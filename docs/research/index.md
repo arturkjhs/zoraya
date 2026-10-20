@@ -216,3 +216,22 @@ stream B, and so on) so parallel work never collides. Gaps in the numbering are 
 - Stream J: Multics, Plan 9 / Inferno, Mach, L4 family / seL4, QNX, KeyKOS / EROS / CapROS, Singularity / Midori.
 - Stream K: Barrelfish, Fuchsia / Zircon (incl. Starnix), Genode, Redox, Haiku / BeOS, Theseus, Hubris, plus
   MINIX 3, Amoeba / Sprite, Exokernel, Oberon (others added if relevant).
+
+## IDs added after the index phase
+
+Allocated from the per-stream reserve blocks during research. See `research-log.md` for the reasons.
+
+| ID | Entry | Stream |
+|----|-------|--------|
+| DM-100 | No reliable, inescapable process-tree containment | A |
+| DM-101 | Containers as an emergent assembly of retrofitted primitives | A |
+| DM-110 | Unprivileged user namespaces expose root-only kernel attack surface | B |
+| DM-111 | cgroups v1 multiple hierarchies and the v1→v2 redesign | B |
+| DM-120 | Futex interface: one multiplexed syscall with accreted operations | C |
+| DM-130 | Waitable events outside the descriptor model and their fd retrofits | D |
+| DM-160 | Raw user pointers in syscall arguments and double-fetch races | G |
+| DM-161 | Driver isolation without DMA isolation | G |
+| GR-021 | virtio as a standard paravirtual device interface | I |
+
+No candidate was dropped. Category placement in `design-mistakes.md` follows each entry's **Category** field, which
+can differ from the stream that wrote it: for example, DM-101 is in category 2.
