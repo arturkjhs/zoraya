@@ -1,0 +1,9 @@
+busybox	ELF 64-bit LSB pie executable, ARM aarch64
+dash	ELF 64-bit LSB pie executable, ARM aarch64
+gmake	ELF 64-bit LSB pie executable, ARM aarch64
+mrsh	ELF 64-bit LSB pie executable, ARM aarch64
+oksh	ELF 64-bit LSB pie executable, ARM aarch64
+pdpmake	ELF 64-bit LSB pie executable, ARM aarch64
+tcc	ELF 64-bit LSB pie executable, ARM aarch64
+toybox	ELF 64-bit LSB pie executable, ARM aarch64
+tcc version 0.9.28rc 2026-10-16 HEAD@e23dabed* (AArch64 Linux)
