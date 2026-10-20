@@ -10,7 +10,7 @@ REPO=$(cd "$HERE/../.." && pwd)
 VM=${PSURF_VM:-alpine-posix}
 SSHCFG=${PSURF_SSHCFG:-$HOME/.lima/$VM/ssh.config}
 SSH="ssh -F $SSHCFG -o BatchMode=yes lima-$VM"
-STAGES=${*:-"env fetch build interposer static dynamic strace callsites analyze"}
+STAGES=${*:-"env fetch build static interposer dynamic minbuild strace callsites analyze"}
 
 $SSH true || { echo "cannot reach VM lima-$VM via $SSHCFG" >&2; exit 1; }
 # sync this directory (minus results) to ~/psurf/tools in the VM
@@ -18,7 +18,7 @@ tar -C "$HERE" --exclude=./results -cf - . | $SSH 'rm -rf ~/psurf/tools && mkdir
 
 for s in $STAGES; do
   echo "=== stage $s"
-  $SSH "sh ~/psurf/tools/remote/$s.sh"
+  $SSH "PSURF_WORKLOADS='${PSURF_WORKLOADS:-}' sh ~/psurf/tools/remote/$s.sh"
 done
 
 mkdir -p "$HERE/results"

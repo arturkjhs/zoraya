@@ -1,0 +1,6 @@
+T0	toybox	cat ls sleep touch
+T0	busybox	tr
+T1	toybox	cat head ls mv rm sleep touch true uname
+T1	busybox	diff tr
+T2	toybox	arch basename cat chmod cp cpio dirname echo env find grep head hostname id install ln ls mkdir mktemp mv rm rmdir sed sleep sort tar touch true uname wc xargs
+T2	busybox	awk diff expr gzip tr

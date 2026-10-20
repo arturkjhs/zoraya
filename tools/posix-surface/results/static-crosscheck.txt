@@ -1,0 +1,5 @@
+dash objects: 32
+object-file method: 101 musl symbols
+import-table method: 101 musl symbols
+only in objects: []
+only in imports: []

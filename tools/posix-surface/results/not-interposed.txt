@@ -1,0 +1,12 @@
+__cxa_finalize	crt
+__libc_start_main	crt
+__stack_chk_guard	data
+dlsym	excluded
+environ	data
+optarg	data
+opterr	data
+optind	data
+optopt	data
+stderr	data
+stdin	data
+stdout	data
