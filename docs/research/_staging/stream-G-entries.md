@@ -69,7 +69,7 @@
 
 **Relevance to our OS.** high. We have already chosen Rust. The open questions are how much `unsafe` to allow, where it may live, and what a panic does.
 
-**Sources.** [S709], [S710], [S711], [S712], [S713], [S715], [S716], [S717], [S741], [S700], [S704]
+**Sources.** [S709], [S710], [S711], [S712], [S713], [S715], [S716], [S717], [S741], [S700], [S704], [S707]
 
 ### DM-049: No stable in-kernel driver API/ABI (Linux)
 

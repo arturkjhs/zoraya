@@ -306,7 +306,7 @@ Overcommit and the OOM killer (DM-030) and mmap truncation hazards (DM-031) are 
 
 **Relevance to our OS.** medium. Observability is cheaper to design in than to retrofit. A small, non-Turing-complete probe language in the DTrace style may be safer than a general verifier, given eBPF's history.
 
-**Sources.** [S937], [S938], [S939], [S940]
+**Sources.** [S937], [S938], [S939], [S940], [S929]
 
 ### GR-014: Checksummed copy-on-write storage (ZFS, Btrfs, APFS)
 

@@ -197,7 +197,7 @@ The result was a niche interface with "long term undiscovered bugs" [S410]. Ever
 - Lemon notes that signal-based notification allows only one handler per process, which makes it "unsuitable for use in library code" [S401].
 - Each retrofit carries over the old mechanism's process-global semantics. For `signalfd` to work, the signal must be blocked with `sigprocmask`. The blocked mask and pending signals then survive `execve`, so child processes inherit an unexpected mask [S465].
 - `pidfd_open` waits on process exit only if `SIGCHLD` is not ignored and nothing else reaps the child. Otherwise the caller must create the child with `CLONE_PIDFD` [S464].
-- Until pidfds, waiting on a process by PID was racy (see DM-017 and stream A's PID-reuse entry).
+- Until pidfds, waiting on a process by PID was racy (see DM-017 and DM-003).
 
 **Why it was not fixed.** Each retrofit was added in its own Linux release while the original mechanisms stayed for POSIX compatibility. kqueue unified these events in 2000 [S401][S402], but Linux took a different direction.
 

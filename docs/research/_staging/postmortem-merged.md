@@ -1,0 +1,928 @@
+Draft for `alternatives-postmortem.md`. Source IDs S1000–S1099 (see `stream-J-sources.md`). Claims without a
+verified source are marked `[unverified]`. "Lessons" are observations, not decisions.
+
+## Multics
+
+**What it tried to fix.** Batch-era computing: Multics aimed to be a "computer utility" that runs continuously, serves
+many interactive users, and shares programs and data between them safely. The 1965 design paper lists: segmented,
+paged virtual memory with named segments; dynamic linking at run time by symbolic name; reentrant shared code; a
+hierarchical file system with automatic storage movement and backup; files private by default with selective
+sharing enforced by hardware descriptor bits; delegated administration; and being written mostly in PL/I so it could
+move to other hardware [S1001].
+
+**What worked.**
+- The hierarchical file system, dynamic linking, shared reentrant code and a kernel written in a high-level language
+  became standard. Thompson credited Multics as the source of the hierarchical file system he took for Unix [S1000].
+- Security held up well for its time. Karger and Schell, looking back at the 1974 Air Force penetration test, say
+  Multics had essentially no buffer overflows. They give three reasons: PL/I strings with declared maximum lengths,
+  hardware execute-permission bits that stopped data being run as code, and stacks that grew upward [S1003]. Multics
+  was the first system rated B2, in 1985 [S1002].
+- The kernel stayed fairly small: about 250K source lines in 1978 [S1000]. Karger and Schell note that SELinux's
+  example policy alone is more than 2.5 times the size of the whole 1973 Multics kernel [S1003].
+
+**What did not work.**
+- Late and slow at first. The GE-645 arrived in January 1967, milestones slipped, and early versions had poor
+  performance, frequent crashes and a slow compiler [S1002]. Van Vleck accepts "big and slow" for the period before
+  release, but says it was not true of later Multics [S1000].
+- Tied to hardware. The design needed special segmentation hardware (GE-645, then Honeywell 6180), so the
+  portability promised by PL/I did not happen in practice. When the vendor stopped making competitive hardware,
+  sites ended up on slow, obsolete machines [S1000][S1002].
+- Even a security-focused design could be subverted. The 1974 evaluation's main finding was that malicious software
+  (trap doors) could be planted in the system and shipped to customer sites [S1003].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* it needed expensive proprietary mainframe hardware, each sale ran to millions of dollars, and
+  it could not follow the 1980s move to cheap microcomputers. The 645 had reliability problems and fell behind
+  competitors built with integrated circuits [S1002].
+- *Non-technical reasons:* Bell Labs left in April 1969 because it had no usable system and no end date for the
+  costs [S1002][S1000]. GE sold its computer business to Honeywell in 1970. Honeywell cancelled Multics development
+  in 1985 after repeated internal attempts to kill it, and Bull built no new hardware [S1002]. A participant account
+  blames corporate politics (no champion among executives) rather than technical flaws or weak sales [S1000]. At
+  peak there were about 77 sites. The last one shut down in October 2000 [S1000][S1002].
+- *Niche:* government, military, car makers and universities. Some sites kept running for years after cancellation
+  because Multics had features they could not get elsewhere [S1000][S1002].
+
+**Lessons for our OS.**
+- Language choice and hardware protection (bounded strings, no execution of data) mattered more to Multics' memory
+  safety than any single kernel feature. Rust plus aarch64 permissions can play a similar role.
+- A design that depends on unusual hardware (rich segmentation) lives or dies with its hardware vendor.
+  Mainstream aarch64 has no Multics-style segments, so similar ideas would have to be built from paging,
+  capabilities or language mechanisms.
+- A security story can be mostly right and still be beaten by subverting the supply chain. Build and release
+  integrity is part of the TCB.
+- Adoption depended on corporate sponsorship more than technical merit. Staying "a research system" did not save
+  it from decisions made in executive suites.
+
+**Sources.** [S1000] (participant retrospective), [S1001] (primary design paper), [S1002] (participant-maintained
+history), [S1003] (primary retrospective).
+
+## Plan 9 / Inferno
+
+**What it tried to fix.** The authors saw Unix as an old timesharing system that handled graphics, networking and
+multi-machine use poorly. Their problems were "too deep to fix" in place [S625]. Their goal was a single system
+built from many machines (central file and CPU servers, cheap terminals), with every resource exposed through one
+file protocol (9P), per-process namespaces, and union directories [S625]. Inferno (Bell Labs, 1995–97) brought
+the same namespace-and-9P model to small networked devices. Its programs ran on a portable VM (Dis) in a safe
+language (Limbo), either hosted on another OS or as a native kernel [S1011][S1012].
+
+**What worked.**
+- UTF-8 was designed by Thompson and Pike in 1992 for Plan 9, and Plan 9 was the first system to use it throughout
+  [S1008].
+- Per-process namespaces and 9P. Linux added mount namespaces in 2.4.19, which led to containers [S162]. 9P
+  itself lives on in Linux v9fs, including as the virtio transport for sharing host files with QEMU guests [S1010].
+- Text-file `/proc`, windows as file servers that give each window its own `/dev` files (so no tty code in the
+  kernel), a dump file system with daily read-only snapshots in the namespace, and no superuser in the
+  authentication model [S625].
+
+**What did not work (the authors' own list, [S625]).**
+- The "everything is a file" idea had limits. Process creation still used fork/exec rather than file writes, and
+  network setup needed more structure than files give.
+- A process cannot pass its namespace to another, so `cpu` cannot fully reproduce a terminal's changes to its
+  environment.
+- The file server was a separate kernel with duplicated drivers and bug fixes. The WORM jukebox, the least reliable
+  hardware, held the file system metadata, and restoring from it took days. The central server limited how big an
+  installation could get.
+- Files in the dump could never be deleted. The authors list this among the costs of permanence.
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* Pike estimated that 90–95% of the Plan 9 work went into honoring external standards (TCP/IP,
+  HTTP, HTML, POSIX, NFS, X, ...), which left little room for new ideas. He also says new systems are expected to
+  ship a Unix emulation layer first [S1005]. Because the software was mostly new rather than ported from Unix
+  [S1006], users had few familiar applications. By 2000 hardware had settled on the PC, so Plan 9's portability no
+  longer gave it an edge [S1005].
+- *Non-technical reasons:* licensing and timing. The 1st edition (1992) was for universities only. The 2nd (1995)
+  cost $350. Only the 3rd (2000) was free on the Internet, under a new Plan 9 License. The 4th (2002) used the
+  Lucent Public License, and MIT relicensing came only in 2021 [S1006][S1007]. By 2000 Linux had taken the role of
+  a free Unix. Pike also points to funding and short-horizon business pressure as reasons such large systems
+  projects are no longer built [S1005]. Inferno was spun out to Vita Nuova in 2000. Its CEO compared it to Java and
+  claimed embedded customers, but these are company claims [S1013].
+- *Niche:* research and a hobbyist community (9front and the Plan 9 Foundation [S1007]). Its ideas, rather than
+  its code, are what spread: UTF-8, namespaces, 9P.
+
+**Lessons for our OS.**
+- Per-process namespaces composed from file servers are the Plan 9 idea that spread most (containers, 9P in VMs).
+  Unix inherited them late, as an add-on.
+- The authors themselves found that files are a poor fit for process creation and for structured control (network
+  setup). A uniform name space and a uniform operation set are different claims.
+- The cost of external standards (network protocols, web, POSIX for a C toolchain) can take up most of the effort
+  of a new OS. That budget is worth setting on purpose.
+- Restrictive early licensing during the years when the free-Unix niche was open seems to have mattered as much as
+  any technical factor. This is our inference, not the authors' stated conclusion.
+
+**Sources.** [S625] (primary), [S1005] (primary, author polemic), [S1006] (primary), [S1007] (primary), [S1008]
+(primary), [S162] (secondary), [S1010] (primary), [S1011] (primary), [S1012] (primary), [S1013] (weak, vendor interview).
+
+## Mach (incl. NeXTSTEP / XNU and OSF/1)
+
+**What it tried to fix.** Mach (CMU, 1985–1994 [S1020]) aimed to give Unix a new base for shared-memory
+multiprocessors and networks of machines, while staying compatible with Unix. Its abstractions were tasks, threads,
+ports (capability-like message endpoints), messages, and memory objects with external pagers. The plan was for much
+of Unix to run as user-level servers [S1015].
+
+**What worked.**
+- Its abstractions outlived the research project. XNU (macOS/iOS) describes itself as a hybrid kernel that combines
+  CMU's Mach with FreeBSD components and the IOKit driver API, and keeps Mach in its `osfmk` tree [S1019]. NeXTSTEP
+  used an older Mach version [S1015].
+- Mach 2.5 became the base of OSF/1 from 1989, and Mach 3.0 the base of MkLinux [S1015].
+- Ports as named, transferable message rights, and user-level pagers, shaped later microkernels. Even L4 defines
+  itself by how it differs from Mach. seL4 endpoints are "essentially ports" but without kernel buffering [S305].
+
+**What did not work.**
+- In Mach 2.5, the first major release, all the Unix compatibility code was still inside the kernel. The
+  microkernel split arrived only with 3.0 [S1015].
+- IPC was slow. A typical one-way microkernel message cost about 100 µs in the early 1990s, which led to services
+  being moved back into the kernel [S305]. Chen and Bershad traced Mach 3.0 + Unix server against Ultrix. For the
+  same work, Mach ran substantially more non-idle system instructions, each instruction cost more memory cycles, and
+  system locality was worse [S1014].
+- The workaround was to put the servers back in the kernel. The Utah in-kernel-server work improved RPC about 3x,
+  Unix syscalls by 20%–2x, and large benchmarks by 4–13% [S1016]. But a co-located MkLinux still lost about 27% of
+  native Linux AIM throughput, against about 5% for L4Linux. User-mode MkLinux lost about 38% [S306].
+- Whether this cost was inherent was disputed. Chen and Bershad's results were read as structural [S305]. Liedtke
+  argued that Mach was slow because it was overloaded and implemented poorly, not because it was a microkernel
+  [S304]. L4's results support Liedtke for IPC [S306].
+
+**Why it did not achieve wide adoption as a microkernel.**
+- *Technical reasons:* the IPC and cache-footprint costs above [S1014][S306]. Vendors who shipped Mach (OSF/1,
+  NeXT, Apple) used it as a single-server or co-located kernel, so the microkernel's isolation benefits largely did
+  not reach users [S1015][S1019].
+- *Non-technical reasons:* OSF/1 was a product of the Unix wars, positioned as the rival to System V Release 4
+  [S1015]. Its later commercial fate (Digital UNIX/Tru64) was decided by vendor consolidation `[unverified]`. CMU's
+  project ended in 1994 [S1020]. Mach still reached very wide adoption through NeXT and Apple, but as a component
+  of a monolithic hybrid, not as the multiserver design it was meant to be [S1019].
+- *Niche:* Mach-derived code runs on every Apple device via XNU [S1019].
+
+**Lessons for our OS.**
+- Message passing designed for the network case (rich messages, kernel buffering, transparent remote ports) cost
+  so much locally that it pushed implementers back into a monolithic structure.
+- "Microkernel" turned out to be a claim about implementation quality as much as structure. Chen/Bershad's numbers
+  and Liedtke's rebuttal concern the same design space [S1014][S304].
+- Mach's abstractions survived in XNU because Apple kept them as an internal structuring tool, not as an isolation
+  boundary. Abstractions can last longer than the architecture they were built for.
+
+**Sources.** [S1014] (primary), [S1015] (secondary, textbook), [S1016] (primary), [S306] (primary), [S304]
+(primary), [S1019] (primary), [S1020] (primary), [S305] (primary).
+
+## L4 family and seL4
+
+**What it tried to fix.** By the early 1990s, IPC (about 100 µs one way) was the weak point of first-generation
+microkernels [S305]. Liedtke argued that a minimal kernel offering only address spaces, threads and IPC could be
+fast, and that Mach's slowness came from implementation, not structure [S304]. His L4 IPC was 10–20x faster than
+contemporary microkernels [S305]. seL4 later added capability-based access control and a machine-checked proof
+that the C implementation matches its specification, plus proofs of integrity and confidentiality enforcement
+[S305][S1022].
+
+**What worked.**
+- Performance. Linux paravirtualised on L4 lost only about 5% AIM throughput [S306].
+- Commercial deployment at very large scale. NICTA's L4-embedded became Qualcomm's protected-mode RTOS for modem
+  firmware, and the authors report it running on the security processor of recent Apple iOS devices. OKL4 shipped on
+  billions of devices, and PikeOS (a commercial L4 clone) is certified for avionics [S305].
+- Formal verification of a real, high-performance kernel, together with analysis of worst-case execution time
+  [S305]. seL4 is also a hypervisor. Its main deployment pattern is "incremental cyber-retrofit": run the existing
+  stack in a Linux VM, then move critical pieces out into verified native components. The Boeing ULB work under
+  DARPA HACMS was done this way [S1022].
+- Ideas that survived are those that held up across 20 years of rewrites [S305]: minimality, fast synchronous IPC
+  for client–server calls, user-mode drivers, and capabilities (influenced by KeyKOS/EROS).
+
+**What did not work (from the authors' retrospective [S305]).**
+- *IPC timeouts* were abandoned. There was no theory for choosing values, and in practice only zero and infinity
+  were used.
+- *Long IPC* (in-kernel copying of bulk data, with page faults handled during IPC) was abandoned. It added
+  significant kernel complexity and was rarely used, since shared buffers did the job.
+- *Clans and chiefs* (kernel-enforced IPC policy) were abandoned. The model collapsed into one chief per process, and
+  many builds disabled it, which left no way to control IPC until capabilities arrived.
+- *Recursive mapping database*: in real deployments it used 25–50% of kernel memory and was a potential
+  denial-of-service vector. It was removed.
+- *Thread IDs as IPC destinations* were replaced by port-like endpoints. *C++* was abandoned for seL4 and OKL4. The
+  verification toolchain needed C, and good C++ compilers for embedded targets were scarce.
+- The proofs have limits. They do not cover timing channels, some architectures are only partly verified (with the
+  missing parts "waiting for funding"), and the Microkit/CapDL proofs are incomplete [S1022].
+
+**Why it did not achieve wide adoption as a general-purpose OS.**
+- *Technical reasons:* L4 is a kernel, not an OS. In practice "virtualised Linux became the de facto OS middleware"
+  and most L4 systems needed at least one Linux VM [S305]. Building native systems is hard. The whitepaper calls
+  CAmkES painful to build with and costly at runtime. It also says Genode works only at a least-common-denominator
+  level and has no assurance story. The Microkit is easier but requires a static architecture fixed at build time
+  [S1022]. Verification also limits what the kernel can do: it must be in C, with no kernel concurrency [S305].
+- *Non-technical reasons:* business and licensing. OK Labs was sold to General Dynamics in 2012. GD closed its Sydney
+  engineering office in February 2014, and the engineers spun out as Cog Systems [S1024]. seL4 was open-sourced only
+  in July 2014 (GPLv2 kernel, BSD for parts), five years after the proof [S1023][S305]. Most deployments are under
+  NDA or embedded, so they do not create a visible developer community `[unverified]`.
+- *Niche (successful):* baseband/modem firmware, secure enclaves, avionics/rail (PikeOS), and defense retrofit
+  (HACMS) [S305][S1022]. These buyers value isolation and certification and accept small, static systems.
+
+**Lessons for our OS.**
+- Many of L4's "abandoned" features were mechanisms that put policy in the kernel or handled rare cases
+  (timeouts, long IPC, clans). They added complexity without adding generality.
+- When a microkernel needs a guest Linux to be useful, compatibility becomes the bottleneck. This is relevant to how
+  much our POSIX layer has to carry.
+- Verification puts concrete constraints on design: language subset, no kernel concurrency, a static system
+  architecture. It also leaves timing channels unproven. These are tradeoffs, not free benefits.
+- Commercial success came in places where buyers paid for isolation (modems, enclaves). That did not carry over to
+  general-purpose computing.
+
+**Sources.** [S306] (primary), [S304] (primary), [S305] (primary retrospective), [S1022] (primary), [S1023]
+(secondary), [S1024] (primary, participant blog).
+
+## QNX
+
+**What it tried to fix.** QNX targets real-time and embedded systems that cannot tolerate a large, monolithic
+kernel. Message passing is its basic IPC, and its documentation calls it the first commercial OS of this kind. The
+microkernel provides thread-level services and message passing. File systems, networking and drivers run as
+user-level "resource managers" that can be started and stopped dynamically and are reached through the POSIX
+library. Qnet extends message passing transparently across a network of nodes [S1025].
+
+**What worked.**
+- Synchronous, copying send/receive/reply also handles scheduling: processes change state as they send and reply,
+  and the kernel uses that state and their priorities [S1025]. This keeps the real-time model simple.
+- POSIX on top of message passing. Applications see a POSIX API and the library turns calls into messages
+  [S1025]. This let QNX host conventional software without making POSIX the kernel's native interface.
+- Commercial longevity in safety-critical markets. BlackBerry reports QNX in more than 255 million vehicles
+  (TechInsights estimate, Oct 2024), certified to ISO 26262 and ISO 21434, and licensed mostly per-unit royalty
+  [S1029].
+- The architecture kept evolving. QNX OS 8.0 (2024) introduced a redesigned, fully preemptible, multithreaded kernel
+  for 1–64 cores, with kernel calls running in parallel unless they touch shared resources [S1026].
+
+**What did not work.**
+- Older kernels did not scale to many cores. The vendor's own 8.0 redesign implies this. The release notes do not
+  say what the old bottleneck was, so the exact mechanism is `[unverified]` [S1026].
+- 8.0 broke compatibility: interrupt service routines were removed (replaced by interrupt threads), shared
+  synchronization objects must now be declared shared, and the mqueue implementations were replaced [S1026].
+  Evolving a decades-old ABI had real costs.
+- Synchronous copying IPC costs a copy on every message [S1025]. Whether that is a problem in general-purpose use
+  (e.g. large-buffer I/O) is not measured in our sources `[unverified]`.
+
+**Why it did not achieve wide adoption outside embedded.**
+- *Technical reasons:* QNX was optimized for determinism and small systems. It had few desktop and server
+  applications, and its own GUI (Photon) never built an ecosystem `[unverified]`. The PlayBook tablet (2010) ran a
+  QNX-based OS [S1028], but our sources do not give the technical reasons the BlackBerry platform failed
+  `[unverified]`.
+- *Non-technical reasons:* licensing and ownership. QNX opened much of its source (2007 `[unverified]`). After RIM bought it from
+  Harman in April 2010, access to the microkernel, userland, libraries and Photon was withdrawn [S1027][S1028].
+  This cut off the hobbyist and academic community. Commercial royalty licensing [S1029] suits automotive buyers but
+  not general-purpose adoption. Its consumer future was also tied to BlackBerry's handset business.
+- *Niche (successful):* automotive ECUs and infotainment, industrial and medical. In these markets certification,
+  determinism and fault containment are worth paying for [S1029].
+
+**Lessons for our OS.**
+- A message-passing microkernel with a POSIX-translating library is a proven production design. "POSIX as a
+  library over native IPC" is not hypothetical.
+- Certification and determinism, not raw throughput, were where QNX's design paid off commercially.
+- Closing source after an acquisition ended community use overnight. Long-term governance of the code matters
+  as much as its license on day one.
+- Even a well-regarded microkernel needed a major kernel redesign for many cores, and its 8.0 release broke
+  compatibility. This suggests planning for SMP scalability from the start.
+
+**Sources.** [S1025] (primary), [S1026] (primary), [S1027] (secondary), [S1028] (secondary), [S1029] (primary,
+vendor claim).
+
+## KeyKOS / EROS / CapROS (and Coyotos)
+
+**What it tried to fix.** KeyKOS (GNOSIS at Tymshare from about 1975 [S1031], then Key Logic) was a pure
+capability microkernel for running a commercial service on a network. All authority was held as "keys" to objects
+(pages, nodes, domains, gates), and there was no ambient authority. Formal reasoning about security (confinement)
+was a design goal. Everything was persistent: the whole system was checkpointed, and the kernel kept no state that
+could not be rebuilt from a checkpoint [S1030]. EROS (Shapiro et al., Penn) was the third implementation of the
+architecture. It set out to show that capabilities plus a transparent single-level store could be fast on commodity
+x86 hardware [S1035]. CapROS continues EROS [S1036]. Coyotos was Shapiro's successor project [S1037].
+
+**What worked.**
+- It worked in production. KeyKOS/370 ran production applications from January 1983. It hosted UNIX, VM/CMS and a
+  transaction processor (KeyTXF) as guest environments, with performance described as comparable to the native
+  systems [S1030]. On the Motorola 88000 it offered a binary-compatible POSIX emulation [S1035].
+- IPC was fast. EROS microbenchmarks were generally comparable to similar Linux operations on a 400 MHz Pentium II
+  [S1035].
+- The ideas lived on: capabilities in seL4, OKL4 and Fiasco.OC, and seL4's badged endpoints copy KeyKOS
+  "distinguished" capabilities [S305]. Midori cites KeyKOS/EROS/Coyotos as influences [S1043]. Hardy notes the
+  message primitives never needed critical changes [S1046].
+
+**What did not work.**
+- Hardy's own list of "warts" [S1032]:
+  - The single-level store hides the RAM/disk distinction. That hurts when the kernel's paging guesses are wrong, or
+    when recomputing data would be cheaper than reading it from disk.
+  - Batched kernel work grows roughly linearly with RAM size and cannot be kept out of critical periods, so
+    real-time support was poor.
+  - There were abstraction faults and a covert channel in the space bank.
+- Persistence makes things hard to get out and to upgrade. KeyKOS objects are generally not extractable from the
+  platform, and Hardy's tradeoffs note puts application upgrades on a persistent platform aside as a separate issue
+  [S1033]. In EROS, changing the size of checkpointed kernel tables makes earlier checkpoints unusable [S1035].
+- EROS's microbenchmark results were not proof of application-level performance. The authors say a full validation
+  needed application measurements [S1035].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* applications had to be written against the capability discipline to get its benefits.
+  Ported UNIX/VM code ran as legacy guests [S1030]. Hardy himself observes that any simple application is better
+  done without a new OS. The value appears only when many mutually suspicious parties interact, and that market had
+  to be created [S1034].
+- *Non-technical reasons:* corporate ownership and funding. GNOSIS passed from Tymshare to McDonnell Douglas, which
+  judged it not strategic, and then to the start-up Key Logic `[unverified: secondary snippet only]`. The KeyKOS
+  hardware ran on IBM 370 and 88000 [S1030], and the 88000 platform itself faded `[unverified]`. EROS/Coyotos was
+  effectively a one-leader project. Shapiro stopped work on Coyotos and BitC when he joined Microsoft's Midori in
+  2009 [S1037]. CapROS is still maintained by a very small group [S1036].
+- *Niche:* transaction processing on 370 mainframes in the 1980s [S1030]. Today its ideas live on rather than its
+  code.
+
+**Lessons for our OS.**
+- Capabilities without ambient authority can be implemented efficiently. Neither KeyKOS in production nor the EROS
+  measurements show capabilities as the performance problem [S1030][S1035].
+- Transparent orthogonal persistence moves hard problems elsewhere: paging policy, real-time behavior, schema and
+  code upgrades, and getting data out. It is not a free simplification.
+- Making legacy OSes guests let KeyKOS run existing software. It also meant most code got none of the capability
+  benefits. This is the same tension our POSIX layer will face.
+- A small team with a single leader is fragile. Coyotos and BitC ended when their leader changed jobs.
+
+**Sources.** [S305] (primary), [S1030] (primary), [S1031] (primary), [S1032] (primary), [S1033] (primary),
+[S1034] (primary), [S1035] (primary), [S1036] (primary), [S1037] (secondary), [S1043] (primary), [S1046] (primary).
+
+## Singularity / Midori
+
+**What it tried to fix.** Singularity (Microsoft Research, started about 2003–04 per the 2007 paper) revisited OS design decisions in light of
+safe languages and verification. It had three features [S1038]:
+- *Software-isolated processes (SIPs):* isolated by type-safe code (Sing#, compiled from MSIL at install time)
+  rather than by the MMU. SIPs share no writable memory and cannot load code dynamically.
+- *Contract-based channels:* messages pass ownership of data through an exchange heap, enforced by a linear type
+  system.
+- *Manifest-based programs:* manifests declare everything a program is and needs.
+
+Midori (about 2008–2015) was the incubation project that tried to turn this into a complete stack: language,
+compiler, OS, services and applications, with asynchrony everywhere, capability-based security and safe concurrency
+[S1041][S1042][S1043].
+
+**What worked.**
+- Measuring the "unsafe code tax." In the WebFiles benchmark, adding hardware protection step by step slowed it down
+  by up to 33% (separate domains) and 37.7% (full ring-3 microkernel). The runtime checks for safe code cost under 5%
+  [S1038]. The authors say this may be the worst case.
+- A kernel mostly in a safe language: over 90% Sing#. The garbage collector was 48% of the remaining unsafe code
+  [S1038].
+- Midori showed a whole OS, browser and compiler in safe code. Duffy reports safety checks "within the noise" after
+  optimization, and buffer overflows, data races and deadlocks largely gone [S1042].
+- Object capabilities with no ambient authority. There were no mutable statics, and even the clock was a capability
+  [S1043].
+- Ideas moved into products: asynchrony, slices, safe concurrency, and C++ safety profiles. Duffy says existing
+  ecosystems slowed adoption [S1041][S1042]. Analysts in 2010 linked Midori's concurrency principles to .NET
+  [S1044].
+
+**What did not work.**
+- The trusted computing base still included a large optimizing compiler (Bartok). The authors admit it probably has
+  bugs that could turn safe code unsafe, and they planned typed-assembly verification to remove it from the TCB
+  [S1038].
+- Sealed processes cannot load or generate code at run time [S1038]. That rules out JITs and plugins as they are
+  normally built.
+- Software isolation is now undermined by hardware. Google's V8 team concluded that speculative-execution attacks
+  defeat all language-enforced confidentiality on current hardware. Untrusted code in the same address space can
+  build a universal read gadget, so Chrome moved to process isolation [S963]. SIPs sharing one address space (the
+  low-overhead configuration) now face the same problem. This weakens the main performance argument for software
+  isolation. It is "right at the time, wrong now".
+- Midori's capability model had usability problems. Constructors ended up with long capability lists, downcasting
+  leaked authority, and the end-user permission UX was underexplored. Duffy says it was never tested at real-world
+  scale [S1043].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* everything had to be rewritten in the new language. Existing Windows/Win32 and C/C++ code
+  could not run as SIPs (our inference from the sealed, verified-MSIL model in [S1038]), and Duffy notes that existing ecosystems made the ideas slow to move [S1042].
+  Spectre later removed part of the security case for one shared address space [S963].
+- *Non-technical reasons:* Singularity was released only under an academic, non-commercial research license
+  (2008) [S1039]. Midori was an incubation project. Duffy says decisions about its core technology were "not
+  entirely technology-driven" nor entirely business-driven. He regrets not open-sourcing it and not publishing more
+  [S1041]. It was reported as shut down by late 2015 [S1045]. A press report that it was folded into the Windows OS
+  group (2013) could not be fetched `[unverified]`. Staff turnover played a part: Shapiro left in 2010 [S1044].
+- *Niche:* none as a product. Its influence came through people and language features [S1041][S1042].
+
+**Lessons for our OS.**
+- Hardware isolation costs something, and the cost can be measured. Singularity's numbers are a rare apples-to-apples
+  comparison, but they predate Spectre [S1038][S963].
+- Language-based isolation still adds value inside one protection domain: safety and fewer bugs. As a boundary
+  between mutually untrusting code, on current CPUs, it needs to be combined with hardware isolation [S963].
+- Midori's experience suggests a full capability system needs ergonomic patterns (grouping, attenuation,
+  avoiding downcasts) as much as a kernel mechanism [S1043].
+- A clean-slate stack without a compatibility path stayed inside the company. Its ideas spread only by being
+  retrofitted into existing ecosystems [S1041][S1042].
+
+**Sources.** [S1038] (primary), [S1039] (secondary), [S963] (primary), [S1041] (primary, author retrospective),
+[S1042] (primary), [S1043] (primary), [S1044] (secondary), [S1045] (weak).
+
+
+Systems: Barrelfish; Fuchsia / Zircon (incl. Starnix); Genode; Redox; Haiku / BeOS; Theseus; Hubris; MINIX 3;
+Amoeba and Sprite; Exokernel (Aegis/XOK); Oberon. Source IDs refer to `stream-K-sources.md`.
+
+## Barrelfish
+
+**What it tried to fix.** Shared-memory kernels like Linux and Windows scale by adding locks and fine-grained
+sharing, and they assume homogeneous, cache-coherent cores. Barrelfish (ETH Zurich and MSR Cambridge, 2007 to about 2020)
+proposed the *multikernel*. Each core runs its own CPU driver plus a monitor. OS state is replicated per core and
+kept consistent by explicit asynchronous messages, never by shared kernel data structures. The machine is treated as a
+distributed system [S1100].
+
+**What worked.**
+- The paper named a new point in the design space. Its evaluation showed that URPC messaging could match the best
+  microkernel IPC without the cache and TLB costs of context switches, and that multicast tuned to the interconnect
+  topology beat point-to-point protocols for TLB shootdown [S1100].
+- The ideas lived on in research, not in products. "An Analysis of Linux Scalability to Many Cores" (2010) was
+  partly a response to it. Popcorn Linux turned Linux into a multikernel, and LegoOS applied the model to
+  disaggregated servers. Arrakis and FlexNIC were built on the Barrelfish codebase, and LXDs reused its
+  message-passing protocol [S1102].
+- The author's retrospective says the multikernel still fits rack-scale and disaggregated hardware, and
+  heterogeneous hardware such as big.LITTLE cores and accelerators [S1102].
+
+**What did not work.**
+- The motivating prediction was wrong. The team expected hundreds to thousands of cores. Core counts grew
+  gradually, and Linux and Windows kept up through incremental changes. The author now calls the emphasis on
+  scalability "perhaps a mistake" [S1102].
+- A purely message-oriented system was very sensitive to message-queue lengths, which caused performance anomalies.
+  Fast URPC needed detailed knowledge of the cache-coherence protocol [S1100].
+- Adopting the seL4 capability model for memory management was the project's biggest distraction. That model
+  suited static embedded memory layouts, not PCs with dynamic memory and hot-plug, and it made heap allocation very
+  complex. It was not simplified until 2016 [S1102].
+- The paper itself admits that it did not evaluate complex applications, a storage system, or heterogeneous
+  cores. Building a whole OS from scratch limited how far the architecture could be tested [S1100].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* commodity hardware stayed cache-coherent with moderate core counts, so the problem it
+  solved never became urgent [S1102]. There was no binary compatibility, only partial POSIX (no thread-local storage
+  in 2009) [S1100].
+- *Non-technical reasons:* it was a research vehicle, never a product. The first year lacked a clear research
+  agenda, and engineering effort went to work that did not advance the research [S1102]. The project is now marked
+  "no longer active", and its last release was in March 2020 [S1101].
+
+**Lessons for our OS.**
+- Design premises that rest on hardware forecasts can expire. Barrelfish's lasting value came from heterogeneity
+  and explicit communication, not from the core-count bet.
+- A capability model built for one memory environment (static, embedded) can impose heavy costs in another.
+  Memory-management capabilities need to fit dynamic allocation on aarch64 SoCs.
+- A message-only design moves the performance problem into queueing and cache-line behaviour. Plan for
+  measurement and tracing from day one.
+
+**Sources.** [S1100] (primary), [S1101] (primary), [S1102] (primary, author retrospective).
+
+## Fuchsia / Zircon (incl. Starnix)
+
+**What it tried to fix.** Google built a new, non-Linux OS stack, publicly visible from 2016. Its kernel, Zircon,
+offers about 100 syscalls, most of them non-blocking. Access to kernel objects is through per-process handles that
+carry rights. Rights can only be reduced when a handle is duplicated, and handles move between processes over
+channels [S1103][S911]. Drivers, filesystems and most services run in userspace, and a "much larger OS" is
+built on top [S1103]. The aims were capability-style authority, updatability, and freedom from Linux's ABI and GPL
+kernel. The licensing motive is commonly reported but is not stated in the sources fetched here [unverified].
+
+**What worked.**
+- It shipped at scale. In 2021 Fuchsia replaced the Linux-based Cast OS on the first-generation Nest Hub through an
+  over-the-air update that users did not notice [S1109]. Nest Hubs still ran and received Fuchsia updates in
+  2023 [S1107].
+- The handle and rights model is the clearest production example of a capability-leaning kernel interface [S911].
+- Starnix is a userspace "runner" that implements the Linux ABI by translating Linux syscalls into Fuchsia
+  protocol messages. For example, `write` becomes `fuchsia.io.File#Write`. Starnix keeps the fd tables, pid
+  allocation and AF_UNIX state itself, so Linux binaries run unmodified without a Linux kernel [S1105][S1106].
+  It is written in Rust because it is a trust boundary [S1106].
+
+**What did not work.**
+- Source-level compatibility was not enough. POSIX Lite deliberately omitted global-state calls such as `kill`, and
+  some important software, such as Android native modules, cannot be recompiled. This forced the project to build
+  Starnix for binary compatibility [S1106]. A non-Unix kernel did not remove the need for the Linux ABI; it
+  moved that need into a large userspace emulator.
+- The Starnix RFC itself names semantic mismatches: futexes, asynchronous signal handlers (which have no Fuchsia
+  equivalent), and inotify. It also expected the first syscall-trapping design (Zircon exceptions plus
+  cross-process memory reads) to be too slow, and it cited WSL1's filesystem-performance problems as a warning
+  [S1106]. Starnix's current trapping mechanism and its production performance were not verified for this report
+  [unverified].
+- The move of Assistant speakers to Fuchsia was abandoned in 2023. Reporting suggests one target SoC did not meet
+  Fuchsia's CPU requirements, but that is the reporter's inference, not Google's [S1107].
+
+**Why it did not achieve wide adoption.** *(Fuchsia is still active; its adoption outcome is not final.)*
+- *Technical reasons:* there was no app ecosystem of its own, so it depended on Linux/Android compatibility
+  (Starnix) to run existing software [S1106]. Hardware requirements limited which existing devices it could
+  replace [S1107].
+- *Non-technical reasons:* in 2023, 16–20%+ of a roughly 400-person team was laid off and the speaker effort was
+  dropped [S1107]. Google already owns Android and ChromeOS, so a replacement must justify its cost against
+  incumbents controlled by the same company. Commentators read the cuts as a scaling-back of ambition
+  [S1108] (opinion).
+- *Status 2026:* Fuchsia is still developed and has a published 2025 roadmap page. It runs on Nest Hub devices.
+  "Microfuchsia" (2024) runs Fuchsia as a guest under pKVM/QEMU on Android, possibly for protected workloads
+  [S1108]. No phone or PC deployment has been announced [S1108].
+
+**Lessons for our OS.**
+- A capability kernel plus a userspace Linux-ABI personality is a proven shape (Starnix). Its hard parts are the
+  ones the RFC lists in advance: signals, futex semantics, file-change notification, and filesystem
+  performance [S1106].
+- Even with Google's resources, a clean kernel needed an ABI-compatibility layer to get software. Our POSIX layer
+  for a C compiler is far smaller, and keeping it that size is a scope decision.
+- Technical success (shipping OTA on real devices) did not secure the project. Corporate priorities did.
+
+**Sources.** [S1103], [S911], [S1105], [S1106] (primary); [S1107], [S1108], [S1109] (secondary).
+
+## Genode
+
+**What it tried to fix.** Genode (TU Dresden origins, later Genode Labs, GPLv2 from 2008 [S1112]) is an OS
+framework, not a kernel. It runs on several microkernels as well as its own base-hw kernel [S1114]. Its targets are
+TCBs of millions of lines, the forced choice between rigid separation kernels and unassurable general-purpose
+OSes, and nondeterministic memory overcommit that can kill arbitrary processes. Its answer is a recursive tree of
+components. Each parent supplies its children's resources and environment, authority comes from capabilities, and
+memory and CPU budgets are explicit and can be traded along the tree [S1110].
+
+**What worked.**
+- Each application can have its own tailored TCB, and resource accounting avoids global OOM-style behaviour by
+  design [S1110].
+- The project has been maintained continuously, with releases every year and the Foundations book revised every
+  year since 2015. Sculpt OS is a usable desktop distribution, and the 2026 roadmap aims at headless VM hosts and
+  servers [S1114].
+- Reuse is pragmatic: Linux drivers through DDE-Linux, plus VirtualBox, Chromium and Qt ports [S1113][S1114].
+
+**What did not work.**
+- Drivers are the bottleneck. Genode admits it would be far less useful without drivers ported from Linux (Intel
+  WiFi, USB host controllers, Intel graphics). Each port is a separate project. One i.MX8 graphics port took two
+  months, and each Linux version bump repeats the cost, which grows with every driver added. The old approach would
+  have been "unbearable" for ARM SoCs, which led to a redesign of DDE-Linux in 2021 [S1113].
+- Configuration format churn: the migration from XML to the new HID format was "the most delicate challenge" of
+  2025 [S1114].
+
+**Why it did not achieve wide adoption.** *(Genode is still active; its adoption outcome is not final.)*
+- *Technical reasons:* it depends on Linux drivers for hardware coverage, so it trails Linux on new hardware
+  [S1113]. Its native component model and API are not POSIX, so existing software reaches it through ports and
+  emulation layers [S1110][S1114].
+- *Non-technical reasons:* a small company plus volunteers, with progress "depending on community support"
+  [S1114]. It is licensed AGPLv3 with a linking clause, and anyone wanting more permissive terms needs a commercial
+  licence [S1111][S1112]. That model funds Genode Labs but makes Genode hard to embed in commercial products
+  without a deal.
+- *Status 2026:* Release 26.05 is current. Sculpt 26.10 plans to make base-hw the default kernel and drop XML
+  [S1114].
+
+**Lessons for our OS.**
+- Explicit resource budgets passed down a parent tree are a worked-out alternative to overcommit and an OOM killer.
+  Its cost is that every component must handle running out of quota.
+- Without a driver strategy, a capability OS stays limited to a few machines. Porting Linux drivers is a
+  continuing maintenance cost, not a one-time one [S1113].
+- The licence affects who can adopt the system, independently of its technical merit.
+
+**Sources.** [S1110], [S1111], [S1112], [S1113], [S1114] (all primary; no independent secondary source found).
+
+## Redox
+
+**What it tried to fix.** Redox (2015 onward, Rust) aims to be a Unix-like general-purpose OS. It uses a
+microkernel, runs drivers as unprivileged userspace daemons, and builds on a "scheme" resource model drawn from
+Plan 9 and MINIX influences. It began in 2015 as a unikernel and was later redesigned [S1115]. POSIX-like calls are
+mostly implemented in the relibc library rather than as kernel syscalls [S1116].
+
+**What worked.**
+- It shows a Rust microkernel with a kernel of about 50k lines and isolated driver daemons, and it runs real ported
+  software, including several COSMIC apps [S1116][S1117].
+- The compatibility shim lives in userspace (relibc), so the kernel syscall interface is free to change and is
+  declared unstable [S1116].
+- Performance work in 2026 includes an io_uring-like ring-buffer API ("Redox Rings"), which improved NVMe I/O about
+  14–15x in a benchmark that bypassed the filesystem [S1118].
+
+**What did not work.**
+- Moving code into userspace does not remove it. Redox's own book says monolithic-kernel code is "just moved to
+  user-space daemons" [S1116].
+- Hardware coverage is thin. As of 2025 there was no WiFi, USB covered only HID, storage and hubs, there was no
+  I2C driver, and IOMMU support was not implemented. The project proposes running a stripped-down Linux under QEMU
+  to get drivers for rarer devices [S1117].
+- Self-hosting is still incomplete after about ten years: Cargo and rustc are unreliable and ptrace needs rework
+  [S1117]. A kernel memory leak made a GCC-based test build take about 10 hours until it was fixed in 2026 [S1118].
+- The 14x gain from switching to rings suggests that the earlier scheme/message I/O path left a lot of performance
+  unused (inference).
+
+**Why it did not achieve wide adoption.** *(Redox is still active; its adoption outcome is not final.)*
+- *Technical reasons:* driver gaps, no Wayland (which blocks the full COSMIC desktop), partial POSIX (full POSIX
+  compliance is explicitly not a goal), and no CPython [S1117].
+- *Non-technical reasons:* funded by donations, Patreon, merchandise and NLnet/NGI grants, with a few part-time
+  roles, and in 2025 it was still looking for an experienced kernel developer [S1117]. Its last tagged release is
+  0.9.0 (2024); it now ships daily images [S1118].
+
+**Lessons for our OS.**
+- Redox is the closest peer to our profile (Rust, microkernel, Unix-like userspace via a libc shim), and its
+  10-year path to self-hosting is a schedule warning.
+- Design high-throughput I/O as shared-memory rings early. Adding them later was a large win, which implies the
+  default path was slow.
+- Drivers on aarch64 are the biggest gap. Using "recommended hardware" plus a Linux-in-VM driver host are the
+  fallbacks Redox itself considers [S1117].
+
+**Sources.** [S1115], [S1116], [S1117], [S1118] (all primary project documents; no independent secondary).
+
+## Haiku / BeOS
+
+**What it tried to fix.** BeOS (Be Inc., 1990s) was a clean-slate desktop OS designed for media and multiprocessor
+machines. Haiku (founded as OpenBeOS on 2001-08-18, renamed in 2004) reimplements it as open source [S1120].
+Its stated design is a kernel tuned for responsiveness, a "fully threaded" design, a database-like filesystem (BFS)
+with indexed metadata, a rich object-oriented API, and one team that writes everything from kernel to desktop apps
+for consistency [S1119].
+
+**What worked.**
+- A single integrated team and API produced a coherent, responsive system that is still developed after 25 years
+  [S1119][S1121].
+- Indexed file attributes and queries influenced later desktop search thinking. This report did not verify a
+  documented lineage into specific systems [unverified].
+
+**What did not work.**
+- Progress has been slow. Alpha 1 came in 2009, eight years after the project started. Beta 1 came in 2018 [S1120],
+  and beta 6 in August 2026, two years after beta 5 [S1121]. There is still no R1 final [S1121].
+- Re-creating a complete desktop OS, including drivers and toolkit, with volunteers took decades rather than years
+  [S1120][S1121].
+
+**Why it did not achieve wide adoption.** *(Haiku is still active; its adoption outcome is not final.)*
+- *Technical reasons (BeOS):* this report did not find a primary source for BeOS's technical gaps at the time, such
+  as networking, hardware support or applications [unverified]. *Haiku:* it targets a model whose native
+  application ecosystem disappeared with Be, and it still has no stable R1 [S1121].
+- *Non-technical reasons (BeOS):* the main factors were not technical. In 1996 Apple bought NeXT for about $400M
+  after talks with Be failed over price. That account comes from secondary reporting, and the figures are rumoured
+  [S1125]. Be then pursued PC OEM preinstallation. It said a Hitachi dual-boot deal collapsed because of
+  Hitachi's Windows licence terms, and it sued Microsoft for exclusive OEM dealing [S1123]. Be sold its assets to
+  Palm in 2001 [S1123]. Microsoft settled in 2003 for about $23.5M without admitting wrongdoing [S1124].
+  *Haiku:* volunteer project with one paid contract developer in 2024, funded by record but small donations
+  [S1122].
+
+**Lessons for our OS.**
+- BeOS shows that distribution channels (OEM preinstallation, platform-vendor deals) can decide an OS's fate
+  regardless of technical merit [S1123][S1125].
+- A small team owning the whole stack gives coherence, but that same scope stretched Haiku's schedule over
+  decades. Limiting what we build ourselves is a choice we have to make, not something that follows from the
+  design.
+- Indexed metadata in the filesystem is an idea to evaluate on its own merits. It is not tied to BeOS's fate.
+
+**Sources.** [S1119], [S1120], [S1121], [S1122] (primary); [S1123], [S1124] (secondary); [S1125] (weak).
+
+## Theseus
+
+**What it tried to fix.** Theseus (Rice/Yale, OSDI 2020) targets *state spill*: one component holding state on
+behalf of another, which blocks live update and fault recovery. The OS is many tiny "cells" (Rust crates)
+loaded at runtime. Everything runs in a single address space at a single privilege level (SAS/SPL). Isolation
+comes from Rust's type and ownership system instead of hardware. "Intralingual" design pushes OS invariants,
+such as the ownership of mapped pages, into the compiler's checks [S1126].
+
+**What worked.**
+- Live evolution and fault recovery of core components. Out of 13 deterministic faults injected into IPC/ITC,
+  Theseus recovered from all but two, where the tasks hung without crashing. The MINIX 3 comparison covered
+  faults in its IPC layer, which MINIX 3's own recovery literature had not evaluated [S1126].
+- `MappedPages`-style APIs let the compiler prevent use-after-unmap and similar errors. The authors report no
+  significant performance drawbacks from the intralingual designs they measured [S1126].
+- It was achieved with roughly 38k lines of Rust and about four person-years [S1126].
+
+**What did not work.**
+- In random hardware-fault injection, Theseus failed to recover from 31% of the faults that manifested, mainly
+  because Rust/LLVM only emit synchronous unwinding tables [S1126].
+- Unsafe code is unavoidable. Some of it is "infectious", meaning it can break isolation. Theseus must trust rustc
+  and core/alloc [S1126].
+- Legacy code is the main limit. Unsafe languages such as C would need hardware protection or SFI to be isolated.
+  Mixing in unsafe components breaks the chain of compiler knowledge. A spill-free filesystem would break POSIX,
+  so Theseus accepts spill in its FS cells [S1126].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* SAS/SPL rules out running untrusted native C binaries without extra mechanisms, and
+  POSIX-style abstractions conflict with spill freedom [S1126]. The README calls it experimental and "not yet
+  mature" [S1127].
+- *Non-technical reasons:* it is a small academic project. The last commit to the main branch was on 2024-09-22,
+  so it has been dormant for about two years [S1128].
+
+**Lessons for our OS.**
+- Language-based isolation removes context-switch costs, but it cannot host a C compiler's output safely. A POSIX
+  layer for C needs hardware isolation, so the system would run a hybrid of both models.
+- Rust panic unwinding is not a fault-recovery mechanism for hardware-level faults. Recovery coverage depends on
+  compiler support for asynchronous unwinding [S1126].
+- Some cell-boundary invariants (MappedPages-style ownership types) can be adopted in a conventional
+  address-space kernel without adopting SAS/SPL.
+
+**Sources.** [S1126] (primary, peer-reviewed), [S1127], [S1128] (primary, project repository).
+
+## Hubris
+
+**What it tried to fix.** Hubris is Oxide Computer's microcontroller OS (decision taken in March 2020), built for
+the housekeeping cores in its servers. The available options lacked memory protection or had "serious problems"
+[S1130]. The task set is fixed at build time and cannot change at runtime. Drivers are unprivileged tasks isolated by
+the MPU. IPC is synchronous rendezvous with no kernel queues, and *leases* lend memory for large transfers. A
+supervisor task restarts faulted tasks in place. Generation numbers in task IDs let peers detect a restart
+[S1129][S1130].
+
+**What worked.**
+- It ships in Oxide's product as the service-processor (BMC-equivalent) firmware [S1130], and it is still actively
+  developed in October 2026 [S1131].
+- Static allocation lets peak memory be checked at build time and keeps the kernel out of resource allocation
+  [S1129].
+- It was co-designed with the Humility debugger, which reads task state and coredumps over JTAG/SWD, so the
+  firmware needs no console [S1130].
+
+**What did not work / acknowledged costs.**
+- Synchronous IPC trades throughput for latency and size. Each task can have only one outstanding message, which
+  limits concurrency [S1130]. A server cannot learn that a reply failed [S1129].
+- There are no capabilities yet: any task can message any task, and mandatory access control is only planned
+  [S1129].
+- Tasks do not share code, which costs flash. Firmware ships as a whole image and field updates of parts are not
+  supported [S1129].
+- Unsafe Rust can still corrupt memory inside a task [S1130].
+
+**Why it did not achieve wide adoption.** *(Hubris is still active; its adoption outcome is not final.)*
+- *Technical reasons:* it deliberately targets a narrow niche (MPU microcontrollers, a static system image) and is
+  not a general-purpose OS [S1129].
+- *Non-technical reasons:* it was built for one company's hardware alongside its first product, without aiming
+  at generality [S1130]. Wide adoption is not a stated goal [S1129][S1130].
+
+**Lessons for our OS.**
+- Restart-in-place supervision plus generation-tagged IDs is a simple, proven way to make restarts visible to
+  clients.
+- Rejecting asynchronous kernel messaging and requiring build-time configuration works because Hubris is
+  single-purpose firmware. A general-purpose OS cannot copy those choices directly.
+- Designing the debugger with the kernel from day one paid off.
+
+**Sources.** [S1129], [S1130], [S1131] (all primary; Oxide is the system's author).
+
+## MINIX 3
+
+**What it tried to fix.** Monolithic kernels run all drivers in kernel mode without fault isolation, so a single
+driver bug can take down the system. MINIX 3 (Vrije Universiteit) runs almost the whole OS as tightly restricted
+user-mode servers and drivers on top of a minimal kernel. A *reincarnation server* detects failed components and
+restarts them, transparently to applications where possible. It aims to stay POSIX-conformant [S1132].
+
+**What worked.**
+- Driver recovery works. After a block-driver crash, the file server retries the I/O. For Ethernet drivers, TCP
+  retransmission hides the failure. In one measurement, recovery took a mean of 0.36 s, which was dominated by
+  the TCP retransmission timeout [S1132].
+- The reported overhead was 5–10% compared with the same system using in-kernel drivers, measured before any
+  optimisation [S1132].
+- MINIX became one of the most widely deployed OSes through an unexpected channel. Intel runs a version of it in
+  the Management Engine of most recent PCs, attracted by the BSD licence [S1135].
+
+**What did not work.**
+- Recovery covers drivers, not the core. If the process manager or file server crashes (the two servers that
+  together implement POSIX), the system cannot recover [S1132]. Isolation alone does not make the core
+  restartable.
+- The design assumes transient faults. Logical and Byzantine failures, such as a driver that reports success but
+  produces garbage, are out of scope [S1132].
+- Theseus later showed experimentally that faults injected into MINIX 3's own IPC layer were outside what its
+  recovery handled [S1126].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* as a POSIX-like system it competed with Linux and BSD on their own terms (applications,
+  drivers) while carrying 5–10% overhead [S1132].
+- *Non-technical reasons:* it was academic and grant-funded. The public repository's last commits are from
+  November 2018, and the download page still offers 3.3.0 [S1133][S1134]. Its largest deployment (Intel ME)
+  came from the permissive licence. It gave the project neither feedback nor contributions, and Tanenbaum learned
+  of it from the press [S1135]. Why the funding ended was not verified [unverified].
+
+**Lessons for our OS.**
+- User-mode drivers with supervised restart are cheap and effective for *drivers*. Recovering stateful core
+  services (process table, VFS) needs explicit state design: checkpointing, or Theseus-style avoidance of state
+  spill.
+- A permissive licence can produce huge invisible deployment and nothing flowing back to the project. Whether
+  that is acceptable is a values decision.
+
+**Sources.** [S1132], [S1133], [S1134], [S1135] (primary); [S1126] (primary, independent evaluation).
+
+## Amoeba
+
+**What it tried to fix.** Amoeba (VU/CWI, about 1981–1996) aimed to make a network of machines appear as one
+time-sharing system. Users had cheap terminals, and computation ran on a shared *processor pool*. All objects were
+named and protected by sparse, cryptographically protected capabilities carrying rights bits, which servers could
+validate without kernel involvement. Communication used fast RPC [S1136].
+
+**What worked.**
+- RPC performance was a "major success" [S1136]. The immutable "bullet" file server, with a separate directory
+  server, made replication simple and fast, and the authors called it the most innovative part [S1136].
+- Capabilities were a single mechanism for naming and protection across the network [S1136].
+- An unexpected output: Python was created to administer Amoeba, because its system calls were awkward to reach
+  from the Bourne shell [S1138].
+
+**What did not work.**
+- The authors called run-to-completion (non-preemptive) threads "probably the worst mistake" of Amoeba 3.0.
+  Adding a print statement inside a critical region could trigger an RPC, block the thread, and break mutual
+  exclusion. Run-to-completion also blocked multiprocessor parallelism. Amoeba 4.0 replaced it with explicit
+  mutexes [S1136].
+- Point-to-point, master/slave RPC fit Unix pipelines and multicast-style parallel workloads poorly, so multicast
+  was added later [S1136].
+- The first Unix emulation reused the MINIX file server as "a quick and dirty solution", and emulated programs
+  could not use the bullet server [S1136].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* its model assumed a dedicated processor pool and LAN, unlike personal workstations and
+  then PCs. It reached software through emulation of about 100 common Unix utilities, not native applications
+  [S1136].
+- *Non-technical reasons:* it was a research project. The project page was last updated in 1998 with release 5.3
+  [S1137]. Licensing history (early commercial distribution) was not verified [unverified].
+
+**Lessons for our OS.**
+- Sparse (password-style) capabilities validated by servers avoid kernel bookkeeping, but they can be copied like
+  data. That trade-off differs from kernel-held handles (Zircon, seL4) [S1136][S911].
+- Concurrency semantics that rely on programmers knowing when code blocks are fragile. Hidden RPCs make this worse
+  [S1136].
+- A Unix emulation layer that bypasses the native storage model creates a second-class world inside the system
+  [S1136].
+
+**Sources.** [S1136], [S1137], [S1138] (primary).
+
+## Sprite
+
+**What it tried to fix.** Sprite (UC Berkeley, 1984–about 1994) aimed to "do networking right" by designing the
+network into a new kernel, so that a cluster of workstations behaved like one time-sharing system [S1139].
+
+**What worked.**
+- It had a network file system with aggressive client caching, which the retrospective describes as the fastest
+  in the world into the 1990s [S1139].
+- Transparent process migration ran in daily use: about 31% of all processing ran migrated [S1140]. Compiles sped
+  up 3–6x, limited by the file servers [S1140]. Idle-host tracking evicted migrated processes when the owner
+  returned [S1139].
+- It presented a true single system image (one root, one password file) [S1139].
+- The log-structured filesystem was its most durable idea. It reached NetApp products and flash controllers.
+  Process migration came back as VM live migration, implemented at VMware by a former Sprite member [S1139].
+
+**What did not work.**
+- Process migration was complicated to build and hard to keep working as the kernel changed [S1139].
+- The kernel became harder to maintain with age and staff turnover [S1139].
+- Porting Sprite as a Mach 3.0 user-level server (1992) performed poorly [S1139].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* adoption was all or nothing. The file system could not be taken without the whole OS.
+  Installation was never easy, and applications were hard to keep portable [S1139].
+- *Non-technical reasons:* Unix vendors added features faster than a team of about four students could match.
+  Shared libraries and SunOS/Ultrix binary compatibility consumed research time. Only about ten outside sites
+  used it, NFS and AFS won, and the team decided in late 1991 to wind down. Ousterhout suggests that building it
+  as an extension of an existing OS might have eased technology transfer, though it would probably have prevented
+  the single-system-image work [S1139].
+
+**Lessons for our OS.**
+- Ideas that can be separated from the system (LFS) survived. Ideas that needed the whole system (single system
+  image) did not. That bears on which of our mechanisms are worth making extractable [S1139].
+- Features that cut across the whole kernel, like migration, need continuous use and testing or they rot as the
+  kernel evolves [S1139].
+- A small team chasing compatibility with moving commercial targets loses. Our "no compatibility obligation" only
+  holds if the POSIX layer's scope stays fixed.
+
+**Sources.** [S1139], [S1140] (primary; no independent secondary source fetched).
+
+## Exokernel (MIT Aegis / XOK)
+
+**What it tried to fix.** Fixed kernel abstractions such as VM, IPC and filesystems deny applications
+domain-specific optimisation, and any new abstraction has to be emulated on top of them. The exokernel separates
+*protection* from *management*. A small kernel securely multiplexes physical resources through *secure bindings*,
+a *visible revocation* protocol, and an *abort protocol*. Untrusted *library OSes* implement the abstractions
+[S1141].
+
+**What worked.**
+- Aegis primitives ran 10–100x faster than Ultrix [S1141]. On Xok, unmodified Unix programs on the ExOS libOS
+  ran as fast as or faster than on FreeBSD/OpenBSD. The Cheetah web server, which served from the file cache with
+  precomputed checksums and co-located files on disk, ran about 8x faster than the best OpenBSD server on small
+  documents [S1142].
+- Debugging libraries ("relinking instead of rebooting") was easier than debugging kernels. Downloaded code was
+  valuable for letting the kernel safely delegate decisions, more than for raw speed [S1142].
+- The idea of the kernel as a control plane, with applications on a direct data plane, returned in Arrakis:
+  2–5x lower latency and about 9x throughput over Linux for a NoSQL store [S456]. Linking Arrakis to exokernel
+  lineage is this report's characterisation.
+
+**What did not work.**
+- Most of the measured gains came from the C-FFS filesystem, not from the exokernel structure. Against OpenBSD
+  running the same C-FFS, Xok was comparable on 8 of 11 steps [S1142].
+- Sharing state between mutually distrusting libOSes was the hardest problem. ExOS left the process map, fd
+  tables, sockets, TTYs and the mount table in writable shared memory [S1142].
+- The protected disk system (XN) took four designs before settling on downloaded deterministic metadata functions
+  (UDFs). Higher-level invariants still needed code downloaded into the kernel [S1142].
+- fork took about 6 ms against under 1 ms on OpenBSD because page tables could not be shared. Moving abstractions
+  into libraries hid information the kernel needed (cache pages versus VM pages), and exposing kernel structures
+  made the libOS API unstable [S1142].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* to get POSIX semantics such as a shared file namespace, fds across fork and signals, a
+  libOS must protect shared state. That pulls much of a conventional kernel back in [S1142]. The open problems
+  listed in 1997 (paging, swapping, a windowing system, fair global policy) were never closed in a deployed
+  system [S1142].
+- *Non-technical reasons:* it was an academic prototype. Its ideas were absorbed piecemeal as kernel-bypass and
+  control/data-plane split designs rather than as an OS [S456]. Broader industry uptake (DPDK/SPDK, unikernels)
+  was not sourced here [unverified].
+
+**Lessons for our OS.**
+- Separating protection from abstraction is powerful for specialised data paths (network, storage). The cost
+  appears as soon as abstractions are *shared*: namespaces, fds and pipes [S1142].
+- Our POSIX compatibility layer is a library-OS problem. ExOS's list of unprotected shared tables is a concrete
+  checklist of what such a layer must protect [S1142].
+- Measure where the speed-up actually comes from. In 1997 it was mostly the filesystem design, not the kernel
+  boundary [S1142].
+
+**Sources.** [S1141], [S1142], [S456] (primary, peer-reviewed).
+
+## Oberon
+
+**What it tried to fix.** Project Oberon (Wirth and Gutknecht, ETH, 1986–89, revised 2013) aimed to build an
+entire workstation system — OS, compiler, and later the CPU in Verilog — that one person could understand as a
+whole [S1144][S1145]. The core OS is about 4,600 lines and the compiler about 2,900 [S1144].
+
+**What worked.**
+- Extreme leanness and the module system. The book itself is the proof that a complete system can be explained in
+  full [S1144].
+- The text-as-command user interface, with tool texts as menus, directly inspired Plan 9's Help and Acme. Pike
+  liked its simplicity and use of the mouse buttons [S1146].
+- Its garbage-collected, type-safe single-language design anticipated the language-based OSes (Singularity,
+  Theseus) [S1144][S1126].
+
+**What did not work.**
+- It runs a single process with a central polling loop. Commands run to completion, cannot interact with the user,
+  and there are deliberately "no protection mechanisms" because tasks cannot interleave [S1144].
+- Pike called the single-process design with weak networking "an architectural throwback" [S1146].
+- Long jobs block the machine. Wirth suggests delegating them to compute servers [S1144].
+
+**Why it did not achieve wide adoption.**
+- *Technical reasons:* it is tied to a single language (Oberon), has no hardware isolation, no preemption and no
+  multi-user support, and is incompatible with existing software [S1144][S1146].
+- *Non-technical reasons:* it was designed for teaching and understanding, not for market. Wirth himself wrote in
+  2013 that proposing a system competing with worldwide "standards" would be preposterous, because very few people
+  would use it [S1144].
+
+**Lessons for our OS.**
+- Whole-system comprehensibility is achievable only by refusing features (multiprocessing, protection,
+  compatibility). Every one of those our OS keeps adds size.
+- Cooperative single-thread designs remove whole bug classes but cannot host untrusted or long-running programs,
+  which a C compiler workload needs.
+- A UI idea can outlive its OS when it can be ported independently (Oberon to Acme) [S1146].
+
+**Sources.** [S1144], [S1145], [S1146] (primary).
