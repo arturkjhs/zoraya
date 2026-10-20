@@ -1,0 +1,775 @@
+program	kind	tier	feature	api	file	line	function	code	rule_class	rule_effort_lines	rule_reason	signals
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/bltin/printf.c	567	check_conversion	warnx("%s: %s", s, strerror(ERANGE));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	4 tty/job control	isatty	src/bltin/test.c	319	primary	return isatty(getn(*t_wp));	direct	1	terminal check: handle type query	
+dash	core	T0	5 identity/permissions	geteuid	src/bltin/test.c	432	filstat	return s.st_uid == geteuid();	direct	2	identity query	
+dash	core	T0	5 identity/permissions	getegid	src/bltin/test.c	434	filstat	return s.st_gid == getegid();	direct	2	identity query	
+dash	core	T0	5 identity/permissions	faccessat	src/bltin/test.c	537	test_file_access	return !faccessat(AT_FDCWD, path, mode, AT_EACCESS);	direct	3	permission probe: try the operation / capability check	
+dash	core	T0	3 global path/cwd	chdir	src/cd.c	178	docd	err = chdir(dest);	emulate	0	process-global cwd	
+dash	core	T0	6 DM-060 non-reentrant	strtok	src/cd.c	236	updatepwd	p = strtok(cdcomppath, "/");	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	6 DM-060 non-reentrant	strtok	src/cd.c	254	updatepwd	p = strtok(0, "/");	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	3 global path/cwd	getcwd	src/cd.c	279	getpwd	if (getcwd(buf, sizeof(buf)))	emulate	0	process-global cwd	
+dash	core	T0	3 global path/cwd	getcwd	src/cd.c	283	getpwd	sh_warnx("getcwd() failed: %s", strerror(errno));	emulate	0	process-global cwd	
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/cd.c	283	getpwd	sh_warnx("getcwd() failed: %s", strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	2 signals	signal	src/error.c	110	onint	signal(SIGINT, SIG_DFL);	emulate	0	interrupt/termination handling	INT
+dash	core	T0	2 signals	raise	src/error.c	111	onint	raise(SIGINT);	emulate	0	interrupt/termination handling	INT
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/error.c	220	errmsg	return strerror(e);	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	1 process	pipe	src/eval.c	587	evalpipe	if (pipe(pip) < 0) {	direct	3	pipe between parent and spawned child: pass handle at spawn	
+dash	core	T0	1 process	execve	src/exec.c	163	tryexec	execve(cmd, argv, envp);	emulate	0	shell exec of a command	
+dash	core	T0	5 identity/permissions	getpwnam	src/expand.c	209	getpwhome	struct passwd *pw = getpwnam(name);	emulate	0	user/group database	
+dash	core	T0	4 tty/job control	tcgetattr	src/input.c	138	input_init	istty = tcgetattr(0, &tios) + 1;	emulate	0	termios mode change	
+dash	core	T0	4 tty/job control	isatty	src/jobs.c	214	setjobctl	while (!isatty(fd))	direct	1	terminal check: handle type query	
+dash	core	T0	4 tty/job control	tcgetpgrp	src/jobs.c	220	setjobctl	if ((pgrp = tcgetpgrp(fd)) < 0) {	emulate	0	process group / session / foreground: job-control semantics	
+dash	core	T0	4 tty/job control	getpgrp	src/jobs.c	231	setjobctl	if (pgrp == getpgrp())	emulate	0	process group / session / foreground: job-control semantics	
+dash	core	T0	2 signals	killpg	src/jobs.c	235	setjobctl	killpg(0, SIGTTIN);	emulate	0	job-control signal	TTIN
+dash	core	T0	4 tty/job control	setpgid	src/jobs.c	249	setjobctl	setpgid(0, pgrp);	emulate	0	process group / session / foreground: job-control semantics	
+dash	core	T0	2 signals	kill	src/jobs.c	347	killcmd	if (kill(pid, signo) != 0) {	emulate	0	send signal	
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/jobs.c	348	killcmd	sh_warnx(snlfmt, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	2 signals	killpg	src/jobs.c	413	restartjob	killpg(pgid, SIGCONT);	emulate	0	job-control signal	CONT
+dash	core	T0	4 tty/job control	setpgid	src/jobs.c	895	forkchild	(void)setpgid(0, pgrp);	emulate	0	process group / session / foreground: job-control semantics	
+dash	core	T0	4 tty/job control	setpgid	src/jobs.c	956	forkparent	(void)setpgid(pid, pgrp);	emulate	0	process group / session / foreground: job-control semantics	
+dash	core	T0	1 process	fork	src/jobs.c	982	forkshell	pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+dash	core	T0	1 process	vfork	src/jobs.c	1002	vforkexec	pid = vfork();	direct	15	vfork+exec child: posix_spawn with file actions	
+dash	core	T0	2 signals	raise	src/jobs.c	1060	waitforjob	raise(SIGINT);	emulate	0	interrupt/termination handling	INT
+dash	core	T0	1 process	wait3	src/jobs.c	1209	waitproc	err = wait3(status, flags, NULL);	emulate	0	shell job status (incl. WUNTRACED)	
+dash	core	T0	2 signals	sigsuspend	src/jobs.c	1221	waitproc	sigsuspend(&oldmask);	emulate	0	signal handler/disposition	
+dash	core	T0	4 tty/job control	tcsetpgrp	src/jobs.c	1550	xtcsetpgrp	err = tcsetpgrp(fd, pgrp);	emulate	0	process group / session / foreground: job-control semantics	
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/jobs.c	1554	xtcsetpgrp	sh_error("Cannot set tty process group (%s)", strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	3 global path/cwd	literal:/etc/profile	src/main.c	153	main	read_profile("/etc/profile");	restructure	10	global configuration file	
+dash	core	T0	4 tty/job control	isatty	src/miscbltin.c	138	readcmd	if (prompt && isatty(0)) {	direct	1	terminal check: handle type query	
+dash	core	T0	5 identity/permissions	umask	src/miscbltin.c	226	umaskcmd	mask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+dash	core	T0	5 identity/permissions	umask	src/miscbltin.c	227	umaskcmd	umask(mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+dash	core	T0	5 identity/permissions	umask	src/miscbltin.c	326	umaskcmd	umask(new_mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/miscbltin.c	513	ulimitcmd	sh_error("error setting limit (%s)", strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	4 tty/job control	isatty	src/options.c	143	procargs	if (stdin_istty && isatty(2))	direct	1	terminal check: handle type query	
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/redir.c	299	sh_dup2	sh_error("%d: %s", ofd, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	1 process	pipe	src/redir.c	341	sh_pipe	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+dash	core	T0	2 signals	signal	src/redir.c	378	openhere	signal(SIGINT, SIG_IGN);	emulate	0	interrupt/termination handling	INT
+dash	core	T0	2 signals	signal	src/redir.c	379	openhere	signal(SIGQUIT, SIG_IGN);	emulate	0	interrupt/termination handling	QUIT
+dash	core	T0	2 signals	signal	src/redir.c	380	openhere	signal(SIGHUP, SIG_IGN);	emulate	0	interrupt/termination handling	HUP
+dash	core	T0	2 signals	signal	src/redir.c	382	openhere	signal(SIGTSTP, SIG_IGN);	emulate	0	job-control signal	TSTP
+dash	core	T0	2 signals	signal	src/redir.c	384	openhere	signal(SIGPIPE, SIG_DFL);	direct	1	SIGPIPE disposition: native write returns EPIPE	PIPE
+dash	core	T0	6 DM-060 non-reentrant	strerror	src/redir.c	479	savefd	sh_error("%d: %s", from, strerror(err));	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	2 signals	sigemptyset	src/system.h	53	sigclearmask	sigemptyset(&set);	emulate	0	signal mask bookkeeping	
+dash	core	T0	2 signals	sigprocmask	src/system.h	54	sigclearmask	sigprocmask(SIG_SETMASK, &set, 0);	emulate	0	signal mask bookkeeping	
+dash	core	T0	2 signals	sigaction	src/trap.c	255	setsignal	if (sigaction(signo, 0, &act) == -1) {	emulate	0	signal handler/disposition	
+dash	core	T0	2 signals	sigfillset	src/trap.c	288	setsignal	sigfillset(&act.sa_mask);	emulate	0	signal mask bookkeeping	
+dash	core	T0	2 signals	sigaction	src/trap.c	289	setsignal	sigaction(signo, &act, 0);	emulate	0	signal handler/disposition	
+dash	core	T0	2 signals	signal	src/trap.c	301	ignoresig	signal(signo, SIG_IGN);	emulate	0	signal handler/disposition	
+dash	core	T0	2 signals	sigfillset	src/trap.c	475	sigblockall	sigfillset(&mask);	emulate	0	signal mask bookkeeping	
+dash	core	T0	2 signals	sigprocmask	src/trap.c	476	sigblockall	sigprocmask(SIG_SETMASK, &mask, oldmask);	emulate	0	signal mask bookkeeping	
+dash	core	T0	6 environment (DM-085)	putenv	src/var.c	87	changelocale	putenv((char *)val);	emulate	2	environment variable	
+dash	core	T0	6 DM-097 locale	setlocale	src/var.c	88	changelocale	setlocale(LC_ALL, nullstr);	direct	5	DM-flagged API; see catalog entry	
+dash	core	T0	5 identity/permissions	geteuid	src/var.c	210	initvar	if (!geteuid())	direct	2	identity query	
+oksh	comparison	T0	3 global path/cwd	chdir	c_ksh.c	112	c_cd	rval = chdir(try = Xstring(xs, xp) + phys_path);	emulate	0	process-global cwd	
+oksh	comparison	T0	3 global path/cwd	chdir	c_ksh.c	115	c_cd	rval = chdir(try = Xstring(xs, xp));	emulate	0	process-global cwd	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	c_ksh.c	123	c_cd	bi_errorf("%s - %s", try, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	5 identity/permissions	access	c_ksh.c	189	c_pwd	if (p && access(p, R_OK) == -1)	direct	3	permission probe: try the operation / capability check	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	c_ksh.c	195	c_pwd	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	kill	c_ksh.c	1248	c_kill	if ((n < -1 ? killpg(-n, sig) : kill(n, sig)) == -1) {	emulate	0	send signal	
+oksh	comparison	T0	2 signals	killpg	c_ksh.c	1248	c_kill	if ((n < -1 ? killpg(-n, sig) : kill(n, sig)) == -1) {	emulate	0	send signal	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	c_ksh.c	1249	c_kill	bi_errorf("%s: %s", p, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	5 identity/permissions	umask	c_sh.c	81	c_umask	old_umask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+oksh	comparison	T0	5 identity/permissions	umask	c_sh.c	82	c_umask	umask(old_umask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+oksh	comparison	T0	5 identity/permissions	umask	c_sh.c	116	c_umask	old_umask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+oksh	comparison	T0	5 identity/permissions	umask	c_sh.c	117	c_umask	umask(old_umask); /* in case of error */	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+oksh	comparison	T0	5 identity/permissions	umask	c_sh.c	184	c_umask	umask(new_umask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	c_sh.c	205	c_dot	bi_errorf("%s: %s", cp, err ? strerror(err) : "not found");	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	c_sh.c	221	c_dot	bi_errorf("%s: %s", cp, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	isatty	c_sh.c	302	c_read	if (isatty(fd)) {	direct	1	terminal check: handle type query	
+oksh	comparison	T0	4 tty/job control	isatty	c_sh.c	360	c_read	if (Flag(FTALKING_I) && isatty(fd)) {	direct	1	terminal check: handle type query	
+oksh	comparison	T0	6 DM-065 wall clock	clock_gettime	c_sh.c	744	timex	clock_gettime(CLOCK_MONOTONIC, &ts0);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	clock_gettime	c_sh.c	761	timex	clock_gettime(CLOCK_MONOTONIC, &ts1);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	getsid	c_sh.c	867	c_suspend	getsid(parent) != getsid(0)) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-039 symlink/lstat	lstat	c_test.c	251	test_eval	return lstat(opnd1, &b1) == 0 && S_ISLNK(b1.st_mode);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	isatty	c_test.c	272	test_eval	return isatty(res);	direct	1	terminal check: handle type query	
+oksh	comparison	T0	5 identity/permissions	getegid	c_test.c	276	test_eval	return stat(opnd1, &b1) == 0 && b1.st_gid == getegid();	direct	2	identity query	
+oksh	comparison	T0	5 identity/permissions	access	c_test.c	359	test_eaccess	res = access(path, amode);	direct	3	permission probe: try the operation / capability check	
+oksh	comparison	T0	6 DM-053 ioctl	ioctl	edit.c	74	check_sigwinch	if (procpid == kshpid && ioctl(tty_fd, TIOCGWINSZ, &ws) == 0) {	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcsetattr	edit.c	198	x_mode	tcsetattr(tty_fd, TCSADRAIN, &cb);	emulate	0	termios mode change	
+oksh	comparison	T0	4 tty/job control	tcsetattr	edit.c	219	x_mode	tcsetattr(tty_fd, TCSADRAIN, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	5 identity/permissions	getpwnam	edit.c	436	x_tilde_expand	else if ((pw = getpwnam(tilde + 1)) != NULL)	emulate	0	user/group database	
+oksh	comparison	T0	6 DM-060 non-reentrant	getpwent	edit.c	491	x_tilde_glob	while ((pw = getpwent()) != NULL) {	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-039 symlink/lstat	lstat	edit.c	626	x_file_glob	if ((lstat(words[0], &statb) == -1) ||	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	eval.c	913	comsub	"%s: %s", name, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-039 symlink/lstat	lstat	eval.c	1052	globit	if (lstat(Xstring(*xs, xp), &lstatb) == -1)	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	readdir	eval.c	1121	globit	while ((d = readdir(dirp)) != NULL) {	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	5 identity/permissions	getpwnam	eval.c	1252	homedir	pw = getpwnam(name);	emulate	0	user/group database	
+oksh	comparison	T0	2 signals	sigprocmask	exec.c	181	execute	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigsetjmp	exec.c	183	execute	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	exec.c	185	execute	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	exec.c	220	execute	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigsetjmp	exec.c	281	execute	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigsetjmp	exec.c	322	execute	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	1 process	execve	exec.c	382	execute	execve(t->str, t->args, ap);	emulate	0	shell exec of a command	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	386	execute	errorf("%s: %s", s, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	559	comexec	cp, strerror(tp->u2.errno_));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	572	comexec	cp, tp->u.fpath, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigsetjmp	exec.c	615	comexec	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	664	comexec	strerror(tp->u2.errno_));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	1 process	execve	exec.c	719	scriptexec	execve(tp->args[0], tp->args, ap);	emulate	0	shell exec of a command	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	722	scriptexec	errorf("%s: %s: %s", tp->str, shell, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	5 identity/permissions	access	exec.c	883	findcom	if (tp && (tp->flag & ISSET) && access(tp->val.s, X_OK) != 0) {	direct	3	permission probe: try the operation / capability check	
+oksh	comparison	T0	5 identity/permissions	access	exec.c	963	search_access	ret = access(path, mode);	direct	3	permission probe: try the operation / capability check	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	1132	iosetup	"open" : "create", cp, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	1157	iosetup	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	1205	herein	h->name, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigsetjmp	exec.c	1213	herein	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	exec.c	1237	herein	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigsetjmp	expr.c	185	v_evaluate	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	history.c	224	c_fc	tf->name, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	history.c	231	c_fc	bi_errorf("error writing temporary file - %s", strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	history.c	581	sethistsize	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	history.c	628	init_histvec	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	1 process	pipe	io.c	306	openpipe	if (pipe(lpv) == -1)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+oksh	comparison	T0	3 global path/cwd	literal:/tmp	io.c	456	maketemp	dir = tmpdir ? tmpdir : "/tmp";	direct	3	global /tmp: temp-dir capability	
+oksh	comparison	T0	3 global path/cwd	mkstemp	io.c	464	maketemp	fd = mkstemp(path);	direct	3	temporary file in global /tmp: temp-dir capability	
+oksh	comparison	T0	2 signals	sigemptyset	jobs.c	154	j_init	sigemptyset(&sm_default);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	155	j_init	sigprocmask(SIG_SETMASK, &sm_default, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigemptyset	jobs.c	157	j_init	sigemptyset(&sm_sigchld);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigaddset	jobs.c	158	j_init	sigaddset(&sm_sigchld, SIGCHLD);	emulate	0	child-exit notification	CHLD
+oksh	comparison	T0	4 tty/job control	tcsetattr	jobs.c	200	j_suspend	tcsetattr(tty_fd, TCSADRAIN, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	202	j_suspend	if (tcsetpgrp(tty_fd, restore_ttypgrp) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	203	j_suspend	warningf(false, "%s: tcsetpgrp() failed: %s",	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	204	j_suspend	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	206	j_suspend	if (setpgid(0, restore_ttypgrp) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	209	j_suspend	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigemptyset	jobs.c	217	j_suspend	sigemptyset(&sa.sa_mask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigaction	jobs.c	219	j_suspend	sigaction(SIGTSTP, &sa, &osa);	emulate	0	job-control signal	TSTP
+oksh	comparison	T0	2 signals	kill	jobs.c	220	j_suspend	kill(0, SIGTSTP);	emulate	0	job-control signal	TSTP
+oksh	comparison	T0	2 signals	sigaction	jobs.c	223	j_suspend	sigaction(SIGTSTP, &osa, NULL);	emulate	0	job-control signal	TSTP
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	226	j_suspend	if (setpgid(0, kshpid) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	227	j_suspend	warningf(false, "%s: setpgid() failed: %s",	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	228	j_suspend	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	231	j_suspend	if (tcsetpgrp(tty_fd, kshpid) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	234	j_suspend	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	killpg	jobs.c	261	j_exit	killpg(j->pgrp, SIGHUP);	emulate	0	interrupt/termination handling	HUP
+oksh	comparison	T0	2 signals	killpg	jobs.c	266	j_exit	killpg(j->pgrp, SIGCONT);	emulate	0	job-control signal	CONT
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	282	j_exit	tcsetpgrp(tty_fd, restore_ttypgrp);	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	283	j_exit	setpgid(0, restore_ttypgrp);	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	getpgrp	jobs.c	310	j_change	if (ttypgrp_ok && (our_pgrp = getpgrp()) < 0) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	getpgrp	jobs.c	311	j_change	warningf(false, "%s: getpgrp() failed: %s",	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	312	j_change	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcgetpgrp	jobs.c	322	j_change	if ((ttypgrp = tcgetpgrp(tty_fd)) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	325	j_change	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	kill	jobs.c	331	j_change	kill(0, SIGTTIN);	emulate	0	job-control signal	TTIN
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	338	j_change	if (setpgid(0, kshpid) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	339	j_change	warningf(false, "%s: setpgid() failed: %s",	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	340	j_change	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	343	j_change	if (tcsetpgrp(tty_fd, kshpid) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	346	j_change	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcgetattr	jobs.c	359	j_change	tcgetattr(tty_fd, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	402	exchild	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	1 process	fork	jobs.c	444	exchild	while ((i = fork()) == -1 && errno == EAGAIN && forksleep < 32) {	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	453	exchild	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	4 tty/job control	setpgid	jobs.c	473	exchild	setpgid(p->pid, j->pgrp);	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	480	exchild	tcsetpgrp(tty_fd, j->pgrp);	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	491	exchild	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	3 global path/cwd	literal:/dev/null	jobs.c	510	exchild	int fd = open("/dev/null", O_RDONLY);	direct	2	null device: pass a null handle	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	557	exchild	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	568	startlast	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	575	startlast	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	586	waitlast	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	594	waitlast	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	600	waitlast	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	615	j_waitfor	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	628	j_waitfor	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	639	j_waitfor	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	648	j_waitfor	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	665	j_kill	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	668	j_kill	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	killpg	jobs.c	680	j_kill	(void) killpg(j->pgrp, SIGCONT);	emulate	0	job-control signal	CONT
+oksh	comparison	T0	2 signals	killpg	jobs.c	681	j_kill	if (killpg(j->pgrp, sig) == -1) {	emulate	0	send signal	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	682	j_kill	bi_errorf("%s: %s", cp, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	687	j_kill	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	703	j_resume	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	706	j_resume	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	712	j_resume	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	4 tty/job control	tcsetattr	jobs.c	741	j_resume	tcsetattr(tty_fd, TCSADRAIN, &j->ttystate);	emulate	0	termios mode change	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	744	j_resume	tcsetpgrp(tty_fd, (j->flags & JF_SAVEDTTYPGRP) ?	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	tcsetattr	jobs.c	747	j_resume	tcsetattr(tty_fd, TCSADRAIN, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	748	j_resume	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	749	j_resume	bi_errorf("1st tcsetpgrp(%d, %d) failed: %s",	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	753	j_resume	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	killpg	jobs.c	763	j_resume	if (j->state == PRUNNING && killpg(j->pgrp, SIGCONT) == -1) {	emulate	0	job-control signal	CONT
+oksh	comparison	T0	4 tty/job control	tcsetattr	jobs.c	769	j_resume	tcsetattr(tty_fd, TCSADRAIN, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	770	j_resume	if (ttypgrp_ok && tcsetpgrp(tty_fd, our_pgrp) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	777	j_resume	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	788	j_resume	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	824	j_njobs	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	828	j_njobs	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	843	j_jobs	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	853	j_jobs	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	876	j_jobs	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	887	j_notify	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	903	j_notify	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	912	j_async	sigprocmask(SIG_BLOCK, &sm_sigchld, &omask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigprocmask	jobs.c	917	j_async	sigprocmask(SIG_SETMASK, &omask, NULL);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	kill	jobs.c	975	j_startjob	kill(procpid, SIGCHLD);	emulate	0	child-exit notification	CHLD
+oksh	comparison	T0	2 signals	sigsuspend	jobs.c	1003	j_waitj	sigsuspend(&sm_default);	emulate	0	signal handler/disposition	
+oksh	comparison	T0	4 tty/job control	tcgetpgrp	jobs.c	1034	j_waitj	(j->saved_ttypgrp = tcgetpgrp(tty_fd)) >= 0)	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	4 tty/job control	tcsetpgrp	jobs.c	1036	j_waitj	if (tcsetpgrp(tty_fd, our_pgrp) == -1) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	jobs.c	1040	j_waitj	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcgetattr	jobs.c	1044	j_waitj	tcgetattr(tty_fd, &j->ttystate);	emulate	0	termios mode change	
+oksh	comparison	T0	4 tty/job control	tcgetattr	jobs.c	1058	j_waitj	tcgetattr(tty_fd, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	4 tty/job control	tcsetattr	jobs.c	1060	j_waitj	tcsetattr(tty_fd, TCSADRAIN, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	1 process	waitpid	jobs.c	1154	j_sigchld	pid = waitpid(-1, &status, (WNOHANG|WUNTRACED));	emulate	0	shell job status (incl. WUNTRACED)	
+oksh	comparison	T0	2 signals	kill	jobs.c	1644	kill_job	if (kill(p->pid, sig) == -1)	emulate	0	send signal	
+oksh	comparison	T0	2 signals	alarm	lex.c	1087	getsc_line	alarm(ksh_tmout);	restructure	20	timeout via signal: native timer/deadline	
+oksh	comparison	T0	2 signals	alarm	lex.c	1142	getsc_line	alarm(0);	restructure	20	timeout via signal: native timer/deadline	
+oksh	comparison	T0	2 signals	sigsetjmp	lex.c	1189	set_prompt	if (sigsetjmp(genv->jbuf, 0)) {	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	6 DM-065 wall clock	time	lex.c	1252	dopprompt	time(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	localtime	lex.c	1253	dopprompt	tm = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	time	lex.c	1271	dopprompt	time(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	localtime	lex.c	1272	dopprompt	tm = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	ttyname	lex.c	1298	dopprompt	p = ttyname(0);	emulate	0	termios mode change	
+oksh	comparison	T0	6 DM-060 non-reentrant	ttyname	lex.c	1298	dopprompt	p = ttyname(0);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	time	lex.c	1324	dopprompt	time(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	localtime	lex.c	1325	dopprompt	tm = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	time	lex.c	1333	dopprompt	time(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	localtime	lex.c	1334	dopprompt	tm = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	time	lex.c	1342	dopprompt	time(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	localtime	lex.c	1343	dopprompt	tm = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	time	lex.c	1351	dopprompt	time(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-060 non-reentrant	localtime	lex.c	1352	dopprompt	tm = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	6 DM-065 wall clock	clock_gettime	mail.c	59	mcheck	clock_gettime(CLOCK_MONOTONIC, &now);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	5 identity/permissions	geteuid	main.c	326	main	ksheuid = geteuid();	direct	2	identity query	
+oksh	comparison	T0	5 identity/permissions	getegid	main.c	340	main	Flag(FPRIVILEGED) = getuid() != ksheuid || getgid() != getegid();	direct	2	identity query	
+oksh	comparison	T0	5 identity/permissions	getgid	main.c	340	main	Flag(FPRIVILEGED) = getuid() != ksheuid || getgid() != getegid();	direct	2	identity query	
+oksh	comparison	T0	5 identity/permissions	getuid	main.c	340	main	Flag(FPRIVILEGED) = getuid() != ksheuid || getgid() != getegid();	direct	2	identity query	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	main.c	360	main	errorf("%s: %s", s->file, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	isatty	main.c	368	main	if (isatty(0) && isatty(2)) {	direct	1	terminal check: handle type query	
+oksh	comparison	T0	3 global path/cwd	literal:/etc/suid_profile	main.c	418	main	include("/etc/suid_profile", 0, NULL, 1);	restructure	10	global configuration file	
+oksh	comparison	T0	5 identity/permissions	getlogin	main.c	469	init_username	p = getlogin();	emulate	0	user/group database	
+oksh	comparison	T0	6 DM-060 non-reentrant	getlogin	main.c	469	init_username	p = getlogin();	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigsetjmp	main.c	495	include	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigsetjmp	main.c	570	shell	i = sigsetjmp(genv->jbuf, 0);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	siglongjmp	main.c	690	unwind	siglongjmp(genv->jbuf, i);	emulate	0	signal handler/disposition	
+oksh	comparison	T0	4 tty/job control	getpgrp	main.c	761	quitenv	getpgrp() == kshpid) {	emulate	0	process group / session / foreground: job-control semantics	
+oksh	comparison	T0	2 signals	kill	main.c	764	quitenv	kill(0, sig);	emulate	0	send signal	
+oksh	comparison	T0	5 identity/permissions	getgid	misc.c	297	change_flag	gid_t gid = getgid();	direct	2	identity query	
+oksh	comparison	T0	5 identity/permissions	setresgid	misc.c	299	change_flag	setresgid(gid, gid, gid);	restructure	20	privilege change	
+oksh	comparison	T0	5 identity/permissions	setgroups	misc.c	300	change_flag	setgroups(1, &gid);	restructure	20	privilege change	
+oksh	comparison	T0	5 identity/permissions	setresuid	misc.c	301	change_flag	setresuid(ksheuid, ksheuid, ksheuid);	restructure	20	privilege change	
+oksh	comparison	T0	3 global path/cwd	getcwd	misc.c	1145	ksh_get_wd	ret = getcwd(b, bsize);	emulate	0	process-global cwd	
+oksh	comparison	T0	6 DM-039 symlink/lstat	readlink	path.c	250	do_phys_path	llen = readlink(Xstring(*xsp, xp), lbuf, sizeof(lbuf) - 1);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	2 signals	sigemptyset	trap.c	55	inittraps	sigemptyset(&Sigact_ign.sa_mask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	alarm	trap.c	90	alarm_catcher	int left = alarm(0);	restructure	20	timeout via signal: native timer/deadline	
+oksh	comparison	T0	2 signals	alarm	trap.c	96	alarm_catcher	alarm(left);	restructure	20	timeout via signal: native timer/deadline	
+oksh	comparison	T0	2 signals	sigaction	trap.c	378	setsig	sigaction(p->signal, &Sigact_ign, &sigact);	emulate	0	signal handler/disposition	
+oksh	comparison	T0	2 signals	sigemptyset	trap.c	407	setsig	sigemptyset(&sigact.sa_mask);	emulate	0	signal mask bookkeeping	
+oksh	comparison	T0	2 signals	sigaction	trap.c	410	setsig	sigaction(p->signal, &sigact, NULL);	emulate	0	signal handler/disposition	
+oksh	comparison	T0	3 global path/cwd	literal:/dev/tty	tty.c	36	tty_init	tfd = open("/dev/tty", O_RDWR);	emulate	0	controlling terminal by name	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	tty.c	40	tty_init	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	isatty	tty.c	43	tty_init	if (isatty(0))	direct	1	terminal check: handle type query	
+oksh	comparison	T0	4 tty/job control	isatty	tty.c	45	tty_init	else if (isatty(2))	direct	1	terminal check: handle type query	
+oksh	comparison	T0	6 DM-060 non-reentrant	strerror	tty.c	55	tty_init	__func__, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	4 tty/job control	tcgetattr	tty.c	67	tty_init	tcgetattr(tty_fd, &tty_state);	emulate	0	termios mode change	
+oksh	comparison	T0	6 DM-065 wall clock	clock_gettime	var.c	943	getspec	clock_gettime(CLOCK_MONOTONIC, &now);	direct	5	DM-flagged API; see catalog entry	
+oksh	comparison	T0	5 identity/permissions	access	var.c	1005	setspec	if (s[0] == '/' && access(s, W_OK|X_OK) == 0 &&	direct	3	permission probe: try the operation / capability check	
+oksh	comparison	T0	6 DM-065 wall clock	clock_gettime	var.c	1062	setspec	clock_gettime(CLOCK_MONOTONIC, &seconds);	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	3 global path/cwd	chdir	builtin/cd.c	17	cd	if (chdir(path) != 0) {	emulate	0	process-global cwd	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	builtin/cd.c	19	cd	fprintf(stderr, "cd: %s\n", strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	3 global path/cwd	chdir	builtin/cd.c	80	builtin_cd	if (chdir(oldpwd) != 0) {	emulate	0	process-global cwd	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	builtin/cd.c	81	builtin_cd	fprintf(stderr, "cd: %s\n", strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	1 process	fork	builtin/command.c	73	run_command	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	1 process	execv	builtin/command.c	78	run_command	execv(path, argv);	emulate	0	shell exec of a command	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	builtin/dot.c	34	builtin_dot	argv[1], strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	5 identity/permissions	access	builtin/exec.c	25	builtin_exec	if (access(path, X_OK) != 0) {	direct	3	permission probe: try the operation / capability check	
+mrsh	comparison	T0	1 process	execv	builtin/exec.c	30	builtin_exec	execv(path, &argv[_mrsh_optind]);	emulate	0	shell exec of a command	
+mrsh	comparison	T0	4 tty/job control	isatty	builtin/set.c	242	mrsh_process_args	state->interactive = isatty(priv->term_fd) &&	direct	1	terminal check: handle type query	
+mrsh	comparison	T0	5 identity/permissions	umask	builtin/umask.c	20	umask_current_mask	mode_t mask = umask(default_mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+mrsh	comparison	T0	5 identity/permissions	umask	builtin/umask.c	21	umask_current_mask	umask(mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+mrsh	comparison	T0	5 identity/permissions	umask	builtin/umask.c	203	builtin_umask	umask(mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+mrsh	comparison	T0	1 process	waitpid	builtin/wait.c	87	builtin_wait	pid_t waited = waitpid(pids[i].pid, &stat, 0);	emulate	0	shell job status (incl. WUNTRACED)	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	main.c	47	main	init_args.command_file, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	5 identity/permissions	getuid	shell/entry.c	60	mrsh_get_ps1	sprintf(p, "%s", getuid() ? "$ " : "# ");	direct	2	identity query	
+mrsh	comparison	T0	5 identity/permissions	access	shell/entry.c	119	source_file	if (access(path, F_OK) == -1) {	direct	3	permission probe: try the operation / capability check	
+mrsh	comparison	T0	3 global path/cwd	literal:/etc/profile	shell/entry.c	127	mrsh_source_profile	source_file(state, "/etc/profile");	restructure	10	global configuration file	
+mrsh	comparison	T0	6 environment (DM-085)	getenv	shell/entry.c	129	mrsh_source_profile	const char *home = getenv("HOME");	direct	2	environment variable	
+mrsh	comparison	T0	6 environment (DM-085)	getenv	shell/entry.c	148	mrsh_source_env	char *path = getenv("ENV");	direct	2	environment variable	
+mrsh	comparison	T0	5 identity/permissions	getegid	shell/entry.c	152	mrsh_source_env	if (getuid() != geteuid() || getgid() != getegid()) {	direct	2	identity query	
+mrsh	comparison	T0	5 identity/permissions	geteuid	shell/entry.c	152	mrsh_source_env	if (getuid() != geteuid() || getgid() != getegid()) {	direct	2	identity query	
+mrsh	comparison	T0	5 identity/permissions	getgid	shell/entry.c	152	mrsh_source_env	if (getuid() != geteuid() || getgid() != getegid()) {	direct	2	identity query	
+mrsh	comparison	T0	5 identity/permissions	getuid	shell/entry.c	152	mrsh_source_env	if (getuid() != geteuid() || getgid() != getegid()) {	direct	2	identity query	
+mrsh	comparison	T0	4 tty/job control	getpgrp	shell/job.c	28	mrsh_set_job_control	pid_t pgid = getpgrp();	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	tcgetpgrp	shell/job.c	29	mrsh_set_job_control	if (tcgetpgrp(priv->term_fd) == pgid) {	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	2 signals	kill	shell/job.c	32	mrsh_set_job_control	kill(-pgid, SIGTTIN);	emulate	0	job-control signal	TTIN
+mrsh	comparison	T0	4 tty/job control	getsid	shell/job.c	41	mrsh_set_job_control	if (getsid(0) != priv->pgid) {	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	setpgid	shell/job.c	42	mrsh_set_job_control	if (setpgid(priv->pgid, priv->pgid) != 0) {	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	tcsetpgrp	shell/job.c	49	mrsh_set_job_control	if (tcsetpgrp(priv->term_fd, priv->pgid) != 0) {	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	tcgetattr	shell/job.c	54	mrsh_set_job_control	if (tcgetattr(priv->term_fd, &priv->term_modes) != 0) {	emulate	0	termios mode change	
+mrsh	comparison	T0	4 tty/job control	setpgid	shell/job.c	125	job_add_process	if (setpgid(proc->pid, job->pgid) != 0 && errno != EPERM) {	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	tcsetpgrp	shell/job.c	161	job_set_foreground	tcsetpgrp(priv->term_fd, job->pgid);	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	tcsetattr	shell/job.c	164	job_set_foreground	tcsetattr(priv->term_fd, TCSADRAIN, &job->term_modes);	emulate	0	termios mode change	
+mrsh	comparison	T0	4 tty/job control	tcsetpgrp	shell/job.c	171	job_set_foreground	tcsetpgrp(priv->term_fd, priv->pgid);	emulate	0	process group / session / foreground: job-control semantics	
+mrsh	comparison	T0	4 tty/job control	tcgetattr	shell/job.c	174	job_set_foreground	tcgetattr(priv->term_fd, &job->term_modes);	emulate	0	termios mode change	
+mrsh	comparison	T0	4 tty/job control	tcsetattr	shell/job.c	176	job_set_foreground	tcsetattr(priv->term_fd, TCSADRAIN, &priv->term_modes);	emulate	0	termios mode change	
+mrsh	comparison	T0	2 signals	kill	shell/job.c	181	job_set_foreground	if (kill(-job->pgid, SIGCONT) != 0) {	emulate	0	job-control signal	CONT
+mrsh	comparison	T0	1 process	waitpid	shell/job.c	236	_job_wait	pid_t ret = waitpid(pid, &stat, options);	emulate	0	shell job status (incl. WUNTRACED)	
+mrsh	comparison	T0	1 process	waitpid	shell/job.c	244	_job_wait	fprintf(stderr, "waitpid(%d): %s\n", pid, strerror(errno));	emulate	0	shell job status (incl. WUNTRACED)	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/job.c	244	_job_wait	fprintf(stderr, "waitpid(%d): %s\n", pid, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	2 signals	kill	shell/job.c	487	broadcast_sighup_to_jobs	if (kill(-job->pgid, SIGHUP) != 0) {	emulate	0	interrupt/termination handling	HUP
+mrsh	comparison	T0	6 DM-060 non-reentrant	strtok	shell/path.c	44	expand_path	char *basedir = strtok(pathe, ":");	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	5 identity/permissions	access	shell/path.c	57	expand_path	if (access(path, exec ? X_OK : R_OK) != -1) {	direct	3	permission probe: try the operation / capability check	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strtok	shell/path.c	62	expand_path	basedir = strtok(NULL, ":");	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	3 global path/cwd	getcwd	shell/path.c	75	current_working_dir	while (getcwd(buf.data, buf.cap) == NULL) {	emulate	0	process-global cwd	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/redir.c	36	write_here_document_line	errno ? strerror(errno) : "short write");	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	1 process	pipe	shell/redir.c	42	create_here_document_fd	if (pipe(fds) != 0) {	direct	3	pipe between parent and spawned child: pass handle at spawn	
+mrsh	comparison	T0	1 process	fork	shell/redir.c	71	create_here_document_fd	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	1 process	pipe	shell/task/pipeline.c	50	run_pipeline	if (pipe(fds) != 0) {	direct	3	pipe between parent and spawned child: pass handle at spawn	
+mrsh	comparison	T0	1 process	fork	shell/task/pipeline.c	62	run_pipeline	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/pipeline.c	80	run_pipeline	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/pipeline.c	89	run_pipeline	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	6 environment (DM-085)	setenv	shell/task/simple_command.c	21	populate_env_iterator	setenv(key, var->value, 1);	emulate	2	environment variable	
+mrsh	comparison	T0	1 process	fork	shell/task/simple_command.c	55	run_process	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	6 environment (DM-085)	setenv	shell/task/simple_command.c	75	run_process	setenv(assign->name, value, true);	emulate	2	environment variable	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/simple_command.c	98	run_process	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	1 process	execv	shell/task/simple_command.c	103	run_process	execv(path, argv);	emulate	0	shell exec of a command	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/simple_command.c	106	run_process	fprintf(stderr, "%s: %s\n", argv[0], strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/simple_command.c	138	dup_and_save_fd	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/simple_command.c	186	run_builtin	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	1 process	fork	shell/task/task.c	18	run_subshell	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	3 global path/cwd	literal:/dev/null	shell/task/task.c	29	run_subshell	int fd = open("/dev/null", O_CLOEXEC | O_RDONLY);	direct	2	null device: pass a null handle	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/task.c	32	run_subshell	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	1 process	fork	shell/task/task.c	342	run_command_list_array	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	3 global path/cwd	literal:/dev/null	shell/task/task.c	357	run_command_list_array	int fd = open("/dev/null", O_CLOEXEC | O_RDONLY);	direct	2	null device: pass a null handle	
+mrsh	comparison	T0	6 DM-060 non-reentrant	strerror	shell/task/task.c	360	run_command_list_array	strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+mrsh	comparison	T0	1 process	pipe	shell/task/word.c	92	run_word_command	if (pipe(fds) != 0) {	direct	3	pipe between parent and spawned child: pass handle at spawn	
+mrsh	comparison	T0	1 process	fork	shell/task/word.c	97	run_word_command	pid_t pid = fork();	emulate	0	shell fork (subshell/pipeline/background job): POSIX semantics of the language	
+mrsh	comparison	T0	2 signals	sigaction	shell/trap.c	37	set_trap	if (sigaction(sig, NULL, &sa) != 0) {	emulate	0	signal handler/disposition	
+mrsh	comparison	T0	2 signals	sigaction	shell/trap.c	71	set_trap	if (sigaction(sig, &sa, NULL) < 0) {	emulate	0	signal handler/disposition	
+mrsh	comparison	T0	2 signals	sigaction	shell/trap.c	98	set_job_control_traps	if (sigaction(sig, &sa, NULL) < 0) {	emulate	0	signal handler/disposition	
+mrsh	comparison	T0	5 identity/permissions	getpwnam	shell/word.c	45	expand_tilde_at	struct passwd *pw = getpwnam(name);	emulate	0	user/group database	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/dirtree.c	48	dirtree_add_node	if (0>(linklen = readlinkat(fd, name, libbuf, 4095))) goto error;	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-060 non-reentrant	readdir	lib/dirtree.c	181	dirtree_recurse	} else while ((entry = readdir(dir))) {	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/env.c	122	reset_env	stuff[i] = (s = getenv(stuff[i])) ? xmprintf("%s=%s", stuff[i], s) : 0;	direct	2	environment variable	
+toybox	core	T0-T2	3 global path/cwd	chdir	lib/env.c	125	reset_env	if (chdir(p->pw_dir)) {	restructure	10	process-global cwd	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	140	reset_env	setenv("PATH", _PATH_DEFPATH, 1);	emulate	0	$PATH search semantics	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	141	reset_env	setenv("HOME", p->pw_dir, 1);	emulate	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	142	reset_env	setenv("SHELL", p->pw_shell, 1);	emulate	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	143	reset_env	setenv("USER", p->pw_name, 1);	emulate	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	144	reset_env	setenv("LOGNAME", p->pw_name, 1);	emulate	2	environment variable	
+toybox	core	T0-T2	6 DM-060 non-reentrant	strerror	lib/lib.c	18	verror_msg	if (err>0) fprintf(stderr, s, strerror(err));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	fchmodat	lib/lib.c	762	wfchmodat	int rc = fchmodat(fd, name, mode, 0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	fchmod	lib/lib.c	788	copy_tempfile	if (!fstat(fdin, &statbuf)) fchmod(fd, statbuf.st_mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	fchown	lib/lib.c	795	copy_tempfile	ignored = fchown(fd, statbuf.st_uid, statbuf.st_gid);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	2 signals	sigfillset	lib/lib.c	899	exit_signal	sigfillset(&sigset);	direct	2	signal mask bookkeeping	
+toybox	core	T0-T2	2 signals	sigprocmask	lib/lib.c	900	exit_signal	sigprocmask(SIG_BLOCK, &sigset, 0);	direct	2	signal mask bookkeeping	
+toybox	core	T0-T2	5 identity/permissions	umask	lib/lib.c	966	string_to_mode	umask(amask = umask(0));	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	3 global path/cwd	literal:/proc	lib/lib.c	1123	names_to_pid	if (!(dp = opendir("/proc"))) perror_exit("no /proc");	restructure	15	procfs text interface (DM-054)	
+toybox	core	T0-T2	6 DM-060 non-reentrant	readdir	lib/lib.c	1125	names_to_pid	while ((entry = readdir(dp))) {	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	3 global path/cwd	literal:/proc/%u/comm	lib/lib.c	1135	names_to_pid	sprintf(libbuf, "/proc/%u/comm", u);	restructure	15	procfs text interface (DM-054)	
+toybox	core	T0-T2	3 global path/cwd	literal:/proc/%u/exe	lib/lib.c	1156	names_to_pid	sprintf(buf, "/proc/%u/exe", u);	restructure	15	procfs text interface (DM-054)	
+toybox	core	T0-T2	3 global path/cwd	literal:/proc/%u/cmdline	lib/lib.c	1163	names_to_pid	sprintf(cmd = libbuf+16, "/proc/%u/cmdline", u);	restructure	15	procfs text interface (DM-054)	
+toybox	core	T0-T2	3 global path/cwd	literal:/etc/passwd	lib/lib.c	1292	bufgetpwnamuid	if (!stat("/etc/passwd", st) && passtime!=st->st_mtime) {	restructure	10	global configuration file	
+toybox	core	T0-T2	3 global path/cwd	literal:/etc/group	lib/lib.c	1341	bufgetgrnamgid	if (!stat("/etc/group", st) && grptime!=st->st_mtime) {	restructure	10	global configuration file	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/lib.c	1380	readlinkat0	len = readlinkat(dirfd, path, buf, len-1);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-065 wall clock	clock_gettime	lib/lib.c	1455	millitime	clock_gettime(CLOCK_MONOTONIC, &ts);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	lib/lib.c	1464	format_iso_time	s += strftime(s, len, "%F %T", localtime(&(ts->tv_sec)));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	lib/lib.c	1466	format_iso_time	s += strftime(s, len-strlen(buf), "%z", localtime(&(ts->tv_sec)));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	4 tty/job control	isatty	lib/lib.c	1478	loggit	for (i = 0; i<3; i++) if (isatty(i)) facility = LOG_AUTH;	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	6 DM-023 select/poll	poll	lib/net.c	86	xpoll	if (0<=(i = poll(fds, nfds, timeout)) || toys.signal) return i;	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	2 signals	sigaction	lib/password.c	60	read_password	sigaction(SIGINT, &sa, &oldsa);	restructure	20	interrupt/termination handling	INT
+toybox	core	T0-T2	4 tty/job control	tcflush	lib/password.c	61	read_password	tcflush(tty, TCIFLUSH);	restructure	15	termios mode change	
+toybox	core	T0-T2	4 tty/job control	tcsetattr	lib/password.c	78	read_password	tcsetattr(0, TCSANOW, &oldtermio);	restructure	15	termios mode change	
+toybox	core	T0-T2	2 signals	sigaction	lib/password.c	79	read_password	sigaction(SIGINT, &oldsa, 0);	restructure	20	interrupt/termination handling	INT
+toybox	core	T0-T2	6 DM-036 record locks	fcntl-lock	lib/password.c	133	update_password	if (!(ofp = fopen(filename, "w+")) || 0>fcntl(fileno(ofp), F_SETLK, &lock)\	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-037 fsync	fsync	lib/password.c	187	update_password	fsync(nfd);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-038 rename	rename	lib/password.c	190	update_password	if (!found || rename(ff, filename)) {	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	1 process	fork	lib/portability.c	25	xfork	pid_t pid = fork();	restructure	40	fork: check whether exec follows; else needs separate process design	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/urandom	lib/portability.c	50	xgetrandom	xreadall(fd = xopen("/dev/urandom", O_RDONLY), buf, buflen);	restructure	10	global path	
+toybox	core	T0-T2	3 global path/cwd	literal:/proc/mounts	lib/portability.c	136	xgetmountlist	char *p = path ? : "/proc/mounts";	restructure	15	procfs text interface (DM-054)	
+toybox	core	T0-T2	2 signals	xsignal	lib/portability.c	456	xsignal_all_killers	if (signames[i].num != SIGKILL) xsignal(signames[i].num, handler);	restructure	15	signal handler/disposition	KILL
+toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/portability.c	614	get_block_device_size	return (ioctl(fd, BLKGETSIZE64, size) >= 0);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	4 tty/job control	isatty	lib/tty.c	24	tty_fd	for (i = 0; i<3; i++) if (isatty(j = (i+1)%3)) return j;	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	lib/tty.c	26	tty_fd	return xnotstdio(open("/dev/tty", O_RDWR));	emulate	0	controlling terminal by name	
+toybox	core	T0-T2	4 tty/job control	isatty	lib/tty.c	42	terminal_size	if (isatty(i) && !ioctl(i, TIOCGWINSZ, &ws)) {	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/tty.c	42	terminal_size	if (isatty(i) && !ioctl(i, TIOCGWINSZ, &ws)) {	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/tty.c	49	terminal_size	s = getenv("COLUMNS");	direct	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/tty.c	51	terminal_size	s = getenv("LINES");	direct	2	environment variable	
+toybox	core	T0-T2	4 tty/job control	tcgetattr	lib/tty.c	113	set_terminal	int i = tcgetattr(fd, &tio);	restructure	15	termios mode change	
+toybox	core	T0-T2	4 tty/job control	cfmakeraw	lib/tty.c	119	set_terminal	cfmakeraw(&tio);	restructure	15	termios mode change	
+toybox	core	T0-T2	4 tty/job control	tcsetattr	lib/tty.c	140	set_terminal	return tcsetattr(fd, TCSAFLUSH, &tio);	restructure	15	termios mode change	
+toybox	core	T0-T2	2 signals	xsignal	lib/tty.c	289	start_redraw	xsignal(SIGWINCH, generic_signal);	restructure	15	signal handler/disposition	WINCH
+toybox	core	T0-T2	2 signals	siglongjmp	lib/xwrap.c	40	_xexit	if (toys.rebound) siglongjmp(*toys.rebound, 1);	restructure	15	signal handler/disposition	
+toybox	core	T0-T2	6 DM-031 mmap	mmap	lib/xwrap.c	63	xmmap	void *ret = mmap(addr, length, prot, flags, fd, off);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	3 global path/cwd	chdir	lib/xwrap.c	199	xvdaemon	chdir("/");	restructure	10	process-global cwd	
+toybox	core	T0-T2	4 tty/job control	setsid	lib/xwrap.c	200	xvdaemon	setsid();	emulate	0	process group / session / foreground: job-control semantics	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	lib/xwrap.c	202	xvdaemon	xopen_stdio("/dev/null", O_RDWR);	direct	2	null device: pass a null handle	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	lib/xwrap.c	204	xvdaemon	if (-1 != (fd = open("/dev/tty", O_RDONLY))) {	emulate	0	controlling terminal by name	
+toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/xwrap.c	205	xvdaemon	ioctl(fd, TIOCNOTTY);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	1 process	execvp	lib/xwrap.c	232	xexec	execvp(argv[0], argv);	direct	5	exec in child: fold into spawn	
+toybox	core	T0-T2	1 process	pipe	lib/xwrap.c	254	xpopen_setup	if (pipes[pid]==-1 && pipe(cestnepasun+(2*pid))) perror_exit("pipe");	direct	3	pipe between parent and spawned child: pass handle at spawn	
+toybox	core	T0-T2	1 process	waitpid	lib/xwrap.c	343	xwaitpid	while (-1 == waitpid(pid, &status, 0) && errno == EINTR) errno = 0;	direct	5	wait for own child: wait on process handle	
+toybox	core	T0-T2	5 identity/permissions	access	lib/xwrap.c	414	xaccess	if (access(path, flags)) perror_exit("Can't access '%s'", path);	direct	3	permission probe: try the operation / capability check	
+toybox	core	T0-T2	1 process	pipe	lib/xwrap.c	442	xpipe	if (pipe(pp)) perror_exit("xpipe");	direct	3	pipe between parent and spawned child: pass handle at spawn	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	lib/xwrap.c	467	xnotstdio	xopen_stdio("/dev/null", O_RDWR);	direct	2	null device: pass a null handle	
+toybox	core	T0-T2	6 DM-038 rename	rename	lib/xwrap.c	476	xrename	if (rename(from, to)) perror_exit("rename %s -> %s", from, to);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	3 global path/cwd	mkstemp	lib/xwrap.c	484	xtempfile	if(-1 == (fd = mkstemp(*tempname))) perror_exit("no temp file");	direct	3	temporary file in global /tmp: temp-dir capability	
+toybox	core	T0-T2	3 global path/cwd	getcwd	lib/xwrap.c	567	xgetcwd	char *buf = getcwd(NULL, 0);	restructure	10	process-global cwd	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/xwrap.c	595	xabspath	if ((flags & ABS_KEEP) && (str = getenv("PWD")))	direct	2	environment variable	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/xwrap.c	632	xabspath	else len = readlinkat(dirfd, str, libbuf, sizeof(libbuf));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	3 global path/cwd	chdir	lib/xwrap.c	703	xchdir	if (chdir(path)) perror_exit("chdir '%s'", path);	restructure	10	process-global cwd	
+toybox	core	T0-T2	3 global path/cwd	chroot	lib/xwrap.c	708	xchroot	if (chroot(path)) error_exit("chroot '%s'", path);	restructure	10	global path	
+toybox	core	T0-T2	5 identity/permissions	getpwuid	lib/xwrap.c	714	xgetpwuid	struct passwd *pwd = getpwuid(uid);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getgrgid	lib/xwrap.c	721	xgetgrgid	struct group *group = getgrgid(gid);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getpwnam	lib/xwrap.c	729	xgetuid	struct passwd *up = getpwnam(name);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getgrnam	lib/xwrap.c	743	xgetgid	struct group *gr = getgrnam(name);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getpwnam	lib/xwrap.c	757	xgetpwnam	struct passwd *up = getpwnam(name);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getgrnam	lib/xwrap.c	765	xgetgrnam	struct group *gr = getgrnam(name);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	initgroups	lib/xwrap.c	776	xsetuser	if (initgroups(pwd->pw_name, pwd->pw_gid) || setgid(pwd->pw_gid)	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	setgid	lib/xwrap.c	776	xsetuser	if (initgroups(pwd->pw_name, pwd->pw_gid) || setgid(pwd->pw_gid)	restructure	20	privilege change	
+toybox	core	T0-T2	5 identity/permissions	setuid	lib/xwrap.c	777	xsetuser	|| setuid(pwd->pw_uid)) perror_exit("xsetuser '%s'", pwd->pw_name);	restructure	20	privilege change	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/xwrap.c	791	xreadlinkat	len = readlinkat(dir, name, buf, size);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/xwrap.c	824	xioctl	rc = ioctl(fd, request, data);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	3 global path/cwd	literal:/var/run/%s.pid	lib/xwrap.c	838	xpidfile	sprintf(pidfile, "/var/run/%s.pid", name);	restructure	10	global path	
+toybox	core	T0-T2	2 signals	kill	lib/xwrap.c	852	xpidfile	if (pid < 1 || (kill(pid, 0) && errno == ESRCH)) unlink(pidfile);	direct	3	send signal	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/xwrap.c	979	xtzset	char *old = getenv("TZ");	direct	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/xwrap.c	982	xtzset	if (new ? setenv("TZ", new, 1) : unsetenv("TZ")) perror_exit("setenv");	emulate	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	unsetenv	lib/xwrap.c	982	xtzset	if (new ? setenv("TZ", new, 1) : unsetenv("TZ")) perror_exit("setenv");	emulate	2	environment variable	
+toybox	core	T0-T2	2 signals	sigaction	lib/xwrap.c	997	xsignal_flags	if (sigaction(signal, sa, 0)) perror_exit("xsignal %d", signal);	restructure	15	signal handler/disposition	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/xwrap.c	1091	xparsedate	oldtz = getenv("TZ");	direct	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/xwrap.c	1094	xparsedate	if (tz) setenv("TZ", tz, 1);	emulate	2	environment variable	
+toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/xwrap.c	1105	xparsedate	if (oldtz) setenv("TZ", oldtz, 1);	emulate	2	environment variable	
+toybox	core	T0-T2	5 identity/permissions	umask	main.c	217	toy_singleinit	toys.old_umask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	umask	main.c	218	toy_singleinit	if (!(which->flags & TOYFLAG_UMASK)) umask(toys.old_umask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	6 DM-097 locale	setlocale	main.c	222	toy_singleinit	setlocale(LC_CTYPE, "");	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-097 locale	nl_langinfo	main.c	223	toy_singleinit	if (strcmp("UTF-8", nl_langinfo(CODESET)))	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-097 locale	newlocale	main.c	224	toy_singleinit	uselocale(newlocale(LC_CTYPE_MASK, "C.UTF-8", 0) ? :	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-097 locale	uselocale	main.c	224	toy_singleinit	uselocale(newlocale(LC_CTYPE_MASK, "C.UTF-8", 0) ? :	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-097 locale	newlocale	main.c	225	toy_singleinit	newlocale(LC_CTYPE_MASK, "en_US.UTF-8", 0));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	2 signals	signal	main.c	285	toy_exec_which	for (i = 0; i<NSIG; i++) signal(i, SIG_DFL);	restructure	15	signal handler/disposition	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	readlink	main.c	320	toybox_main	s = (0<readlink(s, libbuf, sizeof(libbuf))) ? libbuf : 0;	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	toys/lsb/mktemp.c	36	mktemp_main	char *template = *toys.optargs, *dir, *te = getenv("TMPDIR");	direct	2	environment variable	
+toybox	core	T0-T2	3 global path/cwd	literal:/tmp	toys/lsb/mktemp.c	47	mktemp_main	if (!dir || !*dir) dir = "/tmp";	direct	3	global /tmp: temp-dir capability	
+toybox	core	T0-T2	3 global path/cwd	mkdtemp	toys/lsb/mktemp.c	75	mktemp_main	} else if (FLAG(d) ? !mkdtemp(template) : mkstemp(template) == -1) {	direct	3	temporary file in global /tmp: temp-dir capability	
+toybox	core	T0-T2	3 global path/cwd	mkstemp	toys/lsb/mktemp.c	75	mktemp_main	} else if (FLAG(d) ? !mkdtemp(template) : mkstemp(template) == -1) {	direct	3	temporary file in global /tmp: temp-dir capability	
+toybox	core	T0-T2	1 process	pipe	toys/posix/chmod.c	92	chmod_main	pipe(pp);	direct	3	pipe between parent and spawned child: pass handle at spawn	
+toybox	core	T0-T2	5 identity/permissions	faccessat	toys/posix/cp.c	192	cp_node	if (!faccessat(cfd, catch, F_OK, 0) && !S_ISDIR(cst.st_mode)) {	direct	3	permission probe: try the operation / capability check	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	symlinkat	toys/posix/cp.c	265	cp_node	if (!symlinkat(s, cfd, catch)) {	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	symlinkat	toys/posix/cp.c	279	cp_node	!symlinkat(toybuf, cfd, catch)	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	fchownat	toys/posix/cp.c	318	cp_node	rc = fchownat(cfd, catch, try->st.st_uid, try->st.st_gid,	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	fchown	toys/posix/cp.c	320	cp_node	else rc = fchown(fdout, try->st.st_uid, try->st.st_gid);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/cp.c	321	cp_node	if (rc && !geteuid()) {	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	fchmod	toys/posix/cp.c	339	cp_node	if (TT.pflags & _CP_mode) fchmod(fdout, try->st.st_mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	umask	toys/posix/cp.c	410	cp_main	if (TT.pflags & _CP_mode) umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	4 tty/job control	isatty	toys/posix/cp.c	446	cp_main	if (exists && (FLAG(i) || (!(st.st_mode & 0222) && isatty(0)))) {	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	6 DM-038 rename	rename	toys/posix/cp.c	454	cp_main	if (send) send = rename(src, TT.destname);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	lchown	toys/posix/cp.c	524	install_main	if (lchown(*ss, TT.uid, TT.gid)) perror_msg("chown '%s'", *ss);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	lchown	toys/posix/cp.c	524	install_main	if (lchown(*ss, TT.uid, TT.gid)) perror_msg("chown '%s'", *ss);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	chmod	toys/posix/cp.c	525	install_main	if ((mode&~01777) && chmod(*ss, mode)) perror_msg("chmod '%s'", *ss);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/cpio.c	87	cpio_main	int pipe, afd = FLAG(o), reown = !geteuid() && !FLAG(no_preserve_owner),	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	fchown	toys/posix/cpio.c	194	cpio_main	err = fchown(fd, uid, gid);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	fchmod	toys/posix/cpio.c	223	cpio_main	if (reown) err = fchown(fd, uid, gid) && fchmod(fd, mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	5 identity/permissions	fchown	toys/posix/cpio.c	223	cpio_main	if (reown) err = fchown(fd, uid, gid) && fchmod(fd, mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	symlink	toys/posix/cpio.c	229	cpio_main	err = data ? symlink(data, name)	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	lchown	toys/posix/cpio.c	235	cpio_main	if (!err && reown) err = lchown(name, uid, gid);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	lchown	toys/posix/cpio.c	235	cpio_main	if (!err && reown) err = lchown(name, uid, gid);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	3 global path/cwd	PATH-lookup	toys/posix/env.c	37	GLOBALS	char **ev = toys.optargs, **ee = 0, **set QUIET, *path = getenv("PATH");	restructure	10	global path	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	toys/posix/env.c	37	GLOBALS	char **ev = toys.optargs, **ee = 0, **set QUIET, *path = getenv("PATH");	emulate	0	$PATH search semantics	
+toybox	core	T0-T2	1 process	execve	toys/posix/env.c	62	GLOBALS	execve(sl->str, ev, ee ? : environ);	direct	5	exec in child: fold into spawn	
+toybox	core	T0-T2	1 process	execve	toys/posix/env.c	63	GLOBALS	} else execve(ex, ev, ee ? : environ);	direct	5	exec in child: fold into spawn	
+toybox	core	T0-T2	3 global path/cwd	fchdir	toys/posix/find.c	112	flush_exec	rc = fchdir(new->parent->dirfd);	restructure	10	process-global cwd	
+toybox	core	T0-T2	3 global path/cwd	fchdir	toys/posix/find.c	113	flush_exec	} else rc = fchdir(TT.topdir);	restructure	10	process-global cwd	
+toybox	core	T0-T2	3 global path/cwd	fchdir	toys/posix/find.c	144	flush_exec	if (revert) revert = fchdir(TT.topdir);	restructure	10	process-global cwd	
+toybox	core	T0-T2	6 DM-060 non-reentrant	readdir	toys/posix/find.c	341	do_find	while ((de = readdir(dfd)) && isdotdot(de->d_name));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	faccessat	toys/posix/find.c	356	do_find	if (check && faccessat(dirtree_parentfd(new), new->name,	direct	3	permission probe: try the operation / capability check	
+toybox	core	T0-T2	6 DM-065 wall clock	time	toys/posix/find.c	715	find_main	TT.now = time(0);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	4 tty/job control	isatty	toys/posix/grep.c	499	grep_main	if (FLAG(color) && (!TT.color || !strcmp(TT.color, "auto")) && !isatty(1))	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	toys/posix/grep.c	537	grep_main	xopen_stdio("/dev/null", O_RDWR);	direct	2	null device: pass a null handle	
+toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/id.c	81	do_id	uid_t uid = getuid(), euid = geteuid();	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	getuid	toys/posix/id.c	81	do_id	uid_t uid = getuid(), euid = geteuid();	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	getegid	toys/posix/id.c	82	do_id	gid_t gid = getgid(), egid = getegid();	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	getgid	toys/posix/id.c	82	do_id	gid_t gid = getgid(), egid = getegid();	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	getpwnam	toys/posix/id.c	88	do_id	pw = getpwnam(username);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getgroups	toys/posix/id.c	106	do_id	: getgroups(i, groups);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getgrgid	toys/posix/id.c	113	do_id	if ((grp=getgrgid(groups[i]))) showone(" ",grp->gr_name,grp->gr_gid,0);	emulate	0	user/group database	
+toybox	core	T0-T2	5 identity/permissions	getgrgid	toys/posix/id.c	139	do_id	if ((grp=getgrgid(groups[i]))) showid(",", grp->gr_gid, grp->gr_name);	emulate	0	user/group database	
+toybox	core	T0-T2	3 global path/cwd	mkstemp	toys/posix/ln.c	77	GLOBALS	rc = mkstemp(new);	direct	3	temporary file in global /tmp: temp-dir capability	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	symlink	toys/posix/ln.c	84	GLOBALS	rc = FLAG(s) ? symlink(try, new) : link(try, new);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-038 rename	rename	toys/posix/ln.c	89	GLOBALS	rc = rename(new, oldnew);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	toys/posix/ls.c	529	listfiles	tm = localtime(&(st->st_mtime));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	4 tty/job control	isatty	toys/posix/ls.c	594	ls_main	if (isatty(1)) {	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	5 identity/permissions	faccessat	toys/posix/rm.c	39	do_rm	&& (!S_ISLNK(try->st.st_mode) && faccessat(fd, try->name, W_OK, 0))) or++;	direct	3	permission probe: try the operation / capability check	
+toybox	core	T0-T2	4 tty/job control	isatty	toys/posix/rm.c	44	do_rm	if (!(dir && try->again) && ((or && isatty(0)) || FLAG(i))) {	direct	1	terminal check: handle type query	
+toybox	core	T0-T2	5 identity/permissions	faccessat	toys/posix/rm.c	57	do_rm	if (faccessat(fd, try->name, R_OK, 0)) {	direct	3	permission probe: try the operation / capability check	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	lstat	toys/posix/rm.c	110	rm_main	if (FLAG(f) && lstat(*s, (void *)toybuf) && errno == ENOENT) continue;	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	symlink	toys/posix/tar.c	652	extract_to_disk	if (symlink(TT.hdr.link_target, name))	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/tar.c	658	extract_to_disk	if (!FLAG(o) && !geteuid()) {	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	lchown	toys/posix/tar.c	673	extract_to_disk	if (lchown(name, u, g)) perror_msg("chown %d:%d '%s'", u, g, name);;	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	6 DM-039 symlink/lstat	lchown	toys/posix/tar.c	673	extract_to_disk	if (lchown(name, u, g)) perror_msg("chown %d:%d '%s'", u, g, name);;	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	chmod	toys/posix/tar.c	676	extract_to_disk	if (!S_ISLNK(ala)) chmod(name, FLAG(p) ? ala : ala&0777&~toys.old_umask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+toybox	core	T0-T2	3 global path/cwd	literal:/proc/self/attr/fscreate	toys/posix/tar.c	757	unpack_tar	sefd = xopen("/proc/self/attr/fscreate", O_WRONLY|WARN_ONLY);	restructure	15	procfs text interface (DM-054)	
+toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	toys/posix/tar.c	925	unpack_tar	struct tm *lc = localtime(TT.mtime ? &TT.mtt : &TT.hdr.mtime);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	2 signals	signal	toys/posix/tar.c	1015	tar_main	signal(SIGPIPE, SIG_IGN);	direct	1	SIGPIPE disposition: native write returns EPIPE	PIPE
+toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/tar.c	1018	tar_main	if (!geteuid()) toys.optflags |= FLAG_p;	direct	2	identity query	
+toybox	core	T0-T2	3 global path/cwd	PATH-lookup	toys/posix/tar.c	1114	tar_main	struct string_list *zcat = FLAG(I) ? 0 : find_in_path(getenv("PATH"),	restructure	10	global path	
+toybox	core	T0-T2	6 environment (DM-085)	getenv	toys/posix/tar.c	1114	tar_main	struct string_list *zcat = FLAG(I) ? 0 : find_in_path(getenv("PATH"),	emulate	0	$PATH search semantics	
+toybox	core	T0-T2	6 DM-065 wall clock	time	toys/posix/touch.c	46	touch_main	time_t t = time(0);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	access	toys/posix/touch.c	75	touch_main	if (access(s, F_OK) && (-1!=(fd = open(s, O_CREAT, 0666)))) {	direct	3	permission probe: try the operation / capability check	
+toybox	core	T0-T2	1 process	waitpid	toys/posix/xargs.c	109	waitchild	if ((pid = waitpid(-1, &status, options)) <= 0) return;	direct	5	wait for own child: wait on process handle	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	toys/posix/xargs.c	217	xargs_main	if (!TT.tty) TT.tty = xfopen("/dev/tty", "re");	emulate	0	controlling terminal by name	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	toys/posix/xargs.c	229	xargs_main	xopen_stdio(FLAG(o) ? "/dev/tty" : "/dev/null", O_RDONLY|O_CLOEXEC);	direct	2	null device: pass a null handle	
+toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	toys/posix/xargs.c	229	xargs_main	xopen_stdio(FLAG(o) ? "/dev/tty" : "/dev/null", O_RDONLY|O_CLOEXEC);	emulate	0	controlling terminal by name	
+busybox	core	T0-T2	4 tty/job control	isatty	archival/bbunzip.c	116	bbunpack	if (!(option_mask32 & BBUNPK_OPT_FORCE) && isatty(STDIN_FILENO)) {	direct	1	terminal check: handle type query	
+busybox	core	T0-T2	1 process	wait	archival/libarchive/open_transformer.c	73	check_errors_in_children	if (wait(&status) < 0)	direct	5	wait for own child: wait on process handle	
+busybox	core	T0-T2	6 DM-065 wall clock	time	editors/awk.c	2866	exec_builtin	time(&tt);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-060 non-reentrant	localtime	editors/awk.c	2869	exec_builtin	localtime(&tt));	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	1 process	popen	editors/awk.c	3131	evaluate	rsm->F = popen(R.s, "w");	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+busybox	core	T0-T2	1 process	popen	editors/awk.c	3353	evaluate	rsm->F = popen(L.s, "r");	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+busybox	core	T0-T2	6 DM-065 wall clock	time	editors/awk.c	3449	evaluate	seed = op1 ? (unsigned)L_d : (unsigned)time(NULL);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-065 wall clock	time	editors/awk.c	3456	evaluate	R_d = time(NULL);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	1 process	pclose	editors/awk.c	3504	evaluate	err = rsm->is_pipe ? pclose(rsm->F) : fclose(rsm->F);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+busybox	core	T0-T2	1 process	pclose	editors/awk.c	3712	awk_exit	pclose(hi->data.rs.F);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+busybox	core	T0-T2	6 DM-097 locale	setlocale	editors/awk.c	3731	awk_main	setlocale(LC_NUMERIC, "C");	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/stdin	editors/awk.c	3853	awk_main	newfile("/dev/stdin")->F = stdin;	restructure	10	global path	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/stdout	editors/awk.c	3854	awk_main	newfile("/dev/stdout")->F = stdout;	restructure	10	global path	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/stderr	editors/awk.c	3855	awk_main	newfile("/dev/stderr")->F = stderr;	restructure	10	global path	
+busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	editors/awk.c	3879	awk_main	syntax_error(strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/null	editors/diff.c	726	diffreg	fd = xopen("/dev/null", O_RDONLY);	direct	2	null device: pass a null handle	
+busybox	core	T0-T2	3 global path/cwd	literal:/tmp/difXXXXXX	editors/diff.c	733	diffreg	char name[] = "/tmp/difXXXXXX";	direct	3	global /tmp: temp-dir capability	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/null	editors/diff.c	1001	diff_main	xstat("/dev/null", &stb[i]);	direct	2	null device: pass a null handle	
+busybox	core	T0-T2	6 DM-097 locale	setlocale	libbb/appletlib.c	257	lbb_prepare	setlocale(LC_ALL, "");	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	5 identity/permissions	getgroups	libbb/bb_getgroups.c	25	bb_getgroups	n = getgroups(n, group_array);	emulate	0	user/group database	
+busybox	core	T0-T2	5 identity/permissions	getgroups	libbb/bb_getgroups.c	37	bb_getgroups	n = getgroups(0, group_array);	emulate	0	user/group database	
+busybox	core	T0-T2	5 identity/permissions	umask	libbb/parse_mode.c	133	bb_parse_mode	mode_t u_mask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+busybox	core	T0-T2	5 identity/permissions	umask	libbb/parse_mode.c	134	bb_parse_mode	umask(u_mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/perror_msg.c	17	bb_perror_msg	bb_verror_msg(s, p, errno ? strerror(errno) : NULL);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/perror_msg.c	27	bb_perror_msg_and_die	bb_verror_msg(s, p, errno ? strerror(errno) : NULL);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	2 signals	sigfillset	libbb/poll_with_signals.c	37	check_got_signal_and_poll	sigfillset(&orig_mask);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	6 DM-023 select/poll	ppoll	libbb/poll_with_signals.c	45	check_got_signal_and_poll	n = ppoll(pfd, 1, timeout >= 0 ? &tv : NULL, &orig_mask);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-023 select/poll	poll	libbb/safe_poll.c	17	safe_poll	int n = poll(ufds, nfds, timeout);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	2 signals	sigaction	libbb/signals.c	24	sigaction_set	return sigaction(signum, act, NULL);	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	2 signals	sigprocmask	libbb/signals.c	34	sigprocmask2	return sigprocmask(how, set, oset);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigfillset	libbb/signals.c	40	sigprocmask_allsigs	sigfillset(&set);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigfillset	libbb/signals.c	51	sigblockall	sigfillset(&mask);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigprocmask	libbb/signals.c	52	sigblockall	return sigprocmask(SIG_SETMASK, &mask, set);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	signal	libbb/signals.c	64	bb_signals	signal(sig_no, f);	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	2 signals	sigemptyset	libbb/signals.c	95	sig_block	sigemptyset(&ss);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigaddset	libbb/signals.c	96	sig_block	sigaddset(&ss, sig);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigemptyset	libbb/signals.c	103	sig_unblock	sigemptyset(&ss);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigaddset	libbb/signals.c	104	sig_unblock	sigaddset(&ss, sig);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigemptyset	libbb/signals.c	111	wait_for_any_sig	sigemptyset(&ss);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	2 signals	sigsuspend	libbb/signals.c	112	wait_for_any_sig	sigsuspend(&ss);	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	2 signals	signal	libbb/signals.c	118	kill_myself_with_sig	signal(sig, SIG_DFL);	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	2 signals	raise	libbb/signals.c	120	kill_myself_with_sig	raise(sig);	direct	3	send signal	
+busybox	core	T0-T2	6 DM-060 non-reentrant	localtime	libbb/time.c	145	parse_datestr	lt = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-065 wall clock	time	libbb/time.c	282	strftime_fmt	time(tp);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-060 non-reentrant	localtime	libbb/time.c	285	strftime_fmt	return buf + strftime(buf, len, fmt, localtime(tp));	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-065 wall clock	time	libbb/time.c	358	monotonic_sec	return time(NULL);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 environment (DM-085)	getenv	libbb/xfuncs.c	208	wh_helper	char *s = getenv(env_name);	direct	2	environment variable	
+busybox	core	T0-T2	4 tty/job control	isatty	libbb/xfuncs.c	231	get_terminal_width_height	if (isatty(STDOUT_FILENO))	direct	1	terminal check: handle type query	
+busybox	core	T0-T2	4 tty/job control	isatty	libbb/xfuncs.c	234	get_terminal_width_height	if (isatty(STDERR_FILENO))	direct	1	terminal check: handle type query	
+busybox	core	T0-T2	4 tty/job control	isatty	libbb/xfuncs.c	237	get_terminal_width_height	if (isatty(STDIN_FILENO))	direct	1	terminal check: handle type query	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	libbb/xfuncs.c	240	get_terminal_width_height	close_me = fd = open("/dev/tty", O_RDONLY);	emulate	0	controlling terminal by name	
+busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs.c	247	get_terminal_width_height	err = ioctl(fd, TIOCGWINSZ, &win) != 0 || win.ws_row == 0;	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 environment (DM-085)	getenv	libbb/xfuncs.c	267	is_TERM_dumb	char *term = getenv("TERM");	direct	2	environment variable	
+busybox	core	T0-T2	4 tty/job control	tcsetattr	libbb/xfuncs.c	273	tcsetattr_stdin_TCSANOW	return tcsetattr(STDIN_FILENO, TCSANOW, tp);	restructure	15	termios mode change	
+busybox	core	T0-T2	4 tty/job control	tcgetattr	libbb/xfuncs.c	282	get_termios_and_make_raw	r = tcgetattr(fd, oldterm);	restructure	15	termios mode change	
+busybox	core	T0-T2	4 tty/job control	tcsetattr	libbb/xfuncs.c	349	set_termios_to_raw	return tcsetattr(fd, TCSANOW, &newterm);	restructure	15	termios mode change	
+busybox	core	T0-T2	1 process	waitpid	libbb/xfuncs.c	357	safe_waitpid	r = waitpid(pid, wstat, options);	direct	5	wait for own child: wait on process handle	
+busybox	core	T0-T2	6 DM-031 mmap	mmap	libbb/xfuncs_printf.c	113	mmap_read	return mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-031 mmap	mmap	libbb/xfuncs_printf.c	118	mmap_anon	return mmap(NULL, size,	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	5 identity/permissions	geteuid	libbb/xfuncs_printf.c	190	xopen_as_uid_gid	uid_t old_euid = geteuid();	direct	2	identity query	
+busybox	core	T0-T2	5 identity/permissions	getegid	libbb/xfuncs_printf.c	191	xopen_as_uid_gid	gid_t old_egid = getegid();	direct	2	identity query	
+busybox	core	T0-T2	6 DM-038 rename	rename	libbb/xfuncs_printf.c	212	xrename	if (rename(oldpath, newpath))	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-038 rename	rename	libbb/xfuncs_printf.c	218	rename_or_warn	int n = rename(oldpath, newpath);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	1 process	pipe	libbb/xfuncs_printf.c	226	xpipe	if (pipe(filedes))	direct	3	pipe between parent and spawned child: pass handle at spawn	
+busybox	core	T0-T2	3 global path/cwd	mkstemp	libbb/xfuncs_printf.c	286	xmkstemp	int fd = mkstemp(template);	direct	3	temporary file in global /tmp: temp-dir capability	
+busybox	core	T0-T2	6 environment (DM-085)	setenv	libbb/xfuncs_printf.c	370	xsetenv	if (setenv(key, value, 1))	emulate	2	environment variable	
+busybox	core	T0-T2	6 environment (DM-085)	unsetenv	libbb/xfuncs_printf.c	400	bb_unsetenv	unsetenv(var);	emulate	2	environment variable	
+busybox	core	T0-T2	5 identity/permissions	setgid	libbb/xfuncs_printf.c	415	xsetgid	if (setgid(gid)) bb_simple_perror_msg_and_die("setgid");	restructure	20	privilege change	
+busybox	core	T0-T2	5 identity/permissions	setuid	libbb/xfuncs_printf.c	421	xsetuid	if (setuid(uid)) bb_simple_perror_msg_and_die("setuid");	restructure	20	privilege change	
+busybox	core	T0-T2	5 identity/permissions	setegid	libbb/xfuncs_printf.c	426	xsetegid	if (setegid(egid)) bb_simple_perror_msg_and_die("setegid");	restructure	20	privilege change	
+busybox	core	T0-T2	5 identity/permissions	seteuid	libbb/xfuncs_printf.c	431	xseteuid	if (seteuid(euid)) bb_simple_perror_msg_and_die("seteuid");	restructure	20	privilege change	
+busybox	core	T0-T2	3 global path/cwd	chdir	libbb/xfuncs_printf.c	436	chdir_or_warn	int r = chdir(path);	restructure	10	process-global cwd	
+busybox	core	T0-T2	3 global path/cwd	fchdir	libbb/xfuncs_printf.c	450	xfchdir	if (fchdir(fd))	restructure	10	process-global cwd	
+busybox	core	T0-T2	3 global path/cwd	chroot	libbb/xfuncs_printf.c	456	xchroot	if (chroot(path))	restructure	10	global path	
+busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	571	ioctl_or_perror_and_die	ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/xfuncs_printf.c	574	ioctl_or_perror_and_die	bb_verror_msg(fmt, p, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	585	ioctl_or_perror	int ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/xfuncs_printf.c	589	ioctl_or_perror	bb_verror_msg(fmt, p, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	619	bb_ioctl_or_warn	ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	628	bb_xioctl	ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	3 global path/cwd	literal:/dev/urandom	libbb/xfuncs_printf.c	682	generate_uuid	open_read_close("/dev/urandom", buf, 16);	restructure	10	global path	
+busybox	core	T0-T2	1 process	fork	libbb/xfuncs_printf.c	721	xfork	pid = fork();	restructure	40	fork: check whether exec follows; else needs separate process design	
+busybox	core	T0-T2	6 DM-065 wall clock	gettimeofday	libbb/xfuncs_printf.c	778	xgettimeofday	gettimeofday(tv, NULL);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	763	raise_interrupt	signal(SIGINT, SIG_DFL);	restructure	20	interrupt/termination handling	INT
+busybox	core	T0-T2	2 signals	raise	shell/ash.c	764	raise_interrupt	raise(SIGINT);	restructure	20	interrupt/termination handling	INT
+busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	shell/ash.c	1629	errmsg	return strerror(e);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	3 global path/cwd	getcwd	shell/ash.c	3000	getpwd	char *dir = getcwd(NULL, 0); /* huh, using glibc extension? */	restructure	10	process-global cwd	
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	3639	ignoresig	signal(signo, SIG_IGN);	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	2 signals	sigaction	shell/ash.c	3753	setsignal	if (sigaction(signo, NULL, &act)) {	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	2 signals	sigfillset	shell/ash.c	3793	setsignal	sigfillset(&act.sa_mask);	direct	2	signal mask bookkeeping	
+busybox	core	T0-T2	1 process	waitpid	shell/ash.c	4346	waitproc	err = waitpid(-1, status, flags);	direct	5	wait for own child: wait on process handle	
+busybox	core	T0-T2	2 signals	sigsuspend	shell/ash.c	4366	waitproc	sigsuspend(&oldmask);	restructure	15	signal handler/disposition	
+busybox	core	T0-T2	1 process	fork	shell/ash.c	5526	forkshell	pid = fork();	restructure	40	fork: check whether exec follows; else needs separate process design	
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	5562	write2pipe	ignoresig(SIGINT);  //signal(SIGINT, SIG_IGN);	restructure	20	interrupt/termination handling	INT
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	5563	write2pipe	ignoresig(SIGQUIT); //signal(SIGQUIT, SIG_IGN);	restructure	20	interrupt/termination handling	QUIT
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	5564	write2pipe	ignoresig(SIGHUP);  //signal(SIGHUP, SIG_IGN);	restructure	20	interrupt/termination handling	HUP
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	5565	write2pipe	ignoresig(SIGTSTP); //signal(SIGTSTP, SIG_IGN);	emulate	0	job-control signal	TSTP
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	5566	write2pipe	signal(SIGPIPE, SIG_DFL);	direct	1	SIGPIPE disposition: native write returns EPIPE	PIPE
+busybox	core	T0-T2	1 process	pipe	shell/ash.c	5583	openhere	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+busybox	core	T0-T2	1 process	pipe	shell/ash.c	5601	openherestr	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+busybox	core	T0-T2	1 process	execve	shell/ash.c	6182	tryexec	execve(cmd, argv, envp);	direct	5	exec in child: fold into spawn	
+busybox	core	T0-T2	1 process	vfork	shell/ash.c	6278	vforkexec	pid = vfork();	direct	15	vfork+exec child: posix_spawn with file actions	
+busybox	core	T0-T2	5 identity/permissions	getpwnam	shell/ash.c	6815	exptilde	pw = getpwnam(name);	emulate	0	user/group database	
+busybox	core	T0-T2	1 process	pipe	shell/ash.c	6884	evaltreenr	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+busybox	core	T0-T2	1 process	pipe	shell/ash.c	10089	evalpipe	if (pipe(pip) < 0) {	direct	3	pipe between parent and spawned child: pass handle at spawn	
+busybox	core	T0-T2	3 global path/cwd	chdir	shell/ash.c	10528	docd	err = chdir(dest);	restructure	10	process-global cwd	
+busybox	core	T0-T2	5 identity/permissions	umask	shell/ash.c	14691	umaskcmd	mask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+busybox	core	T0-T2	5 identity/permissions	umask	shell/ash.c	14692	umaskcmd	umask(mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+busybox	core	T0-T2	5 identity/permissions	umask	shell/ash.c	14731	umaskcmd	umask(mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+busybox	core	T0-T2	4 tty/job control	isatty	shell/ash.c	14942	procargs	&& isatty(0) && isatty(1) /* we are on tty */	direct	1	terminal check: handle type query	
+busybox	core	T0-T2	2 signals	signal	shell/ash.c	14984	procargs	signal(SIGHUP, SIG_DFL);	restructure	20	interrupt/termination handling	HUP
+busybox	core	T0-T2	3 global path/cwd	literal:/etc/profile	shell/ash.c	15093	ash_main	read_profile("/etc/profile");	restructure	10	global configuration file	
+busybox	core	T0-T2	6 DM-023 select/poll	poll	shell/shell_common.c	146	shell_builtin_read	r = poll(pfd, 1, /*timeout:*/ 0);	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	4 tty/job control	isatty	shell/shell_common.c	151	shell_builtin_read	if (params->opt_p && isatty(fd)) {	direct	1	terminal check: handle type query	
+busybox	core	T0-T2	4 tty/job control	tcgetattr	shell/shell_common.c	162	shell_builtin_read	tcgetattr(fd, &tty);	restructure	15	termios mode change	
+busybox	core	T0-T2	4 tty/job control	tcsetattr	shell/shell_common.c	181	shell_builtin_read	tcsetattr(fd, TCSANOW, &tty);	restructure	15	termios mode change	
+busybox	core	T0-T2	4 tty/job control	tcsetattr	shell/shell_common.c	338	shell_builtin_read	tcsetattr(fd, TCSANOW, &old_tty);	restructure	15	termios mode change	
+tcc	core	T1	3 global path/cwd	realpath	libtcc.c	503	normalized_PATHCMP	if (!!(p1 = realpath(f1, NULL))) {	restructure	10	canonical global path	
+tcc	core	T1	3 global path/cwd	realpath	libtcc.c	504	normalized_PATHCMP	if (!!(p2 = realpath(f2, NULL))) {	restructure	10	canonical global path	
+tcc	core	T1	3 global path/cwd	realpath	libtcc.c	506	normalized_PATHCMP	libc_free(p2); /* realpath() requirement */	restructure	10	canonical global path	
+tcc	core	T1	6 environment (DM-085)	getenv	tcc.c	237	set_environment	path = getenv("C_INCLUDE_PATH");	emulate	0	$PATH search semantics	
+tcc	core	T1	6 environment (DM-085)	getenv	tcc.c	241	set_environment	path = getenv("CPATH");	emulate	0	$PATH search semantics	
+tcc	core	T1	6 environment (DM-085)	getenv	tcc.c	245	set_environment	path = getenv("LIBRARY_PATH");	emulate	0	$PATH search semantics	
+tcc	core	T1	6 DM-065 wall clock	gettimeofday	tcc.c	284	getclock_ms	gettimeofday(&tv, NULL);	direct	5	DM-flagged API; see catalog entry	
+tcc	core	T1	3 global path/cwd	getcwd	tccdbg.c	1135	tcc_debug_start	getcwd(buf, sizeof(buf));	restructure	10	process-global cwd	
+tcc	core	T1	3 global path/cwd	getcwd	tccdbg.c	2541	tcc_tcov_block_begin	getcwd (wd, sizeof(wd));	restructure	10	process-global cwd	
+tcc	core	T1	3 global path/cwd	getcwd	tccelf.c	1741	tcc_tcov_add_file	getcwd (wd, sizeof(wd));	restructure	10	process-global cwd	
+tcc	core	T1	6 DM-060 non-reentrant	strerror	tccelf.c	2831	tcc_write_elf_file	return tcc_error_noabort("could not write '%s: %s'", filename, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+tcc	core	T1	6 DM-065 wall clock	time	tccpp.c	3381	macro_subst_tok	time(&ti);	direct	5	DM-flagged API; see catalog entry	
+tcc	core	T1	6 DM-060 non-reentrant	localtime	tccpp.c	3382	macro_subst_tok	tm = localtime(&ti);	direct	5	DM-flagged API; see catalog entry	
+tcc	core	T1	2 signals	sigemptyset	tccrun.c	1354	sig_error	sigemptyset(&s);	direct	2	signal mask bookkeeping	
+tcc	core	T1	2 signals	sigaddset	tccrun.c	1355	sig_error	sigaddset(&s, signum);	direct	2	signal mask bookkeeping	
+tcc	core	T1	2 signals	sigprocmask	tccrun.c	1356	sig_error	sigprocmask(SIG_UNBLOCK, &s, NULL);	direct	2	signal mask bookkeeping	
+tcc	core	T1	2 signals	sigemptyset	tccrun.c	1371	set_exception_handler	sigemptyset (&sigact.sa_mask);	direct	2	signal mask bookkeeping	
+tcc	core	T1	2 signals	sigaction	tccrun.c	1377	set_exception_handler	sigaction(SIGFPE, &sigact, NULL);	restructure	15	signal handler/disposition	
+tcc	core	T1	2 signals	sigaction	tccrun.c	1378	set_exception_handler	sigaction(SIGILL, &sigact, NULL);	restructure	15	signal handler/disposition	
+tcc	core	T1	2 signals	sigaction	tccrun.c	1379	set_exception_handler	sigaction(SIGSEGV, &sigact, NULL);	restructure	15	signal handler/disposition	
+tcc	core	T1	2 signals	sigaction	tccrun.c	1380	set_exception_handler	sigaction(SIGBUS, &sigact, NULL);	restructure	15	signal handler/disposition	
+tcc	core	T1	2 signals	sigaction	tccrun.c	1381	set_exception_handler	sigaction(SIGABRT, &sigact, NULL);	restructure	15	signal handler/disposition	
+gmake	core	T1	5 identity/permissions	eaccess	lib/findprog-in.c	148	find_in_given_path	if (eaccess (progpathname, X_OK) == 0)	direct	3	permission probe: try the operation / capability check	
+gmake	core	T1	5 identity/permissions	eaccess	lib/findprog-in.c	300	find_in_given_path	if (eaccess (progpathname, X_OK) == 0)	direct	3	permission probe: try the operation / capability check	
+gmake	core	T1	6 environment (DM-085)	getenv	lib/fnmatch.c	273	internal_fnmatch	posixly_correct = getenv ("POSIXLY_CORRECT") != NULL ? 1 : -1;	direct	2	environment variable	
+gmake	core	T1	6 environment (DM-085)	getenv	lib/glob.c	531	glob	const char *home_dir = getenv ("HOME");	direct	2	environment variable	
+gmake	core	T1	5 identity/permissions	getlogin	lib/glob.c	561	glob	success = (name = getlogin ()) != NULL;	emulate	0	user/group database	
+gmake	core	T1	6 DM-060 non-reentrant	getlogin	lib/glob.c	561	glob	success = (name = getlogin ()) != NULL;	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	5 identity/permissions	getpwnam	lib/glob.c	591	glob	p = getpwnam (name);	emulate	0	user/group database	
+gmake	core	T1	5 identity/permissions	getpwnam	lib/glob.c	675	glob	p = getpwnam (user_name);	emulate	0	user/group database	
+gmake	core	T1	6 DM-060 non-reentrant	readdir	lib/glob.c	1213	glob_in_dir	: readdir ((DIR *) stream));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	2 signals	signal	src/commands.c	530	fatal_error_signal	signal (sig, SIG_DFL);	restructure	15	signal handler/disposition	
+gmake	core	T1	2 signals	kill	src/commands.c	544	fatal_error_signal	(void) kill (c->pid, SIGTERM);	restructure	20	interrupt/termination handling	TERM
+gmake	core	T1	2 signals	kill	src/commands.c	600	fatal_error_signal	if (kill (make_pid (), sig) < 0)	direct	3	send signal	
+gmake	core	T1	6 DM-060 non-reentrant	readdir	src/dir.c	733	dir_contents_file_exists_p	ENULLLOOP (d, readdir (dc->dirstream));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/dir.c	737	dir_contents_file_exists_p	OSS (fatal, NILF, "readdir %s: %s", dir->name, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-065 wall clock	clock_gettime	src/file.c	965	file_timestamp_now	if (clock_gettime (CLOCK_REALTIME, &timespec) == 0)	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-065 wall clock	gettimeofday	src/file.c	977	file_timestamp_now	if (gettimeofday (&timeval, 0) == 0)	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-065 wall clock	time	src/file.c	989	file_timestamp_now	s = time ((time_t *) 0);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	localtime	src/file.c	1005	file_timestamp_sprintf	struct tm *tm = localtime (&t);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	1 process	pipe	src/function.c	1904	func_shell_base	if (pipe (pipedes) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	1906	func_shell_base	OS (error, reading_file, "pipe: %s", strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	3 global path/cwd	realpath	src/function.c	2288	func_realpath	ENULLLOOP (rp, realpath (in, out));	restructure	10	canonical global path	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	2358	func_file	OSS (fatal, reading_file, _("open: %s: %s"), nm, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	2371	func_file	OSS (fatal, reading_file, _("write: %s: %s"), nm, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	2374	func_file	OSS (fatal, reading_file, _("close: %s: %s"), nm, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	2408	func_file	OSS (fatal, reading_file, _("open: %s: %s"), nm, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	2422	func_file	OSS (fatal, reading_file, _("read: %s: %s"), nm, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/function.c	2427	func_file	OSS (fatal, reading_file, _("close: %s: %s"), nm, strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 environment (DM-085)	getenv	src/getopt.c	390	_getopt_initialize	posixly_correct = getenv ("POSIXLY_CORRECT");	direct	2	environment variable	
+gmake	core	T1	2 signals	sigprocmask	src/job.c	477	block_sigs	sigprocmask (SIG_BLOCK, &fatal_signal_set, (sigset_t *) 0);	direct	2	signal mask bookkeeping	
+gmake	core	T1	2 signals	sigprocmask	src/job.c	483	unblock_sigs	sigprocmask (SIG_UNBLOCK, &fatal_signal_set, (sigset_t *) 0);	direct	2	signal mask bookkeeping	
+gmake	core	T1	2 signals	sigemptyset	src/job.c	490	unblock_all_sigs	sigemptyset (&empty);	direct	2	signal mask bookkeeping	
+gmake	core	T1	2 signals	sigprocmask	src/job.c	491	unblock_all_sigs	sigprocmask (SIG_SETMASK, &empty, (sigset_t *) 0);	direct	2	signal mask bookkeeping	
+gmake	core	T1	1 process	wait	src/job.c	762	reap_children	EINTRLOOP (pid, wait (&status));	direct	5	wait for own child: wait on process handle	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	939	reap_children	e = strerror (errno);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	941	reap_children	e = strerror (EACCES);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	943	reap_children	e = strerror (ENOEXEC);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	2130	load_too_high	DB (DB_JOBS, ("Failed to read " LOADAVG ": %s\n", strerror (errno)));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-065 wall clock	time	src/job.c	2157	load_too_high	now = time (NULL);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	2 signals	sigemptyset	src/job.c	2385	child_execute_job	sigemptyset (&mask);	direct	2	signal mask bookkeeping	
+gmake	core	T1	1 process	posix_spawn	src/job.c	2452	child_execute_job	while ((r = posix_spawn (&pid, cmd, &fa, &attr, argv,	direct	0	already posix_spawn	
+gmake	core	T1	1 process	posix_spawn	src/job.c	2473	child_execute_job	while ((r = posix_spawn (&pid, nargv[0], &fa, &attr, nargv,	direct	0	already posix_spawn	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	2501	child_execute_job	OSS (error, NILF, "%s: %s", argv[0], strerror (r));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	1 process	execvp	src/job.c	2606	exec_command	execvp (argv[0], argv);	direct	5	exec in child: fold into spawn	
+gmake	core	T1	6 environment (DM-085)	getenv	src/job.c	2631	exec_command	shell = getenv ("SHELL");	direct	2	environment variable	
+gmake	core	T1	1 process	execvp	src/job.c	2672	exec_command	execvp (shell, new_argv);	direct	5	exec in child: fold into spawn	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	2674	exec_command	OSS (error, NILF, "%s: %s", new_argv[0], strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/job.c	2686	exec_command	OSS (error, NILF, "%s: %s", argv[0], strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-097 locale	setlocale	src/main.c	1245	main	setlocale (LC_ALL, "");	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	2 signals	sigemptyset	src/main.c	1252	main	sigemptyset (&fatal_signal_set);	direct	2	signal mask bookkeeping	
+gmake	core	T1	2 signals	bsd_signal	src/main.c	1307	main	(void) bsd_signal (SIGCHLD, SIG_DFL);	restructure	30	child-exit notification	CHLD
+gmake	core	T1	3 global path/cwd	getcwd	src/main.c	1412	main	if (getcwd (current_directory, GET_PATH_MAX) == 0)	restructure	10	process-global cwd	
+gmake	core	T1	4 tty/job control	isatty	src/main.c	1666	main	if (isatty (fileno (stdout)))	direct	1	terminal check: handle type query	
+gmake	core	T1	4 tty/job control	isatty	src/main.c	1673	main	if (isatty (fileno (stderr)))	direct	1	terminal check: handle type query	
+gmake	core	T1	3 global path/cwd	chdir	src/main.c	1789	main	if (chdir (dir) < 0)	restructure	10	process-global cwd	
+gmake	core	T1	3 global path/cwd	getcwd	src/main.c	1813	main	if (getcwd (current_directory, GET_PATH_MAX) == 0)	restructure	10	process-global cwd	
+gmake	core	T1	2 signals	bsd_signal	src/main.c	2002	main	bsd_signal (SIGCHLD, child_handler);	restructure	30	child-exit notification	CHLD
+gmake	core	T1	2 signals	sigemptyset	src/main.c	2013	main	sigemptyset (&block);	direct	2	signal mask bookkeeping	
+gmake	core	T1	2 signals	sigaddset	src/main.c	2014	main	sigaddset (&block, SIGCHLD);	restructure	30	child-exit notification	CHLD
+gmake	core	T1	2 signals	sigprocmask	src/main.c	2015	main	if (sigprocmask (SIG_SETMASK, &block, NULL) < 0)	direct	2	signal mask bookkeeping	
+gmake	core	T1	2 signals	sigprocmask	src/main.c	2016	main	pfatal_with_name ("sigprocmask(SIG_SETMASK, SIGCHLD)");	restructure	30	child-exit notification	CHLD
+gmake	core	T1	2 signals	bsd_signal	src/main.c	2025	main	bsd_signal (SIGUSR1, debug_signal_handler);	restructure	15	signal handler/disposition	USR1
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/main.c	2458	main	const char *err = strerror (d->error);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	3 global path/cwd	chdir	src/main.c	2710	main	if (chdir (directory_before_chdir) < 0)	restructure	10	process-global cwd	
+gmake	core	T1	6 environment (DM-085)	putenv	src/main.c	2773	main	putenv (b);	emulate	2	environment variable	
+gmake	core	T1	6 DM-065 wall clock	time	src/main.c	3747	print_data_base	time_t when = time ((time_t *) 0);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	ctime	src/main.c	3751	print_data_base	printf (_("\n# Make data base, printed on %s"), ctime (&when));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-065 wall clock	time	src/main.c	3760	print_data_base	when = time ((time_t *) 0);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	ctime	src/main.c	3761	print_data_base	printf (_("\n# Finished Make data base on %s\n"), ctime (&when));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	3 global path/cwd	chdir	src/main.c	3864	die	_x = chdir (directory_before_chdir);	restructure	10	process-global cwd	
+gmake	core	T1	6 DM-065 wall clock	time	src/misc.c	97	make_rand	mk_state = (unsigned int)(time (NULL) ^ make_pid ()) + 1;	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 environment (DM-085)	getenv	src/misc.c	598	get_tmpdir	if ((tmpdir = getenv (*tp)) && *tmpdir != '\0')	direct	2	environment variable	
+gmake	core	T1	5 identity/permissions	umask	src/misc.c	699	get_tmpfd	mask = umask (0077);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+gmake	core	T1	3 global path/cwd	mkstemp	src/misc.c	705	get_tmpfd	EINTRLOOP (fd, mkstemp (tmpnm));	direct	3	temporary file in global /tmp: temp-dir capability	
+gmake	core	T1	5 identity/permissions	umask	src/misc.c	734	get_tmpfd	umask (mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/output.c	513	perror_with_name	const char *err = strerror (errno);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/output.c	522	pfatal_with_name	const char *err = strerror (errno);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	1 process	pipe	src/posixos.c	195	jobserver_setup	EINTRLOOP (r, pipe (job_fds));	direct	3	pipe between parent and spawned child: pass handle at spawn	
+gmake	core	T1	2 signals	sigemptyset	src/posixos.c	465	jobserver_acquire	sigemptyset (&empty);	direct	2	signal mask bookkeeping	
+gmake	core	T1	6 DM-023 select/poll	pselect	src/posixos.c	484	jobserver_acquire	r = pselect (job_fds[0]+1, &readfds, NULL, NULL, specp, &empty);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-036 record locks	fcntl-lock	src/posixos.c	732	osync_acquire	if (fcntl (osync_handle, F_SETLKW, &fl) == -1)	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-036 record locks	fcntl-lock	src/posixos.c	754	osync_release	if (fcntl (osync_handle, F_SETLKW, &fl) == -1)	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	1 process	pipe	src/posixos.c	774	get_bad_stdin	if (pipe (pd) == 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
+gmake	core	T1	5 identity/permissions	umask	src/posixos.c	878	os_anontmp	mode_t mask = umask (0077);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+gmake	core	T1	3 global path/cwd	tmpfile	src/posixos.c	880	os_anontmp	ENULLLOOP (tfile, tmpfile ());	direct	3	temporary file in global /tmp: temp-dir capability	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/posixos.c	883	os_anontmp	OS (error, NILF, "tmpfile: %s", strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	5 identity/permissions	umask	src/posixos.c	886	os_anontmp	umask (mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/posixos.c	890	os_anontmp	OS (error, NILF, "dup: %s", strerror (errno));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-060 non-reentrant	strerror	src/read.c	360	eval_makefile	const char *err = strerror (deps->error);	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 environment (DM-085)	getenv	src/read.c	3109	tilde_expand	home_dir = getenv ("HOME");	direct	2	environment variable	
+gmake	core	T1	5 identity/permissions	getlogin	src/read.c	3114	tilde_expand	char *logname = getlogin ();	emulate	0	user/group database	
+gmake	core	T1	6 DM-060 non-reentrant	getlogin	src/read.c	3114	tilde_expand	char *logname = getlogin ();	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	5 identity/permissions	getpwnam	src/read.c	3118	tilde_expand	struct passwd *p = getpwnam (logname);	emulate	0	user/group database	
+gmake	core	T1	5 identity/permissions	getpwnam	src/read.c	3139	tilde_expand	pwent = getpwnam (name + 1);	emulate	0	user/group database	
+gmake	core	T1	6 DM-039 symlink/lstat	lstat	src/remake.c	1635	name_mtime	EINTRLOOP (e, lstat (lpath, &st));	direct	5	DM-flagged API; see catalog entry	
+gmake	core	T1	6 DM-039 symlink/lstat	readlink	src/remake.c	1655	name_mtime	EINTRLOOP (llen, readlink (lpath, lbuf, GET_PATH_MAX - 1));	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	1 process	popen	input.c	870	run_command	if ((fd = popen(cmd, "r")) == NULL)	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+pdpmake	comparison	T1	1 process	pclose	input.c	883	run_command	pclose(fd);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+pdpmake	comparison	T1	6 environment (DM-085)	getenv	input.c	979	pragmas_from_env	const char *env = getenv("PDPMAKE_PRAGMAS");	direct	2	environment variable	
+pdpmake	comparison	T1	6 environment (DM-085)	setenv	input.c	1429	input	setenv("PDPMAKE_POSIXLY_CORRECT", "", 1);	emulate	2	environment variable	
+pdpmake	comparison	T1	3 global path/cwd	chdir	main.c	107	process_options	if (chdir(optarg) == -1) {	restructure	10	process-global cwd	
+pdpmake	comparison	T1	6 DM-060 non-reentrant	strerror	main.c	108	process_options	error("can't chdir to %s: %s", optarg, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	6 environment (DM-085)	getenv	main.c	206	expand_makeflags	const char *m, *makeflags = getenv("MAKEFLAGS");	direct	2	environment variable	
+pdpmake	comparison	T1	6 environment (DM-085)	setenv	main.c	417	update_makeflags	setenv(mp->m_name, mp->m_val, 1);	emulate	2	environment variable	
+pdpmake	comparison	T1	6 environment (DM-085)	setenv	main.c	424	update_makeflags	setenv("MAKEFLAGS", makeflags, 1);	emulate	2	environment variable	
+pdpmake	comparison	T1	2 signals	signal	main.c	432	make_handler	signal(sig, SIG_DFL);	restructure	15	signal handler/disposition	
+pdpmake	comparison	T1	2 signals	kill	main.c	434	make_handler	kill(getpid(), sig);	direct	3	send signal	
+pdpmake	comparison	T1	2 signals	sigemptyset	main.c	442	init_signal	sigemptyset(&new_action.sa_mask);	direct	2	signal mask bookkeeping	
+pdpmake	comparison	T1	2 signals	sigaction	main.c	446	init_signal	sigaction(sig, NULL, &sa);	restructure	15	signal handler/disposition	
+pdpmake	comparison	T1	2 signals	sigaction	main.c	448	init_signal	sigaction(sig, &new_action, NULL);	restructure	15	signal handler/disposition	
+pdpmake	comparison	T1	6 environment (DM-085)	setenv	main.c	501	main	setenv("PDPMAKE_POSIXLY_CORRECT", "", 1);	emulate	2	environment variable	
+pdpmake	comparison	T1	6 environment (DM-085)	getenv	main.c	504	main	posix = getenv("PDPMAKE_POSIXLY_CORRECT") != NULL;	direct	2	environment variable	
+pdpmake	comparison	T1	3 global path/cwd	realpath	main.c	514	main	path = newpath = realpath(argv[0], NULL);	restructure	10	canonical global path	
+pdpmake	comparison	T1	6 DM-060 non-reentrant	strerror	main.c	516	main	error("can't resolve path for %s: %s", argv[0], strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	3 global path/cwd	literal:/bin/sh	main.c	570	main	setmacro("SHELL", "/bin/sh", 4);	direct	3	hard-coded program path: configurable/handle	
+pdpmake	comparison	T1	3 global path/cwd	getcwd	main.c	580	main	if (getcwd(cwd, len)) {	restructure	10	process-global cwd	
+pdpmake	comparison	T1	6 environment (DM-085)	getenv	main.c	583	main	char *envcwd = getenv("CURDIR");	direct	2	environment variable	
+pdpmake	comparison	T1	6 environment (DM-085)	setenv	main.c	585	main	setenv("CURDIR", cwd, 1);	emulate	2	environment variable	
+pdpmake	comparison	T1	6 DM-060 non-reentrant	strerror	main.c	618	main	error("can't open %s: %s", fp->f_name, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	6 DM-060 non-reentrant	strerror	make.c	38	touch	warning("touch %s failed: %s\n", np->n_name, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	1 process	system	make.c	103	docmds	status = system(cmd);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+pdpmake	comparison	T1	6 DM-065 wall clock	clock_gettime	make.c	484	make	clock_gettime(CLOCK_REALTIME, &np->n_tim);	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	6 DM-060 non-reentrant	strerror	modtime.c	164	modtime	error("can't open %s: %s", name, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
+pdpmake	comparison	T1	6 environment (DM-085)	setenv	target.c	329	pragmas_to_env	setenv("PDPMAKE_PRAGMAS", val, 1);	emulate	2	environment variable	

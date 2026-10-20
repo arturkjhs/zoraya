@@ -1,0 +1,121 @@
+program	feature	class	sites
+busybox	1 process	direct	14
+busybox	1 process	restructure	2
+busybox	2 signals	direct	13
+busybox	2 signals	emulate	1
+busybox	2 signals	restructure	13
+busybox	3 global path/cwd	direct	4
+busybox	3 global path/cwd	emulate	1
+busybox	3 global path/cwd	restructure	10
+busybox	4 tty/job control	direct	6
+busybox	4 tty/job control	restructure	6
+busybox	5 identity/permissions	direct	2
+busybox	5 identity/permissions	emulate	8
+busybox	5 identity/permissions	restructure	4
+busybox	6 DM-023 select/poll	direct	3
+busybox	6 DM-031 mmap	direct	2
+busybox	6 DM-038 rename	direct	2
+busybox	6 DM-053 ioctl	direct	5
+busybox	6 DM-060 non-reentrant	direct	9
+busybox	6 DM-065 wall clock	direct	6
+busybox	6 DM-097 locale	direct	2
+busybox	6 environment (DM-085)	direct	2
+busybox	6 environment (DM-085)	emulate	2
+dash	1 process	direct	3
+dash	1 process	emulate	3
+dash	2 signals	direct	1
+dash	2 signals	emulate	19
+dash	3 global path/cwd	emulate	3
+dash	3 global path/cwd	restructure	1
+dash	4 tty/job control	direct	4
+dash	4 tty/job control	emulate	7
+dash	5 identity/permissions	direct	4
+dash	5 identity/permissions	emulate	4
+dash	6 DM-060 non-reentrant	direct	10
+dash	6 DM-097 locale	direct	1
+dash	6 environment (DM-085)	emulate	1
+gmake	1 process	direct	8
+gmake	2 signals	direct	10
+gmake	2 signals	restructure	7
+gmake	3 global path/cwd	direct	2
+gmake	3 global path/cwd	restructure	6
+gmake	4 tty/job control	direct	2
+gmake	5 identity/permissions	direct	2
+gmake	5 identity/permissions	emulate	10
+gmake	6 DM-023 select/poll	direct	1
+gmake	6 DM-036 record locks	direct	2
+gmake	6 DM-039 symlink/lstat	direct	2
+gmake	6 DM-060 non-reentrant	direct	28
+gmake	6 DM-065 wall clock	direct	7
+gmake	6 DM-097 locale	direct	1
+gmake	6 environment (DM-085)	direct	6
+gmake	6 environment (DM-085)	emulate	1
+mrsh	1 process	direct	3
+mrsh	1 process	emulate	13
+mrsh	2 signals	emulate	6
+mrsh	3 global path/cwd	direct	2
+mrsh	3 global path/cwd	emulate	3
+mrsh	3 global path/cwd	restructure	1
+mrsh	4 tty/job control	direct	1
+mrsh	4 tty/job control	emulate	12
+mrsh	5 identity/permissions	direct	8
+mrsh	5 identity/permissions	emulate	4
+mrsh	6 DM-060 non-reentrant	direct	16
+mrsh	6 environment (DM-085)	direct	2
+mrsh	6 environment (DM-085)	emulate	2
+oksh	1 process	direct	1
+oksh	1 process	emulate	4
+oksh	2 signals	emulate	68
+oksh	2 signals	restructure	4
+oksh	3 global path/cwd	direct	3
+oksh	3 global path/cwd	emulate	4
+oksh	3 global path/cwd	restructure	1
+oksh	4 tty/job control	direct	6
+oksh	4 tty/job control	emulate	35
+oksh	5 identity/permissions	direct	11
+oksh	5 identity/permissions	emulate	8
+oksh	5 identity/permissions	restructure	3
+oksh	6 DM-039 symlink/lstat	direct	4
+oksh	6 DM-053 ioctl	direct	1
+oksh	6 DM-060 non-reentrant	direct	43
+oksh	6 DM-065 wall clock	direct	11
+pdpmake	1 process	direct	3
+pdpmake	2 signals	direct	2
+pdpmake	2 signals	restructure	3
+pdpmake	3 global path/cwd	direct	1
+pdpmake	3 global path/cwd	restructure	3
+pdpmake	6 DM-060 non-reentrant	direct	5
+pdpmake	6 DM-065 wall clock	direct	1
+pdpmake	6 environment (DM-085)	direct	4
+pdpmake	6 environment (DM-085)	emulate	6
+tcc	2 signals	direct	4
+tcc	2 signals	restructure	5
+tcc	3 global path/cwd	restructure	6
+tcc	6 DM-060 non-reentrant	direct	2
+tcc	6 DM-065 wall clock	direct	2
+tcc	6 environment (DM-085)	emulate	3
+toybox	1 process	direct	8
+toybox	1 process	restructure	1
+toybox	2 signals	direct	4
+toybox	2 signals	restructure	7
+toybox	3 global path/cwd	direct	9
+toybox	3 global path/cwd	emulate	4
+toybox	3 global path/cwd	restructure	20
+toybox	4 tty/job control	direct	7
+toybox	4 tty/job control	emulate	1
+toybox	4 tty/job control	restructure	5
+toybox	5 identity/permissions	direct	15
+toybox	5 identity/permissions	emulate	28
+toybox	5 identity/permissions	restructure	2
+toybox	6 DM-023 select/poll	direct	1
+toybox	6 DM-031 mmap	direct	1
+toybox	6 DM-036 record locks	direct	1
+toybox	6 DM-037 fsync	direct	1
+toybox	6 DM-038 rename	direct	4
+toybox	6 DM-039 symlink/lstat	direct	14
+toybox	6 DM-053 ioctl	direct	4
+toybox	6 DM-060 non-reentrant	direct	8
+toybox	6 DM-065 wall clock	direct	3
+toybox	6 DM-097 locale	direct	5
+toybox	6 environment (DM-085)	direct	7
+toybox	6 environment (DM-085)	emulate	11
