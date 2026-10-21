@@ -5653,7 +5653,6 @@ W5-busybox	comparison	T0	busybox	close
 W5-busybox	comparison	T0	busybox	closedir
 W5-busybox	comparison	T0	busybox	dup2
 W5-busybox	comparison	T0	busybox	execve
-W5-busybox	comparison	T0	busybox	fclose
 W5-busybox	comparison	T0	busybox	fcntl
 W5-busybox	comparison	T0	busybox	ferror_unlocked
 W5-busybox	comparison	T0	busybox	fflush
@@ -5663,7 +5662,6 @@ W5-busybox	comparison	T0	busybox	fork
 W5-busybox	comparison	T0	busybox	fprintf
 W5-busybox	comparison	T0	busybox	fputs_unlocked
 W5-busybox	comparison	T0	busybox	free
-W5-busybox	comparison	T0	busybox	getc_unlocked
 W5-busybox	comparison	T0	busybox	getcwd
 W5-busybox	comparison	T0	busybox	getenv
 W5-busybox	comparison	T0	busybox	getgid
@@ -5823,7 +5821,9 @@ W5-busybox	comparison	T0	toybox:sleep	strcmp
 W5-busybox	comparison	T0	toybox:sleep	strtoul
 W5-busybox	comparison	T0	toybox:sleep	umask
 W5-busybox	comparison	T0	toybox:touch	_exit
+W5-busybox	comparison	T0	toybox:touch	access
 W5-busybox	comparison	T0	toybox:touch	basename
+W5-busybox	comparison	T0	toybox:touch	close
 W5-busybox	comparison	T0	toybox:touch	ferror
 W5-busybox	comparison	T0	toybox:touch	fflush
 W5-busybox	comparison	T0	toybox:touch	geteuid
@@ -5831,6 +5831,7 @@ W5-busybox	comparison	T0	toybox:touch	getuid
 W5-busybox	comparison	T0	toybox:touch	malloc
 W5-busybox	comparison	T0	toybox:touch	memset
 W5-busybox	comparison	T0	toybox:touch	nl_langinfo
+W5-busybox	comparison	T0	toybox:touch	open
 W5-busybox	comparison	T0	toybox:touch	setlocale
 W5-busybox	comparison	T0	toybox:touch	setvbuf
 W5-busybox	comparison	T0	toybox:touch	signal
@@ -5972,7 +5973,9 @@ W5-dash	core	T0	toybox:sleep	strcmp
 W5-dash	core	T0	toybox:sleep	strtoul
 W5-dash	core	T0	toybox:sleep	umask
 W5-dash	core	T0	toybox:touch	_exit
+W5-dash	core	T0	toybox:touch	access
 W5-dash	core	T0	toybox:touch	basename
+W5-dash	core	T0	toybox:touch	close
 W5-dash	core	T0	toybox:touch	ferror
 W5-dash	core	T0	toybox:touch	fflush
 W5-dash	core	T0	toybox:touch	geteuid
@@ -5980,6 +5983,7 @@ W5-dash	core	T0	toybox:touch	getuid
 W5-dash	core	T0	toybox:touch	malloc
 W5-dash	core	T0	toybox:touch	memset
 W5-dash	core	T0	toybox:touch	nl_langinfo
+W5-dash	core	T0	toybox:touch	open
 W5-dash	core	T0	toybox:touch	setlocale
 W5-dash	core	T0	toybox:touch	setvbuf
 W5-dash	core	T0	toybox:touch	signal
@@ -6167,7 +6171,9 @@ W5-mrsh	comparison	T0	toybox:sleep	strcmp
 W5-mrsh	comparison	T0	toybox:sleep	strtoul
 W5-mrsh	comparison	T0	toybox:sleep	umask
 W5-mrsh	comparison	T0	toybox:touch	_exit
+W5-mrsh	comparison	T0	toybox:touch	access
 W5-mrsh	comparison	T0	toybox:touch	basename
+W5-mrsh	comparison	T0	toybox:touch	close
 W5-mrsh	comparison	T0	toybox:touch	ferror
 W5-mrsh	comparison	T0	toybox:touch	fflush
 W5-mrsh	comparison	T0	toybox:touch	geteuid
@@ -6175,6 +6181,7 @@ W5-mrsh	comparison	T0	toybox:touch	getuid
 W5-mrsh	comparison	T0	toybox:touch	malloc
 W5-mrsh	comparison	T0	toybox:touch	memset
 W5-mrsh	comparison	T0	toybox:touch	nl_langinfo
+W5-mrsh	comparison	T0	toybox:touch	open
 W5-mrsh	comparison	T0	toybox:touch	setlocale
 W5-mrsh	comparison	T0	toybox:touch	setvbuf
 W5-mrsh	comparison	T0	toybox:touch	signal
@@ -6353,7 +6360,9 @@ W5-oksh	comparison	T0	toybox:sleep	strcmp
 W5-oksh	comparison	T0	toybox:sleep	strtoul
 W5-oksh	comparison	T0	toybox:sleep	umask
 W5-oksh	comparison	T0	toybox:touch	_exit
+W5-oksh	comparison	T0	toybox:touch	access
 W5-oksh	comparison	T0	toybox:touch	basename
+W5-oksh	comparison	T0	toybox:touch	close
 W5-oksh	comparison	T0	toybox:touch	ferror
 W5-oksh	comparison	T0	toybox:touch	fflush
 W5-oksh	comparison	T0	toybox:touch	geteuid
@@ -6361,6 +6370,7 @@ W5-oksh	comparison	T0	toybox:touch	getuid
 W5-oksh	comparison	T0	toybox:touch	malloc
 W5-oksh	comparison	T0	toybox:touch	memset
 W5-oksh	comparison	T0	toybox:touch	nl_langinfo
+W5-oksh	comparison	T0	toybox:touch	open
 W5-oksh	comparison	T0	toybox:touch	setlocale
 W5-oksh	comparison	T0	toybox:touch	setvbuf
 W5-oksh	comparison	T0	toybox:touch	signal

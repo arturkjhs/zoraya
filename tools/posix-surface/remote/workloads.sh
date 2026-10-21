@@ -5,10 +5,12 @@ SETS=$W/sets
 RUN=$W/run
 LIB=$W/interposer/libpsurf.so
 
-mkset() { # name make-binary
+SG=${SET_G:-t1g}; SP=${SET_P:-t1p}; TAG=${RUNTAG:-}
+mkset() { # name make-binary [dash-binary]
   d=$SETS/$1/bin; rm -rf "$SETS/$1"; mkdir -p "$d"
-  ln -s "$PFX/bin/dash" "$d/sh"; ln -s "$PFX/bin/dash" "$d/dash"
-  ln -s "$PFX/bin/$2" "$d/make"
+  db=${3:-$PFX/bin/dash}
+  ln -s "$db" "$d/sh"; ln -s "$db" "$d/dash"
+  case $2 in /*) ln -s "$2" "$d/make";; *) ln -s "$PFX/bin/$2" "$d/make";; esac
   ln -s "$PFX/bin/tcc" "$d/tcc"; ln -s "$PFX/bin/tcc" "$d/cc"
   for a in $("$PFX/bin/toybox"); do [ -e "$d/$a" ] || ln -s "$PFX/bin/toybox" "$d/$a"; done
 }
@@ -63,7 +65,8 @@ run_wl() {
     if [ $harness = yes ]; then pre=PSURF_PRELOAD; else pre=LD_PRELOAD; fi
     (cd "$dir" && NS "$set" /usr/bin/env -i PATH="$P" HOME="$dir" TERM=dumb SHELL="$SETS/t1g/bin/sh" $pre="$LIB" "$@") > "$out" 2>&1
     rc=$?
-    cat /tmp/psurf-hits/* 2>/dev/null | sort -u > "$RAW/dynamic/$id.tsv"
+    # one line per (process, symbol): pid, argv[0], executable, symbol
+    for h in /tmp/psurf-hits/*; do [ -f "$h" ] && sed "s/^/$(basename "$h")	/" "$h"; done | sort -u > "$RAW/dynamic/$id.tsv"
   elif [ $harness = yes ]; then
     (cd "$dir" && NS "$set" /usr/bin/env -i PATH="$P" HOME="$dir" TERM=dumb SHELL="$SETS/t1g/bin/sh" "$@") > "$out" 2>&1
     rc=$?
@@ -81,46 +84,46 @@ fresh_run() { rm -rf "$RUN/$1"; mkdir -p "$RUN/$1"; cp -Rp "$SRC/$2" "$RUN/$1/sr
 
 # W1: tcc compiles itself (configure run by dash, build driven by GNU make; pdpmake attempted and recorded)
 W1() {
-  fresh_run W1 tcc; ( cd "$RUN/W1/src" && patch -s -p1 < "$TOOLS/patches/build/tcc-aarch64-wchar.patch" )
-  run_wl W1-configure t1g "$RUN/W1/src" sh ./configure --cc=tcc --config-musl --prefix="$RUN/W1/inst"
-  run_wl W1-make-pdpmake t1p "$RUN/W1/src" make
-  run_wl W1-make t1g "$RUN/W1/src" make
-  run_wl W1-check t1g "$RUN/W1/src" sh -c './tcc -v && printf "int main(){return 0;}\n" > t.c && ./tcc -B. -o t t.c && ./t && echo W1-OK'
+  fresh_run ${TAG}W1 tcc; ( cd "$RUN/${TAG}W1/src" && patch -s -p1 < "$TOOLS/patches/build/tcc-aarch64-wchar.patch" )
+  run_wl ${TAG}W1-configure "$SG" "$RUN/${TAG}W1/src" sh ./configure --cc=tcc --config-musl --prefix="$RUN/${TAG}W1/inst"
+  run_wl ${TAG}W1-make-pdpmake "$SP" "$RUN/${TAG}W1/src" make
+  run_wl ${TAG}W1-make "$SG" "$RUN/${TAG}W1/src" make
+  run_wl ${TAG}W1-check "$SG" "$RUN/${TAG}W1/src" sh -c './tcc -v && printf "int main(){return 0;}\n" > t.c && ./tcc -B. -o t t.c && ./t && echo W1-OK'
 }
 # W2: Lua with its plain Makefile, tcc as compiler, tcc -ar as archiver; once with each make
 W2() {
   for m in p g; do
-    fresh_run W2$m lua
-    run_wl W2-make-$m t1$m "$RUN/W2$m/src" make CC=tcc AR="tcc -ar rcu" RANLIB=true posix
-    run_wl W2-check-$m t1$m "$RUN/W2$m/src" sh -c './src/lua -e "print(string.format(\"lua ok %d\", 6*7))"'
+    fresh_run ${TAG}W2$m lua
+    run_wl ${TAG}W2-make-$m "$( [ $m = g ] && echo "$SG" || echo "$SP")" "$RUN/${TAG}W2$m/src" make CC=tcc AR="tcc -ar rcu" RANLIB=true posix
+    run_wl ${TAG}W2-check-$m "$( [ $m = g ] && echo "$SG" || echo "$SP")" "$RUN/${TAG}W2$m/src" sh -c './src/lua -e "print(string.format(\"lua ok %d\", 6*7))"'
   done
 }
 # W3: SQLite amalgamation compiled and linked by tcc from a shell script
 W3() {
-  fresh_run W3 sqlite
-  run_wl W3-build t1p "$RUN/W3/src" sh -c 'tcc -O2 -DSQLITE_THREADSAFE=0 -c sqlite3.c && tcc -c shell.c && tcc -o sqlite3 shell.o sqlite3.o -lm'
-  run_wl W3-check t1p "$RUN/W3/src" sh -c 'echo "create table t(x); insert into t values(40),(2); select sum(x) from t;" | ./sqlite3'
+  fresh_run ${TAG}W3 sqlite
+  run_wl ${TAG}W3-build "$SP" "$RUN/${TAG}W3/src" sh -c 'tcc -O2 -DSQLITE_THREADSAFE=0 -c sqlite3.c && tcc -c shell.c && tcc -o sqlite3 shell.o sqlite3.o -lm'
+  run_wl ${TAG}W3-check "$SP" "$RUN/${TAG}W3/src" sh -c 'echo "create table t(x); insert into t values(40),(2); select sum(x) from t;" | ./sqlite3'
 }
 # W4: GNU hello: ./configure && make with tcc, dash as CONFIG_SHELL; gcc baseline configure (unmeasured) for diffing
 W4() {
-  fresh_run W4 hello
+  fresh_run ${TAG}W4 hello
   # first as-is (records whether a toolchain without a separate ld passes), then with LD=tcc to continue
-  run_wl W4-configure-noLD t1g "$RUN/W4/src" sh ./configure CC=tcc CONFIG_SHELL="$SETS/t1g/bin/sh" --disable-nls
-  cp "$RUN/W4/src/config.log" "$RAW/$MODE/W4-noLD-config.log" 2>/dev/null || true
-  run_wl W4-configure-noAR t1g "$RUN/W4/src" sh ./configure CC=tcc LD=tcc CONFIG_SHELL="$SETS/t1g/bin/sh" --disable-nls
-  run_wl W4-make-noAR t1g "$RUN/W4/src" make
+  run_wl ${TAG}W4-configure-noLD "$SG" "$RUN/${TAG}W4/src" sh ./configure CC=tcc CONFIG_SHELL="$SETS/$SG/bin/sh" --disable-nls
+  cp "$RUN/${TAG}W4/src/config.log" "$RAW/$MODE/W4-noLD-config.log" 2>/dev/null || true
+  run_wl ${TAG}W4-configure-noAR "$SG" "$RUN/${TAG}W4/src" sh ./configure CC=tcc LD=tcc CONFIG_SHELL="$SETS/$SG/bin/sh" --disable-nls
+  run_wl ${TAG}W4-make-noAR "$SG" "$RUN/${TAG}W4/src" make
   # T1/T2 sets have no `ar` (toybox has none; busybox defconfig has none): use tcc's built-in archiver
-  run_wl W4-configure t1g "$RUN/W4/src" sh ./configure CC=tcc LD=tcc AR="tcc -ar" CONFIG_SHELL="$SETS/t1g/bin/sh" --disable-nls
-  run_wl W4-make t1g "$RUN/W4/src" make
-  run_wl W4-check t1g "$RUN/W4/src" ./hello
-  fresh_run W4p hello
-  run_wl W4p-configure t1p "$RUN/W4p/src" sh ./configure CC=tcc LD=tcc AR="tcc -ar" CONFIG_SHELL="$SETS/t1p/bin/sh" --disable-nls
-  run_wl W4p-make t1p "$RUN/W4p/src" make
+  run_wl ${TAG}W4-configure "$SG" "$RUN/${TAG}W4/src" sh ./configure CC=tcc LD=tcc AR="tcc -ar" CONFIG_SHELL="$SETS/$SG/bin/sh" --disable-nls
+  run_wl ${TAG}W4-make "$SG" "$RUN/${TAG}W4/src" make
+  run_wl ${TAG}W4-check "$SG" "$RUN/${TAG}W4/src" ./hello
+  fresh_run ${TAG}W4p hello
+  run_wl ${TAG}W4p-configure "$SP" "$RUN/${TAG}W4p/src" sh ./configure CC=tcc LD=tcc AR="tcc -ar" CONFIG_SHELL="$SETS/$SP/bin/sh" --disable-nls
+  run_wl ${TAG}W4p-make "$SP" "$RUN/${TAG}W4p/src" make
   if [ "$MODE" = dynamic ]; then   # baseline with Alpine's normal toolchain, not measured
-    rm -rf "$RUN/W4base"; mkdir -p "$RUN/W4base"; cp -Rp "$SRC/hello" "$RUN/W4base/src"; chmod -R u+w "$RUN/W4base/src"
-    (cd "$RUN/W4base/src" && ./configure CC=gcc --disable-nls > "$RAW/W4-baseline-configure.log" 2>&1) || true
-    cp "$RUN/W4base/src/config.log" "$RAW/W4-baseline-config.log" 2>/dev/null || true
-    cp "$RUN/W4/src/config.log" "$RAW/W4-tcc-config.log" 2>/dev/null || true
+    rm -rf "$RUN/${TAG}W4base"; mkdir -p "$RUN/${TAG}W4base"; cp -Rp "$SRC/hello" "$RUN/${TAG}W4base/src"; chmod -R u+w "$RUN/${TAG}W4base/src"
+    (cd "$RUN/${TAG}W4base/src" && ./configure CC=gcc --disable-nls > "$RAW/W4-baseline-configure.log" 2>&1) || true
+    cp "$RUN/${TAG}W4base/src/config.log" "$RAW/W4-baseline-config.log" 2>/dev/null || true
+    cp "$RUN/${TAG}W4/src/config.log" "$RAW/W4-tcc-config.log" 2>/dev/null || true
   fi
 }
 # W5: scripted interactive session on a pty for each shell

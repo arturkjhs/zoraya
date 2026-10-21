@@ -1,0 +1,208 @@
+program	file	line	api	class	effort_lines	what	note
+oksh	c_ksh.c	112	chdir	emulate	0	`cd -P` changes the process cwd	cd builtin; process-global cwd is the language semantics
+oksh	c_ksh.c	115	chdir	emulate	0	`cd` (logical) changes the process cwd	same as c_ksh.c:112
+oksh	c_ksh.c	123	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	c_ksh.c	189	access	direct	2	`pwd` checks the cached $PWD is still readable before printing it	inside the emulated cwd builtin; the probe itself could just try getcwd
+oksh	c_ksh.c	195	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	c_ksh.c	1248	kill	emulate	0	`kill` builtin sends a user-chosen signal to a pid	signal delivery to arbitrary pids is the builtin's purpose
+oksh	c_ksh.c	1248	killpg	emulate	0	`kill -<pgid>` builtin signals a process group	same line as kill row
+oksh	c_ksh.c	1249	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	c_sh.c	81	umask	emulate	0	`umask` builtin reads the mask (set-and-restore)	umask builtin semantics
+oksh	c_sh.c	82	umask	emulate	0	restores umask after reading it	same as c_sh.c:81
+oksh	c_sh.c	116	umask	emulate	0	`umask` symbolic mode: read current mask	same as c_sh.c:81
+oksh	c_sh.c	117	umask	emulate	0	restores umask on parse error	same as c_sh.c:81
+oksh	c_sh.c	184	umask	emulate	0	`umask` builtin sets the new mask	same as c_sh.c:81
+oksh	c_sh.c	205	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	c_sh.c	221	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	c_sh.c	302	isatty	direct	1	`read -p prompt?`: print prompt only if input fd is a terminal	
+oksh	c_sh.c	360	isatty	direct	1	`read` line continuation: reprompt PS2 if interactive and fd is a tty	
+oksh	c_sh.c	744	clock_gettime	n/a	0	`time` keyword takes start timestamp	CLOCK_MONOTONIC for elapsed time is the correct use; no DM-065 issue
+oksh	c_sh.c	761	clock_gettime	n/a	0	`time` keyword takes end timestamp	same as c_sh.c:744
+oksh	c_sh.c	867	getsid	emulate	0	`suspend` refuses to stop a login shell (orphaned pgrp / session check)	session/pgrp semantics; also getpgid on line 866
+oksh	c_test.c	251	lstat	emulate	0	`test -h/-L` checks whether a path is a symlink	the operator's semantics are a path-based symlink query (DM-039)
+oksh	c_test.c	272	isatty	direct	1	`test -t fd`	maps to handle-type query on the fd
+oksh	c_test.c	276	getegid	emulate	0	`test -G` compares file gid with effective gid	test operator semantics require POSIX gid identity
+oksh	c_test.c	359	access	emulate	0	`test -r/-w/-x` permission check	test operator semantics are permission probes; try-the-operation is not possible here
+oksh	edit.c	74	ioctl	direct	3	after SIGWINCH, reads window size via TIOCGWINSZ to update COLUMNS/LINES	typed terminal-size query; the SIGWINCH flag handler (x_sigwinch) is not in this list and would become a resize event (DM-053)
+oksh	edit.c	198	tcsetattr	emulate	0	line editor puts tty into raw (non-canonical) mode	interactive editing needs termios-like raw mode
+oksh	edit.c	219	tcsetattr	emulate	0	line editor restores saved tty mode	same as edit.c:198
+oksh	edit.c	436	getpwnam	emulate	0	completion: expands ~user via passwd lookup	~user is POSIX tilde semantics; user database
+oksh	edit.c	491	getpwent	emulate	0	completion: enumerates all users to complete ~prefix	user database enumeration; DM-060 hidden iteration state is irrelevant single-threaded
+oksh	edit.c	626	lstat	direct	1	completion: checks single glob result exists	plain existence check; could be stat/open-relative; doubt: whole completion is path-based
+oksh	eval.c	913	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	eval.c	1052	lstat	emulate	0	pathname expansion: lstat to distinguish symlinks for markdirs/trailing-slash checks	glob semantics over the global namespace (DM-039)
+oksh	eval.c	1121	readdir	n/a	0	pathname expansion reads directory entries	readdir state is per DIR stream, not hidden global state; not a DM-060 instance
+oksh	eval.c	1252	getpwnam	emulate	0	tilde expansion ~user looks up home directory	POSIX tilde semantics; user database
+oksh	exec.c	181	sigprocmask	restructure	2	coprocess setup blocks SIGCHLD while touching job/coproc state	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	exec.c	183	sigsetjmp	direct	1	error-unwind point for coprocess setup	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	exec.c	185	sigprocmask	restructure	2	restores mask on coprocess setup error	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	exec.c	220	sigprocmask	restructure	2	restores mask after coprocess pipes are set	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	exec.c	281	sigsetjmp	direct	1	break/continue target for for/select loops	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	exec.c	322	sigsetjmp	direct	1	break/continue target for while/until loops	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	exec.c	382	execve	emulate	0	execs the command (in a forked child or for `exec`)	exec replacing the shell image is shell semantics; pairs with fork in jobs.c:444
+oksh	exec.c	386	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	559	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	572	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	615	sigsetjmp	direct	1	return target for shell function call	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	exec.c	664	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	719	execve	emulate	0	ENOEXEC fallback: re-execs file via $EXECSHELL or /bin/sh	shell script exec semantics; also uses _PATH_BSHELL global path
+oksh	exec.c	722	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	883	access	emulate	0	tracked alias: drops cached path if no longer executable	part of $PATH search semantics
+oksh	exec.c	963	access	emulate	0	$PATH search: tests candidate for X_OK	$PATH search in a shell
+oksh	exec.c	1132	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	1157	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	1205	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	exec.c	1213	sigsetjmp	direct	1	error-unwind point for here-document expansion	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	exec.c	1237	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	expr.c	185	sigsetjmp	direct	1	error-unwind point for arithmetic evaluation	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	history.c	224	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	history.c	231	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	history.c	581	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	history.c	628	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	io.c	306	pipe	direct	3	creates a pipe for pipelines and coprocesses	pipe maps to a native channel pair; the fork inheritance it feeds is the emulated part (jobs.c:444)
+oksh	io.c	456	literal:/tmp	direct	3	temp files default to /tmp unless $TMPDIR is set	temp-dir capability; same change as io.c:464
+oksh	io.c	464	mkstemp	direct	3	creates temp file for here-docs and `fc`	temp-dir capability (mkstemp relative to a dir handle); same change as io.c:456
+oksh	jobs.c	154	sigemptyset	emulate	0	builds empty mask used to clear inherited mask and for sigsuspend	inherited-mask hygiene is POSIX-only; also used by jobs.c:1003
+oksh	jobs.c	155	sigprocmask	emulate	0	clears signal mask inherited from parent	inherited signal mask is a POSIX exec semantic
+oksh	jobs.c	157	sigemptyset	restructure	1	builds SIGCHLD-only mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	158	sigaddset	restructure	1	adds SIGCHLD to the blocking mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	200	tcsetattr	emulate	0	`suspend`: restores original tty modes before stopping	job control
+oksh	jobs.c	202	tcsetpgrp	emulate	0	`suspend`: hands terminal back to original pgrp	job control
+oksh	jobs.c	203	tcsetpgrp	n/a	0	error message string	match is inside a warningf format string
+oksh	jobs.c	204	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	206	setpgid	emulate	0	`suspend`: moves shell back into original pgrp	job control
+oksh	jobs.c	209	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	217	sigemptyset	emulate	0	prepares SIG_DFL action for SIGTSTP	part of self-stop for `suspend`
+oksh	jobs.c	219	sigaction	emulate	0	sets SIGTSTP to default so the shell can stop itself	job control
+oksh	jobs.c	220	kill	emulate	0	stops own process group with SIGTSTP	job control
+oksh	jobs.c	223	sigaction	emulate	0	restores SIGTSTP disposition after resume	job control
+oksh	jobs.c	226	setpgid	emulate	0	after resume, retakes own pgrp	job control
+oksh	jobs.c	227	setpgid	n/a	0	error message string	match is inside a warningf format string
+oksh	jobs.c	228	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	231	tcsetpgrp	emulate	0	after resume, retakes terminal foreground	job control
+oksh	jobs.c	234	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	261	killpg	emulate	0	on exit sends SIGHUP to remaining jobs	POSIX hangup semantics for jobs
+oksh	jobs.c	266	killpg	emulate	0	on exit sends SIGCONT so stopped jobs see the SIGHUP	job control
+oksh	jobs.c	282	tcsetpgrp	emulate	0	on exit restores terminal pgrp	job control
+oksh	jobs.c	283	setpgid	emulate	0	on exit restores original pgrp	job control
+oksh	jobs.c	310	getpgrp	emulate	0	enabling `set -m`: reads own pgrp	job control
+oksh	jobs.c	311	getpgrp	n/a	0	error message string	match is inside a warningf format string
+oksh	jobs.c	312	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	322	tcgetpgrp	emulate	0	waits until the shell owns the terminal foreground	job control
+oksh	jobs.c	325	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	331	kill	emulate	0	sends SIGTTIN to own pgrp while not in foreground	job control (POSIX.1 B.2)
+oksh	jobs.c	338	setpgid	emulate	0	puts the shell in its own pgrp	job control
+oksh	jobs.c	339	setpgid	n/a	0	error message string	match is inside a warningf format string
+oksh	jobs.c	340	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	343	tcsetpgrp	emulate	0	makes shell pgrp the terminal foreground	job control
+oksh	jobs.c	346	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	359	tcgetattr	emulate	0	saves shell tty modes for restoring after jobs	job control / termios
+oksh	jobs.c	402	sigprocmask	restructure	2	exchild blocks SIGCHLD while editing job lists	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	444	fork	emulate	0	forks every child: subshells, pipelines, background jobs, external commands	shell fork semantics; child runs execute() on the parse tree, not just exec
+oksh	jobs.c	453	sigprocmask	restructure	2	restores mask on fork failure	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	473	setpgid	emulate	0	puts child into job pgrp (both sides, race)	job control
+oksh	jobs.c	480	tcsetpgrp	emulate	0	gives terminal to new foreground job	job control
+oksh	jobs.c	491	sigprocmask	restructure	2	child restores mask after fork	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	510	literal:/dev/null	direct	2	background job without job control gets stdin from /dev/null	null handle; runs in forked child
+oksh	jobs.c	557	sigprocmask	restructure	2	parent restores mask after starting job	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	568	sigprocmask	restructure	2	startlast blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	575	sigprocmask	restructure	2	startlast restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	586	sigprocmask	restructure	2	waitlast blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	594	sigprocmask	restructure	2	waitlast restores mask (error path)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	600	sigprocmask	restructure	2	waitlast restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	615	sigprocmask	restructure	2	`wait` builtin blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	628	sigprocmask	restructure	2	`wait` restores mask (no job)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	639	sigprocmask	restructure	2	`wait` restores mask (foreign job)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	648	sigprocmask	restructure	2	`wait` restores mask after waiting	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	665	sigprocmask	restructure	2	`kill %job` blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	668	sigprocmask	restructure	2	`kill %job` restores mask (lookup error)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	680	killpg	emulate	0	`kill %job` sends SIGCONT before SIGTERM/SIGHUP to stopped job	job control
+oksh	jobs.c	681	killpg	emulate	0	`kill %job` signals the job's pgrp	kill builtin semantics
+oksh	jobs.c	682	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	687	sigprocmask	restructure	2	`kill %job` restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	703	sigprocmask	restructure	2	`fg`/`bg` blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	706	sigprocmask	restructure	2	`fg`/`bg` restores mask (lookup error)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	712	sigprocmask	restructure	2	`fg`/`bg` restores mask (not job-controlled)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	741	tcsetattr	emulate	0	`fg`: restores job's saved tty modes	job control
+oksh	jobs.c	744	tcsetpgrp	emulate	0	`fg`: gives terminal to the job	job control
+oksh	jobs.c	747	tcsetattr	emulate	0	`fg` failure: restores shell tty modes	job control
+oksh	jobs.c	748	sigprocmask	restructure	2	`fg` failure restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	749	tcsetpgrp	n/a	0	error message string	match is inside a bi_errorf format string
+oksh	jobs.c	753	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	763	killpg	emulate	0	`fg`/`bg` sends SIGCONT to the job	job control
+oksh	jobs.c	769	tcsetattr	emulate	0	`fg` SIGCONT failure: restores shell tty modes	job control
+oksh	jobs.c	770	tcsetpgrp	emulate	0	`fg` SIGCONT failure: retakes terminal	job control
+oksh	jobs.c	777	sigprocmask	restructure	2	`fg`/`bg` restores mask (SIGCONT failure)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	788	sigprocmask	restructure	2	`fg`/`bg` restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	824	sigprocmask	restructure	2	j_njobs (prompt \j) blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	828	sigprocmask	restructure	2	j_njobs restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	843	sigprocmask	restructure	2	`jobs` builtin blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	853	sigprocmask	restructure	2	`jobs` restores mask (error)	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	876	sigprocmask	restructure	2	`jobs` restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	887	sigprocmask	restructure	2	j_notify blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	903	sigprocmask	restructure	2	j_notify restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	912	sigprocmask	restructure	2	j_async ($!) blocks SIGCHLD	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	917	sigprocmask	restructure	2	j_async restores mask	SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003
+oksh	jobs.c	975	kill	restructure	3	re-raises a held SIGCHLD to itself once the job is fully started	exists only because the handler must defer; same change as jobs.c:1003
+oksh	jobs.c	1003	sigsuspend	restructure	300	waits for job state change by sleeping until SIGCHLD (or a trap signal) arrives	core of the SIGCHLD-driven job loop: replace with a wait over child handles + trap events; ~300 lines total across jobs.c/exec.c incl. ~40 mask pairs; doubt: if job control stays emulated the layer must deliver SIGCHLD anyway, so could be emulate
+oksh	jobs.c	1034	tcgetpgrp	emulate	0	saves terminal pgrp of a stopped job	job control
+oksh	jobs.c	1036	tcsetpgrp	emulate	0	retakes terminal after foreground job stops/exits	job control
+oksh	jobs.c	1040	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	jobs.c	1044	tcgetattr	emulate	0	saves stopped job's tty modes	job control
+oksh	jobs.c	1058	tcgetattr	emulate	0	adopts tty modes left by a successful foreground job	job control
+oksh	jobs.c	1060	tcsetattr	emulate	0	restores shell tty modes after foreground job	job control
+oksh	jobs.c	1154	waitpid	emulate	0	SIGCHLD handler reaps any child, incl. stopped ones (WUNTRACED)	reaping could move into the event loop (jobs.c:1003), but stop reporting via WUNTRACED is job control; runs in handler context
+oksh	jobs.c	1644	kill	emulate	0	signals each process of a non-pgrp job (kill builtin, SIGKILL on fork failure)	arbitrary signal delivery
+oksh	lex.c	1087	alarm	restructure	40	TMOUT: arms SIGALRM before reading an interactive line	replace with read deadline in x_read and shf_getse paths; alarm_catcher sets intrsig to log out
+oksh	lex.c	1142	alarm	restructure	2	TMOUT: disarms alarm after the line is read	same change as lex.c:1087
+oksh	lex.c	1189	sigsetjmp	direct	1	error-unwind point for PS1 expansion	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	lex.c	1252	time	n/a	0	prompt \d reads current date	wall clock is the right clock for displaying a date; not DM-065 misuse
+oksh	lex.c	1253	localtime	direct	1	prompt \d converts to local time	localtime_r (DM-060)
+oksh	lex.c	1271	time	n/a	0	prompt \D{fmt} reads current time	same as lex.c:1252
+oksh	lex.c	1272	localtime	direct	1	prompt \D{fmt} converts to local time	localtime_r
+oksh	lex.c	1298	ttyname	direct	3	prompt \l prints basename of stdin tty	name query on the handle, or drop the escape; rule's emulate is too strong
+oksh	lex.c	1298	ttyname	direct	1	prompt \l: ttyname returns a static buffer	ttyname_r; same line as tty/job-control row
+oksh	lex.c	1324	time	n/a	0	prompt \t reads current time	same as lex.c:1252
+oksh	lex.c	1325	localtime	direct	1	prompt \t converts to local time	localtime_r
+oksh	lex.c	1333	time	n/a	0	prompt \T reads current time	same as lex.c:1252
+oksh	lex.c	1334	localtime	direct	1	prompt \T converts to local time	localtime_r
+oksh	lex.c	1342	time	n/a	0	prompt \@ reads current time	same as lex.c:1252
+oksh	lex.c	1343	localtime	direct	1	prompt \@ converts to local time	localtime_r
+oksh	lex.c	1351	time	n/a	0	prompt \A reads current time	same as lex.c:1252
+oksh	lex.c	1352	localtime	direct	1	prompt \A converts to local time	localtime_r
+oksh	mail.c	59	clock_gettime	n/a	0	MAILCHECK interval timer	CLOCK_MONOTONIC for an interval is correct
+oksh	main.c	326	geteuid	direct	2	records effective uid (root prompt '#', test -O, privilege drop)	native identity query
+oksh	main.c	340	getegid	direct	2	detects setuid/setgid start to set privileged mode	without setuid in the native model this is constant false
+oksh	main.c	340	getgid	direct	2	same privileged-mode check	same line as getegid row
+oksh	main.c	340	getuid	direct	2	same privileged-mode check	same line as getegid row
+oksh	main.c	360	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	main.c	368	isatty	direct	1	decides interactive mode: stdin and stderr are ttys	
+oksh	main.c	418	literal:/etc/suid_profile	direct	2	privileged mode reads /etc/suid_profile instead of $ENV	dead without setuid; else a config capability. Rule said restructure; doubt only if setuid is kept
+oksh	main.c	469	getlogin	direct	3	sets username for prompt \u when $USER is unset	fallback to native principal name or '?'; rule's user-db emulate is too strong
+oksh	main.c	469	getlogin	direct	1	getlogin returns a static buffer	getlogin_r; same line as identity row
+oksh	main.c	495	sigsetjmp	direct	1	error-unwind point for `.`/profile include	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	main.c	570	sigsetjmp	direct	1	top-level error/interrupt recovery in the command loop	sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler
+oksh	main.c	690	siglongjmp	direct	1	unwind() jumps to the nearest error/loop/function target	plain longjmp; called synchronously, not from a handler; same macro change as all sigsetjmp sites
+oksh	main.c	761	getpgrp	emulate	0	on death by SIGINT/SIGTERM, checks it leads its own pgrp	exit-by-signal semantics; pairs with main.c:764
+oksh	main.c	764	kill	emulate	0	re-raises the fatal signal to its pgrp so the parent sees death-by-signal	wait-status semantics of dying by a signal
+oksh	misc.c	297	getgid	direct	2	`set +p`: reads real gid to drop privileges	only reached when started setuid
+oksh	misc.c	299	setresgid	direct	3	`set +p`: drops setgid privilege	dead without setuid in native model (delete block); rule said restructure. If setuid is emulated, this becomes emulate
+oksh	misc.c	300	setgroups	direct	1	`set +p`: drops supplementary groups	same block as misc.c:299
+oksh	misc.c	301	setresuid	direct	1	`set +p`: drops setuid privilege	same block as misc.c:299
+oksh	misc.c	1145	getcwd	emulate	0	reads process cwd for $PWD/pwd/cd	process-global cwd
+oksh	path.c	250	readlink	emulate	0	`cd -P`/`pwd -P`: resolves symlinks component by component	physical-path semantics of cd/pwd (DM-039)
+oksh	trap.c	55	sigemptyset	emulate	0	initializes SIG_IGN action template for traps	trap builtin semantics
+oksh	trap.c	90	alarm	restructure	5	TMOUT handler checks remaining alarm time	handler deleted with the read-deadline change; same change as lex.c:1087
+oksh	trap.c	96	alarm	restructure	1	TMOUT handler re-arms remaining time	same change as lex.c:1087
+oksh	trap.c	378	sigaction	emulate	0	setsig: probes original disposition (ignored-on-entry rule)	POSIX: signals ignored on entry stay ignored; trap builtin
+oksh	trap.c	407	sigemptyset	emulate	0	setsig: builds action for new handler	trap builtin / shell signal handling
+oksh	trap.c	410	sigaction	emulate	0	setsig: installs handler/IGN/DFL for traps and shell-internal signals (SIGCHLD, SIGALRM, SIGWINCH)	central for trap builtin; SIGCHLD/SIGALRM uses go away with the restructures, but `trap` itself remains
+oksh	tty.c	36	literal:/dev/tty	emulate	0	opens the controlling terminal for job control/editing	controlling-terminal-by-name; tied to job control; falls back to fd 0/2
+oksh	tty.c	40	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	tty.c	43	isatty	direct	1	fallback: use stdin as tty fd	
+oksh	tty.c	45	isatty	direct	1	fallback: use stderr as tty fd	
+oksh	tty.c	55	strerror	direct	1	formats an errno message with strerror	single-threaded shell: strerror_r or native error string; no real hazard today (DM-060)
+oksh	tty.c	67	tcgetattr	emulate	0	saves initial tty modes	job control / line editor
+oksh	var.c	943	clock_gettime	n/a	0	reading $SECONDS computes elapsed time	CLOCK_MONOTONIC is correct for elapsed time
+oksh	var.c	1005	access	direct	3	validates $TMPDIR is a writable searchable directory	temp-dir capability; same change as io.c:456
+oksh	var.c	1062	clock_gettime	n/a	0	assigning $SECONDS resets its base	same as var.c:943

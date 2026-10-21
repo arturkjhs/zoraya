@@ -1,0 +1,651 @@
+program,kind,feature,api,file,line,function,class,effort_lines,what,note,signals,source,rule_class
+dash,core,6 DM-060 non-reentrant,strerror,src/bltin/printf.c,567,check_conversion,direct,1,prints the ERANGE message for a printf numeric conversion,,,review,direct
+dash,core,4 tty/job control,isatty,src/bltin/test.c,319,primary,direct,1,implements `test -t fd`,needs a handle-type query keyed by fd number,,review,direct
+dash,core,5 identity/permissions,geteuid,src/bltin/test.c,432,filstat,emulate,0,`test -O`: compares file owner with effective uid,the builtin exists to expose the POSIX uid model; direct only if native has an owner concept,,review,direct
+dash,core,5 identity/permissions,getegid,src/bltin/test.c,434,filstat,emulate,0,`test -G`: compares file group with effective gid,same as test.c:432,,review,direct
+dash,core,5 identity/permissions,faccessat,src/bltin/test.c,537,test_file_access,emulate,0,`test -r/-w/-x`: permission probe with effective ids (AT_EACCESS),cannot 'just try the operation': test must answer without doing it; doubt: a native capability-rights query could make it direct,,review,direct
+dash,core,3 global path/cwd,chdir,src/cd.c,178,docd,emulate,0,changes process cwd for the `cd` builtin,,,review,emulate
+dash,core,6 DM-060 non-reentrant,strtok,src/cd.c,236,updatepwd,direct,1,splits the logical path into components for `cd -L`,strtok_r; same change as cd.c:254,,review,direct
+dash,core,6 DM-060 non-reentrant,strtok,src/cd.c,254,updatepwd,direct,1,continues the component split for `cd -L`,same change as cd.c:236,,review,direct
+dash,core,3 global path/cwd,getcwd,src/cd.c,279,getpwd,emulate,0,reads process cwd for `pwd -P` and PWD init,,,review,emulate
+dash,core,3 global path/cwd,getcwd,src/cd.c,283,getpwd,n/a,0,'getcwd' matched inside the warning string,false positive: string literal; the real call is cd.c:279,,review,emulate
+dash,core,6 DM-060 non-reentrant,strerror,src/cd.c,283,getpwd,direct,1,formats the getcwd failure message,,,review,direct
+dash,core,2 signals,signal,src/error.c,110,onint,emulate,0,resets SIGINT to default before re-raising it,exit-by-signal so the parent sees WIFSIGNALED; same as error.c:111,INT,review,emulate
+dash,core,2 signals,raise,src/error.c,111,onint,emulate,0,re-raises SIGINT so a non-interactive shell dies by the signal,,INT,review,emulate
+dash,core,6 DM-060 non-reentrant,strerror,src/error.c,220,errmsg,direct,1,maps errno to a message for shell errors,,,review,direct
+dash,core,1 process,pipe,src/eval.c,587,evalpipe,direct,2,creates the pipe between pipeline elements,"pipe is fine as a channel handle; the children come from forkshell (jobs.c:982, emulate)",,review,direct
+dash,core,1 process,execve,src/exec.c,163,tryexec,emulate,0,"execs a command after $PATH search, falling back to /bin/sh on ENOEXEC","reached from vforkexec child, the `exec` builtin and EV_EXIT in forked subshells; _PATH_BSHELL is a global path",,review,emulate
+dash,core,5 identity/permissions,getpwnam,src/expand.c,209,getpwhome,emulate,0,looks up the home directory for `~user` expansion,,,review,emulate
+dash,core,4 tty/job control,tcgetattr,src/input.c,138,input_init,direct,3,queries whether stdin is a terminal in canonical mode to decide input buffering,"query only, no mode change; rule said emulate; needs a terminal-mode query on the handle",,review,emulate
+dash,core,4 tty/job control,isatty,src/jobs.c,214,setjobctl,direct,1,scans fds 2..0 for a terminal when /dev/tty cannot be opened,"isatty is trivial, but the surrounding setjobctl is job control (emulate); _PATH_TTY open is not in the list",,review,direct
+dash,core,4 tty/job control,tcgetpgrp,src/jobs.c,220,setjobctl,emulate,0,reads the tty foreground pgrp when enabling job control,,,review,emulate
+dash,core,4 tty/job control,getpgrp,src/jobs.c,231,setjobctl,emulate,0,compares own pgrp with the tty foreground pgrp,,,review,emulate
+dash,core,2 signals,killpg,src/jobs.c,235,setjobctl,emulate,0,sends SIGTTIN to own group to stop while in the background,,TTIN,review,emulate
+dash,core,4 tty/job control,setpgid,src/jobs.c,249,setjobctl,emulate,0,puts the shell into its own process group,,,review,emulate
+dash,core,2 signals,kill,src/jobs.c,347,killcmd,emulate,0,`kill` builtin sends a signal to a pid or job pgrp,,,review,emulate
+dash,core,6 DM-060 non-reentrant,strerror,src/jobs.c,348,killcmd,direct,1,formats the kill failure message,,,review,direct
+dash,core,2 signals,killpg,src/jobs.c,413,restartjob,emulate,0,`fg`/`bg` send SIGCONT to the job's process group,,CONT,review,emulate
+dash,core,4 tty/job control,setpgid,src/jobs.c,895,forkchild,emulate,0,child joins the job's process group,parent does the same at jobs.c:956,,review,emulate
+dash,core,4 tty/job control,setpgid,src/jobs.c,956,forkparent,emulate,0,parent puts the child into the job's process group,,,review,emulate
+dash,core,1 process,fork,src/jobs.c,982,forkshell,emulate,0,"forks the shell for subshells, pipelines, background jobs, command substitution and the heredoc writer",the central X-1 site of dash,,review,emulate
+dash,core,1 process,vfork,src/jobs.c,1002,vforkexec,restructure,60,vfork+exec of an external simple command,"posix_spawn is possible: resolve path in parent (cmdentry idx), SETSIGDEF/SETPGROUP attrs, ENOEXEC->/bin/sh fallback, FORK_BG stdin=/dev/null, tcsetpgrp from parent; doubt direct vs restructure, picked harder",,review,direct
+dash,core,2 signals,raise,src/jobs.c,1060,waitforjob,emulate,0,re-raises SIGINT in the shell when the foreground job died of SIGINT,,INT,review,emulate
+dash,core,1 process,wait3,src/jobs.c,1209,waitproc,emulate,0,"reaps any child, incl. stopped ones (WUNTRACED), for the job table","without job control this is an event wait on child handles (restructure, ~100 lines)",,review,emulate
+dash,core,2 signals,sigsuspend,src/jobs.c,1221,waitproc,emulate,0,blocks until SIGCHLD or a trapped signal arrives,SIGCHLD part is restructure (event loop over child handles); interruption of `wait` by trapped signals needs signal emulation,,review,emulate
+dash,core,4 tty/job control,tcsetpgrp,src/jobs.c,1550,xtcsetpgrp,emulate,0,sets the tty foreground process group,,,review,emulate
+dash,core,6 DM-060 non-reentrant,strerror,src/jobs.c,1554,xtcsetpgrp,direct,1,formats the tcsetpgrp failure message,,,review,direct
+dash,core,3 global path/cwd,literal:/etc/profile,src/main.c,153,main,direct,10,login shell reads the system profile,read from a config-dir capability instead; rule said restructure; doubt: compat namespace may just provide /etc/profile; same as mrsh entry.c:127,,review,restructure
+dash,core,4 tty/job control,isatty,src/miscbltin.c,138,readcmd,direct,1,`read -p` prints the prompt only if stdin is a terminal,,,review,direct
+dash,core,5 identity/permissions,umask,src/miscbltin.c,226,umaskcmd,emulate,0,`umask` builtin reads the mask (set-and-restore),,,review,emulate
+dash,core,5 identity/permissions,umask,src/miscbltin.c,227,umaskcmd,emulate,0,restores the mask after reading it,,,review,emulate
+dash,core,5 identity/permissions,umask,src/miscbltin.c,326,umaskcmd,emulate,0,`umask` builtin sets the new mask,,,review,emulate
+dash,core,6 DM-060 non-reentrant,strerror,src/miscbltin.c,513,ulimitcmd,direct,1,formats the setrlimit failure message for `ulimit`,setrlimit itself is not in the feature list,,review,direct
+dash,core,4 tty/job control,isatty,src/options.c,143,procargs,direct,1,decides interactive mode if stdin and stderr are terminals,,,review,direct
+dash,core,6 DM-060 non-reentrant,strerror,src/redir.c,299,sh_dup2,direct,1,formats the dup2 failure message,,,review,direct
+dash,core,1 process,pipe,src/redir.c,341,sh_pipe,direct,2,"creates a pipe (sh_pipe) for command substitution, heredocs and stdin buffering",coupled to forkshell (jobs.c:982) for cmd subst,,review,direct
+dash,core,2 signals,signal,src/redir.c,378,openhere,direct,12,heredoc writer child ignores SIGINT,only reached if memfd_create fails (USE_MEMFD_CREATE=1) and doc > PIPESIZE; drop the fork fallback (temp-file handle); covers redir.c:378-384,INT,review,emulate
+dash,core,2 signals,signal,src/redir.c,379,openhere,direct,1,heredoc writer child ignores SIGQUIT,same change as redir.c:378,QUIT,review,emulate
+dash,core,2 signals,signal,src/redir.c,380,openhere,direct,1,heredoc writer child ignores SIGHUP,same change as redir.c:378,HUP,review,emulate
+dash,core,2 signals,signal,src/redir.c,382,openhere,direct,1,heredoc writer child ignores SIGTSTP,same change as redir.c:378,TSTP,review,emulate
+dash,core,2 signals,signal,src/redir.c,384,openhere,direct,1,heredoc writer child restores default SIGPIPE,same change as redir.c:378,PIPE,review,direct
+dash,core,6 DM-060 non-reentrant,strerror,src/redir.c,479,savefd,direct,1,formats the F_DUPFD failure message,,,review,direct
+dash,core,2 signals,sigemptyset,src/system.h,53,sigclearmask,emulate,0,sigclearmask: empties the mask to unblock all signals,"live path (HAVE_SIGSETMASK undefined); used by onint, waitproc, xtcsetpgrp",,review,emulate
+dash,core,2 signals,sigprocmask,src/system.h,54,sigclearmask,emulate,0,sigclearmask: unblocks all signals,same as system.h:53,,review,emulate
+dash,core,2 signals,sigaction,src/trap.c,255,setsignal,emulate,0,queries the inherited disposition to detect hard-ignored signals,,,review,emulate
+dash,core,2 signals,sigfillset,src/trap.c,288,setsignal,emulate,0,fills the handler mask before installing it,,,review,emulate
+dash,core,2 signals,sigaction,src/trap.c,289,setsignal,emulate,0,installs catch/ignore/default for traps and job-control signals; SIGCHLD always caught,,,review,emulate
+dash,core,2 signals,signal,src/trap.c,301,ignoresig,emulate,0,ignores a signal (e.g. SIGINT/SIGQUIT in background children),,,review,emulate
+dash,core,2 signals,sigfillset,src/trap.c,475,sigblockall,emulate,0,sigblockall: builds the full mask,critical sections against async handlers,,review,emulate
+dash,core,2 signals,sigprocmask,src/trap.c,476,sigblockall,emulate,0,sigblockall: blocks all signals,,,review,emulate
+dash,core,6 environment (DM-085),putenv,src/var.c,87,changelocale,direct,5,exports an LC_*/LANG change into environ so setlocale sees it,"replace by setlocale(category, value); children get env from dash's var table, not environ; doubt",,review,emulate
+dash,core,6 DM-097 locale,setlocale,src/var.c,88,changelocale,direct,1,re-reads the locale from the environment,same change as var.c:87; locale stays process-global (DM-097),,review,direct
+dash,core,5 identity/permissions,geteuid,src/var.c,210,initvar,direct,1,picks default PS1 '# ' for root,,,review,direct
+oksh,comparison,3 global path/cwd,chdir,c_ksh.c,112,c_cd,emulate,0,`cd -P` changes the process cwd,cd builtin; process-global cwd is the language semantics,,review,emulate
+oksh,comparison,3 global path/cwd,chdir,c_ksh.c,115,c_cd,emulate,0,`cd` (logical) changes the process cwd,same as c_ksh.c:112,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,c_ksh.c,123,c_cd,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,5 identity/permissions,access,c_ksh.c,189,c_pwd,direct,2,`pwd` checks the cached $PWD is still readable before printing it,inside the emulated cwd builtin; the probe itself could just try getcwd,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,c_ksh.c,195,c_pwd,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,kill,c_ksh.c,1248,c_kill,emulate,0,`kill` builtin sends a user-chosen signal to a pid,signal delivery to arbitrary pids is the builtin's purpose,,review,emulate
+oksh,comparison,2 signals,killpg,c_ksh.c,1248,c_kill,emulate,0,`kill -<pgid>` builtin signals a process group,same line as kill row,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,c_ksh.c,1249,c_kill,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,5 identity/permissions,umask,c_sh.c,81,c_umask,emulate,0,`umask` builtin reads the mask (set-and-restore),umask builtin semantics,,review,emulate
+oksh,comparison,5 identity/permissions,umask,c_sh.c,82,c_umask,emulate,0,restores umask after reading it,same as c_sh.c:81,,review,emulate
+oksh,comparison,5 identity/permissions,umask,c_sh.c,116,c_umask,emulate,0,`umask` symbolic mode: read current mask,same as c_sh.c:81,,review,emulate
+oksh,comparison,5 identity/permissions,umask,c_sh.c,117,c_umask,emulate,0,restores umask on parse error,same as c_sh.c:81,,review,emulate
+oksh,comparison,5 identity/permissions,umask,c_sh.c,184,c_umask,emulate,0,`umask` builtin sets the new mask,same as c_sh.c:81,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,c_sh.c,205,c_dot,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,c_sh.c,221,c_dot,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,isatty,c_sh.c,302,c_read,direct,1,`read -p prompt?`: print prompt only if input fd is a terminal,,,review,direct
+oksh,comparison,4 tty/job control,isatty,c_sh.c,360,c_read,direct,1,`read` line continuation: reprompt PS2 if interactive and fd is a tty,,,review,direct
+oksh,comparison,6 DM-065 wall clock,clock_gettime,c_sh.c,744,timex,n/a,0,`time` keyword takes start timestamp,CLOCK_MONOTONIC for elapsed time is the correct use; no DM-065 issue,,review,direct
+oksh,comparison,6 DM-065 wall clock,clock_gettime,c_sh.c,761,timex,n/a,0,`time` keyword takes end timestamp,same as c_sh.c:744,,review,direct
+oksh,comparison,4 tty/job control,getsid,c_sh.c,867,c_suspend,emulate,0,`suspend` refuses to stop a login shell (orphaned pgrp / session check),session/pgrp semantics; also getpgid on line 866,,review,emulate
+oksh,comparison,6 DM-039 symlink/lstat,lstat,c_test.c,251,test_eval,emulate,0,`test -h/-L` checks whether a path is a symlink,the operator's semantics are a path-based symlink query (DM-039),,review,direct
+oksh,comparison,4 tty/job control,isatty,c_test.c,272,test_eval,direct,1,`test -t fd`,maps to handle-type query on the fd,,review,direct
+oksh,comparison,5 identity/permissions,getegid,c_test.c,276,test_eval,emulate,0,`test -G` compares file gid with effective gid,test operator semantics require POSIX gid identity,,review,direct
+oksh,comparison,5 identity/permissions,access,c_test.c,359,test_eaccess,emulate,0,`test -r/-w/-x` permission check,test operator semantics are permission probes; try-the-operation is not possible here,,review,direct
+oksh,comparison,6 DM-053 ioctl,ioctl,edit.c,74,check_sigwinch,direct,3,"after SIGWINCH, reads window size via TIOCGWINSZ to update COLUMNS/LINES",typed terminal-size query; the SIGWINCH flag handler (x_sigwinch) is not in this list and would become a resize event (DM-053),,review,direct
+oksh,comparison,4 tty/job control,tcsetattr,edit.c,198,x_mode,emulate,0,line editor puts tty into raw (non-canonical) mode,interactive editing needs termios-like raw mode,,review,emulate
+oksh,comparison,4 tty/job control,tcsetattr,edit.c,219,x_mode,emulate,0,line editor restores saved tty mode,same as edit.c:198,,review,emulate
+oksh,comparison,5 identity/permissions,getpwnam,edit.c,436,x_tilde_expand,emulate,0,completion: expands ~user via passwd lookup,~user is POSIX tilde semantics; user database,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,getpwent,edit.c,491,x_tilde_glob,emulate,0,completion: enumerates all users to complete ~prefix,user database enumeration; DM-060 hidden iteration state is irrelevant single-threaded,,review,direct
+oksh,comparison,6 DM-039 symlink/lstat,lstat,edit.c,626,x_file_glob,direct,1,completion: checks single glob result exists,plain existence check; could be stat/open-relative; doubt: whole completion is path-based,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,eval.c,913,comsub,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-039 symlink/lstat,lstat,eval.c,1052,globit,emulate,0,pathname expansion: lstat to distinguish symlinks for markdirs/trailing-slash checks,glob semantics over the global namespace (DM-039),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,readdir,eval.c,1121,globit,n/a,0,pathname expansion reads directory entries,"readdir state is per DIR stream, not hidden global state; not a DM-060 instance",,review,direct
+oksh,comparison,5 identity/permissions,getpwnam,eval.c,1252,homedir,emulate,0,tilde expansion ~user looks up home directory,POSIX tilde semantics; user database,,review,emulate
+oksh,comparison,2 signals,sigprocmask,exec.c,181,execute,restructure,2,coprocess setup blocks SIGCHLD while touching job/coproc state,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigsetjmp,exec.c,183,execute,direct,1,error-unwind point for coprocess setup,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,2 signals,sigprocmask,exec.c,185,execute,restructure,2,restores mask on coprocess setup error,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,exec.c,220,execute,restructure,2,restores mask after coprocess pipes are set,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigsetjmp,exec.c,281,execute,direct,1,break/continue target for for/select loops,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,2 signals,sigsetjmp,exec.c,322,execute,direct,1,break/continue target for while/until loops,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,1 process,execve,exec.c,382,execute,emulate,0,execs the command (in a forked child or for `exec`),exec replacing the shell image is shell semantics; pairs with fork in jobs.c:444,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,386,execute,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,559,comexec,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,572,comexec,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,sigsetjmp,exec.c,615,comexec,direct,1,return target for shell function call,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,664,comexec,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,1 process,execve,exec.c,719,scriptexec,emulate,0,ENOEXEC fallback: re-execs file via $EXECSHELL or /bin/sh,shell script exec semantics; also uses _PATH_BSHELL global path,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,722,scriptexec,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,5 identity/permissions,access,exec.c,883,findcom,emulate,0,tracked alias: drops cached path if no longer executable,part of $PATH search semantics,,review,direct
+oksh,comparison,5 identity/permissions,access,exec.c,963,search_access,emulate,0,$PATH search: tests candidate for X_OK,$PATH search in a shell,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,1132,iosetup,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,1157,iosetup,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,1205,herein,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,sigsetjmp,exec.c,1213,herein,direct,1,error-unwind point for here-document expansion,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,exec.c,1237,herein,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,sigsetjmp,expr.c,185,v_evaluate,direct,1,error-unwind point for arithmetic evaluation,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,history.c,224,c_fc,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,history.c,231,c_fc,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,history.c,581,sethistsize,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,history.c,628,init_histvec,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,1 process,pipe,io.c,306,openpipe,direct,3,creates a pipe for pipelines and coprocesses,pipe maps to a native channel pair; the fork inheritance it feeds is the emulated part (jobs.c:444),,review,direct
+oksh,comparison,3 global path/cwd,literal:/tmp,io.c,456,maketemp,direct,3,temp files default to /tmp unless $TMPDIR is set,temp-dir capability; same change as io.c:464,,review,direct
+oksh,comparison,3 global path/cwd,mkstemp,io.c,464,maketemp,direct,3,creates temp file for here-docs and `fc`,temp-dir capability (mkstemp relative to a dir handle); same change as io.c:456,,review,direct
+oksh,comparison,2 signals,sigemptyset,jobs.c,154,j_init,emulate,0,builds empty mask used to clear inherited mask and for sigsuspend,inherited-mask hygiene is POSIX-only; also used by jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,155,j_init,emulate,0,clears signal mask inherited from parent,inherited signal mask is a POSIX exec semantic,,review,emulate
+oksh,comparison,2 signals,sigemptyset,jobs.c,157,j_init,restructure,1,builds SIGCHLD-only mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigaddset,jobs.c,158,j_init,restructure,1,adds SIGCHLD to the blocking mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,CHLD,review,emulate
+oksh,comparison,4 tty/job control,tcsetattr,jobs.c,200,j_suspend,emulate,0,`suspend`: restores original tty modes before stopping,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,202,j_suspend,emulate,0,`suspend`: hands terminal back to original pgrp,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,203,j_suspend,n/a,0,error message string,match is inside a warningf format string,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,204,j_suspend,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,setpgid,jobs.c,206,j_suspend,emulate,0,`suspend`: moves shell back into original pgrp,job control,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,209,j_suspend,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,sigemptyset,jobs.c,217,j_suspend,emulate,0,prepares SIG_DFL action for SIGTSTP,part of self-stop for `suspend`,,review,emulate
+oksh,comparison,2 signals,sigaction,jobs.c,219,j_suspend,emulate,0,sets SIGTSTP to default so the shell can stop itself,job control,TSTP,review,emulate
+oksh,comparison,2 signals,kill,jobs.c,220,j_suspend,emulate,0,stops own process group with SIGTSTP,job control,TSTP,review,emulate
+oksh,comparison,2 signals,sigaction,jobs.c,223,j_suspend,emulate,0,restores SIGTSTP disposition after resume,job control,TSTP,review,emulate
+oksh,comparison,4 tty/job control,setpgid,jobs.c,226,j_suspend,emulate,0,"after resume, retakes own pgrp",job control,,review,emulate
+oksh,comparison,4 tty/job control,setpgid,jobs.c,227,j_suspend,n/a,0,error message string,match is inside a warningf format string,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,228,j_suspend,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,231,j_suspend,emulate,0,"after resume, retakes terminal foreground",job control,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,234,j_suspend,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,killpg,jobs.c,261,j_exit,emulate,0,on exit sends SIGHUP to remaining jobs,POSIX hangup semantics for jobs,HUP,review,emulate
+oksh,comparison,2 signals,killpg,jobs.c,266,j_exit,emulate,0,on exit sends SIGCONT so stopped jobs see the SIGHUP,job control,CONT,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,282,j_exit,emulate,0,on exit restores terminal pgrp,job control,,review,emulate
+oksh,comparison,4 tty/job control,setpgid,jobs.c,283,j_exit,emulate,0,on exit restores original pgrp,job control,,review,emulate
+oksh,comparison,4 tty/job control,getpgrp,jobs.c,310,j_change,emulate,0,enabling `set -m`: reads own pgrp,job control,,review,emulate
+oksh,comparison,4 tty/job control,getpgrp,jobs.c,311,j_change,n/a,0,error message string,match is inside a warningf format string,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,312,j_change,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,tcgetpgrp,jobs.c,322,j_change,emulate,0,waits until the shell owns the terminal foreground,job control,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,325,j_change,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,kill,jobs.c,331,j_change,emulate,0,sends SIGTTIN to own pgrp while not in foreground,job control (POSIX.1 B.2),TTIN,review,emulate
+oksh,comparison,4 tty/job control,setpgid,jobs.c,338,j_change,emulate,0,puts the shell in its own pgrp,job control,,review,emulate
+oksh,comparison,4 tty/job control,setpgid,jobs.c,339,j_change,n/a,0,error message string,match is inside a warningf format string,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,340,j_change,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,343,j_change,emulate,0,makes shell pgrp the terminal foreground,job control,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,346,j_change,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,tcgetattr,jobs.c,359,j_change,emulate,0,saves shell tty modes for restoring after jobs,job control / termios,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,402,exchild,restructure,2,exchild blocks SIGCHLD while editing job lists,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,1 process,fork,jobs.c,444,exchild,emulate,0,"forks every child: subshells, pipelines, background jobs, external commands","shell fork semantics; child runs execute() on the parse tree, not just exec",,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,453,exchild,restructure,2,restores mask on fork failure,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,4 tty/job control,setpgid,jobs.c,473,exchild,emulate,0,"puts child into job pgrp (both sides, race)",job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,480,exchild,emulate,0,gives terminal to new foreground job,job control,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,491,exchild,restructure,2,child restores mask after fork,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,3 global path/cwd,literal:/dev/null,jobs.c,510,exchild,direct,2,background job without job control gets stdin from /dev/null,null handle; runs in forked child,,review,direct
+oksh,comparison,2 signals,sigprocmask,jobs.c,557,exchild,restructure,2,parent restores mask after starting job,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,568,startlast,restructure,2,startlast blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,575,startlast,restructure,2,startlast restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,586,waitlast,restructure,2,waitlast blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,594,waitlast,restructure,2,waitlast restores mask (error path),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,600,waitlast,restructure,2,waitlast restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,615,j_waitfor,restructure,2,`wait` builtin blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,628,j_waitfor,restructure,2,`wait` restores mask (no job),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,639,j_waitfor,restructure,2,`wait` restores mask (foreign job),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,648,j_waitfor,restructure,2,`wait` restores mask after waiting,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,665,j_kill,restructure,2,`kill %job` blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,668,j_kill,restructure,2,`kill %job` restores mask (lookup error),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,killpg,jobs.c,680,j_kill,emulate,0,`kill %job` sends SIGCONT before SIGTERM/SIGHUP to stopped job,job control,CONT,review,emulate
+oksh,comparison,2 signals,killpg,jobs.c,681,j_kill,emulate,0,`kill %job` signals the job's pgrp,kill builtin semantics,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,682,j_kill,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,sigprocmask,jobs.c,687,j_kill,restructure,2,`kill %job` restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,703,j_resume,restructure,2,`fg`/`bg` blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,706,j_resume,restructure,2,`fg`/`bg` restores mask (lookup error),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,712,j_resume,restructure,2,`fg`/`bg` restores mask (not job-controlled),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,4 tty/job control,tcsetattr,jobs.c,741,j_resume,emulate,0,`fg`: restores job's saved tty modes,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,744,j_resume,emulate,0,`fg`: gives terminal to the job,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetattr,jobs.c,747,j_resume,emulate,0,`fg` failure: restores shell tty modes,job control,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,748,j_resume,restructure,2,`fg` failure restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,749,j_resume,n/a,0,error message string,match is inside a bi_errorf format string,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,753,j_resume,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,2 signals,killpg,jobs.c,763,j_resume,emulate,0,`fg`/`bg` sends SIGCONT to the job,job control,CONT,review,emulate
+oksh,comparison,4 tty/job control,tcsetattr,jobs.c,769,j_resume,emulate,0,`fg` SIGCONT failure: restores shell tty modes,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,770,j_resume,emulate,0,`fg` SIGCONT failure: retakes terminal,job control,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,777,j_resume,restructure,2,`fg`/`bg` restores mask (SIGCONT failure),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,788,j_resume,restructure,2,`fg`/`bg` restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,824,j_njobs,restructure,2,j_njobs (prompt \j) blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,828,j_njobs,restructure,2,j_njobs restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,843,j_jobs,restructure,2,`jobs` builtin blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,853,j_jobs,restructure,2,`jobs` restores mask (error),SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,876,j_jobs,restructure,2,`jobs` restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,887,j_notify,restructure,2,j_notify blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,903,j_notify,restructure,2,j_notify restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,912,j_async,restructure,2,j_async ($!) blocks SIGCHLD,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,sigprocmask,jobs.c,917,j_async,restructure,2,j_async restores mask,SIGCHLD-handler job loop -> event loop over child handles; same change as jobs.c:1003,,review,emulate
+oksh,comparison,2 signals,kill,jobs.c,975,j_startjob,restructure,3,re-raises a held SIGCHLD to itself once the job is fully started,exists only because the handler must defer; same change as jobs.c:1003,CHLD,review,emulate
+oksh,comparison,2 signals,sigsuspend,jobs.c,1003,j_waitj,restructure,300,waits for job state change by sleeping until SIGCHLD (or a trap signal) arrives,"core of the SIGCHLD-driven job loop: replace with a wait over child handles + trap events; ~300 lines total across jobs.c/exec.c incl. ~40 mask pairs; doubt: if job control stays emulated the layer must deliver SIGCHLD anyway, so could be emulate",,review,emulate
+oksh,comparison,4 tty/job control,tcgetpgrp,jobs.c,1034,j_waitj,emulate,0,saves terminal pgrp of a stopped job,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetpgrp,jobs.c,1036,j_waitj,emulate,0,retakes terminal after foreground job stops/exits,job control,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,jobs.c,1040,j_waitj,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,tcgetattr,jobs.c,1044,j_waitj,emulate,0,saves stopped job's tty modes,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcgetattr,jobs.c,1058,j_waitj,emulate,0,adopts tty modes left by a successful foreground job,job control,,review,emulate
+oksh,comparison,4 tty/job control,tcsetattr,jobs.c,1060,j_waitj,emulate,0,restores shell tty modes after foreground job,job control,,review,emulate
+oksh,comparison,1 process,waitpid,jobs.c,1154,j_sigchld,emulate,0,"SIGCHLD handler reaps any child, incl. stopped ones (WUNTRACED)","reaping could move into the event loop (jobs.c:1003), but stop reporting via WUNTRACED is job control; runs in handler context",,review,emulate
+oksh,comparison,2 signals,kill,jobs.c,1644,kill_job,emulate,0,"signals each process of a non-pgrp job (kill builtin, SIGKILL on fork failure)",arbitrary signal delivery,,review,emulate
+oksh,comparison,2 signals,alarm,lex.c,1087,getsc_line,restructure,40,TMOUT: arms SIGALRM before reading an interactive line,replace with read deadline in x_read and shf_getse paths; alarm_catcher sets intrsig to log out,,review,restructure
+oksh,comparison,2 signals,alarm,lex.c,1142,getsc_line,restructure,2,TMOUT: disarms alarm after the line is read,same change as lex.c:1087,,review,restructure
+oksh,comparison,2 signals,sigsetjmp,lex.c,1189,set_prompt,direct,1,error-unwind point for PS1 expansion,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,6 DM-065 wall clock,time,lex.c,1252,dopprompt,n/a,0,prompt \d reads current date,wall clock is the right clock for displaying a date; not DM-065 misuse,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,localtime,lex.c,1253,dopprompt,direct,1,prompt \d converts to local time,localtime_r (DM-060),,review,direct
+oksh,comparison,6 DM-065 wall clock,time,lex.c,1271,dopprompt,n/a,0,prompt \D{fmt} reads current time,same as lex.c:1252,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,localtime,lex.c,1272,dopprompt,direct,1,prompt \D{fmt} converts to local time,localtime_r,,review,direct
+oksh,comparison,4 tty/job control,ttyname,lex.c,1298,dopprompt,direct,1,prompt \l: ttyname returns a static buffer,ttyname_r; same line as tty/job-control row,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,ttyname,lex.c,1298,dopprompt,direct,1,prompt \l: ttyname returns a static buffer,ttyname_r; same line as tty/job-control row,,review,direct
+oksh,comparison,6 DM-065 wall clock,time,lex.c,1324,dopprompt,n/a,0,prompt \t reads current time,same as lex.c:1252,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,localtime,lex.c,1325,dopprompt,direct,1,prompt \t converts to local time,localtime_r,,review,direct
+oksh,comparison,6 DM-065 wall clock,time,lex.c,1333,dopprompt,n/a,0,prompt \T reads current time,same as lex.c:1252,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,localtime,lex.c,1334,dopprompt,direct,1,prompt \T converts to local time,localtime_r,,review,direct
+oksh,comparison,6 DM-065 wall clock,time,lex.c,1342,dopprompt,n/a,0,prompt \@ reads current time,same as lex.c:1252,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,localtime,lex.c,1343,dopprompt,direct,1,prompt \@ converts to local time,localtime_r,,review,direct
+oksh,comparison,6 DM-065 wall clock,time,lex.c,1351,dopprompt,n/a,0,prompt \A reads current time,same as lex.c:1252,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,localtime,lex.c,1352,dopprompt,direct,1,prompt \A converts to local time,localtime_r,,review,direct
+oksh,comparison,6 DM-065 wall clock,clock_gettime,mail.c,59,mcheck,n/a,0,MAILCHECK interval timer,CLOCK_MONOTONIC for an interval is correct,,review,direct
+oksh,comparison,5 identity/permissions,geteuid,main.c,326,main,direct,2,"records effective uid (root prompt '#', test -O, privilege drop)",native identity query,,review,direct
+oksh,comparison,5 identity/permissions,getegid,main.c,340,main,direct,2,detects setuid/setgid start to set privileged mode,without setuid in the native model this is constant false,,review,direct
+oksh,comparison,5 identity/permissions,getgid,main.c,340,main,direct,2,same privileged-mode check,same line as getegid row,,review,direct
+oksh,comparison,5 identity/permissions,getuid,main.c,340,main,direct,2,same privileged-mode check,same line as getegid row,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,main.c,360,main,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,isatty,main.c,368,main,direct,1,decides interactive mode: stdin and stderr are ttys,,,review,direct
+oksh,comparison,3 global path/cwd,literal:/etc/suid_profile,main.c,418,main,direct,2,privileged mode reads /etc/suid_profile instead of $ENV,dead without setuid; else a config capability. Rule said restructure; doubt only if setuid is kept,,review,restructure
+oksh,comparison,5 identity/permissions,getlogin,main.c,469,init_username,direct,1,getlogin returns a static buffer,getlogin_r; same line as identity row,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,getlogin,main.c,469,init_username,direct,1,getlogin returns a static buffer,getlogin_r; same line as identity row,,review,direct
+oksh,comparison,2 signals,sigsetjmp,main.c,495,include,direct,1,error-unwind point for `.`/profile include,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,2 signals,sigsetjmp,main.c,570,shell,direct,1,top-level error/interrupt recovery in the command loop,"sigsetjmp(...,0) saves no mask: plain setjmp exception unwind; unwind() is only reached synchronously (intrcheck/runtraps), never from a handler",,review,emulate
+oksh,comparison,2 signals,siglongjmp,main.c,690,unwind,direct,1,unwind() jumps to the nearest error/loop/function target,"plain longjmp; called synchronously, not from a handler; same macro change as all sigsetjmp sites",,review,emulate
+oksh,comparison,4 tty/job control,getpgrp,main.c,761,quitenv,emulate,0,"on death by SIGINT/SIGTERM, checks it leads its own pgrp",exit-by-signal semantics; pairs with main.c:764,,review,emulate
+oksh,comparison,2 signals,kill,main.c,764,quitenv,emulate,0,re-raises the fatal signal to its pgrp so the parent sees death-by-signal,wait-status semantics of dying by a signal,,review,emulate
+oksh,comparison,5 identity/permissions,getgid,misc.c,297,change_flag,direct,2,`set +p`: reads real gid to drop privileges,only reached when started setuid,,review,direct
+oksh,comparison,5 identity/permissions,setresgid,misc.c,299,change_flag,direct,3,`set +p`: drops setgid privilege,"dead without setuid in native model (delete block); rule said restructure. If setuid is emulated, this becomes emulate",,review,restructure
+oksh,comparison,5 identity/permissions,setgroups,misc.c,300,change_flag,direct,1,`set +p`: drops supplementary groups,same block as misc.c:299,,review,restructure
+oksh,comparison,5 identity/permissions,setresuid,misc.c,301,change_flag,direct,1,`set +p`: drops setuid privilege,same block as misc.c:299,,review,restructure
+oksh,comparison,3 global path/cwd,getcwd,misc.c,1145,ksh_get_wd,emulate,0,reads process cwd for $PWD/pwd/cd,process-global cwd,,review,emulate
+oksh,comparison,6 DM-039 symlink/lstat,readlink,path.c,250,do_phys_path,emulate,0,`cd -P`/`pwd -P`: resolves symlinks component by component,physical-path semantics of cd/pwd (DM-039),,review,direct
+oksh,comparison,2 signals,sigemptyset,trap.c,55,inittraps,emulate,0,initializes SIG_IGN action template for traps,trap builtin semantics,,review,emulate
+oksh,comparison,2 signals,alarm,trap.c,90,alarm_catcher,restructure,5,TMOUT handler checks remaining alarm time,handler deleted with the read-deadline change; same change as lex.c:1087,,review,restructure
+oksh,comparison,2 signals,alarm,trap.c,96,alarm_catcher,restructure,1,TMOUT handler re-arms remaining time,same change as lex.c:1087,,review,restructure
+oksh,comparison,2 signals,sigaction,trap.c,378,setsig,emulate,0,setsig: probes original disposition (ignored-on-entry rule),POSIX: signals ignored on entry stay ignored; trap builtin,,review,emulate
+oksh,comparison,2 signals,sigemptyset,trap.c,407,setsig,emulate,0,setsig: builds action for new handler,trap builtin / shell signal handling,,review,emulate
+oksh,comparison,2 signals,sigaction,trap.c,410,setsig,emulate,0,"setsig: installs handler/IGN/DFL for traps and shell-internal signals (SIGCHLD, SIGALRM, SIGWINCH)","central for trap builtin; SIGCHLD/SIGALRM uses go away with the restructures, but `trap` itself remains",,review,emulate
+oksh,comparison,3 global path/cwd,literal:/dev/tty,tty.c,36,tty_init,emulate,0,opens the controlling terminal for job control/editing,controlling-terminal-by-name; tied to job control; falls back to fd 0/2,,review,emulate
+oksh,comparison,6 DM-060 non-reentrant,strerror,tty.c,40,tty_init,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,isatty,tty.c,43,tty_init,direct,1,fallback: use stdin as tty fd,,,review,direct
+oksh,comparison,4 tty/job control,isatty,tty.c,45,tty_init,direct,1,fallback: use stderr as tty fd,,,review,direct
+oksh,comparison,6 DM-060 non-reentrant,strerror,tty.c,55,tty_init,direct,1,formats an errno message with strerror,single-threaded shell: strerror_r or native error string; no real hazard today (DM-060),,review,direct
+oksh,comparison,4 tty/job control,tcgetattr,tty.c,67,tty_init,emulate,0,saves initial tty modes,job control / line editor,,review,emulate
+oksh,comparison,6 DM-065 wall clock,clock_gettime,var.c,943,getspec,n/a,0,reading $SECONDS computes elapsed time,CLOCK_MONOTONIC is correct for elapsed time,,review,direct
+oksh,comparison,5 identity/permissions,access,var.c,1005,setspec,direct,3,validates $TMPDIR is a writable searchable directory,temp-dir capability; same change as io.c:456,,review,direct
+oksh,comparison,6 DM-065 wall clock,clock_gettime,var.c,1062,setspec,n/a,0,assigning $SECONDS resets its base,same as var.c:943,,review,direct
+mrsh,comparison,3 global path/cwd,chdir,builtin/cd.c,17,cd,emulate,0,`cd` changes process cwd,,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,builtin/cd.c,19,cd,direct,1,formats the chdir failure message,,,review,direct
+mrsh,comparison,3 global path/cwd,chdir,builtin/cd.c,80,builtin_cd,emulate,0,`cd -` changes to OLDPWD,,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,builtin/cd.c,81,builtin_cd,direct,1,formats the chdir failure message,,,review,direct
+mrsh,comparison,1 process,fork,builtin/command.c,73,run_command,direct,10,"`command` builtin forks and execs a resolved external command, then waits",no child setup at all (job control TODO); posix_spawn + wait on handle; M4 candidate,,review,emulate
+mrsh,comparison,1 process,execv,builtin/command.c,78,run_command,direct,1,execs the resolved path in the `command` child,same change as command.c:73,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,builtin/dot.c,34,builtin_dot,direct,1,formats the open failure message for `.`,,,review,direct
+mrsh,comparison,5 identity/permissions,access,builtin/exec.c,25,builtin_exec,direct,3,pre-checks the execute bit before `exec`,just try execv and map EACCES,,review,direct
+mrsh,comparison,1 process,execv,builtin/exec.c,30,builtin_exec,emulate,0,`exec` builtin replaces the shell process image,,,review,emulate
+mrsh,comparison,4 tty/job control,isatty,builtin/set.c,242,mrsh_process_args,direct,1,decides interactive mode from the tty fd,,,review,direct
+mrsh,comparison,5 identity/permissions,umask,builtin/umask.c,20,umask_current_mask,emulate,0,`umask` builtin reads the mask (set-and-restore),,,review,emulate
+mrsh,comparison,5 identity/permissions,umask,builtin/umask.c,21,umask_current_mask,emulate,0,restores the mask after reading it,,,review,emulate
+mrsh,comparison,5 identity/permissions,umask,builtin/umask.c,203,builtin_umask,emulate,0,`umask` builtin sets the new mask,,,review,emulate
+mrsh,comparison,1 process,waitpid,builtin/wait.c,87,builtin_wait,direct,5,`wait` builtin blocks on specific child pids,no WUNTRACED; needs a pid->handle in mrsh_process; children come from emulated fork; doubt,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,main.c,47,main,direct,1,formats the open failure message for the script file,,,review,direct
+mrsh,comparison,5 identity/permissions,getuid,shell/entry.c,60,mrsh_get_ps1,direct,1,picks default PS1 '# ' for root,,,review,direct
+mrsh,comparison,5 identity/permissions,access,shell/entry.c,119,source_file,direct,3,checks that a profile file exists before sourcing it,open and ignore ENOENT instead,,review,direct
+mrsh,comparison,3 global path/cwd,literal:/etc/profile,shell/entry.c,127,mrsh_source_profile,direct,10,login shell sources the system profile,config-dir capability instead; rule said restructure; same as dash main.c:153,,review,restructure
+mrsh,comparison,6 environment (DM-085),getenv,shell/entry.c,129,mrsh_source_profile,direct,1,reads HOME from the process env for ~/.profile,could use mrsh_env_get,,review,direct
+mrsh,comparison,6 environment (DM-085),getenv,shell/entry.c,148,mrsh_source_env,direct,1,reads ENV from the process env,,,review,direct
+mrsh,comparison,5 identity/permissions,getegid,shell/entry.c,152,mrsh_source_env,direct,1,skips $ENV for setuid/setgid shells,one-line change for all four ids on this line (delete the check: no setuid natively),,review,direct
+mrsh,comparison,5 identity/permissions,geteuid,shell/entry.c,152,mrsh_source_env,direct,1,skips $ENV for setuid/setgid shells,same change as entry.c:152 getegid,,review,direct
+mrsh,comparison,5 identity/permissions,getgid,shell/entry.c,152,mrsh_source_env,direct,1,skips $ENV for setuid/setgid shells,same change as entry.c:152 getegid,,review,direct
+mrsh,comparison,5 identity/permissions,getuid,shell/entry.c,152,mrsh_source_env,direct,1,skips $ENV for setuid/setgid shells,same change as entry.c:152 getegid,,review,direct
+mrsh,comparison,4 tty/job control,getpgrp,shell/job.c,28,mrsh_set_job_control,emulate,0,reads own pgrp when enabling job control,,,review,emulate
+mrsh,comparison,4 tty/job control,tcgetpgrp,shell/job.c,29,mrsh_set_job_control,emulate,0,checks whether the shell is the tty foreground pgrp,,,review,emulate
+mrsh,comparison,2 signals,kill,shell/job.c,32,mrsh_set_job_control,emulate,0,sends SIGTTIN to own group to stop while in the background,,TTIN,review,emulate
+mrsh,comparison,4 tty/job control,getsid,shell/job.c,41,mrsh_set_job_control,emulate,0,checks whether the shell is a session leader,,,review,emulate
+mrsh,comparison,4 tty/job control,setpgid,shell/job.c,42,mrsh_set_job_control,emulate,0,puts the shell into its own process group,,,review,emulate
+mrsh,comparison,4 tty/job control,tcsetpgrp,shell/job.c,49,mrsh_set_job_control,emulate,0,grabs the tty for the shell's pgrp,,,review,emulate
+mrsh,comparison,4 tty/job control,tcgetattr,shell/job.c,54,mrsh_set_job_control,emulate,0,saves the shell's terminal modes for job-control restore,"query itself is easy, but feeds per-job termios save/restore",,review,emulate
+mrsh,comparison,4 tty/job control,setpgid,shell/job.c,125,job_add_process,emulate,0,puts a child into the job's process group,,,review,emulate
+mrsh,comparison,4 tty/job control,tcsetpgrp,shell/job.c,161,job_set_foreground,emulate,0,puts a job's pgrp in the tty foreground,,,review,emulate
+mrsh,comparison,4 tty/job control,tcsetattr,shell/job.c,164,job_set_foreground,emulate,0,restores the job's terminal modes on `fg`,,,review,emulate
+mrsh,comparison,4 tty/job control,tcsetpgrp,shell/job.c,171,job_set_foreground,emulate,0,puts the shell's pgrp back in the tty foreground,,,review,emulate
+mrsh,comparison,4 tty/job control,tcgetattr,shell/job.c,174,job_set_foreground,emulate,0,saves the job's terminal modes,,,review,emulate
+mrsh,comparison,4 tty/job control,tcsetattr,shell/job.c,176,job_set_foreground,emulate,0,restores the shell's terminal modes,,,review,emulate
+mrsh,comparison,2 signals,kill,shell/job.c,181,job_set_foreground,emulate,0,sends SIGCONT to a stopped job's pgrp,,CONT,review,emulate
+mrsh,comparison,1 process,waitpid,shell/job.c,236,_job_wait,emulate,0,"waits for a specific child, with WUNTRACED in the main shell",without WUNTRACED it would be a direct handle wait; stops need job-control emulation,,review,emulate
+mrsh,comparison,1 process,waitpid,shell/job.c,244,_job_wait,n/a,0,'waitpid' matched inside the error-message string,false positive: string literal; the real call is job.c:236,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/job.c,244,_job_wait,direct,1,formats the waitpid failure message,,,review,direct
+mrsh,comparison,2 signals,kill,shell/job.c,487,broadcast_sighup_to_jobs,emulate,0,sends SIGHUP to all job pgrps when the shell exits,,HUP,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strtok,shell/path.c,44,expand_path,direct,1,splits $PATH into directories,strtok_r; same change as path.c:62,,review,direct
+mrsh,comparison,5 identity/permissions,access,shell/path.c,57,expand_path,emulate,0,$PATH search: probes each candidate with access(X_OK/R_OK),$PATH search in a shell,,review,direct
+mrsh,comparison,6 DM-060 non-reentrant,strtok,shell/path.c,62,expand_path,direct,1,continues the $PATH split,same change as path.c:44,,review,direct
+mrsh,comparison,3 global path/cwd,getcwd,shell/path.c,75,current_working_dir,emulate,0,"reads process cwd (PWD init, cd)",,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/redir.c,36,write_here_document_line,direct,1,formats the heredoc write failure message,,,review,direct
+mrsh,comparison,1 process,pipe,shell/redir.c,42,create_here_document_fd,direct,2,creates the pipe for a here-document,same change as redir.c:71,,review,direct
+mrsh,comparison,1 process,fork,shell/redir.c,71,create_here_document_fd,direct,15,forks a writer child when the heredoc exceeds PIPE_BUF,replace by a memory/temp-file handle (like dash memfd); testable with a large heredoc; M4 candidate,,review,emulate
+mrsh,comparison,1 process,pipe,shell/task/pipeline.c,50,run_pipeline,direct,2,creates the pipe between pipeline elements,children come from pipeline.c:62 (emulate),,review,direct
+mrsh,comparison,1 process,fork,shell/task/pipeline.c,62,run_pipeline,emulate,0,forks each pipeline element to run an arbitrary shell command,,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/pipeline.c,80,run_pipeline,direct,1,formats the dup2 stdin failure message,,,review,direct
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/pipeline.c,89,run_pipeline,direct,1,formats the dup2 stdout failure message,,,review,direct
+mrsh,comparison,6 environment (DM-085),setenv,shell/task/simple_command.c,21,populate_env_iterator,direct,10,child copies exported shell vars into environ before exec,build an envp array in the parent for spawn; same change as simple_command.c:55,,review,emulate
+mrsh,comparison,1 process,fork,shell/task/simple_command.c,55,run_process,restructure,80,"forks an external simple command: pgrp/foreground setup, env, redirections, execv","spawn needs redirections (process_redir) and env moved to the parent, pgrp via spawn attr, tcsetpgrp from parent; job-control calls themselves are emulate (job.c)",,review,emulate
+mrsh,comparison,6 environment (DM-085),setenv,shell/task/simple_command.c,75,run_process,direct,1,child exports prefix assignments (VAR=x cmd) into environ,same change as simple_command.c:21,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/simple_command.c,98,run_process,direct,1,formats the dup2 failure message in the child,,,review,direct
+mrsh,comparison,1 process,execv,shell/task/simple_command.c,103,run_process,restructure,1,execs the resolved command in the child,same change as simple_command.c:55,,review,emulate
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/simple_command.c,106,run_process,direct,1,formats the execv failure message,,,review,direct
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/simple_command.c,138,dup_and_save_fd,direct,1,formats the dup failure message,,,review,direct
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/simple_command.c,186,run_builtin,direct,1,formats the dup2 failure message,,,review,direct
+mrsh,comparison,1 process,fork,shell/task/task.c,18,run_subshell,emulate,0,forks a subshell for `( ... )`,,,review,emulate
+mrsh,comparison,3 global path/cwd,literal:/dev/null,shell/task/task.c,29,run_subshell,direct,2,subshell takes stdin from /dev/null when job control is off,null handle; lives inside the emulated fork child,,review,direct
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/task.c,32,run_subshell,direct,1,formats the /dev/null open failure message,,,review,direct
+mrsh,comparison,1 process,fork,shell/task/task.c,342,run_command_list_array,emulate,0,forks a background `&` list,,,review,emulate
+mrsh,comparison,3 global path/cwd,literal:/dev/null,shell/task/task.c,357,run_command_list_array,direct,2,background job takes stdin from /dev/null,null handle; inside the emulated fork child,,review,direct
+mrsh,comparison,6 DM-060 non-reentrant,strerror,shell/task/task.c,360,run_command_list_array,direct,1,formats the /dev/null open failure message,,,review,direct
+mrsh,comparison,1 process,pipe,shell/task/word.c,92,run_word_command,direct,2,creates the pipe for command substitution output,children come from word.c:97 (emulate),,review,direct
+mrsh,comparison,1 process,fork,shell/task/word.c,97,run_word_command,emulate,0,forks a command substitution `$(...)`,,,review,emulate
+mrsh,comparison,2 signals,sigaction,shell/trap.c,37,set_trap,emulate,0,queries inherited disposition (ignored-on-entry rule for `trap`),,,review,emulate
+mrsh,comparison,2 signals,sigaction,shell/trap.c,71,set_trap,emulate,0,installs a `trap` action,,,review,emulate
+mrsh,comparison,2 signals,sigaction,shell/trap.c,98,set_job_control_traps,emulate,0,ignores or restores job-control signals,,,review,emulate
+mrsh,comparison,5 identity/permissions,getpwnam,shell/word.c,45,expand_tilde_at,emulate,0,looks up the home directory for `~user` expansion,,,review,emulate
+toybox,core,6 DM-039 symlink/lstat,readlinkat,lib/dirtree.c,48,dirtree_add_node,direct,1,reads a symlink's target relative to the parent dir fd while building a tree node,"already the *at form (DM-039 mitigation); change only if native FS lacks symlinks. dirtree helper used by ls, cp/mv/install, find, rm, chmod, grep -r, tar -c",,review,direct
+toybox,core,6 DM-060 non-reentrant,readdir,lib/dirtree.c,181,dirtree_recurse,direct,1,iterates directory entries during a tree walk,"single-threaded readdir on fdopendir handle; DM-060 not an issue. dirtree helper used by ls, cp/mv/install, find, rm, chmod, grep -r, tar -c",,review,direct
+toybox,core,6 DM-060 non-reentrant,strerror,lib/lib.c,18,verror_msg,direct,1,formats errno text for every error message,strerror is non-reentrant (DM-060) but toybox is single-threaded; strerror_r or native error string. Used by all applets,,review,direct
+toybox,core,5 identity/permissions,fchmodat,lib/lib.c,762,wfchmodat,emulate,0,sets file mode bits relative to a dir fd,chmod's purpose (chmod -R via dirtree); rm -f also calls it to chmod 0700 an unreadable dir before deleting. POSIX umask/mode semantics; compat layer keeps a per-process umask,,review,emulate
+toybox,core,5 identity/permissions,fchmod,lib/lib.c,788,copy_tempfile,emulate,0,copies the original file's mode to the replacement temp file (sed -i),"preserving mode bits is POSIX mode semantics; doubt: a native 'replace contents, keep metadata' primitive would make it direct",,review,emulate
+toybox,core,5 identity/permissions,fchown,lib/lib.c,795,copy_tempfile,direct,1,best-effort copy of owner/group to the temp file (sed -i); result ignored,"fails silently for non-root by design; under no-superuser (CP-03) it always fails, so delete",,review,emulate
+toybox,core,2 signals,sigfillset,lib/lib.c,899,exit_signal,restructure,15,signal handler for every fatal signal: blocks all signals then runs the atexit list,"sigatexit() machinery; only linked user is copy_tempfile (sed -i temp cleanup on fatal signal); native: anonymous temp file committed by atomic link/rename removes the need; same change as lib/portability.c:456, lib/xwrap.c:997",,review,direct
+toybox,core,2 signals,sigprocmask,lib/lib.c,900,exit_signal,restructure,0,blocks all signals inside the fatal-signal handler before cleanup,same change as lib/lib.c:899 (effort counted there),,review,direct
+toybox,core,5 identity/permissions,umask,lib/lib.c,966,string_to_mode,emulate,0,reads the process umask to apply mode strings without a 'who' (chmod +x),"used by chmod, mkdir -m, install -m, cp, find -perm, tar --mode; POSIX umask/mode semantics; compat layer keeps a per-process umask",,review,emulate
+toybox,core,3 global path/cwd,literal:/etc/passwd,lib/lib.c,1292,bufgetpwnamuid,direct,2,stats /etc/passwd to invalidate the uid/name cache when the file changes,"the cache check only; drop it or ask the identity service for a generation number. The getpwuid_r/getpwnam_r lookups inside are user-db semantics (emulate, not matched as sites). Callers: ls -l, find -user/-nouser, tar, id",,review,restructure
+toybox,core,3 global path/cwd,literal:/etc/group,lib/lib.c,1341,bufgetgrnamgid,direct,2,stats /etc/group to invalidate the gid/name cache when the file changes,"same as lib/lib.c:1292; callers ls -l, find -group/-nogroup, tar, id",,review,restructure
+toybox,core,6 DM-039 symlink/lstat,readlinkat,lib/lib.c,1380,readlinkat0,direct,1,null-terminating readlinkat wrapper,used by cp -P/-a/-r to copy symlinks; already dirfd-relative; same note as lib/dirtree.c:48,,review,direct
+toybox,core,1 process,fork,lib/portability.c,25,xfork,restructure,50,"forks for xpopen_setup(): child either execs a command, runs a builtin applet in-process via toy_exec, or (argv==0) continues the same applet","linked users: find -exec/-execdir/-ok (xrun), install -s (xrun strip), tar -z/-j/-J/-I (external or builtin decompressor/compressor), tar --xform (builtin sed), tar fork-self extraction child (tar.c:1141), cpio -p fork-self (cpio.c:113). fork+exec of an external command is direct (spawn); the builtin-in-child and argv==0 cases need a spawn of the toybox binary with state passed via argv/fds. Upstream's own !CFG_TOYBOX_FORK (nommu) path already does vfork+exec of /proc/self/exe with an argv[0] marker, a template for this (but /proc/self/exe is itself a global path, X-1). X-2",,review,restructure
+toybox,core,3 global path/cwd,literal:/dev/urandom,lib/portability.c,50,xgetrandom,direct,2,falls back to reading /dev/urandom when getentropy() is ENOSYS,linked via mktemp (random template) ; fallback never taken on current Linux/musl; delete or use native entropy call,,review,restructure
+toybox,core,2 signals,xsignal,lib/portability.c,456,xsignal_all_killers,restructure,0,installs the same handler on every signal whose default action kills the process,sigatexit() machinery; only linked user is copy_tempfile (sed -i temp cleanup on fatal signal); same change as lib/lib.c:899 (effort counted there). X-3,KILL,review,restructure
+toybox,core,6 DM-053 ioctl,ioctl,lib/portability.c,614,get_block_device_size,direct,3,BLKGETSIZE64 ioctl to size a block device,fallback in fdlength() when the fd is not a regular file (readfile users); DM-053; native handle size query,,review,direct
+toybox,core,4 tty/job control,isatty,lib/tty.c,42,terminal_size,direct,1,checks whether fd 0-2 is a terminal before asking its size,"terminal_size() callers: ls (column width), sed 'l' wrap, toybox --help/multiplexer listing; native: query handle type",,review,direct
+toybox,core,6 DM-053 ioctl,ioctl,lib/tty.c,42,terminal_size,direct,2,TIOCGWINSZ ioctl to get terminal width/height,same function as the isatty at lib/tty.c:42; native terminal-handle size query; DM-053,,review,direct
+toybox,core,6 environment (DM-085),getenv,lib/tty.c,49,terminal_size,direct,1,lets $COLUMNS override terminal width,environment read (DM-085); compat env provides it; native: explicit parameter,,review,direct
+toybox,core,6 environment (DM-085),getenv,lib/tty.c,51,terminal_size,direct,1,lets $LINES override terminal height,same as lib/tty.c:49,,review,direct
+toybox,core,2 signals,siglongjmp,lib/xwrap.c,40,_xexit,n/a,0,non-local jump out of exit when toys.rebound is set,"linked but unreachable here: toys.rebound is only set by toysh (not built); not a signal use, siglongjmp is just the jump primitive",,review,restructure
+toybox,core,1 process,execvp,lib/xwrap.c,232,xexec,direct,5,"execs argv via $PATH (execvp), or runs a builtin in-process when not vforked",called in the child of xpopen_setup and of xargs' XVFORK; becomes posix_spawnp-style call. The toy_exec builtin branch is part of the lib/portability.c:25 restructure,,review,direct
+toybox,core,1 process,pipe,lib/xwrap.c,254,xpopen_setup,direct,3,creates stdin/stdout pipes for a child (xpopen_setup),pipe handles become spawn file actions; same change as lib/portability.c:25; used by tar compress/decompress,,review,direct
+toybox,core,1 process,XVFORK,lib/xwrap.c,256,xpopen_setup,restructure,50,"creates the child for every xpopen/xrun: vfork, then either exec argv or (argv==0) re-exec /proc/self/exe to rerun the applet as a helper process",argv!=0 path alone is direct (posix_spawn with file actions for the pipe dance); the self-copy mode needs a spawn-self-with-mode design and /proc/self/exe (DM-054). Same change as xfork on this line.,,review,direct
+toybox,core,1 process,xfork,lib/xwrap.c,256,xpopen_setup,restructure,50,fork alternative of the same line (CFG_TOYBOX_FORK): child continues the applet in-process,same change as XVFORK on this line,,review,restructure
+toybox,core,1 process,xexec,lib/xwrap.c,291,xpopen_setup,direct,5,child execs the requested command after setting up pipes,folds into the posix_spawn above,,review,direct
+toybox,core,1 process,xpopen_setup,lib/xwrap.c,334,xpopen_both,direct,0,thin wrapper xpopen_both -> xpopen_setup,no change of its own; follows lib/xwrap.c:256,,review,direct
+toybox,core,1 process,waitpid,lib/xwrap.c,343,xwaitpid,direct,3,waits for its own child and maps the status (xwaitpid),"wait on process handle; used by find -exec, install -s, tar",,review,direct
+toybox,core,1 process,xwaitpid,lib/xwrap.c,355,xpclose_both,direct,2,waits for the helper child and collects its status,wait on process handle,,review,direct
+toybox,core,1 process,xpopen_both,lib/xwrap.c,365,xpopen,direct,0,popen-style wrapper,follows lib/xwrap.c:256,,review,direct
+toybox,core,1 process,xpclose_both,lib/xwrap.c,375,xpclose,direct,0,pclose-style wrapper,follows lib/xwrap.c:355,,review,direct
+toybox,core,1 process,xpclose_both,lib/xwrap.c,381,xrun,direct,0,xrun = spawn and wait for a command,already spawn-shaped; follows xwrap.c:256/355,,review,direct
+toybox,core,1 process,xpopen_both,lib/xwrap.c,381,xrun,direct,0,xrun = spawn and wait for a command,same line as above,,review,direct
+toybox,core,3 global path/cwd,literal:/dev/null,lib/xwrap.c,467,xnotstdio,direct,2,fills a stdio slot with /dev/null when a newly opened fd landed in 0-2,xnotstdio() runs on every xopen/xcreate/loopfiles in all applets; null handle,,review,direct
+toybox,core,6 DM-038 rename,rename,lib/xwrap.c,476,xrename,direct,1,rename or die,"sed -i commit and backup, copy_tempfile done; renameat on dir handles; DM-038 is ordering only",,review,direct
+toybox,core,3 global path/cwd,mkstemp,lib/xwrap.c,484,xtempfile,direct,3,creates a temp file next to the target (name+XXXXXX) for in-place edits,"not /tmp: same directory as the file (sed -i via copy_tempfile); native: anonymous file in the dir handle, link on commit",,review,direct
+toybox,core,3 global path/cwd,getcwd,lib/xwrap.c,567,xgetcwd,restructure,10,returns the process cwd as an absolute path,"callers: find_in_path (env, tar -z PATH search), xabspath, tar (TT.cwd for the extract-outside-tree check). Conservative: tar's use couples cwd strings with xabspath (lib/xwrap.c:632)",,review,restructure
+toybox,core,6 environment (DM-085),getenv,lib/xwrap.c,595,xabspath,direct,1,uses $PWD as the base for relative paths when ABS_KEEP is set,ABS_KEEP is not used by any T2 applet (readlink -L not built); effectively unreachable,,review,direct
+toybox,core,6 DM-039 symlink/lstat,readlinkat,lib/xwrap.c,632,xabspath,restructure,20,resolves symlinks component by component to canonicalize a path (xabspath),"tar uses it to keep extraction inside the target dir (tar.c:542, 1079) and fileunderdir; userspace path canonicalization is the DM-039 TOCTOU pattern; native beneath-only resolution would replace the check. Same change as lib/xwrap.c:567",,review,direct
+toybox,core,3 global path/cwd,chdir,lib/xwrap.c,703,xchdir,restructure,40,chdir or die,"callers: tar -C (all later extraction uses cwd-relative paths across many functions), cpio -p child (cpio.c:119, in forked child), reset_env (dead). Converting tar to a dir handle touches every create/chmod/chown call; cheap alternative: compat layer emulates per-process cwd. cpio's case becomes a spawn cwd parameter",,review,restructure
+toybox,core,5 identity/permissions,getpwuid,lib/xwrap.c,714,xgetpwuid,emulate,0,looks up passwd entry for a uid,id (name for uid/euid); user database semantics,,review,emulate
+toybox,core,5 identity/permissions,getgrgid,lib/xwrap.c,721,xgetgrgid,emulate,0,looks up group entry for a gid,id; user database semantics,,review,emulate
+toybox,core,5 identity/permissions,getpwnam,lib/xwrap.c,729,xgetuid,emulate,0,maps a user name (or number) to a uid,"install -o, cpio -R, find -user, tar --owner; user database",,review,emulate
+toybox,core,5 identity/permissions,getgrnam,lib/xwrap.c,743,xgetgid,emulate,0,maps a group name (or number) to a gid,"install -g, cpio -R, find -group, tar --group; user database",,review,emulate
+toybox,core,6 DM-039 symlink/lstat,readlinkat,lib/xwrap.c,791,xreadlinkat,direct,1,reads a symlink target into a growing buffer,find -lname/-printf %l; already *at form; same note as lib/dirtree.c:48,,review,direct
+toybox,core,2 signals,sigaction,lib/xwrap.c,997,xsignal_flags,restructure,15,generic sigaction wrapper,"linked callers: xargs (SIGUSR1/SIGUSR2 adjust -P parallelism, xargs.c:136-137, not matched as sites) and xsignal_all_killers (sigatexit). xargs part alone is direct (drop the GNU extension or use a control channel); sigatexit part is restructure, counted at lib/lib.c:899. X-3",,review,restructure
+toybox,core,6 environment (DM-085),getenv,lib/xwrap.c,1091,xparsedate,direct,4,saves $TZ before temporarily replacing it to parse a date with an explicit UTC offset,"process-global env mutation to steer mktime (DM-085/DM-066); replace with timegm()+offset arithmetic; callers touch -d/-t, find -newerXt, tar --mtime",,review,direct
+toybox,core,6 environment (DM-085),setenv,lib/xwrap.c,1094,xparsedate,direct,4,sets $TZ to the parsed UTC offset so mktime interprets the date in it,same change as lib/xwrap.c:1091,,review,emulate
+toybox,core,6 environment (DM-085),setenv,lib/xwrap.c,1105,xparsedate,direct,2,restores the saved $TZ,same change as lib/xwrap.c:1091,,review,emulate
+toybox,core,5 identity/permissions,umask,main.c,217,toy_singleinit,emulate,0,saves the inherited umask and sets it to 0 for every applet,inherited process umask is POSIX state; tar/mkdir (TOYFLAG_UMASK) apply toys.old_umask themselves. POSIX umask/mode semantics; compat layer keeps a per-process umask; doubt: native could pass a default mode mask at spawn (direct),,review,emulate
+toybox,core,5 identity/permissions,umask,main.c,218,toy_singleinit,emulate,0,restores the inherited umask for applets without TOYFLAG_UMASK,same as main.c:217,,review,emulate
+toybox,core,6 DM-097 locale,setlocale,main.c,222,toy_singleinit,direct,2,selects the user's LC_CTYPE locale from the environment,DM-097; toybox only needs UTF-8 ctype: replace lines 222-225 with a fixed C.UTF-8 uselocale,,review,direct
+toybox,core,6 DM-097 locale,nl_langinfo,main.c,223,toy_singleinit,direct,1,checks whether the selected codeset is UTF-8,same change as main.c:222,,review,direct
+toybox,core,6 DM-097 locale,newlocale,main.c,224,toy_singleinit,direct,1,creates a C.UTF-8 ctype locale object as fallback,newlocale/uselocale (per-thread locale) is the DM-097 remedy; part of the main.c:222 change,,review,direct
+toybox,core,6 DM-097 locale,uselocale,main.c,224,toy_singleinit,direct,1,makes the fallback UTF-8 locale current for this thread,same change as main.c:222,,review,direct
+toybox,core,6 DM-097 locale,newlocale,main.c,225,toy_singleinit,direct,1,creates an en_US.UTF-8 ctype locale as second fallback (macOS),same change as main.c:222,,review,direct
+toybox,core,2 signals,signal,main.c,285,toy_exec_which,direct,1,resets every signal disposition to default before running a builtin in-process,"emulates exec's signal reset; toys.stacktop is set at every start, so this NSIG-long loop runs on every applet invocation (dynamic data: every T2 applet calls signal()); deletable without async signals; coupled to lib/portability.c:25",,review,restructure
+toybox,core,6 DM-039 symlink/lstat,readlink,main.c,320,toybox_main,direct,2,follows the argv[0] symlink chain to find which applet to run,multiplexer dispatch via symlinks; native install can use hardlinks/argv[0] name or 'toybox <applet>'; only matters if no symlinks,,review,direct
+toybox,core,6 environment (DM-085),getenv,toys/lsb/mktemp.c,36,mktemp_main,direct,1,reads $TMPDIR for the default directory,environment read (DM-085),,review,direct
+toybox,core,3 global path/cwd,literal:/tmp,toys/lsb/mktemp.c,47,mktemp_main,emulate,0,defaults the directory to /tmp,"mktemp's purpose is printing a path in a shared namespace for the calling script; free if the compat layer maps /tmp to a per-sandbox temp dir, but no native rewrite since the output is a path. Doubt: brief lists mkstemp-in-/tmp as direct, that holds for callers that keep the fd",,review,direct
+toybox,core,3 global path/cwd,mkdtemp,toys/lsb/mktemp.c,75,mktemp_main,emulate,0,creates the unique directory (mktemp -d),same as toys/lsb/mktemp.c:47; line holds mkdtemp and mkstemp,,review,direct
+toybox,core,3 global path/cwd,mkstemp,toys/lsb/mktemp.c,75,mktemp_main,emulate,0,creates the unique file (mktemp),same as toys/lsb/mktemp.c:47,,review,direct
+toybox,core,1 process,pipe,toys/posix/chmod.c,92,chmod_main,direct,2,chmod -f: dup2s the read end of a pipe over stderr to discard messages,not an inter-process pipe; replace with a null handle,,review,direct
+toybox,core,5 identity/permissions,faccessat,toys/posix/cp.c,192,cp_node,direct,1,checks whether the destination exists (F_OK) before copy/-i/-n/-F handling,"pure existence check via dirfd, no identity semantics; fstatat; TOCTOU (DM-039)",,review,direct
+toybox,core,6 DM-039 symlink/lstat,symlinkat,toys/posix/cp.c,265,cp_node,emulate,0,cp -s: creates a symlink to the source instead of copying,creating the symlink is the requested operation; emulate only if the native FS lacks symlinks (DM-039 is about following them),,review,direct
+toybox,core,6 DM-039 symlink/lstat,symlinkat,toys/posix/cp.c,279,cp_node,emulate,0,copies a symlink as a symlink (-P/-a/-r),creating the symlink is the requested operation; emulate only if the native FS lacks symlinks (DM-039 is about following them),,review,direct
+toybox,core,5 identity/permissions,fchownat,toys/posix/cp.c,318,cp_node,emulate,0,preserves owner/group on a symlink or node (-p/-a),ownership semantics,,review,emulate
+toybox,core,5 identity/permissions,fchown,toys/posix/cp.c,320,cp_node,emulate,0,preserves owner/group on the copied file (-p/-a),ownership semantics,,review,emulate
+toybox,core,5 identity/permissions,geteuid,toys/posix/cp.c,321,cp_node,direct,1,reports chown failure only when running as root,root check; drop or query a capability (CP-03),,review,direct
+toybox,core,5 identity/permissions,fchmod,toys/posix/cp.c,339,cp_node,emulate,0,"preserves mode bits on the copied file (-p/-a, mv across fs)",mode semantics,,review,emulate
+toybox,core,5 identity/permissions,umask,toys/posix/cp.c,410,cp_main,direct,1,sets umask 0 so preserved modes are applied exactly,deletable if native create takes an explicit mode (cp fchmods afterwards anyway); doubt: under the compat layer it is umask semantics,,review,emulate
+toybox,core,4 tty/job control,isatty,toys/posix/cp.c,446,cp_main,direct,1,mv: prompts only if stdin is a tty and target is not writable,query handle type,,review,direct
+toybox,core,6 DM-038 rename,rename,toys/posix/cp.c,454,cp_main,direct,1,mv: renames source to destination,mv's core op; renameat on dir handles; DM-038 ordering only,,review,direct
+toybox,core,1 process,xrun,toys/posix/cp.c,503,install_node,direct,0,install -s runs `strip -p` on the installed file,call site unchanged once xrun is spawn-based,,review,direct
+toybox,core,5 identity/permissions,lchown,toys/posix/cp.c,524,install_main,emulate,0,"same call as previous row, matched again as DM-039",duplicate row; lchown is the no-follow variant (safe w.r.t. DM-039),,review,emulate
+toybox,core,6 DM-039 symlink/lstat,lchown,toys/posix/cp.c,524,install_main,emulate,0,"same call as previous row, matched again as DM-039",duplicate row; lchown is the no-follow variant (safe w.r.t. DM-039),,review,direct
+toybox,core,5 identity/permissions,chmod,toys/posix/cp.c,525,install_main,emulate,0,install -d -m: sets mode with special bits,mode semantics; install's purpose,,review,emulate
+toybox,core,5 identity/permissions,geteuid,toys/posix/cpio.c,87,cpio_main,direct,1,cpio -i: restore ownership only if root,root check; under no-superuser always false (CP-03),,review,direct
+toybox,core,1 process,xpopen,toys/posix/cpio.c,114,cpio_main,restructure,40,cpio -p forks a copy of itself (argv==0) to act as the extracting side of a pipe,self-copy mode: needs spawn-self with a mode flag and explicit pipe handles,,review,direct
+toybox,core,5 identity/permissions,fchown,toys/posix/cpio.c,194,cpio_main,emulate,0,restores owner/group of an extracted directory,"ownership semantics, archiver's purpose",,review,emulate
+toybox,core,5 identity/permissions,fchmod,toys/posix/cpio.c,223,cpio_main,emulate,0,restores mode (incl. suid) of an extracted file,line also has fchown (next row),,review,emulate
+toybox,core,5 identity/permissions,fchown,toys/posix/cpio.c,223,cpio_main,emulate,0,restores owner/group of an extracted file,same line as previous row,,review,emulate
+toybox,core,6 DM-039 symlink/lstat,symlink,toys/posix/cpio.c,229,cpio_main,emulate,0,extracts a symlink entry,creating the symlink is the requested operation; emulate only if the native FS lacks symlinks (DM-039 is about following them),,review,direct
+toybox,core,5 identity/permissions,lchown,toys/posix/cpio.c,235,cpio_main,emulate,0,"same call as previous row, matched again as DM-039",duplicate row,,review,emulate
+toybox,core,6 DM-039 symlink/lstat,lchown,toys/posix/cpio.c,235,cpio_main,emulate,0,"same call as previous row, matched again as DM-039",duplicate row,,review,direct
+toybox,core,1 process,xpclose,toys/posix/cpio.c,323,cpio_main,direct,2,waits for the cpio -p helper,wait on process handle,,review,direct
+toybox,core,3 global path/cwd,PATH-lookup,toys/posix/env.c,37,GLOBALS,emulate,0,env: reads $PATH to search for the command itself,"$PATH search is env's POSIX semantics; function column 'GLOBALS' is a ctags artifact, really env_main",,review,restructure
+toybox,core,6 environment (DM-085),getenv,toys/posix/env.c,37,GLOBALS,emulate,0,"env: getenv(""PATH"") on the same line",same as previous row,,review,emulate
+toybox,core,1 process,execve,toys/posix/env.c,62,GLOBALS,direct,8,"env: execve()s each $PATH candidate, replacing itself",exec without fork; nothing to do if exec-in-place exists; spawn-only native: spawn+wait+exit with child status (~8 lines). Doubt: process identity/pid not preserved,,review,direct
+toybox,core,1 process,execve,toys/posix/env.c,63,GLOBALS,direct,2,env: execve()s an explicit path,same change as toys/posix/env.c:62,,review,direct
+toybox,core,3 global path/cwd,fchdir,toys/posix/find.c,112,flush_exec,direct,4,find -execdir: fchdir to the matched file's parent before running the command,process-global cwd changed only to set the child's cwd; pass a dir handle to spawn instead (extend xpopen_setup with a cwd fd),,review,restructure
+toybox,core,3 global path/cwd,fchdir,toys/posix/find.c,113,flush_exec,direct,2,fchdir back to the top dir before a plain -exec,same change as toys/posix/find.c:112,,review,restructure
+toybox,core,1 process,xrun,toys/posix/find.c,138,flush_exec,direct,0,find -exec runs the command and waits,call site unchanged once xrun is spawn-based,,review,direct
+toybox,core,3 global path/cwd,fchdir,toys/posix/find.c,144,flush_exec,direct,2,fchdir back to the top dir after -execdir,same change as toys/posix/find.c:112,,review,restructure
+toybox,core,6 DM-060 non-reentrant,readdir,toys/posix/find.c,341,do_find,direct,1,find -empty: reads a directory to see if it has entries,single-threaded readdir on a handle,,review,direct
+toybox,core,5 identity/permissions,faccessat,toys/posix/find.c,356,do_find,emulate,0,find -readable/-executable: access check via dirfd,access() with R/W/X answers from real uid + mode bits; could become direct if the native ABI has an effective-rights query on a dir handle,,review,direct
+toybox,core,6 DM-065 wall clock,time,toys/posix/find.c,715,find_main,direct,1,records 'now' for -mtime/-mmin comparisons,"wall clock is correct here (compared to file mtimes, DM-065)",,review,direct
+toybox,core,4 tty/job control,isatty,toys/posix/grep.c,499,grep_main,direct,1,grep --color=auto: color only if stdout is a tty,query handle type,,review,direct
+toybox,core,3 global path/cwd,literal:/dev/null,toys/posix/grep.c,537,grep_main,direct,2,grep -s: replaces stderr with /dev/null,null handle,,review,direct
+toybox,core,5 identity/permissions,geteuid,toys/posix/id.c,81,do_id,emulate,0,id: reads real and effective uid,id's purpose is reporting POSIX identity,,review,direct
+toybox,core,5 identity/permissions,getuid,toys/posix/id.c,81,do_id,emulate,0,id: reads real uid,same line as previous row,,review,direct
+toybox,core,5 identity/permissions,getegid,toys/posix/id.c,82,do_id,emulate,0,id: reads effective gid,id's purpose,,review,direct
+toybox,core,5 identity/permissions,getgid,toys/posix/id.c,82,do_id,emulate,0,id: reads real gid,same line as previous row,,review,direct
+toybox,core,5 identity/permissions,getpwnam,toys/posix/id.c,88,do_id,emulate,0,id USER: looks up the named user,user database,,review,emulate
+toybox,core,5 identity/permissions,getgroups,toys/posix/id.c,106,do_id,emulate,0,id: lists supplementary groups of the process,POSIX identity,,review,emulate
+toybox,core,5 identity/permissions,getgrgid,toys/posix/id.c,113,do_id,emulate,0,id -G: names each supplementary group,user database,,review,emulate
+toybox,core,5 identity/permissions,getgrgid,toys/posix/id.c,139,do_id,emulate,0,id: names each supplementary group in default output,user database,,review,emulate
+toybox,core,3 global path/cwd,mkstemp,toys/posix/ln.c,77,GLOBALS,direct,4,ln -f: reserves a temp name next to the target (mkstemp+unlink) to link then rename over,racy name reservation; native: create link under temp name in the dir handle or atomic link-replace. Function 'GLOBALS' is a ctags artifact (ln_main),,review,direct
+toybox,core,6 DM-039 symlink/lstat,symlink,toys/posix/ln.c,84,GLOBALS,emulate,0,ln -s: creates a symlink (or hard link without -s),creating the symlink is the requested operation; emulate only if the native FS lacks symlinks (DM-039 is about following them),,review,direct
+toybox,core,6 DM-038 rename,rename,toys/posix/ln.c,89,GLOBALS,direct,1,ln -f: renames the temp link over the target,atomic replace; DM-038 ordering only,,review,direct
+toybox,core,6 DM-060 non-reentrant,localtime,toys/posix/ls.c,529,listfiles,direct,2,ls -l: formats mtime in local time,localtime_r; TZ comes from env (DM-060/DM-066),,review,direct
+toybox,core,4 tty/job control,isatty,toys/posix/ls.c,594,ls_main,direct,1,ls: chooses column/escape defaults when stdout is a tty,query handle type,,review,direct
+toybox,core,5 identity/permissions,faccessat,toys/posix/rm.c,39,do_rm,emulate,0,rm: checks write permission to decide whether to prompt (POSIX rule),access() with R/W/X answers from real uid + mode bits; could become direct if the native ABI has an effective-rights query on a dir handle,,review,direct
+toybox,core,4 tty/job control,isatty,toys/posix/rm.c,44,do_rm,direct,1,rm: prompts only if stdin is a tty,query handle type,,review,direct
+toybox,core,5 identity/permissions,faccessat,toys/posix/rm.c,57,do_rm,emulate,0,"rm -r: checks read permission on a dir, chmods 0700 with -f",same as toys/posix/rm.c:39; couples to wfchmodat (lib/lib.c:762),,review,direct
+toybox,core,6 DM-039 symlink/lstat,lstat,toys/posix/rm.c,110,rm_main,direct,1,rm -f: lstat to skip nonexistent operands,existence check; fstatat NOFOLLOW,,review,direct
+toybox,core,6 DM-039 symlink/lstat,symlink,toys/posix/tar.c,652,extract_to_disk,emulate,0,tar -x: creates a symlink entry,creating the symlink is the requested operation; emulate only if the native FS lacks symlinks (DM-039 is about following them),,review,direct
+toybox,core,5 identity/permissions,geteuid,toys/posix/tar.c,658,extract_to_disk,direct,1,tar -x: restores ownership only when root,root check (CP-03),,review,direct
+toybox,core,5 identity/permissions,lchown,toys/posix/tar.c,673,extract_to_disk,emulate,0,"same call as previous row, matched again as DM-039",duplicate row,,review,emulate
+toybox,core,6 DM-039 symlink/lstat,lchown,toys/posix/tar.c,673,extract_to_disk,emulate,0,"same call as previous row, matched again as DM-039",duplicate row,,review,direct
+toybox,core,5 identity/permissions,chmod,toys/posix/tar.c,676,extract_to_disk,emulate,0,tar -x: sets mode bits (masked by saved umask unless -p),mode semantics,,review,emulate
+toybox,core,3 global path/cwd,literal:/proc/self/attr/fscreate,toys/posix/tar.c,757,unpack_tar,direct,2,tar --selinux: writes the security context to /proc/self/attr/fscreate,Linux SELinux-specific; drop (or map to native labels),,review,restructure
+toybox,core,6 DM-060 non-reentrant,localtime,toys/posix/tar.c,925,unpack_tar,direct,2,tar -tv: formats mtime in local time,localtime_r (DM-060),,review,direct
+toybox,core,1 process,xpopen,toys/posix/tar.c,962,unpack_tar,direct,3,tar --to-command pipes each member into `sh -c CMD`,spawn sh -c with stdin pipe; /bin/sh via PATH lookup of sh,,review,direct
+toybox,core,1 process,xpclose_both,toys/posix/tar.c,965,unpack_tar,direct,2,waits for the --to-command child,wait on process handle,,review,direct
+toybox,core,2 signals,signal,toys/posix/tar.c,1015,tar_main,direct,1,ignores SIGPIPE (needed when extracting to a command),delete: native write returns an error,PIPE,review,direct
+toybox,core,5 identity/permissions,geteuid,toys/posix/tar.c,1018,tar_main,direct,1,root implies -p (preserve permissions),root check (CP-03),,review,direct
+toybox,core,1 process,xpopen_both,toys/posix/tar.c,1065,tar_main,direct,3,starts a sed helper for --xform name rewriting,spawn with two pipes,,review,direct
+toybox,core,3 global path/cwd,PATH-lookup,toys/posix/tar.c,1114,tar_main,direct,3,"tar -z/-j/-J/-Z: searches $PATH for an external decompressor, else uses the builtin",use the builtin decompressor or spawnp-style lookup; find_in_path also calls getcwd (lib/xwrap.c:567),,review,restructure
+toybox,core,6 environment (DM-085),getenv,toys/posix/tar.c,1114,tar_main,direct,1,"getenv(""PATH"") on the same line",same change as previous row,,review,emulate
+toybox,core,1 process,xpopen_both,toys/posix/tar.c,1118,tar_main,direct,3,starts the decompressor (zcat/xz/...) for -z/-J/-a on extract,spawn with pipes; used in W4 `make dist`-style paths only if compression is requested,,review,direct
+toybox,core,1 process,xpopen_both,toys/posix/tar.c,1141,tar_main,restructure,40,forks a copy of tar to do extraction from the decompressor's output while the parent feeds it,"self-copy mode, same design question as cpio.c:114",,review,direct
+toybox,core,1 process,xwaitpid,toys/posix/tar.c,1149,tar_main,direct,2,waits for the extraction helper,wait on process handle,,review,direct
+toybox,core,1 process,xpopen_both,toys/posix/tar.c,1193,tar_main,direct,3,starts the compressor for -c with -z/-J,spawn with pipes,,review,direct
+toybox,core,1 process,xpclose_both,toys/posix/tar.c,1208,tar_main,direct,2,waits for the compressor,wait on process handle,,review,direct
+toybox,core,6 DM-065 wall clock,time,toys/posix/touch.c,46,touch_main,direct,1,touch -t/-d: current time as base for date parsing,wall clock correct here,,review,direct
+toybox,core,5 identity/permissions,access,toys/posix/touch.c,75,touch_main,direct,1,touch: creates the file only if it does not exist (F_OK),existence check; open O_CREAT without O_EXCL is enough,,review,direct
+toybox,core,1 process,waitpid,toys/posix/xargs.c,109,waitchild,direct,8,xargs: waits for any child (waitpid(-1)) and frees its -P slot,"wait-any over the handles in TT.pids; children come from XVFORK()+xexec at xargs.c:225-230 (not matched: XVFORK macro), which is a direct vfork+exec -> spawn (~6 lines)",,review,direct
+toybox,core,3 global path/cwd,literal:/dev/tty,toys/posix/xargs.c,217,xargs_main,emulate,0,xargs -p: opens /dev/tty to read the confirmation,controlling-terminal semantics; doubt: a terminal handle passed at spawn would make it direct,,review,emulate
+toybox,core,1 process,XVFORK,toys/posix/xargs.c,225,xargs_main,direct,15,"xargs starts each command batch (also -P parallel): vfork, set slot env, stdin from /dev/null or /dev/tty, exec",posix_spawnp with file actions (open stdin) and envp; the waitchild loop uses waitpid(-1) -> wait on handles. The only process creation W4 actually executes in toybox.,,review,direct
+toybox,core,3 global path/cwd,literal:/dev/null,toys/posix/xargs.c,229,xargs_main,direct,2,xargs: child stdin from /dev/null (or /dev/tty with -o),null handle in spawn file actions,,review,direct
+toybox,core,3 global path/cwd,literal:/dev/tty,toys/posix/xargs.c,229,xargs_main,emulate,0,xargs -o: child stdin from /dev/tty,same line as previous row; controlling terminal,,review,emulate
+toybox,core,1 process,xexec,toys/posix/xargs.c,230,xargs_main,direct,0,exec of the batch in the vfork child,same change as xargs.c:225,,review,direct
+busybox,core,4 tty/job control,isatty,archival/bbunzip.c,116,bbunpack,direct,1,gzip/gunzip refuses to read compressed data from a terminal on stdin unless -f,query the stdin handle type,,review,direct
+busybox,core,6 DM-065 wall clock,time,editors/awk.c,2866,exec_builtin,direct,0,awk strftime() uses the current time when no argument is given,correct use of wall clock (calendar time); no change,,review,direct
+busybox,core,6 DM-060 non-reentrant,localtime,editors/awk.c,2869,exec_builtin,direct,2,awk strftime() converts time to local broken-down time,localtime_r; timezone still comes from global TZ / /etc/localtime,,review,direct
+busybox,core,1 process,popen,editors/awk.c,3131,evaluate,direct,15,opens a pipe to `sh -c cmd` for awk `print | cmd`,musl popen is already posix_spawn-based; native: spawn sh with a pipe handle (helper shared with awk.c:3353/3504/3712). Needs a shell to exist,,review,direct
+busybox,core,1 process,popen,editors/awk.c,3353,evaluate,direct,2,opens a pipe from `sh -c cmd` for awk `cmd | getline`,same helper as awk.c:3131,,review,direct
+busybox,core,6 DM-065 wall clock,time,editors/awk.c,3449,evaluate,direct,1,srand() without argument seeds from wall-clock time,any clock/entropy source,,review,direct
+busybox,core,6 DM-065 wall clock,time,editors/awk.c,3456,evaluate,direct,0,awk systime() returns current epoch seconds,correct use of wall clock; no change,,review,direct
+busybox,core,1 process,pclose,editors/awk.c,3504,evaluate,direct,3,close() of an awk pipe stream waits for the child,pclose -> wait on process handle; same helper as awk.c:3131,,review,direct
+busybox,core,1 process,pclose,editors/awk.c,3712,awk_exit,direct,2,at exit awk closes all pipe streams and waits for their children,same helper as awk.c:3131,,review,direct
+busybox,core,6 DM-097 locale,setlocale,editors/awk.c,3731,awk_main,n/a,0,would reset LC_NUMERIC to C,"compiled out: ENABLE_LOCALE_SUPPORT=0, setlocale not in the binary's symbols",,review,direct
+busybox,core,3 global path/cwd,literal:/dev/stdin,editors/awk.c,3853,awk_main,n/a,0,registers the name /dev/stdin in awk's stream table bound to the existing stdin FILE,"string used as a lookup key, never opened as a path",,review,restructure
+busybox,core,3 global path/cwd,literal:/dev/stdout,editors/awk.c,3854,awk_main,n/a,0,registers the name /dev/stdout bound to the existing stdout FILE,"string key, never opened; same as awk.c:3853",,review,restructure
+busybox,core,3 global path/cwd,literal:/dev/stderr,editors/awk.c,3855,awk_main,n/a,0,registers the name /dev/stderr bound to the existing stderr FILE,"string key, never opened; same as awk.c:3853",,review,restructure
+busybox,core,6 DM-060 non-reentrant,strerror,editors/awk.c,3879,awk_main,direct,1,reports a read error on an input file,strerror_r / message table,,review,direct
+busybox,core,3 global path/cwd,literal:/dev/null,editors/diff.c,726,diffreg,direct,2,diff -N opens /dev/null in place of a missing file,null/empty handle,,review,direct
+busybox,core,3 global path/cwd,literal:/tmp/difXXXXXX,editors/diff.c,733,diffreg,direct,3,diff copies non-seekable input into a /tmp temp file,temp-dir capability or anonymous temp file; same change as xfuncs_printf.c:286,,review,direct
+busybox,core,3 global path/cwd,literal:/dev/null,editors/diff.c,1001,diff_main,direct,2,diff -N stats /dev/null in place of a missing file,zero-filled stat struct,,review,direct
+busybox,core,6 DM-097 locale,setlocale,libbb/appletlib.c,257,lbb_prepare,n/a,0,would set the locale from the environment at applet start,"compiled out: ENABLE_LOCALE_SUPPORT=0, setlocale not in the binary's symbols",,review,direct
+busybox,core,6 DM-060 non-reentrant,strerror,libbb/perror_msg.c,17,bb_perror_msg,direct,1,formats an errno message for error output,strerror_r / message table,,review,direct
+busybox,core,6 DM-060 non-reentrant,strerror,libbb/perror_msg.c,27,bb_perror_msg_and_die,direct,1,formats an errno message before dying,strerror_r / message table,,review,direct
+busybox,core,3 global path/cwd,mkstemp,libbb/xfuncs_printf.c,286,xmkstemp,direct,3,mkstemp-or-die wrapper; only live caller is diff.c:734,temp-dir capability; same change as diff.c:733,,review,direct
+tcc,core,3 global path/cwd,realpath,libtcc.c,503,normalized_PATHCMP,direct,8,canonicalizes two paths to compare files for #pragma once,compare file identity (st_dev/st_ino or handle identity) instead; rule said restructure,,review,restructure
+tcc,core,3 global path/cwd,realpath,libtcc.c,504,normalized_PATHCMP,direct,1,canonicalizes the second path,same change as libtcc.c:503,,review,restructure
+tcc,core,3 global path/cwd,realpath,libtcc.c,506,normalized_PATHCMP,n/a,0,frees the realpath result; 'realpath' matched in a comment,false positive: comment,,review,restructure
+tcc,core,6 environment (DM-085),getenv,tcc.c,237,set_environment,direct,1,reads C_INCLUDE_PATH into the system include dirs,"rule said emulate ($PATH search) - wrong; env read is harmless, the dirs themselves are global paths (separate concern)",,review,emulate
+tcc,core,6 environment (DM-085),getenv,tcc.c,241,set_environment,direct,1,reads CPATH into the include dirs,same as tcc.c:237,,review,emulate
+tcc,core,6 environment (DM-085),getenv,tcc.c,245,set_environment,direct,1,reads LIBRARY_PATH into the library dirs,same as tcc.c:237,,review,emulate
+tcc,core,6 DM-065 wall clock,gettimeofday,tcc.c,284,getclock_ms,direct,2,wall clock for -bench timing,monotonic clock,,review,direct
+tcc,core,3 global path/cwd,getcwd,tccdbg.c,1135,tcc_debug_start,direct,3,records the compilation dir in debug info (-g),pass the name in (option or PWD); only with -g,,review,restructure
+tcc,core,3 global path/cwd,getcwd,tccdbg.c,2541,tcc_tcov_block_begin,direct,3,builds an absolute source path for -ftest-coverage records,only with -ftest-coverage,,review,restructure
+tcc,core,3 global path/cwd,getcwd,tccelf.c,1741,tcc_tcov_add_file,direct,3,builds the absolute .tcov output path,only with -ftest-coverage; also unlinks at that path,,review,restructure
+tcc,core,6 DM-060 non-reentrant,strerror,tccelf.c,2831,tcc_write_elf_file,direct,1,formats the output-file write failure message,,,review,direct
+tcc,core,6 DM-065 wall clock,time,tccpp.c,3381,macro_subst_tok,direct,2,reads wall clock for __DATE__/__TIME__,SOURCE_DATE_EPOCH or a clock capability,,review,direct
+tcc,core,6 DM-060 non-reentrant,localtime,tccpp.c,3382,macro_subst_tok,direct,1,converts the time for __DATE__/__TIME__,localtime_r; timezone comes from TZ / /etc/localtime (global path),,review,direct
+tcc,core,2 signals,sigemptyset,tccrun.c,1354,sig_error,restructure,1,fault handler builds a mask with the caught signal,counted in tccrun.c:1377,,review,direct
+tcc,core,2 signals,sigaddset,tccrun.c,1355,sig_error,restructure,1,adds the caught signal to the mask,counted in tccrun.c:1377,,review,direct
+tcc,core,2 signals,sigprocmask,tccrun.c,1356,sig_error,restructure,1,unblocks the caught signal before unwinding to rt_exit,counted in tccrun.c:1377,,review,direct
+tcc,core,2 signals,sigemptyset,tccrun.c,1371,set_exception_handler,restructure,1,clears the handler mask,counted in tccrun.c:1377,,review,direct
+tcc,core,2 signals,sigaction,tccrun.c,1377,set_exception_handler,restructure,40,-run: catches SIGFPE to print a backtrace of JIT-ed code,"synchronous fault, needs a native exception handler with register context and unwind; if none exists, emulate; only on the -run path",,review,restructure
+tcc,core,2 signals,sigaction,tccrun.c,1378,set_exception_handler,restructure,1,-run: catches SIGILL,same change as tccrun.c:1377,,review,restructure
+tcc,core,2 signals,sigaction,tccrun.c,1379,set_exception_handler,restructure,1,-run: catches SIGSEGV,same change as tccrun.c:1377,,review,restructure
+tcc,core,2 signals,sigaction,tccrun.c,1380,set_exception_handler,restructure,1,-run: catches SIGBUS,same change as tccrun.c:1377,,review,restructure
+tcc,core,2 signals,sigaction,tccrun.c,1381,set_exception_handler,restructure,1,-run: catches SIGABRT,same change as tccrun.c:1377,,review,restructure
+gmake,core,5 identity/permissions,eaccess,lib/findprog-in.c,148,find_in_given_path,emulate,0,checks X_OK on a PATH candidate while looking up a recipe command run without a shell,PATH search + effective-uid permission check; same compat feature as shell PATH search. Native spawn-by-name would make it direct,,review,direct
+gmake,core,5 identity/permissions,eaccess,lib/findprog-in.c,300,find_in_given_path,emulate,0,checks X_OK on a PATH candidate (second lookup loop),same site as findprog-in.c:148,,review,direct
+gmake,core,6 environment (DM-085),getenv,lib/fnmatch.c,273,internal_fnmatch,direct,2,fnmatch reads POSIXLY_CORRECT,explicit configuration,,review,direct
+gmake,core,6 environment (DM-085),getenv,lib/glob.c,531,glob,direct,2,glob reads HOME for ~ expansion,explicit configuration,,review,direct
+gmake,core,5 identity/permissions,getlogin,lib/glob.c,561,glob,emulate,0,same getlogin call as glob.c:561 (non-reentrant),same site as glob.c:561; reentrancy alone is direct (getlogin_r),,review,emulate
+gmake,core,6 DM-060 non-reentrant,getlogin,lib/glob.c,561,glob,emulate,0,same getlogin call as glob.c:561 (non-reentrant),same site as glob.c:561; reentrancy alone is direct (getlogin_r),,review,direct
+gmake,core,5 identity/permissions,getpwnam,lib/glob.c,591,glob,emulate,0,glob ~ looks up the home directory in passwd,user database,,review,emulate
+gmake,core,5 identity/permissions,getpwnam,lib/glob.c,675,glob,emulate,0,glob ~user looks up the passwd entry,user database,,review,emulate
+gmake,core,6 DM-060 non-reentrant,readdir,lib/glob.c,1213,glob_in_dir,direct,0,reads directory entries from a private DIR stream,DM-060 not a hazard here: stream is not shared; no change,,review,direct
+gmake,core,2 signals,signal,src/commands.c,530,fatal_error_signal,restructure,30,"fatal-signal handler: resets disposition, forwards SIGTERM to children, deletes targets, re-raises","handlers installed via the FATAL_SIG macro (main.c:1263, not a row: macro body). Native: termination event handled in the main wait loop; couples with posixos.c:484",,review,restructure
+gmake,core,2 signals,kill,src/commands.c,544,fatal_error_signal,direct,3,on SIGTERM forwards SIGTERM to each running child,terminate child via its handle; doubt: children that catch SIGTERM need it delivered as a signal,TERM,review,restructure
+gmake,core,2 signals,kill,src/commands.c,600,fatal_error_signal,direct,3,re-raises the fatal signal to die by it,exit(128+sig); parent loses WIFSIGNALED,,review,direct
+gmake,core,6 DM-060 non-reentrant,readdir,src/dir.c,733,dir_contents_file_exists_p,direct,0,reads directory entries into make's directory cache,DM-060 not a hazard: private stream; no change,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/dir.c,737,dir_contents_file_exists_p,direct,1,error message for readdir failure,strerror_r,,review,direct
+gmake,core,6 DM-065 wall clock,clock_gettime,src/file.c,965,file_timestamp_now,direct,0,current time (REALTIME) for comparison with file mtimes,correct use of wall clock; no change,,review,direct
+gmake,core,6 DM-065 wall clock,gettimeofday,src/file.c,977,file_timestamp_now,direct,0,gettimeofday fallback for the current time,same as file.c:965; no change,,review,direct
+gmake,core,6 DM-065 wall clock,time,src/file.c,989,file_timestamp_now,direct,0,time() fallback for the current time,same as file.c:965; no change,,review,direct
+gmake,core,6 DM-060 non-reentrant,localtime,src/file.c,1005,file_timestamp_sprintf,direct,2,formats a file timestamp in local time for debug output,localtime_r,,review,direct
+gmake,core,1 process,pipe,src/function.c,1904,func_shell_base,direct,3,pipe that captures $(shell ...) output; child started via child_execute_job (posix_spawn),pass pipe handle at spawn,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,1906,func_shell_base,direct,1,error message for pipe failure,strerror_r,,review,direct
+gmake,core,3 global path/cwd,realpath,src/function.c,2288,func_realpath,emulate,0,$(realpath ...) resolves a name against cwd and symlinks,make language feature that returns absolute paths,,review,restructure
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,2358,func_file,direct,1,$(file) open error message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,2371,func_file,direct,1,$(file) write error message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,2374,func_file,direct,1,$(file) close error message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,2408,func_file,direct,1,$(file <) open error message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,2422,func_file,direct,1,$(file <) read error message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/function.c,2427,func_file,direct,1,$(file <) close error message,strerror_r,,review,direct
+gmake,core,6 environment (DM-085),getenv,src/getopt.c,390,_getopt_initialize,direct,2,getopt reads POSIXLY_CORRECT,explicit configuration,,review,direct
+gmake,core,2 signals,sigprocmask,src/job.c,477,block_sigs,direct,1,blocks fatal signals while the children list is changed,deletable once fatal signals are not asynchronous (commands.c:530),,review,direct
+gmake,core,2 signals,sigprocmask,src/job.c,483,unblock_sigs,direct,1,unblocks fatal signals after the children list change,same as job.c:477,,review,direct
+gmake,core,2 signals,sigemptyset,src/job.c,490,unblock_all_sigs,direct,1,empties the mask in unblock_all_sigs,function compiled but its only caller (job.c:2349) is in the !USE_POSIX_SPAWN branch; effectively dead,,review,direct
+gmake,core,2 signals,sigprocmask,src/job.c,491,unblock_all_sigs,direct,1,unblocks all signals in unblock_all_sigs,same as job.c:490; effectively dead,,review,direct
+gmake,core,1 process,wait,src/job.c,762,reap_children,direct,15,reap_children blocks in wait() for any child,"wait-any over the handles in the children list plus shell_function_pid; the WNOHANG path uses the WAIT_NOHANG macro (waitpid, not a row). Couples with the SIGCHLD restructure (posixos.c:484)",,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,939,reap_children,direct,1,explains exit 127 after posix_spawn (command not found),strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,941,reap_children,direct,1,explains exit 127 after posix_spawn (EACCES),strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,943,reap_children,direct,1,explains exit 127 after posix_spawn (ENOEXEC),strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,2130,load_too_high,direct,1,debug message when /proc/loadavg cannot be read,"strerror_r. Note: load_too_high opens /proc/loadavg via the LOADAVG macro (job.c:2075), missed by the literal scan; only with -l",,review,direct
+gmake,core,6 DM-065 wall clock,time,src/job.c,2157,load_too_high,direct,1,seconds counter for the job-start backlog in load_too_high,"DM-065: duration from wall clock, use monotonic; only with -l",,review,direct
+gmake,core,2 signals,sigemptyset,src/job.c,2385,child_execute_job,direct,4,empty signal mask for posix_spawnattr_setsigmask,native spawn has no inherited mask; delete the block,,review,direct
+gmake,core,1 process,posix_spawn,src/job.c,2452,child_execute_job,direct,0,posix_spawn of a recipe command with dup2 file actions for stdin/stdout/stderr,already posix_spawn (USE_POSIX_SPAWN=1); vfork branch (job.c:2340) is compiled out. Maps 1:1 to a spawn-from-handles primitive,,review,direct
+gmake,core,1 process,posix_spawn,src/job.c,2473,child_execute_job,direct,0,ENOEXEC fallback: posix_spawn of default_shell with the script as argument,already posix_spawn; default_shell is the global path /bin/sh,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,2501,child_execute_job,direct,1,error message when spawn fails,strerror_r,,review,direct
+gmake,core,1 process,execvp,src/job.c,2606,exec_command,direct,10,exec_command: execvp make itself in place after remaking makefiles,"only live caller is main.c:2817 (re-exec, no fork). Replace by spawn + wait + exit(status), as the __EMX__ branch at main.c:2789 already does; pid changes, jobserver fds must be inherited",,review,direct
+gmake,core,6 environment (DM-085),getenv,src/job.c,2631,exec_command,direct,2,reads SHELL for the ENOEXEC fallback of the re-exec,explicit configuration,,review,direct
+gmake,core,1 process,execvp,src/job.c,2672,exec_command,direct,0,ENOEXEC fallback: execvp of the shell with the script,same change as job.c:2606,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,2674,exec_command,direct,1,error message when exec of the shell fails,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/job.c,2686,exec_command,direct,1,error message when exec fails,strerror_r,,review,direct
+gmake,core,6 DM-097 locale,setlocale,src/main.c,1245,main,direct,1,sets the locale from the environment,"ENABLE_NLS undefined, so only ctype/collation effects; pass locale explicitly or drop",,review,direct
+gmake,core,2 signals,sigemptyset,src/main.c,1252,main,restructure,0,initialises the fatal-signal set,counted at commands.c:530,,review,direct
+gmake,core,2 signals,bsd_signal,src/main.c,1307,main,direct,1,resets an inherited SIGCHLD ignore so wait works,delete,CHLD,review,restructure
+gmake,core,3 global path/cwd,getcwd,src/main.c,1412,main,emulate,0,records the cwd for CURDIR and -C bookkeeping,CURDIR is make language semantics; per-process cwd,,review,restructure
+gmake,core,4 tty/job control,isatty,src/main.c,1666,main,direct,1,exports MAKE_TERMOUT when stdout is a tty,query handle type; the exported value comes from ttyname() via the TTYNAME macro (not a row) and is a /dev path,,review,direct
+gmake,core,4 tty/job control,isatty,src/main.c,1673,main,direct,1,exports MAKE_TERMERR when stderr is a tty,same as main.c:1666,,review,direct
+gmake,core,3 global path/cwd,chdir,src/main.c,1789,main,emulate,0,-C dir changes the process cwd before reading makefiles,"all make file access is cwd-relative; avoiding needs dir-handle-relative opens everywhere (restructure, hundreds of lines). Same compat feature as shell cd",,review,restructure
+gmake,core,3 global path/cwd,getcwd,src/main.c,1813,main,emulate,0,re-reads the cwd after -C,same as main.c:1412,,review,restructure
+gmake,core,2 signals,bsd_signal,src/main.c,2002,main,restructure,0,installs the SIGCHLD handler that counts dead children and wakes the jobserver wait,counted at posixos.c:484,CHLD,review,restructure
+gmake,core,2 signals,sigemptyset,src/main.c,2013,main,restructure,0,builds the SIGCHLD block mask,counted at posixos.c:484,,review,direct
+gmake,core,2 signals,sigaddset,src/main.c,2014,main,restructure,0,adds SIGCHLD to the block mask,counted at posixos.c:484,CHLD,review,restructure
+gmake,core,2 signals,sigprocmask,src/main.c,2015,main,restructure,0,blocks SIGCHLD everywhere except inside pselect,counted at posixos.c:484,,review,direct
+gmake,core,2 signals,sigprocmask,src/main.c,2016,main,n/a,0,error message string naming sigprocmask,false positive: the match is inside a string literal of pfatal_with_name,CHLD,review,restructure
+gmake,core,2 signals,bsd_signal,src/main.c,2025,main,direct,3,SIGUSR1 handler toggles debug output at runtime,drop the optional feature or map it to a control channel; doubt: keeping it needs async notification,USR1,review,restructure
+gmake,core,6 DM-060 non-reentrant,strerror,src/main.c,2458,main,direct,1,error message for makefiles that could not be remade,strerror_r,,review,direct
+gmake,core,3 global path/cwd,chdir,src/main.c,2710,main,emulate,0,chdir back to the original directory before re-exec,same cwd model as main.c:1789,,review,restructure
+gmake,core,6 environment (DM-085),putenv,src/main.c,2773,main,direct,5,putenv MAKE_RESTARTS before re-exec,add the entry to the envp passed to spawn (main.c:2817),,review,emulate
+gmake,core,6 DM-065 wall clock,time,src/main.c,3747,print_data_base,direct,0,date stamp for -p database output,correct use of wall clock; no change,,review,direct
+gmake,core,6 DM-060 non-reentrant,ctime,src/main.c,3751,print_data_base,direct,2,formats the -p date stamp,ctime_r / strftime,,review,direct
+gmake,core,6 DM-065 wall clock,time,src/main.c,3760,print_data_base,direct,0,date stamp at end of -p output,correct use of wall clock; no change,,review,direct
+gmake,core,6 DM-060 non-reentrant,ctime,src/main.c,3761,print_data_base,direct,2,formats the end-of-database date stamp,ctime_r / strftime,,review,direct
+gmake,core,3 global path/cwd,chdir,src/main.c,3864,die,emulate,0,chdir back to the original directory in die(),same cwd model as main.c:1789,,review,restructure
+gmake,core,6 DM-065 wall clock,time,src/misc.c,97,make_rand,direct,1,seeds make's RNG (--shuffle) from time and pid,any entropy/clock source,,review,direct
+gmake,core,6 environment (DM-085),getenv,src/misc.c,598,get_tmpdir,direct,2,reads MAKE_TMPDIR / TMPDIR for the temp directory,temp-dir capability,,review,direct
+gmake,core,5 identity/permissions,umask,src/misc.c,699,get_tmpfd,direct,2,sets umask 0077 around temp-file creation,mkstemp already creates mode 0600; drop the umask pair (with misc.c:734),,review,emulate
+gmake,core,3 global path/cwd,mkstemp,src/misc.c,705,get_tmpfd,direct,3,creates a named temp file in the temp dir,temp-dir capability,,review,direct
+gmake,core,5 identity/permissions,umask,src/misc.c,734,get_tmpfd,direct,0,restores the umask after temp-file creation,same change as misc.c:699,,review,emulate
+gmake,core,6 DM-060 non-reentrant,strerror,src/output.c,513,perror_with_name,direct,1,perror_with_name message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/output.c,522,pfatal_with_name,direct,1,pfatal_with_name message,strerror_r,,review,direct
+gmake,core,1 process,pipe,src/posixos.c,195,jobserver_setup,direct,5,creates the jobserver token pipe shared with sub-makes,"fds are advertised by number in MAKEFLAGS (--jobserver-auth=R,W); compat must keep fd numbers across spawn, or use the fifo: style. Doubt",,review,direct
+gmake,core,2 signals,sigemptyset,src/posixos.c,465,jobserver_acquire,restructure,0,empty mask so pselect unblocks SIGCHLD while waiting,counted at posixos.c:484,,review,direct
+gmake,core,6 DM-023 select/poll,pselect,src/posixos.c,484,jobserver_acquire,restructure,60,"pselect waits for a jobserver token with SIGCHLD atomically unblocked, so a child exit interrupts the wait","core of the SIGCHLD-driven job loop: becomes one wait over {jobserver pipe, child handles}; covers main.c:2002-2016, posixos.c:465, job.c:762",,review,direct
+gmake,core,6 DM-036 record locks,fcntl-lock,src/posixos.c,732,osync_acquire,direct,10,takes a byte-range lock on a shared temp file to serialise --output-sync output across sub-makes,needs a cross-process mutex handle inherited by sub-makes; sub-makes find the file by path (--sync-mutex=fnm:...) in the temp dir,,review,direct
+gmake,core,6 DM-036 record locks,fcntl-lock,src/posixos.c,754,osync_release,direct,2,releases the --output-sync lock,same change as posixos.c:732,,review,direct
+gmake,core,1 process,pipe,src/posixos.c,774,get_bad_stdin,direct,3,makes a broken-pipe read end used as stdin for parallel jobs,pass a closed/null handle as stdin at spawn,,review,direct
+gmake,core,5 identity/permissions,umask,src/posixos.c,878,os_anontmp,direct,2,sets umask 0077 around tmpfile(),drop the umask pair (with posixos.c:886); anonymous temp from capability,,review,emulate
+gmake,core,3 global path/cwd,tmpfile,src/posixos.c,880,os_anontmp,direct,3,creates an anonymous temp file in the default temp dir,temp-dir capability,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/posixos.c,883,os_anontmp,direct,1,tmpfile error message,strerror_r,,review,direct
+gmake,core,5 identity/permissions,umask,src/posixos.c,886,os_anontmp,direct,0,restores the umask after tmpfile(),same change as posixos.c:878,,review,emulate
+gmake,core,6 DM-060 non-reentrant,strerror,src/posixos.c,890,os_anontmp,direct,1,dup error message,strerror_r,,review,direct
+gmake,core,6 DM-060 non-reentrant,strerror,src/read.c,360,eval_makefile,direct,1,error message for an included makefile that failed,strerror_r,,review,direct
+gmake,core,6 environment (DM-085),getenv,src/read.c,3109,tilde_expand,direct,2,tilde_expand reads HOME,explicit configuration,,review,direct
+gmake,core,5 identity/permissions,getlogin,src/read.c,3114,tilde_expand,emulate,0,same getlogin call as read.c:3114 (non-reentrant),same site as read.c:3114; reentrancy alone is direct (getlogin_r),,review,emulate
+gmake,core,6 DM-060 non-reentrant,getlogin,src/read.c,3114,tilde_expand,emulate,0,same getlogin call as read.c:3114 (non-reentrant),same site as read.c:3114; reentrancy alone is direct (getlogin_r),,review,direct
+gmake,core,5 identity/permissions,getpwnam,src/read.c,3118,tilde_expand,emulate,0,looks up the login user's home directory,user database,,review,emulate
+gmake,core,5 identity/permissions,getpwnam,src/read.c,3139,tilde_expand,emulate,0,~user looks up the passwd entry,user database,,review,emulate
+gmake,core,6 DM-039 symlink/lstat,lstat,src/remake.c,1635,name_mtime,direct,2,-L/--check-symlink-times walks the symlink chain for the newest mtime,only with -L; if the native FS has no symlinks this collapses to stat,,review,direct
+gmake,core,6 DM-039 symlink/lstat,readlink,src/remake.c,1655,name_mtime,direct,0,reads each symlink in the chain for -L,same change as remake.c:1635,,review,direct
+pdpmake,comparison,1 process,popen,input.c,870,run_command,direct,10,runs `sh -c cmd` via popen for `!=` / $(shell) and reads its output,musl popen is already posix_spawn-based; native: spawn sh with a pipe handle,,review,direct
+pdpmake,comparison,1 process,pclose,input.c,883,run_command,direct,2,closes the command pipe and waits for the child,wait on process handle; same change as input.c:870,,review,direct
+pdpmake,comparison,6 environment (DM-085),getenv,input.c,979,pragmas_from_env,direct,2,reads PDPMAKE_PRAGMAS from the environment,explicit configuration,,review,direct
+pdpmake,comparison,6 environment (DM-085),setenv,input.c,1429,input,direct,3,exports PDPMAKE_POSIXLY_CORRECT when a makefile declares .POSIX,env is the channel to sub-makes; with system() replaced by spawn with an explicit envp (make.c:103) this is an entry in that array,,review,emulate
+pdpmake,comparison,3 global path/cwd,chdir,main.c,107,process_options,emulate,0,-C dir changes the process cwd,all file access is cwd-relative; same compat feature as gmake main.c:1789,,review,restructure
+pdpmake,comparison,6 DM-060 non-reentrant,strerror,main.c,108,process_options,direct,1,error message for -C failure,strerror_r,,review,direct
+pdpmake,comparison,6 environment (DM-085),getenv,main.c,206,expand_makeflags,direct,2,reads MAKEFLAGS from the environment,explicit configuration,,review,direct
+pdpmake,comparison,6 environment (DM-085),setenv,main.c,417,update_makeflags,direct,3,exports command-line macros to the environment for commands,entry in the explicit envp of the spawn (make.c:103),,review,emulate
+pdpmake,comparison,6 environment (DM-085),setenv,main.c,424,update_makeflags,direct,3,exports MAKEFLAGS to the environment for sub-makes,entry in the explicit envp of the spawn (make.c:103),,review,emulate
+pdpmake,comparison,2 signals,signal,main.c,432,make_handler,restructure,20,"HUP/TERM handler resets disposition, removes the current target, re-raises",async termination cleanup; native: termination event checked around the blocking command wait. Doubt: system() blocks inside libc,,review,restructure
+pdpmake,comparison,2 signals,kill,main.c,434,make_handler,direct,3,re-raises the signal to die by it,exit(128+sig); parent loses WIFSIGNALED,,review,direct
+pdpmake,comparison,2 signals,sigemptyset,main.c,442,init_signal,restructure,0,empties the handler mask,counted at main.c:432,,review,direct
+pdpmake,comparison,2 signals,sigaction,main.c,446,init_signal,restructure,0,queries the inherited disposition (keep SIG_IGN),counted at main.c:432,,review,restructure
+pdpmake,comparison,2 signals,sigaction,main.c,448,init_signal,restructure,0,installs make_handler for HUP/TERM,counted at main.c:432,,review,restructure
+pdpmake,comparison,6 environment (DM-085),setenv,main.c,501,main,direct,3,exports PDPMAKE_POSIXLY_CORRECT for --posix,entry in the explicit envp of the spawn (make.c:103),,review,emulate
+pdpmake,comparison,6 environment (DM-085),getenv,main.c,504,main,direct,2,reads PDPMAKE_POSIXLY_CORRECT,explicit configuration,,review,direct
+pdpmake,comparison,3 global path/cwd,realpath,main.c,514,main,emulate,0,realpath(argv[0]) to set MAKE to an absolute path,resolves against cwd; path semantics of the compat layer,,review,restructure
+pdpmake,comparison,6 DM-060 non-reentrant,strerror,main.c,516,main,direct,1,error message when argv[0] cannot be resolved,strerror_r,,review,direct
+pdpmake,comparison,3 global path/cwd,literal:/bin/sh,main.c,570,main,direct,3,sets the SHELL macro to /bin/sh,POSIX-required default; native: shell handle/capability. The shell actually used is system()'s own /bin/sh,,review,direct
+pdpmake,comparison,3 global path/cwd,getcwd,main.c,580,main,emulate,0,gets the cwd for the CURDIR macro,CURDIR is make language semantics; per-process cwd,,review,restructure
+pdpmake,comparison,6 environment (DM-085),getenv,main.c,583,main,direct,2,reads CURDIR from the environment,explicit configuration,,review,direct
+pdpmake,comparison,6 environment (DM-085),setenv,main.c,585,main,direct,3,exports CURDIR to the environment,entry in the explicit envp of the spawn (make.c:103),,review,emulate
+pdpmake,comparison,6 DM-060 non-reentrant,strerror,main.c,618,main,direct,1,error message when a makefile cannot be opened,strerror_r,,review,direct
+pdpmake,comparison,6 DM-060 non-reentrant,strerror,make.c,38,touch,direct,1,warning when touch fails,strerror_r,,review,direct
+pdpmake,comparison,1 process,system,make.c,103,docmds,direct,12,"runs each recipe line with system() (`sh -c`), waits for it",spawn /bin/sh -c with an explicit envp + wait on handle; musl system() is already posix_spawn-based. Also gives the envp array used by the setenv sites,,review,direct
+pdpmake,comparison,6 DM-065 wall clock,clock_gettime,make.c,484,make,direct,0,stamps a rebuilt target with current time when it has no file,correct use of wall clock (compared with mtimes); no change,,review,direct
+pdpmake,comparison,6 DM-060 non-reentrant,strerror,modtime.c,164,modtime,direct,1,error message when a file cannot be opened,strerror_r,,review,direct
+pdpmake,comparison,6 environment (DM-085),setenv,target.c,329,pragmas_to_env,direct,3,exports PDPMAKE_PRAGMAS to the environment for sub-makes,entry in the explicit envp of the spawn (make.c:103),,review,emulate

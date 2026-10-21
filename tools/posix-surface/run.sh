@@ -10,7 +10,7 @@ REPO=$(cd "$HERE/../.." && pwd)
 VM=${PSURF_VM:-alpine-posix}
 SSHCFG=${PSURF_SSHCFG:-$HOME/.lima/$VM/ssh.config}
 SSH="ssh -F $SSHCFG -o BatchMode=yes lima-$VM"
-STAGES=${*:-"env fetch build static interposer dynamic minbuild strace callsites analyze"}
+STAGES=${*:-"env fetch build static interposer dynamic minbuild strace callsites m4 analyze"}
 
 $SSH true || { echo "cannot reach VM lima-$VM via $SSHCFG" >&2; exit 1; }
 # sync this directory (minus results) to ~/psurf/tools in the VM
@@ -25,6 +25,8 @@ mkdir -p "$HERE/results"
 $SSH 'tar -C ~/psurf/results -cf - .' | tar -C "$HERE/results" -xf -
 # sources.lock is an input once recorded: keep the first one
 [ -f "$HERE/sources.lock" ] || cp "$HERE/results/sources.lock" "$HERE/sources.lock" 2>/dev/null || true
+# M3 report merges the extracted sites with the committed per-site reviews (review/m3-*.tsv); runs locally
+if [ -f "$HERE/results/callsites.tsv" ]; then python3 "$HERE/analysis/callsite_report.py" "$HERE" "$REPO/docs/research/task-02" >/dev/null; fi
 for f in libc-surface.csv syscall-surface.csv; do
   [ -f "$HERE/results/$f" ] && cp "$HERE/results/$f" "$REPO/docs/research/task-02/$f"
 done

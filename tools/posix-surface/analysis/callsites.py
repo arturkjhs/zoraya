@@ -27,7 +27,13 @@ PROGS = {
     "pdpmake": ("pdpmake",       "pdpmake/make", "T1", "comparison"),
 }
 
-F_PROC = r"fork|vfork|execl|execlp|execle|execv|execvp|execve|execvpe|fexecve|posix_spawnp?|wait|waitpid|wait3|wait4|waitid|pipe2?|popen|pclose|system"
+# toybox/busybox wrappers (macros or helpers) around the same primitives
+WRAP = {"XVFORK": "vfork", "xvfork": "vfork", "xvforkwrap": "vfork", "xfork": "fork",
+        "xpopen_setup": "popen", "xpopen_both": "popen", "xpopen": "popen", "xpclose_both": "pclose",
+        "xpclose": "pclose", "xrun": "spawn-wrapper", "xexec": "execvp", "spawn": "spawn-wrapper",
+        "spawn_and_wait": "spawn-wrapper", "wait4pid": "waitpid", "safe_waitpid": "waitpid",
+        "xwaitpid": "waitpid", "BB_EXECVP": "execvp", "BB_EXECLP": "execlp"}
+F_PROC = "|".join(WRAP) + r"|fork|vfork|execl|execlp|execle|execv|execvp|execve|execvpe|fexecve|posix_spawnp?|wait|waitpid|wait3|wait4|waitid|pipe2?|popen|pclose|system"
 F_SIG = r"signal|sigaction|sigprocmask|pthread_sigmask|kill|killpg|raise|sigsuspend|sigwait|sigtimedwait|alarm|setitimer|sigsetjmp|siglongjmp|sigemptyset|sigfillset|sigaddset|sigdelset|sigismember|bsd_signal|xsignal|signal_no_SA_RESTART_empty_mask|signal_SA_RESTART_empty_mask|bb_signals"
 F_TTY = r"tcgetattr|tcsetattr|tcgetpgrp|tcsetpgrp|isatty|ttyname|setpgid|setsid|getpgrp|setpgrp|getsid|tcdrain|tcflush|cfmakeraw|cfsetispeed|cfsetospeed|ctermid"
 F_ID = r"getuid|geteuid|getgid|getegid|setuid|seteuid|setgid|setegid|setreuid|setregid|setresuid|setresgid|setgroups|getgroups|initgroups|chmod|fchmod|fchmodat|lchmod|chown|fchown|lchown|fchownat|umask|getpwnam|getpwuid|getgrnam|getgrgid|getlogin|access|faccessat|euidaccess|eaccess"
@@ -53,18 +59,29 @@ ABS = re.compile(r'"(/(?:bin|usr|tmp|dev|proc|etc|var|sys|lib)\b[^"]*)"')
 FCNTL_LOCK = re.compile(r"F_SETLKW?|F_GETLK|F_OFD_")
 SIGNAME = re.compile(r"\bSIG(CHLD|INT|QUIT|TERM|HUP|PIPE|TSTP|TTIN|TTOU|CONT|STOP|ALRM|WINCH|USR1|USR2|KILL|XCPU|XFSZ)\b")
 
+def exec_ranges(binary):
+    """address ranges of executable sections (.init/.text/.fini)"""
+    out = subprocess.run(["readelf", "-SW", binary], capture_output=True, text=True).stdout
+    rs = []
+    for line in out.splitlines():
+        m = re.match(r"\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)\s+\S+\s+(\S+)", line)
+        if m and "X" in m.group(4) and m.group(1) != ".plt":
+            a, n = int(m.group(2), 16), int(m.group(3), 16)
+            rs.append((a, a + n))
+    return rs
+
 def line_table(binary):
+    """(file basename -> set of lines) for line-table rows whose address is inside an executable section.
+    Functions removed by --gc-sections keep their DWARF rows but at addresses outside .text; they are dropped."""
+    rs = exec_ranges(binary)
     out = subprocess.run(["objdump", "--dwarf=decodedline", binary], capture_output=True, text=True).stdout
     have = collections.defaultdict(set)
-    cur = None
     for line in out.splitlines():
-        m = re.match(r"^(\S+\.[ch]):$", line) or re.match(r"^CU: (\S+\.[ch]):?$", line)
-        if m:
-            cur = os.path.basename(m.group(1))
-            continue
         parts = line.split()
-        if len(parts) >= 3 and parts[1].isdigit() and cur:
-            have[os.path.basename(parts[0])].add(int(parts[1]))
+        if len(parts) >= 3 and parts[1].isdigit() and parts[2].startswith("0x"):
+            addr = int(parts[2], 16)
+            if any(lo <= addr < hi for lo, hi in rs):
+                have[os.path.basename(parts[0])].add(int(parts[1]))
     return have
 
 def functions(path):
@@ -89,6 +106,10 @@ def enclosing(fs, ln):
 def rule(feature, api, code, fn, prog):
     """first-pass replaceability by rule; every value is an estimate"""
     c = code
+    if api in WRAP:
+        if WRAP[api] == "spawn-wrapper":
+            return "direct", 5, "library spawn helper (vfork+exec inside): swap its body for posix_spawn"
+        api = WRAP[api]
     shell = prog in ("dash", "oksh", "mrsh") or (prog == "busybox" and "ash" in fn)
     if feature == "1 process":
         if api in ("posix_spawn", "posix_spawnp"):
@@ -198,7 +219,10 @@ for prog, (src, binp, tier, kind) in PROGS.items():
             if fs is None:
                 fs = functions(path)
             fn = enclosing(fs, ln)
+            fstart = {n: st for st, n in fs}
             for feat, api in sorted(set(found)):
+                if fstart.get(api) == ln or (fn == api and fstart.get(fn) in (ln, ln - 1)):
+                    continue   # the definition of a wrapper, not a call
                 if api.startswith("literal:"):
                     lit = api[8:]
                     if lit.startswith("/dev/null"):

@@ -30,6 +30,8 @@ while IFS='	' read -r tier box apps; do
     got=$(./toybox | tr ' ' '\n' | grep . | sort | tr '\n' ' ')
   else
     make -s allnoconfig >/dev/null
+    # the "sh is" Kconfig choice always picks one option, so allnoconfig still links ash; no workload uses it
+    sed -i 's/^CONFIG_SH_IS_ASH=y/# CONFIG_SH_IS_ASH is not set/; s/^# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' .config
     for a in $apps; do
       case $a in '['|'[[') u=TEST;; *) u=$(echo "$a" | tr 'a-z-' 'A-Z_');; esac
       sed -i "s/^# CONFIG_$u is not set/CONFIG_$u=y/" .config

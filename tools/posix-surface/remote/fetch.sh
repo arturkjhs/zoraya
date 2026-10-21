@@ -55,6 +55,7 @@ unpack sqlite  "$DL/$(basename "$SQLITE_URL")"
 unpack hello   "$DL/$(basename "$HELLO_URL")"
 for g in mrsh:$MRSH_COMMIT tcc:$TCC_COMMIT pdpmake:$PDPMAKE_COMMIT; do
   n=${g%%:*}; c=${g#*:}
+  git -C "$DL/$n.git" worktree prune
   [ -d "$SRC/$n" ] || git -C "$DL/$n.git" worktree add -q --detach "$SRC/$n" "$c"
 done
 chmod -R a-w "$SRC"

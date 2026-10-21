@@ -1,0 +1,24 @@
+program	file	line	api	class	effort_lines	what	note
+toybox	lib/xwrap.c	256	XVFORK	restructure	50	creates the child for every xpopen/xrun: vfork, then either exec argv or (argv==0) re-exec /proc/self/exe to rerun the applet as a helper process	argv!=0 path alone is direct (posix_spawn with file actions for the pipe dance); the self-copy mode needs a spawn-self-with-mode design and /proc/self/exe (DM-054). Same change as xfork on this line.
+toybox	lib/xwrap.c	256	xfork	restructure	50	fork alternative of the same line (CFG_TOYBOX_FORK): child continues the applet in-process	same change as XVFORK on this line
+toybox	lib/xwrap.c	291	xexec	direct	5	child execs the requested command after setting up pipes	folds into the posix_spawn above
+toybox	lib/xwrap.c	334	xpopen_setup	direct	0	thin wrapper xpopen_both -> xpopen_setup	no change of its own; follows lib/xwrap.c:256
+toybox	lib/xwrap.c	355	xwaitpid	direct	2	waits for the helper child and collects its status	wait on process handle
+toybox	lib/xwrap.c	365	xpopen_both	direct	0	popen-style wrapper	follows lib/xwrap.c:256
+toybox	lib/xwrap.c	375	xpclose_both	direct	0	pclose-style wrapper	follows lib/xwrap.c:355
+toybox	lib/xwrap.c	381	xpclose_both	direct	0	xrun = spawn and wait for a command	already spawn-shaped; follows xwrap.c:256/355
+toybox	lib/xwrap.c	381	xpopen_both	direct	0	xrun = spawn and wait for a command	same line as above
+toybox	toys/posix/cp.c	503	xrun	direct	0	install -s runs `strip -p` on the installed file	call site unchanged once xrun is spawn-based
+toybox	toys/posix/cpio.c	114	xpopen	restructure	40	cpio -p forks a copy of itself (argv==0) to act as the extracting side of a pipe	self-copy mode: needs spawn-self with a mode flag and explicit pipe handles
+toybox	toys/posix/cpio.c	323	xpclose	direct	2	waits for the cpio -p helper	wait on process handle
+toybox	toys/posix/find.c	138	xrun	direct	0	find -exec runs the command and waits	call site unchanged once xrun is spawn-based
+toybox	toys/posix/tar.c	962	xpopen	direct	3	tar --to-command pipes each member into `sh -c CMD`	spawn sh -c with stdin pipe; /bin/sh via PATH lookup of sh
+toybox	toys/posix/tar.c	965	xpclose_both	direct	2	waits for the --to-command child	wait on process handle
+toybox	toys/posix/tar.c	1065	xpopen_both	direct	3	starts a sed helper for --xform name rewriting	spawn with two pipes
+toybox	toys/posix/tar.c	1118	xpopen_both	direct	3	starts the decompressor (zcat/xz/...) for -z/-J/-a on extract	spawn with pipes; used in W4 `make dist`-style paths only if compression is requested
+toybox	toys/posix/tar.c	1141	xpopen_both	restructure	40	forks a copy of tar to do extraction from the decompressor's output while the parent feeds it	self-copy mode, same design question as cpio.c:114
+toybox	toys/posix/tar.c	1149	xwaitpid	direct	2	waits for the extraction helper	wait on process handle
+toybox	toys/posix/tar.c	1193	xpopen_both	direct	3	starts the compressor for -c with -z/-J	spawn with pipes
+toybox	toys/posix/tar.c	1208	xpclose_both	direct	2	waits for the compressor	wait on process handle
+toybox	toys/posix/xargs.c	225	XVFORK	direct	15	xargs starts each command batch (also -P parallel): vfork, set slot env, stdin from /dev/null or /dev/tty, exec	posix_spawnp with file actions (open stdin) and envp; the waitchild loop uses waitpid(-1) -> wait on handles. The only process creation W4 actually executes in toybox.
+toybox	toys/posix/xargs.c	230	xexec	direct	0	exec of the batch in the vfork child	same change as xargs.c:225

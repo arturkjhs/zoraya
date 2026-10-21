@@ -64,13 +64,24 @@ class Mapper:
 def base(p):
     return p.split(":")[0]
 
+def load_hits_pid(raw, sub="dynamic"):
+    """yield (run_id, pid, arg0, exe, symbol)"""
+    for f in sorted(glob.glob(os.path.join(raw, sub, "*.tsv"))):
+        fid = os.path.basename(f)[:-4]
+        for line in open(f, errors="replace"):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) == 4:
+                yield (fid, *parts)
+
 def load_hits(raw):
     """yield (run_id, arg0, exe, symbol) from raw/dynamic/*.tsv"""
     for f in sorted(glob.glob(os.path.join(raw, "dynamic", "*.tsv"))):
         fid = os.path.basename(f)[:-4]
         for line in open(f, errors="replace"):
             parts = line.rstrip("\n").split("\t")
-            if len(parts) == 3:
+            if len(parts) == 4:          # pid, argv0, exe, symbol
+                yield (fid, *parts[1:])
+            elif len(parts) == 3:        # older format without pid
                 yield (fid, *parts)
 
 def applets_by_tier(work, mapper=None):

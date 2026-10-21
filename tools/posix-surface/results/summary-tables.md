@@ -18,9 +18,9 @@ Static names used for the upper bounds:
 
 | Tier | Upper, full binaries | Upper, minimal multi-call builds | Lower (dynamic, core runs) | Min upper − lower | Observed but not in minimal imports |
 |---|---|---|---|---|---|
-| T0 | 485 | 186 | 83 | 103 | 5 |
-| T1 | 518 | 263 | 133 | 130 | 5 |
-| T2 | 518 | 301 | 189 | 112 | 3 |
+| T0 | 485 | 166 | 84 | 82 | 5 |
+| T1 | 518 | 250 | 134 | 116 | 5 |
+| T2 | 518 | 293 | 189 | 104 | 3 |
 | T3 | 333 | 333 | 89 | 244 | 0 |
 
 - T0 observed-not-in-minimal-imports (getgid, getopt_long, getuid, setgid, setuid): busybox:tr:getgid, busybox:tr:getopt_long, busybox:tr:getuid, busybox:tr:setgid, busybox:tr:setuid, toybox:cat:getuid, toybox:ls:getuid, toybox:sleep:getuid, toybox:touch:getuid
@@ -31,15 +31,15 @@ Static names used for the upper bounds:
 
 | Category | T0 | T1 | T2 | T3 |
 |---|---|---|---|---|
-| stdio | 28 / 10 | 47 / 24 | 52 / 42 | 36 / 7 |
-| string | 50 / 18 | 56 / 29 | 64 / 39 | 64 / 17 |
-| process | 35 / 19 | 52 / 30 | 58 / 39 | 43 / 13 |
+| stdio | 22 / 10 | 43 / 24 | 50 / 42 | 36 / 7 |
+| string | 45 / 18 | 53 / 29 | 63 / 39 | 64 / 17 |
+| process | 32 / 19 | 51 / 30 | 58 / 39 | 43 / 13 |
 | signal | 10 / 7 | 12 / 9 | 12 / 9 | 9 / 5 |
-| file | 22 / 8 | 42 / 14 | 51 / 25 | 48 / 10 |
-| dir | 8 / 5 | 9 / 5 | 12 / 9 | 8 / 4 |
-| time | 9 / 1 | 11 / 2 | 12 / 3 | 10 / 0 |
+| file | 20 / 9 | 40 / 15 | 49 / 25 | 48 / 10 |
+| dir | 6 / 5 | 7 / 5 | 10 / 9 | 8 / 4 |
+| time | 8 / 1 | 11 / 2 | 12 / 3 | 10 / 0 |
 | locale | 4 / 2 | 4 / 2 | 4 / 4 | 9 / 0 |
-| tty | 6 / 5 | 7 / 5 | 7 / 5 | 2 / 1 |
+| tty | 5 / 5 | 6 / 5 | 6 / 5 | 2 / 1 |
 | memory | 4 / 3 | 6 / 4 | 6 / 5 | 14 / 7 |
 | threads | 0 / 0 | 3 / 3 | 3 / 3 | 33 / 19 |
 | network | 1 / 0 | 1 / 0 | 4 / 0 | 12 / 0 |
@@ -47,20 +47,20 @@ Static names used for the upper bounds:
 
 ### Jumps
 
-- T0 → T1: min upper +77, lower +50
-- T1 → T2: min upper +38, lower +56
-  - new lower-bound symbols at T2: access, dirname, dprintf, dup, execvp, faccessat, fchmodat, fdopendir, feof, ferror_unlocked, fileno_unlocked, fprintf, fputs_unlocked, fseeko, getc_unlocked, getdelim, getegid, getgrgid, gethostname, getline, getopt, getpwuid, iswctype, mbrtowc, memchr, memfd_create, mkdir, mkdirat, mkdtemp, mkstemp, newlocale, openat, putc, putchar, putchar_unlocked, putenv, puts, readlinkat, regcomp, regexec, regfree, rmdir, sscanf, strspn, strtoll, symlink, syscall, sysconf, tee, time, uselocale, vasprintf, vfprintf, vprintf, waitpid, wctype
-- T3 (clang+lld alone) vs T1: min upper 333 vs 263; lower 89 vs 133; T3 lower symbols not in T1 lower: 46
-  - of those, by category: threads 19, process 8, string 6, file 5, other 3, memory 3, signal 2
+- T0 → T1: min upper +84, lower +50
+- T1 → T2: min upper +43, lower +55
+  - new lower-bound symbols at T2: dirname, dprintf, dup, execvp, faccessat, fchmodat, fdopendir, feof, ferror_unlocked, fileno_unlocked, fprintf, fputs_unlocked, fseeko, getc_unlocked, getdelim, getegid, getgrgid, gethostname, getline, getopt, getpwuid, iswctype, mbrtowc, memchr, memfd_create, mkdir, mkdirat, mkdtemp, mkstemp, newlocale, openat, putc, putchar, putchar_unlocked, putenv, puts, readlinkat, regcomp, regexec, regfree, rmdir, sscanf, strspn, strtoll, symlink, syscall, sysconf, tee, time, uselocale, vasprintf, vfprintf, vprintf, waitpid, wctype
+- T3 (clang+lld alone) vs T1: min upper 333 vs 250; lower 89 vs 134; T3 lower symbols not in T1 lower: 45
+  - of those, by category: threads 19, process 8, string 6, file 4, memory 3, other 3, signal 2
 
 ### Per program
 
 | Program | Static imports | Dynamic (any run) | Dynamic runs |
 |---|---|---|---|
 | busybox | 393 | 101 | 11 |
-| busybox-T0 | 99 | — | — |
-| busybox-T1 | 109 | — | — |
-| busybox-T2 | 131 | — | — |
+| busybox-T0 | 24 | — | — |
+| busybox-T1 | 44 | — | — |
+| busybox-T2 | 79 | — | — |
 | clang | 14 | 72 | 2 |
 | clang+libs | 331 | — | — |
 | dash | 101 | 73 | 20 |
@@ -83,7 +83,7 @@ Static names used for the upper bounds:
 | dash | 54 | 101 |
 | oksh | 66 | 124 |
 | mrsh | 58 | 90 |
-| busybox | 75 | 393 |
+| busybox | 73 | 393 |
 
 ### make comparison (dynamic libc symbols of the make process)
 

@@ -1,0 +1,16 @@
+M4W1-configure	m4g	0
+M4W1-make-pdpmake	m4p	2
+M4W1-make	m4g	0
+M4W1-check	m4g	0
+M4W2-make-p	m4p	0
+M4W2-check-p	m4p	0
+M4W2-make-g	m4g	0
+M4W2-check-g	m4g	0
+M4W4-configure-noLD	m4g	1
+M4W4-configure-noAR	m4g	0
+M4W4-make-noAR	m4g	2
+M4W4-configure	m4g	0
+M4W4-make	m4g	0
+M4W4-check	m4g	0
+M4W4p-configure	m4p	0
+M4W4p-make	m4p	0

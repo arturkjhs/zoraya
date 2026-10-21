@@ -1,0 +1,58 @@
+M4 validation patch (TASK-02). Call site: pdpmake make.c:103 docmds, `status = system(cmd)`.
+M3 class: direct. Replaces system() with an explicit posix_spawn of /bin/sh -c plus waitpid, keeping
+system()'s parent-side signal behaviour (SIGINT/SIGQUIT ignored while waiting, child gets default
+dispositions and the parent's original mask). The shell path stays /bin/sh: that is a separate site.
+--- a/make.c
++++ b/make.c
+@@ -2,6 +2,42 @@
+  * Do the actual making for make
+  */
+ #include "make.h"
++#include <spawn.h>
++
++extern char **environ;
++
++// Run cmd with "/bin/sh -c", like system(3), but without fork: posix_spawn + waitpid.
++static int
++run_shell(const char *cmd)
++{
++	struct sigaction ign = { .sa_handler = SIG_IGN }, oint, oquit;
++	sigset_t chld, omask, def;
++	posix_spawnattr_t attr;
++	char *argv[] = { (char *)"sh", (char *)"-c", (char *)cmd, NULL };
++	pid_t pid;
++	int status = -1, r;
++
++	sigemptyset(&chld);
++	sigaddset(&chld, SIGCHLD);
++	sigprocmask(SIG_BLOCK, &chld, &omask);
++	sigaction(SIGINT, &ign, &oint);
++	sigaction(SIGQUIT, &ign, &oquit);
++	sigemptyset(&def);
++	if (oint.sa_handler != SIG_IGN) sigaddset(&def, SIGINT);
++	if (oquit.sa_handler != SIG_IGN) sigaddset(&def, SIGQUIT);
++	posix_spawnattr_init(&attr);
++	posix_spawnattr_setsigmask(&attr, &omask);
++	posix_spawnattr_setsigdefault(&attr, &def);
++	posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK);
++	r = posix_spawn(&pid, "/bin/sh", NULL, &attr, argv, environ);
++	posix_spawnattr_destroy(&attr);
++	if (r == 0)
++		while (waitpid(pid, &status, 0) < 0 && errno == EINTR) ;
++	sigaction(SIGINT, &oint, NULL);
++	sigaction(SIGQUIT, &oquit, NULL);
++	sigprocmask(SIG_SETMASK, &omask, NULL);
++	return r == 0 ? status : -1;
++}
+ 
+ struct name *target;
+ 
+@@ -100,7 +136,7 @@
+ 							xconcat3("set -e;", q, "") : q;
+ 
+ 			target = np;
+-			status = system(cmd);
++			status = run_shell(cmd);
+ 			if (!signore IF_FEATURE_MAKE_EXTENSIONS(&& posix))
+ 				free(cmd);
+ 			// If this command was being run to create an include file

@@ -342,13 +342,6 @@ mrsh	comparison	T0	2 signals	sigaction	shell/trap.c	98	set_job_control_traps	if 
 mrsh	comparison	T0	5 identity/permissions	getpwnam	shell/word.c	45	expand_tilde_at	struct passwd *pw = getpwnam(name);	emulate	0	user/group database	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/dirtree.c	48	dirtree_add_node	if (0>(linklen = readlinkat(fd, name, libbuf, 4095))) goto error;	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	6 DM-060 non-reentrant	readdir	lib/dirtree.c	181	dirtree_recurse	} else while ((entry = readdir(dir))) {	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/env.c	122	reset_env	stuff[i] = (s = getenv(stuff[i])) ? xmprintf("%s=%s", stuff[i], s) : 0;	direct	2	environment variable	
-toybox	core	T0-T2	3 global path/cwd	chdir	lib/env.c	125	reset_env	if (chdir(p->pw_dir)) {	restructure	10	process-global cwd	
-toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	140	reset_env	setenv("PATH", _PATH_DEFPATH, 1);	emulate	0	$PATH search semantics	
-toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	141	reset_env	setenv("HOME", p->pw_dir, 1);	emulate	2	environment variable	
-toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	142	reset_env	setenv("SHELL", p->pw_shell, 1);	emulate	2	environment variable	
-toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	143	reset_env	setenv("USER", p->pw_name, 1);	emulate	2	environment variable	
-toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/env.c	144	reset_env	setenv("LOGNAME", p->pw_name, 1);	emulate	2	environment variable	
 toybox	core	T0-T2	6 DM-060 non-reentrant	strerror	lib/lib.c	18	verror_msg	if (err>0) fprintf(stderr, s, strerror(err));	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	5 identity/permissions	fchmodat	lib/lib.c	762	wfchmodat	int rc = fchmodat(fd, name, mode, 0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	5 identity/permissions	fchmod	lib/lib.c	788	copy_tempfile	if (!fstat(fdin, &statbuf)) fchmod(fd, statbuf.st_mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
@@ -356,53 +349,30 @@ toybox	core	T0-T2	5 identity/permissions	fchown	lib/lib.c	795	copy_tempfile	igno
 toybox	core	T0-T2	2 signals	sigfillset	lib/lib.c	899	exit_signal	sigfillset(&sigset);	direct	2	signal mask bookkeeping	
 toybox	core	T0-T2	2 signals	sigprocmask	lib/lib.c	900	exit_signal	sigprocmask(SIG_BLOCK, &sigset, 0);	direct	2	signal mask bookkeeping	
 toybox	core	T0-T2	5 identity/permissions	umask	lib/lib.c	966	string_to_mode	umask(amask = umask(0));	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
-toybox	core	T0-T2	3 global path/cwd	literal:/proc	lib/lib.c	1123	names_to_pid	if (!(dp = opendir("/proc"))) perror_exit("no /proc");	restructure	15	procfs text interface (DM-054)	
-toybox	core	T0-T2	6 DM-060 non-reentrant	readdir	lib/lib.c	1125	names_to_pid	while ((entry = readdir(dp))) {	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	3 global path/cwd	literal:/proc/%u/comm	lib/lib.c	1135	names_to_pid	sprintf(libbuf, "/proc/%u/comm", u);	restructure	15	procfs text interface (DM-054)	
-toybox	core	T0-T2	3 global path/cwd	literal:/proc/%u/exe	lib/lib.c	1156	names_to_pid	sprintf(buf, "/proc/%u/exe", u);	restructure	15	procfs text interface (DM-054)	
-toybox	core	T0-T2	3 global path/cwd	literal:/proc/%u/cmdline	lib/lib.c	1163	names_to_pid	sprintf(cmd = libbuf+16, "/proc/%u/cmdline", u);	restructure	15	procfs text interface (DM-054)	
 toybox	core	T0-T2	3 global path/cwd	literal:/etc/passwd	lib/lib.c	1292	bufgetpwnamuid	if (!stat("/etc/passwd", st) && passtime!=st->st_mtime) {	restructure	10	global configuration file	
 toybox	core	T0-T2	3 global path/cwd	literal:/etc/group	lib/lib.c	1341	bufgetgrnamgid	if (!stat("/etc/group", st) && grptime!=st->st_mtime) {	restructure	10	global configuration file	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/lib.c	1380	readlinkat0	len = readlinkat(dirfd, path, buf, len-1);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 DM-065 wall clock	clock_gettime	lib/lib.c	1455	millitime	clock_gettime(CLOCK_MONOTONIC, &ts);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	lib/lib.c	1464	format_iso_time	s += strftime(s, len, "%F %T", localtime(&(ts->tv_sec)));	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	lib/lib.c	1466	format_iso_time	s += strftime(s, len-strlen(buf), "%z", localtime(&(ts->tv_sec)));	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	4 tty/job control	isatty	lib/lib.c	1478	loggit	for (i = 0; i<3; i++) if (isatty(i)) facility = LOG_AUTH;	direct	1	terminal check: handle type query	
-toybox	core	T0-T2	6 DM-023 select/poll	poll	lib/net.c	86	xpoll	if (0<=(i = poll(fds, nfds, timeout)) || toys.signal) return i;	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	2 signals	sigaction	lib/password.c	60	read_password	sigaction(SIGINT, &sa, &oldsa);	restructure	20	interrupt/termination handling	INT
-toybox	core	T0-T2	4 tty/job control	tcflush	lib/password.c	61	read_password	tcflush(tty, TCIFLUSH);	restructure	15	termios mode change	
-toybox	core	T0-T2	4 tty/job control	tcsetattr	lib/password.c	78	read_password	tcsetattr(0, TCSANOW, &oldtermio);	restructure	15	termios mode change	
-toybox	core	T0-T2	2 signals	sigaction	lib/password.c	79	read_password	sigaction(SIGINT, &oldsa, 0);	restructure	20	interrupt/termination handling	INT
-toybox	core	T0-T2	6 DM-036 record locks	fcntl-lock	lib/password.c	133	update_password	if (!(ofp = fopen(filename, "w+")) || 0>fcntl(fileno(ofp), F_SETLK, &lock)\	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 DM-037 fsync	fsync	lib/password.c	187	update_password	fsync(nfd);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 DM-038 rename	rename	lib/password.c	190	update_password	if (!found || rename(ff, filename)) {	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	1 process	fork	lib/portability.c	25	xfork	pid_t pid = fork();	restructure	40	fork: check whether exec follows; else needs separate process design	
 toybox	core	T0-T2	3 global path/cwd	literal:/dev/urandom	lib/portability.c	50	xgetrandom	xreadall(fd = xopen("/dev/urandom", O_RDONLY), buf, buflen);	restructure	10	global path	
-toybox	core	T0-T2	3 global path/cwd	literal:/proc/mounts	lib/portability.c	136	xgetmountlist	char *p = path ? : "/proc/mounts";	restructure	15	procfs text interface (DM-054)	
 toybox	core	T0-T2	2 signals	xsignal	lib/portability.c	456	xsignal_all_killers	if (signames[i].num != SIGKILL) xsignal(signames[i].num, handler);	restructure	15	signal handler/disposition	KILL
 toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/portability.c	614	get_block_device_size	return (ioctl(fd, BLKGETSIZE64, size) >= 0);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	4 tty/job control	isatty	lib/tty.c	24	tty_fd	for (i = 0; i<3; i++) if (isatty(j = (i+1)%3)) return j;	direct	1	terminal check: handle type query	
-toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	lib/tty.c	26	tty_fd	return xnotstdio(open("/dev/tty", O_RDWR));	emulate	0	controlling terminal by name	
 toybox	core	T0-T2	4 tty/job control	isatty	lib/tty.c	42	terminal_size	if (isatty(i) && !ioctl(i, TIOCGWINSZ, &ws)) {	direct	1	terminal check: handle type query	
 toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/tty.c	42	terminal_size	if (isatty(i) && !ioctl(i, TIOCGWINSZ, &ws)) {	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/tty.c	49	terminal_size	s = getenv("COLUMNS");	direct	2	environment variable	
 toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/tty.c	51	terminal_size	s = getenv("LINES");	direct	2	environment variable	
-toybox	core	T0-T2	4 tty/job control	tcgetattr	lib/tty.c	113	set_terminal	int i = tcgetattr(fd, &tio);	restructure	15	termios mode change	
-toybox	core	T0-T2	4 tty/job control	cfmakeraw	lib/tty.c	119	set_terminal	cfmakeraw(&tio);	restructure	15	termios mode change	
-toybox	core	T0-T2	4 tty/job control	tcsetattr	lib/tty.c	140	set_terminal	return tcsetattr(fd, TCSAFLUSH, &tio);	restructure	15	termios mode change	
-toybox	core	T0-T2	2 signals	xsignal	lib/tty.c	289	start_redraw	xsignal(SIGWINCH, generic_signal);	restructure	15	signal handler/disposition	WINCH
 toybox	core	T0-T2	2 signals	siglongjmp	lib/xwrap.c	40	_xexit	if (toys.rebound) siglongjmp(*toys.rebound, 1);	restructure	15	signal handler/disposition	
-toybox	core	T0-T2	6 DM-031 mmap	mmap	lib/xwrap.c	63	xmmap	void *ret = mmap(addr, length, prot, flags, fd, off);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	3 global path/cwd	chdir	lib/xwrap.c	199	xvdaemon	chdir("/");	restructure	10	process-global cwd	
-toybox	core	T0-T2	4 tty/job control	setsid	lib/xwrap.c	200	xvdaemon	setsid();	emulate	0	process group / session / foreground: job-control semantics	
-toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	lib/xwrap.c	202	xvdaemon	xopen_stdio("/dev/null", O_RDWR);	direct	2	null device: pass a null handle	
-toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	lib/xwrap.c	204	xvdaemon	if (-1 != (fd = open("/dev/tty", O_RDONLY))) {	emulate	0	controlling terminal by name	
-toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/xwrap.c	205	xvdaemon	ioctl(fd, TIOCNOTTY);	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	1 process	execvp	lib/xwrap.c	232	xexec	execvp(argv[0], argv);	direct	5	exec in child: fold into spawn	
 toybox	core	T0-T2	1 process	pipe	lib/xwrap.c	254	xpopen_setup	if (pipes[pid]==-1 && pipe(cestnepasun+(2*pid))) perror_exit("pipe");	direct	3	pipe between parent and spawned child: pass handle at spawn	
+toybox	core	T0-T2	1 process	XVFORK	lib/xwrap.c	256	xpopen_setup	if (!(pid = CFG_TOYBOX_FORK ? xfork() : XVFORK())) {	direct	15	vfork+exec child: posix_spawn with file actions	
+toybox	core	T0-T2	1 process	xfork	lib/xwrap.c	256	xpopen_setup	if (!(pid = CFG_TOYBOX_FORK ? xfork() : XVFORK())) {	restructure	40	fork: check whether exec follows; else needs separate process design	
+toybox	core	T0-T2	1 process	xexec	lib/xwrap.c	291	xpopen_setup	if (argv) xexec(argv);	direct	5	exec in child: fold into spawn	
+toybox	core	T0-T2	1 process	xpopen_setup	lib/xwrap.c	334	xpopen_both	return xpopen_setup(argv, pipes, 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	1 process	waitpid	lib/xwrap.c	343	xwaitpid	while (-1 == waitpid(pid, &status, 0) && errno == EINTR) errno = 0;	direct	5	wait for own child: wait on process handle	
-toybox	core	T0-T2	5 identity/permissions	access	lib/xwrap.c	414	xaccess	if (access(path, flags)) perror_exit("Can't access '%s'", path);	direct	3	permission probe: try the operation / capability check	
-toybox	core	T0-T2	1 process	pipe	lib/xwrap.c	442	xpipe	if (pipe(pp)) perror_exit("xpipe");	direct	3	pipe between parent and spawned child: pass handle at spawn	
+toybox	core	T0-T2	1 process	xwaitpid	lib/xwrap.c	355	xpclose_both	return xwaitpid(pid);	direct	5	wait for own child: wait on process handle	
+toybox	core	T0-T2	1 process	xpopen_both	lib/xwrap.c	365	xpopen	pid = xpopen_both(argv, pipes);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xpclose_both	lib/xwrap.c	375	xpclose	return xpclose_both(pid, 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xpclose_both	lib/xwrap.c	381	xrun	return xpclose_both(xpopen_both(argv, 0), 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xpopen_both	lib/xwrap.c	381	xrun	return xpclose_both(xpopen_both(argv, 0), 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	lib/xwrap.c	467	xnotstdio	xopen_stdio("/dev/null", O_RDWR);	direct	2	null device: pass a null handle	
 toybox	core	T0-T2	6 DM-038 rename	rename	lib/xwrap.c	476	xrename	if (rename(from, to)) perror_exit("rename %s -> %s", from, to);	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	3 global path/cwd	mkstemp	lib/xwrap.c	484	xtempfile	if(-1 == (fd = mkstemp(*tempname))) perror_exit("no temp file");	direct	3	temporary file in global /tmp: temp-dir capability	
@@ -410,23 +380,11 @@ toybox	core	T0-T2	3 global path/cwd	getcwd	lib/xwrap.c	567	xgetcwd	char *buf = g
 toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/xwrap.c	595	xabspath	if ((flags & ABS_KEEP) && (str = getenv("PWD")))	direct	2	environment variable	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/xwrap.c	632	xabspath	else len = readlinkat(dirfd, str, libbuf, sizeof(libbuf));	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	3 global path/cwd	chdir	lib/xwrap.c	703	xchdir	if (chdir(path)) perror_exit("chdir '%s'", path);	restructure	10	process-global cwd	
-toybox	core	T0-T2	3 global path/cwd	chroot	lib/xwrap.c	708	xchroot	if (chroot(path)) error_exit("chroot '%s'", path);	restructure	10	global path	
 toybox	core	T0-T2	5 identity/permissions	getpwuid	lib/xwrap.c	714	xgetpwuid	struct passwd *pwd = getpwuid(uid);	emulate	0	user/group database	
 toybox	core	T0-T2	5 identity/permissions	getgrgid	lib/xwrap.c	721	xgetgrgid	struct group *group = getgrgid(gid);	emulate	0	user/group database	
 toybox	core	T0-T2	5 identity/permissions	getpwnam	lib/xwrap.c	729	xgetuid	struct passwd *up = getpwnam(name);	emulate	0	user/group database	
 toybox	core	T0-T2	5 identity/permissions	getgrnam	lib/xwrap.c	743	xgetgid	struct group *gr = getgrnam(name);	emulate	0	user/group database	
-toybox	core	T0-T2	5 identity/permissions	getpwnam	lib/xwrap.c	757	xgetpwnam	struct passwd *up = getpwnam(name);	emulate	0	user/group database	
-toybox	core	T0-T2	5 identity/permissions	getgrnam	lib/xwrap.c	765	xgetgrnam	struct group *gr = getgrnam(name);	emulate	0	user/group database	
-toybox	core	T0-T2	5 identity/permissions	initgroups	lib/xwrap.c	776	xsetuser	if (initgroups(pwd->pw_name, pwd->pw_gid) || setgid(pwd->pw_gid)	direct	2	identity query	
-toybox	core	T0-T2	5 identity/permissions	setgid	lib/xwrap.c	776	xsetuser	if (initgroups(pwd->pw_name, pwd->pw_gid) || setgid(pwd->pw_gid)	restructure	20	privilege change	
-toybox	core	T0-T2	5 identity/permissions	setuid	lib/xwrap.c	777	xsetuser	|| setuid(pwd->pw_uid)) perror_exit("xsetuser '%s'", pwd->pw_name);	restructure	20	privilege change	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	readlinkat	lib/xwrap.c	791	xreadlinkat	len = readlinkat(dir, name, buf, size);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	6 DM-053 ioctl	ioctl	lib/xwrap.c	824	xioctl	rc = ioctl(fd, request, data);	direct	5	DM-flagged API; see catalog entry	
-toybox	core	T0-T2	3 global path/cwd	literal:/var/run/%s.pid	lib/xwrap.c	838	xpidfile	sprintf(pidfile, "/var/run/%s.pid", name);	restructure	10	global path	
-toybox	core	T0-T2	2 signals	kill	lib/xwrap.c	852	xpidfile	if (pid < 1 || (kill(pid, 0) && errno == ESRCH)) unlink(pidfile);	direct	3	send signal	
-toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/xwrap.c	979	xtzset	char *old = getenv("TZ");	direct	2	environment variable	
-toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/xwrap.c	982	xtzset	if (new ? setenv("TZ", new, 1) : unsetenv("TZ")) perror_exit("setenv");	emulate	2	environment variable	
-toybox	core	T0-T2	6 environment (DM-085)	unsetenv	lib/xwrap.c	982	xtzset	if (new ? setenv("TZ", new, 1) : unsetenv("TZ")) perror_exit("setenv");	emulate	2	environment variable	
 toybox	core	T0-T2	2 signals	sigaction	lib/xwrap.c	997	xsignal_flags	if (sigaction(signal, sa, 0)) perror_exit("xsignal %d", signal);	restructure	15	signal handler/disposition	
 toybox	core	T0-T2	6 environment (DM-085)	getenv	lib/xwrap.c	1091	xparsedate	oldtz = getenv("TZ");	direct	2	environment variable	
 toybox	core	T0-T2	6 environment (DM-085)	setenv	lib/xwrap.c	1094	xparsedate	if (tz) setenv("TZ", tz, 1);	emulate	2	environment variable	
@@ -455,22 +413,26 @@ toybox	core	T0-T2	5 identity/permissions	fchmod	toys/posix/cp.c	339	cp_node	if (
 toybox	core	T0-T2	5 identity/permissions	umask	toys/posix/cp.c	410	cp_main	if (TT.pflags & _CP_mode) umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	4 tty/job control	isatty	toys/posix/cp.c	446	cp_main	if (exists && (FLAG(i) || (!(st.st_mode & 0222) && isatty(0)))) {	direct	1	terminal check: handle type query	
 toybox	core	T0-T2	6 DM-038 rename	rename	toys/posix/cp.c	454	cp_main	if (send) send = rename(src, TT.destname);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	1 process	xrun	toys/posix/cp.c	503	install_node	if (FLAG(s) && xrun((char *[]){"strip", "-p", TT.destname, 0}))	direct	5	library spawn helper (vfork+exec inside): swap its body for posix_spawn	
 toybox	core	T0-T2	5 identity/permissions	lchown	toys/posix/cp.c	524	install_main	if (lchown(*ss, TT.uid, TT.gid)) perror_msg("chown '%s'", *ss);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	lchown	toys/posix/cp.c	524	install_main	if (lchown(*ss, TT.uid, TT.gid)) perror_msg("chown '%s'", *ss);	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	5 identity/permissions	chmod	toys/posix/cp.c	525	install_main	if ((mode&~01777) && chmod(*ss, mode)) perror_msg("chmod '%s'", *ss);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/cpio.c	87	cpio_main	int pipe, afd = FLAG(o), reown = !geteuid() && !FLAG(no_preserve_owner),	direct	2	identity query	
+toybox	core	T0-T2	1 process	xpopen	toys/posix/cpio.c	114	cpio_main	pid = xpopen(0, &pipe, 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	5 identity/permissions	fchown	toys/posix/cpio.c	194	cpio_main	err = fchown(fd, uid, gid);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	5 identity/permissions	fchmod	toys/posix/cpio.c	223	cpio_main	if (reown) err = fchown(fd, uid, gid) && fchmod(fd, mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	5 identity/permissions	fchown	toys/posix/cpio.c	223	cpio_main	if (reown) err = fchown(fd, uid, gid) && fchmod(fd, mode);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	symlink	toys/posix/cpio.c	229	cpio_main	err = data ? symlink(data, name)	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	5 identity/permissions	lchown	toys/posix/cpio.c	235	cpio_main	if (!err && reown) err = lchown(name, uid, gid);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	lchown	toys/posix/cpio.c	235	cpio_main	if (!err && reown) err = lchown(name, uid, gid);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	1 process	xpclose	toys/posix/cpio.c	323	cpio_main	if (FLAG(p) && pid) toys.exitval |= xpclose(pid, pipe);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	3 global path/cwd	PATH-lookup	toys/posix/env.c	37	GLOBALS	char **ev = toys.optargs, **ee = 0, **set QUIET, *path = getenv("PATH");	restructure	10	global path	
 toybox	core	T0-T2	6 environment (DM-085)	getenv	toys/posix/env.c	37	GLOBALS	char **ev = toys.optargs, **ee = 0, **set QUIET, *path = getenv("PATH");	emulate	0	$PATH search semantics	
 toybox	core	T0-T2	1 process	execve	toys/posix/env.c	62	GLOBALS	execve(sl->str, ev, ee ? : environ);	direct	5	exec in child: fold into spawn	
 toybox	core	T0-T2	1 process	execve	toys/posix/env.c	63	GLOBALS	} else execve(ex, ev, ee ? : environ);	direct	5	exec in child: fold into spawn	
 toybox	core	T0-T2	3 global path/cwd	fchdir	toys/posix/find.c	112	flush_exec	rc = fchdir(new->parent->dirfd);	restructure	10	process-global cwd	
 toybox	core	T0-T2	3 global path/cwd	fchdir	toys/posix/find.c	113	flush_exec	} else rc = fchdir(TT.topdir);	restructure	10	process-global cwd	
+toybox	core	T0-T2	1 process	xrun	toys/posix/find.c	138	flush_exec	rc = xrun(newargs);	direct	5	library spawn helper (vfork+exec inside): swap its body for posix_spawn	
 toybox	core	T0-T2	3 global path/cwd	fchdir	toys/posix/find.c	144	flush_exec	if (revert) revert = fchdir(TT.topdir);	restructure	10	process-global cwd	
 toybox	core	T0-T2	6 DM-060 non-reentrant	readdir	toys/posix/find.c	341	do_find	while ((de = readdir(dfd)) && isdotdot(de->d_name));	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	5 identity/permissions	faccessat	toys/posix/find.c	356	do_find	if (check && faccessat(dirtree_parentfd(new), new->name,	direct	3	permission probe: try the operation / capability check	
@@ -501,18 +463,27 @@ toybox	core	T0-T2	6 DM-039 symlink/lstat	lchown	toys/posix/tar.c	673	extract_to_
 toybox	core	T0-T2	5 identity/permissions	chmod	toys/posix/tar.c	676	extract_to_disk	if (!S_ISLNK(ala)) chmod(name, FLAG(p) ? ala : ala&0777&~toys.old_umask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 toybox	core	T0-T2	3 global path/cwd	literal:/proc/self/attr/fscreate	toys/posix/tar.c	757	unpack_tar	sefd = xopen("/proc/self/attr/fscreate", O_WRONLY|WARN_ONLY);	restructure	15	procfs text interface (DM-054)	
 toybox	core	T0-T2	6 DM-060 non-reentrant	localtime	toys/posix/tar.c	925	unpack_tar	struct tm *lc = localtime(TT.mtime ? &TT.mtt : &TT.hdr.mtime);	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	1 process	xpopen	toys/posix/tar.c	962	unpack_tar	pid = xpopen((char *[]){"sh", "-c", TT.to_command, NULL}, &fd, 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xpclose_both	toys/posix/tar.c	965	unpack_tar	fd = xpclose_both(pid, 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	2 signals	signal	toys/posix/tar.c	1015	tar_main	signal(SIGPIPE, SIG_IGN);	direct	1	SIGPIPE disposition: native write returns EPIPE	PIPE
 toybox	core	T0-T2	5 identity/permissions	geteuid	toys/posix/tar.c	1018	tar_main	if (!geteuid()) toys.optflags |= FLAG_p;	direct	2	identity query	
+toybox	core	T0-T2	1 process	xpopen_both	toys/posix/tar.c	1065	tar_main	xpopen_both(xfsed, TT.xfpipe);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	3 global path/cwd	PATH-lookup	toys/posix/tar.c	1114	tar_main	struct string_list *zcat = FLAG(I) ? 0 : find_in_path(getenv("PATH"),	restructure	10	global path	
 toybox	core	T0-T2	6 environment (DM-085)	getenv	toys/posix/tar.c	1114	tar_main	struct string_list *zcat = FLAG(I) ? 0 : find_in_path(getenv("PATH"),	emulate	0	$PATH search semantics	
+toybox	core	T0-T2	1 process	xpopen_both	toys/posix/tar.c	1118	tar_main	TT.pid = xpopen_both(zcat ? (char *[]){zcat->str, 0} :	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xpopen_both	toys/posix/tar.c	1141	tar_main	pid = xpopen_both(0, pipefd);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xwaitpid	toys/posix/tar.c	1149	tar_main	xwaitpid(pid);	direct	5	wait for own child: wait on process handle	
+toybox	core	T0-T2	1 process	xpopen_both	toys/posix/tar.c	1193	tar_main	TT.pid = xpopen_both((char *[]){get_archiver(), 0}, pipefd);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
+toybox	core	T0-T2	1 process	xpclose_both	toys/posix/tar.c	1208	tar_main	TT.pid = xpclose_both(TT.pid, 0);	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
 toybox	core	T0-T2	6 DM-065 wall clock	time	toys/posix/touch.c	46	touch_main	time_t t = time(0);	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	5 identity/permissions	access	toys/posix/touch.c	75	touch_main	if (access(s, F_OK) && (-1!=(fd = open(s, O_CREAT, 0666)))) {	direct	3	permission probe: try the operation / capability check	
 toybox	core	T0-T2	1 process	waitpid	toys/posix/xargs.c	109	waitchild	if ((pid = waitpid(-1, &status, options)) <= 0) return;	direct	5	wait for own child: wait on process handle	
 toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	toys/posix/xargs.c	217	xargs_main	if (!TT.tty) TT.tty = xfopen("/dev/tty", "re");	emulate	0	controlling terminal by name	
+toybox	core	T0-T2	1 process	XVFORK	toys/posix/xargs.c	225	xargs_main	if (!(pid = XVFORK())) {	direct	15	vfork+exec child: posix_spawn with file actions	
 toybox	core	T0-T2	3 global path/cwd	literal:/dev/null	toys/posix/xargs.c	229	xargs_main	xopen_stdio(FLAG(o) ? "/dev/tty" : "/dev/null", O_RDONLY|O_CLOEXEC);	direct	2	null device: pass a null handle	
 toybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	toys/posix/xargs.c	229	xargs_main	xopen_stdio(FLAG(o) ? "/dev/tty" : "/dev/null", O_RDONLY|O_CLOEXEC);	emulate	0	controlling terminal by name	
+toybox	core	T0-T2	1 process	xexec	toys/posix/xargs.c	230	xargs_main	xexec(out);	direct	5	exec in child: fold into spawn	
 busybox	core	T0-T2	4 tty/job control	isatty	archival/bbunzip.c	116	bbunpack	if (!(option_mask32 & BBUNPK_OPT_FORCE) && isatty(STDIN_FILENO)) {	direct	1	terminal check: handle type query	
-busybox	core	T0-T2	1 process	wait	archival/libarchive/open_transformer.c	73	check_errors_in_children	if (wait(&status) < 0)	direct	5	wait for own child: wait on process handle	
 busybox	core	T0-T2	6 DM-065 wall clock	time	editors/awk.c	2866	exec_builtin	time(&tt);	direct	5	DM-flagged API; see catalog entry	
 busybox	core	T0-T2	6 DM-060 non-reentrant	localtime	editors/awk.c	2869	exec_builtin	localtime(&tt));	direct	5	DM-flagged API; see catalog entry	
 busybox	core	T0-T2	1 process	popen	editors/awk.c	3131	evaluate	rsm->F = popen(R.s, "w");	direct	10	popen/system: spawn of /bin/sh -c with a pipe	
@@ -530,104 +501,9 @@ busybox	core	T0-T2	3 global path/cwd	literal:/dev/null	editors/diff.c	726	diffre
 busybox	core	T0-T2	3 global path/cwd	literal:/tmp/difXXXXXX	editors/diff.c	733	diffreg	char name[] = "/tmp/difXXXXXX";	direct	3	global /tmp: temp-dir capability	
 busybox	core	T0-T2	3 global path/cwd	literal:/dev/null	editors/diff.c	1001	diff_main	xstat("/dev/null", &stb[i]);	direct	2	null device: pass a null handle	
 busybox	core	T0-T2	6 DM-097 locale	setlocale	libbb/appletlib.c	257	lbb_prepare	setlocale(LC_ALL, "");	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	5 identity/permissions	getgroups	libbb/bb_getgroups.c	25	bb_getgroups	n = getgroups(n, group_array);	emulate	0	user/group database	
-busybox	core	T0-T2	5 identity/permissions	getgroups	libbb/bb_getgroups.c	37	bb_getgroups	n = getgroups(0, group_array);	emulate	0	user/group database	
-busybox	core	T0-T2	5 identity/permissions	umask	libbb/parse_mode.c	133	bb_parse_mode	mode_t u_mask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
-busybox	core	T0-T2	5 identity/permissions	umask	libbb/parse_mode.c	134	bb_parse_mode	umask(u_mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
 busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/perror_msg.c	17	bb_perror_msg	bb_verror_msg(s, p, errno ? strerror(errno) : NULL);	direct	5	DM-flagged API; see catalog entry	
 busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/perror_msg.c	27	bb_perror_msg_and_die	bb_verror_msg(s, p, errno ? strerror(errno) : NULL);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	2 signals	sigfillset	libbb/poll_with_signals.c	37	check_got_signal_and_poll	sigfillset(&orig_mask);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	6 DM-023 select/poll	ppoll	libbb/poll_with_signals.c	45	check_got_signal_and_poll	n = ppoll(pfd, 1, timeout >= 0 ? &tv : NULL, &orig_mask);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-023 select/poll	poll	libbb/safe_poll.c	17	safe_poll	int n = poll(ufds, nfds, timeout);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	2 signals	sigaction	libbb/signals.c	24	sigaction_set	return sigaction(signum, act, NULL);	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	2 signals	sigprocmask	libbb/signals.c	34	sigprocmask2	return sigprocmask(how, set, oset);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigfillset	libbb/signals.c	40	sigprocmask_allsigs	sigfillset(&set);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigfillset	libbb/signals.c	51	sigblockall	sigfillset(&mask);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigprocmask	libbb/signals.c	52	sigblockall	return sigprocmask(SIG_SETMASK, &mask, set);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	signal	libbb/signals.c	64	bb_signals	signal(sig_no, f);	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	2 signals	sigemptyset	libbb/signals.c	95	sig_block	sigemptyset(&ss);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigaddset	libbb/signals.c	96	sig_block	sigaddset(&ss, sig);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigemptyset	libbb/signals.c	103	sig_unblock	sigemptyset(&ss);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigaddset	libbb/signals.c	104	sig_unblock	sigaddset(&ss, sig);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigemptyset	libbb/signals.c	111	wait_for_any_sig	sigemptyset(&ss);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	2 signals	sigsuspend	libbb/signals.c	112	wait_for_any_sig	sigsuspend(&ss);	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	2 signals	signal	libbb/signals.c	118	kill_myself_with_sig	signal(sig, SIG_DFL);	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	2 signals	raise	libbb/signals.c	120	kill_myself_with_sig	raise(sig);	direct	3	send signal	
-busybox	core	T0-T2	6 DM-060 non-reentrant	localtime	libbb/time.c	145	parse_datestr	lt = localtime(&t);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-065 wall clock	time	libbb/time.c	282	strftime_fmt	time(tp);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-060 non-reentrant	localtime	libbb/time.c	285	strftime_fmt	return buf + strftime(buf, len, fmt, localtime(tp));	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-065 wall clock	time	libbb/time.c	358	monotonic_sec	return time(NULL);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 environment (DM-085)	getenv	libbb/xfuncs.c	208	wh_helper	char *s = getenv(env_name);	direct	2	environment variable	
-busybox	core	T0-T2	4 tty/job control	isatty	libbb/xfuncs.c	231	get_terminal_width_height	if (isatty(STDOUT_FILENO))	direct	1	terminal check: handle type query	
-busybox	core	T0-T2	4 tty/job control	isatty	libbb/xfuncs.c	234	get_terminal_width_height	if (isatty(STDERR_FILENO))	direct	1	terminal check: handle type query	
-busybox	core	T0-T2	4 tty/job control	isatty	libbb/xfuncs.c	237	get_terminal_width_height	if (isatty(STDIN_FILENO))	direct	1	terminal check: handle type query	
-busybox	core	T0-T2	3 global path/cwd	literal:/dev/tty	libbb/xfuncs.c	240	get_terminal_width_height	close_me = fd = open("/dev/tty", O_RDONLY);	emulate	0	controlling terminal by name	
-busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs.c	247	get_terminal_width_height	err = ioctl(fd, TIOCGWINSZ, &win) != 0 || win.ws_row == 0;	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 environment (DM-085)	getenv	libbb/xfuncs.c	267	is_TERM_dumb	char *term = getenv("TERM");	direct	2	environment variable	
-busybox	core	T0-T2	4 tty/job control	tcsetattr	libbb/xfuncs.c	273	tcsetattr_stdin_TCSANOW	return tcsetattr(STDIN_FILENO, TCSANOW, tp);	restructure	15	termios mode change	
-busybox	core	T0-T2	4 tty/job control	tcgetattr	libbb/xfuncs.c	282	get_termios_and_make_raw	r = tcgetattr(fd, oldterm);	restructure	15	termios mode change	
-busybox	core	T0-T2	4 tty/job control	tcsetattr	libbb/xfuncs.c	349	set_termios_to_raw	return tcsetattr(fd, TCSANOW, &newterm);	restructure	15	termios mode change	
-busybox	core	T0-T2	1 process	waitpid	libbb/xfuncs.c	357	safe_waitpid	r = waitpid(pid, wstat, options);	direct	5	wait for own child: wait on process handle	
-busybox	core	T0-T2	6 DM-031 mmap	mmap	libbb/xfuncs_printf.c	113	mmap_read	return mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-031 mmap	mmap	libbb/xfuncs_printf.c	118	mmap_anon	return mmap(NULL, size,	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	5 identity/permissions	geteuid	libbb/xfuncs_printf.c	190	xopen_as_uid_gid	uid_t old_euid = geteuid();	direct	2	identity query	
-busybox	core	T0-T2	5 identity/permissions	getegid	libbb/xfuncs_printf.c	191	xopen_as_uid_gid	gid_t old_egid = getegid();	direct	2	identity query	
-busybox	core	T0-T2	6 DM-038 rename	rename	libbb/xfuncs_printf.c	212	xrename	if (rename(oldpath, newpath))	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-038 rename	rename	libbb/xfuncs_printf.c	218	rename_or_warn	int n = rename(oldpath, newpath);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	1 process	pipe	libbb/xfuncs_printf.c	226	xpipe	if (pipe(filedes))	direct	3	pipe between parent and spawned child: pass handle at spawn	
 busybox	core	T0-T2	3 global path/cwd	mkstemp	libbb/xfuncs_printf.c	286	xmkstemp	int fd = mkstemp(template);	direct	3	temporary file in global /tmp: temp-dir capability	
-busybox	core	T0-T2	6 environment (DM-085)	setenv	libbb/xfuncs_printf.c	370	xsetenv	if (setenv(key, value, 1))	emulate	2	environment variable	
-busybox	core	T0-T2	6 environment (DM-085)	unsetenv	libbb/xfuncs_printf.c	400	bb_unsetenv	unsetenv(var);	emulate	2	environment variable	
-busybox	core	T0-T2	5 identity/permissions	setgid	libbb/xfuncs_printf.c	415	xsetgid	if (setgid(gid)) bb_simple_perror_msg_and_die("setgid");	restructure	20	privilege change	
-busybox	core	T0-T2	5 identity/permissions	setuid	libbb/xfuncs_printf.c	421	xsetuid	if (setuid(uid)) bb_simple_perror_msg_and_die("setuid");	restructure	20	privilege change	
-busybox	core	T0-T2	5 identity/permissions	setegid	libbb/xfuncs_printf.c	426	xsetegid	if (setegid(egid)) bb_simple_perror_msg_and_die("setegid");	restructure	20	privilege change	
-busybox	core	T0-T2	5 identity/permissions	seteuid	libbb/xfuncs_printf.c	431	xseteuid	if (seteuid(euid)) bb_simple_perror_msg_and_die("seteuid");	restructure	20	privilege change	
-busybox	core	T0-T2	3 global path/cwd	chdir	libbb/xfuncs_printf.c	436	chdir_or_warn	int r = chdir(path);	restructure	10	process-global cwd	
-busybox	core	T0-T2	3 global path/cwd	fchdir	libbb/xfuncs_printf.c	450	xfchdir	if (fchdir(fd))	restructure	10	process-global cwd	
-busybox	core	T0-T2	3 global path/cwd	chroot	libbb/xfuncs_printf.c	456	xchroot	if (chroot(path))	restructure	10	global path	
-busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	571	ioctl_or_perror_and_die	ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/xfuncs_printf.c	574	ioctl_or_perror_and_die	bb_verror_msg(fmt, p, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	585	ioctl_or_perror	int ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/xfuncs_printf.c	589	ioctl_or_perror	bb_verror_msg(fmt, p, strerror(errno));	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	619	bb_ioctl_or_warn	ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	6 DM-053 ioctl	ioctl	libbb/xfuncs_printf.c	628	bb_xioctl	ret = ioctl(fd, request, argp);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	3 global path/cwd	literal:/dev/urandom	libbb/xfuncs_printf.c	682	generate_uuid	open_read_close("/dev/urandom", buf, 16);	restructure	10	global path	
-busybox	core	T0-T2	1 process	fork	libbb/xfuncs_printf.c	721	xfork	pid = fork();	restructure	40	fork: check whether exec follows; else needs separate process design	
-busybox	core	T0-T2	6 DM-065 wall clock	gettimeofday	libbb/xfuncs_printf.c	778	xgettimeofday	gettimeofday(tv, NULL);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	763	raise_interrupt	signal(SIGINT, SIG_DFL);	restructure	20	interrupt/termination handling	INT
-busybox	core	T0-T2	2 signals	raise	shell/ash.c	764	raise_interrupt	raise(SIGINT);	restructure	20	interrupt/termination handling	INT
-busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	shell/ash.c	1629	errmsg	return strerror(e);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	3 global path/cwd	getcwd	shell/ash.c	3000	getpwd	char *dir = getcwd(NULL, 0); /* huh, using glibc extension? */	restructure	10	process-global cwd	
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	3639	ignoresig	signal(signo, SIG_IGN);	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	2 signals	sigaction	shell/ash.c	3753	setsignal	if (sigaction(signo, NULL, &act)) {	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	2 signals	sigfillset	shell/ash.c	3793	setsignal	sigfillset(&act.sa_mask);	direct	2	signal mask bookkeeping	
-busybox	core	T0-T2	1 process	waitpid	shell/ash.c	4346	waitproc	err = waitpid(-1, status, flags);	direct	5	wait for own child: wait on process handle	
-busybox	core	T0-T2	2 signals	sigsuspend	shell/ash.c	4366	waitproc	sigsuspend(&oldmask);	restructure	15	signal handler/disposition	
-busybox	core	T0-T2	1 process	fork	shell/ash.c	5526	forkshell	pid = fork();	restructure	40	fork: check whether exec follows; else needs separate process design	
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	5562	write2pipe	ignoresig(SIGINT);  //signal(SIGINT, SIG_IGN);	restructure	20	interrupt/termination handling	INT
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	5563	write2pipe	ignoresig(SIGQUIT); //signal(SIGQUIT, SIG_IGN);	restructure	20	interrupt/termination handling	QUIT
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	5564	write2pipe	ignoresig(SIGHUP);  //signal(SIGHUP, SIG_IGN);	restructure	20	interrupt/termination handling	HUP
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	5565	write2pipe	ignoresig(SIGTSTP); //signal(SIGTSTP, SIG_IGN);	emulate	0	job-control signal	TSTP
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	5566	write2pipe	signal(SIGPIPE, SIG_DFL);	direct	1	SIGPIPE disposition: native write returns EPIPE	PIPE
-busybox	core	T0-T2	1 process	pipe	shell/ash.c	5583	openhere	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
-busybox	core	T0-T2	1 process	pipe	shell/ash.c	5601	openherestr	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
-busybox	core	T0-T2	1 process	execve	shell/ash.c	6182	tryexec	execve(cmd, argv, envp);	direct	5	exec in child: fold into spawn	
-busybox	core	T0-T2	1 process	vfork	shell/ash.c	6278	vforkexec	pid = vfork();	direct	15	vfork+exec child: posix_spawn with file actions	
-busybox	core	T0-T2	5 identity/permissions	getpwnam	shell/ash.c	6815	exptilde	pw = getpwnam(name);	emulate	0	user/group database	
-busybox	core	T0-T2	1 process	pipe	shell/ash.c	6884	evaltreenr	if (pipe(pip) < 0)	direct	3	pipe between parent and spawned child: pass handle at spawn	
-busybox	core	T0-T2	1 process	pipe	shell/ash.c	10089	evalpipe	if (pipe(pip) < 0) {	direct	3	pipe between parent and spawned child: pass handle at spawn	
-busybox	core	T0-T2	3 global path/cwd	chdir	shell/ash.c	10528	docd	err = chdir(dest);	restructure	10	process-global cwd	
-busybox	core	T0-T2	5 identity/permissions	umask	shell/ash.c	14691	umaskcmd	mask = umask(0);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
-busybox	core	T0-T2	5 identity/permissions	umask	shell/ash.c	14692	umaskcmd	umask(mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
-busybox	core	T0-T2	5 identity/permissions	umask	shell/ash.c	14731	umaskcmd	umask(mask);	emulate	0	file mode/ownership semantics expected by POSIX tools (install, tar, cp -p)	
-busybox	core	T0-T2	4 tty/job control	isatty	shell/ash.c	14942	procargs	&& isatty(0) && isatty(1) /* we are on tty */	direct	1	terminal check: handle type query	
-busybox	core	T0-T2	2 signals	signal	shell/ash.c	14984	procargs	signal(SIGHUP, SIG_DFL);	restructure	20	interrupt/termination handling	HUP
-busybox	core	T0-T2	3 global path/cwd	literal:/etc/profile	shell/ash.c	15093	ash_main	read_profile("/etc/profile");	restructure	10	global configuration file	
-busybox	core	T0-T2	6 DM-023 select/poll	poll	shell/shell_common.c	146	shell_builtin_read	r = poll(pfd, 1, /*timeout:*/ 0);	direct	5	DM-flagged API; see catalog entry	
-busybox	core	T0-T2	4 tty/job control	isatty	shell/shell_common.c	151	shell_builtin_read	if (params->opt_p && isatty(fd)) {	direct	1	terminal check: handle type query	
-busybox	core	T0-T2	4 tty/job control	tcgetattr	shell/shell_common.c	162	shell_builtin_read	tcgetattr(fd, &tty);	restructure	15	termios mode change	
-busybox	core	T0-T2	4 tty/job control	tcsetattr	shell/shell_common.c	181	shell_builtin_read	tcsetattr(fd, TCSANOW, &tty);	restructure	15	termios mode change	
-busybox	core	T0-T2	4 tty/job control	tcsetattr	shell/shell_common.c	338	shell_builtin_read	tcsetattr(fd, TCSANOW, &old_tty);	restructure	15	termios mode change	
 tcc	core	T1	3 global path/cwd	realpath	libtcc.c	503	normalized_PATHCMP	if (!!(p1 = realpath(f1, NULL))) {	restructure	10	canonical global path	
 tcc	core	T1	3 global path/cwd	realpath	libtcc.c	504	normalized_PATHCMP	if (!!(p2 = realpath(f2, NULL))) {	restructure	10	canonical global path	
 tcc	core	T1	3 global path/cwd	realpath	libtcc.c	506	normalized_PATHCMP	libc_free(p2); /* realpath() requirement */	restructure	10	canonical global path	

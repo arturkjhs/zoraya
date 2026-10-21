@@ -1,26 +1,11 @@
 program	feature	class	sites
-busybox	1 process	direct	14
-busybox	1 process	restructure	2
-busybox	2 signals	direct	13
-busybox	2 signals	emulate	1
-busybox	2 signals	restructure	13
+busybox	1 process	direct	4
 busybox	3 global path/cwd	direct	4
-busybox	3 global path/cwd	emulate	1
-busybox	3 global path/cwd	restructure	10
-busybox	4 tty/job control	direct	6
-busybox	4 tty/job control	restructure	6
-busybox	5 identity/permissions	direct	2
-busybox	5 identity/permissions	emulate	8
-busybox	5 identity/permissions	restructure	4
-busybox	6 DM-023 select/poll	direct	3
-busybox	6 DM-031 mmap	direct	2
-busybox	6 DM-038 rename	direct	2
-busybox	6 DM-053 ioctl	direct	5
-busybox	6 DM-060 non-reentrant	direct	9
-busybox	6 DM-065 wall clock	direct	6
+busybox	3 global path/cwd	restructure	3
+busybox	4 tty/job control	direct	1
+busybox	6 DM-060 non-reentrant	direct	4
+busybox	6 DM-065 wall clock	direct	3
 busybox	6 DM-097 locale	direct	2
-busybox	6 environment (DM-085)	direct	2
-busybox	6 environment (DM-085)	emulate	2
 dash	1 process	direct	3
 dash	1 process	emulate	3
 dash	2 signals	direct	1
@@ -94,28 +79,21 @@ tcc	3 global path/cwd	restructure	6
 tcc	6 DM-060 non-reentrant	direct	2
 tcc	6 DM-065 wall clock	direct	2
 tcc	6 environment (DM-085)	emulate	3
-toybox	1 process	direct	8
-toybox	1 process	restructure	1
-toybox	2 signals	direct	4
-toybox	2 signals	restructure	7
-toybox	3 global path/cwd	direct	9
-toybox	3 global path/cwd	emulate	4
-toybox	3 global path/cwd	restructure	20
-toybox	4 tty/job control	direct	7
-toybox	4 tty/job control	emulate	1
-toybox	4 tty/job control	restructure	5
-toybox	5 identity/permissions	direct	15
-toybox	5 identity/permissions	emulate	28
-toybox	5 identity/permissions	restructure	2
-toybox	6 DM-023 select/poll	direct	1
-toybox	6 DM-031 mmap	direct	1
-toybox	6 DM-036 record locks	direct	1
-toybox	6 DM-037 fsync	direct	1
-toybox	6 DM-038 rename	direct	4
+toybox	1 process	direct	29
+toybox	1 process	restructure	2
+toybox	2 signals	direct	3
+toybox	2 signals	restructure	4
+toybox	3 global path/cwd	direct	8
+toybox	3 global path/cwd	emulate	2
+toybox	3 global path/cwd	restructure	11
+toybox	4 tty/job control	direct	5
+toybox	5 identity/permissions	direct	13
+toybox	5 identity/permissions	emulate	26
+toybox	6 DM-038 rename	direct	3
 toybox	6 DM-039 symlink/lstat	direct	14
-toybox	6 DM-053 ioctl	direct	4
-toybox	6 DM-060 non-reentrant	direct	8
-toybox	6 DM-065 wall clock	direct	3
+toybox	6 DM-053 ioctl	direct	2
+toybox	6 DM-060 non-reentrant	direct	5
+toybox	6 DM-065 wall clock	direct	2
 toybox	6 DM-097 locale	direct	5
-toybox	6 environment (DM-085)	direct	7
-toybox	6 environment (DM-085)	emulate	11
+toybox	6 environment (DM-085)	direct	5
+toybox	6 environment (DM-085)	emulate	4

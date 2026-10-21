@@ -1,0 +1,157 @@
+program	file	line	api	class	effort_lines	what	note
+dash	src/bltin/printf.c	567	strerror	direct	1	prints the ERANGE message for a printf numeric conversion	
+dash	src/bltin/test.c	319	isatty	direct	1	implements `test -t fd`	needs a handle-type query keyed by fd number
+dash	src/bltin/test.c	432	geteuid	emulate	0	`test -O`: compares file owner with effective uid	the builtin exists to expose the POSIX uid model; direct only if native has an owner concept
+dash	src/bltin/test.c	434	getegid	emulate	0	`test -G`: compares file group with effective gid	same as test.c:432
+dash	src/bltin/test.c	537	faccessat	emulate	0	`test -r/-w/-x`: permission probe with effective ids (AT_EACCESS)	cannot 'just try the operation': test must answer without doing it; doubt: a native capability-rights query could make it direct
+dash	src/cd.c	178	chdir	emulate	0	changes process cwd for the `cd` builtin	
+dash	src/cd.c	236	strtok	direct	1	splits the logical path into components for `cd -L`	strtok_r; same change as cd.c:254
+dash	src/cd.c	254	strtok	direct	1	continues the component split for `cd -L`	same change as cd.c:236
+dash	src/cd.c	279	getcwd	emulate	0	reads process cwd for `pwd -P` and PWD init	
+dash	src/cd.c	283	getcwd	n/a	0	'getcwd' matched inside the warning string	false positive: string literal; the real call is cd.c:279
+dash	src/cd.c	283	strerror	direct	1	formats the getcwd failure message	
+dash	src/error.c	110	signal	emulate	0	resets SIGINT to default before re-raising it	exit-by-signal so the parent sees WIFSIGNALED; same as error.c:111
+dash	src/error.c	111	raise	emulate	0	re-raises SIGINT so a non-interactive shell dies by the signal	
+dash	src/error.c	220	strerror	direct	1	maps errno to a message for shell errors	
+dash	src/eval.c	587	pipe	direct	2	creates the pipe between pipeline elements	pipe is fine as a channel handle; the children come from forkshell (jobs.c:982, emulate)
+dash	src/exec.c	163	execve	emulate	0	execs a command after $PATH search, falling back to /bin/sh on ENOEXEC	reached from vforkexec child, the `exec` builtin and EV_EXIT in forked subshells; _PATH_BSHELL is a global path
+dash	src/expand.c	209	getpwnam	emulate	0	looks up the home directory for `~user` expansion	
+dash	src/input.c	138	tcgetattr	direct	3	queries whether stdin is a terminal in canonical mode to decide input buffering	query only, no mode change; rule said emulate; needs a terminal-mode query on the handle
+dash	src/jobs.c	214	isatty	direct	1	scans fds 2..0 for a terminal when /dev/tty cannot be opened	isatty is trivial, but the surrounding setjobctl is job control (emulate); _PATH_TTY open is not in the list
+dash	src/jobs.c	220	tcgetpgrp	emulate	0	reads the tty foreground pgrp when enabling job control	
+dash	src/jobs.c	231	getpgrp	emulate	0	compares own pgrp with the tty foreground pgrp	
+dash	src/jobs.c	235	killpg	emulate	0	sends SIGTTIN to own group to stop while in the background	
+dash	src/jobs.c	249	setpgid	emulate	0	puts the shell into its own process group	
+dash	src/jobs.c	347	kill	emulate	0	`kill` builtin sends a signal to a pid or job pgrp	
+dash	src/jobs.c	348	strerror	direct	1	formats the kill failure message	
+dash	src/jobs.c	413	killpg	emulate	0	`fg`/`bg` send SIGCONT to the job's process group	
+dash	src/jobs.c	895	setpgid	emulate	0	child joins the job's process group	parent does the same at jobs.c:956
+dash	src/jobs.c	956	setpgid	emulate	0	parent puts the child into the job's process group	
+dash	src/jobs.c	982	fork	emulate	0	forks the shell for subshells, pipelines, background jobs, command substitution and the heredoc writer	the central X-1 site of dash
+dash	src/jobs.c	1002	vfork	restructure	60	vfork+exec of an external simple command	posix_spawn is possible: resolve path in parent (cmdentry idx), SETSIGDEF/SETPGROUP attrs, ENOEXEC->/bin/sh fallback, FORK_BG stdin=/dev/null, tcsetpgrp from parent; doubt direct vs restructure, picked harder
+dash	src/jobs.c	1060	raise	emulate	0	re-raises SIGINT in the shell when the foreground job died of SIGINT	
+dash	src/jobs.c	1209	wait3	emulate	0	reaps any child, incl. stopped ones (WUNTRACED), for the job table	without job control this is an event wait on child handles (restructure, ~100 lines)
+dash	src/jobs.c	1221	sigsuspend	emulate	0	blocks until SIGCHLD or a trapped signal arrives	SIGCHLD part is restructure (event loop over child handles); interruption of `wait` by trapped signals needs signal emulation
+dash	src/jobs.c	1550	tcsetpgrp	emulate	0	sets the tty foreground process group	
+dash	src/jobs.c	1554	strerror	direct	1	formats the tcsetpgrp failure message	
+dash	src/main.c	153	literal:/etc/profile	direct	10	login shell reads the system profile	read from a config-dir capability instead; rule said restructure; doubt: compat namespace may just provide /etc/profile; same as mrsh entry.c:127
+dash	src/miscbltin.c	138	isatty	direct	1	`read -p` prints the prompt only if stdin is a terminal	
+dash	src/miscbltin.c	226	umask	emulate	0	`umask` builtin reads the mask (set-and-restore)	
+dash	src/miscbltin.c	227	umask	emulate	0	restores the mask after reading it	
+dash	src/miscbltin.c	326	umask	emulate	0	`umask` builtin sets the new mask	
+dash	src/miscbltin.c	513	strerror	direct	1	formats the setrlimit failure message for `ulimit`	setrlimit itself is not in the feature list
+dash	src/options.c	143	isatty	direct	1	decides interactive mode if stdin and stderr are terminals	
+dash	src/redir.c	299	strerror	direct	1	formats the dup2 failure message	
+dash	src/redir.c	341	pipe	direct	2	creates a pipe (sh_pipe) for command substitution, heredocs and stdin buffering	coupled to forkshell (jobs.c:982) for cmd subst
+dash	src/redir.c	378	signal	direct	12	heredoc writer child ignores SIGINT	only reached if memfd_create fails (USE_MEMFD_CREATE=1) and doc > PIPESIZE; drop the fork fallback (temp-file handle); covers redir.c:378-384
+dash	src/redir.c	379	signal	direct	1	heredoc writer child ignores SIGQUIT	same change as redir.c:378
+dash	src/redir.c	380	signal	direct	1	heredoc writer child ignores SIGHUP	same change as redir.c:378
+dash	src/redir.c	382	signal	direct	1	heredoc writer child ignores SIGTSTP	same change as redir.c:378
+dash	src/redir.c	384	signal	direct	1	heredoc writer child restores default SIGPIPE	same change as redir.c:378
+dash	src/redir.c	479	strerror	direct	1	formats the F_DUPFD failure message	
+dash	src/system.h	53	sigemptyset	emulate	0	sigclearmask: empties the mask to unblock all signals	live path (HAVE_SIGSETMASK undefined); used by onint, waitproc, xtcsetpgrp
+dash	src/system.h	54	sigprocmask	emulate	0	sigclearmask: unblocks all signals	same as system.h:53
+dash	src/trap.c	255	sigaction	emulate	0	queries the inherited disposition to detect hard-ignored signals	
+dash	src/trap.c	288	sigfillset	emulate	0	fills the handler mask before installing it	
+dash	src/trap.c	289	sigaction	emulate	0	installs catch/ignore/default for traps and job-control signals; SIGCHLD always caught	
+dash	src/trap.c	301	signal	emulate	0	ignores a signal (e.g. SIGINT/SIGQUIT in background children)	
+dash	src/trap.c	475	sigfillset	emulate	0	sigblockall: builds the full mask	critical sections against async handlers
+dash	src/trap.c	476	sigprocmask	emulate	0	sigblockall: blocks all signals	
+dash	src/var.c	87	putenv	direct	5	exports an LC_*/LANG change into environ so setlocale sees it	replace by setlocale(category, value); children get env from dash's var table, not environ; doubt
+dash	src/var.c	88	setlocale	direct	1	re-reads the locale from the environment	same change as var.c:87; locale stays process-global (DM-097)
+dash	src/var.c	210	geteuid	direct	1	picks default PS1 '# ' for root	
+mrsh	builtin/cd.c	17	chdir	emulate	0	`cd` changes process cwd	
+mrsh	builtin/cd.c	19	strerror	direct	1	formats the chdir failure message	
+mrsh	builtin/cd.c	80	chdir	emulate	0	`cd -` changes to OLDPWD	
+mrsh	builtin/cd.c	81	strerror	direct	1	formats the chdir failure message	
+mrsh	builtin/command.c	73	fork	direct	10	`command` builtin forks and execs a resolved external command, then waits	no child setup at all (job control TODO); posix_spawn + wait on handle; M4 candidate
+mrsh	builtin/command.c	78	execv	direct	1	execs the resolved path in the `command` child	same change as command.c:73
+mrsh	builtin/dot.c	34	strerror	direct	1	formats the open failure message for `.`	
+mrsh	builtin/exec.c	25	access	direct	3	pre-checks the execute bit before `exec`	just try execv and map EACCES
+mrsh	builtin/exec.c	30	execv	emulate	0	`exec` builtin replaces the shell process image	
+mrsh	builtin/set.c	242	isatty	direct	1	decides interactive mode from the tty fd	
+mrsh	builtin/umask.c	20	umask	emulate	0	`umask` builtin reads the mask (set-and-restore)	
+mrsh	builtin/umask.c	21	umask	emulate	0	restores the mask after reading it	
+mrsh	builtin/umask.c	203	umask	emulate	0	`umask` builtin sets the new mask	
+mrsh	builtin/wait.c	87	waitpid	direct	5	`wait` builtin blocks on specific child pids	no WUNTRACED; needs a pid->handle in mrsh_process; children come from emulated fork; doubt
+mrsh	main.c	47	strerror	direct	1	formats the open failure message for the script file	
+mrsh	shell/entry.c	60	getuid	direct	1	picks default PS1 '# ' for root	
+mrsh	shell/entry.c	119	access	direct	3	checks that a profile file exists before sourcing it	open and ignore ENOENT instead
+mrsh	shell/entry.c	127	literal:/etc/profile	direct	10	login shell sources the system profile	config-dir capability instead; rule said restructure; same as dash main.c:153
+mrsh	shell/entry.c	129	getenv	direct	1	reads HOME from the process env for ~/.profile	could use mrsh_env_get
+mrsh	shell/entry.c	148	getenv	direct	1	reads ENV from the process env	
+mrsh	shell/entry.c	152	getegid	direct	1	skips $ENV for setuid/setgid shells	one-line change for all four ids on this line (delete the check: no setuid natively)
+mrsh	shell/entry.c	152	geteuid	direct	1	skips $ENV for setuid/setgid shells	same change as entry.c:152 getegid
+mrsh	shell/entry.c	152	getgid	direct	1	skips $ENV for setuid/setgid shells	same change as entry.c:152 getegid
+mrsh	shell/entry.c	152	getuid	direct	1	skips $ENV for setuid/setgid shells	same change as entry.c:152 getegid
+mrsh	shell/job.c	28	getpgrp	emulate	0	reads own pgrp when enabling job control	
+mrsh	shell/job.c	29	tcgetpgrp	emulate	0	checks whether the shell is the tty foreground pgrp	
+mrsh	shell/job.c	32	kill	emulate	0	sends SIGTTIN to own group to stop while in the background	
+mrsh	shell/job.c	41	getsid	emulate	0	checks whether the shell is a session leader	
+mrsh	shell/job.c	42	setpgid	emulate	0	puts the shell into its own process group	
+mrsh	shell/job.c	49	tcsetpgrp	emulate	0	grabs the tty for the shell's pgrp	
+mrsh	shell/job.c	54	tcgetattr	emulate	0	saves the shell's terminal modes for job-control restore	query itself is easy, but feeds per-job termios save/restore
+mrsh	shell/job.c	125	setpgid	emulate	0	puts a child into the job's process group	
+mrsh	shell/job.c	161	tcsetpgrp	emulate	0	puts a job's pgrp in the tty foreground	
+mrsh	shell/job.c	164	tcsetattr	emulate	0	restores the job's terminal modes on `fg`	
+mrsh	shell/job.c	171	tcsetpgrp	emulate	0	puts the shell's pgrp back in the tty foreground	
+mrsh	shell/job.c	174	tcgetattr	emulate	0	saves the job's terminal modes	
+mrsh	shell/job.c	176	tcsetattr	emulate	0	restores the shell's terminal modes	
+mrsh	shell/job.c	181	kill	emulate	0	sends SIGCONT to a stopped job's pgrp	
+mrsh	shell/job.c	236	waitpid	emulate	0	waits for a specific child, with WUNTRACED in the main shell	without WUNTRACED it would be a direct handle wait; stops need job-control emulation
+mrsh	shell/job.c	244	waitpid	n/a	0	'waitpid' matched inside the error-message string	false positive: string literal; the real call is job.c:236
+mrsh	shell/job.c	244	strerror	direct	1	formats the waitpid failure message	
+mrsh	shell/job.c	487	kill	emulate	0	sends SIGHUP to all job pgrps when the shell exits	
+mrsh	shell/path.c	44	strtok	direct	1	splits $PATH into directories	strtok_r; same change as path.c:62
+mrsh	shell/path.c	57	access	emulate	0	$PATH search: probes each candidate with access(X_OK/R_OK)	$PATH search in a shell
+mrsh	shell/path.c	62	strtok	direct	1	continues the $PATH split	same change as path.c:44
+mrsh	shell/path.c	75	getcwd	emulate	0	reads process cwd (PWD init, cd)	
+mrsh	shell/redir.c	36	strerror	direct	1	formats the heredoc write failure message	
+mrsh	shell/redir.c	42	pipe	direct	2	creates the pipe for a here-document	same change as redir.c:71
+mrsh	shell/redir.c	71	fork	direct	15	forks a writer child when the heredoc exceeds PIPE_BUF	replace by a memory/temp-file handle (like dash memfd); testable with a large heredoc; M4 candidate
+mrsh	shell/task/pipeline.c	50	pipe	direct	2	creates the pipe between pipeline elements	children come from pipeline.c:62 (emulate)
+mrsh	shell/task/pipeline.c	62	fork	emulate	0	forks each pipeline element to run an arbitrary shell command	
+mrsh	shell/task/pipeline.c	80	strerror	direct	1	formats the dup2 stdin failure message	
+mrsh	shell/task/pipeline.c	89	strerror	direct	1	formats the dup2 stdout failure message	
+mrsh	shell/task/simple_command.c	21	setenv	direct	10	child copies exported shell vars into environ before exec	build an envp array in the parent for spawn; same change as simple_command.c:55
+mrsh	shell/task/simple_command.c	55	fork	restructure	80	forks an external simple command: pgrp/foreground setup, env, redirections, execv	spawn needs redirections (process_redir) and env moved to the parent, pgrp via spawn attr, tcsetpgrp from parent; job-control calls themselves are emulate (job.c)
+mrsh	shell/task/simple_command.c	75	setenv	direct	1	child exports prefix assignments (VAR=x cmd) into environ	same change as simple_command.c:21
+mrsh	shell/task/simple_command.c	98	strerror	direct	1	formats the dup2 failure message in the child	
+mrsh	shell/task/simple_command.c	103	execv	restructure	1	execs the resolved command in the child	same change as simple_command.c:55
+mrsh	shell/task/simple_command.c	106	strerror	direct	1	formats the execv failure message	
+mrsh	shell/task/simple_command.c	138	strerror	direct	1	formats the dup failure message	
+mrsh	shell/task/simple_command.c	186	strerror	direct	1	formats the dup2 failure message	
+mrsh	shell/task/task.c	18	fork	emulate	0	forks a subshell for `( ... )`	
+mrsh	shell/task/task.c	29	literal:/dev/null	direct	2	subshell takes stdin from /dev/null when job control is off	null handle; lives inside the emulated fork child
+mrsh	shell/task/task.c	32	strerror	direct	1	formats the /dev/null open failure message	
+mrsh	shell/task/task.c	342	fork	emulate	0	forks a background `&` list	
+mrsh	shell/task/task.c	357	literal:/dev/null	direct	2	background job takes stdin from /dev/null	null handle; inside the emulated fork child
+mrsh	shell/task/task.c	360	strerror	direct	1	formats the /dev/null open failure message	
+mrsh	shell/task/word.c	92	pipe	direct	2	creates the pipe for command substitution output	children come from word.c:97 (emulate)
+mrsh	shell/task/word.c	97	fork	emulate	0	forks a command substitution `$(...)`	
+mrsh	shell/trap.c	37	sigaction	emulate	0	queries inherited disposition (ignored-on-entry rule for `trap`)	
+mrsh	shell/trap.c	71	sigaction	emulate	0	installs a `trap` action	
+mrsh	shell/trap.c	98	sigaction	emulate	0	ignores or restores job-control signals	
+mrsh	shell/word.c	45	getpwnam	emulate	0	looks up the home directory for `~user` expansion	
+tcc	libtcc.c	503	realpath	direct	8	canonicalizes two paths to compare files for #pragma once	compare file identity (st_dev/st_ino or handle identity) instead; rule said restructure
+tcc	libtcc.c	504	realpath	direct	1	canonicalizes the second path	same change as libtcc.c:503
+tcc	libtcc.c	506	realpath	n/a	0	frees the realpath result; 'realpath' matched in a comment	false positive: comment
+tcc	tcc.c	237	getenv	direct	1	reads C_INCLUDE_PATH into the system include dirs	rule said emulate ($PATH search) - wrong; env read is harmless, the dirs themselves are global paths (separate concern)
+tcc	tcc.c	241	getenv	direct	1	reads CPATH into the include dirs	same as tcc.c:237
+tcc	tcc.c	245	getenv	direct	1	reads LIBRARY_PATH into the library dirs	same as tcc.c:237
+tcc	tcc.c	284	gettimeofday	direct	2	wall clock for -bench timing	monotonic clock
+tcc	tccdbg.c	1135	getcwd	direct	3	records the compilation dir in debug info (-g)	pass the name in (option or PWD); only with -g
+tcc	tccdbg.c	2541	getcwd	direct	3	builds an absolute source path for -ftest-coverage records	only with -ftest-coverage
+tcc	tccelf.c	1741	getcwd	direct	3	builds the absolute .tcov output path	only with -ftest-coverage; also unlinks at that path
+tcc	tccelf.c	2831	strerror	direct	1	formats the output-file write failure message	
+tcc	tccpp.c	3381	time	direct	2	reads wall clock for __DATE__/__TIME__	SOURCE_DATE_EPOCH or a clock capability
+tcc	tccpp.c	3382	localtime	direct	1	converts the time for __DATE__/__TIME__	localtime_r; timezone comes from TZ / /etc/localtime (global path)
+tcc	tccrun.c	1354	sigemptyset	restructure	1	fault handler builds a mask with the caught signal	counted in tccrun.c:1377
+tcc	tccrun.c	1355	sigaddset	restructure	1	adds the caught signal to the mask	counted in tccrun.c:1377
+tcc	tccrun.c	1356	sigprocmask	restructure	1	unblocks the caught signal before unwinding to rt_exit	counted in tccrun.c:1377
+tcc	tccrun.c	1371	sigemptyset	restructure	1	clears the handler mask	counted in tccrun.c:1377
+tcc	tccrun.c	1377	sigaction	restructure	40	-run: catches SIGFPE to print a backtrace of JIT-ed code	synchronous fault, needs a native exception handler with register context and unwind; if none exists, emulate; only on the -run path
+tcc	tccrun.c	1378	sigaction	restructure	1	-run: catches SIGILL	same change as tccrun.c:1377
+tcc	tccrun.c	1379	sigaction	restructure	1	-run: catches SIGSEGV	same change as tccrun.c:1377
+tcc	tccrun.c	1380	sigaction	restructure	1	-run: catches SIGBUS	same change as tccrun.c:1377
+tcc	tccrun.c	1381	sigaction	restructure	1	-run: catches SIGABRT	same change as tccrun.c:1377

@@ -1,0 +1,241 @@
+program	file	line	api	class	effort_lines	what	note
+busybox	archival/bbunzip.c	116	isatty	direct	1	gzip/gunzip refuses to read compressed data from a terminal on stdin unless -f	query the stdin handle type
+busybox	archival/libarchive/open_transformer.c	73	wait	n/a	0	reaps transformer children (tar/rpm decompressor helpers)	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	editors/awk.c	2866	time	direct	0	awk strftime() uses the current time when no argument is given	correct use of wall clock (calendar time); no change
+busybox	editors/awk.c	2869	localtime	direct	2	awk strftime() converts time to local broken-down time	localtime_r; timezone still comes from global TZ / /etc/localtime
+busybox	editors/awk.c	3131	popen	direct	15	opens a pipe to `sh -c cmd` for awk `print | cmd`	musl popen is already posix_spawn-based; native: spawn sh with a pipe handle (helper shared with awk.c:3353/3504/3712). Needs a shell to exist
+busybox	editors/awk.c	3353	popen	direct	2	opens a pipe from `sh -c cmd` for awk `cmd | getline`	same helper as awk.c:3131
+busybox	editors/awk.c	3449	time	direct	1	srand() without argument seeds from wall-clock time	any clock/entropy source
+busybox	editors/awk.c	3456	time	direct	0	awk systime() returns current epoch seconds	correct use of wall clock; no change
+busybox	editors/awk.c	3504	pclose	direct	3	close() of an awk pipe stream waits for the child	pclose -> wait on process handle; same helper as awk.c:3131
+busybox	editors/awk.c	3712	pclose	direct	2	at exit awk closes all pipe streams and waits for their children	same helper as awk.c:3131
+busybox	editors/awk.c	3731	setlocale	n/a	0	would reset LC_NUMERIC to C	compiled out: ENABLE_LOCALE_SUPPORT=0, setlocale not in the binary's symbols
+busybox	editors/awk.c	3853	literal:/dev/stdin	n/a	0	registers the name /dev/stdin in awk's stream table bound to the existing stdin FILE	string used as a lookup key, never opened as a path
+busybox	editors/awk.c	3854	literal:/dev/stdout	n/a	0	registers the name /dev/stdout bound to the existing stdout FILE	string key, never opened; same as awk.c:3853
+busybox	editors/awk.c	3855	literal:/dev/stderr	n/a	0	registers the name /dev/stderr bound to the existing stderr FILE	string key, never opened; same as awk.c:3853
+busybox	editors/awk.c	3879	strerror	direct	1	reports a read error on an input file	strerror_r / message table
+busybox	editors/diff.c	726	literal:/dev/null	direct	2	diff -N opens /dev/null in place of a missing file	null/empty handle
+busybox	editors/diff.c	733	literal:/tmp/difXXXXXX	direct	3	diff copies non-seekable input into a /tmp temp file	temp-dir capability or anonymous temp file; same change as xfuncs_printf.c:286
+busybox	editors/diff.c	1001	literal:/dev/null	direct	2	diff -N stats /dev/null in place of a missing file	zero-filled stat struct
+busybox	libbb/appletlib.c	257	setlocale	n/a	0	would set the locale from the environment at applet start	compiled out: ENABLE_LOCALE_SUPPORT=0, setlocale not in the binary's symbols
+busybox	libbb/bb_getgroups.c	25	getgroups	emulate	0	reads supplementary groups for the executable-bit test during ash PATH search (test_exec)	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it; uid/gid model of the compat layer; same feature as ash PATH search
+busybox	libbb/bb_getgroups.c	37	getgroups	emulate	0	asks the kernel for the group count when the buffer was too small	same site as bb_getgroups.c:25
+busybox	libbb/parse_mode.c	133	umask	emulate	0	reads the umask (set to 0, then restore) to resolve a symbolic mode without who-list	only caller in this build is the ash umask builtin (ash.c:14725); sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	libbb/parse_mode.c	134	umask	emulate	0	restores the umask after reading it	same site as parse_mode.c:133
+busybox	libbb/perror_msg.c	17	strerror	direct	1	formats an errno message for error output	strerror_r / message table
+busybox	libbb/perror_msg.c	27	strerror	direct	1	formats an errno message before dying	strerror_r / message table
+busybox	libbb/poll_with_signals.c	37	sigfillset	emulate	0	blocks all signals to test the got-signal flag and ppoll atomically	used by ash `read` builtin (shell_common.c:220) so `read` is interrupted by trapped signals; sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	libbb/poll_with_signals.c	45	ppoll	emulate	0	ppoll with the original mask, wakes on a signal or input	same site as poll_with_signals.c:37; without async signals this is a plain wait with deadline, but trap semantics need emulation
+busybox	libbb/safe_poll.c	17	poll	direct	1	poll loop retrying EINTR, used by nonblock_immune_read to wait for input on an O_NONBLOCK fd	single-handle readiness wait; trivial
+busybox	libbb/signals.c	24	sigaction	emulate	0	thin sigaction wrapper; only live caller is ash setsignal (trap handling)	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	libbb/signals.c	34	sigprocmask	emulate	0	thin sigprocmask wrapper used by ash signal paths and check_got_signal_and_poll	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	libbb/signals.c	40	sigfillset	emulate	0	unblocks all signals (ash raise_interrupt, exception path)	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	libbb/signals.c	51	sigfillset	emulate	0	fills a mask to block all signals (ash vforkexec, waitproc, tcsetpgrp)	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	libbb/signals.c	52	sigprocmask	emulate	0	blocks all signals, saving the old mask	same site as signals.c:51
+busybox	libbb/signals.c	64	signal	n/a	0	installs one handler for a bitmask of signals	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: restructure 15
+busybox	libbb/signals.c	95	sigemptyset	n/a	0	builds a one-signal mask to block it	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/signals.c	96	sigaddset	n/a	0	builds a one-signal mask to block it	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/signals.c	103	sigemptyset	n/a	0	builds a one-signal mask to unblock it	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/signals.c	104	sigaddset	n/a	0	builds a one-signal mask to unblock it	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/signals.c	111	sigemptyset	n/a	0	empties the mask before sigsuspend	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: restructure
+busybox	libbb/signals.c	112	sigsuspend	n/a	0	sleeps until any signal arrives	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: restructure 15
+busybox	libbb/signals.c	118	signal	n/a	0	resets a signal to default before re-raising it	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 3
+busybox	libbb/signals.c	120	raise	n/a	0	re-raises a signal to die by it	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 3
+busybox	libbb/time.c	145	localtime	n/a	0	date parsing fills in local time fields (date/touch -d)	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 2
+busybox	libbb/time.c	282	time	n/a	0	gets current time for strftime formatting	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 0
+busybox	libbb/time.c	285	localtime	n/a	0	formats local time with strftime	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 2
+busybox	libbb/time.c	358	time	n/a	0	monotonic_sec fallback returns wall-clock seconds	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/xfuncs.c	208	getenv	n/a	0	reads LINES/COLUMNS from the environment	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 2
+busybox	libbb/xfuncs.c	231	isatty	n/a	0	checks stdout is a tty before querying window size	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/xfuncs.c	234	isatty	n/a	0	checks stderr is a tty before querying window size	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/xfuncs.c	237	isatty	n/a	0	checks stdin is a tty before querying window size	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/xfuncs.c	240	literal:/dev/tty	n/a	0	opens /dev/tty to query window size	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate (controlling terminal)
+busybox	libbb/xfuncs.c	247	ioctl	n/a	0	TIOCGWINSZ window size query	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs.c	267	getenv	n/a	0	checks TERM=dumb	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 2
+busybox	libbb/xfuncs.c	273	tcsetattr	n/a	0	tcsetattr on stdin wrapper	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate (termios)
+busybox	libbb/xfuncs.c	282	tcgetattr	n/a	0	gets termios before making the tty raw	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate (termios)
+busybox	libbb/xfuncs.c	349	tcsetattr	n/a	0	sets the tty raw	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate (termios)
+busybox	libbb/xfuncs.c	357	waitpid	n/a	0	waitpid wrapper retrying EINTR	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs_printf.c	113	mmap	n/a	0	maps a file read-only	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs_printf.c	118	mmap	n/a	0	anonymous mmap allocation	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 2
+busybox	libbb/xfuncs_printf.c	190	geteuid	n/a	0	saves euid before opening a file as another uid	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	191	getegid	n/a	0	saves egid before opening a file as another gid	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	212	rename	n/a	0	rename or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 0
+busybox	libbb/xfuncs_printf.c	218	rename	n/a	0	rename with warning	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 0
+busybox	libbb/xfuncs_printf.c	226	pipe	n/a	0	pipe or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 3
+busybox	libbb/xfuncs_printf.c	286	mkstemp	direct	3	mkstemp-or-die wrapper; only live caller is diff.c:734	temp-dir capability; same change as diff.c:733
+busybox	libbb/xfuncs_printf.c	370	setenv	n/a	0	setenv or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	400	unsetenv	n/a	0	unsetenv wrapper	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	415	setgid	n/a	0	setgid or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	421	setuid	n/a	0	setuid or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	426	setegid	n/a	0	setegid or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	431	seteuid	n/a	0	seteuid or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	436	chdir	n/a	0	chdir with warning	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	450	fchdir	n/a	0	fchdir or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	456	chroot	n/a	0	chroot or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: emulate
+busybox	libbb/xfuncs_printf.c	571	ioctl	n/a	0	ioctl or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs_printf.c	574	strerror	n/a	0	error message for failed ioctl	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/xfuncs_printf.c	585	ioctl	n/a	0	ioctl with perror	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs_printf.c	589	strerror	n/a	0	error message for failed ioctl	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 1
+busybox	libbb/xfuncs_printf.c	619	ioctl	n/a	0	ioctl with warning	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs_printf.c	628	ioctl	n/a	0	ioctl or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 5
+busybox	libbb/xfuncs_printf.c	682	literal:/dev/urandom	n/a	0	reads /dev/urandom for a UUID	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: direct 2 (entropy handle)
+busybox	libbb/xfuncs_printf.c	721	fork	n/a	0	fork or die	not linked: function discarded by --gc-sections (its DWARF line entries sit at addresses below .text start, the extractor kept them); if live: restructure 40
+busybox	libbb/xfuncs_printf.c	778	gettimeofday	direct	1	gettimeofday used as the monotonic_ms() clock (no clock_gettime configured)	DM-065: wall clock used for durations; use a monotonic clock. Callers: ash read -t timeouts
+busybox	shell/ash.c	763	signal	emulate	0	on SIGINT in a non-interactive shell, resets SIGINT to default before re-raising it	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it; POSIX requires the shell to die by SIGINT so the parent sees WIFSIGNALED
+busybox	shell/ash.c	764	raise	emulate	0	re-raises SIGINT to die by it	same site as ash.c:763; exit(130) would lose WIFSIGNALED semantics
+busybox	shell/ash.c	1629	strerror	direct	1	maps errno to a message for shell error output	strerror_r / message table
+busybox	shell/ash.c	3000	getcwd	emulate	0	gets the current directory for PWD / cd / pwd	shell cwd semantics; sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	3639	signal	emulate	0	sets a signal to SIG_IGN (trap '' / background jobs / heredoc child)	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	3753	sigaction	emulate	0	setsignal: queries the inherited disposition, then installs the trap/default handler	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it; X-3
+busybox	shell/ash.c	3793	sigfillset	emulate	0	fills sa_mask for the handler setsignal installs	same site as ash.c:3753
+busybox	shell/ash.c	4346	waitpid	emulate	0	waitpid(-1) reaps any child for the job table	shell job status; sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	4366	sigsuspend	emulate	0	sigsuspend until SIGCHLD or a trapped signal arrives	SIGCHLD-driven wait loop of the shell; same feature as ash.c:4346
+busybox	shell/ash.c	5526	fork	emulate	0	forks for subshells, pipeline stages, command substitution, background jobs, large heredocs	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it; X-2
+busybox	shell/ash.c	5562	signal	direct	15	forked heredoc writer (doc > PIPE_BUF) ignores SIGINT	replacing the writer child with an anonymous temp file (or a writer thread) removes the fork and ash.c:5562-5566; 15 lines for write2pipe
+busybox	shell/ash.c	5563	signal	direct	0	forked heredoc writer ignores SIGQUIT	same change as ash.c:5562
+busybox	shell/ash.c	5564	signal	direct	0	forked heredoc writer ignores SIGHUP	same change as ash.c:5562
+busybox	shell/ash.c	5565	signal	direct	0	forked heredoc writer ignores SIGTSTP	same change as ash.c:5562
+busybox	shell/ash.c	5566	signal	direct	0	forked heredoc writer restores SIGPIPE default so it dies if the reader exits	same change as ash.c:5562
+busybox	shell/ash.c	5583	pipe	direct	2	pipe that carries a heredoc to the command	part of the write2pipe change (ash.c:5562)
+busybox	shell/ash.c	5601	pipe	direct	2	pipe that carries a here-string to the command	part of the write2pipe change (ash.c:5562)
+busybox	shell/ash.c	6182	execve	emulate	0	execve of a command, from a vforked child or the `exec` builtin; ENOEXEC reruns as a script	exec-in-place for the `exec` builtin is POSIX shell semantics; in the vfork path it folds into spawn (ash.c:6278)
+busybox	shell/ash.c	6278	vfork	direct	40	vfork + forkchild + shellexec for foreground external commands	posix_spawn with default signals and a PATH loop over candidates; redirections already applied in the parent; ASH_JOB_CONTROL is off so no pgrp work. Doubt: forkchild state could push this to restructure
+busybox	shell/ash.c	6815	getpwnam	emulate	0	~user tilde expansion looks up the passwd entry	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	6884	pipe	emulate	0	pipe for $(...) command substitution output, read by the parent of a forkshell child	function is evalbackcmd (ctags misattributed to evaltreenr); coupled with forkshell ash.c:5526
+busybox	shell/ash.c	10089	pipe	emulate	0	pipe between pipeline stages, each started via forkshell	coupled with forkshell ash.c:5526
+busybox	shell/ash.c	10528	chdir	emulate	0	cd builtin changes the process cwd	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	14691	umask	emulate	0	umask builtin reads the umask (set 0, restore)	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	14692	umask	emulate	0	umask builtin restores the umask after reading	same site as ash.c:14691
+busybox	shell/ash.c	14731	umask	emulate	0	umask builtin sets the new umask	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it
+busybox	shell/ash.c	14942	isatty	direct	1	decides interactive mode when stdin and stdout are ttys	query handle type
+busybox	shell/ash.c	14984	signal	emulate	0	interactive shell resets SIGHUP to default	sh applet (ash) is compiled in by the default CONFIG_SH_IS_ASH but no T2 workload runs it; inherited signal disposition
+busybox	shell/ash.c	15093	literal:/etc/profile	emulate	0	login shell reads /etc/profile	POSIX login-shell convention; native could pass a profile handle (~5 lines). Doubt
+busybox	shell/shell_common.c	146	poll	direct	1	read -t 0: polls one fd with zero timeout to test for input	readiness query on one handle
+busybox	shell/shell_common.c	151	isatty	direct	1	read -p prints the prompt only when input is a tty	query handle type
+busybox	shell/shell_common.c	162	tcgetattr	emulate	0	read -n/-s gets the termios state to switch off ICANON/ECHO	termios semantics; doubt: with a native console-mode API this is direct ~5
+busybox	shell/shell_common.c	181	tcsetattr	emulate	0	read -n/-s sets non-canonical / no-echo mode	same site as shell_common.c:162
+busybox	shell/shell_common.c	338	tcsetattr	emulate	0	read restores the saved termios state	same site as shell_common.c:162
+gmake	lib/findprog-in.c	148	eaccess	emulate	0	checks X_OK on a PATH candidate while looking up a recipe command run without a shell	PATH search + effective-uid permission check; same compat feature as shell PATH search. Native spawn-by-name would make it direct
+gmake	lib/findprog-in.c	300	eaccess	emulate	0	checks X_OK on a PATH candidate (second lookup loop)	same site as findprog-in.c:148
+gmake	lib/fnmatch.c	273	getenv	direct	2	fnmatch reads POSIXLY_CORRECT	explicit configuration
+gmake	lib/glob.c	531	getenv	direct	2	glob reads HOME for ~ expansion	explicit configuration
+gmake	lib/glob.c	561	getlogin	emulate	0	glob ~ with HOME unset falls back to the login name	user database
+gmake	lib/glob.c	561	getlogin	emulate	0	same getlogin call as glob.c:561 (non-reentrant)	same site as glob.c:561; reentrancy alone is direct (getlogin_r)
+gmake	lib/glob.c	591	getpwnam	emulate	0	glob ~ looks up the home directory in passwd	user database
+gmake	lib/glob.c	675	getpwnam	emulate	0	glob ~user looks up the passwd entry	user database
+gmake	lib/glob.c	1213	readdir	direct	0	reads directory entries from a private DIR stream	DM-060 not a hazard here: stream is not shared; no change
+gmake	src/commands.c	530	signal	restructure	30	fatal-signal handler: resets disposition, forwards SIGTERM to children, deletes targets, re-raises	handlers installed via the FATAL_SIG macro (main.c:1263, not a row: macro body). Native: termination event handled in the main wait loop; couples with posixos.c:484
+gmake	src/commands.c	544	kill	direct	3	on SIGTERM forwards SIGTERM to each running child	terminate child via its handle; doubt: children that catch SIGTERM need it delivered as a signal
+gmake	src/commands.c	600	kill	direct	3	re-raises the fatal signal to die by it	exit(128+sig); parent loses WIFSIGNALED
+gmake	src/dir.c	733	readdir	direct	0	reads directory entries into make's directory cache	DM-060 not a hazard: private stream; no change
+gmake	src/dir.c	737	strerror	direct	1	error message for readdir failure	strerror_r
+gmake	src/file.c	965	clock_gettime	direct	0	current time (REALTIME) for comparison with file mtimes	correct use of wall clock; no change
+gmake	src/file.c	977	gettimeofday	direct	0	gettimeofday fallback for the current time	same as file.c:965; no change
+gmake	src/file.c	989	time	direct	0	time() fallback for the current time	same as file.c:965; no change
+gmake	src/file.c	1005	localtime	direct	2	formats a file timestamp in local time for debug output	localtime_r
+gmake	src/function.c	1904	pipe	direct	3	pipe that captures $(shell ...) output; child started via child_execute_job (posix_spawn)	pass pipe handle at spawn
+gmake	src/function.c	1906	strerror	direct	1	error message for pipe failure	strerror_r
+gmake	src/function.c	2288	realpath	emulate	0	$(realpath ...) resolves a name against cwd and symlinks	make language feature that returns absolute paths
+gmake	src/function.c	2358	strerror	direct	1	$(file) open error message	strerror_r
+gmake	src/function.c	2371	strerror	direct	1	$(file) write error message	strerror_r
+gmake	src/function.c	2374	strerror	direct	1	$(file) close error message	strerror_r
+gmake	src/function.c	2408	strerror	direct	1	$(file <) open error message	strerror_r
+gmake	src/function.c	2422	strerror	direct	1	$(file <) read error message	strerror_r
+gmake	src/function.c	2427	strerror	direct	1	$(file <) close error message	strerror_r
+gmake	src/getopt.c	390	getenv	direct	2	getopt reads POSIXLY_CORRECT	explicit configuration
+gmake	src/job.c	477	sigprocmask	direct	1	blocks fatal signals while the children list is changed	deletable once fatal signals are not asynchronous (commands.c:530)
+gmake	src/job.c	483	sigprocmask	direct	1	unblocks fatal signals after the children list change	same as job.c:477
+gmake	src/job.c	490	sigemptyset	direct	1	empties the mask in unblock_all_sigs	function compiled but its only caller (job.c:2349) is in the !USE_POSIX_SPAWN branch; effectively dead
+gmake	src/job.c	491	sigprocmask	direct	1	unblocks all signals in unblock_all_sigs	same as job.c:490; effectively dead
+gmake	src/job.c	762	wait	direct	15	reap_children blocks in wait() for any child	wait-any over the handles in the children list plus shell_function_pid; the WNOHANG path uses the WAIT_NOHANG macro (waitpid, not a row). Couples with the SIGCHLD restructure (posixos.c:484)
+gmake	src/job.c	939	strerror	direct	1	explains exit 127 after posix_spawn (command not found)	strerror_r
+gmake	src/job.c	941	strerror	direct	1	explains exit 127 after posix_spawn (EACCES)	strerror_r
+gmake	src/job.c	943	strerror	direct	1	explains exit 127 after posix_spawn (ENOEXEC)	strerror_r
+gmake	src/job.c	2130	strerror	direct	1	debug message when /proc/loadavg cannot be read	strerror_r. Note: load_too_high opens /proc/loadavg via the LOADAVG macro (job.c:2075), missed by the literal scan; only with -l
+gmake	src/job.c	2157	time	direct	1	seconds counter for the job-start backlog in load_too_high	DM-065: duration from wall clock, use monotonic; only with -l
+gmake	src/job.c	2385	sigemptyset	direct	4	empty signal mask for posix_spawnattr_setsigmask	native spawn has no inherited mask; delete the block
+gmake	src/job.c	2452	posix_spawn	direct	0	posix_spawn of a recipe command with dup2 file actions for stdin/stdout/stderr	already posix_spawn (USE_POSIX_SPAWN=1); vfork branch (job.c:2340) is compiled out. Maps 1:1 to a spawn-from-handles primitive
+gmake	src/job.c	2473	posix_spawn	direct	0	ENOEXEC fallback: posix_spawn of default_shell with the script as argument	already posix_spawn; default_shell is the global path /bin/sh
+gmake	src/job.c	2501	strerror	direct	1	error message when spawn fails	strerror_r
+gmake	src/job.c	2606	execvp	direct	10	exec_command: execvp make itself in place after remaking makefiles	only live caller is main.c:2817 (re-exec, no fork). Replace by spawn + wait + exit(status), as the __EMX__ branch at main.c:2789 already does; pid changes, jobserver fds must be inherited
+gmake	src/job.c	2631	getenv	direct	2	reads SHELL for the ENOEXEC fallback of the re-exec	explicit configuration
+gmake	src/job.c	2672	execvp	direct	0	ENOEXEC fallback: execvp of the shell with the script	same change as job.c:2606
+gmake	src/job.c	2674	strerror	direct	1	error message when exec of the shell fails	strerror_r
+gmake	src/job.c	2686	strerror	direct	1	error message when exec fails	strerror_r
+gmake	src/main.c	1245	setlocale	direct	1	sets the locale from the environment	ENABLE_NLS undefined, so only ctype/collation effects; pass locale explicitly or drop
+gmake	src/main.c	1252	sigemptyset	restructure	0	initialises the fatal-signal set	counted at commands.c:530
+gmake	src/main.c	1307	bsd_signal	direct	1	resets an inherited SIGCHLD ignore so wait works	delete
+gmake	src/main.c	1412	getcwd	emulate	0	records the cwd for CURDIR and -C bookkeeping	CURDIR is make language semantics; per-process cwd
+gmake	src/main.c	1666	isatty	direct	1	exports MAKE_TERMOUT when stdout is a tty	query handle type; the exported value comes from ttyname() via the TTYNAME macro (not a row) and is a /dev path
+gmake	src/main.c	1673	isatty	direct	1	exports MAKE_TERMERR when stderr is a tty	same as main.c:1666
+gmake	src/main.c	1789	chdir	emulate	0	-C dir changes the process cwd before reading makefiles	all make file access is cwd-relative; avoiding needs dir-handle-relative opens everywhere (restructure, hundreds of lines). Same compat feature as shell cd
+gmake	src/main.c	1813	getcwd	emulate	0	re-reads the cwd after -C	same as main.c:1412
+gmake	src/main.c	2002	bsd_signal	restructure	0	installs the SIGCHLD handler that counts dead children and wakes the jobserver wait	counted at posixos.c:484
+gmake	src/main.c	2013	sigemptyset	restructure	0	builds the SIGCHLD block mask	counted at posixos.c:484
+gmake	src/main.c	2014	sigaddset	restructure	0	adds SIGCHLD to the block mask	counted at posixos.c:484
+gmake	src/main.c	2015	sigprocmask	restructure	0	blocks SIGCHLD everywhere except inside pselect	counted at posixos.c:484
+gmake	src/main.c	2016	sigprocmask	n/a	0	error message string naming sigprocmask	false positive: the match is inside a string literal of pfatal_with_name
+gmake	src/main.c	2025	bsd_signal	direct	3	SIGUSR1 handler toggles debug output at runtime	drop the optional feature or map it to a control channel; doubt: keeping it needs async notification
+gmake	src/main.c	2458	strerror	direct	1	error message for makefiles that could not be remade	strerror_r
+gmake	src/main.c	2710	chdir	emulate	0	chdir back to the original directory before re-exec	same cwd model as main.c:1789
+gmake	src/main.c	2773	putenv	direct	5	putenv MAKE_RESTARTS before re-exec	add the entry to the envp passed to spawn (main.c:2817)
+gmake	src/main.c	3747	time	direct	0	date stamp for -p database output	correct use of wall clock; no change
+gmake	src/main.c	3751	ctime	direct	2	formats the -p date stamp	ctime_r / strftime
+gmake	src/main.c	3760	time	direct	0	date stamp at end of -p output	correct use of wall clock; no change
+gmake	src/main.c	3761	ctime	direct	2	formats the end-of-database date stamp	ctime_r / strftime
+gmake	src/main.c	3864	chdir	emulate	0	chdir back to the original directory in die()	same cwd model as main.c:1789
+gmake	src/misc.c	97	time	direct	1	seeds make's RNG (--shuffle) from time and pid	any entropy/clock source
+gmake	src/misc.c	598	getenv	direct	2	reads MAKE_TMPDIR / TMPDIR for the temp directory	temp-dir capability
+gmake	src/misc.c	699	umask	direct	2	sets umask 0077 around temp-file creation	mkstemp already creates mode 0600; drop the umask pair (with misc.c:734)
+gmake	src/misc.c	705	mkstemp	direct	3	creates a named temp file in the temp dir	temp-dir capability
+gmake	src/misc.c	734	umask	direct	0	restores the umask after temp-file creation	same change as misc.c:699
+gmake	src/output.c	513	strerror	direct	1	perror_with_name message	strerror_r
+gmake	src/output.c	522	strerror	direct	1	pfatal_with_name message	strerror_r
+gmake	src/posixos.c	195	pipe	direct	5	creates the jobserver token pipe shared with sub-makes	fds are advertised by number in MAKEFLAGS (--jobserver-auth=R,W); compat must keep fd numbers across spawn, or use the fifo: style. Doubt
+gmake	src/posixos.c	465	sigemptyset	restructure	0	empty mask so pselect unblocks SIGCHLD while waiting	counted at posixos.c:484
+gmake	src/posixos.c	484	pselect	restructure	60	pselect waits for a jobserver token with SIGCHLD atomically unblocked, so a child exit interrupts the wait	core of the SIGCHLD-driven job loop: becomes one wait over {jobserver pipe, child handles}; covers main.c:2002-2016, posixos.c:465, job.c:762
+gmake	src/posixos.c	732	fcntl-lock	direct	10	takes a byte-range lock on a shared temp file to serialise --output-sync output across sub-makes	needs a cross-process mutex handle inherited by sub-makes; sub-makes find the file by path (--sync-mutex=fnm:...) in the temp dir
+gmake	src/posixos.c	754	fcntl-lock	direct	2	releases the --output-sync lock	same change as posixos.c:732
+gmake	src/posixos.c	774	pipe	direct	3	makes a broken-pipe read end used as stdin for parallel jobs	pass a closed/null handle as stdin at spawn
+gmake	src/posixos.c	878	umask	direct	2	sets umask 0077 around tmpfile()	drop the umask pair (with posixos.c:886); anonymous temp from capability
+gmake	src/posixos.c	880	tmpfile	direct	3	creates an anonymous temp file in the default temp dir	temp-dir capability
+gmake	src/posixos.c	883	strerror	direct	1	tmpfile error message	strerror_r
+gmake	src/posixos.c	886	umask	direct	0	restores the umask after tmpfile()	same change as posixos.c:878
+gmake	src/posixos.c	890	strerror	direct	1	dup error message	strerror_r
+gmake	src/read.c	360	strerror	direct	1	error message for an included makefile that failed	strerror_r
+gmake	src/read.c	3109	getenv	direct	2	tilde_expand reads HOME	explicit configuration
+gmake	src/read.c	3114	getlogin	emulate	0	tilde_expand with HOME unset falls back to the login name	user database
+gmake	src/read.c	3114	getlogin	emulate	0	same getlogin call as read.c:3114 (non-reentrant)	same site as read.c:3114; reentrancy alone is direct (getlogin_r)
+gmake	src/read.c	3118	getpwnam	emulate	0	looks up the login user's home directory	user database
+gmake	src/read.c	3139	getpwnam	emulate	0	~user looks up the passwd entry	user database
+gmake	src/remake.c	1635	lstat	direct	2	-L/--check-symlink-times walks the symlink chain for the newest mtime	only with -L; if the native FS has no symlinks this collapses to stat
+gmake	src/remake.c	1655	readlink	direct	0	reads each symlink in the chain for -L	same change as remake.c:1635
+pdpmake	input.c	870	popen	direct	10	runs `sh -c cmd` via popen for `!=` / $(shell) and reads its output	musl popen is already posix_spawn-based; native: spawn sh with a pipe handle
+pdpmake	input.c	883	pclose	direct	2	closes the command pipe and waits for the child	wait on process handle; same change as input.c:870
+pdpmake	input.c	979	getenv	direct	2	reads PDPMAKE_PRAGMAS from the environment	explicit configuration
+pdpmake	input.c	1429	setenv	direct	3	exports PDPMAKE_POSIXLY_CORRECT when a makefile declares .POSIX	env is the channel to sub-makes; with system() replaced by spawn with an explicit envp (make.c:103) this is an entry in that array
+pdpmake	main.c	107	chdir	emulate	0	-C dir changes the process cwd	all file access is cwd-relative; same compat feature as gmake main.c:1789
+pdpmake	main.c	108	strerror	direct	1	error message for -C failure	strerror_r
+pdpmake	main.c	206	getenv	direct	2	reads MAKEFLAGS from the environment	explicit configuration
+pdpmake	main.c	417	setenv	direct	3	exports command-line macros to the environment for commands	entry in the explicit envp of the spawn (make.c:103)
+pdpmake	main.c	424	setenv	direct	3	exports MAKEFLAGS to the environment for sub-makes	entry in the explicit envp of the spawn (make.c:103)
+pdpmake	main.c	432	signal	restructure	20	HUP/TERM handler resets disposition, removes the current target, re-raises	async termination cleanup; native: termination event checked around the blocking command wait. Doubt: system() blocks inside libc
+pdpmake	main.c	434	kill	direct	3	re-raises the signal to die by it	exit(128+sig); parent loses WIFSIGNALED
+pdpmake	main.c	442	sigemptyset	restructure	0	empties the handler mask	counted at main.c:432
+pdpmake	main.c	446	sigaction	restructure	0	queries the inherited disposition (keep SIG_IGN)	counted at main.c:432
+pdpmake	main.c	448	sigaction	restructure	0	installs make_handler for HUP/TERM	counted at main.c:432
+pdpmake	main.c	501	setenv	direct	3	exports PDPMAKE_POSIXLY_CORRECT for --posix	entry in the explicit envp of the spawn (make.c:103)
+pdpmake	main.c	504	getenv	direct	2	reads PDPMAKE_POSIXLY_CORRECT	explicit configuration
+pdpmake	main.c	514	realpath	emulate	0	realpath(argv[0]) to set MAKE to an absolute path	resolves against cwd; path semantics of the compat layer
+pdpmake	main.c	516	strerror	direct	1	error message when argv[0] cannot be resolved	strerror_r
+pdpmake	main.c	570	literal:/bin/sh	direct	3	sets the SHELL macro to /bin/sh	POSIX-required default; native: shell handle/capability. The shell actually used is system()'s own /bin/sh
+pdpmake	main.c	580	getcwd	emulate	0	gets the cwd for the CURDIR macro	CURDIR is make language semantics; per-process cwd
+pdpmake	main.c	583	getenv	direct	2	reads CURDIR from the environment	explicit configuration
+pdpmake	main.c	585	setenv	direct	3	exports CURDIR to the environment	entry in the explicit envp of the spawn (make.c:103)
+pdpmake	main.c	618	strerror	direct	1	error message when a makefile cannot be opened	strerror_r
+pdpmake	make.c	38	strerror	direct	1	warning when touch fails	strerror_r
+pdpmake	make.c	103	system	direct	12	runs each recipe line with system() (`sh -c`), waits for it	spawn /bin/sh -c with an explicit envp + wait on handle; musl system() is already posix_spawn-based. Also gives the envp array used by the setenv sites
+pdpmake	make.c	484	clock_gettime	direct	0	stamps a rebuilt target with current time when it has no file	correct use of wall clock (compared with mtimes); no change
+pdpmake	modtime.c	164	strerror	direct	1	error message when a file cannot be opened	strerror_r
+pdpmake	target.c	329	setenv	direct	3	exports PDPMAKE_PRAGMAS to the environment for sub-makes	entry in the explicit envp of the spawn (make.c:103)
