@@ -3,15 +3,15 @@ brk,W2 gmake -j2 pipe,90,90,
 chdir,W2 gmake -j2 pipe,4,4,
 clock_gettime,W2 gmake -j2 pipe,3,3,
 clone,W2 gmake -j2 pipe,40,40,kind=vfork(80)
-close,W2 gmake -j2 pipe,1346,1346,
-dup3,W2 gmake -j2 pipe,0,18,
+close,W2 gmake -j2 pipe,1346,1346.5,
+dup3,W2 gmake -j2 pipe,0,18.5,
 execve,W2 gmake -j2 pipe,43,43,
 exit_group,W2 gmake -j2 pipe,41,41,
 faccessat2,W2 gmake -j2 pipe,40,40,
-fcntl,W2 gmake -j2 pipe,103,142,F_SETFD(182);F_GETFD(62);F_GETFL(20);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(12);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(6);F_SETFL O_RDONLY|O_LARGEFILE(2)
+fcntl,W2 gmake -j2 pipe,103,142.5,F_SETFD(183);F_GETFD(62);F_GETFL(20);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(12);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(6);F_SETFL O_RDONLY|O_LARGEFILE(2)
 fstat,W2 gmake -j2 pipe,12,12,
 getcwd,W2 gmake -j2 pipe,4,4,
-getdents64,W2 gmake -j2 pipe,107,98,
+getdents64,W2 gmake -j2 pipe,107,99.5,
 geteuid,W2 gmake -j2 pipe,3,3,
 getpid,W2 gmake -j2 pipe,2,2,
 getppid,W2 gmake -j2 pipe,2,2,
@@ -22,11 +22,11 @@ mmap,W2 gmake -j2 pipe,2003,2021,
 mprotect,W2 gmake -j2 pipe,85,85,
 mremap,W2 gmake -j2 pipe,5,5,
 munmap,W2 gmake -j2 pipe,1870,1887,
-newfstatat,W2 gmake -j2 pipe,299,290,
-openat,W2 gmake -j2 pipe,1910,1907,
+newfstatat,W2 gmake -j2 pipe,299,291.5,
+openat,W2 gmake -j2 pipe,1910,1907.5,
 pipe2,W2 gmake -j2 pipe,40,42,flags=O_CLOEXEC(80);flags=0(4)
-pselect6,W2 gmake -j2 pipe,0,66.5,fds=[3];timeout=NULL;sigmask=[](133);result=ready(67);intr=ERESTARTNOHAND(66);result=?(66)
-read,W2 gmake -j2 pipe,4174,4209.5,?(192);token(10)
+pselect6,W2 gmake -j2 pipe,0,67,fds=[3];timeout=NULL;sigmask=[](134);result=ready(68);intr=ERESTARTNOHAND(66);result=?(66)
+read,W2 gmake -j2 pipe,4174,4210,token(70)
 readv,W2 gmake -j2 pipe,33,33,
 rt_sigaction,W2 gmake -j2 pipe,825,825,SIGCHLD:SIG_DFL+SA_RESTART(88);SIGINT:query(84);SIGQUIT:query(84);SIGTERM:query(84);SIGHUP:SIG_DFL+SA_RESTART(82);SIGINT:SIG_DFL+SA_RESTART(82);SIGQUIT:SIG_DFL+SA_RESTART(82);SIGUSR1:SIG_DFL+SA_RESTART(82);SIGPIPE:SIG_DFL+SA_RESTART(82);SIGTERM:SIG_DFL+SA_RESTART(82)
 rt_sigprocmask,W2 gmake -j2 pipe,288,288,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_BLOCK ~[](82);SIG_SETMASK [](82);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](80);SIG_UNBLOCK [RT_1 RT_2](10);SIG_SETMASK [CHLD](6)
@@ -34,8 +34,8 @@ rt_sigreturn,W2 gmake -j2 pipe,0,33,intr=EINTR(66)
 set_tid_address,W2 gmake -j2 pipe,43,43,
 umask,W2 gmake -j2 pipe,2,2,
 unlinkat,W2 gmake -j2 pipe,37,37,path=lapi.o(2);path=lcode.o(2);path=lctype.o(2);path=ldebug.o(2);path=ldo.o(2);path=ldump.o(2);path=lfunc.o(2);path=lgc.o(2);path=llex.o(2);path=lmem.o(2)
-wait4,W2 gmake -j2 pipe,40,145.5,pid=-1;opts=WNOHANG(19)
-write,W2 gmake -j2 pipe,0,34.5,token(11)
+wait4,W2 gmake -j2 pipe,40,146,pid=-1;opts=WNOHANG(278);pid=-1;opts=0(14)
+write,W2 gmake -j2 pipe,0,35,token(70)
 writev,W2 gmake -j2 pipe,296,296,
 brk,W2 gmake -j2 fifo,90,90,
 chdir,W2 gmake -j2 fifo,4,4,
@@ -64,8 +64,8 @@ munmap,W2 gmake -j2 fifo,1870,1862,
 newfstatat,W2 gmake -j2 fifo,299,290,
 openat,W2 gmake -j2 fifo,1910,1913,jobserver-fifo O_WRONLY|O_LARGEFILE(6);jobserver-fifo O_RDONLY|O_LARGEFILE(4);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2)
 pipe2,W2 gmake -j2 fifo,40,41,flags=O_CLOEXEC(80);flags=0(2)
-pselect6,W2 gmake -j2 fifo,0,66.5,fds=[3];timeout=NULL;sigmask=[](133);result=ready(67);intr=ERESTARTNOHAND(66);result=?(66)
-read,W2 gmake -j2 fifo,4174,4209.5,?(188);token(9)
+pselect6,W2 gmake -j2 fifo,0,67,fds=[3];timeout=NULL;sigmask=[](134);result=ready(68);intr=ERESTARTNOHAND(66);result=?(66)
+read,W2 gmake -j2 fifo,4174,4210,token(70)
 readv,W2 gmake -j2 fifo,33,33,
 rt_sigaction,W2 gmake -j2 fifo,825,825,SIGCHLD:SIG_DFL+SA_RESTART(88);SIGINT:query(84);SIGQUIT:query(84);SIGTERM:query(84);SIGHUP:SIG_DFL+SA_RESTART(82);SIGINT:SIG_DFL+SA_RESTART(82);SIGQUIT:SIG_DFL+SA_RESTART(82);SIGUSR1:SIG_DFL+SA_RESTART(82);SIGPIPE:SIG_DFL+SA_RESTART(82);SIGTERM:SIG_DFL+SA_RESTART(82)
 rt_sigprocmask,W2 gmake -j2 fifo,288,288,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_BLOCK ~[](82);SIG_SETMASK [](82);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](80);SIG_UNBLOCK [RT_1 RT_2](10);SIG_SETMASK [CHLD](6)
@@ -73,8 +73,8 @@ rt_sigreturn,W2 gmake -j2 fifo,0,33,intr=EINTR(66)
 set_tid_address,W2 gmake -j2 fifo,43,43,
 umask,W2 gmake -j2 fifo,2,2,
 unlinkat,W2 gmake -j2 fifo,37,38,path=lapi.o(2);path=lcode.o(2);path=lctype.o(2);path=ldebug.o(2);path=ldo.o(2);path=ldump.o(2);path=lfunc.o(2);path=lgc.o(2);path=llex.o(2);path=lmem.o(2)
-wait4,W2 gmake -j2 fifo,40,145.5,pid=-1;opts=WNOHANG(16)
-write,W2 gmake -j2 fifo,0,34.5,token(5)
+wait4,W2 gmake -j2 fifo,40,146,pid=-1;opts=WNOHANG(278);pid=-1;opts=0(14)
+write,W2 gmake -j2 fifo,0,35,token(70)
 writev,W2 gmake -j2 fifo,296,296,
 brk,W2 pdpmake -j2,162,162,
 chdir,W2 pdpmake -j2,1,1,
@@ -97,65 +97,65 @@ munmap,W2 pdpmake -j2,1621,1649,
 newfstatat,W2 pdpmake -j2,610,610,
 openat,W2 pdpmake -j2,1880,1880,
 pipe2,W2 pdpmake -j2,40,40,flags=O_CLOEXEC(80)
-read,W2 pdpmake -j2,4174,4174,?(1426)
+read,W2 pdpmake -j2,4174,4174,
 readv,W2 pdpmake -j2,33,33,
 rt_sigaction,W2 pdpmake -j2,692,692,SIGQUIT:SIG_DFL(240);SIGTERM:query(166);SIGINT:SIG_DFL(160);SIGTERM:SIG_DFL(160);SIGHUP:query(86);SIGINT:SIG_IGN(80);SIGQUIT:SIG_IGN(80);SIGHUP:SIG_DFL(80);SIGCHLD:handler(80);SIGINT:query(80)
 rt_sigprocmask,W2 pdpmake -j2,243,243,SIG_SETMASK [](160);SIG_UNBLOCK [RT_1 RT_2](86);SIG_BLOCK [CHLD](80);SIG_BLOCK ~[](80);SIG_SETMASK [CHLD](80)
 set_tid_address,W2 pdpmake -j2,80,80,
 unlinkat,W2 pdpmake -j2,37,37,path=lapi.o(2);path=lcode.o(2);path=lctype.o(2);path=ldebug.o(2);path=ldo.o(2);path=ldump.o(2);path=lfunc.o(2);path=lgc.o(2);path=llex.o(2);path=lmem.o(2)
-wait4,W2 pdpmake -j2,40,40,
+wait4,W2 pdpmake -j2,40,40,pid=>0;opts=0(80)
 writev,W2 pdpmake -j2,292,292,
 brk,W2 gmake -j4 pipe,90,90,
 chdir,W2 gmake -j4 pipe,4,4,
 clock_gettime,W2 gmake -j4 pipe,3,3,
 clone,W2 gmake -j4 pipe,40,40,kind=vfork(80)
-close,W2 gmake -j4 pipe,1346,1341.5,
+close,W2 gmake -j4 pipe,1346,1342,
 dup3,W2 gmake -j4 pipe,0,27,
 execve,W2 gmake -j4 pipe,43,43,
 exit_group,W2 gmake -j4 pipe,41,41,
 faccessat2,W2 gmake -j4 pipe,40,40,
-fcntl,W2 gmake -j4 pipe,103,137.5,F_SETFD(173);F_GETFD(62);F_GETFL(20);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(12);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(6);F_SETFL O_RDONLY|O_LARGEFILE(2)
+fcntl,W2 gmake -j4 pipe,103,138,F_SETFD(174);F_GETFD(62);F_GETFL(20);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(12);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(6);F_SETFL O_RDONLY|O_LARGEFILE(2)
 fstat,W2 gmake -j4 pipe,12,12,
 getcwd,W2 gmake -j4 pipe,4,4,
-getdents64,W2 gmake -j4 pipe,107,84.5,
+getdents64,W2 gmake -j4 pipe,107,86,
 geteuid,W2 gmake -j4 pipe,3,3,
 getpid,W2 gmake -j4 pipe,2,2,
 getppid,W2 gmake -j4 pipe,2,2,
 getuid,W2 gmake -j4 pipe,1,1,
 ioctl,W2 gmake -j4 pipe,44,44,req=TIOCGWINSZ(88)
 lseek,W2 gmake -j4 pipe,808,808,
-mmap,W2 gmake -j4 pipe,2003,2026,
+mmap,W2 gmake -j4 pipe,2003,2016.5,
 mprotect,W2 gmake -j4 pipe,85,85,
 mremap,W2 gmake -j4 pipe,5,5,
-munmap,W2 gmake -j4 pipe,1870,1892,
-newfstatat,W2 gmake -j4 pipe,299,276.5,
-openat,W2 gmake -j4 pipe,1910,1902.5,
+munmap,W2 gmake -j4 pipe,1870,1882.5,
+newfstatat,W2 gmake -j4 pipe,299,278,
+openat,W2 gmake -j4 pipe,1910,1903,
 pipe2,W2 gmake -j4 pipe,40,42,flags=O_CLOEXEC(80);flags=0(4)
-pselect6,W2 gmake -j4 pipe,0,55.5,fds=[3];timeout=NULL;sigmask=[](111);result=ready(70);intr=ERESTARTNOHAND(41);result=?(41)
-read,W2 gmake -j4 pipe,4174,4213,?(195);token(6)
+pselect6,W2 gmake -j4 pipe,0,56.5,fds=[3];timeout=NULL;sigmask=[](113);result=ready(70);intr=ERESTARTNOHAND(43);result=?(43)
+read,W2 gmake -j4 pipe,4174,4213,token(76)
 readv,W2 gmake -j4 pipe,33,33,
 rt_sigaction,W2 gmake -j4 pipe,825,825,SIGCHLD:SIG_DFL+SA_RESTART(88);SIGINT:query(84);SIGQUIT:query(84);SIGTERM:query(84);SIGHUP:SIG_DFL+SA_RESTART(82);SIGINT:SIG_DFL+SA_RESTART(82);SIGQUIT:SIG_DFL+SA_RESTART(82);SIGUSR1:SIG_DFL+SA_RESTART(82);SIGPIPE:SIG_DFL+SA_RESTART(82);SIGTERM:SIG_DFL+SA_RESTART(82)
 rt_sigprocmask,W2 gmake -j4 pipe,288,288,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_BLOCK ~[](82);SIG_SETMASK [](82);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](80);SIG_UNBLOCK [RT_1 RT_2](10);SIG_SETMASK [CHLD](6)
-rt_sigreturn,W2 gmake -j4 pipe,0,20.5,intr=EINTR(41)
+rt_sigreturn,W2 gmake -j4 pipe,0,21.5,intr=EINTR(43)
 set_tid_address,W2 gmake -j4 pipe,43,43,
 umask,W2 gmake -j4 pipe,2,2,
 unlinkat,W2 gmake -j4 pipe,37,37,path=lctype.o(2);path=lapi.o(2);path=lcode.o(2);path=ldebug.o(2);path=ldump.o(2);path=ldo.o(2);path=lfunc.o(2);path=lgc.o(2);path=lmem.o(2);path=llex.o(2)
-wait4,W2 gmake -j4 pipe,40,134.5,
-write,W2 gmake -j4 pipe,0,38,token(6)
+wait4,W2 gmake -j4 pipe,40,135.5,pid=-1;opts=WNOHANG(255);pid=-1;opts=0(16)
+write,W2 gmake -j4 pipe,0,38,token(76)
 writev,W2 gmake -j4 pipe,296,296,
 brk,W2 gmake -j4 fifo,90,90,
 chdir,W2 gmake -j4 fifo,4,4,
 clock_gettime,W2 gmake -j4 fifo,3,3,
 clone,W2 gmake -j4 fifo,40,40,kind=vfork(80)
-close,W2 gmake -j4 fifo,1346,1342,
+close,W2 gmake -j4 fifo,1346,1342.5,
 dup3,W2 gmake -j4 fifo,0,27,
 execve,W2 gmake -j4 fifo,43,43,
 exit_group,W2 gmake -j4 fifo,41,41,
 faccessat2,W2 gmake -j4 fifo,40,40,
-fcntl,W2 gmake -j4 fifo,103,118,F_SETFD(158);F_GETFD(38);F_GETFL(20);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(12);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(6);F_SETFL O_RDONLY|O_LARGEFILE(2)
+fcntl,W2 gmake -j4 fifo,103,118.5,F_SETFD(159);F_GETFD(38);F_GETFL(20);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(12);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(6);F_SETFL O_RDONLY|O_LARGEFILE(2)
 fstat,W2 gmake -j4 fifo,12,12,
 getcwd,W2 gmake -j4 fifo,4,4,
-getdents64,W2 gmake -j4 fifo,107,86,
+getdents64,W2 gmake -j4 fifo,107,87.5,
 geteuid,W2 gmake -j4 fifo,3,3,
 getpid,W2 gmake -j4 fifo,2,3,
 getppid,W2 gmake -j4 fifo,2,2,
@@ -167,20 +167,20 @@ mmap,W2 gmake -j4 fifo,2003,2011,
 mprotect,W2 gmake -j4 fifo,85,85,
 mremap,W2 gmake -j4 fifo,5,5,
 munmap,W2 gmake -j4 fifo,1870,1877,
-newfstatat,W2 gmake -j4 fifo,299,278,
-openat,W2 gmake -j4 fifo,1910,1909,jobserver-fifo O_WRONLY|O_LARGEFILE(6);jobserver-fifo O_RDONLY|O_LARGEFILE(4);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2)
+newfstatat,W2 gmake -j4 fifo,299,279.5,
+openat,W2 gmake -j4 fifo,1910,1909.5,jobserver-fifo O_WRONLY|O_LARGEFILE(6);jobserver-fifo O_RDONLY|O_LARGEFILE(4);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2)
 pipe2,W2 gmake -j4 fifo,40,41,flags=O_CLOEXEC(80);flags=0(2)
-pselect6,W2 gmake -j4 fifo,0,55,fds=[3];timeout=NULL;sigmask=[](110);result=ready(70);intr=ERESTARTNOHAND(40);result=?(40)
-read,W2 gmake -j4 fifo,4174,4213,?(194);token(6)
+pselect6,W2 gmake -j4 fifo,0,55.5,fds=[3];timeout=NULL;sigmask=[](111);result=ready(70);intr=ERESTARTNOHAND(41);result=?(41)
+read,W2 gmake -j4 fifo,4174,4213,token(76)
 readv,W2 gmake -j4 fifo,33,33,
 rt_sigaction,W2 gmake -j4 fifo,825,825,SIGCHLD:SIG_DFL+SA_RESTART(88);SIGINT:query(84);SIGQUIT:query(84);SIGTERM:query(84);SIGHUP:SIG_DFL+SA_RESTART(82);SIGINT:SIG_DFL+SA_RESTART(82);SIGQUIT:SIG_DFL+SA_RESTART(82);SIGUSR1:SIG_DFL+SA_RESTART(82);SIGPIPE:SIG_DFL+SA_RESTART(82);SIGTERM:SIG_DFL+SA_RESTART(82)
 rt_sigprocmask,W2 gmake -j4 fifo,288,288,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](158);SIG_BLOCK ~[](82);SIG_SETMASK [](82);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](80);SIG_UNBLOCK [RT_1 RT_2](10);SIG_SETMASK [CHLD](6)
-rt_sigreturn,W2 gmake -j4 fifo,0,20,intr=EINTR(40)
+rt_sigreturn,W2 gmake -j4 fifo,0,20.5,intr=EINTR(41)
 set_tid_address,W2 gmake -j4 fifo,43,43,
 umask,W2 gmake -j4 fifo,2,2,
 unlinkat,W2 gmake -j4 fifo,37,38,path=lctype.o(2);path=lapi.o(2);path=lcode.o(2);path=ldebug.o(2);path=ldump.o(2);path=ldo.o(2);path=lfunc.o(2);path=lgc.o(2);path=lmem.o(2);path=llex.o(2)
-wait4,W2 gmake -j4 fifo,40,134,
-write,W2 gmake -j4 fifo,0,38,token(6)
+wait4,W2 gmake -j4 fifo,40,134.5,pid=-1;opts=WNOHANG(253);pid=-1;opts=0(16)
+write,W2 gmake -j4 fifo,0,38,token(76)
 writev,W2 gmake -j4 fifo,296,296,
 brk,W2 pdpmake -j4,162,162,
 chdir,W2 pdpmake -j4,1,1,
@@ -203,13 +203,13 @@ munmap,W2 pdpmake -j4,1621,1649,
 newfstatat,W2 pdpmake -j4,610,610,
 openat,W2 pdpmake -j4,1880,1880,
 pipe2,W2 pdpmake -j4,40,40,flags=O_CLOEXEC(80)
-read,W2 pdpmake -j4,4174,4174,?(1426)
+read,W2 pdpmake -j4,4174,4174,
 readv,W2 pdpmake -j4,33,33,
 rt_sigaction,W2 pdpmake -j4,692,692,SIGQUIT:SIG_DFL(240);SIGTERM:query(166);SIGINT:SIG_DFL(160);SIGTERM:SIG_DFL(160);SIGHUP:query(86);SIGINT:SIG_IGN(80);SIGQUIT:SIG_IGN(80);SIGHUP:SIG_DFL(80);SIGCHLD:handler(80);SIGINT:query(80)
 rt_sigprocmask,W2 pdpmake -j4,243,243,SIG_SETMASK [](160);SIG_UNBLOCK [RT_1 RT_2](86);SIG_BLOCK [CHLD](80);SIG_BLOCK ~[](80);SIG_SETMASK [CHLD](80)
 set_tid_address,W2 pdpmake -j4,80,80,
 unlinkat,W2 pdpmake -j4,37,37,path=lapi.o(2);path=lcode.o(2);path=lctype.o(2);path=ldebug.o(2);path=ldo.o(2);path=ldump.o(2);path=lfunc.o(2);path=lgc.o(2);path=llex.o(2);path=lmem.o(2)
-wait4,W2 pdpmake -j4,40,40,
+wait4,W2 pdpmake -j4,40,40,pid=>0;opts=0(80)
 writev,W2 pdpmake -j4,292,292,
 brk,W3 gmake -j2 pipe,10,10,
 chdir,W3 gmake -j2 pipe,1,1,
@@ -234,12 +234,12 @@ newfstatat,W3 gmake -j2 pipe,22,19,
 openat,W3 gmake -j2 pipe,374,373,
 pipe2,W3 gmake -j2 pipe,3,5,flags=O_CLOEXEC(6);flags=0(4)
 pselect6,W3 gmake -j2 pipe,0,1,fds=[3];timeout=NULL;sigmask=[](2);result=ready(2)
-read,W3 gmake -j2 pipe,1844,1847,?(145);token(2)
+read,W3 gmake -j2 pipe,1844,1847,token(4)
 rt_sigaction,W3 gmake -j2 pipe,64,64,SIGCHLD:SIG_DFL+SA_RESTART(8);SIGHUP:query(6);SIGHUP:SIG_DFL+SA_RESTART(6);SIGINT:query(6);SIGINT:SIG_DFL+SA_RESTART(6);SIGQUIT:query(6);SIGQUIT:SIG_DFL+SA_RESTART(6);SIGUSR1:query(6);SIGUSR1:SIG_DFL+SA_RESTART(6);SIGPIPE:query(6)
 rt_sigprocmask,W3 gmake -j2 pipe,23,23,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_BLOCK ~[](6);SIG_SETMASK [](6);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](6);SIG_UNBLOCK [RT_1 RT_2](2);SIG_SETMASK [CHLD](2)
 set_tid_address,W3 gmake -j2 pipe,4,4,
 unlinkat,W3 gmake -j2 pipe,3,3,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2)
-wait4,W3 gmake -j2 pipe,3,6,pid=-1;opts=WNOHANG(2)
+wait4,W3 gmake -j2 pipe,3,6,pid=-1;opts=WNOHANG(6);pid=-1;opts=0(6)
 write,W3 gmake -j2 pipe,0,2,token(4)
 writev,W3 gmake -j2 pipe,37,37,
 brk,W3 gmake -j2 fifo,10,10,
@@ -267,13 +267,13 @@ newfstatat,W3 gmake -j2 fifo,22,19,
 openat,W3 gmake -j2 fifo,374,375,jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2);jobserver-fifo O_WRONLY|O_LARGEFILE(2)
 pipe2,W3 gmake -j2 fifo,3,4,flags=O_CLOEXEC(6);flags=0(2)
 pselect6,W3 gmake -j2 fifo,0,1,fds=[3];timeout=NULL;sigmask=[](2);result=ready(2)
-read,W3 gmake -j2 fifo,1844,1847,?(142);token(2)
+read,W3 gmake -j2 fifo,1844,1847,token(4)
 rt_sigaction,W3 gmake -j2 fifo,64,64,SIGCHLD:SIG_DFL+SA_RESTART(8);SIGHUP:query(6);SIGHUP:SIG_DFL+SA_RESTART(6);SIGINT:query(6);SIGINT:SIG_DFL+SA_RESTART(6);SIGQUIT:query(6);SIGQUIT:SIG_DFL+SA_RESTART(6);SIGUSR1:query(6);SIGUSR1:SIG_DFL+SA_RESTART(6);SIGPIPE:query(6)
 rt_sigprocmask,W3 gmake -j2 fifo,23,23,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_BLOCK ~[](6);SIG_SETMASK [](6);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](6);SIG_UNBLOCK [RT_1 RT_2](2);SIG_SETMASK [CHLD](2)
 set_tid_address,W3 gmake -j2 fifo,4,4,
 unlinkat,W3 gmake -j2 fifo,3,4,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2);path=GMfifo?????(2)
-wait4,W3 gmake -j2 fifo,3,6,pid=-1;opts=WNOHANG(1)
-write,W3 gmake -j2 fifo,0,2,token(2)
+wait4,W3 gmake -j2 fifo,3,6,pid=-1;opts=WNOHANG(6);pid=-1;opts=0(6)
+write,W3 gmake -j2 fifo,0,2,token(4)
 writev,W3 gmake -j2 fifo,37,37,
 brk,W3 pdpmake -j2,15,15,
 clock_gettime,W3 pdpmake -j2,1,1,
@@ -295,12 +295,12 @@ munmap,W3 pdpmake -j2,588,588,
 newfstatat,W3 pdpmake -j2,29,29,
 openat,W3 pdpmake -j2,374,374,
 pipe2,W3 pdpmake -j2,3,3,flags=O_CLOEXEC(6)
-read,W3 pdpmake -j2,1844,1844,?(140)
+read,W3 pdpmake -j2,1844,1844,
 rt_sigaction,W3 pdpmake -j2,55,55,SIGQUIT:SIG_DFL(18);SIGTERM:query(14);SIGINT:SIG_DFL(12);SIGTERM:SIG_DFL(12);SIGHUP:query(8);SIGINT:SIG_IGN(6);SIGQUIT:SIG_IGN(6);SIGHUP:SIG_DFL(6);SIGCHLD:handler(6);SIGINT:query(6)
 rt_sigprocmask,W3 pdpmake -j2,19,19,SIG_SETMASK [](12);SIG_UNBLOCK [RT_1 RT_2](8);SIG_BLOCK [CHLD](6);SIG_BLOCK ~[](6);SIG_SETMASK [CHLD](6)
 set_tid_address,W3 pdpmake -j2,7,7,
 unlinkat,W3 pdpmake -j2,3,3,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2)
-wait4,W3 pdpmake -j2,3,3,
+wait4,W3 pdpmake -j2,3,3,pid=>0;opts=0(6)
 writev,W3 pdpmake -j2,37,37,
 brk,W3 gmake -j4 pipe,10,10,
 chdir,W3 gmake -j4 pipe,1,1,
@@ -325,13 +325,13 @@ newfstatat,W3 gmake -j4 pipe,22,19,
 openat,W3 gmake -j4 pipe,374,373,
 pipe2,W3 gmake -j4 pipe,3,5,flags=O_CLOEXEC(6);flags=0(4)
 pselect6,W3 gmake -j4 pipe,0,1,fds=[3];timeout=NULL;sigmask=[](2);result=ready(2)
-read,W3 gmake -j4 pipe,1844,1849,?(142);token(6)
+read,W3 gmake -j4 pipe,1844,1849,token(8)
 rt_sigaction,W3 gmake -j4 pipe,64,64,SIGCHLD:SIG_DFL+SA_RESTART(8);SIGHUP:query(6);SIGHUP:SIG_DFL+SA_RESTART(6);SIGINT:query(6);SIGINT:SIG_DFL+SA_RESTART(6);SIGQUIT:query(6);SIGQUIT:SIG_DFL+SA_RESTART(6);SIGUSR1:query(6);SIGUSR1:SIG_DFL+SA_RESTART(6);SIGPIPE:query(6)
 rt_sigprocmask,W3 gmake -j4 pipe,23,23,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_BLOCK ~[](6);SIG_SETMASK [](6);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](6);SIG_UNBLOCK [RT_1 RT_2](2);SIG_SETMASK [CHLD](2)
 set_tid_address,W3 gmake -j4 pipe,4,4,
 unlinkat,W3 gmake -j4 pipe,3,3,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2)
-wait4,W3 gmake -j4 pipe,3,6,
-write,W3 gmake -j4 pipe,0,4,token(6)
+wait4,W3 gmake -j4 pipe,3,6,pid=-1;opts=WNOHANG(6);pid=-1;opts=0(6)
+write,W3 gmake -j4 pipe,0,4,token(8)
 writev,W3 gmake -j4 pipe,37,37,
 brk,W3 gmake -j4 fifo,10,10,
 chdir,W3 gmake -j4 fifo,1,1,
@@ -358,13 +358,13 @@ newfstatat,W3 gmake -j4 fifo,22,19,
 openat,W3 gmake -j4 fifo,374,375,jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2);jobserver-fifo O_WRONLY|O_LARGEFILE(2)
 pipe2,W3 gmake -j4 fifo,3,4,flags=O_CLOEXEC(6);flags=0(2)
 pselect6,W3 gmake -j4 fifo,0,1,fds=[3];timeout=NULL;sigmask=[](2);result=ready(2)
-read,W3 gmake -j4 fifo,1844,1849,?(143);token(6)
+read,W3 gmake -j4 fifo,1844,1849,token(8)
 rt_sigaction,W3 gmake -j4 fifo,64,64,SIGCHLD:SIG_DFL+SA_RESTART(8);SIGHUP:query(6);SIGHUP:SIG_DFL+SA_RESTART(6);SIGINT:query(6);SIGINT:SIG_DFL+SA_RESTART(6);SIGQUIT:query(6);SIGQUIT:SIG_DFL+SA_RESTART(6);SIGUSR1:query(6);SIGUSR1:SIG_DFL+SA_RESTART(6);SIGPIPE:query(6)
 rt_sigprocmask,W3 gmake -j4 fifo,23,23,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](12);SIG_BLOCK ~[](6);SIG_SETMASK [](6);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](6);SIG_UNBLOCK [RT_1 RT_2](2);SIG_SETMASK [CHLD](2)
 set_tid_address,W3 gmake -j4 fifo,4,4,
-unlinkat,W3 gmake -j4 fifo,3,4,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2);path=GMfifo?????(2)
-wait4,W3 gmake -j4 fifo,3,6,pid=-1;opts=WNOHANG(2)
-write,W3 gmake -j4 fifo,0,4,token(7)
+unlinkat,W3 gmake -j4 fifo,3,4,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2);path=GMfifo???(1);path=GMfifo????(1)
+wait4,W3 gmake -j4 fifo,3,6,pid=-1;opts=WNOHANG(6);pid=-1;opts=0(6)
+write,W3 gmake -j4 fifo,0,4,token(8)
 writev,W3 gmake -j4 fifo,37,37,
 brk,W3 pdpmake -j4,15,15,
 clock_gettime,W3 pdpmake -j4,1,1,
@@ -386,12 +386,12 @@ munmap,W3 pdpmake -j4,588,588,
 newfstatat,W3 pdpmake -j4,29,29,
 openat,W3 pdpmake -j4,374,374,
 pipe2,W3 pdpmake -j4,3,3,flags=O_CLOEXEC(6)
-read,W3 pdpmake -j4,1844,1844,?(141)
+read,W3 pdpmake -j4,1844,1844,
 rt_sigaction,W3 pdpmake -j4,55,55,SIGQUIT:SIG_DFL(18);SIGTERM:query(14);SIGINT:SIG_DFL(12);SIGTERM:SIG_DFL(12);SIGHUP:query(8);SIGINT:SIG_IGN(6);SIGQUIT:SIG_IGN(6);SIGHUP:SIG_DFL(6);SIGCHLD:handler(6);SIGINT:query(6)
 rt_sigprocmask,W3 pdpmake -j4,19,19,SIG_SETMASK [](12);SIG_UNBLOCK [RT_1 RT_2](8);SIG_BLOCK [CHLD](6);SIG_BLOCK ~[](6);SIG_SETMASK [CHLD](6)
 set_tid_address,W3 pdpmake -j4,7,7,
 unlinkat,W3 pdpmake -j4,3,3,path=shell.o(2);path=sqlite?.o(2);path=sqlite?(2)
-wait4,W3 pdpmake -j4,3,3,
+wait4,W3 pdpmake -j4,3,3,pid=>0;opts=0(6)
 writev,W3 pdpmake -j4,37,37,
 brk,W8 gmake -j2 pipe,229,229,
 chdir,W8 gmake -j2 pipe,13,13,
@@ -418,15 +418,15 @@ newfstatat,W8 gmake -j2 pipe,423,339,
 openat,W8 gmake -j2 pipe,354,326,
 pipe2,W8 gmake -j2 pipe,78,80,flags=O_CLOEXEC(156);flags=0(4)
 pselect6,W8 gmake -j2 pipe,0,67,fds=[3];timeout=NULL;sigmask=[](134);intr=ERESTARTNOHAND(132);result=?(132);result=ready(2)
-read,W8 gmake -j2 pipe,644,647,?(40);token(2)
+read,W8 gmake -j2 pipe,644,647,token(4)
 readv,W8 gmake -j2 pipe,36,36,
 rt_sigaction,W8 gmake -j2 pipe,1698,1698,SIGINT:query(220);SIGQUIT:query(220);SIGTERM:query(220);SIGCHLD:SIG_DFL+SA_RESTART(170);SIGHUP:query(156);SIGHUP:SIG_DFL+SA_RESTART(156);SIGINT:SIG_DFL+SA_RESTART(156);SIGQUIT:SIG_DFL+SA_RESTART(156);SIGUSR1:query(156);SIGUSR1:SIG_DFL+SA_RESTART(156)
 rt_sigprocmask,W8 gmake -j2 pipe,592,592,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_BLOCK ~[](156);SIG_SETMASK [](156);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](156);SIG_UNBLOCK [RT_1 RT_2](78);SIG_SETMASK [CHLD](14)
 rt_sigreturn,W8 gmake -j2 pipe,0,66,intr=EINTR(132)
 set_tid_address,W8 gmake -j2 pipe,111,111,
 unlinkat,W8 gmake -j2 pipe,40,40,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8)
-wait4,W8 gmake -j2 pipe,78,218.5,pid=-1;opts=WNOHANG(50)
-write,W8 gmake -j2 pipe,0,2,token(3)
+wait4,W8 gmake -j2 pipe,78,218,pid=-1;opts=WNOHANG(406);pid=-1;opts=0(30)
+write,W8 gmake -j2 pipe,0,2,token(4)
 writev,W8 gmake -j2 pipe,1554,1554,
 brk,W8 gmake -j2 fifo,229,229,
 chdir,W8 gmake -j2 fifo,13,13,
@@ -454,14 +454,14 @@ newfstatat,W8 gmake -j2 fifo,423,339,
 openat,W8 gmake -j2 fifo,354,340,jobserver-fifo O_WRONLY|O_LARGEFILE(14);jobserver-fifo O_RDONLY|O_LARGEFILE(12);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2)
 pipe2,W8 gmake -j2 fifo,78,79,flags=O_CLOEXEC(156);flags=0(2)
 pselect6,W8 gmake -j2 fifo,0,67,fds=[3];timeout=NULL;sigmask=[](134);intr=ERESTARTNOHAND(132);result=?(132);result=ready(2)
-read,W8 gmake -j2 fifo,644,647,?(21);token(2)
+read,W8 gmake -j2 fifo,644,647,token(4)
 readv,W8 gmake -j2 fifo,36,36,
 rt_sigaction,W8 gmake -j2 fifo,1698,1698,SIGINT:query(220);SIGQUIT:query(220);SIGTERM:query(220);SIGCHLD:SIG_DFL+SA_RESTART(170);SIGHUP:query(156);SIGHUP:SIG_DFL+SA_RESTART(156);SIGINT:SIG_DFL+SA_RESTART(156);SIGQUIT:SIG_DFL+SA_RESTART(156);SIGUSR1:query(156);SIGUSR1:SIG_DFL+SA_RESTART(156)
 rt_sigprocmask,W8 gmake -j2 fifo,592,592,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_BLOCK ~[](156);SIG_SETMASK [](156);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](156);SIG_UNBLOCK [RT_1 RT_2](78);SIG_SETMASK [CHLD](14)
 rt_sigreturn,W8 gmake -j2 fifo,0,66,intr=EINTR(132)
 set_tid_address,W8 gmake -j2 fifo,111,111,
-unlinkat,W8 gmake -j2 fifo,40,41,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8);path=GMfifo???(1);path=GMfifo????(1)
-wait4,W8 gmake -j2 fifo,78,218,pid=-1;opts=WNOHANG(17)
+unlinkat,W8 gmake -j2 fifo,40,41,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8);path=GMfifo????(1);path=GMfifo?????(1)
+wait4,W8 gmake -j2 fifo,78,218,pid=-1;opts=WNOHANG(406);pid=-1;opts=0(30)
 write,W8 gmake -j2 fifo,0,2,token(4)
 writev,W8 gmake -j2 fifo,1554,1554,
 brk,W8 pdpmake -j2,314,314,
@@ -485,20 +485,20 @@ munmap,W8 pdpmake -j2,579,579,
 newfstatat,W8 pdpmake -j2,616,616,
 openat,W8 pdpmake -j2,325,325,
 pipe2,W8 pdpmake -j2,78,78,flags=O_CLOEXEC(156)
-read,W8 pdpmake -j2,644,644,?(338)
+read,W8 pdpmake -j2,644,644,
 readv,W8 pdpmake -j2,36,36,
 rt_sigaction,W8 pdpmake -j2,1354,1354,SIGQUIT:SIG_DFL(468);SIGTERM:query(326);SIGINT:SIG_DFL(312);SIGTERM:SIG_DFL(312);SIGHUP:query(170);SIGINT:SIG_IGN(156);SIGQUIT:SIG_IGN(156);SIGHUP:SIG_DFL(156);SIGCHLD:handler(156);SIGINT:query(156)
 rt_sigprocmask,W8 pdpmake -j2,475,475,SIG_SETMASK [](312);SIG_UNBLOCK [RT_1 RT_2](170);SIG_BLOCK [CHLD](156);SIG_BLOCK ~[](156);SIG_SETMASK [CHLD](156)
 set_tid_address,W8 pdpmake -j2,157,157,
 unlinkat,W8 pdpmake -j2,40,40,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8)
-wait4,W8 pdpmake -j2,78,78,
+wait4,W8 pdpmake -j2,78,78,pid=>0;opts=0(156)
 writev,W8 pdpmake -j2,1542,1542,
 brk,W8 gmake -j4 pipe,229,229,
 chdir,W8 gmake -j4 pipe,13,13,
 clock_gettime,W8 gmake -j4 pipe,7,7,
 clone,W8 gmake -j4 pipe,78,78,kind=vfork(156)
 close,W8 gmake -j4 pipe,555,535,
-dup3,W8 gmake -j4 pipe,32,45.5,
+dup3,W8 gmake -j4 pipe,32,49,
 execve,W8 gmake -j4 pipe,111,111,
 exit_group,W8 gmake -j4 pipe,79,79,
 faccessat2,W8 gmake -j4 pipe,78,78,
@@ -517,27 +517,27 @@ munmap,W8 gmake -j4 pipe,1224,1143,
 newfstatat,W8 gmake -j4 pipe,423,339,
 openat,W8 gmake -j4 pipe,354,326,
 pipe2,W8 gmake -j4 pipe,78,85,flags=O_CLOEXEC(156);flags=0(14)
-pselect6,W8 gmake -j4 pipe,0,80,fds=[3];timeout=NULL;sigmask=[](160);intr=ERESTARTNOHAND(116);result=?(116);result=ready(44)
-read,W8 gmake -j4 pipe,644,670,?(53);result=EAGAIN(11);token(7)
+pselect6,W8 gmake -j4 pipe,0,89,fds=[3];timeout=NULL;sigmask=[](178);intr=ERESTARTNOHAND(120);result=?(120);result=ready(58)
+read,W8 gmake -j4 pipe,644,677,token(44);result=EAGAIN(20)
 readv,W8 gmake -j4 pipe,36,36,
 rt_sigaction,W8 gmake -j4 pipe,1698,1698,SIGINT:query(220);SIGQUIT:query(220);SIGTERM:query(220);SIGCHLD:SIG_DFL+SA_RESTART(170);SIGHUP:query(156);SIGHUP:SIG_DFL+SA_RESTART(156);SIGINT:SIG_DFL+SA_RESTART(156);SIGQUIT:SIG_DFL+SA_RESTART(156);SIGUSR1:query(156);SIGUSR1:SIG_DFL+SA_RESTART(156)
 rt_sigprocmask,W8 gmake -j4 pipe,592,592,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_BLOCK ~[](156);SIG_SETMASK [](156);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](156);SIG_UNBLOCK [RT_1 RT_2](78);SIG_SETMASK [CHLD](14)
-rt_sigreturn,W8 gmake -j4 pipe,0,58,intr=EINTR(116)
+rt_sigreturn,W8 gmake -j4 pipe,0,60,intr=EINTR(120)
 set_tid_address,W8 gmake -j4 pipe,111,111,
 unlinkat,W8 gmake -j4 pipe,40,40,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8)
-wait4,W8 gmake -j4 pipe,78,226.5,pid=-1;opts=WNOHANG(112)
-write,W8 gmake -j4 pipe,0,19.5,token(7)
+wait4,W8 gmake -j4 pipe,78,232,pid=-1;opts=WNOHANG(427);pid=-1;opts=0(37)
+write,W8 gmake -j4 pipe,0,22,token(44)
 writev,W8 gmake -j4 pipe,1554,1554,
 brk,W8 gmake -j4 fifo,229,229,
 chdir,W8 gmake -j4 fifo,13,13,
 clock_gettime,W8 gmake -j4 fifo,7,7,
 clone,W8 gmake -j4 fifo,78,78,kind=vfork(156)
-close,W8 gmake -j4 fifo,555,535,
-dup3,W8 gmake -j4 fifo,32,44.5,
+close,W8 gmake -j4 fifo,555,534.5,
+dup3,W8 gmake -j4 fifo,32,45.5,
 execve,W8 gmake -j4 fifo,111,111,
 exit_group,W8 gmake -j4 fifo,79,79,
 faccessat2,W8 gmake -j4 fifo,78,78,
-fcntl,W8 gmake -j4 fifo,256,284,F_SETFD(312);F_GETFD(104);F_DUPFD_CLOEXEC(64);F_GETFL(44);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(28);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(14);F_SETFL O_RDONLY|O_LARGEFILE(2)
+fcntl,W8 gmake -j4 fifo,256,283,F_SETFD(311);F_GETFD(103);F_DUPFD_CLOEXEC(64);F_GETFL(44);F_SETFL O_WRONLY|O_APPEND|O_LARGEFILE(28);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(14);F_SETFL O_RDONLY|O_LARGEFILE(2)
 fstat,W8 gmake -j4 fifo,28,28,
 getcwd,W8 gmake -j4 fifo,45,45,
 getdents64,W8 gmake -j4 fifo,86,30,
@@ -552,17 +552,17 @@ mprotect,W8 gmake -j4 fifo,190,190,
 munmap,W8 gmake -j4 fifo,1224,1127,
 newfstatat,W8 gmake -j4 fifo,423,339,
 openat,W8 gmake -j4 fifo,354,340,jobserver-fifo O_WRONLY|O_LARGEFILE(14);jobserver-fifo O_RDONLY|O_LARGEFILE(12);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(2)
-pipe2,W8 gmake -j4 fifo,78,84,flags=O_CLOEXEC(156);flags=0(12)
-pselect6,W8 gmake -j4 fifo,0,81,fds=[3];timeout=NULL;sigmask=[](162);intr=ERESTARTNOHAND(120);result=?(120);result=ready(42)
-read,W8 gmake -j4 fifo,644,669,?(76);result=EAGAIN(12);token(7)
+pipe2,W8 gmake -j4 fifo,78,83.5,flags=O_CLOEXEC(156);flags=0(11)
+pselect6,W8 gmake -j4 fifo,0,78.5,fds=[3];timeout=NULL;sigmask=[](157);intr=ERESTARTNOHAND(112);result=?(112);result=ready(45)
+read,W8 gmake -j4 fifo,644,670.5,token(42);result=EAGAIN(9)
 readv,W8 gmake -j4 fifo,36,36,
 rt_sigaction,W8 gmake -j4 fifo,1698,1698,SIGINT:query(220);SIGQUIT:query(220);SIGTERM:query(220);SIGCHLD:SIG_DFL+SA_RESTART(170);SIGHUP:query(156);SIGHUP:SIG_DFL+SA_RESTART(156);SIGINT:SIG_DFL+SA_RESTART(156);SIGQUIT:SIG_DFL+SA_RESTART(156);SIGUSR1:query(156);SIGUSR1:SIG_DFL+SA_RESTART(156)
 rt_sigprocmask,W8 gmake -j4 fifo,592,592,SIG_BLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_UNBLOCK [HUP INT QUIT PIPE TERM XCPU XFSZ](312);SIG_BLOCK ~[](156);SIG_SETMASK [](156);SIG_SETMASK [HUP INT QUIT PIPE TERM CHLD XCPU XFSZ](156);SIG_UNBLOCK [RT_1 RT_2](78);SIG_SETMASK [CHLD](14)
-rt_sigreturn,W8 gmake -j4 fifo,0,60,intr=EINTR(120)
+rt_sigreturn,W8 gmake -j4 fifo,0,56,intr=EINTR(112)
 set_tid_address,W8 gmake -j4 fifo,111,111,
-unlinkat,W8 gmake -j4 fifo,40,41,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8);path=GMfifo????(2)
-wait4,W8 gmake -j4 fifo,78,226,pid=-1;opts=WNOHANG(146)
-write,W8 gmake -j4 fifo,0,18,token(10)
+unlinkat,W8 gmake -j4 fifo,40,41,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8);path=GMfifo?????(2)
+wait4,W8 gmake -j4 fifo,78,225.5,pid=-1;opts=WNOHANG(416);pid=-1;opts=0(35)
+write,W8 gmake -j4 fifo,0,21,token(42)
 writev,W8 gmake -j4 fifo,1554,1554,
 brk,W8 pdpmake -j4,314,314,
 chdir,W8 pdpmake -j4,6,6,
@@ -585,13 +585,13 @@ munmap,W8 pdpmake -j4,579,579,
 newfstatat,W8 pdpmake -j4,616,616,
 openat,W8 pdpmake -j4,325,325,
 pipe2,W8 pdpmake -j4,78,78,flags=O_CLOEXEC(156)
-read,W8 pdpmake -j4,644,644,?(337)
+read,W8 pdpmake -j4,644,644,
 readv,W8 pdpmake -j4,36,36,
 rt_sigaction,W8 pdpmake -j4,1354,1354,SIGQUIT:SIG_DFL(468);SIGTERM:query(326);SIGINT:SIG_DFL(312);SIGTERM:SIG_DFL(312);SIGHUP:query(170);SIGINT:SIG_IGN(156);SIGQUIT:SIG_IGN(156);SIGHUP:SIG_DFL(156);SIGCHLD:handler(156);SIGINT:query(156)
 rt_sigprocmask,W8 pdpmake -j4,475,475,SIG_SETMASK [](312);SIG_UNBLOCK [RT_1 RT_2](170);SIG_BLOCK [CHLD](156);SIG_BLOCK ~[](156);SIG_SETMASK [CHLD](156)
 set_tid_address,W8 pdpmake -j4,157,157,
 unlinkat,W8 pdpmake -j4,40,40,path=m?.o(64);path=mktab(8);path=libleaf.a.tmp(8)
-wait4,W8 pdpmake -j4,78,78,
+wait4,W8 pdpmake -j4,78,78,pid=>0;opts=0(156)
 writev,W8 pdpmake -j4,1542,1542,
 brk,W10 dash,20,24,
 clone,W10 dash,9,12,kind=fork(20);kind=vfork(4)
@@ -613,7 +613,7 @@ munmap,W10 dash,45,44,
 newfstatat,W10 dash,4,6,
 openat,W10 dash,36,35,
 pipe2,W10 dash,1,4,flags=0(8)
-read,W10 dash,120,203,?(84)
+read,W10 dash,120,203,
 rt_sigaction,W10 dash,251,379,SIGHUP:SIG_DFL+SA_RESTART(12);SIGINT:SIG_DFL+SA_RESTART(12);SIGQUIT:SIG_DFL+SA_RESTART(12);SIGILL:SIG_DFL+SA_RESTART(12);SIGTRAP:SIG_DFL+SA_RESTART(12);SIGABRT:SIG_DFL+SA_RESTART(12);SIGBUS:SIG_DFL+SA_RESTART(12);SIGFPE:SIG_DFL+SA_RESTART(12);SIGKILL:SIG_DFL+SA_RESTART(12);SIGUSR1:SIG_DFL+SA_RESTART(12)
 rt_sigprocmask,W10 dash,21,77,SIG_SETMASK [](56);SIG_SETMASK ~[KILL STOP RTMIN RT_1 RT_2](40);SIG_BLOCK ~[](32);SIG_BLOCK ~[RTMIN RT_1 RT_2](20);SIG_SETMASK ~[RTMIN RT_1 RT_2](4);SIG_UNBLOCK [RT_1 RT_2](2)
 rt_sigreturn,W10 dash,9,11.5,intr=EINTR(4)
@@ -621,19 +621,19 @@ rt_sigsuspend,W10 dash,0,2,intr=ERESTARTNOHAND(4)
 set_tid_address,W10 dash,12,22,
 umask,W10 dash,8,12,
 unlinkat,W10 dash,1,1,path=mktab(2)
-wait4,W10 dash,17,21,pid=-1;opts=WNOHANG(17);pid=-1;opts=0(1)
+wait4,W10 dash,17,21,pid=-1;opts=WNOHANG(24);pid=-1;opts=0(18)
 write,W10 dash,49,49,
-writev,W10 dash,174,180.5,
+writev,W10 dash,174,181,
 brk,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),229,47,
 chdir,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),13,7,
 clock_gettime,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),7,7,
 clone,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),78,15,kind=vfork(45)
-close,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),535,157,
-dup3,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),44.5,7,
+close,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),534.5,157,
+dup3,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),45.5,7,
 execve,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),111,20,
 exit_group,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),79,5,
 faccessat2,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),78,14,
-fcntl,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),284,132,F_SETFD(189);F_GETFD(147);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21);F_DUPFD_CLOEXEC(18)
+fcntl,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),283,132,F_SETFD(189);F_GETFD(147);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21);F_DUPFD_CLOEXEC(18)
 fstat,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),28,30,
 getcwd,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),45,18,
 getdents64,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),30,30,
@@ -650,31 +650,31 @@ mprotect,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),190,36,
 munmap,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),1127,725,
 newfstatat,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),339,222,
 openat,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),340,146,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
-pipe2,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),84,17,flags=O_CLOEXEC(42);flags=0(9)
-pselect6,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),81,11,fds=[3];timeout=NULL;sigmask=[](33);intr=ERESTARTNOHAND(24);result=?(24);result=ready(9)
-read,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),669,460,?(7)
+pipe2,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),83.5,17,flags=O_CLOEXEC(42);flags=0(9)
+pselect6,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),78.5,11,fds=[3];timeout=NULL;sigmask=[](33);intr=ERESTARTNOHAND(24);result=?(24);result=ready(9)
+read,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),670.5,460,token(9)
 readlinkat,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),0,2,
 readv,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),36,0,
 rt_sigaction,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),1698,361,SIGCHLD:SIG_DFL+SA_RESTART(63);SIGINT:SIG_DFL+SA_RESTART(63);SIGINT:query(57);SIGQUIT:query(57);SIGTERM:query(57);SIGHUP:query(42);SIGHUP:SIG_DFL+SA_RESTART(42);SIGQUIT:SIG_DFL+SA_RESTART(42);SIGUSR1:query(42);SIGUSR1:SIG_DFL+SA_RESTART(42)
 rt_sigprocmask,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),592,128,SIG_BLOCK [HUP INT QUIT TERM XCPU](84);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](84);SIG_SETMASK [](60);SIG_BLOCK ~[](42);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](42);SIG_UNBLOCK [RT_1 RT_2](36);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12);SIG_BLOCK ~[RTMIN RT_1 RT_2](3)
-rt_sigreturn,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),60,10,intr=EINTR(12)
+rt_sigreturn,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),56,10,intr=EINTR(12)
 set_tid_address,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),111,20,
 setpgid,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),0,4,setpgid(12)
 tkill,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),0,1,SIGINT->self/thread(3)
 unlinkat,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(3)
-wait4,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),226,38.3,intr=ERESTARTSYS(9);pid=-1;opts=WNOHANG(5);pid=-1;opts=WNOHANG|WSTOPPED(3);pid=-1;opts=0(2)
-write,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),18,9,token(9)
-writev,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),1554,144,
+wait4,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),225.5,37.7,pid=-1;opts=WNOHANG(63);pid=-1;opts=0(44);intr=ERESTARTSYS(9);pid=-1;opts=WSTOPPED(3);pid=-1;opts=WNOHANG|WSTOPPED(3)
+write,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),21,9,token(9)
+writev,W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo),1554,142,
 brk,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),229,95,
 chdir,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),13,7,
 clock_gettime,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),7,7,
 clone,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),78,27,kind=vfork(81)
-close,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),535,217,
-dup3,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),44.5,19,
+close,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),534.5,217,
+dup3,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),45.5,19,
 execve,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),111,44,
 exit_group,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),79,17,
 faccessat2,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),78,26,
-fcntl,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),284,168,F_SETFD(261);F_GETFD(147);F_DUPFD_CLOEXEC(54);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
+fcntl,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),283,168,F_SETFD(261);F_GETFD(147);F_DUPFD_CLOEXEC(54);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
 fstat,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),28,30,
 getcwd,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),45,30,
 getdents64,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),30,30,
@@ -691,72 +691,72 @@ mprotect,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),190,72,
 munmap,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),1127,749,
 newfstatat,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),339,258,
 openat,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),340,158,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
-pipe2,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),84,29,flags=O_CLOEXEC(78);flags=0(9)
-pselect6,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),81,23,fds=[3];timeout=NULL;sigmask=[](69);intr=ERESTARTNOHAND(60);result=?(60);result=ready(9)
-read,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),669,472,?(4)
+pipe2,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),83.5,29,flags=O_CLOEXEC(78);flags=0(9)
+pselect6,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),78.5,23,fds=[3];timeout=NULL;sigmask=[](69);intr=ERESTARTNOHAND(60);result=?(60);result=ready(9)
+read,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),670.5,472,token(9)
 readlinkat,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),0,2,
 readv,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),36,0,
 rt_sigaction,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),1698,637,SIGINT:query(129);SIGQUIT:query(129);SIGTERM:query(129);SIGCHLD:SIG_DFL+SA_RESTART(99);SIGINT:SIG_DFL+SA_RESTART(99);SIGHUP:query(78);SIGHUP:SIG_DFL+SA_RESTART(78);SIGQUIT:SIG_DFL+SA_RESTART(78);SIGUSR1:query(78);SIGUSR1:SIG_DFL+SA_RESTART(78)
 rt_sigprocmask,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),592,224,SIG_BLOCK [HUP INT QUIT TERM XCPU](156);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](156);SIG_SETMASK [](96);SIG_BLOCK ~[](78);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](78);SIG_UNBLOCK [RT_1 RT_2](72);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12);SIG_BLOCK ~[RTMIN RT_1 RT_2](3)
-rt_sigreturn,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),60,22,intr=EINTR(48)
+rt_sigreturn,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),56,22,intr=EINTR(48)
 set_tid_address,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),111,44,
 setpgid,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),0,4,setpgid(12)
 tkill,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),0,1,SIGINT->self/thread(3)
 unlinkat,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(3)
-wait4,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),226,74.3,pid=-1;opts=WNOHANG(20);intr=ERESTARTSYS(9);pid=-1;opts=WNOHANG|WSTOPPED(3);pid=-1;opts=0(1)
-write,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),18,9,token(9)
-writev,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),1554,632,
-brk,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),229,144.3,
+wait4,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),225.5,73.7,pid=-1;opts=WNOHANG(171);pid=-1;opts=0(44);intr=ERESTARTSYS(9);pid=-1;opts=WSTOPPED(3);pid=-1;opts=WNOHANG|WSTOPPED(3)
+write,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),21,9,token(9)
+writev,W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo),1554,631,
+brk,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),229,143,
 chdir,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),13,7,
 clock_gettime,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),7,7,
-clone,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),78,39.3,kind=vfork(118)
-close,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),535,278.7,
-dup3,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),44.5,31.3,
-execve,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),111,68.7,
-exit_group,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),79,29.3,
-faccessat2,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),78,38.3,
-fcntl,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),284,205,F_SETFD(335);F_GETFD(147);F_DUPFD_CLOEXEC(91);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
+clone,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),78,39,kind=vfork(117)
+close,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),534.5,277,
+dup3,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),45.5,31,
+execve,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),111,68,
+exit_group,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),79,29,
+faccessat2,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),78,38,
+fcntl,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),283,204,F_SETFD(333);F_GETFD(147);F_DUPFD_CLOEXEC(90);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
 fstat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),28,30,
-getcwd,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),45,42.3,
+getcwd,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),45,42,
 getdents64,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),30,30,
-geteuid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),32,29.3,
+geteuid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),32,29,
 getpgid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),0,1,
-getpid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),33,38.3,
-getppid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),32,29.3,
-ioctl,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),90,54.3,req=TIOCGWINSZ(145);req=TIOCSPGRP(12);req=TIOCGPGRP(3);req=TCGETS(3)
+getpid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),33,38,
+getppid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),32,29,
+ioctl,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),90,54,req=TIOCGWINSZ(144);req=TIOCSPGRP(12);req=TIOCGPGRP(3);req=TCGETS(3)
 kill,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),0,7,SIGINT->pid(21)
 lseek,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),264,156,
 mknodat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1,1,S_IFIFO(3)
-mmap,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1406,999,
-mprotect,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),190,109,
-munmap,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1127,761.3,
-newfstatat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),339,295.3,
-openat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),340,170.3,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
-pipe2,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),84,41.3,flags=O_CLOEXEC(115);flags=0(9)
-pselect6,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),81,35.3,fds=[3];timeout=NULL;sigmask=[](106);intr=ERESTARTNOHAND(97);result=?(97);result=ready(9)
-read,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),669,484.3,?(18)
+mmap,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1406,998,
+mprotect,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),190,108,
+munmap,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1127,761,
+newfstatat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),339,294,
+openat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),340,170,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
+pipe2,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),83.5,41,flags=O_CLOEXEC(114);flags=0(9)
+pselect6,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),78.5,35,fds=[3];timeout=NULL;sigmask=[](105);intr=ERESTARTNOHAND(96);result=?(96);result=ready(9)
+read,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),670.5,484,token(9)
 readlinkat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),0,2,
 readv,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),36,0,
-rt_sigaction,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1698,920.7,SIGINT:query(203);SIGQUIT:query(203);SIGTERM:query(203);SIGCHLD:SIG_DFL+SA_RESTART(136);SIGINT:SIG_DFL+SA_RESTART(136);SIGHUP:query(115);SIGHUP:SIG_DFL+SA_RESTART(115);SIGQUIT:SIG_DFL+SA_RESTART(115);SIGUSR1:query(115);SIGUSR1:SIG_DFL+SA_RESTART(115)
-rt_sigprocmask,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),592,322.7,SIG_BLOCK [HUP INT QUIT TERM XCPU](230);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](230);SIG_SETMASK [](133);SIG_BLOCK ~[](115);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](115);SIG_UNBLOCK [RT_1 RT_2](109);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12);SIG_BLOCK ~[RTMIN RT_1 RT_2](3)
-rt_sigreturn,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),60,34.3,intr=EINTR(85)
-set_tid_address,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),111,68.7,
+rt_sigaction,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1698,913,SIGINT:query(201);SIGQUIT:query(201);SIGTERM:query(201);SIGCHLD:SIG_DFL+SA_RESTART(135);SIGINT:SIG_DFL+SA_RESTART(135);SIGHUP:query(114);SIGHUP:SIG_DFL+SA_RESTART(114);SIGQUIT:SIG_DFL+SA_RESTART(114);SIGUSR1:query(114);SIGUSR1:SIG_DFL+SA_RESTART(114)
+rt_sigprocmask,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),592,320,SIG_BLOCK [HUP INT QUIT TERM XCPU](228);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](228);SIG_SETMASK [](132);SIG_BLOCK ~[](114);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](114);SIG_UNBLOCK [RT_1 RT_2](108);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12);SIG_BLOCK ~[RTMIN RT_1 RT_2](3)
+rt_sigreturn,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),56,34,intr=EINTR(84)
+set_tid_address,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),111,68,
 setpgid,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),0,4,setpgid(12)
 tkill,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),0,1,SIGINT->self/thread(3)
 unlinkat,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(3)
-wait4,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),226,111,pid=-1;opts=WNOHANG(60);intr=ERESTARTSYS(9);pid=-1;opts=WNOHANG|WSTOPPED(3)
-write,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),18,9,token(9)
-writev,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1554,1240,
+wait4,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),225.5,109.3,pid=-1;opts=WNOHANG(279);pid=-1;opts=0(43);intr=ERESTARTSYS(9);pid=-1;opts=WSTOPPED(3);pid=-1;opts=WNOHANG|WSTOPPED(3)
+write,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),21,9,token(9)
+writev,W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo),1554,1232.3,
 brk,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),229,47,
 chdir,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),13,7,
 clock_gettime,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),7,7,
 clone,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),78,15,kind=vfork(45)
-close,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),535,157,
-dup3,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),44.5,7,
+close,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),534.5,157,
+dup3,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),45.5,7,
 execve,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),111,20,
 exit_group,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),79,5,
 faccessat2,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),78,14,
-fcntl,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),284,132,F_SETFD(189);F_GETFD(147);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21);F_DUPFD_CLOEXEC(18)
+fcntl,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),283,132,F_SETFD(189);F_GETFD(147);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21);F_DUPFD_CLOEXEC(18)
 fstat,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),28,30,
 getcwd,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),45,18,
 getdents64,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),30,30,
@@ -773,30 +773,30 @@ mprotect,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),190,36,
 munmap,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),1127,725,
 newfstatat,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),339,222,
 openat,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),340,146,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
-pipe2,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),84,17,flags=O_CLOEXEC(42);flags=0(9)
-pselect6,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),81,11,fds=[3];timeout=NULL;sigmask=[](33);intr=ERESTARTNOHAND(24);result=?(24);result=ready(9)
-read,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),669,460,?(7)
+pipe2,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),83.5,17,flags=O_CLOEXEC(42);flags=0(9)
+pselect6,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),78.5,11,fds=[3];timeout=NULL;sigmask=[](33);intr=ERESTARTNOHAND(24);result=?(24);result=ready(9)
+read,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),670.5,460,token(9)
 readlinkat,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),0,2,
 readv,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),36,0,
 rt_sigaction,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),1698,361,SIGCHLD:SIG_DFL+SA_RESTART(63);SIGTERM:SIG_DFL+SA_RESTART(63);SIGINT:query(57);SIGQUIT:query(57);SIGTERM:query(57);SIGHUP:query(42);SIGHUP:SIG_DFL+SA_RESTART(42);SIGINT:SIG_DFL+SA_RESTART(42);SIGQUIT:SIG_DFL+SA_RESTART(42);SIGUSR1:query(42)
 rt_sigprocmask,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),592,125,SIG_BLOCK [HUP INT QUIT TERM XCPU](84);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](84);SIG_SETMASK [](54);SIG_BLOCK ~[](42);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](42);SIG_UNBLOCK [RT_1 RT_2](36);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12)
-rt_sigreturn,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),60,9,intr=EINTR(12)
+rt_sigreturn,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),56,9,intr=EINTR(12)
 set_tid_address,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),111,20,
 setpgid,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),0,4,setpgid(12)
-unlinkat,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(3)
-wait4,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),226,39.3,intr=ERESTARTSYS(9);pid=-1;opts=WNOHANG|WSTOPPED(3);pid=-1;opts=0(2);pid=-1;opts=WNOHANG(2)
-write,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),18,9,token(9)
-writev,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),1554,146,intr=ERESTARTSYS(3)
+unlinkat,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(2);path=GMfifo???(1)
+wait4,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),225.5,38.7,pid=-1;opts=WNOHANG(63);pid=-1;opts=0(47);intr=ERESTARTSYS(9);pid=-1;opts=WSTOPPED(3);pid=-1;opts=WNOHANG|WSTOPPED(3)
+write,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),21,9,token(9)
+writev,W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo),1554,146,intr=ERESTARTSYS(2)
 brk,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),229,95,
 chdir,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),13,7,
 clock_gettime,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),7,7,
 clone,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),78,27,kind=vfork(81)
-close,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),535,217,
-dup3,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),44.5,19,
+close,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),534.5,217,
+dup3,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),45.5,19,
 execve,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),111,44,
 exit_group,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),79,17,
 faccessat2,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),78,26,
-fcntl,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),284,168,F_SETFD(261);F_GETFD(147);F_DUPFD_CLOEXEC(54);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
+fcntl,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),283,168,F_SETFD(261);F_GETFD(147);F_DUPFD_CLOEXEC(54);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
 fstat,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),28,30,
 getcwd,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),45,30,
 getdents64,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),30,30,
@@ -813,57 +813,57 @@ mprotect,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),190,72,
 munmap,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),1127,749,
 newfstatat,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),339,258,
 openat,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),340,158,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
-pipe2,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),84,29,flags=O_CLOEXEC(78);flags=0(9)
-pselect6,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),81,23,fds=[3];timeout=NULL;sigmask=[](69);intr=ERESTARTNOHAND(60);result=?(60);result=ready(9)
-read,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),669,472,?(9)
+pipe2,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),83.5,29,flags=O_CLOEXEC(78);flags=0(9)
+pselect6,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),78.5,23,fds=[3];timeout=NULL;sigmask=[](69);intr=ERESTARTNOHAND(60);result=?(60);result=ready(9)
+read,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),670.5,472,token(9)
 readlinkat,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),0,2,
 readv,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),36,0,
 rt_sigaction,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),1698,637,SIGINT:query(129);SIGQUIT:query(129);SIGTERM:query(129);SIGCHLD:SIG_DFL+SA_RESTART(99);SIGTERM:SIG_DFL+SA_RESTART(99);SIGHUP:query(78);SIGHUP:SIG_DFL+SA_RESTART(78);SIGINT:SIG_DFL+SA_RESTART(78);SIGQUIT:SIG_DFL+SA_RESTART(78);SIGUSR1:query(78)
 rt_sigprocmask,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),592,221,SIG_BLOCK [HUP INT QUIT TERM XCPU](156);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](156);SIG_SETMASK [](90);SIG_BLOCK ~[](78);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](78);SIG_UNBLOCK [RT_1 RT_2](72);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12)
-rt_sigreturn,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),60,21,intr=EINTR(48)
+rt_sigreturn,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),56,21,intr=EINTR(48)
 set_tid_address,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),111,44,
 setpgid,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),0,4,setpgid(12)
-unlinkat,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(3)
-wait4,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),226,74.3,pid=-1;opts=WNOHANG(25);intr=ERESTARTSYS(9);pid=-1;opts=WNOHANG|WSTOPPED(3);pid=-1;opts=0(2)
-write,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),18,9,token(9)
-writev,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),1554,628,intr=ERESTARTSYS(1)
-brk,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),229,143,
+unlinkat,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo????(3)
+wait4,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),225.5,74,pid=-1;opts=WNOHANG(171);pid=-1;opts=0(45);intr=ERESTARTSYS(9);pid=-1;opts=WSTOPPED(3);pid=-1;opts=WNOHANG|WSTOPPED(3)
+write,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),21,9,token(9)
+writev,W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo),1554,638,intr=ERESTARTSYS(1)
+brk,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),229,143.7,
 chdir,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),13,7,
 clock_gettime,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),7,7,
-clone,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),78,39,kind=vfork(117)
-close,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),535,277,
-dup3,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),44.5,31,
-execve,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),111,68,
-exit_group,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),79,29,
-faccessat2,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),78,38,
-fcntl,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),284,204,F_SETFD(333);F_GETFD(147);F_DUPFD_CLOEXEC(90);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
+clone,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),78,39.3,kind=vfork(118)
+close,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),534.5,278,
+dup3,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),45.5,31,
+execve,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),111,68.3,
+exit_group,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),79,29.3,
+faccessat2,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),78,38.3,
+fcntl,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),283,204.3,F_SETFD(334);F_GETFD(147);F_DUPFD_CLOEXEC(90);F_GETFL(21);F_SETFL O_RDONLY|O_NONBLOCK|O_LARGEFILE(21)
 fstat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),28,30,
 getcwd,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),45,42,
 getdents64,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),30,30,
-geteuid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),32,29,
+geteuid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),32,29.3,
 getpgid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),0,1,
-getpid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),33,38,
+getpid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),33,38.3,
 getppid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),32,29,
 ioctl,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),90,54,req=TIOCGWINSZ(144);req=TIOCSPGRP(12);req=TIOCGPGRP(3);req=TCGETS(3)
 kill,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),0,17,SIGTERM->pid(51)
 lseek,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),264,156,
 mknodat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1,1,S_IFIFO(3)
-mmap,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1406,998,
-mprotect,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),190,108,
+mmap,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1406,998.3,
+mprotect,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),190,108.7,
 munmap,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1127,761,
-newfstatat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),339,294,
+newfstatat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),339,294.3,
 openat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),340,170,jobserver-fifo O_WRONLY|O_LARGEFILE(21);jobserver-fifo O_RDONLY|O_LARGEFILE(18);jobserver-fifo O_RDONLY|O_NONBLOCK|O_LARGEFILE(3)
-pipe2,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),84,41,flags=O_CLOEXEC(114);flags=0(9)
-pselect6,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),81,35,fds=[3];timeout=NULL;sigmask=[](105);intr=ERESTARTNOHAND(96);result=?(96);result=ready(9)
-read,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),669,484,?(15)
+pipe2,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),83.5,41.3,flags=O_CLOEXEC(115);flags=0(9)
+pselect6,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),78.5,35,fds=[3];timeout=NULL;sigmask=[](105);intr=ERESTARTNOHAND(96);result=?(96);result=ready(9)
+read,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),670.5,484.3,token(9)
 readlinkat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),0,2,
 readv,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),36,0,
-rt_sigaction,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1698,913,SIGINT:query(201);SIGQUIT:query(201);SIGTERM:query(201);SIGCHLD:SIG_DFL+SA_RESTART(135);SIGTERM:SIG_DFL+SA_RESTART(135);SIGHUP:query(114);SIGHUP:SIG_DFL+SA_RESTART(114);SIGINT:SIG_DFL+SA_RESTART(114);SIGQUIT:SIG_DFL+SA_RESTART(114);SIGUSR1:query(114)
-rt_sigprocmask,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),592,317,SIG_BLOCK [HUP INT QUIT TERM XCPU](228);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](228);SIG_SETMASK [](126);SIG_BLOCK ~[](114);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](114);SIG_UNBLOCK [RT_1 RT_2](108);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12)
-rt_sigreturn,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),60,33,intr=EINTR(84)
-set_tid_address,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),111,68,
+rt_sigaction,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1698,918.7,SIGINT:query(202);SIGQUIT:query(202);SIGTERM:query(202);SIGCHLD:SIG_DFL+SA_RESTART(136);SIGTERM:SIG_DFL+SA_RESTART(136);SIGHUP:query(115);SIGHUP:SIG_DFL+SA_RESTART(115);SIGINT:SIG_DFL+SA_RESTART(115);SIGQUIT:SIG_DFL+SA_RESTART(115);SIGUSR1:query(115)
+rt_sigprocmask,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),592,319.7,SIG_BLOCK [HUP INT QUIT TERM XCPU](230);SIG_UNBLOCK [HUP INT QUIT TERM XCPU](230);SIG_SETMASK [](127);SIG_BLOCK ~[](115);SIG_SETMASK [HUP INT QUIT TERM CHLD XCPU](115);SIG_UNBLOCK [RT_1 RT_2](109);SIG_SETMASK [CHLD](21);SIG_SETMASK ~[RTMIN RT_1 RT_2](12)
+rt_sigreturn,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),56,33,intr=EINTR(85)
+set_tid_address,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),111,68.3,
 setpgid,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),0,4,setpgid(12)
-unlinkat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),41,9,path=mktab(12);path=t?.h(12);path=GMfifo?????(3)
-wait4,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),226,110.3,pid=-1;opts=WNOHANG(60);intr=ERESTARTSYS(9);pid=-1;opts=WNOHANG|WSTOPPED(3);pid=-1;opts=0(2)
-write,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),18,9,token(9)
-writev,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1554,1227.3,intr=ERESTARTSYS(2)
+unlinkat,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),41,8.7,path=mktab(12);path=t?.h(11);path=GMfifo????(3)
+wait4,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),225.5,112.3,pid=-1;opts=WNOHANG(280);pid=-1;opts=0(51);intr=ERESTARTSYS(9);pid=-1;opts=WSTOPPED(3);pid=-1;opts=WNOHANG|WSTOPPED(3)
+write,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),21,9,token(9)
+writev,W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo),1554,1238.3,intr=ERESTARTSYS(1)

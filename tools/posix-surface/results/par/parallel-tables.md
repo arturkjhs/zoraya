@@ -24,14 +24,14 @@ Max recipe processes alive at once = children of any make that are not makes the
 | W3j-g-j1 | 1, 1 | 0.3, 0.3 |
 | W3j-g-pipe-j2 | 2, 2 | 0.2, 0.2 |
 | W3j-g-pipe-j4 | 2, 2 | 0.2, 0.2 |
-| W3j-p-j1 | 1, 1 | 0.3, 0.2 |
+| W3j-p-j1 | 1, 1 | 0.3, 0.3 |
 | W3j-p-j2 | 1, 1 | 0.3, 0.2 |
-| W3j-p-j4 | 1, 1 | 0.2, 0.2 |
+| W3j-p-j4 | 1, 1 | 0.2, 0.3 |
 | W8j-g-fifo-j2 | 2, 2 | 6.8, 6.8 |
-| W8j-g-fifo-j4 | 4, 4 | 3.5, 3.4 |
+| W8j-g-fifo-j4 | 4, 4 | 3.4, 3.5 |
 | W8j-g-j1 | 1, 1 | 13.4, 13.4 |
-| W8j-g-pipe-j2 | 2, 2 | 6.8, 6.9 |
-| W8j-g-pipe-j4 | 4, 4 | 3.5, 3.5 |
+| W8j-g-pipe-j2 | 2, 2 | 6.9, 6.8 |
+| W8j-g-pipe-j4 | 4, 4 | 3.4, 3.4 |
 | W8j-p-j1 | 1, 1 | 13.3, 13.3 |
 | W8j-p-j2 | 1, 1 | 13.3, 13.3 |
 | W8j-p-j4 | 1, 1 | 13.3, 13.3 |
@@ -42,18 +42,18 @@ Max recipe processes alive at once = children of any make that are not makes the
 
 | Runs | auth values | FIFO created | token reads | token writes | pselect6 calls (interrupted) | makes |
 |---|---|---|---|---|---|---|
-| W2j-g-fifo-j2 | `fifo:/tmp/GMfifoN` ×84 | 2 | [4, 5] | [3, 2] | [66, 67] ([33, 33]) | [3, 3] |
-| W2j-g-fifo-j4 | `fifo:/tmp/GMfifoN` ×84 | 2 | [3, 3] | [3, 3] | [55, 55] ([20, 20]) | [3, 3] |
-| W2j-g-pipe-j2 | `3,4 then -2,-2` ×76; `3,4` ×8 | 0 | [6, 4] | [6, 5] | [67, 66] ([33, 33]) | [3, 3] |
-| W2j-g-pipe-j4 | `3,4 then -2,-2` ×76; `3,4` ×8 | 0 | [3, 3] | [3, 3] | [56, 55] ([21, 20]) | [3, 3] |
-| W3j-g-fifo-j2 | `fifo:/tmp/GMfifoN` ×6 | 2 | [1, 1] | [1, 1] | [1, 1] ([0, 0]) | [1, 1] |
-| W3j-g-fifo-j4 | `fifo:/tmp/GMfifoN` ×6 | 2 | [3, 3] | [4, 3] | [1, 1] ([0, 0]) | [1, 1] |
-| W3j-g-pipe-j2 | `3,4 then -2,-2` ×6 | 0 | [1, 1] | [2, 2] | [1, 1] ([0, 0]) | [1, 1] |
-| W3j-g-pipe-j4 | `3,4 then -2,-2` ×6 | 0 | [3, 3] | [3, 3] | [1, 1] ([0, 0]) | [1, 1] |
-| W8j-g-fifo-j2 | `fifo:/tmp/GMfifoN` ×220 | 2 | [1, 1] | [2, 2] | [67, 67] ([66, 66]) | [7, 7] |
-| W8j-g-fifo-j4 | `fifo:/tmp/GMfifoN` ×220 | 2 | [3, 4] | [4, 6] | [83, 79] ([60, 60]) | [7, 7] |
-| W8j-g-pipe-j2 | `3,4 then -2,-2` ×208; `3,4` ×12 | 0 | [1, 1] | [2, 1] | [67, 67] ([66, 66]) | [7, 7] |
-| W8j-g-pipe-j4 | `3,4 then -2,-2` ×208; `3,4` ×12 | 0 | [3, 4] | [4, 3] | [84, 76] ([61, 55]) | [7, 7] |
+| W2j-g-fifo-j2 | `fifo:/tmp/GMfifoN` ×84 | 2 | [35, 35] | [35, 35] | [67, 67] ([33, 33]) | [3, 3] |
+| W2j-g-fifo-j4 | `fifo:/tmp/GMfifoN` ×84 | 2 | [38, 38] | [38, 38] | [55, 56] ([20, 21]) | [3, 3] |
+| W2j-g-pipe-j2 | `3,4 then -2,-2` ×76; `3,4` ×8 | 0 | [36, 34] | [36, 34] | [68, 66] ([33, 33]) | [3, 3] |
+| W2j-g-pipe-j4 | `3,4 then -2,-2` ×76; `3,4` ×8 | 0 | [38, 38] | [38, 38] | [56, 57] ([21, 22]) | [3, 3] |
+| W3j-g-fifo-j2 | `fifo:/tmp/GMfifoN` ×6 | 2 | [2, 2] | [2, 2] | [1, 1] ([0, 0]) | [1, 1] |
+| W3j-g-fifo-j4 | `fifo:/tmp/GMfifoN` ×6 | 2 | [4, 4] | [4, 4] | [1, 1] ([0, 0]) | [1, 1] |
+| W3j-g-pipe-j2 | `3,4 then -2,-2` ×6 | 0 | [2, 2] | [2, 2] | [1, 1] ([0, 0]) | [1, 1] |
+| W3j-g-pipe-j4 | `3,4 then -2,-2` ×6 | 0 | [4, 4] | [4, 4] | [1, 1] ([0, 0]) | [1, 1] |
+| W8j-g-fifo-j2 | `fifo:/tmp/GMfifoN` ×220 | 2 | [2, 2] | [2, 2] | [67, 67] ([66, 66]) | [7, 7] |
+| W8j-g-fifo-j4 | `fifo:/tmp/GMfifoN` ×220 | 2 | [25, 17] | [25, 17] | [85, 72] ([55, 57]) | [7, 7] |
+| W8j-g-pipe-j2 | `3,4 then -2,-2` ×208; `3,4` ×12 | 0 | [2, 2] | [2, 2] | [67, 67] ([66, 66]) | [7, 7] |
+| W8j-g-pipe-j4 | `3,4 then -2,-2` ×208; `3,4` ×12 | 0 | [26, 18] | [26, 18] | [100, 78] ([60, 60]) | [7, 7] |
 
 ### libc functions called under parallelism that TASK-02 never saw (interposer)
 
@@ -74,19 +74,19 @@ Totals over all strace repetitions of the family; runs per family in brackets.
 - **W10 parallel** [2]: SIGCHLD (CLD_EXITED) -> shell from cat ×2; SIGCHLD (CLD_EXITED) -> shell from head ×2; SIGCHLD (CLD_EXITED) -> shell from mktab ×7; SIGCHLD (CLD_EXITED) -> shell from shell ×2; SIGCHLD (CLD_EXITED) -> shell from sort ×2; SIGCHLD (CLD_EXITED) -> shell from tcc ×2; SIGCHLD (CLD_EXITED) -> shell from wc ×4; SIGCHLD (CLD_KILLED) -> shell from yes ×2; SIGPIPE (SI_USER) -> yes from yes ×2
 - **W10 serial** [2]: SIGCHLD (CLD_EXITED) -> shell from cat ×2; SIGCHLD (CLD_EXITED) -> shell from mktab ×8; SIGCHLD (CLD_EXITED) -> shell from sort ×2; SIGCHLD (CLD_EXITED) -> shell from tcc ×2; SIGCHLD (CLD_EXITED) -> shell from wc ×4
 - **W2j gmake -j2** [4]: SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×132
-- **W2j gmake -j4** [4]: SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×81
+- **W2j gmake -j4** [4]: SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×84
 - **W2j pdpmake -j2** [2]: SIGCHLD (CLD_EXITED) -> make-l1 from make-l2 ×2; SIGCHLD (CLD_EXITED) -> make-l2 from recipe-sh ×2; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×74; SIGCHLD (CLD_EXITED) -> make-top from make-l1 ×2
 - **W2j pdpmake -j4** [2]: SIGCHLD (CLD_EXITED) -> make-l1 from make-l2 ×2; SIGCHLD (CLD_EXITED) -> make-l2 from recipe-sh ×2; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×74; SIGCHLD (CLD_EXITED) -> make-top from make-l1 ×2
 - **W3j pdpmake -j1** [2]: SIGCHLD (CLD_EXITED) -> make-top from tcc ×6
 - **W3j pdpmake -j2** [2]: SIGCHLD (CLD_EXITED) -> make-top from tcc ×6
 - **W3j pdpmake -j4** [2]: SIGCHLD (CLD_EXITED) -> make-top from tcc ×6
 - **W8j gmake -j2** [4]: SIGCHLD (CLD_EXITED) -> make-l1 from make-l2 ×8; SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×128; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×128
-- **W8j gmake -j4** [4]: SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×128; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×108
+- **W8j gmake -j4** [4]: SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×128; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×104
 - **W8j pdpmake -j1** [2]: SIGCHLD (CLD_EXITED) -> make-l1 from make-l2 ×8; SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×64; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×80; SIGCHLD (CLD_EXITED) -> make-top from make-l1 ×4
 - **W8j pdpmake -j2** [2]: SIGCHLD (CLD_EXITED) -> make-l1 from make-l2 ×8; SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×64; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×80; SIGCHLD (CLD_EXITED) -> make-top from make-l1 ×4
 - **W8j pdpmake -j4** [2]: SIGCHLD (CLD_EXITED) -> make-l1 from make-l2 ×8; SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×64; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×80; SIGCHLD (CLD_EXITED) -> make-top from make-l1 ×4
-- **W9 Ctrl-C** [9]: SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×109; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×36; SIGCHLD (CLD_KILLED) -> make-l2 from mktab ×36; SIGCHLD (CLD_KILLED) -> shell from make-top ×9; SIGINT (SI_KERNEL) -> make-l1 ×18; SIGINT (SI_KERNEL) -> make-l2 ×36; SIGINT (SI_KERNEL) -> make-top ×9; SIGINT (SI_KERNEL) -> mktab ×36; SIGINT (SI_TKILL) -> shell from shell ×9; SIGINT (SI_USER) -> make-l1 from make-l1 ×18; SIGINT (SI_USER) -> make-l2 from make-l2 ×36; SIGINT (SI_USER) -> make-top from make-top ×9
-- **W9 SIGTERM** [9]: SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×108; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×36; SIGCHLD (CLD_KILLED) -> make-l2 from mktab ×36; SIGCHLD (CLD_KILLED) -> shell from make-top ×9; SIGTERM (SI_USER) -> make-l1 from make-l1 ×18; SIGTERM (SI_USER) -> make-l1 from make-top ×18; SIGTERM (SI_USER) -> make-l2 from make-l1 ×36; SIGTERM (SI_USER) -> make-l2 from make-l2 ×36; SIGTERM (SI_USER) -> make-top ×9; SIGTERM (SI_USER) -> make-top from make-top ×9; SIGTERM (SI_USER) -> mktab from make-l2 ×36
+- **W9 Ctrl-C** [9]: SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×108; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×36; SIGCHLD (CLD_KILLED) -> make-l2 from mktab ×36; SIGCHLD (CLD_KILLED) -> shell from make-top ×9; SIGINT (SI_KERNEL) -> make-l1 ×18; SIGINT (SI_KERNEL) -> make-l2 ×36; SIGINT (SI_KERNEL) -> make-top ×9; SIGINT (SI_KERNEL) -> mktab ×36; SIGINT (SI_TKILL) -> shell from shell ×9; SIGINT (SI_USER) -> make-l1 from make-l1 ×18; SIGINT (SI_USER) -> make-l2 from make-l2 ×36; SIGINT (SI_USER) -> make-top from make-top ×9
+- **W9 SIGTERM** [9]: SIGCHLD (CLD_EXITED) -> make-l2 from mktab ×109; SIGCHLD (CLD_EXITED) -> make-l2 from tcc ×36; SIGCHLD (CLD_KILLED) -> make-l2 from mktab ×35; SIGCHLD (CLD_KILLED) -> shell from make-top ×9; SIGTERM (SI_USER) -> make-l1 from make-l1 ×18; SIGTERM (SI_USER) -> make-l1 from make-top ×18; SIGTERM (SI_USER) -> make-l2 from make-l1 ×36; SIGTERM (SI_USER) -> make-l2 from make-l2 ×36; SIGTERM (SI_USER) -> make-top ×9; SIGTERM (SI_USER) -> make-top from make-top ×9; SIGTERM (SI_USER) -> mktab from make-l2 ×35; SIGTERM (SI_USER) -> recipe-sh from make-l2 ×1
 
 ### Signals sent by the processes themselves (kill/tgkill/tkill)
 
@@ -101,18 +101,18 @@ Totals over all strace repetitions of the family; runs per family in brackets.
 
 - **W10 parallel** [2]: rt_sigreturn EINTR in shell ×4; rt_sigsuspend ERESTARTNOHAND in shell ×4
 - **W2j gmake -j2** [4]: pselect6 ERESTARTNOHAND in make-l2 ×132; rt_sigreturn EINTR in make-l2 ×132
-- **W2j gmake -j4** [4]: pselect6 ERESTARTNOHAND in make-l2 ×81; rt_sigreturn EINTR in make-l2 ×81
+- **W2j gmake -j4** [4]: pselect6 ERESTARTNOHAND in make-l2 ×84; rt_sigreturn EINTR in make-l2 ×84
 - **W8j gmake -j2** [4]: pselect6 ERESTARTNOHAND in make-l1 ×8; pselect6 ERESTARTNOHAND in make-l2 ×256; rt_sigreturn EINTR in make-l1 ×8; rt_sigreturn EINTR in make-l2 ×256
-- **W8j gmake -j4** [4]: pselect6 ERESTARTNOHAND in make-l2 ×236; rt_sigreturn EINTR in make-l2 ×236
-- **W9 Ctrl-C** [9]: pselect6 ERESTARTNOHAND in make-l2 ×181; rt_sigreturn EINTR in make-l2 ×145; wait4 ERESTARTSYS in make-l1 ×18; wait4 ERESTARTSYS in make-top ×9
-- **W9 SIGTERM** [9]: pselect6 ERESTARTNOHAND in make-l2 ×180; rt_sigreturn EINTR in make-l2 ×144; wait4 ERESTARTSYS in make-l1 ×18; wait4 ERESTARTSYS in make-top ×9; writev ERESTARTSYS in make-l2 ×6
+- **W8j gmake -j4** [4]: pselect6 ERESTARTNOHAND in make-l2 ×232; rt_sigreturn EINTR in make-l2 ×232
+- **W9 Ctrl-C** [9]: pselect6 ERESTARTNOHAND in make-l2 ×180; rt_sigreturn EINTR in make-l2 ×144; wait4 ERESTARTSYS in make-l1 ×18; wait4 ERESTARTSYS in make-top ×9
+- **W9 SIGTERM** [9]: pselect6 ERESTARTNOHAND in make-l2 ×180; rt_sigreturn EINTR in make-l2 ×145; wait4 ERESTARTSYS in make-l1 ×18; wait4 ERESTARTSYS in make-top ×9; writev ERESTARTSYS in make-l2 ×4
 
 ### Process-group operations
 
 Totals over all strace repetitions of the family; runs per family in brackets.
 
-- **W9 Ctrl-C** [9]: make-top ioctl TIOCSPGRP ×9; make-top setpgid ×9; shell ioctl TIOCSPGRP ×27; shell setpgid ×27
-- **W9 SIGTERM** [9]: make-top ioctl TIOCSPGRP ×9; make-top setpgid ×9; shell ioctl TIOCSPGRP ×27; shell setpgid ×27
+- **W9 Ctrl-C** [9]: shell ioctl TIOCSPGRP ×27; shell setpgid ×27; shell(child before exec) ioctl TIOCSPGRP ×9; shell(child before exec) setpgid ×9
+- **W9 SIGTERM** [9]: shell ioctl TIOCSPGRP ×27; shell setpgid ×27; shell(child before exec) ioctl TIOCSPGRP ×9; shell(child before exec) setpgid ×9
 
 ### W9 outcomes per run (both modes; `dynamic` = interposer only, no strace)
 
@@ -143,7 +143,7 @@ Totals over all strace repetitions of the family; runs per family in brackets.
 | W9-int-d1.5-r2 | strace | 130 | 12 | 4 | none | none |
 | W9-int-d1.5-r3 | strace | 130 | 12 | 4 | none | none |
 | W9-int-d3.0-r1 | strace | 130 | 24 | 4 | none | none |
-| W9-int-d3.0-r2 | strace | 130 | 25 | 4 | none | none |
+| W9-int-d3.0-r2 | strace | 130 | 24 | 4 | none | none |
 | W9-int-d3.0-r3 | strace | 130 | 24 | 4 | none | none |
 | W9-term-d0.3-r1 | strace | 143 | 0 | 4 | none | none |
 | W9-term-d0.3-r2 | strace | 143 | 0 | 4 | none | none |
@@ -152,6 +152,6 @@ Totals over all strace repetitions of the family; runs per family in brackets.
 | W9-term-d1.5-r2 | strace | 143 | 12 | 4 | none | none |
 | W9-term-d1.5-r3 | strace | 143 | 12 | 4 | none | none |
 | W9-term-d3.0-r1 | strace | 143 | 24 | 4 | none | none |
-| W9-term-d3.0-r2 | strace | 143 | 24 | 4 | none | none |
+| W9-term-d3.0-r2 | strace | 143 | 25 | 3 | none | none |
 | W9-term-d3.0-r3 | strace | 143 | 24 | 4 | none | none |
 

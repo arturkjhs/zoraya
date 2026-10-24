@@ -41,6 +41,13 @@ gmake	2 wait/reap	reap_children	src/job.c	2192	start_waiting_jobs	reap_children 
 gmake	3 signals	sigemptyset	src/job.c	2385	child_execute_job	sigemptyset (&mask);	
 gmake	1 jobserver	jobserver_clear	src/main.c	1141	reset_jobserver	jobserver_clear ();	
 gmake	3 signals	sigemptyset	src/main.c	1252	main	sigemptyset (&fatal_signal_set);	
+gmake	3 signals	FATAL_SIG	src/main.c	1270	main	FATAL_SIG (SIGHUP);	HUP
+gmake	3 signals	FATAL_SIG	src/main.c	1273	main	FATAL_SIG (SIGQUIT);	QUIT
+gmake	3 signals	FATAL_SIG	src/main.c	1276	main	FATAL_SIG (SIGPIPE);	PIPE
+gmake	3 signals	FATAL_SIG	src/main.c	1278	main	FATAL_SIG (SIGINT);	INT
+gmake	3 signals	FATAL_SIG	src/main.c	1279	main	FATAL_SIG (SIGTERM);	TERM
+gmake	3 signals	FATAL_SIG	src/main.c	1292	main	FATAL_SIG (SIGXCPU);	XCPU
+gmake	3 signals	FATAL_SIG	src/main.c	1295	main	FATAL_SIG (SIGXFSZ);	XFSZ
 gmake	3 signals	bsd_signal	src/main.c	1307	main	(void) bsd_signal (SIGCHLD, SIG_DFL);	CHLD
 gmake	1 jobserver	jobserver_parse_auth	src/main.c	1844	main	if (jobserver_parse_auth (jobserver_auth))	
 gmake	3 signals	bsd_signal	src/main.c	2002	main	bsd_signal (SIGCHLD, child_handler);	CHLD

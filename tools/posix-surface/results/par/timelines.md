@@ -4,163 +4,163 @@ Times are milliseconds relative to the harness action (Ctrl-C written to the pty
 
 ## W9a: Ctrl-C during `make -j4` (W8) in an interactive dash
 
-Run `W9-int-d1.5-r1`. Harness: -1500.1 ms send command make -j4; +0.0 ms write VINTR (Ctrl-C) to pty; +2.3 ms prompt back (make returned); +3.0 ms tables complete: 12/32; partial targets left: none; +513.3 ms processes left in build tree after 0.5s: none
+Run `W9-int-d1.5-r1`. Harness: -1501.4 ms send command make -j4; +0.0 ms write VINTR (Ctrl-C) to pty; +2.9 ms prompt back (make returned); +3.6 ms tables complete: 12/32; partial targets left: none; +519.5 ms processes left in build tree after 0.5s: none
 
 Alive at the harness action: `dash -i`, `gmake@a`, `gmake@a/1`, `gmake@a/2`, `gmake@b`, `gmake@b/1`, `gmake@b/2`, `gmake@top`, `mktab 4 @a/1`, `mktab 4 @a/2`, `mktab 4 @b/1`, `mktab 4 @b/2`
 
 | ms | process | event |
 |---|---|---|
-|      +0.1 | 18341 mktab 4 @b/2 | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18339 mktab 4 @a/2 | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18320 gmake@a/2 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +0.1 | 18342 mktab 4 @b/1 | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18321 gmake@b/2 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +0.1 | 18319 gmake@b/1 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +0.1 | 18321 gmake@b/2 | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18320 gmake@a/2 | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18318 gmake@a/1 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +0.1 | 18341 mktab 4 @b/2 | killed by SIGINT |
-|      +0.1 | 18319 gmake@b/1 | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18342 mktab 4 @b/1 | killed by SIGINT |
-|      +0.1 | 18321 gmake@b/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/2) |
-|      +0.1 | 18316 gmake@a | receives SIGINT (SI_KERNEL) |
-|      +0.1 | 18339 mktab 4 @a/2 | killed by SIGINT |
-|      +0.1 | 18319 gmake@b/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/1) |
-|      +0.1 | 18320 gmake@a/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/2) |
-|      +0.3 | 18340 mktab 4 @a/1 | receives SIGINT (SI_KERNEL) |
-|      +0.3 | 18318 gmake@a/1 | receives SIGINT (SI_KERNEL) |
-|      +0.3 | 18317 gmake@b | receives SIGINT (SI_KERNEL) |
-|      +0.3 | 18315 gmake@top | receives SIGINT (SI_KERNEL) |
-|      +0.3 | 18340 mktab 4 @a/1 | killed by SIGINT |
-|      +0.4 | 18318 gmake@a/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/1) |
-|      +0.6 | 18321 gmake@b/2 | unlinkat(t4.h) = 0 |
-|      +0.6 | 18320 gmake@a/2 | unlinkat(t4.h) = 0 |
-|      +0.6 | 18315 gmake@top | unlinkat(/tmp/GMfifo18315) = 0 |
-|      +0.6 | 18321 gmake@b/2 | wait4 reaps mktab 4 @b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +0.6 | 18320 gmake@a/2 | wait4 reaps mktab 4 @a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +0.6 | 18319 gmake@b/1 | unlinkat(t4.h) = 0 |
-|      +0.7 | 18318 gmake@a/1 | unlinkat(t4.h) = 0 |
-|      +0.7 | 18318 gmake@a/1 | wait4 reaps mktab 4 @a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +0.7 | 18319 gmake@b/1 | wait4 reaps mktab 4 @b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +0.8 | 18321 gmake@b/2 | kill(gmake@b/2, SIGINT) = 0 |
-|      +0.8 | 18321 gmake@b/2 | receives SIGINT (SI_USER, from gmake@b/2) |
-|      +0.8 | 18318 gmake@a/1 | kill(gmake@a/1, SIGINT) = 0 |
-|      +0.9 | 18318 gmake@a/1 | receives SIGINT (SI_USER, from gmake@a/1) |
-|      +0.9 | 18321 gmake@b/2 | killed by SIGINT |
-|      +0.9 | 18320 gmake@a/2 | kill(gmake@a/2, SIGINT) = 0 |
-|      +0.9 | 18318 gmake@a/1 | killed by SIGINT |
-|      +0.9 | 18317 gmake@b | wait4 reaps gmake@b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +0.9 | 18320 gmake@a/2 | receives SIGINT (SI_USER, from gmake@a/2) |
-|      +0.9 | 18316 gmake@a | wait4 reaps gmake@a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +1.0 | 18320 gmake@a/2 | killed by SIGINT |
-|      +1.0 | 18319 gmake@b/1 | kill(gmake@b/1, SIGINT) = 0 |
-|      +1.0 | 18319 gmake@b/1 | receives SIGINT (SI_USER, from gmake@b/1) |
-|      +1.1 | 18319 gmake@b/1 | killed by SIGINT |
-|      +1.1 | 18317 gmake@b | wait4 reaps gmake@b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +1.1 | 18316 gmake@a | wait4 reaps gmake@a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +1.1 | 18317 gmake@b | kill(gmake@b, SIGINT) = 0 |
-|      +1.1 | 18317 gmake@b | receives SIGINT (SI_USER, from gmake@b) |
-|      +1.2 | 18317 gmake@b | killed by SIGINT |
-|      +1.2 | 18315 gmake@top | wait4 reaps gmake@b: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +1.4 | 18316 gmake@a | kill(gmake@a, SIGINT) = 0 |
-|      +1.4 | 18316 gmake@a | receives SIGINT (SI_USER, from gmake@a) |
-|      +1.5 | 18316 gmake@a | killed by SIGINT |
-|      +1.5 | 18315 gmake@top | wait4 reaps gmake@a: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +1.5 | 18315 gmake@top | kill(gmake@top, SIGINT) = 0 |
-|      +1.5 | 18315 gmake@top | receives SIGINT (SI_USER, from gmake@top) |
-|      +1.6 | 18315 gmake@top | killed by SIGINT |
-|      +1.6 | 18311 dash -i | wait4 reaps gmake@top: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
-|      +1.6 | 18311 dash -i | receives SIGCHLD (CLD_KILLED, from gmake@top) |
-|      +1.8 | 18311 dash -i | ioctl TIOCSPGRP (foreground process group) |
-|      +2.0 | 18311 dash -i | tkill(dash -i, SIGINT) = 0 |
-|      +2.0 | 18311 dash -i | receives SIGINT (SI_TKILL, from dash -i) |
-|    +513.6 | 18311 dash -i | setpgid(0, 18311) = -1 EPERM (Operation not permitted) |
-|    +513.9 | 18311 dash -i | ioctl TIOCSPGRP (foreground process group) |
-|    +514.4 | 18311 dash -i | exits 0 |
+|      +0.0 | 26860 mktab 4 @a/1 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26858 mktab 4 @b/1 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26857 mktab 4 @a/2 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26837 gmake@a/2 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +0.1 | 26836 gmake@b/1 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +0.1 | 26838 gmake@b/2 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +0.1 | 26837 gmake@a/2 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26858 mktab 4 @b/1 | killed by SIGINT |
+|      +0.1 | 26835 gmake@a/1 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +0.1 | 26834 gmake@b | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26836 gmake@b/1 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26857 mktab 4 @a/2 | killed by SIGINT |
+|      +0.1 | 26859 mktab 4 @b/2 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26838 gmake@b/2 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26835 gmake@a/1 | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26833 gmake@a | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26832 gmake@top | receives SIGINT (SI_KERNEL) |
+|      +0.1 | 26836 gmake@b/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/1) |
+|      +0.2 | 26859 mktab 4 @b/2 | killed by SIGINT |
+|      +0.2 | 26837 gmake@a/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/2) |
+|      +0.2 | 26838 gmake@b/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/2) |
+|      +0.4 | 26860 mktab 4 @a/1 | killed by SIGINT |
+|      +0.5 | 26832 gmake@top | unlinkat(/tmp/GMfifo26832) = 0 |
+|      +0.5 | 26837 gmake@a/2 | unlinkat(t4.h) = 0 |
+|      +0.5 | 26835 gmake@a/1 | unlinkat(t4.h) = 0 |
+|      +0.5 | 26838 gmake@b/2 | unlinkat(t4.h) = 0 |
+|      +0.5 | 26835 gmake@a/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/1) |
+|      +0.5 | 26837 gmake@a/2 | wait4 reaps mktab 4 @a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +0.5 | 26836 gmake@b/1 | unlinkat(t4.h) = 0 |
+|      +0.6 | 26838 gmake@b/2 | wait4 reaps mktab 4 @b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +0.6 | 26836 gmake@b/1 | wait4 reaps mktab 4 @b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +0.6 | 26835 gmake@a/1 | wait4 reaps mktab 4 @a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +0.8 | 26837 gmake@a/2 | kill(gmake@a/2, SIGINT) = 0 |
+|      +0.8 | 26838 gmake@b/2 | kill(gmake@b/2, SIGINT) = 0 |
+|      +0.8 | 26837 gmake@a/2 | receives SIGINT (SI_USER, from gmake@a/2) |
+|      +0.8 | 26838 gmake@b/2 | receives SIGINT (SI_USER, from gmake@b/2) |
+|      +0.9 | 26837 gmake@a/2 | killed by SIGINT |
+|      +0.9 | 26833 gmake@a | wait4 reaps gmake@a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +0.9 | 26838 gmake@b/2 | killed by SIGINT |
+|      +0.9 | 26834 gmake@b | wait4 reaps gmake@b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +0.9 | 26836 gmake@b/1 | kill(gmake@b/1, SIGINT) = 0 |
+|      +0.9 | 26835 gmake@a/1 | kill(gmake@a/1, SIGINT) = 0 |
+|      +0.9 | 26836 gmake@b/1 | receives SIGINT (SI_USER, from gmake@b/1) |
+|      +0.9 | 26835 gmake@a/1 | receives SIGINT (SI_USER, from gmake@a/1) |
+|      +1.0 | 26836 gmake@b/1 | killed by SIGINT |
+|      +1.0 | 26835 gmake@a/1 | killed by SIGINT |
+|      +1.1 | 26833 gmake@a | wait4 reaps gmake@a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +1.1 | 26834 gmake@b | wait4 reaps gmake@b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +1.4 | 26833 gmake@a | kill(gmake@a, SIGINT) = 0 |
+|      +1.4 | 26834 gmake@b | kill(gmake@b, SIGINT) = 0 |
+|      +1.4 | 26833 gmake@a | receives SIGINT (SI_USER, from gmake@a) |
+|      +1.4 | 26834 gmake@b | receives SIGINT (SI_USER, from gmake@b) |
+|      +1.5 | 26833 gmake@a | killed by SIGINT |
+|      +1.5 | 26834 gmake@b | killed by SIGINT |
+|      +1.5 | 26832 gmake@top | wait4 reaps gmake@a: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +1.7 | 26832 gmake@top | wait4 reaps gmake@b: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +2.0 | 26832 gmake@top | kill(gmake@top, SIGINT) = 0 |
+|      +2.0 | 26832 gmake@top | receives SIGINT (SI_USER, from gmake@top) |
+|      +2.1 | 26832 gmake@top | killed by SIGINT |
+|      +2.1 | 26828 dash -i | wait4 reaps gmake@top: WIFSIGNALED(s) && WTERMSIG(s) == SIGINT |
+|      +2.2 | 26828 dash -i | receives SIGCHLD (CLD_KILLED, from gmake@top) |
+|      +2.3 | 26828 dash -i | ioctl TIOCSPGRP (foreground process group) |
+|      +2.5 | 26828 dash -i | tkill(dash -i, SIGINT) = 0 |
+|      +2.6 | 26828 dash -i | receives SIGINT (SI_TKILL, from dash -i) |
+|    +519.9 | 26828 dash -i | setpgid(0, 26828) = -1 EPERM (Operation not permitted) |
+|    +520.3 | 26828 dash -i | ioctl TIOCSPGRP (foreground process group) |
+|    +521.1 | 26828 dash -i | exits 0 |
 
 ## W9b: SIGTERM to the top-level make only
 
-Run `W9-term-d1.5-r1`. Harness: -1504.5 ms send command make -j4; +0.0 ms kill SIGTERM pid=25648 (top-level make); +4.0 ms prompt back (make returned); +4.6 ms tables complete: 12/32; partial targets left: none; +515.8 ms processes left in build tree after 0.5s: none
+Run `W9-term-d1.5-r1`. Harness: -1502.1 ms send command make -j4; +0.0 ms kill SIGTERM pid=1708 (top-level make); +4.9 ms prompt back (make returned); +5.5 ms tables complete: 12/32; partial targets left: none; +518.0 ms processes left in build tree after 0.5s: none
 
 Alive at the harness action: `dash -i`, `gmake@a`, `gmake@a/1`, `gmake@a/2`, `gmake@b`, `gmake@b/1`, `gmake@b/2`, `gmake@top`, `mktab 4 @a/1`, `mktab 4 @a/2`, `mktab 4 @b/1`, `mktab 4 @b/2`
 
 | ms | process | event |
 |---|---|---|
-|      +0.1 | 25648 gmake@top | receives SIGTERM (SI_USER) |
-|      +0.1 | 25648 gmake@top | unlinkat(/tmp/GMfifo25648) = 0 |
-|      +0.9 | 25648 gmake@top | kill(gmake@b, SIGTERM) = 0 |
-|      +0.9 | 25648 gmake@top | kill(gmake@a, SIGTERM) = 0 |
-|      +0.9 | 25650 gmake@b | receives SIGTERM (SI_USER, from gmake@top) |
-|      +1.0 | 25650 gmake@b | kill(gmake@b/2, SIGTERM) = 0 |
-|      +1.0 | 25654 gmake@b/2 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +1.0 | 25650 gmake@b | kill(gmake@b/1, SIGTERM) = 0 |
-|      +1.0 | 25652 gmake@b/1 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +1.0 | 25652 gmake@b/1 | receives SIGTERM (SI_USER, from gmake@b) |
-|      +1.0 | 25652 gmake@b/1 | kill(mktab 4 @b/1, SIGTERM) = 0 |
-|      +1.0 | 25675 mktab 4 @b/1 | receives SIGTERM (SI_USER, from gmake@b/1) |
-|      +1.1 | 25649 gmake@a | receives SIGTERM (SI_USER, from gmake@top) |
-|      +1.1 | 25675 mktab 4 @b/1 | killed by SIGTERM |
-|      +1.1 | 25652 gmake@b/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/1) |
-|      +1.2 | 25652 gmake@b/1 | unlinkat(t4.h) = 0 |
-|      +1.2 | 25652 gmake@b/1 | wait4 reaps mktab 4 @b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +1.2 | 25649 gmake@a | kill(gmake@a/2, SIGTERM) = 0 |
-|      +1.2 | 25653 gmake@a/2 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +1.3 | 25652 gmake@b/1 | kill(gmake@b/1, SIGTERM) = 0 |
-|      +1.3 | 25652 gmake@b/1 | receives SIGTERM (SI_USER, from gmake@b/1) |
-|      +1.3 | 25653 gmake@a/2 | receives SIGTERM (SI_USER, from gmake@a) |
-|      +1.3 | 25651 gmake@a/1 | pselect6 interrupted (ERESTARTNOHAND) |
-|      +1.3 | 25649 gmake@a | kill(gmake@a/1, SIGTERM) = 0 |
-|      +1.3 | 25651 gmake@a/1 | receives SIGTERM (SI_USER, from gmake@a) |
-|      +1.4 | 25652 gmake@b/1 | killed by SIGTERM |
-|      +1.4 | 25650 gmake@b | wait4 reaps gmake@b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +1.4 | 25653 gmake@a/2 | kill(mktab 4 @a/2, SIGTERM) = 0 |
-|      +1.4 | 25676 mktab 4 @a/2 | receives SIGTERM (SI_USER, from gmake@a/2) |
-|      +1.5 | 25651 gmake@a/1 | kill(mktab 4 @a/1, SIGTERM) = 0 |
-|      +1.5 | 25676 mktab 4 @a/2 | killed by SIGTERM |
-|      +1.5 | 25653 gmake@a/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/2) |
-|      +1.5 | 25673 mktab 4 @a/1 | receives SIGTERM (SI_USER, from gmake@a/1) |
-|      +1.6 | 25673 mktab 4 @a/1 | killed by SIGTERM |
-|      +1.6 | 25651 gmake@a/1 | unlinkat(t4.h) = 0 |
-|      +1.6 | 25653 gmake@a/2 | unlinkat(t4.h) = 0 |
-|      +1.7 | 25651 gmake@a/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/1) |
-|      +1.7 | 25654 gmake@b/2 | receives SIGTERM (SI_USER, from gmake@b) |
-|      +1.7 | 25653 gmake@a/2 | wait4 reaps mktab 4 @a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +1.8 | 25651 gmake@a/1 | wait4 reaps mktab 4 @a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +2.0 | 25674 mktab 4 @b/2 | receives SIGTERM (SI_USER, from gmake@b/2) |
-|      +2.0 | 25654 gmake@b/2 | kill(mktab 4 @b/2, SIGTERM) = 0 |
-|      +2.0 | 25674 mktab 4 @b/2 | killed by SIGTERM |
-|      +2.1 | 25653 gmake@a/2 | kill(gmake@a/2, SIGTERM) = 0 |
-|      +2.1 | 25654 gmake@b/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/2) |
-|      +2.1 | 25653 gmake@a/2 | receives SIGTERM (SI_USER, from gmake@a/2) |
-|      +2.1 | 25651 gmake@a/1 | kill(gmake@a/1, SIGTERM) = 0 |
-|      +2.2 | 25653 gmake@a/2 | killed by SIGTERM |
-|      +2.2 | 25651 gmake@a/1 | receives SIGTERM (SI_USER, from gmake@a/1) |
-|      +2.2 | 25649 gmake@a | wait4 reaps gmake@a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +2.2 | 25651 gmake@a/1 | killed by SIGTERM |
-|      +2.2 | 25654 gmake@b/2 | unlinkat(t4.h) = 0 |
-|      +2.3 | 25654 gmake@b/2 | wait4 reaps mktab 4 @b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +2.5 | 25649 gmake@a | wait4 reaps gmake@a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +2.6 | 25654 gmake@b/2 | kill(gmake@b/2, SIGTERM) = 0 |
-|      +2.7 | 25654 gmake@b/2 | receives SIGTERM (SI_USER, from gmake@b/2) |
-|      +2.8 | 25654 gmake@b/2 | killed by SIGTERM |
-|      +2.8 | 25649 gmake@a | kill(gmake@a, SIGTERM) = 0 |
-|      +2.8 | 25650 gmake@b | wait4 reaps gmake@b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +2.8 | 25649 gmake@a | receives SIGTERM (SI_USER, from gmake@a) |
-|      +2.9 | 25649 gmake@a | killed by SIGTERM |
-|      +2.9 | 25648 gmake@top | wait4 reaps gmake@a: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +3.1 | 25650 gmake@b | kill(gmake@b, SIGTERM) = 0 |
-|      +3.1 | 25650 gmake@b | receives SIGTERM (SI_USER, from gmake@b) |
-|      +3.2 | 25650 gmake@b | killed by SIGTERM |
-|      +3.2 | 25648 gmake@top | wait4 reaps gmake@b: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +3.4 | 25648 gmake@top | kill(gmake@top, SIGTERM) = 0 |
-|      +3.5 | 25648 gmake@top | receives SIGTERM (SI_USER, from gmake@top) |
-|      +3.5 | 25648 gmake@top | killed by SIGTERM |
-|      +3.6 | 25644 dash -i | wait4 reaps gmake@top: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
-|      +3.6 | 25644 dash -i | receives SIGCHLD (CLD_KILLED, from gmake@top) |
-|      +3.8 | 25644 dash -i | ioctl TIOCSPGRP (foreground process group) |
-|    +516.1 | 25644 dash -i | setpgid(0, 25644) = -1 EPERM (Operation not permitted) |
-|    +516.3 | 25644 dash -i | ioctl TIOCSPGRP (foreground process group) |
-|    +516.8 | 25644 dash -i | exits 0 |
+|      +0.2 | 1708 gmake@top | receives SIGTERM (SI_USER) |
+|      +0.3 | 1708 gmake@top | unlinkat(/tmp/GMfifo1708) = 0 |
+|      +0.3 | 1708 gmake@top | kill(gmake@b, SIGTERM) = 0 |
+|      +2.1 | 1710 gmake@b | receives SIGTERM (SI_USER, from gmake@top) |
+|      +2.2 | 1708 gmake@top | kill(gmake@a, SIGTERM) = 0 |
+|      +2.2 | 1709 gmake@a | receives SIGTERM (SI_USER, from gmake@top) |
+|      +2.2 | 1710 gmake@b | kill(gmake@b/2, SIGTERM) = 0 |
+|      +2.3 | 1710 gmake@b | kill(gmake@b/1, SIGTERM) = 0 |
+|      +2.3 | 1712 gmake@b/1 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +2.3 | 1713 gmake@a/2 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +2.3 | 1709 gmake@a | kill(gmake@a/2, SIGTERM) = 0 |
+|      +2.3 | 1713 gmake@a/2 | receives SIGTERM (SI_USER, from gmake@a) |
+|      +2.3 | 1711 gmake@a/1 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +2.3 | 1709 gmake@a | kill(gmake@a/1, SIGTERM) = 0 |
+|      +2.3 | 1711 gmake@a/1 | receives SIGTERM (SI_USER, from gmake@a) |
+|      +2.4 | 1713 gmake@a/2 | kill(mktab 4 @a/2, SIGTERM) = 0 |
+|      +2.4 | 1734 mktab 4 @a/2 | receives SIGTERM (SI_USER, from gmake@a/2) |
+|      +2.4 | 1712 gmake@b/1 | receives SIGTERM (SI_USER, from gmake@b) |
+|      +2.4 | 1735 mktab 4 @a/1 | receives SIGTERM (SI_USER, from gmake@a/1) |
+|      +2.5 | 1734 mktab 4 @a/2 | killed by SIGTERM |
+|      +2.5 | 1711 gmake@a/1 | kill(mktab 4 @a/1, SIGTERM) = 0 |
+|      +2.5 | 1713 gmake@a/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/2) |
+|      +2.5 | 1735 mktab 4 @a/1 | killed by SIGTERM |
+|      +2.5 | 1711 gmake@a/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @a/1) |
+|      +2.6 | 1712 gmake@b/1 | kill(mktab 4 @b/1, SIGTERM) = 0 |
+|      +2.6 | 1732 mktab 4 @b/1 | receives SIGTERM (SI_USER, from gmake@b/1) |
+|      +2.6 | 1714 gmake@b/2 | pselect6 interrupted (ERESTARTNOHAND) |
+|      +2.6 | 1714 gmake@b/2 | receives SIGTERM (SI_USER, from gmake@b) |
+|      +2.6 | 1713 gmake@a/2 | unlinkat(t4.h) = 0 |
+|      +2.6 | 1732 mktab 4 @b/1 | killed by SIGTERM |
+|      +2.7 | 1712 gmake@b/1 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/1) |
+|      +2.7 | 1711 gmake@a/1 | unlinkat(t4.h) = 0 |
+|      +2.7 | 1713 gmake@a/2 | wait4 reaps mktab 4 @a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +2.7 | 1711 gmake@a/1 | wait4 reaps mktab 4 @a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +2.8 | 1714 gmake@b/2 | kill(mktab 4 @b/2, SIGTERM) = 0 |
+|      +2.8 | 1733 mktab 4 @b/2 | receives SIGTERM (SI_USER, from gmake@b/2) |
+|      +2.8 | 1712 gmake@b/1 | unlinkat(t4.h) = 0 |
+|      +2.9 | 1712 gmake@b/1 | wait4 reaps mktab 4 @b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +2.9 | 1714 gmake@b/2 | unlinkat(t4.h) = 0 |
+|      +2.9 | 1713 gmake@a/2 | kill(gmake@a/2, SIGTERM) = 0 |
+|      +3.0 | 1713 gmake@a/2 | receives SIGTERM (SI_USER, from gmake@a/2) |
+|      +3.0 | 1711 gmake@a/1 | kill(gmake@a/1, SIGTERM) = 0 |
+|      +3.0 | 1711 gmake@a/1 | receives SIGTERM (SI_USER, from gmake@a/1) |
+|      +3.0 | 1733 mktab 4 @b/2 | killed by SIGTERM |
+|      +3.0 | 1714 gmake@b/2 | wait4 reaps mktab 4 @b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +3.0 | 1713 gmake@a/2 | killed by SIGTERM |
+|      +3.0 | 1714 gmake@b/2 | receives SIGCHLD (CLD_KILLED, from mktab 4 @b/2) |
+|      +3.1 | 1709 gmake@a | wait4 reaps gmake@a/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +3.1 | 1712 gmake@b/1 | kill(gmake@b/1, SIGTERM) = 0 |
+|      +3.1 | 1711 gmake@a/1 | killed by SIGTERM |
+|      +3.1 | 1712 gmake@b/1 | receives SIGTERM (SI_USER, from gmake@b/1) |
+|      +3.2 | 1712 gmake@b/1 | killed by SIGTERM |
+|      +3.2 | 1710 gmake@b | wait4 reaps gmake@b/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +3.3 | 1714 gmake@b/2 | kill(gmake@b/2, SIGTERM) = 0 |
+|      +3.3 | 1714 gmake@b/2 | receives SIGTERM (SI_USER, from gmake@b/2) |
+|      +3.3 | 1709 gmake@a | wait4 reaps gmake@a/1: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +3.4 | 1714 gmake@b/2 | killed by SIGTERM |
+|      +3.5 | 1710 gmake@b | wait4 reaps gmake@b/2: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +3.6 | 1709 gmake@a | kill(gmake@a, SIGTERM) = 0 |
+|      +3.6 | 1709 gmake@a | receives SIGTERM (SI_USER, from gmake@a) |
+|      +3.7 | 1709 gmake@a | killed by SIGTERM |
+|      +3.8 | 1708 gmake@top | wait4 reaps gmake@a: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +3.8 | 1710 gmake@b | kill(gmake@b, SIGTERM) = 0 |
+|      +3.8 | 1710 gmake@b | receives SIGTERM (SI_USER, from gmake@b) |
+|      +3.9 | 1710 gmake@b | killed by SIGTERM |
+|      +4.0 | 1708 gmake@top | wait4 reaps gmake@b: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +4.2 | 1708 gmake@top | kill(gmake@top, SIGTERM) = 0 |
+|      +4.3 | 1708 gmake@top | receives SIGTERM (SI_USER, from gmake@top) |
+|      +4.4 | 1708 gmake@top | killed by SIGTERM |
+|      +4.4 | 1704 dash -i | wait4 reaps gmake@top: WIFSIGNALED(s) && WTERMSIG(s) == SIGTERM |
+|      +4.4 | 1704 dash -i | receives SIGCHLD (CLD_KILLED, from gmake@top) |
+|      +4.7 | 1704 dash -i | ioctl TIOCSPGRP (foreground process group) |
+|    +518.4 | 1704 dash -i | setpgid(0, 1704) = -1 EPERM (Operation not permitted) |
+|    +518.8 | 1704 dash -i | ioctl TIOCSPGRP (foreground process group) |
+|    +519.6 | 1704 dash -i | exits 0 |
 
 ## W10: background jobs, wait, concurrent pipelines in dash (`sh w10.sh parallel`)
 
@@ -168,112 +168,112 @@ Run `W10-parallel-r1`. Times relative to the first traced syscall. Includes bloc
 
 | ms | process | event |
 |---|---|---|
-|      +0.0 | 13518 sh w10.sh | execve -> sh w10.sh |
-|      +0.6 | 13518 sh w10.sh | rt_sigaction SIGCHLD:handler |
-|      +1.1 | 13518 sh w10.sh | rt_sigaction SIGINT:handler |
-|      +1.2 | 13518 sh w10.sh | rt_sigaction SIGQUIT:SIG_DFL |
-|      +1.3 | 13518 sh w10.sh | rt_sigaction SIGTERM:SIG_DFL |
-|      +1.7 | 13518 sh w10.sh | kind=vfork -> child 13519 |
-|      +1.7 | 13519 tcc -o | execve -> tcc -o |
-|     +15.0 | 13519 tcc -o | unlinkat(mktab) = -1 ENOENT (No such file or directory) |
-|     +16.1 | 13519 tcc -o | exits 0 |
-|     +16.1 | 13518 sh w10.sh | wait4 reaps tcc -o: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|     +16.2 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from tcc -o) |
-|     +16.2 | 13518 sh w10.sh | returns from signal handler |
-|     +16.3 | 13518 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
-|     +16.6 | 13518 sh w10.sh | kind=fork -> child 13520 |
-|     +16.9 | 13520 mktab 1 | rt_sigaction SIGINT:SIG_IGN+SA_RESTART |
-|     +17.0 | 13518 sh w10.sh | kind=fork -> child 13521 |
-|     +17.0 | 13520 mktab 1 | rt_sigaction SIGQUIT:SIG_IGN+SA_RESTART |
-|     +17.2 | 13518 sh w10.sh | kind=fork -> child 13522 |
-|     +17.3 | 13521 mktab 2 | rt_sigaction SIGINT:SIG_IGN+SA_RESTART |
-|     +17.3 | 13521 mktab 2 | rt_sigaction SIGQUIT:SIG_IGN+SA_RESTART |
-|     +17.4 | 13518 sh w10.sh | wait4(WNOHANG) = 0 |
-|     +17.4 | 13522 sh w10.sh | rt_sigaction SIGINT:SIG_IGN+SA_RESTART |
-|     +17.5 | 13522 sh w10.sh | rt_sigaction SIGQUIT:SIG_IGN+SA_RESTART |
-|     +17.5 | 13520 mktab 1 | execve -> mktab 1 |
-|     +17.9 | 13521 mktab 2 | execve -> mktab 2 |
-|     +18.1 | 13522 sh w10.sh | kind=vfork -> child 13523 |
-|     +18.1 | 13523 mktab 3 | execve -> mktab 3 |
-|    +432.6 | 13520 mktab 1 | exits 0 |
-|    +432.6 | 13518 sh w10.sh | rt_sigsuspend interrupted (ERESTARTNOHAND) |
-|    +432.6 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 1) |
-|    +432.7 | 13518 sh w10.sh | returns from signal handler |
-|    +432.8 | 13518 sh w10.sh | wait4 reaps mktab 1: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +432.8 | 13523 mktab 3 | exits 0 |
-|    +432.8 | 13521 mktab 2 | exits 0 |
-|    +432.8 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 2) |
-|    +432.8 | 13518 sh w10.sh | returns from signal handler |
-|    +432.8 | 13522 sh w10.sh | wait4 reaps mktab 3: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +432.9 | 13518 sh w10.sh | wait4 reaps mktab 2: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +432.9 | 13518 sh w10.sh | wait4(WNOHANG) = 0 |
-|    +432.9 | 13522 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 3) |
-|    +432.9 | 13518 sh w10.sh | wait4(WNOHANG) = 0 |
-|    +432.9 | 13522 sh w10.sh | returns from signal handler |
-|    +433.0 | 13522 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
-|    +433.3 | 13522 sh w10.sh | exits 0 |
-|    +433.3 | 13518 sh w10.sh | rt_sigsuspend interrupted (ERESTARTNOHAND) |
-|    +433.3 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from sh w10.sh) |
-|    +433.4 | 13518 sh w10.sh | returns from signal handler |
-|    +433.5 | 13518 sh w10.sh | wait4 reaps sh w10.sh: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +433.5 | 13518 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
-|    +433.6 | 13518 sh w10.sh | pipe2 -> 3, 4 |
-|    +433.8 | 13518 sh w10.sh | kind=fork -> child 13524 |
-|    +434.2 | 13518 sh w10.sh | pipe2 -> 4, 5 |
-|    +434.4 | 13518 sh w10.sh | kind=fork -> child 13525 |
-|    +434.5 | 13524 mktab 4 | execve -> mktab 4 |
-|    +434.9 | 13518 sh w10.sh | kind=fork -> child 13526 |
-|    +435.1 | 13525 sort | execve -> sort |
-|    +435.3 | 13526 wc -l | execve -> wc -l |
-|    +435.5 | 13525 sort | resets 61 signal dispositions to SIG_DFL |
-|    +435.7 | 13526 wc -l | resets 61 signal dispositions to SIG_DFL |
-|    +839.2 | 13524 mktab 4 | exits 0 |
-|    +839.3 | 13518 sh w10.sh | wait4 reaps mktab 4: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +839.3 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 4) |
-|    +839.3 | 13518 sh w10.sh | returns from signal handler |
-|    +841.9 | 13525 sort | exits 0 |
-|    +842.0 | 13518 sh w10.sh | wait4 reaps sort: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +842.0 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from sort) |
-|    +842.1 | 13518 sh w10.sh | returns from signal handler |
-|    +842.1 | 13526 wc -l | exits 0 |
-|    +842.1 | 13518 sh w10.sh | wait4 reaps wc -l: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +842.1 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from wc -l) |
-|    +842.2 | 13518 sh w10.sh | returns from signal handler |
-|    +842.2 | 13518 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
-|    +842.3 | 13518 sh w10.sh | pipe2 -> 3, 4 |
-|    +842.5 | 13518 sh w10.sh | kind=fork -> child 13528 |
-|    +843.0 | 13518 sh w10.sh | kind=fork -> child 13529 |
-|    +843.1 | 13528 yes w10 | execve -> yes w10 |
-|    +843.4 | 13529 head -n | execve -> head -n |
-|    +843.4 | 13528 yes w10 | resets 61 signal dispositions to SIG_DFL |
-|    +843.8 | 13529 head -n | resets 61 signal dispositions to SIG_DFL |
-|    +848.3 | 13529 head -n | exits 0 |
-|    +848.3 | 13518 sh w10.sh | wait4 reaps head -n: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +848.3 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from head -n) |
-|    +848.3 | 13528 yes w10 | receives SIGPIPE (SI_USER, from yes w10) |
-|    +848.4 | 13518 sh w10.sh | returns from signal handler |
-|    +848.4 | 13528 yes w10 | killed by SIGPIPE |
-|    +848.4 | 13518 sh w10.sh | receives SIGCHLD (CLD_KILLED, from yes w10) |
-|    +848.4 | 13518 sh w10.sh | returns from signal handler |
-|    +848.5 | 13518 sh w10.sh | wait4 reaps yes w10: WIFSIGNALED(s) && WTERMSIG(s) == SIGPIPE |
-|    +848.5 | 13518 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
-|    +848.9 | 13518 sh w10.sh | pipe2 -> 3, 4 |
-|    +849.0 | 13518 sh w10.sh | kind=fork -> child 13530 |
-|    +849.5 | 13518 sh w10.sh | kind=fork -> child 13531 |
-|    +849.7 | 13530 cat t1.h | execve -> cat t1.h |
-|    +849.9 | 13531 wc -l | execve -> wc -l |
-|    +850.0 | 13530 cat t1.h | resets 61 signal dispositions to SIG_DFL |
-|    +850.3 | 13531 wc -l | resets 61 signal dispositions to SIG_DFL |
-|    +855.2 | 13530 cat t1.h | exits 0 |
-|    +855.2 | 13518 sh w10.sh | wait4 reaps cat t1.h: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +855.2 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from cat t1.h) |
-|    +855.3 | 13518 sh w10.sh | returns from signal handler |
-|    +855.3 | 13531 wc -l | exits 0 |
-|    +855.3 | 13518 sh w10.sh | wait4 reaps wc -l: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
-|    +855.4 | 13518 sh w10.sh | receives SIGCHLD (CLD_EXITED, from wc -l) |
-|    +855.4 | 13518 sh w10.sh | returns from signal handler |
-|    +855.4 | 13518 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
-|    +855.6 | 13518 sh w10.sh | exits 0 |
+|      +0.0 | 22034 sh w10.sh | execve -> sh w10.sh |
+|      +0.6 | 22034 sh w10.sh | rt_sigaction SIGCHLD:handler |
+|      +1.1 | 22034 sh w10.sh | rt_sigaction SIGINT:handler |
+|      +1.2 | 22034 sh w10.sh | rt_sigaction SIGQUIT:SIG_DFL |
+|      +1.3 | 22034 sh w10.sh | rt_sigaction SIGTERM:SIG_DFL |
+|      +1.6 | 22034 sh w10.sh | kind=vfork -> child 22035 |
+|      +1.6 | 22035 tcc -o | execve -> tcc -o |
+|     +15.0 | 22035 tcc -o | unlinkat(mktab) = -1 ENOENT (No such file or directory) |
+|     +16.0 | 22035 tcc -o | exits 0 |
+|     +16.1 | 22034 sh w10.sh | wait4 reaps tcc -o: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|     +16.1 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from tcc -o) |
+|     +16.1 | 22034 sh w10.sh | returns from signal handler |
+|     +16.2 | 22034 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
+|     +16.5 | 22034 sh w10.sh | kind=fork -> child 22036 |
+|     +16.9 | 22036 sh w10.sh | rt_sigaction SIGINT:SIG_IGN+SA_RESTART |
+|     +16.9 | 22034 sh w10.sh | kind=fork -> child 22037 |
+|     +16.9 | 22036 sh w10.sh | rt_sigaction SIGQUIT:SIG_IGN+SA_RESTART |
+|     +17.2 | 22037 sh w10.sh | rt_sigaction SIGINT:SIG_IGN+SA_RESTART |
+|     +17.2 | 22034 sh w10.sh | kind=fork -> child 22038 |
+|     +17.2 | 22037 sh w10.sh | rt_sigaction SIGQUIT:SIG_IGN+SA_RESTART |
+|     +17.3 | 22034 sh w10.sh | wait4(WNOHANG) = 0 |
+|     +17.4 | 22038 sh w10.sh | rt_sigaction SIGINT:SIG_IGN+SA_RESTART |
+|     +17.5 | 22038 sh w10.sh | rt_sigaction SIGQUIT:SIG_IGN+SA_RESTART |
+|     +17.5 | 22036 mktab 1 | execve -> mktab 1 |
+|     +17.8 | 22037 mktab 2 | execve -> mktab 2 |
+|     +18.2 | 22038 sh w10.sh | kind=vfork -> child 22039 |
+|     +18.2 | 22039 mktab 3 | execve -> mktab 3 |
+|    +432.6 | 22036 mktab 1 | exits 0 |
+|    +432.6 | 22034 sh w10.sh | rt_sigsuspend interrupted (ERESTARTNOHAND) |
+|    +432.6 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 1) |
+|    +432.7 | 22034 sh w10.sh | returns from signal handler |
+|    +432.7 | 22037 mktab 2 | exits 0 |
+|    +432.8 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 2) |
+|    +432.8 | 22034 sh w10.sh | returns from signal handler |
+|    +432.9 | 22034 sh w10.sh | wait4 reaps mktab 1: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +432.9 | 22039 mktab 3 | exits 0 |
+|    +432.9 | 22034 sh w10.sh | wait4 reaps mktab 2: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +432.9 | 22038 sh w10.sh | wait4 reaps mktab 3: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +433.0 | 22038 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 3) |
+|    +433.0 | 22034 sh w10.sh | wait4(WNOHANG) = 0 |
+|    +433.0 | 22038 sh w10.sh | returns from signal handler |
+|    +433.1 | 22034 sh w10.sh | wait4(WNOHANG) = 0 |
+|    +433.1 | 22038 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
+|    +433.4 | 22038 sh w10.sh | exits 0 |
+|    +433.4 | 22034 sh w10.sh | rt_sigsuspend interrupted (ERESTARTNOHAND) |
+|    +433.4 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from sh w10.sh) |
+|    +433.4 | 22034 sh w10.sh | returns from signal handler |
+|    +433.5 | 22034 sh w10.sh | wait4 reaps sh w10.sh: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +433.6 | 22034 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
+|    +433.7 | 22034 sh w10.sh | pipe2 -> 3, 4 |
+|    +433.9 | 22034 sh w10.sh | kind=fork -> child 22041 |
+|    +434.2 | 22034 sh w10.sh | pipe2 -> 4, 5 |
+|    +434.5 | 22034 sh w10.sh | kind=fork -> child 22042 |
+|    +434.5 | 22041 mktab 4 | execve -> mktab 4 |
+|    +434.9 | 22034 sh w10.sh | kind=fork -> child 22043 |
+|    +435.1 | 22042 sort | execve -> sort |
+|    +435.4 | 22043 wc -l | execve -> wc -l |
+|    +435.5 | 22042 sort | resets 61 signal dispositions to SIG_DFL |
+|    +435.8 | 22043 wc -l | resets 61 signal dispositions to SIG_DFL |
+|    +838.5 | 22041 mktab 4 | exits 0 |
+|    +838.5 | 22034 sh w10.sh | wait4 reaps mktab 4: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +838.5 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from mktab 4) |
+|    +838.6 | 22034 sh w10.sh | returns from signal handler |
+|    +841.2 | 22042 sort | exits 0 |
+|    +841.3 | 22034 sh w10.sh | wait4 reaps sort: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +841.3 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from sort) |
+|    +841.4 | 22034 sh w10.sh | returns from signal handler |
+|    +841.4 | 22043 wc -l | exits 0 |
+|    +841.4 | 22034 sh w10.sh | wait4 reaps wc -l: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +841.4 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from wc -l) |
+|    +841.5 | 22034 sh w10.sh | returns from signal handler |
+|    +841.5 | 22034 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
+|    +841.6 | 22034 sh w10.sh | pipe2 -> 3, 4 |
+|    +841.8 | 22034 sh w10.sh | kind=fork -> child 22044 |
+|    +842.4 | 22034 sh w10.sh | kind=fork -> child 22045 |
+|    +842.4 | 22044 yes w10 | execve -> yes w10 |
+|    +842.8 | 22045 head -n | execve -> head -n |
+|    +842.8 | 22044 yes w10 | resets 61 signal dispositions to SIG_DFL |
+|    +843.2 | 22045 head -n | resets 61 signal dispositions to SIG_DFL |
+|    +847.8 | 22045 head -n | exits 0 |
+|    +847.9 | 22034 sh w10.sh | wait4 reaps head -n: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +847.9 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from head -n) |
+|    +847.9 | 22044 yes w10 | receives SIGPIPE (SI_USER, from yes w10) |
+|    +848.0 | 22034 sh w10.sh | returns from signal handler |
+|    +848.0 | 22044 yes w10 | killed by SIGPIPE |
+|    +848.0 | 22034 sh w10.sh | wait4 reaps yes w10: WIFSIGNALED(s) && WTERMSIG(s) == SIGPIPE |
+|    +848.0 | 22034 sh w10.sh | receives SIGCHLD (CLD_KILLED, from yes w10) |
+|    +848.1 | 22034 sh w10.sh | returns from signal handler |
+|    +848.1 | 22034 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
+|    +848.4 | 22034 sh w10.sh | pipe2 -> 3, 4 |
+|    +848.6 | 22034 sh w10.sh | kind=fork -> child 22046 |
+|    +849.0 | 22034 sh w10.sh | kind=fork -> child 22047 |
+|    +849.2 | 22046 cat t1.h | execve -> cat t1.h |
+|    +849.6 | 22047 wc -l | execve -> wc -l |
+|    +849.6 | 22046 cat t1.h | resets 61 signal dispositions to SIG_DFL |
+|    +849.9 | 22047 wc -l | resets 61 signal dispositions to SIG_DFL |
+|    +854.8 | 22046 cat t1.h | exits 0 |
+|    +854.8 | 22034 sh w10.sh | wait4 reaps cat t1.h: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +854.8 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from cat t1.h) |
+|    +854.9 | 22034 sh w10.sh | returns from signal handler |
+|    +855.0 | 22047 wc -l | exits 0 |
+|    +855.0 | 22034 sh w10.sh | wait4 reaps wc -l: WIFEXITED(s) && WEXITSTATUS(s) == 0 |
+|    +855.0 | 22034 sh w10.sh | receives SIGCHLD (CLD_EXITED, from wc -l) |
+|    +855.0 | 22034 sh w10.sh | returns from signal handler |
+|    +855.1 | 22034 sh w10.sh | wait4(WNOHANG) = -1 ECHILD (No child process) |
+|    +855.2 | 22034 sh w10.sh | exits 0 |
 
 ## W9 stability, Ctrl-C: event kinds per repetition (strace, 9 runs)
 
@@ -335,5 +335,7 @@ Run `W10-parallel-r1`. Times relative to the first traced syscall. Includes bloc
 | wait4 interrupted in make-l1 | all |
 | wait4 interrupted in make-top | all |
 | mktab exits 0 | 6/9 (at 1.5, 3.0 s) |
-| writev interrupted in make-l2 | 5/9 (at 0.3, 1.5, 3.0 s) |
+| writev interrupted in make-l2 | 4/9 (at 0.3, 1.5, 3.0 s) |
+| recipe-sh killed by SIGTERM | 1/9 (at 3.0 s) |
+| recipe-sh receives SIGTERM (SI_USER) | 1/9 (at 3.0 s) |
 

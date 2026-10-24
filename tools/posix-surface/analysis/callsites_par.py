@@ -22,7 +22,7 @@ os.makedirs(RES, exist_ok=True)
 PROGS = {"gmake": ("gmake", "gmake/make"), "pdpmake": ("pdpmake", "pdpmake/make"), "dash": ("dash", "dash/src/dash")}
 
 API_WAIT = r"pselect|select|poll|ppoll|epoll_\w+|wait|waitpid|wait3|wait4|waitid|sigsuspend|system|reap_children|block_sigs|unblock_sigs"
-API_SIG = r"signal|bsd_signal|sigaction|sigprocmask|pthread_sigmask|sigemptyset|sigfillset|sigaddset|sigdelset|sigismember|raise|kill|killpg|setsignal|ignoresig|sigblockall|sigclearmask|alarm|setitimer"
+API_SIG = r"FATAL_SIG|signal|bsd_signal|sigaction|sigprocmask|pthread_sigmask|sigemptyset|sigfillset|sigaddset|sigdelset|sigismember|raise|kill|killpg|setsignal|ignoresig|sigblockall|sigclearmask|alarm|setitimer"
 API_CLEAN = r"unlink|unlinkat|remove|delete_target|delete_child_targets|kill|killpg|remove_intermediates"
 API_IO = r"read|write|open|close|pipe|pipe2|mkfifo|mknod|fcntl|dup|dup2|fd_noinherit|fd_inherit|set_blocking|unlink"
 CALL = lambda pat: re.compile(r"(?<![\w.>])(" + pat + r")\s*\(")

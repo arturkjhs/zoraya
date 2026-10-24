@@ -28,12 +28,13 @@ SIGL = re.compile(r"^--- (SIG\w+) \{si_signo=\w+, si_code=(\w+)(?:, si_pid=(\d+)
 EXITL = re.compile(r"^\+\+\+ (exited with (\d+)|killed by (SIG\w+))")
 QSTR = re.compile(r'"((?:[^"\\]|\\.)*)"')
 
+RETSEP = re.compile(r"\)\s+=\s")
 def ret_of(text):
-    i = text.rfind(") = ")
-    if i < 0:
-        i = text.rfind(") =")
-        return text[i + 3:].strip() if i >= 0 else "?"
-    return text[i + 4:].strip()
+    """return value after the last ') = ' (strace pads short lines: ')    = 0')"""
+    m = None
+    for m in RETSEP.finditer(text):
+        pass
+    return text[m.end():].strip() if m else "?"
 
 def strlist(text, start):
     """quoted strings of the array that starts at text[start] == '['"""
@@ -53,6 +54,7 @@ class Trace:
     def __init__(self, path):
         self.path, self.calls, self.sigs, self.exits = path, [], [], {}
         self.parent, self.argv, self.exe, self.start, self.end = {}, {}, {}, {}, {}
+        self.exec_ts = {}       # pid -> time its (last) execve returned: calls before it ran the parent's image
         pend = {}
         for l in open(path, errors="replace"):
             m = LINE.match(l.rstrip("\n"))
@@ -76,7 +78,7 @@ class Trace:
             if r:
                 if pid in pend:
                     i = pend.pop(pid)
-                    name, full = self.calls[i][2], self.calls[i][3] + r.group(2)
+                    name, full = self.calls[i][2], self.calls[i][3].rstrip() + r.group(2)
                     self.calls[i] = (pid, self.calls[i][1], name, full, ret_of(full), ts)
                     self._note(self.calls[i])
                 continue
@@ -99,31 +101,33 @@ class Trace:
             m = QSTR.match(full, len("execve("))
             if m:
                 self.exe[pid] = m.group(1)
+                self.exec_ts[pid] = ets
                 b = full.find("[", m.end())
                 if b >= 0:
                     self.argv[pid] = strlist(full, b)[0]
 
-    def image(self, pid):
+    def image(self, pid, ts=None):
+        """pid whose execve defines the image running in pid (at time ts, if given)"""
         while pid is not None:
-            if pid in self.exe:
+            if pid in self.exe and (ts is None or self.exec_ts.get(pid) is None or ts >= self.exec_ts[pid]):
                 return pid
             pid = self.parent.get(pid)
         return None
 
-    def prog(self, pid):
-        ip = self.image(pid)
+    def prog(self, pid, ts=None):
+        ip = self.image(pid, ts)
         if ip is None:
             return "?"
         av = self.argv.get(ip, [""])
         return M.program(av[0] if av else "", M.resolve(self.exe[ip]))
 
-    def role(self, pid):
+    def role(self, pid, ts=None):
         """short label: make@<dir> for makes, otherwise program + argument, @ the nearest make's dir"""
-        ip = self.image(pid)
+        ip = self.image(pid, ts)
         if ip is None:
             return f"?{pid}"
         av = self.argv.get(ip, [])
-        p = self.prog(pid)
+        p = self.prog(pid, ts)
         if p == "gmake" or p == "pdpmake":
             return f"{p}@{self.makedir(ip)}"
         base = os.path.basename(av[0]) if av else p
@@ -165,8 +169,10 @@ class Trace:
             p = self.parent.get(p)
         return None
 
-    def rclass(self, pid):
+    def rclass(self, pid, ts=None):
         """role class used for stability signatures"""
+        if ts is not None and self.image(pid, ts) != self.image(pid):
+            return self.rclass(self.parent[pid], ts) + "(child before exec)" if pid in self.parent else "?"
         p = self.prog(pid)
         if p in ("gmake", "pdpmake"):
             # level = number of make ancestors (recursion through -C or through `cd dir && $(MAKE)`)
@@ -191,7 +197,7 @@ def patterns(name, full, ret):
     if name in ("clone", "clone3"):
         out.append("kind=" + ("thread" if "CLONE_THREAD" in a else "vfork" if "CLONE_VFORK" in a else "fork"))
     elif name == "wait4":
-        m = re.match(r"(-?\d+), (?:NULL|0x[0-9a-f]+|\[.*?\]), ([A-Z_|]+|0)", a)
+        m = re.match(r"(-?\d+),\s*(?:NULL|0x[0-9a-f]+|\[.*?\]),\s*([A-Z_|]+|0)", a)
         if m:
             out.append(f"pid={'-1' if m.group(1) == '-1' else '>0'};opts={m.group(2)}")
     elif name in ("pselect6", "ppoll", "poll", "select", "epoll_wait", "epoll_pwait"):
@@ -230,7 +236,7 @@ def patterns(name, full, ret):
             fl = re.search(r'", (O_[\w|]+)', a)
             out.append("jobserver-fifo " + (fl.group(1) if fl else ""))
     elif name in ("read", "write"):
-        if re.match(r'\d+, "\+", 1\)', a) and ret.startswith("1"):
+        if re.match(r'\d+,\s*"\+", 1\)', a) and ret.startswith("1"):
             out.append("token")
         elif ret.startswith("?") or "EAGAIN" in ret:
             out.append("result=" + ret.split()[1] if len(ret.split()) > 1 else ret)
@@ -441,11 +447,11 @@ for f in sorted(glob.glob(os.path.join(RAWP, "strace", "*.txt"))):
         dl[fam][f"{sig} ({code}) -> {t.rclass(pid)}" + (f" from {t.rclass(spid)}" if spid and spid in t.start else "")] += 1
     for pid, ts, name, full, ret, ets in t.calls:
         if name in ("kill", "tgkill", "tkill"):
-            sd[fam][f"{t.rclass(pid)} {name}: {patterns(name, full, ret)[0]}"] += 1
+            sd[fam][f"{t.rclass(pid, ts)} {name}: {patterns(name, full, ret)[0]}"] += 1
         if ret.startswith("? ERESTART") or "EINTR" in ret:
-            intr[fam][f"{name} {ret.split()[1]} in {t.rclass(pid)}"] += 1
+            intr[fam][f"{name} {ret.split()[1]} in {t.rclass(pid, ts)}"] += 1
         if name in ("setpgid",) or (name == "ioctl" and "TIOCSPGRP" in full) or (name == "kill" and re.match(r"kill\(-\d", full)):
-            pg[fam][f"{t.rclass(pid)} {name}" + (" TIOCSPGRP" if "TIOCSPGRP" in full else "")] += 1
+            pg[fam][f"{t.rclass(pid, ts)} {name}" + (" TIOCSPGRP" if "TIOCSPGRP" in full else "")] += 1
 for title, d in (("Signals delivered (receiver role, sender role when si_pid names a traced process)", dl),
                  ("Signals sent by the processes themselves (kill/tgkill/tkill)", sd),
                  ("System calls interrupted by a signal (EINTR / ERESTART*)", intr),
@@ -553,7 +559,7 @@ def tl_lines(rid, t0, since=None, until=None, full=False):
     for ts, pid, txt in ev:
         if ts is None or (since and ts < since) or (until and ts > until):
             continue
-        out.append((ts, f"| {1000 * (ts - t0):+9.1f} | {pid} {t.role(pid)} | {txt} |"))
+        out.append((ts, f"| {1000 * (ts - t0):+9.1f} | {pid} {t.role(pid, ts)} | {txt} |"))
     return out, t
 
 def alive_at(t, ts):

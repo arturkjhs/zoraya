@@ -37,15 +37,15 @@ W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	brk	90
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	chdir	4
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	clock_gettime	3
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	clone	40
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	close	1346
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	dup3	18
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	close	1347
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	dup3	19
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	execve	43
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	exit_group	41
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	faccessat2	40
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	fcntl	142
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	fcntl	143
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	fstat	12
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	getcwd	4
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	getdents64	98
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	getdents64	101
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	geteuid	3
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	getpid	2
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	getppid	2
@@ -56,11 +56,11 @@ W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	mmap	2021
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	mprotect	85
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	mremap	5
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	munmap	1887
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	newfstatat	290
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	openat	1907
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	newfstatat	293
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	openat	1908
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	pipe2	42
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	pselect6	67
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	read	4210
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	pselect6	68
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	read	4211
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	readv	33
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	rt_sigaction	825
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	rt_sigprocmask	288
@@ -68,8 +68,8 @@ W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	rt_sigreturn	33
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	set_tid_address	43
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	umask	2
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	unlinkat	37
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	wait4	146
-W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	write	35
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	wait4	147
+W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	write	36
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r1	writev	296
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r2	brk	90
 W2 gmake -j2 pipe	parallel	W2j-g-pipe-j2-r2	chdir	4
@@ -170,8 +170,8 @@ W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	munmap	1862
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	newfstatat	290
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	openat	1913
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	pipe2	41
-W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	pselect6	66
-W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	read	4209
+W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	pselect6	67
+W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	read	4210
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	readv	33
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	rt_sigaction	825
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	rt_sigprocmask	288
@@ -179,8 +179,8 @@ W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	rt_sigreturn	33
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	set_tid_address	43
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	umask	2
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	unlinkat	38
-W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	wait4	145
-W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	write	34
+W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	wait4	146
+W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	write	35
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r1	writev	296
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r2	brk	90
 W2 gmake -j2 fifo	parallel	W2j-g-fifo-j2-r2	chdir	4
@@ -346,27 +346,27 @@ W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	brk	90
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	chdir	4
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	clock_gettime	3
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	clone	40
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	close	1341
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	close	1342
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	dup3	27
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	execve	43
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	exit_group	41
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	faccessat2	40
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	fcntl	137
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	fcntl	138
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	fstat	12
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	getcwd	4
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	getdents64	83
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	getdents64	86
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	geteuid	3
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	getpid	2
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	getppid	2
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	getuid	1
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	ioctl	44
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	lseek	808
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	mmap	2026
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	mmap	2007
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	mprotect	85
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	mremap	5
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	munmap	1892
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	newfstatat	275
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	openat	1902
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	munmap	1873
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	newfstatat	278
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	openat	1903
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	pipe2	42
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	pselect6	56
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r1	read	4213
@@ -406,16 +406,16 @@ W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	munmap	1892
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	newfstatat	278
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	openat	1903
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	pipe2	42
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	pselect6	55
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	pselect6	57
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	read	4213
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	readv	33
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	rt_sigaction	825
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	rt_sigprocmask	288
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	rt_sigreturn	20
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	rt_sigreturn	22
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	set_tid_address	43
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	umask	2
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	unlinkat	37
-W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	wait4	134
+W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	wait4	136
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	write	38
 W2 gmake -j4 pipe	parallel	W2j-g-pipe-j4-r2	writev	296
 W2 gmake -j4 fifo	serial	W2-make-g	brk	90
@@ -456,15 +456,15 @@ W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	brk	90
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	chdir	4
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	clock_gettime	3
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	clone	40
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	close	1342
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	close	1343
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	dup3	27
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	execve	43
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	exit_group	41
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	faccessat2	40
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	fcntl	118
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	fcntl	119
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	fstat	12
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	getcwd	4
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	getdents64	86
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	getdents64	89
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	geteuid	3
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	getpid	3
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	getppid	2
@@ -476,8 +476,8 @@ W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	mmap	2011
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	mprotect	85
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	mremap	5
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	munmap	1877
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	newfstatat	278
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	openat	1909
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	newfstatat	281
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	openat	1910
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	pipe2	41
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	pselect6	55
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r1	read	4213
@@ -518,16 +518,16 @@ W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	munmap	1877
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	newfstatat	278
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	openat	1909
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	pipe2	41
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	pselect6	55
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	pselect6	56
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	read	4213
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	readv	33
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	rt_sigaction	825
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	rt_sigprocmask	288
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	rt_sigreturn	20
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	rt_sigreturn	21
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	set_tid_address	43
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	umask	2
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	unlinkat	38
-W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	wait4	134
+W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	wait4	135
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	write	38
 W2 gmake -j4 fifo	parallel	W2j-g-fifo-j4-r2	writev	296
 W2 pdpmake -j4	serial	W2-make-p	brk	162
@@ -1444,7 +1444,7 @@ W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	rt_sigprocmask	592
 W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	rt_sigreturn	66
 W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	set_tid_address	111
 W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	unlinkat	40
-W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	wait4	219
+W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	wait4	218
 W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	write	2
 W8 gmake -j2 pipe	parallel	W8j-g-pipe-j2-r2	writev	1554
 W8 gmake -j2 fifo	serial	W8j-g-j1-r1	brk	229
@@ -1768,7 +1768,7 @@ W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	chdir	13
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	clock_gettime	7
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	clone	78
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	close	535
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	dup3	47
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	dup3	53
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	execve	111
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	exit_group	79
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	faccessat2	78
@@ -1787,23 +1787,23 @@ W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	munmap	1143
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	newfstatat	339
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	openat	326
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	pipe2	85
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	pselect6	84
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	read	671
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	pselect6	100
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	read	688
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	readv	36
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	rt_sigaction	1698
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	rt_sigprocmask	592
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	rt_sigreturn	61
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	rt_sigreturn	60
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	set_tid_address	111
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	unlinkat	40
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	wait4	229
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	write	19
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	wait4	237
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	write	26
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r1	writev	1554
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	brk	229
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	chdir	13
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	clock_gettime	7
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	clone	78
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	close	535
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	dup3	44
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	dup3	45
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	execve	111
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	exit_group	79
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	faccessat2	78
@@ -1822,16 +1822,16 @@ W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	munmap	1143
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	newfstatat	339
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	openat	326
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	pipe2	85
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	pselect6	76
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	read	669
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	pselect6	78
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	read	666
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	readv	36
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	rt_sigaction	1698
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	rt_sigprocmask	592
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	rt_sigreturn	55
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	rt_sigreturn	60
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	set_tid_address	111
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	unlinkat	40
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	wait4	224
-W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	write	20
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	wait4	227
+W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	write	18
 W8 gmake -j4 pipe	parallel	W8j-g-pipe-j4-r2	writev	1554
 W8 gmake -j4 fifo	serial	W8j-g-j1-r1	brk	229
 W8 gmake -j4 fifo	serial	W8j-g-j1-r1	chdir	13
@@ -1902,7 +1902,7 @@ W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	chdir	13
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	clock_gettime	7
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	clone	78
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	close	535
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	dup3	44
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	dup3	49
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	execve	111
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	exit_group	79
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	faccessat2	78
@@ -1922,27 +1922,27 @@ W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	munmap	1127
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	newfstatat	339
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	openat	340
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	pipe2	84
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	pselect6	83
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	read	671
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	pselect6	85
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	read	678
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	readv	36
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	set_tid_address	111
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	unlinkat	41
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	wait4	226
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	write	18
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	wait4	228
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	write	25
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r1	writev	1554
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	brk	229
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	chdir	13
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	clock_gettime	7
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	clone	78
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	close	535
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	dup3	45
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	close	534
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	dup3	42
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	execve	111
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	exit_group	79
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	faccessat2	78
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	fcntl	284
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	fcntl	282
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	fstat	28
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	getcwd	45
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	getdents64	30
@@ -1957,17 +1957,17 @@ W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	mprotect	190
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	munmap	1127
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	newfstatat	339
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	openat	340
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	pipe2	84
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	pselect6	79
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	read	667
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	pipe2	83
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	pselect6	72
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	read	663
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	readv	36
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	set_tid_address	111
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	unlinkat	41
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	wait4	226
-W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	write	18
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	wait4	223
+W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	write	17
 W8 gmake -j4 fifo	parallel	W8j-g-fifo-j4-r2	writev	1554
 W8 pdpmake -j4	serial	W8j-p-j1-r1	brk	314
 W8 pdpmake -j4	serial	W8j-p-j1-r1	chdir	6
@@ -2175,7 +2175,7 @@ W10 dash	parallel	W10-parallel-r1	umask	12
 W10 dash	parallel	W10-parallel-r1	unlinkat	1
 W10 dash	parallel	W10-parallel-r1	wait4	21
 W10 dash	parallel	W10-parallel-r1	write	49
-W10 dash	parallel	W10-parallel-r1	writev	180
+W10 dash	parallel	W10-parallel-r1	writev	181
 W10 dash	parallel	W10-parallel-r2	brk	24
 W10 dash	parallel	W10-parallel-r2	clone	12
 W10 dash	parallel	W10-parallel-r2	close	62
@@ -2212,7 +2212,7 @@ W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	chdir	13
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clock_gettime	7
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clone	78
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	close	535
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	44
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	49
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	execve	111
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	exit_group	79
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	faccessat2	78
@@ -2232,27 +2232,27 @@ W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	munmap	1127
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	newfstatat	339
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	openat	340
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pipe2	84
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	83
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	671
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	85
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	678
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	readv	36
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	set_tid_address	111
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	unlinkat	41
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	226
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	18
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	228
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	25
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	writev	1554
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	brk	229
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	chdir	13
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clock_gettime	7
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clone	78
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	535
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	45
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	534
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	42
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	execve	111
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	exit_group	79
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	faccessat2	78
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	284
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	282
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fstat	28
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getcwd	45
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getdents64	30
@@ -2267,17 +2267,17 @@ W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	mprotect	190
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	munmap	1127
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	newfstatat	339
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	openat	340
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	84
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	79
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	667
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	83
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	72
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	663
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	readv	36
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	set_tid_address	111
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	unlinkat	41
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	226
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	18
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	223
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	17
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	writev	1554
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	brk	47
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	chdir	7
@@ -2316,7 +2316,7 @@ W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	set_tid_address
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	setpgid	4
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	tkill	1
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	unlinkat	9
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	wait4	40
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	wait4	38
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	write	9
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r1	writev	142
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	brk	47
@@ -2358,7 +2358,7 @@ W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	tkill	1
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	unlinkat	9
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	wait4	37
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	write	9
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	writev	146
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r2	writev	143
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	brk	47
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	chdir	7
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	clock_gettime	7
@@ -2398,13 +2398,13 @@ W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	tkill	1
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	unlinkat	9
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	wait4	38
 W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	write	9
-W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	writev	144
+W9 Ctrl-C at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-int-d0.3-r3	writev	141
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	brk	229
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	chdir	13
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clock_gettime	7
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clone	78
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	close	535
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	44
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	49
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	execve	111
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	exit_group	79
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	faccessat2	78
@@ -2424,27 +2424,27 @@ W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	munmap	1127
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	newfstatat	339
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	openat	340
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pipe2	84
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	83
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	671
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	85
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	678
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	readv	36
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	set_tid_address	111
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	unlinkat	41
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	226
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	18
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	228
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	25
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	writev	1554
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	brk	229
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	chdir	13
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clock_gettime	7
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clone	78
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	535
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	45
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	534
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	42
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	execve	111
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	exit_group	79
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	faccessat2	78
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	284
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	282
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fstat	28
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getcwd	45
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getdents64	30
@@ -2459,17 +2459,17 @@ W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	mprotect	190
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	munmap	1127
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	newfstatat	339
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	openat	340
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	84
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	79
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	667
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	83
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	72
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	663
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	readv	36
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	set_tid_address	111
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	unlinkat	41
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	226
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	18
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	223
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	17
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	writev	1554
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	brk	95
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	chdir	7
@@ -2508,9 +2508,9 @@ W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	set_tid_address
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	setpgid	4
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	tkill	1
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	unlinkat	9
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	wait4	75
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	wait4	73
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	write	9
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	writev	631
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r1	writev	634
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	brk	95
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	chdir	7
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	clock_gettime	7
@@ -2548,9 +2548,9 @@ W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	set_tid_address
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	setpgid	4
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	tkill	1
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	unlinkat	9
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	wait4	75
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	wait4	74
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	write	9
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	writev	637
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r2	writev	632
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	brk	95
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	chdir	7
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	clock_gettime	7
@@ -2588,15 +2588,15 @@ W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	set_tid_address
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	setpgid	4
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	tkill	1
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	unlinkat	9
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	wait4	73
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	wait4	74
 W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	write	9
-W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	writev	628
+W9 Ctrl-C at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-int-d1.5-r3	writev	627
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	brk	229
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	chdir	13
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clock_gettime	7
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clone	78
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	close	535
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	44
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	49
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	execve	111
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	exit_group	79
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	faccessat2	78
@@ -2616,27 +2616,27 @@ W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	munmap	1127
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	newfstatat	339
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	openat	340
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pipe2	84
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	83
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	671
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	85
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	678
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	readv	36
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	set_tid_address	111
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	unlinkat	41
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	226
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	18
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	228
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	25
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	writev	1554
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	brk	229
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	chdir	13
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clock_gettime	7
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clone	78
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	535
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	45
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	534
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	42
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	execve	111
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	exit_group	79
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	faccessat2	78
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	284
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	282
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fstat	28
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getcwd	45
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getdents64	30
@@ -2651,17 +2651,17 @@ W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	mprotect	190
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	munmap	1127
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	newfstatat	339
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	openat	340
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	84
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	79
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	667
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	83
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	72
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	663
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	readv	36
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	set_tid_address	111
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	unlinkat	41
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	226
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	18
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	223
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	17
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	writev	1554
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	brk	143
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	chdir	7
@@ -2700,49 +2700,49 @@ W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	set_tid_address
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	setpgid	4
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	tkill	1
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	unlinkat	9
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	wait4	110
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	wait4	109
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	write	9
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	writev	1236
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	brk	147
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r1	writev	1232
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	brk	143
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	chdir	7
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	clock_gettime	7
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	clone	40
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	close	282
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	dup3	32
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	execve	70
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	exit_group	30
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	faccessat2	39
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	fcntl	207
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	clone	39
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	close	277
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	dup3	31
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	execve	68
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	exit_group	29
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	faccessat2	38
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	fcntl	204
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	fstat	30
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getcwd	43
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getcwd	42
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getdents64	30
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	geteuid	30
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	geteuid	29
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getpgid	1
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getpid	39
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getppid	30
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	ioctl	55
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getpid	38
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	getppid	29
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	ioctl	54
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	kill	7
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	lseek	156
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	mknodat	1
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	mmap	1001
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	mprotect	111
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	munmap	762
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	newfstatat	298
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	openat	171
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	pipe2	42
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	pselect6	36
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	read	485
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	mmap	998
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	mprotect	108
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	munmap	761
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	newfstatat	294
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	openat	170
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	pipe2	41
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	pselect6	35
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	read	484
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	readlinkat	2
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	rt_sigaction	936
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	rt_sigprocmask	328
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	rt_sigreturn	35
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	set_tid_address	70
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	rt_sigaction	913
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	rt_sigprocmask	320
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	rt_sigreturn	34
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	set_tid_address	68
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	setpgid	4
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	tkill	1
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	unlinkat	9
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	wait4	114
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	wait4	110
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	write	9
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	writev	1244
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r2	writev	1230
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	brk	143
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	chdir	7
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	clock_gettime	7
@@ -2782,13 +2782,13 @@ W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	tkill	1
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	unlinkat	9
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	wait4	109
 W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	write	9
-W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	writev	1240
+W9 Ctrl-C at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-int-d3.0-r3	writev	1235
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	brk	229
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	chdir	13
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clock_gettime	7
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clone	78
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	close	535
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	44
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	49
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	execve	111
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	exit_group	79
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	faccessat2	78
@@ -2808,27 +2808,27 @@ W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	munmap	1127
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	newfstatat	339
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	openat	340
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pipe2	84
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	83
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	671
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	85
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	678
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	readv	36
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	set_tid_address	111
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	unlinkat	41
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	226
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	18
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	228
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	25
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	writev	1554
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	brk	229
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	chdir	13
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clock_gettime	7
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clone	78
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	535
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	45
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	534
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	42
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	execve	111
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	exit_group	79
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	faccessat2	78
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	284
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	282
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fstat	28
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getcwd	45
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getdents64	30
@@ -2843,17 +2843,17 @@ W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	mprotect	190
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	munmap	1127
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	newfstatat	339
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	openat	340
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	84
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	79
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	667
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	83
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	72
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	663
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	readv	36
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	set_tid_address	111
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	unlinkat	41
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	226
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	18
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	223
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	17
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	writev	1554
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	brk	47
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	chdir	7
@@ -2893,7 +2893,7 @@ W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	setpgid	4
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	unlinkat	9
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	wait4	40
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	write	9
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	writev	147
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r1	writev	145
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	brk	47
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	chdir	7
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	clock_gettime	7
@@ -2930,9 +2930,9 @@ W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	rt_sigreturn	
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	set_tid_address	20
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	setpgid	4
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	unlinkat	9
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	wait4	39
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	wait4	38
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	write	9
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	writev	146
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r2	writev	147
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	brk	47
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	chdir	7
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	clock_gettime	7
@@ -2969,15 +2969,15 @@ W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	rt_sigreturn	
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	set_tid_address	20
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	setpgid	4
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	unlinkat	9
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	wait4	39
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	wait4	38
 W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	write	9
-W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	writev	145
+W9 SIGTERM at 0.3s (vs W8 gmake -j4 fifo)	parallel	W9-term-d0.3-r3	writev	146
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	brk	229
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	chdir	13
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clock_gettime	7
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clone	78
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	close	535
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	44
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	49
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	execve	111
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	exit_group	79
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	faccessat2	78
@@ -2997,27 +2997,27 @@ W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	munmap	1127
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	newfstatat	339
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	openat	340
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pipe2	84
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	83
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	671
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	85
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	678
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	readv	36
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	set_tid_address	111
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	unlinkat	41
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	226
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	18
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	228
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	25
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	writev	1554
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	brk	229
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	chdir	13
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clock_gettime	7
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clone	78
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	535
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	45
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	534
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	42
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	execve	111
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	exit_group	79
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	faccessat2	78
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	284
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	282
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fstat	28
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getcwd	45
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getdents64	30
@@ -3032,17 +3032,17 @@ W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	mprotect	190
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	munmap	1127
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	newfstatat	339
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	openat	340
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	84
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	79
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	667
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	83
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	72
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	663
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	readv	36
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	set_tid_address	111
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	unlinkat	41
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	226
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	18
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	223
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	17
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	writev	1554
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	brk	95
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	chdir	7
@@ -3080,9 +3080,9 @@ W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	rt_sigreturn	
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	set_tid_address	44
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	setpgid	4
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	unlinkat	9
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	wait4	75
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	wait4	73
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	write	9
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	writev	630
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r1	writev	636
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	brk	95
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	chdir	7
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	clock_gettime	7
@@ -3119,9 +3119,9 @@ W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	rt_sigreturn	
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	set_tid_address	44
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	setpgid	4
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	unlinkat	9
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	wait4	75
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	wait4	74
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	write	9
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	writev	626
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r2	writev	638
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	brk	95
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	chdir	7
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	clock_gettime	7
@@ -3158,15 +3158,15 @@ W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	rt_sigreturn	
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	set_tid_address	44
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	setpgid	4
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	unlinkat	9
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	wait4	73
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	wait4	75
 W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	write	9
-W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	writev	628
+W9 SIGTERM at 1.5s (vs W8 gmake -j4 fifo)	parallel	W9-term-d1.5-r3	writev	640
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	brk	229
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	chdir	13
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clock_gettime	7
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	clone	78
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	close	535
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	44
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	dup3	49
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	execve	111
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	exit_group	79
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	faccessat2	78
@@ -3186,27 +3186,27 @@ W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	munmap	1127
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	newfstatat	339
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	openat	340
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pipe2	84
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	83
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	671
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	pselect6	85
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	read	678
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	readv	36
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigaction	1698
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigprocmask	592
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	60
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	rt_sigreturn	55
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	set_tid_address	111
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	unlinkat	41
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	226
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	18
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	wait4	228
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	write	25
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r1	writev	1554
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	brk	229
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	chdir	13
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clock_gettime	7
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	clone	78
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	535
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	45
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	close	534
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	dup3	42
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	execve	111
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	exit_group	79
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	faccessat2	78
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	284
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fcntl	282
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	fstat	28
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getcwd	45
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	getdents64	30
@@ -3221,17 +3221,17 @@ W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	mprotect	190
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	munmap	1127
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	newfstatat	339
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	openat	340
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	84
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	79
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	667
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pipe2	83
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	pselect6	72
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	read	663
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	readv	36
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigaction	1698
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigprocmask	592
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	60
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	rt_sigreturn	57
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	set_tid_address	111
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	unlinkat	41
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	226
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	18
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	wait4	223
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	write	17
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	serial	W8j-g-fifo-j4-r2	writev	1554
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	brk	143
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	chdir	7
@@ -3269,48 +3269,48 @@ W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	rt_sigreturn	
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	set_tid_address	68
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	setpgid	4
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	unlinkat	9
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	wait4	111
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	wait4	112
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	write	9
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	writev	1231
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	brk	143
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r1	writev	1236
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	brk	145
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	chdir	7
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	clock_gettime	7
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	clone	39
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	close	277
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	clone	40
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	close	280
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	dup3	31
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	execve	68
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	exit_group	29
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	faccessat2	38
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	fcntl	204
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	execve	69
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	exit_group	30
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	faccessat2	39
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	fcntl	205
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	fstat	30
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	getcwd	42
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	getdents64	30
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	geteuid	29
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	geteuid	30
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	getpgid	1
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	getpid	38
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	getpid	39
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	getppid	29
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	ioctl	54
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	kill	17
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	lseek	156
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	mknodat	1
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	mmap	998
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	mprotect	108
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	mmap	999
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	mprotect	110
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	munmap	761
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	newfstatat	294
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	newfstatat	295
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	openat	170
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	pipe2	41
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	pipe2	42
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	pselect6	35
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	read	484
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	read	485
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	readlinkat	2
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	rt_sigaction	913
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	rt_sigprocmask	317
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	rt_sigaction	930
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	rt_sigprocmask	325
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	rt_sigreturn	33
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	set_tid_address	68
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	set_tid_address	69
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	setpgid	4
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	unlinkat	9
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	wait4	110
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	unlinkat	8
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	wait4	113
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	write	9
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	writev	1221
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r2	writev	1243
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	brk	143
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	chdir	7
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	clock_gettime	7
@@ -3347,6 +3347,6 @@ W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	rt_sigreturn	
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	set_tid_address	68
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	setpgid	4
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	unlinkat	9
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	wait4	110
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	wait4	112
 W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	write	9
-W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	writev	1230
+W9 SIGTERM at 3.0s (vs W8 gmake -j4 fifo)	parallel	W9-term-d3.0-r3	writev	1236
