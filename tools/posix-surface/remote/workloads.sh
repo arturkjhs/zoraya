@@ -129,7 +129,7 @@ W4() {
 # W5: scripted interactive session on a pty for each shell
 W5() {
   for sh in dash oksh mrsh busybox; do
-    mkdir -p "$RUN/W5-$sh"
+    rm -rf "$RUN/W5-$sh"; mkdir -p "$RUN/W5-$sh"
     run_wl W5-$sh t1g "$RUN/W5-$sh" /usr/bin/python3 -I "$TOOLS/remote/w5_session.py" "$sh" "$PFX/bin" "$MODE" "$RAW"
   done
 }

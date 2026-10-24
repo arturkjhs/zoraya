@@ -143,7 +143,8 @@ md.append(f"  - new lower-bound symbols at T2: {', '.join(sorted(LO['T2'] - LO['
 md.append(f"- T3 (clang+lld alone) vs T1: min upper {len(UP['T3']['min'])} vs {len(UP['T1']['min'])}; "
           f"lower {len(LO['T3'])} vs {len(LO['T1'])}; T3 lower symbols not in T1 lower: {len(LO['T3'] - LO['T1'])}")
 md.append(f"  - of those, by category: " + ", ".join(
-    f"{c} {n}" for c, n in collections.Counter(cat[s] for s in LO['T3'] - LO['T1']).most_common()))
+    f"{c} {n}" for c, n in sorted(collections.Counter(cat[s] for s in LO['T3'] - LO['T1']).items(),
+                                  key=lambda kv: (-kv[1], kv[0]))))
 md.append("")
 
 # per program, including comparison programs
