@@ -59,7 +59,7 @@ run_wl() {
   out=$RAW/$MODE/$id.log
   log "$MODE $id ($set)"
   set +e
-  harness=no; case $id in W5-*) harness=yes;; esac   # W5: the pty harness applies preload/strace to the shell only
+  harness=no; case $id in W5-*|*W9-*) harness=yes;; esac   # W5, W9: the pty harness applies preload/strace to the shell only
   if [ "$MODE" = dynamic ]; then
     rm -rf /tmp/psurf-hits; mkdir -p /tmp/psurf-hits
     if [ $harness = yes ]; then pre=PSURF_PRELOAD; else pre=LD_PRELOAD; fi
@@ -72,7 +72,7 @@ run_wl() {
     rc=$?
   else
     (cd "$dir" && NS "$set" /usr/bin/env -i PATH="$P" HOME="$dir" TERM=dumb SHELL="$SETS/t1g/bin/sh" \
-        /usr/bin/strace -f -qq -s 256 -o "$RAW/strace/$id.txt" "$@") > "$out" 2>&1
+        /usr/bin/strace ${STRACE_OPTS:--f -qq -s 256} -o "$RAW/strace/$id.txt" "$@") > "$out" 2>&1
     rc=$?
   fi
   set -e

@@ -1,0 +1,144 @@
+program	feature	api	file	line	function	code	signals
+gmake	3 signals	signal	src/commands.c	530	fatal_error_signal	signal (sig, SIG_DFL);	
+gmake	1 jobserver	jobserver_clear	src/commands.c	534	fatal_error_signal	jobserver_clear ();	
+gmake	3 signals	kill	src/commands.c	544	fatal_error_signal	(void) kill (c->pid, SIGTERM);	TERM
+gmake	4 cleanup	kill	src/commands.c	544	fatal_error_signal	(void) kill (c->pid, SIGTERM);	TERM
+gmake	4 cleanup	delete_child_targets	src/commands.c	568	fatal_error_signal	delete_child_targets (c);	
+gmake	2 wait/reap	reap_children	src/commands.c	573	fatal_error_signal	reap_children (1, 0);	
+gmake	2 wait/reap	reap_children	src/commands.c	578	fatal_error_signal	reap_children (1, 1);	
+gmake	4 cleanup	remove_intermediates	src/commands.c	582	fatal_error_signal	remove_intermediates (1);	
+gmake	3 signals	kill	src/commands.c	600	fatal_error_signal	if (kill (make_pid (), sig) < 0)	
+gmake	4 cleanup	kill	src/commands.c	600	fatal_error_signal	if (kill (make_pid (), sig) < 0)	
+gmake	4 cleanup	unlink	src/commands.c	650	delete_target	if (unlink (file->name) < 0	
+gmake	4 cleanup	delete_target	src/commands.c	669	delete_child_targets	delete_target (child->file, NULL);	
+gmake	4 cleanup	delete_target	src/commands.c	673	delete_child_targets	delete_target (d->file, child->file->name);	
+gmake	2 wait/reap	reap_children	src/function.c	1979	func_shell_base	reap_children (1, 0);	
+gmake	2 wait/reap	block_sigs	src/job.c	475	block_sigs	block_sigs ()	
+gmake	3 signals	sigprocmask	src/job.c	477	block_sigs	sigprocmask (SIG_BLOCK, &fatal_signal_set, (sigset_t *) 0);	
+gmake	2 wait/reap	unblock_sigs	src/job.c	481	unblock_sigs	unblock_sigs ()	
+gmake	3 signals	sigprocmask	src/job.c	483	unblock_sigs	sigprocmask (SIG_UNBLOCK, &fatal_signal_set, (sigset_t *) 0);	
+gmake	3 signals	sigemptyset	src/job.c	490	unblock_all_sigs	sigemptyset (&empty);	
+gmake	3 signals	sigprocmask	src/job.c	491	unblock_all_sigs	sigprocmask (SIG_SETMASK, &empty, (sigset_t *) 0);	
+gmake	1 jobserver	jobserver_signal	src/job.c	615	child_handler	jobserver_signal ();	
+gmake	2 wait/reap	wait	src/job.c	762	reap_children	EINTRLOOP (pid, wait (&status));	
+gmake	2 wait/reap	unblock_sigs	src/job.c	1037	reap_children	unblock_sigs ();	
+gmake	2 wait/reap	block_sigs	src/job.c	1076	reap_children	block_sigs ();	
+gmake	2 wait/reap	unblock_sigs	src/job.c	1096	reap_children	unblock_sigs ();	
+gmake	1 jobserver	jobserver_enabled	src/job.c	1140	free_child	if (jobserver_enabled () && jobserver_tokens > 1)	
+gmake	1 jobserver	jobserver_release	src/job.c	1142	free_child	jobserver_release (1);	
+gmake	2 wait/reap	block_sigs	src/job.c	1465	start_job_command	block_sigs ();	
+gmake	1 jobserver	jobserver_pre_child	src/job.c	1474	start_job_command	jobserver_pre_child (ANY_SET (flags, COMMANDS_RECURSE));	
+gmake	1 jobserver	jobserver_post_child	src/job.c	1479	start_job_command	jobserver_post_child (ANY_SET (flags, COMMANDS_RECURSE));	
+gmake	2 wait/reap	unblock_sigs	src/job.c	1663	start_waiting_job	unblock_sigs ();	
+gmake	2 wait/reap	reap_children	src/job.c	1699	new_job	reap_children (0, 0);	
+gmake	2 wait/reap	reap_children	src/job.c	1835	new_job	reap_children (1, 0);	
+gmake	1 jobserver	jobserver_enabled	src/job.c	1850	new_job	else if (jobserver_enabled ())	
+gmake	1 jobserver	jobserver_pre_acquire	src/job.c	1863	new_job	jobserver_pre_acquire ();	
+gmake	2 wait/reap	reap_children	src/job.c	1866	new_job	reap_children (0, 0);	
+gmake	1 jobserver	jobserver_acquire	src/job.c	1882	new_job	got_token = jobserver_acquire (waiting_jobs != NULL);	
+gmake	2 wait/reap	reap_children	src/job.c	1966	new_job	reap_children (1, 0);	
+gmake	2 wait/reap	reap_children	src/job.c	2192	start_waiting_jobs	reap_children (0, 0);	
+gmake	3 signals	sigemptyset	src/job.c	2385	child_execute_job	sigemptyset (&mask);	
+gmake	1 jobserver	jobserver_clear	src/main.c	1141	reset_jobserver	jobserver_clear ();	
+gmake	3 signals	sigemptyset	src/main.c	1252	main	sigemptyset (&fatal_signal_set);	
+gmake	3 signals	bsd_signal	src/main.c	1307	main	(void) bsd_signal (SIGCHLD, SIG_DFL);	CHLD
+gmake	1 jobserver	jobserver_parse_auth	src/main.c	1844	main	if (jobserver_parse_auth (jobserver_auth))	
+gmake	3 signals	bsd_signal	src/main.c	2002	main	bsd_signal (SIGCHLD, child_handler);	CHLD
+gmake	3 signals	sigemptyset	src/main.c	2013	main	sigemptyset (&block);	
+gmake	3 signals	sigaddset	src/main.c	2014	main	sigaddset (&block, SIGCHLD);	CHLD
+gmake	3 signals	sigprocmask	src/main.c	2015	main	if (sigprocmask (SIG_SETMASK, &block, NULL) < 0)	
+gmake	3 signals	sigprocmask	src/main.c	2016	main	pfatal_with_name ("sigprocmask(SIG_SETMASK, SIGCHLD)");	CHLD
+gmake	3 signals	bsd_signal	src/main.c	2025	main	bsd_signal (SIGUSR1, debug_signal_handler);	USR1
+gmake	1 jobserver	jobserver_setup	src/main.c	2217	main	if (job_slots > 1 && jobserver_setup (job_slots - 1, jobserver_style))	
+gmake	1 jobserver	jobserver_get_auth	src/main.c	2220	main	jobserver_auth = jobserver_get_auth ();	
+gmake	1 jobserver	jobserver_pre_child	src/main.c	2782	main	jobserver_pre_child(1);	
+gmake	1 jobserver	jobserver_post_child	src/main.c	2819	main	jobserver_post_child(1);	
+gmake	1 jobserver	jobserver_enabled	src/main.c	3772	clean_jobserver	if (jobserver_enabled() && jobserver_tokens)	
+gmake	1 jobserver	jobserver_release	src/main.c	3781	clean_jobserver	jobserver_release (0);	
+gmake	1 jobserver	jobserver_acquire_all	src/main.c	3790	clean_jobserver	unsigned int tokens = 1 + jobserver_acquire_all ();	
+gmake	2 wait/reap	reap_children	src/main.c	3823	die	reap_children (1, err);	
+gmake	4 cleanup	remove_intermediates	src/main.c	3829	die	remove_intermediates (0);	
+gmake	1 jobserver	mkfifo	src/posixos.c	164	jobserver_setup	EINTRLOOP (r, mkfifo (fifo_name, 0600));	
+gmake	1 jobserver	open	src/posixos.c	175	jobserver_setup	EINTRLOOP (job_fds[0], open (fifo_name, O_RDONLY|O_NONBLOCK));	
+gmake	1 jobserver	open	src/posixos.c	180	jobserver_setup	EINTRLOOP (job_fds[1], open (fifo_name, O_WRONLY));	
+gmake	1 jobserver	pipe	src/posixos.c	195	jobserver_setup	EINTRLOOP (r, pipe (job_fds));	
+gmake	1 jobserver	fd_noinherit	src/posixos.c	204	jobserver_setup	fd_noinherit (job_fds[0]);	
+gmake	1 jobserver	fd_noinherit	src/posixos.c	205	jobserver_setup	fd_noinherit (job_fds[1]);	
+gmake	1 jobserver	write	src/posixos.c	212	jobserver_setup	EINTRLOOP (r, write (job_fds[1], &token, 1));	
+gmake	1 jobserver	set_blocking	src/posixos.c	218	jobserver_setup	set_blocking (job_fds[0], 0);	
+gmake	1 jobserver	open	src/posixos.c	237	jobserver_parse_auth	EINTRLOOP (job_fds[0], open (fifo_name, O_RDONLY));	
+gmake	1 jobserver	open	src/posixos.c	245	jobserver_parse_auth	EINTRLOOP (job_fds[1], open (fifo_name, O_WRONLY));	
+gmake	1 jobserver	set_blocking	src/posixos.c	292	jobserver_parse_auth	set_blocking (job_fds[0], 0);	
+gmake	1 jobserver	fd_noinherit	src/posixos.c	296	jobserver_parse_auth	fd_noinherit (job_fds[0]);	
+gmake	1 jobserver	fd_noinherit	src/posixos.c	297	jobserver_parse_auth	fd_noinherit (job_fds[1]);	
+gmake	1 jobserver	close	src/posixos.c	341	jobserver_clear	close (job_fds[0]);	
+gmake	1 jobserver	close	src/posixos.c	343	jobserver_clear	close (job_fds[1]);	
+gmake	1 jobserver	close	src/posixos.c	345	jobserver_clear	close (job_rfd);	
+gmake	1 jobserver	unlink	src/posixos.c	354	jobserver_clear	EINTRLOOP (r, unlink (fifo_name));	
+gmake	1 jobserver	write	src/posixos.c	371	jobserver_release	EINTRLOOP (r, write (job_fds[1], &token, 1));	
+gmake	1 jobserver	set_blocking	src/posixos.c	387	jobserver_acquire_all	set_blocking (job_fds[0], 1);	
+gmake	1 jobserver	close	src/posixos.c	390	jobserver_acquire_all	close (job_fds[1]);	
+gmake	1 jobserver	read	src/posixos.c	396	jobserver_acquire_all	EINTRLOOP (r, read (job_fds[0], &intake, 1));	
+gmake	1 jobserver	jobserver_clear	src/posixos.c	404	jobserver_acquire_all	jobserver_clear ();	
+gmake	1 jobserver	fd_inherit	src/posixos.c	415	jobserver_pre_child	fd_inherit (job_fds[0]);	
+gmake	1 jobserver	fd_inherit	src/posixos.c	416	jobserver_pre_child	fd_inherit (job_fds[1]);	
+gmake	1 jobserver	fd_noinherit	src/posixos.c	426	jobserver_post_child	fd_noinherit (job_fds[0]);	
+gmake	1 jobserver	fd_noinherit	src/posixos.c	427	jobserver_post_child	fd_noinherit (job_fds[1]);	
+gmake	1 jobserver	close	src/posixos.c	436	jobserver_signal	close (job_rfd);	
+gmake	1 jobserver	sigemptyset	src/posixos.c	465	jobserver_acquire	sigemptyset (&empty);	
+gmake	3 signals	sigemptyset	src/posixos.c	465	jobserver_acquire	sigemptyset (&empty);	
+gmake	1 jobserver	pselect	src/posixos.c	484	jobserver_acquire	r = pselect (job_fds[0]+1, &readfds, NULL, NULL, specp, &empty);	
+gmake	2 wait/reap	pselect	src/posixos.c	484	jobserver_acquire	r = pselect (job_fds[0]+1, &readfds, NULL, NULL, specp, &empty);	
+gmake	1 jobserver	read	src/posixos.c	506	jobserver_acquire	EINTRLOOP (r, read (job_fds[0], &intake, 1));	
+gmake	2 wait/reap	reap_children	src/remake.c	142	update_goal_chain	reap_children (last_cmd_count == command_count, 0);	
+gmake	1 jobserver	jobserver_get_invalid_auth	src/variable.c	1075	target_environment	invalid = jobserver_get_invalid_auth ();	
+pdpmake	3 signals	signal	main.c	432	make_handler	signal(sig, SIG_DFL);	
+pdpmake	3 signals	kill	main.c	434	make_handler	kill(getpid(), sig);	
+pdpmake	4 cleanup	kill	main.c	434	make_handler	kill(getpid(), sig);	
+pdpmake	3 signals	sigemptyset	main.c	442	init_signal	sigemptyset(&new_action.sa_mask);	
+pdpmake	3 signals	sigaction	main.c	446	init_signal	sigaction(sig, NULL, &sa);	
+pdpmake	3 signals	sigaction	main.c	448	init_signal	sigaction(sig, &new_action, NULL);	
+pdpmake	4 cleanup	unlink	make.c	13	remove_target	unlink(target->n_name) == 0) {	
+pdpmake	2 wait/reap	system	make.c	103	docmds	status = system(cmd);	
+dash	3 signals	sigclearmask	src/error.c	108	onint	sigclearmask();	
+dash	3 signals	signal	src/error.c	110	onint	signal(SIGINT, SIG_DFL);	INT
+dash	3 signals	raise	src/error.c	111	onint	raise(SIGINT);	INT
+dash	3 signals	setsignal	src/init.c	185	init	setsignal(SIGCHLD);	CHLD
+dash	3 signals	killpg	src/jobs.c	235	setjobctl	killpg(0, SIGTTIN);	TTIN
+dash	3 signals	setsignal	src/jobs.c	245	setjobctl	setsignal(SIGTSTP);	TSTP
+dash	3 signals	setsignal	src/jobs.c	246	setjobctl	setsignal(SIGTTOU);	TTOU
+dash	3 signals	setsignal	src/jobs.c	247	setjobctl	setsignal(SIGTTIN);	TTIN
+dash	3 signals	kill	src/jobs.c	347	killcmd	if (kill(pid, signo) != 0) {	
+dash	3 signals	killpg	src/jobs.c	413	restartjob	killpg(pgid, SIGCONT);	CONT
+dash	3 signals	setsignal	src/jobs.c	898	forkchild	setsignal(SIGTSTP);	TSTP
+dash	3 signals	setsignal	src/jobs.c	899	forkchild	setsignal(SIGTTOU);	TTOU
+dash	3 signals	ignoresig	src/jobs.c	903	forkchild	ignoresig(SIGINT);	INT
+dash	3 signals	ignoresig	src/jobs.c	904	forkchild	ignoresig(SIGQUIT);	QUIT
+dash	3 signals	setsignal	src/jobs.c	914	forkchild	setsignal(SIGINT);	INT
+dash	3 signals	setsignal	src/jobs.c	915	forkchild	setsignal(SIGQUIT);	QUIT
+dash	3 signals	setsignal	src/jobs.c	916	forkchild	setsignal(SIGTERM);	TERM
+dash	3 signals	raise	src/jobs.c	1060	waitforjob	raise(SIGINT);	INT
+dash	2 wait/reap	wait3	src/jobs.c	1209	waitproc	err = wait3(status, flags, NULL);	
+dash	3 signals	sigblockall	src/jobs.c	1218	waitproc	sigblockall(&oldmask);	
+dash	2 wait/reap	sigsuspend	src/jobs.c	1221	waitproc	sigsuspend(&oldmask);	
+dash	3 signals	sigclearmask	src/jobs.c	1223	waitproc	sigclearmask();	
+dash	3 signals	sigblockall	src/jobs.c	1549	xtcsetpgrp	sigblockall(NULL);	
+dash	3 signals	sigclearmask	src/jobs.c	1551	xtcsetpgrp	sigclearmask();	
+dash	3 signals	signal	src/redir.c	378	openhere	signal(SIGINT, SIG_IGN);	INT
+dash	3 signals	signal	src/redir.c	379	openhere	signal(SIGQUIT, SIG_IGN);	QUIT
+dash	3 signals	signal	src/redir.c	380	openhere	signal(SIGHUP, SIG_IGN);	HUP
+dash	3 signals	signal	src/redir.c	382	openhere	signal(SIGTSTP, SIG_IGN);	TSTP
+dash	3 signals	signal	src/redir.c	384	openhere	signal(SIGPIPE, SIG_DFL);	PIPE
+dash	3 signals	sigemptyset	src/system.h	53	sigclearmask	sigemptyset(&set);	
+dash	3 signals	sigprocmask	src/system.h	54	sigclearmask	sigprocmask(SIG_SETMASK, &set, 0);	
+dash	3 signals	setsignal	src/trap.c	157	trapcmd	setsignal(signo);	
+dash	3 signals	setsignal	src/trap.c	184	clear_traps	setsignal(tp - trap);	
+dash	3 signals	sigaction	src/trap.c	255	setsignal	if (sigaction(signo, 0, &act) == -1) {	
+dash	3 signals	sigfillset	src/trap.c	288	setsignal	sigfillset(&act.sa_mask);	
+dash	3 signals	sigaction	src/trap.c	289	setsignal	sigaction(signo, &act, 0);	
+dash	3 signals	signal	src/trap.c	301	ignoresig	signal(signo, SIG_IGN);	
+dash	3 signals	setsignal	src/trap.c	397	setinteractive	setsignal(SIGINT);	INT
+dash	3 signals	setsignal	src/trap.c	398	setinteractive	setsignal(SIGQUIT);	QUIT
+dash	3 signals	setsignal	src/trap.c	399	setinteractive	setsignal(SIGTERM);	TERM
+dash	3 signals	sigfillset	src/trap.c	475	sigblockall	sigfillset(&mask);	
+dash	3 signals	sigprocmask	src/trap.c	476	sigblockall	sigprocmask(SIG_SETMASK, &mask, oldmask);	

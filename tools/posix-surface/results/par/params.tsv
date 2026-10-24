@@ -1,0 +1,6 @@
+ncpu	4
+jobs	2 4
+styles	pipe fifo
+reps	2
+w9_delays	0.3 1.5 3.0
+w9_reps	3
