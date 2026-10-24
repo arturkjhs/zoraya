@@ -86,9 +86,55 @@ describes process.
    - M3 is left unchanged, so that TASK-02 outputs reproduce exactly. The gap is recorded here: TASK-02 M3 is missing
      these 7 restructure lines, but its class totals for GNU make signals do not change in kind.
 
-## Run-to-run variation
+## Reproduction
 
-See "Reproduction" and "Independent review" below.
+A full `tools/posix-surface/run.sh` (all TASK-02 stages plus `parallel`, about 20 minutes on a VM that already had
+the builds) reproduced the outputs as follows.
+
+- **TASK-02 outputs.** All unchanged except three timing-dependent syscall counts in `syscall-surface.csv`:
+  - ld.lld `futex` in W6-link: 185 → 182;
+  - `read` in the W4 configure runs: up to 20 in 15,000;
+  - `readv` in W4-configure: up to 5 in 7,700.
+
+  These are the same kinds of variation TASK-02 already documented (`../task-02/method.md` → Known limits,
+  "Reruns"). No libc symbol, class, category or published summary number changed. The committed TASK-02 files keep
+  their earlier values.
+- **TASK-02b outputs.** Regenerated. The values that legitimately differ between runs are pids, timestamps and
+  timing-dependent counts.
+
+## Run-to-run variation (TASK-02b)
+
+Measured by repeating every non-interrupt workload twice and every W9 case 9 times (`results/par/syscall-reps.tsv`,
+`parallel-tables.md`, stability tables in `timelines.md`).
+
+- **Identical between repetitions:**
+  - exit statuses and output checks;
+  - concurrency reached (max recipes at once);
+  - handler and mask set-up (`rt_sigaction`, `rt_sigprocmask` counts);
+  - jobserver set-up;
+  - every W9 event kind except the two below.
+- **Varying with timing:**
+  - jobserver token reads in W8 `-j4`: 17–26 per build;
+  - `pselect6` calls: 72–100 per W8 `-j4` build;
+  - `wait4` counts (within a few percent);
+  - W8 build duration (±0.1 s);
+  - in W9, which recipes had already finished (depends on the delay), and whether a leaf make was inside a restartable
+    `writev` when SIGTERM arrived (4 of 9 runs);
+  - in W9, how far the build had got under strace vs without it: 24–25 vs 28 tables at the 3.0 s delay. strace slows
+    the build.
+
+## Measurement limits specific to TASK-02b
+
+- **strace changes timing.** The W9 sequences were checked against untraced runs (interposer mode) for outcome only:
+  status, deletions, leftovers. The event order inside the untraced runs is not observable.
+- **Order across processes** in a timeline is the order strace observed. Within a process it is exact.
+- **Pre-exec attribution.** A forked child's calls before `execve` are attributed to the parent's image: for
+  example, dash's job-control `setpgid` and `TIOCSPGRP` in the child that becomes make.
+- **The token count is a heuristic**: 1-byte `+` reads and writes. GNU make's token character is `+` by default, and
+  no other 1-byte `+` I/O appeared in the traces' make processes.
+- **Parallel only up to -j4.** The VM has 4 vCPUs. Higher `-j` was not run.
+- **W8 is synthetic.** Its recipes are a generated table program, not compiles, so that slots stay busy (see
+  "Workload decisions").
 
 ## Independent review (step 5)
 

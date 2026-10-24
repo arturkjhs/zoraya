@@ -33,11 +33,11 @@ would become in such a model. The model is a lens for describing the code, not a
 
 ## Overview
 
-138 distinct lines (143 site–feature pairs):
+145 distinct lines (150 site–feature pairs):
 
 | Program | direct | restructure | emulate | n/a | direct lines | restructure lines |
 |---|---|---|---|---|---|---|
-| GNU make | 55 | 20 | 11 | 3 | 43 | 45 |
+| GNU make | 55 | 27 | 11 | 3 | 43 | 45 |
 | pdpmake | 2 | 3 | 2 | 0 | 13 | 20 |
 | dash | 0 | 5 | 37 | 0 | 0 | 10 |
 
@@ -45,7 +45,7 @@ By feature (site–feature pairs; a line in two features counts in both): see `c
 
 - **GNU make's jobserver:** 35 direct, 4 restructure, 10 emulate. The emulate sites are all the *protocol*, not the
   mechanism.
-- **GNU make's signals and masks:** 10 of 17 are restructure. They all exist to make SIGCHLD and the fatal signals
+- **GNU make's signals and masks:** 17 of 24 are restructure. They all exist to make SIGCHLD and the fatal signals
   safe to take asynchronously.
 - **dash:** almost entirely emulate. The shell language exposes signals through `trap`, `kill` and job control.
 
@@ -83,13 +83,16 @@ never runs more than one recipe at a time (`parallel-surface.md`). Its sites are
 |---|---|---|
 | create / read / write tokens; inherit / no-inherit toggling; close | direct | a counting-semaphore handle passed explicitly to children covers it; 1–3 lines each, 10 for setup |
 | `pselect` + empty mask + blocked SIGCHLD (`posixos.c:465/484`, `main.c:2002–2015`, `job.c:1882`) | restructure, about 10 lines | the construction exists only because "child exited" is a signal and "token available" is an fd. In the event model it is one wait over two handles |
-| auth string, FIFO name in `/tmp`, `-2,-2`, opening the FIFO by name (`main.c:1844/2220`, `variable.c:1075`, `posixos.c:164/175/180/195/237/245/354`) | emulate | `MAKEFLAGS --jobserver-auth` is a protocol other programs read: other make versions, ninja, cargo and the Linux kernel's build. The fd numbers and the FIFO path must stay meaningful in the POSIX personality, even if make itself could use a passed handle |
+| auth string, FIFO name in `/tmp`, `-2,-2`, opening the FIFO by name (`main.c:1844/2220`, `variable.c:1075`, `posixos.c:164/175/180/195/237/245/354`) | emulate | `MAKEFLAGS --jobserver-auth` is a protocol other programs read (other make versions and other build tools that join the jobserver; not measured here). The fd numbers and the FIFO path must stay meaningful in the POSIX personality, even if make itself could use a passed handle |
 
 **Measured behaviour that bears on this** (`parallel-surface.md`, `results/par/parallel-tables.md`):
 
-- **Token traffic is tiny.** W8 `-j4` used about 3–4 token reads per build for 64 jobs.
-- **Every make spends its free token first.** Leaf makes then mostly sit in `pselect6`, and their wait ends by
-  SIGCHLD from their own child (`ERESTARTNOHAND`) far more often than by a token.
+- **Tokens and implicit slots.** Lua's compiling sub-make reads a token for nearly every compile after its first
+  (35–38 per build). W8 `-j4` read 17–26 per build, varying between repetitions. W8 `-j2` read only 2: every make
+  holds one implicit job slot, so the four leaf makes run one job each on those.
+- **Most waits end by child exit, not by a token.** Leaf makes mostly sit in `pselect6`, and their wait ends by
+  SIGCHLD from their own child (`ERESTARTNOHAND`) far more often than by a token: 55–60 of 72–100 calls per W8 `-j4`
+  build.
 - **Practical result.** The jobserver's job is to *cap* concurrency across processes, and the dominant wake-up is
   child exit. Both styles behave the same; only the setup differs (`mknodat` + `openat` of the FIFO vs `pipe2`).
 
@@ -178,7 +181,7 @@ its own: it relies on the terminal driver signalling the whole foreground job.
 ## What the mapping exercise shows (estimate)
 
 - **For make, the event model mostly *removes* code.**
-  - The 20 GNU make restructure sites total about 45 lines. Almost all exist to make asynchronous signals safe:
+  - The 27 GNU make restructure sites total about 45 lines. Almost all exist to make asynchronous signals safe:
     blocked SIGCHLD, the empty mask for `pselect`, the fatal-set masking around the children list, a handler that
     does a whole shutdown.
   - In a model where child exit, token availability and user interrupt are events on handles, make waits on all
