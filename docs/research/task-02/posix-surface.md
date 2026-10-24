@@ -162,9 +162,12 @@ No core run executed anything outside the measured sets.
    only 43 imports. This rests on both bounds.
 3. **T0–T2 are single-threaded, and T3 is not.** Thread functions and thread clones appear only in T3 (strace and
    dynamic data). The 3 thread functions observed at T1 are tcc's semaphores. They synchronise nothing, because no second thread exists.
-4. **fork is a shell matter.** All 1,710 fork-style clones come from shells (dash in core runs, others in
-   comparison runs). make, tcc, toybox and busybox create processes vfork-style or through `posix_spawn`. The shell
-   forks for subshells, pipelines and command substitution (M3).
+4. **fork is a shell matter.** Apart from 3 forks by a script that hello's build runs, every fork-style clone comes
+   from a shell. make, tcc, toybox and busybox create processes vfork-style or through `posix_spawn`.
+   - The shell forks for subshells, pipelines and command substitution (M3).
+   - In core runs (excluding `*-check`), dash's fork children are 536 fork+exec and **1,169 fork-without-exec**. 695 of the latter create
+     processes of their own (`results/fork-children.md`).
+   - Every vfork-style child execs: 2,041 by dash and 281 by GNU make in core runs.
 5. **Signals in T0–T2 are mostly resets and cleanup.** Handlers exist for child exit (`SIGCHLD`), interrupt
    (`SIGINT`) and fatal-signal cleanup (make). The bulk of `rt_sigaction` traffic is musl resetting dispositions in
    spawned children.

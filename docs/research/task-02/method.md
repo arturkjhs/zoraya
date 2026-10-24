@@ -153,6 +153,25 @@ Argument patterns are extracted for the following:
 
 Absolute-path `execve`s chosen by the program itself (not resolved through `PATH`) are tabulated separately.
 
+**Children of clones** (`analysis/fork_children.py` → `results/fork-children.md`):
+- Every non-thread clone outside `*-check` runs is classed by what its child does itself: `exec` if the child calls
+  `execve` successfully, otherwise `no-exec`, meaning it keeps running the parent's code.
+- A `no-exec` child that creates processes of its own is also counted.
+- The parent program is the image running in the parent at the clone line.
+- Pids are not reused within a run: `pid_max` is 32768, and no clone return value repeats in any trace (checked).
+- The core-run fork-style total, 1,708, plus the 2 in the excluded `W3-check` run, equals the 1,710 in
+  `syscall-surface.csv`.
+- **Limit:** a script run through its shebang is attributed to the script's name (for example
+  `built:vc-list-files`), not to the shell that interprets it.
+
+## W4 configure checks
+
+`analysis/configure_checks.py` pairs every `checking …` line of hello's `config.log` with its `result:` line. It does
+this for the tcc run (`raw/W4-tcc-config.log`) and for an unmeasured `CC=gcc` baseline configure of the same tree
+(`raw/W4-baseline-config.log`, made by `remote/workloads.sh`). It then lists the checks whose result differs, with the
+first diagnostic logged under the tcc check, in `results/configure-checks.md`. Checks that only one run performs,
+such as linker detection, are listed separately.
+
 ## M3: call sites
 
 1. **Candidates** (`analysis/callsites.py`). Regular expressions match calls to the feature APIs, including
