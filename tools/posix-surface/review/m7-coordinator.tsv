@@ -1,0 +1,139 @@
+program	file	line	api	class	effort_lines	what	event_model	note
+gmake	src/commands.c	530	signal	restructure	30	fatal_error_signal: resets the disposition before cleanup so the final re-raise kills make	interrupt arrives as an event in make's single main wait instead of running asynchronously; the cleanup runs from that branch; no disposition to reset	effort covers the whole handler (530-600) moving out of signal context, as in M3
+gmake	src/commands.c	534	jobserver_clear	restructure	0	closes the jobserver fds and unlinks the FIFO from inside the signal handler	close the jobserver handle in the interrupt branch; an anonymous handle needs no unlink	
+gmake	src/commands.c	544	kill	direct	2	on SIGTERM only: forwards SIGTERM to every running child (Ctrl-C reaches them through the tty process group instead)	send a terminate request to each child process handle, or once to a group/job handle holding all of them	runs inside the handler today (see :530)
+gmake	src/commands.c	568	delete_child_targets	direct	0	deletes the targets of children that were still running	unchanged file operation, called from the interrupt branch	
+gmake	src/commands.c	573	reap_children	restructure	0	waits for every child to die before exiting (INT/TERM/HUP/QUIT): a blocking wait inside a signal handler	wait for exit events on the remaining child handles from the main loop	
+gmake	src/commands.c	578	reap_children	restructure	0	same, with 'waiting for unfinished jobs' messages, for other fatal signals	as :573	
+gmake	src/commands.c	582	remove_intermediates	direct	0	deletes non-precious intermediate files	unchanged file operation	
+gmake	src/commands.c	600	kill	emulate	0	re-raises the signal on itself after cleanup so the parent sees death by SIGINT/SIGTERM (WIFSIGNALED)	exit with an exit reason 'interrupted' recorded on the process handle; parents (outer make, shell) must be able to tell interrupt from failure	the shell aborts the rest of a command line only on death-by-SIGINT (W9 timeline)
+gmake	src/commands.c	650	unlink	direct	1	delete_target: removes a target whose file changed since the job started	unchanged file operation	
+gmake	src/commands.c	669	delete_target	direct	0	deletes the child's target	unchanged	
+gmake	src/commands.c	673	delete_target	direct	0	deletes the child's also-make targets	unchanged	
+gmake	src/function.c	1979	reap_children	direct	2	$(shell ...): loops until the child shell has been reaped	wait for the exit event of that child handle together with EOF on its output pipe	
+gmake	src/job.c	475	block_sigs	n/a	0	definition line of block_sigs, matched by the call pattern	—	
+gmake	src/job.c	477	sigprocmask	restructure	0	block_sigs: blocks the fatal signals while the children list is edited, so the fatal handler never sees it half-updated	no asynchronous handler, so no mask: events are consumed only at the wait	disappears with the :530 restructure
+gmake	src/job.c	481	unblock_sigs	n/a	0	definition line of unblock_sigs	—	
+gmake	src/job.c	483	sigprocmask	restructure	0	unblock_sigs: re-enables the fatal signals	as :477	
+gmake	src/job.c	490	sigemptyset	direct	1	unblock_all_sigs: builds an empty mask for a child before exec	children start with no inherited mask; nothing to clear	
+gmake	src/job.c	491	sigprocmask	direct	1	unblock_all_sigs: clears the mask (SIGCHLD is blocked in make) before exec in the fork path	as :490	
+gmake	src/job.c	615	jobserver_signal	direct	0	child_handler: closes the dup'd jobserver fd to break a blocking read; with pselect (this build) the fd is never dup'd, so it is a no-op	child exit is just another handle in the same wait; nothing to close	
+gmake	src/job.c	762	wait	direct	2	reap_children: blocking wait for any child (non-blocking WAIT_NOHANG = waitpid(-1, WNOHANG) is a macro on the line above, not matched)	wait for an exit event on any child handle, or on one group handle that reports every child's exit	
+gmake	src/job.c	1037	unblock_sigs	restructure	0	brackets an edit of the children list against the fatal-signal handler	removed with the asynchronous handler (:530)	
+gmake	src/job.c	1076	block_sigs	restructure	0	brackets an edit of the children list against the fatal-signal handler	removed with the asynchronous handler (:530)	
+gmake	src/job.c	1096	unblock_sigs	restructure	0	brackets an edit of the children list against the fatal-signal handler	removed with the asynchronous handler (:530)	
+gmake	src/job.c	1465	block_sigs	restructure	0	brackets an edit of the children list against the fatal-signal handler	removed with the asynchronous handler (:530)	
+gmake	src/job.c	1663	unblock_sigs	restructure	0	brackets an edit of the children list against the fatal-signal handler	removed with the asynchronous handler (:530)	
+gmake	src/job.c	1140	jobserver_enabled	direct	0	query: is a jobserver in use	—	
+gmake	src/job.c	1142	jobserver_release	direct	1	free_child: returns the child's token when it is reaped	release one unit of a counting semaphore handle shared by all makes	
+gmake	src/job.c	1474	jobserver_pre_child	direct	2	before starting a recursive $(MAKE) recipe: makes the pipe fds inheritable (pipe style only)	put the jobserver handle in the child's explicit handle list; non-recursive children simply don't get it	
+gmake	src/job.c	1479	jobserver_post_child	direct	0	after starting it: makes them close-on-exec again	not needed with explicit handle lists	
+gmake	src/job.c	1699	reap_children	direct	0	new_job: reaps finished children without blocking before starting a job	drain pending exit events	
+gmake	src/job.c	1835	reap_children	direct	0	new_job: blocks until a child exits when the job-slot limit (-j without jobserver / -l) is reached	wait for one exit event	
+gmake	src/job.c	1850	jobserver_enabled	direct	0	query	—	
+gmake	src/job.c	1863	jobserver_pre_acquire	direct	0	ensures the dup'd read fd exists (no-op with pselect)	—	
+gmake	src/job.c	1866	reap_children	direct	0	reaps anything already dead before asking for a token	drain pending exit events	
+gmake	src/job.c	1882	jobserver_acquire	restructure	0	waits for a token OR a child exit, whichever first; loops back to reaping on a child exit	one wait over two handles (token semaphore, children); effort counted at posixos.c:484	
+gmake	src/job.c	1966	reap_children	direct	0	new_job: blocking reap while waiting for a .WAIT / serial dependency	wait for one exit event	
+gmake	src/job.c	2192	reap_children	direct	0	start_waiting_jobs: non-blocking reap	drain pending exit events	
+gmake	src/job.c	2385	sigemptyset	direct	1	child_execute_job: empty signal mask for posix_spawnattr_setsigmask (SIGCHLD is blocked in make)	spawn attributes need no signal mask	
+gmake	src/main.c	1141	jobserver_clear	direct	0	reset_jobserver: drops the jobserver before re-exec / when it is invalid	close the handle	
+gmake	src/main.c	1252	sigemptyset	restructure	0	builds the fatal-signal set used by block_sigs	removed with the asynchronous handler	
+gmake	src/main.c	1307	bsd_signal	direct	1	resets an inherited SIGCHLD disposition to default	child exit is not a signal; nothing to reset	
+gmake	src/main.c	1844	jobserver_parse_auth	emulate	0	sub-make: parses --jobserver-auth from MAKEFLAGS (fd numbers 'R,W', '-2,-2' = not a recursive make, or fifo:PATH) and opens/validates it	receive the semaphore handle in the inherited handle list; but MAKEFLAGS is a protocol other tools also speak (sub-makes of other versions, ninja, cargo, the Linux kernel build), so the personality must keep fd numbers or a FIFO path meaningful	
+gmake	src/main.c	2002	bsd_signal	restructure	0	installs child_handler for SIGCHLD (counts dead children, wakes pselect)	child exit is an event on the child handle; effort counted at posixos.c:484	
+gmake	src/main.c	2013	sigemptyset	restructure	0	builds {SIGCHLD}	as :2002	
+gmake	src/main.c	2014	sigaddset	restructure	0	adds SIGCHLD	as :2002	
+gmake	src/main.c	2015	sigprocmask	restructure	0	blocks SIGCHLD everywhere so it is only taken atomically inside pselect	as :2002; the mask exists only to make the signal behave like an event	
+gmake	src/main.c	2016	sigprocmask	n/a	0	string in the error message of :2015	—	
+gmake	src/main.c	2025	bsd_signal	restructure	5	SIGUSR1 toggles debug output at run time (never sent in the workloads)	a control message on a handle the user or a tool holds	
+gmake	src/main.c	2217	jobserver_setup	direct	10	top make with -jN: creates the jobserver (FIFO by default, pipe with --jobserver-style=pipe) holding N-1 tokens	create a counting semaphore (or token pipe) handle with N-1 units	
+gmake	src/main.c	2220	jobserver_get_auth	emulate	0	formats the auth string put into MAKEFLAGS for children	see :1844: the string is a cross-tool protocol	
+gmake	src/main.c	2782	jobserver_pre_child	direct	2	before re-exec of make itself (remade makefiles): keep the jobserver fds	pass the handle to the new image explicitly	
+gmake	src/main.c	2819	jobserver_post_child	direct	0	after a failed re-exec: back to close-on-exec	—	
+gmake	src/main.c	3772	jobserver_enabled	direct	0	query	—	
+gmake	src/main.c	3781	jobserver_release	direct	0	clean_jobserver: returns tokens still held	semaphore release	
+gmake	src/main.c	3790	jobserver_acquire_all	direct	3	top make before exit: collects all tokens back (blocking reads until the write side is closed) to check none leaked	wait until the semaphore is back at N-1, or just destroy it	
+gmake	src/main.c	3823	reap_children	direct	0	die(): waits for remaining children before exiting	wait for exit events	
+gmake	src/main.c	3829	remove_intermediates	direct	0	die(): deletes intermediates	unchanged	
+gmake	src/posixos.c	164	mkfifo	emulate	0	fifo style: creates /tmp/GMfifo<pid> as the jobserver	an anonymous semaphore handle replaces a named object in /tmp; the path stays only for MAKEFLAGS compatibility (see main.c:1844)	global /tmp name: TASK-02 feature 3
+gmake	src/posixos.c	175	open	emulate	0	top make opens the FIFO read side non-blocking	as :164	
+gmake	src/posixos.c	180	open	emulate	0	opens the write side	as :164	
+gmake	src/posixos.c	195	pipe	emulate	0	pipe style: creates the token pipe whose fd numbers go into MAKEFLAGS	the handle itself is direct; fd numbers named in an environment variable are the protocol to emulate	
+gmake	src/posixos.c	204	fd_noinherit	direct	1	marks a jobserver fd close-on-exec so ordinary recipes don't inherit it	explicit handle lists: a child gets the jobserver only if it is passed	
+gmake	src/posixos.c	205	fd_noinherit	direct	1	marks a jobserver fd close-on-exec so ordinary recipes don't inherit it	explicit handle lists: a child gets the jobserver only if it is passed	
+gmake	src/posixos.c	296	fd_noinherit	direct	1	marks a jobserver fd close-on-exec so ordinary recipes don't inherit it	explicit handle lists: a child gets the jobserver only if it is passed	
+gmake	src/posixos.c	297	fd_noinherit	direct	1	marks a jobserver fd close-on-exec so ordinary recipes don't inherit it	explicit handle lists: a child gets the jobserver only if it is passed	
+gmake	src/posixos.c	426	fd_noinherit	direct	1	marks a jobserver fd close-on-exec so ordinary recipes don't inherit it	explicit handle lists: a child gets the jobserver only if it is passed	
+gmake	src/posixos.c	427	fd_noinherit	direct	1	marks a jobserver fd close-on-exec so ordinary recipes don't inherit it	explicit handle lists: a child gets the jobserver only if it is passed	
+gmake	src/posixos.c	415	fd_inherit	direct	1	clears close-on-exec for a recursive make child	as above	
+gmake	src/posixos.c	416	fd_inherit	direct	1	clears close-on-exec for a recursive make child	as above	
+gmake	src/posixos.c	212	write	direct	1	writes the N-1 initial tokens ('+')	semaphore created with N-1 units	
+gmake	src/posixos.c	218	set_blocking	direct	1	top make: jobserver read side non-blocking (read only after pselect says ready)	an atomic semaphore acquire needs no blocking-mode switch	
+gmake	src/posixos.c	292	set_blocking	direct	1	sub-make: same	an atomic semaphore acquire needs no blocking-mode switch	
+gmake	src/posixos.c	387	set_blocking	direct	1	acquire_all: back to blocking	an atomic semaphore acquire needs no blocking-mode switch	
+gmake	src/posixos.c	237	open	emulate	0	sub-make opens the FIFO named in MAKEFLAGS (read side)	as main.c:1844	
+gmake	src/posixos.c	245	open	emulate	0	sub-make opens the FIFO write side	as main.c:1844	
+gmake	src/posixos.c	341	close	direct	0	closes a jobserver fd	close the handle	
+gmake	src/posixos.c	343	close	direct	0	closes a jobserver fd	close the handle	
+gmake	src/posixos.c	345	close	direct	0	closes a jobserver fd	close the handle	
+gmake	src/posixos.c	390	close	direct	0	closes a jobserver fd	close the handle	
+gmake	src/posixos.c	436	close	direct	0	closes a jobserver fd	close the handle	
+gmake	src/posixos.c	354	unlink	emulate	0	top make removes the FIFO from /tmp (also from inside the fatal-signal handler)	not needed for an anonymous handle; kept for the path-based protocol	
+gmake	src/posixos.c	371	write	direct	1	returns one token	semaphore release	
+gmake	src/posixos.c	396	read	direct	0	acquire_all: reads tokens back	semaphore drain	
+gmake	src/posixos.c	404	jobserver_clear	direct	0	after acquire_all	close	
+gmake	src/posixos.c	465	sigemptyset	restructure	0	empty mask so pselect atomically unblocks SIGCHLD while waiting	no mask: the wait covers child exit directly	
+gmake	src/posixos.c	484	pselect	restructure	10	jobserver_acquire: waits until the token fd is readable OR SIGCHLD arrives (EINTR -> go reap); 1 s timeout when jobs wait for load	one blocking wait on {token semaphore, child-exit events}; the pselect+blocked-SIGCHLD construction exists only because exit is a signal and the token is an fd	in W8 -j4 most pselect6 calls end by SIGCHLD (ERESTARTNOHAND), not by a token (parallel-tables.md)
+gmake	src/posixos.c	506	read	direct	1	non-blocking token read after readiness; EAGAIN = another make took it first, try again	atomic semaphore acquire removes the readiness/read race	
+gmake	src/remake.c	142	reap_children	direct	0	update_goal_chain: blocks for a child exit when nothing new was started	wait for one exit event	
+gmake	src/variable.c	1075	jobserver_get_invalid_auth	emulate	0	pipe style: appends --jobserver-auth=-2,-2 to MAKEFLAGS of non-recursive recipes (their fds are closed)	with explicit handle lists the child simply has no handle; the string is kept for protocol compatibility	
+pdpmake	main.c	432	signal	restructure	20	make_handler (HUP/TERM): resets the disposition, removes the current target, re-raises	interrupt as an event in the main loop; then remove target and exit with reason 'interrupted'	effort as M3; pdpmake runs one recipe at a time even with -j (parallel-tables.md)
+pdpmake	main.c	434	kill	emulate	0	re-raises the signal to die by it	exit reason on the process handle (see gmake commands.c:600)	
+pdpmake	main.c	442	sigemptyset	restructure	0	handler mask	removed with the handler	
+pdpmake	main.c	446	sigaction	emulate	0	queries the inherited disposition: a HUP/TERM ignored on entry stays ignored	the personality must carry an 'interrupts ignored' attribute from parent to child (nohup, background jobs)	
+pdpmake	main.c	448	sigaction	restructure	0	installs make_handler	as :432	
+pdpmake	make.c	13	unlink	direct	1	remove_target: deletes the target being built	unchanged file operation	
+pdpmake	make.c	103	system	direct	12	runs each recipe line with system() and waits; SIGINT/SIGQUIT are ignored in make during the wait (system semantics), so Ctrl-C reaches only the child, and pdpmake's own SIGINT disposition is default	spawn + wait for the exit event; whether make reacts to the user interrupt becomes an explicit choice instead of system()'s implicit ignore	M4 replaced it with posix_spawn in 34 lines (TASK-02)
+dash	src/error.c	108	sigclearmask	emulate	0	onint: unblocks everything before dying of SIGINT	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/error.c	110	signal	emulate	0	onint: SIGINT back to default	interrupt is an event; dying 'by interrupt' needs an exit reason on the process handle	
+dash	src/error.c	111	raise	emulate	0	onint: non-interactive shell re-raises SIGINT so its parent sees death by SIGINT	as :110	
+dash	src/init.c	185	setsignal	emulate	0	init: SIGCHLD is always caught (wakes sigsuspend in waitproc)	child exit as an event on the job's process handles; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	init.c is generated by mkinit in the build tree
+dash	src/jobs.c	235	killpg	emulate	0	setjobctl: stops itself with SIGTTIN while not in the foreground	foreground ownership of the terminal as a property of the terminal handle; the stop is POSIX job control	
+dash	src/jobs.c	245	setsignal	emulate	0	setjobctl: job-control shell ignores SIGTSTP	job control is emulated; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/jobs.c	246	setsignal	emulate	0	setjobctl: job-control shell ignores SIGTTOU	job control is emulated; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/jobs.c	247	setsignal	emulate	0	setjobctl: job-control shell ignores SIGTTIN	job control is emulated; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/jobs.c	347	kill	emulate	0	kill builtin: user-chosen signal to pid or job	a user-visible command that names signals	
+dash	src/jobs.c	413	killpg	emulate	0	fg/bg: SIGCONT to the job's process group	resume request on a job handle	
+dash	src/jobs.c	898	setsignal	emulate	0	forkchild, job control: child restores SIGTSTP	job control	
+dash	src/jobs.c	899	setsignal	emulate	0	forkchild, job control: child restores SIGTTOU	job control	
+dash	src/jobs.c	903	ignoresig	emulate	0	forkchild, background job without job control: ignores SIGINT so Ctrl-C does not kill `cmd &`	the interrupt event is delivered only to the foreground job's handle; background jobs never receive it. POSIX requires the ignore to be inherited by the program run	
+dash	src/jobs.c	904	ignoresig	emulate	0	same for SIGQUIT	as :903	
+dash	src/jobs.c	914	setsignal	emulate	0	forkchild of an interactive shell: child restores SIGINT to default	children start with default interrupt handling	
+dash	src/jobs.c	915	setsignal	emulate	0	forkchild of an interactive shell: child restores SIGQUIT to default	children start with default interrupt handling	
+dash	src/jobs.c	916	setsignal	emulate	0	forkchild of an interactive shell: child restores SIGTERM to default	children start with default interrupt handling	
+dash	src/jobs.c	1060	raise	emulate	0	waitforjob: foreground job died of SIGINT -> the shell interrupts itself (abandons the rest of the line)	shell observes the job's exit reason 'interrupted' on its handle and stops the command list (W9 timeline: tkill SIGINT after TIOCSPGRP)	
+dash	src/jobs.c	1209	wait3	emulate	0	waitproc: reaps any child, incl. stopped ones (WUNTRACED) for the job table	exit and stop events on the job's process handles	
+dash	src/jobs.c	1218	sigblockall	emulate	0	waitproc: blocks all signals before the sigsuspend check (no lost wakeup)	one wait over {child events, pending traps}; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/jobs.c	1221	sigsuspend	emulate	0	waitproc / wait builtin: sleeps until SIGCHLD or a trapped signal	as :1218; the wait builtin must return early on a trapped signal (POSIX)	
+dash	src/jobs.c	1223	sigclearmask	emulate	0	waitproc: unblocks after waking	as :1218	
+dash	src/jobs.c	1549	sigblockall	emulate	0	xtcsetpgrp: blocks signals around tcsetpgrp (avoid SIGTTOU races)	foreground handover is an operation on the terminal handle	
+dash	src/jobs.c	1551	sigclearmask	emulate	0	xtcsetpgrp: unblocks	as :1549	
+dash	src/redir.c	378	signal	restructure	10	heredoc writer child (only for heredocs > pipe size when memfd is unavailable) ignores SIGINT	write the heredoc into an anonymous memory handle (dash already does this with memfd_create, seen in W4) so no child exists	effort covers 378-384
+dash	src/redir.c	379	signal	restructure	0	heredoc writer ignores SIGQUIT	as :378	
+dash	src/redir.c	380	signal	restructure	0	heredoc writer ignores SIGHUP	as :378	
+dash	src/redir.c	382	signal	restructure	0	heredoc writer ignores SIGTSTP	as :378	
+dash	src/redir.c	384	signal	restructure	0	heredoc writer restores SIGPIPE default so it dies when the reader goes away	writer sees EPIPE / a closed-pipe event; as :378	
+dash	src/system.h	53	sigemptyset	emulate	0	sigclearmask helper	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/system.h	54	sigprocmask	emulate	0	sigclearmask helper: unblock all	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/trap.c	157	setsignal	emulate	0	trap builtin: installs the disposition for a trapped signal	trap names signals in the shell language	
+dash	src/trap.c	184	setsignal	emulate	0	clear_traps in a subshell: resets traps	as :157	
+dash	src/trap.c	255	sigaction	emulate	0	setsignal: queries the inherited disposition (ignored on entry stays ignored, POSIX)	inherited 'interrupts ignored' attribute (see pdpmake main.c:446)	
+dash	src/trap.c	288	sigfillset	emulate	0	setsignal: handler runs with all signals blocked	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/trap.c	289	sigaction	emulate	0	setsignal: installs catch/ignore/default	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/trap.c	301	signal	emulate	0	ignoresig: SIG_IGN	as jobs.c:903	
+dash	src/trap.c	397	setsignal	emulate	0	setinteractive: interactive shell catches/ignores SIGINT so Ctrl-C returns to the prompt	the interactive shell subscribes to the terminal's interrupt events while it owns the foreground	
+dash	src/trap.c	398	setsignal	emulate	0	setinteractive: interactive shell catches/ignores SIGQUIT so Ctrl-C returns to the prompt	the interactive shell subscribes to the terminal's interrupt events while it owns the foreground	
+dash	src/trap.c	399	setsignal	emulate	0	setinteractive: interactive shell catches/ignores SIGTERM so Ctrl-C returns to the prompt	the interactive shell subscribes to the terminal's interrupt events while it owns the foreground	
+dash	src/trap.c	475	sigfillset	emulate	0	sigblockall: full mask	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
+dash	src/trap.c	476	sigprocmask	emulate	0	sigblockall: block all, save old mask	—; the POSIX shell language exposes signals (trap, kill, job control), so the personality must emulate them for the shell	
