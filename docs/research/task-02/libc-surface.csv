@@ -8,8 +8,6 @@ __h_errno_location,network,busybox;toybox,busybox;toybox;toybox-T2,,T2
 __libc_current_sigrtmax,signal,busybox;toybox,busybox;toybox,,unused-applets
 __libc_current_sigrtmin,signal,busybox;toybox,busybox;toybox,,unused-applets
 __sched_cpucount,process,clang;ld.lld,clang+libs;ld.lld+libs,ld.lld[W6],T3
-__stack_chk_fail,other,busybox;clang;dash;gmake;ld.lld;mrsh;oksh;pdpmake;tcc;toybox,busybox;busybox-T0;busybox-T1;busybox-T2;clang;clang+libs;dash;gmake;ld.lld;ld.lld+libs;mrsh;oksh;pdpmake;tcc;toybox;toybox-T0;toybox-T1;toybox-T2,,T0
-__stack_chk_guard,other,busybox;clang;dash;gmake;ld.lld;mrsh;oksh;pdpmake;tcc;toybox,busybox;busybox-T0;busybox-T1;busybox-T2;clang;clang+libs;dash;gmake;ld.lld;ld.lld+libs;mrsh;oksh;pdpmake;tcc;toybox;toybox-T0;toybox-T1;toybox-T2,,T0
 _exit,process,busybox;clang;dash;gmake;ld.lld;toybox,busybox;clang+libs;dash;gmake;ld.lld+libs;toybox;toybox-T0;toybox-T1;toybox-T2,"busybox[W5-busybox];dash[W1,W2-make-p,W3,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:arch[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:basename[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:cat[W1,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:chmod[W4,W4-configure-noAR,W4p-configure];toybox:cp[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:cpio[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:dirname[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:echo[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5-mrsh];toybox:find[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:grep[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure];toybox:head[W1];toybox:hostname[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:id[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:install[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:ln[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:ls[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:mkdir[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:mktemp[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:mv[W1,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:rm[W1,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:rmdir[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:sed[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:sleep[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:sort[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:tar[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:touch[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:true[W2,W4,W4-configure-noAR,W4-configure-noLD];toybox:uname[W1,W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:wc[W4,W4-configure-noAR,W4p-configure];toybox:xargs[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0
 abort,process,busybox;clang;dash;gmake;ld.lld;mrsh,busybox;clang+libs;dash;gmake;ld.lld+libs;mrsh,,T0
 accept,network,busybox;clang;ld.lld;toybox,busybox;clang+libs;ld.lld+libs;toybox,,T3
@@ -48,7 +46,7 @@ chmod,file,busybox;clang;ld.lld;toybox,busybox;clang+libs;ld.lld+libs;toybox;toy
 chown,file,busybox;toybox,busybox;toybox,,unused-applets
 chroot,dir,busybox;toybox,busybox;toybox,,unused-applets
 clearenv,process,busybox,busybox,,unused-applets
-clearerr,stdio,busybox,busybox,busybox[W5-busybox],unused-applets
+clearerr,stdio,busybox,busybox,busybox[W5-busybox],comparison
 clock,time,clang;ld.lld,clang+libs;ld.lld+libs,,T3
 clock_gettime,time,busybox;clang;gmake;ld.lld;oksh;pdpmake;toybox,busybox;clang+libs;gmake;ld.lld+libs;oksh;pdpmake;toybox,"gmake[W1,W2,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR];oksh[W5-oksh];pdpmake[W2-make-p,W4p-configure,W4p-make]",T1
 clock_settime,time,busybox;toybox,busybox;toybox,,unused-applets
@@ -85,7 +83,7 @@ epoll_wait,file,clang,clang+libs,,T3
 erf,other,clang;ld.lld,clang+libs;ld.lld+libs,,T3
 ether_aton_r,network,busybox,busybox,,unused-applets
 ether_hostton,network,busybox,busybox,,unused-applets
-execl,process,busybox;toybox,busybox;toybox,,unused-applets
+execl,process,busybox;toybox,busybox;toybox,,comparison
 execle,process,busybox,busybox,,unused-applets
 execlp,process,busybox,busybox,,unused-applets
 execv,process,busybox;clang;ld.lld;mrsh;toybox,busybox;clang+libs;ld.lld+libs;mrsh;toybox,mrsh[W5-mrsh],T3
@@ -215,8 +213,8 @@ getusershell,file,busybox,busybox,,unused-applets
 getutxent,tty,busybox;toybox,busybox;toybox,,unused-applets
 getwc,string,clang;ld.lld,clang+libs;ld.lld+libs,,T3
 getxattr,file,busybox;toybox,busybox;toybox;toybox-T2,,T2
-glob,dir,busybox;mrsh;pdpmake,busybox;mrsh;pdpmake,mrsh[W5-mrsh],unused-applets
-globfree,dir,busybox;mrsh;pdpmake,busybox;mrsh;pdpmake,mrsh[W5-mrsh],unused-applets
+glob,dir,busybox;mrsh;pdpmake,busybox;mrsh;pdpmake,mrsh[W5-mrsh],comparison
+globfree,dir,busybox;mrsh;pdpmake,busybox;mrsh;pdpmake,mrsh[W5-mrsh],comparison
 gmtime,time,busybox;clang;toybox,busybox;clang+libs;toybox,,T3
 gmtime_r,time,busybox;clang;ld.lld;toybox,busybox;clang+libs;ld.lld+libs;toybox,,T3
 grantpt,tty,busybox,busybox,,unused-applets
@@ -356,7 +354,7 @@ posix_spawnattr_init,process,gmake,gmake,"gmake[W1,W2,W4,W4-configure-noAR,W4-co
 posix_spawnattr_setflags,process,gmake,gmake,"gmake[W1,W2,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR]",T1
 posix_spawnattr_setsigmask,process,gmake,gmake,"gmake[W1,W2,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR]",T1
 pow,other,busybox;clang;ld.lld,busybox;clang+libs;ld.lld+libs,,T3
-ppoll,file,busybox,busybox,busybox[W5-busybox],unused-applets
+ppoll,file,busybox,busybox,busybox[W5-busybox],comparison
 prctl,process,busybox,busybox,,unused-applets
 pread,file,busybox;clang;ld.lld,busybox;clang+libs;ld.lld+libs,clang[W6];ld.lld[W6],T3
 printf,stdio,busybox;clang;gmake;ld.lld;mrsh;pdpmake;tcc;toybox,busybox;busybox-T1;busybox-T2;clang+libs;gmake;ld.lld+libs;mrsh;pdpmake;tcc;toybox;toybox-T0;toybox-T1;toybox-T2,"busybox:diff[W4,W4-configure-noAR,W4p-configure];busybox:expr[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];mrsh[W5-mrsh];pdpmake[W4p-configure];toybox:id[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:ls[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:wc[W4,W4-configure-noAR,W4p-configure]",T0
@@ -398,7 +396,7 @@ pthread_setspecific,threads,clang;ld.lld,clang+libs;ld.lld+libs,ld.lld[W6],T3
 pthread_sigmask,signal,clang;ld.lld,clang+libs;ld.lld+libs,clang[W6];ld.lld[W6],T3
 ptsname_r,tty,busybox,busybox,,unused-applets
 putc,stdio,clang;gmake;ld.lld;toybox,clang+libs;gmake;ld.lld+libs;toybox;toybox-T0;toybox-T1;toybox-T2,"toybox:cat[W4,W4-make-noAR];toybox:tar[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:uname[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0
-putc_unlocked,stdio,busybox,busybox,busybox[W5-busybox],unused-applets
+putc_unlocked,stdio,busybox,busybox,busybox[W5-busybox],comparison
 putchar,stdio,clang;gmake;ld.lld;mrsh;pdpmake;tcc;toybox,clang+libs;gmake;ld.lld+libs;mrsh;pdpmake;tcc;toybox;toybox-T0;toybox-T1;toybox-T2,"mrsh[W5-mrsh];tcc[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:echo[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5-mrsh]",T0
 putchar_unlocked,stdio,busybox,busybox;busybox-T1;busybox-T2,"busybox:diff[W4,W4-configure-noAR,W4p-configure]",T1
 putenv,process,busybox;dash;gmake,busybox;dash;gmake,"dash[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure]",T0
@@ -497,12 +495,12 @@ sigismember,signal,busybox,busybox,,unused-applets
 siglongjmp,signal,busybox;oksh;toybox,busybox;oksh;toybox;toybox-T0;toybox-T1;toybox-T2,oksh[W5-oksh],T0
 signal,signal,busybox;dash;gmake;pdpmake;toybox,busybox;dash;gmake;pdpmake;toybox;toybox-T0;toybox-T1;toybox-T2,"busybox[W5-busybox];toybox:arch[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:basename[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:cat[W1,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:chmod[W4,W4-configure-noAR,W4p-configure];toybox:cp[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:cpio[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:dirname[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:echo[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5-mrsh];toybox:env[W4,W4-make-noAR];toybox:find[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:grep[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure];toybox:head[W1];toybox:hostname[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:id[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:install[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:ln[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:ls[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:mkdir[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:mktemp[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:mv[W1,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:rm[W1,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:rmdir[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:sed[W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:sleep[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:sort[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:tar[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:touch[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure,W5,W5-busybox,W5-mrsh,W5-oksh];toybox:true[W2,W4,W4-configure-noAR,W4-configure-noLD];toybox:uname[W1,W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:wc[W4,W4-configure-noAR,W4p-configure];toybox:xargs[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0
 sigprocmask,signal,busybox;clang;dash;gmake;ld.lld;oksh;tcc;toybox,busybox;clang+libs;dash;gmake;ld.lld+libs;oksh;tcc;toybox;toybox-T2,"busybox[W5-busybox];dash[W5];gmake[W1,W2,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR];oksh[W5-oksh]",T0
-sigsetjmp,signal,busybox;oksh;toybox,busybox;oksh;toybox,oksh[W5-oksh],unused-applets
+sigsetjmp,signal,busybox;oksh;toybox,busybox;oksh;toybox,oksh[W5-oksh],comparison
 sigsuspend,signal,busybox;dash;oksh,busybox;dash;oksh,busybox[W5-busybox];dash[W5];oksh[W5-oksh],T0
 sigtimedwait,signal,busybox,busybox,,unused-applets
 sin,other,busybox;clang;ld.lld;toybox,busybox;clang+libs;ld.lld+libs;toybox,,T3
 sinh,other,clang;ld.lld,clang+libs;ld.lld+libs,,T3
-sleep,process,busybox;oksh;toybox,busybox;oksh;toybox,,unused-applets
+sleep,process,busybox;oksh;toybox,busybox;oksh;toybox,,comparison
 snprintf,stdio,busybox;clang;gmake;ld.lld;mrsh;oksh;tcc;toybox,busybox;busybox-T2;clang+libs;gmake;ld.lld+libs;mrsh;oksh;tcc;toybox;toybox-T0;toybox-T1;toybox-T2,"busybox:awk[W4,W4-configure-noAR,W4p-configure];clang[W6];mrsh[W5-mrsh];tcc[W1,W2,W2-make-p,W3,W4,W4-configure-noAR,W4-configure-noLD,W4-make-noAR,W4p-configure,W4p-make];toybox:ls[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0
 socket,network,busybox;clang;ld.lld;toybox,busybox;clang+libs;ld.lld+libs;toybox,,T3
 socketpair,network,busybox,busybox,,unused-applets
@@ -571,7 +569,7 @@ syscall,file,busybox;clang;ld.lld;toybox,busybox;clang+libs;ld.lld+libs;toybox;t
 sysconf,process,busybox;clang;dash;ld.lld;mrsh;tcc;toybox,busybox;clang+libs;dash;ld.lld+libs;mrsh;tcc;toybox;toybox-T2,"clang[W6];toybox:find[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure];toybox:xargs[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0
 sysinfo,other,busybox;toybox,busybox;toybox,,unused-applets
 syslog,other,busybox;toybox,busybox;toybox,,unused-applets
-system,process,busybox;pdpmake,busybox;pdpmake,"pdpmake[W2-make-p,W4p-configure,W4p-make]",unused-applets
+system,process,busybox;pdpmake,busybox;pdpmake,"pdpmake[W2-make-p,W4p-configure,W4p-make]",comparison
 tan,other,clang;ld.lld,clang+libs;ld.lld+libs,,T3
 tanh,other,clang;ld.lld,clang+libs;ld.lld+libs,,T3
 tcdrain,tty,busybox,busybox,,unused-applets
@@ -580,7 +578,7 @@ tcgetattr,tty,busybox;dash;mrsh;oksh;toybox,busybox;dash;mrsh;oksh;toybox,"busyb
 tcgetpgrp,tty,busybox;dash;mrsh;oksh,busybox;dash;mrsh;oksh,busybox[W5-busybox];dash[W5];mrsh[W5-mrsh];oksh[W5-oksh],T0
 tcgetsid,tty,busybox,busybox,,unused-applets
 tcsendbreak,tty,busybox;toybox,busybox;toybox,,unused-applets
-tcsetattr,tty,busybox;mrsh;oksh;toybox,busybox;mrsh;oksh;toybox,busybox[W5-busybox];mrsh[W5-mrsh];oksh[W5-oksh],unused-applets
+tcsetattr,tty,busybox;mrsh;oksh;toybox,busybox;mrsh;oksh;toybox,busybox[W5-busybox];mrsh[W5-mrsh];oksh[W5-oksh],comparison
 tcsetpgrp,tty,busybox;dash;mrsh;oksh;toybox,busybox;dash;mrsh;oksh;toybox,busybox[W5-busybox];dash[W5];mrsh[W5-mrsh];oksh[W5-oksh],T0
 tee,file,dash,dash,"dash[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0
 time,time,busybox;clang;gmake;ld.lld;oksh;tcc;toybox,busybox;busybox-T2;clang+libs;gmake;ld.lld+libs;oksh;tcc;toybox;toybox-T0;toybox-T1;toybox-T2,"toybox:find[W4,W4-configure-noAR,W4-configure-noLD,W4p-configure]",T0

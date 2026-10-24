@@ -93,10 +93,14 @@ GAP_WHO = {t: sorted({f"{p}:{s}" for fid, k, tt, p, s in hits if k == "core" and
 for t in R.TIERS:
     UP[t]["min"] = UP[t]["min"] | LO[t]
 
+CALLED = {s for fid, k, t, p, s in hits}
+
 def sym_tier(s):
     for t in R.TIERS:
         if s in UP[t]["min"] or s in LO[t]:
             return t
+    if s in CALLED:
+        return "comparison"         # called only by comparison programs or probe runs
     if any(s in UP[t]["full"] for t in R.TIERS):
         return "unused-applets"     # only in parts of toybox/busybox no workload executed
     return "comparison"

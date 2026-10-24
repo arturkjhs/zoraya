@@ -396,6 +396,9 @@ toybox	core	T0-T2	6 DM-097 locale	nl_langinfo	main.c	223	toy_singleinit	if (strc
 toybox	core	T0-T2	6 DM-097 locale	newlocale	main.c	224	toy_singleinit	uselocale(newlocale(LC_CTYPE_MASK, "C.UTF-8", 0) ? :	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	6 DM-097 locale	uselocale	main.c	224	toy_singleinit	uselocale(newlocale(LC_CTYPE_MASK, "C.UTF-8", 0) ? :	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	6 DM-097 locale	newlocale	main.c	225	toy_singleinit	newlocale(LC_CTYPE_MASK, "en_US.UTF-8", 0));	direct	5	DM-flagged API; see catalog entry	
+toybox	core	T0-T2	5 identity/permissions	geteuid	main.c	243	toy_init	uid_t uid = getuid(), euid = geteuid();	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	getuid	main.c	243	toy_init	uid_t uid = getuid(), euid = geteuid();	direct	2	identity query	
+toybox	core	T0-T2	5 identity/permissions	setuid	main.c	247	toy_init	if (setuid(uid)) perror_exit("setuid %d->%d", euid, uid); // drop root	restructure	20	privilege change	
 toybox	core	T0-T2	2 signals	signal	main.c	285	toy_exec_which	for (i = 0; i<NSIG; i++) signal(i, SIG_DFL);	restructure	15	signal handler/disposition	
 toybox	core	T0-T2	6 DM-039 symlink/lstat	readlink	main.c	320	toybox_main	s = (0<readlink(s, libbuf, sizeof(libbuf))) ? libbuf : 0;	direct	5	DM-flagged API; see catalog entry	
 toybox	core	T0-T2	6 environment (DM-085)	getenv	toys/lsb/mktemp.c	36	mktemp_main	char *template = *toys.optargs, *dir, *te = getenv("TMPDIR");	direct	2	environment variable	
@@ -501,6 +504,16 @@ busybox	core	T0-T2	3 global path/cwd	literal:/dev/null	editors/diff.c	726	diffre
 busybox	core	T0-T2	3 global path/cwd	literal:/tmp/difXXXXXX	editors/diff.c	733	diffreg	char name[] = "/tmp/difXXXXXX";	direct	3	global /tmp: temp-dir capability	
 busybox	core	T0-T2	3 global path/cwd	literal:/dev/null	editors/diff.c	1001	diff_main	xstat("/dev/null", &stb[i]);	direct	2	null device: pass a null handle	
 busybox	core	T0-T2	6 DM-097 locale	setlocale	libbb/appletlib.c	257	lbb_prepare	setlocale(LC_ALL, "");	direct	5	DM-flagged API; see catalog entry	
+busybox	core	T0-T2	3 global path/cwd	literal:/etc/busybox.conf	libbb/appletlib.c	334	parse_config_file	static const char config_file[] ALIGN1 = "/etc/busybox.conf";	restructure	10	global configuration file	
+busybox	core	T0-T2	5 identity/permissions	getuid	libbb/appletlib.c	344	parse_config_file	ruid = getuid();	direct	2	identity query	
+busybox	core	T0-T2	5 identity/permissions	getgrgid	libbb/appletlib.c	542	ingroup	struct group *grp = getgrgid(g);	emulate	0	user/group database	
+busybox	core	T0-T2	5 identity/permissions	getpwnam	libbb/appletlib.c	546	ingroup	struct passwd *pwd = getpwnam(*mem);	emulate	0	user/group database	
+busybox	core	T0-T2	5 identity/permissions	getgid	libbb/appletlib.c	561	check_suid	rgid = getgid();	direct	2	identity query	
+busybox	core	T0-T2	5 identity/permissions	setresgid	libbb/appletlib.c	595	check_suid	if (setresgid(-1, rgid, rgid))	restructure	20	privilege change	
+busybox	core	T0-T2	5 identity/permissions	setresuid	libbb/appletlib.c	605	check_suid	if (setresuid(-1, uid, uid))	restructure	20	privilege change	
+busybox	core	T0-T2	5 identity/permissions	geteuid	libbb/appletlib.c	625	check_suid	if (geteuid())	direct	2	identity query	
+busybox	core	T0-T2	5 identity/permissions	setgid	libbb/appletlib.c	641	check_suid	setgid(rgid);	restructure	20	privilege change	
+busybox	core	T0-T2	5 identity/permissions	setuid	libbb/appletlib.c	642	check_suid	setuid(ruid);	restructure	20	privilege change	
 busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/perror_msg.c	17	bb_perror_msg	bb_verror_msg(s, p, errno ? strerror(errno) : NULL);	direct	5	DM-flagged API; see catalog entry	
 busybox	core	T0-T2	6 DM-060 non-reentrant	strerror	libbb/perror_msg.c	27	bb_perror_msg_and_die	bb_verror_msg(s, p, errno ? strerror(errno) : NULL);	direct	5	DM-flagged API; see catalog entry	
 busybox	core	T0-T2	3 global path/cwd	mkstemp	libbb/xfuncs_printf.c	286	xmkstemp	int fd = mkstemp(template);	direct	3	temporary file in global /tmp: temp-dir capability	
@@ -521,11 +534,11 @@ tcc	core	T1	2 signals	sigemptyset	tccrun.c	1354	sig_error	sigemptyset(&s);	direc
 tcc	core	T1	2 signals	sigaddset	tccrun.c	1355	sig_error	sigaddset(&s, signum);	direct	2	signal mask bookkeeping	
 tcc	core	T1	2 signals	sigprocmask	tccrun.c	1356	sig_error	sigprocmask(SIG_UNBLOCK, &s, NULL);	direct	2	signal mask bookkeeping	
 tcc	core	T1	2 signals	sigemptyset	tccrun.c	1371	set_exception_handler	sigemptyset (&sigact.sa_mask);	direct	2	signal mask bookkeeping	
-tcc	core	T1	2 signals	sigaction	tccrun.c	1377	set_exception_handler	sigaction(SIGFPE, &sigact, NULL);	restructure	15	signal handler/disposition	
-tcc	core	T1	2 signals	sigaction	tccrun.c	1378	set_exception_handler	sigaction(SIGILL, &sigact, NULL);	restructure	15	signal handler/disposition	
-tcc	core	T1	2 signals	sigaction	tccrun.c	1379	set_exception_handler	sigaction(SIGSEGV, &sigact, NULL);	restructure	15	signal handler/disposition	
-tcc	core	T1	2 signals	sigaction	tccrun.c	1380	set_exception_handler	sigaction(SIGBUS, &sigact, NULL);	restructure	15	signal handler/disposition	
-tcc	core	T1	2 signals	sigaction	tccrun.c	1381	set_exception_handler	sigaction(SIGABRT, &sigact, NULL);	restructure	15	signal handler/disposition	
+tcc	core	T1	2 signals	sigaction	tccrun.c	1377	set_exception_handler	sigaction(SIGFPE, &sigact, NULL);	restructure	15	signal handler/disposition	FPE
+tcc	core	T1	2 signals	sigaction	tccrun.c	1378	set_exception_handler	sigaction(SIGILL, &sigact, NULL);	restructure	15	signal handler/disposition	ILL
+tcc	core	T1	2 signals	sigaction	tccrun.c	1379	set_exception_handler	sigaction(SIGSEGV, &sigact, NULL);	restructure	15	signal handler/disposition	SEGV
+tcc	core	T1	2 signals	sigaction	tccrun.c	1380	set_exception_handler	sigaction(SIGBUS, &sigact, NULL);	restructure	15	signal handler/disposition	BUS
+tcc	core	T1	2 signals	sigaction	tccrun.c	1381	set_exception_handler	sigaction(SIGABRT, &sigact, NULL);	restructure	15	signal handler/disposition	ABRT
 gmake	core	T1	5 identity/permissions	eaccess	lib/findprog-in.c	148	find_in_given_path	if (eaccess (progpathname, X_OK) == 0)	direct	3	permission probe: try the operation / capability check	
 gmake	core	T1	5 identity/permissions	eaccess	lib/findprog-in.c	300	find_in_given_path	if (eaccess (progpathname, X_OK) == 0)	direct	3	permission probe: try the operation / capability check	
 gmake	core	T1	6 environment (DM-085)	getenv	lib/fnmatch.c	273	internal_fnmatch	posixly_correct = getenv ("POSIXLY_CORRECT") != NULL ? 1 : -1;	direct	2	environment variable	

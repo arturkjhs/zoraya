@@ -1,8 +1,11 @@
 program	feature	class	sites
 busybox	1 process	direct	4
 busybox	3 global path/cwd	direct	4
-busybox	3 global path/cwd	restructure	3
+busybox	3 global path/cwd	restructure	4
 busybox	4 tty/job control	direct	1
+busybox	5 identity/permissions	direct	3
+busybox	5 identity/permissions	emulate	2
+busybox	5 identity/permissions	restructure	4
 busybox	6 DM-060 non-reentrant	direct	4
 busybox	6 DM-065 wall clock	direct	3
 busybox	6 DM-097 locale	direct	2
@@ -87,8 +90,9 @@ toybox	3 global path/cwd	direct	8
 toybox	3 global path/cwd	emulate	2
 toybox	3 global path/cwd	restructure	11
 toybox	4 tty/job control	direct	5
-toybox	5 identity/permissions	direct	13
+toybox	5 identity/permissions	direct	15
 toybox	5 identity/permissions	emulate	26
+toybox	5 identity/permissions	restructure	1
 toybox	6 DM-038 rename	direct	3
 toybox	6 DM-039 symlink/lstat	direct	14
 toybox	6 DM-053 ioctl	direct	2

@@ -18,10 +18,10 @@ Static names used for the upper bounds:
 
 | Tier | Upper, full binaries | Upper, minimal multi-call builds | Lower (dynamic, core runs) | Min upper − lower | Observed but not in minimal imports |
 |---|---|---|---|---|---|
-| T0 | 485 | 166 | 84 | 82 | 5 |
-| T1 | 518 | 250 | 134 | 116 | 5 |
-| T2 | 518 | 293 | 189 | 104 | 3 |
-| T3 | 333 | 333 | 89 | 244 | 0 |
+| T0 | 483 | 164 | 84 | 80 | 5 |
+| T1 | 516 | 248 | 134 | 114 | 5 |
+| T2 | 516 | 291 | 189 | 102 | 3 |
+| T3 | 331 | 331 | 89 | 242 | 0 |
 
 - T0 observed-not-in-minimal-imports (getgid, getopt_long, getuid, setgid, setuid): busybox:tr:getgid, busybox:tr:getopt_long, busybox:tr:getuid, busybox:tr:setgid, busybox:tr:setuid, toybox:cat:getuid, toybox:ls:getuid, toybox:sleep:getuid, toybox:touch:getuid
 - T1 observed-not-in-minimal-imports (getgid, getopt_long, getuid, setgid, setuid): busybox:diff:getgid, busybox:diff:getopt_long, busybox:diff:getuid, busybox:diff:setgid, busybox:diff:setuid, busybox:tr:getgid, busybox:tr:getopt_long, busybox:tr:getuid, busybox:tr:setgid, busybox:tr:setuid, toybox:cat:getuid, toybox:head:getuid, toybox:ls:getuid, toybox:mv:getuid, toybox:rm:getuid, toybox:sleep:getuid, toybox:touch:getuid, toybox:true:getuid, toybox:uname:getuid
@@ -43,47 +43,47 @@ Static names used for the upper bounds:
 | memory | 4 / 3 | 6 / 4 | 6 / 5 | 14 / 7 |
 | threads | 0 / 0 | 3 / 3 | 3 / 3 | 33 / 19 |
 | network | 1 / 0 | 1 / 0 | 4 / 0 | 12 / 0 |
-| other | 9 / 5 | 13 / 6 | 16 / 6 | 45 / 6 |
+| other | 7 / 5 | 11 / 6 | 14 / 6 | 43 / 6 |
 
 ### Jumps
 
 - T0 → T1: min upper +84, lower +50
 - T1 → T2: min upper +43, lower +55
   - new lower-bound symbols at T2: dirname, dprintf, dup, execvp, faccessat, fchmodat, fdopendir, feof, ferror_unlocked, fileno_unlocked, fprintf, fputs_unlocked, fseeko, getc_unlocked, getdelim, getegid, getgrgid, gethostname, getline, getopt, getpwuid, iswctype, mbrtowc, memchr, memfd_create, mkdir, mkdirat, mkdtemp, mkstemp, newlocale, openat, putc, putchar, putchar_unlocked, putenv, puts, readlinkat, regcomp, regexec, regfree, rmdir, sscanf, strspn, strtoll, symlink, syscall, sysconf, tee, time, uselocale, vasprintf, vfprintf, vprintf, waitpid, wctype
-- T3 (clang+lld alone) vs T1: min upper 333 vs 250; lower 89 vs 134; T3 lower symbols not in T1 lower: 45
+- T3 (clang+lld alone) vs T1: min upper 331 vs 248; lower 89 vs 134; T3 lower symbols not in T1 lower: 45
   - of those, by category: threads 19, process 8, string 6, file 4, memory 3, other 3, signal 2
 
 ### Per program
 
 | Program | Static imports | Dynamic (any run) | Dynamic runs |
 |---|---|---|---|
-| busybox | 393 | 101 | 11 |
-| busybox-T0 | 24 | — | — |
-| busybox-T1 | 44 | — | — |
-| busybox-T2 | 79 | — | — |
-| clang | 14 | 72 | 2 |
-| clang+libs | 331 | — | — |
-| dash | 101 | 73 | 20 |
-| gmake | 132 | 74 | 7 |
-| ld.lld | 7 | 64 | 1 |
-| ld.lld+libs | 319 | — | — |
-| mrsh | 90 | 58 | 1 |
-| oksh | 124 | 66 | 1 |
-| pdpmake | 64 | 35 | 4 |
-| tcc | 79 | 48 | 12 |
-| toybox | 327 | 97 | 13 |
-| toybox-T0 | 84 | — | — |
-| toybox-T1 | 112 | — | — |
-| toybox-T2 | 176 | — | — |
+| busybox | 391 | 101 | 11 |
+| busybox-T0 | 22 | — | — |
+| busybox-T1 | 42 | — | — |
+| busybox-T2 | 77 | — | — |
+| clang | 12 | 72 | 2 |
+| clang+libs | 329 | — | — |
+| dash | 99 | 73 | 20 |
+| gmake | 130 | 74 | 7 |
+| ld.lld | 5 | 64 | 1 |
+| ld.lld+libs | 317 | — | — |
+| mrsh | 88 | 58 | 1 |
+| oksh | 122 | 66 | 1 |
+| pdpmake | 62 | 35 | 4 |
+| tcc | 77 | 48 | 12 |
+| toybox | 325 | 97 | 13 |
+| toybox-T0 | 82 | — | — |
+| toybox-T1 | 110 | — | — |
+| toybox-T2 | 174 | — | — |
 
 ### Shell comparison in W5 (same session, dynamic libc symbols of the shell process itself)
 
 | Shell | W5 dynamic | Static imports |
 |---|---|---|
-| dash | 54 | 101 |
-| oksh | 66 | 124 |
-| mrsh | 58 | 90 |
-| busybox | 73 | 393 |
+| dash | 54 | 99 |
+| oksh | 66 | 122 |
+| mrsh | 58 | 88 |
+| busybox | 73 | 391 |
 
 ### make comparison (dynamic libc symbols of the make process)
 

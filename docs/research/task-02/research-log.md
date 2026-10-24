@@ -90,9 +90,57 @@ They are recorded in the outputs; listed here so they are not mistaken for harne
 - After Ctrl-C in W5, mrsh reports `$?` = 129 where dash, oksh and busybox ash report 130. mrsh's status for a
   signal-terminated job differs; not investigated further.
 
+## Analyses added after M4 (2026-10-24)
+
+- `analysis/configure_checks.py`. The task asks which configure checks fail with tcc, and no script answered that.
+  This one diffs hello's tcc `config.log` against a gcc baseline. 22 checks differ.
+- `analysis/fork_children.py`, `analysis/signals_delivered.py` and `analysis/path_prefixes.py`. These are inputs that
+  `conflict-impact.md` needed for X-2, X-3 and X-1. The first version of `fork_children.py` missed every pid that
+  strace pads with two spaces. The totals did not reconcile with `syscall-surface.csv`, which exposed the bug; they
+  now match (1,708 + 2 in `W3-check` = 1,710).
+- `analyze.py` sorted a category tally by count only, so ties came out in hash order and the summary changed between
+  runs. Ties are now sorted by name.
+
 ## Independent review (step 5)
 
-See the section appended below after the review ran.
+A separate subagent reviewed `method.md` against the scripts. It had not written the scripts or the M3 reviews. It
+also spot-checked 20 random rows of each CSV against raw VM data with its own scripts (seed
+`random.Random(20261024)`). Full report: `tools/posix-surface/review/step5-review.md`.
+
+| CSV | Rows checked | Mismatches |
+|---|---|---|
+| `libc-surface.csv` | 20 | 1: `system` labelled `unused-applets`, though pdpmake calls it (E2) |
+| `syscall-surface.csv` | 20 | 0: counts, argument patterns and program attribution all matched |
+| `callsites.csv` | 20 | 2: only the `signals` tag was wrong; api, line, function and class were right |
+
+Findings and what was done:
+
+- **E1, M3 missed executed code.** The full toybox/busybox binaries run set-uid startup code on every applet call
+  (`toybox/main.c` `toy_init`; busybox `parse_config_file`/`check_suid`). The minimal builds compile it out, so M3,
+  which filtered through their line tables, never saw it.
+  - **Fixed:** `callsites.py` also uses the full binaries' line tables for those two files.
+  - 13 sites were added and classified by the coordinator: all `direct`, removable by the config switch the minimal
+    builds already use.
+  - M3 is now 663 sites.
+- **E2, `tier` labels.** `sym_tier()` labelled symbols that comparison programs call as `unused-applets`.
+  - **Fixed:** dynamic evidence now takes precedence. The labels are now 166 `unused-applets` and 19 `comparison`.
+  - The `tier` column is now defined in `method.md`. Per-tier counts were not affected.
+- **I1, stack-protector symbols counted as API.** **Fixed:** they are excluded with the crt references. Every static
+  upper bound drops by 2: T0 164, T1 248, T2 291, T3 331. Lower bounds are unchanged.
+- **I2, vDSO wording.** `clock_gettime` does reach the kernel sometimes. The known-limits row was corrected.
+- **Minor.**
+  - The `signals` regex now includes `SEGV`, `BUS`, `ILL`, `FPE`, `ABRT`, `TRAP` and `SYS`.
+  - Basename false positives are documented as possible; the review found none.
+  - The review merge key, the `n/a` class, the raw data size (about 490 MB) and `SHELL` are now documented.
+- **Notes left as they are:**
+  - No script asserts that exit statuses match with and without the interposer. The review confirmed they match for
+    all 25 runs.
+  - W1 and W4 run several attempts in the same tree, so they depend on run order.
+  - `dlsym`'s empty dynamic column means "never interposed", not "never called".
+  - Per-tier syscall counts include syscalls from programs the workloads built.
+
+All published numbers were regenerated after the fixes. `posix-surface.md`, `callsite-analysis.md` and
+`conflict-impact.md` quote the regenerated values.
 
 ## Open questions
 

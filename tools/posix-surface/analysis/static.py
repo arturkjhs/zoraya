@@ -31,9 +31,11 @@ with open(os.path.join(RES, "musl-exports.tsv"), "w") as f:
     for s in sorted(exports):
         f.write(f"{s}\t{exports[s]}\n")
 
-# referenced by crt1.o / crti.o startup code linked into every executable, not by program code
+# referenced by crt1.o / crti.o startup code linked into every executable, or inserted by the compiler (Alpine gcc
+# defaults to -fstack-protector-strong), not called by program code
 CRT = {"__libc_start_main", "__cxa_finalize", "__deregister_frame_info", "__register_frame_info",
-       "_ITM_registerTMCloneTable", "_ITM_deregisterTMCloneTable", "__gmon_start__"}
+       "_ITM_registerTMCloneTable", "_ITM_deregisterTMCloneTable", "__gmon_start__",
+       "__stack_chk_fail", "__stack_chk_guard"}
 
 def imports(path):
     return sorted({ALIAS.get(s, s) for t, s in nm(["-D", "--undefined-only"], path)})

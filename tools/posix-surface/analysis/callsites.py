@@ -27,6 +27,12 @@ PROGS = {
     "pdpmake": ("pdpmake",       "pdpmake/make", "T1", "comparison"),
 }
 
+# Shared startup code of the full multi-call binaries the workloads actually ran. It executes on every applet call but
+# is compiled out of the minimal builds (toybox CFG_TOYBOX_SUID, busybox FEATURE_SUID), so for these files the
+# full binary's line table is used as well. (program -> full binary, files relative to the source root)
+STARTUP = {"toybox": ("toybox/generated/unstripped/toybox", ("main.c",)),
+           "busybox": ("busybox/busybox_unstripped", ("libbb/appletlib.c",))}
+
 # toybox/busybox wrappers (macros or helpers) around the same primitives
 WRAP = {"XVFORK": "vfork", "xvfork": "vfork", "xvforkwrap": "vfork", "xfork": "fork",
         "xpopen_setup": "popen", "xpopen_both": "popen", "xpopen": "popen", "xpclose_both": "pclose",
@@ -57,7 +63,7 @@ FEATURES = [("1 process", F_PROC), ("2 signals", F_SIG), ("4 tty/job control", F
 CALL = {name: re.compile(r"(?<![\w.>])(" + pat + r")\s*\(") for name, pat in FEATURES}
 ABS = re.compile(r'"(/(?:bin|usr|tmp|dev|proc|etc|var|sys|lib)\b[^"]*)"')
 FCNTL_LOCK = re.compile(r"F_SETLKW?|F_GETLK|F_OFD_")
-SIGNAME = re.compile(r"\bSIG(CHLD|INT|QUIT|TERM|HUP|PIPE|TSTP|TTIN|TTOU|CONT|STOP|ALRM|WINCH|USR1|USR2|KILL|XCPU|XFSZ)\b")
+SIGNAME = re.compile(r"\bSIG(CHLD|INT|QUIT|TERM|HUP|PIPE|TSTP|TTIN|TTOU|CONT|STOP|ALRM|WINCH|USR1|USR2|KILL|XCPU|XFSZ|SEGV|BUS|ILL|FPE|ABRT|TRAP|SYS)\b")
 
 def exec_ranges(binary):
     """address ranges of executable sections (.init/.text/.fini)"""
@@ -186,11 +192,14 @@ for prog, (src, binp, tier, kind) in PROGS.items():
         print(f"missing binary {binary}", file=sys.stderr)
         continue
     lt = line_table(binary)
+    full_lt = line_table(os.path.join(BLD, STARTUP[prog][0])) if prog in STARTUP else {}
     for path in sorted(glob.glob(os.path.join(root, "**", "*.[ch]"), recursive=True)):
         rel = os.path.relpath(path, root)
         if rel.startswith(("tests", "testsuite", "scripts", "kconfig", "generated", "win32", "tests/")) or "/tests/" in rel:
             continue
         lines_ok = lt.get(os.path.basename(path), set())
+        if prog in STARTUP and rel in STARTUP[prog][1]:
+            lines_ok = lines_ok | full_lt.get(os.path.basename(path), set())
         if not lines_ok:
             continue
         try:

@@ -11,7 +11,7 @@ tools/posix-surface/run.sh analyze    # selected stages only
 `run.sh` copies `tools/posix-surface/` into the VM (`~/psurf/tools`) and runs each stage there over SSH. It then copies
 `~/psurf/results/` back to `tools/posix-surface/results/`, runs the M3 report locally (it reads the committed reviews
 in `tools/posix-surface/review/`), and copies `libc-surface.csv`, `syscall-surface.csv` and `callsites.csv` into
-`docs/research/task-02/`. Raw traces, about 226 MB, stay in the VM under `~/psurf/raw` and `~/psurf/raw-m4`; every
+`docs/research/task-02/`. Raw traces, about 490 MB, stay in the VM under `~/psurf/raw` and `~/psurf/raw-m4`; every
 table can be regenerated from them.
 
 Stages, in order: `env fetch build static interposer dynamic minbuild strace callsites m4 analyze`, one script each in
@@ -96,6 +96,9 @@ Workloads (`remote/workloads.sh`; outputs are checked in the `*-check` runs):
   itself never show up, by construction.
 - musl's four `environ` aliases are counted as one symbol.
 - crt startup references (`__libc_start_main`, `__cxa_finalize`, `_ITM_*`, ...) are tagged `crt` and excluded.
+  So are the compiler-inserted stack-protector symbols `__stack_chk_fail` and `__stack_chk_guard`, because Alpine's
+  gcc defaults to `-fstack-protector-strong`. The independent review found them counted as API; that had inflated
+  every upper bound by 2.
 - Cross-check: for dash, the object-file method (undefined across all `.o` files minus defined across them) gives
   exactly the same set as the import table. See `results/static-crosscheck.txt`.
 - For T3, `clang+libs` and `ld.lld+libs` are the union over the binary and every non-musl shared library it loads:
@@ -129,6 +132,11 @@ Workloads (`remote/workloads.sh`; outputs are checked in the `*-check` runs):
   vs `results/strace-status.tsv`).
 - **Consistency check.** Every dynamic hit of a program is in that program's static import table, or in its `+libs`
   closure for clang and lld. The check is printed in `summary-tables.md`.
+
+**`tier` column of `libc-surface.csv`.** It holds one of three kinds of value:
+- `T0`–`T3`: the first tier whose minimal upper bound or lower bound contains the symbol.
+- `comparison`: no tier contains the symbol, but a comparison program or probe run called it.
+- `unused-applets`: no tier contains it and nothing called it. Only the full toybox/busybox binaries import it.
 
 **Categories** (`analysis/categories.py`). Each symbol's header is found by scanning musl's installed headers for a
 declaration. The header is mapped to a category, with per-symbol overrides for headers that mix concerns (`unistd.h`,
@@ -186,13 +194,22 @@ such as linker detection, are listed separately.
 2. **Compiled code only.** A match counts only if its source line appears in the DWARF line table of the measured
    binary at an address inside an executable section. This drops unconfigured code and code removed by
    `--gc-sections`, and keeps inlined code. For toybox and busybox the binary is the T2 minimal build, so only the
-   applets the workloads executed are covered. The enclosing function comes from universal-ctags.
+   applets the workloads executed are covered. Exception: the shared startup files of the full binaries that the
+   workloads actually ran (toybox `main.c`, busybox `libbb/appletlib.c`) also accept lines from the full binaries'
+   line tables. The independent review found that this executed set-uid code was missing (`callsites.py: STARTUP`).
+   The enclosing function comes from universal-ctags.
 3. **Classification.**
    - A rule gives a first guess.
    - Four reviewers then classified every site by reading its context in the VM, following
      `tools/posix-surface/review/M3-BRIEF.md`. Each reviewer covered different programs, and none wrote the
      extraction scripts. Their output is in `review/m3-*.tsv`.
-   - The coordinator classified the 23 sites that appeared after the extractor fix (`review/m3-coordinator.tsv`).
+   - The coordinator classified the 23 sites that appeared after the extractor fix and the 13 startup sites added
+     after the independent review (`review/m3-coordinator.tsv`).
+   - Classes: `direct`, `restructure` and `emulate` as defined in the task. `n/a` marks a match that is not a use of
+     the feature: a string comparison of `/dev/stdin`, a match in a comment, or a feature not reached on Linux.
+   - Reviews are merged by (program, file, line, api), ignoring the feature. A line listed under two features shares
+     one review. Review entries for lines the extractor no longer emits are ignored; most are the dead-code rows
+     that the extractor fix removed.
    - `analysis/callsite_report.py` merges the sites and reviews into `callsites.csv` and `results/callsite-tables.md`.
 
 Classes, efforts and "what it does" are estimates by reading code, not measurements.
@@ -209,15 +226,17 @@ never modified in place: `src/` is read-only after fetching.
 
 | Method | Limit | Effect |
 |---|---|---|
-| Static imports | Symbols reached only through `dlsym` are invisible. GNU make (`load` directive) and tcc (`-run`) import `dlopen`/`dlsym`, but no workload calls them (empty dynamic column in `libc-surface.csv`) | upper bound could miss plugin-only symbols; not exercised here |
+| Static imports | Symbols reached only through `dlsym` are invisible. GNU make (`load` directive) and tcc (`-run`) import `dlopen`/`dlsym`, but no workload calls `dlopen` (empty dynamic column in `libc-surface.csv`; `dlsym` is never interposed, so its empty column means nothing) | upper bound could miss plugin-only symbols; not exercised here |
 | Static imports | Include dead code, error paths and features no workload uses | overestimate; this is why the lower bound exists |
 | Minimal builds | Built from the applets observed, so they are bounded by the workloads too | they are a tighter upper bound for *these* workloads, not for "any build" |
 | Interposer | First hit per symbol per process image; a vfork child shares the parent's memory, so its first hits may be suppressed if the parent already logged them | attribution is by program, not process; process counts in M4 are counts of images |
 | Interposer | Data symbols are not interposable; `dlsym` is excluded | those symbols have static evidence only |
 | Interposer | Only exercised paths | underestimate; depends on W1–W6 |
-| strace | Calls served by the vDSO (`clock_gettime`, `gettimeofday` on aarch64) never enter the kernel and are not traced | time syscalls are under-represented in M2 |
+| strace | Calls served by the vDSO (`clock_gettime`, `gettimeofday` on aarch64) usually do not enter the kernel and are not traced. 64 `clock_gettime` syscalls still appear, through the vDSO fallback | time syscall counts in M2 are partial |
 | strace | Argument decoding is strace's symbolic rendering; patterns are regex-extracted | rare formats could be mis-bucketed |
 | Namespace | Supplementary groups are not mapped inside the user namespace; `/usr/bin/*` remains Alpine's | any `/usr/bin` absolute use shows up as a leak (none in core runs) |
-| M3 regex | Calls via function pointers or unlisted macros are missed; file basenames are used to match the line table | false negatives possible; reviewers caught `XVFORK` this way |
+| M3 regex | Calls via function pointers or unlisted macros are missed. File basenames are used to match the line table, so a line from an uncompiled file that shares a basename with a compiled one could be admitted | false negatives possible (reviewers caught `XVFORK` this way); false positives possible, none found by the review |
+| M3 `signals` column | Signal names are regex-matched on the call line only, and most signal sites name none. A line like `!= SIGKILL` is tagged with that signal | the per-signal table is indicative |
+| Environment | `SHELL` is the GNU make set's `sh` in every run; both sets' `sh` is the same dash | no effect on results |
 | M3 classes | Expert estimates by reading code, by one reviewer per program | effort numbers are order-of-magnitude; M4 calibrates two of them |
 | Categories | Header scan plus a hand-written override table | a symbol's category is a choice; per-category totals inherit it |

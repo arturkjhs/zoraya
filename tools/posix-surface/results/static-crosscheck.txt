@@ -1,5 +1,5 @@
 dash objects: 32
 object-file method: 101 musl symbols
-import-table method: 101 musl symbols
-only in objects: []
+import-table method: 99 musl symbols
+only in objects: ['__stack_chk_fail', '__stack_chk_guard']
 only in imports: []

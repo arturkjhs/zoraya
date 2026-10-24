@@ -14,8 +14,12 @@ How each number is produced, and its limits, is in [`method.md`](method.md). Cal
 - **Lower bound (dynamic).** The libc functions that an `LD_PRELOAD` interposer saw called from program code (not from
   inside musl) during W1–W6. It covers only exercised paths, so it underestimates.
 - **Full vs. minimal multi-call builds.** toybox and busybox are multi-call binaries. Their defconfig builds import
-  every applet's needs (toybox 327, busybox 393). Per tier, a minimal build containing only the applets that the
+  every applet's needs (toybox 325, busybox 391). Per tier, a minimal build containing only the applets that the
   tier's workloads ran gives a tighter upper bound. That bound is still tied to these workloads.
+
+- **Not counted.** crt startup references and the compiler-inserted stack-protector symbols (`__stack_chk_fail`,
+  `__stack_chk_guard`; Alpine's gcc defaults to `-fstack-protector-strong`) are not counted as API. Neither is called
+  by program code.
 
 Conclusions below say which bound they rely on.
 
@@ -39,14 +43,14 @@ pdpmake as a comparison.
 
 | Tier | Upper, full binaries | Upper, minimal multi-call builds | Lower (dynamic) | Gap (min upper − lower) |
 |---|---|---|---|---|
-| T0 | 485 | 166 | 84 | 82 |
-| T1 | 518 | 250 | 134 | 116 |
-| T2 | 518 | 293 | 189 | 104 |
-| T3 (alone) | 333 | 333 | 89 | 244 |
+| T0 | 483 | 164 | 84 | 80 |
+| T1 | 516 | 248 | 134 | 114 |
+| T2 | 516 | 291 | 189 | 102 |
+| T3 (alone) | 331 | 331 | 89 | 242 |
 
 musl 1.2.5 exports 1,613 functions (and 30 data symbols, `results/musl-exports.tsv`). For scale, the smallest surface that runs T1
-is **134 functions observed, at most 250 imported** (minimal builds). Measured against these workloads, that is
-roughly 8–16 % of musl's exported functions.
+is **134 functions observed, at most 248 imported** (minimal builds). Measured against these workloads, that is
+roughly 8–15 % of musl's exported functions.
 
 Every dynamic hit also appears in the same program's static imports (consistency check, `summary-tables.md`). A few
 symbols were observed but are not in the minimal imports: busybox's setuid handling, `getopt_long` and `getuid`, and
@@ -69,7 +73,7 @@ They are listed in `summary-tables.md` and counted in the lower bound.
 | memory | 4 / 3 | 6 / 4 | 6 / 5 | 14 / 7 |
 | threads | 0 / 0 | 3 / 3 | 3 / 3 | 33 / 19 |
 | network | 1 / 0 | 1 / 0 | 4 / 0 | 12 / 0 |
-| other | 9 / 5 | 13 / 6 | 16 / 6 | 45 / 6 |
+| other | 7 / 5 | 11 / 6 | 14 / 6 | 43 / 6 |
 
 Categories come from a header scan plus a hand-written override table (`analysis/categories.py`), so the split
 between categories is partly a choice. The totals are not.
@@ -89,7 +93,7 @@ between categories is partly a choice. The totals are not.
   - locale objects (`newlocale`, `uselocale`);
   - process functions (`execvp`, `waitpid`, `dup`);
   - `memfd_create` and `syscall`, from toybox.
-- **T3 vs T1:** clang+lld alone imports 333 (more than T1's 250), but only 89 were observed (fewer than T1's 134).
+- **T3 vs T1:** clang+lld alone imports 331 (more than T1's 248), but only 89 were observed (fewer than T1's 134).
   Of T3's observed functions, 45 are not in T1's lower bound: threads 19, process 8, string 6, file 4, memory 3,
   other 3, signal 2. **Threads are what separates T3 from T1–T2.** ld.lld creates 4 threads in W6; nothing in
   T0–T2 creates any.
@@ -156,7 +160,7 @@ No core run executed anything outside the measured sets.
 
 ## Key observations
 
-1. **The T1 surface is small and bounded.** Self-hosting C without autoconf needs 134 to 250 libc functions under
+1. **The T1 surface is small and bounded.** Self-hosting C without autoconf needs 134 to 248 libc functions under
    these workloads. The interval is between the dynamic and the minimal-static bound.
 2. **autoconf is a bigger step in exercised surface than in imported surface.** T1→T2 adds 55 observed functions but
    only 43 imports. This rests on both bounds.

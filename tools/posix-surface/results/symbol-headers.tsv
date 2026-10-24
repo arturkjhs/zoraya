@@ -7,8 +7,6 @@ __h_errno_location	netdb.h	network
 __libc_current_sigrtmax	signal.h	signal
 __libc_current_sigrtmin	signal.h	signal
 __sched_cpucount	sched.h	process
-__stack_chk_fail		other
-__stack_chk_guard		other
 _exit	unistd.h	process
 abort	stdlib.h	process
 accept	sys/socket.h	network

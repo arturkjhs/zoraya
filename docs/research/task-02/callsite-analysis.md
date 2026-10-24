@@ -1,12 +1,12 @@
 # TASK-02: call-site analysis (M3) and validation patches (M4)
 
 Every compiled call site of the conflict-critical features in the T0–T2 programs. For comparison, the alternative
-shells (oksh, mrsh) and pdpmake are included as well. All 650 sites are in [`callsites.csv`](callsites.csv), and the
+shells (oksh, mrsh) and pdpmake are included as well. All 663 sites are in [`callsites.csv`](callsites.csv), and the
 generated tables in `tools/posix-surface/results/callsite-tables.md`. The extraction and review process is described
 in [`method.md`](method.md) → M3.
 
 **Classes and effort are estimates.** They come from reading the code. Each program had one reviewer, and the
-coordinator handled the 23 late sites. They are not measurements. Effort is in estimated changed lines; for
+coordinator handled the 36 late sites: 23 after the extractor fix and 13 after the independent review (see below). They are not measurements. Effort is in estimated changed lines; for
 `emulate` it is 0 by definition. M4 at the end calibrates two of them.
 
 Scope notes:
@@ -14,6 +14,9 @@ Scope notes:
 - A site counts only if its line is in the DWARF line table of the measured binary, at an address in an executable
   section. Unconfigured code and code removed by `--gc-sections` are excluded.
 - For toybox and busybox the binary is the T2 minimal build. Only the applets the workloads ran are covered.
+- The workloads ran the *full* toybox and busybox binaries. Their shared startup code (toybox `main.c`, busybox
+  `libbb/appletlib.c`) runs on every applet call but is compiled out of the minimal builds. For those two files, the
+  full binaries' line tables are used too. The independent review found this gap; it added 13 sites.
 - busybox in T0–T2 is a fallback for five applets (`tr`, `diff`, `awk`, `expr`, `gzip`). Its call sites cover those
   applets only.
 
@@ -22,8 +25,8 @@ Scope notes:
 | Program | Kind | direct | restructure | emulate | n/a | direct lines | restructure lines |
 |---|---|---|---|---|---|---|---|
 | dash | core | 26 | 1 | 33 | 1 | 54 | 60 |
-| toybox | core | 84 | 12 | 46 | 1 | 164 | 330 |
-| busybox | core | 16 | 0 | 0 | 5 | 39 | 0 |
+| toybox | core | 87 | 12 | 46 | 1 | 167 | 330 |
+| busybox | core | 26 | 0 | 0 | 5 | 49 | 0 |
 | tcc | core | 12 | 9 | 0 | 1 | 27 | 48 |
 | gmake | core | 70 | 8 | 16 | 1 | 127 | 90 |
 | oksh | comparison | 76 | 42 | 72 | 17 | 96 | 421 |
@@ -36,12 +39,12 @@ By feature, all programs (core programs in parentheses):
 |---|---|---|---|---|
 | 1 process | 51 (40) | 8 (6) | 13 (3) | 1 (0) |
 | 2 signals | 27 (16) | 66 (20) | 41 (15) | 2 (2) |
-| 3 global path/cwd | 33 (25) | 2 (2) | 24 (14) | 5 (5) |
+| 3 global path/cwd | 34 (26) | 2 (2) | 24 (14) | 5 (5) |
 | 4 tty/job control | 21 (13) | 0 (0) | 47 (6) | 5 (0) |
-| 5 identity/permissions | 31 (13) | 0 (0) | 62 (46) | 0 (0) |
+| 5 identity/permissions | 43 (25) | 0 (0) | 62 (46) | 0 (0) |
 | 6 (TASK-01 design mistakes, all IDs) | 180 (101) | 2 (2) | 15 (11) | 14 (2) |
 
-The rule-based first pass was changed by review on 194 of 650 sites. Sites whose class was `emulate` concentrate
+The rule-based first pass was changed by review on 202 of 663 sites. Sites whose class was `emulate` concentrate
 in two places:
 
 - the **shells**: process creation, job control and signal semantics;
@@ -103,7 +106,7 @@ Dynamic evidence (M2, `posix-surface.md`): in T0–T2 core runs, handlers are ac
 
 ## Feature 3: global paths, `$PATH`, cwd
 
-Core programs: 25 direct, 2 restructure, 14 emulate, 5 n/a.
+Core programs: 26 direct, 2 restructure, 14 emulate, 5 n/a.
 
 - **`/bin/sh`.** GNU make and pdpmake hard-code it for recipes. Shebangs and dash's ENOEXEC fallback use it too.
   - The source sites are the `_PATH_BSHELL`/`default_shell` constants, plus `tryexec` (see feature 1).
@@ -122,7 +125,8 @@ Core programs: 25 direct, 2 restructure, 14 emulate, 5 n/a.
   - Dynamically, `openat` with a `/tmp` prefix happened 9 times.
 - **`/etc/passwd`, `/etc/group`**, toybox (`id` and friends), direct: read through a lookup API instead.
   `getpwnam`/`getgrgid` are counted under feature 5.
-- **`/etc/profile`**, dash, direct.
+- **`/etc/profile`**, dash, direct. **`/etc/busybox.conf`**, busybox set-uid policy file: direct, compiled out with
+  set-uid support.
 - **cwd dependence.**
   - GNU make's `chdir` for `-C`, `getcwd` for `CURDIR`, and `realpath`: emulate (6 sites).
   - dash's `cd`/`pwd` (`chdir`, `getcwd`): emulate, since a per-process cwd is part of the language.
@@ -151,7 +155,7 @@ Core programs: 13 direct, 6 emulate. All 6 emulate sites are in dash; oksh and m
 
 ## Feature 5: identity and permissions
 
-Core programs: 13 direct, 46 emulate.
+Core programs: 25 direct, 46 emulate.
 
 - **toybox** accounts for most of it. The emulate sites are `chmod`/`fchmod`/`fchmodat`, `fchown`/`lchown`/`fchownat`,
   `getpwnam`/`getpwuid`/`getgrgid`/`getgrnam`, and `getgroups`, in `chmod`, `cp -p`, `install`, `ls -l`, `id` and
@@ -159,6 +163,12 @@ Core programs: 13 direct, 46 emulate.
   - These applets exist to manipulate or print POSIX owners and modes. They are emulate by definition, not because
     of how they are written.
   - The direct sites are root checks (`geteuid() == 0`) and `access` probes.
+- **Set-uid support at startup** (toybox `toy_init`, busybox `parse_config_file`/`check_suid`), 12 sites:
+  - `getuid`, `geteuid`, `getgid`, `setuid`, `setgid`, `setresuid`, `setresgid`, plus `getgrgid`/`getpwnam` for
+    `/etc/busybox.conf` policy entries.
+  - All direct, 1 line each (estimate). The config switch that the minimal builds already use removes them.
+  - They only matter for binaries installed set-uid, which CP-03 rules out natively.
+  - busybox's `setgid`/`setuid` drop was executed in the workloads, as a no-op (dynamic evidence).
 - **GNU make**:
   - `umask` (4 sites, direct);
   - `getpwnam` and `getlogin` for `~` / `~user` expansion in makefiles and globs (6 sites, emulate);
