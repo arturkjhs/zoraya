@@ -164,6 +164,11 @@ Absolute-path `execve`s chosen by the program itself (not resolved through `PATH
 - **Limit:** a script run through its shebang is attributed to the script's name (for example
   `built:vc-list-files`), not to the shell that interprets it.
 
+**Signals delivered** (`analysis/signals_delivered.py` → `results/signals-delivered.md`). The script counts strace's
+signal-delivery lines (`--- SIGx {si_code=…}`), `+++ killed by SIGx` lines, and syscalls that returned `EINTR` or
+`ERESTART*`, per run. Under ptrace a delivery is logged even when the disposition is default or ignore, so the counts
+are signals sent, not handlers run. Which handlers exist is in the `rt_sigaction` table of `summary-tables.md`.
+
 ## W4 configure checks
 
 `analysis/configure_checks.py` pairs every `checking …` line of hello's `config.log` with its `result:` line. It does
