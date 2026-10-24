@@ -128,10 +128,12 @@ Measured by repeating every non-interrupt workload twice and every W9 case 9 tim
 - **strace changes timing.** The W9 sequences were checked against untraced runs (interposer mode) for outcome only:
   status, deletions, leftovers. The event order inside the untraced runs is not observable.
 - **Order across processes** in a timeline is the order strace observed. Within a process it is exact.
-- **Pre-exec attribution.** A forked child's calls before `execve` are attributed to the parent's image: for
-  example, dash's job-control `setpgid` and `TIOCSPGRP` in the child that becomes make.
-- **The token count is a heuristic**: 1-byte `+` reads and writes. GNU make's token character is `+` by default, and
-  no other 1-byte `+` I/O appeared in the traces' make processes.
+- **Pre-exec attribution.** A forked child's calls before its `execve` run the parent's image. They are attributed
+  to it as `shell(child before exec)`: for example, dash's job-control `setpgid` and `TIOCSPGRP` in the child that
+  becomes make. The signal-delivery and stability tables attribute a receiver by its final image, so a signal
+  delivered to a child before its exec would be credited to the program it was about to become.
+- **The token count is a heuristic**: 1-byte `+` reads and writes that return 1. GNU make's token character is `+`
+  by default. The count is not restricted to the jobserver fd, so other 1-byte `+` I/O would be counted too.
 - **Parallel only up to -j4.** The VM has 4 vCPUs. Higher `-j` was not run.
 - **W8 is synthetic.** Its recipes are a generated table program, not compiles, so that slots stay busy (see
   "Workload decisions").
