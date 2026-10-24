@@ -5,7 +5,8 @@ Outputs: results/par/syscall-delta.csv   syscall, workload, serial_count, parall
          results/par/syscall-reps.tsv    per-run counts behind the means (run-to-run variation)
          results/par/parallel-tables.md  status, concurrency, jobserver, new libc symbols, signals, EINTR, W9 outcomes
          results/par/timelines.md        M6 timelines (W9 Ctrl-C, W9 SIGTERM, W10) and W9 stability across repetitions
-Counts are over all processes of a run (strace -f), `*-check` runs excluded. Means are over repetitions.
+Counts are over all processes of a run (strace -f), `*-check` runs excluded. serial_count/parallel_count are means over
+repetitions; the counts inside notable_args are sums over the parallel repetitions.
 """
 import sys, os, re, glob, csv, collections, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -22,6 +22,8 @@ Scope of the evidence:
 "Rules in" means the data does not contradict an option. "Rules out" means the data contradicts the premise an
 option depends on, for these programs.
 
+> **Update (TASK-02b):** the parallel-build question (`make -j`, jobserver, readiness, interrupting a build) is answered in [`../task-02b/conflict-impact.md`](../task-02b/conflict-impact.md).
+
 ## X-1: capability-only access (CP-01, CP-02) vs ease of POSIX porting (CP-27)
 
 ### What the data shows

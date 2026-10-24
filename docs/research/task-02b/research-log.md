@@ -118,8 +118,11 @@ Measured by repeating every non-interrupt workload twice and every W9 case 9 tim
   - `pselect6` calls: 72–100 per W8 `-j4` build;
   - `wait4` counts (within a few percent);
   - W8 build duration (±0.1 s);
-  - in W9, which recipes had already finished (depends on the delay), and whether a leaf make was inside a restartable
-    `writev` when SIGTERM arrived (4 of 9 runs);
+  - in W9, which recipes had already finished (depends on the delay);
+  - in W9 SIGTERM: whether a nested SIGCHLD from a just-killed recipe interrupted the handler's "Deleting file"
+    `writev` (4/9 runs);
+  - in W9 SIGTERM: whether a leaf make started a new recipe before the forwarded SIGTERM reached it, giving 3 deletions
+    instead of 4 (1/9: `W9-term-d3.0-r2`);
   - in W9, how far the build had got under strace vs without it: 24–25 vs 28 tables at the 3.0 s delay. strace slows
     the build.
 
@@ -140,7 +143,51 @@ Measured by repeating every non-interrupt workload twice and every W9 case 9 tim
 
 ## Independent review (step 5)
 
-To be appended after the review runs.
+A separate subagent reviewed the work; it had not written the scripts. It checked:
+
+- the W9a, W9b and W10 timelines against the raw traces and harness logs, plus 4 further W9 runs for the stability
+  claims;
+- 20 random rows of `syscall-delta.csv`, recounted from raw traces (seed `random.Random(20261024)`);
+- the jobserver figures on 4 runs, and the new-libc table against both interposer data sets and `readelf`;
+- 10 random M7 sites against the source.
+
+Full report: `tools/posix-surface/review/step5-review-02b.md`.
+
+**Verified with no discrepancy:**
+
+- all 20 sampled `syscall-delta.csv` rows, and every entry of the "new syscalls" table;
+- token reads and writes, `pselect6` counts and interrupted counts, the 9 `EAGAIN` reads, `mknodat` and the auth
+  strings;
+- the libc table (the six new functions are already imported, per `readelf`);
+- the 10 M7 sites (line, function, description; no misclassification);
+- in the timelines: senders and receivers, `si_code`, who deletes what, who re-raises, the exit statuses, and the
+  shell's `TIOCSPGRP`/`tkill`;
+- W10 in full.
+
+**Errors found, all fixed in the documents:**
+
+1. **`wait4` "restarted" was wrong.** The top and level-1 makes' blocking `wait4` returns `ERESTARTSYS` and is never
+   resumed. `fatal_error_signal` issues its own `wait4` calls and never returns: none of the 54 interrupted pids
+   calls `rt_sigreturn`. Fixed in `event-timelines.md`, `parallel-surface.md` and `conflict-impact.md`. This changes
+   an emulation requirement in X-3: no `SA_RESTART` restart of `wait4` was observed.
+2. **The cause of the interrupted `writev` was wrong.** It is the handler's own "Deleting file" message, interrupted
+   by SIGCHLD from the recipe the same make had just killed. The handler, entered from `pselect6`, runs with that
+   call's empty mask. It is not a `writev` in progress when SIGTERM arrived. This explains why it happens with
+   SIGTERM (4/9) and never with Ctrl-C.
+3. **"4 deletions in 36/36" and "one timing-dependent event kind" were false.** `W9-term-d3.0-r2` deleted 3. A leaf
+   make started a new recipe 9.7 ms after the SIGTERM, 0.2 ms before the forwarded SIGTERM reached it, and killed
+   that recipe before it created its target. "No partial target left, no stray process" still holds in 36/36.
+   - New for X-3: forwarding SIGTERM down the tree leaves a window in which lower makes keep starting jobs.
+
+**Imprecisions, fixed:**
+
+- The W9b times for the level-1 and top makes' reaps, and the time of leaf a/1's SIGCHLD in W9a.
+- FIFO open flags: only the top make opens the read side `O_NONBLOCK`; sub-makes set it with `fcntl`.
+- The "bad stdin" `pipe2`: at most one per make, only in makes that run jobs concurrently.
+- The extra `setpgid`/`getpgid`/`readlinkat`/`TIOCSPGRP`/`ttyname` in W9 come from the interactive-shell context,
+  not from the interruption.
+- `notable_args` counts are sums over repetitions; this is now documented.
+- The `-j2` token explanation is reworded: implicit slots allow only two leaf makes at a time.
 
 ## Open questions
 

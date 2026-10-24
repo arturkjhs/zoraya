@@ -76,7 +76,8 @@ Syscalls absent from the serial run and present under `-j` (means over repetitio
 No `epoll_*`, `ppoll`, `poll` or `select` appeared in any run. No `waitid` either. No new syscall appeared for
 pdpmake.
 
-**Argument patterns that define semantics** (`notable_args` in `syscall-delta.csv`):
+**Argument patterns that define semantics** (`notable_args` in `syscall-delta.csv`; its counts are *sums* over the
+repetitions, while `serial_count` and `parallel_count` are means):
 
 - **`pselect6`.** Always `pselect6(4, [3], NULL, NULL, NULL, {sigmask=[]})`: one fd (the jobserver read side), no
   timeout, and an empty signal mask. SIGCHLD, blocked everywhere else, is unblocked only inside this call.
@@ -88,7 +89,8 @@ pdpmake.
   after every wake-up. Blocking `wait4(-1, 0)` remains for the final reaps.
 - **Jobserver.**
   - FIFO style: `mknodat("/tmp/GMfifo<pid>", S_IFIFO|0600)`, then `openat` read side `O_RDONLY|O_NONBLOCK`, write
-    side `O_WRONLY`, in every make. The auth string `fifo:/tmp/GMfifoN` goes to every process.
+    side `O_WRONLY`. Only the top make opens the read side with `O_NONBLOCK`; the 6 sub-makes open it `O_RDONLY`
+    and set `O_NONBLOCK` afterwards with `fcntl(F_SETFL)`. The auth string `fifo:/tmp/GMfifoN` goes to every process.
   - Pipe style: `pipe2` with flags 0, and `--jobserver-auth=3,4` for recursive makes. Every other recipe gets
     `3,4` followed by `--jobserver-auth=-2,-2`, which tells a sub-make that the fds are not real.
   - Tokens are single `+` bytes written to and read from those fds:
@@ -96,7 +98,7 @@ pdpmake.
     | Build | Token reads per build | Comment |
     |---|---|---|
     | W2 `-j2` / `-j4` | 34–36 / 38 | each compile beyond the first needs one |
-    | W8 `-j2` | 2 | four leaf makes each hold an implicit slot |
+    | W8 `-j2` | 2 | every make runs its first job on the implicit slot it was started with; the single token starts the second level-1 make, after which only two leaf makes run at a time |
     | W8 `-j4` | 17–26 | varies run to run |
     | W3 `-j2` / `-j4` | 2 / 4 | |
 
@@ -106,7 +108,8 @@ pdpmake.
     (`F_SETFD`/`F_GETFD`) around recursive spawns accounts for the extra `fcntl` calls in pipe style (W8 `-j4`:
     256 → 344 pipe vs 283 fifo).
 - **Stdin of parallel jobs.** Each job spawned while another runs gets a "bad stdin": a pipe whose write end is
-  closed. That shows as one extra `pipe2` per make and `dup3(5, 0, 0)` in the spawned child (`get_bad_stdin`, a
+  closed. That shows as at most one extra `pipe2` per make, and only in makes that run jobs concurrently (W2 +1 for
+  3 makes, W8 `-j4` +5.5 for 7), plus `dup3(5, 0, 0)` in the spawned child (`get_bad_stdin`, a
   TASK-02 M3 site).
 - **Signal handling.** `rt_sigaction` and `rt_sigprocmask` counts are *unchanged* between serial and parallel GNU
   make runs (W8: 1698 and 592 in both). The handlers and masks are set up identically at every `-j`. What changes is
@@ -135,7 +138,7 @@ SIGPIPE on a write to a closed pipe; `yes` calls no `kill`.
 |---|---|
 | GNU make `-j` builds | `pselect6` `ERESTARTNOHAND` (SIGCHLD), followed by `rt_sigreturn` `EINTR`, in the make that waits |
 | W10 | `rt_sigsuspend` `ERESTARTNOHAND` in the shell's `wait` |
-| W9 (both cases) | as above, plus `wait4` `ERESTARTSYS` in the top and level-1 makes (they were blocked reaping when the signal arrived; restarted because of `SA_RESTART`). SIGTERM: `writev` `ERESTARTSYS` in a leaf make in 4 of 9 runs, a timing-dependent case |
+| W9 (both cases) | as above, plus `wait4` `ERESTARTSYS` in the top and level-1 makes. They were blocked reaping when the signal arrived; the call is abandoned, because the handler issues its own `wait4` calls and never returns. SIGTERM: in 4 of 9 runs a leaf make's `writev` inside the handler is interrupted by a nested SIGCHLD and restarted (`SA_RESTART`) |
 
 No `EINTR` reached program code as an error return, except where the program asked for it: `pselect6` with its
 atomic mask, and `sigsuspend`.
@@ -149,7 +152,7 @@ The event sequences are in [`event-timelines.md`](event-timelines.md). Outcomes 
 |---|---|---|
 | make exit status (as seen by the shell) | 130 (killed by SIGINT) | 143 (killed by SIGTERM) |
 | who gets the signal | every process in the foreground process group, at once, from the tty driver | the top make; it forwards SIGTERM to its children, and they to theirs |
-| partial targets | each leaf make deletes the target its running recipe was writing (`unlinkat(tN.h)`, "Deleting file"); 4 per run | the same |
+| partial targets | each leaf make deletes the target its running recipe was writing (`unlinkat(tN.h)`, "Deleting file"); 4 per run | 4 per run, except one strace run with 3 (a leaf make started a new recipe before the forwarded SIGTERM arrived and killed it before it created its target) |
 | partial targets left behind | none, in all 36 runs | none |
 | processes left 0.5 s after make returned | none | none |
 | children terminated by | SIGINT from the tty (not by make) | SIGTERM sent by their parent make |
@@ -169,5 +172,7 @@ The sequence of event kinds did not change (`event-timelines.md` → stability t
 3. **No new import surface.** All six newly observed libc functions were already in the TASK-02 static upper bound.
 4. **Shell-level parallelism adds `sigsuspend`-based waiting and inherited ignores.** Background jobs ignore SIGINT
    and SIGQUIT. The shell sleeps in `rt_sigsuspend` until SIGCHLD arrives.
-5. **Interruption adds `kill`, `tkill`, `setpgid`/`TIOCSPGRP` and target deletion.** Its behaviour was the same in
-   every repetition.
+5. **Interruption adds `kill`, `tkill` (the shell's self-interrupt) and target deletion.** The extra `setpgid`,
+   `getpgid`, `readlinkat`, `TIOCSPGRP` and `ttyname` in W9 come from running make under an interactive shell on a
+   pty, not from the interruption. The kinds of events were the same in every repetition. What varied with timing
+   is described in `event-timelines.md` → stability.

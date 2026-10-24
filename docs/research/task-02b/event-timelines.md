@@ -47,12 +47,12 @@ process of the pty, job control on.
 | 0.0 | The harness writes `^C` (VINTR) to the pty master | harness |
 | +0.0 … +0.1 | **The tty driver sends SIGINT (`SI_KERNEL`) to every process in the foreground group at once** | all 4 `mktab`, all 7 makes |
 | +0.1 | Each leaf make's `pselect6` returns `ERESTARTNOHAND`: the wait is interrupted by SIGINT and the handler `fatal_error_signal` runs | 4 leaf makes |
-| +0.1 … +0.4 | The 4 `mktab` processes die of SIGINT (default action). Each leaf make receives SIGCHLD `CLD_KILLED` | mktab → leaf makes |
+| +0.1 … +0.5 | The 4 `mktab` processes die of SIGINT (default action). Each leaf make receives SIGCHLD `CLD_KILLED` | mktab → leaf makes |
 | +0.5 | make@top, in its handler, unlinks the jobserver FIFO `/tmp/GMfifo<pid>` | make@top |
 | +0.5 | **Each leaf make deletes its partial target `t4.h`** (`unlinkat`, "Deleting file 't4.h'") | 4 leaf makes |
 | +0.5 … +0.6 | Each leaf make, still inside the handler, reaps its `mktab`: `wait4` → `WIFSIGNALED, SIGINT` | 4 leaf makes |
 | +0.8 … +1.0 | **Each leaf make re-raises SIGINT on itself** (`kill(getpid(), SIGINT)`, delivered as `SI_USER`) and dies of it | 4 leaf makes |
-| +0.9 … +1.1 | make@a and make@b reap their leaves (`WIFSIGNALED, SIGINT`). They had been blocked in `wait4`, which returned `ERESTARTSYS` when SIGINT arrived and restarted after the handler started reaping | make@a, make@b |
+| +0.9 … +1.1 | make@a and make@b reap their leaves (`WIFSIGNALED, SIGINT`). They had been blocked in `wait4`, which returned `ERESTARTSYS` when SIGINT arrived. That call is never resumed: `fatal_error_signal` issues its own blocking `wait4` calls (`reap_children`) and never returns, because it ends by re-raising the signal | make@a, make@b |
 | +1.4 … +1.5 | make@a and make@b re-raise SIGINT and die | level 1 |
 | +1.5 … +1.7 | make@top reaps make@a and make@b | make@top |
 | +2.0 … +2.1 | make@top re-raises SIGINT and dies | make@top |
@@ -84,8 +84,8 @@ Observations from this timeline:
 | +2.4 … +2.8 | **Each leaf make sends SIGTERM to its `mktab`**, which dies of it | leaves → mktab |
 | +2.6 … +2.9 | Each leaf make deletes its partial `t4.h` and reaps its `mktab` | leaves |
 | +2.9 … +3.4 | The leaf makes re-raise SIGTERM on themselves and die | leaves |
-| +3.6 … +3.9 | make@a and make@b reap their leaves, re-raise SIGTERM, die | level 1 |
-| +4.2 … +4.4 | make@top reaps both, re-raises SIGTERM, dies | make@top |
+| +3.1 … +3.9 | make@a and make@b reap their leaves (+3.1 … +3.5), re-raise SIGTERM, die | level 1 |
+| +3.8 … +4.4 | make@top reaps both (+3.8, +4.0), re-raises SIGTERM (+4.2), dies (+4.4) | make@top |
 | +4.7 | dash takes the terminal back (`TIOCSPGRP`). **No self-interrupt**: the job died of SIGTERM, not SIGINT. The shell reports `$?` = 143 | dash |
 
 Observations:
@@ -93,8 +93,18 @@ Observations:
 - **SIGTERM goes to one process, not a group.** Propagation is make's own code: each make sends it to its direct
   children (`commands.c:544`), so it travels down the tree one level at a time and the deaths come back up.
 - **The cleanup is the same as for Ctrl-C:** delete the partial target, reap, re-raise.
-- In 4 of 9 runs a leaf make was inside `writev` (writing a message) when SIGTERM arrived. The call returned
-  `ERESTARTSYS` and was restarted (`SA_RESTART`). This is the one timing-dependent event kind.
+- **SIGTERM needs milliseconds to travel down the tree, and lower makes keep starting jobs meanwhile.** In
+  `W9-term-d3.0-r2`, a leaf make started a new recipe (`sh -c './mktab 8 > t8.h'`) 9.7 ms after the harness's SIGTERM,
+  just before the forwarded SIGTERM reached it at 9.9 ms. It then killed that `sh` before `t8.h` existed, so that run
+  deleted 3 partial targets instead of 4. Ctrl-C has no such window: the tty signals every process at once.
+- **Nested signals inside the handler.** In 4 of 9 SIGTERM runs, including this one (`W9-term-d1.5-r1`), a leaf
+  make's `writev` of the "Deleting file" message, inside `fatal_error_signal`, returned `ERESTARTSYS`. The cause is
+  SIGCHLD `CLD_KILLED` from the `mktab` the same make had killed about 0.07 ms earlier. SIGCHLD can arrive there
+  because the handler was entered from `pselect6` and runs with that call's empty mask. The `writev` is then
+  restarted (`SA_RESTART`).
+  - This never happens with Ctrl-C (0/9): there the tty kills the recipes first, so their SIGCHLD arrives before the
+    handler writes anything.
+  - The condensed table above omits it.
 
 ## W10: background jobs, `wait`, concurrent pipelines (run `W10-parallel-r1`)
 
@@ -141,18 +151,20 @@ deletes a partial table".
 | SIGTERM forwarded parent → child at every level | — | all 9 |
 | every make deletes the partial target of its running recipe | all 9 | all 9 |
 | every make re-raises the signal and dies by it | all 9 | all 9 |
-| `pselect6` interrupted in leaf makes; `wait4` restarted in top and level-1 makes | all 9 | all 9 |
+| `pselect6` interrupted in leaf makes; blocking `wait4` interrupted in top and level-1 makes (abandoned: the handler never returns) | all 9 | all 9 |
 | shell retakes the terminal; self-`SIGINT` | all 9 | retake only, all 9 |
 | some `mktab` had already exited normally before the interrupt | 6/9 (delays 1.5 and 3.0 s only) | 6/9 (same) |
-| a leaf make's `writev` interrupted and restarted | 0/9 | 4/9 (all delays) |
+| a leaf make's `writev` ("Deleting file" message, inside the handler) interrupted by SIGCHLD and restarted | 0/9 | 4/9 (all delays) |
+| a leaf make starts a new recipe after the interrupt and kills it (`recipe-sh` killed by SIGTERM; 3 deletions instead of 4) | 0/9 | 1/9 (3.0 s) |
 
 The untraced runs (interposer mode) gave the same outcome as the strace runs in every one of the 36 runs:
 
 - exit status 130 or 143;
-- 4 "Deleting file" messages;
+- 4 "Deleting file" messages (3 in the one strace run above; 4 in all untraced runs);
 - no partial target left behind;
 - no process left over.
 
 They differed only in how far the build had got (`parallel-tables.md` → "W9 outcomes"). **Stable:** the order and
 kinds of events, the cleanup, and the exit statuses. **Timing-dependent:** which recipes had already finished, and
-whether a make happened to be inside a restartable system call when the signal arrived.
+whether a nested SIGCHLD interrupted the handler's own `writev`, and (SIGTERM only) whether a lower make started a
+new recipe before the forwarded SIGTERM reached it.
