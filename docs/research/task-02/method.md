@@ -237,6 +237,7 @@ never modified in place: `src/` is read-only after fetching.
 | Namespace | Supplementary groups are not mapped inside the user namespace; `/usr/bin/*` remains Alpine's | any `/usr/bin` absolute use shows up as a leak (none in core runs) |
 | M3 regex | Calls via function pointers or unlisted macros are missed. File basenames are used to match the line table, so a line from an uncompiled file that shares a basename with a compiled one could be admitted | false negatives possible (reviewers caught `XVFORK` this way); false positives possible, none found by the review |
 | M3 `signals` column | Signal names are regex-matched on the call line only, and most signal sites name none. A line like `!= SIGKILL` is tagged with that signal | the per-signal table is indicative |
+| Reruns | Workloads are deterministic in their outputs, but a few syscall counts vary with timing between full reruns: ld.lld `futex` (threads), clang `mmap`, W4 `readv` (a few per thousand) | syscall counts are exact for the committed run, not invariant; no libc symbol set, class or category changed between reruns |
 | Environment | `SHELL` is the GNU make set's `sh` in every run; both sets' `sh` is the same dash | no effect on results |
 | M3 classes | Expert estimates by reading code, by one reviewer per program | effort numbers are order-of-magnitude; M4 calibrates two of them |
 | Categories | Header scan plus a hand-written override table | a symbol's category is a choice; per-category totals inherit it |

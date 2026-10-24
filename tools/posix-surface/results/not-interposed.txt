@@ -1,6 +1,7 @@
 __cxa_finalize	crt
 __libc_start_main	crt
-__stack_chk_guard	data
+__stack_chk_fail	crt
+__stack_chk_guard	crt
 dlsym	excluded
 environ	data
 optarg	data

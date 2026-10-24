@@ -115,7 +115,7 @@ This is what musl and the programs need from the kernel. It is not a proposal fo
 
 | Tier | Distinct syscalls in this tier's runs | Cumulative |
 |---|---|---|
-| T0 | 39 | 39 |
+| T0 | 40 | 40 |
 | T1 | 43 | 49 |
 | T2 | 55 | 59 |
 | T3 (alone) | 35 | — |
@@ -130,7 +130,7 @@ Argument patterns that define semantics (core and comparison runs, `syscall-surf
   make, clang and pdpmake use (`libc-surface.csv`, rows `vfork`, `posix_spawn`, `system`).
 - **`execve`.** 3,002 succeeded and 7 failed. 2,922 used an absolute path, because musl's `execvp` and the shells'
   own `$PATH` walk resolve the name in user space. Only 87 used a relative path.
-- **`openat`.** 19,005 relative paths and 13,921 absolute ones, with prefixes `/usr` 5,886, `/dev` 159, `/lib` 28,
+- **`openat`.** 19,007 relative paths and 13,921 absolute ones, with prefixes `/usr` 5,886, `/dev` 159, `/lib` 28,
   `/etc` 11 and `/tmp` 9. Flags are overwhelmingly `O_RDONLY`, then `O_WRONLY|O_CREAT|O_TRUNC` (1,317) and
   `O_APPEND` (393). `O_EXCL` appears 3 times (temp files).
 - **`fcntl`.** `F_SETFD` (5,360) and `F_DUPFD_CLOEXEC` (3,894) dominate, that is, close-on-exec bookkeeping around

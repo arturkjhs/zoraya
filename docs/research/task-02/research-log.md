@@ -139,6 +139,12 @@ Findings and what was done:
   - `dlsym`'s empty dynamic column means "never interposed", not "never called".
   - Per-tier syscall counts include syscalls from programs the workloads built.
 
+A full rerun from `run.sh` then reproduced every output, with two kinds of difference.
+- The W5 strace data had been recorded before W5 cleared its run directory. In the rerun, `touch` creates its file,
+  which adds `faccessat` and an `O_CREAT` open to T0: T0 has 40 syscalls, not 39.
+- A few syscall counts vary with timing between runs: ld.lld `futex` 179 → 185, clang `mmap` −4, W4-configure
+  `readv` +13. No libc symbol set changed.
+
 All published numbers were regenerated after the fixes. `posix-surface.md`, `callsite-analysis.md` and
 `conflict-impact.md` quote the regenerated values.
 

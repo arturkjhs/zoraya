@@ -40,7 +40,7 @@ option depends on, for these programs.
   | `/etc/group` | 1 | |
   | `/dev/tty` | 1 | dash job control, T0 |
 
-  Relative opens outnumber absolute ones: 19,005 vs 13,921 (`syscall-surface.csv`).
+  Relative opens outnumber absolute ones: 19,007 vs 13,921 (`syscall-surface.csv`).
 - **Paths come from data, not code.** Most absolute paths are built at run time from configure results, makefile
   variables, `-I`/`-L` options and tcc's built-in search paths. They are not literals at a call site. M3 found only a
   handful of path literals:

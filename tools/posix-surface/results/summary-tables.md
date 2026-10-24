@@ -107,7 +107,7 @@ none (every dynamic hit is in the program's static import table)
 
 | Tier | Distinct syscalls in this tier's runs | Cumulative |
 |---|---|---|
-| T0 | 39 | 39 |
+| T0 | 40 | 40 |
 | T1 | 43 | 49 |
 | T2 | 55 | 59 |
 | T3 | 35 | — (alone) |

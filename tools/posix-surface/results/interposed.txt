@@ -7,7 +7,6 @@ __h_errno_location
 __libc_current_sigrtmax
 __libc_current_sigrtmin
 __sched_cpucount
-__stack_chk_fail
 _exit
 abort
 accept
