@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-10-25
 - **Depends on:** none
-- **Evidence:** GR-010, DM-084, DM-055, DM-057, X-10, CP-13, CP-27, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#sprite, alternatives-postmortem.md#l4-family-and-sel4, research-log.md#process
+- **Evidence:** CP-13, CP-27, X-10, DM-036, DM-055, DM-057, DM-058, DM-084, GR-010, alternatives-postmortem.md#barrelfish, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, alternatives-postmortem.md#keykos--eros--capros-and-coyotos, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#sprite, research-log.md#process, research-log.md#verification-phase-findings
 
 ## Context
 
@@ -38,7 +38,7 @@ What is measured: nothing in this ADR is measured; it is a process decision. The
 
 ### Option B: Formal RFC process with multi-party sign-off (Fuchsia RFCs, wayland-protocols governance)
 
-- **Description:** Every change goes through a numbered RFC with reviewers, ACK thresholds and a veto. Fuchsia's Starnix was introduced this way (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`); wayland-protocols requires 2–3 ACKs and one NACK blocks (DM-084).
+- **Description:** Every change goes through a numbered design document with reviewers and sign-off. Fuchsia introduced Starnix through an RFC (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`; the mechanics of Fuchsia's RFC process are `[outside evidence: fuchsia.dev RFC process]`); wayland-protocols requires 2–3 ACKs and one NACK blocks (DM-084).
 - **Evidence for:** Rationale, alternatives and risks are recorded up front and stay findable. The Starnix RFC named its hard parts (signals, futexes, inotify) in advance, and five years later the release notes show exactly that work (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`). Multi-party review catches unsupported claims, as TASK-01 verification did (`research-log.md#verification-phase-findings`).
 - **Evidence against:** With a veto and ACK quorum, basic protocols waited "months, to years" (DM-084). We have one architect, so the quorum is one; the machinery adds latency without adding reviewers.
 - **Cost:** *(estimate)* Moderate writing cost per decision (the same as Option C), plus coordination cost that a one-architect project cannot use.
@@ -46,7 +46,7 @@ What is measured: nothing in this ADR is measured; it is a process decision. The
 
 ### Option C: Lightweight ADRs with a single deciding architect (non-Unix precedent: Plan 9's and Hubris's single-team ownership)
 
-- **Description:** Numbered ADRs in `docs/adr/`, written by agents from the evidence base, each with options, a recommendation, invariants and an empty "Architect's decision" section. The architect alone changes status. Implementation agents treat accepted ADRs as binding. Plan 9 and Hubris were built by one team that made and owned every decision, "without excess generality" (`alternatives-postmortem.md#plan-9--inferno`, `alternatives-postmortem.md#hubris`).
+- **Description:** Numbered ADRs in `docs/adr/`, written by agents from the evidence base, each with options, a recommendation, invariants and an empty "Architect's decision" section. The architect alone changes status. Implementation agents treat accepted ADRs as binding. Plan 9 was built by one small team that wrote most of its software new rather than porting it (`alternatives-postmortem.md#plan-9--inferno`); Hubris was built by one company for its own hardware, deliberately "without excess generality" (`alternatives-postmortem.md#hubris`).
 - **Evidence for:** Keeps the record of Option B and the speed of Option A. Hubris's design is documented by its authors and co-designed with its tooling (`alternatives-postmortem.md#hubris`). The TASK-01 process (independent verification of claims, `research-log.md#process`) is already in place and can be reused for ADR review.
 - **Evidence against:** A single-owner process is fragile: Coyotos and BitC ended when their leader changed jobs (`alternatives-postmortem.md#keykos--eros--capros-and-coyotos`). An ADR is only as good as its evidence links; without a checking step it degrades into Option A with extra files.
 - **Cost:** *(estimate)* One document per decision, a review pass per batch, and an index. Agents pay reading cost per task, which is bounded by `index.md`.
@@ -60,7 +60,7 @@ Rules, kept short:
 
 1. **Statuses.** `proposed`: written by an agent, not binding. `accepted`: binding on all implementation work. `rejected`: not to be implemented; the record stays. `superseded by ADR-XXXX`: was accepted, now replaced; the new ADR must say what changes and why.
 2. **Who sets status.** Only the architect sets `accepted`, `rejected` or `superseded`. Agents create ADRs as `proposed` and may propose a superseding ADR. An agent never edits the "Architect's decision" section.
-3. **Changed decisions.** If the architect accepts an option other than the recommended one, or changes a detail, the architect records that in "Architect's decision". The ADR body is then edited by an agent to state the accepted decision in "Recommendation" (renamed "Decision"), with the original recommendation kept below it, so the record shows both.
+3. **Changed decisions.** If the architect accepts an option other than the recommended one, or changes a detail, the architect records that in "Architect's decision". An agent then adds a `### Decision` sub-heading at the top of the "Recommendation" section stating the accepted decision, and keeps the original recommendation below it, so the record shows both. The template's `##` headings are never renamed (INV-0001-1).
 4. **How implementation agents use ADRs.** Before changing the `abi` crate, the kernel ABI, the personality boundary or process/event semantics, an agent reads `index.md` and the accepted ADRs it lists for that area. Accepted ADRs are followed. Any deviation, however small, requires a new or superseding `proposed` ADR before the code is merged. A silent deviation is a defect to be reverted.
 5. **Evidence rules.** Every claim in Context, Decision drivers and option analysis cites a DM/GR/CP/X ID or a `task-02`/`task-02b` file section. Anything else is `[outside evidence]` with a source or `[assumption]`. Each ADR has at least three options, including the Linux/POSIX baseline and at least one non-Unix precedent, and steelmans the options it does not recommend.
 6. **Invariants become checks.** Each invariant gets an ID `INV-NNNN-k` (ADR number, running index) and is listed in `invariants.md` with its checking method. When an ADR is accepted, the first implementation task that touches its area must implement each invariant's check (test, lint, CI script or `abi` type) or record in the ADR's open questions why it cannot yet be checked. CI treats an accepted ADR's invariant without a check as a warning, and a failing check as a build failure.
@@ -76,7 +76,7 @@ Rules, kept short:
 
 - **INV-0001-1.** Every file `docs/adr/NNNN-*.md` other than the template has the template's section headings in order. *Check:* a CI script compares the `##` headings of each ADR with `0000-template.md`.
 - **INV-0001-2.** Every ADR's `Status` line is one of the four values, and `accepted`/`rejected`/`superseded` appear only with a non-empty "Architect's decision" section. *Check:* CI script.
-- **INV-0001-3.** Every ID cited in an ADR's `Evidence` line exists in `design-mistakes.md`, `held-up-well.md`, `candidate-principles.md` or the named `task-02`/`task-02b` file. *Check:* CI script that greps the research files for each cited ID and file section.
+- **INV-0001-3.** Every evidence citation anywhere in an ADR (`DM-`, `GR-`, `CP-`, `X-` IDs and `<file>#<section>` references) exists in `design-mistakes.md`, `held-up-well.md`, `candidate-principles.md` or the named research file, and the `Evidence` line is exactly the set of citations used in the body. *Check:* a CI script that extracts every citation token from the whole file, greps the research files for each ID and resolves each section slug against the file's headings, then compares the body's set with the `Evidence` line.
 - **INV-0001-4.** Every invariant in an accepted ADR appears in `invariants.md` with a checking method. *Check:* CI script that diffs the `## Invariants` sections against `invariants.md`.
 - **INV-0001-5.** `index.md` lists every ADR file with its status. *Check:* CI script.
 
