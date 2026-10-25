@@ -1,0 +1,23 @@
+# Runs `make test` on Linux; QEMU uses TCG there (tools/run-qemu.sh picks
+# hvf only on an Apple Silicon Mac).
+name: make test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: make test
+        run: make test
