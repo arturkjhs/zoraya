@@ -70,6 +70,9 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 	$(RUN_TEST) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
 		-- $(RUN_QEMU) --test --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
+	$(RUN_TEST) --label auto-el2 \
+		--expect-line "exception level at entry: EL2, now EL1" \
+		-- $(RUN_QEMU) --test --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
 		-- $(RUN_QEMU) --test --accel tcg $(TEST_KERNEL)
