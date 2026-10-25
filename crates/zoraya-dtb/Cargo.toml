@@ -1,0 +1,10 @@
+[package]
+name = "zoraya-dtb"
+description = "Flattened device tree (DTB) parser: no_std, no allocation, no unsafe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

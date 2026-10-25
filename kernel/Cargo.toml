@@ -1,0 +1,22 @@
+[package]
+name = "zoraya-kernel"
+description = "Zoraya kernel: boot and machine-dependent code for aarch64 QEMU virt."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zoraya-kernel"
+test = false
+bench = false
+
+[features]
+# Build the in-QEMU test kernel instead of the normal one.
+qemu-test = []
+
+[dependencies]
+zoraya-dtb = { path = "../crates/zoraya-dtb" }
+
+[lints]
+workspace = true

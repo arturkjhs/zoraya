@@ -1,0 +1,10 @@
+[package]
+name = "zoraya-adr-check"
+description = "Checks the ADR files against the ADR-0001 invariants."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

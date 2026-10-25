@@ -1,0 +1,10 @@
+[package]
+name = "zoraya-test-runner"
+description = "Runs the in-QEMU kernel tests through tools/run-qemu.sh and checks the ZORAYA-TEST protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

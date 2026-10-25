@@ -1,0 +1,11 @@
+# The kernel target is passed explicitly (see Makefile) so that host crates
+# and their tests keep building for the host.
+
+[target.aarch64-unknown-none]
+# `cargo run` on the kernel goes through the one script that owns the QEMU
+# command line.
+runner = "tools/run-qemu.sh"
+
+[alias]
+kbuild = "build -p zoraya-kernel --target aarch64-unknown-none"
+krun = "run -p zoraya-kernel --target aarch64-unknown-none"

@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = [
+    "kernel",
+    "crates/zoraya-dtb",
+    "tools/test-runner",
+    "tools/adr-check",
+]
+# The kernel only builds for aarch64-unknown-none; plain `cargo test` and
+# `cargo build` act on the host-side members. The Makefile builds the kernel.
+default-members = [
+    "crates/zoraya-dtb",
+    "tools/test-runner",
+    "tools/adr-check",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
