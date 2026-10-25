@@ -85,8 +85,8 @@ Each design below is checked against these. The IDs `FM-n` are used only in this
 - **Integrity.** "Self-describing metadata" (F-05): every metadata block carries a CRC32c, the filesystem UUID, its
   own block number (a block number alone does not catch a write "misdirected to the wrong LUN"), an owner field (which
   inode or allocation group the block belongs to) and the log sequence number of its last modification. The authors
-  chose CRC32c because metadata blocks are at most 64 KiB, and stated that a larger checksum "does not really provide
-  any extra value over CRC32c, but it does add a lot of complexity", so there is "no provision for changing the
+  chose CRC32c because metadata blocks are at most 64 KiB, and stated that a larger checksum "does [not] really provide
+  any extra value over CRC32c, but it does add a lot of complexity" (the source omits "not", evidently a typo), so there is "no provision for changing the
   integrity checking mechanism". The motive was forensic: making corruption at petabyte scale diagnosable (F-05). No
   data checksums are described.
 - **Metadata structure.** B-trees: free space per allocation group, extents per inode (F-05).
@@ -121,7 +121,10 @@ Each design below is checked against these. The IDs `FM-n` are used only in this
   an uberblock (GR-014). Synchronous requests (`fsync`, `O_DSYNC`) follow the `sync` property: `standard` is "the
   POSIX-specified behavior of ensuring all synchronous requests are written to stable storage and all devices are
   flushed"; `always` commits every transaction before the call returns, with "a large performance penalty";
-  `disabled` ignores synchronous requests and is "very dangerous" (F-10).
+  `disabled` ignores synchronous requests and is "very dangerous" (F-10). With `logbias=latency` (the default), "ZFS
+  will use pool log devices (if configured) to handle the write requests at low latency"; with `throughput` it will
+  not (F-10). That synchronous writes go to a separate intent log (the ZIL) is the usual description of this
+  mechanism `[outside evidence: not stated in the fetched sources beyond "pool log devices"]`.
 - **Integrity.** Every block is checksummed; the default `checksum=on` currently selects Fletcher-4; SHA-256,
   SHA-512, Skein, Edon-R and BLAKE3 are available; turning checksums off is "NOT a recommended practice" (F-10).
   Self-healing from redundant copies and periodic scrubs (GR-014).
@@ -276,7 +279,7 @@ Sizes are from F-35 (lines of C or Rust, including comments, excluding test file
 | ext4 | WAL journal, ordered data | CRC32c | no | 64,700 + 9,500 | only through the `auto_da_alloc` heuristic (F-02) |
 | XFS | WAL metadata journal with intents | CRC32c, self-describing | no | 222,000 (incl. online repair) | not documented in the fetched sources |
 | btrfs | CoW B-trees | yes | yes | 155,000 | not documented in the fetched sources |
-| ZFS | CoW + synchronous request log | yes | yes (Fletcher-4 default) | 283,000 core | not documented in the fetched sources |
+| ZFS | CoW + log devices for synchronous writes (F-10) | yes | yes (Fletcher-4 default) | 283,000 core | not documented in the fetched sources |
 | F2FS | LFS checkpoints + roll-forward | not documented | not documented | 49,500 | not documented |
 | NILFS2 | LFS checkpoints | not documented | not documented | 23,600 | not documented |
 | Fxfs | LSM trees + logical journal | journal block checksums | COW data, verified at replay | unknown | unknown (`[search summary]`) |
@@ -369,7 +372,7 @@ approach), all running under `cargo test`.
 | 16-bit code units, unpaired surrogates allowed | NTFS | names need not be valid Unicode | DM-096 |
 | Normalisation on compare, names stored unmodified | ZFS `normalization=formC/D/KC/KD` (default none) | equality becomes a function of Unicode tables | F-10; DM-094 |
 | Normalisation on store | HFS+ (almost NFD) | HFS+ used Unicode 3.2 and APFS 9.0; migration mismatches | DM-094 |
-| Case-insensitive | Windows, macOS by default; FAT on Linux by default; ext4, F2FS, bcachefs per directory | CVE-2014-9390 (`.git/config` overwrite via case, ignorable code points or `git~1`); dcache support "half baked"; feature bits make images unmountable on kernels without Unicode support | DM-094; F-13; F-19 |
+| Case-insensitive | Windows, macOS by default; FAT on Linux by default; ext4 per directory (the superblock records the Unicode version and encoding; names are compared after canonical decomposition, stored as given, but large directories hash the casefolded name, so "the normalization format used actually has an impact on where the directory entry is stored", F-02; encrypted casefolded entries carry extra hash data, F-36), F2FS, bcachefs per directory | CVE-2014-9390 (`.git/config` overwrite via case, ignorable code points or `git~1`); dcache support "half baked"; feature bits make images unmountable on kernels without Unicode support | DM-094; F-13; F-19 |
 | Forbidden characters and reserved names | Windows (bytes 1–31, punctuation, `CON`, `NUL`, ...) | names valid on NTFS unreachable through Win32; reserved names in every directory | DM-043; DM-095 |
 | Length limits | Linux `NAME_MAX` 255 bytes, `PATH_MAX` 4,096 bytes including NUL (F-32); Win32 `MAX_PATH` 260 characters | fixed buffers leak into every application (DM-043); relative paths cannot escape the limit on Windows | F-32; DM-043 |
 | Confusable names | any Unicode-aware system | "users can be tricked into doing things they do not desire when malicious actors exploit quirks of Unicode to place misleading names in directories": XFS's online checker reports such names (F-07) | F-07 |
@@ -401,10 +404,14 @@ What a filesystem on QEMU `virt` can assume about its disk, from the virtio spec
 - **Errors.** Each request ends with `VIRTIO_BLK_S_OK`, `VIRTIO_BLK_S_IOERR` ("device or driver error") or
   `VIRTIO_BLK_S_UNSUPP`; after a failed multi-segment discard or write-zeroes, each segment's state is indeterminate
   (F-20).
-- **QEMU.** The virtio-blk model offers the flush feature (`VIRTIO_BLK_F_WCE`, the legacy name of
-  `VIRTIO_BLK_F_FLUSH`) whenever the drive's write cache is enabled, and its source has no support for the FUA request
-  flag. `-drive cache=` defaults to `writeback`; `writethrough` and `directsync` disable the guest-visible write
-  cache; `unsafe` sets `cache.no-flush`, telling QEMU "it never needs to write any data to the disk" (F-21).
+- **QEMU.** In `virtio_blk_get_features` the virtio-blk model adds the flush feature (`VIRTIO_BLK_F_WCE`, the legacy
+  name of `VIRTIO_BLK_F_FLUSH`) if `blk_enable_write_cache(s->blk) || (s->conf.x_enable_wce_if_config_wce &&
+  virtio_has_feature(features, VIRTIO_BLK_F_CONFIG_WCE))`; the device properties `config-wce` (which sets
+  `VIRTIO_BLK_F_CONFIG_WCE`) and `x-enable-wce-if-config-wce` both default to true. With default properties QEMU
+  therefore offers flush in **every** cache mode, and a guest that negotiates `CONFIG_WCE` can switch the cache
+  between writeback and writethrough itself. Its source has no support for the FUA request flag. `-drive cache=`
+  defaults to `writeback`; `writethrough` and `directsync` only change the default of the device's write cache;
+  `unsafe` sets `cache.no-flush`, telling QEMU "it never needs to write any data to the disk" (F-21).
 - **Linux's model for comparison.** `REQ_PREFLUSH` guarantees "that previously completed write requests are on
   non-volatile storage before the flagged bio starts"; `REQ_FUA` completes a request "only ... after the data has been
   committed to non-volatile storage"; for devices without a volatile cache the block layer strips both flags, and it
@@ -450,7 +457,7 @@ All fetched on 2026-10-25. `raw` means `https://raw.githubusercontent.com/`.
 | F-32 | Linux UAPI `limits.h` (`NAME_MAX`, `PATH_MAX`) | raw `torvalds/linux/master/include/uapi/linux/limits.h` |
 | F-33 | PostgreSQL documentation, `data_sync_retry` | raw `postgres/postgres/master/doc/src/sgml/config.sgml` |
 | F-34 | Rust standard library, `std::ffi::OsString` documentation comment | raw `rust-lang/rust/master/library/std/src/ffi/os_str.rs` |
-| F-35 | Line counts made for this survey: `git clone --depth 1` (sparse where large) of Linux v6.17 (e5f0a698b34e), OpenZFS master (ea111ca50fed), littlefs master (6cb4e86540ec), RedoxFS master (b87b0976ee12), Plan 9 Foundation `plan9` main (ed1a9c21e329); `find <dir> -name '*.[ch]' ! -name '*test*' \| xargs cat \| wc -l` (`*.rs` for RedoxFS) | `https://github.com/<project>` |
+| F-35 | Line counts made for this survey: `git clone --depth 1` (sparse where large) of Linux v6.17 (e5f0a698b34e), OpenZFS master (ea111ca50fed), littlefs master (6cb4e86540ec), RedoxFS master (b87b0976ee12), Plan 9 Foundation `plan9` main (ed1a9c21e329); `find <dir> -name '*.[ch]' ! -name '*test*' \| xargs cat \| wc -l` over `fs/<name>` (Linux), `module/zfs` + `include/sys` (OpenZFS core) or `module` + `include` (total); littlefs: only `lfs.c`, `lfs.h`, `lfs_util.c`, `lfs_util.h` (the whole tree gives 11,314); RedoxFS: `*.rs` in `src/` without `src/mount/`, `src/bin/` and `tests.rs` (core, 6,503) and all of `src/` (11,321); Plan 9: `sys/src/cmd/{fossil,venti,cwfs}` | `https://github.com/<project>` |
 | F-36 | Linux kernel, ext4 directory format (casefolded and encrypted directory entries) | raw `torvalds/linux/master/Documentation/filesystems/ext4/directory.rst` |
 | F-37 | GNU Autoconf, `lib/m4sugar/m4sh.m4` (`_AS_LN_S_PREPARE`: `ln -s` probe with `ln` and `cp -pR` fallbacks) and `lib/autoconf/programs.m4` (`AC_PROG_LN_S`), GitHub mirror | raw `autotools-mirror/autoconf/master/lib/m4sugar/m4sh.m4`; raw `autotools-mirror/autoconf/master/lib/autoconf/programs.m4` |
 | F-38 | Linux man-pages, `link(2)` (`EPERM`: "the filesystem ... does not support the creation of hard links") | raw `mkerrisk/man-pages/master/man2/link.2` |

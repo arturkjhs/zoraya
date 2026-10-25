@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-10-25
-- **Depends on:** ADR-0001
+- **Depends on:** ADR-0001 (rules 6 and 8 refer to ADR-0010 and ADR-0012 only to say what the consumer does; they are informative)
 - **Evidence:** CP-12, GR-021, fs/survey.md#block-devices, fs/survey.md#ext4, fs/survey.md#littlefs, fs/survey.md#redoxfs, fs/survey.md#sources, fs/survey.md#testing-crash-consistency
 
 ## Context
@@ -31,9 +31,12 @@ device requirements; quoted in `fs/survey.md#block-devices`, source F-20 in `fs/
   that fails, the state of each segment is indeterminate.
 - The specification says nothing about write atomicity beyond the "undefined until stable" rule above.
 
-**What QEMU does** (`fs/survey.md#block-devices`, source F-21): it offers `VIRTIO_BLK_F_FLUSH` (under its legacy name `WCE`)
-whenever the drive's write cache is enabled, and its virtio-blk model does not offer the FUA request flag. Its default
-cache mode is `writeback`; `cache=unsafe` ("cache.no-flush") ignores flushes.
+**What QEMU does** (`fs/survey.md#block-devices`, source F-21): with its default device properties (`config-wce` on,
+`x-enable-wce-if-config-wce` true) it offers `VIRTIO_BLK_F_FLUSH` (under its legacy name `WCE`) and
+`VIRTIO_BLK_F_CONFIG_WCE` in **every** cache mode, so a guest can read and switch the cache mode; only with
+`config-wce=off` (or an old machine type) does the offer depend on the drive's write cache being enabled. Its
+virtio-blk model does not offer the FUA request flag. Its default cache mode is `writeback`; `cache=unsafe`
+("cache.no-flush") ignores flushes.
 
 **Linux's model** for comparison: filesystems mark a request `REQ_PREFLUSH` (flush the volatile cache before this
 write) and/or `REQ_FUA` (complete only when this write is on non-volatile storage); the block layer emulates both on
@@ -65,8 +68,8 @@ specification, not on data.
   not "old or new" (driver 1). QEMU does not offer FUA (driver 5). A sector-atomicity assumption cannot be simulated
   faithfully by a test device without deciding what the real device does, which the specification does not say.
 - **Cost:** *(estimate)* Slightly fewer flushes per commit; a hidden assumption.
-- **Precedent:** ext4, XFS (journal commit blocks with checksums partly exist because the assumption is not always
-  true, `fs/survey.md#ext4`).
+- **Precedent:** ext4, XFS; their journals discard a transaction whose commit record is missing or fails its checksum
+  (`fs/survey.md#ext4`), which suggests the single-sector assumption is not relied on alone `[inference]`.
 
 ### Option B: The virtio contract as written: no atomicity, ordering only by flush
 
@@ -76,8 +79,8 @@ specification, not on data.
   order among themselves. FUA is used if negotiated, never required.
 - **Evidence for:** Exactly the specification (driver 1); exactly simulable: a test device keeps, per sector, the
   last stable content and the set of unstable writes, and a crash picks any combination (driver 2). ADR-0011's
-  copy-on-write commit needs nothing more: checksums detect torn root records and the root ring keeps an older valid
-  one (`fs/survey.md#redoxfs`). littlefs is designed for power loss "at any time" on hardware with even fewer
+  copy-on-write commit needs nothing more: checksums detect torn root records and a ring of root slots keeps an older
+  valid one, as RedoxFS does (`fs/survey.md#redoxfs`). littlefs is designed for power loss "at any time" on hardware with even fewer
   guarantees (`fs/survey.md#littlefs`).
 - **Evidence against:** Two flushes per commit (before and after the root record) where FUA could save one. The test
   device's crash state space is larger than under Option A (any content for unstable sectors).
@@ -121,8 +124,10 @@ against and that both the virtio driver and the test device implement:
 5. **Read-write mount requires a flush.** The driver negotiates `VIRTIO_BLK_F_FLUSH`. If the device does not offer
    it, the filesystem mounts the volume read-only, because the specification does not require such a device to
    commit anything (case 1 of the stable-write rule needs the feature to be *offered*). An explicit "unsafe" mount
-   flag may override this for tests that do not crash (QEMU `cache=unsafe` speeds tests but ignores flushes, F-21);
-   crash tests never use it.
+   flag may override this for tests that do not crash; crash tests never use it. On QEMU with default properties the
+   flush feature is always offered (F-21), so this rule matters for other devices or `config-wce=off`. The driver
+   does not negotiate `VIRTIO_BLK_F_CONFIG_WCE` in the first release: it leaves the cache mode as the device set it
+   and relies only on flush. QEMU's `cache=unsafe` ignores flushes and is allowed only for tests that do not crash.
 6. **Errors.** Every request completes with `Ok`, `IoError` or `Unsupported`, as a typed result at the request site
    (CP-12). A failed write leaves its sectors undefined. A failed flush means that nothing since the last successful
    flush is known to be stable. The filesystem treats any write or flush error as a write-back failure (ADR-0010
@@ -150,15 +155,16 @@ not promise; D models hardware we do not have.
 
 ## Invariants
 
-- **INV-0015-1.** The test device implements exactly rules 2–4: after a simulated crash, a sector holds its last stable content unless a write covering it was not stable, in which case it holds old, new or arbitrary content, chosen independently per sector by the test. *Check:* unit tests of the test device itself, enumerating small write/flush histories and comparing the set of possible crash images with an independent brute-force model.
+- **INV-0015-1.** The test device implements exactly rules 2–4: after a simulated crash, a sector holds its last stable content unless a write covering it was not stable, in which case it holds the old content, the new content or "arbitrary", chosen independently per sector by the test; "arbitrary" is represented finitely by a fixed set of patterns (all zeros and a seeded pseudo-random pattern) in both the device and the model. *Check:* unit tests of the test device itself, enumerating small write/flush histories and comparing the finite set of possible crash images with an independent brute-force model that uses the same representation.
 - **INV-0015-2.** The filesystem core never depends on order between concurrently in-flight requests: its tests pass when the test device completes in-flight requests in any order. *Check:* the crash harness of INV-0010-1 run with a device that permutes completion order randomly (fixed seeds).
 - **INV-0015-3.** A volume on a device that did not negotiate flush is never mounted read-write without the explicit unsafe flag. *Check:* a test with a device that reports no flush support, asserting that a read-write mount fails and a read-only mount succeeds.
 - **INV-0015-4.** Every device error is surfaced to the filesystem core as a typed result, and every write or flush error moves the volume to `Failed` (ADR-0010 rule 6). *Check:* the fault-injecting test device of INV-0010-3, plus a driver unit test that maps each virtio status to the trait's error type.
 
 ## Open questions
 
-- Does QEMU in `cache=writethrough` or `cache=directsync` mode (which do not offer flush, F-21) need special handling?
-  By rule 5 they mount read-only; whether that is wanted for some test configurations is a stage-4 decision.
+- Should the driver negotiate `VIRTIO_BLK_F_CONFIG_WCE` and switch QEMU's cache to writethrough (each write stable
+  on completion, case 2 of the specification) to save flushes? Rule 3 does not rely on it; a stage-4 measurement can
+  decide.
 - Block size: 4 KiB is assumed; measure whether larger blocks reduce ADR-0011's write amplification.
 - Multi-queue virtio-blk (`VIRTIO_BLK_F_MQ`) and request merging are performance questions for the driver.
 

@@ -70,8 +70,10 @@ forbidden-set choices are separable (`fs/survey.md#names`).
 
 - **Description:** Names are Unicode; equality ignores case and/or normalisation form; additional aliases (8.3 names)
   may exist.
-- **Evidence for:** Users do not distinguish "Readme" from "README" (DM-094 Position B); interoperability with
-  Windows/macOS media and software (Wine, Samba) is why Linux added casefolding (`fs/survey.md#bcachefs`, DM-094).
+- **Evidence for:** Users do not think of "Readme" and "README" as different documents (DM-094, "Why it was chosen");
+  real user and application needs (Android's `/sdcard`, Samba) justified casefolding in Linux, and user-space
+  emulation did not work well (DM-094 Position B); bcachefs cites compatibility with software written for other
+  filesystems (`fs/survey.md#bcachefs`).
   ZFS shows normalisation can be done on comparison while storing names unmodified (`fs/survey.md#zfs`).
 - **Evidence against:** Equality depends on a Unicode version and vendor tables (HFS+ 3.2 vs APFS 9.0, DM-094);
   CVE-2014-9390; per-directory feature bits make images unmountable without Unicode support (`fs/survey.md#bcachefs`).
@@ -99,15 +101,20 @@ forbidden-set choices are separable (`fs/survey.md#names`).
 
 - **Description:** As C, but the filesystem can store a *link object*: a node whose content is a target string. The
   server never follows it: resolving a path through a link object returns "this component is a link with target T"
-  to the client. `libposix` decides whether to follow, resolving T relative to the link's directory within the same
-  namespace-table entry (lexical `..`, INV-0002-4), with a hop limit.
+  to the client. `libposix` decides whether to follow, resolving T exactly as if the program had written that path
+  at that point (lexical `..` clamped at the entry's root per INV-0002-4; absolute targets through the namespace
+  table), with a hop limit.
 - **Evidence for:** Archives with symlinks round-trip (driver 7); POSIX programs see symlinks (`ln -s` succeeds,
   `readlink` works, configure's probe answers "yes"); and none of DM-039's server-side race exists, because the server
   never resolves a link and no privileged deputy resolves paths for others (no set-uid, CP-03). Following stays
   confined to what the client's handles already reach (driver 4).
 - **Evidence against:** A second resolver (in `libposix`) whose behaviour must match POSIX's for the cases programs
-  use; a client that follows links still has DM-039's check-then-use race *within its own subtree*. The measured
-  workload needs none of it (R-7), so it is scope (CP-27) bought for archives.
+  use; a client that follows links still has DM-039's check-then-use race *within its own subtree*. NT's object
+  namespace shows the risk of links that low-privilege code can create: they enabled "resource planting" attacks in
+  which a sandboxed process redirects a privileged service (GR-003); here the mitigation is that no service follows
+  links and no process resolves paths with another's authority, but any future component that resolves client-chosen
+  paths on behalf of others inherits the risk. The measured workload needs none of it (R-7), so it is scope (CP-27)
+  bought for archives.
 - **Cost:** *(estimate)* Server: one more node kind, a few hundred lines. `libposix`: link following in its resolver,
   bounded by a hop limit.
 - **Precedent:** Windows NT's object-namespace links followed with restrictions for sandboxed processes (GR-003),
@@ -128,8 +135,10 @@ objects for symbolic links.**
 4. **Limits.** At most 255 bytes per component (Linux's `NAME_MAX`, so `libposix` adds no new limit,
    `fs/survey.md#names`). A request's relative path is at most 4,096 bytes `[assumption: Linux PATH_MAX; bounds the
    service's work per request]`. No limit on depth beyond that.
-5. **Tree.** Every object except the volume root has exactly one name (no hard links). Directories form a tree; a
-   rename that would move a directory into its own subtree is refused. Creating a second name for an object is not
+5. **Tree.** Every object except the volume root has at most one name (no hard links); objects with no name are
+   unnamed objects not yet published and objects whose last name was removed while handles are open (ADR-0010 rule
+   7, ADR-0011 rule 7). Directories form a tree; a rename that would move a directory into its own subtree is
+   refused. Creating a second name for an object is not
    possible, which satisfies driver 5 trivially.
 6. **No `..` in the server.** The server rejects `.` and `..` components (rule 2). A directory handle confines its
    holder to the subtree below it (ADR-0002, INV-0002-4). The server may keep parent references internally (to
@@ -142,11 +151,13 @@ objects for symbolic links.**
    - A POSIX name that is not valid UTF-8 or contains a forbidden character fails with `EILSEQ` (POSIX.1-2024
      already encourages `EILSEQ` for newline in new names, DM-095). This answers ADR-0002's open question (X-8) by
      rejection, not mapping; revisit trigger below.
-   - `symlink` creates a link object; `readlink` reads it; path resolution follows link objects inside the same
-     namespace-table entry, lexically, at most 40 hops `[assumption: Linux's limit]`, and fails with `ELOOP` beyond;
-     a target that would leave the entry fails with `ENOENT` `[assumption]`. `O_NOFOLLOW` and `lstat`
-     return the link itself.
-   - `link`/`linkat` fail with `EPERM`, which is what Linux returns when "the filesystem ... does not support the
+   - `symlink` creates a link object; `readlink` reads it; path resolution follows a link object by resolving its
+     target exactly as `libposix` resolves any path the program supplies: a relative target from the link's directory
+     with `..` handled lexically and clamped at the namespace-table entry's root (INV-0002-4), an absolute target
+     through the namespace table (ADR-0002 rule 5). At most 40 hops `[assumption: Linux's limit]`, then `ELOOP`.
+     `O_NOFOLLOW` and `lstat` return the link itself.
+   - `link`, and `linkat` in every form except `linkat(fd, "", dir, name, AT_EMPTY_PATH)` on an unpublished unnamed
+     object (which is `publish`, ADR-0010), fail with `EPERM`, which is what Linux returns when "the filesystem ... does not support the
      creation of hard links" (`fs/survey.md#sources`, F-38). Autoconf's fallback then uses `cp -pR`
      (`fs/requirements.md#32-symbolic-links`).
    - `rename` of a directory into its own subtree → `EINVAL`.
@@ -160,7 +171,8 @@ inert objects keep the server out of DM-039 entirely; the architect may prefer p
 the `libposix` follower.
 
 **Principles this recommendation strains.** CP-27: symlink following in `libposix` is not required by any measured
-workload. X-8 is resolved toward rejection, at the cost DM-095 records (archives with non-UTF-8 or control-character
+workload. DM-043's lesson to avoid fixed limits in a path ABI: rule 4 fixes 255 bytes per component and 4,096 per
+request path, chosen to equal Linux's so that `libposix` imposes no limit the hosted programs do not already have. X-8 is resolved toward rejection, at the cost DM-095 records (archives with non-UTF-8 or control-character
 names cannot be extracted).
 
 ## Consequences
@@ -179,7 +191,7 @@ names cannot be extracted).
 - **INV-0013-1.** The `abi` `Name` constructor accepts exactly the well-formed UTF-8 strings of 1 to 255 bytes that contain no `/`, no code point in U+0000–U+001F, U+007F or U+0080–U+009F, and are not `.` or `..`. *Check:* unit tests with boundary cases (255/256 bytes, each forbidden code point, overlong encodings, encoded surrogates, U+10FFFF and above) plus a property test against an independent reference predicate.
 - **INV-0013-2.** The filesystem service compares names byte for byte: two distinct valid names never refer to the same entry. *Check:* a property test that creates pairs of names differing only in case or normalisation form (for example U+00E9 versus U+0065 U+0301) and asserts both exist independently.
 - **INV-0013-3.** The service never follows a link object: resolving any path through one returns `IsLink` and touches no object beyond the link. *Check:* service tests with link objects at every position of a path, asserting the reply and that the target's access counters (test instrumentation) are unchanged.
-- **INV-0013-4.** No request can give an existing object a second name, and no rename can make a directory its own descendant. *Check:* a model-based test over random request sequences asserting that the namespace stays a tree with one name per object.
+- **INV-0013-4.** No request can give an object that has a name a second name, and no rename can make a directory its own descendant. *Check:* a model-based test over random request sequences (including unnamed objects, `publish` and removal of open files) asserting that the namespace stays a tree with at most one name per object.
 - **INV-0013-5.** No component `.` or `..` and no absolute path is accepted by any service request. *Check:* unit tests on the request decoder, and the `RelativePath`/`Name` types of INV-0002-1 and INV-0013-1.
 
 ## Open questions

@@ -13,12 +13,12 @@ needs the machine.
 | Crate | Contents | Depends on | Size estimate (lines, Rust, excluding tests) |
 |---|---|---|---|
 | `zoraya-blockdev` | The `BlockDevice` trait of ADR-0015 (geometry, read, write, flush, typed errors); `MemDevice` (a RAM device); `RecordingDevice` (logs every write, completion and flush, and produces the set of crash images ADR-0015 rule 2 allows, with a seeded choice of old/new/arbitrary content per unstable sector); `FaultDevice` (fails the n-th request) | none | 800–1,200 |
-| `zoraya-fs-format` | On-disk format: root record, block pointer with checksum, metadata block header, B+tree node layout, attribute record (ADR-0014), directory entry and `Name` validation (ADR-0013), CRC32C (ADR-0012). Total decoder: `#![forbid(unsafe_code)]`, every decode returns `Result`, bounded allocation | none | 1,500–2,500 |
+| `zoraya-fs-format` | On-disk format: root record, block pointer with checksum, metadata block header, B+tree node layout, attribute record (ADR-0014), directory entry encoding using the `abi` crate's `Name` type (ADR-0013, INV-0013-1; the format crate decodes names through it rather than defining its own), CRC32C (ADR-0012). Total decoder: `#![forbid(unsafe_code)]`, every decode returns `Result`, bounded allocation | none | 1,500–2,500 |
 | `zoraya-fs-core` | The engine behind the trait: copy-on-write B+tree, allocator with deferred reuse and space reservation, commit groups and the commit protocol (ADR-0011), mount (root selection), the request API of ADR-0010 (create, mkdir, remove, rename with modes, set attributes, set size, write, read, readdir, link objects, unnamed objects and `publish`, `sync`), fail-stop error state, strictly increasing timestamps (ADR-0014 rule 3) | `zoraya-blockdev`, `zoraya-fs-format` | 6,000–10,000 (RedoxFS core about 6,500; littlefs about 7,700 lines of C; `survey.md`, Comparison) |
 | `zoraya-fs-model` | Reference model of ADR-0010's contract: an in-memory namespace and file contents with a completion log; given a log prefix, the expected state; the "is this observed state a valid prefix?" check | none | 600–1,000 |
 | `zoraya-fsck` (library + host binary) | Offline checker: every reachable block verifies, the namespace is a tree, no block is reachable twice, the allocator's free set matches, attributes are in range; optional repair later | `zoraya-fs-format`, `zoraya-fs-core` (read-only paths) | 1,000–2,000 |
 | `zoraya-mkfs` (host binary, `std`) | Creates an image file; optionally populates it from a host directory (for the stage-4 "files survive reboot" test and for test images) | `zoraya-fs-core`, `zoraya-blockdev` (file-backed device) | 300–600 |
-| filesystem service (stage 4, user space, not a host crate) | One process per volume: channel protocol to clients (needs the channel/message ADRs), virtio-blk driver binding, the volume object with its `FAILED` signal | `zoraya-fs-core` | depends on the IPC ADRs |
+| filesystem service (stage 4, user space, not a host crate) | One process per volume: channel protocol to clients (needs the channel/message ADRs), virtio-blk driver binding, reporting the `Failed` state to a supervisor (ADR-0010 rule 6) | `zoraya-fs-core` | depends on the IPC ADRs |
 | `libposix` file layer (stage 6) | `stat` synthesis, `umask`, link-object following, `EILSEQ` mapping, `fsync`→`sync`, `O_TMPFILE`→unnamed + `publish` | IPC client | part of `libposix` |
 
 Total for the host-testable part: about 10,000–17,000 lines plus tests, by the estimates above `[estimate]`.
@@ -49,9 +49,13 @@ deterministic (fixed seeds, fixed iteration counts, like `zoraya-dtb`'s 30,000 m
    middle and low bit, add, subtract, randomise; `survey.md`, Testing crash consistency), lost-write and
    misdirected-write substitutions; mount, traverse every file, run `fsck`. Assert no panic, bounded steps and
    allocation, and that every read returns either the original bytes or `Corrupt`.
-6. **Unit tests** for `Name` (INV-0013-1), timestamps (INV-0014-4), CRC32C test vectors, the test device itself
-   (INV-0015-1), and the attribute record shape (INV-0014-5).
-7. **In-QEMU tests** (stage 4, `kernel/src/testing.rs` or a user-space test runner, whichever exists then): mount an
+6. **Unit tests** for `Name` (INV-0013-1), the request decoder's rejection of `.`, `..` and absolute paths
+   (INV-0013-5), timestamps (INV-0014-4), CRC32C test vectors, the test device itself (INV-0015-1), the attribute
+   record's field list (INV-0014-5), and mount refusing read-write on a device without flush (INV-0015-3).
+7. **Service-level tests on the core API** for link objects never being followed (INV-0013-3, with access counters on
+   the test device) and strictly increasing assigned times with a scripted clock across remounts and crash-remounts
+   (INV-0014-1), and for no device write by an idle commit (INV-0011-6).
+8. **In-QEMU tests** (stage 4, `kernel/src/testing.rs` or a user-space test runner, whichever exists then): mount an
    image built by `zoraya-mkfs`, write, power off through PSCI without unmounting, reboot, check; run with
    `cache=writeback`, never `cache=unsafe`, for crash-related tests (ADR-0015 rule 5). Every QEMU command line goes
    through `tools/run-qemu.sh`.

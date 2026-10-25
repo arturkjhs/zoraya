@@ -45,8 +45,10 @@ time and needs a time-zone option to convert (`fs/survey.md#fat`); PID reuse sho
 2. **No identity in the native ABI** (ADR-0002 rule 6, CP-01, CP-03); modes are advisory metadata for the personality.
 3. **Reads must not cause writes** (DM-042), especially under copy-on-write (ADR-0011).
 4. **Time is 64-bit and wide enough never to wrap in practice** (DM-063, CP-20), and archives carry arbitrary times
-   that `touch`/`cpio` set explicitly (R-5).
-5. **Store only what a measured program uses** (CP-27 applied to metadata); everything else is a later ADR.
+   that `touch`/`cpio` set explicitly (`fs/requirements.md#4-metadata-read-and-written`).
+5. **Store only what a measured program writes, or what POSIX `stat` (in ADR-0005's surface) must report and cannot
+   be synthesised** (CP-27 applied to metadata). Which fields programs *read* is not measured
+   (`fs/requirements.md#5-questions-the-data-cannot-answer`), so reads cannot justify or exclude a field.
 6. **Stable object identity** for `st_ino`-style comparisons, without reuse races (DM-003's lesson applied to files).
 
 ## Considered options
@@ -87,9 +89,9 @@ time and needs a time-zone option to convert (`fs/survey.md#fat`); PID reuse sho
 ### Option D: Minimal native attributes plus an advisory POSIX mode word
 
 - **Description:** Natively: object identifier (64-bit, never reused within a volume), kind, size, modification
-  time, change time, creation time; plus one 16-bit `posix_mode` word stored verbatim for the personality and
+  time, change time; plus one 16-bit `posix_mode` word stored verbatim for the personality and
   enforced by nobody. No owner, no access time, no extended attributes.
-- **Evidence for:** Exactly what the measured programs use (driver 5); no identity (driver 2); no atime (driver 3); an
+- **Evidence for:** Every stored field is written by a measured program or needed to fill `struct stat` (driver 5); no identity (driver 2); no atime (driver 3); an
   identifier that is never reused removes stale-identity races [inference from DM-003]; the mode word gives `ls -l`,
   `chmod`, `test -x` and `$PATH` probes what they need (R-6).
 - **Evidence against:** Tools that preserve owners (`cp -p`, `tar`) lose them; programs that rely on access times
@@ -111,7 +113,6 @@ time and needs a time-zone option to convert (`fs/survey.md#fat`); PID reuse sho
    | `size` | u64, at most 2^63 − 1 (fits `off_t`) | writes, set-size |
    | `mtime` | timestamp | service on every change of content (file data, directory entries, link target); client explicitly |
    | `ctime` | timestamp | service on every change of the object, including attributes and rename; never by clients |
-   | `btime` | timestamp | service at creation |
    | `posix_mode` | u16: 9 permission bits plus set-user-id, set-group-id and sticky bits, stored verbatim | creation request; set-attributes |
 
 2. **Timestamps.** Signed 64-bit seconds since 1970-01-01T00:00:00 UTC plus a 32-bit nanosecond field (0 to
@@ -123,17 +124,26 @@ time and needs a time-zone option to convert (`fs/survey.md#fat`); PID reuse sho
    modification that completes after another (ADR-0010 completion order) has a strictly later `mtime`, whatever the
    clock's resolution and even if the wall clock steps backwards. If the clock steps back, assigned times run ahead of
    the wall clock until it catches up; make may then warn about files "in the future" `[inference]`. Times set
-   explicitly by clients (`utimensat`) are stored as given and do not move `last_assigned`.
+   explicitly by clients (`utimensat`) are stored as given and do not move `last_assigned`. `last_assigned` is
+   persisted in every root record (ADR-0011 rule 3) and restored at mount, so the order also holds across remounts
+   and crashes: after a crash the restored value is at least every time stored in the selected tree.
 4. **No access time.** Not stored. `libposix` reports `st_atime = st_mtime`. Reads never write (driver 3).
-5. **No owners.** `libposix` reports the session's fixed uid/gid for every file (ADR-0002 rule 6). `chown`/`fchown`/
-   `lchown` to that same uid/gid succeed and change nothing; any other value fails with `EPERM`.
+5. **No owners.** `libposix` reports the session's fixed uid/gid for every file (ADR-0002 rule 6), which is also what
+   `geteuid`/`getegid` return, so readers of the owner field behave as for a user's own files: `ls -l` prints the
+   session's names, `test -O`/`-G` are true. If a superseding ADR adds `chown`/`fchown`/`lchown` to ADR-0005's surface
+   (today only `fchown`, `fchownat` and `lchown` are tier rows, and none was ever called; `chown` is an
+   `unused-applets` row of `task-02/libc-surface.csv`), changing to that same uid/gid succeeds and changes nothing, and
+   any other value fails with `EPERM`.
 6. **Modes are advisory.** The service stores `posix_mode` and enforces nothing; a handle's rights are the only
    authority (ADR-0002 rule 6). A create request carries the mode; a native client that passes none gets `0o644` for
    files and `0o755` for directories `[assumption]`. `umask` is `libposix` state, carried to children by
    `libposix` through its spawn protocol `[assumption]`, and applied before the request is sent (DM-006: the process-global part stays inside the
-   personality). For consistency with POSIX programs (`test -x`, configure probes), `libposix` reports `EACCES` from
-   `execve` and `access(X_OK)` when no execute bit is set; this is behaviour emulation, not a security check, and the
-   set-id bits grant nothing (CP-03).
+   personality). For consistency with POSIX programs, `libposix` applies the *owner* permission bits as POSIX would
+   for a file's owner who is not root: `access(R_OK|W_OK|X_OK)`, `open` for reading or writing and `execve` fail with
+   `EACCES` when the corresponding owner bit is clear (`test -r/-w/-x`, `rm`'s prompt for write-protected files,
+   configure probes). This is consistent with ADR-0002 rule 6, because every file has the caller's identity as owner
+   (rule 5), so no identity is compared: it is behaviour emulation, not a security check. A native client is not
+   affected, and the set-id bits grant nothing (CP-03).
 7. **Object identity.** `libposix` reports `st_ino = id` and `st_dev` = a per-volume identifier; since `id` is never
    reused, `(st_dev, st_ino)` identifies one object for the life of the volume.
 8. **No extended attributes, no ACLs.** `libposix` returns `ENOTSUP` for the xattr calls (none was ever called).
@@ -142,10 +152,16 @@ time and needs a time-zone option to convert (`fs/survey.md#fat`); PID reuse sho
    `st_blocks` reports allocated blocks.
 10. **Link counts.** `libposix` reports `st_nlink = 1` for files and link objects; for directories see ADR-0013's
     open question.
+11. **No FIFO or device nodes.** `kind` has no FIFO: FIFO nodes live in the per-session temporary directory service
+    (ADR-0002 rule 1, ADR-0006), not in this filesystem (ADR-0010 open question 5).
 
-**Why D.** Driver 5 with the measured data: every attribute in D has a measured reader or writer; everything dropped
-(owners, atime, xattrs) has none. Rule 3 turns make's implicit assumption into a guarantee the filesystem can test,
-which neither A nor B gives.
+**Why D.** The *writes* are measured: owners are never set, extended attributes never called, access times never
+set, while modification times and modes are set and relied on (`fs/requirements.md#4-metadata-read-and-written`).
+Which fields are *read* is not measured; the known readers of owners (`ls -l`, `test -O/-G`) are satisfied by the
+fixed per-session identity (rule 5). `ctime` has no measured writer but is part of `struct stat` and cannot be
+synthesised (it changes on renames and mode changes, not only on writes); a creation time has neither, so it is not
+stored. The decisive drivers are 2 (no identity) and 3 (no atime). Rule 3 turns make's implicit assumption into a
+guarantee the filesystem can test, which neither A nor B gives.
 
 **Principles this recommendation strains.** CP-27's spirit is kept; the cost DM-042 records ("dropping atime removes
 a cheap usage signal") is accepted.
@@ -161,11 +177,11 @@ a cheap usage signal") is accepted.
 
 ## Invariants
 
-- **INV-0014-1.** Times assigned by the service on one volume are strictly increasing in completion order, also when the wall clock stands still or steps backwards. *Check:* a service test with a scripted test clock (constant, coarse-grained, stepping backwards) and random request sequences, asserting that the `mtime`/`ctime` values assigned are strictly increasing in completion order.
+- **INV-0014-1.** Times assigned by the service on one volume are strictly increasing in completion order, also when the wall clock stands still or steps backwards, and across remounts and crash-remounts. *Check:* a service test with a scripted test clock (constant, coarse-grained, stepping backwards, and behind the newest stored time after a remount) and random request sequences interleaved with clean remounts and crash-remounts from the crash harness, asserting that the `mtime`/`ctime` values assigned are strictly increasing in completion order across all of them.
 - **INV-0014-2.** Every request that changes a file's content or a directory's entries sets that object's `mtime` (and `ctime`) to a newly assigned time, and no read or lookup changes any attribute. *Check:* a model-based test comparing attributes after each request with the reference model, including a check that read-only request sequences leave the image byte-identical.
 - **INV-0014-3.** Object identifiers are never reused within a volume, across deletes, commits and remounts. *Check:* a property test that creates and deletes objects across many commits and crash-remounts, recording every identifier ever returned.
 - **INV-0014-4.** Timestamps round-trip exactly: any value with seconds in the full i64 range and nanoseconds in 0..1e9 set explicitly is read back unchanged, and values outside the nanosecond range are rejected. *Check:* unit and property tests on the attribute encoder and through the service.
-- **INV-0014-5.** The attribute record has no owner, group or access-time field. *Check:* a test over the on-disk format crate's attribute type (a compile-time size/field assertion), so adding one requires changing this ADR.
+- **INV-0014-5.** The attribute record has exactly the fields of rule 1 and no owner, group, access-time or creation-time field. *Check:* a test in the on-disk format crate that lists the attribute record's field names (from a `const` field table the encoder is generated from) and compares them with rule 1's list, so adding a field requires changing this ADR.
 
 ## Open questions
 

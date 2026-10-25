@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0010, ADR-0011, ADR-0015
-- **Evidence:** CP-15, CP-17, CP-26, DM-037, GR-014, GR-017, GR-021, fs/requirements.md#12-linux-syscalls, fs/requirements.md#5-questions-the-data-cannot-answer, fs/survey.md#btrfs, fs/survey.md#comparison, fs/survey.md#ext4, fs/survey.md#failure-modes-from-the-task-01-catalogue, fs/survey.md#fxfs-and-minfs-fuchsia, fs/survey.md#littlefs, fs/survey.md#plan-9-cwfs-fossil-and-venti, fs/survey.md#redoxfs, fs/survey.md#testing-crash-consistency, fs/survey.md#xfs, fs/survey.md#zfs
+- **Evidence:** CP-15, CP-17, CP-26, DM-037, GR-014, GR-017, GR-021, fs/requirements.md#13-open-flags-and-who-uses-them, fs/requirements.md#5-questions-the-data-cannot-answer, fs/requirements.md#sources-and-queries, fs/survey.md#btrfs, fs/survey.md#comparison, fs/survey.md#ext4, fs/survey.md#failure-modes-from-the-task-01-catalogue, fs/survey.md#littlefs, fs/survey.md#plan-9-cwfs-fossil-and-venti, fs/survey.md#redoxfs, fs/survey.md#testing-crash-consistency, fs/survey.md#xfs, fs/survey.md#zfs
 
 ## Context
 
@@ -13,25 +13,27 @@ to assume that removable or downloaded images can be hostile. The filesystem is 
 device is virtio-blk (ADR-0015), which hands the filesystem whatever bytes the host's image file contains.
 
 **What is measured.** Nothing about corruption: no workload read a corrupted block, and no crash was injected
-(`fs/requirements.md#5-questions-the-data-cannot-answer`). The measurements say only that the toolchain reads far more
-than it writes (W4: about 66,000 `read` calls; T1: 9,237; `fs/requirements.md#12-linux-syscalls`), so read-side
-verification cost is on the hot path.
+(`fs/requirements.md#5-questions-the-data-cannot-answer`). On cost, the data shows that file reads are on the hot
+path: tcc alone opened files read-only 3,998 times in T1 and 24,796 times in W4 (headers and sources,
+`fs/requirements.md#13-open-flags-and-who-uses-them`). The `read`/`write` call totals cannot be used to compare file
+reads with file writes, because they include pipes and terminals (`fs/requirements.md#sources-and-queries`).
 
 **What the record says.**
 
 - Devices corrupt data silently: a study of 1.53 million drives found more than 400,000 checksum mismatches that only
-  the layer above the drives detected (GR-014). Journaling filesystems "do not detect silent data corruption"
-  (GR-014). ext4 and XFS added metadata checksums late and have none on data (`fs/survey.md#ext4`,
-  `fs/survey.md#xfs`). ZFS and btrfs checksum everything, store each block's checksum in its parent, and repair from
-  redundant copies (GR-014, `fs/survey.md#zfs`, `fs/survey.md#btrfs`).
+  the layer above the drives detected (GR-014). Journaling does not detect silent data corruption (GR-014). ext4 and XFS added metadata checksums late and have none on data (`fs/survey.md#ext4`,
+  `fs/survey.md#xfs`). ZFS and btrfs checksum data and metadata and repair from redundant copies (GR-014,
+  `fs/survey.md#zfs`, `fs/survey.md#btrfs`); ZFS stores each block's checksum in the block pointer that references it
+  (GR-014), as RedoxFS does (`fs/survey.md#redoxfs`); where btrfs stores its checksums is not in the record.
 - XFS's "self-describing metadata" adds to each metadata block its filesystem UUID, its own block number, its owner
   and the log sequence number, because a block number alone does not catch a write misdirected to another device
   (`fs/survey.md#xfs`).
 - Memory corruption is not covered by on-disk checksums (GR-014).
-- Crafted images: fuzzers generate deliberately corrupted images and find memory-safety bugs in kernel filesystems
-  (Janus; syzbot); one Linux maintainer's position is that nothing can be done about a deliberately corrupted
-  filesystem, while distributions auto-mount images from USB devices; XFS maintainers describe crafted-image reports
-  as an ongoing burden (`fs/survey.md#testing-crash-consistency`, `fs/survey.md#xfs`). The device-side analogue is
+- Crafted images: fuzzers that mutate images and system calls together find memory-safety bugs in Linux filesystems
+  (Janus, `fs/survey.md#testing-crash-consistency`); XFS maintainers describe crafted-image reports as an ongoing
+  burden (`fs/survey.md#xfs`). From a search summary only (U-04, not fetched): syzbot generates deliberately corrupted
+  images, one Linux maintainer's position is that nothing can be done about a deliberately corrupted filesystem, and
+  distributions auto-mount images from USB devices (`fs/survey.md#testing-crash-consistency`). The device-side analogue is
   GR-021: Linux virtio drivers were written trusting the device and had to be hardened.
 - Checksums detect accidents, not attackers: whoever crafts an image recomputes them [inference].
 
@@ -63,7 +65,7 @@ verification cost is on the hot path.
 - **Cost:** *(estimate)* Small: a CRC function and a verify call per metadata read.
 - **Precedent:** ext4 (2012 retrofit), XFS (self-describing metadata).
 
-### Option B: Checksums of every block stored in its parent pointer, plus self-describing headers (ZFS, btrfs, RedoxFS)
+### Option B: Checksums of every block stored in its parent pointer, plus self-describing headers (ZFS, RedoxFS; btrfs checksums all blocks too)
 
 - **Description:** Every block, metadata and data, is checksummed; the checksum is stored in the pointer that
   references the block (so verification checks *that the parent expected this content*), and every metadata block
@@ -73,7 +75,7 @@ verification cost is on the hot path.
   design "held up" and was robust under fault injection (GR-014). In a copy-on-write tree (ADR-0011) the parent is
   rewritten anyway, so storing the child's checksum there costs no extra write (`fs/survey.md#comparison`). RedoxFS
   does this in Rust with a 64-bit SeaHash per block pointer (`fs/survey.md#redoxfs`).
-- **Evidence against:** Every data read pays a checksum (drivers 5). No redundancy means detection without repair:
+- **Evidence against:** Every data read pays a checksum (driver 5). No redundancy means detection without repair:
   with one copy, a mismatch is an error, not a fix (GR-014 repairs only "if redundancy exists"). Overwrite-heavy
   workloads fragment under the copy-on-write that this relies on (GR-014, FM-11).
 - **Cost:** *(estimate)* Small on top of ADR-0011: a checksum field per pointer and a verify call per read; CRC32C
@@ -88,15 +90,16 @@ verification cost is on the hot path.
 - **Evidence for:** Venti's design "enforces a write-once policy, preventing accidental or malicious destruction of
   data" (`fs/survey.md#plan-9-cwfs-fossil-and-venti`). If the root hash is authenticated (signed, or held by a trusted
   party), *tampering* is detected, not only accidents, which is what a verified system image wants (CP-26, GR-017).
-  Deduplication for free.
+  Deduplication for free. ZFS ships cryptographic per-block checksums (SHA-256, SHA-512, Skein, Edon-R, BLAKE3) as
+  per-dataset options in production, so the approach is deployable on a read-write filesystem (`fs/survey.md#zfs`).
 - **Evidence against:** A cryptographic hash per block costs far more CPU than a CRC on the read-heavy path
   (driver 5) `[inference]`. Without an authenticated root it gives no more against an attacker than a CRC (an
   attacker recomputes the tree). Mutable files under content addressing need a separate mutable layer (fossil on
   Venti, `fs/survey.md#plan-9-cwfs-fossil-and-venti`).
 - **Cost:** *(estimate)* A cryptographic hash implementation in-house (or an external crate, a recorded decision)
   plus dedup/index structures for a full Venti-like design.
-- **Precedent:** Venti and fossil (Plan 9), Git object stores, Fuchsia's verified blobs (search summary only,
-  `fs/survey.md#fxfs-and-minfs-fuchsia`).
+- **Precedent:** Venti and fossil (Plan 9), Git object stores `[outside evidence: Git's content-addressed objects,
+  not in the record]`.
 
 ### Option D: No filesystem checksums; rely on the device (FAT, littlefs data, APFS data)
 
@@ -123,9 +126,9 @@ discipline that does not rely on checksums.**
 3. **On a mismatch.**
    - *Data block:* that read fails with `Corrupt`; nothing else changes; the volume object records the event (a
      counter readable through its handle) so a supervisor can notice. No wrong data is ever returned.
-   - *Metadata block or root record:* the request fails with `Corrupt` and the volume becomes read-only (no further
-     commits), asserting the same `FAILED` signal as ADR-0010 rule 6. Mount ignores root records that fail
-     validation (ADR-0011 rule 4).
+   - *Metadata block:* the request fails with `Corrupt` and the volume enters `Failed` (ADR-0010 rule 6): no further
+     writes, `StorageFailed` for every later mutating request and `sync`, reported to the supervisor. Root records
+     are handled by mount (ADR-0011 rule 4).
    - *No automatic repair* in the first release: there is one copy of each block. Repair is `fsck`'s job, offline.
 4. **Crafted images.** Every volume not created by this system's own `mkfs` on this machine is treated as hostile,
    and the code paths do not distinguish trusted from untrusted volumes:
@@ -133,8 +136,11 @@ discipline that does not rely on checksums.**
      and the client channels for that volume (CP-15, CP-17). A compromised service can reach that volume's data and
      its clients' requests, nothing else.
    - **A total decoder.** The on-disk format crate has `#![forbid(unsafe_code)]`; every decoding function returns a
-     `Result` for every input; it never panics, never indexes out of range, never allocates more than a bound derived
-     from validated fields and a fixed cap, and never loops without a bound.
+     `Result` for every input; it never panics, never indexes out of range, and never loops without a bound. Memory:
+     mounting and traversing hold at most one block per tree level plus a fixed cache, so the bound is
+     `MAX_DEPTH × BLOCK_SIZE + CACHE_CAP` bytes of decoder state, with the constants defined in the format crate
+     `[assumption: values chosen there]`; no allocation size is taken from an on-disk field without clamping to that
+     bound.
    - **Structural validation after the checksum**, because an attacker recomputes checksums: every block address is
      inside the device; every child's generation is not greater than its parent's; tree depth is at most a fixed
      maximum; keys are sorted and within the parent's key range; sizes and counts are within the block; names satisfy
@@ -165,8 +171,8 @@ remains.
 - **INV-0012-1.** No read reply ever carries data whose checksum did not verify: corrupting any single bit of any block of an image makes every read that depends on that block return `Corrupt`, never different bytes. *Check:* a test that, for each block of a set of `mkfs`-built images with known content, flips bits and reads every file, asserting that each read returns either the original content or `Corrupt`.
 - **INV-0012-2.** A block written at the right address but by an older commit (a lost write) or at the wrong address (a misdirected write) is detected on read. *Check:* tests that replace a block with its previous version, and that swap two blocks, then read through the tree.
 - **INV-0012-3.** The on-disk format decoder never panics, never reads outside its input, and terminates on every input. *Check:* the format crate is `#![forbid(unsafe_code)]` (compile-time) and a fuzz test (field-level mutation of every field of every structure, XFS-style, plus random mutation, as a deterministic `cargo test` with a fixed seed and iteration count, like `zoraya-dtb`'s 30,000 mutations) asserts no panic and a bounded step count.
-- **INV-0012-4.** Mounting and fully traversing any image, valid or not, uses memory bounded by a fixed function of the device size and terminates. *Check:* the same fuzz test with an allocation-counting allocator and a step counter.
-- **INV-0012-5.** After any metadata `Corrupt` result, the volume performs no further writes. *Check:* a test device that records writes, with corruption injected into metadata blocks at random points of a request sequence.
+- **INV-0012-4.** Mounting and fully traversing any image, valid or not, terminates and never holds more than `MAX_DEPTH × BLOCK_SIZE + CACHE_CAP` bytes of decoder state (rule 4). *Check:* the same fuzz test with an allocation-counting allocator asserting the peak against the constant, and a step counter asserting a bound linear in the number of blocks.
+- **INV-0012-5.** After any metadata `Corrupt` result, the volume is in `Failed`: it performs no further writes and answers every later mutating request and `sync` with `StorageFailed`. *Check:* a test device that records writes, with corruption injected into metadata blocks at random points of a request sequence, asserting the write log and the replies (shared with INV-0010-3).
 
 ## Open questions
 

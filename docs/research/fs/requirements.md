@@ -51,7 +51,9 @@ grep -E 'DM-03[6-9]|rename|readlink|symlink|mtime|mkstemp' docs/research/task-02
 **Limit that matters here.** The syscall CSV's per-workload counts include programs built by the workload itself
 (`built`: the stage-2 tcc, `conftest` binaries, `lua`, ...). The per-tier totals from Q-S therefore include them; the
 per-program counts from Q-P separate them. Per `task-02/method.md` ("Attribution"), `built` programs are not part of
-any tier's surface.
+any tier's surface. A second limit: `read`, `write`, `readv`, `writev` and `lseek` count calls on *every* kind of fd
+(regular files, pipes, terminals, `/dev/null`); the data does not separate file I/O from pipe and terminal I/O, so
+these columns say nothing about whether the workload reads or writes files more.
 
 ## 1. Filesystem functions and syscalls used in T0–T2
 
@@ -72,8 +74,8 @@ programs the interposer saw calling the function (dynamic lower bound). Rows who
 | `fstat` | T0 | dash, gmake, busybox, toybox | gmake, busybox awk |
 | `access` / `faccessat` / `eaccess` | T0/T0/T1 | toybox, dash, gmake | toybox (cp, install, rm, touch), dash, gmake |
 | `lseek` | T0 | dash, tcc, busybox, toybox | dash, tcc, busybox diff, toybox grep |
-| `opendir` / `fdopendir` / `readdir` / `closedir` | T0 | dash, gmake, toybox, busybox | dash, gmake, busybox, toybox (find, rm) |
-| `getcwd` / `chdir` | T0 | all | dash, gmake, tcc, busybox (`getcwd` also pdpmake) |
+| `opendir` / `fdopendir` / `readdir` / `closedir` | T0 | dash, gmake, toybox, busybox | dash, gmake, toybox (find, rm) (busybox only in the busybox-sh comparison run) |
+| `getcwd` / `chdir` | T0 | all | dash, gmake, tcc (`getcwd` also pdpmake, a comparison program; busybox only in the busybox-sh comparison run) |
 | `fchdir` | T2 | toybox | none |
 | `mkdir` / `mkdirat` | T2/T1 | toybox | toybox (cpio, mkdir) |
 | `rmdir` | T2 | toybox | toybox rmdir |
@@ -152,8 +154,10 @@ From Q-P (core runs, per program; `built` programs omitted).
 | `O_RDONLY\|O_CREAT` | toybox 2 (T0), 2 (T2) | `touch` |
 | `/tmp` prefix | dash 2, gmake 4, tcc 2, toybox 1 (T2); plus `mkdirat` toybox 1, `unlinkat` gmake 2, toybox 1 | temp files (gmake `mkstemp`), `mktemp -d` |
 
-TASK-02b adds `fcntl(F_SETFL, O_WRONLY|O_APPEND)` 12 times and `F_SETFL O_RDONLY|O_NONBLOCK` 6 times in W2 `gmake
--j2` (delta CSV, `fcntl` row); the data does not record which fds.
+TASK-02b records `fcntl(F_SETFL, O_WRONLY|O_APPEND)` 12 times and `F_SETFL O_RDONLY|O_NONBLOCK` 6 times in each W2
+`gmake -j` variant (delta CSV, `fcntl` rows); the serial TASK-02 core runs also show gmake calling `F_SETFL` (10 in
+T1, 15 in T2, Q-P) without recording the flags, so nothing shows the `O_APPEND` setting is specific to parallel
+builds. The data does not record which fds.
 
 **File mappings.** No T0–T2 program maps a file. Every `mmap` in T0–T2 core runs is `MAP_PRIVATE|MAP_ANONYMOUS`
 (read-write, or `PROT_NONE` reservations) (Q-P). File mappings appear only in T3: `PROT_READ|PROT_EXEC`/
@@ -165,10 +169,11 @@ TASK-02b adds `fcntl(F_SETFL, O_WRONLY|O_APPEND)` 12 times and `F_SETFL O_RDONLY
 ### 2.1 Durability is never requested
 
 No measured program calls `fsync`, `fdatasync`, `sync`, `syncfs` or `msync` in any tier, T0 to T3 (section 1.2;
-the libc rows are `unused-applets`). The M3 extractor searched every compiled call site of every measured program for
-`fsync|fdatasync|sync|syncfs` (`tools/posix-surface/analysis/callsites.py`, feature "DM-037 fsync") and the call-site
-table has no row for it: no measured program has such a call in its compiled code. The measured toolchain therefore
-**never asks for durability**. What survives a crash in these workloads is decided entirely by what the filesystem
+the libc rows are `unused-applets`, imported only by the full toybox and busybox binaries). The M3 extractor searched
+the compiled code of dash, oksh, mrsh, tcc, GNU make, pdpmake and the minimal T2 builds of toybox and busybox for
+`fsync|fdatasync|sync|syncfs` (`tools/posix-surface/analysis/callsites.py`, feature "DM-037 fsync"), and the call-site
+table has no row for it. M3 did not search clang, ld.lld or the full multi-call binaries; for those the syscall data
+alone shows no call. The measured toolchain therefore **never asks for durability**. What survives a crash in these workloads is decided entirely by what the filesystem
 does without being asked.
 
 ### 2.2 Atomic rename
@@ -184,8 +189,9 @@ does without being asked.
     the target* (not in `/tmp`) and renames it over the target.
   - toybox `ln -f` (`toys/posix/ln.c:77,89`): reserves a temp name with `mkstemp`+`unlink`, links there, renames over
     the target.
-- **T3 does it too.** clang and ld.lld each create a temporary output with `O_RDWR|O_CREAT|O_EXCL` and rename it
-  (`renameat` 1 each in W6; Q-P). That is the replace-by-rename idiom for compiler output.
+- **T3 does it too.** clang and ld.lld each create a temporary output with `O_RDWR|O_CREAT|O_EXCL` (Q-P) and rename
+  it: `renameat` is called once in W6-compile and once in W6-link (syscall CSV; attributed to clang and ld.lld by
+  workload, since the patterns TSV has no `renameat` rows). That is the replace-by-rename idiom for compiler output.
 - **tcc does not.** tcc unlinks its output and recreates it in place: `unlinkat` 55 (T1) and 258 (T2) relative
   paths, and 55/339 opens with `O_WRONLY|O_CREAT|O_TRUNC` (Q-P). A crash while tcc writes leaves a partial file under
   the final name.
@@ -205,13 +211,15 @@ does without being asked.
 
 ### 2.4 Unlink while in use, and cleanup on interrupt
 
-- On Ctrl-C or SIGTERM, every GNU make deletes the target its running recipe was writing: 4 partial targets per run,
-  in 36 of 36 runs, with no partial target left behind (`task-02b/parallel-surface.md`, "partial targets" row;
-  `task-02b/event-timelines.md`). The `unlinkat` happens while the recipe process may still hold the file open (the
-  recipe is killed by the same signal).
-- GNU make deletes the FIFO jobserver node by name at exit, including from its fatal-signal handler (delta CSV:
-  `unlinkat path=GMfifo...` in every FIFO run).
-- Requirement: unlinking a name must succeed while the file is open, and the open handle must keep working (ADR-0006
+- On Ctrl-C or SIGTERM, each leaf GNU make deletes the target its running recipe was writing: 4 partial targets in 35
+  runs and 3 in one SIGTERM run, with no partial target left behind in 36 of 36 runs (`task-02b/conflict-impact.md`;
+  `task-02b/research-log.md`, which corrects an earlier "4 in 36/36"). In the timelines the recipe process has already
+  died (W9a) or been killed by the make (W9b) before the make unlinks the target (`task-02b/event-timelines.md`), so
+  the partial-target data does not show an unlink while another process holds the file open.
+- GNU make's top-level process deletes the FIFO jobserver node by name, including from its fatal-signal handler,
+  while the sub-makes still hold it open (W9a +0.5 ms, W9b +0.3 ms, `task-02b/event-timelines.md`; delta CSV:
+  `unlinkat path=GMfifo...` in every FIFO run). This is the measured unlink-while-open.
+- Requirement: unlinking a name must succeed while the object is open, and the open handle must keep working (ADR-0006
   already requires this of FIFO nodes: "`unlink` removes the name while open handles stay valid").
 
 ### 2.5 Timestamps
@@ -261,7 +269,9 @@ appends must not interleave within a write is not established by the measurement
   - toybox dispatches on `argv[0]` and follows the symlink chain with `readlink` to find the applet name
     (`main.c:320` `toybox_main`, reviewed `direct`, note: "native install can use hardlinks/argv[0] name or `toybox
     <applet>`; only matters if no symlinks").
-- **Call sites that depend on symlink semantics** (DM-039 rows, 20 sites in core programs, 16 compiled): toybox
+- **Call sites that depend on symlink semantics** (20 DM-039 rows in the call-site table: 16 in core programs, toybox
+  14 and GNU make 2, of which 13 are distinct sites because 3 toybox `lchown` rows duplicate another row; 4 in oksh, a
+  comparison program): toybox
   `dirtree` and `cp -P/-a/-r` copy links as links (`direct`, already `*at`); `cp -s`, `cpio`, `tar -x` and `ln -s`
   create links (`emulate`: creating the link is the requested operation); `xabspath` canonicalises by resolving links
   (`restructure`, 20 lines, used by `tar` to keep extraction inside the target directory); GNU make `-L` walks link
@@ -278,7 +288,7 @@ which fields the program used. The per-program counts (Q-P, core runs) are:
 |---|---|---|---|---|
 | GNU make | 624 | 1,892 | `faccessat2` 80 / 201; `fstat` | modification times of targets and prerequisites (`name_mtime`, `src/remake.c`); `eaccess` `X_OK` probe of `$PATH` candidates (2 sites, `emulate`) |
 | dash | 29 | 1,798 | `faccessat2` 0 / 49 | `test -f/-d/-r/-w/-x/-O/-G` in configure scripts (`faccessat` `emulate`; `geteuid`/`getegid` for `-O/-G`), `$PATH` search |
-| toybox | 4 | 3,345 | `faccessat` 29; `fstatat` | `find`, `rm -r`, `cp`, `install`, `ls -l` (mode, owner, size, mtime printed), `mkdir -p` |
+| toybox | 4 | 3,345 | `faccessat` 29; `fstatat` | `find`, `rm -r`, `cp`, `install`, `ls` (with `-l` it prints mode, owner, size and mtime; the flags used were not recorded), `mkdir -p` |
 | busybox | 3 | 106 | | `stat` from awk, diff, expr, gzip, tr |
 | tcc | 0 | 0 | | tcc stats nothing: it opens headers by trying paths (`openat` only, Q-P) |
 
@@ -318,15 +328,23 @@ What GNU make does with times, from the data and its manual:
   the sub-second part, and offers `.LOW_RESOLUTION_TIME` to compare such files at one-second granularity; archive
   member times are always whole seconds `[outside evidence: F-01, ".LOW_RESOLUTION_TIME"]`.
 
-**Required ordering behaviour** `[inference from the rule above]`: if a prerequisite is written after its target
-(in real time), the prerequisite's recorded modification time must be *strictly greater* than the target's, or make
-will wrongly skip the rebuild. With timestamps taken from the wall clock, that holds only if (a) the resolution is
-finer than the time between two dependent writes, and (b) the clock does not step backwards between them. Build steps
-in the measured workloads follow each other well within a second: in W8/W9, 12 of 32 generated tables were complete
-1.5 s after the build started, with 4 leaf makes running (`task-02b/event-timelines.md`, "State when the interrupt
-arrives"), and each table is a chain of three dependent targets (`mktab`, `tN.h`, `mN.o`;
-`tools/posix-surface/workloads/w8/leaf.mk`). One-second resolution is therefore not enough; nanosecond storage with the clock's real
-resolution is the conservative choice. Equal times are safe in one direction only (make treats equal as up to date).
+**Required ordering behaviour** `[inference from the manual's rules above]`. Two rules depend on resolution:
+
+- *Interrupts:* make deletes a partial target only "if the target file's last-modification time has changed since
+  make first checked it" (F-01). A target rewritten within the same clock tick as make's first check keeps its time
+  under a coarse clock, so its partial content survives the interrupt.
+- *Rebuilds:* if a prerequisite is rewritten after its target within one tick, both get the same time and make
+  (which treats equal as up to date) skips the rebuild. The manual says high-resolution timestamps "lessen the chance
+  of make incorrectly concluding that a file is up to date" (F-01).
+
+Both need modification times that change on every write and order later writes strictly after earlier ones: a
+resolution finer than the interval between dependent writes, and a clock that does not step backwards between them.
+As context for "how fine": in W8/W9 dependent steps follow each other well within a second (12 of 32 generated tables,
+each a chain `mktab` → `tN.h` → `mN.o`, were complete 1.5 s after start with 4 leaf makes running;
+`task-02b/event-timelines.md`, "State when the interrupt arrives"; `tools/posix-surface/workloads/w8/leaf.mk`). In
+those chains the target is written *after* its prerequisite, where an equal time is harmless; the data therefore
+shows the pace of builds, not a measured instance of either hazard. One-second resolution is not enough for that
+pace; nanosecond storage with strictly increasing assignment is the conservative choice.
 
 ## 5. Questions the data cannot answer
 
