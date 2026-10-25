@@ -381,6 +381,35 @@ validates without normalising (`utf8only=on`, `normalization=none`); ext4 folds 
 over validated UTF-8 with control characters forbidden avoids every failure in the table except the archive
 round-trip cost, which then falls on the POSIX personality (DM-095, X-8).
 
+## Block devices
+
+What a filesystem on QEMU `virt` can assume about its disk, from the virtio specification and QEMU's implementation.
+
+- **Ordering.** Requests are "serviced (probably out of order) by the device"; the device uses them "not necessarily
+  in order" (F-20).
+- **Units.** Sector numbers and lengths are always 512-byte units; `blk_size` is only the "optimal sector size" and
+  "does not affect the units used in the protocol" (F-20).
+- **Durability.** "A write is considered volatile when it is submitted; the contents of sectors covered by a volatile
+  write are undefined in persistent device backend storage until the write becomes stable." A completed write becomes
+  stable if (1) `VIRTIO_BLK_F_FLUSH` was offered but neither it nor `VIRTIO_BLK_F_CONFIG_WCE` was negotiated, (2) the
+  cache was in writethrough mode for the whole time between submission and completion, (3) the write carried the FUA
+  flag (`VIRTIO_BLK_F_REQ_FLAGS_OUT_FUA`), or (4) a flush request "is sent after the write is completed and is
+  completed itself". A device backed by persistent storage "MUST ensure that stable writes are committed to it". A
+  device that does not offer `VIRTIO_BLK_F_FLUSH` "MAY" commit before completion but need not, and then "will not be
+  resilient to data loss in case of crashes" (F-20).
+- **Atomicity.** The specification states none: the contents of unstable sectors are "undefined" (F-20).
+- **Errors.** Each request ends with `VIRTIO_BLK_S_OK`, `VIRTIO_BLK_S_IOERR` ("device or driver error") or
+  `VIRTIO_BLK_S_UNSUPP`; after a failed multi-segment discard or write-zeroes, each segment's state is indeterminate
+  (F-20).
+- **QEMU.** The virtio-blk model offers the flush feature (`VIRTIO_BLK_F_WCE`, the legacy name of
+  `VIRTIO_BLK_F_FLUSH`) whenever the drive's write cache is enabled, and its source has no support for the FUA request
+  flag. `-drive cache=` defaults to `writeback`; `writethrough` and `directsync` disable the guest-visible write
+  cache; `unsafe` sets `cache.no-flush`, telling QEMU "it never needs to write any data to the disk" (F-21).
+- **Linux's model for comparison.** `REQ_PREFLUSH` guarantees "that previously completed write requests are on
+  non-volatile storage before the flagged bio starts"; `REQ_FUA` completes a request "only ... after the data has been
+  committed to non-volatile storage"; for devices without a volatile cache the block layer strips both flags, and it
+  emulates them on devices that have one (F-22). The device-trust problem of virtio drivers is GR-021.
+
 ## Sources
 
 All fetched on 2026-10-25. `raw` means `https://raw.githubusercontent.com/`.
@@ -423,6 +452,8 @@ All fetched on 2026-10-25. `raw` means `https://raw.githubusercontent.com/`.
 | F-34 | Rust standard library, `std::ffi::OsString` documentation comment | raw `rust-lang/rust/master/library/std/src/ffi/os_str.rs` |
 | F-35 | Line counts made for this survey: `git clone --depth 1` (sparse where large) of Linux v6.17 (e5f0a698b34e), OpenZFS master (ea111ca50fed), littlefs master (6cb4e86540ec), RedoxFS master (b87b0976ee12), Plan 9 Foundation `plan9` main (ed1a9c21e329); `find <dir> -name '*.[ch]' ! -name '*test*' \| xargs cat \| wc -l` (`*.rs` for RedoxFS) | `https://github.com/<project>` |
 | F-36 | Linux kernel, ext4 directory format (casefolded and encrypted directory entries) | raw `torvalds/linux/master/Documentation/filesystems/ext4/directory.rst` |
+| F-37 | GNU Autoconf, `lib/m4sugar/m4sh.m4` (`_AS_LN_S_PREPARE`: `ln -s` probe with `ln` and `cp -pR` fallbacks) and `lib/autoconf/programs.m4` (`AC_PROG_LN_S`), GitHub mirror | raw `autotools-mirror/autoconf/master/lib/m4sugar/m4sh.m4`; raw `autotools-mirror/autoconf/master/lib/autoconf/programs.m4` |
+| F-38 | Linux man-pages, `link(2)` (`EPERM`: "the filesystem ... does not support the creation of hard links") | raw `mkerrisk/man-pages/master/man2/link.2` |
 
 **Not fetched** (search-engine summaries only; weaker evidence):
 

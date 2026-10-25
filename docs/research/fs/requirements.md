@@ -244,6 +244,12 @@ appends must not interleave within a write is not established by the measurement
 
 - **Created only in T2, by `ln -s`.** `symlinkat`: 9 calls in W4-configure, of which toybox 6 (`path=dirfd`) and
   `built` 3 (configure test programs) (Q-P). libc: `symlink` called by `toybox:ln` only. None in T0 or T1.
+- **What they were for.** Autoconf-generated shell scripts probe whether `ln -s` works when they start
+  (`_AS_LN_S_PREPARE` in autoconf's `m4sh.m4`: `ln -s conf$$.file conf$$`, then a second `ln -s` into a directory),
+  delete the probe files at once, and fall back to `ln` (a hard link) and then to `cp -pR` if `ln -s` fails
+  `[outside evidence: survey source F-37]`. The 9 `symlinkat` calls in W4-configure are consistent with these probes
+  in `configure` and `config.status` [inference: the traces do not record the target names]. hello's build therefore
+  needs symlinks only to answer "does `ln -s` work?", and has a fallback when the answer is no.
 - **Read.** `readlinkat`: toybox 7 (T2, relative paths; libc CSV: `toybox:rm`); clang 22 (T3, 12 of them under
   `/proc`, i.e. `/proc/self/exe`). `readlink` dynamically: clang only (T3).
 - **Followed.** The data does not record path resolution through links, so how often a *workload* followed a
@@ -350,7 +356,7 @@ Labels `R-n` are used by the ADRs. Each is a reading of the data above, not a de
 | R-4 | Without any explicit durability request, the post-crash state must still be consistent and must not expose data that was never written (stale blocks or zeros) under a size or time that claims it was. | 2.1, 2.5 |
 | R-5 | Modification time changes on every write, is on the wall-clock time base, and has sub-second resolution. | 4.1 |
 | R-6 | Mode bits (at least the execute bit) are stored and reported; `umask` and creation modes work. Owners are never set by the workloads. | 4 |
-| R-7 | Symbolic links are created only by `ln -s` in T2 configure; no site needs native symlinks to work (all creation sites `emulate` if absent). Hard links are never created. | 3 |
+| R-7 | Symbolic links are created only by `ln -s` in T2 configure, as a capability probe with a `cp -pR` fallback; no site needs native symlinks to work (all creation sites `emulate` if absent). Hard links are never created. | 3 |
 | R-8 | File mappings are not needed below T3. | 1.3 |
 | R-9 | Anonymous (unnamed) files are needed (`memfd_create`, temp files that need only privacy). | 4, 2.3 |
 | R-10 | A FIFO node can be created in the temporary directory and unlinked while open (ADR-0006). | 1.2, 2.4 |
