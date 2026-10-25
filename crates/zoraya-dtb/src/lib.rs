@@ -176,7 +176,7 @@ impl<'a> Fdt<'a> {
         let data = data.get(..total).ok_or(Error::Truncated)?;
         let block = |off: u32, size: u32, align: usize| -> Result<&'a [u8], Error> {
             let (off, size) = (off as usize, size as usize);
-            if off < HEADER_SIZE || off % align != 0 {
+            if off < HEADER_SIZE || !off.is_multiple_of(align) {
                 return Err(Error::BadLayout);
             }
             let end = off.checked_add(size).ok_or(Error::BadLayout)?;
@@ -208,7 +208,7 @@ impl<'a> Fdt<'a> {
 
     fn validate_rsvmap(&self) -> Result<(), Error> {
         let mut off = self.header.off_mem_rsvmap as usize;
-        if off < HEADER_SIZE || off % 8 != 0 {
+        if off < HEADER_SIZE || !off.is_multiple_of(8) {
             return Err(Error::BadLayout);
         }
         loop {
@@ -492,7 +492,7 @@ impl<'a> Node<'a> {
             return None;
         }
         let entry = (ac + sc) as usize * 4;
-        if value.len() % entry != 0 {
+        if !value.len().is_multiple_of(entry) {
             return None;
         }
         Some(RegIter {

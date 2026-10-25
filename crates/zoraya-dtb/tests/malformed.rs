@@ -43,7 +43,7 @@ impl Builder {
         self.u32(9)
     }
     fn pad(&mut self) -> &mut Self {
-        while self.structs.len() % 4 != 0 {
+        while !self.structs.len().is_multiple_of(4) {
             self.structs.push(0);
         }
         self
@@ -85,11 +85,17 @@ fn minimal() -> Builder {
         .prop("compatible", b"test\0")
         .begin("memory@40000000")
         .prop("device_type", b"memory\0")
-        .prop("reg", &[0, 0, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0])
+        .prop(
+            "reg",
+            &[0, 0, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0],
+        )
         .end()
         .begin("uart@9000000")
         .prop("compatible", b"arm,pl011\0arm,primecell\0")
-        .prop("reg", &[0, 0, 0, 0, 0x09, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0])
+        .prop(
+            "reg",
+            &[0, 0, 0, 0, 0x09, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0],
+        )
         .end()
         .end()
         .fdt_end();
@@ -207,18 +213,18 @@ fn bad_header_offsets() {
     let len = base.len() as u32;
     // (word index, value)
     let cases = [
-        (1, 39),          // totalsize below the header
-        (2, len),         // struct block starts at the end
-        (2, 0),           // struct block overlaps the header
-        (2, 57),          // struct block misaligned
-        (2, u32::MAX),    // struct offset overflows
-        (9, u32::MAX),    // struct size overflows
-        (9, len),         // struct block runs past the end
-        (3, len + 1),     // strings block past the end
-        (8, u32::MAX),    // strings size overflows
-        (4, 44),          // reservation map misaligned
-        (4, 8),           // reservation map in the header
-        (4, len - 8),     // reservation map runs off the end
+        (1, 39),           // totalsize below the header
+        (2, len),          // struct block starts at the end
+        (2, 0),            // struct block overlaps the header
+        (2, 57),           // struct block misaligned
+        (2, u32::MAX),     // struct offset overflows
+        (9, u32::MAX),     // struct size overflows
+        (9, len),          // struct block runs past the end
+        (3, len + 1),      // strings block past the end
+        (8, u32::MAX),     // strings size overflows
+        (4, 44),           // reservation map misaligned
+        (4, 8),            // reservation map in the header
+        (4, len - 8),      // reservation map runs off the end
         (4, u32::MAX - 7), // reservation map offset overflows
     ];
     for (word, v) in cases {

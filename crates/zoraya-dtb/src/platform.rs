@@ -304,10 +304,7 @@ pub fn psci(fdt: &Fdt<'_>) -> Option<Psci> {
         "smc" => PsciMethod::Smc,
         _ => return None,
     };
-    let compatible = VERSIONED
-        .iter()
-        .copied()
-        .find(|c| node.is_compatible(c));
+    let compatible = VERSIONED.iter().copied().find(|c| node.is_compatible(c));
     Some(Psci {
         method,
         has_system_off: compatible.is_some(),

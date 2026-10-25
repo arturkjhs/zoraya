@@ -1,1 +1,179 @@
+//! Zoraya kernel, stage 0: boot, console, device tree, PSCI shutdown.
+//!
+//! Only machine-dependent code lives here; device tree parsing is in the
+//! host-tested `zoraya-dtb` crate.
+
 #![no_std]
+#![no_main]
+
+mod arch;
+mod console;
+mod dtb;
+mod panic;
+mod pl011;
+mod psci;
+#[cfg(feature = "qemu-test")]
+mod testing;
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+use zoraya_dtb::platform::{GicKind, PlatformInfo, Psci, PsciMethod, UartSource};
+
+/// Version from Cargo.toml.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Git commit the kernel was built from (build.rs).
+pub const GIT_COMMIT: &str = env!("ZORAYA_GIT_COMMIT");
+
+/// PSCI conduit for shutdown: 0 none, 1 HVC, 2 SMC.
+static PSCI_CONDUIT: AtomicUsize = AtomicUsize::new(0);
+
+/// Called from boot.rs with the loader's `x0` and the exception level at
+/// entry, at EL1, on the boot stack, with `.bss` cleared.
+#[unsafe(no_mangle)]
+extern "C" fn kernel_main(x0: usize, entry_el: u64) -> ! {
+    let (fdt, source) = match dtb::locate(x0) {
+        Ok(found) => found,
+        Err(e) => fatal_before_console(format_args!("{e}")),
+    };
+    let info = match PlatformInfo::from_fdt(&fdt) {
+        Ok(i) => i,
+        Err(e) => fatal_before_console(format_args!("{e}")),
+    };
+    // SAFETY: the base is the `reg` of the device tree node named by
+    // /chosen/stdout-path (or the first enabled node) whose compatible list
+    // contains "arm,pl011", and nothing else drives that UART.
+    unsafe { console::init(info.uart.base as usize) };
+    if let Some(p) = info.psci.filter(|p| p.has_system_off) {
+        let conduit = match p.method {
+            PsciMethod::Hvc => 1,
+            PsciMethod::Smc => 2,
+        };
+        PSCI_CONDUIT.store(conduit, Ordering::Relaxed);
+    }
+
+    print_banner(&info, x0, source, entry_el, fdt.total_size());
+
+    #[cfg(feature = "qemu-test")]
+    testing::run(0);
+
+    #[cfg(not(feature = "qemu-test"))]
+    {
+        println!("stage 0 complete; powering off");
+        shutdown()
+    }
+}
+
+/// Reports an error found before the console exists, through the one
+/// fallback UART address, and halts.
+fn fatal_before_console(msg: core::fmt::Arguments<'_>) -> ! {
+    console::print_fallback(format_args!("\nZORAYA-PANIC at boot: {msg}\nhalting\n"));
+    arch::halt()
+}
+
+fn print_banner(
+    info: &PlatformInfo<'_>,
+    x0: usize,
+    source: dtb::Source,
+    entry_el: u64,
+    dtb_len: usize,
+) {
+    println!();
+    println!("Zoraya kernel {VERSION} (git {GIT_COMMIT})");
+    println!(
+        "exception level at entry: EL{entry_el}, now EL{}",
+        arch::current_el()
+    );
+    println!(
+        "boot cpu: MPIDR_EL1 {:#x}; physical address size {} bits",
+        arch::mpidr(),
+        arch::pa_bits()
+    );
+    let (addr, how) = match source {
+        dtb::Source::Register => (x0, "from x0"),
+        dtb::Source::StartOfRam => (dtb::RAM_BASE, "at start of RAM"),
+    };
+    println!("device tree: {addr:#x} ({how}, x0 was {x0:#x}), {dtb_len} bytes");
+    let from = match info.uart.source {
+        UartSource::StdoutPath(p) => p,
+        UartSource::FirstCompatible => "first arm,pl011 node",
+    };
+    println!("console: pl011 at {:#x} ({from})", info.uart.base);
+    println!("cpus: {}", info.cpu_count);
+    match &info.interrupt_controller {
+        Some(ic) => {
+            let kind = match ic.kind {
+                GicKind::V2 => "GICv2",
+                GicKind::V3 => "GICv3",
+                GicKind::Other => "unknown type",
+            };
+            print!("interrupt controller: {} ({kind})", ic.node_name);
+            for r in ic.regs() {
+                print!(" {:#x}+{:#x}", r.address, r.size);
+            }
+            println!();
+        }
+        None => println!("interrupt controller: none found"),
+    }
+    match &info.psci {
+        Some(Psci {
+            method, compatible, ..
+        }) => {
+            let m = match method {
+                PsciMethod::Hvc => "hvc",
+                PsciMethod::Smc => "smc",
+            };
+            println!("psci: {} via {m}", compatible.unwrap_or("arm,psci (0.1)"));
+        }
+        None => println!("psci: none found"),
+    }
+    println!("memory map:");
+    for r in info.memory.as_slice() {
+        println!(
+            "  {:#018x}-{:#018x} {:>6} MiB  RAM",
+            r.address,
+            r.address + r.size - 1,
+            r.size >> 20
+        );
+    }
+    if info.memory.dropped > 0 {
+        println!("  ({} more regions not recorded)", info.memory.dropped);
+    }
+    for r in info.reserved.as_slice() {
+        println!(
+            "  {:#018x}-{:#018x}  reserved",
+            r.address,
+            r.address + r.size.max(1) - 1
+        );
+    }
+    let (start, end) = arch::kernel_image();
+    println!(
+        "  {start:#018x}-{:#018x}  kernel image and boot stack",
+        end - 1
+    );
+    println!(
+        "  {addr:#018x}-{:#018x}  device tree blob",
+        addr + dtb_len - 1
+    );
+}
+
+/// Powers off through PSCI `SYSTEM_OFF`; halts if that is unavailable or fails.
+pub fn shutdown() -> ! {
+    let method = match PSCI_CONDUIT.load(Ordering::Relaxed) {
+        1 => Some(PsciMethod::Hvc),
+        2 => Some(PsciMethod::Smc),
+        _ => None,
+    };
+    match method {
+        Some(method) => {
+            let psci = Psci {
+                method,
+                has_system_off: true,
+                compatible: None,
+            };
+            let err = psci::system_off(&psci);
+            println!("PSCI SYSTEM_OFF failed ({err}); halting");
+        }
+        None => println!("no PSCI SYSTEM_OFF in the device tree; halting"),
+    }
+    arch::halt()
+}
