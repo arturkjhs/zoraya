@@ -1,13 +1,16 @@
 /*
  * Kernel image layout for QEMU virt. RAM starts at 0x40000000; QEMU puts the
- * device tree blob there for a bare-metal ELF (1 MiB on QEMU 11) and refuses
- * to load if the image overlaps it, so the image starts 2 MiB in. The MMU is
- * off at stage 0: these are physical addresses.
+ * device tree blob there for a bare-metal ELF (1 MiB on QEMU 11), but only if
+ * it fits below the image: otherwise QEMU silently omits it and the kernel
+ * can only report the missing blob through the fallback UART. The image
+ * therefore starts 2 MiB in. The MMU is off at stage 0: these are physical
+ * addresses.
  */
 
 ENTRY(_start)
 
 KERNEL_BASE = 0x40200000;
+ASSERT(KERNEL_BASE - 0x40000000 >= 2M, "leave 2 MiB below the image for the DTB")
 STACK_SIZE = 64K;
 
 SECTIONS

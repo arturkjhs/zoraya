@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! ZORAYA-TEST begin <count>
+//! ZORAYA-TEST run <name>
 //! ZORAYA-TEST ok <name>
 //! ZORAYA-TEST fail <name> <message>
 //! ZORAYA-TEST end pass=<n> fail=<m>
@@ -82,6 +83,11 @@ static TESTS: &[Test] = &[
         name: "harness_resumes_after_panic",
         run: harness_resumes_after_panic,
     },
+    // Last, so that it covers every test before it.
+    Test {
+        name: "stack_canary_intact",
+        run: stack_canary_intact,
+    },
 ];
 
 const NONE: usize = usize::MAX;
@@ -101,6 +107,7 @@ pub fn run(start: usize) -> ! {
         println!("ZORAYA-TEST begin {}", TESTS.len());
     }
     for (i, t) in TESTS.iter().enumerate().skip(start) {
+        println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
@@ -133,7 +140,10 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     // SAFETY: the panicking test's frames and the panic machinery's frames
     // are all on the boot stack; none holds anything still referenced (tests
     // keep no state outside the atomics above), one CPU runs, and
-    // interrupts are masked.
+    // interrupts are masked. If the panic came from the catch-all exception
+    // vector, the remaining tests run still in that exception context
+    // (stale ELR_EL1/SPSR_EL1, no `eret`); stage 0 uses neither, but once
+    // the vectors are real (stage 1) recovery must `eret` to a trampoline.
     unsafe { arch::reset_stack_and_call(resume, i + 1) }
 }
 
@@ -177,10 +187,12 @@ fn memory_regions_inside_pa_space() {
 }
 
 fn contains(info: &PlatformInfo<'_>, start: usize, end: usize) -> bool {
-    info.memory
-        .as_slice()
-        .iter()
-        .any(|r| r.address <= start as u64 && end as u64 <= r.address + r.size)
+    info.memory.as_slice().iter().any(|r| {
+        r.address <= start as u64
+            && r.address
+                .checked_add(r.size)
+                .is_some_and(|e| end as u64 <= e)
+    })
 }
 
 fn kernel_image_inside_memory() {
@@ -235,6 +247,13 @@ fn harness_reports_exception_as_failure() {
     // SAFETY: `udf` raises an undefined-instruction exception, which the
     // catch-all vector turns into a panic; nothing after it executes.
     unsafe { core::arch::asm!("udf #0", options(nomem, nostack)) };
+}
+
+fn stack_canary_intact() {
+    assert!(
+        arch::stack_canary_intact(),
+        "boot stack overflowed into its canary"
+    );
 }
 
 fn harness_resumes_after_panic() {

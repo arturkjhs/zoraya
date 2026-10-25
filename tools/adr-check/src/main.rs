@@ -133,6 +133,14 @@ fn check_status(adrs: &[Adr], out: &mut Outcome) {
             out.error("INV-0001-2", &adr.file, "no \"- **Status:**\" line");
             continue;
         };
+        let lines = adr
+            .text
+            .lines()
+            .filter(|l| l.starts_with("- **Status:**"))
+            .count();
+        if lines > 1 {
+            out.error("INV-0001-2", &adr.file, format!("{lines} Status lines"));
+        }
         if !status_is_valid(status) {
             out.error(
                 "INV-0001-2",
@@ -140,6 +148,15 @@ fn check_status(adrs: &[Adr], out: &mut Outcome) {
                 format!("invalid status {status:?}"),
             );
             continue;
+        }
+        if let Some(n) = status.strip_prefix("superseded by ADR-")
+            && !adrs.iter().any(|a| a.number == n)
+        {
+            out.error(
+                "INV-0001-2",
+                &adr.file,
+                format!("superseded by ADR-{n}, which does not exist"),
+            );
         }
         if status != "proposed" {
             let decision = section(&adr.text, "Architect's decision").unwrap_or_default();
@@ -663,6 +680,16 @@ mod tests {
             "approved",
             "INV-0001-2",
         );
+        let sup = adr("superseded by ADR-0009", EV, BODY, "Superseded.");
+        expect(
+            "s3",
+            &sup,
+            INVARIANTS,
+            "superseded by ADR-0009",
+            "INV-0001-2",
+        );
+        let dup = ok.replace("- **Evidence:**", "- **Status:** proposed\n- **Evidence:**");
+        expect("s4", &dup, INVARIANTS, "accepted", "INV-0001-2");
         // INV-0001-3: unknown ID, missing section, Evidence/body mismatch.
         expect(
             "e1",

@@ -215,6 +215,7 @@ pub fn console_uart<'a>(fdt: &Fdt<'a>) -> Result<Uart<'a>, PlatformError> {
 }
 
 /// Every non-empty `reg` range of every enabled `device_type = "memory"` node.
+/// A range that wraps past 2^64 is dropped.
 pub fn memory_regions(fdt: &Fdt<'_>) -> RegionList {
     let mut list = RegionList::new();
     for node in fdt.nodes() {
@@ -222,7 +223,8 @@ pub fn memory_regions(fdt: &Fdt<'_>) -> RegionList {
             continue;
         }
         if let Some(regs) = node.reg() {
-            regs.filter(|r| r.size != 0).for_each(|r| list.push(r));
+            regs.filter(|r| r.size != 0 && r.address.checked_add(r.size).is_some())
+                .for_each(|r| list.push(r));
         }
     }
     list

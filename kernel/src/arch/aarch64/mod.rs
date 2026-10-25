@@ -50,6 +50,30 @@ unsafe extern "C" {
     static __kernel_start: u8;
     static __kernel_end: u8;
     static __stack_top: u8;
+    static __stack_bottom: u8;
+}
+
+/// Written at the lowest word of the boot stack. With the MMU off there is no
+/// guard page, so an overflow would run silently into `.bss`; a changed
+/// canary is the only sign of it.
+const STACK_CANARY: u64 = 0x5a0e_a57a_c4ca_2a2e;
+
+fn stack_canary_ptr() -> *mut u64 {
+    core::ptr::addr_of!(__stack_bottom) as *mut u64
+}
+
+/// Writes the stack canary. Call once, early.
+pub fn stack_canary_set() {
+    // SAFETY: __stack_bottom is the 16-byte aligned lowest address of the
+    // boot stack (linker.ld); the stack grows down from __stack_top and
+    // reaches this word only on overflow.
+    unsafe { core::ptr::write_volatile(stack_canary_ptr(), STACK_CANARY) }
+}
+
+/// False if the stack has grown into its lowest word.
+pub fn stack_canary_intact() -> bool {
+    // SAFETY: as in `stack_canary_set`.
+    unsafe { core::ptr::read_volatile(stack_canary_ptr()) == STACK_CANARY }
 }
 
 /// Physical address range `[start, end)` of the loaded image, stack included.

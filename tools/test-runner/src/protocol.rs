@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! ZORAYA-TEST begin <count>
+//! ZORAYA-TEST run <name>          (before each test)
 //! ZORAYA-TEST ok <name>
 //! ZORAYA-TEST fail <name> <message>
 //! ZORAYA-TEST end pass=<n> fail=<m>
@@ -46,6 +47,8 @@ pub struct Checker {
     seen_expect_lines: Vec<bool>,
     begin: Option<usize>,
     names: HashSet<String>,
+    /// The test whose `run` line came last and has no result yet.
+    running: Option<String>,
     ok: Vec<String>,
     failed: Vec<(String, String)>,
     end: Option<(usize, usize)>,
@@ -100,17 +103,25 @@ impl Checker {
                 (Some(_), _) => self.errors.push("second begin line".into()),
                 (_, Err(_)) => self.errors.push(format!("malformed begin line: {line}")),
             },
-            "ok" | "fail" if self.begin.is_none() => {
+            "run" | "ok" | "fail" if self.begin.is_none() => {
                 self.errors
                     .push(format!("result before the begin line: {line}"));
             }
+            "run" => {
+                if let Some(prev) = self.running.replace(args.to_string()) {
+                    self.errors
+                        .push(format!("{args} started before {prev} reported a result"));
+                }
+            }
             "ok" => {
+                self.check_running(args);
                 if self.record_name(args) {
                     self.ok.push(args.to_string());
                 }
             }
             "fail" => {
                 let (name, msg) = args.split_once(' ').unwrap_or((args, ""));
+                self.check_running(name);
                 if self.record_name(name) {
                     self.failed.push((name.to_string(), msg.to_string()));
                 }
@@ -125,6 +136,13 @@ impl Checker {
             _ => self.errors.push(format!("unknown protocol line: {line}")),
         }
         Flow::Continue
+    }
+
+    fn check_running(&mut self, name: &str) {
+        if self.running.take().as_deref() != Some(name) {
+            self.errors
+                .push(format!("result for {name} without a run line for it"));
+        }
     }
 
     fn record_name(&mut self, name: &str) -> bool {
@@ -143,10 +161,10 @@ impl Checker {
         match exit {
             Exit::Timeout => self.errors.push(format!(
                 "timeout after {timeout_secs} s ({})",
-                if self.begin.is_none() {
-                    "no begin line"
-                } else {
-                    "no end line"
+                match (&self.begin, &self.running) {
+                    (None, _) => "no begin line".to_string(),
+                    (_, Some(t)) => format!("test {t} did not finish"),
+                    _ => "no end line".to_string(),
                 }
             )),
             Exit::NoPowerOff => self
@@ -241,11 +259,20 @@ mod tests {
     const GOOD: &[&str] = &[
         "banner line\r",
         "ZORAYA-TEST begin 3",
+        "ZORAYA-TEST run a",
         "ZORAYA-TEST ok a",
+        "ZORAYA-TEST run boom",
         "ZORAYA-TEST fail boom panic at x.rs:1:1: deliberate",
+        "ZORAYA-TEST run c",
         "ZORAYA-TEST ok c",
         "ZORAYA-TEST end pass=2 fail=1\r",
     ];
+
+    // Indices into GOOD.
+    const OK_A: usize = 3;
+    const FAIL_BOOM: usize = 5;
+    const OK_C: usize = 7;
+    const END: usize = 8;
 
     #[test]
     fn clean_run_passes() {
@@ -256,7 +283,7 @@ mod tests {
 
     #[test]
     fn missing_end_line() {
-        let r = run(&GOOD[..5], Exit::Status(Some(0)));
+        let r = run(&GOOD[..END], Exit::Status(Some(0)));
         assert!(!r.passed);
         assert!(r.problems.iter().any(|p| p.contains("without an end line")));
     }
@@ -266,6 +293,15 @@ mod tests {
         let r = run(&GOOD[..3], Exit::Timeout);
         assert!(!r.passed);
         assert!(r.problems.iter().any(|p| p.contains("timeout")));
+        // The hung test is named.
+        let r = run(&GOOD[..5], Exit::Timeout);
+        assert!(
+            r.problems
+                .iter()
+                .any(|p| p.contains("test boom did not finish")),
+            "{:?}",
+            r.problems
+        );
     }
 
     #[test]
@@ -291,8 +327,8 @@ mod tests {
     #[test]
     fn unexpected_failure() {
         let mut lines = GOOD.to_vec();
-        lines[2] = "ZORAYA-TEST fail a assertion failed";
-        lines[5] = "ZORAYA-TEST end pass=1 fail=2";
+        lines[OK_A] = "ZORAYA-TEST fail a assertion failed";
+        lines[END] = "ZORAYA-TEST end pass=1 fail=2";
         let r = run(&lines, Exit::Status(Some(0)));
         assert!(!r.passed);
         assert!(r.problems.iter().any(|p| p.starts_with("a failed")));
@@ -301,8 +337,8 @@ mod tests {
     #[test]
     fn expected_panic_that_passes() {
         let mut lines = GOOD.to_vec();
-        lines[3] = "ZORAYA-TEST ok boom";
-        lines[5] = "ZORAYA-TEST end pass=3 fail=0";
+        lines[FAIL_BOOM] = "ZORAYA-TEST ok boom";
+        lines[END] = "ZORAYA-TEST end pass=3 fail=0";
         let r = run(&lines, Exit::Status(Some(0)));
         assert!(!r.passed);
         assert!(
@@ -315,7 +351,7 @@ mod tests {
     #[test]
     fn expected_failure_without_panic() {
         let mut lines = GOOD.to_vec();
-        lines[3] = "ZORAYA-TEST fail boom something else";
+        lines[FAIL_BOOM] = "ZORAYA-TEST fail boom something else";
         let r = run(&lines, Exit::Status(Some(0)));
         assert!(!r.passed);
     }
@@ -326,17 +362,21 @@ mod tests {
         lines[1] = "ZORAYA-TEST begin 4";
         assert!(!run(&lines, Exit::Status(Some(0))).passed);
         let mut lines = GOOD.to_vec();
-        lines[5] = "ZORAYA-TEST end pass=3 fail=0";
+        lines[END] = "ZORAYA-TEST end pass=3 fail=0";
         assert!(!run(&lines, Exit::Status(Some(0))).passed);
     }
 
     #[test]
     fn duplicates_and_garbage() {
         let mut lines = GOOD.to_vec();
-        lines[4] = "ZORAYA-TEST ok a";
+        lines[OK_C] = "ZORAYA-TEST ok a";
         assert!(!run(&lines, Exit::Status(Some(0))).passed);
         let mut lines = GOOD.to_vec();
         lines.insert(2, "ZORAYA-TEST maybe x");
+        assert!(!run(&lines, Exit::Status(Some(0))).passed);
+        // A result without its run line.
+        let mut lines = GOOD.to_vec();
+        lines.remove(OK_A - 1);
         assert!(!run(&lines, Exit::Status(Some(0))).passed);
         let mut lines = GOOD.to_vec();
         lines.push("ZORAYA-TEST ok late");

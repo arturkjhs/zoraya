@@ -30,7 +30,18 @@
 //! - `VPIDR_EL2`/`VMPIDR_EL2` = `MIDR_EL1`/`MPIDR_EL1`, so EL1 reads its real IDs.
 //! - If the CPU has a GIC system register interface (`ID_AA64PFR0_EL1.GIC`):
 //!   `ICC_SRE_EL2 = SRE | DFB | DIB | Enable`, so EL1 can use it later.
+//! - `SCTLR_EL1` gets its known value before `eret`, so EL1 never runs with
+//!   the reset value.
 //! - `SPSR_EL2 = EL1h` with D, A, I, F masked; `ELR_EL2` = the EL1 path.
+//!
+//! Left at reset: `MDCR_EL2` (debug and PMU traps; stage 0 uses neither, and
+//! stage 1 must set it before using the PMU or debug registers) and, on CPUs
+//! that have them, the fine-grained trap registers (`HFG*_EL2`, `HCRX_EL2`).
+//!
+//! Assumption: `HCR_EL2.E2H` can be 0 (FEAT_E2H0). On a CPU where E2H is
+//! RES1, `CNTHCTL_EL2` and `CPTR_EL2` have the E2H=1 layout and the values
+//! above would trap FP/SIMD to EL2. Checked under QEMU 11.1.2: `HCR_EL2` reads
+//! back as `RW` only, under both TCG (cortex-a72) and HVF (M4).
 
 use core::arch::global_asm;
 
@@ -76,6 +87,9 @@ _start:
     mov     x1, #0xf
     msr     S3_4_C12_C9_5, x1       // ICC_SRE_EL2
 1:
+    mov     x1, #0x0800             // SCTLR_EL1, as at .Lel1
+    movk    x1, #0x30d0, lsl #16
+    msr     sctlr_el1, x1
     mov     x1, #0x3c5              // EL1h, DAIF masked
     msr     spsr_el2, x1
     adr     x1, .Lel1

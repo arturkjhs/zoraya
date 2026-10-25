@@ -66,6 +66,7 @@ RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 test-qemu: $(TEST_KERNEL) $(RUNNER)
 	$(RUN_TEST) --label auto-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
+		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
 		-- $(RUN_QEMU) --test --accel auto $(TEST_KERNEL)
 	$(RUN_TEST) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \

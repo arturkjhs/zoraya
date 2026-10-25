@@ -31,6 +31,7 @@ static PSCI_CONDUIT: AtomicUsize = AtomicUsize::new(0);
 /// entry, at EL1, on the boot stack, with `.bss` cleared.
 #[unsafe(no_mangle)]
 extern "C" fn kernel_main(x0: usize, entry_el: u64) -> ! {
+    arch::stack_canary_set();
     let (fdt, source) = match dtb::locate(x0) {
         Ok(found) => found,
         Err(e) => fatal_before_console(format_args!("{e}")),
@@ -131,7 +132,7 @@ fn print_banner(
         println!(
             "  {:#018x}-{:#018x} {:>6} MiB  RAM",
             r.address,
-            r.address + r.size - 1,
+            r.address.saturating_add(r.size - 1),
             r.size >> 20
         );
     }
@@ -142,7 +143,7 @@ fn print_banner(
         println!(
             "  {:#018x}-{:#018x}  reserved",
             r.address,
-            r.address + r.size.max(1) - 1
+            r.address.saturating_add(r.size.max(1) - 1)
         );
     }
     let (start, end) = arch::kernel_image();
@@ -158,6 +159,9 @@ fn print_banner(
 
 /// Powers off through PSCI `SYSTEM_OFF`; halts if that is unavailable or fails.
 pub fn shutdown() -> ! {
+    if !arch::stack_canary_intact() {
+        println!("warning: boot stack canary overwritten (stack overflow)");
+    }
     let method = match PSCI_CONDUIT.load(Ordering::Relaxed) {
         1 => Some(PsciMethod::Hvc),
         2 => Some(PsciMethod::Smc),

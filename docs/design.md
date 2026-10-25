@@ -91,7 +91,8 @@ How the kernel starts. The code is in `kernel/src/arch/aarch64/boot.rs`, `kernel
   - `tools/run-qemu.sh` passes the kernel ELF with `-kernel`. QEMU treats an ELF as a bare-metal image: it loads the
     segments at their link addresses and starts CPU 0 at the ELF entry.
   - The image is linked at `0x40200000`, which is RAM base plus 2 MiB. QEMU puts the device tree blob at the start
-    of RAM (`0x40000000`; 1 MiB on QEMU 11.1.2) and refuses to load an image that overlaps it.
+    of RAM (`0x40000000`; 1 MiB on QEMU 11.1.2), but only if it fits below the image. Otherwise QEMU silently omits
+    the blob and the kernel can only report its absence through the fallback UART. `linker.ld` asserts the 2 MiB gap.
   - The MMU is off at stage 0, so all addresses are physical.
 - **Device tree address.** The kernel accepts an address in `x0` if it lies in RAM below the image (Linux boot
   protocol style). Otherwise it reads the blob at the start of RAM.
@@ -100,7 +101,9 @@ How the kernel starts. The code is in `kernel/src/arch/aarch64/boot.rs`, `kernel
   - The blob is validated by `zoraya-dtb` before use.
 - **Exception level.** The kernel starts at EL1, or at EL2 with `-machine virt,virtualization=on`, which works under both TCG and, on the M4 with QEMU 11.1.2, HVF. At EL2 it
   writes a minimal configuration and `eret`s to EL1h; the configuration is documented in the header of `boot.rs`:
-  - EL1 is AArch64 with no stage-2 translation or traps;
+  - EL1 is AArch64 with no stage-2 translation, and nothing stage 0 does is trapped. SVE and SME stay trapped, and
+    `MDCR_EL2` (debug and PMU traps) is left at its reset value; stage 1 must set it before using either;
+  - `SCTLR_EL1` is set before the `eret`;
   - EL1 may use the physical timer and counter;
   - FP/SIMD is not trapped;
   - the GIC system-register interface is enabled for EL1 if present.
@@ -139,7 +142,8 @@ How the kernel starts. The code is in `kernel/src/arch/aarch64/boot.rs`, `kernel
 | tcg-smp4-gicv3 | TCG | 4 CPUs, 2 GiB, `gic-version=3` | `cpus: 4`, GICv3 |
 
 How the in-QEMU tests run and report:
-- The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`.
+- The test kernel (feature `qemu-test`) prints the `ZORAYA-TEST` protocol, described in `kernel/src/testing.rs`. A
+  `run <name>` line precedes each test, so a test that hangs is named in the timeout report.
 - A panicking test is reported as that test's failure, and the run continues on a fresh stack.
 - Two harness self-tests fail on purpose: one panic, and one undefined instruction caught by the vectors. The runner
   requires both to be reported as panics.
@@ -158,9 +162,14 @@ deterministic random mutations.
 - **QEMU `virt` assumptions.** The RAM base `0x40000000` (where the device tree and image are found) and the fallback
   UART address are QEMU `virt` facts.
 - **UART set-up.** The PL011 baud rate is not programmed; QEMU ignores it.
+- **No stack guard.** The 64 KiB boot stack sits directly above `.bss`, and with the MMU off there is no guard page.
+  The review measured a high-water mark of about 27 KiB (normal kernel) and 30 KiB (test kernel). A canary at the
+  bottom of the stack is checked at shutdown (warning) and by the last in-QEMU test.
+- **Exception recovery in tests.** A test that fails through the catch-all vector is recovered without `eret`, so the
+  remaining tests run in exception context. That is harmless at stage 0, and must change when the vectors become real.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
-  (`virtualization=on`) works on the M4 with QEMU 11.1.2 and is part of `make test`. It may not work on older Apple
-  chips or macOS versions.
+  (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
+  QEMU 11.1.2 and is part of `make test`, so `make test` as written fails on an M1 or M2 Mac (`auto-el2`).
 - **CI not run.** The CI workflow (`.github/workflows/test.yml`) runs `make test` on Linux with TCG, and has not run
   yet.
 

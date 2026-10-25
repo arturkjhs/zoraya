@@ -8,14 +8,14 @@ Read `docs/design.md` first. It says what exists and where it lives.
   (`docs/adr/index.md`).
 - Any deviation from an accepted ADR, or any new architectural decision, requires a new ADR with status `proposed`,
   written from `docs/adr/0000-template.md` under the rules of ADR-0001. Never change design silently.
-- Never set or change an ADR status, and never edit an ADR's "Architect's decision" section. Only the architect does
-  this. The one exception is transcribing a decision the architect has already recorded elsewhere, when a task tells
-  you to.
+- Never set or change an ADR status, and never edit an ADR's "Architect's decision" section (ADR-0001 rule 2). Only
+  the architect does this. If an architect's task explicitly tells you to transcribe a decision the architect already
+  recorded (as TASK-04 Step 1 did), that is the architect's instruction for that task, not a standing permission.
 - Change an accepted ADR only in the two ways ADR-0001 allows agents: the `### Decision` sub-heading of rule 3, after
   the architect changes a recommendation, and the open-question note of rule 6 below. For anything else, propose a
   superseding ADR.
-- Use the ADR number the task reserves for you. If the task reserves none, use the next free number and say so in
-  your report.
+- Use the ADR number the task reserves for you. If the task reserves none, ask the architect. Number allocation for
+  parallel work is an open question of ADR-0001.
 - Architectural choices are decisions. These include language features or toolchain channel, external dependencies in
   the kernel, memory layout conventions and ABI shapes. Small implementation choices are not decisions. When unsure,
   write a short proposed ADR and continue with the least committing option.

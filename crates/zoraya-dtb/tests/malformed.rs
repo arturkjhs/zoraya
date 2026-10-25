@@ -410,6 +410,34 @@ fn odd_property_values_are_not_errors() {
     assert!(PlatformInfo::from_fdt(&fdt).is_err());
 }
 
+#[test]
+fn wrapping_memory_region_is_dropped() {
+    let mut b = Builder::default();
+    let mut reg = Vec::new();
+    for v in [0xffff_ffff_ffff_f000u64, 0x2000, 0x4000_0000, 0x1000] {
+        reg.extend_from_slice(&v.to_be_bytes());
+    }
+    b.begin("")
+        .prop("#address-cells", &2u32.to_be_bytes())
+        .prop("#size-cells", &2u32.to_be_bytes())
+        .begin("memory")
+        .prop("device_type", b"memory\0")
+        .prop("reg", &reg)
+        .end()
+        .end()
+        .fdt_end();
+    let blob = b.build();
+    let fdt = Fdt::new(&blob).unwrap();
+    let mem = zoraya_dtb::platform::memory_regions(&fdt);
+    assert_eq!(
+        mem.as_slice(),
+        &[zoraya_dtb::Reg {
+            address: 0x4000_0000,
+            size: 0x1000
+        }]
+    );
+}
+
 // --- mutation fuzzing ---------------------------------------------------------
 
 /// xorshift64*: deterministic, no dependencies.

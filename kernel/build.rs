@@ -27,7 +27,15 @@ fn main() {
     };
     println!("cargo:rustc-env=ZORAYA_GIT_COMMIT={commit}");
 
-    // Rebuild when HEAD moves or the index changes.
+    // Rebuild when a source file changes, so the "-dirty" flag follows edits
+    // that are not staged (files elsewhere can still leave it stale), and
+    // when HEAD moves or the index changes.
+    for p in ["src", "../crates", "Cargo.toml"] {
+        println!(
+            "cargo:rerun-if-changed={}",
+            Path::new(&dir).join(p).display()
+        );
+    }
     if let Some(git_dir) = git(&["rev-parse", "--absolute-git-dir"]) {
         let git_dir = Path::new(&git_dir);
         println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
