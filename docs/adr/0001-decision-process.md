@@ -1,6 +1,6 @@
 # ADR-0001: How decisions are made and used
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** none
 - **Evidence:** CP-13, CP-27, X-10, DM-036, DM-055, DM-057, DM-058, DM-084, GR-010, alternatives-postmortem.md#barrelfish, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, alternatives-postmortem.md#keykos--eros--capros-and-coyotos, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#sprite, research-log.md#process, research-log.md#verification-phase-findings
@@ -93,3 +93,4 @@ Rules, kept short:
 
 ## Architect's decision
 
+Accepted as recommended, 2026-10-25. Recorded by an agent from the architect's decision in docs/adr/index.md (commit 8c4ee71).

@@ -1,6 +1,6 @@
 # ADR-0006: Event and readiness mechanism (X-4)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0003, ADR-0004
 - **Evidence:** CP-02, CP-08, CP-09, CP-10, CP-11, CP-14, CP-18, CP-20, X-4, X-5, DM-018, DM-023, DM-024, DM-025, DM-026, DM-027, DM-029, DM-059, DM-130, DM-160, GR-003, GR-009, GR-018, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, task-02/callsite-analysis.md#feature-6-other-task-01-design-mistakes-in-the-data, task-02/conflict-impact.md#x-4-completion-native-async-cp-08-vs-readiness-for-posix, task-02/posix-surface.md#key-observations, task-02b/callsite-analysis.md#1-jobserver-gnu-make, task-02b/callsite-analysis.md#2-readiness-waiting-and-child-reaping, task-02b/conflict-impact.md#x-1-capability-only-access-vs-posix-porting, task-02b/conflict-impact.md#x-4-completion-native-async-cp-08-vs-readiness-for-posix, task-02b/event-timelines.md#state-when-the-interrupt-arrives-both-w9-cases-delay-15-s, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1, task-02b/event-timelines.md#w9b-sigterm-to-the-top-level-make-run-w9-term-d15-r1, task-02b/parallel-surface.md#concurrency-actually-achieved, task-02b/parallel-surface.md#interrupted-system-calls, task-02b/parallel-surface.md#new-libc-functions-interposer-lower-bound, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
@@ -153,3 +153,4 @@ Interrupted-system-call semantics as measured (`task-02b/parallel-surface.md#int
 
 ## Architect's decision
 
+Accepted as recommended, 2026-10-25. Recorded by an agent from the architect's decision in docs/adr/index.md (commit 8c4ee71).

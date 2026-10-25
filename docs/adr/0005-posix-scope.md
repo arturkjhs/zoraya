@@ -1,6 +1,6 @@
 # ADR-0005: Scope of POSIX compatibility
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0003, ADR-0004
 - **Evidence:** CP-03, CP-13, CP-15, CP-16, CP-27, CP-28, X-1, X-2, X-3, X-6, X-10, DM-003, DM-019, DM-036, DM-059, GR-019, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#keykos--eros--capros-and-coyotos, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, alternatives-postmortem.md#sprite, task-02/callsite-analysis.md#feature-2-signals, task-02/callsite-analysis.md#feature-3-global-paths-path-cwd, task-02/callsite-analysis.md#feature-5-identity-and-permissions, task-02/callsite-analysis.md#feature-6-other-task-01-design-mistakes-in-the-data, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02/conflict-impact.md#x-4-completion-native-async-cp-08-vs-readiness-for-posix, task-02/libc-surface.csv, task-02/method.md#known-limits, task-02/method.md#pinned-inputs, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#comparison-programs-lower-bound-same-workload, task-02/posix-surface.md#jumps-between-tiers, task-02/posix-surface.md#key-observations, task-02/posix-surface.md#libc-symbols-per-tier-m1, task-02/posix-surface.md#linux-syscall-surface-m2, task-02/posix-surface.md#tiers-as-measured, task-02/research-log.md#workload-findings-that-are-results-not-failures, task-02/syscall-surface.csv, task-02b/parallel-surface.md#concurrency-actually-achieved, task-02b/parallel-surface.md#interrupted-system-calls, task-02b/parallel-surface.md#new-libc-functions-interposer-lower-bound
@@ -142,3 +142,4 @@ CP-27 says the POSIX layer exists to host a C compiler and its toolchain, that i
 
 ## Architect's decision
 
+Accepted as recommended, 2026-10-25. Recorded by an agent from the architect's decision in docs/adr/index.md (commit 8c4ee71).

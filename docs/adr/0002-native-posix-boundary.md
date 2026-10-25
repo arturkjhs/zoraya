@@ -1,6 +1,6 @@
 # ADR-0002: Boundary between the native ABI and the POSIX personality
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0001
 - **Evidence:** CP-01, CP-02, CP-03, CP-05, CP-06, CP-07, CP-10, CP-13, CP-15, CP-17, CP-21, CP-22, CP-25, CP-27, X-1, X-2, X-3, X-6, X-7, X-8, X-10, X-15, DM-001, DM-002, DM-003, DM-005, DM-006, DM-009, DM-017, DM-018, DM-020, DM-026, DM-039, DM-041, DM-046, DM-070, DM-081, DM-085, GR-001, GR-002, GR-004, GR-005, GR-008, GR-016, GR-018, GR-019, alternatives-postmortem.md#exokernel-mit-aegis--xok, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#keykos--eros--capros-and-coyotos, alternatives-postmortem.md#minix-3, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, alternatives-postmortem.md#summary-across-systems, research-log.md#unresolved-questions, task-02/callsite-analysis.md#feature-3-global-paths-path-cwd, task-02/callsite-analysis.md#feature-5-identity-and-permissions, task-02/callsite-analysis.md#overview, task-02/conflict-impact.md#x-1-capability-only-access-cp-01-cp-02-vs-ease-of-posix-porting-cp-27, task-02/conflict-impact.md#x-15-explicit-configuration-cp-21-vs-ergonomics-and-the-posix-layer, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02/conflict-impact.md#x-6-strict-commit-cp-14-vs-fork-emulation, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#libc-symbols-per-tier-m1, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/conflict-impact.md#open-questions-the-data-frames-but-cannot-answer, task-02b/conflict-impact.md#x-1-capability-only-access-vs-posix-porting, task-02b/conflict-impact.md#x-15-environment-as-configuration, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
@@ -123,3 +123,4 @@ Why D over C: per-call cost on the data path is the documented failure mode of s
 
 ## Architect's decision
 
+Accepted as recommended, 2026-10-25. Recorded by an agent from the architect's decision in docs/adr/index.md (commit 8c4ee71).

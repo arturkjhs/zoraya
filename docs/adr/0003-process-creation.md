@@ -1,6 +1,6 @@
 # ADR-0003: Process creation
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002
 - **Evidence:** CP-01, CP-02, CP-05, CP-06, CP-07, CP-13, CP-14, CP-21, CP-25, X-2, X-6, X-10, X-15, DM-001, DM-002, DM-003, DM-004, DM-005, DM-008, DM-009, DM-022, DM-030, DM-100, GR-003, GR-005, alternatives-postmortem.md#exokernel-mit-aegis--xok, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#keykos--eros--capros-and-coyotos, alternatives-postmortem.md#plan-9--inferno, task-02/callsite-analysis.md#feature-1-process-creation-exec-wait-pipes, task-02/callsite-analysis.md#m4-validation-patches, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02/conflict-impact.md#x-6-strict-commit-cp-14-vs-fork-emulation, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/callsite-analysis.md#3-signal-handlers-and-masks-during-parallel-builds, task-02b/conflict-impact.md#x-2-no-fork, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1
@@ -123,3 +123,4 @@ Why B over C: C's cost is unmeasured and lands on the T2 scope at its most fragi
 
 ## Architect's decision
 
+Accepted as recommended, 2026-10-25. Recorded by an agent from the architect's decision in docs/adr/index.md (commit 8c4ee71).

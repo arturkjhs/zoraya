@@ -1,6 +1,6 @@
 # ADR-0004: Asynchronous notification without Unix signals (native side)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0003
 - **Evidence:** CP-02, CP-06, CP-07, CP-10, CP-12, CP-25, X-3, X-10, X-12, DM-004, DM-005, DM-017, DM-027, DM-059, DM-070, DM-077, DM-100, DM-130, GR-003, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, task-02/callsite-analysis.md#feature-2-signals, task-02/callsite-analysis.md#feature-4-tty-and-job-control, task-02/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02/posix-surface.md#key-observations, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/callsite-analysis.md#3-signal-handlers-and-masks-during-parallel-builds, task-02b/callsite-analysis.md#4-cleanup-on-interruption, task-02b/callsite-analysis.md#what-the-mapping-exercise-shows-estimate, task-02b/conflict-impact.md#cp-25--cp-07-terminal-rights-and-job-containment, task-02b/conflict-impact.md#open-questions-the-data-frames-but-cannot-answer, task-02b/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1, task-02b/event-timelines.md#w9b-sigterm-to-the-top-level-make-run-w9-term-d15-r1, task-02b/parallel-surface.md#interrupted-system-calls, task-02b/parallel-surface.md#interruption-what-happens-to-the-build-w9, task-02b/parallel-surface.md#signals-actually-delivered
@@ -138,3 +138,4 @@ CP-10 says the native ABI delivers events as messages or wait results, never by 
 
 ## Architect's decision
 
+Accepted as recommended, 2026-10-25. Recorded by an agent from the architect's decision in docs/adr/index.md (commit 8c4ee71).
