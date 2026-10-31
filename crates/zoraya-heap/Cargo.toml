@@ -1,0 +1,10 @@
+[package]
+name = "zoraya-heap"
+description = "Kernel heap logic: size classes over a page-span allocator."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

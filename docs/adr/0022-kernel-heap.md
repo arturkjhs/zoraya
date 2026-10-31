@@ -48,9 +48,9 @@
 ## Recommendation
 Recommended: **Option C**, in a `no_std` crate `zoraya-heap`. It is a recommendation, not a decision.
 
-- **Backing.** The crate asks a `Backing` trait for more pages, which must extend the previous range. The kernel implements it by mapping frames at the top of the heap window (ADR-0020). Growth is at least 1 MiB at a time. Stage 1 never shrinks the heap.
+- **Backing.** The crate asks a `Backing` trait for more pages, and coalesces ranges that happen to be adjacent. The kernel implements it by mapping frames at the top of the heap window (ADR-0020). Growth is at least 1 MiB at a time. Stage 1 never shrinks the heap.
 - **Alignment.** Size is rounded up to `max(size, align)`, then to a class, so a block is aligned to its class. Alignment above 4 KiB comes from a span.
-- **Fragmentation.** Each small class holds at most its own peak live size plus one chunk. Span fragmentation is limited by coalescing. A host test states and enforces a workload bound.
+- **Fragmentation.** Each small class holds at most its own peak live size plus one chunk. Span fragmentation is limited by coalescing. A host test enforces a bound on one stated workload: sizes from 16 bytes to 256 KiB, up to 8 MiB live, memory taken from the backing within 3 times the peak of live bytes plus 16 chunks.
 - **Failure policy.** Both kinds of API, with a rule for where each is allowed:
   - `GlobalAlloc` returns null when the backing is exhausted. An infallible `Box::new` or `Vec::push` then panics through Rust's allocation error path. This is allowed only in boot code and at fixed, bounded call sites whose size no user action can influence.
   - Everything reachable from a system call, from stage 2 on, uses fallible paths (`Vec::try_reserve` and `memory::try_box`) and returns the failure to the caller, as CP-14 expects.

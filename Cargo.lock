@@ -11,6 +11,10 @@ name = "zoraya-dtb"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-heap"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-kernel"
 version = "0.1.0"
 dependencies = [

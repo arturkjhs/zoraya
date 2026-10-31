@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "kernel",
     "crates/zoraya-dtb",
+    "crates/zoraya-heap",
     "crates/zoraya-pmm",
     "tools/test-runner",
     "tools/adr-check",
@@ -11,6 +12,7 @@ members = [
 # `cargo build` act on the host-side members. The Makefile builds the kernel.
 default-members = [
     "crates/zoraya-dtb",
+    "crates/zoraya-heap",
     "crates/zoraya-pmm",
     "tools/test-runner",
     "tools/adr-check",
