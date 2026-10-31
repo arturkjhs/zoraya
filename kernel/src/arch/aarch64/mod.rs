@@ -3,6 +3,7 @@
 mod boot;
 mod exception;
 pub mod mmu;
+pub mod timer;
 
 pub use exception::init as exception_init;
 #[cfg(feature = "qemu-test")]
@@ -82,6 +83,77 @@ pub fn stack_canary_intact() -> bool {
 pub fn mask_interrupts() {
     // SAFETY: setting mask bits has no effect on memory or on Rust's state.
     unsafe { asm!("msr daifset, #3", options(nomem, nostack, preserves_flags)) };
+}
+
+/// Allows IRQ and FIQ.
+pub fn unmask_interrupts() {
+    // SAFETY: clearing mask bits changes no memory; the vectors are installed
+    // and the interrupt controller is set up.
+    unsafe { asm!("msr daifclr, #3", options(nomem, nostack, preserves_flags)) };
+}
+
+/// Waits for an interrupt, which must be unmasked to wake the CPU and run.
+#[cfg(feature = "qemu-test")]
+pub fn wait_for_interrupt() {
+    // SAFETY: `wfi` only waits, and any interrupt ends it.
+    unsafe { asm!("wfi", options(nomem, nostack, preserves_flags)) };
+}
+
+/// Turns on this CPU's GICv3 system register interface: `SRE`, then the
+/// priority mask, binary point 0, `EOImode = 0` and group 1 enabled. System
+/// register names are spelled out, since assemblers need `+gic` otherwise.
+pub fn gic_v3_cpu_interface_on(priority_mask: u64) {
+    let sre: u64;
+    // SAFETY: ICC_SRE_EL1 only selects how this CPU reaches its GIC interface;
+    // the kernel uses the system registers and never the memory-mapped one.
+    unsafe {
+        asm!(
+            "mrs {t}, S3_0_C12_C12_5",
+            "orr {t}, {t}, #1",
+            "msr S3_0_C12_C12_5, {t}",
+            "isb",
+            "mrs {t}, S3_0_C12_C12_5",
+            t = out(reg) sre,
+            options(nomem, nostack, preserves_flags),
+        )
+    };
+    assert!(sre & 1 != 0, "ICC_SRE_EL1.SRE did not stick");
+    // SAFETY: the interface is in system register mode; these registers
+    // affect only how this CPU takes interrupts, and IRQ is still masked.
+    unsafe {
+        asm!(
+            "msr S3_0_C4_C6_0, {pmr}",      // ICC_PMR_EL1
+            "msr S3_0_C12_C12_3, xzr",      // ICC_BPR1_EL1
+            "msr S3_0_C12_C12_4, xzr",      // ICC_CTLR_EL1
+            "mov {t}, #1",
+            "msr S3_0_C12_C12_7, {t}",      // ICC_IGRPEN1_EL1
+            "isb",
+            pmr = in(reg) priority_mask,
+            t = out(reg) _,
+            options(nomem, nostack, preserves_flags),
+        )
+    };
+}
+
+/// `ICC_IAR1_EL1`.
+pub fn gic_v3_acknowledge() -> u32 {
+    let v: u64;
+    // SAFETY: only reached with the interface on; the read acknowledges the
+    // interrupt, which is what the caller asks for.
+    unsafe {
+        asm!("mrs {}, S3_0_C12_C12_0", "dsb sy", out(reg) v, options(nostack, preserves_flags))
+    };
+    v as u32
+}
+
+/// `ICC_EOIR1_EL1`.
+pub fn gic_v3_end_of_interrupt(intid: u32) {
+    // SAFETY: only reached with the interface on, for an interrupt taken from
+    // `gic_v3_acknowledge`.
+    unsafe {
+        asm!("msr S3_0_C12_C12_1, {}", "isb", in(reg) u64::from(intid),
+             options(nostack, preserves_flags))
+    };
 }
 
 /// Masks every exception source, returning the previous mask for

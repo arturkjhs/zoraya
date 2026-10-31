@@ -22,6 +22,7 @@ dependencies = [
  "zoraya-heap",
  "zoraya-pagetable",
  "zoraya-pmm",
+ "zoraya-time",
 ]
 
 [[package]]

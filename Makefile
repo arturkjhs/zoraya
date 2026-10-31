@@ -4,6 +4,7 @@
 #   make run        boot it interactively (Ctrl-A X quits QEMU)
 #   make test-unit  host tests (cargo test) for crates/ and tools/
 #   make test-qemu  in-QEMU tests under several machine configurations
+#   make test-boot  boot the normal kernel under each accelerator
 #   make test       all of the above plus fmt, clippy and the ADR checks
 #   make debug      boot under TCG and wait for a debugger on :1234
 #
@@ -21,7 +22,7 @@ QEMU_TIMEOUT ?= 60
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu fmt-check clippy adr-check clean \
+.PHONY: all build run debug test test-unit test-qemu test-boot fmt-check clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER)
 
 all: build
@@ -64,12 +65,16 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic fault_report_for_brk \
 	--expect-panic fault_report_for_unmapped_access \
 	--expect-panic fault_report_for_stack_overflow \
+	--expect-panic fault_report_for_unexpected_interrupt \
 	--expect-line "ZORAYA-FAULT synchronous from EL1" \
 	--expect-line "EC 0x3c: BRK instruction" \
 	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321" \
 	--expect-line "EC 0x25: data abort, same EL" \
 	--expect-line "FAR_EL1 0xffff820000002000" \
-	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1"
+	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1" \
+	--expect-line "ZORAYA-FAULT interrupt 40 has no handler" \
+	--expect-line "timer: virtual" --expect-line ", interrupt 27" \
+	--expect-line "uart interrupt 33"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
 test-qemu: $(TEST_KERNEL) $(RUNNER)
@@ -86,13 +91,28 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 		-- $(RUN_QEMU) --test --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
+		--expect-line "gic: version 2" \
 		-- $(RUN_QEMU) --test --accel tcg $(TEST_KERNEL)
+	$(RUN_TEST) --label tcg-smp4-gicv2 \
+		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
+		-- $(RUN_QEMU) --test --accel tcg --smp 4 $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" --expect-line "psci: arm,psci-1.0 via smc" \
 		-- $(RUN_QEMU) --test --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-smp4-gicv3 \
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
+		--expect-line "gic: version 3" \
 		-- $(RUN_QEMU) --test --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
+
+# The normal kernel, which the test kernel does not exercise: its own path
+# through boot, its heap and timer checks, and that it stops on its own.
+BOOT_LINES := --expect-line "heap check: Box and Vec work" \
+	--expect-line "timer check: 10 interrupts in" --expect-line "stage 1 complete"
+RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --plain $(BOOT_LINES)
+
+test-boot: $(KERNEL) $(RUNNER)
+	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --accel auto $(KERNEL)
+	$(RUN_BOOT) --label boot-tcg -- $(RUN_QEMU) --test --accel tcg $(KERNEL)
 
 fmt-check:
 	$(CARGO) fmt --all --check
@@ -106,7 +126,7 @@ clippy:
 adr-check:
 	$(CARGO) run -q -p zoraya-adr-check -- docs
 
-test: fmt-check clippy test-unit adr-check test-qemu
+test: fmt-check clippy test-unit adr-check test-qemu test-boot
 	@echo "make test: all checks passed"
 
 clean:

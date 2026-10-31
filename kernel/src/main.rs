@@ -11,6 +11,8 @@ extern crate alloc;
 mod arch;
 mod console;
 mod dtb;
+mod gic;
+mod irq;
 mod memory;
 mod panic;
 mod pl011;
@@ -18,6 +20,7 @@ mod psci;
 mod sync;
 #[cfg(feature = "qemu-test")]
 mod testing;
+mod timer;
 
 #[cfg(not(feature = "qemu-test"))]
 use alloc::vec::Vec;
@@ -77,6 +80,15 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
 
     memory::frames::init(&info);
 
+    let controller = info
+        .interrupt_controller
+        .as_ref()
+        .expect("no interrupt controller in the device tree");
+    gic::init(controller);
+    let timer_irqs = info.timer.as_ref().expect("no timer in the device tree");
+    timer::init(timer_irqs);
+    arch::unmask_interrupts();
+
     print_banner(&info, x0, source, entry_el, fdt.total_size());
 
     #[cfg(feature = "qemu-test")]
@@ -88,9 +100,36 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
         let sum = memory::heap::try_box(numbers.iter().sum::<u64>()).expect("heap check");
         let backing = memory::heap::stats().backing >> 10;
         println!("heap check: Box and Vec work, sum {sum}, {backing} KiB of heap");
+        tick_check();
         println!("stage 1 complete; powering off");
         shutdown()
     }
+}
+
+/// The roadmap's "timer ticks": ten deadlines 10 ms apart, each armed by the
+/// one before.
+#[cfg(not(feature = "qemu-test"))]
+fn tick_check() {
+    use core::sync::atomic::AtomicU32;
+
+    const TICKS: u32 = 10;
+    const PERIOD_NS: u64 = 10_000_000;
+    static COUNT: AtomicU32 = AtomicU32::new(0);
+
+    fn tick(_: usize) {
+        if COUNT.fetch_add(1, Ordering::Relaxed) + 1 < TICKS {
+            let next = timer::now().plus_nanos(PERIOD_NS);
+            timer::arm(next, tick, 0).expect("deadline queue has room");
+        }
+    }
+
+    let start = timer::now();
+    timer::arm(start.plus_nanos(PERIOD_NS), tick, 0).expect("deadline queue has room");
+    while COUNT.load(Ordering::Relaxed) < TICKS {
+        core::hint::spin_loop();
+    }
+    let ms = timer::now().nanos_since(start) / 1_000_000;
+    println!("timer check: {TICKS} interrupts in {ms} ms");
 }
 
 /// Reports an error found before the console exists, through the one
@@ -144,6 +183,16 @@ fn print_banner(
         }
         None => println!("interrupt controller: none found"),
     }
+    println!(
+        "gic: version {}; uart interrupt {}",
+        gic::version(),
+        info.uart.interrupt.map_or(0, |i| i.intid)
+    );
+    println!(
+        "timer: virtual, {} Hz, interrupt {}",
+        timer::frequency(),
+        info.timer.map_or(0, |t| t.virtual_timer.intid)
+    );
     match &info.psci {
         Some(Psci {
             method, compatible, ..

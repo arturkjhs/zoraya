@@ -3,7 +3,7 @@
 //! Usage:
 //!
 //! ```text
-//! zoraya-test-runner [--label L] [--timeout SECS] [--expect-panic NAME]...
+//! zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]...
 //!                    [--expect-line TEXT]... -- tools/run-qemu.sh --test ... KERNEL
 //! ```
 //!
@@ -12,7 +12,8 @@
 //! was complete and consistent, every failure was an expected panic, the
 //! kernel powered off after its end line, and QEMU exited with status 0.
 //! The guest's exit status is never the only signal: the verdict comes from
-//! the output lines.
+//! the output lines. With `--plain` the kernel is not expected to speak the
+//! protocol: it must print the expected lines, not panic, and power off.
 
 mod protocol;
 
@@ -31,13 +32,14 @@ struct Args {
     timeout: u64,
     expect_panic: Vec<String>,
     expect_line: Vec<String>,
+    plain: bool,
     command: Vec<String>,
 }
 
 fn usage(msg: &str) -> ExitCode {
     eprintln!("zoraya-test-runner: {msg}");
     eprintln!(
-        "usage: zoraya-test-runner [--label L] [--timeout SECS] [--expect-panic NAME]... \
+        "usage: zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]... \
          [--expect-line TEXT]... -- COMMAND..."
     );
     ExitCode::from(2)
@@ -49,6 +51,7 @@ fn parse_args() -> Result<Args, String> {
         timeout: 60,
         expect_panic: Vec::new(),
         expect_line: Vec::new(),
+        plain: false,
         command: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -63,6 +66,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--expect-panic" => a.expect_panic.push(value()?),
             "--expect-line" => a.expect_line.push(value()?),
+            "--plain" => a.plain = true,
             "--" => {
                 a.command = it.collect();
                 break;
@@ -121,7 +125,11 @@ fn main() -> ExitCode {
         }
     });
 
-    let mut checker = Checker::new(args.expect_panic.clone(), args.expect_line.clone());
+    let mut checker = if args.plain {
+        Checker::plain(args.expect_line.clone())
+    } else {
+        Checker::new(args.expect_panic.clone(), args.expect_line.clone())
+    };
     let deadline = Instant::now() + Duration::from_secs(args.timeout);
     let mut ended_at: Option<Instant> = None;
     let exit = loop {

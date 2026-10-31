@@ -80,6 +80,15 @@ static KERNEL: SpinLock<Option<Kernel>> = SpinLock::new(None);
 /// Next free address in the device window.
 static NEXT_DEVICE: AtomicU64 = AtomicU64::new(DEVICE_WINDOW);
 
+/// Maps a device's registers and returns the virtual address of `pa`. A
+/// device is never unmapped. Panics if the window or the tables run out,
+/// since only boot code maps devices.
+pub fn map_device(pa: u64, size: u64) -> u64 {
+    let mut kernel = KERNEL.lock();
+    let kernel = kernel.as_mut().expect("paging is up");
+    map_device_in(kernel, pa, size)
+}
+
 fn map_device_in(kernel: &mut Kernel, pa: u64, size: u64) -> u64 {
     let range = Range::at(pa, size).frames_around();
     let va = NEXT_DEVICE.load(Ordering::Relaxed);

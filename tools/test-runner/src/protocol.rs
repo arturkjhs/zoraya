@@ -53,6 +53,8 @@ pub struct Checker {
     failed: Vec<(String, String)>,
     end: Option<(usize, usize)>,
     errors: Vec<String>,
+    /// See [`Checker::plain`].
+    plain: bool,
 }
 
 /// The verdict for one QEMU run.
@@ -76,6 +78,15 @@ impl Checker {
         }
     }
 
+    /// For a kernel that speaks no protocol, such as the normal kernel: only
+    /// the expected lines, the absence of panics and a clean power-off count.
+    pub fn plain(expect_lines: Vec<String>) -> Checker {
+        Checker {
+            plain: true,
+            ..Checker::new(Vec::new(), expect_lines)
+        }
+    }
+
     pub fn feed(&mut self, line: &str) -> Flow {
         let line = line.trim_end_matches(['\r', '\n']);
         for (i, e) in self.expect_lines.iter().enumerate() {
@@ -87,6 +98,9 @@ impl Checker {
             self.errors
                 .push(format!("kernel panic outside a test: {line}"));
             return Flow::Abort;
+        }
+        if self.plain {
+            return Flow::Continue;
         }
         let Some(rest) = line.strip_prefix(TEST) else {
             return Flow::Continue;
@@ -176,6 +190,7 @@ impl Checker {
         }
         let ran = self.ok.len() + self.failed.len();
         match self.begin {
+            None if self.plain => {}
             None => self.errors.push("no begin line".into()),
             Some(n) if self.end.is_some() && n != ran => {
                 self.errors
@@ -184,7 +199,7 @@ impl Checker {
             _ => {}
         }
         match self.end {
-            None if matches!(exit, Exit::Status(_)) => {
+            None if matches!(exit, Exit::Status(_)) && !self.plain => {
                 self.errors.push("QEMU exited without an end line".into());
             }
             Some((p, f)) if (p, f) != (self.ok.len(), self.failed.len()) => {
@@ -273,6 +288,25 @@ mod tests {
     const FAIL_BOOM: usize = 5;
     const OK_C: usize = 7;
     const END: usize = 8;
+
+    #[test]
+    fn plain_mode_needs_lines_and_a_clean_exit_only() {
+        let mut c = Checker::plain(vec!["done".into()]);
+        assert_eq!(c.feed("booting"), Flow::Continue);
+        assert_eq!(c.feed("done"), Flow::Continue);
+        assert!(c.finish(Exit::Status(Some(0)), 60).passed);
+
+        let c = Checker::plain(vec!["done".into()]);
+        assert!(!c.finish(Exit::Status(Some(0)), 60).passed, "line missing");
+
+        let mut c = Checker::plain(vec!["done".into()]);
+        assert_eq!(c.feed("ZORAYA-PANIC at x"), Flow::Abort);
+        assert!(!c.finish(Exit::Aborted, 60).passed);
+
+        let mut c = Checker::plain(vec![]);
+        c.feed("done");
+        assert!(!c.finish(Exit::Timeout, 60).passed, "never powered off");
+    }
 
     #[test]
     fn clean_run_passes() {

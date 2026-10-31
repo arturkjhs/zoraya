@@ -37,6 +37,9 @@ const _: () = assert!(offset_of!(Frame, sp) == 248 && offset_of!(Frame, elr) == 
 const _: () = assert!(offset_of!(Frame, esr) == 272 && offset_of!(Frame, fpcr) == 288);
 const _: () = assert!(offset_of!(Frame, q) == 304);
 
+#[cfg(feature = "qemu-test")]
+const KIND_SYNC: u64 = 4;
+const KIND_IRQ: u64 = 5;
 const KIND_OVERFLOW: u64 = 16;
 
 global_asm!(
@@ -329,9 +332,17 @@ fn fatal(frame: &Frame, kind: u64) -> ! {
 /// [`KIND_OVERFLOW`]. Returning resumes the context in `frame`.
 #[unsafe(no_mangle)]
 extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
-    #[cfg(feature = "qemu-test")]
-    if kind == 4 && catching::intercept(frame) {
-        return;
+    match kind {
+        KIND_IRQ => match crate::irq::dispatch() {
+            Ok(()) => return,
+            Err(crate::irq::Unexpected(intid)) => {
+                println!();
+                println!("ZORAYA-FAULT interrupt {intid} has no handler");
+            }
+        },
+        #[cfg(feature = "qemu-test")]
+        KIND_SYNC if catching::intercept(frame) => return,
+        _ => {}
     }
     fatal(frame, kind)
 }
@@ -467,8 +478,8 @@ __catch_landing:
     }
 
     /// Leaves whatever context the CPU is in through `eret`, and calls
-    /// `f(arg)` on an empty boot stack with no exception in progress. IRQ,
-    /// FIQ and SError are as `SPSR` below says; debug stays masked.
+    /// `f(arg)` on an empty boot stack with no exception in progress, IRQ,
+    /// FIQ and SError allowed.
     ///
     /// # Safety
     ///
@@ -476,8 +487,8 @@ __catch_landing:
     /// in it, so nothing may still reference data on the stack, and no other
     /// code may be running on it.
     pub unsafe fn recover_to(f: extern "C" fn(usize) -> !, arg: usize) -> ! {
-        /// EL1h with D, I and F masked, as stage 1 boot runs before the GIC.
-        const SPSR: u64 = 0x5 | (1 << 9) | (1 << 7) | (1 << 6);
+        /// EL1h with D masked; tests run with interrupts on.
+        const SPSR: u64 = 0x5 | (1 << 9);
         let limit = &raw const __stack_bottom as u64 + super::FRAME_SIZE as u64;
         // SAFETY: the caller guarantees the old frames are dead. __stack_top
         // is the 16-byte aligned top of the boot stack from linker.ld, the

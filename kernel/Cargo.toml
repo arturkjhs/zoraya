@@ -20,6 +20,7 @@ zoraya-dtb = { path = "../crates/zoraya-dtb" }
 zoraya-heap = { path = "../crates/zoraya-heap" }
 zoraya-pagetable = { path = "../crates/zoraya-pagetable" }
 zoraya-pmm = { path = "../crates/zoraya-pmm" }
+zoraya-time = { path = "../crates/zoraya-time" }
 
 [lints]
 workspace = true

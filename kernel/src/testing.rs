@@ -22,18 +22,19 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::hint::black_box;
 use core::ptr::{addr_of, read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
 use zoraya_pagetable::{MemoryType, PAGE_SIZE};
 use zoraya_pmm::{Frame, Range};
+use zoraya_time::Instant;
 
 use crate::arch::mmu;
 use crate::memory::layout::{DEVICE_WINDOW, DEVICE_WINDOW_SIZE, STACK_WINDOW};
 use crate::memory::{frames, heap, paging};
 use crate::sync::SpinLock;
-use crate::{arch, console, dtb, memory, println};
+use crate::{arch, console, dtb, gic, irq, memory, println, timer};
 
 struct Test {
     name: &'static str,
@@ -43,7 +44,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 5;
+const EXPECTED_FAILURES: usize = 6;
 
 static TESTS: &[Test] = &[
     Test {
@@ -183,6 +184,38 @@ static TESTS: &[Test] = &[
         run: frames_avoid_every_reserved_region,
     },
     Test {
+        name: "timer_interrupts_agree_with_the_clock",
+        run: timer_interrupts_agree_with_the_clock,
+    },
+    Test {
+        name: "clock_never_decreases_across_interrupts",
+        run: clock_never_decreases_across_interrupts,
+    },
+    Test {
+        name: "one_shot_deadline_is_not_early",
+        run: one_shot_deadline_is_not_early,
+    },
+    Test {
+        name: "deadline_wakes_a_waiting_cpu",
+        run: deadline_wakes_a_waiting_cpu,
+    },
+    Test {
+        name: "deadlines_fire_in_order_and_cancel",
+        run: deadlines_fire_in_order_and_cancel,
+    },
+    Test {
+        name: "timer_is_off_with_no_deadlines",
+        run: timer_is_off_with_no_deadlines,
+    },
+    Test {
+        name: "shared_interrupt_is_delivered",
+        run: shared_interrupt_is_delivered,
+    },
+    Test {
+        name: "interrupt_preserves_fp_registers",
+        run: interrupt_preserves_fp_registers,
+    },
+    Test {
         name: "harness_reports_panic_as_failure",
         run: harness_reports_panic_as_failure,
     },
@@ -197,6 +230,14 @@ static TESTS: &[Test] = &[
     Test {
         name: "fault_report_for_unmapped_access",
         run: fault_report_for_unmapped_access,
+    },
+    Test {
+        name: "fault_report_for_unexpected_interrupt",
+        run: fault_report_for_unexpected_interrupt,
+    },
+    Test {
+        name: "interrupts_still_arrive_after_a_fault",
+        run: interrupts_still_arrive_after_a_fault,
     },
     Test {
         name: "fault_report_for_stack_overflow",
@@ -547,6 +588,234 @@ fn frames_avoid_every_reserved_region() {
         head = next;
     }
     assert_eq!(frames::stats(), before);
+}
+
+/// How long to wait for an interrupt before failing, in nanoseconds. Far
+/// longer than any lateness expected: this is a hang guard, not a limit.
+const PATIENCE_NS: u64 = 10_000_000_000;
+
+/// Spins until `done`, failing rather than hanging.
+fn wait_until(done: impl Fn() -> bool) {
+    let start = timer::now();
+    while !done() {
+        assert!(
+            timer::now().nanos_since(start) < PATIENCE_NS,
+            "no interrupt in time"
+        );
+        core::hint::spin_loop();
+    }
+}
+
+const TICK_PERIOD_NS: u64 = 5_000_000;
+const TICK_TARGET: usize = 40;
+/// Largest shortfall of ticks at the end of the interval: 20 % of the count.
+/// A tick is never early, and each is armed from the last tick's deadline, so
+/// none is lost; but when the host deschedules the HVF vCPU or a TCG thread,
+/// ticks arrive late and catch up after. 20 % allows a pause of 40 ms at the
+/// worst moment of the 200 ms interval. Too many ticks is always a failure.
+const TICK_SLACK: u64 = TICK_TARGET as u64 / 5;
+
+static TICKS: AtomicUsize = AtomicUsize::new(0);
+static TICK_ORIGIN: AtomicU64 = AtomicU64::new(0);
+
+fn on_tick(_: usize) {
+    let n = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    if n < TICK_TARGET * 2 {
+        let origin = Instant::from_nanos(TICK_ORIGIN.load(Ordering::Relaxed));
+        let next = origin.plus_nanos((n as u64 + 1) * TICK_PERIOD_NS);
+        timer::arm(next, on_tick, 0).expect("deadline queue has room");
+    }
+}
+
+fn timer_interrupts_agree_with_the_clock() {
+    let start_ticks = arch::timer::counter();
+    let start = timer::now();
+    TICK_ORIGIN.store(start.as_nanos(), Ordering::Relaxed);
+    TICKS.store(0, Ordering::Relaxed);
+    timer::arm(start.plus_nanos(TICK_PERIOD_NS), on_tick, 0).expect("queue");
+
+    let interval = TICK_TARGET as u64 * TICK_PERIOD_NS;
+    wait_until(|| timer::now().nanos_since(start) >= interval);
+    let count = TICKS.load(Ordering::Relaxed) as u64;
+    let elapsed = timer::now().nanos_since(start);
+    let end_ticks = arch::timer::counter();
+
+    // The clock agrees with the raw counter and its frequency, to within what
+    // two reads apart can differ by: the interval between them is bounded by
+    // the same 40 ms allowance.
+    let raw_ns =
+        u128::from(end_ticks - start_ticks) * 1_000_000_000 / u128::from(arch::timer::frequency());
+    let diff = (raw_ns as u64).abs_diff(elapsed);
+    assert!(
+        diff < TICK_SLACK * TICK_PERIOD_NS,
+        "clock {elapsed}, raw {raw_ns}"
+    );
+
+    let expected = elapsed / TICK_PERIOD_NS;
+    assert!(count <= expected, "{count} ticks in {elapsed} ns: too many");
+    assert!(
+        count + TICK_SLACK >= expected,
+        "{count} ticks in {elapsed} ns: too few"
+    );
+    println!(
+        "timer: {count} ticks in {} us at {} Hz",
+        elapsed / 1000,
+        timer::frequency()
+    );
+    wait_until(|| TICKS.load(Ordering::Relaxed) == TICK_TARGET * 2);
+}
+
+fn clock_never_decreases_across_interrupts() {
+    static FIRED: AtomicBool = AtomicBool::new(false);
+    fn fired(_: usize) {
+        FIRED.store(true, Ordering::Relaxed);
+    }
+    let mut last = timer::now();
+    for _ in 0..5 {
+        FIRED.store(false, Ordering::Relaxed);
+        timer::arm(last.plus_nanos(1_000_000), fired, 0).expect("queue");
+        while !FIRED.load(Ordering::Relaxed) {
+            let now = timer::now();
+            assert!(now >= last, "{now:?} after {last:?}");
+            last = now;
+        }
+    }
+}
+
+fn one_shot_deadline_is_not_early() {
+    static FIRED_AT: AtomicU64 = AtomicU64::new(0);
+    fn fired(_: usize) {
+        FIRED_AT.store(timer::now().as_nanos(), Ordering::Relaxed);
+    }
+    for delay in [1, 1_000, 1_000_000, 10_000_000] {
+        FIRED_AT.store(0, Ordering::Relaxed);
+        let deadline = timer::now().plus_nanos(delay);
+        timer::arm(deadline, fired, 0).expect("queue");
+        wait_until(|| FIRED_AT.load(Ordering::Relaxed) != 0);
+        let at = FIRED_AT.load(Ordering::Relaxed);
+        assert!(
+            at >= deadline.as_nanos(),
+            "fired {at}, deadline {deadline:?}"
+        );
+    }
+}
+
+fn deadline_wakes_a_waiting_cpu() {
+    static FIRED: AtomicBool = AtomicBool::new(false);
+    fn fired(_: usize) {
+        FIRED.store(true, Ordering::Relaxed);
+    }
+    timer::arm(timer::now().plus_nanos(1_000_000), fired, 0).expect("queue");
+    // The runner's timeout is the guard: a CPU that never wakes hangs here.
+    while !FIRED.load(Ordering::Relaxed) {
+        arch::wait_for_interrupt();
+    }
+}
+
+fn deadlines_fire_in_order_and_cancel() {
+    static ORDER: AtomicU64 = AtomicU64::new(0);
+    fn fired(digit: usize) {
+        let so_far = ORDER.load(Ordering::Relaxed);
+        ORDER.store(so_far * 10 + digit as u64, Ordering::Relaxed);
+    }
+    ORDER.store(0, Ordering::Relaxed);
+    let now = timer::now();
+    timer::arm(now.plus_nanos(30_000_000), fired, 3).expect("queue");
+    timer::arm(now.plus_nanos(10_000_000), fired, 1).expect("queue");
+    let gone = timer::arm(now.plus_nanos(20_000_000), fired, 9).expect("queue");
+    timer::arm(now.plus_nanos(20_000_000), fired, 2).expect("queue");
+    assert!(timer::cancel(gone));
+    assert!(!timer::cancel(gone), "cancelled once");
+    wait_until(|| ORDER.load(Ordering::Relaxed) >= 100);
+    assert_eq!(ORDER.load(Ordering::Relaxed), 123);
+}
+
+fn timer_is_off_with_no_deadlines() {
+    assert!(!arch::timer::is_enabled(), "no deadline is queued");
+    let id = timer::arm(timer::now().plus_nanos(1 << 40), |_| {}, 0).expect("queue");
+    assert!(arch::timer::is_enabled());
+    assert!(timer::cancel(id));
+    assert!(!arch::timer::is_enabled());
+}
+
+fn shared_interrupt_is_delivered() {
+    static TAKEN: AtomicUsize = AtomicUsize::new(0);
+    fn handler() {
+        TAKEN.fetch_add(1, Ordering::Relaxed);
+    }
+    let (_, info) = platform();
+    let uart = info
+        .uart
+        .interrupt
+        .expect("UART interrupt in the device tree");
+    let spurious = irq::spurious_count();
+    irq::register(uart.intid, uart.edge, handler);
+    for n in 1..=3 {
+        gic::trigger(uart.intid);
+        wait_until(|| TAKEN.load(Ordering::Relaxed) == n);
+    }
+    irq::unregister(uart.intid);
+    assert_eq!(irq::spurious_count(), spurious);
+}
+
+fn interrupt_preserves_fp_registers() {
+    static FIRED: AtomicBool = AtomicBool::new(false);
+    fn clobber(_: usize) {
+        // SAFETY: only caller-saved vector registers, declared as clobbered;
+        // the vectors restore them for the interrupted code.
+        unsafe {
+            core::arch::asm!(
+                "movi v0.16b, #0x11",
+                "movi v15.16b, #0x22",
+                "movi v31.16b, #0x33",
+                out("v0") _, out("v15") _, out("v31") _,
+                options(nomem, nostack, preserves_flags),
+            )
+        };
+        FIRED.store(true, Ordering::Relaxed);
+    }
+    FIRED.store(false, Ordering::Relaxed);
+    timer::arm(timer::now().plus_nanos(1_000_000), clobber, 0).expect("queue");
+    let same: u64;
+    // SAFETY: only the named registers are used; the loop ends when the
+    // interrupt sets FIRED, which the deadline above guarantees.
+    unsafe {
+        core::arch::asm!(
+            "movi v0.16b, #0xa5",
+            "movi v15.16b, #0x5a",
+            "movi v31.16b, #0xc3",
+            "2:",
+            "ldrb {t:w}, [{fired}]",
+            "cbz {t:w}, 2b",
+            "umov {a}, v0.d[1]",
+            "umov {b}, v15.d[1]",
+            "eor {a}, {a}, {b}",
+            "umov {b}, v31.d[0]",
+            "eor {a}, {a}, {b}",
+            t = out(reg) _,
+            a = out(reg) same,
+            b = out(reg) _,
+            fired = in(reg) (&raw const FIRED),
+            out("v0") _, out("v15") _, out("v31") _,
+            options(nostack),
+        )
+    };
+    let expected = 0xa5a5_a5a5_a5a5_a5a5u64 ^ 0x5a5a_5a5a_5a5a_5a5a ^ 0xc3c3_c3c3_c3c3_c3c3;
+    assert_eq!(same, expected);
+}
+
+/// Next free SPI ID in QEMU virt's distributor that no device uses in the
+/// tests. Its only use is to be raised by hand.
+const UNUSED_SPI: u32 = 40;
+
+fn fault_report_for_unexpected_interrupt() {
+    gic::enable(UNUSED_SPI, false);
+    gic::trigger(UNUSED_SPI);
+    wait_until(|| false);
+}
+
+fn interrupts_still_arrive_after_a_fault() {
+    one_shot_deadline_is_not_early();
 }
 
 const EC_INSTRUCTION_ABORT: u64 = 0x21;
