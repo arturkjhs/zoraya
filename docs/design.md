@@ -15,7 +15,8 @@ TODO(architect): what is new in Zoraya, in the architect's words.
   TCG elsewhere it is `cortex-a72`. Real hardware is out of scope.
 - **Language:** Rust, `no_std`, target `aarch64-unknown-none`. Stable toolchain 1.99.1, pinned in
   `rust-toolchain.toml`. No nightly features are used.
-- **External crates:** none ([`dependencies.md`](dependencies.md)). The kernel uses `core` and `alloc`.
+- **External crates:** none in the workspace ([`dependencies.md`](dependencies.md)). The kernel uses `core` and
+  `alloc`. The separate `fuzz/` project (nightly, not built by `make test`) uses `libfuzzer-sys`.
 - **Native interfaces are Zoraya's own design.** POSIX exists only as a compatibility personality on top of them
   (ADR-0002).
 
@@ -84,8 +85,10 @@ set or is explicitly not waitable.
 `pselect` with SIGCHLD and both jobserver styles are mapped onto this mechanism for every measured scenario.
 
 **Filesystem** ([ADR-0010](adr/0010-filesystem-client-guarantees.md) to
-[ADR-0015](adr/0015-block-device-contract.md)). Accepted, not yet built; the reasons are in
-[`adr/filesystem-batch-selection.md`](adr/filesystem-batch-selection.md).
+[ADR-0015](adr/0015-block-device-contract.md)). Accepted; the reasons are in
+[`adr/filesystem-batch-selection.md`](adr/filesystem-batch-selection.md). The storage engine is built as a
+host-tested library (TASK-07, "Filesystem engine (as built)" below); the service around it is stage 4. Choices the
+ADRs leave open are in [ADR-0016](adr/0016-filesystem-implementation-choices.md) (proposed).
 - **Guarantees.** After a crash a volume holds a prefix of the completion order. Requests are atomic, durability comes
   from `sync`, and a storage error stops the volume's writes for good.
 - **Mechanism.** A copy-on-write tree with dual root records. Mount picks the newest valid root, with no replay.
@@ -212,6 +215,39 @@ The code is in `kernel/src/gic.rs`, `kernel/src/irq.rs`, `kernel/src/timer.rs` a
   earliest, rounded up, so nothing fires early. An empty queue turns the timer off. There is no periodic tick;
   periodic work arms its own next deadline. Callbacks run in interrupt context.
 
+## Filesystem engine (as built)
+
+The code is in `crates/zoraya-fs` (`no_std` + `alloc`, `#![forbid(unsafe_code)]`); it knows nothing of IPC. The
+stage-4 service will wrap `Volume` and forward its failure report.
+
+- **Device.** `BlockDevice` (ADR-0015): size in 512-byte sectors, whole 4 KiB block reads, a batch write whose
+  members complete in any order, flush. A device without flush mounts read-only unless the mount says unsafe.
+- **Format.** Explicit little-endian layouts in `format.rs`. Blocks 0–7 are the root slots (both copies of four
+  pairs); everything else is copy-on-write. Every pointer holds the child's address, CRC32C and generation; every
+  metadata block's header holds its kind, level, volume id, own address and generation. One B+tree keyed by
+  `(object, kind, offset, name)` holds attribute records (exactly ADR-0014 rule 1's fields), directory entries,
+  parent links of directories, one extent per data block, and the orphan list. A one-level bitmap allocator caps a
+  volume at about 20.9 GiB (ADR-0016).
+- **Commits.** Requests change an in-memory copy-on-write tree; a request that fails, including for space, is
+  rolled back from a snapshot. A commit writes every new block, flushes, writes the root record into both slots of
+  pair `g mod 4`, and flushes again; freed blocks become reusable only then. Commits happen on `sync`, after
+  `T_COMMIT` (5 s, driven by `tick`), at 1,024 dirty blocks, before handing out an id at the durable id limit, and to
+  release space for a request refused for it.
+- **Mount.** Picks the highest generation with a valid root record copy; refuses an invalid tree root of that
+  generation; mounts read-only and reports corruption if the generations in the ring are not consecutive; frees the
+  orphan list (and commits) on a read-write mount.
+- **Requests.** Open (with exclusive create and truncate), mkdir, symlink (inert link objects), unlink, rmdir,
+  rename (replace, no-replace, exchange), set attributes, set size, write (at most 1 MiB), read, stat, readdir,
+  readlink, unnamed create and publish, close, sync. Paths are relative, components validated (ADR-0013); a link
+  object in a path stops resolution with `IsLink`. Times are `max(wall clock, last + 1 ns)`.
+- **Failure.** Any device write or flush error, metadata read error or invalid metadata puts the volume in `Failed`:
+  every later mutating request and `sync` gets `StorageFailed`, nothing more is written, reads go on from memory, and
+  `take_failure_report` returns the reason once. A bad data block is `Corrupt` for that read only.
+- **Checker.** `zoraya_fs::check` (used by `zoraya-fsck` and the tests) verifies every invariant the ADRs define;
+  `repair` rebuilds the allocator and fixes namespace damage, and refuses when the tree itself is damaged.
+- **Tools.** `zoraya-mkfs` creates an image and copies a host directory into it; `zoraya-fsck` checks an image
+  read-only and repairs only with `--repair`.
+
 ## Tests
 
 `make test` runs:
@@ -256,6 +292,21 @@ Host tests: `zoraya-pmm`, `zoraya-heap`, `zoraya-pagetable` and `zoraya-time` ea
 generator, so there is no property-testing dependency. `zoraya-pagetable` decodes descriptors bit by bit with a walker
 that shares no code with the crate.
 
+`zoraya-fs` has one test file per invariant family (`crates/zoraya-fs/tests/`), all deterministic and run by
+`make test-unit`; `docs/adr/invariants.md` names the file that checks each invariant:
+- `model.rs`: random request sequences against the reference model in `zoraya-fs-testkit`, with clean remounts and
+  four clock behaviours;
+- `crash.rs`: every crash image a recording device allows within a stated bound (all subsets of a window's writes
+  when it has at most 12, else every prefix and 64 random subsets, plus 16 torn per-sector variants), each checked,
+  mounted and compared with the model's allowed prefixes; the ordering of writes and flushes is checked against the
+  commit protocol;
+- `faults.rs`: every write, flush and read of request sequences failed in turn, and metadata corrupted on read;
+- `integrity.rs`, `units.rs`, `space_time.rs`, `workload.rs`, `basic.rs`;
+- `decoder_fuzz.rs`: field-level (eight transformations, checksums recomputed) and random image mutation, with an
+  allocation-counting allocator for the decoder's memory bound.
+
+Coverage-guided fuzz targets for the same decoder are in `fuzz/` (nightly, cargo-fuzz; see `fuzz/README.md`).
+
 `zoraya-dtb` is tested against device trees dumped from QEMU (`crates/zoraya-dtb/tests/fixtures/`, with the exact
 commands) and against malformed input: every truncation, bad header fields, structure and string errors, and 30,000
 deterministic random mutations.
@@ -285,6 +336,12 @@ deterministic random mutations.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
   (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
   QEMU 11.1.2 and is part of `make test`, so `make test` as written fails on an M1 or M2 Mac (`auto-el2`).
+- **Filesystem.** No service, IPC or virtio-blk driver yet (stage 4); the engine is a library. CRC32C is
+  table-driven (no CPU instructions, ADR-0016). A volume is at most about 20.9 GiB. One copy of each block: a bad
+  metadata block makes the volume read-only until offline repair, and a bad newest tree root block makes it
+  unmountable. The first create after each mount costs a commit (id reservation). A read-write mount holds the
+  allocator bitmap in memory (one bit per block). `fsck --repair` cannot repair damaged tree blocks. Requests are
+  served one at a time.
 - **CI not run.** The CI workflow (`.github/workflows/test.yml`) runs `make test` on Linux with TCG, and has not run
   yet.
 
@@ -333,12 +390,17 @@ crates/                   no_std, host-tested
   zoraya-heap/            kernel heap logic
   zoraya-pagetable/       translation table building and editing
   zoraya-time/            clock arithmetic and the deadline queue
+  zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)
+  zoraya-fs-testkit/      test devices, reference model, crash harness, image field map (host only)
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
   test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol
   adr-check/              zoraya-adr-check: ADR-0001 invariants
+  zoraya-mkfs/            creates a filesystem image from a host directory
+  zoraya-fsck/            checks (and on request repairs) a filesystem image
   posix-surface/          TASK-02/02b measurement pipeline (unchanged)
+fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the workspace)
 build/                    kernel ELFs copied by make (not committed)
 ```
 

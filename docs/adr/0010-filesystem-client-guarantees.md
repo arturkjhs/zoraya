@@ -253,6 +253,11 @@ calls `sync` often; the mitigation is that the measured clients never do, and th
 5. Is the per-session temporary directory service (ADR-0002 rule 1) an instance of this filesystem on a memory device
    plus FIFO nodes, or a separate small service? Either way it must provide rule 2's exclusive create and
    unlink-while-open; crash rules do not apply to it.
+6. *Check status (TASK-07, ADR-0001 rule 6).* INV-0010-1 to -6 are checked on the `zoraya-fs` engine, which has
+   no IPC yet: "several simulated clients" are request streams on different handles of one engine, interleaved by
+   the generator, and INV-0010-3's report to the supervisor is checked as `Volume::take_failure_report` returning
+   the reason exactly once. The service's forwarding of that report waits for the stage-4 service and the channel
+   ADRs.
 
 ## Revisit triggers
 
