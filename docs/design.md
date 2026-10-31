@@ -148,7 +148,8 @@ How the kernel starts. The code is in `kernel/src/arch/aarch64/boot.rs`, `kernel
 - **Panic.** The handler prints `ZORAYA-PANIC at file:line:col: message` on one line, then halts.
 
 **Threads and user programs** ([ADR-0030](adr/0030-threads-and-scheduling.md) to
-[ADR-0034](adr/0034-user-faults.md)). Stage 2, `proposed`. The sections below describe the code that follows them.
+[ADR-0034](adr/0034-user-faults.md)). Stage 2, accepted on 2026-10-31. The sections below describe the code that
+follows them.
 
 ## Exceptions (as built)
 

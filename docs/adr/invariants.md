@@ -129,9 +129,9 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0022](0022-kernel-heap.md) Kernel heap | 2 |
 | [ADR-0023](0023-interrupts-and-time.md) Interrupts and time | 4 |
 | [ADR-0024](0024-kernel-fault-policy.md) Kernel fault policy | 3 |
-| [ADR-0030](0030-threads-and-scheduling.md) Threads and scheduling (proposed) | 3 |
-| [ADR-0031](0031-user-address-spaces.md) User address spaces and access to user memory (proposed) | 5 |
-| [ADR-0032](0032-system-call-abi.md) System call ABI (proposed) | 2 |
-| [ADR-0033](0033-initial-ramdisk-and-elf.md) Initial ramdisk and ELF loading (proposed) | 2 |
-| [ADR-0034](0034-user-faults.md) Faults from user processes at stage 2 (proposed) | 2 |
+| [ADR-0030](0030-threads-and-scheduling.md) Threads and scheduling | 3 |
+| [ADR-0031](0031-user-address-spaces.md) User address spaces and access to user memory | 5 |
+| [ADR-0032](0032-system-call-abi.md) System call ABI | 2 |
+| [ADR-0033](0033-initial-ramdisk-and-elf.md) Initial ramdisk and ELF loading | 2 |
+| [ADR-0034](0034-user-faults.md) Faults from user processes at stage 2 | 2 |
 | **Total** | **101** |

@@ -1,6 +1,6 @@
 # ADR-0030: Threads and scheduling
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0020, ADR-0023, ADR-0024
 - **Evidence:** CP-18, CP-20, DM-067, DM-068, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, alternatives-postmortem.md#l4-family-and-sel4
@@ -70,3 +70,5 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - SMP.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. No human specialist reviewed it; the independent review is in `docs/tasks/TASK-08-review.md`.

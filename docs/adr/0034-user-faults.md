@@ -1,6 +1,6 @@
 # ADR-0034: Faults from user processes at stage 2
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0004, ADR-0024, ADR-0031
 - **Evidence:** CP-06, CP-10, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris
@@ -62,3 +62,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - Exception channels in stage 3.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. No human specialist reviewed it; the independent review is in `docs/tasks/TASK-08-review.md`.

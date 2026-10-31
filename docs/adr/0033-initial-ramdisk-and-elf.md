@@ -1,6 +1,6 @@
 # ADR-0033: Initial ramdisk and ELF loading
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0020, ADR-0031
 - **Evidence:** CP-16, CP-26, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris
@@ -61,3 +61,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - A need to boot through firmware or a Linux-style loader.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. No human specialist reviewed it; the independent review is in `docs/tasks/TASK-08-review.md`.
