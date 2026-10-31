@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-pmm"
+description = "Physical frame allocator: a bitmap over RAM regions with reservations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+zoraya-dtb = { path = "../zoraya-dtb" }
+
+[lints]
+workspace = true
