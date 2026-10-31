@@ -1,0 +1,14 @@
+[package]
+name = "zoraya-ramdisk"
+description = "The initial ramdisk format."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# The writer, for the host tool.
+std = []

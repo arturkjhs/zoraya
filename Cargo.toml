@@ -2,24 +2,32 @@
 resolver = "3"
 members = [
     "kernel",
+    "crates/zoraya-abi",
     "crates/zoraya-dtb",
+    "crates/zoraya-elf",
     "crates/zoraya-heap",
     "crates/zoraya-pagetable",
     "crates/zoraya-pmm",
+    "crates/zoraya-ramdisk",
     "crates/zoraya-time",
     "tools/test-runner",
     "tools/adr-check",
+    "tools/mkramdisk",
 ]
 # The kernel only builds for aarch64-unknown-none; plain `cargo test` and
 # `cargo build` act on the host-side members. The Makefile builds the kernel.
 default-members = [
+    "crates/zoraya-abi",
     "crates/zoraya-dtb",
+    "crates/zoraya-elf",
     "crates/zoraya-heap",
     "crates/zoraya-pagetable",
     "crates/zoraya-pmm",
+    "crates/zoraya-ramdisk",
     "crates/zoraya-time",
     "tools/test-runner",
     "tools/adr-check",
+    "tools/mkramdisk",
 ]
 
 [workspace.package]

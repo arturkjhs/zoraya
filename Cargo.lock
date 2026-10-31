@@ -3,11 +3,19 @@
 version = 4
 
 [[package]]
+name = "zoraya-abi"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-adr-check"
 version = "0.1.0"
 
 [[package]]
 name = "zoraya-dtb"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-elf"
 version = "0.1.0"
 
 [[package]]
@@ -26,6 +34,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-mkramdisk"
+version = "0.1.0"
+dependencies = [
+ "zoraya-ramdisk",
+]
+
+[[package]]
 name = "zoraya-pagetable"
 version = "0.1.0"
 
@@ -35,6 +50,10 @@ version = "0.1.0"
 dependencies = [
  "zoraya-dtb",
 ]
+
+[[package]]
+name = "zoraya-ramdisk"
+version = "0.1.0"
 
 [[package]]
 name = "zoraya-test-runner"

@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-mkramdisk"
+description = "Packs user programs into the initial ramdisk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-ramdisk = { path = "../../crates/zoraya-ramdisk", features = ["std"] }
+
+[lints]
+workspace = true
