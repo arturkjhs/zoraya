@@ -6,6 +6,8 @@
 #![no_std]
 #![no_main]
 
+extern crate alloc;
+
 mod arch;
 mod console;
 mod dtb;
@@ -17,6 +19,8 @@ mod sync;
 #[cfg(feature = "qemu-test")]
 mod testing;
 
+#[cfg(not(feature = "qemu-test"))]
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use zoraya_dtb::Fdt;
@@ -71,6 +75,8 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
     let fdt = Fdt::new(blob).expect("device tree still valid");
     let info = PlatformInfo::from_fdt(&fdt).expect("platform info still valid");
 
+    memory::frames::init(&info);
+
     print_banner(&info, x0, source, entry_el, fdt.total_size());
 
     #[cfg(feature = "qemu-test")]
@@ -78,6 +84,10 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
 
     #[cfg(not(feature = "qemu-test"))]
     {
+        let numbers: Vec<u64> = (1..=1000).collect();
+        let sum = memory::heap::try_box(numbers.iter().sum::<u64>()).expect("heap check");
+        let backing = memory::heap::stats().backing >> 10;
+        println!("heap check: Box and Vec work, sum {sum}, {backing} KiB of heap");
         println!("stage 1 complete; powering off");
         shutdown()
     }
@@ -165,6 +175,14 @@ fn print_banner(
             r.address.saturating_add(r.size.max(1) - 1)
         );
     }
+    let stats = memory::frames::stats();
+    let kib = |frames: u64| (frames * zoraya_pmm::FRAME_SIZE) >> 10;
+    println!(
+        "memory: {} KiB total, {} KiB reserved, {} KiB free",
+        kib(stats.total),
+        kib(stats.reserved),
+        kib(stats.free)
+    );
     let image = memory::kernel_image_phys();
     println!(
         "  {:#018x}-{:#018x}  kernel image and boot stack, at {:#x}",

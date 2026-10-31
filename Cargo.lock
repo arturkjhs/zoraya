@@ -19,6 +19,9 @@ name = "zoraya-kernel"
 version = "0.1.0"
 dependencies = [
  "zoraya-dtb",
+ "zoraya-heap",
+ "zoraya-pagetable",
+ "zoraya-pmm",
 ]
 
 [[package]]

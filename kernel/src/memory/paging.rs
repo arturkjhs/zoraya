@@ -5,21 +5,21 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_dtb::platform::PlatformInfo;
 use zoraya_pagetable::{Attributes, Half, MapError, PageTable, TableMemory};
-use zoraya_pmm::{FRAME_SIZE, Range, RangeSet};
+use zoraya_pmm::{FRAME_SIZE, Frame, Range, RangeSet};
 
 use super::layout::{DEVICE_WINDOW, DEVICE_WINDOW_SIZE, DIRECT_MAP_SIZE};
 use super::{
     __data_end, __data_start, __emergency_stack_bottom, __emergency_stack_top, __rodata_end,
-    __rodata_start, __stack_bottom, __stack_top, __text_end, __text_start, image_virt_to_phys,
-    kernel_image_phys, phys_to_virt, symbol, table_virt,
+    __rodata_start, __stack_bottom, __stack_top, __text_end, __text_start, frames,
+    image_virt_to_phys, kernel_image_phys, phys_to_virt, symbol, table_virt,
 };
 use crate::arch::mmu;
 use crate::sync::SpinLock;
 use crate::{console, dtb};
 
 /// Tables for building the kernel's own mappings, before there is a frame
-/// allocator. Sized for the worst case seen, with room: a pool that runs out
-/// stops the boot with a message.
+/// allocator; afterwards tables come from frames. Sized for the tables built
+/// at boot, with room: a pool that runs out stops the boot with a message.
 const POOL_TABLES: usize = 64;
 
 #[repr(C, align(4096))]
@@ -29,8 +29,8 @@ struct Pool([[u64; 512]; POOL_TABLES]);
 // at a time under the lock on `KERNEL`.
 static mut POOL: Pool = Pool([[0; 512]; POOL_TABLES]);
 
-/// Table memory in the boot pool. Mapped from the first instruction: the pool
-/// is in `.bss`.
+/// Table memory: the boot pool, which is in `.bss` and so mapped from the
+/// first instruction, then frames.
 struct KernelTables {
     used: usize,
 }
@@ -38,7 +38,7 @@ struct KernelTables {
 impl TableMemory for KernelTables {
     fn alloc_table(&mut self) -> Option<u64> {
         if self.used == POOL_TABLES {
-            return None;
+            return frames::alloc_zeroed().ok().map(Frame::addr);
         }
         let va = (&raw mut POOL) as u64 + (self.used as u64) * FRAME_SIZE;
         self.used += 1;
@@ -215,6 +215,34 @@ pub fn init(info: &PlatformInfo<'_>) {
         console::rebase(uart as usize);
         mmu::drop_identity_map();
     }
+}
+
+/// Maps one page of ordinary kernel data. The address must be unused.
+pub fn map_page(va: u64, frame: Frame) -> Result<(), MapError> {
+    let mut kernel = KERNEL.lock();
+    let kernel = kernel.as_mut().expect("paging is up");
+    kernel.table.map_pages(
+        &mut kernel.memory,
+        va,
+        frame.addr(),
+        FRAME_SIZE,
+        Attributes::KERNEL_DATA,
+    )
+}
+
+/// Unmaps a page from [`map_page`] and returns its frame.
+pub fn unmap_page(va: u64) -> Frame {
+    let mut kernel = KERNEL.lock();
+    let kernel = kernel.as_mut().expect("paging is up");
+    let m = kernel
+        .table
+        .translate(&kernel.memory, va)
+        .expect("page is mapped");
+    kernel
+        .table
+        .unmap(&mut kernel.memory, va, FRAME_SIZE)
+        .expect("page is mapped");
+    Frame::from_addr(m.pa).expect("page-aligned")
 }
 
 /// Calls `f` for every mapping in the kernel's tables.

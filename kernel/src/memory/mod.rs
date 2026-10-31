@@ -2,6 +2,8 @@
 //!
 //! Hardware access lives in `arch::mmu`; table logic in `zoraya-pagetable`.
 
+pub mod frames;
+pub mod heap;
 pub mod paging;
 
 use core::ptr::addr_of;

@@ -73,7 +73,8 @@ Read `docs/design.md` first. It says what exists and where it lives.
 - Rust code only runs with the MMU on, on Normal memory, so atomics including read-modify-write are allowed. The boot
   stub in `boot.rs` runs before that on Device-nGnRnE memory: there, use only aligned accesses and no exclusives. MMIO
   uses aligned volatile accesses through device mappings.
-- There is no allocator before stage 1. Use fixed-capacity data.
+- There is no allocator before `memory::frames::init` runs, so code before it uses fixed-capacity data. After it,
+  follow ADR-0022 on where infallible allocation is allowed.
 - Tests that need the machine go in `kernel/src/testing.rs`, using the `ZORAYA-TEST` protocol. A test fails by
   panicking. A test that must fail is listed with `--expect-panic` in the `Makefile`.
 

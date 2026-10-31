@@ -15,6 +15,11 @@
 //! fresh stack and out of any exception context. Tests hold no resources that
 //! would need unwinding, so dropping their frames loses nothing.
 
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::alloc::Layout;
 use core::hint::black_box;
 use core::ptr::{addr_of, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -22,10 +27,11 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
 use zoraya_pagetable::{MemoryType, PAGE_SIZE};
+use zoraya_pmm::{Frame, Range};
 
 use crate::arch::mmu;
 use crate::memory::layout::{DEVICE_WINDOW, DEVICE_WINDOW_SIZE, STACK_WINDOW};
-use crate::memory::paging;
+use crate::memory::{frames, heap, paging};
 use crate::sync::SpinLock;
 use crate::{arch, console, dtb, memory, println};
 
@@ -155,6 +161,26 @@ static TESTS: &[Test] = &[
     Test {
         name: "stack_guard_is_unmapped",
         run: stack_guard_is_unmapped,
+    },
+    Test {
+        name: "box_vec_btreemap_string_work",
+        run: box_vec_btreemap_string_work,
+    },
+    Test {
+        name: "heap_stress_grows_and_reuses",
+        run: heap_stress_grows_and_reuses,
+    },
+    Test {
+        name: "heap_blocks_are_aligned",
+        run: heap_blocks_are_aligned,
+    },
+    Test {
+        name: "fallible_allocation_returns_failure",
+        run: fallible_allocation_returns_failure,
+    },
+    Test {
+        name: "frames_avoid_every_reserved_region",
+        run: frames_avoid_every_reserved_region,
     },
     Test {
         name: "harness_reports_panic_as_failure",
@@ -374,6 +400,153 @@ fn exception_returns_with_eret() {
 fn fault_report_for_brk() {
     // SAFETY: as in `do_brk`, with no `catch` active: the fault policy panics.
     unsafe { core::arch::asm!("brk #0x321", options(nomem, nostack)) };
+}
+
+fn box_vec_btreemap_string_work() {
+    let boxed = Box::new(41u64);
+    assert_eq!(*boxed + 1, 42);
+    let squares: Vec<u64> = (0..2000).map(|i| i * i).collect();
+    assert_eq!(squares[1999], 1999 * 1999);
+    let mut map = BTreeMap::new();
+    for i in 0..500u32 {
+        map.insert(i.wrapping_mul(2_654_435_761), i);
+    }
+    assert_eq!(map.len(), 500);
+    assert!(map.keys().is_sorted());
+    let mut text = String::new();
+    for word in ["kernel", " ", "heap"] {
+        text.push_str(word);
+    }
+    assert_eq!(text, "kernel heap");
+    assert_eq!(alloc::format!("{text}-{}", 7), "kernel heap-7");
+}
+
+fn heap_stress_grows_and_reuses() {
+    const BLOCKS: usize = 64;
+    const BLOCK: usize = 256 * 1024;
+    let run = || {
+        let mut blocks = Vec::new();
+        for i in 0..BLOCKS {
+            let mut block = alloc::vec![i as u8; BLOCK];
+            block[BLOCK - 1] = !(i as u8);
+            blocks.push(block);
+            // Small blocks in between, freed at once and kept in part.
+            let keep: Vec<Box<u64>> = (0..200).map(|n| Box::new(n as u64)).collect();
+            assert_eq!(*keep[199], 199);
+        }
+        for (i, block) in blocks.iter().enumerate() {
+            assert_eq!(block[0], i as u8);
+            assert_eq!(block[BLOCK - 1], !(i as u8));
+        }
+    };
+    let before = heap::stats();
+    run();
+    let first = heap::stats();
+    assert!(
+        first.backing - before.backing >= BLOCKS * BLOCK / 2,
+        "the stress grows the heap: {first:?}"
+    );
+    assert!(first.grows > before.grows);
+    for _ in 0..4 {
+        run();
+    }
+    let last = heap::stats();
+    assert_eq!(last.backing, first.backing, "later rounds reuse memory");
+    assert_eq!(last.live, before.live, "nothing leaked");
+}
+
+fn heap_blocks_are_aligned() {
+    for shift in 0..=16 {
+        let align = 1usize << shift;
+        for size in [1, 100, 5000] {
+            let layout = Layout::from_size_align(size, align).expect("layout");
+            // SAFETY: the size is not zero.
+            let p = unsafe { alloc::alloc::alloc(layout) };
+            assert!(!p.is_null());
+            assert!((p as usize).is_multiple_of(align));
+            // SAFETY: the block has at least `size` bytes.
+            unsafe { p.write_bytes(0xa5, size) };
+            // SAFETY: from `alloc` above with this layout, freed once.
+            unsafe { alloc::alloc::dealloc(p, layout) };
+        }
+    }
+}
+
+fn fallible_allocation_returns_failure() {
+    let before = (heap::stats(), frames::stats());
+    let mut too_big: Vec<u8> = Vec::new();
+    let free_bytes = frames::stats().free * zoraya_pmm::FRAME_SIZE;
+    assert!(
+        too_big
+            .try_reserve_exact(free_bytes as usize + (1 << 20))
+            .is_err()
+    );
+    assert_eq!((heap::stats(), frames::stats()), before, "no trace of it");
+    assert_eq!(*heap::try_box(7u32).expect("small block"), 7);
+    assert_eq!(*heap::try_box(()).map(|_| 5).as_ref().expect("no block"), 5);
+}
+
+/// Drains the allocator, links every frame through the direct map, and checks
+/// each against what the live device tree and the kernel say is reserved.
+fn frames_avoid_every_reserved_region() {
+    let (fdt, info) = platform();
+    let mut forbidden: Vec<Range> = Vec::new();
+    forbidden.extend(fdt.reservations().map(|r| Range::at(r.address, r.size)));
+    forbidden.extend(
+        info.reserved
+            .as_slice()
+            .iter()
+            .map(|r| Range::at(r.address, r.size)),
+    );
+    let (blob, blob_len) = dtb::phys();
+    forbidden.push(Range::at(blob as u64, blob_len as u64));
+    forbidden.push(memory::kernel_image_phys());
+    forbidden.push(frames::metadata());
+    let ram: Vec<Range> = info
+        .memory
+        .as_slice()
+        .iter()
+        .map(|r| Range::at(r.address, r.size))
+        .collect();
+
+    let before = frames::stats();
+    assert!(before.reserved > 0);
+    assert_eq!(
+        before.total * zoraya_pmm::FRAME_SIZE,
+        ram.iter().map(Range::len).sum::<u64>()
+    );
+
+    const NO_FRAME: u64 = 0;
+    let mut head = NO_FRAME;
+    let mut count = 0;
+    while let Ok(frame) = frames::alloc() {
+        let range = Range::at(frame.addr(), zoraya_pmm::FRAME_SIZE);
+        assert!(frame.addr() != 0);
+        assert!(
+            !forbidden.iter().any(|r| r.overlaps(&range)),
+            "frame {:#x} overlaps a reserved region",
+            frame.addr()
+        );
+        assert!(
+            ram.iter()
+                .any(|r| r.start <= range.start && range.end <= r.end)
+        );
+        // SAFETY: the frame is allocated, so this code owns it, and the
+        // direct map holds it read-write.
+        unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(head) };
+        head = frame.addr();
+        count += 1;
+    }
+    assert_eq!(count, before.free, "every free frame was returned");
+    assert_eq!(frames::stats().free, 0);
+
+    while head != NO_FRAME {
+        // SAFETY: written above; the frame is still allocated.
+        let next = unsafe { (memory::phys_to_virt(head) as *const u64).read() };
+        frames::free(Frame::from_addr(head).expect("aligned"));
+        head = next;
+    }
+    assert_eq!(frames::stats(), before);
 }
 
 const EC_INSTRUCTION_ABORT: u64 = 0x21;
