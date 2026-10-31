@@ -60,7 +60,11 @@ test-unit:
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
 # a Mac both accelerators are exercised.
 EXPECT := --expect-panic harness_reports_panic_as_failure \
-	--expect-panic harness_reports_exception_as_failure
+	--expect-panic harness_reports_exception_as_failure \
+	--expect-panic fault_report_for_brk \
+	--expect-line "ZORAYA-FAULT synchronous from EL1" \
+	--expect-line "EC 0x3c: BRK instruction" \
+	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
 test-qemu: $(TEST_KERNEL) $(RUNNER)

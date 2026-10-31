@@ -32,6 +32,7 @@ static PSCI_CONDUIT: AtomicUsize = AtomicUsize::new(0);
 #[unsafe(no_mangle)]
 extern "C" fn kernel_main(x0: usize, entry_el: u64) -> ! {
     arch::stack_canary_set();
+    arch::exception_init();
     let (fdt, source) = match dtb::locate(x0) {
         Ok(found) => found,
         Err(e) => fatal_before_console(format_args!("{e}")),

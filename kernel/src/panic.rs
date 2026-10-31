@@ -18,6 +18,7 @@ pub fn clear() {
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
+    arch::mask_interrupts();
     // One CPU and interrupts masked: a plain load and store cannot race.
     if PANICKING.load(Ordering::Relaxed) {
         crate::print!("\nZORAYA-PANIC nested panic; halting\n");

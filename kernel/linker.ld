@@ -11,7 +11,8 @@ ENTRY(_start)
 
 KERNEL_BASE = 0x40200000;
 ASSERT(KERNEL_BASE - 0x40000000 >= 2M, "leave 2 MiB below the image for the DTB")
-STACK_SIZE = 64K;
+STACK_SIZE = 128K;
+EMERGENCY_STACK_SIZE = 32K;
 
 SECTIONS
 {
@@ -20,6 +21,7 @@ SECTIONS
 
     .text : {
         KEEP(*(.text.boot))
+        *(.text.vectors)
         *(.text .text.*)
     }
 
@@ -39,7 +41,14 @@ SECTIONS
         __bss_end = .;
     }
 
-    .stack (NOLOAD) : ALIGN(16) {
+    /* The emergency stack is where a stack overflow gets reported from. */
+    .stack (NOLOAD) : ALIGN(4K) {
+        __emergency_stack_bottom = .;
+        . += EMERGENCY_STACK_SIZE;
+        __emergency_stack_top = .;
+        . = ALIGN(4K);
+        __stack_guard = .;
+        . += 4K;
         __stack_bottom = .;
         . += STACK_SIZE;
         __stack_top = .;

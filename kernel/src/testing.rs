@@ -11,9 +11,9 @@
 //! ```
 //!
 //! A test fails by panicking. The panic handler calls [`on_panic`], which
-//! prints the `fail` line, abandons the test's stack and continues with the
-//! next test on a fresh stack. Tests hold no resources that would need
-//! unwinding, so dropping their frames loses nothing.
+//! prints the `fail` line and leaves through `eret` to the next test, on a
+//! fresh stack and out of any exception context. Tests hold no resources that
+//! would need unwinding, so dropping their frames loses nothing.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -27,8 +27,10 @@ struct Test {
     run: fn(),
 }
 
-// The two `harness_reports_*` tests are expected to fail; the runner is
-// told so (`--expect-panic`) and checks that each is reported as a panic.
+// The `harness_reports_*` and `fault_report_*` tests are expected to fail;
+// the runner is told so (`--expect-panic`) and checks that each is reported
+// as a panic, and `--expect-line` checks what the report said.
+const EXPECTED_FAILURES: usize = 3;
 
 static TESTS: &[Test] = &[
     Test {
@@ -72,12 +74,24 @@ static TESTS: &[Test] = &[
         run: psci_system_off_available,
     },
     Test {
+        name: "brk_is_taken_with_its_class",
+        run: brk_is_taken_with_its_class,
+    },
+    Test {
+        name: "exception_returns_with_eret",
+        run: exception_returns_with_eret,
+    },
+    Test {
         name: "harness_reports_panic_as_failure",
         run: harness_reports_panic_as_failure,
     },
     Test {
         name: "harness_reports_exception_as_failure",
         run: harness_reports_exception_as_failure,
+    },
+    Test {
+        name: "fault_report_for_brk",
+        run: fault_report_for_brk,
     },
     Test {
         name: "harness_resumes_after_panic",
@@ -138,13 +152,10 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     println!();
     crate::panic::clear();
     // SAFETY: the panicking test's frames and the panic machinery's frames
-    // are all on the boot stack; none holds anything still referenced (tests
-    // keep no state outside the atomics above), one CPU runs, and
-    // interrupts are masked. If the panic came from the catch-all exception
-    // vector, the remaining tests run still in that exception context
-    // (stale ELR_EL1/SPSR_EL1, no `eret`); stage 0 uses neither, but once
-    // the vectors are real (stage 1) recovery must `eret` to a trampoline.
-    unsafe { arch::reset_stack_and_call(resume, i + 1) }
+    // are all on the boot stack, and none holds anything still referenced:
+    // tests keep no state outside the atomics above, one CPU runs, and the
+    // panic handler masked interrupts.
+    unsafe { arch::recover_to(resume, i + 1) }
 }
 
 fn platform() -> (Fdt<'static>, PlatformInfo<'static>) {
@@ -245,8 +256,37 @@ fn harness_reports_panic_as_failure() {
 
 fn harness_reports_exception_as_failure() {
     // SAFETY: `udf` raises an undefined-instruction exception, which the
-    // catch-all vector turns into a panic; nothing after it executes.
+    // fault policy turns into a panic; nothing after it executes.
     unsafe { core::arch::asm!("udf #0", options(nomem, nostack)) };
+}
+
+extern "C" fn do_brk(_: usize) {
+    // SAFETY: `brk` raises a breakpoint exception that `catch` handles;
+    // nothing after it executes.
+    unsafe { core::arch::asm!("brk #0x123", options(nomem, nostack)) };
+}
+
+fn brk_is_taken_with_its_class() {
+    let fault = arch::catch(do_brk, 0).expect("brk faults");
+    assert_eq!(fault.ec, 0x3c, "ESR_EL1.EC of BRK");
+    assert_eq!(fault.esr & 0xffff, 0x123, "ISS holds the immediate");
+    assert_eq!(fault.far, None);
+    assert_eq!(arch::current_el(), 1, "back at EL1 after eret");
+}
+
+fn exception_returns_with_eret() {
+    extern "C" fn ok(arg: usize) {
+        assert_eq!(arg, 7);
+    }
+    assert!(arch::catch(ok, 7).is_none(), "no fault, no record");
+    let first = arch::catch(do_brk, 0).expect("brk faults");
+    let second = arch::catch(do_brk, 0).expect("brk faults again");
+    assert_eq!(first.elr, second.elr, "same instruction both times");
+}
+
+fn fault_report_for_brk() {
+    // SAFETY: as in `do_brk`, with no `catch` active: the fault policy panics.
+    unsafe { core::arch::asm!("brk #0x321", options(nomem, nostack)) };
 }
 
 fn stack_canary_intact() {
@@ -257,7 +297,7 @@ fn stack_canary_intact() {
 }
 
 fn harness_resumes_after_panic() {
-    // Runs after the two deliberate failures: the harness recorded exactly
-    // those and came back to run this test.
-    assert_eq!(FAILED.load(Ordering::Relaxed), 2);
+    // Runs after the deliberate failures: the harness recorded exactly those
+    // and came back to run this test.
+    assert_eq!(FAILED.load(Ordering::Relaxed), EXPECTED_FAILURES);
 }

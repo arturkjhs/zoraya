@@ -14,8 +14,8 @@
 //! 4. At EL2: the minimal configuration below, then `eret` to EL1h.
 //!    At EL1: continue. Anything else: park (no console exists yet).
 //! 5. At EL1: known `SCTLR_EL1`, FP/SIMD enabled (the `aarch64-unknown-none`
-//!    target lets the compiler use NEON registers), catch-all exception
-//!    vectors, stack, `.bss` cleared.
+//!    target lets the compiler use NEON registers), exception vectors,
+//!    stack and its limit in `SP_EL0`, `.bss` cleared.
 //! 6. `kernel_main(x19, x20)`.
 //!
 //! Minimal EL2 configuration (everything not listed is left at its reset
@@ -30,13 +30,15 @@
 //! - `VPIDR_EL2`/`VMPIDR_EL2` = `MIDR_EL1`/`MPIDR_EL1`, so EL1 reads its real IDs.
 //! - If the CPU has a GIC system register interface (`ID_AA64PFR0_EL1.GIC`):
 //!   `ICC_SRE_EL2 = SRE | DFB | DIB | Enable`, so EL1 can use it later.
+//! - `MDCR_EL2 = HPMN = PMCR_EL0.N`: EL1 and EL0 own every PMU counter, and
+//!   no debug or PMU access traps to EL2 (`TDE`, `TDA`, `TDRA`, `TDOSA`,
+//!   `TPM`, `TPMCR` and `HPME` are all 0), whatever the reset value was.
 //! - `SCTLR_EL1` gets its known value before `eret`, so EL1 never runs with
 //!   the reset value.
 //! - `SPSR_EL2 = EL1h` with D, A, I, F masked; `ELR_EL2` = the EL1 path.
 //!
-//! Left at reset: `MDCR_EL2` (debug and PMU traps; stage 0 uses neither, and
-//! stage 1 must set it before using the PMU or debug registers) and, on CPUs
-//! that have them, the fine-grained trap registers (`HFG*_EL2`, `HCRX_EL2`).
+//! Left at reset: on CPUs that have them, the fine-grained trap registers
+//! (`HFG*_EL2`, `HCRX_EL2`).
 //!
 //! Assumption: `HCR_EL2.E2H` can be 0 (FEAT_E2H0). On a CPU where E2H is
 //! RES1, `CNTHCTL_EL2` and `CPTR_EL2` have the E2H=1 layout and the values
@@ -81,6 +83,9 @@ _start:
     msr     vpidr_el2, x1
     mrs     x1, mpidr_el1
     msr     vmpidr_el2, x1
+    mrs     x1, pmcr_el0
+    ubfx    x1, x1, #11, #5         // PMCR_EL0.N
+    msr     mdcr_el2, x1
     mrs     x1, id_aa64pfr0_el1
     ubfx    x1, x1, #24, #4
     cbz     x1, 1f
@@ -113,6 +118,10 @@ _start:
     adrp    x1, __stack_top
     add     x1, x1, :lo12:__stack_top
     mov     sp, x1
+    adrp    x1, __stack_bottom
+    add     x1, x1, :lo12:__stack_bottom
+    add     x1, x1, #{frame_size}
+    msr     sp_el0, x1              // the vectors' stack limit
 
     // Clear .bss; both ends are 16-byte aligned (linker.ld).
     adrp    x1, __bss_start
@@ -132,19 +141,6 @@ _start:
 .Lpark:
     wfe
     b       .Lpark
-
-    // Catch-all vector table: every entry reports and halts through
-    // `unhandled_exception`. Stage 0 expects no exception at all; this only
-    // turns a fault into a message instead of a silent hang.
-    .balign 2048
-__exception_vectors:
-    .irp    n, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
-    .balign 128
-    mov     x0, #\n
-    mrs     x1, esr_el1
-    mrs     x2, elr_el1
-    mrs     x3, far_el1
-    b       unhandled_exception
-    .endr
-"#
+"#,
+    frame_size = const super::exception::FRAME_SIZE,
 );

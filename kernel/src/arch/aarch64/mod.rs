@@ -1,6 +1,11 @@
-//! aarch64 boot code and the few system registers stage 0 reads.
+//! aarch64 boot code, exception handling and system registers.
 
 mod boot;
+mod exception;
+
+pub use exception::init as exception_init;
+#[cfg(feature = "qemu-test")]
+pub use exception::{catch, recover_to};
 
 use core::arch::asm;
 
@@ -53,9 +58,8 @@ unsafe extern "C" {
     static __stack_bottom: u8;
 }
 
-/// Written at the lowest word of the boot stack. With the MMU off there is no
-/// guard page, so an overflow would run silently into `.bss`; a changed
-/// canary is the only sign of it.
+/// Written at the lowest word of the boot stack, as a second check of the
+/// stack's limit.
 const STACK_CANARY: u64 = 0x5a0e_a57a_c4ca_2a2e;
 
 fn stack_canary_ptr() -> *mut u64 {
@@ -86,47 +90,8 @@ pub fn kernel_image() -> (usize, usize) {
     )
 }
 
-/// Abandons the current stack: resets the stack pointer to the top of the
-/// boot stack and calls `f(arg)`, which must not return.
-///
-/// # Safety
-///
-/// Every frame on the current stack is discarded without running any code
-/// in it, so nothing may still reference data on the stack, and no other
-/// code may be running on this stack (one CPU, interrupts masked).
-#[cfg(feature = "qemu-test")]
-pub unsafe fn reset_stack_and_call(f: extern "C" fn(usize) -> !, arg: usize) -> ! {
-    // SAFETY: the caller guarantees the old frames are dead; __stack_top is
-    // the 16-byte aligned top of the boot stack from linker.ld.
-    unsafe {
-        asm!(
-            "mov sp, {top}",
-            "br {f}",
-            top = in(reg) core::ptr::addr_of!(__stack_top),
-            f = in(reg) f,
-            in("x0") arg,
-            options(noreturn),
-        )
-    }
-}
-
-/// Exception class names for the catch-all handler.
-fn exception_kind(index: u64) -> &'static str {
-    match index {
-        0..=3 => "current EL with SP_EL0",
-        4..=7 => "current EL with SP_ELx",
-        8..=11 => "lower EL, AArch64",
-        _ => "lower EL, AArch32",
-    }
-}
-
-/// Target of every entry of the catch-all vector table in boot.rs.
-#[unsafe(no_mangle)]
-extern "C" fn unhandled_exception(index: u64, esr: u64, elr: u64, far: u64) -> ! {
-    let kind = ["synchronous", "IRQ", "FIQ", "SError"][(index & 3) as usize];
-    panic!(
-        "unhandled {kind} exception from {}: ESR_EL1={esr:#x} (EC={:#x}) ELR_EL1={elr:#x} FAR_EL1={far:#x}",
-        exception_kind(index),
-        esr >> 26,
-    );
+/// Masks IRQ and FIQ on this CPU. SError stays as it is.
+pub fn mask_interrupts() {
+    // SAFETY: setting mask bits has no effect on memory or on Rust's state.
+    unsafe { asm!("msr daifset, #3", options(nomem, nostack, preserves_flags)) };
 }
