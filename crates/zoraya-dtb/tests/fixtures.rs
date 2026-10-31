@@ -117,6 +117,24 @@ fn hvf_default_has_gic_v3() {
 }
 
 #[test]
+fn timer_and_uart_interrupts() {
+    for (name, blob) in ALL {
+        let i = info(blob);
+        let t = i.timer.unwrap_or_else(|| panic!("{name}: no timer"));
+        // QEMU hw/arm/virt.c: PPIs 13, 14, 11 and 10, level-triggered.
+        assert_eq!(t.secure_physical.intid, 29, "{name}");
+        assert_eq!(t.physical.intid, 30, "{name}");
+        assert_eq!(t.virtual_timer.intid, 27, "{name}");
+        assert_eq!(t.hypervisor.intid, 26, "{name}");
+        assert!(!t.virtual_timer.edge, "{name}");
+        // SPI 1, level-triggered.
+        let uart = i.uart.interrupt.unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(uart.intid, 33, "{name}");
+        assert!(!uart.edge, "{name}");
+    }
+}
+
+#[test]
 fn tree_navigation() {
     let fdt = Fdt::new(DEFAULT).unwrap();
     let root = fdt.root();

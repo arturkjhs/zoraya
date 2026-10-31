@@ -35,3 +35,7 @@ dependencies = [
 [[package]]
 name = "zoraya-test-runner"
 version = "0.1.0"
+
+[[package]]
+name = "zoraya-time"
+version = "0.1.0"

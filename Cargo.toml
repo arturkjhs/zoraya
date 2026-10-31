@@ -6,6 +6,7 @@ members = [
     "crates/zoraya-heap",
     "crates/zoraya-pagetable",
     "crates/zoraya-pmm",
+    "crates/zoraya-time",
     "tools/test-runner",
     "tools/adr-check",
 ]
@@ -16,6 +17,7 @@ default-members = [
     "crates/zoraya-heap",
     "crates/zoraya-pagetable",
     "crates/zoraya-pmm",
+    "crates/zoraya-time",
     "tools/test-runner",
     "tools/adr-check",
 ]

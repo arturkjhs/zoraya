@@ -1,5 +1,6 @@
 //! What the kernel needs from the device tree at boot: the console UART,
-//! the memory map, the CPU count, the interrupt controller and PSCI.
+//! the memory map, the CPU count, the interrupt controller, the generic
+//! timer and PSCI.
 //!
 //! Fixed-capacity results only; nothing here allocates.
 
@@ -97,6 +98,53 @@ pub struct Uart<'a> {
     pub size: u64,
     pub node_name: &'a str,
     pub source: UartSource<'a>,
+    /// Its interrupt, if the node names one in GIC form.
+    pub interrupt: Option<Interrupt>,
+}
+
+/// An interrupt, from the three cells of the `arm,gic` and `arm,gic-v3`
+/// bindings: type (0 SPI, 1 PPI), number within that type, flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interrupt {
+    /// GIC interrupt ID: SPI number + 32, PPI number + 16.
+    pub intid: u32,
+    /// True for edge-triggered (flag values 1 and 2), false for level.
+    pub edge: bool,
+}
+
+impl Interrupt {
+    fn from_cells(kind: u32, number: u32, flags: u32) -> Option<Interrupt> {
+        let base = match kind {
+            0 => 32,
+            1 => 16,
+            _ => return None,
+        };
+        Some(Interrupt {
+            intid: number.checked_add(base)?,
+            edge: flags & 0b11 != 0,
+        })
+    }
+
+    /// Entry `index` of a node's `interrupts` property.
+    fn from_property(node: &Node<'_>, index: usize) -> Option<Interrupt> {
+        let (entries, _) = node.property("interrupts")?.value.as_chunks::<12>();
+        let entry = entries.get(index)?;
+        let cell = |i: usize| {
+            let (cells, _) = entry.as_chunks::<4>();
+            cells.get(i).map(|c| u32::from_be_bytes(*c))
+        };
+        Interrupt::from_cells(cell(0)?, cell(1)?, cell(2)?)
+    }
+}
+
+/// The per-CPU interrupts of the `arm,armv8-timer` node, in the order the
+/// binding fixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timer {
+    pub secure_physical: Interrupt,
+    pub physical: Interrupt,
+    pub virtual_timer: Interrupt,
+    pub hypervisor: Interrupt,
 }
 
 /// Interrupt controller family, from `compatible`.
@@ -149,6 +197,7 @@ pub struct PlatformInfo<'a> {
     pub reserved: RegionList,
     pub cpu_count: usize,
     pub interrupt_controller: Option<InterruptController<'a>>,
+    pub timer: Option<Timer>,
     pub psci: Option<Psci>,
 }
 
@@ -166,6 +215,7 @@ impl<'a> PlatformInfo<'a> {
             reserved: reserved_regions(fdt),
             cpu_count: cpu_count(fdt),
             interrupt_controller: interrupt_controller(fdt),
+            timer: timer(fdt),
             psci: psci(fdt),
         })
     }
@@ -211,6 +261,7 @@ pub fn console_uart<'a>(fdt: &Fdt<'a>) -> Result<Uart<'a>, PlatformError> {
         size: reg.size,
         node_name: node.name(),
         source,
+        interrupt: Interrupt::from_property(&node, 0),
     })
 }
 
@@ -291,6 +342,19 @@ pub fn interrupt_controller<'a>(fdt: &Fdt<'a>) -> Option<InterruptController<'a>
         kind,
         regs,
         reg_count,
+    })
+}
+
+/// The interrupts of the first enabled `arm,armv8-timer` node.
+pub fn timer(fdt: &Fdt<'_>) -> Option<Timer> {
+    let node = fdt
+        .nodes()
+        .find(|n| n.is_compatible("arm,armv8-timer") && n.is_enabled())?;
+    Some(Timer {
+        secure_physical: Interrupt::from_property(&node, 0)?,
+        physical: Interrupt::from_property(&node, 1)?,
+        virtual_timer: Interrupt::from_property(&node, 2)?,
+        hypervisor: Interrupt::from_property(&node, 3)?,
     })
 }
 
