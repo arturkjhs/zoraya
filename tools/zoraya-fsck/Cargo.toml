@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-fsck"
+description = "Checks a Zoraya filesystem image against the ADR invariants; repairs only when asked."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-fs = { path = "../../crates/zoraya-fs" }
+zoraya-mkfs = { path = "../zoraya-mkfs" }
+
+[dev-dependencies]
+zoraya-fs-testkit = { path = "../../crates/zoraya-fs-testkit" }
+
+[lints]
+workspace = true

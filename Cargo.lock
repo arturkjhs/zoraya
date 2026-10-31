@@ -25,6 +25,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-fsck"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fs",
+ "zoraya-fs-testkit",
+ "zoraya-mkfs",
+]
+
+[[package]]
 name = "zoraya-heap"
 version = "0.1.0"
 
@@ -37,6 +46,13 @@ dependencies = [
  "zoraya-pagetable",
  "zoraya-pmm",
  "zoraya-time",
+]
+
+[[package]]
+name = "zoraya-mkfs"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fs",
 ]
 
 [[package]]

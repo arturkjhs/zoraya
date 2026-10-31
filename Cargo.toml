@@ -11,6 +11,8 @@ members = [
     "crates/zoraya-fs-testkit",
     "tools/test-runner",
     "tools/adr-check",
+    "tools/zoraya-mkfs",
+    "tools/zoraya-fsck",
 ]
 # The fuzz targets need a nightly toolchain; they are a separate workspace.
 exclude = ["fuzz"]
@@ -26,6 +28,8 @@ default-members = [
     "crates/zoraya-fs-testkit",
     "tools/test-runner",
     "tools/adr-check",
+    "tools/zoraya-mkfs",
+    "tools/zoraya-fsck",
 ]
 
 [workspace.package]
