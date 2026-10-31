@@ -165,6 +165,10 @@ pub struct Session<D: BlockDevice> {
     pub completed: u64,
     /// Every time the engine assigned, in completion order.
     pub assigned: Vec<Timestamp>,
+    /// `(request index, time)` for each request that assigned a time.
+    pub assigned_at: Vec<(u64, Timestamp)>,
+    /// Ids of objects created, in order.
+    pub created: Vec<u64>,
     /// Every object id ever returned.
     pub ids: Vec<u64>,
 }
@@ -182,6 +186,8 @@ impl<D: BlockDevice> Session<D> {
             clock_mode: ClockMode::Advancing,
             completed: 0,
             assigned: Vec::new(),
+            assigned_at: Vec::new(),
+            created: Vec::new(),
             ids: Vec::new(),
         }
     }
@@ -243,6 +249,7 @@ impl<D: BlockDevice> Session<D> {
         let before_model = self.model.clone();
         self.model.begin(wall);
         let last_before = self.model.last;
+        let next_before = self.model.next_id;
         let m = self.run_model(op);
         let e = self.run_engine(op);
         if e == Err(FsError::NoSpace) && m.is_ok() {
@@ -255,6 +262,10 @@ impl<D: BlockDevice> Session<D> {
         assert_eq!(e, m, "engine and model differ on {op:?}");
         if self.model.last != last_before {
             self.assigned.push(self.model.last);
+            self.assigned_at.push((self.completed, self.model.last));
+        }
+        if self.model.next_id != next_before {
+            self.created.push(next_before);
         }
         match (op, &e) {
             (Op::Open { .. } | Op::CreateUnnamed { .. }, Ok(Out::Opened { id, kind })) => {
@@ -351,6 +362,20 @@ impl<D: BlockDevice> Session<D> {
             }
             Op::Sync | Op::Tick { .. } => Ok(Out::Unit),
         }
+    }
+
+    /// Runs `op` on the engine only (for fault tests, where the model no
+    /// longer applies). Keeps the handle list in step.
+    pub fn step_engine(&mut self, op: &Op, rng: &mut Rng) -> Result<Out, FsError> {
+        self.step_clock(rng);
+        let r = self.run_engine(op);
+        if let (Op::Close { h }, Ok(_) | Err(FsError::StorageFailed)) = (op, &r)
+            && h % self.slots.len() != 0
+        {
+            self.slots.remove(h % self.slots.len());
+        }
+        self.completed += 1;
+        r
     }
 
     fn run_engine(&mut self, op: &Op) -> Result<Out, FsError> {

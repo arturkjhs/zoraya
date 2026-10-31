@@ -652,6 +652,53 @@ impl Model {
         }
     }
 
+    /// A model holding exactly `state` (as read from a remounted volume),
+    /// with the engine's next id and last assigned time.
+    pub fn from_state(state: &FsState, next_id: u64, last: Timestamp) -> Model {
+        let mut objs = BTreeMap::new();
+        for (path, o) in state {
+            objs.insert(
+                o.id,
+                MObj {
+                    kind: o.kind,
+                    mode: o.mode,
+                    mtime: o.mtime,
+                    ctime: o.ctime,
+                    data: o.content.clone(),
+                    entries: BTreeMap::new(),
+                    parent: None,
+                    orphan: false,
+                },
+            );
+            let _ = path;
+        }
+        for (path, o) in state {
+            if path.is_empty() {
+                continue;
+            }
+            let (dir, name) = match path.rfind('/') {
+                Some(i) => (&path[..i], &path[i + 1..]),
+                None => ("", path.as_str()),
+            };
+            let pid = state[dir].id;
+            objs.get_mut(&pid)
+                .expect("parent")
+                .entries
+                .insert(name.as_bytes().to_vec(), o.id);
+            if o.kind == ObjKind::Directory {
+                objs.get_mut(&o.id).expect("dir").parent = Some(pid);
+            }
+        }
+        Model {
+            objs,
+            next_id,
+            last,
+            open: BTreeMap::new(),
+            req: None,
+            wall: last,
+        }
+    }
+
     /// Forgets every handle and orphan, as a crash or remount does.
     pub fn after_remount(&mut self, next_id: u64) {
         self.open.clear();

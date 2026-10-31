@@ -66,7 +66,8 @@ pub fn select_root<D: BlockDevice + ?Sized>(dev: &mut D) -> Result<RootSelection
     // gap no older pair may be valid.
     let mut gap = false;
     for k in 0..N_PAIRS {
-        let pair = ((best.generation + N_PAIRS - k) % N_PAIRS) as usize;
+        // The generation is untrusted: no arithmetic that can overflow.
+        let pair = ((best.generation % N_PAIRS + N_PAIRS - k) % N_PAIRS) as usize;
         let held = pairs.get(pair).copied().flatten();
         let expected = best.generation.checked_sub(k).filter(|&g| g >= 1);
         match (held, expected) {

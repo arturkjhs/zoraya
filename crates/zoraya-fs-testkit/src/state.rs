@@ -34,9 +34,10 @@ pub fn engine_state<D: BlockDevice, C: Clock>(v: &mut Volume<D, C>) -> Result<Fs
     let mut out = FsState::new();
     let root = v.root();
     let r = collect(v, root, String::new(), &mut out);
-    let c = v.close(root);
+    // On a `Failed` volume close reports `StorageFailed` after releasing the
+    // handle; reading is still allowed, so that is not an error here.
+    let _ = v.close(root);
     r?;
-    c?;
     Ok(out)
 }
 
@@ -88,7 +89,7 @@ fn collect<D: BlockDevice, C: Clock>(
             format!("{path}/{}", e.name)
         };
         let r = collect(v, child, p, out);
-        v.close(child)?;
+        let _ = v.close(child);
         r?;
         after = Some(e.name);
     }

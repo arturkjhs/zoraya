@@ -434,6 +434,12 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         self.st.next_id
     }
 
+    /// Empties the node cache, so that clean nodes are read again (memory
+    /// pressure; also used by tests).
+    pub fn drop_caches(&mut self) {
+        self.io.cache_clear();
+    }
+
     /// The generation of the newest durable root record.
     pub fn durable_generation(&self) -> u64 {
         self.durable.generation
@@ -831,6 +837,9 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Opens, and with `create` creates, the object `path` names.
     pub fn open(&mut self, dir: Handle, path: &str, o: OpenOptions) -> Result<Handle, FsError> {
+        if o.create.is_some() || o.truncate {
+            self.writable()?;
+        }
         let (id, kind) = if o.create.is_some() || o.truncate {
             let mut f = |v: &mut Self| v.open_mut(dir, path, o);
             self.mutate(false, o.create.is_some(), &mut f)?
@@ -957,6 +966,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Creates a directory.
     pub fn mkdir(&mut self, dir: Handle, path: &str, mode: u16) -> Result<(), FsError> {
+        self.writable()?;
         self.mutate(false, true, &mut |v| {
             let (parent, name) = v.parent_of(dir, path)?;
             v.create_obj(parent, name, ObjKind::Directory, mode, None)
@@ -966,6 +976,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Creates a link object holding `target` (ADR-0013 rule 7).
     pub fn symlink(&mut self, dir: Handle, path: &str, target: &str) -> Result<(), FsError> {
+        self.writable()?;
         if target.len() > MAX_LINK_TARGET {
             return Err(FsError::InvalidArgument);
         }
@@ -978,6 +989,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Removes a name of a file or link object.
     pub fn unlink(&mut self, dir: Handle, path: &str) -> Result<(), FsError> {
+        self.writable()?;
         self.mutate(true, false, &mut |v| {
             let (parent, name) = v.parent_of(dir, path)?;
             let (id, kind) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
@@ -993,6 +1005,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Removes an empty directory.
     pub fn rmdir(&mut self, dir: Handle, path: &str) -> Result<(), FsError> {
+        self.writable()?;
         self.mutate(true, false, &mut |v| {
             let (parent, name) = v.parent_of(dir, path)?;
             let (id, kind) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
@@ -1011,9 +1024,12 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Whether directory `dir` is `anc` or below it.
     fn is_within(&mut self, mut dir: u64, anc: u64) -> Result<bool, FsError> {
-        // Bounded: each step goes to a distinct directory on a sane volume;
-        // a crafted parent cycle is caught by the step limit.
-        for _ in 0..=self.st.next_id {
+        // Bounded: each step goes to a distinct directory on a sane volume,
+        // and a volume holds fewer directories than this (each needs an item
+        // of at least 20 bytes in some block); a crafted parent cycle is
+        // caught by the limit.
+        let limit = self.durable.block_count.saturating_mul(256);
+        for _ in 0..=limit {
             if dir == anc {
                 return Ok(true);
             }
@@ -1037,6 +1053,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         dpath: &str,
         mode: RenameMode,
     ) -> Result<(), FsError> {
+        self.writable()?;
         self.mutate(true, false, &mut |v| {
             let (sp, sn) = v.parent_of(sdir, spath)?;
             let (dp, dn) = v.parent_of(ddir, dpath)?;
@@ -1135,6 +1152,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         mode: Option<u16>,
         mtime: Option<Timestamp>,
     ) -> Result<(), FsError> {
+        self.writable()?;
         let e = self.handle(h)?;
         if let Some(m) = mode {
             Self::check_mode(m)?;
@@ -1177,6 +1195,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Sets a file's size; new space reads as zeros.
     pub fn set_size(&mut self, h: Handle, size: u64) -> Result<(), FsError> {
+        self.writable()?;
         let e = self.handle(h)?;
         match e.kind {
             ObjKind::Directory => return Err(FsError::IsDir),
@@ -1192,6 +1211,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     /// Writes `data` at `offset`; atomic up to [`MAX_ATOMIC_WRITE`] bytes.
     /// An empty write changes nothing.
     pub fn write(&mut self, h: Handle, offset: u64, data: &[u8]) -> Result<usize, FsError> {
+        self.writable()?;
         let e = self.handle(h)?;
         match e.kind {
             ObjKind::Directory => return Err(FsError::IsDir),
@@ -1327,6 +1347,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     /// Creates a file with no name (ADR-0010 rule 7). It is on the orphan
     /// list until published; a crash or the last close removes it.
     pub fn create_unnamed(&mut self, dir: Handle, mode: u16) -> Result<Handle, FsError> {
+        self.writable()?;
         let d = self.dir_handle(dir)?;
         Self::check_mode(mode)?;
         let id = self.mutate(false, true, &mut |v| {
@@ -1362,6 +1383,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         path: &str,
         mode: PublishMode,
     ) -> Result<(), FsError> {
+        self.writable()?;
         let e = self.handle(h)?;
         if e.kind != ObjKind::File {
             return Err(FsError::InvalidArgument);
@@ -1509,7 +1531,11 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     }
 
     fn commit_inner(&mut self) -> Result<(), FailReason> {
-        let g = self.durable.generation + 1;
+        let g = self
+            .durable
+            .generation
+            .checked_add(1)
+            .ok_or(FailReason::Internal)?;
         let vid = self.io.volume_id;
         let mut walked = 0;
         count_dirty(&self.st.tree.root, &mut walked);

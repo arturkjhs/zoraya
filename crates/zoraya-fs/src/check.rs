@@ -751,7 +751,10 @@ fn rebuild_allocator<D: BlockDevice>(
     old_alloc: &BTreeSet<u64>,
 ) -> Result<(), crate::DevError> {
     use crate::format::{N_PAIRS, bitmap_count, encode_alloc_root, encode_bitmap};
-    let g = rec.generation + 1;
+    let g = rec
+        .generation
+        .checked_add(1)
+        .ok_or(crate::DevError::Unsupported)?;
     let n = bitmap_count(rec.block_count);
     let is_used = |b: u64| {
         b < ROOT_SLOTS

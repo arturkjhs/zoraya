@@ -79,6 +79,10 @@ impl<D: BlockDevice> Io<D> {
         }
     }
 
+    pub fn cache_clear(&mut self) {
+        self.cache.clear();
+    }
+
     /// Adds a node the engine just wrote, so it need not be read back.
     pub fn cache_insert(&mut self, ptr: BlockPtr, node: Rc<Node>) {
         self.tick += 1;

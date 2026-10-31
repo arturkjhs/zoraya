@@ -13,6 +13,7 @@ pub mod model;
 pub mod ops;
 pub mod rng;
 pub mod state;
+pub mod walk;
 
 pub use clock::TestClock;
 pub use devices::{Event, FaultDevice, FaultPlan, ImageDevice, MemDevice, RecordingDevice};
