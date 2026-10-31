@@ -266,12 +266,21 @@ pub fn mkfs<D: BlockDevice>(dev: &mut D, opts: MkfsOptions) -> Result<(), FsErro
 
 impl<D: BlockDevice, C: Clock> Volume<D, C> {
     /// Mounts the volume on `dev` (ADR-0011 rule 4): selects the newest valid
-    /// root record, with no replay. A read-write mount needs a device with
-    /// flush (ADR-0015 rule 5) and frees every object on the orphan list
-    /// (ADR-0011 rule 7), committing if there were any.
+    /// root record, with no replay, and refuses an invalid tree under it
+    /// (ADR-0016, item 2). A read-write mount needs a device with flush
+    /// (ADR-0015 rule 5), flushes before it reads the roots, and frees every
+    /// object on the orphan list (ADR-0011 rule 7, ADR-0016, item 7),
+    /// committing if there were any.
     pub fn mount(mut dev: D, clock: C, opts: MountOptions) -> Result<Self, FsError> {
         if !opts.read_only && !dev.flush_supported() && !opts.unsafe_no_flush {
             return Err(FsError::ReadOnly);
+        }
+        // What the device shows after a crash need not be stable: a root
+        // record written but never flushed can be read now and be gone after
+        // the next crash (ADR-0015 rule 3). This mount's commits reuse blocks
+        // that record freed, so it must be stable before any of them.
+        if !opts.read_only && dev.flush_supported() {
+            dev.flush().map_err(|_| FsError::StorageFailed)?;
         }
         let sel = select_root(&mut dev).map_err(|_| FsError::Corrupt)?;
         let rec = sel.record;
@@ -399,7 +408,8 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// Returns the failure once, the first time it is called after the
     /// volume entered `Failed`: the report to the supervisor of ADR-0010
-    /// rule 6. The service forwards it on its supervisor channel.
+    /// rule 6. The service forwards it on its supervisor channel (ADR-0016,
+    /// item 8).
     pub fn take_failure_report(&mut self) -> Option<FailReason> {
         if self.failure_unreported {
             self.failure_unreported = false;
@@ -407,6 +417,11 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         } else {
             None
         }
+    }
+
+    /// Decoded nodes held now, at most `CACHE_ENTRIES` (ADR-0012 rule 4).
+    pub fn cached_nodes(&self) -> usize {
+        self.io.cached_nodes()
     }
 
     /// Data reads that failed their checksum (ADR-0012 rule 3's counter).
@@ -530,6 +545,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         if self.acct.dirty_nodes + self.acct.dirty_data >= COMMIT_THRESHOLD_BLOCKS {
             self.commit()?;
         }
+        // Commits earlier than ADR-0011 rule 2 asks (ADR-0016, item 9).
         if creates && self.st.next_id >= self.st.id_limit {
             // Reserve the next batch of ids durably before handing any out.
             self.st.id_limit = self.st.next_id.saturating_add(ID_BATCH);
@@ -1013,6 +1029,8 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 return Err(FsError::NotDir);
             }
             if v.inode(id)?.size != 0 {
+                // A directory's size is its number of entries (ADR-0016,
+                // item 5).
                 return Err(FsError::NotEmpty);
             }
             let t = v.now();
@@ -1045,6 +1063,8 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     }
 
     /// Renames within the volume (ADR-0010 rule 2, ADR-0013 rule 5).
+    /// Renaming an entry onto itself succeeds and changes nothing (ADR-0016,
+    /// item 10).
     pub fn rename(
         &mut self,
         sdir: Handle,
@@ -1681,6 +1701,20 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                     Fix::RemoveOrphan(id) => {
                         v.tdel(&Key::orphan(*id))?;
                     }
+                    Fix::SetEntryKind {
+                        dir,
+                        name,
+                        child,
+                        kind,
+                    } => {
+                        let key = Key::dirent(*dir, name);
+                        v.tdel(&key)?;
+                        let value = Value::Dirent {
+                            child: *child,
+                            kind: *kind,
+                        };
+                        v.tins(key, value)?;
+                    }
                     Fix::RemoveExtent { id, index } => {
                         let old = v.tdel(&Key::extent(*id, *index))?;
                         v.drop_data(old);
@@ -1708,7 +1742,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 }
                 Fix::Orphan(_) => out.objects_orphaned += 1,
                 Fix::SetDirSize { .. } => out.sizes_fixed += 1,
-                Fix::SetParent { .. } => out.parents_fixed += 1,
+                Fix::SetParent { .. } | Fix::SetEntryKind { .. } => out.parents_fixed += 1,
             }
         }
         self.commit()

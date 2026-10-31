@@ -19,10 +19,18 @@
 //!
 //! For each window with `u` writes:
 //! - **whole-write subsets**: all `2^u` subsets when `u <= k` (each write in
-//!   the subset fully new, the others fully old), otherwise the empty set, the
-//!   full set and `random_subsets` seeded random subsets;
+//!   the subset fully new, the others fully old), otherwise every prefix of
+//!   the log and `random_subsets` seeded random subsets;
 //! - **torn variants**: `torn` seeded images where every sector of every
 //!   write independently takes one of the four values.
+//!
+//! # What this does not cover
+//!
+//! One crash per image, so a window covers every crash point in it for one
+//! crash, not for two (`regressions.rs` has the double crash that mattered).
+//! No crash inside mount's orphan commit or inside repair, no crash state
+//! after a failed write or flush, and no commit from the dirty threshold or
+//! the `NoSpace` retry.
 //!
 //! [`RecordingDevice`]: crate::devices::RecordingDevice
 

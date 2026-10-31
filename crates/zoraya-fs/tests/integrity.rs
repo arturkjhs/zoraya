@@ -416,3 +416,98 @@ fn invalid_tree_root_of_the_newest_generation_fails_the_mount() {
         Some(FsError::Corrupt)
     );
 }
+
+/// INV-0012-1 for metadata: every bit of every tree node of a small image.
+/// Random flips mostly land where structure checks catch them, so they cannot
+/// show that the checksum does its part (TASK-07 review R-02).
+#[test]
+fn every_metadata_bit_flip_is_detected() {
+    let clock = TestClock::new(T0);
+    let mut d = fresh(96);
+    {
+        let mut v = mount(&mut d, &clock);
+        let r = v.root();
+        let f = v
+            .open(
+                r,
+                "f",
+                OpenOptions {
+                    create: Some(0o644),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        v.write(f, 0, b"known content here").unwrap();
+        v.close(f).unwrap();
+        v.close(r).unwrap();
+        v.unmount().unwrap();
+    }
+    let rec = select_root(&mut d).unwrap().record;
+    let nodes: Vec<u64> = reachable_from(&mut d, &rec)
+        .unwrap()
+        .into_iter()
+        .filter(|(_, (k, _))| matches!(k, zoraya_fs::check::BlockKind::Node(_)))
+        .map(|x| x.0)
+        .collect();
+    assert!(!nodes.is_empty());
+    let base = Rc::new(d.into_image());
+    let read_only = MountOptions {
+        read_only: true,
+        ..Default::default()
+    };
+    let (mut same, mut detected) = (0u64, 0u64);
+    for b in nodes {
+        for bit in 0..BLOCK_SIZE * 8 {
+            let mut x = ImageDevice::new(base.clone());
+            let mut blk = x.get_block(b);
+            blk[bit / 8] ^= 1 << (bit % 8);
+            x.set_block(b, blk);
+            let Ok(mut v) = Volume::mount(x, clock.clone(), read_only) else {
+                detected += 1;
+                continue;
+            };
+            let r = v.root();
+            let got = v.open(r, "f", OpenOptions::default()).and_then(|h| {
+                let mut q = [0u8; 64];
+                let n = v.read(h, 0, &mut q)?;
+                Ok(q[..n].to_vec())
+            });
+            match got {
+                Ok(q) => {
+                    assert_eq!(q, b"known content here", "wrong bytes at bit {bit}");
+                    same += 1;
+                }
+                Err(_) => detected += 1,
+            }
+        }
+    }
+    assert_eq!(same, 0, "a flip went unnoticed");
+    assert!(detected > 0);
+}
+
+/// INV-0012-2 with a valid checksum: only the header can show that a block
+/// has the wrong generation or address, which is what a lost or misdirected
+/// write looks like when the pointer's checksum matches the old block.
+#[test]
+fn header_checks_stand_without_the_checksum() {
+    use zoraya_fs::format::{BlockPtr, Expect, KIND_ALLOC_ROOT, check_meta, encode_alloc_root};
+    let block = encode_alloc_root(7, 100, 5, &[]).unwrap();
+    let csum = zoraya_fs::crc32c::checksum64(&block);
+    let exp = Expect {
+        volume_id: 7,
+        block_count: 1000,
+        kind: KIND_ALLOC_ROOT,
+        level: 0,
+    };
+    let ptr = |addr, generation| BlockPtr {
+        addr,
+        csum,
+        generation,
+    };
+    assert!(check_meta(&block, &ptr(100, 5), &exp).is_ok());
+    assert!(
+        check_meta(&block, &ptr(100, 6), &exp).is_err(),
+        "generation"
+    );
+    assert!(check_meta(&block, &ptr(101, 5), &exp).is_err(), "address");
+}

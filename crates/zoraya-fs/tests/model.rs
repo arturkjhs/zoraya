@@ -22,7 +22,6 @@ fn run(seed: u64, mode: ClockMode) -> (usize, usize) {
     s.clock_mode = mode;
     let g = Gen::default();
     let (mut ok, mut err) = (0, 0);
-    let mut all_ids: BTreeSet<u64> = BTreeSet::new();
     for i in 0..OPS {
         let op = random_op(&mut rng, s.handles(), &g);
         match s.step(&op, &mut rng) {
@@ -58,10 +57,6 @@ fn run(seed: u64, mode: ClockMode) -> (usize, usize) {
             w[0] < w[1],
             "seed {seed}: times not strictly increasing: {w:?}"
         );
-    }
-    // INV-0014-3: no id handed out twice for different objects.
-    for id in &s.ids {
-        all_ids.insert(*id);
     }
     let mut dev = s.vol.unmount().expect("unmount");
     let rep = check(&mut dev, CheckOptions::default());

@@ -50,7 +50,8 @@ fn collect<D: BlockDevice, C: Clock>(
     let a = v.stat(h)?;
     let content = match a.kind {
         ObjKind::File => {
-            let mut buf = vec![0u8; a.size as usize];
+            // For valid images, but a crafted size must not abort the test.
+            let mut buf = vec![0u8; a.size.min(1 << 26) as usize];
             let n = v.read(h, 0, &mut buf)?;
             buf.truncate(n);
             buf

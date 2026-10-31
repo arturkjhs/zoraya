@@ -53,6 +53,10 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("zoraya-mkfs: {e}");
+            // A partial image would pass fsck as clean.
+            if image.is_file() {
+                let _ = std::fs::remove_file(&image);
+            }
             ExitCode::from(1)
         }
     }

@@ -336,7 +336,12 @@ fn idle_volume_loses_nothing() {
     s.vol.tick().unwrap();
     assert_eq!(s.vol.commits(), before + 1);
     let (base, events, cur) = s.vol.into_device().into_parts();
-    let _ = (base, events);
+    // The log ends with a flush, so the last window has no write that a crash
+    // could undo: only the full prefix survives (TASK-07 review R-04).
+    let ws = zoraya_fs_testkit::crash::windows(&events);
+    let last = ws.last().expect("a window");
+    assert!(last.writes.is_empty(), "the commit left unstable writes");
+    check_ordering(&base, &events).unwrap();
     let mut v = Volume::mount(cur, clock, MountOptions::default()).unwrap();
     assert_eq!(engine_state(&mut v).unwrap(), want);
 }

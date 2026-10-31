@@ -83,6 +83,11 @@ impl<D: BlockDevice> Io<D> {
         self.cache.clear();
     }
 
+    /// Decoded nodes held now.
+    pub fn cached_nodes(&self) -> usize {
+        self.cache.len()
+    }
+
     /// Adds a node the engine just wrote, so it need not be read back.
     pub fn cache_insert(&mut self, ptr: BlockPtr, node: Rc<Node>) {
         self.tick += 1;

@@ -156,6 +156,9 @@ The original recommendation follows, accepted with the 20.9 GiB limit and softwa
 - Is `ID_BATCH` = 1,024 right? It trades one commit per 1,024 creates (and one per mount) against nothing else;
   measure with the stage-4 service.
 - Does a toolchain workload ever fill a volume to the delete reserve? Unmeasured.
+- TASK-07's review (R-17): the `durable` request flag of ADR-0010 rule 4 is not in the API. A client gets the same effect with a request followed by `sync`, which is how the rule defines it. Add the flag with the service, or record that it is not needed.
+- TASK-07's review (R-08): item 3 calls rename a request that only frees space, and it is not: renames to longer names spent 55 of the 64 reserved blocks in the review. The invariant still held.
+- TASK-07's review (R-24, R-25): item 10 does not say whether `NoReplace` onto itself should fail, or that the id reservation can commit before a request is judged.
 - Is the 20.9 GiB cap acceptable for stage 4's system disk (a few GiB, ADR-0011's assumption)? Yes for now.
 
 ## Revisit triggers
