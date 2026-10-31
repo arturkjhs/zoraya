@@ -62,9 +62,14 @@ test-unit:
 EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic harness_reports_exception_as_failure \
 	--expect-panic fault_report_for_brk \
+	--expect-panic fault_report_for_unmapped_access \
+	--expect-panic fault_report_for_stack_overflow \
 	--expect-line "ZORAYA-FAULT synchronous from EL1" \
 	--expect-line "EC 0x3c: BRK instruction" \
-	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321"
+	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321" \
+	--expect-line "EC 0x25: data abort, same EL" \
+	--expect-line "FAR_EL1 0xffff820000002000" \
+	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
 test-qemu: $(TEST_KERNEL) $(RUNNER)

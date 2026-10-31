@@ -70,9 +70,9 @@ Read `docs/design.md` first. It says what exists and where it lives.
 - Target `aarch64-unknown-none`. The kernel runs on QEMU `virt`. Real hardware is out of scope.
 - Hardware facts come from the device tree, not from constants. The one exception is
   `console::FALLBACK_UART_BASE`, which is used only to report that the device tree is unusable.
-- Until the MMU is on (stage 1), memory is Device-nGnRnE. Use only aligned accesses (the target enforces
-  `strict-align`), and use no atomic read-modify-write (exclusives need not work on Device memory). Plain atomic loads
-  and stores are fine.
+- Rust code only runs with the MMU on, on Normal memory, so atomics including read-modify-write are allowed. The boot
+  stub in `boot.rs` runs before that on Device-nGnRnE memory: there, use only aligned accesses and no exclusives. MMIO
+  uses aligned volatile accesses through device mappings.
 - There is no allocator before stage 1. Use fixed-capacity data.
 - Tests that need the machine go in `kernel/src/testing.rs`, using the `ZORAYA-TEST` protocol. A test fails by
   panicking. A test that must fail is listed with `--expect-panic` in the `Makefile`.

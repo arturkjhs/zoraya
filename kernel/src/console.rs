@@ -1,10 +1,9 @@
 //! Kernel console on the device tree's UART.
 //!
-//! The console holds only the UART base address. It is stored in an atomic
-//! with plain loads and stores (no read-modify-write, so no exclusive access
-//! instructions, which need not work while the MMU is off), and a fresh
-//! stateless writer is made for every print. The panic handler can therefore
-//! always print, even if it interrupted another print.
+//! The console holds only the UART base address, in an atomic, and a fresh
+//! stateless writer is made for every print. There is no lock, so the panic
+//! handler can always print, even if it interrupted another print, and two
+//! prints can interleave.
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -26,6 +25,15 @@ pub unsafe fn init(base: usize) {
     // SAFETY: forwarded from the caller.
     let uart = unsafe { Pl011::new(base) };
     uart.init();
+    UART_BASE.store(base, Ordering::Relaxed);
+}
+
+/// Moves the console to another mapping of the same UART.
+///
+/// # Safety
+///
+/// `base` must be mapped as Device memory to the UART given to [`init`].
+pub unsafe fn rebase(base: usize) {
     UART_BASE.store(base, Ordering::Relaxed);
 }
 

@@ -7,12 +7,16 @@
 //! the Linux arm64 boot protocol passes it, if it lies in RAM below the
 //! image. The candidates are checked in that order: `x0`, then the start of
 //! RAM. What QEMU actually passes in `x0` is recorded in docs/design.md.
+//!
+//! [`locate`] reads through the boot identity map. Once the final tables are
+//! on, [`rebase`] gives the same blob through the direct map, and nothing may
+//! keep a reference from the first parse.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use zoraya_dtb::{Fdt, HEADER_SIZE, Header};
 
-use crate::arch;
+use crate::memory;
 
 /// Start of RAM on QEMU virt.
 pub const RAM_BASE: usize = 0x4000_0000;
@@ -49,14 +53,16 @@ impl core::fmt::Display for DtbError {
 static DTB_ADDR: AtomicUsize = AtomicUsize::new(0);
 static DTB_LEN: AtomicUsize = AtomicUsize::new(0);
 
-/// The blob at `addr`, which must lie in `[RAM_BASE, kernel start)`.
+/// The blob at physical address `addr`, which must lie in
+/// `[RAM_BASE, kernel start)`, read through the boot identity map.
 fn blob_at(addr: usize, limit: usize) -> Result<&'static [u8], DtbError> {
     if addr < RAM_BASE || !addr.is_multiple_of(8) || addr.saturating_add(HEADER_SIZE) > limit {
         return Err(DtbError::NotFound);
     }
     // SAFETY: [RAM_BASE, limit) is RAM below the kernel image: QEMU loaded
-    // the image at its link address 2 MiB above RAM_BASE, and virt RAM is
-    // one contiguous range from RAM_BASE. Nothing writes below the image.
+    // the image 2 MiB above RAM_BASE, and virt RAM is one contiguous range
+    // from RAM_BASE. The boot tables map it at the same address, and nothing
+    // writes below the image.
     let header = unsafe { core::slice::from_raw_parts(addr as *const u8, HEADER_SIZE) };
     let header = Header::read(header).map_err(|_| DtbError::NotFound)?;
     let len = header.total_size as usize;
@@ -71,7 +77,7 @@ fn blob_at(addr: usize, limit: usize) -> Result<&'static [u8], DtbError> {
 
 /// Finds and validates the device tree, and remembers it for [`blob`].
 pub fn locate(x0: usize) -> Result<(Fdt<'static>, Source), DtbError> {
-    let limit = arch::kernel_image().0;
+    let limit = memory::kernel_image_phys().start as usize;
     let (bytes, source) = match blob_at(x0, limit) {
         Ok(b) => (b, Source::Register),
         Err(_) => (blob_at(RAM_BASE, limit)?, Source::StartOfRam),
@@ -82,17 +88,31 @@ pub fn locate(x0: usize) -> Result<(Fdt<'static>, Source), DtbError> {
     Ok((fdt, source))
 }
 
-/// The blob found by [`locate`], if it succeeded.
-#[cfg(feature = "qemu-test")]
-pub fn blob() -> Option<&'static [u8]> {
-    let (addr, len) = (
+/// Physical address and size of the blob found by [`locate`].
+pub fn phys() -> (usize, usize) {
+    (
         DTB_ADDR.load(Ordering::Relaxed),
         DTB_LEN.load(Ordering::Relaxed),
-    );
-    if addr == 0 {
-        return None;
-    }
-    // SAFETY: addr and len describe the slice `locate` validated, which
-    // stays valid and unmodified for the kernel's lifetime.
-    Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
+    )
+}
+
+/// The blob found by [`locate`], through the direct map.
+///
+/// # Safety
+///
+/// [`locate`] succeeded and the final tables are on.
+pub unsafe fn rebase() -> &'static [u8] {
+    let (addr, len) = phys();
+    // SAFETY: addr and len describe the blob `locate` validated. The final
+    // tables map it read-only in the direct map, and it is reserved from the
+    // frame allocator, so it stays valid and unmodified for the kernel's
+    // lifetime.
+    unsafe { core::slice::from_raw_parts(memory::phys_to_virt(addr as u64) as *const u8, len) }
+}
+
+/// The blob, for tests.
+#[cfg(feature = "qemu-test")]
+pub fn blob() -> &'static [u8] {
+    // SAFETY: tests run after boot has finished with the final tables on.
+    unsafe { rebase() }
 }

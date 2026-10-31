@@ -2,6 +2,7 @@
 
 mod boot;
 mod exception;
+pub mod mmu;
 
 pub use exception::init as exception_init;
 #[cfg(feature = "qemu-test")]
@@ -52,9 +53,6 @@ pub fn halt() -> ! {
 }
 
 unsafe extern "C" {
-    static __kernel_start: u8;
-    static __kernel_end: u8;
-    static __stack_top: u8;
     static __stack_bottom: u8;
 }
 
@@ -80,18 +78,46 @@ pub fn stack_canary_intact() -> bool {
     unsafe { core::ptr::read_volatile(stack_canary_ptr()) == STACK_CANARY }
 }
 
-/// Physical address range `[start, end)` of the loaded image, stack included.
-pub fn kernel_image() -> (usize, usize) {
-    // Only the symbols' addresses (defined by linker.ld) are taken; the
-    // bytes are never read.
-    (
-        core::ptr::addr_of!(__kernel_start) as usize,
-        core::ptr::addr_of!(__kernel_end) as usize,
-    )
-}
-
 /// Masks IRQ and FIQ on this CPU. SError stays as it is.
 pub fn mask_interrupts() {
     // SAFETY: setting mask bits has no effect on memory or on Rust's state.
     unsafe { asm!("msr daifset, #3", options(nomem, nostack, preserves_flags)) };
+}
+
+/// Masks every exception source, returning the previous mask for
+/// [`restore_interrupts`].
+fn save_and_mask_all() -> u64 {
+    let daif: u64;
+    // SAFETY: reading DAIF and setting mask bits have no effect on memory.
+    unsafe {
+        asm!("mrs {}, daif", "msr daifset, #0xf", out(reg) daif,
+             options(nomem, nostack, preserves_flags))
+    };
+    daif
+}
+
+/// Masks IRQ and FIQ, returning the previous mask for [`restore_interrupts`].
+pub fn save_and_mask_interrupts() -> u64 {
+    let daif: u64;
+    // SAFETY: reading DAIF has no side effects.
+    unsafe { asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack, preserves_flags)) };
+    mask_interrupts();
+    daif
+}
+
+/// The current `DAIF`.
+#[cfg(feature = "qemu-test")]
+pub fn interrupt_mask() -> u64 {
+    let daif: u64;
+    // SAFETY: reading DAIF has no side effects.
+    unsafe { asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack, preserves_flags)) };
+    daif
+}
+
+/// Restores a mask from [`save_and_mask_interrupts`].
+pub fn restore_interrupts(daif: u64) {
+    // SAFETY: `daif` was read from DAIF, so this returns to a state the CPU
+    // was already in. It acts as a compiler barrier: critical sections end
+    // here, not earlier.
+    unsafe { asm!("msr daif, {}", in(reg) daif, options(nostack, preserves_flags)) };
 }

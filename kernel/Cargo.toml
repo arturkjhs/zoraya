@@ -17,6 +17,8 @@ qemu-test = []
 
 [dependencies]
 zoraya-dtb = { path = "../crates/zoraya-dtb" }
+zoraya-pagetable = { path = "../crates/zoraya-pagetable" }
+zoraya-pmm = { path = "../crates/zoraya-pmm" }
 
 [lints]
 workspace = true

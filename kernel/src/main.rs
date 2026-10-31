@@ -1,7 +1,7 @@
-//! Zoraya kernel, stage 0: boot, console, device tree, PSCI shutdown.
+//! Zoraya kernel, stage 1: boot, exceptions, MMU, memory, interrupts, timer.
 //!
-//! Only machine-dependent code lives here; device tree parsing is in the
-//! host-tested `zoraya-dtb` crate.
+//! Only machine-dependent code lives here; logic that needs no hardware is in
+//! the host-tested crates under `crates/`.
 
 #![no_std]
 #![no_main]
@@ -9,14 +9,17 @@
 mod arch;
 mod console;
 mod dtb;
+mod memory;
 mod panic;
 mod pl011;
 mod psci;
+mod sync;
 #[cfg(feature = "qemu-test")]
 mod testing;
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::{GicKind, PlatformInfo, Psci, PsciMethod, UartSource};
 
 /// Version from Cargo.toml.
@@ -27,10 +30,12 @@ pub const GIT_COMMIT: &str = env!("ZORAYA_GIT_COMMIT");
 /// PSCI conduit for shutdown: 0 none, 1 HVC, 2 SMC.
 static PSCI_CONDUIT: AtomicUsize = AtomicUsize::new(0);
 
-/// Called from boot.rs with the loader's `x0` and the exception level at
-/// entry, at EL1, on the boot stack, with `.bss` cleared.
+/// Called from boot.rs with the loader's `x0`, the exception level at entry
+/// and the image's physical base, at EL1, on the boot stack, with `.bss`
+/// cleared, on the boot tables.
 #[unsafe(no_mangle)]
-extern "C" fn kernel_main(x0: usize, entry_el: u64) -> ! {
+extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
+    memory::set_phys_base(phys_base);
     arch::stack_canary_set();
     arch::exception_init();
     let (fdt, source) = match dtb::locate(x0) {
@@ -53,6 +58,19 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64) -> ! {
         PSCI_CONDUIT.store(conduit, Ordering::Relaxed);
     }
 
+    let reserved_dropped = info.reserved.dropped;
+    assert!(
+        reserved_dropped == 0,
+        "{reserved_dropped} device tree reservations not recorded"
+    );
+    memory::paging::init(&info);
+
+    // Everything from the first parse pointed through the identity map.
+    // SAFETY: `locate` succeeded above, and the final tables are on.
+    let blob = unsafe { dtb::rebase() };
+    let fdt = Fdt::new(blob).expect("device tree still valid");
+    let info = PlatformInfo::from_fdt(&fdt).expect("platform info still valid");
+
     print_banner(&info, x0, source, entry_el, fdt.total_size());
 
     #[cfg(feature = "qemu-test")]
@@ -60,7 +78,7 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64) -> ! {
 
     #[cfg(not(feature = "qemu-test"))]
     {
-        println!("stage 0 complete; powering off");
+        println!("stage 1 complete; powering off");
         shutdown()
     }
 }
@@ -147,10 +165,12 @@ fn print_banner(
             r.address.saturating_add(r.size.max(1) - 1)
         );
     }
-    let (start, end) = arch::kernel_image();
+    let image = memory::kernel_image_phys();
     println!(
-        "  {start:#018x}-{:#018x}  kernel image and boot stack",
-        end - 1
+        "  {:#018x}-{:#018x}  kernel image and boot stack, at {:#x}",
+        image.start,
+        image.end - 1,
+        memory::layout::KERNEL_IMAGE,
     );
     println!(
         "  {addr:#018x}-{:#018x}  device tree blob",

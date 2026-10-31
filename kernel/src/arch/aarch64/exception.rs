@@ -419,13 +419,10 @@ __catch_landing:
     /// In the fault path: if a [`catch`] is active, records the fault and
     /// arranges to resume at its landing pad.
     pub(super) fn intercept(frame: &mut Frame) -> bool {
-        // A plain load and store: one CPU, and before the MMU is on memory
-        // takes no atomic read-modify-write.
-        let saved = ACTIVE.load(Ordering::Relaxed);
+        let saved = ACTIVE.swap(ptr::null_mut(), Ordering::Relaxed);
         if saved.is_null() {
             return false;
         }
-        ACTIVE.store(ptr::null_mut(), Ordering::Relaxed);
         let fault = Fault {
             ec: exception_class(frame.esr),
             esr: frame.esr,
