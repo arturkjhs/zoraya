@@ -76,7 +76,6 @@ pub fn arm(at: Instant, callback: Callback, arg: usize) -> Result<TimerId, Queue
 }
 
 /// Cancels a deadline. False if it already fired or was cancelled.
-#[cfg(feature = "qemu-test")]
 pub fn cancel(id: TimerId) -> bool {
     let mut queue = QUEUE.lock();
     let found = queue.cancel(id);

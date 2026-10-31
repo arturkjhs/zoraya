@@ -26,10 +26,13 @@ version = "0.1.0"
 name = "zoraya-kernel"
 version = "0.1.0"
 dependencies = [
+ "zoraya-abi",
  "zoraya-dtb",
+ "zoraya-elf",
  "zoraya-heap",
  "zoraya-pagetable",
  "zoraya-pmm",
+ "zoraya-ramdisk",
  "zoraya-time",
 ]
 
@@ -62,3 +65,10 @@ version = "0.1.0"
 [[package]]
 name = "zoraya-time"
 version = "0.1.0"
+
+[[package]]
+name = "zoraya-user"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+]

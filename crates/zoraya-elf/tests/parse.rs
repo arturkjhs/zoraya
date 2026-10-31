@@ -136,7 +136,7 @@ fn bad_sizes_and_offsets_are_refused() {
         load(R | X, 0x1000, LOW, 0, 0),           // empty
         load(R | X, 0x1100, LOW, 0x10, 0x10),     // offset and vaddr disagree
         load(R | X, 0x2000, LOW, 0x2000, 0x2000), // past the end of the file
-        load(R | X, u64::MAX & !0xfff, LOW, 0x2000, 0x2000),
+        load(R | X, 0xffff_ffff_ffff_f000, LOW, 0x2000, 0x2000),
     ] {
         assert_eq!(parse(&elf(LOW, &[ph], TOTAL)), Err(Error::BadSegment));
     }

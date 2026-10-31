@@ -16,8 +16,12 @@ mod irq;
 mod memory;
 mod panic;
 mod pl011;
+mod process;
 mod psci;
+mod ramdisk;
+mod sched;
 mod sync;
+mod syscall;
 #[cfg(feature = "qemu-test")]
 mod testing;
 mod timer;
@@ -83,6 +87,7 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
     let info = PlatformInfo::from_fdt(&fdt).expect("platform info still valid");
 
     memory::frames::init(&info);
+    sched::init();
 
     let controller = info
         .interrupt_controller
@@ -106,7 +111,10 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
         let backing = memory::heap::stats().backing >> 10;
         println!("heap check: Box and Vec work, sum {sum}, {backing} KiB of heap");
         tick_check();
-        println!("stage 1 complete; powering off");
+        let hello = process::spawn("hello").expect("hello in the ramdisk");
+        let record = hello.wait();
+        println!("process hello ended: {record:?}");
+        println!("stage 2 complete; powering off");
         shutdown()
     }
 }

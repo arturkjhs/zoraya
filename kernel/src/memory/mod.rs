@@ -5,6 +5,8 @@
 pub mod frames;
 pub mod heap;
 pub mod paging;
+pub mod stack;
+pub mod user;
 
 use core::ptr::addr_of;
 use core::sync::atomic::{AtomicU64, Ordering};

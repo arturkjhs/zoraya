@@ -41,12 +41,12 @@ ADR-0020 leaves ASIDs and the use of TTBR0 to this stage. CP-15 makes hardware a
 ## Recommendation
 Recommended: **Option B**, with a typed `UserSlice` as the only way kernel code reaches user memory. It is a recommendation, not a decision.
 
-- **Layout.** User addresses are `[0x0040_0000, 2^47)`. Page 0 up to 4 MiB stays unmapped. The ELF decides text and data. The stack sits at the top, 1 MiB by default, with an unmapped page below it.
+- **Layout.** User addresses are `[0x0040_0000, 2^47)`. Page 0 up to 4 MiB stays unmapped. The ELF decides text and data. The stack sits at the top, 64 KiB and mapped in full at creation, with an unmapped page below it.
 - **Tables.** One `zoraya-pagetable` tree per process in `Half::Lower`, from frames, with no sharing between processes. User pages are `nG`, so their TLB entries carry the ASID.
 - **ASIDs.** 8-bit, one per live process, in the top of `TTBR0_EL1`. Freed on exit with `tlbi aside1is`. 255 live processes at most at this stage: creation then fails with an error `[assumption: enough until stage 3 measures otherwise]`.
 - **Kernel threads.** `EPD0 = 1` and `TTBR0 = 0` while no process is current, so INV-0020-2 holds. `EPD0` is cleared only when switching to a thread with a process.
 - **Stack limit.** Each thread stack has a fixed size, and SP_EL1 is at the top of it on entry from EL0, so the vector computes the limit from SP. It saves the user's `SP_EL0` in the frame, loads the limit, and restores `SP_EL0` on return to EL0. No per-CPU pointer is needed, which also settles ADR-0024's open question. SMP will still need one emergency stack per CPU.
-- **User access.** `UserSlice::new` checks the range lies in the user half. Then `read` and `write` use the fix-up routine. A fault there, and nowhere else, is resumed: this is the one exception ADR-0024 planned. The normal kernel's fix-up check compares the PC with the routine's bounds.
+- **User access.** `UserSlice::new` checks the range lies in the user half. Then `read` uses the fix-up routine. No call writes to user memory yet, so the `sttrb` form comes with the first that does. A fault there, and nowhere else, is resumed: this is the one exception ADR-0024 planned. The normal kernel's fix-up check compares the PC with the routine's bounds.
 - **Faults.** Every page is mapped at creation, so a fault from a user access is a bad pointer; there is no demand paging at this stage.
 
 ## Consequences

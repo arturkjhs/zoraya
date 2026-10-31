@@ -16,10 +16,13 @@ bench = false
 qemu-test = []
 
 [dependencies]
+zoraya-abi = { path = "../crates/zoraya-abi" }
 zoraya-dtb = { path = "../crates/zoraya-dtb" }
+zoraya-elf = { path = "../crates/zoraya-elf" }
 zoraya-heap = { path = "../crates/zoraya-heap" }
 zoraya-pagetable = { path = "../crates/zoraya-pagetable" }
 zoraya-pmm = { path = "../crates/zoraya-pmm" }
+zoraya-ramdisk = { path = "../crates/zoraya-ramdisk" }
 zoraya-time = { path = "../crates/zoraya-time" }
 
 [lints]

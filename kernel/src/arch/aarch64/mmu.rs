@@ -125,6 +125,86 @@ pub fn invalidate(va: u64, size: u64) {
     unsafe { asm!("dsb ish", "isb", options(nostack, preserves_flags)) };
 }
 
+/// Points TTBR0 at a process's table, or turns TTBR0 off for kernel threads.
+/// Global kernel mappings are in TTBR1, and user entries carry their ASID, so
+/// no TLB maintenance is needed.
+pub fn set_user_table(ttbr0: Option<u64>) {
+    match ttbr0 {
+        // SAFETY: the table maps only user addresses, and nothing in the
+        // kernel runs through TTBR0, so the running code is unaffected.
+        Some(value) => unsafe {
+            asm!(
+                "msr ttbr0_el1, {value}",
+                "isb",
+                "mrs {t}, tcr_el1",
+                "bic {t}, {t}, {epd0}",
+                "msr tcr_el1, {t}",
+                "isb",
+                value = in(reg) value,
+                t = out(reg) _,
+                epd0 = in(reg) TCR_EPD0,
+                options(nostack),
+            )
+        },
+        // SAFETY: as above; only user addresses stop translating.
+        None => unsafe {
+            asm!(
+                "mrs {t}, tcr_el1",
+                "orr {t}, {t}, {epd0}",
+                "msr tcr_el1, {t}",
+                "isb",
+                "msr ttbr0_el1, xzr",
+                "isb",
+                t = out(reg) _,
+                epd0 = in(reg) TCR_EPD0,
+                options(nostack),
+            )
+        },
+    }
+}
+
+/// Removes every TLB entry of `asid`, on all CPUs.
+pub fn invalidate_asid(asid: u16) {
+    // SAFETY: TLB maintenance has no effect on memory contents. The operand
+    // holds the ASID in bits 63:48.
+    unsafe {
+        asm!(
+            "dsb ishst",
+            "tlbi aside1is, {}",
+            "dsb ish",
+            "isb",
+            in(reg) u64::from(asid) << 48,
+            options(nostack, preserves_flags),
+        )
+    };
+}
+
+/// After writing code at `[va, va + size)`: cleans it to the point of
+/// unification and invalidates the instruction caches, since data and
+/// instruction caches need not be coherent.
+pub fn sync_instruction_cache(va: u64, size: u64) {
+    let ctr: u64;
+    // SAFETY: reading CTR_EL0 has no side effects.
+    unsafe { asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack, preserves_flags)) };
+    let line = 4u64 << ((ctr >> 16) & 0xf);
+    let mut at = va & !(line - 1);
+    while at < va + size {
+        // SAFETY: cleaning a cache line of mapped memory changes no contents.
+        unsafe { asm!("dc cvau, {}", in(reg) at, options(nostack, preserves_flags)) };
+        at += line;
+    }
+    // SAFETY: cache maintenance and barriers only.
+    unsafe {
+        asm!(
+            "dsb ish",
+            "ic ialluis",
+            "dsb ish",
+            "isb",
+            options(nostack, preserves_flags)
+        )
+    };
+}
+
 /// `TCR_EL1`.
 #[cfg(feature = "qemu-test")]
 pub fn tcr() -> u64 {

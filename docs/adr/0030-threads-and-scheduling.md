@@ -33,7 +33,7 @@ Stage 2 needs more than one flow of control. ADR-0023 rules out a periodic tick,
 
 ### Option C: Round robin, non-preemptible kernel, slice by deadline
 - **Description:** One run queue in FIFO order. A running user thread gets a 10 ms slice, armed as a one-shot deadline only when another thread is waiting to run. The kernel runs to a blocking point: a slice that ends in the kernel takes effect on return to EL0.
-- **Evidence for:** Meets drivers 1 and 3 at once: with interrupts masked in the kernel, no kernel lock is ever contended on one CPU. The policy is one small module (driver 2).
+- **Evidence for:** Meets drivers 1 and 3 at once: with interrupts masked while a lock is held, no kernel lock is ever contended on one CPU. The policy is one small module (driver 2).
 - **Evidence against:** A long kernel path delays everything; no priorities, so no latency guarantee. Zircon has a preemptible kernel and a fair scheduler (alternatives-postmortem.md#fuchsia--zircon-incl-starnix) [outside evidence: Zircon scheduler docs], and SMP will need more than this.
 - **Cost:** Lowest (estimate: 300 lines).
 - **Precedent:** Early Unix kernels were non-preemptible [outside evidence: Lions' Commentary on UNIX 6th Edition].
@@ -44,7 +44,7 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - **Thread.** A kernel object with a saved context, a state (`Ready`, `Running`, `Blocked`, `Dead`), a kernel stack, and an optional owning process.
 - **Stacks.** 64 KiB each in the stack window of ADR-0020, separated by one unmapped guard page, backed by frames. Creation fails with an error if memory runs out.
 - **Context switch.** Called from kernel code at a call boundary, so it saves x19 to x30, SP, d8 to d15 and `FPCR`/`FPSR`. All other state, including a user thread's whole register set, is already in the exception frame on its stack, so FP state is eager and there is no lazy trap. It also switches the user TLS register `TPIDR_EL0`, the stack limit and the address space.
-- **Interrupts.** Kernel code runs with IRQ masked, except the idle thread and a kernel thread that unmasks them to wait. A timer callback only marks the need to reschedule.
+- **Interrupts.** Exception handlers and system calls run with IRQ masked. Kernel threads run with IRQ unmasked but are never preempted, so nothing in them needs a lock against a switch. A timer callback only marks the need to reschedule.
 - **Preemption.** On return to EL0 only, and at explicit `yield` or blocking points. The boot thread and other kernel threads are cooperative.
 - **Slice.** 10 ms `[assumption]`, armed only when a thread is waiting to run, so a lone thread takes no timer interrupts, as CP-20 asks.
 - **Idle.** One thread that sleeps with `wfi`, with interrupts masked around its check of the run queue so a wakeup cannot be lost.

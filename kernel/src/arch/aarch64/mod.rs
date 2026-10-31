@@ -1,13 +1,18 @@
 //! aarch64 boot code, exception handling and system registers.
 
 mod boot;
+mod context;
 mod exception;
 pub mod mmu;
 pub mod timer;
+mod usercopy;
 
+pub use context::{Context, switch};
 pub use exception::init as exception_init;
+pub use exception::{FRAME_SIZE, Frame, THREAD_STACK_SIZE, write_user_frame};
 #[cfg(feature = "qemu-test")]
 pub use exception::{catch, enter_el0, recover_to};
+pub use usercopy::copy_from_user;
 
 use core::arch::asm;
 
@@ -98,8 +103,8 @@ pub unsafe fn unmask_interrupts() {
     unsafe { asm!("msr daifclr, #3", options(nostack, preserves_flags)) };
 }
 
-/// Waits for an interrupt, which must be unmasked to wake the CPU and run.
-#[cfg(feature = "qemu-test")]
+/// Waits for an interrupt. A masked one wakes the CPU too, but runs only once
+/// unmasked.
 pub fn wait_for_interrupt() {
     // SAFETY: `wfi` only waits, and any interrupt ends it.
     unsafe { asm!("wfi", options(nomem, nostack, preserves_flags)) };

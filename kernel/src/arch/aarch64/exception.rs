@@ -32,14 +32,20 @@ pub struct Frame {
 }
 
 pub const FRAME_SIZE: usize = size_of::<Frame>();
+/// Size of every thread stack. Fixed, because the EL0 vectors compute the
+/// stack limit from it.
+pub const THREAD_STACK_SIZE: usize = 64 * 1024;
 const _: () = assert!(FRAME_SIZE.is_multiple_of(16));
 const _: () = assert!(offset_of!(Frame, sp) == 248 && offset_of!(Frame, elr) == 256);
 const _: () = assert!(offset_of!(Frame, esr) == 272 && offset_of!(Frame, fpcr) == 288);
 const _: () = assert!(offset_of!(Frame, q) == 304);
 
-#[cfg(feature = "qemu-test")]
 const KIND_SYNC: u64 = 4;
 const KIND_IRQ: u64 = 5;
+const KIND_SYNC_EL0: u64 = 8;
+const KIND_IRQ_EL0: u64 = 9;
+const EC_SVC: u64 = 0x15;
+const EC_DATA_ABORT_SAME_EL: u64 = 0x25;
 const KIND_OVERFLOW: u64 = 16;
 
 global_asm!(
@@ -55,6 +61,14 @@ global_asm!(
     stp     x0, x1, [sp]
     mov     x0, #\n
     b       __exception_save
+    .endm
+
+    .macro  vector_lower n
+    .balign 128
+    sub     sp, sp, #{frame_size}
+    stp     x0, x1, [sp]
+    mov     x0, #\n
+    b       __exception_save_el0
     .endm
 
     .macro  vector_other n
@@ -77,9 +91,9 @@ __exception_vectors:
     .irp    n, 4, 5, 6, 7
     vector_current_spx \n
     .endr
-    // Lower EL, AArch64 then AArch32: 8 to 15. Wired up in stage 2.
+    // Lower EL, AArch64 then AArch32: 8 to 15.
     .irp    n, 8, 9, 10, 11, 12, 13, 14, 15
-    vector_other \n
+    vector_lower \n
     .endr
 
     // x0 holds its original value and nothing has been saved.
@@ -106,6 +120,16 @@ __stack_overflow:
 .Lsecond_overflow:
     wfe
     b       .Lsecond_overflow
+
+    // From EL0: SP_EL0 is the user's stack. A thread at EL0 has SP_EL1 at the
+    // top of its fixed-size stack, so the limit follows from SP (ADR-0031).
+__exception_save_el0:
+    mrs     x1, sp_el0
+    str     x1, [sp, #{off_sp}]
+    add     x1, sp, #({frame_size} * 2)
+    sub     x1, x1, #{stack_size}
+    msr     sp_el0, x1
+    b       __exception_save_rest
 
     // x0 is the vector number; the original x0 and x1 are in the frame.
 __exception_save:
@@ -158,6 +182,9 @@ __exception_save_rest:
     mov     x0, sp
     bl      exception_dispatch
 
+    // With SP at a frame: back to the context it holds.
+    .global __exception_return
+__exception_return:
     add     x1, sp, #{off_q}
     ldp     q0, q1, [x1], #32
     ldp     q2, q3, [x1], #32
@@ -181,6 +208,11 @@ __exception_save_rest:
     ldp     x1, x2, [sp, #{off_elr}]
     msr     elr_el1, x1
     msr     spsr_el1, x2
+    tst     x2, #0xf                // to EL0: its stack pointer comes back
+    b.ne    1f
+    ldr     x1, [sp, #{off_sp}]
+    msr     sp_el0, x1
+1:
     ldp     x2, x3, [sp, #16]
     ldp     x4, x5, [sp, #32]
     ldp     x6, x7, [sp, #48]
@@ -201,6 +233,7 @@ __exception_save_rest:
     eret
 "#,
     frame_size = const FRAME_SIZE,
+    stack_size = const THREAD_STACK_SIZE,
     kind_overflow = const KIND_OVERFLOW,
     off_sp = const offset_of!(Frame, sp),
     off_elr = const offset_of!(Frame, elr),
@@ -208,6 +241,23 @@ __exception_save_rest:
     off_fpcr = const offset_of!(Frame, fpcr),
     off_q = const offset_of!(Frame, q),
 );
+
+/// Writes the frame for a thread's first return to EL0: everything zero but
+/// the entry and stack, EL0t with nothing masked.
+///
+/// # Safety
+///
+/// `at` is 16-byte aligned, and [`FRAME_SIZE`] bytes there are writable and
+/// used by nothing else.
+pub unsafe fn write_user_frame(at: u64, pc: u64, sp: u64) {
+    let frame = at as *mut Frame;
+    // SAFETY: the caller's contract; all-zero is a valid `Frame`.
+    unsafe {
+        frame.write_bytes(0, 1);
+        (*frame).elr = pc;
+        (*frame).sp = sp;
+    }
+}
 
 /// Allows SError from here on (ADR-0024). The vectors are installed by the
 /// boot code.
@@ -271,8 +321,8 @@ fn origin(kind: u64) -> &'static str {
     match kind {
         0..=3 => "EL1 on SP_EL0, which the kernel does not use",
         4..=7 | KIND_OVERFLOW => "EL1",
-        8..=11 => "EL0 (AArch64), not wired up until stage 2",
-        _ => "EL0 (AArch32), not wired up until stage 2",
+        8..=11 => "EL0 (AArch64)",
+        _ => "EL0 (AArch32)",
     }
 }
 
@@ -356,8 +406,41 @@ extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
                 println!("ZORAYA-FAULT interrupt {intid} has no handler");
             }
         },
-        #[cfg(feature = "qemu-test")]
-        KIND_SYNC if catching::intercept(frame) => return,
+        KIND_SYNC => {
+            let class = exception_class(frame.esr);
+            if class == EC_DATA_ABORT_SAME_EL
+                && let Some(resume) = super::usercopy::fixup(frame.elr)
+            {
+                frame.elr = resume;
+                return;
+            }
+            #[cfg(feature = "qemu-test")]
+            if catching::intercept(frame) {
+                return;
+            }
+        }
+        KIND_SYNC_EL0 => {
+            let class = exception_class(frame.esr);
+            if crate::sched::current().process().is_some() {
+                if class == EC_SVC {
+                    crate::syscall::dispatch(frame);
+                    crate::sched::preempt_point();
+                    return;
+                }
+                let far = far_is_valid(frame.esr).then_some(frame.far);
+                crate::process::fault_current(class, frame.elr, far);
+            }
+        }
+        KIND_IRQ_EL0 => match crate::irq::dispatch() {
+            Ok(()) => {
+                crate::sched::preempt_point();
+                return;
+            }
+            Err(crate::irq::Unexpected(intid)) => {
+                println!();
+                println!("ZORAYA-FAULT interrupt {intid} has no handler");
+            }
+        },
         _ => {}
     }
     fatal(frame, kind)

@@ -24,17 +24,22 @@ use core::hint::black_box;
 use core::ptr::{addr_of, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+use zoraya_abi::{ExitReason, ExitRecord};
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
+use zoraya_elf::Error as ElfError;
 use zoraya_pagetable::{MemoryType, PAGE_SIZE};
 use zoraya_pmm::{Frame, Range};
-use zoraya_time::Instant;
+use zoraya_time::{Deadline, Instant};
 
 use crate::arch::mmu;
-use crate::memory::layout::{DEVICE_WINDOW, DEVICE_WINDOW_SIZE, STACK_WINDOW};
+use crate::memory::layout::{DEVICE_WINDOW, DEVICE_WINDOW_SIZE, KERNEL_IMAGE};
+use crate::memory::stack::KernelStack;
+use crate::memory::user::{USER_HIGH, USER_LOW};
 use crate::memory::{frames, heap, paging};
+use crate::process::{self, SpawnError};
 use crate::sync::SpinLock;
-use crate::{arch, console, dtb, gic, irq, memory, println, timer};
+use crate::{arch, console, dtb, gic, irq, memory, println, sched, timer};
 
 struct Test {
     name: &'static str,
@@ -44,7 +49,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 7;
+const EXPECTED_FAILURES: usize = 8;
 
 static TESTS: &[Test] = &[
     Test {
@@ -220,6 +225,66 @@ static TESTS: &[Test] = &[
         run: interrupt_preserves_fp_registers,
     },
     Test {
+        name: "kernel_threads_take_turns",
+        run: kernel_threads_take_turns,
+    },
+    Test {
+        name: "sleep_ends_no_earlier_than_its_deadline",
+        run: sleep_ends_no_earlier_than_its_deadline,
+    },
+    Test {
+        name: "thread_stack_has_a_guard_page",
+        run: thread_stack_has_a_guard_page,
+    },
+    Test {
+        name: "user_process_prints_and_exits",
+        run: user_process_prints_and_exits,
+    },
+    Test {
+        name: "user_tables_obey_wx",
+        run: user_tables_obey_wx,
+    },
+    Test {
+        name: "user_faults_end_the_process_only",
+        run: user_faults_end_the_process_only,
+    },
+    Test {
+        name: "bad_syscall_arguments_return_errors",
+        run: bad_syscall_arguments_return_errors,
+    },
+    Test {
+        name: "random_syscalls_do_not_hurt_the_kernel",
+        run: random_syscalls_do_not_hurt_the_kernel,
+    },
+    Test {
+        name: "processes_cannot_see_each_other",
+        run: processes_cannot_see_each_other,
+    },
+    Test {
+        name: "cpu_bound_processes_share_the_cpu",
+        run: cpu_bound_processes_share_the_cpu,
+    },
+    Test {
+        name: "registers_survive_preemption",
+        run: registers_survive_preemption,
+    },
+    Test {
+        name: "bad_programs_are_refused",
+        run: bad_programs_are_refused,
+    },
+    Test {
+        name: "exited_processes_leave_nothing_behind",
+        run: exited_processes_leave_nothing_behind,
+    },
+    Test {
+        name: "running_out_of_asids_is_an_error",
+        run: running_out_of_asids_is_an_error,
+    },
+    Test {
+        name: "ttbr0_is_off_with_no_process",
+        run: ttbr0_is_off_with_no_process,
+    },
+    Test {
         name: "harness_reports_panic_as_failure",
         run: harness_reports_panic_as_failure,
     },
@@ -246,6 +311,10 @@ static TESTS: &[Test] = &[
     Test {
         name: "fault_report_for_el0_exception",
         run: fault_report_for_el0_exception,
+    },
+    Test {
+        name: "fault_report_for_thread_stack_overflow",
+        run: fault_report_for_thread_stack_overflow,
     },
     Test {
         name: "fault_report_for_stack_overflow",
@@ -317,6 +386,7 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     let _ = write!(console::OneLine, "{}", crate::panic::Report(info));
     println!();
     crate::panic::clear();
+    crate::sched::adopt_boot_thread();
     // SAFETY: the panicking test's frames and the panic machinery's frames
     // are on the boot stack, or the emergency stack after a stack overflow,
     // and none holds anything still referenced: tests keep no state outside
@@ -858,6 +928,236 @@ fn interrupts_still_arrive_after_a_fault() {
     one_shot_deadline_is_not_early();
 }
 
+fn kernel_threads_take_turns() {
+    static TURNS: AtomicUsize = AtomicUsize::new(0);
+    fn take_turns(me: usize) {
+        for round in 0..50 {
+            while TURNS.load(Ordering::Relaxed) != round * 2 + me {
+                sched::yield_now();
+            }
+            TURNS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    TURNS.store(0, Ordering::Relaxed);
+    sched::spawn_kernel(take_turns, 0).expect("thread");
+    sched::spawn_kernel(take_turns, 1).expect("thread");
+    wait_until_yielding(|| TURNS.load(Ordering::Relaxed) == 100);
+}
+
+/// As `wait_until`, for what another thread has to do.
+fn wait_until_yielding(done: impl Fn() -> bool) {
+    let start = timer::now();
+    while !done() {
+        assert!(timer::now().nanos_since(start) < PATIENCE_NS, "no progress");
+        sched::yield_now();
+    }
+}
+
+fn sleep_ends_no_earlier_than_its_deadline() {
+    for delay in [1, 1_000_000, 5_000_000] {
+        let deadline = timer::now().plus_nanos(delay);
+        sched::sleep_until(Deadline::At(deadline)).expect("queue");
+        assert!(timer::now() >= deadline);
+    }
+}
+
+fn thread_stack_has_a_guard_page() {
+    let stack = KernelStack::new().expect("stack");
+    let bottom = stack.bottom();
+    assert!(paging::translate(bottom).is_some());
+    assert!(paging::translate(stack.top() - 1).is_some());
+    assert!(paging::translate(bottom - PAGE_SIZE).is_none());
+    drop(stack);
+    assert!(paging::translate(bottom).is_none(), "unmapped when freed");
+}
+
+fn run_program(name: &str) -> ExitRecord {
+    process::spawn(name).expect("program in the ramdisk").wait()
+}
+
+fn exited(code: i32) -> ExitRecord {
+    ExitRecord {
+        code,
+        reason: ExitReason::Exited,
+        detail: 0,
+    }
+}
+
+fn user_process_prints_and_exits() {
+    assert_eq!(run_program("hello"), exited(7));
+}
+
+fn user_tables_obey_wx() {
+    let process = process::spawn("spin").expect("spin");
+    let mut count = 0;
+    process.for_each_mapping(&mut |m| {
+        count += 1;
+        let a = m.attributes;
+        assert!(a.user, "{m:?}");
+        assert!(!(a.write && a.execute), "W+X at {:#x}", m.va);
+        assert_eq!(a.memory, MemoryType::Normal);
+        assert!(m.va >= USER_LOW && m.va < USER_HIGH, "{m:?}");
+    });
+    assert!(count > 3);
+    assert_eq!(process.wait(), exited(1));
+    let mut left = 0;
+    process.for_each_mapping(&mut |_| left += 1);
+    assert_eq!(left, 0, "memory released at exit");
+}
+
+fn user_faults_end_the_process_only() {
+    /// Exception classes: unknown, instruction and data abort from EL0, BRK.
+    const CASES: [(&str, u32); 8] = [
+        ("f_kread", 0x24),
+        ("f_kwrite", 0x24),
+        ("f_null", 0x24),
+        ("f_priv", 0x00),
+        ("f_undef", 0x00),
+        ("f_brk", 0x3c),
+        ("f_exdata", 0x20),
+        ("f_stack", 0x24),
+    ];
+    for (name, class) in CASES {
+        let record = run_program(name);
+        assert_eq!(record.reason, ExitReason::Fault, "{name}");
+        assert_eq!(record.detail, class, "{name}");
+    }
+}
+
+fn bad_syscall_arguments_return_errors() {
+    assert_eq!(run_program("badptr"), exited(0));
+}
+
+fn random_syscalls_do_not_hurt_the_kernel() {
+    assert_eq!(run_program("fuzz"), exited(0));
+}
+
+fn processes_cannot_see_each_other() {
+    let a = process::spawn("isolate").expect("isolate");
+    let b = process::spawn("isolate").expect("isolate");
+    assert_eq!(a.wait(), exited(0));
+    assert_eq!(b.wait(), exited(0));
+}
+
+fn cpu_bound_processes_share_the_cpu() {
+    let before = sched::preemptions();
+    let start = timer::now();
+    let a = process::spawn("spin").expect("spin");
+    let b = process::spawn("spin").expect("spin");
+    assert_eq!(a.wait(), exited(1));
+    assert_eq!(b.wait(), exited(1));
+    let elapsed = timer::now().nanos_since(start);
+    let preempted = sched::preemptions() - before;
+    assert!(preempted >= 2, "{preempted} preemptions in {elapsed} ns");
+    println!("preemption: {preempted} in {} us", elapsed / 1000);
+}
+
+fn registers_survive_preemption() {
+    let a = process::spawn("regs").expect("regs");
+    let b = process::spawn("regs").expect("regs");
+    assert_eq!(a.wait(), exited(0));
+    assert_eq!(b.wait(), exited(0));
+}
+
+/// A minimal ELF header with one `PT_LOAD`, for what the build cannot make.
+fn one_segment_elf(flags: u32, vaddr: u64) -> Vec<u8> {
+    let mut f = alloc::vec![0u8; 0x2000];
+    f[..4].copy_from_slice(b"\x7fELF");
+    f[4..7].copy_from_slice(&[2, 1, 1]);
+    f[16..18].copy_from_slice(&2u16.to_le_bytes());
+    f[18..20].copy_from_slice(&183u16.to_le_bytes());
+    f[24..32].copy_from_slice(&vaddr.to_le_bytes());
+    f[32..40].copy_from_slice(&64u64.to_le_bytes());
+    f[54..56].copy_from_slice(&56u16.to_le_bytes());
+    f[56..58].copy_from_slice(&1u16.to_le_bytes());
+    let ph = &mut f[64..120];
+    ph[..4].copy_from_slice(&1u32.to_le_bytes());
+    ph[4..8].copy_from_slice(&flags.to_le_bytes());
+    ph[8..16].copy_from_slice(&0x1000u64.to_le_bytes());
+    ph[16..24].copy_from_slice(&vaddr.to_le_bytes());
+    ph[32..40].copy_from_slice(&0x100u64.to_le_bytes());
+    ph[40..48].copy_from_slice(&0x100u64.to_le_bytes());
+    f
+}
+
+fn bad_programs_are_refused() {
+    const RX: u32 = 5;
+    const RWX: u32 = 7;
+    let refused = |file: &[u8]| process::spawn_bytes("bad", file).err();
+    assert_eq!(
+        refused(&one_segment_elf(RWX, USER_LOW)),
+        Some(SpawnError::BadProgram(ElfError::WritableExecutable))
+    );
+    assert_eq!(
+        refused(&one_segment_elf(RX, 0x1000)),
+        Some(SpawnError::BadProgram(ElfError::OutOfRange))
+    );
+    assert_eq!(
+        refused(&one_segment_elf(RX, 0xffff_ffff_8000_0000)),
+        Some(SpawnError::BadProgram(ElfError::OutOfRange))
+    );
+    assert_eq!(
+        refused(b"not a program"),
+        Some(SpawnError::BadProgram(ElfError::Truncated))
+    );
+    assert_eq!(
+        process::spawn("no such file").err(),
+        Some(SpawnError::NotFound)
+    );
+}
+
+fn exited_processes_leave_nothing_behind() {
+    // The first round settles the heap and the slot list.
+    for name in ["hello", "f_null"] {
+        run_program(name);
+    }
+    sched::yield_now();
+    let before = frames::stats();
+    for _ in 0..20 {
+        assert_eq!(run_program("hello"), exited(7));
+        assert_eq!(run_program("f_null").reason, ExitReason::Fault);
+    }
+    sched::yield_now();
+    assert_eq!(frames::stats(), before);
+}
+
+fn running_out_of_asids_is_an_error() {
+    let mut live = Vec::new();
+    let failure = loop {
+        match process::spawn("hello") {
+            Ok(process) => live.push(process),
+            Err(e) => break e,
+        }
+        assert!(live.len() <= 255, "more live processes than ASIDs");
+    };
+    assert_eq!(failure, SpawnError::NoMemory);
+    assert_eq!(live.len(), 255, "ASID 0 belongs to no process");
+    for process in live {
+        assert_eq!(process.wait(), exited(7));
+    }
+    assert_eq!(run_program("hello"), exited(7), "ASIDs come back");
+}
+
+fn ttbr0_is_off_with_no_process() {
+    /// `TCR_EL1.EPD0`.
+    const EPD0: u64 = 1 << 7;
+    assert!(mmu::tcr() & EPD0 != 0);
+    assert_eq!(mmu::ttbr0(), 0);
+    expect_data_abort(read_at, USER_LOW, FSC_TRANSLATION, false);
+}
+
+fn fault_report_for_thread_stack_overflow() {
+    fn overflow(_: usize) {
+        black_box(use_stack(0));
+    }
+    sched::spawn_kernel(overflow, 0).expect("thread");
+    // The panic in that thread ends this test, through `on_panic`.
+    wait_until_yielding(|| false);
+}
+
+/// Between the windows and the image, where nothing is ever mapped.
+const UNMAPPED: u64 = KERNEL_IMAGE - 0x2000;
+
 const EC_INSTRUCTION_ABORT: u64 = 0x21;
 const EC_DATA_ABORT: u64 = 0x25;
 
@@ -964,8 +1264,8 @@ fn pmu_and_debug_registers_do_not_trap() {
 }
 
 fn unmapped_access_is_taken() {
-    expect_data_abort(read_at, STACK_WINDOW + 0x1000, FSC_TRANSLATION, false);
-    expect_data_abort(write_at, STACK_WINDOW + 0x1000, FSC_TRANSLATION, true);
+    expect_data_abort(read_at, UNMAPPED, FSC_TRANSLATION, false);
+    expect_data_abort(write_at, UNMAPPED, FSC_TRANSLATION, true);
 }
 
 fn null_pointer_read_faults() {
@@ -1109,7 +1409,7 @@ fn stack_guard_is_unmapped() {
 
 fn fault_report_for_unmapped_access() {
     // No `catch`: the fault policy reports and panics.
-    read_at((STACK_WINDOW + 0x2000) as usize);
+    read_at(UNMAPPED as usize);
 }
 
 fn fault_report_for_el0_exception() {

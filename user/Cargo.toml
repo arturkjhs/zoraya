@@ -1,0 +1,87 @@
+[package]
+name = "zoraya-user"
+description = "The user runtime and the programs in the initial ramdisk."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+test = false
+bench = false
+
+[dependencies]
+zoraya-abi = { path = "../crates/zoraya-abi" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "hello"
+test = false
+bench = false
+
+[[bin]]
+name = "spin"
+test = false
+bench = false
+
+[[bin]]
+name = "isolate"
+test = false
+bench = false
+
+[[bin]]
+name = "badptr"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz"
+test = false
+bench = false
+
+[[bin]]
+name = "regs"
+test = false
+bench = false
+
+[[bin]]
+name = "f_kread"
+test = false
+bench = false
+
+[[bin]]
+name = "f_kwrite"
+test = false
+bench = false
+
+[[bin]]
+name = "f_null"
+test = false
+bench = false
+
+[[bin]]
+name = "f_priv"
+test = false
+bench = false
+
+[[bin]]
+name = "f_undef"
+test = false
+bench = false
+
+[[bin]]
+name = "f_exdata"
+test = false
+bench = false
+
+[[bin]]
+name = "f_stack"
+test = false
+bench = false
+
+[[bin]]
+name = "f_brk"
+test = false
+bench = false

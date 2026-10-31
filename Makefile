@@ -16,29 +16,43 @@ TARGET := aarch64-unknown-none
 BUILD := build
 KERNEL := $(BUILD)/zoraya-kernel.elf
 TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
+RAMDISK := $(BUILD)/ramdisk.bin
+USER_DIR := target/user/$(TARGET)/user
+USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
+	f_undef f_exdata f_stack f_brk
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-boot fmt-check clippy adr-check clean \
-	$(KERNEL) $(TEST_KERNEL) $(RUNNER)
+.PHONY: all build run debug test test-unit test-qemu test-boot ramdisk fmt-check check-user-access clippy adr-check clean \
+	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
 
 build: $(KERNEL)
 
+# User programs go into the ramdisk, and the ramdisk into the kernel image
+# (ADR-0033). They have their own target directory and a stripped profile.
+$(RAMDISK):
+	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user
+	$(CARGO) build -p zoraya-mkramdisk
+	@mkdir -p $(BUILD)
+	target/debug/zoraya-mkramdisk $@ $(addprefix $(USER_DIR)/,$(USER_PROGRAMS))
+
+ramdisk: $(RAMDISK)
+
 # Cargo decides what to rebuild; the copies give the ELFs stable names.
-$(KERNEL):
-	$(CARGO) build $(KERNEL_ARGS)
+$(KERNEL): $(RAMDISK)
+	ZORAYA_RAMDISK=$(abspath $(RAMDISK)) $(CARGO) build $(KERNEL_ARGS)
 	@mkdir -p $(BUILD)
 	cp target/$(TARGET)/debug/zoraya-kernel $@
 
 # The test kernel has its own target directory so the two builds do not
 # overwrite each other's output.
-$(TEST_KERNEL):
-	$(CARGO) build $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test
+$(TEST_KERNEL): $(RAMDISK)
+	ZORAYA_RAMDISK=$(abspath $(RAMDISK)) $(CARGO) build $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test
 	@mkdir -p $(BUILD)
 	cp target/qemu-test/$(TARGET)/debug/zoraya-kernel $@
 
@@ -55,7 +69,7 @@ debug: $(KERNEL)
 	$(RUN_QEMU) --debug $(KERNEL)
 
 test-unit:
-	$(CARGO) test --workspace --exclude zoraya-kernel
+	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user
 
 # One runner invocation per machine configuration. "auto" is HVF on an
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
@@ -65,6 +79,7 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic fault_report_for_brk \
 	--expect-panic fault_report_for_unmapped_access \
 	--expect-panic fault_report_for_stack_overflow \
+	--expect-panic fault_report_for_thread_stack_overflow \
 	--expect-panic fault_report_for_unexpected_interrupt \
 	--expect-panic fault_report_for_el0_exception \
 	--expect-line "ZORAYA-FAULT synchronous from EL1" \
@@ -73,10 +88,11 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "no syndrome: an interrupt does not set ESR_EL1" \
 	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321" \
 	--expect-line "EC 0x25: data abort, same EL" \
-	--expect-line "FAR_EL1 0xffff820000002000" \
+	--expect-line "FAR_EL1 0xffffffff7fffe000" \
 	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1" \
 	--expect-line "ZORAYA-FAULT interrupt 40 has no handler" \
-	--expect-line "ZORAYA-FAULT synchronous from EL0 (AArch64), not wired up until stage 2" \
+	--expect-line "ZORAYA-FAULT synchronous from EL0 (AArch64)" \
+	--expect-line "hello from EL0" --expect-line "process f_kread: fault, EC 0x24" \
 	--expect-line "timer: virtual" --expect-line ", interrupt 27" \
 	--expect-line "uart interrupt 33"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
@@ -111,7 +127,8 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, and that it stops on its own.
 BOOT_LINES := --expect-line "heap check: Box and Vec work" \
-	--expect-line "timer check: 10 interrupts in" --expect-line "stage 1 complete"
+	--expect-line "timer check: 10 interrupts in" --expect-line "hello from EL0" \
+	--expect-line "code: 7, reason: Exited" --expect-line "stage 2 complete"
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --plain $(BOOT_LINES)
 
 test-boot: $(KERNEL) $(RUNNER)
@@ -122,7 +139,8 @@ fmt-check:
 	$(CARGO) fmt --all --check
 
 clippy:
-	$(CARGO) clippy --workspace --exclude zoraya-kernel --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --all-targets -- -D warnings
+	$(CARGO) clippy -p zoraya-user --target $(TARGET) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test -- -D warnings
 
@@ -130,7 +148,11 @@ clippy:
 adr-check:
 	$(CARGO) run -q -p zoraya-adr-check -- docs
 
-test: fmt-check clippy test-unit adr-check test-qemu test-boot
+# INV-0031-4: only usercopy.rs may use the unprivileged load and store forms.
+check-user-access:
+	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
+
+test: fmt-check clippy test-unit adr-check check-user-access test-qemu test-boot
 	@echo "make test: all checks passed"
 
 clean:

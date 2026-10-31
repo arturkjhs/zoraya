@@ -13,9 +13,11 @@ members = [
     "tools/test-runner",
     "tools/adr-check",
     "tools/mkramdisk",
+    "user",
 ]
-# The kernel only builds for aarch64-unknown-none; plain `cargo test` and
-# `cargo build` act on the host-side members. The Makefile builds the kernel.
+# The kernel and user programs only build for aarch64-unknown-none; plain
+# `cargo test` and `cargo build` act on the host-side members. The Makefile
+# builds the others.
 default-members = [
     "crates/zoraya-abi",
     "crates/zoraya-dtb",
@@ -41,3 +43,10 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
+
+# User programs go into the ramdisk, which goes into the kernel image.
+[profile.user]
+inherits = "release"
+opt-level = 1
+debug = false
+strip = true
