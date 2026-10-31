@@ -1,6 +1,6 @@
 # ADR-0012: Filesystem integrity: checksums, mismatch handling and crafted images
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0010, ADR-0011, ADR-0015
 - **Evidence:** CP-15, CP-17, CP-26, DM-037, GR-014, GR-017, GR-021, fs/requirements.md#13-open-flags-and-who-uses-them, fs/requirements.md#5-questions-the-data-cannot-answer, fs/requirements.md#sources-and-queries, fs/survey.md#btrfs, fs/survey.md#comparison, fs/survey.md#ext4, fs/survey.md#failure-modes-from-the-task-01-catalogue, fs/survey.md#littlefs, fs/survey.md#plan-9-cwfs-fossil-and-venti, fs/survey.md#redoxfs, fs/survey.md#testing-crash-consistency, fs/survey.md#xfs, fs/survey.md#zfs
@@ -191,3 +191,5 @@ remains.
 - Corruption is observed in practice on a supported device: reconsider redundancy (metadata duplication, mirrors).
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. Reasons and open conditions: [filesystem-batch-selection.md](filesystem-batch-selection.md).

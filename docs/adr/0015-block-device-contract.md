@@ -1,6 +1,6 @@
 # ADR-0015: Block device contract for the filesystem
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0001 (rules 6 and 8 refer to ADR-0010 and ADR-0012 only to say what the consumer does; they are informative)
 - **Evidence:** CP-12, GR-021, fs/survey.md#block-devices, fs/survey.md#ext4, fs/survey.md#littlefs, fs/survey.md#redoxfs, fs/survey.md#sources, fs/survey.md#testing-crash-consistency
@@ -177,3 +177,5 @@ not promise; D models hardware we do not have.
   it.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. Reasons and open conditions: [filesystem-batch-selection.md](filesystem-batch-selection.md).

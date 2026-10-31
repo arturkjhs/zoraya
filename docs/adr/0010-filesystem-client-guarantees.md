@@ -1,6 +1,6 @@
 # ADR-0010: Filesystem guarantees to clients (atomicity, ordering, durability, errors)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0005, ADR-0006
 - **Evidence:** CP-12, CP-14, CP-19, CP-27, X-14, DM-037, DM-038, DM-045, GR-014, fs/requirements.md#12-linux-syscalls, fs/requirements.md#2-what-the-toolchain-depends-on-for-correctness, fs/requirements.md#21-durability-is-never-requested, fs/requirements.md#22-atomic-rename, fs/requirements.md#23-exclusive-create, fs/requirements.md#24-unlink-while-in-use-and-cleanup-on-interrupt, fs/requirements.md#25-timestamps, fs/requirements.md#5-questions-the-data-cannot-answer, fs/requirements.md#6-requirements-derived-for-the-adrs, fs/survey.md#crash-consistency-as-applications-experience-it, fs/survey.md#ext4, fs/survey.md#f2fs, fs/survey.md#fxfs-and-minfs-fuchsia, fs/survey.md#littlefs, fs/survey.md#plan-9-cwfs-fossil-and-venti, fs/survey.md#testing-crash-consistency, fs/survey.md#zfs, task-02/libc-surface.csv, task-02/syscall-surface.csv
@@ -263,3 +263,5 @@ calls `sync` often; the mitigation is that the measured clients never do, and th
 - Transient device errors that succeed on retry are observed on a supported device: refine rule 6.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. Reasons and open conditions: [filesystem-batch-selection.md](filesystem-batch-selection.md).

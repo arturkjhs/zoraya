@@ -1,16 +1,17 @@
-# Selection for the filesystem ADR batch (ADR-0010 to ADR-0015)
+# Decision on the filesystem ADR batch (ADR-0010 to ADR-0015)
 
 - **Date:** 2026-10-31
-- **Made by:** an agent, at the project owner's request to choose which of these ADRs to apply.
-- **Scope:** this file records a selection. It is not an ADR and it changes no status. ADR-0010 to ADR-0015 stay
-  `proposed`, and their "Architect's decision" sections stay empty, until the architect records the decision there
-  (ADR-0001 rule 2). TASK-07 starts only once they are `accepted`.
+- **Made by:** an agent acting as architect, on the project owner's explicit instruction to take this decision in the
+  owner's place, because the owner does not assess this area.
+- **Scope:** the reasons behind accepting ADR-0010 to ADR-0015. It is not an ADR. The decision itself is in each ADR's
+  "Architect's decision" section. That instruction covers this batch only; it is not a standing change to ADR-0001
+  rule 2. No human specialist reviewed this decision, which is a reason to take the revisit triggers seriously.
 
-## Selection
+## Decision
 
-Apply all six, each with its recommended option.
+Accept all six, each with its recommended option.
 
-| ADR | Decision area | Apply | Why |
+| ADR | Decision area | Accepted | Why |
 |---|---|---|---|
 | [ADR-0010](0010-filesystem-client-guarantees.md) | Guarantees to clients | Option C: a crash leaves a prefix of the completion order; `sync` on request; sticky fail-stop | No measured program requests durability, so only a consistent default protects the toolchain. It is also one checkable rule. |
 | [ADR-0011](0011-filesystem-crash-consistency-mechanism.md) | Crash consistency | Option B: copy-on-write tree with dual root records and no replay | It gives ADR-0010's prefix rule for data overwrites at no extra cost, and leaves two outcomes per commit to test. |
@@ -27,13 +28,13 @@ drafter records all of them as addressed, none declined.
 ## The one real choice among the recommendations
 
 ADR-0013 leaves open whether to keep link objects or take pure Option C, which removes one node kind and the
-`libposix` link follower. This selection keeps link objects: no measured workload needs them, but they let archives
+`libposix` link follower. This decision keeps link objects: no measured workload needs them, but they let archives
 with symbolic links round-trip, and removing them later is cheaper than adding a node kind to a format in use. If
 extracting third-party archives turns out to be out of scope, pure Option C is the better choice.
 
 ## Conditions that remain open
 
-None of these blocks the selection, but each must be settled before or during implementation:
+None of these blocks acceptance, but each must be settled before or during implementation:
 
 1. **Assumed values.** `MAX_ATOMIC_WRITE` (1 MiB) and `T_COMMIT` (5 s) wait for the IPC ADR and a commit-cost
    measurement. `N_PAIRS`, the 4 KiB block size and the path limits are also marked as assumptions.

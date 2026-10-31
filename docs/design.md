@@ -21,7 +21,7 @@ TODO(architect): what is new in Zoraya, in the architect's words.
 
 ## Architecture as decided
 
-All six ADRs were accepted as recommended on 2026-10-25. [ADR-0001](adr/0001-decision-process.md) sets the process:
+ADR-0001 to ADR-0006 were accepted as recommended on 2026-10-25, and the filesystem ADRs below on 2026-10-31. [ADR-0001](adr/0001-decision-process.md) sets the process:
 - agents write ADRs as `proposed`, and only the architect accepts them;
 - accepted ADRs bind implementation;
 - every invariant gets an ID and becomes a check (`make adr-check` covers ADR-0001's own invariants;
@@ -82,6 +82,17 @@ set or is explicitly not waitable.
 - **Completions.** A completion packet kind is reserved on the same port for later.
 
 `pselect` with SIGCHLD and both jobserver styles are mapped onto this mechanism for every measured scenario.
+
+**Filesystem** ([ADR-0010](adr/0010-filesystem-client-guarantees.md) to
+[ADR-0015](adr/0015-block-device-contract.md)). Accepted, not yet built; the reasons are in
+[`adr/filesystem-batch-selection.md`](adr/filesystem-batch-selection.md).
+- **Guarantees.** After a crash a volume holds a prefix of the completion order. Requests are atomic, durability comes
+  from `sync`, and a storage error stops the volume's writes for good.
+- **Mechanism.** A copy-on-write tree with dual root records. Mount picks the newest valid root, with no replay.
+- **Integrity.** CRC32C of every block in its parent pointer, a total decoder, and one service per volume.
+- **Names.** UTF-8 compared byte for byte, no hard links, no `..` in the server, symbolic links as inert objects.
+- **Metadata.** `mtime`, `ctime` and an advisory mode; times strictly increase on a volume.
+- **Device.** The virtio contract as written: no write is atomic, and flush is the only barrier.
 
 ## Boot (stage 0, as built)
 

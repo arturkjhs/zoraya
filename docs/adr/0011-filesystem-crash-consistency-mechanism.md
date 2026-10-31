@@ -1,6 +1,6 @@
 # ADR-0011: Filesystem crash-consistency mechanism
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0010, ADR-0015
 - **Evidence:** X-14, DM-038, GR-014, GR-017, alternatives-postmortem.md#sprite, fs/requirements.md#12-linux-syscalls, fs/requirements.md#13-open-flags-and-who-uses-them, fs/requirements.md#21-durability-is-never-requested, fs/requirements.md#22-atomic-rename, fs/requirements.md#26-appends, fs/requirements.md#6-requirements-derived-for-the-adrs, fs/requirements.md#sources-and-queries, fs/survey.md#btrfs, fs/survey.md#comparison, fs/survey.md#ext4, fs/survey.md#f2fs, fs/survey.md#fxfs-and-minfs-fuchsia, fs/survey.md#littlefs, fs/survey.md#nilfs2, fs/survey.md#plan-9-cwfs-fossil-and-venti, fs/survey.md#redoxfs, fs/survey.md#testing-crash-consistency, fs/survey.md#wafl, fs/survey.md#xfs, fs/survey.md#zfs
@@ -224,3 +224,5 @@ heavy files fragment) is accepted with no escape hatch, which costs performance 
 - The volume size grows so that commit cost (tree height, allocator) dominates: reconsider the tree layout.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. Reasons and open conditions: [filesystem-batch-selection.md](filesystem-batch-selection.md).

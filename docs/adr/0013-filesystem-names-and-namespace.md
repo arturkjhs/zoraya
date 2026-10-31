@@ -1,6 +1,6 @@
 # ADR-0013: File names and namespace structure
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0005, ADR-0010
 - **Evidence:** CP-01, CP-03, CP-04, CP-22, CP-27, X-8, DM-039, DM-040, DM-043, DM-094, DM-095, DM-096, GR-003, GR-004, GR-015, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, fs/requirements.md#3-links, fs/requirements.md#31-hard-links, fs/requirements.md#32-symbolic-links, fs/requirements.md#5-questions-the-data-cannot-answer, fs/requirements.md#6-requirements-derived-for-the-adrs, fs/survey.md#bcachefs, fs/survey.md#names, fs/survey.md#sources, fs/survey.md#zfs, task-02/callsite-analysis.md#feature-6-other-task-01-design-mistakes-in-the-data, task-02/conflict-impact.md#x-8-strict-names-vs-posix-byte-names, task-02/syscall-surface.csv
@@ -212,3 +212,5 @@ names cannot be extracted).
 - A requirement to read or write case-insensitive media: a separate FAT/exFAT service, not a change to this one.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. Reasons and open conditions: [filesystem-batch-selection.md](filesystem-batch-selection.md). Link objects (Option D) are kept rather than pure Option C.

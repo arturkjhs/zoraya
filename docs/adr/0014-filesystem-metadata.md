@@ -1,6 +1,6 @@
 # ADR-0014: File metadata
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-25
 - **Depends on:** ADR-0002, ADR-0010, ADR-0013
 - **Evidence:** CP-01, CP-03, CP-20, CP-27, DM-003, DM-006, DM-009, DM-010, DM-016, DM-042, DM-063, GR-004, alternatives-postmortem.md#plan-9--inferno, fs/requirements.md#11-libc-functions, fs/requirements.md#4-metadata-read-and-written, fs/requirements.md#41-make-and-modification-times, fs/requirements.md#5-questions-the-data-cannot-answer, fs/survey.md#fat, fs/survey.md#nilfs2, fs/survey.md#plan-9-cwfs-fossil-and-venti, task-02/callsite-analysis.md#feature-5-identity-and-permissions, task-02/libc-surface.csv
@@ -202,3 +202,5 @@ a cheap usage signal") is accepted.
   platform).
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. Reasons and open conditions: [filesystem-batch-selection.md](filesystem-batch-selection.md).
