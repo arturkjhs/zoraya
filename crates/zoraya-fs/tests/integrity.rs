@@ -254,7 +254,7 @@ fn root_record_selection() {
         let mut v = mount(&mut rec, &clock);
         let root = v.root();
         // Not a create: a create after mount first reserves ids durably
-        // (one more commit, proposed ADR-0016).
+        // (one more commit, ADR-0016).
         v.set_attr(root, Some(0o700), None).unwrap();
         v.sync().unwrap();
     }

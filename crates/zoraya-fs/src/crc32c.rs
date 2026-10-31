@@ -3,7 +3,7 @@
 //! Table-driven, slicing by one byte. The ADR asks for the CPU's CRC32C
 //! instructions where the CPU reports them; this crate is
 //! `#![forbid(unsafe_code)]` (INV-0012-3) and the intrinsics are `unsafe`, so
-//! the hardware path is deferred (proposed ADR-0016, item 6). The result is
+//! the hardware path is deferred (ADR-0016, item 6). The result is
 //! the same either way; only speed differs.
 
 /// Reflected Castagnoli polynomial.

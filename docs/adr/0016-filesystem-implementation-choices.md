@@ -1,6 +1,6 @@
 # ADR-0016: Filesystem implementation choices the accepted ADRs leave open
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0010, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0015
 - **Evidence:** CP-12, DM-037, GR-014, alternatives-postmortem.md#redox, fs/survey.md#btrfs, fs/survey.md#littlefs, fs/survey.md#redoxfs, fs/survey.md#testing-crash-consistency
@@ -98,6 +98,12 @@ The items:
 
 ## Recommendation
 
+### Decision
+
+Accepted 2026-10-31. Until the on-disk format is declared stable by a later ADR, on-disk compatibility between format versions is not guaranteed; volumes are rebuilt with zoraya-mkfs. Raising the volume limit is deferred to a format version 2 when a real need appears. Hardware CRC32C may be added later in a separate crate with the table implementation as fallback; it does not change the format.
+
+The original recommendation follows, accepted with the 20.9 GiB limit and software CRC32C.
+
 **Recommendation (not a decision): Option B**, as implemented:
 
 1. **Ids in durable batches.** The root record holds `id_limit`: every id below it may have been handed out. Mount
@@ -160,3 +166,6 @@ The items:
 
 ## Architect's decision
 
+### Decision
+
+Accepted 2026-10-31. Until the on-disk format is declared stable by a later ADR, on-disk compatibility between format versions is not guaranteed; volumes are rebuilt with zoraya-mkfs. Raising the volume limit is deferred to a format version 2 when a real need appears. Hardware CRC32C may be added later in a separate crate with the table implementation as fallback; it does not change the format.

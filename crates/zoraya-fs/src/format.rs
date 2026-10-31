@@ -95,7 +95,7 @@ pub const NODE_CAPACITY: usize = BLOCK_SIZE - HEADER_LEN - 4;
 pub const BITS_PER_BITMAP: u64 = ((BLOCK_SIZE - HEADER_LEN - 8) * 8) as u64;
 /// Bitmap blocks an allocator root can point to.
 pub const MAX_BITMAPS: u64 = ((BLOCK_SIZE - HEADER_LEN - 8) / PTR_LEN) as u64;
-/// Largest volume in blocks: about 20.9 GiB (proposed ADR-0016, item 4).
+/// Largest volume in blocks: about 20.9 GiB (ADR-0016, item 4).
 pub const MAX_BLOCKS: u64 = MAX_BITMAPS * BITS_PER_BITMAP;
 
 /// Encoded size of a [`BlockPtr`].
@@ -347,8 +347,8 @@ pub struct RootRecord {
     pub alloc_root: BlockPtr,
     /// The highest time assigned so far (ADR-0014 rule 3).
     pub last_assigned: Timestamp,
-    /// Every object id below this may have been handed out (proposed
-    /// ADR-0016, item 1).
+    /// Every object id below this may have been handed out (ADR-0016,
+    /// item 1).
     pub id_limit: u64,
 }
 

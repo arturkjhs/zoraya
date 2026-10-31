@@ -262,7 +262,7 @@ fn times_and_ids_across_crash_remounts() {
     }
 }
 
-/// The id reservation of proposed ADR-0016: after a crash that loses the
+/// The id reservation of ADR-0016: after a crash that loses the
 /// creation of an object, the next object gets a new id.
 #[test]
 fn lost_ids_are_not_reused() {

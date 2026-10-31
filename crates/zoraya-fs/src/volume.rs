@@ -39,7 +39,7 @@ pub const T_COMMIT_NS: u64 = 5_000_000_000;
 /// (ADR-0011 rule 2's dirty-state threshold; 4 MiB).
 pub const COMMIT_THRESHOLD_BLOCKS: u64 = 1024;
 /// Blocks kept free for requests that only free space, so that removing a
-/// file works on a full volume (proposed ADR-0016, item 3).
+/// file works on a full volume (ADR-0016, item 3).
 pub const DELETE_RESERVE: u64 = 64;
 /// Object ids are reserved durably in batches of this many (proposed
 /// ADR-0016, item 1).

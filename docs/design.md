@@ -88,7 +88,8 @@ set or is explicitly not waitable.
 [ADR-0015](adr/0015-block-device-contract.md)). Accepted; the reasons are in
 [`adr/filesystem-batch-selection.md`](adr/filesystem-batch-selection.md). The storage engine is built as a
 host-tested library (TASK-07, "Filesystem engine (as built)" below); the service around it is stage 4. Choices the
-ADRs leave open are in [ADR-0016](adr/0016-filesystem-implementation-choices.md) (proposed).
+ADRs leave open are in [ADR-0016](adr/0016-filesystem-implementation-choices.md). Until a later ADR declares the
+format stable, compatibility between format versions is not guaranteed: volumes are rebuilt with `zoraya-mkfs`.
 - **Guarantees.** After a crash a volume holds a prefix of the completion order. Requests are atomic, durability comes
   from `sync`, and a storage error stops the volume's writes for good.
 - **Mechanism.** A copy-on-write tree with dual root records. Mount picks the newest valid root, with no replay.

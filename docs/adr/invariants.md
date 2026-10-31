@@ -138,5 +138,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0032](0032-system-call-abi.md) System call ABI | 2 |
 | [ADR-0033](0033-initial-ramdisk-and-elf.md) Initial ramdisk and ELF loading | 2 |
 | [ADR-0034](0034-user-faults.md) Faults from user processes at stage 2 | 2 |
-| [ADR-0016](0016-filesystem-implementation-choices.md) Filesystem implementation choices the accepted ADRs leave open (proposed) | 4 |
+| [ADR-0016](0016-filesystem-implementation-choices.md) Filesystem implementation choices the accepted ADRs leave open | 4 |
 | **Total** | **105** |
