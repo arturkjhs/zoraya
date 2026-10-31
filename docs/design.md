@@ -147,6 +147,9 @@ How the kernel starts. The code is in `kernel/src/arch/aarch64/boot.rs`, `kernel
 - **Shutdown.** PSCI `SYSTEM_OFF`, through the conduit (`hvc` or `smc`) named by the device tree's PSCI node.
 - **Panic.** The handler prints `ZORAYA-PANIC at file:line:col: message` on one line, then halts.
 
+**Threads and user programs** ([ADR-0030](adr/0030-threads-and-scheduling.md) to
+[ADR-0034](adr/0034-user-faults.md)). Stage 2, `proposed`. The sections below describe the code that follows them.
+
 ## Exceptions (as built)
 
 The code is in `kernel/src/arch/aarch64/exception.rs` (ADR-0024).
@@ -159,7 +162,11 @@ The code is in `kernel/src/arch/aarch64/exception.rs` (ADR-0024).
 - **Policy.** Any synchronous exception, SError or FIQ from EL1 prints a `ZORAYA-FAULT` report and panics. The report
   has `ELR_EL1`, `SPSR_EL1` and the registers. Exceptions that set a syndrome add the exception class by number and
   name, `ESR_EL1`, and `FAR_EL1` when valid; an interrupt's report says it has none. An IRQ with no handler is disabled and ended, reported, and panics. Spurious IRQs are counted.
-- **EL0 vectors** exist and panic with a message saying they are not wired up until stage 2.
+- **From EL0.** The vector saves the user's `SP_EL0` in the frame and computes the stack limit from SP, since thread
+  stacks have a fixed size and SP_EL1 is at the top of one on entry. `svc` is a system call. Any other synchronous
+  exception ends the process (ADR-0034). An SError from EL0 is a kernel fault.
+- **User copies.** A data abort with the PC in `arch/aarch64/usercopy.rs` resumes at its error exit. It is the only
+  kernel fault that resumes.
 - **Masks.** SError is unmasked once `kernel_main` starts, IRQ and FIQ after the GIC is up. Debug stays masked.
   Handlers run with IRQ masked and do not nest. A panic masks IRQ and FIQ.
 
@@ -212,6 +219,29 @@ The code is in `kernel/src/gic.rs`, `kernel/src/irq.rs`, `kernel/src/timer.rs` a
   earliest, rounded up, so nothing fires early. An empty queue turns the timer off. There is no periodic tick;
   periodic work arms its own next deadline. Callbacks run in interrupt context.
 
+## Threads and processes (as built)
+
+The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src/memory/{stack,user}.rs`.
+
+- **Scheduler.** One run queue, round robin, on one CPU. The kernel is not preempted: a slice ends at a return to
+  EL0, and kernel threads run until they yield or block. A 10 ms slice is armed only when another thread is ready.
+- **Thread stacks.** 64 KiB with an unmapped guard page, in the stack window.
+- **Context switch.** Callee-saved registers, `FPCR`, `FPSR`, `TPIDR_EL0` and the stack limit. All else is in the
+  exception frame. A thread ended is freed by a later one, since none can free its own stack.
+- **Address spaces.** One table per process, with an ASID of 8 bits, so 255 live processes at most. User pages are
+  not global. With no current process, `EPD0` is set and `TTBR0` is 0.
+- **User layout.** Programs from 4 MiB up; a 64 KiB stack mapped in full, ending one page below 2^47, with an unmapped
+  page below it.
+- **Processes.** One thread each, started by the kernel from the ramdisk. All memory is mapped at creation, so there
+  is no demand paging. `Process::wait` gives the `ExitRecord`. `spawn` for user space is stage 3.
+- **System calls.** `svc #0`, number in x8, status in x0, value in x1, as `zoraya-abi` states:
+  `process_exit`, `thread_yield`, `console_write`, `clock_monotonic`, `sleep_until`. The handle table is one fixed
+  console handle until stage 3.
+- **Ramdisk.** QEMU ignores `-initrd` for an ELF kernel, so `tools/mkramdisk` packs `user/` programs and the kernel
+  embeds them in `.rodata`. A kernel built without the Makefile has an empty one.
+- **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb`, which checks permissions as EL0 does.
+  No call writes to user memory yet.
+
 ## Tests
 
 `make test` runs:
@@ -243,8 +273,9 @@ How the in-QEMU tests run and report:
   stack and out of any exception context.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
   exists only in the test kernel: the normal kernel cannot resume a fault.
-- Seven tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
-  access, an unexpected interrupt, an EL0 exception and a stack overflow. `--expect-line` checks what the reports say.
+- Eight tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
+  access, an unexpected interrupt, an EL0 exception with no process, and a stack overflow on the boot stack and on a thread
+  stack. `--expect-line` checks what the reports say.
 - `tools/test-runner` applies a timeout, and fails on a missing `begin` or `end` line, a count mismatch, a panic
   outside a test, a kernel that does not power off, or a non-zero QEMU status. The guest's exit status is not used as
   a signal.
@@ -274,13 +305,18 @@ deterministic random mutations.
 - **Memory.** Page tables left empty by an unmap are not freed; later maps go below them, so a block cannot be used
   where an empty table remains. The heap never shrinks, and memory in a size class
   stays there. Frames are not zeroed by the allocator, except for table frames. No double-free detection in the heap.
+- **Threads.** No priorities, and kernel paths are not preempted. One thread per process. `sleep_until(Infinite)`
+  never returns, and nothing can kill a process yet. A deadline queue of 32 is shared by sleepers and the slice, so a
+  full queue fails `sleep_until` with `NoMemory`.
+- **User memory.** Copies are a byte at a time. At most 255 live processes. A process's memory is all mapped up front.
+- **Console.** `console_write` is a stand-in until the terminal service (ADR-0032), and any process can use it.
 - **Interrupts.** One priority, no nesting. FIQ and SError reports are untested, since nothing raises them.
   Interrupt handlers must not panic in a test that expects recovery: the interrupt would stay active.
 - **Emergency stack.** A second overflow, on the emergency stack, halts silently. The deepest use measured is the
   stack overflow report: 5,552 of 32,768 bytes.
 - **Faults while a lock is held.** Recovery in the test kernel does not release locks, so a test that panics while
   holding one makes later tests fail. The normal kernel halts on panic.
-- **Single core.** Only the boot CPU runs. The GIC, timer and lock are set up for it alone. Before SMP: on GICv2,
+- **Single core.** Only the boot CPU runs, with one emergency stack. The GIC, timer and lock are set up for it alone. Before SMP: on GICv2,
   `gic::acknowledge` must keep the source bits of an SGI for the EOI and mask them from the ID.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
   (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
@@ -324,6 +360,8 @@ kernel/                   zoraya-kernel: boot, arch, machine-dependent code only
   src/gic.rs, irq.rs      interrupt controller and dispatch
   src/timer.rs            monotonic clock and deadlines
   src/sync.rs             the kernel's lock
+  src/sched.rs            threads and the scheduler
+  src/process.rs, syscall.rs, ramdisk.rs  processes, system calls, the embedded ramdisk
   src/psci.rs             SYSTEM_OFF
   src/panic.rs            panic handler
   src/testing.rs          in-QEMU tests (feature qemu-test)
@@ -333,14 +371,18 @@ crates/                   no_std, host-tested
   zoraya-heap/            kernel heap logic
   zoraya-pagetable/       translation table building and editing
   zoraya-time/            clock arithmetic and the deadline queue
+  zoraya-abi/             the native ABI, with its checks
+  zoraya-elf/, zoraya-ramdisk/  total parsers for programs and the ramdisk
+user/                     the user runtime and the programs in the ramdisk
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
   test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol
   adr-check/              zoraya-adr-check: ADR-0001 invariants
+  mkramdisk/              zoraya-mkramdisk: packs user programs
   posix-surface/          TASK-02/02b measurement pipeline (unchanged)
 build/                    kernel ELFs copied by make (not committed)
 ```
 
-The ADRs mention an `abi` crate, `libposix`, the broker and services. None of these exists yet; they arrive in
-stages 2 to 6.
+The ADRs mention `libposix`, the broker and services. None of these exists yet; they arrive in
+stages 3 to 6.
