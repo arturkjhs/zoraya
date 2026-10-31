@@ -1,6 +1,6 @@
 # ADR-0022: Kernel heap
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0020, ADR-0021
 - **Evidence:** CP-14, DM-030, alternatives-postmortem.md#hubris, alternatives-postmortem.md#redox
@@ -74,3 +74,5 @@ Recommended: **Option C**, in a `no_std` crate `zoraya-heap`. It is a recommenda
 - SMP, when a global lock around the heap becomes contended.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. No human specialist reviewed it; the independent review is in `docs/tasks/TASK-05-review.md`.

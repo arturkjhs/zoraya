@@ -1,6 +1,6 @@
 # ADR-0024: Kernel fault policy
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0004, ADR-0020
 - **Evidence:** alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, alternatives-postmortem.md#l4-family-and-sel4
@@ -78,3 +78,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - Drivers moving into the kernel, which would raise the cost of fail-stop.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. No human specialist reviewed it; the independent review is in `docs/tasks/TASK-05-review.md`.

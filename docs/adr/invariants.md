@@ -73,9 +73,9 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0004](0004-async-notification.md) Asynchronous notification without Unix signals (native side) | 8 |
 | [ADR-0005](0005-posix-scope.md) Scope of POSIX compatibility | 4 |
 | [ADR-0006](0006-event-mechanism.md) Event and readiness mechanism (X-4) | 9 |
-| [ADR-0020](0020-kernel-address-space.md) Kernel virtual address space layout (proposed) | 5 |
-| [ADR-0021](0021-physical-memory.md) Physical memory management (proposed) | 3 |
-| [ADR-0022](0022-kernel-heap.md) Kernel heap (proposed) | 2 |
-| [ADR-0023](0023-interrupts-and-time.md) Interrupts and time (proposed) | 4 |
-| [ADR-0024](0024-kernel-fault-policy.md) Kernel fault policy (proposed) | 3 |
+| [ADR-0020](0020-kernel-address-space.md) Kernel virtual address space layout | 5 |
+| [ADR-0021](0021-physical-memory.md) Physical memory management | 3 |
+| [ADR-0022](0022-kernel-heap.md) Kernel heap | 2 |
+| [ADR-0023](0023-interrupts-and-time.md) Interrupts and time | 4 |
+| [ADR-0024](0024-kernel-fault-policy.md) Kernel fault policy | 3 |
 | **Total** | **56** |

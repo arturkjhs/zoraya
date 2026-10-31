@@ -1,6 +1,6 @@
 # ADR-0021: Physical memory management
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0020
 - **Evidence:** CP-14, DM-030, alternatives-postmortem.md#barrelfish, alternatives-postmortem.md#hubris, alternatives-postmortem.md#l4-family-and-sel4
@@ -64,3 +64,5 @@ Recommended: **Option B**. It is a recommendation, not a decision. The interface
 - Frame allocation showing up in the cost of the `snapshot_process` measurement that ADR-0005 requires.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-10-31. Decided by an agent acting as architect, on the project owner's explicit instruction to take this decision in the owner's place. No human specialist reviewed it; the independent review is in `docs/tasks/TASK-05-review.md`.

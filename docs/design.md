@@ -83,9 +83,9 @@ set or is explicitly not waitable.
 
 `pselect` with SIGCHLD and both jobserver styles are mapped onto this mechanism for every measured scenario.
 
-**Proposed, not yet decided.** Stage 1 is built on ADR-0020 (address space), ADR-0021 (physical memory), ADR-0022
-(heap), ADR-0023 (interrupts and time) and ADR-0024 (kernel fault policy). They are `proposed` until the architect
-reviews the branch. The code follows their recommendations, and the sections below describe it.
+**Kernel foundations** ([ADR-0020](adr/0020-kernel-address-space.md) to
+[ADR-0024](adr/0024-kernel-fault-policy.md)). Address space, physical memory, heap, interrupts and time, and kernel
+fault policy, accepted on 2026-10-31. The sections below describe the code that follows them.
 
 ## Boot (as built)
 
