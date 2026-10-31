@@ -17,6 +17,8 @@
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
+#   --initrd FILE         load FILE as the initial ramdisk; the device tree's
+#                         /chosen says where (linux,initrd-start and -end)
 #   --print-cmd           print the QEMU command line on stderr first
 #
 # Loading: the kernel ELF is passed with -kernel. QEMU's virt board treats an
@@ -37,6 +39,7 @@ mode=interactive
 dumpdtb=
 print_cmd=0
 kernel=
+initrd=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
 
@@ -49,6 +52,7 @@ while [ $# -gt 0 ]; do
         --test) mode=test; shift ;;
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
+        --initrd) [ $# -ge 2 ] || die "--initrd needs a file"; initrd=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
         -h|--help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         -*) die "unknown option $1" ;;
@@ -79,7 +83,8 @@ fi
 
 set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
     -smp "$smp" -m "$mem" -nodefaults -no-reboot
-[ -n "$kernel" ] && [ -z "$dumpdtb" ] && set -- "$@" -kernel "$kernel"
+[ -n "$kernel" ] && set -- "$@" -kernel "$kernel"
+[ -n "$initrd" ] && set -- "$@" -initrd "$initrd"
 
 case $mode in
     interactive) set -- "$@" -display none -serial mon:stdio ;;
