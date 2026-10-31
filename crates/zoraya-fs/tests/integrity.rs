@@ -381,3 +381,38 @@ fn idle_and_read_only_sequences_write_nothing() {
     assert_eq!(v.commits(), 0);
     eprintln!("idle: {n} read-only requests, 0 writes");
 }
+
+/// Proposed ADR-0016 item 2: when the newest generation's root record is
+/// valid but its tree root block is not, mount fails with `Corrupt` rather
+/// than fall back to an older generation (ADR-0011 rule 4: never select a
+/// generation lower than the highest valid one).
+#[test]
+fn invalid_tree_root_of_the_newest_generation_fails_the_mount() {
+    let clock = TestClock::new(T0);
+    let mut dev = fresh(256);
+    {
+        let mut v = mount(&mut dev, &clock);
+        let root = v.root();
+        for i in 0..3 {
+            v.mkdir(root, &format!("d{i}"), 0o755).unwrap();
+            v.sync().unwrap();
+        }
+    }
+    let rec = select_root(&mut dev).unwrap().record;
+    let s = rec.tree_root.addr as usize * BLOCK_SIZE;
+    dev.block_mut(rec.tree_root.addr)[100] ^= 1;
+    let _ = s;
+    let r = Volume::mount(
+        dev.clone(),
+        clock.clone(),
+        MountOptions {
+            read_only: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.err(), Some(FsError::Corrupt));
+    assert_eq!(
+        Volume::mount(dev, clock, MountOptions::default()).err(),
+        Some(FsError::Corrupt)
+    );
+}
