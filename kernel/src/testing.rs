@@ -346,6 +346,10 @@ static TESTS: &[Test] = &[
         run: fault_report_for_stack_overflow,
     },
     Test {
+        name: "every_overflow_reached_the_limit_check",
+        run: every_overflow_reached_the_limit_check,
+    },
+    Test {
         name: "emergency_stack_kept_a_margin",
         run: emergency_stack_kept_a_margin,
     },
@@ -1517,6 +1521,13 @@ fn use_stack(depth: u64) -> u64 {
 fn fault_report_for_stack_overflow() {
     REARM_CANARY.store(true, Ordering::Relaxed);
     black_box(use_stack(0));
+}
+
+/// The three overflow reports above are expected panics, but a panic alone
+/// proves little: with no limit in `SP_EL0`, an overflow from a system call
+/// runs on through the guard page into the stack below it, and panics anyway.
+fn every_overflow_reached_the_limit_check() {
+    assert_eq!(arch::STACK_OVERFLOWS.load(Ordering::Relaxed), 3);
 }
 
 /// Runs after the stack overflow report, which is the deepest use of the

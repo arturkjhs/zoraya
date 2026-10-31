@@ -11,7 +11,7 @@ pub use context::{Context, switch};
 pub use exception::init as exception_init;
 pub use exception::{FRAME_SIZE, Frame, THREAD_STACK_SIZE, write_user_frame};
 #[cfg(feature = "qemu-test")]
-pub use exception::{catch, enter_el0, recover_to};
+pub use exception::{STACK_OVERFLOWS, catch, enter_el0, recover_to};
 pub use usercopy::copy_from_user;
 
 use core::arch::asm;

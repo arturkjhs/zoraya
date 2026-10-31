@@ -378,7 +378,16 @@ fn report(frame: &Frame, kind: u64) {
     println!("  sp  {:#018x}", frame.sp);
 }
 
+/// Stack overflows the vectors' limit check caught.
+#[cfg(feature = "qemu-test")]
+pub static STACK_OVERFLOWS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
 fn fatal(frame: &Frame, kind: u64) -> ! {
+    #[cfg(feature = "qemu-test")]
+    if kind == KIND_OVERFLOW {
+        STACK_OVERFLOWS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    }
     report(frame, kind);
     let ec = exception_class(frame.esr);
     let name = exception_name(kind);

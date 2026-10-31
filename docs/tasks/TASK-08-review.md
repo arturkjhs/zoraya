@@ -161,7 +161,7 @@ The implementing agent applied these after the review, in the commit that adds t
 | R-07 | Fixed. `spin` makes no system call while it runs, and `PREEMPTIONS` counts only real switches. The mutant result is in the note below. |
 | R-08 | Fixed. New `regsave` checks x2 to x30 across system calls. `regs` checks all 128-bit q registers, x19 to x28, FPCR and TLS across preemption. |
 | R-09 | Fixed. The runtime's `_start` faults if any x or q register, `TPIDR_EL0` or `FPCR` is not zero, in every program. |
-| R-10 | Fixed. New expected-failure test `fault_report_for_stack_overflow_from_el0`, through a system call that exists only in the test kernel. |
+| R-10 | Fixed. New expected-failure test `fault_report_for_stack_overflow_from_el0`, through a system call that exists only in the test kernel. Rerunning `m24` showed that test alone was not enough: without the limit the kernel still panics, having run through the guard page into the stack below. `every_overflow_reached_the_limit_check` counts what the vectors caught, and fails under `m24`. |
 | R-11 | Fixed. New test `lone_process_has_no_timer` reads the timer from a lone user process. |
 | R-12 | Status corrected: INV-0002-1 is back to `not yet applicable (stage 4)`. ADR-0002's open questions and ADR-0032 state what the lint does not cover, and that `process_exit`'s `code` needs the two ADRs reconciled. That is for the architect. The table is still not connected to the dispatcher. |
 | R-13 | INV-0031-4 and INV-0032-2 now state their limits, and `fuzz` calls `sleep_until` with near deadlines. INV-0024-2 is accepted, so its exception is recorded in ADR-0024's open questions for the architect. |
@@ -179,3 +179,5 @@ The implementing agent applied these after the review, in the commit that adds t
 | R-25 | Fixed: an unreadable segment is refused, with a host test, and ADR-0033 says so. |
 | R-26 | Open: needs the Arm ARM. |
 | R-27 | Fixed: `f_wfi` and `f_align` added. |
+
+Mutants rerun on the final code, each in a clean clone: `m26` (no preempt point on the IRQ path), `m12` (a slice armed with nothing waiting), `m21` (stale `TPIDR_EL0` in a new thread) and `m24` (no limit from EL0) now fail `make test-qemu`. `m04`, `m06` and the mutants of the other findings were not rerun.
