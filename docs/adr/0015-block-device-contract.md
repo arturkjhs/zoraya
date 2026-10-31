@@ -167,6 +167,9 @@ not promise; D models hardware we do not have.
   decide.
 - Block size: 4 KiB is assumed; measure whether larger blocks reduce ADR-0011's write amplification.
 - Multi-queue virtio-blk (`VIRTIO_BLK_F_MQ`) and request merging are performance questions for the driver.
+- *Check status (TASK-07, ADR-0001 rule 6).* INV-0015-4's fault-device half is checked in
+  `crates/zoraya-fs/tests/faults.rs`; its driver half (each virtio status mapped to the trait's error type) waits
+  for the virtio-blk driver of stage 4.
 
 ## Revisit triggers
 

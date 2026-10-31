@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-mkfs"
+description = "Creates a Zoraya filesystem image, optionally populated from a host directory."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-fs = { path = "../../crates/zoraya-fs" }
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "zoraya-fs"
+description = "Filesystem storage engine (ADR-0010 to ADR-0015): on-disk format, copy-on-write tree, commit protocol, checker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Records which objects' attribute records a request read, for the
+# INV-0013-3 test. Off in every non-test build.
+instrument = []
+
+[dev-dependencies]
+zoraya-fs-testkit = { path = "../zoraya-fs-testkit" }
+
+[lints]
+workspace = true

@@ -1,0 +1,36 @@
+# Coverage-guided fuzzing of the zoraya-fs decoder with cargo-fuzz.
+#
+# Needs a nightly toolchain and cargo-fuzz, so it is not part of the
+# workspace and `make test` does not run it; the workspace's own
+# deterministic fuzz test (crates/zoraya-fs/tests/decoder_fuzz.rs) does.
+# How to run: see README.md here.
+
+[package]
+name = "zoraya-fs-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.10"
+zoraya-fs = { path = "../crates/zoraya-fs" }
+zoraya-fs-testkit = { path = "../crates/zoraya-fs-testkit" }
+
+[[bin]]
+name = "mount_walk"
+path = "fuzz_targets/mount_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_image"
+path = "fuzz_targets/raw_image.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

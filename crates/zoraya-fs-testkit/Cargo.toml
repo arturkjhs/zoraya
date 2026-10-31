@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-fs-testkit"
+description = "Test support for zoraya-fs: memory, recording and fault-injecting block devices, the ADR-0010 reference model, and the crash harness."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-fs = { path = "../zoraya-fs", features = ["instrument"] }
+
+[lints]
+workspace = true

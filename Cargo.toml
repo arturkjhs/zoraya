@@ -10,11 +10,17 @@ members = [
     "crates/zoraya-pmm",
     "crates/zoraya-ramdisk",
     "crates/zoraya-time",
+    "crates/zoraya-fs",
+    "crates/zoraya-fs-testkit",
     "tools/test-runner",
     "tools/adr-check",
     "tools/mkramdisk",
+    "tools/zoraya-mkfs",
+    "tools/zoraya-fsck",
     "user",
 ]
+# The fuzz targets need a nightly toolchain; they are a separate workspace.
+exclude = ["fuzz"]
 # The kernel and user programs only build for aarch64-unknown-none; plain
 # `cargo test` and `cargo build` act on the host-side members. The Makefile
 # builds the others.
@@ -27,9 +33,13 @@ default-members = [
     "crates/zoraya-pmm",
     "crates/zoraya-ramdisk",
     "crates/zoraya-time",
+    "crates/zoraya-fs",
+    "crates/zoraya-fs-testkit",
     "tools/test-runner",
     "tools/adr-check",
     "tools/mkramdisk",
+    "tools/zoraya-mkfs",
+    "tools/zoraya-fsck",
 ]
 
 [workspace.package]
@@ -37,6 +47,14 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
+
+# The filesystem's crash and fuzz tests mount tens of thousands of images;
+# unoptimised they take minutes. Optimise these two crates in test builds too.
+[profile.dev.package.zoraya-fs]
+opt-level = 2
+
+[profile.dev.package.zoraya-fs-testkit]
+opt-level = 2
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
