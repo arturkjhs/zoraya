@@ -268,7 +268,7 @@ The implementing agent applied these after the review, on branch `fs/review-fixe
 | R-12 | Partly. `ProblemKind` now says what has no fix. Repair still does not raise `id_limit` or `last_assigned`, mount does not compare `id_limit` with the tree, and `repaired:` still prints when nothing was done. |
 | R-13 | Fixed: the comment states what a crash during repair leaves, and every bitmap pointer is marked before any is decoded. Not reproduced before or tested after. |
 | R-14 | Fixed: items 2, 5, 7, 8, 9 and 10 now have markers. |
-| R-15 | Open. The sentence the review quotes was not found in ADR-0013 by that wording, so nothing changed. To be checked by hand. |
+| R-15 | Fixed in ADR-0013's check status note: "has no `Name` type yet". |
 | R-16 | Fixed. |
 | R-17 | Recorded in ADR-0016's open questions. Not implemented. |
 | R-18 | Open. The review's own run found no bug. Not added to the suite. |

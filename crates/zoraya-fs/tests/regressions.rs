@@ -176,8 +176,8 @@ fn a_double_crash_keeps_synced_data() {
         })
         .unwrap();
     let mut stable = (*base).clone();
-    for i in 0..w.start {
-        if let Event::Write { block, data, .. } = &events[i] {
+    for event in &events[..w.start] {
+        if let Event::Write { block, data, .. } = event {
             let s = *block as usize * BLOCK_SIZE;
             stable[s..s + BLOCK_SIZE].copy_from_slice(&data[..]);
         }
