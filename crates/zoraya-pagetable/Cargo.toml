@@ -1,0 +1,10 @@
+[package]
+name = "zoraya-pagetable"
+description = "aarch64 translation tables: 4 KiB granule, 48-bit VA, descriptor encoding."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
