@@ -69,6 +69,8 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic fault_report_for_el0_exception \
 	--expect-line "ZORAYA-FAULT synchronous from EL1" \
 	--expect-line "EC 0x3c: BRK instruction" \
+	--expect-line "SPSR_EL1 0x" --expect-line "x30 0x" --expect-line "  sp  0x" \
+	--expect-line "no syndrome: an interrupt does not set ESR_EL1" \
 	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321" \
 	--expect-line "EC 0x25: data abort, same EL" \
 	--expect-line "FAR_EL1 0xffff820000002000" \

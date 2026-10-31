@@ -82,14 +82,20 @@ pub fn stack_canary_intact() -> bool {
 /// Masks IRQ and FIQ on this CPU. SError stays as it is.
 pub fn mask_interrupts() {
     // SAFETY: setting mask bits has no effect on memory or on Rust's state.
-    unsafe { asm!("msr daifset, #3", options(nomem, nostack, preserves_flags)) };
+    // Not `nomem`: this is a compiler barrier, so that the accesses it
+    // protects stay after it.
+    unsafe { asm!("msr daifset, #3", options(nostack, preserves_flags)) };
 }
 
 /// Allows IRQ and FIQ.
-pub fn unmask_interrupts() {
-    // SAFETY: clearing mask bits changes no memory; the vectors are installed
-    // and the interrupt controller is set up.
-    unsafe { asm!("msr daifclr, #3", options(nomem, nostack, preserves_flags)) };
+///
+/// # Safety
+///
+/// The vectors are installed and the interrupt controller is set up, so an
+/// interrupt can be handled.
+pub unsafe fn unmask_interrupts() {
+    // SAFETY: the caller's contract. Not `nomem`, as in `mask_interrupts`.
+    unsafe { asm!("msr daifclr, #3", options(nostack, preserves_flags)) };
 }
 
 /// Waits for an interrupt, which must be unmasked to wake the CPU and run.
@@ -161,9 +167,10 @@ pub fn gic_v3_end_of_interrupt(intid: u32) {
 fn save_and_mask_all() -> u64 {
     let daif: u64;
     // SAFETY: reading DAIF and setting mask bits have no effect on memory.
+    // Not `nomem`, as in `mask_interrupts`.
     unsafe {
         asm!("mrs {}, daif", "msr daifset, #0xf", out(reg) daif,
-             options(nomem, nostack, preserves_flags))
+             options(nostack, preserves_flags))
     };
     daif
 }

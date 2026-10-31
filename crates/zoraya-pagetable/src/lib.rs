@@ -365,6 +365,7 @@ impl PageTable {
         let mut done = 0;
         while done < size {
             let (at, to, left) = (va + done, pa + done, size - done);
+            let first_level = first_level.max(self.first_open_level(mem, at));
             let level = (first_level..3)
                 .find(|l| {
                     let s = level_size(*l);
@@ -385,6 +386,22 @@ impl PageTable {
         Ok(())
     }
 
+    /// The first level at which the walk for `va` finds no table. A table
+    /// left empty by an unmap is valid, so replacing it with a block would
+    /// need break-before-make and would lose the table; the map goes below it
+    /// instead.
+    fn first_open_level<M: TableMemory>(&self, mem: &M, va: u64) -> usize {
+        let mut table = self.root;
+        for level in 0..3 {
+            let descriptor = mem.read(table, entry_index(va, level));
+            if !is_table(descriptor, level) {
+                return level;
+            }
+            table = descriptor & ADDRESS_MASK;
+        }
+        3
+    }
+
     fn map_leaf<M: TableMemory>(
         &mut self,
         mem: &mut M,
@@ -401,6 +418,9 @@ impl PageTable {
                 descriptor & ADDRESS_MASK
             } else {
                 let new = mem.alloc_table().ok_or(MapError::OutOfTables)?;
+                // The zeroes must reach the walker before the link to them
+                // does, or a walk could read old frame contents as entries.
+                mem.sync();
                 mem.write(table, index, table_descriptor(new));
                 new
             };
@@ -416,7 +436,8 @@ impl PageTable {
     /// requirements and the Break-Before-Make sequence"). So nothing may
     /// access the rest of such a block during the call.
     ///
-    /// Tables left empty stay allocated. They are reused by later mappings.
+    /// Tables left empty stay allocated. Later mappings under them reuse them,
+    /// with pages or smaller blocks instead of a block over the table.
     pub fn unmap<M: TableMemory>(
         &mut self,
         mem: &mut M,

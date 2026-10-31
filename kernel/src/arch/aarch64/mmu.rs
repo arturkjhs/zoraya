@@ -42,7 +42,7 @@ pub unsafe fn install(root: u64, empty: u64) {
     };
 
     // SCTLR_EL1.WXN may be cached in a TLB, so it needs invalidation to take
-    // effect ("Preferred Execute-never" and "TLB maintenance requirements").
+    // effect.
     // SAFETY: the new tables have no writable executable page, so nothing
     // changes for the running code.
     unsafe {

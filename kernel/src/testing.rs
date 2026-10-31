@@ -318,9 +318,10 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     println!();
     crate::panic::clear();
     // SAFETY: the panicking test's frames and the panic machinery's frames
-    // are all on the boot stack, and none holds anything still referenced:
-    // tests keep no state outside the atomics above, one CPU runs, and the
-    // panic handler masked interrupts.
+    // are on the boot stack, or the emergency stack after a stack overflow,
+    // and none holds anything still referenced: tests keep no state outside
+    // the atomics above, one CPU runs, and the panic handler masked
+    // interrupts.
     unsafe { arch::recover_to(resume, i + 1) }
 }
 
@@ -536,6 +537,12 @@ fn fallible_allocation_returns_failure() {
     );
     assert_eq!((heap::stats(), frames::stats()), before, "no trace of it");
     assert_eq!(*heap::try_box(7u32).expect("small block"), 7);
+    // Heap addresses are near the top of the address space, so rounding up to
+    // this alignment overflows; it must fail like any other request.
+    let huge_align = Layout::from_size_align(8192, 1 << 47).expect("layout");
+    // SAFETY: the size is not zero; a block would be freed below.
+    let block = unsafe { alloc::alloc::alloc(huge_align) };
+    assert!(block.is_null(), "no span has that alignment");
     assert_eq!(*heap::try_box(()).map(|_| 5).as_ref().expect("no block"), 5);
 }
 
@@ -719,8 +726,19 @@ fn deadline_wakes_a_waiting_cpu() {
     }
     timer::arm(timer::now().plus_nanos(1_000_000), fired, 0).expect("queue");
     // The runner's timeout is the guard: a CPU that never wakes hangs here.
-    while !FIRED.load(Ordering::Relaxed) {
-        arch::wait_for_interrupt();
+    // Masked around the check, or the interrupt could land between it and
+    // `wfi` and leave nothing to wake the CPU. `wfi` still wakes on an
+    // interrupt that is pending but masked.
+    loop {
+        let daif = arch::save_and_mask_interrupts();
+        let fired = FIRED.load(Ordering::Relaxed);
+        if !fired {
+            arch::wait_for_interrupt();
+        }
+        arch::restore_interrupts(daif);
+        if fired {
+            break;
+        }
     }
 }
 
@@ -780,6 +798,7 @@ fn interrupt_preserves_fp_registers() {
                 "movi v0.16b, #0x11",
                 "movi v15.16b, #0x22",
                 "movi v31.16b, #0x33",
+                "msr fpcr, xzr",
                 out("v0") _, out("v15") _, out("v31") _,
                 options(nomem, nostack, preserves_flags),
             )
@@ -788,14 +807,18 @@ fn interrupt_preserves_fp_registers() {
     }
     FIRED.store(false, Ordering::Relaxed);
     timer::arm(timer::now().plus_nanos(1_000_000), clobber, 0).expect("queue");
+    const FPCR_RMODE_UP: u64 = 0b01 << 22;
     let same: u64;
+    let fpcr: u64;
     // SAFETY: only the named registers are used; the loop ends when the
-    // interrupt sets FIRED, which the deadline above guarantees.
+    // interrupt sets FIRED, which the deadline above guarantees. The rounding
+    // mode is put back before Rust code does any arithmetic.
     unsafe {
         core::arch::asm!(
             "movi v0.16b, #0xa5",
             "movi v15.16b, #0x5a",
             "movi v31.16b, #0xc3",
+            "msr fpcr, {rmode}",
             "2:",
             "ldrb {t:w}, [{fired}]",
             "cbz {t:w}, 2b",
@@ -804,6 +827,10 @@ fn interrupt_preserves_fp_registers() {
             "eor {a}, {a}, {b}",
             "umov {b}, v31.d[0]",
             "eor {a}, {a}, {b}",
+            "mrs {f}, fpcr",
+            "msr fpcr, xzr",
+            rmode = in(reg) FPCR_RMODE_UP,
+            f = out(reg) fpcr,
             t = out(reg) _,
             a = out(reg) same,
             b = out(reg) _,
@@ -814,6 +841,7 @@ fn interrupt_preserves_fp_registers() {
     };
     let expected = 0xa5a5_a5a5_a5a5_a5a5u64 ^ 0x5a5a_5a5a_5a5a_5a5a ^ 0xc3c3_c3c3_c3c3_c3c3;
     assert_eq!(same, expected);
+    assert_eq!(fpcr, FPCR_RMODE_UP);
 }
 
 /// Next free SPI ID in QEMU virt's distributor that no device uses in the

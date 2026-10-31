@@ -45,7 +45,11 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
     memory::set_phys_base(phys_base);
     arch::stack_canary_set();
     arch::exception_init();
-    let (fdt, source) = match dtb::locate(x0) {
+    // SAFETY: this result and `info` built from it go out of use at the
+    // shadowing parse below, before anything else runs without the identity
+    // map. `paging::init` ends by removing it, and its last use of `info` is
+    // before that.
+    let (fdt, source) = match unsafe { dtb::locate(x0) } {
         Ok(found) => found,
         Err(e) => fatal_before_console(format_args!("{e}")),
     };
@@ -87,7 +91,8 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
     gic::init(controller);
     let timer_irqs = info.timer.as_ref().expect("no timer in the device tree");
     timer::init(timer_irqs);
-    arch::unmask_interrupts();
+    // SAFETY: boot.rs installed the vectors, and the GIC is set up above.
+    unsafe { arch::unmask_interrupts() };
 
     print_banner(&info, x0, source, entry_el, fdt.total_size());
 

@@ -54,6 +54,9 @@
 //! Left at reset: on CPUs that have them, the fine-grained trap registers
 //! (`HFG*_EL2`, `HCRX_EL2`).
 //!
+//! Assumption: the CPU has a PMU, so `PMCR_EL0` reads; with `N = 0` the
+//! `HPMN` value also needs FEAT_HPMN0. Both hold on the CPUs QEMU gives us.
+//!
 //! Assumption: `HCR_EL2.E2H` can be 0 (FEAT_E2H0). On a CPU where E2H is
 //! RES1, `CNTHCTL_EL2` and `CPTR_EL2` have the E2H=1 layout and the values
 //! above would trap FP/SIMD to EL2. Checked under QEMU 11.1.2: `HCR_EL2` reads
@@ -142,8 +145,26 @@ _start:
     cmp     x1, #4
     b.hs    .Lpark
 
-    // Clear the boot tables. The MMU is off, so these writes bypass the
-    // caches; the invalidation below drops any stale line over them.
+    // Invalidate the tables' lines to the point of coherency, before and
+    // after writing them with the MMU off. Before: a dirty line present on
+    // entry could otherwise be evicted over the new contents. After: nothing
+    // speculated meanwhile may hide them from cached accesses, and `dc ivac`
+    // may act as clean and invalidate, so the first pass is what makes the
+    // second harmless. CTR_EL0.DminLine is the log2 of the line size in
+    // words.
+    mrs     x1, ctr_el0
+    ubfx    x1, x1, #16, #4
+    mov     x11, #4
+    lsl     x11, x11, x1
+    adrp    x1, __boot_tables_start
+    adrp    x3, __boot_tables_end
+7:
+    dc      ivac, x1
+    add     x1, x1, x11
+    cmp     x1, x3
+    b.lo    7b
+    dsb     sy
+
     adrp    x1, __boot_tables_start
     adrp    x2, __boot_tables_end
 1:
@@ -192,19 +213,12 @@ _start:
     cmp     x7, x6
     b.lo    3b
 
-    // Invalidate the tables by VA to the point of coherency, so the walker
-    // and later cached accesses see what was just written to memory
-    // ("Data cache maintenance instructions"). CTR_EL0.DminLine is the log2
-    // of the line size in words.
-    mrs     x1, ctr_el0
-    ubfx    x1, x1, #16, #4
-    mov     x2, #4
-    lsl     x2, x2, x1
+    // The second pass, now that the tables are written.
     adrp    x1, __boot_tables_start
     adrp    x3, __boot_tables_end
 4:
     dc      ivac, x1
-    add     x1, x1, x2
+    add     x1, x1, x11
     cmp     x1, x3
     b.lo    4b
     dsb     sy
@@ -284,8 +298,7 @@ __high_entry:
     // goes away while TTBR1 changes. Passing through a table with nothing
     // mapped means translations from the old and the new tables never exist
     // together, which break-before-make requires when block and page sizes
-    // differ ("TLB maintenance requirements and the Break-Before-Make
-    // sequence"). The caller has masked every exception.
+    // differ (break-before-make). The caller has masked every exception.
     .global __replace_ttbr1
 __replace_ttbr1:
     msr     ttbr1_el1, x1
@@ -310,5 +323,5 @@ __replace_ttbr1:
     // T0SZ, T1SZ = 16; IRGNn = ORGNn = 1, SHn = 3, TG0 = 0, TG1 = 2.
     tcr = const 0xb510_3510u64,
     // The value at .Lel1 plus M (0), C (2), SA (3) and I (12).
-    sctlr_mmu = const 0x30d0_190du64,
+    sctlr_mmu = const 0x30d0_180du64,
 );

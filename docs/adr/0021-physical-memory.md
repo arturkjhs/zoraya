@@ -19,14 +19,14 @@ The kernel needs frames for page tables and the heap now, and for user memory fr
 
 ### Option A: Buddy allocator (Linux baseline)
 - **Description:** Free lists of power-of-two blocks, split and merged on demand.
-- **Evidence for:** O(log n) contiguous allocation; decades of use at any scale [outside evidence: Linux `Documentation/mm/page_allocator.rst`].
-- **Evidence against:** Free-list links live in free frames, so a wild write corrupts the allocator, and detecting a double free needs a separate state map, which is the bitmap of Option B in addition to the lists.
+- **Evidence for:** O(log n) contiguous allocation; decades of use at any scale [outside evidence: Linux `mm/page_alloc.c`].
+- **Evidence against:** Free-list links live in free frames, so a wild write corrupts the allocator, and detecting a double free needs a separate state map, which is the bitmap of Option B in addition to the lists [assumption: reasoning from the structure].
 - **Cost:** Moderate (estimate: 300 to 400 lines plus state tracking). No measured need yet.
 - **Precedent:** Linux.
 
 ### Option B: Bitmap per region
 - **Description:** Two bits per frame (allocated, reserved) in a metadata block outside the managed frames. Next-fit scan for single frames; a run search for contiguous requests.
-- **Evidence for:** State is outside the frames, so a wild write to a free frame cannot corrupt it. Double free, freeing a reserved frame and freeing outside RAM are all detected by reading two bits. Size is exactly known: 64 KiB of metadata per 2 GiB of RAM.
+- **Evidence for:** [assumption: reasoning from the structure] State is outside the frames, so a wild write to a free frame cannot corrupt it. Double free, freeing a reserved frame and freeing outside RAM are all detected by reading two bits. Size is exactly known: 128 KiB of metadata per 2 GiB of RAM.
 - **Evidence against:** Contiguous search is O(frames), and allocation cost grows as memory fills, although word-at-a-time skipping bounds it.
 - **Cost:** Lowest (estimate: 200 lines).
 - **Precedent:** Early allocators of many teaching kernels; it is the structure a bump-plus-bitmap kernel grows out of [assumption].

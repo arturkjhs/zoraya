@@ -214,7 +214,7 @@ __exception_save_rest:
 pub fn init() {
     // SAFETY: clearing a mask bit changes no memory; an SError now reaches
     // the vectors, which are installed.
-    unsafe { core::arch::asm!("msr daifclr, #4", options(nomem, nostack, preserves_flags)) };
+    unsafe { core::arch::asm!("msr daifclr, #4", options(nostack, preserves_flags)) };
 }
 
 /// Exception class name (`ESR_ELx.EC`, "ESR_EL1, Exception Syndrome Register").
@@ -260,6 +260,13 @@ fn far_is_valid(esr: u64) -> bool {
     }
 }
 
+/// Whether `ESR_EL1` was written by this exception. Interrupts leave it, and
+/// `FAR_EL1`, as the last fault left them. A stack overflow is usually a data
+/// abort, but it may have been entered through any vector.
+fn has_syndrome(kind: u64) -> bool {
+    kind == KIND_OVERFLOW || matches!(kind & 3, 0 | 3)
+}
+
 fn origin(kind: u64) -> &'static str {
     match kind {
         0..=3 => "EL1 on SP_EL0, which the kernel does not use",
@@ -279,22 +286,28 @@ fn exception_name(kind: u64) -> &'static str {
 
 /// Prints the report of ADR-0024.
 fn report(frame: &Frame, kind: u64) {
-    let ec = exception_class(frame.esr);
     println!();
     println!(
         "ZORAYA-FAULT {} from {}",
         exception_name(kind),
         origin(kind)
     );
-    println!("  EC {ec:#x}: {}", class_name(ec));
-    print!(
-        "  ESR_EL1 {:#x}  ELR_EL1 {:#x}  SPSR_EL1 {:#x}",
-        frame.esr, frame.elr, frame.spsr
-    );
-    if far_is_valid(frame.esr) {
-        println!("  FAR_EL1 {:#x}", frame.far);
+    print!("  ELR_EL1 {:#x}  SPSR_EL1 {:#x}", frame.elr, frame.spsr);
+    if has_syndrome(kind) {
+        let ec = exception_class(frame.esr);
+        println!("  ESR_EL1 {:#x}", frame.esr);
+        println!("  EC {ec:#x}: {}", class_name(ec));
+        if far_is_valid(frame.esr) {
+            println!("  FAR_EL1 {:#x}", frame.far);
+        } else {
+            println!("  FAR_EL1 not valid");
+        }
+        if kind == KIND_OVERFLOW {
+            println!("  (the syndrome is stale if an interrupt found the stack full)");
+        }
     } else {
-        println!("  FAR_EL1 not valid");
+        println!();
+        println!("  no syndrome: an interrupt does not set ESR_EL1 or FAR_EL1");
     }
     for (i, r) in frame.x.iter().enumerate() {
         print!("  x{i:<2} {r:#018x}");
@@ -309,6 +322,9 @@ fn fatal(frame: &Frame, kind: u64) -> ! {
     report(frame, kind);
     let ec = exception_class(frame.esr);
     let name = exception_name(kind);
+    if !has_syndrome(kind) {
+        panic!("{name} from {}: ELR_EL1={:#x}", origin(kind), frame.elr);
+    }
     if far_is_valid(frame.esr) {
         panic!(
             "{name} from {}: EC={ec:#x} ({}) ESR_EL1={:#x} ELR_EL1={:#x} FAR_EL1={:#x}",

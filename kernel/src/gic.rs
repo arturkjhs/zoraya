@@ -49,6 +49,8 @@ const GICD_IROUTER: usize = 0x6000;
 const GICD_CTLR_ENABLE_ALL: u32 = 0b11;
 const GICD_CTLR_ARE: u32 = 1 << 4;
 const GICD_CTLR_RWP: u32 = 1 << 31;
+const GICR_CTLR: usize = 0x0000;
+const GICR_CTLR_RWP: u32 = 1 << 3;
 const GICR_TYPER: usize = 0x0008;
 const GICR_WAKER: usize = 0x0014;
 const GICR_TYPER_VLPIS: u64 = 1 << 1;
@@ -196,6 +198,12 @@ fn wait_for_distributor() {
     }
 }
 
+fn wait_for_redistributor() {
+    while read32(cpu(), GICR_CTLR) & GICR_CTLR_RWP != 0 {
+        core::hint::spin_loop();
+    }
+}
+
 /// Affinity of this CPU in the layout of `GICR_TYPER` bits 63:32.
 fn affinity() -> u32 {
     let m = arch::mpidr();
@@ -248,6 +256,7 @@ fn init_v3() {
     }
     let sgi = cpu() + GICR_SGI_FRAME;
     write32(sgi, GICD_ICENABLER, !0);
+    wait_for_redistributor();
     write32(sgi, GICD_ICPENDR, !0);
     write32(sgi, GICD_IGROUPR, !0);
     for intid in 0..FIRST_SPI {
@@ -280,10 +289,17 @@ pub fn enable(intid: u32, edge: bool) {
     write32(block(intid), offset, mask);
 }
 
-/// Disables an interrupt.
+/// Disables an interrupt, which has taken effect on return.
 pub fn disable(intid: u32) {
     let (offset, mask) = bit_register(GICD_ICENABLER, intid);
     write32(block(intid), offset, mask);
+    if is_v3() {
+        if intid < FIRST_SPI {
+            wait_for_redistributor();
+        } else {
+            wait_for_distributor();
+        }
+    }
 }
 
 /// Number of interrupt IDs the distributor implements, read through its

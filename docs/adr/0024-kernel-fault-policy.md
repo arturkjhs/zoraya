@@ -19,12 +19,12 @@ Stage 1 replaces the stage-0 catch-all vectors with real ones. This ADR says wha
 ### Option A: Oops and continue (Linux baseline)
 - **Description:** Report, kill the current task, and keep running unless `panic_on_oops` is set.
 - **Evidence for:** A desktop or server stays up; a developer can read the log [outside evidence: Linux `Documentation/admin-guide/bug-hunting.rst`].
-- **Evidence against:** Locks held by the killed task stay held and invariants stay broken. Linux itself offers `panic_on_oops` because of that. Nothing can be killed at stage 1, which has no tasks.
+- **Evidence against:** Locks held by the killed task stay held and invariants stay broken [assumption: reasoning from the design]. Linux also offers `panic_on_oops`, which stops instead [outside evidence: Linux `Documentation/admin-guide/sysctl/kernel.rst`]. Nothing can be killed at stage 1, which has no tasks.
 - **Cost:** High (estimate: needs a task model and a recovery story).
 - **Precedent:** Linux.
 
 ### Option B: Fail-stop with a full report
-- **Description:** Print a report once, panic, halt. No resumption of any kernel fault. Hubris similarly treats a kernel-level fault as fatal, leaving restarts to the supervisor for tasks (alternatives-postmortem.md#hubris); seL4's position is that a kernel fault must not exist at all, which it backs by proof (alternatives-postmortem.md#l4-family-and-sel4).
+- **Description:** Print a report once, panic, halt. No resumption of any kernel fault. Hubris restarts faulted tasks through a supervisor task (alternatives-postmortem.md#hubris), which leaves nothing to restart its kernel [assumption]. seL4 has a machine-checked proof (alternatives-postmortem.md#l4-family-and-sel4), which aims to rule such faults out rather than recover from them [assumption].
 - **Evidence for:** Simple and honest about what is known. Keeps state for a post-mortem.
 - **Evidence against:** One kernel bug takes the whole system down, which matters more with drivers in the kernel. The roadmap keeps drivers in services [assumption].
 - **Cost:** Low (estimate: 200 lines).
@@ -51,7 +51,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 | SError | Report and panic: it may be asynchronous and imprecise, so nothing can be trusted to resume |
 | From EL0, or on `SP_EL0` | Report and panic with a message that these are not wired up until stage 2 |
 
-- **Report.** Vector kind, exception class by number and name, `ESR_EL1`, `FAR_EL1` when the syndrome says it is valid, `ELR_EL1`, `SPSR_EL1`, and x0 to x30 with SP.
+- **Report.** Vector kind, `ELR_EL1`, `SPSR_EL1`, and x0 to x30 with SP. For a synchronous exception or SError also the exception class by number and name, `ESR_EL1`, and `FAR_EL1` when the syndrome says it is valid. An interrupt sets neither `ESR_EL1` nor `FAR_EL1`, so its report says so instead.
 - **Frame.** Every entry saves x0 to x30, SP, `ELR`, `SPSR`, `ESR`, `FAR`, and the FP/SIMD state: the target lets the compiler use NEON in any function, so an interrupt that uses it would otherwise corrupt the code it interrupted.
 - **Stack check.** Before touching memory, the vector compares SP with a limit held in `SP_EL0`, which is free while the kernel runs and costs no memory access. `TPIDR_EL1` holds a scratch register for those few instructions. Stage 2 must keep the limit of the current thread's stack there on kernel entry. A second overflow, on the emergency stack, halts silently: there is no stack left to report with.
 - **Interrupts in handlers.** All handlers run with IRQ masked; there is no nesting at stage 1.
@@ -71,6 +71,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 ## Open questions
 - Whether SError can ever be expected from QEMU devices. None has been seen.
+- How the stack check survives stage 2. `SP_EL0` holds the user stack at EL0 and `TPIDR_EL1` is the natural per-CPU pointer, so lower-EL vectors must swap the limit in before any Rust, and SMP needs a limit and an emergency stack per CPU. To be settled in the stage 2 ADR.
 
 ## Revisit triggers
 - Kernel bugs in production-like use, which would argue for more containment.

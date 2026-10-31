@@ -465,6 +465,42 @@ fn tables_of_an_unmapped_range_are_reused() {
 }
 
 #[test]
+fn a_block_never_replaces_an_empty_table() {
+    let (mut m, mut t) = setup();
+    t.map_pages(&mut m, HIGH, 0, PAGE_SIZE, Attributes::KERNEL_DATA)
+        .unwrap();
+    t.unmap(&mut m, HIGH, PAGE_SIZE).unwrap();
+    let tables = m.tables.len();
+    m.log.clear();
+
+    t.map(&mut m, HIGH, 0, MIB2, Attributes::KERNEL_DATA)
+        .unwrap();
+    assert_eq!(raw_walk(&m, t.root(), HIGH).0, 3, "pages in the kept table");
+    assert_eq!(mappings(&m, &t).len(), 512);
+    assert_eq!(m.tables.len(), tables, "no table lost or added");
+    assert!(
+        !m.log.iter().any(|e| matches!(e, Event::Invalidate(..))),
+        "from invalid to valid needs no invalidation"
+    );
+}
+
+#[test]
+fn a_new_table_is_visible_before_its_parent_links_it() {
+    let (mut m, mut t) = setup();
+    t.map(&mut m, HIGH, 0, PAGE_SIZE, Attributes::KERNEL_DATA)
+        .unwrap();
+    let links = m.log.iter().enumerate().filter(|(_, e)| {
+        matches!(e, Event::Write(_, _, v) if v & 0b11 == 0b11 && m.tables.contains_key(&(v & !0xfff)))
+    });
+    let mut count = 0;
+    for (i, _) in links {
+        assert_eq!(m.log[i - 1], Event::Sync, "barrier before link {i}");
+        count += 1;
+    }
+    assert_eq!(count, 3, "levels 0, 1 and 2 link a new table");
+}
+
+#[test]
 fn level_sizes() {
     assert_eq!(level_size(3), 4096);
     assert_eq!(level_size(2), MIB2);

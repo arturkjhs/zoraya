@@ -219,8 +219,12 @@ impl<B: Backing> Heap<B> {
             // SAFETY: list members are free spans holding a valid header.
             let Span { size, next } = unsafe { cur.read() };
             let end = start + size;
-            let at = start.next_multiple_of(align);
-            if at.checked_add(bytes).is_some_and(|e| e <= end) {
+            // Heap addresses can be near the top of the address space, so
+            // the rounding itself can overflow: that span does not fit.
+            let fitting = start
+                .checked_next_multiple_of(align)
+                .filter(|at| at.checked_add(bytes).is_some_and(|e| e <= end));
+            if let Some(at) = fitting {
                 self.unlink(prev, next);
                 self.stats.free_spans -= size;
                 if at > start {

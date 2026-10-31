@@ -146,8 +146,8 @@ The code is in `kernel/src/arch/aarch64/exception.rs` (ADR-0024).
 - **Stack overflow.** With no room for a frame, the entry moves to a 32 KiB emergency stack, reports and panics. Bit 0
   of the limit marks that stack; a second overflow halts silently.
 - **Policy.** Any synchronous exception, SError or FIQ from EL1 prints a `ZORAYA-FAULT` report and panics. The report
-  has the exception class by number and name, `ESR_EL1`, `FAR_EL1` when valid, `ELR_EL1`, `SPSR_EL1` and the
-  registers. An IRQ with no handler is disabled and ended, reported, and panics. Spurious IRQs are counted.
+  has `ELR_EL1`, `SPSR_EL1` and the registers. Exceptions that set a syndrome add the exception class by number and
+  name, `ESR_EL1`, and `FAR_EL1` when valid; an interrupt's report says it has none. An IRQ with no handler is disabled and ended, reported, and panics. Spurious IRQs are counted.
 - **EL0 vectors** exist and panic with a message saying they are not wired up until stage 2.
 - **Masks.** SError is unmasked once `kernel_main` starts, IRQ and FIQ after the GIC is up. Debug stays masked.
   Handlers run with IRQ masked and do not nest. A panic masks IRQ and FIQ.
@@ -173,7 +173,7 @@ TTBR0 is disabled (`TCR_EL1.EPD0`) and holds 0. The layout is stated only in `ke
   So every frame of the image has exactly one mapping. RAM above 128 TiB stops the boot.
 - **Hardware W^X.** `SCTLR_EL1.WXN` is set with the final tables.
 - **Tables.** The first 64 tables come from a pool in `.bss`, the rest from frames.
-- **Frames.** `zoraya-pmm`: two bits per frame, in metadata carved from the largest free range (64 KiB per 2 GiB).
+- **Frames.** `zoraya-pmm`: two bits per frame, in metadata carved from the largest free range (128 KiB per 2 GiB).
   Reserved: the image with stacks and boot tables, the blob, `/memreserve/` entries, `/reserved-memory` children,
   the metadata, and frame 0. A device tree with more reservations than `zoraya-dtb` records stops the boot.
   Exhaustion is a return value. A bad free panics in the kernel (the crate returns an error).
@@ -260,7 +260,8 @@ deterministic random mutations.
   no lock, so that the panic path can always print.
 - **Boot image mapping.** The boot tables map the image writable and executable until the final tables replace them.
 - **Direct map.** A kernel write primitive still reaches all ordinary RAM through it (ADR-0020).
-- **Memory.** Page tables left empty by an unmap are not freed. The heap never shrinks, and memory in a size class
+- **Memory.** Page tables left empty by an unmap are not freed; later maps go below them, so a block cannot be used
+  where an empty table remains. The heap never shrinks, and memory in a size class
   stays there. Frames are not zeroed by the allocator, except for table frames. No double-free detection in the heap.
 - **Interrupts.** One priority, no nesting. FIQ and SError reports are untested, since nothing raises them.
   Interrupt handlers must not panic in a test that expects recovery: the interrupt would stay active.
@@ -268,7 +269,8 @@ deterministic random mutations.
   stack overflow report: 5,552 of 32,768 bytes.
 - **Faults while a lock is held.** Recovery in the test kernel does not release locks, so a test that panics while
   holding one makes later tests fail. The normal kernel halts on panic.
-- **Single core.** Only the boot CPU runs. The GIC, timer and lock are set up for it alone.
+- **Single core.** Only the boot CPU runs. The GIC, timer and lock are set up for it alone. Before SMP: on GICv2,
+  `gic::acknowledge` must keep the source bits of an SGI for the EOI and mask them from the ID.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
   (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
   QEMU 11.1.2 and is part of `make test`, so `make test` as written fails on an M1 or M2 Mac (`auto-el2`).

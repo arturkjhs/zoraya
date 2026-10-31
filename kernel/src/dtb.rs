@@ -61,8 +61,8 @@ fn blob_at(addr: usize, limit: usize) -> Result<&'static [u8], DtbError> {
     }
     // SAFETY: [RAM_BASE, limit) is RAM below the kernel image: QEMU loaded
     // the image 2 MiB above RAM_BASE, and virt RAM is one contiguous range
-    // from RAM_BASE. The boot tables map it at the same address, and nothing
-    // writes below the image.
+    // from RAM_BASE. The boot tables map it at the same address until the
+    // caller's limit (see `locate`), and nothing writes below the image.
     let header = unsafe { core::slice::from_raw_parts(addr as *const u8, HEADER_SIZE) };
     let header = Header::read(header).map_err(|_| DtbError::NotFound)?;
     let len = header.total_size as usize;
@@ -70,13 +70,18 @@ fn blob_at(addr: usize, limit: usize) -> Result<&'static [u8], DtbError> {
         return Err(DtbError::TooLarge(len));
     }
     // SAFETY: as above; the range [addr, addr + len) was just checked to
-    // stay below `limit`, and the memory is never written while the
-    // returned slice exists (it is never written at all).
+    // stay below `limit`, and the memory is never written at all.
     Ok(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
 }
 
-/// Finds and validates the device tree, and remembers it for [`blob`].
-pub fn locate(x0: usize) -> Result<(Fdt<'static>, Source), DtbError> {
+/// Finds and validates the device tree, and remembers it for [`rebase`].
+///
+/// # Safety
+///
+/// The boot identity map must be active. Despite the `'static` in the result,
+/// it and everything borrowed from it are valid only until that map is
+/// removed; after that, use [`rebase`].
+pub unsafe fn locate(x0: usize) -> Result<(Fdt<'static>, Source), DtbError> {
     let limit = memory::kernel_image_phys().start as usize;
     let (bytes, source) = match blob_at(x0, limit) {
         Ok(b) => (b, Source::Register),

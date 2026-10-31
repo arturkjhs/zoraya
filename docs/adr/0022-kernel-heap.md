@@ -26,8 +26,8 @@
 
 ### Option B: One first-fit free list
 - **Description:** A single address-ordered list of free blocks with coalescing.
-- **Evidence for:** Smallest. Coalescing limits external fragmentation.
-- **Evidence against:** O(free blocks) for every operation, including the many small allocations a kernel makes; small and large blocks fragment each other.
+- **Evidence for:** Smallest. Coalescing limits external fragmentation [assumption: reasoning from the structure].
+- **Evidence against:** O(free blocks) for every operation, including the many small allocations a kernel makes; small and large blocks fragment each other [assumption: reasoning from the structure].
 - **Cost:** Lowest (estimate: 150 lines).
 - **Precedent:** The `linked_list_allocator` crate used by many hobby kernels [outside evidence: crates.io].
 
