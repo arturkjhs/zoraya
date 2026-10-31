@@ -45,6 +45,23 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0006-7 | [ADR-0006](0006-event-mechanism.md) | `libposix`'s `pselect` returns `EINTR` only if a handler ran, and a wait on an fd set never returns because of a signal that is ignored or blocked. | `libposix` unit tests with each disposition. | not yet applicable (stage 6) |
 | INV-0006-8 | [ADR-0006](0006-event-mechanism.md) | The ready list honours handle rights: a subscription requires the `wait` right on the handle, and a handle without it cannot be subscribed. | kernel test with a duplicated handle lacking the right. | not yet applicable (stage 3) |
 | INV-0006-9 | [ADR-0006](0006-event-mechanism.md) | A FIFO node in the temp-directory service satisfies the three POSIX open behaviours listed above. | a service test reproducing GNU make's open sequence (`O_RDONLY\|O_NONBLOCK` then `O_WRONLY`, then a sub-make's `O_RDONLY` with `O_NONBLOCK` set afterwards). | not yet applicable (stage 6) |
+| INV-0020-1 | [ADR-0020](0020-kernel-address-space.md) | No kernel mapping in the final tables is both writable and executable, and none is accessible from EL0. | `zoraya-pagetable` rejects such attributes at the API (host test) and an in-QEMU test walks the live tables. | checked: `make test-unit` and `make test-qemu` |
+| INV-0020-2 | [ADR-0020](0020-kernel-address-space.md) | After boot, TTBR0 translation is disabled and an access through the old identity mapping faults. | in-QEMU test on the old UART address, plus a read of `TCR_EL1.EPD0`. | checked: `make test-qemu` |
+| INV-0020-3 | [ADR-0020](0020-kernel-address-space.md) | No page of the kernel image is mapped twice. | in-QEMU test walks the live tables and finds each image frame at most once, and an access to the image through the direct map faults. | checked: `make test-qemu` |
+| INV-0020-4 | [ADR-0020](0020-kernel-address-space.md) | Every device mapping is Device memory and never executable. | in-QEMU test walks the device window of the live tables. | checked: `make test-qemu` |
+| INV-0020-5 | [ADR-0020](0020-kernel-address-space.md) | The page below the boot stack is unmapped, and overrunning the stack is reported as a stack overflow. | expected-failure in-QEMU test. | checked: `make test-qemu` |
+| INV-0021-1 | [ADR-0021](0021-physical-memory.md) | The allocator never returns a frame that is reserved, outside RAM, or already allocated. | host property tests in `zoraya-pmm` against a model, and an in-QEMU test that drains the allocator and compares every frame with the live device tree. | checked: `make test-unit` and `make test-qemu` |
+| INV-0021-2 | [ADR-0021](0021-physical-memory.md) | Freeing a frame that is free, reserved or outside RAM is reported as an error and changes no state. | host tests in `zoraya-pmm`. | checked: `make test-unit` |
+| INV-0021-3 | [ADR-0021](0021-physical-memory.md) | Exhaustion returns `OutOfFrames` and leaves the allocator usable. | host test in `zoraya-pmm`, and the in-QEMU drain test. | checked: `make test-unit` and `make test-qemu` |
+| INV-0022-1 | [ADR-0022](0022-kernel-heap.md) | Every block returned satisfies its layout's alignment and overlaps no live block. | host property tests in `zoraya-heap` against a model. | checked: `make test-unit` |
+| INV-0022-2 | [ADR-0022](0022-kernel-heap.md) | When the backing is exhausted the allocator returns failure and stays usable. | host test in `zoraya-heap`, and an in-QEMU test of a fallible request that cannot be met. | checked: `make test-unit` and `make test-qemu` |
+| INV-0023-1 | [ADR-0023](0023-interrupts-and-time.md) | A deadline fires no earlier than requested. | host test of the round-trip conversion in `zoraya-time`, and an in-QEMU one-shot test. | checked: `make test-unit` and `make test-qemu` |
+| INV-0023-2 | [ADR-0023](0023-interrupts-and-time.md) | `Instant` never decreases on one CPU. | in-QEMU test reading the clock in a loop across timer interrupts. | checked: `make test-unit` and `make test-qemu` |
+| INV-0023-3 | [ADR-0023](0023-interrupts-and-time.md) | The kernel programs no periodic hardware tick: the comparator is only ever set for the earliest queued deadline, and an empty queue leaves the timer disabled. | in-QEMU test that the timer is disabled when the queue is empty. | checked: `make test-qemu` |
+| INV-0023-4 | [ADR-0023](0023-interrupts-and-time.md) | Interrupt numbers come from the device tree. | `zoraya-dtb` host tests against the QEMU fixtures, and the in-QEMU delivery tests under GICv2 and GICv3. | checked: `make test-unit` and `make test-qemu` |
+| INV-0024-1 | [ADR-0024](0024-kernel-fault-policy.md) | A kernel fault prints the exception class, `ESR_EL1`, `ELR_EL1`, `SPSR_EL1` and the registers, then panics. `FAR_EL1` is printed when valid. | expected-failure in-QEMU tests with `--expect-line` on the report. | checked: `make test-qemu` |
+| INV-0024-2 | [ADR-0024](0024-kernel-fault-policy.md) | The normal kernel contains no path that resumes after a kernel fault. | the resume path is `#[cfg(feature = "qemu-test")]`, and `make test` builds the normal kernel without the feature. | checked: `make test` |
+| INV-0024-3 | [ADR-0024](0024-kernel-fault-policy.md) | A vector entry can always report: a stack overflow reaches the report on the emergency stack. | expected-failure in-QEMU test. | checked: `make test-qemu` |
 
 ## Counts
 
@@ -56,4 +73,9 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0004](0004-async-notification.md) Asynchronous notification without Unix signals (native side) | 8 |
 | [ADR-0005](0005-posix-scope.md) Scope of POSIX compatibility | 4 |
 | [ADR-0006](0006-event-mechanism.md) Event and readiness mechanism (X-4) | 9 |
-| **Total** | **39** |
+| [ADR-0020](0020-kernel-address-space.md) Kernel virtual address space layout (proposed) | 5 |
+| [ADR-0021](0021-physical-memory.md) Physical memory management (proposed) | 3 |
+| [ADR-0022](0022-kernel-heap.md) Kernel heap (proposed) | 2 |
+| [ADR-0023](0023-interrupts-and-time.md) Interrupts and time (proposed) | 4 |
+| [ADR-0024](0024-kernel-fault-policy.md) Kernel fault policy (proposed) | 3 |
+| **Total** | **56** |

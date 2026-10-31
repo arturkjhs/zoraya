@@ -66,6 +66,7 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic fault_report_for_unmapped_access \
 	--expect-panic fault_report_for_stack_overflow \
 	--expect-panic fault_report_for_unexpected_interrupt \
+	--expect-panic fault_report_for_el0_exception \
 	--expect-line "ZORAYA-FAULT synchronous from EL1" \
 	--expect-line "EC 0x3c: BRK instruction" \
 	--expect-line "EC=0x3c (BRK instruction) ESR_EL1=0xf2000321" \
@@ -73,6 +74,7 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "FAR_EL1 0xffff820000002000" \
 	--expect-line "ZORAYA-FAULT kernel stack overflow from EL1" \
 	--expect-line "ZORAYA-FAULT interrupt 40 has no handler" \
+	--expect-line "ZORAYA-FAULT synchronous from EL0 (AArch64), not wired up until stage 2" \
 	--expect-line "timer: virtual" --expect-line ", interrupt 27" \
 	--expect-line "uart interrupt 33"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)

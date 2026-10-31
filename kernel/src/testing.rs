@@ -44,7 +44,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 6;
+const EXPECTED_FAILURES: usize = 7;
 
 static TESTS: &[Test] = &[
     Test {
@@ -160,6 +160,10 @@ static TESTS: &[Test] = &[
         run: uart_is_reached_through_the_device_window,
     },
     Test {
+        name: "gic_is_reached_through_the_device_window",
+        run: gic_is_reached_through_the_device_window,
+    },
+    Test {
         name: "stack_guard_is_unmapped",
         run: stack_guard_is_unmapped,
     },
@@ -240,8 +244,16 @@ static TESTS: &[Test] = &[
         run: interrupts_still_arrive_after_a_fault,
     },
     Test {
+        name: "fault_report_for_el0_exception",
+        run: fault_report_for_el0_exception,
+    },
+    Test {
         name: "fault_report_for_stack_overflow",
         run: fault_report_for_stack_overflow,
+    },
+    Test {
+        name: "emergency_stack_kept_a_margin",
+        run: emergency_stack_kept_a_margin,
     },
     Test {
         name: "harness_resumes_after_panic",
@@ -1045,6 +1057,19 @@ fn uart_is_reached_through_the_device_window() {
     assert_eq!(m.attributes.memory, MemoryType::Device);
 }
 
+fn gic_is_reached_through_the_device_window() {
+    let (_, info) = platform();
+    let ic = info.interrupt_controller.expect("interrupt controller");
+    let va = gic::distributor() as u64;
+    assert!((DEVICE_WINDOW..DEVICE_WINDOW + DEVICE_WINDOW_SIZE).contains(&va));
+    let m = paging::translate(va).expect("distributor mapping");
+    assert_eq!(m.pa + (va - m.va), ic.regs()[0].address);
+    assert_eq!(m.attributes.memory, MemoryType::Device);
+    // QEMU virt implements more than the 32 private IDs plus the UART's.
+    let lines = gic::line_count();
+    assert!(lines > 32 && lines <= 1020, "{lines} lines");
+}
+
 fn stack_guard_is_unmapped() {
     let guard = addr_of!(memory::__stack_guard) as u64;
     let bottom = addr_of!(memory::__stack_bottom) as u64;
@@ -1059,6 +1084,10 @@ fn fault_report_for_unmapped_access() {
     read_at((STACK_WINDOW + 0x2000) as usize);
 }
 
+fn fault_report_for_el0_exception() {
+    arch::enter_el0(0x1000);
+}
+
 #[inline(never)]
 fn use_stack(depth: u64) -> u64 {
     let frame = [depth; 64];
@@ -1071,6 +1100,25 @@ fn use_stack(depth: u64) -> u64 {
 fn fault_report_for_stack_overflow() {
     REARM_CANARY.store(true, Ordering::Relaxed);
     black_box(use_stack(0));
+}
+
+/// Runs after the stack overflow report, which is the deepest use of the
+/// emergency stack: the panic path of the debug build, formatting included.
+/// The stack is in memory the ELF loader zeroes.
+fn emergency_stack_kept_a_margin() {
+    const MARGIN: usize = 4096;
+    let bottom = addr_of!(memory::__emergency_stack_bottom);
+    let top = addr_of!(memory::__emergency_stack_top) as usize;
+    let size = top - bottom as usize;
+    // SAFETY: the range is the emergency stack, mapped read-write, and
+    // nothing runs on it now.
+    let stack = unsafe { core::slice::from_raw_parts(bottom, size) };
+    let untouched = stack.iter().take_while(|b| **b == 0).count();
+    assert!(
+        untouched >= MARGIN,
+        "only {untouched} of {size} bytes left unused"
+    );
+    println!("emergency stack: {} of {size} bytes used", size - untouched);
 }
 
 fn stack_canary_intact() {

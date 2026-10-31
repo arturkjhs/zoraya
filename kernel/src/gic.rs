@@ -107,9 +107,16 @@ pub fn version() -> u8 {
     VERSION.load(Ordering::Relaxed)
 }
 
-/// Number of interrupt IDs the distributor implements.
+/// The distributor's virtual address.
+#[cfg(feature = "qemu-test")]
+pub fn distributor() -> usize {
+    dist()
+}
+
+/// Number of usable interrupt IDs. `GICD_TYPER` counts in steps of 32, and
+/// its largest value includes the special IDs, which have no registers.
 fn lines() -> u32 {
-    ((read32(dist(), GICD_TYPER) & 0x1f) + 1) * 32
+    (((read32(dist(), GICD_TYPER) & 0x1f) + 1) * 32).min(FIRST_SPECIAL)
 }
 
 /// The same bit in a register array with one bit per interrupt.
@@ -277,6 +284,13 @@ pub fn enable(intid: u32, edge: bool) {
 pub fn disable(intid: u32) {
     let (offset, mask) = bit_register(GICD_ICENABLER, intid);
     write32(block(intid), offset, mask);
+}
+
+/// Number of interrupt IDs the distributor implements, read through its
+/// mapping.
+#[cfg(feature = "qemu-test")]
+pub fn line_count() -> u32 {
+    lines()
 }
 
 /// Makes an enabled interrupt pending, as if its device had raised it.

@@ -7,7 +7,7 @@ pub mod timer;
 
 pub use exception::init as exception_init;
 #[cfg(feature = "qemu-test")]
-pub use exception::{catch, recover_to};
+pub use exception::{catch, enter_el0, recover_to};
 
 use core::arch::asm;
 

@@ -8,7 +8,8 @@ purpose, and the reason it is not written in-house. Only permissively licensed (
 |---|---|---|---|---|---|
 | *(none)* | | | | | |
 
-The kernel and `zoraya-dtb` use only `core`. The host-side tools (`zoraya-test-runner`, `zoraya-adr-check`) use
+The kernel uses `core` and `alloc`. The crates under `crates/` use only `core`, and their tests use `std`, with seeded
+generators instead of a property-testing crate. The host-side tools (`zoraya-test-runner`, `zoraya-adr-check`) use
 only `std`. `Cargo.lock` has no registry entries, so no build needs network access once the toolchain in
 `rust-toolchain.toml` is installed.
 

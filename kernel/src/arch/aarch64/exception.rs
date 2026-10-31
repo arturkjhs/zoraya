@@ -348,7 +348,7 @@ extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
 }
 
 #[cfg(feature = "qemu-test")]
-pub use catching::{catch, recover_to};
+pub use catching::{catch, enter_el0, recover_to};
 
 /// Test-only ways out of a fault (ADR-0024: the normal kernel has none).
 #[cfg(feature = "qemu-test")]
@@ -469,6 +469,28 @@ __catch_landing:
             // SAFETY: written by `intercept` during the call above, on this
             // CPU, so the volatile read sees it.
             unsafe { ptr::read_volatile(&raw const saved.fault) }
+        }
+    }
+
+    /// Drops to EL0 at `pc`, an address EL0 cannot fetch, so the lower-EL
+    /// vectors run. There is no way back but the fault that takes.
+    pub fn enter_el0(pc: u64) -> ! {
+        /// EL0t, with nothing masked.
+        const SPSR_EL0: u64 = 0;
+        // SAFETY: with TTBR0 walks disabled and no EL0 mapping, the first
+        // fetch at EL0 faults to EL1. The vectors handle that, on SP_EL1,
+        // which still holds this stack. All exceptions are masked until
+        // `eret`, so ELR and SPSR cannot be overwritten.
+        unsafe {
+            asm!(
+                "msr daifset, #0xf",
+                "msr elr_el1, {pc}",
+                "msr spsr_el1, {spsr}",
+                "eret",
+                pc = in(reg) pc,
+                spsr = in(reg) SPSR_EL0,
+                options(noreturn),
+            )
         }
     }
 
