@@ -85,3 +85,28 @@ bench = false
 name = "f_brk"
 test = false
 bench = false
+
+[[bin]]
+name = "f_wfi"
+test = false
+bench = false
+
+[[bin]]
+name = "f_align"
+test = false
+bench = false
+
+[[bin]]
+name = "regsave"
+test = false
+bench = false
+
+[[bin]]
+name = "lone"
+test = false
+bench = false
+
+[[bin]]
+name = "koverflow"
+test = false
+bench = false

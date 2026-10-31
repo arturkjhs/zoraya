@@ -13,6 +13,25 @@ global_asm!(
     .text
     .global _start
 _start:
+    // A process starts with nothing in its registers, so that nothing of the
+    // kernel's or another process's can reach it: `brk` makes a fault of any
+    // leak, and every program checks this on every start.
+    .irp    n, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30
+    orr     x0, x0, x\n
+    orr     v0.16b, v0.16b, v\n\().16b
+    .endr
+    orr     v0.16b, v0.16b, v31.16b
+    mrs     x1, tpidr_el0
+    orr     x0, x0, x1
+    mrs     x1, fpcr
+    orr     x0, x0, x1
+    umov    x1, v0.d[0]
+    orr     x0, x0, x1
+    umov    x1, v0.d[1]
+    orr     x0, x0, x1
+    cbz     x0, 1f
+    brk     #2
+1:
     bl      __user_main
 "#
 );

@@ -19,7 +19,7 @@ TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
 USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
-	f_undef f_exdata f_stack f_brk
+	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
@@ -80,6 +80,7 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-panic fault_report_for_unmapped_access \
 	--expect-panic fault_report_for_stack_overflow \
 	--expect-panic fault_report_for_thread_stack_overflow \
+	--expect-panic fault_report_for_stack_overflow_from_el0 \
 	--expect-panic fault_report_for_unexpected_interrupt \
 	--expect-panic fault_report_for_el0_exception \
 	--expect-line "ZORAYA-FAULT synchronous from EL1" \

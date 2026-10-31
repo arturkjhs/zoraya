@@ -185,6 +185,7 @@ __exception_save_rest:
     // With SP at a frame: back to the context it holds.
     .global __exception_return
 __exception_return:
+    msr     daifset, #0xf           // ELR, SPSR and SP_EL0 change below
     add     x1, sp, #{off_q}
     ldp     q0, q1, [x1], #32
     ldp     q2, q3, [x1], #32
@@ -262,9 +263,18 @@ pub unsafe fn write_user_frame(at: u64, pc: u64, sp: u64) {
 /// Allows SError from here on (ADR-0024). The vectors are installed by the
 /// boot code.
 pub fn init() {
-    // SAFETY: clearing a mask bit changes no memory; an SError now reaches
-    // the vectors, which are installed.
-    unsafe { core::arch::asm!("msr daifclr, #4", options(nostack, preserves_flags)) };
+    // SAFETY: EL0 gets no timer or PMU access, by these zeroes rather than by
+    // their reset values; nothing runs at EL0 yet. Clearing a mask bit changes
+    // no memory, and an SError now reaches the vectors, which are installed.
+    unsafe {
+        core::arch::asm!(
+            "msr cntkctl_el1, xzr",
+            "msr pmuserenr_el0, xzr",
+            "isb",
+            "msr daifclr, #4",
+            options(nostack, preserves_flags),
+        )
+    };
 }
 
 /// Exception class name (`ESR_ELx.EC`, "ESR_EL1, Exception Syndrome Register").

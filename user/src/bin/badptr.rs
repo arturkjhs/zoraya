@@ -20,12 +20,14 @@ fn main() -> i32 {
         // Kernel addresses, past the range check and below it.
         expect(0xffff_ffff_8000_0000, 16, Status::BadAddress),
         expect(0xffff_0000_4000_0000, 16, Status::BadAddress),
-        expect(0x7fff_ffff_f000, 0x2000, Status::BadAddress),
+        expect(0x7fff_ffff_f000, 16, Status::BadAddress),
         // Wrapping.
         expect(u64::MAX - 4, 16, Status::BadAddress),
-        // An unmapped page between mapped ones, reached part way through.
-        expect(0x3f_f000, 0x2000, Status::BadAddress),
-        expect(0x40_0000, 1 << 20, Status::InvalidArgument),
+        // Starting unmapped, just below the program.
+        expect(0x3f_f000, 0x1000, Status::BadAddress),
+        // Starting mapped, at the top of the stack, and running off the end.
+        expect(0x7fff_ffff_eff8, 16, Status::BadAddress),
+        expect(0x40_0000, 5000, Status::InvalidArgument),
         raw_syscall(WRITE, 0, 0, 0).0 == Status::BadHandle as u64,
         raw_syscall(WRITE, 99, 0, 0).0 == Status::BadHandle as u64,
         raw_syscall(WRITE, u64::MAX, 0, 0).0 == Status::BadHandle as u64,

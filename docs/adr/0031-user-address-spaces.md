@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0020, ADR-0024
-- **Evidence:** CP-15, CP-16, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#l4-family-and-sel4
+- **Evidence:** CP-15, CP-16
 
 ## Context
 ADR-0020 leaves ASIDs and the use of TTBR0 to this stage. CP-15 makes hardware address spaces the isolation boundary. ADR-0024 calls for a new ADR on faults during copies from user memory, and its open question asks how the stack limit in `SP_EL0` survives EL0.
@@ -17,22 +17,22 @@ ADR-0020 leaves ASIDs and the use of TTBR0 to this stage. CP-15 makes hardware a
 
 ## Considered options
 
-### Option A: Check, then ordinary loads, with an exception table (Linux baseline)
-- **Description:** Check the range, then use `copy_from_user` with a table of fix-ups, with PAN guarding against stray accesses.
-- **Evidence for:** Proven at scale [outside evidence: Linux `Documentation/arch/arm64/`]. 
+### Option A: Ordinary loads after a range check, with PAN
+- **Description:** Check the range, then use ordinary loads with fix-ups, relying on PAN to catch stray accesses.
+- **Evidence for:** Fast, and any size of access works.
 - **Evidence against:** Ordinary loads run with EL1 permission, so a range check is the only barrier unless the CPU has PAN, which is optional and which `cortex-a72` under TCG lacks [outside evidence: Arm ARM DDI 0487, FEAT_PAN].
 - **Cost:** Moderate.
-- **Precedent:** Linux.
+- **Precedent:** Older Linux arm64 kernels [outside evidence: Linux arm64 `uaccess` history].
 
-### Option B: Unprivileged load and store instructions with a fix-up
+### Option B: Unprivileged load and store instructions with a fix-up (Linux baseline)
 - **Description:** One small assembly routine copies with `ldtrb` and `sttrb`, which check permissions as EL0 would. A fault with the PC inside the routine resumes at its error exit.
 - **Evidence for:** The hardware enforces user permissions, so a kernel pointer passed by a user faults even if a range check were wrong. Needs no optional feature.
 - **Evidence against:** A byte at a time, so slow for large copies. Word-sized forms can come later.
 - **Cost:** Low (estimate: 40 lines of assembly).
-- **Precedent:** Linux used these on arm64 for a period [outside evidence: Linux arm64 `uaccess` history].
+- **Precedent:** Linux on arm64 today: `arch/arm64/include/asm/uaccess.h` and `lib/copy_from_user.S` use `ldtr` forms, with an exception table [outside evidence: Linux sources].
 
 ### Option C: Map user pages into the kernel for each call (microkernel style)
-- **Description:** seL4 avoids general user access by passing messages through registers and a mapped IPC buffer (alternatives-postmortem.md#l4-family-and-sel4). Zircon uses checked user-pointer types around its copies (alternatives-postmortem.md#fuchsia--zircon-incl-starnix).
+- **Description:** seL4 avoids general user access by passing messages through registers and a mapped IPC buffer [outside evidence: seL4 reference manual]. Zircon uses checked user-pointer types around its copies [outside evidence: Zircon `user_ptr` sources].
 - **Evidence for:** A narrow, typed path into the kernel.
 - **Evidence against:** An IPC buffer design decides stage 3's message format ahead of time. The direct map could reach the frames, but walking tables for every copy is slower and easy to get wrong.
 - **Cost:** Moderate.
@@ -58,7 +58,7 @@ Recommended: **Option B**, with a typed `UserSlice` as the only way kernel code 
 - **INV-0031-1.** No user mapping is writable and executable, and all user mappings have no EL1 execute permission. *Check:* `zoraya-pagetable` host tests, and an in-QEMU test walking a live process's tables.
 - **INV-0031-2.** A process cannot read or write kernel memory or another process's memory. *Check:* in-QEMU tests with user programs that try, each ending in a `Fault` exit record.
 - **INV-0031-3.** A bad pointer passed to a system call returns `BadAddress` and leaves the kernel running. *Check:* in-QEMU test with kernel, unmapped and wrapping addresses.
-- **INV-0031-4.** Kernel code reaches user memory only through `UserSlice`. *Check:* a test over `kernel/src` that `ldtr`, `sttr` and user-range casts appear only in `arch/aarch64/usercopy.rs`.
+- **INV-0031-4.** Kernel code reaches user memory only through `UserSlice`. *Check:* `make check-user-access` greps `kernel/src` for `ldtr` and `sttr` outside `arch/aarch64/usercopy.rs`. A plain cast of a user address is left to review.
 - **INV-0031-5.** With no current process, TTBR0 translation is disabled. *Check:* in-QEMU test after a process has run and exited.
 
 ## Open questions

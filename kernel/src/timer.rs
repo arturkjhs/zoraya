@@ -67,8 +67,21 @@ fn program(queue: &DeadlineQueue<Entry, QUEUE_SIZE>) {
     }
 }
 
-/// Calls `callback(arg)` once, no earlier than `at`.
+/// Calls `callback(arg)` once, no earlier than `at`. One slot stays free for
+/// [`arm_reserved`].
 pub fn arm(at: Instant, callback: Callback, arg: usize) -> Result<TimerId, QueueFull> {
+    let mut queue = QUEUE.lock();
+    if queue.len() + 1 >= QUEUE_SIZE {
+        return Err(QueueFull);
+    }
+    let id = queue.insert(at, Entry { callback, arg })?;
+    program(&queue);
+    Ok(id)
+}
+
+/// As [`arm`], for the scheduler's one time slice, which must not be lost to
+/// a full queue.
+pub fn arm_reserved(at: Instant, callback: Callback, arg: usize) -> Result<TimerId, QueueFull> {
     let mut queue = QUEUE.lock();
     let id = queue.insert(at, Entry { callback, arg })?;
     program(&queue);

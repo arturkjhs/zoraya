@@ -128,7 +128,12 @@ pub fn invalidate(va: u64, size: u64) {
 /// Points TTBR0 at a process's table, or turns TTBR0 off for kernel threads.
 /// Global kernel mappings are in TTBR1, and user entries carry their ASID, so
 /// no TLB maintenance is needed.
-pub fn set_user_table(ttbr0: Option<u64>) {
+///
+/// # Safety
+///
+/// A `Some` value is the root and ASID of a live user table, which maps nothing
+/// but user addresses.
+pub unsafe fn set_user_table(ttbr0: Option<u64>) {
     match ttbr0 {
         // SAFETY: the table maps only user addresses, and nothing in the
         // kernel runs through TTBR0, so the running code is unaffected.
@@ -182,14 +187,19 @@ pub fn invalidate_asid(asid: u16) {
 /// After writing code at `[va, va + size)`: cleans it to the point of
 /// unification and invalidates the instruction caches, since data and
 /// instruction caches need not be coherent.
-pub fn sync_instruction_cache(va: u64, size: u64) {
+///
+/// # Safety
+///
+/// The range is mapped.
+pub unsafe fn sync_instruction_cache(va: u64, size: u64) {
     let ctr: u64;
     // SAFETY: reading CTR_EL0 has no side effects.
     unsafe { asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack, preserves_flags)) };
     let line = 4u64 << ((ctr >> 16) & 0xf);
     let mut at = va & !(line - 1);
     while at < va + size {
-        // SAFETY: cleaning a cache line of mapped memory changes no contents.
+        // SAFETY: the caller's range is mapped, and a clean changes no
+        // contents.
         unsafe { asm!("dc cvau, {}", in(reg) at, options(nostack, preserves_flags)) };
         at += line;
     }

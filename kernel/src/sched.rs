@@ -5,7 +5,6 @@
 //! The slice is a one-shot deadline, armed only when another thread is ready,
 //! so a lone thread takes no timer interrupts.
 
-use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -39,8 +38,9 @@ pub struct Thread {
     process: Option<Arc<Process>>,
 }
 
-// SAFETY: `context` is only touched by `schedule`, with interrupts masked, for
-// a thread that is not running; everything else is atomic or immutable.
+// SAFETY: `context` is only touched by `schedule`, with interrupts masked, on
+// the one CPU: saved for the running thread and read for the next. Everything
+// else is atomic or immutable.
 unsafe impl Send for Thread {}
 // SAFETY: as above.
 unsafe impl Sync for Thread {}
@@ -86,7 +86,7 @@ pub fn preemptions() -> u64 {
     PREEMPTIONS.load(Ordering::Relaxed)
 }
 
-fn boot_thread() -> Result<Arc<Thread>, OutOfMemory> {
+fn boot_thread() -> Arc<Thread> {
     arc(Thread {
         context: UnsafeCell::new(Context::default()),
         state: AtomicU8::new(RUNNING),
@@ -95,16 +95,17 @@ fn boot_thread() -> Result<Arc<Thread>, OutOfMemory> {
     })
 }
 
-fn arc(thread: Thread) -> Result<Arc<Thread>, OutOfMemory> {
-    // `Arc::try_new` is not stable; a box first would only move the failure.
-    let boxed = crate::memory::heap::try_box(thread)?;
-    Ok(Arc::from(boxed as Box<Thread>))
+/// Stable Rust has no fallible `Arc` constructor, so this one panics when
+/// memory runs out. ADR-0022 allows that only because the kernel alone starts
+/// threads at this stage. `spawn` in stage 3 needs a fallible form first.
+fn arc(thread: Thread) -> Arc<Thread> {
+    Arc::new(thread)
 }
 
 /// Makes the running code the boot thread and creates the idle thread. Call
 /// once, with the heap up.
 pub fn init() {
-    let boot = boot_thread().expect("boot thread");
+    let boot = boot_thread();
     let idle = new_kernel(idle_main, 0).expect("idle thread");
     let mut s = SCHED.lock();
     #[cfg(feature = "qemu-test")]
@@ -119,12 +120,12 @@ pub fn init() {
 fn new_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
     let stack = KernelStack::new()?;
     let context = Context::new_kernel(entry as usize, arg, stack.top(), stack.limit());
-    arc(Thread {
+    Ok(arc(Thread {
         context: UnsafeCell::new(context),
         state: AtomicU8::new(READY),
         _stack: Some(stack),
         process: None,
-    })
+    }))
 }
 
 /// Reserves queue room for one more thread, so that the scheduler itself never
@@ -156,15 +157,15 @@ pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>
         state: AtomicU8::new(READY),
         _stack: Some(stack),
         process: Some(process),
-    })?)
+    }))
 }
 
 /// Runs on a new kernel thread, from boot-time assembly.
 #[unsafe(no_mangle)]
 extern "C" fn kernel_thread_main(entry: usize, arg: usize) -> ! {
     // SAFETY: threads exist only after the vectors and GIC are up. New threads
-    // start from `schedule`, with interrupts masked.
-    unsafe { arch::unmask_interrupts() };
+    // start from `schedule`, with every exception masked.
+    unsafe { arch::unmask_all() };
     // SAFETY: `new_kernel` stored a `fn(usize)` here.
     let entry: fn(usize) = unsafe { core::mem::transmute(entry) };
     entry(arg);
@@ -209,7 +210,7 @@ fn end_of_slice(_: usize) {
 /// runs, and never if it is dead.
 fn schedule() {
     reap();
-    let daif = arch::save_and_mask_interrupts();
+    let daif = arch::save_and_mask_all();
     let (prev, next, ttbr0) = {
         let mut guard = SCHED.lock();
         let s = &mut *guard;
@@ -240,7 +241,7 @@ fn schedule() {
         let user = next.process.is_some();
         if user && !s.ready.is_empty() {
             let end = timer::now().plus_nanos(SLICE_NS);
-            s.slice = timer::arm(end, end_of_slice, 0).ok();
+            s.slice = timer::arm_reserved(end, end_of_slice, 0).ok();
         }
         let ttbr0 = next.process.as_ref().map(|p| p.ttbr0());
         let raw: *const Thread = Arc::as_ptr(&next);
@@ -248,10 +249,12 @@ fn schedule() {
         (prev, raw, ttbr0)
     };
     if !core::ptr::eq(prev, next) {
-        mmu::set_user_table(ttbr0);
-        // SAFETY: interrupts are masked. Both threads are kept alive past the
-        // switch: `next` by SCHED.current; `prev` by the ready queue, the dead
-        // list, or whoever will wake it, and no local here holds a count.
+        // SAFETY: `ttbr0` is the table of `next`'s live process, or none.
+        unsafe { mmu::set_user_table(ttbr0) };
+        // SAFETY: every exception is masked. Both threads are kept alive past
+        // the switch: `next` by SCHED.current; `prev` by the ready queue, the
+        // dead list, `s.idle`, or the waiter list or leaked count that will
+        // wake it. No local here holds a count.
         unsafe { arch::switch((*prev).context.get(), (*next).context.get()) };
     }
     arch::restore_interrupts(daif);
@@ -265,9 +268,14 @@ pub fn yield_now() {
 /// Switches away if the slice ended. Called on the way back to EL0, on the
 /// thread's own stack, with interrupts masked.
 pub fn preempt_point() {
-    let due = SCHED.lock().need_resched;
+    let (due, other) = {
+        let s = SCHED.lock();
+        (s.need_resched, !s.ready.is_empty())
+    };
     if due {
-        PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+        if other {
+            PREEMPTIONS.fetch_add(1, Ordering::Relaxed);
+        }
         schedule();
     }
 }
@@ -354,6 +362,7 @@ pub fn adopt_boot_thread() {
         if let Some(old) = s.current.replace(boot) {
             core::mem::forget(old);
         }
-        mmu::set_user_table(None);
+        // SAFETY: no table is the safe value.
+        unsafe { mmu::set_user_table(None) };
     }
 }

@@ -22,7 +22,7 @@ pub mod layout {
     pub const DEVICE_WINDOW_SIZE: u64 = 1 << 40;
     pub const HEAP_WINDOW: u64 = 0xffff_8100_0000_0000;
     pub const HEAP_WINDOW_SIZE: u64 = 1 << 40;
-    /// Reserved for thread stacks from stage 2. Nothing is mapped here.
+    /// Thread stacks.
     pub const STACK_WINDOW: u64 = 0xffff_8200_0000_0000;
     pub const STACK_WINDOW_SIZE: u64 = 1 << 40;
     pub const KERNEL_IMAGE: u64 = 0xffff_ffff_8000_0000;

@@ -18,7 +18,11 @@ fn main() -> i32 {
     for _ in 0..20_000 {
         let number = next() % 12;
         // Exit would end the run, and a far deadline would never come back.
-        if number == Syscall::ProcessExit as u64 || number == Syscall::SleepUntil as u64 {
+        if number == Syscall::ProcessExit as u64 {
+            continue;
+        }
+        if number == Syscall::SleepUntil as u64 {
+            raw_syscall(number, next() % 1000, 0, 0);
             continue;
         }
         let (status, _) = raw_syscall(number, next() >> (next() % 64), next(), next() >> 40);

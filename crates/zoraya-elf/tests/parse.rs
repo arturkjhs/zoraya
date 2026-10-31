@@ -133,6 +133,7 @@ fn segments_sharing_a_page_or_out_of_order_are_refused() {
 fn bad_sizes_and_offsets_are_refused() {
     for ph in [
         load(R | X, 0x1000, LOW, 0x200, 0x100),   // memsz < filesz
+        load(X, 0x1000, LOW, 0x10, 0x10),         // not readable
         load(R | X, 0x1000, LOW, 0, 0),           // empty
         load(R | X, 0x1100, LOW, 0x10, 0x10),     // offset and vaddr disagree
         load(R | X, 0x2000, LOW, 0x2000, 0x2000), // past the end of the file

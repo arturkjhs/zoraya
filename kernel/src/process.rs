@@ -3,13 +3,14 @@
 
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use zoraya_abi::{CONSOLE, ExitReason, ExitRecord, Handle};
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, Program, Segment};
 use zoraya_pagetable::{Attributes, MemoryType};
 
 use crate::arch::mmu;
-use crate::memory::heap::{OutOfMemory, try_box};
+use crate::memory::heap::OutOfMemory;
 use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
@@ -43,8 +44,8 @@ impl From<MapFailed> for SpawnError {
 
 struct Exit {
     record: Option<ExitRecord>,
-    /// The thread blocked in [`Process::wait`].
-    waiter: Option<Arc<Thread>>,
+    /// The threads blocked in [`Process::wait`].
+    waiters: Vec<Arc<Thread>>,
 }
 
 pub struct Process {
@@ -71,19 +72,30 @@ impl Process {
         handle == CONSOLE
     }
 
-    /// Blocks until the process has ended.
+    /// Blocks until the process has ended. Any number of threads may wait.
     pub fn wait(&self) -> ExitRecord {
         let daif = arch::save_and_mask_interrupts();
         loop {
-            {
+            // A block of its own, so that the guard restores its mask before
+            // `daif` is restored.
+            let (record, listed) = {
                 let mut exit = self.exit.lock();
-                if let Some(record) = exit.record {
+                let record = exit.record;
+                let listed = record.is_none() && exit.waiters.try_reserve(1).is_ok();
+                if listed {
+                    exit.waiters.push(sched::current());
+                }
+                (record, listed)
+            };
+            match (record, listed) {
+                (Some(record), _) => {
                     arch::restore_interrupts(daif);
                     return record;
                 }
-                exit.waiter = Some(sched::current());
+                (None, true) => sched::block_current(),
+                // No room to be listed: this needs no memory.
+                (None, false) => sched::yield_now(),
             }
-            sched::block_current();
         }
     }
 
@@ -137,7 +149,8 @@ fn load_segment(space: &mut AddressSpace, file: &[u8], s: &Segment) -> Result<()
             }
         }
         if s.execute {
-            mmu::sync_instruction_cache(target as u64, PAGE_SIZE);
+            // SAFETY: `target` is a whole page in the direct map.
+            unsafe { mmu::sync_instruction_cache(target as u64, PAGE_SIZE) };
         }
     }
     Ok(())
@@ -166,10 +179,10 @@ pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> 
         space: SpinLock::new(Some(space)),
         exit: SpinLock::new(Exit {
             record: None,
-            waiter: None,
+            waiters: Vec::new(),
         }),
     };
-    let process: Arc<Process> = Arc::from(try_box(process)?);
+    let process = Arc::new(process);
     sched::spawn_user(process.clone(), program.entry, USER_STACK_TOP)?;
     Ok(process)
 }
@@ -188,15 +201,16 @@ pub fn exit_current(record: ExitRecord) -> ! {
         .process()
         .expect("a process is running")
         .clone();
-    mmu::set_user_table(None);
+    // SAFETY: no table is the safe value.
+    unsafe { mmu::set_user_table(None) };
     let space = process.space.lock().take();
-    let waiter = {
+    let waiters = {
         let mut exit = process.exit.lock();
         exit.record = Some(record);
-        exit.waiter.take()
+        core::mem::take(&mut exit.waiters)
     };
     drop(space);
-    if let Some(waiter) = waiter {
+    for waiter in waiters {
         sched::wake(waiter);
     }
     drop(process);

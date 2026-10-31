@@ -18,6 +18,7 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::alloc::Layout;
 use core::hint::black_box;
@@ -49,7 +50,7 @@ struct Test {
 // The `harness_reports_*` and `fault_report_*` tests are expected to fail;
 // the runner is told so (`--expect-panic`) and checks that each is reported
 // as a panic, and `--expect-line` checks what the report said.
-const EXPECTED_FAILURES: usize = 8;
+const EXPECTED_FAILURES: usize = 9;
 
 static TESTS: &[Test] = &[
     Test {
@@ -285,6 +286,26 @@ static TESTS: &[Test] = &[
         run: ttbr0_is_off_with_no_process,
     },
     Test {
+        name: "wait_keeps_the_interrupt_mask",
+        run: wait_keeps_the_interrupt_mask,
+    },
+    Test {
+        name: "every_waiter_is_woken",
+        run: every_waiter_is_woken,
+    },
+    Test {
+        name: "registers_survive_system_calls",
+        run: registers_survive_system_calls,
+    },
+    Test {
+        name: "lone_process_has_no_timer",
+        run: lone_process_has_no_timer,
+    },
+    Test {
+        name: "full_deadline_queue_keeps_the_slice",
+        run: full_deadline_queue_keeps_the_slice,
+    },
+    Test {
         name: "harness_reports_panic_as_failure",
         run: harness_reports_panic_as_failure,
     },
@@ -315,6 +336,10 @@ static TESTS: &[Test] = &[
     Test {
         name: "fault_report_for_thread_stack_overflow",
         run: fault_report_for_thread_stack_overflow,
+    },
+    Test {
+        name: "fault_report_for_stack_overflow_from_el0",
+        run: fault_report_for_stack_overflow_from_el0,
     },
     Test {
         name: "fault_report_for_stack_overflow",
@@ -388,8 +413,8 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     crate::panic::clear();
     crate::sched::adopt_boot_thread();
     // SAFETY: the panicking test's frames and the panic machinery's frames
-    // are on the boot stack, or the emergency stack after a stack overflow,
-    // and none holds anything still referenced: tests keep no state outside
+    // are on the boot stack, a thread's stack, or the emergency stack after a
+    // stack overflow, and none holds anything still referenced: tests keep no state outside
     // the atomics above, one CPU runs, and the panic handler masked
     // interrupts.
     unsafe { arch::recover_to(resume, i + 1) }
@@ -1006,8 +1031,9 @@ fn user_tables_obey_wx() {
 }
 
 fn user_faults_end_the_process_only() {
-    /// Exception classes: unknown, instruction and data abort from EL0, BRK.
-    const CASES: [(&str, u32); 8] = [
+    /// Exception classes: unknown, WFI trapped, instruction and data abort
+    /// from EL0, PC alignment, BRK.
+    const CASES: [(&str, u32); 10] = [
         ("f_kread", 0x24),
         ("f_kwrite", 0x24),
         ("f_null", 0x24),
@@ -1016,6 +1042,8 @@ fn user_faults_end_the_process_only() {
         ("f_brk", 0x3c),
         ("f_exdata", 0x20),
         ("f_stack", 0x24),
+        ("f_wfi", 0x01),
+        ("f_align", 0x22),
     ];
     for (name, class) in CASES {
         let record = run_program(name);
@@ -1144,6 +1172,67 @@ fn ttbr0_is_off_with_no_process() {
     assert!(mmu::tcr() & EPD0 != 0);
     assert_eq!(mmu::ttbr0(), 0);
     expect_data_abort(read_at, USER_LOW, FSC_TRANSLATION, false);
+}
+
+fn wait_keeps_the_interrupt_mask() {
+    let before = arch::interrupt_mask();
+    assert_eq!(run_program("hello"), exited(7));
+    assert_eq!(arch::interrupt_mask(), before);
+}
+
+fn every_waiter_is_woken() {
+    static DONE: AtomicUsize = AtomicUsize::new(0);
+    fn waiter(raw: usize) {
+        // SAFETY: from `Arc::into_raw` below, once per waiter.
+        let process = unsafe { Arc::from_raw(raw as *const process::Process) };
+        assert_eq!(process.wait(), exited(1));
+        DONE.fetch_add(1, Ordering::Relaxed);
+    }
+    DONE.store(0, Ordering::Relaxed);
+    let process = process::spawn("spin").expect("spin");
+    for _ in 0..3 {
+        let raw = Arc::into_raw(process.clone()) as usize;
+        sched::spawn_kernel(waiter, raw).expect("thread");
+    }
+    assert_eq!(process.wait(), exited(1));
+    wait_until_yielding(|| DONE.load(Ordering::Relaxed) == 3);
+}
+
+fn registers_survive_system_calls() {
+    assert_eq!(run_program("regsave"), exited(0));
+}
+
+/// INV-0030-1: the program reads the timer while it is the only thread that
+/// can run: the boot thread blocks in `wait`, and no deadline is queued.
+fn lone_process_has_no_timer() {
+    assert_eq!(run_program("lone"), exited(0));
+}
+
+fn full_deadline_queue_keeps_the_slice() {
+    fn nothing(_: usize) {}
+    let far = timer::now().plus_nanos(1 << 50);
+    let mut ids = Vec::new();
+    while let Ok(id) = timer::arm(far, nothing, 0) {
+        ids.push(id);
+    }
+    let before = sched::preemptions();
+    let a = process::spawn("spin").expect("spin");
+    let b = process::spawn("spin").expect("spin");
+    assert_eq!(a.wait(), exited(1));
+    assert_eq!(b.wait(), exited(1));
+    for id in ids {
+        assert!(timer::cancel(id));
+    }
+    assert!(sched::preemptions() - before >= 2, "no slice was armed");
+}
+
+/// The test-only system call that makes the kernel overflow a thread's stack.
+pub fn overflow_stack() {
+    black_box(use_stack(0));
+}
+
+fn fault_report_for_stack_overflow_from_el0() {
+    let _ = run_program("koverflow");
 }
 
 fn fault_report_for_thread_stack_overflow() {

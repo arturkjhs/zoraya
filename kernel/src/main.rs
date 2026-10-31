@@ -1,4 +1,5 @@
-//! Zoraya kernel, stage 1: boot, exceptions, MMU, memory, interrupts, timer.
+//! Zoraya kernel: boot, exceptions, MMU, memory, interrupts, timer, threads,
+//! user processes and system calls.
 //!
 //! Only machine-dependent code lives here; logic that needs no hardware is in
 //! the host-tested crates under `crates/`.

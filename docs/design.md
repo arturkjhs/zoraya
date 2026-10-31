@@ -200,7 +200,7 @@ TTBR0 is disabled (`TCR_EL1.EPD0`) and holds 0. The layout is stated only in `ke
   window, and never shrinks. `Box::new` and `Vec::push` panic on exhaustion, so they are allowed only at boot and at
   bounded call sites. `memory::heap::try_box` and `Vec::try_reserve` return the failure.
 - **Lock.** `sync::SpinLock` masks IRQ and FIQ while held. On one CPU a taken lock can only be a bug, so it panics
-  rather than spin. `sync.rs` says what changes for SMP. Lock order: heap, then kernel tables, then frames.
+  rather than spin. `sync.rs` says what changes for SMP. Lock order: scheduler, then the deadline queue and heap; a process's exit record, then scheduler; stack slots, then heap; heap, then kernel tables, then frames.
 
 ## Interrupts and time (as built)
 
@@ -306,10 +306,18 @@ deterministic random mutations.
   where an empty table remains. The heap never shrinks, and memory in a size class
   stays there. Frames are not zeroed by the allocator, except for table frames. No double-free detection in the heap.
 - **Threads.** No priorities, and kernel paths are not preempted. One thread per process. `sleep_until(Infinite)`
-  never returns, and nothing can kill a process yet. A deadline queue of 32 is shared by sleepers and the slice, so a
-  full queue fails `sleep_until` with `NoMemory`.
+  never returns, and nothing can kill a process yet. Sleepers share a deadline queue of 32, with one slot kept for the slice, so a full
+  queue fails `sleep_until` with `NoMemory`. Thread and process objects use `Arc::new`, which panics when memory runs
+  out, so stage 3's `spawn` needs a fallible form first (ADR-0022).
 - **User memory.** Copies are a byte at a time. At most 255 live processes. A process's memory is all mapped up front.
-- **Console.** `console_write` is a stand-in until the terminal service (ADR-0032), and any process can use it.
+- **Console.** `console_write` is a stand-in until the terminal service (ADR-0032), and any process can use it. A
+  call takes up to 4 KiB and holds off interrupts while it prints, about 60 ms under QEMU.
+- **PMU under HVF.** `PMUSERENR_EL0` is 0, and TCG traps EL0's PMU accesses, but the review saw them work at EL0 under
+  HVF. It looks like QEMU's HVF register emulation, which a guest cannot change, so a process can read a cycle counter
+  there.
+- **Tests.** The suite needs more memory than the 32 MiB of stage 1: `running_out_of_asids_is_an_error` needs room for
+  255 live processes.
+- **PAN** is not used. A stray kernel access to user memory would not fault.
 - **Interrupts.** One priority, no nesting. FIQ and SError reports are untested, since nothing raises them.
   Interrupt handlers must not panic in a test that expects recovery: the interrupt would stay active.
 - **Emergency stack.** A second overflow, on the emergency stack, halts silently. The deepest use measured is the

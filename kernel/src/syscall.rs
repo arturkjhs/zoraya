@@ -11,7 +11,11 @@ use crate::memory::user::USER_HIGH;
 use crate::{print, process, sched, timer};
 
 /// Longest `console_write`.
-const MAX_WRITE: u64 = 64 * 1024;
+///
+/// System calls run with interrupts masked, and the UART is polled, so this
+/// bounds how long one call can hold off everything else. 4 KiB took about
+/// 60 ms under QEMU (from 690 ms measured for 64 KiB).
+const MAX_WRITE: u64 = 4 * 1024;
 
 /// A range in the user half. The only way to reach user memory (ADR-0031).
 pub struct UserSlice {
@@ -73,10 +77,51 @@ fn sleep_until(raw: u64) -> Result<u64, Status> {
     Ok(0)
 }
 
+/// Calls that exist only in the test kernel, outside `zoraya-abi`.
+#[cfg(feature = "qemu-test")]
+pub mod test_calls {
+    /// Returns 1 if the timer is on.
+    pub const TIMER_IS_ON: u64 = 0x7000;
+    /// Overflows the kernel stack of the calling thread.
+    pub const OVERFLOW_STACK: u64 = 0x7001;
+}
+
+#[cfg(feature = "qemu-test")]
+fn test_call(number: u64) -> Option<Result<u64, Status>> {
+    match number {
+        test_calls::TIMER_IS_ON => Some(Ok(u64::from(arch::timer::is_enabled()))),
+        test_calls::OVERFLOW_STACK => {
+            crate::testing::overflow_stack();
+            Some(Ok(0))
+        }
+        _ => None,
+    }
+}
+
+/// `ESR_EL1.ISS` of an `svc`: its immediate, which must be 0 (ADR-0032).
+const fn svc_immediate(esr: u64) -> u64 {
+    esr & 0xffff
+}
+
 /// Handles the `svc` in `frame`.
 pub fn dispatch(frame: &mut Frame) {
     let [a0, a1, a2] = [frame.x[0], frame.x[1], frame.x[2]];
-    let result = match Syscall::from_number(frame.x[8]) {
+    let number = frame.x[8];
+    #[cfg(feature = "qemu-test")]
+    if let Some(result) = test_call(number) {
+        frame.x[0] = match result {
+            Ok(_) => Status::Ok as u64,
+            Err(status) => status as u64,
+        };
+        frame.x[1] = result.unwrap_or(0);
+        return;
+    }
+    let known = if svc_immediate(frame.esr) == 0 {
+        Syscall::from_number(number)
+    } else {
+        None
+    };
+    let result = match known {
         None => Err(Status::BadSyscall),
         Some(Syscall::ProcessExit) => process::exit_current(ExitRecord {
             code: a0 as u32 as i32,

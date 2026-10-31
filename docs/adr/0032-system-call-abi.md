@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0002, ADR-0004, ADR-0006, ADR-0023
-- **Evidence:** CP-01, CP-11, CP-12, CP-13, CP-22, CP-25, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#l4-family-and-sel4
+- **Evidence:** CP-01, CP-11, CP-12, CP-13, CP-22, CP-25, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
 
 ## Context
 Stage 2's criterion is a user process printing through a native system call. ADR-0002's INV-0002-1 requires that every object is named by a `Handle`, and its checks over the `abi` crate become possible with this stage, with those of INV-0004-1 and INV-0006-2. Stage 3 adds handles, ports and `spawn`, so this ABI starts small and has to grow without breaking (CP-11, CP-13).
@@ -31,7 +31,7 @@ Stage 2's criterion is a user process printing through a native system call. ADR
 - **Precedent:** Zircon.
 
 ### Option C: One invocation call on capabilities
-- **Description:** seL4 has few system calls, and most operations are invocations of a capability with a message (alternatives-postmortem.md#l4-family-and-sel4).
+- **Description:** seL4 has few system calls, and most operations are invocations of a capability with a message [outside evidence: seL4 reference manual].
 - **Evidence for:** A very small trap surface, with authority always explicit.
 - **Evidence against:** Fixes the message format before stage 3 designs it.
 - **Cost:** Moderate.
@@ -40,7 +40,7 @@ Stage 2's criterion is a user process printing through a native system call. ADR
 ## Recommendation
 Recommended: **Option B**. It is a recommendation, not a decision.
 
-- **Trap.** `svc #0`. Number in x8, arguments in x0 to x5. Return: x0 is `Status` (0 is success), x1 a value. x2 to x18 are preserved, unlike SMCCC, so the wrappers stay simple.
+- **Trap.** `svc #0`; any other immediate returns `BadSyscall`. Number in x8, arguments in x0 to x5. Return: x0 is `Status` (0 is success), x1 a value. x2 to x18 are preserved, unlike SMCCC, so the wrappers stay simple.
 - **`Handle`.** A `u32` index into a per-process table, with 0 never valid. At this stage a process starts with a console handle in a fixed slot, and the table is otherwise fixed; stage 3 replaces this with rights and duplication.
 - **Time.** `Deadline` goes over the ABI as a `u64` nanosecond instant, with `u64::MAX` meaning `Infinite`, as ADR-0006 rule 4 fixes.
 - **First calls.**
@@ -55,7 +55,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **`console_write`** names its console by handle, so a process with no console handle cannot print (driver 1). Bytes must be valid UTF-8 (CP-22) or the call returns `InvalidArgument`.
 - **`Status`.** `Ok`, `BadSyscall`, `BadHandle`, `BadAddress`, `InvalidArgument`, `NoMemory`. Unknown numbers return `BadSyscall`.
-- **Checks.** `zoraya-abi` holds `SYSCALLS`, a const table of each call's parameter kinds. Unit tests implement the lints of INV-0002-1, INV-0004-1 and INV-0006-2 on it.
+- **Checks.** `zoraya-abi` holds `SYSCALLS`, a const table of each call's parameter kinds. Unit tests implement the lints of INV-0004-1 and INV-0006-2 on it. That table is written by hand and is not connected to the dispatcher. INV-0002-1's lint is partial: there is no `RelativePath` yet, and `process_exit`'s `code` is an integer outside that invariant's allow-list, as ADR-0004 rule 1 requires. ADR-0002's open questions record both.
 - **Failure policy.** System call paths use fallible allocation (ADR-0022).
 
 ## Consequences
@@ -65,7 +65,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 ## Invariants
 - **INV-0032-1.** Every call in `SYSCALLS` has a number that the kernel's dispatcher handles, and any other number returns `BadSyscall`. *Check:* `zoraya-abi` unit test, and an in-QEMU test with an unknown number.
-- **INV-0032-2.** A system call never panics the kernel on any argument values. *Check:* an in-QEMU test where a user program makes every call with random register values.
+- **INV-0032-2.** A system call never panics the kernel on any argument values. *Check:* an in-QEMU test where a user program makes every call except `process_exit` with random register values, with `sleep_until` given near deadlines.
 
 ## Open questions
 - How a struct-passing convention should look for `spawn`, which has too many parameters for registers.

@@ -25,6 +25,7 @@ const EM_AARCH64: u16 = 183;
 const PT_LOAD: u32 = 1;
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
+const PF_R: u32 = 4;
 
 /// Why a file was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,7 +40,8 @@ pub enum Error {
     BadHeaders,
     /// No `PT_LOAD` segment, or more than [`MAX_SEGMENTS`].
     BadSegmentCount,
-    /// `memsz < filesz`, unaligned, or file bytes outside the file.
+    /// Not readable, `memsz < filesz`, unaligned, or file bytes outside the
+    /// file. User pages are always readable, so a segment must say so.
     BadSegment,
     /// Writable and executable (CP-16).
     WritableExecutable,
@@ -172,7 +174,7 @@ fn read_segment(ph: &[u8], file_len: u64, low: u64, high: u64) -> Result<Segment
     if write && execute {
         return Err(Error::WritableExecutable);
     }
-    if memsz == 0 || memsz < filesz {
+    if flags & PF_R == 0 || memsz == 0 || memsz < filesz {
         return Err(Error::BadSegment);
     }
     if vaddr % PAGE_SIZE != offset % PAGE_SIZE {

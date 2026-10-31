@@ -41,8 +41,8 @@ User programs need a way into the machine before any filesystem exists (stage 4)
 Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **Ramdisk.** `zoraya-ramdisk`: a total reader with no `unsafe`, and a writer for `tools/mkramdisk`. If no ramdisk has been built, the kernel builds with an empty one, so `cargo build -p zoraya-kernel` still works.
-- **ELF.** `zoraya-elf`: a total parser with no `unsafe`, for little-endian AArch64 static `ET_EXEC` only. It rejects anything else, a segment both writable and executable (driver 3), segments that overlap or lie outside the user range of ADR-0031, and `memsz < filesz`.
-- **Loading.** Frames are allocated and zeroed, the file bytes are copied through the direct map, then pages are mapped with the segment's permissions. No page is writable while it is being executed, because the process does not exist yet.
+- **ELF.** `zoraya-elf`: a total parser with no `unsafe`, for little-endian AArch64 static `ET_EXEC` only. It rejects anything else, a segment that is not readable, a segment both writable and executable (driver 3), segments that overlap or lie outside the user range of ADR-0031, and `memsz < filesz`.
+- **Loading.** Frames are allocated, zeroed and mapped with the segment's permissions, then the file bytes are copied in through the direct map. The tables are not in use yet, so no page is writable while it can be executed. Executable pages then get instruction cache maintenance.
 - **Authenticity.** None: the ramdisk is part of the kernel image. CP-26's verified image is a later matter.
 
 ## Consequences

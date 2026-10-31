@@ -103,6 +103,17 @@ pub unsafe fn unmask_interrupts() {
     unsafe { asm!("msr daifclr, #3", options(nostack, preserves_flags)) };
 }
 
+/// Allows IRQ, FIQ and SError: a new kernel thread's start, which may inherit
+/// any mask from the thread that switched to it.
+///
+/// # Safety
+///
+/// As for [`unmask_interrupts`].
+pub unsafe fn unmask_all() {
+    // SAFETY: the caller's contract. Not `nomem`, as in `mask_interrupts`.
+    unsafe { asm!("msr daifclr, #7", options(nostack, preserves_flags)) };
+}
+
 /// Waits for an interrupt. A masked one wakes the CPU too, but runs only once
 /// unmasked.
 pub fn wait_for_interrupt() {
@@ -169,7 +180,7 @@ pub fn gic_v3_end_of_interrupt(intid: u32) {
 
 /// Masks every exception source, returning the previous mask for
 /// [`restore_interrupts`].
-fn save_and_mask_all() -> u64 {
+pub fn save_and_mask_all() -> u64 {
     let daif: u64;
     // SAFETY: reading DAIF and setting mask bits have no effect on memory.
     // Not `nomem`, as in `mask_interrupts`.

@@ -1,18 +1,18 @@
 #![no_std]
 #![no_main]
 
-//! Stays runnable for a while, so that only preemption can let others in.
+//! Never enters the kernel while it runs, so only a timer interrupt on the
+//! way back to EL0 can let another thread in.
 
-use zoraya_user::clock_monotonic;
+use core::arch::asm;
 
-const RUN_NS: u64 = 60_000_000;
+use zoraya_user as _;
+
+const ROUNDS: u64 = 150_000_000;
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
-    let end = clock_monotonic() + RUN_NS;
-    let mut rounds = 0u32;
-    while clock_monotonic() < end {
-        rounds = rounds.wrapping_add(1);
-    }
-    i32::from(rounds > 0)
+    // SAFETY: only the named register changes.
+    unsafe { asm!("2:", "subs {n}, {n}, #1", "b.ne 2b", n = inout(reg) ROUNDS => _) };
+    1
 }
