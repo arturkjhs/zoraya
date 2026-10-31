@@ -29,6 +29,8 @@ Evidence IDs (`DM-`, `GR-`, `CP-`, `X-`) resolve in `docs/research/`; `task-02/â
 | [ADR-0032](0032-system-call-abi.md) | System call ABI | accepted | `svc #0`, status in x0, value in x1; `zoraya-abi` holds a signature table that tests check; five first calls, with `console_write` taking a handle. | ADR-0001, ADR-0002, ADR-0004, ADR-0006, ADR-0023 |
 | [ADR-0033](0033-initial-ramdisk-and-elf.md) | Initial ramdisk and ELF loading | accepted | QEMU ignores `-initrd` for an ELF kernel, so the ramdisk is embedded in the image; total parsers; static AArch64 ELF only, with W^X checked at load. | ADR-0001, ADR-0020, ADR-0031 |
 | [ADR-0034](0034-user-faults.md) | Faults from user processes at stage 2 | accepted | With no exception channels yet, a fault ends the process with an `ExitRecord` of reason `Fault`; the kernel goes on. | ADR-0001, ADR-0004, ADR-0024, ADR-0031 |
+| [ADR-0035](0035-exit-code-in-the-abi.md) | The exit code as a parameter of the native ABI | proposed | A new invariant replaces INV-0002-1, allowing `ExitRecord.code` by name as an opaque payload, which reconciles ADR-0002 and ADR-0004. | ADR-0001, ADR-0002, ADR-0004, ADR-0032 |
+| [ADR-0036](0036-user-copy-fault-exception.md) | The user copy fix-up as the one resumed kernel fault | proposed | A new invariant replaces INV-0024-2, naming the one exception, narrowed to a data abort in the copy routine with `FAR_EL1` in the user range. | ADR-0001, ADR-0024, ADR-0031 |
 
 ## Dependency order
 

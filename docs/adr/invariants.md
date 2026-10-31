@@ -111,6 +111,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0033-2 | [ADR-0033](0033-initial-ramdisk-and-elf.md) | A program with a writable and executable segment, or a segment outside the user range, is refused. | host tests in `zoraya-elf`, and an in-QEMU test. | checked: `make test-unit` and `make test-qemu` |
 | INV-0034-1 | [ADR-0034](0034-user-faults.md) | A synchronous exception from EL0 other than `svc` ends that process with reason `Fault` and the exception class in `detail`, and other threads and the kernel go on. | in-QEMU tests with a fault program for each class. | checked: `make test-qemu` |
 | INV-0034-2 | [ADR-0034](0034-user-faults.md) | A process's frames and ASID are released at exit, by any cause. | in-QEMU test comparing frame counts before and after many processes. | checked: `make test-qemu` |
+| INV-0035-1 | [ADR-0035](0035-exit-code-in-the-abi.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields and `ExitRecord.code`, each documented as opaque to the kernel (ADR-0004). | a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`), plus a unit test that `RelativePath::new("/x")` fails. | not yet applicable (stage 4) |
+| INV-0036-1 | [ADR-0036](0036-user-copy-fault-exception.md) | The normal kernel resumes after a fault from EL1 in exactly one case: a data abort with the PC in the user copy routine and `FAR_EL1` in the user range. | the test-only paths are `#[cfg(feature = "qemu-test")]`, and an in-QEMU test faults on a kernel destination inside the routine and sees that it is not resumed, while `badptr` shows user faults are. | checked: `make test-qemu` |
 
 ## Counts
 
@@ -139,4 +141,6 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0033](0033-initial-ramdisk-and-elf.md) Initial ramdisk and ELF loading | 2 |
 | [ADR-0034](0034-user-faults.md) Faults from user processes at stage 2 | 2 |
 | [ADR-0016](0016-filesystem-implementation-choices.md) Filesystem implementation choices the accepted ADRs leave open | 4 |
-| **Total** | **105** |
+| [ADR-0035](0035-exit-code-in-the-abi.md) The exit code as a parameter of the native ABI (proposed) | 1 |
+| [ADR-0036](0036-user-copy-fault-exception.md) The user copy fix-up as the one resumed kernel fault (proposed) | 1 |
+| **Total** | **107** |

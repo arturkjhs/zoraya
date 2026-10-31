@@ -286,6 +286,10 @@ static TESTS: &[Test] = &[
         run: ttbr0_is_off_with_no_process,
     },
     Test {
+        name: "copy_fault_on_kernel_memory_is_not_resumed",
+        run: copy_fault_on_kernel_memory_is_not_resumed,
+    },
+    Test {
         name: "wait_keeps_the_interrupt_mask",
         run: wait_keeps_the_interrupt_mask,
     },
@@ -1228,6 +1232,25 @@ fn full_deadline_queue_keeps_the_slice() {
         assert!(timer::cancel(id));
     }
     assert!(sched::preemptions() - before >= 2, "no slice was armed");
+}
+
+/// For the test-only system call: faults on the kernel's own destination in
+/// the copy routine. `catch` sees it only if `fixup` does not resume it.
+pub fn copy_to_bad_kernel(user_source: u64) -> u64 {
+    extern "C" fn copy(source: usize) {
+        // SAFETY: under `catch`, to an address that faults.
+        let result = unsafe { arch::copy_from_user_to(UNMAPPED as *mut u8, source as u64, 1) };
+        black_box(result.is_err());
+    }
+    match arch::catch(copy, user_source as usize) {
+        Some(fault) if fault.ec == EC_DATA_ABORT && fault.far == Some(UNMAPPED) => 1,
+        _ => 0,
+    }
+}
+
+/// INV-0036-1, with `badptr` showing the other side.
+fn copy_fault_on_kernel_memory_is_not_resumed() {
+    assert_eq!(run_program("copyfar"), exited(0));
 }
 
 /// The test-only system call that makes the kernel overflow a thread's stack.

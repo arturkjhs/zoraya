@@ -428,7 +428,7 @@ extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
         KIND_SYNC => {
             let class = exception_class(frame.esr);
             if class == EC_DATA_ABORT_SAME_EL
-                && let Some(resume) = super::usercopy::fixup(frame.elr)
+                && let Some(resume) = super::usercopy::fixup(frame.elr, frame.far)
             {
                 frame.elr = resume;
                 return;

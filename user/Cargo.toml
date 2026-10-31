@@ -110,3 +110,8 @@ bench = false
 name = "koverflow"
 test = false
 bench = false
+
+[[bin]]
+name = "copyfar"
+test = false
+bench = false

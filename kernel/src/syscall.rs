@@ -84,11 +84,15 @@ pub mod test_calls {
     pub const TIMER_IS_ON: u64 = 0x7000;
     /// Overflows the kernel stack of the calling thread.
     pub const OVERFLOW_STACK: u64 = 0x7001;
+    /// Copies from the user address in x0 to an unmapped kernel address, and
+    /// returns 1 if the fault was not resumed as a bad user pointer.
+    pub const COPY_TO_BAD_KERNEL: u64 = 0x7002;
 }
 
 #[cfg(feature = "qemu-test")]
-fn test_call(number: u64) -> Option<Result<u64, Status>> {
+fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
     match number {
+        test_calls::COPY_TO_BAD_KERNEL => Some(Ok(crate::testing::copy_to_bad_kernel(a0))),
         test_calls::TIMER_IS_ON => Some(Ok(u64::from(arch::timer::is_enabled()))),
         test_calls::OVERFLOW_STACK => {
             crate::testing::overflow_stack();
@@ -108,7 +112,7 @@ pub fn dispatch(frame: &mut Frame) {
     let [a0, a1, a2] = [frame.x[0], frame.x[1], frame.x[2]];
     let number = frame.x[8];
     #[cfg(feature = "qemu-test")]
-    if let Some(result) = test_call(number) {
+    if let Some(result) = test_call(number, a0) {
         frame.x[0] = match result {
             Ok(_) => Status::Ok as u64,
             Err(status) => status as u64,

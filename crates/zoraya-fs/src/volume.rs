@@ -41,8 +41,8 @@ pub const COMMIT_THRESHOLD_BLOCKS: u64 = 1024;
 /// Blocks kept free for requests that only free space, so that removing a
 /// file works on a full volume (ADR-0016, item 3).
 pub const DELETE_RESERVE: u64 = 64;
-/// Object ids are reserved durably in batches of this many (proposed
-/// ADR-0016, item 1).
+/// Object ids are reserved durably in batches of this many (ADR-0016, item
+/// 1).
 pub const ID_BATCH: u64 = 1024;
 /// Default modes for native clients that give none (ADR-0014 rule 6).
 pub const DEFAULT_FILE_MODE: u16 = 0o644;

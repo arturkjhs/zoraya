@@ -70,6 +70,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 ## Open questions
 - How a struct-passing convention should look for `spawn`, which has too many parameters for registers.
 - Whether `console_write` survives past the terminal service.
+- For stage 3: `SYSCALLS` is written by hand and is not connected to the dispatcher, so checks of invariants over a table that is not the source of truth are weak. At stage 3 the dispatcher must be built from the `abi` table, or a test must check that the two match.
 
 ## Revisit triggers
 - A call that needs more than six arguments.
