@@ -70,7 +70,8 @@ This is where the vision matters most. For target 2, a driver in the trusted bas
 ## Consequences
 - **Positive.** A driver bug that does not corrupt DMA ends a process, and recovery is a remount. Three small objects.
 - **Negative.** No security gain over Option A against a compromised driver. Quarantined frames stay lost until a new driver runs. Every I/O crosses processes.
-- **Follow-up.** `tools/run-qemu.sh` gains a disk option. The architect decides whether Option D belongs to the roadmap.
+- **DMA isolation.** Isolating DMA requires PCIe and SMMUv3. It will be a separate ADR, if the direction of isolating untrusted code is chosen; this ADR does not provide it.
+- **Follow-up.** `tools/run-qemu.sh` gains a disk option.
 
 ## Invariants
 - **INV-0054-1.** A device mapping is never executable and never Normal memory. *Check:* in-QEMU table walk.
