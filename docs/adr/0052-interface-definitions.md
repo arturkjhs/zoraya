@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0012, ADR-0044, ADR-0050
-- **Evidence:** CP-11, CP-13, DM-053, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, stage-4/sources.md#interface-definitions
+- **Evidence:** DM-023, CP-11, CP-13, DM-053, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, stage-4/sources.md#interface-definitions
 
 ## Context
 Services need a way to state their protocols. DM-053 is what untyped interfaces become, and CP-11 forbids an untyped `invoke(handle, op, bytes)` unless an IDL types the bytes. ADR-0044 already generates the system call ABI from one Rust declaration, and left open whether IPC should share it. Decoders of hostile input follow ADR-0012's discipline.
@@ -13,7 +13,7 @@ Services need a way to state their protocols. DM-053 is what untyped interfaces 
 2. No untyped escape hatch (DM-053).
 3. A protocol can gain methods without breaking old peers (CP-13).
 4. Few moving parts: no external dependency in `no_std` code without a reason, and a Rust-only system at this stage.
-5. Other languages must remain possible: C programs reach services through `libposix`, not directly, but the wire must be describable.
+5. Other languages must remain possible: the wire must be describable without Rust.
 
 ## Considered options
 
@@ -58,6 +58,9 @@ Recommended: **Option D**, with the wire format specified independently of the m
 
 ### Effect of the vision
 Target 3 favours Option B, and so do language runtimes under target 2 if they speak protocols directly; through `libposix` they do not. Moving later costs a compiler, but the wire is specified without Rust, so a generator for another language can target the same bytes, and nothing on the wire changes. For target 2 a hostile client is the normal case, and total decoding is what is wanted. Networking does not change it: this format is local, and a network protocol has its own.
+
+### Deferred to stage 6
+How C programs reach services through `libposix`. A new method is a new ordinal, so stage 6 adds what it needs without changing a stage 4 method. ADR-0055 holds the one requirement on stage 4: its design must not preclude an open file description with a shared position (DM-023).
 
 ## Consequences
 - **Positive.** No tool to build. A protocol is a page of Rust. Decoders are host-fuzzed like the ramdisk's.

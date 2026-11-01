@@ -1,6 +1,6 @@
 # Stage 4 outline
 
-Non-binding, part of TASK-10. It orders the work; the ADRs decide. Numbers refer to proposed ADRs in `docs/adr/`.
+Non-binding, part of TASK-10. It orders the work; the ADRs decide. Numbers refer to proposed ADRs in `docs/adr/`. ADR-0040 to ADR-0046 are accepted and come first; ADR-0050 to ADR-0056 are reviewed and accepted together, since they refer to each other. No `fork`, handoff or POSIX client is in this stage.
 
 | Step | Work | Depends on | Done when |
 |---|---|---|---|
@@ -12,7 +12,7 @@ Non-binding, part of TASK-10. It orders the work; the ADRs decide. Numbers refer
 | 5 | Device memory, interrupt and DMA objects; test with a loopback of virtio-mmio registers under QEMU | ADR-0051, ADR-0054 | a user program reads the virtio magic value and takes an interrupt |
 | 6 | `virtio-blk` driver in user space, implementing ADR-0015's trait, with a host test against a fake device | ADR-0015, ADR-0054 | the host fake reads, writes and flushes; real-device test in step 7 |
 | 7 | `tools/run-qemu.sh --disk FILE`, the one place that adds the `virtio-blk-device` | CLAUDE.md, ADR-0054 | a `zoraya-mkfs` image is read and written through the driver |
-| 8 | Filesystem service around `zoraya-fs`, one per volume | ADR-0010 to ADR-0016, ADR-0055 | a client creates, reads and renames a file |
+| 8 | Filesystem service around `zoraya-fs`, one per volume, with connection budgets; event objects and `object_same` for tokens | ADR-0006, ADR-0010 to ADR-0016, ADR-0055 | a client creates, reads and renames a file |
 | 9 | Failure paths: driver killed, device error, service killed | ADR-0010, ADR-0054, ADR-0055 | `Failed` is observed and a remount recovers the durable prefix |
 | 10 | Roadmap criterion: a file written, reboot, file read, in `make test` with a disk image | all | files survive reboot |
 | 11 | Spawn from a filesystem image: image handle from a file | ADR-0043 open question, ADR-0055 | optional for the stage |

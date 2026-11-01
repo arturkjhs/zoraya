@@ -207,3 +207,13 @@ Listed, open means the conflict is still there and the proposed ADR says so. Row
 - Walked the `fork` steps by hand. Nothing was built or run for this: no ADR here has code.
 - Ran `make adr-check`: it fails with 7 INV-0001-5 errors, one more than finding 63 records, because ADR-0056 is also missing from `index.md`. This is the expected kind. Finding 63's "Rows in the final report" could not be checked, because that report is not in the repository.
 - Not checked: no web source was fetched, so the source notes for [K1], [Z8], [Z9] and [G2], new in 75edc0f, and ADR-0056's citations to them were not verified. The claims about `VIRTIO_F_ACCESS_PLATFORM` and reset rest on the first review. QEMU's behaviour was not tested. The fork cost figures and the 78-process figure are arithmetic on stated numbers, not measurements.
+
+### Disposition of the second review
+
+Scope was narrowed by the architect to stage 4. Commits after 350ec8f carry this.
+
+- **Fixed in the ADRs:** 3, 9, 14, 17, 21, 25, 32, 50, 55, S1, S3, S4, S9, S10, S11, S13, S14, S16, S17. S15 and S18 were small and were fixed with them.
+- **S1:** a channel, queued replies included, is now paid by the job that made it (ADR-0056), and a reply that meets a quota closes that connection (ADR-0055).
+- **Finding 3, S3, S4, S11:** children's limits now sum within the parent, by carving (ADR-0056), with a table of defaults. ADR-0056's Option B changed to this, and charging no longer walks the tree.
+- **Moved out of scope, to "Deferred to stage 6":** 1, S2, S5, S6, S7, S8, S12. The handoff object is not introduced.
+- **Left as it was, by the architect's list:** 41.
