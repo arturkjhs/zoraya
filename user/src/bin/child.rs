@@ -16,7 +16,7 @@ use zoraya_user::{
 /// Every slot of this process's table is empty (INV-0003-1).
 fn holds_nothing() -> bool {
     (1..=MAX_HANDLES).all(|slot| {
-        let handle = Handle::new(slot).expect("slot is not zero");
+        let handle = Handle::new(u64::from(slot)).expect("slot is not zero");
         handle_duplicate(handle, Rights::NONE) == Err(Status::BadHandle)
     })
 }

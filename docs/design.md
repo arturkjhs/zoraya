@@ -241,7 +241,7 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   its own thread: anyone else sets the exit it wants and wakes it, and it acts on that at its next return to EL0, or
   before its first instruction. At exit it releases its memory, ASID and handles, and stays as a zombie holding only
   its `ExitRecord` until its last handle goes.
-- **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u32` of slot and generation, 1024 slots, a rights
+- **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u64` of 16 bits of slot and 48 of generation (ADR-0057), 1024 slots, a rights
   mask that only decreases. Port handles have no `DUPLICATE`, so closing one closes the port.
 - **Jobs (`kernel/src/job.rs`).** A tree, at most 32 deep, with one lock over membership and walks. `job_signal` and
   `job_kill` cover the tree; a killed tree refuses new processes. `TERMINATED` means no live process in the tree.

@@ -24,7 +24,7 @@ fn input() {
     assert_eq!(packets[0].signals, console_signals::READABLE);
 
     // An address nothing maps loses no input.
-    let call = [u64::from(CONSOLE.raw()), 0x10, 8, 0, 0, 0];
+    let call = [CONSOLE.raw(), 0x10, 8, 0, 0, 0];
     assert_eq!(raw_syscall(CONSOLE_READ, call).0, Status::BadAddress as u64);
 
     let write_only = handle_duplicate(CONSOLE, Rights::WRITE).expect("duplicate");

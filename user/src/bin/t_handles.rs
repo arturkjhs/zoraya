@@ -27,7 +27,7 @@ fn stale_handles_fail() {
     assert_err!(handle_close(copy), Status::BadHandle);
     handle_close(again).expect("close");
     assert_err!(
-        handle_close(Handle::new(0xffff_ffff).unwrap()),
+        handle_close(Handle::new(u64::MAX).unwrap()),
         Status::BadHandle
     );
 }

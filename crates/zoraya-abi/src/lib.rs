@@ -70,37 +70,39 @@ statuses! {
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
 pub const MAX_HANDLES: u32 = 1024;
 const SLOT_BITS: u32 = 16;
+/// The last generation of a slot, 48 bits (ADR-0057).
+pub const MAX_GENERATION: u64 = (1 << 48) - 1;
 
 /// Names an object in a process's handle table: a slot and a generation
 /// (ADR-0040). Zero is never valid. A handle present at start has generation
 /// 0, so its value is its slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Handle(u32);
+pub struct Handle(u64);
 
 impl Handle {
-    pub const fn new(raw: u32) -> Option<Handle> {
+    pub const fn new(raw: u64) -> Option<Handle> {
         if raw == 0 { None } else { Some(Handle(raw)) }
     }
 
     /// The handle at `slot`, of the given generation.
-    pub const fn from_parts(slot: u32, generation: u16) -> Option<Handle> {
-        if slot == 0 || slot > MAX_HANDLES {
+    pub const fn from_parts(slot: u32, generation: u64) -> Option<Handle> {
+        if slot == 0 || slot > MAX_HANDLES || generation > MAX_GENERATION {
             None
         } else {
-            Some(Handle(slot | (generation as u32) << SLOT_BITS))
+            Some(Handle(slot as u64 | generation << SLOT_BITS))
         }
     }
 
-    pub const fn raw(self) -> u32 {
+    pub const fn raw(self) -> u64 {
         self.0
     }
 
     pub const fn slot(self) -> u32 {
-        self.0 & ((1 << SLOT_BITS) - 1)
+        (self.0 & ((1 << SLOT_BITS) - 1)) as u32
     }
 
-    pub const fn generation(self) -> u16 {
-        (self.0 >> SLOT_BITS) as u16
+    pub const fn generation(self) -> u64 {
+        self.0 >> SLOT_BITS
     }
 }
 
@@ -490,14 +492,11 @@ impl Arg for Handle {
     const PARAM: Param = Param::Handle;
 
     fn decode(r: &[u64]) -> Result<Handle, Status> {
-        u32::try_from(r[0])
-            .ok()
-            .and_then(Handle::new)
-            .ok_or(Status::BadHandle)
+        Handle::new(r[0]).ok_or(Status::BadHandle)
     }
 
     fn encode(&self, r: &mut [u64]) {
-        r[0] = u64::from(self.0);
+        r[0] = self.0;
     }
 }
 

@@ -136,7 +136,7 @@ impl Calls {
             .handles
             .lock()
             .insert(object, rights, object::next_id())?;
-        Ok(u64::from(handle.raw()))
+        Ok(handle.raw())
     }
 }
 
@@ -187,7 +187,7 @@ impl Handlers for Calls {
     fn handle_duplicate(&mut self, handle: Handle, rights: Rights) -> Result<u64, Status> {
         let id = object::next_id();
         let new = self.process.handles.lock().duplicate(handle, rights, id)?;
-        Ok(u64::from(new.raw()))
+        Ok(new.raw())
     }
 
     fn job_create(&mut self, parent: Handle, flags: JobFlags) -> Result<u64, Status> {

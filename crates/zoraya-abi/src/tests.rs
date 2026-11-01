@@ -259,7 +259,7 @@ fn every_number_reaches_its_handler() {
 #[test]
 fn a_value_too_wide_is_refused_not_truncated() {
     let wide = 1u64 << 32;
-    assert_eq!(Handle::decode(&[wide + 1]), Err(Status::BadHandle));
+    assert_eq!(Handle::decode(&[0]), Err(Status::BadHandle));
     assert_eq!(ExitCode::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(Detail::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(SignalSet::decode(&[wide]), Err(Status::InvalidArgument));
@@ -420,7 +420,14 @@ fn trailing_bytes_flags_and_reserved_fields_are_refused() {
     let mut b = [0; 512];
     let n = sample(&mut b);
     assert!(SpawnRequest::decode(&b[..n + 1]).is_err());
-    for (at, value) in [(0, 0), (4, 0), (8, 2), (36, 1), (HEADER_SIZE - 1, 1)] {
+    for (at, value) in [
+        (0, 0),
+        (4, 0),
+        (8, 2),
+        (12, 1),
+        (52, 1),
+        (HEADER_SIZE - 1, 1),
+    ] {
         let mut m = b;
         m[at] = value;
         assert_eq!(
@@ -446,9 +453,10 @@ fn a_single_bad_entry_is_refused() {
     assert!(SpawnRequest::decode(&buffer[..n]).is_ok());
     for (at, value, status) in [
         (HEADER_SIZE, 0, Status::InvalidArgument),
-        (HEADER_SIZE + 4, 0, Status::BadHandle),
-        (HEADER_SIZE + 9, 0xff, Status::InvalidArgument),
-        (HEADER_SIZE + 12, 7, Status::InvalidArgument),
+        (HEADER_SIZE + 4, 1, Status::InvalidArgument),
+        (HEADER_SIZE + 8, 0, Status::BadHandle),
+        (HEADER_SIZE + 17, 0xff, Status::InvalidArgument),
+        (HEADER_SIZE + 20, 7, Status::InvalidArgument),
     ] {
         let mut m = buffer;
         m[at] = value;
@@ -535,4 +543,48 @@ fn power_is_one_right_on_one_type() {
         .iter()
         .filter(|(_, _, rights)| rights.contains(Rights::POWER));
     assert_eq!(holders.count(), 1);
+}
+
+/// INV-0057-3: a generation above 32 bits survives every crossing.
+#[test]
+fn a_handle_is_64_bits_wherever_it_goes() {
+    let high = Handle::from_parts(9, 0xabcd_1234_5678).unwrap();
+    assert_eq!(high.slot(), 9);
+    assert_eq!(high.generation(), 0xabcd_1234_5678);
+    assert_eq!(Handle::new(high.raw()), Some(high));
+    let mut register = [0];
+    high.encode(&mut register);
+    assert_eq!(Handle::decode(&register), Ok(high));
+
+    let mut buffer = [0; 1024];
+    let mut e = Encoder::new(&mut buffer, high, high);
+    e.group(high).handle(HandleEntry {
+        slot: 3,
+        handle: high,
+        rights: Rights::NONE,
+        transfer: Transfer::Duplicate,
+    });
+    let length = e.finish().unwrap();
+    let r = SpawnRequest::decode(&buffer[..length]).unwrap();
+    assert_eq!((r.job, r.image, r.group), (high, high, Some(high)));
+    assert_eq!(r.handles().next().unwrap().handle, high);
+}
+
+#[test]
+fn a_generation_past_48_bits_is_refused() {
+    assert_eq!(Handle::from_parts(1, 1 << 48), None);
+    assert!(Handle::from_parts(1, MAX_GENERATION).is_some());
+}
+
+#[test]
+fn the_old_format_is_refused() {
+    let mut buffer = [0; HEADER_SIZE];
+    let length = Encoder::new(&mut buffer, CONSOLE, CONSOLE)
+        .finish()
+        .unwrap();
+    buffer[3] = b'1';
+    assert_eq!(
+        SpawnRequest::decode(&buffer[..length]).map(|_| ()),
+        Err(Status::InvalidArgument)
+    );
 }

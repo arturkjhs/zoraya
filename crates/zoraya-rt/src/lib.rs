@@ -91,10 +91,7 @@ fn bytes(slice: &[u8]) -> Buffer {
 }
 
 fn handle(raw: u64) -> Result<Handle, Status> {
-    u32::try_from(raw)
-        .ok()
-        .and_then(Handle::new)
-        .ok_or(Status::BadHandle)
+    Handle::new(raw).ok_or(Status::BadHandle)
 }
 
 pub fn process_exit(code: i32) -> ! {
