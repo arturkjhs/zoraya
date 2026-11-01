@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-proto-file"
+description = "The file protocol of ADR-0055."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-protocol = { path = "../zoraya-protocol" }
+
+[lints]
+workspace = true

@@ -111,6 +111,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-block"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-file"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-protocol"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-ramdisk"
 version = "0.1.0"
 
