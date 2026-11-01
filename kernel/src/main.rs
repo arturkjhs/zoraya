@@ -14,9 +14,12 @@ mod console;
 mod dtb;
 mod gic;
 mod irq;
+mod job;
 mod memory;
+mod object;
 mod panic;
 mod pl011;
+mod port;
 mod process;
 mod psci;
 mod ramdisk;
@@ -112,10 +115,13 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
         let backing = memory::heap::stats().backing >> 10;
         println!("heap check: Box and Vec work, sum {sum}, {backing} KiB of heap");
         tick_check();
-        let hello = process::spawn("hello").expect("hello in the ramdisk");
-        let record = hello.wait();
-        println!("process hello ended: {record:?}");
-        println!("stage 2 complete; powering off");
+        for name in ["hello", "parent"] {
+            match process::spawn(name) {
+                Ok(process) => println!("process {name} ended: {:?}", process.wait()),
+                Err(e) => println!("process {name} did not start: {e:?}"),
+            }
+        }
+        println!("stage 3 complete; powering off");
         shutdown()
     }
 }

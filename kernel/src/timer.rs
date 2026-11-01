@@ -12,8 +12,10 @@ use crate::arch::timer as hw;
 use crate::irq;
 use crate::sync::SpinLock;
 
-/// Deadlines pending at once. A full queue is an error for the caller.
-const QUEUE_SIZE: usize = 32;
+/// Deadlines pending at once: every live process can sleep (ADR-0031 bounds
+/// them at 255), with room for the kernel's own. A full queue is an error for
+/// the caller.
+const QUEUE_SIZE: usize = 288;
 
 /// A deadline's callback. It runs in interrupt context, with IRQ masked and
 /// no lock held, so it may arm further deadlines.

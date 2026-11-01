@@ -77,13 +77,18 @@ __thread_start:
     mov     x0, x19
     mov     x1, x20
     bl      kernel_thread_main
+
+    // First switch to a user thread: SP is at its exception frame.
+__user_thread_start:
+    bl      user_thread_start
+    b       __exception_return
 "#
 );
 
 unsafe extern "C" {
     fn __context_switch(prev: *mut Context, next: *const Context);
     fn __thread_start();
-    fn __exception_return();
+    fn __user_thread_start();
 }
 
 impl Context {
@@ -105,7 +110,7 @@ impl Context {
     /// `frame`.
     pub fn new_user(frame: u64, limit: u64) -> Context {
         Context {
-            x30: __exception_return as *const () as u64,
+            x30: __user_thread_start as *const () as u64,
             sp: frame,
             limit,
             ..Context::default()

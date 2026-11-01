@@ -121,6 +121,19 @@ impl AddressSpace {
         Ok(phys_to_virt(frame.addr()) as *mut u8)
     }
 
+    /// The 64-bit value at `va`, which must be mapped and aligned.
+    #[cfg(feature = "qemu-test")]
+    pub fn peek(&self, va: u64) -> Option<u64> {
+        let mut found = None;
+        self.for_each_mapping(&mut |m| {
+            if (m.va..m.va + m.size).contains(&va) {
+                found = Some(m.pa + (va - m.va));
+            }
+        });
+        // SAFETY: a frame of this space, which the direct map holds.
+        found.map(|pa| unsafe { (phys_to_virt(pa) as *const u64).read_volatile() })
+    }
+
     /// Calls `f` for every mapping.
     #[cfg(feature = "qemu-test")]
     pub fn for_each_mapping(&self, f: &mut impl FnMut(zoraya_pagetable::Mapping)) {

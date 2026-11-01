@@ -10,3 +10,8 @@ static BYTES: &[u8] = include_bytes!(env!("ZORAYA_RAMDISK_PATH"));
 pub fn get() -> Ramdisk<'static> {
     Ramdisk::new(BYTES).expect("embedded ramdisk")
 }
+
+/// The file called `name`, with its name as the ramdisk holds it.
+pub fn find(name: &str) -> Option<(&'static str, &'static [u8])> {
+    get().files().find(|(n, _)| *n == name)
+}

@@ -109,6 +109,7 @@ Why B over C: C's cost is unmeasured and lands on the T2 scope at its most fragi
 
 ## Open questions
 
+- As of TASK-09, INV-0003-5's check has no shared memory object to read, since none exists at stage 3. The test instead reads the suspended thread's saved program counter, and that the process has no exit record after other threads ran; `t_spawn` shows from user space that a suspended `exit130` does nothing until `process_resume`.
 - Memory and time cost of `snapshot_process` for dash under strict commit (X-6): measure on W4's 764 configure forks on the prototype. Threshold for "too slow" to be set by the architect.
 - Semantics of a duplicated channel endpoint in the child after snapshot (both processes hold the same end): define per type; no evidence in the files (DM-022 lists the Zircon cycle question as `[unverified]`).
 - Whether toybox's `xfork` applets (`cpio -p`, `tar`) are in scope at all (ADR-0005); if not, their restructure is not needed.

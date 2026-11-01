@@ -443,7 +443,7 @@ extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
             if crate::sched::current().process().is_some() {
                 if class == EC_SVC {
                     crate::syscall::dispatch(frame);
-                    crate::sched::preempt_point();
+                    crate::process::return_to_user();
                     return;
                 }
                 let far = far_is_valid(frame.esr).then_some(frame.far);
@@ -452,7 +452,7 @@ extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
         }
         KIND_IRQ_EL0 => match crate::irq::dispatch() {
             Ok(()) => {
-                crate::sched::preempt_point();
+                crate::process::return_to_user();
                 return;
             }
             Err(crate::irq::Unexpected(intid)) => {
