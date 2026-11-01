@@ -1,6 +1,6 @@
 # ADR-0057: A 64-bit handle with no retired slots
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0032, ADR-0040, ADR-0042, ADR-0044, ADR-0050, ADR-0052, ADR-0054, ADR-0055
 - **Evidence:** CP-13, DM-003, DM-023, GR-001, alternatives-postmortem.md#hubris, stage-4/sources.md#handles
@@ -93,3 +93,5 @@ Nothing here depends on POSIX. A file descriptor stays a `libposix` number that 
 - A machine fast enough to make the wrap time a concern.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect, on the condition of 0 errors in the changed lines of the sixth review, which `docs/research/stage-4/review-notes.md`, section "Sixth review, repeated", records.

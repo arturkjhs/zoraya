@@ -113,7 +113,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0034-2 | [ADR-0034](0034-user-faults.md) | A process's frames and ASID are released at exit, by any cause. | in-QEMU test comparing frame counts before and after many processes. | checked: `make test-qemu` |
 | INV-0035-1 | [ADR-0035](0035-exit-code-in-the-abi.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields and `ExitRecord.code`, each documented as opaque to the kernel (ADR-0004). | a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`), plus a unit test that `RelativePath::new("/x")` fails. | replaced by INV-0045-1 |
 | INV-0036-1 | [ADR-0036](0036-user-copy-fault-exception.md) | The normal kernel resumes after a fault from EL1 in exactly one case: a data abort with the PC in the user copy routine and `FAR_EL1` in the user range. | the test-only paths are `#[cfg(feature = "qemu-test")]`, and an in-QEMU test faults on a kernel destination inside the routine and sees that it is not resumed, while `badptr` shows user faults are. | checked: `make test-qemu` |
-| INV-0040-1 | [ADR-0040](0040-handle-table-and-rights.md) | A closed handle's value never names an object again in that process. | `cargo test -p zoraya-handle`, including a slot driven through every generation to retirement. | checked: `make test` |
+| INV-0040-1 | [ADR-0040](0040-handle-table-and-rights.md) | A closed handle's value never names an object again in that process. | `cargo test -p zoraya-handle`, including a slot driven through every generation to retirement. | replaced by INV-0057-1 |
 | INV-0040-2 | [ADR-0040](0040-handle-table-and-rights.md) | No operation yields a handle with a right its source lacked. | `zoraya-handle` host tests over all rights masks, and an in-QEMU test that every call refuses a handle lacking its right. | checked: `make test` |
 | INV-0040-3 | [ADR-0040](0040-handle-table-and-rights.md) | A handle table never holds more than `MAX_HANDLES` entries, and a full table gives `LimitReached`, never a panic. | a host test, and an in-QEMU test that exhausts a table. | checked: `make test` |
 | INV-0041-1 | [ADR-0041](0041-kernel-object-lifetime.md) | After a process ends and its last handle closes, the kernel's frame count and heap use return to their earlier values. | an in-QEMU loop of spawn, exit and close, comparing `frames::stats` and `heap::stats`. | checked: `make test-qemu` |
@@ -181,7 +181,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0060-2 | [ADR-0060](0060-console-input.md) | `READABLE` is asserted exactly while the ring is non-empty. | in-QEMU test feeding the ring. | checked: `make test-qemu` |
 | INV-0060-3 | [ADR-0060](0060-console-input.md) | `console_read` never blocks and needs `READ`. | in-QEMU test on an empty ring and with a handle lacking `READ`. | checked: `make test-qemu` |
 | INV-0060-4 | [ADR-0060](0060-console-input.md) | A burst larger than the ring loses bytes, counts them, and crashes nothing. | scripted serial test. | checked: `make test-boot` |
-| INV-0061-1 | [ADR-0061](0061-directory-entries.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys, user packet data and directory cookies, each documented as opaque to the kernel or to its caller. | the lint of INV-0045-1, with `Cookie` allowed only for `directory_entry`, plus a unit test that `RelativePath::new("/x")` fails. | checked: `make test-unit` |
+| INV-0061-1 | [ADR-0061](0061-directory-entries.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys, user packet data and directory cookies, each documented as opaque to the kernel or to its caller. | the lint of INV-0045-1, with `Cookie` allowed only for `directory_entry`, plus a unit test that `RelativePath::new("/x")` fails. | replaced by INV-0051-5 |
 | INV-0061-2 | [ADR-0061](0061-directory-entries.md) | Starting at cookie 0 and following next cookies gives each name once, then 0. | in-QEMU test against the ramdisk, and a `zoraya-abi` round-trip test. | checked: `make test` |
 | INV-0061-3 | [ADR-0061](0061-directory-entries.md) | `directory_entry` without `LOOKUP` is `AccessDenied`. | in-QEMU test. | checked: `make test-qemu` |
 | INV-0061-4 | [ADR-0061](0061-directory-entries.md) | `DirectoryEntry::decode` is total. | host test with truncations and mutations. | checked: `make test-unit` |
@@ -227,14 +227,14 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) The dispatcher and the ABI table | 2 |
 | [ADR-0045](0045-port-keys-as-opaque-payloads.md) Port keys and user packet data as opaque payloads | 1 |
 | [ADR-0046](0046-job-and-request-details.md) Job and request details the accepted ADRs leave open | 4 |
-| [ADR-0050](0050-ipc-channels.md) IPC channels (proposed) | 6 |
-| [ADR-0051](0051-shared-memory-objects.md) Shared memory objects (proposed) | 5 |
-| [ADR-0052](0052-interface-definitions.md) Interface definitions and wire format (proposed) | 4 |
-| [ADR-0053](0053-service-discovery-and-first-process.md) Service discovery and the first process (proposed) | 3 |
-| [ADR-0054](0054-driver-model.md) Driver model (proposed) | 7 |
-| [ADR-0055](0055-filesystem-service-protocol.md) Filesystem service protocol (proposed) | 9 |
+| [ADR-0050](0050-ipc-channels.md) IPC channels | 6 |
+| [ADR-0051](0051-shared-memory-objects.md) Shared memory objects | 5 |
+| [ADR-0052](0052-interface-definitions.md) Interface definitions and wire format | 4 |
+| [ADR-0053](0053-service-discovery-and-first-process.md) Service discovery and the first process | 3 |
+| [ADR-0054](0054-driver-model.md) Driver model | 7 |
+| [ADR-0055](0055-filesystem-service-protocol.md) Filesystem service protocol | 9 |
 | [ADR-0056](0056-job-memory-accounting.md) Memory accounting by job (proposed) | 9 |
-| [ADR-0057](0057-handle-width.md) A 64-bit handle with no retired slots (proposed) | 3 |
+| [ADR-0057](0057-handle-width.md) A 64-bit handle with no retired slots | 3 |
 | [ADR-0060](0060-console-input.md) Console input as raw bytes | 4 |
 | [ADR-0061](0061-directory-entries.md) Listing a directory handle | 4 |
 | [ADR-0062](0062-power-off.md) Power off through a handle | 3 |

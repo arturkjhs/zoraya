@@ -1,6 +1,6 @@
 # ADR-0053: Service discovery and the first process
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0002, ADR-0003, ADR-0040, ADR-0041, ADR-0043, ADR-0046, ADR-0050, ADR-0052, ADR-0054, ADR-0055, ADR-0062, ADR-0063
 - **Evidence:** DM-023, CP-01, DM-009, DM-021, GR-004, GR-005, alternatives-postmortem.md#genode, alternatives-postmortem.md#hubris, alternatives-postmortem.md#plan-9--inferno
@@ -78,3 +78,5 @@ The namespace table of ADR-0002 is user-space data, built by the launcher and pa
 - More than a handful of services.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect, on the condition of 0 errors in the changed lines of the sixth review, which `docs/research/stage-4/review-notes.md`, section "Sixth review, repeated", records.

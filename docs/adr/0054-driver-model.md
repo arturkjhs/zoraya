@@ -1,6 +1,6 @@
 # ADR-0054: Driver model
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0006, ADR-0010, ADR-0012, ADR-0015, ADR-0024, ADR-0031, ADR-0034, ADR-0040, ADR-0041, ADR-0045, ADR-0050, ADR-0051, ADR-0053
 - **Evidence:** DM-023, DM-046, DM-047, DM-161, alternatives-postmortem.md#minix-3, alternatives-postmortem.md#redox, stage-4/sources.md#drivers, stage-4/sources.md#virtio-and-qemu
@@ -96,3 +96,5 @@ Nothing in this ADR depends on POSIX or `fork`: only the filesystem service spea
 - A measured I/O path dominated by the driver's process boundary.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect, on the condition of 0 errors in the changed lines of the sixth review, which `docs/research/stage-4/review-notes.md`, section "Sixth review, repeated", records.

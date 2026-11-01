@@ -505,3 +505,33 @@ Faithful. V3, V4, V6 and V10 to V15 are all there, nine rows, none missing, and 
 - Read code: `Param` in `crates/zoraya-abi/src/lib.rs`, and the message's source in `tools/adr-check`.
 - Ran: `make adr-check` at 4a02c73, and the same tool on an export of d328ca9's `docs` in a scratch directory. Counted the rows of `invariants.md` by script, at HEAD and at 6d6e967.
 - Not checked: `make test` was not run, as only documents changed. No web source was fetched, and nothing was built. ADR-0052, ADR-0055 and the remaining ADRs were not reviewed, since no changed line is theirs. Older problems outside the changed lines were not searched for beyond what the changed lines touched.
+
+## Sixth review, repeated
+
+Reviewer: a subagent that wrote none of these documents and took no part in earlier reviews. Range: `git diff ac9734b HEAD`, HEAD being fe98915, on branch `adr/stage-4-design`. Date: 2026-11-01. Severity is as defined at the top of this file. Only changed lines were judged.
+
+Errors in changed lines: 0.
+
+### Problems
+
+Neither row is an error, and neither is in the count.
+
+| # | Severity | Location | What is wrong, with evidence | Suggested fix |
+|---|---|---|---|---|
+| X1 | note | ADR-0040 the two notes; ADR-0041 the note | W2's false statement is gone, but the notes stay in accepted ADRs. CLAUDE.md lets an agent change an accepted ADR in two ways only, and a note of this kind is neither. W2 offered keeping them only if the architect records the instruction. No such record is in c1c7597, in its message or in the changed files. An instruction given in conversation would not show here. This is a project rule, not ADR-0001 itself, and the wording is now true, so by the strict definition it is not an error. | The architect confirms the notes, or they are removed and added on acceptance. |
+| X2 | note | `docs/backlog.md`, an unchanged sentence | "What it finds outside them is added here" is not met for the sixth review. Its three "Items for the backlog" have no row: ADR-0054's "Quarantined frames stay lost until a new driver runs", `make adr-check` not verifying the Total line, and INV-0051-5's payload list. They have no W id, so the changed lines say nothing false about them. | Add three rows, or say that these items stay in the review. |
+
+### W1 and W2
+
+- **W1: fixed.** The Total line says 184. Counted by script at fe98915: 184 invariant rows, 184 distinct ids, and the 44 rows of the Counts table add up to 184. For every ADR, the count of invariants in its file, its rows in the table and its Counts row agree. No other total of 182, 183 or 184 stands in `index.md`, `design.md` or `backlog.md`. `make adr-check` still does not test this line, so the count above is the evidence.
+- **W2: fixed as to the error.** All three notes now read "when that ADR is accepted". None cites an architect's decision or a date, and "on its acceptance" is left in `docs/` only in this file, as quotation. ADR-0054 and ADR-0057 are proposed with empty "Architect's decision" sections, so a conditional wording states nothing false and binds nothing, in line with ADR-0001 rule 1 and with ADR-0053's "when accepted". "Carries a note" in ADR-0054 and ADR-0057 remains true. The content of each note agrees with its ADR: the rights and object types of ADR-0054, the two ADR-0040 sentences that ADR-0057 quotes, and the quarantine rule. See X1 for what remains.
+
+### `docs/backlog.md`
+
+The new header is true: V and W ids are rows of the fifth and sixth reviews. W3 to W8 each match their finding and the current text of ADR-0051, ADR-0053, ADR-0054 and `invariants.md`. W4's "decide before building it" is added advice, not a claim. W5's "keeps heap use" rests on ADR-0051's Lifetime rule, under which a pin holds the memory object. W7 rests on INV-0050-4. W8 is true: INV-0054-7 stands between INV-0054-3 and INV-0054-4 in the ADR, and last in the table. W1 and W2 rightly have no row. Nothing was fixed that a row still reports as open.
+
+### What was checked and not checked
+
+- Ran: `make adr-check` at fe98915, with 0 errors and 17 warnings, all of them accepted invariants not yet applicable. Counted rows by script, as above. Searched `docs/` for the old wording and for stale totals.
+- Read: the full diff, the commit messages, the Sixth review, ADR-0001's rules and CLAUDE.md's rule on accepted ADRs, all of ADR-0054, and the lines of ADR-0040, 0041, 0050, 0051, 0053 and 0057 that the changed lines cite.
+- Not checked: `make test` was not run, as only documents changed. No web source was fetched. Older problems outside the changed lines were not searched for.

@@ -1,6 +1,6 @@
 # ADR-0051: Shared memory objects
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0020, ADR-0021, ADR-0031, ADR-0040, ADR-0041, ADR-0045, ADR-0061
 - **Evidence:** DM-023, CP-14, DM-030, DM-160, GR-007, X-6, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#hubris, stage-4/sources.md#memory-objects
@@ -83,3 +83,5 @@ What `snapshot_process` does to a mapping of a memory object, which must stay sh
 - A need for executable shared code.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect, on the condition of 0 errors in the changed lines of the sixth review, which `docs/research/stage-4/review-notes.md`, section "Sixth review, repeated", records.
