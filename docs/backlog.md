@@ -21,3 +21,6 @@ limited to the lines it changed, what it finds outside them is added here.
 | W6 | ADR-0053 What `init` receives | "`init` keeps them" now reads as giving `Power` to a restarted driver. |
 | W7 | ADR-0054 DMA, Quarantine | Whether `dma_unpin` closes the handle is unstated, and a pin can also end when a queue is torn down. |
 | W8 | ADR-0054 Invariants | INV-0054-7 is out of order against `invariants.md`. |
+| - | ADR-0054 Consequences | "Quarantined frames stay lost until a new driver runs" no longer covers a live driver that closes a pin. |
+| - | `tools/adr-check` | It does not verify the Total line of `invariants.md`, which is how W1 got through. |
+| - | ADR-0051 INV-0051-5 | Its list of payloads, from the sixth review's backlog items. |
