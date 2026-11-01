@@ -10,7 +10,7 @@ Stage 4 puts a driver and a filesystem service in user space, so something must 
 
 ## Decision drivers
 1. Handles must move with a message, atomically, without a garbage collector (DM-022).
-2. A slow reader must not grow one queue without bound (CP-14). Total memory stays bounded only by `NoMemory` until ADR-0041's charging exists.
+2. A slow reader must not grow one queue without bound (CP-14). Total memory stays bounded only by `NoMemory` until ADR-0056's charging exists.
 3. Failure is a value at the call (CP-12): a full or closed peer never interrupts anyone.
 4. Fit ADR-0006's one wait: no second queue beside the port.
 5. Service calls must be cheap enough, since IPC sets the ceiling of a user-space system (DM-018), but copying everything has a known bound (X-5).
@@ -62,18 +62,18 @@ Recommended: **Option C**, and bulk data through ADR-0051's memory objects. It i
 **Tensions with accepted ADRs.**
 
 - *ADR-0006 rule 1* lists a channel's signals without `WRITABLE`. Its revisit triggers do not foresee this. Accepting this ADR is accepting that row's replacement (ADR-0001 rule 1).
-- *ADR-0003 rule 3, ADR-0002 rules 2 and 5.* With no `DUPLICATE`, a `snapshot_process` child loses every channel: under ADR-0055 that means its files, cwd, namespace table and broker channel. ADR-0003 says `libposix` must not depend on non-duplicable handles, and dash's subshells rely on the snapshot. The architect must choose before stage 6: `libposix` runs ADR-0055's `clone` for each handle before a snapshot and `snapshot_process` takes an explicit move list, at one round trip per handle per `fork` and a change to ADR-0003; or a duplicable file object. This ADR does not settle it.
+- *ADR-0003 rule 3, ADR-0002 rules 2 and 5.* With no `DUPLICATE`, a `snapshot_process` child loses every channel: under ADR-0055 that means its files, cwd, namespace table and broker channel. ADR-0055 answers this with `share` and a handoff object, which leaves ADR-0003 unchanged and needs ADR-0002 rule 3 superseded.
 - *ADR-0004 rule 5:* see the no-cycle rule.
 - *ADR-0032:* two return values, above.
 - *ADR-0040:* transfer outside `spawn`, above.
 
 ### Effect of the vision
-None on the choice of Option C, but the details change. For target 2, untrusted agents, a limit on handles in flight and memory charging (ADR-0041's open question) become requirements, and peer-controlled refusal of a move must be designed around. Networking fits: a socket is a service reached by channel, or a later object using the same signals. Threads fit: read and write are atomic per message.
+None on the choice of Option C, but the details change. For target 2, untrusted agents, memory charging (ADR-0056), which also covers handles in flight, becomes a requirement, and peer-controlled refusal of a move must be designed around. Networking fits: a socket is a service reached by channel, or a later object using the same signals. Threads fit: read and write are atomic per message.
 
 ## Consequences
 - **Positive.** One wait for I/O, exit and messages. No collector. A failed write has no effect, so retry is simple.
 - **Negative.** Three system calls per side per call until `channel_call` exists. An endpoint with handles queued cannot be forwarded. Two copies through the byte-at-a-time routine of ADR-0031 until it is improved.
-- **Follow-up.** A round-trip measurement. Word-sized user copies. Accounting of handles in flight, which leave the table and so escape `MAX_HANDLES`.
+- **Follow-up.** A round-trip measurement. Word-sized user copies. Handles in flight leave the table and so escape `MAX_HANDLES`; ADR-0056 charges them.
 
 ## Invariants
 - **INV-0050-1.** A message is delivered whole, in order, or not at all, and a failed `channel_write` leaves the caller's handle table unchanged. *Check:* in-QEMU test filling a queue, with a handle in the refused message still usable.
