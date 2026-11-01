@@ -5,13 +5,13 @@
 
 use zoraya_abi::{
     CONSOLE, DEADLINE_INFINITE, Disposition, Handle, JOB, MAX_HANDLES, MapFlags, Mode, Packet,
-    RequestKind, Rights, Status,
+    RequestKind, Rights, Status, channel_signals,
 };
 use zoraya_user::{
-    assert_err, clock_monotonic, handle_duplicate, memory_map, memory_unmap, port_create,
-    port_queue, port_subscribe, port_unsubscribe, port_wait, println, process_exit,
-    process_exit_terminated, process_set_disposition, process_take_request, sleep_until, startup,
-    thread_yield,
+    assert_err, channel_read, channel_write, clock_monotonic, handle_duplicate, memory_map,
+    memory_unmap, port_create, port_queue, port_subscribe, port_unsubscribe, port_wait, println,
+    process_exit, process_exit_terminated, process_set_disposition, process_take_request,
+    sleep_until, startup, thread_yield,
 };
 
 /// Every slot of this process's table is empty (INV-0003-1).
@@ -50,6 +50,18 @@ fn main() -> i32 {
     let block = startup();
     let mut argv = block.argv;
     match argv.next().unwrap_or(b"") {
+        b"channel-echo" => {
+            let end = at_slot(3);
+            let port = port_create().expect("port");
+            port_subscribe(port, end, channel_signals::READABLE, 1, Mode::Level)
+                .expect("subscribe");
+            let mut packets = [Packet::default()];
+            port_wait(port, DEADLINE_INFINITE, &mut packets).expect("wait");
+            let mut buffer = [0; 16];
+            let sizes = channel_read(end, &mut buffer, &mut []).expect("read");
+            channel_write(end, &buffer[..sizes.bytes as usize], &[]).expect("write");
+            0
+        }
         b"memory-writer" => {
             let at = memory_map(at_slot(3), 0, 4096, MapFlags::WRITE).expect("map");
             // SAFETY: mapped just above.

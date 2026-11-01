@@ -11,11 +11,13 @@ use core::fmt;
 
 use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
 use zoraya_abi::{
-    Address, Buffer, Bytes, CONSOLE, Cookie, Deadline, Detail, Disposition, ExitCode, ExitReason,
-    ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags, Mode, Opaque, Packet,
-    PacketBuffer, PathBuffer, RequestKind, Rights, SignalSet, Size, SpawnBuffer, Status,
-    request_from_value, stubs,
+    Address, Buffer, Bytes, CONSOLE, ChannelEntry, ChannelSizes, Cookie, Deadline, Detail,
+    Disposition, ExitCode, ExitReason, ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags,
+    Mode, Opaque, Out, Packet, PacketBuffer, PathBuffer, RequestKind, Rights, SignalSet, Size,
+    SpawnBuffer, Status, request_from_value, stubs,
 };
+
+const MAX_MESSAGE_HANDLES: usize = 64;
 
 global_asm!(
     r#"
@@ -259,6 +261,68 @@ pub fn memory_map(
 /// Ends the whole mapping at `address`.
 pub fn memory_unmap(address: u64, length: u64) -> Result<(), Status> {
     stubs::memory_unmap::<Svc>(Address(address), Size(length)).map(|_| ())
+}
+
+/// Two ends of a new channel.
+pub fn channel_create() -> Result<(Handle, Handle), Status> {
+    let mut ends = [0u8; 16];
+    let buffer = Buffer {
+        address: ends.as_mut_ptr() as u64,
+        length: 16,
+    };
+    stubs::channel_create::<Svc>(Bytes(buffer))?;
+    core::hint::black_box(&mut ends);
+    let [a, b] = [&ends[..8], &ends[8..]].map(|e| {
+        let mut raw = [0; 8];
+        raw.copy_from_slice(e);
+        handle(u64::from_le_bytes(raw))
+    });
+    Ok((a?, b?))
+}
+
+/// Sends a message, all or nothing.
+pub fn channel_write(end: Handle, message: &[u8], handles: &[ChannelEntry]) -> Result<(), Status> {
+    let mut list = [0; ChannelEntry::SIZE * MAX_MESSAGE_HANDLES];
+    let room = handles.len() * ChannelEntry::SIZE;
+    let target = list.get_mut(..room).ok_or(Status::InvalidArgument)?;
+    for (slot, entry) in target.chunks_exact_mut(ChannelEntry::SIZE).zip(handles) {
+        slot.copy_from_slice(&entry.to_bytes());
+    }
+    stubs::channel_write::<Svc>(end, Bytes(bytes(message)), Bytes(bytes(&list[..room])))?;
+    Ok(())
+}
+
+/// Takes the next message. On `BufferTooSmall` the message stays, and the
+/// sizes it needs are in the error's second part.
+pub fn channel_read(
+    end: Handle,
+    message: &mut [u8],
+    handles: &mut [Handle],
+) -> Result<ChannelSizes, (Status, ChannelSizes)> {
+    let mut raw = [0u64; MAX_MESSAGE_HANDLES];
+    let room = handles.len().min(MAX_MESSAGE_HANDLES);
+    let mut sizes = [0u8; ChannelSizes::SIZE];
+    let list = Buffer {
+        address: raw.as_mut_ptr() as u64,
+        length: (room * 8) as u64,
+    };
+    let result = stubs::channel_read::<Svc>(
+        end,
+        Bytes(bytes(message)),
+        Bytes(list),
+        Out(sizes.as_mut_ptr() as u64),
+    );
+    core::hint::black_box((&mut sizes, &mut raw, &mut *message));
+    let sizes = ChannelSizes::from_bytes(&sizes);
+    match result {
+        Ok(_) => {
+            for (slot, raw) in handles.iter_mut().zip(&raw[..sizes.handles as usize]) {
+                *slot = handle(*raw).map_err(|e| (e, sizes))?;
+            }
+            Ok(sizes)
+        }
+        Err(status) => Err((status, sizes)),
+    }
 }
 
 pub fn directory_lookup(directory: Handle, name: &str) -> Result<Handle, Status> {

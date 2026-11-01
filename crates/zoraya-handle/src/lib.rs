@@ -105,6 +105,18 @@ impl<T> Table<T> {
         }
     }
 
+    /// Makes room for `count` more, so that that many [`Table::insert`]s
+    /// cannot fail.
+    pub fn reserve_many(&mut self, count: usize) -> Result<(), Status> {
+        if self.count + count > MAX_HANDLES as usize {
+            return Err(Status::LimitReached);
+        }
+        let slots = (self.count + count).max(self.slots.len());
+        self.slots
+            .try_reserve(slots - self.slots.len())
+            .map_err(|_| Status::NoMemory)
+    }
+
     /// Adds a handle. A full table is `LimitReached` and changes nothing.
     pub fn insert(&mut self, object: T, rights: Rights, id: u64) -> Result<Handle, Status> {
         self.reserve()?;

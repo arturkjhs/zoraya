@@ -10,6 +10,7 @@
 extern crate alloc;
 
 mod arch;
+mod channel;
 mod console;
 mod dtb;
 mod gic;

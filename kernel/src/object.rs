@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use zoraya_abi::{ObjectType, Waiting};
 use zoraya_events::SourceId;
 
+use crate::channel::{self, Pair};
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
 use crate::port::{self, Port};
@@ -33,6 +34,8 @@ pub enum Object {
     Job(Arc<Job>),
     Port(Arc<Port>),
     Memory(Arc<MemoryObject>),
+    /// One end of a channel: `end` is 0 or 1.
+    Channel(Arc<Pair>, usize),
 }
 
 impl Object {
@@ -40,6 +43,7 @@ impl Object {
     /// ADR-0006 rule 1.
     pub fn signals(&self) -> Option<(SourceId, u32)> {
         let (source, waiting) = match self {
+            Object::Channel(pair, end) => (pair.source(*end), zoraya_abi::ChannelObject::WAITING),
             Object::Process(p) => (p.source(), zoraya_abi::ProcessObject::WAITING),
             Object::Job(j) => (j.source(), zoraya_abi::JobObject::WAITING),
             Object::Console => (
@@ -76,10 +80,12 @@ pub fn end_subscriptions(entry: &Entry) {
     }
 }
 
-/// Ends a handle. A port has one handle, so that closes the port.
+/// Ends a handle. A port or a channel end has one handle, so that closes it.
 pub fn close(entry: Entry) {
     end_subscriptions(&entry);
-    if let Object::Port(port) = &entry.object {
-        port.close();
+    match &entry.object {
+        Object::Port(port) => port.close(),
+        Object::Channel(pair, end) => channel::close(pair, *end),
+        _ => {}
     }
 }

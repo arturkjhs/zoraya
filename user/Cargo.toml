@@ -245,3 +245,8 @@ bench = false
 name = "t_memory"
 test = false
 bench = false
+
+[[bin]]
+name = "t_channels"
+test = false
+bench = false

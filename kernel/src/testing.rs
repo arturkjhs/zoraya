@@ -446,6 +446,10 @@ static TESTS: &[Test] = &[
         name: "memory_objects_from_a_process",
         run: memory_objects_from_a_process,
     },
+    Test {
+        name: "channels_from_a_process",
+        run: channels_from_a_process,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1110,6 +1114,19 @@ fn memory_objects_from_a_process() {
     let frames_before = frames::stats().free;
     let heap_before = heap::stats().live;
     assert_eq!(run_program("t_memory"), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// ADR-0050 from a process. It ends with nothing left in the kernel.
+fn channels_from_a_process() {
+    // The first run grows the signal table to its peak, which it keeps: every
+    // channel end is two entries of a table that does not shrink. A second run
+    // must then change nothing.
+    assert_eq!(run_program("t_channels"), exited(0));
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run_program("t_channels"), exited(0));
     assert_eq!(frames::stats().free, frames_before);
     assert_eq!(heap::stats().live, heap_before);
 }

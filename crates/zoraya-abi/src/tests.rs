@@ -33,6 +33,7 @@ fn parameters_come_from_the_allow_list() {
                     s.name
                 ),
                 Param::Address => assert_eq!(s.name, "memory_unmap"),
+                Param::Out => assert_eq!(s.name, "channel_read"),
                 Param::EntryPoint => assert_eq!(s.name, "thread_create"),
             }
         }
@@ -135,7 +136,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 8);
+    assert_eq!(OBJECT_TYPES.len(), 9);
     for (name, waiting, rights) in OBJECT_TYPES {
         if let Waiting::Signals(bits) = waiting {
             assert_ne!(*bits, 0, "{name}");
@@ -244,6 +245,9 @@ echo! {
     memory_create(size: Size, flags: MemoryFlags);
     memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags);
     memory_unmap(address: Address, length: Size);
+    channel_create(ends: Bytes);
+    channel_write(end: Handle, bytes: Bytes, handles: Bytes);
+    channel_read(end: Handle, bytes: Bytes, handles: Bytes, sizes: Out);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
@@ -596,4 +600,44 @@ fn the_old_format_is_refused() {
         SpawnRequest::decode(&buffer[..length]).map(|_| ()),
         Err(Status::InvalidArgument)
     );
+}
+
+/// INV-0050-5.
+#[test]
+fn a_channel_has_no_duplicate_right() {
+    assert!(!ChannelObject::RIGHTS.contains(Rights::DUPLICATE));
+    assert!(ChannelObject::RIGHTS.contains(Rights::TRANSFER));
+}
+
+/// ADR-0032's six registers hold every call (ADR-0050's `Out`).
+#[test]
+fn every_call_fits_six_registers() {
+    for s in SYSCALLS {
+        let used: usize = s.params.iter().map(|p| p.registers()).sum();
+        assert!(used <= 6, "{}", s.name);
+    }
+}
+
+#[test]
+fn a_channel_entry_round_trips_and_refuses_bad_values() {
+    let entry = ChannelEntry {
+        handle: Handle::from_parts(5, 1 << 40).unwrap(),
+        rights: Rights::READ,
+        transfer: Transfer::Duplicate,
+    };
+    assert_eq!(ChannelEntry::from_bytes(&entry.to_bytes()), Ok(entry));
+    let mut b = entry.to_bytes();
+    b[0..8].fill(0);
+    assert_eq!(ChannelEntry::from_bytes(&b), Err(Status::BadHandle));
+    let mut b = entry.to_bytes();
+    b[11] = 0xff;
+    assert_eq!(ChannelEntry::from_bytes(&b), Err(Status::InvalidArgument));
+    let mut b = entry.to_bytes();
+    b[12] = 2;
+    assert_eq!(ChannelEntry::from_bytes(&b), Err(Status::InvalidArgument));
+    let sizes = ChannelSizes {
+        bytes: 7,
+        handles: 2,
+    };
+    assert_eq!(ChannelSizes::from_bytes(&sizes.to_bytes()), sizes);
 }

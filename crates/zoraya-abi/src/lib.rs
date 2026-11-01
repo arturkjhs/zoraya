@@ -206,6 +206,15 @@ pub mod console_signals {
     pub const READABLE: u32 = 1 << 0;
 }
 
+/// Signal bits of a channel end (ADR-0050).
+pub mod channel_signals {
+    /// A message waits.
+    pub const READABLE: u32 = 1 << 0;
+    /// Any message would fit.
+    pub const WRITABLE: u32 = 1 << 1;
+    pub const PEER_CLOSED: u32 = 1 << 2;
+}
+
 const COMMON: Rights = Rights::DUPLICATE.union(Rights::TRANSFER);
 
 macro_rules! object_types {
@@ -251,6 +260,14 @@ object_types! {
             .union(Rights::WRITE)
             .union(Rights::WAIT);
     PowerObject "power" Waiting::NotWaitable, COMMON.union(Rights::POWER);
+    ChannelObject "channel"
+        Waiting::Signals(
+            channel_signals::READABLE | channel_signals::WRITABLE | channel_signals::PEER_CLOSED
+        ),
+        Rights::READ
+            .union(Rights::WRITE)
+            .union(Rights::WAIT)
+            .union(Rights::TRANSFER);
     MemoryObject "memory"
         Waiting::NotWaitable,
         COMMON.union(Rights::READ).union(Rights::WRITE);
@@ -477,6 +494,8 @@ pub enum Param {
     Cookie,
     /// A size or offset in a memory object (ADR-0051).
     Size,
+    /// A pointer to a record of fixed size, in one register (ADR-0050).
+    Out,
     /// A place in the caller's own space: it names no object (ADR-0051).
     Address,
     /// Code to run. Only thread creation may take one (INV-0004-1).
@@ -609,6 +628,22 @@ impl Arg for Size {
 
     fn decode(r: &[u64]) -> Result<Size, Status> {
         Ok(Size(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// Where a call writes a record of fixed size (ADR-0050).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Out(pub u64);
+
+impl Arg for Out {
+    const PARAM: Param = Param::Out;
+
+    fn decode(r: &[u64]) -> Result<Out, Status> {
+        Ok(Out(r[0]))
     }
 
     fn encode(&self, r: &mut [u64]) {
@@ -916,6 +951,9 @@ syscalls! {
     27 MemoryCreate memory_create(size: Size, flags: MemoryFlags) false;
     28 MemoryMap memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags) false;
     29 MemoryUnmap memory_unmap(address: Address, length: Size) false;
+    30 ChannelCreate channel_create(ends: Bytes) false;
+    31 ChannelWrite channel_write(end: Handle, bytes: Bytes, handles: Bytes) false;
+    32 ChannelRead channel_read(end: Handle, bytes: Bytes, handles: Bytes, sizes: Out) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
@@ -949,6 +987,66 @@ impl<'a> DirectoryEntry<'a> {
         }
         let name = bytes.get(16..)?.get(..length)?;
         Some(DirectoryEntry { next, name })
+    }
+}
+
+/// One entry of a message's handle list: `spawn`'s, without the slot (ADR-0050).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelEntry {
+    pub handle: Handle,
+    pub rights: Rights,
+    pub transfer: spawn::Transfer,
+}
+
+impl ChannelEntry {
+    pub const SIZE: usize = 16;
+
+    pub fn to_bytes(self) -> [u8; ChannelEntry::SIZE] {
+        let mut b = [0; ChannelEntry::SIZE];
+        b[0..8].copy_from_slice(&self.handle.raw().to_le_bytes());
+        b[8..12].copy_from_slice(&self.rights.raw().to_le_bytes());
+        b[12..16].copy_from_slice(&(self.transfer as u32).to_le_bytes());
+        b
+    }
+
+    /// Total: any bytes give an entry or a status.
+    pub fn from_bytes(b: &[u8; ChannelEntry::SIZE]) -> Result<ChannelEntry, Status> {
+        let raw = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        let word = |at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        Ok(ChannelEntry {
+            handle: Handle::new(raw).ok_or(Status::BadHandle)?,
+            rights: Rights::from_raw(word(8)).ok_or(Status::InvalidArgument)?,
+            transfer: match word(12) {
+                0 => spawn::Transfer::Move,
+                1 => spawn::Transfer::Duplicate,
+                _ => return Err(Status::InvalidArgument),
+            },
+        })
+    }
+}
+
+/// What `channel_read` writes through its `sizes`: the next message's sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChannelSizes {
+    pub bytes: u32,
+    pub handles: u32,
+}
+
+impl ChannelSizes {
+    pub const SIZE: usize = 8;
+
+    pub fn to_bytes(self) -> [u8; ChannelSizes::SIZE] {
+        let mut b = [0; ChannelSizes::SIZE];
+        b[0..4].copy_from_slice(&self.bytes.to_le_bytes());
+        b[4..8].copy_from_slice(&self.handles.to_le_bytes());
+        b
+    }
+
+    pub fn from_bytes(b: &[u8; ChannelSizes::SIZE]) -> ChannelSizes {
+        ChannelSizes {
+            bytes: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            handles: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+        }
     }
 }
 

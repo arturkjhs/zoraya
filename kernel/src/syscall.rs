@@ -7,11 +7,11 @@ use alloc::vec::Vec;
 
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
-    Address, Buffer, Bytes, Cookie, DEADLINE_INFINITE, Detail, DirectoryEntry, Disposition,
-    ExitCode, ExitReason, ExitRecord, Handle, Handlers, ImageObject, JobFlags, JobObject, MapFlags,
-    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Packet, PacketBuffer,
-    PathBuffer, PortObject, ProcessObject, RelativePath, RequestKind, Rights, SignalSet, Size,
-    SpawnBuffer, Status, request_value,
+    Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
+    Detail, DirectoryEntry, Disposition, ExitCode, ExitReason, ExitRecord, Handle, Handlers,
+    ImageObject, JobFlags, JobObject, MapFlags, MemoryFlags, MemoryObject as MemoryType, Mode,
+    ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer, PortObject, ProcessObject,
+    RelativePath, RequestKind, Rights, SignalSet, Size, SpawnBuffer, Status, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_pagetable::{Attributes, MemoryType as PageMemory};
@@ -20,6 +20,7 @@ use zoraya_ramdisk::NAME_SIZE;
 use zoraya_time::{Deadline, Instant};
 
 use crate::arch::{self, Frame};
+use crate::channel::{self, MAX_MESSAGE, MAX_MESSAGE_HANDLES, Pair};
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
 use crate::memory::user::{Holder, MappingError, USER_HIGH};
@@ -517,6 +518,149 @@ impl Handlers for Calls {
             .unmap_object(address.0, length.0)
             .map_err(|_| Status::InvalidArgument)?;
         drop(holder);
+        Ok(0)
+    }
+
+    fn channel_create(&mut self, ends: Bytes) -> Result<u64, Status> {
+        if ends.0.length != 16 {
+            return Err(Status::InvalidArgument);
+        }
+        let target = UserSlice::of(ends.0)?;
+        target.write(&[0; 16])?;
+        let pair = Pair::new()?;
+        let mut handles = self.process.handles.lock();
+        handles.reserve_many(2)?;
+        let mut record = [0; 16];
+        for end in 0..2 {
+            let object = Object::Channel(pair.clone(), end);
+            let handle = handles.insert(object, ChannelObject::RIGHTS, object::next_id())?;
+            record[end * 8..end * 8 + 8].copy_from_slice(&handle.raw().to_le_bytes());
+        }
+        drop(handles);
+        target.write(&record)?;
+        Ok(0)
+    }
+
+    fn channel_write(&mut self, end: Handle, bytes: Bytes, list: Bytes) -> Result<u64, Status> {
+        let Object::Channel(pair, side) = self.object(end, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        let entries = list.0.length as usize / ChannelEntry::SIZE;
+        if bytes.0.length > MAX_MESSAGE as u64
+            || entries > MAX_MESSAGE_HANDLES
+            || !(list.0.length as usize).is_multiple_of(ChannelEntry::SIZE)
+        {
+            return Err(Status::InvalidArgument);
+        }
+        let body = UserSlice::of(bytes.0)?.read()?;
+        let raw = UserSlice::of(list.0)?.read()?;
+        let mut listed = [None; MAX_MESSAGE_HANDLES];
+        for (slot, chunk) in listed.iter_mut().zip(raw.as_chunks().0) {
+            *slot = Some(ChannelEntry::from_bytes(chunk)?);
+        }
+        let listed = listed.iter().flatten().copied();
+
+        // Every check and every allocation first: a failed write has no
+        // effect (INV-0050-1).
+        let mut handles = self.process.handles.lock();
+        for (i, entry) in listed.clone().enumerate() {
+            let held = handles.check(entry.handle, channel::needed_right(entry.transfer))?;
+            if !held.rights.contains(entry.rights) {
+                return Err(Status::AccessDenied);
+            }
+            if entry.transfer == Transfer::Move
+                && listed.clone().skip(i + 1).any(|e| e.handle == entry.handle)
+                || entry.transfer == Transfer::Duplicate
+                    && listed
+                        .clone()
+                        .skip(i + 1)
+                        .any(|e| e.handle == entry.handle && e.transfer == Transfer::Move)
+            {
+                return Err(Status::InvalidArgument);
+            }
+            if let Object::Channel(other, other_end) = &held.object
+                && !zoraya_channel::may_travel(
+                    Arc::ptr_eq(other, &pair),
+                    other.holds_handles(*other_end),
+                )
+            {
+                return Err(Status::BadState);
+            }
+        }
+        let mut carried = Vec::new();
+        carried
+            .try_reserve_exact(entries)
+            .map_err(|_| Status::NoMemory)?;
+        let mut message = channel::message(body, Vec::new())?;
+        pair.prepare(side, message.bytes.len())?;
+        for entry in listed {
+            let object = match entry.transfer {
+                Transfer::Duplicate => handles.check(entry.handle, Rights::NONE)?.object.clone(),
+                Transfer::Move => {
+                    let taken = handles.remove(entry.handle).ok_or(Status::BadHandle)?;
+                    object::end_subscriptions(&taken);
+                    taken.object
+                }
+            };
+            carried.push(zoraya_handle::Entry {
+                object,
+                rights: entry.rights,
+                id: object::next_id(),
+            });
+        }
+        drop(handles);
+        message.handles = carried;
+        pair.write(side, message);
+        Ok(0)
+    }
+
+    fn channel_read(
+        &mut self,
+        end: Handle,
+        bytes: Bytes,
+        list: Bytes,
+        sizes: Out,
+    ) -> Result<u64, Status> {
+        let Object::Channel(pair, side) = self.object(end, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        let sizes = UserSlice::new(sizes.0, ChannelSizes::SIZE as u64)?;
+        let target = UserSlice::of(bytes.0)?;
+        let room = list.0.length / 8;
+        if !list.0.length.is_multiple_of(8) {
+            return Err(Status::InvalidArgument);
+        }
+        let values = UserSlice::of(list.0)?;
+        let Some((length, count)) = pair.peek(side)? else {
+            return Err(Status::WouldBlock);
+        };
+        let record = ChannelSizes {
+            bytes: length as u32,
+            handles: count as u32,
+        };
+        sizes.write(&record.to_bytes())?;
+        if length as u64 > bytes.0.length || count as u64 > room {
+            return Err(Status::BufferTooSmall);
+        }
+        let mut handles = self.process.handles.lock();
+        handles.reserve_many(count)?;
+        // User memory is reached before the message leaves the queue, so a bad
+        // address loses nothing.
+        let mut zeros = [0u8; 8 * MAX_MESSAGE_HANDLES];
+        values.write(&zeros[..count * 8])?;
+        pair.copy_front(side, |bytes| target.write(bytes))?;
+        let Some(mut message) = pair.read(side) else {
+            return Err(Status::WouldBlock);
+        };
+        let mut at = 0;
+        for entry in message.handles.drain(..) {
+            let handle = handles.insert(entry.object, entry.rights, entry.id)?;
+            zeros[at..at + 8].copy_from_slice(&handle.raw().to_le_bytes());
+            at += 8;
+        }
+        drop(handles);
+        // This range was just written, and a process has one thread.
+        values.write(&zeros[..at])?;
         Ok(0)
     }
 
