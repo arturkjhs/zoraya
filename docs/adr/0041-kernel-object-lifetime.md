@@ -1,6 +1,6 @@
 # ADR-0041: Kernel object lifetime
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0003, ADR-0004, ADR-0006, ADR-0022, ADR-0030
 - **Evidence:** CP-06, CP-14, DM-005, DM-022, DM-023, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#l4-family-and-sel4
@@ -68,3 +68,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - A measured contention or latency problem on the signal lock.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

@@ -1,6 +1,6 @@
 # ADR-0046: Job and request details the accepted ADRs leave open
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0003, ADR-0004, ADR-0006, ADR-0041
 - **Evidence:** CP-14, DM-100, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -37,6 +37,16 @@ Building ADR-0003 and ADR-0004 needs answers they do not give. What the process-
 - **Precedent:** None better.
 
 ## Recommendation
+
+### Decision
+Accepted as recommended, except for the bullet **Exit record of a request**, which the architect replaced:
+
+- `ExitRecord` is `{ code, reason, detail, request_kind }`. `request_kind` is `Option<RequestKind>`: the request whose `Terminate` disposition ended the process, and none for every other end, `process_exit_with_reason` included. On the wire it is a fourth `u32`, 0 for none and otherwise the kind's number plus one, so the record is 16 bytes.
+- `detail` is the sender's value, all 32 bits. `process_signal` and `job_signal` take any `u32`.
+- This partly replaces ADR-0004 rule 1, which has `detail` carry the kind, and the `WTERMSIG` line of its personality mapping. ADR-0004 carries a note saying so.
+- **`WTERMSIG` for `libposix`.** With `reason = Terminated`: `detail`, if it is a valid POSIX signal number, as it is after `kill` (ADR-0004: `process_signal(handle, kind(sig), sig)`) or `exit_with_reason(Terminated, SIGPIPE)`. Otherwise, by `request_kind`: `Interrupt → SIGINT`, `Terminate → SIGTERM`, `Hangup → SIGHUP`, `Quit → SIGQUIT`, `Custom(n) → n`. A native sender's `detail` can now be any value, so the validity test is needed. With neither, `SIGTERM` `[assumption]`. `reason = Killed` gives `SIGKILL`. `reason = Fault` and `Limit` use ADR-0004's fixed map and never `detail`, which for a fault is the exception class (ADR-0034).
+
+The original recommendation follows.
 Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **Group.** `spawn`'s group field, if not 0, is a job handle with `CREATE_PROCESS` in the tree of the `job` field. The process goes in that sub-job. Otherwise `InvalidArgument`.
@@ -59,6 +69,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **INV-0046-1.** A full request queue gives `LimitReached` and never allocates. *Check:* the queue is a fixed array, which the type states, and an in-QEMU test fills one and sees `LimitReached`.
 - **INV-0046-2.** After `job_kill` returns, no process can be created in that tree. *Check:* in-QEMU test.
 - **INV-0046-3.** A job tree deeper than 32 is refused. *Check:* in-QEMU test.
+- **INV-0046-4.** `request_kind` names the request that ended a process and is none otherwise, and `detail` reaches the record with all 32 bits. *Check:* `zoraya-abi` round-trip test over every kind, and in-QEMU tests with `detail` above 2^24 through `process_signal` and `job_signal`.
 
 ## Open questions
 - Whether 64 entries suits a real signal storm: nothing measured.
@@ -68,3 +79,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - A shell's need for job-level `SUSPENDED` at stage 6, which brings `job_suspend` in.
 
 ## Architect's decision
+
+Accepted with a change, 2026-11-01. Decided by the architect. The request kind is not encoded in `detail`. `ExitRecord` gains a separate field `request_kind` (none, `Interrupt`, `Terminate`, `Hangup`, `Quit`, `Custom(n)`), and `detail` stays the sender's full 32-bit value, with no 2^24 limit. This changes the structure in ADR-0004 rule 1.

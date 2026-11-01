@@ -1,6 +1,6 @@
 # ADR-0045: Port keys and user packet data as opaque payloads
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0002, ADR-0006, ADR-0035
 - **Evidence:** CP-01, CP-06, CP-11, DM-023
@@ -57,3 +57,5 @@ Recommended: **Option A**. It is a recommendation, not a decision.
 - Another call that needs an integer payload.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

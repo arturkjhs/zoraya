@@ -1,6 +1,6 @@
 # ADR-0042: Passing structures to system calls
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0003, ADR-0004, ADR-0031, ADR-0032
 - **Evidence:** CP-11, CP-13, DM-008, DM-055, DM-160, X-8, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -66,3 +66,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - A real command line that does not fit.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

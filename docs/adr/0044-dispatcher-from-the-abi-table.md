@@ -1,6 +1,6 @@
 # ADR-0044: The dispatcher and the ABI table
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0032, ADR-0035
 - **Evidence:** CP-11, DM-053, DM-120
@@ -60,3 +60,5 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - A call that the macro cannot express.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

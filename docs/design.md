@@ -53,7 +53,7 @@ Nothing that is not listed is inherited. `start_suspended` plus `resume` replace
 
 **Asynchronous notification without Unix signals** ([ADR-0004](adr/0004-async-notification.md)). No native call runs
 code asynchronously on an existing thread. Instead:
-- **Exit records.** A process object carries `ExitRecord { code, reason, detail }`.
+- **Exit records.** A process object carries `ExitRecord { code, reason, detail, request_kind }`.
 - **Request signals.** These are `Interrupt`, `Terminate`, `Hangup`, `Quit` and `Custom(n)`. Their per-process
   dispositions (`Terminate`, `Ignore`, `Deliver`) are held by the kernel.
 - **Job-wide delivery.** `job_signal` reaches a whole job tree atomically, and `job_kill` is the uncatchable kill.
