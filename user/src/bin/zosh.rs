@@ -17,8 +17,8 @@ use zoraya_shell::{
 use zoraya_user::{
     clock_monotonic, console_dropped, console_entry, console_read, console_write, directory_entry,
     directory_lookup, dup, handle_close, job_create, job_kill, job_signal, port_create,
-    port_subscribe, port_unsubscribe, port_wait, power_off, print, println, process_exit_record,
-    spawn,
+    port_subscribe, port_unsubscribe, port_wait, power_off, print, println, process_exit,
+    process_exit_record, spawn,
 };
 
 const PROMPT: &str = "zosh$ ";
@@ -229,6 +229,8 @@ impl Shell {
                 None => println!("usage: kill [-int|-term|-hup|-quit] %n"),
             },
             ["kill", ..] => println!("usage: kill [-int|-term|-hup|-quit] %n"),
+            // `exit <n>` is the program. Alone, it ends the shell (ADR-0063).
+            ["exit"] => process_exit(0),
             ["poweroff"] => {
                 let status = power_off(POWER);
                 println!("zosh: poweroff: {status:?}");
@@ -400,7 +402,7 @@ impl Shell {
 fn help() {
     println!("ls  run <program> [args...]  <program> [args...]  <command> &");
     println!("jobs  wait [%n]  kill [-int|-term|-hup|-quit] %n");
-    println!("echo  uptime  exit-code  poweroff  help");
+    println!("echo  uptime  exit-code  exit  poweroff  help");
     println!("Ctrl-C interrupts the foreground job, or clears the line. Ctrl-\\ sends Quit.");
 }
 

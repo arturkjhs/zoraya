@@ -375,7 +375,8 @@ deterministic random mutations.
 
 - `ls` lists the ramdisk. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
-- `echo`, `uptime`, `exit-code` (the last record) and `help` are built in.
+- `echo`, `uptime`, `exit-code` (the last record) and `help` are built in. `exit` alone ends the shell, and the
+  kernel then powers off; `exit <n>` is the demonstration program.
 - Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it,
   which is more than TASK-11 asked: a job can ignore `Interrupt`.
   Ctrl-\\ sends `Quit`. Ctrl-U kills the line, and Up and Down walk the last 32 lines.
