@@ -126,7 +126,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0043-1 | [ADR-0043](0043-image-source-for-spawn.md) | A process with no directory or image handle cannot start a program. | in-QEMU test: a child with an empty handle list has no valid handle to name one. | checked: `make test-qemu` |
 | INV-0044-1 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) | `SYSCALLS`, `Syscall`, the kernel's `Handlers` and the user stubs come from one declaration. | the kernel builds only if it implements the generated trait, and a `zoraya-abi` test sends every number through `dispatch` and asserts it reaches the handler of the same name. | checked: `make test` |
 | INV-0044-2 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) | A register value too wide for its parameter type is refused, never truncated. | `zoraya-abi` unit test for every parameter type. | checked: `make test-unit` |
-| INV-0045-1 | [ADR-0045](0045-port-keys-as-opaque-payloads.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys and user packet data, each documented as opaque to the kernel (ADR-0004, ADR-0006). | a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`, `Opaque` for `port_subscribe`, `port_unsubscribe` and `port_queue`), plus a unit test that `RelativePath::new("/x")` fails. | checked: `make test-unit` |
+| INV-0045-1 | [ADR-0045](0045-port-keys-as-opaque-payloads.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys and user packet data, each documented as opaque to the kernel (ADR-0004, ADR-0006). | a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`, `Opaque` for `port_subscribe`, `port_unsubscribe` and `port_queue`), plus a unit test that `RelativePath::new("/x")` fails. | replaced by INV-0061-1 |
 | INV-0046-1 | [ADR-0046](0046-job-and-request-details.md) | A full request queue gives `LimitReached` and never allocates. | the queue is a fixed array, which the type states, and an in-QEMU test fills one and sees `LimitReached`. | checked: `make test-qemu` |
 | INV-0046-2 | [ADR-0046](0046-job-and-request-details.md) | After `job_kill` returns, no process can be created in that tree. | in-QEMU test. | checked: `make test-qemu` |
 | INV-0046-3 | [ADR-0046](0046-job-and-request-details.md) | A job tree deeper than 32 is refused. | in-QEMU test. | checked: `make test-qemu` |
@@ -188,7 +188,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0062-2 | [ADR-0062](0062-power-off.md) | `power_off` without `POWER` is refused, and the machine goes on. | in-QEMU test with a wrong handle. | checked: `make test-qemu` |
 | INV-0062-3 | [ADR-0062](0062-power-off.md) | `poweroff` in the shell ends the machine with QEMU status 0. | scripted serial test. | checked: `make test-boot` |
 | INV-0063-1 | [ADR-0063](0063-first-process-until-init.md) | The normal kernel starts exactly one process. | the scripted boot test shows `zosh` first and the kernel starts no other. | checked: `make test-boot` |
-| INV-0063-2 | [ADR-0063](0063-first-process-until-init.md) | The kernel powers off when the first process ends. | scripted serial test ending the shell. | not yet applicable (stage 4) |
+| INV-0063-2 | [ADR-0063](0063-first-process-until-init.md) | The kernel powers off when the first process ends. | scripted serial test ending the shell with `exit`. | checked: `make test-boot` |
 
 ## Counts
 
@@ -234,8 +234,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0055](0055-filesystem-service-protocol.md) Filesystem service protocol (proposed) | 9 |
 | [ADR-0056](0056-job-memory-accounting.md) Memory accounting by job (proposed) | 9 |
 | [ADR-0057](0057-handle-width.md) A 64-bit handle with no retired slots (proposed) | 3 |
-| [ADR-0060](0060-console-input.md) Console input as raw bytes (proposed) | 4 |
-| [ADR-0061](0061-directory-entries.md) Listing a directory handle (proposed) | 4 |
-| [ADR-0062](0062-power-off.md) Power off through a handle (proposed) | 3 |
-| [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` (proposed) | 2 |
+| [ADR-0060](0060-console-input.md) Console input as raw bytes | 4 |
+| [ADR-0061](0061-directory-entries.md) Listing a directory handle | 4 |
+| [ADR-0062](0062-power-off.md) Power off through a handle | 3 |
+| [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` | 2 |
 | **Total** | **182** |

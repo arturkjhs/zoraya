@@ -1,6 +1,6 @@
 # ADR-0063: The shell as first process, until `init`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0003, ADR-0043, ADR-0062
 - **Evidence:** CP-01, alternatives-postmortem.md#hubris
@@ -51,12 +51,14 @@ Recommended: **Option B**. It is a recommendation, not a decision. It is tempora
 
 ## Invariants
 - **INV-0063-1.** The normal kernel starts exactly one process. *Check:* the scripted boot test shows `zosh` first and the kernel starts no other.
-- **INV-0063-2.** The kernel powers off when the first process ends. *Check:* scripted serial test ending the shell.
+- **INV-0063-2.** The kernel powers off when the first process ends. *Check:* scripted serial test ending the shell with `exit`.
 
 ## Open questions
-- INV-0063-2 has no test: no shell command ends the shell, by the task's list of commands. It waits for ADR-0053's `init`, whose end is a separate case.
+- None beyond ADR-0053's.
 
 ## Revisit triggers
 - ADR-0053 accepted.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

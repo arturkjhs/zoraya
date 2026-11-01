@@ -1,6 +1,6 @@
 # ADR-0062: Power off through a handle
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0040, ADR-0043
 - **Evidence:** CP-01, CP-02
@@ -69,3 +69,5 @@ Recommended: **Option C**, with Option D's behaviour kept for a first process th
 - A second system-wide power action.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

@@ -1,6 +1,6 @@
 # ADR-0061: Listing a directory handle
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0032, ADR-0040, ADR-0043, ADR-0044, ADR-0045
 - **Evidence:** CP-01, CP-02, DM-053
@@ -64,3 +64,5 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - A directory large enough for one call per name to show in a measurement.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.
