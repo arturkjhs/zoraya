@@ -135,6 +135,26 @@ fn exhaustion_changes_nothing() {
     }
 }
 
+/// ADR-0051: zeroed, contiguous or not, even over another object's frames.
+fn new_objects_are_zeroed() {
+    for flags in [MemoryFlags::NONE, MemoryFlags::CONTIGUOUS] {
+        let dirty = memory_create(4 * PAGE, flags).expect("create");
+        let at = memory_map(dirty, 0, 4 * PAGE, MapFlags::WRITE).expect("map");
+        for page in 0..4 {
+            write(at + page * PAGE, u64::MAX);
+        }
+        memory_unmap(at, 4 * PAGE).expect("unmap");
+        handle_close(dirty).expect("close");
+        let clean = memory_create(4 * PAGE, flags).expect("create");
+        let at = memory_map(clean, 0, 4 * PAGE, MapFlags::READ).expect("map");
+        for page in 0..4 {
+            assert_eq!(read(at + page * PAGE), 0, "{page}");
+        }
+        memory_unmap(at, 4 * PAGE).expect("unmap");
+        handle_close(clean).expect("close");
+    }
+}
+
 /// INV-0051-2: the kernel's own walk of this process's tables.
 fn no_object_mapping_is_executable() {
     let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
@@ -189,6 +209,7 @@ fn main() -> i32 {
     faults();
     bad_arguments();
     exhaustion_changes_nothing();
+    new_objects_are_zeroed();
     no_object_mapping_is_executable();
     lifetime_either_order();
     mapping_limit();

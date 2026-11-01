@@ -72,7 +72,7 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 - **INV-0070-3.** A device with no virtio transport keeps its quarantine. *Check:* in-QEMU test with a device object that has no transport.
 
 ## Open questions
-- Whether 100 ms is enough for every virtio device: nothing measured.
+- Whether 100 ms is enough for every virtio device: nothing measured. QEMU resets at once, so no test sees the wait.
 
 ## Revisit triggers
 - A device type with no observable reset.

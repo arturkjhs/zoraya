@@ -5,10 +5,13 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use zoraya_protocol::{Seq, protocol};
+use zoraya_protocol::{Below, Seq, protocol};
 
 /// Sectors in one request.
 pub const MAX_BATCH: usize = 256;
+
+/// One of `status`.
+pub type Status = Below<5>;
 
 /// The status of every reply.
 pub mod status {
@@ -35,7 +38,7 @@ protocol! {
     /// What the device is.
     message Info = 1, handles 0 {}
     message InfoReply = 1, handles 0 {
-        status: u32,
+        status: Status,
         sectors: u64,
         flush: bool,
     }
@@ -43,7 +46,7 @@ protocol! {
     /// Attaches the memory object that transfers use.
     message Attach = 2, handles 1 {}
     message Done = 2, handles 0 {
-        status: u32,
+        status: Status,
     }
 
     message Read = 3, handles 0 {
@@ -99,12 +102,12 @@ mod tests {
     fn every_fixed_message_round_trips_and_decodes_totally() {
         total(Info {});
         total(InfoReply {
-            status: status::OK,
+            status: Below(status::OK),
             sectors: 2048,
             flush: true,
         });
         total(Attach {});
-        total(Done { status: 1 });
+        total(Done { status: Below(1) });
         total(Read { range: RANGE });
         total(Flush {});
     }

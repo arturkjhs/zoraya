@@ -1,5 +1,6 @@
 //! Decoder tests for a protocol crate: every truncation, every single bit
-//! flipped, and random bytes. A decoder under test must not panic; what it
+//! flipped, several bytes changed at once, and wholly random bodies under the
+//! valid header. A decoder under test must not panic; what it
 //! accepts it must be able to read back in full (`decode` does that).
 
 /// Feeds `decode` every damaged form of `valid`.
@@ -18,14 +19,24 @@ pub fn exercise(valid: &[u8], decode: impl Fn(&[u8])) {
         }
     }
     let mut x = 0x9e37_79b9_7f4a_7c15u64;
-    for _ in 0..20_000 {
+    let mut next = move || {
         x ^= x << 13;
         x ^= x >> 7;
         x ^= x << 17;
-        let at = (x as usize) % copy.len().max(1);
-        let saved = copy[at];
-        copy[at] = (x >> 32) as u8;
+        x
+    };
+    for _ in 0..20_000 {
+        for _ in 0..1 + next() % 4 {
+            let at = (next() as usize) % copy.len().max(1);
+            copy[at] = next() as u8;
+        }
         decode(copy);
-        copy[at] = saved;
+        copy.copy_from_slice(valid);
+    }
+    for _ in 0..20_000 {
+        for byte in copy.iter_mut().skip(crate::HEADER_SIZE) {
+            *byte = next() as u8;
+        }
+        decode(copy);
     }
 }

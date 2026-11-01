@@ -510,6 +510,7 @@ pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> 
 /// (ADR-0062).
 #[cfg(not(feature = "qemu-test"))]
 pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
+    println!("first process: {name}");
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
     let none = StartupBlock::decode(&[0; 8]).ok_or(SpawnError::NoMemory)?;
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;

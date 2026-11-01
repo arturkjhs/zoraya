@@ -18,9 +18,9 @@ limited to the lines it changed, what it finds outside them is added here.
 | W3 | ADR-0051 Calls | "An address kind for the last" now reads as `length`. Name `memory_unmap`'s address. |
 | W5 | ADR-0041 note, ADR-0054 Tensions | The exception to INV-0041-1 covers frames only; a quarantined pin also keeps heap use. |
 | W6 | ADR-0053 What `init` receives | "`init` keeps them" now reads as giving `Power` to a restarted driver. |
-| W7 | ADR-0054 DMA, Quarantine | Whether `dma_unpin` closes the handle is unstated, and a pin can also end when a queue is torn down. |
 | W8 | ADR-0054 Invariants | INV-0054-7 is out of order against `invariants.md`. |
 | - | ADR-0054 Consequences | "Quarantined frames stay lost until a new driver runs" no longer covers a live driver that closes a pin. |
 | - | ADR-0051 INV-0051-5 | Its list of payloads, from the sixth review's backlog items. |
-| - | ADR-0052, Handles | A decoder checks the number of handles, not their types: no call reports a handle's type. |
 | - | `zoraya-events` | The signal table keeps its peak size, so one burst of channels stays as heap until reboot. |
+| R-23 | ADR-0062 INV-0062-1 | "Only the first process starts with a `Power` handle" is false now that `init` hands one to `zosh`. It should say that only the kernel makes one. |
+| R-27 | ADR-0050 No cycles | The rule on moving an end with handles queued holds for `channel_write`. `spawn` can move such an end, which makes no cycle. Say "through a channel". |

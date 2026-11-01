@@ -7,13 +7,14 @@
 
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
-    DIRECTORY, DeviceObject, FIRST_DEVICE_SLOT, Handle, JOB, MapFlags, MemoryFlags, Mode,
-    ObjectType, Packet, Rights, Status, interrupt_signals,
+    ChannelEntry, DIRECTORY, DeviceObject, FIRST_DEVICE_SLOT, Handle, JOB, MapFlags, MemoryFlags,
+    Mode, ObjectType, Packet, Rights, Status, interrupt_signals,
 };
 use zoraya_user::{
-    assert_err, device_interrupt, device_map, directory_lookup, dma_pin, dma_release_quarantine,
-    dma_unpin, handle_close, handle_duplicate, interrupt_ack, memory_create, memory_map,
-    memory_unmap, port_create, port_subscribe, port_wait, raw_syscall, spawn, wait_exit,
+    assert_err, channel_create, channel_read, channel_write, device_interrupt, device_map,
+    directory_lookup, dma_pin, dma_release_quarantine, dma_unpin, handle_close, handle_duplicate,
+    interrupt_ack, memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_wait,
+    raw_syscall, spawn, wait_exit,
 };
 
 const VIRTIO_MAGIC: u32 = 0x7472_6976;
@@ -25,6 +26,8 @@ const PAGE: u64 = 4096;
 const TRIGGER_INTERRUPT: u64 = 0x7005;
 const FREE_FRAMES: u64 = 0x7006;
 const DEVICE_MAPPINGS: u64 = 0x7007;
+const FIRST_LINE: u64 = 0x7009;
+const LINE_ENABLED: u64 = 0x700a;
 
 fn test_call(number: u64) -> u64 {
     raw_syscall(number, [0; 6]).1
@@ -113,7 +116,15 @@ fn takes_an_interrupt() {
         "the second, once acknowledged"
     );
     interrupt_ack(interrupt).expect("ack");
+    let line = test_call(FIRST_LINE);
+    assert_ne!(line, 0);
+    assert_eq!(raw_syscall(LINE_ENABLED, [line, 0, 0, 0, 0, 0]).1, 1);
     handle_close(interrupt).expect("close");
+    assert_eq!(
+        raw_syscall(LINE_ENABLED, [line, 0, 0, 0, 0, 0]).1,
+        0,
+        "INV-0054-2: closing masks the line"
+    );
     handle_close(port).expect("close");
     // Masked and given back: another object can take the line.
     let again = device_interrupt(device, range).expect("the line is free");
@@ -163,6 +174,50 @@ fn refusals() {
     for h in [read_only, no_dma, memory, scattered] {
         handle_close(h).expect("close");
     }
+}
+
+/// R-9 of the review: a failed `dma_pin` makes no pin, so nothing is
+/// quarantined: the frames go when the object does.
+fn a_refused_pin_leaves_nothing() {
+    let (device, _) = find_block_device();
+    let memory = memory_create(PAGE, MemoryFlags::NONE).expect("memory");
+    let mut fill = [memory; 1024];
+    let mut filled = 0;
+    while let Ok(port) = port_create() {
+        fill[filled] = port;
+        filled += 1;
+    }
+    let mut runs = [[0; 2]; 2];
+    assert_err!(dma_pin(memory, device, &mut runs), Status::LimitReached);
+    for port in &fill[..filled] {
+        handle_close(*port).expect("close");
+    }
+    let free = test_call(FREE_FRAMES);
+    handle_close(memory).expect("close");
+    assert_eq!(test_call(FREE_FRAMES), free + 1);
+}
+
+/// INV-0054-7's second half: a pin handle without `DMA` cannot unpin.
+fn unpinning_needs_its_right() {
+    let (device, _) = find_block_device();
+    let memory = memory_create(PAGE, MemoryFlags::NONE).expect("memory");
+    let mut runs = [[0; 2]; 2];
+    let pin = dma_pin(memory, device, &mut runs).expect("pin");
+    let (a, b) = channel_create().expect("create");
+    let entry = ChannelEntry {
+        handle: pin,
+        rights: Rights::TRANSFER,
+        transfer: Transfer::Move,
+    };
+    channel_write(a, b"", &[entry]).expect("write");
+    let mut body = [0; 1];
+    let mut got = [a; 1];
+    channel_read(b, &mut body, &mut got).expect("read");
+    assert_err!(dma_unpin(got[0]), Status::AccessDenied);
+    for h in [got[0], a, b, memory] {
+        handle_close(h).expect("close");
+    }
+    dma_release_quarantine(device).expect("release");
 }
 
 /// INV-0054-7 and ADR-0070: a pin closed with the device active stays
@@ -238,6 +293,8 @@ fn main() -> i32 {
     takes_an_interrupt();
     pins_and_unpins();
     refusals();
+    a_refused_pin_leaves_nothing();
+    unpinning_needs_its_right();
     a_closed_pin_stays_quarantined();
     a_dead_holder_leaves_its_frames_quarantined();
     0

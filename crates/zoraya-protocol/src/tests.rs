@@ -183,3 +183,176 @@ fn the_error_reply_is_generic() {
     assert_eq!((header.ordinal, header.transaction), (ERROR_ORDINAL, 3));
     assert_eq!(reply.status, 9);
 }
+
+fn with_body(body: &[u8], out: &mut [u8]) -> usize {
+    out[0..4].copy_from_slice(&MAGIC_VERSION.to_le_bytes());
+    out[4..8].copy_from_slice(&Limits::ORDINAL_FOR_TEST.to_le_bytes());
+    out[8..12].fill(0);
+    out[12..16].copy_from_slice(&(body.len() as u32).to_le_bytes());
+    out[16..16 + body.len()].copy_from_slice(body);
+    16 + body.len()
+}
+
+protocol! {
+    message Limits<'a> = 9, handles 0 {
+        data: Data<'a, 2>,
+    }
+    message TextLimit<'a> = 9, handles 0 {
+        text: Text<'a, 2>,
+    }
+    message Records<'a> = 9, handles 0 {
+        list: Seq<'a, Entry<'a>, 1>,
+    }
+    message Ranged = 9, handles 0 {
+        kind: Below<3>,
+    }
+    message Paths<'a> = 9, handles 0 {
+        path: Path<'a, 8, false>,
+        rest: Path<'a, 8, true>,
+    }
+}
+
+impl Limits<'_> {
+    const ORDINAL_FOR_TEST: u32 = 9;
+}
+
+/// INV-0052-1: a decoder refuses a length over the declared maximum, for each
+/// kind, even with the bytes present.
+#[test]
+fn a_decoder_enforces_declared_maxima() {
+    let mut out = [0; 64];
+    let body = [3, 0, 0, 0, b'a', b'b', b'c', 0];
+    let length = with_body(&body[..7], &mut out);
+    assert_eq!(
+        decode::<Limits<'_>>(&out[..length], 0).map(|_| ()),
+        Err(WireError::TooLong)
+    );
+    assert_eq!(
+        decode::<TextLimit<'_>>(&out[..length], 0).map(|_| ()),
+        Err(WireError::TooLong)
+    );
+    let body = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let length = with_body(&body, &mut out);
+    assert_eq!(
+        decode::<Records<'_>>(&out[..length], 0).map(|_| ()),
+        Err(WireError::TooLong)
+    );
+}
+
+fn seq_message(out: &mut [u8]) -> usize {
+    encode(
+        &Records {
+            list: Seq::Of(&ENTRIES[..1]),
+        },
+        0,
+        out,
+    )
+    .unwrap()
+}
+
+/// INV-0052-2 inside a sequence: a padding byte between a record's parts, and
+/// a byte past the last record but inside the declared size.
+#[test]
+fn a_sequence_has_no_loose_bytes() {
+    let mut out = [0; 128];
+    let length = seq_message(&mut out);
+    let mut grown = out;
+    // The size field, at body offset 8, covers one byte more.
+    grown[24] += 1;
+    grown[12] += 1;
+    assert_eq!(
+        decode::<Records<'_>>(&grown[..length + 1], 0).map(|_| ()),
+        Err(WireError::Trailing)
+    );
+}
+
+#[test]
+fn padding_between_records_is_refused() {
+    let many = [ENTRIES[0], ENTRIES[1]];
+    let mut out = [0; 128];
+    let length = encode(
+        &Everything {
+            list: Seq::Of(&many),
+            ..sample(&ENTRIES)
+        },
+        0,
+        &mut out,
+    )
+    .unwrap();
+    // The first record ends in `a`, and padding runs to 8-byte alignment.
+    let at = out[..length].iter().rposition(|b| *b == b'a').unwrap() + 1;
+    assert!(!(at - 16).is_multiple_of(8), "there is padding to spoil");
+    assert_eq!(out[at], 0);
+    let mut copy = out;
+    copy[at] = 1;
+    assert_eq!(
+        decode::<Everything<'_>>(&copy[..length], 1).map(|_| ()),
+        Err(WireError::BadPadding)
+    );
+}
+
+#[test]
+fn an_enumeration_is_range_checked() {
+    let mut out = [0; 32];
+    let length = encode(&Ranged { kind: Below(2) }, 0, &mut out).unwrap();
+    assert!(decode::<Ranged>(&out[..length], 0).is_ok());
+    out[16] = 3;
+    assert_eq!(
+        decode::<Ranged>(&out[..length], 0).map(|_| ()),
+        Err(WireError::BadValue)
+    );
+    assert_eq!(
+        encode(&Ranged { kind: Below(3) }, 0, &mut out),
+        Err(WireError::BadValue)
+    );
+}
+
+#[test]
+fn a_path_is_relative() {
+    let mut out = [0; 64];
+    let good = Paths {
+        path: Path("a/b"),
+        rest: Path(""),
+    };
+    let length = encode(&good, 0, &mut out).unwrap();
+    assert_eq!(decode::<Paths<'_>>(&out[..length], 0).unwrap().1, good);
+    let bad = Paths {
+        path: Path("/etc"),
+        rest: Path(""),
+    };
+    assert_eq!(encode(&bad, 0, &mut out), Err(WireError::BadValue));
+    let empty = Paths {
+        path: Path(""),
+        rest: Path(""),
+    };
+    assert_eq!(encode(&empty, 0, &mut out), Err(WireError::BadValue));
+    // On the wire too: `a/b` becomes `/a/`.
+    out[20] = b'/';
+    out[21] = b'a';
+    out[22] = b'/';
+    assert_eq!(
+        decode::<Paths<'_>>(&out[..length], 0).map(|_| ()),
+        Err(WireError::BadValue)
+    );
+}
+
+/// INV-0052-3: `protocol!` runs this at compile time on every field name.
+#[test]
+#[should_panic(expected = "an operation field")]
+fn an_operation_field_is_refused() {
+    no_operation_field(&["offset", "operation"]);
+}
+
+#[test]
+fn ordinary_fields_pass() {
+    no_operation_field(&["offset", "length", "name", "kind"]);
+}
+
+#[test]
+fn the_error_reply_decodes_totally() {
+    let mut out = [0; 32];
+    let length = encode(&ErrorReply { status: 1 }, 0, &mut out).unwrap();
+    testing::exercise(&out[..length], |bytes| {
+        let _ = decode::<ErrorReply>(bytes, 0);
+    });
+}

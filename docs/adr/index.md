@@ -49,9 +49,10 @@ Evidence IDs (`DM-`, `GR-`, `CP-`, `X-`) resolve in `docs/research/`; `task-02/â
 | [ADR-0060](0060-console-input.md) | Console input as raw bytes | accepted | Raw bytes in a fixed ring from the receive interrupt, a `console_read` that never blocks, a `READABLE` signal; no terminal policy in the kernel. | ADR-0006, ADR-0022, ADR-0040, ADR-0043 |
 | [ADR-0061](0061-directory-entries.md) | Listing a directory handle | accepted | One record per call with an opaque cookie, in a form a filesystem service can offer. | ADR-0032, ADR-0040, ADR-0043, ADR-0044, ADR-0045 |
 | [ADR-0062](0062-power-off.md) | Power off through a handle | accepted | A `Power` object with one right, given only to the first process. | ADR-0040, ADR-0043 |
-| [ADR-0063](0063-first-process-until-init.md) | The shell as first process, until `init` | superseded by ADR-0053 | Temporary: the kernel starts the shell directly; ADR-0053 replaces this. | ADR-0003, ADR-0043, ADR-0062 |
+| [ADR-0063](0063-first-process-until-init.md) | The shell as first process, until `init` | accepted | Temporary: the kernel starts the shell directly; ADR-0053 replaces this. | ADR-0003, ADR-0043, ADR-0062 |
 | [ADR-0070](0070-releasing-quarantined-frames.md) | Releasing quarantined DMA frames | proposed | Kernel resets the device and observes Status 0 before quarantined frames return; refused while a mapping or live pin exists. | ADR-0021, ADR-0024, ADR-0051, ADR-0053, ADR-0054 |
 | [ADR-0071](0071-invariant-totals.md) | Checking the totals in `invariants.md` | proposed | `adr-check` compares the Counts table with the rows. | ADR-0001 |
+| [ADR-0072](0072-handle-types-and-small-kernel-choices.md) | Handle types in protocols, and small choices stage 4 made | proposed | The decoder checks the count of handles, and a server's first use checks the type; records five small choices. | ADR-0050, ADR-0051, ADR-0052, ADR-0054, ADR-0070 |
 
 ## Dependency order
 

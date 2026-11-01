@@ -724,19 +724,28 @@ impl Handlers for Calls {
             return Err(Status::BadHandle);
         };
         let target = UserSlice::of(out.0)?;
-        let mut at = 0;
-        for (address, length) in memory.runs() {
-            if at + 16 > out.0.length {
-                return Err(Status::InvalidArgument);
-            }
+        let needed = memory.runs().count() as u64 * 16;
+        if needed > out.0.length {
+            return Err(Status::InvalidArgument);
+        }
+        // Everything that can fail comes before the pin: a pin that ends
+        // without `dma_unpin` is quarantined, so a failed call must make none.
+        for at in (0..needed).step_by(16) {
+            target.at(at)?.write(&[0; 16])?;
+        }
+        let mut handles = self.process.handles.lock();
+        handles.reserve()?;
+        let pin = Pin::new(device, memory.clone())?;
+        let handle = handles.insert(Object::Pin(pin), PinObject::RIGHTS, object::next_id())?;
+        drop(handles);
+        for (i, (address, length)) in memory.runs().enumerate() {
             let mut record = [0; 16];
             record[..8].copy_from_slice(&address.to_le_bytes());
             record[8..].copy_from_slice(&length.to_le_bytes());
-            target.at(at)?.write(&record)?;
-            at += 16;
+            // This range was just written, and a process has one thread.
+            target.at(i as u64 * 16)?.write(&record)?;
         }
-        let pin = Pin::new(device, memory)?;
-        self.insert(Object::Pin(pin), PinObject::RIGHTS)
+        Ok(handle.raw())
     }
 
     fn dma_unpin(&mut self, pin: Handle) -> Result<u64, Status> {
@@ -790,6 +799,10 @@ pub mod test_calls {
     /// Returns how many pages of memory objects the caller has mapped, or
     /// `u64::MAX` if one is executable (INV-0051-2).
     pub const OBJECT_MAPPINGS: u64 = 0x7008;
+    /// Returns the line of the first interrupt object, or 0.
+    pub const FIRST_LINE: u64 = 0x7009;
+    /// Returns 1 if the line in x0 is enabled.
+    pub const LINE_ENABLED: u64 = 0x700a;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -808,6 +821,8 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             crate::device::trigger_first_line();
             Some(Ok(0))
         }
+        test_calls::FIRST_LINE => Some(Ok(u64::from(crate::device::first_line()))),
+        test_calls::LINE_ENABLED => Some(Ok(u64::from(crate::gic::is_enabled(a0 as u32)))),
         test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
         test_calls::OBJECT_MAPPINGS => {
             let thread = sched::current();

@@ -409,6 +409,10 @@ deterministic random mutations.
 
 ## Known limitations
 
+- **Masked interrupts.** System calls run with interrupts masked, and some scale with what they touch. Under HVF on
+  128 MiB: `memory_create` of all memory about 9 ms, and closing that object about 4 ms; closing a chain of 20,000
+  channel ends about 11 ms. `memory_map`, `dma_pin`, an address space's teardown and a device reset, up to 100 ms a
+  transport, are the same kind. ADR-0056 must bound them before untrusted code runs.
 - **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
 - **Handles in messages.** A protocol decoder checks how many handles a message has, not their object types.
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code

@@ -19,7 +19,7 @@ use crate::memory::heap::try_arc;
 use crate::memory::object::MemoryObject;
 use crate::memory::paging;
 use crate::sync::SpinLock;
-use crate::{gic, irq, port, timer};
+use crate::{gic, irq, port, println, timer};
 
 /// Transports in a page: QEMU's are 0x200 apart.
 const MAX_RANGES: usize = 8;
@@ -68,14 +68,28 @@ pub fn init(fdt: &Fdt<'_>) {
     let mut devices: Vec<Device> = Vec::new();
     for transport in transports {
         let base = transport.base & !(FRAME_SIZE - 1);
+        // Every register must lie in the window: `read` and `write` rely on it.
+        if !transport.base.is_multiple_of(4)
+            || transport.base + transport.size.max(REG_STATUS as u64 + 4) > base + FRAME_SIZE
+        {
+            println!(
+                "device: {:#x} does not fit a page, left out",
+                transport.base
+            );
+            continue;
+        }
         let range = Range {
             offset: transport.base - base,
             intid: transport.interrupt.intid,
             edge: transport.interrupt.edge,
         };
         if let Some(device) = devices.iter_mut().find(|d| d.base == base) {
-            if let Some(slot) = device.ranges.iter_mut().find(|r| r.is_none()) {
-                *slot = Some(range);
+            match device.ranges.iter_mut().find(|r| r.is_none()) {
+                Some(slot) => *slot = Some(range),
+                None => println!(
+                    "device: {:#x} is past {MAX_RANGES} in a page, left out",
+                    transport.base
+                ),
             }
             continue;
         }
@@ -94,6 +108,12 @@ pub fn init(fdt: &Fdt<'_>) {
 /// Every device.
 pub fn all() -> Vec<Arc<Device>> {
     DEVICES.lock().clone()
+}
+
+/// The first object's line, or 0.
+#[cfg(feature = "qemu-test")]
+pub fn first_line() -> u32 {
+    LINES.lock().first().map_or(0, |(intid, _)| *intid)
 }
 
 /// Makes the first object's line pending, as its device could.
@@ -153,7 +173,6 @@ impl Device {
         // alone: the line is taken only after this.
         let interrupt = try_arc(Interrupt {
             intid: range.intid,
-            edge: range.edge,
             source,
             active: false,
         });
@@ -237,7 +256,6 @@ impl Drop for DeviceMapping {
 /// A device's interrupt line, for one holder.
 pub struct Interrupt {
     intid: u32,
-    edge: bool,
     source: SourceId,
     active: bool,
 }
@@ -260,7 +278,7 @@ impl Interrupt {
 
     pub fn ack(&self) {
         port::clear_signals(self.source, interrupt_signals::INTERRUPT);
-        gic::enable(self.intid, self.edge);
+        gic::unmask(self.intid);
     }
 }
 

@@ -194,6 +194,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0070-2 | [ADR-0070](0070-releasing-quarantined-frames.md) | Quarantined frames return only after the kernel has read Status 0 from every transport in the window. | in-QEMU test that sets a transport's Status, releases, and reads 0 and the frame count. | checked: `make test-qemu` |
 | INV-0070-3 | [ADR-0070](0070-releasing-quarantined-frames.md) | A device with no virtio transport keeps its quarantine. | in-QEMU test with a device object that has no transport. | checked: `make test-qemu` |
 | INV-0071-1 | [ADR-0071](0071-invariant-totals.md) | The Counts table in `invariants.md` matches its rows, per ADR and in total. | `make adr-check`, with host tests of a wrong row, a wrong total and a missing section. | checked: `make adr-check` |
+| INV-0072-1 | [ADR-0072](0072-handle-types-and-small-kernel-choices.md) | A message with the wrong number of handles is refused by its decoder. | `make test-unit`. | checked: `make test` |
+| INV-0072-2 | [ADR-0072](0072-handle-types-and-small-kernel-choices.md) | `memory_unmap` of anything but a whole mapping changes nothing. | the in-QEMU test of `memory_unmap` with a wrong length and a wrong address. | checked: `make test` |
 
 ## Counts
 
@@ -242,7 +244,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0060](0060-console-input.md) Console input as raw bytes | 4 |
 | [ADR-0061](0061-directory-entries.md) Listing a directory handle | 4 |
 | [ADR-0062](0062-power-off.md) Power off through a handle | 3 |
-| [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` (superseded by ADR-0053) | 2 |
+| [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` | 2 |
 | [ADR-0070](0070-releasing-quarantined-frames.md) Releasing quarantined DMA frames (proposed) | 3 |
 | [ADR-0071](0071-invariant-totals.md) Checking the totals in `invariants.md` (proposed) | 1 |
-| **Total** | **188** |
+| [ADR-0072](0072-handle-types-and-small-kernel-choices.md) Handle types in protocols, and small choices stage 4 made (proposed) | 2 |
+| **Total** | **190** |

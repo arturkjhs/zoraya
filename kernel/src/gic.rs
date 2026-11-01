@@ -289,6 +289,19 @@ pub fn enable(intid: u32, edge: bool) {
     write32(block(intid), offset, mask);
 }
 
+/// Enables an interrupt whose type was set by [`enable`].
+pub fn unmask(intid: u32) {
+    let (offset, mask) = bit_register(GICD_ISENABLER, intid);
+    write32(block(intid), offset, mask);
+}
+
+/// True if the interrupt is enabled.
+#[cfg(feature = "qemu-test")]
+pub fn is_enabled(intid: u32) -> bool {
+    let (offset, mask) = bit_register(GICD_ISENABLER, intid);
+    read32(block(intid), offset) & mask != 0
+}
+
 /// Disables an interrupt, which has taken effect on return.
 pub fn disable(intid: u32) {
     let (offset, mask) = bit_register(GICD_ICENABLER, intid);

@@ -71,7 +71,7 @@ impl MemoryObject {
         }
     }
 
-    /// True if the frames are one physical run.
+    /// The physically contiguous runs, each `(address, length)`.
     pub fn runs(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
         let mut at = 0;
         core::iter::from_fn(move || {

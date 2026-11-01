@@ -8,7 +8,6 @@
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
     ChannelEntry, ChannelObject, FIRST_DEVICE_SLOT, Handle, MapFlags, MemoryFlags, ObjectType,
-    Rights,
 };
 use zoraya_user::{
     channel_create, channel_write, dma_pin, dma_release_quarantine, dma_unpin, handle_close,
@@ -64,7 +63,6 @@ fn pins(device: Handle) {
 fn main() -> i32 {
     // Any device with a transport: the reset works on all of them.
     let device = Handle::new(u64::from(FIRST_DEVICE_SLOT)).expect("slot");
-    let _ = Rights::NONE;
     for _ in 0..ROUNDS {
         channels_in_flight();
         mapped_memory();

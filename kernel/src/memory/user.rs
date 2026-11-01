@@ -3,6 +3,8 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+#[cfg(feature = "qemu-test")]
+use zoraya_pagetable::MemoryType;
 use zoraya_pagetable::{Attributes, Half, MapError, PageTable, TableMemory};
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
@@ -77,8 +79,8 @@ impl TableMemory for UserMemory {
     }
 
     fn write(&mut self, table: u64, index: usize, value: u64) {
-        // SAFETY: as in `read`; this space is only changed while it is being
-        // built, by one thread.
+        // SAFETY: as in `read`; the owner holds the process's `space` lock while
+        // it changes this table, or it is still being built by one thread.
         unsafe { ((phys_to_virt(table) as *mut u64).add(index)).write_volatile(value) }
     }
 
@@ -228,11 +230,13 @@ impl AddressSpace {
     pub fn peek(&self, va: u64) -> Option<u64> {
         let mut found = None;
         self.for_each_mapping(&mut |m| {
-            if (m.va..m.va + m.size).contains(&va) {
+            let normal = m.attributes.memory == MemoryType::Normal;
+            if normal && (m.va..m.va + m.size).contains(&va) {
                 found = Some(m.pa + (va - m.va));
             }
         });
-        // SAFETY: a frame of this space, which the direct map holds.
+        // SAFETY: RAM of this space or of an object it maps, which the direct
+        // map holds: a device window has no direct-map entry, and is left out.
         found.map(|pa| unsafe { (phys_to_virt(pa) as *const u64).read_volatile() })
     }
 

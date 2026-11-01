@@ -111,7 +111,8 @@ impl<T> Table<T> {
         if self.count + count > MAX_HANDLES as usize {
             return Err(Status::LimitReached);
         }
-        let slots = (self.count + count).max(self.slots.len());
+        // `insert` appends while the table can grow, even past free slots.
+        let slots = (self.slots.len() + count).min(MAX_HANDLES as usize);
         self.slots
             .try_reserve(slots - self.slots.len())
             .map_err(|_| Status::NoMemory)
@@ -304,6 +305,25 @@ mod tests {
         }
         assert_eq!(t.len(), MAX_HANDLES as usize - 1);
         assert_eq!(t.get(handles[7]), None);
+    }
+
+    /// `reserve_many`'s promise: that many inserts take no memory, with free
+    /// slots in the table or not.
+    #[test]
+    fn reserving_covers_appended_slots() {
+        let mut t = Table::new();
+        let handles: std::vec::Vec<Handle> =
+            (0..1000u64).map(|i| t.insert(i, ALL, i).unwrap()).collect();
+        for h in &handles[10..] {
+            t.remove(*h).unwrap();
+        }
+        t.slots.shrink_to_fit();
+        t.reserve_many(10).unwrap();
+        assert!(t.slots.capacity() >= t.slots.len() + 10);
+        assert_eq!(
+            t.reserve_many(MAX_HANDLES as usize),
+            Err(Status::LimitReached)
+        );
     }
 
     /// INV-0040-3.

@@ -9,9 +9,9 @@ use zoraya_abi::{
     Packet, Rights, Status, channel_signals,
 };
 use zoraya_user::{
-    assert_err, channel_create, channel_read, channel_write, directory_lookup, handle_close,
-    handle_duplicate, memory_create, memory_map, port_create, port_subscribe, port_wait,
-    process_exit_record, raw_syscall, spawn,
+    assert_err, channel_create, channel_read, channel_write, clock_monotonic, directory_lookup,
+    handle_close, handle_duplicate, memory_create, memory_map, port_create, port_subscribe,
+    port_wait, println, process_exit_record, raw_syscall, spawn,
 };
 
 const MAX: usize = 64 * 1024;
@@ -238,7 +238,24 @@ fn closing_closes_what_is_queued() {
         }],
     )
     .expect("write");
+    // Several handles in one message: each is closed, not only the first.
+    let (second_child, tail_peer) = {
+        let (tail, peer) = channel_create().expect("create");
+        let image = directory_lookup(DIRECTORY, "child").expect("child");
+        let length = {
+            let mut e = Encoder::new(&mut buffer, JOB, image);
+            e.arg(b"hello");
+            e.finish().expect("fits")
+        };
+        let second = spawn(&buffer[..length]).expect("spawn");
+        handle_close(image).expect("close");
+        channel_write(a, b"", &[moved_process(second), moved(tail)]).expect("write");
+        (second, peer)
+    };
     handle_close(b).expect("close the reader");
+    assert_err_read(tail_peer, Status::PeerClosed);
+    handle_close(tail_peer).expect("close");
+    assert_err!(process_exit_record(second_child), Status::BadHandle);
     assert_err!(process_exit_record(child), Status::BadHandle);
     assert_err!(handle_close(memory), Status::BadHandle);
     handle_close(a).expect("close");
@@ -261,9 +278,42 @@ fn a_deep_chain_closes() {
         handle_close(peer).expect("close");
         peer = next;
     }
+    let start = clock_monotonic();
     handle_close(head).expect("close the head");
+    // INV-0050-6: interrupts stay masked for this long.
+    println!(
+        "t_channels: closing a chain of 20000 took {} us",
+        (clock_monotonic() - start) / 1000
+    );
     assert_err!(channel_write(peer, b"", &[]), Status::PeerClosed);
     handle_close(peer).expect("close");
+}
+
+/// ADR-0050: a full table is `LimitReached`, and the message stays.
+fn a_full_table_keeps_the_message() {
+    let (a, b) = channel_create().expect("create");
+    let (c, d) = channel_create().expect("create");
+    channel_write(a, b"held", &[moved(c)]).expect("write");
+    let mut fill = [a; 1024];
+    let mut filled = 0;
+    while let Ok(port) = port_create() {
+        fill[filled] = port;
+        filled += 1;
+    }
+    let mut body = [0; 8];
+    let mut handles = [a; 1];
+    match channel_read(b, &mut body, &mut handles) {
+        Err((status, _)) => assert_eq!(status, Status::LimitReached),
+        Ok(_) => panic!("read succeeded"),
+    }
+    for port in &fill[..filled] {
+        handle_close(*port).expect("close");
+    }
+    let sizes = channel_read(b, &mut body, &mut handles).expect("it stayed");
+    assert_eq!((sizes.bytes, sizes.handles), (4, 1));
+    for h in [a, b, handles[0], d] {
+        handle_close(h).expect("close");
+    }
 }
 
 /// Signals, through a port.
@@ -351,6 +401,7 @@ fn main() -> i32 {
     the_no_cycle_rule();
     closing_closes_what_is_queued();
     a_deep_chain_closes();
+    a_full_table_keeps_the_message();
     signals_reach_a_port();
     rights_are_checked();
     across_a_spawn();

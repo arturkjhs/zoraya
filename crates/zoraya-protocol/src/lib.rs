@@ -6,6 +6,7 @@
 //! out of band, in the channel message's handle list. A decoder checks the
 //! whole message, once, before any effect: whatever it accepts is valid, and
 //! everything else, including nonzero padding and trailing bytes, is refused.
+//! `WIRE.md`, next to this crate's manifest, states the bytes without Rust.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -272,6 +273,53 @@ impl<'a, const N: usize> Field<'a> for Text<'a, N> {
     }
 }
 
+/// A value below `N`: an enumeration, checked (ADR-0052).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Below<const N: u32>(pub u32);
+
+impl<const N: u32> Field<'_> for Below<N> {
+    const VARIABLE: bool = false;
+
+    fn put(&self, w: &mut Writer<'_>) -> Result<(), WireError> {
+        if self.0 >= N {
+            return Err(WireError::BadValue);
+        }
+        self.0.put(w)
+    }
+
+    fn get(r: &mut Reader<'_>) -> Result<Self, WireError> {
+        let raw = u32::get(r)?;
+        if raw >= N {
+            return Err(WireError::BadValue);
+        }
+        Ok(Below(raw))
+    }
+}
+
+/// A relative path (ADR-0055, ADR-0013): no leading `/`. `EMPTY` allows the
+/// empty path, which only a reply about the end of a path can be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Path<'a, const N: usize, const EMPTY: bool>(pub &'a str);
+
+impl<'a, const N: usize, const EMPTY: bool> Field<'a> for Path<'a, N, EMPTY> {
+    const VARIABLE: bool = true;
+
+    fn put(&self, w: &mut Writer<'_>) -> Result<(), WireError> {
+        if self.0.starts_with('/') || (self.0.is_empty() && !EMPTY) {
+            return Err(WireError::BadValue);
+        }
+        Text::<'a, N>(self.0).put(w)
+    }
+
+    fn get(r: &mut Reader<'a>) -> Result<Self, WireError> {
+        let Text::<N>(path) = Text::get(r)?;
+        if path.starts_with('/') || (path.is_empty() && !EMPTY) {
+            return Err(WireError::BadValue);
+        }
+        Ok(Path(path))
+    }
+}
+
 /// One path component, as ADR-0013 allows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Name<'a>(pub &'a str);
@@ -402,6 +450,46 @@ pub const fn fixed_then_variable(fields: &[bool]) {
     }
 }
 
+const fn same(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Field names that would be an untyped operation (INV-0052-3).
+const FORBIDDEN_FIELDS: [&str; 7] = [
+    "op",
+    "opcode",
+    "operation",
+    "command",
+    "cmd",
+    "ioctl",
+    "request",
+];
+
+/// Panics, at compile time, on a field that names an operation. An operation
+/// is a method, with an ordinal of its own (DM-053).
+pub const fn no_operation_field(fields: &[&str]) {
+    let mut i = 0;
+    while i < fields.len() {
+        let mut j = 0;
+        while j < FORBIDDEN_FIELDS.len() {
+            assert!(!same(fields[i], FORBIDDEN_FIELDS[j]), "an operation field");
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
 /// One message of a protocol.
 pub trait Message<'a>: Sized {
     const ORDINAL: u32;
@@ -527,6 +615,7 @@ macro_rules! protocol {
             const VARIABLE: bool = true;
 
             fn put(&self, w: &mut $crate::Writer<'_>) -> Result<(), $crate::WireError> {
+                const { $crate::no_operation_field(&[$(stringify!($field)),*]) };
                 $($crate::Field::put(&self.$field, w)?;)*
                 Ok(())
             }
@@ -548,6 +637,7 @@ macro_rules! protocol {
             const VARIABLE: bool = true;
 
             fn put(&self, w: &mut $crate::Writer<'_>) -> Result<(), $crate::WireError> {
+                const { $crate::no_operation_field(&[$(stringify!($field)),*]) };
                 $($crate::Field::put(&self.$field, w)?;)*
                 Ok(())
             }
@@ -563,6 +653,7 @@ macro_rules! protocol {
         #[allow(unused_variables)]
         fn body(&self, w: &mut $crate::Writer<'_>) -> Result<(), $crate::WireError> {
             const { $crate::fixed_then_variable(&[$(<$type as $crate::Field>::VARIABLE),*]) };
+            const { $crate::no_operation_field(&[$(stringify!($field)),*]) };
             $($crate::Field::put(&self.$field, w)?;)*
             Ok(())
         }

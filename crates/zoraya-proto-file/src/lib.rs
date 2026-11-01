@@ -5,7 +5,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use zoraya_protocol::{Data, Flags, Name, Seq, Text, protocol};
+use zoraya_protocol::{Below, Data, Flags, Name, Path, Seq, Text, protocol};
 
 /// Largest read or write in a message (ADR-0055).
 pub const MAX_INLINE: usize = 60 * 1024;
@@ -13,6 +13,18 @@ pub const MAX_INLINE: usize = 60 * 1024;
 pub const MAX_PATH: usize = 4096;
 /// Names in one `read_directory` reply.
 pub const MAX_ENTRIES: usize = 64;
+
+/// One of `status`.
+pub type Code = Below<16>;
+/// One of `kind`.
+pub type Kind = Below<3>;
+
+/// What an object is.
+pub mod kind {
+    pub const FILE: u32 = 0;
+    pub const DIRECTORY: u32 = 1;
+    pub const LINK: u32 = 2;
+}
 
 /// The status of every reply.
 pub mod status {
@@ -85,12 +97,12 @@ protocol! {
     message Open<'a> = 1, handles 1 {
         flags: Flags<{ open_flags::ALL }>,
         rights: Rights,
-        path: Text<'a, MAX_PATH>,
+        path: Path<'a, MAX_PATH, false>,
     }
     message OpenReply<'a> = 1, handles 0 {
-        status: u32,
+        status: Code,
         /// With `IS_LINK`: the path after the link.
-        remaining: Text<'a, MAX_PATH>,
+        remaining: Path<'a, MAX_PATH, true>,
         /// With `IS_LINK`: where it points.
         target: Text<'a, MAX_PATH>,
     }
@@ -105,7 +117,7 @@ protocol! {
         length: u32,
     }
     message ReadReply<'a> = 3, handles 0 {
-        status: u32,
+        status: Code,
         data: Data<'a, MAX_INLINE>,
     }
 
@@ -117,7 +129,7 @@ protocol! {
 
     /// Done, with a count of bytes, for every request with no data to give.
     message Done = 4, handles 0 {
-        status: u32,
+        status: Code,
         count: u64,
     }
 
@@ -140,12 +152,12 @@ protocol! {
 
     message GetAttributes = 9, handles 0 {}
     message Attributes = 9, handles 0 {
-        status: u32,
+        status: Code,
         size: u64,
         modified: u64,
         changed: u64,
         mode: u32,
-        kind: u32,
+        kind: Kind,
     }
 
     message ReadDirectory = 10, handles 0 {
@@ -155,11 +167,11 @@ protocol! {
     record Entry<'a> {
         /// Where to go on from this name. Opaque to the client.
         next: u64,
-        kind: u32,
+        kind: Kind,
         name: Name<'a>,
     }
     message ReadDirectoryReply<'a> = 10, handles 0 {
-        status: u32,
+        status: Code,
         entries: Seq<'a, Entry<'a>, MAX_ENTRIES>,
     }
 
@@ -195,7 +207,7 @@ protocol! {
     /// A token naming this connection in a `Rename` or `Publish`.
     message GetToken = 18, handles 0 {}
     message TokenReply = 18, handles 1 {
-        status: u32,
+        status: Code,
     }
 }
 
@@ -262,7 +274,7 @@ mod tests {
         );
         check(
             Done {
-                status: status::TOO_MANY_OPEN,
+                status: Below(status::TOO_MANY_OPEN),
                 count: 3,
             },
             0,
@@ -289,12 +301,12 @@ mod tests {
         check(GetAttributes {}, 0);
         check(
             Attributes {
-                status: 0,
+                status: Below(0),
                 size: 1,
                 modified: 2,
                 changed: 3,
                 mode: 0o644,
-                kind: 1,
+                kind: Below(1),
             },
             0,
         );
@@ -303,7 +315,7 @@ mod tests {
         check(Status {}, 0);
         check(CorruptReads {}, 0);
         check(GetToken {}, 0);
-        check(TokenReply { status: 0 }, 1);
+        check(TokenReply { status: Below(0) }, 1);
     }
 
     /// Each borrowed message, by hand: the lifetime stops a generic helper.
@@ -326,15 +338,15 @@ mod tests {
             Open {
                 flags: Flags(open_flags::CREATE),
                 rights: Flags(rights::ALL),
-                path: Text("a/b/c"),
+                path: Path("a/b/c"),
             },
             Open<'_>,
             1
         );
         borrowed!(
             OpenReply {
-                status: status::IS_LINK,
-                remaining: Text("rest"),
+                status: Below(status::IS_LINK),
+                remaining: Path("rest"),
                 target: Text("../x"),
             },
             OpenReply<'_>,
@@ -342,7 +354,7 @@ mod tests {
         );
         borrowed!(
             ReadReply {
-                status: 0,
+                status: Below(0),
                 data: Data(b"contents"),
             },
             ReadReply<'_>,
@@ -383,17 +395,17 @@ mod tests {
         let entries = [
             Entry {
                 next: 2,
-                kind: 1,
+                kind: Below(1),
                 name: Name("one"),
             },
             Entry {
                 next: 0,
-                kind: 2,
+                kind: Below(2),
                 name: Name("two"),
             },
         ];
         let reply = ReadDirectoryReply {
-            status: 0,
+            status: Below(0),
             entries: Seq::Of(&entries),
         };
         let mut out = [0; 512];
