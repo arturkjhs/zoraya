@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-01
-- **Depends on:** ADR-0020, ADR-0021, ADR-0031, ADR-0040, ADR-0041, ADR-0045
+- **Depends on:** ADR-0020, ADR-0021, ADR-0031, ADR-0040, ADR-0041, ADR-0045, ADR-0061
 - **Evidence:** DM-023, CP-14, DM-030, DM-160, GR-007, X-6, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#hubris, stage-4/sources.md#memory-objects
 
 ## Context
@@ -54,7 +54,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **Unmapping** is break-before-make with `tlbi` for the ASID, as ADR-0020 requires of the kernel's tables.
 - **Limit.** 256 mappings per process `[assumption]`, then `LimitReached`.
 - **Tension: INV-0031-2.** It says a process cannot read or write another process's memory. A shared object does that by consent. Its wording needs a superseding ADR if this is accepted.
-- **Tension: INV-0045-1.** Its allow-list, which replaced those of INV-0002-1 and INV-0035-1, has no address kind. If this ADR is accepted, INV-0051-5 replaces it, in the way ADR-0035 and ADR-0045 did, and INV-0045-1's row is marked as replaced.
+- **Tension: INV-0061-1.** That invariant, the latest in the line from INV-0002-1, has no address kind. ADR-0050's `Out` and ADR-0054's range index are not in it either. If this ADR is accepted, INV-0051-5 replaces it, in the way ADR-0035, ADR-0045 and ADR-0061 did, and INV-0061-1's row is marked as replaced.
 - **The rule for readers.** Memory another process can write is hostile input that can change between two reads. Copy out, then validate, and never validate in place. A service reads the bytes once.
 
 ### Effect of the vision
@@ -73,7 +73,7 @@ What `snapshot_process` does to a mapping of a memory object, which must stay sh
 - **INV-0051-2.** No user mapping from a memory object is executable, or writable through a handle without `WRITE`. *Check:* in-QEMU table walk, with INV-0031-1's test extended.
 - **INV-0051-3.** After `memory_unmap`, an access faults, on every process that unmapped. *Check:* in-QEMU test with a `Fault` exit record.
 - **INV-0051-4.** Frames return when the last handle, mapping and pin go, in any order. *Check:* in-QEMU test with each order.
-- **INV-0051-5.** INV-0045-1's rule, with the address parameter of `memory_unmap` added to the allow-list by name. *Check:* the lint of INV-0045-1, extended.
+- **INV-0051-5.** Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys, user packet data, directory cookies, the address of `memory_unmap`, and the range index of `device_map` and `device_interrupt`, each documented as opaque or as naming no object. *Check:* the lint of INV-0061-1, with the address kind allowed only for `memory_unmap`, the index only for those two calls, and `Out` only for `channel_read`, plus a unit test that `RelativePath::new("/x")` fails.
 
 ## Open questions
 - The first use of a kernel-chosen address policy for ASLR.

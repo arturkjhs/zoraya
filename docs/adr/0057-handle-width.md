@@ -25,7 +25,7 @@ ADR-0040 makes `Handle` a `u32` of 16 bits of slot and 16 of generation, and ret
 
 ### Option B: 64 bits, 48 of generation, no retirement
 - **Description:** `Handle` is a `u64`: bits 0 to 15 the slot, bits 16 to 63 the generation. A slot's generation rises on each close and wraps. No slot retires.
-- **Evidence for:** Drivers 2 to 4, and driver 1 in practice rather than absolutely. At one close per microsecond on one slot, about the speed of `port_wait` under HVF (875 ns), a value returns after about 8.9 years, and next-fit (ADR-0040) spreads closes over the table, so about 9,000 years for a full cycle of 1024 slots `[arithmetic]`. The slot field is already 16 bits, so `MAX_HANDLES` can rise later with no ABI change.
+- **Evidence for:** Drivers 2 to 4, and driver 1 within the system's working life, not absolutely (INV-0057-1). At one close per microsecond on one slot, about the speed of `port_wait` under HVF (875 ns), a value returns after about 8.9 years, and next-fit (ADR-0040) spreads closes over the table, so about 9,000 years for a full cycle of 1024 slots `[arithmetic]`. The slot field is already 16 bits, so `MAX_HANDLES` can rise later with no ABI change.
 - **Evidence against:** Handles in structures double in size: `spawn`'s buffer and messages. Rights stay in the table, so nothing else is gained from the extra bits. A value can return in principle, after the times above. A variant keeps retirement at the last 48-bit generation, which keeps INV-0040-1 word for word, at the price of a rule and a state that would never run. The architect asked for no retirement, so wrapping it is.
 - **Cost:** *(estimate)* A day's change across the crates below.
 - **Precedent:** Generation-tagged ids in Hubris (`alternatives-postmortem.md#hubris`).
@@ -80,7 +80,7 @@ Nothing here depends on POSIX. A file descriptor stays a `libposix` number that 
 - **Follow-up.** Done before stage 4 adds any format holding a handle.
 
 ## Invariants
-- **INV-0057-1.** A closed handle's value does not name an object again until its slot's generation has wrapped. *Check:* `zoraya-handle` host tests, including a slot set near the 48-bit limit by direct access and driven past it.
+- **INV-0057-1.** A slot's generation does not repeat within the system's working life, so within that life a closed handle's value does not name an object again. The bound: a repeat needs 2^48 closes of one slot, about 2.8 × 10^14. At 875 ns a close, the `port_wait` median under HVF, used here as an upper bound on the rate because a close is also a system call, that is about 7.8 years of one process doing nothing but closing one slot with a table otherwise full, and about 8,000 years when next-fit spreads closes over 1024 slots. A process's table dies with it, so the count starts again. This is an arithmetic bound, not an absolute rule: a process that runs longer than that, doing only that, would see a repeat. *Check:* `zoraya-handle` host tests, including a slot set near the 48-bit limit by direct access and driven past it, showing that generations rise by one until the wrap.
 - **INV-0057-2.** A slot is reusable at every generation: no table loses a slot by use. *Check:* the same test, asserting that the table's free count is unchanged after the wrap.
 - **INV-0057-3.** Handle values in the `spawn` buffer and the syscall ABI have one width, 64 bits. *Check:* `zoraya-abi` round-trip test with a generation above 32 bits, through `Encoder`, `SpawnRequest::decode` and the `Arg` encoding.
 
