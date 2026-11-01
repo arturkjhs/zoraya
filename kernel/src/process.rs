@@ -15,8 +15,9 @@ use zoraya_abi::spawn::{
     STARTUP_BLOCK, StartupBlock, Strings, USER_STACK_SIZE, USER_STACK_TOP, startup_header,
 };
 use zoraya_abi::{
-    CONSOLE, ConsoleObject, DIRECTORY, DirectoryObject, Disposition, ExitReason, ExitRecord, JOB,
-    JobObject, ObjectType, REQUEST_KINDS, RequestKind, Status, process_signals,
+    CONSOLE, ConsoleObject, DIRECTORY, DeviceObject, DirectoryObject, Disposition, ExitReason,
+    ExitRecord, FIRST_DEVICE_SLOT, JOB, JobObject, ObjectType, REQUEST_KINDS, RequestKind, Status,
+    process_signals,
 };
 #[cfg(not(feature = "qemu-test"))]
 use zoraya_abi::{POWER, PowerObject};
@@ -450,6 +451,42 @@ fn kernel_handles(job: Arc<Job>) -> Result<HandleTable, SpawnError> {
     Ok(handles)
 }
 
+/// Every device, from slot `FIRST_DEVICE_SLOT` on (ADR-0053).
+fn insert_devices(handles: &mut HandleTable) -> Result<(), SpawnError> {
+    for (i, device) in crate::device::all().iter().enumerate() {
+        handles
+            .insert_at(
+                FIRST_DEVICE_SLOT + i as u32,
+                Object::Device(device.clone()),
+                DeviceObject::RIGHTS,
+                object::next_id(),
+            )
+            .map_err(|_| SpawnError::NoMemory)?;
+    }
+    Ok(())
+}
+
+/// Starts the ramdisk's `name` with the device handles, for tests of them.
+#[cfg(feature = "qemu-test")]
+pub fn spawn_with_devices(name: &str) -> Result<Arc<Process>, SpawnError> {
+    let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
+    let none = StartupBlock::decode(&[0; 8]).ok_or(SpawnError::NoMemory)?;
+    let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
+    let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
+    let mut handles = kernel_handles(job.clone())?;
+    insert_devices(&mut handles)?;
+    create(Start {
+        name,
+        file,
+        job,
+        handles,
+        argv: none.argv,
+        envp: none.envp,
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended: false,
+    })
+}
+
 /// Starts a process from ELF bytes, in the root job.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
@@ -486,6 +523,7 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
             object::next_id(),
         )
         .map_err(|_| SpawnError::NoMemory)?;
+    insert_devices(&mut handles)?;
     create(Start {
         name,
         file,

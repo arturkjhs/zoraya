@@ -250,3 +250,13 @@ bench = false
 name = "t_channels"
 test = false
 bench = false
+
+[[bin]]
+name = "init"
+test = false
+bench = false
+
+[[bin]]
+name = "t_devices"
+test = false
+bench = false

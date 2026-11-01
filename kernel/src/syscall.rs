@@ -9,9 +9,10 @@ use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
     Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
     Detail, DirectoryEntry, Disposition, ExitCode, ExitReason, ExitRecord, Handle, Handlers,
-    ImageObject, JobFlags, JobObject, MapFlags, MemoryFlags, MemoryObject as MemoryType, Mode,
-    ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer, PortObject, ProcessObject,
-    RelativePath, RequestKind, Rights, SignalSet, Size, SpawnBuffer, Status, request_value,
+    ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
+    MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
+    PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
+    Size, SpawnBuffer, Status, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_pagetable::{Attributes, MemoryType as PageMemory};
@@ -21,6 +22,7 @@ use zoraya_time::{Deadline, Instant};
 
 use crate::arch::{self, Frame};
 use crate::channel::{self, MAX_MESSAGE, MAX_MESSAGE_HANDLES, Pair};
+use crate::device::Pin;
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
 use crate::memory::user::{Holder, MappingError, USER_HIGH};
@@ -664,6 +666,97 @@ impl Handlers for Calls {
         Ok(0)
     }
 
+    fn device_map(&mut self, device: Handle, index: RangeIndex, out: Bytes) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::MAP)? else {
+            return Err(Status::BadHandle);
+        };
+        if out.0.length < 16 {
+            return Err(Status::InvalidArgument);
+        }
+        let target = UserSlice::of(out.0)?;
+        target.write(&[0; 16])?;
+        let offset = device.offset(index.0).ok_or(Status::InvalidArgument)?;
+        let mapping = device.begin_mapping()?;
+        // Device-nGnRnE, never executable (INV-0054-1).
+        let attributes = Attributes {
+            memory: PageMemory::Device,
+            write: true,
+            execute: false,
+            user: true,
+        };
+        let base = device.base();
+        let mut space = self.process.space.lock();
+        let space = space.as_mut().ok_or(Status::BadState)?;
+        let address = space
+            .map_object(FRAME_SIZE, attributes, Holder::Device(mapping), |_| base)
+            .map_err(|e| match e {
+                MappingError::Limit => Status::LimitReached,
+                _ => Status::NoMemory,
+            })?;
+        let mut record = [0; 16];
+        record[..8].copy_from_slice(&address.to_le_bytes());
+        record[8..].copy_from_slice(&offset.to_le_bytes());
+        target.write(&record)?;
+        Ok(0)
+    }
+
+    fn device_interrupt(&mut self, device: Handle, index: RangeIndex) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::INTERRUPT)? else {
+            return Err(Status::BadHandle);
+        };
+        let interrupt = device.interrupt(index.0)?;
+        self.insert(Object::Interrupt(interrupt), InterruptObject::RIGHTS)
+    }
+
+    fn interrupt_ack(&mut self, interrupt: Handle) -> Result<u64, Status> {
+        let Object::Interrupt(interrupt) = self.object(interrupt, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        interrupt.ack();
+        Ok(0)
+    }
+
+    fn dma_pin(&mut self, memory: Handle, device: Handle, out: Bytes) -> Result<u64, Status> {
+        let Object::Memory(memory) = self.object(memory, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        let Object::Device(device) = self.object(device, Rights::DMA)? else {
+            return Err(Status::BadHandle);
+        };
+        let target = UserSlice::of(out.0)?;
+        let mut at = 0;
+        for (address, length) in memory.runs() {
+            if at + 16 > out.0.length {
+                return Err(Status::InvalidArgument);
+            }
+            let mut record = [0; 16];
+            record[..8].copy_from_slice(&address.to_le_bytes());
+            record[8..].copy_from_slice(&length.to_le_bytes());
+            target.at(at)?.write(&record)?;
+            at += 16;
+        }
+        let pin = Pin::new(device, memory)?;
+        self.insert(Object::Pin(pin), PinObject::RIGHTS)
+    }
+
+    fn dma_unpin(&mut self, pin: Handle) -> Result<u64, Status> {
+        let Object::Pin(held) = self.object(pin, Rights::DMA)? else {
+            return Err(Status::BadHandle);
+        };
+        held.unpin();
+        let entry = self.process.handles.lock().remove(pin);
+        object::close(entry.ok_or(Status::BadHandle)?);
+        Ok(0)
+    }
+
+    fn dma_release_quarantine(&mut self, device: Handle) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::DMA)? else {
+            return Err(Status::BadHandle);
+        };
+        device.release_quarantine()?;
+        Ok(0)
+    }
+
     fn power_off(&mut self, power: Handle) -> Result<u64, Status> {
         let Object::Power = self.object(power, Rights::POWER)? else {
             return Err(Status::BadHandle);
@@ -687,6 +780,13 @@ pub mod test_calls {
     pub const COPY_FROM_BAD_KERNEL: u64 = 0x7003;
     /// Asks that the user address in x0 be read as this process ends.
     pub const WATCH: u64 = 0x7004;
+    /// Makes the line of the first interrupt object pending.
+    pub const TRIGGER_INTERRUPT: u64 = 0x7005;
+    /// Returns the free frames.
+    pub const FREE_FRAMES: u64 = 0x7006;
+    /// Returns how many device mappings the caller has, or `u64::MAX` if one
+    /// breaks INV-0054-1.
+    pub const DEVICE_MAPPINGS: u64 = 0x7007;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -701,6 +801,24 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             Some(Ok(0))
         }
         test_calls::TIMER_IS_ON => Some(Ok(u64::from(arch::timer::is_enabled()))),
+        test_calls::TRIGGER_INTERRUPT => {
+            crate::device::trigger_first_line();
+            Some(Ok(0))
+        }
+        test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
+        test_calls::DEVICE_MAPPINGS => {
+            let thread = sched::current();
+            let process = thread.process()?;
+            let space = process.space.lock();
+            let (mut count, mut good) = (0, true);
+            space.as_ref()?.for_each_mapping(&mut |m| {
+                if m.attributes.memory == PageMemory::Device {
+                    count += 1;
+                    good &= !m.attributes.execute;
+                }
+            });
+            Some(Ok(if good { count } else { u64::MAX }))
+        }
         test_calls::OVERFLOW_STACK => {
             crate::testing::overflow_stack();
             Some(Ok(0))

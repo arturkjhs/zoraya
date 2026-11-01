@@ -450,6 +450,14 @@ static TESTS: &[Test] = &[
         name: "channels_from_a_process",
         run: channels_from_a_process,
     },
+    Test {
+        name: "devices_from_a_process",
+        run: devices_from_a_process,
+    },
+    Test {
+        name: "a_device_with_no_transport_keeps_its_quarantine",
+        run: a_device_with_no_transport_keeps_its_quarantine,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1129,6 +1137,47 @@ fn channels_from_a_process() {
     assert_eq!(run_program("t_channels"), exited(0));
     assert_eq!(frames::stats().free, frames_before);
     assert_eq!(heap::stats().live, heap_before);
+}
+
+/// ADR-0054 and ADR-0070 from a process, with the test disk attached. What it
+/// pinned is gone at the end.
+fn devices_from_a_process() {
+    let run = || {
+        process::spawn_with_devices("t_devices")
+            .expect("program in the ramdisk")
+            .wait()
+    };
+    assert_eq!(run(), exited(0));
+    // Twice, so that the heap's growth is behind the counts.
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run(), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// INV-0070-3: with no virtio transport nothing proves the device stopped, so
+/// the quarantine stays.
+fn a_device_with_no_transport_keeps_its_quarantine() {
+    let (_, info) = platform();
+    let window = memory::paging::map_device(info.uart.base, 4096) as usize;
+    let device = crate::device::without_transport(info.uart.base, window);
+    let frames_before = frames::stats().free;
+    let memory = crate::memory::object::MemoryObject::new(4096, false).expect("memory");
+    let pin = crate::device::Pin::new(device.clone(), memory).expect("pin");
+    assert_eq!(
+        device.release_quarantine(),
+        Err(zoraya_abi::Status::BadState)
+    );
+    drop(pin);
+    assert_eq!(device.quarantined(), 1);
+    assert_eq!(
+        device.release_quarantine(),
+        Err(zoraya_abi::Status::BadState)
+    );
+    assert_eq!(device.quarantined(), 1, "nothing proved a stop");
+    assert!(frames::stats().free < frames_before);
+    drop(device);
 }
 
 fn run_program(name: &str) -> ExitRecord {

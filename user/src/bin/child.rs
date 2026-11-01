@@ -8,9 +8,9 @@ use zoraya_abi::{
     RequestKind, Rights, Status, channel_signals,
 };
 use zoraya_user::{
-    assert_err, channel_read, channel_write, clock_monotonic, handle_duplicate, memory_map,
-    memory_unmap, port_create, port_queue, port_subscribe, port_unsubscribe, port_wait, println,
-    process_exit, process_exit_terminated, process_set_disposition, process_take_request,
+    assert_err, channel_read, channel_write, clock_monotonic, dma_pin, handle_duplicate,
+    memory_map, memory_unmap, port_create, port_queue, port_subscribe, port_unsubscribe, port_wait,
+    println, process_exit, process_exit_terminated, process_set_disposition, process_take_request,
     sleep_until, startup, thread_yield,
 };
 
@@ -60,6 +60,13 @@ fn main() -> i32 {
             let mut buffer = [0; 16];
             let sizes = channel_read(end, &mut buffer, &mut []).expect("read");
             channel_write(end, &buffer[..sizes.bytes as usize], &[]).expect("write");
+            0
+        }
+        b"pin-and-die" => {
+            // Slot 3 a memory object, slot 4 a device. It ends with the pin
+            // live, as a dead driver does.
+            let mut runs = [[0; 2]; 4];
+            dma_pin(at_slot(3), at_slot(4), &mut runs).expect("pin");
             0
         }
         b"memory-writer" => {

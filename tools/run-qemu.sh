@@ -16,6 +16,8 @@
 #                         stdin not read
 #   --keys                with --test: stdin goes to the serial line, for the
 #                         scripted shell tests
+#   --test-disk           attach an empty virtio-blk device that reads as zeros,
+#                         for tests of device objects
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
@@ -39,6 +41,7 @@ mode=interactive
 dumpdtb=
 print_cmd=0
 keys=0
+test_disk=0
 kernel=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
@@ -51,6 +54,7 @@ while [ $# -gt 0 ]; do
         --machine-opt) [ $# -ge 2 ] || die "--machine-opt needs a value"; machine="$machine,$2"; shift 2 ;;
         --test) mode=test; shift ;;
         --keys) keys=1; shift ;;
+        --test-disk) test_disk=1; shift ;;
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
@@ -90,6 +94,10 @@ case $mode in
     test) set -- "$@" -display none -monitor none -serial stdio ;;
     debug) set -- "$@" -display none -serial mon:stdio -s -S ;;
 esac
+
+if [ "$test_disk" = 1 ]; then
+    set -- "$@" -drive driver=null-co,if=none,id=testdisk -device virtio-blk-device,drive=testdisk
+fi
 
 if [ "$print_cmd" = 1 ]; then
     echo "$*" >&2

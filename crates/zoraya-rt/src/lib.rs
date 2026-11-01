@@ -13,8 +13,8 @@ use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
 use zoraya_abi::{
     Address, Buffer, Bytes, CONSOLE, ChannelEntry, ChannelSizes, Cookie, Deadline, Detail,
     Disposition, ExitCode, ExitReason, ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags,
-    Mode, Opaque, Out, Packet, PacketBuffer, PathBuffer, RequestKind, Rights, SignalSet, Size,
-    SpawnBuffer, Status, request_from_value, stubs,
+    Mode, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind, Rights,
+    SignalSet, Size, SpawnBuffer, Status, request_from_value, stubs,
 };
 
 const MAX_MESSAGE_HANDLES: usize = 64;
@@ -323,6 +323,52 @@ pub fn channel_read(
         }
         Err(status) => Err((status, sizes)),
     }
+}
+
+/// Maps a device's window: the address, and range `index`'s offset inside it.
+pub fn device_map(device: Handle, index: u32) -> Result<(u64, u64), Status> {
+    let mut out = [0u8; 16];
+    let buffer = Buffer {
+        address: out.as_mut_ptr() as u64,
+        length: 16,
+    };
+    stubs::device_map::<Svc>(device, RangeIndex(index), Bytes(buffer))?;
+    core::hint::black_box(&mut out);
+    let word = |at: usize| {
+        let mut raw = [0; 8];
+        raw.copy_from_slice(&out[at..at + 8]);
+        u64::from_le_bytes(raw)
+    };
+    Ok((word(0), word(8)))
+}
+
+pub fn device_interrupt(device: Handle, index: u32) -> Result<Handle, Status> {
+    handle(stubs::device_interrupt::<Svc>(device, RangeIndex(index))?)
+}
+
+pub fn interrupt_ack(interrupt: Handle) -> Result<(), Status> {
+    stubs::interrupt_ack::<Svc>(interrupt).map(|_| ())
+}
+
+/// Pins a memory object for a device, and writes its physically contiguous
+/// runs to `runs` as `(device address, length)`.
+pub fn dma_pin(memory: Handle, device: Handle, runs: &mut [[u64; 2]]) -> Result<Handle, Status> {
+    let buffer = Buffer {
+        address: runs.as_mut_ptr() as u64,
+        length: (runs.len() * 16) as u64,
+    };
+    let pin = stubs::dma_pin::<Svc>(memory, device, Bytes(buffer))?;
+    core::hint::black_box(runs);
+    handle(pin)
+}
+
+/// Ends a pin, and its handle: the caller says the device has done with it.
+pub fn dma_unpin(pin: Handle) -> Result<(), Status> {
+    stubs::dma_unpin::<Svc>(pin).map(|_| ())
+}
+
+pub fn dma_release_quarantine(device: Handle) -> Result<(), Status> {
+    stubs::dma_release_quarantine::<Svc>(device).map(|_| ())
 }
 
 pub fn directory_lookup(directory: Handle, name: &str) -> Result<Handle, Status> {

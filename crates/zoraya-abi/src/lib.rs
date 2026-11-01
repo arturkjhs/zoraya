@@ -119,6 +119,8 @@ pub const JOB: Handle = Handle(2);
 pub const DIRECTORY: Handle = Handle(3);
 /// In the first process only (ADR-0062).
 pub const POWER: Handle = Handle(4);
+/// The first process's first device, then one a slot (ADR-0053).
+pub const FIRST_DEVICE_SLOT: u32 = 5;
 
 /// What a handle allows (ADR-0040). Rights only decrease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +217,12 @@ pub mod channel_signals {
     pub const PEER_CLOSED: u32 = 1 << 2;
 }
 
+/// Signal bits of an interrupt object (ADR-0054).
+pub mod interrupt_signals {
+    /// The line fired, and stays masked until `interrupt_ack`.
+    pub const INTERRUPT: u32 = 1 << 0;
+}
+
 const COMMON: Rights = Rights::DUPLICATE.union(Rights::TRANSFER);
 
 macro_rules! object_types {
@@ -268,6 +276,16 @@ object_types! {
             .union(Rights::WRITE)
             .union(Rights::WAIT)
             .union(Rights::TRANSFER);
+    DeviceObject "device"
+        Waiting::NotWaitable,
+        COMMON
+            .union(Rights::MAP)
+            .union(Rights::INTERRUPT)
+            .union(Rights::DMA);
+    InterruptObject "interrupt"
+        Waiting::Signals(interrupt_signals::INTERRUPT),
+        Rights::WAIT.union(Rights::WRITE).union(Rights::TRANSFER);
+    PinObject "pin" Waiting::NotWaitable, Rights::DMA.union(Rights::TRANSFER);
     MemoryObject "memory"
         Waiting::NotWaitable,
         COMMON.union(Rights::READ).union(Rights::WRITE);
@@ -496,6 +514,8 @@ pub enum Param {
     Size,
     /// A pointer to a record of fixed size, in one register (ADR-0050).
     Out,
+    /// Which range of a device: it names no object (ADR-0054).
+    RangeIndex,
     /// A place in the caller's own space: it names no object (ADR-0051).
     Address,
     /// Code to run. Only thread creation may take one (INV-0004-1).
@@ -648,6 +668,22 @@ impl Arg for Out {
 
     fn encode(&self, r: &mut [u64]) {
         r[0] = self.0;
+    }
+}
+
+/// A range of a device (ADR-0054).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeIndex(pub u32);
+
+impl Arg for RangeIndex {
+    const PARAM: Param = Param::RangeIndex;
+
+    fn decode(r: &[u64]) -> Result<RangeIndex, Status> {
+        Ok(RangeIndex(word(r[0])?))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
     }
 }
 
@@ -954,6 +990,12 @@ syscalls! {
     30 ChannelCreate channel_create(ends: Bytes) false;
     31 ChannelWrite channel_write(end: Handle, bytes: Bytes, handles: Bytes) false;
     32 ChannelRead channel_read(end: Handle, bytes: Bytes, handles: Bytes, sizes: Out) false;
+    33 DeviceMap device_map(device: Handle, index: RangeIndex, out: Bytes) false;
+    34 DeviceInterrupt device_interrupt(device: Handle, index: RangeIndex) false;
+    35 InterruptAck interrupt_ack(interrupt: Handle) false;
+    36 DmaPin dma_pin(memory: Handle, device: Handle, out: Bytes) false;
+    37 DmaUnpin dma_unpin(pin: Handle) false;
+    38 DmaReleaseQuarantine dma_release_quarantine(device: Handle) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then

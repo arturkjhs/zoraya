@@ -11,6 +11,7 @@ use super::heap::OutOfMemory;
 use super::object::MemoryObject;
 use super::phys_to_virt;
 use crate::arch::mmu;
+use crate::device::DeviceMapping;
 use crate::sync::SpinLock;
 
 /// Lowest address a user mapping may have.
@@ -92,7 +93,11 @@ impl TableMemory for UserMemory {
 
 /// What a mapping keeps alive.
 pub enum Holder {
+    // Read by nothing: holding them is the point.
+    #[allow(dead_code)]
     Memory(Arc<MemoryObject>),
+    #[allow(dead_code)]
+    Device(DeviceMapping),
 }
 
 struct Mapping {

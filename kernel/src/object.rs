@@ -7,6 +7,7 @@ use zoraya_abi::{ObjectType, Waiting};
 use zoraya_events::SourceId;
 
 use crate::channel::{self, Pair};
+use crate::device::{Device, Interrupt, Pin};
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
 use crate::port::{self, Port};
@@ -34,6 +35,9 @@ pub enum Object {
     Job(Arc<Job>),
     Port(Arc<Port>),
     Memory(Arc<MemoryObject>),
+    Device(Arc<Device>),
+    Interrupt(Arc<Interrupt>),
+    Pin(Arc<Pin>),
     /// One end of a channel: `end` is 0 or 1.
     Channel(Arc<Pair>, usize),
 }
@@ -44,6 +48,7 @@ impl Object {
     pub fn signals(&self) -> Option<(SourceId, u32)> {
         let (source, waiting) = match self {
             Object::Channel(pair, end) => (pair.source(*end), zoraya_abi::ChannelObject::WAITING),
+            Object::Interrupt(i) => (i.source(), zoraya_abi::InterruptObject::WAITING),
             Object::Process(p) => (p.source(), zoraya_abi::ProcessObject::WAITING),
             Object::Job(j) => (j.source(), zoraya_abi::JobObject::WAITING),
             Object::Console => (
@@ -54,7 +59,9 @@ impl Object {
             | Object::Directory
             | Object::Image(_)
             | Object::Port(_)
-            | Object::Memory(_) => {
+            | Object::Memory(_)
+            | Object::Device(_)
+            | Object::Pin(_) => {
                 return None;
             }
         };

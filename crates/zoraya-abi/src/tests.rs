@@ -34,6 +34,11 @@ fn parameters_come_from_the_allow_list() {
                 ),
                 Param::Address => assert_eq!(s.name, "memory_unmap"),
                 Param::Out => assert_eq!(s.name, "channel_read"),
+                Param::RangeIndex => assert!(
+                    matches!(s.name, "device_map" | "device_interrupt"),
+                    "{}",
+                    s.name
+                ),
                 Param::EntryPoint => assert_eq!(s.name, "thread_create"),
             }
         }
@@ -136,7 +141,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 9);
+    assert_eq!(OBJECT_TYPES.len(), 12);
     for (name, waiting, rights) in OBJECT_TYPES {
         if let Waiting::Signals(bits) = waiting {
             assert_ne!(*bits, 0, "{name}");
@@ -248,6 +253,12 @@ echo! {
     channel_create(ends: Bytes);
     channel_write(end: Handle, bytes: Bytes, handles: Bytes);
     channel_read(end: Handle, bytes: Bytes, handles: Bytes, sizes: Out);
+    device_map(device: Handle, index: RangeIndex, out: Bytes);
+    device_interrupt(device: Handle, index: RangeIndex);
+    interrupt_ack(interrupt: Handle);
+    dma_pin(memory: Handle, device: Handle, out: Bytes);
+    dma_unpin(pin: Handle);
+    dma_release_quarantine(device: Handle);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
