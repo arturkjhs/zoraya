@@ -14,6 +14,8 @@
 #                         (e.g. gic-version=3, virtualization=on)
 #   --test                non-interactive: serial on stdout, no monitor,
 #                         stdin not read
+#   --keys                with --test: stdin goes to the serial line, for the
+#                         scripted shell tests
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
@@ -36,6 +38,7 @@ machine=virt
 mode=interactive
 dumpdtb=
 print_cmd=0
+keys=0
 kernel=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
@@ -47,6 +50,7 @@ while [ $# -gt 0 ]; do
         --mem) [ $# -ge 2 ] || die "--mem needs a value"; mem=$2; shift 2 ;;
         --machine-opt) [ $# -ge 2 ] || die "--machine-opt needs a value"; machine="$machine,$2"; shift 2 ;;
         --test) mode=test; shift ;;
+        --keys) keys=1; shift ;;
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
@@ -91,7 +95,7 @@ if [ "$print_cmd" = 1 ]; then
     echo "$*" >&2
 fi
 
-if [ "$mode" = test ]; then
+if [ "$mode" = test ] && [ "$keys" = 0 ]; then
     exec "$@" </dev/null
 fi
 exec "$@"

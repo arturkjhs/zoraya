@@ -109,6 +109,8 @@ impl Handle {
 pub const CONSOLE: Handle = Handle(1);
 pub const JOB: Handle = Handle(2);
 pub const DIRECTORY: Handle = Handle(3);
+/// In the first process only (ADR-0062).
+pub const POWER: Handle = Handle(4);
 
 /// What a handle allows (ADR-0040). Rights only decrease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,7 +128,8 @@ impl Rights {
     pub const READ: Rights = Rights(1 << 7);
     pub const WRITE: Rights = Rights(1 << 8);
     pub const LOOKUP: Rights = Rights(1 << 9);
-    const KNOWN: u32 = (1 << 10) - 1;
+    pub const POWER: Rights = Rights(1 << 10);
+    const KNOWN: u32 = (1 << 11) - 1;
 
     /// Unknown bits are refused (CP-11).
     pub const fn from_raw(raw: u32) -> Option<Rights> {
@@ -186,6 +189,12 @@ pub mod job_signals {
     pub const SUSPENDED: u32 = 1 << 2;
 }
 
+/// Signal bits of the console (ADR-0060).
+pub mod console_signals {
+    /// Asserted exactly while input waits.
+    pub const READABLE: u32 = 1 << 0;
+}
+
 const COMMON: Rights = Rights::DUPLICATE.union(Rights::TRANSFER);
 
 macro_rules! object_types {
@@ -224,7 +233,13 @@ object_types! {
     PortObject "port"
         Waiting::NotWaitable,
         Rights::TRANSFER.union(Rights::WAIT).union(Rights::WRITE);
-    ConsoleObject "console" Waiting::NotWaitable, COMMON.union(Rights::WRITE);
+    ConsoleObject "console"
+        Waiting::Signals(console_signals::READABLE),
+        COMMON
+            .union(Rights::READ)
+            .union(Rights::WRITE)
+            .union(Rights::WAIT);
+    PowerObject "power" Waiting::NotWaitable, COMMON.union(Rights::POWER);
     DirectoryObject "directory" Waiting::NotWaitable, COMMON.union(Rights::LOOKUP);
     ImageObject "image" Waiting::NotWaitable, COMMON.union(Rights::READ);
 }
@@ -444,6 +459,8 @@ pub enum Param {
     Detail,
     /// A port key or user packet data: opaque to the kernel (ADR-0045).
     Opaque,
+    /// A place in a listing: opaque to the caller (ADR-0061).
+    Cookie,
     /// Code to run. Only thread creation may take one (INV-0004-1).
     EntryPoint,
 }
@@ -545,6 +562,22 @@ impl Arg for Opaque {
 
     fn decode(r: &[u64]) -> Result<Opaque, Status> {
         Ok(Opaque(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// A place in a listing: 0 is the start (ADR-0061).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cookie(pub u64);
+
+impl Arg for Cookie {
+    const PARAM: Param = Param::Cookie;
+
+    fn decode(r: &[u64]) -> Result<Cookie, Status> {
+        Ok(Cookie(r[0]))
     }
 
     fn encode(&self, r: &mut [u64]) {
@@ -772,6 +805,44 @@ syscalls! {
     20 PortQueue port_queue(port: Handle, key: Opaque, data: Opaque) false;
     21 PortWait port_wait(port: Handle, deadline: Deadline, packets: PacketBuffer) true;
     22 DirectoryLookup directory_lookup(directory: Handle, name: PathBuffer) false;
+    23 ConsoleRead console_read(console: Handle, bytes: Bytes) false;
+    24 ConsoleDropped console_dropped(console: Handle) false;
+    25 DirectoryEntry directory_entry(directory: Handle, cookie: Cookie, entry: Bytes) false;
+    26 PowerOff power_off(power: Handle) false;
+}
+
+/// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
+/// the name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DirectoryEntry<'a> {
+    pub next: u64,
+    pub name: &'a [u8],
+}
+
+impl<'a> DirectoryEntry<'a> {
+    pub const HEADER_SIZE: usize = 16;
+
+    /// Writes the record, and gives its size, or `None` if it does not fit.
+    pub fn encode(&self, out: &mut [u8]) -> Option<usize> {
+        let size = DirectoryEntry::HEADER_SIZE.checked_add(self.name.len())?;
+        let out = out.get_mut(..size)?;
+        out[..8].copy_from_slice(&self.next.to_le_bytes());
+        out[8..12].copy_from_slice(&(self.name.len() as u32).to_le_bytes());
+        out[12..16].fill(0);
+        out[16..].copy_from_slice(self.name);
+        Some(size)
+    }
+
+    /// Total: any bytes give a record or `None`.
+    pub fn decode(bytes: &'a [u8]) -> Option<DirectoryEntry<'a>> {
+        let next = u64::from_le_bytes(bytes.get(..8)?.try_into().ok()?);
+        let length = u32::from_le_bytes(bytes.get(8..12)?.try_into().ok()?) as usize;
+        if bytes.get(12..16)? != [0; 4] {
+            return None;
+        }
+        let name = bytes.get(16..)?.get(..length)?;
+        Some(DirectoryEntry { next, name })
+    }
 }
 
 /// `process_take_request`'s value, a kind and a detail in one register.

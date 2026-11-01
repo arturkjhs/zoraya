@@ -11,9 +11,9 @@ use core::fmt;
 
 use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
 use zoraya_abi::{
-    Buffer, Bytes, CONSOLE, Deadline, Detail, Disposition, ExitCode, ExitReason, ExitRecord,
-    Handle, Invoke, JobFlags, Mode, Opaque, Packet, PacketBuffer, PathBuffer, RequestKind, Rights,
-    SignalSet, SpawnBuffer, Status, request_from_value, stubs,
+    Buffer, Bytes, CONSOLE, Cookie, Deadline, Detail, Disposition, ExitCode, ExitReason,
+    ExitRecord, Handle, Invoke, JobFlags, Mode, Opaque, Packet, PacketBuffer, PathBuffer,
+    RequestKind, Rights, SignalSet, SpawnBuffer, Status, request_from_value, stubs,
 };
 
 global_asm!(
@@ -216,6 +216,33 @@ pub fn port_wait(port: Handle, deadline: u64, packets: &mut [Packet]) -> Result<
     Ok(count as usize)
 }
 
+/// Moves waiting input to the front of `buffer`, and gives how many bytes. It
+/// never blocks: 0 means none.
+pub fn console_read(console: Handle, buffer: &mut [u8]) -> Result<usize, Status> {
+    let count = stubs::console_read::<Svc>(console, Bytes(bytes(buffer)))?;
+    core::hint::black_box(buffer);
+    Ok(count as usize)
+}
+
+pub fn console_dropped(console: Handle) -> Result<u64, Status> {
+    stubs::console_dropped::<Svc>(console)
+}
+
+/// Writes the record at `cookie`, and gives its size: 0 past the last name.
+pub fn directory_entry(directory: Handle, cookie: u64, entry: &mut [u8]) -> Result<usize, Status> {
+    let size = stubs::directory_entry::<Svc>(directory, Cookie(cookie), Bytes(bytes(entry)))?;
+    core::hint::black_box(entry);
+    Ok(size as usize)
+}
+
+/// Turns the machine off. It returns only on a refusal.
+pub fn power_off(power: Handle) -> Status {
+    match stubs::power_off::<Svc>(power) {
+        Ok(_) => Status::Ok,
+        Err(status) => status,
+    }
+}
+
 pub fn directory_lookup(directory: Handle, name: &str) -> Result<Handle, Status> {
     let name = PathBuffer(bytes(name.as_bytes()));
     handle(stubs::directory_lookup::<Svc>(directory, name)?)
@@ -256,6 +283,15 @@ impl fmt::Write for Console {
             .map(|_| ())
             .map_err(|_| fmt::Error)
     }
+}
+
+/// Prints to the console, with no newline.
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let _ = write!($crate::Console, $($arg)*);
+    }};
 }
 
 #[macro_export]

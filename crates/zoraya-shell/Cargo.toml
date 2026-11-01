@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-shell"
+description = "The line editor, parser and reports of the console shell."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-abi = { path = "../zoraya-abi" }
+
+[lints]
+workspace = true

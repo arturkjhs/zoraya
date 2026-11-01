@@ -23,6 +23,9 @@ pub struct Image {
 #[derive(Clone)]
 pub enum Object {
     Console,
+    // Only the normal kernel starts a first process, which holds this.
+    #[cfg_attr(feature = "qemu-test", allow(dead_code))]
+    Power,
     Directory,
     Image(Image),
     Process(Arc<Process>),
@@ -37,7 +40,11 @@ impl Object {
         let (source, waiting) = match self {
             Object::Process(p) => (p.source(), zoraya_abi::ProcessObject::WAITING),
             Object::Job(j) => (j.source(), zoraya_abi::JobObject::WAITING),
-            Object::Console | Object::Directory | Object::Image(_) | Object::Port(_) => {
+            Object::Console => (
+                crate::console::source()?,
+                zoraya_abi::ConsoleObject::WAITING,
+            ),
+            Object::Power | Object::Directory | Object::Image(_) | Object::Port(_) => {
                 return None;
             }
         };

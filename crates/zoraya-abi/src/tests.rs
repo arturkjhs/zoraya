@@ -26,6 +26,7 @@ fn parameters_come_from_the_allow_list() {
                     "{}",
                     s.name
                 ),
+                Param::Cookie => assert_eq!(s.name, "directory_entry"),
                 Param::EntryPoint => assert_eq!(s.name, "thread_create"),
             }
         }
@@ -128,7 +129,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 6);
+    assert_eq!(OBJECT_TYPES.len(), 7);
     for (name, waiting, rights) in OBJECT_TYPES {
         if let Waiting::Signals(bits) = waiting {
             assert_ne!(*bits, 0, "{name}");
@@ -230,6 +231,10 @@ echo! {
     port_queue(port: Handle, key: Opaque, data: Opaque);
     port_wait(port: Handle, deadline: Deadline, packets: PacketBuffer);
     directory_lookup(directory: Handle, name: PathBuffer);
+    console_read(console: Handle, bytes: Bytes);
+    console_dropped(console: Handle);
+    directory_entry(directory: Handle, cookie: Cookie, entry: Bytes);
+    power_off(power: Handle);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
@@ -265,7 +270,7 @@ fn a_value_too_wide_is_refused_not_truncated() {
     assert_eq!(Mode::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(ExitReason::decode(&[wide]), Err(Status::InvalidArgument));
     // And out-of-range values within 32 bits.
-    assert_eq!(Rights::decode(&[1 << 10]), Err(Status::InvalidArgument));
+    assert_eq!(Rights::decode(&[1 << 11]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[36]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[35]), Ok(RequestKind::Custom(31)));
     assert_eq!(Disposition::decode(&[3]), Err(Status::InvalidArgument));
@@ -489,3 +494,45 @@ fn an_encoder_that_runs_out_of_room_says_so() {
 
 const _: () = assert!(STARTUP_BLOCK.is_multiple_of(4096));
 const _: () = assert!(STARTUP_BLOCK + STARTUP_BLOCK_MAX < USER_STACK_TOP - USER_STACK_SIZE);
+
+/// INV-0061-4.
+#[test]
+fn a_directory_entry_round_trips_and_its_decoder_is_total() {
+    let entry = DirectoryEntry {
+        next: 7,
+        name: b"hello",
+    };
+    let mut buffer = [0; 32];
+    let size = entry.encode(&mut buffer).unwrap();
+    assert_eq!(size, 21);
+    assert_eq!(DirectoryEntry::decode(&buffer[..size]), Some(entry));
+    assert_eq!(entry.encode(&mut buffer[..20]), None);
+    for cut in 0..size {
+        assert_eq!(DirectoryEntry::decode(&buffer[..cut]), None, "{cut}");
+    }
+    for at in 0..size {
+        for bit in 0..8 {
+            let mut bytes = buffer;
+            bytes[at] ^= 1 << bit;
+            let _ = DirectoryEntry::decode(&bytes[..size]);
+        }
+    }
+    buffer[12] = 1;
+    assert_eq!(DirectoryEntry::decode(&buffer[..size]), None, "reserved");
+}
+
+/// INV-0062-1: only `PowerObject` carries `POWER`, and it carries nothing that
+/// could do anything else.
+#[test]
+fn power_is_one_right_on_one_type() {
+    assert_eq!(
+        PowerObject::RIGHTS,
+        Rights::POWER
+            .union(Rights::DUPLICATE)
+            .union(Rights::TRANSFER)
+    );
+    let holders = OBJECT_TYPES
+        .iter()
+        .filter(|(_, _, rights)| rights.contains(Rights::POWER));
+    assert_eq!(holders.count(), 1);
+}

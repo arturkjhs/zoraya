@@ -131,6 +131,19 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0046-2 | [ADR-0046](0046-job-and-request-details.md) | After `job_kill` returns, no process can be created in that tree. | in-QEMU test. | checked: `make test-qemu` |
 | INV-0046-3 | [ADR-0046](0046-job-and-request-details.md) | A job tree deeper than 32 is refused. | in-QEMU test. | checked: `make test-qemu` |
 | INV-0046-4 | [ADR-0046](0046-job-and-request-details.md) | `request_kind` names the request that ended a process and is none otherwise, and `detail` reaches the record with all 32 bits. | `zoraya-abi` round-trip test over every kind, and in-QEMU tests with `detail` above 2^24 through `process_signal` and `job_signal`. | checked: `make test` |
+| INV-0060-1 | [ADR-0060](0060-console-input.md) | The ring never allocates, keeps byte order, and counts every dropped byte. | host tests in its crate, which does not link `alloc`. | checked: `make test-unit` |
+| INV-0060-2 | [ADR-0060](0060-console-input.md) | `READABLE` is asserted exactly while the ring is non-empty. | in-QEMU test feeding the ring. | checked: `make test-qemu` |
+| INV-0060-3 | [ADR-0060](0060-console-input.md) | `console_read` never blocks and needs `READ`. | in-QEMU test on an empty ring and with a handle lacking `READ`. | checked: `make test-qemu` |
+| INV-0060-4 | [ADR-0060](0060-console-input.md) | A burst larger than the ring loses bytes, counts them, and crashes nothing. | scripted serial test. | checked: `make test-boot` |
+| INV-0061-1 | [ADR-0061](0061-directory-entries.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys, user packet data and directory cookies, each documented as opaque to the kernel or to its caller. | the lint of INV-0045-1, with `Cookie` allowed only for `directory_entry`, plus a unit test that `RelativePath::new("/x")` fails. | checked: `make test-unit` |
+| INV-0061-2 | [ADR-0061](0061-directory-entries.md) | Starting at cookie 0 and following next cookies gives each name once, then 0. | in-QEMU test against the ramdisk, and a `zoraya-abi` round-trip test. | checked: `make test` |
+| INV-0061-3 | [ADR-0061](0061-directory-entries.md) | `directory_entry` without `LOOKUP` is `AccessDenied`. | in-QEMU test. | checked: `make test-qemu` |
+| INV-0061-4 | [ADR-0061](0061-directory-entries.md) | `DirectoryEntry::decode` is total. | host test with truncations and mutations. | checked: `make test-unit` |
+| INV-0062-1 | [ADR-0062](0062-power-off.md) | Only the first process starts with a `Power` handle, and no call makes one. | in-QEMU test that a kernel-started process has no valid handle at slot 4, and a unit test over `OBJECT_TYPES` that `PowerObject` alone carries `POWER`. That no call makes one is held by review. | checked: `make test` |
+| INV-0062-2 | [ADR-0062](0062-power-off.md) | `power_off` without `POWER` is refused, and the machine goes on. | in-QEMU test with a wrong handle. | checked: `make test-qemu` |
+| INV-0062-3 | [ADR-0062](0062-power-off.md) | `poweroff` in the shell ends the machine with QEMU status 0. | scripted serial test. | checked: `make test-boot` |
+| INV-0063-1 | [ADR-0063](0063-first-process-until-init.md) | The normal kernel starts exactly one process. | the scripted boot test shows `zosh` first and the kernel starts no other. | checked: `make test-boot` |
+| INV-0063-2 | [ADR-0063](0063-first-process-until-init.md) | The kernel powers off when the first process ends. | scripted serial test ending the shell. | not yet applicable (stage 4) |
 
 ## Counts
 
@@ -168,4 +181,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) The dispatcher and the ABI table | 2 |
 | [ADR-0045](0045-port-keys-as-opaque-payloads.md) Port keys and user packet data as opaque payloads | 1 |
 | [ADR-0046](0046-job-and-request-details.md) Job and request details the accepted ADRs leave open | 4 |
-| **Total** | **124** |
+| [ADR-0060](0060-console-input.md) Console input as raw bytes (proposed) | 4 |
+| [ADR-0061](0061-directory-entries.md) Listing a directory handle (proposed) | 4 |
+| [ADR-0062](0062-power-off.md) Power off through a handle (proposed) | 3 |
+| [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` (proposed) | 2 |
+| **Total** | **137** |

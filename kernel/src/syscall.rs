@@ -7,11 +7,12 @@ use alloc::vec::Vec;
 
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
-    Buffer, Bytes, DEADLINE_INFINITE, Detail, Disposition, ExitCode, ExitReason, ExitRecord,
-    Handle, Handlers, ImageObject, JobFlags, JobObject, Mode, ObjectType, Opaque, Packet,
-    PacketBuffer, PathBuffer, PortObject, ProcessObject, RelativePath, RequestKind, Rights,
-    SignalSet, SpawnBuffer, Status, request_value,
+    Buffer, Bytes, Cookie, DEADLINE_INFINITE, Detail, DirectoryEntry, Disposition, ExitCode,
+    ExitReason, ExitRecord, Handle, Handlers, ImageObject, JobFlags, JobObject, Mode, ObjectType,
+    Opaque, Packet, PacketBuffer, PathBuffer, PortObject, ProcessObject, RelativePath, RequestKind,
+    Rights, SignalSet, SpawnBuffer, Status, request_value,
 };
+use zoraya_console::INPUT_SIZE;
 use zoraya_ramdisk::NAME_SIZE;
 use zoraya_time::{Deadline, Instant};
 
@@ -21,7 +22,7 @@ use crate::memory::user::USER_HIGH;
 use crate::object::{self, HandleTable, Image, Object};
 use crate::port::Port;
 use crate::process::{self, Process, Start};
-use crate::{print, ramdisk, sched, timer};
+use crate::{console, print, ramdisk, sched, timer};
 
 /// Longest `console_write`.
 ///
@@ -403,6 +404,67 @@ impl Handlers for Calls {
         let path = RelativePath::new(text).ok_or(Status::InvalidArgument)?;
         let (name, file) = ramdisk::find(path.as_str()).ok_or(Status::NotFound)?;
         self.insert(Object::Image(Image { name, file }), ImageObject::RIGHTS)
+    }
+
+    fn console_read(&mut self, console: Handle, bytes: Bytes) -> Result<u64, Status> {
+        let Object::Console = self.object(console, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        // User memory is reached before any byte leaves the ring, so that a
+        // bad address loses no input.
+        let target = UserSlice::of(bytes.0)?;
+        let mut buffer = [0; INPUT_SIZE];
+        let room = &mut buffer[..bytes.0.length.min(INPUT_SIZE as u64) as usize];
+        target.write(room)?;
+        let taken = console::read(room);
+        target.write(&buffer[..taken])?;
+        Ok(taken as u64)
+    }
+
+    fn console_dropped(&mut self, console: Handle) -> Result<u64, Status> {
+        let Object::Console = self.object(console, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        Ok(console::dropped())
+    }
+
+    fn directory_entry(
+        &mut self,
+        directory: Handle,
+        cookie: Cookie,
+        entry: Bytes,
+    ) -> Result<u64, Status> {
+        let Object::Directory = self.object(directory, Rights::LOOKUP)? else {
+            return Err(Status::BadHandle);
+        };
+        let target = UserSlice::of(entry.0)?;
+        let disk = ramdisk::get();
+        let Some((name, _)) = disk.files().nth(cookie.0 as usize) else {
+            return Ok(0);
+        };
+        let next = cookie.0 + 1;
+        let record = DirectoryEntry {
+            next: if (next as usize) < disk.len() {
+                next
+            } else {
+                0
+            },
+            name: name.as_bytes(),
+        };
+        let mut buffer = [0; DirectoryEntry::HEADER_SIZE + NAME_SIZE];
+        let size = record.encode(&mut buffer).ok_or(Status::InvalidArgument)?;
+        if entry.0.length < size as u64 {
+            return Err(Status::InvalidArgument);
+        }
+        target.write(&buffer[..size])?;
+        Ok(size as u64)
+    }
+
+    fn power_off(&mut self, power: Handle) -> Result<u64, Status> {
+        let Object::Power = self.object(power, Rights::POWER)? else {
+            return Err(Status::BadHandle);
+        };
+        crate::shutdown()
     }
 }
 

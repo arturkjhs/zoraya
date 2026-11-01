@@ -1,0 +1,183 @@
+# The shell, from boot to power-off, through the serial line. TASK-11 step 3.
+! panicked
+# Only the shell's own power_off ends this run (INV-0062-3).
+! first process ended
+! no such program: hello
+< heap check: Box and Vec work
+< timer check: 10 interrupts in
+< zosh: type help
+# The kernel started nothing before the shell (INV-0063-1).
+x hello from EL0
+< zosh$ 
+# A command and its output (and the receive interrupt).
+> echo a  b\r
+< a b
+< zosh$ 
+# Listing the ramdisk (INV-0061-2).
+> ls\r
+< hello
+< zosh$ 
+# A bare name with arguments, and `run`.
+> echo-args one two\r
+< arg 0: one
+< arg 1: two
+< zosh$ 
+> run hello\r
+< hello from EL0
+< [exited 7]
+< zosh$ 
+# Stage 3's criterion: a process spawns a child and waits through a port.
+> parent\r
+< parent: spawning child
+< child: hello from the child
+< parent: child ended
+< zosh$ 
+# A clean exit prints nothing; `exit-code` shows the last record.
+> exit 0\r
+< exit 0
+< zosh$ 
+x [exited
+> exit-code\r
+< [exited 0]
+< zosh$ 
+> exit 3\r
+< [exited 3]
+< zosh$ 
+> nosuch\r
+< no such program: nosuch
+< zosh$ 
+# A fault cannot take the shell down.
+> fault\r
+< [fault: data abort, class 0x24]
+< zosh$ 
+# Ctrl-C at the prompt clears the line.
+> half\x03
+< ^C
+< zosh$ 
+> echo cleared\r
+< \r\ncleared
+< zosh$ 
+# Ctrl-U and backspace.
+> wrong\x15echo fixez\x7fd\r
+< fixed
+< zosh$ 
+# Ctrl-C on a foreground job.
+> spin\r
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+# Ctrl-\ sends Quit.
+> sleep 60\r
+> \x1c
+< [terminated: Quit]
+< zosh$ 
+# One Ctrl-C ends every child of `fanout`, and the job is gone.
+> fanout 8\r
+< fanout: 8 children spinning
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+> jobs\r
+< no jobs
+< zosh$ 
+# None is left: ticking children go silent once the shell reports the end.
+> fanout 4 tick\r
+< tick
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+~ 500 tick
+# The shell waits for the job, not its first process: no prompt while a child lives.
+> fanout 1 tick leave\r
+< tick
+~ 400 zosh$ 
+> \x03
+< zosh$ 
+~ 300 tick
+# A child holds only what the shell lists, and its console cannot read.
+> handles\r
+< slots: 1\r\n
+< console read: Err(AccessDenied)
+< zosh$ 
+# The third Ctrl-C kills a job that ignores Interrupt.
+> stubborn\r
+< stubborn: ignoring Interrupt
+> \x03
+< ^C
+> \x03
+< ^C
+> \x03
+< [killed]
+< zosh$ 
+> kill\r
+< usage: kill
+< zosh$ 
+> jobs &\r
+< & is for programs
+< zosh$ 
+# A program that floods the console still takes Ctrl-C.
+> flood\r
+< flood
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+# A background job with jobs, wait and kill.
+> sleep 60 &\r
+< [15] sleep
+< zosh$ 
+> jobs\r
+< [15] running sleep
+< zosh$ 
+> kill -hup %15\r
+< [15] done sleep [terminated: Hangup]
+< zosh$ 
+> jobs\r
+< no jobs
+< zosh$ 
+> sleep 1 &\r
+< [16] sleep
+< zosh$ 
+> wait %16\r
+< [16] done sleep [exited 0]
+# No prompt before the job ended.
+x zosh$ 
+< zosh$ 
+> sleep 1 &\r
+< [17] sleep
+< zosh$ 
+> wait\r
+< [17] done sleep [exited 0]
+x zosh$ 
+< zosh$ 
+> wait\r
+< zosh$ 
+# History: Up recalls the last line, Down leaves it.
+> echo remembered\r
+< \r\nremembered
+< zosh$ 
+> \e[A\r
+< \r\nremembered
+< zosh$ 
+> \e[A\e[B\e[A\r
+< \r\nremembered
+< zosh$ 
+> uptime\r
+< up 
+< zosh$ 
+# A burst larger than the ring, during a job, drops bytes and counts them.
+> spin\r
+= 8192
+< bytes dropped]
+# The key itself can be lost in a burst, so it is sent until it lands.
+@ \x03 | [terminated: Interrupt]
+< zosh$ 
+> uptime\r
+< up 
+< zosh$ 
+# The count is reported once.
+> echo alive\r
+< \r\nalive
+x bytes dropped
+< zosh$ 
+# `poweroff` needs the handle only this process has (INV-0062-3).
+> poweroff\r
