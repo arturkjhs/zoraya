@@ -442,6 +442,10 @@ static TESTS: &[Test] = &[
         name: "console_and_listing_from_a_process",
         run: console_and_listing_from_a_process,
     },
+    Test {
+        name: "memory_objects_from_a_process",
+        run: memory_objects_from_a_process,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1098,6 +1102,16 @@ fn console_and_listing_from_a_process() {
         run_program("t_console"),
         exited(ramdisk::get().len() as i32)
     );
+}
+
+/// ADR-0051 from a process, and INV-0051-1 and -4 by the counters: after it
+/// ends, the frames and heap are as they were.
+fn memory_objects_from_a_process() {
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run_program("t_memory"), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
 }
 
 fn run_program(name: &str) -> ExitRecord {

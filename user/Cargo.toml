@@ -240,3 +240,8 @@ bench = false
 name = "stubborn"
 test = false
 bench = false
+
+[[bin]]
+name = "t_memory"
+test = false
+bench = false

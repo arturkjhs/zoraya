@@ -7,18 +7,22 @@ use alloc::vec::Vec;
 
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
-    Buffer, Bytes, Cookie, DEADLINE_INFINITE, Detail, DirectoryEntry, Disposition, ExitCode,
-    ExitReason, ExitRecord, Handle, Handlers, ImageObject, JobFlags, JobObject, Mode, ObjectType,
-    Opaque, Packet, PacketBuffer, PathBuffer, PortObject, ProcessObject, RelativePath, RequestKind,
-    Rights, SignalSet, SpawnBuffer, Status, request_value,
+    Address, Buffer, Bytes, Cookie, DEADLINE_INFINITE, Detail, DirectoryEntry, Disposition,
+    ExitCode, ExitReason, ExitRecord, Handle, Handlers, ImageObject, JobFlags, JobObject, MapFlags,
+    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Packet, PacketBuffer,
+    PathBuffer, PortObject, ProcessObject, RelativePath, RequestKind, Rights, SignalSet, Size,
+    SpawnBuffer, Status, request_value,
 };
 use zoraya_console::INPUT_SIZE;
+use zoraya_pagetable::{Attributes, MemoryType as PageMemory};
+use zoraya_pmm::FRAME_SIZE;
 use zoraya_ramdisk::NAME_SIZE;
 use zoraya_time::{Deadline, Instant};
 
 use crate::arch::{self, Frame};
 use crate::job::Job;
-use crate::memory::user::USER_HIGH;
+use crate::memory::object::MemoryObject;
+use crate::memory::user::{Holder, MappingError, USER_HIGH};
 use crate::object::{self, HandleTable, Image, Object};
 use crate::port::Port;
 use crate::process::{self, Process, Start};
@@ -458,6 +462,62 @@ impl Handlers for Calls {
         }
         target.write(&buffer[..size])?;
         Ok(size as u64)
+    }
+
+    fn memory_create(&mut self, size: Size, flags: MemoryFlags) -> Result<u64, Status> {
+        let object = MemoryObject::new(size.0, flags.is_contiguous())?;
+        self.insert(Object::Memory(object), MemoryType::RIGHTS)
+    }
+
+    fn memory_map(
+        &mut self,
+        object: Handle,
+        offset: Size,
+        length: Size,
+        flags: MapFlags,
+    ) -> Result<u64, Status> {
+        let needed = if flags.is_write() {
+            Rights::READ.union(Rights::WRITE)
+        } else {
+            Rights::READ
+        };
+        let Object::Memory(object) = self.object(object, needed)? else {
+            return Err(Status::BadHandle);
+        };
+        let (offset, length) = (offset.0, length.0);
+        let end = offset.checked_add(length).ok_or(Status::InvalidArgument)?;
+        let whole = |v: u64| v.is_multiple_of(FRAME_SIZE);
+        if length == 0 || !whole(offset) || !whole(length) || end > object.size() {
+            return Err(Status::InvalidArgument);
+        }
+        // Never executable (INV-0051-2): this ADR has no right that could say so.
+        let attributes = Attributes {
+            memory: PageMemory::Normal,
+            write: flags.is_write(),
+            execute: false,
+            user: true,
+        };
+        let frames = object.clone();
+        let mut space = self.process.space.lock();
+        let space = space.as_mut().ok_or(Status::BadState)?;
+        space
+            .map_object(length, attributes, Holder::Memory(object), |at| {
+                frames.page(offset + at)
+            })
+            .map_err(|e| match e {
+                MappingError::Limit => Status::LimitReached,
+                _ => Status::NoMemory,
+            })
+    }
+
+    fn memory_unmap(&mut self, address: Address, length: Size) -> Result<u64, Status> {
+        let mut space = self.process.space.lock();
+        let space = space.as_mut().ok_or(Status::BadState)?;
+        let holder = space
+            .unmap_object(address.0, length.0)
+            .map_err(|_| Status::InvalidArgument)?;
+        drop(holder);
+        Ok(0)
     }
 
     fn power_off(&mut self, power: Handle) -> Result<u64, Status> {

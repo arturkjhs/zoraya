@@ -7,6 +7,7 @@ use zoraya_abi::{ObjectType, Waiting};
 use zoraya_events::SourceId;
 
 use crate::job::Job;
+use crate::memory::object::MemoryObject;
 use crate::port::{self, Port};
 use crate::process::Process;
 
@@ -31,6 +32,7 @@ pub enum Object {
     Process(Arc<Process>),
     Job(Arc<Job>),
     Port(Arc<Port>),
+    Memory(Arc<MemoryObject>),
 }
 
 impl Object {
@@ -44,7 +46,11 @@ impl Object {
                 crate::console::source()?,
                 zoraya_abi::ConsoleObject::WAITING,
             ),
-            Object::Power | Object::Directory | Object::Image(_) | Object::Port(_) => {
+            Object::Power
+            | Object::Directory
+            | Object::Image(_)
+            | Object::Port(_)
+            | Object::Memory(_) => {
                 return None;
             }
         };

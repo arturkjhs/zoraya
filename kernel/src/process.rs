@@ -96,7 +96,7 @@ pub struct Process {
     name: String,
     ttbr0: u64,
     /// Released at exit, whoever still holds the process.
-    space: SpinLock<Option<AddressSpace>>,
+    pub space: SpinLock<Option<AddressSpace>>,
     exit: SpinLock<Exit>,
     job: Arc<Job>,
     source: SourceId,

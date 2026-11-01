@@ -27,6 +27,12 @@ fn parameters_come_from_the_allow_list() {
                     s.name
                 ),
                 Param::Cookie => assert_eq!(s.name, "directory_entry"),
+                Param::Size => assert!(
+                    matches!(s.name, "memory_create" | "memory_map" | "memory_unmap"),
+                    "{}",
+                    s.name
+                ),
+                Param::Address => assert_eq!(s.name, "memory_unmap"),
                 Param::EntryPoint => assert_eq!(s.name, "thread_create"),
             }
         }
@@ -74,7 +80,7 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
 /// come from one list, so a new status is judged here.
 #[test]
 fn no_status_means_interrupted() {
-    assert_eq!(Status::ALL.len(), 12);
+    assert_eq!(Status::ALL.len(), 15);
     for (raw, s) in Status::ALL.iter().enumerate() {
         assert_eq!(*s as usize, raw);
         assert_eq!(Status::from_raw(raw as u64), Some(*s));
@@ -129,7 +135,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 7);
+    assert_eq!(OBJECT_TYPES.len(), 8);
     for (name, waiting, rights) in OBJECT_TYPES {
         if let Waiting::Signals(bits) = waiting {
             assert_ne!(*bits, 0, "{name}");
@@ -235,6 +241,9 @@ echo! {
     console_dropped(console: Handle);
     directory_entry(directory: Handle, cookie: Cookie, entry: Bytes);
     power_off(power: Handle);
+    memory_create(size: Size, flags: MemoryFlags);
+    memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags);
+    memory_unmap(address: Address, length: Size);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
@@ -270,7 +279,7 @@ fn a_value_too_wide_is_refused_not_truncated() {
     assert_eq!(Mode::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(ExitReason::decode(&[wide]), Err(Status::InvalidArgument));
     // And out-of-range values within 32 bits.
-    assert_eq!(Rights::decode(&[1 << 11]), Err(Status::InvalidArgument));
+    assert_eq!(Rights::decode(&[1 << 14]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[36]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[35]), Ok(RequestKind::Custom(31)));
     assert_eq!(Disposition::decode(&[3]), Err(Status::InvalidArgument));

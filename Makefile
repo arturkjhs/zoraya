@@ -22,14 +22,14 @@ USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console
+	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-boot ramdisk fmt-check check-user-access clippy adr-check clean \
+.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot ramdisk fmt-check check-user-access clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -127,6 +127,10 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
 		--expect-line "gic: version 3" \
 		-- $(RUN_QEMU) --test --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
+
+# One configuration, for working on the kernel.
+test-qemu-one: $(TEST_KERNEL) $(RUNNER)
+	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --accel auto $(TEST_KERNEL)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell

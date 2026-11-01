@@ -65,6 +65,12 @@ statuses! {
     DeadlineExceeded = 10,
     /// The port was closed during the wait.
     Cancelled = 11,
+    /// Nothing to read, or a queue is full: try when signalled.
+    WouldBlock = 12,
+    /// The other end of a channel is gone.
+    PeerClosed = 13,
+    /// The message stays; the sizes it needs have been reported.
+    BufferTooSmall = 14,
 }
 
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
@@ -131,7 +137,10 @@ impl Rights {
     pub const WRITE: Rights = Rights(1 << 8);
     pub const LOOKUP: Rights = Rights(1 << 9);
     pub const POWER: Rights = Rights(1 << 10);
-    const KNOWN: u32 = (1 << 11) - 1;
+    pub const MAP: Rights = Rights(1 << 11);
+    pub const INTERRUPT: Rights = Rights(1 << 12);
+    pub const DMA: Rights = Rights(1 << 13);
+    const KNOWN: u32 = (1 << 14) - 1;
 
     /// Unknown bits are refused (CP-11).
     pub const fn from_raw(raw: u32) -> Option<Rights> {
@@ -242,6 +251,9 @@ object_types! {
             .union(Rights::WRITE)
             .union(Rights::WAIT);
     PowerObject "power" Waiting::NotWaitable, COMMON.union(Rights::POWER);
+    MemoryObject "memory"
+        Waiting::NotWaitable,
+        COMMON.union(Rights::READ).union(Rights::WRITE);
     DirectoryObject "directory" Waiting::NotWaitable, COMMON.union(Rights::LOOKUP);
     ImageObject "image" Waiting::NotWaitable, COMMON.union(Rights::READ);
 }
@@ -463,6 +475,10 @@ pub enum Param {
     Opaque,
     /// A place in a listing: opaque to the caller (ADR-0061).
     Cookie,
+    /// A size or offset in a memory object (ADR-0051).
+    Size,
+    /// A place in the caller's own space: it names no object (ADR-0051).
+    Address,
     /// Code to run. Only thread creation may take one (INV-0004-1).
     EntryPoint,
 }
@@ -581,6 +597,95 @@ impl Arg for Cookie {
 
     fn encode(&self, r: &mut [u64]) {
         r[0] = self.0;
+    }
+}
+
+/// A size or offset in bytes (ADR-0051).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Size(pub u64);
+
+impl Arg for Size {
+    const PARAM: Param = Param::Size;
+
+    fn decode(r: &[u64]) -> Result<Size, Status> {
+        Ok(Size(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// An address in the caller's space (ADR-0051).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Address(pub u64);
+
+impl Arg for Address {
+    const PARAM: Param = Param::Address;
+
+    fn decode(r: &[u64]) -> Result<Address, Status> {
+        Ok(Address(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// `memory_create`'s flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryFlags(u32);
+
+impl MemoryFlags {
+    pub const NONE: MemoryFlags = MemoryFlags(0);
+    /// Physically contiguous frames, for a device's queues (ADR-0051).
+    pub const CONTIGUOUS: MemoryFlags = MemoryFlags(1);
+
+    pub const fn is_contiguous(self) -> bool {
+        self.0 & 1 != 0
+    }
+}
+
+impl Arg for MemoryFlags {
+    const PARAM: Param = Param::Flags;
+
+    fn decode(r: &[u64]) -> Result<MemoryFlags, Status> {
+        match word(r[0])? {
+            raw @ (0 | 1) => Ok(MemoryFlags(raw)),
+            _ => Err(Status::InvalidArgument),
+        }
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
+    }
+}
+
+/// `memory_map`'s flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapFlags(u32);
+
+impl MapFlags {
+    pub const READ: MapFlags = MapFlags(0);
+    pub const WRITE: MapFlags = MapFlags(1);
+
+    pub const fn is_write(self) -> bool {
+        self.0 & 1 != 0
+    }
+}
+
+impl Arg for MapFlags {
+    const PARAM: Param = Param::Flags;
+
+    fn decode(r: &[u64]) -> Result<MapFlags, Status> {
+        match word(r[0])? {
+            raw @ (0 | 1) => Ok(MapFlags(raw)),
+            _ => Err(Status::InvalidArgument),
+        }
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
     }
 }
 
@@ -808,6 +913,9 @@ syscalls! {
     24 ConsoleDropped console_dropped(console: Handle) false;
     25 DirectoryEntry directory_entry(directory: Handle, cookie: Cookie, entry: Bytes) false;
     26 PowerOff power_off(power: Handle) false;
+    27 MemoryCreate memory_create(size: Size, flags: MemoryFlags) false;
+    28 MemoryMap memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags) false;
+    29 MemoryUnmap memory_unmap(address: Address, length: Size) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then

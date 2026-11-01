@@ -11,9 +11,10 @@ use core::fmt;
 
 use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
 use zoraya_abi::{
-    Buffer, Bytes, CONSOLE, Cookie, Deadline, Detail, Disposition, ExitCode, ExitReason,
-    ExitRecord, Handle, Invoke, JobFlags, Mode, Opaque, Packet, PacketBuffer, PathBuffer,
-    RequestKind, Rights, SignalSet, SpawnBuffer, Status, request_from_value, stubs,
+    Address, Buffer, Bytes, CONSOLE, Cookie, Deadline, Detail, Disposition, ExitCode, ExitReason,
+    ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags, Mode, Opaque, Packet,
+    PacketBuffer, PathBuffer, RequestKind, Rights, SignalSet, Size, SpawnBuffer, Status,
+    request_from_value, stubs,
 };
 
 global_asm!(
@@ -238,6 +239,26 @@ pub fn power_off(power: Handle) -> Status {
         Ok(_) => Status::Ok,
         Err(status) => status,
     }
+}
+
+/// A new memory object of `size` bytes, all committed and zeroed.
+pub fn memory_create(size: u64, flags: MemoryFlags) -> Result<Handle, Status> {
+    handle(stubs::memory_create::<Svc>(Size(size), flags)?)
+}
+
+/// Maps part of a memory object, and gives the address the kernel chose.
+pub fn memory_map(
+    object: Handle,
+    offset: u64,
+    length: u64,
+    flags: MapFlags,
+) -> Result<u64, Status> {
+    stubs::memory_map::<Svc>(object, Size(offset), Size(length), flags)
+}
+
+/// Ends the whole mapping at `address`.
+pub fn memory_unmap(address: u64, length: u64) -> Result<(), Status> {
+    stubs::memory_unmap::<Svc>(Address(address), Size(length)).map(|_| ())
 }
 
 pub fn directory_lookup(directory: Handle, name: &str) -> Result<Handle, Status> {

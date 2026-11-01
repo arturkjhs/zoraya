@@ -4,13 +4,14 @@
 //! What the tests spawn. Its first argument says what it does.
 
 use zoraya_abi::{
-    CONSOLE, DEADLINE_INFINITE, Disposition, Handle, JOB, MAX_HANDLES, Mode, Packet, RequestKind,
-    Rights, Status,
+    CONSOLE, DEADLINE_INFINITE, Disposition, Handle, JOB, MAX_HANDLES, MapFlags, Mode, Packet,
+    RequestKind, Rights, Status,
 };
 use zoraya_user::{
-    assert_err, clock_monotonic, handle_duplicate, port_create, port_queue, port_subscribe,
-    port_unsubscribe, port_wait, println, process_exit, process_exit_terminated,
-    process_set_disposition, process_take_request, sleep_until, startup, thread_yield,
+    assert_err, clock_monotonic, handle_duplicate, memory_map, memory_unmap, port_create,
+    port_queue, port_subscribe, port_unsubscribe, port_wait, println, process_exit,
+    process_exit_terminated, process_set_disposition, process_take_request, sleep_until, startup,
+    thread_yield,
 };
 
 /// Every slot of this process's table is empty (INV-0003-1).
@@ -19,6 +20,10 @@ fn holds_nothing() -> bool {
         let handle = Handle::new(u64::from(slot)).expect("slot is not zero");
         handle_duplicate(handle, Rights::NONE) == Err(Status::BadHandle)
     })
+}
+
+fn at_slot(slot: u64) -> Handle {
+    Handle::new(slot).expect("slot is not zero")
 }
 
 /// Blocks in a port wait for good, with nothing that could end it.
@@ -45,6 +50,27 @@ fn main() -> i32 {
     let block = startup();
     let mut argv = block.argv;
     match argv.next().unwrap_or(b"") {
+        b"memory-writer" => {
+            let at = memory_map(at_slot(3), 0, 4096, MapFlags::WRITE).expect("map");
+            // SAFETY: mapped just above.
+            unsafe { core::ptr::write_volatile(at as *mut u64, 0x5678) };
+            0
+        }
+        b"memory-write-read-only" => {
+            let at = memory_map(at_slot(3), 0, 4096, MapFlags::READ).expect("map");
+            // SAFETY: none: the fault is the point.
+            unsafe { core::ptr::write_volatile(at as *mut u64, 1) };
+            0
+        }
+        b"memory-after-unmap" => {
+            let at = memory_map(at_slot(3), 0, 4096, MapFlags::READ).expect("map");
+            // SAFETY: mapped just above.
+            let value = unsafe { core::ptr::read_volatile(at as *const u64) };
+            memory_unmap(at, 4096).expect("unmap");
+            // SAFETY: none: the fault is the point.
+            let again = unsafe { core::ptr::read_volatile(at as *const u64) };
+            (value + again) as i32
+        }
         b"hello" => {
             println!("child: hello from the child");
             42
