@@ -11,6 +11,10 @@ name = "zoraya-adr-check"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-console"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-dtb"
 version = "0.1.0"
 
@@ -64,6 +68,7 @@ name = "zoraya-kernel"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-console",
  "zoraya-dtb",
  "zoraya-elf",
  "zoraya-events",
@@ -112,6 +117,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-shell"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+]
+
+[[package]]
 name = "zoraya-test-runner"
 version = "0.1.0"
 
@@ -125,4 +137,5 @@ version = "0.1.0"
 dependencies = [
  "zoraya-abi",
  "zoraya-rt",
+ "zoraya-shell",
 ]

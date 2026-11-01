@@ -17,6 +17,7 @@ qemu-test = []
 
 [dependencies]
 zoraya-abi = { path = "../crates/zoraya-abi" }
+zoraya-console = { path = "../crates/zoraya-console" }
 zoraya-dtb = { path = "../crates/zoraya-dtb" }
 zoraya-elf = { path = "../crates/zoraya-elf" }
 zoraya-events = { path = "../crates/zoraya-events" }

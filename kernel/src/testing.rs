@@ -438,6 +438,10 @@ static TESTS: &[Test] = &[
         name: "failed_allocation_frees_each_object_once",
         run: failed_allocation_frees_each_object_once,
     },
+    Test {
+        name: "console_and_listing_from_a_process",
+        run: console_and_listing_from_a_process,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1081,6 +1085,13 @@ fn thread_stack_has_a_guard_page() {
     assert!(paging::translate(bottom).is_none(), "unmapped when freed");
 }
 
+/// ADR-0060 to ADR-0062 from a process, with input put in the ring by hand.
+fn console_and_listing_from_a_process() {
+    console::receive(b'a');
+    console::receive(b'b');
+    assert_eq!(run_program("t_console"), exited(0));
+}
+
 fn run_program(name: &str) -> ExitRecord {
     process::spawn(name).expect("program in the ramdisk").wait()
 }
@@ -1099,7 +1110,7 @@ fn user_process_prints_and_exits() {
 }
 
 fn user_tables_obey_wx() {
-    let process = process::spawn("spin").expect("spin");
+    let process = process::spawn("busy").expect("busy");
     let mut count = 0;
     process.for_each_mapping(&mut |m| {
         count += 1;
@@ -1156,8 +1167,8 @@ fn processes_cannot_see_each_other() {
 fn cpu_bound_processes_share_the_cpu() {
     let before = sched::preemptions();
     let start = timer::now();
-    let a = process::spawn("spin").expect("spin");
-    let b = process::spawn("spin").expect("spin");
+    let a = process::spawn("busy").expect("busy");
+    let b = process::spawn("busy").expect("busy");
     assert_eq!(a.wait(), exited(1));
     assert_eq!(b.wait(), exited(1));
     let elapsed = timer::now().nanos_since(start);
@@ -1275,7 +1286,7 @@ fn every_waiter_is_woken() {
         DONE.fetch_add(1, Ordering::Relaxed);
     }
     DONE.store(0, Ordering::Relaxed);
-    let process = process::spawn("spin").expect("spin");
+    let process = process::spawn("busy").expect("busy");
     for _ in 0..3 {
         let raw = Arc::into_raw(process.clone()) as usize;
         sched::spawn_kernel(waiter, raw).expect("thread");
@@ -1302,8 +1313,8 @@ fn full_deadline_queue_keeps_the_slice() {
         ids.push(id);
     }
     let before = sched::preemptions();
-    let a = process::spawn("spin").expect("spin");
-    let b = process::spawn("spin").expect("spin");
+    let a = process::spawn("busy").expect("busy");
+    let b = process::spawn("busy").expect("busy");
     assert_eq!(a.wait(), exited(1));
     assert_eq!(b.wait(), exited(1));
     for id in ids {

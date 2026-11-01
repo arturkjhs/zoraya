@@ -64,7 +64,7 @@ fn wrong_types_are_refused() {
     assert_err!(job_create(DIRECTORY, JobFlags::NONE), Status::AccessDenied);
     assert_err!(directory_lookup(JOB, "child"), Status::AccessDenied);
     assert_err!(
-        port_subscribe(port, CONSOLE, 1, 1, Mode::Level),
+        port_subscribe(port, DIRECTORY, 1, 1, Mode::Level),
         Status::AccessDenied
     );
     process_signal(process, RequestKind::Terminate, 0).expect("end it");

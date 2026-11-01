@@ -13,6 +13,7 @@ bench = false
 [dependencies]
 zoraya-abi = { path = "../crates/zoraya-abi" }
 zoraya-rt = { path = "../crates/zoraya-rt" }
+zoraya-shell = { path = "../crates/zoraya-shell" }
 
 [lints]
 workspace = true
@@ -169,5 +170,58 @@ bench = false
 
 [[bin]]
 name = "t_leak"
+test = false
+bench = false
+
+[[bin]]
+name = "busy"
+path = "src/bin/busy.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "zosh"
+path = "src/bin/zosh.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "echo-args"
+path = "src/bin/echo_args.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "sleep"
+path = "src/bin/sleep.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "exit"
+path = "src/bin/exit.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fault"
+path = "src/bin/fault.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fanout"
+path = "src/bin/fanout.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "t_console"
+path = "src/bin/t_console.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "flood"
 test = false
 bench = false
