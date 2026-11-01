@@ -38,6 +38,10 @@ Evidence IDs (`DM-`, `GR-`, `CP-`, `X-`) resolve in `docs/research/`; `task-02/â
 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) | The dispatcher and the ABI table | accepted | One `syscalls!` declaration generates the enum, the table, the kernel trait, the decoder and the user stubs. | ADR-0032, ADR-0035 |
 | [ADR-0045](0045-port-keys-as-opaque-payloads.md) | Port keys and user packet data as opaque payloads | accepted | A new invariant replaces INV-0035-1, allowing port keys and packet data by name, which reconciles it with ADR-0006. | ADR-0002, ADR-0006, ADR-0035 |
 | [ADR-0046](0046-job-and-request-details.md) | Job and request details the accepted ADRs leave open | accepted | The group field selects a sub-job; a fixed request queue reports overflow; a killed job is closed; depth 32; one lock over the job tree. Accepted with a change: `ExitRecord` gains `request_kind`, and `detail` stays the sender's full value, partly replacing ADR-0004 rule 1. | ADR-0003, ADR-0004, ADR-0006, ADR-0041 |
+| [ADR-0060](0060-console-input.md) | Console input as raw bytes | proposed | Raw bytes in a fixed ring from the receive interrupt, a `console_read` that never blocks, a `READABLE` signal; no terminal policy in the kernel. | ADR-0006, ADR-0022, ADR-0040, ADR-0043 |
+| [ADR-0061](0061-directory-entries.md) | Listing a directory handle | proposed | One record per call with an opaque cookie, in a form a filesystem service can offer. | ADR-0032, ADR-0040, ADR-0043, ADR-0044, ADR-0045 |
+| [ADR-0062](0062-power-off.md) | Power off through a handle | proposed | A `Power` object with one right, given only to the first process. | ADR-0040, ADR-0043 |
+| [ADR-0063](0063-first-process-until-init.md) | The shell as first process, until `init` | proposed | Temporary: the kernel starts the shell directly; ADR-0053 replaces this. | ADR-0003, ADR-0043, ADR-0062 |
 
 ## Dependency order
 
