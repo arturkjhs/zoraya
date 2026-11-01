@@ -457,3 +457,51 @@ Computed in this session. 2^48 = 2.81 × 10^14. × 875 ns = 7.80 years. × 1024 
 - Ran `make adr-check` at 82cfb68 and 13253a3. Ran the arithmetic.
 - Not checked: no ADR here has code, so nothing was built for the design, and `make test` was not run. [Z5] was not fetched: V5 rests on the first review's note. No web source was fetched. Close cost was not measured. ADR-0056 was read by search only, for F12. T11 to T15, T18 to T20 and T22 were not re-examined, apart from what T15 shares with V1, and T20's open points on a faulting `sizes` stay open. ADR-0060 to ADR-0063 were judged from this branch's text, with status taken from `main`.
 
+
+## Sixth review: the changes of one step
+
+Errors in changed lines: 2.
+
+Reviewer: a subagent that wrote none of these documents and took no part in earlier reviews. Commit range: `git diff 6d6e967 HEAD`, on branch `adr/stage-4-design`, date 2026-11-01. HEAD moved during the review, from d328ca9 to 4a02c73, so the range reviewed is 6d6e967..4a02c73. Severity is as defined at the top of this file. Only changed lines were judged. Older problems are listed for the backlog and are not in the count.
+
+`make adr-check` at 4a02c73: 0 errors, 17 warnings, all of them accepted invariants not yet applicable. `index.md` does not fail. At d328ca9 it failed with 1 error: the ADR-0041 note, placed inside the invariant list, became part of INV-0041-1's checking method. 4a02c73 moved the note out, and that is what fixed it. The tool does not check the Total line, so a pass says nothing about W1.
+
+### Problems
+
+| # | Severity | Location | What is wrong, with evidence | Suggested fix |
+|---|---|---|---|---|
+| W1 | error | `invariants.md` Counts, the Total line | The changed line says 183. The table has 184 invariant rows, 184 distinct ids, and the 44 rows of the Counts table add up to 184, each matching its ADR's rows. The earlier total was already one short: 182 against a sum of 183 at 6d6e967. The step raised it by one and carried the slip forward, so the changed line states something false. | Write 184. |
+| W2 | error | ADR-0040 the two new notes; ADR-0041 the new note; ADR-0054 Tensions ("carries a note"), ADR-0057 "ADR-0040 carries a note saying so" | The notes in accepted ADRs read "Partly replaced by ADR-0054 (architect's decision, 2026-11-01, on its acceptance)", and the same for ADR-0057. Both ADRs are proposed and their "Architect's decision" sections are empty, so no such decision is on record, and under ADR-0001 rule 1 they bind nothing. "On its acceptance" makes the replacement conditional, but the attribution and date still state a decision that does not exist. The precedent differs: the notes for ADR-0060 and ADR-0062 came in e0cda11, the commit that accepted them. CLAUDE.md allows agents to change an accepted ADR in two ways only, and neither covers this. V2, V8 and V9 asked for text in ADR-0057 and ADR-0054, not in ADR-0040 or ADR-0041. No task file or other record found here authorises the notes. If the architect asked for them, the wording is still false until acceptance, and that request should be recorded. | Remove the three notes and the two "carries a note" clauses, and let the proposed ADRs state what they will replace. Add the notes in the commit that accepts each ADR. Alternatively, the architect records the instruction and the notes drop "architect's decision" until then. |
+| W3 | imprecision | ADR-0051 Calls | The V1 fix leaves "`Param` gains a `Size` kind for `size`, `offset` and `length`, and an address kind for the last". "The last" meant `memory_unmap`, the last call named. It now reads as the last item of the new list, `length`, which is a `Size`. INV-0051-5 settles the meaning, so this is not an error. | "and an address kind for the `address` of `memory_unmap`". |
+| W4 | imprecision | ADR-0054 Quarantine, INV-0054-7 | The new text covers a holder that closes a pin while running, but the release rule still speaks only of "the successor". INV-0054-7's check calls the release in a live process, and no text says whether a running driver may do so, or whether it must reset the device first. Without that rule, a live driver can release frames the device may still write. | State it: any holder of `DMA` on the device may release, and only after resetting the device and seeing status 0. Make the check do that reset, or say why a test may skip it. |
+| W5 | imprecision | ADR-0041 note; ADR-0054 Tensions on INV-0041-1 | INV-0041-1 speaks of frame count and heap use. The note and the tension except frames only. A quarantined pin keeps its pin record and, by ADR-0051, the memory object, so heap use does not return either. | "frames and the pin's kernel objects". |
+| W6 | note | ADR-0053 What `init` receives | "`init` keeps them, to give a restarted driver a duplicate" now sits after a list that includes `Power`. Read literally, a restarted driver gets `Power`. | "keeps the `Device` handles, to give ...". |
+| W7 | note | ADR-0054 DMA, Quarantine | Two loose ends in new text. Whether the handle still exists after `dma_unpin` is unstated, though "ends it" and "goes without `dma_unpin`" suggest two separate events. "Because its holder closed it while running or died" reads as a full list, but a pin moved into a channel can also end when the queue is torn down (INV-0050-4). The rule's first clause covers that if the "because" is read as examples. | Say that `dma_unpin` closes the handle, or that it stays until closed. Write "for instance". |
+| W8 | note | ADR-0054 Invariants | INV-0054-7 stands between INV-0054-3 and INV-0054-4. `invariants.md` has it after INV-0054-6. | Move it to the end of the list. |
+
+### V items
+
+- **V1: confirmed fixed.** `Size` is named and the closed list has `size`, `offset`, `length` and the address. The check allows `Size` for the three calls only. The tension line was updated and the row matches the ADR. `Param` in `zoraya-abi` has no such kind today, so a new kind is needed, as the ADR says, and `Param::registers` gives it 1. See W3.
+- **V2: confirmed fixed.** The bullet in ADR-0057 names both sentences, and both quotations match ADR-0040 word for word. "Everything else in ADR-0040 stands" still reads correctly after it. The way ADR-0040 itself was changed is W2.
+- **V5: confirmed fixed.** `dma_unpin` needs `DMA` on the pin, and a pin carries `DMA` and `TRANSFER`. Closing without unpinning quarantines. "Last handle" covers a moved pin. INV-0054-7 is added, its row matches, and a pin lacking `DMA` can be produced for its test, because ADR-0040 lets a transfer narrow rights. See W4 and W7.
+- **V7: confirmed fixed.** Console 1, job 2, directory 3 (ADR-0043), `Power` 4 (ADR-0062), `Device` from 5 agree. The replacement of ADR-0063 is stated, and agrees with ADR-0063's own text. Both ADRs are on the Depends line. See W6.
+- **V8: confirmed fixed, at 4a02c73 and not at d328ca9.** The tension is listed and its exception is accurate. See W2 and W5.
+- **V9: confirmed fixed.** ADR-0054's Tensions list ADR-0040's new rights and types. See W2 for the note in ADR-0040.
+
+### `docs/backlog.md`
+
+Faithful. V3, V4, V6 and V10 to V15 are all there, nine rows, none missing, and each states its finding without changing its sense. The rows are shorter than the findings, and the file points to this one for evidence: V6 leaves out that "small" has no data behind it, V4 that the figure is one host's median. Those are acceptable omissions. None of the nine was fixed in this step, so all remain open. Nothing outside these nine is in the file.
+
+### Items for the backlog
+
+- ADR-0054 Consequences, an unchanged line: "Quarantined frames stay lost until a new driver runs" is too narrow now that a live holder can quarantine (see W4).
+- `make adr-check` does not verify the Total line or the per-ADR counts. That is why W1 and its predecessor went unseen.
+- INV-0051-5 keeps INV-0061-1's "only integer payloads" list, which names neither `Deadline` nor `Flags`. Older wording, carried over unchanged, and read as not being payloads.
+
+### What was checked and not checked
+
+- Read: the full diff, the Fifth review, ADR-0001's rules, ADR-0041's Consequences and Invariants, the Recommendation of ADR-0057, ADR-0054's DMA, Quarantine, Tensions, Depends and Invariants, ADR-0051's Calls and Depends. The architect's sections of ADR-0040, 0041, 0051, 0053, 0054 and 0057.
+- Read by search only: ADR-0040 (headings and the cited lines), ADR-0043 (slots), ADR-0044, ADR-0050, ADR-0056 (call signatures), ADR-0061, ADR-0062, ADR-0063. Searched `docs/tasks` and `docs/research/stage-4` for any instruction on the notes, and found none. An instruction given only in conversation would not show there.
+- Read code: `Param` in `crates/zoraya-abi/src/lib.rs`, and the message's source in `tools/adr-check`.
+- Ran: `make adr-check` at 4a02c73, and the same tool on an export of d328ca9's `docs` in a scratch directory. Counted the rows of `invariants.md` by script, at HEAD and at 6d6e967.
+- Not checked: `make test` was not run, as only documents changed. No web source was fetched, and nothing was built. ADR-0052, ADR-0055 and the remaining ADRs were not reviewed, since no changed line is theirs. Older problems outside the changed lines were not searched for beyond what the changed lines touched.
