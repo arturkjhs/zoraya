@@ -53,6 +53,8 @@ Nothing that is not listed is inherited. `start_suspended` plus `resume` replace
 
 **Asynchronous notification without Unix signals** ([ADR-0004](adr/0004-async-notification.md)). No native call runs
 code asynchronously on an existing thread. Instead:
+- **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
+  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060, proposed).
 - **Exit records.** A process object carries `ExitRecord { code, reason, detail, request_kind }`.
 - **Request signals.** These are `Interrupt`, `Terminate`, `Hangup`, `Quit` and `Custom(n)`. Their per-process
   dispositions (`Terminate`, `Ignore`, `Deliver`) are held by the kernel.
@@ -361,7 +363,25 @@ Coverage-guided fuzz targets for the same decoder are in `fuzz/` (nightly, cargo
 commands) and against malformed input: every truncation, bad header fields, structure and string errors, and 30,000
 deterministic random mutations.
 
+## Using the shell
+
+`make run` boots to `zosh$ ` on the serial console. Ctrl-A X leaves QEMU, and `poweroff` turns the machine off.
+
+- `ls` lists the ramdisk. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
+  the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
+- `echo`, `uptime`, `exit-code` (the last record) and `help` are built in.
+- Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it.
+  Ctrl-\\ sends `Quit`. Ctrl-U kills the line, and Up and Down walk the last 32 lines.
+- Other keys pressed while a foreground job runs are dropped, so they do not reach the next prompt.
+- A program ending otherwise than with exit 0 gets a short report such as `[exited 3]`, `[terminated: Interrupt]`,
+  `[fault: data abort, class 0x24]` or `[killed]`. A fault report gives the exception class, because that is what
+  `ExitRecord.detail` holds (ADR-0034): the kernel's own line above it has the address.
+
 ## Known limitations
+
+- **Console input.** Input is a fixed 256-byte ring (ADR-0060). A burst overruns it while the shell waits for the CPU,
+  and the shell reports how many bytes went. Any holder of the console's `READ` right can take input from the shell;
+  children get `WRITE` only.
 
 - **QEMU `virt` assumptions.** The RAM base `0x40000000` (where the device tree and image are found), the fallback
   UART address, and the boot identity map's shape (first 4 GiB, image below 4 GiB) are QEMU `virt` facts. The load
@@ -418,6 +438,7 @@ deterministic random mutations.
 | 1 (done) | Exception vectors, GIC, timer, MMU (kernel in upper half), physical frame allocator, kernel heap | timer ticks; `Box`/`Vec` work in the kernel |
 | 2 (done) | Threads, context switch, scheduler, EL0, first native syscalls, ELF loader, initial ramdisk | a user process prints through a native syscall |
 | 3 (done) | Handles, ports and process objects per ADR-0003/0004/0006; native `spawn` | a process spawns a child and waits on its exit via a port |
+| 3a (done) | Native console shell (TASK-11): `zosh` over the serial console, no files | a person works at a prompt after `make run` |
 | **4 (current)** | virtio-blk, filesystem service, `mkfs` on host | files survive reboot |
 | 5 | virtio-gpu, virtio-input, compositor, terminal as GUI client | screenshot shows a terminal window |
 | 6 | `libposix` T1 per ADR-0005, port of tcc, make, dash | `tcc hello.c && ./a.out` inside Zoraya |
@@ -461,6 +482,8 @@ crates/                   no_std, host-tested
   zoraya-abi/             the native ABI, with its checks
   zoraya-elf/, zoraya-ramdisk/  total parsers for programs and the ramdisk
   zoraya-handle/          handle tables: slots, generations, rights
+  zoraya-console/         the console input ring
+  zoraya-shell/           zosh's line editor, parser and reports
   zoraya-events/          signals, port subscriptions and ready lists
   zoraya-rt/              the runtime of Zoraya programs (aarch64 only)
   zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)

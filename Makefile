@@ -4,7 +4,8 @@
 #   make run        boot it interactively (Ctrl-A X quits QEMU)
 #   make test-unit  host tests (cargo test) for crates/ and tools/
 #   make test-qemu  in-QEMU tests under several machine configurations
-#   make test-boot  boot the normal kernel under each accelerator
+#   make test-boot  boot the normal kernel, run the shell script under each
+#                   machine configuration
 #   make test       all of the above plus fmt, clippy and the ADR checks
 #   make debug      boot under TCG and wait for a debugger on :1234
 #
@@ -20,7 +21,8 @@ RAMDISK := $(BUILD)/ramdisk.bin
 USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
-	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak
+	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
+	busy zosh echo-args sleep exit fault fanout flood t_console
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
@@ -127,17 +129,19 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 		-- $(RUN_QEMU) --test --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
 
 # The normal kernel, which the test kernel does not exercise: its own path
-# through boot, its heap and timer checks, and that it stops on its own.
-BOOT_LINES := --expect-line "heap check: Box and Vec work" \
-	--expect-line "timer check: 10 interrupts in" --expect-line "hello from EL0" \
-	--expect-line "code: 7, reason: Exited" --expect-line "parent: spawning child" \
-	--expect-line "child: hello from the child" --expect-line "parent: child ended" \
-	--expect-line "stage 3 complete"
-RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --plain $(BOOT_LINES)
+# through boot, its heap and timer checks, the receive interrupt, and the shell
+# with keys sent by the runner. The script powers the machine off.
+SHELL_SCRIPT := tests/shell/console.script
+RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
-	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --accel auto $(KERNEL)
-	$(RUN_BOOT) --label boot-tcg -- $(RUN_QEMU) --test --accel tcg $(KERNEL)
+	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
+	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)
+	$(RUN_BOOT) --label boot-auto-el2 -- $(RUN_QEMU) --test --keys --accel auto --machine-opt virtualization=on $(KERNEL)
+	$(RUN_BOOT) --label boot-tcg -- $(RUN_QEMU) --test --keys --accel tcg $(KERNEL)
+	$(RUN_BOOT) --label boot-tcg-smp4-gicv2 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 $(KERNEL)
+	$(RUN_BOOT) --label boot-tcg-el2 -- $(RUN_QEMU) --test --keys --accel tcg --machine-opt virtualization=on $(KERNEL)
+	$(RUN_BOOT) --label boot-tcg-smp4-gicv3 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(KERNEL)
 
 fmt-check:
 	$(CARGO) fmt --all --check

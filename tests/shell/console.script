@@ -1,0 +1,128 @@
+# The shell, from boot to power-off, through the serial line. TASK-11 step 3.
+! panicked
+! no such program: hello
+< heap check: Box and Vec work
+< timer check: 10 interrupts in
+< zosh$ 
+# A command and its output (and the receive interrupt).
+> echo a  b\r
+< a b
+< zosh$ 
+# Listing the ramdisk (INV-0061-2).
+> ls\r
+< hello
+< zosh$ 
+# A bare name with arguments, and `run`.
+> echo-args one two\r
+< arg 0: one
+< arg 1: two
+< zosh$ 
+> run hello\r
+< hello from EL0
+< [exited 7]
+< zosh$ 
+# Stage 3's criterion: a process spawns a child and waits through a port.
+> parent\r
+< parent: spawning child
+< child: hello from the child
+< parent: child ended
+< zosh$ 
+# A clean exit prints nothing; `exit-code` shows the last record.
+> exit 0\r
+< zosh$ 
+> exit-code\r
+< [exited 0]
+< zosh$ 
+> exit 3\r
+< [exited 3]
+< zosh$ 
+> nosuch\r
+< no such program: nosuch
+< zosh$ 
+# A fault cannot take the shell down.
+> fault\r
+< [fault: data abort, class 0x24]
+< zosh$ 
+# Ctrl-C at the prompt clears the line.
+> half\x03
+< ^C
+< zosh$ 
+> echo cleared\r
+< cleared
+< zosh$ 
+# Ctrl-U and backspace.
+> wrong\x15echo fixez\x7fd\r
+< fixed
+< zosh$ 
+# Ctrl-C on a foreground job.
+> spin\r
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+# Ctrl-\ sends Quit.
+> sleep 60\r
+> \x1c
+< [terminated: Quit]
+< zosh$ 
+# One Ctrl-C ends every child of `fanout`, and the job is gone.
+> fanout 8\r
+< fanout: 8 children spinning
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+> jobs\r
+< no jobs
+< zosh$ 
+# A program that floods the console still takes Ctrl-C.
+> flood\r
+< flood
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+# A background job with jobs, wait and kill.
+> sleep 60 &\r
+< [11] sleep
+< zosh$ 
+> jobs\r
+< [11] running sleep
+< zosh$ 
+> kill -hup %11\r
+< [11] done sleep [terminated: Hangup]
+< zosh$ 
+> jobs\r
+< no jobs
+< zosh$ 
+> sleep 1 &\r
+< [12] sleep
+< zosh$ 
+> wait %12\r
+< [12] done sleep [exited 0]
+< zosh$ 
+> wait\r
+< zosh$ 
+# History: Up recalls the last line, Down leaves it.
+> echo remembered\r
+< remembered
+< zosh$ 
+> \e[A\r
+< remembered
+< zosh$ 
+> \e[A\e[B\e[A\r
+< remembered
+< zosh$ 
+> uptime\r
+< up 
+< zosh$ 
+# A burst larger than the ring, during a job, drops bytes and counts them.
+> spin\r
+= 8192
+< bytes dropped]
+# The key itself can be lost in a burst, so it comes after.
+> \x03
+< [terminated: Interrupt]
+< zosh$ 
+> echo alive\r
+< alive
+< zosh$ 
+# `poweroff` needs the handle only this process has (INV-0062-3).
+> poweroff\r

@@ -54,7 +54,7 @@ Recommended: **Option B**. It is a recommendation, not a decision. It is tempora
 - **INV-0063-2.** The kernel powers off when the first process ends. *Check:* scripted serial test ending the shell.
 
 ## Open questions
-- None beyond ADR-0053's.
+- INV-0063-2 has no test: no shell command ends the shell, by the task's list of commands, so that path is checked by review only.
 
 ## Revisit triggers
 - ADR-0053 accepted.
