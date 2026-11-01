@@ -30,7 +30,8 @@ fn main() -> i32 {
         ExitRecord {
             code: 42,
             reason: ExitReason::Exited,
-            detail: 0
+            detail: 0,
+            request_kind: None,
         }
     );
     println!("parent: child ended: {record:?}");

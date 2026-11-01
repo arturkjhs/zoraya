@@ -16,8 +16,7 @@ use zoraya_abi::spawn::{
 };
 use zoraya_abi::{
     CONSOLE, ConsoleObject, DIRECTORY, DirectoryObject, Disposition, ExitReason, ExitRecord, JOB,
-    JobObject, MAX_REQUEST_DETAIL, ObjectType, REQUEST_KINDS, RequestKind, Status, exit_detail,
-    process_signals,
+    JobObject, ObjectType, REQUEST_KINDS, RequestKind, Status, process_signals,
 };
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, Program, Segment};
 use zoraya_events::{RequestQueue, SourceId};
@@ -86,7 +85,8 @@ fn terminated(kind: RequestKind, detail: u32) -> ExitRecord {
     ExitRecord {
         code: 0,
         reason: ExitReason::Terminated,
-        detail: exit_detail(kind, detail),
+        detail,
+        request_kind: Some(kind),
     }
 }
 
@@ -213,9 +213,6 @@ impl Process {
 
     /// ADR-0004 rule 2.
     pub fn signal(&self, kind: RequestKind, detail: u32) -> Result<(), Status> {
-        if detail > MAX_REQUEST_DETAIL {
-            return Err(Status::InvalidArgument);
-        }
         if self.exit_record().is_some() {
             return Ok(());
         }
@@ -566,5 +563,6 @@ pub fn fault_current(class: u64, elr: u64, far: Option<u64>) -> ! {
         code: 0,
         reason: ExitReason::Fault,
         detail: class as u32,
+        request_kind: None,
     })
 }

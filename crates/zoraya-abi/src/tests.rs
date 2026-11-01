@@ -82,20 +82,39 @@ fn no_status_means_interrupted() {
 }
 
 #[test]
-fn an_exit_detail_keeps_the_kind_and_the_value() {
-    for kind in [
-        RequestKind::Interrupt,
-        RequestKind::Hangup,
-        RequestKind::Custom(31),
+fn an_exit_record_keeps_the_kind_apart_from_the_whole_detail() {
+    for request_kind in [
+        None,
+        Some(RequestKind::Interrupt),
+        Some(RequestKind::Terminate),
+        Some(RequestKind::Hangup),
+        Some(RequestKind::Quit),
+        Some(RequestKind::Custom(0)),
+        Some(RequestKind::Custom(31)),
     ] {
-        let detail = exit_detail(kind, MAX_REQUEST_DETAIL);
-        assert_eq!(exit_detail_parts(detail), (Some(kind), MAX_REQUEST_DETAIL));
+        for detail in [0, 1, 1 << 24, u32::MAX] {
+            let record = ExitRecord {
+                code: 0,
+                reason: ExitReason::Terminated,
+                detail,
+                request_kind,
+            };
+            assert_eq!(ExitRecord::from_bytes(&record.to_bytes()), Some(record));
+        }
     }
-    assert_ne!(
-        exit_detail(RequestKind::Hangup, 0),
-        exit_detail(RequestKind::Interrupt, 0)
-    );
-    assert_eq!(exit_detail_parts(2), (None, 2));
+}
+
+#[test]
+fn an_exit_record_with_no_such_kind_is_refused() {
+    let mut bytes = ExitRecord {
+        code: 0,
+        reason: ExitReason::Exited,
+        detail: 0,
+        request_kind: None,
+    }
+    .to_bytes();
+    bytes[12..16].copy_from_slice(&(REQUEST_KINDS as u32 + 1).to_le_bytes());
+    assert_eq!(ExitRecord::from_bytes(&bytes), None);
 }
 
 /// INV-0003-3: `spawn` takes one buffer of vectors, never a string.
@@ -286,6 +305,7 @@ fn exit_records_and_packets_encode() {
         code: -2,
         reason: ExitReason::Fault,
         detail: 0x24,
+        request_kind: None,
     };
     assert_eq!(ExitRecord::from_bytes(&record.to_bytes()), Some(record));
     let packet = Packet {

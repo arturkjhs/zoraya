@@ -216,6 +216,7 @@ impl Job {
                     code: 0,
                     reason: ExitReason::Killed,
                     detail: 0,
+                    request_kind: None,
                 });
             });
         });

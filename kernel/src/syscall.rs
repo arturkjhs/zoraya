@@ -145,6 +145,7 @@ impl Handlers for Calls {
             code: code.0,
             reason: ExitReason::Exited,
             detail: 0,
+            request_kind: None,
         });
         Ok(0)
     }
@@ -277,6 +278,7 @@ impl Handlers for Calls {
             code: 0,
             reason,
             detail: detail.0,
+            request_kind: None,
         });
         Ok(0)
     }

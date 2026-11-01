@@ -7,16 +7,12 @@
 use zoraya_abi::spawn::Encoder;
 use zoraya_abi::{
     Disposition, ExitReason, Handle, JOB, JobFlags, Mode, Packet, RequestKind, Status,
-    exit_detail_parts, process_signals,
+    process_signals,
 };
 use zoraya_user::{
     assert_err, handle_close, image, job_create, job_kill, job_signal, port_create, port_subscribe,
     port_wait, process_set_disposition, process_signal, spawn, spawn_role, wait_exit,
 };
-
-fn request_detail(detail: u32) -> u32 {
-    exit_detail_parts(detail).1
-}
 
 const KINDS: [RequestKind; 5] = [
     RequestKind::Interrupt,
@@ -45,7 +41,7 @@ fn default_ends_the_process() {
         let record = wait_exit(child);
         assert_eq!(record.reason, ExitReason::Terminated);
         assert_eq!(
-            exit_detail_parts(record.detail),
+            (record.request_kind, record.detail),
             (Some(kind), 100 + i as u32)
         );
     }
@@ -73,7 +69,7 @@ fn a_suspended_process_ends_without_starting() {
     process_signal(child, RequestKind::Interrupt, 3).expect("signal");
     let record = wait_exit(child);
     assert_eq!(record.reason, ExitReason::Terminated);
-    assert_eq!(request_detail(record.detail), 3);
+    assert_eq!(record.detail, 3);
 }
 
 fn deliver_queues_and_asserts() {
@@ -119,7 +115,7 @@ fn a_full_queue_says_so() {
         Status::LimitReached
     );
     process_signal(child, RequestKind::Terminate, 7).expect("it still ends");
-    assert_eq!(request_detail(wait_exit(child).detail), 7);
+    assert_eq!(wait_exit(child).detail, 7);
     handle_close(port).expect("close");
 }
 
@@ -130,17 +126,13 @@ fn job_signal_covers_the_tree() {
     let b = spawn_in(inner, b"sleep");
     let outside = spawn_role("yield", &[], false).expect("spawn");
     job_signal(job, RequestKind::Interrupt, 11).expect("signal");
-    assert_eq!(request_detail(wait_exit(a).detail), 11);
-    assert_eq!(request_detail(wait_exit(b).detail), 11);
+    assert_eq!(wait_exit(a).detail, 11);
+    assert_eq!(wait_exit(b).detail, 11);
     let record = {
         process_signal(outside, RequestKind::Quit, 12).expect("signal");
         wait_exit(outside)
     };
-    assert_eq!(
-        request_detail(record.detail),
-        12,
-        "outside the job, so not reached"
-    );
+    assert_eq!(record.detail, 12, "outside the job, so not reached");
     handle_close(inner).expect("close");
     handle_close(job).expect("close");
 }
@@ -193,24 +185,27 @@ fn depth_has_a_limit() {
     }
 }
 
-/// A detail the top byte of `ExitRecord.detail` needs is refused (ADR-0046).
-fn a_detail_too_wide_is_refused() {
-    let child = spawn_role("yield", &[], false).expect("spawn");
-    assert_err!(
-        process_signal(child, RequestKind::Quit, 1 << 24),
-        Status::InvalidArgument
-    );
-    assert_err!(
-        job_signal(JOB, RequestKind::Quit, u32::MAX),
-        Status::InvalidArgument
-    );
-    process_signal(child, RequestKind::Interrupt, 0).expect("signal");
-    let (kind, _) = exit_detail_parts(wait_exit(child).detail);
+/// ADR-0046: `detail` reaches the record whole, beside the kind.
+fn a_detail_keeps_all_its_bits() {
+    for detail in [1 << 24, u32::MAX] {
+        let child = spawn_role("yield", &[], false).expect("spawn");
+        process_signal(child, RequestKind::Quit, detail).expect("signal");
+        let record = wait_exit(child);
+        assert_eq!(
+            (record.request_kind, record.detail),
+            (Some(RequestKind::Quit), detail)
+        );
+    }
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    let child = spawn_in(job, b"yield");
+    job_signal(job, RequestKind::Hangup, u32::MAX).expect("signal");
+    let record = wait_exit(child);
     assert_eq!(
-        kind,
-        Some(RequestKind::Interrupt),
-        "the kind is in the record"
+        (record.request_kind, record.detail),
+        (Some(RequestKind::Hangup), u32::MAX)
     );
+    job_kill(job).expect("kill");
+    handle_close(job).expect("close");
 }
 
 /// Changing to `Terminate` with one queued ends the process at once. A child
@@ -231,7 +226,7 @@ fn main() -> i32 {
     job_signal_covers_the_tree();
     job_kill_is_final();
     depth_has_a_limit();
-    a_detail_too_wide_is_refused();
+    a_detail_keeps_all_its_bits();
     set_disposition_is_checked();
     0
 }

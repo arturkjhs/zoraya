@@ -263,16 +263,23 @@ pub struct ExitRecord {
     pub code: i32,
     pub reason: ExitReason,
     pub detail: u32,
+    /// The request that ended the process, if one did (ADR-0046).
+    pub request_kind: Option<RequestKind>,
 }
 
 impl ExitRecord {
-    pub const SIZE: usize = 12;
+    pub const SIZE: usize = 16;
 
     pub fn to_bytes(self) -> [u8; ExitRecord::SIZE] {
         let mut b = [0; ExitRecord::SIZE];
         b[0..4].copy_from_slice(&self.code.to_le_bytes());
         b[4..8].copy_from_slice(&(self.reason as u32).to_le_bytes());
         b[8..12].copy_from_slice(&self.detail.to_le_bytes());
+        let kind = match self.request_kind {
+            Some(kind) => kind.raw() + 1,
+            None => 0,
+        };
+        b[12..16].copy_from_slice(&kind.to_le_bytes());
         b
     }
 
@@ -282,6 +289,10 @@ impl ExitRecord {
             code: i32::from_le_bytes(word(0)),
             reason: ExitReason::from_raw(u32::from_le_bytes(word(4)))?,
             detail: u32::from_le_bytes(word(8)),
+            request_kind: match u32::from_le_bytes(word(12)).checked_sub(1) {
+                Some(raw) => Some(RequestKind::from_raw(raw)?),
+                None => None,
+            },
         })
     }
 }
@@ -761,27 +772,6 @@ syscalls! {
     20 PortQueue port_queue(port: Handle, key: Opaque, data: Opaque) false;
     21 PortWait port_wait(port: Handle, deadline: Deadline, packets: PacketBuffer) true;
     22 DirectoryLookup directory_lookup(directory: Handle, name: PathBuffer) false;
-}
-
-/// Largest `detail` a request can carry: the rest of `ExitRecord.detail` holds
-/// its kind (ADR-0046).
-pub const MAX_REQUEST_DETAIL: u32 = (1 << 24) - 1;
-
-/// `ExitRecord.detail` of a process a request ended (ADR-0004 rule 1): the
-/// kind plus one in the top byte, the sender's value below it. A process that
-/// ends itself with `process_exit_with_reason` leaves the top byte 0.
-pub const fn exit_detail(kind: RequestKind, detail: u32) -> u32 {
-    (kind.raw() + 1) << 24 | detail
-}
-
-/// The request in an `ExitRecord.detail`, if a request ended the process, and
-/// the value below the kind.
-pub const fn exit_detail_parts(detail: u32) -> (Option<RequestKind>, u32) {
-    let low = detail & MAX_REQUEST_DETAIL;
-    match (detail >> 24).checked_sub(1) {
-        Some(raw) => (RequestKind::from_raw(raw), low),
-        None => (None, low),
-    }
 }
 
 /// `process_take_request`'s value, a kind and a detail in one register.

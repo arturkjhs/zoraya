@@ -7,7 +7,7 @@
 use zoraya_abi::spawn::{Encoder, HandleEntry, MAX_SPAWN_SIZE, Transfer};
 use zoraya_abi::{
     CONSOLE, DIRECTORY, Disposition, ExitReason, ExitRecord, Handle, JOB, JobFlags, Mode,
-    RequestKind, Rights, Status, exit_detail_parts, job_signals, process_signals,
+    RequestKind, Rights, Status, job_signals, process_signals,
 };
 use zoraya_user::{
     assert_err, console_entry, console_write, dup, handle_close, handle_duplicate, image,
@@ -20,6 +20,7 @@ fn exited(code: i32) -> ExitRecord {
         code,
         reason: ExitReason::Exited,
         detail: 0,
+        request_kind: None,
     }
 }
 
@@ -294,7 +295,7 @@ fn dispositions_come_from_the_block() {
     let record = wait_exit(child);
     assert_eq!(record.reason, ExitReason::Terminated);
     assert_eq!(
-        exit_detail_parts(record.detail),
+        (record.request_kind, record.detail),
         (Some(RequestKind::Hangup), 8)
     );
 
@@ -307,8 +308,11 @@ fn dispositions_come_from_the_block() {
     let child = spawn(&buffer[..length]).expect("spawn");
     process_signal(child, RequestKind::Hangup, 8).expect("signal");
     process_signal(child, RequestKind::Quit, 9).expect("signal");
-    let (kind, _) = exit_detail_parts(wait_exit(child).detail);
-    assert_eq!(kind, Some(RequestKind::Quit), "the hangup was ignored");
+    assert_eq!(
+        wait_exit(child).request_kind,
+        Some(RequestKind::Quit),
+        "the hangup was ignored"
+    );
     handle_close(image).expect("close");
     process_set_disposition(RequestKind::Hangup, Disposition::Terminate).expect("set");
 }
@@ -328,6 +332,7 @@ fn exit_reasons_are_distinct() {
     let record = wait_exit(child);
     assert_eq!(record.reason, ExitReason::Terminated);
     assert_eq!(record.detail, 2);
+    assert_eq!(record.request_kind, None);
     let child = spawn_role("exit130", &[], false).expect("spawn");
     assert_eq!(wait_exit(child), exited(130));
     let child = spawn_role("fault", &[], false).expect("spawn");

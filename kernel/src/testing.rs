@@ -27,8 +27,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use zoraya_abi::spawn::StartupBlock;
 use zoraya_abi::{
-    Disposition, ExitReason, ExitRecord, Handle, REQUEST_KINDS, RequestKind, exit_detail,
-    exit_detail_parts, process_signals,
+    Disposition, ExitReason, ExitRecord, Handle, REQUEST_KINDS, RequestKind, process_signals,
 };
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
@@ -1091,6 +1090,7 @@ fn exited(code: i32) -> ExitRecord {
         code,
         reason: ExitReason::Exited,
         detail: 0,
+        request_kind: None,
     }
 }
 
@@ -1455,7 +1455,8 @@ fn terminate_stops_user_code_at_once() {
         ExitRecord {
             code: 0,
             reason: ExitReason::Terminated,
-            detail: exit_detail(RequestKind::Terminate, 9)
+            detail: 9,
+            request_kind: Some(RequestKind::Terminate),
         }
     );
     assert_eq!(process.watched(), Some(at_request));
@@ -1483,7 +1484,7 @@ fn disposition_change_ends_at_once() {
     process.set_disposition(RequestKind::Quit, Disposition::Terminate);
     let record = process.wait();
     assert_eq!(
-        exit_detail_parts(record.detail),
+        (record.request_kind, record.detail),
         (Some(RequestKind::Quit), 5)
     );
 }
