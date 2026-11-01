@@ -42,6 +42,10 @@ New sources for TASK-10. Each URL was fetched on the check date and the note say
 - [Z9] Fuchsia project, zx_job_set_policy, https://fuchsia.dev/fuchsia-src/reference/syscalls/job_set_policy, primary, checked 2026-11-01. Policies allow, deny or kill on conditions such as `ZX_POL_NEW_VMO`, and combine with the parent's. The page gives no memory quota.
 - [G2] Genode Labs, Genode Foundations 24.05, Resource trading, https://genode.org/documentation/genode-foundations/24.05/architecture/Resource_trading.html, primary, checked 2026-11-01. A parent moves part of its quota to each child's account; clients pay for server-side allocations through session quota, returned on close.
 
+## Handles
+
+- [Z10] Fuchsia project, Handles, https://fuchsia.dev/fuchsia-src/concepts/kernel/handles, primary, checked 2026-11-01. A handle value is a 32-bit number; the kernel may reuse the values of closed handles; using a closed value is an error, and the `ZX_POL_BAD_HANDLE` job policy can detect it.
+
 ## Not relied on
 
 - The Zircon page on driver architectures and the QNX 8.0 message-passing page gave 404 on 2026-11-01. QNX claims here rest on `alternatives-postmortem.md#qnx`.

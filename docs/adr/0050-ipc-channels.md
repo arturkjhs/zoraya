@@ -50,13 +50,12 @@ Recommended: **Option C**, and bulk data through ADR-0051's memory objects. It i
 
 - **Object.** `channel_create(out)`: two endpoints, written as two handles to an output buffer. `channel_read(endpoint, bytes, handles, sizes)` writes its two sizes to an output buffer, on `BufferTooSmall` as well. So ADR-0032's registers stay as they are: status in x0, one value in x1, x2 to x18 preserved. New `Status` values: `WouldBlock`, `PeerClosed`, `BufferTooSmall`. A message is bytes plus handles. Order is FIFO per direction. There is no connection-time negotiation.
 - **Limits.** At most `MAX_MESSAGE` 64 KiB and 64 handles per message `[assumption, Zircon's values]`. Each direction queues at most 64 messages and 256 KiB `[assumption]`.
-- **Write.** `channel_write(endpoint, bytes, handles)` is all or nothing. Queue full is `WouldBlock`, peer closed is `PeerClosed`. A `move` entry without `TRANSFER`, or a `duplicate` entry without `DUPLICATE`, is `AccessDenied`, the rule ADR-0040 gives for `spawn`. No memory for the message is `NoMemory`, and a quota refused is `QuotaExceeded` (ADR-0056, under which the channel's maker pays). Unlike Zircon, on any failure the caller keeps every handle, as `spawn` does (INV-0042-3): a failed call has no effect. A handle entry is `spawn`'s `{handle, rights, mode}`, without the slot, and extends ADR-0040's "only as part of `spawn`".
+- **Write.** `channel_write(endpoint, bytes, handles)` is all or nothing. Queue full is `WouldBlock`, peer closed is `PeerClosed`. A `move` entry without `TRANSFER`, or a `duplicate` entry without `DUPLICATE`, is `AccessDenied`, the rule ADR-0040 gives for `spawn`. No memory for the message is `NoMemory`. Who pays for a channel is ADR-0056's. Unlike Zircon, on any failure the caller keeps every handle, as `spawn` does (INV-0042-3): a failed call has no effect. A handle entry is `spawn`'s `{handle, rights, mode}`, without the slot, and extends ADR-0040's "only as part of `spawn`".
 - **Read.** A buffer too small is `BufferTooSmall`, reporting the sizes, and the message stays. A full handle table is `LimitReached`, and the message stays. A hostile message at the head can therefore block a connection, so a server keeps room for 64 handles and a maximum message, and closes a connection on either error. Empty is `WouldBlock`, or `PeerClosed` once the peer is gone and the queue is drained.
 - **Signals.** `READABLE`, `PEER_CLOSED`, as ADR-0006 rule 1, plus `WRITABLE`: asserted while the direction has a free message slot and `MAX_MESSAGE` bytes free. A smaller write may succeed without it. Rule 1 does not list it for a channel: see the tensions below.
-- **Closing.** The last handle to an endpoint ending destroys its unread messages and closes their handles (`stage-4/sources.md#channels`), and asserts `PEER_CLOSED` at the peer. Teardown is iterative, with a work list threaded through the messages themselves: nesting depth has no bound, so recursive `Drop` on a 64 KiB stack would be a kernel panic any program could cause. This bounds the stack, not the time: the kernel runs this with interrupts masked (ADR-0041), for as long as the chain lasts. ADR-0056's `kernel` limit bounds a chain to what its makers paid for, and INV-0050-6's test measures the stall on the default limits.
+- **Closing.** The last handle to an endpoint ending destroys its unread messages and closes their handles (`stage-4/sources.md#channels`), and asserts `PEER_CLOSED` at the peer. Teardown is iterative, with a work list threaded through the messages themselves: nesting depth has no bound, so recursive `Drop` on a 64 KiB stack would be a kernel panic any program could cause. This bounds the stack, not the time: the kernel runs this with interrupts masked (ADR-0041), for as long as the chain lasts. At stage 4 every process is trusted, so a long chain is a bug and not an attack, and INV-0050-6's test measures the stall. ADR-0056 is what bounds a chain for untrusted code.
 - **Rights.** `READ`, `WRITE`, `WAIT`, `TRANSFER`. No `DUPLICATE`: an endpoint has one holder, like a port, so `PEER_CLOSED` is exact. `snapshot_process` is stage 6: see the deferred section.
 - **No cycles, by rule.** An endpoint cannot be sent through itself or its peer, and an endpoint that has handles queued for reading cannot be moved at all (`BadState`). A cycle of endpoints in each other's queues needs a last edge: moving an endpoint whose queue already holds a handle. So no cycle of endpoints can exist and no collector is needed for them. This does not bound depth or total memory, and it covers endpoints only. A process or job handle can sit in a queue only it can reach; exit and `job_kill` reclaim those. Exception channels (ADR-0004 rule 5) would let a job hold an endpoint, so binding one must extend this rule. CP-02's question stays open for those. The cost: a server drains an endpoint before handing it on, and a peer that keeps queuing handles can pin the endpoint to its holder, so a protocol in which a peer may send unsolicited handles cannot be forwarded.
-- **Byte streams.** A separate object with ADR-0006's three signals, at stage 6, not a mode of this one. Partial reads and writes have nothing in common with whole messages, and no stage 4 work needs them.
 - **Not built.** A combined `channel_call` until a measurement asks for it. Completion packets (ADR-0006 rule 7) stay reserved.
 
 **Tensions with accepted ADRs.**
@@ -69,12 +68,12 @@ Recommended: **Option C**, and bulk data through ADR-0051's memory objects. It i
 None on the choice of Option C, but the details change. For target 2, untrusted agents, memory charging (ADR-0056), which also covers handles in flight, becomes a requirement, and peer-controlled refusal of a move must be designed around. Networking fits: a socket is a service reached by channel, or a later object using the same signals. Threads fit: read and write are atomic per message.
 
 ### Deferred to stage 6
-What a `snapshot_process` child does without channels (INV-0003-7), and byte streams for `pipe()`. Stage 4 has no `fork` and builds neither. ADR-0055 holds the one requirement on stage 4: its design must not preclude an open file description with a shared position (DM-023).
+What a `snapshot_process` child does without channels (INV-0003-7), and byte streams for `pipe()`. Stage 4 has no `fork` and builds neither. Whether a byte stream is a separate object or a mode of this one is left open: partial reads and writes have nothing in common with whole messages, which suggests a separate object with ADR-0006's three signals. ADR-0055 holds the one requirement on stage 4: its design must not preclude an open file description with a shared position (DM-023).
 
 ## Consequences
 - **Positive.** One wait for I/O, exit and messages. No collector. A failed write has no effect, so retry is simple.
 - **Negative.** Three system calls per side per call until `channel_call` exists. An endpoint with handles queued cannot be forwarded. Two copies through the byte-at-a-time routine of ADR-0031 until it is improved.
-- **Follow-up.** A round-trip measurement. Word-sized user copies. Handles in flight leave the table and so escape `MAX_HANDLES`; ADR-0056 charges them.
+- **Follow-up.** A round-trip measurement. Word-sized user copies. Handles in flight leave the table and so escape `MAX_HANDLES`; ADR-0056 covers that.
 
 ## Invariants
 - **INV-0050-1.** A message is delivered whole, in order, or not at all, and a failed `channel_write` leaves the caller's handle table unchanged. *Check:* in-QEMU test filling a queue, with a handle in the refused message still usable.
@@ -82,13 +81,13 @@ What a `snapshot_process` child does without channels (INV-0003-7), and byte str
 - **INV-0050-3.** Queued bytes and messages per direction never exceed their bounds. *Check:* host test in the channel's crate, and an in-QEMU test seeing `WouldBlock`.
 - **INV-0050-4.** Closing an endpoint closes every handle in its unread messages. *Check:* in-QEMU test sending a process handle, closing the reader, and seeing the object freed with the frame and heap counters of INV-0041-1.
 - **INV-0050-5.** A channel handle has no `DUPLICATE` right. *Check:* a unit test over `OBJECT_TYPES`.
-- **INV-0050-6.** Closing an endpoint uses bounded kernel stack whatever the nesting depth. *Check:* in-QEMU test building a chain far deeper than a kernel stack allows, then closing its head.
+- **INV-0050-6.** Closing an endpoint uses bounded kernel stack whatever the nesting depth. *Check:* in-QEMU test building a chain far deeper than a kernel stack allows, then closing its head, reporting how long interrupts stayed masked.
 
 ## Open questions
 - Round-trip cost on Zoraya: measure at stage 4, under HVF and TCG.
 - Whether 64 messages and 256 KiB suit a busy service.
 - Whether the moved-endpoint rule hurts a real protocol: none of stage 4's do.
-- Whether the teardown stall on the default limits is acceptable: if not, a kernel thread takes the work list and yields between objects.
+- Whether the teardown stall is acceptable: if not, a kernel thread takes the work list and yields between objects.
 
 ## Revisit triggers
 - A measured round trip that dominates a build: add `channel_call`, or a ring for that path.

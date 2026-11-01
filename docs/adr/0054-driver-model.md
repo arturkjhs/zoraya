@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-01
-- **Depends on:** ADR-0006, ADR-0010, ADR-0012, ADR-0015, ADR-0024, ADR-0031, ADR-0034, ADR-0040, ADR-0041, ADR-0045, ADR-0050, ADR-0051, ADR-0053, ADR-0056
+- **Depends on:** ADR-0006, ADR-0010, ADR-0012, ADR-0015, ADR-0024, ADR-0031, ADR-0034, ADR-0040, ADR-0041, ADR-0045, ADR-0050, ADR-0051, ADR-0053
 - **Evidence:** DM-023, DM-046, DM-047, DM-161, alternatives-postmortem.md#minix-3, alternatives-postmortem.md#redox, stage-4/sources.md#drivers, stage-4/sources.md#virtio-and-qemu
 
 ## Context

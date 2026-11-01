@@ -363,6 +363,9 @@ deterministic random mutations.
 
 ## Known limitations
 
+- **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code
+  runs in Zoraya until [ADR-0056](adr/0056-job-memory-accounting.md) is accepted and implemented. At stage 4 every
+  process is trusted.
 - **QEMU `virt` assumptions.** The RAM base `0x40000000` (where the device tree and image are found), the fallback
   UART address, and the boot identity map's shape (first 4 GiB, image below 4 GiB) are QEMU `virt` facts. The load
   address is fixed by the ELF; KASLR is not implemented.

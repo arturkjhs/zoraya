@@ -321,3 +321,12 @@ Verdict counts: resolved 1, listed and open 11, understated 3, not addressed 4, 
 - Read each citation in the option lists of ADR-0050 and ADR-0055 against DM-018, DM-022, GR-002, GR-018, the QNX, Redox, Hubris, L4 and Fuchsia sections, and the source notes. No web source was fetched, so these rest on the notes.
 - Ran `make adr-check`: 7 errors, all the expected `index.md` kind. Booted the kernel in `target/` once under TCG for the memory line in T7. That build is dated earlier today and may predate 7d7a0e0, which changed `ExitRecord` only, so the 2 MiB gap does not depend on it.
 - Not checked: nothing here was built or run for the design, as no ADR here has code. The 16 MiB of the service's row and the other values of the table were checked for sums, not for need. The attack counts in T2, T5 and T6 are arithmetic on stated numbers, not measurements. Outside scope and not reviewed: finding 41, and the rows the second review confirmed that are not named above.
+
+### Disposition of the third review
+
+The architect moved quotas out of stage 4, so budgets, accounts, payment for channels, the reply pool and `init`'s limits are now in ADR-0056, which stays proposed and is not accepted now.
+
+- **T1:** fixed in ADR-0053 and ADR-0056. **T2:** ADR-0056, `channel_create` names the job that pays. **T3, T6:** ADR-0056, carved accounts and a reply share per account; ADR-0055 no longer closes on `NoMemory`. **T4:** ADR-0055 keeps 240 buffers, and ADR-0056 has 63 accounts. **T5:** proposed ADR-0057, a 64-bit handle; listed as a tension in ADR-0055. **T7:** ADR-0056, 92 MiB, with `init`'s row at 8 MiB.
+- **T10, T16, T21, T23, T24, T17:** fixed. T24 by the record in Process and INV-0055-9.
+- **Not changed, not on the architect's list:** T8, T9, T11 to T15, T18 to T20, T22.
+
