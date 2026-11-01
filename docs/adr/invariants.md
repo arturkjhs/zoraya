@@ -239,4 +239,4 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0061](0061-directory-entries.md) Listing a directory handle | 4 |
 | [ADR-0062](0062-power-off.md) Power off through a handle | 3 |
 | [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` | 2 |
-| **Total** | **183** |
+| **Total** | **184** |
