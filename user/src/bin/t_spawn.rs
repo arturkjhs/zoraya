@@ -7,7 +7,7 @@
 use zoraya_abi::spawn::{Encoder, HandleEntry, MAX_SPAWN_SIZE, Transfer};
 use zoraya_abi::{
     CONSOLE, DIRECTORY, Disposition, ExitReason, ExitRecord, Handle, JOB, JobFlags, Mode,
-    RequestKind, Rights, Status, job_signals, process_signals,
+    RequestKind, Rights, Status, exit_detail_parts, job_signals, process_signals,
 };
 use zoraya_user::{
     assert_err, console_entry, console_write, dup, handle_close, handle_duplicate, image,
@@ -170,6 +170,22 @@ fn suspended_means_not_started() {
     assert_eq!(wait_exit(child).code, 130);
     assert_err!(process_resume(child), Status::BadState);
     handle_close(port).expect("close");
+
+    // `process_resume` on one killed while suspended.
+    let child = spawn_role("exit130", &[], true).expect("spawn");
+    process_signal(child, RequestKind::Terminate, 0).expect("signal");
+    wait_exit(child);
+    assert_err!(process_resume(child), Status::BadState);
+
+    // `SUSPENDED` goes with the resume.
+    let child = spawn_role("yield", &[], true).expect("spawn");
+    let port = port_create().expect("port");
+    port_subscribe(port, child, process_signals::SUSPENDED, 1, Mode::Level).expect("subscribe");
+    process_resume(child).expect("resume");
+    assert_err!(port_wait(port, 0, &mut packets), Status::DeadlineExceeded);
+    process_signal(child, RequestKind::Terminate, 0).expect("signal");
+    wait_exit(child);
+    handle_close(port).expect("close");
 }
 
 /// ADR-0046: the group is a job in the tree of the job field.
@@ -182,6 +198,19 @@ fn the_group_is_a_sub_job() {
     e.group(sub);
     let length = e.finish().expect("fits");
     assert_err!(spawn(&buffer[..length]), Status::InvalidArgument);
+
+    // The job itself is a group of the job, and a group needs its right.
+    let mut e = Encoder::new(&mut buffer, sub, image);
+    e.group(sub).arg(b"exit130");
+    let length_self = e.finish().expect("fits");
+    let child_self = spawn(&buffer[..length_self]).expect("spawn");
+    assert_eq!(wait_exit(child_self).code, 130);
+    let weak = handle_duplicate(sub, Rights::WAIT).expect("dup");
+    let mut e = Encoder::new(&mut buffer, JOB, image);
+    e.group(weak).arg(b"exit130");
+    let length_weak = e.finish().expect("fits");
+    assert_err!(spawn(&buffer[..length_weak]), Status::AccessDenied);
+    handle_close(weak).expect("close");
 
     let mut e = Encoder::new(&mut buffer, JOB, image);
     e.group(sub).arg(b"yield");
@@ -264,7 +293,10 @@ fn dispositions_come_from_the_block() {
     process_signal(child, RequestKind::Hangup, 8).expect("signal");
     let record = wait_exit(child);
     assert_eq!(record.reason, ExitReason::Terminated);
-    assert_eq!(record.detail, 8);
+    assert_eq!(
+        exit_detail_parts(record.detail),
+        (Some(RequestKind::Hangup), 8)
+    );
 
     let mut buffer = [0; 256];
     let image = image("child");
@@ -275,7 +307,8 @@ fn dispositions_come_from_the_block() {
     let child = spawn(&buffer[..length]).expect("spawn");
     process_signal(child, RequestKind::Hangup, 8).expect("signal");
     process_signal(child, RequestKind::Quit, 9).expect("signal");
-    assert_eq!(wait_exit(child).detail, 9, "the hangup was ignored");
+    let (kind, _) = exit_detail_parts(wait_exit(child).detail);
+    assert_eq!(kind, Some(RequestKind::Quit), "the hangup was ignored");
     handle_close(image).expect("close");
     process_set_disposition(RequestKind::Hangup, Disposition::Terminate).expect("set");
 }

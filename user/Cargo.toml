@@ -166,3 +166,8 @@ bench = false
 name = "t_stress"
 test = false
 bench = false
+
+[[bin]]
+name = "t_leak"
+test = false
+bench = false

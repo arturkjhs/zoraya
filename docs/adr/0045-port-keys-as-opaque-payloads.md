@@ -40,7 +40,7 @@ INV-0035-1 says the only integer payloads of a native call are `detail` fields a
 Recommended: **Option A**. It is a recommendation, not a decision.
 
 - INV-0045-1 replaces INV-0035-1 when this ADR is accepted, and INV-0035-1's row is marked as replaced.
-- `Param` gains `Opaque`, for the two named uses. The lint allows it only for `port_subscribe`'s key and `port_queue`'s key and data.
+- `Param` gains `Opaque`, for the two named uses. The lint allows it only for the keys of `port_subscribe`, `port_unsubscribe` and `port_queue`, and `port_queue`'s data.
 
 ## Consequences
 - **Positive.** The invariant can be true and checked at stage 3.
@@ -48,7 +48,7 @@ Recommended: **Option A**. It is a recommendation, not a decision.
 - **Follow-up.** None.
 
 ## Invariants
-- **INV-0045-1.** Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys and user packet data, each documented as opaque to the kernel (ADR-0004, ADR-0006). *Check:* a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`, `Opaque` for `port_subscribe` and `port_queue`), plus a unit test that `RelativePath::new("/x")` fails.
+- **INV-0045-1.** Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys and user packet data, each documented as opaque to the kernel (ADR-0004, ADR-0006). *Check:* a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`, `Opaque` for `port_subscribe`, `port_unsubscribe` and `port_queue`), plus a unit test that `RelativePath::new("/x")` fails.
 
 ## Open questions
 - None.

@@ -7,13 +7,16 @@
 use zoraya_abi::spawn::Encoder;
 use zoraya_abi::{
     Disposition, ExitReason, Handle, JOB, JobFlags, Mode, Packet, RequestKind, Status,
-    process_signals,
+    exit_detail_parts, process_signals,
 };
 use zoraya_user::{
     assert_err, handle_close, image, job_create, job_kill, job_signal, port_create, port_subscribe,
-    port_wait, process_set_disposition, process_signal, process_take_request, spawn, spawn_role,
-    wait_exit,
+    port_wait, process_set_disposition, process_signal, spawn, spawn_role, wait_exit,
 };
+
+fn request_detail(detail: u32) -> u32 {
+    exit_detail_parts(detail).1
+}
 
 const KINDS: [RequestKind; 5] = [
     RequestKind::Interrupt,
@@ -41,7 +44,10 @@ fn default_ends_the_process() {
         process_signal(child, kind, 100 + i as u32).expect("signal");
         let record = wait_exit(child);
         assert_eq!(record.reason, ExitReason::Terminated);
-        assert_eq!(record.detail, 100 + i as u32);
+        assert_eq!(
+            exit_detail_parts(record.detail),
+            (Some(kind), 100 + i as u32)
+        );
     }
 }
 
@@ -67,7 +73,7 @@ fn a_suspended_process_ends_without_starting() {
     process_signal(child, RequestKind::Interrupt, 3).expect("signal");
     let record = wait_exit(child);
     assert_eq!(record.reason, ExitReason::Terminated);
-    assert_eq!(record.detail, 3);
+    assert_eq!(request_detail(record.detail), 3);
 }
 
 fn deliver_queues_and_asserts() {
@@ -79,21 +85,6 @@ fn deliver_queues_and_asserts() {
     process_signal(child, RequestKind::Interrupt, 21).expect("signal");
     assert_eq!(wait_exit(child).code, 21);
     handle_close(port).expect("close");
-}
-
-/// The queue and `REQUEST_PENDING` on this process's own side.
-fn requests_queue_in_order_with_a_bound() {
-    process_set_disposition(RequestKind::Hangup, Disposition::Deliver).expect("set");
-    let job = job_create(JOB, JobFlags::NONE).expect("job");
-    // This process has no handle to itself, so a child stands in.
-    let child = spawn_in(job, b"take");
-    let _ = child;
-    assert_err!(process_take_request(), Status::NotFound);
-    job_kill(job).expect("kill");
-    wait_exit(child);
-    handle_close(child).expect("close");
-    handle_close(job).expect("close");
-    process_set_disposition(RequestKind::Hangup, Disposition::Terminate).expect("set");
 }
 
 /// A child with `Deliver`, not taking anything, fills its queue (INV-0046-1).
@@ -128,7 +119,7 @@ fn a_full_queue_says_so() {
         Status::LimitReached
     );
     process_signal(child, RequestKind::Terminate, 7).expect("it still ends");
-    assert_eq!(wait_exit(child).detail, 7);
+    assert_eq!(request_detail(wait_exit(child).detail), 7);
     handle_close(port).expect("close");
 }
 
@@ -139,13 +130,17 @@ fn job_signal_covers_the_tree() {
     let b = spawn_in(inner, b"sleep");
     let outside = spawn_role("yield", &[], false).expect("spawn");
     job_signal(job, RequestKind::Interrupt, 11).expect("signal");
-    assert_eq!(wait_exit(a).detail, 11);
-    assert_eq!(wait_exit(b).detail, 11);
+    assert_eq!(request_detail(wait_exit(a).detail), 11);
+    assert_eq!(request_detail(wait_exit(b).detail), 11);
     let record = {
         process_signal(outside, RequestKind::Quit, 12).expect("signal");
         wait_exit(outside)
     };
-    assert_eq!(record.detail, 12, "outside the job, so not reached");
+    assert_eq!(
+        request_detail(record.detail),
+        12,
+        "outside the job, so not reached"
+    );
     handle_close(inner).expect("close");
     handle_close(job).expect("close");
 }
@@ -190,10 +185,32 @@ fn depth_has_a_limit() {
         }
     };
     assert_eq!(status, Status::LimitReached);
+    // This process's job is at depth 1, and depth 31 is the deepest allowed.
+    assert_eq!(count, 30);
     // A closed parent is held up by its child, so close in any order.
     for job in held.iter().flatten() {
         handle_close(*job).expect("close");
     }
+}
+
+/// A detail the top byte of `ExitRecord.detail` needs is refused (ADR-0046).
+fn a_detail_too_wide_is_refused() {
+    let child = spawn_role("yield", &[], false).expect("spawn");
+    assert_err!(
+        process_signal(child, RequestKind::Quit, 1 << 24),
+        Status::InvalidArgument
+    );
+    assert_err!(
+        job_signal(JOB, RequestKind::Quit, u32::MAX),
+        Status::InvalidArgument
+    );
+    process_signal(child, RequestKind::Interrupt, 0).expect("signal");
+    let (kind, _) = exit_detail_parts(wait_exit(child).detail);
+    assert_eq!(
+        kind,
+        Some(RequestKind::Interrupt),
+        "the kind is in the record"
+    );
 }
 
 /// Changing to `Terminate` with one queued ends the process at once. A child
@@ -210,11 +227,11 @@ fn main() -> i32 {
     blocked_processes_end();
     a_suspended_process_ends_without_starting();
     deliver_queues_and_asserts();
-    requests_queue_in_order_with_a_bound();
     a_full_queue_says_so();
     job_signal_covers_the_tree();
     job_kill_is_final();
     depth_has_a_limit();
+    a_detail_too_wide_is_refused();
     set_disposition_is_checked();
     0
 }

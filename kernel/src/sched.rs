@@ -268,8 +268,8 @@ fn schedule() {
         unsafe { mmu::set_user_table(ttbr0) };
         // SAFETY: every exception is masked. Both threads are kept alive past
         // the switch: `next` by SCHED.current; `prev` by the ready queue, the
-        // dead list, `s.idle`, or the waiter list or leaked count that will
-        // wake it. No local here holds a count.
+        // dead list, `s.idle`, its process's `thread`, or the waiter list or
+        // count that will wake it. No local here holds a count.
         unsafe { arch::switch((*prev).context.get(), (*next).context.get()) };
     }
     arch::restore_interrupts(daif);

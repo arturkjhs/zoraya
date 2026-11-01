@@ -55,10 +55,8 @@ impl Job {
                 closed: false,
             }),
         });
-        job.map_err(|_| {
-            port::free_source(source);
-            Status::NoMemory
-        })
+        // On failure the value was dropped, and its `Drop` freed the source.
+        job.map_err(|_| Status::NoMemory)
     }
 
     /// The job of processes the kernel starts.

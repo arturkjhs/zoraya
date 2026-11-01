@@ -48,10 +48,8 @@ pub struct Port {
 impl Port {
     pub fn new() -> Result<Arc<Port>, Status> {
         let id = EVENTS.lock().new_port().map_err(status)?;
-        try_arc(Port { id }).map_err(|_| {
-            EVENTS.lock().free_port(id, &mut sched::wake);
-            Status::NoMemory
-        })
+        // On failure the value was dropped, and its `Drop` freed the port.
+        try_arc(Port { id }).map_err(|_| Status::NoMemory)
     }
 
     /// Ends all waits and subscriptions (ADR-0006 rule 5).

@@ -49,7 +49,7 @@ ADR-0032 fixes `Handle` as a `u32` with 0 never valid and left rights to stage 3
 Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **Representation.** `Handle` stays a `u32`: bits 0 to 15 the slot, bits 16 to 31 the generation. Slot 0 does not exist, so 0 stays invalid. `MAX_HANDLES` is 1024 slots `[assumption]`.
-- **Allocation.** Next-fit from a cursor, so a closed slot is not reused soon. `spawn` installs at the requested slot, with generation 0, in a table that is otherwise empty.
+- **Allocation.** Slots never used first, then next-fit from a cursor, so a closed slot is not reused soon. `spawn` installs at the requested slot, with generation 0, in a table that is otherwise empty.
 - **Exhaustion.** A full table gives `LimitReached`, and the call has no other effect. A slot whose generation reaches 65535 is retired: a stale handle can then never match.
 - **Rights.** `DUPLICATE`, `TRANSFER`, `WAIT`, `SIGNAL`, `CREATE_PROCESS`, `KILL`, `RESUME`, `READ`, `WRITE`, `LOOKUP`.
 

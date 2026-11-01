@@ -42,7 +42,7 @@ Stage 3 is the first code in which user programs decide when kernel objects die.
 Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **Objects** are `Arc`s. A handle, a thread running for a process, and a job's list of live processes each hold one count. `heap::try_arc` probes the allocator for the layout, frees the probe, then calls `Arc::new`. With one CPU, interrupts masked and no preemption in the kernel, nothing runs between, so the second allocation succeeds. SMP must replace it.
-- **Signals and subscriptions** live in `zoraya-events`, in one `SpinLock`. A process or job has a source id, freed in its `Drop`. A port has a port id, freed when it closes. Space for every packet a subscription can ever need is reserved when it is made, so asserting a signal never allocates.
+- **Signals and subscriptions** live in `zoraya-events`, in one `SpinLock`. A process or job has a source id, freed in its `Drop`. A port has a port id, whose subscriptions end when it closes, freed with the last `Arc`. Space for every packet a subscription can ever need is reserved when it is made, so asserting a signal never allocates.
 - **Process.** Live, then a zombie, then freed. It becomes a zombie at exit, on its own thread: it releases the address space and ASID, closes every handle, records `ExitRecord`, asserts `TERMINATED`, and leaves its job. A zombie is an `Arc` with a record. It is freed when the last handle goes.
 - **Ending another process.** The requester sets the exit it wants and wakes the target. The target ends itself on its own stack at the next return to EL0, or as it starts. So nothing is torn down under a blocked thread's feet, and no user instruction runs after the request.
 - **Cycle.** A process holds its thread and a thread its process, until exit breaks that. A job's list holds its live processes and each holds its job, until exit breaks that.
@@ -51,7 +51,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 ## Consequences
 - **Positive.** Ownership has one direction everywhere but two cycles that exit breaks. No garbage collector. The event logic is tested on the host.
-- **Negative.** A suspended process nobody resumes stays until its job is killed. `try_arc` depends on one CPU. One global lock for signals.
+- **Negative.** Removing a subscription leaves a stale ready item, bounded by what is live. A suspended process nobody resumes stays until its job is killed. `try_arc` depends on one CPU. One global lock for signals.
 - **Follow-up.** A real fallible `Arc` when SMP arrives, or when `Arc::try_new` is stable.
 
 ## Invariants

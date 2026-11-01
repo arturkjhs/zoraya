@@ -105,10 +105,13 @@ impl<T> Table<T> {
 
     /// Makes room, so that the next [`Table::insert`] cannot fail.
     pub fn reserve(&mut self) -> Result<(), Status> {
-        if self.free_index().is_none() {
-            return Err(Status::LimitReached);
+        match self.free_index() {
+            None => Err(Status::LimitReached),
+            Some(index) if index == self.slots.len() => {
+                self.slots.try_reserve(1).map_err(|_| Status::NoMemory)
+            }
+            Some(_) => Ok(()),
         }
-        self.slots.try_reserve(1).map_err(|_| Status::NoMemory)
     }
 
     /// Adds a handle. A full table is `LimitReached` and changes nothing.

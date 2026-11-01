@@ -24,7 +24,7 @@ Building ADR-0003 and ADR-0004 needs answers they do not give. What the process-
 
 ### Option B: Bounded queue with an error; killed jobs closed; group as sub-job
 - **Description:** A fixed ring per process; the group field selects a sub-job; a killed job refuses new processes.
-- **Evidence for:** No allocation on delivery (driver 2). The sender learns of a loss (CP-14). A closed job has no window for a late child (driver 1). Zircon's jobs refuse new children once killed (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`).
+- **Evidence for:** No allocation on delivery (driver 2). The sender learns of a loss (CP-14). A closed job has no window for a late child (driver 1). Zircon's jobs refuse new children once killed `[outside evidence: not checked]`, and its job model is cited at `alternatives-postmortem.md#fuchsia--zircon-incl-starnix`.
 - **Evidence against:** A flood is reported, not absorbed.
 - **Cost:** *(estimate)* 30 lines.
 - **Precedent:** Zircon jobs.
@@ -44,6 +44,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **Job `TERMINATED`.** Asserted exactly while the job's tree has no live process, a new job included, and cleared by `spawn`. A waiter should spawn first.
 - **`job_kill`.** Ends every process in the tree with reason `Killed`, and closes the tree: `spawn` and `job_create` then give `BadState`.
 - **Depth.** A job tree is at most 32 deep `[assumption]`, so walking it has a bound; deeper gives `LimitReached`.
+- **Exit record of a request.** ADR-0004 rule 1 has `detail` carry the kind and the signal number. The top byte is the kind plus one, and the low 24 bits the sender's value, so `process_signal` and `job_signal` refuse a `detail` above 2^24 - 1 with `InvalidArgument`. `process_exit_with_reason` leaves the top byte 0. `WTERMSIG` is the low bits if nonzero, else ADR-0004's map from the kind.
 - **Atomicity.** One lock over the job tree covers process creation, `job_signal`, `job_kill` and leaving a job. That is what INV-0004-3 asks for, on one CPU or many.
 - **`exit_with_reason`.** Takes only `Terminated`, as ADR-0004 rule 1 defines; any other reason is `InvalidArgument`.
 - **`posix` bit.** A flag of `job_create`, inherited by child jobs, and otherwise unused until `snapshot_process`.

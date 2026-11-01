@@ -4,13 +4,13 @@
 //! What the tests spawn. Its first argument says what it does.
 
 use zoraya_abi::{
-    CONSOLE, DEADLINE_INFINITE, Disposition, Handle, JOB, MAX_HANDLES, Packet, RequestKind, Rights,
-    Status,
+    CONSOLE, DEADLINE_INFINITE, Disposition, Handle, JOB, MAX_HANDLES, Mode, Packet, RequestKind,
+    Rights, Status,
 };
 use zoraya_user::{
-    assert_err, handle_duplicate, port_create, port_wait, println, process_exit,
-    process_exit_terminated, process_set_disposition, process_take_request, sleep_until, startup,
-    thread_yield,
+    assert_err, clock_monotonic, handle_duplicate, port_create, port_queue, port_subscribe,
+    port_unsubscribe, port_wait, println, process_exit, process_exit_terminated,
+    process_set_disposition, process_take_request, sleep_until, startup, thread_yield,
 };
 
 /// Every slot of this process's table is empty (INV-0003-1).
@@ -82,6 +82,35 @@ fn main() -> i32 {
         }
         b"wait" => wait_forever(),
         b"take" => take_requests(),
+        b"nap" => {
+            sleep_until(clock_monotonic() + 3_600_000_000_000);
+            94
+        }
+        b"spin" => loop {
+            core::hint::spin_loop();
+        },
+        b"port-wait-only" => {
+            // A port with only `WAIT`, and something to subscribe.
+            let port = Handle::new(3).expect("slot");
+            let job = Handle::new(4).expect("slot");
+            let denied = Status::AccessDenied;
+            assert_err!(port_queue(port, 0, 0), denied);
+            assert_err!(port_unsubscribe(port, 0), denied);
+            assert_err!(port_subscribe(port, job, 1, 0, Mode::Level), denied);
+            let mut packets = [Packet::default()];
+            assert_err!(port_wait(port, 0, &mut packets), Status::DeadlineExceeded);
+            0
+        }
+        b"port-write-only" => {
+            let port = Handle::new(3).expect("slot");
+            let job = Handle::new(4).expect("slot");
+            let mut packets = [Packet::default()];
+            assert_err!(port_wait(port, 0, &mut packets), Status::AccessDenied);
+            port_subscribe(port, job, 1, 0, Mode::Edge).expect("subscribe");
+            port_unsubscribe(port, 0).expect("unsubscribe");
+            port_queue(port, 0, 0).expect("queue");
+            0
+        }
         b"yield" => loop {
             thread_yield();
         },

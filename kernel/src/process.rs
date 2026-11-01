@@ -16,10 +16,11 @@ use zoraya_abi::spawn::{
 };
 use zoraya_abi::{
     CONSOLE, ConsoleObject, DIRECTORY, DirectoryObject, Disposition, ExitReason, ExitRecord, JOB,
-    JobObject, ObjectType, REQUEST_KINDS, RequestKind, Status, process_signals,
+    JobObject, MAX_REQUEST_DETAIL, ObjectType, REQUEST_KINDS, RequestKind, Status, exit_detail,
+    process_signals,
 };
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, Program, Segment};
-use zoraya_events::SourceId;
+use zoraya_events::{RequestQueue, SourceId};
 use zoraya_pagetable::{Attributes, MemoryType};
 
 use crate::arch::mmu;
@@ -32,9 +33,6 @@ use crate::sync::SpinLock;
 use crate::{arch, port, println, ramdisk};
 
 const _: () = assert!(USER_STACK_TOP == USER_HIGH - PAGE_SIZE);
-
-/// Requests queued per process (ADR-0046).
-const MAX_REQUESTS: usize = 64;
 
 /// Why a process could not start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,49 +75,18 @@ struct Exit {
 
 struct Requests {
     dispositions: [Disposition; REQUEST_KINDS],
-    /// A ring of what `Deliver` queued, in fixed memory, so delivery cannot
-    /// fail for lack of it.
-    queue: [(RequestKind, u32); MAX_REQUESTS],
-    first: usize,
-    count: usize,
+    /// What `Deliver` queued, in fixed memory, so delivery cannot fail for
+    /// lack of it.
+    queue: RequestQueue,
     /// How this process is to end, once it next can.
     exit: Option<ExitRecord>,
 }
 
-impl Requests {
-    fn push(&mut self, kind: RequestKind, detail: u32) -> Result<(), Status> {
-        if self.count == MAX_REQUESTS {
-            return Err(Status::LimitReached);
-        }
-        self.queue[(self.first + self.count) % MAX_REQUESTS] = (kind, detail);
-        self.count += 1;
-        Ok(())
-    }
-
-    fn pop(&mut self) -> Option<(RequestKind, u32)> {
-        if self.count == 0 {
-            return None;
-        }
-        let request = self.queue[self.first];
-        self.first = (self.first + 1) % MAX_REQUESTS;
-        self.count -= 1;
-        Some(request)
-    }
-
-    /// The first queued request of `kind`.
-    fn queued(&self, kind: RequestKind) -> Option<u32> {
-        (0..self.count)
-            .map(|i| self.queue[(self.first + i) % MAX_REQUESTS])
-            .find(|(k, _)| *k == kind)
-            .map(|(_, detail)| detail)
-    }
-}
-
-fn terminated(detail: u32) -> ExitRecord {
+fn terminated(kind: RequestKind, detail: u32) -> ExitRecord {
     ExitRecord {
         code: 0,
         reason: ExitReason::Terminated,
-        detail,
+        detail: exit_detail(kind, detail),
     }
 }
 
@@ -222,7 +189,7 @@ impl Process {
     /// Requests queued, of any kind.
     #[cfg(feature = "qemu-test")]
     pub fn requests_queued(&self) -> usize {
-        self.requests.lock().count
+        self.requests.lock().queue.len()
     }
 
     #[cfg(feature = "qemu-test")]
@@ -246,6 +213,9 @@ impl Process {
 
     /// ADR-0004 rule 2.
     pub fn signal(&self, kind: RequestKind, detail: u32) -> Result<(), Status> {
+        if detail > MAX_REQUEST_DETAIL {
+            return Err(Status::InvalidArgument);
+        }
         if self.exit_record().is_some() {
             return Ok(());
         }
@@ -254,11 +224,14 @@ impl Process {
             Disposition::Ignore => Ok(()),
             Disposition::Terminate => {
                 drop(requests);
-                self.request_exit(terminated(detail));
+                self.request_exit(terminated(kind, detail));
                 Ok(())
             }
             Disposition::Deliver => {
-                requests.push(kind, detail)?;
+                requests
+                    .queue
+                    .push(kind, detail)
+                    .map_err(|_| Status::LimitReached)?;
                 drop(requests);
                 port::set_signals(self.source, process_signals::REQUEST_PENDING);
                 Ok(())
@@ -271,19 +244,19 @@ impl Process {
     pub fn set_disposition(&self, kind: RequestKind, disposition: Disposition) {
         let mut requests = self.requests.lock();
         requests.dispositions[kind.raw() as usize] = disposition;
-        let queued = requests.queued(kind);
+        let queued = requests.queue.queued(kind);
         drop(requests);
         if disposition == Disposition::Terminate
             && let Some(detail) = queued
         {
-            self.request_exit(terminated(detail));
+            self.request_exit(terminated(kind, detail));
         }
     }
 
     pub fn take_request(&self) -> Option<(RequestKind, u32)> {
         let mut requests = self.requests.lock();
-        let request = requests.pop();
-        let empty = requests.count == 0;
+        let request = requests.queue.pop();
+        let empty = requests.queue.is_empty();
         drop(requests);
         if empty {
             port::clear_signals(self.source, process_signals::REQUEST_PENDING);
@@ -438,22 +411,15 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
         thread: SpinLock::new(None),
         requests: SpinLock::new(Requests {
             dispositions: start.dispositions,
-            queue: [(RequestKind::Interrupt, 0); MAX_REQUESTS],
-            first: 0,
-            count: 0,
+            queue: RequestQueue::new(),
             exit: None,
         }),
         suspended: AtomicBool::new(start.suspended),
         #[cfg(feature = "qemu-test")]
         watch: SpinLock::new((0, None)),
     });
-    let process = match process {
-        Ok(process) => process,
-        Err(e) => {
-            port::free_source(source);
-            return Err(e.into());
-        }
-    };
+    // On failure the value was dropped, and its `Drop` freed the source.
+    let process = process?;
     let thread = sched::spawn_user(process.clone(), program.entry, USER_STACK_TOP)?;
     *process.thread.lock() = Some(thread.clone());
     if let Err(status) = process.job.admit(&process) {
@@ -471,8 +437,7 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
 }
 
 /// The handles of a process the kernel starts (ADR-0043).
-fn kernel_handles() -> Result<HandleTable, SpawnError> {
-    let job = Job::root().map_err(|_| SpawnError::NoMemory)?;
+fn kernel_handles(job: Arc<Job>) -> Result<HandleTable, SpawnError> {
     let mut handles = HandleTable::new();
     for (handle, object, rights) in [
         (CONSOLE, Object::Console, ConsoleObject::RIGHTS),
@@ -489,11 +454,14 @@ fn kernel_handles() -> Result<HandleTable, SpawnError> {
 /// Starts a process from ELF bytes, in the root job.
 pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
     let none = StartupBlock::decode(&[0; 8]).ok_or(SpawnError::NoMemory)?;
+    // A job of its own, so that killing it leaves the root usable.
+    let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
+    let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
     create(Start {
         name,
         file,
-        job: Job::root().map_err(|_| SpawnError::NoMemory)?,
-        handles: kernel_handles()?,
+        job: job.clone(),
+        handles: kernel_handles(job)?,
         argv: none.argv,
         envp: none.envp,
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
@@ -533,11 +501,15 @@ pub fn exit_current(record: ExitRecord) -> ! {
             None => break,
         }
     }
+    // A zombie holds its record, not the table's memory.
+    let table = core::mem::take(&mut *process.handles.lock());
+    drop(table);
     let waiters = {
         let mut exit = process.exit.lock();
         exit.record = Some(record);
         core::mem::take(&mut exit.waiters)
     };
+    process.suspended.store(false, Ordering::Relaxed);
     port::clear_signals(
         process.source,
         process_signals::SUSPENDED | process_signals::REQUEST_PENDING,

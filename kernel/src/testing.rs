@@ -26,7 +26,10 @@ use core::ptr::{addr_of, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use zoraya_abi::spawn::StartupBlock;
-use zoraya_abi::{Disposition, ExitReason, ExitRecord, Handle, REQUEST_KINDS, RequestKind};
+use zoraya_abi::{
+    Disposition, ExitReason, ExitRecord, Handle, REQUEST_KINDS, RequestKind, exit_detail,
+    exit_detail_parts, process_signals,
+};
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
 use zoraya_elf::{Error as ElfError, Program};
@@ -423,6 +426,18 @@ static TESTS: &[Test] = &[
     Test {
         name: "try_arc_reports_failure",
         run: try_arc_reports_failure,
+    },
+    Test {
+        name: "requests_come_out_in_order",
+        run: requests_come_out_in_order,
+    },
+    Test {
+        name: "an_ended_process_asserts_only_terminated",
+        run: an_ended_process_asserts_only_terminated,
+    },
+    Test {
+        name: "failed_allocation_frees_each_object_once",
+        run: failed_allocation_frees_each_object_once,
     },
     // Last, so that it covers every test before it.
     Test {
@@ -1355,7 +1370,9 @@ fn ports_keep_their_rules() {
 }
 
 fn many_processes_come_and_go() {
+    let before = sched::preemptions();
     exited_in("t_stress");
+    assert!(sched::preemptions() > before, "the stress never preempted");
 }
 
 /// A `Start` for program `name`, holding nothing, in `job`.
@@ -1438,7 +1455,7 @@ fn terminate_stops_user_code_at_once() {
         ExitRecord {
             code: 0,
             reason: ExitReason::Terminated,
-            detail: 9
+            detail: exit_detail(RequestKind::Terminate, 9)
         }
     );
     assert_eq!(process.watched(), Some(at_request));
@@ -1464,7 +1481,66 @@ fn disposition_change_ends_at_once() {
     assert_eq!(process.requests_queued(), 1);
     assert_eq!(process.exit_record(), None);
     process.set_disposition(RequestKind::Quit, Disposition::Terminate);
-    assert_eq!(process.wait().detail, 5);
+    let record = process.wait();
+    assert_eq!(
+        exit_detail_parts(record.detail),
+        (Some(RequestKind::Quit), 5)
+    );
+}
+
+/// ADR-0004: first in, first out, and `Deliver` asserts until the queue empties.
+fn requests_come_out_in_order() {
+    let process = process::spawn("counter").expect("counter");
+    process.set_disposition(RequestKind::Quit, Disposition::Deliver);
+    for detail in 1..=3 {
+        process.signal(RequestKind::Quit, detail).expect("signal");
+    }
+    for detail in 1..=3 {
+        assert_eq!(process.take_request(), Some((RequestKind::Quit, detail)));
+    }
+    assert_eq!(process.take_request(), None);
+    process.signal(RequestKind::Terminate, 0).expect("signal");
+    process.wait();
+}
+
+/// ADR-0006 rule 1: an ended process asserts `TERMINATED` and nothing else.
+fn an_ended_process_asserts_only_terminated() {
+    let process = process::spawn("hello").expect("hello");
+    process.set_disposition(RequestKind::Quit, Disposition::Deliver);
+    process.signal(RequestKind::Quit, 1).expect("signal");
+    process.wait();
+    let bits = port::EVENTS.lock().signals(process.source());
+    assert_eq!(bits, process_signals::TERMINATED);
+}
+
+/// R-01 of the TASK-09 review: a failing `try_arc` drops the object, whose
+/// `Drop` is the only free.
+fn failed_allocation_frees_each_object_once() {
+    use core::sync::atomic::Ordering::Relaxed;
+    let before = port::EVENTS.lock().live();
+    let fail = || heap::FAIL_NEXT_ARC.store(true, Relaxed);
+    fail();
+    assert!(port::Port::new().is_err());
+    fail();
+    assert!(Job::create(&root(), false).is_err());
+    fail();
+    let (name, file) = ramdisk::find("child").expect("child");
+    let none = StartupBlock::decode(&[0; 8]).expect("empty block");
+    let result = process::create(process::Start {
+        name,
+        file,
+        job: root(),
+        handles: HandleTable::new(),
+        argv: none.argv,
+        envp: none.envp,
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended: false,
+    });
+    assert!(result.is_err());
+    assert_eq!(port::EVENTS.lock().live(), before);
+    // And the id table still works.
+    let port = port::Port::new().expect("port");
+    port.close();
 }
 
 /// `[assumption]` of INV-0004-3, which states the count.
@@ -1538,8 +1614,8 @@ fn settle() {
     }
 }
 
-/// INV-0041-1: after many rounds of everything a round of `t_stress` does at
-/// small scale, frames, heap and event tables are where they were.
+/// INV-0041-1: after many rounds of `t_leak`, which makes and ends each kind of
+/// object in each way, frames, heap and event tables are where they were.
 fn nothing_is_left_after_spawn_exit_close() {
     let snapshot = || {
         settle();
@@ -1551,7 +1627,7 @@ fn nothing_is_left_after_spawn_exit_close() {
             events.subscription_count(),
         )
     };
-    let round = || assert_eq!(run_program("parent"), exited(0));
+    let round = || assert_eq!(run_program("t_leak"), exited(0));
     // The first rounds grow what is kept for reuse, such as the run queue.
     for _ in 0..8 {
         round();

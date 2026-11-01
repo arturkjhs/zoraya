@@ -53,7 +53,6 @@ extern "C" fn __user_main() -> ! {
     process_exit(main())
 }
 
-/// Makes a system call with up to three arguments, returning x0 and x1.
 /// Makes a system call with up to six arguments, returning x0 and x1.
 pub fn raw_syscall(number: u64, registers: [u64; 6]) -> (u64, u64) {
     let (status, value);
@@ -155,11 +154,12 @@ pub fn process_resume(process: Handle) -> Result<(), Status> {
 
 pub fn process_exit_record(process: Handle) -> Result<ExitRecord, Status> {
     let mut raw = [0; ExitRecord::SIZE];
-    stubs::process_exit_record::<Svc>(process, Bytes(bytes(&raw)))?;
-    // The kernel wrote through the pointer above, which the compiler cannot
-    // see: `black_box` keeps it from assuming `raw` is still zero.
-    let raw = core::hint::black_box(&mut raw);
-    ExitRecord::from_bytes(raw).ok_or(Status::InvalidArgument)
+    let target = Buffer {
+        address: raw.as_mut_ptr() as u64,
+        length: raw.len() as u64,
+    };
+    stubs::process_exit_record::<Svc>(process, Bytes(target))?;
+    ExitRecord::from_bytes(&raw).ok_or(Status::InvalidArgument)
 }
 
 pub fn process_signal(process: Handle, kind: RequestKind, detail: u32) -> Result<(), Status> {

@@ -4,6 +4,7 @@
 //! Handles and rights, from a process's side: INV-0040-1 to INV-0040-3 and
 //! INV-0006-8, and that every call refuses a handle without its right.
 
+use zoraya_abi::spawn::Encoder;
 use zoraya_abi::{
     CONSOLE, DIRECTORY, Disposition, Handle, JOB, JobFlags, MAX_HANDLES, Mode, ObjectType, Packet,
     PortObject, ProcessObject, RequestKind, Rights, Status, job_signals, process_signals,
@@ -11,8 +12,8 @@ use zoraya_abi::{
 use zoraya_user::{
     assert_err, console_write, directory_lookup, handle_close, handle_duplicate, image, job_create,
     job_kill, job_signal, port_create, port_queue, port_subscribe, port_unsubscribe, port_wait,
-    process_exit_record, process_resume, process_set_disposition, process_signal, spawn_role,
-    wait_exit,
+    process_exit_record, process_resume, process_set_disposition, process_signal, spawn,
+    spawn_role, wait_exit,
 };
 
 fn stale_handles_fail() {
@@ -112,8 +113,8 @@ fn every_call_needs_its_right() {
     let d = handle_duplicate(DIRECTORY, Rights::DUPLICATE).expect("duplicate");
     assert_err!(directory_lookup(d, "child"), denied);
 
-    // A port cannot be duplicated, so a narrower one is reached by spawn only:
-    // the kernel test of the same rule is in t_spawn.
+    // A port cannot be duplicated, so a narrower one is reached by a move:
+    // t_ports does that.
     assert_err!(handle_duplicate(port, PortObject::RIGHTS), denied);
     assert!(!PortObject::RIGHTS.contains(Rights::DUPLICATE));
 
@@ -152,6 +153,16 @@ fn ports_refuse_bad_subscriptions() {
 
 /// INV-0040-3 from user space.
 fn a_table_can_be_filled() {
+    // Made while there is room: `spawn` at the limit must start nothing, which
+    // shows as its job staying empty.
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    let port = port_create().expect("port");
+    port_subscribe(port, job, job_signals::TERMINATED, 1, Mode::Edge).expect("subscribe");
+    let child = image("child");
+    let mut buffer = [0; 256];
+    let mut e = Encoder::new(&mut buffer, job, child);
+    e.suspended().arg(b"hello");
+    let length = e.finish().expect("fits");
     let mut held = [None; MAX_HANDLES as usize];
     let mut count = 0;
     let status = loop {
@@ -164,13 +175,24 @@ fn a_table_can_be_filled() {
         }
     };
     assert_eq!(status, Status::LimitReached);
-    assert!(count >= MAX_HANDLES as usize - 16, "{count}");
+    assert!(count >= MAX_HANDLES as usize - 32, "{count}");
     assert_err!(port_create(), Status::LimitReached);
     assert_err!(job_create(JOB, JobFlags::NONE), Status::LimitReached);
     assert_err!(image_at_limit(), Status::LimitReached);
+    assert_err!(spawn(&buffer[..length]), Status::LimitReached);
+    let mut packets = [Packet::default()];
+    assert_err!(port_wait(port, 0, &mut packets), Status::DeadlineExceeded);
+    let mut signals_port = None;
+    core::mem::swap(&mut signals_port, &mut held[0]);
+    handle_close(signals_port.expect("a handle")).expect("close");
+    port_subscribe(port, job, job_signals::TERMINATED, 2, Mode::Level).expect("subscribe");
+    assert_eq!(port_wait(port, 0, &mut packets), Ok(1), "no child started");
     for h in held.iter().flatten() {
         handle_close(*h).expect("close");
     }
+    handle_close(child).expect("close");
+    handle_close(port).expect("close");
+    handle_close(job).expect("close");
     handle_close(image("child")).expect("usable again");
 }
 

@@ -90,7 +90,8 @@ impl KernelStack {
     pub fn first_pc(&self) -> u64 {
         let frame = (self.top() - EXCEPTION_FRAME as u64) as *const crate::arch::Frame;
         // SAFETY: a user thread's stack has its frame at the top, mapped for
-        // as long as `self` lives. The caller asks about a thread not running.
+        // as long as `self` lives. Only a thread that never ran leaves the
+        // value meaningful; on another it is merely stale.
         unsafe { (*frame).elr }
     }
 

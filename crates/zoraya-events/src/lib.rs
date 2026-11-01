@@ -5,8 +5,11 @@
 //! can form a reference cycle, and the kernel keeps all of it behind one lock.
 //!
 //! The ready list holds at most one item per subscription plus the user
-//! packets, and room for that is reserved when a subscription or user packet
-//! is added, so asserting a signal never allocates. `take` costs the packets
+//! packets and some items left stale by removals, and room for that is reserved
+//! when a subscription or user packet is added, so asserting a signal never
+//! allocates. Removal marks items stale instead of searching the list, and
+//! removing many subscriptions sweeps each port once, so ending a handle costs
+//! what it holds, not the square of it. `take` costs the packets
 //! it returns plus the entries that went stale, which earlier assertions paid
 //! for, and never looks at an idle subscription.
 
@@ -64,8 +67,12 @@ pub struct PortId(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Item {
-    Subscription(u32),
-    User { key: u64, data: u64 },
+    /// The subscription's slot and its serial: a slot is reused, a serial not.
+    Subscription(u32, u64),
+    User {
+        key: u64,
+        data: u64,
+    },
 }
 
 #[derive(Debug)]
@@ -81,6 +88,8 @@ struct Subscription {
     owner: u64,
     /// In the port's ready list.
     queued: bool,
+    /// Told apart from a later user of the same slot.
+    serial: u64,
     /// `Edge`: assertions not yet returned, and their bits.
     pending: u32,
     latched: u32,
@@ -98,6 +107,10 @@ struct Port<W> {
     /// Sorted by key.
     subscriptions: Vec<(u64, u32)>,
     user: usize,
+    /// Items in `ready` whose subscription is gone.
+    stale: usize,
+    /// The last sweep that visited this port.
+    swept: u64,
     closed: bool,
     waiters: Vec<W>,
 }
@@ -105,7 +118,7 @@ struct Port<W> {
 impl<W> Port<W> {
     /// Keeps room for every item this port could then hold.
     fn reserve(&mut self, subscriptions: usize, user: usize) -> Result<(), Error> {
-        let needed = (subscriptions + user).saturating_sub(self.ready.len());
+        let needed = (subscriptions + user + self.stale).saturating_sub(self.ready.len());
         self.ready.try_reserve(needed).map_err(|_| Error::NoMemory)
     }
 }
@@ -119,6 +132,8 @@ pub struct Events<W> {
     free_ports: Vec<u32>,
     subscriptions: Vec<Option<Subscription>>,
     free_subscriptions: Vec<u32>,
+    serial: u64,
+    sweeps: u64,
 }
 
 impl<W> Default for Events<W> {
@@ -136,6 +151,8 @@ impl<W> Events<W> {
             free_ports: Vec::new(),
             subscriptions: Vec::new(),
             free_subscriptions: Vec::new(),
+            serial: 0,
+            sweeps: 0,
         }
     }
 
@@ -163,9 +180,7 @@ impl<W> Events<W> {
 
     /// Ends a source and every subscription to it.
     pub fn free_source(&mut self, id: SourceId) {
-        while let Some(&s) = self.source(id.0).subscriptions.last() {
-            self.remove_subscription(s);
-        }
+        self.remove_matching(id, None);
         self.sources[id.0 as usize] = None;
         self.free_sources.push(id.0);
     }
@@ -175,6 +190,8 @@ impl<W> Events<W> {
             ready: VecDeque::new(),
             subscriptions: Vec::new(),
             user: 0,
+            stale: 0,
+            swept: 0,
             closed: false,
             waiters: Vec::new(),
         };
@@ -193,6 +210,7 @@ impl<W> Events<W> {
         port.closed = true;
         port.ready.clear();
         port.user = 0;
+        port.stale = 0;
         for waiter in port.waiters.drain(..) {
             wake(waiter);
         }
@@ -224,17 +242,59 @@ impl<W> Events<W> {
         self.free_subscriptions.push(s);
     }
 
-    fn remove_subscription(&mut self, s: u32) {
-        let (port_id, key, queued) = {
+    /// Marks a subscription's ready item stale, for `take` to drop.
+    fn mark_stale(&mut self, s: u32) {
+        let subscription = self.subscription(s);
+        let (queued, port) = (subscription.queued, subscription.port);
+        if queued {
+            self.port(port).stale += 1;
+        }
+    }
+
+    /// Removes the subscriptions of `source` that belong to `owner`, or all of
+    /// them. Each port's list is swept once, however many leave it.
+    fn remove_matching(&mut self, source: SourceId, owner: Option<u64>) {
+        self.sweeps += 1;
+        let sweep = self.sweeps;
+        let matches = |s: &Subscription| s.source == source.0 && owner.is_none_or(|o| s.owner == o);
+        for i in 0..self.source(source.0).subscriptions.len() {
+            let s = self.source(source.0).subscriptions[i];
             let subscription = self.subscription(s);
-            (subscription.port, subscription.key, subscription.queued)
+            if !matches(subscription) {
+                continue;
+            }
+            let port_id = subscription.port;
+            self.mark_stale(s);
+            if self.port(port_id).swept != sweep {
+                self.port(port_id).swept = sweep;
+                let mut list = core::mem::take(&mut self.port(port_id).subscriptions);
+                list.retain(|(_, s)| {
+                    !self.subscriptions[*s as usize]
+                        .as_ref()
+                        .is_some_and(matches)
+                });
+                self.port(port_id).subscriptions = list;
+            }
+        }
+        let mut i = 0;
+        while let Some(&s) = self.source(source.0).subscriptions.get(i) {
+            if matches(self.subscription(s)) {
+                self.detach(s);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn remove_subscription(&mut self, s: u32) {
+        let (port_id, key) = {
+            let subscription = self.subscription(s);
+            (subscription.port, subscription.key)
         };
+        self.mark_stale(s);
         let port = self.port(port_id);
         if let Ok(at) = port.subscriptions.binary_search_by_key(&key, |e| e.0) {
             port.subscriptions.remove(at);
-        }
-        if queued {
-            port.ready.retain(|item| *item != Item::Subscription(s));
         }
         self.detach(s);
     }
@@ -258,6 +318,24 @@ impl<W> Events<W> {
             Ok(_) => return Err(Error::KeyInUse),
             Err(at) => at,
         };
+        // Stale items are bounded by what is live, so subscribing and removing
+        // in a loop cannot grow the list.
+        if port.stale > port.subscriptions.len() + port.user {
+            let live = port.ready.len() - port.stale;
+            let subscriptions = &self.subscriptions;
+            let port = self.ports[port_id.0 as usize]
+                .as_mut()
+                .expect("port is alive");
+            port.ready.retain(|item| match item {
+                Item::Subscription(s, serial) => subscriptions[*s as usize]
+                    .as_ref()
+                    .is_some_and(|sub| sub.serial == *serial),
+                Item::User { .. } => true,
+            });
+            debug_assert_eq!(port.ready.len(), live);
+            port.stale = 0;
+        }
+        let port = self.port(port_id.0);
         // Everything that can fail comes first.
         port.subscriptions
             .try_reserve(1)
@@ -269,6 +347,8 @@ impl<W> Events<W> {
             .try_reserve(1)
             .map_err(|_| Error::NoMemory)?;
         let place = self.source(source.0).subscriptions.len() as u32;
+        self.serial += 1;
+        let serial = self.serial;
         let s = alloc_slot(
             &mut self.subscriptions,
             &mut self.free_subscriptions,
@@ -281,6 +361,7 @@ impl<W> Events<W> {
                 mode,
                 owner,
                 queued: false,
+                serial,
                 pending: 0,
                 latched: 0,
             },
@@ -289,7 +370,9 @@ impl<W> Events<W> {
         self.port(port_id.0).subscriptions.insert(at, (key, s));
         if mode == Mode::Level && self.source(source.0).bits & mask != 0 {
             self.subscription(s).queued = true;
-            self.port(port_id.0).ready.push_back(Item::Subscription(s));
+            self.port(port_id.0)
+                .ready
+                .push_back(Item::Subscription(s, serial));
         }
         Ok(())
     }
@@ -310,14 +393,7 @@ impl<W> Events<W> {
 
     /// Ends the subscriptions of one handle (INV-0006-4).
     pub fn remove_owner(&mut self, source: SourceId, owner: u64) {
-        let mut i = 0;
-        while let Some(&s) = self.source(source.0).subscriptions.get(i) {
-            if self.subscription(s).owner == owner {
-                self.remove_subscription(s);
-            } else {
-                i += 1;
-            }
-        }
+        self.remove_matching(source, Some(owner));
     }
 
     pub fn signals(&mut self, source: SourceId) -> u32 {
@@ -346,9 +422,9 @@ impl<W> Events<W> {
             }
             if !subscription.queued {
                 subscription.queued = true;
-                let port_id = subscription.port;
+                let (port_id, serial) = (subscription.port, subscription.serial);
                 let port = self.port(port_id);
-                port.ready.push_back(Item::Subscription(s));
+                port.ready.push_back(Item::Subscription(s, serial));
                 for waiter in port.waiters.drain(..) {
                     wake(waiter);
                 }
@@ -411,7 +487,14 @@ impl<W> Events<W> {
                     };
                     count += 1;
                 }
-                Item::Subscription(s) => {
+                Item::Subscription(s, serial) => {
+                    let alive = self.subscriptions[s as usize]
+                        .as_ref()
+                        .is_some_and(|sub| sub.serial == serial);
+                    if !alive {
+                        self.port(id.0).stale -= 1;
+                        continue;
+                    }
                     let source = self.subscription(s).source;
                     let bits = self.source(source).bits;
                     let subscription = self.subscription(s);
@@ -466,6 +549,11 @@ impl<W> Events<W> {
         Some(port.waiters.swap_remove(at))
     }
 
+    /// Items on the ready list, stale ones too.
+    pub fn ready_len(&mut self, id: PortId) -> usize {
+        self.port(id.0).ready.len()
+    }
+
     /// Live subscriptions, for tests of the kernel.
     pub fn subscription_count(&self) -> usize {
         self.subscriptions.iter().flatten().count()
@@ -479,6 +567,9 @@ impl<W> Events<W> {
         )
     }
 }
+
+mod requests;
+pub use requests::{MAX_REQUESTS, QueueFull, RequestQueue};
 
 #[cfg(test)]
 mod tests;

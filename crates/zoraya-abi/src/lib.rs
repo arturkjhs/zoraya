@@ -17,11 +17,31 @@ extern crate std;
 
 pub mod spawn;
 
-/// Result of a system call. There is no `Interrupted`: nothing but the ways
-/// ADR-0006 rule 5 lists ends a wait.
-#[repr(u64)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
+macro_rules! statuses {
+    ($($(#[$doc:meta])* $name:ident = $value:literal,)*) => {
+        /// Result of a system call. There is no `Interrupted`: nothing but the
+        /// ways ADR-0006 rule 5 lists ends a wait.
+        #[repr(u64)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Status {
+            $($(#[$doc])* $name = $value,)*
+        }
+
+        impl Status {
+            /// Every status, from the one list that defines them.
+            pub const ALL: &[Status] = &[$(Status::$name),*];
+
+            pub const fn from_raw(raw: u64) -> Option<Status> {
+                Some(match raw {
+                    $($value => Status::$name,)*
+                    _ => return None,
+                })
+            }
+        }
+    };
+}
+
+statuses! {
     Ok = 0,
     /// The number names no call.
     BadSyscall = 1,
@@ -45,26 +65,6 @@ pub enum Status {
     DeadlineExceeded = 10,
     /// The port was closed during the wait.
     Cancelled = 11,
-}
-
-impl Status {
-    pub const fn from_raw(raw: u64) -> Option<Status> {
-        Some(match raw {
-            0 => Status::Ok,
-            1 => Status::BadSyscall,
-            2 => Status::BadHandle,
-            3 => Status::BadAddress,
-            4 => Status::InvalidArgument,
-            5 => Status::NoMemory,
-            6 => Status::AccessDenied,
-            7 => Status::LimitReached,
-            8 => Status::NotFound,
-            9 => Status::BadState,
-            10 => Status::DeadlineExceeded,
-            11 => Status::Cancelled,
-            _ => return None,
-        })
-    }
 }
 
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
@@ -761,6 +761,27 @@ syscalls! {
     20 PortQueue port_queue(port: Handle, key: Opaque, data: Opaque) false;
     21 PortWait port_wait(port: Handle, deadline: Deadline, packets: PacketBuffer) true;
     22 DirectoryLookup directory_lookup(directory: Handle, name: PathBuffer) false;
+}
+
+/// Largest `detail` a request can carry: the rest of `ExitRecord.detail` holds
+/// its kind (ADR-0046).
+pub const MAX_REQUEST_DETAIL: u32 = (1 << 24) - 1;
+
+/// `ExitRecord.detail` of a process a request ended (ADR-0004 rule 1): the
+/// kind plus one in the top byte, the sender's value below it. A process that
+/// ends itself with `process_exit_with_reason` leaves the top byte 0.
+pub const fn exit_detail(kind: RequestKind, detail: u32) -> u32 {
+    (kind.raw() + 1) << 24 | detail
+}
+
+/// The request in an `ExitRecord.detail`, if a request ended the process, and
+/// the value below the kind.
+pub const fn exit_detail_parts(detail: u32) -> (Option<RequestKind>, u32) {
+    let low = detail & MAX_REQUEST_DETAIL;
+    match (detail >> 24).checked_sub(1) {
+        Some(raw) => (RequestKind::from_raw(raw), low),
+        None => (None, low),
+    }
 }
 
 /// `process_take_request`'s value, a kind and a detail in one register.

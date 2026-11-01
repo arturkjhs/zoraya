@@ -146,6 +146,54 @@ fn a_port_moves_but_is_not_copied() {
     assert_eq!(wait_exit(child).code, 130);
 }
 
+/// INV-0040-2 for ports: each right, in a child that holds only it.
+fn port_rights_are_checked() {
+    use zoraya_abi::spawn::{HandleEntry, Transfer};
+    for (role, right) in [
+        ("port-wait-only", Rights::WAIT),
+        ("port-write-only", Rights::WRITE),
+    ] {
+        let port = port_create().expect("port");
+        let list = [
+            HandleEntry {
+                slot: 3,
+                handle: port,
+                rights: right,
+                transfer: Transfer::Move,
+            },
+            zoraya_user::dup(4, zoraya_abi::JOB, Rights::WAIT),
+        ];
+        let child = spawn_role(role, &list, false).expect("spawn");
+        assert_eq!(wait_exit(child).code, 0, "{role}");
+    }
+}
+
+/// INV-0006-4 for a move: the subscription belonged to the handle that left.
+fn moving_a_handle_ends_its_subscriptions() {
+    use zoraya_abi::spawn::{HandleEntry, Transfer};
+    let target = spawn_role("exit130", &[], true).expect("spawn");
+    let mine = handle_duplicate(
+        target,
+        <zoraya_abi::ProcessObject as zoraya_abi::ObjectType>::RIGHTS,
+    )
+    .expect("duplicate");
+    let port = port_create().expect("port");
+    port_subscribe(port, mine, TERMINATED, 1, Mode::Level).expect("subscribe");
+    let list = [HandleEntry {
+        slot: 3,
+        handle: mine,
+        rights: Rights::NONE,
+        transfer: Transfer::Move,
+    }];
+    let holder = spawn_role("exit130", &list, false).expect("spawn");
+    wait_exit(holder);
+    zoraya_user::process_resume(target).expect("resume");
+    wait_exit(target);
+    let mut p = [Packet::default()];
+    assert_err!(port_wait(port, 0, &mut p), Status::DeadlineExceeded);
+    handle_close(port).expect("close");
+}
+
 /// Nothing but a packet, a deadline or a close ends a wait: a child's requests
 /// and exit do not, unless subscribed (INV-0006-6).
 fn unrelated_events_do_not_wake() {
@@ -170,5 +218,7 @@ fn main() -> i32 {
     a_bounded_port_says_so();
     a_port_moves_but_is_not_copied();
     unrelated_events_do_not_wake();
+    port_rights_are_checked();
+    moving_a_handle_ends_its_subscriptions();
     0
 }

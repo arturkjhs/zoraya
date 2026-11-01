@@ -40,7 +40,7 @@ ADR-0003's `spawn` takes an image handle. At stage 3 there is no filesystem serv
 Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **`directory_lookup(directory, name)`** needs `LOOKUP`, and returns an image handle with `READ`, `DUPLICATE` and `TRANSFER`. A missing name is `NotFound`. The name is a `RelativePath`: UTF-8, not empty, no leading `/`. The ramdisk is flat, so a `/` anywhere simply finds nothing.
-- **Startup convention.** A process started by the kernel gets the console at slot 1, a job handle at slot 2 and the directory at slot 3. The convention is `zoraya-abi` constants, not a kernel rule for children: a child has what its parent listed (INV-0003-1).
+- **Startup convention.** A process started by the kernel gets the console at slot 1, a handle to a job of its own at slot 2, under the root job so that killing it leaves the root usable, and the directory at slot 3. The convention is `zoraya-abi` constants, not a kernel rule for children: a child has what its parent listed (INV-0003-1).
 - **Rights of the first handles.** All the rights their type can carry.
 
 ## Consequences

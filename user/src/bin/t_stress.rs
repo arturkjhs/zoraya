@@ -2,7 +2,8 @@
 #![no_main]
 
 //! Many processes starting and ending, with requests and port waits
-//! interleaved, under preemption by the children that spin.
+//! interleaved, under preemption by the children that spin: the kernel test
+//! asserts that preemptions happened.
 
 use zoraya_abi::{
     DEADLINE_INFINITE, ExitReason, Handle, Mode, Packet, RequestKind, process_signals,
@@ -15,7 +16,7 @@ use zoraya_user::{
 const ROUNDS: u64 = 300;
 const WIDTH: usize = 12;
 
-const ROLES: [&str; 5] = ["yield", "exit130", "sleep", "wait", "empty"];
+const ROLES: [&str; 6] = ["yield", "exit130", "sleep", "wait", "empty", "spin"];
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {

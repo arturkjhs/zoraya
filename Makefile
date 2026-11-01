@@ -20,7 +20,7 @@ RAMDISK := $(BUILD)/ramdisk.bin
 USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
-	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress
+	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60

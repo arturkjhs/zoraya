@@ -69,19 +69,33 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
     assert_eq!(blocking, 2);
 }
 
-/// INV-0006-6: the vocabulary has no `Interrupted`, and `from_raw` knows
-/// every status there is.
+/// INV-0006-6: the vocabulary has no `Interrupted`. `Status::ALL` and the enum
+/// come from one list, so a new status is judged here.
 #[test]
 fn no_status_means_interrupted() {
-    let mut count = 0;
-    for raw in 0..64 {
-        if let Some(s) = Status::from_raw(raw) {
-            count += 1;
-            assert_eq!(s as u64, raw);
-            assert!(!format!("{s:?}").contains("Interrupt"), "{s:?}");
-        }
+    assert_eq!(Status::ALL.len(), 12);
+    for (raw, s) in Status::ALL.iter().enumerate() {
+        assert_eq!(*s as usize, raw);
+        assert_eq!(Status::from_raw(raw as u64), Some(*s));
+        assert!(!format!("{s:?}").contains("Interrupt"), "{s:?}");
     }
-    assert_eq!(count, 12);
+}
+
+#[test]
+fn an_exit_detail_keeps_the_kind_and_the_value() {
+    for kind in [
+        RequestKind::Interrupt,
+        RequestKind::Hangup,
+        RequestKind::Custom(31),
+    ] {
+        let detail = exit_detail(kind, MAX_REQUEST_DETAIL);
+        assert_eq!(exit_detail_parts(detail), (Some(kind), MAX_REQUEST_DETAIL));
+    }
+    assert_ne!(
+        exit_detail(RequestKind::Hangup, 0),
+        exit_detail(RequestKind::Interrupt, 0)
+    );
+    assert_eq!(exit_detail_parts(2), (None, 2));
 }
 
 /// INV-0003-3: `spawn` takes one buffer of vectors, never a string.
@@ -388,6 +402,35 @@ fn trailing_bytes_flags_and_reserved_fields_are_refused() {
             SpawnRequest::decode(&m[..n]).map(|_| ()),
             Err(Status::InvalidArgument),
             "byte {at}"
+        );
+    }
+}
+
+/// One entry alone must be checked too: `handles` would otherwise hide it.
+#[test]
+fn a_single_bad_entry_is_refused() {
+    let mut buffer = [0; 256];
+    let mut e = Encoder::new(&mut buffer, JOB, DIRECTORY);
+    e.handle(HandleEntry {
+        slot: 3,
+        handle: Handle::new(4).unwrap(),
+        rights: Rights::NONE,
+        transfer: Transfer::Move,
+    });
+    let n = e.finish().unwrap();
+    assert!(SpawnRequest::decode(&buffer[..n]).is_ok());
+    for (at, value, status) in [
+        (HEADER_SIZE, 0, Status::InvalidArgument),
+        (HEADER_SIZE + 4, 0, Status::BadHandle),
+        (HEADER_SIZE + 9, 0xff, Status::InvalidArgument),
+        (HEADER_SIZE + 12, 7, Status::InvalidArgument),
+    ] {
+        let mut m = buffer;
+        m[at] = value;
+        assert_eq!(
+            SpawnRequest::decode(&m[..n]).map(|_| ()),
+            Err(status),
+            "{at}"
         );
     }
 }

@@ -115,6 +115,10 @@ pub fn try_box<T>(value: T) -> Result<Box<T>, OutOfMemory> {
 /// one CPU, in code that nothing preempts, with the block just freed, the
 /// allocation inside `Arc::new` then finds it. SMP must replace this.
 pub fn try_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
+    #[cfg(feature = "qemu-test")]
+    if FAIL_NEXT_ARC.swap(false, core::sync::atomic::Ordering::Relaxed) {
+        return Err(OutOfMemory);
+    }
     let (layout, _) = Layout::new::<[usize; 2]>()
         .extend(Layout::new::<T>())
         .map_err(|_| OutOfMemory)?;
@@ -125,9 +129,17 @@ pub fn try_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
     arc.ok_or(OutOfMemory)
 }
 
-/// Takes a block of `layout`, whose size is not zero, and gives it back.
+/// Makes the next `try_arc` fail, as an exhausted heap would.
+#[cfg(feature = "qemu-test")]
+pub static FAIL_NEXT_ARC: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Takes a block of `layout` and gives it back. Size zero needs no block.
 pub fn can_allocate(layout: Layout) -> bool {
-    // SAFETY: the caller's contract on the size.
+    if layout.size() == 0 {
+        return true;
+    }
+    // SAFETY: the size is not zero.
     let block = unsafe { alloc(layout) };
     if block.is_null() {
         return false;

@@ -274,3 +274,45 @@ fn a_waiter_can_be_taken_back() {
     assert_eq!(e.remove_waiter(port, |w| *w == 5), None);
     e.queue(port, 0, 0, &mut no_wake()).unwrap();
 }
+
+/// Stale items never reach a client, and a loop of subscribing and removing
+/// cannot grow the list.
+#[test]
+fn removed_items_go_stale_and_are_bounded() {
+    let (mut e, port, source) = setup();
+    e.set(source, A, &mut no_wake());
+    for _ in 0..10_000 {
+        e.subscribe(port, source, A, 1, Mode::Level, 1).unwrap();
+        e.unsubscribe(port, 1).unwrap();
+    }
+    assert_eq!(keys(&mut e, port), [0u64; 0]);
+    assert!(e.ready_len(port) < 16, "{}", e.ready_len(port));
+    e.subscribe(port, source, A, 2, Mode::Level, 1).unwrap();
+    assert_eq!(keys(&mut e, port), [2]);
+}
+
+/// R-02 of the TASK-09 review: closing a handle with many ready subscriptions,
+/// keys in the worst order for the sorted list. A quadratic path takes 16
+/// times as long for 4 times the size, and this allows 8.
+#[test]
+fn ending_a_handle_is_not_quadratic() {
+    use std::time::{Duration, Instant};
+    fn run(n: u64) -> Duration {
+        let (mut e, port, source) = setup();
+        e.set(source, A, &mut no_wake());
+        for key in 0..n {
+            e.subscribe(port, source, A, key, Mode::Level, 1).unwrap();
+        }
+        let start = Instant::now();
+        e.remove_owner(source, 1);
+        let time = start.elapsed();
+        assert_eq!(e.subscription_count(), 0);
+        time
+    }
+    let best = |n| (0..5).map(|_| run(n)).min().unwrap();
+    let (small, large) = (best(20_000), best(80_000));
+    assert!(
+        large < small * 8 + Duration::from_millis(5),
+        "{small:?} {large:?}"
+    );
+}
