@@ -424,8 +424,5 @@ fn an_encoder_that_runs_out_of_room_says_so() {
     assert_eq!(e.finish(), None);
 }
 
-#[test]
-fn the_startup_block_lies_below_the_stack() {
-    assert_eq!(STARTUP_BLOCK % 4096, 0);
-    assert!(STARTUP_BLOCK + STARTUP_BLOCK_MAX < USER_STACK_TOP - USER_STACK_SIZE);
-}
+const _: () = assert!(STARTUP_BLOCK.is_multiple_of(4096));
+const _: () = assert!(STARTUP_BLOCK + STARTUP_BLOCK_MAX < USER_STACK_TOP - USER_STACK_SIZE);

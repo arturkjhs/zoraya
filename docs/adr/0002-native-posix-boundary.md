@@ -108,6 +108,7 @@ Why D over C: per-call cost on the data path is the documented failure mode of s
 
 ## Open questions
 
+- As of TASK-09, INV-0002-2 and INV-0002-6 cannot be fully checked: `snapshot_process` and `libposix` are stage 6. The `posix` policy bit exists and is stored, and `ExitRecord` has its three fields, with `code`, `reason` and `detail` separate in `zoraya-abi` and through `process_exit_record`.
 - INV-0002-1's check is partial as of TASK-08 and stays `not yet applicable (stage 4)`. The first system calls are checked by a lint over `zoraya-abi`, but no call takes a path, so `RelativePath` does not exist. Also, `process_exit`'s `code: i32` is an integer that is not a `detail` field, although ADR-0004 rule 1 requires it. Proposed ADR-0035 reconciles the two ADRs.
 - Path-resolution cost of a prefix table in the library on our kernel: prototype measurement on W1 (5,294 header opens).
 - Memory cost of fork emulation under strict commit (X-6): measure dash RSS at fork points in W4 (unmeasured; `task-02/conflict-impact.md#x-6-…`).

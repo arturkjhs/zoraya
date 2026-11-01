@@ -123,6 +123,7 @@ CP-10 says the native ABI delivers events as messages or wait results, never by 
 
 ## Open questions
 
+- As of TASK-09: `job_suspend`, `job_resume` and exception channels are not built (ADR-0046), so INV-0004-6 waits for exception channels, which no stage in the roadmap names yet; it is marked stage 6. INV-0004-7 waits for byte streams at stage 4 (TASK-10). INV-0004-2's `waitpid` half waits for `libposix`; `process_exit_with_reason` and the separate fields exist. INV-0004-4's "shared counter" is read by the test kernel from the target's page, and at exit, since no shared memory object exists. INV-0004-5 is checked by behaviour, in `t_signals` and `t_spawn`: a default block gives `Terminate` for each kind tried, and the parent's own dispositions do not reach the child.
 - Reaction latency of a compute-bound POSIX program with a handler: measure with a synthetic program on the prototype; the shells check pending state at every builtin, so the practical case is third-party programs.
 - Whether make's cleanup runs correctly from the main wait (M7 estimate, 30 lines): patch and rerun W9 (`task-02b/conflict-impact.md#open-questions-…`, item 3).
 - Interrupts arriving during `spawn`/`snapshot_process`: unmeasured; define that a request is queued on the new process only if its disposition is `Deliver` at creation (attribute block).

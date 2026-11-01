@@ -237,15 +237,32 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   not global. With no current process, `EPD0` is set and `TTBR0` is 0.
 - **User layout.** Programs from 4 MiB up; a 64 KiB stack mapped in full, ending one page below 2^47, with an unmapped
   page below it.
-- **Processes.** One thread each, started by the kernel from the ramdisk. All memory is mapped at creation, so there
-  is no demand paging. `Process::wait` gives the `ExitRecord`. `spawn` for user space is stage 3.
-- **System calls.** `svc #0`, number in x8, status in x0, value in x1, as `zoraya-abi` states:
-  `process_exit`, `thread_yield`, `console_write`, `clock_monotonic`, `sleep_until`. The handle table is one fixed
-  console handle until stage 3.
+- **Processes.** One thread each. All memory is mapped at creation, so there is no demand paging. A process ends on
+  its own thread: anyone else sets the exit it wants and wakes it, and it acts on that at its next return to EL0, or
+  before its first instruction. At exit it releases its memory, ASID and handles, and stays as a zombie holding only
+  its `ExitRecord` until its last handle goes.
+- **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u32` of slot and generation, 1024 slots, a rights
+  mask that only decreases. Port handles have no `DUPLICATE`, so closing one closes the port.
+- **Jobs (`kernel/src/job.rs`).** A tree, at most 32 deep, with one lock over membership and walks. `job_signal` and
+  `job_kill` cover the tree; a killed tree refuses new processes. `TERMINATED` means no live process in the tree.
+  The `posix` bit is stored and unused until stage 6.
+- **`spawn`.** One flat buffer, copied once and decoded by `zoraya_abi::spawn::SpawnRequest`: job, image, group, handle
+  list, dispositions, argv and environment. A child holds what was listed and nothing else, and reads its vectors from a
+  read-only block at `STARTUP_BLOCK`. Registers start at zero. A process the kernel starts has the console, a job and
+  the ramdisk directory at slots 1 to 3, and gets images with `directory_lookup`.
+- **Requests (ADR-0004).** Dispositions per kind, four fixed and 32 custom; a fixed queue of 64 per process, with
+  `LimitReached` when full. `Deliver` asserts `REQUEST_PENDING`; no code runs asynchronously.
+- **Ports (`crates/zoraya-events`, `kernel/src/port.rs`).** All signals, ready lists and subscriptions in one structure
+  under one lock, linked by index. Level and edge. `port_wait` costs the packets it returns, not the subscriptions.
+  1024 user packets per port.
+- **System calls.** `svc #0`, number in x8, status in x0, value in x1. One `syscalls!` declaration in `zoraya-abi` makes
+  the numbers, the table the lints read, the trait `kernel/src/syscall.rs` implements and the stubs `zoraya-rt` wraps.
+- **Not built at stage 3.** `job_suspend`, `job_resume`, `object_wait_one`, `object_get_signals`, timers, event
+  objects, byte streams, channels, exception channels and `snapshot_process`.
 - **Ramdisk.** QEMU ignores `-initrd` for an ELF kernel, so `tools/mkramdisk` packs `user/` programs and the kernel
   embeds them in `.rodata`. A kernel built without the Makefile has an empty one.
-- **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb`, which checks permissions as EL0 does.
-  No call writes to user memory yet.
+- **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb` and `sttrb`, which check permissions as EL0
+  does.
 
 ## Filesystem engine (as built)
 

@@ -6,8 +6,9 @@
 //! can influence. Anything a system call can reach uses [`try_box`] and
 //! `Vec::try_reserve` and returns the failure.
 
-use alloc::alloc::alloc;
+use alloc::alloc::{alloc, dealloc};
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr;
 
@@ -16,6 +17,7 @@ use zoraya_pmm::OutOfFrames;
 
 use super::layout::{HEAP_WINDOW, HEAP_WINDOW_SIZE};
 use super::{frames, paging};
+use crate::arch;
 use crate::sync::SpinLock;
 
 struct Window {
@@ -106,6 +108,33 @@ pub fn try_box<T>(value: T) -> Result<Box<T>, OutOfMemory> {
         ptr::write(block, value);
         Ok(Box::from_raw(block))
     }
+}
+
+/// `Arc::new` that returns the failure, which stable Rust has no form of
+/// (ADR-0041). It takes and frees a block of the size `Arc` will ask for: with
+/// one CPU, in code that nothing preempts, with the block just freed, the
+/// allocation inside `Arc::new` then finds it. SMP must replace this.
+pub fn try_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
+    let (layout, _) = Layout::new::<[usize; 2]>()
+        .extend(Layout::new::<T>())
+        .map_err(|_| OutOfMemory)?;
+    let daif = arch::save_and_mask_interrupts();
+    let fits = can_allocate(layout.pad_to_align());
+    let arc = fits.then(|| Arc::new(value));
+    arch::restore_interrupts(daif);
+    arc.ok_or(OutOfMemory)
+}
+
+/// Takes a block of `layout`, whose size is not zero, and gives it back.
+pub fn can_allocate(layout: Layout) -> bool {
+    // SAFETY: the caller's contract on the size.
+    let block = unsafe { alloc(layout) };
+    if block.is_null() {
+        return false;
+    }
+    // SAFETY: allocated just above with this layout.
+    unsafe { dealloc(block, layout) };
+    true
 }
 
 /// Byte counts.

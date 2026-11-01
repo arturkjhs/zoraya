@@ -85,6 +85,15 @@ impl KernelStack {
         self.bottom
     }
 
+    /// The program counter in the frame [`KernelStack::push_user_frame`] wrote.
+    #[cfg(feature = "qemu-test")]
+    pub fn first_pc(&self) -> u64 {
+        let frame = (self.top() - EXCEPTION_FRAME as u64) as *const crate::arch::Frame;
+        // SAFETY: a user thread's stack has its frame at the top, mapped for
+        // as long as `self` lives. The caller asks about a thread not running.
+        unsafe { (*frame).elr }
+    }
+
     /// Writes the frame for a first return to EL0 at the top of the stack, and
     /// returns its address.
     pub fn push_user_frame(&self, pc: u64, sp: u64) -> u64 {

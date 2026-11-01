@@ -14,6 +14,7 @@ members = [
     "crates/zoraya-events",
     "crates/zoraya-fs",
     "crates/zoraya-fs-testkit",
+    "crates/zoraya-rt",
     "tools/test-runner",
     "tools/adr-check",
     "tools/mkramdisk",

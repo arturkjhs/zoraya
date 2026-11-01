@@ -127,6 +127,11 @@ impl<'a> Iterator for Strings<'a> {
     }
 }
 
+/// The argument vector: byte strings, never one string (INV-0003-3).
+pub type ArgVec<'a> = Strings<'a>;
+/// The environment vector: byte strings, never one string (INV-0003-3).
+pub type EnvVec<'a> = Strings<'a>;
+
 /// A checked `spawn` buffer.
 #[derive(Debug, Clone, Copy)]
 pub struct SpawnRequest<'a> {
@@ -136,8 +141,8 @@ pub struct SpawnRequest<'a> {
     pub group: Option<Handle>,
     pub dispositions: [Disposition; REQUEST_KINDS],
     entries: &'a [u8],
-    pub argv: Strings<'a>,
-    pub envp: Strings<'a>,
+    pub argv: ArgVec<'a>,
+    pub envp: EnvVec<'a>,
 }
 
 fn entry(bytes: &[u8]) -> Result<HandleEntry, Status> {
@@ -203,9 +208,9 @@ impl<'a> SpawnRequest<'a> {
             envp,
         };
         // Each slot once; a moved handle in no other entry.
-        for (i, chunk) in entries.chunks_exact(ENTRY_SIZE).enumerate() {
+        for (i, chunk) in entries.as_chunks::<ENTRY_SIZE>().0.iter().enumerate() {
             let a = entry(chunk)?;
-            for other in entries.chunks_exact(ENTRY_SIZE).skip(i + 1) {
+            for other in entries.as_chunks::<ENTRY_SIZE>().0.iter().skip(i + 1) {
                 let b = entry(other)?;
                 let moved = a.transfer == Transfer::Move || b.transfer == Transfer::Move;
                 if a.slot == b.slot || (moved && a.handle == b.handle) {
@@ -219,7 +224,9 @@ impl<'a> SpawnRequest<'a> {
     pub fn handles(&self) -> impl Iterator<Item = HandleEntry> + 'a {
         // `decode` checked every entry.
         self.entries
-            .chunks_exact(ENTRY_SIZE)
+            .as_chunks::<ENTRY_SIZE>()
+            .0
+            .iter()
             .filter_map(|chunk| entry(chunk).ok())
     }
 
@@ -231,8 +238,8 @@ impl<'a> SpawnRequest<'a> {
 /// The startup block: `argc`, `envc`, then the strings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartupBlock<'a> {
-    pub argv: Strings<'a>,
-    pub envp: Strings<'a>,
+    pub argv: ArgVec<'a>,
+    pub envp: EnvVec<'a>,
 }
 
 impl<'a> StartupBlock<'a> {

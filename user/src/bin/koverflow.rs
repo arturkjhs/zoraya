@@ -11,6 +11,6 @@ const OVERFLOW_STACK: u64 = 0x7001;
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
-    raw_syscall(OVERFLOW_STACK, 0, 0, 0);
+    raw_syscall(OVERFLOW_STACK, [0, 0, 0, 0, 0, 0]);
     1
 }

@@ -19,7 +19,8 @@ TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
 USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
-	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar
+	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
+	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
@@ -69,7 +70,7 @@ debug: $(KERNEL)
 	$(RUN_QEMU) --debug $(KERNEL)
 
 test-unit:
-	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user
+	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt
 
 # One runner invocation per machine configuration. "auto" is HVF on an
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
@@ -129,7 +130,9 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 # through boot, its heap and timer checks, and that it stops on its own.
 BOOT_LINES := --expect-line "heap check: Box and Vec work" \
 	--expect-line "timer check: 10 interrupts in" --expect-line "hello from EL0" \
-	--expect-line "code: 7, reason: Exited" --expect-line "stage 2 complete"
+	--expect-line "code: 7, reason: Exited" --expect-line "parent: spawning child" \
+	--expect-line "child: hello from the child" --expect-line "parent: child ended" \
+	--expect-line "stage 3 complete"
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --plain $(BOOT_LINES)
 
 test-boot: $(KERNEL) $(RUNNER)
@@ -140,8 +143,8 @@ fmt-check:
 	$(CARGO) fmt --all --check
 
 clippy:
-	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --all-targets -- -D warnings
-	$(CARGO) clippy -p zoraya-user --target $(TARGET) -- -D warnings
+	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
+	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test -- -D warnings
 

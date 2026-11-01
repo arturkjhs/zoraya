@@ -16,7 +16,7 @@ use zoraya_time::{Deadline, TimerId};
 use crate::arch;
 use crate::arch::Context;
 use crate::arch::mmu;
-use crate::memory::heap::OutOfMemory;
+use crate::memory::heap::{OutOfMemory, try_arc};
 use crate::memory::stack::KernelStack;
 use crate::process::Process;
 use crate::sync::SpinLock;
@@ -49,6 +49,17 @@ impl Thread {
     /// The process this thread belongs to.
     pub fn process(&self) -> Option<&Arc<Process>> {
         self.process.as_ref()
+    }
+
+    /// The program counter of a user thread that has not run yet.
+    #[cfg(feature = "qemu-test")]
+    pub fn first_pc(&self) -> Option<u64> {
+        self._stack.as_ref().map(KernelStack::first_pc)
+    }
+
+    #[cfg(feature = "qemu-test")]
+    pub fn is_blocked(&self) -> bool {
+        self.state.load(Ordering::Relaxed) == BLOCKED
     }
 }
 
@@ -87,19 +98,12 @@ pub fn preemptions() -> u64 {
 }
 
 fn boot_thread() -> Arc<Thread> {
-    arc(Thread {
+    Arc::new(Thread {
         context: UnsafeCell::new(Context::default()),
         state: AtomicU8::new(RUNNING),
         _stack: None,
         process: None,
     })
-}
-
-/// Stable Rust has no fallible `Arc` constructor, so this one panics when
-/// memory runs out. ADR-0022 allows that only because the kernel alone starts
-/// threads at this stage. `spawn` in stage 3 needs a fallible form first.
-fn arc(thread: Thread) -> Arc<Thread> {
-    Arc::new(thread)
 }
 
 /// Makes the running code the boot thread and creates the idle thread. Call
@@ -120,44 +124,55 @@ pub fn init() {
 fn new_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
     let stack = KernelStack::new()?;
     let context = Context::new_kernel(entry as usize, arg, stack.top(), stack.limit());
-    Ok(arc(Thread {
+    try_arc(Thread {
         context: UnsafeCell::new(context),
         state: AtomicU8::new(READY),
         _stack: Some(stack),
         process: None,
-    }))
+    })
 }
 
 /// Reserves queue room for one more thread, so that the scheduler itself never
-/// has to allocate, then queues it.
-fn enqueue_new(thread: Arc<Thread>) -> Result<Arc<Thread>, OutOfMemory> {
+/// has to allocate.
+fn count_new() -> Result<(), OutOfMemory> {
     let mut s = SCHED.lock();
     let threads = s.threads + 1;
     s.ready.try_reserve(threads).map_err(|_| OutOfMemory)?;
     s.dead.try_reserve(threads).map_err(|_| OutOfMemory)?;
     s.threads = threads;
-    s.ready.push_back(thread.clone());
-    Ok(thread)
+    Ok(())
 }
 
 /// Starts a kernel thread running `entry(arg)`. When `entry` returns, the
 /// thread ends.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
-    enqueue_new(new_kernel(entry, arg)?)
+    let thread = new_kernel(entry, arg)?;
+    count_new()?;
+    SCHED.lock().ready.push_back(thread.clone());
+    Ok(thread)
 }
 
-/// Starts `process`'s thread at EL0 with `pc` and `sp`.
+/// Makes `process`'s thread, to go to EL0 at `pc` with `sp`. It is blocked:
+/// [`wake`] starts it, and [`discard`] gives it up.
 pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>, OutOfMemory> {
     let stack = KernelStack::new()?;
     let frame = stack.push_user_frame(pc, sp);
     let context = Context::new_user(frame, stack.limit());
-    enqueue_new(arc(Thread {
+    let thread = try_arc(Thread {
         context: UnsafeCell::new(context),
-        state: AtomicU8::new(READY),
+        state: AtomicU8::new(BLOCKED),
         _stack: Some(stack),
         process: Some(process),
-    }))
+    })?;
+    count_new()?;
+    Ok(thread)
+}
+
+/// Forgets a thread from [`spawn_user`] that never ran.
+pub fn discard(thread: Arc<Thread>) {
+    SCHED.lock().threads -= 1;
+    drop(thread);
 }
 
 /// Runs on a new kernel thread, from boot-time assembly.
@@ -286,7 +301,8 @@ pub fn current() -> Arc<Thread> {
 }
 
 /// Stops running until [`wake`]. Interrupts must be masked since the check
-/// that decided to block, and someone must hold the thread to wake it.
+/// that decided to block, and someone must hold the thread: a waiter list, a
+/// deadline, or its process.
 pub fn block_current() {
     let current: *const Thread = {
         let s = SCHED.lock();
@@ -309,28 +325,50 @@ pub fn wake(thread: Arc<Thread>) {
 }
 
 fn wake_sleeper(raw: usize) {
-    // SAFETY: `sleep_until` made this from `Arc::into_raw`, and this callback
-    // runs once.
+    // SAFETY: `block_until` made this from `Arc::into_raw`, and this callback
+    // runs once, or `block_until` cancels it.
     wake(unsafe { Arc::from_raw(raw as *const Thread) });
+}
+
+/// Blocks until [`wake`] or `deadline`. Interrupts must be masked since the
+/// check that decided to block. An error if the deadline queue is full. With
+/// `Infinite`, someone other than a deadline must hold the thread.
+pub fn block_until(deadline: Deadline) -> Result<(), zoraya_time::QueueFull> {
+    let Deadline::At(at) = deadline else {
+        block_current();
+        return Ok(());
+    };
+    let raw = Arc::into_raw(current());
+    let id = match timer::arm(at, wake_sleeper, raw as usize) {
+        Ok(id) => id,
+        Err(e) => {
+            // SAFETY: made just above and given to nobody.
+            drop(unsafe { Arc::from_raw(raw) });
+            return Err(e);
+        }
+    };
+    block_current();
+    if timer::cancel(id) {
+        // SAFETY: the callback did not run and now never will, so its count
+        // is still here.
+        drop(unsafe { Arc::from_raw(raw) });
+    }
+    Ok(())
 }
 
 /// Blocks until `deadline`. An error if the deadline queue is full.
 pub fn sleep_until(deadline: Deadline) -> Result<(), zoraya_time::QueueFull> {
     let daif = arch::save_and_mask_interrupts();
-    let raw = Arc::into_raw(current());
-    if let Deadline::At(at) = deadline
-        && let Err(e) = timer::arm(at, wake_sleeper, raw as usize)
-    {
-        // SAFETY: made just above and given to nobody.
-        drop(unsafe { Arc::from_raw(raw) });
-        arch::restore_interrupts(daif);
-        return Err(e);
-    }
-    // With `Infinite` nothing wakes it, and the count made above keeps the
-    // thread's memory valid for good.
-    block_current();
+    let held = match deadline {
+        // Nothing else holds a kernel thread: this count keeps its memory
+        // valid for good. A user thread's process holds it, to end it.
+        Deadline::Infinite if current().process.is_none() => Some(Arc::into_raw(current())),
+        _ => None,
+    };
+    let result = block_until(deadline);
     arch::restore_interrupts(daif);
-    Ok(())
+    let _ = held;
+    result
 }
 
 /// Ends the running thread.

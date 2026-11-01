@@ -14,9 +14,12 @@ mod console;
 mod dtb;
 mod gic;
 mod irq;
+mod job;
 mod memory;
+mod object;
 mod panic;
 mod pl011;
+mod port;
 mod process;
 mod psci;
 mod ramdisk;
@@ -115,7 +118,10 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
         let hello = process::spawn("hello").expect("hello in the ramdisk");
         let record = hello.wait();
         println!("process hello ended: {record:?}");
-        println!("stage 2 complete; powering off");
+        let parent = process::spawn("parent").expect("parent in the ramdisk");
+        let record = parent.wait();
+        println!("process parent ended: {record:?}");
+        println!("stage 3 complete; powering off");
         shutdown()
     }
 }

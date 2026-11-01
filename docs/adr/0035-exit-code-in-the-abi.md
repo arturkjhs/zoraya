@@ -54,6 +54,7 @@ Recommended: **Option A**. It is a recommendation, not a decision.
 - **INV-0035-1.** Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields and `ExitRecord.code`, each documented as opaque to the kernel (ADR-0004). *Check:* a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`), plus a unit test that `RelativePath::new("/x")` fails.
 
 ## Open questions
+- As of TASK-09, this invariant cannot be true of ADR-0006's `port_subscribe` key and packet data, so its status stays unchecked. Proposed ADR-0045 replaces it.
 - Whether a signal-style status needs `code` at all once `libposix` exists. ADR-0004's mapping says it does.
 
 ## Revisit triggers

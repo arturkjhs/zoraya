@@ -9,7 +9,7 @@ use zoraya_user::{console_write, raw_syscall};
 const WRITE: u64 = Syscall::ConsoleWrite as u64;
 
 fn expect(addr: u64, len: u64, status: Status) -> bool {
-    raw_syscall(WRITE, u64::from(CONSOLE.raw()), addr, len).0 == status as u64
+    raw_syscall(WRITE, [u64::from(CONSOLE.raw()), addr, len, 0, 0, 0]).0 == status as u64
 }
 
 #[unsafe(no_mangle)]
@@ -28,11 +28,11 @@ fn main() -> i32 {
         // Starting mapped, at the top of the stack, and running off the end.
         expect(0x7fff_ffff_eff8, 16, Status::BadAddress),
         expect(0x40_0000, 5000, Status::InvalidArgument),
-        raw_syscall(WRITE, 0, 0, 0).0 == Status::BadHandle as u64,
-        raw_syscall(WRITE, 99, 0, 0).0 == Status::BadHandle as u64,
-        raw_syscall(WRITE, u64::MAX, 0, 0).0 == Status::BadHandle as u64,
-        raw_syscall(1000, 0, 0, 0).0 == Status::BadSyscall as u64,
-        raw_syscall(u64::MAX, 0, 0, 0).0 == Status::BadSyscall as u64,
+        raw_syscall(WRITE, [0, 0, 0, 0, 0, 0]).0 == Status::BadHandle as u64,
+        raw_syscall(WRITE, [99, 0, 0, 0, 0, 0]).0 == Status::BadHandle as u64,
+        raw_syscall(WRITE, [u64::MAX, 0, 0, 0, 0, 0]).0 == Status::BadHandle as u64,
+        raw_syscall(1000, [0, 0, 0, 0, 0, 0]).0 == Status::BadSyscall as u64,
+        raw_syscall(u64::MAX, [0, 0, 0, 0, 0, 0]).0 == Status::BadSyscall as u64,
         console_write(CONSOLE, &[0xff, 0xfe]) == Err(Status::InvalidArgument),
         console_write(CONSOLE, b"") == Ok(0),
     ];
