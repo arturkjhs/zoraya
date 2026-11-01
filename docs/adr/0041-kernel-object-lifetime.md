@@ -54,11 +54,10 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **Negative.** Removing a subscription leaves a stale ready item, bounded by what is live. A suspended process nobody resumes stays until its job is killed. `try_arc` depends on one CPU. One global lock for signals.
 - **Follow-up.** A real fallible `Arc` when SMP arrives, or when `Arc::try_new` is stable.
 
+*Partly replaced by ADR-0054 (architect's decision, 2026-11-01, on its acceptance):* for INV-0041-1, frames of a DMA pin ended without `dma_unpin` return only after `dma_release_quarantine`.
+
 ## Invariants
 - **INV-0041-1.** After a process ends and its last handle closes, the kernel's frame count and heap use return to their earlier values. *Check:* an in-QEMU loop of spawn, exit and close, comparing `frames::stats` and `heap::stats`.
-
-  *Partly replaced by ADR-0054 (architect's decision, 2026-11-01, on its acceptance):* frames of a DMA pin ended without `dma_unpin` return only after `dma_release_quarantine`.
-
 - **INV-0041-2.** A process's address space, ASID and handles are released at exit, whoever still holds the process. *Check:* in-QEMU test holding a handle to an ended process, plus INV-0034-2's test.
 - **INV-0041-3.** Asserting a signal never allocates. *Check:* `zoraya-events` host test under a counting allocator.
 - **INV-0041-4.** A subscription cannot outlive its source or its port. *Check:* `zoraya-events` host tests, closing either side first.
