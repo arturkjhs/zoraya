@@ -73,6 +73,8 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 ## Open questions
 - Whether 64 entries suits a real signal storm: nothing measured.
+- For `reason = Fault`, `libposix` translates the exception class in `detail` into a signal by a table (`SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGTRAP`, `SIGFPE`). The table is decided at stage 6.
+- The signal for `reason = Limit` must be defined; the candidate is `SIGKILL`. Decided at stage 6.
 
 ## Revisit triggers
 - A workload that loses requests.
