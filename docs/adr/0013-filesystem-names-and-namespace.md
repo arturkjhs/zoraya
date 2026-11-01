@@ -203,7 +203,7 @@ names cannot be extracted).
 - Directory link counts reported by `libposix` (`st_nlink`): 2 plus the number of subdirectories (POSIX convention,
   maintained cheaply by the service) or 1. No measured program was shown to read link counts
   (`fs/requirements.md#5-questions-the-data-cannot-answer`).
-- *Check status (TASK-07, ADR-0001 rule 6).* The `abi` crate does not exist yet. INV-0013-1's tests run against
+- *Check status (TASK-07, ADR-0001 rule 6).* The `abi` crate has no `Name` type yet. INV-0013-1's tests run against
   `zoraya_fs::name`, the one name validator, which the request API and the on-disk decoder both use; INV-0013-5's
   run against the engine's request API, there being no request decoder before the stage-4 service. When `abi`
   gains `Name` and `RelativePath`, the same tests must run against them (or `abi` must reuse this validator).

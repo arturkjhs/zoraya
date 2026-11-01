@@ -357,3 +357,72 @@ fn device_errors_are_typed() {
     v.mkdir(root, "still-writable", 0o755).unwrap();
     let _ = MemDevice::new(1);
 }
+
+/// INV-0010-3 after a read-only request: a one-time read fault leaves no
+/// persistent error behind, so only the volume's state can show it was met
+/// (TASK-07 review R-05).
+#[test]
+fn read_only_request_that_meets_a_read_fault_fails_the_volume() {
+    let clock = TestClock::new(T0);
+    let mut base = fresh(128);
+    {
+        let mut v = mount(&mut base, &clock);
+        let r = v.root();
+        v.mkdir(r, "d", 0o755).unwrap();
+        v.close(r).unwrap();
+        v.unmount().unwrap();
+    }
+    let image = base.into_image();
+    let mut met = 0;
+    for n in 0..40 {
+        let plan = FaultPlan {
+            fail_read: Some(n),
+            ..FaultPlan::default()
+        };
+        let dev = FaultDevice::new(MemDevice::from_image(image.clone()), plan);
+        let Ok(mut v) = Volume::mount(dev, clock.clone(), MountOptions::default()) else {
+            continue;
+        };
+        if v.device().injected > 0 {
+            continue;
+        }
+        v.drop_caches();
+        let r = v.root();
+        let got = v.stat_at(r, "d");
+        if v.device().injected == 0 {
+            continue;
+        }
+        met += 1;
+        assert!(got.is_err());
+        assert!(
+            v.failure().is_some(),
+            "read fault {n} left the volume healthy"
+        );
+        assert_eq!(v.sync(), Err(FsError::StorageFailed));
+    }
+    assert!(met > 0);
+}
+
+/// INV-0016-4: the checker runs on what fault runs leave behind too. A device
+/// whose writes failed still holds a volume that mounts clean.
+#[test]
+fn volumes_left_by_faults_check_clean() {
+    use zoraya_fs::check::{CheckOptions, check};
+    let clock = TestClock::new(T0);
+    let mut d = fresh(128);
+    for fail_write in 0..12 {
+        let plan = FaultPlan {
+            fail_write: Some(fail_write),
+            ..FaultPlan::default()
+        };
+        let dev = FaultDevice::new(MemDevice::from_image(d.image().to_vec()), plan);
+        let mut v = Volume::mount(dev, clock.clone(), MountOptions::default()).unwrap();
+        let r = v.root();
+        let _ = v.mkdir(r, "d", 0o755);
+        let _ = v.sync();
+        let mut inner = v.into_device().inner;
+        let rep = check(&mut inner, CheckOptions::default());
+        assert!(rep.is_clean(), "fault {fail_write}: {:?}", rep.problems);
+    }
+    let _ = &mut d;
+}

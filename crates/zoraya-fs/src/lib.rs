@@ -14,7 +14,7 @@
 //!   [`Timestamp`]); ADR-0015, the block device ([`BlockDevice`]);
 //! - and an offline checker ([`check`]) used by `zoraya-fsck` and the tests.
 //!
-//! Choices the ADRs leave open are listed in proposed ADR-0016.
+//! Choices the ADRs leave open are listed in ADR-0016.
 
 #![no_std]
 #![forbid(unsafe_code)]

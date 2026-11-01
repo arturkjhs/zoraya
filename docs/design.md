@@ -88,7 +88,8 @@ set or is explicitly not waitable.
 [ADR-0015](adr/0015-block-device-contract.md)). Accepted; the reasons are in
 [`adr/filesystem-batch-selection.md`](adr/filesystem-batch-selection.md). The storage engine is built as a
 host-tested library (TASK-07, "Filesystem engine (as built)" below); the service around it is stage 4. Choices the
-ADRs leave open are in [ADR-0016](adr/0016-filesystem-implementation-choices.md) (proposed).
+ADRs leave open are in [ADR-0016](adr/0016-filesystem-implementation-choices.md). Until a later ADR declares the
+format stable, compatibility between format versions is not guaranteed: volumes are rebuilt with `zoraya-mkfs`.
 - **Guarantees.** After a crash a volume holds a prefix of the completion order. Requests are atomic, durability comes
   from `sync`, and a storage error stops the volume's writes for good.
 - **Mechanism.** A copy-on-write tree with dual root records. Mount picks the newest valid root, with no replay.
@@ -169,8 +170,8 @@ The code is in `kernel/src/arch/aarch64/exception.rs` (ADR-0024).
 - **From EL0.** The vector saves the user's `SP_EL0` in the frame and computes the stack limit from SP, since thread
   stacks have a fixed size and SP_EL1 is at the top of one on entry. `svc` is a system call. Any other synchronous
   exception ends the process (ADR-0034). An SError from EL0 is a kernel fault.
-- **User copies.** A data abort with the PC in `arch/aarch64/usercopy.rs` resumes at its error exit. It is the only
-  kernel fault that resumes.
+- **User copies.** A data abort with the PC in `arch/aarch64/usercopy.rs` and `FAR_EL1` in the user range resumes at
+  the routine's error exit. It is the only kernel fault that resumes.
 - **Masks.** SError is unmasked once `kernel_main` starts, IRQ and FIQ after the GIC is up. Debug stays masked.
   Handlers run with IRQ masked and do not nest. A panic masks IRQ and FIQ.
 
@@ -362,6 +363,8 @@ deterministic random mutations.
   queue fails `sleep_until` with `NoMemory`. Thread and process objects use `Arc::new`, which panics when memory runs
   out, so stage 3's `spawn` needs a fallible form first (ADR-0022).
 - **User memory.** Copies are a byte at a time. At most 255 live processes. A process's memory is all mapped up front.
+- **ABI table.** `SYSCALLS` is written by hand and not connected to the dispatcher, so the lints over it are weak.
+  Stage 3 must build the dispatcher from it, or test that they match (ADR-0032).
 - **Console.** `console_write` is a stand-in until the terminal service (ADR-0032), and any process can use it. A
   call takes up to 4 KiB and holds off interrupts while it prints, about 60 ms under QEMU.
 - **PMU under HVF.** `PMUSERENR_EL0` is 0, and TCG traps EL0's PMU accesses, but the review saw them work at EL0 under

@@ -71,7 +71,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 ## Open questions
 - Whether SError can ever be expected from QEMU devices. None has been seen.
-- INV-0024-2 predates the planned exception: `usercopy::fixup` (ADR-0031) resumes a kernel data abort with the PC in the copy routine. The invariant's text needs that exception stated.
+- INV-0024-2 predates the planned exception: `usercopy::fixup` (ADR-0031) resumes a kernel data abort with the PC in the copy routine. Proposed ADR-0036 states the exception.
 - How the stack check survives stage 2. `SP_EL0` holds the user stack at EL0 and `TPIDR_EL1` is the natural per-CPU pointer, so lower-EL vectors must swap the limit in before any Rust, and SMP needs a limit and an emergency stack per CPU. ADR-0031 proposes the answer for the stack limit; SMP's stacks stay open.
 
 ## Revisit triggers

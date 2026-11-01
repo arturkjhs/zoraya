@@ -13,6 +13,8 @@ pub use exception::{FRAME_SIZE, Frame, THREAD_STACK_SIZE, write_user_frame};
 #[cfg(feature = "qemu-test")]
 pub use exception::{STACK_OVERFLOWS, catch, enter_el0, recover_to};
 pub use usercopy::copy_from_user;
+#[cfg(feature = "qemu-test")]
+pub use usercopy::copy_from_user_to;
 
 use core::arch::asm;
 

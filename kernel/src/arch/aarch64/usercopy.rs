@@ -7,6 +7,8 @@
 
 use core::arch::global_asm;
 
+use crate::memory::user::USER_HIGH;
+
 global_asm!(
     r#"
     .text
@@ -40,13 +42,13 @@ unsafe extern "C" {
     static __user_copy_end: u8;
 }
 
-/// Where a fault at `pc` must resume, if `pc` is in the routine above.
-pub fn fixup(pc: u64) -> Option<u64> {
+/// Where a data abort at `pc` on address `far` must resume, if it was the
+/// routine above reading user memory (ADR-0036). A fault on the kernel's own
+/// destination is a kernel fault, and stays one.
+pub fn fixup(pc: u64, far: u64) -> Option<u64> {
     let start = &raw const __user_copy_start as u64;
     let end = &raw const __user_copy_end as u64;
-    (start..end)
-        .contains(&pc)
-        .then_some(__user_copy_fault as *const () as u64)
+    ((start..end).contains(&pc) && far < USER_HIGH).then_some(__user_copy_fault as *const () as u64)
 }
 
 /// A faulting access ended the copy. The destination may be partly written.
@@ -62,6 +64,21 @@ pub struct BadAddress;
 pub unsafe fn copy_from_user(dst: &mut [u8], src: u64) -> Result<(), BadAddress> {
     // SAFETY: the caller's contract; a bad `src` faults into the error exit.
     match unsafe { __copy_from_user(dst.as_mut_ptr(), src as *const u8, dst.len()) } {
+        0 => Ok(()),
+        _ => Err(BadAddress),
+    }
+}
+
+/// As [`copy_from_user`] with a destination the test chooses, which need not
+/// be mapped: the fault it takes must not be resumed.
+///
+/// # Safety
+///
+/// Run under `catch`, on a destination that faults.
+#[cfg(feature = "qemu-test")]
+pub unsafe fn copy_from_user_to(dst: *mut u8, src: u64, len: usize) -> Result<(), BadAddress> {
+    // SAFETY: the caller's contract.
+    match unsafe { __copy_from_user(dst, src as *const u8, len) } {
         0 => Ok(()),
         _ => Err(BadAddress),
     }

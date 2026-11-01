@@ -255,3 +255,66 @@ fn random_mutation() {
         b.images, b.mounted, b.peak, b.max_reads_per_block
     );
 }
+
+/// INV-0012-4 on a tree far larger than the node cache: the small fuzz images
+/// could not reach the bound, whatever the cache did (TASK-07 review R-03).
+/// The read-write path also holds one bit per block of allocator bitmap, which
+/// ADR-0012's bound does not count, so only the read-only path is held to it.
+#[test]
+fn large_tree_stays_within_the_decoder_bound() {
+    use zoraya_fs::{CACHE_ENTRIES, MkfsOptions, MountOptions, OpenOptions, Timestamp, mkfs};
+    use zoraya_fs_testkit::{MemDevice, TestClock};
+    let t0 = Timestamp {
+        secs: 1_700_000_000,
+        nanos: 0,
+    };
+    let clock = TestClock::new(t0);
+    let mut dev = MemDevice::new(12_000);
+    mkfs(
+        &mut dev,
+        MkfsOptions {
+            volume_id: 1,
+            now: t0,
+            root_mode: 0o755,
+        },
+    )
+    .unwrap();
+    {
+        let mut v =
+            zoraya_fs::Volume::mount(&mut dev, clock.clone(), MountOptions::default()).unwrap();
+        let r = v.root();
+        for i in 0..1500 {
+            let f = v
+                .open(
+                    r,
+                    &format!("file-{i:05}"),
+                    OpenOptions {
+                        create: Some(0o644),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            v.write(f, 0, &[7u8; 5000]).unwrap();
+            v.close(f).unwrap();
+        }
+        v.close(r).unwrap();
+        v.unmount().unwrap();
+    }
+    let image = std::rc::Rc::new(dev.into_image());
+
+    let read_only = MountOptions {
+        read_only: true,
+        ..Default::default()
+    };
+    let d = ImageDevice::new(image.clone());
+    let mut v = zoraya_fs::Volume::mount(d, clock, read_only).unwrap();
+    let r = v.root();
+    for i in 0..1500 {
+        v.stat_at(r, &format!("file-{i:05}")).unwrap();
+        assert!(v.cached_nodes() <= CACHE_ENTRIES, "{}", v.cached_nodes());
+    }
+
+    let mut bench = Bench::new();
+    bench.run(ImageDevice::new(image), false);
+    assert!(bench.peak > 0);
+}

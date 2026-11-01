@@ -1,6 +1,6 @@
 # ADR-0016: Filesystem implementation choices the accepted ADRs leave open
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0010, ADR-0011, ADR-0012, ADR-0013, ADR-0014, ADR-0015
 - **Evidence:** CP-12, DM-037, GR-014, alternatives-postmortem.md#redox, fs/survey.md#btrfs, fs/survey.md#littlefs, fs/survey.md#redoxfs, fs/survey.md#testing-crash-consistency
@@ -98,6 +98,12 @@ The items:
 
 ## Recommendation
 
+### Decision
+
+Accepted 2026-10-31. Until the on-disk format is declared stable by a later ADR, on-disk compatibility between format versions is not guaranteed; volumes are rebuilt with zoraya-mkfs. Raising the volume limit is deferred to a format version 2 when a real need appears. Hardware CRC32C may be added later in a separate crate with the table implementation as fallback; it does not change the format.
+
+The original recommendation follows, accepted with the 20.9 GiB limit and software CRC32C.
+
 **Recommendation (not a decision): Option B**, as implemented:
 
 1. **Ids in durable batches.** The root record holds `id_limit`: every id below it may have been handed out. Mount
@@ -150,6 +156,9 @@ The items:
 - Is `ID_BATCH` = 1,024 right? It trades one commit per 1,024 creates (and one per mount) against nothing else;
   measure with the stage-4 service.
 - Does a toolchain workload ever fill a volume to the delete reserve? Unmeasured.
+- TASK-07's review (R-17): the `durable` request flag of ADR-0010 rule 4 is not in the API. A client gets the same effect with a request followed by `sync`, which is how the rule defines it. Add the flag with the service, or record that it is not needed.
+- TASK-07's review (R-08): item 3 calls rename a request that only frees space, and it is not: renames to longer names spent 55 of the 64 reserved blocks in the review. The invariant still held.
+- TASK-07's review (R-24, R-25): item 10 does not say whether `NoReplace` onto itself should fail, or that the id reservation can commit before a request is judged.
 - Is the 20.9 GiB cap acceptable for stage 4's system disk (a few GiB, ADR-0011's assumption)? Yes for now.
 
 ## Revisit triggers
@@ -160,3 +169,6 @@ The items:
 
 ## Architect's decision
 
+### Decision
+
+Accepted 2026-10-31. Until the on-disk format is declared stable by a later ADR, on-disk compatibility between format versions is not guaranteed; volumes are rebuilt with zoraya-mkfs. Raising the volume limit is deferred to a format version 2 when a real need appears. Hardware CRC32C may be added later in a separate crate with the table implementation as fallback; it does not change the format.

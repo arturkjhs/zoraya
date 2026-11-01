@@ -569,3 +569,29 @@ fn test_device_crash_model() {
     let w = &windows(&events)[0];
     assert_eq!(seen, sector_choices(&base, &events, w, 1));
 }
+
+/// INV-0015-1: sectors of one write choose independently (TASK-07 review
+/// R-10). One choice per write would give every sector the same value.
+#[test]
+fn sectors_of_one_write_tear_independently() {
+    use std::rc::Rc;
+    use zoraya_fs_testkit::Event;
+    use zoraya_fs_testkit::crash::{torn_image, windows};
+    let base = Rc::new(vec![1u8; zoraya_fs::BLOCK_SIZE]);
+    let events = vec![Event::Write {
+        block: 0,
+        data: Rc::new([2u8; zoraya_fs::BLOCK_SIZE]),
+        batch: 1,
+    }];
+    let w = &windows(&events)[0];
+    for seed in 0..8 {
+        let image = torn_image(&base, &events, w, seed, 1).to_image();
+        let mut kinds: Vec<&[u8]> = image.chunks(512).collect();
+        kinds.sort();
+        kinds.dedup();
+        assert!(
+            kinds.len() > 1,
+            "seed {seed}: one choice for the whole write"
+        );
+    }
+}

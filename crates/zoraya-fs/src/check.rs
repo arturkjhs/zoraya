@@ -21,9 +21,12 @@
 //!
 //! [`repair`] fixes what can be fixed without a second copy of anything: the
 //! allocator (rebuilt from the reachable set) and namespace damage (dangling
-//! entries removed, unreferenced objects put on the orphan list, directory
-//! sizes and parent links corrected). It refuses if any tree block is
-//! unreadable or invalid. Every repair is itself a copy-on-write commit.
+//! entries removed, entry kinds and stray orphan entries corrected, directory
+//! sizes and parent links corrected). Objects no name reaches go on the orphan
+//! list, and the mount that follows **deletes** them: there is no lost+found.
+//! It refuses if any tree block is unreadable or invalid. Each repair step is
+//! a copy-on-write commit, so a crash during repair leaves the state after
+//! some step, not necessarily the original or the fully repaired volume.
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -78,7 +81,9 @@ pub enum ProblemKind {
     Tree,
     /// The allocator blocks or the used set. Repairable.
     Allocator,
-    /// The namespace or attributes. Repairable.
+    /// The namespace or attributes. Mostly repairable: a time past the last
+    /// assigned one, an id at or above the limit and a bad link target have
+    /// no fix yet.
     Namespace,
 }
 
@@ -278,10 +283,14 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
             }
         };
         self.report.stats.allocator_blocks = 1 + bitmaps.len() as u64;
-        let mut bits: Vec<u8> = Vec::new();
-        for (i, p) in bitmaps.iter().enumerate() {
+        // Every pointer first: a bitmap that cannot be read must not leave the
+        // ones after it unmarked, or repair could overwrite them.
+        for p in &bitmaps {
             self.mark(p.addr, "bitmap");
             self.alloc_blocks.insert(p.addr);
+        }
+        let mut bits: Vec<u8> = Vec::new();
+        for (i, p) in bitmaps.iter().enumerate() {
             let Some(bb) = self.read(p.addr) else { return };
             match decode_bitmap(&bb, p, rec.volume_id, rec.block_count, i as u32) {
                 Ok(b) => bits.extend_from_slice(b),
@@ -634,12 +643,30 @@ impl crate::Clock for NoClock {
 /// One namespace repair.
 #[derive(Debug, Clone)]
 pub(crate) enum Fix {
-    RemoveEntry { dir: u64, name: Vec<u8> },
+    RemoveEntry {
+        dir: u64,
+        name: Vec<u8>,
+    },
     Orphan(u64),
     RemoveOrphan(u64),
-    RemoveExtent { id: u64, index: u64 },
-    SetDirSize { dir: u64, size: u64 },
-    SetParent { dir: u64, parent: Option<u64> },
+    SetEntryKind {
+        dir: u64,
+        name: Vec<u8>,
+        child: u64,
+        kind: ObjKind,
+    },
+    RemoveExtent {
+        id: u64,
+        index: u64,
+    },
+    SetDirSize {
+        dir: u64,
+        size: u64,
+    },
+    SetParent {
+        dir: u64,
+        parent: Option<u64>,
+    },
 }
 
 /// Keeps, for every object, the first valid entry that reaches it from the
@@ -652,13 +679,14 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
         by_dir.entry(*dir).or_default().push(i);
     }
     let valid = |i: usize| {
-        col.dirents.get(i).is_some_and(|(dir, _, child, kind)| {
+        // The object's own record decides its kind, and a name beats a stray
+        // orphan entry: repair removes as little as it can.
+        col.dirents.get(i).is_some_and(|(dir, _, child, _)| {
             col.inodes
                 .get(dir)
                 .is_some_and(|a| a.kind == ObjKind::Directory)
-                && col.inodes.get(child).is_some_and(|a| a.kind == *kind)
+                && col.inodes.contains_key(child)
                 && *child != ROOT_ID
-                && !col.orphans.contains(child)
         })
     };
     let mut keep = vec![false; col.dirents.len()];
@@ -667,15 +695,16 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
     let mut seen: BTreeSet<u64> = BTreeSet::from([ROOT_ID]);
     while let Some(d) = queue.pop_front() {
         for &i in by_dir.get(&d).map(Vec::as_slice).unwrap_or(&[]) {
-            let Some((_, _, child, kind)) = col.dirents.get(i) else {
+            let Some((_, _, child, _)) = col.dirents.get(i) else {
                 continue;
             };
+            let kind = col.inodes.get(child).map(|a| a.kind);
             if valid(i) && seen.insert(*child) {
                 if let Some(k) = keep.get_mut(i) {
                     *k = true;
                 }
                 parent_of.insert(*child, d);
-                if *kind == ObjKind::Directory {
+                if kind == Some(ObjKind::Directory) {
                     queue.push_back(*child);
                 }
             }
@@ -683,9 +712,19 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
     }
     let mut fixes = Vec::new();
     let mut entries: BTreeMap<u64, u64> = BTreeMap::new();
-    for (i, (dir, name, _, _)) in col.dirents.iter().enumerate() {
+    for (i, (dir, name, child, kind)) in col.dirents.iter().enumerate() {
         if keep.get(i).copied().unwrap_or(false) {
             *entries.entry(*dir).or_insert(0) += 1;
+            if let Some(a) = col.inodes.get(child)
+                && a.kind != *kind
+            {
+                fixes.push(Fix::SetEntryKind {
+                    dir: *dir,
+                    name: name.clone(),
+                    child: *child,
+                    kind: a.kind,
+                });
+            }
         } else {
             fixes.push(Fix::RemoveEntry {
                 dir: *dir,
@@ -694,7 +733,7 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
         }
     }
     for o in &col.orphans {
-        if !col.inodes.contains_key(o) {
+        if !col.inodes.contains_key(o) || parent_of.contains_key(o) {
             fixes.push(Fix::RemoveOrphan(*o));
         }
     }

@@ -108,7 +108,7 @@ Why D over C: per-call cost on the data path is the documented failure mode of s
 
 ## Open questions
 
-- INV-0002-1's check is partial as of TASK-08 and stays `not yet applicable (stage 4)`. The first system calls are checked by a lint over `zoraya-abi`, but no call takes a path, so `RelativePath` does not exist. Also, `process_exit`'s `code: i32` is an integer that is not a `detail` field, although ADR-0004 rule 1 requires it. Either this invariant should allow `ExitRecord.code`, or the two ADRs need reconciling by a superseding ADR.
+- INV-0002-1's check is partial as of TASK-08 and stays `not yet applicable (stage 4)`. The first system calls are checked by a lint over `zoraya-abi`, but no call takes a path, so `RelativePath` does not exist. Also, `process_exit`'s `code: i32` is an integer that is not a `detail` field, although ADR-0004 rule 1 requires it. Proposed ADR-0035 reconciles the two ADRs.
 - Path-resolution cost of a prefix table in the library on our kernel: prototype measurement on W1 (5,294 header opens).
 - Memory cost of fork emulation under strict commit (X-6): measure dash RSS at fork points in W4 (unmeasured; `task-02/conflict-impact.md#x-6-…`).
 - Byte names that are not UTF-8 (X-8): no workload exercised them. Research: what do archives in the toolchain's inputs contain?
