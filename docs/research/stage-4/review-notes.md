@@ -388,7 +388,8 @@ Reviewer: a subagent that wrote none of these documents and took no part in earl
 
 ### Disposition of the fourth review
 
-- **Fixed:** F1, F2, F3 (the variant is stated, and wrapping follows the architect's "no retirement"), F4, F5, F6, F7, F8, F9, F10, F11, F13.
+- **Fixed:** F1, F2, F3 (the variant is stated, and wrapping follows the architect's "no retirement"), F4, F5, F6, F8, F9, F10, F11, F13.
+- **F7 stays:** `adr-check` does not accept a file without an anchor on the Evidence line, and no section of `fs/requirements.md` states driver 4 directly.
 - **Left for ADR-0056, which is not being worked on now:** F12.
 - These fixes were not reviewed again.
 

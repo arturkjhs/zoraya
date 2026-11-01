@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0032, ADR-0040, ADR-0042, ADR-0044, ADR-0050, ADR-0052, ADR-0054, ADR-0055
-- **Evidence:** CP-02, CP-13, DM-003, DM-023, GR-001, alternatives-postmortem.md#hubris, stage-4/sources.md#handles
+- **Evidence:** CP-13, DM-003, DM-023, GR-001, alternatives-postmortem.md#hubris, stage-4/sources.md#handles
 
 ## Context
 ADR-0040 makes `Handle` a `u32` of 16 bits of slot and 16 of generation, and retires a slot whose generation reaches 65535. With 1024 slots, a process can pass about 67 million handles through its table before the table is gone. Stage 3's programs never come close. ADR-0055's service does: every `open` passes one handle, and a message of 64 handles passes 64 whether or not it is then refused. The third review of TASK-10 (T5) found that one client could end a volume's table in about a million messages, by arithmetic and not by measurement, with few handles open at any moment. ADR-0040 names the cost for "a long-lived process" and its revisit triggers name a service that needs more handles. The handle is ABI, so widening it costs least now (CP-13). Measured: nothing on this point.

@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0002, ADR-0003, ADR-0005, ADR-0010, ADR-0011, ADR-0012, ADR-0013, ADR-0015, ADR-0016, ADR-0040, ADR-0050, ADR-0051, ADR-0052, ADR-0054, ADR-0057
-- **Evidence:** fs/requirements.md, CP-02, DM-023, DM-160, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, stage-4/sources.md#services
+- **Evidence:** CP-02, DM-023, DM-160, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, stage-4/sources.md#services
 
 ## Context
 `zoraya-fs` is a synchronous engine that knows nothing about IPC. ADR-0012 asks for one service per volume. ADR-0010 promises a single completion order, atomic requests, durability on `sync`, and sticky failure, and left two points open: `MAX_ATOMIC_WRITE`, "to be fixed with the IPC message size", and how a supervisor hears of failure. Native clients are the only clients at stage 4.
