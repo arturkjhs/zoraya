@@ -133,9 +133,11 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 # with keys sent by the runner. The script powers the machine off.
 SHELL_SCRIPT := tests/shell/console.script
 LEAK_SCRIPT := tests/shell/leak.script
+EXIT_SCRIPT := tests/shell/exit.script
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
+	$(RUN_BOOT:$(SHELL_SCRIPT)=$(EXIT_SCRIPT)) --label exit-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUNNER) --timeout 240 --script $(LEAK_SCRIPT) --label leak-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)

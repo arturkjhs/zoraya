@@ -1,6 +1,6 @@
 # ADR-0060: Console input as raw bytes
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0006, ADR-0022, ADR-0040, ADR-0043
 - **Evidence:** CP-14, CP-25, DM-069, DM-070, DM-071
@@ -76,3 +76,5 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - Real hardware with no FIFO.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

@@ -1,0 +1,11 @@
+# When the first process ends the kernel powers off (INV-0063-2). No poweroff
+# here: QEMU's status 0 comes from that path alone.
+! panicked
+< zosh$ 
+# A job left running does not hold the machine up.
+> sleep 60 &\r
+< sleep
+< zosh$ 
+> exit\r
+< first process ended
+< reason: Exited

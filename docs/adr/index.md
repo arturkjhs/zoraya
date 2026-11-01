@@ -46,10 +46,10 @@ Evidence IDs (`DM-`, `GR-`, `CP-`, `X-`) resolve in `docs/research/`; `task-02/â
 | [ADR-0055](0055-filesystem-service-protocol.md) | Filesystem service protocol | proposed | One service per volume, one channel per open object, `TooManyOpen` at a full table. | ADR-0002, ADR-0003, ADR-0005, ADR-0010, ADR-0011, ADR-0012, ADR-0013, ADR-0015, ADR-0016, ADR-0040, ADR-0050, ADR-0051, ADR-0052, ADR-0054, ADR-0057 |
 | [ADR-0056](0056-job-memory-accounting.md) | Memory accounting by job | proposed | Not part of stage 4: job limits carved from the parent, connection budgets, who pays. No untrusted code runs until it is built. | ADR-0003, ADR-0004, ADR-0006, ADR-0021, ADR-0022, ADR-0032, ADR-0040, ADR-0041, ADR-0046, ADR-0050, ADR-0051, ADR-0053, ADR-0054, ADR-0055 |
 | [ADR-0057](0057-handle-width.md) | A 64-bit handle with no retired slots | proposed | A 64-bit handle with 48 bits of generation and no retired slots. | ADR-0032, ADR-0040, ADR-0042, ADR-0044, ADR-0050, ADR-0052, ADR-0054, ADR-0055 |
-| [ADR-0060](0060-console-input.md) | Console input as raw bytes | proposed | Raw bytes in a fixed ring from the receive interrupt, a `console_read` that never blocks, a `READABLE` signal; no terminal policy in the kernel. | ADR-0006, ADR-0022, ADR-0040, ADR-0043 |
-| [ADR-0061](0061-directory-entries.md) | Listing a directory handle | proposed | One record per call with an opaque cookie, in a form a filesystem service can offer. | ADR-0032, ADR-0040, ADR-0043, ADR-0044, ADR-0045 |
-| [ADR-0062](0062-power-off.md) | Power off through a handle | proposed | A `Power` object with one right, given only to the first process. | ADR-0040, ADR-0043 |
-| [ADR-0063](0063-first-process-until-init.md) | The shell as first process, until `init` | proposed | Temporary: the kernel starts the shell directly; ADR-0053 replaces this. | ADR-0003, ADR-0043, ADR-0062 |
+| [ADR-0060](0060-console-input.md) | Console input as raw bytes | accepted | Raw bytes in a fixed ring from the receive interrupt, a `console_read` that never blocks, a `READABLE` signal; no terminal policy in the kernel. | ADR-0006, ADR-0022, ADR-0040, ADR-0043 |
+| [ADR-0061](0061-directory-entries.md) | Listing a directory handle | accepted | One record per call with an opaque cookie, in a form a filesystem service can offer. | ADR-0032, ADR-0040, ADR-0043, ADR-0044, ADR-0045 |
+| [ADR-0062](0062-power-off.md) | Power off through a handle | accepted | A `Power` object with one right, given only to the first process. | ADR-0040, ADR-0043 |
+| [ADR-0063](0063-first-process-until-init.md) | The shell as first process, until `init` | accepted | Temporary: the kernel starts the shell directly; ADR-0053 replaces this. | ADR-0003, ADR-0043, ADR-0062 |
 
 ## Dependency order
 
