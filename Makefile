@@ -22,7 +22,7 @@ USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit fault fanout flood t_console
+	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
@@ -132,9 +132,11 @@ test-qemu: $(TEST_KERNEL) $(RUNNER)
 # through boot, its heap and timer checks, the receive interrupt, and the shell
 # with keys sent by the runner. The script powers the machine off.
 SHELL_SCRIPT := tests/shell/console.script
+LEAK_SCRIPT := tests/shell/leak.script
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
+	$(RUNNER) --timeout 240 --script $(LEAK_SCRIPT) --label leak-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-el2 -- $(RUN_QEMU) --test --keys --accel auto --machine-opt virtualization=on $(KERNEL)

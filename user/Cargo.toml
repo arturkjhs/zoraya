@@ -225,3 +225,18 @@ bench = false
 name = "flood"
 test = false
 bench = false
+
+[[bin]]
+name = "ticker"
+test = false
+bench = false
+
+[[bin]]
+name = "handles"
+test = false
+bench = false
+
+[[bin]]
+name = "stubborn"
+test = false
+bench = false

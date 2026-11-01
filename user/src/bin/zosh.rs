@@ -8,9 +8,8 @@ use core::fmt::{self, Write};
 
 use zoraya_abi::spawn::Encoder;
 use zoraya_abi::{
-    CONSOLE, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB, JobFlags,
-    JobObject, Mode, ObjectType, POWER, Packet, RequestKind, Rights, Status, console_signals,
-    job_signals,
+    CONSOLE, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB, JobFlags, Mode,
+    POWER, Packet, RequestKind, Rights, Status, console_signals, job_signals,
 };
 use zoraya_shell::{
     CTRL_BACKSLASH, CTRL_C, Editor, Key, Report, Words, job_number, request_flag, split,
@@ -146,7 +145,7 @@ impl Shell {
             // They hand the console on to their children.
             let rights = Rights::WRITE.union(Rights::DUPLICATE);
             e.handle(dup(CONSOLE.slot(), CONSOLE, rights));
-            e.handle(dup(JOB.slot(), job, JobObject::RIGHTS));
+            e.handle(dup(JOB.slot(), job, Rights::CREATE_PROCESS));
             e.handle(dup(DIRECTORY.slot(), DIRECTORY, Rights::LOOKUP));
         } else {
             e.handle(console_entry());
@@ -176,6 +175,21 @@ impl Shell {
             }
         };
         let words = parsed.as_slice();
+        const BUILT_IN: [&str; 9] = [
+            "help",
+            "ls",
+            "echo",
+            "uptime",
+            "exit-code",
+            "jobs",
+            "wait",
+            "kill",
+            "poweroff",
+        ];
+        if parsed.background && words.first().is_some_and(|w| BUILT_IN.contains(w)) {
+            println!("zosh: & is for programs");
+            return;
+        }
         match words {
             [] => {}
             ["help"] => help(),
@@ -208,11 +222,13 @@ impl Shell {
                 Some(number) => self.waiting = Waiting::One(number),
                 None => println!("zosh: no such job: {which}"),
             },
+            ["wait", ..] => println!("usage: wait [%n]"),
             ["kill", which] => self.signal(which, RequestKind::Terminate),
             ["kill", flag, which] => match request_flag(flag) {
                 Some(kind) => self.signal(which, kind),
                 None => println!("usage: kill [-int|-term|-hup|-quit] %n"),
             },
+            ["kill", ..] => println!("usage: kill [-int|-term|-hup|-quit] %n"),
             ["poweroff"] => {
                 let status = power_off(POWER);
                 println!("zosh: poweroff: {status:?}");

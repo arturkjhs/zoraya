@@ -50,13 +50,15 @@ Recommended: **Option C**, with Option D's behaviour kept for a first process th
 - **Call.** `power_off(power)` needs `POWER`. On success it does not return.
 - **Where it comes from.** The kernel installs it at slot 4, `POWER`, in the first process alone. `kernel_handles` for any other process does not. Nothing else can make one.
 
+**Tensions with accepted ADRs.** *ADR-0040:* a new right and object type in its lists. *ADR-0043:* slot 4 extends its startup convention, for the first process alone. Accepting this ADR replaces both rows (ADR-0001 rule 1).
+
 ## Consequences
 - **Positive.** Who can stop the machine is visible in handle lists.
 - **Negative.** A new type and right.
 - **Follow-up.** `init` takes this handle when ADR-0053 is accepted.
 
 ## Invariants
-- **INV-0062-1.** Only the first process starts with a `Power` handle, and no call makes one. *Check:* in-QEMU test that a kernel-started process has no valid handle at slot 4, and a unit test over `OBJECT_TYPES`.
+- **INV-0062-1.** Only the first process starts with a `Power` handle, and no call makes one. *Check:* in-QEMU test that a kernel-started process has no valid handle at slot 4, and a unit test over `OBJECT_TYPES` that `PowerObject` alone carries `POWER`. That no call makes one is held by review.
 - **INV-0062-2.** `power_off` without `POWER` is refused, and the machine goes on. *Check:* in-QEMU test with a wrong handle.
 - **INV-0062-3.** `poweroff` in the shell ends the machine with QEMU status 0. *Check:* scripted serial test.
 

@@ -2,15 +2,18 @@
 #![no_main]
 
 //! ADR-0060, ADR-0061 and ADR-0062 from a process. The test kernel has put
-//! `ab` in the console's ring.
+//! `ab` and 254 of `c` in the console's ring. It ends with the number of names it listed.
 
 use zoraya_abi::{
     CONSOLE, DIRECTORY, DirectoryEntry, Mode, POWER, Packet, Rights, Status, console_signals,
 };
 use zoraya_user::{
     assert_err, console_dropped, console_read, directory_entry, handle_close, handle_duplicate,
-    port_create, port_subscribe, port_wait, power_off,
+    port_create, port_subscribe, port_wait, power_off, raw_syscall,
 };
+
+/// `console_read`'s number.
+const CONSOLE_READ: u64 = 23;
 
 /// INV-0060-2, INV-0060-3.
 fn input() {
@@ -20,16 +23,22 @@ fn input() {
     assert_eq!(port_wait(port, 0, &mut packets), Ok(1), "input waits");
     assert_eq!(packets[0].signals, console_signals::READABLE);
 
+    // An address nothing maps loses no input.
+    let call = [u64::from(CONSOLE.raw()), 0x10, 8, 0, 0, 0];
+    assert_eq!(raw_syscall(CONSOLE_READ, call).0, Status::BadAddress as u64);
+
     let write_only = handle_duplicate(CONSOLE, Rights::WRITE).expect("duplicate");
-    let mut bytes = [0; 8];
+    let mut bytes = [0; 512];
     assert_err!(console_read(write_only, &mut bytes), Status::AccessDenied);
     assert_err!(console_dropped(write_only), Status::AccessDenied);
     handle_close(write_only).expect("close");
 
     assert_eq!(console_read(CONSOLE, &mut bytes[..1]), Ok(1));
     assert_eq!(port_wait(port, 0, &mut packets), Ok(1), "still one left");
-    assert_eq!(console_read(CONSOLE, &mut bytes[1..]), Ok(1));
-    assert_eq!(&bytes[..2], b"ab");
+    assert_eq!(console_read(CONSOLE, &mut bytes[1..]), Ok(255));
+    assert_eq!(&bytes[..3], b"abc");
+    assert_eq!(bytes[255], b'c');
+    assert_eq!(bytes[300], 0, "nothing past the bytes taken");
     assert_err!(port_wait(port, 0, &mut packets), Status::DeadlineExceeded);
     assert_eq!(
         console_read(CONSOLE, &mut bytes),
@@ -40,7 +49,7 @@ fn input() {
 }
 
 /// INV-0061-2, INV-0061-3.
-fn listing() {
+fn listing() -> i32 {
     let mut record = [0; 128];
     let mut cookie = 0;
     let mut seen = 0;
@@ -69,6 +78,7 @@ fn listing() {
         Status::AccessDenied
     );
     handle_close(no_lookup).expect("close");
+    seen
 }
 
 /// INV-0062-1, INV-0062-2.
@@ -80,7 +90,7 @@ fn power() {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     input();
-    listing();
+    let names = listing();
     power();
-    0
+    names
 }

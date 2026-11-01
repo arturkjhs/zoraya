@@ -1089,7 +1089,15 @@ fn thread_stack_has_a_guard_page() {
 fn console_and_listing_from_a_process() {
     console::receive(b'a');
     console::receive(b'b');
-    assert_eq!(run_program("t_console"), exited(0));
+    // The ring's whole size, for a read as long as it.
+    for _ in 2..zoraya_console::INPUT_SIZE {
+        console::receive(b'c');
+    }
+    // It ends with the number of names it listed.
+    assert_eq!(
+        run_program("t_console"),
+        exited(ramdisk::get().len() as i32)
+    );
 }
 
 fn run_program(name: &str) -> ExitRecord {

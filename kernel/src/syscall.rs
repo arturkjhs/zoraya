@@ -410,14 +410,11 @@ impl Handlers for Calls {
         let Object::Console = self.object(console, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
-        if bytes.0.length > INPUT_SIZE as u64 {
-            return Err(Status::InvalidArgument);
-        }
         // User memory is reached before any byte leaves the ring, so that a
         // bad address loses no input.
         let target = UserSlice::of(bytes.0)?;
         let mut buffer = [0; INPUT_SIZE];
-        let room = &mut buffer[..bytes.0.length as usize];
+        let room = &mut buffer[..bytes.0.length.min(INPUT_SIZE as u64) as usize];
         target.write(room)?;
         let taken = console::read(room);
         target.write(&buffer[..taken])?;

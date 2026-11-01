@@ -53,8 +53,6 @@ Nothing that is not listed is inherited. `start_suspended` plus `resume` replace
 
 **Asynchronous notification without Unix signals** ([ADR-0004](adr/0004-async-notification.md)). No native call runs
 code asynchronously on an existing thread. Instead:
-- **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
-  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060, proposed).
 - **Exit records.** A process object carries `ExitRecord { code, reason, detail, request_kind }`.
 - **Request signals.** These are `Interrupt`, `Terminate`, `Hangup`, `Quit` and `Custom(n)`. Their per-process
   dispositions (`Terminate`, `Ignore`, `Deliver`) are held by the kernel.
@@ -307,8 +305,9 @@ stage-4 service will wrap `Volume` and forward its failure report.
 - the host tests;
 - `make adr-check`;
 - the in-QEMU tests in seven machine configurations;
-- `make test-boot`, which builds the normal kernel and boots it under each accelerator. It must print its heap and
-  timer checks, not panic, and power off.
+- `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
+  plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
+  0; `tests/shell/leak.script` runs more programs than a handle table has slots.
 
 | Label | Accelerator | Machine | Checks beyond the test list |
 |---|---|---|---|
@@ -363,6 +362,13 @@ Coverage-guided fuzz targets for the same decoder are in `fuzz/` (nightly, cargo
 commands) and against malformed input: every truncation, bad header fields, structure and string errors, and 30,000
 deterministic random mutations.
 
+## Console input and the first process
+
+- **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
+  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060, proposed).
+- **First process.** The normal kernel starts `zosh` alone, with ADR-0043's handles and `Power` at slot 4, and powers
+  off if it ends (ADR-0062, ADR-0063, proposed).
+
 ## Using the shell
 
 `make run` boots to `zosh$ ` on the serial console. Ctrl-A X leaves QEMU, and `poweroff` turns the machine off.
@@ -370,9 +376,13 @@ deterministic random mutations.
 - `ls` lists the ramdisk. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
 - `echo`, `uptime`, `exit-code` (the last record) and `help` are built in.
-- Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it.
+- Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it,
+  which is more than TASK-11 asked: a job can ignore `Interrupt`.
   Ctrl-\\ sends `Quit`. Ctrl-U kills the line, and Up and Down walk the last 32 lines.
-- Other keys pressed while a foreground job runs are dropped, so they do not reach the next prompt.
+- Other keys read while a foreground job runs are dropped, and are not in the dropped count. Keys still in the ring
+  when the job ends do reach the prompt.
+- A report is the record of the job's first process. The shell waits for the whole job, so a first process that
+  exits 0 and leaves children looks clean.
 - A program ending otherwise than with exit 0 gets a short report such as `[exited 3]`, `[terminated: Interrupt]`,
   `[fault: data abort, class 0x24]` or `[killed]`. A fault report gives the exception class, because that is what
   `ExitRecord.detail` holds (ADR-0034): the kernel's own line above it has the address.

@@ -48,14 +48,14 @@ The console only writes. A person at the serial line needs a shell, so bytes mus
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 - **Ring.** 256 bytes `[assumption]`, a static array in a host-tested `no_std` crate. The interrupt handler drains the UART FIFO into it. A byte that does not fit is dropped and counted, and nothing allocates.
-- **`console_read(console, buffer)`** needs `READ`, never blocks, and returns the bytes taken: 0 if there are none.
+- **`console_read(console, buffer)`** needs `READ`, never blocks, and returns the bytes taken: 0 if there are none. It takes at most the ring's size, however long the buffer, and the buffer's bytes up to that size are overwritten even if fewer are taken, because the kernel touches them first so that a bad address loses no input.
 - **`console_dropped(console)`** needs `READ`, and returns the bytes dropped since boot.
 - **Signal.** The console object changes from `NotWaitable` to waitable, with `READABLE` asserted exactly while the ring holds a byte. Rights: `COMMON`, `READ`, `WRITE`, `WAIT`.
 - **Two holders.** One ring exists for the machine, so readers share it: each byte goes to whichever call takes it first, and nothing arbitrates. A parent must not list `READ` for a child that should not read. The shell lists `WRITE` only.
 - **Output is unchanged.** Writes stay synchronous and polled.
-- **Kernel knows no byte.** Ctrl-C is a byte like any other.
+- **Kernel knows no byte.** Ctrl-C is a byte like any other, so a burst that overruns the ring can lose it. A person presses it again.
 
-**Tensions with accepted ADRs.** *ADR-0040, ADR-0043:* the console's rights grow, which both allow. ADR-0006 rule 1 lists no console row, so a new waitable type follows its rule 2.
+**Tensions with accepted ADRs.** *ADR-0040:* its table lists the console's rights and calls, and this changes them, so accepting this ADR replaces that row (ADR-0001 rule 1). *ADR-0006 rule 1* lists terminals as byte streams, with signals of their own, and rule 6 has a non-blocking read return `WouldBlock`. This console is neither: `READABLE` alone, and 0 when empty, because `WouldBlock` is not in `Status` at this stage. A terminal service at a later stage must take the rule's form.
 
 ## Consequences
 - **Positive.** The kernel holds no terminal state. Input goes through the one wait.

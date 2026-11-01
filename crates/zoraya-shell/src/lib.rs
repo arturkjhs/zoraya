@@ -42,8 +42,12 @@ impl Line {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Escape {
     None,
+    /// After Esc.
     Started,
-    Bracket,
+    /// After `Esc [`, up to a final byte.
+    Csi,
+    /// After `Esc O`: one more byte.
+    Single,
 }
 
 /// What a key did.
@@ -102,21 +106,32 @@ impl Editor {
 
     /// Takes one input byte.
     pub fn key(&mut self, byte: u8, out: &mut impl Write) -> Result<Key, fmt::Error> {
+        // Ctrl-C always means Ctrl-C, whatever was typed before it.
+        if byte == CTRL_C {
+            self.escape = Escape::None;
+        }
         match self.escape {
             Escape::Started => {
-                self.escape = if byte == b'[' {
-                    Escape::Bracket
-                } else {
-                    Escape::None
+                self.escape = match byte {
+                    b'[' => Escape::Csi,
+                    b'O' => Escape::Single,
+                    _ => Escape::None,
                 };
                 return Ok(Key::Edited);
             }
-            Escape::Bracket => {
+            Escape::Single => {
                 self.escape = Escape::None;
-                match byte {
-                    b'A' => self.older(out)?,
-                    b'B' => self.newer(out)?,
-                    _ => {}
+                return Ok(Key::Edited);
+            }
+            Escape::Csi => {
+                // Parameters and intermediates run until a final byte.
+                if (0x40..=0x7e).contains(&byte) {
+                    self.escape = Escape::None;
+                    match byte {
+                        b'A' => self.older(out)?,
+                        b'B' => self.newer(out)?,
+                        _ => {}
+                    }
                 }
                 return Ok(Key::Edited);
             }
@@ -430,8 +445,41 @@ mod tests {
     #[test]
     fn an_unknown_escape_is_swallowed() {
         let mut e = Editor::new();
-        let (out, _) = typed(&mut e, b"\x1b[Zk\x1bOx");
-        assert_eq!(out, "kx");
+        let (out, _) = typed(&mut e, b"\x1b[Zk\x1bOAx\x1b[3~y");
+        assert_eq!(out, "kxy");
+    }
+
+    #[test]
+    fn ctrl_c_gets_through_an_escape() {
+        let mut e = Editor::new();
+        let (_, last) = typed(&mut e, &[27, CTRL_C]);
+        assert_eq!(last, Some(Key::Interrupt));
+        let (out, _) = typed(&mut e, b"a");
+        assert_eq!(out, "a");
+    }
+
+    #[test]
+    fn newline_ends_a_line_too() {
+        let mut e = Editor::new();
+        let (_, last) = typed(&mut e, b"x\n");
+        assert_eq!(last, Some(Key::Line));
+    }
+
+    #[test]
+    fn ctrl_c_and_enter_return_to_the_newest_line() {
+        let mut e = Editor::new();
+        enter(&mut e, "one");
+        enter(&mut e, "two");
+        typed(&mut e, UP);
+        typed(&mut e, UP);
+        typed(&mut e, &[CTRL_C]);
+        typed(&mut e, UP);
+        assert_eq!(e.line(), "two");
+        typed(&mut e, UP);
+        typed(&mut e, b"\r");
+        e.finish();
+        typed(&mut e, UP);
+        assert_eq!(e.line(), "one", "the line just entered");
     }
 
     #[test]
@@ -452,7 +500,10 @@ mod tests {
         assert_eq!(job_number("%3"), Some(3));
         assert_eq!(job_number("3"), None);
         assert_eq!(job_number("%x"), None);
+        assert_eq!(request_flag("-int"), Some(RequestKind::Interrupt));
+        assert_eq!(request_flag("-term"), Some(RequestKind::Terminate));
         assert_eq!(request_flag("-hup"), Some(RequestKind::Hangup));
+        assert_eq!(request_flag("-quit"), Some(RequestKind::Quit));
         assert_eq!(request_flag("-kill"), None);
     }
 
@@ -482,6 +533,7 @@ mod tests {
             "[terminated: 2]"
         );
         assert_eq!(report(ExitReason::Killed, 0, 0, None), "[killed]");
+        assert_eq!(report(ExitReason::Limit, 0, 0, None), "[limit]");
         assert_eq!(
             report(ExitReason::Fault, 0, 0x24, None),
             "[fault: data abort, class 0x24]"

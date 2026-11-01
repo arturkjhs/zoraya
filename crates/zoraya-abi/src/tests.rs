@@ -520,3 +520,19 @@ fn a_directory_entry_round_trips_and_its_decoder_is_total() {
     buffer[12] = 1;
     assert_eq!(DirectoryEntry::decode(&buffer[..size]), None, "reserved");
 }
+
+/// INV-0062-1: only `PowerObject` carries `POWER`, and it carries nothing that
+/// could do anything else.
+#[test]
+fn power_is_one_right_on_one_type() {
+    assert_eq!(
+        PowerObject::RIGHTS,
+        Rights::POWER
+            .union(Rights::DUPLICATE)
+            .union(Rights::TRANSFER)
+    );
+    let holders = OBJECT_TYPES
+        .iter()
+        .filter(|(_, _, rights)| rights.contains(Rights::POWER));
+    assert_eq!(holders.count(), 1);
+}
