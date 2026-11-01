@@ -42,9 +42,12 @@ fn asserting_a_signal_allocates_nothing() {
         e.subscribe(port, source, 1, key, mode, 0).unwrap();
     }
     // User packets keep the room they found.
-    for i in 0..10 {
+    for i in 0..1024 {
         e.queue(port, i, i, &mut |_| {}).unwrap();
+        assert!(e.has_room(port), "{i}");
     }
+    let mut drained = [zoraya_abi::Packet::default(); 2048];
+    e.take(port, &mut drained).unwrap();
     let before = ALLOCATIONS.load(Ordering::Relaxed);
     let mut packets = [zoraya_abi::Packet::default(); 64];
     for _ in 0..100 {

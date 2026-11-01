@@ -549,6 +549,13 @@ impl<W> Events<W> {
         Some(port.waiters.swap_remove(at))
     }
 
+    /// Whether the ready list can take an item for every subscription that has
+    /// none, without allocating.
+    pub fn has_room(&mut self, id: PortId) -> bool {
+        let port = self.port(id.0);
+        port.ready.capacity() >= port.subscriptions.len() + port.user + port.stale
+    }
+
     /// Items on the ready list, stale ones too.
     pub fn ready_len(&mut self, id: PortId) -> usize {
         self.port(id.0).ready.len()
