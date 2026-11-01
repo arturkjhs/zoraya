@@ -6,7 +6,7 @@ The rules for working here are in [`../CLAUDE.md`](../CLAUDE.md).
 
 ## Vision (architect)
 
-TODO(architect): what is new in Zoraya, in the architect's words.
+Zoraya is an experiment in building an operating system from scratch with AI agents, where every design decision is grounded in measured evidence and recorded as an ADR. Its core idea is that a process can reach only what it was explicitly given: no ambient authority, no global namespace, no fork, no asynchronous signals in the native world; POSIX lives in an isolated personality. Near term, Zoraya is a general-purpose base that runs a self-hosting C toolchain and a GUI terminal under QEMU. A possible later direction is a system for running untrusted code, such as AI agents, in strict isolation; that choice is made after stage 4 and must not be precluded before it. The process itself — successes, failures and numbers — is published as part of the project.
 
 ## Platform
 
@@ -397,10 +397,10 @@ deterministic random mutations.
 
 | Stage | Content | Done when |
 |---|---|---|
-| **0 (current)** | Boot, UART output, panic handler, device tree parsing, test harness | `make test` passes |
-| 1 | Exception vectors, GIC, timer, MMU (kernel in upper half), physical frame allocator, kernel heap | timer ticks; `Box`/`Vec` work in the kernel |
-| 2 | Threads, context switch, scheduler, EL0, first native syscalls, ELF loader, initial ramdisk | a user process prints through a native syscall |
-| 3 | Handles, ports and process objects per ADR-0003/0004/0006; native `spawn` | a process spawns a child and waits on its exit via a port |
+| 0 (done) | Boot, UART output, panic handler, device tree parsing, test harness | `make test` passes |
+| 1 (done) | Exception vectors, GIC, timer, MMU (kernel in upper half), physical frame allocator, kernel heap | timer ticks; `Box`/`Vec` work in the kernel |
+| 2 (done) | Threads, context switch, scheduler, EL0, first native syscalls, ELF loader, initial ramdisk | a user process prints through a native syscall |
+| **3 (current)** | Handles, ports and process objects per ADR-0003/0004/0006; native `spawn` | a process spawns a child and waits on its exit via a port |
 | 4 | virtio-blk, filesystem service, `mkfs` on host | files survive reboot |
 | 5 | virtio-gpu, virtio-input, compositor, terminal as GUI client | screenshot shows a terminal window |
 | 6 | `libposix` T1 per ADR-0005, port of tcc, make, dash | `tcc hello.c && ./a.out` inside Zoraya |
