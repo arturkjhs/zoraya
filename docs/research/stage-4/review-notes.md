@@ -393,3 +393,67 @@ Reviewer: a subagent that wrote none of these documents and took no part in earl
 - **Left for ADR-0056, which is not being worked on now:** F12.
 - These fixes were not reviewed again.
 
+## Fifth review: F1 to F13, T8, T9
+
+Errors: 1. New tensions: 1.
+
+Reviewer: a subagent that wrote none of these documents and took no part in earlier reviews. Reviewed on branch `adr/stage-4-design` at 13253a3, on 2026-11-01. The scope was the fixes of F1 to F13, T8 and T9, and the last two commits: 82cfb68 (INV-0051-5, INV-0057-1) and 13253a3 (their rows in `invariants.md`). ADR-0060 to ADR-0063 were treated as accepted, as they are on `main`. Severity is as defined at the top of this file. "New tension" means an unstated tension with an accepted ADR that these changes or fixes create. Three older unstated tensions came up as well. They are V7 to V9, are kept apart, and are not in the count.
+
+`make adr-check` passes at 13253a3: 0 errors, 17 warnings, all of them accepted invariants not yet applicable. At 82cfb68 it failed with 4 errors, on the rows of INV-0051-5 and INV-0057-1, and 13253a3 fixed those.
+
+### Problems
+
+| # | Severity | Location | What is wrong, with evidence | Suggested fix | Disposition |
+|---|---|---|---|---|---|
+| V1 | error | ADR-0051 INV-0051-5, Calls | The restated rule is a closed list: "the only integer payloads are" detail, code, keys, packet data, cookies, the address of `memory_unmap`, and the range index. ADR-0051's own calls take other integers: `size` in `memory_create`, `offset` and `length` in `memory_map`, `length` in `memory_unmap`. They are no part of a pointer-and-length pair, and `Param` has no size kind today: `Flags` is "bits or a small enumeration", and the lint's `match` has nothing else to put them in. ADR-0051 adds "an address kind for the last" and nothing for these. So the invariant is false of the ADR that states it, and the lint as described either fails on three calls or passes sizes as `Flags`, the slip T15 warned of. T15's text assumed a size kind that does not exist. | Add a `Size` kind by name: "sizes and offsets of `memory_create`, `memory_map` and `memory_unmap`, which name no object". Allow it only for those calls in the check. | |
+| V2 | imprecision, new tension | ADR-0057 "Everything else in ADR-0040 stands"; ADR-0040 Consequences, driver 1 | INV-0057-1 now says plainly that the rule is not absolute. ADR-0040's Consequences still say "Stale handles fail deterministically", and its driver 1 says a stale handle must "never reach whatever now occupies the slot". ADR-0057 names the one Consequences sentence it replaces, on retiring, and says that the rest stands. This one no longer holds as written. The practical effect is nil, but the list of replacements is meant to be complete and is not. | Add to the bullet: the "deterministically" sentence holds only within INV-0057-1's bound. | |
+| V3 | imprecision | ADR-0050 Object, the rejected alternative | T8's question. The premise is true: ADR-0042 chose "No pointer inside", and its Follow-up applies that to future struct-taking calls. The conclusion overclaims. "Copied once more" holds only for a structure read as input. `channel_read`'s structure would be output: one `Buffer` holding sizes, handle values and bytes, in 3 registers, with one copy by the kernel, as now, no new kind, and no double fetch, which is ADR-0042's concern. The reader decodes those bytes in place either way, since ADR-0052 puts a header on every message. Its real costs are a layout rule and bytes at an offset. Also unweighed: two sizes packed in x1, though `finish` in `zoraya-abi` drops x1 on any error, so `BufferTooSmall` would need a stub change. `Out` remains a sound choice, so this is an overclaim and not a false design statement. | State the alternative as one output buffer, and give the real reason for preferring `Out`, or adopt the buffer. | |
+| V4 | imprecision | ADR-0057 INV-0057-1 | The arithmetic is right (below). The reason given for "an upper bound on the rate" does not show it: "because a close is also a system call" compares a close with `port_wait`, which has a lookup and a packet copy, and no close was measured. The better argument is unused: a slot needs an install and a close per generation, so two system calls. The figure is also one host's median under HVF. The bound is probably conservative, but that is unmeasured, and the text states it as fact. The rest of the invariant is honest. The check tests the mechanism, not the bound, which is all a test can do, and "the system's working life" is defined only by the arithmetic that follows. | Say "taken as" the rate, with the two-call argument, marked `[assumption]`, or measure `handle_duplicate` and `handle_close`. | |
+| V5 | imprecision | ADR-0054 DMA, Quarantine; INV-0054-3 | T9 is otherwise fixed (below). Two things remain. A pin carries only `TRANSFER`, and `dma_unpin(pin)` states no right, though T9 asked for rights and the other two calls have theirs. More important, `handle_close` on a pin by a live holder is unstated. Quarantine speaks only of a holder that dies, so closing without unpinning could free frames a device still writes. Zircon quarantines here, by [Z5]. INV-0054-3 does not cover it. A pin that can be moved also has a holder that changes, which the rule does not mention. | State that `dma_unpin` needs no right beyond holding the handle, or add one. Say that closing a pin without `dma_unpin` quarantines it, and extend INV-0054-3. | |
+| V6 | imprecision | ADR-0055 driver 4; Disposition of the fourth review, F7 | F7's stated reason is true but not whole. `adr-check` does reject a bare file on the Evidence line ("Every token ... must be a citation"), and no section states driver 4. But "stays" is not forced. Section 1.2 gives call counts that support "reads and writes dominate", so an anchor exists for half of the sentence. For "small", the file has no size data at all: M1/M2 record calls. So the driver still attributes to a file something it does not contain, and that is the honest statement of what stays. | Cite `fs/requirements.md#12-linux-syscalls` for the counts, and mark "small" `[assumption]`. | |
+| V7 | imprecision, older, not counted | ADR-0053 What `init` receives, Depends; ADR-0062; ADR-0063 | Not created by anything in scope, and seen only now that these are accepted. ADR-0062 puts `POWER` at slot 4 in the first process and says `init` "takes this handle when ADR-0053 is accepted". ADR-0053's list omits it and says `Device` handles go "at further slots", which on ADR-0043's three slots reads as slot 4 onward. ADR-0063 says ADR-0053 replaces it. ADR-0053 names neither, and neither is on its Depends line. | Add `POWER` at slot 4 and `Device` from slot 5, and say that accepting ADR-0053 supersedes ADR-0063. | |
+| V8 | imprecision, older, not counted | ADR-0054 Quarantine, Tensions; ADR-0041 INV-0041-1 | INV-0041-1 says that after a process ends and its last handle closes, the frame count returns to its earlier value. By design this does not hold for a dead pin holder until `dma_release_quarantine`, and INV-0054-3 tests the opposite. ADR-0054's Tensions do not list ADR-0041. T9 edited these sentences but did not cause this. | List it, with the exception for quarantined frames. | |
+| V9 | imprecision, older, not counted | ADR-0054 Device object, Tensions; ADR-0040 Rights | `MAP`, `INTERRUPT` and `DMA` are new rights. ADR-0040's Follow-up foresees rights for channels and memory objects only, and accepted ADR-0062 treats a new right as a tension with ADR-0040's lists. ADR-0054 does not list one. | One line: accepting ADR-0054 replaces those lists (ADR-0001 rule 1). | |
+| V10 | note | ADR-0050 `channel_create(out)`; ADR-0054 `device_map`, `dma_pin` | Lower-case `out` beside a new kind `Out` that "only `channel_read` may use". By the two-register arithmetic these are `Buffer`, and all fit, but no text says so. `device_map` and `channel_create` write fixed records, which is `Out`'s own definition, so the restriction looks arbitrary. | Say that those are `Buffer`, or allow `Out` for fixed records. | |
+| V11 | note | INV-0051-5 rule against check | `Out` is in the check and not in the rule. That is defensible, since it is a pointer and not an integer payload, but ADR-0050 says "INV-0051-5 names it". | Accept, or say "its check". | |
+| V12 | note | ADR-0054 Interrupt object | "So ADR-0045's lint is enough" is now stale: that lint is replaced twice over, and `device_interrupt`'s `index` needs INV-0051-5 (T15's point). ADR-0054 itself never mentions the index kind. | "INV-0051-5 covers its index." | |
+| V13 | note | Depends lines | The last commit gave ADR-0050 a tension with ADR-0044, and ADR-0051 text naming ADR-0050 and ADR-0054. Neither line was updated. `adr-check` does not look at this. | Add them. | |
+| V14 | note | ADR-0057 Option B against INV-0057-1 | Two sets of figures: 8.9 years and 9,000 years at 1 µs, 7.8 and 8,000 at 875 ns. Each is right for its rate. The Recommendation says "the times above". | Use one rate. | |
+| V15 | note | ADR-0057 Option C, Consequences | "Fixes `MAX_HANDLES` at 1024": 11 bits hold slots up to 2047. `POWER` keeps its value too, and is not named beside `CONSOLE`, `JOB` and `DIRECTORY`. | "At 2047"; add `POWER`. | |
+
+### Arithmetic
+
+Computed in this session. 2^48 = 2.81 × 10^14. × 875 ns = 7.80 years. × 1024 = 7,992 years. At 1 µs: 8.92 and 9,133 years. 1024 × 65,535 = 67.1 million; / 64 = 1.05 million. Option C: 2^21 × 1024 = 2.15 billion, 32 times ADR-0040's lifetime, with 16 − 11 = 5 spare bits. All match the text.
+
+### T8 and T9
+
+- **T8: confirmed fixed, sound.** `channel_read` is 1 + 2 + 2 + 1 = 6 registers. It would be the first call to use x5: `port_subscribe` uses 5. `dispatch`, the stubs and `kernel/src/syscall.rs` all carry six. `Param::registers` gives 1 by default, and the lint's exhaustive `match` forces a judgement on `Out`, as ADR-0044 says. The return registers do not change, because the sizes go through memory, which also survives `finish` dropping x1 on error. ADR-0032's trigger of more than six arguments is not reached. On ADR-0042 see V3.
+- **T9: confirmed fixed apart from V5.** `dma_pin(memory, device, out)` is 4 registers, with the pin in x1 and the runs through a `Buffer`. `InvalidArgument` with nothing pinned follows ADR-0061's precedent. A caller can size the buffer from the object's size. `dma_release_quarantine` needs `DMA`, which `init` and the successor hold.
+
+### Fixes confirmed
+
+| Finding | Confirmed by |
+|---|---|
+| F1 | 11 and 21 bits, 32 times, about 2.1 billion. See V15. |
+| F2 | ADR-0042 and ADR-0032 bullets present, and no other accepted ADR gives the handle a width by search. |
+| F3 | The variant and the reason are stated, and driver 1 is claimed "within the system's working life". No contradiction added. See V2. |
+| F4 | `PEER_CLOSED` alone and a port deadline. No spin, and the retry cannot be lost on an idle volume. |
+| F5 | "With the last connection", and `clone` makes a new record. This agrees with INV-0055-9 and with the Deferred section. |
+| F6 | ADR-0056 is gone from all four lines. The text only points at it. |
+| F7 | Stays, for a true reason, but see V6. |
+| F8 | The Consequences sentence is named, and "table entries" is dropped from "double". |
+| F9 | The lookup is the check: `Table::remove` and `get` refuse a bad slot with no decoder test. The file list and `handle()` are complete: `child.rs` needs its `u32`, `handles.rs` infers its type, and `CONSOLE.raw()` sites still compile. |
+| F10 | DM-003 and GR-001 cited. Hubris's generation-tagged ids are in the postmortem, and the width claim is gone. |
+| F11 | "With its startup handles". |
+| F12 | Left, honestly: ADR-0056 is unchanged, and ADR-0055's 240 against its 252 stays a duty on it. Nothing at stage 4 is affected. |
+| F13 | Both are on the line. |
+| INV-0051-5's form | It restates the rule in full from INV-0061-1, with `Cookie` kept through the named lint, so T15 is fixed in form. See V1 for the content. |
+| INV-0057-1's rows | Row and ADR match, by `adr-check`. |
+
+### What was checked and not checked
+
+- Read in full: ADR-0050 to ADR-0055, ADR-0057, ADR-0032, ADR-0040, ADR-0042, ADR-0044, this file's four reviews, and `git show` of both commits. Read the Recommendation, Tensions and Invariants of ADR-0041, ADR-0061, ADR-0062 and ADR-0063, ADR-0043's convention, the tension lines of ADR-0060, and ADR-0001's rules by search.
+- Read code: `Param`, `Arg`, `syscalls!`, `Handle`, the handle table's `remove`, the allow-list lint, the register array in `kernel/src/syscall.rs`, `adr-check`'s Evidence logic, and handle uses in `user/src/bin` and `zoraya-rt`. Read `fs/requirements.md` section 1.2 and searched it for size data.
+- Ran `make adr-check` at 82cfb68 and 13253a3. Ran the arithmetic.
+- Not checked: no ADR here has code, so nothing was built for the design, and `make test` was not run. [Z5] was not fetched: V5 rests on the first review's note. No web source was fetched. Close cost was not measured. ADR-0056 was read by search only, for F12. T11 to T15, T18 to T20 and T22 were not re-examined, apart from what T15 shares with V1, and T20's open points on a faulting `sizes` stay open. ADR-0060 to ADR-0063 were judged from this branch's text, with status taken from `main`.
+
