@@ -47,11 +47,13 @@ ADR-0050 caps a message at 64 KiB, ADR-0010 allows atomic writes of up to 1 MiB,
 ## Recommendation
 Recommended: **Option B**. It is a recommendation, not a decision.
 
-- **Calls.** `memory_create(size)` commits all frames, zeroed, or fails with `NoMemory`. `memory_map(object, offset, length, write)` returns an address the kernel chose. `memory_unmap(address, length)`. The size is fixed.
+- **Calls.** `memory_create(size, contiguous)` commits all frames, zeroed, or fails with `NoMemory`; `contiguous` uses ADR-0021's run allocation and exists for ADR-0054's queues. `memory_map(object, offset, length, write)` returns an address the kernel chose. `memory_unmap(address, length)`. `Param` gains an address kind for the last, which ADR-0045's lint must allow; an address names no object, only a place in the caller's own space. The size is fixed.
 - **Rights.** `READ` to map, `WRITE` to map writable, plus `DUPLICATE` and `TRANSFER`. A duplicate with only `READ` is how a client gets a read-only view. No right maps anything executable: user code comes from `spawn` alone at this stage.
-- **Lifetime.** Each handle and each mapping holds the object. Frames go with the last of them. A process's mappings go at exit, before its handles.
+- **Object type.** `NotWaitable` (INV-0006-1).
+- **Lifetime.** Each handle, each mapping and each DMA pin (ADR-0054) holds the object. Frames go with the last of them. A process's mappings go at exit, before its handles.
 - **Unmapping** is break-before-make with `tlbi` for the ASID, as ADR-0020 requires of the kernel's tables.
 - **Limit.** 256 mappings per process `[assumption]`, then `LimitReached`.
+- **Tension.** INV-0031-2 says a process cannot read or write another process's memory. A shared object does that by consent. Its wording needs a superseding ADR if this is accepted.
 - **The rule for readers.** Memory another process can write is hostile input that can change between two reads. Copy out, then validate, and never validate in place. A service reads the bytes once.
 
 ### Effect of the vision
@@ -66,7 +68,7 @@ No change. For target 2, `NoMemory` at creation is what a sandbox wants, and cha
 - **INV-0051-1.** `memory_create` either commits every frame or fails, and changes nothing else. *Check:* in-QEMU test against the frame counter, at exhaustion.
 - **INV-0051-2.** No user mapping from a memory object is executable, or writable through a handle without `WRITE`. *Check:* in-QEMU table walk, with INV-0031-1's test extended.
 - **INV-0051-3.** After `memory_unmap`, an access faults, on every process that unmapped. *Check:* in-QEMU test with a `Fault` exit record.
-- **INV-0051-4.** Frames return when the last handle and mapping go, in either order. *Check:* in-QEMU test with both orders.
+- **INV-0051-4.** Frames return when the last handle, mapping and pin go, in any order. *Check:* in-QEMU test with each order.
 
 ## Open questions
 - Whether a fixed-size object suits `libposix`'s `mmap` for T1.

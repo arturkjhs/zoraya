@@ -20,7 +20,7 @@ Services need a way to state their protocols. DM-053 is what untyped interfaces 
 ### Option A: `ioctl`-style codes and hand-written structs (Linux baseline)
 - **Description:** A number and a buffer per operation, with each side coding its own.
 - **Evidence for:** No tooling.
-- **Evidence against:** DM-053.
+- **Evidence against:** DM-053. Its real strength is one entry point and no version negotiation, and that is what makes it unreviewable.
 - **Cost:** Every interface pays in review.
 - **Precedent:** Linux `ioctl`.
 
@@ -33,10 +33,10 @@ Services need a way to state their protocols. DM-053 is what untyped interfaces 
 
 ### Option C: An existing format (Cap'n Proto)
 - **Description:** Adopt a schema language and its encoding.
-- **Evidence for:** Mature; capability table in the design; zero-copy reads (`stage-4/sources.md#interface-definitions`).
+- **Evidence for:** Mature; a capability table in the design; reading needs no decoding pass (`stage-4/sources.md#interface-definitions`).
 - **Evidence against:** Relative pointers with lazy validation, which needs a traversal budget and depth limit (`stage-4/sources.md#interface-definitions`), against driver 1's all-at-once decoder. An external generator, and a `no_std` dependency to justify.
 - **Cost:** *(estimate)* An audit of a large dependency.
-- **Precedent:** Sandstorm and others `[outside evidence]`.
+- **Precedent:** Its own project.
 
 ### Option D: Rust declarations as the schema, flat fixed layouts
 - **Description:** A `protocol!` macro, in the style of ADR-0044's `syscalls!`, declares each method's fields, handles and reply. It generates encoders, total decoders, a server trait and client stubs.
@@ -49,15 +49,15 @@ Services need a way to state their protocols. DM-053 is what untyped interfaces 
 Recommended: **Option D**, with the wire format specified independently of the macro. It is a recommendation, not a decision.
 
 - **Header.** 16 bytes, little-endian: magic-and-version `u32`, ordinal `u32`, transaction id `u32`, body size `u32`. A transaction id of 0 means no reply is expected. No pointers, as in FIDL's encoded form.
-- **Body.** Fixed fields in order, with natural alignment and zero padding that is checked, then at most one trailing byte array. Enumerations are range-checked. Strings are UTF-8, and names satisfy ADR-0013.
+- **Body.** Fixed fields in order, with natural alignment and zero padding that is checked, then bounded variable parts in declared order: byte arrays, strings, or sequences of declared records, each with a declared maximum and decoded whole by generated code. No variable part is opaque when its contents have structure, so `rename`'s two names, `IsLink`'s path and target (ADR-0013 rule 7) and `read_directory`'s entries are all typed. Enumerations are range-checked. Strings are UTF-8, and names satisfy ADR-0013.
 - **Handles** are out of band, in the message's handle list, in declared order, with their object types checked. A message with extra or missing handles is refused and its handles closed.
 - **Decoding.** Whole message, once, before any effect; total; `#![forbid(unsafe_code)]`. Reference: `zoraya-abi`'s `SpawnRequest::decode`.
-- **Evolution.** A new method is a new ordinal. An unknown ordinal gets the reply `Unsupported` and closes nothing. A changed method is a new ordinal too: no optional fields and no tables. The magic-and-version changes only for a new header.
+- **Evolution.** A new method is a new ordinal. An unknown ordinal gets one generic error reply, whose layout is the same for every protocol and holds a status; any attached handles are closed, and the connection stays. With a transaction id of 0, no reply. A changed method is a new ordinal too: no optional fields and no tables. The magic-and-version changes only for a new header.
 - **One crate per protocol**, so a client links only what it speaks.
 - **Syscalls stay apart:** ADR-0044's declaration describes registers, this one bytes and handles. The answer to its open question is two macros of one style.
 
 ### Effect of the vision
-Target 3 and common language runtimes favour Option B. Moving later costs a compiler, but the wire is specified without Rust, so a generator for another language can target the same bytes, and nothing on the wire changes. For target 2 a hostile client is the normal case, and total decoding is what is wanted. Networking does not change it: this format is local, and a network protocol has its own.
+Target 3 favours Option B, and so do language runtimes under target 2 if they speak protocols directly; through `libposix` they do not. Moving later costs a compiler, but the wire is specified without Rust, so a generator for another language can target the same bytes, and nothing on the wire changes. For target 2 a hostile client is the normal case, and total decoding is what is wanted. Networking does not change it: this format is local, and a network protocol has its own.
 
 ## Consequences
 - **Positive.** No tool to build. A protocol is a page of Rust. Decoders are host-fuzzed like the ramdisk's.
@@ -67,11 +67,10 @@ Target 3 and common language runtimes favour Option B. Moving later costs a comp
 ## Invariants
 - **INV-0052-1.** Every decoder is total: no input panics or reads out of bounds. *Check:* `#![forbid(unsafe_code)]`, and host tests with truncations and random mutations for every message.
 - **INV-0052-2.** Encoding then decoding gives the same value, and any nonzero padding or trailing byte is refused. *Check:* generated round-trip test per message, and a mutation test.
-- **INV-0052-3.** No method's body has a free-form "operation" field. *Check:* a lint over the macro's table allowing no opaque byte array named or typed as an operation, by review of the table's kinds.
+- **INV-0052-3.** No method's body has a free-form "operation" field. *Check:* the macro accepts only declared kinds, which a lint over its table confirms; whether a byte array carries operations in disguise is left to review.
 - **INV-0052-4.** An unknown ordinal gets `Unsupported`, and the connection survives. *Check:* in-QEMU test against a service.
 
 ## Open questions
-- Whether the trailing-array rule suits `readdir`, which returns many entries: ADR-0055 pages it.
 - When a second language needs bindings.
 
 ## Revisit triggers
