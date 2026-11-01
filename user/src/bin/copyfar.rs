@@ -8,11 +8,20 @@ use zoraya_user::raw_syscall;
 
 /// `syscall::test_calls::COPY_TO_BAD_KERNEL`.
 const COPY_TO_BAD_KERNEL: u64 = 0x7002;
+/// `syscall::test_calls::COPY_FROM_BAD_KERNEL`.
+const COPY_FROM_BAD_KERNEL: u64 = 0x7003;
 
-static SOURCE: u8 = 1;
+static mut SOURCE: u8 = 1;
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
-    let (_, not_resumed) = raw_syscall(COPY_TO_BAD_KERNEL, &raw const SOURCE as u64, 0, 0);
-    i32::from(not_resumed != 1)
+    let (_, not_resumed) = raw_syscall(
+        COPY_TO_BAD_KERNEL,
+        [&raw const SOURCE as u64, 0, 0, 0, 0, 0],
+    );
+    let (_, also) = raw_syscall(
+        COPY_FROM_BAD_KERNEL,
+        [&raw mut SOURCE as u64, 0, 0, 0, 0, 0],
+    );
+    i32::from(not_resumed != 1 || also != 1)
 }

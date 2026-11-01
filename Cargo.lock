@@ -19,6 +19,13 @@ name = "zoraya-elf"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-events"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+]
+
+[[package]]
 name = "zoraya-fs"
 version = "0.1.0"
 dependencies = [
@@ -42,6 +49,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-handle"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+]
+
+[[package]]
 name = "zoraya-heap"
 version = "0.1.0"
 
@@ -52,6 +66,8 @@ dependencies = [
  "zoraya-abi",
  "zoraya-dtb",
  "zoraya-elf",
+ "zoraya-events",
+ "zoraya-handle",
  "zoraya-heap",
  "zoraya-pagetable",
  "zoraya-pmm",
@@ -89,6 +105,13 @@ name = "zoraya-ramdisk"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-rt"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+]
+
+[[package]]
 name = "zoraya-test-runner"
 version = "0.1.0"
 
@@ -101,4 +124,5 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-rt",
 ]

@@ -1,7 +1,7 @@
 //! Copies to and from user memory (ADR-0031). The only code that dereferences
 //! a user address.
 //!
-//! `ldtrb` checks permissions as EL0 would, so even an address in
+//! `ldtrb` and `sttrb` check permissions as EL0 would, so even an address in
 //! kernel memory faults here. A fault with the PC in this routine resumes at
 //! its error exit, which is the one fault the kernel survives (ADR-0024).
 
@@ -12,9 +12,8 @@ use crate::memory::user::USER_HIGH;
 global_asm!(
     r#"
     .text
-    // Returns 0, or 1 after a fault. x0 is the destination, x1 the source, x2
-    // the length. No call writes to user memory yet; the `sttrb` form comes
-    // with the first that does.
+    // Each returns 0, or 1 after a fault. x0 is the destination, x1 the
+    // source, x2 the length.
 __user_copy_start:
 __copy_from_user:
     cbz     x2, 2f
@@ -22,6 +21,18 @@ __copy_from_user:
     ldtrb   w3, [x1]
     strb    w3, [x0], #1
     add     x1, x1, #1
+    subs    x2, x2, #1
+    b.ne    1b
+2:
+    mov     x0, #0
+    ret
+
+__copy_to_user:
+    cbz     x2, 2f
+1:
+    ldrb    w3, [x1], #1
+    sttrb   w3, [x0]
+    add     x0, x0, #1
     subs    x2, x2, #1
     b.ne    1b
 2:
@@ -37,14 +48,15 @@ __user_copy_end:
 
 unsafe extern "C" {
     fn __copy_from_user(dst: *mut u8, src: *const u8, len: usize) -> u64;
+    fn __copy_to_user(dst: *mut u8, src: *const u8, len: usize) -> u64;
     fn __user_copy_fault();
     static __user_copy_start: u8;
     static __user_copy_end: u8;
 }
 
 /// Where a data abort at `pc` on address `far` must resume, if it was the
-/// routine above reading user memory (ADR-0036). A fault on the kernel's own
-/// destination is a kernel fault, and stays one.
+/// routines above touching user memory (ADR-0036). A fault on the kernel's own
+/// side of a copy is a kernel fault, and stays one.
 pub fn fixup(pc: u64, far: u64) -> Option<u64> {
     let start = &raw const __user_copy_start as u64;
     let end = &raw const __user_copy_end as u64;
@@ -69,6 +81,19 @@ pub unsafe fn copy_from_user(dst: &mut [u8], src: u64) -> Result<(), BadAddress>
     }
 }
 
+/// Copies to user address `dst`.
+///
+/// # Safety
+///
+/// `dst` is any value, because the access is checked as EL0's.
+pub unsafe fn copy_to_user(dst: u64, src: &[u8]) -> Result<(), BadAddress> {
+    // SAFETY: `src` is readable; a bad `dst` faults into the error exit.
+    match unsafe { __copy_to_user(dst as *mut u8, src.as_ptr(), src.len()) } {
+        0 => Ok(()),
+        _ => Err(BadAddress),
+    }
+}
+
 /// As [`copy_from_user`] with a destination the test chooses, which need not
 /// be mapped: the fault it takes must not be resumed.
 ///
@@ -79,6 +104,21 @@ pub unsafe fn copy_from_user(dst: &mut [u8], src: u64) -> Result<(), BadAddress>
 pub unsafe fn copy_from_user_to(dst: *mut u8, src: u64, len: usize) -> Result<(), BadAddress> {
     // SAFETY: the caller's contract.
     match unsafe { __copy_from_user(dst, src as *const u8, len) } {
+        0 => Ok(()),
+        _ => Err(BadAddress),
+    }
+}
+
+/// As [`copy_to_user`] with a source the test chooses, which need not be
+/// mapped: the fault it takes must not be resumed.
+///
+/// # Safety
+///
+/// Run under `catch`, on a source that faults.
+#[cfg(feature = "qemu-test")]
+pub unsafe fn copy_to_user_from(dst: u64, src: *const u8, len: usize) -> Result<(), BadAddress> {
+    // SAFETY: the caller's contract.
+    match unsafe { __copy_to_user(dst as *mut u8, src, len) } {
         0 => Ok(()),
         _ => Err(BadAddress),
     }

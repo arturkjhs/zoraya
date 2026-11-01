@@ -1,0 +1,13 @@
+[package]
+name = "zoraya-events"
+description = "Signals, port subscriptions and ready lists, as pure data."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+zoraya-abi = { path = "../zoraya-abi" }
+
+[lints]
+workspace = true

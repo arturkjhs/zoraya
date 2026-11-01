@@ -138,6 +138,7 @@ Interrupted-system-call semantics as measured (`task-02b/parallel-surface.md#int
 
 ## Open questions
 
+- As of TASK-09: `object_wait_one`, `object_get_signals`, timers, event objects and `stream_read`/`stream_write` are not built (ADR-0046). INV-0006-3 measures 10,000 calls with 10,000 idle subscriptions: the medians on one host were 875 ns and 875 ns under HVF, and about 13 µs and 13 µs under TCG. No job memory charge exists yet, so "no cap but memory" is plain kernel heap (ADR-0041's open question). INV-0006-6's "closed by another thread" is exercised by a kernel thread closing the handle, since processes have one thread at this stage.
 - Wake-up rate at high `-j`: one packet per child exit plus one per token; unmeasured above `-j4` (`task-02b/conflict-impact.md#x-4-…`, Unknown). Measure on the prototype with W8 at `-j16`.
 - Other jobserver clients (ninja, cargo) and their readiness calls (`poll`?): unmeasured; `poll` maps to the same port, so the question is only whether they need anything beyond pipes and FIFOs.
 - Interactive line editors (`ppoll` in busybox sh, 222 calls): a terminal handle with `READABLE` covers it, but no T0 core program needed it; confirm when a line-editing shell enters scope.

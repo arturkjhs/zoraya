@@ -68,6 +68,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **INV-0032-2.** A system call never panics the kernel on any argument values. *Check:* an in-QEMU test where a user program makes every call except `process_exit` with random register values, with `sleep_until` given near deadlines.
 
 ## Open questions
+- As of TASK-09, proposed ADR-0042 answers the struct-passing question and proposed ADR-0044 the dispatcher question.
 - How a struct-passing convention should look for `spawn`, which has too many parameters for registers.
 - Whether `console_write` survives past the terminal service.
 - For stage 3: `SYSCALLS` is written by hand and is not connected to the dispatcher, so checks of invariants over a table that is not the source of truth are weak. At stage 3 the dispatcher must be built from the `abi` table, or a test must check that the two match.

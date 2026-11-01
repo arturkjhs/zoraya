@@ -1,6 +1,6 @@
 [package]
 name = "zoraya-user"
-description = "The user runtime and the programs in the initial ramdisk."
+description = "The programs in the initial ramdisk."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ bench = false
 
 [dependencies]
 zoraya-abi = { path = "../crates/zoraya-abi" }
+zoraya-rt = { path = "../crates/zoraya-rt" }
 
 [lints]
 workspace = true
@@ -113,5 +114,60 @@ bench = false
 
 [[bin]]
 name = "copyfar"
+test = false
+bench = false
+
+[[bin]]
+name = "parent"
+test = false
+bench = false
+
+[[bin]]
+name = "child"
+test = false
+bench = false
+
+[[bin]]
+name = "counter"
+test = false
+bench = false
+
+[[bin]]
+name = "portclose"
+test = false
+bench = false
+
+[[bin]]
+name = "t_handles"
+test = false
+bench = false
+
+[[bin]]
+name = "t_spawn"
+test = false
+bench = false
+
+[[bin]]
+name = "t_signals"
+test = false
+bench = false
+
+[[bin]]
+name = "t_ports"
+test = false
+bench = false
+
+[[bin]]
+name = "portbench"
+test = false
+bench = false
+
+[[bin]]
+name = "t_stress"
+test = false
+bench = false
+
+[[bin]]
+name = "t_leak"
 test = false
 bench = false
