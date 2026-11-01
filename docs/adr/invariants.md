@@ -113,6 +113,23 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0034-2 | [ADR-0034](0034-user-faults.md) | A process's frames and ASID are released at exit, by any cause. | in-QEMU test comparing frame counts before and after many processes. | checked: `make test-qemu` |
 | INV-0035-1 | [ADR-0035](0035-exit-code-in-the-abi.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields and `ExitRecord.code`, each documented as opaque to the kernel (ADR-0004). | a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`), plus a unit test that `RelativePath::new("/x")` fails. | not yet applicable (stage 4) |
 | INV-0036-1 | [ADR-0036](0036-user-copy-fault-exception.md) | The normal kernel resumes after a fault from EL1 in exactly one case: a data abort with the PC in the user copy routine and `FAR_EL1` in the user range. | the test-only paths are `#[cfg(feature = "qemu-test")]`, and an in-QEMU test faults on a kernel destination inside the routine and sees that it is not resumed, while `badptr` shows user faults are. | checked: `make test-qemu` |
+| INV-0040-1 | [ADR-0040](0040-handle-table-and-rights.md) | A closed handle's value never names an object again in that process. | `cargo test -p zoraya-handle`, including a slot driven through every generation to retirement. | not yet applicable (stage 3) |
+| INV-0040-2 | [ADR-0040](0040-handle-table-and-rights.md) | No operation yields a handle with a right its source lacked. | `zoraya-handle` host tests over all rights masks, and an in-QEMU test that every call refuses a handle lacking its right. | not yet applicable (stage 3) |
+| INV-0040-3 | [ADR-0040](0040-handle-table-and-rights.md) | A handle table never holds more than `MAX_HANDLES` entries, and a full table gives `LimitReached`, never a panic. | a host test, and an in-QEMU test that exhausts a table. | not yet applicable (stage 3) |
+| INV-0041-1 | [ADR-0041](0041-kernel-object-lifetime.md) | After a process ends and its last handle closes, the kernel's frame count and heap use return to their earlier values. | an in-QEMU loop of spawn, exit and close, comparing `frames::stats` and `heap::stats`. | not yet applicable (stage 3) |
+| INV-0041-2 | [ADR-0041](0041-kernel-object-lifetime.md) | A process's address space, ASID and handles are released at exit, whoever still holds the process. | in-QEMU test holding a handle to an ended process, plus INV-0034-2's test. | not yet applicable (stage 3) |
+| INV-0041-3 | [ADR-0041](0041-kernel-object-lifetime.md) | Asserting a signal never allocates. | `zoraya-events` host test under a counting allocator. | not yet applicable (stage 3) |
+| INV-0041-4 | [ADR-0041](0041-kernel-object-lifetime.md) | A subscription cannot outlive its source or its port. | `zoraya-events` host tests, closing either side first. | not yet applicable (stage 3) |
+| INV-0042-1 | [ADR-0042](0042-spawn-argument-format.md) | The kernel reads a `spawn` buffer from user memory exactly once. | `SpawnRequest::decode` takes `&[u8]`, so it cannot fetch, and `spawn` holds the only read of its buffer. | not yet applicable (stage 3) |
+| INV-0042-2 | [ADR-0042](0042-spawn-argument-format.md) | `SpawnRequest::decode` is total: no input panics, and any input it accepts iterates without failure. | `cargo test -p zoraya-abi` with truncations and random mutations of a valid buffer. | not yet applicable (stage 3) |
+| INV-0042-3 | [ADR-0042](0042-spawn-argument-format.md) | A refused `spawn` leaves the caller's handle table unchanged. | in-QEMU test where the last entry of a list is invalid and the moved handles are still usable. | not yet applicable (stage 3) |
+| INV-0043-1 | [ADR-0043](0043-image-source-for-spawn.md) | A process with no directory or image handle cannot start a program. | in-QEMU test: a child with an empty handle list has no valid handle to name one. | not yet applicable (stage 3) |
+| INV-0044-1 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) | `SYSCALLS`, `Syscall`, the kernel's `Handlers` and the user stubs come from one declaration. | the kernel builds only if it implements the generated trait, and a `zoraya-abi` test sends every number through `dispatch` and asserts it reaches the handler of the same name. | not yet applicable (stage 3) |
+| INV-0044-2 | [ADR-0044](0044-dispatcher-from-the-abi-table.md) | A register value too wide for its parameter type is refused, never truncated. | `zoraya-abi` unit test for every parameter type. | not yet applicable (stage 3) |
+| INV-0045-1 | [ADR-0045](0045-port-keys-as-opaque-payloads.md) | Every object a native syscall acts on is designated by a `Handle` parameter; every path parameter has the `abi` type `RelativePath`, whose constructor rejects a leading `/`; the only integer payloads are `detail` fields, `ExitRecord.code`, port subscription keys and user packet data, each documented as opaque to the kernel (ADR-0004, ADR-0006). | a lint over the `abi` crate's syscall signatures that allows parameter types only from an allow-list (`Handle`, `RelativePath`, `Deadline`, flags, sizes, buffers, `detail: u32`, `code: i32`, `Opaque` for `port_subscribe` and `port_queue`), plus a unit test that `RelativePath::new("/x")` fails. | not yet applicable (stage 3) |
+| INV-0046-1 | [ADR-0046](0046-job-and-request-details.md) | A full request queue gives `LimitReached` and never allocates. | the queue is a fixed array, which the type states, and an in-QEMU test fills one and sees `LimitReached`. | not yet applicable (stage 3) |
+| INV-0046-2 | [ADR-0046](0046-job-and-request-details.md) | After `job_kill` returns, no process can be created in that tree. | in-QEMU test. | not yet applicable (stage 3) |
+| INV-0046-3 | [ADR-0046](0046-job-and-request-details.md) | A job tree deeper than 32 is refused. | in-QEMU test. | not yet applicable (stage 3) |
 
 ## Counts
 
@@ -143,4 +160,11 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0016](0016-filesystem-implementation-choices.md) Filesystem implementation choices the accepted ADRs leave open | 4 |
 | [ADR-0035](0035-exit-code-in-the-abi.md) The exit code as a parameter of the native ABI | 1 |
 | [ADR-0036](0036-user-copy-fault-exception.md) The user copy fix-up as the one resumed kernel fault | 1 |
-| **Total** | **107** |
+| [ADR-0040](0040-handle-table-and-rights.md) Handle table and rights (proposed) | 3 |
+| [ADR-0041](0041-kernel-object-lifetime.md) Kernel object lifetime (proposed) | 4 |
+| [ADR-0042](0042-spawn-argument-format.md) Passing structures to system calls (proposed) | 3 |
+| [ADR-0043](0043-image-source-for-spawn.md) Where `spawn` gets its image (proposed) | 1 |
+| [ADR-0044](0044-dispatcher-from-the-abi-table.md) The dispatcher and the ABI table (proposed) | 2 |
+| [ADR-0045](0045-port-keys-as-opaque-payloads.md) Port keys and user packet data as opaque payloads (proposed) | 1 |
+| [ADR-0046](0046-job-and-request-details.md) Job and request details the accepted ADRs leave open (proposed) | 3 |
+| **Total** | **124** |
