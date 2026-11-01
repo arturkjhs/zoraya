@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-01
-- **Depends on:** ADR-0002, ADR-0003, ADR-0040, ADR-0041, ADR-0043, ADR-0046, ADR-0050, ADR-0052, ADR-0054, ADR-0055
+- **Depends on:** ADR-0002, ADR-0003, ADR-0040, ADR-0041, ADR-0043, ADR-0046, ADR-0050, ADR-0052, ADR-0054, ADR-0055, ADR-0062, ADR-0063
 - **Evidence:** DM-023, CP-01, DM-009, DM-021, GR-004, GR-005, alternatives-postmortem.md#genode, alternatives-postmortem.md#hubris, alternatives-postmortem.md#plan-9--inferno
 
 ## Context
@@ -48,7 +48,7 @@ ADR-0002 rule 5 has a launcher build a per-process namespace table and forbids a
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 - **First process.** The normal kernel starts exactly one program, `init`, from the ramdisk. It is an ordinary process with no special status in the kernel, only special handles. The test kernel keeps starting test programs its own way.
-- **What `init` receives.** ADR-0043's console, a job of its own under the root, and ramdisk directory, plus `Device` handles at further slots (ADR-0054). Nothing else in the system can make those. `init` keeps them, to give a restarted driver a duplicate.
+- **What `init` receives.** ADR-0043's console, a job of its own under the root, and ramdisk directory, `Power` at slot 4 (ADR-0062), and `Device` handles from slot 5 on (ADR-0054). This ADR replaces ADR-0063 when accepted. Nothing else in the system can make those. `init` keeps them, to give a restarted driver a duplicate.
 - **Starting services.** At stage 4 a compiled table in `init`: start the driver with its device handles in a sub-job, start the filesystem service with a channel to the driver in a sub-job, and start each client in a sub-job with a directory channel. All of them are trusted at stage 4; limits on jobs belong to ADR-0056. The service gets its root endpoint at spawn. `init` keeps the root client end, and `clone`s it (ADR-0055) with narrowed rights for each client. A later configuration format is not needed for three processes.
 - **Discovery.** There is none as such. A process has what it was handed.
 - **Supervision.** `init` holds a process handle and a supervisor channel for each service, on one port. Exit is `TERMINATED`; a volume's `Failed` state is a message on the supervisor channel, which settles ADR-0010's assumption. Restart is `init`'s policy, and the order is in ADR-0054. Running clients are not recovered: they lose their handles, and only their spawner could give them new ones.

@@ -64,6 +64,10 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 *Partly replaced by ADR-0060 and ADR-0062 (architect's decision, 2026-11-01):* the console also has `READ` and `WAIT`, with `console_read` and `console_dropped` needing `READ`, and it is waitable. There is a new right `POWER` and a new object type `Power`, whose call `power_off` needs it. ADR-0061 adds `directory_entry`, which needs `LOOKUP`.
 
+*Partly replaced by ADR-0054 (architect's decision, 2026-11-01, on its acceptance):* new rights `MAP`, `INTERRUPT` and `DMA`, and new object types for a device, an interrupt and a DMA pin, with the rights ADR-0054 lists.
+
+*Partly replaced by ADR-0057 (architect's decision, 2026-11-01, on its acceptance):* the representation, and the retirement of a slot. Driver 1's "never reach whatever now occupies the slot" and the Consequences sentence "Stale handles fail deterministically" hold within the bound of INV-0057-1, not absolutely.
+
 - **Duplication.** `handle_duplicate(handle, rights)` needs `DUPLICATE`, and `rights` must be a subset of what the handle holds, or it fails with `AccessDenied`. It never silently narrows a request: asking for more is an error, so a bug shows. Unknown bits are `InvalidArgument`.
 - **Transfer.** Only as part of `spawn` at this stage. A move needs `TRANSFER`, a duplicate needs `DUPLICATE`, and rights passed are a subset, with the same error. Moving a handle ends its subscriptions, as closing does: a subscription belongs to the handle in its process.
 - **Closing.** `handle_close` ends the handle at once and removes its subscriptions. No call fails on an open handle's behalf later: there is no revocation.

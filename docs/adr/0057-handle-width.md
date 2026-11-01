@@ -58,6 +58,7 @@ Recommended: **Option B**. It is a recommendation, not a decision. Option A's re
 - **Exhaustion.** This replaces the second sentence of ADR-0040's Exhaustion: no slot is retired. A generation wraps, in the times above.
 - **ADR-0042.** This replaces its versioning rule once: the magic and the width change together, before any code outside this repository exists, and no older size is accepted. The rule holds again from `ZSP2` on.
 - **ADR-0032.** Its `Handle` becomes a `u64`, under its revisit trigger.
+- **ADR-0040's absolute wording.** This also replaces its driver 1, "A stale handle must fail, never reach whatever now occupies the slot", and its Consequences sentence "Stale handles fail deterministically". Both now hold within INV-0057-1's bound, not absolutely. ADR-0040 carries a note saying so.
 - **Everything else in ADR-0040 stands,** except its Consequences sentence on retiring a slot, which goes with the rule. Rights, allocation, a full table giving `LimitReached`, and `spawn` installing with generation 0.
 - **Registers.** A handle is one register. Since every bit pattern is now a generation, a width check has nothing left to refuse. The table's lookup stays the check.
 - **On acceptance,** INV-0057-1 replaces INV-0040-1, and its row is marked as replaced.
