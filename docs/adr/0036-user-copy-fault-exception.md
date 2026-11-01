@@ -1,6 +1,6 @@
 # ADR-0036: The user copy fix-up as the one resumed kernel fault
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0024, ADR-0031
 - **Evidence:** CP-12, CP-15, alternatives-postmortem.md#l4-family-and-sel4
@@ -58,3 +58,5 @@ Recommended: **Option A**. It is a recommendation, not a decision.
 - A second routine that needs a fix-up.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

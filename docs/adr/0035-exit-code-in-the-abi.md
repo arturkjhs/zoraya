@@ -1,6 +1,6 @@
 # ADR-0035: The exit code as a parameter of the native ABI
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-10-31
 - **Depends on:** ADR-0001, ADR-0002, ADR-0004, ADR-0032
 - **Evidence:** CP-01, CP-06, CP-13, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -60,3 +60,5 @@ Recommended: **Option A**. It is a recommendation, not a decision.
 - A call that needs another integer payload.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect.

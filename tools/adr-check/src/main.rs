@@ -372,6 +372,9 @@ fn status_is_known(s: &str) -> bool {
     if let Some(cmd) = s.strip_prefix("checked: ") {
         return !cmd.trim().is_empty();
     }
+    if s.strip_prefix("replaced by INV-").is_some() {
+        return true;
+    }
     s.strip_prefix("not yet applicable (stage ")
         .and_then(|r| r.strip_suffix(')'))
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
@@ -441,9 +444,12 @@ fn check_invariants(adrs: &[Adr], adr_dir: &Path, out: &mut Outcome) -> Result<(
                 out.error(
                     "INV-0001-4",
                     "invariants.md",
-                    format!("{id}: status {r_status:?} is neither \"checked: ...\" nor \"not yet applicable (stage N)\""),
+                    format!("{id}: status {r_status:?} is not \"checked: ...\", \"replaced by INV-...\" or \"not yet applicable (stage N)\""),
                 );
-            } else if accepted && !r_status.starts_with("checked") {
+            } else if accepted
+                && !r_status.starts_with("checked")
+                && !r_status.starts_with("replaced by ")
+            {
                 out.unchecked
                     .entry(r_status.clone())
                     .or_default()
@@ -761,6 +767,16 @@ mod tests {
             out.unchecked["not yet applicable (stage 2)"],
             ["INV-0001-1"]
         );
+    }
+
+    #[test]
+    fn replaced_invariant_does_not_warn() {
+        let inv = INVARIANTS.replace("checked: `make adr-check`", "replaced by INV-0002-1");
+        let t = tree("r", &adr("accepted", EV, BODY, "A."), &inv, "accepted");
+        let out = run(&t).unwrap();
+        fs::remove_dir_all(&t).unwrap();
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert!(out.unchecked.is_empty());
     }
 
     #[test]
