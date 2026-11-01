@@ -22,6 +22,8 @@ fn holds_nothing() -> bool {
     })
 }
 
+static mut ECHO: [u8; 64 * 1024] = [0; 64 * 1024];
+
 fn at_slot(slot: u64) -> Handle {
     Handle::new(slot).expect("slot is not zero")
 }
@@ -61,6 +63,24 @@ fn main() -> i32 {
             let sizes = channel_read(end, &mut buffer, &mut []).expect("read");
             channel_write(end, &buffer[..sizes.bytes as usize], &[]).expect("write");
             0
+        }
+        b"channel-echo-loop" => {
+            let end = at_slot(3);
+            let port = port_create().expect("port");
+            let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+            port_subscribe(port, end, wanted, 1, Mode::Level).expect("subscribe");
+            // SAFETY: one thread, and this is the only reference.
+            let buffer = unsafe { &mut *core::ptr::addr_of_mut!(ECHO) };
+            let mut packets = [Packet::default()];
+            loop {
+                port_wait(port, DEADLINE_INFINITE, &mut packets).expect("wait");
+                match channel_read(end, buffer, &mut []) {
+                    Ok(sizes) => {
+                        channel_write(end, &buffer[..sizes.bytes as usize], &[]).expect("write");
+                    }
+                    Err(_) => return 0,
+                }
+            }
         }
         b"pin-and-die" => {
             // Slot 3 a memory object, slot 4 a device. It ends with the pin

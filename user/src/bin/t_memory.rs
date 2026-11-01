@@ -9,10 +9,16 @@ use zoraya_abi::{
 };
 use zoraya_user::{
     assert_err, directory_lookup, handle_close, handle_duplicate, memory_create, memory_map,
-    memory_unmap, spawn, wait_exit,
+    memory_unmap, raw_syscall, spawn, wait_exit,
 };
 
 const PAGE: u64 = 4096;
+const FREE_FRAMES: u64 = 0x7006;
+const OBJECT_MAPPINGS: u64 = 0x7008;
+
+fn test_call(number: u64) -> u64 {
+    raw_syscall(number, [0; 6]).1
+}
 
 fn read(address: u64) -> u64 {
     // SAFETY: the caller mapped `address`.
@@ -120,6 +126,27 @@ fn bad_arguments() {
     handle_close(object).expect("close");
 }
 
+/// INV-0051-1 at exhaustion: more than is free fails, and frees what it took.
+fn exhaustion_changes_nothing() {
+    for flags in [MemoryFlags::NONE, MemoryFlags::CONTIGUOUS] {
+        let free = test_call(FREE_FRAMES);
+        assert_err!(memory_create((free + 16) * PAGE, flags), Status::NoMemory);
+        assert_eq!(test_call(FREE_FRAMES), free, "nothing kept");
+    }
+}
+
+/// INV-0051-2: the kernel's own walk of this process's tables.
+fn no_object_mapping_is_executable() {
+    let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
+    let a = memory_map(object, 0, PAGE, MapFlags::WRITE).expect("map");
+    let b = memory_map(object, 0, PAGE, MapFlags::READ).expect("map");
+    assert_eq!(test_call(OBJECT_MAPPINGS), 2);
+    memory_unmap(a, PAGE).expect("unmap");
+    memory_unmap(b, PAGE).expect("unmap");
+    assert_eq!(test_call(OBJECT_MAPPINGS), 0);
+    handle_close(object).expect("close");
+}
+
 /// 256 mappings, then `LimitReached`, and each ends a place to reuse.
 fn mapping_limit() {
     let object = memory_create(PAGE, MemoryFlags::NONE).expect("create");
@@ -161,6 +188,8 @@ fn main() -> i32 {
     read_only_view();
     faults();
     bad_arguments();
+    exhaustion_changes_nothing();
+    no_object_mapping_is_executable();
     lifetime_either_order();
     mapping_limit();
     0

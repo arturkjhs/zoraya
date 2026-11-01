@@ -70,6 +70,7 @@ The namespace table of ADR-0002 is user-space data, built by the launcher and pa
 - **INV-0053-3.** A service's death is seen by its supervisor. *Check:* a `make test-boot` run in which `init` kills a service and reports `TERMINATED` from its port.
 
 ## Open questions
+- As of TASK-12: `init` starts only `zosh`, so INV-0053-3 waits for a service, in TASK-13. This ADR replaces ADR-0063.
 - How a user session is built at stage 5, and who is its launcher.
 - Whether `init` should reboot on service failure, or keep what still runs.
 

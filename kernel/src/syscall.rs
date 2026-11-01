@@ -787,6 +787,9 @@ pub mod test_calls {
     /// Returns how many device mappings the caller has, or `u64::MAX` if one
     /// breaks INV-0054-1.
     pub const DEVICE_MAPPINGS: u64 = 0x7007;
+    /// Returns how many pages of memory objects the caller has mapped, or
+    /// `u64::MAX` if one is executable (INV-0051-2).
+    pub const OBJECT_MAPPINGS: u64 = 0x7008;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -806,6 +809,22 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             Some(Ok(0))
         }
         test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
+        test_calls::OBJECT_MAPPINGS => {
+            let thread = sched::current();
+            let process = thread.process()?;
+            let space = process.space.lock();
+            let (mut count, mut good) = (0, true);
+            space.as_ref()?.for_each_mapping(&mut |m| {
+                if m.va >= crate::memory::user::MAP_LOW
+                    && m.va < crate::memory::user::MAP_HIGH
+                    && m.attributes.memory == PageMemory::Normal
+                {
+                    count += 1;
+                    good &= !m.attributes.execute;
+                }
+            });
+            Some(Ok(if good { count } else { u64::MAX }))
+        }
         test_calls::DEVICE_MAPPINGS => {
             let thread = sched::current();
             let process = thread.process()?;

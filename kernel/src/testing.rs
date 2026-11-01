@@ -458,6 +458,14 @@ static TESTS: &[Test] = &[
         name: "a_device_with_no_transport_keeps_its_quarantine",
         run: a_device_with_no_transport_keeps_its_quarantine,
     },
+    Test {
+        name: "no_leak_after_rounds_of_objects",
+        run: no_leak_after_rounds_of_objects,
+    },
+    Test {
+        name: "channel_measurements",
+        run: channel_measurements,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1154,6 +1162,27 @@ fn devices_from_a_process() {
     assert_eq!(run(), exited(0));
     assert_eq!(frames::stats().free, frames_before);
     assert_eq!(heap::stats().live, heap_before);
+}
+
+/// Leaks: rounds of channels with handles in flight, mappings and pins, with
+/// the counts compared across a run.
+fn no_leak_after_rounds_of_objects() {
+    let run = || {
+        process::spawn_with_devices("t_loop")
+            .expect("program in the ramdisk")
+            .wait()
+    };
+    assert_eq!(run(), exited(0));
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run(), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// plan.md's measurements: printed, and not judged.
+fn channel_measurements() {
+    assert_eq!(run_program("chanbench"), exited(0));
 }
 
 /// INV-0070-3: with no virtio transport nothing proves the device stopped, so

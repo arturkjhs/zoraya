@@ -22,8 +22,8 @@ pub const USER_HIGH: u64 = 1 << 47;
 /// Mappings a process may hold (ADR-0051).
 pub const MAX_MAPPINGS: usize = 256;
 /// Where mappings of objects go: the kernel chooses inside this range.
-const MAP_LOW: u64 = 1 << 46;
-const MAP_HIGH: u64 = 3 << 45;
+pub const MAP_LOW: u64 = 1 << 46;
+pub const MAP_HIGH: u64 = 3 << 45;
 
 /// ASIDs in use; ASID 0 belongs to no process.
 static ASIDS: SpinLock<[u64; 4]> = SpinLock::new([1, 0, 0, 0]);

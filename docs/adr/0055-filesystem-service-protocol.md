@@ -92,6 +92,7 @@ Everything else is left to stage 6, undecided: `libposix` and its mapping of POS
 - **INV-0055-9.** Open-file state is held in a record separate from the connection, and two connections can refer to one record. *Check:* a host test of the `fs-service` crate attaching two connections to one record through its internal interface.
 
 ## Open questions
+- As of TASK-12: the protocol is declared and every invariant here waits for the service, in TASK-13.
 - Costs of the inline and buffer paths: measure.
 - Whether the service's blocking on the driver needs an asynchronous `BlockDevice`.
 

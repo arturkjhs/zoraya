@@ -285,8 +285,8 @@ pub fn channel_write(end: Handle, message: &[u8], handles: &[ChannelEntry]) -> R
     let mut list = [0; ChannelEntry::SIZE * MAX_MESSAGE_HANDLES];
     let room = handles.len() * ChannelEntry::SIZE;
     let target = list.get_mut(..room).ok_or(Status::InvalidArgument)?;
-    for (slot, entry) in target.chunks_exact_mut(ChannelEntry::SIZE).zip(handles) {
-        slot.copy_from_slice(&entry.to_bytes());
+    for (slot, entry) in target.as_chunks_mut().0.iter_mut().zip(handles) {
+        *slot = entry.to_bytes();
     }
     stubs::channel_write::<Svc>(end, Bytes(bytes(message)), Bytes(bytes(&list[..room])))?;
     Ok(())

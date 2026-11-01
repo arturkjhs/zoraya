@@ -260,3 +260,13 @@ bench = false
 name = "t_devices"
 test = false
 bench = false
+
+[[bin]]
+name = "t_loop"
+test = false
+bench = false
+
+[[bin]]
+name = "chanbench"
+test = false
+bench = false

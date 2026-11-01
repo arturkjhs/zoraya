@@ -114,6 +114,9 @@ fn a_long_pile_drops_with_no_recursion() {
     drop(pile);
 }
 
+/// From the end whose queue holds a handle, to the end that is queued.
+type Edge = ((usize, usize), (usize, usize));
+
 /// INV-0050-2: random sends under the rule keep the graph of ends in queues
 /// acyclic. An edge F -> E means E is queued for reading on F.
 #[test]
@@ -127,7 +130,7 @@ fn random_sends_under_the_rule_make_no_cycle() {
         x
     };
     let mut queued = [[0u32; 2]; CHANNELS];
-    let mut edges: Vec<((usize, usize), (usize, usize))> = Vec::new();
+    let mut edges: Vec<Edge> = Vec::new();
     let mut held = [[true; 2]; CHANNELS];
     for _ in 0..200_000 {
         let (a, side) = ((next() as usize) % CHANNELS, (next() as usize) % 2);
@@ -152,7 +155,7 @@ fn random_sends_under_the_rule_make_no_cycle() {
     }
 }
 
-fn assert_acyclic(edges: &[((usize, usize), (usize, usize))]) {
+fn assert_acyclic(edges: &[Edge]) {
     for start in edges {
         let mut at = start.1;
         let mut steps = 0;
