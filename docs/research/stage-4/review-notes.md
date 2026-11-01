@@ -330,3 +330,65 @@ The architect moved quotas out of stage 4, so budgets, accounts, payment for cha
 - **T10, T16, T21, T23, T24, T17:** fixed. T24 by the record in Process and INV-0055-9.
 - **Not changed, not on the architect's list:** T8, T9, T11 to T15, T18 to T20, T22.
 
+
+## Fourth review: ADR-0050 to ADR-0055 and ADR-0057
+
+Reviewer: a subagent that wrote none of these documents and took no part in earlier reviews. Reviewed on branch `adr/stage-4-design` at 392fa32, on 2026-11-01. The scope was the fixes of T1, T4, T5, T6 (ADR-0055 part), T10, T16, T21, T23 and T24, the move of quotas to ADR-0056, stage 4 scope with every process trusted, and ADR-0057 in full. ADR-0056's content was not reviewed. Severity is as defined at the top of this file. The Disposition column is for the author.
+
+### Summary
+
+- **Findings:** 13 in all: **2 errors** (F1, F2), **4 imprecisions** (F3 to F6), **7 notes** (F7 to F13).
+- **Both errors are in ADR-0057, and both are one-line fixes.** ADR-0050 to ADR-0055 have no error in this scope.
+- **Fixes:** of 9, 8 confirmed, and T23 half done (F7). T6 and T24 hold, but each left a small gap (F4, F5).
+- **The move:** no sentence in the seven ADRs still assumes accounts, budgets, a reply pool or `QuotaExceeded`. What is left is `Depends on` lines (F6) and one number that differs from ADR-0056 (F12).
+- **Scope:** every ADR is within stage 4. Fork, handoff, POSIX clients and toolchain scale appear only in the Deferred sections, apart from evidence in option lists and vision text, which decide nothing. The design stays consistent with trusted processes: the rules that treat peers as hostile are still needed, because a crafted image can compromise the service (ADR-0054).
+- **ADR-0057 arithmetic:** right, apart from Option C (F1). 1024 × 65,535 ≈ 67.1 million; divided by 64 ≈ 1.05 million messages; 2^48 µs ≈ 8.9 years; × 1024 ≈ 9,100 years; 875 ns is the `port_wait` median in ADR-0006 and TASK-09's review.
+
+### Problems
+
+| # | Severity | Location | What is wrong, with evidence | Suggested fix | Disposition |
+|---|---|---|---|---|---|
+| F1 | error | ADR-0057 Option C | "The 6 bits that 1024 slots do not use" is false. Slots are numbered 1 to 1024 (`from_parts` refuses 0 and accepts `MAX_HANDLES`; `Table` says `slots[0]` is slot 1), and slot 0 must stay absent so that 0 is invalid and a startup value equals its slot. 10 bits hold at most 1023, so slot 1024 does not fit. 1024 slots need 11 bits, which leaves 21 of generation: 32 times the lifetime and about 2.1 billion closes, not 64 times and 4.3 billion. The ADR's figures hold only with `MAX_HANDLES` at 1023, and then "fixes `MAX_HANDLES` at 1024" is wrong. The rejection of Option C does not change. | Say 11 and 21 bits, 32 times, about 2.1 billion. Or say that the option lowers `MAX_HANDLES` to 1023, which changes ADR-0040. | |
+| F2 | error | ADR-0057 Recommendation, Consequences; ADR-0042 Versioning; ADR-0032 `Handle` | ADR-0057 lists what it replaces in ADR-0040 only. ADR-0042 says "The header size says which version" and "a later one accepts older sizes and fills defaults". ADR-0057 instead changes the magic and has stage 3's binaries "change together, once", so the new decoder refuses the old format. That contradicts the accepted rule, and it is not listed. ADR-0032 also says `Handle` is "A `u32` index", and ADR-0057 cites it as a dependency without saying this changes. Its revisit trigger foresees a different width, so this one is only unlisted, but it stands as binding text. | Add two bullets beside the ADR-0040 ones. ADR-0042: the magic and the width change once, before any outside code exists, and no older size is accepted; the rule holds from `ZSP2` on. ADR-0032: `u64`, under its revisit trigger. | |
+| F3 | imprecision | ADR-0057 Option B, driver 1, INV-0057-1 | Driver 1 and INV-0040-1 are absolute, "never". Option B claims "Drivers 1 to 4", but wrapping lets a value return, so INV-0057-1 weakens the invariant, as the Evidence against admits. One variant is not considered: keep retirement at the last 48-bit generation. A slot would then be lost only after 8.9 years at one close per microsecond, no table wears out in any realistic life, and INV-0040-1 stays true word for word with `is_retired` kept. So wrapping gives up a deterministic guarantee and gains almost nothing. Wrap may still be preferred, but the choice is not argued. | Add the variant, or give the reason for wrapping. Say that driver 1 is met in practice, not absolutely. | |
+| F4 | imprecision | ADR-0055 Replies, the `NoMemory` case (T6's fix) | The reply is held "in the same way", which is the `WRITABLE` and `PEER_CLOSED` subscription, and it is retried "at its next port deadline". With room in the queue `WRITABLE` stays asserted, so a `Level` subscription fires at once and the loop spins. That is the case the sentence before was written to avoid. Also, on an idle volume no deadline may be set, because the port's deadline drives `T_COMMIT`, so the retry may never come. | For this case subscribe to `PEER_CLOSED` only, and set a port deadline while such a reply is held. | |
+| F5 | imprecision | ADR-0055 Closing, Handles and rights, INV-0055-9 (T24's fix) | Closing says "`PEER_CLOSED` on a connection is its close: open-file state goes", but state now lives in a record that two connections can share (INV-0055-9). Whether `clone` shares the record or makes a new one is not stated. If it shares, the sentence is false at stage 4. If it does not, INV-0055-9's two connections are reachable only from the test, as its check says. The third review noted the wording. | Say "goes with the last connection that refers to it", and state what `clone` does. | |
+| F6 | imprecision | `Depends on` of ADR-0050, ADR-0051, ADR-0053, ADR-0055 | Each lists ADR-0056, which `plan.md` says is not part of the stage and will not be accepted now. Their text only points at it, and none needs it to hold, so ADR-0056 is not a dependency. As written, four accepted ADRs would depend on a proposed one that also depends on them. ADR-0001 does not forbid this, but the line misstates what was moved. ADR-0055's use of ADR-0057 is similar, though its tension covers both outcomes. | Remove ADR-0056 from the four lines and keep the links in the text. Keep ADR-0057 only if the architect wants the order recorded. | |
+| F7 | note | ADR-0055 Evidence, driver 4 | T23 is half fixed. The blank line before the tensions is there, but `fs/requirements.md`, which driver 4 cites, is still not on the Evidence line, though the disposition says fixed. | Add it. | |
+| F8 | note | ADR-0057 "Everything else in ADR-0040 stands"; Option B | ADR-0040's Consequences sentence "A long-lived process retires a slot after 65,535 uses of it" is not replaced, so it "stands". Option B says table entries "double in size", but the table holds no handle: its generation goes from 2 to 8 bytes, as Consequences says with "6 bytes a slot at most". | Name the sentence as replaced. Drop "table entries" from "double". | |
+| F9 | note | ADR-0057 Registers, Consequences | "The decoder's check is the slot range" is new: today `Handle::new` refuses only 0, and the table gives `BadHandle` for a bad slot. No Consequence says that the decoder gains a check, and it needs none. The list of files to review omits `user/src/bin/child.rs`, whose `Handle::new(slot)` takes a `u32` and will not compile, `badptr.rs`, and `crates/zoraya-abi/src/tests.rs` apart from INV-0044-2. `zoraya-rt`'s `handle()` is the hand-written 32-bit helper meant by "any helper", and it decodes every returned handle, so name it. | Say the table's lookup remains the check. Complete the list. | |
+| F10 | note | ADR-0057 driver 1, Option D, Option B | CP-02 says nothing on stale values. DM-023 is about epoll and mentions reused fds in passing. ADR-0040's driver 1 cites DM-003, and GR-001's discussion in `held-up-well.md` states the reuse race directly. "At a smaller width" for Hubris is not in the postmortem or in [H1]. | Cite DM-003 and GR-001. Mark the width `[outside evidence]` or drop it. | |
+| F11 | note | ADR-0053 Option C (T1's fix) | The Description still says "The kernel starts one process with the root handles", and the Recommendation now gives `init` a job of its own under the root, as ADR-0043 does. | Say "with its startup handles". | |
+| F12 | note | ADR-0055 Data against ADR-0056 Services | ADR-0055 caps the service at 240 mapped buffers and a connection at one. ADR-0056 has 63 accounts of 4 buffers, 252 in all, and says that leaves 4 mappings. The two agree at stage 4, as ADR-0056 is not built, but ADR-0055's 240 leaves a duty on ADR-0056 to raise it, and neither says so. | One line in ADR-0056 when it is next worked on. | |
+| F13 | note | ADR-0057 `Depends on` | ADR-0052 and ADR-0054 are used in the text, and neither is listed. | Add them. | |
+
+### Fixes confirmed
+
+| Finding | Confirmed by |
+|---|---|
+| T1 | ADR-0053 gives `init` "a job of its own under the root", which matches ADR-0043 and adds no limits. See F11. |
+| T4 | 240 buffers, the block data object and the service's own fit in 256. No account remains in ADR-0055. See F12. |
+| T5 | Listed as a tension in ADR-0055, with ADR-0057 and the fallback of a restart. "The room is always there" is gone: the text now says "while the count holds". |
+| T6, ADR-0055 part | The pool is gone, and `NoMemory` no longer closes a connection. Closing is the last resort and is said not to assign fault. INV-0055-6 agrees. See F4. |
+| T10 | INV-0055-7 reads "Between requests". |
+| T16 | The byte-stream text is in Deferred, and it leaves the choice open. |
+| T21 | INV-0050-6's check reports how long interrupts stayed masked. |
+| T24 | The record is in Process, with INV-0055-9 and a host test. See F5. |
+| `MAX_OPEN` | 1024 − 64 − 64 = 896, used the same way in all three places. |
+| Dangling duties | What ADR-0050, ADR-0051, ADR-0053 and ADR-0055 hand to ADR-0056 is taken up there: handles in flight, who pays, limits on jobs, sharing the table. ADR-0056 does not name chains, but its charge on channels bounds them. |
+
+### What was checked and not checked
+
+- Read in full: ADR-0050 to ADR-0055, ADR-0057, ADR-0040, ADR-0042, ADR-0044, the template, `plan.md`, `sources.md`, the third review and its disposition. Read the rules of ADR-0001, ADR-0032's `Handle` text, and the moved parts of ADR-0056 by search only.
+- Read code: `crates/zoraya-handle/src/lib.rs`, `Handle`, `Arg` and `Status` in `crates/zoraya-abi/src/lib.rs`, `crates/zoraya-abi/src/spawn.rs`, `crates/zoraya-rt`'s `handle()`. Searched `kernel/src`, `user/src` and the `zoraya-abi` tests for handle values, `raw()`, `retired` and `generation`. ADR-0057's statements on them hold, apart from F9.
+- Scripted: a search of the seven ADRs for quota, budget, account, carve, pool and charge words, and for fork, handoff, POSIX and toolchain words outside the Deferred sections.
+- Citations: DM-023, CP-02, CP-13, the Hubris section, and the 875 ns figure were read at source. [Z10] was fetched: it supports Option E, including 32 bits, reuse, `ZX_POL_BAD_HANDLE` and the warning on racy close and use.
+- Ran `make adr-check`: 8 errors, all the expected `index.md` kind, and 17 warnings.
+- Not checked: nothing was built or run for ADR-0057, and the Consequences were checked by reading. Its cost estimates are unverified. T2, T3, T7, T8, T9, T11 to T15, T17 to T20 and T22 were outside scope and were not re-examined, including whether T8's register count still stands. ADR-0056's content, the other citations in ADR-0050 to ADR-0055, and the tensions table were not reviewed.
+
+### Disposition of the fourth review
+
+- **Fixed:** F1, F2, F3 (the variant is stated, and wrapping follows the architect's "no retirement"), F4, F5, F6, F7, F8, F9, F10, F11, F13.
+- **Left for ADR-0056, which is not being worked on now:** F12.
+- These fixes were not reviewed again.
+

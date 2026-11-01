@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-01
-- **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0006, ADR-0031, ADR-0032, ADR-0040, ADR-0041, ADR-0042, ADR-0051, ADR-0056
+- **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0006, ADR-0031, ADR-0032, ADR-0040, ADR-0041, ADR-0042, ADR-0051
 - **Evidence:** DM-023, CP-02, CP-12, CP-14, DM-018, DM-022, GR-002, GR-018, X-5, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#qnx, alternatives-postmortem.md#hubris, alternatives-postmortem.md#l4-family-and-sel4, stage-4/sources.md#channels, alternatives-postmortem.md#redox, stage-4/sources.md#drivers
 
 ## Context

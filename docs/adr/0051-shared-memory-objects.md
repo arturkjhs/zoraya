@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-01
-- **Depends on:** ADR-0020, ADR-0021, ADR-0031, ADR-0040, ADR-0041, ADR-0045, ADR-0056
+- **Depends on:** ADR-0020, ADR-0021, ADR-0031, ADR-0040, ADR-0041, ADR-0045
 - **Evidence:** DM-023, CP-14, DM-030, DM-160, GR-007, X-6, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#hubris, stage-4/sources.md#memory-objects
 
 ## Context

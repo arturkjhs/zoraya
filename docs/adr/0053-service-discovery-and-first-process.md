@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-01
-- **Depends on:** ADR-0002, ADR-0003, ADR-0040, ADR-0041, ADR-0043, ADR-0046, ADR-0050, ADR-0052, ADR-0054, ADR-0055, ADR-0056
+- **Depends on:** ADR-0002, ADR-0003, ADR-0040, ADR-0041, ADR-0043, ADR-0046, ADR-0050, ADR-0052, ADR-0054, ADR-0055
 - **Evidence:** DM-023, CP-01, DM-009, DM-021, GR-004, GR-005, alternatives-postmortem.md#genode, alternatives-postmortem.md#hubris, alternatives-postmortem.md#plan-9--inferno
 
 ## Context
@@ -31,7 +31,7 @@ ADR-0002 rule 5 has a launcher build a per-process namespace table and forbids a
 - **Precedent:** D-Bus (DM-021); Mach's bootstrap port and launchd `[outside evidence]`.
 
 ### Option C: Parent-routed handles; `init` as the root launcher
-- **Description:** The kernel starts one process with the root handles. It starts services and passes each what it needs at `spawn`. A client gets channels in its handle list or namespace table, from whoever spawned it.
+- **Description:** The kernel starts one process with its startup handles. It starts services and passes each what it needs at `spawn`. A client gets channels in its handle list or namespace table, from whoever spawned it.
 - **Evidence for:** ADR-0003's explicit handle list, with Genode's parent-routed sessions as a working recursive form (`alternatives-postmortem.md#genode`) and Fuchsia's launcher (GR-005). Plan 9's per-process name spaces are the table's ancestor (GR-004, `alternatives-postmortem.md#plan-9--inferno`).
 - **Evidence against:** Everything must be wired by a parent, and a late-started service needs a path through parents. Genode's configuration format migration was its "most delicate challenge" of 2025 (`alternatives-postmortem.md#genode`).
 - **Cost:** *(estimate)* A few hundred lines in `init`.
