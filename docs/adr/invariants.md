@@ -190,6 +190,10 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0062-3 | [ADR-0062](0062-power-off.md) | `poweroff` in the shell ends the machine with QEMU status 0. | scripted serial test. | checked: `make test-boot` |
 | INV-0063-1 | [ADR-0063](0063-first-process-until-init.md) | The normal kernel starts exactly one process. | the scripted boot test shows `zosh` first and the kernel starts no other. | checked: `make test-boot` |
 | INV-0063-2 | [ADR-0063](0063-first-process-until-init.md) | The kernel powers off when the first process ends. | scripted serial test ending the shell with `exit`. | checked: `make test-boot` |
+| INV-0070-1 | [ADR-0070](0070-releasing-quarantined-frames.md) | `dma_release_quarantine` frees nothing while the device has a mapping or a live pin. | in-QEMU test of each refusal, comparing frame counts. | not yet applicable (stage 4) |
+| INV-0070-2 | [ADR-0070](0070-releasing-quarantined-frames.md) | Quarantined frames return only after the kernel has read Status 0 from every transport in the window. | in-QEMU test that sets a transport's Status, releases, and reads 0 and the frame count. | not yet applicable (stage 4) |
+| INV-0070-3 | [ADR-0070](0070-releasing-quarantined-frames.md) | A device with no virtio transport keeps its quarantine. | in-QEMU test with a device object that has no transport. | not yet applicable (stage 4) |
+| INV-0071-1 | [ADR-0071](0071-invariant-totals.md) | The Counts table in `invariants.md` matches its rows, per ADR and in total. | `make adr-check`, with host tests of a wrong row, a wrong total and a missing section. | checked: `make adr-check` |
 
 ## Counts
 
@@ -239,4 +243,6 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0061](0061-directory-entries.md) Listing a directory handle | 4 |
 | [ADR-0062](0062-power-off.md) Power off through a handle | 3 |
 | [ADR-0063](0063-first-process-until-init.md) The shell as first process, until `init` | 2 |
-| **Total** | **184** |
+| [ADR-0070](0070-releasing-quarantined-frames.md) Releasing quarantined DMA frames (proposed) | 3 |
+| [ADR-0071](0071-invariant-totals.md) Checking the totals in `invariants.md` (proposed) | 1 |
+| **Total** | **188** |
