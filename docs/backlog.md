@@ -1,6 +1,6 @@
 # Backlog
 
-Known small problems, to take up when the area is next worked on. Each id is a row of the fifth review in
+Known small problems, to take up when the area is next worked on. Each id is a row of the fifth (V) or sixth (W) review in
 [`research/stage-4/review-notes.md`](research/stage-4/review-notes.md), which has the evidence. Where a review was
 limited to the lines it changed, what it finds outside them is added here.
 
@@ -15,3 +15,9 @@ limited to the lines it changed, what it finds outside them is added here.
 | V13 | Depends lines | ADR-0050 lacks ADR-0044, and ADR-0051 lacks ADR-0050 and ADR-0054. |
 | V14 | ADR-0057 Option B, INV-0057-1 | Two sets of figures, for 1 microsecond and 875 ns. Use one rate. |
 | V15 | ADR-0057 Option C, Consequences | 11 bits hold slots up to 2047. `POWER` keeps its value too, and is not named. |
+| W3 | ADR-0051 Calls | "An address kind for the last" now reads as `length`. Name `memory_unmap`'s address. |
+| W4 | ADR-0054 Quarantine, INV-0054-7 | Who may call `dma_release_quarantine` on a live driver, and that a reset must come first, is unstated. Decide before building it: otherwise a live driver can release frames a device may still write. |
+| W5 | ADR-0041 note, ADR-0054 Tensions | The exception to INV-0041-1 covers frames only; a quarantined pin also keeps heap use. |
+| W6 | ADR-0053 What `init` receives | "`init` keeps them" now reads as giving `Power` to a restarted driver. |
+| W7 | ADR-0054 DMA, Quarantine | Whether `dma_unpin` closes the handle is unstated, and a pin can also end when a queue is torn down. |
+| W8 | ADR-0054 Invariants | INV-0054-7 is out of order against `invariants.md`. |
