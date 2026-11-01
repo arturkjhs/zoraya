@@ -35,9 +35,17 @@ New sources for TASK-10. Each URL was fetched on the check date and the note say
 
 - [Z7] Fuchsia project, fuchsia.io, https://fuchsia.dev/reference/fidl/fuchsia.io, primary, read by the independent review 2026-11-01. Each open object is a channel; `GetToken` and `Rename` with a destination token valid while the connection stays open; the seek offset is per connection, and clones do not share it.
 
+## Quotas
+
+- [K1] Linux kernel documentation, Control Group v2, https://docs.kernel.org/admin-guide/cgroup-v2.html, primary, checked 2026-11-01. `memory.max` is the hard limit, and if usage cannot be reduced the OOM killer runs inside the cgroup; `memory.high` throttles and never invokes it; restrictions closer to the root cannot be overridden further down; kernel data structures, stacks and page tables are tracked. Only the first 100,000 characters of the page were read.
+- [Z8] Fuchsia project, Job, https://fuchsia.dev/fuchsia-src/reference/kernel_objects/job, primary, checked 2026-11-01. Jobs form a tree and are said to track and limit basic resource consumption; the page does not say how.
+- [Z9] Fuchsia project, zx_job_set_policy, https://fuchsia.dev/fuchsia-src/reference/syscalls/job_set_policy, primary, checked 2026-11-01. Policies allow, deny or kill on conditions such as `ZX_POL_NEW_VMO`, and combine with the parent's. The page gives no memory quota.
+- [G2] Genode Labs, Genode Foundations 24.05, Resource trading, https://genode.org/documentation/genode-foundations/24.05/architecture/Resource_trading.html, primary, checked 2026-11-01. A parent moves part of its quota to each child's account; clients pay for server-side allocations through session quota, returned on close.
+
 ## Not relied on
 
 - The Zircon page on driver architectures and the QNX 8.0 message-passing page gave 404 on 2026-11-01. QNX claims here rest on `alternatives-postmortem.md#qnx`.
 - `cs.vu.nl` did not resolve, so the MINIX 3 paper was not re-read; MINIX claims rest on `alternatives-postmortem.md#minix-3`.
 - The FIDL compatibility guide is marked outdated by its maintainers and is not cited.
+- The seL4 manual page holds only links to PDFs and did not answer; seL4 claims rest on `alternatives-postmortem.md#l4-family-and-sel4`.
 - The Redox "schemes and resources" page and the Genode Foundations contents page did not answer the questions asked. Redox claims rest on `alternatives-postmortem.md#redox`.

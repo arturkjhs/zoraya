@@ -57,7 +57,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **The rule for readers.** Memory another process can write is hostile input that can change between two reads. Copy out, then validate, and never validate in place. A service reads the bytes once.
 
 ### Effect of the vision
-No change. For target 2, `NoMemory` at creation is what a sandbox wants, and charging to a job (ADR-0041's open question) must come first. Demand paging and copy-on-write can be added under the same handles, which `snapshot_process` needs anyway. Language runtimes need executable mappings, which would be a new right plus W^X rules: a later ADR at a modest cost, since nothing here precludes it.
+No change. For target 2, `NoMemory` at creation is what a sandbox wants, and charging to a job (ADR-0056) must come first. Demand paging and copy-on-write can be added under the same handles, which `snapshot_process` needs anyway. Language runtimes need executable mappings, which would be a new right plus W^X rules: a later ADR at a modest cost, since nothing here precludes it.
 
 ## Consequences
 - **Positive.** Failure is immediate. A read-only view is a rights mask.

@@ -5,7 +5,8 @@ Non-binding, part of TASK-10. It orders the work; the ADRs decide. Numbers refer
 | Step | Work | Depends on | Done when |
 |---|---|---|---|
 | 1 | Memory objects: create, map, unmap, rights, eager commit | ADR-0050 (handles in messages use the same table), ADR-0051 | a process shares a page with a child |
-| 2 | Channels in the kernel, with the no-cycle rule | ADR-0050 | every INV-0050 check passes |
+| 2 | Charging: limits on the job tree, every allocation on a system call path charged, before channels add more of them | ADR-0056 | every INV-0056 check passes |
+| 2a | Channels in the kernel, with the no-cycle rule | ADR-0050 | every INV-0050 check passes |
 | 3 | `protocol!` macro, the block and file protocols as declarations, decoder tests | ADR-0052, ADR-0054, ADR-0055 | fuzz-style host tests of every decoder |
 | 4 | `init` as the kernel's only process in the normal kernel; supervisor channel | ADR-0053 | normal boot starts `init`, and it starts a service |
 | 5 | Device memory, interrupt and DMA objects; test with a loopback of virtio-mmio registers under QEMU | ADR-0051, ADR-0054 | a user program reads the virtio magic value and takes an interrupt |
@@ -16,6 +17,6 @@ Non-binding, part of TASK-10. It orders the work; the ADRs decide. Numbers refer
 | 10 | Roadmap criterion: a file written, reboot, file read, in `make test` with a disk image | all | files survive reboot |
 | 11 | Spawn from a filesystem image: image handle from a file | ADR-0043 open question, ADR-0055 | optional for the stage |
 
-Order of risk: steps 2 and 5 touch the kernel's hardest code. Step 9 is the one the design is most likely to change.
+Order of risk: steps 2, 2a and 5 touch the kernel's hardest code. Step 9 is the one the design is most likely to change.
 
 Measurements to take on the way: round-trip time of a channel call under HVF and TCG; cost per KiB of inline against shared-memory transfer; `port_wait` with many client channels; whether 64 messages per queue is enough under one client.
