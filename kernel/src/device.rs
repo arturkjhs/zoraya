@@ -69,9 +69,10 @@ pub fn init(fdt: &Fdt<'_>) {
     for transport in transports {
         let base = transport.base & !(FRAME_SIZE - 1);
         // Every register must lie in the window: `read` and `write` rely on it.
-        if !transport.base.is_multiple_of(4)
-            || transport.base + transport.size.max(REG_STATUS as u64 + 4) > base + FRAME_SIZE
-        {
+        let end = transport
+            .base
+            .checked_add(transport.size.max(REG_STATUS as u64 + 4));
+        if !transport.base.is_multiple_of(4) || end.is_none_or(|end| end > base + FRAME_SIZE) {
             println!(
                 "device: {:#x} does not fit a page, left out",
                 transport.base

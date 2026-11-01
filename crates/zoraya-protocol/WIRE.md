@@ -16,7 +16,7 @@ checked.
 | `Below<N>` | `u32`, less than `N`: an enumeration |
 | `Data<N>` | `u32` length of at most `N`, then the bytes |
 | `Text<N>` | as `Data`, valid UTF-8 |
-| `Path<N, EMPTY>` | as `Text`, with no leading `/`, and empty only if `EMPTY` |
+| `Path<N, EMPTY>` | as `Text`, components split at `/` each a `Name`, and empty only if `EMPTY` |
 | `Name` | as `Text<255>`, a path component as ADR-0013 allows |
 | `Seq<T, N>` | `u32` count of at most `N`, padding to 8, `u64` size in bytes, then the records |
 

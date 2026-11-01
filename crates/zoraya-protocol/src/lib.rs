@@ -296,16 +296,23 @@ impl<const N: u32> Field<'_> for Below<N> {
     }
 }
 
-/// A relative path (ADR-0055, ADR-0013): no leading `/`. `EMPTY` allows the
-/// empty path, which only a reply about the end of a path can be.
+/// A relative path (ADR-0055, ADR-0013): components that are each a [`Name`],
+/// so no leading `/`. `EMPTY` allows the empty path, which only a reply about the end of a path can be.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Path<'a, const N: usize, const EMPTY: bool>(pub &'a str);
+
+impl<const N: usize, const EMPTY: bool> Path<'_, N, EMPTY> {
+    /// Every component is a [`Name`], so no `.` or `..` (INV-0013-5).
+    pub fn is_valid(path: &str) -> bool {
+        (path.is_empty() && EMPTY) || (!path.is_empty() && path.split('/').all(Name::is_valid))
+    }
+}
 
 impl<'a, const N: usize, const EMPTY: bool> Field<'a> for Path<'a, N, EMPTY> {
     const VARIABLE: bool = true;
 
     fn put(&self, w: &mut Writer<'_>) -> Result<(), WireError> {
-        if self.0.starts_with('/') || (self.0.is_empty() && !EMPTY) {
+        if !Self::is_valid(self.0) {
             return Err(WireError::BadValue);
         }
         Text::<'a, N>(self.0).put(w)
@@ -313,7 +320,7 @@ impl<'a, const N: usize, const EMPTY: bool> Field<'a> for Path<'a, N, EMPTY> {
 
     fn get(r: &mut Reader<'a>) -> Result<Self, WireError> {
         let Text::<N>(path) = Text::get(r)?;
-        if path.starts_with('/') || (path.is_empty() && !EMPTY) {
+        if !Self::is_valid(path) {
             return Err(WireError::BadValue);
         }
         Ok(Path(path))

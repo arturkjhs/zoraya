@@ -8,13 +8,13 @@
 < first process: init
 < zosh: type help
 # The kernel starts one process (INV-0053-1), and it runs nothing but the shell.
-x first process:
+o first process: 
 x hello from EL0
 < zosh$ 
-# The shell holds what init listed, and the port it made at slot 5: no Device
+# The shell holds what init listed, and the port it made: no Device, by type
 # (INV-0053-2).
 > slots\r
-< slots: 1 2 3 4 5\r\n
+< slots: 1:console 2:job 3:directory 4:power 5:port\r\n
 < zosh$ 
 # A command and its output (and the receive interrupt).
 > echo a  b\r

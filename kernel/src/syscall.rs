@@ -766,6 +766,10 @@ impl Handlers for Calls {
         Ok(0)
     }
 
+    fn handle_type(&mut self, handle: Handle) -> Result<u64, Status> {
+        Ok(self.object(handle, Rights::NONE)?.type_index())
+    }
+
     fn power_off(&mut self, power: Handle) -> Result<u64, Status> {
         let Object::Power = self.object(power, Rights::POWER)? else {
             return Err(Status::BadHandle);

@@ -18,56 +18,56 @@ Building ADR-0050 to ADR-0055 met points where the accepted text is silent or as
 ### Option A: No check, as `ioctl` passes a descriptor (Linux)
 - **Description:** A server uses a handle and sees what happens.
 - **Evidence for:** Nothing to build, and the kernel refuses a wrong type at first use with `BadHandle`.
-- **Evidence against:** The refusal comes late, perhaps after an effect (DM-053's shape).
+- **Evidence against:** Not every call refuses a wrong type: `port_subscribe` takes any object with signals, so a wrong handle can pass and an effect can happen first (DM-053's shape).
 - **Cost:** None.
 - **Precedent:** Unix.
 
 ### Option B: A call that reports a handle's type, used by servers
 - **Description:** `handle_type(handle)`, and a server checks each handle after the decoder, before any effect. Zircon has `zx_object_get_info` for this `[outside evidence]`.
-- **Evidence for:** Meets ADR-0052's sentence.
-- **Evidence against:** One more call, which is only used on a path that a wrong handle fails anyway.
+- **Evidence for:** Meets ADR-0052's sentence as written, and drivers 1 and 2: the decoder stays total, and the check is one call after it.
+- **Evidence against:** One more call on each request that carries a handle.
 - **Cost:** *(estimate)* 40 lines and a table of types.
 - **Precedent:** Fuchsia.
 
 ### Option C: Check the count at the decoder and the type at first use, before any effect
 - **Description:** The decoder checks how many handles came. Each method's first act with a handle is a call that needs that type, so a wrong one gives `BadHandle` before an effect.
-- **Evidence for:** Drivers 1 and 3. No new call. Holds for what TASK-13 builds: `attach` maps, a token is compared, a `server_end` is subscribed.
-- **Evidence against:** A rule for server authors, which review must keep, and a change to one sentence of ADR-0052.
+- **Evidence for:** Drivers 1 and 3. No new call. `attach` is safe this way: mapping refuses anything else.
+- **Evidence against:** False for the rest. A `server_end` is first subscribed, which any object with signals passes, and a token is compared, which gives "not the same" and no refusal. It also changes a sentence of ADR-0052.
 - **Cost:** A sentence.
 - **Precedent:** Option A, with an order added.
 
 ## Recommendation
-Recommended: **Option C**. It is a recommendation, not a decision. If the architect prefers Option B, it is cheap to add.
+Recommended: **Option B**. It is a recommendation, not a decision. `handle_type(handle)` needs no right and gives the row of `OBJECT_TYPES`. A decoder checks the count, and a server calls this for each handle after the decoder, before any effect. ADR-0052's sentence stands, with the type check one step after the decoder, because a decoder takes bytes and makes no call.
 
 Accepting this ADR also records these, as built:
 
-- **`dma_unpin` ends the pin and closes its handle.** A handle to an ended pin would have no use. This closes backlog W7.
+- **`dma_unpin` ends the pin and closes its handle.** A handle to an ended pin would have no use.
 - **`memory_unmap` ends one whole mapping.** The range must be exactly one mapping's, or it is `InvalidArgument`. Cutting a mapping would need a split record for what ADR-0051 does not ask.
 - **One interrupt object per line.** A second is `BadState`, as for a device's one mapping.
 - **`memory_create` takes whole pages.** Anything else is `InvalidArgument`, because rounding up would commit what was not asked for.
 - **ADR-0070's 100 ms is per transport,** so up to 800 ms for a page of eight.
 
-**Tensions with accepted ADRs.** *ADR-0052, Handles:* "with their object types checked" is replaced by Option C.
+**Tensions with accepted ADRs.** *ADR-0040:* one more call on its list, with no right, since a type says nothing a holder could not learn by using the handle.
 
 ### Effect of the vision
-For target 2 a hostile client is the normal case, and Option C holds only while each server keeps the rule. Option B can be added later with no change to the wire.
+For target 2 a hostile client is the normal case, which is why the check is explicit. A server that forgets it is still a bug, which a later protocol helper can prevent with no change to the wire.
 
 ### Deferred to stage 6
 Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 
 ## Consequences
-- **Positive.** The choices are on record, and ADR-0052's text matches the code.
-- **Negative.** A rule that a compiler does not check.
+- **Positive.** The choices are on record, and a server can do what ADR-0052 says.
+- **Negative.** A rule that a compiler does not check: a server must call it.
 - **Follow-up.** TASK-13's service follows the rule.
 
 ## Invariants
-- **INV-0072-1.** A message with the wrong number of handles is refused by its decoder. *Check:* `make test-unit`.
+- **INV-0072-1.** A message with the wrong number of handles is refused by its decoder, and `handle_type` gives each handle's row of `OBJECT_TYPES`. *Check:* `make test`.
 - **INV-0072-2.** `memory_unmap` of anything but a whole mapping changes nothing. *Check:* the in-QEMU test of `memory_unmap` with a wrong length and a wrong address.
 
 ## Open questions
 - Whether a service's authors keep the rule: TASK-13's review.
 
 ## Revisit triggers
-- A method that acts before it first uses a handle.
+- A protocol helper that makes the check impossible to forget.
 
 ## Architect's decision

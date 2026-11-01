@@ -259,6 +259,7 @@ echo! {
     dma_pin(memory: Handle, device: Handle, out: Bytes);
     dma_unpin(pin: Handle);
     dma_release_quarantine(device: Handle);
+    handle_type(handle: Handle);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.

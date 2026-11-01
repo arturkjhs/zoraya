@@ -394,7 +394,7 @@ deterministic random mutations.
 
 - `ls` lists the ramdisk. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
-- `echo`, `uptime`, `exit-code` (the last record) and `help` are built in. `exit` alone ends the shell, and the
+- `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's own handles, by type) and `help` are built in. `exit` alone ends the shell, and the
   kernel then powers off; `exit <n>` is the demonstration program.
 - Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it,
   which is more than TASK-11 asked: a job can ignore `Interrupt`.
@@ -414,7 +414,8 @@ deterministic random mutations.
   channel ends about 11 ms. `memory_map`, `dma_pin`, an address space's teardown and a device reset, up to 100 ms a
   transport, are the same kind. ADR-0056 must bound them before untrusted code runs.
 - **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
-- **Handles in messages.** A protocol decoder checks how many handles a message has, not their object types.
+- **Handles in messages.** A protocol decoder checks how many handles a message has. A server must then check their
+  types with `handle_type` (proposed ADR-0072).
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code
   runs in Zoraya until [ADR-0056](adr/0056-job-memory-accounting.md) is accepted and implemented. At stage 4 every
   process is trusted.

@@ -336,6 +336,16 @@ fn a_path_is_relative() {
     );
 }
 
+#[test]
+fn a_path_has_no_dots_or_empty_parts() {
+    type P<'a> = Path<'a, 64, false>;
+    for bad in ["a/../b", "..", ".", "a//b", "a/", "a\u{1}b", "/a", ""] {
+        assert!(!P::is_valid(bad), "{bad:?}");
+    }
+    assert!(P::is_valid("a/b.c/d"));
+    assert!(Path::<'_, 64, true>::is_valid(""));
+}
+
 /// INV-0052-3: `protocol!` runs this at compile time on every field name.
 #[test]
 #[should_panic(expected = "an operation field")]

@@ -54,7 +54,7 @@ Recommended: **Option B**. It is a recommendation, not a decision. It is tempora
 - **INV-0063-2.** The kernel powers off when the first process ends. *Check:* scripted serial test ending the shell with `exit`.
 
 ## Open questions
-- As of TASK-12: `init` is built, so ADR-0053 replaces this ADR in the code; recording that as `superseded` is the architect's. INV-0063-2 has no test: `init` turns the machine off when the shell ends, so nothing ends the first process, and the kernel's path for that is checked by review only.
+- As of TASK-12: INV-0063-2 has no test: `init` turns the machine off when the shell ends, so nothing ends the first process, and the kernel's path for that is checked by review only.
 
 ## Revisit triggers
 - ADR-0053 accepted.

@@ -996,6 +996,7 @@ syscalls! {
     36 DmaPin dma_pin(memory: Handle, device: Handle, out: Bytes) false;
     37 DmaUnpin dma_unpin(pin: Handle) false;
     38 DmaReleaseQuarantine dma_release_quarantine(device: Handle) false;
+    39 HandleType handle_type(handle: Handle) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then

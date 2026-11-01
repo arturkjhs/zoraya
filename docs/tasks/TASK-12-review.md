@@ -20,7 +20,7 @@ Measurements in that run, HVF default and TCG default. Round trip 16 B: 7,667 ns
 
 | ID | Severity | Location | Evidence | Suggested fix | Disposition |
 |---|---|---|---|---|---|
-| R-1 | error | INV-0053-2; `tests/shell/*.script`; `user/src/bin/init.rs` | Marked `checked: make test-boot`, but B3 (`init` gives `zosh` a `Device` at slot 5) passes both `exit.script` and `console.script`. No step enumerates `init`'s handle lists, and no step shows that a child cannot obtain a `Device`. | Have a test program report what it holds, or have `init` print its outgoing list and check it in a script. Until then the status must be `not yet applicable`. | Fixed: a `slots` built-in, and the script checks `slots: 1 2 3 4`. |
+| R-1 | error | INV-0053-2; `tests/shell/*.script`; `user/src/bin/init.rs` | Marked `checked: make test-boot`, but B3 (`init` gives `zosh` a `Device` at slot 5) passes both `exit.script` and `console.script`. No step enumerates `init`'s handle lists, and no step shows that a child cannot obtain a `Device`. | Have a test program report what it holds, or have `init` print its outgoing list and check it in a script. Until then the status must be `not yet applicable`. | Fixed: a `slots` built-in lists the shell's handles by type, and the script checks the whole list. |
 | R-2 | error | INV-0052-3; `crates/zoraya-protocol` | Marked `checked: make test-unit`, but the check names a lint over the macro's table and no such lint exists. P7 adds `message Control { operation: u32, argument: Data<4096> }` to the block protocol and every test passes. `operation` is exactly the field the invariant forbids. | Add a test over a list of each protocol's messages and field names that refuses names such as `operation`, `op`, `command`, `ioctl`, or restate the check in a proposed ADR. | Fixed: `protocol!` refuses operation-like field names at compile time. |
 | R-3 | error | INV-0052-2; `crates/zoraya-protocol/src/lib.rs`, `Seq::get` | "Any nonzero padding or trailing byte is refused" is true by reading, but its check does not cover `Seq`. P4 (`Seq` trailing bytes accepted) and P6 (padding between records unchecked) both survive. `exercise` only asks that nothing panics. | Add tests that set a padding byte between records and add a byte inside the declared size, expecting `BadPadding` and `Trailing`. | Fixed: tests of `Seq` trailing bytes and padding. |
 | R-4 | error | INV-0052-1; `crates/zoraya-protocol/src/lib.rs`, `length` | P2 removes the decoder's check of a declared maximum and all tests pass. `limits_are_checked_both_ways` tests only the encoder. So a decoder that accepts a `Data`, `Text` or `Seq` over its declared size is not detected, and ADR-0052 requires "a declared maximum". | Add decoder tests with a length of N + 1 for each variable kind. | Fixed: decoder tests over each maximum. |
@@ -174,3 +174,81 @@ Checked as stated above. Not checked:
 - R-10 was found by reading and not reproduced, and neither was R-21's GIC point against the specification text.
 - `INV-0051-5`'s `RelativePath` half was not mutated.
 - All mutants and probes were reverted. `git status --short` shows no source change: only the two untracked task files and this review.
+
+## Check of the fixes
+
+- **Reviewer:** independent reviewer subagent (Claude), which took no part in this code or its first review.
+- **Range:** `git diff 474e8ba 4b32f97`.
+- **Date:** 2026-11-01
+
+Errors in changed lines: 3.
+
+Also 6 lesser points below, which do not count as errors. `make test` passed in the working tree at `4b32f97`, not from a fresh clone: `make test: all checks passed`, `console.script` 162 steps in the boot runs seen.
+
+### Problems
+
+| ID | Severity | Location | Evidence | Suggested fix |
+|---|---|---|---|---|
+| C1 | error | `docs/adr/0072-handle-types-and-small-kernel-choices.md`, Option C | The ADR says each method's first act with a handle "is a call that needs that type, so a wrong one gives `BadHandle` before an effect", and lists "a `server_end` is subscribed". That is false. `port_subscribe` takes any object with signals, and a process knows bits 0 and 2, the same bits as `READABLE` and `PEER_CLOSED`. A probe subscribed a process handle with those two signals, and the call succeeded. So `open` with `CREATE` and a wrong end passes the first use and can create the file. "A token is compared" does not fit either: a comparison gives "not the same", not `BadHandle`, and `object_same` does not exist yet. | Correct the claim before the architect decides. State what each first use really refuses, require a first call that does check the type for `server_end`, or recommend Option B. |
+| C2 | error | `user/src/bin/t_channels.rs`, `closing_closes_what_is_queued` (R-5) | The new comment says "each is closed, not only the first". `close` takes handles with `Vec::pop`, so the last in the list goes first. The test puts the end last. A mutant that turns `while let` into `if let`, so only one handle per message is handled, passes `make test-qemu-one` (94 passed, 9 expected failures). Only the mutant that handles index 0 is killed. INV-0050-4 is therefore still not covered for a message with several handles. | Also send a message with the end first and the process after it, or two ends, and expect `PEER_CLOSED` at each peer. |
+| C3 | error | `tests/shell/console.script`, `x first process:`; disposition of R-18; INV-0053-1 | The disposition says the script forbids a second process. An `x` step covers only the text between the last two matches (`Step::Absent`), here the `first process: init` and `zosh: type help` lines. A mutant that calls `spawn_first("spin")` before `init` prints `first process: spin` and passes all 162 steps of `console.script`. This is the silent second process R-18 was about. `exit.script` was not run on this mutant. | Use `! first process: ` with a check of exactly one such line, for example a kernel line printed after the first process starts, or match the first such line and refuse any other name. |
+| C4 | imprecision | R-1 disposition; `tests/shell/console.script`; INV-0053-2 | The disposition says `slots: 1 2 3 4`; the script expects `slots: 1 2 3 4 5`. The step sees slot numbers up to 32, not object types, so a `Device` in place of `Power` at slot 4, or at a slot past 32, would not show. It does kill B3 as described. The invariant's check still says `init`'s lists are enumerated, which no step does. | Correct the disposition, and word the invariant's check as what is run. |
+| C5 | imprecision | `docs/design.md`, shell section | The new built-in `slots` is not in the list of built-ins, which CLAUDE.md asks to keep true. | Add it. |
+| C6 | imprecision | `docs/backlog.md`, row W7 | The row is removed as closed by ADR-0072, but it had two halves. ADR-0072 covers `dma_unpin` closing its handle, not "a pin can also end when a queue is torn down". ADR-0072 is also only proposed. | Keep that half in the backlog until the architect decides. |
+| C7 | imprecision | `crates/zoraya-protocol/src/lib.rs`, `Path` (R-13) | The fix does what its disposition says. But the type cites ADR-0013, and a probe shows `a/../b`, `..`, `.`, `a//b` and a control byte all decode. INV-0013-5 says no `.` or `..` component is accepted by any service request. This gap is older than `Path`, and `Text` had it too. | Check each component with `Name::is_valid`, and allow an empty path only where `EMPTY` is set. |
+| C8 | imprecision | `docs/adr/0063-first-process-until-init.md`, open questions | R-14 said to revert the edits and keep the note. The note now also says that ADR-0053 replaces this ADR in the code. That goes past the open-question note of ADR-0001 rule 6, the only edit CLAUDE.md allows here besides rule 3's. It decides nothing new, since ADR-0053 says the same. | Keep only the sentence on INV-0063-2, and leave the rest to the architect's request. |
+| C9 | note | `kernel/src/device.rs`, `init` | `transport.base + transport.size.max(...)` is an unchecked addition on device-tree values, by reading. `virtio_transports` filters a zero size but not, in the lines I read, an overflow. It needs a broken device tree, and QEMU gives none. | `checked_add`, and leave the transport out on overflow. |
+
+### Mutants
+
+Each was applied alone, run and reverted. The `make test-qemu-one` runs are the `auto-default` configuration. B3 and the boot probes ran `console.script` on the normal kernel under `auto`.
+
+| Mutant | Check | Result | Caught by |
+|---|---|---|---|
+| P2 | `cargo test -p zoraya-protocol -p zoraya-proto-block -p zoraya-proto-file` | killed | `a_decoder_enforces_declared_maxima` |
+| P4 | same | killed | `a_sequence_has_no_loose_bytes` |
+| P6 | same | killed | `padding_between_records_is_refused` |
+| P7 | `cargo test -p zoraya-proto-block` | killed | Does not compile: "an operation field" |
+| K2 | `make test-qemu-one` | killed | `channels_from_a_process` |
+| K7, `if let` on `pop`, one handle a message | `make test-qemu-one` | **survived** | C2 |
+| K7, only index 0 handled | `make test-qemu-one` | killed | `channels_from_a_process` |
+| K10 | `make test-qemu-one` | killed | `memory_objects_from_a_process` |
+| K20 | `make test-qemu-one` | killed | `devices_from_a_process` |
+| K23 | `make test-qemu-one` | killed | `devices_from_a_process` |
+| B3 | `console.script` | killed | `slots: 1 2 3 4 5 6` where the script expects 5 |
+
+The first review's table does not give K7's exact edit, so I ran both forms. Its wording, "the first handle", fits the second; its likely edit, given the `pop` loop, is the first. Nine of the ten mutants are killed outright, and K7 is killed in one form and survives in the other. P7's kill rests on a list of names, so `selector: u32` would pass; INV-0052-3 leaves disguised operations to review.
+
+Probes, all temporary and reverted:
+
+| Probe | Result |
+|---|---|
+| `spawn_first("hello")` before `init` | Caught only because `hello` prints a line the script refuses (`x hello from EL0`). |
+| `spawn_first("spin")` before `init` | Passes `console.script`: C3. |
+| `port_subscribe` on a process with `READABLE` and `PEER_CLOSED` | Succeeds: C1. |
+| `Paths` with `a/../b`, `..`, `.`, `a//b` and a control byte | All decode: C7. |
+
+### Dispositions
+
+All of R-1 to R-29 were read against the diff. Apart from C1 to C8, each fix does what its disposition says. In particular, by reading: `reserve_many` now covers appended slots. In `dma_pin` nothing can fail after the pin but the second write to bytes just written, and a process has one thread; no reverse order of the handle and device locks appeared. `gic::unmask`, `is_enabled`, the `peek` and `write` SAFETY comments, the `init` fit check and `WIRE.md` agree with the code, and `WIRE.md` agrees with ADR-0052. The status values fit `Below<16>` and `Below<5>`. ADR-0072's five small choices match the code, and 0072 is inside TASK-12's reserved range. The chain close printed 11.0 to 11.5 ms under `auto`, as R-8 says.
+
+### Backlog, outside the changed lines
+
+- `x` steps in the scripts cover only the text between the last two matches, which the wording of older steps such as `x hello from EL0` does not suggest.
+
+### What was and was not checked
+
+Checked as above. Not checked:
+
+- A fresh clone. `make test` ran in the working tree.
+- Mutants under TCG or any other configuration.
+- `make test-boot`'s other scripts on B3 or the probes.
+- K27: the first review accepted it, and it was not in this brief.
+- The GIC specification text for R-21, and the kernel's behaviour on a broken device tree (C9).
+- Old problems outside the changed lines, except where noted.
+- All mutants and probes were reverted. `git status --short` shows only this review and the two untracked task files.
+
+### Disposition of the check
+
+- **C1:** ADR-0072 now recommends `handle_type`, which is built and tested. **C2:** a message with an end on each side of the process. **C3:** the runner gains `o TEXT`, exactly once. **C4:** `slots` gives types. **C5, C6, C8, C9:** done. **C7:** every component of a `Path` is a `Name`.
+- The mutants of C2 and C3 were rerun by the author, one configuration each. No further independent check was made.

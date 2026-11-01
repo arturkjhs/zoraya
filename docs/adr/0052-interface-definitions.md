@@ -74,7 +74,7 @@ How C programs reach services through `libposix`. A new method is a new ordinal,
 - **INV-0052-4.** An unknown ordinal gets `Unsupported`, and the connection survives. *Check:* in-QEMU test against a service.
 
 ## Open questions
-- As of TASK-12: INV-0052-4 waits for a server, in TASK-13; the wire half is tested. A decoder checks how many handles a message has, not their object types, because no call reports a handle's type: a server finds a wrong type at first use.
+- As of TASK-12: INV-0052-4 waits for a server, in TASK-13; the wire half is tested. A decoder checks how many handles a message has. Their object types are for a server to check after it, with ADR-0072's `handle_type`, if that is accepted.
 - When a second language needs bindings.
 
 ## Revisit triggers

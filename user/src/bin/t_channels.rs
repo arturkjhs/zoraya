@@ -239,8 +239,9 @@ fn closing_closes_what_is_queued() {
     )
     .expect("write");
     // Several handles in one message: each is closed, not only the first.
-    let (second_child, tail_peer) = {
+    let (second_child, tails) = {
         let (tail, peer) = channel_create().expect("create");
+        let (head_end, head_peer) = channel_create().expect("create");
         let image = directory_lookup(DIRECTORY, "child").expect("child");
         let length = {
             let mut e = Encoder::new(&mut buffer, JOB, image);
@@ -249,12 +250,16 @@ fn closing_closes_what_is_queued() {
         };
         let second = spawn(&buffer[..length]).expect("spawn");
         handle_close(image).expect("close");
-        channel_write(a, b"", &[moved_process(second), moved(tail)]).expect("write");
-        (second, peer)
+        // An end on each side of the process: the order must not matter.
+        let list = [moved(head_end), moved_process(second), moved(tail)];
+        channel_write(a, b"", &list).expect("write");
+        (second, [head_peer, peer])
     };
     handle_close(b).expect("close the reader");
-    assert_err_read(tail_peer, Status::PeerClosed);
-    handle_close(tail_peer).expect("close");
+    for peer in tails {
+        assert_err_read(peer, Status::PeerClosed);
+        handle_close(peer).expect("close");
+    }
     assert_err!(process_exit_record(second_child), Status::BadHandle);
     assert_err!(process_exit_record(child), Status::BadHandle);
     assert_err!(handle_close(memory), Status::BadHandle);

@@ -13,8 +13,8 @@ use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
 use zoraya_abi::{
     Address, Buffer, Bytes, CONSOLE, ChannelEntry, ChannelSizes, Cookie, Deadline, Detail,
     Disposition, ExitCode, ExitReason, ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags,
-    Mode, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind, Rights,
-    SignalSet, Size, SpawnBuffer, Status, request_from_value, stubs,
+    Mode, OBJECT_TYPES, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind,
+    Rights, SignalSet, Size, SpawnBuffer, Status, request_from_value, stubs,
 };
 
 const MAX_MESSAGE_HANDLES: usize = 64;
@@ -369,6 +369,15 @@ pub fn dma_unpin(pin: Handle) -> Result<(), Status> {
 
 pub fn dma_release_quarantine(device: Handle) -> Result<(), Status> {
     stubs::dma_release_quarantine::<Svc>(device).map(|_| ())
+}
+
+/// The name of the object type behind `handle` (ADR-0072).
+pub fn handle_type(handle: Handle) -> Result<&'static str, Status> {
+    let index = stubs::handle_type::<Svc>(handle)? as usize;
+    match OBJECT_TYPES.get(index) {
+        Some((name, _, _)) => Ok(name),
+        None => Err(Status::BadHandle),
+    }
 }
 
 pub fn directory_lookup(directory: Handle, name: &str) -> Result<Handle, Status> {

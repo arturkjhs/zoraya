@@ -43,6 +43,28 @@ pub enum Object {
 }
 
 impl Object {
+    /// Its row in `OBJECT_TYPES`.
+    pub fn type_index(&self) -> u64 {
+        let name = match self {
+            Object::Console => "console",
+            Object::Power => "power",
+            Object::Directory => "directory",
+            Object::Image(_) => "image",
+            Object::Process(_) => "process",
+            Object::Job(_) => "job",
+            Object::Port(_) => "port",
+            Object::Memory(_) => "memory",
+            Object::Device(_) => "device",
+            Object::Interrupt(_) => "interrupt",
+            Object::Pin(_) => "pin",
+            Object::Channel(..) => "channel",
+        };
+        let row = zoraya_abi::OBJECT_TYPES
+            .iter()
+            .position(|(n, _, _)| *n == name);
+        row.map_or(u64::MAX, |row| row as u64)
+    }
+
     /// Where its signals are, and which bits exist: the kernel's side of
     /// ADR-0006 rule 1.
     pub fn signals(&self) -> Option<(SourceId, u32)> {
