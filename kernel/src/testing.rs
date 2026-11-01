@@ -25,22 +25,25 @@ use core::hint::black_box;
 use core::ptr::{addr_of, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use zoraya_abi::{ExitReason, ExitRecord};
+use zoraya_abi::spawn::StartupBlock;
+use zoraya_abi::{Disposition, ExitReason, ExitRecord, Handle, REQUEST_KINDS, RequestKind};
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
-use zoraya_elf::Error as ElfError;
+use zoraya_elf::{Error as ElfError, Program};
 use zoraya_pagetable::{MemoryType, PAGE_SIZE};
 use zoraya_pmm::{Frame, Range};
 use zoraya_time::{Deadline, Instant};
 
 use crate::arch::mmu;
+use crate::job::Job;
 use crate::memory::layout::{DEVICE_WINDOW, DEVICE_WINDOW_SIZE, KERNEL_IMAGE};
 use crate::memory::stack::KernelStack;
 use crate::memory::user::{USER_HIGH, USER_LOW};
 use crate::memory::{frames, heap, paging};
+use crate::object::{self, HandleTable};
 use crate::process::{self, SpawnError};
 use crate::sync::SpinLock;
-use crate::{arch, console, dtb, gic, irq, memory, println, sched, timer};
+use crate::{arch, console, dtb, gic, irq, memory, port, println, ramdisk, sched, timer};
 
 struct Test {
     name: &'static str,
@@ -360,6 +363,66 @@ static TESTS: &[Test] = &[
     Test {
         name: "harness_resumes_after_panic",
         run: harness_resumes_after_panic,
+    },
+    Test {
+        name: "spawned_child_is_waited_for_through_a_port",
+        run: spawned_child_is_waited_for_through_a_port,
+    },
+    Test {
+        name: "handles_and_rights_hold_from_user_space",
+        run: handles_and_rights_hold_from_user_space,
+    },
+    Test {
+        name: "spawn_keeps_its_rules",
+        run: spawn_keeps_its_rules,
+    },
+    Test {
+        name: "requests_and_jobs_keep_their_rules",
+        run: requests_and_jobs_keep_their_rules,
+    },
+    Test {
+        name: "ports_keep_their_rules",
+        run: ports_keep_their_rules,
+    },
+    Test {
+        name: "many_processes_come_and_go",
+        run: many_processes_come_and_go,
+    },
+    Test {
+        name: "suspended_process_stays_at_its_entry",
+        run: suspended_process_stays_at_its_entry,
+    },
+    Test {
+        name: "terminate_stops_user_code_at_once",
+        run: terminate_stops_user_code_at_once,
+    },
+    Test {
+        name: "closing_a_port_ends_a_blocked_wait",
+        run: closing_a_port_ends_a_blocked_wait,
+    },
+    Test {
+        name: "disposition_change_ends_at_once",
+        run: disposition_change_ends_at_once,
+    },
+    Test {
+        name: "job_signal_reaches_every_process_of_its_tree",
+        run: job_signal_reaches_every_process_of_its_tree,
+    },
+    Test {
+        name: "nothing_is_left_after_spawn_exit_close",
+        run: nothing_is_left_after_spawn_exit_close,
+    },
+    Test {
+        name: "an_ended_process_holds_only_its_record",
+        run: an_ended_process_holds_only_its_record,
+    },
+    Test {
+        name: "port_wait_ignores_idle_subscriptions",
+        run: port_wait_ignores_idle_subscriptions,
+    },
+    Test {
+        name: "try_arc_reports_failure",
+        run: try_arc_reports_failure,
     },
     // Last, so that it covers every test before it.
     Test {
@@ -1248,9 +1311,287 @@ pub fn copy_to_bad_kernel(user_source: u64) -> u64 {
     }
 }
 
+/// As above, with the fault on the kernel's own source of a copy to the user.
+pub fn copy_from_bad_kernel(user_target: u64) -> u64 {
+    extern "C" fn copy(target: usize) {
+        // SAFETY: under `catch`, from an address that faults.
+        let result = unsafe { arch::copy_to_user_from(target as u64, UNMAPPED as *const u8, 1) };
+        black_box(result.is_err());
+    }
+    match arch::catch(copy, user_target as usize) {
+        Some(fault) if fault.ec == EC_DATA_ABORT && fault.far == Some(UNMAPPED) => 1,
+        _ => 0,
+    }
+}
+
 /// INV-0036-1, with `badptr` showing the other side.
 fn copy_fault_on_kernel_memory_is_not_resumed() {
     assert_eq!(run_program("copyfar"), exited(0));
+}
+
+fn exited_in(name: &str) {
+    assert_eq!(run_program(name), exited(0));
+}
+
+/// The stage 3 roadmap criterion.
+fn spawned_child_is_waited_for_through_a_port() {
+    exited_in("parent");
+}
+
+fn handles_and_rights_hold_from_user_space() {
+    exited_in("t_handles");
+}
+
+fn spawn_keeps_its_rules() {
+    exited_in("t_spawn");
+}
+
+fn requests_and_jobs_keep_their_rules() {
+    exited_in("t_signals");
+}
+
+fn ports_keep_their_rules() {
+    exited_in("t_ports");
+}
+
+fn many_processes_come_and_go() {
+    exited_in("t_stress");
+}
+
+/// A `Start` for program `name`, holding nothing, in `job`.
+fn start(name: &str, job: Arc<Job>, suspended: bool) -> Arc<process::Process> {
+    let (name, file) = ramdisk::find(name).expect("program in the ramdisk");
+    let none = StartupBlock::decode(&[0; 8]).expect("empty block");
+    process::create(process::Start {
+        name,
+        file,
+        job,
+        handles: HandleTable::new(),
+        argv: none.argv,
+        envp: none.envp,
+        dispositions: [Disposition::Terminate; REQUEST_KINDS],
+        suspended,
+    })
+    .expect("create")
+}
+
+fn root() -> Arc<Job> {
+    Job::root().expect("root job")
+}
+
+/// As `wait_until`, for what another thread must do: the kernel is not
+/// preempted, so nothing else runs unless this yields.
+fn yield_until(done: impl Fn() -> bool) {
+    let start = timer::now();
+    while !done() {
+        sched::yield_now();
+        assert!(timer::now().nanos_since(start) < PATIENCE_NS, "no progress");
+    }
+}
+
+fn run_a_while() {
+    let until = timer::now().plus_nanos(20_000_000);
+    while timer::now() < until {
+        sched::yield_now();
+    }
+}
+
+/// INV-0003-5. The first instruction would end the process; the thread's
+/// frame still says the image's entry point, after others have had the CPU.
+fn suspended_process_stays_at_its_entry() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let entry = Program::parse(file, USER_LOW, USER_HIGH)
+        .expect("hello")
+        .entry;
+    let process = start("hello", root(), true);
+    let thread = process.thread().expect("a thread");
+    run_a_while();
+    assert_eq!(thread.first_pc(), Some(entry));
+    assert!(thread.is_blocked());
+    assert_eq!(process.exit_record(), None);
+    drop(thread);
+    process.resume().expect("resume");
+    assert_eq!(process.wait().reason, ExitReason::Exited);
+}
+
+/// INV-0004-4: the count read right after the request, while the target is
+/// not running, is the count it ended with.
+fn terminate_stops_user_code_at_once() {
+    let process = process::spawn("counter").expect("counter");
+    let start = timer::now();
+    let (address, before) = loop {
+        sched::yield_now();
+        if let Some(address) = process.watch_address()
+            && let Some(v) = process.peek(address)
+            && v > 0
+        {
+            break (address, v);
+        }
+        assert!(timer::now().nanos_since(start) < PATIENCE_NS, "no progress");
+    };
+    process.signal(RequestKind::Terminate, 9).expect("signal");
+    let at_request = process.peek(address).expect("still mapped");
+    assert!(at_request >= before);
+    let record = process.wait();
+    assert_eq!(
+        record,
+        ExitRecord {
+            code: 0,
+            reason: ExitReason::Terminated,
+            detail: 9
+        }
+    );
+    assert_eq!(process.watched(), Some(at_request));
+}
+
+/// INV-0006-6: closing the handle from another thread.
+fn closing_a_port_ends_a_blocked_wait() {
+    let process = process::spawn("portclose").expect("portclose");
+    let thread = process.thread().expect("a thread");
+    yield_until(|| process.handles.lock().len() == 4 && thread.is_blocked());
+    drop(thread);
+    let port = Handle::from_parts(4, 0).expect("slot");
+    let entry = process.handles.lock().remove(port).expect("its port");
+    object::close(entry);
+    assert_eq!(process.wait(), exited(55));
+}
+
+/// ADR-0004 rule 2.
+fn disposition_change_ends_at_once() {
+    let process = process::spawn("counter").expect("counter");
+    process.set_disposition(RequestKind::Quit, Disposition::Deliver);
+    process.signal(RequestKind::Quit, 5).expect("signal");
+    assert_eq!(process.requests_queued(), 1);
+    assert_eq!(process.exit_record(), None);
+    process.set_disposition(RequestKind::Quit, Disposition::Terminate);
+    assert_eq!(process.wait().detail, 5);
+}
+
+/// `[assumption]` of INV-0004-3, which states the count.
+const JOB_SIGNAL_ROUNDS: usize = 10_000;
+/// Processes alive at a time, within ADR-0031's 255.
+const JOB_SIGNAL_WIDTH: usize = 8;
+
+/// INV-0004-3: another thread keeps starting processes, numbered, while this
+/// one signals. Every process numbered before the call has the request after
+/// it, which a walk that missed a job or a process would break.
+fn job_signal_reaches_every_process_of_its_tree() {
+    static STARTED: AtomicUsize = AtomicUsize::new(0);
+    static STOP: AtomicBool = AtomicBool::new(false);
+    static LIVE: SpinLock<Vec<(usize, Arc<process::Process>)>> = SpinLock::new(Vec::new());
+    static JOBS: SpinLock<Option<[Arc<Job>; 2]>> = SpinLock::new(None);
+
+    fn spawner(_: usize) {
+        let mut number = 0;
+        while !STOP.load(Ordering::Relaxed) {
+            if LIVE.lock().len() < JOB_SIGNAL_WIDTH {
+                let job = JOBS.lock().as_ref().expect("jobs")[number % 2].clone();
+                let p = start("child", job, true);
+                p.set_disposition(RequestKind::Hangup, Disposition::Deliver);
+                LIVE.lock().push((number, p));
+                number += 1;
+                STARTED.store(number, Ordering::Relaxed);
+            }
+            sched::yield_now();
+        }
+    }
+
+    let top = Job::create(&root(), false).expect("job");
+    let inner = Job::create(&top, false).expect("job");
+    *JOBS.lock() = Some([top.clone(), inner.clone()]);
+    STOP.store(false, Ordering::Relaxed);
+    STARTED.store(0, Ordering::Relaxed);
+    sched::spawn_kernel(spawner, 0).expect("thread");
+    for _ in 0..JOB_SIGNAL_ROUNDS {
+        sched::yield_now();
+        let before = STARTED.load(Ordering::Relaxed);
+        top.signal(RequestKind::Hangup, 1).expect("signal");
+        // Taken out one at a time: ending one lets the spawner go on.
+        let mut live = LIVE.lock();
+        for (number, process) in live.iter() {
+            if *number < before {
+                assert!(process.requests_queued() > 0, "process {number} missed");
+            }
+            // Its queue must not fill over the rounds it lives.
+            while process.take_request().is_some() {}
+        }
+        let done = live.pop();
+        drop(live);
+        if let Some((_, process)) = done {
+            process.request_exit(exited(0));
+            process.wait();
+        }
+    }
+    assert!(STARTED.load(Ordering::Relaxed) >= JOB_SIGNAL_ROUNDS / 2);
+    STOP.store(true, Ordering::Relaxed);
+    sched::yield_now();
+    for (_, process) in LIVE.lock().drain(..) {
+        process.request_exit(exited(0));
+    }
+    *JOBS.lock() = None;
+    yield_until(|| top.is_empty());
+}
+
+fn settle() {
+    for _ in 0..4 {
+        sched::yield_now();
+    }
+}
+
+/// INV-0041-1: after many rounds of everything a round of `t_stress` does at
+/// small scale, frames, heap and event tables are where they were.
+fn nothing_is_left_after_spawn_exit_close() {
+    let snapshot = || {
+        settle();
+        let events = port::EVENTS.lock();
+        (
+            frames::stats().free,
+            heap::stats().live,
+            events.live(),
+            events.subscription_count(),
+        )
+    };
+    let round = || assert_eq!(run_program("parent"), exited(0));
+    // The first rounds grow what is kept for reuse, such as the run queue.
+    for _ in 0..8 {
+        round();
+    }
+    let before = snapshot();
+    for _ in 0..64 {
+        round();
+    }
+    assert_eq!(snapshot(), before);
+}
+
+/// INV-0041-2: a held process keeps its record, and nothing else.
+fn an_ended_process_holds_only_its_record() {
+    let process = process::spawn("hello").expect("hello");
+    assert_eq!(process.wait(), exited(7));
+    assert_eq!(process.peek(USER_LOW), None);
+    assert!(process.handles.lock().is_empty());
+    assert!(process.thread().is_none());
+    let mut mappings = 0;
+    process.for_each_mapping(&mut |_| mappings += 1);
+    assert_eq!(mappings, 0);
+    assert_eq!(process.exit_record(), Some(exited(7)));
+}
+
+/// The bound INV-0006-3 states, in hundredths.
+const PORT_RATIO_LIMIT: i32 = 150;
+
+fn port_wait_ignores_idle_subscriptions() {
+    let record = run_program("portbench");
+    assert_eq!(record.reason, ExitReason::Exited);
+    assert!(record.code <= PORT_RATIO_LIMIT, "ratio {}%", record.code);
+}
+
+/// ADR-0041: `try_arc` rests on this, so that it fails where `Arc::new` would
+/// panic. A value too large for the machine cannot be passed to `try_arc`
+/// itself: it would not fit on a stack.
+fn try_arc_reports_failure() {
+    assert!(!heap::can_allocate(Layout::new::<[u8; 1 << 40]>()));
+    assert!(heap::can_allocate(Layout::new::<u64>()));
+    assert_eq!(heap::try_arc(7u64).map(|a| *a), Ok(7));
 }
 
 /// The test-only system call that makes the kernel overflow a thread's stack.

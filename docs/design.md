@@ -328,7 +328,7 @@ How the in-QEMU tests run and report:
   stack and out of any exception context.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
   exists only in the test kernel: the normal kernel cannot resume a fault.
-- Eight tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
+- Nine tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
   access, an unexpected interrupt, an EL0 exception with no process, and a stack overflow on the boot stack and on a thread
   stack. `--expect-line` checks what the reports say.
 - `tools/test-runner` applies a timeout, and fails on a missing `begin` or `end` line, a count mismatch, a panic
@@ -447,7 +447,8 @@ kernel/                   zoraya-kernel: boot, arch, machine-dependent code only
   src/timer.rs            monotonic clock and deadlines
   src/sync.rs             the kernel's lock
   src/sched.rs            threads and the scheduler
-  src/process.rs, syscall.rs, ramdisk.rs  processes, system calls, the embedded ramdisk
+  src/process.rs, job.rs, object.rs, port.rs  processes, jobs, handle contents, ports
+  src/syscall.rs, ramdisk.rs  system calls, the embedded ramdisk
   src/psci.rs             SYSTEM_OFF
   src/panic.rs            panic handler
   src/testing.rs          in-QEMU tests (feature qemu-test)
@@ -459,9 +460,12 @@ crates/                   no_std, host-tested
   zoraya-time/            clock arithmetic and the deadline queue
   zoraya-abi/             the native ABI, with its checks
   zoraya-elf/, zoraya-ramdisk/  total parsers for programs and the ramdisk
-user/                     the user runtime and the programs in the ramdisk
+  zoraya-handle/          handle tables: slots, generations, rights
+  zoraya-events/          signals, port subscriptions and ready lists
+  zoraya-rt/              the runtime of Zoraya programs (aarch64 only)
   zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)
   zoraya-fs-testkit/      test devices, reference model, crash harness, image field map (host only)
+user/                     the programs in the ramdisk, on zoraya-rt
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
