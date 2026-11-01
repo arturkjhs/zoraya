@@ -1,6 +1,6 @@
 # ADR-0055: Filesystem service protocol
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0002, ADR-0003, ADR-0005, ADR-0010, ADR-0011, ADR-0012, ADR-0013, ADR-0015, ADR-0016, ADR-0040, ADR-0050, ADR-0051, ADR-0052, ADR-0054, ADR-0057
 - **Evidence:** CP-02, DM-023, DM-160, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, stage-4/sources.md#services
@@ -101,3 +101,5 @@ Everything else is left to stage 6, undecided: `libposix` and its mapping of POS
 - A workload that reaches 896 connections on a volume: raise `MAX_HANDLES` for services (ADR-0040's revisit), carry several open files on one connection as Option B does, or split the volume.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect, on the condition of 0 errors in the changed lines of the sixth review, which `docs/research/stage-4/review-notes.md`, section "Sixth review, repeated", records.

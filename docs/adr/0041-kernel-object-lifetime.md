@@ -54,6 +54,8 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **Negative.** Removing a subscription leaves a stale ready item, bounded by what is live. A suspended process nobody resumes stays until its job is killed. `try_arc` depends on one CPU. One global lock for signals.
 - **Follow-up.** A real fallible `Arc` when SMP arrives, or when `Arc::try_new` is stable.
 
+*Partly replaced by ADR-0054 when that ADR is accepted:* for INV-0041-1, frames of a DMA pin ended without `dma_unpin` return only after `dma_release_quarantine`.
+
 ## Invariants
 - **INV-0041-1.** After a process ends and its last handle closes, the kernel's frame count and heap use return to their earlier values. *Check:* an in-QEMU loop of spawn, exit and close, comparing `frames::stats` and `heap::stats`.
 - **INV-0041-2.** A process's address space, ASID and handles are released at exit, whoever still holds the process. *Check:* in-QEMU test holding a handle to an ended process, plus INV-0034-2's test.

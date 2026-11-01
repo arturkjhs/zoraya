@@ -1,6 +1,6 @@
 # ADR-0052: Interface definitions and wire format
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0012, ADR-0044, ADR-0050
 - **Evidence:** DM-023, CP-11, CP-13, DM-053, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, stage-4/sources.md#interface-definitions
@@ -81,3 +81,5 @@ How C programs reach services through `libposix`. A new method is a new ordinal,
 - A non-Rust client that must speak a protocol directly.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-01. Decided by the architect, on the condition of 0 errors in the changed lines of the sixth review, which `docs/research/stage-4/review-notes.md`, section "Sixth review, repeated", records.
