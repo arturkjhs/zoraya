@@ -50,7 +50,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 - **Representation.** `Handle` stays a `u32`: bits 0 to 15 the slot, bits 16 to 31 the generation. Slot 0 does not exist, so 0 stays invalid. `MAX_HANDLES` is 1024 slots `[assumption]`.
 - **Allocation.** Next-fit from a cursor, so a closed slot is not reused soon. `spawn` installs at the requested slot, with generation 0, in a table that is otherwise empty.
-- **Exhaustion.** A full table gives `LimitReached`, and the call has no other effect. A slot at generation 65535 is retired when closed: a stale handle can then never match.
+- **Exhaustion.** A full table gives `LimitReached`, and the call has no other effect. A slot whose generation reaches 65535 is retired: a stale handle can then never match.
 - **Rights.** `DUPLICATE`, `TRANSFER`, `WAIT`, `SIGNAL`, `CREATE_PROCESS`, `KILL`, `RESUME`, `READ`, `WRITE`, `LOOKUP`.
 
 | Object | Rights it can carry | Calls |
@@ -69,7 +69,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 
 ## Consequences
 - **Positive.** Stale handles fail deterministically. Every right is checked in one place per call. Startup slots need no second table.
-- **Negative.** A table of 1024 is a real limit on a server. A long-lived process retires a slot after 65,536 uses of it; next-fit spreads that across the table.
+- **Negative.** A table of 1024 is a real limit on a server. A long-lived process retires a slot after 65,535 uses of it; next-fit spreads that across the table.
 - **Follow-up.** Revocation (CP-02's open question). Rights for channels and memory objects at stage 4. Per-type duplicability for `snapshot_process` at stage 6.
 
 ## Invariants

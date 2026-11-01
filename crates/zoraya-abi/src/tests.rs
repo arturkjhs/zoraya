@@ -1,0 +1,431 @@
+use std::format;
+use std::vec::Vec;
+
+use super::spawn::*;
+use super::*;
+
+/// INV-0045-1: objects are named by handles, and integers are opaque
+/// payloads. Listing the kinds by match means a new kind must be judged here
+/// to compile.
+#[test]
+fn parameters_come_from_the_allow_list() {
+    for s in SYSCALLS {
+        for p in s.params {
+            match p {
+                Param::Handle
+                | Param::Buffer
+                | Param::Packets
+                | Param::SpawnArgs
+                | Param::RelativePath
+                | Param::Deadline
+                | Param::Flags
+                | Param::ExitCode
+                | Param::Detail => {}
+                Param::Opaque => assert!(
+                    matches!(s.name, "port_subscribe" | "port_unsubscribe" | "port_queue"),
+                    "{}",
+                    s.name
+                ),
+                Param::EntryPoint => assert_eq!(s.name, "thread_create"),
+            }
+        }
+    }
+}
+
+#[test]
+fn a_relative_path_is_not_absolute() {
+    assert_eq!(RelativePath::new("/x"), None);
+    assert_eq!(RelativePath::new(""), None);
+    assert_eq!(RelativePath::new("x").map(RelativePath::as_str), Some("x"));
+}
+
+/// INV-0004-1: nothing registers code to run asynchronously.
+#[test]
+fn only_thread_creation_takes_an_entry_point() {
+    for s in SYSCALLS
+        .iter()
+        .filter(|s| s.params.contains(&Param::EntryPoint))
+    {
+        assert_eq!(s.name, "thread_create");
+    }
+}
+
+/// INV-0006-2: blocking calls take handles, a `Deadline` and a packet buffer,
+/// so no signal mask, no array to scan and no relative timeout.
+#[test]
+fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
+    let mut blocking = 0;
+    for s in SYSCALLS.iter().filter(|s| s.blocking) {
+        blocking += 1;
+        assert!(s.params.contains(&Param::Deadline), "{}", s.name);
+        for p in s.params {
+            assert!(
+                matches!(p, Param::Handle | Param::Deadline | Param::Packets),
+                "{}",
+                s.name
+            );
+        }
+    }
+    assert_eq!(blocking, 2);
+}
+
+/// INV-0006-6: the vocabulary has no `Interrupted`, and `from_raw` knows
+/// every status there is.
+#[test]
+fn no_status_means_interrupted() {
+    let mut count = 0;
+    for raw in 0..64 {
+        if let Some(s) = Status::from_raw(raw) {
+            count += 1;
+            assert_eq!(s as u64, raw);
+            assert!(!format!("{s:?}").contains("Interrupt"), "{s:?}");
+        }
+    }
+    assert_eq!(count, 12);
+}
+
+/// INV-0003-3: `spawn` takes one buffer of vectors, never a string.
+#[test]
+fn spawn_takes_vectors() {
+    let spawn = SYSCALLS.iter().find(|s| s.name == "spawn").unwrap();
+    assert_eq!(spawn.params, &[Param::SpawnArgs]);
+}
+
+/// INV-0006-1, over the list; [`ObjectType`] makes it a compile error to
+/// define a type without saying.
+#[test]
+fn every_object_type_says_how_it_waits() {
+    assert_eq!(OBJECT_TYPES.len(), 6);
+    for (name, waiting, rights) in OBJECT_TYPES {
+        if let Waiting::Signals(bits) = waiting {
+            assert_ne!(*bits, 0, "{name}");
+        }
+        assert_ne!(rights.raw(), 0, "{name}");
+    }
+    let port = OBJECT_TYPES.iter().find(|t| t.0 == "port").unwrap();
+    assert!(
+        !port.2.contains(Rights::DUPLICATE),
+        "ADR-0003 rule 3: a port is not duplicable"
+    );
+}
+
+/// INV-0032-1.
+#[test]
+fn numbers_round_trip_and_unknown_ones_are_refused() {
+    for s in SYSCALLS {
+        assert_eq!(
+            Syscall::from_number(s.call as u64),
+            Some(s.call),
+            "{}",
+            s.name
+        );
+    }
+    assert_eq!(Syscall::from_number(SYSCALLS.len() as u64), None);
+    assert_eq!(Syscall::from_number(u64::MAX), None);
+    for (i, s) in SYSCALLS.iter().enumerate() {
+        assert_eq!(s.call as usize, i, "table in number order");
+    }
+}
+
+#[test]
+fn registers_are_enough() {
+    for s in SYSCALLS {
+        let registers: usize = s.params.iter().map(|p| p.registers()).sum();
+        assert!(registers <= 6, "{}", s.name);
+    }
+}
+
+#[test]
+fn status_round_trips() {
+    assert_eq!(Status::from_raw(99), None);
+    assert_eq!(
+        Status::from_raw(Status::Cancelled as u64),
+        Some(Status::Cancelled)
+    );
+}
+
+#[test]
+fn handle_zero_is_not_valid() {
+    assert_eq!(Handle::new(0), None);
+    assert_eq!(Handle::new(1), Some(CONSOLE));
+    assert_eq!(Handle::from_parts(0, 3), None);
+    assert_eq!(Handle::from_parts(MAX_HANDLES + 1, 0), None);
+    let h = Handle::from_parts(5, 9).unwrap();
+    assert_eq!((h.slot(), h.generation()), (5, 9));
+    assert_eq!(Handle::from_parts(3, 0), Some(DIRECTORY));
+}
+
+#[derive(Default)]
+struct Echo {
+    last: Option<&'static str>,
+    keys: Vec<u64>,
+}
+
+macro_rules! echo {
+    ($($name:ident($($arg:ident: $type:ty),*);)*) => {
+        impl Handlers for Echo {
+            $(fn $name(&mut self, $($arg: $type),*) -> Result<u64, Status> {
+                self.last = Some(stringify!($name));
+                $(let _ = $arg;)*
+                Ok(0)
+            })*
+        }
+    };
+}
+
+echo! {
+    process_exit(code: ExitCode);
+    thread_yield();
+    console_write(console: Handle, bytes: Bytes);
+    clock_monotonic();
+    sleep_until(deadline: Deadline);
+    handle_close(handle: Handle);
+    handle_duplicate(handle: Handle, rights: Rights);
+    job_create(parent: Handle, flags: JobFlags);
+    spawn(args: SpawnBuffer);
+    process_resume(process: Handle);
+    process_exit_with_reason(reason: ExitReason, detail: Detail);
+    process_exit_record(process: Handle, record: Bytes);
+    process_signal(process: Handle, kind: RequestKind, detail: Detail);
+    process_set_disposition(kind: RequestKind, disposition: Disposition);
+    process_take_request();
+    job_signal(job: Handle, kind: RequestKind, detail: Detail);
+    job_kill(job: Handle);
+    port_create();
+    port_subscribe(port: Handle, handle: Handle, signals: SignalSet, key: Opaque, mode: Mode);
+    port_unsubscribe(port: Handle, key: Opaque);
+    port_queue(port: Handle, key: Opaque, data: Opaque);
+    port_wait(port: Handle, deadline: Deadline, packets: PacketBuffer);
+    directory_lookup(directory: Handle, name: PathBuffer);
+}
+
+/// INV-0044-1: each number reaches the handler of the name the table gives.
+#[test]
+fn every_number_reaches_its_handler() {
+    for s in SYSCALLS {
+        let mut echo = Echo::default();
+        let registers = [1; 6];
+        let result = dispatch(&mut echo, s.call as u64, &registers);
+        assert_eq!(result, Ok(0), "{}", s.name);
+        assert_eq!(echo.last, Some(s.name));
+    }
+    assert!(Echo::default().keys.is_empty());
+    let mut echo = Echo::default();
+    assert_eq!(
+        dispatch(&mut echo, SYSCALLS.len() as u64, &[0; 6]),
+        Err(Status::BadSyscall)
+    );
+}
+
+/// INV-0044-2, for each parameter type that is narrower than a register.
+#[test]
+fn a_value_too_wide_is_refused_not_truncated() {
+    let wide = 1u64 << 32;
+    assert_eq!(Handle::decode(&[wide + 1]), Err(Status::BadHandle));
+    assert_eq!(ExitCode::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(Detail::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(SignalSet::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(JobFlags::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(Rights::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(RequestKind::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(Disposition::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(Mode::decode(&[wide]), Err(Status::InvalidArgument));
+    assert_eq!(ExitReason::decode(&[wide]), Err(Status::InvalidArgument));
+    // And out-of-range values within 32 bits.
+    assert_eq!(Rights::decode(&[1 << 10]), Err(Status::InvalidArgument));
+    assert_eq!(RequestKind::decode(&[36]), Err(Status::InvalidArgument));
+    assert_eq!(RequestKind::decode(&[35]), Ok(RequestKind::Custom(31)));
+    assert_eq!(Disposition::decode(&[3]), Err(Status::InvalidArgument));
+    assert_eq!(Mode::decode(&[2]), Err(Status::InvalidArgument));
+    assert_eq!(ExitReason::decode(&[5]), Err(Status::InvalidArgument));
+    assert_eq!(JobFlags::decode(&[2]), Err(Status::InvalidArgument));
+}
+
+#[test]
+fn an_argument_round_trips_through_the_stub() {
+    struct Loop;
+    static SEEN: std::sync::Mutex<[u64; 7]> = std::sync::Mutex::new([0; 7]);
+    impl Invoke for Loop {
+        fn invoke(number: u64, r: [u64; 6]) -> (u64, u64) {
+            let mut seen = SEEN.lock().unwrap();
+            seen[0] = number;
+            seen[1..].copy_from_slice(&r);
+            (0, 5)
+        }
+    }
+    let port = Handle::new(7).unwrap();
+    let value = stubs::port_wait::<Loop>(
+        port,
+        Deadline(9),
+        PacketBuffer(Buffer {
+            address: 0x1000,
+            length: 3,
+        }),
+    );
+    assert_eq!(value, Ok(5));
+    assert_eq!(*SEEN.lock().unwrap(), [21, 7, 9, 0x1000, 3, 0, 0]);
+}
+
+#[test]
+fn exit_records_and_packets_encode() {
+    let record = ExitRecord {
+        code: -2,
+        reason: ExitReason::Fault,
+        detail: 0x24,
+    };
+    assert_eq!(ExitRecord::from_bytes(&record.to_bytes()), Some(record));
+    let packet = Packet {
+        key: 1,
+        kind: PACKET_USER,
+        signals: 2,
+        data: 3,
+    };
+    assert_eq!(size_of::<Packet>(), Packet::SIZE);
+    assert_eq!(packet.to_bytes()[8], 1);
+    let (kind, detail) = request_from_value(request_value(RequestKind::Custom(3), 9)).unwrap();
+    assert_eq!((kind, detail), (RequestKind::Custom(3), 9));
+}
+
+fn sample(buffer: &mut [u8]) -> usize {
+    let (job, image) = (JOB, DIRECTORY);
+    let mut e = Encoder::new(buffer, job, image);
+    e.suspended()
+        .group(Handle::new(9).unwrap())
+        .disposition(RequestKind::Hangup, Disposition::Ignore)
+        .handle(HandleEntry {
+            slot: 3,
+            handle: Handle::new(4).unwrap(),
+            rights: Rights::WAIT,
+            transfer: Transfer::Move,
+        })
+        .handle(HandleEntry {
+            slot: 4,
+            handle: Handle::new(5).unwrap(),
+            rights: Rights::NONE,
+            transfer: Transfer::Duplicate,
+        })
+        .arg(b"name")
+        .arg(b"a\0b")
+        .env(b"K=V");
+    e.finish().unwrap()
+}
+
+#[test]
+fn a_request_round_trips() {
+    let mut b = [0; 512];
+    let n = sample(&mut b);
+    let r = SpawnRequest::decode(&b[..n]).unwrap();
+    assert!(r.suspended);
+    assert_eq!((r.job, r.image), (JOB, DIRECTORY));
+    assert_eq!(r.group, Handle::new(9));
+    assert_eq!(r.dispositions[2], Disposition::Ignore);
+    assert_eq!(r.dispositions[0], Disposition::Terminate);
+    let handles: Vec<_> = r.handles().collect();
+    assert_eq!(handles.len(), r.handle_count());
+    assert_eq!(handles[1].slot, 4);
+    assert_eq!(handles[1].transfer, Transfer::Duplicate);
+    let argv: Vec<_> = r.argv.collect();
+    assert_eq!(argv, [&b"name"[..], &b"a\0b"[..]]);
+    assert_eq!(r.envp.collect::<Vec<_>>(), [&b"K=V"[..]]);
+}
+
+#[test]
+fn the_startup_block_round_trips() {
+    let mut b = [0; 512];
+    let n = sample(&mut b);
+    let r = SpawnRequest::decode(&b[..n]).unwrap();
+    let mut block = Vec::new();
+    block.extend_from_slice(&startup_header(r.argv.len(), r.envp.len()));
+    block.extend_from_slice(r.argv.as_bytes());
+    block.extend_from_slice(r.envp.as_bytes());
+    let s = StartupBlock::decode(&block).unwrap();
+    assert_eq!(s.argv.len(), 2);
+    assert_eq!(s.envp.collect::<Vec<_>>(), [&b"K=V"[..]]);
+}
+
+/// INV-0042-2: no prefix or mutation panics, and what is accepted iterates to
+/// exactly its declared counts.
+#[test]
+fn the_decoder_is_total() {
+    let mut b = [0; 512];
+    let n = sample(&mut b);
+    for length in 0..n {
+        assert!(SpawnRequest::decode(&b[..length]).is_err(), "{length}");
+    }
+    let mut x = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move || {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        x
+    };
+    let mut accepted = 0;
+    for _ in 0..200_000 {
+        let mut m = b;
+        for _ in 0..=next() % 3 {
+            m[next() as usize % n] = next() as u8;
+        }
+        if let Ok(r) = SpawnRequest::decode(&m[..n]) {
+            accepted += 1;
+            assert_eq!(r.handles().count(), r.handle_count());
+            assert_eq!(r.argv.count(), r.argv.len());
+            assert_eq!(r.envp.count(), r.envp.len());
+        }
+        let _ = StartupBlock::decode(&m[..n]);
+    }
+    assert!(accepted > 0, "the mutations must reach the end of decoding");
+}
+
+#[test]
+fn trailing_bytes_flags_and_reserved_fields_are_refused() {
+    let mut b = [0; 512];
+    let n = sample(&mut b);
+    assert!(SpawnRequest::decode(&b[..n + 1]).is_err());
+    for (at, value) in [(0, 0), (4, 0), (8, 2), (36, 1), (HEADER_SIZE - 1, 1)] {
+        let mut m = b;
+        m[at] = value;
+        assert_eq!(
+            SpawnRequest::decode(&m[..n]).map(|_| ()),
+            Err(Status::InvalidArgument),
+            "byte {at}"
+        );
+    }
+}
+
+#[test]
+fn a_slot_or_a_moved_handle_twice_is_refused() {
+    let entry = |slot, handle, transfer| HandleEntry {
+        slot,
+        handle: Handle::new(handle).unwrap(),
+        rights: Rights::NONE,
+        transfer,
+    };
+    let refused = |a, b| {
+        let mut buffer = [0; 256];
+        let mut e = Encoder::new(&mut buffer, JOB, DIRECTORY);
+        e.handle(a).handle(b);
+        let n = e.finish().unwrap();
+        SpawnRequest::decode(&buffer[..n]).is_err()
+    };
+    use Transfer::{Duplicate, Move};
+    assert!(refused(entry(3, 4, Duplicate), entry(3, 5, Duplicate)));
+    assert!(refused(entry(3, 4, Move), entry(5, 4, Duplicate)));
+    assert!(refused(entry(3, 4, Duplicate), entry(5, 4, Move)));
+    assert!(!refused(entry(3, 4, Duplicate), entry(5, 4, Duplicate)));
+}
+
+#[test]
+fn an_encoder_that_runs_out_of_room_says_so() {
+    let mut small = [0; 10];
+    assert_eq!(Encoder::new(&mut small, JOB, DIRECTORY).finish(), None);
+    let mut b = [0; HEADER_SIZE + 3];
+    let mut e = Encoder::new(&mut b, JOB, DIRECTORY);
+    e.arg(b"long");
+    assert_eq!(e.finish(), None);
+}
+
+#[test]
+fn the_startup_block_lies_below_the_stack() {
+    assert_eq!(STARTUP_BLOCK % 4096, 0);
+    assert!(STARTUP_BLOCK + STARTUP_BLOCK_MAX < USER_STACK_TOP - USER_STACK_SIZE);
+}

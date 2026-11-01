@@ -46,7 +46,7 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **Versioning.** The header size says which version. This version accepts exactly its own size; a later one accepts older sizes and fills defaults. Unknown flags, a nonzero reserved field, and unknown modes or dispositions are `InvalidArgument`.
 - **Validation.** `SpawnRequest::decode` checks everything before anything happens, and iteration after it cannot fail. `spawn` then checks the handles, with no effect on the parent until all pass.
 - **Strings.** Byte strings: any bytes, with their length. UTF-8 is not required, since ADR-0002 leaves X-8 open, and DM-008 is why these stay vectors.
-- **The child's view.** The kernel writes the argument and environment vectors into a read-only block at the fixed address `STARTUP_BLOCK`, in the same string format, because a process starts with zeroed registers (ADR-0031's test relies on that). No block is mapped if both are empty.
+- **The child's view.** The kernel writes the argument and environment vectors into a read-only block at the fixed address `STARTUP_BLOCK`, in the same string format, because a process starts with zeroed registers (ADR-0031's test relies on that). The block is always mapped, even when both are empty.
 
 ## Consequences
 - **Positive.** No pointer chasing, so one fault path and one copy.

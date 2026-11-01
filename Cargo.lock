@@ -19,6 +19,13 @@ name = "zoraya-elf"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-events"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+]
+
+[[package]]
 name = "zoraya-fs"
 version = "0.1.0"
 dependencies = [
@@ -39,6 +46,13 @@ dependencies = [
  "zoraya-fs",
  "zoraya-fs-testkit",
  "zoraya-mkfs",
+]
+
+[[package]]
+name = "zoraya-handle"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
 ]
 
 [[package]]
