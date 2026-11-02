@@ -1,6 +1,6 @@
 # ADR-0080: Restarting the storage stack, and small choices of stage 4b
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0014, ADR-0015, ADR-0050, ADR-0052, ADR-0053, ADR-0054, ADR-0055, ADR-0070
 - **Evidence:** CP-12, DM-046, alternatives-postmortem.md#minix-3, stage-4/sources.md#virtio-and-qemu
@@ -94,3 +94,5 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 - A device whose negotiation is costly.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect.

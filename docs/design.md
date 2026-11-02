@@ -301,7 +301,7 @@ over the tree on a 64 KiB process stack, and a block passed by value through tha
 ## Storage stack (as built)
 
 Two processes, each in a sub-job that `init` makes, and `init` over them, on [ADR-0053](adr/0053-service-discovery-and-first-process.md),
-[ADR-0054](adr/0054-driver-model.md), [ADR-0055](adr/0055-filesystem-service-protocol.md) and the proposed
+[ADR-0054](adr/0054-driver-model.md), [ADR-0055](adr/0055-filesystem-service-protocol.md) and
 [ADR-0080](adr/0080-restart-and-small-choices-of-stage-4b.md).
 
 - **`blkd`** owns the virtio-mmio device: split queues on transport version 2, in `crates/zoraya-virtio`, which holds
