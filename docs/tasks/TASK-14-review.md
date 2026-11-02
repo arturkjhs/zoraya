@@ -37,13 +37,13 @@ survivors.
 
 | Crate | Mutants | Caught | Missed | Unviable | After the new tests |
 |---|---|---|---|---|---|
-| `zoraya-compositor` | 324 | 270 | 50 | 4 | AFTER_COMPOSITOR |
-| `zoraya-term` | 317 | 255 | 58 | 4 | AFTER_TERM |
-| `zoraya-virtio-gpu` | 111 | 89 | 10 | 12 | AFTER_GPU |
-| `zoraya-virtio-input` | 110 | 92 | 12 | 6 | AFTER_INPUT |
-| `zoraya-font` | 89 | 70 | 3 | 16 | AFTER_FONT |
-| `zoraya-keymap` | 43 | 34 | 8 | 1 | AFTER_KEYMAP |
-| `zoraya-virtio` | 485 | 373 | 101 | 11 | AFTER_VIRTIO |
+| `zoraya-compositor` | 324 | 270 | 50 | 4 | 325 mutants: 8 missed, all equivalent |
+| `zoraya-term` | 317 | 255 | 58 | 4 | 320: 3 missed, all equivalent |
+| `zoraya-virtio-gpu` | 111 | 89 | 10 | 12 | 111: 0 missed |
+| `zoraya-virtio-input` | 110 | 92 | 12 | 6 | 110: 3 missed, all equivalent |
+| `zoraya-font` | 89 | 70 | 3 | 16 | 89: 2 missed, both equivalent |
+| `zoraya-keymap` | 43 | 34 | 8 | 1 | 43: 0 missed |
+| `zoraya-virtio` | 485 | 373 | 101 | 11 | 485: 68 missed: 53 in `fake.rs`, 8 stage 4 equivalents, 7 equivalent |
 
 - **`zoraya-virtio`.** 56 of the 101 survivors are in `fake.rs`, the device-side fake that tests use, and are left: it
   is test code. 25 were in the new default `read8` and `write8` of `Registers`, which every implementation in the
@@ -62,6 +62,9 @@ survivors.
   exactly `u32::MAX`. In the input driver: devices with one axis or none, axes with different ranges, an 8-byte axis
   info, and the layout's size. In the font: a pixel in the right margin. In the keymap: Ctrl and Alt on both sides,
   Caps Lock released, and Ctrl with `[` and `]`.
+- **After.** A second run of cargo-mutants on the tests above, at commit `4a585a9` plus the compositor tests of
+  the first check, missed only the equivalents below, and in `zoraya-virtio` also one more: `|` to `^` in the default
+  `write8`, where the mask has cleared the bits the value fills. (`fake.rs` is left as test code.)
 - **Equivalent, left on purpose** (the triage's reasons, checked against the code):
   - compositor: key ranges and guards that differ only on keys no `watch` registers; the display's `Empty` arm, which
     a single reader woken for readable-or-closed never sees; `!attached` beside a size of 0; `room < 1` against
@@ -91,4 +94,14 @@ host tests of every changed crate and `adr-check`, and found 3 errors.
 
 ## Second check of the fixes
 
-The first check found errors, so TASK-14 asks for one more check of the lines changed to fix them. See below.
+The first check found errors, so TASK-14 asks for one more check of the lines changed to fix them (`git diff
+4a585a9..8d168b6`), by a subagent that wrote none of them. It confirmed C1 to C3 and N2 to N6, and found 2 errors.
+
+| Id | Finding | Disposition |
+|---|---|---|
+| D1 | error: N1's test for R10(b) checked the `dropped` of the release, not of the first event after the lost reply, so it passed with the bug. | Fixed. It now checks that the reply was not delivered and that the next event carries 0. |
+| D2 | error: `init` printed "the compositor did not take the new driver" when no new driver had started (limit reached, or spawn failed). | Fixed. It prints that only while a new driver runs. |
+| - | note: `init` now blocks up to 6 s in a restart and watches nothing else meanwhile. | Recorded here; a supervisor that waits on its port while the compositor answers is follow-up. |
+
+TASK-14 allows no third check. D1 and D2 are fixed and the suite passes, but **no check has reviewed those two
+fixes**.

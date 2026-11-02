@@ -199,7 +199,7 @@ fn main() -> i32 {
                 }
                 KEY_GPU => {
                     let g = gui.as_mut().expect("a GUI");
-                    if !g.restart_gpu() {
+                    if !g.restart_gpu() && g.gpud.is_some() {
                         println!("init: the compositor did not take the new GPU driver");
                     }
                     // Watched whenever it runs, whatever the compositor said.
@@ -211,7 +211,7 @@ fn main() -> i32 {
                 k if k >= KEY_INPUT => {
                     let g = gui.as_mut().expect("a GUI");
                     let i = (k - KEY_INPUT) as usize;
-                    if !g.restart_input(i) {
+                    if !g.restart_input(i) && g.inputd[i].is_some() {
                         println!("init: the compositor did not take the new input driver");
                     }
                     if let Some(r) = g.inputd[i] {

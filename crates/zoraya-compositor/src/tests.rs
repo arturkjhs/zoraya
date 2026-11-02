@@ -1360,7 +1360,7 @@ fn buttons_are_held_and_released() {
 }
 
 /// Review R10(b): a reply lost to a full queue is not counted as a dropped
-/// event.
+/// event: the first event after it carries 0.
 #[test]
 fn a_lost_reply_is_not_a_dropped_event() {
     let mut s = setup();
@@ -1375,12 +1375,9 @@ fn a_lost_reply_is_not_a_dropped_event() {
     };
     s.f().send(a, message(&m, 3), vec![]);
     s.c.step();
+    assert!(s.f().take(a).is_empty(), "the reply was not delivered");
     s.f().peers.get_mut(&a).unwrap().room = 64;
     s.keys(&[(30, 1)]);
-    assert_eq!(keys_of(&s.f().take(a)), [(30, true, Some('a'))]);
-    let k = s.f().take(a);
-    assert!(k.is_empty());
-    s.keys(&[(30, 0)]);
     let dropped: Vec<u32> = s
         .f()
         .take(a)
