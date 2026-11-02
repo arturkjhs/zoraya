@@ -81,6 +81,9 @@ impl Window {
             && channel_write(self.compositor, &out[..n], &[]).is_ok()
         {
             self.outstanding = true;
+        } else {
+            // Not sent: draw it all again next time (review S2).
+            self.term.redraw();
         }
     }
 

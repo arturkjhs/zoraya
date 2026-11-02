@@ -116,7 +116,7 @@ impl Driver {
                 Err(Status::DeadlineExceeded) if polls < COMMAND_NS / POLL_NS => {
                     polls += 1;
                     if !MISSED.swap(true, Ordering::Relaxed) {
-                        println!("gpud: a completion came without its interrupt: polling");
+                        println!("gpud: a wait passed 10 ms: looking at the queue");
                     }
                     Ok(())
                 }
@@ -176,10 +176,16 @@ impl Driver {
                 self.pin = Some(pin);
                 status::OK
             }
-            Err(e) => {
-                // The device holds no reference to a backing it refused.
+            // Refused before any command: nothing reached the device.
+            Err(e @ (Error::BadBacking | Error::Attached | Error::NoDisplay)) => {
                 let _ = dma_unpin(pin);
                 self.status(e)
+            }
+            // A command failed part-way: the device may hold the backing,
+            // and resource 1 exists. Stop the device first (review R4).
+            Err(_) => {
+                self.pin = Some(pin);
+                self.lost()
             }
         }
     }

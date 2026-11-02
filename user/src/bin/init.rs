@@ -124,6 +124,7 @@ fn main() -> i32 {
     let mut gui_allowed = gui_devices.is_some();
     let mut gui_restarts = 0;
     let mut gui: Option<Gui> = None;
+    let mut driver_restarts = (0, alloc::vec![0; devices.inputs.len()]);
     if gui_devices.is_some() {
         println!(
             "init: gui: gpu on its own page, {} input device(s)",
@@ -146,6 +147,12 @@ fn main() -> i32 {
             && let Some(gpu) = gui_devices
         {
             gui = Gui::start(gpu, &devices.inputs);
+            // A driver's restarts count over the boot, not per GUI start
+            // (review R6).
+            if let Some(g) = gui.as_mut() {
+                g.gpu_restarts = driver_restarts.0;
+                g.input_restarts.clone_from(&driver_restarts.1);
+            }
             if gui.is_none() {
                 println!("init: the gui did not start");
                 gui_allowed = false;
@@ -222,6 +229,7 @@ fn main() -> i32 {
             Ended::Gui => {
                 println!("init: the gui failed");
                 if let Some(g) = gui.take() {
+                    driver_restarts = (g.gpu_restarts, g.input_restarts.clone());
                     g.end();
                 }
                 gui_restarts += 1;

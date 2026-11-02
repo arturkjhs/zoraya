@@ -10,7 +10,7 @@ Stage 5 puts pixels on QEMU's display. QEMU `virt` offers `virtio-gpu-device` on
 
 ## Decision drivers
 1. A bug in display code must end a process, not the kernel (DM-047, DM-081, CP-17).
-2. The device is untrusted: every response is checked, as for blk (GR-021, ADR-0015 rule 8).
+2. The device is untrusted: every response is checked, as ADR-0015 rule 8 asks for blk; Linux's virtio drivers had to be hardened later for trusting the device (GR-021).
 3. The compositor holds every pixel it shows, so the driver holds no state worth keeping across a restart (CP-17).
 4. Small: the stage's criterion is a terminal window, not acceleration.
 
@@ -54,6 +54,8 @@ Recommended: **Option B**. It is a recommendation, not a decision.
 - **Display protocol** (`zoraya-proto-display`, ADR-0052). `Info` gives width, height and the pixel format. `Attach` carries one memory object: the driver checks its type, pins it, and checks that its runs cover `width × height × 4` bytes, creates the resource and sets the scanout. A second `Attach` is refused. `Flush { x, y, width, height }` is checked against the resource, then transferred and flushed; a rectangle outside it is `BadRange` and reaches no device. The driver treats every message as hostile (ADR-0054).
 - **Death.** The compositor sees `PEER_CLOSED`, and `init` restarts the driver alone (ADR-0097). The new driver gets a new `Attach`, and the compositor sends one full flush: the compositor holds every pixel, so nothing is lost (driver 3).
 
+- **Errors.** A response of the wrong type or length is a protocol break: reset and exit (INV-0090-3). A device *error* response to `Flush` is a status, `DEVICE`, and the driver goes on. An error, or a broken response, after `RESOURCE_CREATE_2D` in an `Attach` leaves resource 1 and perhaps its backing in the device, so it is treated as a protocol break: reset, then unpin, then exit.
+
 **Tensions with accepted ADRs.** *ADR-0054* names virtio-blk as its device; this is a second driver on the same objects, with no change to them. *ADR-0054, Trust boundary:* the same statement holds for `gpud`: it can program the device to read any memory, so it is in the trusted base.
 
 ### Effect of the vision
@@ -70,11 +72,11 @@ Nothing here depends on POSIX.
 ## Invariants
 - **INV-0090-1.** The driver negotiates `VERSION_1` and no other feature. *Check:* host test with a fake device that offers every feature bit, asserting what the driver wrote to `DriverFeatures`.
 - **INV-0090-2.** No command reaches the device with a rectangle outside the resource, whatever the client sends. *Check:* host test of the display logic with hostile `Flush` and `Attach` messages against a recording fake device.
-- **INV-0090-3.** A response of the wrong type or length, or a used index past what was submitted, ends with a device reset and no further command. *Check:* host tests against a hostile fake device, one per kind of lie.
+- **INV-0090-3.** A response of the wrong type or length, or a used index past what was submitted, is a protocol break, after which the driver resets the device and sends no further command. *Check:* host tests against a hostile fake device, one per kind of lie, that each is reported as a protocol break; the reset and exit that follow are in `gpud`, checked by reading.
 
 ## Open questions
 - The cost of a flush round trip through `gpud`: measured by this task (frames per second of a full redraw).
-- *As built (TASK-14).* Under TCG a command's completion is sometimes not followed by an interrupt the driver sees, about once in a driver's life, early on; the cause is not found. The driver's wait therefore looks at the queue every 10 ms, and still gives up after a second, so a lost interrupt costs 10 ms and is reported once on the console. `blkd` waits without a deadline and has never shown this in stage 4's tests.
+- *As built (TASK-14).* The first build missed completions under TCG. The cause, found by the review (R1): virtio-mmio's interrupt is edge-triggered on QEMU `virt`, and a completion that lands while the line is still high from the previous one makes no edge. The driver now takes the device's interrupt down and looks at the queue again before every wait. The wait also looks at the queue every 10 ms, and still gives up after a second, as a guard; the first time it does, the driver says so once on the console.
 - Whether `B8G8R8X8_UNORM` is what QEMU's screendump reports byte for byte: checked by the screendump test.
 
 ## Revisit triggers

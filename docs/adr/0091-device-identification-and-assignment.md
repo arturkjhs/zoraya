@@ -48,7 +48,7 @@ ADR-0054 makes one `Device` object per 4 KiB page of virtio-mmio transports, bec
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 - **Placement** (ADR-0097). The disk stays where QEMU puts it, transport 31 (page 3). The GPU is on transport 23 (page 2), the keyboard on 15 (page 1), the tablet on 7 (page 0).
-- **Identification.** A pure function over a page's eight register reads, in a host-tested crate: for each transport, `MagicValue` must be `0x74726976` and `Version` 2; `DeviceID` 0 is an empty transport. It gives the page's one device as `(range, device ID)`, or nothing if the page has none or more than one. Known IDs: 2 block, 16 GPU, 18 input. `init` reads each page with one mapping, which it ends before handing the handle on.
+- **Identification.** A pure function over a page's eight register reads, in a host-tested crate: for each transport, `MagicValue` must be `0x74726976` and `Version` 2; `DeviceID` 0 is an empty transport. It gives the page's one device as `(range, device ID)`, or nothing if the page has none or more than one. Known IDs: 2 block, 16 GPU, 18 input. `init` maps the page's ranges one at a time, reads each transport's registers and ends the mapping, before it hands the handle on.
 - **Hand-over.** The driver gets a duplicate with `MAP | INTERRUPT | DMA`, never `DUPLICATE` or `TRANSFER`, and its range as an argument. `init` keeps its own handle for a restart (ADR-0053).
 - **Refusal.** A page with two devices is reported on the console and gets no driver. The disk follows the same rule, which changes nothing for `make run`, where it is alone.
 

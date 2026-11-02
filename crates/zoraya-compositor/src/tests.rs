@@ -913,8 +913,11 @@ fn a_lost_display_is_replaced_and_the_screen_shown_again() {
     let mut s = setup();
     let (a, _) = s.window(10, 10, 4);
     s.f().display_dead = true;
-    // Commits are still answered with no display.
+    // Commits are still answered with no display, and no flush is counted.
+    let before = s.c.stats().flushes;
     assert_eq!(s.commit(a, 0, 0, 10, 10), status::OK);
+    assert_eq!(s.commit(a, 0, 0, 10, 10), status::OK);
+    assert_eq!(s.c.stats().flushes, before);
     let old = s.f().display.unwrap();
     assert!(s.f().closed.contains(&old));
     // A new driver through the manager: attached, and everything flushed.
@@ -1013,6 +1016,7 @@ fn stats_count_frames_and_commits() {
     let (_, r) = decode::<gui::StatsReply>(&s.f().take(m)[0], 0).unwrap();
     assert_eq!(r.commits, 1);
     assert!(r.frames >= 2 && r.compose_ns > 0 && r.flush_ns > 0);
+    assert_eq!(r.flushes, r.frames);
 }
 
 #[test]

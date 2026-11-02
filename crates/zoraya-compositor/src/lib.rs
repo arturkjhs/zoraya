@@ -171,6 +171,8 @@ pub struct Stats {
     pub commits: u64,
     pub compose_ns: u64,
     pub flush_ns: u64,
+    /// Flushes a display driver answered.
+    pub flushes: u64,
 }
 
 pub struct Compositor<P: Platform> {
@@ -438,6 +440,9 @@ impl<P: Platform> Compositor<P> {
             Incoming::Closed | Incoming::Refused => {
                 self.platform.close(end);
                 self.inputs[slot] = None;
+                // Keys it held down will never be released (review R10).
+                self.keymap = Keymap::new();
+                self.buttons = 0;
             }
         }
         self.message = message;
@@ -702,6 +707,7 @@ impl<P: Platform> Compositor<P> {
                     commits: s.commits,
                     compose_ns: s.compose_ns,
                     flush_ns: s.flush_ns,
+                    flushes: s.flushes,
                 };
                 let length = reply(&m, header.transaction, &mut self.out);
                 self.platform.write(self.manager, &self.out[..length], &[]);
@@ -801,10 +807,10 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let length = reply(m, transaction, &mut self.out);
-        if self.platform.write(c.end, &self.out[..length], &[]) == Outgoing::Full {
-            // The client stalls only itself (INV-0093-5).
-            c.dropped = c.dropped.saturating_add(1);
-        }
+        // A client whose queue is full loses the reply and stalls only
+        // itself (INV-0093-5). It is not an event, so it is not counted as
+        // a dropped one (review R10).
+        let _ = self.platform.write(c.end, &self.out[..length], &[]);
     }
 
     fn request(&mut self, slot: usize, bytes: &[u8], handles: &mut Vec<P::End>) {
@@ -1006,8 +1012,9 @@ impl<P: Platform> Compositor<P> {
         let n = self
             .platform
             .call(end, &message[..length], &[], &mut answer);
-        if n.is_none() {
-            self.lose_display();
+        match n {
+            Some(_) => self.stats.flushes += 1,
+            None => self.lose_display(),
         }
     }
 

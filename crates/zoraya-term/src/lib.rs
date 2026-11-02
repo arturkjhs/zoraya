@@ -222,11 +222,13 @@ impl Term {
                 _ => self.skip(),
             },
             State::StrEscape => {
-                self.state = if b == b'\\' {
-                    State::Ground
+                if b == b'\\' {
+                    self.state = State::Ground;
                 } else {
-                    State::Str
-                };
+                    // Every byte of a string counts towards its bound.
+                    self.state = State::Str;
+                    self.skip();
+                }
             }
             State::EscapeIntermediate => self.state = State::Ground,
         }
@@ -290,6 +292,7 @@ impl Term {
         match b {
             b'[' => {
                 self.state = State::Csi;
+                self.skipped = 0;
                 self.params = [0; MAX_PARAMS];
                 self.count = 0;
                 self.private = false;
@@ -305,6 +308,12 @@ impl Term {
     }
 
     fn csi(&mut self, b: u8) {
+        // A sequence that never ends is cut at the string bound too.
+        self.skipped += 1;
+        if self.skipped >= MAX_STRING {
+            self.state = State::Ground;
+            return;
+        }
         match b {
             b'0'..=b'9' => {
                 if self.count == 0 {

@@ -202,15 +202,18 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         ];
         self.queue.offer(&mut self.shared, 0, &chain)?;
         self.queue.notify(&mut self.registers, &mut self.shared);
-        // The device's interrupt is taken down before every wait, so that
-        // its line is low when `wait` unmasks it: a line left high by an
-        // earlier completion gives no new edge (virtio-mmio is
-        // edge-triggered on QEMU `virt`).
+        // virtio-mmio is edge-triggered on QEMU `virt`: a completion that
+        // lands while the line is still high from an earlier one makes no
+        // edge. So the device's interrupt is taken down, and the queue looked
+        // at again, before every wait (TASK-14 review, R1).
         let used = loop {
             if let Some(used) = self.queue.take(&self.shared)? {
                 break used;
             }
             self.acknowledge();
+            if let Some(used) = self.queue.take(&self.shared)? {
+                break used;
+            }
             wait()?;
         };
         if used.head != 0 || (used.length as usize) < HEADER || used.length as usize > length {

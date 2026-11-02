@@ -12,7 +12,7 @@ Several programs share one screen and one keyboard. Something must decide what i
 1. No client can read another's pixels or input, or make input (DM-079, DM-082, CP-24).
 2. Shared memory is read once and never trusted (DM-160, ADR-0051).
 3. A hostile or hung client cannot stop the compositor or other clients (CP-14).
-4. Every frame shown is whole: a client commits, and nothing half-drawn is shown on its behalf (DM-083).
+4. What is shown of a client is what it committed: the compositor never shows pixels a client has not committed (DM-083). A client that writes the rectangle it is committing while the compositor copies it can still tear its own window.
 5. Small and local: no remote display at this stage (DM-080).
 
 ## Considered options
@@ -27,7 +27,7 @@ Several programs share one screen and one keyboard. Something must decide what i
 ### Option B: Wayland on DRM/KMS (Linux baseline, current)
 - **Description:** Clients render into buffers they share with the compositor (shared memory or DMA-buf), attach and commit damage, and get a frame callback; the compositor owns input and routes it (GR-016).
 - **Evidence for:** Drivers 1, 3, 4 (GR-016), proven across Linux desktops.
-- **Evidence against:** The compositor composes from the client's buffer, which the client can change at any time; Wayland relies on a release protocol and client discipline for that. Its minimal core fragmented into extensions (DM-084).
+- **Evidence against:** The compositor composes from the client's buffer whenever it recomposes, so a client that writes outside a commit can change what is shown; Wayland relies on a release protocol and client discipline for that. A client writing the rectangle being read tears its window in both models. Its minimal core fragmented into extensions (DM-084).
 - **Cost:** *(estimate)* As Option C, plus a buffer release protocol.
 - **Precedent:** Weston, Mutter, KWin.
 
@@ -58,6 +58,8 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - **Events.** Sent with `channel_write`; `WouldBlock` drops the event and counts it for that client (ADR-0094). The compositor never waits for a client.
 - **What no client can do.** There is no message that returns pixels, names another client, creates input, or reads the display. A client's memory is mapped read-only by the compositor, so the compositor cannot write into it either.
 - **Without a display.** If the display driver goes, the compositor goes on accepting commits into its copies and replies to them; when a new driver is attached it attaches the scanout again and flushes the whole screen.
+
+**Driver calls block.** Each round's `Flush`, and the `Info` and `Attach` of a new display driver, wait for the driver's reply, with a 2 s deadline. A hung driver therefore stops input routing and every client for up to 2 s before the compositor drops it, against driver 3 for the driver (not for clients); and a driver slower than 2 s to come up is dropped and costs a restart. A flush that does not block, with replies matched by transaction, would remove this; it is follow-up work.
 
 **Tensions with accepted ADRs.** *ADR-0056* is proposed, so the compositor's memory per client is bounded only by the limits above.
 

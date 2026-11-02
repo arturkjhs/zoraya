@@ -63,6 +63,7 @@ fn every_message_round_trips_and_decodes_totally() {
         commits: 2,
         compose_ns: 3,
         flush_ns: 4,
+        flushes: 5,
     });
 }
 

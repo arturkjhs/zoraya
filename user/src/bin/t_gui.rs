@@ -429,11 +429,16 @@ fn driver_restarts(gui: &mut Gui, a: &mut Client) {
     let before = stats(gui);
     assert_eq!(a.whole(), status::OK);
     let after = stats(gui);
-    assert!(after.flush_ns > before.flush_ns, "the new driver flushes");
+    assert!(
+        after.flushes > before.flushes,
+        "the new driver answers flushes"
+    );
     if let Some(Some(r)) = gui.inputd.first().copied() {
         {
             job_kill(r.job).expect("kill an input driver");
             wait_exit(r.process);
+            // `restart_input` is true only once the compositor accepted the
+            // new driver's channel.
             assert!(gui.restart_input(0), "restart the input driver");
             settle(gui);
             let r = gui.inputd[0].expect("a new input driver");

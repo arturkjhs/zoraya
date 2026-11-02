@@ -17,7 +17,8 @@ screen zosh$ _
 type cat a.txt\r
 screen hi
 screen zosh$ _
-# F12 is the compositor's: with one window, focus stays and nothing is typed.
+# F12 with one window: focus stays, and typing goes on. (That F12 never reaches a
+# client is checked by t_gui: the terminal would send nothing for it anyway.)
 key f12
 type ls\r
 screen a.txt

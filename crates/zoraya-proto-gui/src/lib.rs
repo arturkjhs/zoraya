@@ -129,6 +129,8 @@ protocol! {
         commits: u64,
         compose_ns: u64,
         flush_ns: u64,
+        /// Flushes a display driver answered.
+        flushes: u64,
     }
 }
 

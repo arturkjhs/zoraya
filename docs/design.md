@@ -358,8 +358,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
 - **`gpud`** (`zoraya-virtio-gpu`, ADR-0090). `VERSION_1` only, the control queue only, one command at a time with
   its response type and length checked. It serves the compositor `zoraya-proto-display`: `Info`, `Attach` (the
   compositor's framebuffer object, pinned, becomes the resource's backing) and `Flush` (transfer and flush, refused
-  outside the resource). Under TCG a completion's interrupt is sometimes missed, so a wait looks at the queue every
-  10 ms and gives up after a second (Known limitations).
+  outside the resource). Before each wait it takes the device's interrupt down and looks at the queue again:
+  virtio-mmio is edge-triggered on QEMU `virt`. A wait also looks at the queue every 10 ms, as a guard, and gives up
+  after a second.
 - **`inputd`** (`zoraya-virtio-input`, ADR-0092). One process per device; it reads the configuration to learn whether
   it drives a keyboard or an absolute pointer, keeps 64 event buffers offered, checks every event, and sends one
   `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535. A frame that does not fit is dropped and
@@ -572,8 +573,8 @@ or `exit` turns the machine off.
   until stage 6 (ADR-0096). The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until
-  ADR-0056. Under TCG a virtio-gpu completion's interrupt is sometimes not seen, about once per driver's life; `gpud`
-  polls every 10 ms and reports it once; the cause is not found (backlog). A QMP socket's path must be under 104 bytes
+  ADR-0056. The compositor waits up to 2 s for the display driver on each flush (ADR-0093), so a hung driver stalls
+  every client that long. NUL cannot be typed in the window. A QMP socket's path must be under 104 bytes
   on macOS, so the tests keep it in `build/`. The runner's key latency figure under HVF is bounded by the cost of one
   screendump.
 

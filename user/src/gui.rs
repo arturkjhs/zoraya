@@ -164,6 +164,14 @@ pub fn wait_reply(end: Handle, reply: &mut [u8], nanos: u64) -> Option<usize> {
     Some(sizes.bytes as usize)
 }
 
+/// Gives the compositor a driver's channel and sees it accepted.
+fn attached<'a, M: Message<'a>>(manager: Handle, m: &M, end: Handle) -> bool {
+    let mut reply = [0u8; 64];
+    manager_send(manager, m, Some(end), 1, &mut reply)
+        .and_then(|n| manager_reply::<gui::ManagerDone>(&reply[..n]))
+        .is_some_and(|d| d.status.0 == gui::status::OK)
+}
+
 /// The GUI's processes and `init`'s end of the compositor's manager
 /// channel.
 pub struct Gui {
@@ -192,12 +200,25 @@ impl Gui {
                 None => inputd.push(None),
             }
         }
-        let (manager, theirs) = channel_create().ok()?;
+        // On failure the drivers started so far are ended: nothing else
+        // would end them (review R7).
+        let give_up = |gpud: Running, inputd: Vec<Option<Running>>| {
+            gpud.end();
+            inputd.into_iter().flatten().for_each(Running::end);
+        };
+        let Ok((manager, theirs)) = channel_create() else {
+            give_up(gpud, inputd);
+            return None;
+        };
         let mut entries = alloc::vec![console(), moved(5, theirs), moved(6, display)];
         for (i, end) in ends.iter().enumerate() {
             entries.push(moved(7 + i as u32, *end));
         }
-        let (job, process) = start("compd", &entries, &[])?;
+        let Some((job, process)) = start("compd", &entries, &[]) else {
+            let _ = handle_close(manager);
+            give_up(gpud, inputd);
+            return None;
+        };
         Some(Gui {
             gpu,
             input_devices: inputs.to_vec(),
@@ -231,7 +252,7 @@ impl Gui {
             return false;
         };
         self.gpud = Some(running);
-        manager_send(self.manager, &gui::AttachDisplay {}, Some(end), 0, &mut []).is_some()
+        attached(self.manager, &gui::AttachDisplay {}, end)
     }
 
     /// Starts input driver `i` again and gives it to the compositor.
@@ -248,7 +269,7 @@ impl Gui {
             return false;
         };
         self.inputd[i] = Some(running);
-        manager_send(self.manager, &gui::AttachInput {}, Some(end), 0, &mut []).is_some()
+        attached(self.manager, &gui::AttachInput {}, end)
     }
 
     /// Ends every GUI process.

@@ -162,6 +162,18 @@ fn memory_is_bounded() {
         "the string was cut and the rest printed"
     );
     assert_eq!(t.memory(), before);
+    // An escape inside a string still counts (review R2), and so does a
+    // control sequence that never ends.
+    for opening in [&b"\x1b]"[..], b"\x1b["] {
+        let mut t = Term::new(80, 24);
+        t.write(opening);
+        for _ in 0..100_000 {
+            t.write(if opening[1] == b']' { b"\x1bA" } else { b"1;" });
+        }
+        t.write(b"\n\nvisible");
+        let shown: String = (0..24).map(|y| t.line(y)).collect();
+        assert!(shown.contains("visible"), "{opening:?}");
+    }
 }
 
 /// INV-0096-1: random and structured bytes never panic and keep the cursor
