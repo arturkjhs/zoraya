@@ -14,6 +14,10 @@
 #   make test       all of the above plus fmt, clippy and the ADR checks:
 #                   a summary, with each step's output in build/logs/
 #                   (V=1 prints everything, KEEP_GOING=1 runs on after a failure)
+#   make fetch-ports  download the ports' pinned sources (the only step with
+#                   network; ADR-0109)
+#   make ports      build build/sysroot and build/rootfs-posix from them and
+#                   run the host checks (make check-ports alone)
 #   make mutants    the mutation lists of tools/mutants (not part of make
 #                   test); survivors in build/mutants/report.md
 #   make mutants-host CRATE=name
@@ -241,9 +245,13 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
+
+# INV-0109-3 and INV-0109-4: the fetch step and the cache, offline.
+check-fetch-ports:
+	ports/test-fetch.sh
 
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
@@ -277,7 +285,7 @@ check-host-paths:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths test-qemu test-boot test-files test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-fetch-ports test-qemu test-boot test-files test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

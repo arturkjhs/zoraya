@@ -381,12 +381,17 @@ check-ports: | tools
 	$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
 	@echo "== libc.a against the tier list (INV-0100-1, INV-0100-2, INV-0005-1, INV-0005-2)"
 	$(SURFACE_CHECK) check $(TIER_LIST) $(LIBC)
+	@echo "== the excluded musl files are exactly the ones the shim refuses (INV-0141-2)"
+	@$(MAKE) -s -f ports/musl/musl.mk MUSL=$(MUSL) OBJ=$(OBJ)/musl ZCC=$(ZCC) LIST=$(MUSL_LIST) check-excluded
 	@echo "== the same check fails on broken copies of libc.a"
 	ports/check-broken-archives.sh $(SURFACE_CHECK) $(ZAR) $(ZCC) $(TIER_LIST) $(LIBC) $(OBJ)/broken
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
-	@echo "== no port was compiled with __linux__ (INV-0109-2)"
+	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
 	@! grep -l -e '-D__linux' $(LOGS)/*.log
+	$(ZCC) -dM -E -x c /dev/null > $(OBJ)/zcc-predefs.h
+	grep -q '__zoraya__' $(OBJ)/zcc-predefs.h && ! grep -q -e '__linux' -e '__unix' $(OBJ)/zcc-predefs.h
+	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi
 	@echo "== tcc links a hello world against the sysroot (ADR-0109 item 7)"
 	@$(MAKE) -f ports/Makefile tcc-host
 	rm -rf $(HELLO_DIR) && mkdir -p $(HELLO_DIR)

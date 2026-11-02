@@ -56,3 +56,10 @@ $(OBJ)/%.o: $(MUSL)/%.s
 $(OBJ)/%.o: $(MUSL)/%.S
 	@mkdir -p $(dir $@)
 	$(ZCC) $(CFLAGS) -c -o $@ $<
+
+# INV-0141-2: every excluded file is refused by the shim (compiling it fails).
+check-excluded: $(OBJ)/src/internal/version.h
+	@for f in $(EXCLUDED); do \
+	  if $(ZCC) $(CFLAGS) -c -o /dev/null $(MUSL)/$$f 2>/dev/null; then \
+	    echo "musl: $$f is excluded but compiles with the shim"; exit 1; fi; done
+	@echo "musl: all $(words $(EXCLUDED)) excluded files are refused by the shim"
