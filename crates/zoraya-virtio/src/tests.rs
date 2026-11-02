@@ -274,7 +274,9 @@ impl Shared for Fake {
     fn acquire(&self) {}
 }
 
-fn driver(hostile: Hostile) -> (Rc<RefCell<Device>>, Result<Driver<Fake, Fake>, Error>) {
+type Started = (Rc<RefCell<Device>>, Result<Driver<Fake, Fake>, Error>);
+
+fn driver(hostile: Hostile) -> Started {
     let device = Device::new(hostile);
     let driver = Driver::new(Fake(device.clone()), Fake(device.clone()), QUEUE_BASE);
     (device, driver)

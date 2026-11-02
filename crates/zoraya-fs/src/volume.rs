@@ -15,7 +15,7 @@ use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::device::{BLOCK_SIZE, Block, BlockDevice};
+use crate::device::{BLOCK_SIZE, Block, BlockDevice, new_block};
 use crate::error::FsError;
 use crate::format::{
     Attr, BITS_PER_BITMAP, BlockPtr, Body, Child, DataRef, K_DIRENT, K_EXTENT, K_ORPHAN, Key,
@@ -194,10 +194,10 @@ pub fn mkfs<D: BlockDevice>(dev: &mut D, opts: MkfsOptions) -> Result<(), FsErro
         .map_err(|_| FsError::Internal)?;
     let tree_root = BlockPtr {
         addr: leaf_addr,
-        csum: crate::crc32c::checksum64(&leaf_block),
+        csum: crate::crc32c::checksum64(&leaf_block[..]),
         generation,
     };
-    let mut writes: Vec<(u64, Box<Block>)> = vec![(leaf_addr, Box::new(leaf_block))];
+    let mut writes: Vec<(u64, Box<Block>)> = vec![(leaf_addr, leaf_block)];
     // Used: root slots, the leaf, the bitmaps, the allocator root.
     let first_bitmap = leaf_addr + 1;
     let alloc_addr = first_bitmap + nbitmaps;
@@ -220,19 +220,19 @@ pub fn mkfs<D: BlockDevice>(dev: &mut D, opts: MkfsOptions) -> Result<(), FsErro
             encode_bitmap(vid, addr, generation, i as u32, bits).map_err(|_| FsError::Internal)?;
         bitmaps.push(BlockPtr {
             addr,
-            csum: crate::crc32c::checksum64(&blk),
+            csum: crate::crc32c::checksum64(&blk[..]),
             generation,
         });
-        writes.push((addr, Box::new(blk)));
+        writes.push((addr, blk));
     }
     let ablk =
         encode_alloc_root(vid, alloc_addr, generation, &bitmaps).map_err(|_| FsError::Internal)?;
     let alloc_root = BlockPtr {
         addr: alloc_addr,
-        csum: crate::crc32c::checksum64(&ablk),
+        csum: crate::crc32c::checksum64(&ablk[..]),
         generation,
     };
-    writes.push((alloc_addr, Box::new(ablk)));
+    writes.push((alloc_addr, ablk));
     let refs: Vec<(u64, &Block)> = writes.iter().map(|(a, b)| (*a, &**b)).collect();
     dev.write(&refs).map_err(|_| FsError::StorageFailed)?;
     dev.flush().map_err(|_| FsError::StorageFailed)?;
@@ -671,23 +671,27 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         }
     }
 
-    fn set_extent(&mut self, id: u64, index: u64, data: Block) -> Result<(), FsError> {
+    fn set_extent(&mut self, id: u64, index: u64, data: Box<Block>) -> Result<(), FsError> {
         self.acct.dirty_data += 1;
         let old = self.tins(
             Key::extent(id, index),
-            Value::Extent(DataRef::Dirty(Rc::new(data))),
+            Value::Extent(DataRef::Dirty(Rc::from(data))),
         )?;
         self.drop_data(old);
         Ok(())
     }
 
     /// Block `index` of object `id`: its content, or `None` for a hole.
-    fn get_block(&mut self, id: u64, index: u64) -> Result<Option<Block>, FsError> {
+    fn get_block(&mut self, id: u64, index: u64) -> Result<Option<Box<Block>>, FsError> {
         match self.tget(&Key::extent(id, index))? {
             None => Ok(None),
-            Some(Value::Extent(DataRef::Dirty(b))) => Ok(Some(*b)),
+            Some(Value::Extent(DataRef::Dirty(b))) => {
+                let mut copy = new_block();
+                copy.copy_from_slice(&b[..]);
+                Ok(Some(copy))
+            }
             Some(Value::Extent(DataRef::Clean(p))) => match self.io.read_data(&p) {
-                Ok(b) => Ok(Some(*b)),
+                Ok(b) => Ok(Some(b)),
                 Err(e) => {
                     self.corrupt_reads += 1;
                     Err(e)
@@ -754,7 +758,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         if len > MAX_LINK_TARGET {
             return Err(self.inconsistent());
         }
-        let b = self.get_block(id, 0)?.unwrap_or([0; BLOCK_SIZE]);
+        let b = self.get_block(id, 0)?.unwrap_or_else(new_block);
         let s = b.get(..len).ok_or(FsError::Internal)?;
         core::str::from_utf8(s)
             .map(ToString::to_string)
@@ -978,7 +982,7 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         if let Some(s) = target
             && !s.is_empty()
         {
-            let mut b = [0u8; BLOCK_SIZE];
+            let mut b = new_block();
             b.get_mut(..s.len())
                 .ok_or(FsError::InvalidArgument)?
                 .copy_from_slice(s.as_bytes());
@@ -1270,9 +1274,9 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 let within = (pos % bs) as usize;
                 let n = core::cmp::min(BLOCK_SIZE - within, (end - pos) as usize);
                 let mut b = if within == 0 && n == BLOCK_SIZE {
-                    [0u8; BLOCK_SIZE]
+                    new_block()
                 } else {
-                    v.get_block(e.id, index)?.unwrap_or([0; BLOCK_SIZE])
+                    v.get_block(e.id, index)?.unwrap_or_else(new_block)
                 };
                 let src_off = (pos - offset) as usize;
                 let src = data.get(src_off..src_off + n).ok_or(FsError::Internal)?;
@@ -1635,19 +1639,19 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 .ok_or(FailReason::Internal)?;
             let blk = encode_bitmap(vid, p.addr, g, i as u32, &bytes)
                 .map_err(|_| FailReason::Internal)?;
-            p.csum = crate::crc32c::checksum64(&blk);
+            p.csum = crate::crc32c::checksum64(&blk[..]);
             p.generation = g;
-            writes.push((p.addr, Box::new(blk)));
+            writes.push((p.addr, blk));
         }
         let aaddr = alloc_root_addr.ok_or(FailReason::Internal)?;
         let ablk =
             encode_alloc_root(vid, aaddr, g, &new_bitmaps).map_err(|_| FailReason::Internal)?;
         let alloc_root = BlockPtr {
             addr: aaddr,
-            csum: crate::crc32c::checksum64(&ablk),
+            csum: crate::crc32c::checksum64(&ablk[..]),
             generation: g,
         };
-        writes.push((aaddr, Box::new(ablk)));
+        writes.push((aaddr, ablk));
         // (a)–(c) Write every new block, wait, flush.
         let refs: Vec<(u64, &Block)> = writes.iter().map(|(a, b)| (*a, &**b)).collect();
         self.io
@@ -1807,7 +1811,9 @@ fn write_child(
                             csum: crate::crc32c::checksum64(&b[..]),
                             generation: g,
                         };
-                        writes.push((addr, Box::new(**b)));
+                        let mut copy = new_block();
+                        copy.copy_from_slice(&b[..]);
+                        writes.push((addr, copy));
                         Value::Extent(DataRef::Clean(p))
                     }
                     v => v.clone(),
@@ -1835,10 +1841,10 @@ fn write_child(
         .map_err(|_| FailReason::Internal)?;
     let p = BlockPtr {
         addr,
-        csum: crate::crc32c::checksum64(&blk),
+        csum: crate::crc32c::checksum64(&blk[..]),
         generation: g,
     };
-    writes.push((addr, Box::new(blk)));
+    writes.push((addr, blk));
     written.push((p, Rc::new(clean)));
     Ok(p)
 }

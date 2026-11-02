@@ -19,12 +19,13 @@ use zoraya_protocol::{
 };
 
 type End = u32;
+type Queue = VecDeque<(Vec<u8>, Vec<End>)>;
 
 #[derive(Default)]
 struct Net {
     next: End,
-    queues: BTreeMap<End, VecDeque<(Vec<u8>, Vec<End>)>>,
-    replies: BTreeMap<End, VecDeque<(Vec<u8>, Vec<End>)>>,
+    queues: BTreeMap<End, Queue>,
+    replies: BTreeMap<End, Queue>,
     closed: BTreeSet<End>,
     kinds: BTreeMap<End, HandleKind>,
     interests: BTreeMap<u64, (End, Interest)>,

@@ -1167,7 +1167,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.handle_of(target).ok_or(status::STORAGE_FAILED)
     }
 
-    fn rename(&mut self, i: usize, t: u32, m: &proto::Rename<'_>, handles: &mut Vec<T::End>) {
+    fn rename(&mut self, i: usize, t: u32, m: &proto::Rename<'_>, handles: &mut [T::End]) {
         use proto::rename_mode as modes;
         let right = proto::rights::RENAME;
         if !self.has(i, right) {
@@ -1190,7 +1190,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.done_result(i, t, r.map(|()| 0));
     }
 
-    fn publish(&mut self, i: usize, t: u32, m: &proto::Publish<'_>, handles: &mut Vec<T::End>) {
+    fn publish(&mut self, i: usize, t: u32, m: &proto::Publish<'_>, handles: &mut [T::End]) {
         let right = proto::rights::PUBLISH;
         if !self.has(i, right) {
             return self.done(i, t, status::ACCESS_DENIED, 0);

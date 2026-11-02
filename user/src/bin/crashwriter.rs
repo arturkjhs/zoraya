@@ -2,16 +2,16 @@
 #![no_main]
 
 //! Writes files for the crash test, without end, and says which are durable.
-//! `f<i>` holds `bytes(i)` bytes of a pattern. Every eighth file is followed
-//! by a `sync`, and only after it returns does the line appear. It starts
-//! after what the volume already holds, so a run can follow a crash.
+//! `f<i>` holds the bytes of `bytes_of(i)`. `crashwriter <n>` syncs after every
+//! `n` files, and only after the sync returns does the line appear. With a
+//! large `n`, the engine's own commits run between them.
 
 use alloc::format;
 
 use zoraya_abi::Handle;
 use zoraya_proto_file::open_flags;
 use zoraya_user::files::{ALL, File, bytes_of, status_name};
-use zoraya_user::println;
+use zoraya_user::{println, startup};
 
 extern crate alloc;
 
@@ -20,6 +20,13 @@ fn main() -> i32 {
     let root = File {
         end: Handle::new(5).expect("slot"),
     };
+    let every = startup()
+        .argv
+        .next()
+        .and_then(|a| core::str::from_utf8(a).ok())
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(8u64)
+        .max(1);
     println!("crash: start");
     let mut i = 0u64;
     loop {
@@ -36,7 +43,7 @@ fn main() -> i32 {
             return 1;
         }
         drop(file);
-        if (i + 1).is_multiple_of(8) {
+        if (i + 1).is_multiple_of(every) {
             if let Err(s) = root.sync() {
                 println!("crash: sync: {}", status_name(s));
                 return 1;

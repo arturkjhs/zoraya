@@ -5,7 +5,7 @@ use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
-use crate::device::{BLOCK_SIZE, Block, BlockDevice, DevError};
+use crate::device::{Block, BlockDevice, DevError};
 use crate::error::FsError;
 use crate::format::{BlockPtr, Body, Key, Node};
 use crate::tree::Loader;
@@ -57,7 +57,7 @@ impl<D: BlockDevice> Io<D> {
 
     pub fn read_block(&mut self, addr: u64) -> Result<Box<Block>, DevError> {
         self.reads += 1;
-        let mut b = Box::new([0u8; BLOCK_SIZE]);
+        let mut b = crate::device::new_block();
         self.dev.read(addr, &mut b)?;
         Ok(b)
     }

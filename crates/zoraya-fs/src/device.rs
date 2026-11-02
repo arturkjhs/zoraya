@@ -18,6 +18,9 @@
 //!   (INV-0015-2).
 //! - **Errors are typed** (rule 6) and never retried by the engine.
 
+use alloc::boxed::Box;
+use alloc::vec;
+
 /// Bytes in a filesystem block (ADR-0015 rule 1, an assumption there).
 pub const BLOCK_SIZE: usize = 4096;
 /// Bytes in a device sector (virtio units).
@@ -27,6 +30,15 @@ pub const SECTORS_PER_BLOCK: u64 = (BLOCK_SIZE / SECTOR_SIZE) as u64;
 
 /// One block of data.
 pub type Block = [u8; BLOCK_SIZE];
+
+/// A zeroed block on the heap, without passing through the stack: the engine
+/// runs on the 64 KiB stack of a process, and it recurses over the tree.
+pub fn new_block() -> Box<Block> {
+    match vec![0; BLOCK_SIZE].into_boxed_slice().try_into() {
+        Ok(block) => block,
+        Err(_) => unreachable!("the length is the block's"),
+    }
+}
 
 /// How a device request failed (ADR-0015 rule 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

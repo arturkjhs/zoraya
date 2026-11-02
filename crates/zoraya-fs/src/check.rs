@@ -837,19 +837,19 @@ fn rebuild_allocator<D: BlockDevice>(
             .map_err(|_| crate::DevError::IoError)?;
         ptrs.push(BlockPtr {
             addr,
-            csum: crate::crc32c::checksum64(&blk),
+            csum: crate::crc32c::checksum64(&blk[..]),
             generation: g,
         });
-        writes.push((addr, Box::new(blk)));
+        writes.push((addr, blk));
     }
     let ab = encode_alloc_root(rec.volume_id, alloc_addr, g, &ptrs)
         .map_err(|_| crate::DevError::IoError)?;
     let alloc_root = BlockPtr {
         addr: alloc_addr,
-        csum: crate::crc32c::checksum64(&ab),
+        csum: crate::crc32c::checksum64(&ab[..]),
         generation: g,
     };
-    writes.push((alloc_addr, Box::new(ab)));
+    writes.push((alloc_addr, ab));
     let refs: Vec<(u64, &Block)> = writes.iter().map(|(a, b)| (*a, &**b)).collect();
     dev.write(&refs)?;
     dev.flush()?;

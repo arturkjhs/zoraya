@@ -1,0 +1,98 @@
+# First boot of the roadmap's criterion, and every file command with its errors.
+! panicked
+! storage failed
+< zosh$ 
+> ls\r
+< README
+< docs/
+< hello.txt
+< zosh$ 
+> cat hello.txt\r
+< hello from the filesystem
+< zosh$ 
+> cat missing\r
+< zosh: cat: NotFound
+< zosh$ 
+> cat docs\r
+< zosh: cat: 
+< zosh$ 
+> write /notes.txt first line\r
+< zosh$ 
+> append notes.txt second line\r
+< zosh$ 
+> cat notes.txt\r
+< first line
+< second line
+< zosh$ 
+> stat notes.txt\r
+< file size 23 mtime 
+< zosh$ 
+> stat docs\r
+< directory size
+< zosh$ 
+> stat missing\r
+< zosh: stat: NotFound
+< zosh$ 
+> mkdir work\r
+< zosh$ 
+> mkdir work\r
+< zosh: mkdir: Exists
+< zosh$ 
+> mkdir no/such/place\r
+< zosh: mkdir: NotFound
+< zosh$ 
+> cd work\r
+< zosh$ 
+> pwd\r
+< /work
+< zosh$ 
+> write inner.txt kept\r
+< zosh$ 
+> cd ..\r
+< zosh$ 
+> pwd\r
+< /
+< zosh$ 
+> cd missing\r
+< zosh: cd: NotFound
+< zosh$ 
+> cd hello.txt\r
+< zosh: cd: NotDirectory
+< zosh$ 
+> ls work\r
+< inner.txt
+< zosh$ 
+> rm work\r
+< zosh: rm: NotEmpty
+< zosh$ 
+> rm missing\r
+< zosh: rm: NotFound
+< zosh$ 
+> write gone.txt soon removed\r
+< zosh$ 
+> rm gone.txt\r
+< zosh$ 
+> cat gone.txt\r
+< zosh: cat: NotFound
+< zosh$ 
+> write old.txt moved\r
+< zosh$ 
+> mv old.txt work/new.txt\r
+< zosh$ 
+> mv missing other\r
+< zosh: mv: NotFound
+< zosh$ 
+> cat old.txt\r
+< zosh: cat: NotFound
+< zosh$ 
+> cat ../hello.txt\r
+< zosh: cat: InvalidArgument
+< zosh$ 
+> mv\r
+< usage: mv
+< zosh$ 
+> sync\r
+< zosh$ 
+> write unsynced.txt the shell never asked\r
+< zosh$ 
+> poweroff\r

@@ -32,7 +32,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot ramdisk fmt-check check-user-access clippy adr-check clean \
+.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash tools-storage ramdisk fmt-check check-user-access clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -156,6 +156,10 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) $(TEST_DISK)
 SHELL_SCRIPT := tests/shell/console.script
 LEAK_SCRIPT := tests/shell/leak.script
 EXIT_SCRIPT := tests/shell/exit.script
+FILES_WRITE := tests/shell/files-write.script
+FILES_READ := tests/shell/files-read.script
+CRASH_IMAGE := $(BUILD)/crash.img
+CRASH_ROUNDS ?= 10
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
@@ -168,6 +172,23 @@ test-boot: $(KERNEL) $(RUNNER)
 	$(RUN_BOOT) --label boot-tcg-smp4-gicv2 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 $(KERNEL)
 	$(RUN_BOOT) --label boot-tcg-el2 -- $(RUN_QEMU) --test --keys --accel tcg --machine-opt virtualization=on $(KERNEL)
 	$(RUN_BOOT) --label boot-tcg-smp4-gicv3 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(KERNEL)
+
+# The roadmap's criterion: two boots of one image, and the image is clean.
+test-files: $(KERNEL) $(RUNNER) tools-storage
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_WRITE) --label files-write -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_READ) --label files-read -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+
+# Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
+test-crash: $(KERNEL) tools-storage
+	$(CARGO) build -q -p zoraya-test-runner
+	target/debug/zoraya-crash-test --rounds $(CRASH_ROUNDS) --kernel $(KERNEL) --image $(CRASH_IMAGE)
+
+tools-storage:
+	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
+	@mkdir -p $(BUILD)
 
 fmt-check:
 	$(CARGO) fmt --all --check
@@ -186,7 +207,7 @@ adr-check:
 check-user-access:
 	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
 
-test: fmt-check clippy test-unit adr-check check-user-access test-qemu test-boot
+test: fmt-check clippy test-unit adr-check check-user-access test-qemu test-boot test-files test-crash
 	@echo "make test: all checks passed"
 
 clean:
