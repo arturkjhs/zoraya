@@ -56,6 +56,7 @@ fetch-ports:
 	tools/fetch-ports.sh $(LOCK) $(CACHE)
 
 ports: rootfs
+	@echo "ports: built with $$($(CLANG) --version | head -1) and $$($(LLD) --version)"
 	@$(MAKE) -f ports/Makefile check-ports
 
 clean-ports:

@@ -48,6 +48,41 @@ These are not crates, but the build depends on them:
 
 `dtc` (Device Tree Compiler) is useful for inspecting the fixtures but is not needed by any build or test.
 
+### The cross toolchain (stage 6b, ADR-0109 item 10)
+
+Needed by `make fetch-ports` and `make ports` only; `make test` needs none of them except the POSIX tools it already
+uses (its `check-fetch-ports` step runs `curl` on a local `file://` URL and `shasum` or `sha256sum`). `make ports`
+prints the clang it uses.
+
+| Tool | Version used | Where it comes from |
+|---|---|---|
+| clang, any version that targets `aarch64-unknown-none-elf` and has `--ld-path` (`tools/zcc`) | Apple clang 21.0.0 (clang-2100.0.123.102) on the M4; on Linux CI the runner's `clang` (unverified here) | Xcode Command Line Tools / distribution |
+| `rust-lld` (through the toolchain's `gcc-ld/ld.lld`) | LLD 23.1.1, from Rust 1.99.1 | rustup, with the pinned toolchain; nothing to add |
+| `core` and `compiler_builtins` for `aarch64-unknown-none` (in `libc.a`'s stub, ADR-0140) | from Rust 1.99.1 | the pinned toolchain's target; not a crate from a registry |
+| the host's C compiler (`cc`): dash's helpers, tcc's `c2str` and the host tcc of the link check | Apple clang 21.0.0 on the M4 | Xcode Command Line Tools / distribution |
+| `curl`, `shasum` or `sha256sum` (`make fetch-ports`) | curl 8.7.1 | macOS / distribution |
+| `patch`, `tar` with gzip and bzip2, `awk`, `sed` | the host's | macOS / distribution |
+| GNU sed, as `gsed` or `sed` (toybox's build scripts) | Homebrew's `gnu-sed` on the M4 | `brew install gnu-sed` on macOS; the default `sed` on Linux |
+
+`rust-objcopy`, which ADR-0109 item 10 lists, is not used: it needs the `llvm-tools` component, which the minimal
+profile of `rust-toolchain.toml` does not install, so `posix-surface-check` renames symbols itself (ADR-0141).
+
+## Ported programs (third-party C, stage 6b)
+
+Not crates: C sources built by `ports/Makefile` into `build/sysroot` and `build/rootfs-posix`, fetched by
+`make fetch-ports` and never committed. Versions and hashes are in `ports/sources.lock`, licences and patches in
+`ports/README.md`. Why they are not written in-house: ADR-0100 (musl's pure C) and ADR-0005 (the programs are the
+measured T1 workloads).
+
+| Program | Version | Licence | Used for |
+|---|---|---|---|
+| musl | 1.2.5 | MIT | the retained C of `libc.a` and the sysroot's headers (ADR-0100) |
+| dash | 0.5.13.5 | BSD-3-Clause | `/bin/sh` |
+| GNU make | 4.4.1 | GPL-3.0-or-later | `/bin/make` |
+| toybox | 0.8.15 | 0BSD | `cat head ls mv rm sleep touch true uname sort wc yes` |
+| busybox | 1.38.0 | GPL-2.0-only | `tr`, `diff` |
+| TinyCC | `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL-2.1-or-later | `/bin/tcc`, `libtcc1.a` |
+
 ### Mutation testing
 
 `make mutants` runs `tools/mutants` (`zoraya-mutants`, `std` only): hand-written mutations, each with the tests that

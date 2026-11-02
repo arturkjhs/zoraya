@@ -406,6 +406,40 @@ Under HVF the flush that no longer blocks (ADR-0093, Decision) lowered the full-
 and raised compose time from 0.48 ms, between runs of the same tests; under TCG nothing moved. A guess, not measured:
 the compositor now composes while QEMU's device still reads the framebuffer for the previous flush.
 
+## Cross toolchain and ports (as built)
+
+Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
+[ADR-0109](adr/0109-building-the-toolchain.md) and the proposed ADR-0140 to ADR-0143. Everything here runs on the
+host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6c. `ports/README.md` has the details.
+
+- **`make fetch-ports`** downloads the archives of `ports/sources.lock` (TASK-02's pins and hashes, musl 1.2.5 added,
+  tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. It is the only
+  step with network. `make ports` builds from that cache only and stops with a message naming `make fetch-ports` when
+  an archive is missing.
+- **`tools/zcc`** is the C compiler for `aarch64-unknown-zoraya`: the host's clang with
+  `--target=aarch64-unknown-none-elf -D__zoraya__ -nostdinc -isystem build/sysroot/usr/include -fno-pic
+  -fno-stack-protector`, linking with the pinned toolchain's `rust-lld` as a static `ET_EXEC` from 4 MiB
+  (`crt1.o crti.o ... -lc crtn.o`, `-z norelro`, no build id). It refuses `-D__linux__`, `-shared` and `-pie`. Neither
+  `__linux__` nor `__unix__` is defined (ADR-0143).
+- **`tools/zoraya-ar`** writes deterministic GNU `ar` archives with a symbol index (also as `ranlib`).
+- **`libc.a`** is 737 objects of musl's retained directories, compiled with the system-call shim, and 513 members of
+  the stub `zoraya-posix` (ADR-0140: a generated Rust static library in which every function of the Rust half fails
+  with `ENOSYS` or traps, and which brings `compiler_builtins`). The shim routes eleven calls; 34 files that make
+  other calls are not compiled; 750 names outside the tier list are renamed `__zoraya_*` in every object, so that the
+  archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141). The sysroot also has
+  `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
+  tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
+- **The ports.** dash (TASK-02's M4 patch), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched),
+  toybox (`cat head ls mv rm sleep touch true uname sort wc yes`, unpatched) and tcc (a `Zoraya` target and a fix
+  for `SHF_EXCLUDE` sections) build with `zcc`; `build/rootfs-posix` has them in `/bin` with a symbolic link per
+  applet and the sysroot as `/usr`. No port needed `__linux__`.
+- **`make check-ports`** (the end of `make ports`): the tier list is the CSV's (INV-0100-1); `posix-surface-check`
+  checks `libc.a` (exports, the exclusion table, missing names, unresolved references, the symbol index, `svc`) and
+  fails on four broken copies of it; every excluded musl file is refused by the shim; `zoraya-elf-check` runs the
+  loader's parser over every program and over the `a.out` that a host build of the same tcc links against the
+  sysroot (INV-0109-1, ADR-0143); both compilers' predefined macros. `make test` runs only the fast part: the tools'
+  host tests and the fetch step's test (`make check-fetch-ports`).
+
 ## Tests
 
 `make test` prints one line per step and keeps each step's output in `build/logs/<step>.log`: a failed step gives its
@@ -418,6 +452,7 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 - `make check-user-access` and `make check-host-paths`: the unprivileged load and store forms only in `usercopy.rs`
   (INV-0031-4), and no home-directory paths or email addresses in tracked files outside `docs/research/` and
   `tools/posix-surface/results/`;
+- `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP and reads QEMU screendumps back as text by matching every
@@ -641,8 +676,12 @@ or `exit` turns the machine off.
   unmountable. The first create after each mount costs a commit (id reservation). A read-write mount holds the
   allocator bitmap in memory (one bit per block). `fsck --repair` cannot repair damaged tree blocks. Requests are
   served one at a time.
-- **CI not run.** The CI workflow (`.github/workflows/test.yml`) runs `make test` on Linux with TCG, and has not run
-  yet.
+- **Ports.** Nothing built by `make ports` runs yet: every program faults in the stub's `zoraya_posix_start` before
+  `main` until 6c (ADR-0140). dash carries only TASK-02's M4 patch; its job-control patches wait for ADR-0142. tcc's
+  host check uses a tcc compiled for the host from the same source, not the Zoraya binary (ADR-0143). Programs are
+  installed with their debug information.
+- **CI not run.** The CI workflow (`.github/workflows/test.yml`) runs `make test` on Linux with TCG and, in a second
+  job, `make fetch-ports` and `make ports`; neither has run yet.
 
 ## Roadmap
 
@@ -663,7 +702,8 @@ or `exit` turns the machine off.
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
 LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md)
-Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test-gui, test, adr-check
+Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test-gui, test, adr-check,
+                          fetch-ports, ports, check-ports
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
 .github/workflows/        CI: make test on Linux/TCG
@@ -736,8 +776,14 @@ tools/
   zoraya-mkfs/            creates a filesystem image from a host directory
   zoraya-fsck/            checks (and on request repairs) a filesystem image
   posix-surface/          TASK-02/02b measurement pipeline (unchanged)
+  zcc                     the C compiler driver for aarch64-unknown-zoraya (ADR-0109)
+  fetch-ports.sh          downloads and verifies the ports' archives (make fetch-ports)
+  zoraya-ar/              the archiver: GNU ar with a symbol index
+  posix-surface-check/    libc.a against the tier list, the svc scan, the hiding of other names
+  zoraya-elf-check/       zoraya-elf over programs on the host (INV-0109-1)
+ports/                    stage 6b: sources.lock, the build of the sysroot and the ports, patches (ports/README.md)
 fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the workspace)
-build/                    kernel ELFs, disk images, logs/ and mutants/ (not committed)
+build/                    kernel ELFs, disk images, logs/ and mutants/; ports/, sysroot/, rootfs-posix/ (not committed)
 ```
 
 The ADRs mention `libposix` and the broker. Neither exists yet; they arrive in stage 6.
