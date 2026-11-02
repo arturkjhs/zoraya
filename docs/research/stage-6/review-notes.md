@@ -494,3 +494,103 @@ N11 (ADR-0102: the parent pid is the parent's cached pid; the `SELF` handle take
 slot), N12 (`sources.md` [P2] carries the `O_RDWR` sentence), N13 (ADR-0102 item 4 says why `fork` and `spawn`
 report the bound with different `errno` values). The four "partly fixed" findings (1, 10, 15, 22) are the residues
 N4, N7, N6 and N5 and are closed by the same edits.
+
+## Check of the second-round fixes (third reviewer)
+
+Checker: a third subagent that wrote neither the ADRs, nor the first review, nor the second check. Compared 10a6458
+("independent review and its fixes") with dadec47 ("fixes from the check of the review fixes"), on 2026-11-02, over
+`git diff 10a6458..dadec47 -- docs/adr docs/research/stage-6/sources.md` (8 files, 47 insertions, 35 deletions).
+Scope: the changed lines and the unchanged lines they refer to. Read for this check: `tools/posix-surface/remote/w9_session.py`
+(the Ctrl-C step and the separate `echo MAKE_STATUS=$?`), `crates/zoraya-elf/src/lib.rs` (what the parser keeps),
+`docs/research/task-02/libc-surface.csv` (the T0/T1 counts behind ADR-0100's Cost), ADR-0103 item 7, ADR-0104 items
+2 to 8, ADR-0105 item 7, ADR-0107 item 5 and its bootstrap record, and the `sources.md` entries [P3], [P7], [D1], [M10].
+
+**Totals:** 12 confirmed fixed, 1 partly fixed (N9), 0 not fixed. New problems: 7 (0 errors, 2 imprecisions, 5
+notes), listed after the table.
+
+| # | Verdict | Evidence |
+|---|---|---|
+| N1 | confirmed fixed | ADR-0110 item 4 now types `cd /work/w8 && make -j4 >/dev/null`, then `~ 1500`, then `\x03`, "then wait for the prompt", and only then "separate lines at the prompt: `echo W9-STATUS $?`, then `n=0; for f in t*.h; ...; echo W9-PARTIAL $n`". It gives the reason ("An interactive dash whose foreground job died of `SIGINT` raises `SIGINT` on itself and abandons the rest of the typed line ([D1] ...)"), which matches [D1]'s summary ("`raise(SIGINT)` when the job died of `SIGINT`") and the harness: `w9_session.py` sends `\x03`, comments "after Ctrl-C an interactive shell abandons the rest of the line, so the status is asked for separately", waits for the prompt and then writes `echo MAKE_STATUS=$?\n` on its own. Same shape as W5's `echo status=$?` in item 3. |
+| N2 | confirmed fixed | ADR-0104 item 8a: "A new pid's record starts at `spawn_prepare` as the caller's record for `fork` (POSIX keeps dispositions across `fork`, [P3]) and as `Default` for `posix_spawn`, with `Ignore` where the attribute block says so; `exec_commit` resets `Handler` to `Default` and keeps `Ignore`, as `exec` does ([P7])". [P7]'s summary carries "caught signals reset to default, ignored stay ignored". The fix lives in item 8a rather than in items 4 and 6 as N2 asked; items 4 and 6 (unchanged) say nothing that contradicts it, and item 6's `exec` path already reports the stop signals "by their POSIX disposition". Residues are P3 and P4 below (wording, and the [P3] summary). |
+| N3 | confirmed fixed | ADR-0104 item 9: "For a group (`-pgid`, or the terminal's `suspend(20)` on the foreground group, ADR-0105 item 3) the broker goes process job by process job, each by its own record, since the records are per pid; a `job_suspend` of the whole group job happens only when every member's record is `Default`." ADR-0105 item 3: the broker "applies each foreground process's recorded disposition for `SIGTSTP` (ADR-0104 items 8a and 9: `job_suspend` of its process job, with the pid marked stopped ..., or `Custom(20)` to a handler, or nothing when ignored)". The two now describe the same per-process rule; the old "always suspend" sentence is gone. ADR-0105 does not mention ADR-0104's whole-group shortcut (P5, equivalent in effect). |
+| N4 | confirmed fixed | ADR-0105 item 8: "`SIGTTOU` is sent nowhere (`TOSTOP` off; `tcsetpgrp` from the background succeeds, item 7)". Item 7 (unchanged): "any process of the session may make a group of the session the foreground group ... `pgid` outside the session is `EPERM`". Agrees with ADR-0104 item 10. |
+| N5 | confirmed fixed | INV-0104-4: "`setpgid` never moves a process between jobs: it succeeds only when the process's group is already the one named, and changes nothing. *Check:* ... the pipeline case (`Join` then `setpgid`) and the refused case (`EPERM`)". Item 8 (unchanged): "If the process's group pid already equals `pgid`, the call succeeds and changes nothing ...; anything else would move a process between jobs and is `EPERM`". The invariant matches its item again. |
+| N6 | confirmed fixed | ADR-0100 item 7, first sentence: the tool "reads `libc.a`'s members with its own `ar` reader (an archive is a header per member) and `ET_REL` symbol-table reader, and lists defined global symbols". The last sentence (unchanged) says the same: the readers "are part of the tool, not of `zoraya-elf`". No contradiction left. |
+| N7 | confirmed fixed | ADR-0100 Cost: "the 133 rows of the machine-facing categories (process 51, file 40, signal 12, dir 7, tty 6, memory 6, time 11) plus `read`, `write` and `close` from stdio". Checked against `task-02/libc-surface.csv` (T0 and T1 rows): process 51, file 40, signal 12, dir 7, tty 6, memory 6, time 11 = 133; `read`, `write`, `close` are stdio rows; `readv`/`writev` no longer listed as stdio. The 22 pure rows named (9 process, 3 signal, four `dl*` in process, six time rows: `ctime`, `localtime`, `localtime_r`, `mktime`, `strftime`, `strptime`, leaving `clock_gettime`, `gettimeofday`, `nanosleep`, `time`, `times` as the 5 that touch the clock) give 136 − 22 = 114, which "about 110 `[estimate]`" covers. See P6 on the `dl*` label. |
+| N8 | confirmed fixed | ADR-0104 item 9: "for `-1`, `job_signal` on every process job of the session but the caller's, which is Linux's behaviour ([P13]: POSIX lets the caller be included)". `sources.md` [P13] now ends: "POSIX requires `kill(-1, sig)` to reach every process the caller may signal, and on Linux the call does not signal the caller itself." Attribution moved to Linux as asked; the parenthesis understates POSIX (P2). |
+| N9 | partly fixed | ADR-0109 item 5: "The whole table goes, all `e_phnum` entries of 56 bytes, not only the `PT_LOAD` ones `zoraya-elf` keeps: musl's `__init_tls` looks for `PT_TLS`, `PT_PHDR`, `PT_DYNAMIC` and `PT_GNU_STACK` ([M10]), which `zoraya-elf` skips when loading". That is what `crates/zoraya-elf/src/lib.rs` does: `parse` reads `phnum` from `e_phnum`, keeps only `PT_LOAD` (`if u32_at(ph, 0) != Some(PT_LOAD) { continue; }`) into `segments: [Segment; MAX_SEGMENTS]`, and `Program` holds `entry`, `segments`, `count` and nothing of the table. "An accessor for the raw table" is a consistent requirement: `parse` has already checked that `phoff..phoff + phnum * 56` lies inside `file`, so `Program` can keep `phoff` and `phnum` and return the slice of the caller's file bytes. Not fixed in the same sentence: "`zoraya-elf` gains ... a bound on `e_phnum` (64 `[assumption]`, refused above)". The crate already has one, `const MAX_PHDRS: usize = 32;` with `if phentsize != PHDR_SIZE \|\| phnum > MAX_PHDRS { return Err(Error::BadHeaders); }` (P1). |
+| N10 | confirmed fixed | ADR-0107 item 5: "`BOOTSTRAP` (the channel end, read at start-up and closed)", and the same ADR's "the child's start-up reads both messages before anything else"; ADR-0100 item 4: "initialises `zoraya-posix` from the bootstrap messages of ADR-0107"; ADR-0109 item 4 (unchanged): "reads the bootstrap messages of ADR-0107". All plural. |
+| N11 | confirmed fixed | ADR-0102 item 3: `self_slot` receives "a handle to the *child* process itself with `WAIT`, at the generation the parent's slot carries", which is what INV-0102-7's check ("compares the raw handle values of the child's table with the parent's, slot by slot") needs. The wrapper paragraph: the child takes "its pid and group from the `spawn_prepare` reply that is in its copied memory and its parent pid from the parent's own cached pid", so the non-existent parent pid of the reply (`{pid, pgid, parent_job, child_job, child_broker_end}`, ADR-0104 item 4) is no longer cited. See P7 on "cached". |
+| N12 | confirmed fixed | `sources.md` [P2] now ends: "under Linux opening a FIFO for reading and writing succeeds, which POSIX leaves undefined", which is the claim ADR-0107 item 14 cites it for. |
+| N13 | confirmed fixed | ADR-0102 item 4: "`EAGAIN` from `fork` (the `errno` POSIX gives `fork` for a resource limit; `posix_spawn` and `exec` report the same bound as `E2BIG`, their own 'too many arguments' error, ADR-0103 item 7)". ADR-0103 item 7 (unchanged) says `E2BIG` from `posix_spawn` and `exec` for the same `MAX_SPAWN_HANDLES` of 64. The difference is now stated as deliberate, with the reason. |
+
+### New problems in the changed lines
+
+- **P1 (imprecision) ADR-0109 item 5.** "`zoraya-elf` gains an accessor for the raw table and a bound on `e_phnum`
+  (64 `[assumption]`, refused above)". The crate already bounds `e_phnum`: `crates/zoraya-elf/src/lib.rs` has
+  `const MAX_PHDRS: usize = 32;` and refuses `phnum > MAX_PHDRS` with `Error::BadHeaders`. The sentence should say
+  whether `MAX_PHDRS` stays 32 (then the block's bound is 32 × 56 = 1,792 bytes, and `[assumption]` is not needed) or
+  is raised to 64 and why. Either fits the one-page room the item claims (64 × 56 = 3,584 bytes), so the design is
+  unaffected; the claim about the existing code is not true as written.
+- **P2 (imprecision) ADR-0104 item 9.** "([P13]: POSIX lets the caller be included)". `kill.2`, as the new [P13]
+  summary itself says, has POSIX *require* `kill(-1, sig)` to reach "every process the caller may signal", which
+  includes the caller; Linux's exclusion is the deviation. "lets" should be "requires", or the parenthesis should
+  quote [P13]'s sentence.
+- **P3 (note) ADR-0104 item 8a.** "as `Default` for `posix_spawn`, with `Ignore` where the attribute block says so".
+  In an item about `posix_spawn`, "the attribute block" reads as POSIX's `posix_spawnattr_t`, which can only reset
+  signals to default (`POSIX_SPAWN_SETSIGDEF`) and never set `Ignore`. Item 6 uses the same words for Zoraya's spawn
+  attribute block, whose `Ignore` entries are the caller's `SIG_IGN` dispositions; that is the meaning that agrees
+  with POSIX (ignored signals stay ignored in the child). One qualifier ("the spawn attribute block of item 6", or
+  "where the caller ignores it") removes the double reading.
+- **P4 (note) `sources.md` [P3]**, cited by ADR-0104 item 8a for "POSIX keeps dispositions across `fork`". The [P3]
+  summary lists what `fork` does not inherit and says nothing about dispositions; the claim is true (the man page's
+  "exact duplicate ... except" list does not name them), but the summary does not carry it, the pattern N8 and N12
+  were about.
+- **P5 (note) ADR-0104 item 9 vs ADR-0105 item 3.** Only ADR-0104 has the shortcut "a `job_suspend` of the whole group
+  job happens only when every member's record is `Default`"; ADR-0105 item 3 describes the terminal's `suspend(20)`
+  as `job_suspend` of each process job. The effect is the same (every member stopped, every pid marked), so this is
+  not a contradiction, but the earlier unchanged sentence of item 9 ("`job_suspend` of the target's job (the process
+  job, or the group job for `-pgid`)") now reads as the special case of the sentence that follows it; one of the two
+  could be dropped.
+- **P6 (note) ADR-0100 Option B, Cost.** "the four `dl*` rows" are counted among "the rows that are pure and stay musl
+  C", while item 7 removes `dlopen`, `dlsym`, `dlclose`, `dlerror` from the tier list ("the ports are built without
+  them") and item 8 has tcc define its own dummies. They are subtracted either way, so the "about 110" is unchanged;
+  the label is not. Pre-existing in substance (the previous text said "the `dl*` rows"); the changed line keeps it.
+- **P7 (note) ADR-0102, the wrapper paragraph.** "its parent pid from the parent's own cached pid" is the first use
+  of "cached" in the ADRs. The pid `libposix` holds in memory is the bootstrap record's `pid` (ADR-0107's record:
+  "`pid`, `ppid`, `pgid`, `sid`, ..."), so the sentence is true; naming the record would say where the value comes
+  from.
+
+Item references in the changed lines were resolved against the current numbering: ADR-0104 item 9 → ADR-0105 item 3
+(Signals), ADR-0105 item 8 → item 7 (Job control calls), ADR-0105 item 3 → ADR-0104 items 8a and 9, ADR-0102 item 4
+→ ADR-0103 item 7 (`spawn`), ADR-0109 item 5 → [M10], ADR-0110 item 4 → [D1], ADR-0104 item 8a → [P3] and [P7]: all
+point at what they describe. Every new claim in the changed lines carries a label or a citation except those P1 to P7
+name. Line length: five added lines exceed the ADRs' usual 120 columns (ADR-0102 item 3 and the wrapper paragraph,
+ADR-0105 item 3, the two `sources.md` entries); no lint bounds it and every ADR in the set already has such lines, so
+this is not listed as a problem.
+
+### adr-check
+
+`cargo run -q -p zoraya-adr-check -- docs` at dadec47: "59 ADRs checked against INV-0001-1..5", the eleven
+`INV-0001-5: index.md: 01NN-....md is not listed` errors for ADR-0100 to ADR-0110, 17 `not yet applicable (stage 6)`
+warnings (INV-0002-2 to INV-0006-9, as at 10a6458), "11 errors, 17 warnings". Nothing else.
+
+### What was checked and not checked
+
+Checked: every added or changed line of the eight files in the diff, against the unchanged text around it and the
+items, invariants and source entries it names; N1 against `w9_session.py` and [D1]; N7's arithmetic against
+`libc-surface.csv`; N9 against `crates/zoraya-elf/src/lib.rs`; N2, N3, N4, N5, N13 against the items of ADR-0103,
+ADR-0104 and ADR-0105 they now rely on. Not checked: anything outside the changed lines (the first review and the
+second check cover it); the removed lines beyond confirming that what they said is gone or moved; the man pages
+themselves (the [P2], [P3], [P7], [P13] summaries in `sources.md` were taken as the second check left them, with the
+one mismatch P2 names being between the ADR and the summary, not between the summary and the page); `plan.md` and
+`inputs.md`, which the commit does not touch; `make test`.
+
+### Disposition of the third check (author, 2026-11-02)
+
+The third check found no error, so the review loop ends here as TASK-15 prescribes. Its seven small problems are fixed
+all the same in the commit that follows, without a further check: P1 (ADR-0109 item 5 names `zoraya-elf`'s existing
+`MAX_PHDRS` of 32), P2 (ADR-0104 item 9: POSIX requires the caller to be included, Linux leaves it out), P3 (item 8a
+names the Zoraya spawn block of item 6), P4 (item 8a cites ADR-0004 rule 6 instead of [P3]), P5 (ADR-0105 item 3
+carries the whole-group shortcut), P6 (ADR-0100's Cost says the `dl*` rows are not built), P7 (ADR-0102's wrapper
+takes the parent pid from the bootstrap record). These edits were not checked by a reviewer.

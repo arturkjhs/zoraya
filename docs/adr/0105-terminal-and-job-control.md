@@ -143,7 +143,8 @@ that terminal rights be separated and control be out of band natively, with a VT
    a `suspend(20)` message to the broker, which applies each foreground process's recorded disposition for `SIGTSTP`
    (ADR-0104 items 8a and 9: `job_suspend` of its process job, with the pid marked stopped so that a
    `waitpid(WUNTRACED)` in the shell returns, or `Custom(20)` to a handler, or nothing when ignored); the terminal
-   itself calls `job_suspend` for nothing, since it cannot know the targets' dispositions. Hangup, when the backend closes:
+   itself calls `job_suspend` for nothing, since it cannot know the targets' dispositions; when every member's
+   record is `Default` the broker suspends the group job in one call (ADR-0104 item 9). Hangup, when the backend closes:
    `job_signal(session_job, Hangup, 1)`, with the session job handle the broker gave it (ADR-0104 item 1: the session
    job holds only POSIX processes). Window size change:
    `job_signal(fg_job, Custom(28), 28)`, whose default disposition is `Ignore` (ADR-0004). With no foreground job set,

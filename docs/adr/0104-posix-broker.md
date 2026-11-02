@@ -176,12 +176,13 @@ for each child before it exists and moved to the child at slot `BROKER`):
 8a. `set_stop_disposition(sig, Default | Ignore | Handler)` for `SIGTSTP`, `SIGTTIN`, `SIGTTOU` and `SIGCONT`:
    `libposix` sends it from `sigaction` on those four, so that the broker, which executes stops and continues (item
    9), knows what the *target* wants. `SIGSTOP`'s is always `Default`. A new pid's record starts at `spawn_prepare`
-   as the caller's record for `fork` (POSIX keeps dispositions across `fork`, [P3]) and as `Default` for
-   `posix_spawn`, with `Ignore` where the attribute block says so; `exec_commit` resets `Handler` to `Default` and
-   keeps `Ignore`, as `exec` does ([P7]).
+   as the caller's record for `fork` (dispositions are kept across `fork`, as `snapshot_process` keeps the kernel's,
+   ADR-0004 rule 6) and as `Default` for `posix_spawn`, with `Ignore` where the Zoraya spawn attribute block of item
+   6 says so; `exec_commit` resets `Handler` to `Default` and keeps `Ignore`, as `exec` does ([P7]).
 9. `kill(pid | 0 | -1 | -pgid, sig, detail)`: `job_signal` on the process job, the caller's group job, or the named
    group job, with the kind and `detail` of ADR-0004 and ADR-0106; for `-1`, `job_signal` on every process job of the
-   session but the caller's, which is Linux's behaviour ([P13]: POSIX lets the caller be included); `sig` 0 is an
+   session but the caller's, which is Linux's behaviour ([P13]: POSIX requires the caller to be included, Linux
+   leaves it out, and the measured programs ran on Linux); `sig` 0 is an
    existence check; `ESRCH` for an
    unknown or reaped pid, `EPERM` for a pid outside the session. `SIGKILL` is `job_kill`. For the stop and continue
    signals the broker acts by the target's recorded disposition (item 8a): `SIGSTOP`, and `SIGTSTP`/`SIGTTIN`/

@@ -108,7 +108,8 @@ and the BSDs could change later (DM-057). C libc internals with hidden global st
 - **Cost:** *(estimate)* Rust: the 133 rows of the machine-facing categories (process 51, file 40, signal 12, dir 7,
   tty 6, memory 6, time 11) plus `read`, `write` and `close` from stdio, less the rows that are pure and stay musl C
   (`memcpy`, `memcmp`, `memset`, `getopt`, `getopt_long`, `getenv`, `putenv`, `setenv`, `atexit`, `sigemptyset`,
-  `sigaddset`, `sigfillset`, the four `dl*` rows, and six time formatters and converters): about 110 functions
+  `sigaddset`, `sigfillset`, and six time formatters and converters) and the four `dl*` rows, which are not built
+  (item 8): about 110 functions
   `[estimate]` on top of the fd table, resolver, startup and `malloc`: 6,000 to 9,000 lines with tests.
   C: about 150 musl source files compiled unchanged plus a dozen patched; a shim header of about 100 lines; `crt1`
   replaced (ADR-0109). Build: one archive, one generated header set.

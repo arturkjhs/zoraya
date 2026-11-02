@@ -186,7 +186,7 @@ group (ADR-0103 item 8, one request per connection, replies awaited together); b
 the `SELF` slot; `snapshot_process`; in the parent, send the child's process handle to the broker (`spawn_commit`)
 and record the child's process job handle in its child list; in the child, whose copied tables already hold valid
 values (items 3 and 4), take its pid and group from the `spawn_prepare` reply that is in its copied memory and its
-parent pid from the parent's own cached pid, create a fresh port, re-subscribe nothing, close the duplicated handles to the parent's other children's
+parent pid from the `pid` of the parent's bootstrap record (ADR-0107 item 1), which is in the same memory, create a fresh port, re-subscribe nothing, close the duplicated handles to the parent's other children's
 process jobs and drop that child list, and return 0. Cost per fork `[estimate]`: the copy (above), 2 broker round
 trips, and one `share` or `clone` per connection: about 4 for a quiet shell (`/`, `/tmp`, cwd, the terminal
 connection; the stdio descriptions are stream ends, ADR-0103 item 13) plus one per open file, unmeasured.
