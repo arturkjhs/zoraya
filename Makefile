@@ -34,7 +34,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash tools-storage ramdisk fmt-check check-user-access clippy adr-check clean \
+.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -214,7 +214,16 @@ adr-check:
 check-user-access:
 	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
 
-test: fmt-check clippy test-unit adr-check check-user-access test-qemu test-boot test-files test-crash
+# No host paths or email addresses in tracked files (CLAUDE.md, Conventions), apart from
+# the configured git identity's address. docs/research/ and tools/posix-surface/results/
+# are cleaned separately. The brackets keep the pattern from matching this file.
+check-host-paths:
+	@id="$$(git config user.email)"; \
+	hits="$$(git grep -n -I -E '/Use[r]s/|/hom[e]/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}' -- . \
+	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
+	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
+
+test: fmt-check clippy test-unit adr-check check-user-access check-host-paths test-qemu test-boot test-files test-crash
 	@echo "make test: all checks passed"
 
 clean:
