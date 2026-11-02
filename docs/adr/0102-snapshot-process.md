@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-02
-- **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0021, ADR-0031, ADR-0034, ADR-0036, ADR-0040, ADR-0041, ADR-0042, ADR-0046, ADR-0050, ADR-0051, ADR-0056
+- **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0021, ADR-0031, ADR-0034, ADR-0036, ADR-0040, ADR-0041, ADR-0042, ADR-0046, ADR-0050, ADR-0051, ADR-0056 (proposed), ADR-0057
 - **Evidence:** CP-05, CP-14, X-10, X-6, DM-001, DM-030, GR-005, alternatives-postmortem.md#exokernel-mit-aegis--xok, stage-6/sources.md#libc-implementations, stage-6/sources.md#posix-semantics, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1
 
 ## Context
@@ -124,34 +124,46 @@ comes from a vfork-style shared address space, not from avoiding a copy.
 **Recommendation (not a decision): Option B**, with Option A as the recorded upgrade if the W4 measurement demands it.
 
 **The call.** `snapshot_process(buffer, length)` takes one flat buffer in ADR-0042's form (magic `ZSN1`, header size,
-flags, `job`, `group` handle, move count, reserved zero, then move entries `{slot, handle}`), and returns the child's
-process handle with the rights `spawn` gives. It is tagged `#[personality_only]` (INV-0002-2) and fails with
+flags, `job`, `group` handle, `self_slot`, move count, reserved zero, then move entries `{slot, handle}`), and
+returns the child's process handle with the rights `spawn` gives. It is tagged `#[personality_only]` (INV-0002-2) and fails with
 `AccessDenied` in a job without the `posix` bit (INV-0003-2).
 
 1. **Job.** The child is created in `job`, which must carry `CREATE_PROCESS` and be in the caller's job tree; `group`
    is as in `spawn` (ADR-0046), or 0. ADR-0104 makes every POSIX process a job of its own, so `libposix` passes the
    child's process job, which the broker created inside the right group job. This replaces rule 3's "in the same
-   job" (tension below).
+   job" (tension below). Creating the child clears the job's `TERMINATED` signal, as `spawn` does (ADR-0046), so a
+   parent that subscribes the job after the call does not see a stale `TERMINATED`.
 2. **Memory.** For every page mapped in the caller's tables, the kernel allocates a frame, copies the page through
    the direct map, and maps it at the same address with the same attributes, including the read-only startup block
    (ADR-0042) and the stack. For every memory-object mapping it creates a new object of the mapping's length, copies
    the mapped range into it, and maps the new object at the same address with the same permissions; the child's
    `mappings` hold the new objects. The child therefore shares no memory with its parent or with anyone (driver 4).
    Device mappings and DMA pins (ADR-0054) refuse the snapshot with `BadState`; a POSIX process has none.
-3. **Handles.** Every slot whose type is duplicable is duplicated at the same slot with the same rights: processes,
-   jobs, memory objects, stream ends (ADR-0101), console, directory, image, event tokens, `Power`. Non-duplicable
-   types are absent: ports, channel ends, interrupts, pins, devices (`Device` is duplicable but a POSIX process holds
-   none). The `abi` crate marks each object type `Duplicable` or not in `OBJECT_TYPES` (ADR-0040's follow-up), and
-   INV-0003-7 covers the rule. The child's handle to a memory object that the parent had mapped refers to the parent's
-   object, while the child's mapping is its own copy; `libposix` never uses a mapped object's handle except to close
-   it, and `memory_unmap` takes an address (ADR-0051), so the difference is invisible to POSIX code.
+3. **Handles.** Every slot whose type is duplicable and whose handle carries `DUPLICATE` is duplicated at the same
+   slot, with the same rights and the same generation, so that every handle value in the child's copied memory names
+   in the child what it named in the parent (ADR-0040's `slot | generation`, 48 bits under ADR-0057): processes,
+   jobs, memory objects, stream ends (ADR-0101), console, directory, image, event tokens, `Power`. A handle of a
+   duplicable type that lacks `DUPLICATE` leaves its slot empty, as ADR-0040's rule for `handle_duplicate` requires.
+   Non-duplicable types are absent: ports, channel ends, interrupts, pins, devices (`Device` is duplicable but a POSIX
+   process holds none). The `abi` crate marks each object type `Duplicable` or not in `OBJECT_TYPES` (ADR-0040's
+   follow-up). The slot `self_slot` names receives, instead of a duplicate of whatever the parent holds there, a
+   handle to the *child* process itself with `WAIT`, so that the child's `libposix` can subscribe its own
+   `REQUEST_PENDING` (ADR-0106); in the parent that slot holds the parent's own handle (ADR-0107 item 5), so the
+   copied value is right in both. The child's handle to a memory object that the parent had mapped refers to the
+   parent's object, while the child's mapping is its own copy; `libposix` never uses a mapped object's handle except
+   to close it, and `memory_unmap` takes an address (ADR-0051), so the difference is invisible to POSIX code.
 4. **The move list.** Each entry moves a handle out of the caller's table into the child's at `slot`, overriding
-   whatever duplication would have put there, with the handle's full rights (a move needs `TRANSFER`, ADR-0040). This
+   whatever duplication would have put there, with the handle's full rights (a move needs `TRANSFER`, ADR-0040), and
+   at the generation the *caller's* slot `slot` carries, so that the handle value the child's copied table holds for
+   that slot (the parent's old connection, which is not duplicable and would otherwise leave the slot empty) names the
+   moved handle in the child without any rewriting. This
    is how the child gets the channels it cannot inherit: `libposix` prepares them before the call (new file
    connections through `share`, ADR-0103; the child's broker channel and process job, ADR-0104) and lists them. The
    list is all or nothing: if any entry is invalid, the call fails before anything is allocated and the caller's table
    is unchanged. An endpoint with handles queued cannot be moved (`BadState`), as ADR-0050 says of a message; the
-   ends `libposix` moves are fresh and empty. Up to `MAX_SPAWN_HANDLES` entries.
+   ends `libposix` moves are fresh and empty. Up to `MAX_SPAWN_HANDLES` entries (64, ADR-0042), which bounds the
+   connections a `fork` can carry: a process with more inherited connections than that gets `EAGAIN` from `fork`, a
+   limit Linux does not have (tension below).
 5. **Thread.** The child's one thread starts with the caller's registers as saved at the `svc`, with `x0` = `Ok` and
    `x1` = 0, so the `fork()` wrapper returns 0 in the child and the handle in the parent. Dispositions are copied
    (ADR-0004 rule 6); the request queue is empty; `REQUEST_PENDING` is clear; the child is not suspended unless
@@ -167,21 +179,37 @@ process handle with the rights `spawn` gives. It is tagged `#[personality_only]`
    it before untrusted code runs, as it must those.
 
 **The `fork()` wrapper**, in order: ask the broker for the child's pid, process job and broker channel
-(`fork_prepare`, ADR-0104, one round trip); `share` every connection in the fd table and the namespace table
-(ADR-0103, one request per connection, replies awaited together); build the move list; `snapshot_process`; in the
-parent, send the child's process handle to the broker (`fork_commit`) and record the child; in the child, write the
-moved handles into the copied fd and namespace tables, create a fresh port, re-subscribe nothing, drop the parent's
-child list, and return 0. Cost per fork `[estimate]`: the copy (above), 2 broker round trips, and one `share` per
-connection: about 10 connections for a shell (`/` and `/tmp` directory connections, cwd, three stdio descriptions,
-the terminal control connection), unmeasured.
+(`spawn_prepare`, ADR-0104 item 4, one round trip, with the group hint of ADR-0104 item 4); `share` every file and
+directory connection in the fd table and the namespace table and `clone` the terminal connection with the child's
+group (ADR-0103 item 8, one request per connection, replies awaited together); build the move list, with `self_slot`
+the `SELF` slot; `snapshot_process`; in the parent, send the child's process handle to the broker (`spawn_commit`)
+and record the child's process job handle in its child list; in the child, whose copied tables already hold valid
+values (items 3 and 4), take its pid, parent pid and group from the `spawn_prepare` reply that is in its copied
+memory, create a fresh port, re-subscribe nothing, close the duplicated handles to the parent's other children's
+process jobs and drop that child list, and return 0. Cost per fork `[estimate]`: the copy (above), 2 broker round
+trips, and one `share` or `clone` per connection: about 4 for a quiet shell (`/`, `/tmp`, cwd, the terminal
+connection; the stdio descriptions are stream ends, ADR-0103 item 13) plus one per open file, unmeasured.
 
 **Tensions with accepted ADRs.**
 
 - *ADR-0003 rule 3* says "copy-on-write clone". This ADR copies eagerly: the same contents, no sharing, no deferred
   work. Accepting it reads rule 3's "copy-on-write" as "a copy", and keeps Option A as the revisit. Rule 3 also says
   "in the same job"; item 1 puts the child in a job of its own inside the parent's group job (ADR-0104), which
-  `job_signal` on the group still reaches. Rule 3's "exactly what dash's `forkshell` needs and nothing more" gains the
-  move list, which ADR-0055's review found necessary (its finding 1).
+  `job_signal` on the group still reaches (ADR-0002 rule 3(a) says "in the same job" too). Rule 3's "exactly what
+  dash's `forkshell` needs and nothing more" gains the move list and the self slot, which ADR-0055's review found
+  necessary (its finding 1). Rule 3 has the wrapper register the child for a pid after the call; here the pid comes
+  before it (`spawn_prepare`), so that the child's copied memory holds it.
+- *ADR-0003 INV-0003-7* says `snapshot_process` "never transfers a handle type marked non-duplicable ... such slots
+  are empty in the child". The move list transfers channel ends, a non-duplicable type, into the child. Accepting
+  this ADR replaces that invariant by INV-0102-6 below: no non-duplicable handle is *duplicated*, a listed move is
+  the only way such a handle reaches the child, and an unlisted slot of that type is empty.
+- *ADR-0040*'s duplication is by right (`DUPLICATE`), not by type; item 3 follows the right, so a handle of a
+  duplicable type without `DUPLICATE` leaves an empty slot in the child.
+- *ADR-0040 and ADR-0057*: the child's table starts with the parent's generations rather than at generation 0 as a
+  `spawn`ed table does; a moved handle takes the slot's parent generation (items 3 and 4). INV-0057-1's bound is
+  unaffected: generations still only rise within a table.
+- *ADR-0042*'s `MAX_SPAWN_HANDLES` of 64 bounds a `fork`'s connections (item 4); raising it is an ADR of its own.
+- *ADR-0046*'s job `TERMINATED` is cleared by the call as by `spawn` (item 1).
 - *ADR-0002 rule 3(b)*: the move list is a parameter of the one gated facility, not a second facility; INV-0002-2's set
   stays at one entry. The handoff object of TASK-10 would have been a second one, which is one reason it is not chosen
   (ADR-0103 gives the others).
@@ -222,7 +250,8 @@ would give it to `spawn` too).
   page, including a mapped memory object, while the parent checks its own pages, in both directions.
 - **INV-0102-2.** The move list is all or nothing: after a refused call every listed handle is still valid in the
   caller, and after a successful one none is, and each appears at its slot in the child. *Check:* in-QEMU tests with
-  an invalid entry, with a full child table, and with a valid list, checking both tables.
+  an invalid entry, with a full child table, and with a valid list, checking both tables and the generation of each
+  moved slot against the parent's.
 - **INV-0102-3.** A failed `snapshot_process` returns the kernel's frame count and heap use to their values before the
   call. *Check:* in-QEMU test at frame exhaustion, with INV-0041-1's counters.
 - **INV-0102-4.** The child's thread starts at the instruction after the caller's `svc` with the caller's registers
@@ -230,6 +259,16 @@ would give it to `spawn` too).
   child with the parent's, and a request queued to the parent during the call observed only there.
 - **INV-0102-5.** `snapshot_process` refuses a caller with a device mapping or a live DMA pin with `BadState`.
   *Check:* in-QEMU test in a `posix` job holding each.
+- **INV-0102-6.** `snapshot_process` never duplicates a handle of a non-duplicable type or one lacking `DUPLICATE`:
+  such a slot is empty in the child unless the move list names it, and a listed move is the only way such a handle
+  reaches the child. *Check:* a test per non-duplicable type (ports, channel ends) and one with a duplicable type
+  lacking `DUPLICATE`, asserting the child's slot is empty, plus one moving a channel end to a slot and reading it in
+  the child.
+- **INV-0102-7.** Every duplicated slot in the child carries the parent's generation, a moved slot the parent's
+  generation of that slot, and `self_slot` a handle to the child; so every handle value in the parent's memory names
+  in the child what it named in the parent, or the child itself at `self_slot`. *Check:* an in-QEMU test that
+  compares the raw handle values of the child's table with the parent's, slot by slot, and that the child's
+  `self_slot` handle reports the child's own `TERMINATED` and `REQUEST_PENDING`.
 
 ## Open questions
 

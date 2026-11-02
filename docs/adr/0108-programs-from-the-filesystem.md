@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0012, ADR-0013, ADR-0014, ADR-0031, ADR-0033, ADR-0040, ADR-0042, ADR-0043, ADR-0051, ADR-0055, ADR-0103, ADR-0107
-- **Evidence:** CP-01, CP-03, CP-16, DM-009, DM-032, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, fs/requirements.md#32-symbolic-links, fs/requirements.md#4-metadata-read-and-written, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, stage-6/sources.md#tinycc, task-02/posix-surface.md#absolute-paths-chosen-by-programs, task-02/posix-surface.md#linux-syscall-surface-m2
+- **Evidence:** CP-01, CP-03, CP-16, DM-009, DM-032, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, fs/requirements.md#22-atomic-rename, fs/requirements.md#32-symbolic-links, fs/requirements.md#4-metadata-read-and-written, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, stage-6/sources.md#tinycc, task-02/posix-surface.md#absolute-paths-chosen-by-programs, task-02/posix-surface.md#linux-syscall-surface-m2
 
 ## Context
 
@@ -23,9 +23,10 @@ tcc produces must look like.
 - toybox is a multicall binary dispatching on the name it was called by, installed as symlinks
   ([B3], `stage-6/sources.md#other-programs-and-inputs`), and follows the symlink chain with `readlink` to find the
   applet name when needed (`fs/requirements.md#32-symbolic-links`).
-- tcc unlinks its output and recreates it with `O_WRONLY|O_CREAT|O_TRUNC`; W1 runs the stage-2 tcc it built, W3 runs
-  `sqlite3`, W4 runs `hello` and every configure test program, so the execute bit on fresh files is load-bearing
-  (`fs/requirements.md#4-metadata-read-and-written`).
+- tcc unlinks its output and recreates it with `O_WRONLY|O_CREAT|O_TRUNC` (`fs/requirements.md#22-atomic-rename`);
+  W1 runs the stage-2 tcc it built, W3 runs `sqlite3`, W4 runs `hello` and every configure test program, so the
+  execute bit on fresh files is load-bearing (`fs/requirements.md#4-metadata-read-and-written`). The mode of a create
+  reaches the service through ADR-0103 item 1's `open_with_mode`; the stage 4 `Open` message carried none.
 - Linux `execve`: `#!interpreter [optional-arg]`, up to 255 characters, four levels of interpreter scripts; `ENOEXEC`
   for an unrecognised format; the pid unchanged ([P7], `stage-6/sources.md#posix-semantics`).
 - tcc has its own linker, writes ELF executables directly, adds `crt1.o`, `crti.o`, `crtn.o`, `libc.a` and
@@ -41,8 +42,9 @@ copying one at the measured memory rates is below a millisecond under HVF.
 W^X from day one (CP-16, DM-032); the loader is a parser of hostile bytes (ADR-0012's discipline, ADR-0033). Zircon has
 no `exec`: a launcher reads the executable and builds the process from memory objects
 (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`; the loader service is
-`[outside evidence: fuchsia.dev program loading, not fetched]`). Plan 9's `exec` reads the binary through its
-per-process namespace (`alternatives-postmortem.md#plan-9--inferno`).
+`[outside evidence: fuchsia.dev program loading, not fetched]`). Plan 9 kept `fork` and `exec` and gave each process
+its own namespace (`alternatives-postmortem.md#plan-9--inferno`); that its `exec` resolves the binary through that
+namespace is the author's inference from the two.
 
 ## Decision drivers
 
@@ -116,8 +118,9 @@ per-process namespace (`alternatives-postmortem.md#plan-9--inferno`).
 
 1. **`image_create(memory, length)`** needs `READ` on the memory object; `length` is the file's size, at most the
    object's. The kernel runs `zoraya-elf` over the bytes (total, INV-0033-1), rejecting what ADR-0033 rejects
-   (anything but little-endian AArch64 static `ET_EXEC`, a segment not readable, writable and executable, outside the
-   user range, overlapping, or with `memsz < filesz`) with `InvalidArgument`, and returns an `Image` with
+   (anything but little-endian AArch64 static `ET_EXEC`; a segment that is not readable; a segment both writable and
+   executable; segments outside the user range or overlapping; `memsz < filesz`) with `InvalidArgument`, and returns
+   an `Image` with
    `READ | DUPLICATE | TRANSFER`. The image keeps the validated headers and an `Arc` of the object (ADR-0041); the
    object's frames live while any image handle, mapping or handle to it does (ADR-0051's rule extended by one holder).
    `spawn` with such an image copies each segment's `filesz` bytes from the object through the direct map into frames

@@ -23,7 +23,8 @@ session shares: neither works without the other's shape.
   code are `/bin/sh`, `/dev/null`, `/dev/tty`, `/dev/urandom`, `/tmp`, `/etc/passwd`, `/etc/group`, `/etc/profile`,
   `/proc/self/exe` (`task-02/conflict-impact.md#x-1-capability-only-access-cp-01-cp-02-vs-ease-of-posix-porting-cp-27`).
 - `$PATH` is walked in user space: 2,922 of 3,002 `execve` calls used an absolute path
-  (`task-02/posix-surface.md#linux-syscall-surface-m2`); `chdir` was absolute 32 times and relative once; cwd is part
+  (`task-02/posix-surface.md#linux-syscall-surface-m2`); `chdir` was absolute 32 times and relative once
+  (`task-02/conflict-impact.md#x-1-capability-only-access-cp-01-cp-02-vs-ease-of-posix-porting-cp-27`); cwd is part
   of make's and dash's meaning (`task-02/callsite-analysis.md#feature-3-global-paths-path-cwd`).
 - Every measured run worked in a namespace whose `/bin` was replaced per set
   (`task-02/method.md#tiers-runs-and-sets`).
@@ -167,8 +168,14 @@ versioning, decoded totally):
    index into the message's handle list or none. A `Directory` or `Tmp` entry carries a directory connection
    (ADR-0055), `Terminal` the process's terminal connection (ADR-0105), `Image` the process's own image handle
    (ADR-0108), `Null` nothing.
-5. Fixed slots in `zoraya-abi`: `BOOTSTRAP` (the channel end, read once and closed), `BROKER` (ADR-0104), `JOB` (the
-   process's own process job), all above `OPEN_MAX` (ADR-0103 item 4); fds at their numbers.
+5. Fixed slots in `zoraya-abi`: `BOOTSTRAP` (the channel end, read once and closed), `BROKER` (ADR-0104),
+   `PROCESS_JOB` (the process's own process job, `CREATE_PROCESS | TRANSFER`, ADR-0104 item 4; a different slot
+   from ADR-0043's `JOB` of the first process), `SELF` (a handle to the process itself with `WAIT`, for
+   `REQUEST_PENDING`, ADR-0106 item 3), all above `OPEN_MAX` (ADR-0103 item 4); fds at their numbers. The spawner
+   cannot list the child's own handle in the child's `spawn`, since it exists only after the call: it writes a second
+   message on the bootstrap channel right after `spawn` returns, carrying a `WAIT` duplicate of the process handle,
+   and the child's start-up reads both messages before anything else. A `fork` child gets its `SELF` handle from
+   `snapshot_process` (ADR-0102 item 3) and reads no bootstrap channel.
 
 **Who builds it.** The broker for the session's shell (ADR-0104 item 12): `/` → a `clone` of the root connection with
 every right the launcher chose (all of them for the toolchain: `read`, `write`, `create`, `remove`, `rename`,
@@ -201,14 +208,17 @@ INV-0002-5 enumerates the child's table after the read.
 
 **The temporary directory service** (`tmpd` is `fsd` with `--memory SIZE`, `SIZE` 16 MiB `[assumption]`):
 
-12. The broker starts it in a job of its own inside the session job, with a fresh in-memory volume (`zoraya-mkfs`'s
-    logic over a `MemoryDevice`), and gives the shell's table its root as `/tmp`. It ends with the session.
-13. `mkfifo(path, mode)`: `open` with `CREATE | EXCLUSIVE` and `posix_mode = S_IFIFO | (mode & ~umask)`, then close;
+12. The broker starts it in a job of its own beside the session job (ADR-0104 item 1, so that a signal to the
+    session never reaches it), with a fresh in-memory volume (`zoraya-mkfs`'s logic over a `MemoryDevice`), and
+    gives the shell's table its root as `/tmp`. It ends with the session.
+13. `mkfifo(path, mode)`: `open_with_mode` (ADR-0103 item 1) with `CREATE | EXCLUSIVE` and
+    `posix_mode = S_IFIFO | (mode & ~umask)`, then close;
     `stat` reports `S_IFIFO`; `readdir`, `unlink` and `rename` are the engine's (driver 4). `mknodat` with `S_IFIFO`
     is the same; other node types are `EPERM`.
 14. `open` of an `S_IFIFO` object in the service: the first open creates a stream pair (ADR-0101) for that object id
     and records reader and writer counts per connection; `O_RDONLY` gets a duplicate of the read end,
-    `O_WRONLY` of the write end, `O_RDWR` is `EINVAL`. Open semantics (INV-0006-9): a read-side open with
+    `O_WRONLY` of the write end, `O_RDWR` is `EINVAL` (Linux allows it and POSIX leaves it undefined, [P2]; a stated
+    deviation that no measured program meets). Open semantics (INV-0006-9): a read-side open with
     `O_NONBLOCK` returns at once; a write-side open with `O_NONBLOCK` returns `ENXIO` while no reader connection
     exists; a blocking open of either side is answered when the other side has an open connection (the service holds
     the request, at most one per connection). A FIFO fd in `libposix` is a `Stream` description with a connection
@@ -228,9 +238,15 @@ INV-0002-5 enumerates the child's table after the read.
 - *ADR-0002 rule 5*'s list of table entries: `/usr/include`, `/usr/lib`, `/bin`, `/etc/passwd` and `/etc/group` are
   reached through `/` here, not as entries of their own; a launcher that wants to narrow may still list them (item 6
   takes any prefixes).
-- *ADR-0002 INV-0002-5*: one transient handle, `BOOTSTRAP`, is added; the enumeration test runs after startup.
+- *ADR-0002 INV-0002-5*: its list gains `SELF` (the process's own handle), `PROCESS_JOB` is its "job handle", a tty
+  fd is two handles (a stream end at the slot and a terminal connection among the message's handles), and the
+  transient `BOOTSTRAP` channel exists until the record is read; the enumeration test runs after startup against
+  this list. Accepting this ADR replaces the invariant's list by it.
 - *ADR-0055*: a FIFO is a file object with a special `open`; no new node kind in the protocol, two new behaviours in
-  the service (`ENXIO`, held opens). The protocol gains nothing for FIFOs; `mkfifo` is `open` with a mode.
+  the service (`ENXIO`, held opens). A held open is a request the loop leaves unanswered while it serves other
+  connections, which ADR-0055's "one request at a time per connection" allows (the opener sends nothing else until
+  its reply); `PEER_CLOSED` on a connection with a held open drops the request. `mkfifo` is `open_with_mode`
+  (ADR-0103 item 1), the one protocol addition it needs.
 - *ADR-0014*: `posix_mode`'s type bits now carry meaning for the service (`S_IFIFO`), where the ADR had them "stored
   verbatim"; the persistent volume's service treats them as verbatim still, so a FIFO created on the root volume
   would be a plain file. `mkfifo` outside `/tmp` therefore returns `EPERM` from `libposix` (no measured program does
@@ -268,10 +284,11 @@ several entries on one prefix; a batch `clone` for spawn.
   test of the resolver with adversarial paths (INV-0002-4's test).
 - **INV-0107-3.** A process's `environ` after startup is exactly the environment vector its spawner passed. *Check:*
   an in-QEMU `libposix` test spawning with a known environment and reading `environ` back.
-- **INV-0107-4.** A FIFO node satisfies the three open behaviours: a non-blocking read-side open succeeds with no
+- **INV-0107-4.** A FIFO node satisfies GNU make's open sequence: a non-blocking read-side open succeeds with no
   writer, a write-side open with a reader succeeds at once, and a sub-make's read-side open followed by
   `fcntl(F_SETFL, O_NONBLOCK)` reads the same tokens the top make wrote. *Check:* a host test of the service loop
-  reproducing GNU make's open sequence (INV-0006-9's test).
+  reproducing GNU make's open sequence; with INV-0107-5 this is INV-0006-9's check (its third behaviour is the
+  unlink while open).
 - **INV-0107-5.** Unlinking a FIFO or a file while connections are open keeps every open connection working and frees
   the object with the last one. *Check:* host test of the service (INV-0010-6's rule through the loop).
 

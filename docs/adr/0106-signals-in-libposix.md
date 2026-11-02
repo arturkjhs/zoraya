@@ -66,14 +66,17 @@ native ABI and ADR-0004 chose wait-point delivery with Option D (a typed upcall)
 
 ## Considered options
 
-### Option A: Asynchronous handlers (Linux signals, ADR-0004 Option D)
+### Option A: Asynchronous handlers (Linux signals, ADR-0004 Option D; NT's fresh-thread console handler as the non-Unix form)
 
-- **Description:** A kernel upcall interrupts the thread wherever it is and runs the handler on its stack.
-- **Evidence for:** Exact fidelity, including compute loops and `tcc -run`'s fault capture.
+- **Description:** A kernel upcall interrupts the thread wherever it is and runs the handler on its stack; or, as NT
+  does for console control events, the kernel starts a fresh thread in the process to run it (DM-017).
+- **Evidence for:** Exact fidelity, including compute loops and `tcc -run`'s fault capture; NT's form needs no
+  async-signal-safety rules.
 - **Evidence against:** Rejected by ADR-0004 for CP-10 and DM-017; no native facility exists; it would be a second
   personality-only facility (ADR-0002 rule 3(b)).
-- **Cost:** The hardest kernel primitive in ADR-0004's words.
-- **Precedent:** Unix; Starnix emulates it on Zircon and calls it a hard part.
+- **Cost:** The hardest kernel primitive in ADR-0004's words; NT's form is a thread injection ADR-0004 Option C
+  weighed and rejected.
+- **Precedent:** Unix; Starnix emulates it on Zircon and calls it a hard part; NT consoles (DM-017).
 
 ### Option B: Wait points only (ADR-0004 Option B read literally)
 
@@ -81,9 +84,9 @@ native ABI and ADR-0004 chose wait-point delivery with Option D (a typed upcall)
   reads and writes; nowhere else.
 - **Evidence for:** Zero cost outside waits; every measured delivery is covered (driver 1).
 - **Evidence against:** A shell loop of builtins (`while :; do :; done`) never reaches a wait and cannot be
-  interrupted by Ctrl-C; make between waits (parsing, directory scans) reacts late. dash checks for a pending interrupt
-  at every command through a flag its handler sets ([D1]: `pending_sig`); with no handler ever running between waits
-  that flag stays clear.
+  interrupted by Ctrl-C; make between waits (parsing, directory scans) reacts late. dash runs its pending traps at
+  the start and end of every command node (`dotrap()` in `evaltree`, [D3], `stage-6/sources.md#other-programs-and-inputs`)
+  from state its handlers set; with no handler ever running between waits that state stays clear.
 - **Cost:** Lowest; a visible fidelity gap in the shell.
 - **Precedent:** ADR-0004's own fidelity note.
 
@@ -102,7 +105,8 @@ native ABI and ADR-0004 chose wait-point delivery with Option D (a typed upcall)
   every shell and make operation; under TCG the cost is visible.
 - **Cost:** *(estimate)* 50 lines in the library's entry path; the measured overhead above.
 - **Precedent:** Cooperative delivery at safe points is how musl's own cancellation and many runtimes' signal handling
-  work (DM-059's deferred cancellation at declared points).
+  work (DM-059's deferred cancellation at declared points); seL4 delivers asynchronous events as notifications a
+  thread polls or waits on (DM-017), which is the non-Unix form of the same rule.
 
 ### Option D: A kernel-written status word in a process-readable page
 
@@ -131,25 +135,32 @@ matter.
 
 1. **Mapping.** `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT` are the kinds `Interrupt`, `Terminate`, `Hangup`, `Quit`;
    every other signal number `n` in 1 to 31 is `Custom(n)`. `sigaction(SIG_DFL)` sets the kernel disposition
-   `Terminate` for signals whose default action terminates (1 to 15 except 9, 24, 25, 26, 27, 29, 30, 31) and
-   `Ignore` for those whose default is to ignore (17, 23, 28) or to stop or continue (18 to 22: the broker acts, item
+   `Terminate` for signals whose default action terminates (1 to 16 except 9, and 24 to 27, 29 to 31) and `Ignore`
+   for those whose default is to ignore (17, 23, 28) or to stop or continue (18 to 22: the broker acts on the
+   *target's* POSIX disposition, which `sigaction` for 18, 20, 21 and 22 registers with it, ADR-0104 item 8a; item
    9). `SIG_IGN` sets `Ignore`; a handler sets `Deliver`. `SIGKILL` and `SIGSTOP` refuse `sigaction` with `EINVAL`.
    At startup `libposix` sets every slot from this table except those the bootstrap record marks as ignored on entry
    (ADR-0107), which stay `Ignore` and which `sigaction` reports as `SIG_IGN` (make's and pdpmake's inherited ignores).
 2. **Blocking.** `sigprocmask` and the mask argument of `pselect` and `sigsuspend` are library state. A request taken
    while its signal is blocked goes into the library's pending set (one bit per signal; standard signals do not
-   queue) and is delivered when unblocked. The kernel's disposition does not change on block: a blocked `SIGINT` with
-   `SIG_DFL` would still end the process at once, so `sigprocmask` blocking a signal whose disposition is `Terminate`
-   sets the kernel disposition to `Deliver` for the duration and restores it on unblock, delivering the default action
-   (item 7) if a request arrived meanwhile. This is the one place the kernel disposition and the POSIX disposition
-   differ.
+   queue) and is delivered when unblocked. The kernel's disposition does not change on block: a blocked signal whose
+   POSIX disposition is `SIG_DFL` and whose default action terminates still ends the process at once, a stated
+   deviation. The alternative, flipping the kernel disposition to `Deliver` for the duration, would cost a
+   `process_set_disposition` per terminating signal per block and unblock: dash blocks every signal around each
+   `sigsuspend` in `waitproc` and around `tcsetpgrp` ([D1]), so about 80 system calls per wait, times the 3,751 child
+   waits of the core runs, seconds under TCG. No measured program blocks a default-action signal and receives it
+   while blocked: make's blocked `SIGCHLD` has a handler, and dash's momentary blocks are around waits it leaves at
+   once. ADR-0004's mapping says "the kernel queue holds it"; here the library's set does (tension below).
 
 **Delivery.**
 
 3. **Wait points** are every `port_wait` the library makes: `pselect`, `select`, `poll`, `sigsuspend`, `pause`,
    `wait*`, `nanosleep`, `sleep`, and the retries of blocking `read` and `write` on streams and terminal connections
-   (ADR-0101, ADR-0105). At each, the process's own handle is subscribed for `REQUEST_PENDING` (Level) when any
-   request-mapped signal has a handler and is unblocked. `SIGCHLD`'s sources are the children's *process job* handles
+   (ADR-0101, ADR-0105). At each, the process's own handle (slot `SELF`, ADR-0107 item 5: given by the spawner over
+   the bootstrap channel, and by `snapshot_process` itself for a `fork` child, ADR-0102 item 3) is subscribed for
+   `REQUEST_PENDING` (Level) when any request-mapped signal has a handler and is unblocked. `pselect` on a `File` or
+   `Dir` fd reports it ready at once: regular files are `NotWaitable` (ADR-0006 rule 1) and a file connection's
+   `READABLE` means a reply, not data; only stream ends and terminal connections are subscribed. `SIGCHLD`'s sources are the children's *process job* handles
    (ADR-0104), subscribed for `TERMINATED` only while a `SIGCHLD` handler is installed and unblocked (INV-0004-8), and
    for `SUSPENDED` too under `SA_NOCLDSTOP` clear.
 4. **Taking a request.** On `REQUEST_PENDING` the library calls `process_take_request` until `NotFound`, and for each
@@ -177,8 +188,10 @@ matter.
    the broker's `stop_self`. `abort()` is `SIGABRT` this way. `SIGPIPE`: on `PeerClosed` from `stream_write`
    (ADR-0101), `SIG_DFL` → `process_exit_with_reason(Terminated, 13)`; otherwise `EPIPE`, after a handler if one is
    installed (W10's `yes`).
-9. **`kill(pid, n)`** for another process: the broker (ADR-0104 item 9), with `sig` 9 as `job_kill`, 19 and 20 (default
-   disposition) as `job_suspend`, 18 as `job_resume`, and every other number as `job_signal(kind(n), n)`.
+9. **`kill(pid, n)`** for another process: the broker (ADR-0104 item 9), with `sig` 9 as `job_kill`; 18 to 22 by the
+   target's disposition the broker holds (`job_suspend` or `job_resume`, `Custom(n)` to a handler, nothing when
+   ignored); and every other number as `job_signal(kind(n), n)`. The stop signals' POSIX dispositions reach the
+   broker from `sigaction` (`set_stop_disposition`, ADR-0104 item 8a), the one `sigaction` that costs a round trip.
 10. **Timers.** `nanosleep`, `sleep` and `pselect`'s timeout are the `Deadline` of the `port_wait`; no timer object is
     needed at stage 6 (`alarm` and `setitimer` are excluded, ADR-0005). `DeadlineExceeded` ends the wait normally.
 
@@ -204,6 +217,8 @@ matter.
 
 **Tensions with accepted ADRs.**
 
+- *ADR-0004*'s mapping has a blocked signal held in the kernel queue; item 2 takes it into the library's pending set
+  and does not flip `Terminate` dispositions, with the stated deviation.
 - *ADR-0004*: "a delivered request is taken at a wait point or at `libposix` entry" is made precise by item 5; its
   mapping of `SIGCHLD` to "child process handles" becomes process job handles (ADR-0104). The stop signals as
   `Custom(n)` with kernel default `Ignore` extend ADR-0004's startup table, which named only terminate and ignore
@@ -229,7 +244,7 @@ the three named.
 ## Consequences
 
 - **Positive.** Every measured scenario of ADR-0006's walkthrough holds, make's handler runs unpatched, dash's
-  `pending_sig` check works for every command that makes a library call, and tcc pays nothing.
+  per-command `dotrap` sees a pending trap after any command that makes a library call, and tcc pays nothing.
 - **Negative.** Shells and make make twice the system calls while a handler is installed. A pure compute loop still
   reacts only at its next library call. Alignment faults report `SIGSEGV`.
 - **Follow-up.** The disposition and `WTERMSIG` tables in `zoraya-posix` with host tests; the poll's measured cost on

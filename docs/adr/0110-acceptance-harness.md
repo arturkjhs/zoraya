@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0001, ADR-0003, ADR-0005, ADR-0006, ADR-0053, ADR-0080, ADR-0100, ADR-0102, ADR-0104, ADR-0105, ADR-0106, ADR-0107, ADR-0109
-- **Evidence:** task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02/method.md#known-limits, task-02/method.md#tiers-runs-and-sets, task-02b/parallel-surface.md#interruption-what-happens-to-the-build-w9, task-02b/parallel-surface.md#setup-in-one-paragraph
+- **Evidence:** alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02/method.md#known-limits, task-02/method.md#tiers-runs-and-sets, task-02b/parallel-surface.md#interruption-what-happens-to-the-build-w9, task-02b/parallel-surface.md#setup-in-one-paragraph
 
 ## Context
 
@@ -63,14 +63,14 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
 
 ## Considered options
 
-### Option A: Run the TASK-02 harness as it is, inside the guest (the measurement setup transplanted)
+### Option A: Run the TASK-02 harness as it is, inside the guest (the Linux measurement setup transplanted: the baseline)
 
 - **Description:** Port Python, `strace` and the interposer to Zoraya and run `run.sh`.
 - **Evidence for:** Identical harness, identical numbers.
 - **Evidence against:** Python, `strace` and `LD_PRELOAD` are T3 and beyond: threads, `ptrace`, dynamic linking,
   all excluded (ADR-0005); the harness would be larger than the system under test.
 - **Cost:** Not achievable at stage 6.
-- **Precedent:** None.
+- **Precedent:** The TASK-02 and TASK-02b runs on Alpine Linux.
 
 ### Option B: Drive the guest from the host over the serial line with the existing runner, checks as shell scripts
 
@@ -88,7 +88,8 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
   varied the delay for that reason.
 - **Cost:** *(estimate)* One runner script per workload (about 15 lines each), the shell scripts, a `make test-posix`
   target, the statistics printout.
-- **Precedent:** `make test-boot` and `make test-files` (this repository).
+- **Precedent:** `make test-boot` and `make test-files` (this repository); Hubris drives its tests from the host
+  through a debug probe and reads results back (`alternatives-postmortem.md#hubris`), the same host-driven shape.
 
 ### Option C: A guest-side native test program under the `ZORAYA-TEST` protocol
 
@@ -99,7 +100,9 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
   ADR-0104 would need a second launcher; W5 and W9 need keystrokes with a terminal in the loop, which a native test
   would have to fake through `ttyd`'s backend; a failing workload is one failed case with no transcript.
 - **Cost:** *(estimate)* A native launcher duplicating `init`'s, and a fake terminal.
-- **Precedent:** `t_storage` (this repository), for a smaller system.
+- **Precedent:** `t_storage` (this repository), for a smaller system; Fuchsia runs its tests as components under a
+  test manager inside the system (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`; the test manager is
+  `[outside evidence: fuchsia.dev test runner framework, not fetched]`).
 
 ### Option D: Host-side checking of the disk image after the run
 
@@ -117,8 +120,9 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
 
 1. **The image.** `make posix-image` builds `build/posix-disk.img` with `zoraya-mkfs` from `build/rootfs-posix/`
    (ADR-0109) plus `tests/posix/rootfs/`: `/etc/passwd` and `/etc/group` with the fixed identity (ADR-0002 rule 6),
-   `/etc/zoraya/session` naming the session command (`sh -i` with `PS1='PSURF> '` and `ENV=/dev/null`, as the
-   measurement did), `/src/tcc` (the pinned tcc tree), `/src/lua`, `/src/sqlite` (the amalgamation), `/src/w8`,
+   `/etc/zoraya/session` naming the session command and environment (`sh -i` with `PS1='PSURF> '`, `ENV=/dev/null`,
+   `PATH=/bin:/usr/bin`, `HOME=/home`, `TERM=dumb`, `SHELL=/bin/sh`, as the measurement's `env -i` did,
+   `task-02/method.md#tiers-runs-and-sets`; ADR-0104 item 12), a `/home` directory, `/src/tcc` (the pinned tcc tree), `/src/lua`, `/src/sqlite` (the amalgamation), `/src/w8`,
    `/src/w10` (from `tools/posix-surface/workloads/`, unchanged), and `/tests/wN.sh` scripts. `init` reads
    `/etc/zoraya/session` when the volume has it and starts `ttyd`, the broker and that command instead of `zosh`
    (ADR-0104 item 12, ADR-0053); without the file it starts `zosh` as today, so every existing test is unchanged.
@@ -135,8 +139,9 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
    redirection, `touch` and the glob, the export and `sh -c`, `sleep 2 &`, `jobs`, `sleep 30` then `\x03` after a
    `~ 500` quiet step, `echo status=$?` expecting `status=130`, `cd /tmp; pwd; cd -`, `wait; echo waited`, `exit`;
    each step waits for `PSURF> `. `uname` is added as the first step (INV-0109-2).
-4. **W9.** `tests/posix/w9-int.script`: at the prompt, `cd /work/w8 && make -j4 >/dev/null; echo W9-STATUS $?; ls
-   t*.h 2>/dev/null | wc -l | sed 's/^/W9-PARTIAL /'`, then `~ 1500` (a quiet wait), then `\x03`, then expect
+4. **W9.** `tests/posix/w9-int.script`: at the prompt, `cd /work/w8 && make -j4 >/dev/null; echo W9-STATUS $?; n=0;
+   for f in t*.h; do [ -e "$f" ] && n=$((n+1)); done; echo W9-PARTIAL $n` (dash only, no applet), then `~ 1500` (a
+   quiet wait), then `\x03`, then expect
    `W9-STATUS 130` and `W9-PARTIAL 0` and, after half a second, `W9-LEFT 0` from a `ps`-less check: the script's
    next line counts the session's pids through the broker's `pids` builtin added to dash as a test aid (or a
    `/tests/pids` program over the broker protocol). `tests/posix/w9-term.script`: the same build in the background
@@ -180,7 +185,9 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
 **Tensions with accepted ADRs.**
 
 - *ADR-0005 INV-0005-3*'s check speaks of "a compile-time call-log feature in `libposix`"; item 7's `stats` feature
-  is that, with the broker as the aggregator and the serial line as the channel.
+  is that, with the broker as the aggregator and the serial line as the channel. *INV-0005-4* says "CI runs the
+  TASK-02/02b workload scripts against the prototype"; the scripts are rewritten as dash scripts and runner scripts
+  (items 2 to 4) with the measured commands and checks, since the Python harness cannot run on Zoraya.
 - *ADR-0053*: `init` gains a second session shape, chosen by a file on the volume; the kernel still starts one
   process (INV-0053-1).
 - *ADR-0080*: a restart of the storage stack ends the POSIX session with the shell, as it ends `zosh`; a test that
@@ -208,14 +215,14 @@ blocks on a FIFO until the harness releases it).
 
 ## Invariants
 
-- **INV-0110-1.** Every T1 acceptance workload (W1, W2, W3, W5, W2-j, W3-j, W8, W9, W10) and the roadmap criterion
-  run inside Zoraya under `make test`, each ending with its `OK` marker, `W9-STATUS 130` and `143`, `W9-PARTIAL 0`,
-  and a power-off. *Check:* `make test-posix`, a step of `make test`, with one runner script per workload.
+- **INV-0110-1.** `make test` fails unless every T1 acceptance workload (W1, W2, W3, W5, W2-j, W3-j, W8, W9, W10) and
+  the roadmap criterion run inside Zoraya to their `OK` marker, `W9-STATUS 130` and `143`, `W9-PARTIAL 0`, and a
+  power-off. *Check:* `make test-posix`, a step of `make test`, with one runner script per workload.
 - **INV-0110-2.** The union of `POSIX-CALLS` over the T1 runs covers every function of the tier list not marked
   `static-only`. *Check:* `tools/posix-stats --calls` in `make test-posix`.
-- **INV-0110-3.** `make measure-w4` prints the fork count, total and mean `snapshot_process` time, `exec` count and
-  time, peak live pids and peak `/tmp` use for W4, under the accelerator it ran on. *Check:* the target's output
-  parsed by `tools/posix-stats`, which fails on a missing counter.
+- **INV-0110-3.** A W4 report produced by `make measure-w4` carries every counter of item 10 (fork count, total and
+  mean `snapshot_process` time, `exec` count and time, peak live pids, peak `/tmp` use) and names the accelerator; a
+  report missing one is not a report. *Check:* `tools/posix-stats` fails on a missing counter.
 - **INV-0110-4.** A `-FAIL`, `panicked` or `ZORAYA-FAULT` line in any POSIX run fails the step. *Check:* the `!`
   lines of every runner script.
 

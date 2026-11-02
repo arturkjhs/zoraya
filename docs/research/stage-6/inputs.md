@@ -49,14 +49,14 @@ measurement is taken, and the number itself waits for the prototype. *open*: no 
 | I-23 | INV-0004-2's `waitpid` half, INV-0004-8 (`SIGCHLD` subscription only with a handler) | open question | answered: ADR-0106 |
 | I-24 | Reaction latency of a compute-bound POSIX program with a handler | open question | answered in part: ADR-0106 adds a bounded poll at library entry for processes with a handler installed, and names the measurement; the compute-loop case stays a documented limitation |
 | I-25 | Whether make's cleanup runs correctly from the main wait (M7 estimate, about 30 lines) | open question, follow-up | answered: ADR-0106 runs the handler on the calling thread at the wait point, so make's `fatal_error_signal` runs unpatched; ADR-0110's W9 test is the check |
-| I-26 | Interrupts arriving during `spawn` or `snapshot_process` | open question | answered: ADR-0102 and ADR-0104: a request is queued on a new process only if its disposition is `Deliver` at creation, and `snapshot_process` copies dispositions but not the queue |
+| I-26 | Interrupts arriving during `spawn` or `snapshot_process` | open question | answered: ADR-0102 item 5 (a `fork` child receives requests from the moment it joins its job, under the dispositions it copied, with an empty queue) and ADR-0104 item 6 (an `exec`ed image under its attribute block); the answer to ADR-0004's open question is therefore "under the new process's dispositions at creation", which for `Deliver` means queued and for `Terminate` means ended |
 | I-27 | Ctrl-Z, `SIGTTIN`/`SIGTTOU`, `SIGWINCH` not exercised; a W5 extension needed before the job-control mapping is trusted | open question | open in part: ADR-0105 specifies Ctrl-Z through `job_suspend`/`job_resume` and `SIGWINCH` as a `Custom` request from the terminal, and leaves `SIGTTIN`/`SIGTTOU` unemulated at stage 6 with the reason; the W5 extension is listed in ADR-0110 as a measurement, not an acceptance test |
 | I-28 | Who may bind an exception channel to a `posix` job; whether a crash reporter is wanted | open question | open: ADR-0106 says no exception channel is bound at stage 6; a crash reporter is a later ADR |
 | I-29 | The terminal service's foreground-job protocol (CP-25) | follow-up | answered: ADR-0105 |
 | I-30 | A patch of GNU make's `fatal_error_signal` as the M7 calibration | follow-up | answered: not needed under ADR-0106's delivery rule; ADR-0110 runs W9 unpatched |
 | I-31 | A test reproducing W9a and W9b with exit statuses 130/143 and zero partial targets | follow-up | answered: ADR-0110 |
-| I-32 | `SIGTTIN`: "a background job's read on the terminal returns `NotForeground`" | personality mapping | answered with a deviation: ADR-0105 makes the terminal a byte stream, which cannot refuse a read by caller, so this sentence is deferred; the tension is listed there |
-| I-33 | Process groups are sub-jobs; `setpgid` at spawn through `start_suspended`; `setpgid(0, 0)` by a lone process declares its job a group | personality mapping | answered: ADR-0104, with the group handle passed at `spawn` and `snapshot_process` |
+| I-32 | `SIGTTIN`: "a background job's read on the terminal returns `NotForeground`" | personality mapping | answered: ADR-0105 items 4 and 8 implement it (terminal reads are requests the service can refuse); `SIGTTOU` on a background `tcsetpgrp` is the one deviation, listed there |
+| I-33 | Process groups are sub-jobs; `setpgid` at spawn through `start_suspended`; `setpgid(0, 0)` by a lone process declares its job a group | personality mapping | answered: ADR-0104 items 4, 5 and 8: the group is chosen at `spawn_prepare` and the process job the broker returns is the `job` of `spawn` or `snapshot_process` (`spawn`'s own `group` field is unused); `setpgid` succeeds only as a no-op; the interactive foreground path spawns suspended and the parent sets the terminal before `process_resume` |
 
 ## ADR-0005: scope
 
@@ -67,7 +67,7 @@ measurement is taken, and the number itself waits for the prototype. *open*: no 
 | I-36 | A larger autoconf project before T2 is accepted | open question | open: T2 beyond the measurement plan is out of this task's scope |
 | I-37 | Whether `tcc -ar` and the `ld` wrapper suffice for autoconf projects | open question | open: T2 |
 | I-38 | toybox `mktemp` prints a `/tmp` path: confirm the per-session `/tmp` satisfies configure | open question | answered in part: ADR-0107 gives `/tmp` the semantics `mktemp` needs (a path that other processes of the session can open); confirmation on W4 is T2 |
-| I-39 | Which toybox applets are the accepted set | open question | open: `applets-by-tier.tsv` stays normative; ADR-0109 builds the T1 row and the architect may add applets |
+| I-39 | Which toybox applets are the accepted set | open question | answered in part: ADR-0109 item 6 builds the TSV's T1 row plus `sort`, `wc` and `yes`, which W10 runs and the TSV (older than TASK-02b) does not list at T1; the tension with ADR-0005 is listed there; further applets are the architect's |
 | I-40 | `snapshot_process` measured on W4 before T2 is accepted | in-scope text, revisit trigger | measured later: ADR-0110 |
 | I-41 | Job control beyond Ctrl-C and background jobs is specified to POSIX but not an acceptance test | exclusion table | answered: ADR-0105 keeps that split |
 
@@ -84,8 +84,8 @@ measurement is taken, and the number itself waits for the prototype. *open*: no 
 | I-48 | Wake-up rate at high `-j` (W8 at `-j16`) | open question, follow-up | measured later: ADR-0110 lists it |
 | I-49 | Other jobserver clients (ninja, cargo) and `poll` | open question | open: unmeasured, not in scope |
 | I-50 | Interactive line editors (`ppoll`) | open question | open: line editing is excluded by ADR-0005; ADR-0105's terminal is a byte stream with `READABLE`, which is the form a later line editor needs |
-| I-51 | Edge versus level for the personality | open question | answered: ADR-0106 uses `Level` throughout, with one `Edge` use for the request-pending poll |
-| I-52 | `stream_read`/`stream_write` "synchronous with a `nonblocking` flag" (rule 6), `object_wait_one`, `object_get_signals`, timers, event objects not built | rule 6, open question | answered with a change: ADR-0101 makes stream transfers never block and drops the flag (tension listed); ADR-0106 needs timers for `nanosleep` and lists `object_wait_one` as optional |
+| I-51 | Edge versus level for the personality | open question | answered: ADR-0106 uses `Level` throughout and no `Edge` (item 3); the poll is a `process_take_request`, not a subscription |
+| I-52 | `stream_read`/`stream_write` "synchronous with a `nonblocking` flag" (rule 6), `object_wait_one`, `object_get_signals`, timers, event objects not built | rule 6, open question | answered with a change: ADR-0101 makes stream transfers never block and drops the flag (tension listed); ADR-0106 item 10 needs no timer object (`nanosleep` is a port deadline) and ADR-0104 item 11 uses `object_get_signals` for `WNOHANG`; `object_wait_one` stays optional |
 
 ## ADR-0031, ADR-0033, ADR-0040 to ADR-0046
 
@@ -112,20 +112,20 @@ measurement is taken, and the number itself waits for the prototype. *open*: no 
 | I-66 | `mmap` for `libposix` | ADR-0051 | answered: ADR-0100 and ADR-0103 (anonymous private mappings on memory objects; `MAP_SHARED` stays out) |
 | I-67 | How C programs reach services through `libposix` | ADR-0052 | answered: ADR-0100, ADR-0103 |
 | I-68 | The broker is started as services are; who builds a user session | ADR-0053 | answered: ADR-0104 |
-| I-69 | `pselect` over file handles (regular files always ready) | ADR-0055 | answered: ADR-0106 |
+| I-69 | `pselect` over file handles (regular files always ready) | ADR-0055 | answered: ADR-0106 item 3 and ADR-0103 item 14: a `File` or `Dir` fd is reported ready at once and is not subscribed |
 | I-70 | `close` returning `EIO` through `status` | ADR-0055, ADR-0010 personality mapping | answered: ADR-0103 |
 | I-71 | How far 896 connections go for a POSIX toolchain | ADR-0055 | answered in part: ADR-0103 counts connections per POSIX process and names the measurement; ADR-0107's table of a few entries keeps the count low |
 | I-72 | `snapshot_process` must charge a full copy to the same job; `QuotaExceeded` to `errno` | ADR-0056 (proposed) | answered in part: ADR-0102's eager copy is that full charge by construction; the `errno` mapping (`ENOMEM`) is in ADR-0106's error table; ADR-0056 itself stays proposed and outside this task |
 | I-73 | A file descriptor stays a `libposix` number that maps to a handle | ADR-0057 | answered: ADR-0103 |
 | I-74 | A terminal service "must take the rule's form" (ADR-0006 rule 1: a byte stream with `READABLE`, `WRITABLE`, `PEER_CLOSED`, and `WouldBlock` when empty) | ADR-0060 tensions, follow-up, revisit trigger | answered: ADR-0105 |
-| I-75 | `fsync` family not exported; `O_TMPFILE` to unnamed create; tcc's unlink-then-create pattern | ADR-0010 personality mapping and open question 1 | answered: ADR-0103 keeps the mapping and leaves tcc's pattern as written (open question stays with ADR-0010) |
+| I-75 | `fsync` family not exported; `O_TMPFILE` to unnamed create; tcc's unlink-then-create pattern | ADR-0010 personality mapping and open question 1 | answered: ADR-0103 item 14 keeps the mapping (and ADR-0100 item 6 maps `linkat` with `AT_EMPTY_PATH` to `publish`); tcc's pattern is left as written and ADR-0010's open question 1 stays open |
 | I-76 | Symbolic links followed by `libposix`; `..` lexical; `st_nlink`, `st_ino`, `st_atime` synthesis; `umask` carried through the spawn protocol | ADR-0013 rule 8, ADR-0014 rules 4 to 10 | answered: ADR-0107 (resolver, `umask` in the bootstrap record), ADR-0103 (`stat` synthesis) |
 
 ## `docs/design.md` and `docs/backlog.md`
 
 | # | Item | Source | Disposition |
 |---|---|---|---|
-| I-77 | "Not built at stage 3: `job_suspend`, `job_resume`, `object_wait_one`, `object_get_signals`, timers, event objects, byte streams, channels, exception channels and `snapshot_process`" (channels and event objects came with stage 4) | design.md | answered: ADR-0101 (streams), ADR-0102 (snapshot), ADR-0105 (`job_suspend`/`job_resume`), ADR-0106 (timers, `object_get_signals` for `WNOHANG`); exception channels stay unbuilt (I-21) |
+| I-77 | "Not built at stage 3: `job_suspend`, `job_resume`, `object_wait_one`, `object_get_signals`, timers, event objects, byte streams, channels, exception channels and `snapshot_process`" (channels and event objects came with stage 4) | design.md | answered: ADR-0101 (streams), ADR-0102 (snapshot), ADR-0105 (`job_suspend`/`job_resume`), ADR-0104 item 11 (`object_get_signals` for `WNOHANG`); timers stay unbuilt (ADR-0106 item 10 uses port deadlines); exception channels stay unbuilt (I-21) |
 | I-78 | "The `posix` bit is stored and unused until stage 6" | design.md | answered: ADR-0104 says who creates `posix` jobs |
 | I-79 | Stage 6 roadmap row: `libposix` T1, port of tcc, make, dash; done when `tcc hello.c && ./a.out` runs inside Zoraya | design.md | answered: ADR-0109, ADR-0110 |
 | I-80 | User copies are byte at a time (3.2 µs a KiB under HVF); try word-sized copies with a measurement | backlog | open: not a stage 6 decision; ADR-0102 and ADR-0108 note that their copy costs scale with it |

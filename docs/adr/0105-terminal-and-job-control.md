@@ -55,7 +55,7 @@ that terminal rights be separated and control be out of band natively, with a VT
 1. **Ctrl-C must reach the whole foreground job at once**, from the terminal, without any process forwarding it
    (ADR-0004 driver 2, W9a).
 2. **The data path is high volume and simple**: compiler and make output, a byte at a time or a line at a time,
-   should be a stream write, not a round trip (CP-25's "data path as bytes").
+   should be a stream write, not a round trip (CP-25 keeps data and control apart; the data side is bytes).
 3. **The control path needs to know who asks**: `tcsetpgrp` is a shell's authority over the terminal, a background
    read must be refusable, the window size is a query (ADR-0004's mapping; CP-25).
 4. **No terminal policy in the kernel** (ADR-0060, DM-069): echo, canonical lines, the signal characters and `TOSTOP`
@@ -140,9 +140,12 @@ that terminal rights be separated and control be out of band natively, with a VT
    unless `NOFLSH`. Non-canonical mode exists in the state machine (for a later line editor) but nothing at T1 sets it.
    `TOSTOP` is off and not implemented at stage 6 (no measured use).
 3. **Signals.** INTR: `job_signal(fg_job, Interrupt, 2)`; QUIT: `job_signal(fg_job, Quit, 3)`; SUSP:
-   `job_suspend(fg_job)` then a `stopped` message to the broker, which marks the group's pids stopped so that a
-   `waitpid(WUNTRACED)` in the shell returns (ADR-0104 item 11, the job's `SUSPENDED` signal). Hangup, when the backend
-   closes: `job_signal(session_job, Hangup, 1)`, with the session job handle the broker gave it. Window size change:
+   a `suspend(20)` message to the broker, which applies the foreground group's recorded dispositions for `SIGTSTP`
+   (ADR-0104 items 8a and 9: `job_suspend` of the group job and the pids marked stopped so that a `waitpid(WUNTRACED)`
+   in the shell returns, or `Custom(20)` to a handler, or nothing when ignored); the terminal itself calls
+   `job_suspend` for nothing, since it cannot know the targets' dispositions. Hangup, when the backend closes:
+   `job_signal(session_job, Hangup, 1)`, with the session job handle the broker gave it (ADR-0104 item 1: the session
+   job holds only POSIX processes). Window size change:
    `job_signal(fg_job, Custom(28), 28)`, whose default disposition is `Ignore` (ADR-0004). With no foreground job set,
    the characters are data.
 4. **The terminal connection** (`zoraya-proto-tty`): `read(max) → bytes` (an empty reply is end of file; `NotForeground`
@@ -151,8 +154,9 @@ that terminal rights be separated and control be out of band natively, with a VT
    would not block, for a later `pselect`); `window_size → {rows, cols}`; `get_attr → termios subset`;
    `set_attr(subset)`; `clone(group pid, server_end)`: a new connection for a child, tagged with the group the caller
    declares. `isatty` and `ttyname` need no request: the description's kind says so and the name is `/dev/tty`.
-5. **The control connection** (broker only): `foreground(group pid, job handle with SIGNAL and KILL)` sets the
-   foreground group and the handle the signals go to; `session(job handle)` for hangup; `clear_foreground`.
+5. **The control connection** (broker only): `foreground(group pid, job handle)` sets the foreground group and the
+   handle the signals go to, with the rights ADR-0104 item 10 gives it (`SIGNAL | KILL`); `session(job handle)` for
+   hangup; `clear_foreground`; and, from `ttyd` to the broker, `suspend(sig)` for the SUSP character (item 3).
    `job_suspend` and `job_resume` need the `KILL` right `[assumption, until ADR-0040's table names a right]`.
 
 **`libposix`.**
@@ -161,17 +165,19 @@ that terminal rights be separated and control be out of band natively, with a VT
    stream write; `read` sends `read`, then waits on the connection's `READABLE` at a wait point (ADR-0106), and maps
    `NotForeground` as item 8 says. fds 0, 1 and 2 of the shell are one description; `open("/dev/tty")` makes another
    from the namespace entry (ADR-0107) by `clone` of the process's own connection.
-7. **Job control calls.** `tcsetpgrp(fd, pgid)` → broker `tcsetpgrp(pgid)` (ADR-0104 item 10); the broker checks
-   that `pgid` is a group of the session and that the caller is in the foreground group or has no foreground set,
-   else `EPERM` (the `SIGTTOU` a background caller would get on Linux, [P10], is not emulated: see item 8), and sends
-   `foreground` to `ttyd`. `tcgetpgrp` → broker lookup; `TIOCSPGRP`/`TIOCGPGRP` through `ioctl` are the same two.
+7. **Job control calls.** `tcsetpgrp(fd, pgid)` → broker `tcsetpgrp(pgid)` (ADR-0104 item 10): any process of the
+   session may make a group of the session the foreground group, which is what dash needs twice per foreground job,
+   in `forkchild` from the child for its own new group and in `waitforjob` from the shell while the job's group is
+   still foreground ([D1]; both run with signals blocked, which on Linux is what lets a background caller through,
+   [P10]); `pgid` outside the session is `EPERM`. The `SIGTTOU` Linux would send a background caller with `SIGTTOU`
+   unblocked is not emulated (item 8). The broker sends `foreground` to `ttyd`. `tcgetpgrp` → broker lookup; `TIOCSPGRP`/`TIOCGPGRP` through `ioctl` are the same two.
    `TIOCGWINSZ` → `window_size`. `tcgetattr` → `get_attr`. `setpgid` is ADR-0104's.
 8. **`SIGTTIN`, `SIGTTOU`, Ctrl-Z, `fg`, `bg`.** Specified to POSIX, not acceptance tests (ADR-0005). A `read` answered
    `NotForeground`: `libposix` asks the broker to stop its group (`stop_self(21)`), which `job_suspend`s the process
    job and marks it stopped; when resumed, the read is retried. If `SIGTTIN` is ignored or blocked the read returns
    `EIO`, as POSIX says. `SIGTTOU` is sent nowhere (`TOSTOP` off; `tcsetpgrp` from the background is `EPERM`).
-   `kill(pid, SIGSTOP | SIGTSTP)` with default disposition → broker `job_suspend`; `kill(pid, SIGCONT)` → `job_resume`;
-   `SIGTSTP` with a handler is `Custom(20)` delivered as ADR-0106 says. The shell's `fg` is `tcsetpgrp` then
+   `kill(pid, SIGSTOP | SIGTSTP)` and `kill(pid, SIGCONT)` are the broker's by the target's recorded disposition
+   (ADR-0104 items 8a and 9): `job_suspend` or `job_resume`, `Custom(n)` to a handler, nothing when ignored. The shell's `fg` is `tcsetpgrp` then
    `kill(-pgid, SIGCONT)`; `bg` the latter alone. `job_suspend(job)` and `job_resume(job)` (ADR-0004 rule 3, not yet
    built) stop and continue every thread in the job tree and assert `SUSPENDED` on the job and every job below it;
    this ADR fixes that meaning, since ADR-0046 left the calls unbuilt.
@@ -190,8 +196,10 @@ that terminal rights be separated and control be out of band natively, with a VT
   for output. Accepting this ADR records that a terminal's input is a connection.
 - *ADR-0004 rule 8*'s "the terminal never names processes" holds: it holds job handles the broker gave it, and group
   *pids* only as tags on connections, which it never acts on except to compare.
-- *ADR-0004*'s `SIGTTIN` sentence is implemented as written, through `NotForeground`; the `SIGTTOU` on a background
-  `tcsetpgrp` is replaced by `EPERM`, a deviation from [P10] that no measured program exercises.
+- *ADR-0004*'s `SIGTTIN` sentence is implemented as written, through `NotForeground`; the `SIGTTOU` Linux sends a
+  background `tcsetpgrp` caller with the signal unblocked ([P10]) is not emulated: the call succeeds for any process
+  of the session (item 7). dash exercises the background call on every foreground job, with the signal blocked, so
+  the deviation changes nothing it sees.
 - *ADR-0040*: `job_suspend` and `job_resume` need a right; `KILL` is assumed until the table says.
 - *ADR-0060*: the console's `READ` right goes to `ttyd` alone in a POSIX session; `zosh` does not run beside it.
 
@@ -224,12 +232,16 @@ a pseudo-terminal pair for programs that run others under a terminal they create
   `job_signal`. *Check:* an in-QEMU test with a foreground job of three processes and a background job of two, each
   counting `Interrupt` requests, after one Ctrl-C through `ttyd`'s backend.
 - **INV-0105-2.** Only the broker's control connection can change the foreground group; a `foreground` message on a
-  terminal connection is refused. *Check:* a host test of the service loop with both connection kinds.
+  terminal connection is refused; and through the broker, `tcsetpgrp` from a child for its own new group and from the
+  shell after a foreground job both succeed. *Check:* a host test of the service loop with both connection kinds, and
+  an in-QEMU `libposix` test of dash's two calls (a child calling `tcsetpgrp(getpgrp())` after `setpgid`, then the
+  parent calling `tcsetpgrp(getpgrp())` after `waitpid`).
 - **INV-0105-3.** A `read` from a connection whose group is not the foreground group returns `NotForeground` and
   consumes no input; a `read` from the foreground group returns the next line. *Check:* host test of the service with
   two tagged connections.
 - **INV-0105-4.** `ttyd` holds no terminal policy in the kernel: the kernel console stays ADR-0060's raw ring.
-  *Check:* INV-0060-1 to -4 keep passing; `grep` finds no termios constant in `kernel/src`.
+  *Check:* INV-0060-1 to -4 keep passing; `grep -rn` for `ICANON`, `ECHO`, `ISIG`, `VINTR`, `VQUIT`, `VSUSP`,
+  `VERASE`, `VKILL`, `VEOF`, `ONLCR`, `TOSTOP`, `termios` and `winsize` finds nothing in `kernel/src`.
 - **INV-0105-5.** `job_suspend` stops every thread in the job tree before it returns and asserts `SUSPENDED` on every
   job in it; `job_resume` clears it. *Check:* an in-QEMU test with a two-level job of counting processes, reading the
   counters before and after.

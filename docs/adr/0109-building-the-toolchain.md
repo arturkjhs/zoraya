@@ -20,8 +20,9 @@ and is itself built inside Zoraya, and how third-party sources enter the build.
   pinned the versions and the SHA-256 of every archive in `tools/posix-surface/versions.env` and `sources.lock`
   (`task-02/method.md#pinned-inputs`). W1 is `sh ./configure --cc=tcc --config-musl` then `make` in tcc's tree; W2
   is Lua's `make CC=tcc AR="tcc -ar rcu" RANLIB=true posix`; W3 compiles SQLite's two files with tcc
-  (`task-02/method.md#tiers-runs-and-sets`). tcc's `configure` reports `aarch64-unknown-linux-gnu` through
-  `config.guess` under musl (`task-02/posix-surface.md#key-observations`, item 7).
+  (`task-02/method.md#tiers-runs-and-sets`). GNU hello's `configure`, run with `CC=tcc`, reports
+  `aarch64-unknown-linux-gnu` through `config.guess` under musl (`task-02/posix-surface.md#key-observations`, item 7);
+  tcc's own `configure` has no `config.guess` ([T3]).
 - tcc: "generates machine code for i386, x86_64, arm, aarch64 or riscv64", with `arm64-gen.c`, `arm64-link.c` and
   `arm64-asm.c`; its own linker; `-ar` as an archiver; `-static`, `-B`, `-nostdlib`, `-Wl,--oformat`; `configure`'s
   `--cpu=`, `--targetos=`, `--crtprefix=`, `--sysincludepaths=`, `--libpaths=`, `--elfinterp=`, `--enable-cross`;
@@ -140,26 +141,33 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
 4. **Startup.** `crt1.o` is built from `ports/crt/crt1.S` and the Rust function `zoraya_posix_start` in
    `zoraya-posix`: `_start` clears the frame pointer and link register as musl's does ([M9]), checks the zero-register
    contract of `zoraya-rt`, and calls `zoraya_posix_start(sp)`, which reads the startup block of ADR-0042, writes
-   `argc`, the `argv` pointers, `NULL`, the `envp` pointers, `NULL` and an auxiliary vector onto the stack
-   (`AT_PAGESZ` 4096, `AT_PHDR` and `AT_PHNUM` from the program header table the kernel now copies into the startup
-   block for musl's `__init_tls`, `AT_RANDOM` pointing at 16 bytes derived from the clock and the process's handle
-   generations, labelled weak, `AT_NULL`), reads the bootstrap message of ADR-0107, and tail-calls musl's `_start_c`
-   with that stack. `crti.o` and `crtn.o` hold the empty `_init` and `_fini` prologues and epilogues.
+   `argc`, the `argv` pointers, `NULL`, the `envp` pointers, `NULL` and the auxiliary vector onto the stack: `AT_PAGESZ`
+   4096; `AT_PHDR`, `AT_PHENT` 56 and `AT_PHNUM` from the program header table the kernel now copies into the startup
+   block, which musl's `__init_tls` walks with that stride for `PT_TLS` ([M10]); `AT_RANDOM` pointing at 16 bytes
+   derived from the clock and the process's handle generations, labelled weak; `AT_NULL`. This is the one list for
+   `crt1` (ADR-0100 item 4 refers to it). It then reads the bootstrap messages of ADR-0107 and tail-calls musl's
+   `_start_c` with that stack. `crti.o` and `crtn.o` hold the empty `_init` and `_fini` prologues and epilogues.
 5. **The startup block gains the program header table**: the kernel appends the ELF's program headers after the
-   vectors (ADR-0042's layout, versioned by the header size), which `AT_PHDR` points at. `zoraya-elf` already parses
-   them; this makes them visible to the program.
+   vectors (ADR-0042's layout, versioned by the header size), which `AT_PHDR` points at; ADR-0042's "Nothing may
+   follow" becomes "then the program headers, and nothing may follow". `zoraya-elf` already parses them (at most
+   `MAX_SEGMENTS` loadable, 8 headers of 56 bytes at most for a static tcc output); the block's room is
+   `STARTUP_BLOCK_MAX`, one page beyond the 64 KiB `spawn` buffer, so a `spawn` whose vectors plus headers exceed it
+   is refused with `LimitReached`, as an over-long buffer is today.
 6. **The ports.** `ports/Makefile`, run by `make ports` (a prerequisite of the stage 6 tests, ADR-0110): fetches each
    archive once into `build/ports/src/` by URL from `ports/sources.lock` (versions and SHA-256 as TASK-02's, musl
    added), refuses a hash mismatch, and fails with a message naming `make ports-fetch` when a source is missing and
    the network is not to be used. Then builds, with `tools/zcc`: musl's retained files and `zoraya-posix` into
    `libc.a`; dash (`./configure --host=aarch64-unknown-zoraya` with a `config.site` answering the checks that cannot
    run; its `mksignames` runs on the host); GNU make (`--host=...`, `--disable-load`, `--without-guile`; `posix_spawn`
-   detected by the site file so make uses it, as measured); toybox (a `.config` with exactly the T1 applets of
-   `applets-by-tier.tsv`, `cat head ls mv rm sleep touch true uname`, and the `__linux__` branches of its portability
-   layer compiled out); busybox (`tr`, `diff`); tcc (`./configure --cpu=aarch64 --targetos=Zoraya --prefix=/usr
+   detected by the site file so make uses it, as measured); toybox (a `.config` with the T1 applets of
+   `applets-by-tier.tsv`, `cat head ls mv rm sleep touch true uname`, plus `sort`, `wc` and `yes`, which W10's script
+   runs (`tools/posix-surface/workloads/w10/w10.sh`: `sort`, `wc -l`, `yes`) and which the TSV, made before TASK-02b,
+   lists at T2 or not at all, added on TASK-02b's evidence as ADR-0005 added `writev` (tension below); and the
+   `__linux__` branches of its portability layer compiled out); busybox (`tr`, `diff`); tcc (`./configure --cpu=aarch64 --targetos=Zoraya --prefix=/usr
    --tccdir=/usr/lib/tcc --crtprefix=/usr/lib --sysincludepaths=/usr/include:/usr/lib/tcc/include --libpaths=/usr/lib
    --elfinterp=` with `CONFIG_TCC_STATIC`, cross-compiled by `zcc`), and `arm64-libtcc1.a` by `zcc` through
-   `arm64-libtcc1-usegcc=yes` ([T6]). Outputs go to `build/rootfs-posix/` as `/bin/sh`, `/bin/dash`, `/bin/make`,
+   `arm64-libtcc1-usegcc=yes` ([T6]; `lib/Makefile` chooses `dsohandle.o` and the native-only objects by OS branch, one
+   more patch point for a `Zoraya` target). Outputs go to `build/rootfs-posix/` as `/bin/sh`, `/bin/dash`, `/bin/make`,
    `/bin/tcc`, `/bin/cc` → `tcc`, `/bin/toybox` with a link per applet (ADR-0108 item 6), `/bin/busybox` with `tr`
    and `diff` links, `/usr/include`, `/usr/lib`. `zoraya-mkfs` makes the image (ADR-0110).
 7. **tcc inside Zoraya.** With item 6's configuration tcc links `-static` always, emits no `PT_INTERP`, finds
@@ -171,11 +179,13 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
    `zoraya-elf` over `a.out` in a host test before any boot.
 8. **W1 inside Zoraya.** `sh ./configure --cc=tcc --cpu=aarch64 --targetos=Zoraya ...` then `make` in tcc's tree,
    with `/bin/cc` the stage 6 tcc: the stage-2 tcc is linked against the same `libc.a` and compiles the test program
-   of `W1-check`. `--config-musl` is dropped: it only sets a dynamic linker path.
+   of `W1-check`. `--config-musl` is dropped: it sets the dynamic linker path and `CONFIG_TCC_MUSL` ([T3]), whose other
+   effects in tcc's sources the first toolchain task checks.
 9. **Patches** live in `ports/patches/<program>/` with a README naming each original's version and licence, as
    `tools/posix-surface/patches/` does: dash (the `fork` group hint of ADR-0104 item 4 in `forkshell`, about 5 lines;
-   `vforkexec` to `posix_spawn` with the group attribute for the interactive path, ADR-0003's follow-up, the M4
-   patch extended); make (none expected beyond `config.sub`); toybox and busybox (portability branches); tcc (item 7);
+   `vforkexec` to `posix_spawn` with `POSIX_SPAWN_SETPGROUP` and the Zoraya-only `POSIX_SPAWN_TCSETPGRP` for the
+   interactive foreground path, so that the parent, not the child, hands the terminal over before the child runs,
+   ADR-0104 item 5, ADR-0003's follow-up, the M4 patch extended); make (none expected beyond `config.sub`); toybox and busybox (portability branches); tcc (item 7);
    musl (ADR-0100 item 2). A patch to a GPL program is distributed under that program's licence, which the README
    states.
 10. **Host tools recorded** in `docs/dependencies.md`: clang (the version each development host has; the build prints
@@ -183,6 +193,10 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
     new table.
 
 **Tensions with accepted ADRs.**
+
+- *ADR-0005*'s "the TSV is authoritative" for applets: the T1 build adds `sort`, `wc` and `yes` (item 6) on
+  TASK-02b's W10 evidence, as the ADR itself added `writev`; `applets-by-tier.tsv` predates TASK-02b. Accepting this
+  ADR adds those three to T1's applet list.
 
 - *ADR-0042*: the startup block's layout grows (item 5), versioned by its header size as the ADR provides.
 - *ADR-0033*: unchanged in rule; the loader now also serves tcc's output, which item 7 shapes to it.

@@ -125,15 +125,23 @@ authority (CP-02), and names resolve relative to handles (CP-04).
    position, the append flag. `share(rights, server_end)` attaches a new connection to the caller's description, with
    rights equal to or narrower than the caller's; it needs the `clone` right (ADR-0055), which every connection a
    POSIX process holds carries. The description ends with its last connection. `clone` keeps making a fresh
-   description (ADR-0080), which is `open` of the same object again.
+   description (ADR-0080), which is `open` of the same object again. `open` gains a form that carries the POSIX
+   `mode` for a create (`open_with_mode`, a new ordinal under ADR-0052; the stage 4 `Open` message has `flags`,
+   `rights` and `path` only, and ADR-0014 rule 6's "a create request carries the mode" was never built): `libposix`
+   uses it for every `O_CREAT` open, so tcc's `a.out` is created `0o777 & ~umask` and executable, and ADR-0107's
+   `mkfifo` can set `S_IFIFO`. The alternative, `set_attributes` after each create, would cost a round trip on each
+   of the 1,317 `O_CREAT|O_TRUNC` opens.
 2. **Offsets.** `read` and `write` take an offset or the marker `current`; with `current` the service reads at the
    position and advances it inside the request, atomically across the description's connections because requests
    run one at a time (INV-0055-1). `seek(whence, offset)` returns the new position; `SEEK_END` is a size read in the
    same request. Append: a write to a description with the flag goes to the end and moves the position there (ADR-0010
    rule 2 keeps it atomic). `set_flags` changes append. `pread`/`pwrite` are explicit offsets and move nothing.
-3. **Directories.** A directory description has no position; the `readdir` cookie stays in the library
-   (ADR-0080), so two fds on one directory description each walk from their own cookie, which POSIX leaves
-   unspecified `[outside evidence: POSIX readdir, not fetched]`.
+3. **Directories.** A directory description has no position in the service; the `readdir` cookie is held once per
+   description entry in the library, so `dup`ed directory fds share one stream, as POSIX asks. ADR-0080 keeps one
+   cookie per connection in the service, valid for that connection's last reply, so after `fork` or `spawn` the
+   child's connection has no valid cookie and its directory stream starts again from the beginning: a stated
+   deviation (POSIX leaves a directory stream's state after `fork` to the implementation
+   `[outside evidence: POSIX readdir, not fetched]`; no measured program reads a directory across a fork).
 
 **The library's table.**
 
@@ -143,20 +151,28 @@ authority (CP-02), and names resolve relative to handles (CP-04).
    `Stream { read end and/or write end, connection }` (pipes have no connection; FIFOs and the terminal have one,
    ADR-0105, ADR-0107), `Null`, plus the per-description flags the service does not hold: `O_NONBLOCK` (ADR-0006), and
    for streams `O_APPEND` is meaningless. `open` of a file is one `open` request; of `/dev/null`, no handle.
+   `O_NONBLOCK` is therefore per process after `fork` or `spawn`, where POSIX shares it across every copy of the
+   description ([P16]): a stated deviation, harmless for make, which sets the flag once on its own read end.
 5. **`dup`, `dup2`, `dup3`, `F_DUPFD*`.** A second fd on the same description entry, in the process; no IPC. `dup2`
    closes its target first and is a no-op when the fds are equal ([P4]). `FD_CLOEXEC` is per fd, off on the copy.
 6. **`close`.** The last fd of a description entry closes its handles. For a `File` opened for writing, `close` first
    sends `status` (ADR-0055) and returns `EIO` on `StorageFailed` (ADR-0010's personality mapping); a reply of
    `PEER_CLOSED` is `EIO` too.
 7. **`spawn` (posix_spawn, exec).** For each fd without `FD_CLOEXEC`, in fd order: `Stream` ends are listed as
-   duplicates at slot = fd; a `File`, `Dir` or terminal connection is `share`d into a fresh channel whose client end is
-   moved at slot = fd; `Null` is listed as no handle, with its kind in the bootstrap record. The child's `libposix`
+   duplicates at slot = fd; a `File`, `Dir` or FIFO connection is `share`d into a fresh channel whose client end is
+   moved at slot = fd; a terminal connection is `clone`d by the terminal protocol with the child's group as
+   `spawn_prepare` returned it (ADR-0105 item 4), since the terminal's `NotForeground` compares that tag; `Null` is
+   listed as no handle, with its kind in the bootstrap record. A `spawn` carries at most `MAX_SPAWN_HANDLES` (64,
+   ADR-0042) handles, fixed slots included: a process with more inherited fds and namespace handles than that gets
+   `E2BIG` from `posix_spawn` and `exec`, a limit Linux does not have (tension below). The child's `libposix`
    rebuilds its table from the slots and the bootstrap record (ADR-0107), so `MAKEFLAGS` `3,4` names the child's
    slots 3 and 4 (INV-0003-6), and `-2,-2` needs nothing. Pipe style's close-on-exec toggling is `FD_CLOEXEC` in the
    table and costs no call.
-8. **`fork`.** The parent `share`s every `File`, `Dir`, FIFO and terminal connection, and the namespace table's
-   directory connections (ADR-0107), awaits the replies together, and lists the new client ends in the move list at
-   slots the child's table expects; stream ends duplicate by themselves (ADR-0102). A failed snapshot closes the new
+8. **`fork`.** The parent `share`s every `File`, `Dir` and FIFO connection and the namespace table's directory
+   connections (ADR-0107), `clone`s the terminal connection with the child's group (item 7), awaits the replies
+   together, and lists the new client ends in the move list at the slots the parent's own table uses for those
+   descriptions, so the child's copied table is valid as it is (ADR-0102 item 4); stream ends duplicate by
+   themselves (ADR-0102). A failed snapshot closes the new
    ends and the service drops those connections; the parent's own were never touched.
 9. **`exec`.** `spawn` as item 7 plus exit (ADR-0003 rule 5): the old process's connections close with it.
 10. **`stat` family.** `stat`, `fstat`, `lstat`, `fstatat`: the service's attributes (ADR-0014) with `st_ino = id`,
@@ -168,14 +184,26 @@ authority (CP-02), and names resolve relative to handles (CP-04).
 12. **`mmap`.** `MAP_PRIVATE|MAP_ANONYMOUS` only: a memory object created, mapped and recorded for `munmap`;
     `MAP_SHARED` and file mappings return `ENODEV` (ADR-0005). `memfd_create` is an unnamed file on the temporary
     directory service (ADR-0107): one `File` description, so `write`, `lseek` and `read` work unchanged.
-13. **Connections per process.** A shell holds: `/` and `/tmp` (namespace, ADR-0107), cwd, the terminal control
-    connection (ADR-0105), and one per open file. Three stdio fds on the terminal are streams. So a quiet shell holds
-    about 4 connections; a `make -j4` tree of 7 makes and 4 recipes about 60 `[arithmetic]`, against 896.
+13. **Connections per process.** A shell holds: `/` and `/tmp` (namespace, ADR-0107), cwd, the terminal connection
+    (ADR-0105), and one per open file. Three stdio fds on the terminal are one description whose output side is a
+    stream end and whose connection is the terminal connection just counted. So a quiet shell holds about 4
+    connections; a `make -j4` tree of 7 makes and 4 recipes about 60 `[arithmetic]`, against ADR-0055's `MAX_OPEN` of
+    896, which also counts attached buffers (one per connection that transfers more than 60 KiB) and tokens.
+14. **What is not exported and what maps elsewhere.** `fsync`, `fdatasync`, `sync` and `syncfs` are not exported
+    (ADR-0010's personality mapping, INV-0005-1); `O_SYNC` and `O_DSYNC` are the `durable` flag on every write;
+    `O_TMPFILE` is an unnamed create and `linkat(fd, "", dir, name, AT_EMPTY_PATH)` on it is `publish` (ADR-0010,
+    ADR-0100 item 6); tcc's unlink-then-create pattern is left as written (ADR-0010's open question 1 stays open).
+    `pselect` on a `File` or `Dir` fd reports it ready at once (regular files are `NotWaitable`, ADR-0006 rule 1; a
+    file connection's `READABLE` means a reply, not data), as ADR-0106 item 3 says.
 
 **Tensions with accepted ADRs.**
 
-- *ADR-0055*: new requests `share`, `seek`, `set_flags`, the `current` offset and `SEEK_END`; new ordinals under
-  ADR-0052, no change to a stage 4 method. `clone`'s record stays fresh, so "attach a second connection to the same
+- *ADR-0055*: new requests `share`, `seek`, `set_flags`, `open_with_mode`, the `current` offset and `SEEK_END`; new
+  ordinals under ADR-0052, no change to a stage 4 method. *ADR-0014 rule 6 and ADR-0080*: the mode of a create
+  reaches the service only now (item 1); the stage 4 protocol never carried it.
+- *ADR-0042*'s `MAX_SPAWN_HANDLES` bounds the fds a `spawn` can pass (item 7).
+- *ADR-0080*'s one cookie per connection makes a directory stream restart in a `fork` or `spawn` child (item 3).
+- *[P16]*'s shared `O_NONBLOCK` is per process here (item 4). `clone`'s record stays fresh, so "attach a second connection to the same
   record" is `share`, as ADR-0055's deferred section foresaw.
 - *ADR-0050's* rule that an endpoint with queued handles cannot be moved: the moved ends are fresh (nothing queued),
   so the rule is met; `docs/backlog.md` R-27 asks the rule's wording to say "through a channel", which `spawn` and
@@ -215,9 +243,11 @@ them; a batch `share` if the `fork` cost shows (ADR-0102).
   order.
 - **INV-0103-2.** After `fork`, a `read` through an inherited fd in one process moves the position the other sees,
   and after a failed `fork` the service's connection count is what it was before. *Check:* an in-QEMU `libposix` test
-  against the service, with snapshot failure injected by exhausting a limit.
-- **INV-0103-3.** `libposix` sends no message to the broker on `open`, `read`, `write`, `close`, `lseek`, `dup`,
-  `mmap` or `pipe`. *Check:* INV-0002-3's test, a file-only workload under a counting broker.
+  against the service, with snapshot failure injected by exhausting a limit; the connection count is read through the
+  `fs-service` crate's host test interface in a host re-run of the same sequence, since the protocol has no count
+  request.
+- **INV-0103-3.** `libposix` sends no message to the broker on `open`, `read`, `write`, `close`, `stat`, `lseek`,
+  `dup`, `mmap` or `pipe`. *Check:* INV-0002-3's test, a file-only workload under a counting broker.
 - **INV-0103-4.** A fd with `FD_CLOEXEC` is absent in a `spawn`ed child; one without it is present at the slot equal
   to its number and shares its description with the parent. *Check:* an in-QEMU test spawning with fds 3 and 4 open,
   3 marked close-on-exec, and reading back in the child.

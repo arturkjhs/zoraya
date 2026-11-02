@@ -96,7 +96,8 @@ and the BSDs could change later (DM-057). C libc internals with hidden global st
   table and the port inside it. The two are archived into one `libc.a` with musl's headers as the sysroot's
   `/usr/include`.
 - **Evidence for:** Driver 2 and driver 3 at once: the pure C stays, the mapping is Rust with host tests. It is the
-  shape Fuchsia shipped for its own programs (musl above, fdio below). The cut is at a boundary musl already has
+  shape Fuchsia shipped for its own programs (musl above, fdio below, `[outside evidence: fuchsia.dev libc page, not
+  fetched]`). The cut is at a boundary musl already has
   ([M3], [M4]): the retained files call a dozen `SYS_*` numbers, each a one-line route. The export list is the
   archive's symbol table, which a host tool can read and diff (driver 1). MIT (driver 6).
 - **Evidence against:** Two languages in one library and a C cross compiler on the host (ADR-0109). musl's internals
@@ -104,11 +105,17 @@ and the BSDs could change later (DM-057). C libc internals with hidden global st
   `readv`/`writev` on an integer fd, `malloc` wants `mmap`/`brk`. Each is a small adaptation, but each is a patch to
   carry across musl versions. The C half keeps DM-060's hidden state (`strtok`, `localtime`), which the hosted programs
   use anyway. Memory safety is only in the Rust half.
-- **Cost:** *(estimate)* Rust: about 90 OS-facing functions (process 51, file 40, signal 12, dir 7, tty 6, memory 6,
-  time 2, `writev`/`readv`) on top of the fd table, resolver, startup and `malloc`: 6,000 to 9,000 lines with tests.
+- **Cost:** *(estimate)* Rust: the 126 rows of the machine-facing categories (process 51, file 40, signal 12, dir 7,
+  tty 6, memory 6, time 11 of which 5 touch the clock, plus `read`, `write`, `close`, `readv` and `writev` from stdio)
+  less the rows that are pure and stay musl C (`memcpy`, `memcmp`, `memset`, `getopt`, `getopt_long`, `getenv`,
+  `putenv`, `setenv`, `atexit`, `sigemptyset`, `sigaddset`, `sigfillset`, the `dl*` rows, the time formatters):
+  about 110 functions `[estimate]` on top of the fd table, resolver, startup and `malloc`: 6,000 to 9,000 lines
+  with tests.
   C: about 150 musl source files compiled unchanged plus a dozen patched; a shim header of about 100 lines; `crt1`
   replaced (ADR-0109). Build: one archive, one generated header set.
-- **Precedent:** Fuchsia's libc over fdio (shipping on Nest Hubs, `alternatives-postmortem.md#fuchsia--zircon-incl-starnix`).
+- **Precedent:** Fuchsia's libc, which the postmortem shows shipping on Nest Hubs
+  (`alternatives-postmortem.md#fuchsia--zircon-incl-starnix`); that it is musl over fdio is
+  `[outside evidence: fuchsia.dev libc page, not fetched]`, as in Context.
 
 ### Option C: relibc with a Zoraya platform layer (Redox precedent)
 
@@ -158,22 +165,27 @@ machine half is Zoraya's design and belongs in Rust with host tests. Concretely:
    `src/{unistd,fcntl,stat,dirent,process,signal,select,termios,mman,sched,thread,ipc,network,linux,ldso,malloc,
    aio,mq,legacy}` and the system-call-making files of `stdio`, `time` and `env`. `src/internal/syscall.h` becomes a
    shim that maps each `SYS_*` the retained files use to a `zoraya_posix_*` function (`readv`, `writev`, `lseek`,
-   `close`, `fcntl`, `ioctl`, `clock_gettime`, `getpid`, `exit_group`), and no other `SYS_*` is defined, so a
-   retained file that needs another fails to compile rather than silently calling Linux.
+   `close`, `fcntl`, `ioctl`, `clock_gettime`, `getpid`, `exit_group`, `set_tid_address`, and `mmap` for the one use
+   in `__init_tls`), and no other `SYS_*` is defined, so a retained file that needs another fails to compile rather
+   than silently calling Linux. Two files of the replaced directories are retained as exceptions because musl's
+   start-up needs them: `src/env/__init_tls.c` and `src/thread/aarch64/__set_thread_area.s`.
 3. **`malloc`.** `zoraya-heap` behind `malloc`, `calloc`, `realloc`, `free`, over memory objects, as `user/src/heap.rs`
    already does for Rust programs (ADR-0080); the arena grows by mapping another object, never by `brk`.
-4. **Startup.** `crt1.o` is Zoraya's (ADR-0109): it reads the startup block of ADR-0042, lays out `argc`, `argv`,
-   `envp` and a minimal auxiliary vector (`AT_PAGESZ`, `AT_RANDOM`, `AT_NULL`) on the stack in the form musl's
+4. **Startup.** `crt1.o` is Zoraya's (ADR-0109 item 4, which fixes the layout): it reads the startup block of
+   ADR-0042, lays out `argc`, `argv`, `envp` and the auxiliary vector ADR-0109 lists on the stack in the form musl's
    `_start_c` expects ([M7], [M8]), initialises `zoraya-posix` from the bootstrap message of ADR-0107, and calls
    `__libc_start_main`. musl's `__init_libc` then runs unchanged.
 5. **Threads.** `sem_init`, `sem_post`, `sem_wait` are single-threaded no-ops that keep a count (ADR-0005 keeps them
-   in scope). No `pthread_*` is exported (INV-0005-2). musl's TLS set-up (`__init_tls`) is kept, since `errno` and
-   `stdio` locks are thread-local in musl and the one thread needs a TLS block; `__set_thread_area` is `msr tpidr_el0`
-   on AArch64 and needs no system call.
+   in scope). No `pthread_*` is exported (INV-0005-2). musl's TLS set-up (`__init_tls`, retained as item 2 says) is
+   kept, since `errno` and `stdio` locks are thread-local in musl and the one thread needs a TLS block: it walks the
+   program headers from `AT_PHDR` with the stride `AT_PHENT` for `PT_TLS`, uses its built-in block when the TLS fits
+   and `SYS_mmap` otherwise ([M10]), which the shim routes to a memory object; `__set_thread_area` is
+   `msr tpidr_el0` on AArch64 and needs no system call.
 6. **Stubs.** Rows that are imported but never called by any T1 workload are exported with a documented return:
    `fgetxattr`, `flistxattr`, `fsetxattr` return `ENOTSUP` (ADR-0014 rule 8); `tee`, `syscall` and `mprotect` return
-   `ENOSYS`; `getloadavg` reports zero load; `getrlimit` and `setrlimit` report fixed limits; `linkat` returns `EPERM`
-   (ADR-0013: no hard links); `vfork` is `fork`; `fchown`, `fchownat` succeed and change nothing (ADR-0014 rule 5).
+   `ENOSYS`; `getloadavg` reports zero load; `getrlimit` and `setrlimit` report fixed limits; `linkat` is `publish`
+   for the one form ADR-0010 and ADR-0013 rule 8 allow (`AT_EMPTY_PATH` on an unnamed file) and `EPERM` otherwise
+   (no hard links); `vfork` is `fork`; `fchown`, `fchownat` succeed and change nothing (ADR-0014 rule 5).
    Each is marked `static-only` in the tier list (INV-0005-3).
 7. **The export check** (INV-0005-1, INV-0005-2). A host tool, `tools/posix-surface-check`, reads `libc.a`'s members
    with `zoraya-elf` (an `ar` archive is a header per member) and lists defined global symbols. The tier list is
@@ -182,7 +194,10 @@ machine half is Zoraya's design and belongs in Rust with host tests. Concretely:
    them, item 8, and `dlopen` is on INV-0005-2's deny list), plus `writev`: 248 − 2 − 4 + 1 = 243 names. Symbols
    beginning with `__` or `_` are musl internals and are not exports for this check; every other defined global
    symbol in the archive must be in the list, and the check runs under `make test`. Data symbols (`environ`, `stdin`,
-   `stdout`, `stderr`, `optarg`, `optind`) are in the list and in the archive.
+   `stdout`, `stderr`, `optarg`, `optind`) are in the list and in the archive. The tier rows that begin with `_`
+   (`_exit`, `__assert_fail`, `__errno_location`) are outside this check and are checked by the link of the ports.
+   The tool needs an `ar` reader and an `ET_REL` symbol-table reader, which `zoraya-elf` (program headers of
+   `ET_EXEC` only) does not have; both are small and are part of the tool, not of `zoraya-elf`.
 8. **`dlopen` and `-run`.** tcc is built with `CONFIG_TCC_STATIC`, under which it defines its own dummy `dlopen` and
    `dlsym` `[outside evidence: tcc's libtcc.c, not fetched for this line]`, and GNU make with `--disable-load`, so
    neither links the `dl*` symbols and `libposix` does not export them.
@@ -191,6 +206,16 @@ machine half is Zoraya's design and belongs in Rust with host tests. Concretely:
    by call, `NoMemory` → `ENOMEM`, `StorageFailed` → `EIO`, `NoSpace` → `ENOSPC`, `TooManyOpen` → `ENFILE`,
    `BadState` → `EBUSY`, `InvalidArgument` → `EINVAL`, `BadAddress` → `EFAULT`, `BadHandle` → `EBADF`), stated once
    and tested on the host.
+
+**Tensions with accepted ADRs.**
+
+- *ADR-0005 INV-0005-1*: its generator rule is "the CSV rows of the accepted tier, minus the struck set-uid rows, plus
+  `writev`"; item 7 strikes four more rows, `dlopen`, `dlsym`, `dlclose` and `dlerror`. ADR-0005 lists `dlopen` both
+  as a `T1` row and on INV-0005-2's deny list, so its "disjoint by construction" did not hold; item 7 makes it hold.
+  Accepting this ADR changes INV-0005-1's generator rule by those four names.
+- *ADR-0033*: nothing changes in its rule; the loader's acceptance of what tcc links is ADR-0108's and ADR-0109's.
+- *CLAUDE.md's dependency rule* speaks of crates; third-party C in the build is a new kind of dependency, recorded in
+  `docs/dependencies.md` under its own table (ADR-0109 item 10).
 
 **Why B.** A over B: A pays for Linux compatibility nobody asked for and maps two layers instead of one. C over B: C
 would be the right answer if relibc were a stable dependency on stable Rust with a handle-shaped platform layer; it is
@@ -231,8 +256,9 @@ functions; nothing in the cut changes for them. A dynamic loader (`ET_DYN`, ADR-
   *Check:* `tools/posix-surface-check`, run by `make test`, fails on an extra symbol or a stale generated list.
 - **INV-0100-2.** No retained musl source file reaches a Linux system call: the shim header defines only the
   `SYS_*` names item 2 lists, each routed to a `zoraya_posix_*` function, and the archive contains no `svc`
-  instruction outside `zoraya-rt`'s stubs. *Check:* the build fails on an undefined `SYS_*`; a host test disassembles
-  the archive's members with `zoraya-elf` and finds `svc` only in the one object that `zoraya-rt` contributes.
+  instruction outside `zoraya-rt`'s stubs. *Check:* the build fails on an undefined `SYS_*`; a host test in
+  `tools/posix-surface-check` scans the code sections of the archive's `ET_REL` members for the encoding of `svc #0`
+  (`0xd4000001`) and finds it only in the one object that `zoraya-rt` contributes.
 - **INV-0100-3.** `zoraya-posix` has no `unsafe` outside its `ffi` module, and its logic crates compile and test on
   the host. *Check:* `#![forbid(unsafe_code)]` on every module but `ffi`, enforced by the compiler, and
   `cargo test -p zoraya-posix`.

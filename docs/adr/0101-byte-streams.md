@@ -36,8 +36,8 @@ all need it. ADR-0060's console is not it: a shared ring with no peer.
 **What is assumed.** Capacity and `PIPE_BUF` are Linux's values, not measured needs. Nothing about stream throughput
 is measured on Zoraya.
 
-**Forces from TASK-01.** Pipes are the composition primitive that held up (GR-002), and `SIGPIPE` by default is the
-part that did not (DM-077). Untyped byte streams as the only medium is *contested* (DM-020); here they are one object
+**Forces from TASK-01.** Pipes are the composition primitive that held up (GR-002); `SIGPIPE` by default is a
+tradeoff that shell pipelines depend on (DM-077), kept out of the native ABI by ADR-0004 rule 7. Untyped byte streams as the only medium is *contested* (DM-020); here they are one object
 beside channels, not the only one. Readiness plus non-blocking transfer is the contract ADR-0006 chose, and a
 registration must die with its handle (DM-023).
 
@@ -124,11 +124,13 @@ registration must die with its handle (DM-023).
   `WouldBlock` when empty and the writer end is held, and 0 when empty and no write-end handle exists. Neither call
   blocks, so neither takes a `Deadline`.
 - **Peers.** `PEER_CLOSED` on the read end is asserted when the last write-end handle closes (the `Arc` of the
-  write-end object drops, ADR-0041); `stream_write` after the last read-end handle closes returns `PeerClosed` and
-  changes nothing (INV-0004-7). A handle in flight in a channel message counts as held.
+  write-end object drops, ADR-0041), and `PEER_CLOSED` on the write end when the last read-end handle closes;
+  `stream_write` after that returns `PeerClosed` and changes nothing (INV-0004-7). A handle in flight in a channel
+  message counts as held.
 - **Signals.** `READABLE` while the ring holds a byte or `PEER_CLOSED` is set (so that a reader wakes to see end of
   file, as `select` treats end of file as readable, [P11]); `WRITABLE` while at least `STREAM_ATOMIC` bytes are free
-  and a read-end handle exists; `PEER_CLOSED` as above. All level-triggered.
+  and a read-end handle exists; `PEER_CLOSED` on each end as above, so a writer blocked on `WRITABLE | PEER_CLOSED`
+  wakes when its reader goes (W10's `yes` when `head` exits). All level-triggered.
 - **Rights.** Read end: `READ`, `WAIT`, `DUPLICATE`, `TRANSFER`. Write end: `WRITE`, `WAIT`, `DUPLICATE`, `TRANSFER`.
   Both types are duplicable for `snapshot_process` (ADR-0102) and may be listed in `spawn` and in channel messages
   (so the temporary directory service of ADR-0107 can hand out FIFO ends).
@@ -183,9 +185,11 @@ A smaller capacity for pipes that only carry tokens, if 64 KiB per pipe shows in
   writers of 4096-byte records and a reader checking record boundaries, plus an in-QEMU test of the `WouldBlock`
   case on a nearly full ring.
 - **INV-0101-2.** `stream_read` returns 0 exactly when the ring is empty and no write-end handle exists, and
-  `stream_write` returns `PeerClosed` exactly when no read-end handle exists. *Check:* in-QEMU tests duplicating an
-  end, closing the duplicates in each order, and asserting the return values and `PEER_CLOSED` before and after the
-  last close; a handle moved through a channel message keeps the peer open.
+  `stream_write` returns `PeerClosed` exactly when no read-end handle exists, and each end's `PEER_CLOSED` signal is
+  asserted exactly then. *Check:* in-QEMU tests duplicating an end, closing the duplicates in each order, and
+  asserting the return values and both ends' `PEER_CLOSED` (through `port_wait`) before and after the last close; a
+  handle moved through a channel message keeps the peer open; a writer blocked in `port_wait` on a full stream wakes
+  when the last reader closes.
 - **INV-0101-3.** Neither `stream_read` nor `stream_write` blocks: with the ring full or empty each returns within a
   bounded time without any other thread running. *Check:* an in-QEMU test on one CPU with no other runnable thread,
   calling each on a full and on an empty stream and asserting `WouldBlock`.

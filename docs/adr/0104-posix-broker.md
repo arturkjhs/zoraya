@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0006, ADR-0040, ADR-0041, ADR-0046, ADR-0050, ADR-0052, ADR-0053, ADR-0072, ADR-0101, ADR-0102, ADR-0103
-- **Evidence:** CP-01, CP-06, CP-07, CP-15, DM-003, DM-005, DM-070, DM-100, alternatives-postmortem.md#exokernel-mit-aegis--xok, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#minix-3, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-4-tty-and-job-control, task-02/callsite-analysis.md#m4-validation-patches, task-02/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
+- **Evidence:** CP-01, CP-06, CP-07, CP-15, DM-003, DM-005, DM-070, DM-100, alternatives-postmortem.md#exokernel-mit-aegis--xok, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#minix-3, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-4-tty-and-job-control, task-02/callsite-analysis.md#m4-validation-patches, task-02/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
 
 ## Context
 
@@ -17,8 +17,9 @@ finds the right process, and what the broker may not know.
 **What is measured.**
 
 - Control-path calls are rare: 15 `TIOCSPGRP`, 1 `TIOCGPGRP`, `setpgid` 4 and `getpgid` 1 in W9, `kill` 7 to 17 per
-  interrupted build, `getpid` in W9 for the re-raise (`task-02/posix-surface.md#linux-syscall-surface-m2`,
-  `task-02b/parallel-surface.md#new-syscalls-and-argument-patterns`). No T1 program but the shell uses process groups
+  interrupted build (`task-02/posix-surface.md#linux-syscall-surface-m2`,
+  `task-02b/parallel-surface.md#new-syscalls-and-argument-patterns`), and `kill(getpid(), SIGINT)` as each make's
+  re-raise (`task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1`). No T1 program but the shell uses process groups
   (`task-02/callsite-analysis.md#feature-4-tty-and-job-control`).
 - Waits are frequent: `wait4` 4,030 blocking and 3,307 `WNOHANG` in the core runs, about 226 per W8 `-j4` build
   (`task-02/posix-surface.md#linux-syscall-surface-m2`, `task-02b/parallel-surface.md#new-syscalls-and-argument-patterns`);
@@ -119,11 +120,16 @@ MINIX 3's process manager is a server that could not be restarted (`alternatives
 
 **Structure.**
 
-1. **Jobs.** `init` creates the broker's job with the `posix` flag (ADR-0046); that job is the *session job*. In it the
-   broker creates the temporary directory service's job (ADR-0107) and one *group job* per process group; in a group
-   job, one *process job* per POSIX process. All inherit the bit. A pid names a process job for its whole life.
-2. **The pid table.** Per pid: process job handle (`CREATE_PROCESS | SIGNAL | KILL | WAIT`), current process handle
-   (`WAIT | SIGNAL`), parent pid, group pid, state (running, zombie, reaped). Pids are a 31-bit counter starting at 2,
+1. **Jobs.** `init` creates the broker's job with the `posix` flag (ADR-0046). In it the broker creates two child
+   jobs: the temporary directory service's job (ADR-0107) and the *session job*, which holds only POSIX processes, so
+   that a signal to the whole session (`kill(-1)`, the terminal's hangup) never reaches the broker or `tmpd`, whose
+   dispositions are the default `Terminate`. In the session job the broker creates one *group job* per process
+   group; in a group job, one *process job* per POSIX process. All inherit the bit. A pid names a process job for its
+   whole life.
+2. **The pid table.** Per pid: the process job handle with every right a job can carry (`DUPLICATE | TRANSFER |
+   WAIT | SIGNAL | CREATE_PROCESS | KILL`), from which the broker makes the narrower duplicates below; the current
+   process handle (`WAIT | SIGNAL`); parent pid; group pid; the POSIX disposition of the stop and continue signals
+   (item 8a); state (running, stopped, zombie, reaped). Pids are a 31-bit counter starting at 2,
    never reused within a session: at 1,000 spawns a second a session exhausts it in about 25 days `[arithmetic]`, and
    the broker then refuses `spawn_prepare` with `EAGAIN`. Pid 1 is the broker itself as `getppid` of the shell and
    as the reparenting target. The session id is the shell's pid.
@@ -133,37 +139,62 @@ MINIX 3's process manager is a server that could not be restarted (`alternatives
 **Protocol** (`zoraya-proto-posix`, declared with ADR-0052; one connection per POSIX process, created by the broker
 for each child before it exists and moved to the child at slot `BROKER`):
 
-4. `spawn_prepare(group: Inherit | New | Join(pid), start_suspended) → {pid, process_job (moved), child_broker_end
-   (moved)}`. The broker creates the process job in the caller's group job, a new group job, or `pid`'s group job
-   (which must be in the session, else `EPERM`), and a channel whose server end it keeps. The caller then spawns or
-   snapshots into `process_job` and moves `child_broker_end` into the child (slot `BROKER` in the handle list or the
-   move list). `libposix`'s `posix_spawn` and `fork` call this; the dash patch of ADR-0109 passes `Join` or `New` for
-   job-control forks and `Inherit` otherwise (dash's `forkchild` and `forkparent` then call `setpgid`, which item 8
-   confirms).
+4. `spawn_prepare(group: Inherit | New | Join(pid)) → {pid, pgid, parent_job (moved), child_job (moved),
+   child_broker_end (moved)}`. The broker creates the process job in the caller's group job, a new group job, or
+   `pid`'s group job (which must be in the session, else `EPERM`), and a channel whose server end it keeps. It
+   returns two duplicates of the process job: `parent_job` with `WAIT | DUPLICATE | TRANSFER`, which the parent keeps
+   in its child list for `waitpid` (item 11), and `child_job` with `CREATE_PROCESS | TRANSFER`, which the parent uses
+   as the `job` of `spawn` or `snapshot_process` and moves into the child at slot `PROCESS_JOB` (ADR-0107 item 5) for
+   the child's own `exec` (item 6). The caller moves `child_broker_end` into the child at slot `BROKER`. `libposix`'s
+   `posix_spawn` and `fork` call this. The group hint comes from the caller: `posix_spawn` with
+   `POSIX_SPAWN_SETPGROUP` passes `New` for `pgroup` 0 or `Join(pgroup)`; `fork` passes what the Zoraya-only
+   function `zoraya_fork_group(Inherit | New | Join(pid))` set before the call, else `Inherit`. The dash patch of
+   ADR-0109 calls it in `forkshell` with the group dash will `setpgid` to (dash's `forkchild` and `forkparent` then
+   call `setpgid`, which item 8 confirms as a no-op).
 5. `spawn_commit(pid, process (moved, WAIT | SIGNAL))` after a successful `spawn` or `snapshot_process`; the broker
    subscribes nothing, it keeps the handle for the record. `spawn_abort(pid)` after a failure frees the pid, its job
-   and the channel.
+   and the channel. For an interactive foreground job (ADR-0003 rule 2's `vforkexec` path, ADR-0109 item 9) the
+   parent spawns with `START_SUSPENDED`, calls `tcsetpgrp` (item 10) for the child's group, commits, and then
+   `process_resume`s the child, so the child cannot read the terminal before its group is foreground; `posix_spawn`
+   does this when the Zoraya-only attribute flag `POSIX_SPAWN_TCSETPGRP` is set with `SETPGROUP`.
 6. `exec_commit(process (moved))` from the process that `exec`s: the broker replaces its current handle. The caller
    has already spawned the new image into its own process job (it holds that job's handle from startup, ADR-0107),
-   with the attribute block built from its dispositions (ignored stays `Ignore`, everything else `Terminate`, as
-   `exec` resets caught signals, [P7]) and the fds of ADR-0103 item 7, and exits right after the reply.
+   with the attribute block and the bootstrap record's `ignored` set built from its *POSIX* dispositions (a signal
+   whose POSIX disposition is `SIG_IGN` stays `Ignore` in both; every other request-mapped signal is `Terminate` in
+   the block, as `exec` resets caught signals, [P7]; the stop and continue signals, whose kernel disposition is
+   `Ignore` whatever POSIX says, are reported by their POSIX disposition, ADR-0106 item 1) and the fds of ADR-0103
+   item 7, and exits right after the reply.
 7. `reap(pid) → ExitRecord`, allowed to the parent only, after the process job's `TERMINATED`: the broker reads the
    record from the current process handle, marks the pid reaped, closes its handles and the group job if empty. A
    parent that exits with unreaped children: the broker reparents them to pid 1 and reaps them itself when they end,
    discarding the records (DM-005's `init` role).
 8. `setpgid(pid, pgid)`: `pid` must be the caller or a child of the caller that has not called `exec_commit`
-   (`EACCES` after, [P5]); if the process is already in `pgid`'s group job the call succeeds (this is how dash's
-   two `setpgid` calls after a `Join` or `New` prepare both succeed); `pgid == pid` for a process that is alone in a
-   group job that is not yet a declared group declares it; anything that would move a process between jobs is
-   `EPERM` (CP-07; ADR-0004's rule). `getpgid`, `getppid`, `getsid` are lookups. `setsid` is not in the T1 surface
-   and is not offered.
-9. `kill(pid | 0 | -1 | -pgid, sig, detail)`: `job_signal` on the process job, the caller's group job, the session job
-   or the named group job, with the kind and `detail` of ADR-0004 and ADR-0106; `sig` 0 is an existence check;
-   `ESRCH` for an unknown or reaped pid, `EPERM` for a pid outside the session. `kill(getpid(), sig)` and `raise`
-   never reach the broker (ADR-0106).
-10. `tcsetpgrp(pgid)` and `tcgetpgrp()`: the broker records the foreground group and sends the terminal service a
-    duplicate of that group job's handle with `SIGNAL` (ADR-0105); `tcgetpgrp` is a lookup. `ENOTTY` when the
-    session has no terminal.
+   (`EACCES` after, [P5]); `pgid` 0 means `pid`. If the process's group pid already equals `pgid`, the call succeeds
+   and changes nothing (this is how dash's `setjobctl`, `forkchild` and `forkparent` calls all succeed after a `New`
+   or `Join` prepare); anything else would move a process between jobs and is `EPERM` (CP-07; ADR-0004's rule).
+   `getpgid`, `getppid`, `getsid` are lookups. `setsid` is not in the T1 surface and is not offered.
+8a. `set_stop_disposition(sig, Default | Ignore | Handler)` for `SIGTSTP`, `SIGTTIN`, `SIGTTOU` and `SIGCONT`:
+   `libposix` sends it from `sigaction` on those four, so that the broker, which executes stops and continues (item
+   9), knows what the *target* wants. `SIGSTOP`'s is always `Default`.
+9. `kill(pid | 0 | -1 | -pgid, sig, detail)`: `job_signal` on the process job, the caller's group job, or the named
+   group job, with the kind and `detail` of ADR-0004 and ADR-0106; for `-1`, `job_signal` on every process job of the
+   session but the caller's, as POSIX excludes the caller ([P13]); `sig` 0 is an existence check; `ESRCH` for an
+   unknown or reaped pid, `EPERM` for a pid outside the session. `SIGKILL` is `job_kill`. For the stop and continue
+   signals the broker acts by the target's recorded disposition (item 8a): `SIGSTOP`, and `SIGTSTP`/`SIGTTIN`/
+   `SIGTTOU` with `Default`, are `job_suspend` of the target's job (the process job, or the group job for `-pgid`),
+   recorded as stopped so that the parent's `waitpid(WUNTRACED)` reports it; with `Handler` they are
+   `job_signal(Custom(n), n)` and no stop; with `Ignore` nothing. `SIGCONT` is `job_resume` always, plus
+   `job_signal(Custom(18), 18)` when the target has a handler, as POSIX runs the handler after continuing. A stop
+   from the terminal (ADR-0105 item 3) is the `Default` path on the foreground group. `kill(getpid(), sig)` and
+   `raise` never reach the broker (ADR-0106), except for a stop of oneself, which `libposix` asks for as
+   `stop_self(sig)`.
+10. `tcsetpgrp(pgid)` and `tcgetpgrp()`: `pgid` must be a group of the session (`EPERM` otherwise, [P10]); any
+    process of the session may call it, which is Linux's behaviour for a caller that has `SIGTTOU` blocked or ignored
+    ([P10]) and what dash's `forkchild` (in the child, for its own new group) and `waitforjob` (in the shell, after a
+    foreground job) do ([D1], `stage-6/sources.md#other-programs-and-inputs`); the `SIGTTOU` Linux would send a
+    background caller that has it unblocked is not emulated (ADR-0105 item 8). The broker records the foreground
+    group and sends the terminal service a duplicate of that group job's handle with `SIGNAL | KILL` (`KILL` for
+    `job_suspend`, ADR-0105 item 5); `tcgetpgrp` is a lookup. `ENOTTY` when the session has no terminal.
 11. `terminated(pid)` notifications: none. The parent learns of a child's end from the process job's `TERMINATED`
     signal on its own port (ADR-0106 subscribes process jobs where ADR-0004 and ADR-0006 say "child process handles");
     `waitpid(-1)` is a `port_wait` over the parent's children's job handles; `WNOHANG` is `object_get_signals` on each;
@@ -172,13 +203,16 @@ for each child before it exists and moved to the child at slot `BROKER`):
 **The session.**
 
 12. `init` starts the broker as it starts a service (ADR-0053), in a `posix` job, with: a root directory connection
-    with every right (ADR-0055 `clone`), the terminal's control channel and stream ends (ADR-0105), its own job
-    handle and the ramdisk directory for `fsd --memory` (ADR-0107). The broker starts the temporary directory service,
-    builds the shell's namespace table and bootstrap record (ADR-0107), gets the shell's image through the root
-    connection (ADR-0108), prepares pid 2 in a new group, spawns `/bin/sh`, commits, and gives the terminal the
-    shell's group job. It then serves its port until the shell's process job is `TERMINATED` and no other pid is live,
-    and exits; `init` treats that as it treats `zosh` ending today. For `make test` the broker takes an argv that
-    names the shell's command (ADR-0110).
+    with every right (ADR-0055 `clone`), the terminal's control channel, a terminal connection and the output stream's
+    write end (ADR-0105), its own job handle and the ramdisk directory for `fsd --memory` (ADR-0107). The broker
+    creates the session job and `tmpd`'s job (item 1), starts the temporary directory service, builds the shell's
+    namespace table and bootstrap record (ADR-0107), gets the shell's image through the root connection (ADR-0108),
+    prepares pid 2 in a new group, spawns `/bin/sh` with the environment `PATH=/bin:/usr/bin`, `HOME=/home`,
+    `TERM=dumb`, `SHELL=/bin/sh` and whatever `/etc/zoraya/session` adds (ADR-0110 item 1; the measurement ran under
+    `env -i` with those four, `task-02/method.md#tiers-runs-and-sets`), commits, and gives the terminal the shell's
+    group job. It then serves its port until the shell's process job is `TERMINATED` and no other pid is live, and
+    exits; `init` treats that as it treats `zosh` ending today. For `make test` the session file names the shell's
+    command (ADR-0110).
 13. **What the broker never knows:** file names, fds, cwd, environment, `umask`, signal handlers, the contents of any
     pipe or file. It holds no filesystem connection but the one it clones for the shell.
 
@@ -199,7 +233,14 @@ an `object_same` over jobs) or spawning by the broker itself (Option D's shape f
   process, spawned by anyone, in a job of its own.
 - *ADR-0046*: `spawn`'s `group` field is unused by `libposix` (the `job` field is the process job); the depth bound of
   32 is reached at about 28 nested sessions, which nothing creates.
+- *ADR-0003 rule 2*: the interactive `vforkexec` path keeps rule 2's shape (spawn suspended, set the group and the
+  terminal from the parent, resume) through `posix_spawn`'s attributes (item 5), not through a child-side `tcsetpgrp`.
+- *ADR-0004 rule 8*'s "hangup to the session job" reaches only POSIX processes, because the session job holds nothing
+  else (item 1).
+- *[P10]*: `tcsetpgrp` from any process of the session succeeds (item 10); no `SIGTTOU`.
 - *ADR-0053*: one more service `init` starts, by the same path.
+- *ADR-0006*'s personality text has a blocking `wait4` as `object_wait_one` on the child's process handle; here it is
+  a wait on the child's process job handle followed by one `reap` round trip (item 11), for the `exec` reason.
 
 ### Effect of the vision
 
@@ -235,7 +276,8 @@ ties a process handle to its job; restart of a dead broker (MINIX 3's unsolved c
 - **INV-0104-4.** `setpgid` never moves a process between jobs: it succeeds only when the process is already in the
   named group's job or declares its own lone job a group. *Check:* host test of the broker's rule table, and an
   in-QEMU test of the pipeline case (`Join`) and the refused case (`EPERM`).
-- **INV-0104-5.** The broker handles no message on the `open`, `read`, `write`, `close`, `lseek` or `pipe` paths.
+- **INV-0104-5.** The broker handles no message on the `open`, `read`, `write`, `close`, `stat`, `lseek`, `mmap` or
+  `pipe` paths.
   *Check:* INV-0002-3's counting broker.
 
 ## Open questions
