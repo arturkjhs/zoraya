@@ -140,10 +140,10 @@ that terminal rights be separated and control be out of band natively, with a VT
    unless `NOFLSH`. Non-canonical mode exists in the state machine (for a later line editor) but nothing at T1 sets it.
    `TOSTOP` is off and not implemented at stage 6 (no measured use).
 3. **Signals.** INTR: `job_signal(fg_job, Interrupt, 2)`; QUIT: `job_signal(fg_job, Quit, 3)`; SUSP:
-   a `suspend(20)` message to the broker, which applies the foreground group's recorded dispositions for `SIGTSTP`
-   (ADR-0104 items 8a and 9: `job_suspend` of the group job and the pids marked stopped so that a `waitpid(WUNTRACED)`
-   in the shell returns, or `Custom(20)` to a handler, or nothing when ignored); the terminal itself calls
-   `job_suspend` for nothing, since it cannot know the targets' dispositions. Hangup, when the backend closes:
+   a `suspend(20)` message to the broker, which applies each foreground process's recorded disposition for `SIGTSTP`
+   (ADR-0104 items 8a and 9: `job_suspend` of its process job, with the pid marked stopped so that a
+   `waitpid(WUNTRACED)` in the shell returns, or `Custom(20)` to a handler, or nothing when ignored); the terminal
+   itself calls `job_suspend` for nothing, since it cannot know the targets' dispositions. Hangup, when the backend closes:
    `job_signal(session_job, Hangup, 1)`, with the session job handle the broker gave it (ADR-0104 item 1: the session
    job holds only POSIX processes). Window size change:
    `job_signal(fg_job, Custom(28), 28)`, whose default disposition is `Ignore` (ADR-0004). With no foreground job set,
@@ -175,7 +175,7 @@ that terminal rights be separated and control be out of band natively, with a VT
 8. **`SIGTTIN`, `SIGTTOU`, Ctrl-Z, `fg`, `bg`.** Specified to POSIX, not acceptance tests (ADR-0005). A `read` answered
    `NotForeground`: `libposix` asks the broker to stop its group (`stop_self(21)`), which `job_suspend`s the process
    job and marks it stopped; when resumed, the read is retried. If `SIGTTIN` is ignored or blocked the read returns
-   `EIO`, as POSIX says. `SIGTTOU` is sent nowhere (`TOSTOP` off; `tcsetpgrp` from the background is `EPERM`).
+   `EIO`, as POSIX says. `SIGTTOU` is sent nowhere (`TOSTOP` off; `tcsetpgrp` from the background succeeds, item 7).
    `kill(pid, SIGSTOP | SIGTSTP)` and `kill(pid, SIGCONT)` are the broker's by the target's recorded disposition
    (ADR-0104 items 8a and 9): `job_suspend` or `job_resume`, `Custom(n)` to a handler, nothing when ignored. The shell's `fg` is `tcsetpgrp` then
    `kill(-pgid, SIGCONT)`; `bg` the latter alone. `job_suspend(job)` and `job_resume(job)` (ADR-0004 rule 3, not yet

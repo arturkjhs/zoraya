@@ -105,12 +105,11 @@ and the BSDs could change later (DM-057). C libc internals with hidden global st
   `readv`/`writev` on an integer fd, `malloc` wants `mmap`/`brk`. Each is a small adaptation, but each is a patch to
   carry across musl versions. The C half keeps DM-060's hidden state (`strtok`, `localtime`), which the hosted programs
   use anyway. Memory safety is only in the Rust half.
-- **Cost:** *(estimate)* Rust: the 126 rows of the machine-facing categories (process 51, file 40, signal 12, dir 7,
-  tty 6, memory 6, time 11 of which 5 touch the clock, plus `read`, `write`, `close`, `readv` and `writev` from stdio)
-  less the rows that are pure and stay musl C (`memcpy`, `memcmp`, `memset`, `getopt`, `getopt_long`, `getenv`,
-  `putenv`, `setenv`, `atexit`, `sigemptyset`, `sigaddset`, `sigfillset`, the `dl*` rows, the time formatters):
-  about 110 functions `[estimate]` on top of the fd table, resolver, startup and `malloc`: 6,000 to 9,000 lines
-  with tests.
+- **Cost:** *(estimate)* Rust: the 133 rows of the machine-facing categories (process 51, file 40, signal 12, dir 7,
+  tty 6, memory 6, time 11) plus `read`, `write` and `close` from stdio, less the rows that are pure and stay musl C
+  (`memcpy`, `memcmp`, `memset`, `getopt`, `getopt_long`, `getenv`, `putenv`, `setenv`, `atexit`, `sigemptyset`,
+  `sigaddset`, `sigfillset`, the four `dl*` rows, and six time formatters and converters): about 110 functions
+  `[estimate]` on top of the fd table, resolver, startup and `malloc`: 6,000 to 9,000 lines with tests.
   C: about 150 musl source files compiled unchanged plus a dozen patched; a shim header of about 100 lines; `crt1`
   replaced (ADR-0109). Build: one archive, one generated header set.
 - **Precedent:** Fuchsia's libc, which the postmortem shows shipping on Nest Hubs
@@ -173,7 +172,7 @@ machine half is Zoraya's design and belongs in Rust with host tests. Concretely:
    already does for Rust programs (ADR-0080); the arena grows by mapping another object, never by `brk`.
 4. **Startup.** `crt1.o` is Zoraya's (ADR-0109 item 4, which fixes the layout): it reads the startup block of
    ADR-0042, lays out `argc`, `argv`, `envp` and the auxiliary vector ADR-0109 lists on the stack in the form musl's
-   `_start_c` expects ([M7], [M8]), initialises `zoraya-posix` from the bootstrap message of ADR-0107, and calls
+   `_start_c` expects ([M7], [M8]), initialises `zoraya-posix` from the bootstrap messages of ADR-0107, and calls
    `__libc_start_main`. musl's `__init_libc` then runs unchanged.
 5. **Threads.** `sem_init`, `sem_post`, `sem_wait` are single-threaded no-ops that keep a count (ADR-0005 keeps them
    in scope). No `pthread_*` is exported (INV-0005-2). musl's TLS set-up (`__init_tls`, retained as item 2 says) is
@@ -188,7 +187,8 @@ machine half is Zoraya's design and belongs in Rust with host tests. Concretely:
    (no hard links); `vfork` is `fork`; `fchown`, `fchownat` succeed and change nothing (ADR-0014 rule 5).
    Each is marked `static-only` in the tier list (INV-0005-3).
 7. **The export check** (INV-0005-1, INV-0005-2). A host tool, `tools/posix-surface-check`, reads `libc.a`'s members
-   with `zoraya-elf` (an `ar` archive is a header per member) and lists defined global symbols. The tier list is
+   with its own `ar` reader (an archive is a header per member) and `ET_REL` symbol-table reader, and lists defined
+   global symbols. The tier list is
    generated into `docs/adr/posix-surface-T1.txt` from `task-02/libc-surface.csv`: the `T0` and `T1` rows, minus
    `setuid` and `setgid` (ADR-0005), minus `dlopen`, `dlsym`, `dlclose` and `dlerror` (the ports are built without
    them, item 8, and `dlopen` is on INV-0005-2's deny list), plus `writev`: 248 − 2 − 4 + 1 = 243 names. Symbols

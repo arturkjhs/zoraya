@@ -175,17 +175,23 @@ for each child before it exists and moved to the child at slot `BROKER`):
    `getpgid`, `getppid`, `getsid` are lookups. `setsid` is not in the T1 surface and is not offered.
 8a. `set_stop_disposition(sig, Default | Ignore | Handler)` for `SIGTSTP`, `SIGTTIN`, `SIGTTOU` and `SIGCONT`:
    `libposix` sends it from `sigaction` on those four, so that the broker, which executes stops and continues (item
-   9), knows what the *target* wants. `SIGSTOP`'s is always `Default`.
+   9), knows what the *target* wants. `SIGSTOP`'s is always `Default`. A new pid's record starts at `spawn_prepare`
+   as the caller's record for `fork` (POSIX keeps dispositions across `fork`, [P3]) and as `Default` for
+   `posix_spawn`, with `Ignore` where the attribute block says so; `exec_commit` resets `Handler` to `Default` and
+   keeps `Ignore`, as `exec` does ([P7]).
 9. `kill(pid | 0 | -1 | -pgid, sig, detail)`: `job_signal` on the process job, the caller's group job, or the named
    group job, with the kind and `detail` of ADR-0004 and ADR-0106; for `-1`, `job_signal` on every process job of the
-   session but the caller's, as POSIX excludes the caller ([P13]); `sig` 0 is an existence check; `ESRCH` for an
+   session but the caller's, which is Linux's behaviour ([P13]: POSIX lets the caller be included); `sig` 0 is an
+   existence check; `ESRCH` for an
    unknown or reaped pid, `EPERM` for a pid outside the session. `SIGKILL` is `job_kill`. For the stop and continue
    signals the broker acts by the target's recorded disposition (item 8a): `SIGSTOP`, and `SIGTSTP`/`SIGTTIN`/
    `SIGTTOU` with `Default`, are `job_suspend` of the target's job (the process job, or the group job for `-pgid`),
    recorded as stopped so that the parent's `waitpid(WUNTRACED)` reports it; with `Handler` they are
    `job_signal(Custom(n), n)` and no stop; with `Ignore` nothing. `SIGCONT` is `job_resume` always, plus
-   `job_signal(Custom(18), 18)` when the target has a handler, as POSIX runs the handler after continuing. A stop
-   from the terminal (ADR-0105 item 3) is the `Default` path on the foreground group. `kill(getpid(), sig)` and
+   `job_signal(Custom(18), 18)` when the target has a handler, as POSIX runs the handler after continuing. For a
+   group (`-pgid`, or the terminal's `suspend(20)` on the foreground group, ADR-0105 item 3) the broker goes process
+   job by process job, each by its own record, since the records are per pid; a `job_suspend` of the whole group job
+   happens only when every member's record is `Default`. `kill(getpid(), sig)` and
    `raise` never reach the broker (ADR-0106), except for a stop of oneself, which `libposix` asks for as
    `stop_self(sig)`.
 10. `tcsetpgrp(pgid)` and `tcgetpgrp()`: `pgid` must be a group of the session (`EPERM` otherwise, [P10]); any
@@ -273,9 +279,9 @@ ties a process handle to its job; restart of a dead broker (MINIX 3's unsolved c
   once and reports 7, never the old process's exit.
 - **INV-0104-3.** `kill(pid, sig)` reaches exactly the processes of `pid`'s process job, and `kill(-pgid, sig)` exactly
   those of the group job. *Check:* in-QEMU test with two groups of two processes, each counting requests it took.
-- **INV-0104-4.** `setpgid` never moves a process between jobs: it succeeds only when the process is already in the
-  named group's job or declares its own lone job a group. *Check:* host test of the broker's rule table, and an
-  in-QEMU test of the pipeline case (`Join`) and the refused case (`EPERM`).
+- **INV-0104-4.** `setpgid` never moves a process between jobs: it succeeds only when the process's group is already
+  the one named, and changes nothing. *Check:* host test of the broker's rule table, and an in-QEMU test of the
+  pipeline case (`Join` then `setpgid`) and the refused case (`EPERM`).
 - **INV-0104-5.** The broker handles no message on the `open`, `read`, `write`, `close`, `stat`, `lseek`, `mmap` or
   `pipe` paths.
   *Check:* INV-0002-3's counting broker.

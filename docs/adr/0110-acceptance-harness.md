@@ -139,9 +139,12 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
    redirection, `touch` and the glob, the export and `sh -c`, `sleep 2 &`, `jobs`, `sleep 30` then `\x03` after a
    `~ 500` quiet step, `echo status=$?` expecting `status=130`, `cd /tmp; pwd; cd -`, `wait; echo waited`, `exit`;
    each step waits for `PSURF> `. `uname` is added as the first step (INV-0109-2).
-4. **W9.** `tests/posix/w9-int.script`: at the prompt, `cd /work/w8 && make -j4 >/dev/null; echo W9-STATUS $?; n=0;
-   for f in t*.h; do [ -e "$f" ] && n=$((n+1)); done; echo W9-PARTIAL $n` (dash only, no applet), then `~ 1500` (a
-   quiet wait), then `\x03`, then expect
+4. **W9.** `tests/posix/w9-int.script`: at the prompt, `cd /work/w8 && make -j4 >/dev/null`, then `~ 1500` (a
+   quiet wait), then `\x03`, then wait for the prompt. An interactive dash whose foreground job died of `SIGINT`
+   raises `SIGINT` on itself and abandons the rest of the typed line ([D1]; the measurement's harness asked for the
+   status on a separate line for that reason, `tools/posix-surface/remote/w9_session.py`), so the next steps are
+   separate lines at the prompt: `echo W9-STATUS $?`, then `n=0; for f in t*.h; do [ -e "$f" ] && n=$((n+1)); done;
+   echo W9-PARTIAL $n` (dash only, no applet), then expect
    `W9-STATUS 130` and `W9-PARTIAL 0` and, after half a second, `W9-LEFT 0` from a `ps`-less check: the script's
    next line counts the session's pids through the broker's `pids` builtin added to dash as a test aid (or a
    `/tests/pids` program over the broker protocol). `tests/posix/w9-term.script`: the same build in the background

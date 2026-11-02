@@ -149,8 +149,10 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
    `_start_c` with that stack. `crti.o` and `crtn.o` hold the empty `_init` and `_fini` prologues and epilogues.
 5. **The startup block gains the program header table**: the kernel appends the ELF's program headers after the
    vectors (ADR-0042's layout, versioned by the header size), which `AT_PHDR` points at; ADR-0042's "Nothing may
-   follow" becomes "then the program headers, and nothing may follow". `zoraya-elf` already parses them (at most
-   `MAX_SEGMENTS` loadable, 8 headers of 56 bytes at most for a static tcc output); the block's room is
+   follow" becomes "then the program headers, and nothing may follow". The whole table goes, all `e_phnum` entries of
+   56 bytes, not only the `PT_LOAD` ones `zoraya-elf` keeps: musl's `__init_tls` looks for `PT_TLS`, `PT_PHDR`,
+   `PT_DYNAMIC` and `PT_GNU_STACK` ([M10]), which `zoraya-elf` skips when loading; `zoraya-elf` gains an accessor for
+   the raw table and a bound on `e_phnum` (64 `[assumption]`, refused above). The block's room is
    `STARTUP_BLOCK_MAX`, one page beyond the 64 KiB `spawn` buffer, so a `spawn` whose vectors plus headers exceed it
    is refused with `LimitReached`, as an over-long buffer is today.
 6. **The ports.** `ports/Makefile`, run by `make ports` (a prerequisite of the stage 6 tests, ADR-0110): fetches each

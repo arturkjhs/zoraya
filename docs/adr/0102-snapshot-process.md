@@ -147,9 +147,9 @@ returns the child's process handle with the rights `spawn` gives. It is tagged `
    Non-duplicable types are absent: ports, channel ends, interrupts, pins, devices (`Device` is duplicable but a POSIX
    process holds none). The `abi` crate marks each object type `Duplicable` or not in `OBJECT_TYPES` (ADR-0040's
    follow-up). The slot `self_slot` names receives, instead of a duplicate of whatever the parent holds there, a
-   handle to the *child* process itself with `WAIT`, so that the child's `libposix` can subscribe its own
-   `REQUEST_PENDING` (ADR-0106); in the parent that slot holds the parent's own handle (ADR-0107 item 5), so the
-   copied value is right in both. The child's handle to a memory object that the parent had mapped refers to the
+   handle to the *child* process itself with `WAIT`, at the generation the parent's slot carries, so that the child's
+   `libposix` can subscribe its own `REQUEST_PENDING` (ADR-0106); in the parent that slot holds the parent's own
+   handle (ADR-0107 item 5), so the copied value is right in both. The child's handle to a memory object that the parent had mapped refers to the
    parent's object, while the child's mapping is its own copy; `libposix` never uses a mapped object's handle except
    to close it, and `memory_unmap` takes an address (ADR-0051), so the difference is invisible to POSIX code.
 4. **The move list.** Each entry moves a handle out of the caller's table into the child's at `slot`, overriding
@@ -162,8 +162,9 @@ returns the child's process handle with the rights `spawn` gives. It is tagged `
    list is all or nothing: if any entry is invalid, the call fails before anything is allocated and the caller's table
    is unchanged. An endpoint with handles queued cannot be moved (`BadState`), as ADR-0050 says of a message; the
    ends `libposix` moves are fresh and empty. Up to `MAX_SPAWN_HANDLES` entries (64, ADR-0042), which bounds the
-   connections a `fork` can carry: a process with more inherited connections than that gets `EAGAIN` from `fork`, a
-   limit Linux does not have (tension below).
+   connections a `fork` can carry: a process with more inherited connections than that gets `EAGAIN` from `fork` (the
+   `errno` POSIX gives `fork` for a resource limit; `posix_spawn` and `exec` report the same bound as `E2BIG`, their
+   own "too many arguments" error, ADR-0103 item 7), a limit Linux does not have (tension below).
 5. **Thread.** The child's one thread starts with the caller's registers as saved at the `svc`, with `x0` = `Ok` and
    `x1` = 0, so the `fork()` wrapper returns 0 in the child and the handle in the parent. Dispositions are copied
    (ADR-0004 rule 6); the request queue is empty; `REQUEST_PENDING` is clear; the child is not suspended unless
@@ -184,8 +185,8 @@ directory connection in the fd table and the namespace table and `clone` the ter
 group (ADR-0103 item 8, one request per connection, replies awaited together); build the move list, with `self_slot`
 the `SELF` slot; `snapshot_process`; in the parent, send the child's process handle to the broker (`spawn_commit`)
 and record the child's process job handle in its child list; in the child, whose copied tables already hold valid
-values (items 3 and 4), take its pid, parent pid and group from the `spawn_prepare` reply that is in its copied
-memory, create a fresh port, re-subscribe nothing, close the duplicated handles to the parent's other children's
+values (items 3 and 4), take its pid and group from the `spawn_prepare` reply that is in its copied memory and its
+parent pid from the parent's own cached pid, create a fresh port, re-subscribe nothing, close the duplicated handles to the parent's other children's
 process jobs and drop that child list, and return 0. Cost per fork `[estimate]`: the copy (above), 2 broker round
 trips, and one `share` or `clone` per connection: about 4 for a quiet shell (`/`, `/tmp`, cwd, the terminal
 connection; the stdio descriptions are stream ends, ADR-0103 item 13) plus one per open file, unmeasured.

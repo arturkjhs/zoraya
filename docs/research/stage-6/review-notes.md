@@ -276,3 +276,221 @@ ADR-0057 generations, duplication by right and the process job's rights (ADR-010
 (ADR-0102, ADR-0103), ADR-0043's `JOB` name (ADR-0107), ADR-0046's `TERMINATED` (ADR-0102), ADR-0055's held open
 (ADR-0107), `MAX_OPEN`'s count (ADR-0103), ADR-0080's cookie (ADR-0103), and ADR-0006's `wait4` (ADR-0104). The
 walkthroughs' verdicts after the fixes are for the check that follows this section.
+
+## Check of the fixes (second reviewer)
+
+Checker: a second subagent that wrote neither the ADRs nor the first review. Compared 78072b8 (reviewed) with 10a6458
+("independent review and its fixes"), on 2026-11-02, over `git diff 78072b8..10a6458 -- docs/adr
+docs/research/stage-6/{inputs,sources,plan}.md` (14 files, 413 insertions, 202 deletions). Scope: the changed lines
+and the unchanged lines they depend on. Fetched for this check: [M10] (`src/env/__init_tls.c`, 153 lines), [D3]
+(`src/eval.c`, 1,169 lines), and, for two changed claims, `man7/fifo.7` and `man2/kill.2` from the man-pages mirror.
+`cargo run -q -p zoraya-adr-check -- docs` at 10a6458: "59 ADRs checked", the eleven `INV-0001-5 ... is not
+listed` errors, 17 `not yet applicable` warnings, nothing else.
+
+**Totals:** 46 confirmed fixed, 4 partly fixed (findings 1, 10, 15, 22), 0 not fixed. New problems: 13 (2 errors,
+7 imprecisions, 4 notes), listed after the tables.
+
+| # | Verdict | Evidence |
+|---|---|---|
+| 1 | partly fixed | ADR-0104 item 10 ("any process of the session may call it ... [D1]"), ADR-0105 item 7 and its tensions bullet, INV-0105-2's two dash calls: as the disposition says. Residue: ADR-0105 item 8 still reads "`SIGTTOU` is sent nowhere (`TOSTOP` off; `tcsetpgrp` from the background is `EPERM`)", contradicting item 7 (N4). |
+| 2 | confirmed fixed | ADR-0104 item 8a `set_stop_disposition(sig, Default \| Ignore \| Handler)` for 18, 20, 21, 22; item 9 acts on it ("`SIGCONT` is `job_resume` always, plus `job_signal(Custom(18), 18)` when the target has a handler"); ADR-0105 items 3 and 8, ADR-0106 items 1 and 9 agree. The record's life across `exec` and `fork` is not stated (N2) and the terminal's path is described differently in ADR-0104 and ADR-0105 (N3). |
+| 3 | confirmed fixed | ADR-0102 item 3 "with the same rights and the same generation", item 4 "at the generation the *caller's* slot `slot` carries"; INV-0102-7 added; INV-0102-2's check gains "the generation of each moved slot"; tension bullet "*ADR-0040 and ADR-0057*" present. See N11 for the `self_slot` generation. |
+| 4 | confirmed fixed | ADR-0104 item 2: full-rights handle `DUPLICATE \| TRANSFER \| WAIT \| SIGNAL \| CREATE_PROCESS \| KILL` (exactly ADR-0040's job row); item 4 returns `parent_job` (`WAIT \| DUPLICATE \| TRANSFER`) and `child_job` (`CREATE_PROCESS \| TRANSFER`); ADR-0107 item 5 names `PROCESS_JOB` with those rights. |
+| 5 | confirmed fixed | `SELF` slot in ADR-0107 item 5 (second bootstrap message with a `WAIT` duplicate), ADR-0102 item 3 (`self_slot` gets "a handle to the *child* process itself with `WAIT`"), ADR-0106 item 3, INV-0102-7, ADR-0107's INV-0002-5 bullet. `spawn` returns the child handle with `ProcessObject::RIGHTS` = `DUPLICATE \| TRANSFER \| WAIT \| SIGNAL \| RESUME` (`crates/zoraya-abi/src/lib.rs`, `kernel/src/syscall.rs` line 269), so the spawner can make the `WAIT` duplicate. Wording residue in N10. |
+| 6 | confirmed fixed | ADR-0103 item 1 `open_with_mode` ("a new ordinal under ADR-0052; the stage 4 `Open` message has `flags`, `rights` and `path` only"); ADR-0107 item 13 uses it; ADR-0108 Context says so; ADR-0103 tensions name ADR-0014 rule 6 and ADR-0080; plan.md 6c lists it. |
+| 7 | confirmed fixed | ADR-0109 item 6 adds `sort`, `wc`, `yes`; checked: `applets-by-tier.tsv` T1 toybox row is `cat head ls mv rm sleep touch true uname`, `sort` and `wc` are in the T2 row, `yes` in none; `w10.sh` runs `sort`, `wc -l`, `yes`, `head`, `cat`. ADR-0110 item 4's W9 check uses only dash (`for f in t*.h; do [ -e "$f" ] && n=$((n+1)); done`); I-39 updated; ADR-0005 tension bullet present. The rewritten check has a different defect (N1). |
+| 8 | confirmed fixed | ADR-0102 tensions "*ADR-0003 INV-0003-7* ... Accepting this ADR replaces that invariant by INV-0102-6 below"; INV-0102-6 states the three clauses the finding asked for. |
+| 9 | confirmed fixed | ADR-0104 item 1: two child jobs, `tmpd`'s and the session job "which holds only POSIX processes"; item 9: `-1` is "`job_signal` on every process job of the session but the caller's"; ADR-0105 item 3 and ADR-0107 item 12 refer to item 1. The attribution of the exclusion to POSIX is wrong (N8). |
+| 10 | partly fixed | The false 90 is gone, but the new parenthesis does not sum to its headline "the 126 rows": 51+40+12+7+6+6 = 122, plus `time` 11 = 133 (or plus the 5 that touch the clock = 127), plus the five stdio rows = 138 (or 132). Recounted from `libc-surface.csv` (T0+T1 rows: process 51, file 40, signal 12, dir 7, tty 6, memory 6, time 11, stdio 43): the categories are right, 126 is not. `readv` and `writev` are `file` rows (`unused-applets`, `T3`), not stdio. "About 110" is consistent with 132 minus the 22 pure rows named (N7). |
+| 11 | confirmed fixed | I-26 matches ADR-0102 item 5 ("the child receives requests from the moment the kernel adds it to its job, under the dispositions it copied"); I-32 matches ADR-0105 items 4 and 8; I-33 matches ADR-0104 items 4, 5, 8; I-51 "no `Edge`" matches ADR-0106 item 3; I-52 and I-77 match ADR-0106 item 10 and ADR-0104 item 11; I-69 and I-75 point at the new ADR-0103 item 14 and ADR-0106 item 3 sentences, which exist; I-39 as finding 7. |
+| 12 | confirmed fixed | ADR-0101 Peers: "`PEER_CLOSED` on the write end when the last read-end handle closes"; Signals: "a writer blocked on `WRITABLE \| PEER_CLOSED` wakes when its reader goes"; INV-0101-2 asserts "both ends' `PEER_CLOSED` (through `port_wait`)" and the blocked-writer wake. |
+| 13 | confirmed fixed | ADR-0109 item 4 is the one list (`AT_PAGESZ`, `AT_PHDR`, `AT_PHENT` 56, `AT_PHNUM`, `AT_RANDOM`, `AT_NULL`); ADR-0100 item 4 refers to it. [M10] fetched: `for (p=(void *)aux[AT_PHDR],n=aux[AT_PHNUM]; n; n--,p+=aux[AT_PHENT])` and `if (phdr->p_type == PT_TLS) tls_phdr = phdr;`, as sources.md says. See N9 on which headers the block must carry. |
+| 14 | confirmed fixed | ADR-0100 item 2 retains `src/env/__init_tls.c` and `src/thread/aarch64/__set_thread_area.s`, adds `set_tid_address` and `mmap` to the shim; item 5 describes `__init_tls`. [M10] fetched: `__init_tp` calls `__set_thread_area` and `__syscall(SYS_set_tid_address, ...)`; `static_init_tls` uses `builtin_tls` or `__syscall(SYS_mmap2, ...)` with `#define SYS_mmap2 SYS_mmap` when `mmap2` is absent (it is on AArch64). |
+| 15 | partly fixed | New text right: "an `ar` reader and an `ET_REL` symbol-table reader, which `zoraya-elf` (program headers of `ET_EXEC` only) does not have"; INV-0100-2 scans for `0xd4000001`; plan.md 6b names the tool. The `_`-prefixed tier rows are `_exit` (T0), `__assert_fail` (T1), `__errno_location` (T0), checked against the CSV (`_Exit` is T3, rightly absent). Residue: item 7's first sentence still says the tool "reads `libc.a`'s members with `zoraya-elf`" (N6). |
+| 16 | confirmed fixed | ADR-0100 gained "**Tensions with accepted ADRs.**" with the INV-0005-1 rule change and "ADR-0005 lists `dlopen` both as a `T1` row and on INV-0005-2's deny list". |
+| 17 | confirmed fixed | Option B Evidence for and Precedent both carry `[outside evidence: fuchsia.dev libc page, not fetched]`; the postmortem is cited only for "shipping on Nest Hubs". |
+| 18 | confirmed fixed | ADR-0102 wrapper: `spawn_prepare`, `spawn_commit`; "about 4 for a quiet shell (`/`, `/tmp`, cwd, the terminal connection ...) plus one per open file"; "terminal connection" throughout; ADR-0103 item 13 agrees. |
+| 19 | confirmed fixed | ADR-0103 item 7: "a terminal connection is `clone`d by the terminal protocol with the child's group as `spawn_prepare` returned it (ADR-0105 item 4)"; item 8 and ADR-0102's wrapper say the same; `spawn_prepare` now returns `pgid`. |
+| 20 | confirmed fixed | ADR-0103 item 3: one cookie "per description entry in the library, so `dup`ed directory fds share one stream"; the restart after `fork`/`spawn` is a stated deviation; ADR-0080 bullet in tensions. |
+| 21 | confirmed fixed | ADR-0103 item 4: "`O_NONBLOCK` is therefore per process after `fork` or `spawn`, where POSIX shares it ... ([P16]): a stated deviation"; tensions bullet "*[P16]*". sources.md [P16] carries the shared-flags sentence. |
+| 22 | partly fixed | ADR-0104 item 4 names `zoraya_fork_group(Inherit \| New \| Join(pid))` and the `POSIX_SPAWN_SETPGROUP` path; item 8 now succeeds only as a no-op ("anything else would move a process between jobs and is `EPERM`"). Residue: INV-0104-4 (unchanged) still says "or declares its own lone job a group", a case item 8 no longer has (N5). |
+| 23 | confirmed fixed | ADR-0104 item 5: "spawns with `START_SUSPENDED`, calls `tcsetpgrp` (item 10) for the child's group, commits, and then `process_resume`s the child", through `POSIX_SPAWN_TCSETPGRP`; `start_suspended` gone from item 4's signature; ADR-0109 item 9 and ADR-0104's "*ADR-0003 rule 2*" bullet agree; `START_SUSPENDED` is ADR-0042's flag. |
+| 24 | confirmed fixed | ADR-0106 item 2: "The kernel's disposition does not change on block ... a stated deviation", with the 80-calls-per-wait cost and the "No measured program blocks a default-action signal and receives it while blocked" argument; tensions bullet "*ADR-0004*'s mapping has a blocked signal held in the kernel queue". |
+| 25 | confirmed fixed | ADR-0104 item 6: block and `ignored` set "built from its *POSIX* dispositions"; stop and continue signals "reported by their POSIX disposition". (The broker's own record of them across `exec` is N2.) |
+| 26 | confirmed fixed | ADR-0104 item 10: "a duplicate of that group job's handle with `SIGNAL \| KILL` (`KILL` for `job_suspend`, ADR-0105 item 5)"; ADR-0105 item 5: "with the rights ADR-0104 item 10 gives it (`SIGNAL \| KILL`)". |
+| 27 | confirmed fixed | ADR-0106 Option B cites "`dotrap()` in `evaltree`, [D3]". [D3] fetched: `evaltree` calls `dotrap()` at its start (line 230) and under `out:` (line 328), as sources.md says. |
+| 28 | confirmed fixed | ADR-0106 Option A has NT's fresh-thread form, Option C seL4 notifications (both DM-017); ADR-0110 Option A is "the baseline" with the Alpine runs as precedent, Option B cites Hubris (`alternatives-postmortem.md#hubris`, heading exists at line 794), Option C Fuchsia's test manager marked outside evidence. |
+| 29 | confirmed fixed | ADR-0106 item 1: "1 to 16 except 9, and 24 to 27, 29 to 31". |
+| 30 | confirmed fixed | ADR-0107 Context cites `task-02/conflict-impact.md#x-1-capability-only-access-...` for the 32/1 counts. |
+| 31 | confirmed fixed | INV-0107-4: "with INV-0107-5 this is INV-0006-9's check (its third behaviour is the unlink while open)". |
+| 32 | confirmed fixed | ADR-0108 item 1 now reads "a segment that is not readable; a segment both writable and executable; segments outside the user range or overlapping; `memsz < filesz`", which is ADR-0033's list. |
+| 33 | confirmed fixed | `fs/requirements.md#22-atomic-rename` added to Evidence and Context (heading "### 2.2 Atomic rename" at line 179, the tcc sentence at line 195); the Plan 9 sentence is "the author's inference from the two". |
+| 34 | confirmed fixed | ADR-0109 Context: "GNU hello's `configure`, run with `CC=tcc` ... tcc's own `configure` has no `config.guess` ([T3])". |
+| 35 | confirmed fixed | ADR-0109 item 8: "it sets the dynamic linker path and `CONFIG_TCC_MUSL` ([T3]), whose other effects in tcc's sources the first toolchain task checks". |
+| 36 | confirmed fixed | ADR-0109 item 6: "`lib/Makefile` chooses `dsohandle.o` and the native-only objects by OS branch, one more patch point for a `Zoraya` target". |
+| 37 | confirmed fixed | ADR-0101 Forces: "`SIGPIPE` by default is a tradeoff that shell pipelines depend on (DM-077), kept out of the native ABI by ADR-0004 rule 7". |
+| 38 | confirmed fixed | ADR-0105 driver 2: "(CP-25 keeps data and control apart; the data side is bytes)", no quotation marks. |
+| 39 | confirmed fixed | ADR-0102 item 1: "Creating the child clears the job's `TERMINATED` signal, as `spawn` does (ADR-0046)"; tensions bullet "*ADR-0046*'s job `TERMINATED` is cleared by the call". |
+| 40 | confirmed fixed | ADR-0102 item 3: "whose handle carries `DUPLICATE` ... A handle of a duplicable type that lacks `DUPLICATE` leaves its slot empty"; tensions bullet "*ADR-0040*'s duplication is by right"; INV-0102-6 tests it. |
+| 41 | confirmed fixed | Wrapper paragraph: "take its pid, parent pid and group from the `spawn_prepare` reply that is in its copied memory ... close the duplicated handles to the parent's other children's process jobs and drop that child list". Wording note in N11 (the reply has no parent pid field). |
+| 42 | confirmed fixed | ADR-0104 item 12 and ADR-0110 item 1: `PATH=/bin:/usr/bin`, `HOME=/home`, `TERM=dumb`, `SHELL=/bin/sh`; a `/home` directory added to the image; `task-02/method.md` line 68 confirms `env -i PATH=<set> HOME=<run dir> TERM=dumb SHELL=<set>/sh`. |
+| 43 | confirmed fixed | INV-0110-1 "`make test` fails unless ..."; INV-0110-3 a property of the report; INV-0105-4 lists `ICANON`, `ECHO`, `ISIG`, `VINTR`, `VQUIT`, `VSUSP`, `VERASE`, `VKILL`, `VEOF`, `ONLCR`, `TOSTOP`, `termios`, `winsize`; INV-0103-2 reads the count "through the `fs-service` crate's host test interface", which exists (`open_count` at `crates/zoraya-fs-service/src/lib.rs` line 280). |
+| 44 | confirmed fixed | INV-0103-3 and INV-0104-5 now list `open`, `read`, `write`, `close`, `stat`, `lseek`, (`dup`,) `mmap`, `pipe`: INV-0002-3's eight. |
+| 45 | confirmed fixed | ADR-0102 item 4 ("64, ADR-0042 ... `EAGAIN` from `fork`") and ADR-0103 item 7 ("`E2BIG` from `posix_spawn` and `exec`") state the bound; both ADRs list it against ADR-0042. Two errnos for one bound, one per call family (N13, note). |
+| 46 | confirmed fixed | ADR-0109 item 5: "ADR-0042's 'Nothing may follow' becomes 'then the program headers, and nothing may follow'"; room `STARTUP_BLOCK_MAX` (`MAX_SPAWN_SIZE + PAGE` in `crates/zoraya-abi/src/spawn.rs`), overflow `LimitReached`. The "8 headers" aside is N9. |
+| 47 | confirmed fixed | ADR-0107 item 5: `PROCESS_JOB` "a different slot from ADR-0043's `JOB` of the first process". |
+| 48 | confirmed fixed | ADR-0107 item 14: "`O_RDWR` is `EINVAL` (Linux allows it and POSIX leaves it undefined, [P2]; a stated deviation ...)". `fifo.7` fetched: "Under Linux, opening a FIFO for read and write will succeed ... POSIX leaves this behavior undefined." (N12: sources.md's [P2] summary does not carry the sentence.) |
+| 49 | confirmed fixed | ADR-0104 Context: "`kill(getpid(), SIGINT)` as each make's re-raise (`task-02b/event-timelines.md#w9a-...`)"; the timeline's line 54 has it. |
+| 50 | confirmed fixed | ADR-0102 Depends on: "ADR-0056 (proposed), ADR-0057". |
+
+### The tension rows the first review found unlisted
+
+The first review counted 24 rows "not listed by any author, or listed with a wrong exposure"; the four "Partly" rows
+are added at the end, so that every row that was not a plain "Yes" is checked.
+
+| Tension | Bullet present? | Where |
+|---|---|---|
+| ADR-0002 INV-0002-3: `stat` (and `mmap`) missing from derived invariants | n/a (the lists were corrected) | INV-0103-3, INV-0104-5 now copy INV-0002-3's list |
+| ADR-0002 INV-0002-5: tty fd is two handles; a self handle | yes | ADR-0107 tensions, "*ADR-0002 INV-0002-5*: its list gains `SELF` ... a tty fd is two handles ... Accepting this ADR replaces the invariant's list by it" |
+| ADR-0003 rule 3: pid registered before the call | yes | ADR-0102 tensions, "Rule 3 has the wrapper register the child for a pid after the call; here the pid comes before it" |
+| ADR-0003 INV-0003-7: the move list transfers channel ends | yes | ADR-0102 tensions, "*ADR-0003 INV-0003-7* ... replaces that invariant by INV-0102-6" |
+| ADR-0003 rule 2: interactive `vforkexec` path | yes | ADR-0104 tensions, "*ADR-0003 rule 2*: ... keeps rule 2's shape (spawn suspended, set the group and the terminal from the parent, resume)" |
+| ADR-0004 personality: blocked signal held by the kernel queue | yes | ADR-0106 tensions, first bullet |
+| ADR-0004 / [P10]: background `tcsetpgrp` (exposure misstated) | yes, restated | ADR-0105 tensions ("dash exercises the background call on every foreground job"); ADR-0104 tensions "*[P10]*" |
+| ADR-0004 rule 8: hangup reaches broker and `tmpd` | yes | ADR-0104 tensions, "*ADR-0004 rule 8*'s 'hangup to the session job' reaches only POSIX processes" |
+| ADR-0004 open question: request queued at creation | no bullet in an ADR | `inputs.md` I-26 only; ADR-0102 item 5 says "(ADR-0004's open question)" inline but its tensions list has no bullet. Minor: the item answers it. |
+| ADR-0005 INV-0005-1: the `dl*` rows; the `dlopen` clash | yes | ADR-0100 tensions, "*ADR-0005 INV-0005-1*" |
+| ADR-0005 "the TSV is authoritative": `sort`, `wc`, `yes` | yes | ADR-0109 tensions, "*ADR-0005*'s 'the TSV is authoritative' for applets" |
+| ADR-0006 rule 1 / ADR-0055 deferred: `pselect` over file fds | stated as behaviour, no bullet | ADR-0103 item 14 and ADR-0106 item 3 (sentence present; a tensions bullet is not needed since the ADRs now say what `libposix` does) |
+| ADR-0006 INV-0006-9: third behaviour | yes (in the invariant) | INV-0107-4's check sentence |
+| ADR-0014 rule 6 as built (ADR-0080): no mode in `Open` | yes | ADR-0103 tensions, "*ADR-0014 rule 6 and ADR-0080*: the mode of a create reaches the service only now" |
+| ADR-0040 Representation, ADR-0057: generations in copied memory | yes | ADR-0102 tensions, "*ADR-0040 and ADR-0057*" |
+| ADR-0040 Duplication: by type vs by right | yes | ADR-0102 tensions, "*ADR-0040*'s duplication is by right" |
+| ADR-0040 rights table: process job handle thrice without rights | n/a (removed by the fix) | ADR-0104 items 2 and 4 give the rights; the handle is no longer "moved thrice" |
+| ADR-0042 Layout: room and "Nothing may follow" | yes (in the item) | ADR-0109 item 5; ADR-0109 tensions "*ADR-0042*: the startup block's layout grows (item 5)" |
+| ADR-0042 `MAX_SPAWN_HANDLES` 64 | yes | ADR-0102 tensions "*ADR-0042*'s `MAX_SPAWN_HANDLES` of 64 bounds a `fork`'s connections"; ADR-0103 tensions "*ADR-0042*'s `MAX_SPAWN_HANDLES` bounds the fds a `spawn` can pass" |
+| ADR-0043 convention: slot name `JOB` | yes (in the item, not the tensions list) | ADR-0107 item 5, "a different slot from ADR-0043's `JOB` of the first process" |
+| ADR-0046 Job `TERMINATED` | yes | ADR-0102 tensions, "*ADR-0046*'s job `TERMINATED` is cleared by the call as by `spawn` (item 1)" |
+| ADR-0055 Replies: a held FIFO `open` | yes | ADR-0107 tensions, "A held open is a request the loop leaves unanswered ... `PEER_CLOSED` on a connection with a held open drops the request" |
+| ADR-0055 `MAX_OPEN` counts buffers and tokens too | yes (in the item) | ADR-0103 item 13, "which also counts attached buffers ... and tokens" |
+| ADR-0080 Cookies: one per connection | yes | ADR-0103 tensions, "*ADR-0080*'s one cookie per connection makes a directory stream restart" |
+| (Partly) ADR-0002 rule 3(a) "in the same job" | yes | ADR-0102 tensions, "(ADR-0002 rule 3(a) says 'in the same job' too)" |
+| (Partly) ADR-0005 INV-0005-4: rewritten scripts | yes | ADR-0110 tensions, "*INV-0005-4* says 'CI runs the TASK-02/02b workload scripts' ... rewritten as dash scripts and runner scripts" |
+| (Partly) ADR-0006 personality: `wait4` as `object_wait_one` | yes | ADR-0104 tensions, "*ADR-0006*'s personality text has a blocking `wait4` as `object_wait_one`" |
+| (Partly) ADR-0010 personality mapping: `fsync`, `O_TMPFILE`, `linkat` | yes (in the item) | ADR-0103 item 14; ADR-0100 item 6 maps `linkat` with `AT_EMPTY_PATH` to `publish`, which is ADR-0010's personality mapping line ("`linkat(fd, "", dir, name, AT_EMPTY_PATH)` on such a file → `publish`") |
+
+### New problems in the changed lines
+
+- **N1 (error) ADR-0110 item 4, the W9 script.** The rewritten line types `cd /work/w8 && make -j4 >/dev/null;
+  echo W9-STATUS $?; n=0; for f in t*.h; ...` as one command at an interactive prompt and then sends `\x03`. When
+  the foreground make dies of `SIGINT`, interactive dash's `waitforjob` does `raise(SIGINT)` ([D1] in
+  `sources.md`: "`raise(SIGINT)` when the job died of `SIGINT`"), its handler calls `onint`, and the rest of the line
+  is abandoned: `echo W9-STATUS $?` never runs and the runner waits for `W9-STATUS 130` forever. The measurement's
+  own harness says so and asks separately (`tools/posix-surface/remote/w9_session.py` lines 93 to 97: "after Ctrl-C
+  an interactive shell abandons the rest of the line, so the status is asked for separately", then
+  `echo MAKE_STATUS=$?` on its own line). Under ADR-0106 item 8 the `raise` runs the handler inline, so Zoraya's
+  dash behaves the same. The defect existed in shape at 78072b8 (the first review did not catch it); the fix
+  rewrote the line and kept it. Fix: make `W9-STATUS` and `W9-PARTIAL` separate steps after the prompt, as item 3
+  does for W5's `echo status=$?`.
+- **N2 (error) ADR-0104 items 6 and 8a.** The broker's recorded stop and continue dispositions (item 8a) are not
+  reset by `exec_commit` and not copied by `spawn_prepare`. After `exec` of a program whose predecessor had a
+  `SIGTSTP` handler, the record still says `Handler`, so `kill(pid, SIGTSTP)` sends `Custom(20)` and no stop (item
+  9), and the new image's kernel disposition for 20 is `Ignore` (ADR-0106 item 1): the signal is dropped. POSIX
+  resets a caught signal to `SIG_DFL` on `exec` ([P7]) and keeps the parent's dispositions on `fork`. Item 6 should
+  reset the four to `Default` (or `Ignore` where ignored), and item 4 should say what a new pid's record starts as
+  (the caller's for `fork`; `Default`, or `Ignore` per the attribute block, for `posix_spawn`).
+- **N3 (imprecision) ADR-0104 item 9 vs ADR-0105 item 3.** ADR-0104: "A stop from the terminal (ADR-0105 item 3)
+  is the `Default` path on the foreground group." ADR-0105: the broker "applies the foreground group's recorded
+  dispositions for `SIGTSTP` (... `job_suspend` ..., or `Custom(20)` to a handler, or nothing when ignored)". One
+  says always suspend, the other says by disposition. Neither says how a group whose processes differ (the
+  dispositions are per pid, item 2) is handled for `-pgid` or for the terminal's `suspend(20)`: one `job_suspend` of
+  the group job, or per process job.
+- **N4 (imprecision) ADR-0105 item 8**, unchanged sentence in a changed item: "`tcsetpgrp` from the background is
+  `EPERM`" contradicts item 7 and ADR-0104 item 10 (finding 1's residue).
+- **N5 (imprecision) ADR-0104 INV-0104-4**: "or declares its own lone job a group" describes the case item 8 dropped
+  (finding 22's residue); the invariant no longer matches its item.
+- **N6 (imprecision) ADR-0100 item 7**: the first sentence still has the tool read `libc.a` "with `zoraya-elf`"
+  while the new last sentence says `zoraya-elf` cannot and the readers are the tool's own (finding 15's residue).
+- **N7 (imprecision) ADR-0100 Option B, Cost**: "the 126 rows" does not equal its own parenthesis (133 with `time`
+  11, or 127 with the 5 clock rows; plus the five stdio rows: 138 or 132); `readv`/`writev` are `file` rows, not
+  stdio (finding 10's residue; the "about 110" estimate is defensible from 132 minus the 22 pure rows named).
+- **N8 (imprecision) ADR-0104 item 9**: "as POSIX excludes the caller ([P13])". `kill.2` (fetched): "POSIX.1
+  requires that `kill(-1,sig)` send `sig` to all processes that the calling process may send signals to, except
+  possibly for some implementation-defined system processes. Linux allows a process to signal itself, but on Linux
+  the call `kill(-1,sig)` does not signal the calling process." The exclusion is Linux's behaviour, which the ADR
+  rightly copies; the attribution should say Linux, and sources.md's [P13] summary should carry the sentence.
+- **N9 (imprecision) ADR-0109 item 5**: "`zoraya-elf` already parses them (at most `MAX_SEGMENTS` loadable, 8
+  headers of 56 bytes at most for a static tcc output)" conflates the loadable segments `zoraya-elf` keeps with the
+  program header table musl needs. `static_init_tls` ([M10], fetched) looks for `PT_TLS`, `PT_PHDR`, `PT_DYNAMIC`
+  and `PT_GNU_STACK`, none of which is `PT_LOAD`, and `zoraya-elf` skips non-`PT_LOAD` headers
+  (`crates/zoraya-elf/src/lib.rs`). The block must carry the whole table (`e_phnum` entries), and the room bound
+  should be stated for `e_phnum`, not `MAX_SEGMENTS`. Harmless for a program without TLS; wrong for one with it,
+  which is the case finding 13 was about.
+- **N10 (note) ADR-0107 item 5**: "`BOOTSTRAP` (the channel end, read once and closed)" in the same item that now
+  has the child read two messages; ADR-0100 item 4 still says "the bootstrap message" (singular) where ADR-0109
+  item 4 says "messages".
+- **N11 (note) ADR-0102**: the wrapper says the child takes "its pid, parent pid and group from the `spawn_prepare`
+  reply", but the reply is `{pid, pgid, parent_job, child_job, child_broker_end}` (ADR-0104 item 4), with no parent
+  pid; the child's `ppid` is the parent's own pid, elsewhere in copied memory. Item 3 does not say which generation
+  the `self_slot` handle gets; INV-0102-7's check ("compares the raw handle values ... slot by slot") implies the
+  parent's generation of `SELF`, which item 3 should state.
+- **N12 (note) sources.md [P2]**: cited by ADR-0107 item 14 for Linux's `O_RDWR` on a FIFO; the claim is true
+  against `fifo.7`, but the [P2] entry's summary does not mention it.
+- **N13 (note) ADR-0102 item 4 vs ADR-0103 item 7**: the same 64-handle bound is `EAGAIN` from `fork` and `E2BIG`
+  from `posix_spawn`/`exec`. Defensible (each call's errno set), but worth one sentence saying it is deliberate.
+
+Item references: every "item N" in a changed line was resolved against the current numbering of ADR-0100 to
+ADR-0110 and `inputs.md`; all point at the item they describe (ADR-0104's new `8a` included). The new Evidence
+anchors (`task-02/method.md#tiers-runs-and-sets`, `fs/requirements.md#22-atomic-rename`,
+`alternatives-postmortem.md#hubris`) exist.
+
+### The five walkthroughs after the fixes
+
+1. **`fork()` of dash: works as written.** The `SELF` slot, the generation rule, `parent_job`/`child_job` rights,
+   the tty `clone` with `spawn_prepare`'s `pgid`, and the method names are consistent across ADR-0102, 0103, 0104,
+   0105, 0106 and 0107 (N11 is wording).
+2. **`exec` of `/bin/sh` with the parent's `waitpid`: works as written.** `parent_job` has `WAIT`, `PROCESS_JOB`
+   has `CREATE_PROCESS`, the attribute block comes from POSIX dispositions, and the spawner can hand the new image
+   its `SELF` handle because `spawn` returns `DUPLICATE`. N2 sits beside this path, not on it.
+3. **Ctrl-C during `make -j4`: the signal path works as written; the acceptance script still fails at the
+   `W9-STATUS` step (N1).** `tcsetpgrp` is allowed for both dash calls, `job_signal(fg_job, Interrupt, 2)` reaches the
+   group, each make's `SELF` subscription takes the request, the re-raise and `reap`'s `WTERMSIG` are as before; but
+   dash abandons the typed line after the job dies of `SIGINT`, so `W9-STATUS 130` is never printed by the script of
+   ADR-0110 item 4.
+4. **The FIFO jobserver: works as written.** `open_with_mode` carries `S_IFIFO`; the held open is now a listed
+   behaviour of ADR-0055's loop with its `PEER_CLOSED` rule.
+5. **`tcc hello.c && ./a.out`: works as written.** `a.out` is created `0o777 & ~umask` through `open_with_mode`,
+   `AT_PHENT` is in the one auxiliary vector; N9 does not bite a program without TLS.
+
+### What was checked and not checked
+
+- **Checked:** every hunk of the diff; the 50 dispositions against the changed text; every "item N" reference in
+  a changed line against the current numbering; [M10] and [D3] against the fetched files; `fifo.7` and `kill.2` for
+  the two changed claims that cite them; `libc-surface.csv` (T0+T1 rows: 248; categories; the `_`-prefixed rows;
+  the rows named as pure), `applets-by-tier.tsv`, `w10.sh`, `w9_session.py`, `task-02/method.md` line 68,
+  `event-timelines.md` line 54; `ProcessObject::RIGHTS` and `JobObject::RIGHTS` in `crates/zoraya-abi/src/lib.rs`,
+  `kernel/src/syscall.rs`'s `spawn` (rights checked per entry, child handle inserted with `ProcessObject::RIGHTS`),
+  `MAX_SPAWN_HANDLES`, `STARTUP_BLOCK_MAX`, `MAX_SEGMENTS`, `open_count` in `zoraya-fs-service`; ADR-0040's rights
+  table, ADR-0042's Layout line, ADR-0003 rules 1 to 3 and INV-0003-7, ADR-0002 rule 3(a) and INV-0002-3/-5,
+  ADR-0004 rules 2 and 8 and its blocking sentence, ADR-0006 rule 1 and INV-0006-9, ADR-0010's personality mapping
+  and rule 7, ADR-0013 rule 8, ADR-0033's rejection list, ADR-0046's `TERMINATED` sentence, ADR-0055's Replies and
+  `MAX_OPEN`, ADR-0005's INV-0005-1/-2/-4; `adr-check`.
+- **Not checked:** unchanged text beyond what a changed line depends on; the other 42 `sources.md` entries; whether
+  tcc's static output has more than 8 program headers (N9 stands on musl's loop regardless); the options and costs
+  of the eleven ADRs except where a changed line touched them; W9b, Ctrl-Z/`fg`/`bg` and the pipe-style jobserver;
+  the arithmetic of ADR-0100's "about 110" beyond the recount above.
+
+### Disposition of the check (author, 2026-11-02)
+
+All thirteen new problems are fixed in the commit that follows this section: N1 (ADR-0110 item 4: `W9-STATUS` and
+`W9-PARTIAL` are separate lines after the prompt), N2 (ADR-0104 item 8a: a new pid's record starts as the caller's
+for `fork` and `Default`, or `Ignore` per the attribute block, for `posix_spawn`; `exec_commit` resets `Handler` to
+`Default`), N3 (ADR-0104 item 9 and ADR-0105 item 3: a group stop goes process job by process job, each by its own
+record), N4 (ADR-0105 item 8), N5 (INV-0104-4 reworded to item 8's rule), N6 (ADR-0100 item 7's first sentence),
+N7 (ADR-0100's Cost: 133 rows plus three stdio rows, less the pure ones), N8 (ADR-0104 item 9 attributes the caller
+exclusion to Linux; `sources.md` [P13] carries the sentence), N9 (ADR-0109 item 5: the whole program header table,
+bounded by `e_phnum`, with an accessor in `zoraya-elf`), N10 (ADR-0107 item 5 and ADR-0100 item 4: "messages"),
+N11 (ADR-0102: the parent pid is the parent's cached pid; the `SELF` handle takes the parent's generation of that
+slot), N12 (`sources.md` [P2] carries the `O_RDWR` sentence), N13 (ADR-0102 item 4 says why `fork` and `spawn`
+report the bound with different `errno` values). The four "partly fixed" findings (1, 10, 15, 22) are the residues
+N4, N7, N6 and N5 and are closed by the same edits.

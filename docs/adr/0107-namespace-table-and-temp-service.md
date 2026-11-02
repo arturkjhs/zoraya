@@ -168,7 +168,7 @@ versioning, decoded totally):
    index into the message's handle list or none. A `Directory` or `Tmp` entry carries a directory connection
    (ADR-0055), `Terminal` the process's terminal connection (ADR-0105), `Image` the process's own image handle
    (ADR-0108), `Null` nothing.
-5. Fixed slots in `zoraya-abi`: `BOOTSTRAP` (the channel end, read once and closed), `BROKER` (ADR-0104),
+5. Fixed slots in `zoraya-abi`: `BOOTSTRAP` (the channel end, read at start-up and closed), `BROKER` (ADR-0104),
    `PROCESS_JOB` (the process's own process job, `CREATE_PROCESS | TRANSFER`, ADR-0104 item 4; a different slot
    from ADR-0043's `JOB` of the first process), `SELF` (a handle to the process itself with `WAIT`, for
    `REQUEST_PENDING`, ADR-0106 item 3), all above `OPEN_MAX` (ADR-0103 item 4); fds at their numbers. The spawner
