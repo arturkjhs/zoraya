@@ -24,7 +24,7 @@ fetched.
 - [R4] Redox OS, relibc `src/platform/pal/mod.rs`, https://github.com/redox-os/relibc/blob/master/src/platform/pal/mod.rs, primary, checked 2026-11-02. The `Pal` trait, "Platform abstraction layer, a platform-agnostic abstraction over syscalls", with `open`, `read`, `write`, `fork`, `execve`, `pipe2`, `waitpid`, `getpid`, `setpgid`, `dup2`, `fcntl`, `mmap` among its methods, several with default bodies.
 - [C1] Cygwin, User's Guide, "Highlights of Cygwin functionality" (source `winsup/doc/highlights.xml`), https://github.com/cygwin/cygwin/blob/main/winsup/doc/highlights.xml (mirror of cygwin.com), primary, checked 2026-11-02. `fork` is "a non-copy-on-write implementation similar to what was present in early flavors of UNIX": a suspended child by `CreateProcess`, `.data` and `.bss` copied, then stack and heap; the child must have the same address space layout; retries on layout conflicts; "occasional fork failures are inevitable"; fork "will almost certainly always be inefficient under Win32"; switching a compiler driver to spawn "increased compilation speeds by twenty to thirty percent".
 
-## POSIX semantics (Linux man-pages, which state the POSIX rules the specification text would have given)
+## POSIX semantics
 
 Read from the Linux man-pages project's repository, https://github.com/mkerrisk/man-pages, since `pubs.opengroup.org` and `man7.org` were not reachable. Each page is primary for Linux and quotes or paraphrases POSIX.1; where only Linux behaviour is meant the note says so.
 
