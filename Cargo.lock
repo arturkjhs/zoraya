@@ -209,6 +209,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-stream"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-term"
 version = "0.1.0"
 dependencies = [
