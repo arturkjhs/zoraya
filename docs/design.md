@@ -333,7 +333,9 @@ dirty blocks, and `read` is after a `sync`, from the device. `sync` is on the ho
 
 ## Tests
 
-`make test` runs:
+`make test` prints one line per step and keeps each step's output in `build/logs/<step>.log`: a failed step gives its
+log's path and first error lines, so that the log is read only when something failed. `make test V=1` prints
+everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 - `cargo fmt --check`;
 - clippy with warnings as errors (host crates, kernel, test kernel);
 - the host tests;
@@ -371,6 +373,11 @@ How the in-QEMU tests run and report:
 - `t_storage`, run by the test kernel, kills the driver idle clean, idle dirty, in a commit and in a read, then the
   service, and checks the durable file after each remount. It sends malformed messages and hostile paths, fills the
   open table, and never reads its replies.
+- Mutation testing is outside `make test`. `make mutants` applies the hand-written mutations of `tools/mutants/*.toml`
+  in parallel worktrees of `HEAD` (`build/mutants/w<i>`, kept between runs, about 400 MB each), runs only the tests
+  each list names, and writes the survivors to `build/mutants/report.md`. `make mutants-host CRATE=name` runs
+  cargo-mutants on one host crate. The `mutant-triage` and `test-runner` subagents (`.claude/agents/`) read and run
+  these; CLAUDE.md says which work goes to them.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
   exists only in the test kernel: the normal kernel cannot resume a fault.
 - Nine tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
@@ -546,6 +553,7 @@ deterministic random mutations.
 
 ```
 CLAUDE.md                 rules for agents
+.claude/agents/           the test-runner and mutant-triage subagents
 Makefile                  build, run, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test, adr-check
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
@@ -601,13 +609,15 @@ tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
   test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol; zoraya-crash-test
+  test-summary.sh         make test's summary, with the logs in build/logs/
+  mutants/                zoraya-mutants and its mutation lists (*.toml)
   adr-check/              zoraya-adr-check: ADR-0001 invariants
   mkramdisk/              zoraya-mkramdisk: packs user programs
   zoraya-mkfs/            creates a filesystem image from a host directory
   zoraya-fsck/            checks (and on request repairs) a filesystem image
   posix-surface/          TASK-02/02b measurement pipeline (unchanged)
 fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the workspace)
-build/                    kernel ELFs copied by make (not committed)
+build/                    kernel ELFs, disk images, logs/ and mutants/ (not committed)
 ```
 
 The ADRs mention `libposix` and the broker. Neither exists yet; they arrive in stage 6.

@@ -13,6 +13,8 @@
 #                   (V=1 prints everything, KEEP_GOING=1 runs on after a failure)
 #   make mutants    the mutation lists of tools/mutants (not part of make
 #                   test); survivors in build/mutants/report.md
+#   make mutants-host CRATE=name
+#                   cargo-mutants on one host crate (installed separately)
 #   make debug      boot under TCG and wait for a debugger on :1234
 #
 # rustup installed with --no-modify-path keeps cargo in ~/.cargo/bin, which
@@ -38,7 +40,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash mutants tools-storage ramdisk fmt-check check-user-access clippy adr-check clean \
+.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash mutants mutants-host tools-storage ramdisk fmt-check check-user-access clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -202,6 +204,14 @@ test-crash: $(KERNEL) tools-storage
 mutants:
 	$(CARGO) build -q -p zoraya-mutants
 	target/debug/zoraya-mutants $(MUTANTS_ARGS)
+
+# cargo-mutants on one host crate: mutants made from the code's syntax, as
+# opposed to the hand-written lists above. Missed ones in
+# build/mutants/cargo/mutants.out/missed.txt. Not part of make test.
+CRATE ?= zoraya-virtio
+mutants-host:
+	@command -v cargo-mutants >/dev/null || { echo "cargo-mutants is not installed: cargo install cargo-mutants --version 27.1.0 --locked (docs/dependencies.md)"; exit 2; }
+	$(CARGO) mutants -p $(CRATE) -j 4 --timeout 300 -o build/mutants/cargo
 
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
