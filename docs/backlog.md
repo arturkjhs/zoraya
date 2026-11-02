@@ -43,3 +43,26 @@ limited to the lines it changed, what it finds outside them is added here.
 | R-41 | `tools/test-runner` `o` step | Counts occurrences so far, not over the whole run. |
 | W7 | ADR-0054 Quarantine | A pin can also end when a queue is torn down: the text reads as a full list of ways. |
 | - | `kernel/src/arch/aarch64/usercopy.rs` | Copying between user memory and the kernel is byte by byte: 3.2 us a KiB under HVF. After stage 4, try word-sized copies through the unprivileged instructions, with a measurement. |
+
+## Mutation testing: `zoraya-virtio`
+
+`make mutants-host CRATE=zoraya-virtio` (cargo-mutants 27.1.0), 2026-11-02, branch `tests/virtio-mutants`. Before:
+168 mutants, 139 caught, 25 missed, 4 unviable. The `mutant-triage` subagent sorted the 25; new tests in
+`crates/zoraya-virtio/src/tests.rs` cover the holes. After: 156 caught, 8 missed, 4 unviable.
+
+- **Killed: 17.** Each was a hole in the tests, not a bug in the driver: every new test passes on the unmutated code.
+  The holes were a request with exactly 30 pieces (and a literal 31 refused), each request of a batch reaching its own
+  sector, a failure of the second request in a batch, an answer left intact by a later `queue`, the high words of a
+  queue address above 4 GiB, `FAILED` kept when the device already shows it, and the queue layout: rings aligned as
+  2.7 requires, not overlapping, and with the headers within the four pages `QUEUE_MEMORY` promises.
+- **Equivalent: 8**, all left missed on purpose.
+  - Six in the layout constants (`lib.rs` 93:34, 93:38, 93:42 twice, 94:44 twice). Each changes a size that is then
+    rounded up to 4096 and lands on the same page, so `USED_AT` and `HEADERS_AT` keep their values.
+  - 265:36 writes the reserved header word at `header - 4` instead of `header + 4`. The queue memory is zeroed
+    (`Driver::new`'s contract) and nothing else writes either place, so the word is 0 either way.
+  - 275:36 `|` to `^` on the descriptor flags. `DESC_NEXT` (1) shares no bit with the data flags (0 or `DESC_WRITE`,
+    2), so the two give the same value.
+- **Left: 0** that are not equivalent.
+
+The triage's one miss: it said the 30-piece test kills `MAX_PIECES` = 16, but a test that takes its count from
+`MAX_PIECES` changes with it. The test uses a literal 30.

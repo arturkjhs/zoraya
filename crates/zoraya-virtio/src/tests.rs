@@ -42,6 +42,11 @@ enum Hostile {
     ShortQueue,
     /// Never answers.
     Silent,
+    /// Requests fail, except the one in the first slot.
+    FailsLater,
+    /// No version 1 feature, and `Status` reads back with `FAILED` set once
+    /// the driver has said it is one: an untrusted device's value.
+    SetsFailed,
 }
 
 /// A virtio-blk device over plain memory, enough for the driver.
@@ -158,6 +163,7 @@ impl Device {
                     Hostile::BadStatus => 7,
                     Hostile::IoError => 1,
                     Hostile::Unsupported => 2,
+                    Hostile::FailsLater if head != 0 => 1,
                     _ => 0,
                 };
                 self.set((address - QUEUE_BASE) as usize, &[status]);
@@ -214,13 +220,16 @@ impl Registers for Fake {
             reg::DEVICE_ID => DEVICE_BLOCK,
             reg::DEVICE_FEATURES => match d.feature_sel {
                 0 if d.flush_offered => F_BLK_FLUSH,
-                1 if d.hostile != Hostile::NoVersion1 => F_VERSION_1,
+                1 if !matches!(d.hostile, Hostile::NoVersion1 | Hostile::SetsFailed) => F_VERSION_1,
                 _ => 0,
             },
             reg::QUEUE_NUM_MAX if d.hostile == Hostile::ShortQueue => 16,
             reg::QUEUE_NUM_MAX => 1024,
             reg::QUEUE_READY => 0,
             reg::STATUS if d.hostile == Hostile::NoReset => 1,
+            reg::STATUS if d.hostile == Hostile::SetsFailed && d.status & STATUS_DRIVER != 0 => {
+                d.status | STATUS_FAILED
+            }
             reg::STATUS => d.status,
             reg::CONFIG => SIZE_SECTORS as u32,
             reg::INTERRUPT_STATUS => 1,
@@ -353,6 +362,61 @@ fn a_bad_device_is_refused_at_negotiation() {
     assert_eq!(driver(Hostile::NoReset).1.err(), Some(Error::Device));
     let (device, _) = driver(Hostile::NoVersion1);
     assert_ne!(device.borrow().status & STATUS_FAILED, 0);
+    // FAILED stays set when the device already shows it.
+    let (device, d) = driver(Hostile::SetsFailed);
+    assert_eq!(d.err(), Some(Error::Negotiation));
+    let last = *device.borrow().status_writes.last().unwrap();
+    assert_ne!(last & STATUS_FAILED, 0, "last status written {last:#x}");
+}
+
+/// The rings are where the spec lets them be (2.7: descriptors 16-aligned,
+/// avail 2, used 4), do not overlap, and with the request headers fit in the
+/// four pages that `QUEUE_MEMORY` promises. Measured from what the device is
+/// told, not from the constants.
+#[test]
+fn the_queue_layout_fits_four_pages_without_overlap() {
+    let (device, d) = driver(Hostile::Silent);
+    let mut d = d.unwrap();
+    d.queue(&request(Kind::Read, 0, &[piece(0, 512)])).unwrap();
+    let dev = device.borrow();
+    let at = |r: usize| {
+        (u64::from(dev.registers[r / 4]) | u64::from(dev.registers[r / 4 + 1]) << 32) - QUEUE_BASE
+    };
+    let (desc, avail, used) = (
+        at(reg::QUEUE_DESC),
+        at(reg::QUEUE_AVAIL),
+        at(reg::QUEUE_USED),
+    );
+    let headers = dev.descriptor(0).0 - QUEUE_BASE;
+    let n = u64::from(QUEUE_SIZE);
+    assert_eq!(desc, 0);
+    assert!(
+        avail >= 16 * n && avail.is_multiple_of(2),
+        "avail at {avail}"
+    );
+    assert!(
+        used >= avail + 6 + 2 * n && used.is_multiple_of(4),
+        "used at {used}"
+    );
+    assert!(headers >= used + 6 + 8 * n, "headers at {headers}");
+    let end = headers + 32 * MAX_IN_FLIGHT as u64;
+    assert_eq!(
+        QUEUE_MEMORY as u64, end,
+        "QUEUE_MEMORY is what the queues use"
+    );
+    assert!(end <= 4 * 4096, "the queues take {end} bytes");
+}
+
+#[test]
+fn a_queue_above_four_gigabytes_gets_its_high_words() {
+    let device = Device::new(Hostile::None);
+    let base = 0x1_0000_0000;
+    Driver::new(Fake(device.clone()), Fake(device.clone()), base).unwrap();
+    let d = device.borrow();
+    for r in [reg::QUEUE_DESC, reg::QUEUE_AVAIL, reg::QUEUE_USED] {
+        assert_eq!(d.registers[r / 4 + 1], 1, "high word of {r:#x}");
+    }
+    assert_eq!(d.registers[reg::QUEUE_DESC / 4], 0);
 }
 
 #[test]
@@ -372,6 +436,54 @@ fn a_write_then_a_read_comes_back() {
     d.notify();
     assert_eq!(d.collect(), Ok(0));
     assert_eq!(device.borrow().data[4096 + 100], 0x5a);
+}
+
+#[test]
+fn a_request_with_the_most_pieces_fits_its_slot() {
+    // A slot is 32 descriptors: the header, the status and 30 pieces. A literal,
+    // so that a wrong MAX_PIECES cannot change the test with the code.
+    const PIECES: usize = 30;
+    let (device, d) = driver(Hostile::None);
+    let mut d = d.unwrap();
+    for i in 0..PIECES {
+        device.borrow_mut().data[i * 512..(i + 1) * 512].fill(i as u8 + 1);
+    }
+    let pieces: Vec<Piece> = (0..PIECES as u64).map(|i| piece(i * 512, 512)).collect();
+    assert_eq!(d.queue(&request(Kind::Write, 16, &pieces)), Ok(()));
+    d.notify();
+    assert_eq!(d.collect(), Ok(0));
+    assert!(!d.take_failure());
+    let dev = device.borrow();
+    for i in 0..PIECES {
+        assert_eq!(dev.disk[(16 + i) * 512], i as u8 + 1, "piece {i}");
+    }
+}
+
+#[test]
+fn a_batch_writes_each_request_to_its_own_sector() {
+    let (device, d) = driver(Hostile::None);
+    let mut d = d.unwrap();
+    device.borrow_mut().data[..512].fill(0x11);
+    device.borrow_mut().data[512..1024].fill(0x22);
+    d.queue(&request(Kind::Write, 8, &[piece(0, 512)])).unwrap();
+    d.queue(&request(Kind::Write, 16, &[piece(512, 512)]))
+        .unwrap();
+    d.notify();
+    assert_eq!(d.collect(), Ok(0));
+    let dev = device.borrow();
+    assert_eq!((dev.disk[8 * 512], dev.disk[16 * 512]), (0x11, 0x22));
+}
+
+#[test]
+fn a_failure_of_a_later_request_in_a_batch_is_a_failure() {
+    let (_, d) = driver(Hostile::FailsLater);
+    let mut d = d.unwrap();
+    d.queue(&request(Kind::Read, 0, &[piece(0, 512)])).unwrap();
+    d.queue(&request(Kind::Read, 8, &[piece(512, 512)]))
+        .unwrap();
+    d.notify();
+    assert_eq!(d.collect(), Ok(0));
+    assert!(d.take_failure());
 }
 
 #[test]
@@ -408,6 +520,11 @@ fn the_queue_refuses_what_does_not_fit() {
     let many = [piece(0, 512); MAX_PIECES + 1];
     assert_eq!(
         d.queue(&request(Kind::Read, 0, &many)),
+        Err(Error::TooLarge)
+    );
+    // A slot is 32 descriptors: the header, the status and 30 pieces.
+    assert_eq!(
+        d.queue(&request(Kind::Read, 0, &[piece(0, 512); 31])),
         Err(Error::TooLarge)
     );
     assert_eq!(d.capacity(), MAX_IN_FLIGHT);
@@ -482,6 +599,19 @@ fn a_used_length_is_not_trusted() {
     d.notify();
     assert_eq!(d.collect(), Ok(0), "a write's length is the status");
     drop(device);
+}
+
+/// Queueing a request does not touch the status of one already answered.
+#[test]
+fn a_request_queued_after_an_answer_leaves_that_answer_alone() {
+    let (_, d) = driver(Hostile::None);
+    let mut d = d.unwrap();
+    d.queue(&request(Kind::Read, 0, &[piece(0, 512)])).unwrap();
+    d.notify();
+    d.queue(&request(Kind::Read, 8, &[piece(512, 512)]))
+        .unwrap();
+    assert_eq!(d.collect(), Ok(1));
+    assert!(!d.take_failure());
 }
 
 /// A status the device never wrote does not read as success.
