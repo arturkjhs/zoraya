@@ -58,6 +58,15 @@ Read `docs/design.md` first. It says what exists and where it lives.
 - Do not start the next stage without the architect's go-ahead.
 - Record known limitations where they apply (`docs/design.md` or the task report). Do not leave them implicit.
 
+## Models and loops
+
+- Code and reviews, including every independent review of a task, are done by the main model.
+- Test runs and the sorting of mutants are not: run tests with `make test` (it prints a summary, with each step's log in
+  `build/logs/`) or the `test-runner` subagent, and mutation tests with `make mutants` (survivors in
+  `build/mutants/report.md`) and the `mutant-triage` subagent (`.claude/agents/`). Open a log only when its step
+  failed.
+- A mutation found by hand goes into a list in `tools/mutants/`, so that the next run repeats it.
+
 ## Dependencies
 
 - Every external crate used by the kernel or a `no_std` crate is listed in `docs/dependencies.md` with its exact
