@@ -8,7 +8,9 @@
 #                   machine configuration
 #   make test-files files across two boots, restarts, a failed write
 #   make test-crash kill QEMU at random points (CRASH_ROUNDS=200 for more)
-#   make test       all of the above plus fmt, clippy and the ADR checks
+#   make test       all of the above plus fmt, clippy and the ADR checks:
+#                   a summary, with each step's output in build/logs/
+#                   (V=1 prints everything, KEEP_GOING=1 runs on after a failure)
 #   make debug      boot under TCG and wait for a debugger on :1234
 #
 # rustup installed with --no-modify-path keeps cargo in ~/.cargo/bin, which
@@ -214,8 +216,17 @@ adr-check:
 check-user-access:
 	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
 
-test: fmt-check clippy test-unit adr-check check-user-access test-qemu test-boot test-files test-crash
+# `make test` prints a summary and keeps each step's output in build/logs/;
+# `make test V=1` prints everything as it runs.
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access test-qemu test-boot test-files test-crash
+
+ifeq ($(V),1)
+test: $(TEST_STEPS)
 	@echo "make test: all checks passed"
+else
+test:
+	@MAKE="$(MAKE)" tools/test-summary.sh $(TEST_STEPS)
+endif
 
 clean:
 	$(CARGO) clean
