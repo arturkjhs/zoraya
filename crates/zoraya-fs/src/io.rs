@@ -26,6 +26,8 @@ pub enum FailReason {
     MetadataCorrupt,
     /// An internal check of the engine failed.
     Internal,
+    /// The driver is gone, so what reached the device is unknown (ADR-0054).
+    DeviceLost,
 }
 
 pub(crate) struct Io<D> {

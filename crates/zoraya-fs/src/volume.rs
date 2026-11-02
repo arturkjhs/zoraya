@@ -846,6 +846,18 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     // -----------------------------------------------------------------------
     // Requests (ADR-0010 rule 2).
 
+    /// The device is gone: treated as a failed flush, `Failed` and sticky, and
+    /// a clean volume too, since nothing can be read any more (ADR-0054).
+    pub fn device_lost(&mut self) {
+        self.fail(FailReason::DeviceLost);
+    }
+
+    /// A second handle to the object of `h`, for a service's `clone`.
+    pub fn reopen(&mut self, h: Handle) -> Result<Handle, FsError> {
+        let e = self.handle(h)?;
+        Ok(self.new_handle(e.id, e.kind))
+    }
+
     /// A handle to the volume's root directory.
     pub fn root(&mut self) -> Handle {
         self.new_handle(ROOT_ID, ObjKind::Directory)
