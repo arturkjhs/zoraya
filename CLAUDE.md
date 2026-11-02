@@ -81,6 +81,10 @@ Read `docs/design.md` first. It says what exists and where it lives.
 ## Conventions
 
 - Repository language: English (code, comments, docs, commit messages).
+- Committed files contain no absolute paths of the host, no user names and no email addresses, apart from the
+  configured git identity. Write paths relative to the repository root. `make check-host-paths` (part of `make test`)
+  looks for home-directory paths and email addresses; `docs/research/` and `tools/posix-surface/results/` are cleaned
+  separately.
 - Crate names use the prefix `zoraya-`.
 - Task specifications live in `docs/tasks/`. Reviews of a task go next to it (`docs/tasks/TASK-NN-review.md`).
 - Keep `docs/design.md` true when what exists changes. Its Vision section and the stage plan belong to the architect.

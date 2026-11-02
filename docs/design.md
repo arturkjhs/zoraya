@@ -338,6 +338,9 @@ dirty blocks, and `read` is after a `sync`, from the device. `sync` is on the ho
 - clippy with warnings as errors (host crates, kernel, test kernel);
 - the host tests;
 - `make adr-check`;
+- `make check-user-access` and `make check-host-paths`: the unprivileged load and store forms only in `usercopy.rs`
+  (INV-0031-4), and no home-directory paths or email addresses in tracked files outside `docs/research/` and
+  `tools/posix-surface/results/`;
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
