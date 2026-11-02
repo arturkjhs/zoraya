@@ -275,7 +275,8 @@ would give it to `spawn` too).
 
 - The time and memory per fork on W4 (X-6, ADR-0003's open question): ADR-0110's measurement. The threshold, set by
   the architect: if `fork` emulation (the `snapshot_process` time summed over the run, as ADR-0110 item 10 reports it)
-  takes more than 10 % of W4's wall-clock time, Option A (copy-on-write) replaces the eager copy.
+  takes more than 10 % of W4's wall-clock time (`configure` and `make` together, as ADR-0110 item 10 reports them),
+  Option A (copy-on-write) replaces the eager copy.
 - The peak number of live processes in a parallel W4 configure against the 255 ASIDs.
 - Whether text pages should be shared with a reference count once `spawn` of the same image many times is measured
   (W4 runs `/bin/sh` 136 times).

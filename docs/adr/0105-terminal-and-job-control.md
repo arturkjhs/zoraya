@@ -158,8 +158,8 @@ that terminal rights be separated and control be out of band natively, with a VT
 5. **The control connection** (broker only): `foreground(group pid, job handle)` sets the foreground group and the
    handle the signals go to, with the rights ADR-0104 item 10 gives it (`SIGNAL | KILL`); `session(job handle)` for
    hangup; `clear_foreground`; and, from `ttyd` to the broker, `suspend(sig)` for the SUSP character (item 3).
-   `job_suspend` and `job_resume` need the `KILL` right on the job, by the architect's decision; ADR-0040's table
-   gains that use of `KILL`.
+   `job_suspend` and `job_resume` need the `KILL` right on the job, by the architect's decision (ADR-0040's `RESUME`
+   is a process right, for `process_resume`; a job handle carries none); ADR-0040's table gains that use of `KILL`.
 
 **`libposix`.**
 

@@ -49,8 +49,9 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
 
 ## Decision drivers
 
-1. **Every acceptance workload runs inside Zoraya under `make test`**, checked by its own `W*-check` (INV-0005-4), with
-   the result visible on the serial line and the run ending in a power-off (the runner's pass condition).
+1. **Every acceptance workload runs inside Zoraya under `make test` or `make test-posix-long`** (item 6), checked by
+   its own `W*-check` (INV-0005-4), with the result visible on the serial line and the run ending in a power-off (the
+   runner's pass condition).
 2. **Interactive scenarios need keys at the right moments** (W5, W9's Ctrl-C), which the runner already does.
 3. **The guest can be observed only through what it prints**: coverage of the tier list (INV-0005-3), fork counts and
    times, round trips, must be collected by `libposix` and the broker and printed at the session's end.
@@ -86,8 +87,8 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
   is a timeout, diagnosed from the log. Interactive timing (W9's delays) is wall-clock on the host against a guest
   whose speed under TCG differs from the measurement VM, so the point of interruption differs; the measurement itself
   varied the delay for that reason.
-- **Cost:** *(estimate)* One runner script per workload (about 15 lines each), the shell scripts, a `make test-posix`
-  target, the statistics printout.
+- **Cost:** *(estimate)* One runner script per workload (about 15 lines each), the shell scripts, the
+  `make test-posix` and `make test-posix-long` targets, the statistics printout.
 - **Precedent:** `make test-boot` and `make test-files` (this repository); Hubris drives its tests from the host
   through a debug probe and reads results back (`alternatives-postmortem.md#hubris`), the same host-driven shape.
 
@@ -154,11 +155,11 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
 5. **The roadmap criterion.** `tests/posix/hello.script`: `printf 'int main(){puts("hello from tcc");return 0;}'
    > hello.c && tcc hello.c && ./a.out`, expecting the line.
 6. **Two targets**, by the architect's decision. `make test-posix` runs the fast workloads, W5, W8, W9 and W10 (items
-   3 and 4) and the roadmap criterion (item 5), under `auto` and `tcg`, `zoraya-fsck` after each, as `test-files`
+   2 to 4) and the roadmap criterion (item 5), under `auto` and `tcg`, `zoraya-fsck` after each, as `test-files`
    does, and is a step of `make test` after `test-files`. `make test-posix-long` runs the builds, W1, W2, W3, W2-j and
-   W3-j (item 2), the same way; it is not a step of `make test`, and it must pass before stage 6 is merged, as the
-   stage's definition of done. `QEMU_TIMEOUT` per script comes from a table, set from the first measured durations
-   with a margin.
+   W3-j (item 2), the same way, and then the call-log union of item 8 over its own logs and the fast run's; it is not
+   a step of `make test`, and it must pass before stage 6 is merged, as the stage's definition of done. `QEMU_TIMEOUT`
+   per script comes from a table, set from the first measured durations with a margin.
 7. **Observation.** A `stats` feature of `zoraya-posix`, on in the test image: each process counts `snapshot_process`
    calls and their wall-clock time (`clock_monotonic` around the call), `exec`s and their time, broker round trips,
    `share` and `seek` requests, resolver calls and time, request polls (ADR-0106), the largest `spawn` buffer it
@@ -167,10 +168,13 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
    `status`, the peak space of `/tmp`. At the session's end the broker prints one line per counter, `POSIX-STATS
    name=value`, and the call bitmap as hex, `POSIX-CALLS <hex>`. The runner's log keeps them; `tools/posix-stats`
    (host) turns a log into a table for the task report.
-8. **INV-0005-3.** `tools/posix-stats --calls` decodes `POSIX-CALLS` from every T1 run's log, unions them, and diffs
-   against `docs/adr/posix-surface-T1.txt`: every function not called must be marked `static-only` in the list's
-   second column, else the step fails.
-9. **INV-0005-1 and INV-0005-2.** ADR-0100's export check runs in the same step.
+8. **INV-0005-3.** `tools/posix-stats --calls` decodes `POSIX-CALLS` from every T1 run's log (the nine of items 2 to
+   4: the five of `make test-posix-long` and the four of `make test-posix`, read from `build/logs/posix-*.log` of the
+   same build), unions them, and diffs against `docs/adr/posix-surface-T1.txt`: every function not called must be
+   marked `static-only` in the list's second column, else the step fails. The step is the last of
+   `make test-posix-long`, since the builds call functions the fast workloads do not; it fails with a message naming
+   `make test-posix` when the fast logs are missing.
+9. **INV-0005-1 and INV-0005-2.** ADR-0100's export check runs as a step of `make test-posix`, before the workloads.
 10. **The W4 measurement** (`make measure-w4`, not part of `make test`): the image also holds GNU hello 2.12.3's
     source and the T2 applets the ports build when asked; the script runs `./configure CC=tcc LD=tcc AR="tcc -ar"`
     and `make`, with the statistics of item 7. The report gives: forks, total and mean `snapshot_process` time,
@@ -192,7 +196,9 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
 - *ADR-0005 INV-0005-3*'s check speaks of "a compile-time call-log feature in `libposix`"; item 7's `stats` feature
   is that, with the broker as the aggregator and the serial line as the channel. *INV-0005-4* says "CI runs the
   TASK-02/02b workload scripts against the prototype"; the scripts are rewritten as dash scripts and runner scripts
-  (items 2 to 4) with the measured commands and checks, since the Python harness cannot run on Zoraya.
+  (items 2 to 4) with the measured commands and checks, since the Python harness cannot run on Zoraya, and CI
+  (`make test`) runs the fast four and the criterion, while the builds run in `make test-posix-long` before the merge
+  (item 6), so CI covers a subset of the scripts; INV-0005-3's union, which needs the builds, moves with them.
 - *ADR-0053*: `init` gains a second session shape, chosen by a file on the volume; the kernel still starts one
   process (INV-0053-1).
 - *ADR-0080*: a restart of the storage stack ends the POSIX session with the shell, as it ends `zosh`; a test that
@@ -216,8 +222,8 @@ blocks on a FIFO until the harness releases it).
 - **Negative.** `make test` grows by the fast workloads, more under TCG, and the builds need a second command that a
   developer must remember before a merge; W9's interruption point depends on timing; a guest hang is a timeout to
   diagnose from a log.
-- **Follow-up.** `tests/posix/`, `make posix-image`, `make test-posix`, `make measure-w4`, `tools/posix-stats`,
-  `init`'s session file, the `stats` feature, the timeout table.
+- **Follow-up.** `tests/posix/`, `make posix-image`, `make test-posix`, `make test-posix-long`, `make measure-w4`,
+  `tools/posix-stats`, `init`'s session file, the `stats` feature, the timeout table.
 
 ## Invariants
 
@@ -225,8 +231,9 @@ blocks on a FIFO until the harness releases it).
   marker, `W9-STATUS 130` and `143`, `W9-PARTIAL 0`, and a power-off; and `make test-posix-long` fails unless W1, W2,
   W3, W2-j and W3-j do the same, and stage 6 is not merged until it passes. *Check:* `make test-posix`, a step of
   `make test`, and `make test-posix-long`, with one runner script per workload.
-- **INV-0110-2.** The union of `POSIX-CALLS` over the T1 runs covers every function of the tier list not marked
-  `static-only`. *Check:* `tools/posix-stats --calls` in `make test-posix`.
+- **INV-0110-2.** The union of `POSIX-CALLS` over the nine T1 runs (W1, W2, W3, W2-j, W3-j, W5, W8, W9, W10) covers
+  every function of the tier list not marked `static-only`. *Check:* `tools/posix-stats --calls`, the last step of
+  `make test-posix-long`, over its own logs and those of `make test-posix` for the same build.
 - **INV-0110-3.** A W4 report produced by `make measure-w4` carries every counter of item 10 (fork count, total and
   mean `snapshot_process` time, `exec` count and time, peak live pids, peak `/tmp` use) and names the accelerator; a
   report missing one is not a report. *Check:* `tools/posix-stats` fails on a missing counter.

@@ -265,9 +265,11 @@ the three named.
 - **INV-0106-4.** A blocked signal whose POSIX disposition is a handler or `SIG_IGN` is never lost and never acted on
   while blocked: a request taken while blocked is delivered on unblock, as the handler, or dropped if ignored. A
   blocked signal whose POSIX disposition is `SIG_DFL` and whose default action terminates is outside this rule: it
-  ends the process at once, as item 2 states. *Check:* in-QEMU test blocking `SIGTERM` with a handler, receiving a
-  `kill`, unblocking, and observing the handler run exactly once; the same with `SIG_IGN`, observing nothing; and
-  with `SIG_DFL`, observing the exit record `Terminated` with `detail` 15 while the signal is still blocked.
+  ends the process at once, as item 2 states. Stop, continue and default-ignore signals never reach the library as
+  requests under `SIG_DFL` (items 1 and 7) and are outside it too. *Check:* in-QEMU test blocking `SIGTERM` with a
+  handler, receiving a `kill`, unblocking, and observing the handler run exactly once; the same with `SIG_IGN`,
+  observing nothing; and with `SIG_DFL`, observing the exit record `Terminated` with `detail` 15 while the signal is
+  still blocked.
 - **INV-0106-5.** `kill(getpid(), n)` and `raise(n)` with `SIG_DFL` end the process with `ExitRecord { reason:
   Terminated, detail: n }` with no broker message. *Check:* in-QEMU test under the counting broker.
 

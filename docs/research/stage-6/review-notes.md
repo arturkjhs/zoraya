@@ -594,3 +594,133 @@ all the same in the commit that follows, without a further check: P1 (ADR-0109 i
 names the Zoraya spawn block of item 6), P4 (item 8a cites ADR-0004 rule 6 instead of [P3]), P5 (ADR-0105 item 3
 carries the whole-group shortcut), P6 (ADR-0100's Cost says the `dl*` rows are not built), P7 (ADR-0102's wrapper
 takes the parent pid from the bootstrap record). These edits were not checked by a reviewer.
+
+## Check of the architect's six changes (fourth reviewer)
+
+Checker: an independent subagent that wrote none of ADR-0100 to ADR-0110 and none of this file. Commit checked:
+d5b101f, "stage-6 design: the architect's six decisions before acceptance", read as `git diff HEAD~1..HEAD` in full
+(ten files, 81 insertions, 41 deletions). Date: 2026-11-02. Scope: the changed lines, the unchanged text next to them
+and the items they name. Nothing but this section was written.
+
+| Item | Verdict | Evidence |
+|---|---|---|
+| 1. ADR-0106: item 2 keeps the deviation; INV-0106-4 excludes it and its check observes immediate termination for `SIG_DFL`; revisit trigger for a T1 or T2 program | implemented as stated | Item 2 (lines 92 to 101) is unchanged and still says a blocked `SIG_DFL` signal whose default action terminates "still ends the process at once, a stated deviation". INV-0106-4 now covers handlers and `SIG_IGN` only, names the `SIG_DFL` case as "outside this rule: it ends the process at once, as item 2 states", and its check observes "the exit record `Terminated` with `detail` 15 while the signal is still blocked"; `detail` 15 is right: item 1 maps `SIGTERM` to `Terminate` and item 4 and ADR-0104 item 9 carry the signal number as `detail`. The new revisit trigger names "a program of the T1 or T2 workloads" that "blocks a signal whose default action terminates and receives it while blocked", and its remedy ("the disposition flip it rejected") is the alternative item 2 describes. |
+| 2. ADR-0102: the threshold is 10 % of W4's time as ADR-0110 measures it | implemented as stated | The open question now reads "if `fork` emulation (the `snapshot_process` time summed over the run, as ADR-0110 item 10 reports it) takes more than 10 % of W4's wall-clock time, Option A (copy-on-write) replaces the eager copy". ADR-0110 item 10 does report "total and mean `snapshot_process` time" and "wall-clock of configure and of make"; ADR-0102's revisit trigger (line 285, unchanged) still says "exceeds the architect's threshold: Option A", consistent. |
+| 3. ADR-0104 and ADR-0105: `job_suspend` and `job_resume` need `KILL`, no longer an assumption | implemented as stated | ADR-0105 item 5 says "need the `KILL` right on the job, by the architect's decision"; the `[assumption, until ADR-0040's table names a right]` label is gone; the tension bullet records that ADR-0040's job row lists `KILL` for `job_kill` alone; the open question is removed. ADR-0104 item 10 says the same of the `SIGNAL \| KILL` duplicate and points at ADR-0105 item 5. `grep assum` over both ADRs finds no leftover on this point. |
+| 4. ADR-0110: W5, W8, W9, W10 and the roadmap criterion in `make test`; W1, W2, W3, W2-j, W3-j in `make test-posix-long`, mandatory before the merge | implemented as stated, with contradictions left in adjacent unchanged text (E1, I1 to I4) | Item 6 names both targets with those workload sets, says `make test-posix-long` "is not a step of `make test`, and it must pass before stage 6 is merged, as the stage's definition of done"; INV-0110-1 states both halves and the merge condition; the Consequences, the open question and the revisit trigger follow. Driver 1, item 6's item references, INV-0110-2's check, the Tensions paragraph and `plan.md` row 6e were not brought along; see below. |
+| 5. ADR-0109: `make fetch-ports` outside `make test`, pinned SHA-256 and a cache; clear failure without the cache; nothing GPL or LGPL committed; triple `aarch64-unknown-zoraya`, `uname` `Zoraya`; `config.sub` as a known T2 cost | implemented as stated | Item 6: `make fetch-ports` "a step outside `make test` by the architect's decision" into "the cache `build/ports/src/`", SHA-256 from `ports/sources.lock`, "refuses a hash mismatch", `make ports` "builds from the cache only: with an archive missing it fails at once with a message naming `make fetch-ports`, and never downloads", "No third-party source, GPL or LGPL in particular, is committed". Item 1: the triple and `uname -s` "both by the architect's decision", ADR-0107 item 11 is `uname`; "Every autoconf package's `config.sub` must learn `zoraya*`... as a known cost of T2, for every autoconf project built on Zoraya (GNU hello first)". INV-0109-3, the CLAUDE.md tension, the deferred list (vendoring removed) and the revisit trigger (a mirror instead of vendoring) agree. `grep ports-fetch` over `docs/adr/01*.md` finds nothing; one hit remains in `stage-6/rows-to-add.md` (E2). |
+| 6. INV-0004-6 `not yet applicable (until exception channels)`; exception channels in `docs/backlog.md`; `tools/adr-check` accepts the form | implemented as stated | `invariants.md` row INV-0004-6 carries the status and the Status paragraph defines the form ("when no planned stage builds it and `docs/backlog.md` holds the item"). The backlog row has the table's three columns and cites ADR-0004 rule 5 (faults and exception channels), ADR-0034 (ends with reason `Fault` without a channel) and ADR-0106 item 12 (no fault capture at stage 6), each checked against its text. `status_is_known` accepts `not yet applicable (until <non-empty>)` and rejects an empty `<what>`; the error message and the module comment list the new form; the new test `until_status_is_known_and_warns` covers acceptance, the warning bucket and the empty case. Test and run results below. |
+
+### Errors and imprecisions in the changed lines and the text next to them
+
+1. **E1 (error), ADR-0110 INV-0110-2 (lines 228 to 229, unchanged) and item 8 (line 170, unchanged), against the
+   changed item 6.** INV-0110-2's check is "`tools/posix-stats --calls` in `make test-posix`" over "the T1 runs", and
+   item 8 "decodes `POSIX-CALLS` from every T1 run's log, unions them". After item 6, `make test-posix` runs W5, W8, W9,
+   W10 and the hello only; the W1, W2, W3, W2-j and W3-j logs exist only after `make test-posix-long`. As written,
+   either the union in `make test` lacks every function that only the builds call (tcc's and configure's) and the
+   step fails, or `make test-posix` must read logs of a run that is not a step of `make test`, which the ADR does not
+   say. The same holds for INV-0005-3's check, which item 8 implements. The split needs a sentence on where the
+   union is formed (the long run, or a stored log the fast run reads).
+2. **E2 (error, outside the diff), `docs/research/stage-6/rows-to-add.md` lines 57, 70 and 72.** The rows for
+   INV-0106-4, INV-0109-3 and INV-0110-1 still carry the pre-commit rule and check text (`make ports-fetch`, the
+   nine-workload `make test`, the old INV-0106-4 rule). Copying them into `invariants.md` fails INV-0001-4: confirmed
+   by running `cargo run -q -p zoraya-adr-check` on a scratch copy of `docs/` with the rows appended, which reports
+   "INV-0106-4: rule differs", "INV-0106-4: checking method differs", "INV-0109-3: rule differs", "INV-0110-1: rule
+   differs" and "INV-0110-1: checking method differs". The file says it was generated from the ADRs; it must be
+   regenerated, or whoever adds the rows must copy from the ADRs, not from it.
+3. **I1 (imprecision), ADR-0110 driver 1 (line 52), Cost (line 89) and Follow-up (line 219), unchanged.** Driver 1
+   says "Every acceptance workload runs inside Zoraya under `make test`"; item 6 now puts five of them outside it.
+   The Cost line speaks of "a `make test-posix` target" and the Follow-up lists `make test-posix` only; both predate
+   the second target.
+4. **I2 (imprecision), ADR-0110 item 6 (changed).** "the fast workloads, W5, W8, W9 and W10 (items 3 and 4)": items
+   3 and 4 describe W5 and W9 only; the W8 and W10 scripts are in item 2, which item 6 cites for the builds alone.
+5. **I3 (imprecision), ADR-0110 Tensions, INV-0005-4 (line 193, unchanged).** INV-0005-4's check is "CI runs the
+   TASK-02/02b workload scripts against the prototype". CI runs `make test` (`.github/workflows/test.yml`), so after
+   item 6 CI runs W5, W8, W9 and W10 and not the builds; the tension paragraph records only the rewrite of the scripts,
+   not that CI now covers a subset and a developer's `make test-posix-long` the rest.
+6. **I4 (imprecision), `docs/research/stage-6/plan.md` row 6e (unchanged, next to the changed row 6b).** Its Work
+   column names "`make test-posix` in `make test`" alone and its Done-when column says "`make test` passes with W1, W2,
+   W3, W5, W2-j, W3-j, W8, W9, W10 and `tcc hello.c && ./a.out`", which ADR-0110 item 6 no longer asks of `make test`.
+7. **I5 (imprecision), ADR-0109 item 6 (changed) against ADR-0100 item 1 (line 157, unchanged).** Item 6 names the
+   cache `build/ports/src/` and says no third-party source is committed; ADR-0100 item 1 says "`ports/musl/` holds the
+   pinned musl source (1.2.5...) fetched as ADR-0109 fetches every port". A fetched tree under `ports/` in the source
+   tree is not the cache item 6 names; one of the two locations should give way (musl is MIT, so the licence claim is
+   untouched, the location is not).
+8. **N1 (note), ADR-0106 INV-0106-4 (changed).** The rewritten rule covers "a handler or `SIG_IGN`" and excludes
+   "`SIG_DFL` and whose default action terminates". `SIG_DFL` signals whose default is to ignore (17, 23, 28, kernel
+   `Ignore` by item 1) or to stop or continue (18 to 22, the broker's by item 7) fall under neither sentence. Item 2's
+   general rule still covers them, so nothing is wrong, but the invariant is narrower than item 2.
+9. **N2 (note), ADR-0102 open question (changed).** "W4's wall-clock time": ADR-0110 item 10 reports configure's and
+   make's wall-clock separately. The sum is the natural reading; a word would remove the doubt.
+10. **N3 (note), ADR-0109 item 1 (changed).** "a patch of a few lines per package" is an estimate without the
+    `*(estimate)*` label the ADRs give their costs.
+11. **N4 (note), ADR-0105 item 5 and its tension bullet (changed).** ADR-0040 also has a `RESUME` right (process row,
+    `process_resume`). The text is right that the job row lists `KILL` for `job_kill` alone, but a reader who knows
+    the rights list will ask why `job_resume` does not take `RESUME`; the architect's choice could say so in a clause.
+12. **N5 (note), line length.** Seven added lines exceed the ADRs' 120 columns: ADR-0104 line 204 (161), ADR-0109
+    line 134 (203) and line 245 (145), and one-line table rows in `invariants.md` (two), `backlog.md` and `plan.md`,
+    which are one line by convention. The three prose lines break the wrap of their paragraphs; no lint bounds it,
+    as the third check noted.
+
+### cargo test and adr-check
+
+- `cargo test -q -p zoraya-adr-check` at d5b101f: 12 tests, 11 passed, 1 failed. The failure is
+  `tests::repository_docs_pass`, whose `left` is exactly the eleven `INV-0001-5: index.md: 01NN-....md is not listed`
+  strings for ADR-0100 to ADR-0110 and nothing else; the expected failure. `until_status_is_known_and_warns` passes.
+- `cargo run -q -p zoraya-adr-check -- docs` at d5b101f: "59 ADRs checked against INV-0001-1..5", a warning for 17
+  unchecked invariants of accepted ADRs, grouped as "not yet applicable (stage 6)" (INV-0002-2 to INV-0006-9, sixteen)
+  and "not yet applicable (until exception channels): INV-0004-6", then the eleven INV-0001-5 "is not listed" errors,
+  "11 errors, 17 warnings". Nothing else: no INV-0001-3 Evidence-line error, so the changed lines added no citation
+  the Evidence lines lack.
+
+### What was checked and not checked
+
+Checked: every changed line of the ten files, against the unchanged text around it and the items it names (ADR-0106
+items 1, 2, 4, 7 and 12; ADR-0110 items 2 to 5, 8 and 10, driver 1, the Tensions, Cost and Follow-up lines; ADR-0105
+items 5 and 7; ADR-0104 items 9 and 10; ADR-0040's rights list and job row; ADR-0107 item 11; ADR-0109 items 2, 4, 9
+and its licence paragraph; ADR-0100 item 1; ADR-0004 rule 5; ADR-0034; ADR-0003's open question); the `grep` for
+`ports-fetch` and `test-posix` over `docs/adr/01*.md`, `docs/research/stage-6/`, `docs/backlog.md` and
+`docs/design.md`; the `grep` for leftover assumption labels on the `KILL` right; the CI workflow's steps; the changed
+lines of `tools/adr-check/src/main.rs` by reading and by the two runs above; `rows-to-add.md` against the ADRs by an
+adr-check run on a scratch copy. Not checked: anything outside the changed lines beyond the adjacent text named above
+(the three earlier reviews cover it); whether 10 % is the right threshold, which is the architect's; `make test`;
+the man pages and sources behind the citations; `design.md`, which the commit does not touch and which names no
+stage 6 workload set.
+
+### Disposition of the fourth check (author, 2026-11-02)
+
+The architect's rule for this check: zero errors means acceptance; an error means fix and report, without accepting.
+The check found two errors, so ADR-0100 to ADR-0110 stay `proposed`, and everything below is fixed in the commit that
+follows this section, without a further check.
+
+- **E1 (fixed).** ADR-0110 item 8 now says where the union is formed: `tools/posix-stats --calls` reads the nine logs
+  (the five of `make test-posix-long` and the four of `make test-posix`, from `build/logs/posix-*.log` of the same
+  build) as the last step of `make test-posix-long`, and fails with a message naming `make test-posix` when the fast
+  logs are missing. Item 6 names that step; item 9 moves the export check to `make test-posix`, before the workloads;
+  INV-0110-2 names the nine runs and the check as that step over both log sets.
+- **E2 (fixed).** `rows-to-add.md` is regenerated from the ADRs after every fix of this section (52 rows, 11 counts);
+  `cargo run -q -p zoraya-adr-check` on a scratch copy of `docs/` with the index rows, invariant rows, Counts rows
+  and the Total inserted reports 0 errors and the same 17 warnings as the tree.
+- **I1 (fixed).** ADR-0110 driver 1 says "under `make test` or `make test-posix-long` (item 6)"; the Cost line names
+  both targets; the Follow-up lists `make test-posix-long`.
+- **I2 (fixed).** ADR-0110 item 6 cites items 2 to 4 for the fast workloads.
+- **I3 (fixed).** The INV-0005-4 tension bullet records that CI (`make test`) runs the fast four and the criterion,
+  the builds run in `make test-posix-long` before the merge, so CI covers a subset of the scripts, and INV-0005-3's
+  union moves with the builds.
+- **I4 (fixed).** `plan.md` row 6e: Work names `make test-posix-long` outside `make test`; Done-when splits the
+  workloads between the two targets and adds the call-log union.
+- **I5 (fixed).** ADR-0100 item 1 puts the musl source in the cache `build/ports/src/`, fetched by ADR-0109 item 6
+  and never committed; `ports/musl/` holds the build file and `ports/musl/zoraya/` the patches and the shim header.
+- **N1 (fixed).** INV-0106-4 adds that stop, continue and default-ignore signals never reach the library as requests
+  under `SIG_DFL` (items 1 and 7) and are outside it too.
+- **N2 (fixed).** ADR-0102's open question says "`configure` and `make` together, as ADR-0110 item 10 reports them".
+- **N3 (fixed).** ADR-0109 item 1 labels the patch size `*(estimate)*`.
+- **N4 (fixed).** ADR-0105 item 5 adds that ADR-0040's `RESUME` is a process right, for `process_resume`, and a job
+  handle carries none.
+- **N5 (fixed).** The three prose lines (ADR-0104 line 204, ADR-0109 lines 134 and 245) are reflowed to 120 columns,
+  with the lines the fixes above touched; the one-line table rows stay one line by convention.
+
+After the fixes: `cargo run -q -p zoraya-adr-check -- docs` reports the eleven `INV-0001-5 ... is not listed` errors
+and 17 warnings, nothing else; `cargo test -q -p zoraya-adr-check` has 11 of 12 tests passing, the failure being
+`repository_docs_pass` with exactly those eleven strings, as at d5b101f. The Evidence lines were regenerated from the
+body citations. Acceptance (statuses, decisions, index and invariants rows) is not applied, by the architect's rule.

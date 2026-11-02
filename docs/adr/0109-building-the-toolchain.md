@@ -130,9 +130,10 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
 1. **Triple and identity.** `aarch64-unknown-zoraya`, and `uname -s` is `Zoraya` (ADR-0107 item 11), both by the
    architect's decision. `tools/zcc` defines `__zoraya__` and nothing Linux; `config.guess` is not run (cross builds
    pass `--host`). Every autoconf package's `config.sub` must learn `zoraya*` as an OS before its `configure` accepts
-   the triple: a patch of a few lines per package, paid for dash and GNU make here and, as a known cost of T2, for
-   every autoconf project built on Zoraya (GNU hello first) until upstream `config.sub` carries the name. Code generation: AArch64 with FP and SIMD, AAPCS64, `-fno-stack-protector` (no `AT_RANDOM` source
-   yet, below), `-O2 -g` as measured, PIC off (static `ET_EXEC`).
+   the triple: a patch of a few lines per package *(estimate)*, paid for dash and GNU make here and, as a known cost
+   of T2, for every autoconf project built on Zoraya (GNU hello first) until upstream `config.sub` carries the name.
+   Code generation: AArch64 with FP and SIMD, AAPCS64, `-fno-stack-protector` (no `AT_RANDOM` source yet, below),
+   `-O2 -g` as measured, PIC off (static `ET_EXEC`).
 2. **Sysroot** at `build/sysroot/usr/`: `include/` from musl 1.2.5 (`include/`, `arch/aarch64/bits`,
    `arch/generic/bits`, the generated `bits/alltypes.h` and `bits/syscall.h`, the latter empty of Linux numbers),
    `lib/libc.a` (ADR-0100's archive), `lib/crt1.o`, `lib/crti.o`, `lib/crtn.o`, `lib/libm.a`, `lib/libpthread.a` and
@@ -242,9 +243,9 @@ stack protectors.
 - **INV-0109-2.** No port is compiled with `__linux__` defined, and `uname -s` inside Zoraya prints `Zoraya`.
   *Check:* `tools/zcc` refuses `-D__linux__`; a `grep` of the build logs for `__linux__`; the W5 script prints `uname`.
 - **INV-0109-3.** `make test` runs without network once `make fetch-ports` has filled the cache and the Rust toolchain
-  is installed; a missing source fails with a message naming `make fetch-ports`, never with a download. *Check:* CI runs the fetch step first and
-  `make test` with network disabled `[assumption: the runner allows it; otherwise a host test runs `ports/Makefile` in
-  a sandbox with no network]`.
+  is installed; a missing source fails with a message naming `make fetch-ports`, never with a download. *Check:* CI
+  runs the fetch step first and `make test` with network disabled `[assumption: the runner allows it; otherwise a
+  host test runs `ports/Makefile` in a sandbox with no network]`.
 - **INV-0109-4.** Every archive in `ports/sources.lock` matches its recorded SHA-256 before it is unpacked.
   *Check:* the fetch step verifies and a host test feeds it a corrupted archive.
 

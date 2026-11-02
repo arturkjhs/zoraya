@@ -154,9 +154,10 @@ and the BSDs could change later (DM-057). C libc internals with hidden global st
 **Recommendation (not a decision): Option B.** The pure half of POSIX is a solved problem with a permissive licence; the
 machine half is Zoraya's design and belongs in Rust with host tests. Concretely:
 
-1. **Layout.** `ports/musl/` holds the pinned musl source (1.2.5, the version TASK-02 measured against,
-   `task-02/method.md#pinned-inputs`) fetched as ADR-0109 fetches every port, and `ports/musl/zoraya/` the patches and
-   the shim header. `crates/zoraya-posix/` is the Rust crate: `no_std`, `#![forbid(unsafe_code)]` outside its `ffi`
+1. **Layout.** The pinned musl source (1.2.5, the version TASK-02 measured against,
+   `task-02/method.md#pinned-inputs`) lives in the cache `build/ports/src/`, fetched as ADR-0109 item 6 fetches every
+   port and never committed; `ports/musl/` holds its build file and `ports/musl/zoraya/` the patches and the shim
+   header. `crates/zoraya-posix/` is the Rust crate: `no_std`, `#![forbid(unsafe_code)]` outside its `ffi`
    module, `crate-type = ["staticlib"]`, every public symbol `extern "C"` and listed in one `exports.rs`. Its logic
    (fd table, resolver, signal state, `pselect` set building, `stat` synthesis) is host-tested; only its `ffi` module
    and the system-call stubs of `zoraya-rt` need the machine.
