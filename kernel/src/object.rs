@@ -33,6 +33,8 @@ pub enum Object {
     Job(Arc<Job>),
     Port(Arc<Port>),
     Memory(Arc<MemoryObject>),
+    /// Its identity is all it has (ADR-0080).
+    Event(Arc<u8>),
     Device(Arc<Device>),
     Interrupt(Arc<Interrupt>),
     Pin(Arc<Pin>),
@@ -41,6 +43,22 @@ pub enum Object {
 }
 
 impl Object {
+    /// True if both name one object.
+    pub fn same(&self, other: &Object) -> bool {
+        use Object as O;
+        match (self, other) {
+            (O::Console, O::Console) | (O::Power, O::Power) | (O::Directory, O::Directory) => true,
+            (O::Event(a), O::Event(b)) => Arc::ptr_eq(a, b),
+            (O::Memory(a), O::Memory(b)) => Arc::ptr_eq(a, b),
+            (O::Process(a), O::Process(b)) => Arc::ptr_eq(a, b),
+            (O::Job(a), O::Job(b)) => Arc::ptr_eq(a, b),
+            (O::Port(a), O::Port(b)) => Arc::ptr_eq(a, b),
+            (O::Device(a), O::Device(b)) => Arc::ptr_eq(a, b),
+            (O::Channel(a, x), O::Channel(b, y)) => Arc::ptr_eq(a, b) && x == y,
+            _ => false,
+        }
+    }
+
     /// Its row in `OBJECT_TYPES`.
     pub fn type_index(&self) -> u64 {
         let name = match self {
@@ -52,6 +70,7 @@ impl Object {
             Object::Job(_) => "job",
             Object::Port(_) => "port",
             Object::Memory(_) => "memory",
+            Object::Event(_) => "event",
             Object::Device(_) => "device",
             Object::Interrupt(_) => "interrupt",
             Object::Pin(_) => "pin",
@@ -80,6 +99,7 @@ impl Object {
             | Object::Image(_)
             | Object::Port(_)
             | Object::Memory(_)
+            | Object::Event(_)
             | Object::Device(_)
             | Object::Pin(_) => {
                 return None;

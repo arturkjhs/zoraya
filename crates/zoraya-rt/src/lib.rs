@@ -380,6 +380,16 @@ pub fn handle_type(handle: Handle) -> Result<&'static str, Status> {
     }
 }
 
+/// A new object with no use but its identity, for tokens (ADR-0080).
+pub fn event_create() -> Result<Handle, Status> {
+    handle(stubs::event_create::<Svc>()?)
+}
+
+/// True if two handles name one object.
+pub fn object_same(a: Handle, b: Handle) -> Result<bool, Status> {
+    Ok(stubs::object_same::<Svc>(a, b)? != 0)
+}
+
 pub fn directory_lookup(directory: Handle, name: &str) -> Result<Handle, Status> {
     let name = PathBuffer(bytes(name.as_bytes()));
     handle(stubs::directory_lookup::<Svc>(directory, name)?)

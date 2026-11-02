@@ -169,7 +169,10 @@ not promise; D models hardware we do not have.
 - Multi-queue virtio-blk (`VIRTIO_BLK_F_MQ`) and request merging are performance questions for the driver.
 - *Check status (TASK-07, ADR-0001 rule 6).* INV-0015-4's fault-device half is checked in
   `crates/zoraya-fs/tests/faults.rs`; its driver half (each virtio status mapped to the trait's error type) waits
-  for the virtio-blk driver of stage 4.
+  for the virtio-blk driver of stage 4. *TASK-13:* `zoraya-virtio`'s tests map the statuses, including a device that
+  lies, `blkd` carries the result, and `make test-files` fails a write in QEMU's block layer. Every error moves the
+  volume to `Failed`, but the mapping is not one to one: `UNSUPP` becomes `IoError`, and `DevError::Unsupported` is
+  never produced (TASK-13 review, R-26). So INV-0015-4 is still checked in part.
 
 ## Revisit triggers
 

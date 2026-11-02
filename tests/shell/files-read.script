@@ -1,0 +1,21 @@
+# Second boot: what the first one wrote is here, synced or not.
+! panicked
+! storage failed
+< zosh$ 
+> cat notes.txt\r
+< first line
+< second line
+< zosh$ 
+> cat work/inner.txt\r
+< kept
+< zosh$ 
+> cat work/new.txt\r
+< moved
+< zosh$ 
+> cat unsynced.txt\r
+< the shell never asked
+< zosh$ 
+> cat gone.txt\r
+< zosh: cat: NotFound
+< zosh$ 
+> poweroff\r

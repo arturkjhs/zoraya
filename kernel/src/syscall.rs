@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
     Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
-    Detail, DirectoryEntry, Disposition, ExitCode, ExitReason, ExitRecord, Handle, Handlers,
-    ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
+    Detail, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason, ExitRecord, Handle,
+    Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
     MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
     PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
     Size, SpawnBuffer, Status, request_value,
@@ -764,6 +764,17 @@ impl Handlers for Calls {
         };
         device.release_quarantine()?;
         Ok(0)
+    }
+
+    fn event_create(&mut self) -> Result<u64, Status> {
+        let event = crate::memory::heap::try_arc(0u8).map_err(|_| Status::NoMemory)?;
+        self.insert(Object::Event(event), EventObject::RIGHTS)
+    }
+
+    fn object_same(&mut self, a: Handle, b: Handle) -> Result<u64, Status> {
+        let a = self.object(a, Rights::NONE)?;
+        let b = self.object(b, Rights::NONE)?;
+        Ok(u64::from(a.same(&b)))
     }
 
     fn handle_type(&mut self, handle: Handle) -> Result<u64, Status> {

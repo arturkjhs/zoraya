@@ -18,6 +18,8 @@
 #                         scripted shell tests
 #   --test-disk           attach an empty virtio-blk device that reads as zeros,
 #                         for tests of device objects
+#   --disk FILE           attach FILE as the virtio-blk disk
+#   --disk-write-error    with --disk: the first write to it fails with EIO
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
@@ -42,6 +44,8 @@ dumpdtb=
 print_cmd=0
 keys=0
 test_disk=0
+write_error=0
+disk=
 kernel=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
@@ -55,6 +59,8 @@ while [ $# -gt 0 ]; do
         --test) mode=test; shift ;;
         --keys) keys=1; shift ;;
         --test-disk) test_disk=1; shift ;;
+        --disk-write-error) write_error=1; shift ;;
+        --disk) [ $# -ge 2 ] || die "--disk needs a file"; disk=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
@@ -95,8 +101,22 @@ case $mode in
     debug) set -- "$@" -display none -serial mon:stdio -s -S ;;
 esac
 
+# Version 2 of virtio-mmio: QEMU defaults to the legacy transport (ADR-0080).
+if [ "$test_disk" = 1 ] || [ -n "$disk" ]; then
+    set -- "$@" -global virtio-mmio.force-legacy=false
+fi
 if [ "$test_disk" = 1 ]; then
     set -- "$@" -drive driver=null-co,if=none,id=testdisk -device virtio-blk-device,drive=testdisk
+fi
+if [ -n "$disk" ]; then
+    source="file=$disk"
+    # One write to the disk fails with EIO: QEMU's blkdebug, under the raw format.
+    if [ "$write_error" = 1 ]; then
+        source="file.driver=blkdebug,file.image.filename=$disk,file.inject-error.0.event=write_aio"
+        source="$source,file.inject-error.0.iotype=write,file.inject-error.0.once=on"
+    fi
+    set -- "$@" -drive "$source,format=raw,if=none,id=disk,werror=report,rerror=report" \
+        -device virtio-blk-device,drive=disk
 fi
 
 if [ "$print_cmd" = 1 ]; then

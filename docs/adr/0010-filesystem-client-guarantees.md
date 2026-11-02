@@ -257,7 +257,8 @@ calls `sync` often; the mitigation is that the measured clients never do, and th
    no IPC yet: "several simulated clients" are request streams on different handles of one engine, interleaved by
    the generator, and INV-0010-3's report to the supervisor is checked as `Volume::take_failure_report` returning
    the reason exactly once. The service's forwarding of that report waits for the stage-4 service and the channel
-   ADRs.
+   ADRs. *TASK-13:* the service forwards it. A host test of the loop and `make test-files` (a write failed in QEMU's
+   block layer) check it, and INV-0010-3 is now checked whole.
 
 ## Revisit triggers
 

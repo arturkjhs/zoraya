@@ -1,0 +1,18 @@
+# A disk that cannot be mounted: the service dies each time. `init` sees it and
+# restarts three times, and then the shell runs without a volume.
+! panicked
+< fsd: mount:
+< init: storage failed
+< fsd: mount:
+< init: storage failed
+< fsd: mount:
+< init: storage failed
+< fsd: mount:
+< init: storage failed
+< init: no more restarts
+x init: storage failed
+< zosh$ 
+> ls\r
+< zosh: no volume
+< zosh$ 
+> poweroff\r

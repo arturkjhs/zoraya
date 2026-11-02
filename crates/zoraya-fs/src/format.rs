@@ -43,11 +43,12 @@
 //! | `EXTENT` | `(object, 4, block index, "")` | pointer to one data block |
 //! | `ORPHAN` | `(0, 5, object, "")` | empty: the object has no name (ADR-0011 rule 7) |
 
+use alloc::boxed::Box;
 use alloc::rc::Rc;
 use alloc::vec::Vec;
 
 use crate::crc32c;
-use crate::device::{BLOCK_SIZE, Block};
+use crate::device::{BLOCK_SIZE, Block, new_block};
 use crate::name::{MAX_NAME, validate_name};
 use crate::time::Timestamp;
 
@@ -353,9 +354,9 @@ pub struct RootRecord {
 }
 
 impl RootRecord {
-    pub fn encode(&self) -> Result<Block, Overflow> {
-        let mut b = [0u8; BLOCK_SIZE];
-        let mut w = Wr::new(&mut b);
+    pub fn encode(&self) -> Result<Box<Block>, Overflow> {
+        let mut b = new_block();
+        let mut w = Wr::new(&mut b[..]);
         w.bytes(&ROOT_MAGIC)?;
         w.u16(FORMAT_VERSION)?;
         w.u16(CSUM_CRC32C)?;
@@ -373,7 +374,7 @@ impl RootRecord {
         w.u64(self.id_limit)?;
         debug_assert_eq!(w.pos(), ROOT_USED);
         let csum = crc32c::checksum64(&b[..ROOT_CSUM_OFF]);
-        Wr::at(&mut b, ROOT_CSUM_OFF).u64(csum)?;
+        Wr::at(&mut b[..], ROOT_CSUM_OFF).u64(csum)?;
         Ok(b)
     }
 
@@ -866,9 +867,14 @@ impl Node {
 
     /// Encodes the node into a block. Every child and extent must be
     /// [`Child::Clean`] / [`DataRef::Clean`].
-    pub fn encode(&self, volume_id: u64, addr: u64, generation: u64) -> Result<Block, Overflow> {
-        let mut b = [0u8; BLOCK_SIZE];
-        let mut w = Wr::new(&mut b);
+    pub fn encode(
+        &self,
+        volume_id: u64,
+        addr: u64,
+        generation: u64,
+    ) -> Result<Box<Block>, Overflow> {
+        let mut b = new_block();
+        let mut w = Wr::new(&mut b[..]);
         let kind = match self.body {
             Body::Leaf(_) => KIND_LEAF,
             Body::Interior(_) => KIND_INTERIOR,
@@ -990,9 +996,9 @@ pub fn encode_alloc_root(
     addr: u64,
     generation: u64,
     bitmaps: &[BlockPtr],
-) -> Result<Block, Overflow> {
-    let mut b = [0u8; BLOCK_SIZE];
-    let mut w = Wr::new(&mut b);
+) -> Result<Box<Block>, Overflow> {
+    let mut b = new_block();
+    let mut w = Wr::new(&mut b[..]);
     Header {
         kind: KIND_ALLOC_ROOT,
         level: 0,
@@ -1050,9 +1056,9 @@ pub fn encode_bitmap(
     generation: u64,
     index: u32,
     bits: &[u8],
-) -> Result<Block, Overflow> {
-    let mut b = [0u8; BLOCK_SIZE];
-    let mut w = Wr::new(&mut b);
+) -> Result<Box<Block>, Overflow> {
+    let mut b = new_block();
+    let mut w = Wr::new(&mut b[..]);
     Header {
         kind: KIND_BITMAP,
         level: 0,

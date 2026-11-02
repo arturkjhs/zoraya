@@ -14,6 +14,13 @@ bench = false
 zoraya-abi = { path = "../crates/zoraya-abi" }
 zoraya-rt = { path = "../crates/zoraya-rt" }
 zoraya-shell = { path = "../crates/zoraya-shell" }
+zoraya-heap = { path = "../crates/zoraya-heap" }
+zoraya-fs = { path = "../crates/zoraya-fs" }
+zoraya-fs-service = { path = "../crates/zoraya-fs-service" }
+zoraya-proto-block = { path = "../crates/zoraya-proto-block" }
+zoraya-proto-file = { path = "../crates/zoraya-proto-file" }
+zoraya-protocol = { path = "../crates/zoraya-protocol" }
+zoraya-virtio = { path = "../crates/zoraya-virtio" }
 
 [lints]
 workspace = true
@@ -268,5 +275,35 @@ bench = false
 
 [[bin]]
 name = "chanbench"
+test = false
+bench = false
+
+[[bin]]
+name = "blkd"
+test = false
+bench = false
+
+[[bin]]
+name = "fsd"
+test = false
+bench = false
+
+[[bin]]
+name = "crashwriter"
+test = false
+bench = false
+
+[[bin]]
+name = "crashcheck"
+test = false
+bench = false
+
+[[bin]]
+name = "fsbench"
+test = false
+bench = false
+
+[[bin]]
+name = "t_storage"
 test = false
 bench = false

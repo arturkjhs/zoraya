@@ -466,6 +466,10 @@ static TESTS: &[Test] = &[
         name: "channel_measurements",
         run: channel_measurements,
     },
+    Test {
+        name: "storage_from_a_process",
+        run: storage_from_a_process,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1179,6 +1183,14 @@ fn no_leak_after_rounds_of_objects() {
     assert_eq!(run(), exited(0));
     assert_eq!(frames::stats().free, frames_before);
     assert_eq!(heap::stats().live, heap_before);
+}
+
+/// The storage stack: failure paths and hostile clients, on the test disk.
+fn storage_from_a_process() {
+    let record = process::spawn_with_devices("t_storage")
+        .expect("program in the ramdisk")
+        .wait();
+    assert_eq!(record, exited(0));
 }
 
 /// plan.md's measurements: printed, and not judged.

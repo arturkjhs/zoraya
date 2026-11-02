@@ -141,7 +141,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 12);
+    assert_eq!(OBJECT_TYPES.len(), 13);
     for (name, waiting, rights) in OBJECT_TYPES {
         if let Waiting::Signals(bits) = waiting {
             assert_ne!(*bits, 0, "{name}");
@@ -260,6 +260,8 @@ echo! {
     dma_unpin(pin: Handle);
     dma_release_quarantine(device: Handle);
     handle_type(handle: Handle);
+    event_create();
+    object_same(a: Handle, b: Handle);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.

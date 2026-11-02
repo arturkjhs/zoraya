@@ -492,7 +492,7 @@ fn every_metadata_bit_flip_is_detected() {
 fn header_checks_stand_without_the_checksum() {
     use zoraya_fs::format::{BlockPtr, Expect, KIND_ALLOC_ROOT, check_meta, encode_alloc_root};
     let block = encode_alloc_root(7, 100, 5, &[]).unwrap();
-    let csum = zoraya_fs::crc32c::checksum64(&block);
+    let csum = zoraya_fs::crc32c::checksum64(&block[..]);
     let exp = Expect {
         volume_id: 7,
         block_count: 1000,

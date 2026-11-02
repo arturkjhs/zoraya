@@ -1,0 +1,22 @@
+# One write fails in QEMU's block layer. The commit fails, `init` restarts the
+# stack, and what was durable before it is there, with the failed work gone.
+! panicked
+< zosh$ 
+# The first create after a mount commits, so it meets the failing write.
+> write lost.txt in the failed commit\r
+< init: storage failed
+< zosh$ 
+> cat hello.txt\r
+< hello from the filesystem
+< zosh$ 
+> cat lost.txt\r
+< zosh: cat: NotFound
+< zosh$ 
+> write after.txt the device works again\r
+< zosh$ 
+> sync\r
+< zosh$ 
+> cat after.txt\r
+< the device works again
+< zosh$ 
+> poweroff\r

@@ -71,7 +71,9 @@ pub mod open_flags {
     pub const DIRECTORY: u32 = 1 << 3;
     /// The link itself, not `IS_LINK`.
     pub const NO_FOLLOW: u32 = 1 << 4;
-    pub const ALL: u32 = (1 << 5) - 1;
+    /// A new file with no name, for `publish` (ADR-0010 rule 7).
+    pub const UNNAMED: u32 = 1 << 5;
+    pub const ALL: u32 = (1 << 6) - 1;
 }
 
 /// `write`'s flags.
@@ -87,7 +89,26 @@ pub mod write_flags {
 pub mod rename_mode {
     pub const REPLACE: u32 = 0;
     pub const NO_REPLACE: u32 = 1;
-    pub const ALL: u32 = 1;
+    pub const EXCHANGE: u32 = 2;
+    pub const COUNT: u32 = 3;
+}
+
+/// `publish`'s mode (ADR-0010 rule 7).
+pub mod publish_mode {
+    pub const REPLACE: u32 = 0;
+    pub const NO_REPLACE: u32 = 1;
+    pub const COUNT: u32 = 2;
+}
+
+/// The reasons a supervisor hears (ADR-0080).
+pub mod failure {
+    pub const DEVICE_WRITE: u32 = 0;
+    pub const DEVICE_FLUSH: u32 = 1;
+    pub const METADATA_READ: u32 = 2;
+    pub const METADATA_CORRUPT: u32 = 3;
+    pub const INTERNAL: u32 = 4;
+    pub const DEVICE_LOST: u32 = 5;
+    pub const COUNT: u32 = 6;
 }
 
 pub type Rights = Flags<{ rights::ALL }>;
@@ -134,7 +155,10 @@ protocol! {
     }
 
     /// Attaches a memory object for large transfers, one per connection.
-    message Attach = 5, handles 1 {}
+    message Attach = 5, handles 1 {
+        /// The object's size, which the mapping checks.
+        size: u64,
+    }
     message Detach = 6, handles 0 {}
 
     message ReadBuffer = 7, handles 0 {
@@ -177,13 +201,14 @@ protocol! {
 
     /// `old` here to `new` in the directory of the token.
     message Rename<'a> = 11, handles 1 {
-        mode: Flags<{ rename_mode::ALL }>,
+        mode: Below<{ rename_mode::COUNT }>,
         old: Name<'a>,
         new: Name<'a>,
     }
 
     /// Gives this unnamed file `name` in the directory of the token.
     message Publish<'a> = 12, handles 1 {
+        mode: Below<{ publish_mode::COUNT }>,
         name: Name<'a>,
     }
 
@@ -209,10 +234,38 @@ protocol! {
     message TokenReply = 18, handles 1 {
         status: Code,
     }
+
+    message SetSize = 19, handles 0 {
+        size: u64,
+    }
+
+    /// Sets what `which` says: bit 0 the mode, bit 1 `mtime` (ADR-0014).
+    message SetAttributes = 20, handles 0 {
+        which: Flags<3>,
+        mode: u32,
+        seconds: u64,
+        nanos: u32,
+    }
+
+    message MakeLink<'a> = 21, handles 0 {
+        name: Name<'a>,
+        target: Text<'a, MAX_PATH>,
+    }
+
+    message ReadLink = 22, handles 0 {}
+    message ReadLinkReply<'a> = 22, handles 0 {
+        status: Code,
+        target: Text<'a, MAX_PATH>,
+    }
+
+    /// A failed volume, on the supervisor channel (ADR-0080).
+    message Failure = 100, handles 0 {
+        reason: Below<{ failure::COUNT }>,
+    }
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 18] = [
+pub const REQUESTS: [(&str, u32); 22] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -231,6 +284,10 @@ pub const REQUESTS: [(&str, u32); 18] = [
     ("status", 16),
     ("corrupt_reads", 17),
     ("get_token", 18),
+    ("set_size", 19),
+    ("set_attributes", 20),
+    ("make_link", 21),
+    ("read_link", 22),
 ];
 
 #[cfg(test)]
@@ -279,7 +336,7 @@ mod tests {
             },
             0,
         );
-        check(Attach {}, 1);
+        check(Attach { size: 4096 }, 1);
         check(Detach {}, 0);
         check(
             ReadBuffer {
@@ -315,6 +372,23 @@ mod tests {
         check(Status {}, 0);
         check(CorruptReads {}, 0);
         check(GetToken {}, 0);
+        check(SetSize { size: 9 }, 0);
+        check(
+            SetAttributes {
+                which: Flags(1),
+                mode: 0o600,
+                seconds: 1,
+                nanos: 2,
+            },
+            0,
+        );
+        check(ReadLink {}, 0);
+        check(
+            Failure {
+                reason: Below(failure::DEVICE_LOST),
+            },
+            0,
+        );
         check(TokenReply { status: Below(0) }, 1);
     }
 
@@ -371,14 +445,37 @@ mod tests {
         );
         borrowed!(
             Rename {
-                mode: Flags(rename_mode::NO_REPLACE),
+                mode: Below(rename_mode::NO_REPLACE),
                 old: Name("a"),
                 new: Name("b"),
             },
             Rename<'_>,
             1
         );
-        borrowed!(Publish { name: Name("n") }, Publish<'_>, 1);
+        borrowed!(
+            Publish {
+                mode: Below(publish_mode::REPLACE),
+                name: Name("n"),
+            },
+            Publish<'_>,
+            1
+        );
+        borrowed!(
+            MakeLink {
+                name: Name("n"),
+                target: Text("/t"),
+            },
+            MakeLink<'_>,
+            0
+        );
+        borrowed!(
+            ReadLinkReply {
+                status: Below(0),
+                target: Text("t"),
+            },
+            ReadLinkReply<'_>,
+            0
+        );
         borrowed!(Remove { name: Name("n") }, Remove<'_>, 0);
         borrowed!(
             MakeDirectory {

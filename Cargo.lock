@@ -41,6 +41,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-fs-service"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fs",
+ "zoraya-fs-testkit",
+ "zoraya-proto-block",
+ "zoraya-proto-file",
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-fs-testkit"
 version = "0.1.0"
 dependencies = [
@@ -159,6 +170,17 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-fs",
+ "zoraya-fs-service",
+ "zoraya-heap",
+ "zoraya-proto-block",
+ "zoraya-proto-file",
+ "zoraya-protocol",
  "zoraya-rt",
  "zoraya-shell",
+ "zoraya-virtio",
 ]
+
+[[package]]
+name = "zoraya-virtio"
+version = "0.1.0"
