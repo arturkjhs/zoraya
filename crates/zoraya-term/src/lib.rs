@@ -225,7 +225,8 @@ impl Term {
                 if b == b'\\' {
                     self.state = State::Ground;
                 } else {
-                    // Every byte of a string counts towards its bound.
+                    // An escape pair inside a string counts once towards its bound, so
+                    // a string is cut within twice `MAX_STRING` bytes.
                     self.state = State::Str;
                     self.skip();
                 }

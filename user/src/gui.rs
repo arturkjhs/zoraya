@@ -2,6 +2,7 @@
 //! ADR-0091. A test starts the same one.
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
@@ -123,8 +124,17 @@ fn channel(handle: Handle) -> ChannelEntry {
     }
 }
 
-/// Sends a message on the manager channel. With a transaction, waits up to
-/// two seconds for the reply and gives it.
+/// How long the manager waits for the compositor: its attach of a new
+/// display driver makes two driver calls of up to 2 s each (ADR-0093).
+const MANAGER_WAIT_NS: u64 = 6_000_000_000;
+
+/// Transactions of the manager channel, each used once, so that a late
+/// reply is never taken for the reply to a later request.
+static NEXT_TRANSACTION: AtomicU32 = AtomicU32::new(1);
+
+/// Sends a message on the manager channel. With a `transaction` that is not
+/// 0, the message gets a fresh one, and the call waits up to six seconds for
+/// the reply that carries it, skipping replies to earlier requests.
 pub fn manager_send<'a, M: Message<'a>>(
     manager: Handle,
     m: &M,
@@ -132,6 +142,11 @@ pub fn manager_send<'a, M: Message<'a>>(
     transaction: u32,
     reply: &mut [u8],
 ) -> Option<usize> {
+    let transaction = if transaction == 0 {
+        0
+    } else {
+        NEXT_TRANSACTION.fetch_add(1, Ordering::Relaxed).max(1)
+    };
     let mut out = [0u8; 64];
     let length = encode(m, transaction, &mut out).ok()?;
     let entries: Vec<ChannelEntry> = handle.into_iter().map(channel).collect();
@@ -144,7 +159,15 @@ pub fn manager_send<'a, M: Message<'a>>(
     if transaction == 0 {
         return Some(0);
     }
-    wait_reply(manager, reply, 2_000_000_000)
+    let until = clock_monotonic() + MANAGER_WAIT_NS;
+    loop {
+        let left = until.checked_sub(clock_monotonic())?;
+        let n = wait_reply(manager, reply, left)?;
+        let header = zoraya_protocol::Header::decode(&reply[..n]).ok()?.0;
+        if header.transaction == transaction {
+            return Some(n);
+        }
+    }
 }
 
 /// Waits for one message on `end`, until `nanos` from now.
@@ -207,6 +230,10 @@ impl Gui {
             inputd.into_iter().flatten().for_each(Running::end);
         };
         let Ok((manager, theirs)) = channel_create() else {
+            let _ = handle_close(display);
+            ends.iter().for_each(|e| {
+                let _ = handle_close(*e);
+            });
             give_up(gpud, inputd);
             return None;
         };

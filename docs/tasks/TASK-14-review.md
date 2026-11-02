@@ -74,4 +74,21 @@ survivors.
 
 ## Check of the fixes
 
-One check of the changed lines only, by a subagent that did not write them. See the next section.
+One check of the changed lines only (`git diff a9ae1a4..4a585a9`), by a subagent that wrote none of them. It ran the
+host tests of every changed crate and `adr-check`, and found 3 errors.
+
+| Id | Finding | Disposition |
+|---|---|---|
+| C1 | error: `gpud`'s comments still said the cause of the missed interrupt was not found, and `MISSED`'s doc contradicted its new message. | Fixed. |
+| C2 | error, a regression from R3: `manager_send` waited 2 s, but the compositor's attach of a new display driver makes two driver calls of up to 2 s each. `init` would then leave the new `gpud` unwatched, and the late reply would be taken for the reply to the next request, because replies were not matched by transaction. | Fixed. Each manager request with a reply gets a fresh transaction. `manager_send` skips replies to earlier ones and waits up to 6 s. `init` watches a restarted driver whenever it runs, and reports separately if the compositor did not take it. |
+| C3 | error: `t_gui`'s doc still claimed the compositor "shows the screen again". | Fixed, with INV-0097-2's wording. |
+| N1 | note: R10(b), R10(d) and R1's second look at the queue had no test. | Tests added for R10(b) and R10(d). R1's second look is not reached by the fake GPU, which completes at the notify; it is checked by the TCG runs (the guard never fired) and by reading. |
+| N2 | note: R10(d) forgets every modifier, the keyboard's too, when any input driver goes. | Stated in ADR-0092. |
+| N3 | note: the string bound counts an escape pair once, so a string ends within twice `MAX_STRING`. | Comment corrected. Still bounded. |
+| N4 | note: R7 left the display and input ends open when `channel_create` failed. | Fixed. |
+| N5 | note: ADR-0090 said "after `RESOURCE_CREATE_2D`", but the code also stops on its own failure. | Text says "from". |
+| N6 | note: this file's placeholders. | Filled in. |
+
+## Second check of the fixes
+
+The first check found errors, so TASK-14 asks for one more check of the lines changed to fix them. See below.

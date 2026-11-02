@@ -1358,3 +1358,55 @@ fn buttons_are_held_and_released() {
         .collect();
     assert_eq!(got, [gui::buttons::LEFT, 0]);
 }
+
+/// Review R10(b): a reply lost to a full queue is not counted as a dropped
+/// event.
+#[test]
+fn a_lost_reply_is_not_a_dropped_event() {
+    let mut s = setup();
+    let (a, _) = s.window(10, 10, 1);
+    s.f().take(a);
+    s.f().peers.get_mut(&a).unwrap().room = 0;
+    let m = gui::Commit {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+    };
+    s.f().send(a, message(&m, 3), vec![]);
+    s.c.step();
+    s.f().peers.get_mut(&a).unwrap().room = 64;
+    s.keys(&[(30, 1)]);
+    assert_eq!(keys_of(&s.f().take(a)), [(30, true, Some('a'))]);
+    let k = s.f().take(a);
+    assert!(k.is_empty());
+    s.keys(&[(30, 0)]);
+    let dropped: Vec<u32> = s
+        .f()
+        .take(a)
+        .iter()
+        .filter_map(|m| decode::<gui::Key>(m, 0).ok())
+        .map(|(_, k)| k.dropped)
+        .collect();
+    assert_eq!(dropped, [0]);
+}
+
+/// Review R10(d): when an input driver goes, the modifiers it held go too.
+#[test]
+fn modifiers_held_by_a_lost_driver_are_forgotten() {
+    let mut s = setup();
+    let (a, _) = s.window(10, 10, 1);
+    s.f().take(a);
+    s.keys(&[(code::LEFT_SHIFT, 1)]);
+    let k = s.keyboard;
+    s.f().peers.get_mut(&k).unwrap().gone = true;
+    s.c.step();
+    let new = s.f().channel(8);
+    let m = s.manager;
+    s.f().send(m, message(&gui::AttachInput {}, 7), vec![new]);
+    s.c.step();
+    s.keyboard = new;
+    s.f().take(a);
+    s.keys(&[(30, 1)]);
+    assert_eq!(keys_of(&s.f().take(a)), [(30, true, Some('a'))]);
+}

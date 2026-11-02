@@ -417,7 +417,7 @@ fn no_injection(gui: &Gui, a: &mut Client, b: &mut Client) {
 }
 
 /// INV-0097-2: a killed GPU or input driver is restarted alone, and the
-/// compositor shows the screen again.
+/// compositor takes the new one; the new GPU driver answers a flush.
 fn driver_restarts(gui: &mut Gui, a: &mut Client) {
     let gpud = gui.gpud.expect("a GPU driver");
     job_kill(gpud.job).expect("kill the GPU driver");

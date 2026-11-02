@@ -30,7 +30,7 @@ extern crate alloc;
 const COMMAND_NS: u64 = 1_000_000_000;
 /// How often a wait looks at the queue without an interrupt.
 const POLL_NS: u64 = 10_000_000;
-/// Reported once: a completion was found without its interrupt.
+/// Reported once: a wait passed 10 ms with no interrupt.
 static MISSED: AtomicBool = AtomicBool::new(false);
 
 struct Window(u64);
@@ -105,9 +105,9 @@ impl Driver {
         let (port, interrupt) = (self.port, self.interrupt);
         // Wait, then unmask: the driver took the device's interrupt down
         // before, so the line is low and the next completion is a new edge.
-        // A completion's interrupt is sometimes not seen under TCG (cause
-        // not found; docs/backlog.md): the wait polls the queue every 10 ms,
-        // and gives up after a second.
+        // The driver takes the device's interrupt down and looks at the
+        // queue again before every wait (TASK-14 review, R1). As a guard,
+        // the wait also looks every 10 ms, and gives up after a second.
         let mut polls = 0;
         let mut wait = || {
             let mut packets = [Packet::default()];

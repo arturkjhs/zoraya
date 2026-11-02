@@ -199,21 +199,24 @@ fn main() -> i32 {
                 }
                 KEY_GPU => {
                     let g = gui.as_mut().expect("a GUI");
-                    if g.restart_gpu() {
+                    if !g.restart_gpu() {
+                        println!("init: the compositor did not take the new GPU driver");
+                    }
+                    // Watched whenever it runs, whatever the compositor said.
+                    if let Some(r) = g.gpud {
                         println!("init: the GPU driver was restarted");
-                        if let Some(r) = g.gpud {
-                            subscribe(port, r.process, KEY_GPU);
-                        }
+                        subscribe(port, r.process, KEY_GPU);
                     }
                 }
                 k if k >= KEY_INPUT => {
                     let g = gui.as_mut().expect("a GUI");
                     let i = (k - KEY_INPUT) as usize;
-                    if g.restart_input(i) {
+                    if !g.restart_input(i) {
+                        println!("init: the compositor did not take the new input driver");
+                    }
+                    if let Some(r) = g.inputd[i] {
                         println!("init: an input driver was restarted");
-                        if let Some(r) = g.inputd[i] {
-                            subscribe(port, r.process, k);
-                        }
+                        subscribe(port, r.process, k);
                     }
                 }
                 KEY_COMPOSITOR | KEY_TERMINAL => break Ended::Gui,
