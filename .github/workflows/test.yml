@@ -36,7 +36,9 @@ jobs:
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: The host tools the ports need (clang; GNU make, sed, curl and bzip2 are in the image)
-        run: clang --version && make --version | head -1 && sed --version | head -1
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+          clang --version && make --version | head -1 && sed --version | head -1
       - name: Cache the ports' archives
         uses: actions/cache@v4
         with:

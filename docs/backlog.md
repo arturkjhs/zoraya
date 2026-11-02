@@ -50,6 +50,11 @@ limited to the lines it changed, what it finds outside them is added here.
 | - | GUI, `zosh` | Programs started from `zosh` in the window print to the serial console. Byte streams (stage 6) or a terminal connection handed to each child would fix it (ADR-0096). |
 | - | `compd` `Platform::call` | The display driver's end is subscribed on two ports while a call waits (the main port and the call port). It works; a single port with a per-call key would be simpler. |
 | - | Fuzzing | `zoraya-term`'s parser and the GUI decoders have deterministic random tests in `make test-unit`; no coverage-guided target exists for them in `fuzz/` (no nightly toolchain on the host in TASK-14). |
+| - | dash (ADR-0142) | dash carries only TASK-02's M4 patch. ADR-0109 item 9's fork group hint and `vforkexec` with `POSIX_SPAWN_TCSETPGRP` need three names outside the tier list; write and test them in 6d once ADR-0142 is decided. |
+| - | `ports/` (ADR-0143) | The host check of tcc's link step uses a tcc compiled for the host from the same source; the Zoraya tcc's own output is first seen in W1 (6e). |
+| - | `ports/` | Programs go into `build/rootfs-posix` with their debug information (`-g` as measured): dash 853 KB on disk for 170 KB loaded, tcc 1.7 MB for 549 KB. Strip them for the image if the volume's size matters; the toolchain has no strip tool without `llvm-tools`. |
+| - | `posix-surface-check` | `hide` and `check` share the tool's ELF reader; the cross-check against `zoraya-ar`'s index (its own reader) is what keeps a reader bug from hiding a name and passing the check alike. |
+| - | `libc.a` (ADR-0141) | `getpwnam` and friends call `pthread_setcancelstate` and the `nscd` client's `socket`, `connect` and `sendmsg`, hidden and failing in the stub. 6c decides whether they are no-ops in Rust or the `passwd` parsers are patched. |
 
 ## Mutation testing: `zoraya-virtio`
 

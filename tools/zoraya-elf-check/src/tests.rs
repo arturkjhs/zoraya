@@ -102,6 +102,31 @@ fn the_loader_s_refusals_are_reported() {
 }
 
 #[test]
+fn the_range_ends_one_page_below_the_startup_block() {
+    use zoraya_elf::Error;
+    let last = zoraya_abi::spawn::STARTUP_BLOCK - 2 * 4096;
+    assert!(check(&exec(2, &[(LOAD, PF_R | PF_X, last, 0x1000)], last)).is_ok());
+    let over = last + 4096;
+    assert_eq!(
+        check(&exec(2, &[(LOAD, PF_R | PF_X, over, 0x1000)], over)).unwrap_err(),
+        Refusal::Loader(Error::OutOfRange)
+    );
+    assert_eq!(
+        Refusal::Interpreter.to_string(),
+        "it has a PT_INTERP program header"
+    );
+    assert_eq!(
+        Refusal::Dynamic.to_string(),
+        "it has a PT_DYNAMIC program header"
+    );
+    assert!(
+        Refusal::Loader(Error::BadEntry)
+            .to_string()
+            .contains("BadEntry")
+    );
+}
+
+#[test]
 fn the_range_is_the_kernel_s() {
     assert_eq!(USER_LOW, 4 << 20);
     const { assert!(USER_HIGH > USER_LOW && USER_HIGH < 1 << 47) };

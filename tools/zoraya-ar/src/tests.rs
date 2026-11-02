@@ -225,3 +225,61 @@ fn parsers_are_total() {
         let _ = elf::defined_globals(&e);
     }
 }
+
+/// The name in a member's header, read from the bytes.
+fn header_names(archive: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = MAGIC.len();
+    while at < archive.len() {
+        let h = &archive[at..at + 60];
+        out.push(field(&h[..16]).to_string());
+        let size: usize = field(&h[48..58]).parse().unwrap();
+        at += 60 + size + (size & 1);
+    }
+    out
+}
+
+#[test]
+fn short_names_stay_in_the_header_and_others_go_to_the_table() {
+    let members = vec![
+        member("exactly15chars.", vec![1]),
+        member("sixteen_chars.o_", vec![2]),
+        member("a b", vec![3]),
+    ];
+    let bytes = write(&members).unwrap();
+    let names = header_names(&bytes);
+    assert_eq!(names, ["/", "//", "exactly15chars./", "/0", "/18"]);
+    assert_eq!(read(&bytes).unwrap(), members);
+}
+
+#[test]
+fn only_relocatable_objects_contribute_symbols() {
+    let mut exec = object(&[("main", GLOBAL, 1, FUNC)]);
+    exec[16] = 2; // ET_EXEC
+    assert_eq!(elf::defined_globals(&exec), Vec::<String>::new());
+    let mut wrong = object(&[("main", GLOBAL, 1, FUNC)]);
+    wrong[5] = 2; // big-endian
+    assert_eq!(elf::defined_globals(&wrong), Vec::<String>::new());
+}
+
+#[test]
+fn a_string_table_link_past_the_sections_gives_no_symbols() {
+    let mut o = object(&[("main", GLOBAL, 1, FUNC)]);
+    let shoff = u64::from_le_bytes(o[40..48].try_into().unwrap()) as usize;
+    // .symtab is section 2; point its sh_link past the four sections.
+    let link = shoff + 2 * 64 + 40;
+    o[link..link + 4].copy_from_slice(&4u32.to_le_bytes());
+    assert_eq!(elf::defined_globals(&o), Vec::<String>::new());
+    let mut o = object(&[("main", GLOBAL, 1, FUNC)]);
+    o[58..60].copy_from_slice(&40u16.to_le_bytes());
+    assert_eq!(elf::defined_globals(&o), Vec::<String>::new());
+}
+
+#[test]
+fn read_error_messages_name_the_problem() {
+    assert_eq!(ReadError::BadMagic.to_string(), "not an archive");
+    assert_eq!(
+        ReadError::BadHeader(8).to_string(),
+        "bad member header at offset 8"
+    );
+}
