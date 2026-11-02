@@ -87,7 +87,7 @@ set or is explicitly not waitable.
 **Filesystem** ([ADR-0010](adr/0010-filesystem-client-guarantees.md) to
 [ADR-0015](adr/0015-block-device-contract.md)). Accepted; the reasons are in
 [`adr/filesystem-batch-selection.md`](adr/filesystem-batch-selection.md). The storage engine is built as a
-host-tested library (TASK-07, "Filesystem engine (as built)" below); the service around it is stage 4. Choices the
+host-tested library (TASK-07, "Filesystem engine (as built)" below); the service around it is built (TASK-13, "Storage stack (as built)"). Choices the
 ADRs leave open are in [ADR-0016](adr/0016-filesystem-implementation-choices.md). Until a later ADR declares the
 format stable, compatibility between format versions is not guaranteed: volumes are rebuilt with `zoraya-mkfs`.
 - **Guarantees.** After a crash a volume holds a prefix of the completion order. Requests are atomic, durability comes
@@ -267,7 +267,8 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
 ## Filesystem engine (as built)
 
 The code is in `crates/zoraya-fs` (`no_std` + `alloc`, `#![forbid(unsafe_code)]`); it knows nothing of IPC. The
-stage-4 service will wrap `Volume` and forward its failure report.
+service wraps `Volume` and forwards its failure report. Blocks stay on the heap (`new_block`): the engine recurses
+over the tree on a 64 KiB process stack, and a block passed by value through that recursion overflowed it.
 
 - **Device.** `BlockDevice` (ADR-0015): size in 512-byte sectors, whole 4 KiB block reads, a batch write whose
   members complete in any order, flush. A device without flush mounts read-only unless the mount says unsafe.
@@ -296,6 +297,37 @@ stage-4 service will wrap `Volume` and forward its failure report.
   `repair` rebuilds the allocator and fixes namespace damage, and refuses when the tree itself is damaged.
 - **Tools.** `zoraya-mkfs` creates an image and copies a host directory into it; `zoraya-fsck` checks an image
   read-only and repairs only with `--repair`.
+
+## Storage stack (as built)
+
+Three processes, each in a sub-job that `init` makes, on [ADR-0053](adr/0053-service-discovery-and-first-process.md),
+[ADR-0054](adr/0054-driver-model.md), [ADR-0055](adr/0055-filesystem-service-protocol.md) and the proposed
+[ADR-0080](adr/0080-restart-and-small-choices-of-stage-4b.md).
+
+- **`blkd`** owns the virtio-mmio device: split queues on transport version 2, in `crates/zoraya-virtio`, which holds
+  the logic and treats what the device writes as untrusted. It speaks `zoraya-proto-block` over a channel to the
+  service, and resets the device when the service goes.
+- **`fsd`** runs the loop of `crates/zoraya-fs-service` over a `Transport`, with the engine under it. One request at a
+  time, and its only blocking wait is on the driver, with a deadline of 30 s. Clients speak `zoraya-proto-file`.
+- **`init`** finds the disk, starts both (`user/src/stack.rs`, which `t_storage` also uses), and gives the shell a
+  connection to the root. On a report from the service or the death of either, it ends all three and starts them
+  again, at most three times. After that the shell runs with no volume. When the shell ends, it syncs and powers off.
+
+A request waiting on a driver that dies reports what it lost: `DEVICE_WRITE`, `DEVICE_FLUSH` or `METADATA_READ`. An idle
+service reports `DEVICE_LOST`. `init` does the same for all of them.
+
+Measured on an M4 under QEMU 11.1.2, `make run`'s image, `fsbench`, the last of three runs. `write` is into the cache of
+dirty blocks, and `read` is after a `sync`, from the device. `sync` is on the host's page cache: QEMU's flush is an
+`fsync` of a file. Boot to prompt is `uptime` at the first prompt.
+
+| | HVF | TCG |
+|---|---|---|
+| Inline, 4 KiB: write, read (MB/s) | 152, 58 | 5.1, 4.0 |
+| Inline, 1 MiB: write, read | 273, 76 | 27, 8.1 |
+| Memory object, 4 KiB: write, read | 243, 78 | 8.3, 4.7 |
+| Memory object, 1 MiB: write, read | 4061, 108 | 502, 11.7 |
+| `sync` after 4 KiB, after 1 MiB | 0.30, 3.3 ms | 2.7, 10.3 ms |
+| Boot to prompt | 0.105 s | 0.211 s |
 
 ## Tests
 
@@ -328,6 +360,15 @@ How the in-QEMU tests run and report:
   `run <name>` line precedes each test, so a test that hangs is named in the timeout report.
 - A panicking test is reported as that test's failure. Recovery goes through `eret` to the next test, on a fresh
   stack and out of any exception context.
+- `make test-files` is the roadmap's criterion: one image over two boots, with every file command and its errors, and
+  `zoraya-fsck` after each. Then a disk that cannot be mounted (`init` stops after three restarts) and a write failed in
+  QEMU's block layer with `blkdebug` (`--disk-write-error`: `init` restarts, and durable files are there).
+- `make test-crash` kills QEMU at a random point of `crashwriter`, 10 rounds by default, and runs `zoraya-fsck` and
+  `crashcheck` after each: every file reported durable whole, and what exists a prefix of the writer's order. One more
+  round writes, never syncs, waits 8 s and kills: ADR-0010 rule 5. The seed is printed, and `--seed` repeats the delays.
+- `t_storage`, run by the test kernel, kills the driver idle clean, idle dirty, in a commit and in a read, then the
+  service, and checks the durable file after each remount. It sends malformed messages and hostile paths, fills the
+  open table, and never reads its replies.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
   exists only in the test kernel: the normal kernel cannot resume a fault.
 - Nine tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
@@ -392,7 +433,12 @@ deterministic random mutations.
 
 `make run` boots to `zosh$ ` on the serial console. Ctrl-A X leaves QEMU, and `poweroff` turns the machine off.
 
-- `ls` lists the ramdisk. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
+- `make run` attaches `build/disk.img`, made from `rootfs/` on first use. What you write stays there between runs:
+  delete the file to start again. Paths are relative to the current directory, or start with `/`.
+- `ls [dir]`, `cat file`, `write file text...` (replaces it), `append file text...`, `mkdir dir`, `rm path`,
+  `mv old new`, `stat path`, `sync`, `cd [dir]`, `pwd`. Errors read `zosh: cat: NotFound`. `cd` takes `..`, in the
+  shell. The service refuses `..` in any path, so `cat ../x` is `InvalidArgument`.
+- `ls-ramdisk` lists the programs. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
 - `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's own handles, by type) and `help` are built in. `exit` alone ends the shell, and the
   kernel then powers off; `exit <n>` is the demonstration program.
@@ -461,7 +507,13 @@ deterministic random mutations.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
   (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
   QEMU 11.1.2 and is part of `make test`, so `make test` as written fails on an M1 or M2 Mac (`auto-el2`).
-- **Filesystem.** No service, IPC or virtio-blk driver yet (stage 4); the engine is a library. CRC32C is
+- **Storage stack.** One disk, one queue, no spawning from the volume: programs still come from the ramdisk. A
+  restart ends the shell with the rest, so the current directory and the jobs go. After three restarts in a boot the
+  volume stays down until the next boot, with nothing measured behind three. The crash test kills QEMU, so it stops the
+  writer at a random point but does not lose unflushed writes: QEMU has already given them to the host. Losing and
+  reordering them is tested only on the engine's simulated device. `make test-qemu` shares one image among its
+  configurations.
+- **Filesystem.** CRC32C is
   table-driven (no CPU instructions, ADR-0016). A volume is at most about 20.9 GiB. One copy of each block: a bad
   metadata block makes the volume read-only until offline repair, and a bad newest tree root block makes it
   unmountable. The first create after each mount costs a commit (id reservation). A read-write mount holds the
@@ -479,7 +531,7 @@ deterministic random mutations.
 | 2 (done) | Threads, context switch, scheduler, EL0, first native syscalls, ELF loader, initial ramdisk | a user process prints through a native syscall |
 | 3 (done) | Handles, ports and process objects per ADR-0003/0004/0006; native `spawn` | a process spawns a child and waits on its exit via a port |
 | 3a (done) | Native console shell (TASK-11): `zosh` over the serial console, no files | a person works at a prompt after `make run` |
-| **4 (current)** | virtio-blk, filesystem service, `mkfs` on host | files survive reboot |
+| 4 (done) | virtio-blk, filesystem service, `mkfs` on host | files survive reboot |
 | 5 | virtio-gpu, virtio-input, compositor, terminal as GUI client | screenshot shows a terminal window |
 | 6 | `libposix` T1 per ADR-0005, port of tcc, make, dash | `tcc hello.c && ./a.out` inside Zoraya |
 
@@ -487,7 +539,7 @@ deterministic random mutations.
 
 ```
 CLAUDE.md                 rules for agents
-Makefile                  build, run, debug, test-unit, test-qemu, test-boot, test, adr-check
+Makefile                  build, run, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test, adr-check
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
 .github/workflows/        CI: make test on Linux/TCG
@@ -532,11 +584,16 @@ crates/                   no_std, host-tested
   zoraya-rt/              the runtime of Zoraya programs (aarch64 only)
   zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)
   zoraya-fs-testkit/      test devices, reference model, crash harness, image field map (host only)
-user/                     the programs in the ramdisk, on zoraya-rt
+  zoraya-fs-service/      the service's loop and block adapter, over a transport trait
+  zoraya-virtio/          virtio-blk over split queues, against a hostile fake device
+user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, test programs
+  src/stack.rs            starts the driver and the service
+rootfs/                   the first contents of build/disk.img
+tests/shell/              scripts the runner plays on the serial line
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
-  test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol
+  test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol; zoraya-crash-test
   adr-check/              zoraya-adr-check: ADR-0001 invariants
   mkramdisk/              zoraya-mkramdisk: packs user programs
   zoraya-mkfs/            creates a filesystem image from a host directory
@@ -546,5 +603,4 @@ fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the
 build/                    kernel ELFs copied by make (not committed)
 ```
 
-The ADRs mention `libposix`, the broker and services. None of these exists yet; they arrive in
-stages 3 to 6.
+The ADRs mention `libposix` and the broker. Neither exists yet; they arrive in stage 6.

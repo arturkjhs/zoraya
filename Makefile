@@ -6,6 +6,8 @@
 #   make test-qemu  in-QEMU tests under several machine configurations
 #   make test-boot  boot the normal kernel, run the shell script under each
 #                   machine configuration
+#   make test-files files across two boots, restarts, a failed write
+#   make test-crash kill QEMU at random points (CRASH_ROUNDS=200 for more)
 #   make test       all of the above plus fmt, clippy and the ADR checks
 #   make debug      boot under TCG and wait for a debugger on :1234
 #
@@ -111,7 +113,7 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
-test-qemu: $(TEST_KERNEL) $(RUNNER) $(TEST_DISK)
+test-qemu: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
@@ -138,17 +140,13 @@ test-qemu: $(TEST_KERNEL) $(RUNNER) $(TEST_DISK)
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
 		--expect-line "gic: version 3" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
-
-# The image the in-QEMU tests use: made fresh by each target.
-$(TEST_DISK):
-	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
-	@mkdir -p $(BUILD)
-	target/debug/zoraya-mkfs --size 16M --from rootfs $@
+	target/debug/zoraya-fsck $(TEST_DISK)
 
 # One configuration, for working on the kernel.
-test-qemu-one: $(TEST_KERNEL) $(RUNNER) $(TEST_DISK)
+test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell
@@ -158,6 +156,8 @@ LEAK_SCRIPT := tests/shell/leak.script
 EXIT_SCRIPT := tests/shell/exit.script
 FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
+STORAGE_DOWN := tests/shell/storage-down.script
+DEVICE_ERROR := tests/shell/device-error.script
 CRASH_IMAGE := $(BUILD)/crash.img
 CRASH_ROUNDS ?= 10
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
@@ -179,6 +179,13 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_WRITE) --label files-write -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_READ) --label files-read -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# A volume that cannot be mounted: ADR-0080's limit on restarts, from `init`.
+# Then one failed write, injected in QEMU's block layer.
+	head -c 1048576 /dev/zero > $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(STORAGE_DOWN) --label storage-down -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(DEVICE_ERROR) --label device-error -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --disk-write-error --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.

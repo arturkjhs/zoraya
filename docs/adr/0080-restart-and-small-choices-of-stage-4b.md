@@ -70,7 +70,7 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 
 ## Invariants
 - **INV-0080-1.** After any death in the storage stack, a remount happens only after the device has been reset. *Check:* in-QEMU tests killing the driver and the service, then `zoraya-fsck` on the image and a read through a new connection.
-- **INV-0080-2.** `init` restarts at most three times in a boot, and the shell still answers after that. *Check:* a scripted test killing the stack four times.
+- **INV-0080-2.** `init` restarts at most three times in a boot, and the shell still answers after that. *Check:* a scripted boot with a disk that cannot be mounted, and a host test of the count.
 
 ## Open questions
 - Whether three restarts is the right number: nothing measured.

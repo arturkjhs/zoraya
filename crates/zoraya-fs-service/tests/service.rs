@@ -693,6 +693,64 @@ fn the_table_has_a_limit_and_the_connection_survives_it() {
     assert_eq!(s, status::OK);
 }
 
+/// INV-0055-7: a model of random `open`, `clone`, `attach` and closes.
+#[test]
+fn the_table_never_passes_its_limit_under_random_use() {
+    let mut r = rig();
+    let root = r.root;
+    r.done(root, &proto::Sync {}, vec![]);
+    let (s, first) = r.try_open(root, "shared", open_flags::CREATE, ANY);
+    assert_eq!(s, status::OK);
+    let mut live = vec![first];
+    let mut peak = 0;
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    for _ in 0..12_000 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let at = (state >> 8) as usize % live.len().max(1);
+        match state % 8 {
+            // Mostly growth, so that it reaches the limit, and stays there.
+            0..=2 => {
+                let (s, end) = r.try_open(root, "shared", 0, ANY);
+                match s {
+                    status::OK => live.push(end),
+                    status::TOO_MANY_OPEN => assert!(r.net.0.borrow().closed.contains(&end)),
+                    other => panic!("{other}"),
+                }
+            }
+            3 | 4 if !live.is_empty() => {
+                let end = r.net.channel();
+                let m = proto::Clone { rights: Flags(ANY) };
+                match r.done(live[at], &m, vec![end]).0 {
+                    status::OK => live.push(end),
+                    status::TOO_MANY_OPEN => {}
+                    other => panic!("{other}"),
+                }
+            }
+            5 if !live.is_empty() => {
+                let memory = r.net.end(HandleKind::Memory);
+                let bytes = vec![0; 4096];
+                r.net.0.borrow_mut().memory.insert(u64::from(memory), bytes);
+                r.done(live[at], &proto::Attach { size: 4096 }, vec![memory]);
+            }
+            6 | 7 if !live.is_empty() => {
+                let end = live.swap_remove(at);
+                r.net.0.borrow_mut().closed.insert(end);
+                r.run();
+            }
+            _ => {}
+        }
+        assert!(r.service.open_count() <= MAX_OPEN);
+        peak = peak.max(r.service.open_count());
+    }
+    assert_eq!(peak, MAX_OPEN, "the run must reach the limit");
+    // Attached buffers count too, and they go with the last connection.
+    r.net.0.borrow_mut().closed.extend(live);
+    r.run();
+    assert_eq!(r.service.open_count(), 1);
+}
+
 #[test]
 fn buffers_have_a_limit() {
     let mut r = rig();

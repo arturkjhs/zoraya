@@ -24,5 +24,7 @@ limited to the lines it changed, what it finds outside them is added here.
 | - | `zoraya-events` | The signal table keeps its peak size, so one burst of channels stays as heap until reboot. |
 | R-23 | ADR-0062 INV-0062-1 | "Only the first process starts with a `Power` handle" is false now that `init` hands one to `zosh`. It should say that only the kernel makes one. |
 | R-27 | ADR-0050 No cycles | The rule on moving an end with handles queued holds for `channel_write`. `spawn` can move such an end, which makes no cycle. Say "through a channel". |
+| - | `zoraya-fs-service` | A loss seen during a request is reported by what it lost (`DEVICE_WRITE`), not as `DEVICE_LOST`. `init` treats them alike, so nothing depends on it yet. |
+| - | `zoraya-protocol`, `zoraya-fs` | Two name validators, kept alike only by their tests (ADR-0013 open question). |
 | W7 | ADR-0054 Quarantine | A pin can also end when a queue is torn down: the text reads as a full list of ways. |
 | - | `kernel/src/arch/aarch64/usercopy.rs` | Copying between user memory and the kernel is byte by byte: 3.2 us a KiB under HVF. After stage 4, try word-sized copies through the unprivileged instructions, with a measurement. |
