@@ -100,8 +100,8 @@ pub trait Transport {
     /// A new token object (ADR-0080).
     fn new_token(&mut self) -> Option<Self::End>;
     fn same(&mut self, a: Self::End, b: Self::End) -> bool;
-    /// Maps a memory object, and gives its address and length.
-    fn map(&mut self, memory: Self::End) -> Option<(u64, u64)>;
+    /// Maps `length` bytes of a memory object, and gives its address.
+    fn map(&mut self, memory: Self::End, length: u64) -> Option<u64>;
     fn unmap(&mut self, address: u64, length: u64);
     /// Copies out of client memory: once, before anything looks at it.
     fn copy_from(&mut self, address: u64, out: &mut [u8]) -> bool;
@@ -583,8 +583,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.write(i, t, m.offset, m.flags.0, m.data.0);
             }
             5 => {
-                decode::<proto::Attach>(bytes, n)?;
-                self.attach(i, t, handles);
+                let (_, m) = decode::<proto::Attach>(bytes, n)?;
+                self.attach(i, t, m.size, handles);
             }
             6 => {
                 decode::<proto::Detach>(bytes, n)?;
@@ -878,7 +878,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.done_result(i, t, r);
     }
 
-    fn attach(&mut self, i: usize, t: u32, handles: &mut Vec<T::End>) {
+    fn attach(&mut self, i: usize, t: u32, length: u64, handles: &mut Vec<T::End>) {
         if !self.room() {
             return self.done(i, t, status::TOO_MANY_OPEN, 0);
         }
@@ -894,7 +894,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         if attached || self.transport.kind(end) != HandleKind::Memory {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         }
-        let Some((address, length)) = self.transport.map(end) else {
+        let Some(address) = self.transport.map(end, length) else {
             return self.done(i, t, status::LIMIT_REACHED, 0);
         };
         handles.clear();

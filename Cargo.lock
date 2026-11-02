@@ -170,8 +170,15 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-fs",
+ "zoraya-fs-service",
+ "zoraya-heap",
+ "zoraya-proto-block",
+ "zoraya-proto-file",
+ "zoraya-protocol",
  "zoraya-rt",
  "zoraya-shell",
+ "zoraya-virtio",
 ]
 
 [[package]]

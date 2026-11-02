@@ -2,6 +2,11 @@
 
 #![no_std]
 
+extern crate alloc;
+
+pub mod files;
+mod heap;
+
 pub use zoraya_rt::*;
 
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};

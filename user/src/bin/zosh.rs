@@ -4,6 +4,7 @@
 //! The console shell (TASK-11). One port waits for the console and for every
 //! job. Each program gets a sub-job and only the handles listed here.
 
+use alloc::string::String;
 use core::fmt::{self, Write};
 
 use zoraya_abi::spawn::Encoder;
@@ -11,8 +12,12 @@ use zoraya_abi::{
     CONSOLE, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB, JobFlags,
     MAX_HANDLES, Mode, POWER, Packet, RequestKind, Rights, Status, console_signals, job_signals,
 };
+use zoraya_proto_file::{kind as proto_kind, open_flags, write_flags};
 use zoraya_shell::{
     CTRL_BACKSLASH, CTRL_C, Editor, Key, Report, Words, job_number, request_flag, split,
+};
+use zoraya_user::files::{
+    ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_all, split_path, status_name,
 };
 use zoraya_user::{
     clock_monotonic, console_dropped, console_entry, console_read, console_write, directory_entry,
@@ -20,6 +25,8 @@ use zoraya_user::{
     port_create, port_subscribe, port_unsubscribe, port_wait, power_off, print, println,
     process_exit, process_exit_record, spawn,
 };
+
+extern crate alloc;
 
 const PROMPT: &str = "zosh$ ";
 const CONSOLE_KEY: u64 = 1;
@@ -68,7 +75,162 @@ enum Waiting {
     All,
 }
 
+/// The volume: a root connection, the current directory and its path.
+struct Volume {
+    root: File,
+    current: File,
+    path: String,
+}
+
+impl Volume {
+    /// The directory `path` starts from, and the path from there. A leading
+    /// `/` starts at the root: `..` is the shell's, and only in `cd`.
+    fn base<'a>(&self, path: &'a str) -> (&File, &'a str) {
+        match path.strip_prefix('/') {
+            Some(rest) => (&self.root, rest),
+            None => (&self.current, path),
+        }
+    }
+
+    /// Opens the directory holding `path`, and gives its last name.
+    fn parent<'a>(&self, path: &'a str) -> FsResult<(File, &'a str)> {
+        let (base, rest) = self.base(path);
+        let (dir, name) = split_path(rest);
+        let parent = if dir.is_empty() {
+            base.clone_as(ALL)?
+        } else {
+            base.open(dir, OPEN_DIRECTORY, ALL)?
+        };
+        Ok((parent, name))
+    }
+
+    fn directory(&self, path: &str) -> FsResult<File> {
+        let (base, rest) = self.base(path);
+        if rest.is_empty() {
+            base.clone_as(ALL)
+        } else {
+            base.open(rest, OPEN_DIRECTORY, ALL)
+        }
+    }
+
+    fn list(&self, path: Option<&str>) -> FsResult<()> {
+        let dir = self.directory(path.unwrap_or(""))?;
+        dir.list(&mut |name, kind| {
+            let mark = if kind == proto_kind::DIRECTORY {
+                "/"
+            } else {
+                ""
+            };
+            println!("{name}{mark}");
+        })
+    }
+
+    fn cat(&self, path: &str) -> FsResult<()> {
+        let (base, rest) = self.base(path);
+        let file = base.open(rest, 0, ALL)?;
+        let data = read_all(&file)?;
+        match core::str::from_utf8(&data) {
+            Ok(text) => {
+                for chunk in text.as_bytes().chunks(4096) {
+                    if let Ok(part) = core::str::from_utf8(chunk) {
+                        print!("{part}");
+                    }
+                }
+                if !text.is_empty() && !text.ends_with('\n') {
+                    println!();
+                }
+            }
+            Err(_) => println!("{} bytes of binary", data.len()),
+        }
+        Ok(())
+    }
+
+    fn store(&self, path: &str, flags: u32, write: u32, words: &[&str]) -> FsResult<()> {
+        let (base, rest) = self.base(path);
+        let file = base.open(rest, flags, ALL)?;
+        let mut line = String::new();
+        for (i, word) in words.iter().enumerate() {
+            if i > 0 {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        line.push('\n');
+        file.write(0, write, line.as_bytes()).map(|_| ())
+    }
+
+    fn mkdir(&self, path: &str) -> FsResult<()> {
+        let (parent, name) = self.parent(path)?;
+        parent.make_directory(name)
+    }
+
+    fn remove(&self, path: &str) -> FsResult<()> {
+        let (parent, name) = self.parent(path)?;
+        parent.remove(name)
+    }
+
+    fn rename(&self, old: &str, new: &str) -> FsResult<()> {
+        let (from, old_name) = self.parent(old)?;
+        let (to, new_name) = self.parent(new)?;
+        from.rename(old_name, &to, new_name)
+    }
+
+    fn stat(&self, path: &str) -> FsResult<()> {
+        let (base, rest) = self.base(path);
+        let file = if rest.is_empty() {
+            base.clone_as(ALL)?
+        } else {
+            base.open(rest, 0, ALL)?
+        };
+        let s = file.stat()?;
+        let kind = match s.kind {
+            proto_kind::DIRECTORY => "directory",
+            proto_kind::LINK => "link",
+            _ => "file",
+        };
+        println!(
+            "{kind} size {} mtime {} ctime {} mode {:o}",
+            s.size,
+            s.modified / 1_000_000_000,
+            s.changed / 1_000_000_000,
+            s.mode
+        );
+        Ok(())
+    }
+
+    /// `cd`: `..` is taken off the path here, and the path opened from the root.
+    fn change(&mut self, target: &str) -> FsResult<()> {
+        let mut path = if target.starts_with('/') {
+            String::new()
+        } else {
+            self.path.clone()
+        };
+        for part in target.split('/').filter(|p| !p.is_empty()) {
+            if part == ".." {
+                path.truncate(path.rfind('/').unwrap_or(0));
+            } else {
+                path.push('/');
+                path.push_str(part);
+            }
+        }
+        let next = match path.strip_prefix('/') {
+            Some(relative) => self.root.open(relative, OPEN_DIRECTORY, ALL)?,
+            None => self.root.clone_as(ALL)?,
+        };
+        self.current = next;
+        self.path = path;
+        Ok(())
+    }
+}
+
+fn report(what: &str, result: FsResult<()>) {
+    if let Err(status) = result {
+        println!("zosh: {what}: {}", status_name(status));
+    }
+}
+
 struct Shell {
+    volume: Option<Volume>,
     port: Handle,
     jobs: [Option<Job>; MAX_JOBS],
     next_number: u32,
@@ -178,7 +340,7 @@ impl Shell {
         const BUILT_IN: [&str; 10] = [
             "help",
             "slots",
-            "ls",
+            "ls-ramdisk",
             "echo",
             "uptime",
             "exit-code",
@@ -194,7 +356,12 @@ impl Shell {
         match words {
             [] => {}
             ["help"] => help(),
-            ["ls"] => list(),
+            ["ls-ramdisk"] => list(),
+            [
+                "ls" | "cat" | "write" | "append" | "mkdir" | "rm" | "mv" | "stat" | "sync" | "cd"
+                | "pwd",
+                ..,
+            ] => self.file_command(words),
             ["echo", rest @ ..] => {
                 for (i, word) in rest.iter().enumerate() {
                     print!("{}{word}", if i == 0 { "" } else { " " });
@@ -242,6 +409,9 @@ impl Shell {
             // `exit <n>` is the program. Alone, it ends the shell (ADR-0063).
             ["exit"] => process_exit(0),
             ["poweroff"] => {
+                if let Some(volume) = &self.volume {
+                    report("sync", volume.root.sync());
+                }
                 let status = power_off(POWER);
                 println!("zosh: poweroff: {status:?}");
             }
@@ -249,6 +419,47 @@ impl Shell {
             ["run", program @ ..] => self.start(program, parsed.background),
             program => self.start(program, parsed.background),
         }
+    }
+
+    fn file_command(&mut self, words: &[&str]) {
+        let Some(volume) = self.volume.as_mut() else {
+            println!("zosh: no volume");
+            return;
+        };
+        let (name, usage) = (words[0], "usage: ");
+        let create = open_flags::CREATE;
+        let result = match words {
+            ["ls"] => volume.list(None),
+            ["ls", dir] => volume.list(Some(dir)),
+            ["cat", file] => volume.cat(file),
+            ["write", file, text @ ..] => {
+                volume.store(file, create | open_flags::TRUNCATE, 0, text)
+            }
+            ["append", file, text @ ..] => volume.store(file, create, write_flags::APPEND, text),
+            ["mkdir", dir] => volume.mkdir(dir),
+            ["rm", path] => volume.remove(path),
+            ["mv", old, new] => volume.rename(old, new),
+            ["stat", path] => volume.stat(path),
+            ["sync"] => volume.root.sync(),
+            ["cd"] => volume.change("/"),
+            ["cd", dir] => volume.change(dir),
+            ["pwd"] => {
+                println!(
+                    "{}",
+                    if volume.path.is_empty() {
+                        "/"
+                    } else {
+                        &volume.path
+                    }
+                );
+                Ok(())
+            }
+            _ => {
+                println!("{usage}{name} ...");
+                Ok(())
+            }
+        };
+        report(name, result);
     }
 
     fn find(&self, word: &str) -> Option<u32> {
@@ -410,7 +621,8 @@ impl Shell {
 }
 
 fn help() {
-    println!("ls  run <program> [args...]  <program> [args...]  <command> &");
+    println!("ls [dir]  cat  write  append  mkdir  rm  mv  stat  sync  cd  pwd  ls-ramdisk");
+    println!("run <program> [args...]  <program> [args...]  <command> &");
     println!("jobs  wait [%n]  kill [-int|-term|-hup|-quit] %n");
     println!("echo  uptime  exit-code  slots  exit  poweroff  help");
     println!("Ctrl-C interrupts the foreground job, or clears the line. Ctrl-\\ sends Quit.");
@@ -450,7 +662,18 @@ fn main() -> i32 {
         Mode::Level,
     )
     .expect("subscribe to the console");
+    let root = Handle::new(5).filter(|h| handle_type(*h) == Ok("channel"));
+    let volume = root.and_then(|end| {
+        let root = File { end };
+        let current = root.clone_as(ALL).ok()?;
+        Some(Volume {
+            root,
+            current,
+            path: String::new(),
+        })
+    });
     let mut shell = Shell {
+        volume,
         port,
         jobs: [None; MAX_JOBS],
         next_number: 1,

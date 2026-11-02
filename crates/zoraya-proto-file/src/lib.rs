@@ -155,7 +155,10 @@ protocol! {
     }
 
     /// Attaches a memory object for large transfers, one per connection.
-    message Attach = 5, handles 1 {}
+    message Attach = 5, handles 1 {
+        /// The object's size, which the mapping checks.
+        size: u64,
+    }
     message Detach = 6, handles 0 {}
 
     message ReadBuffer = 7, handles 0 {
@@ -333,7 +336,7 @@ mod tests {
             },
             0,
         );
-        check(Attach {}, 1);
+        check(Attach { size: 4096 }, 1);
         check(Detach {}, 0);
         check(
             ReadBuffer {

@@ -142,13 +142,15 @@ impl Transport for Fake {
         n.tokens.get(&a).unwrap_or(&a) == n.tokens.get(&b).unwrap_or(&b)
     }
 
-    fn map(&mut self, memory: End) -> Option<(u64, u64)> {
+    fn map(&mut self, memory: End, length: u64) -> Option<u64> {
         let mut n = self.0.borrow_mut();
         let address = u64::from(memory) << 32;
-        let size = n.memory.get(&u64::from(memory))?.len() as u64;
+        if n.memory.get(&u64::from(memory))?.len() as u64 != length {
+            return None;
+        }
         let bytes = n.memory.remove(&u64::from(memory))?;
         n.memory.insert(address, bytes);
-        Some((address, size))
+        Some(address)
     }
 
     fn unmap(&mut self, _address: u64, _length: u64) {}
@@ -560,7 +562,7 @@ fn a_buffer_is_copied_once() {
         .borrow_mut()
         .memory
         .insert(u64::from(memory), vec![7; 1 << 20]);
-    let (s, size) = r.done(f, &proto::Attach {}, vec![memory]);
+    let (s, size) = r.done(f, &proto::Attach { size: 1 << 20 }, vec![memory]);
     assert_eq!((s, size), (status::OK, 1 << 20));
     let m = proto::WriteBuffer {
         offset: 0,
@@ -594,7 +596,7 @@ fn a_bad_buffer_range_is_refused() {
         .borrow_mut()
         .memory
         .insert(u64::from(memory), vec![0; 4096]);
-    r.done(f, &proto::Attach {}, vec![memory]);
+    r.done(f, &proto::Attach { size: 4096 }, vec![memory]);
     for (buffer_offset, length) in [(4097, 0), (0, 4097), (u64::MAX, 2)] {
         let m = proto::WriteBuffer {
             offset: 0,
@@ -606,14 +608,14 @@ fn a_bad_buffer_range_is_refused() {
     }
     let second = r.net.end(HandleKind::Memory);
     assert_eq!(
-        r.done(f, &proto::Attach {}, vec![second]).0,
+        r.done(f, &proto::Attach { size: 4096 }, vec![second]).0,
         status::INVALID_ARGUMENT,
         "one per connection"
     );
     let channel = r.net.channel();
     let g = r.open(root, "g", open_flags::CREATE);
     assert_eq!(
-        r.done(g, &proto::Attach {}, vec![channel]).0,
+        r.done(g, &proto::Attach { size: 4096 }, vec![channel]).0,
         status::INVALID_ARGUMENT,
         "not memory"
     );
@@ -702,7 +704,10 @@ fn buffers_have_a_limit() {
             .borrow_mut()
             .memory
             .insert(u64::from(memory), vec![0; 4096]);
-        assert_eq!(r.done(f, &proto::Attach {}, vec![memory]).0, status::OK);
+        assert_eq!(
+            r.done(f, &proto::Attach { size: 4096 }, vec![memory]).0,
+            status::OK
+        );
     }
     let f = r.open(root, "last", open_flags::CREATE);
     let memory = r.net.end(HandleKind::Memory);
@@ -712,7 +717,7 @@ fn buffers_have_a_limit() {
         .memory
         .insert(u64::from(memory), vec![0; 4096]);
     assert_eq!(
-        r.done(f, &proto::Attach {}, vec![memory]).0,
+        r.done(f, &proto::Attach { size: 4096 }, vec![memory]).0,
         status::LIMIT_REACHED
     );
     assert_eq!(r.write_text(f, 0, 0, b"inline still works").0, status::OK);

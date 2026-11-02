@@ -1,0 +1,2 @@
+This volume was made by zoraya-mkfs from rootfs/ in the repository.
+Files you write here survive a reboot, as long as build/disk.img stays.

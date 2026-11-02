@@ -18,11 +18,12 @@ BUILD := build
 KERNEL := $(BUILD)/zoraya-kernel.elf
 TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
+DISK := $(BUILD)/disk.img
 USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench
+	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 60
@@ -62,8 +63,13 @@ $(TEST_KERNEL): $(RAMDISK)
 $(RUNNER):
 	$(CARGO) build -p zoraya-test-runner
 
-run: $(KERNEL)
-	$(RUN_QEMU) $(KERNEL)
+# The default disk: made once from rootfs/, and kept, so that files stay.
+$(DISK): | $(KERNEL)
+	$(CARGO) build -q -p zoraya-mkfs
+	target/debug/zoraya-mkfs --size 64M --from rootfs $@
+
+run: $(KERNEL) $(DISK)
+	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"

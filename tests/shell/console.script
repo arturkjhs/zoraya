@@ -21,7 +21,7 @@ x hello from EL0
 < a b
 < zosh$ 
 # Listing the ramdisk (INV-0061-2).
-> ls\r
+> ls-ramdisk\r
 < hello
 < zosh$ 
 # A bare name with arguments, and `run`.

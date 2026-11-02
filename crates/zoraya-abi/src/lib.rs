@@ -286,6 +286,7 @@ object_types! {
         Waiting::Signals(interrupt_signals::INTERRUPT),
         Rights::WAIT.union(Rights::WRITE).union(Rights::TRANSFER);
     PinObject "pin" Waiting::NotWaitable, Rights::DMA.union(Rights::TRANSFER);
+    EventObject "event" Waiting::NotWaitable, COMMON;
     MemoryObject "memory"
         Waiting::NotWaitable,
         COMMON.union(Rights::READ).union(Rights::WRITE);
@@ -997,6 +998,8 @@ syscalls! {
     37 DmaUnpin dma_unpin(pin: Handle) false;
     38 DmaReleaseQuarantine dma_release_quarantine(device: Handle) false;
     39 HandleType handle_type(handle: Handle) false;
+    40 EventCreate event_create() false;
+    41 ObjectSame object_same(a: Handle, b: Handle) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
