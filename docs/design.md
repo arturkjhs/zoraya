@@ -8,6 +8,10 @@ The rules for working here are in [`../CLAUDE.md`](../CLAUDE.md).
 
 Zoraya is an experiment in building an operating system from scratch with AI agents, where every design decision is grounded in measured evidence and recorded as an ADR. Its core idea is that a process can reach only what it was explicitly given: no ambient authority, no global namespace, no fork, no asynchronous signals in the native world; POSIX lives in an isolated personality. Near term, Zoraya is a general-purpose base that runs a self-hosting C toolchain and a GUI terminal under QEMU. A possible later direction is a system for running untrusted code, such as AI agents, in strict isolation; that choice is made after stage 4 and must not be precluded before it. The process itself — successes, failures and numbers — is published as part of the project.
 
+*Note, 2026-11-02 (the architect's direction, recorded by an agent from TASK-14):* after stage 4 the architect chose
+to continue with stages 5 and 6, towards the general-purpose base. The isolation direction stays open and must not be
+precluded; every ADR of stage 5 states the effect of the vision on its choice.
+
 ## Platform
 
 - **Architecture:** aarch64 (ARMv8-A).
