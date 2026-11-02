@@ -131,7 +131,13 @@ protocol! {
         flush_ns: u64,
         /// Flushes a display driver answered.
         flushes: u64,
+        /// Display drivers dropped for missing their deadline.
+        hangs: u64,
     }
+
+    /// Compositor to manager, unasked: the display driver missed its
+    /// deadline and was dropped (ADR-0093, Decision).
+    message DisplayHung = 36, handles 0 {}
 }
 
 /// The ordinals a client may send.
@@ -140,6 +146,8 @@ pub const CLIENT_REQUESTS: [u32; 3] = [1, 2, 3];
 pub const CLIENT_EVENTS: [u32; 3] = [16, 17, 18];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 4] = [32, 33, 34, 35];
+/// What the compositor sends the manager unasked.
+pub const MANAGER_EVENTS: [u32; 1] = [36];
 
 #[cfg(test)]
 extern crate std;

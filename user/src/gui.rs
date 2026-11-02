@@ -2,7 +2,7 @@
 //! ADR-0091. A test starts the same one.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
@@ -132,6 +132,33 @@ const MANAGER_WAIT_NS: u64 = 6_000_000_000;
 /// reply is never taken for the reply to a later request.
 static NEXT_TRANSACTION: AtomicU32 = AtomicU32::new(1);
 
+/// Set when the compositor reported a hung display driver (ADR-0093,
+/// Decision), however the report was read.
+static DISPLAY_HUNG: AtomicBool = AtomicBool::new(false);
+
+/// True once after the compositor reported a hung display driver.
+pub fn take_display_hung() -> bool {
+    DISPLAY_HUNG.swap(false, Ordering::Relaxed)
+}
+
+/// Reads what the compositor sent the manager unasked, without blocking.
+pub fn read_manager_events(manager: Handle) {
+    let mut bytes = [0u8; 64];
+    let mut handles = [manager; 1];
+    while let Ok(sizes) = channel_read(manager, &mut bytes, &mut handles) {
+        for h in &handles[..sizes.handles as usize] {
+            let _ = handle_close(*h);
+        }
+        note_event(&bytes[..sizes.bytes as usize]);
+    }
+}
+
+fn note_event(bytes: &[u8]) {
+    if decode::<gui::DisplayHung>(bytes, 0).is_ok() {
+        DISPLAY_HUNG.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Sends a message on the manager channel. With a `transaction` that is not
 /// 0, the message gets a fresh one, and the call waits up to six seconds for
 /// the reply that carries it, skipping replies to earlier requests.
@@ -167,6 +194,8 @@ pub fn manager_send<'a, M: Message<'a>>(
         if header.transaction == transaction {
             return Some(n);
         }
+        // An event, or a reply to an earlier request: noted, not lost.
+        note_event(&reply[..n]);
     }
 }
 

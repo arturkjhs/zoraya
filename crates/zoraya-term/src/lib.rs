@@ -123,6 +123,9 @@ pub struct Term {
     /// UTF-8 being decoded: the value so far and the bytes still needed.
     utf8: u32,
     needed: u8,
+    /// The smallest value a sequence of this length may encode: anything
+    /// below it is an overlong encoding.
+    utf8_min: u32,
     /// Rows of the view that changed since the last render.
     dirty: Vec<bool>,
 }
@@ -153,6 +156,7 @@ impl Term {
             skipped: 0,
             utf8: 0,
             needed: 0,
+            utf8_min: 0,
             dirty: vec![true; rows],
         }
     }
@@ -248,7 +252,13 @@ impl Term {
                 self.utf8 = self.utf8 << 6 | u32::from(b & 0x3f);
                 self.needed -= 1;
                 if self.needed == 0 {
-                    let c = char::from_u32(self.utf8).unwrap_or('\u{fffd}');
+                    // Overlong encodings, surrogates, values past U+10FFFF
+                    // and C1 controls all show as U+FFFD: nothing decoded
+                    // is ever a control (ADR-0013 allows UTF-8 names).
+                    let c = char::from_u32(self.utf8)
+                        .filter(|_| self.utf8 >= self.utf8_min)
+                        .filter(|c| !c.is_control())
+                        .unwrap_or('\u{fffd}');
                     self.put(c);
                 }
                 return;
@@ -276,16 +286,17 @@ impl Term {
             }
             0x00..=0x1f | 0x7f => {}
             0x20..=0x7e => self.put(char::from(b)),
-            0xc2..=0xdf => self.lead(b & 0x1f, 1),
-            0xe0..=0xef => self.lead(b & 0x0f, 2),
-            0xf0..=0xf4 => self.lead(b & 0x07, 3),
+            0xc2..=0xdf => self.lead(b & 0x1f, 1, 0x80),
+            0xe0..=0xef => self.lead(b & 0x0f, 2, 0x800),
+            0xf0..=0xf4 => self.lead(b & 0x07, 3, 0x1_0000),
             _ => self.put('\u{fffd}'),
         }
     }
 
-    fn lead(&mut self, value: u8, needed: u8) {
+    fn lead(&mut self, value: u8, needed: u8, min: u32) {
         self.utf8 = u32::from(value);
         self.needed = needed;
+        self.utf8_min = min;
     }
 
     fn escape(&mut self, b: u8) {

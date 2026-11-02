@@ -28,6 +28,16 @@ use zoraya_user::{
 
 extern crate alloc;
 
+/// A spawn entry that moves `handle` to `slot`.
+fn moved(slot: u32, rights: Rights, handle: Handle) -> zoraya_abi::spawn::HandleEntry {
+    zoraya_abi::spawn::HandleEntry {
+        slot,
+        handle,
+        rights,
+        transfer: Transfer::Move,
+    }
+}
+
 const COLOUR_A: u32 = 0x00aa_0000;
 const COLOUR_B: u32 = 0x0000_bb00;
 
@@ -48,7 +58,7 @@ fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
     out
 }
 
-fn moved(handle: Handle, rights: Rights) -> ChannelEntry {
+fn moved_entry(handle: Handle, rights: Rights) -> ChannelEntry {
     ChannelEntry {
         handle,
         rights,
@@ -97,7 +107,7 @@ impl Client {
 
     fn create_with(&mut self, width: u32, height: u32, memory: Handle, rights: Rights) -> u32 {
         let m = message(&gui::Create { width, height }, 2);
-        let reply = self.call(&m, &[moved(memory, rights)]);
+        let reply = self.call(&m, &[moved_entry(memory, rights)]);
         decode::<gui::Done>(&reply, 0).expect("Done").1.status.0
     }
 
@@ -216,6 +226,20 @@ fn stats(gui: &Gui) -> gui::StatsReply {
     decode::<gui::StatsReply>(&reply[..n], 0)
         .expect("StatsReply")
         .1
+}
+
+/// True once the display driver has answered more than `flushes` flushes,
+/// within a second: the compositor does not wait for it (ADR-0093,
+/// Decision), so the count follows the commit's reply.
+fn flushed_since(gui: &Gui, flushes: u64) -> bool {
+    let until = clock_monotonic() + 1_000_000_000;
+    while clock_monotonic() < until {
+        if stats(gui).flushes > flushes {
+            return true;
+        }
+        zoraya_user::sleep_until(clock_monotonic() + 10_000_000);
+    }
+    false
 }
 
 /// Lets the compositor run: the test and it share one CPU.
@@ -345,9 +369,12 @@ fn routing_and_focus(gui: &Gui, keyboard: &FakeInput, a: &mut Client, b: &mut Cl
     assert!(first.len() < 200, "some were dropped: {}", first.len());
     keyboard.keys(&[(48, 1)]);
     settle(gui);
+    // The first event b gets after it had no room carries the count. (The
+    // compositor may still have been taking the flood when b drained, so
+    // what follows is not only the last key.)
     let after = b.keys();
     assert!(
-        after.len() == 1 && after[0].3 > 0,
+        after.first().is_some_and(|k| k.3 > 0),
         "the count arrives: {after:?}"
     );
     // Back to a for the rest.
@@ -395,7 +422,7 @@ fn no_injection(gui: &Gui, a: &mut Client, b: &mut Client) {
         let handles: Vec<ChannelEntry> = if with_handle {
             let (x, y) = channel_create().expect("channel");
             let _ = handle_close(y);
-            vec![moved(x, zoraya_abi::ChannelObject::RIGHTS)]
+            vec![moved_entry(x, zoraya_abi::ChannelObject::RIGHTS)]
         } else {
             Vec::new()
         };
@@ -428,9 +455,8 @@ fn driver_restarts(gui: &mut Gui, a: &mut Client) {
     settle(gui);
     let before = stats(gui);
     assert_eq!(a.whole(), status::OK);
-    let after = stats(gui);
     assert!(
-        after.flushes > before.flushes,
+        flushed_since(gui, before.flushes),
         "the new driver answers flushes"
     );
     if let Some(Some(r)) = gui.inputd.first().copied() {
@@ -454,6 +480,80 @@ fn driver_restarts(gui: &mut Gui, a: &mut Client) {
     let _ = process_signals::TERMINATED;
     assert_eq!(a.whole(), status::OK);
     println!("t_gui: driver restarts ok");
+}
+
+/// ADR-0093, Decision: a display driver that never answers stalls nobody.
+/// Clients keep getting frame callbacks and keys; at the deadline the
+/// compositor drops the driver and tells the manager.
+fn a_hung_display_driver_stalls_nobody(
+    gui: &mut Gui,
+    keyboard: &FakeInput,
+    a: &mut Client,
+    b: &mut Client,
+) {
+    let gpud = gui.gpud.take().expect("a GPU driver");
+    gpud.end();
+    let (ours, theirs) = channel_create().expect("channel");
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    let program = image("guibench");
+    let mut buffer = [0u8; 512];
+    let mut e = Encoder::new(&mut buffer, job, program);
+    e.handle(console_entry());
+    e.handle(moved(5, zoraya_abi::ChannelObject::RIGHTS, theirs));
+    e.arg(b"hang-display");
+    let length = e.finish().expect("spawn buffer");
+    let hung = spawn(&buffer[..length]).expect("spawn");
+    let _ = handle_close(program);
+    let mut reply = [0u8; 64];
+    let n = manager_send(
+        gui.manager,
+        &gui::AttachDisplay {},
+        Some(ours),
+        1,
+        &mut reply,
+    )
+    .expect("the manager answers");
+    let (_, d) = decode::<gui::ManagerDone>(&reply[..n], 0).expect("ManagerDone");
+    assert_eq!(d.status.0, status::OK);
+    let before = stats(gui);
+    a.drain();
+    b.drain();
+    let start = clock_monotonic();
+    for _ in 0..10 {
+        let t = clock_monotonic();
+        assert_eq!(a.whole(), status::OK);
+        assert_eq!(b.commit(0, 0, 4, 4), status::OK);
+        keyboard.keys(&[(30, 1), (30, 0)]);
+        settle(gui);
+        assert_eq!(a.keys().len(), 2, "keys still arrive");
+        assert!(
+            clock_monotonic() - t < 500_000_000,
+            "a round took over 0.5 s"
+        );
+    }
+    assert!(clock_monotonic() - start < zoraya_compositor::FLUSH_DEADLINE_NS);
+    let during = stats(gui);
+    assert!(during.frames > before.frames, "frames are composed");
+    assert_eq!(during.flushes, before.flushes, "and none is answered");
+    // Past the deadline the compositor gives up on the driver by itself.
+    zoraya_user::sleep_until(start + zoraya_compositor::FLUSH_DEADLINE_NS + 500_000_000);
+    let after = stats(gui);
+    assert_eq!(after.hangs, before.hangs + 1);
+    zoraya_user::gui::read_manager_events(gui.manager);
+    assert!(
+        zoraya_user::gui::take_display_hung(),
+        "the manager was told"
+    );
+    assert_eq!(a.whole(), status::OK, "still serving");
+    job_kill(job).expect("kill");
+    wait_exit(hung);
+    let _ = handle_close(hung);
+    let _ = handle_close(job);
+    assert!(gui.restart_gpu(), "a real driver again");
+    let before = stats(gui);
+    assert_eq!(a.whole(), status::OK);
+    assert!(flushed_since(gui, before.flushes), "and it answers");
+    println!("t_gui: a hung display driver stalls nobody ok");
 }
 
 /// Measurements: a full-screen surface committed whole, again and again.
@@ -499,6 +599,7 @@ fn main() -> i32 {
     routing_and_focus(&gui, &keyboard, &mut a, &mut b);
     no_injection(&gui, &mut a, &mut b);
     driver_restarts(&mut gui, &mut a);
+    a_hung_display_driver_stalls_nobody(&mut gui, &keyboard, &mut a, &mut b);
     full_redraw(&gui);
     let _ = handle_close(a.end);
     let _ = handle_close(b.end);

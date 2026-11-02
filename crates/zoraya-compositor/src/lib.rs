@@ -43,6 +43,9 @@ pub const MANAGER_KEY: u64 = 1;
 pub const DISPLAY_KEY: u64 = 2;
 pub const INPUT_KEY: u64 = 16;
 pub const CLIENT_KEY: u64 = 64;
+/// How long the display driver may take to answer a flush before the
+/// compositor drops it and tells the manager (ADR-0093, Decision).
+pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
 
 /// The pointer: 1 is white, 2 is black, 0 is clear.
 const POINTER: [[u8; 8]; 11] = [
@@ -107,7 +110,8 @@ pub trait Platform {
     fn framebuffer(&mut self, width: u32, height: u32) -> Option<Self::End>;
     fn pixels(&mut self) -> &mut [u32];
     /// Sends a request to a driver and waits, with a deadline, for its
-    /// reply. None if the driver is gone or late.
+    /// reply. None if the driver is gone or late. Used only to attach a
+    /// display driver (`Info`, `Attach`); flushes do not wait.
     fn call(
         &mut self,
         end: Self::End,
@@ -115,8 +119,9 @@ pub trait Platform {
         handles: &[Self::End],
         reply: &mut [u8],
     ) -> Option<usize>;
-    /// Blocks until something is ready, and gives the keys.
-    fn wait(&mut self, ready: &mut Vec<u64>);
+    /// Blocks until something is ready, or until `deadline` on the clock of
+    /// [`Platform::now`], and gives the keys.
+    fn wait(&mut self, ready: &mut Vec<u64>, deadline: Option<u64>);
     fn now(&mut self) -> u64;
 }
 
@@ -173,6 +178,8 @@ pub struct Stats {
     pub flush_ns: u64,
     /// Flushes a display driver answered.
     pub flushes: u64,
+    /// Display drivers dropped for missing their deadline.
+    pub hangs: u64,
 }
 
 pub struct Compositor<P: Platform> {
@@ -195,6 +202,10 @@ pub struct Compositor<P: Platform> {
     pending_pointer: bool,
     /// What changed on the screen this round.
     damage: Rect,
+    /// Composed and not yet sent to the display driver.
+    unflushed: Rect,
+    /// When the one flush in flight was sent.
+    in_flight: Option<u64>,
     created: u64,
     stats: Stats,
     message: Vec<u8>,
@@ -233,6 +244,8 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             pending_pointer: false,
             damage: Rect::default(),
+            unflushed: Rect::default(),
+            in_flight: None,
             created: 0,
             stats: Stats::default(),
             message: vec![0; 4096],
@@ -286,7 +299,8 @@ impl<P: Platform> Compositor<P> {
     /// and flush what changed, reply to the round's commits.
     pub fn step(&mut self) {
         let mut ready = Vec::new();
-        self.platform.wait(&mut ready);
+        let deadline = self.in_flight.map(|sent| sent + FLUSH_DEADLINE_NS);
+        self.platform.wait(&mut ready, deadline);
         for key in ready {
             match key {
                 MANAGER_KEY => self.manager_message(),
@@ -300,7 +314,21 @@ impl<P: Platform> Compositor<P> {
                 _ => {}
             }
         }
+        if let Some(sent) = self.in_flight
+            && self.platform.now() >= sent + FLUSH_DEADLINE_NS
+        {
+            self.display_hung();
+        }
         self.finish_round();
+    }
+
+    /// The display driver missed its deadline: drop it, and tell the
+    /// manager, which restarts it (ADR-0093, Decision).
+    fn display_hung(&mut self) {
+        self.stats.hangs += 1;
+        self.lose_display();
+        let length = reply(&gui::DisplayHung {}, NO_REPLY, &mut self.out);
+        let _ = self.platform.write(self.manager, &self.out[..length], &[]);
     }
 
     // ---- drivers ----------------------------------------------------------
@@ -371,6 +399,7 @@ impl<P: Platform> Compositor<P> {
         self.platform.watch(end, DISPLAY_KEY);
         // Everything, once: a new driver shows nothing until told.
         self.damage = self.damage.union(&self.screen());
+        self.in_flight = None;
         status::OK
     }
 
@@ -383,13 +412,24 @@ impl<P: Platform> Compositor<P> {
         Rect::new(0, 0, i64::from(self.width), i64::from(self.height))
     }
 
-    /// The display driver only answers; anything readable unasked is a
-    /// broken driver or its end.
+    /// The display driver answers the flush in flight; anything else
+    /// readable is a broken driver or its end.
     fn display_message(&mut self) {
         let Some(end) = self.display else { return };
         let mut handles = Vec::new();
         match self.platform.read(end, &mut self.message, &mut handles) {
             Incoming::Empty => {}
+            Incoming::Message(n)
+                if handles.is_empty()
+                    && self.in_flight.is_some()
+                    && decode::<display::Done>(&self.message[..n], 0).is_ok() =>
+            {
+                let sent = self.in_flight.take().unwrap_or(0);
+                self.stats.flushes += 1;
+                self.stats.flush_ns += self.platform.now().saturating_sub(sent);
+                // The latest frame, whatever was composed meanwhile.
+                self.send_flush();
+            }
             _ => {
                 for h in handles {
                     self.platform.close(h);
@@ -400,6 +440,7 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn lose_display(&mut self) {
+        self.in_flight = None;
         if let Some(end) = self.display.take() {
             self.platform.close(end);
         }
@@ -708,6 +749,7 @@ impl<P: Platform> Compositor<P> {
                     compose_ns: s.compose_ns,
                     flush_ns: s.flush_ns,
                     flushes: s.flushes,
+                    hangs: s.hangs,
                 };
                 let length = reply(&m, header.transaction, &mut self.out);
                 self.platform.write(self.manager, &self.out[..length], &[]);
@@ -981,12 +1023,12 @@ impl<P: Platform> Compositor<P> {
         if !damage.is_empty() {
             let start = self.platform.now();
             self.compose(damage);
-            let composed = self.platform.now();
-            self.stats.compose_ns += composed.saturating_sub(start);
-            self.flush(damage);
-            self.stats.flush_ns += self.platform.now().saturating_sub(composed);
+            self.stats.compose_ns += self.platform.now().saturating_sub(start);
             self.stats.frames += 1;
+            self.unflushed = self.unflushed.union(&damage);
         }
+        // The frame callback: the commit is copied and composed. It does
+        // not wait for the display driver (ADR-0093, Decision).
         for slot in 0..MAX_CLIENTS {
             let Some(t) = self.clients[slot].as_mut().and_then(|c| c.commit.take()) else {
                 continue;
@@ -996,10 +1038,17 @@ impl<P: Platform> Compositor<P> {
             };
             self.answer(slot, &m, t);
         }
+        self.send_flush();
     }
 
-    fn flush(&mut self, r: Rect) {
+    /// Sends what is composed and not yet shown, if no flush is in flight:
+    /// one at a time, and frames composed meanwhile go together in the next.
+    fn send_flush(&mut self) {
         let Some(end) = self.display else { return };
+        if self.in_flight.is_some() || self.unflushed.is_empty() {
+            return;
+        }
+        let r = self.unflushed;
         let m = display::Flush {
             x: r.x as u32,
             y: r.y as u32,
@@ -1007,14 +1056,14 @@ impl<P: Platform> Compositor<P> {
             height: r.height as u32,
         };
         let length = reply(&m, 3, &mut self.out);
-        let message = self.out;
-        let mut answer = [0u8; 64];
-        let n = self
-            .platform
-            .call(end, &message[..length], &[], &mut answer);
-        match n {
-            Some(_) => self.stats.flushes += 1,
-            None => self.lose_display(),
+        match self.platform.write(end, &self.out[..length], &[]) {
+            Outgoing::Sent => {
+                self.unflushed = Rect::default();
+                self.in_flight = Some(self.platform.now());
+            }
+            // Tried again at the end of the next round.
+            Outgoing::Full => {}
+            Outgoing::Closed => self.lose_display(),
         }
     }
 

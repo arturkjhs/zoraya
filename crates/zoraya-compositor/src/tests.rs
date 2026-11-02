@@ -131,6 +131,29 @@ impl Platform for Fake {
             handles.is_empty(),
             "the compositor sends no client a handle"
         );
+        // The display driver: a flush is answered at once, unless it hangs.
+        if Some(end) == self.display && !self.peers[&end].gone {
+            let (header, _) = Header::decode(bytes).unwrap();
+            assert_eq!(header.ordinal, 3, "only flushes are sent unasked");
+            let (_, f) = decode::<display::Flush>(bytes, 0).unwrap();
+            self.flushes.push((f.x, f.y, f.width, f.height));
+            if !self.display_dead {
+                let mut reply = vec![0; 64];
+                let n = encode(
+                    &display::Done { status: Below(0) },
+                    header.transaction,
+                    &mut reply,
+                )
+                .unwrap();
+                reply.truncate(n);
+                self.peers
+                    .get_mut(&end)
+                    .unwrap()
+                    .inbox
+                    .push_back((reply, vec![]));
+            }
+            return Outgoing::Sent;
+        }
         let peer = self.peers.get_mut(&end).unwrap();
         if peer.gone {
             return Outgoing::Closed;
@@ -236,23 +259,24 @@ impl Platform for Fake {
                 self.attaches += 1;
                 encode(&display::Done { status: Below(0) }, t, reply)
             }
-            3 => {
-                let (_, f) = decode::<display::Flush>(message, 0).unwrap();
-                self.flushes.push((f.x, f.y, f.width, f.height));
-                encode(&display::Done { status: Below(0) }, t, reply)
-            }
-            _ => panic!("unexpected display request"),
+            _ => panic!("unexpected display call: flushes do not wait"),
         };
         n.ok()
     }
 
-    fn wait(&mut self, ready: &mut Vec<u64>) {
+    fn wait(&mut self, ready: &mut Vec<u64>, deadline: Option<u64>) {
         for (key, end) in &self.watched {
             if let Some(p) = self.peers.get(end)
                 && (!p.inbox.is_empty() || p.gone)
             {
                 ready.push(*key);
             }
+        }
+        // Nothing ready: time passes to the deadline.
+        if ready.is_empty()
+            && let Some(d) = deadline
+        {
+            self.clock = self.clock.max(d);
         }
     }
 
@@ -924,14 +948,10 @@ fn the_manager_refuses_wrong_handles() {
 fn a_lost_display_is_replaced_and_the_screen_shown_again() {
     let mut s = setup();
     let (a, _) = s.window(10, 10, 4);
-    s.f().display_dead = true;
-    // Commits are still answered with no display, and no flush is counted.
-    let before = s.c.stats().flushes;
-    assert_eq!(s.commit(a, 0, 0, 10, 10), status::OK);
-    assert_eq!(s.commit(a, 0, 0, 10, 10), status::OK);
-    assert_eq!(s.c.stats().flushes, before);
-    let old = s.f().display.unwrap();
+    let old = hang(&mut s, a);
     assert!(s.f().closed.contains(&old));
+    let m = s.manager;
+    s.f().take(m);
     // A new driver through the manager: attached, and everything flushed.
     let new = s.f().channel(8);
     s.f().display = Some(new);
@@ -1028,7 +1048,9 @@ fn stats_count_frames_and_commits() {
     let (_, r) = decode::<gui::StatsReply>(&s.f().take(m)[0], 0).unwrap();
     assert_eq!(r.commits, 1);
     assert!(r.frames >= 2 && r.compose_ns > 0 && r.flush_ns > 0);
-    assert_eq!(r.flushes, r.frames);
+    // The manager is read before the display's last answer in a round.
+    assert!(r.flushes <= r.frames && r.flushes + 1 >= r.frames);
+    assert_eq!(r.hangs, 0);
 }
 
 #[test]
@@ -1090,11 +1112,28 @@ fn attach_display(s: &mut Setup, end: u32) -> u32 {
     s.f().send(m, message(&gui::AttachDisplay {}, 7), vec![end]);
     s.c.step();
     let replies = s.f().take(m);
-    decode::<gui::ManagerDone>(&replies[0], 0)
+    replies
+        .iter()
+        .find_map(|r| decode::<gui::ManagerDone>(r, 0).ok())
         .unwrap()
         .1
         .status
         .0
+}
+
+/// Makes the display driver stop answering, commits through `client`, and
+/// steps until the compositor drops the driver; gives the dropped end.
+fn hang(s: &mut Setup, client: u32) -> u32 {
+    let old = s.f().display.unwrap();
+    s.f().display_dead = true;
+    assert_eq!(s.commit(client, 0, 0, 1, 1), status::OK);
+    for _ in 0..4 {
+        if s.f().closed.contains(&old) {
+            return old;
+        }
+        s.c.step();
+    }
+    panic!("the hung display was not dropped");
 }
 
 #[test]
@@ -1117,9 +1156,8 @@ fn a_display_with_a_wrong_answer_is_refused() {
     ];
     for (status, format, size, refuse) in cases {
         let mut s = setup();
-        s.f().display_dead = true;
         let (a, _) = s.window(4, 4, 1);
-        s.commit(a, 0, 0, 1, 1);
+        hang(&mut s, a);
         s.f().display_dead = false;
         s.f().info_status = status;
         s.f().info_format = format;
@@ -1134,9 +1172,8 @@ fn a_display_with_a_wrong_answer_is_refused() {
 #[test]
 fn a_display_of_a_new_size_is_taken() {
     let mut s = setup();
-    s.f().display_dead = true;
     let (a, _) = s.window(4, 4, 1);
-    s.commit(a, 0, 0, 1, 1);
+    hang(&mut s, a);
     s.f().display_dead = false;
     s.f().display_size = (W / 2, H);
     let end = s.f().channel(8);
@@ -1406,4 +1443,79 @@ fn modifiers_held_by_a_lost_driver_are_forgotten() {
     s.f().take(a);
     s.keys(&[(30, 1)]);
     assert_eq!(keys_of(&s.f().take(a)), [(30, true, Some('a'))]);
+}
+
+/// ADR-0093, Decision: a display driver that never answers a flush stalls
+/// nobody. Clients keep getting input and frame callbacks; at the deadline
+/// the driver is dropped and the manager told; a new driver gets the whole
+/// screen in one flush.
+#[test]
+fn a_display_driver_that_never_answers_stalls_nobody() {
+    let mut s = setup();
+    let (a, _) = s.window(20, 20, 1);
+    let (b, _) = s.window(20, 20, 2);
+    s.c.step();
+    s.f().take(a);
+    s.f().take(b);
+    s.f().display_dead = true;
+    s.f().flushes.clear();
+    let display = s.f().display.unwrap();
+    // This commit's flush goes out and is never answered.
+    assert_eq!(s.commit(a, 0, 0, 20, 20), status::OK);
+    assert_eq!(s.f().flushes.len(), 1);
+    // Meanwhile: frame callbacks and keys, and no second flush.
+    for i in 0..5 {
+        assert_eq!(s.commit(a, i, 0, 1, 1), status::OK);
+        assert_eq!(s.commit(b, 0, i, 1, 1), status::OK);
+        s.keys(&[(30, 1), (30, 0)]);
+        assert_eq!(keys_of(&s.f().take(a)).len(), 2, "round {i}");
+    }
+    assert_eq!(s.f().flushes.len(), 1, "one flush in flight");
+    assert!(!s.f().closed.contains(&display));
+    // The deadline passes: the driver is dropped, and the manager hears.
+    let m = s.manager;
+    s.f().take(m);
+    s.f().clock += FLUSH_DEADLINE_NS;
+    s.c.step();
+    assert!(s.f().closed.contains(&display));
+    let told = s.f().take(m);
+    assert!(
+        told.iter()
+            .any(|r| decode::<gui::DisplayHung>(r, 0).is_ok())
+    );
+    assert_eq!(s.c.stats().hangs, 1);
+    // Still serving with no display at all.
+    assert_eq!(s.commit(b, 0, 0, 2, 2), status::OK);
+    s.f().display_dead = false;
+    s.f().flushes.clear();
+    let new = s.f().channel(8);
+    assert_eq!(attach_display(&mut s, new), status::OK);
+    assert_eq!(s.f().flushes, [(0, 0, W, H)]);
+}
+
+/// ADR-0093, Decision: commits made while a flush is in flight go to the
+/// driver together, as their union, when it answers.
+#[test]
+fn frames_composed_during_a_flush_go_out_together() {
+    let mut s = setup();
+    let (a, _) = s.window(40, 40, 1);
+    s.c.step();
+    s.c.step();
+    let display = s.f().display.unwrap();
+    s.f().flushes.clear();
+    s.f().display_dead = true;
+    assert_eq!(s.commit(a, 0, 0, 1, 1), status::OK);
+    assert_eq!(s.commit(a, 10, 10, 2, 2), status::OK);
+    assert_eq!(s.commit(a, 30, 5, 1, 1), status::OK);
+    let (x, y) = ORIGIN;
+    assert_eq!(s.f().flushes, [(x as u32, y as u32, 1, 1)]);
+    // The answer to the first arrives: the next flush is the union of the
+    // other two.
+    s.f().display_dead = false;
+    let mut done = vec![0; 64];
+    let n = encode(&display::Done { status: Below(0) }, 3, &mut done).unwrap();
+    done.truncate(n);
+    s.f().send(display, done, vec![]);
+    s.c.step();
+    assert_eq!(s.f().flushes[1], ((x + 10) as u32, (y + 5) as u32, 21, 7));
 }

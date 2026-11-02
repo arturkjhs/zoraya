@@ -44,7 +44,8 @@ limited to the lines it changed, what it finds outside them is added here.
 | W7 | ADR-0054 Quarantine | A pin can also end when a queue is torn down: the text reads as a full list of ways. |
 | - | `kernel/src/arch/aarch64/usercopy.rs` | Copying between user memory and the kernel is byte by byte: 3.2 us a KiB under HVF. After stage 4, try word-sized copies through the unprivileged instructions, with a measurement. |
 
-| - | `compd` driver calls | Each flush waits for the display driver, up to 2 s (ADR-0093). A flush that does not block, with replies matched by transaction, would keep a hung driver from stalling clients. |
+| - | `init` (architect, 2026-11-02) | `init` must not block while it restarts one driver: today it waits up to 6 s for the compositor to take the new driver, and watches nothing else meanwhile. **Fix before stage 6's implementation starts.** |
+| - | `compd` attach | Attaching a new display driver (`Info`, `Attach`) still waits for it, up to 2 s each (ADR-0093, Decision); flushes no longer do. |
 | - | `blkd`, `zoraya-virtio` | `blkd` keeps its own split queue beside the generic one in `queue.rs`. Move it onto the generic one, with its mutation tests, when the blk driver is next worked on. |
 | - | GUI, `zosh` | Programs started from `zosh` in the window print to the serial console. Byte streams (stage 6) or a terminal connection handed to each child would fix it (ADR-0096). |
 | - | `compd` `Platform::call` | The display driver's end is subscribed on two ports while a call waits (the main port and the call port). It works; a single port with a per-call key would be simpler. |

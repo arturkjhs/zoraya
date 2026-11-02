@@ -58,12 +58,14 @@ fn every_message_round_trips_and_decodes_totally() {
     total(AttachDisplay {});
     total(AttachInput {});
     total(Stats {});
+    total(DisplayHung {});
     total(StatsReply {
         frames: 1,
         commits: 2,
         compose_ns: 3,
         flush_ns: 4,
         flushes: 5,
+        hangs: 6,
     });
 }
 

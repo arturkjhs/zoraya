@@ -23,7 +23,9 @@ use zoraya_abi::{
 };
 use zoraya_fs_service::Restarts;
 use zoraya_user::files::{ALL, File};
-use zoraya_user::gui::{Gui, MAX_RESTARTS, Running, scan, start_terminal};
+use zoraya_user::gui::{
+    Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
+};
 use zoraya_user::stack::{Stack, end_job, moved, start_stack};
 use zoraya_user::{
     directory_lookup, dup, handle_close, job_create, port_create, port_subscribe, port_wait,
@@ -37,6 +39,7 @@ const KEY_SUPERVISOR: u64 = 4;
 const KEY_GPU: u64 = 5;
 const KEY_COMPOSITOR: u64 = 6;
 const KEY_TERMINAL: u64 = 7;
+const KEY_MANAGER: u64 = 8;
 const KEY_INPUT: u64 = 16;
 
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
@@ -104,6 +107,8 @@ fn subscribe(port: Handle, process: Handle, key: u64) {
 
 fn gui_subscriptions(port: Handle, gui: &Gui) {
     subscribe(port, gui.compd.process, KEY_COMPOSITOR);
+    let readable = channel_signals::READABLE;
+    port_subscribe(port, gui.manager, readable, KEY_MANAGER, Mode::Level).expect("subscribe");
     if let Some(g) = gui.gpud {
         subscribe(port, g.process, KEY_GPU);
     }
@@ -197,8 +202,17 @@ fn main() -> i32 {
                     }
                     break Ended::Gui;
                 }
-                KEY_GPU => {
+                KEY_GPU | KEY_MANAGER => {
                     let g = gui.as_mut().expect("a GUI");
+                    if packets[0].key == KEY_MANAGER {
+                        read_manager_events(g.manager);
+                        if !take_display_hung() {
+                            continue;
+                        }
+                        // ADR-0093, Decision: the compositor dropped a
+                        // display driver that missed its deadline.
+                        println!("init: the GPU driver hung");
+                    }
                     if !g.restart_gpu() && g.gpud.is_some() {
                         println!("init: the compositor did not take the new GPU driver");
                     }

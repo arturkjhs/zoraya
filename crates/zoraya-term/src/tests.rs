@@ -427,3 +427,41 @@ fn every_named_key_has_its_sequence() {
         assert_eq!(&out[..n], bytes, "{key}");
     }
 }
+
+/// Bytes outside ASCII (ADR-0013 allows UTF-8 names): valid characters are
+/// kept, and everything malformed is one U+FFFD per bad sequence, with no
+/// control acted on and the text after it intact. The font draws every
+/// non-ASCII character as its box.
+#[test]
+fn bytes_outside_ascii_are_shown_safely() {
+    let cases: [(&[u8], &str); 12] = [
+        ("naïve.txt".as_bytes(), "naïve.txt"),
+        ("файл 文件 \u{1F600}".as_bytes(), "файл 文件 \u{1F600}"),
+        // An overlong ESC followed by what would clear the screen.
+        (b"a\xe0\x80\x9b[2Jb", "a\u{fffd}[2Jb"),
+        (b"a\xc0\xafb", "a\u{fffd}\u{fffd}b"),
+        (b"a\xf0\x80\x80\xafb", "a\u{fffd}b"),
+        // C1 controls, CSI among them.
+        (b"a\xc2\x9b2Jb", "a\u{fffd}2Jb"),
+        (b"a\xc2\x85b", "a\u{fffd}b"),
+        // A surrogate, and a value past U+10FFFF.
+        (b"a\xed\xa0\x80b", "a\u{fffd}b"),
+        (b"a\xf4\x90\x80\x80b", "a\u{fffd}b"),
+        // Stray continuations, a cut-off sequence, impossible bytes.
+        (b"a\x80\xbfb", "a\u{fffd}\u{fffd}b"),
+        (b"a\xe2\x82b", "a\u{fffd}b"),
+        (b"a\xf8\xffb", "a\u{fffd}\u{fffd}b"),
+    ];
+    for (bytes, shown) in cases {
+        let t = term(bytes);
+        assert_eq!(t.line(0), shown, "{bytes:x?}");
+        assert_eq!(t.line(1), "", "{bytes:x?}: no line was cleared or moved");
+        assert!((0..20).all(|x| !t.cell(x, 0).ch.is_control()), "{bytes:x?}");
+    }
+    // And a sequence cut by the end of one write and finished by the next
+    // is the character.
+    let mut t = Term::new(20, 5);
+    t.write(b"\xc3");
+    t.write(b"\xa9");
+    assert_eq!(t.line(0), "é");
+}

@@ -211,6 +211,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0093-3 | [ADR-0093](0093-compositor-model-and-protocol.md) | A commit outside its surface, a surface larger than the display, and a memory object smaller than its surface are refused, change nothing, and leave the compositor serving others. | host tests, and the same cases in-QEMU against the real compositor. | checked: `make test-unit`, `make test-qemu` |
 | INV-0093-4 | [ADR-0093](0093-compositor-model-and-protocol.md) | The compositor reads client memory only while copying a commit, once per pixel, and composes only from its own copies. | host test with a client buffer that changes on every read, asserting that the screen equals one consistent copy; and review. | checked: `make test-unit` |
 | INV-0093-5 | [ADR-0093](0093-compositor-model-and-protocol.md) | A client that never reads its channel, or floods commits, does not stop the compositor serving others. | host test of the loop, and an in-QEMU test with such clients beside a well-behaved one. | checked: `make test-unit`, `make test-qemu` |
+| INV-0093-6 | [ADR-0093](0093-compositor-model-and-protocol.md) | A display driver that does not answer a flush stops neither input nor replies to commits; at most one flush is in flight; at the deadline the driver is dropped and the manager told. | host tests with a driver that never answers and with frames composed during a flush, and an in-QEMU test with a display driver that never answers a flush. | checked: `make test-unit`, `make test-qemu` |
 | INV-0094-1 | [ADR-0094](0094-input-routing-and-focus.md) | The reserved key never reaches a client. | host test of the routing logic, and the GUI test presses F12 with a client watching. | checked: `make test-unit`, `make test-qemu` |
 | INV-0094-2 | [ADR-0094](0094-input-routing-and-focus.md) | Focus changes only by a button press over a surface, the reserved key, or the focused client's end. | host test over every client message and event that the focus does not change otherwise. | checked: `make test-unit` |
 | INV-0094-3 | [ADR-0094](0094-input-routing-and-focus.md) | A client whose queue is full loses only its own events, counted, and the others get theirs. | host test with a fake channel that refuses writes for one client. | checked: `make test-unit`, `make test-qemu` |
@@ -278,9 +279,9 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0090](0090-gpu-driver-scope.md) GPU driver scope (proposed) | 3 |
 | [ADR-0091](0091-device-identification-and-assignment.md) Identifying virtio devices and giving each driver only its own (proposed) | 2 |
 | [ADR-0092](0092-input-drivers-and-event-format.md) Input drivers and the event format (proposed) | 3 |
-| [ADR-0093](0093-compositor-model-and-protocol.md) Compositor model and protocol (proposed) | 5 |
+| [ADR-0093](0093-compositor-model-and-protocol.md) Compositor model and protocol (proposed) | 6 |
 | [ADR-0094](0094-input-routing-and-focus.md) Input routing and focus (proposed) | 3 |
 | [ADR-0095](0095-text-rendering.md) Text rendering (proposed) | 2 |
 | [ADR-0096](0096-terminal.md) The terminal client and its protocol with the shell (proposed) | 3 |
 | [ADR-0097](0097-init-gui-mode-and-qemu-command-line.md) `init` in GUI mode, and the QEMU command line (proposed) | 3 |
-| **Total** | **216** |
+| **Total** | **217** |

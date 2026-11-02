@@ -370,7 +370,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   (`zoraya-proto-gui`) asks the display size, creates one surface with a memory object, which the compositor maps
   read-only, and commits damage. Each round reads at most one message per connection, copies committed rows once into
   the compositor's own copy, recomposes the changed rectangle (background, windows bottom to top with a one-pixel frame,
-  the pointer), sends one `Flush`, and then replies to the round's commits: the reply is the frame callback. Windows are
+  the pointer), and replies to the round's commits: the reply is the frame callback. Flushes do not block (ADR-0093,
+  Decision): one is in flight, what is composed meanwhile goes out as one rectangle when the driver answers, and a
+  driver that misses 2 s is dropped and reported to `init` (`DisplayHung`), which restarts it. Windows are
   placed by the compositor (16, 16, then cascaded by 32). Keys go to the focused surface, translated by the US layout of
   `zoraya-keymap`; pointer events to the surface under the pointer. A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
@@ -388,15 +390,16 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   runs on the console. A storage restart starts a new terminal with the new shell.
 
 Measured on the M4 under QEMU 11.1.2, the last run of `make test` (`t_gui` in the test kernel at 128 MiB, the criterion
-script at 256 MiB). A full redraw is a client committing its whole 1024 × 768 surface and waiting for the reply;
-"compose" is the compositor's time per frame for the copy and composition, "flush" its wait for the driver. Key to
+script at 256 MiB). A full redraw is a client committing its whole 1024 × 768 surface and waiting for the reply, which
+no longer waits for the driver; "compose" is the compositor's time per frame for the copy and composition; "flush" is a
+flush's round trip through the driver, which the compositor does not wait for. Key to
 screendump is from QMP's key event to the first screendump that shows the character; reading one screendump (PPM,
 1024 × 768) in the runner takes about as long as the HVF figure, which is therefore an upper bound.
 
 | | HVF | TCG |
 |---|---|---|
 | Full redraw | 1017 frames/s | 154 frames/s |
-| Compositor CPU per full frame: compose, flush | 0.48 ms, 0.12 ms | 2.95 ms, 0.52 ms |
+| Compositor CPU per full frame (compose); driver flush round trip | 0.48 ms, 0.12 ms | 2.95 ms, 0.52 ms |
 | Key to screendump, median of 10 | 35 ms (one screendump read: 35 ms) | 76 ms (one screendump read: 35 ms) |
 
 ## Tests
@@ -573,8 +576,8 @@ or `exit` turns the machine off.
   until stage 6 (ADR-0096). The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until
-  ADR-0056. The compositor waits up to 2 s for the display driver on each flush (ADR-0093), so a hung driver stalls
-  every client that long. NUL cannot be typed in the window. A QMP socket's path must be under 104 bytes
+  ADR-0056. Attaching a new display driver still waits for it, up to 2 s per call; `init` blocks up to 6 s while it
+  restarts a driver (backlog: to fix before stage 6). NUL cannot be typed in the window. A QMP socket's path must be under 104 bytes
   on macOS, so the tests keep it in `build/`. The runner's key latency figure under HVF is bounded by the cost of one
   screendump.
 

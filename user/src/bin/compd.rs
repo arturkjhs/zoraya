@@ -179,9 +179,10 @@ impl Platform for System {
         Some(sizes.bytes as usize)
     }
 
-    fn wait(&mut self, ready: &mut Vec<u64>) {
+    fn wait(&mut self, ready: &mut Vec<u64>, deadline: Option<u64>) {
         let mut packets = [Packet::default(); 16];
-        if let Ok(count) = port_wait(self.port, DEADLINE_INFINITE, &mut packets) {
+        let until = deadline.unwrap_or(DEADLINE_INFINITE);
+        if let Ok(count) = port_wait(self.port, until, &mut packets) {
             ready.extend(packets[..count].iter().map(|p| p.key));
         }
     }
