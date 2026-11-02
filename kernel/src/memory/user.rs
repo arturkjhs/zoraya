@@ -262,7 +262,8 @@ impl AddressSpace {
             .try_reserve_exact(self.mappings.len())
             .map_err(|_| Status::NoMemory)?;
         for m in &self.mappings {
-            objects.push(MemoryObject::new(m.length, false)?);
+            // Every page is written by the copy below before the child exists.
+            objects.push(MemoryObject::new_for_copy(m.length)?);
         }
         let mut failed = None;
         let mut executable = false;

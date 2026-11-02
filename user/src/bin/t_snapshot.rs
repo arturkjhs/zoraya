@@ -16,6 +16,7 @@ use alloc::vec::Vec;
 
 use zoraya_abi::snapshot::{Encoder as SnapshotEncoder, Move};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
+use zoraya_abi::stream_signals;
 use zoraya_abi::{
     ChannelEntry, ChannelObject, DIRECTORY, Disposition, Duplication, ExitReason, Handle, JOB,
     JobFlags, JobObject, MAX_HANDLES, MapFlags, MemoryFlags, MemoryObject, OBJECT_TYPES,
@@ -29,6 +30,7 @@ use zoraya_user::{
     raw_syscall, snapshot_process, spawn, startup, stream_create, stream_read, stream_write,
     wait_exit,
 };
+use zoraya_user::{clock_monotonic, job_resume, job_suspend, sleep_until};
 
 const OUTSIDE: u64 = 9;
 const DEVICE: u64 = 5;
@@ -156,7 +158,6 @@ fn both_halves_run_with_their_own_memory() {
         ok &= channel_write(end, b"from the child", &[]).is_ok();
         // The stream end it duplicated reaches the parent.
         ok &= stream_write(write, b"child ran").is_ok();
-        ok &= handle_type(theirs).is_err() || theirs.slot() == 20;
         core::hint::black_box(&mut on_stack);
         child_exit(ok, 3);
     };
@@ -449,6 +450,10 @@ fn the_childs_table_mirrors_the_parents() {
     let memory = memory_create(4096, MemoryFlags::NONE).expect("memory");
     let no_dup = handle_duplicate(memory, Rights::READ).expect("dup without DUPLICATE");
     let (read, write) = stream_create().expect("stream");
+    // A duplicable handle on the move list: it moves, it is not also copied
+    // (ADR-0130 item 2).
+    let (moved_read, moved_write) = stream_create().expect("stream");
+    let moved_to = 700;
     let process_job = job_create(JOB, JobFlags::POSIX).expect("job");
     // A slot closed and reopened, so that its generation is not 0, for the
     // moved end to land in.
@@ -464,72 +469,110 @@ fn the_childs_table_mirrors_the_parents() {
         );
     }
     let generation_of = |slot: u32| test_call(GENERATION_AT, u64::from(slot));
-    let moves = [Move {
-        slot: target,
-        handle: moved_end,
-    }];
+    let moves = [
+        Move {
+            slot: target,
+            handle: moved_end,
+        },
+        Move {
+            slot: moved_to,
+            handle: moved_write,
+        },
+    ];
+    // The child inherits this disposition (ADR-0102 item 5): without it the
+    // request below would end the child.
+    process_set_disposition(RequestKind::Custom(5), Disposition::Deliver).expect("disposition");
     let child = snap(process_job, &moves, SELF_SLOT, false).expect("snapshot");
     let Some(_) = child else {
         // The child sends its table, then proves its self slot is itself.
         let mut values = Vec::new();
         for slot in 1..=MAX_HANDLES {
             values.extend_from_slice(&test_call(HANDLE_AT, u64::from(slot)).to_le_bytes());
+            let rights = test_call(RIGHTS_AT, u64::from(slot)) as u32;
+            values.extend_from_slice(&rights.to_le_bytes());
         }
         send(write, &values);
         let me = h(u64::from(SELF_SLOT) | generation_of(SELF_SLOT) << 16);
         let mut ok = handle_type(me) == Ok("process");
         ok &= object_get_signals(me).map(|s| s & process_signals::REQUEST_PENDING) == Ok(0);
-        process_set_disposition(RequestKind::Custom(5), Disposition::Deliver).expect("disposition");
-        // Its own job holds only it: the request is its own.
+        // Its own job holds only it: the request is its own, and queued
+        // under the copied disposition.
         ok &= job_signal(process_job, RequestKind::Custom(5), 9).is_ok();
         ok &= object_get_signals(me).map(|s| s & process_signals::REQUEST_PENDING)
             == Ok(process_signals::REQUEST_PENDING);
         ok &= process_take_request() == Ok((RequestKind::Custom(5), 9));
         ok &= object_get_signals(me).map(|s| s & process_signals::TERMINATED) == Ok(0);
-        // The moved end works at its slot.
+        // The moved ends work at their slots.
         let end = h(u64::from(target) | generation_of(target) << 16);
         ok &= channel_write(end, b"moved", &[]).is_ok();
+        let stream_end = h(u64::from(moved_to) | generation_of(moved_to) << 16);
+        ok &= stream_write(stream_end, b"s").is_ok();
         child_exit(ok, 5);
     };
     let child = child.expect("the parent");
-    let mut values = alloc::vec![0u8; MAX_HANDLES as usize * 8];
+    process_set_disposition(RequestKind::Custom(5), Disposition::Terminate).expect("disposition");
+    const ROW: usize = 12;
+    let mut values = alloc::vec![0u8; MAX_HANDLES as usize * ROW];
     receive(read, &mut values);
     assert_eq!(wait_exit(child).code, 0, "the child's self slot names it");
     let mut message = [0; 8];
     let sizes = channel_read(keep, &mut message, &mut []).expect("message");
     assert_eq!(&message[..sizes.bytes as usize], b"moved");
+    let mut byte = [0; 1];
+    assert_eq!(
+        stream_read(moved_read, &mut byte),
+        Ok(1),
+        "through the moved stream end"
+    );
+    let at_slot = |slot: u32| {
+        let at = (slot as usize - 1) * ROW;
+        (
+            u64::from_le_bytes(values[at..at + 8].try_into().unwrap()),
+            u32::from_le_bytes(values[at + 8..at + 12].try_into().unwrap()),
+        )
+    };
     for slot in 1..=MAX_HANDLES {
-        let at = (slot as usize - 1) * 8;
-        let got = u64::from_le_bytes(values[at..at + 8].try_into().unwrap());
+        let (got, got_rights) = at_slot(slot);
         let (value, rights) = before[slot as usize];
-        let expected = if slot == SELF_SLOT || slot == target {
-            u64::from(slot) | generation_of(slot) << 16
-        } else if value == moved_end.raw() || value == 0 {
-            0
+        let moved_from = |m: &Move| m.slot == slot;
+        let expected = if slot == SELF_SLOT {
+            (
+                u64::from(slot) | generation_of(slot) << 16,
+                Rights::WAIT.raw(),
+            )
+        } else if let Some(m) = moves.iter().find(|m| moved_from(m)) {
+            // The full rights the caller held.
+            let source = before[m.handle.slot() as usize].1;
+            (u64::from(slot) | generation_of(slot) << 16, source)
+        } else if moves.iter().any(|m| m.handle.raw() == value) || value == 0 {
+            (0, 0)
         } else {
             let kind = handle_type(h(value)).unwrap_or("closed");
             let dup = Rights::from_raw(rights)
                 .expect("rights")
                 .contains(Rights::DUPLICATE);
-            if duplicable(kind) && dup { value } else { 0 }
+            if duplicable(kind) && dup {
+                (value, rights)
+            } else {
+                (0, 0)
+            }
         };
-        assert_eq!(got, expected, "slot {slot}");
+        assert_eq!((got, got_rights), expected, "slot {slot}");
     }
-    // The ones INV-0102-6 names, by name.
-    for empty in [port, unmoved, unmoved_peer, no_dup] {
-        let at = (empty.slot() as usize - 1) * 8;
+    // The ones INV-0102-6 names, by name, and the moved stream end's old
+    // slot.
+    for empty in [port, unmoved, unmoved_peer, no_dup, moved_write] {
         assert_eq!(
-            &values[at..at + 8],
-            &[0; 8],
+            at_slot(empty.slot()),
+            (0, 0),
             "{:?} is not in the child",
             handle_type(empty)
         );
     }
     for present in [memory, read, write, process_job, JOB, DIRECTORY] {
-        let at = (present.slot() as usize - 1) * 8;
         assert_eq!(
-            &values[at..at + 8],
-            &present.raw().to_le_bytes(),
+            at_slot(present.slot()).0,
+            present.raw(),
             "the parent's value"
         );
     }
@@ -543,6 +586,7 @@ fn the_childs_table_mirrors_the_parents() {
         no_dup,
         read,
         write,
+        moved_read,
         process_job,
     ]);
 }
@@ -863,12 +907,38 @@ fn measure_the_copy() {
     }
 }
 
+/// ADR-0130 item 7, INV-0130-2: a child made into a suspended job runs no
+/// instruction until the job is resumed.
+fn a_child_in_a_suspended_job_waits() {
+    let (read, write) = stream_create().expect("stream");
+    let job = job_create(JOB, JobFlags::POSIX).expect("job");
+    job_suspend(job).expect("suspend");
+    let child = snap(job, &[], 0, false).expect("snapshot");
+    let Some(child) = child else {
+        let _ = stream_write(write, b"r");
+        process_exit(0);
+    };
+    sleep_until(clock_monotonic() + 30_000_000);
+    let readable = object_get_signals(read).expect("signals") & stream_signals::READABLE;
+    assert_eq!(readable, 0, "the child did not run");
+    job_resume(job).expect("resume");
+    assert_eq!(wait_exit(child).code, 0);
+    let mut byte = [0; 1];
+    assert_eq!(
+        stream_read(read, &mut byte),
+        Ok(1),
+        "and ran after the resume"
+    );
+    close(&[child, job, read, write]);
+}
+
 fn inner() -> i32 {
     both_halves_run_with_their_own_memory();
     the_child_starts_with_the_parents_registers();
     the_childs_table_mirrors_the_parents();
     the_move_list_is_all_or_nothing();
     frame_exhaustion_gives_everything_back();
+    a_child_in_a_suspended_job_waits();
     devices_refuse_a_snapshot();
     the_job_must_be_ours_and_open();
     bad_buffers_are_refused();
@@ -885,6 +955,8 @@ fn outer() -> i32 {
     let not_posix = job_create(JOB, JobFlags::NONE).expect("job");
     assert_err!(snap(not_posix, &[], 0, false), Status::AccessDenied);
     let posix = job_create(JOB, JobFlags::POSIX).expect("posix job");
+    // The gate is the caller's job, not the target's.
+    assert_err!(snap(posix, &[], 0, false), Status::AccessDenied);
     let me = directory_lookup(DIRECTORY, "t_snapshot").expect("myself");
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, posix, me);

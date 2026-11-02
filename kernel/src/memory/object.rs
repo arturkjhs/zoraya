@@ -25,6 +25,17 @@ impl MemoryObject {
     /// Commits `size` bytes, zeroed, or fails having changed nothing
     /// (INV-0051-1). `size` must be a whole number of pages, not 0.
     pub fn new(size: u64, contiguous: bool) -> Result<Arc<MemoryObject>, Status> {
+        MemoryObject::make(size, contiguous, true)
+    }
+
+    /// As [`MemoryObject::new`], scattered and not zeroed: for a copy that
+    /// writes every byte before anything can reach the object (a snapshot's
+    /// mapped objects, ADR-0102 item 2). The caller must do so.
+    pub fn new_for_copy(size: u64) -> Result<Arc<MemoryObject>, Status> {
+        MemoryObject::make(size, false, false)
+    }
+
+    fn make(size: u64, contiguous: bool, zeroed: bool) -> Result<Arc<MemoryObject>, Status> {
         if size == 0 || !size.is_multiple_of(FRAME_SIZE) {
             return Err(Status::InvalidArgument);
         }
@@ -38,7 +49,12 @@ impl MemoryObject {
             list.try_reserve_exact(count as usize)
                 .map_err(|_| Status::NoMemory)?;
             for _ in 0..count {
-                match frames::alloc_zeroed() {
+                let frame = if zeroed {
+                    frames::alloc_zeroed()
+                } else {
+                    frames::alloc()
+                };
+                match frame {
                     Ok(frame) => list.push(frame),
                     Err(_) => {
                         object = Frames::Scattered(list);

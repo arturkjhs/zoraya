@@ -13,7 +13,7 @@ use zoraya_abi::{
 use zoraya_user::{
     assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, image, job_create,
     job_kill, job_resume, job_suspend, memory_create, memory_map, object_get_signals, println,
-    sleep_until, spawn, startup, wait_exit,
+    process_resume, sleep_until, spawn, startup, wait_exit,
 };
 
 const COUNTERS: usize = 32;
@@ -39,6 +39,27 @@ impl Counters {
         }
         values
     }
+}
+
+/// A child in `job` that does `what` with counter 7, perhaps suspended.
+fn role(job: Handle, counters: &Counters, what: &[u8], suspended: bool) -> Handle {
+    let mut buffer = [0; 512];
+    let program = image("t_suspend");
+    let mut e = Encoder::new(&mut buffer, job, program);
+    if suspended {
+        e.suspended();
+    }
+    e.handle(console_entry()).handle(HandleEntry {
+        slot: 3,
+        handle: counters.object,
+        rights: MemoryObject::RIGHTS,
+        transfer: Transfer::Duplicate,
+    });
+    e.arg(what).arg(b"07");
+    let length = e.finish().expect("room");
+    let child = spawn(&buffer[..length]).expect("spawn");
+    handle_close(program).expect("image");
+    child
 }
 
 /// A counting child in `job`, writing counter `index`.
@@ -161,6 +182,34 @@ fn suspend_and_resume_need_kill() {
     }
 }
 
+/// A process asleep in the kernel is not woken early by a suspend and resume
+/// of its job: only a parked thread is woken (ADR-0130 item 7). And a process
+/// started suspended in a suspended job waits for both resumes.
+fn resume_wakes_only_what_it_stopped() {
+    let counters = Counters::new();
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    let sleeper = role(job, &counters, b"sleep", false);
+    nap(20);
+    job_suspend(job).expect("suspend");
+    job_resume(job).expect("resume");
+    assert_eq!(wait_exit(sleeper).code, 0, "it slept its whole time");
+    handle_close(sleeper).expect("close");
+
+    job_suspend(job).expect("suspend");
+    let late = role(job, &counters, b"count", true);
+    process_resume(late).expect("resume the process");
+    nap(30);
+    assert_eq!(counters.read()[7], 0, "still stopped by its job");
+    job_resume(job).expect("resume the job");
+    nap(30);
+    assert!(counters.read()[7] > 0, "now it runs");
+    job_kill(job).expect("kill");
+    wait_exit(late);
+    for h in [late, job, counters.object] {
+        handle_close(h).expect("close");
+    }
+}
+
 /// The measurement: `job_suspend` of a job of 16 counting processes.
 fn measure_suspend_latency() {
     let counters = Counters::new();
@@ -215,6 +264,13 @@ fn count(index: usize) -> ! {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let mut argv = startup().argv;
+    let first = argv.clone().next();
+    if let Some(b"sleep") = first {
+        let start = clock_monotonic();
+        let until = start + 100_000_000;
+        sleep_until(until);
+        return if clock_monotonic() >= until { 0 } else { 1 };
+    }
     if let Some(b"count") = argv.next() {
         let digits = argv.next().unwrap_or(b"0");
         let index = digits.iter().fold(0, |n, d| n * 10 + usize::from(d - b'0'));
@@ -222,6 +278,7 @@ fn main() -> i32 {
     }
     suspend_stops_the_whole_tree_and_resume_starts_it();
     suspend_and_resume_need_kill();
+    resume_wakes_only_what_it_stopped();
     measure_suspend_latency();
     println!("t_suspend: all passed");
     0

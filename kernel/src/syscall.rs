@@ -990,7 +990,9 @@ impl Handlers for Calls<'_> {
         }
         let mut ehdr = [0; EHDR_SIZE];
         let head = &mut ehdr[..(length as usize).min(EHDR_SIZE)];
-        memory.read(0, head);
+        // In range: `head` is at most `length`, which is at most the size.
+        let read = memory.read(0, head);
+        debug_assert!(read);
         let header = Header::parse(head).map_err(|_| Status::InvalidArgument)?;
         let end = header.table_offset as u64 + header.table_length as u64;
         if end > length {
@@ -1001,7 +1003,9 @@ impl Handlers for Calls<'_> {
             .try_reserve_exact(header.table_length)
             .map_err(|_| Status::NoMemory)?;
         table.resize(header.table_length, 0);
-        memory.read(header.table_offset as u64, &mut table);
+        // In range: `end <= length <= size`, checked above.
+        let read = memory.read(header.table_offset as u64, &mut table);
+        debug_assert!(read);
         // The same parser and range as the ramdisk's (INV-0108-1).
         let program = Program::from_table(&header, &table, length, PROGRAM_LOW, PROGRAM_HIGH)
             .map_err(|_| Status::InvalidArgument)?;
@@ -1195,14 +1199,23 @@ pub fn dispatch(frame: &mut Frame) {
     let mut exit = None;
     let result = match process {
         Some(process) if svc_immediate(frame.esr) == 0 => {
-            let mut calls = Calls {
-                process,
-                exit: None,
-                frame,
-            };
-            let result = zoraya_abi::dispatch(&mut calls, number, &registers);
-            exit = calls.exit;
-            result
+            // INV-0002-2: every `#[personality_only]` call is refused here
+            // outside a `posix` job, whatever its handler checks.
+            let tagged = zoraya_abi::SYSCALLS
+                .iter()
+                .any(|s| s.call as u64 == number && s.personality_only);
+            if tagged && !process.job().is_posix() {
+                Err(Status::AccessDenied)
+            } else {
+                let mut calls = Calls {
+                    process,
+                    exit: None,
+                    frame,
+                };
+                let result = zoraya_abi::dispatch(&mut calls, number, &registers);
+                exit = calls.exit;
+                result
+            }
         }
         _ => Err(Status::BadSyscall),
     };

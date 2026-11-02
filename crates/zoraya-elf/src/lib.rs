@@ -155,7 +155,10 @@ impl Program {
     /// Checks `file`, whose loaded addresses must lie in `[low, high)`.
     pub fn parse(file: &[u8], low: u64, high: u64) -> Result<Program, Error> {
         let header = Header::parse(file)?;
-        let end = header.table_offset + header.table_length;
+        let end = header
+            .table_offset
+            .checked_add(header.table_length)
+            .ok_or(Error::Truncated)?;
         let table = file.get(header.table_offset..end).ok_or(Error::Truncated)?;
         Program::from_table(&header, table, file.len() as u64, low, high)
     }
@@ -172,7 +175,10 @@ impl Program {
         if table.len() != header.table_length {
             return Err(Error::Truncated);
         }
-        let end = header.table_offset + header.table_length;
+        let end = header
+            .table_offset
+            .checked_add(header.table_length)
+            .ok_or(Error::Truncated)?;
         if end as u64 > file_length {
             return Err(Error::Truncated);
         }
