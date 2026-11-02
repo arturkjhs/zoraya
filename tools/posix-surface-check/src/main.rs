@@ -7,14 +7,14 @@
 //!   (INV-0005-2), that it defines every name of the list and every name its
 //!   members use, and that no member outside the allowed ones contains `svc`
 //!   (INV-0100-2).
-//! - `hide LIST OBJECT...` prints the renames that hide every defined name
-//!   outside the list, one `old new` pair per line, for `objcopy
-//!   --redefine-syms` (ADR-0141).
+//! - `hide LIST OUTDIR OBJECT...` hides every defined name outside the list
+//!   (ADR-0141): it writes each object, renamed, into OUTDIR under its base
+//!   name and prints the renames, one `old new` pair per line.
 
 use std::collections::BTreeSet;
 use std::process::ExitCode;
 
-use posix_surface_check::{ar, elf, surface};
+use posix_surface_check::{ar, elf, rename, surface};
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -65,7 +65,8 @@ fn check(args: &[String]) -> Result<bool, String> {
         let object = elf::read(m.data).map_err(|e| format!("{archive}({}): {e}", m.name))?;
         objects.push((m.name, object));
     }
-    let report = surface::check(&names, &objects, &allowed);
+    let index = ar::index(&bytes).map_err(|e| format!("{archive}: {e}"))?;
+    let report = surface::check(&names, &objects, &allowed, index.as_deref());
     let exports: BTreeSet<&str> = objects
         .iter()
         .flat_map(|(_, o)| o.symbols.iter())
@@ -86,8 +87,8 @@ fn check(args: &[String]) -> Result<bool, String> {
 }
 
 fn hide(args: &[String]) -> Result<(), String> {
-    let [list, paths @ ..] = args else {
-        return Err("usage: hide LIST OBJECT...".into());
+    let [list, outdir, paths @ ..] = args else {
+        return Err("usage: hide LIST OUTDIR OBJECT...".into());
     };
     let names = surface::parse_list(&read_text(list)?);
     let files: Vec<(String, Vec<u8>)> = paths
@@ -98,8 +99,21 @@ fn hide(args: &[String]) -> Result<(), String> {
     for (path, bytes) in &files {
         objects.push(elf::read(bytes).map_err(|e| format!("{path}: {e}"))?);
     }
-    for (old, new) in surface::hide(&names, &objects)? {
+    let renames = surface::hide(&names, &objects)?;
+    for (old, new) in &renames {
         println!("{old} {new}");
+    }
+    let map: std::collections::BTreeMap<String, String> = renames.into_iter().collect();
+    for (path, bytes) in &files {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .ok_or(format!("{path}: no file name"))?;
+        let out = std::path::Path::new(outdir).join(name);
+        if out.exists() {
+            return Err(format!("{}: two objects with this name", out.display()));
+        }
+        let renamed = rename::rename(bytes, &map).map_err(|e| format!("{path}: {e}"))?;
+        std::fs::write(&out, renamed).map_err(|e| format!("{}: {e}", out.display()))?;
     }
     Ok(())
 }

@@ -5,6 +5,7 @@
 
 pub mod ar;
 pub mod elf;
+pub mod rename;
 pub mod surface;
 
 #[cfg(test)]

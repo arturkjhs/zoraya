@@ -86,7 +86,8 @@ fn check_archive(names: &[&str], bytes: &[u8], allowed: &[&str]) -> Report {
         .map(|m| (m.name.clone(), elf::read(m.data).unwrap()))
         .collect();
     let allowed: Vec<String> = allowed.iter().map(|s| s.to_string()).collect();
-    surface::check(&list(names), &objects, &allowed)
+    let index = ar::index(bytes).unwrap();
+    surface::check(&list(names), &objects, &allowed, index.as_deref())
 }
 
 /// A small archive that passes against the list `open`, `read`, `_exit`.
@@ -400,4 +401,63 @@ fn a_non_relocatable_member_is_an_error() {
     exec[16] = 2;
     assert!(elf::read(&exec).is_err());
     assert!(elf::read(b"plain text").is_err());
+}
+
+#[test]
+fn the_index_must_name_exactly_the_defined_symbols() {
+    let bytes = archive(&good());
+    let members = ar::members(&bytes).unwrap();
+    let objects: Vec<(String, Object<'_>)> = members
+        .iter()
+        .map(|m| (m.name.clone(), elf::read(m.data).unwrap()))
+        .collect();
+    let mut index = ar::index(&bytes).unwrap().unwrap();
+    assert!(surface::check(&list(&NAMES), &objects, &[], Some(&index)).passed());
+    index.retain(|n| n != "read");
+    index.push("ghost".into());
+    let r = surface::check(&list(&NAMES), &objects, &[], Some(&index));
+    assert_eq!(
+        r.index,
+        [
+            "read is defined but not indexed",
+            "ghost is indexed but not defined"
+        ]
+    );
+    let r = surface::check(&list(&NAMES), &objects, &[], None);
+    assert_eq!(r.index, ["the archive has no symbol index"]);
+}
+
+#[test]
+fn rename_changes_only_the_named_symbols() {
+    use std::collections::BTreeMap;
+    let o = object(
+        &[
+            ("frexpl", STB_GLOBAL, TEXT),
+            ("open", STB_GLOBAL, UNDEF),
+            ("sin", STB_WEAK, UNDEF),
+            ("frexpl2", STB_LOCAL, TEXT),
+        ],
+        &[NOP, SVC0],
+    );
+    let map: BTreeMap<String, String> = [("frexpl", "__zoraya_frexpl"), ("sin", "__zoraya_sin")]
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+    let renamed = crate::rename::rename(&o, &map).unwrap();
+    let before = elf::read(&o).unwrap();
+    let after = elf::read(&renamed).unwrap();
+    let names: Vec<&str> = after.symbols.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["__zoraya_frexpl", "open", "__zoraya_sin", "frexpl2"]
+    );
+    for (a, b) in before.symbols.iter().zip(&after.symbols) {
+        assert_eq!((a.bind, a.kind, a.shndx), (b.bind, b.kind, b.shndx));
+    }
+    assert_eq!(before.code, after.code);
+    assert_eq!(crate::rename::rename(&o, &BTreeMap::new()).unwrap(), o);
+    assert!(crate::rename::rename(b"junk", &map).is_err());
+    for n in 0..o.len() {
+        let _ = crate::rename::rename(&o[..n], &map);
+    }
 }

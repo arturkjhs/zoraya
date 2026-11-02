@@ -18,6 +18,45 @@ fn text(b: &[u8]) -> Result<&str, String> {
         .map_err(|_| "a header field is not text".to_string())
 }
 
+/// The names of the archive's symbol index (`/`), in index order, or `None`
+/// when it has none.
+pub fn index(archive: &[u8]) -> Result<Option<Vec<String>>, String> {
+    if !archive.starts_with(MAGIC) {
+        return Err("not an ar archive".into());
+    }
+    let Some(h) = archive.get(MAGIC.len()..MAGIC.len() + HEADER) else {
+        return Ok(None);
+    };
+    if text(&h[..16])? != "/" {
+        return Ok(None);
+    }
+    let size: usize = text(&h[48..58])?.parse().map_err(|_| "bad index size")?;
+    let start = MAGIC.len() + HEADER;
+    let body = archive
+        .get(start..start.checked_add(size).ok_or("overflow")?)
+        .ok_or("truncated index")?;
+    let count = u32::from_be_bytes(
+        body.get(..4)
+            .ok_or("truncated index")?
+            .try_into()
+            .map_err(|_| "?")?,
+    ) as usize;
+    let names_at = count
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(4))
+        .ok_or("overflow")?;
+    let names = body.get(names_at..).ok_or("truncated index")?;
+    let out: Vec<String> = names
+        .split(|&b| b == 0)
+        .take(count)
+        .map(|n| String::from_utf8_lossy(n).into_owned())
+        .collect();
+    if out.len() != count {
+        return Err("index has fewer names than its count".into());
+    }
+    Ok(Some(out))
+}
+
 /// The members of `archive`, without the index (`/`, `/SYM64/`) and the name
 /// table (`//`), in archive order.
 pub fn members(archive: &[u8]) -> Result<Vec<Member<'_>>, String> {

@@ -170,6 +170,9 @@ pub struct Report {
     pub unresolved: Vec<(String, String)>,
     /// Member names that occur more than once.
     pub duplicates: Vec<String>,
+    /// Disagreements between the archive's symbol index, which `zoraya-ar`
+    /// wrote with its own ELF reader, and the symbols this tool reads.
+    pub index: Vec<String>,
 }
 
 impl Report {
@@ -197,17 +200,22 @@ impl Report {
         for m in &self.duplicates {
             out.push(format!("member name occurs more than once: {m}"));
         }
+        for m in &self.index {
+            out.push(format!("symbol index: {m}"));
+        }
         out
     }
 }
 
 /// Checks the objects of an archive against `list`. A member whose name
 /// starts with one of `svc_allowed` may contain `svc` (zoraya-rt's object,
-/// INV-0100-2).
+/// INV-0100-2). `index` is the archive's symbol index, which must name
+/// exactly the defined global symbols.
 pub fn check(
     list: &BTreeSet<String>,
     members: &[(String, Object<'_>)],
     svc_allowed: &[String],
+    index: Option<&[String]>,
 ) -> Report {
     let mut report = Report::default();
     let mut defined = BTreeSet::new();
@@ -248,6 +256,18 @@ pub fn check(
         }
     }
     report.unresolved = unresolved.into_iter().collect();
+    match index {
+        None => report.index.push("the archive has no symbol index".into()),
+        Some(names) => {
+            let indexed: BTreeSet<&String> = names.iter().collect();
+            for n in defined.iter().filter(|n| !indexed.contains(n)) {
+                report.index.push(format!("{n} is defined but not indexed"));
+            }
+            for n in indexed.iter().filter(|n| !defined.contains(**n)) {
+                report.index.push(format!("{n} is indexed but not defined"));
+            }
+        }
+    }
     report
 }
 
