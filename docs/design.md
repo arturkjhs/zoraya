@@ -398,9 +398,13 @@ screendump is from QMP's key event to the first screendump that shows the charac
 
 | | HVF | TCG |
 |---|---|---|
-| Full redraw | 1017 frames/s | 154 frames/s |
-| Compositor CPU per full frame (compose); driver flush round trip | 0.48 ms, 0.12 ms | 2.95 ms, 0.52 ms |
-| Key to screendump, median of 10 | 35 ms (one screendump read: 35 ms) | 76 ms (one screendump read: 35 ms) |
+| Full redraw | 759 frames/s | 157 frames/s |
+| Compositor CPU per full frame (compose); driver flush round trip | 0.72 ms; 1.21 ms | 2.89 ms; 1.69 ms |
+| Key to screendump, median of 10 | 35 ms (one screendump read: 35 ms) | 75 ms (one screendump read: 34 ms) |
+
+Under HVF the flush that no longer blocks (ADR-0093, Decision) lowered the full-redraw rate from about 1017 frames/s
+and raised compose time from 0.48 ms, between runs of the same tests; under TCG nothing moved. A guess, not measured:
+the compositor now composes while QEMU's device still reads the framebuffer for the previous flush.
 
 ## Tests
 
