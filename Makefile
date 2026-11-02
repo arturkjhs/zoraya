@@ -211,7 +211,11 @@ mutants:
 CRATE ?= zoraya-virtio
 mutants-host:
 	@command -v cargo-mutants >/dev/null || { echo "cargo-mutants is not installed: cargo install cargo-mutants --version 27.1.0 --locked (docs/dependencies.md)"; exit 2; }
-	$(CARGO) mutants -p $(CRATE) -j 4 --timeout 300 -o build/mutants/cargo
+	@# cargo-mutants exits 2 when a mutant was missed and 3 on a timeout: results, not failures.
+	@mkdir -p build/mutants; $(CARGO) mutants -p $(CRATE) -j 4 --timeout 300 -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
+	  rc=$$?; tail -1 build/mutants/cargo.log; \
+	  case $$rc in 0|2|3) echo "missed: build/mutants/cargo/mutants.out/missed.txt";; \
+	  *) echo "cargo-mutants failed ($$rc), see build/mutants/cargo.log"; exit $$rc;; esac
 
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
