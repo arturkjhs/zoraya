@@ -1,0 +1,76 @@
+# zoraya-fs-service: rights (INV-0055-3), the open table (INV-0055-7, -8),
+# the timed commit (ADR-0010 rule 5). Host tests only.
+tests = ["cargo test -q -p zoraya-fs-service --test service"]
+timeout = 600
+
+[[mutant]]
+id = "S-clone-adds"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if !self.has(i, proto::rights::CLONE) || !self.has(i, rights) {'
+replace = 'if !self.has(i, proto::rights::CLONE) {'
+note = "TASK-13 review R-47 (S1)"
+
+[[mutant]]
+id = "S-remove"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if !self.has(i, proto::rights::REMOVE) {'
+replace = 'if false {'
+
+[[mutant]]
+id = "S-open-rights"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if !self.has(i, needed) {'
+replace = 'if false {'
+
+[[mutant]]
+id = "S-durable-sync"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if durable && !self.has(i, proto::rights::SYNC) {'
+replace = 'if false {'
+note = "TASK-13 review R-12"
+
+[[mutant]]
+id = "S-token-target"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''
+        if !self.has(target, right) {
+            return Err(status::ACCESS_DENIED);'''
+replace = '''
+        if false {
+            return Err(status::ACCESS_DENIED);'''
+note = "TASK-13 check C-1 (S9)"
+
+[[mutant]]
+id = "S-directory-open"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if flags & f::DIRECTORY != 0 && (creates || flags & f::TRUNCATE != 0) {'
+replace = 'if false {'
+note = "TASK-13 review R-11"
+
+[[mutant]]
+id = "S-sent-handles"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'self.open -= handles.len();'
+occurrence = 1
+replace = ''
+note = "TASK-13 review R-15: a sent token copy stays counted"
+
+[[mutant]]
+id = "S-copy-room"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if !self.room() {'
+occurrence = 4
+replace = 'if false {'
+note = "TASK-13 check C-3: the room check before a token's copy"
+
+[[mutant]]
+id = "S-tick-on-ready"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''
+                if self.volume.failure().is_none() {
+                    let _ = self.volume.tick();'''
+occurrence = 1
+replace = '''
+                if false {
+                    let _ = self.volume.tick();'''
+note = "TASK-13 review R-13"

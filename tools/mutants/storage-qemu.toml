@@ -1,0 +1,50 @@
+# The storage stack in QEMU: blkd, fsd and the client library. Minutes per
+# mutant: one QEMU configuration and the file scripts.
+tests = ["make -s test-qemu-one", "make -s test-files"]
+timeout = 1200
+
+[[mutant]]
+id = "Q-flush-not-sent"
+file = "user/src/bin/blkd.rs"
+find = '''
+                let s = match self.driver.queue(&request) {
+                    Ok(()) if self.finish().is_ok() => {'''
+replace = '''
+                let s = match Ok::<(), ()>(()) {
+                    Ok(()) if true => {'''
+note = "TASK-13 review R-29 (Q5): blkd answers Flush and sends nothing. Known to survive: no test sees a flush reach the device"
+
+[[mutant]]
+id = "Q-no-reset-on-exit"
+file = "user/src/bin/blkd.rs"
+find = 'let stopped = self.driver.reset();'
+replace = 'let stopped = true;'
+note = "TASK-13 review R-20 (Q8). Known to survive: the kernel's quarantine resets the device anyway"
+
+[[mutant]]
+id = "Q-batch-checked-first"
+file = "user/src/bin/blkd.rs"
+find = '''
+        if ranges.iter().any(|r| self.check(r, &mut piece).is_none()) {
+            return status::BAD_RANGE;
+        }'''
+replace = ''
+note = "TASK-13 review R-3"
+
+[[mutant]]
+id = "Q-client-leak"
+file = "user/src/files.rs"
+find = '''
+        for entry in handles.iter().filter(|e| e.transfer == Transfer::Move) {
+            let _ = handle_close(entry.handle);
+        }'''
+replace = '''
+        let _ = handles;'''
+note = "TASK-13 review R-33"
+
+[[mutant]]
+id = "Q-driver-unsubscribe"
+file = "user/src/bin/fsd.rs"
+find = 'let _ = port_unsubscribe(self.port, DRIVER_KEY);'
+replace = ''
+note = "TASK-13 review R-14(b): fsd spins after its driver dies"

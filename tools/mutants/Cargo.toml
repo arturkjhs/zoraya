@@ -1,0 +1,10 @@
+[package]
+name = "zoraya-mutants"
+description = "Runs the mutation lists in tools/mutants against the tests they name, and reports the survivors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

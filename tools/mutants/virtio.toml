@@ -1,0 +1,79 @@
+# zoraya-virtio: the driver's checks of what a device writes (INV-0054-4),
+# and its reset (INV-0080-1). Host tests only: seconds per mutant.
+tests = ["cargo test -q -p zoraya-virtio"]
+timeout = 300
+
+[[mutant]]
+id = "V-length-high"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = 'if length > writable {'
+replace = 'if false {'
+note = "TASK-13 review R-2: a used length above what the device may write"
+
+[[mutant]]
+id = "V-length-short"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = '0 if length < writable => return Err(Error::Device),'
+replace = ''
+note = "TASK-13 review R-2: a read that succeeds short"
+
+[[mutant]]
+id = "V-id-range"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = '|| id / SLOT >= MAX_IN_FLIGHT'
+replace = ''
+note = "TASK-13 review R-4 (V3)"
+
+[[mutant]]
+id = "V-id-repeat"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = '''
+            if !self.in_flight[slot] {
+                return Err(Error::Device);
+            }'''
+replace = ''
+note = "TASK-13 review R-4 (V4)"
+
+[[mutant]]
+id = "V-used-count"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = 'if usize::from(new) > self.outstanding {'
+replace = 'if false {'
+
+[[mutant]]
+id = "V-wrap"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = 'self.last_used = self.last_used.wrapping_add(1);'
+replace = 'self.last_used += 1;'
+note = "TASK-13 review R-4 (V9): the 16-bit index wraps at 65,536"
+
+[[mutant]]
+id = "V-status-unknown"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = '                _ => return Err(Error::Device),'
+replace = '                _ => {}'
+
+[[mutant]]
+id = "V-reset-first"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = 'registers.write(reg::STATUS, 0);'
+occurrence = 1
+replace = ''
+note = "INV-0080-1, the driver's half"
+
+[[mutant]]
+id = "V-place-end"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = 'if bytes == 0 || last > sectors {'
+replace = 'if bytes == 0 {'
+note = "TASK-13 review R-5: blkd's check of a range against the device"
+
+[[mutant]]
+id = "V-barrier"
+file = "crates/zoraya-virtio/src/lib.rs"
+find = '''
+        self.shared.acquire();
+        for _ in 0..new {'''
+replace = '''
+        for _ in 0..new {'''
+note = "TASK-13 review R-1. Expected to survive: the fake device's barrier does nothing, so no host test can see it"

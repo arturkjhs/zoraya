@@ -21,3 +21,6 @@ jobs:
         run: rustup toolchain install
       - name: make test
         run: make test
+      - name: The logs of what failed
+        if: failure()
+        run: for f in build/logs/*.log; do echo "== $f"; tail -n 300 "$f"; done
