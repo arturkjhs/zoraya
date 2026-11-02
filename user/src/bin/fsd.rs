@@ -288,7 +288,10 @@ fn main() -> i32 {
         subscribed: Vec::new(),
     };
     let mut service = Box::new(Service::new(volume, kernel));
-    service.add_root(root);
+    if !service.add_root(root) {
+        println!("fsd: the root connection cannot be served");
+        return 1;
+    }
     service.run();
     0
 }

@@ -506,6 +506,43 @@ fn no_request_succeeds_without_its_right() {
     let _ = f;
 }
 
+/// Gives connection `c` a page of buffer.
+fn attach_page(r: &mut Rig, c: End) {
+    let memory = r.net.end(HandleKind::Memory);
+    let bytes = vec![0; 4096];
+    r.net.0.borrow_mut().memory.insert(u64::from(memory), bytes);
+    let m = proto::Attach { size: 4096 };
+    assert_eq!(r.done(c, &m, vec![memory]).0, status::OK);
+}
+
+/// R-15: a token copy in a held reply is counted until it goes, whether the
+/// client reads it or closes first.
+#[test]
+fn a_held_token_copy_is_counted_until_it_goes() {
+    for closes in [false, true] {
+        let mut r = rig();
+        let root = r.root;
+        let f = r.open(root, "f", open_flags::CREATE);
+        let held = |r: &Rig| (r.net.0.borrow().owned.len(), r.service.open_count());
+        r.net.0.borrow_mut().room.insert(f, 0);
+        r.post(f, &proto::GetToken {}, vec![]);
+        r.run();
+        let (owned, open) = held(&r);
+        assert_eq!(owned, open, "held with its copy");
+        if closes {
+            r.net.0.borrow_mut().closed.insert(f);
+        } else {
+            r.net.0.borrow_mut().room.insert(f, 1);
+        }
+        r.run();
+        let (after, open) = held(&r);
+        assert_eq!(after, open, "after it went");
+        // The copy, and if it closed, its connection and token too.
+        let gone = if closes { 3 } else { 1 };
+        assert_eq!(after, owned - gone, "closes {closes}");
+    }
+}
+
 /// A reply's status: every reply has it first, after the header.
 fn status_of(reply: &[u8]) -> u32 {
     u32::from_le_bytes(reply[16..20].try_into().unwrap())
@@ -554,6 +591,66 @@ fn every_guarded_request_needs_each_of_its_rights() {
         }),
         ("sync", false, SYNC, |r, c| {
             r.done(c, &proto::Sync {}, vec![]).0
+        }),
+        ("read buffer", false, READ, |r, c| {
+            attach_page(r, c);
+            let m = proto::ReadBuffer {
+                offset: 0,
+                buffer_offset: 0,
+                length: 16,
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("write buffer", false, WRITE, |r, c| {
+            attach_page(r, c);
+            let m = proto::WriteBuffer {
+                offset: 0,
+                buffer_offset: 0,
+                length: 16,
+                flags: Flags(0),
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("durable write buffer", false, WRITE | SYNC, |r, c| {
+            attach_page(r, c);
+            let m = proto::WriteBuffer {
+                offset: 0,
+                buffer_offset: 0,
+                length: 16,
+                flags: Flags(write_flags::DURABLE),
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("publish", false, PUBLISH, |r, c| {
+            let root = r.root;
+            let token = token_of(r, root);
+            let m = proto::Publish {
+                mode: Below(proto::publish_mode::NO_REPLACE),
+                name: Name("named"),
+            };
+            r.done(c, &m, vec![token]).0
+        }),
+        // The token's directory needs the right too, not only the asker.
+        ("rename's target", true, RENAME, |r, c| {
+            let root = r.root;
+            let token = token_of(r, c);
+            let m = proto::Rename {
+                mode: Below(0),
+                old: Name("moved"),
+                new: Name("moved2"),
+            };
+            r.done(root, &m, vec![token]).0
+        }),
+        ("publish's target", true, PUBLISH, |r, c| {
+            let root = r.root;
+            let token = token_of(r, c);
+            let (s, unnamed) = r.try_open(root, "ignored", open_flags::UNNAMED, ANY);
+            assert_eq!(s, status::OK);
+            let m = proto::Publish {
+                mode: Below(proto::publish_mode::NO_REPLACE),
+                name: Name("named"),
+            };
+            r.done(unnamed, &m, vec![token]).0
         }),
         ("read directory", true, READ, |r, c| {
             status_of(&r.call(c, &proto::ReadDirectory { cookie: 0 }, vec![]))
@@ -867,8 +964,11 @@ fn a_reply_that_meets_no_memory_is_held_and_retried() {
 fn the_table_has_a_limit_and_the_connection_survives_it() {
     let mut r = rig();
     let root = r.root;
+    // The root's token, kept by the service: one more handle in the table.
+    let reply = r.call(root, &proto::GetToken {}, vec![]);
+    assert_eq!(status_of(&reply), status::OK);
     let mut last = 0;
-    for _ in 1..MAX_OPEN {
+    for _ in 2..MAX_OPEN {
         let end = r.net.channel();
         let m = proto::Clone { rights: Flags(ANY) };
         assert_eq!(r.done(root, &m, vec![end]).0, status::OK);
@@ -884,6 +984,10 @@ fn the_table_has_a_limit_and_the_connection_survives_it() {
     assert_eq!(s, status::TOO_MANY_OPEN);
     assert!(r.net.0.borrow().closed.contains(&end));
     assert_eq!(r.done(root, &proto::Status {}, vec![]).0, status::OK);
+    // A token's copy is a handle too: none at the limit, though the token is
+    // already made.
+    let reply = r.call(root, &proto::GetToken {}, vec![]);
+    assert_eq!(status_of(&reply), status::TOO_MANY_OPEN);
     // Closing one makes room.
     r.net.0.borrow_mut().closed.insert(last);
     r.run();

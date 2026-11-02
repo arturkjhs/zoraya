@@ -1,6 +1,7 @@
 # First boot of the roadmap's criterion, and every file command with its errors.
 ! panicked
 ! storage failed
+! VolumeGone
 < zosh$ 
 > ls\r
 < README
@@ -87,6 +88,12 @@
 < zosh$ 
 > cat ../hello.txt\r
 < zosh: cat: InvalidArgument
+< zosh$ 
+# A refused request leaves no handle behind: more than the shell's table holds.
+* 1100 cat ../x\r | zosh: cat: InvalidArgument
+< zosh$ 
+> cat hello.txt\r
+< hello from the filesystem
 < zosh$ 
 > mv\r
 < usage: mv

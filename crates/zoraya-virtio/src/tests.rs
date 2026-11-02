@@ -475,7 +475,7 @@ fn a_used_length_is_not_trusted() {
         d.notify();
         assert_eq!(d.collect(), Err(Error::Device), "{hostile:?} {kind:?}");
     }
-    // A short read that failed wrote nothing, and says so.
+    // The same device: a write's length is its status byte, and is right.
     let (device, d) = driver(Hostile::ShortRead);
     let mut d = d.unwrap();
     d.queue(&request(Kind::Write, 0, &[piece(0, 512)])).unwrap();
