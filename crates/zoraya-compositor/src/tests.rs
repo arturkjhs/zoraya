@@ -46,6 +46,8 @@ struct Fake {
     display: Option<u32>,
     display_size: (u32, u32),
     display_dead: bool,
+    /// The display driver's queue is full: flushes cannot be sent.
+    display_full: bool,
     /// What `Info` answers, and whether `Attach` gets no reply.
     info_status: u32,
     info_format: u32,
@@ -133,6 +135,9 @@ impl Platform for Fake {
         );
         // The display driver: a flush is answered at once, unless it hangs.
         if Some(end) == self.display && !self.peers[&end].gone {
+            if self.display_full {
+                return Outgoing::Full;
+            }
             let (header, _) = Header::decode(bytes).unwrap();
             assert_eq!(header.ordinal, 3, "only flushes are sent unasked");
             let (_, f) = decode::<display::Flush>(bytes, 0).unwrap();
@@ -1518,4 +1523,43 @@ fn frames_composed_during_a_flush_go_out_together() {
     s.f().send(display, done, vec![]);
     s.c.step();
     assert_eq!(s.f().flushes[1], ((x + 10) as u32, (y + 5) as u32, 21, 7));
+}
+
+/// Check of the ADR-0093 Decision, error 3: a driver that stops reading
+/// its channel, so no flush can even be sent, is hung too; the flush is
+/// tried again meanwhile.
+#[test]
+fn a_display_driver_whose_queue_stays_full_is_hung() {
+    let mut s = setup();
+    let (a, _) = s.window(10, 10, 1);
+    s.c.step();
+    s.c.step();
+    let display = s.f().display.unwrap();
+    s.f().flushes.clear();
+    s.f().display_full = true;
+    assert_eq!(s.commit(a, 0, 0, 1, 1), status::OK);
+    assert!(s.f().flushes.is_empty());
+    // Room again before the deadline: the waiting flush goes out by itself.
+    s.f().display_full = false;
+    s.c.step();
+    assert_eq!(s.f().flushes.len(), 1);
+    s.c.step();
+    // Full for good: dropped at the deadline, and the manager told.
+    s.f().display_full = true;
+    assert_eq!(s.commit(a, 1, 1, 1, 1), status::OK);
+    let m = s.manager;
+    s.f().take(m);
+    for _ in 0..(FLUSH_DEADLINE_NS / RETRY_NS + 2) {
+        if s.f().closed.contains(&display) {
+            break;
+        }
+        s.c.step();
+    }
+    assert!(s.f().closed.contains(&display));
+    assert!(
+        s.f()
+            .take(m)
+            .iter()
+            .any(|r| decode::<gui::DisplayHung>(r, 0).is_ok())
+    );
 }

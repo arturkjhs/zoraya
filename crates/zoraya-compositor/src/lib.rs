@@ -46,6 +46,8 @@ pub const CLIENT_KEY: u64 = 64;
 /// How long the display driver may take to answer a flush before the
 /// compositor drops it and tells the manager (ADR-0093, Decision).
 pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
+/// How often a flush that found the driver's queue full is tried again.
+pub const RETRY_NS: u64 = 10_000_000;
 
 /// The pointer: 1 is white, 2 is black, 0 is clear.
 const POINTER: [[u8; 8]; 11] = [
@@ -206,6 +208,8 @@ pub struct Compositor<P: Platform> {
     unflushed: Rect,
     /// When the one flush in flight was sent.
     in_flight: Option<u64>,
+    /// Since when a flush has been waiting for room in the driver's queue.
+    stuck_since: Option<u64>,
     created: u64,
     stats: Stats,
     message: Vec<u8>,
@@ -246,6 +250,7 @@ impl<P: Platform> Compositor<P> {
             damage: Rect::default(),
             unflushed: Rect::default(),
             in_flight: None,
+            stuck_since: None,
             created: 0,
             stats: Stats::default(),
             message: vec![0; 4096],
@@ -299,7 +304,13 @@ impl<P: Platform> Compositor<P> {
     /// and flush what changed, reply to the round's commits.
     pub fn step(&mut self) {
         let mut ready = Vec::new();
-        let deadline = self.in_flight.map(|sent| sent + FLUSH_DEADLINE_NS);
+        // The flush in flight has its deadline; a flush waiting for room in
+        // the driver's queue is tried again every 10 ms, under the same one.
+        let deadline = match (self.in_flight, self.stuck_since) {
+            (Some(sent), _) => Some(sent + FLUSH_DEADLINE_NS),
+            (None, Some(_)) => Some(self.platform.now() + RETRY_NS),
+            (None, None) => None,
+        };
         self.platform.wait(&mut ready, deadline);
         for key in ready {
             match key {
@@ -314,8 +325,9 @@ impl<P: Platform> Compositor<P> {
                 _ => {}
             }
         }
-        if let Some(sent) = self.in_flight
-            && self.platform.now() >= sent + FLUSH_DEADLINE_NS
+        let waiting = self.in_flight.or(self.stuck_since);
+        if let Some(since) = waiting
+            && self.platform.now() >= since + FLUSH_DEADLINE_NS
         {
             self.display_hung();
         }
@@ -328,6 +340,8 @@ impl<P: Platform> Compositor<P> {
         self.stats.hangs += 1;
         self.lose_display();
         let length = reply(&gui::DisplayHung {}, NO_REPLY, &mut self.out);
+        // If the manager's queue is full the report is lost, and the
+        // compositor goes on with no display until the manager attaches one.
         let _ = self.platform.write(self.manager, &self.out[..length], &[]);
     }
 
@@ -400,6 +414,7 @@ impl<P: Platform> Compositor<P> {
         // Everything, once: a new driver shows nothing until told.
         self.damage = self.damage.union(&self.screen());
         self.in_flight = None;
+        self.stuck_since = None;
         status::OK
     }
 
@@ -441,6 +456,7 @@ impl<P: Platform> Compositor<P> {
 
     fn lose_display(&mut self) {
         self.in_flight = None;
+        self.stuck_since = None;
         if let Some(end) = self.display.take() {
             self.platform.close(end);
         }
@@ -1060,9 +1076,15 @@ impl<P: Platform> Compositor<P> {
             Outgoing::Sent => {
                 self.unflushed = Rect::default();
                 self.in_flight = Some(self.platform.now());
+                self.stuck_since = None;
             }
-            // Tried again at the end of the next round.
-            Outgoing::Full => {}
+            // Tried again at the end of the next round, which comes within
+            // `RETRY_NS`; a driver that never makes room is hung.
+            Outgoing::Full => {
+                if self.stuck_since.is_none() {
+                    self.stuck_since = Some(self.platform.now());
+                }
+            }
             Outgoing::Closed => self.lose_display(),
         }
     }

@@ -101,6 +101,10 @@ fn the_client_protocol_has_no_path_for_pixels_or_input() {
     for ordinal in CLIENT_EVENTS {
         assert!(!MANAGER_REQUESTS.contains(&ordinal));
     }
+    for ordinal in MANAGER_EVENTS {
+        assert!(!CLIENT_REQUESTS.contains(&ordinal) && !CLIENT_EVENTS.contains(&ordinal));
+        assert!(!MANAGER_REQUESTS.contains(&ordinal));
+    }
     // Everything a client receives: no handles.
     assert_eq!(<DisplayReply as Message>::HANDLES, 0);
     assert_eq!(<Done as Message>::HANDLES, 0);

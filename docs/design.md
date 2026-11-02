@@ -455,7 +455,8 @@ How the in-QEMU tests run and report:
   drivers and compositor with `init`'s code, plays clients and a fake input driver against them (damage outside the
   surface, absurd sizes, a memory object smaller than declared, a buffer a child rewrites during composition, a client
   that never reads, a flood of commits, input and manager ordinals on a client channel, F12 and focus), kills and
-  restarts the GPU and input drivers, and measures a full redraw. Without a GPU it passes having done nothing.
+  restarts the GPU and input drivers, swaps in a display driver that never answers a flush (`guibench hang-display`)
+  and sees keys and frame callbacks go on and the driver reported hung, and measures a full redraw. Without a GPU it passes having done nothing.
 - `t_storage`, run by the test kernel, kills the driver idle clean, idle dirty, in a commit and in a read, then the
   service, and checks the durable file after each remount. It sends malformed messages and hostile paths, fills the
   open table, and never reads its replies.

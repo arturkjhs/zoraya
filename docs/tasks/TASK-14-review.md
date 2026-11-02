@@ -105,3 +105,24 @@ The first check found errors, so TASK-14 asks for one more check of the lines ch
 
 TASK-14 allows no third check. D1 and D2 are fixed and the suite passes, but **no check has reviewed those two
 fixes**.
+
+## The architect's decisions, and their check
+
+On 2026-11-02 the architect accepted ADR-0090, 0091, 0092, 0094, 0095, 0096 and 0097 as recommended, and ADR-0093
+with a change: a flush that does not block (its `### Decision`). The architect also asked whether the terminal shows
+bytes outside ASCII safely. It did for surrogates, values past U+10FFFF and broken sequences. It did not for overlong
+encodings and C1 controls, which were stored as characters: shown as boxes, and never acted on. Both now show as
+U+FFFD, with a test. One check of the changed lines (commit `9c8d772`), one round, by a subagent that wrote none of
+them, found 5 errors:
+
+| Id | Finding | Disposition |
+|---|---|---|
+| E1 | `init` acted on `DisplayHung` only when its manager wake-up came, and lost it when the report was read inside another manager call. | Fixed. The flag is looked at after every wake-up of `init`'s loop. |
+| E2 | One hang could restart the GPU driver twice: once for its exit and once for the report. | Fixed. After a restart, a report that came before it is read and dropped. |
+| E3 | A flush that met a full driver queue had no deadline, so a driver that stopped reading its channel was never found hung. | Fixed. Such a flush is tried again every 10 ms, under the same 2 s deadline. A host test covers it. |
+| E4 | The wire test of INV-0093-2 did not cover the new manager event ordinal. | Fixed. |
+| E5 | `design.md`'s list of `t_gui` cases lacked the hung driver. | Fixed. |
+
+Notes taken: a lost `DisplayHung` on a full manager queue is commented in the code. The backlog's table was split by
+a blank line, introduced in TASK-14; it is joined again. These fixes were not checked again: the architect asked for
+one round.

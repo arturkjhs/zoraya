@@ -119,6 +119,22 @@ fn gui_subscriptions(port: Handle, gui: &Gui) {
     }
 }
 
+/// Starts the GPU driver again, hands it to the compositor and watches it.
+fn restart_gpu(g: &mut Gui, port: Handle) {
+    if !g.restart_gpu() && g.gpud.is_some() {
+        println!("init: the compositor did not take the new GPU driver");
+    }
+    // A hang reported before this attach was the old driver's: it is
+    // handled by this restart, not by another (check of ADR-0093, error 2).
+    read_manager_events(g.manager);
+    let _ = take_display_hung();
+    // Watched whenever it runs, whatever the compositor said.
+    if let Some(r) = g.gpud {
+        println!("init: the GPU driver was restarted");
+        subscribe(port, r.process, KEY_GPU);
+    }
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let devices = scan();
@@ -202,26 +218,9 @@ fn main() -> i32 {
                     }
                     break Ended::Gui;
                 }
-                KEY_GPU | KEY_MANAGER => {
-                    let g = gui.as_mut().expect("a GUI");
-                    if packets[0].key == KEY_MANAGER {
-                        read_manager_events(g.manager);
-                        if !take_display_hung() {
-                            continue;
-                        }
-                        // ADR-0093, Decision: the compositor dropped a
-                        // display driver that missed its deadline.
-                        println!("init: the GPU driver hung");
-                    }
-                    if !g.restart_gpu() && g.gpud.is_some() {
-                        println!("init: the compositor did not take the new GPU driver");
-                    }
-                    // Watched whenever it runs, whatever the compositor said.
-                    if let Some(r) = g.gpud {
-                        println!("init: the GPU driver was restarted");
-                        subscribe(port, r.process, KEY_GPU);
-                    }
-                }
+                KEY_GPU => restart_gpu(gui.as_mut().expect("a GUI"), port),
+                // Read below, with every other wake-up.
+                KEY_MANAGER => {}
                 k if k >= KEY_INPUT => {
                     let g = gui.as_mut().expect("a GUI");
                     let i = (k - KEY_INPUT) as usize;
@@ -235,6 +234,17 @@ fn main() -> i32 {
                 }
                 KEY_COMPOSITOR | KEY_TERMINAL => break Ended::Gui,
                 _ => break Ended::Storage,
+            }
+            // ADR-0093, Decision: the compositor dropped a display driver
+            // that missed its deadline. The report may have been read here
+            // or inside any manager call, so the flag is looked at after
+            // every wake-up.
+            if let Some(g) = gui.as_mut() {
+                read_manager_events(g.manager);
+                if take_display_hung() {
+                    println!("init: the GPU driver hung");
+                    restart_gpu(g, port);
+                }
             }
         };
         end_job(shell);
