@@ -1,6 +1,6 @@
 # ADR-0063: The shell as first process, until `init`
 
-- **Status:** accepted
+- **Status:** superseded by ADR-0053
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0003, ADR-0043, ADR-0062
 - **Evidence:** CP-01, alternatives-postmortem.md#hubris
@@ -62,3 +62,5 @@ Recommended: **Option B**. It is a recommendation, not a decision. It is tempora
 ## Architect's decision
 
 Accepted as recommended, 2026-11-01. Decided by the architect.
+
+Superseded by ADR-0053, 2026-11-02. Decided by the architect.

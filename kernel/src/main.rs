@@ -10,7 +10,9 @@
 extern crate alloc;
 
 mod arch;
+mod channel;
 mod console;
+mod device;
 mod dtb;
 mod gic;
 mod irq;
@@ -101,6 +103,7 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
     let timer_irqs = info.timer.as_ref().expect("no timer in the device tree");
     timer::init(timer_irqs);
     console::init_input().expect("console input");
+    device::init(&fdt);
     // SAFETY: boot.rs installed the vectors, and the GIC is set up above.
     unsafe { arch::unmask_interrupts() };
 
@@ -116,15 +119,11 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
         let backing = memory::heap::stats().backing >> 10;
         println!("heap check: Box and Vec work, sum {sum}, {backing} KiB of heap");
         tick_check();
-        // The first process, until ADR-0053 (ADR-0063).
+        // The one process the kernel starts (ADR-0053).
         if let Some(uart) = info.uart.interrupt {
             console::enable_input(uart.intid, uart.edge);
         }
-        match process::spawn_first("zosh") {
-            Ok(process) => println!("first process ended: {:?}", process.wait()),
-            Err(e) => println!("first process did not start: {e:?}"),
-        }
-        shutdown()
+        run_first("init")
     }
 }
 
@@ -265,6 +264,16 @@ fn print_banner(
         "  {addr:#018x}-{:#018x}  device tree blob",
         addr + dtb_len - 1
     );
+}
+
+/// Starts the one process, and when it ends, reports that and powers off
+/// (ADR-0053). The test kernel ends this way too, to run this path.
+pub fn run_first(name: &str) -> ! {
+    match process::spawn_first(name) {
+        Ok(process) => println!("first process ended: {:?}", process.wait()),
+        Err(e) => println!("first process did not start: {e:?}"),
+    }
+    shutdown()
 }
 
 /// Powers off through PSCI `SYSTEM_OFF`; halts if that is unavailable or fails.

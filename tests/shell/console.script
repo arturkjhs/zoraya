@@ -5,9 +5,16 @@
 ! no such program: hello
 < heap check: Box and Vec work
 < timer check: 10 interrupts in
+< first process: init
 < zosh: type help
-# The kernel started nothing before the shell (INV-0063-1).
+# The kernel starts one process (INV-0053-1), and it runs nothing but the shell.
+o first process: 
 x hello from EL0
+< zosh$ 
+# The shell holds what init listed, and the port it made: no Device, by type
+# (INV-0053-2).
+> slots\r
+< slots: 1:console 2:job 3:directory 4:power 5:port\r\n
 < zosh$ 
 # A command and its output (and the receive interrupt).
 > echo a  b\r

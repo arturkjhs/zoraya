@@ -86,6 +86,7 @@ Nothing in this ADR depends on POSIX or `fork`: only the filesystem service spea
 - **INV-0054-6.** A restart after the death of a driver or a service keeps ADR-0010 rule 3. *Check:* in-QEMU restart test, then `zoraya-fsck` and a compare with the durable prefix.
 
 ## Open questions
+- As of TASK-12: INV-0054-4, -5 and -6 wait for the driver, in TASK-13.
 - QEMU's behaviour when a driver clears `VIRTIO_F_ACCESS_PLATFORM`, and whether virtio-iommu is cheaper than an SMMUv3 driver: test before Option D.
 - Cost of a block round trip through two processes.
 - Whether the kernel should reset the device itself when a driver dies, which needs device-specific knowledge.

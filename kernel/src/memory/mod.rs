@@ -4,6 +4,7 @@
 
 pub mod frames;
 pub mod heap;
+pub mod object;
 pub mod paging;
 pub mod stack;
 pub mod user;

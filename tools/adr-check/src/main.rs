@@ -464,7 +464,52 @@ fn check_invariants(adrs: &[Adr], adr_dir: &Path, out: &mut Outcome) -> Result<(
             format!("{id} is not in any ADR"),
         );
     }
+    check_counts(&text, out);
     Ok(())
+}
+
+/// INV-0071-1: the Counts table against the rows.
+fn check_counts(text: &str, out: &mut Outcome) {
+    let mut error = |message: String| out.error("INV-0071-1", "invariants.md", message);
+    let mut per_adr: BTreeMap<String, u32> = BTreeMap::new();
+    for line in text.lines().filter(|l| l.starts_with("| INV-")) {
+        if let Some(adr) = line.get(6..10) {
+            *per_adr.entry(adr.to_string()).or_default() += 1;
+        }
+    }
+    let Some((_, counts)) = text.split_once("## Counts") else {
+        error("no Counts section".to_string());
+        return;
+    };
+    let number = |line: &str| {
+        let cell = line.trim_end().trim_end_matches('|').rsplit('|').next()?;
+        cell.trim().trim_matches('*').parse::<u32>().ok()
+    };
+    let mut total = None;
+    let mut listed = BTreeSet::new();
+    for line in counts.lines() {
+        if line.starts_with("| **Total**") {
+            total = number(line);
+        } else if let Some(rest) = line.strip_prefix("| [ADR-")
+            && let Some(adr) = rest.get(..4)
+        {
+            listed.insert(adr.to_string());
+            let rows = per_adr.get(adr).copied().unwrap_or(0);
+            if number(line) != Some(rows) {
+                error(format!(
+                    "ADR-{adr}: Counts says {:?}, {rows} rows",
+                    number(line)
+                ));
+            }
+        }
+    }
+    for adr in per_adr.keys().filter(|adr| !listed.contains(*adr)) {
+        error(format!("ADR-{adr} has rows and no Counts row"));
+    }
+    let rows: u32 = per_adr.values().sum();
+    if total != Some(rows) {
+        error(format!("Total says {total:?}, {rows} rows"));
+    }
 }
 
 /// INV-0001-5.
@@ -582,7 +627,8 @@ mod tests {
     }
 
     const INVARIANTS: &str = "| ID | ADR | Rule | How | Status |\n|---|---|---|---|---|\n\
-        | INV-0001-1 | [ADR-0001](0001-t.md) | Rule one. | a script. | checked: `make adr-check` |\n";
+        | INV-0001-1 | [ADR-0001](0001-t.md) | Rule one. | a script. | checked: `make adr-check` |\n\
+        \n## Counts\n\n| [ADR-0001](0001-t.md) T | 1 |\n| **Total** | **1** |\n";
 
     /// A docs tree in a fresh temporary directory; returns its path.
     fn tree(name: &str, adr_text: &str, invariants: &str, index_status: &str) -> PathBuf {
@@ -777,6 +823,26 @@ mod tests {
         fs::remove_dir_all(&t).unwrap();
         assert!(out.errors.is_empty(), "{:?}", out.errors);
         assert!(out.unchecked.is_empty());
+    }
+
+    /// INV-0071-1.
+    #[test]
+    fn the_counts_must_match_the_rows() {
+        let good = adr("accepted", EV, BODY, "Accepted.");
+        expect_counts("c1", &good, &INVARIANTS.replace("T | 1 |", "T | 2 |"));
+        expect_counts("c2", &good, &INVARIANTS.replace("**1**", "**2**"));
+        expect_counts("c3", &good, &INVARIANTS.replace("## Counts", "## Other"));
+        expect_counts(
+            "c4",
+            &good,
+            &INVARIANTS.replace("| [ADR-0001](0001-t.md) T | 1 |\n", ""),
+        );
+    }
+
+    fn expect_counts(name: &str, text: &str, invariants: &str) {
+        let root = tree(name, text, invariants, "accepted");
+        let found = errors(&root);
+        assert!(found.iter().any(|e| e.contains("INV-0071-1")), "{found:?}");
     }
 
     #[test]

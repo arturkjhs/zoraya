@@ -72,6 +72,29 @@ pub fn alloc_zeroed() -> Result<Frame, OutOfFrames> {
     Ok(frame)
 }
 
+/// `count` contiguous zeroed frames.
+pub fn alloc_contig_zeroed(count: u64) -> Result<Frame, OutOfFrames> {
+    let first = FRAMES
+        .lock()
+        .as_mut()
+        .ok_or(OutOfFrames)?
+        .alloc_contig(count, 1)?;
+    // SAFETY: as in `alloc_zeroed`, for each frame of the run.
+    unsafe {
+        (phys_to_virt(first.addr()) as *mut u8).write_bytes(0, (count * FRAME_SIZE) as usize);
+    }
+    Ok(first)
+}
+
+/// Gives a run back.
+pub fn free_contig(first: Frame, count: u64) {
+    let mut frames = FRAMES.lock();
+    let frames = frames.as_mut().expect("frame allocator is up");
+    if let Err(e) = frames.free_contig(first, count) {
+        panic!("bad free of run at {:#x}: {e:?}", first.addr());
+    }
+}
+
 /// Gives a frame back. A bad free is a kernel bug, so it panics.
 pub fn free(frame: Frame) {
     let mut frames = FRAMES.lock();

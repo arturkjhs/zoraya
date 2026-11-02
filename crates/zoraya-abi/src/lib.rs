@@ -65,42 +65,50 @@ statuses! {
     DeadlineExceeded = 10,
     /// The port was closed during the wait.
     Cancelled = 11,
+    /// Nothing to read, or a queue is full: try when signalled.
+    WouldBlock = 12,
+    /// The other end of a channel is gone.
+    PeerClosed = 13,
+    /// The message stays; the sizes it needs have been reported.
+    BufferTooSmall = 14,
 }
 
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
 pub const MAX_HANDLES: u32 = 1024;
 const SLOT_BITS: u32 = 16;
+/// The last generation of a slot, 48 bits (ADR-0057).
+pub const MAX_GENERATION: u64 = (1 << 48) - 1;
 
 /// Names an object in a process's handle table: a slot and a generation
 /// (ADR-0040). Zero is never valid. A handle present at start has generation
 /// 0, so its value is its slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Handle(u32);
+pub struct Handle(u64);
 
 impl Handle {
-    pub const fn new(raw: u32) -> Option<Handle> {
+    pub const fn new(raw: u64) -> Option<Handle> {
         if raw == 0 { None } else { Some(Handle(raw)) }
     }
 
     /// The handle at `slot`, of the given generation.
-    pub const fn from_parts(slot: u32, generation: u16) -> Option<Handle> {
-        if slot == 0 || slot > MAX_HANDLES {
+    pub const fn from_parts(slot: u32, generation: u64) -> Option<Handle> {
+        if slot == 0 || slot > MAX_HANDLES || generation > MAX_GENERATION {
             None
         } else {
-            Some(Handle(slot | (generation as u32) << SLOT_BITS))
+            Some(Handle(slot as u64 | generation << SLOT_BITS))
         }
     }
 
-    pub const fn raw(self) -> u32 {
+    pub const fn raw(self) -> u64 {
         self.0
     }
 
     pub const fn slot(self) -> u32 {
-        self.0 & ((1 << SLOT_BITS) - 1)
+        (self.0 & ((1 << SLOT_BITS) - 1)) as u32
     }
 
-    pub const fn generation(self) -> u16 {
-        (self.0 >> SLOT_BITS) as u16
+    pub const fn generation(self) -> u64 {
+        self.0 >> SLOT_BITS
     }
 }
 
@@ -111,6 +119,8 @@ pub const JOB: Handle = Handle(2);
 pub const DIRECTORY: Handle = Handle(3);
 /// In the first process only (ADR-0062).
 pub const POWER: Handle = Handle(4);
+/// The first process's first device, then one a slot (ADR-0053).
+pub const FIRST_DEVICE_SLOT: u32 = 5;
 
 /// What a handle allows (ADR-0040). Rights only decrease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,7 +139,10 @@ impl Rights {
     pub const WRITE: Rights = Rights(1 << 8);
     pub const LOOKUP: Rights = Rights(1 << 9);
     pub const POWER: Rights = Rights(1 << 10);
-    const KNOWN: u32 = (1 << 11) - 1;
+    pub const MAP: Rights = Rights(1 << 11);
+    pub const INTERRUPT: Rights = Rights(1 << 12);
+    pub const DMA: Rights = Rights(1 << 13);
+    const KNOWN: u32 = (1 << 14) - 1;
 
     /// Unknown bits are refused (CP-11).
     pub const fn from_raw(raw: u32) -> Option<Rights> {
@@ -195,6 +208,21 @@ pub mod console_signals {
     pub const READABLE: u32 = 1 << 0;
 }
 
+/// Signal bits of a channel end (ADR-0050).
+pub mod channel_signals {
+    /// A message waits.
+    pub const READABLE: u32 = 1 << 0;
+    /// Any message would fit.
+    pub const WRITABLE: u32 = 1 << 1;
+    pub const PEER_CLOSED: u32 = 1 << 2;
+}
+
+/// Signal bits of an interrupt object (ADR-0054).
+pub mod interrupt_signals {
+    /// The line fired, and stays masked until `interrupt_ack`.
+    pub const INTERRUPT: u32 = 1 << 0;
+}
+
 const COMMON: Rights = Rights::DUPLICATE.union(Rights::TRANSFER);
 
 macro_rules! object_types {
@@ -240,6 +268,27 @@ object_types! {
             .union(Rights::WRITE)
             .union(Rights::WAIT);
     PowerObject "power" Waiting::NotWaitable, COMMON.union(Rights::POWER);
+    ChannelObject "channel"
+        Waiting::Signals(
+            channel_signals::READABLE | channel_signals::WRITABLE | channel_signals::PEER_CLOSED
+        ),
+        Rights::READ
+            .union(Rights::WRITE)
+            .union(Rights::WAIT)
+            .union(Rights::TRANSFER);
+    DeviceObject "device"
+        Waiting::NotWaitable,
+        COMMON
+            .union(Rights::MAP)
+            .union(Rights::INTERRUPT)
+            .union(Rights::DMA);
+    InterruptObject "interrupt"
+        Waiting::Signals(interrupt_signals::INTERRUPT),
+        Rights::WAIT.union(Rights::WRITE).union(Rights::TRANSFER);
+    PinObject "pin" Waiting::NotWaitable, Rights::DMA.union(Rights::TRANSFER);
+    MemoryObject "memory"
+        Waiting::NotWaitable,
+        COMMON.union(Rights::READ).union(Rights::WRITE);
     DirectoryObject "directory" Waiting::NotWaitable, COMMON.union(Rights::LOOKUP);
     ImageObject "image" Waiting::NotWaitable, COMMON.union(Rights::READ);
 }
@@ -461,6 +510,14 @@ pub enum Param {
     Opaque,
     /// A place in a listing: opaque to the caller (ADR-0061).
     Cookie,
+    /// A size or offset in a memory object (ADR-0051).
+    Size,
+    /// A pointer to a record of fixed size, in one register (ADR-0050).
+    Out,
+    /// Which range of a device: it names no object (ADR-0054).
+    RangeIndex,
+    /// A place in the caller's own space: it names no object (ADR-0051).
+    Address,
     /// Code to run. Only thread creation may take one (INV-0004-1).
     EntryPoint,
 }
@@ -490,14 +547,11 @@ impl Arg for Handle {
     const PARAM: Param = Param::Handle;
 
     fn decode(r: &[u64]) -> Result<Handle, Status> {
-        u32::try_from(r[0])
-            .ok()
-            .and_then(Handle::new)
-            .ok_or(Status::BadHandle)
+        Handle::new(r[0]).ok_or(Status::BadHandle)
     }
 
     fn encode(&self, r: &mut [u64]) {
-        r[0] = u64::from(self.0);
+        r[0] = self.0;
     }
 }
 
@@ -582,6 +636,127 @@ impl Arg for Cookie {
 
     fn encode(&self, r: &mut [u64]) {
         r[0] = self.0;
+    }
+}
+
+/// A size or offset in bytes (ADR-0051).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Size(pub u64);
+
+impl Arg for Size {
+    const PARAM: Param = Param::Size;
+
+    fn decode(r: &[u64]) -> Result<Size, Status> {
+        Ok(Size(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// Where a call writes a record of fixed size (ADR-0050).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Out(pub u64);
+
+impl Arg for Out {
+    const PARAM: Param = Param::Out;
+
+    fn decode(r: &[u64]) -> Result<Out, Status> {
+        Ok(Out(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// A range of a device (ADR-0054).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeIndex(pub u32);
+
+impl Arg for RangeIndex {
+    const PARAM: Param = Param::RangeIndex;
+
+    fn decode(r: &[u64]) -> Result<RangeIndex, Status> {
+        Ok(RangeIndex(word(r[0])?))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
+    }
+}
+
+/// An address in the caller's space (ADR-0051).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Address(pub u64);
+
+impl Arg for Address {
+    const PARAM: Param = Param::Address;
+
+    fn decode(r: &[u64]) -> Result<Address, Status> {
+        Ok(Address(r[0]))
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = self.0;
+    }
+}
+
+/// `memory_create`'s flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryFlags(u32);
+
+impl MemoryFlags {
+    pub const NONE: MemoryFlags = MemoryFlags(0);
+    /// Physically contiguous frames, for a device's queues (ADR-0051).
+    pub const CONTIGUOUS: MemoryFlags = MemoryFlags(1);
+
+    pub const fn is_contiguous(self) -> bool {
+        self.0 & 1 != 0
+    }
+}
+
+impl Arg for MemoryFlags {
+    const PARAM: Param = Param::Flags;
+
+    fn decode(r: &[u64]) -> Result<MemoryFlags, Status> {
+        match word(r[0])? {
+            raw @ (0 | 1) => Ok(MemoryFlags(raw)),
+            _ => Err(Status::InvalidArgument),
+        }
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
+    }
+}
+
+/// `memory_map`'s flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MapFlags(u32);
+
+impl MapFlags {
+    pub const READ: MapFlags = MapFlags(0);
+    pub const WRITE: MapFlags = MapFlags(1);
+
+    pub const fn is_write(self) -> bool {
+        self.0 & 1 != 0
+    }
+}
+
+impl Arg for MapFlags {
+    const PARAM: Param = Param::Flags;
+
+    fn decode(r: &[u64]) -> Result<MapFlags, Status> {
+        match word(r[0])? {
+            raw @ (0 | 1) => Ok(MapFlags(raw)),
+            _ => Err(Status::InvalidArgument),
+        }
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
     }
 }
 
@@ -809,6 +984,19 @@ syscalls! {
     24 ConsoleDropped console_dropped(console: Handle) false;
     25 DirectoryEntry directory_entry(directory: Handle, cookie: Cookie, entry: Bytes) false;
     26 PowerOff power_off(power: Handle) false;
+    27 MemoryCreate memory_create(size: Size, flags: MemoryFlags) false;
+    28 MemoryMap memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags) false;
+    29 MemoryUnmap memory_unmap(address: Address, length: Size) false;
+    30 ChannelCreate channel_create(ends: Bytes) false;
+    31 ChannelWrite channel_write(end: Handle, bytes: Bytes, handles: Bytes) false;
+    32 ChannelRead channel_read(end: Handle, bytes: Bytes, handles: Bytes, sizes: Out) false;
+    33 DeviceMap device_map(device: Handle, index: RangeIndex, out: Bytes) false;
+    34 DeviceInterrupt device_interrupt(device: Handle, index: RangeIndex) false;
+    35 InterruptAck interrupt_ack(interrupt: Handle) false;
+    36 DmaPin dma_pin(memory: Handle, device: Handle, out: Bytes) false;
+    37 DmaUnpin dma_unpin(pin: Handle) false;
+    38 DmaReleaseQuarantine dma_release_quarantine(device: Handle) false;
+    39 HandleType handle_type(handle: Handle) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
@@ -842,6 +1030,66 @@ impl<'a> DirectoryEntry<'a> {
         }
         let name = bytes.get(16..)?.get(..length)?;
         Some(DirectoryEntry { next, name })
+    }
+}
+
+/// One entry of a message's handle list: `spawn`'s, without the slot (ADR-0050).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelEntry {
+    pub handle: Handle,
+    pub rights: Rights,
+    pub transfer: spawn::Transfer,
+}
+
+impl ChannelEntry {
+    pub const SIZE: usize = 16;
+
+    pub fn to_bytes(self) -> [u8; ChannelEntry::SIZE] {
+        let mut b = [0; ChannelEntry::SIZE];
+        b[0..8].copy_from_slice(&self.handle.raw().to_le_bytes());
+        b[8..12].copy_from_slice(&self.rights.raw().to_le_bytes());
+        b[12..16].copy_from_slice(&(self.transfer as u32).to_le_bytes());
+        b
+    }
+
+    /// Total: any bytes give an entry or a status.
+    pub fn from_bytes(b: &[u8; ChannelEntry::SIZE]) -> Result<ChannelEntry, Status> {
+        let raw = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
+        let word = |at: usize| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        Ok(ChannelEntry {
+            handle: Handle::new(raw).ok_or(Status::BadHandle)?,
+            rights: Rights::from_raw(word(8)).ok_or(Status::InvalidArgument)?,
+            transfer: match word(12) {
+                0 => spawn::Transfer::Move,
+                1 => spawn::Transfer::Duplicate,
+                _ => return Err(Status::InvalidArgument),
+            },
+        })
+    }
+}
+
+/// What `channel_read` writes through its `sizes`: the next message's sizes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChannelSizes {
+    pub bytes: u32,
+    pub handles: u32,
+}
+
+impl ChannelSizes {
+    pub const SIZE: usize = 8;
+
+    pub fn to_bytes(self) -> [u8; ChannelSizes::SIZE] {
+        let mut b = [0; ChannelSizes::SIZE];
+        b[0..4].copy_from_slice(&self.bytes.to_le_bytes());
+        b[4..8].copy_from_slice(&self.handles.to_le_bytes());
+        b
+    }
+
+    pub fn from_bytes(b: &[u8; ChannelSizes::SIZE]) -> ChannelSizes {
+        ChannelSizes {
+            bytes: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            handles: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+        }
     }
 }
 

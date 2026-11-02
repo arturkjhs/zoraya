@@ -9,7 +9,7 @@ use zoraya_user::{console_write, raw_syscall};
 const WRITE: u64 = Syscall::ConsoleWrite as u64;
 
 fn expect(addr: u64, len: u64, status: Status) -> bool {
-    raw_syscall(WRITE, [u64::from(CONSOLE.raw()), addr, len, 0, 0, 0]).0 == status as u64
+    raw_syscall(WRITE, [CONSOLE.raw(), addr, len, 0, 0, 0]).0 == status as u64
 }
 
 #[unsafe(no_mangle)]

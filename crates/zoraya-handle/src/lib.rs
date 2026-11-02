@@ -1,9 +1,10 @@
 //! A process's handle table (ADR-0040).
 //!
 //! A slot's generation rises each time it is emptied, so a closed handle's
-//! value never names anything again. A slot at the last generation is retired
-//! when emptied. New handles go to slots never used, then next-fit from a
-//! cursor, which spreads reuse over the table.
+//! value does not name anything again within the system's working life
+//! (INV-0057-1). No slot retires: the generation wraps, after 2^48 closes of
+//! that slot. New handles go to slots never used, then next-fit from a cursor,
+//! which spreads reuse over the table.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -14,7 +15,7 @@ extern crate std;
 
 use alloc::vec::Vec;
 
-use zoraya_abi::{Handle, MAX_HANDLES, Rights, Status};
+use zoraya_abi::{Handle, MAX_GENERATION, MAX_HANDLES, Rights, Status};
 
 /// What a handle holds. `id` is unique for the kernel's life: a subscription
 /// belongs to it, so a moved or closed handle can end its subscriptions.
@@ -27,18 +28,8 @@ pub struct Entry<T> {
 
 #[derive(Debug)]
 struct Slot<T> {
-    generation: u16,
+    generation: u64,
     entry: Option<Entry<T>>,
-}
-
-impl<T> Slot<T> {
-    fn is_free(&self) -> bool {
-        self.entry.is_none() && !self.is_retired()
-    }
-
-    fn is_retired(&self) -> bool {
-        self.entry.is_none() && self.generation == u16::MAX
-    }
 }
 
 /// `slots[0]` is slot 1: slot 0 does not exist.
@@ -100,7 +91,7 @@ impl<T> Table<T> {
         let n = self.slots.len();
         (0..n)
             .map(|i| (self.cursor + i) % n)
-            .find(|&i| self.slots[i].is_free())
+            .find(|&i| self.slots[i].entry.is_none())
     }
 
     /// Makes room, so that the next [`Table::insert`] cannot fail.
@@ -112,6 +103,19 @@ impl<T> Table<T> {
             }
             Some(_) => Ok(()),
         }
+    }
+
+    /// Makes room for `count` more, so that that many [`Table::insert`]s
+    /// cannot fail.
+    pub fn reserve_many(&mut self, count: usize) -> Result<(), Status> {
+        if self.count + count > MAX_HANDLES as usize {
+            return Err(Status::LimitReached);
+        }
+        // `insert` appends while the table can grow, even past free slots.
+        let slots = (self.slots.len() + count).min(MAX_HANDLES as usize);
+        self.slots
+            .try_reserve(slots - self.slots.len())
+            .map_err(|_| Status::NoMemory)
     }
 
     /// Adds a handle. A full table is `LimitReached` and changes nothing.
@@ -162,7 +166,7 @@ impl<T> Table<T> {
         Ok(handle)
     }
 
-    /// Empties the slot. The value `handle` never names anything again.
+    /// Empties the slot. See INV-0057-1 for how long `handle` stays dead.
     pub fn remove(&mut self, handle: Handle) -> Option<Entry<T>> {
         let slot = self
             .slots
@@ -171,7 +175,7 @@ impl<T> Table<T> {
             return None;
         }
         let entry = slot.entry.take()?;
-        slot.generation = slot.generation.saturating_add(1);
+        slot.generation = slot.generation.wrapping_add(1) & MAX_GENERATION;
         self.count -= 1;
         Some(entry)
     }
@@ -185,11 +189,6 @@ impl<T> Table<T> {
             }
         }
         None
-    }
-
-    /// Slots that can no longer hold a handle.
-    pub fn retired(&self) -> usize {
-        self.slots.iter().filter(|s| s.is_retired()).count()
     }
 }
 
@@ -258,48 +257,73 @@ mod tests {
         }
     }
 
-    /// INV-0040-1 at the last generation: the slot retires instead of wrapping.
+    /// INV-0057-1: generations rise by one up to the 48-bit limit, then wrap,
+    /// and INV-0057-2: the slot stays in use at every generation.
     #[test]
-    fn a_slot_is_retired_at_its_last_generation() {
+    fn a_slot_wraps_and_is_never_lost() {
         let mut t = Table::new();
-        let first = t.insert_at(5, 0, ALL, 0).unwrap();
-        // Direct access: cycling 65,535 generations through the public path
-        // needs the table full, which `the_last_slot_retires` does.
-        t.slots[4].generation = u16::MAX - 1;
-        let h = Handle::from_parts(5, u16::MAX - 1).unwrap();
-        assert_eq!(t.get(first), None);
-        assert!(t.remove(h).is_some());
-        assert_eq!(t.slots[4].generation, u16::MAX);
-        assert_eq!(t.retired(), 1);
+        let a = t.insert(1, ALL, 1).unwrap();
+        let start = t.slots[0].generation;
+        t.remove(a).unwrap();
+        assert_eq!(t.slots[0].generation, start + 1);
+        // Direct access: 2^48 closes through the public path is the point of
+        // the arithmetic in INV-0057-1.
+        t.slots[0].generation = MAX_GENERATION - 1;
+        for expected in [MAX_GENERATION - 1, MAX_GENERATION, 0, 1] {
+            t.slots[0].entry = Some(Entry {
+                object: 3,
+                rights: ALL,
+                id: 3,
+            });
+            assert_eq!(t.slots[0].generation, expected);
+            let h = Handle::from_parts(1, expected).unwrap();
+            assert_eq!(t.get(h).unwrap().object, 3);
+            t.count += 1;
+            t.remove(h).unwrap();
+        }
+        assert!(t.is_empty());
     }
 
+    /// INV-0057-2 through the public path: a full table with one slot cycling
+    /// always finds it, and values do not repeat.
     #[test]
-    fn the_last_slot_retires() {
+    fn a_table_loses_no_slot_by_use() {
         let mut t = Table::new();
-        for i in 0..MAX_HANDLES {
-            t.insert(i, ALL, 0).unwrap();
-        }
-        let slot = Handle::from_parts(7, 0).unwrap();
-        t.remove(slot).unwrap();
-        // One free slot, so every insert takes it, through every generation.
+        let handles: std::vec::Vec<Handle> = (0..MAX_HANDLES as u64)
+            .map(|i| t.insert(i, ALL, i).unwrap())
+            .collect();
+        assert_eq!(t.insert(0, ALL, 0), Err(Status::LimitReached));
+        t.remove(handles[7]).unwrap();
         let mut seen = std::collections::HashSet::new();
-        seen.insert(slot.raw());
-        loop {
-            match t.insert(0, ALL, 0) {
-                Ok(h) => {
-                    assert_eq!(h.slot(), 7);
-                    assert!(seen.insert(h.raw()), "value reused: {h:?}");
-                    t.remove(h).unwrap();
-                }
-                Err(status) => {
-                    assert_eq!(status, Status::LimitReached);
-                    break;
-                }
-            }
+        seen.insert(handles[7].raw());
+        // Past where a 16-bit generation retired the slot.
+        for _ in 0..70_000 {
+            let h = t.insert(1, ALL, 1).unwrap();
+            assert_eq!(h.slot(), 8);
+            assert!(seen.insert(h.raw()), "value reused: {h:?}");
+            t.remove(h).unwrap();
         }
-        assert_eq!(seen.len(), 65_535);
-        assert_eq!(t.retired(), 1);
         assert_eq!(t.len(), MAX_HANDLES as usize - 1);
+        assert_eq!(t.get(handles[7]), None);
+    }
+
+    /// `reserve_many`'s promise: that many inserts take no memory, with free
+    /// slots in the table or not.
+    #[test]
+    fn reserving_covers_appended_slots() {
+        let mut t = Table::new();
+        let handles: std::vec::Vec<Handle> =
+            (0..1000u64).map(|i| t.insert(i, ALL, i).unwrap()).collect();
+        for h in &handles[10..] {
+            t.remove(*h).unwrap();
+        }
+        t.slots.shrink_to_fit();
+        t.reserve_many(10).unwrap();
+        assert!(t.slots.capacity() >= t.slots.len() + 10);
+        assert_eq!(
+            t.reserve_many(MAX_HANDLES as usize),
+            Err(Status::LimitReached)
+        );
     }
 
     /// INV-0040-3.

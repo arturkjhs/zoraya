@@ -241,7 +241,7 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   its own thread: anyone else sets the exit it wants and wakes it, and it acts on that at its next return to EL0, or
   before its first instruction. At exit it releases its memory, ASID and handles, and stays as a zombie holding only
   its `ExitRecord` until its last handle goes.
-- **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u32` of slot and generation, 1024 slots, a rights
+- **Handles (`crates/zoraya-handle`, `kernel/src/object.rs`).** A `u64` of 16 bits of slot and 48 of generation (ADR-0057), 1024 slots, a rights
   mask that only decreases. Port handles have no `DUPLICATE`, so closing one closes the port.
 - **Jobs (`kernel/src/job.rs`).** A tree, at most 32 deep, with one lock over membership and walks. `job_signal` and
   `job_kill` cover the tree; a killed tree refuses new processes. `TERMINATED` means no live process in the tree.
@@ -304,10 +304,11 @@ stage-4 service will wrap `Volume` and forward its failure report.
 - clippy with warnings as errors (host crates, kernel, test kernel);
 - the host tests;
 - `make adr-check`;
-- the in-QEMU tests in seven machine configurations;
+- the in-QEMU tests in seven machine configurations, with an empty virtio-blk device attached;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
-  0; `tests/shell/leak.script` runs more programs than a handle table has slots.
+  0; `tests/shell/leak.script` runs more programs than a handle table has slots, and `tests/shell/exit.script` ends the
+  shell.
 
 | Label | Accelerator | Machine | Checks beyond the test list |
 |---|---|---|---|
@@ -362,12 +363,30 @@ Coverage-guided fuzz targets for the same decoder are in `fuzz/` (nightly, cargo
 commands) and against malformed input: every truncation, bad header fields, structure and string errors, and 30,000
 deterministic random mutations.
 
+## Channels, memory and devices
+
+- **Memory objects (`kernel/src/memory/object.rs`, ADR-0051).** Frames committed and zeroed at creation, contiguous on
+  request, held by handles, mappings and pins. The kernel chooses addresses in a window of the user range, with an
+  unmapped page between mappings. `memory_unmap` ends one whole mapping: the range must be exactly that mapping's.
+- **Channels (`crates/zoraya-channel`, `kernel/src/channel.rs`, ADR-0050).** Two ends with bounded queues, all or
+  nothing on write, a message left in place on any refused read. An end has one handle. Closing runs a work list
+  through the messages, so a deep chain takes no stack.
+- **Protocols (`crates/zoraya-protocol`, `zoraya-proto-block`, `zoraya-proto-file`, ADR-0052).** The `protocol!` macro
+  and a flat wire format with total decoders. The servers come with TASK-13.
+- **`init` (`user/src/bin/init.rs`, ADR-0053).** The one process the kernel starts, with the console, its own job, the
+  ramdisk directory, `Power` at slot 4 and `Device` handles from slot 5. It starts `zosh` in a sub-job with only what
+  the shell needs, and turns the machine off when the shell ends.
+- **Devices (`kernel/src/device.rs`, ADR-0054, ADR-0070).** One `Device` per page of `virtio,mmio` transports. A window
+  has one holder at a time. An interrupt object masks its line when it fires, until `interrupt_ack`. `dma_pin` writes
+  the object's physical runs as device addresses, and `dma_unpin` ends the pin and its handle. A pin that ends any
+  other way leaves its frames quarantined. `dma_release_quarantine` is refused while the device has a mapping or a live
+  pin, and otherwise the kernel resets each transport, sees Status 0, and only then frees the frames.
+
 ## Console input and the first process
 
 - **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
-  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060, proposed).
-- **First process.** The normal kernel starts `zosh` alone, with ADR-0043's handles and `Power` at slot 4, and powers
-  off if it ends (ADR-0062, ADR-0063, proposed).
+  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060).
+- **First process.** `init` (ADR-0053). The kernel reports it and powers off if it ends.
 
 ## Using the shell
 
@@ -375,7 +394,7 @@ deterministic random mutations.
 
 - `ls` lists the ramdisk. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
-- `echo`, `uptime`, `exit-code` (the last record) and `help` are built in. `exit` alone ends the shell, and the
+- `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's own handles, by type) and `help` are built in. `exit` alone ends the shell, and the
   kernel then powers off; `exit <n>` is the demonstration program.
 - Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it,
   which is more than TASK-11 asked: a job can ignore `Interrupt`.
@@ -390,6 +409,13 @@ deterministic random mutations.
 
 ## Known limitations
 
+- **Masked interrupts.** System calls run with interrupts masked, and some scale with what they touch. Under HVF on
+  128 MiB: `memory_create` of all memory about 9 ms, and closing that object about 4 ms; closing a chain of 20,000
+  channel ends about 11 ms. `memory_map`, `dma_pin`, an address space's teardown and a device reset, up to 100 ms a
+  transport, are the same kind. ADR-0056 must bound them before untrusted code runs.
+- **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
+- **Handles in messages.** A protocol decoder checks how many handles a message has. A server must then check their
+  types with `handle_type` (ADR-0072).
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code
   runs in Zoraya until [ADR-0056](adr/0056-job-memory-accounting.md) is accepted and implemented. At stage 4 every
   process is trusted.
@@ -483,6 +509,7 @@ kernel/                   zoraya-kernel: boot, arch, machine-dependent code only
   src/sync.rs             the kernel's lock
   src/sched.rs            threads and the scheduler
   src/process.rs, job.rs, object.rs, port.rs  processes, jobs, handle contents, ports
+  src/channel.rs, device.rs  channels; device, interrupt and pin objects
   src/syscall.rs, ramdisk.rs  system calls, the embedded ramdisk
   src/psci.rs             SYSTEM_OFF
   src/panic.rs            panic handler
@@ -497,6 +524,9 @@ crates/                   no_std, host-tested
   zoraya-elf/, zoraya-ramdisk/  total parsers for programs and the ramdisk
   zoraya-handle/          handle tables: slots, generations, rights
   zoraya-console/         the console input ring
+  zoraya-channel/         channel queues, bounds and the no-cycle rule
+  zoraya-protocol/        the wire format and the protocol! macro
+  zoraya-proto-block/, zoraya-proto-file/  the block and file protocols
   zoraya-shell/           zosh's line editor, parser and reports
   zoraya-events/          signals, port subscriptions and ready lists
   zoraya-rt/              the runtime of Zoraya programs (aarch64 only)

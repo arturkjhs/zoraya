@@ -6,7 +6,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use zoraya_abi::{ObjectType, Waiting};
 use zoraya_events::SourceId;
 
+use crate::channel::{self, Pair};
+use crate::device::{Device, Interrupt, Pin};
 use crate::job::Job;
+use crate::memory::object::MemoryObject;
 use crate::port::{self, Port};
 use crate::process::Process;
 
@@ -23,28 +26,62 @@ pub struct Image {
 #[derive(Clone)]
 pub enum Object {
     Console,
-    // Only the normal kernel starts a first process, which holds this.
-    #[cfg_attr(feature = "qemu-test", allow(dead_code))]
     Power,
     Directory,
     Image(Image),
     Process(Arc<Process>),
     Job(Arc<Job>),
     Port(Arc<Port>),
+    Memory(Arc<MemoryObject>),
+    Device(Arc<Device>),
+    Interrupt(Arc<Interrupt>),
+    Pin(Arc<Pin>),
+    /// One end of a channel: `end` is 0 or 1.
+    Channel(Arc<Pair>, usize),
 }
 
 impl Object {
+    /// Its row in `OBJECT_TYPES`.
+    pub fn type_index(&self) -> u64 {
+        let name = match self {
+            Object::Console => "console",
+            Object::Power => "power",
+            Object::Directory => "directory",
+            Object::Image(_) => "image",
+            Object::Process(_) => "process",
+            Object::Job(_) => "job",
+            Object::Port(_) => "port",
+            Object::Memory(_) => "memory",
+            Object::Device(_) => "device",
+            Object::Interrupt(_) => "interrupt",
+            Object::Pin(_) => "pin",
+            Object::Channel(..) => "channel",
+        };
+        let row = zoraya_abi::OBJECT_TYPES
+            .iter()
+            .position(|(n, _, _)| *n == name);
+        row.map_or(u64::MAX, |row| row as u64)
+    }
+
     /// Where its signals are, and which bits exist: the kernel's side of
     /// ADR-0006 rule 1.
     pub fn signals(&self) -> Option<(SourceId, u32)> {
         let (source, waiting) = match self {
+            Object::Channel(pair, end) => (pair.source(*end), zoraya_abi::ChannelObject::WAITING),
+            Object::Interrupt(i) => (i.source(), zoraya_abi::InterruptObject::WAITING),
             Object::Process(p) => (p.source(), zoraya_abi::ProcessObject::WAITING),
             Object::Job(j) => (j.source(), zoraya_abi::JobObject::WAITING),
             Object::Console => (
                 crate::console::source()?,
                 zoraya_abi::ConsoleObject::WAITING,
             ),
-            Object::Power | Object::Directory | Object::Image(_) | Object::Port(_) => {
+            Object::Power
+            | Object::Directory
+            | Object::Image(_)
+            | Object::Port(_)
+            | Object::Memory(_)
+            | Object::Device(_)
+            | Object::Pin(_) => {
                 return None;
             }
         };
@@ -70,10 +107,12 @@ pub fn end_subscriptions(entry: &Entry) {
     }
 }
 
-/// Ends a handle. A port has one handle, so that closes the port.
+/// Ends a handle. A port or a channel end has one handle, so that closes it.
 pub fn close(entry: Entry) {
     end_subscriptions(&entry);
-    if let Object::Port(port) = &entry.object {
-        port.close();
+    match &entry.object {
+        Object::Port(port) => port.close(),
+        Object::Channel(pair, end) => channel::close(pair, *end),
+        _ => {}
     }
 }

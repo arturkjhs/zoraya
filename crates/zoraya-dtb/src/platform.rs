@@ -265,6 +265,29 @@ pub fn console_uart<'a>(fdt: &Fdt<'a>) -> Result<Uart<'a>, PlatformError> {
     })
 }
 
+/// A `virtio,mmio` transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VirtioTransport {
+    pub base: u64,
+    pub size: u64,
+    pub interrupt: Interrupt,
+}
+
+/// Every enabled `virtio,mmio` node with a range and an interrupt in GIC form.
+pub fn virtio_transports<'a>(fdt: &Fdt<'a>) -> impl Iterator<Item = VirtioTransport> + 'a {
+    fdt.nodes().filter_map(|node| {
+        if !node.is_compatible("virtio,mmio") || !node.is_enabled() {
+            return None;
+        }
+        let reg = first_reg(&node).filter(|r| r.size != 0)?;
+        Some(VirtioTransport {
+            base: reg.address,
+            size: reg.size,
+            interrupt: Interrupt::from_property(&node, 0)?,
+        })
+    })
+}
+
 /// Every non-empty `reg` range of every enabled `device_type = "memory"` node.
 /// A range that wraps past 2^64 is dropped.
 pub fn memory_regions(fdt: &Fdt<'_>) -> RegionList {

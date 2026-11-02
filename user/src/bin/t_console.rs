@@ -5,11 +5,11 @@
 //! `ab` and 254 of `c` in the console's ring. It ends with the number of names it listed.
 
 use zoraya_abi::{
-    CONSOLE, DIRECTORY, DirectoryEntry, Mode, POWER, Packet, Rights, Status, console_signals,
+    CONSOLE, DIRECTORY, DirectoryEntry, JOB, Mode, POWER, Packet, Rights, Status, console_signals,
 };
 use zoraya_user::{
     assert_err, console_dropped, console_read, directory_entry, handle_close, handle_duplicate,
-    port_create, port_subscribe, port_wait, power_off, raw_syscall,
+    handle_type, port_create, port_subscribe, port_wait, power_off, raw_syscall,
 };
 
 /// `console_read`'s number.
@@ -24,7 +24,7 @@ fn input() {
     assert_eq!(packets[0].signals, console_signals::READABLE);
 
     // An address nothing maps loses no input.
-    let call = [u64::from(CONSOLE.raw()), 0x10, 8, 0, 0, 0];
+    let call = [CONSOLE.raw(), 0x10, 8, 0, 0, 0];
     assert_eq!(raw_syscall(CONSOLE_READ, call).0, Status::BadAddress as u64);
 
     let write_only = handle_duplicate(CONSOLE, Rights::WRITE).expect("duplicate");
@@ -81,6 +81,17 @@ fn listing() -> i32 {
     seen
 }
 
+/// INV-0072-1: each handle's type.
+fn types() {
+    assert_eq!(handle_type(CONSOLE), Ok("console"));
+    assert_eq!(handle_type(JOB), Ok("job"));
+    assert_eq!(handle_type(DIRECTORY), Ok("directory"));
+    let port = port_create().expect("port");
+    assert_eq!(handle_type(port), Ok("port"));
+    handle_close(port).expect("close");
+    assert_err!(handle_type(port), Status::BadHandle);
+}
+
 /// INV-0062-1, INV-0062-2.
 fn power() {
     assert_eq!(power_off(POWER), Status::BadHandle, "no such handle here");
@@ -90,6 +101,7 @@ fn power() {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     input();
+    types();
     let names = listing();
     power();
     names

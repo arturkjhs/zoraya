@@ -11,6 +11,10 @@ name = "zoraya-adr-check"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-channel"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-console"
 version = "0.1.0"
 
@@ -68,6 +72,7 @@ name = "zoraya-kernel"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-channel",
  "zoraya-console",
  "zoraya-dtb",
  "zoraya-elf",
@@ -104,6 +109,24 @@ version = "0.1.0"
 dependencies = [
  "zoraya-dtb",
 ]
+
+[[package]]
+name = "zoraya-proto-block"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-file"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-protocol"
+version = "0.1.0"
 
 [[package]]
 name = "zoraya-ramdisk"

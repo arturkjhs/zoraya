@@ -4,11 +4,12 @@
 //! of those bytes.
 //!
 //! ```text
-//! magic "ZSP1"    4 bytes
+//! magic "ZSP2"    4 bytes
 //! header size     u32
 //! flags           u32
-//! job, image      u32 each
-//! group           u32, 0 for none
+//! reserved        u32, zero
+//! job, image      u64 each
+//! group           u64, 0 for none
 //! argc, envc      u32 each
 //! handle count    u32
 //! reserved        u32, zero
@@ -23,11 +24,11 @@
 
 use crate::{Disposition, Handle, MAX_HANDLES, REQUEST_KINDS, Rights, Status};
 
-const MAGIC: &[u8; 4] = b"ZSP1";
+const MAGIC: &[u8; 4] = b"ZSP2";
 /// The size of this version's header.
-pub const HEADER_SIZE: usize = 44 + REQUEST_KINDS;
-const DISPOSITIONS: usize = 40;
-const ENTRY_SIZE: usize = 16;
+pub const HEADER_SIZE: usize = 60 + REQUEST_KINDS;
+const DISPOSITIONS: usize = 56;
+const ENTRY_SIZE: usize = 24;
 
 /// Longest `spawn` buffer.
 pub const MAX_SPAWN_SIZE: usize = 64 * 1024;
@@ -63,6 +64,11 @@ pub struct HandleEntry {
     pub handle: Handle,
     pub rights: Rights,
     pub transfer: Transfer,
+}
+
+fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
+    let b = bytes.get(at..at.checked_add(8)?)?;
+    Some(u64::from_le_bytes(b.try_into().ok()?))
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
@@ -148,16 +154,16 @@ pub struct SpawnRequest<'a> {
 fn entry(bytes: &[u8]) -> Result<HandleEntry, Status> {
     let bad = Status::InvalidArgument;
     let slot = u32_at(bytes, 0).ok_or(bad)?;
-    if slot == 0 || slot > MAX_HANDLES {
+    if slot == 0 || slot > MAX_HANDLES || u32_at(bytes, 4) != Some(0) {
         return Err(bad);
     }
     Ok(HandleEntry {
         slot,
-        handle: u32_at(bytes, 4)
+        handle: u64_at(bytes, 8)
             .and_then(Handle::new)
             .ok_or(Status::BadHandle)?,
-        rights: u32_at(bytes, 8).and_then(Rights::from_raw).ok_or(bad)?,
-        transfer: match u32_at(bytes, 12).ok_or(bad)? {
+        rights: u32_at(bytes, 16).and_then(Rights::from_raw).ok_or(bad)?,
+        transfer: match u32_at(bytes, 20).ok_or(bad)? {
             0 => Transfer::Move,
             1 => Transfer::Duplicate,
             _ => return Err(bad),
@@ -174,34 +180,36 @@ impl<'a> SpawnRequest<'a> {
             return Err(bad);
         }
         let field = |at: usize| u32_at(bytes, at).ok_or(bad);
+        let wide = |at: usize| u64_at(bytes, at).ok_or(bad);
         if field(4)? as usize != HEADER_SIZE {
             return Err(bad);
         }
         let flags = field(8)?;
-        if flags & !START_SUSPENDED != 0 || field(36)? != 0 || field(HEADER_SIZE - 4)? != 0 {
+        let reserved = field(12)? | field(HEADER_SIZE - 4)? | field(52)?;
+        if flags & !START_SUSPENDED != 0 || reserved != 0 {
             return Err(bad);
         }
         let mut dispositions = [Disposition::Terminate; REQUEST_KINDS];
         for (i, d) in dispositions.iter_mut().enumerate() {
             *d = Disposition::from_raw(u32::from(bytes[DISPOSITIONS + i])).ok_or(bad)?;
         }
-        let count = field(32)? as usize;
+        let count = field(48)? as usize;
         if count > MAX_SPAWN_HANDLES {
             return Err(bad);
         }
         let (entries, rest) = bytes[HEADER_SIZE..]
             .split_at_checked(count * ENTRY_SIZE)
             .ok_or(bad)?;
-        let (argv, rest) = Strings::split(rest, field(24)? as usize).ok_or(bad)?;
-        let (envp, rest) = Strings::split(rest, field(28)? as usize).ok_or(bad)?;
+        let (argv, rest) = Strings::split(rest, field(40)? as usize).ok_or(bad)?;
+        let (envp, rest) = Strings::split(rest, field(44)? as usize).ok_or(bad)?;
         if !rest.is_empty() {
             return Err(bad);
         }
         let request = SpawnRequest {
             suspended: flags & START_SUSPENDED != 0,
-            job: Handle::new(field(12)?).ok_or(Status::BadHandle)?,
-            image: Handle::new(field(16)?).ok_or(Status::BadHandle)?,
-            group: Handle::new(field(20)?),
+            job: Handle::new(wide(16)?).ok_or(Status::BadHandle)?,
+            image: Handle::new(wide(24)?).ok_or(Status::BadHandle)?,
+            group: Handle::new(wide(32)?),
             dispositions,
             entries,
             argv,
@@ -288,9 +296,15 @@ impl<'a> Encoder<'a> {
         e.bytes[..HEADER_SIZE].fill(0);
         e.bytes[..4].copy_from_slice(MAGIC);
         e.set(4, HEADER_SIZE as u32);
-        e.set(12, job.raw());
-        e.set(16, image.raw());
+        e.set_wide(16, job.raw());
+        e.set_wide(24, image.raw());
         e
+    }
+
+    fn set_wide(&mut self, at: usize, value: u64) {
+        if !self.overflow {
+            self.bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+        }
     }
 
     fn set(&mut self, at: usize, value: u32) {
@@ -315,7 +329,7 @@ impl<'a> Encoder<'a> {
     }
 
     pub fn group(&mut self, group: Handle) -> &mut Self {
-        self.set(20, group.raw());
+        self.set_wide(32, group.raw());
         self
     }
 
@@ -332,6 +346,7 @@ impl<'a> Encoder<'a> {
             self.overflow = true;
         }
         self.push(&entry.slot.to_le_bytes());
+        self.push(&[0; 4]);
         self.push(&entry.handle.raw().to_le_bytes());
         self.push(&entry.rights.raw().to_le_bytes());
         self.push(&(entry.transfer as u32).to_le_bytes());
@@ -359,9 +374,9 @@ impl<'a> Encoder<'a> {
 
     /// The length of the finished buffer, or `None` if anything did not fit.
     pub fn finish(&mut self) -> Option<usize> {
-        self.set(24, self.args as u32);
-        self.set(28, self.envs as u32);
-        self.set(32, self.entries as u32);
+        self.set(40, self.args as u32);
+        self.set(44, self.envs as u32);
+        self.set(48, self.entries as u32);
         (!self.overflow).then_some(self.length)
     }
 }

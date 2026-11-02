@@ -1,6 +1,6 @@
 //! Interrupt dispatch (ADR-0024's table for IRQ).
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use crate::gic;
 
@@ -11,6 +11,7 @@ const NO_HANDLER: usize = 0;
 static HANDLERS: [AtomicUsize; gic::FIRST_SPECIAL as usize] =
     [const { AtomicUsize::new(NO_HANDLER) }; gic::FIRST_SPECIAL as usize];
 static SPURIOUS: AtomicU64 = AtomicU64::new(0);
+static CURRENT: AtomicU32 = AtomicU32::new(0);
 
 /// Sets the handler for `intid` and enables it. The handler runs with IRQ
 /// masked and must leave the device no longer asserting the interrupt.
@@ -20,8 +21,12 @@ pub fn register(intid: u32, edge: bool, handler: fn()) {
     gic::enable(intid, edge);
 }
 
+/// The interrupt being handled.
+pub fn current() -> u32 {
+    CURRENT.load(Ordering::Relaxed)
+}
+
 /// Disables `intid` and removes its handler.
-#[cfg(feature = "qemu-test")]
 pub fn unregister(intid: u32) {
     gic::disable(intid);
     HANDLERS[intid as usize].store(NO_HANDLER, Ordering::Release);
@@ -54,6 +59,7 @@ pub fn dispatch() -> Result<(), Unexpected> {
     }
     // SAFETY: a non-zero entry was stored from a `fn()` by `register`.
     let handler: fn() = unsafe { core::mem::transmute(handler) };
+    CURRENT.store(intid, Ordering::Relaxed);
     handler();
     gic::end_of_interrupt(intid);
     Ok(())

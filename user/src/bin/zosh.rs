@@ -8,17 +8,17 @@ use core::fmt::{self, Write};
 
 use zoraya_abi::spawn::Encoder;
 use zoraya_abi::{
-    CONSOLE, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB, JobFlags, Mode,
-    POWER, Packet, RequestKind, Rights, Status, console_signals, job_signals,
+    CONSOLE, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB, JobFlags,
+    MAX_HANDLES, Mode, POWER, Packet, RequestKind, Rights, Status, console_signals, job_signals,
 };
 use zoraya_shell::{
     CTRL_BACKSLASH, CTRL_C, Editor, Key, Report, Words, job_number, request_flag, split,
 };
 use zoraya_user::{
     clock_monotonic, console_dropped, console_entry, console_read, console_write, directory_entry,
-    directory_lookup, dup, handle_close, job_create, job_kill, job_signal, port_create,
-    port_subscribe, port_unsubscribe, port_wait, power_off, print, println, process_exit,
-    process_exit_record, spawn,
+    directory_lookup, dup, handle_close, handle_type, job_create, job_kill, job_signal,
+    port_create, port_subscribe, port_unsubscribe, port_wait, power_off, print, println,
+    process_exit, process_exit_record, spawn,
 };
 
 const PROMPT: &str = "zosh$ ";
@@ -175,8 +175,9 @@ impl Shell {
             }
         };
         let words = parsed.as_slice();
-        const BUILT_IN: [&str; 9] = [
+        const BUILT_IN: [&str; 10] = [
             "help",
+            "slots",
             "ls",
             "echo",
             "uptime",
@@ -213,6 +214,15 @@ impl Shell {
                 None => println!("no program has ended"),
             },
             ["jobs"] => self.list_jobs(),
+            ["slots"] => {
+                print!("slots:");
+                for slot in 1..=u64::from(MAX_HANDLES) {
+                    if let Some(Ok(name)) = Handle::new(slot).map(handle_type) {
+                        print!(" {slot}:{name}");
+                    }
+                }
+                println!();
+            }
             ["wait"] => {
                 if self.jobs.iter().any(Option::is_some) {
                     self.waiting = Waiting::All;
@@ -402,7 +412,7 @@ impl Shell {
 fn help() {
     println!("ls  run <program> [args...]  <program> [args...]  <command> &");
     println!("jobs  wait [%n]  kill [-int|-term|-hup|-quit] %n");
-    println!("echo  uptime  exit-code  exit  poweroff  help");
+    println!("echo  uptime  exit-code  slots  exit  poweroff  help");
     println!("Ctrl-C interrupts the foreground job, or clears the line. Ctrl-\\ sends Quit.");
 }
 

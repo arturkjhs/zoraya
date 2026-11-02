@@ -9,6 +9,7 @@
 //! = N             send N bytes of 'x' at once
 //! ! TEXT          fail if TEXT appears anywhere in the output, before or after
 //! x TEXT          fail if TEXT lies between the last two matches
+//! o TEXT          fail unless TEXT has appeared exactly once so far
 //! ~ MS TEXT       for MS milliseconds, fail if TEXT arrives
 //! @ KEYS | TEXT   send KEYS every 200 ms until TEXT appears
 //! * N KEYS | TEXT N times: send KEYS and wait for TEXT
@@ -31,6 +32,7 @@ pub enum Step {
     Forbid(String),
     /// Not between the last two matches.
     Absent(String),
+    Once(String),
     Quiet(u64, String),
     Until(Vec<u8>, String),
     Repeat(usize, Vec<u8>, String),
@@ -90,6 +92,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "<" => Step::Expect(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             ">" => Step::Send(unescape(rest).map_err(|e| format!("line {number}: {e}"))?),
             "x" => Step::Absent(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
+            "o" => Step::Once(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "~" => {
                 let (ms, text) = rest
                     .split_once(' ')
@@ -157,6 +160,11 @@ impl Seen {
             }
             None => false,
         }
+    }
+
+    /// How many times `text` has appeared.
+    pub fn count(&self, text: &str) -> usize {
+        self.text.matches(text).count()
     }
 
     /// True if `text` lies between the last two matches.
@@ -269,6 +277,12 @@ fn drive(
             Step::Absent(text) => {
                 if link.seen.between(text) {
                     return Err(format!("{text:?} appeared where it must not"));
+                }
+            }
+            Step::Once(text) => {
+                let count = link.seen.count(text);
+                if count != 1 {
+                    return Err(format!("{text:?} appeared {count} times"));
                 }
             }
             Step::Quiet(ms, text) => {
@@ -433,6 +447,12 @@ mod tests {
         let script = "printf 'a b c'";
         assert!(shell(script, "< a\n< c\nx b\n", 5).is_err());
         assert_eq!(shell(script, "< b\n< c\nx a\n", 5), Ok(()));
+    }
+
+    #[test]
+    fn once_counts_the_whole_output() {
+        assert_eq!(shell("echo a b", "< b\no a\n", 5), Ok(()));
+        assert!(shell("echo a a b", "< b\no a\n", 5).is_err());
     }
 
     #[test]

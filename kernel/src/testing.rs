@@ -442,6 +442,30 @@ static TESTS: &[Test] = &[
         name: "console_and_listing_from_a_process",
         run: console_and_listing_from_a_process,
     },
+    Test {
+        name: "memory_objects_from_a_process",
+        run: memory_objects_from_a_process,
+    },
+    Test {
+        name: "channels_from_a_process",
+        run: channels_from_a_process,
+    },
+    Test {
+        name: "devices_from_a_process",
+        run: devices_from_a_process,
+    },
+    Test {
+        name: "a_device_with_no_transport_keeps_its_quarantine",
+        run: a_device_with_no_transport_keeps_its_quarantine,
+    },
+    Test {
+        name: "no_leak_after_rounds_of_objects",
+        run: no_leak_after_rounds_of_objects,
+    },
+    Test {
+        name: "channel_measurements",
+        run: channel_measurements,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -479,7 +503,8 @@ pub fn run(start: usize) -> ! {
         PASSED.load(Ordering::Relaxed),
         FAILED.load(Ordering::Relaxed)
     );
-    crate::shutdown()
+    // INV-0063-2 and ADR-0053: `hello` ends with no call to power off.
+    crate::run_first("hello")
 }
 
 extern "C" fn resume(next: usize) -> ! {
@@ -1098,6 +1123,91 @@ fn console_and_listing_from_a_process() {
         run_program("t_console"),
         exited(ramdisk::get().len() as i32)
     );
+}
+
+/// ADR-0051 from a process, and INV-0051-1 and -4 by the counters: after it
+/// ends, the frames and heap are as they were.
+fn memory_objects_from_a_process() {
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run_program("t_memory"), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// ADR-0050 from a process. It ends with nothing left in the kernel.
+fn channels_from_a_process() {
+    // The first run grows the signal table to its peak, which it keeps: every
+    // channel end is two entries of a table that does not shrink. A second run
+    // must then change nothing.
+    assert_eq!(run_program("t_channels"), exited(0));
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run_program("t_channels"), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// ADR-0054 and ADR-0070 from a process, with the test disk attached. What it
+/// pinned is gone at the end.
+fn devices_from_a_process() {
+    let run = || {
+        process::spawn_with_devices("t_devices")
+            .expect("program in the ramdisk")
+            .wait()
+    };
+    assert_eq!(run(), exited(0));
+    // Twice, so that the heap's growth is behind the counts.
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run(), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// Leaks: rounds of channels with handles in flight, mappings and pins, with
+/// the counts compared across a run.
+fn no_leak_after_rounds_of_objects() {
+    let run = || {
+        process::spawn_with_devices("t_loop")
+            .expect("program in the ramdisk")
+            .wait()
+    };
+    assert_eq!(run(), exited(0));
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run(), exited(0));
+    assert_eq!(frames::stats().free, frames_before);
+    assert_eq!(heap::stats().live, heap_before);
+}
+
+/// plan.md's measurements: printed, and not judged.
+fn channel_measurements() {
+    assert_eq!(run_program("chanbench"), exited(0));
+}
+
+/// INV-0070-3: with no virtio transport nothing proves the device stopped, so
+/// the quarantine stays.
+fn a_device_with_no_transport_keeps_its_quarantine() {
+    let (_, info) = platform();
+    let window = memory::paging::map_device(info.uart.base, 4096) as usize;
+    let device = crate::device::without_transport(info.uart.base, window);
+    let frames_before = frames::stats().free;
+    let memory = crate::memory::object::MemoryObject::new(4096, false).expect("memory");
+    let pin = crate::device::Pin::new(device.clone(), memory).expect("pin");
+    assert_eq!(
+        device.release_quarantine(),
+        Err(zoraya_abi::Status::BadState)
+    );
+    drop(pin);
+    assert_eq!(device.quarantined(), 1);
+    assert_eq!(
+        device.release_quarantine(),
+        Err(zoraya_abi::Status::BadState)
+    );
+    assert_eq!(device.quarantined(), 1, "nothing proved a stop");
+    assert!(frames::stats().free < frames_before);
+    drop(device);
 }
 
 fn run_program(name: &str) -> ExitRecord {

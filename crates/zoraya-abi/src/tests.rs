@@ -27,6 +27,18 @@ fn parameters_come_from_the_allow_list() {
                     s.name
                 ),
                 Param::Cookie => assert_eq!(s.name, "directory_entry"),
+                Param::Size => assert!(
+                    matches!(s.name, "memory_create" | "memory_map" | "memory_unmap"),
+                    "{}",
+                    s.name
+                ),
+                Param::Address => assert_eq!(s.name, "memory_unmap"),
+                Param::Out => assert_eq!(s.name, "channel_read"),
+                Param::RangeIndex => assert!(
+                    matches!(s.name, "device_map" | "device_interrupt"),
+                    "{}",
+                    s.name
+                ),
                 Param::EntryPoint => assert_eq!(s.name, "thread_create"),
             }
         }
@@ -74,7 +86,7 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
 /// come from one list, so a new status is judged here.
 #[test]
 fn no_status_means_interrupted() {
-    assert_eq!(Status::ALL.len(), 12);
+    assert_eq!(Status::ALL.len(), 15);
     for (raw, s) in Status::ALL.iter().enumerate() {
         assert_eq!(*s as usize, raw);
         assert_eq!(Status::from_raw(raw as u64), Some(*s));
@@ -129,7 +141,7 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 7);
+    assert_eq!(OBJECT_TYPES.len(), 12);
     for (name, waiting, rights) in OBJECT_TYPES {
         if let Waiting::Signals(bits) = waiting {
             assert_ne!(*bits, 0, "{name}");
@@ -235,6 +247,19 @@ echo! {
     console_dropped(console: Handle);
     directory_entry(directory: Handle, cookie: Cookie, entry: Bytes);
     power_off(power: Handle);
+    memory_create(size: Size, flags: MemoryFlags);
+    memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags);
+    memory_unmap(address: Address, length: Size);
+    channel_create(ends: Bytes);
+    channel_write(end: Handle, bytes: Bytes, handles: Bytes);
+    channel_read(end: Handle, bytes: Bytes, handles: Bytes, sizes: Out);
+    device_map(device: Handle, index: RangeIndex, out: Bytes);
+    device_interrupt(device: Handle, index: RangeIndex);
+    interrupt_ack(interrupt: Handle);
+    dma_pin(memory: Handle, device: Handle, out: Bytes);
+    dma_unpin(pin: Handle);
+    dma_release_quarantine(device: Handle);
+    handle_type(handle: Handle);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
@@ -259,7 +284,7 @@ fn every_number_reaches_its_handler() {
 #[test]
 fn a_value_too_wide_is_refused_not_truncated() {
     let wide = 1u64 << 32;
-    assert_eq!(Handle::decode(&[wide + 1]), Err(Status::BadHandle));
+    assert_eq!(Handle::decode(&[0]), Err(Status::BadHandle));
     assert_eq!(ExitCode::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(Detail::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(SignalSet::decode(&[wide]), Err(Status::InvalidArgument));
@@ -270,7 +295,7 @@ fn a_value_too_wide_is_refused_not_truncated() {
     assert_eq!(Mode::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(ExitReason::decode(&[wide]), Err(Status::InvalidArgument));
     // And out-of-range values within 32 bits.
-    assert_eq!(Rights::decode(&[1 << 11]), Err(Status::InvalidArgument));
+    assert_eq!(Rights::decode(&[1 << 14]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[36]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[35]), Ok(RequestKind::Custom(31)));
     assert_eq!(Disposition::decode(&[3]), Err(Status::InvalidArgument));
@@ -420,7 +445,14 @@ fn trailing_bytes_flags_and_reserved_fields_are_refused() {
     let mut b = [0; 512];
     let n = sample(&mut b);
     assert!(SpawnRequest::decode(&b[..n + 1]).is_err());
-    for (at, value) in [(0, 0), (4, 0), (8, 2), (36, 1), (HEADER_SIZE - 1, 1)] {
+    for (at, value) in [
+        (0, 0),
+        (4, 0),
+        (8, 2),
+        (12, 1),
+        (52, 1),
+        (HEADER_SIZE - 1, 1),
+    ] {
         let mut m = b;
         m[at] = value;
         assert_eq!(
@@ -446,9 +478,10 @@ fn a_single_bad_entry_is_refused() {
     assert!(SpawnRequest::decode(&buffer[..n]).is_ok());
     for (at, value, status) in [
         (HEADER_SIZE, 0, Status::InvalidArgument),
-        (HEADER_SIZE + 4, 0, Status::BadHandle),
-        (HEADER_SIZE + 9, 0xff, Status::InvalidArgument),
-        (HEADER_SIZE + 12, 7, Status::InvalidArgument),
+        (HEADER_SIZE + 4, 1, Status::InvalidArgument),
+        (HEADER_SIZE + 8, 0, Status::BadHandle),
+        (HEADER_SIZE + 17, 0xff, Status::InvalidArgument),
+        (HEADER_SIZE + 20, 7, Status::InvalidArgument),
     ] {
         let mut m = buffer;
         m[at] = value;
@@ -535,4 +568,88 @@ fn power_is_one_right_on_one_type() {
         .iter()
         .filter(|(_, _, rights)| rights.contains(Rights::POWER));
     assert_eq!(holders.count(), 1);
+}
+
+/// INV-0057-3: a generation above 32 bits survives every crossing.
+#[test]
+fn a_handle_is_64_bits_wherever_it_goes() {
+    let high = Handle::from_parts(9, 0xabcd_1234_5678).unwrap();
+    assert_eq!(high.slot(), 9);
+    assert_eq!(high.generation(), 0xabcd_1234_5678);
+    assert_eq!(Handle::new(high.raw()), Some(high));
+    let mut register = [0];
+    high.encode(&mut register);
+    assert_eq!(Handle::decode(&register), Ok(high));
+
+    let mut buffer = [0; 1024];
+    let mut e = Encoder::new(&mut buffer, high, high);
+    e.group(high).handle(HandleEntry {
+        slot: 3,
+        handle: high,
+        rights: Rights::NONE,
+        transfer: Transfer::Duplicate,
+    });
+    let length = e.finish().unwrap();
+    let r = SpawnRequest::decode(&buffer[..length]).unwrap();
+    assert_eq!((r.job, r.image, r.group), (high, high, Some(high)));
+    assert_eq!(r.handles().next().unwrap().handle, high);
+}
+
+#[test]
+fn a_generation_past_48_bits_is_refused() {
+    assert_eq!(Handle::from_parts(1, 1 << 48), None);
+    assert!(Handle::from_parts(1, MAX_GENERATION).is_some());
+}
+
+#[test]
+fn the_old_format_is_refused() {
+    let mut buffer = [0; HEADER_SIZE];
+    let length = Encoder::new(&mut buffer, CONSOLE, CONSOLE)
+        .finish()
+        .unwrap();
+    buffer[3] = b'1';
+    assert_eq!(
+        SpawnRequest::decode(&buffer[..length]).map(|_| ()),
+        Err(Status::InvalidArgument)
+    );
+}
+
+/// INV-0050-5.
+#[test]
+fn a_channel_has_no_duplicate_right() {
+    assert!(!ChannelObject::RIGHTS.contains(Rights::DUPLICATE));
+    assert!(ChannelObject::RIGHTS.contains(Rights::TRANSFER));
+}
+
+/// ADR-0032's six registers hold every call (ADR-0050's `Out`).
+#[test]
+fn every_call_fits_six_registers() {
+    for s in SYSCALLS {
+        let used: usize = s.params.iter().map(|p| p.registers()).sum();
+        assert!(used <= 6, "{}", s.name);
+    }
+}
+
+#[test]
+fn a_channel_entry_round_trips_and_refuses_bad_values() {
+    let entry = ChannelEntry {
+        handle: Handle::from_parts(5, 1 << 40).unwrap(),
+        rights: Rights::READ,
+        transfer: Transfer::Duplicate,
+    };
+    assert_eq!(ChannelEntry::from_bytes(&entry.to_bytes()), Ok(entry));
+    let mut b = entry.to_bytes();
+    b[0..8].fill(0);
+    assert_eq!(ChannelEntry::from_bytes(&b), Err(Status::BadHandle));
+    let mut b = entry.to_bytes();
+    b[11] = 0xff;
+    assert_eq!(ChannelEntry::from_bytes(&b), Err(Status::InvalidArgument));
+    let mut b = entry.to_bytes();
+    b[12] = 2;
+    assert_eq!(ChannelEntry::from_bytes(&b), Err(Status::InvalidArgument));
+    let sizes = ChannelSizes {
+        bytes: 7,
+        handles: 2,
+    };
+    assert_eq!(ChannelSizes::from_bytes(&sizes.to_bytes()), sizes);
 }

@@ -11,10 +11,13 @@ use core::fmt;
 
 use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
 use zoraya_abi::{
-    Buffer, Bytes, CONSOLE, Cookie, Deadline, Detail, Disposition, ExitCode, ExitReason,
-    ExitRecord, Handle, Invoke, JobFlags, Mode, Opaque, Packet, PacketBuffer, PathBuffer,
-    RequestKind, Rights, SignalSet, SpawnBuffer, Status, request_from_value, stubs,
+    Address, Buffer, Bytes, CONSOLE, ChannelEntry, ChannelSizes, Cookie, Deadline, Detail,
+    Disposition, ExitCode, ExitReason, ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags,
+    Mode, OBJECT_TYPES, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind,
+    Rights, SignalSet, Size, SpawnBuffer, Status, request_from_value, stubs,
 };
+
+const MAX_MESSAGE_HANDLES: usize = 64;
 
 global_asm!(
     r#"
@@ -91,10 +94,7 @@ fn bytes(slice: &[u8]) -> Buffer {
 }
 
 fn handle(raw: u64) -> Result<Handle, Status> {
-    u32::try_from(raw)
-        .ok()
-        .and_then(Handle::new)
-        .ok_or(Status::BadHandle)
+    Handle::new(raw).ok_or(Status::BadHandle)
 }
 
 pub fn process_exit(code: i32) -> ! {
@@ -240,6 +240,143 @@ pub fn power_off(power: Handle) -> Status {
     match stubs::power_off::<Svc>(power) {
         Ok(_) => Status::Ok,
         Err(status) => status,
+    }
+}
+
+/// A new memory object of `size` bytes, all committed and zeroed.
+pub fn memory_create(size: u64, flags: MemoryFlags) -> Result<Handle, Status> {
+    handle(stubs::memory_create::<Svc>(Size(size), flags)?)
+}
+
+/// Maps part of a memory object, and gives the address the kernel chose.
+pub fn memory_map(
+    object: Handle,
+    offset: u64,
+    length: u64,
+    flags: MapFlags,
+) -> Result<u64, Status> {
+    stubs::memory_map::<Svc>(object, Size(offset), Size(length), flags)
+}
+
+/// Ends the whole mapping at `address`.
+pub fn memory_unmap(address: u64, length: u64) -> Result<(), Status> {
+    stubs::memory_unmap::<Svc>(Address(address), Size(length)).map(|_| ())
+}
+
+/// Two ends of a new channel.
+pub fn channel_create() -> Result<(Handle, Handle), Status> {
+    let mut ends = [0u8; 16];
+    let buffer = Buffer {
+        address: ends.as_mut_ptr() as u64,
+        length: 16,
+    };
+    stubs::channel_create::<Svc>(Bytes(buffer))?;
+    core::hint::black_box(&mut ends);
+    let [a, b] = [&ends[..8], &ends[8..]].map(|e| {
+        let mut raw = [0; 8];
+        raw.copy_from_slice(e);
+        handle(u64::from_le_bytes(raw))
+    });
+    Ok((a?, b?))
+}
+
+/// Sends a message, all or nothing.
+pub fn channel_write(end: Handle, message: &[u8], handles: &[ChannelEntry]) -> Result<(), Status> {
+    let mut list = [0; ChannelEntry::SIZE * MAX_MESSAGE_HANDLES];
+    let room = handles.len() * ChannelEntry::SIZE;
+    let target = list.get_mut(..room).ok_or(Status::InvalidArgument)?;
+    for (slot, entry) in target.as_chunks_mut().0.iter_mut().zip(handles) {
+        *slot = entry.to_bytes();
+    }
+    stubs::channel_write::<Svc>(end, Bytes(bytes(message)), Bytes(bytes(&list[..room])))?;
+    Ok(())
+}
+
+/// Takes the next message. On `BufferTooSmall` the message stays, and the
+/// sizes it needs are in the error's second part.
+pub fn channel_read(
+    end: Handle,
+    message: &mut [u8],
+    handles: &mut [Handle],
+) -> Result<ChannelSizes, (Status, ChannelSizes)> {
+    let mut raw = [0u64; MAX_MESSAGE_HANDLES];
+    let room = handles.len().min(MAX_MESSAGE_HANDLES);
+    let mut sizes = [0u8; ChannelSizes::SIZE];
+    let list = Buffer {
+        address: raw.as_mut_ptr() as u64,
+        length: (room * 8) as u64,
+    };
+    let result = stubs::channel_read::<Svc>(
+        end,
+        Bytes(bytes(message)),
+        Bytes(list),
+        Out(sizes.as_mut_ptr() as u64),
+    );
+    core::hint::black_box((&mut sizes, &mut raw, &mut *message));
+    let sizes = ChannelSizes::from_bytes(&sizes);
+    match result {
+        Ok(_) => {
+            for (slot, raw) in handles.iter_mut().zip(&raw[..sizes.handles as usize]) {
+                *slot = handle(*raw).map_err(|e| (e, sizes))?;
+            }
+            Ok(sizes)
+        }
+        Err(status) => Err((status, sizes)),
+    }
+}
+
+/// Maps a device's window: the address, and range `index`'s offset inside it.
+pub fn device_map(device: Handle, index: u32) -> Result<(u64, u64), Status> {
+    let mut out = [0u8; 16];
+    let buffer = Buffer {
+        address: out.as_mut_ptr() as u64,
+        length: 16,
+    };
+    stubs::device_map::<Svc>(device, RangeIndex(index), Bytes(buffer))?;
+    core::hint::black_box(&mut out);
+    let word = |at: usize| {
+        let mut raw = [0; 8];
+        raw.copy_from_slice(&out[at..at + 8]);
+        u64::from_le_bytes(raw)
+    };
+    Ok((word(0), word(8)))
+}
+
+pub fn device_interrupt(device: Handle, index: u32) -> Result<Handle, Status> {
+    handle(stubs::device_interrupt::<Svc>(device, RangeIndex(index))?)
+}
+
+pub fn interrupt_ack(interrupt: Handle) -> Result<(), Status> {
+    stubs::interrupt_ack::<Svc>(interrupt).map(|_| ())
+}
+
+/// Pins a memory object for a device, and writes its physically contiguous
+/// runs to `runs` as `(device address, length)`.
+pub fn dma_pin(memory: Handle, device: Handle, runs: &mut [[u64; 2]]) -> Result<Handle, Status> {
+    let buffer = Buffer {
+        address: runs.as_mut_ptr() as u64,
+        length: (runs.len() * 16) as u64,
+    };
+    let pin = stubs::dma_pin::<Svc>(memory, device, Bytes(buffer))?;
+    core::hint::black_box(runs);
+    handle(pin)
+}
+
+/// Ends a pin, and its handle: the caller says the device has done with it.
+pub fn dma_unpin(pin: Handle) -> Result<(), Status> {
+    stubs::dma_unpin::<Svc>(pin).map(|_| ())
+}
+
+pub fn dma_release_quarantine(device: Handle) -> Result<(), Status> {
+    stubs::dma_release_quarantine::<Svc>(device).map(|_| ())
+}
+
+/// The name of the object type behind `handle` (ADR-0072).
+pub fn handle_type(handle: Handle) -> Result<&'static str, Status> {
+    let index = stubs::handle_type::<Svc>(handle)? as usize;
+    match OBJECT_TYPES.get(index) {
+        Some((name, _, _)) => Ok(name),
+        None => Err(Status::BadHandle),
     }
 }
 

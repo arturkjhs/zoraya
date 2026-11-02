@@ -138,7 +138,7 @@ fn a_process_needs_a_job() {
     let length = Encoder::new(&mut buffer, JOB, image)
         .finish()
         .expect("fits");
-    buffer[12..16].fill(0);
+    buffer[16..24].fill(0);
     assert_err!(spawn(&buffer[..length]), Status::BadHandle);
     handle_close(weak).expect("close");
     handle_close(image).expect("close");

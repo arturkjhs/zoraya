@@ -1,0 +1,440 @@
+//! The file protocol between clients and a filesystem service (ADR-0055). A
+//! connection is a channel, and each open object has one. A write under
+//! `MAX_INLINE` travels in the message; above it, an attached memory object.
+
+#![no_std]
+#![forbid(unsafe_code)]
+
+use zoraya_protocol::{Below, Data, Flags, Name, Path, Seq, Text, protocol};
+
+/// Largest read or write in a message (ADR-0055).
+pub const MAX_INLINE: usize = 60 * 1024;
+/// Longest path in one request.
+pub const MAX_PATH: usize = 4096;
+/// Names in one `read_directory` reply.
+pub const MAX_ENTRIES: usize = 64;
+
+/// One of `status`.
+pub type Code = Below<16>;
+/// One of `kind`.
+pub type Kind = Below<3>;
+
+/// What an object is.
+pub mod kind {
+    pub const FILE: u32 = 0;
+    pub const DIRECTORY: u32 = 1;
+    pub const LINK: u32 = 2;
+}
+
+/// The status of every reply.
+pub mod status {
+    pub const OK: u32 = 0;
+    pub const NOT_FOUND: u32 = 1;
+    pub const EXISTS: u32 = 2;
+    pub const NO_SPACE: u32 = 3;
+    pub const NOT_EMPTY: u32 = 4;
+    pub const INVALID_NAME: u32 = 5;
+    pub const NOT_DIRECTORY: u32 = 6;
+    pub const IS_DIRECTORY: u32 = 7;
+    /// `OpenReply` then holds the rest of the path and the link's target.
+    pub const IS_LINK: u32 = 8;
+    pub const INVALID_ARGUMENT: u32 = 9;
+    pub const CORRUPT: u32 = 10;
+    pub const STORAGE_FAILED: u32 = 11;
+    pub const ACCESS_DENIED: u32 = 12;
+    /// The service's table is full (ADR-0055).
+    pub const TOO_MANY_OPEN: u32 = 13;
+    /// The service's mappings are all in use.
+    pub const LIMIT_REACHED: u32 = 14;
+    /// The service does not know the ordinal.
+    pub const UNSUPPORTED: u32 = 15;
+}
+
+/// A connection's rights (ADR-0055).
+pub mod rights {
+    pub const READ: u32 = 1 << 0;
+    pub const WRITE: u32 = 1 << 1;
+    pub const CREATE: u32 = 1 << 2;
+    pub const REMOVE: u32 = 1 << 3;
+    pub const RENAME: u32 = 1 << 4;
+    pub const PUBLISH: u32 = 1 << 5;
+    pub const SYNC: u32 = 1 << 6;
+    pub const CLONE: u32 = 1 << 7;
+    pub const ALL: u32 = (1 << 8) - 1;
+}
+
+/// `open`'s flags.
+pub mod open_flags {
+    pub const CREATE: u32 = 1 << 0;
+    pub const EXCLUSIVE: u32 = 1 << 1;
+    pub const TRUNCATE: u32 = 1 << 2;
+    pub const DIRECTORY: u32 = 1 << 3;
+    /// The link itself, not `IS_LINK`.
+    pub const NO_FOLLOW: u32 = 1 << 4;
+    pub const ALL: u32 = (1 << 5) - 1;
+}
+
+/// `write`'s flags.
+pub mod write_flags {
+    /// To the end of the file, atomically (ADR-0010 rule 2).
+    pub const APPEND: u32 = 1 << 0;
+    /// The reply waits for the commit that covers it.
+    pub const DURABLE: u32 = 1 << 1;
+    pub const ALL: u32 = (1 << 2) - 1;
+}
+
+/// `rename`'s mode (ADR-0010 rule 2).
+pub mod rename_mode {
+    pub const REPLACE: u32 = 0;
+    pub const NO_REPLACE: u32 = 1;
+    pub const ALL: u32 = 1;
+}
+
+pub type Rights = Flags<{ rights::ALL }>;
+
+protocol! {
+    /// Opens `path` under this directory on the given end.
+    message Open<'a> = 1, handles 1 {
+        flags: Flags<{ open_flags::ALL }>,
+        rights: Rights,
+        path: Path<'a, MAX_PATH, false>,
+    }
+    message OpenReply<'a> = 1, handles 0 {
+        status: Code,
+        /// With `IS_LINK`: the path after the link.
+        remaining: Path<'a, MAX_PATH, true>,
+        /// With `IS_LINK`: where it points.
+        target: Text<'a, MAX_PATH>,
+    }
+
+    /// A new connection to this object with equal or fewer rights.
+    message Clone = 2, handles 1 {
+        rights: Rights,
+    }
+
+    message Read = 3, handles 0 {
+        offset: u64,
+        length: u32,
+    }
+    message ReadReply<'a> = 3, handles 0 {
+        status: Code,
+        data: Data<'a, MAX_INLINE>,
+    }
+
+    message Write<'a> = 4, handles 0 {
+        offset: u64,
+        flags: Flags<{ write_flags::ALL }>,
+        data: Data<'a, MAX_INLINE>,
+    }
+
+    /// Done, with a count of bytes, for every request with no data to give.
+    message Done = 4, handles 0 {
+        status: Code,
+        count: u64,
+    }
+
+    /// Attaches a memory object for large transfers, one per connection.
+    message Attach = 5, handles 1 {}
+    message Detach = 6, handles 0 {}
+
+    message ReadBuffer = 7, handles 0 {
+        offset: u64,
+        buffer_offset: u64,
+        length: u32,
+    }
+
+    message WriteBuffer = 8, handles 0 {
+        offset: u64,
+        buffer_offset: u64,
+        length: u32,
+        flags: Flags<{ write_flags::ALL }>,
+    }
+
+    message GetAttributes = 9, handles 0 {}
+    message Attributes = 9, handles 0 {
+        status: Code,
+        size: u64,
+        modified: u64,
+        changed: u64,
+        mode: u32,
+        kind: Kind,
+    }
+
+    message ReadDirectory = 10, handles 0 {
+        /// 0 for the start.
+        cookie: u64,
+    }
+    record Entry<'a> {
+        /// Where to go on from this name. Opaque to the client.
+        next: u64,
+        kind: Kind,
+        name: Name<'a>,
+    }
+    message ReadDirectoryReply<'a> = 10, handles 0 {
+        status: Code,
+        entries: Seq<'a, Entry<'a>, MAX_ENTRIES>,
+    }
+
+    /// `old` here to `new` in the directory of the token.
+    message Rename<'a> = 11, handles 1 {
+        mode: Flags<{ rename_mode::ALL }>,
+        old: Name<'a>,
+        new: Name<'a>,
+    }
+
+    /// Gives this unnamed file `name` in the directory of the token.
+    message Publish<'a> = 12, handles 1 {
+        name: Name<'a>,
+    }
+
+    message Remove<'a> = 13, handles 0 {
+        name: Name<'a>,
+    }
+
+    message MakeDirectory<'a> = 14, handles 0 {
+        mode: u32,
+        name: Name<'a>,
+    }
+
+    message Sync = 15, handles 0 {}
+
+    /// The volume's state: `STORAGE_FAILED` if it has failed.
+    message Status = 16, handles 0 {}
+
+    /// The count of corrupt reads (ADR-0012 rule 3), in `Done`'s count.
+    message CorruptReads = 17, handles 0 {}
+
+    /// A token naming this connection in a `Rename` or `Publish`.
+    message GetToken = 18, handles 0 {}
+    message TokenReply = 18, handles 1 {
+        status: Code,
+    }
+}
+
+/// Every request's ordinal, for a test that none repeats.
+pub const REQUESTS: [(&str, u32); 18] = [
+    ("open", 1),
+    ("clone", 2),
+    ("read", 3),
+    ("write", 4),
+    ("attach", 5),
+    ("detach", 6),
+    ("read_buffer", 7),
+    ("write_buffer", 8),
+    ("get_attributes", 9),
+    ("read_directory", 10),
+    ("rename", 11),
+    ("publish", 12),
+    ("remove", 13),
+    ("make_directory", 14),
+    ("sync", 15),
+    ("status", 16),
+    ("corrupt_reads", 17),
+    ("get_token", 18),
+];
+
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::vec::Vec;
+    use zoraya_protocol::testing::exercise;
+    use zoraya_protocol::{Message, decode, encode};
+
+    fn check<M>(message: M, handles: usize)
+    where
+        M: for<'b> Message<'b> + PartialEq + core::fmt::Debug,
+    {
+        let mut out = [0; 2048];
+        let length = encode(&message, 1, &mut out).unwrap();
+        assert_eq!(M::HANDLES, handles);
+        let (_, back) = decode::<M>(&out[..length], handles).unwrap();
+        assert_eq!(back, message);
+        exercise(&out[..length], |bytes| {
+            let _ = decode::<M>(bytes, handles);
+        });
+    }
+
+    #[test]
+    fn fixed_messages_round_trip_and_decode_totally() {
+        check(
+            Clone {
+                rights: Flags(rights::READ),
+            },
+            1,
+        );
+        check(
+            Read {
+                offset: 7,
+                length: 9,
+            },
+            0,
+        );
+        check(
+            Done {
+                status: Below(status::TOO_MANY_OPEN),
+                count: 3,
+            },
+            0,
+        );
+        check(Attach {}, 1);
+        check(Detach {}, 0);
+        check(
+            ReadBuffer {
+                offset: 1,
+                buffer_offset: 4096,
+                length: 8,
+            },
+            0,
+        );
+        check(
+            WriteBuffer {
+                offset: 1,
+                buffer_offset: 4096,
+                length: 8,
+                flags: Flags(write_flags::APPEND),
+            },
+            0,
+        );
+        check(GetAttributes {}, 0);
+        check(
+            Attributes {
+                status: Below(0),
+                size: 1,
+                modified: 2,
+                changed: 3,
+                mode: 0o644,
+                kind: Below(1),
+            },
+            0,
+        );
+        check(ReadDirectory { cookie: 4 }, 0);
+        check(Sync {}, 0);
+        check(Status {}, 0);
+        check(CorruptReads {}, 0);
+        check(GetToken {}, 0);
+        check(TokenReply { status: Below(0) }, 1);
+    }
+
+    /// Each borrowed message, by hand: the lifetime stops a generic helper.
+    macro_rules! borrowed {
+        ($message:expr, $type:ty, $handles:expr) => {{
+            let message = $message;
+            let mut out = [0; 8192];
+            let length = encode(&message, 1, &mut out).unwrap();
+            let (_, back) = decode::<$type>(&out[..length], $handles).unwrap();
+            assert_eq!(back, message);
+            exercise(&out[..length.min(4096)], |bytes| {
+                let _ = decode::<$type>(bytes, $handles);
+            });
+        }};
+    }
+
+    #[test]
+    fn borrowed_messages_round_trip_and_decode_totally() {
+        borrowed!(
+            Open {
+                flags: Flags(open_flags::CREATE),
+                rights: Flags(rights::ALL),
+                path: Path("a/b/c"),
+            },
+            Open<'_>,
+            1
+        );
+        borrowed!(
+            OpenReply {
+                status: Below(status::IS_LINK),
+                remaining: Path("rest"),
+                target: Text("../x"),
+            },
+            OpenReply<'_>,
+            0
+        );
+        borrowed!(
+            ReadReply {
+                status: Below(0),
+                data: Data(b"contents"),
+            },
+            ReadReply<'_>,
+            0
+        );
+        borrowed!(
+            Write {
+                offset: 3,
+                flags: Flags(write_flags::DURABLE),
+                data: Data(b"x"),
+            },
+            Write<'_>,
+            0
+        );
+        borrowed!(
+            Rename {
+                mode: Flags(rename_mode::NO_REPLACE),
+                old: Name("a"),
+                new: Name("b"),
+            },
+            Rename<'_>,
+            1
+        );
+        borrowed!(Publish { name: Name("n") }, Publish<'_>, 1);
+        borrowed!(Remove { name: Name("n") }, Remove<'_>, 0);
+        borrowed!(
+            MakeDirectory {
+                mode: 0o755,
+                name: Name("d"),
+            },
+            MakeDirectory<'_>,
+            0
+        );
+    }
+
+    #[test]
+    fn a_directory_reply_round_trips_and_decodes_totally() {
+        let entries = [
+            Entry {
+                next: 2,
+                kind: Below(1),
+                name: Name("one"),
+            },
+            Entry {
+                next: 0,
+                kind: Below(2),
+                name: Name("two"),
+            },
+        ];
+        let reply = ReadDirectoryReply {
+            status: Below(0),
+            entries: Seq::Of(&entries),
+        };
+        let mut out = [0; 512];
+        let length = encode(&reply, 1, &mut out).unwrap();
+        let (_, back) = decode::<ReadDirectoryReply<'_>>(&out[..length], 0).unwrap();
+        let got: Vec<_> = back.entries.iter().collect();
+        assert_eq!(got, entries);
+        exercise(&out[..length], |bytes| {
+            if let Ok((_, m)) = decode::<ReadDirectoryReply<'_>>(bytes, 0) {
+                assert!(m.entries.iter().all(|e| Name::is_valid(e.name.0)));
+            }
+        });
+    }
+
+    #[test]
+    fn a_name_that_climbs_is_refused_on_the_wire() {
+        let mut out = [0; 64];
+        let good = Remove { name: Name("ab") };
+        let length = encode(&good, 1, &mut out).unwrap();
+        // The name's bytes are the last two: make it `..`.
+        out[length - 2..length].copy_from_slice(b"..");
+        assert!(decode::<Remove<'_>>(&out[..length], 0).is_err());
+    }
+
+    #[test]
+    fn no_ordinal_repeats() {
+        for (i, (_, a)) in REQUESTS.iter().enumerate() {
+            assert_ne!(*a, zoraya_protocol::ERROR_ORDINAL);
+            assert!(REQUESTS[i + 1..].iter().all(|(_, b)| a != b));
+        }
+    }
+}
