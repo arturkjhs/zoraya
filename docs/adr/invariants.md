@@ -196,6 +196,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0071-1 | [ADR-0071](0071-invariant-totals.md) | The Counts table in `invariants.md` matches its rows, per ADR and in total. | `make adr-check`, with host tests of a wrong row, a wrong total and a missing section. | checked: `make adr-check` |
 | INV-0072-1 | [ADR-0072](0072-handle-types-and-small-kernel-choices.md) | A message with the wrong number of handles is refused by its decoder, and `handle_type` gives each handle's row of `OBJECT_TYPES`. | `make test`. | checked: `make test` |
 | INV-0072-2 | [ADR-0072](0072-handle-types-and-small-kernel-choices.md) | `memory_unmap` of anything but a whole mapping changes nothing. | the in-QEMU test of `memory_unmap` with a wrong length and a wrong address. | checked: `make test` |
+| INV-0080-1 | [ADR-0080](0080-restart-and-small-choices-of-stage-4b.md) | After any death in the storage stack, a remount happens only after the device has been reset. | in-QEMU tests killing the driver and the service, then `zoraya-fsck` on the image and a read through a new connection. | not yet applicable (stage 4) |
+| INV-0080-2 | [ADR-0080](0080-restart-and-small-choices-of-stage-4b.md) | `init` restarts at most three times in a boot, and the shell still answers after that. | a scripted test killing the stack four times. | not yet applicable (stage 4) |
 
 ## Counts
 
@@ -248,4 +250,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0070](0070-releasing-quarantined-frames.md) Releasing quarantined DMA frames | 3 |
 | [ADR-0071](0071-invariant-totals.md) Checking the totals in `invariants.md` | 1 |
 | [ADR-0072](0072-handle-types-and-small-kernel-choices.md) Handle types in protocols, and small choices stage 4 made | 2 |
-| **Total** | **190** |
+| [ADR-0080](0080-restart-and-small-choices-of-stage-4b.md) Restarting the storage stack, and small choices of stage 4b (proposed) | 2 |
+| **Total** | **192** |
