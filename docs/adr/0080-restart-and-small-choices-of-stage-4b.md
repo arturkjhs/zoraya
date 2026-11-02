@@ -53,9 +53,20 @@ Accepting this ADR also records these, as built:
 - **`clone` of an object.** `Volume::reopen` gives a second engine handle, so a clone has a record of its own (ADR-0055).
 - **No `df`.** The file protocol has no free-space request, and the engine reports none: `zosh` has no `df`.
 - **`cd`.** `zosh` holds a root connection and a current-directory connection. `..` is resolved in the shell from its own path string, since ADR-0013 keeps it out of the server.
+- **The file protocol changed in place.** `Attach` gained `size`, `Rename`'s mode gained `EXCHANGE`, `Publish` gained
+  a mode and `open` gained `UNNAMED`, in the ordinals they had. ADR-0052 asks for a new ordinal for a new field;
+  nothing had been deployed, so no client could see the old shape, and this is the one exception.
+- **Rights of the requests.** ADR-0055 names the rights, not which request needs which. As built: `read`,
+  `read_directory`, `read_link` and `read_buffer` need `read`; `write`, `write_buffer`, `set_size` and
+  `set_attributes` need `write`, and a `durable` write also needs `sync`; `open` needs the rights it asks for, plus
+  `create` to create and `write` to truncate; `make_directory` and `make_link` need `create`; `remove`, `rename`,
+  `publish`, `sync` and `clone` need theirs. An `open` with `DIRECTORY` and `CREATE`, `UNNAMED` or `TRUNCATE` is
+  `InvalidArgument`, refused before it changes anything.
 - **Wall clock.** The virtual timer gives no date, so the service's wall clock is seconds since boot, added to the volume's latest time by ADR-0014's rule.
 
-**Tensions with accepted ADRs.** *ADR-0054, Service death with a live driver:* replaced, above. *ADR-0014 rule 3:* a clock with no date is one that "may stand still or step backwards", which the engine already copes with.
+**Tensions with accepted ADRs.** *ADR-0054, Service death with a live driver:* replaced, above, and with it the
+driver's supervisor channel from `init` in ADR-0054's "Driver" paragraph: `blkd` has none, and `init` watches its
+process instead. *ADR-0052, Evolution:* the in-place change above. *ADR-0014 rule 3:* a clock with no date is one that "may stand still or step backwards", which the engine already copes with.
 
 ### Effect of the vision
 For target 2 a shell is not the client, and a launcher would restart sandboxes the same way. Option B can be added later for a device that is costly to renegotiate. Moving later costs the reattach protocol and its tests, 100 lines `[estimate]`.
@@ -69,11 +80,15 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 - **Follow-up.** A real clock, when a device offers one.
 
 ## Invariants
-- **INV-0080-1.** After any death in the storage stack, a remount happens only after the device has been reset. *Check:* in-QEMU tests killing the driver and the service, then `zoraya-fsck` on the image and a read through a new connection.
+- **INV-0080-1.** After any death in the storage stack, a remount happens only after the device has been reset. *Check:* in-QEMU tests killing the driver and the service, then `zoraya-fsck` on the image and a read through a new connection, and a host test that a new driver resets the device before anything else.
 - **INV-0080-2.** `init` restarts at most three times in a boot, and the shell still answers after that. *Check:* a scripted boot with a disk that cannot be mounted, and a host test of the count.
 
 ## Open questions
 - Whether three restarts is the right number: nothing measured.
+- *Check status (TASK-13, ADR-0001 rule 6).* INV-0080-1's in-QEMU tests cannot see a reset: a `blkd` that skips its
+  reset when the service goes passes them, because the kernel resets the device anyway when a pin is left in
+  quarantine (ADR-0070). The new driver's reset is checked on the host (`a_new_driver_resets_the_device_first`); the
+  reset of `blkd` on exit is checked only by reading.
 
 ## Revisit triggers
 - A device whose negotiation is costly.

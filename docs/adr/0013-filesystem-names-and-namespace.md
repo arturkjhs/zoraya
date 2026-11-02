@@ -210,7 +210,8 @@ names cannot be extracted).
   *TASK-13:* the wire types are `Name` and `Path` in `zoraya-protocol`, and `abi`'s `RelativePath` is the kernel's.
   The tests `names_follow_adr_0013`, `a_path_is_relative` and `a_path_has_no_dots_or_empty_parts` run against them,
   and `t_storage` sends `..`, absolute and control-character paths to the running service. So there are two
-  validators, kept alike by their tests. INV-0013-1 and INV-0013-5 are now checked whole.
+  validators, kept alike by their tests. INV-0013-5 is now checked whole. INV-0013-1 is not: `Name` has a table of
+  cases and no property test against an independent predicate (TASK-13 review, R-27).
 
 ## Revisit triggers
 

@@ -300,7 +300,7 @@ over the tree on a 64 KiB process stack, and a block passed by value through tha
 
 ## Storage stack (as built)
 
-Three processes, each in a sub-job that `init` makes, on [ADR-0053](adr/0053-service-discovery-and-first-process.md),
+Two processes, each in a sub-job that `init` makes, and `init` over them, on [ADR-0053](adr/0053-service-discovery-and-first-process.md),
 [ADR-0054](adr/0054-driver-model.md), [ADR-0055](adr/0055-filesystem-service-protocol.md) and the proposed
 [ADR-0080](adr/0080-restart-and-small-choices-of-stage-4b.md).
 
@@ -316,7 +316,9 @@ Three processes, each in a sub-job that `init` makes, on [ADR-0053](adr/0053-ser
 A request waiting on a driver that dies reports what it lost: `DEVICE_WRITE`, `DEVICE_FLUSH` or `METADATA_READ`. An idle
 service reports `DEVICE_LOST`. `init` does the same for all of them.
 
-Measured on an M4 under QEMU 11.1.2, `make run`'s image, `fsbench`, the last of three runs. `write` is into the cache of
+Measured on an M4 under QEMU 11.1.2, `make run`'s image, `fsbench`, the last of three runs in one session. The
+review's runs (TASK-13 review, R-44), on a busier host, gave about half for the 1 MiB write through a memory object
+and for TCG's 4 KiB writes, and the rest within a fifth: read these as orders of magnitude. `write` is into the cache of
 dirty blocks, and `read` is after a `sync`, from the device. `sync` is on the host's page cache: QEMU's flush is an
 `fsync` of a file. Boot to prompt is `uptime` at the first prompt.
 
@@ -336,7 +338,7 @@ dirty blocks, and `read` is after a `sync`, from the device. `sync` is on the ho
 - clippy with warnings as errors (host crates, kernel, test kernel);
 - the host tests;
 - `make adr-check`;
-- the in-QEMU tests in seven machine configurations, with an empty virtio-blk device attached;
+- the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
   0; `tests/shell/leak.script` runs more programs than a handle table has slots, and `tests/shell/exit.script` ends the
@@ -413,7 +415,7 @@ deterministic random mutations.
   nothing on write, a message left in place on any refused read. An end has one handle. Closing runs a work list
   through the messages, so a deep chain takes no stack.
 - **Protocols (`crates/zoraya-protocol`, `zoraya-proto-block`, `zoraya-proto-file`, ADR-0052).** The `protocol!` macro
-  and a flat wire format with total decoders. The servers come with TASK-13.
+  and a flat wire format with total decoders. `blkd` and `fsd` serve them (TASK-13).
 - **`init` (`user/src/bin/init.rs`, ADR-0053).** The one process the kernel starts, with the console, its own job, the
   ramdisk directory, `Power` at slot 4 and `Device` handles from slot 5. It starts `zosh` in a sub-job with only what
   the shell needs, and turns the machine off when the shell ends.
@@ -440,8 +442,8 @@ deterministic random mutations.
   shell. The service refuses `..` in any path, so `cat ../x` is `InvalidArgument`.
 - `ls-ramdisk` lists the programs. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
-- `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's own handles, by type) and `help` are built in. `exit` alone ends the shell, and the
-  kernel then powers off; `exit <n>` is the demonstration program.
+- `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's handles, by type, as far as it can see them: below) and `help` are built in. `exit` alone ends
+  the shell, and `init` then syncs and powers off; `exit <n>` is the demonstration program.
 - Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it,
   which is more than TASK-11 asked: a job can ignore `Interrupt`.
   Ctrl-\\ sends `Quit`. Ctrl-U kills the line, and Up and Down walk the last 32 lines.
@@ -507,7 +509,12 @@ deterministic random mutations.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
   (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
   QEMU 11.1.2 and is part of `make test`, so `make test` as written fails on an M1 or M2 Mac (`auto-el2`).
-- **Storage stack.** One disk, one queue, no spawning from the volume: programs still come from the ramdisk. A
+- **Storage stack.** `t_storage` kills the driver "during a commit" and "during a read", but on one CPU the driver
+  ends before the request reaches the device, so no test kills a driver with a write in flight on the device; the
+  kernel's quarantine of TASK-12 is what covers that case. No test sees whether a flush reaches the device: the crash
+  test keeps the host's page cache (below), and the engine's host crash test is what catches a skipped flush. `slots`
+  calls `handle_type` with generation 0, so a handle in a reused slot is not shown: the kernel has no call to list a
+  table. One disk, one queue, no spawning from the volume: programs still come from the ramdisk. A
   restart ends the shell with the rest, so the current directory and the jobs go. After three restarts in a boot the
   volume stays down until the next boot, with nothing measured behind three. The crash test kills QEMU, so it stops the
   writer at a random point but does not lose unflushed writes: QEMU has already given them to the host. Losing and

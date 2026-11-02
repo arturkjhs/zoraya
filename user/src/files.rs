@@ -61,8 +61,16 @@ fn call<'a, M: Message<'a>>(
     reply: &mut Vec<u8>,
 ) -> FsResult<(usize, Option<Handle>)> {
     reply.resize(64 * 1024, 0);
-    let length = encode(m, 1, reply).map_err(|_| status::INVALID_ARGUMENT)?;
-    channel_write(end, &reply[..length], handles).map_err(|_| GONE)?;
+    // Handles to move are this call's until they are sent: a request that
+    // never goes must not leave them in the table.
+    let unsent = |s: u32| {
+        for entry in handles.iter().filter(|e| e.transfer == Transfer::Move) {
+            let _ = handle_close(entry.handle);
+        }
+        s
+    };
+    let length = encode(m, 1, reply).map_err(|_| unsent(status::INVALID_ARGUMENT))?;
+    channel_write(end, &reply[..length], handles).map_err(|_| unsent(GONE))?;
     let port = port_create().map_err(|_| GONE)?;
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     let waited = port_subscribe(port, end, wanted, 1, Mode::Level)
@@ -117,6 +125,8 @@ impl Drop for File {
 impl File {
     pub fn open(&self, path: &str, flags: u32, wanted: u32) -> FsResult<File> {
         let (client, server) = channel_create().map_err(|_| GONE)?;
+        // Closed on every early return.
+        let client = File { end: client };
         let m = proto::Open {
             flags: Flags(flags),
             rights: Flags(wanted),
@@ -129,7 +139,6 @@ impl File {
             &[moved(server, ChannelObject::RIGHTS)],
             &mut reply,
         )?;
-        let client = File { end: client };
         match decode::<proto::OpenReply<'_>>(&reply[..length], 0) {
             Ok((_, r)) => check(r.status.0).map(|()| client),
             Err(_) => Err(done(&reply[..length])
@@ -140,6 +149,7 @@ impl File {
 
     pub fn clone_as(&self, wanted: u32) -> FsResult<File> {
         let (client, server) = channel_create().map_err(|_| GONE)?;
+        let client = File { end: client };
         let m = proto::Clone {
             rights: Flags(wanted),
         };
@@ -150,7 +160,6 @@ impl File {
             &[moved(server, ChannelObject::RIGHTS)],
             &mut reply,
         )?;
-        let client = File { end: client };
         done(&reply[..length]).map(|_| client)
     }
 
@@ -167,7 +176,11 @@ impl File {
                 .unwrap_or(status::INVALID_ARGUMENT)
         })?;
         check(r.status.0)?;
-        out[..r.data.0.len()].copy_from_slice(r.data.0);
+        // More than was asked is the server's error, not a reason to panic.
+        let into = out
+            .get_mut(..r.data.0.len())
+            .ok_or(status::INVALID_ARGUMENT)?;
+        into.copy_from_slice(r.data.0);
         Ok(r.data.0.len())
     }
 
@@ -311,6 +324,10 @@ impl File {
 }
 
 /// Reads a whole file, by inline requests.
+/// The most `read_all` reads: a larger file is `LimitReached`, not a heap
+/// that grows until the program fails.
+pub const READ_ALL_LIMIT: usize = 16 << 20;
+
 pub fn read_all(file: &File) -> FsResult<Vec<u8>> {
     let mut data = Vec::new();
     let mut chunk = vec![0; proto::MAX_INLINE];
@@ -318,6 +335,9 @@ pub fn read_all(file: &File) -> FsResult<Vec<u8>> {
         let got = file.read(data.len() as u64, &mut chunk)?;
         if got == 0 {
             return Ok(data);
+        }
+        if data.len() + got > READ_ALL_LIMIT {
+            return Err(status::LIMIT_REACHED);
         }
         data.extend_from_slice(&chunk[..got]);
     }

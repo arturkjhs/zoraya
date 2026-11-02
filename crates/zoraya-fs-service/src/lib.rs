@@ -229,6 +229,13 @@ fn wire_kind(kind: ObjKind) -> WireKind {
     })
 }
 
+/// A time in nanoseconds, held at the largest past the year 2554.
+fn nanoseconds(t: Timestamp) -> u64 {
+    (t.secs.max(0) as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(u64::from(t.nanos))
+}
+
 fn failure_code(reason: FailReason) -> u32 {
     use proto::failure::*;
     match reason {
@@ -323,8 +330,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
         };
         self.open += 1;
-        self.transport
-            .interest(end, index as u64, Interest::Requests);
+        // A connection the loop cannot hear would hang its client: refused.
+        if !self
+            .transport
+            .interest(end, index as u64, Interest::Requests)
+        {
+            self.close_connection(index);
+            return None;
+        }
         Some(index)
     }
 
@@ -359,6 +372,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         if let Some(held) = c.held.take() {
             for handle in held.handles {
                 self.transport.close(handle);
+                self.open -= 1;
             }
         }
         let last = match self.records.get_mut(c.record).and_then(Option::as_mut) {
@@ -388,15 +402,35 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// One turn of the loop. False to stop.
     pub fn step(&mut self) -> bool {
-        let deadline = match (self.volume.commit_deadline(), self.retry_at) {
+        // A failed volume commits nothing more: its old deadline would wake
+        // the loop at once, for ever.
+        let commit = match self.volume.failure() {
+            None => self.volume.commit_deadline(),
+            Some(_) => None,
+        };
+        let deadline = match (commit, self.retry_at) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
         match self.transport.wait(deadline) {
-            Wake::Ready(key) => self.ready(key as usize),
+            Wake::Ready(key) => {
+                self.ready(key as usize);
+                // A wait gives ready requests before its deadline, so a busy
+                // loop would never see `Deadline`: ADR-0010 rule 5's bound
+                // and the retry are checked here too.
+                if self.volume.failure().is_none() {
+                    let _ = self.volume.tick();
+                    self.after_engine();
+                }
+                if self.retry_at.is_some_and(|at| self.transport.now() >= at) {
+                    self.retry();
+                }
+            }
             Wake::Deadline => {
-                let _ = self.volume.tick();
-                self.after_engine();
+                if self.volume.failure().is_none() {
+                    let _ = self.volume.tick();
+                    self.after_engine();
+                }
                 self.retry();
             }
             Wake::DriverClosed => {
@@ -464,7 +498,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         };
         match self.transport.write(c.end, &held.bytes, &held.handles) {
             Outgoing::Sent => {
+                let sent = held.handles.len();
                 c.held = None;
+                self.open -= sent;
                 let end = c.end;
                 self.transport
                     .interest(end, index as u64, Interest::Requests);
@@ -488,19 +524,26 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             return;
         };
         match self.transport.write(c.end, &self.output[..length], handles) {
-            Outgoing::Sent => return,
+            Outgoing::Sent => {
+                // Moved to the client: no longer the service's.
+                self.open -= handles.len();
+                return;
+            }
             Outgoing::Closed => {
+                self.drop_handles(handles);
                 self.close_connection(index);
                 return;
             }
             Outgoing::Full | Outgoing::NoMemory => {}
         }
         // Held: one reply, and this connection is not read until it goes.
+        // Its handles stay counted until then.
         let mut bytes = Vec::new();
         let mut held = Vec::new();
         if bytes.try_reserve_exact(length).is_err()
             || held.try_reserve_exact(handles.len()).is_err()
         {
+            self.drop_handles(handles);
             self.close_connection(index);
             return;
         }
@@ -512,6 +555,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         });
         let end = c.end;
         self.transport.interest(end, index as u64, Interest::Reply);
+    }
+
+    /// Closes handles made for a reply that will not be sent.
+    fn drop_handles(&mut self, handles: &[T::End]) {
+        for &handle in handles {
+            self.transport.close(handle);
+        }
+        self.open -= handles.len();
     }
 
     fn reply<'a, M: Message<'a>>(&mut self, index: usize, transaction: u32, m: &M) {
@@ -752,6 +803,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         let flags = m.flags.0;
         let creates = flags & (f::CREATE | f::UNNAMED) != 0;
+        // A directory is opened, never made or truncated here: refused before
+        // the engine runs, so that a refusal changes nothing (ADR-0010 rule 2).
+        if flags & f::DIRECTORY != 0 && (creates || flags & f::TRUNCATE != 0) {
+            return self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
+        }
         let mut needed = m.rights.0;
         if creates {
             needed |= r::CREATE;
@@ -808,8 +864,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         handles.clear();
         let record = self.new_record(handle);
-        self.add_connection(end, record, m.rights.0);
-        self.open_reply(i, t, status::OK, "", "");
+        let s = match self.add_connection(end, record, m.rights.0) {
+            Some(_) => status::OK,
+            None => status::LIMIT_REACHED,
+        };
+        self.open_reply(i, t, s, "", "");
     }
 
     fn clone_connection(&mut self, i: usize, t: u32, rights: u32, handles: &mut Vec<T::End>) {
@@ -832,8 +891,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Ok(handle) => {
                 handles.clear();
                 let record = self.new_record(handle);
-                self.add_connection(end, record, rights);
-                self.done(i, t, status::OK, 0);
+                let s = match self.add_connection(end, record, rights) {
+                    Some(_) => status::OK,
+                    None => status::LIMIT_REACHED,
+                };
+                self.done(i, t, s, 0);
             }
             Err(e) => self.done_result(i, t, Err(e)),
         }
@@ -892,8 +954,18 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         Ok(written)
     }
 
+    /// A write's handle: `WRITE`, and `SYNC` too if it is durable, since that
+    /// is a write followed by `sync` (ADR-0010 rule 4).
+    fn write_handle(&self, i: usize, flags: u32) -> Option<Handle> {
+        let durable = flags & proto::write_flags::DURABLE != 0;
+        if durable && !self.has(i, proto::rights::SYNC) {
+            return None;
+        }
+        self.writable_handle(i)
+    }
+
     fn write(&mut self, i: usize, t: u32, offset: u64, flags: u32, data: &[u8]) {
-        let Some(handle) = self.writable_handle(i) else {
+        let Some(handle) = self.write_handle(i, flags) else {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         };
         let r = self.write_flagged(handle, offset, flags, data);
@@ -982,7 +1054,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn write_buffer(&mut self, i: usize, t: u32, m: &proto::WriteBuffer) {
-        let Some(handle) = self.writable_handle(i) else {
+        let Some(handle) = self.write_handle(i, m.flags.0) else {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         };
         let Some(address) = self.buffer_range(i, m.buffer_offset, m.length) else {
@@ -1013,8 +1085,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Ok(a) => proto::Attributes {
                 status: code(status::OK),
                 size: a.size,
-                modified: (a.mtime.secs.max(0) as u64) * 1_000_000_000 + u64::from(a.mtime.nanos),
-                changed: (a.ctime.secs.max(0) as u64) * 1_000_000_000 + u64::from(a.ctime.nanos),
+                modified: nanoseconds(a.mtime),
+                changed: nanoseconds(a.ctime),
                 mode: u32::from(a.posix_mode),
                 kind: wire_kind(a.kind),
             },
@@ -1133,7 +1205,18 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 return self.reply_without_handle(i, t, &m);
             }
         };
+        // The copy is a handle the service holds until it is sent: it needs
+        // room, and is counted.
+        if !self.room() {
+            let m = proto::TokenReply {
+                status: code(status::TOO_MANY_OPEN),
+            };
+            return self.reply_without_handle(i, t, &m);
+        }
         let copy = token.and_then(|token| self.transport.duplicate(token));
+        if copy.is_some() {
+            self.open += 1;
+        }
         let Some(copy) = copy else {
             let m = proto::TokenReply {
                 status: code(status::STORAGE_FAILED),
@@ -1145,7 +1228,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         };
         match encode(&m, t, &mut self.output) {
             Ok(size) => self.send(i, size, &[copy]),
-            Err(_) => self.close_connection(i),
+            Err(_) => {
+                self.drop_handles(&[copy]);
+                self.close_connection(i);
+            }
         }
     }
 
@@ -1275,6 +1361,13 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn read_link(&mut self, i: usize, t: u32) {
+        if !self.has(i, proto::rights::READ) {
+            let m = proto::ReadLinkReply {
+                status: code(status::ACCESS_DENIED),
+                target: Text(""),
+            };
+            return self.reply(i, t, &m);
+        }
         let r = match self.handle_of(i) {
             Some(handle) => self.volume.readlink(handle),
             None => Err(FsError::StorageFailed),

@@ -151,6 +151,8 @@ pub struct Driver<R, S> {
     next_avail: u16,
     last_used: u16,
     in_flight: [bool; MAX_IN_FLIGHT],
+    /// Bytes the device may write for each slot: a read's data, and the status.
+    writable: [u64; MAX_IN_FLIGHT],
     failed: bool,
     outstanding: usize,
 }
@@ -222,6 +224,7 @@ impl<R: Registers, S: Shared> Driver<R, S> {
             next_avail: 0,
             last_used: 0,
             in_flight: [false; MAX_IN_FLIGHT],
+            writable: [0; MAX_IN_FLIGHT],
             failed: false,
             outstanding: 0,
         })
@@ -279,6 +282,12 @@ impl<R: Registers, S: Shared> Driver<R, S> {
         let ring = AVAIL_AT + 4 + 2 * (usize::from(index) % N);
         self.shared.write16(ring, head as u16);
         self.next_avail = index.wrapping_add(1);
+        let data: u64 = request.pieces.iter().map(|p| u64::from(p.length)).sum();
+        self.writable[slot] = if request.kind == Kind::Read {
+            data + 1
+        } else {
+            1
+        };
         self.in_flight[slot] = true;
         self.outstanding += 1;
         Ok(())
@@ -303,9 +312,13 @@ impl<R: Registers, S: Shared> Driver<R, S> {
         if usize::from(new) > self.outstanding {
             return Err(Error::Device);
         }
+        // The entries and the statuses were written before the index: read
+        // them after it (2.7.14).
+        self.shared.acquire();
         for _ in 0..new {
             let entry = USED_AT + 4 + 8 * (usize::from(self.last_used) % N);
             let id = self.shared.read32(entry) as usize;
+            let length = u64::from(self.shared.read32(entry + 4));
             self.last_used = self.last_used.wrapping_add(1);
             if !id.is_multiple_of(SLOT) || id / SLOT >= MAX_IN_FLIGHT {
                 return Err(Error::Device);
@@ -317,9 +330,15 @@ impl<R: Registers, S: Shared> Driver<R, S> {
             self.in_flight[slot] = false;
             self.outstanding -= 1;
             let status = self.shared.read8(HEADERS_AT + slot * 32 + 16);
-            // The used length is advisory, and a whole transfer is all this
-            // driver accepts: the status says whether it happened.
+            // More than the device could write is a lie. A read that succeeds
+            // must have written all of its data (ADR-0015 rule 8, 2.7.8): the
+            // engine would otherwise see the last transfer's bytes.
+            let writable = self.writable[slot];
+            if length > writable {
+                return Err(Error::Device);
+            }
             match status {
+                0 if length < writable => return Err(Error::Device),
                 0 => {}
                 1 | 2 => self.failed = true,
                 _ => return Err(Error::Device),
@@ -360,6 +379,25 @@ fn fail<R: Registers>(registers: &mut R, error: Error) -> Error {
     let status = registers.read(reg::STATUS);
     registers.write(reg::STATUS, status | STATUS_FAILED);
     error
+}
+
+/// Where a request of the service goes (ADR-0054: its messages are untrusted):
+/// `count` sectors from `sector` of a device of `sectors`, at `offset` in a
+/// memory pinned as `runs`. None if any of it is out of range or empty.
+pub fn place(
+    runs: &[(u64, u64)],
+    sectors: u64,
+    sector: u64,
+    count: u32,
+    offset: u64,
+    out: &mut [Piece],
+) -> Option<usize> {
+    let bytes = u64::from(count).checked_mul(SECTOR_SIZE)?;
+    let last = sector.checked_add(u64::from(count))?;
+    if bytes == 0 || last > sectors {
+        return None;
+    }
+    pieces(runs, offset, bytes, out)
 }
 
 /// Splits `[offset, offset + length)` of a memory pinned as `runs`

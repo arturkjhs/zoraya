@@ -134,10 +134,16 @@ impl Volume {
         let data = read_all(&file)?;
         match core::str::from_utf8(&data) {
             Ok(text) => {
-                for chunk in text.as_bytes().chunks(4096) {
-                    if let Ok(part) = core::str::from_utf8(chunk) {
-                        print!("{part}");
+                // In pieces of at most 4 KiB, cut between characters.
+                let mut rest = text;
+                while !rest.is_empty() {
+                    let mut cut = rest.len().min(4096);
+                    while !rest.is_char_boundary(cut) {
+                        cut -= 1;
                     }
+                    let (part, after) = rest.split_at(cut);
+                    print!("{part}");
+                    rest = after;
                 }
                 if !text.is_empty() && !text.ends_with('\n') {
                     println!();

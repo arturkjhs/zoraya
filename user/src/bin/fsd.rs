@@ -18,7 +18,7 @@ use zoraya_fs_service::block::{ChannelDevice, Link, LinkError};
 use zoraya_fs_service::{HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake};
 use zoraya_proto_block as blk;
 use zoraya_proto_file::Failure;
-use zoraya_protocol::{Below, encode};
+use zoraya_protocol::{Below, decode, encode};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, event_create, handle_duplicate, handle_type,
     memory_create, memory_map, memory_unmap, object_same, port_create, port_subscribe,
@@ -192,8 +192,13 @@ impl Transport for Kernel {
         let m = Failure {
             reason: Below(reason),
         };
-        if let Ok(length) = encode(&m, 0, &mut out) {
-            let _ = channel_write(self.supervisor, &out[..length], &[]);
+        // A report that cannot be sent would leave `init` waiting on a
+        // volume that has failed: ending the service is a report it hears.
+        let sent = encode(&m, 0, &mut out)
+            .is_ok_and(|length| channel_write(self.supervisor, &out[..length], &[]).is_ok());
+        if !sent {
+            println!("fsd: the report did not go: ending");
+            zoraya_user::process_exit(1);
         }
     }
 
@@ -201,7 +206,11 @@ impl Transport for Kernel {
         let mut packets = [Packet::default()];
         let until = deadline.unwrap_or(DEADLINE_INFINITE);
         match port_wait(self.port, until, &mut packets) {
-            Ok(_) if packets[0].key == DRIVER_KEY => Wake::DriverClosed,
+            Ok(_) if packets[0].key == DRIVER_KEY => {
+                // Level: it would come back on every wait.
+                let _ = port_unsubscribe(self.port, DRIVER_KEY);
+                Wake::DriverClosed
+            }
             Ok(_) => Wake::Ready(packets[0].key - FIRST_KEY),
             Err(Status::DeadlineExceeded) => Wake::Deadline,
             Err(_) => Wake::Stop,
@@ -241,7 +250,12 @@ fn main() -> i32 {
     channel_write(driver, &out[..length], &[entry]).expect("attach");
     let mut packets = [Packet::default()];
     port_wait(block_port, DEADLINE_INFINITE, &mut packets).expect("attach reply");
-    channel_read(driver, &mut out, &mut []).expect("attach reply");
+    let sizes = channel_read(driver, &mut out, &mut []).expect("attach reply");
+    let attached = decode::<blk::Done>(&out[..sizes.bytes as usize], 0);
+    if !attached.is_ok_and(|(_, m)| m.status.0 == blk::status::OK) {
+        println!("fsd: the driver refused the transfer buffer");
+        return 1;
+    }
 
     let link = DriverLink {
         end: driver,

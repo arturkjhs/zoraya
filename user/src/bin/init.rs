@@ -54,8 +54,11 @@ fn start_shell(root: Option<File>) -> Option<(Handle, Handle)> {
 
 fn power_down(root: Option<&File>, status_line: zoraya_abi::ExitRecord) -> ! {
     println!("init: shell ended: {status_line:?}");
-    if let Some(root) = root {
-        let _ = root.sync();
+    if let Some(root) = root
+        && root.sync().is_err()
+    {
+        // Nobody else can say it: the last writes may be lost.
+        println!("init: sync failed: what was written since the last sync may be lost");
     }
     let status = power_off(POWER);
     println!("init: power off: {status:?}");
@@ -78,12 +81,19 @@ fn main() -> i32 {
     let mut restarts = Restarts::new();
     loop {
         let Some(stack) = start_stack(device, range) else {
-            break;
+            println!("init: the storage stack did not start");
+            no_storage();
         };
         let shell = match stack.root.clone_as(ALL) {
             Ok(root) => start_shell(Some(root)),
             Err(_) => None,
         };
+        // A healthy stack with no shell would leave nothing to wake `init`.
+        if shell.is_none() && stack.root.sync().is_ok() {
+            println!("init: the shell did not start");
+            stack.end();
+            zoraya_user::process_exit(1);
+        }
         let port = port_create().expect("port");
         let terminated = process_signals::TERMINATED;
         let watched = [(stack.driver.1, KEY_DRIVER), (stack.service.1, KEY_SERVICE)];

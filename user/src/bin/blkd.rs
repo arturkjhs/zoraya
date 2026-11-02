@@ -22,7 +22,7 @@ use zoraya_user::{
 };
 use zoraya_virtio::{
     Driver, Error, Kind, MAX_IN_FLIGHT, MAX_PIECES, Piece, QUEUE_MEMORY, Registers, Request,
-    SECTOR_SIZE, Shared, pieces,
+    Shared, place,
 };
 
 extern crate alloc;
@@ -82,7 +82,6 @@ impl Shared for Queues {
 struct Attached {
     pin: Handle,
     runs: Vec<(u64, u64)>,
-    size: u64,
 }
 
 struct Blk {
@@ -113,15 +112,15 @@ impl Blk {
 
     fn check(&self, range: &Range, out: &mut [Piece]) -> Option<usize> {
         let attached = self.attached.as_ref()?;
-        let bytes = u64::from(range.count).checked_mul(SECTOR_SIZE)?;
-        let last = range.sector.checked_add(u64::from(range.count))?;
-        if bytes == 0 || last > self.driver.geometry().sectors {
-            return None;
-        }
-        if range.offset.checked_add(bytes)? > attached.size {
-            return None;
-        }
-        pieces(&attached.runs, range.offset, bytes, out)
+        let sectors = self.driver.geometry().sectors;
+        place(
+            &attached.runs,
+            sectors,
+            range.sector,
+            range.count,
+            range.offset,
+            out,
+        )
     }
 
     fn transfer(&mut self, kind: Kind, ranges: &mut dyn Iterator<Item = Range>) -> u32 {
@@ -129,6 +128,12 @@ impl Blk {
             address: 0,
             length: 0,
         }; MAX_PIECES];
+        // All of them are checked before any is queued: a refused batch
+        // writes nothing.
+        let ranges: Vec<Range> = ranges.collect();
+        if ranges.iter().any(|r| self.check(r, &mut piece).is_none()) {
+            return status::BAD_RANGE;
+        }
         let mut queued = 0;
         for range in ranges {
             let Some(count) = self.check(&range, &mut piece) else {
@@ -139,8 +144,10 @@ impl Blk {
                 sector: range.sector,
                 pieces: &piece[..count],
             };
+            // Checked above, and a slot is free: this cannot fail, and if it
+            // did, what is queued would go out with a later request.
             if self.driver.queue(&request).is_err() {
-                return status::BAD_RANGE;
+                return self.lost();
             }
             queued += 1;
             if queued == MAX_IN_FLIGHT {
@@ -188,8 +195,7 @@ impl Blk {
             .take_while(|r| r[1] != 0)
             .map(|r| (r[0], r[1]))
             .collect();
-        let size = runs.iter().map(|r| r.1).sum();
-        self.attached = Some(Attached { pin, runs, size });
+        self.attached = Some(Attached { pin, runs });
         status::OK
     }
 
@@ -208,8 +214,8 @@ impl Blk {
     fn serve(&mut self) {
         let mut handles = [self.client; 1];
         let mut message = core::mem::take(&mut self.message);
-        let length = match channel_read(self.client, &mut message, &mut handles) {
-            Ok(sizes) => sizes.bytes as usize,
+        let (length, received) = match channel_read(self.client, &mut message, &mut handles) {
+            Ok(sizes) => (sizes.bytes as usize, sizes.handles > 0),
             Err((zoraya_abi::Status::WouldBlock, _)) => {
                 self.message = message;
                 return;
@@ -222,6 +228,10 @@ impl Blk {
         };
         let t = header.transaction;
         let refused = status::BAD_RANGE;
+        // Only `Attach` takes a handle; any other is closed, not kept.
+        if received && header.ordinal != 2 {
+            let _ = handle_close(handles[0]);
+        }
         match header.ordinal {
             1 if decode::<Info>(bytes, 0).is_ok() => {
                 let g = self.driver.geometry();
@@ -232,10 +242,16 @@ impl Blk {
                 };
                 self.respond(t, &m);
             }
-            2 if decode::<Attach>(bytes, 1).is_ok() => {
+            2 if received && decode::<Attach>(bytes, 1).is_ok() => {
                 let s = self.attach(handles[0]);
                 let _ = handle_close(handles[0]);
                 self.done(t, s);
+            }
+            2 => {
+                if received {
+                    let _ = handle_close(handles[0]);
+                }
+                self.done(t, refused);
             }
             3 => match decode::<Read>(bytes, 0) {
                 Ok((_, m)) => {

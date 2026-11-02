@@ -8,7 +8,7 @@ const QUEUE_BASE: u64 = 0x10_0000;
 const DATA_BASE: u64 = 0x20_0000;
 
 /// How the fake device misbehaves.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Hostile {
     #[default]
     None,
@@ -20,12 +20,18 @@ enum Hostile {
     Repeats,
     /// A status byte that means nothing.
     BadStatus,
+    /// An id past the last slot.
+    IdOutOfRange,
+    /// Completes the first slot for every request.
+    RepeatsFirst,
     /// Requests fail.
     IoError,
     /// Requests are unsupported.
     Unsupported,
     /// The used length claims more than the buffers.
     HugeLength,
+    /// A read succeeds with less than its data written.
+    ShortRead,
     /// Reset never reads back 0.
     NoReset,
     /// No version 1 feature.
@@ -47,6 +53,8 @@ struct Device {
     data: Vec<u8>,
     disk: Vec<u8>,
     status: u32,
+    /// Every value written to `Status`, in order.
+    status_writes: Vec<u32>,
     feature_sel: u32,
     avail_seen: u16,
     used: u16,
@@ -65,6 +73,7 @@ impl Device {
             data: vec![0; 1 << 20],
             disk: vec![0; (SIZE_SECTORS * SECTOR_SIZE) as usize],
             status: 0,
+            status_writes: Vec::new(),
             feature_sel: 0,
             avail_seen: 0,
             used: 0,
@@ -184,7 +193,12 @@ impl Device {
                 self.complete(head as u32, length + 1);
             }
             Hostile::HugeLength => self.complete(head as u32, u32::MAX),
-            _ => self.complete(head as u32, length + 1),
+            Hostile::IdOutOfRange => self.complete((SLOT * MAX_IN_FLIGHT) as u32, 1),
+            Hostile::RepeatsFirst => self.complete(0, 1),
+            Hostile::ShortRead if kind == BLK_T_IN => self.complete(head as u32, length),
+            // What the device wrote: a read's data, and the status.
+            _ if kind == BLK_T_IN => self.complete(head as u32, length + 1),
+            _ => self.complete(head as u32, 1),
         }
     }
 }
@@ -219,6 +233,7 @@ impl Registers for Fake {
         let mut d = self.0.borrow_mut();
         match offset {
             reg::STATUS => {
+                d.status_writes.push(value);
                 let refuse = d.hostile == Hostile::RefusesFeatures;
                 d.status = if refuse {
                     value & !STATUS_FEATURES_OK
@@ -373,7 +388,8 @@ fn a_flush_reaches_the_device() {
 fn a_batch_completes_together_and_the_rings_wrap() {
     let (device, d) = driver(Hostile::None);
     let mut d = d.unwrap();
-    for round in 0..3000u64 {
+    // Past 65,536: the 16-bit indexes wrap.
+    for round in 0..17_000u64 {
         for i in 0..4 {
             let sector = (round + i * 8) % 1024;
             d.queue(&request(Kind::Write, sector, &[piece(i * 512, 512)]))
@@ -382,7 +398,7 @@ fn a_batch_completes_together_and_the_rings_wrap() {
         d.notify();
         assert_eq!(d.collect(), Ok(0), "round {round}");
     }
-    assert_eq!(device.borrow().avail_seen, 12000);
+    assert_eq!(device.borrow().avail_seen, (68_000u32 % 65_536) as u16);
 }
 
 #[test]
@@ -432,10 +448,15 @@ fn a_lying_device_is_a_device_error() {
         Hostile::BadId,
         Hostile::Repeats,
         Hostile::BadStatus,
+        Hostile::IdOutOfRange,
+        Hostile::RepeatsFirst,
     ] {
         let (_, d) = driver(hostile);
         let mut d = d.unwrap();
-        d.queue(&request(Kind::Read, 0, &[piece(0, 512)])).unwrap();
+        // Two, so that a repeat of the first is not more than is outstanding.
+        d.queue(&request(Kind::Write, 0, &[piece(0, 512)])).unwrap();
+        d.queue(&request(Kind::Write, 8, &[piece(512, 512)]))
+            .unwrap();
         d.notify();
         assert_eq!(d.collect(), Err(Error::Device));
     }
@@ -443,11 +464,24 @@ fn a_lying_device_is_a_device_error() {
 
 #[test]
 fn a_used_length_is_not_trusted() {
-    let (_, d) = driver(Hostile::HugeLength);
+    for (hostile, kind) in [
+        (Hostile::HugeLength, Kind::Read),
+        (Hostile::HugeLength, Kind::Write),
+        (Hostile::ShortRead, Kind::Read),
+    ] {
+        let (_, d) = driver(hostile);
+        let mut d = d.unwrap();
+        d.queue(&request(kind, 0, &[piece(0, 512)])).unwrap();
+        d.notify();
+        assert_eq!(d.collect(), Err(Error::Device), "{hostile:?} {kind:?}");
+    }
+    // A short read that failed wrote nothing, and says so.
+    let (device, d) = driver(Hostile::ShortRead);
     let mut d = d.unwrap();
-    d.queue(&request(Kind::Read, 0, &[piece(0, 512)])).unwrap();
+    d.queue(&request(Kind::Write, 0, &[piece(0, 512)])).unwrap();
     d.notify();
-    assert_eq!(d.collect(), Ok(0));
+    assert_eq!(d.collect(), Ok(0), "a write's length is the status");
+    drop(device);
 }
 
 /// A status the device never wrote does not read as success.
@@ -501,4 +535,61 @@ fn pieces_split_at_runs() {
     assert_eq!(pieces(&runs, 0x4000, 1, &mut out), None);
     assert_eq!(pieces(&runs, u64::MAX, 1, &mut out), None);
     assert_eq!(pieces(&runs, 0, 0x3000, &mut out[..1]), None, "too many");
+}
+
+/// `blkd`'s check of a service's range (INV-0054-4).
+#[test]
+fn a_range_is_placed_only_inside_the_device_and_the_memory() {
+    let runs = [(0x1000, 0x1000), (0x8000, 0x2000)];
+    let mut out = [Piece {
+        address: 0,
+        length: 0,
+    }; 4];
+    assert_eq!(place(&runs, 100, 0, 8, 0, &mut out), Some(1));
+    assert_eq!(
+        place(&runs, 100, 92, 8, 0, &mut out),
+        Some(1),
+        "the last sectors"
+    );
+    assert_eq!(
+        place(&runs, 100, 93, 8, 0, &mut out),
+        None,
+        "past the device"
+    );
+    assert_eq!(place(&runs, 100, u64::MAX, 1, 0, &mut out), None, "wraps");
+    assert_eq!(place(&runs, 100, 0, 0, 0, &mut out), None, "empty");
+    assert_eq!(
+        place(&runs, 100, 0, 8, 0x2000, &mut out),
+        Some(1),
+        "the memory's end"
+    );
+    assert_eq!(
+        place(&runs, 100, 0, 8, 0x2001, &mut out),
+        None,
+        "past the memory"
+    );
+    assert_eq!(
+        place(&runs, 100, 0, 1, u64::MAX, &mut out),
+        None,
+        "offset wraps"
+    );
+    assert_eq!(
+        place(&runs, u64::MAX, 0, u32::MAX, 0, &mut out),
+        None,
+        "too large"
+    );
+}
+
+/// INV-0080-1, the driver's half: a new driver resets the device before it
+/// touches anything, and `reset` writes 0 and waits for it.
+#[test]
+fn a_new_driver_resets_the_device_first() {
+    let (device, d) = driver(Hostile::None);
+    let mut d = d.unwrap();
+    let writes = device.borrow().status_writes.clone();
+    assert_eq!(writes.first(), Some(&0), "{writes:?}");
+    assert!(writes[1..].iter().all(|&w| w != 0), "once, first");
+    assert!(d.reset());
+    assert_eq!(device.borrow().status_writes.last(), Some(&0));
+    assert_eq!(device.borrow().status, 0);
 }

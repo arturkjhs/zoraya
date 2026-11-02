@@ -102,7 +102,7 @@ impl Guest {
         while let Ok(bytes) = self.bytes.recv_timeout(Duration::from_secs(2)) {
             self.text.push_str(&String::from_utf8_lossy(&bytes));
         }
-        Ok(self.text)
+        Ok(std::mem::take(&mut self.text))
     }
 
     fn power_off(mut self) -> Result<(), String> {
@@ -112,6 +112,16 @@ impl Guest {
             Ok(())
         } else {
             Err(format!("QEMU ended with {status}"))
+        }
+    }
+}
+
+/// A round that fails returns early: its QEMU must not outlive it.
+impl Drop for Guest {
+    fn drop(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }

@@ -36,6 +36,11 @@ struct Net {
     copies_from: u32,
     memory: BTreeMap<u64, Vec<u8>>,
     wake_deadline: bool,
+    /// Handles the service holds: received, made or copied, and not yet
+    /// closed or sent on (INV-0055-7 counts these, not the service's count).
+    owned: BTreeSet<End>,
+    /// What the service asked each wait for.
+    deadlines: Vec<Option<u64>>,
     driver_closed: bool,
     now: u64,
     tokens: BTreeMap<End, End>,
@@ -81,6 +86,7 @@ impl Transport for Fake {
         match n.queues.get_mut(&end).and_then(VecDeque::pop_front) {
             Some((message, list)) => {
                 bytes[..message.len()].copy_from_slice(&message);
+                n.owned.extend(list.iter().copied());
                 handles.extend(list);
                 Incoming::Message(message.len())
             }
@@ -103,6 +109,9 @@ impl Transport for Fake {
             return Outgoing::Full;
         }
         queue.push_back((bytes.to_vec(), handles.to_vec()));
+        for handle in handles {
+            n.owned.remove(handle);
+        }
         Outgoing::Sent
     }
 
@@ -113,6 +122,7 @@ impl Transport for Fake {
 
     fn close(&mut self, end: End) {
         let mut n = self.0.borrow_mut();
+        n.owned.remove(&end);
         n.closed.insert(end);
         n.interests.retain(|_, (e, _)| *e != end);
     }
@@ -131,11 +141,14 @@ impl Transport for Fake {
         let mut n = self.0.borrow_mut();
         let root = n.tokens.get(&end).copied().unwrap_or(end);
         n.tokens.insert(copy, root);
+        n.owned.insert(copy);
         Some(copy)
     }
 
     fn new_token(&mut self) -> Option<End> {
-        Some(self.end(HandleKind::Token))
+        let token = self.end(HandleKind::Token);
+        self.0.borrow_mut().owned.insert(token);
+        Some(token)
     }
 
     fn same(&mut self, a: End, b: End) -> bool {
@@ -177,8 +190,9 @@ impl Transport for Fake {
         self.0.borrow_mut().reports.push(reason);
     }
 
-    fn wait(&mut self, _deadline: Option<u64>) -> Wake {
+    fn wait(&mut self, deadline: Option<u64>) -> Wake {
         let mut n = self.0.borrow_mut();
+        n.deadlines.push(deadline);
         if std::mem::take(&mut n.driver_closed) {
             return Wake::DriverClosed;
         }
@@ -284,6 +298,7 @@ fn rig_with(plan: FaultPlan) -> Rig {
     let net = Fake::default();
     let mut service = Service::new(volume, net.clone());
     let root = net.channel();
+    net.0.borrow_mut().owned.insert(root);
     assert!(service.add_root(root));
     Rig {
         net,
@@ -491,6 +506,157 @@ fn no_request_succeeds_without_its_right() {
     let _ = f;
 }
 
+/// A reply's status: every reply has it first, after the header.
+fn status_of(reply: &[u8]) -> u32 {
+    u32::from_le_bytes(reply[16..20].try_into().unwrap())
+}
+
+/// INV-0055-3, whole: every request a right guards, against a connection
+/// lacking each right it needs, and `clone` never adding one.
+#[test]
+fn every_guarded_request_needs_each_of_its_rights() {
+    use rights::*;
+    type Ask = fn(&mut Rig, End) -> u32;
+    let cases: &[(&str, bool, u32, Ask)] = &[
+        ("open", true, READ, |r, c| r.try_open(c, "f", 0, READ).0),
+        ("open create", true, CREATE, |r, c| {
+            r.try_open(c, "new", open_flags::CREATE, 0).0
+        }),
+        ("open truncate", true, WRITE, |r, c| {
+            r.try_open(c, "f", open_flags::TRUNCATE, 0).0
+        }),
+        ("clone", false, CLONE | READ, |r, c| {
+            let end = r.net.channel();
+            let m = proto::Clone {
+                rights: Flags(READ),
+            };
+            r.done(c, &m, vec![end]).0
+        }),
+        ("read", false, READ, |r, c| r.read_text(c, 0, 1).0),
+        ("write", false, WRITE, |r, c| r.write_text(c, 0, 0, b"x").0),
+        ("durable write", false, WRITE | SYNC, |r, c| {
+            r.write_text(c, 0, write_flags::DURABLE, b"x").0
+        }),
+        ("set size", false, WRITE, |r, c| {
+            r.done(c, &proto::SetSize { size: 1 }, vec![]).0
+        }),
+        ("set attributes", false, WRITE, |r, c| {
+            let m = proto::SetAttributes {
+                which: Flags(1),
+                mode: 0o600,
+                seconds: 0,
+                nanos: 0,
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("read link", false, READ, |r, c| {
+            status_of(&r.call(c, &proto::ReadLink {}, vec![]))
+        }),
+        ("sync", false, SYNC, |r, c| {
+            r.done(c, &proto::Sync {}, vec![]).0
+        }),
+        ("read directory", true, READ, |r, c| {
+            status_of(&r.call(c, &proto::ReadDirectory { cookie: 0 }, vec![]))
+        }),
+        ("remove", true, REMOVE, |r, c| {
+            r.done(c, &proto::Remove { name: Name("gone") }, vec![]).0
+        }),
+        ("make directory", true, CREATE, |r, c| {
+            let m = proto::MakeDirectory {
+                mode: 0o755,
+                name: Name("d"),
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("make link", true, CREATE, |r, c| {
+            let m = proto::MakeLink {
+                name: Name("l"),
+                target: Text("f"),
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("rename", true, RENAME, |r, c| {
+            let root = r.root;
+            let token = token_of(r, root);
+            let m = proto::Rename {
+                mode: Below(0),
+                old: Name("moved"),
+                new: Name("moved2"),
+            };
+            r.done(c, &m, vec![token]).0
+        }),
+    ];
+    let denied = status::ACCESS_DENIED;
+    for &(name, directory, needed, ask) in cases {
+        let mut bits = needed;
+        while bits != 0 {
+            let right = bits.isolate_lowest_one();
+            bits &= !right;
+            let mut r = rig();
+            let root = r.root;
+            let f = r.open(root, "f", open_flags::CREATE);
+            r.open(root, "gone", open_flags::CREATE);
+            r.open(root, "moved", open_flags::CREATE);
+            let base = if directory { root } else { f };
+            let end = r.net.channel();
+            let m = proto::Clone {
+                rights: Flags(ANY & !right),
+            };
+            assert_eq!(r.done(base, &m, vec![end]).0, status::OK);
+            let before = r.flushes();
+            assert_eq!(ask(&mut r, end), denied, "{name} without {right:#x}");
+            assert_eq!(r.flushes(), before, "{name}: a refusal commits nothing");
+            assert_eq!(r.read_text(f, 0, 8).1, b"", "{name}: f is untouched");
+            // With every right, it is not refused for want of one.
+            let mut r = rig();
+            let root = r.root;
+            let f = r.open(root, "f", open_flags::CREATE);
+            r.open(root, "gone", open_flags::CREATE);
+            r.open(root, "moved", open_flags::CREATE);
+            let base = if directory { root } else { f };
+            assert_ne!(ask(&mut r, base), denied, "{name} with every right");
+        }
+    }
+    // A connection never gets more than it has, by `clone` or `open`.
+    let mut r = rig();
+    let root = r.root;
+    let narrow = r.net.channel();
+    let m = proto::Clone {
+        rights: Flags(CLONE | READ),
+    };
+    assert_eq!(r.done(root, &m, vec![narrow]).0, status::OK);
+    for wanted in [ANY, CLONE | READ | WRITE, WRITE] {
+        let end = r.net.channel();
+        let m = proto::Clone {
+            rights: Flags(wanted),
+        };
+        assert_eq!(r.done(narrow, &m, vec![end]).0, denied, "{wanted:#x}");
+    }
+    let (s, _) = r.try_open(narrow, "f", open_flags::CREATE, READ);
+    assert_eq!(s, denied, "create through a connection without it");
+}
+
+/// ADR-0010 rule 2: a refused open changes nothing.
+#[test]
+fn an_open_as_a_directory_never_creates_or_truncates() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    r.write_text(f, 0, 0, b"precious");
+    for flags in [
+        open_flags::CREATE | open_flags::DIRECTORY,
+        open_flags::TRUNCATE | open_flags::DIRECTORY,
+        open_flags::UNNAMED | open_flags::DIRECTORY,
+    ] {
+        let (s, _) = r.try_open(root, "f", flags, ANY);
+        assert_eq!(s, status::INVALID_ARGUMENT);
+        let (s, _) = r.try_open(root, "new", flags, ANY);
+        assert_eq!(s, status::INVALID_ARGUMENT);
+    }
+    assert_eq!(r.read_text(f, 0, 16).1, b"precious");
+    assert_eq!(r.try_open(root, "new", 0, ANY).0, status::NOT_FOUND);
+}
+
 #[test]
 fn a_read_only_connection_cannot_write_but_can_read() {
     let mut r = rig();
@@ -526,6 +692,39 @@ fn a_failed_timed_commit_reaches_the_supervisor_once() {
         status::STORAGE_FAILED
     );
     assert_eq!(r.net.0.borrow().reports.len(), 1, "once");
+}
+
+/// R-14: a failed volume has no commit to wait for, so the loop sleeps.
+#[test]
+fn a_failed_volume_does_not_wake_the_loop() {
+    let mut r = rig_with(FaultPlan::default());
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    r.write_text(f, 0, 0, b"x");
+    r.service.volume().device_mut().inner.plan.fail_flush =
+        Some(r.service.volume().device().inner.flushes);
+    r.clock.advance_mono(60_000_000_000);
+    r.net.0.borrow_mut().wake_deadline = true;
+    r.run();
+    assert!(r.service.volume().failure().is_some());
+    r.net.0.borrow_mut().deadlines.clear();
+    r.done(root, &proto::Status {}, vec![]);
+    assert!(r.net.0.borrow().deadlines.iter().all(Option::is_none));
+}
+
+/// ADR-0010 rule 5 under load: requests always ready still let the timed
+/// commit run.
+#[test]
+fn a_busy_loop_still_commits_in_time() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    r.write_text(f, 0, 0, b"x");
+    let before = r.flushes();
+    r.clock.advance_mono(6_000_000_000);
+    // Never a `Deadline` wake: there is always a request.
+    r.done(root, &proto::Status {}, vec![]);
+    assert!(r.flushes() > before, "committed between requests");
 }
 
 /// INV-0054-5: lost when idle and clean, heard once, with reads refused.
@@ -719,6 +918,18 @@ fn the_table_never_passes_its_limit_under_random_use() {
                     other => panic!("{other}"),
                 }
             }
+            // A token, to a client that sometimes closes before its reply.
+            3 if !live.is_empty() && state & 0x100 != 0 => {
+                let end = live[at];
+                r.post(end, &proto::GetToken {}, vec![]);
+                if state & 0x200 != 0 {
+                    live.swap_remove(at);
+                    r.net.0.borrow_mut().closed.insert(end);
+                }
+                r.run();
+                // The client takes the copy, which is then its own.
+                let _ = r.net.take_reply(end);
+            }
             3 | 4 if !live.is_empty() => {
                 let end = r.net.channel();
                 let m = proto::Clone { rights: Flags(ANY) };
@@ -741,14 +952,17 @@ fn the_table_never_passes_its_limit_under_random_use() {
             }
             _ => {}
         }
-        assert!(r.service.open_count() <= MAX_OPEN);
-        peak = peak.max(r.service.open_count());
+        let owned = r.net.0.borrow().owned.len();
+        assert_eq!(owned, r.service.open_count(), "the count is what is held");
+        assert!(owned <= MAX_OPEN);
+        peak = peak.max(owned);
     }
     assert_eq!(peak, MAX_OPEN, "the run must reach the limit");
     // Attached buffers count too, and they go with the last connection.
     r.net.0.borrow_mut().closed.extend(live);
     r.run();
     assert_eq!(r.service.open_count(), 1);
+    assert_eq!(r.net.0.borrow().owned.len(), 1, "only the root is held");
 }
 
 #[test]
