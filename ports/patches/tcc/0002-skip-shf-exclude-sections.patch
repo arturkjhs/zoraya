@@ -1,0 +1,15 @@
+--- a/tccelf.c
++++ b/tccelf.c
+@@ -3359,6 +3359,12 @@
+ 	  sh = &shdr[sh->sh_info];
+         /* ignore sections types we do not handle (plus relocs to those) */
+         sh_name = strsec + sh->sh_name;
++        /* Zoraya: SHF_EXCLUDE sections (such as LLVM's embedded bitcode,
++           .llvmbc, in Rust's precompiled libraries in libc.a) are not input
++           to a link, by the ELF gABI; loading them left their local symbols
++           undefined. */
++        if (sh->sh_flags & SHF_EXCLUDE)
++            continue;
+         if (0 == strncmp(sh_name, ".debug_", 7)
+          || 0 == strncmp(sh_name, ".stab", 5)) {
+ 	    if (!s1->do_debug || seencompressed)

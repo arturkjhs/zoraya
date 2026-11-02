@@ -85,9 +85,10 @@ if [ "$defaultlibs" = 1 ]; then
     libs=-lc
 fi
 
-# The word splitting of $pre, $libs and $post is intended: the sysroot's path
+# -x none ends a -x the caller gave (as in `cc -x c -`), so that crtn.o is
+# an object, not C. The word splitting of $pre, $libs and $post is intended: the sysroot's path
 # is the repository's, which has no spaces (CLAUDE.md, Conventions).
 # shellcheck disable=SC2086
 exec "$clang" -static -nostdlib -fuse-ld=lld "--ld-path=$ZORAYA_LD" \
     -Wl,--image-base=0x400000 -Wl,-z,norelro -Wl,--build-id=none \
-    -Wl,-z,noexecstack -L"$lib" $pre "$@" $libs $post
+    -Wl,-z,noexecstack -L"$lib" $pre "$@" -x none $libs $post

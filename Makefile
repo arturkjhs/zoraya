@@ -239,6 +239,12 @@ mutants-host:
 	  case $$rc in 0|2|3) echo "missed: build/mutants/cargo/mutants.out/missed.txt";; \
 	  *) echo "cargo-mutants failed ($$rc), see build/mutants/cargo.log"; exit $$rc;; esac
 
+# Stage 6b: the cross toolchain, the sysroot and the ported programs
+# (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
+.PHONY: fetch-ports ports check-ports clean-ports
+fetch-ports ports check-ports clean-ports:
+	@$(MAKE) -f ports/Makefile $@
+
 tools-storage:
 	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
 	@mkdir -p $(BUILD)

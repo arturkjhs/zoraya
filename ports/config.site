@@ -1,0 +1,26 @@
+# Answers for autoconf checks in the cross builds of the ports (ADR-0109 item
+# 6). ports/Makefile points CONFIG_SITE here. Each answer says why it is true
+# on Zoraya; a configure that asks something not answered here and cannot
+# find out falls back to its own cross-compiling guess, which its log shows.
+
+# dash: musl's <ctype.h> defines isalpha as a macro, so programs call no
+# function; the function is outside the tier list and hidden in libc.a
+# (ADR-0141), which makes dash's link test fail and dash then reach for
+# glibc's private _isalnum and friends.
+ac_cv_func_isalpha=yes
+
+# GNU make: run tests a cross build cannot run.
+# musl's strcoll (retained, a tier row) compares bytes, which is correct in
+# the C locale, the only one Zoraya has.
+ac_cv_func_strcoll_works=yes
+# musl's gettimeofday (retained) is the standard one: it never clobbers the
+# caller's struct tm, which is what the run test looks for.
+ac_cv_func_gettimeofday=yes
+# libposix's posix_spawn resolves and loads the program before the child
+# exists (ADR-0104 items 4 and 5, ADR-0108 item 2), so a missing or unloadable
+# program is reported by posix_spawn's return value, as with musl on Linux,
+# where TASK-02 measured make.
+make_cv_synchronous_posix_spawn=yes
+# fork is snapshot_process (ADR-0102) and vfork is fork (ADR-0100 item 6).
+ac_cv_func_fork_works=yes
+ac_cv_func_vfork_works=yes
