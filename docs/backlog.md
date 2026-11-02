@@ -42,6 +42,7 @@ limited to the lines it changed, what it finds outside them is added here.
 | R-40 | `kernel/src/device.rs` | `base + FRAME_SIZE` is not checked for overflow; only a device tree naming the last page reaches it. |
 | R-41 | `tools/test-runner` `o` step | Counts occurrences so far, not over the whole run. |
 | W7 | ADR-0054 Quarantine | A pin can also end when a queue is torn down: the text reads as a full list of ways. |
+| - | ADR-0004 rule 5, INV-0004-6 | Exception channels are not built and no roadmap stage names them: a fault from a POSIX or native process ends it with reason `Fault` (ADR-0034, ADR-0106 item 12). INV-0004-6 stays `not yet applicable (until exception channels)`. A crash reporter, `tcc -run` or a debugger would bring them in, each by ADR. |
 | - | `kernel/src/arch/aarch64/usercopy.rs` | Copying between user memory and the kernel is byte by byte: 3.2 us a KiB under HVF. After stage 4, try word-sized copies through the unprivileged instructions, with a measurement. |
 | - | `init` (architect, 2026-11-02) | `init` must not block while it restarts one driver: today it waits up to 6 s for the compositor to take the new driver, and watches nothing else meanwhile. **Fix before stage 6's implementation starts.** |
 | - | `compd` attach | Attaching a new display driver (`Info`, `Attach`) still waits for it, up to 2 s each (ADR-0093, Decision); flushes no longer do. |
