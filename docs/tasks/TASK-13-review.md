@@ -2,7 +2,7 @@
 
 Independent review of `main..stage-4b` (main `3075a7e`, HEAD `30bda1a`), by a reviewer that did not write the code.
 Every result below was produced in this session on the development host (M4, macOS, QEMU 11.1.2), in clones under
-the session's scratchpad. The working tree in `/Users/svitlana/workspace/os` was not modified. Anything not verified
+the session's scratchpad. The repository's working tree was not modified. Anything not verified
 by running or by reading the named code is marked **unverified**.
 
 Severity: **error** is wrong now, with a concrete failure; **weakness** is a gap in a check, a claim that is stronger

@@ -9,7 +9,7 @@
 ## make test from a fresh clone
 
 ```
-git clone --branch main /Users/svitlana/workspace/os clone && cd clone && make test
+git clone --branch main . ../clone && cd ../clone && make test
 ```
 
 **Exit status: 0** (wall time 121 s, fresh `target/`). `decoder_fuzz` took **60.12 s** of that, and 60.57 s when run alone, so half the run is one test binary.
@@ -241,7 +241,7 @@ Neither parent lost content. The merge has 13 sections, every section of both pa
 ## Could not verify
 
 - **Coverage-guided fuzz results in `fuzz/README.md`.** No nightly here, so neither the targets nor the numbers were run or compiled. My stable-toolchain fuzz (R-18) is a partial substitute.
-- **The Linux cloud session** in which TASK-07 ran, and whether the commits' identity `Claude <noreply@anthropic.com>` was the identity configured there. The repository's other recent commits are by `Artur`.
+- **The Linux cloud session** in which TASK-07 ran, and whether the commits' identity `Claude` (with an Anthropic no-reply address) was the identity configured there. The repository's other recent commits are by `Artur`.
 - **R-01 on a real device.** It follows from ADR-0015's contract and is shown on the test device's model; I did not reproduce it under QEMU, and there is no virtio driver yet.
 - **Stability of the test timing** on a slow CI host; `make test` ran once. `decoder_fuzz`'s 60 s was on 10 CPUs.
 - **`model.rs` and `ops.rs` of the test kit** were read only in part. I judged them by what the mutants showed.

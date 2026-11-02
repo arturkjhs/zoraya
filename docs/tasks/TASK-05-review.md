@@ -9,7 +9,7 @@
 ## make test from a fresh clone
 
 ```
-git clone --branch kernel/stage-1 /Users/svitlana/workspace/os clone && cd clone && make test
+git clone --branch kernel/stage-1 . ../clone && cd ../clone && make test
 ```
 
 **Exit status: 0** (wall time 28.8 s, fresh `target/`).
