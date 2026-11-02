@@ -162,3 +162,7 @@ dependencies = [
  "zoraya-rt",
  "zoraya-shell",
 ]
+
+[[package]]
+name = "zoraya-virtio"
+version = "0.1.0"
