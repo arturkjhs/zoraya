@@ -177,7 +177,8 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
 
     /// Sends the request written so far and waits for its response, which
     /// must be `expected` and at least `length` bytes. `wait` blocks until
-    /// the device may have answered; an error from it is the caller's.
+    /// the device may have answered, then unmasks its interrupt; an error
+    /// from it is the caller's.
     fn call(
         &mut self,
         request: usize,
@@ -201,10 +202,15 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         ];
         self.queue.offer(&mut self.shared, 0, &chain)?;
         self.queue.notify(&mut self.registers, &mut self.shared);
+        // The device's interrupt is taken down before every wait, so that
+        // its line is low when `wait` unmasks it: a line left high by an
+        // earlier completion gives no new edge (virtio-mmio is
+        // edge-triggered on QEMU `virt`).
         let used = loop {
             if let Some(used) = self.queue.take(&self.shared)? {
                 break used;
             }
+            self.acknowledge();
             wait()?;
         };
         if used.head != 0 || (used.length as usize) < HEADER || used.length as usize > length {

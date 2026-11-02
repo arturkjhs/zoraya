@@ -44,6 +44,12 @@ limited to the lines it changed, what it finds outside them is added here.
 | W7 | ADR-0054 Quarantine | A pin can also end when a queue is torn down: the text reads as a full list of ways. |
 | - | `kernel/src/arch/aarch64/usercopy.rs` | Copying between user memory and the kernel is byte by byte: 3.2 us a KiB under HVF. After stage 4, try word-sized copies through the unprivileged instructions, with a measurement. |
 
+| - | `gpud` under TCG | A virtio-gpu completion's interrupt is sometimes not seen, about once per driver's life, early on (TASK-14). `gpud` polls the queue every 10 ms as a fallback. Not seen under HVF, nor for `blkd` in stage 4's tests. Find out whether the kernel's interrupt object, the GIC model or the driver's order of acknowledgements loses the edge; virtio-mmio is edge-triggered on QEMU `virt`. |
+| - | `blkd`, `zoraya-virtio` | `blkd` keeps its own split queue beside the generic one in `queue.rs`. Move it onto the generic one, with its mutation tests, when the blk driver is next worked on. |
+| - | GUI, `zosh` | Programs started from `zosh` in the window print to the serial console. Byte streams (stage 6) or a terminal connection handed to each child would fix it (ADR-0096). |
+| - | `compd` `Platform::call` | The display driver's end is subscribed on two ports while a call waits (the main port and the call port). It works; a single port with a per-call key would be simpler. |
+| - | Fuzzing | `zoraya-term`'s parser and the GUI decoders have deterministic random tests in `make test-unit`; no coverage-guided target exists for them in `fuzz/` (no nightly toolchain on the host in TASK-14). |
+
 ## Mutation testing: `zoraya-virtio`
 
 `make mutants-host CRATE=zoraya-virtio` (cargo-mutants 27.1.0), 2026-11-02, branch `tests/virtio-mutants`. Before:

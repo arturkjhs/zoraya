@@ -15,8 +15,11 @@
 //! the output lines. With `--plain` the kernel is not expected to speak the
 //! protocol: it must print the expected lines, not panic, and power off.
 //! With `--script FILE` the runner plays a script of keys against the output
-//! (see `script.rs`); its stdin is then the serial line.
+//! (see `script.rs`); its stdin is then the serial line. With `--gui-script
+//! FILE --qmp PATH` it plays a GUI script through QEMU's QMP socket at PATH
+//! (see `gui.rs`).
 
+mod gui;
 mod protocol;
 mod script;
 
@@ -37,6 +40,8 @@ struct Args {
     expect_line: Vec<String>,
     plain: bool,
     script: Option<String>,
+    gui_script: Option<String>,
+    qmp: Option<String>,
     command: Vec<String>,
 }
 
@@ -44,7 +49,7 @@ fn usage(msg: &str) -> ExitCode {
     eprintln!("zoraya-test-runner: {msg}");
     eprintln!(
         "usage: zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]... \
-         [--expect-line TEXT]... [--script FILE] -- COMMAND..."
+         [--expect-line TEXT]... [--script FILE] [--gui-script FILE --qmp PATH] -- COMMAND..."
     );
     ExitCode::from(2)
 }
@@ -57,6 +62,8 @@ fn parse_args() -> Result<Args, String> {
         expect_line: Vec::new(),
         plain: false,
         script: None,
+        gui_script: None,
+        qmp: None,
         command: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -73,6 +80,8 @@ fn parse_args() -> Result<Args, String> {
             "--expect-line" => a.expect_line.push(value()?),
             "--plain" => a.plain = true,
             "--script" => a.script = Some(value()?),
+            "--gui-script" => a.gui_script = Some(value()?),
+            "--qmp" => a.qmp = Some(value()?),
             "--" => {
                 a.command = it.collect();
                 break;
@@ -98,6 +107,12 @@ fn main() -> ExitCode {
     };
     if let Some(file) = &args.script {
         return script::run(file, &args.label, args.timeout, &args.command);
+    }
+    if let Some(file) = &args.gui_script {
+        let Some(qmp) = &args.qmp else {
+            return usage("--gui-script needs --qmp");
+        };
+        return gui::run(file, &args.label, args.timeout, qmp, &args.command);
     }
     let label = &args.label;
     let mut child = match Command::new(&args.command[0])

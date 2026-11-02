@@ -8,6 +8,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use zoraya_abi::{
     DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Status, channel_signals,
@@ -27,6 +28,10 @@ extern crate alloc;
 
 /// How long one command may take before the device counts as lost.
 const COMMAND_NS: u64 = 1_000_000_000;
+/// How often a wait looks at the queue without an interrupt.
+const POLL_NS: u64 = 10_000_000;
+/// Reported once: a completion was found without its interrupt.
+static MISSED: AtomicBool = AtomicBool::new(false);
 
 struct Window(u64);
 
@@ -98,16 +103,30 @@ impl Driver {
         ) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let (port, interrupt) = (self.port, self.interrupt);
+        // Wait, then unmask: the driver took the device's interrupt down
+        // before, so the line is low and the next completion is a new edge.
+        // A completion's interrupt is sometimes not seen under TCG (cause
+        // not found; docs/backlog.md): the wait polls the queue every 10 ms,
+        // and gives up after a second.
+        let mut polls = 0;
         let mut wait = || {
             let mut packets = [Packet::default()];
-            match port_wait(port, clock_monotonic() + COMMAND_NS, &mut packets) {
+            match port_wait(port, clock_monotonic() + POLL_NS, &mut packets) {
                 Ok(_) => interrupt_ack(interrupt).map_err(|_| Error::Device),
-                Err(_) => Err(Error::Device),
+                Err(Status::DeadlineExceeded) if polls < COMMAND_NS / POLL_NS => {
+                    polls += 1;
+                    if !MISSED.swap(true, Ordering::Relaxed) {
+                        println!("gpud: a completion came without its interrupt: polling");
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    println!("gpud: no answer from the device in time: {e:?}");
+                    Err(Error::Device)
+                }
             }
         };
-        let result = f(&mut self.gpu, &mut wait);
-        self.gpu.acknowledge();
-        result
+        f(&mut self.gpu, &mut wait)
     }
 
     /// The device broke the protocol or went silent: stop it and end. The

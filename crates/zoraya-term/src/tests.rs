@@ -299,3 +299,12 @@ fn keys_become_bytes() {
     assert_eq!(bytes(code::F12, false, None), b"");
     assert_eq!(bytes(0x200, false, Some('€')), "€".as_bytes());
 }
+
+#[test]
+fn the_grid_fits_the_display() {
+    assert_eq!(grid_for(1024, 768), (80, 24));
+    let (c, r) = grid_for(640, 480);
+    let (w, h) = surface_size(c, r);
+    assert!(w + 32 <= 640 && h + 32 <= 480);
+    assert_eq!(grid_for(0, 0), (1, 1));
+}

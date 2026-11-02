@@ -25,7 +25,7 @@ ADR-0053 makes `init` the one process the kernel starts, with a compiled table o
 - **Precedent:** Linux desktops.
 
 ### Option B: `init`'s table, with a GUI mode chosen by the devices present
-- **Description:** If `init` finds a GPU and a keyboard (ADR-0091), it starts the GUI drivers, the compositor, the terminal, and the shell with a terminal; otherwise exactly what stage 4 starts. It supervises each part.
+- **Description:** If `init` finds a GPU and an input device (ADR-0091), it starts the GUI drivers, the compositor, the terminal, and the shell with a terminal; otherwise exactly what stage 4 starts. It supervises each part.
 - **Evidence for:** Drivers 1 to 5. Restart of a driver alone is MINIX 3's reincarnation (`alternatives-postmortem.md#minix-3`), and parent-routed handles are Genode's (`alternatives-postmortem.md#genode`).
 - **Evidence against:** `init` grows, and is still a single point of failure (ADR-0053).
 - **Cost:** *(estimate)* 250 lines in `init` and a shared module.
@@ -48,7 +48,7 @@ ADR-0053 makes `init` the one process the kernel starts, with a compiled table o
 ## Recommendation
 Recommended: **Option B**. It is a recommendation, not a decision.
 
-- **GUI mode** if `init` finds a GPU page and a keyboard page (ADR-0091). Otherwise `init` is stage 4's, line for line in behaviour.
+- **GUI mode** if `init` finds a GPU page and at least one input page (ADR-0091). `init` reads only the device ID, so it does not tell a keyboard from a tablet; each `inputd` finds out what it drives (ADR-0092). Otherwise `init` is stage 4's, line for line in behaviour.
 - **What `init` starts in GUI mode**, each in a sub-job, after the storage stack: `gpud` (the GPU page), one `inputd` per input page, `compd` with the manager channel and the drivers' channels, `term` with a compositor client channel and the shell's terminal end, and `zosh` with the volume at slot 5 and the terminal at slot 6. `zosh` gets the console with `WRITE` only. The compositor's manager channel stays in `init`.
 - **Restarts.** A dead `gpud` or `inputd` is restarted alone, at most three times each in a boot `[assumption, as ADR-0080]`, and its new channel goes to the compositor with `AttachDisplay` or `AttachInput`. A driver whose client goes resets its device and exits. If `compd` or `term` dies, `init` ends the GUI processes and the shell and starts them again, at most three times; a storage restart (ADR-0080) restarts the terminal and the shell with it. When the shell ends on its own, `init` syncs and powers off, as before.
 - **QEMU** (`tools/run-qemu.sh`). `--gui` adds `virtio-gpu-device` (1024 × 768) on `virtio-mmio-bus.23`, `virtio-keyboard-device` on bus 15 and `virtio-tablet-device` on bus 7 (ADR-0091), with the modern transport (ADR-0080). Interactive, it opens QEMU's default display; with `--test` the display is `none`. `--qmp PATH` adds a QMP socket at `PATH`.

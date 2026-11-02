@@ -470,6 +470,10 @@ static TESTS: &[Test] = &[
         name: "storage_from_a_process",
         run: storage_from_a_process,
     },
+    Test {
+        name: "gui_from_a_process",
+        run: gui_from_a_process,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "stack_canary_intact",
@@ -1188,6 +1192,16 @@ fn no_leak_after_rounds_of_objects() {
 /// The storage stack: failure paths and hostile clients, on the test disk.
 fn storage_from_a_process() {
     let record = process::spawn_with_devices("t_storage")
+        .expect("program in the ramdisk")
+        .wait();
+    assert_eq!(record, exited(0));
+}
+
+/// The GUI stack (ADR-0090 to ADR-0097): hostile clients, focus, driver
+/// restarts and a measured full redraw, on the GUI devices when a
+/// configuration attaches them. Without them it passes having done nothing.
+fn gui_from_a_process() {
+    let record = process::spawn_with_devices("t_gui")
         .expect("program in the ramdisk")
         .wait();
     assert_eq!(record, exited(0));

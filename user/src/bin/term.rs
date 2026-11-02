@@ -12,11 +12,11 @@ use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Rights, Status,
     channel_signals,
 };
-use zoraya_font::{CELL_HEIGHT, CELL_WIDTH};
+use zoraya_font::CELL_HEIGHT;
 use zoraya_proto_gui::{self as gui, modifiers};
 use zoraya_proto_term::{Input, MAX_INPUT, Output, Size};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{PAD, Term, key_bytes, surface_size};
+use zoraya_term::{PAD, Term, grid_for, key_bytes, surface_size};
 use zoraya_user::gui::wait_reply;
 use zoraya_user::{
     channel_read, channel_write, handle_close, handle_duplicate, memory_create, memory_map,
@@ -25,8 +25,6 @@ use zoraya_user::{
 
 extern crate alloc;
 
-const COLUMNS: usize = 80;
-const ROWS: usize = 24;
 const KEY_COMPOSITOR: u64 = 1;
 const KEY_SHELL: u64 = 2;
 /// Shell messages taken per wake, so that keys and frames stay prompt.
@@ -197,10 +195,7 @@ fn main() -> i32 {
         println!("term: no display");
         return 1;
     }
-    // At most 80 × 24, less on a small display.
-    let fit = |side: u32, cell: usize| (side as usize).saturating_sub(2 * PAD + 8) / cell;
-    let columns = COLUMNS.min(fit(display.width, CELL_WIDTH)).max(1);
-    let rows = ROWS.min(fit(display.height, CELL_HEIGHT)).max(1);
+    let (columns, rows) = grid_for(display.width, display.height);
     let (width, height) = surface_size(columns, rows);
     let size = (width * height * 4).next_multiple_of(4096) as u64;
     let memory = memory_create(size, MemoryFlags::NONE).expect("surface memory");

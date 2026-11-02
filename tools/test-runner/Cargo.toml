@@ -7,6 +7,12 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[dependencies]
+# Zoraya's own crates, to read the screen as the terminal draws it.
+zoraya-font = { path = "../../crates/zoraya-font" }
+zoraya-term = { path = "../../crates/zoraya-term" }
+zoraya-compositor = { path = "../../crates/zoraya-compositor" }
+
 [[bin]]
 name = "zoraya-test-runner"
 path = "src/main.rs"

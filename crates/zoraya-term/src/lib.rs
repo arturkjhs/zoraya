@@ -50,6 +50,17 @@ pub const PALETTE: [u32; 16] = [
 pub const DEFAULT_FG: u8 = 7;
 pub const DEFAULT_BG: u8 = 0;
 
+/// The grid the terminal uses on a display of `width × height` pixels: 80 ×
+/// 24, less on a small display, at least 1 × 1. The GUI test reads the
+/// screen with the same numbers.
+pub fn grid_for(width: u32, height: u32) -> (usize, usize) {
+    // Room for the padding and the compositor's frame and placement.
+    let fit = |side: u32, cell: usize| (side as usize).saturating_sub(2 * PAD + 40) / cell;
+    let columns = 80.min(fit(width, CELL_WIDTH)).max(1);
+    let rows = 24.min(fit(height, CELL_HEIGHT)).max(1);
+    (columns, rows)
+}
+
 /// The surface size, in pixels, of a grid of `columns × rows`.
 pub const fn surface_size(columns: usize, rows: usize) -> (usize, usize) {
     (columns * CELL_WIDTH + 2 * PAD, rows * CELL_HEIGHT + 2 * PAD)

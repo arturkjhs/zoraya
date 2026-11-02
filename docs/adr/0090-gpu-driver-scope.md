@@ -74,6 +74,7 @@ Nothing here depends on POSIX.
 
 ## Open questions
 - The cost of a flush round trip through `gpud`: measured by this task (frames per second of a full redraw).
+- *As built (TASK-14).* Under TCG a command's completion is sometimes not followed by an interrupt the driver sees, about once in a driver's life, early on; the cause is not found. The driver's wait therefore looks at the queue every 10 ms, and still gives up after a second, so a lost interrupt costs 10 ms and is reported once on the console. `blkd` waits without a deadline and has never shown this in stage 4's tests.
 - Whether `B8G8R8X8_UNORM` is what QEMU's screendump reports byte for byte: checked by the screendump test.
 
 ## Revisit triggers
