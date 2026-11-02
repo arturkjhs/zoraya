@@ -1,0 +1,50 @@
+# Files of the retained directories that are not compiled (ADR-0100 item 2,
+# ADR-0141). Each one makes a system call that ports/musl/zoraya/syscall.h does
+# not route, so musl's code for it cannot work on Zoraya: the functions it
+# defines come from zoraya-posix instead, or not at all when they are outside
+# the tier list. The shim makes this list complete: a retained file that makes
+# another system call fails to compile.
+
+# Process and resource state: zoraya-posix (sysconf, abort, getrlimit, setrlimit,
+# uname, ioctl, syscall, times are tier rows; the rest are not exported).
+src/conf/sysconf.c
+src/exit/abort.c
+src/internal/emulate_wait4.c
+src/misc/getpriority.c
+src/misc/getresgid.c
+src/misc/getresuid.c
+src/misc/getrlimit.c
+src/misc/getrusage.c
+src/misc/ioctl.c
+src/misc/setdomainname.c
+src/misc/setpriority.c
+src/misc/setrlimit.c
+src/misc/syscall.c
+src/misc/uname.c
+
+# stdio's files that open, remove or rename by path, or wait for a child:
+# zoraya-posix (fopen, remove, rename and tmpfile are tier rows). freopen stays:
+# it reaches the system through fopen and fcntl.
+src/stdio/__fopen_rb_ca.c
+src/stdio/fopen.c
+src/stdio/pclose.c
+src/stdio/remove.c
+src/stdio/rename.c
+src/stdio/tempnam.c
+src/stdio/tmpfile.c
+src/stdio/tmpnam.c
+
+# Clocks, timers and the time zone file: zoraya-posix (clock_gettime, times are
+# tier rows; __map_file reads /etc/localtime and the zoneinfo files).
+src/time/__map_file.c
+src/time/clock_getcpuclockid.c
+src/time/clock_getres.c
+src/time/clock_gettime.c
+src/time/clock_nanosleep.c
+src/time/clock_settime.c
+src/time/timer_create.c
+src/time/timer_delete.c
+src/time/timer_getoverrun.c
+src/time/timer_gettime.c
+src/time/timer_settime.c
+src/time/times.c

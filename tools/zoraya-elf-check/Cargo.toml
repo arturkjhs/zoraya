@@ -1,0 +1,15 @@
+[package]
+name = "zoraya-elf-check"
+description = "Checks on the host that programs will load: zoraya-elf over every file, plus static (INV-0109-1)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-elf = { path = "../../crates/zoraya-elf" }
+zoraya-abi = { path = "../../crates/zoraya-abi" }
+
+[lints]
+workspace = true
