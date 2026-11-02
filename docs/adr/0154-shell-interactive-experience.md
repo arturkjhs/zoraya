@@ -81,7 +81,7 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    screen and redraw), Enter (run, or continue if a quote or `{` is open, with the prompt `...> `), Ctrl-C (clear the
    line), Ctrl-D on an empty line prints `type exit to end the shell` and does nothing else: ending the shell powers
    the machine off (`docs/design.md`), so it is never one key.
-2. **History.** Every line run is kept, a repeated line once, in `/config/history` (ADR-0157), at most
+2. **History.** Every line run is kept once it has finished, a repeated line once, in `/config/history` (ADR-0157), at most
    `shell.history-size` lines (1,000). Up and Down walk the lines that start with what is already typed; Ctrl-R opens
    an incremental search shown on the line below. `history` lists them; `history --clear` empties the file.
 3. **Completion.** Tab completes the word at the cursor: command names (builtins, functions, programs in

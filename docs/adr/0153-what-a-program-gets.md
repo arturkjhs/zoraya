@@ -124,7 +124,9 @@ path the person writes there, the shell adds a table entry:
 A description may also say `cwd: write`, for a program whose job is to change the current directory (`make`); the
 current directory entry then gets the `tree` rights. A description cannot name a fixed path: authority comes only from
 what the person typed and where they ran it. A redirection (ADR-0152 rule 3) is a designation too: the shell opens
-the named file and the command receives that file alone.
+the named file and the command receives that file alone. A designated `read` or `write` path that does not exist is
+entered in the table as missing, so the program reports it as not found (`NotFound`, `ENOENT`) rather than as not
+granted.
 
 **Explicit grants.** Before the command name, `+r PATH` grants `read` on a file or directory tree and `+w PATH`
 grants the `tree` rights. Several may be given. Rules:
@@ -134,7 +136,8 @@ grants the `tree` rights. Several may be given. Rules:
 - A grant applies to that one command (or pipeline element) and nothing after it. A function that needs grants writes
   them inside its body, where `help` shows them (ADR-0156).
 
-**Showing it.** `grants COMMAND ARGS...` prints the table the command would receive and runs nothing. A background
+**Showing it.** `grants` followed by a command line, its own grants included, prints the table that command would
+receive and runs nothing; the toolchain set is shown as one line, `read (system)`. A background
 job's line in `jobs` lists its grants. A native program that meets `NotGranted` says so in its error message, with the
 grant that would allow it (ADR-0155).
 

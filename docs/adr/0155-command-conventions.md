@@ -106,7 +106,8 @@ Recommended: **Option D**. It is a recommendation, not a decision.
    `unset`, `export`, `count`, `echo`, `test`, `math`, `source`, `exit`, `status`, `history`, `help`, `grants`,
    `jobs`, `fg`, `bg`, `wait`, `kill`, `settings` (the shell owns `/config`, ADR-0157), `poweroff` (the shell holds
    `Power`), `slots` and `uptime`. Everything that acts on files is a program and receives only what the line
-   designates (ADR-0153): `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `sync`, `head`, `find`, `search`. Builtins
+   designates (ADR-0153): `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `sync`, `head`, `find`, `search`. `search TEXT [PATH...]` reads `in` when
+   no path is given, and searches directories recursively. Builtins
    follow the same option, help, error and exit-code rules through the same crate. `write` and `append` go:
    redirection does their job (ADR-0152); `ls-ramdisk` becomes `ls /zoraya/bin`; `exit-code` becomes `status`; `run`
    goes, and the demonstration program `exit` is renamed `exit-with` so that `exit` is only the builtin.
