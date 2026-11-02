@@ -11,8 +11,10 @@
 //!   the `Evidence` line is exactly the set of citations used in the body.
 //! - INV-0001-4: every invariant of an accepted ADR is in `invariants.md`
 //!   with the same rule and checking method, and every row there comes from
-//!   an ADR. An accepted ADR's invariant whose status is not `checked` is a
-//!   warning (ADR-0001 rule 6).
+//!   an ADR. A status is `checked: ...`, `replaced by INV-...`,
+//!   `not yet applicable (stage N)` or `not yet applicable (until ...)`. An
+//!   accepted ADR's invariant whose status is not `checked` is a warning
+//!   (ADR-0001 rule 6).
 //! - INV-0001-5: `index.md` lists every ADR file with its status.
 //!
 //! Exits 1 if any check fails, 0 otherwise (warnings do not fail).
@@ -375,6 +377,11 @@ fn status_is_known(s: &str) -> bool {
     if s.strip_prefix("replaced by INV-").is_some() {
         return true;
     }
+    if let Some(rest) = s.strip_prefix("not yet applicable (until ") {
+        return rest
+            .strip_suffix(')')
+            .is_some_and(|what| !what.trim().is_empty());
+    }
     s.strip_prefix("not yet applicable (stage ")
         .and_then(|r| r.strip_suffix(')'))
         .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
@@ -444,7 +451,7 @@ fn check_invariants(adrs: &[Adr], adr_dir: &Path, out: &mut Outcome) -> Result<(
                 out.error(
                     "INV-0001-4",
                     "invariants.md",
-                    format!("{id}: status {r_status:?} is not \"checked: ...\", \"replaced by INV-...\" or \"not yet applicable (stage N)\""),
+                    format!("{id}: status {r_status:?} is not \"checked: ...\", \"replaced by INV-...\", \"not yet applicable (stage N)\" or \"not yet applicable (until ...)\""),
                 );
             } else if accepted
                 && !r_status.starts_with("checked")
@@ -813,6 +820,23 @@ mod tests {
             out.unchecked["not yet applicable (stage 2)"],
             ["INV-0001-1"]
         );
+    }
+
+    #[test]
+    fn until_status_is_known_and_warns() {
+        let inv = INVARIANTS.replace(
+            "checked: `make adr-check`",
+            "not yet applicable (until exception channels)",
+        );
+        let t = tree("u", &adr("accepted", EV, BODY, "A."), &inv, "accepted");
+        let out = run(&t).unwrap();
+        fs::remove_dir_all(&t).unwrap();
+        assert!(out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!(
+            out.unchecked["not yet applicable (until exception channels)"],
+            ["INV-0001-1"]
+        );
+        assert!(!status_is_known("not yet applicable (until )"));
     }
 
     #[test]

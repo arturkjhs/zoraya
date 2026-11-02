@@ -158,7 +158,8 @@ that terminal rights be separated and control be out of band natively, with a VT
 5. **The control connection** (broker only): `foreground(group pid, job handle)` sets the foreground group and the
    handle the signals go to, with the rights ADR-0104 item 10 gives it (`SIGNAL | KILL`); `session(job handle)` for
    hangup; `clear_foreground`; and, from `ttyd` to the broker, `suspend(sig)` for the SUSP character (item 3).
-   `job_suspend` and `job_resume` need the `KILL` right `[assumption, until ADR-0040's table names a right]`.
+   `job_suspend` and `job_resume` need the `KILL` right on the job, by the architect's decision; ADR-0040's table
+   gains that use of `KILL`.
 
 **`libposix`.**
 
@@ -201,7 +202,7 @@ that terminal rights be separated and control be out of band natively, with a VT
   background `tcsetpgrp` caller with the signal unblocked ([P10]) is not emulated: the call succeeds for any process
   of the session (item 7). dash exercises the background call on every foreground job, with the signal blocked, so
   the deviation changes nothing it sees.
-- *ADR-0040*: `job_suspend` and `job_resume` need a right; `KILL` is assumed until the table says.
+- *ADR-0040*: its job row lists `KILL` for `job_kill` alone; `job_suspend` and `job_resume` now need it too.
 - *ADR-0060*: the console's `READ` right goes to `ttyd` alone in a POSIX session; `zosh` does not run beside it.
 
 ### Effect of the vision
@@ -249,7 +250,6 @@ a pseudo-terminal pair for programs that run others under a terminal they create
 
 ## Open questions
 
-- Which `KILL`-like right `job_suspend` needs: for the architect, with ADR-0040's table.
 - Whether the stage 5 terminal protocol carries raw bytes or key events; the backend adapts either, with a keymap in
   the latter case.
 - Ctrl-Z, `fg` and `bg` end to end: a W5 extension on the prototype (ADR-0110), since W5 never pressed Ctrl-Z.

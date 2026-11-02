@@ -200,8 +200,8 @@ for each child before it exists and moved to the child at slot `BROKER`):
     ([P10]) and what dash's `forkchild` (in the child, for its own new group) and `waitforjob` (in the shell, after a
     foreground job) do ([D1], `stage-6/sources.md#other-programs-and-inputs`); the `SIGTTOU` Linux would send a
     background caller that has it unblocked is not emulated (ADR-0105 item 8). The broker records the foreground
-    group and sends the terminal service a duplicate of that group job's handle with `SIGNAL | KILL` (`KILL` for
-    `job_suspend`, ADR-0105 item 5); `tcgetpgrp` is a lookup. `ENOTTY` when the session has no terminal.
+    group and sends the terminal service a duplicate of that group job's handle with `SIGNAL | KILL` (`KILL` is the
+    right `job_suspend` and `job_resume` need, by the architect's decision; ADR-0105 item 5); `tcgetpgrp` is a lookup. `ENOTTY` when the session has no terminal.
 11. `terminated(pid)` notifications: none. The parent learns of a child's end from the process job's `TERMINATED`
     signal on its own port (ADR-0106 subscribes process jobs where ADR-0004 and ADR-0006 say "child process handles");
     `waitpid(-1)` is a `port_wait` over the parent's children's job handles; `WNOHANG` is `object_get_signals` on each;

@@ -262,10 +262,12 @@ the three named.
 - **INV-0106-3.** `pselect`, `sigsuspend`, `pause` and `nanosleep` return `EINTR` only after a handler ran; a blocking
   `read` interrupted by a handler with `SA_RESTART` resumes and completes. *Check:* `libposix` unit tests with each
   disposition (INV-0006-7's test) and an in-QEMU test of the `SA_RESTART` read.
-- **INV-0106-4.** A blocked signal is never lost and never acted on while blocked: a request taken while blocked is
-  delivered on unblock, as the handler or the default action. *Check:* in-QEMU test blocking `SIGTERM`, receiving a
-  `kill`, unblocking, and observing the handler run exactly once; and the same with `SIG_DFL`, observing the exit
-  record.
+- **INV-0106-4.** A blocked signal whose POSIX disposition is a handler or `SIG_IGN` is never lost and never acted on
+  while blocked: a request taken while blocked is delivered on unblock, as the handler, or dropped if ignored. A
+  blocked signal whose POSIX disposition is `SIG_DFL` and whose default action terminates is outside this rule: it
+  ends the process at once, as item 2 states. *Check:* in-QEMU test blocking `SIGTERM` with a handler, receiving a
+  `kill`, unblocking, and observing the handler run exactly once; the same with `SIG_IGN`, observing nothing; and
+  with `SIG_DFL`, observing the exit record `Terminated` with `detail` 15 while the signal is still blocked.
 - **INV-0106-5.** `kill(getpid(), n)` and `raise(n)` with `SIG_DFL` end the process with `ExitRecord { reason:
   Terminated, detail: n }` with no broker message. *Check:* in-QEMU test under the counting broker.
 
@@ -281,6 +283,8 @@ the three named.
 - A measured program in scope needing a handler to run inside a compute loop: Option D, or ADR-0004's revisit.
 - The poll measured above a few percent of W4's run time: Option D.
 - A program needing `SIGBUS` for alignment: `detail` would need the fault status, a change to ADR-0034.
+- A program of the T1 or T2 workloads blocks a signal whose default action terminates and receives it while blocked:
+  item 2's deviation then costs a wrong termination, and the disposition flip it rejected is built for that signal.
 
 ## Architect's decision
 

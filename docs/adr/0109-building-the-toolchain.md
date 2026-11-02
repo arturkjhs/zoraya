@@ -127,9 +127,11 @@ patches below. Both are checked by the first task that builds them.
 **Recommendation (not a decision): Option B**, with tcc's cross compiler (Option C) as the second choice for any
 program clang cannot build for the target and the first choice for `libtcc1.a`.
 
-1. **Triple and identity.** `aarch64-unknown-zoraya`. `tools/zcc` defines `__zoraya__` and nothing Linux; `uname -s`
-   is `Zoraya` (ADR-0107 item 11); `config.sub` learns `zoraya*` as an OS; `config.guess` is not run (cross builds
-   pass `--host`). Code generation: AArch64 with FP and SIMD, AAPCS64, `-fno-stack-protector` (no `AT_RANDOM` source
+1. **Triple and identity.** `aarch64-unknown-zoraya`, and `uname -s` is `Zoraya` (ADR-0107 item 11), both by the
+   architect's decision. `tools/zcc` defines `__zoraya__` and nothing Linux; `config.guess` is not run (cross builds
+   pass `--host`). Every autoconf package's `config.sub` must learn `zoraya*` as an OS before its `configure` accepts
+   the triple: a patch of a few lines per package, paid for dash and GNU make here and, as a known cost of T2, for
+   every autoconf project built on Zoraya (GNU hello first) until upstream `config.sub` carries the name. Code generation: AArch64 with FP and SIMD, AAPCS64, `-fno-stack-protector` (no `AT_RANDOM` source
    yet, below), `-O2 -g` as measured, PIC off (static `ET_EXEC`).
 2. **Sysroot** at `build/sysroot/usr/`: `include/` from musl 1.2.5 (`include/`, `arch/aarch64/bits`,
    `arch/generic/bits`, the generated `bits/alltypes.h` and `bits/syscall.h`, the latter empty of Linux numbers),
@@ -155,10 +157,13 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
    longer than its `MAX_PHDRS` of 32 and gains an accessor for the raw table. The block's room is
    `STARTUP_BLOCK_MAX`, one page beyond the 64 KiB `spawn` buffer, so a `spawn` whose vectors plus headers exceed it
    is refused with `LimitReached`, as an over-long buffer is today.
-6. **The ports.** `ports/Makefile`, run by `make ports` (a prerequisite of the stage 6 tests, ADR-0110): fetches each
-   archive once into `build/ports/src/` by URL from `ports/sources.lock` (versions and SHA-256 as TASK-02's, musl
-   added), refuses a hash mismatch, and fails with a message naming `make ports-fetch` when a source is missing and
-   the network is not to be used. Then builds, with `tools/zcc`: musl's retained files and `zoraya-posix` into
+6. **The ports.** `make fetch-ports`, a step outside `make test` by the architect's decision, downloads each archive
+   by URL from `ports/sources.lock` (versions and SHA-256 as TASK-02's, musl added) into the cache `build/ports/src/`,
+   refuses a hash mismatch, and does nothing for an archive already in the cache with the right hash. `ports/Makefile`,
+   run by `make ports` (a prerequisite of the stage 6 tests, ADR-0110), builds from the cache only: with an archive
+   missing it fails at once with a message naming `make fetch-ports`, and never downloads. No third-party source,
+   GPL or LGPL in particular, is committed to the repository; only `ports/sources.lock`, the patches of item 9 and
+   the build files are. Then builds, with `tools/zcc`: musl's retained files and `zoraya-posix` into
    `libc.a`; dash (`./configure --host=aarch64-unknown-zoraya` with a `config.site` answering the checks that cannot
    run; its `mksignames` runs on the host); GNU make (`--host=...`, `--disable-load`, `--without-guile`; `posix_spawn`
    detected by the site file so make uses it, as measured); toybox (a `.config` with the T1 applets of
@@ -203,8 +208,8 @@ program clang cannot build for the target and the first choice for `libtcc1.a`.
 - *ADR-0042*: the startup block's layout grows (item 5), versioned by its header size as the ADR provides.
 - *ADR-0033*: unchanged in rule; the loader now also serves tcc's output, which item 7 shapes to it.
 - *ADR-0003*'s follow-up on dash's interactive `vforkexec` is taken up as a patch (item 9).
-- *CLAUDE.md*'s "no network" rule: met by `ports-fetch` being outside `make test`, as `rustup` is; the CI workflow
-  gains the fetch step.
+- *CLAUDE.md*'s "no network" rule: met by `make fetch-ports` being outside `make test`, as `rustup` is; the CI
+  workflow gains the fetch step before `make test`.
 - *`docs/dependencies.md`*: third-party C code and a host compiler are new kinds of dependency; the file's rule speaks
   of crates.
 
@@ -218,7 +223,7 @@ Networking: no effect.
 ### Deferred to a later stage
 
 A Rust target for Zoraya user programs with `std`; a dynamic loader; `AT_RANDOM` from a real entropy source and
-stack protectors; vendoring the sources if the fetch step proves fragile.
+stack protectors.
 
 ## Consequences
 
@@ -236,8 +241,8 @@ stack protectors; vendoring the sources if the fetch step proves fragile.
   host test runs `zoraya-elf` over every file the ports build and over tcc's `a.out` from the W1 check.
 - **INV-0109-2.** No port is compiled with `__linux__` defined, and `uname -s` inside Zoraya prints `Zoraya`.
   *Check:* `tools/zcc` refuses `-D__linux__`; a `grep` of the build logs for `__linux__`; the W5 script prints `uname`.
-- **INV-0109-3.** `make test` runs without network once `make ports-fetch` has run and the Rust toolchain is
-  installed; a missing source fails with a message, never with a download. *Check:* CI runs the fetch step first and
+- **INV-0109-3.** `make test` runs without network once `make fetch-ports` has filled the cache and the Rust toolchain
+  is installed; a missing source fails with a message naming `make fetch-ports`, never with a download. *Check:* CI runs the fetch step first and
   `make test` with network disabled `[assumption: the runner allows it; otherwise a host test runs `ports/Makefile` in
   a sandbox with no network]`.
 - **INV-0109-4.** Every archive in `ports/sources.lock` matches its recorded SHA-256 before it is unpacked.
@@ -255,7 +260,8 @@ stack protectors; vendoring the sources if the fetch step proves fragile.
 
 - A program clang cannot build for the target: Option C for that program.
 - A measured need for shared libraries or a dynamic loader (ADR-0033's trigger).
-- The fetch step failing on CI more than rarely: vendor the sources with their licences.
+- The fetch step failing on CI more than rarely: a mirror of the archives under the project's control, since the
+  architect's decision keeps third-party sources out of the repository.
 
 ## Architect's decision
 

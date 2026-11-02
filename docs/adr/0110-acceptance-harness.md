@@ -153,10 +153,12 @@ measurement harness of TASK-02 relied on `strace` and `LD_PRELOAD`, neither of w
    measurement's delays, and the checked outcomes are the ones that did not vary.
 5. **The roadmap criterion.** `tests/posix/hello.script`: `printf 'int main(){puts("hello from tcc");return 0;}'
    > hello.c && tcc hello.c && ./a.out`, expecting the line.
-6. **`make test-posix`** runs items 2 to 5 under `auto` and `tcg`, `zoraya-fsck` after each, as `test-files` does,
-   and is a step of `make test` after `test-files`; `QEMU_TIMEOUT` per script from a table, set from the first
-   measured durations with a margin. If CI's budget does not hold W1 and W3 under TCG, the architect chooses between a
-   longer budget and a `make test-posix-long` outside the default steps; this ADR does not pre-empt it.
+6. **Two targets**, by the architect's decision. `make test-posix` runs the fast workloads, W5, W8, W9 and W10 (items
+   3 and 4) and the roadmap criterion (item 5), under `auto` and `tcg`, `zoraya-fsck` after each, as `test-files`
+   does, and is a step of `make test` after `test-files`. `make test-posix-long` runs the builds, W1, W2, W3, W2-j and
+   W3-j (item 2), the same way; it is not a step of `make test`, and it must pass before stage 6 is merged, as the
+   stage's definition of done. `QEMU_TIMEOUT` per script comes from a table, set from the first measured durations
+   with a margin.
 7. **Observation.** A `stats` feature of `zoraya-posix`, on in the test image: each process counts `snapshot_process`
    calls and their wall-clock time (`clock_monotonic` around the call), `exec`s and their time, broker round trips,
    `share` and `seek` requests, resolver calls and time, request polls (ADR-0106), the largest `spawn` buffer it
@@ -211,16 +213,18 @@ blocks on a FIFO until the harness releases it).
 
 - **Positive.** The acceptance is the measured checks, run by the tools the repository has, with every number the
   design asked for coming from one statistics line.
-- **Negative.** `make test` grows by several minutes, more under TCG; W9's interruption point depends on timing; a
-  guest hang is a timeout to diagnose from a log.
+- **Negative.** `make test` grows by the fast workloads, more under TCG, and the builds need a second command that a
+  developer must remember before a merge; W9's interruption point depends on timing; a guest hang is a timeout to
+  diagnose from a log.
 - **Follow-up.** `tests/posix/`, `make posix-image`, `make test-posix`, `make measure-w4`, `tools/posix-stats`,
   `init`'s session file, the `stats` feature, the timeout table.
 
 ## Invariants
 
-- **INV-0110-1.** `make test` fails unless every T1 acceptance workload (W1, W2, W3, W5, W2-j, W3-j, W8, W9, W10) and
-  the roadmap criterion run inside Zoraya to their `OK` marker, `W9-STATUS 130` and `143`, `W9-PARTIAL 0`, and a
-  power-off. *Check:* `make test-posix`, a step of `make test`, with one runner script per workload.
+- **INV-0110-1.** `make test` fails unless W5, W8, W9, W10 and the roadmap criterion run inside Zoraya to their `OK`
+  marker, `W9-STATUS 130` and `143`, `W9-PARTIAL 0`, and a power-off; and `make test-posix-long` fails unless W1, W2,
+  W3, W2-j and W3-j do the same, and stage 6 is not merged until it passes. *Check:* `make test-posix`, a step of
+  `make test`, and `make test-posix-long`, with one runner script per workload.
 - **INV-0110-2.** The union of `POSIX-CALLS` over the T1 runs covers every function of the tier list not marked
   `static-only`. *Check:* `tools/posix-stats --calls` in `make test-posix`.
 - **INV-0110-3.** A W4 report produced by `make measure-w4` carries every counter of item 10 (fork count, total and
@@ -231,14 +235,14 @@ blocks on a FIFO until the harness releases it).
 
 ## Open questions
 
-- Run times under TCG for W1 and W3, and so CI's budget: the first run decides item 6's split.
+- Run times under TCG for W1 and W3: measured by the first `make test-posix-long`, for the task report.
 - Whether W9 under TCG reaches a state at 1.5 s where any recipe runs (the measurement's 0.3 s runs had 0 of 32
   tables done); a delay table per accelerator may be needed.
 - The `pids` test aid of item 4: a dash builtin patch or a separate program.
 
 ## Revisit triggers
 
-- CI exceeding its budget: `make test-posix-long`.
+- CI with budget to spare after the fast workloads: move a build workload into `make test-posix`.
 - T2 accepted: W4 moves from measurement to acceptance.
 - A workload whose check cannot be a printed line: Option D's tool.
 
