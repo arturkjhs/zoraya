@@ -461,3 +461,122 @@ fn rename_changes_only_the_named_symbols() {
         let _ = crate::rename::rename(&o[..n], &map);
     }
 }
+
+// Holes found by mutation testing (cargo-mutants, sorted by mutant-triage).
+
+#[test]
+fn a_small_archive_still_has_its_index() {
+    let bytes = archive(&[("t.o", b"abc".to_vec())]);
+    assert!(bytes.len() < 488);
+    assert_eq!(ar::index(&bytes).unwrap(), Some(vec![]));
+    assert_eq!(ar::index(b"!<arch>\n").unwrap(), None);
+}
+
+#[test]
+fn a_symbol_reads_its_type_apart_from_its_binding() {
+    let o = object(
+        &[("open", STB_GLOBAL, TEXT), ("ext", STB_WEAK, UNDEF)],
+        &[NOP],
+    );
+    let syms = elf::read(&o).unwrap().symbols;
+    assert_eq!((syms[0].bind, syms[0].kind), (STB_GLOBAL, FUNC));
+    assert_eq!((syms[1].bind, syms[1].kind), (STB_WEAK, 0));
+}
+
+#[test]
+fn rename_refuses_a_file_without_the_elf_magic() {
+    use std::collections::BTreeMap;
+    let mut o = object(&[("open", STB_GLOBAL, TEXT)], &[]);
+    o[0] = 0x7e;
+    assert!(crate::rename::rename(&o, &BTreeMap::new()).is_err());
+}
+
+/// The section header table's offset and the `.symtab` and `.strtab` headers.
+fn headers(o: &[u8]) -> (usize, usize, usize) {
+    let shoff = u64::from_le_bytes(o[40..48].try_into().unwrap()) as usize;
+    (shoff, shoff + 2 * 64, shoff + 3 * 64)
+}
+
+#[test]
+fn rename_keeps_every_name_of_a_string_table_longer_than_its_symbol_table() {
+    use std::collections::BTreeMap;
+    let a = "a_forty_character_name_for_a_long_tab_01";
+    let b = "a_forty_character_name_for_a_long_tab_02";
+    let o = object(&[(a, STB_GLOBAL, TEXT), (b, STB_GLOBAL, TEXT)], &[]);
+    let map: BTreeMap<String, String> = [(b.to_string(), "__zoraya_b".to_string())]
+        .into_iter()
+        .collect();
+    let renamed = crate::rename::rename(&o, &map).unwrap();
+    let names: Vec<String> = elf::read(&renamed)
+        .unwrap()
+        .symbols
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, [a, "__zoraya_b"]);
+    // The new string table starts on an 8-byte boundary.
+    let (_, _, strtab) = headers(&renamed);
+    let off = u64::from_le_bytes(renamed[strtab + 24..strtab + 32].try_into().unwrap());
+    assert_eq!(off % 8, 0);
+}
+
+#[test]
+fn a_symbol_table_at_the_end_of_the_file_is_renamed() {
+    use std::collections::BTreeMap;
+    let mut o = object(&[("frexpl", STB_GLOBAL, TEXT)], &[]);
+    let (_, symtab, _) = headers(&o);
+    let off = u64::from_le_bytes(o[symtab + 24..symtab + 32].try_into().unwrap()) as usize;
+    let size = u64::from_le_bytes(o[symtab + 32..symtab + 40].try_into().unwrap()) as usize;
+    let copy = o[off..off + size].to_vec();
+    let at = o.len() as u64;
+    o.extend_from_slice(&copy);
+    o[symtab + 24..symtab + 32].copy_from_slice(&at.to_le_bytes());
+    let map: BTreeMap<String, String> = [("frexpl".to_string(), "__zoraya_frexpl".to_string())]
+        .into_iter()
+        .collect();
+    let renamed = crate::rename::rename(&o, &map).unwrap();
+    assert_eq!(
+        elf::read(&renamed).unwrap().symbols[0].name,
+        "__zoraya_frexpl"
+    );
+}
+
+#[test]
+fn a_quote_inside_an_unquoted_field_is_a_character() {
+    let rows = surface::parse_csv("a,b\nx\"y,z\n").unwrap();
+    assert_eq!(rows[1], ["x\"y", "z"]);
+}
+
+#[test]
+fn the_list_file_names_are_its_first_words_outside_comments() {
+    assert_eq!(
+        surface::parse_list("# c\nopen # n\n\n read \nwritev x\n"),
+        list(&["open", "read", "writev"])
+    );
+}
+
+#[test]
+fn a_failed_report_says_what_failed() {
+    let r = Report {
+        extra: vec!["strlcpy".into()],
+        denied: vec!["alarm".into()],
+        missing: vec!["puts".into()],
+        svc: vec![("s.o".into(), vec![4])],
+        unresolved: vec![("__lock".into(), "u.o".into())],
+        duplicates: vec!["d.o".into()],
+        index: vec!["x is indexed but not defined".into()],
+    };
+    assert_eq!(
+        r.lines(),
+        [
+            "export outside the tier list (INV-0100-1): strlcpy",
+            "export on the exclusion table (INV-0005-2): alarm",
+            "tier list name not defined: puts",
+            "svc in s.o at code offsets [4] (INV-0100-2)",
+            "undefined in the archive: __lock (referenced by u.o)",
+            "member name occurs more than once: d.o",
+            "symbol index: x is indexed but not defined",
+        ]
+    );
+    assert!(Report::default().lines().is_empty());
+}

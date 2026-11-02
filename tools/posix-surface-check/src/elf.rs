@@ -115,11 +115,6 @@ fn bytes<'a>(elf: &'a [u8], s: &Section) -> Result<&'a [u8], String> {
         .ok_or("section outside the file".to_string())
 }
 
-/// Whether `data` claims to be an ELF file at all.
-pub fn is_elf(data: &[u8]) -> bool {
-    data.starts_with(b"\x7fELF")
-}
-
 /// Reads an AArch64 `ET_REL` object. Anything else is an error, so that a
 /// member the check cannot read is reported rather than skipped.
 pub fn read(elf: &[u8]) -> Result<Object<'_>, String> {
