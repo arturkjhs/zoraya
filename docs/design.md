@@ -557,6 +557,7 @@ deterministic random mutations.
 ```
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
+LICENSE                   BSD-2-Clause, for every crate in the repository
 Makefile                  build, run, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test, adr-check
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases

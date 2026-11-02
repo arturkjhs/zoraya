@@ -70,6 +70,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
 publish = false
+license = "BSD-2-Clause"
 
 # The filesystem's crash and fuzz tests mount tens of thousands of images;
 # unoptimised they take minutes. Optimise these two crates in test builds too.
