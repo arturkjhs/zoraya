@@ -37,6 +37,11 @@ pub fn set_signals(source: SourceId, bits: u32) {
     EVENTS.lock().set(source, bits, &mut sched::wake);
 }
 
+/// The bits asserted on `source` now.
+pub fn signals(source: SourceId) -> u32 {
+    EVENTS.lock().signals(source)
+}
+
 pub fn clear_signals(source: SourceId, bits: u32) {
     EVENTS.lock().clear(source, bits);
 }

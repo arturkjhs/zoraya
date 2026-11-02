@@ -1,6 +1,6 @@
 //! Files are built by hand, so each field under test is explicit.
 
-use zoraya_elf::{Error, PAGE_SIZE, Program};
+use zoraya_elf::{EHDR_SIZE, Error, Header, PAGE_SIZE, Program};
 
 const LOW: u64 = 0x40_0000;
 const HIGH: u64 = 1 << 47;
@@ -68,7 +68,65 @@ fn good() -> Vec<u8> {
 }
 
 fn parse(f: &[u8]) -> Result<Program, Error> {
-    Program::parse(f, LOW, HIGH)
+    let whole = Program::parse(f, LOW, HIGH);
+    assert_eq!(object_backed(f), whole, "INV-0108-1: both paths agree");
+    whole
+}
+
+/// How the kernel parses an image held in a memory object (ADR-0108): the
+/// file is in pages, so the header and the table are copied out of them
+/// first, each read stopping at the end of the file.
+fn object_backed(f: &[u8]) -> Result<Program, Error> {
+    let pages: Vec<&[u8]> = f.chunks(PAGE_SIZE as usize).collect();
+    let read = |at: usize, out: &mut [u8]| -> bool {
+        if at.checked_add(out.len()).is_none_or(|end| end > f.len()) {
+            return false;
+        }
+        for (i, b) in out.iter_mut().enumerate() {
+            let offset = at + i;
+            *b = pages[offset / PAGE_SIZE as usize][offset % PAGE_SIZE as usize];
+        }
+        true
+    };
+    let mut ehdr = [0u8; EHDR_SIZE];
+    let n = EHDR_SIZE.min(f.len());
+    read(0, &mut ehdr[..n]);
+    let header = Header::parse(&ehdr[..n])?;
+    let mut table = vec![0u8; header.table_length];
+    if !read(header.table_offset, &mut table) {
+        return Err(Error::Truncated);
+    }
+    Program::from_table(&header, &table, f.len() as u64, LOW, HIGH)
+}
+
+#[test]
+fn the_header_table_is_reachable_whole() {
+    let mut f = good();
+    // A third header that is not loaded, as PT_TLS or PT_GNU_STACK are.
+    f[56..58].copy_from_slice(&3u16.to_le_bytes());
+    f[64 + 112..64 + 116].copy_from_slice(&7u32.to_le_bytes());
+    let p = parse(&f).unwrap();
+    assert_eq!(p.segments().len(), 2);
+    assert_eq!(p.table(), (64, 3 * 56));
+    assert_eq!(p.header_table(&f), Some(&f[64..64 + 168]));
+    assert_eq!(p.header_table(&f[..100]), None);
+}
+
+#[test]
+fn a_table_of_the_wrong_length_is_refused() {
+    let f = good();
+    let header = Header::parse(&f).unwrap();
+    let table = &f[64..64 + header.table_length];
+    assert!(Program::from_table(&header, table, f.len() as u64, LOW, HIGH).is_ok());
+    assert_eq!(
+        Program::from_table(&header, &table[1..], f.len() as u64, LOW, HIGH),
+        Err(Error::Truncated)
+    );
+    assert_eq!(
+        Program::from_table(&header, table, 100, LOW, HIGH),
+        Err(Error::Truncated),
+        "a table past the end of the file"
+    );
 }
 
 #[test]

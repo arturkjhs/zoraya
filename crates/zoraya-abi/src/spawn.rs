@@ -243,28 +243,76 @@ impl<'a> SpawnRequest<'a> {
     }
 }
 
-/// The startup block: `argc`, `envc`, then the strings.
+/// The startup block's header: `argc`, `envc`, this size, and the number of
+/// program headers (ADR-0042, ADR-0109 item 5).
+pub const STARTUP_HEADER_SIZE: usize = 16;
+/// One ELF-64 program header.
+pub const PROGRAM_HEADER_SIZE: usize = 56;
+
+/// The block a process reads at `STARTUP_BLOCK`:
+///
+/// ```text
+/// argc, envc          u32 each
+/// header size         u32, STARTUP_HEADER_SIZE
+/// program headers     u32, how many
+/// strings             argc + envc of: u32 length, bytes
+/// padding             zeros, to a multiple of 8
+/// program headers     PROGRAM_HEADER_SIZE bytes each, the ELF's whole table
+/// ```
+///
+/// Nothing follows the table (ADR-0109 item 5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartupBlock<'a> {
     pub argv: ArgVec<'a>,
     pub envp: EnvVec<'a>,
+    /// The program's header table, as the ELF file has it, for `AT_PHDR`.
+    pub program_headers: &'a [u8],
+}
+
+/// Where the program headers start in a block whose strings take `strings`
+/// bytes.
+pub const fn startup_table_offset(strings: usize) -> usize {
+    (STARTUP_HEADER_SIZE + strings).next_multiple_of(8)
 }
 
 impl<'a> StartupBlock<'a> {
     pub fn decode(bytes: &'a [u8]) -> Option<StartupBlock<'a>> {
         let argc = u32_at(bytes, 0)? as usize;
         let envc = u32_at(bytes, 4)? as usize;
-        let (argv, rest) = Strings::split(bytes.get(8..)?, argc)?;
+        if u32_at(bytes, 8)? as usize != STARTUP_HEADER_SIZE {
+            return None;
+        }
+        let headers = u32_at(bytes, 12)? as usize;
+        let (argv, rest) = Strings::split(bytes.get(STARTUP_HEADER_SIZE..)?, argc)?;
         let (envp, _) = Strings::split(rest, envc)?;
-        Some(StartupBlock { argv, envp })
+        let strings = argv.as_bytes().len() + envp.as_bytes().len();
+        let at = startup_table_offset(strings);
+        let end = at.checked_add(headers.checked_mul(PROGRAM_HEADER_SIZE)?)?;
+        Some(StartupBlock {
+            argv,
+            envp,
+            program_headers: bytes.get(at..end)?,
+        })
     }
 }
 
-/// The first 8 bytes of a startup block; the strings follow as they came.
-pub fn startup_header(argc: usize, envc: usize) -> [u8; 8] {
-    let mut h = [0; 8];
+impl Strings<'_> {
+    /// No strings.
+    pub const fn empty() -> Strings<'static> {
+        Strings {
+            bytes: &[],
+            count: 0,
+        }
+    }
+}
+
+/// The header of a startup block; the strings follow as they came.
+pub fn startup_header(argc: usize, envc: usize, headers: usize) -> [u8; STARTUP_HEADER_SIZE] {
+    let mut h = [0; STARTUP_HEADER_SIZE];
     h[0..4].copy_from_slice(&(argc as u32).to_le_bytes());
     h[4..8].copy_from_slice(&(envc as u32).to_le_bytes());
+    h[8..12].copy_from_slice(&(STARTUP_HEADER_SIZE as u32).to_le_bytes());
+    h[12..16].copy_from_slice(&(headers as u32).to_le_bytes());
     h
 }
 

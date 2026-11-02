@@ -108,6 +108,7 @@ dependencies = [
  "zoraya-pagetable",
  "zoraya-pmm",
  "zoraya-ramdisk",
+ "zoraya-stream",
  "zoraya-time",
 ]
 

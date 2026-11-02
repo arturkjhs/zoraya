@@ -9,12 +9,15 @@
 use core::arch::{asm, global_asm};
 use core::fmt;
 
-use zoraya_abi::spawn::{STARTUP_BLOCK, STARTUP_BLOCK_MAX, StartupBlock};
+use zoraya_abi::spawn::{
+    PROGRAM_HEADER_SIZE, STARTUP_BLOCK, STARTUP_BLOCK_MAX, STARTUP_HEADER_SIZE, StartupBlock,
+    startup_table_offset,
+};
 use zoraya_abi::{
     Address, Buffer, Bytes, CONSOLE, ChannelEntry, ChannelSizes, Cookie, Deadline, Detail,
     Disposition, ExitCode, ExitReason, ExitRecord, Handle, Invoke, JobFlags, MapFlags, MemoryFlags,
     Mode, OBJECT_TYPES, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind,
-    Rights, SignalSet, Size, SpawnBuffer, Status, request_from_value, stubs,
+    Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, request_from_value, stubs,
 };
 
 const MAX_MESSAGE_HANDLES: usize = 64;
@@ -375,9 +378,66 @@ pub fn dma_release_quarantine(device: Handle) -> Result<(), Status> {
 pub fn handle_type(handle: Handle) -> Result<&'static str, Status> {
     let index = stubs::handle_type::<Svc>(handle)? as usize;
     match OBJECT_TYPES.get(index) {
-        Some((name, _, _)) => Ok(name),
+        Some(t) => Ok(t.name),
         None => Err(Status::BadHandle),
     }
+}
+
+/// The two ends of a new byte stream: read, then write (ADR-0101).
+pub fn stream_create() -> Result<(Handle, Handle), Status> {
+    let mut ends = [0u8; 16];
+    let buffer = Buffer {
+        address: ends.as_mut_ptr() as u64,
+        length: 16,
+    };
+    stubs::stream_create::<Svc>(Bytes(buffer))?;
+    core::hint::black_box(&mut ends);
+    let [a, b] = [&ends[..8], &ends[8..]].map(|e| {
+        let mut raw = [0; 8];
+        raw.copy_from_slice(e);
+        handle(u64::from_le_bytes(raw))
+    });
+    Ok((a?, b?))
+}
+
+/// Takes what the stream holds, up to `buffer`; 0 is end of file. Never
+/// blocks: an empty stream with a writer is `WouldBlock`.
+pub fn stream_read(end: Handle, buffer: &mut [u8]) -> Result<usize, Status> {
+    let n = stubs::stream_read::<Svc>(end, Bytes(bytes(buffer)))?;
+    core::hint::black_box(&mut *buffer);
+    Ok(n as usize)
+}
+
+/// Writes what fits and gives the count. Never blocks.
+pub fn stream_write(end: Handle, bytes_out: &[u8]) -> Result<usize, Status> {
+    Ok(stubs::stream_write::<Svc>(end, Bytes(bytes(bytes_out)))? as usize)
+}
+
+/// `fork`'s kernel half (ADR-0102): the child's handle in the caller, and
+/// `None` in the child, which goes on from here with a copy of everything.
+pub fn snapshot_process(buffer: &[u8]) -> Result<Option<Handle>, Status> {
+    Ok(Handle::new(stubs::snapshot_process::<Svc>(
+        SnapshotBuffer(bytes(buffer)),
+    )?))
+}
+
+/// An image from the first `length` bytes of a memory object (ADR-0108).
+pub fn image_create(memory: Handle, length: u64) -> Result<Handle, Status> {
+    handle(stubs::image_create::<Svc>(memory, Size(length))?)
+}
+
+/// Stops every process in a job tree (ADR-0105 item 8).
+pub fn job_suspend(job: Handle) -> Result<(), Status> {
+    stubs::job_suspend::<Svc>(job).map(|_| ())
+}
+
+pub fn job_resume(job: Handle) -> Result<(), Status> {
+    stubs::job_resume::<Svc>(job).map(|_| ())
+}
+
+/// The signals asserted on `handle` now, without waiting.
+pub fn object_get_signals(handle: Handle) -> Result<u32, Status> {
+    Ok(stubs::object_get_signals::<Svc>(handle)? as u32)
 }
 
 /// A new object with no use but its identity, for tokens (ADR-0080).
@@ -404,7 +464,7 @@ fn startup_block() -> Option<StartupBlock<'static>> {
     // Up to the end of its last page: lengths in the block keep `decode`
     // inside what is mapped, but a slice must not cover unmapped memory, so
     // this first finds the size by walking one string at a time.
-    let mut size = 8usize;
+    let mut size = STARTUP_HEADER_SIZE;
     let word = |at: usize| {
         // SAFETY: `at` is inside the block: the walk below only reads a length
         // the kernel wrote, and the block ends after the last string.
@@ -415,6 +475,12 @@ fn startup_block() -> Option<StartupBlock<'static>> {
         if size as u64 > STARTUP_BLOCK_MAX {
             return None;
         }
+    }
+    // Then the program headers (ADR-0109 item 5).
+    let headers = (word(12) as usize).checked_mul(PROGRAM_HEADER_SIZE)?;
+    size = startup_table_offset(size - STARTUP_HEADER_SIZE).checked_add(headers)?;
+    if size as u64 > STARTUP_BLOCK_MAX {
+        return None;
     }
     // SAFETY: the walk above found `size` bytes, all mapped and immutable.
     let block = unsafe { core::slice::from_raw_parts(STARTUP_BLOCK as *const u8, size) };

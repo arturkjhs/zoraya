@@ -26,6 +26,7 @@ mod process;
 mod psci;
 mod ramdisk;
 mod sched;
+mod stream;
 mod sync;
 mod syscall;
 #[cfg(feature = "qemu-test")]

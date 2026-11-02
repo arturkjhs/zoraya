@@ -27,8 +27,12 @@ fn parameters_come_from_the_allow_list() {
                     s.name
                 ),
                 Param::Cookie => assert_eq!(s.name, "directory_entry"),
+                // ADR-0108 adds `image_create`'s length.
                 Param::Size => assert!(
-                    matches!(s.name, "memory_create" | "memory_map" | "memory_unmap"),
+                    matches!(
+                        s.name,
+                        "memory_create" | "memory_map" | "memory_unmap" | "image_create"
+                    ),
                     "{}",
                     s.name
                 ),
@@ -141,17 +145,93 @@ fn spawn_takes_vectors() {
 /// define a type without saying.
 #[test]
 fn every_object_type_says_how_it_waits() {
-    assert_eq!(OBJECT_TYPES.len(), 13);
-    for (name, waiting, rights) in OBJECT_TYPES {
-        if let Waiting::Signals(bits) = waiting {
-            assert_ne!(*bits, 0, "{name}");
+    assert_eq!(OBJECT_TYPES.len(), 15);
+    for t in OBJECT_TYPES {
+        if let Waiting::Signals(bits) = t.waiting {
+            assert_ne!(bits, 0, "{}", t.name);
         }
-        assert_ne!(rights.raw(), 0, "{name}");
+        assert_ne!(t.rights.raw(), 0, "{}", t.name);
     }
-    let port = OBJECT_TYPES.iter().find(|t| t.0 == "port").unwrap();
+    let port = OBJECT_TYPES.iter().find(|t| t.name == "port").unwrap();
     assert!(
-        !port.2.contains(Rights::DUPLICATE),
+        !port.rights.contains(Rights::DUPLICATE),
         "ADR-0003 rule 3: a port is not duplicable"
+    );
+}
+
+/// ADR-0102 item 3: the types `snapshot_process` duplicates, by name, and a
+/// type is duplicable exactly when its handles can carry `DUPLICATE`.
+#[test]
+fn duplicable_types_are_the_ones_adr_0102_lists() {
+    let duplicable: Vec<&str> = OBJECT_TYPES
+        .iter()
+        .filter(|t| t.duplication == Duplication::Duplicable)
+        .map(|t| t.name)
+        .collect();
+    assert_eq!(
+        duplicable,
+        [
+            "process",
+            "job",
+            "console",
+            "power",
+            "device",
+            "event",
+            "memory",
+            "directory",
+            "image",
+            "stream-read",
+            "stream-write"
+        ]
+    );
+    for t in OBJECT_TYPES {
+        assert_eq!(
+            t.duplication == Duplication::Duplicable,
+            t.rights.contains(Rights::DUPLICATE),
+            "{}",
+            t.name
+        );
+    }
+}
+
+/// ADR-0101: the two ends' signals and rights.
+#[test]
+fn stream_ends_have_the_signals_and_rights_of_adr_0101() {
+    use stream_signals::*;
+    assert_eq!(
+        StreamReadObject::WAITING,
+        Waiting::Signals(READABLE | PEER_CLOSED)
+    );
+    assert_eq!(
+        StreamWriteObject::WAITING,
+        Waiting::Signals(WRITABLE | PEER_CLOSED)
+    );
+    let both = Rights::WAIT
+        .union(Rights::DUPLICATE)
+        .union(Rights::TRANSFER);
+    assert_eq!(StreamReadObject::RIGHTS, both.union(Rights::READ));
+    assert_eq!(StreamWriteObject::RIGHTS, both.union(Rights::WRITE));
+    assert_eq!((STREAM_CAPACITY, STREAM_ATOMIC), (65536, 4096));
+}
+
+/// INV-0002-2: the set of `#[personality_only]` calls is ADR-0002's list, one
+/// entry.
+#[test]
+fn snapshot_process_is_the_one_personality_only_call() {
+    let tagged: Vec<&str> = SYSCALLS
+        .iter()
+        .filter(|s| s.personality_only)
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(tagged, ["snapshot_process"]);
+}
+
+/// ADR-0105 item 8: a job's `SUSPENDED` can be waited for.
+#[test]
+fn a_job_can_be_waited_on_for_suspended() {
+    assert_eq!(
+        JobObject::WAITING,
+        Waiting::Signals(job_signals::TERMINATED | job_signals::SUSPENDED)
     );
 }
 
@@ -262,6 +342,14 @@ echo! {
     handle_type(handle: Handle);
     event_create();
     object_same(a: Handle, b: Handle);
+    stream_create(ends: Bytes);
+    stream_read(end: Handle, bytes: Bytes);
+    stream_write(end: Handle, bytes: Bytes);
+    snapshot_process(args: SnapshotBuffer);
+    image_create(memory: Handle, length: Size);
+    job_suspend(job: Handle);
+    job_resume(job: Handle);
+    object_get_signals(handle: Handle);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
@@ -401,12 +489,27 @@ fn the_startup_block_round_trips() {
     let n = sample(&mut b);
     let r = SpawnRequest::decode(&b[..n]).unwrap();
     let mut block = Vec::new();
-    block.extend_from_slice(&startup_header(r.argv.len(), r.envp.len()));
+    let table = [0x5au8; 2 * PROGRAM_HEADER_SIZE];
+    block.extend_from_slice(&startup_header(r.argv.len(), r.envp.len(), 2));
     block.extend_from_slice(r.argv.as_bytes());
     block.extend_from_slice(r.envp.as_bytes());
+    let strings = block.len() - STARTUP_HEADER_SIZE;
+    block.resize(startup_table_offset(strings), 0);
+    assert!(block.len().is_multiple_of(8));
+    block.extend_from_slice(&table);
     let s = StartupBlock::decode(&block).unwrap();
     assert_eq!(s.argv.len(), 2);
     assert_eq!(s.envp.collect::<Vec<_>>(), [&b"K=V"[..]]);
+    assert_eq!(s.program_headers, &table[..]);
+    // A table cut short, or a header of another size, is refused.
+    assert_eq!(StartupBlock::decode(&block[..block.len() - 1]), None);
+    let mut other = block.clone();
+    other[8] = 8;
+    assert_eq!(StartupBlock::decode(&other), None);
+    let empty = startup_header(0, 0, 0);
+    let s = StartupBlock::decode(&empty).unwrap();
+    assert!(s.argv.is_empty() && s.envp.is_empty() && s.program_headers.is_empty());
+    assert_eq!(Strings::empty().count(), 0);
 }
 
 /// INV-0042-2: no prefix or mutation panics, and what is accepted iterates to
@@ -568,7 +671,7 @@ fn power_is_one_right_on_one_type() {
     );
     let holders = OBJECT_TYPES
         .iter()
-        .filter(|(_, _, rights)| rights.contains(Rights::POWER));
+        .filter(|t| t.rights.contains(Rights::POWER));
     assert_eq!(holders.count(), 1);
 }
 
@@ -654,4 +757,167 @@ fn a_channel_entry_round_trips_and_refuses_bad_values() {
         handles: 2,
     };
     assert_eq!(ChannelSizes::from_bytes(&sizes.to_bytes()), sizes);
+}
+
+mod snapshots {
+    use std::vec::Vec;
+
+    use crate::snapshot::SnapshotRequest;
+    use crate::snapshot::{Encoder, HEADER_SIZE, MAX_MOVES, MAX_SNAPSHOT_SIZE, Move};
+    use crate::{Handle, MAX_HANDLES, Status};
+
+    fn h(slot: u32, generation: u64) -> Handle {
+        Handle::from_parts(slot, generation).unwrap()
+    }
+
+    fn sample(buffer: &mut [u8]) -> usize {
+        Encoder::new(buffer, h(2, 0))
+            .group(h(7, 3))
+            .self_slot(9)
+            .suspended()
+            .moved(Move {
+                slot: 4,
+                handle: h(30, 1),
+            })
+            .moved(Move {
+                slot: 5,
+                handle: h(31, 0xabcd_1234_5678),
+            })
+            .finish()
+            .unwrap()
+    }
+
+    /// INV-0057-3 through the snapshot buffer, and the fields round trip.
+    #[test]
+    fn a_request_round_trips_with_64_bit_handles() {
+        let mut b = [0; 256];
+        let n = sample(&mut b);
+        assert_eq!(n, HEADER_SIZE + 2 * 16);
+        let r = SnapshotRequest::decode(&b[..n]).unwrap();
+        assert!(r.suspended);
+        assert_eq!(
+            (r.job, r.group, r.self_slot),
+            (h(2, 0), Some(h(7, 3)), Some(9))
+        );
+        let moves: Vec<Move> = r.moves().collect();
+        assert_eq!(moves.len(), r.move_count());
+        assert_eq!(moves[1].handle.generation(), 0xabcd_1234_5678);
+        assert_eq!(moves[0].slot, 4);
+        let mut b = [0; HEADER_SIZE];
+        let n = Encoder::new(&mut b, h(2, 0)).finish().unwrap();
+        let r = SnapshotRequest::decode(&b[..n]).unwrap();
+        assert!(!r.suspended && r.group.is_none() && r.self_slot.is_none());
+        assert_eq!(r.moves().count(), 0);
+    }
+
+    /// The decoder is total: every prefix and many mutations, no panic, and
+    /// what is accepted iterates to its count.
+    #[test]
+    fn the_snapshot_decoder_is_total() {
+        let mut b = [0; 256];
+        let n = sample(&mut b);
+        for length in 0..n {
+            assert!(SnapshotRequest::decode(&b[..length]).is_err(), "{length}");
+        }
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            x.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        };
+        for _ in 0..20_000 {
+            let mut m = b;
+            for _ in 0..1 + next() % 4 {
+                let at = (next() % n as u64) as usize;
+                m[at] = next() as u8;
+            }
+            let length = if next() % 4 == 0 {
+                (next() % 256) as usize
+            } else {
+                n
+            };
+            if let Ok(r) = SnapshotRequest::decode(&m[..length]) {
+                assert_eq!(r.moves().count(), r.move_count());
+            }
+        }
+    }
+
+    #[test]
+    fn bad_buffers_are_refused() {
+        let mut b = [0; 256];
+        let n = sample(&mut b);
+        let refused = |m: &[u8]| SnapshotRequest::decode(m).map(|_| ()).err();
+        let bad = Some(Status::InvalidArgument);
+        let mut m = b;
+        m[3] = b'2';
+        assert_eq!(refused(&m[..n]), bad, "magic");
+        let mut m = b;
+        m[4] = 40;
+        assert_eq!(refused(&m[..n]), bad, "header size");
+        let mut m = b;
+        m[8] = 3;
+        assert_eq!(refused(&m[..n]), bad, "unknown flag");
+        for at in [12, 40, 47, HEADER_SIZE + 4] {
+            let mut m = b;
+            m[at] = 1;
+            assert_eq!(refused(&m[..n]), bad, "reserved at {at}");
+        }
+        assert_eq!(refused(&b[..n + 1]), bad, "trailing byte");
+        let mut m = b;
+        m[16..24].fill(0);
+        assert_eq!(refused(&m[..n]), Some(Status::BadHandle), "no job");
+        let mut m = b;
+        m[HEADER_SIZE + 8..HEADER_SIZE + 16].fill(0);
+        assert_eq!(refused(&m[..n]), Some(Status::BadHandle), "no handle");
+        let mut m = b;
+        m[HEADER_SIZE..HEADER_SIZE + 4].fill(0);
+        assert_eq!(refused(&m[..n]), bad, "slot 0");
+        let mut m = b;
+        m[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&(MAX_HANDLES + 1).to_le_bytes());
+        assert_eq!(refused(&m[..n]), bad, "slot past the table");
+        let mut m = b;
+        m[32..36].copy_from_slice(&(MAX_HANDLES + 1).to_le_bytes());
+        assert_eq!(refused(&m[..n]), bad, "self slot past the table");
+        let mut m = b;
+        m[32..36].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(refused(&m[..n]), bad, "self slot also moved into");
+        let mut m = b;
+        m[HEADER_SIZE + 16..HEADER_SIZE + 20].copy_from_slice(&4u32.to_le_bytes());
+        assert_eq!(refused(&m[..n]), bad, "one slot twice");
+        let mut m = b;
+        let first = m[HEADER_SIZE + 8..HEADER_SIZE + 16].to_vec();
+        m[HEADER_SIZE + 24..HEADER_SIZE + 32].copy_from_slice(&first);
+        assert_eq!(refused(&m[..n]), bad, "one handle moved twice");
+        let mut m = b;
+        m[36] = 3;
+        assert_eq!(refused(&m[..n]), bad, "count beyond the bytes");
+    }
+
+    #[test]
+    fn the_move_list_is_bounded() {
+        let mut b = [0; MAX_SNAPSHOT_SIZE + 64];
+        let mut e = Encoder::new(&mut b, h(2, 0));
+        for i in 0..=MAX_MOVES as u32 {
+            e.moved(Move {
+                slot: 10 + i,
+                handle: h(100 + i, 0),
+            });
+        }
+        let n = e.finish().unwrap();
+        assert_eq!(n, MAX_SNAPSHOT_SIZE + 16);
+        assert_eq!(
+            SnapshotRequest::decode(&b[..n]).map(|_| ()),
+            Err(Status::InvalidArgument)
+        );
+        let mut small = [0; HEADER_SIZE + 8];
+        let mut e = Encoder::new(&mut small, h(2, 0));
+        e.moved(Move {
+            slot: 1,
+            handle: h(1, 0),
+        });
+        assert_eq!(e.finish(), None, "no room is reported");
+        let mut tiny = [0; 4];
+        assert_eq!(Encoder::new(&mut tiny, h(2, 0)).finish(), None);
+    }
 }

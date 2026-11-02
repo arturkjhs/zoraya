@@ -5,6 +5,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
     Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
@@ -12,9 +13,10 @@ use zoraya_abi::{
     Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
     MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
     PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
-    Size, SpawnBuffer, Status, request_value,
+    Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject, StreamWriteObject, request_value,
 };
 use zoraya_console::INPUT_SIZE;
+use zoraya_elf::{EHDR_SIZE, Header, Program};
 use zoraya_pagetable::{Attributes, MemoryType as PageMemory};
 use zoraya_pmm::FRAME_SIZE;
 use zoraya_ramdisk::NAME_SIZE;
@@ -24,12 +26,14 @@ use crate::arch::{self, Frame};
 use crate::channel::{self, MAX_MESSAGE, MAX_MESSAGE_HANDLES, Pair};
 use crate::device::Pin;
 use crate::job::Job;
+use crate::memory::heap::try_arc;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{Holder, MappingError, USER_HIGH};
-use crate::object::{self, HandleTable, Image, Object};
+use crate::memory::user::{Copied, Holder, MappingError, USER_HIGH};
+use crate::object::{self, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
-use crate::process::{self, Process, Start};
-use crate::{console, print, ramdisk, sched, timer};
+use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
+use crate::stream::Stream;
+use crate::{console, port, print, ramdisk, sched, timer};
 
 /// Longest `console_write`.
 ///
@@ -70,6 +74,26 @@ impl UserSlice {
         UserSlice::new(self.address + offset, len)
     }
 
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Copies `out.len()` bytes from `at` in the range into `out`.
+    pub fn read_into(&self, at: u64, out: &mut [u8]) -> Result<(), Status> {
+        let end = at.checked_add(out.len() as u64);
+        if end.is_none_or(|end| end > self.len as u64) {
+            return Err(Status::InvalidArgument);
+        }
+        // SAFETY: `out` is writable for its length, and any user address is
+        // safe: the access is checked as EL0's, and a fault returns an error.
+        unsafe { arch::copy_from_user(out, self.address + at) }.map_err(|_| Status::BadAddress)
+    }
+
+    /// Copies `bytes` to `at` in the range, which must hold them.
+    pub fn write_at(&self, at: u64, bytes: &[u8]) -> Result<(), Status> {
+        self.at(at)?.write(bytes)
+    }
+
     /// Copies the range into a new vector.
     pub fn read(&self) -> Result<Vec<u8>, Status> {
         let mut bytes = Vec::new();
@@ -105,12 +129,30 @@ fn deadline(raw: zoraya_abi::Deadline) -> Deadline {
 /// The calling process, for one call. A call that ends the process leaves its
 /// record in `exit`: `process::exit_current` does not return, so it must run
 /// after this has been dropped, or the count here would never go.
-struct Calls {
+struct Calls<'f> {
     process: Arc<Process>,
     exit: Option<ExitRecord>,
+    /// The caller's registers at its `svc`, for `snapshot_process`.
+    frame: &'f Frame,
 }
 
-impl Calls {
+/// What the last `snapshot_process` cost: nanoseconds with interrupts
+/// masked, and pages copied. For the measurements of TASK-16.
+pub static LAST_SNAPSHOT: crate::sync::SpinLock<(u64, u64)> = crate::sync::SpinLock::new((0, 0));
+
+/// The name a process from a memory image gets: its `argv[0]`, if that is
+/// short UTF-8, since the image itself has no name.
+fn image_name<'a>(request: &SpawnRequest<'a>) -> &'a str {
+    request
+        .argv
+        .clone()
+        .next()
+        .filter(|a| !a.is_empty() && a.len() <= 32)
+        .and_then(|a| core::str::from_utf8(a).ok())
+        .unwrap_or("image")
+}
+
+impl Calls<'_> {
     fn object(&self, handle: Handle, rights: Rights) -> Result<Object, Status> {
         let handles = self.process.handles.lock();
         Ok(handles.check(handle, rights)?.object.clone())
@@ -137,6 +179,61 @@ impl Calls {
         }
     }
 
+    /// The child's table for `request`, from the caller's, which stays as it
+    /// is: every check comes before anything is allocated (ADR-0102 items 3,
+    /// 4). Also reserves the caller's room for the child's handle.
+    fn snapshot_table(
+        &self,
+        request: &SnapshotRequest<'_>,
+    ) -> Result<(HandleTable, Option<Handle>), Status> {
+        let mut handles = self.process.handles.lock();
+        handles.reserve()?;
+        if handles
+            .entries()
+            .any(|(_, e)| matches!(e.object, Object::Pin(_)))
+        {
+            return Err(Status::BadState);
+        }
+        for moved in request.moves() {
+            let entry = handles.check(moved.handle, Rights::TRANSFER)?;
+            if let Object::Channel(pair, end) = &entry.object
+                && pair.holds_handles(*end)
+            {
+                return Err(Status::BadState);
+            }
+        }
+        let self_slot = request.self_slot;
+        let top = request.moves().map(|m| m.slot).chain(self_slot).max();
+        let mut table = handles.empty_like(top.unwrap_or(0))?;
+        let named = |slot: u32| Some(slot) == self_slot || request.moves().any(|m| m.slot == slot);
+        let moved = |h: Handle| request.moves().any(|m| m.handle == h);
+        for (handle, entry) in handles.entries() {
+            let duplicable = entry.object.duplicable() && entry.rights.contains(Rights::DUPLICATE);
+            if duplicable && !named(handle.slot()) && !moved(handle) {
+                table.place(
+                    handle,
+                    entry.object.clone(),
+                    entry.rights,
+                    object::next_id(),
+                )?;
+            }
+        }
+        for m in request.moves() {
+            let entry = handles.check(m.handle, Rights::TRANSFER)?;
+            let at = Handle::from_parts(m.slot, handles.generation_of(m.slot))
+                .ok_or(Status::InvalidArgument)?;
+            table.place(at, entry.object.clone(), entry.rights, object::next_id())?;
+        }
+        let self_handle = match self_slot {
+            Some(slot) => Some(
+                Handle::from_parts(slot, handles.generation_of(slot))
+                    .ok_or(Status::InvalidArgument)?,
+            ),
+            None => None,
+        };
+        Ok((table, self_handle))
+    }
+
     fn insert(&self, object: Object, rights: Rights) -> Result<u64, Status> {
         let handle = self
             .process
@@ -147,7 +244,7 @@ impl Calls {
     }
 }
 
-impl Handlers for Calls {
+impl Handlers for Calls<'_> {
     fn process_exit(&mut self, code: ExitCode) -> Result<u64, Status> {
         self.exit = Some(ExitRecord {
             code: code.0,
@@ -226,6 +323,10 @@ impl Handlers for Calls {
         let Object::Image(image) = self.object(request.image, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
+        let (name, loadable) = match &image {
+            Image::Ramdisk { name, file } => (*name, Loadable::from_file(file)?),
+            Image::Memory(image) => (image_name(&request), Loadable::from_image(image)),
+        };
         // Nothing of the caller's changes until the child exists (INV-0042-3).
         let mut table = HandleTable::new();
         {
@@ -249,8 +350,8 @@ impl Handlers for Calls {
             }
         }
         let child = process::create(Start {
-            name: image.name,
-            file: image.file,
+            name,
+            image: loadable,
             job,
             handles: table,
             argv: request.argv,
@@ -410,7 +511,10 @@ impl Handlers for Calls {
         let text = core::str::from_utf8(&bytes).map_err(|_| Status::InvalidArgument)?;
         let path = RelativePath::new(text).ok_or(Status::InvalidArgument)?;
         let (name, file) = ramdisk::find(path.as_str()).ok_or(Status::NotFound)?;
-        self.insert(Object::Image(Image { name, file }), ImageObject::RIGHTS)
+        self.insert(
+            Object::Image(Image::Ramdisk { name, file }),
+            ImageObject::RIGHTS,
+        )
     }
 
     fn console_read(&mut self, console: Handle, bytes: Bytes) -> Result<u64, Status> {
@@ -777,6 +881,160 @@ impl Handlers for Calls {
         Ok(u64::from(a.same(&b)))
     }
 
+    fn stream_create(&mut self, ends: Bytes) -> Result<u64, Status> {
+        if ends.0.length != 16 {
+            return Err(Status::InvalidArgument);
+        }
+        let target = UserSlice::of(ends.0)?;
+        target.write(&[0; 16])?;
+        let mut handles = self.process.handles.lock();
+        handles.reserve_many(2)?;
+        let (reader, writer) = Stream::create()?;
+        let read = Object::StreamRead(reader);
+        let read = handles.insert(read, StreamReadObject::RIGHTS, object::next_id())?;
+        let write = Object::StreamWrite(writer);
+        let write = handles.insert(write, StreamWriteObject::RIGHTS, object::next_id())?;
+        drop(handles);
+        let mut record = [0; 16];
+        record[..8].copy_from_slice(&read.raw().to_le_bytes());
+        record[8..].copy_from_slice(&write.raw().to_le_bytes());
+        // This range was just written, and a process has one thread.
+        target.write(&record)?;
+        Ok(0)
+    }
+
+    fn stream_read(&mut self, end: Handle, bytes: Bytes) -> Result<u64, Status> {
+        let Object::StreamRead(end) = self.object(end, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        Ok(end.read(&UserSlice::of(bytes.0)?)? as u64)
+    }
+
+    fn stream_write(&mut self, end: Handle, bytes: Bytes) -> Result<u64, Status> {
+        let Object::StreamWrite(end) = self.object(end, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        Ok(end.write(&UserSlice::of(bytes.0)?)? as u64)
+    }
+
+    fn snapshot_process(&mut self, args: SnapshotBuffer) -> Result<u64, Status> {
+        let started = timer::now();
+        // The one personality-only facility (INV-0002-2, INV-0003-2).
+        if !self.process.job().is_posix() {
+            return Err(Status::AccessDenied);
+        }
+        if args.0.length > MAX_SNAPSHOT_SIZE as u64 {
+            return Err(Status::InvalidArgument);
+        }
+        // The only read of this buffer (ADR-0042).
+        let bytes = UserSlice::of(args.0)?.read()?;
+        let request = SnapshotRequest::decode(&bytes)?;
+        let job = self.job(request.job, Rights::CREATE_PROCESS)?;
+        if !job.is_within(self.process.job()) {
+            return Err(Status::AccessDenied);
+        }
+        let job = match request.group {
+            None => job,
+            Some(group) => {
+                let group = self.job(group, Rights::CREATE_PROCESS)?;
+                if !group.is_within(&job) {
+                    return Err(Status::InvalidArgument);
+                }
+                group
+            }
+        };
+        let (table, self_handle) = self.snapshot_table(&request)?;
+        let mut copied = Copied::default();
+        let space = {
+            let space = self.process.space.lock();
+            space
+                .as_ref()
+                .ok_or(Status::BadState)?
+                .snapshot(&mut copied)?
+        };
+        let child = process::create_snapshot(Snapshot {
+            parent: &self.process,
+            space,
+            job,
+            handles: table,
+            self_handle,
+            frame: self.frame,
+            tpidr_el0: arch::tpidr_el0(),
+            suspended: request.suspended,
+        })?;
+        // The child exists: only now do the moved handles leave (INV-0102-2).
+        let mut handles = self.process.handles.lock();
+        for moved in request.moves() {
+            if let Some(entry) = handles.remove(moved.handle) {
+                object::end_subscriptions(&entry);
+            }
+        }
+        // `snapshot_table` reserved this room, and removing made more.
+        let handle = handles.insert(
+            Object::Process(child),
+            ProcessObject::RIGHTS,
+            object::next_id(),
+        )?;
+        drop(handles);
+        *LAST_SNAPSHOT.lock() = (timer::now().nanos_since(started), copied.pages);
+        Ok(handle.raw())
+    }
+
+    fn image_create(&mut self, memory: Handle, length: Size) -> Result<u64, Status> {
+        let Object::Memory(memory) = self.object(memory, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        let length = length.0;
+        if length > memory.size() {
+            return Err(Status::InvalidArgument);
+        }
+        let mut ehdr = [0; EHDR_SIZE];
+        let head = &mut ehdr[..(length as usize).min(EHDR_SIZE)];
+        memory.read(0, head);
+        let header = Header::parse(head).map_err(|_| Status::InvalidArgument)?;
+        let end = header.table_offset as u64 + header.table_length as u64;
+        if end > length {
+            return Err(Status::InvalidArgument);
+        }
+        let mut table = Vec::new();
+        table
+            .try_reserve_exact(header.table_length)
+            .map_err(|_| Status::NoMemory)?;
+        table.resize(header.table_length, 0);
+        memory.read(header.table_offset as u64, &mut table);
+        // The same parser and range as the ramdisk's (INV-0108-1).
+        let program = Program::from_table(&header, &table, length, PROGRAM_LOW, PROGRAM_HIGH)
+            .map_err(|_| Status::InvalidArgument)?;
+        let mut handles = self.process.handles.lock();
+        handles.reserve()?;
+        let image = try_arc(MemoryImage {
+            memory,
+            program,
+            table,
+        })
+        .map_err(|_| Status::NoMemory)?;
+        let image = Object::Image(Image::Memory(image));
+        Ok(handles
+            .insert(image, ImageObject::RIGHTS, object::next_id())?
+            .raw())
+    }
+
+    fn job_suspend(&mut self, job: Handle) -> Result<u64, Status> {
+        self.job(job, Rights::KILL)?.suspend();
+        Ok(0)
+    }
+
+    fn job_resume(&mut self, job: Handle) -> Result<u64, Status> {
+        self.job(job, Rights::KILL)?.resume();
+        Ok(0)
+    }
+
+    fn object_get_signals(&mut self, handle: Handle) -> Result<u64, Status> {
+        let object = self.object(handle, Rights::WAIT)?;
+        let (source, known) = object.signals().ok_or(Status::BadHandle)?;
+        Ok(u64::from(port::signals(source) & known))
+    }
+
     fn handle_type(&mut self, handle: Handle) -> Result<u64, Status> {
         Ok(self.object(handle, Rights::NONE)?.type_index())
     }
@@ -818,6 +1076,23 @@ pub mod test_calls {
     pub const FIRST_LINE: u64 = 0x7009;
     /// Returns 1 if the line in x0 is enabled.
     pub const LINE_ENABLED: u64 = 0x700a;
+    /// Returns the kernel heap's live bytes.
+    pub const HEAP_LIVE: u64 = 0x700b;
+    /// Takes frames until x0 are free, and returns how many it holds.
+    pub const HOLD_FRAMES: u64 = 0x700c;
+    /// Gives back what `HOLD_FRAMES` took, and returns how many.
+    pub const RELEASE_FRAMES: u64 = 0x700d;
+    /// Returns the last `snapshot_process`'s time with interrupts masked, in
+    /// nanoseconds.
+    pub const SNAPSHOT_NS: u64 = 0x700e;
+    /// Returns the pages the last `snapshot_process` copied.
+    pub const SNAPSHOT_PAGES: u64 = 0x700f;
+    /// Returns the raw handle in the caller's slot x0, or 0 if it is empty.
+    pub const HANDLE_AT: u64 = 0x7010;
+    /// Returns the rights of the handle in the caller's slot x0, or 0.
+    pub const RIGHTS_AT: u64 = 0x7011;
+    /// Returns the generation the caller's slot x0 is at.
+    pub const GENERATION_AT: u64 = 0x7012;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -839,6 +1114,25 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::FIRST_LINE => Some(Ok(u64::from(crate::device::first_line()))),
         test_calls::LINE_ENABLED => Some(Ok(u64::from(crate::gic::is_enabled(a0 as u32)))),
         test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
+        test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::stats().live as u64)),
+        test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
+        test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames())),
+        test_calls::SNAPSHOT_NS => Some(Ok(LAST_SNAPSHOT.lock().0)),
+        test_calls::SNAPSHOT_PAGES => Some(Ok(LAST_SNAPSHOT.lock().1)),
+        test_calls::HANDLE_AT | test_calls::RIGHTS_AT | test_calls::GENERATION_AT => {
+            let thread = sched::current();
+            let handles = thread.process()?.handles.lock();
+            let slot = u32::try_from(a0).ok()?;
+            let generation = handles.generation_of(slot);
+            let entry = Handle::from_parts(slot, generation).and_then(|h| handles.get(h));
+            Some(Ok(match number {
+                test_calls::HANDLE_AT => entry.map_or(0, |_| {
+                    Handle::from_parts(slot, generation).map_or(0, Handle::raw)
+                }),
+                test_calls::RIGHTS_AT => entry.map_or(0, |e| u64::from(e.rights.raw())),
+                _ => generation,
+            }))
+        }
         test_calls::OBJECT_MAPPINGS => {
             let thread = sched::current();
             let process = thread.process()?;
@@ -903,6 +1197,7 @@ pub fn dispatch(frame: &mut Frame) {
             let mut calls = Calls {
                 process,
                 exit: None,
+                frame,
             };
             let result = zoraya_abi::dispatch(&mut calls, number, &registers);
             exit = calls.exit;

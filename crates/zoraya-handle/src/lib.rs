@@ -192,6 +192,68 @@ impl<T> Table<T> {
     }
 }
 
+impl<T> Table<T> {
+    /// The generation slot `slot` is at: what a handle to it would carry now.
+    /// A slot never used is at 0.
+    pub fn generation_of(&self, slot: u32) -> u64 {
+        (slot as usize)
+            .checked_sub(1)
+            .and_then(|i| self.slots.get(i))
+            .map_or(0, |s| s.generation)
+    }
+
+    /// Every handle, in slot order.
+    pub fn entries(&self) -> impl Iterator<Item = (Handle, &Entry<T>)> {
+        self.slots.iter().enumerate().filter_map(|(i, slot)| {
+            let entry = slot.entry.as_ref()?;
+            Some((Handle::from_parts(i as u32 + 1, slot.generation)?, entry))
+        })
+    }
+
+    /// An empty table whose slots are at this one's generations, up to at
+    /// least `slots`, for a snapshot's child (ADR-0102 items 3 and 4): a
+    /// handle placed at a slot's generation then has the parent's value.
+    pub fn empty_like(&self, slots: u32) -> Result<Table<T>, Status> {
+        let length = self.slots.len().max(slots.min(MAX_HANDLES) as usize);
+        let mut copy = Vec::new();
+        copy.try_reserve_exact(length)
+            .map_err(|_| Status::NoMemory)?;
+        for i in 0..length {
+            copy.push(Slot {
+                generation: self.slots.get(i).map_or(0, |s| s.generation),
+                entry: None,
+            });
+        }
+        Ok(Table {
+            slots: copy,
+            cursor: self.cursor,
+            count: 0,
+        })
+    }
+
+    /// Puts a handle at exactly `handle`'s slot and generation, which must be
+    /// an empty slot of this table at that generation. Allocates nothing, so
+    /// on a table from [`Table::empty_like`] it fails only on a wrong handle.
+    pub fn place(
+        &mut self,
+        handle: Handle,
+        object: T,
+        rights: Rights,
+        id: u64,
+    ) -> Result<(), Status> {
+        let slot = (handle.slot() as usize)
+            .checked_sub(1)
+            .and_then(|i| self.slots.get_mut(i))
+            .ok_or(Status::InvalidArgument)?;
+        if slot.entry.is_some() || slot.generation != handle.generation() {
+            return Err(Status::InvalidArgument);
+        }
+        slot.entry = Some(Entry { object, rights, id });
+        self.count += 1;
+        Ok(())
+    }
+}
+
 impl<T: Clone> Table<T> {
     /// A copy of `handle` with exactly `rights`. Asking for a right the handle
     /// lacks is `AccessDenied`, so a bug shows instead of narrowing silently.
@@ -408,5 +470,62 @@ mod tests {
         assert_eq!(objects, [1, 2]);
         assert_eq!(t.pop(), None);
         assert!(t.is_empty());
+    }
+
+    /// ADR-0102: a child's table holds the parent's values.
+    #[test]
+    fn a_table_like_another_keeps_its_generations() {
+        let mut parent = Table::new();
+        // Slot 1 closed and empty; slot 2 at generation 0; slot 3 closed
+        // and taken again by a chosen slot of the next generation.
+        let a = parent.insert(1, ALL, 1).unwrap();
+        let b = parent.insert(2, ALL, 2).unwrap();
+        let c = parent.insert(4, ALL, 4).unwrap();
+        parent.remove(a).unwrap();
+        parent.remove(c).unwrap();
+        let a2 = Handle::from_parts(c.slot(), 1).unwrap();
+        assert_eq!(parent.generation_of(a.slot()), 1);
+        assert_eq!(parent.generation_of(c.slot()), 1);
+        assert_eq!(parent.generation_of(500), 0);
+        assert_eq!(parent.generation_of(0), 0);
+        let listed: std::vec::Vec<_> = parent.entries().map(|(h, e)| (h, e.object)).collect();
+        assert_eq!(listed, [(b, 2)]);
+        let c = a;
+
+        let mut child: Table<i32> = parent.empty_like(10).unwrap();
+        assert!(child.is_empty());
+        assert_eq!(child.generation_of(c.slot()), 1, "an empty slot too");
+        assert_eq!(child.generation_of(10), 0);
+        child.place(a2, 30, ALL, 9).unwrap();
+        assert_eq!(child.get(a2).unwrap().object, 30);
+        assert_eq!(
+            child.get(Handle::from_parts(a2.slot(), 0).unwrap()),
+            None,
+            "old value"
+        );
+        assert_eq!(
+            child.place(a2, 31, ALL, 9),
+            Err(Status::InvalidArgument),
+            "full"
+        );
+        assert_eq!(
+            child.place(Handle::from_parts(b.slot(), 1).unwrap(), 0, ALL, 9),
+            Err(Status::InvalidArgument),
+            "wrong generation"
+        );
+        assert_eq!(
+            child.place(Handle::from_parts(11, 0).unwrap(), 0, ALL, 9),
+            Err(Status::InvalidArgument),
+            "past the table"
+        );
+        child
+            .place(Handle::from_parts(10, 0).unwrap(), 5, ALL, 9)
+            .unwrap();
+        assert_eq!(child.len(), 2);
+        // A new handle in the child does not take a placed slot.
+        let fresh = child.insert(7, ALL, 10).unwrap();
+        assert!(![a2.slot(), 10].contains(&fresh.slot()));
+        let big: Table<i32> = parent.empty_like(MAX_HANDLES + 5).unwrap();
+        assert_eq!(big.generation_of(MAX_HANDLES), 0);
     }
 }

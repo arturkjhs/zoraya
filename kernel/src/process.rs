@@ -12,23 +12,25 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use zoraya_abi::spawn::{
-    STARTUP_BLOCK, StartupBlock, Strings, USER_STACK_SIZE, USER_STACK_TOP, startup_header,
+    STARTUP_BLOCK, STARTUP_BLOCK_MAX, STARTUP_HEADER_SIZE, Strings, USER_STACK_SIZE,
+    USER_STACK_TOP, startup_header, startup_table_offset,
 };
 use zoraya_abi::{
     CONSOLE, ConsoleObject, DIRECTORY, DeviceObject, DirectoryObject, Disposition, ExitReason,
-    ExitRecord, FIRST_DEVICE_SLOT, JOB, JobObject, ObjectType, REQUEST_KINDS, RequestKind, Status,
-    process_signals,
+    ExitRecord, FIRST_DEVICE_SLOT, Handle, JOB, JobObject, ObjectType, REQUEST_KINDS, RequestKind,
+    Rights, Status, process_signals,
 };
 use zoraya_abi::{POWER, PowerObject};
-use zoraya_elf::{Error as ElfError, PAGE_SIZE, Program, Segment};
+use zoraya_elf::{Error as ElfError, PAGE_SIZE, PHDR_SIZE, Program, Segment};
 use zoraya_events::{RequestQueue, SourceId};
 use zoraya_pagetable::{Attributes, MemoryType};
 
-use crate::arch::mmu;
+use crate::arch::{Frame, mmu};
 use crate::job::Job;
 use crate::memory::heap::{OutOfMemory, try_arc};
+use crate::memory::object::MemoryObject;
 use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
-use crate::object::{self, HandleTable, Object};
+use crate::object::{self, HandleTable, MemoryImage, Object};
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
 use crate::{arch, port, println, ramdisk};
@@ -43,6 +45,8 @@ pub enum SpawnError {
     NoMemory,
     /// The job was killed.
     JobClosed,
+    /// The vectors and program headers do not fit the startup block.
+    TooLarge,
 }
 
 impl From<OutOfMemory> for SpawnError {
@@ -64,6 +68,7 @@ impl From<SpawnError> for Status {
             SpawnError::BadProgram(_) => Status::InvalidArgument,
             SpawnError::NoMemory => Status::NoMemory,
             SpawnError::JobClosed => Status::BadState,
+            SpawnError::TooLarge => Status::LimitReached,
         }
     }
 }
@@ -106,6 +111,11 @@ pub struct Process {
     thread: SpinLock<Option<Arc<Thread>>>,
     requests: SpinLock<Requests>,
     suspended: AtomicBool,
+    /// Its job tree is suspended (ADR-0105 item 8): it runs no user
+    /// instruction until `job_resume`.
+    stopped: AtomicBool,
+    /// Its thread waits in [`park_if_stopped`] for `stopped` to clear.
+    parked: AtomicBool,
     /// A user address to read as the process ends, and what was there.
     #[cfg(feature = "qemu-test")]
     watch: SpinLock<(u64, Option<u64>)>,
@@ -123,6 +133,26 @@ impl Process {
 
     pub fn source(&self) -> SourceId {
         self.source
+    }
+
+    pub fn job(&self) -> &Arc<Job> {
+        &self.job
+    }
+
+    /// Its job tree was suspended: from now on it does not return to EL0.
+    pub fn stop(&self) {
+        self.stopped.store(true, Ordering::Relaxed);
+    }
+
+    /// Its job tree was resumed: a thread waiting to return to EL0 goes on.
+    pub fn cont(&self) {
+        self.stopped.store(false, Ordering::Relaxed);
+        if self.parked.swap(false, Ordering::Relaxed) {
+            let thread = self.thread.lock().clone();
+            if let Some(thread) = thread {
+                sched::wake(thread);
+            }
+        }
     }
 
     /// Blocks a kernel thread until the process has ended. Any number may wait.
@@ -306,8 +336,78 @@ const USER_STACK: Attributes = Attributes {
     user: true,
 };
 
+/// Where a program's bytes are.
+#[derive(Clone, Copy)]
+pub enum Source<'a> {
+    /// A file in one slice: the ramdisk.
+    Bytes(&'a [u8]),
+    /// A memory object a process filled (ADR-0108).
+    Memory(&'a MemoryObject),
+}
+
+impl Source<'_> {
+    /// Copies the file's bytes from `offset` into `out`, if they are there.
+    fn copy(&self, offset: u64, out: &mut [u8]) -> bool {
+        match self {
+            Source::Bytes(file) => {
+                let Some(bytes) = usize::try_from(offset)
+                    .ok()
+                    .and_then(|at| file.get(at..at.checked_add(out.len())?))
+                else {
+                    return false;
+                };
+                out.copy_from_slice(bytes);
+                true
+            }
+            Source::Memory(object) => object.read(offset, out),
+        }
+    }
+}
+
+/// A checked program and where its bytes are.
+#[derive(Clone, Copy)]
+pub struct Loadable<'a> {
+    pub program: Program,
+    pub source: Source<'a>,
+    /// The whole program header table, for the startup block (ADR-0109).
+    pub table: &'a [u8],
+}
+
+impl<'a> Loadable<'a> {
+    /// Parses a file in one slice.
+    pub fn from_file(file: &'a [u8]) -> Result<Loadable<'a>, SpawnError> {
+        let program = Program::parse(file, USER_LOW, STARTUP_BLOCK - PAGE_SIZE)
+            .map_err(SpawnError::BadProgram)?;
+        let table = program
+            .header_table(file)
+            .ok_or(SpawnError::BadProgram(ElfError::Truncated))?;
+        Ok(Loadable {
+            program,
+            source: Source::Bytes(file),
+            table,
+        })
+    }
+
+    /// An image `image_create` checked.
+    pub fn from_image(image: &'a MemoryImage) -> Loadable<'a> {
+        Loadable {
+            program: image.program,
+            source: Source::Memory(&image.memory),
+            table: &image.table,
+        }
+    }
+}
+
+/// The range `image_create` checks programs against (ADR-0108 item 1).
+pub const PROGRAM_LOW: u64 = USER_LOW;
+pub const PROGRAM_HIGH: u64 = STARTUP_BLOCK - PAGE_SIZE;
+
 /// Copies a segment into new pages.
-fn load_segment(space: &mut AddressSpace, file: &[u8], s: &Segment) -> Result<(), SpawnError> {
+fn load_segment(
+    space: &mut AddressSpace,
+    source: Source<'_>,
+    s: &Segment,
+) -> Result<(), SpawnError> {
     let attributes = attributes(s);
     let (start, end) = s.pages();
     let file_end = s.vaddr + s.filesz;
@@ -317,17 +417,19 @@ fn load_segment(space: &mut AddressSpace, file: &[u8], s: &Segment) -> Result<()
         let from = page.max(s.vaddr);
         let to = (page + PAGE_SIZE).min(file_end);
         if from < to {
-            let offset = (s.offset + (from - s.vaddr)) as usize;
-            let bytes = &file[offset..offset + (to - from) as usize];
+            let offset = s.offset + (from - s.vaddr);
             // SAFETY: `target` is a whole new page, only reachable by this
             // function until the process runs, and `from - page` plus the
-            // length stays inside it. The parser checked the file range.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
+            // length stays inside it.
+            let bytes = unsafe {
+                core::slice::from_raw_parts_mut(
                     target.add((from - page) as usize),
-                    bytes.len(),
-                );
+                    (to - from) as usize,
+                )
+            };
+            // The parser checked the range against the file's length.
+            if !source.copy(offset, bytes) {
+                return Err(SpawnError::BadProgram(ElfError::BadSegment));
             }
         }
         if s.execute {
@@ -338,16 +440,29 @@ fn load_segment(space: &mut AddressSpace, file: &[u8], s: &Segment) -> Result<()
     Ok(())
 }
 
-/// Maps the block a process reads its vectors from.
+/// Maps the block a process reads its vectors and program headers from
+/// (ADR-0042, ADR-0109 item 5).
 fn map_startup_block(
     space: &mut AddressSpace,
     argv: Strings<'_>,
     envp: Strings<'_>,
+    table: &[u8],
 ) -> Result<(), SpawnError> {
-    let header = startup_header(argv.len(), envp.len());
-    let parts = [&header[..], argv.as_bytes(), envp.as_bytes()];
+    let strings = argv.as_bytes().len() + envp.as_bytes().len();
+    let header = startup_header(argv.len(), envp.len(), table.len() / PHDR_SIZE);
+    let padding = startup_table_offset(strings) - STARTUP_HEADER_SIZE - strings;
+    let size = (startup_table_offset(strings) + table.len()) as u64;
+    if size > STARTUP_BLOCK_MAX || !table.len().is_multiple_of(PHDR_SIZE) {
+        return Err(SpawnError::TooLarge);
+    }
+    let parts = [
+        &header[..],
+        argv.as_bytes(),
+        envp.as_bytes(),
+        &[0; 8][..padding],
+        table,
+    ];
     let mut parts = parts.iter().flat_map(|p| p.iter().copied());
-    let size = (header.len() + argv.as_bytes().len() + envp.as_bytes().len()) as u64;
     for page in (STARTUP_BLOCK..STARTUP_BLOCK + size).step_by(PAGE_SIZE as usize) {
         let target = space.map_new_page(page, STARTUP)?;
         for (i, byte) in parts.by_ref().take(PAGE_SIZE as usize).enumerate() {
@@ -362,7 +477,7 @@ fn map_startup_block(
 /// What a new process is made from.
 pub struct Start<'a> {
     pub name: &'a str,
-    pub file: &'a [u8],
+    pub image: Loadable<'a>,
     pub job: Arc<Job>,
     pub handles: HandleTable,
     pub argv: Strings<'a>,
@@ -373,23 +488,41 @@ pub struct Start<'a> {
 
 /// Makes a process. Nothing else has changed if this fails.
 pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
-    let file = start.file;
-    let program = Program::parse(file, USER_LOW, STARTUP_BLOCK - PAGE_SIZE)
-        .map_err(SpawnError::BadProgram)?;
+    let program = start.image.program;
     let mut space = AddressSpace::new()?;
     for segment in program.segments() {
-        load_segment(&mut space, file, segment)?;
+        load_segment(&mut space, start.image.source, segment)?;
     }
     let stack_low = USER_STACK_TOP - USER_STACK_SIZE;
     for page in (stack_low..USER_STACK_TOP).step_by(PAGE_SIZE as usize) {
         space.map_new_page(page, USER_STACK)?;
     }
-    map_startup_block(&mut space, start.argv, start.envp)?;
-    let mut name = String::new();
-    name.try_reserve(start.name.len())
-        .map_err(|_| OutOfMemory)?;
-    name.push_str(start.name);
-    let bits = if start.suspended {
+    map_startup_block(&mut space, start.argv, start.envp, start.image.table)?;
+    let process = assemble(
+        start.name,
+        space,
+        start.job,
+        start.handles,
+        start.dispositions,
+        start.suspended,
+    )?;
+    let thread = sched::spawn_user(process.clone(), program.entry, USER_STACK_TOP)?;
+    admit(process, thread, start.suspended)
+}
+
+/// The process object around a built address space and table.
+fn assemble(
+    name: &str,
+    space: AddressSpace,
+    job: Arc<Job>,
+    handles: HandleTable,
+    dispositions: [Disposition; REQUEST_KINDS],
+    suspended: bool,
+) -> Result<Arc<Process>, SpawnError> {
+    let mut owned = String::new();
+    owned.try_reserve(name.len()).map_err(|_| OutOfMemory)?;
+    owned.push_str(name);
+    let bits = if suspended {
         process_signals::SUSPENDED
     } else {
         0
@@ -397,29 +530,39 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     let source = port::new_source(bits).map_err(|_| OutOfMemory)?;
     let ttbr0 = space.ttbr0();
     let process = try_arc(Process {
-        name,
+        name: owned,
         ttbr0,
         space: SpinLock::new(Some(space)),
         exit: SpinLock::new(Exit {
             record: None,
             waiters: Vec::new(),
         }),
-        job: start.job,
+        job,
         source,
-        handles: SpinLock::new(start.handles),
+        handles: SpinLock::new(handles),
         thread: SpinLock::new(None),
         requests: SpinLock::new(Requests {
-            dispositions: start.dispositions,
+            dispositions,
             queue: RequestQueue::new(),
             exit: None,
         }),
-        suspended: AtomicBool::new(start.suspended),
+        suspended: AtomicBool::new(suspended),
+        stopped: AtomicBool::new(false),
+        parked: AtomicBool::new(false),
         #[cfg(feature = "qemu-test")]
         watch: SpinLock::new((0, None)),
     });
     // On failure the value was dropped, and its `Drop` freed the source.
-    let process = process?;
-    let thread = sched::spawn_user(process.clone(), program.entry, USER_STACK_TOP)?;
+    Ok(process?)
+}
+
+/// Makes `process` a member of its job with `thread`, and starts it unless
+/// it is to wait for `process_resume`.
+fn admit(
+    process: Arc<Process>,
+    thread: Arc<Thread>,
+    suspended: bool,
+) -> Result<Arc<Process>, SpawnError> {
     *process.thread.lock() = Some(thread.clone());
     if let Err(status) = process.job.admit(&process) {
         *process.thread.lock() = None;
@@ -429,10 +572,59 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
             _ => SpawnError::NoMemory,
         });
     }
-    if !start.suspended {
+    if !suspended {
         sched::wake(thread);
     }
     Ok(process)
+}
+
+/// What a snapshot's child is made from (ADR-0102).
+pub struct Snapshot<'a> {
+    pub parent: &'a Process,
+    pub space: AddressSpace,
+    pub job: Arc<Job>,
+    pub handles: HandleTable,
+    /// Where the child gets a handle to itself.
+    pub self_handle: Option<Handle>,
+    /// The caller's registers at its `svc`.
+    pub frame: &'a Frame,
+    pub tpidr_el0: u64,
+    pub suspended: bool,
+}
+
+/// Makes a snapshot's child: the parent's name and dispositions, an empty
+/// request queue, and a thread that returns from the same `svc` with `Ok`
+/// and 0 (ADR-0102 item 5). Nothing else has changed if this fails.
+pub fn create_snapshot(s: Snapshot<'_>) -> Result<Arc<Process>, SpawnError> {
+    let dispositions = s.parent.requests.lock().dispositions;
+    let process = assemble(
+        &s.parent.name,
+        s.space,
+        s.job,
+        s.handles,
+        dispositions,
+        s.suspended,
+    )?;
+    if let Some(handle) = s.self_handle {
+        // The table was made with this slot empty at this generation.
+        let entry = Object::Process(process.clone());
+        let placed = process
+            .handles
+            .lock()
+            .place(handle, entry, Rights::WAIT, object::next_id());
+        if placed.is_err() {
+            return Err(SpawnError::NoMemory);
+        }
+    }
+    // From here a failure must break the cycle the self handle makes.
+    let result = sched::spawn_user_from(process.clone(), s.frame, s.tpidr_el0)
+        .map_err(SpawnError::from)
+        .and_then(|thread| admit(process.clone(), thread, s.suspended));
+    if result.is_err() {
+        let table = core::mem::take(&mut *process.handles.lock());
+        drop(table);
+    }
+    result
 }
 
 /// The handles of a process the kernel starts (ADR-0043).
@@ -468,19 +660,32 @@ fn insert_devices(handles: &mut HandleTable) -> Result<(), SpawnError> {
 /// Starts the ramdisk's `name` with the device handles, for tests of them.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_with_devices(name: &str) -> Result<Arc<Process>, SpawnError> {
+    spawn_with_devices_and(name, None)
+}
+
+/// As [`spawn_with_devices`], with one more handle at a chosen slot.
+#[cfg(feature = "qemu-test")]
+pub fn spawn_with_devices_and(
+    name: &str,
+    extra: Option<(u32, Object, zoraya_abi::Rights)>,
+) -> Result<Arc<Process>, SpawnError> {
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
-    let none = StartupBlock::decode(&[0; 8]).ok_or(SpawnError::NoMemory)?;
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
     let mut handles = kernel_handles(job.clone())?;
     insert_devices(&mut handles)?;
+    if let Some((slot, object, rights)) = extra {
+        handles
+            .insert_at(slot, object, rights, object::next_id())
+            .map_err(|_| SpawnError::NoMemory)?;
+    }
     create(Start {
         name,
-        file,
+        image: Loadable::from_file(file)?,
         job,
         handles,
-        argv: none.argv,
-        envp: none.envp,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
         suspended: false,
     })
@@ -489,17 +694,16 @@ pub fn spawn_with_devices(name: &str) -> Result<Arc<Process>, SpawnError> {
 /// Starts a process from ELF bytes, in the root job.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
-    let none = StartupBlock::decode(&[0; 8]).ok_or(SpawnError::NoMemory)?;
     // A job of its own, so that killing it leaves the root usable.
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
     create(Start {
         name,
-        file,
+        image: Loadable::from_file(file)?,
         job: job.clone(),
         handles: kernel_handles(job)?,
-        argv: none.argv,
-        envp: none.envp,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
         suspended: false,
     })
@@ -510,7 +714,6 @@ pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> 
 pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
     println!("first process: {name}");
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
-    let none = StartupBlock::decode(&[0; 8]).ok_or(SpawnError::NoMemory)?;
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
     let mut handles = kernel_handles(job.clone())?;
@@ -525,11 +728,11 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
     insert_devices(&mut handles)?;
     create(Start {
         name,
-        file,
+        image: Loadable::from_file(file)?,
         job,
         handles,
-        argv: none.argv,
-        envp: none.envp,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
         suspended: false,
     })
@@ -592,6 +795,22 @@ pub fn exit_current(record: ExitRecord) -> ! {
     sched::exit_current()
 }
 
+/// Waits while the process's job tree is suspended, unless it is to end.
+/// Called on the thread's own stack with interrupts masked, on the way to
+/// EL0; its process holds the thread, and [`Process::cont`] or an exit
+/// request wakes it.
+fn park_if_stopped() {
+    let thread = sched::current();
+    let Some(process) = thread.process() else {
+        return;
+    };
+    while process.stopped.load(Ordering::Relaxed) && !process.exit_requested() {
+        process.parked.store(true, Ordering::Relaxed);
+        sched::block_current();
+    }
+    process.parked.store(false, Ordering::Relaxed);
+}
+
 /// Ends the running process if it was asked to.
 fn exit_if_requested() {
     let record = {
@@ -607,6 +826,7 @@ fn exit_if_requested() {
 /// with interrupts masked.
 pub fn return_to_user() {
     sched::preempt_point();
+    park_if_stopped();
     exit_if_requested();
 }
 
@@ -614,6 +834,7 @@ pub fn return_to_user() {
 /// it ever ran ends it here, before its first instruction.
 #[unsafe(no_mangle)]
 extern "C" fn user_thread_start() {
+    park_if_stopped();
     exit_if_requested();
 }
 

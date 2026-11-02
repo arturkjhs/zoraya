@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
-use super::frames;
 use super::heap::try_arc;
+use super::{frames, phys_to_virt};
 use zoraya_abi::Status;
 
 enum Frames {
@@ -69,6 +69,49 @@ impl MemoryObject {
             Frames::Scattered(list) => list[index as usize].addr(),
             Frames::Run { first, .. } => first.addr() + index * FRAME_SIZE,
         }
+    }
+
+    /// Copies the bytes from `offset` on into `out`, or gives `false` if they
+    /// are not all inside the object.
+    pub fn read(&self, offset: u64, out: &mut [u8]) -> bool {
+        let end = offset.checked_add(out.len() as u64);
+        if end.is_none_or(|end| end > self.size()) {
+            return false;
+        }
+        let mut done = 0;
+        while done < out.len() {
+            let at = offset + done as u64;
+            let in_page = (at % FRAME_SIZE) as usize;
+            let length = (FRAME_SIZE as usize - in_page).min(out.len() - done);
+            let from = phys_to_virt(self.page(at - in_page as u64)) + in_page as u64;
+            // SAFETY: a frame of this object, in the direct map, alive while
+            // `self` is; `length` stays inside its page and inside `out`. A
+            // process may write it through a mapping, but not while the
+            // kernel runs on the one CPU, so nothing changes under the copy.
+            unsafe {
+                core::ptr::copy_nonoverlapping(from as *const u8, out[done..].as_mut_ptr(), length);
+            }
+            done += length;
+        }
+        true
+    }
+
+    /// Copies `bytes` into the object at `offset`, for tests that hand a
+    /// process prepared contents. False if they do not fit.
+    #[cfg(feature = "qemu-test")]
+    pub fn write(&self, offset: u64, bytes: &[u8]) -> bool {
+        let end = offset.checked_add(bytes.len() as u64);
+        if end.is_none_or(|end| end > self.size()) {
+            return false;
+        }
+        for (i, byte) in bytes.iter().enumerate() {
+            let at = offset + i as u64;
+            let page = phys_to_virt(self.page(at - at % FRAME_SIZE));
+            // SAFETY: a frame of this object in the direct map; `at % FRAME_SIZE`
+            // is inside it.
+            unsafe { ((page + at % FRAME_SIZE) as *mut u8).write(*byte) };
+        }
+        true
     }
 
     /// The physically contiguous runs, each `(address, length)`.

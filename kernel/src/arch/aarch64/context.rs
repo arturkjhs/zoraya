@@ -109,10 +109,17 @@ impl Context {
     /// A user thread whose first return to EL0 uses the exception frame at
     /// `frame`.
     pub fn new_user(frame: u64, limit: u64) -> Context {
+        Context::new_user_with_tls(frame, limit, 0)
+    }
+
+    /// As [`Context::new_user`], with `TPIDR_EL0` set: a snapshot's child
+    /// keeps its parent's thread pointer (ADR-0102 item 5).
+    pub fn new_user_with_tls(frame: u64, limit: u64, tpidr_el0: u64) -> Context {
         Context {
             x30: __user_thread_start as *const () as u64,
             sp: frame,
             limit,
+            tpidr_el0,
             ..Context::default()
         }
     }
