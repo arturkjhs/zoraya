@@ -105,3 +105,12 @@ fn damaged_or_foreign_cells_are_not_read() {
     cell[first] = 0x0011_1111;
     assert_eq!(read(&cell), None, "two text colours");
 }
+
+/// A lit pixel in the right margin, on a row inside the glyph (a hole
+/// cargo-mutants found).
+#[test]
+fn a_pixel_in_the_right_margin_is_not_read() {
+    let mut cell = vec![BG; CELL_WIDTH * CELL_HEIGHT];
+    cell[10 * CELL_WIDTH + 11] = FG;
+    assert_eq!(recognise(|x, y| cell[y * CELL_WIDTH + x], BG), None);
+}

@@ -46,6 +46,10 @@ struct Fake {
     display: Option<u32>,
     display_size: (u32, u32),
     display_dead: bool,
+    /// What `Info` answers, and whether `Attach` gets no reply.
+    info_status: u32,
+    info_format: u32,
+    refuse_attach: bool,
     flushes: Vec<(u32, u32, u32, u32)>,
     attaches: u32,
     clock: u64,
@@ -56,6 +60,7 @@ impl Fake {
     fn new() -> Fake {
         Fake {
             display_size: (W, H),
+            info_format: display::FORMAT_XRGB,
             next: 100,
             ..Fake::default()
         }
@@ -217,14 +222,15 @@ impl Platform for Fake {
         let n = match header.ordinal {
             1 => encode(
                 &display::InfoReply {
-                    status: Below(0),
+                    status: Below(self.info_status),
                     width: self.display_size.0,
                     height: self.display_size.1,
-                    format: display::FORMAT_XRGB,
+                    format: self.info_format,
                 },
                 t,
                 reply,
             ),
+            2 if self.refuse_attach => return None,
             2 => {
                 assert_eq!(handles, [FRAMEBUFFER]);
                 self.attaches += 1;
@@ -264,7 +270,13 @@ struct Setup {
 }
 
 fn setup() -> Setup {
+    setup_with(|_| {})
+}
+
+/// A compositor whose fake is changed by `change` before it starts.
+fn setup_with(change: impl FnOnce(&mut Fake)) -> Setup {
     let mut f = Fake::new();
+    change(&mut f);
     let manager = f.channel(64);
     let display = f.channel(64);
     let keyboard = f.channel(64);
@@ -1052,4 +1064,297 @@ fn wire_errors_are_not_panics() {
     s.c.step();
     assert!(s.c.client_count() == 1);
     let _ = WireError::Truncated;
+}
+
+// Holes cargo-mutants found (TASK-14 review).
+
+#[test]
+fn the_frame_is_one_pixel_all_round_and_nothing_more() {
+    let mut s = setup();
+    s.window(100, 50, 7);
+    let (x, y) = ORIGIN;
+    assert_eq!(s.pixel(x + 10, y - 1), BORDER_FOCUSED);
+    assert_eq!(s.pixel(x + 100, y + 10), BORDER_FOCUSED);
+    assert_eq!(s.pixel(x + 10, y + 50), BORDER_FOCUSED);
+    assert_eq!(s.pixel(x + 101, y + 10), BACKGROUND);
+    assert_eq!(s.pixel(x + 10, y + 51), BACKGROUND);
+    assert_eq!(s.pixel(x + 10, y - 2), BACKGROUND);
+    assert_eq!(s.pixel(310, y - 2), BACKGROUND);
+}
+
+/// Attaches `end` as a new display through the manager, and gives the
+/// status.
+fn attach_display(s: &mut Setup, end: u32) -> u32 {
+    let m = s.manager;
+    s.f().display = Some(end);
+    s.f().send(m, message(&gui::AttachDisplay {}, 7), vec![end]);
+    s.c.step();
+    let replies = s.f().take(m);
+    decode::<gui::ManagerDone>(&replies[0], 0)
+        .unwrap()
+        .1
+        .status
+        .0
+}
+
+#[test]
+fn a_display_that_closes_unasked_is_lost() {
+    let mut s = setup();
+    let display = s.f().display.unwrap();
+    s.f().peers.get_mut(&display).unwrap().gone = true;
+    s.c.step();
+    assert!(s.f().closed.contains(&display));
+}
+
+#[test]
+fn a_display_with_a_wrong_answer_is_refused() {
+    let cases: [(u32, u32, (u32, u32), bool); 5] = [
+        (0, 0, (W, H), false),
+        (1, display::FORMAT_XRGB, (W, H), false),
+        (0, display::FORMAT_XRGB, (0, H), false),
+        (0, display::FORMAT_XRGB, (W, 0), false),
+        (0, display::FORMAT_XRGB, (W, H), true),
+    ];
+    for (status, format, size, refuse) in cases {
+        let mut s = setup();
+        s.f().display_dead = true;
+        let (a, _) = s.window(4, 4, 1);
+        s.commit(a, 0, 0, 1, 1);
+        s.f().display_dead = false;
+        s.f().info_status = status;
+        s.f().info_format = format;
+        s.f().display_size = size;
+        s.f().refuse_attach = refuse;
+        let end = s.f().channel(8);
+        assert_eq!(attach_display(&mut s, end), status::UNSUPPORTED);
+        assert!(s.f().closed.contains(&end));
+    }
+}
+
+#[test]
+fn a_display_of_a_new_size_is_taken() {
+    let mut s = setup();
+    s.f().display_dead = true;
+    let (a, _) = s.window(4, 4, 1);
+    s.commit(a, 0, 0, 1, 1);
+    s.f().display_dead = false;
+    s.f().display_size = (W / 2, H);
+    let end = s.f().channel(8);
+    assert_eq!(attach_display(&mut s, end), status::OK);
+    assert_eq!(s.c.size(), (W / 2, H));
+}
+
+#[test]
+fn a_one_pixel_wide_display_is_composed() {
+    let mut s = setup_with(|f| f.display_size = (1, 4));
+    s.c.step();
+    assert_eq!(s.f().frame[0], BACKGROUND);
+}
+
+#[test]
+fn the_manager_takes_exactly_one_handle_for_a_driver() {
+    let mut s = setup();
+    let m = s.manager;
+    for bytes in [
+        message(&gui::AttachDisplay {}, 4),
+        message(&gui::AttachInput {}, 4),
+    ] {
+        s.f().send(m, bytes.clone(), vec![]);
+        s.c.step();
+        let (_, d) = decode::<gui::ManagerDone>(&s.f().take(m)[0], 0).unwrap();
+        assert_eq!(d.status.0, status::UNSUPPORTED);
+        let channel = s.f().channel(8);
+        let memory = s.f().memory(vec![], 4096, false);
+        s.f().send(m, bytes, vec![channel, memory]);
+        s.c.step();
+        let (_, d) = decode::<gui::ManagerDone>(&s.f().take(m)[0], 0).unwrap();
+        assert_eq!(d.status.0, status::UNSUPPORTED);
+        assert!(s.f().closed.contains(&channel) && s.f().closed.contains(&memory));
+    }
+}
+
+#[test]
+fn an_object_of_some_pages_but_too_few_is_refused() {
+    let mut s = setup();
+    let end = s.client(8);
+    let memory = s.f().memory(vec![0; 2048], 8192, false);
+    assert_eq!(s.create(end, 100, 50, memory), status::BAD_BUFFER);
+}
+
+#[test]
+fn f12_follows_creation_order_not_client_slots() {
+    let mut s = setup();
+    let ends = [s.client(64), s.client(64), s.client(64)];
+    for i in [2, 1, 0] {
+        let memory = s.f().memory(vec![1; 16], 64, false);
+        assert_eq!(s.create(ends[i], 4, 4, memory), status::OK);
+    }
+    assert_eq!(s.c.focus(), Some(2));
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    assert_eq!(s.c.focus(), Some(1));
+}
+
+#[test]
+fn a_window_that_nearly_fills_the_screen_starts_at_the_corner() {
+    let mut s = setup();
+    s.window(W - 1, H - 1, 1);
+    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((0, 0)));
+}
+
+#[test]
+fn a_part_of_a_surface_is_composed_from_its_own_pixels() {
+    let mut s = setup();
+    let end = s.client(64);
+    let memory = s.f().memory((0..256).collect(), 1024, false);
+    assert_eq!(s.create(end, 16, 16, memory), status::OK);
+    assert_eq!(s.commit(end, 3, 2, 4, 4), status::OK);
+    let (x, y) = ORIGIN;
+    assert_eq!(s.pixel(x + 3, y + 2), 2 * 16 + 3);
+    assert_eq!(s.pixel(x + 6, y + 5), 5 * 16 + 6);
+    assert_eq!(s.pixel(x + 2, y + 2), 0, "outside the commit");
+}
+
+#[test]
+fn pointer_and_focus_events_carry_the_dropped_count() {
+    let mut s = setup();
+    let (a, _) = s.window(60, 60, 1);
+    let (b, _) = s.window(10, 10, 2);
+    s.f().take(a);
+    s.f().take(b);
+    let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
+    let (x, y) = ORIGIN;
+    s.f().peers.get_mut(&a).unwrap().room = 0;
+    s.point(scale(x + 2, W), scale(y + 2, H), None);
+    s.point(scale(x + 5, W), scale(y + 5, H), None);
+    s.f().peers.get_mut(&a).unwrap().room = 64;
+    s.point(scale(x + 8, W), scale(y + 8, H), None);
+    let got: Vec<u32> = s
+        .f()
+        .take(a)
+        .iter()
+        .filter_map(|m| decode::<gui::Pointer>(m, 0).ok())
+        .map(|(_, p)| p.dropped)
+        .collect();
+    assert_eq!(got, [2]);
+    // Focus: a is full when F12 takes focus from it.
+    s.f().peers.get_mut(&a).unwrap().room = 0;
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    s.f().peers.get_mut(&a).unwrap().room = 64;
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    let focus: Vec<u32> = s
+        .f()
+        .take(a)
+        .iter()
+        .filter_map(|m| decode::<gui::Focus>(m, 0).ok())
+        .map(|(_, f)| f.dropped)
+        .collect();
+    assert_eq!(focus, [1]);
+}
+
+#[test]
+fn a_closed_client_flushes_just_its_frame() {
+    let mut s = setup();
+    let (a, _) = s.window(10, 10, 1);
+    let (_b, _) = s.window(10, 10, 2);
+    s.f().flushes.clear();
+    s.f().peers.get_mut(&a).unwrap().gone = true;
+    s.c.step();
+    // a's frame and b's (focus moved to b): one rectangle holding both.
+    let (x, y) = ORIGIN;
+    let side = CASCADE + 12;
+    assert_eq!(
+        s.f().flushes,
+        [((x - 1) as u32, (y - 1) as u32, side as u32, side as u32)]
+    );
+}
+
+#[test]
+fn the_last_axis_value_is_the_last_pixel() {
+    let mut s = setup();
+    let (a, _) = s.window(W, H, 1);
+    s.f().take(a);
+    s.point(65535, 65535, None);
+    let got: Vec<(u32, u32)> = s
+        .f()
+        .take(a)
+        .iter()
+        .filter_map(|m| decode::<gui::Pointer>(m, 0).ok())
+        .map(|(_, p)| (p.x, p.y))
+        .collect();
+    assert_eq!(got, [(W - 1, H - 1)]);
+}
+
+fn press(s: &mut Setup, x: u32, y: u32, button: u32, value: u32) {
+    let events = [
+        input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 0,
+            value: x,
+        },
+        input::Event {
+            kind: Below(input::kind::AXIS),
+            code: 1,
+            value: y,
+        },
+        input::Event {
+            kind: Below(input::kind::KEY),
+            code: button,
+            value,
+        },
+    ];
+    let t = s.tablet;
+    let m = input::Frame {
+        dropped: 0,
+        events: Seq::Of(&events),
+    };
+    s.f().send(t, message(&m, 0), vec![]);
+    s.c.step();
+}
+
+#[test]
+fn any_button_click_raises_the_window_under_it() {
+    let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
+    let (x, y) = ORIGIN;
+    for button in [code::BTN_LEFT, code::BTN_RIGHT, code::BTN_MIDDLE] {
+        let mut s = setup();
+        let (a, _) = s.window(60, 60, 1);
+        let (b, _) = s.window(60, 60, 2);
+        s.commit(a, 0, 0, 60, 60);
+        s.commit(b, 0, 0, 60, 60);
+        let overlap = (x + 50, y + 50);
+        assert_eq!(s.pixel(overlap.0, overlap.1), 2);
+        press(&mut s, scale(x + 2, W), scale(y + 2, H), button, 1);
+        assert_eq!(s.pixel(overlap.0, overlap.1), 1, "button {button:#x}");
+        assert_eq!(s.c.focus(), Some(0));
+        // b is still shown where a does not cover it.
+        assert_eq!(s.pixel(x + CASCADE + 59, y + CASCADE + 59), 2);
+        press(&mut s, scale(x + 2, W), scale(y + 2, H), button, 0);
+        // A click on the window already on top changes nothing on screen.
+        s.f().flushes.clear();
+        press(&mut s, scale(x + 3, W), scale(y + 3, H), button, 1);
+        let flushed = s.f().flushes.clone();
+        assert!(
+            flushed.iter().all(|f| f.2 < 20 && f.3 < 20),
+            "only the pointer moved, not the 62-pixel frame: {flushed:?}"
+        );
+    }
+}
+
+#[test]
+fn buttons_are_held_and_released() {
+    let mut s = setup();
+    let (a, _) = s.window(60, 60, 1);
+    s.f().take(a);
+    let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
+    let (x, y) = ORIGIN;
+    press(&mut s, scale(x + 2, W), scale(y + 2, H), code::BTN_LEFT, 1);
+    press(&mut s, scale(x + 4, W), scale(y + 4, H), code::BTN_LEFT, 0);
+    let got: Vec<u32> = s
+        .f()
+        .take(a)
+        .iter()
+        .filter_map(|m| decode::<gui::Pointer>(m, 0).ok())
+        .map(|(_, p)| p.buttons.0)
+        .collect();
+    assert_eq!(got, [gui::buttons::LEFT, 0]);
 }

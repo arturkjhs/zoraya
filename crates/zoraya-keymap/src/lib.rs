@@ -253,6 +253,25 @@ mod tests {
         assert_eq!(typed(&mut m, 46), Some('c'));
     }
 
+    /// Holes cargo-mutants found (TASK-14 review).
+    #[test]
+    fn every_modifier_and_control_punctuation() {
+        let mut m = Keymap::new();
+        m.key(code::CAPS_LOCK, 0);
+        assert_eq!(m.modifiers(), 0, "a release does not toggle");
+        m.key(code::LEFT_CTRL, 1);
+        assert_eq!(m.modifiers(), CTRL);
+        assert_eq!(typed(&mut m, 46), Some('\u{3}'));
+        assert_eq!(typed(&mut m, 26), Some('\u{1b}'));
+        assert_eq!(typed(&mut m, 27), Some('\u{1d}'));
+        m.key(code::LEFT_CTRL, 0);
+        m.key(code::LEFT_ALT, 1);
+        assert_eq!(m.modifiers(), ALT);
+        m.key(code::LEFT_ALT, 0);
+        m.key(code::RIGHT_ALT, 1);
+        assert_eq!(m.modifiers(), ALT);
+    }
+
     #[test]
     fn released_keys_and_keys_without_text() {
         let mut m = Keymap::new();

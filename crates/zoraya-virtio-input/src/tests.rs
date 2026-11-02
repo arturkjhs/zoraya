@@ -349,3 +349,90 @@ fn the_shared_layout_fits() {
     const { assert!(SHARED_MEMORY >= EVENTS_AT + 8 * BUFFERS as usize) };
     assert_eq!(SHARED_MEMORY % 4096, 0);
 }
+
+/// Holes cargo-mutants found (TASK-14 review): devices the profiles above do
+/// not cover, built from their configuration directly.
+struct Config {
+    abs_bits: u8,
+    x: (u32, u32),
+    y: (u32, u32),
+    info_size: u8,
+}
+
+fn custom(c: Config) -> Device {
+    let d = Device::new(DEVICE_INPUT, BASE, SHARED_MEMORY);
+    d.on(move |f, e| {
+        if let Event::Config(0 | 1) = e {
+            let (which, sub) = (f.config[0], f.config[1]);
+            let mut data = [0u8; 128];
+            let size = match (which, sub) {
+                (0x11, 3) => {
+                    data[0] = c.abs_bits;
+                    1
+                }
+                (0x11, 1) => {
+                    data[0] = 0xfe;
+                    96
+                }
+                (0x12, 0 | 1) => {
+                    let (min, max) = if sub == 0 { c.x } else { c.y };
+                    data[0..4].copy_from_slice(&min.to_le_bytes());
+                    data[4..8].copy_from_slice(&max.to_le_bytes());
+                    c.info_size
+                }
+                _ => 0,
+            };
+            f.config[2] = size;
+            f.config[8..136].copy_from_slice(&data);
+        }
+    });
+    d
+}
+
+#[test]
+fn a_device_with_one_absolute_axis_is_not_a_pointer() {
+    for abs_bits in [0, 0b01, 0b10] {
+        let d = custom(Config {
+            abs_bits,
+            x: (0, 100),
+            y: (0, 100),
+            info_size: 20,
+        });
+        assert_eq!(up(&d).kind(), Kind::Keyboard, "{abs_bits:#b}");
+    }
+}
+
+#[test]
+fn axis_info_of_exactly_eight_bytes_is_enough() {
+    let d = custom(Config {
+        abs_bits: 0b11,
+        x: (0, 100),
+        y: (0, 100),
+        info_size: 8,
+    });
+    let axis = Axis { min: 0, max: 100 };
+    assert_eq!(up(&d).kind(), Kind::Pointer { x: axis, y: axis });
+}
+
+#[test]
+fn each_axis_uses_its_own_range() {
+    let d = custom(Config {
+        abs_bits: 0b11,
+        x: (0, 1000),
+        y: (0, 2000),
+        info_size: 20,
+    });
+    let mut input = up(&d);
+    let frames = Frames::default();
+    push(&d, ev::ABS, ev::ABS_X, 500);
+    push(&d, ev::ABS, ev::ABS_Y, 500);
+    syn(&d);
+    poll(&mut input, &frames, true).unwrap();
+    let values: Vec<u32> = frames.borrow()[0].0.iter().map(|r| r.value).collect();
+    assert_eq!(values, [AXIS_MAX / 2, AXIS_MAX / 4]);
+}
+
+#[test]
+fn the_shared_memory_is_four_pages() {
+    assert_eq!(SHARED_MEMORY, 16 * 1024);
+}

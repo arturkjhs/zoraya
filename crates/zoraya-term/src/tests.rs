@@ -320,3 +320,110 @@ fn the_grid_fits_the_display() {
     assert!(w + 32 <= 640 && h + 32 <= 480);
     assert_eq!(grid_for(0, 0), (1, 1));
 }
+
+// Tests for the holes cargo-mutants found (TASK-14 review).
+
+#[test]
+fn sizes_are_pinned_to_the_padding() {
+    assert_eq!(grid_for(166, 146), (9, 4));
+    assert_eq!(grid_for(640, 480), (49, 21));
+    assert_eq!(
+        surface_size(1, 1),
+        (CELL_WIDTH + 2 * PAD, CELL_HEIGHT + 2 * PAD)
+    );
+}
+
+#[test]
+fn cells_are_addressed_by_row() {
+    let t = term(b"a\nb");
+    assert_eq!(t.cell(0, 1).ch, 'b');
+}
+
+#[test]
+fn memory_is_what_the_terminal_holds() {
+    let t = Term::new(80, 24);
+    let expected =
+        (t.screen.capacity() + t.history.capacity()) * size_of::<Cell>() + t.dirty.capacity();
+    assert_eq!(t.memory(), expected);
+}
+
+#[test]
+fn scrolling_and_cursor_moves_redraw_their_rows() {
+    let mut t = Term::new(10, 3);
+    let (w, h) = surface_size(10, 3);
+    let mut pixels = vec![0u32; w * h];
+    t.write(b"a\nb\nc");
+    t.render(&mut pixels, w, true);
+    t.write(b"\n");
+    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
+    t.write(b"\x1b[2;1H");
+    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut pixels, w, true), None);
+    t.redraw();
+    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
+    // A row below the first is drawn from its own row.
+    let mut t = Term::new(10, 3);
+    t.write(b"h\nZ");
+    t.render(&mut pixels, w, false);
+    let read = zoraya_font::recognise(
+        |dx, dy| pixels[(PAD + CELL_HEIGHT + dy) * w + PAD + dx],
+        PALETTE[0],
+    );
+    assert_eq!(read, Some('Z'));
+}
+
+#[test]
+fn four_byte_utf8_reset_and_intermediates() {
+    assert_eq!(term("\u{1F600}".as_bytes()).line(0), "\u{1F600}");
+    let t = term(b"abc\x1bc");
+    assert_eq!((t.line(0), t.cursor()), (String::new(), (0, 0)));
+    assert_eq!(term(b"a\x1b[5 qb").line(0), "ab");
+    assert_eq!(term(b"ab\x1b[1\ncd").line(1), "d");
+    assert_eq!(term(b"ab\x1b[9\x1b[Hc").line(0), "cb");
+}
+
+#[test]
+fn parameters_and_relative_moves() {
+    assert_eq!(term(b"\x1b[1;2;3H").cursor(), (1, 0));
+    let t = term(b"\x1b[0;0;0;0;0;0;0;0;31mA");
+    assert_eq!(t.cell(0, 0).fg, DEFAULT_FG);
+    assert_eq!(term(b"\n\n\x1b[A").cursor(), (0, 1));
+    assert_eq!(term(b"\x1b[B").cursor(), (0, 1));
+    assert_eq!(term(b"\x1b[C").cursor(), (1, 0));
+    assert_eq!(term(b"ab\x1b[D").cursor(), (1, 0));
+}
+
+#[test]
+fn every_graphics_rendition_and_erase_mode() {
+    assert_eq!(term(b"\x1b[1mA\x1b[22mB").cell(1, 0).fg, 7);
+    assert_eq!(term(b"\x1b[7mA\x1b[27mB").cell(1, 0).fg, 7);
+    assert_eq!(term(b"\x1b[31mA\x1b[39mB").cell(1, 0).fg, 7);
+    assert_eq!(term(b"\x1b[44mA\x1b[49mB").cell(1, 0).bg, 0);
+    assert_eq!(term(b"\x1b[32mA").cell(0, 0).fg, 2);
+    assert_eq!(term(b"abc\x1b[2K").line(0), "");
+    assert_eq!(term(b"abc\nxyz\x1b[2K").line(0), "abc");
+    let t = term(b"abc\nxyz\x1b[2;2H\x1b[J");
+    assert_eq!(screen(&t), ["abc", "x", "", "", ""]);
+    assert_eq!(term(b"abcdef\x1b[1;3H\x1b[1J").line(0), "   def");
+}
+
+#[test]
+fn every_named_key_has_its_sequence() {
+    let mut out = [0u8; 8];
+    let cases: [(u32, &[u8]); 10] = [
+        (code::TAB, b"\t"),
+        (code::ESC, b"\x1b"),
+        (code::DOWN, b"\x1b[B"),
+        (code::RIGHT, b"\x1b[C"),
+        (code::LEFT, b"\x1b[D"),
+        (code::HOME, b"\x1b[H"),
+        (code::END, b"\x1b[F"),
+        (code::INSERT, b"\x1b[2~"),
+        (code::DELETE, b"\x1b[3~"),
+        (code::PAGE_DOWN, b"\x1b[6~"),
+    ];
+    for (key, bytes) in cases {
+        let n = key_bytes(key, false, None, &mut out);
+        assert_eq!(&out[..n], bytes, "{key}");
+    }
+}

@@ -32,6 +32,8 @@ enum Hostile {
     Huge,
     /// Never answers.
     Silent,
+    /// An error type in a response shorter than a header.
+    ShortError,
 }
 
 /// A command as the device saw it: its type and the words after the header.
@@ -39,6 +41,8 @@ enum Hostile {
 struct Seen {
     kind: u32,
     words: Vec<u32>,
+    /// Bytes the driver offered for the response.
+    room: u32,
 }
 
 struct Gpu0 {
@@ -63,7 +67,11 @@ fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>) {
             .chunks(4)
             .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
             .collect();
-        seen.borrow_mut().push(Seen { kind, words });
+        seen.borrow_mut().push(Seen {
+            kind,
+            words,
+            room: chain[1].length,
+        });
         if hostile == Hostile::Silent {
             continue;
         }
@@ -84,6 +92,7 @@ fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>) {
         let (answer, length) = match hostile {
             Hostile::WrongType => (0x1300, response.len() as u32),
             Hostile::Errors => (cmd::ERR_UNSPEC + 5, 24),
+            Hostile::ShortError => (cmd::ERR_UNSPEC + 5, 16),
             Hostile::Short => (ok, 16),
             Hostile::Long => (ok, chain[1].length + 1),
             _ => (ok, response.len() as u32),
@@ -166,6 +175,9 @@ fn display_attach_and_flush_send_the_right_commands() {
     let d = device(Hostile::None);
     let mut gpu = up(&d);
     assert_eq!(gpu.display_info(&mut no_wait()), Ok((1024, 768)));
+    assert_eq!(gpu.size(), (1024, 768));
+    // The whole display-info reply fits what the driver offers.
+    assert_eq!(d.seen.borrow()[0].room, 24 + 16 * 24);
     let runs = [(FRAME, WHOLE / 2), (FRAME + 0x100_0000, WHOLE / 2), (1, 1)];
     gpu.attach(&runs, &mut no_wait()).unwrap();
     let rect = Rect {
@@ -384,4 +396,28 @@ fn the_shared_layout_fits_and_does_not_overlap() {
     const { assert!(RESPONSE_AT >= REQUEST_AT + MAX_REQUEST) };
     const { assert!(SHARED_MEMORY >= RESPONSE_AT + DISPLAY_INFO) };
     assert_eq!(SHARED_MEMORY % 4096, 0);
+}
+
+/// Holes cargo-mutants found (TASK-14 review).
+#[test]
+fn a_short_error_response_is_a_protocol_break() {
+    let d = device(Hostile::ShortError);
+    let mut gpu = up(&d);
+    assert_eq!(gpu.display_info(&mut no_wait()), Err(Error::Device));
+}
+
+#[test]
+fn a_run_of_exactly_the_largest_length_is_accepted() {
+    let d = device(Hostile::None);
+    let mut gpu = up(&d);
+    gpu.display_info(&mut no_wait()).unwrap();
+    assert_eq!(
+        gpu.attach(&[(FRAME, u64::from(u32::MAX))], &mut no_wait()),
+        Ok(())
+    );
+}
+
+#[test]
+fn the_shared_memory_is_what_the_layout_needs() {
+    assert_eq!(SHARED_MEMORY, 36864);
 }

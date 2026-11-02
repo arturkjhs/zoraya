@@ -279,3 +279,78 @@ fn identify_gives_a_page_only_with_exactly_one_device() {
     other[0] = t(0, 0x1234, 2, 16);
     assert_eq!(identify(&other), Page::Empty);
 }
+
+/// Registers that only have word access: the trait's default byte access
+/// reads and writes the aligned word (mutation holes of TASK-14).
+struct Words([u32; 4]);
+
+impl Registers for Words {
+    fn read(&self, offset: usize) -> u32 {
+        assert_eq!(offset % 4, 0, "a word access is aligned");
+        self.0[offset / 4]
+    }
+
+    fn write(&mut self, offset: usize, value: u32) {
+        assert_eq!(offset % 4, 0, "a word access is aligned");
+        self.0[offset / 4] = value;
+    }
+}
+
+#[test]
+fn default_byte_access_uses_the_aligned_word() {
+    let mut r = Words([0x4433_2211, 0x8877_6655, 0, 0]);
+    let bytes: Vec<u8> = (0..8).map(|i| r.read8(i)).collect();
+    assert_eq!(bytes, [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+    r.write8(6, 0xab);
+    assert_eq!(r.0, [0x4433_2211, 0x88ab_6655, 0, 0]);
+    r.write8(0, 0xcd);
+    r.write8(3, 0xef);
+    assert_eq!(r.0[0], 0xef33_22cd);
+    r.write8(9, 0x5a);
+    assert_eq!(r.0[2], 0x0000_5a00);
+}
+
+/// Holes cargo-mutants found in `queue.rs` (TASK-14 review).
+#[test]
+fn a_failed_set_up_keeps_failed_set() {
+    let d = device();
+    let q = queue_on(&d, 16);
+    d.state.borrow_mut().status = 128;
+    assert_eq!(q.set_up(&mut d.registers()), Err(Error::Queue));
+    assert_ne!(d.state.borrow().status & 128, 0);
+}
+
+#[test]
+fn a_queue_as_long_as_the_device_allows_is_accepted() {
+    let d = device();
+    d.state.borrow_mut().queues[0].num_max = 16;
+    let q = Queue::new(0, Layout::new(16, 0), BASE);
+    assert_eq!(q.set_up(&mut d.registers()), Ok(()));
+}
+
+#[test]
+fn a_long_chain_is_linked_in_order() {
+    let d = device();
+    let mut q = queue_on(&d, 16);
+    let mut shared = d.shared();
+    let chain: Vec<Buffer> = (0..3)
+        .map(|i| Buffer {
+            address: BASE + 0x8000 + 0x100 * i,
+            length: 8 + i as u32,
+            writable: i == 2,
+        })
+        .collect();
+    q.offer(&mut shared, 4, &chain).unwrap();
+    assert_eq!(d.state.borrow().chain(0, 4), chain);
+}
+
+#[test]
+fn addresses_above_4_gib_keep_their_high_word() {
+    let d = device();
+    let high = 0x1_0000_0000;
+    let q = Queue::new(0, Layout::new(16, 0), high);
+    q.set_up(&mut d.registers()).unwrap();
+    let s = d.state.borrow().queues[0];
+    assert_eq!(s.desc, high + q.layout().desc as u64);
+    assert_eq!(s.used, high + q.layout().used as u64);
+}
