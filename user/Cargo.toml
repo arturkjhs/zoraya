@@ -22,6 +22,16 @@ zoraya-proto-block = { path = "../crates/zoraya-proto-block" }
 zoraya-proto-file = { path = "../crates/zoraya-proto-file" }
 zoraya-protocol = { path = "../crates/zoraya-protocol" }
 zoraya-virtio = { path = "../crates/zoraya-virtio" }
+zoraya-virtio-gpu = { path = "../crates/zoraya-virtio-gpu" }
+zoraya-virtio-input = { path = "../crates/zoraya-virtio-input" }
+zoraya-proto-display = { path = "../crates/zoraya-proto-display" }
+zoraya-proto-input = { path = "../crates/zoraya-proto-input" }
+zoraya-proto-gui = { path = "../crates/zoraya-proto-gui" }
+zoraya-proto-term = { path = "../crates/zoraya-proto-term" }
+zoraya-compositor = { path = "../crates/zoraya-compositor" }
+zoraya-keymap = { path = "../crates/zoraya-keymap" }
+zoraya-font = { path = "../crates/zoraya-font" }
+zoraya-term = { path = "../crates/zoraya-term" }
 
 [lints]
 workspace = true
@@ -306,5 +316,35 @@ bench = false
 
 [[bin]]
 name = "t_storage"
+test = false
+bench = false
+
+[[bin]]
+name = "gpud"
+test = false
+bench = false
+
+[[bin]]
+name = "inputd"
+test = false
+bench = false
+
+[[bin]]
+name = "compd"
+test = false
+bench = false
+
+[[bin]]
+name = "term"
+test = false
+bench = false
+
+[[bin]]
+name = "t_gui"
+test = false
+bench = false
+
+[[bin]]
+name = "guibench"
 test = false
 bench = false

@@ -2,6 +2,7 @@
 #
 #   make build      build the kernel (build/zoraya-kernel.elf)
 #   make run        boot it interactively (Ctrl-A X quits QEMU)
+#   make run-gui    the same with a GPU, keyboard and tablet, in a window
 #   make test-unit  host tests (cargo test) for crates/ and tools/
 #   make test-qemu  in-QEMU tests under several machine configurations
 #   make test-boot  boot the normal kernel, run the shell script under each
@@ -33,14 +34,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -80,6 +81,10 @@ $(DISK): | $(KERNEL)
 
 run: $(KERNEL) $(DISK)
 	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
+
+# The GUI (ADR-0097): a window on the host; the serial line stays here.
+run-gui: $(KERNEL) $(DISK)
+	$(RUN_QEMU) --gui --mem 256M --disk $(DISK) $(KERNEL)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"

@@ -1,19 +1,25 @@
 #![no_std]
 #![no_main]
 
-//! The console shell (TASK-11). One port waits for the console and for every
+//! The console shell (TASK-11). One port waits for its input and for every
 //! job. Each program gets a sub-job and only the handles listed here.
+//!
+//! With a channel at slot 6 the shell runs in a GUI terminal (ADR-0096): its
+//! output and input go over that channel, and it does not read the console.
 
 use alloc::string::String;
 use core::fmt::{self, Write};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     CONSOLE, ChannelObject, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB,
     JobFlags, MAX_HANDLES, Mode, ObjectType, POWER, Packet, RequestKind, Rights, Status,
-    console_signals, job_signals,
+    channel_signals, console_signals, job_signals,
 };
 use zoraya_proto_file::{kind as proto_kind, open_flags, write_flags};
+use zoraya_proto_term::{Input as TermInput, MAX_OUTPUT, Output as TermOutput};
+use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_shell::{
     CTRL_BACKSLASH, CTRL_C, Editor, Key, Report, Words, job_number, request_flag, split,
 };
@@ -21,9 +27,9 @@ use zoraya_user::files::{
     ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_all, split_path, status_name,
 };
 use zoraya_user::{
-    clock_monotonic, console_dropped, console_entry, console_read, console_write, directory_entry,
-    directory_lookup, dup, handle_close, handle_type, job_create, job_kill, job_signal,
-    port_create, port_subscribe, port_unsubscribe, port_wait, power_off, print, println,
+    channel_read, channel_write, clock_monotonic, console_dropped, console_entry, console_read,
+    console_write, directory_entry, directory_lookup, dup, handle_close, handle_type, job_create,
+    job_kill, job_signal, port_create, port_subscribe, port_unsubscribe, port_wait, power_off,
     process_exit, process_exit_record, spawn,
 };
 
@@ -41,14 +47,72 @@ const NEED_MORE: [&str; 2] = ["fanout", "parent"];
 /// Programs that use files: they get a connection at slot 5.
 const NEED_VOLUME: [&str; 3] = ["crashwriter", "crashcheck", "fsbench"];
 
+/// The terminal's channel, if the shell has one: 0 is none.
+static TERMINAL: AtomicU64 = AtomicU64::new(0);
+/// How long output waits for room in the terminal's queue.
+const OUTPUT_WAIT_NS: u64 = 5_000_000_000;
+
+fn terminal() -> Option<Handle> {
+    Handle::new(TERMINAL.load(Ordering::Relaxed))
+}
+
+/// Sends output to the terminal, waiting while its queue is full. A
+/// terminal that is gone ends the shell: nobody could see it.
+fn terminal_write(end: Handle, bytes: &[u8]) -> fmt::Result {
+    let mut out = [0u8; MAX_OUTPUT + 64];
+    for chunk in bytes.chunks(MAX_OUTPUT) {
+        let m = TermOutput { bytes: Data(chunk) };
+        let n = encode(&m, NO_REPLY, &mut out).map_err(|_| fmt::Error)?;
+        loop {
+            match channel_write(end, &out[..n], &[]) {
+                Ok(()) => break,
+                Err(Status::WouldBlock) => {
+                    let port = port_create().map_err(|_| fmt::Error)?;
+                    let room = channel_signals::WRITABLE | channel_signals::PEER_CLOSED;
+                    let _ = port_subscribe(port, end, room, 1, Mode::Level);
+                    let mut packets = [Packet::default()];
+                    let waited = port_wait(port, clock_monotonic() + OUTPUT_WAIT_NS, &mut packets);
+                    let _ = handle_close(port);
+                    if waited.is_err() {
+                        return Err(fmt::Error);
+                    }
+                }
+                Err(Status::PeerClosed) => process_exit(0),
+                Err(_) => return Err(fmt::Error),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Where the shell writes: its terminal, or the console.
 struct Console;
 
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        // Only the kernel's newline handling applies, so `\n` is enough.
-        console_write(CONSOLE, s.as_bytes()).map_err(|_| fmt::Error)?;
-        Ok(())
+        match terminal() {
+            Some(end) => terminal_write(end, s.as_bytes()),
+            // Only the kernel's newline handling applies, so `\n` is enough.
+            None => console_write(CONSOLE, s.as_bytes())
+                .map(|_| ())
+                .map_err(|_| fmt::Error),
+        }
     }
+}
+
+macro_rules! print {
+    ($($arg:tt)*) => {{
+        let _ = write!(Console, $($arg)*);
+    }};
+}
+
+macro_rules! println {
+    () => {
+        print!("\n")
+    };
+    ($($arg:tt)*) => {{
+        let _ = writeln!(Console, $($arg)*);
+    }};
 }
 
 #[derive(Clone, Copy)]
@@ -583,20 +647,68 @@ impl Shell {
         }
     }
 
+    fn key_bytes(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if self.waiting == Waiting::Prompt {
+                self.prompt_key(byte);
+            } else {
+                self.running_key(byte);
+            }
+        }
+    }
+
+    /// Input from the terminal: the bytes keys made, and what it dropped.
+    fn terminal_input(&mut self, end: Handle) {
+        let mut message = [0u8; 512];
+        let mut handles = [end; 1];
+        loop {
+            let length = match channel_read(end, &mut message, &mut handles) {
+                Ok(sizes) => {
+                    for h in &handles[..sizes.handles as usize] {
+                        let _ = handle_close(*h);
+                    }
+                    sizes.bytes as usize
+                }
+                Err((Status::WouldBlock, _)) => return,
+                // The terminal is gone: nobody can type or read.
+                Err(_) => process_exit(0),
+            };
+            let bytes = &message[..length];
+            let ordinal = Header::decode(bytes).map(|(h, _)| h.ordinal);
+            if ordinal != Ok(2) {
+                // `Size`, or nothing the shell knows.
+                continue;
+            }
+            let Ok((_, m)) = decode::<TermInput<'_>>(bytes, 0) else {
+                continue;
+            };
+            if m.dropped > 0 {
+                println!("[input: {} bytes dropped]", m.dropped);
+                if self.waiting == Waiting::Prompt {
+                    print!("{PROMPT}{}", self.editor.line());
+                }
+            }
+            let mut copy = [0u8; 256];
+            let n = m.bytes.0.len().min(copy.len());
+            copy[..n].copy_from_slice(&m.bytes.0[..n]);
+            self.key_bytes(&copy[..n]);
+        }
+    }
+
     fn input(&mut self) {
+        if let Some(end) = terminal() {
+            self.terminal_input(end);
+            return;
+        }
         let mut bytes = [0; 64];
         loop {
             let count = console_read(CONSOLE, &mut bytes).unwrap_or(0);
             if count == 0 {
                 break;
             }
-            for &byte in &bytes[..count] {
-                if self.waiting == Waiting::Prompt {
-                    self.prompt_key(byte);
-                } else {
-                    self.running_key(byte);
-                }
-            }
+            let mut copy = [0; 64];
+            copy[..count].copy_from_slice(&bytes[..count]);
+            self.key_bytes(&copy[..count]);
         }
         let dropped = console_dropped(CONSOLE).unwrap_or(0);
         if dropped != self.dropped {
@@ -681,14 +793,22 @@ fn list() {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let port = port_create().expect("port");
-    port_subscribe(
-        port,
-        CONSOLE,
-        console_signals::READABLE,
-        CONSOLE_KEY,
-        Mode::Level,
-    )
-    .expect("subscribe to the console");
+    match Handle::new(6).filter(|h| handle_type(*h) == Ok("channel")) {
+        Some(end) => {
+            TERMINAL.store(end.raw(), Ordering::Relaxed);
+            let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+            port_subscribe(port, end, wanted, CONSOLE_KEY, Mode::Level)
+                .expect("subscribe to the terminal");
+        }
+        None => port_subscribe(
+            port,
+            CONSOLE,
+            console_signals::READABLE,
+            CONSOLE_KEY,
+            Mode::Level,
+        )
+        .expect("subscribe to the console"),
+    }
     let root = Handle::new(5).filter(|h| handle_type(*h) == Ok("channel"));
     let volume = root.and_then(|end| {
         let root = File { end };

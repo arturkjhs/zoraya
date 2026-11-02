@@ -229,15 +229,25 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-compositor",
+ "zoraya-font",
  "zoraya-fs",
  "zoraya-fs-service",
  "zoraya-heap",
+ "zoraya-keymap",
  "zoraya-proto-block",
+ "zoraya-proto-display",
  "zoraya-proto-file",
+ "zoraya-proto-gui",
+ "zoraya-proto-input",
+ "zoraya-proto-term",
  "zoraya-protocol",
  "zoraya-rt",
  "zoraya-shell",
+ "zoraya-term",
  "zoraya-virtio",
+ "zoraya-virtio-gpu",
+ "zoraya-virtio-input",
 ]
 
 [[package]]

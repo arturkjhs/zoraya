@@ -20,6 +20,10 @@
 #                         for tests of device objects
 #   --disk FILE           attach FILE as the virtio-blk disk
 #   --disk-write-error    with --disk: the first write to it fails with EIO
+#   --gui                 attach a virtio GPU (1024x768), keyboard and tablet,
+#                         each alone on its page (ADR-0091, ADR-0097). Without
+#                         --test, open QEMU's default display window
+#   --qmp PATH            a QMP socket at PATH, for screendumps and keys
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
@@ -46,6 +50,8 @@ keys=0
 test_disk=0
 write_error=0
 disk=
+gui=0
+qmp=
 kernel=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
@@ -61,6 +67,8 @@ while [ $# -gt 0 ]; do
         --test-disk) test_disk=1; shift ;;
         --disk-write-error) write_error=1; shift ;;
         --disk) [ $# -ge 2 ] || die "--disk needs a file"; disk=$2; shift 2 ;;
+        --gui) gui=1; shift ;;
+        --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
@@ -95,14 +103,17 @@ set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
     -smp "$smp" -m "$mem" -nodefaults -no-reboot
 [ -n "$kernel" ] && [ -z "$dumpdtb" ] && set -- "$@" -kernel "$kernel"
 
+# Interactive with --gui: QEMU's default display opens a window.
+display=none
+[ "$gui" = 1 ] && [ "$mode" = interactive ] && display=default
 case $mode in
-    interactive) set -- "$@" -display none -serial mon:stdio ;;
+    interactive) set -- "$@" -display "$display" -serial mon:stdio ;;
     test) set -- "$@" -display none -monitor none -serial stdio ;;
     debug) set -- "$@" -display none -serial mon:stdio -s -S ;;
 esac
 
 # Version 2 of virtio-mmio: QEMU defaults to the legacy transport (ADR-0080).
-if [ "$test_disk" = 1 ] || [ -n "$disk" ]; then
+if [ "$test_disk" = 1 ] || [ -n "$disk" ] || [ "$gui" = 1 ]; then
     set -- "$@" -global virtio-mmio.force-legacy=false
 fi
 if [ "$test_disk" = 1 ]; then
@@ -117,6 +128,17 @@ if [ -n "$disk" ]; then
     fi
     set -- "$@" -drive "$source,format=raw,if=none,id=disk,werror=report,rerror=report" \
         -device virtio-blk-device,drive=disk
+fi
+
+# Each GUI device alone on a page of eight transports (ADR-0091): QEMU puts
+# the first -device without bus= on transport 31, the disk's, page 3.
+if [ "$gui" = 1 ]; then
+    set -- "$@" -device virtio-gpu-device,bus=virtio-mmio-bus.23,xres=1024,yres=768 \
+        -device virtio-keyboard-device,bus=virtio-mmio-bus.15 \
+        -device virtio-tablet-device,bus=virtio-mmio-bus.7
+fi
+if [ -n "$qmp" ]; then
+    set -- "$@" -qmp "unix:$qmp,server=on,wait=off"
 fi
 
 if [ "$print_cmd" = 1 ]; then

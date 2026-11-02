@@ -2,44 +2,18 @@
 //! the service, each in a sub-job. A test starts the same one.
 
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
-use zoraya_abi::{
-    CONSOLE, ChannelObject, DIRECTORY, FIRST_DEVICE_SLOT, Handle, JOB, JobFlags, ObjectType, Rights,
-};
-use zoraya_rt::{
-    channel_create, device_map, directory_lookup, handle_close, handle_type, job_create, job_kill,
-    memory_unmap, spawn,
-};
+use zoraya_abi::{CONSOLE, ChannelObject, DIRECTORY, Handle, JOB, JobFlags, ObjectType, Rights};
+use zoraya_rt::{channel_create, directory_lookup, handle_close, job_create, job_kill, spawn};
 
 use crate::files::File;
 use crate::{dup, wait_exit};
 
-const VIRTIO_MAGIC: u32 = 0x7472_6976;
-const DEVICE_BLOCK: u32 = 2;
-const DRIVER_RIGHTS: Rights = Rights::MAP.union(Rights::INTERRUPT).union(Rights::DMA);
+pub(crate) const DRIVER_RIGHTS: Rights = Rights::MAP.union(Rights::INTERRUPT).union(Rights::DMA);
 
-/// The block device, by its register values.
+/// The block device: the one page holding exactly one, a block device
+/// (ADR-0091).
 pub fn find_disk() -> Option<(Handle, u32)> {
-    for slot in FIRST_DEVICE_SLOT..FIRST_DEVICE_SLOT + 16 {
-        let device = Handle::new(u64::from(slot))?;
-        if handle_type(device) != Ok("device") {
-            continue;
-        }
-        for range in 0..8 {
-            let Ok((window, offset)) = device_map(device, range) else {
-                break;
-            };
-            let register = |at: u64| {
-                // SAFETY: a device mapping of this process, at a register.
-                unsafe { ((window + offset + at) as *const u32).read_volatile() }
-            };
-            let found = register(0) == VIRTIO_MAGIC && register(8) == DEVICE_BLOCK;
-            let _ = memory_unmap(window, 4096);
-            if found {
-                return Some((device, range));
-            }
-        }
-    }
-    None
+    crate::gui::scan().disk
 }
 
 pub fn moved(slot: u32, handle: Handle) -> HandleEntry {
@@ -51,7 +25,7 @@ pub fn moved(slot: u32, handle: Handle) -> HandleEntry {
     }
 }
 
-fn console() -> HandleEntry {
+pub(crate) fn console() -> HandleEntry {
     dup(CONSOLE.slot(), CONSOLE, Rights::WRITE)
 }
 
