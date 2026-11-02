@@ -1,0 +1,301 @@
+use std::format;
+use std::string::String;
+use std::vec;
+use std::vec::Vec;
+
+use super::*;
+
+fn term(text: &[u8]) -> Term {
+    let mut t = Term::new(20, 5);
+    t.write(text);
+    t
+}
+
+fn screen(t: &Term) -> Vec<String> {
+    (0..t.size().1).map(|y| t.line(y)).collect()
+}
+
+#[test]
+fn text_newlines_and_the_shell_s_erase() {
+    let t = term(b"zosh$ lx\x08 \x08s\nREADME\n");
+    assert_eq!(screen(&t), ["zosh$ ls", "README", "", "", ""]);
+    assert_eq!(t.cursor(), (0, 2));
+}
+
+#[test]
+fn carriage_return_tab_and_bell() {
+    let t = term(b"abc\rX\tY\x07");
+    assert_eq!(t.line(0), "Xbc     Y");
+    assert_eq!(t.cursor(), (9, 0));
+}
+
+#[test]
+fn long_lines_wrap_and_the_bottom_scrolls() {
+    let mut t = term(b"");
+    let line = [b'x'; 25];
+    t.write(&line);
+    assert_eq!(t.line(0), "x".repeat(20));
+    assert_eq!(t.line(1), "x".repeat(5));
+    for i in 0..10 {
+        t.write(format!("line {i}\n").as_bytes());
+    }
+    assert_eq!(t.line(3), "line 9");
+    assert_eq!(t.cursor(), (0, 4));
+    assert_eq!(t.history_len(), 7);
+}
+
+#[test]
+fn a_full_last_column_wraps_only_when_more_comes() {
+    let mut t = term(b"");
+    t.write(&[b'a'; 20]);
+    assert_eq!(t.cursor(), (19, 0));
+    t.write(b"\n");
+    assert_eq!(t.cursor(), (0, 1), "no blank line from the pending wrap");
+}
+
+#[test]
+fn cursor_movement_and_erasing() {
+    let t = term(b"hello\x1b[2Dxy\x1b[3;4HZ\x1b[1;1H\x1b[K");
+    assert_eq!(t.line(0), "");
+    assert_eq!(t.line(2), "   Z");
+    let t = term(b"abcdef\x1b[1;3H\x1b[1K");
+    assert_eq!(t.line(0), "   def");
+    let t = term(b"abc\nxyz\x1b[2J");
+    assert!(screen(&t).iter().all(String::is_empty));
+    let t = term(b"abc\nxyz\x1b[1;2H\x1b[J");
+    assert_eq!(screen(&t), ["a", "", "", "", ""]);
+    // Moves are clamped to the grid.
+    let t = term(b"\x1b[99B\x1b[99C\x1b[99;99H");
+    assert_eq!(t.cursor(), (19, 4));
+    let t = term(b"\x1b[99A\x1b[99D");
+    assert_eq!(t.cursor(), (0, 0));
+}
+
+#[test]
+fn colours_and_reverse() {
+    let t = term(b"\x1b[31;44mA\x1b[1mB\x1b[0;7mC\x1b[mD");
+    assert_eq!(
+        t.cell(0, 0),
+        Cell {
+            ch: 'A',
+            fg: 1,
+            bg: 4
+        }
+    );
+    assert_eq!(
+        t.cell(1, 0),
+        Cell {
+            ch: 'B',
+            fg: 9,
+            bg: 4
+        }
+    );
+    assert_eq!(
+        t.cell(2, 0),
+        Cell {
+            ch: 'C',
+            fg: DEFAULT_BG,
+            bg: DEFAULT_FG
+        }
+    );
+    assert_eq!(
+        t.cell(3, 0),
+        Cell {
+            ch: 'D',
+            fg: DEFAULT_FG,
+            bg: DEFAULT_BG
+        }
+    );
+}
+
+#[test]
+fn utf8_and_bad_bytes() {
+    let t = term("é€x".as_bytes());
+    assert_eq!(t.line(0), "é€x");
+    let t = term(b"\xc3x\xff\xe2\x82");
+    assert_eq!(t.line(0), "\u{fffd}x\u{fffd}");
+}
+
+#[test]
+fn strings_and_unknown_sequences_are_skipped() {
+    let t = term(b"a\x1b]0;title\x07b\x1bP1$q\x1b\\c\x1b[?25ld\x1b(Be\x1b[5ns");
+    assert_eq!(t.line(0), "abcdes");
+}
+
+/// INV-0096-2: no output produces input. The parser has no path to the
+/// shell; these sequences, which a VT answers, change only the screen.
+#[test]
+fn queries_get_no_answer() {
+    let queries: [&[u8]; 6] = [
+        b"\x1b[6n",
+        b"\x1b[c",
+        b"\x1b[>c",
+        b"\x1b]10;?\x07",
+        b"\x1bP$qm\x1b\\",
+        b"\x1b[18t",
+    ];
+    for q in queries {
+        let mut t = Term::new(20, 5);
+        t.write(q);
+        assert_eq!(screen(&t), ["", "", "", "", ""]);
+        assert_eq!(t.cursor(), (0, 0));
+    }
+}
+
+/// INV-0096-3: memory is fixed whatever the output.
+#[test]
+fn memory_is_bounded() {
+    let mut t = Term::new(80, 24);
+    let before = t.memory();
+    for i in 0..5000 {
+        t.write(format!("line {i}\n").as_bytes());
+    }
+    assert_eq!(t.history_len(), SCROLLBACK);
+    let mut osc = vec![b'x'; 64 * 1024];
+    osc[0] = 0x1b;
+    osc[1] = b']';
+    t.write(&osc);
+    t.write(b"after");
+    let shown: String = (0..24).map(|y| t.line(y)).collect();
+    assert!(
+        shown.ends_with("xxxafter"),
+        "the string was cut and the rest printed"
+    );
+    assert_eq!(t.memory(), before);
+}
+
+/// INV-0096-1: random and structured bytes never panic and keep the cursor
+/// inside the grid.
+#[test]
+fn the_parser_is_total() {
+    let mut x = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let pieces: [&[u8]; 12] = [
+        b"\x1b[",
+        b"\x1b]",
+        b"\x1bP",
+        b";",
+        b"9999999999",
+        b"\x1b\\",
+        b"\x07",
+        b"\n",
+        b"\x08",
+        b"\xe2\x82",
+        b"m",
+        b"H",
+    ];
+    for size in [(1, 1), (2, 1), (80, 24), (3, 50)] {
+        let mut t = Term::new(size.0, size.1);
+        let mut pixels = vec![
+            0u32;
+            {
+                let (w, h) = surface_size(size.0, size.1);
+                w * h
+            }
+        ];
+        for _ in 0..2000 {
+            let mut chunk = Vec::new();
+            for _ in 0..next() % 64 {
+                if next() % 3 == 0 {
+                    chunk.extend_from_slice(pieces[(next() % 12) as usize]);
+                } else {
+                    chunk.push(next() as u8);
+                }
+            }
+            t.write(&chunk);
+            let (cx, cy) = t.cursor();
+            assert!(cx < size.0 && cy < size.1);
+            if next() % 7 == 0 {
+                t.scroll_view((next() % 21) as isize - 10);
+            }
+            let stride = surface_size(size.0, size.1).0;
+            let _ = t.render(&mut pixels, stride, true);
+        }
+    }
+}
+
+#[test]
+fn the_view_scrolls_back_and_output_returns_it() {
+    let mut t = Term::new(10, 3);
+    for i in 0..6 {
+        t.write(format!("{i}\n").as_bytes());
+    }
+    assert_eq!(t.history_len(), 4);
+    t.scroll_view(2);
+    assert_eq!(t.view(), 2);
+    let (w, h) = surface_size(10, 3);
+    let mut pixels = vec![0u32; w * h];
+    t.render(&mut pixels, w, true);
+    let row = |p: &[u32], y: usize| -> String {
+        (0..10)
+            .map(|x| {
+                zoraya_font::recognise(
+                    |dx, dy| p[(PAD + y * CELL_HEIGHT + dy) * w + PAD + x * CELL_WIDTH + dx],
+                    PALETTE[0],
+                )
+                .unwrap_or('?')
+            })
+            .collect::<String>()
+            .trim_end()
+            .into()
+    };
+    assert_eq!(
+        [row(&pixels, 0), row(&pixels, 1), row(&pixels, 2)],
+        ["2", "3", "4"]
+    );
+    t.scroll_view(100);
+    assert_eq!(t.view(), 4);
+    t.scroll_view(-100);
+    assert_eq!(t.view(), 0);
+    t.scroll_view(3);
+    t.write(b"x");
+    assert_eq!(t.view(), 0);
+}
+
+#[test]
+fn rendering_draws_changed_rows_and_the_cursor() {
+    let mut t = Term::new(10, 3);
+    let (w, h) = surface_size(10, 3);
+    let mut pixels = vec![0x00ab_cdefu32; w * h];
+    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut pixels, w, true), None);
+    t.write(b"hi");
+    assert_eq!(t.render(&mut pixels, w, true), Some((0, 0)));
+    let at = |x: usize, y: usize| pixels[y * w + x];
+    // 'h' in the text colour on black.
+    let read = zoraya_font::recognise(|dx, dy| at(PAD + dx, PAD + dy), PALETTE[0]);
+    assert_eq!(read, Some('h'));
+    // The cursor, after "hi", is a reversed blank: all text colour.
+    let cx = PAD + 2 * CELL_WIDTH;
+    assert!(
+        (0..CELL_HEIGHT).all(|dy| (0..CELL_WIDTH).all(|dx| at(cx + dx, PAD + dy) == PALETTE[7]))
+    );
+    // The padding is never drawn.
+    assert_eq!(at(0, 0), 0x00ab_cdef);
+    // Backspace redraws the row so the cursor moves.
+    t.write(b"\x08");
+    assert_eq!(t.render(&mut pixels, w, true), Some((0, 0)));
+}
+
+#[test]
+fn keys_become_bytes() {
+    let mut out = [0u8; 8];
+    let mut bytes = |key, shift, text| {
+        let n = key_bytes(key, shift, text, &mut out);
+        out[..n].to_vec()
+    };
+    assert_eq!(bytes(30, false, Some('a')), b"a");
+    assert_eq!(bytes(46, false, Some('\u{3}')), b"\x03");
+    assert_eq!(bytes(code::ENTER, false, None), b"\r");
+    assert_eq!(bytes(code::BACKSPACE, false, None), b"\x7f");
+    assert_eq!(bytes(code::UP, false, None), b"\x1b[A");
+    assert_eq!(bytes(code::PAGE_UP, false, None), b"\x1b[5~");
+    assert_eq!(bytes(code::PAGE_UP, true, None), b"");
+    assert_eq!(bytes(code::F12, false, None), b"");
+    assert_eq!(bytes(0x200, false, Some('€')), "€".as_bytes());
+}

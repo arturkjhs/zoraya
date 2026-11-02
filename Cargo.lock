@@ -15,6 +15,17 @@ name = "zoraya-channel"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-compositor"
+version = "0.1.0"
+dependencies = [
+ "zoraya-keymap",
+ "zoraya-proto-display",
+ "zoraya-proto-gui",
+ "zoraya-proto-input",
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-console"
 version = "0.1.0"
 
@@ -32,6 +43,10 @@ version = "0.1.0"
 dependencies = [
  "zoraya-abi",
 ]
+
+[[package]]
+name = "zoraya-font"
+version = "0.1.0"
 
 [[package]]
 name = "zoraya-fs"
@@ -97,6 +112,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-keymap"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-mkfs"
 version = "0.1.0"
 dependencies = [
@@ -133,7 +152,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-display"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-proto-file"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-gui"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-input"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-term"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
@@ -159,6 +206,14 @@ name = "zoraya-shell"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+]
+
+[[package]]
+name = "zoraya-term"
+version = "0.1.0"
+dependencies = [
+ "zoraya-font",
+ "zoraya-keymap",
 ]
 
 [[package]]
@@ -188,3 +243,17 @@ dependencies = [
 [[package]]
 name = "zoraya-virtio"
 version = "0.1.0"
+
+[[package]]
+name = "zoraya-virtio-gpu"
+version = "0.1.0"
+dependencies = [
+ "zoraya-virtio",
+]
+
+[[package]]
+name = "zoraya-virtio-input"
+version = "0.1.0"
+dependencies = [
+ "zoraya-virtio",
+]

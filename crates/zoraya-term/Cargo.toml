@@ -1,0 +1,15 @@
+[package]
+name = "zoraya-term"
+description = "The terminal's logic: a VT-subset parser, a grid with scrollback, keys to bytes, rendering (ADR-0096)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-font = { path = "../zoraya-font" }
+zoraya-keymap = { path = "../zoraya-keymap" }
+
+[lints]
+workspace = true
