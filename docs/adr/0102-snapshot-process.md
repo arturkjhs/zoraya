@@ -1,6 +1,6 @@
 # ADR-0102: `snapshot_process`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0021, ADR-0031, ADR-0034, ADR-0036, ADR-0040, ADR-0041, ADR-0042, ADR-0046, ADR-0050, ADR-0051, ADR-0056 (proposed), ADR-0057
 - **Evidence:** CP-05, CP-14, X-10, X-6, DM-001, DM-030, GR-005, alternatives-postmortem.md#exokernel-mit-aegis--xok, stage-6/sources.md#libc-implementations, stage-6/sources.md#posix-semantics, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1
@@ -290,3 +290,4 @@ would give it to `spawn` too).
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

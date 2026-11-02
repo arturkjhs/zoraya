@@ -1,6 +1,6 @@
 # ADR-0092: Input drivers and the event format
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0006, ADR-0050, ADR-0052, ADR-0054, ADR-0091, ADR-0093, ADR-0094
 - **Evidence:** DM-079, DM-072, DM-069, GR-016, GR-021, CP-24, CP-14, alternatives-postmortem.md#plan-9--inferno, stage-4/sources.md#virtio-and-qemu
@@ -80,3 +80,5 @@ Nothing here depends on POSIX. A POSIX terminal gets bytes from the terminal cli
 - A client that needs synthetic input (accessibility, automation).
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect; recorded by an agent at the architect's request.

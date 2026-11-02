@@ -1,6 +1,6 @@
 # ADR-0103: File descriptors and open file descriptions
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0010, ADR-0013, ADR-0014, ADR-0040, ADR-0050, ADR-0051, ADR-0052, ADR-0055, ADR-0057, ADR-0080, ADR-0101, ADR-0102
 - **Evidence:** CP-02, CP-04, DM-002, DM-023, GR-001, alternatives-postmortem.md#qnx, fs/requirements.md#12-linux-syscalls, fs/requirements.md#13-open-flags-and-who-uses-them, fs/requirements.md#26-appends, fs/requirements.md#4-metadata-read-and-written, stage-4/sources.md#services, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-1-process-creation-exec-wait-pipes, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
@@ -269,3 +269,4 @@ them; a batch `share` if the `fork` cost shows (ADR-0102).
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

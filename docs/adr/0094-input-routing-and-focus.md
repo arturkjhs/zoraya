@@ -1,6 +1,6 @@
 # ADR-0094: Input routing and focus
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0050, ADR-0092, ADR-0093
 - **Evidence:** DM-079, DM-082, DM-072, GR-016, CP-24, CP-14, alternatives-postmortem.md#plan-9--inferno
@@ -80,3 +80,5 @@ Nothing here depends on POSIX. Ctrl-C is a key like any other here; the terminal
 - A second reserved key.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect; recorded by an agent at the architect's request.

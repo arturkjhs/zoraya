@@ -1,6 +1,6 @@
 # ADR-0104: The POSIX broker
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0004, ADR-0006, ADR-0040, ADR-0041, ADR-0046, ADR-0050, ADR-0052, ADR-0053, ADR-0072, ADR-0101, ADR-0102, ADR-0103
 - **Evidence:** CP-01, CP-06, CP-07, CP-15, DM-003, DM-005, DM-070, DM-100, alternatives-postmortem.md#exokernel-mit-aegis--xok, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#minix-3, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-4-tty-and-job-control, task-02/callsite-analysis.md#m4-validation-patches, task-02/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
@@ -303,3 +303,4 @@ ties a process handle to its job; restart of a dead broker (MINIX 3's unsolved c
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

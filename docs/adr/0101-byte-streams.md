@@ -1,6 +1,6 @@
 # ADR-0101: Byte streams and pipes
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0004, ADR-0006, ADR-0040, ADR-0041, ADR-0050, ADR-0051, ADR-0057
 - **Evidence:** CP-08, CP-10, CP-14, DM-020, DM-022, DM-023, DM-077, DM-160, GR-002, alternatives-postmortem.md#redox, fs/requirements.md#sources-and-queries, stage-6/sources.md#libc-implementations, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-1-process-creation-exec-wait-pipes, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
@@ -212,3 +212,4 @@ A smaller capacity for pipes that only carry tokens, if 64 KiB per pipe shows in
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

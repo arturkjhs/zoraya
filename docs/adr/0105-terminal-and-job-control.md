@@ -1,6 +1,6 @@
 # ADR-0105: Terminal and job control
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0004, ADR-0005, ADR-0006, ADR-0040, ADR-0046, ADR-0050, ADR-0052, ADR-0053, ADR-0060, ADR-0101, ADR-0103, ADR-0104
 - **Evidence:** CP-02, CP-25, DM-017, DM-069, DM-070, DM-071, DM-072, alternatives-postmortem.md#qnx, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-4-tty-and-job-control, task-02/libc-surface.csv, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/event-timelines.md#w9a-ctrl-c-run-w9-int-d15-r1
@@ -262,3 +262,4 @@ a pseudo-terminal pair for programs that run others under a terminal they create
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0091: Identifying virtio devices and giving each driver only its own
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0020, ADR-0053, ADR-0054, ADR-0070, ADR-0080
 - **Evidence:** DM-009, CP-01, CP-17, alternatives-postmortem.md#genode, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, stage-4/sources.md#virtio-and-qemu, stage-4/sources.md#drivers
@@ -77,3 +77,5 @@ Nothing here depends on POSIX.
 - PCI transports, which have their own BARs and make this moot.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect; recorded by an agent at the architect's request.

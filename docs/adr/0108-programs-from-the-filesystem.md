@@ -1,6 +1,6 @@
 # ADR-0108: Running programs from the filesystem
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0012, ADR-0013, ADR-0014, ADR-0031, ADR-0033, ADR-0040, ADR-0042, ADR-0043, ADR-0051, ADR-0055, ADR-0103, ADR-0107
 - **Evidence:** CP-01, CP-03, CP-16, DM-009, DM-032, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, fs/requirements.md#22-atomic-rename, fs/requirements.md#32-symbolic-links, fs/requirements.md#4-metadata-read-and-written, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, stage-6/sources.md#tinycc, task-02/posix-surface.md#absolute-paths-chosen-by-programs, task-02/posix-surface.md#linux-syscall-surface-m2
@@ -214,3 +214,4 @@ could be a table entry of kind `Ramdisk` later).
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

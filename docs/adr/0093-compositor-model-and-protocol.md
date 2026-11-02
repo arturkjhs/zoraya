@@ -1,6 +1,6 @@
 # ADR-0093: Compositor model and protocol
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0006, ADR-0050, ADR-0051, ADR-0052, ADR-0053, ADR-0056, ADR-0072, ADR-0090, ADR-0092, ADR-0094
 - **Evidence:** DM-079, DM-080, DM-081, DM-082, DM-083, DM-084, DM-160, GR-016, CP-24, CP-14, X-11, X-5, alternatives-postmortem.md#plan-9--inferno
@@ -102,3 +102,5 @@ Nothing here depends on POSIX.
 - A request for capture or synthetic input.
 
 ## Architect's decision
+
+Accepted with a change, 2026-11-02: sending a frame to the display driver does not block the compositor, as recorded in the `### Decision` at the top of the Recommendation section. Decided by the architect; recorded by an agent at the architect's request.

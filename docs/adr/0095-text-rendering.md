@@ -1,6 +1,6 @@
 # ADR-0095: Text rendering
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0093, ADR-0096
 - **Evidence:** DM-081, CP-22, GR-015, alternatives-postmortem.md#plan-9--inferno
@@ -77,3 +77,5 @@ Nothing here depends on POSIX. Programs that print non-ASCII UTF-8 see boxes unt
 - A program that needs non-ASCII text on screen.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect; recorded by an agent at the architect's request.

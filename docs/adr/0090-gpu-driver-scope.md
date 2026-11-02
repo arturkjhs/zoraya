@@ -1,6 +1,6 @@
 # ADR-0090: GPU driver scope
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0015, ADR-0051, ADR-0052, ADR-0053, ADR-0054, ADR-0070, ADR-0091, ADR-0093
 - **Evidence:** DM-081, DM-046, DM-047, GR-021, CP-17, alternatives-postmortem.md#genode, alternatives-postmortem.md#minix-3, stage-4/sources.md#drivers, stage-4/sources.md#virtio-and-qemu
@@ -84,3 +84,5 @@ Nothing here depends on POSIX.
 - A measured flush cost that dominates a frame.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect; recorded by an agent at the architect's request.

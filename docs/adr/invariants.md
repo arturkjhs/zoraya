@@ -327,24 +327,24 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0070](0070-releasing-quarantined-frames.md) Releasing quarantined DMA frames | 3 |
 | [ADR-0071](0071-invariant-totals.md) Checking the totals in `invariants.md` | 1 |
 | [ADR-0072](0072-handle-types-and-small-kernel-choices.md) Handle types in protocols, and small choices stage 4 made | 2 |
-| [ADR-0080](0080-restart-and-small-choices-of-stage-4b.md) Restarting the storage stack, and small choices of stage 4b (proposed) | 2 |
-| [ADR-0090](0090-gpu-driver-scope.md) GPU driver scope (proposed) | 3 |
-| [ADR-0091](0091-device-identification-and-assignment.md) Identifying virtio devices and giving each driver only its own (proposed) | 2 |
-| [ADR-0092](0092-input-drivers-and-event-format.md) Input drivers and the event format (proposed) | 3 |
-| [ADR-0093](0093-compositor-model-and-protocol.md) Compositor model and protocol (proposed) | 6 |
-| [ADR-0094](0094-input-routing-and-focus.md) Input routing and focus (proposed) | 3 |
-| [ADR-0095](0095-text-rendering.md) Text rendering (proposed) | 2 |
-| [ADR-0096](0096-terminal.md) The terminal client and its protocol with the shell (proposed) | 3 |
-| [ADR-0097](0097-init-gui-mode-and-qemu-command-line.md) `init` in GUI mode, and the QEMU command line (proposed) | 3 |
-| [ADR-0100](0100-libposix-construction.md) How `libposix` is built (proposed) | 4 |
-| [ADR-0101](0101-byte-streams.md) Byte streams and pipes (proposed) | 4 |
-| [ADR-0102](0102-snapshot-process.md) `snapshot_process` (proposed) | 7 |
-| [ADR-0103](0103-file-descriptors.md) File descriptors and open file descriptions (proposed) | 5 |
-| [ADR-0104](0104-posix-broker.md) The POSIX broker (proposed) | 5 |
-| [ADR-0105](0105-terminal-and-job-control.md) Terminal and job control (proposed) | 5 |
-| [ADR-0106](0106-signals-in-libposix.md) Signals in `libposix` (proposed) | 5 |
-| [ADR-0107](0107-namespace-table-and-temp-service.md) The namespace table and the temporary directory service (proposed) | 5 |
-| [ADR-0108](0108-programs-from-the-filesystem.md) Running programs from the filesystem (proposed) | 4 |
-| [ADR-0109](0109-building-the-toolchain.md) Building the toolchain (proposed) | 4 |
-| [ADR-0110](0110-acceptance-harness.md) Acceptance harness for stage 6 (proposed) | 4 |
+| [ADR-0080](0080-restart-and-small-choices-of-stage-4b.md) Restarting the storage stack, and small choices of stage 4b | 2 |
+| [ADR-0090](0090-gpu-driver-scope.md) GPU driver scope | 3 |
+| [ADR-0091](0091-device-identification-and-assignment.md) Identifying virtio devices and giving each driver only its own | 2 |
+| [ADR-0092](0092-input-drivers-and-event-format.md) Input drivers and the event format | 3 |
+| [ADR-0093](0093-compositor-model-and-protocol.md) Compositor model and protocol | 6 |
+| [ADR-0094](0094-input-routing-and-focus.md) Input routing and focus | 3 |
+| [ADR-0095](0095-text-rendering.md) Text rendering | 2 |
+| [ADR-0096](0096-terminal.md) The terminal client and its protocol with the shell | 3 |
+| [ADR-0097](0097-init-gui-mode-and-qemu-command-line.md) `init` in GUI mode, and the QEMU command line | 3 |
+| [ADR-0100](0100-libposix-construction.md) How `libposix` is built | 4 |
+| [ADR-0101](0101-byte-streams.md) Byte streams and pipes | 4 |
+| [ADR-0102](0102-snapshot-process.md) `snapshot_process` | 7 |
+| [ADR-0103](0103-file-descriptors.md) File descriptors and open file descriptions | 5 |
+| [ADR-0104](0104-posix-broker.md) The POSIX broker | 5 |
+| [ADR-0105](0105-terminal-and-job-control.md) Terminal and job control | 5 |
+| [ADR-0106](0106-signals-in-libposix.md) Signals in `libposix` | 5 |
+| [ADR-0107](0107-namespace-table-and-temp-service.md) The namespace table and the temporary directory service | 5 |
+| [ADR-0108](0108-programs-from-the-filesystem.md) Running programs from the filesystem | 4 |
+| [ADR-0109](0109-building-the-toolchain.md) Building the toolchain | 4 |
+| [ADR-0110](0110-acceptance-harness.md) Acceptance harness for stage 6 | 4 |
 | **Total** | **269** |

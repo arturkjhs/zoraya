@@ -1,6 +1,6 @@
 # ADR-0107: The namespace table and the temporary directory service
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0005, ADR-0006, ADR-0010, ADR-0013, ADR-0014, ADR-0042, ADR-0050, ADR-0052, ADR-0053, ADR-0055, ADR-0080, ADR-0101, ADR-0103, ADR-0104, ADR-0105
 - **Evidence:** CP-01, CP-04, CP-21, CP-22, X-15, X-8, DM-009, DM-041, DM-085, GR-004, GR-006, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#qnx, fs/requirements.md#13-open-flags-and-who-uses-them, fs/requirements.md#24-unlink-while-in-use-and-cleanup-on-interrupt, fs/requirements.md#4-metadata-read-and-written, stage-6/sources.md#gnu-make, stage-6/sources.md#not-reachable-from-this-session, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-3-global-paths-path-cwd, task-02/conflict-impact.md#x-1-capability-only-access-cp-01-cp-02-vs-ease-of-posix-porting-cp-27, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#linux-syscall-surface-m2, task-02b/parallel-surface.md#new-syscalls-and-argument-patterns
@@ -307,3 +307,4 @@ several entries on one prefix; a batch `clone` for spawn.
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

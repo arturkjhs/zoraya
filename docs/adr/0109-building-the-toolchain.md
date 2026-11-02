@@ -1,6 +1,6 @@
 # ADR-0109: Building the toolchain
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0001, ADR-0002, ADR-0003, ADR-0005, ADR-0031, ADR-0033, ADR-0042, ADR-0100, ADR-0104, ADR-0107, ADR-0108
 - **Evidence:** CP-03, CP-13, DM-007, DM-057, GR-010, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#redox, stage-6/sources.md#libc-implementations, stage-6/sources.md#tinycc, task-02/method.md#pinned-inputs, task-02/method.md#tiers-runs-and-sets, task-02/posix-surface.md#key-observations
@@ -266,3 +266,4 @@ stack protectors.
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

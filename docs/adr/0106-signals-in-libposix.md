@@ -1,6 +1,6 @@
 # ADR-0106: Signals in `libposix`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0004, ADR-0005, ADR-0006, ADR-0034, ADR-0046, ADR-0101, ADR-0103, ADR-0104, ADR-0105
 - **Evidence:** CP-10, X-5, DM-017, DM-027, DM-059, DM-130, stage-6/sources.md#other-programs-and-inputs, stage-6/sources.md#posix-semantics, task-02/callsite-analysis.md#feature-2-signals, task-02/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02/syscall-surface.csv, task-02b/callsite-analysis.md#4-cleanup-on-interruption, task-02b/conflict-impact.md#x-3-no-asynchronous-interruption-cp-10-vs-posix-signal-semantics, task-02b/event-timelines.md#w10-background-jobs-wait-concurrent-pipelines-run-w10-parallel-r1, task-02b/parallel-surface.md#interrupted-system-calls
@@ -290,3 +290,4 @@ the three named.
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0096: The terminal client and its protocol with the shell
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0004, ADR-0006, ADR-0050, ADR-0052, ADR-0060, ADR-0093, ADR-0094, ADR-0095
 - **Evidence:** DM-069, DM-070, DM-071, DM-072, DM-073, CP-25, alternatives-postmortem.md#plan-9--inferno
@@ -84,3 +84,5 @@ The broker, sessions, the controlling terminal and `isatty`; byte streams for ch
 - Stage 6's broker design, which may move the shell end.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect; recorded by an agent at the architect's request.

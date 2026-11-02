@@ -1,6 +1,6 @@
 # ADR-0110: Acceptance harness for stage 6
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0001, ADR-0003, ADR-0005, ADR-0006, ADR-0053, ADR-0080, ADR-0100, ADR-0102, ADR-0104, ADR-0105, ADR-0106, ADR-0107, ADR-0109
 - **Evidence:** alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#hubris, task-02/conflict-impact.md#x-2-no-fork-cp-05-vs-hosting-the-c-toolchain, task-02/method.md#known-limits, task-02/method.md#tiers-runs-and-sets, task-02b/parallel-surface.md#interruption-what-happens-to-the-build-w9, task-02b/parallel-surface.md#setup-in-one-paragraph
@@ -255,3 +255,4 @@ blocks on a FIFO until the harness releases it).
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.

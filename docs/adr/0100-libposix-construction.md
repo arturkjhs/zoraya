@@ -1,6 +1,6 @@
 # ADR-0100: How `libposix` is built
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0002, ADR-0003, ADR-0005, ADR-0013, ADR-0014, ADR-0044, ADR-0052, ADR-0057
 - **Evidence:** CP-01, CP-13, CP-15, CP-27, CP-28, DM-048, DM-057, DM-060, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#qnx, alternatives-postmortem.md#redox, alternatives-postmortem.md#summary-across-systems, stage-6/sources.md#libc-implementations, task-02/libc-surface.csv, task-02/method.md#known-limits, task-02/method.md#pinned-inputs, task-02/posix-surface.md#jumps-between-tiers, task-02/posix-surface.md#key-observations, task-02/posix-surface.md#linux-syscall-surface-m2, task-02/posix-surface.md#per-category-min-upper--lower
@@ -284,3 +284,4 @@ functions; nothing in the cut changes for them. A dynamic loader (`ET_DYN`, ADR-
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-02, with the architect's six changes already in the text of ADR-0100 to ADR-0110: the 10 % threshold in ADR-0102, `KILL` for `job_suspend` and `job_resume`, `make test-posix-long`, `make fetch-ports`, `aarch64-unknown-zoraya` with the T2 cost of `config.sub`, INV-0004-6 until exception channels, and INV-0106-4. Decided by the architect; recorded by an agent at the architect's request.
