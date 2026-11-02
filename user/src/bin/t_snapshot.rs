@@ -683,40 +683,33 @@ fn frame_exhaustion_gives_everything_back() {
     let frames = test_call(FREE_FRAMES, 0);
     let heap = test_call(HEAP_LIVE, 0);
     let mut refusals = 0;
-    let mut leave = 0;
+    // Frames stay held across steps and each step gives one back, so each
+    // allocation the call makes meets an empty allocator in turn. With the
+    // self slot, a failure after the child's self handle exists is reached.
+    test_call(HOLD_FRAMES, 0);
     let child = loop {
-        test_call(HOLD_FRAMES, leave);
-        let result = snap(
-            JOB,
-            &[Move {
-                slot: 30,
-                handle: b,
-            }],
-            0,
-            true,
-        );
-        test_call(RELEASE_FRAMES, 0);
-        match result {
+        let moves = [Move {
+            slot: 30,
+            handle: b,
+        }];
+        let before = test_call(FREE_FRAMES, 0);
+        match snap(JOB, &moves, SELF_SLOT, true) {
             Ok(Some(child)) => break child,
             Ok(None) => process_exit(0),
             Err(status) => {
-                assert!(
-                    matches!(status, Status::NoMemory | Status::LimitReached),
-                    "{status:?}"
-                );
-                assert_eq!(
-                    handle_type(b),
-                    Ok("channel"),
-                    "still the caller's at {leave}"
-                );
-                assert_eq!(test_call(FREE_FRAMES, 0), frames, "frames at {leave}");
-                assert_eq!(test_call(HEAP_LIVE, 0), heap, "heap at {leave}");
+                let expected = matches!(status, Status::NoMemory | Status::LimitReached);
+                assert!(expected, "{status:?}");
+                assert_eq!(handle_type(b), Ok("channel"), "still the caller's");
+                // A refusal gave back all it took.
+                assert_eq!(test_call(FREE_FRAMES, 0), before, "frames at {refusals}");
+                assert_eq!(test_call(HEAP_LIVE, 0), heap, "heap at {refusals}");
                 refusals += 1;
             }
         }
-        leave += 1;
-        assert!(leave < 4096, "never enough frames");
+        assert!(refusals < 4096, "never enough frames");
+        assert_eq!(test_call(RELEASE_FRAMES, 1), 1, "a frame to give back");
     };
+    test_call(RELEASE_FRAMES, 0);
     assert!(
         refusals > 10,
         "{refusals} refusals: the sweep reached the copy"
@@ -725,6 +718,7 @@ fn frame_exhaustion_gives_everything_back() {
     process_resume(child).expect("resume");
     assert_eq!(wait_exit(child).code, 0);
     close(&[child, a]);
+    assert_eq!(test_call(FREE_FRAMES, 0), frames, "frames after the sweep");
     println!("t_snapshot: {refusals} refusals by frame exhaustion, each gave everything back");
 }
 

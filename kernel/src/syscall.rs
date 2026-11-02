@@ -1080,7 +1080,8 @@ pub mod test_calls {
     pub const HEAP_LIVE: u64 = 0x700b;
     /// Takes frames until x0 are free, and returns how many it holds.
     pub const HOLD_FRAMES: u64 = 0x700c;
-    /// Gives back what `HOLD_FRAMES` took, and returns how many.
+    /// Gives back what `HOLD_FRAMES` took, and returns how many. With x0
+    /// not 0, gives back at most x0 of them.
     pub const RELEASE_FRAMES: u64 = 0x700d;
     /// Returns the last `snapshot_process`'s time with interrupts masked, in
     /// nanoseconds.
@@ -1116,7 +1117,7 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
         test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::stats().live as u64)),
         test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
-        test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames())),
+        test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames(a0))),
         test_calls::SNAPSHOT_NS => Some(Ok(LAST_SNAPSHOT.lock().0)),
         test_calls::SNAPSHOT_PAGES => Some(Ok(LAST_SNAPSHOT.lock().1)),
         test_calls::HANDLE_AT | test_calls::RIGHTS_AT | test_calls::GENERATION_AT => {

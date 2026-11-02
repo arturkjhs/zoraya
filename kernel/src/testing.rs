@@ -2245,16 +2245,18 @@ pub fn hold_frames(leave: u64) -> u64 {
     held.1
 }
 
-/// Gives back every frame `hold_frames` took.
-pub fn release_frames() -> u64 {
+/// Gives back `limit` of the frames `hold_frames` took, or all of them if
+/// `limit` is 0, and returns how many it gave.
+pub fn release_frames(limit: u64) -> u64 {
     let mut held = HELD.lock();
-    let count = held.1;
-    while held.0 != 0 {
+    let mut count = 0;
+    while held.0 != 0 && (limit == 0 || count < limit) {
         let frame = Frame::from_addr(held.0).expect("an aligned frame");
         // SAFETY: a held frame, written by `hold_frames`.
         held.0 = unsafe { (memory::phys_to_virt(frame.addr()) as *const u64).read() };
         frames::free(frame);
+        held.1 -= 1;
+        count += 1;
     }
-    held.1 = 0;
     count
 }
