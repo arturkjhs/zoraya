@@ -395,9 +395,9 @@ screendump is from QMP's key event to the first screendump that shows the charac
 
 | | HVF | TCG |
 |---|---|---|
-| Full redraw | 1039 frames/s | 156 frames/s |
-| Compositor CPU per full frame: compose, flush | 0.47 ms, 0.11 ms | 2.87 ms, 0.56 ms |
-| Key to screendump, median of 10 | 34 ms (one screendump read: 34 ms) | 76 ms (one screendump read: 34 ms) |
+| Full redraw | 1017 frames/s | 154 frames/s |
+| Compositor CPU per full frame: compose, flush | 0.48 ms, 0.12 ms | 2.95 ms, 0.52 ms |
+| Key to screendump, median of 10 | 35 ms (one screendump read: 35 ms) | 76 ms (one screendump read: 35 ms) |
 
 ## Tests
 
