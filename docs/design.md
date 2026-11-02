@@ -8,6 +8,10 @@ The rules for working here are in [`../CLAUDE.md`](../CLAUDE.md).
 
 Zoraya is an experiment in building an operating system from scratch with AI agents, where every design decision is grounded in measured evidence and recorded as an ADR. Its core idea is that a process can reach only what it was explicitly given: no ambient authority, no global namespace, no fork, no asynchronous signals in the native world; POSIX lives in an isolated personality. Near term, Zoraya is a general-purpose base that runs a self-hosting C toolchain and a GUI terminal under QEMU. A possible later direction is a system for running untrusted code, such as AI agents, in strict isolation; that choice is made after stage 4 and must not be precluded before it. The process itself — successes, failures and numbers — is published as part of the project.
 
+*Note, 2026-11-02 (the architect's direction, recorded by an agent from TASK-14):* after stage 4 the architect chose
+to continue with stages 5 and 6, towards the general-purpose base. The isolation direction stays open and must not be
+precluded; every ADR of stage 5 states the effect of the vision on its choice.
+
 ## Platform
 
 - **Architecture:** aarch64 (ARMv8-A).
@@ -97,6 +101,13 @@ format stable, compatibility between format versions is not guaranteed: volumes 
 - **Names.** UTF-8 compared byte for byte, no hard links, no `..` in the server, symbolic links as inert objects.
 - **Metadata.** `mtime`, `ctime` and an advisory mode; times strictly increase on a volume.
 - **Device.** The virtio contract as written: no write is atomic, and flush is the only barrier.
+
+**GUI** ([ADR-0090](adr/0090-gpu-driver-scope.md) to
+[ADR-0097](adr/0097-init-gui-mode-and-qemu-command-line.md), proposed in TASK-14 and built as recommended; the
+architect accepts or changes them at review). A virtio-gpu 2D driver and virtio-input drivers in user processes, each
+on a device page of its own; a compositor that copies committed damage from clients' memory objects into its own
+copies and owns input and focus; a bitmap font of Zoraya's own; a terminal that speaks a VT subset to the shell over a
+channel; and `init`'s GUI mode. "GUI (as built)" below describes the code.
 
 **Kernel foundations** ([ADR-0020](adr/0020-kernel-address-space.md) to
 [ADR-0024](adr/0024-kernel-fault-policy.md)). Address space, physical memory, heap, interrupts and time, and kernel
@@ -331,6 +342,70 @@ dirty blocks, and `read` is after a `sync`, from the device. `sync` is on the ho
 | `sync` after 4 KiB, after 1 MiB | 0.30, 3.3 ms | 2.7, 10.3 ms |
 | Boot to prompt | 0.105 s | 0.211 s |
 
+## GUI (as built)
+
+Stage 5 (TASK-14), on the proposed [ADR-0090](adr/0090-gpu-driver-scope.md) to
+[ADR-0097](adr/0097-init-gui-mode-and-qemu-command-line.md). No kernel change: everything is a user process on the
+objects of stage 4. Logic lives in host-tested crates; the processes are thin.
+
+- **Devices** (ADR-0091). `tools/run-qemu.sh --gui` puts `virtio-gpu-device` (1024 × 768) on transport 23,
+  `virtio-keyboard-device` on 15 and `virtio-tablet-device` on 7, so each is alone on its 4 KiB page; the disk stays on
+  31. `init` maps each device page a range at a time and gives it to a driver only if exactly one transport in it holds
+  a device (`zoraya_virtio::queue::identify`): device ID 2 to `blkd`, 16 to `gpud`, 18 to `inputd`. A page with two
+  devices is reported and used by nobody.
+- **Shared virtio code.** `zoraya-virtio` gains a generic split queue, the transport's set-up and reset, and a
+  device-side fake for host tests (feature `fake`). `blkd` keeps its own queue, which is older and mutation-tested.
+- **`gpud`** (`zoraya-virtio-gpu`, ADR-0090). `VERSION_1` only, the control queue only, one command at a time with
+  its response type and length checked. It serves the compositor `zoraya-proto-display`: `Info`, `Attach` (the
+  compositor's framebuffer object, pinned, becomes the resource's backing) and `Flush` (transfer and flush, refused
+  outside the resource). Before each wait it takes the device's interrupt down and looks at the queue again:
+  virtio-mmio is edge-triggered on QEMU `virt`. A wait also looks at the queue every 10 ms, as a guard, and gives up
+  after a second.
+- **`inputd`** (`zoraya-virtio-input`, ADR-0092). One process per device; it reads the configuration to learn whether
+  it drives a keyboard or an absolute pointer, keeps 64 event buffers offered, checks every event, and sends one
+  `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535. A frame that does not fit is dropped and
+  counted, and the count goes with the next one.
+- **`compd`** (`zoraya-compositor`, ADR-0093, ADR-0094). The loop runs over a `Platform` trait, so it is tested on
+  the host. Slot 5 is the manager channel from `init`, 6 the display driver, 7 to 10 input drivers. A client
+  (`zoraya-proto-gui`) asks the display size, creates one surface with a memory object, which the compositor maps
+  read-only, and commits damage. Each round reads at most one message per connection, copies committed rows once into
+  the compositor's own copy, recomposes the changed rectangle (background, windows bottom to top with a one-pixel frame,
+  the pointer), and replies to the round's commits: the reply is the frame callback. Flushes do not block (ADR-0093,
+  Decision): one is in flight, what is composed meanwhile goes out as one rectangle when the driver answers, and a
+  driver that misses 2 s is dropped and reported to `init` (`DisplayHung`), which restarts it. Windows are
+  placed by the compositor (16, 16, then cascaded by 32). Keys go to the focused surface, translated by the US layout of
+  `zoraya-keymap`; pointer events to the surface under the pointer. A button press focuses and raises; F12 moves focus
+  to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
+  At most 8 clients. With no display driver it goes on; a new one gets the same framebuffer and one full flush.
+- **`term`** (`zoraya-term`, `zoraya-font`, ADR-0095, ADR-0096). A compositor client with an 80 × 24 grid of 12 × 20
+  cells (968 × 488 pixels) and 500 lines of scrollback (Shift with Page Up or Page Down). It parses the VT subset of
+  ADR-0096, answers no query, and sends the shell the bytes keys make (`zoraya-proto-term`). It draws only the rows
+  that changed, and commits again only after the last commit's reply.
+- **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
+  is full), input from `Input` messages. Without one it is stage 4's shell on the console.
+- **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
+  page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A
+  dead driver is restarted alone, at most three times each, and handed to the compositor over the manager channel. A
+  dead compositor or terminal ends the GUI and the shell and starts them again, at most three times; then the shell
+  runs on the console. A storage restart starts a new terminal with the new shell.
+
+Measured on the M4 under QEMU 11.1.2, the last run of `make test` (`t_gui` in the test kernel at 128 MiB, the criterion
+script at 256 MiB). A full redraw is a client committing its whole 1024 × 768 surface and waiting for the reply, which
+no longer waits for the driver; "compose" is the compositor's time per frame for the copy and composition; "flush" is a
+flush's round trip through the driver, which the compositor does not wait for. Key to
+screendump is from QMP's key event to the first screendump that shows the character; reading one screendump (PPM,
+1024 × 768) in the runner takes about as long as the HVF figure, which is therefore an upper bound.
+
+| | HVF | TCG |
+|---|---|---|
+| Full redraw | 759 frames/s | 157 frames/s |
+| Compositor CPU per full frame (compose); driver flush round trip | 0.72 ms; 1.21 ms | 2.89 ms; 1.69 ms |
+| Key to screendump, median of 10 | 35 ms (one screendump read: 35 ms) | 75 ms (one screendump read: 34 ms) |
+
+Under HVF the flush that no longer blocks (ADR-0093, Decision) lowered the full-redraw rate from about 1017 frames/s
+and raised compose time from 0.48 ms, between runs of the same tests; under TCG nothing moved. A guess, not measured:
+the compositor now composes while QEMU's device still reads the framebuffer for the previous flush.
+
 ## Tests
 
 `make test` prints one line per step and keeps each step's output in `build/logs/<step>.log`: a failed step gives its
@@ -344,6 +419,13 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   (INV-0031-4), and no home-directory paths or email addresses in tracked files outside `docs/research/` and
   `tools/posix-surface/results/`;
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
+- `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
+  The runner (`tools/test-runner/src/gui.rs`) types over QMP and reads QEMU screendumps back as text by matching every
+  cell of the terminal's grid against every glyph of `zoraya-font`, exactly: the font draws each pixel in the text
+  colour or the background and PPM is lossless, so the tolerance is zero. It also checks the background and the
+  focused frame pixel by pixel. `tests/gui/terminal.script` waits for the prompt, types `write a.txt hi` and
+  `cat a.txt`, sees `hi`, presses F12, runs `ls`, measures key latency, and powers off. The serial line's input is
+  closed, so keys reach `zosh` only through the window;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
   0; `tests/shell/leak.script` runs more programs than a handle table has slots, and `tests/shell/exit.script` ends the
@@ -373,6 +455,12 @@ How the in-QEMU tests run and report:
 - `make test-crash` kills QEMU at a random point of `crashwriter`, 10 rounds by default, and runs `zoraya-fsck` and
   `crashcheck` after each: every file reported durable whole, and what exists a prefix of the writer's order. One more
   round writes, never syncs, waits 8 s and kills: ADR-0010 rule 5. The seed is printed, and `--seed` repeats the delays.
+- `t_gui`, run by the test kernel in `auto-default` and `tcg-default`, which attach the GUI devices: it starts the real
+  drivers and compositor with `init`'s code, plays clients and a fake input driver against them (damage outside the
+  surface, absurd sizes, a memory object smaller than declared, a buffer a child rewrites during composition, a client
+  that never reads, a flood of commits, input and manager ordinals on a client channel, F12 and focus), kills and
+  restarts the GPU and input drivers, swaps in a display driver that never answers a flush (`guibench hang-display`)
+  and sees keys and frame callbacks go on and the driver reported hung, and measures a full redraw. Without a GPU it passes having done nothing.
 - `t_storage`, run by the test kernel, kills the driver idle clean, idle dirty, in a commit and in a read, then the
   service, and checks the durable file after each remount. It sends malformed messages and hostile paths, fills the
   open table, and never reads its replies.
@@ -441,6 +529,14 @@ deterministic random mutations.
   `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060).
 - **First process.** `init` (ADR-0053). The kernel reports it and powers off if it ends.
 
+## Using the GUI
+
+`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window; the serial line stays in the terminal for
+`init`'s reports, and Ctrl-A X there quits QEMU. The window shows a terminal running `zosh`, with the same commands as
+`make run` (below). Click the window to focus it; F12 moves focus to the next window. Shift with Page Up or Page Down
+scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `poweroff`
+or `exit` turns the machine off.
+
 ## Using the shell
 
 `make run` boots to `zosh$ ` on the serial console. Ctrl-A X leaves QEMU, and `poweroff` turns the machine off.
@@ -480,6 +576,15 @@ deterministic random mutations.
 - **Console input.** Input is a fixed 256-byte ring (ADR-0060). A burst overruns it while the shell waits for the CPU,
   and the shell reports how many bytes went. Any holder of the console's `READ` right can take input from the shell;
   children get `WRITE` only.
+
+- **GUI.** Programs started from `zosh` in the window print to the serial console: they have no byte stream to inherit
+  until stage 6 (ADR-0096). The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
+  resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
+  a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until
+  ADR-0056. Attaching a new display driver still waits for it, up to 2 s per call; `init` blocks up to 6 s while it
+  restarts a driver (backlog: to fix before stage 6). NUL cannot be typed in the window. A QMP socket's path must be under 104 bytes
+  on macOS, so the tests keep it in `build/`. The runner's key latency figure under HVF is bounded by the cost of one
+  screendump.
 
 - **QEMU `virt` assumptions.** The RAM base `0x40000000` (where the device tree and image are found), the fallback
   UART address, and the boot identity map's shape (first 4 GiB, image below 4 GiB) are QEMU `virt` facts. The load
@@ -549,7 +654,7 @@ deterministic random mutations.
 | 3 (done) | Handles, ports and process objects per ADR-0003/0004/0006; native `spawn` | a process spawns a child and waits on its exit via a port |
 | 3a (done) | Native console shell (TASK-11): `zosh` over the serial console, no files | a person works at a prompt after `make run` |
 | 4 (done) | virtio-blk, filesystem service, `mkfs` on host | files survive reboot |
-| 5 | virtio-gpu, virtio-input, compositor, terminal as GUI client | screenshot shows a terminal window |
+| 5 (done) | virtio-gpu, virtio-input, compositor, terminal as GUI client | screenshot shows a terminal window; TASK-14: `zosh` runs in it and keys typed into it run file commands (`make test-gui`) |
 | 6 | `libposix` T1 per ADR-0005, port of tcc, make, dash | `tcc hello.c && ./a.out` inside Zoraya |
 
 ## Where things are
@@ -558,7 +663,7 @@ deterministic random mutations.
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
 LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md)
-Makefile                  build, run, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test, adr-check
+Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test-gui, test, adr-check
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
 .github/workflows/        CI: make test on Linux/TCG
@@ -604,15 +709,26 @@ crates/                   no_std, host-tested
   zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)
   zoraya-fs-testkit/      test devices, reference model, crash harness, image field map (host only)
   zoraya-fs-service/      the service's loop and block adapter, over a transport trait
-  zoraya-virtio/          virtio-blk over split queues, against a hostile fake device
-user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, test programs
+  zoraya-virtio/          virtio-blk over split queues; a generic split queue, the device page identification
+                          of ADR-0091, and a device-side fake (feature `fake`)
+  zoraya-virtio-gpu/, zoraya-virtio-input/  the GPU and input drivers' logic (ADR-0090, ADR-0092)
+  zoraya-proto-display/, zoraya-proto-input/, zoraya-proto-gui/, zoraya-proto-term/  the GUI's protocols
+  zoraya-keymap/          key codes to text, the US layout (ADR-0092)
+  zoraya-font/            Zoraya's bitmap font, its renderer and exact reader (ADR-0095)
+  zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering (ADR-0096)
+  zoraya-compositor/      the compositor's loop over a platform trait (ADR-0093, ADR-0094)
+user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, compd,
+                          term, test programs
   src/stack.rs            starts the driver and the service
+  src/gui.rs              scans device pages, starts and restarts the GUI (init and t_gui)
 rootfs/                   the first contents of build/disk.img
 tests/shell/              scripts the runner plays on the serial line
+tests/gui/                the GUI script the runner plays over QMP
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
-  test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol; zoraya-crash-test
+  test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol, plays serial and GUI
+                          scripts; zoraya-crash-test
   test-summary.sh         make test's summary, with the logs in build/logs/
   mutants/                zoraya-mutants and its mutation lists (*.toml)
   adr-check/              zoraya-adr-check: ADR-0001 invariants

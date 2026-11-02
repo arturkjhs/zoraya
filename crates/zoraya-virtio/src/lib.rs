@@ -11,10 +11,30 @@
 #![cfg_attr(not(test), no_std)]
 #![forbid(unsafe_code)]
 
+#[cfg(any(test, feature = "fake"))]
+pub mod fake;
+pub mod queue;
+
 /// The transport's registers.
 pub trait Registers {
     fn read(&self, offset: usize) -> u32;
     fn write(&mut self, offset: usize, value: u32);
+
+    /// A byte of the configuration space. A driver whose device has byte
+    /// fields there overrides this with a single byte access; the default
+    /// reads the aligned word.
+    fn read8(&self, offset: usize) -> u8 {
+        (self.read(offset & !3) >> (8 * (offset & 3))) as u8
+    }
+
+    /// As [`Registers::read8`]. The default writes the whole aligned word,
+    /// which is only right for a device that ignores the other bytes.
+    fn write8(&mut self, offset: usize, value: u8) {
+        let at = offset & !3;
+        let shift = 8 * (offset & 3);
+        let word = self.read(at) & !(0xff << shift) | u32::from(value) << shift;
+        self.write(at, word);
+    }
 }
 
 /// Memory the device reaches: the queues, shared with it. Accesses are single
@@ -57,6 +77,8 @@ pub mod reg {
 
 pub const MAGIC: u32 = 0x7472_6976;
 pub const DEVICE_BLOCK: u32 = 2;
+pub const DEVICE_GPU: u32 = 16;
+pub const DEVICE_INPUT: u32 = 18;
 
 const STATUS_ACKNOWLEDGE: u32 = 1;
 const STATUS_DRIVER: u32 = 2;
@@ -110,6 +132,8 @@ pub enum Error {
     Device,
     /// A request does not fit the queue.
     TooLarge,
+    /// Not virtio-mmio version 2, or not the device asked for.
+    WrongDevice,
 }
 
 /// A piece of a transfer: device address and length.
@@ -432,3 +456,5 @@ pub fn pieces(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_queue;

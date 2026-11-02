@@ -2,12 +2,15 @@
 #
 #   make build      build the kernel (build/zoraya-kernel.elf)
 #   make run        boot it interactively (Ctrl-A X quits QEMU)
+#   make run-gui    the same with a GPU, keyboard and tablet, in a window
 #   make test-unit  host tests (cargo test) for crates/ and tools/
 #   make test-qemu  in-QEMU tests under several machine configurations
 #   make test-boot  boot the normal kernel, run the shell script under each
 #                   machine configuration
 #   make test-files files across two boots, restarts, a failed write
 #   make test-crash kill QEMU at random points (CRASH_ROUNDS=200 for more)
+#   make test-gui   the GUI criterion: boot headless with --gui, type into the
+#                   window over QMP and read the screen back (HVF and TCG)
 #   make test       all of the above plus fmt, clippy and the ADR checks:
 #                   a summary, with each step's output in build/logs/
 #                   (V=1 prints everything, KEEP_GOING=1 runs on after a failure)
@@ -33,14 +36,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -80,6 +83,10 @@ $(DISK): | $(KERNEL)
 
 run: $(KERNEL) $(DISK)
 	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
+
+# The GUI (ADR-0097): a window on the host; the serial line stays here.
+run-gui: $(KERNEL) $(DISK)
+	$(RUN_QEMU) --gui --mem 256M --disk $(DISK) $(KERNEL)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
@@ -125,7 +132,8 @@ test-qemu: $(TEST_KERNEL) $(RUNNER) tools-storage
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
 		--expect-line "memory: 131072 KiB total" \
 		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
-		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
+		--expect-line "t_gui: all passed" \
+		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	$(RUN_TEST) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
@@ -134,8 +142,8 @@ test-qemu: $(TEST_KERNEL) $(RUNNER) tools-storage
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
-		--expect-line "gic: version 2" \
-		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
+		--expect-line "gic: version 2" --expect-line "t_gui: all passed" \
+		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-smp4-gicv2 \
 		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
@@ -194,6 +202,20 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(DEVICE_ERROR) --label device-error -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --disk-write-error --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 
+# The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
+# screen read back as text. Under the host's accelerator and under TCG.
+GUI_IMAGE := $(BUILD)/gui.img
+GUI_SCRIPT := tests/gui/terminal.script
+test-gui: $(KERNEL) $(RUNNER) tools-storage
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(GUI_SCRIPT) --qmp $(BUILD)/gui-auto.qmp --label gui-auto -- \
+		$(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/gui-auto.qmp --disk $(GUI_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(GUI_IMAGE)
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(GUI_SCRIPT) --qmp $(BUILD)/gui-tcg.qmp --label gui-tcg -- \
+		$(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/gui-tcg.qmp --disk $(GUI_IMAGE) --accel tcg $(KERNEL)
+	target/debug/zoraya-fsck $(GUI_IMAGE)
+
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
 test-crash: $(KERNEL) tools-storage
 	$(CARGO) build -q -p zoraya-test-runner
@@ -249,7 +271,7 @@ check-host-paths:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths test-qemu test-boot test-files test-crash
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths test-qemu test-boot test-files test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

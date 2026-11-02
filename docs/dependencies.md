@@ -10,9 +10,13 @@ purpose, and the reason it is not written in-house. Only permissively licensed (
 
 The kernel uses `core` and `alloc`, and user programs `core`. The crates under `crates/` use only `core` (and `alloc`:
 `zoraya-fs`), and their tests use `std`, with seeded generators instead of a property-testing crate. `zoraya-fs-testkit`,
-`zoraya-mkfs` and `zoraya-fsck` (TASK-07) use only `std` and the workspace's own crates. The host-side tools
+`zoraya-mkfs` and `zoraya-fsck` (TASK-07) use only `std` and the workspace's own crates. The GUI's crates (TASK-14: `zoraya-virtio-gpu`, `zoraya-virtio-input`, the four `zoraya-proto-*` of
+the GUI, `zoraya-keymap`, `zoraya-font`, `zoraya-term`, `zoraya-compositor`) use only `core` and `alloc` and each
+other. The font in `zoraya-font` was drawn for Zoraya (ADR-0095) and is under the repository's BSD-2-Clause licence: no
+font file and no rasteriser crate is embedded. The host-side tools
 (`zoraya-test-runner`, `zoraya-adr-check`, `zoraya-mkramdisk`, `zoraya-mutants`) use
-only `std`. `Cargo.lock` has no registry entries, so no build needs network access once the toolchain in
+only `std`, and the test runner also the workspace's `zoraya-font`, `zoraya-term` and `zoraya-compositor`, to read the
+screen as the terminal draws it. `Cargo.lock` has no registry entries, so no build needs network access once the toolchain in
 `rust-toolchain.toml` is installed.
 
 ## Fuzzing (outside the workspace)

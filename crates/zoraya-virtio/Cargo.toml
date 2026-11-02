@@ -7,5 +7,9 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+# A device-side fake of the transport and queues, for other crates' host tests.
+fake = []
+
 [lints]
 workspace = true

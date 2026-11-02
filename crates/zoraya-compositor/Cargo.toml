@@ -1,0 +1,18 @@
+[package]
+name = "zoraya-compositor"
+description = "The compositor's loop over a platform trait (ADR-0093, ADR-0094)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-protocol = { path = "../zoraya-protocol" }
+zoraya-proto-display = { path = "../zoraya-proto-display" }
+zoraya-proto-gui = { path = "../zoraya-proto-gui" }
+zoraya-proto-input = { path = "../zoraya-proto-input" }
+zoraya-keymap = { path = "../zoraya-keymap" }
+
+[lints]
+workspace = true

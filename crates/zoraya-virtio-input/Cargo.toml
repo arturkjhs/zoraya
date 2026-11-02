@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-virtio-input"
+description = "virtio-input over virtio-mmio (ADR-0092), as logic over zoraya-virtio's traits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-virtio = { path = "../zoraya-virtio" }
+
+[dev-dependencies]
+zoraya-virtio = { path = "../zoraya-virtio", features = ["fake"] }
+
+[lints]
+workspace = true

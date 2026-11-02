@@ -5,6 +5,7 @@
 extern crate alloc;
 
 pub mod files;
+pub mod gui;
 mod heap;
 pub mod stack;
 
