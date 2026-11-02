@@ -1,6 +1,6 @@
 # ADR-0072: Handle types in protocols, and small choices stage 4 made
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0050, ADR-0051, ADR-0052, ADR-0054, ADR-0070
 - **Evidence:** CP-11, DM-053
@@ -71,3 +71,5 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 - A protocol helper that makes the check impossible to forget.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect.

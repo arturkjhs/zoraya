@@ -1,6 +1,6 @@
 # ADR-0070: Releasing quarantined DMA frames
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0021, ADR-0024, ADR-0051, ADR-0053, ADR-0054
 - **Evidence:** DM-161, stage-4/sources.md#drivers, stage-4/sources.md#virtio-and-qemu
@@ -79,3 +79,5 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 - An IOMMU path (ADR-0054 Option D).
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect.

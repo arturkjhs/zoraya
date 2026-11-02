@@ -503,7 +503,8 @@ pub fn run(start: usize) -> ! {
         PASSED.load(Ordering::Relaxed),
         FAILED.load(Ordering::Relaxed)
     );
-    crate::shutdown()
+    // INV-0063-2 and ADR-0053: `hello` ends with no call to power off.
+    crate::run_first("hello")
 }
 
 extern "C" fn resume(next: usize) -> ! {

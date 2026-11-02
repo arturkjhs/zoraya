@@ -1,6 +1,6 @@
 # ADR-0071: Checking the totals in `invariants.md`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0001
 - **Evidence:** CP-13
@@ -62,3 +62,5 @@ Nothing here depends on POSIX. ADR-0055 holds the one requirement on stage 4.
 - The table is dropped from the file.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-02. Decided by the architect.

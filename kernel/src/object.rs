@@ -26,8 +26,6 @@ pub struct Image {
 #[derive(Clone)]
 pub enum Object {
     Console,
-    // Only the normal kernel starts a first process, which holds this.
-    #[cfg_attr(feature = "qemu-test", allow(dead_code))]
     Power,
     Directory,
     Image(Image),

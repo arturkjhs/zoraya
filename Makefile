@@ -98,7 +98,9 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "ZORAYA-FAULT synchronous from EL0 (AArch64)" \
 	--expect-line "hello from EL0" --expect-line "process f_kread: fault, EC 0x24" \
 	--expect-line "timer: virtual" --expect-line ", interrupt 27" \
-	--expect-line "uart interrupt 33"
+	--expect-line "uart interrupt 33" \
+	--expect-line "first process: hello" \
+	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
 test-qemu: $(TEST_KERNEL) $(RUNNER)

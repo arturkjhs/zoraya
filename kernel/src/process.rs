@@ -19,7 +19,6 @@ use zoraya_abi::{
     ExitRecord, FIRST_DEVICE_SLOT, JOB, JobObject, ObjectType, REQUEST_KINDS, RequestKind, Status,
     process_signals,
 };
-#[cfg(not(feature = "qemu-test"))]
 use zoraya_abi::{POWER, PowerObject};
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, Program, Segment};
 use zoraya_events::{RequestQueue, SourceId};
@@ -508,7 +507,6 @@ pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> 
 
 /// Starts the first process (ADR-0063), the only one with a `Power` handle
 /// (ADR-0062).
-#[cfg(not(feature = "qemu-test"))]
 pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
     println!("first process: {name}");
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;

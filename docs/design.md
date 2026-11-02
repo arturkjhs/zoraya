@@ -380,12 +380,12 @@ deterministic random mutations.
   has one holder at a time. An interrupt object masks its line when it fires, until `interrupt_ack`. `dma_pin` writes
   the object's physical runs as device addresses, and `dma_unpin` ends the pin and its handle. A pin that ends any
   other way leaves its frames quarantined. `dma_release_quarantine` is refused while the device has a mapping or a live
-  pin, and otherwise the kernel resets each transport, sees Status 0, and only then frees the frames (proposed).
+  pin, and otherwise the kernel resets each transport, sees Status 0, and only then frees the frames.
 
 ## Console input and the first process
 
 - **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
-  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060, proposed).
+  `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060).
 - **First process.** `init` (ADR-0053). The kernel reports it and powers off if it ends.
 
 ## Using the shell
@@ -415,7 +415,7 @@ deterministic random mutations.
   transport, are the same kind. ADR-0056 must bound them before untrusted code runs.
 - **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
 - **Handles in messages.** A protocol decoder checks how many handles a message has. A server must then check their
-  types with `handle_type` (proposed ADR-0072).
+  types with `handle_type` (ADR-0072).
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code
   runs in Zoraya until [ADR-0056](adr/0056-job-memory-accounting.md) is accepted and implemented. At stage 4 every
   process is trusted.
