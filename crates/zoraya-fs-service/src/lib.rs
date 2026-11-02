@@ -33,6 +33,29 @@ pub const MAX_BUFFERS: usize = 240;
 /// How long a reply that met `NoMemory` waits before the next try.
 const RETRY_NS: u64 = 10_000_000;
 
+/// How many times a supervisor may start the stack again (ADR-0080).
+pub const MAX_RESTARTS: u32 = 3;
+
+/// A supervisor's count of restarts.
+#[derive(Debug, Default)]
+pub struct Restarts(u32);
+
+impl Restarts {
+    pub const fn new() -> Restarts {
+        Restarts(0)
+    }
+
+    /// True if one more restart is allowed, and counts it.
+    pub fn take(&mut self) -> bool {
+        if self.0 < MAX_RESTARTS {
+            self.0 += 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// What a port should wake the service for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Interest {

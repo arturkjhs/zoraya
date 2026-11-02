@@ -7,10 +7,11 @@
 use alloc::string::String;
 use core::fmt::{self, Write};
 
-use zoraya_abi::spawn::Encoder;
+use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
-    CONSOLE, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB, JobFlags,
-    MAX_HANDLES, Mode, POWER, Packet, RequestKind, Rights, Status, console_signals, job_signals,
+    CONSOLE, ChannelObject, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB,
+    JobFlags, MAX_HANDLES, Mode, ObjectType, POWER, Packet, RequestKind, Rights, Status,
+    console_signals, job_signals,
 };
 use zoraya_proto_file::{kind as proto_kind, open_flags, write_flags};
 use zoraya_shell::{
@@ -37,6 +38,8 @@ const NAME_SIZE: usize = 32;
 const PATIENCE: u32 = 3;
 /// Programs that start others: they get their job and the directory too.
 const NEED_MORE: [&str; 2] = ["fanout", "parent"];
+/// Programs that use files: they get a connection at slot 5.
+const NEED_VOLUME: [&str; 3] = ["crashwriter", "crashcheck", "fsbench"];
 
 struct Console;
 
@@ -303,6 +306,20 @@ impl Shell {
         let job = job_create(JOB, JobFlags::NONE)?;
         let mut buffer = [0; 1024];
         let mut e = Encoder::new(&mut buffer, job, image);
+        // A connection of its own to the volume, for what needs one.
+        let volume = if NEED_VOLUME.contains(&words[0]) {
+            self.volume.as_ref().and_then(|v| v.root.clone_as(ALL).ok())
+        } else {
+            None
+        };
+        if let Some(volume) = &volume {
+            e.handle(HandleEntry {
+                slot: 5,
+                handle: volume.end,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+        }
         if NEED_MORE.contains(&words[0]) {
             // They hand the console on to their children.
             let rights = Rights::WRITE.union(Rights::DUPLICATE);
@@ -320,7 +337,11 @@ impl Shell {
             None => Err(Status::InvalidArgument),
         };
         match result {
-            Ok(process) => Ok((job, process)),
+            Ok(process) => {
+                // Moved to the child.
+                core::mem::forget(volume);
+                Ok((job, process))
+            }
             Err(e) => {
                 let _ = handle_close(job);
                 Err(e)

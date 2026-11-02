@@ -19,14 +19,16 @@ KERNEL := $(BUILD)/zoraya-kernel.elf
 TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
 DISK := $(BUILD)/disk.img
+TEST_DISK := $(BUILD)/test-disk.img
 USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd
+	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
+	crashwriter crashcheck fsbench t_storage
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
-QEMU_TIMEOUT ?= 60
+QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
@@ -109,36 +111,44 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
-test-qemu: $(TEST_KERNEL) $(RUNNER)
+test-qemu: $(TEST_KERNEL) $(RUNNER) $(TEST_DISK)
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
 		--expect-line "memory: 131072 KiB total" \
 		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
-		-- $(RUN_QEMU) --test --test-disk --accel auto $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	$(RUN_TEST) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
-		-- $(RUN_QEMU) --test --test-disk --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
 	$(RUN_TEST) --label auto-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" \
-		-- $(RUN_QEMU) --test --test-disk --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
 		--expect-line "gic: version 2" \
-		-- $(RUN_QEMU) --test --test-disk --accel tcg $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-smp4-gicv2 \
 		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
-		-- $(RUN_QEMU) --test --test-disk --accel tcg --smp 4 $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" --expect-line "psci: arm,psci-1.0 via smc" \
-		-- $(RUN_QEMU) --test --test-disk --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-smp4-gicv3 \
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
 		--expect-line "gic: version 3" \
-		-- $(RUN_QEMU) --test --test-disk --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
+		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
+
+# The image the in-QEMU tests use: made fresh by each target.
+$(TEST_DISK):
+	$(CARGO) build -q -p zoraya-mkfs -p zoraya-fsck
+	@mkdir -p $(BUILD)
+	target/debug/zoraya-mkfs --size 16M --from rootfs $@
 
 # One configuration, for working on the kernel.
-test-qemu-one: $(TEST_KERNEL) $(RUNNER)
-	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --test-disk --accel auto $(TEST_KERNEL)
+test-qemu-one: $(TEST_KERNEL) $(RUNNER) $(TEST_DISK)
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
+	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell

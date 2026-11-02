@@ -6,6 +6,7 @@ extern crate alloc;
 
 pub mod files;
 mod heap;
+pub mod stack;
 
 pub use zoraya_rt::*;
 

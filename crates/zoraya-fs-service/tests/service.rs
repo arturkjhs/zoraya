@@ -1146,6 +1146,15 @@ fn a_reply_to_something_else_loses_the_driver() {
     assert!(d.is_err());
 }
 
+/// INV-0080-2, the count.
+#[test]
+fn restarts_stop_at_three() {
+    let mut restarts = zoraya_fs_service::Restarts::new();
+    assert!(restarts.take() && restarts.take() && restarts.take());
+    assert!(!restarts.take());
+    assert!(!restarts.take());
+}
+
 #[test]
 fn header_size_is_what_the_tests_assume() {
     assert_eq!(HEADER_SIZE, 16);

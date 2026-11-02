@@ -335,3 +335,13 @@ pub fn split_path(path: &str) -> (&str, &str) {
 pub const ALL: u32 = rights::ALL;
 /// The flags of a directory open.
 pub const DIRECTORY: u32 = open_flags::DIRECTORY;
+
+/// The crash test's file `i`: its length and contents depend on `i`.
+pub fn bytes_of(i: u64) -> Vec<u8> {
+    let length = 1 + (i as usize * 997) % (32 * 1024);
+    let mut data = vec![0; length];
+    for (at, byte) in data.iter_mut().enumerate() {
+        *byte = (i as usize + at * 7) as u8;
+    }
+    data
+}

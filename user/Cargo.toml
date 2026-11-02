@@ -287,3 +287,23 @@ bench = false
 name = "fsd"
 test = false
 bench = false
+
+[[bin]]
+name = "crashwriter"
+test = false
+bench = false
+
+[[bin]]
+name = "crashcheck"
+test = false
+bench = false
+
+[[bin]]
+name = "fsbench"
+test = false
+bench = false
+
+[[bin]]
+name = "t_storage"
+test = false
+bench = false
