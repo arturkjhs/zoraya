@@ -38,7 +38,12 @@ pub fn rename(elf: &[u8], renames: &BTreeMap<String, String>) -> Result<Vec<u8>,
         if i >= shnum {
             return Err("bad section index".into());
         }
-        shoff.checked_add(i * 64).ok_or("overflow".into())
+        let h = shoff.checked_add(i * 64).ok_or("overflow")?;
+        // The whole header is in the file, so no field offset overflows.
+        match h.checked_add(64) {
+            Some(end) if end <= elf.len() => Ok(h),
+            _ => Err("section header outside the file".into()),
+        }
     };
     let mut out = elf.to_vec();
     for i in 0..shnum {

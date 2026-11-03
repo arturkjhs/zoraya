@@ -65,8 +65,22 @@ fn check(args: &[String]) -> Result<bool, String> {
         let object = elf::read(m.data).map_err(|e| format!("{archive}({}): {e}", m.name))?;
         objects.push((m.name, object));
     }
-    let index = ar::index(&bytes).map_err(|e| format!("{archive}: {e}"))?;
-    let report = surface::check(&names, &objects, &allowed, index.as_deref());
+    let entries = ar::index_entries(&bytes).map_err(|e| format!("{archive}: {e}"))?;
+    let index: Option<Vec<String>> = entries
+        .as_ref()
+        .map(|e| e.iter().map(|(_, n)| n.clone()).collect());
+    let mut report = surface::check(&names, &objects, &allowed, index.as_deref());
+    if let Some(entries) = &entries {
+        let at: Vec<(usize, String, elf::Object<'_>)> = ar::members(&bytes)
+            .map_err(|e| format!("{archive}: {e}"))?
+            .into_iter()
+            .zip(objects.iter())
+            .map(|(m, (_, o))| (m.offset, m.name, o.clone()))
+            .collect();
+        report
+            .index
+            .extend(surface::check_index_offsets(entries, &at));
+    }
     let exports: BTreeSet<&str> = objects
         .iter()
         .flat_map(|(_, o)| o.symbols.iter())

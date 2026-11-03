@@ -99,8 +99,7 @@ same archive; the list then documents what 6c must provide on day one.
 
 ## Invariants
 
-- **INV-0140-1.** Until `zoraya-posix` exists, every function of `libc.a` that the Rust half of ADR-0100 owns either
-  returns a failure or traps; none reports success. *Check:* the generator accepts only the kinds above (a review
+- **INV-0140-1.** Until `zoraya-posix` exists, every function of `libc.a` that the Rust half of ADR-0100 owns and that has a result either returns a failure or traps; none reports success. The functions without a result (`free`, the lock and signal-mask helpers, `_pthread_cleanup_*`) do nothing. *Check:* the generator accepts only the kinds above (a review
   item), and `make check-ports` fails if the stub and musl together do not define the tier list.
 
 ## Open questions

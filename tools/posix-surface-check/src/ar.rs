@@ -10,6 +10,8 @@ const HEADER: usize = 60;
 pub struct Member<'a> {
     pub name: String,
     pub data: &'a [u8],
+    /// Where the member's header starts in the archive.
+    pub offset: usize,
 }
 
 fn text(b: &[u8]) -> Result<&str, String> {
@@ -21,6 +23,12 @@ fn text(b: &[u8]) -> Result<&str, String> {
 /// The names of the archive's symbol index (`/`), in index order, or `None`
 /// when it has none.
 pub fn index(archive: &[u8]) -> Result<Option<Vec<String>>, String> {
+    Ok(index_entries(archive)?.map(|e| e.into_iter().map(|(_, n)| n).collect()))
+}
+
+/// The index's entries: each name with the offset of the member header it
+/// points at.
+pub fn index_entries(archive: &[u8]) -> Result<Option<Vec<(usize, String)>>, String> {
     if !archive.starts_with(MAGIC) {
         return Err("not an ar archive".into());
     }
@@ -54,7 +62,10 @@ pub fn index(archive: &[u8]) -> Result<Option<Vec<String>>, String> {
     if out.len() != count {
         return Err("index has fewer names than its count".into());
     }
-    Ok(Some(out))
+    let offsets = body[4..names_at]
+        .chunks(4)
+        .map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]) as usize);
+    Ok(Some(offsets.zip(out).collect()))
 }
 
 /// The members of `archive`, without the index (`/`, `/SYM64/`) and the name
@@ -99,7 +110,11 @@ pub fn members(archive: &[u8]) -> Result<Vec<Member<'_>>, String> {
                     }
                     None => raw.strip_suffix('/').unwrap_or(raw).to_string(),
                 };
-                out.push(Member { name, data });
+                out.push(Member {
+                    name,
+                    data,
+                    offset: at,
+                });
             }
         }
         at = end + (size & 1);

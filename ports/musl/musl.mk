@@ -38,7 +38,9 @@ CFLAGS := -std=c99 -ffreestanding -fexcess-precision=standard -frounding-math \
 
 all: $(LIST)
 
-$(LIST): $(OBJS)
+# The list also follows the selection rule, so that a file dropped from it
+# leaves libc.a even when its object is still on disk.
+$(LIST): $(OBJS) ports/musl/musl.mk ports/musl/excluded.txt
 	@printf '%s\n' $(OBJS) > $@
 
 $(OBJ)/src/internal/version.h:
@@ -60,6 +62,9 @@ $(OBJ)/%.o: $(MUSL)/%.S
 # INV-0141-2: every excluded file is refused by the shim (compiling it fails).
 check-excluded: $(OBJ)/src/internal/version.h
 	@for f in $(EXCLUDED); do \
-	  if $(ZCC) $(CFLAGS) -c -o /dev/null $(MUSL)/$$f 2>/dev/null; then \
-	    echo "musl: $$f is excluded but compiles with the shim"; exit 1; fi; done
+	  [ -f $(MUSL)/$$f ] || { echo "musl: $$f is excluded but does not exist"; exit 1; }; \
+	  if $(ZCC) $(CFLAGS) -c -o /dev/null $(MUSL)/$$f > $(OBJ)/excluded.err 2>&1; then \
+	    echo "musl: $$f is excluded but compiles with the shim"; exit 1; fi; \
+	  grep -q -e __zoraya_sys_ -e 'sys_open\|sys_wait4' $(OBJ)/excluded.err || \
+	    { echo "musl: $$f fails for another reason than the shim:"; cat $(OBJ)/excluded.err; exit 1; }; done
 	@echo "musl: all $(words $(EXCLUDED)) excluded files are refused by the shim"

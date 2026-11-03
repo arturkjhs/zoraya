@@ -47,6 +47,9 @@ lock_ver = $(shell awk '$$1 == "$(1)" { print $$2 }' $(LOCK))
 # Runs a command with its output in $(LOGS)/$(2).log; on failure, says so and
 # shows the log's end.
 logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
+# The same, appending: for a step that runs on every build and may then have
+# nothing to do (musl), so that its log keeps the compile commands.
+logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: ports fetch-ports check-ports sysroot rootfs tools musl headers stub \
 	dash make toybox busybox tcc tcc-host clean-ports FORCE
@@ -93,7 +96,7 @@ MUSL := $(WORK)/musl-$(call lock_ver,musl)
 $(MUSL): $(LOCK) $(wildcard ports/musl/zoraya/*.patch) ports/musl/zoraya/syscall.h
 	$(call unpack,musl,ports/musl/zoraya)
 	cp ports/musl/zoraya/syscall.h $@/src/internal/syscall.h
-	rm -rf $(OBJ)/musl
+	rm -rf $(OBJ)/musl $(LOGS)/musl.log
 	@touch $@
 
 # ---------------------------------------------------------------- headers
@@ -120,7 +123,7 @@ $(HEADERS_STAMP): $(MUSL)
 MUSL_LIST := $(OBJ)/musl/objects.txt
 musl: $(MUSL_LIST)
 $(MUSL_LIST): $(HEADERS_STAMP) ports/musl/musl.mk ports/musl/excluded.txt FORCE
-	@$(call logged,$(MAKE) -f ports/musl/musl.mk MUSL=$(MUSL) OBJ=$(OBJ)/musl ZCC=$(ZCC) LIST=$@,musl)
+	@$(call logged_append,$(MAKE) -f ports/musl/musl.mk MUSL=$(MUSL) OBJ=$(OBJ)/musl ZCC=$(ZCC) LIST=$@,musl)
 
 # ---------------------------------------------------------------- the stub
 
@@ -136,7 +139,7 @@ $(STUB_LIB): ports/posix-stub/stubs.txt ports/posix-stub/stubs.awk
 	awk -f ports/posix-stub/stubs.awk ports/posix-stub/stubs.txt > $(STUB)/lib.rs
 	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name zoraya_posix \
 	  --target aarch64-unknown-none -C panic=abort -C opt-level=2 -C debuginfo=0 \
-	  -C codegen-units=1 --remap-path-prefix=$(ROOT)/= $(STUB)/lib.rs -o $@
+	  -C codegen-units=1 --remap-path-prefix=$(ROOT)=. $(STUB)/lib.rs -o $@
 
 # ---------------------------------------------------------------- libc.a
 
@@ -318,7 +321,7 @@ $(BUSYBOX_BIN): $(BUSYBOX) $(SYSROOT_STAMP)
 # tcc for Zoraya (ADR-0109 items 6 and 7): its paths in Zoraya, static links
 # always (the patch's configure case), libtcc1.a in its own directory, which
 # is why the library path starts with {B}, tcc's directory.
-TCC_CONFIG = --cpu=aarch64 --targetos=Zoraya --prefix=/usr --os-release= --elfinterp=
+TCC_CONFIG = --cpu=aarch64 --targetos=Zoraya --prefix=/usr --os-release=0 --elfinterp=
 TCC_PATHS = --tccdir=$(1)/usr/lib/tcc --crtprefix=$(1)/usr/lib \
 	--sysincludepaths=$(1)/usr/include:$(1)/usr/lib/tcc/include --libpaths={B}:$(1)/usr/lib
 TCC_DIR := $(WORK)/tcc

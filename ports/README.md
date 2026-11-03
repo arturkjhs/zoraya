@@ -36,7 +36,7 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | GNU make | 4.4.1 | GPL-3.0-or-later (`COPYING`); `build-aux/config.sub` GPL-3.0-or-later with the Autoconf exception | `patches/make/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
 | toybox | 0.8.15 | 0BSD (`LICENSE`) | none |
 | busybox | 1.38.0 | GPL-2.0-only (`LICENSE`) | none |
-| TinyCC | mob, commit `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL-2.1-or-later (`COPYING`, the notice in each file) | `patches/tcc/0001-zoraya-target.patch`, `patches/tcc/0002-skip-shf-exclude-sections.patch` |
+| TinyCC | mob, commit `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL-2.1 (`COPYING`); each file's notice says version 2 of the LGPL or any later version | `patches/tcc/0001-zoraya-target.patch`, `patches/tcc/0002-skip-shf-exclude-sections.patch` |
 
 TASK-02 pinned tcc by commit and fetched it with git. The cache holds the archive
 GitHub generates for that commit from the mirror `TinyCC/tinycc` (TASK-02 read tcc

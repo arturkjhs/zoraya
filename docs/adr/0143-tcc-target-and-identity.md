@@ -82,9 +82,10 @@ found:
 
 **Recommendation (not a decision): Option B**, with this configuration (`ports/Makefile`):
 `--cpu=aarch64 --targetos=Zoraya --prefix=/usr --tccdir=/usr/lib/tcc --crtprefix=/usr/lib
---sysincludepaths=/usr/include:/usr/lib/tcc/include --libpaths={B}:/usr/lib --elfinterp= --os-release=`.
+--sysincludepaths=/usr/include:/usr/lib/tcc/include --libpaths={B}:/usr/lib --elfinterp= --os-release=0`.
 `{B}` (tcc's directory) is added to ADR-0109's library path so that `libtcc1.a` stays in `/usr/lib/tcc` as item 2's
-layout has it (finding 3). `--os-release=` and `make GITHASH=no` keep the build host out of the binary (finding 7).
+layout has it (finding 3). `--os-release=0` (an empty value leaves configure's default, the build host's `uname -r`; the value is used only
+for BSD note sections) and `make GITHASH=no` keep the build host out of the build (finding 7).
 `--config-musl` is dropped as item 8 says; its other effects are only the `-dumpmachine` string and the bounds checker
 (finding 6). tcc's `c2str` runs on the host and is compiled by the host's compiler before `make`; `libtcc1.a` is
 compiled by `zcc` (`arm64-libtcc1-usegcc=yes`).
@@ -113,6 +114,9 @@ Zoraya, which only W1 in 6e can.
 
 ## Open questions
 
+- `zcc` refuses the `__linux__` definitions it can see on its command line (`-D`, `-Wp,-D`, `--define-macro`,
+  response files, `-Xclang`, a caller's target); a header given by `-include`, or a port's own `#define __linux__`, is
+  not refused, and the check of the build logs sees only command lines.
 - Whether the host-built tcc and the cross-built one generate the same code for the same input (they should: the
   code generator does not depend on the host); a byte comparison of their outputs is possible only in 6e.
 

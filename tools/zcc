@@ -49,13 +49,16 @@ for a in "$@"; do
     -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*)
         echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2
         exit 1;;
-    --target=*|-target=*|-Xclang|-Xpreprocessor)
+    --target=*|-target=*|-Xclang|-Xpreprocessor|--define-macro*|@*)
         echo "zcc: refusing $a: zcc sets the target and the preprocessor's definitions itself" >&2
         exit 1;;
     -shared|-rdynamic|-pie|-static-pie)
         echo "zcc: refusing $a: Zoraya programs are static ET_EXEC (ADR-0033)" >&2
         exit 1;;
-    -c|-S|-E|-M|-MM|-fsyntax-only|--version|-dumpmachine|-dumpversion|-print-*|--print-*)
+    -dumpmachine)
+        echo aarch64-unknown-zoraya
+        exit 0;;
+    -c|-S|-E|-M|-MM|-fsyntax-only|--version|-dumpversion|-print-*|--print-*)
         link=0;;
     -nostdlib)
         startfiles=0; defaultlibs=0;;
@@ -69,12 +72,13 @@ done
 
 # Code generation: AAPCS64 with FP and SIMD, static, no stack protector (no
 # AT_RANDOM source yet, ADR-0109 item 1). -nostdinc keeps the host's and
-# clang's own headers out: musl's are complete. The prefix map keeps this
-# checkout's absolute path out of the objects.
+# clang's own headers out: musl's are complete. The prefix map turns this
+# checkout's absolute path, in file names and the compilation directory, into
+# ".", so that objects do not depend on where the checkout is.
 set -- --target=aarch64-unknown-none-elf -D__zoraya__=1 \
     -nostdinc -isystem "$sysroot/usr/include" \
     -fno-pic -fno-pie -fno-stack-protector \
-    "-ffile-prefix-map=$root/=" -Qunused-arguments "$@"
+    "-ffile-prefix-map=$root=." -Qunused-arguments "$@"
 
 if [ "$link" = 0 ]; then
     exec "$clang" "$@"

@@ -436,7 +436,7 @@ host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6
   with a symbolic link per applet and the sysroot as `/usr`.
 - **`make check-ports`** (the end of `make ports`): the tier list is the CSV's (INV-0100-1); `posix-surface-check`
   checks `libc.a` (exports, the exclusion table, missing names, unresolved references, the symbol index, `svc`) and
-  fails on four broken copies of it; every excluded musl file is refused by the shim; `zoraya-elf-check` runs the
+  fails on five broken copies of it; every excluded musl file is refused by the shim; `zoraya-elf-check` runs the
   loader's parser over every program and over the `a.out` that a host build of the same tcc links against the
   sysroot (INV-0109-1, ADR-0143); both compilers' predefined macros. `make test` runs only the fast part: the tools'
   host tests and the fetch step's test (`make check-fetch-ports`).
@@ -702,7 +702,7 @@ or `exit` turns the machine off.
 ```
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
-LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md)
+LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/, ports/patches/ and ports/musl/zoraya/ (their READMEs)
 Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test-gui, test, adr-check,
                           fetch-ports, ports, check-ports
 rust-toolchain.toml       pinned stable toolchain and target

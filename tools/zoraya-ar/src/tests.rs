@@ -283,3 +283,11 @@ fn read_error_messages_name_the_problem() {
         "bad member header at offset 8"
     );
 }
+
+#[test]
+fn a_section_header_offset_near_the_top_of_the_address_space_gives_no_symbols() {
+    let mut o = object(&[("main", GLOBAL, 1, FUNC)]);
+    o[40..48].copy_from_slice(&0xffff_ffff_ffff_fffeu64.to_le_bytes());
+    o[60..62].copy_from_slice(&1u16.to_le_bytes());
+    assert_eq!(elf::defined_globals(&o), Vec::<String>::new());
+}

@@ -81,7 +81,7 @@ measured T1 workloads).
 | GNU make | 4.4.1 | GPL-3.0-or-later | `/bin/make` |
 | toybox | 0.8.15 | 0BSD | `cat head ls mv rm sleep touch true uname sort wc yes` |
 | busybox | 1.38.0 | GPL-2.0-only | `tr`, `diff` |
-| TinyCC | `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL-2.1-or-later | `/bin/tcc`, `libtcc1.a` |
+| TinyCC | `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (version 2 or later, per its files; `COPYING` is 2.1) | `/bin/tcc`, `libtcc1.a` |
 
 ### Mutation testing
 

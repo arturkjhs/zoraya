@@ -652,3 +652,45 @@ fn an_index_with_fewer_names_than_its_count_is_an_error() {
     bytes[at..at + 4].copy_from_slice(&(n + 1000).to_be_bytes());
     assert!(ar::index(&bytes).is_err());
 }
+
+#[test]
+fn a_section_header_offset_near_the_top_of_the_address_space_is_refused() {
+    let mut o = object(&[("open", STB_GLOBAL, TEXT)], &[NOP]);
+    o[40..48].copy_from_slice(&0xffff_ffff_ffff_fffeu64.to_le_bytes());
+    o[60..62].copy_from_slice(&1u16.to_le_bytes());
+    assert!(elf::read(&o).is_err());
+    assert!(crate::rename::rename(&o, &std::collections::BTreeMap::new()).is_err());
+}
+
+#[test]
+fn the_index_must_point_at_the_defining_member() {
+    let bytes = archive(&good());
+    let members = ar::members(&bytes).unwrap();
+    let at: Vec<(usize, String, Object<'_>)> = members
+        .iter()
+        .map(|m| (m.offset, m.name.clone(), elf::read(m.data).unwrap()))
+        .collect();
+    let mut entries = ar::index_entries(&bytes).unwrap().unwrap();
+    assert!(surface::check_index_offsets(&entries, &at).is_empty());
+    let read_at = at.iter().find(|(_, n, _)| n == "read.o").unwrap().0;
+    let open_at = at.iter().find(|(_, n, _)| n == "open.o").unwrap().0;
+    let i = entries.iter().position(|(_, n)| n == "open").unwrap();
+    entries[i].0 = read_at;
+    assert_eq!(
+        surface::check_index_offsets(&entries, &at),
+        ["open points at read.o, which does not define it"]
+    );
+    entries[i].0 = 3;
+    assert_eq!(
+        surface::check_index_offsets(&entries, &at),
+        ["open points at offset 3, which is no member's header"]
+    );
+    entries[i].0 = open_at;
+    entries.push((open_at, "open".into()));
+    assert_eq!(
+        surface::check_index_offsets(&entries, &at),
+        [format!(
+            "open is indexed 2 times for the member at {open_at}, defined 1 times"
+        )]
+    );
+}

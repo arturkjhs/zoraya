@@ -31,6 +31,7 @@ fi
 lock=$1
 cache=$2
 only=${3:-}
+[ -r "$lock" ] || { echo "fetch-ports: cannot read $lock" >&2; exit 1; }
 mkdir -p "$cache"
 
 if [ -n "$only" ] && ! entries "$lock" | awk -v n="$only" '$1 == n { found = 1 } END { exit !found }'; then

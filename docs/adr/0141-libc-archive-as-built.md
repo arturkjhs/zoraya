@@ -113,10 +113,11 @@ Apple clang 21 on the M4) and found where the accepted text and the code part. T
    stub's names (ADR-0140).
 7. **What the check enforces** (`posix-surface-check check`): no export outside the list (INV-0100-1, INV-0005-1), none
    on the exclusion table (INV-0005-2), every name of the list defined (the `_` rows too), every strong reference of
-   every member defined in the archive, no member name twice, the archive's symbol index equal to what the members
-   define (two ELF readers, the archiver's and the checker's, must agree), and no `svc` of any immediate outside
+   every member defined in the archive, no member name twice, no name with two strong definitions, the archive's
+   symbol index equal to what the members define and each entry pointing at the header of a member that defines it
+   (two ELF readers, the archiver's and the checker's, must agree), and no `svc` of any immediate outside
    permitted members (INV-0100-2; none are permitted while the stub has no `zoraya-rt`).
-8. **Where it runs.** `make ports` ends with `make check-ports`, which runs the check on the real archive and on four
+8. **Where it runs.** `make ports` ends with `make check-ports`, which runs the check on the real archive and on five
    broken copies, and `make test` runs the tool's host tests (including the staleness of the list). INV-0100-1's
    "run by `make test`" holds once ADR-0110 item 9 puts the check into `make test-posix`, a step of `make test`.
 

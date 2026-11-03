@@ -322,3 +322,41 @@ pub fn hide(
     }
     Ok(out)
 }
+
+/// Checks where the index points (the other half of the index check): each
+/// entry must point at the header of a member that defines its name, and
+/// each name must be indexed once for each member that defines it. `members`
+/// are (header offset, member name, object).
+pub fn check_index_offsets(
+    entries: &[(usize, String)],
+    members: &[(usize, String, Object<'_>)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut wanted: BTreeMap<(&str, usize), usize> = BTreeMap::new();
+    for (offset, _, object) in members {
+        for s in object.symbols.iter().filter(|s| s.is_defined_global()) {
+            *wanted.entry((s.name.as_str(), *offset)).or_default() += 1;
+        }
+    }
+    let mut seen: BTreeMap<(&str, usize), usize> = BTreeMap::new();
+    for (offset, name) in entries {
+        match members.iter().find(|(o, _, _)| o == offset) {
+            None => out.push(format!(
+                "{name} points at offset {offset}, which is no member's header"
+            )),
+            Some((_, member, _)) if !wanted.contains_key(&(name.as_str(), *offset)) => out.push(
+                format!("{name} points at {member}, which does not define it"),
+            ),
+            Some(_) => *seen.entry((name.as_str(), *offset)).or_default() += 1,
+        }
+    }
+    for ((name, offset), n) in &wanted {
+        let got = seen.get(&(*name, *offset)).copied().unwrap_or(0);
+        if got != *n && got != 0 {
+            out.push(format!(
+                "{name} is indexed {got} times for the member at {offset}, defined {n} times"
+            ));
+        }
+    }
+    out
+}

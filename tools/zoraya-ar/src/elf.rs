@@ -36,6 +36,8 @@ fn section(elf: &[u8], i: usize) -> Option<(u32, usize, usize, usize)> {
         return None;
     }
     let h = shoff.checked_add(i.checked_mul(64)?)?;
+    // The whole header is in the file, so no field offset below overflows.
+    elf.get(h..h.checked_add(64)?)?;
     let kind = u32_at(elf, h + 4)?;
     let offset = u64_at(elf, h + 24)?;
     let size = u64_at(elf, h + 32)?;

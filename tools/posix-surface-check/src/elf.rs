@@ -104,6 +104,9 @@ fn sections(elf: &[u8]) -> Result<Vec<Section>, String> {
         let h = shoff
             .checked_add(i.checked_mul(64).ok_or("overflow")?)
             .ok_or("overflow")?;
+        // The whole header is in the file, so no field offset below overflows.
+        elf.get(h..h.checked_add(64).ok_or("overflow")?)
+            .ok_or("section header outside the file")?;
         out.push(Section {
             kind: u32_at(elf, h + 4)?,
             flags: u64_at(elf, h + 8)?,
