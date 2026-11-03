@@ -11,6 +11,7 @@ license.workspace = true
 zoraya-virtio = { path = "../zoraya-virtio" }
 
 [dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
 zoraya-virtio = { path = "../zoraya-virtio", features = ["fake"] }
 
 [lints]

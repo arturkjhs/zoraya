@@ -1536,3 +1536,6 @@ fn restarts_stop_at_three() {
 fn header_size_is_what_the_tests_assume() {
     assert_eq!(HEADER_SIZE, 16);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

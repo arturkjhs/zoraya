@@ -83,3 +83,7 @@ mod tests {
         assert!(encode(&m, 0, &mut out).is_err());
     }
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+#[cfg(test)]
+zoraya_test_alloc::cap_memory!();

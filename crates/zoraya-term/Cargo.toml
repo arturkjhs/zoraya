@@ -13,3 +13,6 @@ zoraya-keymap = { path = "../zoraya-keymap" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

@@ -146,6 +146,10 @@ The items:
 ## Open questions
 
 - Whether stage 6d's job control needs nested suspends.
+- INV-0102-5 refuses a caller holding a pin in its table. A pin moved into a message queued on a channel the caller
+  holds is not seen, so such a caller can snapshot with a live pin (TASK-16 review, R3). The child gets fresh memory,
+  so nothing is shared through the pin; whether the letter of INV-0102-5 needs a per-process count of live pins is
+  for the architect. A POSIX process holds no device handle, so it cannot make a pin.
 
 ## Revisit triggers
 

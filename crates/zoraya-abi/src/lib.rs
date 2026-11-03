@@ -1195,3 +1195,7 @@ pub const fn request_from_value(value: u64) -> Option<(RequestKind, u32)> {
 
 #[cfg(test)]
 mod tests;
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+#[cfg(test)]
+zoraya_test_alloc::cap_memory!();

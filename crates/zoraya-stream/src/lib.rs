@@ -274,3 +274,7 @@ impl Ring {
 
 #[cfg(test)]
 mod tests;
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+#[cfg(test)]
+zoraya_test_alloc::cap_memory!();

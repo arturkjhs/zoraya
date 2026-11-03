@@ -347,6 +347,10 @@ fn report(results: &[Tried], commit: &str, seconds: u64) -> String {
     out
 }
 
+/// Most mutants run at once, whatever `--jobs` says: two runs of the test
+/// suite at a time is what the host's memory takes (docs/backlog.md).
+const MAX_WORKERS: usize = 2;
+
 struct Args {
     jobs: usize,
     only: BTreeSet<String>,
@@ -356,7 +360,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
     let mut a = Args {
-        jobs: (cores / 2).clamp(1, 6),
+        jobs: (cores / 2).clamp(1, MAX_WORKERS),
         only: BTreeSet::new(),
         lists: Vec::new(),
     };
@@ -425,7 +429,13 @@ fn main_() -> Result<bool, String> {
             "zoraya-mutants: uncommitted changes are not mutated: the workers check out {commit}"
         );
     }
-    let workers = args.jobs.min(mutants.len());
+    if args.jobs > MAX_WORKERS {
+        println!(
+            "zoraya-mutants: --jobs {} is more than {MAX_WORKERS}; running {MAX_WORKERS}",
+            args.jobs
+        );
+    }
+    let workers = args.jobs.min(MAX_WORKERS).min(mutants.len());
     let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
     let jobs = (cores / workers).max(1);
     fs::create_dir_all(format!("{ROOT}/logs")).map_err(|e| format!("{ROOT}: {e}"))?;

@@ -506,3 +506,6 @@ fn random_mutations_never_panic() {
     // well-formed-but-odd trees would never be reached.
     assert!(accepted > 100, "only {accepted} mutated blobs parsed");
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

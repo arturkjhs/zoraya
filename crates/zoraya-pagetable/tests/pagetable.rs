@@ -566,3 +566,6 @@ fn random_sequences_match_a_model() {
         }
     }
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

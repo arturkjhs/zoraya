@@ -13,6 +13,7 @@ license.workspace = true
 instrument = []
 
 [dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
 zoraya-fs-testkit = { path = "../zoraya-fs-testkit" }
 
 [lints]

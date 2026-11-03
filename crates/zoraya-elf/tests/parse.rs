@@ -293,3 +293,6 @@ fn mutations_never_panic_and_never_accept_what_the_rules_refuse() {
     }
     assert!(accepted > 0);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

@@ -18,7 +18,13 @@
 
 mod common;
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
+
+use zoraya_test_alloc::{Capped, LIMIT};
+
+/// What this file's counting allocator forwards to: capped, as every host
+/// test is (docs/backlog.md).
+static INNER: Capped = Capped::new(LIMIT);
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -37,7 +43,7 @@ thread_local! {
 
 struct Counting;
 
-// SAFETY: forwards to the system allocator unchanged; only adds counting
+// SAFETY: forwards to the capped system allocator unchanged; only adds counting
 // in thread-local cells, which never allocate.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
@@ -47,12 +53,12 @@ unsafe impl GlobalAlloc for Counting {
             let _ = PEAK.try_with(|p| p.set(p.get().max(n)));
         });
         // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(l) }
+        unsafe { INNER.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
         let _ = LIVE.try_with(|c| c.set(c.get() - l.size() as isize));
         // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(p, l) }
+        unsafe { INNER.dealloc(p, l) }
     }
 }
 

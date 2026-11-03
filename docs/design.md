@@ -472,10 +472,12 @@ How the in-QEMU tests run and report:
   service, and checks the durable file after each remount. It sends malformed messages and hostile paths, fills the
   open table, and never reads its replies.
 - Mutation testing is outside `make test`. `make mutants` applies the hand-written mutations of `tools/mutants/*.toml`
-  in parallel worktrees of `HEAD` (`build/mutants/w<i>`, kept between runs, about 400 MB each), runs only the tests
-  each list names, and writes the survivors to `build/mutants/report.md`. `make mutants-host CRATE=name` runs
-  cargo-mutants on one host crate. The `mutant-triage` and `test-runner` subagents (`.claude/agents/`) read and run
-  these; CLAUDE.md says which work goes to them.
+  in at most two parallel worktrees of `HEAD` (`build/mutants/w<i>`, kept between runs, about 400 MB each), runs only
+  the tests each list names, and writes the survivors to `build/mutants/report.md`. `make mutants-host CRATE=name`
+  runs cargo-mutants on one host crate, two jobs at a time. Both run under `tools/mutants/watchdog.sh`, which kills a
+  process past a memory limit, and every host test caps its own heap at 512 MiB (`crates/zoraya-test-alloc`), so a
+  mutant that grows without bound fails instead of taking the host (`docs/backlog.md`). The `mutant-triage` and
+  `test-runner` subagents (`.claude/agents/`) read and run these; CLAUDE.md says which work goes to them.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
   exists only in the test kernel: the normal kernel cannot resume a fault.
 - Nine tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped

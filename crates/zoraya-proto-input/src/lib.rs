@@ -116,3 +116,7 @@ mod tests {
         assert!(!e(kind::AXIS, 0, AXIS_MAX + 1).is_valid());
     }
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+#[cfg(test)]
+zoraya_test_alloc::cap_memory!();
