@@ -834,6 +834,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 let (_, m) = decode::<proto::WriteBufferCurrent>(bytes, n)?;
                 self.write_buffer_current(i, t, &m);
             }
+            32 => {
+                decode::<proto::Stat>(bytes, n)?;
+                self.stat(i, t);
+            }
             ERROR_ORDINAL..=u32::MAX => {
                 let m = ErrorReply {
                     status: status::UNSUPPORTED,
@@ -1475,6 +1479,42 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let m = proto::ReadLinkReply {
             status: code(s),
             target: Text(&target),
+        };
+        self.reply(i, t, &m);
+    }
+
+    fn stat(&mut self, i: usize, t: u32) {
+        let attr: Result<Attr, _> = match self.handle_of(i) {
+            Some(handle) => self.volume.stat(handle),
+            None => Err(FsError::StorageFailed),
+        };
+        self.after_engine();
+        let volume = self.volume.durable_root().volume_id;
+        let m = match attr {
+            Ok(a) => proto::StatReply {
+                status: code(status::OK),
+                volume,
+                id: a.id,
+                size: a.size,
+                modified_seconds: a.mtime.secs as u64,
+                modified_nanos: a.mtime.nanos,
+                changed_seconds: a.ctime.secs as u64,
+                changed_nanos: a.ctime.nanos,
+                mode: u32::from(a.posix_mode),
+                kind: wire_kind(a.kind),
+            },
+            Err(e) => proto::StatReply {
+                status: code(self.engine_status(&e)),
+                volume: 0,
+                id: 0,
+                size: 0,
+                modified_seconds: 0,
+                modified_nanos: 0,
+                changed_seconds: 0,
+                changed_nanos: 0,
+                mode: 0,
+                kind: Below(0),
+            },
         };
         self.reply(i, t, &m);
     }

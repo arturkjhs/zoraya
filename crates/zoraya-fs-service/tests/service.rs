@@ -1978,3 +1978,55 @@ fn header_size_is_what_the_tests_assume() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// `stat` gives the object's id, which no other object has, the volume's id
+/// and the times as the engine holds them.
+#[test]
+fn stat_names_the_object_and_its_volume() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    let g = r.open(root, "g", open_flags::CREATE);
+    assert_eq!(r.write_text(f, 0, 0, b"12345").0, status::OK);
+    let stat = |r: &mut Rig, end| {
+        let reply = r.call(end, &proto::Stat {}, vec![]);
+        decode::<proto::StatReply>(&reply, 0).unwrap().1
+    };
+    let (a, b, d) = (stat(&mut r, f), stat(&mut r, g), stat(&mut r, root));
+    assert_eq!(a.status.0, status::OK);
+    assert_eq!(
+        (a.volume, b.volume, d.volume),
+        (1, 1, 1),
+        "mkfs's volume id"
+    );
+    assert_ne!(a.id, b.id);
+    assert_ne!(a.id, d.id);
+    assert_eq!((a.size, a.kind.0, a.mode), (5, proto::kind::FILE, 0o644));
+    assert_eq!(d.kind.0, proto::kind::DIRECTORY);
+    assert!(a.modified_seconds as i64 >= NOW.secs);
+    // The same object through another connection is the same id.
+    let again = r.open(root, "f", 0);
+    assert_eq!(stat(&mut r, again).id, a.id);
+    // A time set explicitly comes back exactly; set_attributes takes no
+    // negative seconds (a stage 4 limit, unchanged).
+    let m = proto::SetAttributes {
+        which: Flags(2),
+        mode: 0,
+        seconds: (-2i64) as u64,
+        nanos: 7,
+    };
+    assert_eq!(
+        r.done(f, &m, vec![]).0,
+        status::INVALID_ARGUMENT,
+        "a u64 past i64"
+    );
+    let m = proto::SetAttributes {
+        which: Flags(2),
+        mode: 0,
+        seconds: 86_400,
+        nanos: 7,
+    };
+    assert_eq!(r.done(f, &m, vec![]).0, status::OK);
+    let a = stat(&mut r, f);
+    assert_eq!((a.modified_seconds, a.modified_nanos), (86_400, 7));
+}

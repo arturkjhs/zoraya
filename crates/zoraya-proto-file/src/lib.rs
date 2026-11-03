@@ -335,6 +335,23 @@ protocol! {
         flags: Flags<{ write_flags::ALL }>,
     }
 
+    /// Everything `struct stat` is made from (ADR-0103 item 10, ADR-0014):
+    /// the volume, the object's id, which is never reused, and its times
+    /// exactly, seconds being signed in two's complement.
+    message Stat = 32, handles 0 {}
+    message StatReply = 32, handles 0 {
+        status: Code,
+        volume: u64,
+        id: u64,
+        size: u64,
+        modified_seconds: u64,
+        modified_nanos: u32,
+        changed_seconds: u64,
+        changed_nanos: u32,
+        mode: u32,
+        kind: Kind,
+    }
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -342,7 +359,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 31] = [
+pub const REQUESTS: [(&str, u32); 32] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -374,6 +391,7 @@ pub const REQUESTS: [(&str, u32); 31] = [
     ("write_current", 29),
     ("read_buffer_current", 30),
     ("write_buffer_current", 31),
+    ("stat", 32),
 ];
 
 #[cfg(test)]
@@ -496,6 +514,22 @@ mod tests {
             0,
         );
         check(GetFlags {}, 0);
+        check(Stat {}, 0);
+        check(
+            StatReply {
+                status: Below(0),
+                volume: 1,
+                id: 2,
+                size: 3,
+                modified_seconds: (-1i64) as u64,
+                modified_nanos: 999_999_999,
+                changed_seconds: 5,
+                changed_nanos: 6,
+                mode: 0o4755,
+                kind: Below(kind::LINK),
+            },
+            0,
+        );
         check(ReadCurrent { length: 4096 }, 0);
         check(
             ReadBufferCurrent {
