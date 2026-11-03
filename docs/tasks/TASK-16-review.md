@@ -70,6 +70,15 @@ writes each held frame once and gives back one frame a step, so it avoids the co
 full `make test` runs since then passed. A test of elapsed time under TCG would be unreliable, so none was added; the
 finding and the command to repeat it are in `docs/backlog.md`.
 
+## CI after the merge
+
+The first CI run on `main` after the merge (`21786e7`, Linux, TCG) failed in `t_snapshot`: `read: WouldBlock`. The
+test's `receive` read the child's 12 KiB table before waiting for the child, and treated an empty stream as an
+error; on the slower runner the child had not written yet. A test bug, not a kernel one: a reader of a stream that
+never blocks waits on the port when it is empty (ADR-0101). `receive` now does, and the table test's child sleeps
+20 ms before it writes, so the parent always reads first; with the old `receive` that test fails every time, as on
+CI.
+
 ## Mutation testing
 
 Hand-written list `tools/mutants/kernel-objects.toml`, run with `make mutants` (`test-qemu-one` per mutant), at
