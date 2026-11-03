@@ -198,6 +198,12 @@ description checked (operand kinds are authority); that check belongs to the lau
 - Whether to embed descriptions in the ELF and in the ramdisk both, or only in the ramdisk until programs come from
   the volume (ADR-0108).
 - Translations: none now; the format has no language key.
+- *Note, 2026-11-03 (TASK-18 Part 2, step 1):* item 2 is built as written: each described program carries
+  `.zoraya.command` (`user/user.ld` keeps it in no segment) and the ramdisk holds `NAME.cmd` beside it, and the
+  packer refuses a program whose section differs from its file. But no system call lets a process read a ramdisk
+  entry's bytes (`directory_lookup` gives an image, `directory_entry` a name), so `zosh` cannot read `NAME.cmd` from
+  the ramdisk. Until such a call exists (a kernel ABI decision, for the architect), `zosh` has the same files
+  compiled in, checked by `user/build.rs`, so all three copies come from one source file and one build.
 
 ## Revisit triggers
 - A program whose interface cannot be described by operands and options (a sub-command tree such as `git`): add

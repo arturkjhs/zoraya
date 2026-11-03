@@ -65,6 +65,39 @@ pub fn wait_exit(process: Handle) -> ExitRecord {
     process_exit_record(process).expect("record")
 }
 
+/// The command descriptions, checked when this crate was built (ADR-0156):
+/// `(name, text)` for each group under `user/describe/`.
+pub mod descriptions {
+    include!(concat!(env!("OUT_DIR"), "/descriptions.rs"));
+}
+
+/// Puts this program's description, `user/describe/GROUP/NAME.cmd`, into its
+/// ELF as the section `.zoraya.command`, which no segment loads (ADR-0156
+/// item 2). The ramdisk packer checks that it matches the file.
+#[macro_export]
+macro_rules! describe {
+    ($group:literal, $name:literal) => {
+        #[used]
+        #[unsafe(link_section = ".zoraya.command")]
+        static ZORAYA_COMMAND: [u8; include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/describe/",
+            $group,
+            "/",
+            $name,
+            ".cmd"
+        ))
+        .len()] = *include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/describe/",
+            $group,
+            "/",
+            $name,
+            ".cmd"
+        ));
+    };
+}
+
 /// Asserts a call's status.
 #[macro_export]
 macro_rules! assert_err {

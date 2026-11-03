@@ -790,6 +790,8 @@ fn list() {
     }
 }
 
+zoraya_user::describe!("system", "zosh");
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let port = port_create().expect("port");

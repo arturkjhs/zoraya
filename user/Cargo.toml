@@ -33,6 +33,9 @@ zoraya-keymap = { path = "../crates/zoraya-keymap" }
 zoraya-font = { path = "../crates/zoraya-font" }
 zoraya-term = { path = "../crates/zoraya-term" }
 
+[build-dependencies]
+zoraya-describe = { path = "../crates/zoraya-describe" }
+
 [lints]
 workspace = true
 

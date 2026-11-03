@@ -5,6 +5,8 @@
 
 use zoraya_user::println;
 
+zoraya_user::describe!("demos", "hello");
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     println!("hello from EL0");

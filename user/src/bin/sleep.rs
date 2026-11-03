@@ -5,6 +5,8 @@
 
 use zoraya_user::{clock_monotonic, println, sleep_until, startup};
 
+zoraya_user::describe!("commands", "sleep");
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let seconds: Option<u64> = startup()

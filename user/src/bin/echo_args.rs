@@ -5,6 +5,8 @@
 
 use zoraya_user::{println, startup};
 
+zoraya_user::describe!("demos", "echo-args");
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     for (i, arg) in startup().argv.enumerate() {

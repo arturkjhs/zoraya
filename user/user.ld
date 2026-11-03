@@ -22,6 +22,9 @@ SECTIONS
     . = ALIGN(4K);
     .data : { *(.data .data.*) } :data
     .bss (NOLOAD) : { *(.bss .bss.*) *(COMMON) } :data
+    /* The command description (ADR-0156 item 2): kept in the file, never
+     * loaded, since it is in no segment. */
+    .zoraya.command 0 (INFO) : { KEEP(*(.zoraya.command)) }
     /DISCARD/ : {
         *(.comment)
         *(.eh_frame .eh_frame_hdr)

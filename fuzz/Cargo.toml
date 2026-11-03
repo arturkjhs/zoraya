@@ -1,4 +1,5 @@
-# Coverage-guided fuzzing of the zoraya-fs decoder with cargo-fuzz.
+# Coverage-guided fuzzing of the zoraya-fs decoder and the shell's parsers
+# with cargo-fuzz.
 #
 # Needs a nightly toolchain and cargo-fuzz, so it is not part of the
 # workspace and `make test` does not run it; the workspace's own
@@ -19,6 +20,7 @@ cargo-fuzz = true
 libfuzzer-sys = "=0.4.10"
 zoraya-fs = { path = "../crates/zoraya-fs" }
 zoraya-fs-testkit = { path = "../crates/zoraya-fs-testkit" }
+zoraya-describe = { path = "../crates/zoraya-describe" }
 
 [[bin]]
 name = "mount_walk"
@@ -30,6 +32,13 @@ bench = false
 [[bin]]
 name = "raw_image"
 path = "fuzz_targets/raw_image.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "describe"
+path = "fuzz_targets/describe.rs"
 test = false
 doc = false
 bench = false

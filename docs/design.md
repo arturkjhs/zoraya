@@ -891,6 +891,7 @@ crates/                   no_std, host-tested
   zoraya-protocol/        the wire format and the protocol! macro
   zoraya-proto-block/, zoraya-proto-file/  the block and file protocols
   zoraya-shell/           zosh's line editor, parser and reports
+  zoraya-describe/        command descriptions (NAME.cmd): the total parser of ADR-0156
   zoraya-events/          signals, port subscriptions and ready lists
   zoraya-rt/              the runtime of Zoraya programs (aarch64 only)
   zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)
@@ -910,6 +911,8 @@ user/                     the programs in the ramdisk, on zoraya-rt: init, zosh,
                           term, posixrun (the launcher of C programs, stage 6c), test programs
   src/stack.rs            starts the driver and the service
   src/gui.rs              scans device pages, starts and restarts the GUI (init and t_gui)
+  describe/               command descriptions (ADR-0156): builtins/, commands/, demos/, topics/, system/;
+                          build.rs refuses a bad one, describe! puts one in its program's ELF
 rootfs/                   the first contents of build/disk.img
 tests/shell/              scripts the runner plays on the serial line
 tests/gui/                the GUI script the runner plays over QMP
@@ -922,7 +925,7 @@ tools/
   test-summary.sh         make test's summary, with the logs in build/logs/
   mutants/                zoraya-mutants and its mutation lists (*.toml)
   adr-check/              zoraya-adr-check: ADR-0001 invariants
-  mkramdisk/              zoraya-mkramdisk: packs user programs
+  mkramdisk/              zoraya-mkramdisk: packs user programs, and their descriptions as NAME.cmd
   zoraya-mkfs/            creates a filesystem image from a host directory
   zoraya-fsck/            checks (and on request repairs) a filesystem image
   posix-surface/          TASK-02/02b measurement pipeline (unchanged)
@@ -933,7 +936,7 @@ tools/
   zoraya-elf-check/       zoraya-elf over programs on the host (INV-0109-1)
   footprint/              a process's memory for the watchdog (macOS's physical footprint), and memhog
 ports/                    stage 6b: sources.lock, the build of the sysroot and the ports, patches (ports/README.md)
-fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the workspace)
+fuzz/                     cargo-fuzz targets for zoraya-fs and the shell's parsers (nightly; outside the workspace)
 build/                    kernel ELFs, disk images, logs/ and mutants/; ports/, sysroot/, rootfs-posix/ (not committed)
 ```
 

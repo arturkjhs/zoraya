@@ -63,7 +63,7 @@ $(RAMDISK):
 	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user
 	$(CARGO) build -p zoraya-mkramdisk
 	@mkdir -p $(BUILD)
-	target/debug/zoraya-mkramdisk $@ $(addprefix $(USER_DIR)/,$(USER_PROGRAMS))
+	target/debug/zoraya-mkramdisk --describe user/describe $@ $(addprefix $(USER_DIR)/,$(USER_PROGRAMS))
 
 ramdisk: $(RAMDISK)
 

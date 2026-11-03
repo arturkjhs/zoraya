@@ -5,6 +5,8 @@
 
 use zoraya_user as _;
 
+zoraya_user::describe!("demos", "fault");
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     // SAFETY: none: the fault is the point, and it ends this process.

@@ -6,6 +6,8 @@
 use zoraya_abi::{Disposition, RequestKind};
 use zoraya_user::{println, process_set_disposition};
 
+zoraya_user::describe!("demos", "stubborn");
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     process_set_disposition(RequestKind::Interrupt, Disposition::Ignore).expect("disposition");

@@ -51,6 +51,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-describe"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-dtb"
 version = "0.1.0"
 dependencies = [
@@ -179,6 +186,7 @@ dependencies = [
 name = "zoraya-mkramdisk"
 version = "0.1.0"
 dependencies = [
+ "zoraya-describe",
  "zoraya-ramdisk",
 ]
 
@@ -339,6 +347,7 @@ version = "0.1.0"
 dependencies = [
  "zoraya-abi",
  "zoraya-compositor",
+ "zoraya-describe",
  "zoraya-font",
  "zoraya-fs",
  "zoraya-fs-service",

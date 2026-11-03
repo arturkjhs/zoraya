@@ -9,6 +9,7 @@ license.workspace = true
 
 [dependencies]
 zoraya-ramdisk = { path = "../../crates/zoraya-ramdisk", features = ["std"] }
+zoraya-describe = { path = "../../crates/zoraya-describe" }
 
 [lints]
 workspace = true
