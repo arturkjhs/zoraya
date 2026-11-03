@@ -65,6 +65,6 @@ check-excluded: $(OBJ)/src/internal/version.h
 	  [ -f $(MUSL)/$$f ] || { echo "musl: $$f is excluded but does not exist"; exit 1; }; \
 	  if $(ZCC) $(CFLAGS) -c -o /dev/null $(MUSL)/$$f > $(OBJ)/excluded.err 2>&1; then \
 	    echo "musl: $$f is excluded but compiles with the shim"; exit 1; fi; \
-	  grep -q -e __zoraya_sys_ -e 'sys_open\|sys_wait4' $(OBJ)/excluded.err || \
+	  grep -q -e __zoraya_sys_ -e 'sys_open\|sys_wait4' -e 'SIOCGSTAMP_OLD' $(OBJ)/excluded.err || \
 	    { echo "musl: $$f fails for another reason than the shim:"; cat $(OBJ)/excluded.err; exit 1; }; done
 	@echo "musl: all $(words $(EXCLUDED)) excluded files are refused by the shim"

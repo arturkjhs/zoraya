@@ -424,8 +424,8 @@ host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6
 - **`tools/zoraya-ar`** writes deterministic GNU `ar` archives with a symbol index (also as `ranlib`).
 - **`libc.a`** is 737 objects of musl's retained directories, compiled with the system-call shim, and 513 members of
   the stub `zoraya-posix` (ADR-0140: a generated Rust static library in which every function of the Rust half fails
-  with `ENOSYS` or traps, and which brings `compiler_builtins`). The shim routes eleven calls; 34 files that make
-  other calls are not compiled; 750 names outside the tier list (673 from musl, 77 from the Rust members) are renamed `__zoraya_*` in every object, so that the
+  with `ENOSYS` or traps, and which brings `compiler_builtins`). The shim routes eleven calls; 34 files it refuses
+  (33 that make other calls, and `ioctl.c`, which needs musl's Linux constants) are not compiled; 750 names outside the tier list (673 from musl, 77 from the Rust members) are renamed `__zoraya_*` in every object, so that the
   archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141). The sysroot also has
   `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.

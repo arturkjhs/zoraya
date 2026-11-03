@@ -3,7 +3,10 @@
 # not route, so musl's code for it cannot work on Zoraya: the functions it
 # defines come from zoraya-posix instead, or not at all when they are outside
 # the tier list. The shim makes this list complete: a retained file that makes
-# another system call fails to compile.
+# another system call fails to compile. One file fails on the shim for another
+# reason: src/misc/ioctl.c translates socket timestamp requests with constants
+# (SIOCGSTAMP_OLD) that musl's own syscall.h defines and the shim does not, a
+# Linux ABI translation that has no meaning on Zoraya.
 
 # Process and resource state: zoraya-posix (sysconf, abort, getrlimit, setrlimit,
 # uname, ioctl, syscall, times are tier rows; the rest are not exported).

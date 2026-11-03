@@ -22,10 +22,12 @@ Apple clang 21 on the M4) and found where the accepted text and the code part. T
    functions of `src/internal/pthread_impl.h` that every file including it compiles). ADR-0100's list had `lseek`,
    `clock_gettime` and `getpid`, which no retained file calls directly (`__stdio_seek` calls `__lseek`, and `time`
    calls `__clock_gettime`, both of replaced directories), and lacked `read`, `exit` and `futex`.
-2. **Files that make other system calls.** 34 files of the retained directories do, and are not compiled
+2. **Files that make other system calls.** 33 files of the retained directories do, and are not compiled
    (`ports/musl/excluded.txt`): process and resource state (`sysconf`, `abort`, `getrlimit`, `setrlimit`, `uname`,
-   `ioctl`, `syscall`, ...), the stdio files that open, remove or rename by path (`fopen`, `remove`, `rename`,
-   `tmpfile`, `popen`'s `pclose`, `__fopen_rb_ca`), and the clocks, timers and time-zone file of `src/time`.
+   `syscall`, ...), the stdio files that open, remove or rename by path (`fopen`, `remove`, `rename`,
+   `tmpfile`, `popen`'s `pclose`, `__fopen_rb_ca`), and the clocks, timers and time-zone file of `src/time`. A 34th,
+   `src/misc/ioctl.c`, routes through `SYS_ioctl` but translates socket timestamp requests with constants
+   (`SIOCGSTAMP_OLD`) of musl's own `syscall.h` that the shim does not carry; `ioctl` comes from the Rust half.
 3. **Directories the cut does not name.** `src/internal` (the scanners under `strtod` and `strtol`, `__syscall_ret`,
    `libc.c`), `src/conf` (`confstr`, `sysconf`) and `src/temp` (`mkstemp`, over `open`) are in neither list.
 4. **The secure start.** `__libc_start_main`'s `AT_SECURE` path polls fds 0 to 2 with `SYS_poll` or `SYS_ppoll` and

@@ -17,7 +17,7 @@ asks for a stub whose OS-facing exports fail with `ENOSYS`, recorded as a propos
 
 - musl's retained files define 131 of the 243 names of the tier list (`task-02/libc-surface.csv` by ADR-0100 item 7's
   rule); the other 112 come from the directories ADR-0100 item 2 gives to Rust, or from the 34 files of the retained
-  directories that make a system call the shim does not route (ADR-0141).
+  directories that the shim refuses (ADR-0141).
 - The retained objects also use 31 names they do not define and that are not in the tier list: musl's internal
   `__lock`, `__unlock`, `__lseek`, `__dup3`, `__clock_gettime`, `__map_file`, `__libc_malloc`, `__block_all_sigs`
   and others, and public functions of the replaced directories that retained code calls (`socket`, `connect` and
