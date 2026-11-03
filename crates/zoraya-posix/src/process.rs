@@ -81,11 +81,11 @@ pub const MAX_BUFFER: usize = 1024 * 1024;
 #[derive(Debug, Default)]
 pub struct Listing {
     cookie: u64,
-    names: Vec<(String, Kind)>,
+    /// Each name with its kind and its object's id, which is `d_ino` as it
+    /// is `st_ino` (ADR-0014 rule 7).
+    names: Vec<(String, Kind, u64)>,
     at: usize,
     done: bool,
-    /// `d_ino`: the listing gives no ids, so names are numbered from 1.
-    count: u64,
 }
 
 /// A description entry (ADR-0103 item 4).
@@ -1537,7 +1537,7 @@ impl<S: Sys> Posix<S> {
     }
 
     /// The next name of a directory fd's listing: name, `d_type` and the
-    /// number `d_ino` gets.
+    /// object's id, which is `d_ino`.
     pub fn read_dir(&mut self, fd: i32) -> Result<Option<(String, u8, u64)>, i32> {
         loop {
             let (conn, cookie) = match self.fds.get_mut(fd) {
@@ -1549,10 +1549,9 @@ impl<S: Sys> Posix<S> {
                     ..
                 }) => {
                     if listing.at < listing.names.len() {
-                        let (name, kind) = core::mem::take(&mut listing.names[listing.at]);
+                        let (name, kind, id) = core::mem::take(&mut listing.names[listing.at]);
                         listing.at += 1;
-                        listing.count += 1;
-                        return Ok(Some((name, kind.dirent_type(), listing.count)));
+                        return Ok(Some((name, kind.dirent_type(), id)));
                     }
                     if listing.done {
                         return Ok(None);
@@ -1561,17 +1560,17 @@ impl<S: Sys> Posix<S> {
                 }
                 Some(_) => return Err(ENOTDIR),
             };
-            let size = self.call(conn, &proto::ReadDirectory { cookie }, &[])?;
+            let size = self.call(conn, &proto::ReadDirectoryIds { cookie }, &[])?;
             let (names, next) =
-                match decode::<proto::ReadDirectoryReply<'_>>(&self.input[..size], 0) {
+                match decode::<proto::ReadDirectoryIdsReply<'_>>(&self.input[..size], 0) {
                     Ok((_, r)) if r.status.0 == status::OK => {
                         let mut next = 0;
-                        let names: Vec<(String, Kind)> = r
+                        let names: Vec<(String, Kind, u64)> = r
                             .entries
                             .iter()
                             .map(|e| {
                                 next = e.next;
-                                (e.name.0.to_string(), Kind::of_wire(e.kind.0))
+                                (e.name.0.to_string(), Kind::of_wire(e.kind.0), e.id)
                             })
                             .collect();
                         (names, next)

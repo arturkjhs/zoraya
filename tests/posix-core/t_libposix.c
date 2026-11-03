@@ -121,7 +121,11 @@ static void files(void)
 		seen++;
 		if (e->d_type == DT_DIR)
 			dirs++;
-		CHECK(e->d_ino != 0);
+		/* ADR-0014 rule 7: d_ino is the object's id, as st_ino is. */
+		char named[300];
+		struct stat es;
+		snprintf(named, sizeof named, "тека/%s", e->d_name);
+		CHECK(lstat(named, &es) == 0 && es.st_ino == e->d_ino);
 	}
 	CHECK(seen == 4 && dirs == 1);
 	CHECK(closedir(d) == 0);

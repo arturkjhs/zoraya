@@ -88,7 +88,7 @@ The items:
 - **Description:** As the Recommendation lists.
 - **Evidence for:** Drivers 1 to 4; every point has one stated behaviour and a test.
 - **Evidence against:** Several are stated deviations (a fault instead of `EFAULT` on a file read into bad memory,
-  numbered `d_ino`, no `.` and `..`, `O_TRUNC` as a second request) that a later program might meet.
+  no `.` and `..`, `O_TRUNC` as a second request) that a later program might meet.
 - **Cost:** As built.
 - **Precedent:** ADR-0130 did the same for stage 6a's kernel objects.
 
@@ -107,7 +107,7 @@ The items:
 
 **Recommendation (not a decision): Option B**, as follows.
 
-1. **Nine new requests at ordinals 23 to 31, and `stat` at 32** (ADR-0052): `share`, `seek`, `set_flags`,
+1. **Nine new requests at ordinals 23 to 31, `stat` at 32 and `read_directory_ids` at 33** (ADR-0052): `share`, `seek`, `set_flags`,
    `get_flags`, `open_with_mode`, and `read_current`, `write_current`, `read_buffer_current`,
    `write_buffer_current`, which read and write at the description's position and move it inside the request. An
    explicit offset moves nothing, appending or not. No stage 4 request changes. A position past `i64::MAX` is
@@ -121,7 +121,8 @@ The items:
 4. **Created** means the object's id is at or past the volume's next id before the request: ids come in order and are
    never reused (ADR-0014 rule 1). **`O_TRUNC`** is sent as a second request (`set_size` 0) after the owner check, and
    only for an existing non-empty file, so a protected file is never cut and a new or empty one costs nothing more;
-   the open and the truncation are then two steps of the completion order, not one.
+   the open and the truncation are then two steps of the completion order, not one. If the truncation fails, the
+   open is undone: the description is closed, no fd is made, and the truncation's `errno` is returned.
 5. **The record** is `zoraya_abi::posix`'s `ZPB1` (header 64 bytes, then the executable's path, cwd, 8-byte fd
    entries and the entries with their prefixes); the fixed slots are 1000 to 1004 (`BOOTSTRAP`, `BROKER`,
    `PROCESS_JOB`, `SELF`, `REPORT`), of which a spawned child finds `SELF` not at its slot but in the second message,
@@ -145,12 +146,15 @@ The items:
    no stub kind is kept, the functions are written out. The process functions of 6d (`fork`, `exec*`,
    `posix_spawn*`, `wait*`, `kill`, signals, `pselect`) fail with `ENOSYS` until 6d; a FIFO from `mkfifo` or
    `mknodat` is `ENOSYS` until the temporary directory service exists, any other node `EPERM`.
-10. **Bad pointers.** `NULL` where a buffer, path or result is needed is `EFAULT`, checked by the library; a stream
-    transfer gives the kernel the program's pointer, so a bad one is `EFAULT` from the kernel; a file read or write
-    through a bad pointer faults the process (POSIX leaves it undefined), and the service and the kernel go on. A
-    count past `SSIZE_MAX` is `EINVAL`.
-11. **Listings** give `d_ino` numbered from 1 in the order read (never 0), `d_type` from the kind, and no `.` or `..`;
-    `stat` gives the real ids.
+10. **Bad pointers. The rule: a copy `libposix` makes in the process faults on a bad pointer; a copy the kernel makes
+    returns `EFAULT`.** So a file read or write through a bad pointer, whose data the library copies between the
+    program and a message or its buffer, ends the process with a fault (POSIX leaves it undefined), and the service
+    and the kernel go on; a stream transfer hands the program's pointer to the kernel (`writev` to a stream piece by
+    piece), so a bad one is `EFAULT`. `NULL` where a buffer, path or result is needed is `EFAULT`, checked by the
+    library before any copy. A count past `SSIZE_MAX` is `EINVAL`.
+11. **Listings** give each entry's object id as `d_ino`, the id `stat` gives as `st_ino` (ADR-0014 rule 7; the
+    architect's decision), through `read_directory_ids` (ordinal 33), which carries it; `d_type` from the kind; no
+    `.` or `..`.
 12. **`CLOCK_REALTIME` is the monotonic clock** while `fsd` stamps files with it, so `make`'s comparisons agree;
     `UTIME_NOW` uses it too. Every clock id 0 to 7 is that clock.
 13. **`ZORAYA_POSIX_STATS`** in the environment makes the library write one `POSIX-STATS` line of its counters to fd 2
@@ -174,7 +178,7 @@ The items:
 - **Positive.** Every point has one stated behaviour and a test. `open`, `stat` and `access` cost one round trip.
   The library never holds a position.
 - **Negative.** `O_TRUNC` on an existing non-empty file is two requests. A bad pointer to a file read faults instead
-  of `EFAULT`. Listings have no `.`, `..` or real `d_ino`. `posixrun` is a second table builder until the broker.
+  of `EFAULT`. Listings have no `.` or `..`. `posixrun` is a second table builder until the broker.
 - **Follow-up.** 6d replaces `posixrun`'s role with the broker and `libposix`'s `spawn`; `share` is then used at every
   `spawn` and `fork`; a wall clock would change item 12 for both `fsd` and the library together.
 
@@ -193,7 +197,7 @@ The items:
 
 ## Open questions
 
-- Whether a program in scope reads `d_ino`, `.` or `..` from a listing (W1 to W3 will show).
+- Whether a program in scope reads `.` or `..` from a listing (W1 to W3 will show).
 - Whether an `EFAULT` for file data is worth a copy through the kernel on every read and write.
 
 ## Revisit triggers

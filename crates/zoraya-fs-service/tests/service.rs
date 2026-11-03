@@ -2077,3 +2077,43 @@ fn a_durable_write_at_the_position_replies_after_its_commit() {
     );
     assert!(r.flushes() > before, "the durable one did");
 }
+
+/// `read_directory_ids` gives each entry's object id, the one `stat` gives,
+/// pages with the same cookies as `read_directory`, and needs `READ`.
+#[test]
+fn a_listing_with_ids_names_each_object() {
+    let mut r = rig();
+    let root = r.root;
+    let mut want = std::collections::BTreeMap::new();
+    for i in 0..100 {
+        let name = format!("f{i:03}");
+        let f = r.open(root, &name, open_flags::CREATE);
+        let reply = r.call(f, &proto::Stat {}, vec![]);
+        want.insert(name, decode::<proto::StatReply>(&reply, 0).unwrap().1.id);
+    }
+    let mut got = std::collections::BTreeMap::new();
+    let mut cookie = 0;
+    loop {
+        let reply = r.call(root, &proto::ReadDirectoryIds { cookie }, vec![]);
+        let (_, m) = decode::<proto::ReadDirectoryIdsReply<'_>>(&reply, 0).unwrap();
+        assert_eq!(m.status.0, status::OK);
+        let mut next = 0;
+        for e in m.entries.iter() {
+            got.insert(e.name.0.to_string(), e.id);
+            next = e.next;
+        }
+        if next == 0 {
+            break;
+        }
+        cookie = next;
+    }
+    assert_eq!(got, want);
+    let narrow = r.net.channel();
+    let m = proto::Clone {
+        rights: Flags(rights::CLONE),
+    };
+    assert_eq!(r.done(root, &m, vec![narrow]).0, status::OK);
+    let reply = r.call(narrow, &proto::ReadDirectoryIds { cookie: 0 }, vec![]);
+    let (_, m) = decode::<proto::ReadDirectoryIdsReply<'_>>(&reply, 0).unwrap();
+    assert_eq!(m.status.0, status::ACCESS_DENIED);
+}

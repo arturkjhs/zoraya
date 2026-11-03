@@ -1190,7 +1190,7 @@ fn a_reply_that_is_not_ok_is_its_errno_whatever_else_it_carries() {
     r.p.sys.craft_skip = 1;
     assert_eq!(r.p.readlink_at(AT_FDCWD, b"l"), Err(EIO));
     let dir = open(&mut r, "/", o::RDONLY, 0).unwrap();
-    let listing = proto::ReadDirectoryReply {
+    let listing = proto::ReadDirectoryIdsReply {
         status: Below(CORRUPT),
         entries: zoraya_protocol::Seq::Of(&[]),
     };
@@ -1242,4 +1242,90 @@ fn refused_paths_are_remembered_up_to_a_bound() {
         }
         assert_eq!(r.p.remembered(), process::REMEMBERED, "sendable {sendable}");
     }
+}
+
+/// ADR-0014 rule 7: `d_ino` is the object's id, as `st_ino` is: for every
+/// entry, after a rename, and with names deleted and made again (a new
+/// object, a new id).
+#[test]
+fn d_ino_is_st_ino_for_every_entry() {
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"d", 0o755).unwrap();
+    for name in ["a", "b", "Київ", "Plzeň"] {
+        let fd = open(&mut r, &format!("d/{name}"), RW_CREATE, 0o644).unwrap();
+        r.p.close(fd).unwrap();
+    }
+    r.p.mkdir_at(AT_FDCWD, b"d/sub", 0o755).unwrap();
+    let listing = |r: &mut Rig| {
+        let dir = open(r, "d", o::RDONLY, 0).unwrap();
+        let mut out = vec![];
+        while let Some((name, _, ino)) = r.p.read_dir(dir).unwrap() {
+            out.push((name, ino));
+        }
+        r.p.close(dir).unwrap();
+        out.sort();
+        out
+    };
+    let check = |r: &mut Rig| {
+        let names = listing(r);
+        for (name, ino) in &names {
+            let st =
+                r.p.stat_at(
+                    AT_FDCWD,
+                    format!("d/{name}").as_bytes(),
+                    AT_SYMLINK_NOFOLLOW,
+                )
+                .unwrap();
+            assert_eq!(*ino, u64_at(&st, 8), "{name}");
+        }
+        names
+    };
+    let first = check(&mut r);
+    assert_eq!(first.len(), 5);
+    let id_of = |names: &[(String, u64)], n: &str| names.iter().find(|(x, _)| x == n).unwrap().1;
+    r.p.rename(b"d/a", b"d/renamed").unwrap();
+    let second = check(&mut r);
+    assert_eq!(
+        id_of(&second, "renamed"),
+        id_of(&first, "a"),
+        "a rename keeps the id"
+    );
+    r.p.remove(b"d/b").unwrap();
+    let fd = open(&mut r, "d/b", RW_CREATE, 0o644).unwrap();
+    r.p.close(fd).unwrap();
+    let third = check(&mut r);
+    assert_ne!(
+        id_of(&third, "b"),
+        id_of(&first, "b"),
+        "a name made again is a new object"
+    );
+    let ids: std::collections::BTreeSet<u64> = third.iter().map(|(_, i)| *i).collect();
+    assert_eq!(ids.len(), third.len(), "no two entries share an id");
+}
+
+/// An O_TRUNC whose truncation fails undoes the open: no fd, the
+/// description closed, the errno returned. (The fake replaces the reply the
+/// library reads; the service's truncation itself happened.)
+#[test]
+fn a_failed_truncation_undoes_the_open() {
+    use proto::status::STORAGE_FAILED;
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    r.write(fd, b"keep").unwrap();
+    r.p.close(fd).unwrap();
+    r.settle();
+    let (fds, handles) = (r.p.fds.count(), r.handles());
+    let failed = proto::Done {
+        status: Below(STORAGE_FAILED),
+        count: 0,
+    };
+    r.p.sys.craft = Some(Box::new(reply(failed)));
+    r.p.sys.craft_skip = 1;
+    assert_eq!(open(&mut r, "f", o::WRONLY | o::TRUNC, 0), Err(EIO));
+    r.settle();
+    assert_eq!(
+        (r.p.fds.count(), r.handles()),
+        (fds, handles),
+        "nothing left open"
+    );
 }

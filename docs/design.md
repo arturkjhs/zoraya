@@ -647,7 +647,8 @@ Stage 6c (TASK-20), on the accepted [ADR-0100](adr/0100-libposix-construction.md
   `zoraya-proto-file` gains `share` (another connection to the same description, `clone`'s rules), `seek`,
   `set_flags`, `get_flags`, reads and writes at the position (inline and through the buffer) that move it inside the
   request, `open_with_mode` (the POSIX mode of a create, ADR-0014 rule 6, answered with the object's kind, mode, ids and
-  times and whether this open made it) and `stat` (the volume's id, the object's id, exact times), ordinals 23 to 32.
+  times and whether this open made it), `stat` (the volume's id, the object's id, exact times) and a listing with each
+  entry's id (`read_directory_ids`), ordinals 23 to 33.
   No stage 4 request changed.
 - **The bootstrap record (ADR-0107).** `zoraya_abi::posix`: `ZPB1` with the process's facts, `umask`, cwd as an entry
   and a path, each fd's kind and flags, and the namespace entries longest first with their handles in the message;
@@ -822,7 +823,7 @@ or `exit` turns the machine off.
   (the fetch step for `make test-libposix`'s `libc.a`, ADR-0109) and, in a second job, `make ports`.
 - **`libposix` (stage 6c).** Process functions, signals, the terminal, `/tmp` and FIFOs are 6d's and fail with
   `ENOSYS`. A file read or write through a bad pointer faults the process instead of `EFAULT` (streams give
-  `EFAULT`); listings have no `.` or `..` and number `d_ino` from 1; `O_TRUNC` of an existing non-empty file is a
+  `EFAULT`); listings have no `.` or `..` (`d_ino` is the object's id, as `st_ino`); `O_TRUNC` of an existing non-empty file is a
   second request; `CLOCK_REALTIME` is the monotonic clock `fsd` stamps files with; `st_blocks` comes from the size;
   times before 1970 cannot be set (ADR-0180). `posixrun` is the only launcher of C programs until the broker, and only `zosh` names it.
 

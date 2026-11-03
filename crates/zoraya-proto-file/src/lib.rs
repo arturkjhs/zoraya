@@ -371,6 +371,23 @@ protocol! {
         kind: Kind,
     }
 
+    /// `read_directory` with each entry's object id (ADR-0014 rule 7), for
+    /// `d_ino`; the cookie is the same connection's as `read_directory`'s.
+    message ReadDirectoryIds = 33, handles 0 {
+        cookie: u64,
+    }
+    record IdEntry<'a> {
+        next: u64,
+        kind: Kind,
+        /// The object's id, never reused (ADR-0014 rule 1).
+        id: u64,
+        name: Name<'a>,
+    }
+    message ReadDirectoryIdsReply<'a> = 33, handles 0 {
+        status: Code,
+        entries: Seq<'a, IdEntry<'a>, MAX_ENTRIES>,
+    }
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -378,7 +395,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 32] = [
+pub const REQUESTS: [(&str, u32); 33] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -411,6 +428,7 @@ pub const REQUESTS: [(&str, u32); 32] = [
     ("read_buffer_current", 30),
     ("write_buffer_current", 31),
     ("stat", 32),
+    ("read_directory_ids", 33),
 ];
 
 #[cfg(test)]
@@ -534,6 +552,7 @@ mod tests {
         );
         check(GetFlags {}, 0);
         check(Stat {}, 0);
+        check(ReadDirectoryIds { cookie: 9 }, 0);
         check(
             StatReply {
                 status: Below(0),
@@ -741,6 +760,38 @@ mod tests {
         assert_eq!(got, entries);
         exercise(&out[..length], |bytes| {
             if let Ok((_, m)) = decode::<ReadDirectoryReply<'_>>(bytes, 0) {
+                assert!(m.entries.iter().all(|e| Name::is_valid(e.name.0)));
+            }
+        });
+    }
+
+    #[test]
+    fn a_listing_with_ids_round_trips_and_decodes_totally() {
+        let entries = [
+            IdEntry {
+                next: 2,
+                kind: Below(kind::FILE),
+                id: 77,
+                name: Name("Київ"),
+            },
+            IdEntry {
+                next: 0,
+                kind: Below(kind::DIRECTORY),
+                id: u64::MAX,
+                name: Name("Plzeň"),
+            },
+        ];
+        let reply = ReadDirectoryIdsReply {
+            status: Below(0),
+            entries: Seq::Of(&entries),
+        };
+        let mut out = [0; 512];
+        let length = encode(&reply, 1, &mut out).unwrap();
+        let (_, back) = decode::<ReadDirectoryIdsReply<'_>>(&out[..length], 0).unwrap();
+        let got: Vec<_> = back.entries.iter().collect();
+        assert_eq!(got, entries);
+        exercise(&out[..length], |bytes| {
+            if let Ok((_, m)) = decode::<ReadDirectoryIdsReply<'_>>(bytes, 0) {
                 assert!(m.entries.iter().all(|e| Name::is_valid(e.name.0)));
             }
         });

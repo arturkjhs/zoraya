@@ -708,7 +708,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             10 => {
                 let (_, m) = decode::<proto::ReadDirectory>(bytes, n)?;
-                self.read_directory(i, t, m.cookie);
+                self.read_directory(i, t, m.cookie, false);
             }
             11 => {
                 let (_, m) = decode::<proto::Rename<'_>>(bytes, n)?;
@@ -831,6 +831,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             32 => {
                 decode::<proto::Stat>(bytes, n)?;
                 self.stat(i, t);
+            }
+            33 => {
+                let (_, m) = decode::<proto::ReadDirectoryIds>(bytes, n)?;
+                self.read_directory(i, t, m.cookie, true);
             }
             ERROR_ORDINAL..=u32::MAX => {
                 let m = ErrorReply {
@@ -1260,13 +1264,23 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.reply(i, t, &m);
     }
 
-    fn read_directory(&mut self, i: usize, t: u32, cookie: u64) {
+    /// `read_directory`, or with `ids` `read_directory_ids`: one listing,
+    /// one cookie per connection, two reply shapes.
+    fn read_directory(&mut self, i: usize, t: u32, cookie: u64, ids: bool) {
         let fail = |s: u32, this: &mut Self| {
-            let m = proto::ReadDirectoryReply {
-                status: code(s),
-                entries: Seq::Of(&[]),
-            };
-            this.reply(i, t, &m);
+            if ids {
+                let m = proto::ReadDirectoryIdsReply {
+                    status: code(s),
+                    entries: Seq::Of(&[]),
+                };
+                this.reply(i, t, &m);
+            } else {
+                let m = proto::ReadDirectoryReply {
+                    status: code(s),
+                    entries: Seq::Of(&[]),
+                };
+                this.reply(i, t, &m);
+            }
         };
         if !self.has(i, proto::rights::READ) {
             return fail(status::ACCESS_DENIED, self);
@@ -1285,14 +1299,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 _ => return fail(status::INVALID_ARGUMENT, self),
             }
         };
-        let mut found: Vec<(String, WireKind)> = Vec::new();
+        let mut found: Vec<(String, WireKind, u64)> = Vec::new();
         let mut bytes = 0;
         while found.len() < proto::MAX_ENTRIES && bytes < 32 * 1024 {
             match self.volume.readdir(handle, after.as_deref()) {
                 Ok(Some(e)) => {
                     after = Some(e.name.clone());
                     bytes += e.name.len() + 32;
-                    found.push((e.name, wire_kind(e.kind)));
+                    found.push((e.name, wire_kind(e.kind), e.id));
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -1311,19 +1325,37 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         } else {
             0
         };
-        let entries: Vec<proto::Entry<'_>> = found
-            .iter()
-            .map(|(name, kind)| proto::Entry {
-                next,
-                kind: *kind,
-                name: Name(name),
-            })
-            .collect();
-        let m = proto::ReadDirectoryReply {
-            status: code(status::OK),
-            entries: Seq::Of(&entries),
+        let encoded = if ids {
+            let entries: Vec<proto::IdEntry<'_>> = found
+                .iter()
+                .map(|(name, kind, id)| proto::IdEntry {
+                    next,
+                    kind: *kind,
+                    id: *id,
+                    name: Name(name),
+                })
+                .collect();
+            let m = proto::ReadDirectoryIdsReply {
+                status: code(status::OK),
+                entries: Seq::Of(&entries),
+            };
+            encode(&m, t, &mut self.output)
+        } else {
+            let entries: Vec<proto::Entry<'_>> = found
+                .iter()
+                .map(|(name, kind, _)| proto::Entry {
+                    next,
+                    kind: *kind,
+                    name: Name(name),
+                })
+                .collect();
+            let m = proto::ReadDirectoryReply {
+                status: code(status::OK),
+                entries: Seq::Of(&entries),
+            };
+            encode(&m, t, &mut self.output)
         };
-        match encode(&m, t, &mut self.output) {
+        match encoded {
             Ok(size) => {
                 if let Some(c) = self.connections[i].as_mut() {
                     c.position = after.filter(|_| more).map(|name| (next, name));
