@@ -6,6 +6,10 @@
 #
 #   tools/test-summary.sh TARGET...
 #
+# A configuration that cannot run on this host prints "[LABEL] skipped: REASON"
+# (the Makefile's EL2_OR_SKIP). A skip is not a failure, but it is listed on
+# its step's line and again at the end, so that it is never silent.
+#
 # It stops at the first failure, unless KEEP_GOING=1: a step after a failed
 # build fails too, and a QEMU step can take minutes to time out. Exit status:
 # 0 if every target passed, 1 otherwise.
@@ -22,6 +26,7 @@ failed=0
 summary=
 failures=
 skipped=
+skips=
 
 # What a log says about its counts, on one line.
 counts() {
@@ -36,12 +41,14 @@ counts() {
         /\] PASS: [0-9]+ passed/ { configs++ }
         /\] PASS: [0-9]+ steps/ { scripts++ }
         /^crash test: / { sub(/^crash test: /, ""); crash = $0 }
+        /^\[[^]]+\] skipped: / { nskip++ }
         END {
             out = ""
             if (unit_pass + unit_fail > 0) out = out sprintf("%d host tests passed, %d failed", unit_pass, unit_fail)
             if (configs > 0) out = out (out ? "; " : "") sprintf("%d QEMU configurations passed", configs)
             if (scripts > 0) out = out (out ? "; " : "") sprintf("%d shell scripts passed", scripts)
             if (crash != "") out = out (out ? "; " : "") "crash: " crash
+            if (nskip > 0) out = out (out ? "; " : "") sprintf("%d skipped", nskip)
             print out
         }
     ' "$log"
@@ -57,6 +64,11 @@ for target in "$@"; do
     "$make" --no-print-directory "$target" >"$log" 2>&1
     status=$?
     seconds=$(($(date +%s) - start))
+    skip_lines=$(grep -E '^\[[^]]+\] skipped: ' "$log" | sed 's/^/  /')
+    if [ -n "$skip_lines" ]; then
+        skips="$skips
+$skip_lines"
+    fi
     if [ "$status" -eq 0 ]; then
         passed=$((passed + 1))
         line=$(printf '  ok    %-18s %4ss  %s' "$target" "$seconds" "$(counts "$log")")
@@ -80,8 +92,15 @@ echo "make test: $passed of $total passed, $failed failed (full logs in $logs/)$
 if [ -n "$skipped" ]; then
     echo "  not run after the failure:$skipped (KEEP_GOING=1 runs them)"
 fi
+if [ -n "$skips" ] && [ "$failed" -gt 0 ]; then
+    echo "  skipped on this host:$skips"
+fi
 if [ "$failed" -gt 0 ]; then
     echo "failures:$failures"
     exit 1
 fi
-echo "make test: all checks passed"
+if [ -n "$skips" ]; then
+    echo "make test: all checks passed; skipped on this host:$skips"
+else
+    echo "make test: all checks passed"
+fi
