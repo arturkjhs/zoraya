@@ -524,7 +524,7 @@ How the in-QEMU tests run and report:
   in at most two parallel worktrees of `HEAD` (`build/mutants/w<i>`, kept between runs, about 400 MB each), runs only
   the tests each list names, and writes the survivors to `build/mutants/report.md`. `make mutants-host CRATE=name`
   runs cargo-mutants on one host crate, two jobs at a time. Both run under `tools/mutants/watchdog.sh`, which kills a
-  process past a memory limit, and every host test caps its own heap at 512 MiB (`crates/zoraya-test-alloc`), so a
+  process past a memory limit (its physical footprint on macOS, `tools/footprint`), and every host test caps its own heap at 512 MiB (`crates/zoraya-test-alloc`), so a
   mutant that grows without bound fails instead of taking the host (`docs/backlog.md`). The `mutant-triage` and
   `test-runner` subagents (`.claude/agents/`) read and run these; CLAUDE.md says which work goes to them.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
@@ -930,6 +930,7 @@ tools/
   zoraya-ar/              the archiver: GNU ar with a symbol index
   posix-surface-check/    libc.a against the tier list, the svc scan, the hiding of other names
   zoraya-elf-check/       zoraya-elf over programs on the host (INV-0109-1)
+  footprint/              a process's memory for the watchdog (macOS's physical footprint), and memhog
 ports/                    stage 6b: sources.lock, the build of the sysroot and the ports, patches (ports/README.md)
 fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the workspace)
 build/                    kernel ELFs, disk images, logs/ and mutants/; ports/, sysroot/, rootfs-posix/ (not committed)
