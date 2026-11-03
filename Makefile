@@ -267,11 +267,13 @@ mutants:
 # cargo-mutants on one host crate: mutants made from the code's syntax, as
 # opposed to the hand-written lists above. Missed ones in
 # build/mutants/cargo/mutants.out/missed.txt. Not part of make test.
+# MUTANTS_HOST_ARGS adds cargo-mutants options, such as --in-diff FILE or
+# --exclude src/ffi.rs (code the host does not compile).
 CRATE ?= zoraya-virtio
 mutants-host:
 	@command -v cargo-mutants >/dev/null || { echo "cargo-mutants is not installed: cargo install cargo-mutants --version 27.1.0 --locked (docs/dependencies.md)"; exit 2; }
 	@# cargo-mutants exits 2 when a mutant was missed and 3 on a timeout: results, not failures.
-	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 --timeout 300 -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
+	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 --timeout 300 $(MUTANTS_HOST_ARGS) -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
 	  rc=$$?; tail -1 build/mutants/cargo.log; \
 	  case $$rc in 0|2|3) echo "missed: build/mutants/cargo/mutants.out/missed.txt";; \
 	  *) echo "cargo-mutants failed ($$rc), see build/mutants/cargo.log"; exit $$rc;; esac

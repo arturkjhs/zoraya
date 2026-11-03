@@ -158,7 +158,7 @@ fn options() -> Options {
             .push(("/".into(), "/".into(), false, EntryKind::Directory));
     }
     // Longest prefix first, as the record requires.
-    o.mounts.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    o.mounts.sort_by_key(|m| core::cmp::Reverse(m.0.len()));
     o
 }
 
@@ -229,7 +229,7 @@ fn main() -> i32 {
         })
         .collect();
     entries.push(("/dev/null".into(), EntryKind::Null, None));
-    entries.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    entries.sort_by_key(|e| core::cmp::Reverse(e.0.len()));
     let prefixes: Vec<&str> = entries.iter().map(|e| e.0.as_str()).collect();
     let (cwd_entry, cwd) =
         place(&prefixes, &o.cwd).unwrap_or_else(|| fail("-C: outside the table"));
