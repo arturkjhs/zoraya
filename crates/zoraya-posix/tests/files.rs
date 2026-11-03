@@ -1049,7 +1049,36 @@ fn share_gives_a_connection_to_the_same_description() {
         (proto::status::OK, &b"ared"[..]),
         "one position"
     );
-    assert_eq!(r.p.lseek(fd, 0, 1), Ok(6));
+    // It may write and clone too, as the fd's own connection may.
+    let w = proto::WriteCurrent {
+        flags: zoraya_protocol::Flags(0),
+        data: Data(b"!"),
+    };
+    let n = encode(&w, 78, &mut out).unwrap();
+    r.p.sys.channel_write(h, &out[..n], &[]).unwrap();
+    r.p.sys
+        .wait(h, zoraya_posix::sys::signals::READABLE)
+        .unwrap();
+    let n = r.p.sys.channel_read(h, &mut back, &mut handles).unwrap();
+    let (_, d) = zoraya_protocol::decode::<proto::Done>(&back[..n], 0).unwrap();
+    assert_eq!(d.status.0, proto::status::OK, "write");
+    let (_theirs, mine) = r.p.sys.channel_create().unwrap();
+    let c = proto::Clone {
+        rights: zoraya_protocol::Flags(proto::rights::READ),
+    };
+    let n = encode(&c, 79, &mut out).unwrap();
+    r.p.sys.channel_write(h, &out[..n], &[mine]).unwrap();
+    r.p.sys
+        .wait(h, zoraya_posix::sys::signals::READABLE)
+        .unwrap();
+    let n = r.p.sys.channel_read(h, &mut back, &mut handles).unwrap();
+    let (_, d) = zoraya_protocol::decode::<proto::Done>(&back[..n], 0).unwrap();
+    assert_eq!(d.status.0, proto::status::OK, "clone");
+    assert_eq!(
+        r.p.lseek(fd, 0, 1),
+        Ok(7),
+        "the write through it moved the fd's position"
+    );
 }
 
 #[test]
@@ -1172,6 +1201,13 @@ fn a_reply_that_is_not_ok_is_its_errno_whatever_else_it_carries() {
     };
     r.p.sys.craft = Some(Box::new(reply(token)));
     assert_eq!(r.p.rename(b"f", b"g"), Err(EACCES));
+    with_tmp(&mut r);
+    let t = open(&mut r, "/tmp", o::TMPFILE | o::RDWR, 0o600).unwrap();
+    let token = proto::TokenReply {
+        status: Below(ACCESS_DENIED),
+    };
+    r.p.sys.craft = Some(Box::new(reply(token)));
+    assert_eq!(r.p.publish(t, AT_FDCWD, b"/tmp/p"), Err(EACCES));
     // Ordinal 99, a status word ACCESS_DENIED: judged by the word.
     r.p.sys.craft = Some(Box::new(|t| raw_reply(99, t, &ACCESS_DENIED.to_le_bytes())));
     assert_eq!(r.p.fstat(fd), Err(EACCES));
