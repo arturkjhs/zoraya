@@ -198,6 +198,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-posix"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-fs",
+ "zoraya-fs-service",
+ "zoraya-fs-testkit",
+ "zoraya-heap",
+ "zoraya-proto-file",
+ "zoraya-protocol",
+ "zoraya-rt",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-block"
 version = "0.1.0"
 dependencies = [
