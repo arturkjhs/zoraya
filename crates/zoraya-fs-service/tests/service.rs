@@ -2060,3 +2060,20 @@ fn stat_names_the_object_and_its_volume() {
     let a = stat(&mut r, f);
     assert_eq!((a.modified_seconds, a.modified_nanos), (86_400, 7));
 }
+
+/// A durable write at the position replies after its commit, as `write`'s
+/// does (ADR-0010 rule 4).
+#[test]
+fn a_durable_write_at_the_position_replies_after_its_commit() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    let before = r.flushes();
+    assert_eq!(r.write_current(f, 0, b"x"), (status::OK, 1));
+    assert_eq!(r.flushes(), before, "a plain write commits nothing");
+    assert_eq!(
+        r.write_current(f, write_flags::DURABLE, b"y"),
+        (status::OK, 1)
+    );
+    assert!(r.flushes() > before, "the durable one did");
+}

@@ -371,13 +371,6 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         Some(self.connections.get(connection)?.as_ref()?.record)
     }
 
-    /// The connection a client's end is, for tests.
-    pub fn connection_of(&self, end: T::End) -> Option<usize> {
-        self.connections
-            .iter()
-            .position(|c| c.as_ref().is_some_and(|c| c.end == end))
-    }
-
     /// Open descriptions, for tests: records with a connection.
     pub fn descriptions(&self) -> usize {
         self.records.iter().flatten().count()
