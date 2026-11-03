@@ -678,12 +678,18 @@ fn the_index_must_point_at_the_defining_member() {
     entries[i].0 = read_at;
     assert_eq!(
         surface::check_index_offsets(&entries, &at),
-        ["open points at read.o, which does not define it"]
+        [
+            "open points at read.o, which does not define it".to_string(),
+            format!("open is indexed 0 times for the member at {open_at}, defined 1 times"),
+        ]
     );
     entries[i].0 = 3;
     assert_eq!(
         surface::check_index_offsets(&entries, &at),
-        ["open points at offset 3, which is no member's header"]
+        [
+            "open points at offset 3, which is no member's header".to_string(),
+            format!("open is indexed 0 times for the member at {open_at}, defined 1 times"),
+        ]
     );
     entries[i].0 = open_at;
     entries.push((open_at, "open".into()));
@@ -691,6 +697,28 @@ fn the_index_must_point_at_the_defining_member() {
         surface::check_index_offsets(&entries, &at),
         [format!(
             "open is indexed 2 times for the member at {open_at}, defined 1 times"
+        )]
+    );
+}
+
+#[test]
+fn every_member_defining_an_indexed_name_needs_its_entry() {
+    let mut m = good();
+    m.push(("weak_open.o", object(&[("open", STB_WEAK, TEXT)], &[])));
+    let bytes = archive(&m);
+    let members = ar::members(&bytes).unwrap();
+    let at: Vec<(usize, String, Object<'_>)> = members
+        .iter()
+        .map(|m| (m.offset, m.name.clone(), elf::read(m.data).unwrap()))
+        .collect();
+    let mut entries = ar::index_entries(&bytes).unwrap().unwrap();
+    assert!(surface::check_index_offsets(&entries, &at).is_empty());
+    let weak_at = at.iter().find(|(_, n, _)| n == "weak_open.o").unwrap().0;
+    entries.retain(|(o, n)| !(n == "open" && *o == weak_at));
+    assert_eq!(
+        surface::check_index_offsets(&entries, &at),
+        [format!(
+            "open is indexed 0 times for the member at {weak_at}, defined 1 times"
         )]
     );
 }

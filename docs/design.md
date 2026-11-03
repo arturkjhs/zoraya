@@ -704,7 +704,7 @@ or `exit` turns the machine off.
 ```
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
-LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/, ports/patches/ and ports/musl/zoraya/ (their READMEs)
+LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md), ports/patches/ and ports/musl/zoraya/ (ports/README.md)
 Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test-gui, test, adr-check,
                           fetch-ports, ports, check-ports
 rust-toolchain.toml       pinned stable toolchain and target

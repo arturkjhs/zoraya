@@ -46,7 +46,7 @@ for a in "$@"; do
         exit 1;;
     esac
     case "$a" in
-    -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*)
+    -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*|*,-D,__linux*|*,-D,__gnu_linux*|*,-D,linux*)
         echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2
         exit 1;;
     --target=*|-target=*|-Xclang|-Xpreprocessor|--define-macro*|@*)

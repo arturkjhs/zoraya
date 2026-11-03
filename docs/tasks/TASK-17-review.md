@@ -4,7 +4,7 @@ Two independent reviews by subagents that did not write the code (on the main mo
 read-only: the first of `9b58034..e48b761`, the second, after its fixes, of `9b58034..47aa000`. The reviewers ran only
 already-built tools on copies, and crafted inputs (finding B4). Then mutation testing of the three new tools,
 sorted by the `mutant-triage` subagent. Fixes are in `10e6a04` (first review), `50bccb9` and `bd8c6ea` (second
-review), and `1faad3a`, `f4110f8` and the commit after this file (mutation holes). The host ran out of memory once
+review), and `1faad3a`, `f4110f8` and `b6d6313` (mutation holes); the check of the lines changed after the second review is the last section. The host ran out of memory once
 during the task (a parallel mutation run of 6a); since then the new tools run under a capped allocator (`47aa000`)
 and builds are limited to four jobs.
 
@@ -69,12 +69,12 @@ the tools' capped allocator (1 GiB). The `mutant-triage` subagent sorted the fir
 
 | Crate | First run | Holes, now tested | Last run | Left, all equivalent |
 |---|---|---|---|---|
-| `posix-surface-check` | 229 mutants: 45 missed, 182 caught, 2 unviable | 41: the index of a short archive, a symbol's type, `rename`'s magic and string-table bounds and alignment, CSV quotes, `parse_list`, `Report::lines`, and the command line (writing the list, a stale list, `--allow-svc`, misuse, the summary's count) | 264 (after the reviews' additions): 1 missed, 261 caught, 2 unviable | `rename.rs:44` (the guard `end <= elf.len()` made `true`): the next read refuses the same header |
+| `posix-surface-check` | 229 mutants: 45 missed, 182 caught, 2 unviable | 41: the index of a short archive, a symbol's type, `rename`'s magic and string-table bounds and alignment, CSV quotes, `parse_list`, `Report::lines`, and the command line (writing the list, a stale list, `--allow-svc`, misuse, the summary's count) | 264 (after the reviews' additions): 3 missed, 259 caught, 2 unviable; then `main.rs` alone after the new test: 27 mutants, 27 caught | `rename.rs:44` (the guard `end <= elf.len()` made `true`): the next read refuses the same header |
 | `zoraya-ar` | 174: 38 missed, 134 caught, 2 unviable | 37: the long-name boundary, non-relocatable members, a bad string-table link, error messages, and every operation of the command line with its errors and `ranlib` | 179: 1 missed, 176 caught, 2 unviable | `main.rs:149` (`\|\|` to `&&` in the refusal of `.` and `..`): writing either name fails anyway, as it is a directory |
 | `zoraya-elf-check` | 22: 9 missed, 12 caught, 1 unviable | 9: the range's upper end, the refusal messages, and the command line (a refused, unreadable or missing file, no file, a dangling link) | 28: 0 missed, 27 caught, 1 unviable | none |
 
-The last run of `posix-surface-check` left three; the two in `main.rs`'s count of exports were holes, killed by
-`the_summary_counts_defined_non_internal_names_only` (a run of `main.rs` alone: 0 missed).
+The last full run of `posix-surface-check` left three; the two in `main.rs`'s count of exports (line 87) were holes,
+killed by `the_summary_counts_defined_non_internal_names_only`, as the run of `main.rs` alone shows.
 
 ## Open
 
@@ -82,3 +82,22 @@ The last run of `posix-surface-check` left three; the two in `main.rs`'s count o
   completion of `make ports` there are untested; the risk "toybox without `__linux__`" has no outcome yet. Linux CI
   has GNU sed but has not run.
 - `USER_LOW` is copied in `zoraya-elf-check` (A11).
+
+## Check of the changed lines
+
+One check, by a third subagent that wrote none of it, of `git diff 47aa000..b6d6313` (the fixes after the second
+review): no errors; nine warnings and notes, all fixed in the commit after `b6d6313`.
+
+| Id | Severity | Finding | Disposition |
+|---|---|---|---|
+| C1 | warning | The index-offset check said nothing when a second member defining a name had no entry, if the name was indexed at another member (98 names of `libc.a` have such weak twins; a crafted copy without one entry passed). | Fixed and tested; the crafted copy now fails. |
+| C2 | warning | `check-excluded` matched clang's notes ("expanded from macro `__zoraya_sys_...`"), so a file failing inside a routed call would pass. | It now matches the errors themselves (undeclared function or identifier). |
+| C3 | warning | `-Wp,-D,__linux__` (separate fields) was not refused. | Refused. |
+| C4 | warning | The table's last run of `posix-surface-check` was not one command's output. | Corrected: 3 missed in the full run, then the run of `main.rs` alone. |
+| C5 | note | This file named a commit that did not exist. | Corrected. |
+| C6 | warning | Statuses began `checked: make check-ports`, a target that has not passed on the M4. | They now begin "step by step on the M4". |
+| C7 | note | Not every tcc file carries the LGPL notice (`arm64-gen.c` is permissive). | `ports/README.md` and `dependencies.md` corrected. |
+| C8 | note | design.md pointed to a README that `ports/musl/zoraya/` lacks. | Corrected. |
+| C9 | note | `check-broken-archives.sh`'s header listed four cases. | Corrected. |
+
+The task allows one more check if this one found errors; it found none, so none was run.

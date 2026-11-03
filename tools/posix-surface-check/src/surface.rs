@@ -350,9 +350,11 @@ pub fn check_index_offsets(
             Some(_) => *seen.entry((name.as_str(), *offset)).or_default() += 1,
         }
     }
+    let indexed: BTreeSet<&str> = entries.iter().map(|(_, n)| n.as_str()).collect();
     for ((name, offset), n) in &wanted {
         let got = seen.get(&(*name, *offset)).copied().unwrap_or(0);
-        if got != *n && got != 0 {
+        // A name indexed nowhere is the names-only check's report.
+        if got != *n && indexed.contains(name) {
             out.push(format!(
                 "{name} is indexed {got} times for the member at {offset}, defined {n} times"
             ));

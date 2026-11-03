@@ -1,7 +1,7 @@
 #!/bin/sh
 # The export check must fail on broken copies of the real libc.a (TASK-17):
-# an extra export, a missing tier name, a stray svc, and a name of the
-# exclusion table. Each case is a copy of libc.a with one change.
+# an extra export, a missing tier name, a stray svc, a name of the exclusion
+# table, and a name defined strongly twice. Each case is a copy of libc.a with one change.
 #
 # Usage: check-broken-archives.sh CHECK AR ZCC LIST LIBC WORKDIR
 set -eu
