@@ -75,6 +75,9 @@ No change for target 1. For target 3, every client waits on one thread during an
 
 Everything else is left to stage 6, undecided: `libposix` and its mapping of POSIX calls; how a `fork` child, which has no channels (ADR-0003 rule 3, ADR-0050), reconnects, for which a kernel object such as a handoff was sketched and is not introduced here; `pselect` over file handles (ADR-0006 rule 1); `close` returning `EIO` through `status` (ADR-0010); and how far 896 connections go for a POSIX toolchain.
 
+*Note, 2026-11-03 (the architect's decision on ADR-0153, recorded by an agent):* the protocol gains `narrow(name, rights, server_end)` under ADR-0052: a new connection to a directory through which requests may name only that one component, with rights no wider than the caller's, enforced as any connection's rights are. "Create or replace" through it is
+creating the name, or opening the file already there for writing with truncation; without `remove` it cannot delete. The shell gives it for operands that create, replace, remove or rename one name (ADR-0153 rule 2).
+
 ## Consequences
 - **Positive.** ADR-0010's linear order holds with no locks. Files pass as handles. A dead client leaves nothing.
 - **Negative.** Everything waits on one thread during a commit. A channel per open costs kernel memory, and one of the service's 1024 handles. Rights are enforced by the service, so they are only as strong as it is, within the volume.

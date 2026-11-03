@@ -218,6 +218,8 @@ several `ttyd` instances with one backend each. Threads and networking: no effec
 Non-canonical mode and `pselect` readiness on a tty (`poll_readable` is specified, unused); `TOSTOP`; `SIGTTOU`;
 a pseudo-terminal pair for programs that run others under a terminal they create (nothing in T1 or T2 does).
 
+*Note, 2026-11-03 (the architect's decision on ADR-0153, recorded by an agent):* item 9's "`init` runs one or the other" no longer holds for the native shell: `zosh` and POSIX programs share the terminal, which `zosh` owns, and POSIX programs started from it get streams, not a tty connection. To be revisited before the first interactive POSIX program is wanted from `zosh`.
+
 ## Consequences
 
 - **Positive.** Ctrl-C reaches the job as one `job_signal`, with no forwarding and no kernel policy. Output is one

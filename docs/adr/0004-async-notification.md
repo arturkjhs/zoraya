@@ -110,6 +110,8 @@ CP-10 says the native ABI delivers events as messages or wait results, never by 
 
 **Principles this recommendation strains.** CP-10 is kept for threads but the kernel holds a disposition table and a request queue per process, which is signal-shaped state. It is justified by driver 5 (default actions without cooperation) and kept to four kinds, a fixed number of custom slots and three dispositions. CP-07's inescapability (X-12) is strained by process groups as sub-jobs: a POSIX `setpgid` that would move a process between shared jobs is refused by the broker. The data shows two uses of `setpgid`: at creation (dash's `forkparent`/`forkchild`) and by the interactive shell on itself in `setjobctl` (`task-02/callsite-analysis.md#feature-4-tty-and-job-control`); both are satisfied by the rule above.
 
+*Note, 2026-11-03 (the architect's decision on ADR-0158, recorded by an agent):* for the sessions of the native shell, `zosh` is the terminal service of rule 8: it reads the interrupt and suspend characters itself and calls `job_signal` and `job_suspend` on the foreground job (ADR-0158 rule 3). The terminal still names no process.
+
 ## Consequences
 
 - **Positive.** No async-signal-safety rules anywhere in the native stack. Child exit, interrupt and termination are ordinary port events, so make's 27 restructure sites (about 45 lines, mostly masking) disappear in a native port (M7 estimate). Group delivery closes the forwarding window the data found. Exit reasons are typed.

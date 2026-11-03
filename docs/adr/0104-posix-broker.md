@@ -262,6 +262,8 @@ multi-threaded process changes nothing here. Networking: no effect.
 `setsid` and a session that outlives its terminal (DM-070's "ritual"); `kill` across sessions; a kernel query that
 ties a process handle to its job; restart of a dead broker (MINIX 3's unsolved case).
 
+*Note, 2026-11-03 (the architect's decision on ADR-0153, recorded by an agent):* the broker gains a mode with no first shell, in which `init` gives the native shell a client connection with no pid and a connection to the temporary service's root; and `spawn_prepare` gains a fourth group form, `Group(job)`, a `posix` job from the caller's tree in which the broker creates the process job, so POSIX elements of a `zosh` command line stay in `zosh`'s job tree. `zosh` reaps its pids as their parent (ADR-0153 rule 10).
+
 ## Consequences
 
 - **Positive.** `exec` keeps its pid with no shim process and no handle swap in the parent. One `job_signal` per
