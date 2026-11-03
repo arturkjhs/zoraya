@@ -569,6 +569,60 @@ fn every_guarded_request_needs_each_of_its_rights() {
             };
             r.done(c, &m, vec![end]).0
         }),
+        ("share", false, CLONE | READ, |r, c| {
+            let end = r.net.channel();
+            let m = proto::Share {
+                rights: Flags(READ),
+            };
+            r.done(c, &m, vec![end]).0
+        }),
+        ("open with mode", true, READ, |r, c| {
+            r.try_open_mode(c, "f", 0, READ, 0, 0o600).0
+        }),
+        ("open with mode, create", true, CREATE, |r, c| {
+            r.try_open_mode(c, "new", open_flags::CREATE, 0, 0, 0o600).0
+        }),
+        ("open with mode, truncate", true, WRITE, |r, c| {
+            r.try_open_mode(c, "f", open_flags::TRUNCATE, 0, 0, 0o600).0
+        }),
+        ("read current", false, READ, |r, c| r.read_current(c, 1).0),
+        ("write current", false, WRITE, |r, c| {
+            r.write_current(c, 0, b"x").0
+        }),
+        ("durable write current", false, WRITE | SYNC, |r, c| {
+            r.write_current(c, write_flags::DURABLE, b"x").0
+        }),
+        ("read buffer current", false, READ, |r, c| {
+            attach_page(r, c);
+            let m = proto::ReadBufferCurrent {
+                buffer_offset: 0,
+                length: 16,
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        ("write buffer current", false, WRITE, |r, c| {
+            attach_page(r, c);
+            let m = proto::WriteBufferCurrent {
+                buffer_offset: 0,
+                length: 16,
+                flags: Flags(0),
+            };
+            r.done(c, &m, vec![]).0
+        }),
+        (
+            "durable write buffer current",
+            false,
+            WRITE | SYNC,
+            |r, c| {
+                attach_page(r, c);
+                let m = proto::WriteBufferCurrent {
+                    buffer_offset: 0,
+                    length: 16,
+                    flags: Flags(write_flags::DURABLE),
+                };
+                r.done(c, &m, vec![]).0
+            },
+        ),
         ("read", false, READ, |r, c| r.read_text(c, 0, 1).0),
         ("write", false, WRITE, |r, c| r.write_text(c, 0, 0, b"x").0),
         ("durable write", false, WRITE | SYNC, |r, c| {
@@ -731,6 +785,391 @@ fn every_guarded_request_needs_each_of_its_rights() {
     }
     let (s, _) = r.try_open(narrow, "f", open_flags::CREATE, READ);
     assert_eq!(s, denied, "create through a connection without it");
+}
+
+impl Rig {
+    #[allow(clippy::too_many_arguments)] // Reason: one per field of the message.
+    fn try_open_mode(
+        &mut self,
+        dir: End,
+        path: &str,
+        flags: u32,
+        wanted: u32,
+        description: u32,
+        mode: u32,
+    ) -> (u32, End) {
+        let end = self.net.channel();
+        let m = proto::OpenWithMode {
+            flags: Flags(flags),
+            rights: Flags(wanted),
+            description: Flags(description),
+            mode,
+            path: Path(path),
+        };
+        let reply = self.call(dir, &m, vec![end]);
+        let (_, r) = decode::<proto::OpenReply<'_>>(&reply, 0).unwrap();
+        (r.status.0, end)
+    }
+
+    fn share(&mut self, end: End, wanted: u32) -> (u32, End) {
+        let new = self.net.channel();
+        let m = proto::Share {
+            rights: Flags(wanted),
+        };
+        (self.done(end, &m, vec![new]).0, new)
+    }
+
+    fn read_current(&mut self, end: End, length: u32) -> (u32, Vec<u8>) {
+        let reply = self.call(end, &proto::ReadCurrent { length }, vec![]);
+        let (_, r) = decode::<proto::ReadReply<'_>>(&reply, 0).unwrap();
+        (r.status.0, r.data.0.to_vec())
+    }
+
+    fn write_current(&mut self, end: End, flags: u32, text: &[u8]) -> (u32, u64) {
+        let m = proto::WriteCurrent {
+            flags: Flags(flags),
+            data: Data(text),
+        };
+        self.done(end, &m, vec![])
+    }
+
+    fn seek(&mut self, end: End, whence: u32, offset: i64) -> (u32, u64) {
+        let m = proto::Seek {
+            whence: Below(whence),
+            offset: offset as u64,
+        };
+        self.done(end, &m, vec![])
+    }
+
+    fn mode_of(&mut self, end: End) -> u32 {
+        let reply = self.call(end, &proto::GetAttributes {}, vec![]);
+        decode::<proto::Attributes>(&reply, 0).unwrap().1.mode
+    }
+}
+
+/// INV-0103-5 with INV-0055-3: `share` gives exactly the rights asked, and
+/// never one its connection lacked, for every right a connection can hold.
+#[test]
+fn share_never_yields_a_right_its_connection_lacked() {
+    use rights::*;
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    for held in 0..=ANY {
+        let (s, narrow) = {
+            let end = r.net.channel();
+            let m = proto::Clone {
+                rights: Flags(held),
+            };
+            (r.done(f, &m, vec![end]).0, end)
+        };
+        assert_eq!(s, status::OK);
+        for wanted in [0, READ, WRITE, READ | WRITE | CLONE, ANY, held] {
+            let (s, shared) = r.share(narrow, wanted);
+            let allowed = held & CLONE != 0 && wanted & !held == 0;
+            if !allowed {
+                assert_eq!(
+                    s,
+                    status::ACCESS_DENIED,
+                    "held {held:#x} wanted {wanted:#x}"
+                );
+                continue;
+            }
+            assert_eq!(s, status::OK, "held {held:#x} wanted {wanted:#x}");
+            // The new connection has what it asked and nothing more.
+            let read = r.read_text(shared, 0, 1).0;
+            assert_eq!(read == status::ACCESS_DENIED, wanted & READ == 0);
+            let wrote = r.write_current(shared, 0, b"").0;
+            assert_eq!(wrote == status::ACCESS_DENIED, wanted & WRITE == 0);
+            let again = r.share(shared, 0).0;
+            assert_eq!(again == status::ACCESS_DENIED, wanted & CLONE == 0);
+            r.net.0.borrow_mut().closed.insert(shared);
+        }
+        r.net.0.borrow_mut().closed.insert(narrow);
+        r.run();
+    }
+}
+
+/// INV-0103-1: connections of one description see one position and one
+/// append flag; `clone` and a second `open` make descriptions of their own.
+#[test]
+fn shared_connections_see_one_position() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    let (s, g) = r.share(f, ANY);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.write_current(f, 0, b"abc"), (status::OK, 3));
+    assert_eq!(r.write_current(g, 0, b"def"), (status::OK, 3));
+    assert_eq!(r.read_text(f, 0, 100).1, b"abcdef");
+    assert_eq!(r.seek(g, proto::whence::CURRENT, 0), (status::OK, 6));
+    assert_eq!(r.seek(f, proto::whence::START, 1), (status::OK, 1));
+    assert_eq!(r.read_current(g, 2), (status::OK, b"bc".to_vec()));
+    assert_eq!(r.read_current(f, 100), (status::OK, b"def".to_vec()));
+    assert_eq!(r.read_current(g, 100), (status::OK, vec![]), "at the end");
+    // A clone is a description of its own, with its own position.
+    let clone = {
+        let end = r.net.channel();
+        let m = proto::Clone { rights: Flags(ANY) };
+        assert_eq!(r.done(f, &m, vec![end]).0, status::OK);
+        end
+    };
+    assert_eq!(r.seek(clone, proto::whence::CURRENT, 0), (status::OK, 0));
+    assert_eq!(r.read_current(clone, 1), (status::OK, b"a".to_vec()));
+    assert_eq!(r.seek(f, proto::whence::CURRENT, 0), (status::OK, 6));
+    // The append flag is the description's, for both connections.
+    let m = proto::SetFlags {
+        flags: Flags(proto::description_flags::APPEND),
+    };
+    assert_eq!(r.done(g, &m, vec![]).0, status::OK);
+    assert_eq!(r.seek(f, proto::whence::START, 0).0, status::OK);
+    assert_eq!(r.write_current(f, 0, b"!"), (status::OK, 1));
+    assert_eq!(r.read_text(f, 0, 100).1, b"abcdef!");
+    assert_eq!(r.seek(g, proto::whence::CURRENT, 0), (status::OK, 7));
+    let flags = |r: &mut Rig, end| r.done(end, &proto::GetFlags {}, vec![]).1;
+    assert_eq!(
+        flags(&mut r, f),
+        u64::from(proto::description_flags::APPEND)
+    );
+    assert_eq!(flags(&mut r, clone), 0, "the clone's description");
+    // An explicit offset moves nothing, appending or not.
+    assert_eq!(r.write_text(f, 0, 0, b"A").0, status::OK);
+    assert_eq!(r.seek(g, proto::whence::CURRENT, 0), (status::OK, 7));
+}
+
+/// INV-0103-1's model: random requests at the position over three
+/// connections of one description and one of another, against a model of
+/// both positions and the file; then the description ends with its last
+/// connection, whichever order they close in.
+#[test]
+fn interleaved_requests_at_the_position_lose_no_update() {
+    for seed in 1..=40u64 {
+        let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut next = |n: u64| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng % n
+        };
+        let mut r = rig();
+        let root = r.root;
+        let first = r.open(root, "f", open_flags::CREATE);
+        let mut ends = vec![first];
+        for _ in 0..2 {
+            let (s, end) = r.share(first, ANY);
+            assert_eq!(s, status::OK);
+            ends.push(end);
+        }
+        let other = r.open(root, "f", 0);
+        let descriptions = r.service.descriptions();
+        let mut file: Vec<u8> = Vec::new();
+        let mut shared = 0u64;
+        let mut own = 0u64;
+        let mut append = false;
+        for step in 0..120 {
+            let which = next(4) as usize;
+            let (end, position) = if which == 3 {
+                (other, &mut own)
+            } else {
+                (ends[which], &mut shared)
+            };
+            match next(5) {
+                0 | 1 => {
+                    let n = 1 + next(5) as usize;
+                    let data: Vec<u8> = (0..n).map(|k| (step * 7 + k) as u8).collect();
+                    let at = if append && which != 3 {
+                        file.len()
+                    } else {
+                        *position as usize
+                    };
+                    assert_eq!(r.write_current(end, 0, &data), (status::OK, n as u64));
+                    if file.len() < at + n {
+                        file.resize(at + n, 0);
+                    }
+                    file[at..at + n].copy_from_slice(&data);
+                    *position = (at + n) as u64;
+                }
+                2 => {
+                    let n = 1 + next(6) as u32;
+                    let (s, got) = r.read_current(end, n);
+                    assert_eq!(s, status::OK);
+                    let at = (*position as usize).min(file.len());
+                    let want = &file[at..(at + n as usize).min(file.len())];
+                    assert_eq!(got, want, "seed {seed} step {step}");
+                    *position += got.len() as u64;
+                }
+                3 => {
+                    let to = next(file.len() as u64 + 2);
+                    assert_eq!(
+                        r.seek(end, proto::whence::START, to as i64),
+                        (status::OK, to)
+                    );
+                    *position = to;
+                }
+                _ if which != 3 => {
+                    append = !append;
+                    let flags = if append {
+                        proto::description_flags::APPEND
+                    } else {
+                        0
+                    };
+                    let m = proto::SetFlags {
+                        flags: Flags(flags),
+                    };
+                    assert_eq!(r.done(end, &m, vec![]).0, status::OK);
+                }
+                _ => {
+                    let (s, at) = r.seek(end, proto::whence::END, 0);
+                    assert_eq!((s, at), (status::OK, file.len() as u64));
+                    *position = at;
+                }
+            }
+            for &end in &ends {
+                assert_eq!(r.seek(end, proto::whence::CURRENT, 0).1, shared);
+            }
+        }
+        assert_eq!(r.read_text(other, 0, 4096).1, file);
+        // Closes in a seeded order: the description lives while one remains.
+        let mut order = ends.clone();
+        for k in (1..order.len()).rev() {
+            order.swap(k, next(k as u64 + 1) as usize);
+        }
+        for (k, end) in order.iter().enumerate() {
+            r.net.0.borrow_mut().closed.insert(*end);
+            r.run();
+            let left = order.len() - k - 1;
+            let expected = if left == 0 {
+                descriptions - 1
+            } else {
+                descriptions
+            };
+            assert_eq!(r.service.descriptions(), expected, "seed {seed}");
+            if let Some(&live) = order.get(k + 1) {
+                assert_eq!(r.seek(live, proto::whence::CURRENT, 0).1, shared);
+            }
+        }
+    }
+}
+
+/// `seek` from each origin, and a seek to a place no file has is refused
+/// and moves nothing.
+#[test]
+fn seek_moves_the_position_or_nothing() {
+    use proto::whence::*;
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    assert_eq!(r.write_current(f, 0, b"0123456789"), (status::OK, 10));
+    assert_eq!(r.seek(f, START, 3), (status::OK, 3));
+    assert_eq!(r.seek(f, CURRENT, 2), (status::OK, 5));
+    assert_eq!(r.seek(f, CURRENT, -5), (status::OK, 0));
+    assert_eq!(r.seek(f, END, -1), (status::OK, 9));
+    assert_eq!(r.seek(f, END, 5), (status::OK, 15), "past the end");
+    let bad = status::INVALID_ARGUMENT;
+    assert_eq!(r.seek(f, CURRENT, -16).0, bad);
+    assert_eq!(r.seek(f, START, -1).0, bad);
+    assert_eq!(r.seek(f, END, i64::MAX).0, bad);
+    assert_eq!(r.seek(f, CURRENT, i64::MIN).0, bad);
+    assert_eq!(r.seek(f, START, i64::MAX), (status::OK, i64::MAX as u64));
+    assert_eq!(r.seek(f, CURRENT, 1).0, bad, "one past the largest");
+    assert_eq!(
+        r.write_current(f, 0, b"x").0,
+        bad,
+        "no write past the largest"
+    );
+    assert_eq!(r.seek(f, CURRENT, 0), (status::OK, i64::MAX as u64));
+    assert_eq!(r.seek(f, START, 15), (status::OK, 15));
+    assert_eq!(r.write_current(f, 0, b"x"), (status::OK, 1));
+    assert_eq!(r.read_text(f, 9, 100).1, b"9\0\0\0\0\0x");
+}
+
+/// ADR-0014 rule 6 through the protocol: the mode of a create is the one
+/// asked, an existing file keeps its own, and the description starts with
+/// the flags asked.
+#[test]
+fn open_with_mode_creates_with_that_mode() {
+    let mut r = rig();
+    let root = r.root;
+    let (s, f) = r.try_open_mode(root, "run", open_flags::CREATE, ANY, 0, 0o755);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.mode_of(f), 0o755);
+    let (s, g) = r.try_open_mode(root, "run", open_flags::CREATE, ANY, 0, 0o600);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.mode_of(g), 0o755, "an existing file keeps its mode");
+    let native = r.open(root, "native", open_flags::CREATE);
+    assert_eq!(r.mode_of(native), 0o644, "a native create");
+    let (s, u) = r.try_open_mode(root, "x", open_flags::UNNAMED, ANY, 0, 0o700);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.mode_of(u), 0o700, "an unnamed create");
+    let (s, _) = r.try_open_mode(root, "big", open_flags::CREATE, ANY, 0, 0x1_0000);
+    assert_eq!(
+        s,
+        status::INVALID_ARGUMENT,
+        "a mode wider than the stored word"
+    );
+    let (s, _) = r.try_open(root, "big", 0, ANY);
+    assert_eq!(s, status::NOT_FOUND, "and the refusal made nothing");
+    let append = proto::description_flags::APPEND;
+    let (s, a) = r.try_open_mode(root, "run", 0, ANY, append, 0);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.write_current(a, 0, b"ab"), (status::OK, 2));
+    assert_eq!(r.write_current(a, 0, b"cd"), (status::OK, 2));
+    assert_eq!(r.seek(a, proto::whence::START, 0).0, status::OK);
+    assert_eq!(r.write_current(a, 0, b"e"), (status::OK, 1));
+    assert_eq!(r.read_text(a, 0, 10).1, b"abcde");
+}
+
+/// The buffer requests at the position move it as the inline ones do.
+#[test]
+fn buffer_requests_at_the_position_move_it() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    attach_page(&mut r, f);
+    let address = r.net.0.borrow().memory.keys().copied().max().unwrap();
+    r.net.0.borrow_mut().memory.get_mut(&address).unwrap()[..8].copy_from_slice(b"ABCDEFGH");
+    let w = proto::WriteBufferCurrent {
+        buffer_offset: 0,
+        length: 8,
+        flags: Flags(0),
+    };
+    assert_eq!(r.done(f, &w, vec![]), (status::OK, 8));
+    assert_eq!(r.done(f, &w, vec![]), (status::OK, 8));
+    assert_eq!(r.seek(f, proto::whence::CURRENT, 0), (status::OK, 16));
+    assert_eq!(r.seek(f, proto::whence::START, 4).0, status::OK);
+    let m = proto::ReadBufferCurrent {
+        buffer_offset: 100,
+        length: 6,
+    };
+    assert_eq!(r.done(f, &m, vec![]), (status::OK, 6));
+    assert_eq!(r.seek(f, proto::whence::CURRENT, 0), (status::OK, 10));
+    let page = r.net.0.borrow().memory.get(&address).unwrap().clone();
+    assert_eq!(&page[100..106], b"EFGHAB");
+    assert_eq!(r.done(f, &m, vec![]), (status::OK, 6));
+    assert_eq!(r.done(f, &m, vec![]), (status::OK, 0), "at the end");
+    assert_eq!(r.seek(f, proto::whence::CURRENT, 0), (status::OK, 16));
+}
+
+/// `share` is held to `MAX_OPEN` as every request that brings a handle is
+/// (INV-0055-8), and the connection it came on goes on working.
+#[test]
+fn share_has_the_table_limit() {
+    let mut r = rig();
+    let root = r.root;
+    let f = r.open(root, "f", open_flags::CREATE);
+    let mut refused = None;
+    for _ in 0..MAX_OPEN {
+        let (s, end) = r.share(f, ANY);
+        if s != status::OK {
+            refused = Some((s, end));
+            break;
+        }
+    }
+    let (s, end) = refused.expect("a limit");
+    assert_eq!(s, status::TOO_MANY_OPEN);
+    assert!(r.net.0.borrow().closed.contains(&end), "its handle closed");
+    assert_eq!(r.service.open_count(), MAX_OPEN);
+    assert_eq!(r.write_current(f, 0, b"x"), (status::OK, 1));
 }
 
 /// ADR-0010 rule 2: a refused open changes nothing.

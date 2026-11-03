@@ -153,11 +153,20 @@ impl<L: block::Link> Device for block::ChannelDevice<L> {
 }
 
 /// Open-file state: a record a connection refers to, not part of it
-/// (INV-0055-9), so that a later method can share one.
+/// (INV-0055-9). It is the open description of ADR-0103: `share` attaches
+/// another connection to it, and every connection of it sees one position
+/// and one append flag.
 struct Record {
     handle: Handle,
     connections: u32,
+    /// Where the requests without an offset read and write.
+    position: u64,
+    /// `description_flags`.
+    flags: u32,
 }
+
+/// The largest position: a file's size fits `off_t` (ADR-0014 rule 1).
+const MAX_POSITION: u64 = i64::MAX as u64;
 
 struct Buffer<E> {
     end: E,
@@ -195,6 +204,9 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     told_lost: bool,
     retry_at: Option<u64>,
     next_cookie: u64,
+    /// Bytes every read so far gave a client: the requests at the position
+    /// move it by what this grew.
+    read_count: u64,
     input: Vec<u8>,
     output: Vec<u8>,
     data: Vec<u8>,
@@ -261,6 +273,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             told_lost: false,
             retry_at: None,
             next_cookie: 1,
+            read_count: 0,
             input: vec![0; MAX_WIRE_MESSAGE],
             output: vec![0; MAX_WIRE_MESSAGE],
             data: vec![0; proto::MAX_INLINE],
@@ -293,6 +306,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let record = Some(Record {
             handle,
             connections: 0,
+            position: 0,
+            flags: 0,
         });
         match self.records.iter().position(Option::is_none) {
             Some(i) => {
@@ -354,6 +369,18 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     /// Reads with no effect on the record, for tests.
     pub fn record_of(&self, connection: usize) -> Option<usize> {
         Some(self.connections.get(connection)?.as_ref()?.record)
+    }
+
+    /// The connection a client's end is, for tests.
+    pub fn connection_of(&self, end: T::End) -> Option<usize> {
+        self.connections
+            .iter()
+            .position(|c| c.as_ref().is_some_and(|c| c.end == end))
+    }
+
+    /// Open descriptions, for tests: records with a connection.
+    pub fn descriptions(&self) -> usize {
+        self.records.iter().flatten().count()
     }
 
     fn close_connection(&mut self, index: usize) {
@@ -758,6 +785,55 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 decode::<proto::ReadLink>(bytes, n)?;
                 self.read_link(i, t);
             }
+            23 => {
+                let (_, m) = decode::<proto::Share>(bytes, n)?;
+                self.share(i, t, m.rights.0, handles);
+            }
+            24 => {
+                let (_, m) = decode::<proto::Seek>(bytes, n)?;
+                self.seek(i, t, m.whence.0, m.offset as i64);
+            }
+            25 => {
+                let (_, m) = decode::<proto::SetFlags>(bytes, n)?;
+                if let Some(r) = self.record_mut(i) {
+                    r.flags = m.flags.0;
+                }
+                self.done(i, t, status::OK, 0);
+            }
+            26 => {
+                decode::<proto::GetFlags>(bytes, n)?;
+                let flags = self.record_mut(i).map_or(0, |r| r.flags);
+                self.done(i, t, status::OK, u64::from(flags));
+            }
+            27 => {
+                let (_, m) = decode::<proto::OpenWithMode<'_>>(bytes, n)?;
+                let Ok(mode) = u16::try_from(m.mode) else {
+                    self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
+                    return Ok(());
+                };
+                let open = proto::Open {
+                    flags: m.flags,
+                    rights: m.rights,
+                    path: m.path,
+                };
+                self.open_as(i, t, &open, mode, m.description.0, handles);
+            }
+            28 => {
+                let (_, m) = decode::<proto::ReadCurrent>(bytes, n)?;
+                self.read_current(i, t, m.length);
+            }
+            29 => {
+                let (_, m) = decode::<proto::WriteCurrent<'_>>(bytes, n)?;
+                self.write_current(i, t, m.flags.0, m.data.0);
+            }
+            30 => {
+                let (_, m) = decode::<proto::ReadBufferCurrent>(bytes, n)?;
+                self.read_buffer_current(i, t, m.buffer_offset, m.length);
+            }
+            31 => {
+                let (_, m) = decode::<proto::WriteBufferCurrent>(bytes, n)?;
+                self.write_buffer_current(i, t, &m);
+            }
             ERROR_ORDINAL..=u32::MAX => {
                 let m = ErrorReply {
                     status: status::UNSUPPORTED,
@@ -796,7 +872,21 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.open < MAX_OPEN
     }
 
+    /// `open`: a native client's create gets `0o644` (ADR-0014 rule 6).
     fn open(&mut self, i: usize, t: u32, m: &proto::Open<'_>, handles: &mut Vec<T::End>) {
+        self.open_as(i, t, m, 0o644, 0, handles);
+    }
+
+    /// `open` with the mode of a create and the new description's flags.
+    fn open_as(
+        &mut self,
+        i: usize,
+        t: u32,
+        m: &proto::Open<'_>,
+        mode: u16,
+        description: u32,
+        handles: &mut Vec<T::End>,
+    ) {
         use proto::{open_flags as f, rights as r};
         if !self.room() {
             return self.open_reply(i, t, status::TOO_MANY_OPEN, "", "");
@@ -828,13 +918,13 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             return self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
         }
         let opened = if flags & f::UNNAMED != 0 {
-            self.volume.create_unnamed(dir, 0o644)
+            self.volume.create_unnamed(dir, mode)
         } else {
             self.volume.open(
                 dir,
                 m.path.0,
                 OpenOptions {
-                    create: (flags & f::CREATE != 0).then_some(0o644),
+                    create: (flags & f::CREATE != 0).then_some(mode),
                     exclusive: flags & f::EXCLUSIVE != 0,
                     truncate: flags & f::TRUNCATE != 0,
                     link_itself: flags & f::NO_FOLLOW != 0,
@@ -864,6 +954,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         handles.clear();
         let record = self.new_record(handle);
+        if let Some(r) = self.records[record].as_mut() {
+            r.flags = description;
+        }
         let s = match self.add_connection(end, record, m.rights.0) {
             Some(_) => status::OK,
             None => status::LIMIT_REACHED,
@@ -923,6 +1016,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         match self.volume.read(handle, offset, &mut data[..wanted]) {
             Ok(got) => {
                 self.after_engine();
+                self.read_count += got as u64;
                 reply(status::OK, &data[..got], self);
             }
             Err(e) => {
@@ -1047,6 +1141,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         self.data = data;
         self.after_engine();
+        self.read_count += done;
         match failure {
             Some(s) => self.done(i, t, s, done),
             None => self.done(i, t, status::OK, done),
@@ -1382,6 +1477,169 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             target: Text(&target),
         };
         self.reply(i, t, &m);
+    }
+
+    fn record_mut(&mut self, i: usize) -> Option<&mut Record> {
+        let c = self.connections.get(i)?.as_ref()?;
+        self.records.get_mut(c.record)?.as_mut()
+    }
+
+    /// `clone`'s rules, but the new connection joins this one's record.
+    fn share(&mut self, i: usize, t: u32, rights: u32, handles: &mut Vec<T::End>) {
+        if !self.room() {
+            return self.done(i, t, status::TOO_MANY_OPEN, 0);
+        }
+        if !self.has(i, proto::rights::CLONE) || !self.has(i, rights) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        let Some(end) = handles.first().copied() else {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        };
+        if self.transport.kind(end) != HandleKind::Channel {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        }
+        let Some(record) = self.connections[i].as_ref().map(|c| c.record) else {
+            return self.done(i, t, status::STORAGE_FAILED, 0);
+        };
+        handles.clear();
+        let s = match self.add_connection(end, record, rights) {
+            Some(_) => status::OK,
+            None => status::LIMIT_REACHED,
+        };
+        self.done(i, t, s, 0);
+    }
+
+    /// The position after a seek, if it is one a file can have.
+    fn sought(&mut self, i: usize, whence: u32, offset: i64) -> Result<u64, u32> {
+        let (handle, position) = match self.record_mut(i) {
+            Some(r) => (r.handle, r.position),
+            None => return Err(status::STORAGE_FAILED),
+        };
+        let base = match whence {
+            proto::whence::START => 0,
+            proto::whence::CURRENT => position,
+            _ => match self.volume.stat(handle) {
+                Ok(a) => a.size,
+                Err(e) => return Err(self.engine_status(&e)),
+            },
+        };
+        let to = i128::from(base) + i128::from(offset);
+        if !(0..=i128::from(MAX_POSITION)).contains(&to) {
+            return Err(status::INVALID_ARGUMENT);
+        }
+        Ok(to as u64)
+    }
+
+    fn seek(&mut self, i: usize, t: u32, whence: u32, offset: i64) {
+        let r = self.sought(i, whence, offset);
+        self.after_engine();
+        match r {
+            Ok(to) => {
+                if let Some(r) = self.record_mut(i) {
+                    r.position = to;
+                }
+                self.done(i, t, status::OK, to);
+            }
+            Err(s) => self.done(i, t, s, 0),
+        }
+    }
+
+    /// Where a write at the position goes: the end for an append, which the
+    /// description or the request may ask.
+    fn write_at(&mut self, i: usize, flags: u32) -> Result<(Handle, u64), FsError> {
+        let (handle, position, append) = match self.record_mut(i) {
+            Some(r) => (
+                r.handle,
+                r.position,
+                r.flags & proto::description_flags::APPEND != 0,
+            ),
+            None => return Err(FsError::StorageFailed),
+        };
+        if append || flags & proto::write_flags::APPEND != 0 {
+            Ok((handle, self.volume.stat(handle)?.size))
+        } else {
+            Ok((handle, position))
+        }
+    }
+
+    /// A write at the position: the position moves past it in the same
+    /// request, so no other connection of the description sees it between.
+    fn write_current_bytes(&mut self, i: usize, flags: u32, data: &[u8]) -> Result<u64, FsError> {
+        let (handle, at) = self.write_at(i, flags)?;
+        if at
+            .checked_add(data.len() as u64)
+            .is_none_or(|end| end > MAX_POSITION)
+        {
+            return Err(FsError::InvalidArgument);
+        }
+        let written = self.volume.write(handle, at, data)? as u64;
+        if let Some(r) = self.record_mut(i) {
+            r.position = at + written;
+        }
+        if flags & proto::write_flags::DURABLE != 0 {
+            self.volume.sync()?;
+        }
+        Ok(written)
+    }
+
+    fn write_current(&mut self, i: usize, t: u32, flags: u32, data: &[u8]) {
+        if self.write_handle(i, flags).is_none() {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        let r = self.write_current_bytes(i, flags, data);
+        self.after_engine();
+        self.done_result(i, t, r);
+    }
+
+    fn read_current(&mut self, i: usize, t: u32, length: u32) {
+        let position = match self.record_mut(i) {
+            Some(r) => r.position,
+            None => 0,
+        };
+        let before = self.read_count;
+        self.read(i, t, position, length);
+        let got = self.read_count - before;
+        if let Some(r) = self.record_mut(i) {
+            r.position = position + got;
+        }
+    }
+
+    fn read_buffer_current(&mut self, i: usize, t: u32, buffer_offset: u64, length: u32) {
+        let position = match self.record_mut(i) {
+            Some(r) => r.position,
+            None => 0,
+        };
+        let m = proto::ReadBuffer {
+            offset: position,
+            buffer_offset,
+            length,
+        };
+        let before = self.read_count;
+        self.read_buffer(i, t, &m);
+        let got = self.read_count - before;
+        if let Some(r) = self.record_mut(i) {
+            r.position = position + got;
+        }
+    }
+
+    fn write_buffer_current(&mut self, i: usize, t: u32, m: &proto::WriteBufferCurrent) {
+        if self.write_handle(i, m.flags.0).is_none() {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        let Some(address) = self.buffer_range(i, m.buffer_offset, m.length) else {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        };
+        let mut copy = Vec::new();
+        if copy.try_reserve_exact(m.length as usize).is_err() {
+            return self.done(i, t, status::NO_SPACE, 0);
+        }
+        copy.resize(m.length as usize, 0);
+        if !self.transport.copy_from(address, &mut copy) {
+            return self.done(i, t, status::INVALID_ARGUMENT, 0);
+        }
+        let r = self.write_current_bytes(i, m.flags.0, &copy);
+        self.after_engine();
+        self.done_result(i, t, r);
     }
 }
 

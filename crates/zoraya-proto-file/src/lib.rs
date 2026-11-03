@@ -100,6 +100,23 @@ pub mod publish_mode {
     pub const COUNT: u32 = 2;
 }
 
+/// `seek`'s origin (ADR-0103 item 2): POSIX's `SEEK_SET`, `SEEK_CUR` and
+/// `SEEK_END`.
+pub mod whence {
+    pub const START: u32 = 0;
+    pub const CURRENT: u32 = 1;
+    pub const END: u32 = 2;
+    pub const COUNT: u32 = 3;
+}
+
+/// What an open description holds besides its position (ADR-0103 item 1):
+/// what `open_with_mode` starts with, `set_flags` sets and `get_flags` gives.
+pub mod description_flags {
+    /// Every write at the current position goes to the end (ADR-0010 rule 2).
+    pub const APPEND: u32 = 1 << 0;
+    pub const ALL: u32 = (1 << 1) - 1;
+}
+
 /// The reasons a supervisor hears (ADR-0080).
 pub mod failure {
     pub const DEVICE_WRITE: u32 = 0;
@@ -258,6 +275,66 @@ protocol! {
         target: Text<'a, MAX_PATH>,
     }
 
+    // Stage 6c (ADR-0103): the open description. A connection's record is
+    // its description: the open object, a position and the append flag.
+    // `share` attaches another connection to the same description, and the
+    // requests below with no offset read and write at its position, which
+    // the service advances inside the request.
+
+    /// A new connection to this connection's description, with equal or
+    /// fewer rights: one position for both (ADR-0103 item 1).
+    message Share = 23, handles 1 {
+        rights: Rights,
+    }
+
+    /// Moves the position, and gives the new one in `Done`'s count. `offset`
+    /// is a signed 64-bit number in two's complement.
+    message Seek = 24, handles 0 {
+        whence: Below<{ whence::COUNT }>,
+        offset: u64,
+    }
+
+    message SetFlags = 25, handles 0 {
+        flags: Flags<{ description_flags::ALL }>,
+    }
+
+    /// The description's flags, in `Done`'s count.
+    message GetFlags = 26, handles 0 {}
+
+    /// `open` with the description's flags and, for a create, the POSIX mode
+    /// (ADR-0014 rule 6). The reply is `OpenReply`.
+    message OpenWithMode<'a> = 27, handles 1 {
+        flags: Flags<{ open_flags::ALL }>,
+        rights: Rights,
+        description: Flags<{ description_flags::ALL }>,
+        mode: u32,
+        path: Path<'a, MAX_PATH, false>,
+    }
+
+    /// `read` at the position, which moves past what was read. The reply is
+    /// `ReadReply`.
+    message ReadCurrent = 28, handles 0 {
+        length: u32,
+    }
+
+    /// `write` at the position, or at the end with `APPEND` in the flags or
+    /// the description; the position moves past what was written.
+    message WriteCurrent<'a> = 29, handles 0 {
+        flags: Flags<{ write_flags::ALL }>,
+        data: Data<'a, MAX_INLINE>,
+    }
+
+    message ReadBufferCurrent = 30, handles 0 {
+        buffer_offset: u64,
+        length: u32,
+    }
+
+    message WriteBufferCurrent = 31, handles 0 {
+        buffer_offset: u64,
+        length: u32,
+        flags: Flags<{ write_flags::ALL }>,
+    }
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -265,7 +342,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 22] = [
+pub const REQUESTS: [(&str, u32); 31] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -288,6 +365,15 @@ pub const REQUESTS: [(&str, u32); 22] = [
     ("set_attributes", 20),
     ("make_link", 21),
     ("read_link", 22),
+    ("share", 23),
+    ("seek", 24),
+    ("set_flags", 25),
+    ("get_flags", 26),
+    ("open_with_mode", 27),
+    ("read_current", 28),
+    ("write_current", 29),
+    ("read_buffer_current", 30),
+    ("write_buffer_current", 31),
 ];
 
 #[cfg(test)]
@@ -390,6 +476,58 @@ mod tests {
             0,
         );
         check(TokenReply { status: Below(0) }, 1);
+        check(
+            Share {
+                rights: Flags(rights::READ | rights::CLONE),
+            },
+            1,
+        );
+        check(
+            Seek {
+                whence: Below(whence::END),
+                offset: (-5i64) as u64,
+            },
+            0,
+        );
+        check(
+            SetFlags {
+                flags: Flags(description_flags::APPEND),
+            },
+            0,
+        );
+        check(GetFlags {}, 0);
+        check(ReadCurrent { length: 4096 }, 0);
+        check(
+            ReadBufferCurrent {
+                buffer_offset: 8,
+                length: 9,
+            },
+            0,
+        );
+        check(
+            WriteBufferCurrent {
+                buffer_offset: 8,
+                length: 9,
+                flags: Flags(write_flags::DURABLE),
+            },
+            0,
+        );
+    }
+
+    #[test]
+    fn the_stage_6c_fields_refuse_what_they_do_not_name() {
+        let mut out = [0; 64];
+        let seek = Seek {
+            whence: Below(whence::COUNT),
+            offset: 0,
+        };
+        assert!(encode(&seek, 1, &mut out).is_err(), "no fourth origin");
+        // An unknown description flag goes out, and the decoder refuses it.
+        let flags = SetFlags {
+            flags: Flags(description_flags::ALL + 1),
+        };
+        let length = encode(&flags, 1, &mut out).unwrap();
+        assert!(decode::<SetFlags>(&out[..length], 0).is_err());
     }
 
     /// Each borrowed message, by hand: the lifetime stops a generic helper.
@@ -477,6 +615,25 @@ mod tests {
             0
         );
         borrowed!(Remove { name: Name("n") }, Remove<'_>, 0);
+        borrowed!(
+            OpenWithMode {
+                flags: Flags(open_flags::CREATE | open_flags::TRUNCATE),
+                rights: Flags(rights::READ | rights::WRITE),
+                description: Flags(description_flags::APPEND),
+                mode: 0o755,
+                path: Path("bin/a.out"),
+            },
+            OpenWithMode<'_>,
+            1
+        );
+        borrowed!(
+            WriteCurrent {
+                flags: Flags(write_flags::APPEND),
+                data: Data("Київ, Plzeň".as_bytes()),
+            },
+            WriteCurrent<'_>,
+            0
+        );
         borrowed!(
             MakeDirectory {
                 mode: 0o755,
