@@ -50,7 +50,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths check-argv clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -314,6 +314,13 @@ adr-check:
 check-user-access:
 	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
 
+# INV-0155-2: a program with a description (describe!) reads its arguments only
+# through zoraya-command (user/src/command.rs); only test programs, which have
+# none, may read argv themselves.
+check-argv:
+	@hits="$$(grep -l 'describe!(' user/src/bin/*.rs | xargs grep -n 'argv' || true)"; \
+	if [ -n "$$hits" ]; then echo "described programs that read argv themselves (INV-0155-2):"; echo "$$hits"; exit 1; fi
+
 # No host paths or email addresses in tracked files (CLAUDE.md, Conventions), apart from
 # the configured git identity's address. docs/research/ and tools/posix-surface/results/
 # are cleaned separately. The brackets keep the pattern from matching this file.
@@ -338,7 +345,7 @@ check-test-caps:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-argv check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

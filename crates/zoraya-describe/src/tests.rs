@@ -105,6 +105,10 @@ setting shell.home path /home where to start
         SettingType::Choice(vec!["fast".into(), "slow".into()])
     );
     assert!(d.sections.is_empty());
+    let d =
+        parse(b"name t\nsummary s\nusage t\noption -d --directory PATH is a directory\n").unwrap();
+    assert_eq!(d.options[0].argument, None);
+    assert_eq!(d.options[0].text, "PATH is a directory");
 }
 
 #[test]
@@ -149,8 +153,6 @@ fn refusals_name_their_line() {
         ("option --help t\n", 4),
         ("option -ab --x t\n", 4),
         ("option -f --force t\noption -f --fine t\n", 5),
-        ("option --x N t\n", 4),
-        ("option --x N kind t\n", 4),
         ("when --nope A read\n", 4),
         ("operand A read t\nwhen --x A\n", 5),
         ("cwd maybe\n", 4),

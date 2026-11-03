@@ -32,6 +32,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-command"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-describe",
+ "zoraya-proto-file",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-compositor"
 version = "0.1.0"
 dependencies = [
@@ -346,6 +356,7 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-command",
  "zoraya-compositor",
  "zoraya-describe",
  "zoraya-font",

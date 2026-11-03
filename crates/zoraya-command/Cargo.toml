@@ -1,0 +1,19 @@
+[package]
+name = "zoraya-command"
+description = "What every native command shares (ADR-0155): argv from its description, --help, errors, exit codes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-abi = { path = "../zoraya-abi" }
+zoraya-describe = { path = "../zoraya-describe" }
+zoraya-proto-file = { path = "../zoraya-proto-file" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

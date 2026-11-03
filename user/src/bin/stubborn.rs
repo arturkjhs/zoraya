@@ -10,6 +10,8 @@ zoraya_user::describe!("demos", "stubborn");
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
+    let c = zoraya_user::command::start(DESCRIPTION);
+    c.parse();
     process_set_disposition(RequestKind::Interrupt, Disposition::Ignore).expect("disposition");
     println!("stubborn: ignoring Interrupt");
     loop {

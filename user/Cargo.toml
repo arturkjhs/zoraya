@@ -32,6 +32,8 @@ zoraya-compositor = { path = "../crates/zoraya-compositor" }
 zoraya-keymap = { path = "../crates/zoraya-keymap" }
 zoraya-font = { path = "../crates/zoraya-font" }
 zoraya-term = { path = "../crates/zoraya-term" }
+zoraya-describe = { path = "../crates/zoraya-describe" }
+zoraya-command = { path = "../crates/zoraya-command" }
 
 [build-dependencies]
 zoraya-describe = { path = "../crates/zoraya-describe" }

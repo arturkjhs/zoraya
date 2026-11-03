@@ -4,6 +4,7 @@
 
 extern crate alloc;
 
+pub mod command;
 pub mod files;
 pub mod gui;
 mod heap;
@@ -73,10 +74,20 @@ pub mod descriptions {
 
 /// Puts this program's description, `user/describe/GROUP/NAME.cmd`, into its
 /// ELF as the section `.zoraya.command`, which no segment loads (ADR-0156
-/// item 2). The ramdisk packer checks that it matches the file.
+/// item 2). The ramdisk packer checks that it matches the file. The program
+/// reads its own copy, `DESCRIPTION`, through [`command::start`].
 #[macro_export]
 macro_rules! describe {
     ($group:literal, $name:literal) => {
+        const DESCRIPTION: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/describe/",
+            $group,
+            "/",
+            $name,
+            ".cmd"
+        ));
+
         #[used]
         #[unsafe(link_section = ".zoraya.command")]
         static ZORAYA_COMMAND: [u8; include_bytes!(concat!(

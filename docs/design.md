@@ -892,6 +892,8 @@ crates/                   no_std, host-tested
   zoraya-proto-block/, zoraya-proto-file/  the block and file protocols
   zoraya-shell/           zosh's line editor, parser and reports
   zoraya-describe/        command descriptions (NAME.cmd): the total parser of ADR-0156
+  zoraya-command/         what every native command shares: argv from its description, --help, error lines,
+                          statuses in words, exit codes (ADR-0155)
   zoraya-events/          signals, port subscriptions and ready lists
   zoraya-rt/              the runtime of Zoraya programs (aarch64 only)
   zoraya-fs/              filesystem engine: format, tree, commits, requests, checker (ADR-0010..0016)
@@ -911,6 +913,7 @@ user/                     the programs in the ramdisk, on zoraya-rt: init, zosh,
                           term, posixrun (the launcher of C programs, stage 6c), test programs
   src/stack.rs            starts the driver and the service
   src/gui.rs              scans device pages, starts and restarts the GUI (init and t_gui)
+  src/command.rs          a described program's start: its arguments through zoraya-command (INV-0155-2)
   describe/               command descriptions (ADR-0156): builtins/, commands/, demos/, topics/, system/;
                           build.rs refuses a bad one, describe! puts one in its program's ELF
 rootfs/                   the first contents of build/disk.img

@@ -22,7 +22,8 @@
 //! ```
 //!
 //! Keys: `name` or `topic`, `summary`, `usage` (one or more), `operand NAME
-//! KIND TEXT`, `option [SHORT] LONG [ARG KIND] TEXT`, `when OPTION OPERAND
+//! KIND TEXT`, `option [SHORT] LONG [ARG KIND] TEXT` (an upper-case word is
+//! the argument only when a kind follows it), `when OPTION OPERAND
 //! KIND`, `cwd read|none`, `question`, `program PATH`, `exit CODE TEXT` and
 //! `setting NAME TYPE DEFAULT TEXT`.
 //!
@@ -599,16 +600,14 @@ fn parse_option(rest: &str, line: usize) -> Result<Opt> {
     if long_word == "help" {
         return err(line, "--help is given to every command");
     }
+    // `ARG KIND` only when a kind follows the upper-case word: otherwise the
+    // word starts the text (`option -d --directory PATH is a directory`).
     let mut argument = None;
     if let Some((word, after)) = next_word(rest)
         && is_upper_name(word)
+        && let Some((kind, after)) = next_word(after)
+        && let Some(kind) = Kind::parse(kind)
     {
-        let Some((kind, after)) = next_word(after) else {
-            return err(line, "an option's argument needs a kind");
-        };
-        let Some(kind) = Kind::parse(kind) else {
-            return err(line, "an unknown kind");
-        };
         argument = Some(Argument {
             name: word.into(),
             kind,
