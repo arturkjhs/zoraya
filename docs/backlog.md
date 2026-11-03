@@ -49,6 +49,7 @@ limited to the lines it changed, what it finds outside them is added here.
 | - | `blkd`, `zoraya-virtio` | `blkd` keeps its own split queue beside the generic one in `queue.rs`. Move it onto the generic one, with its mutation tests, when the blk driver is next worked on. |
 | - | GUI, `zosh` | Programs started from `zosh` in the window print to the serial console. Byte streams (stage 6) or a terminal connection handed to each child would fix it (ADR-0096). |
 | - | `compd` `Platform::call` | The display driver's end is subscribed on two ports while a call waits (the main port and the call port). It works; a single port with a per-call key would be simpler. |
+| - | `Power`, ADR-0062 (architect, 2026-11-03) | `reboot` is a shell builtin (ADR-0155 Decision): the kernel needs a reset call for a `Power` holder (PSCI `SYSTEM_RESET`), its shape decided by an ADR. Kernel work, outside TASK-18; until then `reboot` says it is not available (INV-0155-7). |
 | - | Fuzzing | `zoraya-term`'s parser and the GUI decoders have deterministic random tests in `make test-unit`; no coverage-guided target exists for them in `fuzz/` (no nightly toolchain on the host in TASK-14). |
 
 ## Mutation testing: `zoraya-virtio`
