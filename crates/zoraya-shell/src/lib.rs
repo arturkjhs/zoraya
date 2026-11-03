@@ -2,7 +2,8 @@
 //!
 //! The language of ADR-0150 and ADR-0151 is in [`syntax`] (the parser),
 //! [`glob`], [`record`] (exit records in words) and [`eval`] (the
-//! evaluator over a [`eval::Host`]). The fixed-buffer editor, `split` and
+//! evaluator over a [`eval::Host`]); the line editor of ADR-0154 is
+//! [`editor`]. The fixed-buffer editor, `split` and
 //! `Report` below are TASK-11's, kept until the new `zosh` replaces them
 //! (TASK-18 step 6).
 
@@ -10,11 +11,14 @@
 
 extern crate alloc;
 
+pub mod editor;
 pub mod eval;
 pub mod glob;
 pub mod record;
 pub mod syntax;
 
+#[cfg(test)]
+mod editor_tests;
 #[cfg(test)]
 mod lang_tests;
 

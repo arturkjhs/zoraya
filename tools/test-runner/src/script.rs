@@ -147,11 +147,49 @@ pub struct Seen {
     searched: usize,
     /// The text `take` last looked for, and how far it has looked.
     looking: Option<(String, usize)>,
+    /// The start of an escape sequence cut at the end of the last read.
+    pending: Vec<u8>,
+}
+
+/// Drops SGR sequences (`ESC [ digits ; ... m`): colour and faint are not
+/// text, so scripts match what a person reads (ADR-0154). Gives the bytes
+/// kept, and the start of a sequence the input ends inside.
+pub fn strip_sgr(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            let mut j = i + 1;
+            if j == bytes.len() {
+                return (out, bytes[i..].to_vec());
+            }
+            if bytes[j] == b'[' {
+                j += 1;
+                while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b';') {
+                    j += 1;
+                }
+                if j == bytes.len() {
+                    return (out, bytes[i..].to_vec());
+                }
+                if bytes[j] == b'm' {
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    (out, Vec::new())
 }
 
 impl Seen {
     pub fn add(&mut self, bytes: &[u8]) -> Result<(), String> {
-        output::keep(&mut self.text, &String::from_utf8_lossy(bytes))
+        let mut all = core::mem::take(&mut self.pending);
+        all.extend_from_slice(bytes);
+        let (kept, pending) = strip_sgr(&all);
+        self.pending = pending;
+        output::keep(&mut self.text, &String::from_utf8_lossy(&kept))
     }
 
     pub fn forbid(&mut self, text: &str) {
@@ -443,6 +481,16 @@ fn play(steps: &[Step], timeout: u64, command: &[String], label: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sgr_is_dropped_even_when_cut() {
+        assert_eq!(strip_sgr(b"a\x1b[31mb\x1b[mc\x1b[2Kd").0, b"abc\x1b[2Kd");
+        let mut seen = Seen::default();
+        seen.add(b"x\x1b[2").unwrap();
+        seen.add(b"2my\x1b").unwrap();
+        seen.add(b"[mz").unwrap();
+        assert!(seen.take("xyz"));
+    }
 
     #[test]
     fn escapes_become_bytes() {

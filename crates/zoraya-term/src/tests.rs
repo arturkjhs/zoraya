@@ -71,6 +71,22 @@ fn cursor_movement_and_erasing() {
     assert_eq!(t.cursor(), (0, 0));
 }
 
+/// ADR-0154's addition to the subset: SGR 2 is faint, 22 ends bold and faint.
+#[test]
+fn faint_and_normal_intensity() {
+    let t = term(b"a\x1b[2mb\x1b[22mc\x1b[1;2md\x1b[22me\x1b[31;2mf\x1b[0mg");
+    let fg = |x| t.cell(x, 0).fg;
+    assert_eq!(fg(0), DEFAULT_FG);
+    assert_eq!(fg(1), FAINT + DEFAULT_FG);
+    assert_eq!(fg(2), DEFAULT_FG);
+    assert_eq!(fg(3), FAINT + DEFAULT_FG, "faint wins over bold");
+    assert_eq!(fg(4), DEFAULT_FG);
+    assert_eq!(fg(5), FAINT + 1);
+    assert_eq!(fg(6), DEFAULT_FG);
+    let half = PALETTE[usize::from(FAINT + DEFAULT_FG)];
+    assert_eq!(half, (PALETTE[usize::from(DEFAULT_FG)] >> 1) & 0x007f_7f7f);
+}
+
 #[test]
 fn colours_and_reverse() {
     let t = term(b"\x1b[31;44mA\x1b[1mB\x1b[0;7mC\x1b[mD");

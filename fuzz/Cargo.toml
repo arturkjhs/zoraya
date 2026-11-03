@@ -51,4 +51,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "editor_keys"
+path = "fuzz_targets/editor_keys.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

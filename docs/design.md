@@ -380,7 +380,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   At most 8 clients. With no display driver it goes on; a new one gets the same framebuffer and one full flush.
 - **`term`** (`zoraya-term`, `zoraya-font`, ADR-0095, ADR-0096). A compositor client with an 80 × 24 grid of 12 × 20
   cells (968 × 488 pixels) and 500 lines of scrollback (Shift with Page Up or Page Down). It parses the VT subset of
-  ADR-0096, answers no query, and sends the shell the bytes keys make (`zoraya-proto-term`). It draws only the rows
+  ADR-0096 with ADR-0154's faint (SGR 2, ended by 22: the colour at half intensity), answers no query, and sends the shell the bytes keys make (`zoraya-proto-term`). It draws only the rows
   that changed, and commits again only after the last commit's reply.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
   is full), input from `Input` messages. Without one it is stage 4's shell on the console.
@@ -925,7 +925,7 @@ tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
   test-runner/            zoraya-test-runner: runs the test kernel, checks the protocol, plays serial and GUI
-                          scripts; zoraya-crash-test
+                          scripts (serial text with SGR sequences dropped); zoraya-crash-test
   test-summary.sh         make test's summary, with the logs in build/logs/
   mutants/                zoraya-mutants and its mutation lists (*.toml)
   adr-check/              zoraya-adr-check: ADR-0001 invariants

@@ -205,6 +205,12 @@ terminal draws faint itself. CP-25's out-of-band control is unaffected: these ar
 - Whether suggestions should also come from completions, as fish's do, or stay history-only (simpler, predictable).
 - Whether a history line should be kept when it failed to parse.
 - The right path-listing deadline once listing a large directory is measured.
+- *Note, 2026-11-03 (TASK-18 Part 2, step 4):* rule 8's subset has no cursor-up, so a line wider than the terminal
+  cannot be redrawn from its start in place once the cursor is on a later row. The editor (`zoraya-shell`'s
+  `editor`) redraws the row in place while prompt and line fit on one row; past that, typing and Backspace at the end
+  stay incremental, and any other edit draws the prompt and line again on a new row, leaving the old rows above.
+  Adding `ESC [ n A` to the subset would allow redrawing in place; that is a change to ADR-0096 and this ADR for the
+  architect. INV-0154-2 is checked against the subset as listed.
 
 ## Revisit triggers
 - The serial console measured to lag while typing because of redraws: redraw only from the cursor.

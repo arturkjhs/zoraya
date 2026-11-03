@@ -28,8 +28,9 @@ pub const MAX_STRING: usize = 4096;
 /// Pixels between the grid and the surface's edge.
 pub const PAD: usize = 4;
 
-/// The 8 colours, then their bright forms for bold.
-pub const PALETTE: [u32; 16] = [
+/// The 8 colours, their bright forms for bold, then their faint forms at
+/// half intensity (SGR 2, added by ADR-0154).
+pub const PALETTE: [u32; 24] = [
     0x0000_0000,
     0x00c0_3030,
     0x0030_c030,
@@ -46,7 +47,17 @@ pub const PALETTE: [u32; 16] = [
     0x00ff_80ff,
     0x0060_ffff,
     0x00ff_ffff,
+    0x0000_0000,
+    0x0060_1818,
+    0x0018_6018,
+    0x0060_5018,
+    0x0020_3070,
+    0x0058_2060,
+    0x0018_5858,
+    0x0060_6060,
 ];
+/// Where the faint colours start in [`PALETTE`].
+pub const FAINT: u8 = 16;
 pub const DEFAULT_FG: u8 = 7;
 pub const DEFAULT_BG: u8 = 0;
 
@@ -112,6 +123,7 @@ pub struct Term {
     fg: u8,
     bg: u8,
     bold: bool,
+    faint: bool,
     reverse: bool,
     state: State,
     params: [u16; MAX_PARAMS],
@@ -148,6 +160,7 @@ impl Term {
             fg: DEFAULT_FG,
             bg: DEFAULT_BG,
             bold: false,
+            faint: false,
             reverse: false,
             state: State::Ground,
             params: [0; MAX_PARAMS],
@@ -400,11 +413,16 @@ impl Term {
                     self.fg = DEFAULT_FG;
                     self.bg = DEFAULT_BG;
                     self.bold = false;
+                    self.faint = false;
                     self.reverse = false;
                 }
                 1 => self.bold = true,
+                2 => self.faint = true,
                 7 => self.reverse = true,
-                22 => self.bold = false,
+                22 => {
+                    self.bold = false;
+                    self.faint = false;
+                }
                 27 => self.reverse = false,
                 30..=37 => self.fg = (p - 30) as u8,
                 39 => self.fg = DEFAULT_FG,
@@ -457,6 +475,7 @@ impl Term {
         self.fg = DEFAULT_FG;
         self.bg = DEFAULT_BG;
         self.bold = false;
+        self.faint = false;
         self.reverse = false;
         self.touch_all();
     }
@@ -466,7 +485,11 @@ impl Term {
             self.carriage_return();
             self.newline();
         }
-        let fg = self.fg + if self.bold { 8 } else { 0 };
+        let fg = if self.faint {
+            self.fg % 8 + FAINT
+        } else {
+            self.fg + if self.bold { 8 } else { 0 }
+        };
         let (fg, bg) = if self.reverse {
             (self.bg, fg)
         } else {
@@ -562,8 +585,8 @@ impl Term {
                 if here {
                     core::mem::swap(&mut cell.fg, &mut cell.bg);
                 }
-                let fg = PALETTE[usize::from(cell.fg) % 16];
-                let bg = PALETTE[usize::from(cell.bg) % 16];
+                let fg = PALETTE[usize::from(cell.fg) % PALETTE.len()];
+                let bg = PALETTE[usize::from(cell.bg) % PALETTE.len()];
                 let (px, py) = (PAD + x * CELL_WIDTH, PAD + y * CELL_HEIGHT);
                 zoraya_font::draw(pixels, stride, px, py, cell.ch, fg, bg);
             }

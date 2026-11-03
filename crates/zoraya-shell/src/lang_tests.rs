@@ -187,7 +187,7 @@ impl Host for Fake {
     }
 
     fn home(&mut self) -> String {
-        "/home".into()
+        "/house".into()
     }
 
     fn interrupted(&mut self) -> bool {
@@ -244,7 +244,7 @@ fn the_examples_of_adr_0150() {
         "zosh: x=1: not a command\n  hint: to set a variable, type: set x 1\n"
     );
     assert_eq!(run(&mut sh, "echo \"it's\" 'a*b'"), "it's a*b\n");
-    assert_eq!(run(&mut sh, "echo ~ ~/x a~"), "/home /home/x a~\n");
+    assert_eq!(run(&mut sh, "echo ~ ~/x a~"), "/house /house/x a~\n");
     assert_eq!(
         run(&mut sh, "echo \"you are in $(echo here)\""),
         "you are in here\n"
