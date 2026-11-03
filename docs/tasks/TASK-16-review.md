@@ -43,16 +43,32 @@ unbounded masked loop driven by a user value other than the snapshot copy's size
 
 ## The intermittent TCG run
 
-Before `e423bb5`, `t_snapshot`'s frame-exhaustion sweep held and gave back all free memory at every step, about
-0.1 s a step under TCG. In three of eight TCG runs of that version, the second run of `t_snapshot` in one boot did
-not finish: once past `make test`'s 180 s, once past 900 s. QEMU's registers, read over QMP, showed the CPU at EL1
-with interrupts masked inside frame allocation and freeing, which is what the sweep's hold and release do. Five
-later runs, with a gdb stub ready, all passed, so no backtrace was taken. The reviewer found no kernel state that
-would make every snapshot attempt fail after a previous run (ASIDs, stack slots, thread counts, event sources and
-the self-handle cycle all balance on every path), and explains it as cost: O(steps × RAM) of masked work in test
-calls. That is plausible and not proven. The sweep now holds frames across steps (O(RAM + steps)); since then every TCG
-configuration of the full `make test` runs at `e423bb5` and at the end of the task passed, and the whole of
-`t_snapshot` takes about 3 s under TCG.
+Before `e423bb5`, `t_snapshot`'s frame-exhaustion sweep held and gave back all free memory at every step, writing a
+list link into each held frame. Under TCG the test kernel's second run of `t_snapshot` in one boot did not finish in
+`make test`'s 180 s, nor in 900 s. At the architect's request it was reproduced afterwards with
+`tools/repro/tcg-loop.sh 96c5a79 20 2`, which builds that commit, runs the test kernel under TCG twenty times, two at
+a time, and samples a run that does not end through QMP and the gdb stub: **20 of 20** runs were still in the second
+sweep after 240 s, each at step 46 to 48 of 333, inside `hold_frames` or `release_frames`, with no loop and no other
+ready thread.
+
+The cause was then measured, not guessed:
+
+- Steps over time, read through the gdb stub: about 10 a second in the first run of the sweep, about 0.32 a second
+  in the second, so the second sweep takes about 1000 s.
+- Counters added to the frame allocator (in a scratch copy of that commit) and read over the gdb stub: about one
+  bitmap word scanned per allocation in both runs, but about 35 times fewer allocations a second in the second run.
+  The scheduler had nothing else ready. The allocator's algorithm and the scheduler are therefore not the cause.
+- QEMU's `info jit`: no growth in translation invalidations or flushes during the slow phase.
+- Keeping the held frames' list in a static array instead of in the frames themselves made the second run as fast as
+  the first, in two runs (3.3 and 3.2 million allocations in 10 s, against 75 thousand).
+
+So the cost is in touching the held frames. After the first run, the free frames include thousands that held user
+code the snapshot children executed; under TCG, accesses to those pages stay slow. That is QEMU's cost, probably its
+tracking of writes to pages with translated code; it was not checked against QEMU's sources. It is not a kernel
+defect, and nothing in the kernel changes. The sweep since `e423bb5`
+writes each held frame once and gives back one frame a step, so it avoids the cost; every TCG configuration of the
+full `make test` runs since then passed. A test of elapsed time under TCG would be unreliable, so none was added; the
+finding and the command to repeat it are in `docs/backlog.md`.
 
 ## Mutation testing
 
