@@ -24,6 +24,8 @@
 #                         each alone on its page (ADR-0091, ADR-0097). Without
 #                         --test, open QEMU's default display window
 #   --qmp PATH            a QMP socket at PATH, for screendumps and keys
+#   --display-opts OPTS   the interactive display and its suboptions (with
+#                         --gui; ignored with --test); the default is below
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
@@ -60,6 +62,7 @@ write_error=0
 disk=
 gui=0
 qmp=
+display_opts=
 kernel=
 
 die() { echo "run-qemu.sh: $*" >&2; exit 2; }
@@ -77,6 +80,7 @@ while [ $# -gt 0 ]; do
         --disk) [ $# -ge 2 ] || die "--disk needs a file"; disk=$2; shift 2 ;;
         --gui) gui=1; shift ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
+        --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
@@ -129,9 +133,19 @@ set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
     -smp "$smp" -m "$mem" -nodefaults -no-reboot
 [ -n "$kernel" ] && [ -z "$dumpdtb" ] && set -- "$@" -kernel "$kernel"
 
-# Interactive with --gui: QEMU's default display opens a window.
+# Interactive with --gui: QEMU's display opens a window. On macOS the
+# cocoa display keeps the Command keys for the host unless told otherwise;
+# left-command-key=on sends both Command keys to the guest as Meta and keeps
+# Meta on a chord (measured on 2026-11-03 with QEMU 11.1.2, whose default
+# already does so; docs/research/desktop/command-key.md), which
+# the stage 7 desktop needs for its system key (ADR-0160). Cmd-Tab stays
+# the system's. --display-opts replaces the whole value.
 display=none
-[ "$gui" = 1 ] && [ "$mode" = interactive ] && display=default
+if [ "$gui" = 1 ] && [ "$mode" = interactive ]; then
+    display=default
+    [ "$(uname -s)" = Darwin ] && display=cocoa,left-command-key=on
+fi
+[ -n "$display_opts" ] && display=$display_opts
 case $mode in
     interactive) set -- "$@" -display "$display" -serial mon:stdio ;;
     test) set -- "$@" -display none -monitor none -serial stdio ;;

@@ -2,3 +2,4 @@
 # target/ of a crate built alone, and test-logs/ a test writes there.
 target/
 /build/
+.DS_Store

@@ -42,6 +42,7 @@ members = [
     "tools/zoraya-mkfs",
     "tools/zoraya-fsck",
     "tools/mutants",
+    "tools/mockups",
     "user",
     "tools/zoraya-ar",
     "tools/posix-surface-check",

@@ -839,6 +839,7 @@ or `exit` turns the machine off.
 | 4 (done) | virtio-blk, filesystem service, `mkfs` on host | files survive reboot |
 | 5 (done) | virtio-gpu, virtio-input, compositor, terminal as GUI client | screenshot shows a terminal window; TASK-14: `zosh` runs in it and keys typed into it run file commands (`make test-gui`) |
 | 6 | `libposix` T1 per ADR-0005, port of tcc, make, dash | `tcc hello.c && ./a.out` inside Zoraya |
+| 7 | design system, text rendering, window management, keyboard layouts, scaling, toolkit, chooser, panel, file manager, editor, settings, clipboard, list settings, rooms (ADR-0160 to ADR-0172) | a person opens a file from the file manager in the editor through the chooser, in a window the compositor framed, with Ukrainian and Czech names on screen, at scale 1 and 2 (`make test-gui`) |
 
 ## Where things are
 
