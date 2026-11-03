@@ -1,6 +1,6 @@
 [package]
 name = "zoraya-shell"
-description = "The line editor, parser and reports of the console shell."
+description = "The native shell's language, line editor and reports (ADR-0150 to ADR-0154)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,8 @@ license.workspace = true
 
 [dependencies]
 zoraya-abi = { path = "../zoraya-abi" }
+zoraya-describe = { path = "../zoraya-describe" }
+zoraya-command = { path = "../zoraya-command" }
 
 [lints]
 workspace = true

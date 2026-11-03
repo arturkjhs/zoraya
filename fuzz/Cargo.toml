@@ -21,6 +21,7 @@ libfuzzer-sys = "=0.4.10"
 zoraya-fs = { path = "../crates/zoraya-fs" }
 zoraya-fs-testkit = { path = "../crates/zoraya-fs-testkit" }
 zoraya-describe = { path = "../crates/zoraya-describe" }
+zoraya-shell = { path = "../crates/zoraya-shell" }
 
 [[bin]]
 name = "mount_walk"
@@ -39,6 +40,13 @@ bench = false
 [[bin]]
 name = "describe"
 path = "fuzz_targets/describe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shell_parse"
+path = "fuzz_targets/shell_parse.rs"
 test = false
 doc = false
 bench = false

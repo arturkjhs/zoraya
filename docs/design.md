@@ -890,7 +890,8 @@ crates/                   no_std, host-tested
   zoraya-stream/          the byte stream's ring and its transfer rules (ADR-0101)
   zoraya-protocol/        the wire format and the protocol! macro
   zoraya-proto-block/, zoraya-proto-file/  the block and file protocols
-  zoraya-shell/           zosh's line editor, parser and reports
+  zoraya-shell/           zosh's language (parser, globs, evaluator over a host trait, ADR-0150, ADR-0151),
+                          its line editor and exit records in words; describe/ holds the language builtins' pages
   zoraya-describe/        command descriptions (NAME.cmd): the total parser of ADR-0156
   zoraya-command/         what every native command shares: argv from its description, --help, error lines,
                           statuses in words, exit codes (ADR-0155)

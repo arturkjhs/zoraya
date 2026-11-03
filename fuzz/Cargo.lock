@@ -82,6 +82,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "zoraya-abi"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-command"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-describe",
+ "zoraya-proto-file",
+]
+
+[[package]]
 name = "zoraya-describe"
 version = "0.1.0"
 
@@ -97,6 +110,7 @@ dependencies = [
  "zoraya-describe",
  "zoraya-fs",
  "zoraya-fs-testkit",
+ "zoraya-shell",
 ]
 
 [[package]]
@@ -104,4 +118,24 @@ name = "zoraya-fs-testkit"
 version = "0.1.0"
 dependencies = [
  "zoraya-fs",
+]
+
+[[package]]
+name = "zoraya-proto-file"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-protocol"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-shell"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-command",
+ "zoraya-describe",
 ]

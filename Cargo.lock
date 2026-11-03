@@ -312,6 +312,8 @@ name = "zoraya-shell"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-command",
+ "zoraya-describe",
  "zoraya-test-alloc",
 ]
 

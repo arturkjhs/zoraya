@@ -1,8 +1,22 @@
-//! What `zosh` does without the kernel: edit a line, parse it, describe an
-//! exit (TASK-11). No allocation: fixed buffers, so a flood of input costs
-//! nothing but the keys it drops.
+//! What `zosh` does without the kernel (TASK-11, TASK-18).
+//!
+//! The language of ADR-0150 and ADR-0151 is in [`syntax`] (the parser),
+//! [`glob`], [`record`] (exit records in words) and [`eval`] (the
+//! evaluator over a [`eval::Host`]). The fixed-buffer editor, `split` and
+//! `Report` below are TASK-11's, kept until the new `zosh` replaces them
+//! (TASK-18 step 6).
 
 #![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+pub mod eval;
+pub mod glob;
+pub mod record;
+pub mod syntax;
+
+#[cfg(test)]
+mod lang_tests;
 
 use core::fmt::{self, Write};
 
