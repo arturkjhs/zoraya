@@ -1,0 +1,11 @@
+[package]
+name = "zoraya-mockups"
+description = "Renders the stage 7 desktop mockups (TASK-19) as PNG from design tokens, with its own TrueType rasteriser and PNG encoder."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
