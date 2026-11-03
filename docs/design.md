@@ -426,21 +426,25 @@ host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6
   the stub `zoraya-posix` (ADR-0140: a generated Rust static library in which every function of the Rust half fails
   with `ENOSYS` or traps, and which brings `compiler_builtins`). The shim routes eleven calls; 34 files it refuses
   (33 that make other calls, and `ioctl.c`, which needs musl's Linux constants) are not compiled; 750 names outside the tier list (673 from musl, 77 from the Rust members) are renamed `__zoraya_*` in every object, so that the
-  archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141). The sysroot also has
+  archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141) and the five names ADR-0142 and
+  ADR-0144 add in their files' `posix-surface-added` blocks. `<zoraya/posix.h>` (`ports/include/`) declares Zoraya's
+  additions (ADR-0142). The sysroot also has
   `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
-- **The ports.** dash (TASK-02's M4 patch), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched)
-  and tcc (a `Zoraya` target and a fix for `SHF_EXCLUDE` sections) build with `zcc`, and none needed `__linux__`.
-  toybox (`cat head ls mv rm sleep touch true uname sort wc yes`) has a rule but has not been built on the M4: its
-  scripts need GNU sed, which that host lacks, so whether it builds without `__linux__` is not yet known. Since the
-  root file system needs toybox, `make ports` and `make check-ports` do not complete on the M4 until GNU sed is
-  installed; the checks below were run one by one there (TASK-17 review). `build/rootfs-posix` is to have the
-  programs in `/bin` with a symbolic link per applet and the sysroot as `/usr`.
+- **The ports.** All build with `zcc`, and none with `__linux__`: dash (TASK-02's M4 patch and ADR-0142's two
+  job-control patches: the fork group hint, and `vforkexec` through `posix_spawn` with `SETPGROUP` and
+  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched), toybox (`cat head
+  ls mv rm sleep touch true uname sort wc yes`; one patch gives `lib/portability.[ch]` a Zoraya branch at the seven
+  places that stop an unknown OS with `#error`, and the link needs ADR-0144's `atoll` and `getdelim`) and tcc (a
+  `Zoraya` target and a fix for `SHF_EXCLUDE` sections). toybox's scripts need GNU sed. `build/rootfs-posix` has the
+  programs in `/bin` with a symbolic link per applet and the sysroot as `/usr`. A clean `make -j4 ports` takes about
+  31 s on the M4, and two clean builds give the same bytes for all 18 outputs compared.
 - **`make check-ports`** (the end of `make ports`): the tier list is the CSV's (INV-0100-1); `posix-surface-check`
   checks `libc.a` (exports, the exclusion table, missing names, unresolved references, the symbol index, `svc`) and
   fails on five broken copies of it; every excluded musl file is refused by the shim; `zoraya-elf-check` runs the
   loader's parser over every program and over the `a.out` that a host build of the same tcc links against the
-  sysroot (INV-0109-1, ADR-0143); both compilers' predefined macros. `make test` runs only the fast part: the tools'
+  sysroot (INV-0109-1, ADR-0143); `ports/compare-predefs.sh` requires `zcc` and tcc to predefine the same identity
+  (`__zoraya__`, no Unix or Linux name, the same target and ABI-type macros; ADR-0143). `make test` runs only the fast part: the tools'
   host tests and the fetch step's test (`make check-fetch-ports`).
 
 ## Tests
@@ -680,8 +684,9 @@ or `exit` turns the machine off.
   allocator bitmap in memory (one bit per block). `fsck --repair` cannot repair damaged tree blocks. Requests are
   served one at a time.
 - **Ports.** Nothing built by `make ports` runs yet: every program faults in the stub's `zoraya_posix_start` before
-  `main` until 6c (ADR-0140). dash carries only TASK-02's M4 patch; its job-control patches wait for ADR-0142. tcc's
-  host check uses a tcc compiled for the host from the same source, not the Zoraya binary (ADR-0143). Programs are
+  `main` until 6c (ADR-0140). dash's job-control patches (ADR-0142) are compiled, not run: the broker of 6d is their
+  first test. toybox has no mount table, file notification or path-based extended attributes on Zoraya (its
+  portability patch fails them); no T1 applet uses them. tcc's host check uses a tcc compiled for the host from the same source, not the Zoraya binary (ADR-0143). Programs are
   installed with their debug information.
 - **CI not run.** The CI workflow (`.github/workflows/test.yml`) runs `make test` on Linux with TCG and, in a second
   job, `make fetch-ports` and `make ports`; neither has run yet.

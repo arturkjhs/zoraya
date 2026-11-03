@@ -7,6 +7,9 @@
 //!   (INV-0005-2), that it defines every name of the list and every name its
 //!   members use, and that no member outside the allowed ones contains `svc`
 //!   (INV-0100-2).
+//!
+//! LIST may be followed by `+ADR` parts: ADR files whose `posix-surface-added`
+//! blocks add names to the list (ADR-0142, ADR-0144).
 //! - `hide LIST OUTDIR OBJECT...` hides every defined name outside the list
 //!   (ADR-0141): it writes each object, renamed, into OUTDIR under its base
 //!   name and prints the renames, one `old new` pair per line.
@@ -15,6 +18,27 @@ use std::collections::BTreeSet;
 use std::process::ExitCode;
 
 use posix_surface_check::{ar, elf, rename, surface};
+
+/// The names an archive may export: `SPEC` is the tier list's file, then
+/// `+`-separated ADR files whose `posix-surface-added` blocks add names. A
+/// name from an ADR that is not accepted is admitted with a printed note.
+fn names(spec: &str) -> Result<BTreeSet<String>, String> {
+    let mut parts = spec.split('+');
+    let list = parts.next().unwrap_or_default();
+    let mut names = surface::parse_list(&read_text(list)?);
+    for adr in parts {
+        let (added, accepted) =
+            surface::added_names(&read_text(adr)?).map_err(|e| format!("{adr}: {e}"))?;
+        if !accepted {
+            eprintln!(
+                "posix-surface-check: note: {adr} is not accepted; admitting {}",
+                added.join(", ")
+            );
+        }
+        names.extend(added);
+    }
+    Ok(names)
+}
 
 fn read(path: &str) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| format!("{path}: {e}"))
@@ -58,7 +82,7 @@ fn check(args: &[String]) -> Result<bool, String> {
             _ => return Err(format!("unexpected argument '{flag}'")),
         }
     }
-    let names = surface::parse_list(&read_text(list)?);
+    let names = names(list)?;
     let bytes = read(archive)?;
     let mut objects = Vec::new();
     for m in ar::members(&bytes).map_err(|e| format!("{archive}: {e}"))? {
@@ -104,7 +128,7 @@ fn hide(args: &[String]) -> Result<(), String> {
     let [list, outdir, paths @ ..] = args else {
         return Err("usage: hide LIST OUTDIR OBJECT...".into());
     };
-    let names = surface::parse_list(&read_text(list)?);
+    let names = names(list)?;
     let files: Vec<(String, Vec<u8>)> = paths
         .iter()
         .map(|p| Ok((p.clone(), read(p)?)))

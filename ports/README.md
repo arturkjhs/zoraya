@@ -18,6 +18,8 @@ committed: only the lock, the patches and the build files below.
 | `musl/zoraya/` | musl's replaced `src/internal/syscall.h` (the shim), the empty `crt_arch.h` for `crt1.c`, and musl's patch |
 | `crt/crt1.S` | `_start` (ADR-0109 item 4) |
 | `posix-stub/` | the ENOSYS stub of `zoraya-posix` until 6c (ADR-0140) |
+| `include/zoraya/posix.h` | Zoraya's additions to the POSIX interface (ADR-0142), installed into the sysroot; the repository's BSD-2-Clause licence |
+| `compare-predefs.sh` | `zcc` and tcc must predefine the same identity (ADR-0143) |
 | `patches/<program>/` | patches to each program, applied in name order |
 | `tests/hello.c` | the program tcc links in the host check (ADR-0143) |
 | `check-broken-archives.sh` | the export check on broken copies of `libc.a` |
@@ -32,9 +34,9 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | Program | Version (`sources.lock`) | Licence of the original | Patches here |
 |---|---|---|---|
 | musl | 1.2.5 | MIT (`COPYRIGHT`) | `musl/zoraya/0001-no-secure-start.patch`; `musl/zoraya/syscall.h` replaces musl's file of that name and is under musl's MIT licence |
-| dash | 0.5.13.5 | BSD-3-Clause (`COPYING`; it also lists `mksignames.c` as GPL, which no patch touches) | `patches/dash/0001-vforkexec-to-posix_spawn.patch`, TASK-02's M4 patch unchanged |
+| dash | 0.5.13.5 | BSD-3-Clause (`COPYING`; it also lists `mksignames.c` as GPL, which no patch touches) | `patches/dash/0001-vforkexec-to-posix_spawn.patch` (TASK-02's M4 patch unchanged), `0002-fork-group-hint.patch`, `0003-vforkexec-setpgroup-tcsetpgrp.patch` (ADR-0142) |
 | GNU make | 4.4.1 | GPL-3.0-or-later (`COPYING`); `build-aux/config.sub` GPL-3.0-or-later with the Autoconf exception | `patches/make/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
-| toybox | 0.8.15 | 0BSD (`LICENSE`) | none |
+| toybox | 0.8.15 | 0BSD (`LICENSE`) | `patches/toybox/0001-zoraya-portability.patch` |
 | busybox | 1.38.0 | GPL-2.0-only (`LICENSE`) | none |
 | TinyCC | mob, commit `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (`COPYING` is version 2.1; the LGPL-licensed files say version 2 or any later; some files, such as `arm64-gen.c`, carry a permissive notice) | `patches/tcc/0001-zoraya-target.patch`, `patches/tcc/0002-skip-shf-exclude-sections.patch` |
 
@@ -56,7 +58,8 @@ ADR-0109 revisit.
 - **GNU make**: `./configure --host=aarch64-unknown-zoraya --disable-load --without-guile
   --disable-nls`.
 - **toybox**: `make allnoconfig`, then the applets of `TOYBOX_APPLETS` in
-  `Makefile`; on a macOS host it needs GNU sed (`brew install gnu-sed`).
+  `Makefile`; on a macOS host it needs GNU sed (`brew install gnu-sed`). Its link
+  needs ADR-0144's two names.
 - **busybox**: `make allnoconfig`, the shell choice set to none, then `tr` and `diff`,
   as TASK-02's minimal builds.
 - **tcc**: `./configure --cpu=aarch64 --targetos=Zoraya ...` (ADR-0143), `tcc` and

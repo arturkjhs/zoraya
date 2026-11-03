@@ -1,0 +1,46 @@
+--- a/src/jobs.c
++++ b/src/jobs.c
+@@ -47,6 +47,9 @@
+ #include <sys/resource.h>
+ #endif
+ #include <sys/ioctl.h>
++#ifdef __zoraya__
++#include <zoraya/posix.h>
++#endif
+ 
+ #include "shell.h"
+ #if JOBS
+@@ -968,7 +971,23 @@
+ 		if (jobctl && n)
+ 			ps->cmd = commandtext(n);
+ 	}
++}
++
++#ifdef __zoraya__
++/*
++ * Zoraya (ADR-0104 item 4, ADR-0142): the broker puts a forked child into its
++ * process group when it creates it, so the shell names, before fork(), the
++ * group that forkparent and forkchild then setpgid to.
++ */
++static pid_t forkgroup(struct job *jp, int mode)
++{
++#if JOBS
++	if (jp && mode != FORK_NOJOB && jp->jobctl)
++		return jp->nprocs == 0 ? ZORAYA_FORK_NEW : jp->ps[0].pid;
++#endif
++	return ZORAYA_FORK_INHERIT;
+ }
++#endif
+ 
+ int
+ forkshell(struct job *jp, union node *n, int mode)
+@@ -979,6 +998,9 @@
+ 
+ 	flush_input();
+ 
++#ifdef __zoraya__
++	zoraya_fork_group(forkgroup(jp, mode));
++#endif
+ 	pid = fork();
+ 	if (pid == 0)
+ 		forkchild(jp, n, mode);

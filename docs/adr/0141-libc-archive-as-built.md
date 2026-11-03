@@ -1,6 +1,6 @@
 # ADR-0141: `libc.a` as built: the files, the shim, hidden names and the check
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0005, ADR-0100, ADR-0109, ADR-0140
 - **Evidence:** CP-27, DM-057, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#qnx, stage-6/sources.md#libc-implementations, task-02/libc-surface.csv
@@ -153,3 +153,4 @@ Apple clang 21 on the M4) and found where the accepted text and the code part. T
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.

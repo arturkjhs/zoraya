@@ -62,7 +62,7 @@ prints the clang it uses.
 | the host's C compiler (`cc`): dash's helpers, tcc's `c2str` and the host tcc of the link check | Apple clang 21.0.0 on the M4 | Xcode Command Line Tools / distribution |
 | `curl`, `shasum` or `sha256sum` (`make fetch-ports`) | curl 8.7.1 | macOS / distribution |
 | `patch`, `tar` with gzip and bzip2, `awk`, `sed` | the host's | macOS / distribution |
-| GNU sed, as `gsed` or `sed` (toybox's build scripts) | not installed on the M4 at the end of TASK-17 (`brew install gnu-sed`) | `brew install gnu-sed` on macOS; the default `sed` on Linux |
+| GNU sed, as `gsed` or `sed` (toybox's build scripts) | GNU sed 4.10 (Homebrew `gnu-sed`) on the M4 | `brew install gnu-sed` on macOS; the default `sed` on Linux |
 
 `rust-objcopy`, which ADR-0109 item 10 lists, is not used: it needs the `llvm-tools` component, which the minimal
 profile of `rust-toolchain.toml` does not install, so `posix-surface-check` renames symbols itself (ADR-0141).

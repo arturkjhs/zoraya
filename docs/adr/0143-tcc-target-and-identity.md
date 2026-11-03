@@ -1,7 +1,7 @@
 # ADR-0143: tcc's Zoraya target, and what the compilers predefine
 
 - **Status:** proposed
-- **Date:** 2026-11-02
+- **Date:** 2026-11-03
 - **Depends on:** ADR-0005, ADR-0033, ADR-0100, ADR-0108, ADR-0109, ADR-0140, ADR-0141
 - **Evidence:** CP-13, CP-16, DM-007, alternatives-postmortem.md#redox, stage-6/sources.md#tinycc
 
@@ -34,6 +34,21 @@ found:
    four `PT_LOAD` segments (R, R-X, RW-, RW-) from 4 MiB and no `PT_INTERP`, which `zoraya-elf` accepts unchanged.
 9. Apple's and LLVM's clang, for `aarch64-unknown-none-elf`, define neither `__linux__` nor `__unix__`; `zcc` adds
    `__zoraya__`.
+10. **Who tests `__unix__`** (the sources of W1 to W3 at TASK-02's pins, hashes checked, and of every port, grepped for
+    `__unix__`, `__unix` and `unix` as a macro):
+    - **Lua 5.5.1 (W2):** never. Its only OS test is `_WIN32`; W2's `make posix` passes `-DLUA_USE_POSIX`, which
+      selects every POSIX path (`luaconf.h`, `loslib.c`, `liolib.c`, `lua.c`).
+    - **SQLite 3540100 (W3):** never. `sqlite3.c` chooses its Unix VFS whenever the target is not Windows (`_WIN32`,
+      `WIN32`, `__CYGWIN__`, `__MINGW32__`, `__BORLANDC__`), and `shell.c` likewise; `__linux__` selects only optional
+      features (`fdatasync`, `O_TMPFILE`, batch atomic writes), which are then left out.
+    - **tcc (W1):** never in its own code; `tccpp.c` only predefines `__unix__` for its targets. `__linux__` appears
+      in `conftest.c` (the host's triplet, at configure time) and in the bounds checker, which Zoraya does not build.
+    - **The ports:** musl's headers, dash, GNU make (with gnulib) and toybox never; busybox only together with
+      `__digital__` (Tru64).
+    So no program in scope selects anything by `__unix__`, and nothing takes a non-Unix path for its absence.
+11. **What else the two compilers predefine differently** (the OS, object-format, architecture and ABI-type macros of
+    `zcc -dM -E` and the host tcc's `-dM -E`): clang defines `__ELF__` and `_LP64`, tcc neither; clang's bare-metal
+    target says `__WINT_TYPE__` is `int`, tcc says `unsigned int`, and musl's `wint_t` on AArch64 is `unsigned`.
 
 ## Decision drivers
 
@@ -62,8 +77,8 @@ found:
   `aarch64-unknown-zoraya` and `-v` `AArch64 Zoraya`; `libtcc1.a` leaves out `armflush.o`. Patch 0002 skips
   `SHF_EXCLUDE` sections, as the ELF gABI says a link must.
 - **Evidence for:** Drivers 1 to 4; the hello world links with the Rust members in `libc.a` (finding 5).
-- **Evidence against:** A program that selects its POSIX code by `__unix__` takes its non-Unix path on Zoraya (none of
-  the T1 programs does: they built without it). Of finding 1's other two branches, the bounds checker's is moot (no
+- **Evidence against:** A program that selects its POSIX code by `__unix__` would take its non-Unix path on Zoraya;
+  no program in scope does (finding 10). Of finding 1's other two branches, the bounds checker's is moot (no
   `-b`), and Zoraya gets the macro forms of the huge-value and NaN builtins; compiled by the host tcc, musl's
   `INFINITY`, `HUGE_VAL` and `HUGE_VALL` are infinities and `NAN` is a NaN (checked once, TASK-17).
 - **Cost:** *(estimate)* 150 lines of patches, as built.
@@ -72,9 +87,12 @@ found:
 ### Option C: The same target, with `__unix__` predefined by tcc and `zcc`
 
 - **Description:** As B, and both compilers also define `__unix__` and `__unix`.
-- **Evidence for:** Programs that test `__unix__` for POSIX interfaces would take that path.
-- **Evidence against:** Zoraya is not Unix: POSIX is a personality over native handles (ADR-0002), and a program that
-  keys on `__unix__` may expect more than the tier list; the T1 programs need neither.
+- **Evidence for:** Programs that test `__unix__` for POSIX interfaces would take that path; outside the programs in
+  scope (T2 and later) some do.
+- **Evidence against:** No program in scope tests it (finding 10), so it buys nothing measured. Zoraya is not Unix:
+  POSIX is a personality over native handles (ADR-0002), and a program that keys on `__unix__` may expect more than
+  the tier list (`/proc`, `fork` at volume, signals anywhere); defining it later is one line in each compiler, while
+  taking it back after programs depend on it is not (CP-13).
 - **Cost:** As B, plus the definition in both compilers.
 - **Precedent:** Most Unix-like hobby systems define it.
 
@@ -90,12 +108,19 @@ for BSD note sections) and `make GITHASH=no` keep the build host out of the buil
 (finding 6). tcc's `c2str` runs on the host and is compiled by the host's compiler before `make`; `libtcc1.a` is
 compiled by `zcc` (`arm64-libtcc1-usegcc=yes`).
 
+**One identity for both compilers** (finding 11). Both predefine `__zoraya__`, no Unix or Linux name, `__ELF__`,
+`__aarch64__`, `__AARCH64EL__`, `__LP64__` and `_LP64`, unsigned `char`, little-endian byte order, and the same
+`size_t`, `ptrdiff_t`, `wchar_t` (`unsigned int`), `wint_t` (`unsigned int`) and `int64_t`: patch 0001 adds `__ELF__`
+and `_LP64` to tcc's Zoraya target, and `zcc` sets `__WINT_TYPE__` to musl's. `ports/compare-predefs.sh`, a step of
+`make check-ports`, compares these 26 names (defined or not, and their values) between `zcc` and the host tcc and
+fails on any difference; 15 are defined. Compiler-specific macros (`__clang__`, `__TINYC__`, feature macros) are not
+compared.
+
 **The host check of item 7.** The tcc built for Zoraya cannot run on the host. `make check-ports` therefore builds the
 same source with the same patches and configuration, compiled by the host's C compiler and with every path rooted at
 `build/sysroot`; that tcc compiles and links `ports/tests/hello.c` (variadic calls, `long double`, `wchar_t`) with
 the sysroot's crt objects, `libc.a` and `libtcc1.a`, `zoraya-elf-check` accepts the result (finding 8, which answers
-ADR-0108's open question: no patch for the loader's ranges or alignment), and its predefined macros contain
-`__zoraya__` and nothing of Linux or Unix. What it does not check is the cross-built tcc's own code generation on
+ADR-0108's open question: no patch for the loader's ranges or alignment), and its predefined identity is `zcc`'s. What it does not check is the cross-built tcc's own code generation on
 Zoraya, which only W1 in 6e can.
 
 ## Consequences
@@ -107,10 +132,8 @@ Zoraya, which only W1 in 6e can.
 
 ## Invariants
 
-- **INV-0143-1.** tcc for Zoraya predefines `__zoraya__` and none of `__linux__`, `__linux`, `__unix__`, `__unix`;
-  `zcc` likewise. *Check:* `make check-ports` greps the host tcc's `-dM -E` output; `zcc` refuses `-D__linux__`.
-- **INV-0143-2.** tcc for Zoraya has no `-run`. *Check:* `TCC_IS_NATIVE` is undefined under `TARGETOS_Zoraya`
-  (patch 0001), so `tccrun.c` compiles to nothing; a review item.
+- **INV-0143-1.** tcc for Zoraya and `zcc` predefine the same identity: `__zoraya__`, none of `__unix__`, `__unix`, `unix`, `__linux__`, `__linux`, `linux`, `__gnu_linux__`, and equal values for the object-format, architecture and ABI-type macros. *Check:* `ports/compare-predefs.sh` in `make check-ports`; `zcc` refuses `-D__linux__`.
+- **INV-0143-2.** tcc for Zoraya has no `-run`. *Check:* `TCC_IS_NATIVE` is undefined under `TARGETOS_Zoraya` (patch 0001), so `tccrun.c` compiles to nothing, and `make check-ports` finds the cross compiler's refusal of `-run` in the binary.
 
 ## Open questions
 
@@ -122,7 +145,7 @@ Zoraya, which only W1 in 6e can.
 
 ## Revisit triggers
 
-- A program in scope that needs `__unix__`.
+- A program in scope that tests `__unix__` (T2 brings autoconf projects; the grep of finding 10 is the check to repeat).
 - A tcc update that changes `TCC_IS_NATIVE` or its target-OS macros.
 
 ## Architect's decision

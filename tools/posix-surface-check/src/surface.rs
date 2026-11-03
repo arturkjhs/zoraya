@@ -362,3 +362,26 @@ pub fn check_index_offsets(
     }
     out
 }
+
+/// The names an ADR adds to the surface (INV-0005-1: "or in an accepted
+/// superseding ADR"): the lines of its fenced block with the info string
+/// `posix-surface-added`, and whether its status is `accepted`. An ADR with
+/// no such block is an error, so that a wrong file is not silently empty.
+pub fn added_names(adr: &str) -> Result<(Vec<String>, bool), String> {
+    let accepted = adr.lines().any(|l| l.trim() == "- **Status:** accepted");
+    let mut lines = adr.lines();
+    if !lines.any(|l| l.trim() == "```posix-surface-added") {
+        return Err("no posix-surface-added block".into());
+    }
+    let mut names = Vec::new();
+    for l in lines {
+        let l = l.trim();
+        if l == "```" {
+            return Ok((names, accepted));
+        }
+        if !l.is_empty() {
+            names.push(l.to_string());
+        }
+    }
+    Err("unterminated posix-surface-added block".into())
+}

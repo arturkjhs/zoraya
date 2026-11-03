@@ -203,3 +203,38 @@ fn the_summary_counts_defined_non_internal_names_only() {
         "{text}"
     );
 }
+
+#[test]
+fn an_adr_s_block_extends_the_list_and_a_proposed_one_is_noted() {
+    let d = tmp("added");
+    let o = object(&[("open", 1, true), ("atoll", 1, true)]);
+    let members = [zoraya_ar::Member {
+        name: "o.o".into(),
+        data: o,
+    }];
+    let archive = d.join("lib.a");
+    std::fs::write(&archive, zoraya_ar::write(&members).unwrap()).unwrap();
+    let list = d.join("list.txt");
+    std::fs::write(&list, "open\n").unwrap();
+    let adr = d.join("adr.md");
+    std::fs::write(
+        &adr,
+        "- **Status:** proposed\n\n```posix-surface-added\natoll\n```\n",
+    )
+    .unwrap();
+    let (l, a) = (list.to_str().unwrap(), archive.to_str().unwrap());
+    assert!(!run(&["check", l, a]).0);
+    let spec = format!("{l}+{}", adr.to_str().unwrap());
+    let (ok, text) = run(&["check", &spec, a]);
+    assert!(
+        ok && text.contains("is not accepted; admitting atoll"),
+        "{text}"
+    );
+    std::fs::write(
+        &adr,
+        "- **Status:** accepted\n\n```posix-surface-added\natoll\n```\n",
+    )
+    .unwrap();
+    let (ok, text) = run(&["check", &spec, a]);
+    assert!(ok && !text.contains("not accepted"), "{text}");
+}

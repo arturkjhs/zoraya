@@ -39,6 +39,12 @@ ZAR := $(ROOT)/target/debug/zoraya-ar
 SURFACE_CHECK := $(ROOT)/target/debug/posix-surface-check
 ELF_CHECK := $(ROOT)/target/debug/zoraya-elf-check
 TIER_LIST := docs/adr/posix-surface-T1.txt
+# The names libc.a may export: the generated list, and the blocks of the ADRs
+# that add names (posix-surface-check's LIST+ADR form).
+ADDED_ADRS := docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md
+empty :=
+space := $(empty) $(empty)
+TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
 
 # Columns of sources.lock: name version sha256 file url.
 lock_file = $(shell awk '$$1 == "$(1)" { print $$4 }' $(LOCK))
@@ -106,7 +112,7 @@ $(MUSL): $(LOCK) $(wildcard ports/musl/zoraya/*.patch) ports/musl/zoraya/syscall
 # no Linux numbers in it (ADR-0109 item 2).
 HEADERS_STAMP := $(OBJ)/headers.stamp
 headers: $(HEADERS_STAMP)
-$(HEADERS_STAMP): $(MUSL)
+$(HEADERS_STAMP): $(MUSL) $(wildcard ports/include/*/*.h)
 	rm -rf $(SYSROOT)/usr/include && mkdir -p $(SYSROOT)/usr/include/bits
 	cp -R $(MUSL)/include/. $(SYSROOT)/usr/include/
 	rm -f $(SYSROOT)/usr/include/alltypes.h.in
@@ -116,6 +122,7 @@ $(HEADERS_STAMP): $(MUSL)
 	  $(MUSL)/include/alltypes.h.in > $(SYSROOT)/usr/include/bits/alltypes.h
 	printf '/* Zoraya: no Linux system call numbers (ADR-0109 item 2). */\n' \
 	  > $(SYSROOT)/usr/include/bits/syscall.h
+	cp -R ports/include/. $(SYSROOT)/usr/include/
 	@mkdir -p $(dir $@) && touch $@
 
 # ---------------------------------------------------------------- musl
@@ -148,10 +155,10 @@ $(STUB_LIB): ports/posix-stub/stubs.txt ports/posix-stub/stubs.awk
 # object and writes the list of renames.
 LIBC := $(SYSROOT)/usr/lib/libc.a
 LIBC_DIR := $(OBJ)/libc
-$(LIBC): $(MUSL_LIST) $(STUB_LIB) $(TIER_LIST) $(ZAR) $(SURFACE_CHECK)
+$(LIBC): $(MUSL_LIST) $(STUB_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
 	rm -rf $(LIBC_DIR) && mkdir -p $(LIBC_DIR)/stub $(LIBC_DIR)/out
 	cd $(LIBC_DIR)/stub && $(ZAR) x $(STUB_LIB)
-	$(SURFACE_CHECK) hide $(TIER_LIST) $(LIBC_DIR)/out $$(cat $(MUSL_LIST)) \
+	$(SURFACE_CHECK) hide $(TIER_SPEC) $(LIBC_DIR)/out $$(cat $(MUSL_LIST)) \
 	  $$(for m in $$($(ZAR) t $(STUB_LIB)); do echo $(LIBC_DIR)/stub/$$m; done) > $(LIBC_DIR)/hidden.txt
 	@echo "libc.a: hid $$(wc -l < $(LIBC_DIR)/hidden.txt | tr -d ' ') names outside the tier list: $(LIBC_DIR)/hidden.txt"
 	@mkdir -p $(dir $@)
@@ -393,26 +400,24 @@ check-ports: | tools
 	@echo "== the tier list is the one ADR-0100 item 7's rule gives"
 	$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
 	@echo "== libc.a against the tier list (INV-0100-1, INV-0100-2, INV-0005-1, INV-0005-2)"
-	$(SURFACE_CHECK) check $(TIER_LIST) $(LIBC)
+	$(SURFACE_CHECK) check $(TIER_SPEC) $(LIBC)
 	@echo "== the excluded musl files are exactly the ones the shim refuses (INV-0141-2)"
 	@$(MAKE) -s -f ports/musl/musl.mk MUSL=$(MUSL) OBJ=$(OBJ)/musl ZCC=$(ZCC) LIST=$(MUSL_LIST) check-excluded
 	@echo "== the same check fails on broken copies of libc.a"
-	ports/check-broken-archives.sh $(SURFACE_CHECK) $(ZAR) $(ZCC) $(TIER_LIST) $(LIBC) $(OBJ)/broken
+	ports/check-broken-archives.sh $(SURFACE_CHECK) $(ZAR) $(ZCC) \
+	  $(subst $(space),+,$(addprefix $(ROOT)/,$(TIER_LIST) $(ADDED_ADRS))) $(LIBC) $(OBJ)/broken
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
 	@for l in dash make busybox toybox tcc libtcc1 musl; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
-	$(ZCC) -dM -E -x c /dev/null > $(OBJ)/zcc-predefs.h
-	grep -q '__zoraya__' $(OBJ)/zcc-predefs.h && ! grep -q -e '__linux' -e '__unix' $(OBJ)/zcc-predefs.h
 	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi
 	@echo "== tcc links a hello world against the sysroot (ADR-0109 item 7)"
 	@$(MAKE) -f ports/Makefile tcc-host
 	rm -rf $(HELLO_DIR) && mkdir -p $(HELLO_DIR)
 	$(TCC_HOST) -dumpmachine | grep -x aarch64-unknown-zoraya
-	$(TCC_HOST) -dM -E - < /dev/null > $(HELLO_DIR)/predefs.h
-	grep -q '__zoraya__' $(HELLO_DIR)/predefs.h && ! grep -q -e '__linux' -e '__unix' $(HELLO_DIR)/predefs.h
+	ports/compare-predefs.sh $(ZCC) $(TCC_HOST) $(HELLO_DIR)
 	$(TCC_HOST) -o $(HELLO_DIR)/a.out ports/tests/hello.c
 	$(ELF_CHECK) $(HELLO_DIR)/a.out
 	@echo "== tcc for Zoraya has no -run: it calls itself a cross compiler (INV-0143-2)"

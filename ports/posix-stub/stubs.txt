@@ -167,6 +167,11 @@ int setsid
 int socket
 int tcsetattr
 
+# Section 2b: the names accepted ADRs add to the surface (ADR-0142).
+err posix_spawnattr_setpgroup
+err posix_spawnattr_setsigdefault
+int zoraya_fork_group
+
 # Section 3: the functions the system-call shim routes to
 # (ports/musl/zoraya/syscall.h) and the start-up of ADR-0109 item 4.
 raw zoraya_posix_read

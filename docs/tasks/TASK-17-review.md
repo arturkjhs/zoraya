@@ -76,11 +76,27 @@ the tools' capped allocator (1 GiB). The `mutant-triage` subagent sorted the fir
 The last full run of `posix-surface-check` left three; the two in `main.rs`'s count of exports (line 87) were holes,
 killed by `the_summary_counts_defined_non_internal_names_only`, as the run of `main.rs` alone shows.
 
+## After the architect's decisions (2026-11-03)
+
+The architect accepted ADR-0140, ADR-0141 and ADR-0142 (with dash's job-control patches written in 6b) and installed
+GNU sed on the M4. Then:
+
+- **toybox** builds without `__linux__` with one patch, `ports/patches/toybox/0001-zoraya-portability.patch`: toybox
+  stops an unknown OS with `#error` at seven places of `lib/portability.c` and leaves `struct statfs` incomplete; each
+  gets a Zoraya branch. Its link needs `atoll` and `getdelim` (T2 rows, pure musl), which proposed ADR-0144 adds.
+- **`make ports` completes on the M4**, ending in the full `make check-ports` (`check-ports: all passed`), twice in a
+  row over the same tree and once from clean. `libc.a` exports 245 names, the CSV's 240 plus ADR-0142's three and
+  ADR-0144's two; with the three `_` rows the list has 248.
+- **Reproducibility with toybox:** two clean `make -j4 ports` runs (about 31 s each) gave the same bytes for all 18
+  outputs compared (`libc.a`, the crt objects, the eight empty libraries, `libtcc1.a`, dash, make, busybox, tcc and
+  toybox).
+- **ADR-0143**, for the architect: no program of W1 to W3 nor any port tests `__unix__`, so both compilers keep
+  `__zoraya__` alone; `zcc` and tcc now predefine the same 26-name identity, compared by `ports/compare-predefs.sh`.
+
 ## Open
 
-- **toybox on macOS.** GNU sed (`gsed`) is not installed on the M4, so toybox, `build/rootfs-posix` and the
-  completion of `make ports` there are untested; the risk "toybox without `__linux__`" has no outcome yet. Linux CI
-  has GNU sed but has not run.
+- ADR-0143 and ADR-0144 await the architect.
+- Linux CI has not run.
 - `USER_LOW` is copied in `zoraya-elf-check` (A11).
 
 ## Check of the changed lines

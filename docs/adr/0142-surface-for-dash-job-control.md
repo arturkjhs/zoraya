@@ -1,6 +1,6 @@
 # ADR-0142: The surface dash's job-control patches need
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0003, ADR-0005, ADR-0100, ADR-0104, ADR-0109, ADR-0141
 - **Evidence:** CP-27, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, task-02/libc-surface.csv
@@ -80,7 +80,14 @@ be tested.
 ## Recommendation
 
 **Recommendation (not a decision): Option B**, written and tested in 6d with the broker. Until then (TASK-17), dash
-carries only the M4 patch, and its interactive path uses `vfork` as on Linux.
+carries only the M4 patch, and its interactive path uses `vfork` as on Linux. The names this ADR adds, in the form
+`posix-surface-check` reads:
+
+```posix-surface-added
+posix_spawnattr_setpgroup
+posix_spawnattr_setsigdefault
+zoraya_fork_group
+```
 
 ## Consequences
 
@@ -104,3 +111,4 @@ carries only the M4 patch, and its interactive path uses `vfork` as on Linux.
 
 ## Architect's decision
 
+Accepted, 2026-11-03, with one change: the two job-control patches of dash are written in 6b (TASK-17), not left to 6d; they are tested with the broker in 6d. The block of added names was put into the text before this record. Decided by the architect; recorded by an agent at the architect's request.

@@ -722,3 +722,16 @@ fn every_member_defining_an_indexed_name_needs_its_entry() {
         )]
     );
 }
+
+#[test]
+fn an_adr_adds_the_names_of_its_block() {
+    let adr = "# ADR\n\n- **Status:** accepted\n\ntext\n\n```posix-surface-added\natoll\n\ngetdelim\n```\nmore\n";
+    assert_eq!(
+        surface::added_names(adr).unwrap(),
+        (vec!["atoll".to_string(), "getdelim".to_string()], true)
+    );
+    let proposed = adr.replace("accepted", "proposed");
+    assert!(!surface::added_names(&proposed).unwrap().1);
+    assert!(surface::added_names("- **Status:** accepted\n").is_err());
+    assert!(surface::added_names("```posix-surface-added\natoll\n").is_err());
+}

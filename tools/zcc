@@ -70,12 +70,16 @@ for a in "$@"; do
     prev=$a
 done
 
+# Identity: __zoraya__, and the same OS and type macros as tcc for Zoraya
+# (ADR-0143; make check-ports compares them). clang's bare-metal target says
+# wint_t is int; musl's wint_t, and tcc's, is unsigned.
 # Code generation: AAPCS64 with FP and SIMD, static, no stack protector (no
 # AT_RANDOM source yet, ADR-0109 item 1). -nostdinc keeps the host's and
 # clang's own headers out: musl's are complete. The prefix map turns this
 # checkout's absolute path, in file names and the compilation directory, into
 # ".", so that objects do not depend on where the checkout is.
 set -- --target=aarch64-unknown-none-elf -D__zoraya__=1 \
+    -U__WINT_TYPE__ "-D__WINT_TYPE__=unsigned int" \
     -nostdinc -isystem "$sysroot/usr/include" \
     -fno-pic -fno-pie -fno-stack-protector \
     "-ffile-prefix-map=$root=." -Qunused-arguments "$@"

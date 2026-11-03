@@ -1,6 +1,6 @@
 # ADR-0140: How the ports link before `zoraya-posix` exists
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0005, ADR-0100, ADR-0109
 - **Evidence:** CP-27, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#redox, task-02/libc-surface.csv
@@ -112,3 +112,4 @@ same archive; the list then documents what 6c must provide on day one.
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
