@@ -28,9 +28,9 @@ note = "READABLE and WRITABLE must clear"
 [[mutant]]
 id = "K-snapshot-no-posix-gate"
 file = "kernel/src/syscall.rs"
-find = 'if !self.process.job().is_posix() {'
+find = 'if zoraya_abi::is_personality_only(number) && !process.job().is_posix() {'
 replace = 'if false {'
-note = "INV-0003-2, INV-0002-2"
+note = "INV-0003-2, INV-0002-2: the dispatcher is the one gate"
 
 [[mutant]]
 id = "K-snapshot-any-job"
@@ -185,3 +185,24 @@ find = '''
         }'''
 replace = ''
 note = "ADR-0108 item 1: length is at most the object's size"
+
+[[mutant]]
+id = "K-snapshot-moved-also-duplicated"
+file = "kernel/src/syscall.rs"
+find = 'if duplicable && !named(handle.slot()) && !moved(handle) {'
+replace = 'if duplicable && !named(handle.slot()) {'
+note = "ADR-0130 item 2, INV-0130-1: a moved duplicable handle is in one place (TASK-16 review T3)"
+
+[[mutant]]
+id = "K-resume-wakes-everything"
+file = "kernel/src/process.rs"
+find = 'if self.parked.swap(false, Ordering::Relaxed) {'
+replace = 'if { self.parked.store(false, Ordering::Relaxed); true } {'
+note = "ADR-0130 item 7: a resume wakes only parked threads, not a sleeper (TASK-16 review T6)"
+
+[[mutant]]
+id = "K-self-handle-full-rights"
+file = "kernel/src/process.rs"
+find = '.place(handle, entry, Rights::WAIT, object::next_id());'
+replace = '.place(handle, entry, zoraya_abi::ProcessObject::RIGHTS, object::next_id());'
+note = "ADR-0102 item 3: the self slot carries WAIT only (TASK-16 review T4)"

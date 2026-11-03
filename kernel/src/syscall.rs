@@ -919,10 +919,8 @@ impl Handlers for Calls<'_> {
 
     fn snapshot_process(&mut self, args: SnapshotBuffer) -> Result<u64, Status> {
         let started = timer::now();
-        // The one personality-only facility (INV-0002-2, INV-0003-2).
-        if !self.process.job().is_posix() {
-            return Err(Status::AccessDenied);
-        }
+        // Only for `posix` jobs: `dispatch` refuses it for others, as every
+        // `#[personality_only]` call (INV-0002-2, INV-0003-2).
         if args.0.length > MAX_SNAPSHOT_SIZE as u64 {
             return Err(Status::InvalidArgument);
         }
@@ -1201,10 +1199,7 @@ pub fn dispatch(frame: &mut Frame) {
         Some(process) if svc_immediate(frame.esr) == 0 => {
             // INV-0002-2: every `#[personality_only]` call is refused here
             // outside a `posix` job, whatever its handler checks.
-            let tagged = zoraya_abi::SYSCALLS
-                .iter()
-                .any(|s| s.call as u64 == number && s.personality_only);
-            if tagged && !process.job().is_posix() {
+            if zoraya_abi::is_personality_only(number) && !process.job().is_posix() {
                 Err(Status::AccessDenied)
             } else {
                 let mut calls = Calls {

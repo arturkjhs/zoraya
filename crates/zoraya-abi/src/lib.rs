@@ -961,6 +961,15 @@ macro_rules! syscalls {
             $($variant = $number,)*
         }
 
+        /// True if call `number` is `#[personality_only]` (INV-0002-2): what
+        /// a dispatcher checks before it runs the call.
+        pub const fn is_personality_only(number: u64) -> bool {
+            match number {
+                $($number => personality!($($tag)?),)*
+                _ => false,
+            }
+        }
+
         impl Syscall {
             pub const fn from_number(n: u64) -> Option<Syscall> {
                 Some(match n {

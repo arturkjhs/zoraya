@@ -84,6 +84,19 @@ fn nap(ms: u64) {
     sleep_until(clock_monotonic() + ms * 1_000_000);
 }
 
+/// Waits until `done`, up to 2 s, sleeping between looks: true if it
+/// happened. A slow host makes this slower, never wrong.
+fn eventually(done: impl Fn() -> bool) -> bool {
+    let deadline = clock_monotonic() + 2_000_000_000;
+    while !done() {
+        if clock_monotonic() > deadline {
+            return false;
+        }
+        nap(5);
+    }
+    true
+}
+
 fn suspended(job: Handle) -> bool {
     object_get_signals(job).expect("signals") & job_signals::SUSPENDED != 0
 }
@@ -99,12 +112,8 @@ fn suspend_stops_the_whole_tree_and_resume_starts_it() {
         counter(below, &counters, 2),
         counter(below, &counters, 3),
     ];
-    nap(50);
-    let running = counters.read();
-    assert!(
-        running[..4].iter().all(|&c| c > 0),
-        "all counting: {running:?}"
-    );
+    let all = || counters.read()[..4].iter().all(|&c| c > 0);
+    assert!(eventually(all), "all counting: {:?}", counters.read());
 
     job_suspend(top).expect("suspend");
     assert!(
@@ -123,27 +132,28 @@ fn suspend_stops_the_whole_tree_and_resume_starts_it() {
 
     job_resume(top).expect("resume");
     assert!(!suspended(top) && !suspended(below));
-    nap(50);
-    let again = counters.read();
-    for i in 0..4 {
-        assert!(again[i] > stopped[i], "{i} counts again");
-    }
+    let again = || (0..4).all(|i| counters.read()[i] > stopped[i]);
+    assert!(eventually(again), "all count again");
 
     // The lower job alone.
     job_suspend(below).expect("suspend");
     assert!(suspended(below) && !suspended(top));
     let part = counters.read();
-    nap(50);
-    let after = counters.read();
-    assert!(after[0] > part[0] && after[1] > part[1], "the top job runs");
-    assert_eq!(after[2..4], part[2..4], "the lower one does not");
+    let top_runs = || {
+        let now = counters.read();
+        now[0] > part[0] && now[1] > part[1]
+    };
+    assert!(eventually(top_runs), "the top job runs");
+    assert_eq!(counters.read()[2..4], part[2..4], "the lower one does not");
     // A process that joins a suspended job starts stopped.
     let late = counter(below, &counters, 4);
     nap(30);
     assert_eq!(counters.read()[4], 0, "a newcomer waits");
     job_resume(below).expect("resume");
-    nap(50);
-    assert!(counters.read()[4] > 0, "and runs after resume");
+    assert!(
+        eventually(|| counters.read()[4] > 0),
+        "and runs after resume"
+    );
 
     // Killing a suspended tree ends it.
     job_suspend(top).expect("suspend");
@@ -201,8 +211,7 @@ fn resume_wakes_only_what_it_stopped() {
     nap(30);
     assert_eq!(counters.read()[7], 0, "still stopped by its job");
     job_resume(job).expect("resume the job");
-    nap(30);
-    assert!(counters.read()[7] > 0, "now it runs");
+    assert!(eventually(|| counters.read()[7] > 0), "now it runs");
     job_kill(job).expect("kill");
     wait_exit(late);
     for h in [late, job, counters.object] {

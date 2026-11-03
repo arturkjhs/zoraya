@@ -224,6 +224,15 @@ fn snapshot_process_is_the_one_personality_only_call() {
         .map(|s| s.name)
         .collect();
     assert_eq!(tagged, ["snapshot_process"]);
+    for s in SYSCALLS {
+        assert_eq!(
+            is_personality_only(s.call as u64),
+            s.personality_only,
+            "{}",
+            s.name
+        );
+    }
+    assert!(!is_personality_only(u64::MAX));
 }
 
 /// ADR-0105 item 8: a job's `SUSPENDED` can be waited for.
