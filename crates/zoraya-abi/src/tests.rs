@@ -930,3 +930,366 @@ mod snapshots {
         assert_eq!(Encoder::new(&mut tiny, h(2, 0)).finish(), None);
     }
 }
+
+/// ADR-0107's bootstrap record and ADR-0153 rule 11's report (INV-0107-1).
+mod bootstrap {
+    use crate::posix::*;
+
+    const FACTS: Facts = Facts {
+        pid: 7,
+        ppid: 1,
+        pgid: 7,
+        sid: 1,
+        uid: 1000,
+        gid: 1000,
+        umask: 0o022,
+        ignored: 1 << 13,
+    };
+
+    const FDS: [Fd; 4] = [
+        Fd {
+            fd: 0,
+            kind: FdKind::Null,
+            flags: 0,
+            tty: NO_HANDLE,
+        },
+        Fd {
+            fd: 1,
+            kind: FdKind::StreamWrite,
+            flags: FD_NONBLOCK,
+            tty: NO_HANDLE,
+        },
+        Fd {
+            fd: 2,
+            kind: FdKind::Tty,
+            flags: 0,
+            tty: 2,
+        },
+        Fd {
+            fd: 511,
+            kind: FdKind::File,
+            flags: 0,
+            tty: NO_HANDLE,
+        },
+    ];
+
+    fn entries() -> [Entry<'static>; 4] {
+        [
+            Entry {
+                prefix: "/proc/self/exe",
+                kind: EntryKind::Image,
+                handle: 1,
+            },
+            Entry {
+                prefix: "/dev/null",
+                kind: EntryKind::Null,
+                handle: NO_HANDLE,
+            },
+            Entry {
+                prefix: "/tmp",
+                kind: EntryKind::Tmp,
+                handle: 3,
+            },
+            Entry {
+                prefix: "/",
+                kind: EntryKind::Directory,
+                handle: 0,
+            },
+        ]
+    }
+
+    fn sample(out: &mut [u8]) -> usize {
+        let exe = "/bin/t_libposix";
+        encode(&FACTS, 0, exe, 3, "home/Київ", &FDS, &entries(), 4, out).unwrap()
+    }
+
+    #[test]
+    fn a_record_round_trips() {
+        let mut b = [0; 1024];
+        let n = sample(&mut b);
+        let r = Bootstrap::decode(&b[..n], 4).unwrap();
+        assert_eq!(r.facts, FACTS);
+        assert_eq!(
+            (r.flags, r.exe, r.cwd_entry, r.cwd),
+            (0, "/bin/t_libposix", 3, "home/Київ")
+        );
+        assert!(r.fds().eq(FDS));
+        assert!(r.entries().eq(entries()));
+        assert_eq!((r.fd_count(), r.entry_count()), (4, 4));
+        // Encoding what was decoded gives the same bytes.
+        let fds: std::vec::Vec<Fd> = r.fds().collect();
+        let es: std::vec::Vec<Entry<'_>> = r.entries().collect();
+        let mut again = [0; 1024];
+        let m = encode(
+            &r.facts,
+            r.flags,
+            r.exe,
+            r.cwd_entry,
+            r.cwd,
+            &fds,
+            &es,
+            4,
+            &mut again,
+        );
+        assert_eq!(&again[..m.unwrap()], &b[..n]);
+        // An empty table of fds and the smallest namespace.
+        let root = [Entry {
+            prefix: "/",
+            kind: EntryKind::Directory,
+            handle: 0,
+        }];
+        let n = encode(
+            &Facts::default(),
+            ABSOLUTE,
+            "",
+            0,
+            "",
+            &[],
+            &root,
+            1,
+            &mut b,
+        )
+        .unwrap();
+        let r = Bootstrap::decode(&b[..n], 1).unwrap();
+        assert_eq!(
+            (r.flags, r.fds().count(), r.entries().count()),
+            (ABSOLUTE, 0, 1)
+        );
+    }
+
+    /// INV-0107-1: no prefix or mutation panics, and what is accepted
+    /// iterates to exactly its counts.
+    #[test]
+    fn the_decoder_is_total() {
+        let mut b = [0; 1024];
+        let n = sample(&mut b);
+        for length in 0..n {
+            assert!(Bootstrap::decode(&b[..length], 4).is_none(), "{length}");
+        }
+        let mut longer = b;
+        assert!(
+            Bootstrap::decode(&longer[..n + 1], 4).is_none(),
+            "a byte after the end"
+        );
+        longer[n] = 1;
+        assert!(Bootstrap::decode(&longer[..n + 1], 4).is_none());
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            x
+        };
+        let mut accepted = 0;
+        for _ in 0..200_000 {
+            let mut m = b;
+            for _ in 0..=next() % 3 {
+                m[next() as usize % n] = next() as u8;
+            }
+            let handles = (next() % 70) as usize;
+            if let Some(r) = Bootstrap::decode(&m[..n], handles) {
+                accepted += 1;
+                assert_eq!(r.fds().count(), r.fd_count());
+                assert_eq!(r.entries().count(), r.entry_count());
+                for e in r.entries() {
+                    assert!(is_absolute_normal(e.prefix));
+                    assert!(e.handle == NO_HANDLE || (e.handle as usize) < handles);
+                }
+            }
+            let _ = Report::decode(&m[..n]);
+        }
+        assert!(accepted > 0, "the mutations must reach the end of decoding");
+    }
+
+    #[test]
+    fn each_rule_refuses_on_its_own() {
+        let mut out = [0; 1024];
+        let e = entries();
+        let mut bad = |facts: Facts, cwd_entry: u32, cwd: &str, fds: &[Fd], es: &[Entry<'_>], h| {
+            encode(&facts, 0, "x", cwd_entry, cwd, fds, es, h, &mut out).is_none()
+        };
+        assert!(
+            !bad(FACTS, 3, "", &FDS, &e, 4),
+            "the sample itself is accepted"
+        );
+        let umask = Facts {
+            umask: 0o1000,
+            ..FACTS
+        };
+        assert!(bad(umask, 3, "", &FDS, &e, 4), "umask past 0o777");
+        assert!(bad(FACTS, 4, "", &FDS, &e, 4), "cwd entry past the end");
+        assert!(bad(FACTS, 0, "", &FDS, &e, 4), "cwd in an image entry");
+        assert!(bad(FACTS, 1, "", &FDS, &e, 4), "cwd in a null entry");
+        for cwd in ["/a", "a/", "a//b", "./a", "a/..", "a\0b"] {
+            assert!(bad(FACTS, 3, cwd, &FDS, &e, 4), "cwd {cwd:?}");
+        }
+        assert!(
+            bad(FACTS, 3, "", &FDS, &e, 3),
+            "a handle index past the message's"
+        );
+        let mut twice = e;
+        twice[2].handle = 0;
+        assert!(
+            bad(FACTS, 3, "", &FDS, &twice, 4),
+            "one handle for two entries"
+        );
+        let mut tty_twice = FDS;
+        tty_twice[2].tty = 3;
+        assert!(
+            bad(FACTS, 3, "", &tty_twice, &e, 4),
+            "a tty on an entry's handle"
+        );
+        let mut null_handle = e;
+        null_handle[1].handle = 2;
+        assert!(
+            bad(FACTS, 3, "", &FDS, &null_handle, 4),
+            "a null entry with a handle"
+        );
+        let mut no_handle = e;
+        no_handle[2].handle = NO_HANDLE;
+        assert!(
+            bad(FACTS, 3, "", &FDS, &no_handle, 4),
+            "a directory without one"
+        );
+        let mut order = e;
+        order.swap(0, 1);
+        assert!(bad(FACTS, 3, "", &FDS, &order, 4), "a shorter prefix first");
+        let mut same = e;
+        same[1].prefix = "/proc/self/exf";
+        same[2].prefix = "/proc/self/exf";
+        assert!(bad(FACTS, 3, "", &FDS, &same, 4), "one prefix twice");
+        for prefix in [
+            "", "tmp", "/tmp/", "//", "/a//b", "/a/./b", "/a/../b", "/..",
+        ] {
+            let mut p = e;
+            p[2].prefix = prefix;
+            assert!(bad(FACTS, 3, "", &FDS, &p, 4), "prefix {prefix:?}");
+        }
+        let mut fds = FDS;
+        fds.swap(0, 1);
+        assert!(bad(FACTS, 3, "", &fds, &e, 4), "fds out of order");
+        let mut fds = FDS;
+        fds[1].fd = 0;
+        assert!(bad(FACTS, 3, "", &fds, &e, 4), "one fd twice");
+        let mut fds = FDS;
+        fds[3].fd = OPEN_MAX;
+        assert!(bad(FACTS, 3, "", &fds, &e, 4), "an fd past OPEN_MAX");
+        let mut fds = FDS;
+        fds[1].flags = 2;
+        assert!(bad(FACTS, 3, "", &fds, &e, 4), "an unknown fd flag");
+        let mut fds = FDS;
+        fds[0].tty = 0;
+        assert!(bad(FACTS, 3, "", &fds, &e, 4), "a tty index on a null fd");
+        let long = "a".repeat(MAX_PATH + 1);
+        let mut big = [0; 2 * MAX_PATH];
+        assert!(
+            encode(&FACTS, 0, &long, 3, "", &FDS, &e, 4, &mut big).is_none(),
+            "exe"
+        );
+        assert!(
+            encode(&FACTS, 2, "x", 3, "", &FDS, &e, 4, &mut big).is_none(),
+            "a flag"
+        );
+        let mut small = [0; 100];
+        assert!(
+            encode(&FACTS, 0, "x", 3, "", &FDS, &e, 4, &mut small).is_none(),
+            "room"
+        );
+    }
+
+    #[test]
+    fn the_raw_header_is_checked() {
+        let mut b = [0; 1024];
+        let n = sample(&mut b);
+        let mut m = b;
+        m[3] = b'2';
+        assert!(
+            Bootstrap::decode(&m[..n], 4).is_none(),
+            "another version's magic"
+        );
+        let mut m = b;
+        m[4] = 60;
+        assert!(
+            Bootstrap::decode(&m[..n], 4).is_none(),
+            "another header size"
+        );
+        for at in 56..HEADER_SIZE {
+            let mut m = b;
+            m[at] = 1;
+            assert!(
+                Bootstrap::decode(&m[..n], 4).is_none(),
+                "reserved byte {at}"
+            );
+        }
+        // The fd kinds and entry kinds past the last are refused.
+        let fd_kind = HEADER_SIZE + 4 + "/bin/t_libposix".len() + 4 + "home/Київ".len() + 4;
+        assert_eq!(b[fd_kind], FdKind::Null as u8);
+        let mut m = b;
+        m[fd_kind] = 6;
+        assert!(Bootstrap::decode(&m[..n], 4).is_none(), "fd kind 6");
+        let mut m = b;
+        m[fd_kind + 3] = 1;
+        assert!(
+            Bootstrap::decode(&m[..n], 4).is_none(),
+            "an fd's reserved byte"
+        );
+        let entry = fd_kind - 4 + 4 * 8;
+        assert_eq!(b[entry], EntryKind::Image as u8);
+        let mut m = b;
+        m[entry] = 5;
+        assert!(Bootstrap::decode(&m[..n], 4).is_none(), "entry kind 5");
+        let mut m = b;
+        m[entry + 2] = 1;
+        assert!(
+            Bootstrap::decode(&m[..n], 4).is_none(),
+            "an entry's reserved byte"
+        );
+    }
+
+    #[test]
+    fn a_report_round_trips_and_refuses_what_is_not_one() {
+        let mut out = [0; 64];
+        let r = Report {
+            access: Access::Write,
+            dropped: 3,
+            path: "/etc/Plzeň",
+        };
+        let n = r.encode(&mut out).unwrap();
+        assert_eq!(Report::decode(&out[..n]), Some(r));
+        for length in 0..Report::HEADER_SIZE + 1 {
+            assert!(Report::decode(&out[..length]).is_none(), "{length}");
+        }
+        let mut m = out;
+        m[4] = 2;
+        assert!(Report::decode(&m[..n]).is_none(), "access 2");
+        for path in ["etc", "/etc/", "/a/../b", ""] {
+            let r = Report {
+                access: Access::Read,
+                dropped: 0,
+                path,
+            };
+            assert!(r.encode(&mut out).is_none(), "{path:?}");
+        }
+        assert!(
+            Report::decode(b"ZPR1\0\0\0\0\0\0\0\0/\xff").is_none(),
+            "not UTF-8"
+        );
+        let short = Report {
+            access: Access::Read,
+            dropped: 0,
+            path: "/a-long-path",
+        };
+        assert!(short.encode(&mut [0; 20]).is_none(), "no room");
+    }
+
+    #[test]
+    fn the_fixed_slots_are_above_every_fd_and_distinct() {
+        for (i, h) in slot::ALL.iter().enumerate() {
+            assert!(h.slot() >= OPEN_MAX && h.slot() < crate::MAX_HANDLES);
+            assert_eq!(h.generation(), 0, "a slot spawn fills");
+            assert!(slot::ALL[i + 1..].iter().all(|o| o != h));
+            assert!(is_fixed_slot(*h));
+        }
+        assert!(!is_fixed_slot(crate::CONSOLE));
+    }
+}
