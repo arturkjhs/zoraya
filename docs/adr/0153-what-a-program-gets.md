@@ -135,7 +135,8 @@ program sees `NotFound` (`ENOENT`) for it, even if it appears later; a file that
 
 Until the file service has `narrow` (it is outside the shell; Part 2 builds it only if the architect accepts this
 change to ADR-0055), the shell gives the whole parent directory for `create`, `remove` and `rename`, and `grants`
-says so: `create, change and remove anything in ~/project`. It never shows less than the command receives.
+words it by the rights given: `create and change anything in ~/project`, `remove anything in ~/project`, `rename,
+create and remove anything in ~/project`. It shows exactly what the command receives.
 
 **3. Explicit grants.** Before the command name, `+r PATH` grants `read` on a file or directory tree and `+w PATH`
 grants the `tree` rights. Several may be given. Rules:
@@ -147,8 +148,10 @@ grants the `tree` rights. Several may be given. Rules:
 - A grant applies to that one command (or pipeline element) and nothing after it. A function that needs grants writes
   them inside its body, where `help` shows them (ADR-0156).
 
-**4. Paths from values.** An operand written literally designates wherever it points. An operand that came from a
-variable or a substitution designates only inside the current directory or inside an explicit grant on the same
+**4. Paths from values.** An operand written literally designates wherever it points. A function's parameters and
+`$args` keep the mark of the words the caller wrote: a path typed literally at the call stays literal inside the
+function, so a function reaches what the bare command would. Any other operand that came from a variable or a
+substitution designates only inside the current directory or inside an explicit grant on the same
 line; anywhere else the line is refused before it runs (`zosh: ../x: from $files, outside the current directory`,
 with a hint naming the grant). So `rm $(cat list.txt)` can remove only below the current directory unless the person
 writes `+w` for more: data cannot reach past what the line shows.
@@ -180,11 +183,13 @@ script writes; a program without it is a POSIX program. Whether it has a descrip
 question: a native program with none (a test program) gets no designations, only item 1.
 
 **10. POSIX programs.** `zosh` runs them through the session's broker (ADR-0104):
-- `init` starts the broker beside `zosh`, without a first shell, and gives `zosh` a **native client connection** to
-  it; `zosh` has no pid.
-- For each command line with a POSIX element `zosh` creates the line's job with the `posix` flag (ADR-0046) and calls
-  `spawn_prepare(Group(job))`: the broker creates the process job inside that job instead of in its session job, so
-  every element of the line, native or POSIX, is inside the line's job and inside `zosh`'s tree. `zosh` calls
+- `init` starts the broker beside `zosh`, without a first shell; the broker gives `zosh`, through `init`, a **native
+  client connection** and a connection to the root of the temporary service it started (ADR-0107 item 12), in which
+  `zosh` makes each line's `/tmp`. `zosh` has no pid.
+- The line's job has no `posix` flag. For each POSIX element `zosh` creates a sub-job of the line's job with the
+  `posix` flag (ADR-0046) and calls `spawn_prepare(Group(job))` with it: the broker creates the process job inside
+  that sub-job instead of in its session job, so every element of the line is inside the line's job and inside
+  `zosh`'s tree, and native elements stay out of `posix` jobs (ADR-0002 rule 3, INV-0002-2). `zosh` calls
   `spawn_commit`, waits on the process job, and calls `reap` for each pid, as the parent.
 - `zosh` builds the child's bootstrap record (ADR-0107) itself: its entries are those above plus a fixed **toolchain
   set**: `/bin`, `/usr`, `/etc` and `/proc/self/exe` read-only, `/dev/null`, and a `/tmp` of its own (a directory
@@ -256,8 +261,11 @@ natural extension once networking exists (CP-28); nothing here precludes it.
   `zosh` until a later ADR lends them `ttyd`. `init` can still start a POSIX session alone for ADR-0110's tests.
 - *ADR-0107* builds the table "by the broker for the session's shell" and "by `libposix` for every child"; `zosh` is
   a third builder. Its item 6 resolves a relative path "against cwd's entry and path"; rule 6 here records cwd as an
-  absolute path so that `..` can leave the cwd entry into another entry. INV-0002-4's guarantee, that resolution never
-  escapes an entry, still holds: a path is served only by an entry that covers it.
+  absolute path so that `..` can leave the cwd entry into another entry. This changes INV-0002-4's wording for tables
+  `zosh` builds: "`..` at an entry's root resolves to the entry's root" becomes "`..` normalises against the absolute
+  path, at `/` it stays, and a path is served only by an entry that covers it". Its purpose, that resolution never
+  escapes an entry, holds; its check, over the shared resolver, must test both forms. Accepting this ADR records the
+  new wording beside INV-0002-4.
 - *ADR-0002 rule 5* lists the toolchain's working set as table entries; the toolchain set here is that list without
   `/` itself, and with a `/tmp` per command line instead of per session (ADR-0002 rule 7 needs `/tmp` shared within
   one `make` tree, which one line is).

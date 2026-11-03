@@ -7,7 +7,9 @@ and in the GUI terminal, so it cannot drift from the shell.
 
 The tour starts on an empty `/home`. Examples 15 to 17 and 27 need stage 6's TinyCC and POSIX programs (6a to 6e),
 the pipelines 19 to 21 need byte streams (6a), and Ctrl-Z in 28 needs `job_suspend` (6a); everything else works on
-what exists today plus TASK-18. Messages written by TinyCC are TinyCC's own; Part 2 checks their exact text.
+what exists today plus TASK-18. Examples 14 and 17 show `grants` with the connection narrowed to one name that ADR-0153 rule 2 proposes;
+if the architect declines that change, they show `create and change anything in ~/project` instead. Messages written
+by TinyCC are TinyCC's own; Part 2 checks their exact text.
 
 ## Getting your bearings
 

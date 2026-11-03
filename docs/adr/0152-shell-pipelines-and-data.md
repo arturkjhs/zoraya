@@ -81,7 +81,9 @@ Recommended: **Option A**, with C kept as a later addition. It is a recommendati
    builtin or function elsewhere in a pipeline is a parse error (`zosh: NAME: a builtin or function can only start a
    pipeline`), until a later ADR runs functions as separate processes.
 6. **Status.** A pipeline succeeds when every element succeeds (ADR-0151 rule 3); otherwise its `$status` is that of
-   the rightmost element that failed. A writer that ends because its reader closed is not a failure: a native program
+   the rightmost element that failed. A question command's "no" (ADR-0151 rule 3) is not a failure in any position;
+   a pipeline whose elements all succeeded but whose last element answered "no" answers "no" (`cat log | search
+   ERROR` with no match: status 1, nothing stops). A writer that ends because its reader closed is not a failure: a native program
    that gets `PeerClosed` on `out` stops and exits 0 (ADR-0155), and a POSIX program ended by `SIGPIPE`
    (`Terminated`, `detail` 13, ADR-0101) counts as success when it is not the last element (YSH's
    `sigpipe_status_ok`, `shell/survey.md#oils-and-ysh`).
@@ -137,8 +139,8 @@ its own text expects this change.
 - **INV-0152-2.** The shell never blocks on a stream: a full stream to a slow reader does not stop the line editor or
   other jobs. *Check:* an in-QEMU test with a builtin producing more than a stream's capacity into a reader that
   sleeps, while keys typed at the prompt are echoed.
-- **INV-0152-3.** A pipeline's status is success exactly when every element succeeded or ended only because its
-  reader closed. *Check:* host tests of the status rule over every combination of three elements' records.
+- **INV-0152-3.** A pipeline's status is success exactly when every element succeeded, answered "no" before the last
+  element, or ended only because its reader closed; it is "no" when the last element answered "no" and none failed. *Check:* host tests of the status rule over every combination of three elements' records.
 
 ## Open questions
 - The cost of relaying every byte of output through the shell, against giving programs a terminal connection of

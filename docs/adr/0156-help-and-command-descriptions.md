@@ -89,8 +89,8 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    ```
    Keys: `name`, `summary` (one line), `usage` (one or more), `operand NAME KIND TEXT` (kinds of ADR-0153: `read`,
    `write`, `create`, `remove`, `remove-tree`, `rename`, `tree`, or `text` for a non-path),
-   `option SHORT LONG [ARG KIND] TEXT` (an option that changes an operand's kind says so: `option -r --recursive
-   makes PATH remove-tree`), `cwd read|none`, `question` (ADR-0155 rule 6), `program PATH` (only in
+   `option SHORT LONG [ARG KIND] TEXT`, `when OPTION OPERAND KIND` (an option that changes an operand's kind:
+   `when --recursive PATH remove-tree`), `cwd read|none`, `question` (ADR-0155 rule 6), `program PATH` (only in
    `/zoraya/commands/`: the program file the description is for, ADR-0153 rule 10), `exit CODE TEXT`, `setting NAME TYPE DEFAULT TEXT` (ADR-0157), `topic` instead of `name` for a
    page that is not a command. Body sections are upper-case lines; the order is that of mdoc
    (`shell/survey.md#freebsd-sh-and-base-system`): DESCRIPTION (the untitled first part), EXAMPLES, FILES, EXIT
@@ -176,7 +176,7 @@ description checked (operand kinds are authority); that check belongs to the lau
 ## Invariants
 - **INV-0156-1.** The description parser is total: any byte string gives a description or an error with a line
   number, in bounded memory. *Check:* a deterministic random test in `make test-unit` and a target in `fuzz/`.
-- **INV-0156-2.** Every program in the ramdisk except the `t_*` test programs and the services, every builtin and every
+- **INV-0156-2.** Every command of ADR-0155 rule 8, every demonstration program it names, every builtin and every
   entry of `/zoraya/commands/` has a description the parser accepts, and every option the program accepts is in it.
   *Check:* a build step that parses each description and fails on a missing or refused one; INV-0155-1 for options.
 - **INV-0156-3.** `NAME --help`, `help NAME` and Tab completion of `NAME --` list the same options. *Check:* a host

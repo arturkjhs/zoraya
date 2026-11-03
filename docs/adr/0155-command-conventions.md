@@ -114,7 +114,9 @@ Recommended: **Option D**. It is a recommendation, not a decision.
    Everything that acts on files is a program and receives only what the line
    designates (ADR-0153): `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `sync`, `head`, `sleep`, `find`,
    `search`. The demonstration programs (`hello`, `spin`, `stubborn`, `fault`, `exit-with`, `echo-args`) have
-   descriptions and are listed by `help` apart from the commands; the `t_*` test programs and the services are not. `search TEXT [PATH...]` reads `in` when
+   descriptions and are listed by `help` apart from the commands. Every other program in the ramdisk (`t_*`, `f_*`,
+   the benchmarks and the other test programs, and the services) is a test program: no description, not listed, run
+   with no designations (ADR-0153 rule 9). `search TEXT [PATH...]` reads `in` when
    no path is given, and searches directories recursively. Builtins
    follow the same option, help, error and exit-code rules through the same crate. `write` and `append` go:
    redirection does their job (ADR-0152); `ls-ramdisk` becomes `ls /zoraya/bin`; `exit-code` becomes `status`; `run`
