@@ -147,6 +147,74 @@ impl EntryKind {
     }
 }
 
+/// Signal numbers (musl's AArch64 numbering, Linux's) and their request
+/// kinds (ADR-0106 item 1), for the broker and `libposix`.
+pub mod signal {
+    use crate::RequestKind;
+
+    pub const SIGHUP: u32 = 1;
+    pub const SIGINT: u32 = 2;
+    pub const SIGQUIT: u32 = 3;
+    pub const SIGABRT: u32 = 6;
+    pub const SIGKILL: u32 = 9;
+    pub const SIGPIPE: u32 = 13;
+    pub const SIGTERM: u32 = 15;
+    pub const SIGCHLD: u32 = 17;
+    pub const SIGCONT: u32 = 18;
+    pub const SIGSTOP: u32 = 19;
+    pub const SIGTSTP: u32 = 20;
+    pub const SIGTTIN: u32 = 21;
+    pub const SIGTTOU: u32 = 22;
+    pub const SIGURG: u32 = 23;
+    pub const SIGWINCH: u32 = 28;
+    /// The highest standard signal.
+    pub const MAX: u32 = 31;
+
+    /// The request kind of signal `n`, 1 to 31: the four fixed kinds, else
+    /// `Custom(n)`.
+    pub const fn kind(n: u32) -> Option<RequestKind> {
+        if n == 0 || n > MAX {
+            return None;
+        }
+        Some(match n {
+            SIGINT => RequestKind::Interrupt,
+            SIGTERM => RequestKind::Terminate,
+            SIGHUP => RequestKind::Hangup,
+            SIGQUIT => RequestKind::Quit,
+            _ => RequestKind::Custom(n),
+        })
+    }
+
+    /// The signal a request stands for: `detail` when it is a valid number,
+    /// else the kind's own (ADR-0046's rule); `Custom(n)` beyond 31 is 15.
+    pub const fn number(kind: RequestKind, detail: u32) -> u32 {
+        if detail >= 1 && detail <= MAX {
+            return detail;
+        }
+        match kind {
+            RequestKind::Interrupt => SIGINT,
+            RequestKind::Terminate => SIGTERM,
+            RequestKind::Hangup => SIGHUP,
+            RequestKind::Quit => SIGQUIT,
+            RequestKind::Custom(n) if n >= 1 && n <= MAX => n,
+            RequestKind::Custom(_) => SIGTERM,
+        }
+    }
+
+    /// True if the default action of signal `n` ends the process (ADR-0106
+    /// item 1: 1 to 16 but 9, 24 to 27, 29 to 31). `SIGKILL` is the kernel's
+    /// `job_kill`, not a request.
+    pub const fn default_terminates(n: u32) -> bool {
+        matches!(n, 1..=8 | 10..=16 | 24..=27 | 29..=31)
+    }
+
+    /// The stop signals and `SIGCONT`, which the broker carries out by the
+    /// target's disposition (ADR-0104 items 8a and 9).
+    pub const fn is_stop_or_continue(n: u32) -> bool {
+        matches!(n, SIGCONT..=SIGTTOU)
+    }
+}
+
 /// The process's POSIX identity (ADR-0107 item 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Facts {

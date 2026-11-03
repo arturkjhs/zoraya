@@ -137,8 +137,12 @@ protocol! {
     }
 
     /// The caller has spawned its new image into its own process job and
-    /// exits after the reply (ADR-0104 item 6).
-    message ExecCommit = 5, handles 1 {}
+    /// exits after the reply (ADR-0104 item 6). Handles: the new image's
+    /// process (`WAIT | SIGNAL`), and the server end of the channel whose
+    /// client end the new image holds at `BROKER`, which becomes the pid's
+    /// connection (ADR-0190: a channel end cannot be duplicated, so the old
+    /// image cannot hand on its own).
+    message ExecCommit = 5, handles 2 {}
     message ExecCommitReply = 5, handles 0 {
         status: Code,
     }

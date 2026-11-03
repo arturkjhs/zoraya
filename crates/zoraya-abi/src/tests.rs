@@ -1374,3 +1374,28 @@ mod bootstrap {
         assert!(!is_fixed_slot(crate::CONSOLE));
     }
 }
+
+#[test]
+fn signal_numbers_map_to_kinds_and_back() {
+    use crate::posix::signal::*;
+    assert_eq!(kind(2), Some(RequestKind::Interrupt));
+    assert_eq!(kind(15), Some(RequestKind::Terminate));
+    assert_eq!(kind(1), Some(RequestKind::Hangup));
+    assert_eq!(kind(3), Some(RequestKind::Quit));
+    assert_eq!(kind(17), Some(RequestKind::Custom(17)));
+    assert_eq!(kind(0), None);
+    assert_eq!(kind(32), None);
+    for n in 1..=MAX {
+        let k = kind(n).unwrap();
+        assert_eq!(number(k, n), n);
+        assert_eq!(number(k, 0), n, "the kind alone names the signal");
+    }
+    assert_eq!(number(RequestKind::Custom(40), 0), SIGTERM);
+    assert_eq!(number(RequestKind::Interrupt, 99), SIGINT);
+    let terminating: Vec<u32> = (1..=MAX).filter(|&n| default_terminates(n)).collect();
+    let mut expected: Vec<u32> = (1..=16).filter(|&n| n != 9).collect();
+    expected.extend([24, 25, 26, 27, 29, 30, 31]);
+    assert_eq!(terminating, expected);
+    let stops: Vec<u32> = (1..=MAX).filter(|&n| is_stop_or_continue(n)).collect();
+    assert_eq!(stops, [18, 19, 20, 21, 22]);
+}
