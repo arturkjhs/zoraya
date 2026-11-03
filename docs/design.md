@@ -566,26 +566,26 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   call returns (one CPU). A process or job that joins a suspended tree starts stopped. Suspends do not nest.
 - **`object_get_signals`.** The bits asserted now, with `WAIT`: `WNOHANG` without a port.
 
-Measured on the M4 under QEMU 11.1.2, `make test`'s test kernel (128 MiB; `auto-*` under HVF, `tcg-default` under
-TCG: `tcg-default`, `tcg-smp4-gicv2`, `tcg-el2` and `tcg-smp4-gicv3`), from `t_streams`, `t_suspend` and
-`t_snapshot`, over two full runs of `make test`, each program twice per configuration. The "1 MiB" and "8 MiB" processes are the test program with a
-mapped object of that size; the program's own pages are about 1.2 MiB, most of it its user heap, so the copies are
-2.2 and 9.2 MiB. Ranges are over configurations and runs; under TCG the worst cases are the host's scheduling as
-much as the kernel's.
+Measured on the M4 under QEMU 11.1.2, `make test`'s test kernel (128 MiB; `auto-*` under HVF, `tcg-*` under TCG),
+from `t_streams`, `t_suspend` and `t_snapshot`, in the final run of TASK-16 (a clean clone at `15c554a`), each
+program twice per configuration. The "1 MiB" and "8 MiB" processes are the test program with a mapped object of that
+size; the program's own pages are about 1.2 MiB, most of it its user heap, so the copies are 2.2 and 9.2 MiB.
 
 | | HVF | TCG |
 |---|---|---|
-| Stream transfer, 64 KiB writes and reads in one process | 1.1 to 1.8 GB/s | 230 to 271 MB/s |
-| `job_suspend` of a job of 16 running processes: mean of 20; worst | 4.1 to 6.8 µs; 10.5 µs | 81 to 123 µs; 174 µs |
-| `snapshot_process` of the "1 MiB" process, worst of 5 masked; pages copied; frames charged | 0.45 to 0.52 ms; 563; 590 | 5.0 to 12.3 ms; 563; 590 |
-| `snapshot_process` of the "8 MiB" process, the same | 1.7 to 2.1 ms; 2355; 2385 | 17.6 to 48.6 ms; 2355; 2385 |
+| Stream transfer, 64 KiB writes and reads in one process | 1.0 to 1.8 GB/s | 265 to 269 MB/s |
+| `job_suspend` of a job of 16 running processes: mean of 20; worst | 6.1 to 6.5 µs; 8 µs | 82 to 86 µs; 118 µs |
+| `snapshot_process` of the "1 MiB" process, worst of 5 masked; pages copied; frames charged | 0.40 to 0.42 ms; 563; 590 | 4.6 to 4.8 ms; 563; 590 |
+| `snapshot_process` of the "8 MiB" process, the same | 1.39 to 1.44 ms; 2355; 2385 | 14.0 to 16.5 ms; 2355; 2385 |
 
 The frames charged are the pages copied plus the child's tables, kernel stack and object records. The copy runs
-with interrupts masked for the whole call, at about 4.5 to 5 GB/s under HVF and 200 to 550 MB/s under TCG. **Does it
-need breaking up?** Not for stage 6: dash at about 1 MiB `[assumption, ADR-0102]` stalls about 0.5 ms under HVF and
-5 to 12 ms under TCG, within the stalls the kernel already has (`memory_create` of all memory, 9 ms; a device reset,
-up to 100 ms). An 8 MiB process stalls TCG for two to five 10 ms slices; nothing in T1 forks one. It must be bounded with the
-others before untrusted code runs (ADR-0056), and copy-on-write (ADR-0102's revisit) removes it.
+with interrupts masked for the whole call, at about 6.5 GB/s under HVF and 550 to 650 MB/s under TCG. Earlier runs,
+while the copies of mapped objects were still zeroed first (TASK-16 review, R4), were about a fifth slower, and under
+TCG on a busy host the 8 MiB case reached 49 ms. **Does it need breaking up?** Not for stage 6: dash at about 1 MiB
+`[assumption, ADR-0102]` stalls about 0.4 ms under HVF and 5 ms under TCG, within the stalls the kernel already has
+(`memory_create` of all memory, 9 ms; a device reset, up to 100 ms). An 8 MiB process stalls TCG for one and a half
+10 ms slices; nothing in T1 forks one. It must be bounded with the others before untrusted code runs (ADR-0056), and
+copy-on-write (ADR-0102's revisit) removes it.
 
 ## Console input and the first process
 
@@ -634,8 +634,8 @@ or `exit` turns the machine off.
 - **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
 - **Handles in messages.** A protocol decoder checks how many handles a message has. A server must then check their
   types with `handle_type` (ADR-0072).
-- **Snapshot stall.** `snapshot_process` copies with interrupts masked: 0.5 ms for a 2.2 MiB process under HVF,
-  up to 49 ms for 9.2 MiB under TCG ("Stage 6 kernel objects (as built)"). Suspends do not nest, and a resume of a
+- **Snapshot stall.** `snapshot_process` copies with interrupts masked: 0.4 ms for a 2.2 MiB process under HVF,
+  about 16 ms for 9.2 MiB under TCG, more on a busy host ("Stage 6 kernel objects (as built)"). Suspends do not nest, and a resume of a
   sub-job runs it while its parent stays suspended (ADR-0130 item 7). A stopped thread blocked in the kernel finishes
   its call before it parks. The stream ring is 64 KiB per stream, committed, with no quota (ADR-0056).
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code
