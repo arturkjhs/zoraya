@@ -116,8 +116,8 @@ Accepted with a change (architect, 2026-11-03), and with additions the architect
   would allow it.
 - **The changes to accepted ADRs** declared below are accepted: `narrow` in ADR-0055, the broker changes in ADR-0104,
   ADR-0105 item 9 (with the revisit condition "before the first interactive POSIX program"), path resolution in
-  ADR-0107 and INV-0002-4 (recorded as INV-0153-8). Rule 11's report slot in ADR-0107's record is the agent's means
-  of carrying out the refused-path hint.
+  ADR-0107 and INV-0002-4 (recorded as INV-0153-8). Rule 11's report slot in ADR-0107's record, first proposed by
+  the agent as its means of carrying out the refused-path hint, is accepted by the architect (2026-11-03).
 
 The original recommendation follows.
 
@@ -399,5 +399,5 @@ is told apart from a missing file by `libposix` (and `zoraya-rt`) and reported t
 program ends which path it tried and which `+r`/`+w` allows it (rule 11, INV-0153-7); an output operand means "create
 or replace this one name". The changes to accepted ADRs declared here are accepted: `narrow` in ADR-0055, the broker
 changes in ADR-0104, ADR-0105 item 9 with the revisit condition "before the first interactive POSIX program", path
-resolution in ADR-0107 and INV-0002-4. The `REPORT` slot in ADR-0107's record (rule 11) is how the agent carried out
-the refused-path hint the architect asked for; the architect did not name the slot itself.
+resolution in ADR-0107 and INV-0002-4. The `REPORT` slot in ADR-0107's record (rule 11), which the agent proposed to carry
+out the refused-path hint the architect asked for, is accepted by the architect (2026-11-03).

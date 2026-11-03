@@ -67,9 +67,9 @@ completions in per-command files separate from the program, and can generate the
 
 ### Decision
 
-Accepted as recommended (architect, 2026-11-03). Addition by the agent, to carry out the hint for `which` that the
-architect asked for (ADR-0154 rule 6): `help NAME` begins by saying what `NAME` is and where it comes from (item 4).
-The architect did not ask for this line itself.
+Accepted as recommended (architect, 2026-11-03). `help NAME` begins by saying what `NAME` is and where it comes
+from (item 4): the agent proposed this line to carry out the hint for `which` that the architect asked for (ADR-0154
+rule 6), and the architect accepted it (2026-11-03).
 
 The original recommendation follows.
 
@@ -207,4 +207,5 @@ description checked (operand kinds are authority); that check belongs to the lau
 ## Architect's decision
 
 Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request. The first line of
-`help NAME` (item 4) is the agent's addition, carrying out the `which` hint the architect asked for in ADR-0154.
+`help NAME` (item 4), proposed by the agent to carry out the `which` hint the architect asked for in ADR-0154, is
+accepted by the architect (2026-11-03).

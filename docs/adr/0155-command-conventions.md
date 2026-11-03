@@ -73,8 +73,8 @@ typed values at the request (CP-12).
 ### Decision
 
 Accepted with a change (architect, 2026-11-03): `exit` ends the shell, and `init` on the console starts a new one;
-the machine stays on. In GUI mode `init` does the same in the window's terminal: that is the agent's extension of the
-decision, to be confirmed. `poweroff` and `reboot` are explicit builtins: the shell holds `Power` (ADR-0062), and
+the machine stays on. In GUI mode `exit` closes the shell's terminal window, and if that was the last terminal
+window, `init` opens a new one (the architect's decision, 2026-11-03; revisit when stage 7 brings a launcher). `poweroff` and `reboot` are explicit builtins: the shell holds `Power` (ADR-0062), and
 `reboot` needs a kernel call to reset the machine, which does not exist yet (ADR-0062's note, `docs/backlog.md`).
 Rule 8 is amended accordingly. From the tour, also: `count --lines FILE...` counts lines, and a native program's
 `not granted` message carries no hint, since the shell prints it (ADR-0153 rule 11).
@@ -217,11 +217,16 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
 ## Revisit triggers
 - A ported or new command whose syntax the description cannot express.
 - People repeatedly typing the GNU spelling of an option that has another name here: add it as the long form.
+- A launcher in stage 7: revisit what `exit` in the last GUI terminal window does (the architect's condition,
+  2026-11-03).
 
 ## Architect's decision
 
 Accepted with a change, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
 `exit` closes the shell, and `init` on the console starts a new one; `poweroff` and `reboot` remain explicit
-commands. The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
+commands. In GUI mode `exit` closes the terminal window; if it was the last terminal window, `init` opens a new one
+(decided by the architect, 2026-11-03, in place of the agent's extension; revisit trigger: a launcher in stage 7).
+`reboot` saying it is unavailable until the kernel has a reset call is accepted (2026-11-03); the reset call is a
+separate proposed ADR (ADR-0159). The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
 updated (notes in those ADRs, INV-0155-5 to -7; INV-0063-2's check moves to a test that ends `init` itself, ADR-0053's
 note).

@@ -22,6 +22,7 @@ those of [`../stage-6/plan.md`](../stage-6/plan.md): 6a kernel objects (byte str
 | 9 | Job control: Ctrl-Z, `fg`, `bg`, notices | 0158 | 6a `job_suspend` |
 | 10 | Running POSIX programs from `zosh` through the broker | 0153, 0158 | 6a `image_create`, 6b, 6c, 6d, 6e's `make posix-image` |
 | 11 | The tour as a test, on serial and GUI; documentation | all | all of the above for the full tour |
+| 12 | `reboot` through PSCI `SYSTEM_RESET` | 0159 (proposed), 0062, 0155 | none; kernel work, after the architect decides ADR-0159 |
 
 Steps 1 to 7 need nothing from stage 6 and can start as soon as the ADRs are decided. Step 8 waits for 6a on `main`;
 step 10 for 6d and for 6e's image with the POSIX programs installed. Until then `docs/design.md` lists each waiting part as pending (TASK-18, "Part 2").
@@ -89,6 +90,14 @@ step 10 for 6d and for 6e's image with the POSIX programs installed. Until then 
     (fuzz), grants that must be refused, completion and history in the scripted sessions. `docs/design.md` "Using the
     shell" rewritten from the tour and "Conventions for commands" pointing at ADR-0155; `index.md`, `invariants.md`
     (statuses), `backlog.md`.
+
+12. **Reboot** (ADR-0159, added by the architect on 2026-11-03). A short proposed ADR, ADR-0159: a call
+    `power_reset(power)` that needs the same `POWER` right as `power_off` and resets through PSCI `SYSTEM_RESET`,
+    returning `NotSupported` where the platform has none. After the architect decides it: the call in `zoraya-abi`
+    and the kernel, `has_system_reset` in `zoraya-dtb`, a `tools/run-qemu.sh` option that lets a reset restart QEMU
+    instead of ending it (`-no-reboot` today), the `reboot` builtin calling it, INV-0159-1 and INV-0155-7 (= INV-0159-2)
+    checked. Independent of stage 6; until it lands `reboot` says it is not available (step 6), as the architect
+    accepted. This step touches kernel code, which TASK-18 otherwise leaves alone; the architect asked for it.
 
 Review (TASK-18, Part 2): mutation testing of `zoraya-shell`, `zoraya-describe` and `zoraya-command` with
 `make mutants-host`, then the review in `docs/tasks/TASK-18-review.md`.
