@@ -16,9 +16,11 @@ extern "C" {
  * posix_spawn attribute flag: with POSIX_SPAWN_SETPGROUP, make the child's
  * process group the terminal's foreground group before the child runs (the
  * broker's start_suspended, tcsetpgrp, resume of ADR-0104 item 5). No flag of
- * musl or glibc uses this bit.
+ * musl or glibc uses this bit. It is below the sign bit of the short that
+ * posix_spawnattr_setflags takes, so that it passes a flag mask unchanged
+ * (ADR-0142, Decision).
  */
-#define POSIX_SPAWN_TCSETPGRP 0x8000
+#define POSIX_SPAWN_TCSETPGRP 0x4000
 
 /* zoraya_fork_group's argument, as setpgid's second: */
 #define ZORAYA_FORK_INHERIT (-1) /* the parent's group */

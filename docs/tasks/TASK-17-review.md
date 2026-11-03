@@ -95,7 +95,8 @@ GNU sed on the M4. Then:
 
 ## Open
 
-- ADR-0143 and ADR-0144 await the architect.
+- The architect accepted ADR-0143 and ADR-0144 on 2026-11-03, and moved `POSIX_SPAWN_TCSETPGRP` to `0x4000` (ADR-0142,
+  Decision).
 - Linux CI has not run.
 - `USER_LOW` is copied in `zoraya-elf-check` (A11).
 

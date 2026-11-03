@@ -1,6 +1,6 @@
 # ADR-0143: tcc's Zoraya target, and what the compilers predefine
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0005, ADR-0033, ADR-0100, ADR-0108, ADR-0109, ADR-0140, ADR-0141
 - **Evidence:** CP-13, CP-16, DM-007, alternatives-postmortem.md#redox, stage-6/sources.md#tinycc
@@ -150,3 +150,4 @@ Zoraya, which only W1 in 6e can.
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-03: `__unix__` is not defined, and `ports/compare-predefs.sh` stays a step of `make check-ports`. Decided by the architect; recorded by an agent at the architect's request.

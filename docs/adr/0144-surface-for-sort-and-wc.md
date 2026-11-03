@@ -1,6 +1,6 @@
 # ADR-0144: The surface toybox's `sort` and `wc` need
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0005, ADR-0100, ADR-0109, ADR-0141, ADR-0142
 - **Evidence:** CP-27, task-02/libc-surface.csv
@@ -89,3 +89,4 @@ getdelim
 
 ## Architect's decision
 
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.

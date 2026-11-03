@@ -79,6 +79,18 @@ be tested.
 
 ## Recommendation
 
+### Decision
+
+Option B, with two changes by the architect: the two dash patches are written in 6b (TASK-17) and first run in 6d,
+and `POSIX_SPAWN_TCSETPGRP` is `0x4000`, not `0x8000`. `posix_spawnattr_setflags` takes a `short`, and musl's checks
+its argument with `if (flags & ~all_flags) return EINVAL`, where `all_flags` is `unsigned`: `0x8000` is the sign
+bit, so the `short` -32768 becomes `0xffff8000` on its way to `unsigned`, and bits 16 to 31 fail the mask whatever
+`all_flags` holds. `0x4000` is positive as a `short`, passes a mask that includes it, and is stored in the `int`
+`__flags` unchanged; no flag of musl (up to `0x80`) or glibc (up to `0x100`) uses it. The Rust half's
+`posix_spawnattr_setflags` takes musl's mask with `POSIX_SPAWN_TCSETPGRP` added.
+
+The recommendation as written:
+
 **Recommendation (not a decision): Option B**, written and tested in 6d with the broker. Until then (TASK-17), dash
 carries only the M4 patch, and its interactive path uses `vfork` as on Linux. The names this ADR adds, in the form
 `posix-surface-check` reads:
@@ -111,4 +123,4 @@ zoraya_fork_group
 
 ## Architect's decision
 
-Accepted, 2026-11-03, with one change: the two job-control patches of dash are written in 6b (TASK-17), not left to 6d; they are tested with the broker in 6d. The block of added names was put into the text before this record. Decided by the architect; recorded by an agent at the architect's request.
+Accepted, 2026-11-03, with one change: the two job-control patches of dash are written in 6b (TASK-17), not left to 6d; they are tested with the broker in 6d. The block of added names was put into the text before this record. Decided by the architect; recorded by an agent at the architect's request. Changed by the architect on 2026-11-03: `POSIX_SPAWN_TCSETPGRP` is `0x4000`, the highest bit below the sign bit of the `short` flags, because `0x8000` does not pass musl's flag mask without sign extension (see "### Decision"). Decided by the architect; recorded by an agent at the architect's request.

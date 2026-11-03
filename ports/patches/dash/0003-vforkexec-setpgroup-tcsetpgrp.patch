@@ -59,7 +59,7 @@
  int padvance_magic(const char **path, const char *name, int magic);
 --- b/src/jobs.c
 +++ c/src/jobs.c
-@@ -1016,16 +1016,62 @@
+@@ -1016,16 +1016,67 @@
  	int pid;
  
  	jp = makejob(1);
@@ -89,6 +89,11 @@
 +			flags |= POSIX_SPAWN_SETSIGDEF;
 +		}
 +#if JOBS
++		/* posix_spawnattr_setflags takes a short: the flags must stay
++		   positive, below its sign bit (ADR-0142, Decision). */
++		_Static_assert((short)(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP |
++				       POSIX_SPAWN_TCSETPGRP) > 0,
++			       "POSIX_SPAWN_TCSETPGRP must fit a positive short");
 +		if (jp->jobctl) {
 +			sigaddset(&dfl, SIGTSTP);
 +			sigaddset(&dfl, SIGTTOU);
