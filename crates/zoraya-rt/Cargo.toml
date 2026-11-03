@@ -11,6 +11,13 @@ license.workspace = true
 test = false
 bench = false
 
+[features]
+# The entry point, `main` and the panic handler of a native program. The
+# Rust half of libposix (zoraya-posix) has its own: crt1's `_start` and C's
+# `main` (ADR-0109 item 4).
+default = ["entry"]
+entry = []
+
 [dependencies]
 zoraya-abi = { path = "../zoraya-abi" }
 

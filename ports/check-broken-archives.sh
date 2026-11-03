@@ -3,19 +3,22 @@
 # an extra export, a missing tier name, a stray svc, a name of the exclusion
 # table, and a name defined strongly twice. Each case is a copy of libc.a with one change.
 #
-# Usage: check-broken-archives.sh CHECK AR ZCC LIST LIBC WORKDIR
+# Usage: check-broken-archives.sh CHECK AR ZCC LIST LIBC WORKDIR [SVC_MEMBER]
+# SVC_MEMBER is the prefix of the one member that may hold svc (zoraya-rt's,
+# INV-0100-2).
 set -eu
 check=$1 ar=$2 zcc=$3 list=$4 libc=$5 dir=$6
+allow=${7:+--allow-svc $7}
 rm -rf "$dir"
 mkdir -p "$dir"
 cd "$dir"
 
 # An archive that passes, so that each failure below is the change's.
-"$check" check "$list" "$libc" > good.log || { cat good.log; echo "check-broken: the real libc.a fails"; exit 1; }
+"$check" check "$list" "$libc" $allow > good.log || { cat good.log; echo "check-broken: the real libc.a fails"; exit 1; }
 
 expect() {
     case=$1 want=$2
-    if "$check" check "$list" "$case.a" > "$case.log" 2>&1; then
+    if "$check" check "$list" "$case.a" $allow > "$case.log" 2>&1; then
         cat "$case.log"
         echo "check-broken: $case: the check passed a broken archive"
         exit 1

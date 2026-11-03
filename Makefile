@@ -274,6 +274,10 @@ fmt-check:
 clippy:
 	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
 	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
+	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
+	@# the user programs' features do not unify with it.
+	$(CARGO) clippy -p zoraya-posix --target $(TARGET) -- -D warnings
+	$(CARGO) clippy -p zoraya-rt --no-default-features --target $(TARGET) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test -- -D warnings
 

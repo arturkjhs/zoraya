@@ -6,7 +6,9 @@
 
 #![no_std]
 
-use core::arch::{asm, global_asm};
+use core::arch::asm;
+#[cfg(feature = "entry")]
+use core::arch::global_asm;
 use core::fmt;
 
 use zoraya_abi::spawn::{
@@ -22,6 +24,7 @@ use zoraya_abi::{
 
 const MAX_MESSAGE_HANDLES: usize = 64;
 
+#[cfg(feature = "entry")]
 global_asm!(
     r#"
     .text
@@ -50,16 +53,21 @@ _start:
 "#
 );
 
+#[cfg(feature = "entry")]
 unsafe extern "Rust" {
     safe fn main() -> i32;
 }
 
+#[cfg(feature = "entry")]
 #[unsafe(no_mangle)]
 extern "C" fn __user_main() -> ! {
     process_exit(main())
 }
 
-/// Makes a system call with up to six arguments, returning x0 and x1.
+/// Makes a system call with up to six arguments, returning x0 and x1. Never
+/// inlined, so that the one `svc` stays in this crate's object, where
+/// INV-0100-2's scan of `libc.a` permits it.
+#[inline(never)]
 pub fn raw_syscall(number: u64, registers: [u64; 6]) -> (u64, u64) {
     let (status, value);
     // SAFETY: `svc` enters the kernel, which validates every value and
@@ -515,6 +523,7 @@ macro_rules! println {
     }};
 }
 
+#[cfg(feature = "entry")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     println!("user panic: {info}");
