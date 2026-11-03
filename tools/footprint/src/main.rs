@@ -5,7 +5,7 @@
 //! process whose memory compresses well (a vector of one repeated value) can
 //! hold gigabytes while `ps` shows a small resident size, which is how the
 //! TASK-20 mutation run froze the host (docs/backlog.md). Elsewhere it is the
-//! resident size from `/proc/PID/statm`. A process that is gone prints
+//! resident size from `/proc/PID/status`. A process that is gone prints
 //! nothing.
 //!
 //! Usage: `zoraya-footprint PID...`
@@ -54,10 +54,11 @@ fn footprint(pid: i32) -> Option<u64> {
 
 #[cfg(not(target_os = "macos"))]
 fn footprint(pid: i32) -> Option<u64> {
-    // The resident pages, the second field of statm, times the page size.
-    let statm = std::fs::read_to_string(format!("/proc/{pid}/statm")).ok()?;
-    let pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-    Some(pages * 4096)
+    // VmRSS of /proc/PID/status is in kB whatever the page size.
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let kib: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kib * 1024)
 }
 
 #[cfg(test)]

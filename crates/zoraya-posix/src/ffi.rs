@@ -1210,11 +1210,11 @@ extern "C" fn readdir(dir: *mut Dir) -> *mut u8 {
     // SAFETY: `dir` came from `fdopendir` (C's contract) and is not shared.
     let dir = unsafe { &mut *dir };
     match state(|p| p.read_dir(dir.fd)) {
-        Ok(Some((name, kind, number))) => {
+        Ok(Some((name, kind, id))) => {
             let n = name.len().min(255);
             dir.entry = [0; DIRENT];
-            dir.entry[..8].copy_from_slice(&number.to_le_bytes());
-            dir.entry[8..16].copy_from_slice(&(number as i64).to_le_bytes());
+            dir.entry[..8].copy_from_slice(&id.to_le_bytes());
+            // d_off is unspecified (ADR-0180 item 11): no telldir or seekdir.
             dir.entry[16..18].copy_from_slice(&(DIRENT as u16).to_le_bytes());
             dir.entry[18] = kind;
             dir.entry[19..19 + n].copy_from_slice(&name.as_bytes()[..n]);

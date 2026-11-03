@@ -42,16 +42,19 @@ descendants() {
         }'
 }
 
-# The list with each process's memory from the helper where it answers.
+# The list with each process's memory from the helper where it answers. The
+# helper's lines and the list go to awk on stdin, a "--" between them (macOS's
+# awk refuses a newline in a -v value); if awk fails, the list as ps gave it.
 measured() {
     list=$(descendants)
     if [ -x "$footprint" ]; then
         pids=$(echo "$list" | awk '{ print $1 }')
         # shellcheck disable=SC2086 # one argument per pid
-        sizes=$("$footprint" $pids 2>/dev/null)
-        echo "$list" | awk -v sizes="$sizes" '
-            BEGIN { n = split(sizes, lines, "\n"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); kib[f[1]] = f[2] } }
-            NF { if ($1 in kib) $2 = kib[$1]; print }'
+        merged=$({ "$footprint" $pids 2>/dev/null; echo "--"; echo "$list"; } | awk '
+            $0 == "--" { body = 1; next }
+            !body { kib[$1] = $2; next }
+            NF { if ($1 in kib) $2 = kib[$1]; print }') && [ -n "$merged" ] || merged=$list
+        echo "$merged"
     else
         echo "$list"
     fi

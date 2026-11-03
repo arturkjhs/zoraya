@@ -153,8 +153,8 @@ The items:
     piece), so a bad one is `EFAULT`. `NULL` where a buffer, path or result is needed is `EFAULT`, checked by the
     library before any copy. A count past `SSIZE_MAX` is `EINVAL`.
 11. **Listings** give each entry's object id as `d_ino`, the id `stat` gives as `st_ino` (ADR-0014 rule 7; the
-    architect's decision), through `read_directory_ids` (ordinal 33), which carries it; `d_type` from the kind; no
-    `.` or `..`.
+    architect's decision), through `read_directory_ids` (ordinal 33), which carries it; `d_type` from the kind; `d_off` 0
+    (no `telldir` or `seekdir` is in the tier list); no `.` or `..`.
 12. **`CLOCK_REALTIME` is the monotonic clock** while `fsd` stamps files with it, so `make`'s comparisons agree;
     `UTIME_NOW` uses it too. Every clock id 0 to 7 is that clock.
 13. **`ZORAYA_POSIX_STATS`** in the environment makes the library write one `POSIX-STATS` line of its counters to fd 2

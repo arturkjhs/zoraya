@@ -134,7 +134,7 @@ unviable, 1 timeout; `fsd`'s changed lines: 88, 2 missed, one of them killed sin
 | `process.rs:970:32` `>` to `>=` in `write` | They differ only at a count of exactly `isize::MAX`, which no memory holds: the original's copy of it cannot be made, in the fake or on the machine. |
 | `process.rs:1020:64` `-` to `+` in `write_stream` | `User::part` clamps the length to what remains, which is what the original asks. |
 | `process.rs:1027:72` `\|` to `^` in `write_stream` | `WRITABLE` and `PEER_CLOSED` share no bit. |
-| `process.rs:1033:26`, `1033:46`, `1033:51`, `1033:56` (two), `1033:79` in `write_stream` | Each changes only whether the check after a wait returns at once; when it does not, the next `stream_write` meets `PeerClosed` and gives the same count or `EPIPE`. `WRITABLE` and `PEER_CLOSED` are never asserted together (a writable stream has a reader), and a satisfied wait has one of them. |
+| `process.rs:1033:26` (two), `1033:46`, `1033:51`, `1033:56` (two), `1033:79` in `write_stream` | Each changes only whether the check after a wait returns at once; when it does not, the next `stream_write` meets `PeerClosed` and gives the same count or `EPIPE`. `WRITABLE` and `PEER_CLOSED` are never asserted together (a writable stream has a reader), and a satisfied wait has one of them. |
 | `process.rs:1038:44` guard `done > 0` to `false`, `1038:49` `>` to `<` | They differ only when `stream_write` returns `PeerClosed` after bytes were written with no wait between, which needs the reader to close between two calls of one thread: another process racing it. The fake runs others only during a wait (`meanwhile`), where the earlier check answers. |
 | `process.rs:1040:27` guard `done == 0` to `true` | The same: an error other than `WouldBlock` or `PeerClosed` after bytes were written with no wait between. |
 | `process.rs:1175:27`, `1175:34`, `1175:71` `\|` to `^` in `access_at` | `R_OK`, `W_OK` and `X_OK` share no bit, nor do `AT_EACCESS` and `AT_SYMLINK_NOFOLLOW`. |
@@ -146,3 +146,23 @@ unviable, 1 timeout; `fsd`'s changed lines: 88, 2 missed, one of them killed sin
 | `sys.rs:38:33` `<<` to `>>` | `1 << 0` and `1 >> 0` are both 1. |
 | `fsd` `lib.rs:1308:27` `+=` to `*=` in `read_directory` | The count of bytes stays 0, so only the 64-entry bound ends a page; with names of at most 255 bytes a page of 64 is about 18 KiB, so the 32 KiB bound never ends one (the `+` to `*` mutant, which did, is killed by `a_page_of_the_longest_names_is_full`). |
 | `zoraya-abi` `posix.rs:271:13` `\|\|` to `&&` in `Bootstrap::decode` | It lets a cwd entry past the end, or more than 512 fds, past the header check alone; the first is refused later, as no entry is cwd's directory, and the second cannot be strictly increasing fds below 512, which the fd loop refuses. |
+
+## After the architect's decisions on ADR-0180
+
+The architect accepted ADR-0180 except `d_ino`, and asked for six things before the merge: `d_ino` as the object's
+id (`read_directory_ids`, ordinal 33, with tests against `st_ino` after a rename and re-created names); an undone open
+when `O_TRUNC`'s truncation fails, tested; the `EFAULT` rule stated in ADR-0180 item 10; the main model's recheck of
+the survivors (the section above); the watchdog on the physical footprint; then one check of the changed lines.
+
+That check, by a sixth subagent, read-only, of `git diff b21b252..cd91a68`, found one error and five notes and
+warnings, all fixed in the commit after `cd91a68`:
+
+| Id | Severity | Finding | Disposition |
+|---|---|---|---|
+| E1 | error | The watchdog passed the helper's lines to awk through `-v`, which macOS's awk refuses with a newline in it: with two processes or more it measured nothing and killed nothing. | Fixed: both lists go to awk on stdin; if awk fails, the list as `ps` gave it. Checked: with `WATCHDOG_MB=1` it kills again, and the old script prints `awk:` errors for the new test's command. |
+| E2 | warning | The test ran the hog as the only process, so the broken merge passed. | The hog runs as a grandchild, the test requires the kill to name it and no `awk:` line, and a second test merges three processes. |
+| E3 | note | Off macOS the helper took 4 KiB pages. | It reads `VmRSS` in kB. |
+| E4 | note | The index row said ordinals 23 to 32. | 23 to 33. |
+| E5 | note | `d_off` carried the id. | 0, stated in ADR-0180 item 11. |
+| E6 | note | The survivors' table listed `1033:26` once for two mutants. | "(two)". |
+
