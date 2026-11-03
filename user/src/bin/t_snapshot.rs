@@ -22,6 +22,7 @@ use zoraya_abi::{
     JobFlags, JobObject, MAX_HANDLES, MapFlags, MemoryFlags, MemoryObject, OBJECT_TYPES,
     ObjectType, RequestKind, Rights, Status, StreamReadObject, StreamWriteObject, process_signals,
 };
+use zoraya_abi::{Mode, Packet};
 use zoraya_user::{
     assert_err, channel_create, channel_read, channel_write, console_entry, device_map,
     directory_lookup, dma_pin, dma_unpin, handle_close, handle_duplicate, handle_type, job_create,
@@ -30,7 +31,9 @@ use zoraya_user::{
     raw_syscall, snapshot_process, spawn, startup, stream_create, stream_read, stream_write,
     wait_exit,
 };
-use zoraya_user::{clock_monotonic, job_resume, job_suspend, sleep_until};
+use zoraya_user::{
+    clock_monotonic, job_resume, job_suspend, port_subscribe, port_wait, sleep_until,
+};
 
 const OUTSIDE: u64 = 9;
 const DEVICE: u64 = 5;
@@ -100,15 +103,27 @@ fn send(write: Handle, bytes: &[u8]) {
     }
 }
 
+/// Reads exactly `out.len()` bytes, waiting on a port while the stream is
+/// empty, as a reader of a stream that never blocks must (ADR-0101): the
+/// writer may not have run yet.
 fn receive(read: Handle, out: &mut [u8]) {
+    let port = port_create().expect("port");
+    let wanted = stream_signals::READABLE | stream_signals::PEER_CLOSED;
+    port_subscribe(port, read, wanted, 1, Mode::Level).expect("subscribe");
+    let deadline = clock_monotonic() + 30_000_000_000;
     let mut at = 0;
     while at < out.len() {
         match stream_read(read, &mut out[at..]) {
             Ok(0) => panic!("end of file after {at}"),
             Ok(n) => at += n,
+            Err(Status::WouldBlock) => {
+                let mut packets = [Packet::default()];
+                port_wait(port, deadline, &mut packets).expect("the writer wrote in time");
+            }
             Err(e) => panic!("read: {e:?}"),
         }
     }
+    handle_close(port).expect("close");
 }
 
 const PAGES: usize = 16;
@@ -493,6 +508,9 @@ fn the_childs_table_mirrors_the_parents() {
             let rights = test_call(RIGHTS_AT, u64::from(slot)) as u32;
             values.extend_from_slice(&rights.to_le_bytes());
         }
+        // The parent reads before this writes, as on a slow host (CI under
+        // TCG): `receive` must wait, not take an empty stream for an error.
+        sleep_until(clock_monotonic() + 20_000_000);
         send(write, &values);
         let me = h(u64::from(SELF_SLOT) | generation_of(SELF_SLOT) << 16);
         let mut ok = handle_type(me) == Ok("process");

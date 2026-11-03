@@ -33,6 +33,8 @@ Read `docs/design.md` first. It says what exists and where it lives.
 - Work on the branch named in the task. Never merge, never push and never rewrite published history, unless the task
   explicitly says so.
 - Commit after each step the task lists, with a message that says what changed and why.
+- A stage's tag goes on `main` only after CI on `main` is green for that commit. A published tag is moved only with
+  the architect's permission.
 
 ## Environment
 
