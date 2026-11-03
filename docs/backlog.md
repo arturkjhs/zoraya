@@ -53,6 +53,7 @@ limited to the lines it changed, what it finds outside them is added here.
 | - | dash (ADR-0142) | dash carries only TASK-02's M4 patch. ADR-0109 item 9's fork group hint and `vforkexec` with `POSIX_SPAWN_TCSETPGRP` need three names outside the tier list; write and test them in 6d once ADR-0142 is decided. |
 | - | `ports/` (ADR-0143) | The host check of tcc's link step uses a tcc compiled for the host from the same source; the Zoraya tcc's own output is first seen in W1 (6e). |
 | - | `ports/` | Programs go into `build/rootfs-posix` with their debug information (`-g` as measured): dash 853 KB on disk for 170 KB loaded, tcc 1.7 MB for 549 KB. Strip them for the image if the volume's size matters; the toolchain has no strip tool without `llvm-tools`. |
+| - | `zoraya-elf-check` | `USER_LOW` (4 MiB) is a copy of `kernel/src/memory/user.rs`'s; move it into `zoraya-abi`, which both would use, when that crate is next changed (TASK-17 review A11). |
 | - | `posix-surface-check` | `hide` and `check` share the tool's ELF reader; the cross-check against `zoraya-ar`'s index (its own reader) is what keeps a reader bug from hiding a name and passing the check alike. |
 | - | `libc.a` (ADR-0141) | `getpwnam` and friends call `pthread_setcancelstate` and the `nscd` client's `socket`, `connect` and `sendmsg`, hidden and failing in the stub. 6c decides whether they are no-ops in Rust or the `passwd` parsers are patched. |
 

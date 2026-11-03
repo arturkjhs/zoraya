@@ -131,3 +131,75 @@ fn hide_refuses_two_objects_with_one_name_and_prints_its_renames() {
     let (ok, text) = run(&["hide", LIST, out.to_str().unwrap(), b.to_str().unwrap()]);
     assert!(!ok && text.contains("two objects"), "{text}");
 }
+
+/// An AArch64 ET_REL with one `.text` and the given (name, bind, defined)
+/// symbols.
+fn object(symbols: &[(&str, u8, bool)]) -> Vec<u8> {
+    let mut strtab = vec![0u8];
+    let mut symtab = vec![0u8; 24];
+    for (name, bind, defined) in symbols {
+        let mut s = [0u8; 24];
+        s[..4].copy_from_slice(&(strtab.len() as u32).to_le_bytes());
+        strtab.extend_from_slice(name.as_bytes());
+        strtab.push(0);
+        s[4] = (bind << 4) | if *defined { 2 } else { 0 };
+        s[6..8].copy_from_slice(&(*defined as u16).to_le_bytes());
+        symtab.extend_from_slice(&s);
+    }
+    let mut e = vec![0u8; 64];
+    e[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    e[16..18].copy_from_slice(&1u16.to_le_bytes());
+    e[18..20].copy_from_slice(&183u16.to_le_bytes());
+    let text = e.len();
+    e.extend_from_slice(&0xd503_201fu32.to_le_bytes());
+    let sym = e.len();
+    e.extend_from_slice(&symtab);
+    let st = e.len();
+    e.extend_from_slice(&strtab);
+    while !e.len().is_multiple_of(8) {
+        e.push(0);
+    }
+    let shoff = e.len();
+    for (kind, flags, off, size, link) in [
+        (0u32, 0u64, 0, 0, 0u32),
+        (1, 6, text, 4, 0),
+        (2, 0, sym, symtab.len(), 3),
+        (3, 0, st, strtab.len(), 0),
+    ] {
+        let mut h = [0u8; 64];
+        h[4..8].copy_from_slice(&kind.to_le_bytes());
+        h[8..16].copy_from_slice(&flags.to_le_bytes());
+        h[24..32].copy_from_slice(&(off as u64).to_le_bytes());
+        h[32..40].copy_from_slice(&(size as u64).to_le_bytes());
+        h[40..44].copy_from_slice(&link.to_le_bytes());
+        e.extend_from_slice(&h);
+    }
+    e[40..48].copy_from_slice(&(shoff as u64).to_le_bytes());
+    e[58..60].copy_from_slice(&64u16.to_le_bytes());
+    e[60..62].copy_from_slice(&4u16.to_le_bytes());
+    e
+}
+
+#[test]
+fn the_summary_counts_defined_non_internal_names_only() {
+    let d = tmp("count");
+    let o = object(&[
+        ("open", 1, true),
+        ("read", 2, true),
+        ("_x", 1, true),
+        ("printf", 2, false),
+    ]);
+    let members = [zoraya_ar::Member {
+        name: "o.o".into(),
+        data: o,
+    }];
+    let archive = d.join("lib.a");
+    std::fs::write(&archive, zoraya_ar::write(&members).unwrap()).unwrap();
+    let list = d.join("list.txt");
+    std::fs::write(&list, "open\nread\n").unwrap();
+    let (ok, text) = run(&["check", list.to_str().unwrap(), archive.to_str().unwrap()]);
+    assert!(
+        ok && text.contains("1 members, 2 exports, tier list of 2 names: passed"),
+        "{text}"
+    );
+}

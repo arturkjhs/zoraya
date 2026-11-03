@@ -432,8 +432,10 @@ host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6
 - **The ports.** dash (TASK-02's M4 patch), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched)
   and tcc (a `Zoraya` target and a fix for `SHF_EXCLUDE` sections) build with `zcc`, and none needed `__linux__`.
   toybox (`cat head ls mv rm sleep touch true uname sort wc yes`) has a rule but has not been built on the M4: its
-  scripts need GNU sed, which that host lacks (TASK-17 report). `build/rootfs-posix` has the programs in `/bin`
-  with a symbolic link per applet and the sysroot as `/usr`.
+  scripts need GNU sed, which that host lacks, so whether it builds without `__linux__` is not yet known. Since the
+  root file system needs toybox, `make ports` and `make check-ports` do not complete on the M4 until GNU sed is
+  installed; the checks below were run one by one there (TASK-17 review). `build/rootfs-posix` is to have the
+  programs in `/bin` with a symbolic link per applet and the sysroot as `/usr`.
 - **`make check-ports`** (the end of `make ports`): the tier list is the CSV's (INV-0100-1); `posix-surface-check`
   checks `libc.a` (exports, the exclusion table, missing names, unresolved references, the symbol index, `svc`) and
   fails on five broken copies of it; every excluded musl file is refused by the shim; `zoraya-elf-check` runs the
