@@ -167,6 +167,14 @@ fn bad_programs_are_refused_and_leave_nothing(hello: &[u8]) {
     assert_err!(image_create(object, u64::MAX), Status::InvalidArgument);
     memory_unmap(at, size).expect("unmap");
     handle_close(object).expect("close");
+    // Past the object with a good program in it: only the length is wrong.
+    let (object, at, size) = object_with(hello);
+    assert_err!(image_create(object, size + 1), Status::InvalidArgument);
+    assert_err!(image_create(object, size + 4096), Status::InvalidArgument);
+    let good = image_create(object, hello.len() as u64).expect("the same object, its length");
+    handle_close(good).expect("close");
+    memory_unmap(at, size).expect("unmap");
+    handle_close(object).expect("close");
     assert_eq!(
         free_frames(),
         frames,
