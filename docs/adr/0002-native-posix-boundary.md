@@ -91,6 +91,10 @@ Why D over C: per-call cost on the data path is the documented failure mode of s
 
 **Principles this recommendation strains.** CP-01 (no ambient authority) is kept for the native ABI but the personality's namespace table is, from the POSIX program's view, ambient: anything in the table can be opened by name. That is the X-1 tradeoff accepted deliberately, bounded by the table's contents. CP-05 (no fork) is kept natively and relaxed for `posix` jobs by rule 3(a); that is X-2 accepted deliberately for one program class.
 
+*Note, 2026-11-03 (the architect's decision on ADR-0153, recorded by an agent):* INV-0002-4 has a second wording for the tables `zosh` builds, where a relative path is joined to the current directory's absolute path: `..` normalises against that path, stays at `/`, and a path is served only by an entry that covers it (INV-0153-8). The guarantee, that resolution never escapes an entry, is the same; the check tests both forms. The list of
+INV-0002-5, as ADR-0107 extended it, also gains `REPORT`, the write end of the channel on which `libposix` reports
+refused paths (ADR-0153 rule 11).
+
 ## Consequences
 
 - **Positive.** The native ABI stays free of pids, signals, global paths and fork. The personality's needs are visible as one kernel facility and one broker. Data-path performance is library-direct. The measured working set gives the launcher's namespace table a concrete default.

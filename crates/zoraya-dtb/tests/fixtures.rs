@@ -201,3 +201,6 @@ fn count_begin_tokens(blob: &[u8]) -> usize {
         }
     }
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

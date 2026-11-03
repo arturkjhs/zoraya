@@ -264,3 +264,6 @@ fn content_changes_assign_new_times() {
     assert_eq!(v.stat(f).unwrap().mtime, Timestamp { secs: -5, nanos: 7 });
     assert!(v.stat(f).unwrap().ctime > last);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

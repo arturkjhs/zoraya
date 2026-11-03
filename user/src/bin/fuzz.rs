@@ -18,12 +18,14 @@ fn main() -> i32 {
     let calls = SYSCALLS.len() as u64 + 2;
     for _ in 0..20_000 {
         let number = next() % calls;
-        // Exit, and a kill or a request to its own job, would end the run, and
-        // a far deadline would never come back.
+        // Exit, and a kill or a request to its own job, would end the run, a
+        // suspend of its own job would stop it for good, and a far deadline
+        // would never come back.
         if number == Syscall::ProcessExit as u64
             || number == Syscall::ProcessExitWithReason as u64
             || number == Syscall::JobKill as u64
             || number == Syscall::JobSignal as u64
+            || number == Syscall::JobSuspend as u64
         {
             continue;
         }

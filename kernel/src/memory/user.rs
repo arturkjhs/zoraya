@@ -15,6 +15,7 @@ use super::phys_to_virt;
 use crate::arch::mmu;
 use crate::device::DeviceMapping;
 use crate::sync::SpinLock;
+use zoraya_abi::Status;
 
 /// Lowest address a user mapping may have.
 pub const USER_LOW: u64 = 0x40_0000;
@@ -105,6 +106,7 @@ pub enum Holder {
 struct Mapping {
     va: u64,
     length: u64,
+    attributes: Attributes,
     holder: Holder,
 }
 
@@ -207,7 +209,15 @@ impl AddressSpace {
                 return Err(MappingError::Memory);
             }
         }
-        self.mappings.insert(index, Mapping { va, length, holder });
+        self.mappings.insert(
+            index,
+            Mapping {
+                va,
+                length,
+                attributes,
+                holder,
+            },
+        );
         Ok(va)
     }
 
@@ -223,6 +233,117 @@ impl AddressSpace {
             .unmap(&mut self.memory, va, length)
             .map_err(|_| MappingError::NotMapped)?;
         Ok(self.mappings.remove(index).holder)
+    }
+
+    /// True if any mapping is of a device window (ADR-0054).
+    pub fn has_device_mapping(&self) -> bool {
+        self.mappings
+            .iter()
+            .any(|m| matches!(m.holder, Holder::Device(_)))
+    }
+
+    /// A copy of this space for a snapshot's child (ADR-0102 item 2): a fresh
+    /// frame for every page this space owns, with the same contents at the
+    /// same address with the same attributes, and a fresh memory object for
+    /// every mapping of one, holding a copy of the mapped range. Nothing is
+    /// shared. A device mapping refuses it with `BadState`. On failure,
+    /// everything it took is given back as the copy drops (INV-0102-3).
+    pub fn snapshot(&self, copied: &mut Copied) -> Result<AddressSpace, Status> {
+        if self.has_device_mapping() {
+            return Err(Status::BadState);
+        }
+        let mut child = AddressSpace::new().map_err(|_| Status::NoMemory)?;
+        child
+            .mappings
+            .try_reserve_exact(self.mappings.len())
+            .map_err(|_| Status::NoMemory)?;
+        let mut objects = Vec::new();
+        objects
+            .try_reserve_exact(self.mappings.len())
+            .map_err(|_| Status::NoMemory)?;
+        for m in &self.mappings {
+            // Every page is written by the copy below before the child exists.
+            objects.push(MemoryObject::new_for_copy(m.length)?);
+        }
+        let mut failed = None;
+        let mut executable = false;
+        self.table.for_each_mapping(&self.memory, &mut |leaf| {
+            for offset in (0..leaf.size).step_by(FRAME_SIZE as usize) {
+                if failed.is_some() {
+                    return;
+                }
+                let (va, pa) = (leaf.va + offset, leaf.pa + offset);
+                // Mappings are kept by address, and do not overlap.
+                let i = self.mappings.partition_point(|m| m.va + m.length <= va);
+                let target = match self.mappings.get(i) {
+                    Some(m) if m.va <= va => objects[i].page(va - m.va),
+                    _ => match child.copy_page(va, leaf.attributes) {
+                        Ok(pa) => pa,
+                        Err(e) => {
+                            failed = Some(e);
+                            return;
+                        }
+                    },
+                };
+                // SAFETY: both are whole frames of ordinary RAM in the direct
+                // map: `pa` is mapped by this space, which the caller's lock
+                // keeps, and `target` was just taken for the copy and is
+                // reached by nothing else yet.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        phys_to_virt(pa) as *const u8,
+                        phys_to_virt(target) as *mut u8,
+                        FRAME_SIZE as usize,
+                    );
+                }
+                if leaf.attributes.execute {
+                    // SAFETY: the frame just written, in the direct map.
+                    unsafe { mmu::clean_to_unification(phys_to_virt(target), FRAME_SIZE) };
+                    executable = true;
+                }
+                copied.pages += 1;
+            }
+        });
+        if let Some(e) = failed {
+            return Err(e);
+        }
+        if executable {
+            // After every clean: fetches through the child's mappings then
+            // see the copies (Arm ARM D7.5.9).
+            mmu::invalidate_instruction_cache();
+        }
+        for (m, object) in self.mappings.iter().zip(objects) {
+            for offset in (0..m.length).step_by(FRAME_SIZE as usize) {
+                child
+                    .table
+                    .map_pages(
+                        &mut child.memory,
+                        m.va + offset,
+                        object.page(offset),
+                        FRAME_SIZE,
+                        m.attributes,
+                    )
+                    .map_err(|_| Status::NoMemory)?;
+            }
+            child.mappings.push(Mapping {
+                va: m.va,
+                length: m.length,
+                attributes: m.attributes,
+                holder: Holder::Memory(object),
+            });
+        }
+        Ok(child)
+    }
+
+    /// Maps a new frame at `va` for [`AddressSpace::snapshot`] to fill: not
+    /// zeroed, since the whole page is written before anything can read it.
+    fn copy_page(&mut self, va: u64, attributes: Attributes) -> Result<u64, Status> {
+        let frame = frames::alloc().map_err(|_| Status::NoMemory)?;
+        self.memory.adopt(frame).map_err(|_| Status::NoMemory)?;
+        self.table
+            .map_pages(&mut self.memory, va, frame.addr(), FRAME_SIZE, attributes)
+            .map_err(|_| Status::NoMemory)?;
+        Ok(frame.addr())
     }
 
     /// The 64-bit value at `va`, which must be mapped and aligned.
@@ -257,6 +378,13 @@ impl Drop for AddressSpace {
         }
         free_asid(self.memory.asid);
     }
+}
+
+/// What a snapshot copied, for its measurement.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Copied {
+    /// Pages copied: the process's own and those of mapped objects.
+    pub pages: u64,
 }
 
 /// Why a page could not be mapped.

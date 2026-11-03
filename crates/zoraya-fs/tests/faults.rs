@@ -426,3 +426,6 @@ fn volumes_left_by_faults_check_clean() {
     }
     let _ = &mut d;
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

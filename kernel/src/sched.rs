@@ -169,6 +169,27 @@ pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>
     Ok(thread)
 }
 
+/// Makes `process`'s thread from a copy of `frame`, returning `Ok` and 0
+/// from the call that frame was saved at, with `TPIDR_EL0` set to
+/// `tpidr_el0`. Blocked, as from [`spawn_user`].
+pub fn spawn_user_from(
+    process: Arc<Process>,
+    frame: &arch::Frame,
+    tpidr_el0: u64,
+) -> Result<Arc<Thread>, OutOfMemory> {
+    let stack = KernelStack::new()?;
+    let at = stack.push_user_frame_copy(frame, zoraya_abi::Status::Ok as u64, 0);
+    let context = Context::new_user_with_tls(at, stack.limit(), tpidr_el0);
+    let thread = try_arc(Thread {
+        context: UnsafeCell::new(context),
+        state: AtomicU8::new(BLOCKED),
+        _stack: Some(stack),
+        process: Some(process),
+    })?;
+    count_new()?;
+    Ok(thread)
+}
+
 /// Forgets a thread from [`spawn_user`] that never ran.
 pub fn discard(thread: Arc<Thread>) {
     SCHED.lock().threads -= 1;

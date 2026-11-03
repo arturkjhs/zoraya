@@ -66,6 +66,8 @@ None on the choice. For target 2 an agent's terminal output is hostile: the pars
 ### Deferred to stage 6
 The broker, sessions, the controlling terminal and `isatty`; byte streams for children's output; termios in `libposix` (canonical mode would be the broker's or `libposix`'s, never the kernel's).
 
+*Note, 2026-11-03 (the architect's decision on ADR-0154, recorded by an agent):* the output subset gains `ESC [ 2 m` (faint: the foreground at half intensity) and `ESC [ 22 m` (normal intensity), for the shell's suggestions. Who interprets Ctrl-C for the native shell's sessions is `zosh` itself (ADR-0158, ADR-0004's note).
+
 ## Consequences
 - **Positive.** A window that runs `zosh`, a parser stage 6 can grow, and no reply path for injected queries.
 - **Negative.** Children of `zosh` print to the serial console in GUI mode until stage 6. Programs that query the terminal get no answer and must use defaults.

@@ -14,6 +14,7 @@ zoraya-proto-file = { path = "../zoraya-proto-file" }
 zoraya-protocol = { path = "../zoraya-protocol" }
 
 [dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
 zoraya-fs-testkit = { path = "../zoraya-fs-testkit" }
 
 [lints]

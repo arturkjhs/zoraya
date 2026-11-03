@@ -425,3 +425,6 @@ fn range_set_reports_full_and_stays_unchanged() {
     assert!(set.remove(r(2, 3)).is_err());
     assert_eq!(set, before);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

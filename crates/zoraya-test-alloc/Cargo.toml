@@ -1,0 +1,11 @@
+[package]
+name = "zoraya-test-alloc"
+description = "A capped global allocator for host tests, so a runaway test fails instead of exhausting the host."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

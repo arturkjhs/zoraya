@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
-use super::frames;
 use super::heap::try_arc;
+use super::{frames, phys_to_virt};
 use zoraya_abi::Status;
 
 enum Frames {
@@ -25,6 +25,17 @@ impl MemoryObject {
     /// Commits `size` bytes, zeroed, or fails having changed nothing
     /// (INV-0051-1). `size` must be a whole number of pages, not 0.
     pub fn new(size: u64, contiguous: bool) -> Result<Arc<MemoryObject>, Status> {
+        MemoryObject::make(size, contiguous, true)
+    }
+
+    /// As [`MemoryObject::new`], scattered and not zeroed: for a copy that
+    /// writes every byte before anything can reach the object (a snapshot's
+    /// mapped objects, ADR-0102 item 2). The caller must do so.
+    pub fn new_for_copy(size: u64) -> Result<Arc<MemoryObject>, Status> {
+        MemoryObject::make(size, false, false)
+    }
+
+    fn make(size: u64, contiguous: bool, zeroed: bool) -> Result<Arc<MemoryObject>, Status> {
         if size == 0 || !size.is_multiple_of(FRAME_SIZE) {
             return Err(Status::InvalidArgument);
         }
@@ -38,7 +49,12 @@ impl MemoryObject {
             list.try_reserve_exact(count as usize)
                 .map_err(|_| Status::NoMemory)?;
             for _ in 0..count {
-                match frames::alloc_zeroed() {
+                let frame = if zeroed {
+                    frames::alloc_zeroed()
+                } else {
+                    frames::alloc()
+                };
+                match frame {
                     Ok(frame) => list.push(frame),
                     Err(_) => {
                         object = Frames::Scattered(list);
@@ -69,6 +85,49 @@ impl MemoryObject {
             Frames::Scattered(list) => list[index as usize].addr(),
             Frames::Run { first, .. } => first.addr() + index * FRAME_SIZE,
         }
+    }
+
+    /// Copies the bytes from `offset` on into `out`, or gives `false` if they
+    /// are not all inside the object.
+    pub fn read(&self, offset: u64, out: &mut [u8]) -> bool {
+        let end = offset.checked_add(out.len() as u64);
+        if end.is_none_or(|end| end > self.size()) {
+            return false;
+        }
+        let mut done = 0;
+        while done < out.len() {
+            let at = offset + done as u64;
+            let in_page = (at % FRAME_SIZE) as usize;
+            let length = (FRAME_SIZE as usize - in_page).min(out.len() - done);
+            let from = phys_to_virt(self.page(at - in_page as u64)) + in_page as u64;
+            // SAFETY: a frame of this object, in the direct map, alive while
+            // `self` is; `length` stays inside its page and inside `out`. A
+            // process may write it through a mapping, but not while the
+            // kernel runs on the one CPU, so nothing changes under the copy.
+            unsafe {
+                core::ptr::copy_nonoverlapping(from as *const u8, out[done..].as_mut_ptr(), length);
+            }
+            done += length;
+        }
+        true
+    }
+
+    /// Copies `bytes` into the object at `offset`, for tests that hand a
+    /// process prepared contents. False if they do not fit.
+    #[cfg(feature = "qemu-test")]
+    pub fn write(&self, offset: u64, bytes: &[u8]) -> bool {
+        let end = offset.checked_add(bytes.len() as u64);
+        if end.is_none_or(|end| end > self.size()) {
+            return false;
+        }
+        for (i, byte) in bytes.iter().enumerate() {
+            let at = offset + i as u64;
+            let page = phys_to_virt(self.page(at - at % FRAME_SIZE));
+            // SAFETY: a frame of this object in the direct map; `at % FRAME_SIZE`
+            // is inside it.
+            unsafe { ((page + at % FRAME_SIZE) as *mut u8).write(*byte) };
+        }
+        true
     }
 
     /// The physically contiguous runs, each `(address, length)`.

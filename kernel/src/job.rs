@@ -28,12 +28,17 @@ struct State {
     live: usize,
     /// `job_kill` ran: nothing new may start here.
     closed: bool,
+    /// Between `job_suspend` and `job_resume` (ADR-0105 item 8). A process
+    /// joining a suspended job starts stopped, and a job made under one starts
+    /// suspended.
+    suspended: bool,
 }
 
 pub struct Job {
     parent: Option<Arc<Job>>,
     depth: u32,
-    /// Stored for `snapshot_process` at stage 6, and passed to child jobs.
+    /// The policy bit `snapshot_process` needs (ADR-0002 rule 3), passed to
+    /// child jobs.
     posix: bool,
     source: SourceId,
     state: SpinLock<State>,
@@ -42,7 +47,13 @@ pub struct Job {
 impl Job {
     fn new(parent: Option<Arc<Job>>, posix: bool) -> Result<Arc<Job>, Status> {
         let depth = parent.as_ref().map_or(0, |p| p.depth + 1);
-        let source = port::new_source(job_signals::TERMINATED)?;
+        let suspended = parent.as_ref().is_some_and(|p| p.state.lock().suspended);
+        let bits = if suspended {
+            job_signals::TERMINATED | job_signals::SUSPENDED
+        } else {
+            job_signals::TERMINATED
+        };
+        let source = port::new_source(bits)?;
         let job = try_arc(Job {
             parent,
             depth,
@@ -53,6 +64,7 @@ impl Job {
                 processes: Vec::new(),
                 live: 0,
                 closed: false,
+                suspended,
             }),
         });
         // On failure the value was dropped, and its `Drop` freed the source.
@@ -90,6 +102,11 @@ impl Job {
 
     pub fn source(&self) -> SourceId {
         self.source
+    }
+
+    /// The `posix` policy bit.
+    pub fn is_posix(&self) -> bool {
+        self.posix
     }
 
     /// No live process in the tree.
@@ -143,6 +160,9 @@ impl Job {
                 .try_reserve(1)
                 .map_err(|_| Status::NoMemory)?;
             state.processes.push(process.clone());
+            if state.suspended {
+                process.stop();
+            }
         }
         self.add_live(1);
         Ok(())
@@ -204,6 +224,30 @@ impl Job {
             });
         });
         result
+    }
+
+    /// Stops every process in the tree and asserts `SUSPENDED` on every job in
+    /// it (ADR-0105 item 8). On one CPU, with the kernel running, no other
+    /// thread is at EL0: each one parks on its next way there, so none runs a
+    /// user instruction after this returns (INV-0105-5).
+    pub fn suspend(&self) {
+        let _tree = TREE.lock();
+        self.walk(&mut |job| {
+            job.state.lock().suspended = true;
+            port::set_signals(job.source, job_signals::SUSPENDED);
+            job.for_each_process(&mut |process| process.stop());
+        });
+    }
+
+    /// Undoes [`Job::suspend`] for the tree. A job that is not suspended is
+    /// left as it is.
+    pub fn resume(&self) {
+        let _tree = TREE.lock();
+        self.walk(&mut |job| {
+            job.state.lock().suspended = false;
+            port::clear_signals(job.source, job_signals::SUSPENDED);
+            job.for_each_process(&mut |process| process.cont());
+        });
     }
 
     /// Ends the tree and closes it to new processes (ADR-0046).

@@ -12,3 +12,6 @@ zoraya-protocol = { path = "../zoraya-protocol" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

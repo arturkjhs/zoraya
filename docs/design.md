@@ -256,7 +256,7 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   mask that only decreases. Port handles have no `DUPLICATE`, so closing one closes the port.
 - **Jobs (`kernel/src/job.rs`).** A tree, at most 32 deep, with one lock over membership and walks. `job_signal` and
   `job_kill` cover the tree; a killed tree refuses new processes. `TERMINATED` means no live process in the tree.
-  The `posix` bit is stored and unused until stage 6.
+  The `posix` bit gates `snapshot_process`; `job_suspend` and `job_resume` came with stage 6a (below).
 - **`spawn`.** One flat buffer, copied once and decoded by `zoraya_abi::spawn::SpawnRequest`: job, image, group, handle
   list, dispositions, argv and environment. A child holds what was listed and nothing else, and reads its vectors from a
   read-only block at `STARTUP_BLOCK`. Registers start at zero. A process the kernel starts has the console, a job and
@@ -268,8 +268,9 @@ The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src
   1024 user packets per port.
 - **System calls.** `svc #0`, number in x8, status in x0, value in x1. One `syscalls!` declaration in `zoraya-abi` makes
   the numbers, the table the lints read, the trait `kernel/src/syscall.rs` implements and the stubs `zoraya-rt` wraps.
-- **Not built at stage 3.** `job_suspend`, `job_resume`, `object_wait_one`, `object_get_signals`, timers, event
-  objects, byte streams, channels, exception channels and `snapshot_process`.
+- **Not built yet.** `object_wait_one`, timers and exception channels. Byte streams, `object_get_signals`,
+  `job_suspend`, `job_resume`, `image_create` and `snapshot_process` came with stage 6a (below), channels and event
+  objects with stage 4.
 - **Ramdisk.** QEMU ignores `-initrd` for an ELF kernel, so `tools/mkramdisk` packs `user/` programs and the kernel
   embeds them in `.rodata`. A kernel built without the Makefile has an empty one.
 - **User memory.** Reached only through `syscall::UserSlice`, with `ldtrb` and `sttrb`, which check permissions as EL0
@@ -503,14 +504,22 @@ How the in-QEMU tests run and report:
   that never reads, a flood of commits, input and manager ordinals on a client channel, F12 and focus), kills and
   restarts the GPU and input drivers, swaps in a display driver that never answers a flush (`guibench hang-display`)
   and sees keys and frame callbacks go on and the driver reported hung, and measures a full redraw. Without a GPU it passes having done nothing.
+- `t_streams`, `t_image`, `t_suspend` and `t_snapshot` check ADR-0101, ADR-0108, ADR-0105 item 8 and ADR-0102 from
+  a process; the test kernel runs each twice and compares frame and heap counts. `t_snapshot` runs itself in a
+  `posix` job: both halves of a snapshot run with their own memory and moved handles, a register dump compares
+  the halves, the child's table is compared slot by slot, and a sweep gives back one frame at a time from an empty
+  allocator until the call succeeds, checking that each refusal returned every frame and byte of heap. Test calls
+  (`syscall::test_calls`) hold frames and read a process's table for these.
 - `t_storage`, run by the test kernel, kills the driver idle clean, idle dirty, in a commit and in a read, then the
   service, and checks the durable file after each remount. It sends malformed messages and hostile paths, fills the
   open table, and never reads its replies.
 - Mutation testing is outside `make test`. `make mutants` applies the hand-written mutations of `tools/mutants/*.toml`
-  in parallel worktrees of `HEAD` (`build/mutants/w<i>`, kept between runs, about 400 MB each), runs only the tests
-  each list names, and writes the survivors to `build/mutants/report.md`. `make mutants-host CRATE=name` runs
-  cargo-mutants on one host crate. The `mutant-triage` and `test-runner` subagents (`.claude/agents/`) read and run
-  these; CLAUDE.md says which work goes to them.
+  in at most two parallel worktrees of `HEAD` (`build/mutants/w<i>`, kept between runs, about 400 MB each), runs only
+  the tests each list names, and writes the survivors to `build/mutants/report.md`. `make mutants-host CRATE=name`
+  runs cargo-mutants on one host crate, two jobs at a time. Both run under `tools/mutants/watchdog.sh`, which kills a
+  process past a memory limit, and every host test caps its own heap at 512 MiB (`crates/zoraya-test-alloc`), so a
+  mutant that grows without bound fails instead of taking the host (`docs/backlog.md`). The `mutant-triage` and
+  `test-runner` subagents (`.claude/agents/`) read and run these; CLAUDE.md says which work goes to them.
 - Tests inspect a fault with `arch::catch`, which runs a function and returns the fault that ended it. That path
   exists only in the test kernel: the normal kernel cannot resume a fault.
 - Nine tests fail on purpose (`--expect-panic`): the harness self-tests, and the fault reports for `brk`, an unmapped
@@ -565,6 +574,61 @@ deterministic random mutations.
   other way leaves its frames quarantined. `dma_release_quarantine` is refused while the device has a mapping or a live
   pin, and otherwise the kernel resets each transport, sees Status 0, and only then frees the frames.
 
+## Stage 6 kernel objects (as built)
+
+TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/0102-snapshot-process.md),
+[ADR-0105](adr/0105-terminal-and-job-control.md) item 8, [ADR-0108](adr/0108-programs-from-the-filesystem.md) and
+[ADR-0109](adr/0109-building-the-toolchain.md) item 5, with the choices they leave open in
+[ADR-0130](adr/0130-kernel-object-choices-of-stage-6a.md) (proposed). Eight calls, numbers 42 to 49, all in the one
+`syscalls!` declaration.
+
+- **Byte streams (`crates/zoraya-stream`, `kernel/src/stream.rs`).** `stream_create` gives a read end and a write
+  end, two object types, over one 64 KiB ring in frames committed at creation (a memory object nobody can name). The
+  ring's rules are host-tested data: a write of at most 4096 bytes is all or nothing and needs 4096 free; a longer one
+  takes what fits; a read takes what is there; nothing blocks. Each handle to an end holds that end's `Arc`, in a
+  table, a channel message or a snapshot's child, so `PEER_CLOSED` comes from the last one dropping. The user copy
+  goes straight between user memory and the ring's frames, so a transfer allocates nothing.
+- **`snapshot_process` (ADR-0102).** Refused with `AccessDenied` outside a `posix` job; the only
+  `#[personality_only]` call. One flat buffer (`ZSN1`, `zoraya_abi::snapshot`), read once. Every check comes first,
+  then the child's table: every slot at the parent's generation, duplicable types (`OBJECT_TYPES` marks each)
+  duplicated where the handle has `DUPLICATE`, listed handles moved to their slots, the self slot a `WAIT` handle to
+  the child. Then the eager copy (`AddressSpace::snapshot`): a fresh frame for every page the process owns, a fresh
+  memory object for every mapped one, data cache cleaned to the point of unification for executable pages and the
+  instruction cache invalidated once. A device mapping or a pin refuses it. The child's thread starts from a copy of
+  the caller's exception frame with x0 `Ok` and x1 0, and its `TPIDR_EL0`; dispositions are copied, the request queue
+  is empty. Only after the child exists do the moved handles leave the caller.
+- **`image_create` (ADR-0108).** `zoraya-elf` parses an ELF in a memory object in two steps (header, then table)
+  with the same rules as the ramdisk; the image keeps the checked headers, a copy of the header table and the object.
+  `spawn` copies each segment's bytes from the object then. Rewriting the object after the call harms only the
+  children spawned from it afterwards.
+- **Startup block (ADR-0109 item 5).** `argc`, `envc`, a header size of 16 and the number of program headers, the
+  strings, zeros to a multiple of 8, then the ELF's whole program header table, for `AT_PHDR`.
+- **`job_suspend`, `job_resume`.** Need `KILL`. A flag on every job of the tree and `SUSPENDED` on each; every
+  process is marked stopped, and its thread parks on its next way to EL0, so none runs a user instruction after the
+  call returns (one CPU). A process or job that joins a suspended tree starts stopped. Suspends do not nest.
+- **`object_get_signals`.** The bits asserted now, with `WAIT`: `WNOHANG` without a port.
+
+Measured on the M4 under QEMU 11.1.2, `make test`'s test kernel (128 MiB; `auto-*` under HVF, `tcg-*` under TCG),
+from `t_streams`, `t_suspend` and `t_snapshot`, in the final run of TASK-16 (a clean clone at `15c554a`), each
+program twice per configuration. The "1 MiB" and "8 MiB" processes are the test program with a mapped object of that
+size; the program's own pages are about 1.2 MiB, most of it its user heap, so the copies are 2.2 and 9.2 MiB.
+
+| | HVF | TCG |
+|---|---|---|
+| Stream transfer, 64 KiB writes and reads in one process | 1.0 to 1.8 GB/s | 265 to 269 MB/s |
+| `job_suspend` of a job of 16 running processes: mean of 20; worst | 6.1 to 6.5 µs; 8 µs | 82 to 86 µs; 118 µs |
+| `snapshot_process` of the "1 MiB" process, worst of 5 masked; pages copied; frames charged | 0.40 to 0.42 ms; 563; 590 | 4.6 to 4.8 ms; 563; 590 |
+| `snapshot_process` of the "8 MiB" process, the same | 1.39 to 1.44 ms; 2355; 2385 | 14.0 to 16.5 ms; 2355; 2385 |
+
+The frames charged are the pages copied plus the child's tables, kernel stack and object records. The copy runs
+with interrupts masked for the whole call, at about 6.5 GB/s under HVF and 550 to 650 MB/s under TCG. Earlier runs,
+while the copies of mapped objects were still zeroed first (TASK-16 review, R4), were about a fifth slower, and under
+TCG on a busy host the 8 MiB case reached 49 ms. **Does it need breaking up?** Not for stage 6: dash at about 1 MiB
+`[assumption, ADR-0102]` stalls about 0.4 ms under HVF and 5 ms under TCG, within the stalls the kernel already has
+(`memory_create` of all memory, 9 ms; a device reset, up to 100 ms). An 8 MiB process stalls TCG for one and a half
+10 ms slices; nothing in T1 forks one. It must be bounded with the others before untrusted code runs (ADR-0056), and
+copy-on-write (ADR-0102's revisit) removes it.
+
 ## Console input and the first process
 
 - **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
@@ -612,6 +676,10 @@ or `exit` turns the machine off.
 - **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
 - **Handles in messages.** A protocol decoder checks how many handles a message has. A server must then check their
   types with `handle_type` (ADR-0072).
+- **Snapshot stall.** `snapshot_process` copies with interrupts masked: 0.4 ms for a 2.2 MiB process under HVF,
+  about 16 ms for 9.2 MiB under TCG, more on a busy host ("Stage 6 kernel objects (as built)"). Suspends do not nest, and a resume of a
+  sub-job runs it while its parent stays suspended (ADR-0130 item 7). A stopped thread blocked in the kernel finishes
+  its call before it parks. The stream ring is 64 KiB per stream, committed, with no quota (ADR-0056).
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code
   runs in Zoraya until [ADR-0056](adr/0056-job-memory-accounting.md) is accepted and implemented. At stage 4 every
   process is trusted.
@@ -734,6 +802,7 @@ kernel/                   zoraya-kernel: boot, arch, machine-dependent code only
   src/sched.rs            threads and the scheduler
   src/process.rs, job.rs, object.rs, port.rs  processes, jobs, handle contents, ports
   src/channel.rs, device.rs  channels; device, interrupt and pin objects
+  src/stream.rs           byte streams
   src/syscall.rs, ramdisk.rs  system calls, the embedded ramdisk
   src/psci.rs             SYSTEM_OFF
   src/panic.rs            panic handler
@@ -749,6 +818,7 @@ crates/                   no_std, host-tested
   zoraya-handle/          handle tables: slots, generations, rights
   zoraya-console/         the console input ring
   zoraya-channel/         channel queues, bounds and the no-cycle rule
+  zoraya-stream/          the byte stream's ring and its transfer rules (ADR-0101)
   zoraya-protocol/        the wire format and the protocol! macro
   zoraya-proto-block/, zoraya-proto-file/  the block and file protocols
   zoraya-shell/           zosh's line editor, parser and reports

@@ -12,6 +12,9 @@ dependencies = [
 [[package]]
 name = "zoraya-abi"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-adr-check"
@@ -24,6 +27,9 @@ version = "0.1.0"
 [[package]]
 name = "zoraya-channel"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-compositor"
@@ -34,19 +40,29 @@ dependencies = [
  "zoraya-proto-gui",
  "zoraya-proto-input",
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
 name = "zoraya-console"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-dtb"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-elf"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-elf-check"
@@ -61,17 +77,22 @@ name = "zoraya-events"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
 name = "zoraya-font"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-fs"
 version = "0.1.0"
 dependencies = [
  "zoraya-fs-testkit",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -83,6 +104,7 @@ dependencies = [
  "zoraya-proto-block",
  "zoraya-proto-file",
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -106,11 +128,15 @@ name = "zoraya-handle"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
 name = "zoraya-heap"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-kernel"
@@ -127,12 +153,16 @@ dependencies = [
  "zoraya-pagetable",
  "zoraya-pmm",
  "zoraya-ramdisk",
+ "zoraya-stream",
  "zoraya-time",
 ]
 
 [[package]]
 name = "zoraya-keymap"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-mkfs"
@@ -155,12 +185,16 @@ version = "0.1.0"
 [[package]]
 name = "zoraya-pagetable"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-pmm"
 version = "0.1.0"
 dependencies = [
  "zoraya-dtb",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -168,6 +202,7 @@ name = "zoraya-proto-block"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -175,6 +210,7 @@ name = "zoraya-proto-display"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -182,6 +218,7 @@ name = "zoraya-proto-file"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -189,6 +226,7 @@ name = "zoraya-proto-gui"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -196,6 +234,7 @@ name = "zoraya-proto-input"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -203,11 +242,15 @@ name = "zoraya-proto-term"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
 name = "zoraya-protocol"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-ramdisk"
@@ -225,6 +268,14 @@ name = "zoraya-shell"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-stream"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -233,7 +284,12 @@ version = "0.1.0"
 dependencies = [
  "zoraya-font",
  "zoraya-keymap",
+ "zoraya-test-alloc",
 ]
+
+[[package]]
+name = "zoraya-test-alloc"
+version = "0.1.0"
 
 [[package]]
 name = "zoraya-test-runner"
@@ -247,6 +303,9 @@ dependencies = [
 [[package]]
 name = "zoraya-time"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-user"
@@ -277,11 +336,15 @@ dependencies = [
 [[package]]
 name = "zoraya-virtio"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-virtio-gpu"
 version = "0.1.0"
 dependencies = [
+ "zoraya-test-alloc",
  "zoraya-virtio",
 ]
 
@@ -289,5 +352,6 @@ dependencies = [
 name = "zoraya-virtio-input"
 version = "0.1.0"
 dependencies = [
+ "zoraya-test-alloc",
  "zoraya-virtio",
 ]
