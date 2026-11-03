@@ -11,6 +11,8 @@
 # Usage: ports/test-fetch.sh (from the repository's root).
 set -eu
 root=$(pwd)
+# Local files fail or succeed at once: no retries.
+export FETCH_PORTS_RETRIES=0
 tmp=${TMPDIR:-/tmp}/zoraya-test-fetch.$$
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/remote" "$tmp/cache"
@@ -35,6 +37,16 @@ LOCK
 tools/fetch-ports.sh "$tmp/lock" "$tmp/cache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "a matching archive was refused"; }
 [ -f "$tmp/cache/good.tar.gz" ] || fail "the matching archive is not in the cache"
 echo "test-fetch: a matching archive enters the cache"
+
+# A first URL that fails, then one that serves the wrong bytes, then the good
+# one: the good one is cached, and the wrong bytes never are.
+cat > "$tmp/mirrorlock" <<LOCK
+good 1 $good mirrored.tar.gz file://$tmp/remote/missing.tar.gz file://$tmp/remote/bad.tar.gz file://$tmp/remote/good.tar.gz
+LOCK
+tools/fetch-ports.sh "$tmp/mirrorlock" "$tmp/cache" > "$tmp/out" 2>&1 || { cat "$tmp/out"; fail "the third URL was not tried"; }
+cmp -s "$tmp/cache/mirrored.tar.gz" "$tmp/remote/good.tar.gz" || fail "the mirror's archive is not the good one"
+grep -q "refused" "$tmp/out" || { cat "$tmp/out"; fail "the wrong bytes were not refused"; }
+echo "test-fetch: a failing URL and a wrong archive give way to a mirror with the locked archive"
 
 if tools/fetch-ports.sh "$tmp/badlock" "$tmp/cache" > "$tmp/out" 2>&1; then fail "a mismatching archive was accepted"; fi
 grep -q "refused" "$tmp/out" || { cat "$tmp/out"; fail "no refusal message"; }

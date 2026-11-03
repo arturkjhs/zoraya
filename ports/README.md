@@ -10,7 +10,7 @@ committed: only the lock, the patches and the build files below.
 
 | Path | What |
 |---|---|
-| `sources.lock` | name, version, SHA-256, cache file name and URL of each archive |
+| `sources.lock` | name, version, SHA-256, cache file name and URLs of each archive: the program's own, then mirrors (buildroot's, GNU's) that serve the same bytes; the first that gives the locked SHA-256 is used |
 | `Makefile` | the whole build, run from the repository's root by the top Makefile |
 | `config.site` | answers for autoconf checks a cross build cannot run, each with its reason |
 | `target-signals.sh` | a header that gives host-built helpers Zoraya's signal numbers (dash's `mksignames`) |

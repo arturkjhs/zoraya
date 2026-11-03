@@ -414,7 +414,9 @@ Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md
 host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6c. `ports/README.md` has the details.
 
 - **`make fetch-ports`** downloads the archives of `ports/sources.lock` (TASK-02's pins and hashes, musl 1.2.5 added,
-  tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. It is the only
+  tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. Each archive
+  may have mirrors after its own URL (buildroot's for musl, dash and busybox, GNU's for make), tried in turn with
+  retries on any error, since CI once lost musl.libc.org to a reset connection. It is the only
   step with network. `make ports` builds from that cache only and stops with a message naming `make fetch-ports` when
   an archive is missing.
 - **`tools/zcc`** is the C compiler for `aarch64-unknown-zoraya`: the host's clang with
