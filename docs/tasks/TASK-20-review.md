@@ -101,3 +101,48 @@ dispositions say; no errors; one warning and three notes, fixed in the commit af
 
 As the task asks, there is no third check.
 
+## The survivors, rechecked by the main model
+
+The architect's point 4 (after the merge request): each mutant the triage called equivalent was checked again by the
+main model, not the subagent. That found holes and one defect, now tested or fixed (`2b84374`):
+
+- **Not equivalent, now tested:** `rights_for`'s `O_DSYNC` test (`&` to `\|`, `^`: every open would ask `SYNC`,
+  which a read-only table entry refuses); `read_stream`'s wait mask (`\|` to `&`: a wait for nothing); `write_stream`'s
+  guards for a stream error before any byte, and its `done > 0` test after a wait whose reader went; `chdir`'s rights
+  (`\|` to `&`: no `READ` asked); `is_object`; and in `fsd` the bound of a write at the position (`>` to `>=`, `==`):
+  the engine allows a file to end exactly at `i64::MAX`, so a write ending there must succeed.
+- **A defect:** a stream write whose wait failed (its handle gone) returned the error after writing; it returns the
+  count now.
+
+What is left, one line per mutant, from the last runs (`zoraya-posix`: 728 mutants, 37 missed, 634 caught, 56
+unviable, 1 timeout; `fsd`'s changed lines: 88, 2 missed, one of them killed since; `zoraya-abi`'s changed lines:
+162, 1 missed):
+
+| Mutant | Why no test can tell it apart |
+|---|---|
+| `path.rs:200:65` `\|\|` to `&&` in `resolve` | It changes `directory` only for a path ending in `/.` or `/..`, where `dot` is true and `place` takes `directory \|\| dot`. |
+| `process.rs:32:34` `\|` to `^` (`ACCMODE`) | `0o3` and `O_PATH` share no bit. |
+| `process.rs:190:38` `\|` to `^` in `rights_for` | `READ` and `WRITE` share no bit. |
+| `process.rs:378:55` `\|` to `^` in `call` | `READABLE` and `PEER_CLOSED` share no bit. |
+| `process.rs:380:26` `&` to `\|` in `call` | A wait woken without `READABLE` is a peer gone; the mutant reads again, gets `PeerClosed` and maps it to the same `EIO`. Only the count of system calls differs, which the library does not expose. |
+| `process.rs:453:51` `+` to `*` in `refused` | It only enlarges a stack buffer; `bytes[..size]` is what is sent. |
+| `process.rs:537:44`, `538:39` `\|` to `^` in `open_place` | `CREATE` and `EXCLUSIVE` share no bit. |
+| `process.rs:711:46`, `711:63` `\|` to `^` in `open` | `rights_for`'s rights, `CREATE` and `PUBLISH` share no bit. |
+| `process.rs:723:46` `&` to `\|`, `^` in `open` | It sends `EXCLUSIVE` without `CREATE` when `O_EXCL` comes alone; the engine applies `EXCLUSIVE` only with `CREATE` (`volume.rs`, `create.is_some() && exclusive`). |
+| `process.rs:746:47` `&` to `\|` in `open` | A link object comes back only when `NO_FOLLOW` was sent, which only `O_NOFOLLOW` sends, so the flag test is already true. |
+| `process.rs:937:54` `\|` to `^` in `read_stream` | `READABLE` and `PEER_CLOSED` share no bit. |
+| `process.rs:970:32` `>` to `>=` in `write` | They differ only at a count of exactly `isize::MAX`, which no memory holds: the original's copy of it cannot be made, in the fake or on the machine. |
+| `process.rs:1020:64` `-` to `+` in `write_stream` | `User::part` clamps the length to what remains, which is what the original asks. |
+| `process.rs:1027:72` `\|` to `^` in `write_stream` | `WRITABLE` and `PEER_CLOSED` share no bit. |
+| `process.rs:1033:26`, `1033:46`, `1033:51`, `1033:56` (two), `1033:79` in `write_stream` | Each changes only whether the check after a wait returns at once; when it does not, the next `stream_write` meets `PeerClosed` and gives the same count or `EPIPE`. `WRITABLE` and `PEER_CLOSED` are never asserted together (a writable stream has a reader), and a satisfied wait has one of them. |
+| `process.rs:1038:44` guard `done > 0` to `false`, `1038:49` `>` to `<` | They differ only when `stream_write` returns `PeerClosed` after bytes were written with no wait between, which needs the reader to close between two calls of one thread: another process racing it. The fake runs others only during a wait (`meanwhile`), where the earlier check answers. |
+| `process.rs:1040:27` guard `done == 0` to `true` | The same: an error other than `WouldBlock` or `PeerClosed` after bytes were written with no wait between. |
+| `process.rs:1175:27`, `1175:34`, `1175:71` `\|` to `^` in `access_at` | `R_OK`, `W_OK` and `X_OK` share no bit, nor do `AT_EACCESS` and `AT_SYMLINK_NOFOLLOW`. |
+| `process.rs:1512:26` `\|` to `^` in `chdir` | `READ` and `CLONE` share no bit (`&`, which did differ, is now tested). |
+| `process.rs:1701:33` `\|` to `^` in `pipe` | `O_CLOEXEC` and `O_NONBLOCK` share no bit. |
+| `process.rs:1784:47` `\|` to `^` in `unnamed_on` | `rights_for`'s rights and `PUBLISH` share no bit. |
+| `process.rs:1874:40`, `1874:56` `\|` to `^` in `share` | `READ`, `WRITE` and `CLONE` share no bit. |
+| `stat.rs:81:32` `\|` to `^` in `encode` | The type bits and the mode masked to `0o7777` share no bit. |
+| `sys.rs:38:33` `<<` to `>>` | `1 << 0` and `1 >> 0` are both 1. |
+| `fsd` `lib.rs:1308:27` `+=` to `*=` in `read_directory` | The count of bytes stays 0, so only the 64-entry bound ends a page; with names of at most 255 bytes a page of 64 is about 18 KiB, so the 32 KiB bound never ends one (the `+` to `*` mutant, which did, is killed by `a_page_of_the_longest_names_is_full`). |
+| `zoraya-abi` `posix.rs:271:13` `\|\|` to `&&` in `Bootstrap::decode` | It lets a cwd entry past the end, or more than 512 fds, past the header check alone; the first is refused later, as no entry is cwd's directory, and the second cannot be strictly increasing fds below 512, which the fd loop refuses. |

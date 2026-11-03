@@ -2128,3 +2128,19 @@ fn a_listing_with_ids_names_each_object() {
     let (_, m) = decode::<proto::ReadDirectoryIdsReply<'_>>(&reply, 0).unwrap();
     assert_eq!(m.status.0, status::ACCESS_DENIED);
 }
+
+/// A page holds MAX_ENTRIES names however long they are: 64 names of 255
+/// bytes are about 18 KiB, inside the 32 KiB a page allows.
+#[test]
+fn a_page_of_the_longest_names_is_full() {
+    let mut r = rig();
+    let root = r.root;
+    for i in 0..proto::MAX_ENTRIES {
+        let name = format!("{i:03}{}", "n".repeat(252));
+        r.open(root, &name, open_flags::CREATE);
+    }
+    let reply = r.call(root, &proto::ReadDirectoryIds { cookie: 0 }, vec![]);
+    let (_, m) = decode::<proto::ReadDirectoryIdsReply<'_>>(&reply, 0).unwrap();
+    assert_eq!(m.entries.iter().count(), proto::MAX_ENTRIES);
+    assert!(m.entries.iter().all(|e| e.name.0.len() == 255));
+}
