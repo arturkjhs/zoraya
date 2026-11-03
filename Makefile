@@ -280,7 +280,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -322,9 +322,22 @@ check-host-paths:
 	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
 
+# Every host-tested crate caps its test heap (CLAUDE.md, Memory limits): the
+# library, if it has tests, and every top-level file of tests/, by the cap or
+# by a counting allocator over `Capped`. An integration test binary does not
+# get the library's cap: TASK-20's mutants found that (docs/backlog.md).
+check-test-caps:
+	@bad=""; \
+	for f in crates/*/tests/*.rs; do \
+	  grep -q -e 'cap_memory!' -e 'Capped::new' "$$f" || bad="$$bad $$f"; done; \
+	for d in crates/*; do \
+	  if grep -rqs -e '#\[test\]' "$$d/src"; then \
+	    grep -rqs -e 'cap_memory!' -e 'Capped::new' "$$d/src" || bad="$$bad $$d/src"; fi; done; \
+	if [ -n "$$bad" ]; then echo "no heap cap in:$$bad"; exit 1; fi
+
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

@@ -376,7 +376,7 @@ fn rig_without_root() -> Rig {
     let mut r = rig();
     r.p.mkdir_at(AT_FDCWD, b"/work", 0o755).unwrap();
     let net = r.net.clone();
-    let (service, root) = volume(&net, 4096);
+    let (service, root) = volume(&net, 1024);
     r.p.sys.services.push(service);
     let mut fresh = zoraya_posix::process::Posix::new(
         std::mem::replace(
@@ -561,7 +561,7 @@ fn times_are_set_and_tmp_and_publish_work() {
     assert_eq!(r.p.unnamed(false), Err(ENOENT));
     r.p.mkdir_at(AT_FDCWD, b"/tmp", 0o777).unwrap();
     let net = r.net.clone();
-    let (service, tmp) = volume(&net, 4096);
+    let (service, tmp) = volume(&net, 1024);
     r.p.sys.services.push(service);
     r.p.add_entry("/tmp", EntryKind::Tmp, Some(tmp));
     let u = r.p.unnamed(false).unwrap();
@@ -665,3 +665,7 @@ fn fchmod_by_place_acts_only_on_the_fds_object() {
     assert_eq!(u32_at(&r.p.fstat(new).unwrap(), 16) & 0o777, 0o644);
     assert_eq!(u32_at(&r.p.fstat(ro).unwrap(), 16) & 0o777, 0o600);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md):
+// the library's cap does not reach an integration test binary.
+zoraya_test_alloc::cap_memory!();

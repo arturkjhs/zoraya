@@ -516,8 +516,10 @@ pub const NOW: Timestamp = Timestamp {
 
 /// A volume with its own service, and a client end with every right to its
 /// root.
-pub fn volume(net: &Rc<RefCell<Net>>, sectors: u64) -> (Rc<RefCell<Svc>>, H) {
-    let mut device = MemDevice::new(sectors);
+/// `blocks` of 4 KiB: every test of a binary holds its rigs at once, under
+/// one 512 MiB cap.
+pub fn volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
+    let mut device = MemDevice::new(blocks);
     mkfs(
         &mut device,
         MkfsOptions {
@@ -570,7 +572,7 @@ pub const ARENA: usize = 4 * 1024 * 1024;
 /// directory of the same volume, and cwd `/`.
 pub fn rig() -> Rig {
     let net = Rc::new(RefCell::new(Net::default()));
-    let (service, root) = volume(&net, 16_384);
+    let (service, root) = volume(&net, 2048);
     let mut fake = Fake {
         net: net.clone(),
         services: vec![service],
