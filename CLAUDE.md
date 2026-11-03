@@ -46,6 +46,22 @@ Read `docs/design.md` first. It says what exists and where it lives.
 - `tools/run-qemu.sh` is the only thing that invokes QEMU. To change the QEMU command line, change that script.
 - `make test` must not need network access once the toolchain in `rust-toolchain.toml` is installed.
 
+## Memory limits
+
+The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entries of 6a and 6c).
+
+- QEMU and guest programs run only through `tools/test-runner` or `make`, never directly. The runner caps a run's
+  output at 64 MiB and keeps the whole of it in `target/test-logs/` (`zoraya-crash-test` keeps none, only its
+  bounded buffer).
+- Any ad-hoc command whose output can grow goes to a file, and is read with `tail`, `grep` or `head -c`; never stream it
+  into the session.
+- No background command without a timeout: the runner's `--timeout`, a test's own limit, or (macOS has no `timeout`)
+  `perl -e 'alarm N; exec @ARGV' COMMAND...`.
+- Every host-tested crate under `crates/` installs `zoraya_test_alloc::cap_memory!()` in its library and in every
+  file of its `tests/` (`make check-test-caps`); the `tools/` crates do not yet (`docs/backlog.md`). Mutation runs
+  go through `make mutants` or `make mutants-host`, under
+  `tools/mutants/watchdog.sh`.
+
 ## Work discipline
 
 - A stage is not done until `make test` passes from a clean checkout. Run it; do not infer it.

@@ -88,6 +88,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-footprint"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-fs"
 version = "0.1.0"
 dependencies = [
@@ -202,6 +206,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-posix"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-fs",
+ "zoraya-fs-service",
+ "zoraya-fs-testkit",
+ "zoraya-heap",
+ "zoraya-proto-file",
+ "zoraya-protocol",
+ "zoraya-rt",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-block"
 version = "0.1.0"
 dependencies = [
@@ -259,6 +278,9 @@ dependencies = [
 [[package]]
 name = "zoraya-ramdisk"
 version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
 
 [[package]]
 name = "zoraya-rt"

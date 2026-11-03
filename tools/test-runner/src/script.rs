@@ -23,6 +23,8 @@
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc;
+
+use crate::output;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -131,7 +133,8 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
     Ok(steps)
 }
 
-/// What has been seen so far, and where the next expectation starts.
+/// What has been seen so far, and where the next expectation starts. At
+/// most `output::LOG_CAP` bytes of it (`add` fails past that).
 #[derive(Default)]
 pub struct Seen {
     text: String,
@@ -139,26 +142,49 @@ pub struct Seen {
     before: usize,
     from: usize,
     forbidden: Vec<String>,
+    /// The first forbidden text found, and how far the text was searched.
+    found: Option<String>,
+    searched: usize,
+    /// The text `take` last looked for, and how far it has looked.
+    looking: Option<(String, usize)>,
 }
 
 impl Seen {
-    pub fn add(&mut self, bytes: &[u8]) {
-        self.text.push_str(&String::from_utf8_lossy(bytes));
+    pub fn add(&mut self, bytes: &[u8]) -> Result<(), String> {
+        output::keep(&mut self.text, &String::from_utf8_lossy(bytes))
     }
 
     pub fn forbid(&mut self, text: &str) {
         self.forbidden.push(text.to_string());
+        // A new rule covers the output before it too.
+        if self.found.is_none() && self.text.contains(text) {
+            self.found = Some(text.to_string());
+        }
     }
 
     /// True once `text` has appeared after the last match, and moves past it.
+    /// Only what is new since the last look for the same text is searched,
+    /// with an overlap, so waiting through a long output stays linear.
     pub fn take(&mut self, text: &str) -> bool {
-        match self.text[self.from..].find(text) {
+        let mut start = match &self.looking {
+            Some((t, upto)) if t == text => upto.saturating_sub(text.len()).max(self.from),
+            _ => self.from,
+        };
+        // A match begins on a character boundary: moving up skips none.
+        while !self.text.is_char_boundary(start) {
+            start += 1;
+        }
+        match self.text[start..].find(text) {
             Some(at) => {
                 self.before = self.from;
-                self.from += at + text.len();
+                self.from = start + at + text.len();
+                self.looking = None;
                 true
             }
-            None => false,
+            None => {
+                self.looking = Some((text.to_string(), self.text.len()));
+                false
+            }
         }
     }
 
@@ -177,19 +203,38 @@ impl Seen {
         &self.text[self.from..]
     }
 
-    /// The first forbidden text in the whole output.
-    pub fn violation(&self) -> Option<&str> {
-        ALWAYS_FORBIDDEN
-            .iter()
-            .copied()
-            .chain(self.forbidden.iter().map(String::as_str))
-            .find(|t| self.text.contains(t))
+    /// The first forbidden text in the whole output. Only what is new since
+    /// the last call is searched, with an overlap for a text split between
+    /// two arrivals, so a long output costs a linear search, not a square.
+    pub fn violation(&mut self) -> Option<&str> {
+        if self.found.is_none() {
+            let longest = ALWAYS_FORBIDDEN
+                .iter()
+                .map(|t| t.len())
+                .chain(self.forbidden.iter().map(String::len))
+                .max()
+                .unwrap_or(0);
+            let mut start = self.searched.saturating_sub(longest);
+            while !self.text.is_char_boundary(start) {
+                start += 1;
+            }
+            let fresh = &self.text[start..];
+            self.found = ALWAYS_FORBIDDEN
+                .iter()
+                .copied()
+                .chain(self.forbidden.iter().map(String::as_str))
+                .find(|t| fresh.contains(t))
+                .map(str::to_string);
+            self.searched = self.text.len();
+        }
+        self.found.as_deref()
     }
 }
 
 fn pump(child: &mut Child) -> mpsc::Receiver<Vec<u8>> {
     let mut stdout = child.stdout.take().expect("stdout is piped");
-    let (tx, rx) = mpsc::channel();
+    // Bounded: a guest that prints faster than it is matched waits.
+    let (tx, rx) = mpsc::sync_channel(256);
     std::thread::spawn(move || {
         let mut buffer = [0; 4096];
         loop {
@@ -211,22 +256,24 @@ struct Link<'a> {
     rx: mpsc::Receiver<Vec<u8>>,
     seen: &'a mut Seen,
     deadline: Instant,
+    out: output::Output,
 }
 
 impl Link<'_> {
-    /// Takes what arrives before `limit`: false if the output has ended.
-    fn receive(&mut self, limit: Instant) -> bool {
+    /// Takes what arrives before `limit`: false if the output has ended,
+    /// and an error past `output::LOG_CAP` of it.
+    fn receive(&mut self, limit: Instant) -> Result<bool, String> {
         let wait = limit
             .min(self.deadline)
             .saturating_duration_since(Instant::now());
         match self.rx.recv_timeout(wait) {
             Ok(bytes) => {
-                print!("{}", String::from_utf8_lossy(&bytes).replace('\r', ""));
-                self.seen.add(&bytes);
-                true
+                self.out.bytes(&bytes)?;
+                self.seen.add(&bytes)?;
+                Ok(true)
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => true,
-            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(true),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(false),
         }
     }
 
@@ -242,7 +289,7 @@ impl Link<'_> {
             if now >= limit {
                 return Ok(false);
             }
-            if !self.receive(limit) {
+            if !self.receive(limit)? {
                 return Err(format!("output ended before {text:?}"));
             }
         }
@@ -262,10 +309,32 @@ fn drive(
     child: &mut Child,
     seen: &mut Seen,
     deadline: Instant,
+    label: &str,
 ) -> Result<(), String> {
-    let mut stdin = child.stdin.take().ok_or("stdin is not piped")?;
+    let stdin = child.stdin.take().ok_or("stdin is not piped")?;
     let rx = pump(child);
-    let mut link = Link { rx, seen, deadline };
+    let mut link = Link {
+        rx,
+        seen,
+        deadline,
+        // The unit tests keep their logs out of the tree.
+        #[cfg(not(test))]
+        out: output::Output::new(label),
+        #[cfg(test)]
+        out: output::Output::quiet(label),
+    };
+    let result = steps_then_drain(steps, child, &mut link, stdin);
+    link.out.finish();
+    result
+}
+
+fn steps_then_drain(
+    steps: &[Step],
+    child: &mut Child,
+    link: &mut Link<'_>,
+    mut stdin: std::process::ChildStdin,
+) -> Result<(), String> {
+    let deadline = link.deadline;
     let far = deadline + Duration::from_secs(1);
     for step in steps {
         match step {
@@ -289,7 +358,7 @@ fn drive(
                 let until = Instant::now() + Duration::from_millis(*ms);
                 let start = link.seen.since_match().len();
                 while Instant::now() < until {
-                    if !link.receive(until) {
+                    if !link.receive(until)? {
                         break;
                     }
                 }
@@ -314,8 +383,7 @@ fn drive(
     }
     // The script's last step should have ended the machine: drain the rest.
     drop(stdin);
-    while link.receive(deadline) && Instant::now() < deadline {}
-    println!();
+    while link.receive(deadline)? && Instant::now() < deadline {}
     if let Some(bad) = link.seen.violation() {
         return Err(format!("forbidden output: {bad}"));
     }
@@ -344,7 +412,7 @@ pub fn run(file: &str, label: &str, timeout: u64, command: &[String]) -> ExitCod
             return ExitCode::FAILURE;
         }
     };
-    match play(&steps, timeout, command) {
+    match play(&steps, timeout, command, label) {
         Ok(()) => {
             println!("[{label}] PASS: {} steps", steps.len());
             ExitCode::SUCCESS
@@ -356,7 +424,7 @@ pub fn run(file: &str, label: &str, timeout: u64, command: &[String]) -> ExitCod
     }
 }
 
-fn play(steps: &[Step], timeout: u64, command: &[String]) -> Result<(), String> {
+fn play(steps: &[Step], timeout: u64, command: &[String], label: &str) -> Result<(), String> {
     let mut child = Command::new(&command[0])
         .args(&command[1..])
         .stdin(Stdio::piped())
@@ -366,7 +434,7 @@ fn play(steps: &[Step], timeout: u64, command: &[String]) -> Result<(), String> 
         .map_err(|e| format!("cannot start {}: {e}", command[0]))?;
     let mut seen = Seen::default();
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let result = drive(steps, &mut child, &mut seen, deadline);
+    let result = drive(steps, &mut child, &mut seen, deadline, label);
     let _ = child.kill();
     let _ = child.wait();
     result
@@ -405,7 +473,7 @@ mod tests {
     #[test]
     fn expectations_match_in_order() {
         let mut seen = Seen::default();
-        seen.add(b"one two one");
+        seen.add(b"one two one").unwrap();
         assert!(seen.take("two"));
         assert!(!seen.take("two"), "a match is used up");
         assert!(seen.take("one"));
@@ -413,7 +481,7 @@ mod tests {
 
     fn shell(script: &str, steps: &str, timeout: u64) -> Result<(), String> {
         let command = ["sh", "-c", script].map(String::from);
-        play(&parse(steps).unwrap(), timeout, &command)
+        play(&parse(steps).unwrap(), timeout, &command, "script-test")
     }
 
     #[test]
@@ -471,11 +539,11 @@ mod tests {
     #[test]
     fn forbidden_text_is_found_anywhere() {
         let mut seen = Seen::default();
-        seen.add(b"early bad");
+        seen.add(b"early bad").unwrap();
         seen.forbid("bad");
         assert_eq!(seen.violation(), Some("bad"));
         let mut seen = Seen::default();
-        seen.add(b"ZORAYA-PANIC at x");
+        seen.add(b"ZORAYA-PANIC at x").unwrap();
         assert_eq!(seen.violation(), Some("ZORAYA-PANIC"));
     }
 }

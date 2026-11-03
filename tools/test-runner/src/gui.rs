@@ -28,12 +28,13 @@
 //! Every run fails on `ZORAYA-PANIC`, `ZORAYA-FAULT` or `panicked` on the
 //! serial line.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use crate::output;
 use zoraya_font::{CELL_HEIGHT, CELL_WIDTH, recognise};
 use zoraya_term::{PAD, PALETTE, grid_for};
 
@@ -297,8 +298,10 @@ impl Qmp {
 struct Run {
     child: Child,
     qmp: Qmp,
-    serial: mpsc::Receiver<String>,
+    serial: mpsc::Receiver<(String, output::Read)>,
+    /// The serial line so far, at most `output::LOG_CAP` bytes.
     seen: String,
+    out: output::Output,
     label: String,
     deadline: Instant,
     /// The row of the last `screen` match.
@@ -307,13 +310,13 @@ struct Run {
 
 impl Run {
     fn pump(&mut self) -> Result<(), String> {
-        while let Ok(line) = self.serial.try_recv() {
-            println!("[{}] {line}", self.label);
+        while let Ok((line, read)) = self.serial.try_recv() {
+            self.out.counted_line(&line, read.cut, read.bytes)?;
             if let Some(bad) = FORBIDDEN.iter().find(|f| line.contains(**f)) {
                 return Err(format!("{bad} on the serial line: {line}"));
             }
-            self.seen.push_str(&line);
-            self.seen.push('\n');
+            output::keep(&mut self.seen, &line)?;
+            output::keep(&mut self.seen, "\n")?;
         }
         if Instant::now() > self.deadline {
             return Err("timeout".into());
@@ -446,24 +449,19 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
         }
     };
     let mut stdout = child.stdout.take().expect("piped");
-    let (tx, rx) = mpsc::channel();
+    // Bounded: a guest that prints faster than it is read waits.
+    let (tx, rx) = mpsc::sync_channel(1024);
     std::thread::spawn(move || {
         let mut reader = BufReader::new(&mut stdout);
         let mut buf = Vec::new();
-        loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let line = String::from_utf8_lossy(&buf).trim_end().to_string();
-                    if tx.send(line).is_err() {
-                        break;
-                    }
-                }
+        while let Some(read) = output::read_line(&mut reader, &mut buf) {
+            let line = String::from_utf8_lossy(&buf).trim_end().to_string();
+            if tx.send((line, read)).is_err() {
+                break;
             }
         }
-        let mut rest = Vec::new();
-        let _ = stdout.read_to_end(&mut rest);
+        // Drained, not kept, so that QEMU never blocks on a full pipe.
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
     });
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let result = Qmp::connect(qmp, deadline).and_then(|q| {
@@ -472,14 +470,21 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             qmp: q,
             serial: rx,
             seen: String::new(),
+            out: output::Output::new(label),
             label: label.to_string(),
             deadline,
             row: None,
         };
         let r = steps.iter().try_for_each(|s| run.step(s));
-        let _ = run.pump();
+        // The last drain fails the run on a flood or forbidden text, not on
+        // a deadline the steps already met.
+        let r = r.and(match run.pump() {
+            Err(e) if e == "timeout" => Ok(()),
+            other => other,
+        });
         let _ = run.child.kill();
         let _ = run.child.wait();
+        run.out.finish();
         r
     });
     let _ = std::fs::remove_file(qmp);

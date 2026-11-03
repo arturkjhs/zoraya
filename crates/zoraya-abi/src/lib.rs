@@ -15,6 +15,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod posix;
 pub mod snapshot;
 pub mod spawn;
 

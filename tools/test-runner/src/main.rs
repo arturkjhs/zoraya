@@ -8,7 +8,9 @@
 //! ```
 //!
 //! The command after `--` is started with stdin closed and stdout read line
-//! by line (echoed, prefixed with the label). Exits 0 only if the protocol
+//! by line: the whole of it to `target/test-logs/LABEL.log`, the first and
+//! last 200 lines to the terminal, prefixed with the label (`output.rs`
+//! bounds it all: past 64 MiB of output QEMU is killed and the run fails). Exits 0 only if the protocol
 //! was complete and consistent, every failure was an expected panic, the
 //! kernel powered off after its end line, and QEMU exited with status 0.
 //! The guest's exit status is never the only signal: the verdict comes from
@@ -20,10 +22,11 @@
 //! (see `gui.rs`).
 
 mod gui;
+mod output;
 mod protocol;
 mod script;
 
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -130,24 +133,20 @@ fn main() -> ExitCode {
     };
 
     let stdout = child.stdout.take().expect("stdout is piped");
-    let (tx, rx) = mpsc::channel::<String>();
+    // Bounded: a guest that prints faster than lines are checked waits.
+    let (tx, rx) = mpsc::sync_channel::<(String, output::Read)>(1024);
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut buf = Vec::new();
-        loop {
-            buf.clear();
-            match reader.read_until(b'\n', &mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    let line = String::from_utf8_lossy(&buf);
-                    let line = line.trim_end_matches(['\r', '\n']).to_string();
-                    if tx.send(line).is_err() {
-                        break;
-                    }
-                }
+        while let Some(read) = output::read_line(&mut reader, &mut buf) {
+            let line = String::from_utf8_lossy(&buf);
+            let line = line.trim_end_matches(['\r', '\n']).to_string();
+            if tx.send((line, read)).is_err() {
+                break;
             }
         }
     });
+    let mut out = output::Output::new(label);
 
     let mut checker = if args.plain {
         Checker::plain(args.expect_line.clone())
@@ -163,8 +162,14 @@ fn main() -> ExitCode {
         };
         let wait = limit.saturating_duration_since(Instant::now());
         match rx.recv_timeout(wait) {
-            Ok(line) => {
-                println!("[{label}] {line}");
+            Ok((line, read)) => {
+                if let Err(flood) = out.counted_line(&line, read.cut, read.bytes) {
+                    kill(&mut child);
+                    out.finish();
+                    println!("[{label}] FAIL:");
+                    println!("[{label}]   {flood}");
+                    return ExitCode::FAILURE;
+                }
                 match checker.feed(&line) {
                     Flow::Continue => {}
                     Flow::Ended => ended_at = Some(Instant::now()),
@@ -190,6 +195,7 @@ fn main() -> ExitCode {
         }
     };
 
+    out.finish();
     let report = checker.finish(exit, args.timeout);
     if report.passed {
         println!(

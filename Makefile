@@ -8,6 +8,8 @@
 #   make test-boot  boot the normal kernel, run the shell script under each
 #                   machine configuration
 #   make test-files files across two boots, restarts, a failed write
+#   make test-libposix C programs through libposix against fsd (stage 6c);
+#                   needs make fetch-ports once, as make ports does
 #   make test-crash kill QEMU at random points (CRASH_ROUNDS=200 for more)
 #   make test-gui   the GUI criterion: boot headless with --gui, type into the
 #                   window over QMP and read the screen back (HVF and TCG)
@@ -41,14 +43,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
-	t_streams t_snapshot t_image t_suspend
+	t_streams t_snapshot t_image t_suspend posixrun
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -215,6 +217,26 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(DEVICE_ERROR) --label device-error -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --disk-write-error --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 
+# The stage 6c criterion (TASK-20): C programs built by zcc against libc.a run
+# through libposix against fsd, from posixrun, under HVF (on a Mac) and TCG.
+# libc.a needs musl's source in the cache of `make fetch-ports` (ADR-0109:
+# the fetch is outside make test, as the Rust toolchain's install is).
+POSIX_CORE := $(BUILD)/posix-core
+POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
+test-libposix: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc
+	@$(MAKE) -s -f ports/Makefile check-libc
+	rm -rf $(POSIX_CORE) && mkdir -p $(POSIX_CORE)/root/bin $(POSIX_CORE)/root/work
+	cp -R rootfs/. $(POSIX_CORE)/root/
+	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
+	@for accel in auto tcg; do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
 GUI_IMAGE := $(BUILD)/gui.img
@@ -239,24 +261,27 @@ test-crash: $(KERNEL) tools-storage
 # At most two mutants run at once, each under its list's timeout, and the
 # watchdog kills any process above WATCHDOG_MB (docs/backlog.md).
 mutants:
-	$(CARGO) build -q -p zoraya-mutants
+	$(CARGO) build -q -p zoraya-mutants -p zoraya-footprint
 	tools/mutants/watchdog.sh target/debug/zoraya-mutants $(MUTANTS_ARGS)
 
 # cargo-mutants on one host crate: mutants made from the code's syntax, as
 # opposed to the hand-written lists above. Missed ones in
 # build/mutants/cargo/mutants.out/missed.txt. Not part of make test.
+# MUTANTS_HOST_ARGS adds cargo-mutants options, such as --in-diff FILE or
+# --exclude src/ffi.rs (code the host does not compile).
 CRATE ?= zoraya-virtio
 mutants-host:
 	@command -v cargo-mutants >/dev/null || { echo "cargo-mutants is not installed: cargo install cargo-mutants --version 27.1.0 --locked (docs/dependencies.md)"; exit 2; }
 	@# cargo-mutants exits 2 when a mutant was missed and 3 on a timeout: results, not failures.
-	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 --timeout 300 -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
+	@$(CARGO) build -q -p zoraya-footprint
+	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 --timeout 300 $(MUTANTS_HOST_ARGS) -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
 	  rc=$$?; tail -1 build/mutants/cargo.log; \
 	  case $$rc in 0|2|3) echo "missed: build/mutants/cargo/mutants.out/missed.txt";; \
 	  *) echo "cargo-mutants failed ($$rc), see build/mutants/cargo.log"; exit $$rc;; esac
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -274,6 +299,10 @@ fmt-check:
 clippy:
 	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
 	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
+	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
+	@# the user programs' features do not unify with it.
+	$(CARGO) clippy -p zoraya-posix --target $(TARGET) -- -D warnings
+	$(CARGO) clippy -p zoraya-rt --no-default-features --target $(TARGET) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test -- -D warnings
 
@@ -294,9 +323,22 @@ check-host-paths:
 	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
 
+# Every host-tested crate caps its test heap (CLAUDE.md, Memory limits): the
+# library, if it has tests, and every top-level file of tests/, by the cap or
+# by a counting allocator over `Capped`. An integration test binary does not
+# get the library's cap: TASK-20's mutants found that (docs/backlog.md).
+check-test-caps:
+	@bad=""; \
+	for f in crates/*/tests/*.rs; do \
+	  grep -q -e 'cap_memory!' -e 'Capped::new' "$$f" || bad="$$bad $$f"; done; \
+	for d in crates/*; do \
+	  if grep -rqs -e '#\[test\]' "$$d/src"; then \
+	    grep -rqs -e 'cap_memory!' -e 'Capped::new' "$$d/src" || bad="$$bad $$d/src"; fi; done; \
+	if [ -n "$$bad" ]; then echo "no heap cap in:$$bad"; exit 1; fi
+
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-fetch-ports test-qemu test-boot test-files test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

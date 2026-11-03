@@ -1,0 +1,65 @@
+# Stage 6c's criterion (TASK-20, docs/research/stage-6/plan.md row 6c): C
+# programs built by zcc run through libposix against fsd, from the native
+# launcher posixrun, on make test-libposix's image (rootfs/ with /bin/t_libposix
+# and /work).
+! panicked
+! ZORAYA-PANIC
+! t_libposix: FAIL
+< zosh$ 
+# The criterion, with the share and seek round trips measured first.
+> posixrun -s -e ZORAYA_POSIX_STATS=1 /bin/t_libposix files\r
+< posixrun: round trips: seek
+< t_libposix: files passed
+< POSIX-STATS
+< posixrun: broker messages 0
+x posixrun: refused
+< posixrun: exit 0
+< zosh$ 
+# INV-0107-3: environ is exactly what the spawner passed, in order.
+> posixrun -e ONE=1 -e TWO=two -e EMPTY= /bin/t_libposix env\r
+< t_libposix: env[0]=ONE=1
+< t_libposix: env[1]=TWO=two
+< t_libposix: env[2]=EMPTY=
+< t_libposix: env count 3
+< posixrun: exit 0
+< zosh$ 
+# INV-0153-7, the library's half: a table without /, a path outside it named
+# twice is reported once, a missing path inside never.
+> posixrun -m /work=/work -m /bin=/bin:ro -C /work /bin/t_libposix refused\r
+< t_libposix: refused passed
+< posixrun: broker messages 0
+< posixrun: refused read /etc/passwd
+< posixrun: refused write /elsewhere/new
+< posixrun: exit 0
+o posixrun: refused read /etc/passwd
+x missing.h
+< zosh$ 
+# share across processes: fd 1 is a description the launcher shares into the
+# child; the child's writes move the position the launcher then reads.
+> posixrun -o /out.txt /bin/t_libposix stdout 5\r
+< t_libposix: wrote 5 lines, at 35
+< posixrun: /out.txt position 35
+< posixrun: exit 0
+< zosh$ 
+> cat out.txt\r
+< line 0
+< line 4
+< zosh$ 
+> rm out.txt\r
+< zosh$ 
+# A C program that faults ends alone: the service and the kernel go on.
+> posixrun /bin/t_libposix fault\r
+< t_libposix: reading into unmapped memory
+< posixrun: ended Fault
+< zosh$ 
+> posixrun /bin/t_libposix files\r
+< t_libposix: files passed
+< posixrun: exit 0
+< zosh$ 
+# The measurements: through libposix, from C.
+> posixrun -e ZORAYA_POSIX_STATS=1 /bin/t_libposix bench\r
+< t_libposix: bench
+< POSIX-STATS
+< posixrun: exit 0
+< zosh$ 
+> poweroff\r

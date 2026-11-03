@@ -57,7 +57,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: ports fetch-ports check-ports sysroot rootfs tools musl headers stub \
+.PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make toybox busybox tcc tcc-host clean-ports FORCE
 .SUFFIXES:
 
@@ -132,38 +132,40 @@ musl: $(MUSL_LIST)
 $(MUSL_LIST): $(HEADERS_STAMP) ports/musl/musl.mk ports/musl/excluded.txt FORCE
 	@$(call logged_append,$(MAKE) -f ports/musl/musl.mk MUSL=$(MUSL) OBJ=$(OBJ)/musl ZCC=$(ZCC) LIST=$@,musl)
 
-# ---------------------------------------------------------------- the stub
+# ---------------------------------------------------------------- zoraya-posix
 
-# zoraya-posix until TASK 6c writes it (ADR-0140): generated from
-# ports/posix-stub/stubs.txt, built as a static library of the pinned Rust
-# toolchain, which also brings compiler_builtins (the long double arithmetic
-# musl's printf and strtod need).
-STUB := $(OBJ)/posix-stub
-STUB_LIB := $(STUB)/libzoraya_posix.a
-stub: $(STUB_LIB)
-$(STUB_LIB): ports/posix-stub/stubs.txt ports/posix-stub/stubs.awk
-	@mkdir -p $(STUB)
-	awk -f ports/posix-stub/stubs.awk ports/posix-stub/stubs.txt > $(STUB)/lib.rs
-	$(RUSTC) --edition 2024 --crate-type staticlib --crate-name zoraya_posix \
-	  --target aarch64-unknown-none -C panic=abort -C opt-level=2 -C debuginfo=0 \
-	  -C codegen-units=1 --remap-path-prefix=$(ROOT)=. $(STUB)/lib.rs -o $@
+# The Rust half of ADR-0100 (crates/zoraya-posix), built by the pinned Rust
+# toolchain as a static library, which also brings compiler_builtins (the
+# long double arithmetic musl's printf and strtod need). Cargo decides what
+# to rebuild; its own target directory keeps these flags apart from the
+# workspace's. One codegen unit per crate keeps zoraya-rt's `svc` in the one
+# member INV-0100-2's scan permits.
+POSIX_TARGET := $(ROOT)/target/posix
+# The member of libc.a that may hold `svc` (INV-0100-2): zoraya-rt's object.
+SVC_MEMBER := zoraya_rt-
+POSIX_LIB := $(POSIX_TARGET)/aarch64-unknown-none/release/libzoraya_posix.a
+posix: $(POSIX_LIB)
+$(POSIX_LIB): FORCE
+	RUSTFLAGS="--remap-path-prefix=$(ROOT)=. -C codegen-units=1" CARGO_PROFILE_RELEASE_DEBUG=0 \
+	  $(CARGO) rustc -q -p zoraya-posix --release --target aarch64-unknown-none \
+	  --target-dir $(POSIX_TARGET) --crate-type staticlib
 
 # ---------------------------------------------------------------- libc.a
 
-# musl's objects first, then the stub's members, each with the names outside
+# musl's objects first, then zoraya-posix's members, each with the names outside
 # the tier list hidden (ADR-0141): posix-surface-check renames them in every
 # object and writes the list of renames.
 LIBC := $(SYSROOT)/usr/lib/libc.a
 LIBC_DIR := $(OBJ)/libc
-$(LIBC): $(MUSL_LIST) $(STUB_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
+$(LIBC): $(MUSL_LIST) $(POSIX_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
 	rm -rf $(LIBC_DIR) && mkdir -p $(LIBC_DIR)/stub $(LIBC_DIR)/out
-	cd $(LIBC_DIR)/stub && $(ZAR) x $(STUB_LIB)
+	cd $(LIBC_DIR)/stub && $(ZAR) x $(POSIX_LIB)
 	$(SURFACE_CHECK) hide $(TIER_SPEC) $(LIBC_DIR)/out $$(cat $(MUSL_LIST)) \
-	  $$(for m in $$($(ZAR) t $(STUB_LIB)); do echo $(LIBC_DIR)/stub/$$m; done) > $(LIBC_DIR)/hidden.txt
+	  $$(for m in $$($(ZAR) t $(POSIX_LIB)); do echo $(LIBC_DIR)/stub/$$m; done) > $(LIBC_DIR)/hidden.txt
 	@echo "libc.a: hid $$(wc -l < $(LIBC_DIR)/hidden.txt | tr -d ' ') names outside the tier list: $(LIBC_DIR)/hidden.txt"
 	@mkdir -p $(dir $@)
 	rm -f $@ && cd $(LIBC_DIR)/out && $(ZAR) rcs $@ \
-	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(STUB_LIB))
+	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(POSIX_LIB))
 
 # ---------------------------------------------------------------- crt
 
@@ -377,6 +379,10 @@ $(TCC_SYSROOT): $(TCC_STAMP)
 
 sysroot: $(SYSROOT_STAMP) $(TCC_SYSROOT)
 
+# libc.a and the crt objects alone: what a C program built with zcc needs
+# (make test-libposix).
+libc: $(SYSROOT_STAMP)
+
 # build/rootfs-posix (ADR-0109 item 6): the programs in /bin, toybox and
 # busybox with a link per applet (ADR-0108 item 6), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
@@ -396,16 +402,22 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STA
 # ---------------------------------------------------------------- the host checks
 
 HELLO_DIR := $(OBJ)/tcc-hello
+# The export check alone (INV-0100-1, INV-0100-2), for make test-libposix.
+check-libc: | tools
+	@$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
+	@$(SURFACE_CHECK) check $(TIER_SPEC) $(LIBC) --allow-svc $(SVC_MEMBER)
+
 check-ports: | tools
 	@echo "== the tier list is the one ADR-0100 item 7's rule gives"
 	$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
 	@echo "== libc.a against the tier list (INV-0100-1, INV-0100-2, INV-0005-1, INV-0005-2)"
-	$(SURFACE_CHECK) check $(TIER_SPEC) $(LIBC)
+	$(SURFACE_CHECK) check $(TIER_SPEC) $(LIBC) --allow-svc $(SVC_MEMBER)
 	@echo "== the excluded musl files are exactly the ones the shim refuses (INV-0141-2)"
 	@$(MAKE) -s -f ports/musl/musl.mk MUSL=$(MUSL) OBJ=$(OBJ)/musl ZCC=$(ZCC) LIST=$(MUSL_LIST) check-excluded
 	@echo "== the same check fails on broken copies of libc.a"
 	ports/check-broken-archives.sh $(SURFACE_CHECK) $(ZAR) $(ZCC) \
-	  $(subst $(space),+,$(addprefix $(ROOT)/,$(TIER_LIST) $(ADDED_ADRS))) $(LIBC) $(OBJ)/broken
+	  $(subst $(space),+,$(addprefix $(ROOT)/,$(TIER_LIST) $(ADDED_ADRS))) $(LIBC) $(OBJ)/broken \
+	  $(SVC_MEMBER)
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"

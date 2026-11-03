@@ -163,6 +163,35 @@ impl File {
         done(&reply[..length]).map(|_| client)
     }
 
+    /// A second connection to this one's open description (ADR-0103): one
+    /// position for both.
+    pub fn share(&self, wanted: u32) -> FsResult<File> {
+        let (client, server) = channel_create().map_err(|_| GONE)?;
+        let client = File { end: client };
+        let m = proto::Share {
+            rights: Flags(wanted),
+        };
+        let mut reply = Vec::new();
+        let (length, _) = call(
+            self.end,
+            &m,
+            &[moved(server, ChannelObject::RIGHTS)],
+            &mut reply,
+        )?;
+        done(&reply[..length]).map(|_| client)
+    }
+
+    /// Moves the description's position, and gives the new one.
+    pub fn seek(&self, whence: u32, offset: i64) -> FsResult<u64> {
+        let m = proto::Seek {
+            whence: Below(whence),
+            offset: offset as u64,
+        };
+        let mut reply = Vec::new();
+        let (length, _) = call(self.end, &m, &[], &mut reply)?;
+        done(&reply[..length])
+    }
+
     pub fn read(&self, offset: u64, out: &mut [u8]) -> FsResult<usize> {
         let m = proto::Read {
             offset,

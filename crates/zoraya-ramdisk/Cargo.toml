@@ -13,3 +13,6 @@ workspace = true
 [features]
 # The writer, for the host tool.
 std = []
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

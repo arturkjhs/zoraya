@@ -35,6 +35,7 @@ members = [
     "crates/zoraya-rt",
     "crates/zoraya-stream",
     "crates/zoraya-test-alloc",
+    "crates/zoraya-posix",
     "tools/test-runner",
     "tools/adr-check",
     "tools/mkramdisk",
@@ -46,6 +47,7 @@ members = [
     "tools/zoraya-ar",
     "tools/posix-surface-check",
     "tools/zoraya-elf-check",
+    "tools/footprint",
 ]
 # The fuzz targets need a nightly toolchain; they are a separate workspace.
 exclude = ["fuzz"]
@@ -85,6 +87,7 @@ default-members = [
     "crates/zoraya-fs-service",
     "crates/zoraya-stream",
     "crates/zoraya-test-alloc",
+    "crates/zoraya-posix",
     "tools/test-runner",
     "tools/adr-check",
     "tools/mkramdisk",
@@ -94,6 +97,7 @@ default-members = [
     "tools/zoraya-ar",
     "tools/posix-surface-check",
     "tools/zoraya-elf-check",
+    "tools/footprint",
 ]
 
 [workspace.package]

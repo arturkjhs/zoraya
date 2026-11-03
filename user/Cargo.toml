@@ -368,3 +368,8 @@ bench = false
 name = "t_suspend"
 test = false
 bench = false
+
+[[bin]]
+name = "posixrun"
+test = false
+bench = false

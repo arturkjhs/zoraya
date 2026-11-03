@@ -6,10 +6,12 @@
  * zoraya-rt's _start does, so that a leak from the kernel or another process
  * faults (brk #2) rather than passing unseen; clears the frame pointer and the
  * link register as musl's _start does; and calls zoraya_posix_start with the
- * stack pointer. zoraya_posix_start (zoraya-posix) lays out argc, argv, envp
- * and the auxiliary vector in the form musl's _start_c expects, reads the
- * bootstrap messages and tail-calls _start_c, which this object also holds
- * (musl's crt/crt1.c, linked in by ports/Makefile). It never returns.
+ * stack pointer and the address of _start_c. zoraya_posix_start (zoraya-posix)
+ * lays out argc, argv, envp and the auxiliary vector in the form musl's
+ * _start_c expects, reads the bootstrap messages and calls _start_c, which
+ * this object also holds (musl's crt/crt1.c, linked in by ports/Makefile). It
+ * never returns. _start_c travels as an argument so that libc.a refers to
+ * nothing outside itself (posix-surface-check, ADR-0141 item 7).
  */
 	.text
 	.global _start
@@ -35,6 +37,8 @@ _start:
 	mov x30, #0
 	mov x0, sp
 	and sp, x0, #-16
+	adrp x1, _start_c
+	add x1, x1, :lo12:_start_c
 	bl zoraya_posix_start
 	brk #3
 	.size _start, . - _start
