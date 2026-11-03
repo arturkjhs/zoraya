@@ -1,7 +1,7 @@
 # A tour of zosh
 
 This is how a person new to Zoraya meets its shell, written as they would read it. Every example shows exactly what
-they type (after the prompt) and what the screen shows. It follows the proposed ADR-0150 to ADR-0158; where it and an
+they type (after the prompt) and what the screen shows. It follows the accepted ADR-0150 to ADR-0158; where it and an
 ADR disagree, one of them is wrong. Part 2 of TASK-18 runs this whole tour as a scripted session on the serial console
 and in the GUI terminal, so it cannot drift from the shell.
 
@@ -29,7 +29,7 @@ Commands:
   bg        continue a stopped job in the background
   cat       print files
   cd        change the current directory
-  count     print how many arguments it was given
+  count     count arguments, or the lines of files
   cp        copy a file
   echo      print its arguments
   exit      end this shell; a new one starts

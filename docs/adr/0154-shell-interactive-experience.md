@@ -85,8 +85,9 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 1. **Keys.** Left and Right (also Ctrl-B, Ctrl-F), Home and End (also Ctrl-A, Ctrl-E), Backspace, Delete, Ctrl-W
    (erase the word before the cursor), Ctrl-U (erase to the start), Ctrl-K (erase to the end), Ctrl-L (clear the
    screen and redraw), Enter (run, or continue if a quote or `{` is open, with the prompt `...> `), Ctrl-C (clear the
-   line), Ctrl-D on an empty line prints `type exit to end the shell` and does nothing else: ending the shell ends
-   its jobs and loses its variables and functions, so it is never one key.
+   line), Ctrl-D on an empty line prints `type exit to end the shell` and does nothing else: ending the shell powers
+   the machine off (`docs/design.md`), so it is never one key. *Amended by ADR-0155's Decision:* ending the shell no
+   longer powers off, but it ends its jobs and loses its variables and functions, so it is still never one key.
 2. **History.** Every line run is kept once it has finished; a line already kept moves to the end instead of being
    kept twice; in `/config/history` (ADR-0157), at most
    `shell.history-size` lines (1,000). Up and Down walk the lines that start with what is already typed; Ctrl-R opens
@@ -106,7 +107,8 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    unclosed quote is red to its end. Nothing else is coloured. `shell.colour = no` turns colour off everywhere.
 6. **Errors.** A parse error shows what, where and what to try: the message, the line, a caret under the place, and
    a hint when one is known. An unknown command suggests the nearest known names at edit distance at most 2, never
-   running them. A familiar Unix name that Zoraya does not have gets a hint naming the Zoraya command instead:
+   running them. *Added by the Decision:* a familiar Unix name that Zoraya does not have gets a hint naming the Zoraya
+   command instead:
 
    | Typed | Hint |
    |---|---|

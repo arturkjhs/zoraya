@@ -303,7 +303,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0155-3 | [ADR-0155](0155-command-conventions.md) | Every error line a native command prints matches `NAME: SUBJECT: PROBLEM` or `NAME: PROBLEM`, with no raw status name. | a host test of the formatter over every `Status`, and the scripted sessions' error lines matched against the pattern. | not yet applicable (until TASK-18 Part 2) |
 | INV-0155-4 | [ADR-0155](0155-command-conventions.md) | A native command whose `out` reader closes exits 0 without writing to `err`. | an in-QEMU test `cat big \| head --lines 1` with each listing command in place of `cat`. | not yet applicable (until TASK-18 Part 2) |
 | INV-0155-5 | [ADR-0155](0155-command-conventions.md) | `exit` in the shell ends that shell, and `init` starts a new shell in the same terminal; the machine stays on. | a scripted serial session (`tests/shell/exit.script`) that exits, sees the new greeting and prompt, and runs a command, and the same in the GUI script. | not yet applicable (until TASK-18 Part 2) |
-| INV-0155-6 | [ADR-0155](0155-command-conventions.md) | `reboot` restarts the machine and `poweroff` ends it with QEMU status 0. | scripted serial sessions, the second being INV-0062-3's. | not yet applicable (until TASK-18 Part 2) |
+| INV-0155-6 | [ADR-0155](0155-command-conventions.md) | `poweroff` ends the machine with QEMU status 0, and `exit` does not. | the scripted serial sessions of INV-0062-3 and INV-0155-5. | not yet applicable (until TASK-18 Part 2) |
+| INV-0155-7 | [ADR-0155](0155-command-conventions.md) | `reboot` restarts the machine. | a scripted serial session that runs `reboot` and sees the boot banner again. | not yet applicable (until a kernel reset call) |
 | INV-0156-1 | [ADR-0156](0156-help-and-command-descriptions.md) | The description parser is total: any byte string gives a description or an error with a line number, in bounded memory. | a deterministic random test in `make test-unit` and a target in `fuzz/`. | not yet applicable (until TASK-18 Part 2) |
 | INV-0156-2 | [ADR-0156](0156-help-and-command-descriptions.md) | Every command of ADR-0155 rule 8, every demonstration program it names, every builtin and every entry of `/zoraya/commands/` has a description the parser accepts, and every option the program accepts is in it. | a build step that parses each description and fails on a missing or refused one; INV-0155-1 for options. | not yet applicable (until TASK-18 Part 2) |
 | INV-0156-3 | [ADR-0156](0156-help-and-command-descriptions.md) | `NAME --help`, `help NAME` and Tab completion of `NAME --` list the same options. | a host test rendering all three from each description. | not yet applicable (until TASK-18 Part 2) |
@@ -391,8 +392,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0152](0152-shell-pipelines-and-data.md) Shell pipelines: byte streams between programs, lists inside the shell | 3 |
 | [ADR-0153](0153-what-a-program-gets.md) What a program gets from the shell, and how a person grants more | 9 |
 | [ADR-0154](0154-shell-interactive-experience.md) The shell's interactive experience: editing, history, completion, suggestions and errors | 4 |
-| [ADR-0155](0155-command-conventions.md) Conventions every native command follows | 6 |
+| [ADR-0155](0155-command-conventions.md) Conventions every native command follows | 7 |
 | [ADR-0156](0156-help-and-command-descriptions.md) Help, the manual and command descriptions from one source | 3 |
 | [ADR-0157](0157-configuration.md) Configuration: one settings file, a command to edit it, and the shell's start file | 3 |
 | [ADR-0158](0158-job-control.md) Job control in the native shell | 4 |
-| **Total** | **308** |
+| **Total** | **309** |

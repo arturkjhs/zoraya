@@ -99,11 +99,12 @@ Recommended: **Option B**, with the rules below. It is a recommendation, not a d
 3. **Variables.** `set name value...` sets a list (`set name` sets the empty list); `unset name` removes it. `$name`
    expands to one argument per element, never split, never globbed; the empty list gives no argument and an empty
    string gives one empty argument. `$name[i]` is element `i` from 1, negative from the end; out of range is an error.
-   `count $name` prints the number of elements, and `count --lines FILE...` the number of lines in the named files
-   together (a builtin reading what the line designates, ADR-0153). `set` takes `--global` (ADR-0151 rule 2) and
+   `count $name` prints the number of elements. `set` takes `--global` (ADR-0151 rule 2) and
    `--query NAME`, which succeeds when `NAME` is set and not empty (ADR-0151 rule 5). Names are letters, digits and `_`, starting with a letter or `_`.
    `name=value` alone is an error with a hint (example below). The shell's own messages have the form
    `zosh: SUBJECT: PROBLEM` with optional `  hint:` lines (ADR-0155 rule 5).
+   *Added by the Decision:* `count --lines FILE...` prints the number of lines in the named files together (ADR-0155's
+   Decision says how it reads them).
 4. **A word that mixes text and a list.** A word yields one argument per element of the one list in it
    (`$files.bak`); a word with two lists of more than one element is an error; a word with an empty list and other
    text is an error ("`$files` is empty"). So `$dir/*` never becomes `/*`.
@@ -163,7 +164,7 @@ it's a*b
 | `rm *.tmp`, no match | error, nothing removed | the literal `*.tmp` was never wanted (driver 2) |
 | `` `cmd` ``, `$((1+2))`, heredocs, `{a,b}` | not supported | `$(cmd)`; `math` (ADR-0155); files or `echo`; typing both names |
 | `export X=1` | error with a hint (`export X 1`) | same rule as `set` |
-| `grep`, `wc -l`, `man`, `less`, `which` | error with a hint naming `search`, `count --lines`, `help`, `cat`, `help` (ADR-0154 rule 6) | one name per action (ADR-0155) |
+| `grep`, `wc -l`, `man`, `less`, `which` (added by the Decision) | error with a hint naming `search`, `count --lines`, `help`, `cat`, `help` (ADR-0154 rule 6) | one name per action (ADR-0155) |
 | `cmd \| read x`, `ls \| count` | error: a builtin can only start a pipeline (ADR-0152) | `set x $(cmd)`, `count $(ls)` |
 | `echo *` with a file `-n` | prints `./-n` | the price of rule 7's protection |
 

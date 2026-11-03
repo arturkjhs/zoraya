@@ -67,8 +67,9 @@ completions in per-command files separate from the program, and can generate the
 
 ### Decision
 
-Accepted as recommended (architect, 2026-11-03). Addition from the tour: `help NAME` begins by saying what `NAME` is
-and where it comes from (item 4), which is what a person asking `which` wants (ADR-0154 rule 6).
+Accepted as recommended (architect, 2026-11-03). Addition by the agent, to carry out the hint for `which` that the
+architect asked for (ADR-0154 rule 6): `help NAME` begins by saying what `NAME` is and where it comes from (item 4).
+The architect did not ask for this line itself.
 
 The original recommendation follows.
 
@@ -112,10 +113,11 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 3. **Readers.** `zoraya-command` (ADR-0155) parses argv and prints `--help`; the shell completes (ADR-0154), grants
    (ADR-0153) and shows help from the same parsed form. Functions get theirs from the comment lines above `fn`
    (ADR-0151): the first line is the summary, and parameters are `text` operands.
-4. **`help`.** `help` lists topics, then commands with their summaries; `help NAME` shows the full page, after a first line saying what `NAME` is: `cp is a program,
-   /zoraya/bin/cp`, `cd is built into the shell`, `backup is a function, from /config/start.zosh`; `help
+4. **`help`.** `help` lists topics, then commands with their summaries; `help NAME` shows the full page; `help
    --search WORD` lists the pages whose name or summary contains the word. Topics shipped: `language`, `grants`,
-   `jobs`, `keys`, `settings`, `errors`, `tour` (this task's tour, abridged).
+   `jobs`, `keys`, `settings`, `errors`, `tour` (this task's tour, abridged). *Added by the Decision:* the page
+   begins with a line saying what `NAME` is: `cp is a program, /zoraya/bin/cp`, `cd is built into the shell`, `backup
+   is a function, from /config/start.zosh`.
 5. **The viewer.** A page longer than the screen is shown a screen at a time with a last line
    `-- space: next page, q: quit --`; output that goes to a pipe or file is not paged. The viewer is in the shell
    and uses only the ADR-0096 subset.
@@ -204,4 +206,5 @@ description checked (operand kinds are authority); that check belongs to the lau
 
 ## Architect's decision
 
-Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request. The first line of
+`help NAME` (item 4) is the agent's addition, carrying out the `which` hint the architect asked for in ADR-0154.

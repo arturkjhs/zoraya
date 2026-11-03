@@ -2,8 +2,8 @@
 
 The order in which Part 2 builds the accepted versions of ADR-0150 to ADR-0158, what each step depends on, and which
 steps wait for stage 6. ADR-0150 to ADR-0158 were accepted on 2026-11-03, ADR-0153 and ADR-0155 with changes, and with
-them the changes to ADR-0004, ADR-0055, ADR-0096, ADR-0104, ADR-0105, ADR-0107 and INV-0002-4 they declare (notes in
-those ADRs); the steps follow the decisions. Each step ends with `make test` passing and a commit. Stage 6's sub-stages are
+them the changes to ADR-0002 (INV-0002-4, -5), ADR-0004, ADR-0053, ADR-0055, ADR-0062, ADR-0096, ADR-0104, ADR-0105
+and ADR-0107 they declare (notes in those ADRs); the steps follow the decisions. Each step ends with `make test` passing and a commit. Stage 6's sub-stages are
 those of [`../stage-6/plan.md`](../stage-6/plan.md): 6a kernel objects (byte streams, `image_create`, `job_suspend`),
 6b toolchain, 6c `libposix` core, 6d broker, `ttyd` and `tmpd`.
 
@@ -53,8 +53,9 @@ step 10 for 6d and for 6e's image with the POSIX programs installed. Until then 
    every builtin of ADR-0155 item 8 with its description; `help`, the topics and the pager; history and settings in
    `/config` and `/home` (created by `zoraya-mkfs` from `rootfs/config/` and `rootfs/home/`); `/config/start.zosh`; the reports of ADR-0151; `count --lines` and the hints for Unix names (ADR-0150 and ADR-0154
    Decisions). `init` starts a new shell when `zosh` exits instead of powering off (ADR-0155 Decision, ADR-0053's
-   note); `poweroff` and `reboot` are builtins (`reboot` says it is unavailable until the kernel has `power_reset`,
-   `docs/backlog.md`); `tests/shell/exit.script` checks INV-0155-5. Programs
+   note); `poweroff` and `reboot` are builtins (`reboot` says it is unavailable until the kernel has a reset call,
+   `docs/backlog.md`); `tests/shell/exit.script` checks INV-0155-5, and INV-0063-2's
+   check moves to a test that ends `init` itself (ADR-0053's note). Programs
    still come from the ramdisk and still print to the console (no streams yet). The existing serial and GUI scripts
    are updated to the new prompt, reports and commands (`write`, `ls-ramdisk`, `exit-code`, `run`, `exit N` go;
    ADR-0155 item 8), and the demonstration program `exit` is renamed `exit-with`.

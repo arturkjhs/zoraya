@@ -57,7 +57,9 @@ Recommended: **Option C**. It is a recommendation, not a decision.
   *Note, 2026-11-03 (the architect's decision on ADR-0155, recorded by an agent):* when the shell `init` started ends,
   `init` starts a new shell in the same terminal (the console, or the GUI window) instead of syncing and powering
   off. The machine is turned off or restarted only through `Power`: the shell's `poweroff` and `reboot` (ADR-0062).
-  If `init` itself ends, the kernel still powers off.
+  If `init` itself ends, the kernel still powers off. INV-0063-2 ("The kernel powers off when the first process
+  ends") stays true, but its check, a serial test ending the shell with `exit`, no longer ends `init`: when TASK-18
+  Part 2 makes `exit` start a new shell, it must move that check to a test that ends `init` itself.
 
 ### Effect of the vision
 Target 2 fits this best: an agent's sandbox is a sub-job with a small namespace table, and it holds nothing else. A launcher for such sandboxes is an ordinary program holding a job handle. Target 3 needs a configuration format and perhaps a broker that hands out services by name to the processes allowed to ask: that is a program, not a kernel change, so the later cost is small.

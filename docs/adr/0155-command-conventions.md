@@ -72,11 +72,16 @@ typed values at the request (CP-12).
 
 ### Decision
 
-Accepted with a change (architect, 2026-11-03): `exit` ends the shell, and `init` starts a new one in the same
-terminal (the console, or the GUI window); the machine stays on. `poweroff` and `reboot` are explicit builtins: the
-shell holds `Power` (ADR-0062), and `reboot` needs a new call on that object, recorded in ADR-0062's note. Rule 8 is
-amended accordingly. From the tour, also: `count --lines FILE...` counts lines (rule 8), and a native program's
+Accepted with a change (architect, 2026-11-03): `exit` ends the shell, and `init` on the console starts a new one;
+the machine stays on. In GUI mode `init` does the same in the window's terminal: that is the agent's extension of the
+decision, to be confirmed. `poweroff` and `reboot` are explicit builtins: the shell holds `Power` (ADR-0062), and
+`reboot` needs a kernel call to reset the machine, which does not exist yet (ADR-0062's note, `docs/backlog.md`).
+Rule 8 is amended accordingly. From the tour, also: `count --lines FILE...` counts lines, and a native program's
 `not granted` message carries no hint, since the shell prints it (ADR-0153 rule 11).
+
+`count --lines` is the one builtin that reads files, an exception to rule 8 stated here: it reads only files that
+its line designates as `read` operands, under every rule of ADR-0153 (paths from values only below the current
+directory, link objects, refused paths), never with the rest of the shell's authority.
 
 The original recommendation follows.
 
@@ -107,9 +112,11 @@ Recommended: **Option D**. It is a recommendation, not a decision.
 5. **Errors.** Every failure is one line to `err`: `NAME: SUBJECT: PROBLEM`, in lower case, no final period, then
    optionally indented lines `  hint: ...` saying what to try. `PROBLEM` comes from the status by one table in the
    shared crate: `NotFound` "not found", `AlreadyExists` "already exists", `NotEmpty` "not empty", `IsDirectory`
-   "is a directory", `NotDirectory` "not a directory", `NotGranted` and `AccessDenied` "not granted" (the
-   shell adds the hint naming the grant, ADR-0153 rule 11), `StorageFailed` "the volume has failed", `TooManyOpen` "too many open
+   "is a directory", `NotDirectory` "not a directory", `NotGranted` and `AccessDenied` "not granted" (with a hint
+   naming the `+r` or `+w` grant, ADR-0153), `StorageFailed` "the volume has failed", `TooManyOpen` "too many open
    files", any other status its name in words. Never the bare status name, never a number alone (DM-052, CP-12).
+   *Amended by the Decision:* a native program's `not granted` carries no hint of its own; the shell prints it after
+   the program ends (ADR-0153 rule 11).
 6. **Exit codes.** 0 success; 1 failure; 2 wrong usage. A command whose description declares it a **question**
    (`question` in its header: `test`, `search`) uses 0 for "yes", 1 for "no", 2 for wrong usage and 3 for a failure,
    so the shell can tell "no" from an error (ADR-0151 rule 3). A command that stops because its `out` reader closed (`PeerClosed`, ADR-0101) exits 0
@@ -197,8 +204,10 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
 - **INV-0155-5.** `exit` in the shell ends that shell, and `init` starts a new shell in the same terminal; the machine
   stays on. *Check:* a scripted serial session (`tests/shell/exit.script`) that exits, sees the new greeting and
   prompt, and runs a command, and the same in the GUI script.
-- **INV-0155-6.** `reboot` restarts the machine and `poweroff` ends it with QEMU status 0. *Check:* scripted serial
-  sessions, the second being INV-0062-3's.
+- **INV-0155-6.** `poweroff` ends the machine with QEMU status 0, and `exit` does not. *Check:* the scripted serial
+  sessions of INV-0062-3 and INV-0155-5.
+- **INV-0155-7.** `reboot` restarts the machine. *Check:* a scripted serial session that runs `reboot` and sees the
+  boot banner again.
 
 ## Open questions
 - Whether `rm` should ask before removing a directory tree at the terminal; Option D's answer is no prompts, only
@@ -214,4 +223,5 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
 Accepted with a change, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
 `exit` closes the shell, and `init` on the console starts a new one; `poweroff` and `reboot` remain explicit
 commands. The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
-updated (notes in those ADRs, INV-0155-5 and -6).
+updated (notes in those ADRs, INV-0155-5 to -7; INV-0063-2's check moves to a test that ends `init` itself, ADR-0053's
+note).

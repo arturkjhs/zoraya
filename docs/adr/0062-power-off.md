@@ -66,9 +66,9 @@ Recommended: **Option C**, with Option D's behaviour kept for a first process th
 - Whether a reboot call is needed.
 
   *Note, 2026-11-03 (the architect's decision on ADR-0155, recorded by an agent):* yes. `reboot` is a shell builtin,
-  so the `Power` object gains a second call, `power_reset(power)`, needing `POWER`, through PSCI `SYSTEM_RESET` on the
-  conduit of `power_off`; on success it does not return. It is kernel work, outside TASK-18 (`docs/backlog.md`), and
-  until it exists `reboot` reports that it is not available. `poweroff` in the shell stays (INV-0062-3).
+  so the kernel needs a way for a `Power` holder to reset the machine (PSCI offers `SYSTEM_RESET`). Its call shape is
+  an ABI decision for a later ADR, with the kernel work (`docs/backlog.md`); until then `reboot` reports that it is
+  not available (INV-0155-7). `poweroff` in the shell stays (INV-0062-3).
 
 ## Revisit triggers
 - A second system-wide power action.

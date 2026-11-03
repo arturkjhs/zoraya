@@ -116,7 +116,8 @@ Accepted with a change (architect, 2026-11-03), and with additions the architect
   would allow it.
 - **The changes to accepted ADRs** declared below are accepted: `narrow` in ADR-0055, the broker changes in ADR-0104,
   ADR-0105 item 9 (with the revisit condition "before the first interactive POSIX program"), path resolution in
-  ADR-0107 and INV-0002-4 (recorded as INV-0153-8), and rule 11's report slot in ADR-0107's record.
+  ADR-0107 and INV-0002-4 (recorded as INV-0153-8). Rule 11's report slot in ADR-0107's record is the agent's means
+  of carrying out the refused-path hint.
 
 The original recommendation follows.
 
@@ -142,14 +143,16 @@ in it. ADR-0055 has no such connection; this ADR adds one request, `narrow(name,
 |---|---|---|---|
 | `read` | the named file or directory | `read`, `clone` | `read` |
 | `write` | the named existing file | `read`, `write`, `sync`, `clone` | `change` |
-| `create` | the parent directory, narrowed to the name | `read`, `write`, `create`, `sync`, `clone` | `create or replace NAME` |
+| `create` | the parent directory, narrowed to the name | `read`, `write`, `create`, `sync`, `clone` | `create NAME` |
 | `remove` | the parent directory, narrowed to the name | `read`, `remove`, `clone` | `remove NAME` |
 | `remove-tree` | as `remove`, plus `tree` on the named directory | as `remove`, plus `tree`'s | `remove NAME and all in it` |
 | `rename` | each parent, narrowed to its name | `read`, `rename`, `create`, `remove`, `clone` | `rename NAME` |
 | `tree` | the named directory and everything below | every right but `publish` | `change anything in` |
 
 *Amended by the Decision:* only `read` is automatic for every described command; the other kinds are automatic for
-base-system commands alone. A `create` name may be created or, if it exists, replaced.
+base-system commands alone. A `create` name may be created or, if it exists, replaced: through the narrowed
+connection the program may create the name, or open the file already there for writing and truncate it, and nothing
+else (no `remove`); `grants` shows `create or replace NAME`.
 
 An option may change an operand's kind (`rm --recursive` makes its operand `remove-tree`, ADR-0156). A description
 cannot name a fixed path and cannot widen the current directory: authority comes only from what the person typed. A
@@ -370,13 +373,16 @@ natural extension once networking exists (CP-28); nothing here precludes it.
   `c`; one level is simpler to read, two are closer to least authority. The architect kept one level for now.
 - Whether the shell should offer a grant after a refused command (Deno's prompt), or only the hint; a prompt trains
   people to say yes.
+- Whether the shell should print a hint after a POSIX command fails when that command is known to open paths from its
+  input (`tcc`, `make`), since their own message says only "not found". *Settled by the Decision:* rule 11.
 - Which descriptions to ship for toybox applets, and whether toybox runs as POSIX programs with the toolchain set.
 
 ## Revisit triggers
 - People routinely type `+w /` or `+w .` for ordinary commands: descriptions are missing or wrong, or the default is
   too narrow.
-- Before the first interactive POSIX program is wanted from `zosh`: lend it `ttyd` (ADR-0105) by a superseding ADR
-  (the architect's condition on ADR-0105 item 9).
+- A POSIX program in scope needs a tty from `zosh`: lend it `ttyd` (ADR-0105) by a superseding ADR.
+- *Added by the Decision:* before the first interactive POSIX program is wanted from `zosh`, revisit ADR-0105 item 9
+  (the architect's condition on accepting it).
 - The agent-isolation direction is chosen (Vision, target 2): reconsider splitting `+w`, and whether base-system
   commands should keep automatic write designation.
 - The architect declines `narrow`: rule 2's fallback becomes the rule, and `create`, `remove` and `rename` are
@@ -393,4 +399,5 @@ is told apart from a missing file by `libposix` (and `zoraya-rt`) and reported t
 program ends which path it tried and which `+r`/`+w` allows it (rule 11, INV-0153-7); an output operand means "create
 or replace this one name". The changes to accepted ADRs declared here are accepted: `narrow` in ADR-0055, the broker
 changes in ADR-0104, ADR-0105 item 9 with the revisit condition "before the first interactive POSIX program", path
-resolution in ADR-0107 and INV-0002-4, and the report slot in ADR-0107's record.
+resolution in ADR-0107 and INV-0002-4. The `REPORT` slot in ADR-0107's record (rule 11) is how the agent carried out
+the refused-path hint the architect asked for; the architect did not name the slot itself.
