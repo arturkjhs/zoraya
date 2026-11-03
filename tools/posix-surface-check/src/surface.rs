@@ -173,6 +173,9 @@ pub struct Report {
     /// Disagreements between the archive's symbol index, which `zoraya-ar`
     /// wrote with its own ELF reader, and the symbols this tool reads.
     pub index: Vec<String>,
+    /// Names with a strong definition in more than one member, with the
+    /// members: which one a program gets would depend on the archive's order.
+    pub doubly_defined: Vec<(String, Vec<String>)>,
 }
 
 impl Report {
@@ -199,6 +202,12 @@ impl Report {
         }
         for m in &self.duplicates {
             out.push(format!("member name occurs more than once: {m}"));
+        }
+        for (n, ms) in &self.doubly_defined {
+            out.push(format!(
+                "defined strongly in more than one member: {n} ({})",
+                ms.join(", ")
+            ));
         }
         for m in &self.index {
             out.push(format!("symbol index: {m}"));
@@ -256,6 +265,20 @@ pub fn check(
         }
     }
     report.unresolved = unresolved.into_iter().collect();
+    let mut strong: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (name, object) in members {
+        for s in object.symbols.iter().filter(|s| s.is_strong_definition()) {
+            strong
+                .entry(s.name.as_str())
+                .or_default()
+                .push(name.clone());
+        }
+    }
+    report.doubly_defined = strong
+        .into_iter()
+        .filter(|(_, ms)| ms.len() > 1)
+        .map(|(n, ms)| (n.to_string(), ms))
+        .collect();
     match index {
         None => report.index.push("the archive has no symbol index".into()),
         Some(names) => {

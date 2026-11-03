@@ -109,3 +109,25 @@ fn an_unknown_command_fails_and_writes_nothing() {
     assert!(!run(&["hide", LIST]).0);
     assert!(!run(&["check", LIST]).0);
 }
+
+#[test]
+fn hide_refuses_two_objects_with_one_name_and_prints_its_renames() {
+    let d = tmp("hide");
+    let out = d.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::create_dir_all(d.join("x")).unwrap();
+    let mut e = vec![0u8; 64];
+    e[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+    e[16..18].copy_from_slice(&1u16.to_le_bytes());
+    e[18..20].copy_from_slice(&183u16.to_le_bytes());
+    e[40..48].copy_from_slice(&64u64.to_le_bytes());
+    e[58..60].copy_from_slice(&64u16.to_le_bytes());
+    std::fs::write(d.join("a.o"), &e).unwrap();
+    std::fs::write(d.join("x/a.o"), &e).unwrap();
+    let (a, b) = (d.join("a.o"), d.join("x/a.o"));
+    let (ok, text) = run(&["hide", LIST, out.to_str().unwrap(), a.to_str().unwrap()]);
+    assert!(ok && text.is_empty(), "{text}");
+    assert!(out.join("a.o").exists());
+    let (ok, text) = run(&["hide", LIST, out.to_str().unwrap(), b.to_str().unwrap()]);
+    assert!(!ok && text.contains("two objects"), "{text}");
+}

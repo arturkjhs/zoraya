@@ -13,8 +13,10 @@ ac_cv_func_isalpha=yes
 # musl's strcoll (retained, a tier row) compares bytes, which is correct in
 # the C locale, the only one Zoraya has.
 ac_cv_func_strcoll_works=yes
-# musl's gettimeofday (retained) is the standard one: it never clobbers the
-# caller's struct tm, which is what the run test looks for.
+# The run test asks that gettimeofday(&t, 0) return 0 with non-negative
+# seconds and microseconds. On Zoraya gettimeofday is musl's (retained), over
+# the Rust half's clock_gettime(CLOCK_REALTIME), which reports the wall clock
+# since the epoch: both hold.
 ac_cv_func_gettimeofday=yes
 # libposix's posix_spawn resolves and loads the program before the child
 # exists (ADR-0104 items 4 and 5, ADR-0108 item 2), so a missing or unloadable

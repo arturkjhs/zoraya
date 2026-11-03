@@ -33,6 +33,11 @@ cache=$2
 only=${3:-}
 mkdir -p "$cache"
 
+if [ -n "$only" ] && ! entries "$lock" | awk -v n="$only" '$1 == n { found = 1 } END { exit !found }'; then
+    echo "fetch-ports: $only is not in $lock" >&2
+    exit 1
+fi
+
 status=0
 entries "$lock" | while read -r name version hash file url; do
     [ -z "$only" ] || [ "$name" = "$only" ] || continue

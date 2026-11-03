@@ -40,9 +40,11 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 
 TASK-02 pinned tcc by commit and fetched it with git. The cache holds the archive
 GitHub generates for that commit from the mirror `TinyCC/tinycc` (TASK-02 read tcc
-there too, because `repo.or.cz` served a bot check); its SHA-256 is recorded like
-any other. GitHub states that these archives are stable, but if one ever changes,
-`make fetch-ports` refuses it and the lock must be renewed by an ADR-0109 revisit.
+there too, because `repo.or.cz` served a bot check); its pax header names the
+commit, and its SHA-256, taken by TASK-17, is recorded like any other. Whether
+GitHub keeps such generated archives byte-identical was not checked here; if one
+ever changes, `make fetch-ports` refuses it and the lock must be renewed by an
+ADR-0109 revisit.
 
 ## How each program is built
 

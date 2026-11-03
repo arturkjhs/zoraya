@@ -57,6 +57,9 @@ fn passes_good_files_and_fails_on_any_refusal() {
     let (ok, text) = run(&[d.join("bad"), d.join("bad2")]);
     assert!(!ok && text.contains("2 files, 2 refused"), "{text}");
     assert!(!run(&[d.join("empty")]).0);
+    std::os::unix::fs::symlink("nothing", d.join("empty/dangling")).unwrap();
+    let (ok, text) = run(&[d.join("empty")]);
+    assert!(!ok && text.contains("a symbolic link to nothing"), "{text}");
     std::fs::write(d.join("locked"), exec(0x40_0000, 5)).unwrap();
     std::fs::set_permissions(
         d.join("locked"),

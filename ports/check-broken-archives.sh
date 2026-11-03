@@ -45,3 +45,8 @@ printf 'unsigned alarm(unsigned s) { return 0; }\n' > denied.c
 "$zcc" -c -o denied.o denied.c
 cp "$libc" denied.a && "$ar" r denied.a denied.o
 expect denied "export on the exclusion table (INV-0005-2): alarm"
+
+printf 'unsigned long strlen(const char *s) { return 0; }\n' > twice.c
+"$zcc" -w -c -o twice.o twice.c
+cp "$libc" twice.a && "$ar" r twice.a twice.o
+expect twice "defined strongly in more than one member: strlen"

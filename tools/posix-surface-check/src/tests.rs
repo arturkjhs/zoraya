@@ -565,6 +565,7 @@ fn a_failed_report_says_what_failed() {
         unresolved: vec![("__lock".into(), "u.o".into())],
         duplicates: vec!["d.o".into()],
         index: vec!["x is indexed but not defined".into()],
+        doubly_defined: vec![("strlen".into(), vec!["a.o".into(), "b.o".into()])],
     };
     assert_eq!(
         r.lines(),
@@ -575,8 +576,79 @@ fn a_failed_report_says_what_failed() {
             "svc in s.o at code offsets [4] (INV-0100-2)",
             "undefined in the archive: __lock (referenced by u.o)",
             "member name occurs more than once: d.o",
+            "defined strongly in more than one member: strlen (a.o, b.o)",
             "symbol index: x is indexed but not defined",
         ]
     );
     assert!(Report::default().lines().is_empty());
+}
+
+// Findings of the independent review (docs/tasks/TASK-17-review.md).
+
+#[test]
+fn a_name_defined_strongly_twice_fails_but_a_weak_twin_does_not() {
+    let mut m = good();
+    m.push(("weak_open.o", object(&[("open", STB_WEAK, TEXT)], &[])));
+    assert!(check_archive(&NAMES, &archive(&m), &[]).passed());
+    m.push(("strong_open.o", object(&[("open", STB_GLOBAL, TEXT)], &[])));
+    let r = check_archive(&NAMES, &archive(&m), &[]);
+    assert_eq!(
+        r.doubly_defined,
+        [(
+            "open".to_string(),
+            vec!["open.o".to_string(), "strong_open.o".to_string()]
+        )]
+    );
+}
+
+#[test]
+fn the_exclusion_table_is_inv_0005_2_s() {
+    for n in [
+        "ptrace",
+        "msgget",
+        "semget",
+        "shmget",
+        "socket",
+        "getaddrinfo",
+        "pthread_create",
+        "dlopen",
+        "flock",
+        "setuid",
+        "setgid",
+        "setresuid",
+        "setresgid",
+        "sigaltstack",
+        "setitimer",
+        "alarm",
+        "epoll_create",
+        "epoll_wait",
+    ] {
+        assert!(surface::is_denied(n), "{n}");
+    }
+    assert!(!surface::is_denied("open") && !surface::is_denied("epoll"));
+}
+
+#[test]
+fn only_the_shim_s_prefix_is_internal_among_zoraya_names() {
+    assert!(surface::is_internal("zoraya_posix_read") && surface::is_internal("_x"));
+    assert!(!surface::is_internal("zoraya_fork_group"));
+    let mut m = good();
+    m.push((
+        "z.o",
+        object(&[("zoraya_fork_group", STB_GLOBAL, TEXT)], &[]),
+    ));
+    assert_eq!(
+        check_archive(&NAMES, &archive(&m), &[]).extra,
+        ["zoraya_fork_group"]
+    );
+}
+
+#[test]
+fn an_index_with_fewer_names_than_its_count_is_an_error() {
+    let mut bytes = archive(&good());
+    // The count is the index body's first four bytes, after the magic and header.
+    let at = 8 + 60;
+    let n = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+    bytes[at..at + 4].copy_from_slice(&(n + 1000).to_be_bytes());
+    assert!(ar::index(&bytes).is_err());
 }

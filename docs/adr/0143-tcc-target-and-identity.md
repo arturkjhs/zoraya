@@ -15,7 +15,9 @@ loader, and item 1 says `zcc` defines `__zoraya__` "and nothing Linux". TASK-17 
 found:
 
 1. tcc predefines `__linux__`, `__linux`, `__unix__` and `__unix` for every ELF target that is not a BSD, and its
-   `tccdefs.h` chooses `wchar_t` and `int64_t` by `__linux__`.
+   `tccdefs.h` chooses four things by `__linux__`: `wchar_t`, `int64_t`, macro versions of `__builtin_huge_val`,
+   `__builtin_huge_valf`, `__builtin_huge_vall` and `__builtin_nanf` (for targets without `__linux__`), and the
+   bounds checker's `malloc` redirection.
 2. A tcc compiled by `zcc` for AArch64 counts as native (its `TCC_IS_NATIVE` test compares the compiler's own
    architecture with the target's) and so compiles `-run`, which needs `dlopen` and executable memory.
 3. With `--libpaths=/usr/lib`, tcc looks for `libtcc1.a` in `/usr/lib` only: it searches the library path, not its own
@@ -61,7 +63,9 @@ found:
   `SHF_EXCLUDE` sections, as the ELF gABI says a link must.
 - **Evidence for:** Drivers 1 to 4; the hello world links with the Rust members in `libc.a` (finding 5).
 - **Evidence against:** A program that selects its POSIX code by `__unix__` takes its non-Unix path on Zoraya (none of
-  the T1 programs does: they built without it).
+  the T1 programs does: they built without it). Of finding 1's other two branches, the bounds checker's is moot (no
+  `-b`), and Zoraya gets the macro forms of the huge-value and NaN builtins; compiled by the host tcc, musl's
+  `INFINITY`, `HUGE_VAL` and `HUGE_VALL` are infinities and `NAN` is a NaN (checked once, TASK-17).
 - **Cost:** *(estimate)* 150 lines of patches, as built.
 - **Precedent:** Redox gave its own target to its compilers (`alternatives-postmortem.md#redox`).
 

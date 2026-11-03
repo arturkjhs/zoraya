@@ -62,9 +62,12 @@ ports: rootfs
 clean-ports:
 	rm -rf $(WORK) $(OBJ) $(LOGS) $(PORTS)/bin $(SYSROOT) $(ROOTFS)
 
-# The host tools. Order-only below: building them never makes a port stale.
+# The host tools. `tools` always asks cargo, which leaves an unchanged binary
+# alone; a rule that uses a tool's output (libc.a) depends on the binary, so
+# a changed tool rebuilds it, and the others take the tools order-only.
 tools:
 	$(CARGO) build -q -p zoraya-ar -p posix-surface-check -p zoraya-elf-check
+$(ZAR) $(SURFACE_CHECK) $(ELF_CHECK): tools
 
 FORCE:
 
@@ -90,6 +93,7 @@ MUSL := $(WORK)/musl-$(call lock_ver,musl)
 $(MUSL): $(LOCK) $(wildcard ports/musl/zoraya/*.patch) ports/musl/zoraya/syscall.h
 	$(call unpack,musl,ports/musl/zoraya)
 	cp ports/musl/zoraya/syscall.h $@/src/internal/syscall.h
+	rm -rf $(OBJ)/musl
 	@touch $@
 
 # ---------------------------------------------------------------- headers
@@ -141,7 +145,7 @@ $(STUB_LIB): ports/posix-stub/stubs.txt ports/posix-stub/stubs.awk
 # object and writes the list of renames.
 LIBC := $(SYSROOT)/usr/lib/libc.a
 LIBC_DIR := $(OBJ)/libc
-$(LIBC): $(MUSL_LIST) $(STUB_LIB) $(TIER_LIST) | tools
+$(LIBC): $(MUSL_LIST) $(STUB_LIB) $(TIER_LIST) $(ZAR) $(SURFACE_CHECK)
 	rm -rf $(LIBC_DIR) && mkdir -p $(LIBC_DIR)/stub $(LIBC_DIR)/out
 	cd $(LIBC_DIR)/stub && $(ZAR) x $(STUB_LIB)
 	$(SURFACE_CHECK) hide $(TIER_LIST) $(LIBC_DIR)/out $$(cat $(MUSL_LIST)) \
@@ -231,7 +235,8 @@ $(DASH_BIN): $(DASH) $(SYSROOT_STAMP) $(TARGET_SIGNALS) ports/config.site
 	@cd $(DASH) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-zoraya \
 	  $(CROSS_TOOLS) CFLAGS="$(CROSS_CFLAGS)" \
 	  CC_FOR_BUILD="$(HOSTCC) -include $(TARGET_SIGNALS)",dash-configure)
-	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(DASH),dash)
+	rm -f $(DASH_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(DASH) V=1,dash)
 	@touch $@
 
 # ---------------------------------------------------------------- GNU make
@@ -249,7 +254,8 @@ $(GMAKE_BIN): $(GMAKE) $(SYSROOT_STAMP) ports/config.site
 	@cd $(GMAKE) && $(call logged,$(CROSS_ENV) ./configure --host=aarch64-unknown-zoraya \
 	  --disable-load --without-guile --disable-nls \
 	  $(CROSS_TOOLS) CFLAGS="$(CROSS_CFLAGS)",make-configure)
-	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GMAKE),make)
+	rm -f $(GMAKE_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GMAKE) V=1,make)
 	@touch $@
 
 # ---------------------------------------------------------------- toybox
@@ -275,7 +281,8 @@ $(TOYBOX_BIN): $(TOYBOX) $(SYSROOT_STAMP)
 	@$(call logged,$(MAKE) -C $(TOYBOX) allnoconfig HOSTCC=$(HOSTCC) SED=$(GSED),toybox-config)
 	@$(call kconfig_on,$(TOYBOX),$(TOYBOX_APPLETS))
 	@yes '' | $(MAKE) -C $(TOYBOX) oldconfig HOSTCC=$(HOSTCC) SED=$(GSED) > /dev/null 2>&1
-	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(TOYBOX) toybox CC=$(ZCC) HOSTCC=$(HOSTCC) \
+	rm -f $(TOYBOX_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(TOYBOX) toybox V=1 CC=$(ZCC) HOSTCC=$(HOSTCC) \
 	  CFLAGS="$(CROSS_CFLAGS)" SED=$(GSED) LDOPTIMIZE=-Wl$(comma)--gc-sections NOSTRIP=1,toybox)
 	@touch $@
 comma := ,
@@ -300,7 +307,8 @@ $(BUSYBOX_BIN): $(BUSYBOX) $(SYSROOT_STAMP)
 	  $(BUSYBOX)/.config > $(BUSYBOX)/.config.new && mv $(BUSYBOX)/.config.new $(BUSYBOX)/.config
 	@$(call kconfig_on,$(BUSYBOX),$(BUSYBOX_APPLETS))
 	@yes '' | $(MAKE) -C $(BUSYBOX) oldconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > /dev/null 2>&1
-	@$(call logged,$(CROSS_ENV) KCONFIG_NOTIMESTAMP=1 $(MAKE) -C $(BUSYBOX) HOSTCC=$(HOSTCC) \
+	rm -f $(BUSYBOX_BIN) $(BUSYBOX)/busybox_unstripped
+	@$(call logged,$(CROSS_ENV) KCONFIG_NOTIMESTAMP=1 $(MAKE) -C $(BUSYBOX) V=1 HOSTCC=$(HOSTCC) \
 	  CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar LD=$(TOOLBIN)/aarch64-unknown-zoraya-ld \
 	  SKIP_STRIP=y,busybox)
 	@touch $@
@@ -328,6 +336,7 @@ $(TCC_STAMP): $(TCC_DIR) $(SYSROOT_STAMP)
 	@cd $(TCC_DIR) && $(call logged,./configure $(TCC_CONFIG) $(call TCC_PATHS,) \
 	  --cc=$(ZCC) --ar=$(TOOLBIN)/aarch64-unknown-zoraya-ar --extra-cflags="$(CROSS_CFLAGS)",tcc-configure)
 	cd $(TCC_DIR) && $(HOSTCC) -DC2STR conftest.c -o c2str.exe
+	rm -f $(TCC_BIN) $(LIBTCC1)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(TCC_DIR) tcc GITHASH=no,tcc)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(TCC_DIR) libtcc1.a arm64-libtcc1-usegcc=yes GITHASH=no,libtcc1)
 	@touch $@
@@ -389,7 +398,9 @@ check-ports: | tools
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
-	@! grep -l -e '-D__linux' $(LOGS)/*.log
+	@for l in dash make busybox toybox tcc libtcc1 musl; do \
+	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
+	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	$(ZCC) -dM -E -x c /dev/null > $(OBJ)/zcc-predefs.h
 	grep -q '__zoraya__' $(OBJ)/zcc-predefs.h && ! grep -q -e '__linux' -e '__unix' $(OBJ)/zcc-predefs.h
 	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi
@@ -401,4 +412,6 @@ check-ports: | tools
 	grep -q '__zoraya__' $(HELLO_DIR)/predefs.h && ! grep -q -e '__linux' -e '__unix' $(HELLO_DIR)/predefs.h
 	$(TCC_HOST) -o $(HELLO_DIR)/a.out ports/tests/hello.c
 	$(ELF_CHECK) $(HELLO_DIR)/a.out
+	@echo "== tcc for Zoraya has no -run: it calls itself a cross compiler (INV-0143-2)"
+	LC_ALL=C grep -a -q 'run is not available in a cross compiler' $(TCC_BIN)
 	@echo "check-ports: all passed"

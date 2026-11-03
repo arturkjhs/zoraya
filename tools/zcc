@@ -17,7 +17,14 @@
 # -nostdlib, -nostartfiles and -nodefaultlibs leave out what they say.
 set -eu
 
-here=$(cd "$(dirname "$0")" && pwd)
+# The repository from the script's own place, through any symbolic links to
+# it (build/ports/bin/aarch64-unknown-zoraya-cc is one).
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
 root=$(cd "$here/.." && pwd)
 sysroot=${ZORAYA_SYSROOT:-$root/build/sysroot}
 clang=${ZORAYA_CLANG:-clang}
@@ -30,16 +37,22 @@ for a in "$@"; do
     case "$prev" in
     -D)
         case "$a" in
-        __linux__|__linux__=*|__linux|__linux=*|linux|linux=*)
+        __linux__|__linux__=*|__linux|__linux=*|linux|linux=*|__gnu_linux__|__gnu_linux__=*)
             echo "zcc: refusing -D$a: Zoraya is not Linux (INV-0109-2)" >&2
             exit 1;;
         esac;;
+    -target)
+        echo "zcc: refusing -target $a: the target is aarch64-unknown-zoraya" >&2
+        exit 1;;
     esac
     case "$a" in
-    -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*)
+    -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*)
         echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2
         exit 1;;
-    -shared|-rdynamic|-pie)
+    --target=*|-target=*|-Xclang|-Xpreprocessor)
+        echo "zcc: refusing $a: zcc sets the target and the preprocessor's definitions itself" >&2
+        exit 1;;
+    -shared|-rdynamic|-pie|-static-pie)
         echo "zcc: refusing $a: Zoraya programs are static ET_EXEC (ADR-0033)" >&2
         exit 1;;
     -c|-S|-E|-M|-MM|-fsyntax-only|--version|-dumpmachine|-dumpversion|-print-*|--print-*)

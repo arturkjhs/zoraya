@@ -9,6 +9,7 @@ const SHT_SYMTAB: u32 = 2;
 const SHF_EXECINSTR: u64 = 4;
 const SHT_NOBITS: u32 = 8;
 pub const SHN_UNDEF: u16 = 0;
+pub const SHN_COMMON: u16 = 0xfff2;
 pub const STB_LOCAL: u8 = 0;
 pub const STB_GLOBAL: u8 = 1;
 pub const STB_WEAK: u8 = 2;
@@ -31,6 +32,11 @@ impl Symbol {
             && self.shndx != SHN_UNDEF
             && self.kind != STT_SECTION
             && self.kind != STT_FILE
+    }
+
+    /// A strong definition: global (not weak) and in a section, not common.
+    pub fn is_strong_definition(&self) -> bool {
+        self.is_defined_global() && self.bind == STB_GLOBAL && self.shndx != SHN_COMMON
     }
 
     /// A reference that some other object must satisfy: undefined and not

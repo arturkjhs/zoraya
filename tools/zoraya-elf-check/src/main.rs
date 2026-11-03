@@ -1,6 +1,7 @@
 //! `zoraya-elf-check PATH...`: checks every file named, and every regular
 //! file under a directory named, with `zoraya_elf_check::check`. Symbolic
-//! links are not followed (a link's target is checked as its own file).
+//! links are not followed (a link's target is checked as its own file), and a
+//! link to nothing fails the check (an applet link in `/bin`).
 //! Fails if any file is refused or if no file was checked.
 
 use std::path::{Path, PathBuf};
@@ -19,6 +20,8 @@ fn walk(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
         }
     } else if meta.is_file() {
         out.push(path.to_path_buf());
+    } else if meta.file_type().is_symlink() && std::fs::metadata(path).is_err() {
+        return Err(format!("{}: a symbolic link to nothing", path.display()));
     }
     Ok(())
 }

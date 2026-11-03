@@ -30,10 +30,10 @@ Apple clang 21 on the M4) and found where the accepted text and the code part. T
    `libc.c`), `src/conf` (`confstr`, `sysconf`) and `src/temp` (`mkstemp`, over `open`) are in neither list.
 4. **The secure start.** `__libc_start_main`'s `AT_SECURE` path polls fds 0 to 2 with `SYS_poll` or `SYS_ppoll` and
    opens `/dev/null`: neither is a routed call.
-5. **musl's public helpers.** Retained files define 750 global names outside the tier list
-   (`task-02/libc-surface.csv` by item 7's rule): `frexpl` and `scalbnl`
-   under `printf`, `strlcpy`, `regcomp`, the whole of `src/math`, `getpwnam`'s `nscd` client, and so on; the Rust
-   static library adds `compiler_builtins`' exports (`bcmp`, `sin`, ...) and `rust_begin_unwind`. Every one of them
+5. **musl's public helpers.** The archive defines 750 global names outside the tier list
+   (`task-02/libc-surface.csv` by item 7's rule). 673 come from musl's retained files: `frexpl` and `scalbnl`
+   under `printf`, `strlcpy`, `regcomp`, the whole of `src/math`, `getpwnam`'s `nscd` client, and so on; 77 only from
+   the Rust static library: `compiler_builtins`' exports (`bcmp`, `sin`, ...) and LLVM's `anon.*` symbols. Every one of them
    violates item 7 as written, and most are called by tier functions, so they cannot simply be left out.
 6. **The signal directory.** ADR-0100's cost estimate counts `sigemptyset`, `sigaddset` and `sigfillset` as musl C
    that stays; item 2 replaces `src/signal` whole.

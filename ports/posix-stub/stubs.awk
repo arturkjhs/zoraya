@@ -6,6 +6,7 @@ BEGIN {
     print "//! real crate. Every function fails with ENOSYS or does nothing; see the list."
     print ""
     print "#![no_std]"
+    print "// musl's internal variables have lower-case names (__default_stacksize)."
     print "#![allow(non_upper_case_globals)]"
     print ""
     print "use core::ffi::{c_int, c_long, c_void};"

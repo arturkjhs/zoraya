@@ -62,7 +62,7 @@ prints the clang it uses.
 | the host's C compiler (`cc`): dash's helpers, tcc's `c2str` and the host tcc of the link check | Apple clang 21.0.0 on the M4 | Xcode Command Line Tools / distribution |
 | `curl`, `shasum` or `sha256sum` (`make fetch-ports`) | curl 8.7.1 | macOS / distribution |
 | `patch`, `tar` with gzip and bzip2, `awk`, `sed` | the host's | macOS / distribution |
-| GNU sed, as `gsed` or `sed` (toybox's build scripts) | Homebrew's `gnu-sed` on the M4 | `brew install gnu-sed` on macOS; the default `sed` on Linux |
+| GNU sed, as `gsed` or `sed` (toybox's build scripts) | not installed on the M4 at the end of TASK-17 (`brew install gnu-sed`) | `brew install gnu-sed` on macOS; the default `sed` on Linux |
 
 `rust-objcopy`, which ADR-0109 item 10 lists, is not used: it needs the `llvm-tools` component, which the minimal
 profile of `rust-toolchain.toml` does not install, so `posix-surface-check` renames symbols itself (ADR-0141).
@@ -76,7 +76,7 @@ measured T1 workloads).
 
 | Program | Version | Licence | Used for |
 |---|---|---|---|
-| musl | 1.2.5 | MIT | the retained C of `libc.a` and the sysroot's headers (ADR-0100) |
+| musl | 1.2.5 | MIT (a few files public domain or under other permissive terms, its `COPYRIGHT`) | the retained C of `libc.a` and the sysroot's headers (ADR-0100) |
 | dash | 0.5.13.5 | BSD-3-Clause | `/bin/sh` |
 | GNU make | 4.4.1 | GPL-3.0-or-later | `/bin/make` |
 | toybox | 0.8.15 | 0BSD | `cat head ls mv rm sleep touch true uname sort wc yes` |

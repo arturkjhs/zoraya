@@ -44,6 +44,20 @@ echo "test-fetch: an archive with the wrong SHA-256 is refused and not cached (I
 printf 'x' >> "$tmp/cache/good.tar.gz"
 if tools/fetch-ports.sh --verify "$tmp/lock" "$tmp/cache" good > "$tmp/out" 2>&1; then fail "--verify accepted a corrupted cached archive"; fi
 echo "test-fetch: a cached archive corrupted later fails --verify (INV-0109-4)"
+if tools/fetch-ports.sh --verify "$tmp/lock" "$tmp/cache" nosuch > "$tmp/out" 2>&1; then fail "--verify passed a name not in the lock"; fi
+
+# The same through ports/Makefile: a corrupted musl archive in the cache stops
+# the build before anything is unpacked.
+mkdir -p "$tmp/badcache"
+musl=$(awk '$1 == "musl" { print $4 }' ports/sources.lock)
+printf 'not musl\n' > "$tmp/badcache/$musl"
+if make -f ports/Makefile CACHE="$tmp/badcache" WORK="$tmp/work2" OBJ="$tmp/obj2" LOGS="$tmp/logs2" \
+    SYSROOT="$tmp/sysroot2" headers > "$tmp/out" 2>&1; then
+    fail "ports/Makefile unpacked a corrupted archive"
+fi
+grep -q "the lock says" "$tmp/out" || { cat "$tmp/out"; fail "no hash message from ports/Makefile"; }
+[ ! -e "$tmp/work2/musl-1.2.5" ] || fail "the corrupted archive was unpacked"
+echo "test-fetch: ports/Makefile verifies a cached archive before unpacking it (INV-0109-4)"
 
 mkdir -p "$tmp/empty"
 if make -f ports/Makefile CACHE="$tmp/empty" WORK="$tmp/work" OBJ="$tmp/obj" LOGS="$tmp/logs" \

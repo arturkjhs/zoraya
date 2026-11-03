@@ -425,14 +425,15 @@ host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6
 - **`libc.a`** is 737 objects of musl's retained directories, compiled with the system-call shim, and 513 members of
   the stub `zoraya-posix` (ADR-0140: a generated Rust static library in which every function of the Rust half fails
   with `ENOSYS` or traps, and which brings `compiler_builtins`). The shim routes eleven calls; 34 files that make
-  other calls are not compiled; 750 names outside the tier list are renamed `__zoraya_*` in every object, so that the
+  other calls are not compiled; 750 names outside the tier list (673 from musl, 77 from the Rust members) are renamed `__zoraya_*` in every object, so that the
   archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141). The sysroot also has
   `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
-- **The ports.** dash (TASK-02's M4 patch), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched),
-  toybox (`cat head ls mv rm sleep touch true uname sort wc yes`, unpatched) and tcc (a `Zoraya` target and a fix
-  for `SHF_EXCLUDE` sections) build with `zcc`; `build/rootfs-posix` has them in `/bin` with a symbolic link per
-  applet and the sysroot as `/usr`. No port needed `__linux__`.
+- **The ports.** dash (TASK-02's M4 patch), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched)
+  and tcc (a `Zoraya` target and a fix for `SHF_EXCLUDE` sections) build with `zcc`, and none needed `__linux__`.
+  toybox (`cat head ls mv rm sleep touch true uname sort wc yes`) has a rule but has not been built on the M4: its
+  scripts need GNU sed, which that host lacks (TASK-17 report). `build/rootfs-posix` has the programs in `/bin`
+  with a symbolic link per applet and the sysroot as `/usr`.
 - **`make check-ports`** (the end of `make ports`): the tier list is the CSV's (INV-0100-1); `posix-surface-check`
   checks `libc.a` (exports, the exclusion table, missing names, unresolved references, the symbol index, `svc`) and
   fails on four broken copies of it; every excluded musl file is refused by the shim; `zoraya-elf-check` runs the

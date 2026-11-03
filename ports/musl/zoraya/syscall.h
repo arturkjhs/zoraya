@@ -13,7 +13,7 @@
  * calling Linux (INV-0100-2). The <bits/syscall.h> of the sysroot defines no
  * SYS_ number at all.
  *
- * The list is the one the compiler found for the files ports/musl/files.mk
+ * The list is the one the compiler found for the files ports/musl/musl.mk
  * retains (ADR-0100's open question); ADR-0141 records how it differs from
  * ADR-0100 item 2's estimate.
  */
