@@ -893,6 +893,7 @@ crates/                   no_std, host-tested
   zoraya-shell/           zosh's language (parser, globs, evaluator over a host trait, ADR-0150, ADR-0151),
                           its line editor and exit records in words; describe/ holds the language builtins' pages
   zoraya-describe/        command descriptions (NAME.cmd): the total parser of ADR-0156
+  zoraya-settings/        /config/settings: a total reader and a writer that keeps every other line (ADR-0157)
   zoraya-command/         what every native command shares: argv from its description, --help, error lines,
                           statuses in words, exit codes (ADR-0155)
   zoraya-events/          signals, port subscriptions and ready lists

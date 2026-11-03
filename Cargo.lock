@@ -308,6 +308,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-settings"
+version = "0.1.0"
+dependencies = [
+ "zoraya-describe",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-shell"
 version = "0.1.0"
 dependencies = [
