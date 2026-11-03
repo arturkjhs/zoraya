@@ -379,14 +379,7 @@ fn rig_without_root() -> Rig {
     let (service, root) = volume(&net, 1024);
     r.p.sys.services.push(service);
     let mut fresh = zoraya_posix::process::Posix::new(
-        std::mem::replace(
-            &mut r.p.sys,
-            Fake {
-                net: net.clone(),
-                services: vec![],
-                waits: 0,
-            },
-        ),
+        std::mem::replace(&mut r.p.sys, Fake::new(net.clone(), vec![])),
         Default::default(),
     );
     let work = fresh.add_entry("/work", EntryKind::Directory, Some(root));
@@ -669,3 +662,530 @@ fn fchmod_by_place_acts_only_on_the_fds_object() {
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md):
 // the library's cap does not reach an integration test binary.
 zoraya_test_alloc::cap_memory!();
+
+// ---- the holes the mutation run of zoraya-posix found (TASK-20 review) ----
+
+use zoraya_posix::process::{F_DUPFD_CLOEXEC, F_SETFD as SETFD};
+use zoraya_posix::sys::User;
+use zoraya_proto_file as proto;
+use zoraya_protocol::{Below, Data, Text, encode};
+
+/// The kernel handle of a pipe fd's read end.
+fn read_end(r: &Rig, fd: i32) -> H {
+    match r.p.fds.get(fd) {
+        Some(process::Desc::Stream { read: Some(h), .. }) => *h,
+        _ => panic!("fd {fd} is no read end"),
+    }
+}
+
+fn fd_flag(r: &mut Rig, fd: i32) -> i32 {
+    r.p.fcntl(fd, F_GETFD, 0).unwrap()
+}
+
+/// A Tmp entry: a second volume standing in for the temporary service.
+fn with_tmp(r: &mut Rig) {
+    r.p.mkdir_at(AT_FDCWD, b"/tmp", 0o777).unwrap();
+    let net = r.net.clone();
+    let (service, tmp) = volume(&net, 1024);
+    r.p.sys.services.push(service);
+    r.p.add_entry("/tmp", EntryKind::Tmp, Some(tmp));
+}
+
+/// A message with any ordinal and body, as no service would send.
+fn raw_reply(ordinal: u32, transaction: u32, body: &[u8]) -> Vec<u8> {
+    let mut magic = [0u8; 64];
+    encode(&zoraya_protocol::ErrorReply { status: 0 }, 0, &mut magic).unwrap();
+    let mut m = magic[..4].to_vec();
+    m.extend_from_slice(&ordinal.to_le_bytes());
+    m.extend_from_slice(&transaction.to_le_bytes());
+    m.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    m.extend_from_slice(body);
+    m
+}
+
+fn reply<'a, M: zoraya_protocol::Message<'a>>(m: M) -> impl FnOnce(u32) -> Vec<u8> {
+    let mut out = vec![0u8; 70_000];
+    let mut keep = Some(move |t: u32| {
+        let n = encode(&m, t, &mut out).unwrap();
+        out.truncate(n);
+        out
+    });
+    move |t| (keep.take().unwrap())(t)
+}
+
+#[test]
+fn fd_flags_are_set_only_as_asked() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    assert_eq!(fd_flag(&mut r, fd), 0);
+    let n = open(&mut r, "/dev/null", o::RDWR | o::CLOEXEC, 0).unwrap();
+    assert_eq!(fd_flag(&mut r, n), FD_CLOEXEC);
+    let n = open(&mut r, "/dev/null", o::RDWR, 0).unwrap();
+    assert_eq!(fd_flag(&mut r, n), 0);
+    let (a, b) = r.p.pipe(0).unwrap();
+    assert_eq!((fd_flag(&mut r, a), fd_flag(&mut r, b)), (0, 0));
+    let (a, b) = r.p.pipe(o::CLOEXEC).unwrap();
+    assert_eq!(
+        (fd_flag(&mut r, a), fd_flag(&mut r, b)),
+        (FD_CLOEXEC, FD_CLOEXEC)
+    );
+    assert_eq!(r.p.dup3(fd, 9, 0, false), Ok(9));
+    assert_eq!(fd_flag(&mut r, 9), 0);
+    assert_eq!(r.p.fcntl(fd, F_DUPFD, 20), Ok(20));
+    assert_eq!(fd_flag(&mut r, 20), 0);
+    assert_eq!(r.p.fcntl(fd, F_DUPFD_CLOEXEC, 30), Ok(30));
+    assert_eq!(fd_flag(&mut r, 30), FD_CLOEXEC);
+    r.p.fcntl(30, SETFD, 0).unwrap();
+    assert_eq!(fd_flag(&mut r, 30), 0);
+}
+
+#[test]
+fn dup3_takes_its_flags_and_refuses_the_others() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    assert_eq!(r.p.dup3(fd, 8, 0, true), Ok(8));
+    assert_eq!(r.p.dup3(fd, 9, o::CLOEXEC, true), Ok(9));
+    assert_eq!(fd_flag(&mut r, 9), FD_CLOEXEC);
+    assert_eq!(r.p.dup3(fd, 10, 1, true), Err(EINVAL));
+}
+
+#[test]
+fn fcntl_setfl_sets_nonblock_on_a_pipe() {
+    let mut r = rig();
+    let (rd, _) = r.p.pipe(0).unwrap();
+    r.p.fcntl(rd, F_SETFL, i64::from(o::NONBLOCK)).unwrap();
+    assert_eq!(
+        r.p.fcntl(rd, F_GETFL, 0),
+        Ok((o::RDONLY | o::NONBLOCK) as i32)
+    );
+    assert_eq!(r.read(rd, 1), Err(EAGAIN));
+    r.p.fcntl(rd, F_SETFL, 0).unwrap();
+    assert_eq!(r.p.fcntl(rd, F_GETFL, 0), Ok(o::RDONLY as i32));
+}
+
+#[test]
+fn open_flags_reach_the_service_as_asked() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", o::RDWR | o::CREAT, 0o644).unwrap();
+    r.write(fd, b"abc").unwrap();
+    r.p.lseek(fd, 0, 0).unwrap();
+    r.write(fd, b"X").unwrap();
+    r.p.lseek(fd, 0, 0).unwrap();
+    assert_eq!(
+        r.read(fd, 10).unwrap(),
+        b"Xbc",
+        "no append without O_APPEND"
+    );
+    assert!(
+        open(&mut r, "f", RW_CREATE, 0o644).is_ok(),
+        "O_CREAT alone opens what exists"
+    );
+    assert_eq!(open(&mut r, "f", o::RDONLY | o::DIRECTORY, 0), Err(ENOTDIR));
+    assert!(
+        open(&mut r, "f", o::RDONLY | o::NOFOLLOW, 0).is_ok(),
+        "a file is no link"
+    );
+    assert_eq!(r.p.lseek(fd, 0, 2), Ok(3), "SEEK_END");
+}
+
+#[test]
+fn an_entry_root_named_without_a_slash_opens_as_a_directory() {
+    let mut r = rig_without_root();
+    let fd = open(&mut r, "/work", o::RDONLY, 0).unwrap();
+    r.p.is_directory(fd).unwrap();
+    assert_eq!(
+        open(&mut r, "/work", RW_CREATE | o::EXCL, 0o644),
+        Err(EEXIST)
+    );
+}
+
+#[test]
+fn o_tmpfile_takes_the_mode_and_cloexec_it_asks_for() {
+    let mut r = rig();
+    with_tmp(&mut r);
+    let t = open(&mut r, "/tmp", o::TMPFILE | o::CREAT | o::RDWR, 0o640).unwrap();
+    assert_eq!(fd_flag(&mut r, t), 0);
+    r.p.publish(t, AT_FDCWD, b"/tmp/named").unwrap();
+    let st = r.p.stat_at(AT_FDCWD, b"/tmp/named", 0).unwrap();
+    assert_eq!(u32_at(&st, 16) & 0o7777, 0o640);
+    let c = open(&mut r, "/tmp", o::TMPFILE | o::RDWR | o::CLOEXEC, 0o600).unwrap();
+    assert_eq!(fd_flag(&mut r, c), FD_CLOEXEC);
+    assert_eq!(
+        open(&mut r, "/tmp", o::TMPFILE | o::RDONLY, 0o600),
+        Err(EINVAL)
+    );
+}
+
+#[test]
+fn a_refused_create_is_reported_as_a_write() {
+    let mut r = rig_without_root();
+    assert_eq!(
+        open(&mut r, "/elsewhere/c", o::RDONLY | o::CREAT, 0o644),
+        Err(ENOENT)
+    );
+    assert_eq!(
+        r.reports(),
+        vec![(Access::Write, 0, "/elsewhere/c".to_string())]
+    );
+}
+
+#[test]
+fn pipes_wait_and_count_as_posix_says() {
+    let mut r = rig();
+    let (rd, _wr) = r.p.pipe(0).unwrap();
+    // The fake ends a wait nothing could end with EBUSY: the read waited.
+    assert_eq!(r.read(rd, 1), Err(EBUSY));
+    let (_nrd, nwr) = r.p.pipe(o::NONBLOCK).unwrap();
+    let big = vec![1u8; 2 * STREAM_CAPACITY];
+    assert_eq!(r.write(nwr, &big), Ok(STREAM_CAPACITY), "what fit");
+    // A blocking write of twice the ring, with a reader draining it meanwhile.
+    let (brd, bwr) = r.p.pipe(0).unwrap();
+    let brd = read_end(&r, brd);
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| {
+        n.drain(brd, usize::MAX);
+    }));
+    assert_eq!(r.write(bwr, &big), Ok(2 * STREAM_CAPACITY));
+    // A reader that closes while the writer waits: the count written.
+    let (crd, cwr) = r.p.pipe(0).unwrap();
+    let crd = read_end(&r, crd);
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| n.close(crd)));
+    assert_eq!(r.write(cwr, &big), Ok(STREAM_CAPACITY));
+    r.p.sys.meanwhile = None;
+    assert_eq!(
+        r.write(cwr, b"x"),
+        Err(EPIPE),
+        "and the next write meets EPIPE"
+    );
+}
+
+#[test]
+fn a_transfer_up_to_max_inline_is_one_request() {
+    let mut r = rig();
+    let requests = |r: &mut Rig, f: &mut dyn FnMut(&mut Rig)| {
+        let before = r.p.stats.requests;
+        f(r);
+        r.p.stats.requests - before
+    };
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    assert_eq!(
+        requests(&mut r, &mut |r| assert_eq!(
+            r.write(fd, b"0123456789"),
+            Ok(10)
+        )),
+        1
+    );
+    let fd = open(&mut r, "g", RW_CREATE, 0o644).unwrap();
+    let block = vec![7u8; 61_440];
+    assert_eq!(
+        requests(&mut r, &mut |r| assert_eq!(r.write(fd, &block), Ok(61_440))),
+        1
+    );
+    let fd = open(&mut r, "g", o::RDONLY, 0).unwrap();
+    assert_eq!(
+        requests(&mut r, &mut |r| assert_eq!(
+            r.read(fd, 61_440).unwrap().len(),
+            61_440
+        )),
+        1
+    );
+    let fd = open(&mut r, "g", o::RDONLY, 0).unwrap();
+    assert_eq!(
+        requests(&mut r, &mut |r| assert_eq!(
+            r.read(fd, 4096).unwrap().len(),
+            4096
+        )),
+        1
+    );
+    let fd = open(&mut r, "h", RW_CREATE, 0o644).unwrap();
+    r.write(fd, &vec![3u8; 102_400]).unwrap();
+    r.p.lseek(fd, 0, 0).unwrap();
+    assert_eq!(
+        r.read(fd, 102_400).unwrap().len(),
+        102_400,
+        "past MAX_INLINE, whole"
+    );
+    let e = open(&mut r, "empty", RW_CREATE, 0o644).unwrap();
+    r.p.close(e).unwrap();
+    let n = requests(&mut r, &mut |r| {
+        open(r, "empty", o::WRONLY | o::TRUNC, 0).unwrap();
+    });
+    assert_eq!(n, 1, "an empty file needs no set_size");
+    assert_eq!(r.p.write(fd, User::new(0, usize::MAX)), Err(EINVAL));
+}
+
+#[test]
+fn a_write_the_volume_cannot_take_is_its_count_then_enospc() {
+    let mut r = rig_sized(400);
+    let fd = open(&mut r, "big", RW_CREATE, 0o644).unwrap();
+    let data = vec![9u8; 2 << 20];
+    assert_eq!(
+        r.write(fd, &data),
+        Ok(1 << 20),
+        "the first MiB fits, the second not"
+    );
+    assert_eq!(r.write(fd, &data[..1 << 20]), Err(ENOSPC));
+}
+
+#[test]
+fn special_files_report_their_modes_and_errors() {
+    let mut r = rig();
+    let (rd, _) = r.p.pipe(0).unwrap();
+    assert_eq!(u32_at(&r.p.fstat(rd).unwrap(), 16) & 0o777, 0o600);
+    let n = open(&mut r, "/dev/null", o::RDWR, 0).unwrap();
+    assert_eq!(u32_at(&r.p.fstat(n).unwrap(), 16) & 0o777, 0o666);
+    assert_eq!(
+        u32_at(&r.p.stat_at(AT_FDCWD, b"/dev/null", 0).unwrap(), 16) & 0o777,
+        0o666
+    );
+    r.p.add_entry("/proc/self/exe", EntryKind::Image, None);
+    assert_eq!(
+        u32_at(&r.p.stat_at(AT_FDCWD, b"/proc/self/exe", 0).unwrap(), 16) & 0o777,
+        0o555
+    );
+    r.p.add_entry("/dev/tty", EntryKind::Terminal, None);
+    assert_eq!(open(&mut r, "/dev/tty", o::RDWR, 0), Err(ENXIO));
+    assert_eq!(open(&mut r, "/proc/self/exe", o::RDONLY, 0), Err(EACCES));
+    // A name under a special entry is ENOTDIR, whatever the call.
+    let t = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    assert_eq!(r.p.mkdir_at(AT_FDCWD, b"/dev/null/x", 0o755), Err(ENOTDIR));
+    assert_eq!(r.p.symlink_at(b"x", AT_FDCWD, b"/dev/null/x"), Err(ENOTDIR));
+    assert_eq!(
+        r.p.publish(t, AT_FDCWD, b"/dev/null/x"),
+        Err(EPERM),
+        "a named file first"
+    );
+    assert_eq!(r.p.unlink_at(AT_FDCWD, b"/dev/null/x", 0), Err(ENOTDIR));
+    assert_eq!(r.p.mkdir_at(AT_FDCWD, b"/dev/null", 0o755), Err(EEXIST));
+    assert_eq!(r.p.unlink_at(AT_FDCWD, b"/dev/null", 0), Err(EBUSY));
+    assert_eq!(r.p.rename(b"f", b"/dev/null"), Err(EXDEV));
+    assert_eq!(r.p.rename(b"missing/f", b"/"), Err(EBUSY));
+}
+
+#[test]
+fn stat_at_takes_an_empty_path_only_with_at_empty_path() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    assert_eq!(r.p.stat_at(AT_FDCWD, b"", 0), Err(ENOENT));
+    assert_eq!(
+        r.p.stat_at(fd, b"", zoraya_posix::process::AT_EMPTY_PATH),
+        r.p.fstat(fd)
+    );
+}
+
+#[test]
+fn access_and_utimensat_follow_a_link_unless_told_not_to() {
+    let mut r = rig();
+    r.p.symlink_at(b"nowhere", AT_FDCWD, b"dangle").unwrap();
+    assert_eq!(r.p.access_at(AT_FDCWD, b"dangle", 0, 0), Err(ENOENT));
+    assert_eq!(
+        r.p.access_at(AT_FDCWD, b"dangle", 0, AT_SYMLINK_NOFOLLOW),
+        Ok(())
+    );
+    let at = Target::Path(AT_FDCWD, b"dangle");
+    assert_eq!(r.p.set_mtime(at, Some((10, 0)), 0), Err(ENOENT));
+    let at = Target::Path(AT_FDCWD, b"dangle");
+    assert_eq!(
+        r.p.set_mtime(at, Some((10, 0)), AT_SYMLINK_NOFOLLOW),
+        Ok(())
+    );
+    let ro = open(&mut r, "ro", o::WRONLY | o::CREAT, 0o444).unwrap();
+    r.p.close(ro).unwrap();
+    assert_eq!(
+        r.p.access_at(AT_FDCWD, b"ro", 0, AT_SYMLINK_NOFOLLOW),
+        Ok(())
+    );
+    assert_eq!(r.p.access_at(AT_FDCWD, b"ro", 0, 0x1), Err(EINVAL));
+    let wo = open(&mut r, "wo", o::WRONLY | o::CREAT, 0o200).unwrap();
+    r.p.close(wo).unwrap();
+    assert_eq!(r.p.access_at(AT_FDCWD, b"wo", R_OK, 0), Err(EACCES));
+    assert_eq!(r.p.access_at(AT_FDCWD, b"wo", 0, 0), Ok(()));
+    assert_eq!(r.p.fchmod_at(AT_FDCWD, b"wo", 0o600, 0x1), Err(EINVAL));
+    assert_eq!(
+        r.p.fchmod_at(AT_FDCWD, b"wo", 0o600, AT_SYMLINK_NOFOLLOW),
+        Err(ENOTSUP)
+    );
+}
+
+#[test]
+fn naming_calls_refuse_the_root_and_dot_names_and_close_what_they_open() {
+    let mut r = rig();
+    with_tmp(&mut r);
+    let t = open(&mut r, "/tmp", o::TMPFILE | o::RDWR, 0o600).unwrap();
+    assert_eq!(r.p.mkdir_at(AT_FDCWD, b"/", 0o755), Err(EEXIST));
+    assert_eq!(r.p.symlink_at(b"x", AT_FDCWD, b"/"), Err(EEXIST));
+    assert_eq!(r.p.publish(t, AT_FDCWD, b"/"), Err(EEXIST));
+    assert_eq!(r.p.symlink_at(b"x", AT_FDCWD, b"new/."), Err(EEXIST));
+    assert_eq!(r.p.publish(t, AT_FDCWD, b"/tmp/new/."), Err(EEXIST));
+    r.settle();
+    let before = r.handles();
+    r.p.mkdir_at(AT_FDCWD, b"d", 0o755).unwrap();
+    r.p.mkdir_at(AT_FDCWD, b"d/e", 0o755).unwrap();
+    r.p.remove(b"d/e").unwrap();
+    r.p.remove(b"d").unwrap();
+    r.settle();
+    assert_eq!(r.handles(), before, "a nested name's parent is closed");
+}
+
+#[test]
+fn share_gives_a_connection_to_the_same_description() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    r.write(fd, b"shared").unwrap();
+    r.p.lseek(fd, 2, 0).unwrap();
+    let h = r.p.share(fd).unwrap();
+    assert_eq!(r.p.stats.shares, 1);
+    let mut out = vec![0u8; 256];
+    let n = encode(&proto::ReadCurrent { length: 4 }, 77, &mut out).unwrap();
+    r.p.sys.channel_write(h, &out[..n], &[]).unwrap();
+    r.p.sys
+        .wait(h, zoraya_posix::sys::signals::READABLE)
+        .unwrap();
+    let mut back = vec![0u8; 70_000];
+    let mut handles = vec![];
+    let n = r.p.sys.channel_read(h, &mut back, &mut handles).unwrap();
+    let (_, m) = zoraya_protocol::decode::<proto::ReadReply<'_>>(&back[..n], 0).unwrap();
+    assert_eq!(
+        (m.status.0, m.data.0),
+        (proto::status::OK, &b"ared"[..]),
+        "one position"
+    );
+    assert_eq!(r.p.lseek(fd, 0, 1), Ok(6));
+}
+
+#[test]
+fn the_counters_and_the_table_setters_do_what_they_say() {
+    let mut r = rig();
+    let before = r.p.stats;
+    r.p.stat_at(AT_FDCWD, b"/", 0).unwrap();
+    assert_eq!(r.p.stats.resolutions, before.resolutions + 1);
+    assert!(r.p.stats.resolve_ns > before.resolve_ns);
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    let before = r.p.stats;
+    r.p.lseek(fd, 0, 0).unwrap();
+    assert_eq!(
+        (r.p.stats.requests, r.p.stats.seeks),
+        (before.requests + 1, before.seeks + 1)
+    );
+    let root = r.root;
+    assert_eq!(r.p.add_entry("/sub", EntryKind::Directory, Some(root)), 2);
+    assert_eq!(r.p.add_entry("/sub2", EntryKind::Directory, Some(root)), 3);
+    r.p.set_cwd(2, "a", zoraya_posix::path::Form::Absolute);
+    assert_eq!(r.p.getcwd(), "/sub/a");
+}
+
+#[test]
+fn from_bootstrap_takes_the_form_fds_and_kinds_from_the_record() {
+    use zoraya_abi::posix::{ABSOLUTE, Bootstrap, Entry, Fd, FdKind, NO_HANDLE, encode};
+    for flags in [0, ABSOLUTE] {
+        let mut r = rig();
+        let root = r.root;
+        let entries = [Entry {
+            prefix: "/work",
+            kind: EntryKind::Directory,
+            handle: 0,
+        }];
+        let fds = [
+            Fd {
+                fd: 3,
+                kind: FdKind::Dir,
+                flags: zoraya_abi::posix::FD_NONBLOCK,
+                tty: NO_HANDLE,
+            },
+            Fd {
+                fd: 4,
+                kind: FdKind::File,
+                flags: 0,
+                tty: NO_HANDLE,
+            },
+        ];
+        let mut bytes = [0u8; 512];
+        let facts = Default::default();
+        let n = encode(&facts, flags, "/x", 0, "", &fds, &entries, 1, &mut bytes).unwrap();
+        let record = Bootstrap::decode(&bytes[..n], 1).unwrap();
+        let sys = std::mem::replace(&mut r.p.sys, Fake::new(r.net.clone(), vec![]));
+        let mut p =
+            zoraya_posix::process::Posix::from_bootstrap(sys, &record, &[root], |_| root, None);
+        let up = p.resolve(AT_FDCWD, b"../../x", Access::Read);
+        if flags == ABSOLUTE {
+            assert_eq!(up.map(|r| r.absolute), Err(ENOENT), "climbs out of /work");
+        } else {
+            assert_eq!(up.unwrap().absolute, "/work/x", "stays in /work");
+        }
+        assert_eq!(p.is_directory(3), Ok(()));
+        assert_eq!(p.is_directory(4), Err(ENOTDIR));
+        assert_eq!(
+            p.fcntl(3, F_GETFL, 0).unwrap() as u32 & o::NONBLOCK,
+            o::NONBLOCK
+        );
+        assert_eq!(p.fcntl(4, F_GETFL, 0).unwrap() as u32 & o::NONBLOCK, 0);
+    }
+}
+
+/// Replies with a status that is not OK are the status's errno, whatever
+/// else they carry; a reply that does not decode is judged by its status
+/// word. The service sends such replies only when its engine fails, so the
+/// fake kernel crafts them.
+#[test]
+fn a_reply_that_is_not_ok_is_its_errno_whatever_else_it_carries() {
+    use proto::status::*;
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    r.write(fd, b"data").unwrap();
+    let stat = proto::StatReply {
+        status: Below(ACCESS_DENIED),
+        volume: 1,
+        id: 2,
+        size: 3,
+        modified_seconds: 4,
+        modified_nanos: 5,
+        changed_seconds: 6,
+        changed_nanos: 7,
+        mode: 0o644,
+        kind: Below(0),
+    };
+    r.p.sys.craft = Some(Box::new(reply(stat)));
+    assert_eq!(r.p.fstat(fd), Err(EACCES));
+    r.p.lseek(fd, 0, 0).unwrap();
+    let read = proto::ReadReply {
+        status: Below(CORRUPT),
+        data: Data(b""),
+    };
+    r.p.sys.craft = Some(Box::new(reply(read)));
+    assert_eq!(r.read(fd, 10), Err(EIO));
+    r.p.symlink_at(b"t", AT_FDCWD, b"l").unwrap();
+    let link = proto::ReadLinkReply {
+        status: Below(CORRUPT),
+        target: Text(""),
+    };
+    r.p.sys.craft = Some(Box::new(reply(link)));
+    r.p.sys.craft_skip = 1;
+    assert_eq!(r.p.readlink_at(AT_FDCWD, b"l"), Err(EIO));
+    let dir = open(&mut r, "/", o::RDONLY, 0).unwrap();
+    let listing = proto::ReadDirectoryReply {
+        status: Below(CORRUPT),
+        entries: zoraya_protocol::Seq::Of(&[]),
+    };
+    r.p.sys.craft = Some(Box::new(reply(listing)));
+    assert_eq!(r.p.read_dir(dir), Err(EIO));
+    let token = proto::TokenReply {
+        status: Below(ACCESS_DENIED),
+    };
+    r.p.sys.craft = Some(Box::new(reply(token)));
+    assert_eq!(r.p.rename(b"f", b"g"), Err(EACCES));
+    // Ordinal 99, a status word ACCESS_DENIED: judged by the word.
+    r.p.sys.craft = Some(Box::new(|t| raw_reply(99, t, &ACCESS_DENIED.to_le_bytes())));
+    assert_eq!(r.p.fstat(fd), Err(EACCES));
+    // The generic reply with a word too many does not decode: EINVAL.
+    let mut body = ACCESS_DENIED.to_le_bytes().to_vec();
+    body.extend_from_slice(&[0; 4]);
+    r.p.sys.craft = Some(Box::new(move |t| raw_reply(0, t, &body)));
+    assert_eq!(r.p.fstat(fd), Err(EINVAL));
+}
+
+/// An O_DSYNC write is durable: its connection holds SYNC as well as WRITE.
+#[test]
+fn a_dsync_write_is_durable() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", o::WRONLY | o::CREAT | o::DSYNC, 0o644).unwrap();
+    assert_eq!(r.write(fd, b"abcd"), Ok(4));
+}

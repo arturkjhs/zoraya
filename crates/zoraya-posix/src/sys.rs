@@ -87,3 +87,27 @@ pub trait Sys {
     /// Nanoseconds on the monotonic clock.
     fn now(&mut self) -> u64;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_signal_bits_are_the_abis() {
+        use zoraya_abi::{channel_signals, stream_signals};
+        assert_eq!(signals::READABLE, channel_signals::READABLE);
+        assert_eq!(signals::WRITABLE, channel_signals::WRITABLE);
+        assert_eq!(signals::PEER_CLOSED, channel_signals::PEER_CLOSED);
+        assert_eq!(signals::READABLE, stream_signals::READABLE);
+        assert_eq!(signals::WRITABLE, stream_signals::WRITABLE);
+        assert_eq!(signals::PEER_CLOSED, stream_signals::PEER_CLOSED);
+    }
+
+    #[test]
+    fn a_part_stays_inside() {
+        let u = User::new(0x1000, 10);
+        assert_eq!(u.part(4, 100), User::new(0x1004, 6));
+        assert_eq!(u.part(4, 3), User::new(0x1004, 3));
+        assert_eq!(u.part(20, 3), User::new(0x100a, 0));
+    }
+}

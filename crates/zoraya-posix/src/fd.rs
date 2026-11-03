@@ -255,6 +255,10 @@ mod tests {
             t.install(0, 'f', true).unwrap();
             assert_eq!(t.dup(0, 0, false), Ok(1));
             assert!(t.same(0, 1));
+            t.install(0, 'h', false).unwrap();
+            assert!(!t.same(0, 2) && !t.same(2, 1), "another entry");
+            assert!(!t.same(0, 9), "a closed fd");
+            t.close(2).unwrap();
             assert_eq!((t.cloexec(0), t.cloexec(1)), (Ok(true), Ok(false)));
             assert_eq!(t.entries(), 1);
             *t.get_mut(1).unwrap() = 'g';

@@ -324,6 +324,14 @@ mod tests {
         }
     }
 
+    /// The record refuses one prefix twice; a table built otherwise gives
+    /// the first of them.
+    #[test]
+    fn of_two_equal_prefixes_the_first_wins() {
+        assert_eq!(longest(["/a", "/a"].into_iter(), "/a/x"), Some((0, "x")));
+        assert_eq!(longest(["/", "/a", "/a"].into_iter(), "/a"), Some((1, "")));
+    }
+
     #[test]
     fn an_absolute_path_no_entry_covers_is_refused_as_outside() {
         let table = ["/work", "/bin"];

@@ -54,7 +54,9 @@ pub struct Net {
     objects: BTreeMap<u32, Obj>,
     /// Handles held to each object.
     holders: BTreeMap<u32, u32>,
-    interests: BTreeMap<u64, (H, Interest)>,
+    /// Each service's subscriptions, by its id and its keys.
+    interests: BTreeMap<(u32, u64), (H, Interest)>,
+    services: u32,
     pub reports: Vec<u32>,
     pub now: u64,
 }
@@ -77,7 +79,19 @@ impl Net {
         self.handles.get(&h).copied()
     }
 
-    fn close(&mut self, h: H) {
+    /// Takes up to `n` bytes out of the stream whose read end is `h`, as a
+    /// reader in another process would.
+    pub fn drain(&mut self, h: H, n: usize) -> usize {
+        let Some(Obj::StreamRead(r)) = self.object(h).and_then(|o| self.objects.get(&o)) else {
+            return 0;
+        };
+        let mut r = r.borrow_mut();
+        let k = n.min(r.bytes.len());
+        r.bytes.drain(..k);
+        k
+    }
+
+    pub fn close(&mut self, h: H) {
         let Some(object) = self.handles.remove(&h) else {
             return;
         };
@@ -161,9 +175,10 @@ impl Net {
     }
 }
 
-/// The service's side.
+/// The service's side: the net and the service's id, which keeps its
+/// subscription keys apart from another service's.
 #[derive(Clone)]
-pub struct Wire(pub Rc<RefCell<Net>>);
+pub struct Wire(pub Rc<RefCell<Net>>, pub u32);
 
 impl Transport for Wire {
     type End = H;
@@ -207,7 +222,11 @@ impl Transport for Wire {
     }
 
     fn interest(&mut self, end: H, key: u64, interest: Interest) -> bool {
-        self.0.borrow_mut().interests.insert(key, (end, interest));
+        let id = self.1;
+        self.0
+            .borrow_mut()
+            .interests
+            .insert((id, key), (end, interest));
         true
     }
 
@@ -276,7 +295,10 @@ impl Transport for Wire {
 
     fn wait(&mut self, _deadline: Option<u64>) -> Wake {
         let n = self.0.borrow();
-        for (key, (end, interest)) in &n.interests {
+        for ((id, key), (end, interest)) in &n.interests {
+            if *id != self.1 {
+                continue;
+            }
             let s = n.signals(*end);
             let ready = match interest {
                 Interest::Requests => s & (signals::READABLE | signals::PEER_CLOSED) != 0,
@@ -325,10 +347,36 @@ impl Device for TestDevice {
 pub type Svc = Service<TestDevice, TestClock, Wire>;
 
 /// The library's side.
+/// A reply to give instead of the next one, from its transaction.
+pub type Craft = Box<dyn FnOnce(u32) -> Vec<u8>>;
+/// What another process does while a wait waits.
+pub type Meanwhile = Box<dyn FnMut(&mut Net)>;
+
 pub struct Fake {
     pub net: Rc<RefCell<Net>>,
     pub services: Vec<Rc<RefCell<Svc>>>,
     pub waits: u32,
+    /// Replaces the next reply read: given the reply's transaction, the
+    /// bytes to give instead (a reply the service would never send).
+    pub craft: Option<Craft>,
+    /// Replies to let through before `craft` takes one.
+    pub craft_skip: u32,
+    /// Run when a wait finds nothing yet, before the services: what another
+    /// process would do meanwhile (drain a stream, close its reader).
+    pub meanwhile: Option<Meanwhile>,
+}
+
+impl Fake {
+    pub fn new(net: Rc<RefCell<Net>>, services: Vec<Rc<RefCell<Svc>>>) -> Fake {
+        Fake {
+            net,
+            services,
+            waits: 0,
+            craft: None,
+            craft_skip: 0,
+            meanwhile: None,
+        }
+    }
 }
 
 impl Fake {
@@ -338,6 +386,13 @@ impl Fake {
             let s = self.net.borrow().signals(h);
             if s & wanted != 0 {
                 return Ok(s);
+            }
+            if let Some(f) = self.meanwhile.as_mut() {
+                f(&mut self.net.borrow_mut());
+                let s = self.net.borrow().signals(h);
+                if s & wanted != 0 {
+                    return Ok(s);
+                }
             }
             let mut stepped = false;
             for service in &self.services {
@@ -381,7 +436,7 @@ impl Sys for Fake {
     }
 
     fn channel_write(&mut self, end: H, bytes: &[u8], moved: &[H]) -> Result<(), Status> {
-        let r = Wire(self.net.clone()).write(end, bytes, moved);
+        let r = Wire(self.net.clone(), 0).write(end, bytes, moved);
         match r {
             Outgoing::Sent => Ok(()),
             _ => {
@@ -399,8 +454,21 @@ impl Sys for Fake {
         bytes: &mut [u8],
         handles: &mut Vec<H>,
     ) -> Result<usize, Status> {
-        match Wire(self.net.clone()).read(end, bytes, handles) {
-            Incoming::Message(n) => Ok(n),
+        match Wire(self.net.clone(), 0).read(end, bytes, handles) {
+            Incoming::Message(n) if self.craft.is_some() && self.craft_skip > 0 => {
+                self.craft_skip -= 1;
+                Ok(n)
+            }
+            Incoming::Message(n) => match self.craft.take() {
+                Some(craft) => {
+                    let (header, _) = zoraya_protocol::Header::decode(&bytes[..n]).unwrap();
+                    let t = header.transaction;
+                    let crafted = craft(t);
+                    bytes[..crafted.len()].copy_from_slice(&crafted);
+                    Ok(crafted.len())
+                }
+                None => Ok(n),
+            },
             Incoming::Empty => Err(Status::WouldBlock),
             Incoming::Closed => Err(Status::PeerClosed),
             Incoming::Refused => Err(Status::BadHandle),
@@ -493,7 +561,7 @@ impl Sys for Fake {
     }
 
     fn memory_map(&mut self, object: H, length: u64) -> Result<u64, Status> {
-        Wire(self.net.clone())
+        Wire(self.net.clone(), 0)
             .map(object, length)
             .ok_or(Status::InvalidArgument)
     }
@@ -535,12 +603,13 @@ pub fn volume(net: &Rc<RefCell<Net>>, blocks: u64) -> (Rc<RefCell<Svc>>, H) {
         MountOptions::default(),
     )
     .unwrap();
-    let service = Rc::new(RefCell::new(Service::new(volume, Wire(net.clone()))));
-    let mut fake = Fake {
-        net: net.clone(),
-        services: vec![],
-        waits: 0,
+    let id = {
+        let mut n = net.borrow_mut();
+        n.services += 1;
+        n.services
     };
+    let service = Rc::new(RefCell::new(Service::new(volume, Wire(net.clone(), id))));
+    let mut fake = Fake::new(net.clone(), vec![]);
     let (client, server) = fake.channel_create().unwrap();
     assert!(service.borrow_mut().add_root(server));
     (service, client)
@@ -571,13 +640,14 @@ pub const ARENA: usize = 4 * 1024 * 1024;
 /// A process with `/` on a fresh volume, `/dev/null`, a `/tmp` that is a
 /// directory of the same volume, and cwd `/`.
 pub fn rig() -> Rig {
+    rig_sized(2048)
+}
+
+/// `rig` with a root volume of `blocks` blocks of 4 KiB.
+pub fn rig_sized(blocks: u64) -> Rig {
     let net = Rc::new(RefCell::new(Net::default()));
-    let (service, root) = volume(&net, 2048);
-    let mut fake = Fake {
-        net: net.clone(),
-        services: vec![service],
-        waits: 0,
-    };
+    let (service, root) = volume(&net, blocks);
+    let mut fake = Fake::new(net.clone(), vec![service]);
     let arena = fake.memory_create(ARENA as u64).unwrap();
     let base = fake.memory_map(arena, ARENA as u64).unwrap();
     let (report, reports) = fake.channel_create().unwrap();

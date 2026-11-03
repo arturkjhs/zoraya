@@ -645,6 +645,17 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// For a call that names something in a directory: a name under a
+    /// special entry (`/dev/null/x`) is `ENOTDIR`, as POSIX has it for a
+    /// path through a non-directory; the special entry itself is `taken`.
+    fn under_special(&self, r: &Resolved, taken: i32) -> Result<(), i32> {
+        match self.special(r) {
+            Some(_) if !r.place.path.is_empty() => Err(ENOTDIR),
+            Some(_) => Err(taken),
+            None => Ok(()),
+        }
+    }
+
     /// The entry `r` lands in, if it is not a directory: those are answered
     /// here (`/dev/null`, `/proc/self/exe`, `/dev/tty`).
     fn special(&self, r: &Resolved) -> Option<EntryKind> {
@@ -1198,7 +1209,8 @@ impl<S: Sys> Posix<S> {
 
     pub fn mkdir_at(&mut self, dirfd: i32, path: &[u8], mode: u32) -> Result<(), i32> {
         let r = self.resolve(dirfd, path, Access::Write)?;
-        if self.special(&r).is_some() || r.place.path.is_empty() || r.dot {
+        self.under_special(&r, EEXIST)?;
+        if r.place.path.is_empty() || r.dot {
             return Err(EEXIST);
         }
         let (conn, temporary, name, _) = self.parent(&r, rights::CREATE)?;
@@ -1221,7 +1233,8 @@ impl<S: Sys> Posix<S> {
         if r.dot {
             return Err(EINVAL);
         }
-        if self.special(&r).is_some() || r.place.path.is_empty() {
+        self.under_special(&r, EBUSY)?;
+        if r.place.path.is_empty() {
             return Err(EBUSY);
         }
         let kind = match self.open_place(&r, open_flags::NO_FOLLOW, 0, 0, 0)? {
@@ -1307,7 +1320,8 @@ impl<S: Sys> Posix<S> {
     pub fn symlink_at(&mut self, target: &[u8], dirfd: i32, path: &[u8]) -> Result<(), i32> {
         let target = path::check(target)?.to_string();
         let r = self.resolve(dirfd, path, Access::Write)?;
-        if self.special(&r).is_some() || r.place.path.is_empty() || r.dot {
+        self.under_special(&r, EEXIST)?;
+        if r.place.path.is_empty() || r.dot {
             return Err(EEXIST);
         }
         let (conn, temporary, name, _) = self.parent(&r, rights::CREATE)?;
@@ -1791,7 +1805,8 @@ impl<S: Sys> Posix<S> {
             None => return Err(EBADF),
         };
         let r = self.resolve(dirfd, path, Access::Write)?;
-        if self.special(&r).is_some() || r.place.path.is_empty() || r.dot {
+        self.under_special(&r, EEXIST)?;
+        if r.place.path.is_empty() || r.dot {
             return Err(EEXIST);
         }
         let (dir, temporary, name, _) = self.parent(&r, rights::PUBLISH)?;
