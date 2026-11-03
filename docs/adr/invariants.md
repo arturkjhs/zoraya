@@ -277,6 +277,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0110-4 | [ADR-0110](0110-acceptance-harness.md) | A `-FAIL`, `panicked` or `ZORAYA-FAULT` line in any POSIX run fails the step. | the `!` lines of every runner script. | not yet applicable (stage 6) |
 | INV-0130-1 | [ADR-0130](0130-kernel-object-choices-of-stage-6a.md) | A refused `snapshot_process` changes nothing the caller can see, and a moved handle is in exactly one place in the child. | `t_snapshot`'s move-list and table tests. | checked: `make test-qemu` |
 | INV-0130-2 | [ADR-0130](0130-kernel-object-choices-of-stage-6a.md) | A process in a suspended job, including one that joins it, runs no user instruction until `job_resume`. | `t_suspend`. | checked: `make test-qemu` |
+| INV-0130-3 | [ADR-0130](0130-kernel-object-choices-of-stage-6a.md) | `dma_pin` fails with `AccessDenied` in any job with the `posix` bit. | `t_snapshot`, which calls it from its `posix` job with a device handle and expects the error. | checked: `make test-qemu` |
 
 ## Counts
 
@@ -349,5 +350,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0108](0108-programs-from-the-filesystem.md) Running programs from the filesystem | 4 |
 | [ADR-0109](0109-building-the-toolchain.md) Building the toolchain | 4 |
 | [ADR-0110](0110-acceptance-harness.md) Acceptance harness for stage 6 | 4 |
-| [ADR-0130](0130-kernel-object-choices-of-stage-6a.md) Kernel object choices the stage 6 ADRs leave open | 2 |
-| **Total** | **271** |
+| [ADR-0130](0130-kernel-object-choices-of-stage-6a.md) Kernel object choices the stage 6 ADRs leave open | 3 |
+| **Total** | **272** |

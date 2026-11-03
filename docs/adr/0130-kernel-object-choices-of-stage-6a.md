@@ -1,6 +1,6 @@
 # ADR-0130: Kernel object choices the stage 6 ADRs leave open
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-02
 - **Depends on:** ADR-0040, ADR-0042, ADR-0044, ADR-0057, ADR-0101, ADR-0102, ADR-0105, ADR-0108, ADR-0109
 - **Evidence:** CP-11, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -92,6 +92,16 @@ The items:
 
 ## Recommendation
 
+### Decision
+
+Accepted 2026-11-03, with one change: **`dma_pin` refuses with `AccessDenied` in a job with the `posix` bit**, so a
+POSIX process makes no pin and none can sit unseen in a message queued on its own channel when it snapshots (the open
+question from the TASK-16 review, R3). INV-0130-3 states it. A pin made elsewhere can still be handed to a POSIX
+process, in a table or a message; one in its table refuses the snapshot as INV-0102-5 says, and a POSIX process has
+no reason to hold one.
+
+The original recommendation follows, accepted as written.
+
 **Recommendation (not a decision): Option B**, as follows.
 
 1. **Snapshot buffer.** Little-endian; magic at 0, header size (48) at 4, flags at 8 (`START_SUSPENDED` only),
@@ -142,14 +152,14 @@ The items:
   one place in the child. *Check:* `t_snapshot`'s move-list and table tests.
 - **INV-0130-2.** A process in a suspended job, including one that joins it, runs no user instruction until
   `job_resume`. *Check:* `t_suspend`.
+- **INV-0130-3.** `dma_pin` fails with `AccessDenied` in any job with the `posix` bit. *Check:* `t_snapshot`, which
+  calls it from its `posix` job with a device handle and expects the error.
 
 ## Open questions
 
 - Whether stage 6d's job control needs nested suspends.
-- INV-0102-5 refuses a caller holding a pin in its table. A pin moved into a message queued on a channel the caller
-  holds is not seen, so such a caller can snapshot with a live pin (TASK-16 review, R3). The child gets fresh memory,
-  so nothing is shared through the pin; whether the letter of INV-0102-5 needs a per-process count of live pins is
-  for the architect. A POSIX process holds no device handle, so it cannot make a pin.
+- Answered by the architect's decision: a pin moved into a message queued on the caller's own channel was not seen
+  by INV-0102-5's check (TASK-16 review, R3); `dma_pin` now refuses in a `posix` job (INV-0130-3).
 
 ## Revisit triggers
 
@@ -157,3 +167,8 @@ The items:
 - A program that reads its own program headers some other way than `AT_PHDR`.
 
 ## Architect's decision
+
+### Decision
+
+Accepted 2026-11-03, with the change above: `dma_pin` refuses in `posix` jobs, with a rule (INV-0130-3) and a test.
+Decided by the architect; recorded by an agent at the architect's request.

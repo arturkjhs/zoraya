@@ -206,3 +206,15 @@ file = "kernel/src/process.rs"
 find = '.place(handle, entry, Rights::WAIT, object::next_id());'
 replace = '.place(handle, entry, zoraya_abi::ProcessObject::RIGHTS, object::next_id());'
 note = "ADR-0102 item 3: the self slot carries WAIT only (TASK-16 review T4)"
+
+[[mutant]]
+id = "K-pin-in-posix-job"
+file = "kernel/src/syscall.rs"
+find = '''
+        if self.process.job().is_posix() {
+            return Err(Status::AccessDenied);
+        }
+'''
+replace = '''
+'''
+note = "INV-0130-3: dma_pin refuses in a posix job (the architect's decision on ADR-0130)"

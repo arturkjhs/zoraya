@@ -821,6 +821,11 @@ impl Handlers for Calls<'_> {
     }
 
     fn dma_pin(&mut self, memory: Handle, device: Handle, out: Bytes) -> Result<u64, Status> {
+        // A POSIX process makes no pin (ADR-0130, the architect's decision,
+        // INV-0130-3), so none can hide in a queued message at a snapshot.
+        if self.process.job().is_posix() {
+            return Err(Status::AccessDenied);
+        }
         let Object::Memory(memory) = self.object(memory, Rights::WRITE)? else {
             return Err(Status::BadHandle);
         };

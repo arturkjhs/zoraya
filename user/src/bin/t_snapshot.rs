@@ -34,6 +34,8 @@ use zoraya_user::{clock_monotonic, job_resume, job_suspend, sleep_until};
 
 const OUTSIDE: u64 = 9;
 const DEVICE: u64 = 5;
+/// Where `inner` finds a pin `outer` made: a `posix` job cannot make one.
+const PIN: u64 = 6;
 const SELF_SLOT: u32 = 21;
 
 const FREE_FRAMES: u64 = 0x7006;
@@ -776,12 +778,16 @@ fn devices_refuse_a_snapshot() {
     let (at, _) = device_map(device, 0).expect("map the device");
     assert_err!(snap(JOB, &[], 0, false), Status::BadState);
     memory_unmap(at, 4096).expect("unmap");
+    // INV-0130-3: no pin is made in a `posix` job.
     let memory = memory_create(4096, MemoryFlags::NONE).expect("memory");
     let mut runs = [[0u64; 2]; 1];
-    let pin = dma_pin(memory, device, &mut runs).expect("pin");
+    assert_err!(dma_pin(memory, device, &mut runs), Status::AccessDenied);
+    close(&[memory]);
+    // INV-0102-5: a pin made outside and handed in refuses the snapshot.
+    let pin = h(PIN);
+    assert_eq!(handle_type(pin), Ok("pin"), "outer's pin");
     assert_err!(snap(JOB, &[], 0, false), Status::BadState);
     dma_unpin(pin).expect("unpin");
-    close(&[memory]);
     let child = snap(JOB, &[], 0, false).expect("and without them it works");
     let Some(child) = child else { process_exit(0) };
     wait_exit(child);
@@ -933,13 +939,15 @@ fn a_child_in_a_suspended_job_waits() {
 }
 
 fn inner() -> i32 {
+    // First: until it ends the pin `outer` handed over, every snapshot is
+    // refused.
+    devices_refuse_a_snapshot();
     both_halves_run_with_their_own_memory();
     the_child_starts_with_the_parents_registers();
     the_childs_table_mirrors_the_parents();
     the_move_list_is_all_or_nothing();
     frame_exhaustion_gives_everything_back();
     a_child_in_a_suspended_job_waits();
-    devices_refuse_a_snapshot();
     the_job_must_be_ours_and_open();
     bad_buffers_are_refused();
     snapshots_come_and_go();
@@ -970,18 +978,28 @@ fn outer() -> i32 {
         .handle(dup(2, posix, JobObject::RIGHTS))
         .handle(dup(3, DIRECTORY, zoraya_abi::DirectoryObject::RIGHTS))
         .handle(dup(OUTSIDE as u32, JOB, JobObject::RIGHTS));
+    // Outside a `posix` job a pin can be made; it moves to `inner`.
+    let pinned = memory_create(4096, MemoryFlags::NONE).expect("memory");
     if handle_type(h(DEVICE)) == Ok("device") {
         e.handle(dup(
             DEVICE as u32,
             h(DEVICE),
             zoraya_abi::DeviceObject::RIGHTS,
         ));
+        let mut runs = [[0u64; 2]; 1];
+        let pin = dma_pin(pinned, h(DEVICE), &mut runs).expect("a pin outside posix");
+        e.handle(HandleEntry {
+            slot: PIN as u32,
+            handle: pin,
+            rights: zoraya_abi::PinObject::RIGHTS,
+            transfer: Transfer::Move,
+        });
     }
     e.arg(b"inner");
     let length = e.finish().expect("room");
     let child = spawn(&buffer[..length]).expect("spawn inner");
     let record = wait_exit(child);
-    close(&[child, me, posix, not_posix]);
+    close(&[child, me, posix, not_posix, pinned]);
     let _ = (StreamReadObject::RIGHTS, StreamWriteObject::RIGHTS);
     record.code
 }
