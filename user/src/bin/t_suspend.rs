@@ -85,7 +85,8 @@ fn nap(ms: u64) {
 }
 
 /// Waits until `done`, up to 2 s, sleeping between looks: true if it
-/// happened. A slow host makes this slower, never wrong.
+/// happened. A slow host makes this slower; it fails only if what it waits
+/// for gets no CPU for 2 s.
 fn eventually(done: impl Fn() -> bool) -> bool {
     let deadline = clock_monotonic() + 2_000_000_000;
     while !done() {
@@ -144,6 +145,8 @@ fn suspend_stops_the_whole_tree_and_resume_starts_it() {
         now[0] > part[0] && now[1] > part[1]
     };
     assert!(eventually(top_runs), "the top job runs");
+    // A fixed wait is safe before a check that nothing happened.
+    nap(50);
     assert_eq!(counters.read()[2..4], part[2..4], "the lower one does not");
     // A process that joins a suspended job starts stopped.
     let late = counter(below, &counters, 4);
