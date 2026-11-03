@@ -129,7 +129,7 @@ How the kernel starts. The code is in `kernel/src/arch/aarch64/boot.rs`, `kernel
   - Under QEMU 11.1.2, `x0` is `0` for an ELF, under both HVF and TCG. The blob is therefore always found at the
     start of RAM. Every boot banner prints this.
   - The blob is validated by `zoraya-dtb` before use.
-- **Exception level.** The kernel starts at EL1, or at EL2 with `-machine virt,virtualization=on`, which works under both TCG and, on the M4 with QEMU 11.1.2, HVF. At EL2 it
+- **Exception level.** The kernel starts at EL1, or at EL2 with `-machine virt,virtualization=on`, which works under both TCG and, on the M4 with QEMU 11.1.2, HVF (not on an M1 or M2: Known limitations, "HVF limits"). At EL2 it
   writes a minimal configuration and `eret`s to EL1h; the configuration is documented in the header of `boot.rs`:
   - EL1 is AArch64 with no stage-2 translation. SVE and SME stay trapped;
   - `MDCR_EL2` is set to `HPMN = PMCR_EL0.N` and nothing else, so EL1 owns every PMU counter and no debug or PMU
@@ -480,7 +480,7 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 |---|---|---|---|
 | auto-default | HVF on a Mac, else TCG | default | entry at EL1 |
 | auto-smp4-2g | HVF on a Mac, else TCG | 4 CPUs, 2 GiB | `cpus: 4`, 2048 MiB region |
-| auto-el2 | HVF on a Mac, else TCG | `virtualization=on` | entry at EL2 |
+| auto-el2 | HVF on a Mac, else TCG | `virtualization=on` | entry at EL2; skipped where HVF has no EL2 (Known limitations) |
 | tcg-default | TCG | default | GICv2 |
 | tcg-smp4-gicv2 | TCG | 4 CPUs | GICv2 with a non-zero `GICD_ITARGETSR` |
 | tcg-el2 | TCG | `virtualization=on` | entry at EL2, PSCI via `smc` |
@@ -735,7 +735,13 @@ or `exit` turns the machine off.
   `gic::acknowledge` must keep the source bits of an SGI for the EOI and mask them from the ID.
 - **HVF limits.** HVF does not support GICv2 (`gic-version=2` fails to start). EL2 entry under HVF
   (`virtualization=on`) needs HVF nested virtualisation: an M3 or later and a recent macOS. It works on the M4 with
-  QEMU 11.1.2 and is part of `make test`, so `make test` as written fails on an M1 or M2 Mac (`auto-el2`).
+  QEMU 11.1.2. On an M1 or M2, QEMU stops at VM creation (`Nested virtualization not supported on this system`;
+  seen on an M1 with QEMU 11.1.3). Before `auto-el2` (`make test-qemu`) and `boot-auto-el2` (`make test-boot`),
+  `tools/run-qemu.sh --probe-el2` creates the VM with `--dumpdtb`, once without and once with `virtualization=on`.
+  If only the second fails under HVF, the configuration prints `[LABEL] skipped: HVF on this Mac has no EL2 (needs M3
+  or later)` and does not run. `make test` counts this as a skip, not a failure, and lists it in its summary. On such
+  a Mac EL2 entry is covered only by TCG (`tcg-el2`, `boot-tcg-el2`, which always run). Under TCG (CI) nothing is
+  probed. The probe tests the host, not the kernel: if HVF creates the EL2 VM, a kernel failure at EL2 still fails.
 - **Storage stack.** `t_storage` kills the driver "during a commit" and "during a read", but on one CPU the driver
   ends before the request reaches the device, so no test kills a driver with a write in flight on the device; the
   kernel's quarantine of TASK-12 is what covers that case. No test sees whether a flush reaches the device: the crash

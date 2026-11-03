@@ -131,6 +131,14 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 
+# Put in front of an "auto" configuration with virtualization=on: if the
+# accelerator cannot start a machine at EL2 (HVF before the M3), print
+# "[LABEL] skipped: <reason>" and end the recipe line with success, so the
+# rest of the line does not run. tools/test-summary.sh reports the skip.
+# Under TCG (CI, Linux) nothing is probed and the line runs as before.
+EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
+	case $$? in 0) ;; 1) echo "[$(1)] skipped: $$reason"; exit 0 ;; *) exit 1 ;; esac;
+
 test-qemu: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default \
@@ -142,7 +150,7 @@ test-qemu: $(TEST_KERNEL) $(RUNNER) tools-storage
 	$(RUN_TEST) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
-	$(RUN_TEST) --label auto-el2 \
+	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST) --label auto-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	$(RUN_TEST) --label tcg-default \
@@ -186,7 +194,7 @@ test-boot: $(KERNEL) $(RUNNER)
 	$(RUNNER) --timeout 240 --script $(LEAK_SCRIPT) --label leak-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)
-	$(RUN_BOOT) --label boot-auto-el2 -- $(RUN_QEMU) --test --keys --accel auto --machine-opt virtualization=on $(KERNEL)
+	$(call EL2_OR_SKIP,boot-auto-el2) $(RUN_BOOT) --label boot-auto-el2 -- $(RUN_QEMU) --test --keys --accel auto --machine-opt virtualization=on $(KERNEL)
 	$(RUN_BOOT) --label boot-tcg -- $(RUN_QEMU) --test --keys --accel tcg $(KERNEL)
 	$(RUN_BOOT) --label boot-tcg-smp4-gicv2 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 $(KERNEL)
 	$(RUN_BOOT) --label boot-tcg-el2 -- $(RUN_QEMU) --test --keys --accel tcg --machine-opt virtualization=on $(KERNEL)

@@ -28,6 +28,13 @@
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
 #   --print-cmd           print the QEMU command line on stderr first
+#   --probe-el2           no kernel needed: exit 0 if the accelerator can start
+#                         a machine at EL2 (virtualization=on). Exit 1, with the
+#                         reason on stdout, only if it is HVF and HVF starts the
+#                         plain machine but not the one with EL2 (HVF nested
+#                         virtualisation needs an M3 or later). TCG is not
+#                         probed. The probe creates the VM through --dumpdtb, so
+#                         it tests the host, never the kernel.
 #
 # Loading: the kernel ELF is passed with -kernel. QEMU's virt board treats an
 # ELF as a bare-metal image: it loads the segments at their physical
@@ -46,6 +53,7 @@ machine=virt
 mode=interactive
 dumpdtb=
 print_cmd=0
+probe_el2=0
 keys=0
 test_disk=0
 write_error=0
@@ -72,6 +80,7 @@ while [ $# -gt 0 ]; do
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
+        --probe-el2) probe_el2=1; shift ;;
         -h|--help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         -*) die "unknown option $1" ;;
         *) [ -z "$kernel" ] || die "more than one kernel given"; kernel=$1; shift ;;
@@ -92,6 +101,23 @@ case $accel in
     tcg) cpu=cortex-a72 ;;
     *) die "unknown accelerator $accel (auto, hvf or tcg)" ;;
 esac
+
+# Each probe is a run of this script with --dumpdtb: QEMU creates the VM, which
+# is where HVF refuses EL2, writes the device tree and exits.
+if [ "$probe_el2" = 1 ]; then
+    [ "$accel" = hvf ] || exit 0
+    dir=$(mktemp -d "${TMPDIR:-/tmp}/zoraya-probe.XXXXXX")
+    trap 'rm -rf "$dir"' EXIT
+    # If HVF cannot start even the plain machine, report EL2 as available, so
+    # that the configuration runs and fails where it shows.
+    # Each probe runs in a subshell that waits for it (the "exit $?" keeps the
+    # shell from exec'ing it), so the report of QEMU's abort goes to the
+    # subshell's stderr, which is discarded, not to ours.
+    ("$0" --accel hvf --dumpdtb "$dir/plain.dtb"; exit $?) >/dev/null 2>&1 || exit 0
+    ("$0" --accel hvf --machine-opt virtualization=on --dumpdtb "$dir/el2.dtb"; exit $?) >/dev/null 2>&1 && exit 0
+    echo "HVF on this Mac has no EL2 (needs M3 or later)"
+    exit 1
+fi
 
 if [ -n "$dumpdtb" ]; then
     machine="$machine,dumpdtb=$dumpdtb"
