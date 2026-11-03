@@ -192,6 +192,20 @@ pub fn invalidate_asid(asid: u16) {
 ///
 /// The range is mapped.
 pub unsafe fn sync_instruction_cache(va: u64, size: u64) {
+    // SAFETY: the caller's contract.
+    unsafe { clean_to_unification(va, size) };
+    invalidate_instruction_cache();
+}
+
+/// Cleans the data cache to the point of unification for `[va, va + size)`,
+/// so that instruction fetches can see what was written there once the
+/// instruction cache is invalidated (Arm ARM D7.5.9, "instruction cache
+/// coherency"). [`invalidate_instruction_cache`] must follow.
+///
+/// # Safety
+///
+/// The range is mapped.
+pub unsafe fn clean_to_unification(va: u64, size: u64) {
     let ctr: u64;
     // SAFETY: reading CTR_EL0 has no side effects.
     unsafe { asm!("mrs {}, ctr_el0", out(reg) ctr, options(nomem, nostack, preserves_flags)) };
@@ -203,6 +217,11 @@ pub unsafe fn sync_instruction_cache(va: u64, size: u64) {
         unsafe { asm!("dc cvau, {}", in(reg) at, options(nostack, preserves_flags)) };
         at += line;
     }
+}
+
+/// Waits for earlier cleans, then invalidates every instruction cache in the
+/// inner shareable domain to the point of unification, and synchronises.
+pub fn invalidate_instruction_cache() {
     // SAFETY: cache maintenance and barriers only.
     unsafe {
         asm!(

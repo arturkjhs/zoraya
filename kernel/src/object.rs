@@ -1,9 +1,11 @@
 //! What a handle can hold (ADR-0040, ADR-0041).
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use zoraya_abi::{ObjectType, Waiting};
+use zoraya_abi::{Duplication, ObjectType, Waiting};
+use zoraya_elf::Program;
 use zoraya_events::SourceId;
 
 use crate::channel::{self, Pair};
@@ -12,15 +14,31 @@ use crate::job::Job;
 use crate::memory::object::MemoryObject;
 use crate::port::{self, Port};
 use crate::process::Process;
+use crate::stream::{ReadEnd, WriteEnd};
 
 pub type HandleTable = zoraya_handle::Table<Object>;
 pub type Entry = zoraya_handle::Entry<Object>;
 
-/// A program in the ramdisk.
-#[derive(Clone, Copy)]
-pub struct Image {
-    pub name: &'static str,
-    pub file: &'static [u8],
+/// A program `spawn` can start (ADR-0043, ADR-0108).
+#[derive(Clone)]
+pub enum Image {
+    /// In the ramdisk, parsed at each `spawn`.
+    Ramdisk {
+        name: &'static str,
+        file: &'static [u8],
+    },
+    /// Made by `image_create`: checked once, and held with its object.
+    Memory(Arc<MemoryImage>),
+}
+
+/// An image from a memory object (ADR-0108 item 1). The headers were checked
+/// when it was made and are kept, so W^X and the ranges hold whatever the
+/// object's bytes become; `spawn` copies the segments' bytes as they are then.
+pub struct MemoryImage {
+    pub memory: Arc<MemoryObject>,
+    pub program: Program,
+    /// The file's whole program header table, for the startup block.
+    pub table: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -40,6 +58,9 @@ pub enum Object {
     Pin(Arc<Pin>),
     /// One end of a channel: `end` is 0 or 1.
     Channel(Arc<Pair>, usize),
+    /// A byte stream's read end (ADR-0101); each handle holds the `Arc`.
+    StreamRead(Arc<ReadEnd>),
+    StreamWrite(Arc<WriteEnd>),
 }
 
 impl Object {
@@ -55,13 +76,15 @@ impl Object {
             (O::Port(a), O::Port(b)) => Arc::ptr_eq(a, b),
             (O::Device(a), O::Device(b)) => Arc::ptr_eq(a, b),
             (O::Channel(a, x), O::Channel(b, y)) => Arc::ptr_eq(a, b) && x == y,
+            (O::StreamRead(a), O::StreamRead(b)) => Arc::ptr_eq(a, b),
+            (O::StreamWrite(a), O::StreamWrite(b)) => Arc::ptr_eq(a, b),
+            (O::Image(Image::Memory(a)), O::Image(Image::Memory(b))) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
 
-    /// Its row in `OBJECT_TYPES`.
-    pub fn type_index(&self) -> u64 {
-        let name = match self {
+    fn type_name(&self) -> &'static str {
+        match self {
             Object::Console => "console",
             Object::Power => "power",
             Object::Directory => "directory",
@@ -75,11 +98,25 @@ impl Object {
             Object::Interrupt(_) => "interrupt",
             Object::Pin(_) => "pin",
             Object::Channel(..) => "channel",
-        };
-        let row = zoraya_abi::OBJECT_TYPES
-            .iter()
-            .position(|(n, _, _)| *n == name);
+            Object::StreamRead(_) => "stream-read",
+            Object::StreamWrite(_) => "stream-write",
+        }
+    }
+
+    /// Its row in `OBJECT_TYPES`.
+    pub fn type_index(&self) -> u64 {
+        let name = self.type_name();
+        let row = zoraya_abi::OBJECT_TYPES.iter().position(|t| t.name == name);
         row.map_or(u64::MAX, |row| row as u64)
+    }
+
+    /// Whether `snapshot_process` may duplicate it, from `OBJECT_TYPES`
+    /// (ADR-0102 item 3). A type missing there is not.
+    pub fn duplicable(&self) -> bool {
+        let name = self.type_name();
+        zoraya_abi::OBJECT_TYPES
+            .iter()
+            .any(|t| t.name == name && t.duplication == Duplication::Duplicable)
     }
 
     /// Where its signals are, and which bits exist: the kernel's side of
@@ -90,6 +127,8 @@ impl Object {
             Object::Interrupt(i) => (i.source(), zoraya_abi::InterruptObject::WAITING),
             Object::Process(p) => (p.source(), zoraya_abi::ProcessObject::WAITING),
             Object::Job(j) => (j.source(), zoraya_abi::JobObject::WAITING),
+            Object::StreamRead(e) => (e.source(), zoraya_abi::StreamReadObject::WAITING),
+            Object::StreamWrite(e) => (e.source(), zoraya_abi::StreamWriteObject::WAITING),
             Object::Console => (
                 crate::console::source()?,
                 zoraya_abi::ConsoleObject::WAITING,

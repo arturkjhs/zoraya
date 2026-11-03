@@ -1,7 +1,13 @@
 //! INV-0041-3: asserting a signal allocates nothing. Alone in its binary,
 //! since it replaces the allocator.
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use std::alloc::{GlobalAlloc, Layout};
+
+use zoraya_test_alloc::{Capped, LIMIT};
+
+/// What this file's counting allocator forwards to: capped, as every host
+/// test is (docs/backlog.md).
+static INNER: Capped = Capped::new(LIMIT);
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use zoraya_abi::Mode;
@@ -11,17 +17,17 @@ struct Counting;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
-// SAFETY: forwards to the system allocator.
+// SAFETY: forwards to the capped system allocator.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         // SAFETY: the caller's contract.
-        unsafe { System.alloc(layout) }
+        unsafe { INNER.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
         // SAFETY: the caller's contract.
-        unsafe { System.dealloc(block, layout) }
+        unsafe { INNER.dealloc(block, layout) }
     }
 }
 

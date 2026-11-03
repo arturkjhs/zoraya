@@ -416,3 +416,6 @@ fn objects_without_names_vanish_after_a_crash() {
     });
     assert!(n > 10);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

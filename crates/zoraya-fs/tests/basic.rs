@@ -106,3 +106,6 @@ fn many_files_split_tree() {
     assert!(rep.is_clean(), "{:?}", rep.problems);
     assert_eq!(rep.stats.files, 0);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

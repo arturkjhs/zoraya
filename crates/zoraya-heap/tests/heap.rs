@@ -295,3 +295,6 @@ fn fragmentation_stays_bounded_under_the_stated_workload() {
     let bound = 3 * st.peak_live + 16 * CHUNK_SIZE;
     assert!(st.backing <= bound, "{st:?}, bound {bound}");
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

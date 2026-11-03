@@ -12,3 +12,6 @@ zoraya-abi = { path = "../zoraya-abi" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

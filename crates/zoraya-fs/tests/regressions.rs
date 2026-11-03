@@ -291,3 +291,6 @@ fn repair_corrects_an_entry_kind_and_keeps_the_subtree() {
     let r = v.root();
     assert_eq!(v.stat_at(r, "d/precious").unwrap().size, 11);
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

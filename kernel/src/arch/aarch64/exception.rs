@@ -260,6 +260,25 @@ pub unsafe fn write_user_frame(at: u64, pc: u64, sp: u64) {
     }
 }
 
+/// Writes a copy of `from`, a frame saved at an `svc` from EL0, at `at`, with
+/// x0 and x1 replaced: how a snapshot's child returns from the same call
+/// (ADR-0102 item 5).
+///
+/// # Safety
+///
+/// As [`write_user_frame`]: `at` is the top of a mapped stack no thread runs
+/// on, with room for a frame, 16-byte aligned.
+pub unsafe fn write_user_frame_copy(at: u64, from: &Frame, x0: u64, x1: u64) {
+    let frame = at as *mut Frame;
+    // SAFETY: the caller's contract; `from` is a whole frame and cannot
+    // overlap a stack no thread runs on.
+    unsafe {
+        core::ptr::copy_nonoverlapping(from as *const Frame, frame, 1);
+        (*frame).x[0] = x0;
+        (*frame).x[1] = x1;
+    }
+}
+
 /// Allows SError from here on (ADR-0024). The vectors are installed by the
 /// boot code.
 pub fn init() {

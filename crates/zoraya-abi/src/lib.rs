@@ -15,6 +15,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod snapshot;
 pub mod spawn;
 
 macro_rules! statuses {
@@ -179,6 +180,16 @@ pub enum Waiting {
     NotWaitable,
 }
 
+/// Whether `snapshot_process` duplicates a handle of a type (ADR-0102 item 3,
+/// ADR-0040's follow-up).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Duplication {
+    /// Duplicated into a snapshot's child, if the handle has `DUPLICATE`.
+    Duplicable,
+    /// Never duplicated: absent in the child unless the move list names it.
+    NotDuplicable,
+}
+
 /// A kernel object type. Every type must state its [`Waiting`], which is the
 /// compile-time half of INV-0006-1.
 pub trait ObjectType {
@@ -186,6 +197,16 @@ pub trait ObjectType {
     const WAITING: Waiting;
     /// All the rights a handle to this type can carry.
     const RIGHTS: Rights;
+    const DUPLICATION: Duplication;
+}
+
+/// One row of [`OBJECT_TYPES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeInfo {
+    pub name: &'static str,
+    pub waiting: Waiting,
+    pub rights: Rights,
+    pub duplication: Duplication,
 }
 
 /// Signal bits of a process (ADR-0006 rule 1).
@@ -198,7 +219,8 @@ pub mod process_signals {
 /// Signal bits of a job (ADR-0006 rule 1).
 pub mod job_signals {
     pub const TERMINATED: u32 = 1 << 0;
-    /// Reserved: `job_suspend` is not built yet (ADR-0046).
+    /// Between `job_suspend` and `job_resume` of this job or one above it
+    /// (ADR-0105 item 8).
     pub const SUSPENDED: u32 = 1 << 2;
 }
 
@@ -217,6 +239,22 @@ pub mod channel_signals {
     pub const PEER_CLOSED: u32 = 1 << 2;
 }
 
+/// Signal bits of a byte stream's ends (ADR-0101). The read end has
+/// `READABLE` and `PEER_CLOSED`, the write end `WRITABLE` and `PEER_CLOSED`.
+pub mod stream_signals {
+    /// A byte waits, or no write end exists (so a read sees end of file).
+    pub const READABLE: u32 = 1 << 0;
+    /// `STREAM_ATOMIC` bytes are free and a read end exists.
+    pub const WRITABLE: u32 = 1 << 1;
+    /// No handle to the other end exists any more.
+    pub const PEER_CLOSED: u32 = 1 << 2;
+}
+
+/// Bytes a stream holds (ADR-0101).
+pub const STREAM_CAPACITY: usize = 64 * 1024;
+/// A `stream_write` of at most this many bytes is all or nothing (ADR-0101).
+pub const STREAM_ATOMIC: usize = 4096;
+
 /// Signal bits of an interrupt object (ADR-0054).
 pub mod interrupt_signals {
     /// The line fired, and stays masked until `interrupt_ack`.
@@ -226,7 +264,7 @@ pub mod interrupt_signals {
 const COMMON: Rights = Rights::DUPLICATE.union(Rights::TRANSFER);
 
 macro_rules! object_types {
-    ($($type:ident $name:literal $waiting:expr, $rights:expr;)*) => {
+    ($($type:ident $name:literal $waiting:expr, $rights:expr, $duplication:ident;)*) => {
         $(
             pub struct $type;
 
@@ -234,12 +272,17 @@ macro_rules! object_types {
                 const NAME: &'static str = $name;
                 const WAITING: Waiting = $waiting;
                 const RIGHTS: Rights = $rights;
+                const DUPLICATION: Duplication = Duplication::$duplication;
             }
         )*
 
-        /// Every object type, as data.
-        pub const OBJECT_TYPES: &[(&str, Waiting, Rights)] =
-            &[$((<$type>::NAME, <$type>::WAITING, <$type>::RIGHTS)),*];
+        /// Every object type, as data. A handle's type is its index here.
+        pub const OBJECT_TYPES: &[TypeInfo] = &[$(TypeInfo {
+            name: <$type>::NAME,
+            waiting: <$type>::WAITING,
+            rights: <$type>::RIGHTS,
+            duplication: <$type>::DUPLICATION,
+        }),*];
     };
 }
 
@@ -250,24 +293,28 @@ object_types! {
                 | process_signals::REQUEST_PENDING
                 | process_signals::SUSPENDED
         ),
-        COMMON.union(Rights::WAIT).union(Rights::SIGNAL).union(Rights::RESUME);
+        COMMON.union(Rights::WAIT).union(Rights::SIGNAL).union(Rights::RESUME),
+        Duplicable;
     JobObject "job"
-        Waiting::Signals(job_signals::TERMINATED),
+        Waiting::Signals(job_signals::TERMINATED | job_signals::SUSPENDED),
         COMMON
             .union(Rights::WAIT)
             .union(Rights::SIGNAL)
             .union(Rights::CREATE_PROCESS)
-            .union(Rights::KILL);
+            .union(Rights::KILL),
+        Duplicable;
     PortObject "port"
         Waiting::NotWaitable,
-        Rights::TRANSFER.union(Rights::WAIT).union(Rights::WRITE);
+        Rights::TRANSFER.union(Rights::WAIT).union(Rights::WRITE),
+        NotDuplicable;
     ConsoleObject "console"
         Waiting::Signals(console_signals::READABLE),
         COMMON
             .union(Rights::READ)
             .union(Rights::WRITE)
-            .union(Rights::WAIT);
-    PowerObject "power" Waiting::NotWaitable, COMMON.union(Rights::POWER);
+            .union(Rights::WAIT),
+        Duplicable;
+    PowerObject "power" Waiting::NotWaitable, COMMON.union(Rights::POWER), Duplicable;
     ChannelObject "channel"
         Waiting::Signals(
             channel_signals::READABLE | channel_signals::WRITABLE | channel_signals::PEER_CLOSED
@@ -275,23 +322,35 @@ object_types! {
         Rights::READ
             .union(Rights::WRITE)
             .union(Rights::WAIT)
-            .union(Rights::TRANSFER);
+            .union(Rights::TRANSFER),
+        NotDuplicable;
     DeviceObject "device"
         Waiting::NotWaitable,
         COMMON
             .union(Rights::MAP)
             .union(Rights::INTERRUPT)
-            .union(Rights::DMA);
+            .union(Rights::DMA),
+        Duplicable;
     InterruptObject "interrupt"
         Waiting::Signals(interrupt_signals::INTERRUPT),
-        Rights::WAIT.union(Rights::WRITE).union(Rights::TRANSFER);
-    PinObject "pin" Waiting::NotWaitable, Rights::DMA.union(Rights::TRANSFER);
-    EventObject "event" Waiting::NotWaitable, COMMON;
+        Rights::WAIT.union(Rights::WRITE).union(Rights::TRANSFER),
+        NotDuplicable;
+    PinObject "pin" Waiting::NotWaitable, Rights::DMA.union(Rights::TRANSFER), NotDuplicable;
+    EventObject "event" Waiting::NotWaitable, COMMON, Duplicable;
     MemoryObject "memory"
         Waiting::NotWaitable,
-        COMMON.union(Rights::READ).union(Rights::WRITE);
-    DirectoryObject "directory" Waiting::NotWaitable, COMMON.union(Rights::LOOKUP);
-    ImageObject "image" Waiting::NotWaitable, COMMON.union(Rights::READ);
+        COMMON.union(Rights::READ).union(Rights::WRITE),
+        Duplicable;
+    DirectoryObject "directory" Waiting::NotWaitable, COMMON.union(Rights::LOOKUP), Duplicable;
+    ImageObject "image" Waiting::NotWaitable, COMMON.union(Rights::READ), Duplicable;
+    StreamReadObject "stream-read"
+        Waiting::Signals(stream_signals::READABLE | stream_signals::PEER_CLOSED),
+        COMMON.union(Rights::READ).union(Rights::WAIT),
+        Duplicable;
+    StreamWriteObject "stream-write"
+        Waiting::Signals(stream_signals::WRITABLE | stream_signals::PEER_CLOSED),
+        COMMON.union(Rights::WRITE).union(Rights::WAIT),
+        Duplicable;
 }
 
 /// `Deadline::Infinite` on the wire. Any other value is an instant in
@@ -496,7 +555,8 @@ pub enum Param {
     Buffer,
     /// A pointer and a count of [`Packet`]s, in two registers.
     Packets,
-    /// A pointer and a length: the flat buffer of [`spawn`], vectors within.
+    /// A pointer and a length: a flat buffer of ADR-0042, the one of [`spawn`]
+    /// (vectors within) or of [`snapshot`].
     SpawnArgs,
     /// A pointer and a length: a [`RelativePath`].
     RelativePath,
@@ -861,6 +921,7 @@ macro_rules! buffer_arg {
 buffer_arg!(Bytes, Param::Buffer);
 buffer_arg!(PacketBuffer, Param::Packets);
 buffer_arg!(SpawnBuffer, Param::SpawnArgs);
+buffer_arg!(SnapshotBuffer, Param::SpawnArgs);
 buffer_arg!(PathBuffer, Param::RelativePath);
 
 /// Enters the kernel. User programs implement this with `svc`.
@@ -876,15 +937,37 @@ pub struct Signature {
     pub params: &'static [Param],
     /// The caller can wait inside the call.
     pub blocking: bool,
+    /// Usable only by `posix` jobs: `#[personality_only]` (INV-0002-2).
+    pub personality_only: bool,
+}
+
+/// What `#[personality_only]` on a call means; any other attribute does not
+/// compile.
+macro_rules! personality {
+    () => {
+        false
+    };
+    (personality_only) => {
+        true
+    };
 }
 
 macro_rules! syscalls {
-    ($($number:literal $variant:ident $name:ident($($arg:ident: $type:ty),*) $blocking:literal;)*) => {
+    ($($(#[$tag:ident])? $number:literal $variant:ident $name:ident($($arg:ident: $type:ty),*) $blocking:literal;)*) => {
         /// System call numbers.
         #[repr(u64)]
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Syscall {
             $($variant = $number,)*
+        }
+
+        /// True if call `number` is `#[personality_only]` (INV-0002-2): what
+        /// a dispatcher checks before it runs the call.
+        pub const fn is_personality_only(number: u64) -> bool {
+            match number {
+                $($number => personality!($($tag)?),)*
+                _ => false,
+            }
         }
 
         impl Syscall {
@@ -901,6 +984,7 @@ macro_rules! syscalls {
             call: Syscall::$variant,
             params: &[$(<$type as Arg>::PARAM),*],
             blocking: $blocking,
+            personality_only: personality!($($tag)?),
         }),*];
 
         /// What the kernel implements, one method per call.
@@ -1000,6 +1084,15 @@ syscalls! {
     39 HandleType handle_type(handle: Handle) false;
     40 EventCreate event_create() false;
     41 ObjectSame object_same(a: Handle, b: Handle) false;
+    42 StreamCreate stream_create(ends: Bytes) false;
+    43 StreamRead stream_read(end: Handle, bytes: Bytes) false;
+    44 StreamWrite stream_write(end: Handle, bytes: Bytes) false;
+    #[personality_only]
+    45 SnapshotProcess snapshot_process(args: SnapshotBuffer) false;
+    46 ImageCreate image_create(memory: Handle, length: Size) false;
+    47 JobSuspend job_suspend(job: Handle) false;
+    48 JobResume job_resume(job: Handle) false;
+    49 ObjectGetSignals object_get_signals(handle: Handle) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
@@ -1111,3 +1204,7 @@ pub const fn request_from_value(value: u64) -> Option<(RequestKind, u32)> {
 
 #[cfg(test)]
 mod tests;
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+#[cfg(test)]
+zoraya_test_alloc::cap_memory!();

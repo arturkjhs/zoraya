@@ -280,6 +280,7 @@ would give it to `spawn` too).
 - The peak number of live processes in a parallel W4 configure against the 255 ASIDs.
 - Whether text pages should be shared with a reference count once `spawn` of the same image many times is measured
   (W4 runs `/bin/sh` 136 times).
+- As of TASK-16 (ADR-0001 rule 6): every INV-0102 check exists in `t_snapshot`. INV-0102-7's "`self_slot` handle reports the child's own `TERMINATED`" is checked as far as a process can see itself: the child sees `TERMINATED` clear and its own `REQUEST_PENDING` through the self slot, and the parent sees `TERMINATED` through the handle the call returned; a process cannot observe its own end. Choices the ADR leaves open are in ADR-0130 (proposed).
 
 ## Revisit triggers
 

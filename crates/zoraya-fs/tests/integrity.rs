@@ -511,3 +511,6 @@ fn header_checks_stand_without_the_checksum() {
     );
     assert!(check_meta(&block, &ptr(101, 5), &exp).is_err(), "address");
 }
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+zoraya_test_alloc::cap_memory!();

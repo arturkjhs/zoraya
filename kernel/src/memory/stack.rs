@@ -95,6 +95,15 @@ impl KernelStack {
         unsafe { (*frame).elr }
     }
 
+    /// Writes a copy of `from` with x0 and x1 replaced at the top of the stack,
+    /// and returns its address.
+    pub fn push_user_frame_copy(&self, from: &crate::arch::Frame, x0: u64, x1: u64) -> u64 {
+        let frame = self.top() - EXCEPTION_FRAME as u64;
+        // SAFETY: as in `push_user_frame`.
+        unsafe { crate::arch::write_user_frame_copy(frame, from, x0, x1) };
+        frame
+    }
+
     /// Writes the frame for a first return to EL0 at the top of the stack, and
     /// returns its address.
     pub fn push_user_frame(&self, pc: u64, sp: u64) -> u64 {

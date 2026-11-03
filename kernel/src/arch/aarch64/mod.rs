@@ -9,7 +9,9 @@ mod usercopy;
 
 pub use context::{Context, switch};
 pub use exception::init as exception_init;
-pub use exception::{FRAME_SIZE, Frame, THREAD_STACK_SIZE, write_user_frame};
+pub use exception::{
+    FRAME_SIZE, Frame, THREAD_STACK_SIZE, write_user_frame, write_user_frame_copy,
+};
 #[cfg(feature = "qemu-test")]
 pub use exception::{STACK_OVERFLOWS, catch, enter_el0, recover_to};
 pub use usercopy::{copy_from_user, copy_to_user};
@@ -200,6 +202,14 @@ pub fn save_and_mask_interrupts() -> u64 {
     unsafe { asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack, preserves_flags)) };
     mask_interrupts();
     daif
+}
+
+/// The running user thread's `TPIDR_EL0`, which the kernel never changes.
+pub fn tpidr_el0() -> u64 {
+    let value: u64;
+    // SAFETY: reading the user's thread pointer has no side effects.
+    unsafe { asm!("mrs {}, tpidr_el0", out(reg) value, options(nomem, nostack, preserves_flags)) };
+    value
 }
 
 /// The current `DAIF`.

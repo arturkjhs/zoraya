@@ -1,0 +1,220 @@
+# The kernel objects of stage 6a (TASK-16): streams, snapshot_process,
+# image_create, job_suspend and the startup block. Minutes per mutant: one
+# QEMU configuration.
+tests = ["make -s test-qemu-one"]
+timeout = 1200
+
+[[mutant]]
+id = "K-read-end-never-closes"
+file = "kernel/src/stream.rs"
+find = 'self.0.close(READ_END);'
+replace = ''
+note = "INV-0101-2: the last read-end handle must assert PEER_CLOSED on the writer"
+
+[[mutant]]
+id = "K-write-end-never-closes"
+file = "kernel/src/stream.rs"
+find = 'self.0.close(WRITE_END);'
+replace = ''
+note = "INV-0101-2: end of file"
+
+[[mutant]]
+id = "K-stream-signals-never-fall"
+file = "kernel/src/stream.rs"
+find = 'port::clear_signals(self.sources[end], falling);'
+replace = ''
+note = "READABLE and WRITABLE must clear"
+
+[[mutant]]
+id = "K-snapshot-no-posix-gate"
+file = "kernel/src/syscall.rs"
+find = 'if zoraya_abi::is_personality_only(number) && !process.job().is_posix() {'
+replace = 'if false {'
+note = "INV-0003-2, INV-0002-2: the dispatcher is the one gate"
+
+[[mutant]]
+id = "K-snapshot-any-job"
+file = "kernel/src/syscall.rs"
+find = 'if !job.is_within(self.process.job()) {'
+replace = 'if false {'
+note = "ADR-0102 item 1: the job is in the caller's tree"
+
+[[mutant]]
+id = "K-snapshot-pins-allowed"
+file = "kernel/src/syscall.rs"
+find = '.any(|(_, e)| matches!(e.object, Object::Pin(_)))'
+replace = '.any(|_| false)'
+note = "INV-0102-5"
+
+[[mutant]]
+id = "K-snapshot-busy-end-moves"
+file = "kernel/src/syscall.rs"
+find = '&& pair.holds_handles(*end)'
+replace = '&& false'
+note = "ADR-0102 item 4: an end with handles queued cannot move"
+
+[[mutant]]
+id = "K-snapshot-ignores-duplicate-right"
+file = "kernel/src/syscall.rs"
+find = 'let duplicable = entry.object.duplicable() && entry.rights.contains(Rights::DUPLICATE);'
+replace = 'let duplicable = entry.object.duplicable();'
+note = "INV-0102-6: a handle without DUPLICATE stays out"
+
+[[mutant]]
+id = "K-snapshot-ignores-type"
+file = "kernel/src/syscall.rs"
+find = 'let duplicable = entry.object.duplicable() && entry.rights.contains(Rights::DUPLICATE);'
+replace = 'let duplicable = entry.rights.contains(Rights::DUPLICATE) || !entry.object.duplicable();'
+note = "INV-0102-6: ports and channel ends stay out"
+
+[[mutant]]
+id = "K-snapshot-move-at-generation-0"
+file = "kernel/src/syscall.rs"
+find = 'let at = Handle::from_parts(m.slot, handles.generation_of(m.slot))'
+replace = 'let at = Handle::from_parts(m.slot, 0)'
+note = "INV-0102-7: a moved slot carries the parent's generation"
+
+[[mutant]]
+id = "K-snapshot-moved-stays"
+file = "kernel/src/syscall.rs"
+find = '''
+        for moved in request.moves() {
+            if let Some(entry) = handles.remove(moved.handle) {
+                object::end_subscriptions(&entry);
+            }
+        }'''
+replace = ''
+note = "INV-0102-2: after success no listed handle is the caller's"
+
+[[mutant]]
+id = "K-snapshot-tls-lost"
+file = "kernel/src/syscall.rs"
+find = 'tpidr_el0: arch::tpidr_el0(),'
+replace = 'tpidr_el0: 0,'
+note = "INV-0102-4, ADR-0130 item 5"
+
+[[mutant]]
+id = "K-snapshot-child-sees-handle"
+file = "kernel/src/sched.rs"
+find = 'let at = stack.push_user_frame_copy(frame, zoraya_abi::Status::Ok as u64, 0);'
+replace = 'let at = stack.push_user_frame_copy(frame, zoraya_abi::Status::Ok as u64, frame.x[1]);'
+note = "INV-0102-4: x1 is 0 in the child"
+
+[[mutant]]
+id = "K-snapshot-devices-allowed"
+file = "kernel/src/memory/user.rs"
+find = 'if self.has_device_mapping() {'
+replace = 'if false {'
+note = "INV-0102-5"
+
+[[mutant]]
+id = "K-snapshot-object-pages-mixed"
+file = "kernel/src/memory/user.rs"
+find = 'Some(m) if m.va <= va => objects[i].page(va - m.va),'
+replace = 'Some(m) if m.va <= va => objects[i].page(0),'
+note = "INV-0102-1: each page of a mapped object to its own place"
+
+[[mutant]]
+id = "K-snapshot-no-icache"
+file = "kernel/src/memory/user.rs"
+find = '''
+            mmu::invalidate_instruction_cache();'''
+replace = ''
+note = "Arm ARM D7.5.9. Expected to survive: QEMU keeps instruction fetch coherent with data writes"
+
+[[mutant]]
+id = "K-snapshot-default-dispositions"
+file = "kernel/src/process.rs"
+find = 'let dispositions = s.parent.requests.lock().dispositions;'
+replace = 'let dispositions = [Disposition::Terminate; REQUEST_KINDS];'
+note = "ADR-0102 item 5: dispositions are copied"
+
+[[mutant]]
+id = "K-snapshot-failure-keeps-cycle"
+file = "kernel/src/process.rs"
+find = '''
+        let table = core::mem::take(&mut *process.handles.lock());
+        drop(table);'''
+replace = ''
+note = "INV-0102-3: a failure after the self handle is placed must break the cycle"
+
+[[mutant]]
+id = "K-startup-no-padding"
+file = "kernel/src/process.rs"
+find = '&[0; 8][..padding],'
+replace = '&[0; 8][..0],'
+note = "ADR-0109 item 5: the table is 8-aligned where the header says"
+
+[[mutant]]
+id = "K-suspend-stops-nothing"
+file = "kernel/src/job.rs"
+find = 'job.for_each_process(&mut |process| process.stop());'
+replace = ''
+note = "INV-0105-5"
+
+[[mutant]]
+id = "K-suspended-job-admits-runner"
+file = "kernel/src/job.rs"
+find = '''
+            if state.suspended {
+                process.stop();
+            }'''
+replace = ''
+note = "ADR-0130 item 7: a process joining a suspended job starts stopped"
+
+[[mutant]]
+id = "K-stopped-ignores-kill"
+file = "kernel/src/process.rs"
+find = 'while process.stopped.load(Ordering::Relaxed) && !process.exit_requested() {'
+replace = 'while process.stopped.load(Ordering::Relaxed) {'
+note = "job_kill of a suspended job must end it"
+
+[[mutant]]
+id = "K-resume-wakes-nothing"
+file = "kernel/src/process.rs"
+find = 'if self.parked.swap(false, Ordering::Relaxed) {'
+replace = 'if false {'
+note = "INV-0105-5: job_resume clears it"
+
+[[mutant]]
+id = "K-image-length-unchecked"
+file = "kernel/src/syscall.rs"
+find = '''
+        if length > memory.size() {
+            return Err(Status::InvalidArgument);
+        }'''
+replace = ''
+note = "ADR-0108 item 1: length is at most the object's size"
+
+[[mutant]]
+id = "K-snapshot-moved-also-duplicated"
+file = "kernel/src/syscall.rs"
+find = 'if duplicable && !named(handle.slot()) && !moved(handle) {'
+replace = 'if duplicable && !named(handle.slot()) {'
+note = "ADR-0130 item 2, INV-0130-1: a moved duplicable handle is in one place (TASK-16 review T3)"
+
+[[mutant]]
+id = "K-resume-wakes-everything"
+file = "kernel/src/process.rs"
+find = 'if self.parked.swap(false, Ordering::Relaxed) {'
+replace = 'if { self.parked.store(false, Ordering::Relaxed); true } {'
+note = "ADR-0130 item 7: a resume wakes only parked threads, not a sleeper (TASK-16 review T6)"
+
+[[mutant]]
+id = "K-self-handle-full-rights"
+file = "kernel/src/process.rs"
+find = '.place(handle, entry, Rights::WAIT, object::next_id());'
+replace = '.place(handle, entry, zoraya_abi::ProcessObject::RIGHTS, object::next_id());'
+note = "ADR-0102 item 3: the self slot carries WAIT only (TASK-16 review T4)"
+
+[[mutant]]
+id = "K-pin-in-posix-job"
+file = "kernel/src/syscall.rs"
+find = '''
+        if self.process.job().is_posix() {
+            return Err(Status::AccessDenied);
+        }
+'''
+replace = '''
+'''
+note = "INV-0130-3: dma_pin refuses in a posix job (the architect's decision on ADR-0130)"

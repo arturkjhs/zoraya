@@ -348,3 +348,23 @@ bench = false
 name = "guibench"
 test = false
 bench = false
+
+[[bin]]
+name = "t_streams"
+test = false
+bench = false
+
+[[bin]]
+name = "t_snapshot"
+test = false
+bench = false
+
+[[bin]]
+name = "t_image"
+test = false
+bench = false
+
+[[bin]]
+name = "t_suspend"
+test = false
+bench = false

@@ -9,3 +9,6 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

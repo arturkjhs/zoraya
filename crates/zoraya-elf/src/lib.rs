@@ -14,9 +14,12 @@ pub const PAGE_SIZE: u64 = 4096;
 /// Most `PT_LOAD` segments accepted.
 pub const MAX_SEGMENTS: usize = 8;
 
-const EHDR_SIZE: usize = 64;
-const PHDR_SIZE: usize = 56;
-const MAX_PHDRS: usize = 32;
+/// The ELF header's size.
+pub const EHDR_SIZE: usize = 64;
+/// One program header's size.
+pub const PHDR_SIZE: usize = 56;
+/// Most program headers accepted, of any type.
+pub const MAX_PHDRS: usize = 32;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const EV_CURRENT: u8 = 1;
@@ -80,6 +83,56 @@ pub struct Program {
     pub entry: u64,
     segments: [Segment; MAX_SEGMENTS],
     count: usize,
+    /// Where the program header table is in the file, and its length.
+    table: (usize, usize),
+}
+
+/// What the ELF header says, checked: the first step of [`Program::parse`],
+/// for a caller whose file is not one slice (ADR-0108).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Header {
+    pub entry: u64,
+    /// Where the program header table starts in the file.
+    pub table_offset: usize,
+    /// Its length in bytes: `PHDR_SIZE` times the header count.
+    pub table_length: usize,
+}
+
+impl Header {
+    /// Checks the ELF header at the start of `bytes`.
+    pub fn parse(bytes: &[u8]) -> Result<Header, Error> {
+        let e = bytes.get(..EHDR_SIZE).ok_or(Error::Truncated)?;
+        if e[..4] != *b"\x7fELF" {
+            return Err(Error::BadMagic);
+        }
+        let machine = u16_at(e, 18).ok_or(Error::Truncated)?;
+        let kind = u16_at(e, 16).ok_or(Error::Truncated)?;
+        if e[4] != ELFCLASS64
+            || e[5] != ELFDATA2LSB
+            || e[6] != EV_CURRENT
+            || kind != ET_EXEC
+            || machine != EM_AARCH64
+        {
+            return Err(Error::Unsupported);
+        }
+        let entry = u64_at(e, 24).ok_or(Error::Truncated)?;
+        let phoff = u64_at(e, 32).ok_or(Error::Truncated)?;
+        let phentsize = u16_at(e, 54).ok_or(Error::Truncated)? as usize;
+        let phnum = u16_at(e, 56).ok_or(Error::Truncated)? as usize;
+        if phentsize != PHDR_SIZE || phnum > MAX_PHDRS {
+            return Err(Error::BadHeaders);
+        }
+        let table_offset = usize::try_from(phoff).map_err(|_| Error::Truncated)?;
+        let table_length = phnum * PHDR_SIZE;
+        table_offset
+            .checked_add(table_length)
+            .ok_or(Error::Truncated)?;
+        Ok(Header {
+            entry,
+            table_offset,
+            table_length,
+        })
+    }
 }
 
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
@@ -101,44 +154,47 @@ impl Program {
 
     /// Checks `file`, whose loaded addresses must lie in `[low, high)`.
     pub fn parse(file: &[u8], low: u64, high: u64) -> Result<Program, Error> {
-        let e = file.get(..EHDR_SIZE).ok_or(Error::Truncated)?;
-        if e[..4] != *b"\x7fELF" {
-            return Err(Error::BadMagic);
-        }
-        let machine = u16_at(e, 18).ok_or(Error::Truncated)?;
-        let kind = u16_at(e, 16).ok_or(Error::Truncated)?;
-        if e[4] != ELFCLASS64
-            || e[5] != ELFDATA2LSB
-            || e[6] != EV_CURRENT
-            || kind != ET_EXEC
-            || machine != EM_AARCH64
-        {
-            return Err(Error::Unsupported);
-        }
-        let entry = u64_at(e, 24).ok_or(Error::Truncated)?;
-        let phoff = u64_at(e, 32).ok_or(Error::Truncated)?;
-        let phentsize = u16_at(e, 54).ok_or(Error::Truncated)? as usize;
-        let phnum = u16_at(e, 56).ok_or(Error::Truncated)? as usize;
-        if phentsize != PHDR_SIZE || phnum > MAX_PHDRS {
-            return Err(Error::BadHeaders);
-        }
-        let phoff = usize::try_from(phoff).map_err(|_| Error::Truncated)?;
-        let table_end = phoff
-            .checked_add(phnum * PHDR_SIZE)
+        let header = Header::parse(file)?;
+        let end = header
+            .table_offset
+            .checked_add(header.table_length)
             .ok_or(Error::Truncated)?;
-        let table = file.get(phoff..table_end).ok_or(Error::Truncated)?;
+        let table = file.get(header.table_offset..end).ok_or(Error::Truncated)?;
+        Program::from_table(&header, table, file.len() as u64, low, high)
+    }
 
+    /// The second step of [`Program::parse`]: `table` is the file's bytes the
+    /// header names, and `file_length` the file's size.
+    pub fn from_table(
+        header: &Header,
+        table: &[u8],
+        file_length: u64,
+        low: u64,
+        high: u64,
+    ) -> Result<Program, Error> {
+        if table.len() != header.table_length {
+            return Err(Error::Truncated);
+        }
+        let end = header
+            .table_offset
+            .checked_add(header.table_length)
+            .ok_or(Error::Truncated)?;
+        if end as u64 > file_length {
+            return Err(Error::Truncated);
+        }
+        let entry = header.entry;
         let mut program = Program {
             entry,
             segments: [Segment::default(); MAX_SEGMENTS],
             count: 0,
+            table: (header.table_offset, header.table_length),
         };
         let mut previous_end = low;
         for ph in table.as_chunks::<PHDR_SIZE>().0 {
             if u32_at(ph, 0) != Some(PT_LOAD) {
                 continue;
             }
-            let segment = read_segment(ph, file.len() as u64, low, high)?;
+            let segment = read_segment(ph, file_length, low, high)?;
             let (start, end) = segment.pages();
             if start < previous_end {
                 return Err(Error::Overlap);
@@ -161,6 +217,17 @@ impl Program {
             return Err(Error::BadEntry);
         }
         Ok(program)
+    }
+
+    /// Where the whole program header table is in the file: offset and
+    /// length (ADR-0109 item 5).
+    pub fn table(&self) -> (usize, usize) {
+        self.table
+    }
+
+    /// The whole program header table, from the file this was parsed from.
+    pub fn header_table<'a>(&self, file: &'a [u8]) -> Option<&'a [u8]> {
+        file.get(self.table.0..self.table.0 + self.table.1)
     }
 }
 

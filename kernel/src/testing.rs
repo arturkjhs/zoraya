@@ -25,7 +25,7 @@ use core::hint::black_box;
 use core::ptr::{addr_of, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
-use zoraya_abi::spawn::StartupBlock;
+use zoraya_abi::spawn::Strings;
 use zoraya_abi::{
     Disposition, ExitReason, ExitRecord, Handle, REQUEST_KINDS, RequestKind, process_signals,
 };
@@ -475,6 +475,22 @@ static TESTS: &[Test] = &[
         run: gui_from_a_process,
     },
     // Last, so that it covers every test before it.
+    Test {
+        name: "streams_from_a_process",
+        run: streams_from_a_process,
+    },
+    Test {
+        name: "images_from_a_process",
+        run: images_from_a_process,
+    },
+    Test {
+        name: "job_suspend_from_a_process",
+        run: job_suspend_from_a_process,
+    },
+    Test {
+        name: "snapshots_from_a_process",
+        run: snapshots_from_a_process,
+    },
     Test {
         name: "stack_canary_intact",
         run: stack_canary_intact,
@@ -1189,6 +1205,58 @@ fn no_leak_after_rounds_of_objects() {
     assert_eq!(heap::stats().live, heap_before);
 }
 
+/// Runs `run` twice and checks that the second run left the frame and heap
+/// counts as it found them (INV-0041-1): the first grows what grows once,
+/// such as the signal table and the heap's chunks.
+fn twice_with_nothing_left(run: impl Fn() -> ExitRecord) {
+    assert_eq!(run(), exited(0));
+    let frames_before = frames::stats().free;
+    let heap_before = heap::stats().live;
+    assert_eq!(run(), exited(0));
+    assert_eq!(frames::stats().free, frames_before, "frames");
+    assert_eq!(heap::stats().live, heap_before, "heap");
+}
+
+/// ADR-0101 from a process (INV-0101-1 to -4), and the stream leak loop.
+fn streams_from_a_process() {
+    twice_with_nothing_left(|| run_program("t_streams"));
+}
+
+/// ADR-0108 and ADR-0109 item 5 from a process. It gets the ramdisk's
+/// `hello` in a memory object: length at 0, the object's size at 8, the file
+/// from 4096 (INV-0108-2 writes it to the test volume and runs it from there).
+fn images_from_a_process() {
+    use crate::memory::object::MemoryObject;
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let size = (PAGE_SIZE + file.len() as u64).next_multiple_of(PAGE_SIZE);
+    twice_with_nothing_left(|| {
+        let object = MemoryObject::new(size, false).expect("memory");
+        assert!(object.write(0, &(file.len() as u64).to_le_bytes()));
+        assert!(object.write(8, &size.to_le_bytes()));
+        assert!(object.write(PAGE_SIZE, file));
+        let rights = <zoraya_abi::MemoryObject as zoraya_abi::ObjectType>::RIGHTS;
+        let extra = (100, object::Object::Memory(object), rights);
+        process::spawn_with_devices_and("t_image", Some(extra))
+            .expect("program in the ramdisk")
+            .wait()
+    });
+}
+
+/// ADR-0105 item 8 (INV-0105-5) and the latency of suspending 16 processes.
+fn job_suspend_from_a_process() {
+    assert_eq!(run_program("t_suspend"), exited(0));
+}
+
+/// ADR-0102 from a process: the criterion and every INV-0102 check, with the
+/// device handles for INV-0102-5.
+fn snapshots_from_a_process() {
+    twice_with_nothing_left(|| {
+        process::spawn_with_devices("t_snapshot")
+            .expect("program in the ramdisk")
+            .wait()
+    });
+}
+
 /// The storage stack: failure paths and hostile clients, on the test disk.
 fn storage_from_a_process() {
     let record = process::spawn_with_devices("t_storage")
@@ -1533,14 +1601,13 @@ fn many_processes_come_and_go() {
 /// A `Start` for program `name`, holding nothing, in `job`.
 fn start(name: &str, job: Arc<Job>, suspended: bool) -> Arc<process::Process> {
     let (name, file) = ramdisk::find(name).expect("program in the ramdisk");
-    let none = StartupBlock::decode(&[0; 8]).expect("empty block");
     process::create(process::Start {
         name,
-        file,
+        image: process::Loadable::from_file(file).expect("a good program"),
         job,
         handles: HandleTable::new(),
-        argv: none.argv,
-        envp: none.envp,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
         suspended,
     })
@@ -1681,14 +1748,13 @@ fn failed_allocation_frees_each_object_once() {
     assert!(Job::create(&root(), false).is_err());
     fail();
     let (name, file) = ramdisk::find("child").expect("child");
-    let none = StartupBlock::decode(&[0; 8]).expect("empty block");
     let result = process::create(process::Start {
         name,
-        file,
+        image: process::Loadable::from_file(file).expect("a good program"),
         job: root(),
         handles: HandleTable::new(),
-        argv: none.argv,
-        envp: none.envp,
+        argv: Strings::empty(),
+        envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
         suspended: false,
     });
@@ -2156,4 +2222,41 @@ fn harness_resumes_after_panic() {
     // Runs after the deliberate failures: the harness recorded exactly those
     // and came back to run this test.
     assert_eq!(FAILED.load(Ordering::Relaxed), EXPECTED_FAILURES);
+}
+
+/// Frames `hold_frames` took, as a list through the frames themselves: the
+/// first 8 bytes of each hold the next one's address, so holding needs no
+/// memory of its own. The head, and the count.
+static HELD: SpinLock<(u64, u64)> = SpinLock::new((0, 0));
+
+/// Takes frames until only `leave` are free, for tests of exhaustion from a
+/// process, and returns how many are held.
+pub fn hold_frames(leave: u64) -> u64 {
+    let mut held = HELD.lock();
+    while frames::stats().free > leave {
+        let Ok(frame) = frames::alloc() else {
+            break;
+        };
+        // SAFETY: a frame just allocated, ordinary RAM in the direct map,
+        // which only this list reaches until `release_frames`.
+        unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(held.0) };
+        *held = (frame.addr(), held.1 + 1);
+    }
+    held.1
+}
+
+/// Gives back `limit` of the frames `hold_frames` took, or all of them if
+/// `limit` is 0, and returns how many it gave.
+pub fn release_frames(limit: u64) -> u64 {
+    let mut held = HELD.lock();
+    let mut count = 0;
+    while held.0 != 0 && (limit == 0 || count < limit) {
+        let frame = Frame::from_addr(held.0).expect("an aligned frame");
+        // SAFETY: a held frame, written by `hold_frames`.
+        held.0 = unsafe { (memory::phys_to_virt(frame.addr()) as *const u64).read() };
+        frames::free(frame);
+        held.1 -= 1;
+        count += 1;
+    }
+    count
 }
