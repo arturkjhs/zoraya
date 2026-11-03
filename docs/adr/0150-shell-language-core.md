@@ -1,6 +1,6 @@
 # ADR-0150: The shell language core: words, quoting, variables and globs
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0002, ADR-0003, ADR-0013
 - **Evidence:** DM-008, DM-085, DM-095, CP-21, CP-22, GR-015, alternatives-postmortem.md#plan-9--inferno, shell/survey.md#posix-sh, shell/survey.md#zsh, shell/survey.md#plan-9-rc, shell/survey.md#fish, shell/survey.md#nushell, shell/survey.md#powershell, shell/survey.md#oils-and-ysh, shell/survey.md#classic-pitfalls, shell/survey.md#freebsd-sh-and-base-system
@@ -80,6 +80,14 @@ characters and no `/` (ADR-0013), so a name never contains a newline; spaces are
 
 ## Recommendation
 
+### Decision
+
+Accepted as recommended (architect, 2026-11-03), with two additions from the tour: `count --lines FILE...` prints
+the number of lines in the named files (rule 3), and a familiar Unix command name that Zoraya does not have gets the
+same kind of hint as `x=1`, naming the Zoraya command (ADR-0154 rule 6).
+
+The original recommendation follows.
+
 Recommended: **Option B**, with the rules below. It is a recommendation, not a decision.
 
 1. **Words and commands.** A line is commands separated by `;` or a newline. A command is words separated by spaces
@@ -91,7 +99,8 @@ Recommended: **Option B**, with the rules below. It is a recommendation, not a d
 3. **Variables.** `set name value...` sets a list (`set name` sets the empty list); `unset name` removes it. `$name`
    expands to one argument per element, never split, never globbed; the empty list gives no argument and an empty
    string gives one empty argument. `$name[i]` is element `i` from 1, negative from the end; out of range is an error.
-   `count $name` prints the number of elements. `set` takes `--global` (ADR-0151 rule 2) and
+   `count $name` prints the number of elements, and `count --lines FILE...` the number of lines in the named files
+   together (a builtin reading what the line designates, ADR-0153). `set` takes `--global` (ADR-0151 rule 2) and
    `--query NAME`, which succeeds when `NAME` is set and not empty (ADR-0151 rule 5). Names are letters, digits and `_`, starting with a letter or `_`.
    `name=value` alone is an error with a hint (example below). The shell's own messages have the form
    `zosh: SUBJECT: PROBLEM` with optional `  hint:` lines (ADR-0155 rule 5).
@@ -154,6 +163,7 @@ it's a*b
 | `rm *.tmp`, no match | error, nothing removed | the literal `*.tmp` was never wanted (driver 2) |
 | `` `cmd` ``, `$((1+2))`, heredocs, `{a,b}` | not supported | `$(cmd)`; `math` (ADR-0155); files or `echo`; typing both names |
 | `export X=1` | error with a hint (`export X 1`) | same rule as `set` |
+| `grep`, `wc -l`, `man`, `less`, `which` | error with a hint naming `search`, `count --lines`, `help`, `cat`, `help` (ADR-0154 rule 6) | one name per action (ADR-0155) |
 | `cmd \| read x`, `ls \| count` | error: a builtin can only start a pipeline (ADR-0152) | `set x $(cmd)`, `count $(ls)` |
 | `echo *` with a file `-n` | prints `./-n` | the price of rule 7's protection |
 
@@ -195,3 +205,6 @@ what rule 7 matches.
 - People repeatedly need a `'` inside single quotes: add fish's `\'` escape there.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request. Additions from the tour: `count --lines`, and hints for familiar Unix
+names (ADR-0154 rule 6).

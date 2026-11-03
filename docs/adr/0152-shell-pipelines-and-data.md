@@ -1,6 +1,6 @@
 # ADR-0152: Shell pipelines: byte streams between programs, lists inside the shell
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0003, ADR-0004, ADR-0006, ADR-0101, ADR-0103, ADR-0150, ADR-0151
 - **Evidence:** DM-020, DM-077, GR-002, X-4, alternatives-postmortem.md#plan-9--inferno, shell/survey.md#plan-9-rc, shell/survey.md#nushell, shell/survey.md#powershell, shell/survey.md#oils-and-ysh
@@ -153,3 +153,5 @@ its own text expects this change.
 - The relay measured as a bottleneck: hand programs the terminal's output stream directly.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.

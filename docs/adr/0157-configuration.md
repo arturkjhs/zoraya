@@ -1,6 +1,6 @@
 # ADR-0157: Configuration: one settings file, a command to edit it, and the shell's start file
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0002, ADR-0053, ADR-0055, ADR-0150, ADR-0153, ADR-0156
 - **Evidence:** DM-085, DM-086, DM-087, CP-21, CP-23, shell/survey.md#freebsd-sh-and-base-system, shell/survey.md#fish
@@ -164,3 +164,5 @@ stays.
 - Several people sharing one machine: per-session `/config` directories become the launcher's business, as above.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.

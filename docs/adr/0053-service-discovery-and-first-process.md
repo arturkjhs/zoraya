@@ -54,6 +54,11 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - **Supervision.** `init` holds a process handle and a supervisor channel for each service, on one port. Exit is `TERMINATED`; a volume's `Failed` state is a message on the supervisor channel, which settles ADR-0010's assumption. Restart is `init`'s policy, and the order is in ADR-0054. Running clients are not recovered: they lose their handles, and only their spawner could give them new ones.
 - **If `init` ends,** the kernel reports it and powers off. Nothing else can supervise, as with `init` on Linux.
 
+  *Note, 2026-11-03 (the architect's decision on ADR-0155, recorded by an agent):* when the shell `init` started ends,
+  `init` starts a new shell in the same terminal (the console, or the GUI window) instead of syncing and powering
+  off. The machine is turned off or restarted only through `Power`: the shell's `poweroff` and `reboot` (ADR-0062).
+  If `init` itself ends, the kernel still powers off.
+
 ### Effect of the vision
 Target 2 fits this best: an agent's sandbox is a sub-job with a small namespace table, and it holds nothing else. A launcher for such sandboxes is an ordinary program holding a job handle. Target 3 needs a configuration format and perhaps a broker that hands out services by name to the processes allowed to ask: that is a program, not a kernel change, so the later cost is small.
 

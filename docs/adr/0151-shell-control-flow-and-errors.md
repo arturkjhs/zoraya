@@ -1,6 +1,6 @@
 # ADR-0151: Shell control flow, functions, and how failures are noticed
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0004, ADR-0034, ADR-0046, ADR-0150
 - **Evidence:** DM-017, DM-027, CP-06, CP-12, alternatives-postmortem.md#plan-9--inferno, shell/survey.md#posix-sh, shell/survey.md#bash, shell/survey.md#plan-9-rc, shell/survey.md#nushell, shell/survey.md#powershell, shell/survey.md#oils-and-ysh, shell/survey.md#classic-pitfalls
@@ -194,3 +194,5 @@ a failed `cd` or `mkdir` cannot let later commands act somewhere unintended.
 - A ported workflow needs the full record of every element of a pipeline: add `$pipestatus`.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request. A failure stops the rest of the line at the prompt too, with a clear message of what was not run.

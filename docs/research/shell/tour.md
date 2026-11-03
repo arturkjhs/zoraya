@@ -7,8 +7,8 @@ and in the GUI terminal, so it cannot drift from the shell.
 
 The tour starts on an empty `/home`. Examples 15 to 17 and 27 need stage 6's TinyCC and POSIX programs (6a to 6e),
 the pipelines 19 to 21 need byte streams (6a), and Ctrl-Z in 28 needs `job_suspend` (6a); everything else works on
-what exists today plus TASK-18. Examples 14 and 17 show `grants` with the connection narrowed to one name that ADR-0153 rule 2 proposes;
-if the architect declines that change, they show `create and change anything in ~/project` instead. Messages written
+what exists today plus TASK-18. Examples 14, 15 and 17 rely on the connection narrowed to one name that ADR-0153 rule 2 adds to the file
+service (accepted); until the service has it, `grants` there shows `create and change anything in ...`. Messages written
 by TinyCC are TinyCC's own; Part 2 checks their exact text.
 
 ## Getting your bearings
@@ -32,7 +32,7 @@ Commands:
   count     print how many arguments it was given
   cp        copy a file
   echo      print its arguments
-  exit      end the shell and turn the machine off
+  exit      end this shell; a new one starts
   export    give a variable to the programs you run
   fg        continue a job in the foreground
   find      find files by name
@@ -46,7 +46,9 @@ Commands:
   math      calculate
   mkdir     make a directory
   mv        move or rename
+  poweroff  turn the machine off
   pwd       print the current directory
+  reboot    start the machine again
   rm        remove files
   search    find lines that contain text
   set       set a variable
@@ -147,6 +149,18 @@ notes.txt:1: buy milk
 ```
 Finding nothing is a "no": status 1, nothing printed, and unlike a failure it does not stop the rest of the line.
 
+**10a. Names from elsewhere.** The shell knows the names you may bring from other systems and says what to type here.
+```
+~> grep milk notes.txt
+zosh: grep: no such command
+  hint: on Zoraya this is search: search TEXT FILE...
+~> wc -l notes.txt
+zosh: wc: no such command
+  hint: to count lines: count --lines FILE...
+~> count --lines notes.txt
+2
+```
+
 ## Getting help
 
 **11. Any command explains itself.**
@@ -185,23 +199,30 @@ cp gets:
   in, out, err         the terminal
   ~                    read (current directory)
   ~/notes.txt          read (operand FROM)
-  ~/project            create notes.txt (operand TO)
+  ~/project            create or replace notes.txt (operand TO)
 ~> cp notes.txt project/notes.txt
 ```
 
-**15. Compiling a program.** TinyCC's description comes with the system, so the source and the output it names are
-given to it.
+**15. Compiling a program.** TinyCC is part of the base system and its description comes with it, so the source it
+reads and the output it names are given to it: `-o hello` means "create or replace this one name", so compiling
+again simply replaces the program.
 ```
 ~> echo '#include <stdio.h>' > hello.c
 ~> echo 'int main(void) { printf("hello, world\n"); return 0; }' >> hello.c
 ~> tcc hello.c -o hello
 ~> ./hello
 hello, world
+~> echo '#include <stdio.h>' > hello.c
+~> echo 'int main(void) { printf("hello again\n"); return 0; }' >> hello.c
+~> tcc hello.c -o hello
+~> ./hello
+hello again
 ```
 
 **16. Giving a directory.** A file can name other files, which no description can know about. Here `main.c` includes
 a header from `~/include`: TinyCC cannot see it until you give that directory with `+r` (read) or `+w` (read and
-write) before the command.
+write) before the command. When a program reaches for something it was not given, the shell says what and how to
+give it.
 ```
 ~> mkdir include
 ~> echo '#define GREETING "hi there"' > include/greet.h
@@ -211,6 +232,8 @@ write) before the command.
 ~/project> echo 'int main(void) { puts(GREETING); return 0; }' >> main.c
 ~/project> tcc main.c -o main
 main.c:1: error: include file '../include/greet.h' not found
+  hint: tcc tried to read ~/include/greet.h, which it was not given
+  to allow it: +r ~/include tcc main.c -o main
 ~/project> +r ~/include tcc main.c -o main
 ~/project> ./main
 hi there
@@ -224,7 +247,7 @@ tcc gets (a POSIX program):
   in, out, err         the terminal
   ~/project            read (current directory)
   ~/project/main.c     read (operand FILE)
-  ~/project            create main (option -o)
+  ~/project            create or replace main (option -o)
   ~/include            read (+r)
   /bin /usr /etc       read (system)
   /proc/self/exe       read (system)
@@ -271,7 +294,7 @@ grants +r ~/include tcc main.c -o main
 **22. A loop.**
 ```
 ~/project> cd
-~> for f in *.c *.txt { echo "$f: $(count $(cat $f)) lines" }
+~> for f in *.c *.txt { echo "$f: $(count --lines $f) lines" }
 hello.c: 2 lines
 notes.txt: 2 lines
 ```
@@ -298,7 +321,7 @@ more: help backup
 ~> echo '}' >> tidy.zosh
 ~> source tidy.zosh
 ~> ls *.bak
-zosh: no file matches *.bak
+zosh: *.bak: no file matches
 ```
 
 ## When things go wrong
@@ -388,7 +411,10 @@ settings: shell.sugestions: no such setting
 ~> settings --reset shell.suggestions
 ```
 
-**32. Ending.** `exit` ends the shell, writes everything to disk and turns the machine off.
+**32. Ending.** `exit` ends this shell; a new one starts in its place. `poweroff` writes everything to disk and turns
+the machine off; `reboot` starts it again.
 ```
 ~> exit
+Type help to begin, or help tour.
+~> poweroff
 ```

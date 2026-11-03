@@ -291,6 +291,9 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0153-4 | [ADR-0153](0153-what-a-program-gets.md) | `grants` prints exactly the entries and rights the command would receive. | a host test comparing `grants`'s output with the spawn request the runner builds for the same line. | not yet applicable (until TASK-18 Part 2) |
 | INV-0153-5 | [ADR-0153](0153-what-a-program-gets.md) | `Startup::decode` is total, and a record that encodes then decodes is equal. | `cargo test -p zoraya-abi` with truncations and random mutations, as for `Bootstrap` (INV-0107-1). | not yet applicable (until TASK-18 Part 2) |
 | INV-0153-6 | [ADR-0153](0153-what-a-program-gets.md) | A description outside the system image never designates: only descriptions in `/zoraya/commands/` of the ramdisk, for the program path they name, and descriptions inside native programs are read. | a host test of the description lookup with a description file on the volume and a program run by `./NAME`. | not yet applicable (until TASK-18 Part 2) |
+| INV-0153-7 | [ADR-0153](0153-what-a-program-gets.md) | A path refused because no entry covers it is reported to the shell once per process and path, a path that is missing inside an entry is never reported, and the shell's hint names each reported path with the grant that covers it. | a host test of the resolver and reporter, and an in-QEMU test with a C program through `libposix` and a native program, each opening one path outside their entries twice and one missing path inside, against the printed hint. | not yet applicable (until TASK-18 Part 2) |
+| INV-0153-8 | [ADR-0153](0153-what-a-program-gets.md) | In a table `zosh` builds, a relative path is joined to the current directory's absolute path and normalised, `..` at `/` stays at `/`, and a path is served only by an entry that covers it. | the shared resolver's host test of INV-0002-4, run in both forms (entry-relative for the broker's and `libposix`'s tables, absolute for `zosh`'s), with adversarial paths. | not yet applicable (until TASK-18 Part 2) |
+| INV-0153-9 | [ADR-0153](0153-what-a-program-gets.md) | Operand kinds other than `read` are granted automatically only from descriptions of base-system commands; any other description gives at most `read`. | a host test of the grant builder with each kind from a system-image description and from a native program's own description outside the image. | not yet applicable (until TASK-18 Part 2) |
 | INV-0154-1 | [ADR-0154](0154-shell-interactive-experience.md) | The editor is total: any byte sequence of input, at any width from 1 to 500 columns, leaves the line buffer valid UTF-8 within its bound and the cursor inside the line, without panic. | a deterministic random test in `make test-unit` and a target in `fuzz/`. | not yet applicable (until TASK-18 Part 2) |
 | INV-0154-2 | [ADR-0154](0154-shell-interactive-experience.md) | The editor's output uses only the sequences listed in item 8. | a host test that feeds random keys and parses every byte written with an independent checker of the subset. | not yet applicable (until TASK-18 Part 2) |
 | INV-0154-3 | [ADR-0154](0154-shell-interactive-experience.md) | A suggestion or completion never runs a command: with any keys but Enter, the runner is never called. | a host test of the editor with a runner that fails if called. | not yet applicable (until TASK-18 Part 2) |
@@ -299,6 +302,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0155-2 | [ADR-0155](0155-command-conventions.md) | No native program parses argv except through the shared crate. | a lint (a `grep` in `make test`) that no program under `user/src/bin` other than test programs reads its argv vector directly. | not yet applicable (until TASK-18 Part 2) |
 | INV-0155-3 | [ADR-0155](0155-command-conventions.md) | Every error line a native command prints matches `NAME: SUBJECT: PROBLEM` or `NAME: PROBLEM`, with no raw status name. | a host test of the formatter over every `Status`, and the scripted sessions' error lines matched against the pattern. | not yet applicable (until TASK-18 Part 2) |
 | INV-0155-4 | [ADR-0155](0155-command-conventions.md) | A native command whose `out` reader closes exits 0 without writing to `err`. | an in-QEMU test `cat big \| head --lines 1` with each listing command in place of `cat`. | not yet applicable (until TASK-18 Part 2) |
+| INV-0155-5 | [ADR-0155](0155-command-conventions.md) | `exit` in the shell ends that shell, and `init` starts a new shell in the same terminal; the machine stays on. | a scripted serial session (`tests/shell/exit.script`) that exits, sees the new greeting and prompt, and runs a command, and the same in the GUI script. | not yet applicable (until TASK-18 Part 2) |
+| INV-0155-6 | [ADR-0155](0155-command-conventions.md) | `reboot` restarts the machine and `poweroff` ends it with QEMU status 0. | scripted serial sessions, the second being INV-0062-3's. | not yet applicable (until TASK-18 Part 2) |
 | INV-0156-1 | [ADR-0156](0156-help-and-command-descriptions.md) | The description parser is total: any byte string gives a description or an error with a line number, in bounded memory. | a deterministic random test in `make test-unit` and a target in `fuzz/`. | not yet applicable (until TASK-18 Part 2) |
 | INV-0156-2 | [ADR-0156](0156-help-and-command-descriptions.md) | Every command of ADR-0155 rule 8, every demonstration program it names, every builtin and every entry of `/zoraya/commands/` has a description the parser accepts, and every option the program accepts is in it. | a build step that parses each description and fails on a missing or refused one; INV-0155-1 for options. | not yet applicable (until TASK-18 Part 2) |
 | INV-0156-3 | [ADR-0156](0156-help-and-command-descriptions.md) | `NAME --help`, `help NAME` and Tab completion of `NAME --` list the same options. | a host test rendering all three from each description. | not yet applicable (until TASK-18 Part 2) |
@@ -381,13 +386,13 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0108](0108-programs-from-the-filesystem.md) Running programs from the filesystem | 4 |
 | [ADR-0109](0109-building-the-toolchain.md) Building the toolchain | 4 |
 | [ADR-0110](0110-acceptance-harness.md) Acceptance harness for stage 6 | 4 |
-| [ADR-0150](0150-shell-language-core.md) The shell language core: words, quoting, variables and globs (proposed) | 4 |
-| [ADR-0151](0151-shell-control-flow-and-errors.md) Shell control flow, functions, and how failures are noticed (proposed) | 3 |
-| [ADR-0152](0152-shell-pipelines-and-data.md) Shell pipelines: byte streams between programs, lists inside the shell (proposed) | 3 |
-| [ADR-0153](0153-what-a-program-gets.md) What a program gets from the shell, and how a person grants more (proposed) | 6 |
-| [ADR-0154](0154-shell-interactive-experience.md) The shell's interactive experience: editing, history, completion, suggestions and errors (proposed) | 4 |
-| [ADR-0155](0155-command-conventions.md) Conventions every native command follows (proposed) | 4 |
-| [ADR-0156](0156-help-and-command-descriptions.md) Help, the manual and command descriptions from one source (proposed) | 3 |
-| [ADR-0157](0157-configuration.md) Configuration: one settings file, a command to edit it, and the shell's start file (proposed) | 3 |
-| [ADR-0158](0158-job-control.md) Job control in the native shell (proposed) | 4 |
-| **Total** | **303** |
+| [ADR-0150](0150-shell-language-core.md) The shell language core: words, quoting, variables and globs | 4 |
+| [ADR-0151](0151-shell-control-flow-and-errors.md) Shell control flow, functions, and how failures are noticed | 3 |
+| [ADR-0152](0152-shell-pipelines-and-data.md) Shell pipelines: byte streams between programs, lists inside the shell | 3 |
+| [ADR-0153](0153-what-a-program-gets.md) What a program gets from the shell, and how a person grants more | 9 |
+| [ADR-0154](0154-shell-interactive-experience.md) The shell's interactive experience: editing, history, completion, suggestions and errors | 4 |
+| [ADR-0155](0155-command-conventions.md) Conventions every native command follows | 6 |
+| [ADR-0156](0156-help-and-command-descriptions.md) Help, the manual and command descriptions from one source | 3 |
+| [ADR-0157](0157-configuration.md) Configuration: one settings file, a command to edit it, and the shell's start file | 3 |
+| [ADR-0158](0158-job-control.md) Job control in the native shell | 4 |
+| **Total** | **308** |

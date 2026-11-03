@@ -1,6 +1,6 @@
 # ADR-0155: Conventions every native command follows
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0004, ADR-0013, ADR-0055, ADR-0101, ADR-0151, ADR-0152, ADR-0153, ADR-0156
 - **Evidence:** DM-008, DM-052, DM-077, DM-095, CP-12, shell/survey.md#freebsd-sh-and-base-system, shell/survey.md#powershell, shell/survey.md#nushell, shell/survey.md#command-line-conventions, shell/survey.md#what-this-suggests-for-zosh, alternatives-postmortem.md#oberon
@@ -70,6 +70,16 @@ typed values at the request (CP-12).
 
 ## Recommendation
 
+### Decision
+
+Accepted with a change (architect, 2026-11-03): `exit` ends the shell, and `init` starts a new one in the same
+terminal (the console, or the GUI window); the machine stays on. `poweroff` and `reboot` are explicit builtins: the
+shell holds `Power` (ADR-0062), and `reboot` needs a new call on that object, recorded in ADR-0062's note. Rule 8 is
+amended accordingly. From the tour, also: `count --lines FILE...` counts lines (rule 8), and a native program's
+`not granted` message carries no hint, since the shell prints it (ADR-0153 rule 11).
+
+The original recommendation follows.
+
 Recommended: **Option D**. It is a recommendation, not a decision.
 
 1. **Names.** The classic names stay for the classic file operations: `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`,
@@ -97,8 +107,8 @@ Recommended: **Option D**. It is a recommendation, not a decision.
 5. **Errors.** Every failure is one line to `err`: `NAME: SUBJECT: PROBLEM`, in lower case, no final period, then
    optionally indented lines `  hint: ...` saying what to try. `PROBLEM` comes from the status by one table in the
    shared crate: `NotFound` "not found", `AlreadyExists` "already exists", `NotEmpty` "not empty", `IsDirectory`
-   "is a directory", `NotDirectory` "not a directory", `NotGranted` and `AccessDenied` "not granted" (with a hint
-   naming the `+r` or `+w` grant, ADR-0153), `StorageFailed` "the volume has failed", `TooManyOpen` "too many open
+   "is a directory", `NotDirectory` "not a directory", `NotGranted` and `AccessDenied` "not granted" (the
+   shell adds the hint naming the grant, ADR-0153 rule 11), `StorageFailed` "the volume has failed", `TooManyOpen` "too many open
    files", any other status its name in words. Never the bare status name, never a number alone (DM-052, CP-12).
 6. **Exit codes.** 0 success; 1 failure; 2 wrong usage. A command whose description declares it a **question**
    (`question` in its header: `test`, `search`) uses 0 for "yes", 1 for "no", 2 for wrong usage and 3 for a failure,
@@ -111,6 +121,9 @@ Recommended: **Option D**. It is a recommendation, not a decision.
    `unset`, `export`, `count`, `echo`, `test`, `math`, `source`, `exit`, `status`, `history`, `help`, `grants`,
    `jobs`, `fg`, `bg`, `wait`, `kill`, `settings` (the shell owns `/config`, ADR-0157), `slots` and `uptime`. `exit`
    is the one way to end the shell and turn the machine off; `poweroff` goes, as a second name for it.
+   *Amended by the Decision:* `exit` ends this shell and `init` starts a new one; `poweroff` (turn the machine off)
+   and `reboot` (start it again) are builtins. `count --lines FILE...` prints the number of lines of the named files
+   together, which the shell reads as `read` designations.
    Everything that acts on files is a program and receives only what the line
    designates (ADR-0153): `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `sync`, `head`, `sleep`, `find`,
    `search`. The demonstration programs (`hello`, `spin`, `stubborn`, `fault`, `exit-with`, `echo-args`) have
@@ -181,6 +194,11 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
   lines matched against the pattern.
 - **INV-0155-4.** A native command whose `out` reader closes exits 0 without writing to `err`. *Check:* an in-QEMU
   test `cat big | head --lines 1` with each listing command in place of `cat`.
+- **INV-0155-5.** `exit` in the shell ends that shell, and `init` starts a new shell in the same terminal; the machine
+  stays on. *Check:* a scripted serial session (`tests/shell/exit.script`) that exits, sees the new greeting and
+  prompt, and runs a command, and the same in the GUI script.
+- **INV-0155-6.** `reboot` restarts the machine and `poweroff` ends it with QEMU status 0. *Check:* scripted serial
+  sessions, the second being INV-0062-3's.
 
 ## Open questions
 - Whether `rm` should ask before removing a directory tree at the terminal; Option D's answer is no prompts, only
@@ -192,3 +210,8 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
 - People repeatedly typing the GNU spelling of an option that has another name here: add it as the long form.
 
 ## Architect's decision
+
+Accepted with a change, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
+`exit` closes the shell, and `init` on the console starts a new one; `poweroff` and `reboot` remain explicit
+commands. The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
+updated (notes in those ADRs, INV-0155-5 and -6).

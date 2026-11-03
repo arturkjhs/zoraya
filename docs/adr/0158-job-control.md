@@ -1,6 +1,6 @@
 # ADR-0158: Job control in the native shell
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0004, ADR-0006, ADR-0046, ADR-0096, ADR-0104, ADR-0105, ADR-0151, ADR-0152, ADR-0153
 - **Evidence:** DM-017, DM-070, DM-100, CP-07, CP-10, X-12, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, alternatives-postmortem.md#plan-9--inferno, shell/survey.md#bash, shell/survey.md#fish, shell/survey.md#plan-9-rc
@@ -174,3 +174,5 @@ leave the job tree (CP-07). Threads: `job_suspend` stops every thread (ADR-0105 
 - People losing background output in the middle of their typing: hold background output until the line is entered.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.

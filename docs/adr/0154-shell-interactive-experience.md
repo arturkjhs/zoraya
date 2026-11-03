@@ -1,6 +1,6 @@
 # ADR-0154: The shell's interactive experience: editing, history, completion, suggestions and errors
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0013, ADR-0060, ADR-0095, ADR-0096, ADR-0150, ADR-0151, ADR-0153, ADR-0156, ADR-0157
 - **Evidence:** DM-069, DM-071, DM-095, CP-22, CP-25, GR-015, shell/survey.md#freebsd-sh-and-base-system, shell/survey.md#bash, shell/survey.md#zsh, shell/survey.md#fish, shell/survey.md#nushell, shell/survey.md#powershell, shell/survey.md#command-line-conventions
@@ -74,13 +74,19 @@ Right, highlighting that marks an unknown command red, Tab with a list, prefix h
 
 ## Recommendation
 
+### Decision
+
+Accepted as recommended (architect, 2026-11-03), with the hints for familiar Unix names in rule 6, from the tour.
+
+The original recommendation follows.
+
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 1. **Keys.** Left and Right (also Ctrl-B, Ctrl-F), Home and End (also Ctrl-A, Ctrl-E), Backspace, Delete, Ctrl-W
    (erase the word before the cursor), Ctrl-U (erase to the start), Ctrl-K (erase to the end), Ctrl-L (clear the
    screen and redraw), Enter (run, or continue if a quote or `{` is open, with the prompt `...> `), Ctrl-C (clear the
-   line), Ctrl-D on an empty line prints `type exit to end the shell` and does nothing else: ending the shell powers
-   the machine off (`docs/design.md`), so it is never one key.
+   line), Ctrl-D on an empty line prints `type exit to end the shell` and does nothing else: ending the shell ends
+   its jobs and loses its variables and functions, so it is never one key.
 2. **History.** Every line run is kept once it has finished; a line already kept moves to the end instead of being
    kept twice; in `/config/history` (ADR-0157), at most
    `shell.history-size` lines (1,000). Up and Down walk the lines that start with what is already typed; Ctrl-R opens
@@ -100,7 +106,17 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    unclosed quote is red to its end. Nothing else is coloured. `shell.colour = no` turns colour off everywhere.
 6. **Errors.** A parse error shows what, where and what to try: the message, the line, a caret under the place, and
    a hint when one is known. An unknown command suggests the nearest known names at edit distance at most 2, never
-   running them.
+   running them. A familiar Unix name that Zoraya does not have gets a hint naming the Zoraya command instead:
+
+   | Typed | Hint |
+   |---|---|
+   | `grep` | `on Zoraya this is search: search TEXT FILE...` |
+   | `wc` | `to count lines: count --lines FILE...` |
+   | `man` | `on Zoraya this is help: help NAME` |
+   | `less`, `more` | `to print a file: cat FILE (help pages page by themselves)` |
+   | `which` | `help NAME says what NAME is and where it comes from` |
+
+   The table is the shell's, kept beside the descriptions (ADR-0156); it never runs the suggested command.
 7. **Text.** The editor takes UTF-8 and refuses an invalid sequence with a bell-free message. It moves by Unicode
    scalar value and counts one column for each, which matches the GUI font (ADR-0095); on the serial line a wide
    character can misalign the cursor, a stated limitation. File names and anything else the shell prints cannot
@@ -130,6 +146,9 @@ notes/  notes.txt
 ~> sl
 zosh: sl: no such command
   hint: did you mean ls?
+~> grep milk notes.txt
+zosh: grep: no such command
+  hint: on Zoraya this is search: search TEXT FILE...
 ~> for f in *.txt { echo $f
 ...> }
 a.txt
@@ -190,3 +209,6 @@ terminal draws faint itself. CP-25's out-of-band control is unaffected: these ar
 - A terminal that reports its size or width of characters (a later ADR-0096 revision): use it instead of the setting.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request. Addition from the tour: hints that name the Zoraya command for
+`grep`, `wc`, `man`, `less` and `which` (rule 6).

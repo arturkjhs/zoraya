@@ -1,8 +1,9 @@
 # Plan for TASK-18 Part 2: building the native shell
 
 The order in which Part 2 builds the accepted versions of ADR-0150 to ADR-0158, what each step depends on, and which
-steps wait for stage 6. It assumes the ADRs are accepted as recommended; a changed decision changes the step that
-implements it and nothing before it. Each step ends with `make test` passing and a commit. Stage 6's sub-stages are
+steps wait for stage 6. ADR-0150 to ADR-0158 were accepted on 2026-11-03, ADR-0153 and ADR-0155 with changes, and with
+them the changes to ADR-0004, ADR-0055, ADR-0096, ADR-0104, ADR-0105, ADR-0107 and INV-0002-4 they declare (notes in
+those ADRs); the steps follow the decisions. Each step ends with `make test` passing and a commit. Stage 6's sub-stages are
 those of [`../stage-6/plan.md`](../stage-6/plan.md): 6a kernel objects (byte streams, `image_create`, `job_suspend`),
 6b toolchain, 6c `libposix` core, 6d broker, `ttyd` and `tmpd`.
 
@@ -50,7 +51,10 @@ step 10 for 6d and for 6e's image with the POSIX programs installed. Until then 
    step 1's `setting` declarations, host tests for INV-0157-1 to -3.
 6. **The new `zosh`.** `user/src/bin/zosh.rs` rebuilt on steps 2 to 5: the evaluator's runner over today's `spawn`;
    every builtin of ADR-0155 item 8 with its description; `help`, the topics and the pager; history and settings in
-   `/config` and `/home` (created by `zoraya-mkfs` from `rootfs/config/` and `rootfs/home/`); `/config/start.zosh`; the reports of ADR-0151. Programs
+   `/config` and `/home` (created by `zoraya-mkfs` from `rootfs/config/` and `rootfs/home/`); `/config/start.zosh`; the reports of ADR-0151; `count --lines` and the hints for Unix names (ADR-0150 and ADR-0154
+   Decisions). `init` starts a new shell when `zosh` exits instead of powering off (ADR-0155 Decision, ADR-0053's
+   note); `poweroff` and `reboot` are builtins (`reboot` says it is unavailable until the kernel has `power_reset`,
+   `docs/backlog.md`); `tests/shell/exit.script` checks INV-0155-5. Programs
    still come from the ramdisk and still print to the console (no streams yet). The existing serial and GUI scripts
    are updated to the new prompt, reports and commands (`write`, `ls-ramdisk`, `exit-code`, `run`, `exit N` go;
    ADR-0155 item 8), and the demonstration program `exit` is renamed `exit-with`.
@@ -59,10 +63,11 @@ step 10 for 6d and for 6e's image with the POSIX programs installed. Until then 
    which reuses 6c's if 6c lands first: the shared crate is the first thing written, whoever needs it first); the
    grant builder in the shell (designated operands, `+r`, `+w`, missing paths) and `grants`; `ls`, `cat`, `cp`, `mv`,
    `rm`, `mkdir`, `stat`, `sync`, `head`, `find` and `search` as ramdisk programs on `zoraya-command`, removed from
-   the shell. Paths from values (rule 4), link objects (rule 5), absolute resolution (rule 6). INV-0153-1 to -6 and
-   INV-0155-1, -2. `narrow` (ADR-0153 rule 2) is a change to the file service, outside this task's files: it is built
-   here only if the architect accepts it with the ADR; otherwise the shell's fallback (the whole parent directory,
-   shown as such) is what Part 2 builds. Without streams the programs write to the console, so this step's
+   the shell. Paths from values (rule 4), link objects (rule 5), absolute resolution (rule 6). Automatic write designation only for
+   base-system commands (ADR-0153 Decision). The `REPORT` channel, its writer in `zoraya-rt` and the shell's hint after
+   a job ends (rule 11). INV-0153-1 to -9 (INV-0153-7's `libposix` half in step 10) and INV-0155-1, -2. `narrow` in
+   `zoraya-proto-file` and `zoraya-fs-service` (ADR-0055's note), accepted by the architect with this ADR; until it
+   lands the shell uses the fallback of rule 2 and shows it. Without streams the programs write to the console, so this step's
    in-QEMU checks read the serial line.
 8. **Streams and pipelines** (ADR-0152), after 6a is on `main`. Standard slots `IN`, `OUT`, `ERR` in `zoraya-abi`;
    `zoraya-rt`'s print goes to `OUT`; the shell's relay between the terminal and its jobs (on the console and on the
@@ -75,9 +80,8 @@ step 10 for 6d and for 6e's image with the POSIX programs installed. Until then 
     tension with ADR-0104 item 12) and gives `zosh` a native client connection; the broker's `Group(job)` form of
     `spawn_prepare`; `zosh` detects a program with no `.zoraya.native` note, prepares it in the line's job, builds the
     bootstrap record with the toolchain set, a `/tmp` of the line's own and the designated entries, commits, waits on
-    the process job and reaps the pid; `/zoraya/commands/` with descriptions for tcc, make and dash; Ctrl-Z for POSIX jobs through the
-    broker. Broker and `init` changes are outside this task's files, as `narrow` is: they need the architect's
-    acceptance of ADR-0153's tensions. The tour's examples 15 to 17 and 27 then run.
+    the process job and reaps the pid; `libposix` writes refused paths on `REPORT` (ADR-0107's note); `/zoraya/commands/` with descriptions for tcc, make and dash; Ctrl-Z for POSIX jobs through the
+    broker. The broker and `init` changes are outside the shell's files; the architect accepted them with ADR-0153. The tour's examples 15 to 17 and 27 then run.
 11. **The tour as a test, and documentation.** `tests/shell/tour.script` plays `docs/research/shell/tour.md` on the
     serial console, and `tests/gui/tour.script` in the GUI, checking every line (INV-0154-4); a host check that the
     scripts and the tour's code blocks are the same text, so neither can change alone. Hostile input to the parser

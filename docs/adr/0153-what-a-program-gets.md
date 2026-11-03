@@ -1,6 +1,6 @@
 # ADR-0153: What a program gets from the shell, and how a person grants more
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0002, ADR-0003, ADR-0013, ADR-0033, ADR-0046, ADR-0052, ADR-0053, ADR-0055, ADR-0101, ADR-0104, ADR-0105, ADR-0107, ADR-0108, ADR-0150, ADR-0152, ADR-0156
 - **Evidence:** CP-01, CP-05, CP-28, DM-009, DM-010, DM-014, DM-039, DM-041, DM-072, DM-087, GR-004, GR-008, X-1, X-12, alternatives-postmortem.md#plan-9--inferno, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, shell/survey.md#capability-shells-and-grant-syntax, shell/survey.md#what-this-suggests-for-zosh
@@ -98,6 +98,28 @@ read a two-letter grant before a command. Neither is measured; the survey found 
 
 ## Recommendation
 
+### Decision
+
+Accepted with a change (architect, 2026-11-03), and with additions the architect asked for after reading the tour:
+
+- **Automatic designation by kind.** A `read` operand is granted automatically for every command that has a
+  description. The kinds that change things (`write`, `create`, `remove`, `remove-tree`, `rename`, `tree`) are granted
+  automatically only to **base-system commands**: the native commands of the system image and the POSIX programs its
+  `/zoraya/commands/` describes (rule 10). For any other program those operands are not granted, and the person
+  writes `+w`. Rule 2 below is amended accordingly.
+- **`+w` stays one level**, not split into change and remove; the open question stays open, with a revisit trigger
+  for the agent-isolation direction.
+- **Output names.** A `create` operand (`-o FILE`, `TO`) means "create or replace this one name": the narrowed
+  connection may create the name or write over the file already there, and nothing else.
+- **Refused paths are reported.** Rule 11 below: the runtime (`zoraya-rt`, `libposix`) tells refused paths apart from
+  missing files and reports them to `zosh`, which prints after the program ends which path it tried and which grant
+  would allow it.
+- **The changes to accepted ADRs** declared below are accepted: `narrow` in ADR-0055, the broker changes in ADR-0104,
+  ADR-0105 item 9 (with the revisit condition "before the first interactive POSIX program"), path resolution in
+  ADR-0107 and INV-0002-4 (recorded as INV-0153-8), and rule 11's report slot in ADR-0107's record.
+
+The original recommendation follows.
+
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 **1. Every command receives** (native or POSIX):
@@ -120,11 +142,14 @@ in it. ADR-0055 has no such connection; this ADR adds one request, `narrow(name,
 |---|---|---|---|
 | `read` | the named file or directory | `read`, `clone` | `read` |
 | `write` | the named existing file | `read`, `write`, `sync`, `clone` | `change` |
-| `create` | the parent directory, narrowed to the name | `read`, `write`, `create`, `sync`, `clone` | `create NAME` |
+| `create` | the parent directory, narrowed to the name | `read`, `write`, `create`, `sync`, `clone` | `create or replace NAME` |
 | `remove` | the parent directory, narrowed to the name | `read`, `remove`, `clone` | `remove NAME` |
 | `remove-tree` | as `remove`, plus `tree` on the named directory | as `remove`, plus `tree`'s | `remove NAME and all in it` |
 | `rename` | each parent, narrowed to its name | `read`, `rename`, `create`, `remove`, `clone` | `rename NAME` |
 | `tree` | the named directory and everything below | every right but `publish` | `change anything in` |
+
+*Amended by the Decision:* only `read` is automatic for every described command; the other kinds are automatic for
+base-system commands alone. A `create` name may be created or, if it exists, replaced.
 
 An option may change an operand's kind (`rm --recursive` makes its operand `remove-tree`, ADR-0156). A description
 cannot name a fixed path and cannot widen the current directory: authority comes only from what the person typed. A
@@ -202,6 +227,24 @@ question: a native program with none (a test program) gets no designations, only
   (`program /bin/tcc`). It applies only when the command resolved to that path through `shell.path`; `./tcc`, a copy
   elsewhere, or a file the person built gets none. Nothing on the volume can add or change a trusted description.
 
+**11. Refused paths** (added by the architect's decision). The start-up record (rule 8) and ADR-0107's bootstrap
+record carry the write end of a **report channel** at a fixed slot, `REPORT`. When a program names a path that no
+entry covers, its runtime (`zoraya-rt` natively, `libposix` for POSIX programs) still fails the call as before
+(`NotGranted`, `ENOENT`), and also writes a report `{ path, access: read | write }` with the absolute, normalised path
+on that channel, once per distinct path and at most 16 per process, never waiting: a report that does not fit is
+dropped and counted. A path inside an entry that does not exist is a missing file, and is never reported. After the
+job ends, `zosh` reads the reports and prints, below the program's own output, for each directory involved (at most
+three, then `and N more`):
+
+```
+  hint: tcc tried to read ~/include/greet.h, which it was not given
+  to allow it: +r ~/include tcc main.c -o main
+```
+
+The grant offered is `+r` or `+w` on the directory that holds the path, and the line is the person's line with that
+grant in front. A native program's own message says only `not granted` (ADR-0155 rule 5); the hint is the shell's,
+the same for both kinds of program.
+
 **Examples.**
 
 ```
@@ -221,6 +264,8 @@ shell.suggestions = no
 hello, world
 ~/proj> tcc main.c -o main
 main.c:1: error: include file '../common/util.h' not found
+  hint: tcc tried to read ~/common/util.h, which it was not given
+  to allow it: +r ~/common tcc main.c -o main
 ~/proj> +r ~/common tcc main.c -o main
 ~/proj> set old $(cat ~/old-files.txt)
 ~/proj> rm $old
@@ -266,6 +311,8 @@ natural extension once networking exists (CP-28); nothing here precludes it.
   path, at `/` it stays, and a path is served only by an entry that covers it". Its purpose, that resolution never
   escapes an entry, holds; its check, over the shared resolver, must test both forms. Accepting this ADR records the
   new wording beside INV-0002-4.
+- *ADR-0107 item 5* lists the fixed slots of the bootstrap record; rule 11 adds `REPORT`, a channel's write end, to
+  them and to the list INV-0002-5's check enumerates (as ADR-0107 already extended it).
 - *ADR-0002 rule 5* lists the toolchain's working set as table entries; the toolchain set here is that list without
   `/` itself, and with a `/tmp` per command line instead of per session (ADR-0002 rule 7 needs `/tmp` shared within
   one `make` tree, which one line is).
@@ -305,22 +352,45 @@ natural extension once networking exists (CP-28); nothing here precludes it.
 - **INV-0153-6.** A description outside the system image never designates: only descriptions in `/zoraya/commands/`
   of the ramdisk, for the program path they name, and descriptions inside native programs are read. *Check:* a host
   test of the description lookup with a description file on the volume and a program run by `./NAME`.
+- **INV-0153-7.** A path refused because no entry covers it is reported to the shell once per process and path, a
+  path that is missing inside an entry is never reported, and the shell's hint names each reported path with the
+  grant that covers it. *Check:* a host test of the resolver and reporter, and an in-QEMU test with a C program
+  through `libposix` and a native program, each opening one path outside their entries twice and one missing path
+  inside, against the printed hint.
+- **INV-0153-8.** In a table `zosh` builds, a relative path is joined to the current directory's absolute path and
+  normalised, `..` at `/` stays at `/`, and a path is served only by an entry that covers it. *Check:* the shared
+  resolver's host test of INV-0002-4, run in both forms (entry-relative for the broker's and `libposix`'s tables,
+  absolute for `zosh`'s), with adversarial paths.
+- **INV-0153-9.** Operand kinds other than `read` are granted automatically only from descriptions of base-system
+  commands; any other description gives at most `read`. *Check:* a host test of the grant builder with each kind
+  from a system-image description and from a native program's own description outside the image.
 
 ## Open questions
 - Whether `+w` should be split into `+w` (change and create) and `+d` (remove and rename), as `unveil` splits `w` and
-  `c`; one level is simpler to read, two are closer to least authority.
+  `c`; one level is simpler to read, two are closer to least authority. The architect kept one level for now.
 - Whether the shell should offer a grant after a refused command (Deno's prompt), or only the hint; a prompt trains
   people to say yes.
-- Whether the shell should print a hint after a POSIX command fails when that command is known to open paths from its
-  input (`tcc`, `make`), since their own message says only "not found".
 - Which descriptions to ship for toybox applets, and whether toybox runs as POSIX programs with the toolchain set.
 
 ## Revisit triggers
 - People routinely type `+w /` or `+w .` for ordinary commands: descriptions are missing or wrong, or the default is
   too narrow.
-- A POSIX program in scope needs a tty from `zosh`: lend it `ttyd` (ADR-0105) by a superseding ADR.
+- Before the first interactive POSIX program is wanted from `zosh`: lend it `ttyd` (ADR-0105) by a superseding ADR
+  (the architect's condition on ADR-0105 item 9).
+- The agent-isolation direction is chosen (Vision, target 2): reconsider splitting `+w`, and whether base-system
+  commands should keep automatic write designation.
 - The architect declines `narrow`: rule 2's fallback becomes the rule, and `create`, `remove` and `rename` are
   recorded as reaching the parent directory.
 - Networking: `+net`.
 
 ## Architect's decision
+
+Accepted with a change, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
+Designation is automatic only for reading; for writing (every kind but `read`) it is automatic only for base-system
+commands, and every other program needs an explicit `+w`. `+w` is not split into change and remove for now; a revisit
+trigger names the agent-isolation direction. From the tour: a program's access to a path outside what it was given
+is told apart from a missing file by `libposix` (and `zoraya-rt`) and reported to `zosh`, which prints after the
+program ends which path it tried and which `+r`/`+w` allows it (rule 11, INV-0153-7); an output operand means "create
+or replace this one name". The changes to accepted ADRs declared here are accepted: `narrow` in ADR-0055, the broker
+changes in ADR-0104, ADR-0105 item 9 with the revisit condition "before the first interactive POSIX program", path
+resolution in ADR-0107 and INV-0002-4, and the report slot in ADR-0107's record.

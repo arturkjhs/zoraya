@@ -1,6 +1,6 @@
 # ADR-0156: Help, the manual and command descriptions from one source
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0033, ADR-0108, ADR-0151, ADR-0153, ADR-0154, ADR-0155
 - **Evidence:** DM-054, CP-23, shell/survey.md#freebsd-sh-and-base-system, shell/survey.md#fish, shell/survey.md#nushell, shell/survey.md#powershell, shell/survey.md#command-line-conventions, shell/survey.md#what-this-suggests-for-zosh
@@ -65,6 +65,13 @@ completions in per-command files separate from the program, and can generate the
 
 ## Recommendation
 
+### Decision
+
+Accepted as recommended (architect, 2026-11-03). Addition from the tour: `help NAME` begins by saying what `NAME` is
+and where it comes from (item 4), which is what a person asking `which` wants (ADR-0154 rule 6).
+
+The original recommendation follows.
+
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 1. **Format.** A UTF-8 text file. The header is lines `KEY VALUE` until a line `---`; then the body.
@@ -105,7 +112,8 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 3. **Readers.** `zoraya-command` (ADR-0155) parses argv and prints `--help`; the shell completes (ADR-0154), grants
    (ADR-0153) and shows help from the same parsed form. Functions get theirs from the comment lines above `fn`
    (ADR-0151): the first line is the summary, and parameters are `text` operands.
-4. **`help`.** `help` lists topics, then commands with their summaries; `help NAME` shows the full page; `help
+4. **`help`.** `help` lists topics, then commands with their summaries; `help NAME` shows the full page, after a first line saying what `NAME` is: `cp is a program,
+   /zoraya/bin/cp`, `cd is built into the shell`, `backup is a function, from /config/start.zosh`; `help
    --search WORD` lists the pages whose name or summary contains the word. Topics shipped: `language`, `grants`,
    `jobs`, `keys`, `settings`, `errors`, `tour` (this task's tour, abridged).
 5. **The viewer.** A page longer than the screen is shown a screen at a time with a last line
@@ -132,6 +140,8 @@ more: help cp
 ~> help --search copy
 cp        copy a file
 ~> help cp
+cp is a program, /zoraya/bin/cp
+
 CP
 
 copy a file
@@ -193,3 +203,5 @@ description checked (operand kinds are authority); that check belongs to the lau
 - External descriptions found out of date with their POSIX programs: generate them from the programs' `--help`.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
