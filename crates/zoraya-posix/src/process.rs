@@ -1024,10 +1024,12 @@ impl<S: Sys> Posix<S> {
                     return if done > 0 { Ok(done) } else { Err(EAGAIN) };
                 }
                 Err(Status::WouldBlock) => {
-                    let s = self
-                        .sys
-                        .wait(end, signals::WRITABLE | signals::PEER_CLOSED)
-                        .map_err(|s| native(s, Call::Other))?;
+                    let s = match self.sys.wait(end, signals::WRITABLE | signals::PEER_CLOSED) {
+                        Ok(s) => s,
+                        // What was written counts, as for any later error.
+                        Err(_) if done > 0 => return Ok(done),
+                        Err(e) => return Err(native(e, Call::Other)),
+                    };
                     if s & signals::WRITABLE == 0 && s & signals::PEER_CLOSED != 0 {
                         return if done > 0 { Ok(done) } else { Err(EPIPE) };
                     }

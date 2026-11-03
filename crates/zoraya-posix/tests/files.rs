@@ -1329,3 +1329,112 @@ fn a_failed_truncation_undoes_the_open() {
         "nothing left open"
     );
 }
+
+// ---- the survivors the main model rechecked (TASK-20 review, point 4) ----
+
+/// The kernel handle of a pipe fd's write end.
+fn write_end(r: &Rig, fd: i32) -> H {
+    match r.p.fds.get(fd) {
+        Some(process::Desc::Stream { write: Some(h), .. }) => *h,
+        _ => panic!("fd {fd} is no write end"),
+    }
+}
+
+/// A connection to the root with only `rights`, through `clone`.
+fn narrowed(r: &mut Rig, rights: u32) -> H {
+    let root = r.root;
+    let (mine, theirs) = r.p.sys.channel_create().unwrap();
+    let mut out = vec![0u8; 256];
+    let m = proto::Clone {
+        rights: zoraya_protocol::Flags(rights),
+    };
+    let n = encode(&m, 90, &mut out).unwrap();
+    r.p.sys.channel_write(root, &out[..n], &[theirs]).unwrap();
+    r.p.sys
+        .wait(root, zoraya_posix::sys::signals::READABLE)
+        .unwrap();
+    let mut back = vec![0u8; 256];
+    let mut handles = vec![];
+    let n = r.p.sys.channel_read(root, &mut back, &mut handles).unwrap();
+    let (_, d) = zoraya_protocol::decode::<proto::Done>(&back[..n], 0).unwrap();
+    assert_eq!(d.status.0, proto::status::OK);
+    mine
+}
+
+/// An open asks the rights its flags need and no more: a table entry that
+/// gives only reading (posixrun's `:ro`) opens files to read, and one
+/// without SYNC opens them to write; chdir asks READ.
+#[test]
+fn an_open_asks_only_the_rights_its_flags_need() {
+    use proto::rights::*;
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    r.p.close(fd).unwrap();
+    r.p.mkdir_at(AT_FDCWD, b"d", 0o755).unwrap();
+    let ro = narrowed(&mut r, READ | CLONE);
+    r.p.add_entry("/ro", EntryKind::Directory, Some(ro));
+    assert!(open(&mut r, "/ro/f", o::RDONLY, 0).is_ok(), "no SYNC asked");
+    assert_eq!(open(&mut r, "/ro/f", o::WRONLY, 0), Err(EACCES));
+    let rw = narrowed(&mut r, READ | WRITE | CLONE);
+    r.p.add_entry("/rw", EntryKind::Directory, Some(rw));
+    assert!(open(&mut r, "/rw/f", o::RDWR, 0).is_ok(), "no SYNC asked");
+    assert_eq!(open(&mut r, "/rw/f", o::RDWR | o::DSYNC, 0), Err(EACCES));
+    let blind = narrowed(&mut r, CLONE);
+    r.p.add_entry("/blind", EntryKind::Directory, Some(blind));
+    assert_eq!(r.p.chdir(b"/blind/d"), Err(EACCES), "chdir asks READ");
+    assert_eq!(r.p.chdir(b"/ro/d"), Ok(()));
+}
+
+/// A blocking read waits for data or an end: here a writer elsewhere puts
+/// bytes in while it waits.
+#[test]
+fn a_blocking_read_takes_what_arrives_while_it_waits() {
+    let mut r = rig();
+    let (rd, _wr) = r.p.pipe(0).unwrap();
+    let h = read_end(&r, rd);
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| n.feed(h, b"late")));
+    assert_eq!(r.read(rd, 10).unwrap(), b"late");
+}
+
+/// A write that must wait before its first byte, whose reader then goes,
+/// is EPIPE; a stream error before any byte is its errno, and after some
+/// bytes the count.
+#[test]
+fn a_stream_write_ends_as_posix_says_whatever_stops_it() {
+    let mut r = rig();
+    let full = vec![1u8; STREAM_CAPACITY];
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    assert_eq!(r.write(wr, &full), Ok(STREAM_CAPACITY));
+    let h = read_end(&r, rd);
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| n.close(h)));
+    assert_eq!(
+        r.write(wr, b"x"),
+        Err(EPIPE),
+        "nothing written before the reader went"
+    );
+    r.p.sys.meanwhile = None;
+    // The write end's handle gone from under the library: EBADF at once.
+    let (_rd2, wr2) = r.p.pipe(0).unwrap();
+    let w = write_end(&r, wr2);
+    r.p.sys.close(w);
+    assert_eq!(r.write(wr2, b"x"), Err(EBADF));
+    // Gone after the first ring: the count written.
+    let (rd3, wr3) = r.p.pipe(0).unwrap();
+    let _keep = rd3;
+    let w = write_end(&r, wr3);
+    r.p.sys.meanwhile = Some(Box::new(move |n: &mut Net| n.close(w)));
+    let big = vec![2u8; 2 * STREAM_CAPACITY];
+    assert_eq!(r.write(wr3, &big), Ok(STREAM_CAPACITY));
+}
+
+#[test]
+fn only_files_and_directories_are_objects() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    let dir = open(&mut r, "/", o::RDONLY, 0).unwrap();
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    let null = open(&mut r, "/dev/null", o::RDWR, 0).unwrap();
+    assert!(r.p.is_object(fd) && r.p.is_object(dir));
+    assert!(!r.p.is_object(rd) && !r.p.is_object(wr) && !r.p.is_object(null));
+    assert!(!r.p.is_object(99));
+}

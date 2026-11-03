@@ -1082,9 +1082,20 @@ fn seek_moves_the_position_or_nothing() {
         "no write past the largest"
     );
     assert_eq!(r.seek(f, CURRENT, 0), (status::OK, i64::MAX as u64));
+    // A write may end exactly at the largest, as the engine allows.
+    assert_eq!(
+        r.seek(f, START, i64::MAX - 1),
+        (status::OK, i64::MAX as u64 - 1)
+    );
+    assert_eq!(
+        r.write_current(f, 0, b"z"),
+        (status::OK, 1),
+        "ends at i64::MAX"
+    );
+    assert_eq!(r.seek(f, CURRENT, 0), (status::OK, i64::MAX as u64));
     assert_eq!(r.seek(f, START, 15), (status::OK, 15));
     assert_eq!(r.write_current(f, 0, b"x"), (status::OK, 1));
-    assert_eq!(r.read_text(f, 9, 100).1, b"9\0\0\0\0\0x");
+    assert_eq!(r.read_text(f, 9, 7).1, b"9\0\0\0\0\0x");
 }
 
 /// ADR-0014 rule 6 through the protocol: the mode of a create is the one

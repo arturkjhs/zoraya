@@ -5,8 +5,10 @@
 #
 # macOS ignores `ulimit -v`, so a test that grows without bound (a mutant
 # that never consumes a queue, say) is stopped by watching instead: once a
-# second this reads the resident size of the command and of every process
-# descended from it, kills (-9) one that holds more than WATCHDOG_MB, and
+# second this reads the memory of the command and of every process
+# descended from it (with tools/footprint, macOS's physical footprint, which
+# counts compressed pages: the TASK-20 freeze grew under a small resident
+# size; without it, or off macOS, the resident size from ps), kills (-9) one that holds more than WATCHDOG_MB, and
 # kills the largest when all of them together hold more than
 # WATCHDOG_TOTAL_MB. A killed
 # test fails, so a mutation tool counts its mutant as caught. Each kill is
@@ -18,6 +20,8 @@
 
 per_process_mb=${WATCHDOG_MB:-3072}
 total_mb=${WATCHDOG_TOTAL_MB:-12288}
+# The footprint helper; WATCHDOG_FOOTPRINT=none falls back to ps's RSS.
+footprint=${WATCHDOG_FOOTPRINT:-$(dirname "$0")/../../target/debug/zoraya-footprint}
 
 [ $# -ge 1 ] || { echo "usage: $0 COMMAND [ARGS...]" >&2; exit 2; }
 
@@ -38,9 +42,24 @@ descendants() {
         }'
 }
 
+# The list with each process's memory from the helper where it answers.
+measured() {
+    list=$(descendants)
+    if [ -x "$footprint" ]; then
+        pids=$(echo "$list" | awk '{ print $1 }')
+        # shellcheck disable=SC2086 # one argument per pid
+        sizes=$("$footprint" $pids 2>/dev/null)
+        echo "$list" | awk -v sizes="$sizes" '
+            BEGIN { n = split(sizes, lines, "\n"); for (i = 1; i <= n; i++) { split(lines[i], f, " "); kib[f[1]] = f[2] } }
+            NF { if ($1 in kib) $2 = kib[$1]; print }'
+    else
+        echo "$list"
+    fi
+}
+
 watch() {
     while kill -0 "$root" 2>/dev/null; do
-        list=$(descendants)
+        list=$(measured)
         echo "$list" | while read -r pid rss cmd; do
             [ -n "$pid" ] || continue
             if [ "$rss" -gt $((per_process_mb * 1024)) ]; then

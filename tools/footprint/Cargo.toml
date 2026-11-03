@@ -1,0 +1,21 @@
+[package]
+name = "zoraya-footprint"
+description = "The memory a process holds, for tools/mutants/watchdog.sh: macOS's physical footprint, which counts compressed pages, or the resident size elsewhere."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zoraya-footprint"
+path = "src/main.rs"
+
+# A process that holds a given amount of memory that compresses well, for
+# the watchdog's test.
+[[bin]]
+name = "zoraya-memhog"
+path = "src/bin/memhog.rs"
+
+[lints]
+workspace = true

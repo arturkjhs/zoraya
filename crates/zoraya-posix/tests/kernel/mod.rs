@@ -91,6 +91,14 @@ impl Net {
         k
     }
 
+    /// Puts `bytes` into the stream whose read end is `h`, as a writer in
+    /// another process would.
+    pub fn feed(&mut self, h: H, bytes: &[u8]) {
+        if let Some(Obj::StreamRead(r)) = self.object(h).and_then(|o| self.objects.get(&o)) {
+            r.borrow_mut().bytes.extend(bytes.iter().copied());
+        }
+    }
+
     pub fn close(&mut self, h: H) {
         let Some(object) = self.handles.remove(&h) else {
             return;
@@ -383,6 +391,10 @@ impl Fake {
     /// Runs every service until `h` asserts one of `wanted`.
     fn run_until(&mut self, h: H, wanted: u32) -> Result<u32, Status> {
         loop {
+            // As the kernel: a wait on a handle that is not there fails.
+            if self.net.borrow().object(h).is_none() {
+                return Err(Status::BadHandle);
+            }
             let s = self.net.borrow().signals(h);
             if s & wanted != 0 {
                 return Ok(s);

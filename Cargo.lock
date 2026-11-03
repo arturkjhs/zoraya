@@ -88,6 +88,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-footprint"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-fs"
 version = "0.1.0"
 dependencies = [
