@@ -261,7 +261,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-posix"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-term"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-proto-tty"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
@@ -330,6 +346,16 @@ dependencies = [
 name = "zoraya-time"
 version = "0.1.0"
 dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-tty"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-tty",
+ "zoraya-protocol",
  "zoraya-test-alloc",
 ]
 
