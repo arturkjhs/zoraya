@@ -655,9 +655,34 @@ extern "C" fn zoraya_posix_start(_stack: usize, start_c: extern "C" fn(*mut usiz
     start_c(vector.as_mut_ptr())
 }
 
+/// With `ZORAYA_POSIX_STATS` in the environment, the library's counters go
+/// to fd 2 at exit, one line, for the task's measurements (ADR-0180; the
+/// broker's statistics of ADR-0110 item 7 are 6d's and 6e's).
+fn print_stats() {
+    let wanted = zoraya_rt::startup()
+        .envp
+        .any(|e| e.starts_with(b"ZORAYA_POSIX_STATS="));
+    if !wanted {
+        return;
+    }
+    let _ = with(|p| {
+        use core::fmt::Write;
+        let s = p.stats;
+        let mut line = String::new();
+        let mean = s.resolve_ns.checked_div(s.resolutions).unwrap_or(0);
+        let _ = writeln!(
+            line,
+            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={}",
+            s.resolutions, mean, s.requests, s.seeks, s.shares, s.reports
+        );
+        let _ = p.write(2, User::new(line.as_ptr() as u64, line.len()));
+    });
+}
+
 /// Ends the process with `code` (`_exit`, `_Exit`, and the shim's
 /// `exit_group`).
 fn exit(code: i64) -> ! {
+    print_stats();
     zoraya_rt::process_exit((code & 0xff) as i32)
 }
 

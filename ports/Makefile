@@ -57,7 +57,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: ports fetch-ports check-ports sysroot rootfs tools musl headers posix \
+.PHONY: ports fetch-ports check-ports sysroot libc rootfs tools musl headers posix \
 	dash make toybox busybox tcc tcc-host clean-ports FORCE
 .SUFFIXES:
 
@@ -378,6 +378,10 @@ $(TCC_SYSROOT): $(TCC_STAMP)
 	cp $(TCC_DIR)/include/*.h $(SYSROOT)/usr/lib/tcc/include/
 
 sysroot: $(SYSROOT_STAMP) $(TCC_SYSROOT)
+
+# libc.a and the crt objects alone: what a C program built with zcc needs
+# (make test-libposix).
+libc: $(SYSROOT_STAMP)
 
 # build/rootfs-posix (ADR-0109 item 6): the programs in /bin, toybox and
 # busybox with a link per applet (ADR-0108 item 6), the sysroot as /usr.

@@ -43,9 +43,9 @@ const NAME_SIZE: usize = 32;
 /// Ctrl-Cs after which a foreground job that will not end is killed.
 const PATIENCE: u32 = 3;
 /// Programs that start others: they get their job and the directory too.
-const NEED_MORE: [&str; 2] = ["fanout", "parent"];
+const NEED_MORE: [&str; 3] = ["fanout", "parent", "posixrun"];
 /// Programs that use files: they get a connection at slot 5.
-const NEED_VOLUME: [&str; 3] = ["crashwriter", "crashcheck", "fsbench"];
+const NEED_VOLUME: [&str; 4] = ["crashwriter", "crashcheck", "fsbench", "posixrun"];
 
 /// The terminal's channel, if the shell has one: 0 is none.
 static TERMINAL: AtomicU64 = AtomicU64::new(0);

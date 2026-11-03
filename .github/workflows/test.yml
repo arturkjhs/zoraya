@@ -15,10 +15,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install QEMU
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm
+      - name: Install QEMU, and clang for libc.a (make test-libposix, stage 6c)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm clang
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      # ADR-0109: the fetch step is outside make test, as the toolchain's
+      # install is; make test-libposix builds libc.a from musl's archive.
+      - name: Cache the ports' archives
+        uses: actions/cache@v4
+        with:
+          path: build/ports/src
+          key: ports-src-${{ hashFiles('ports/sources.lock') }}
+      - name: make fetch-ports
+        run: make fetch-ports
       - name: make test
         run: make test
       - name: The logs of what failed

@@ -8,6 +8,8 @@
 #   make test-boot  boot the normal kernel, run the shell script under each
 #                   machine configuration
 #   make test-files files across two boots, restarts, a failed write
+#   make test-libposix C programs through libposix against fsd (stage 6c);
+#                   needs make fetch-ports once, as make ports does
 #   make test-crash kill QEMU at random points (CRASH_ROUNDS=200 for more)
 #   make test-gui   the GUI criterion: boot headless with --gui, type into the
 #                   window over QMP and read the screen back (HVF and TCG)
@@ -41,14 +43,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
-	t_streams t_snapshot t_image t_suspend
+	t_streams t_snapshot t_image t_suspend posixrun
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -215,6 +217,25 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(DEVICE_ERROR) --label device-error -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --disk-write-error --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 
+# The stage 6c criterion (TASK-20): C programs built by zcc against libc.a run
+# through libposix against fsd, from posixrun, under HVF (on a Mac) and TCG.
+# libc.a needs musl's source in the cache of `make fetch-ports` (ADR-0109:
+# the fetch is outside make test, as the Rust toolchain's install is).
+POSIX_CORE := $(BUILD)/posix-core
+POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
+test-libposix: $(KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile libc
+	rm -rf $(POSIX_CORE) && mkdir -p $(POSIX_CORE)/root/bin $(POSIX_CORE)/root/work
+	cp -R rootfs/. $(POSIX_CORE)/root/
+	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
+	$(CARGO) build -q -p zoraya-elf-check
+	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
+	@for accel in auto tcg; do \
+	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
 GUI_IMAGE := $(BUILD)/gui.img
@@ -300,7 +321,7 @@ check-host-paths:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-fetch-ports test-qemu test-boot test-files test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)
