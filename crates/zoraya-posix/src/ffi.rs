@@ -591,7 +591,7 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
             p
         }
         None => {
-            for h in handles {
+            for h in handles.into_iter().chain(kept) {
                 let _ = zoraya_rt::handle_close(h);
             }
             Posix::new(sys, facts)
@@ -799,7 +799,10 @@ fn writev_all(fd: i32, parts: Vec<User>) -> Result<usize, i32> {
     // One write for what fits one request, so that musl's two iovecs of a
     // line are one append (ADR-0010 rule 2), as writev is on Linux.
     let total: usize = parts.iter().map(|u| u.length).sum();
-    if parts.len() > 1 && total <= GATHER {
+    // Files only: a stream takes each piece's pointer to the kernel, which
+    // checks it (EFAULT), and a piece of at most 4 KiB is atomic there.
+    let object = with(|p| p.is_object(fd)).unwrap_or(false);
+    if object && parts.len() > 1 && total <= GATHER {
         let mut joined = Vec::new();
         if joined.try_reserve_exact(total).is_ok() {
             for u in &parts {

@@ -158,8 +158,10 @@ The items:
 14. **The smaller points.** `fchmod` through a connection without `WRITE` reopens the fd's place with `WRITE` and
     changes the mode only if that place still holds the fd's object (same volume and id), else `EACCES`; it widens
     nothing a narrowed table did not already give, since the reopening goes through the table's own entry.
-    `st_blocks` is the size rounded up to 4 KiB, in 512-byte units (sparse files overstate). `writev` gathers pieces
-    of at most 60 KiB in all into one write, so a stdio line is one append. `utimensat` with negative seconds is
+    `st_blocks` is the size rounded up to 4 KiB, in 512-byte units (sparse files overstate). `writev` to a file
+    gathers pieces of at most 60 KiB in all into one write, so a stdio line is one append; to a stream it writes
+    piece by piece, so the kernel still checks each pointer. Past 16 reports, at most 256 refused paths are
+    remembered. `utimensat` with negative seconds is
     `EINVAL`. Start-up builds the vector in memory of the library's heap, not on the stack, and seeds `AT_RANDOM`
     from the clock and an address (weak, as ADR-0109 item 4 labels it).
 15. **`posixrun`**, a native program in the ramdisk, is 6c's launcher: a table from its options (`/` by default),

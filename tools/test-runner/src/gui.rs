@@ -476,7 +476,12 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             row: None,
         };
         let r = steps.iter().try_for_each(|s| run.step(s));
-        let r = r.and(run.pump());
+        // The last drain fails the run on a flood or forbidden text, not on
+        // a deadline the steps already met.
+        let r = r.and(match run.pump() {
+            Err(e) if e == "timeout" => Ok(()),
+            other => other,
+        });
         let _ = run.child.kill();
         let _ = run.child.wait();
         run.out.finish();

@@ -317,7 +317,11 @@ fn drive(
         rx,
         seen,
         deadline,
+        // The unit tests keep their logs out of the tree.
+        #[cfg(not(test))]
         out: output::Output::new(label),
+        #[cfg(test)]
+        out: output::Output::quiet(label),
     };
     let result = steps_then_drain(steps, child, &mut link, stdin);
     link.out.finish();

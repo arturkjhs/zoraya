@@ -70,6 +70,9 @@ pub const X_OK: u32 = 1;
 /// `SIGPIPE`, whose default ends a writer to a stream with no reader.
 pub const SIGPIPE: u32 = 13;
 
+/// Refused paths remembered so that none is counted twice (ADR-0180 item 6).
+pub const REMEMBERED: usize = 256;
+
 /// The largest transfer in one request through the buffer (ADR-0010 rule 2).
 pub const MAX_BUFFER: usize = 1024 * 1024;
 
@@ -436,8 +439,12 @@ impl<S: Sys> Posix<S> {
             return ENOENT;
         };
         if self.reports_sent >= MAX_REPORTS {
+            // Remembered up to a bound, so a program that names many paths
+            // outside its table costs neither memory nor time without end.
             self.report_dropped = self.report_dropped.saturating_add(1);
-            self.reported.push(path);
+            if self.reported.len() < REMEMBERED {
+                self.reported.push(path);
+            }
             return ENOENT;
         }
         let r = Report {
@@ -1720,6 +1727,12 @@ impl<S: Sys> Posix<S> {
                 Err(e)
             }
         }
+    }
+
+    /// True if `fd` is a file or directory connection: `writev` gathers
+    /// its pieces only then, so a stream still sees each piece's pointer.
+    pub fn is_object(&self, fd: i32) -> bool {
+        matches!(self.fds.get(fd), Some(Desc::Object { .. }))
     }
 
     pub fn isatty(&self, fd: i32) -> Result<bool, i32> {

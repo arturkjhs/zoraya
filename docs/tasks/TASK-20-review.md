@@ -68,4 +68,21 @@ have (the first wins, now tested).
 
 ## Check of the changed lines
 
-(filled in below)
+One check, by a fourth subagent that wrote none of it and ran nothing, of `git diff 781406f..d3a30ea` (the review's
+fixes, the test runner's bounds, the heap caps, the mutation holes' tests, docs): one error and eight warnings and
+notes, all fixed in the commit after `d3a30ea`.
+
+| Id | Severity | Finding | Disposition |
+|---|---|---|---|
+| C1 | error | The line-mode protocol checker kept a copy of every bad line as a problem, so neither its memory nor the terminal was held to the runner's bounds. | Fixed: at most 100 problems are kept and the rest counted, at most 10,000 test names; a unit test feeds 100,000 bad lines. |
+| C2 | warning | The runner's unit tests wrote `tools/test-runner/target/test-logs/`, and that file was committed. | Removed; the unit tests log to the temporary directory; `.gitignore` ignores `target/` at any depth. |
+| C3 | warning | CLAUDE.md's cap rule spoke of every host-tested crate; the check covers `crates/` only. | CLAUDE.md says `crates/`, and that `tools/` is the backlog's. |
+| C4 | warning | Gathering `writev` copied stream pieces in user space, so a bad pointer faulted instead of `EFAULT`. | `writev` gathers only for files; ADR-0180 item 14 says so. |
+| C5 | note | Past 16 reports, the remembered paths grew without bound. | At most 256 are remembered; ADR-0180 item 14. |
+| C6 | note | With a record that does not decode, the `SELF` handle stayed open. | Closed. |
+| C7 | note | `gui.rs`'s last drain failed a run on the deadline the steps had met. | The last drain fails only on a flood or forbidden text. |
+| C8 | note | CLAUDE.md said every run keeps a log; the crash test keeps none. | Said. |
+| C9 | note | `read_line` took `Interrupted` as the end of the output. | It retries. |
+
+The task allows one more check if this one found errors; it found one, so the lines changed by its fixes were checked
+once more (below).

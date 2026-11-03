@@ -53,6 +53,9 @@ pub struct Checker {
     failed: Vec<(String, String)>,
     end: Option<(usize, usize)>,
     errors: Vec<String>,
+    /// Problems past `MAX_ERRORS`, counted and not kept: a guest that loops
+    /// on a bad line must not fill the runner (docs/backlog.md, 6c).
+    more_errors: usize,
     /// See [`Checker::plain`].
     plain: bool,
 }
@@ -66,7 +69,19 @@ pub struct Report {
     pub problems: Vec<String>,
 }
 
+/// The most problems a report keeps; the rest are counted.
+pub const MAX_ERRORS: usize = 100;
+/// The most tests a run may report: the test kernel has a few hundred.
+pub const MAX_TESTS: usize = 10_000;
+
 impl Checker {
+    fn error(&mut self, problem: String) {
+        if self.errors.len() < MAX_ERRORS {
+            self.errors.push(problem);
+        } else {
+            self.more_errors += 1;
+        }
+    }
     /// `expect_panic`: tests that must fail with a panic. `expect_lines`:
     /// substrings that must each appear on some output line.
     pub fn new(expect_panic: Vec<String>, expect_lines: Vec<String>) -> Checker {
@@ -95,8 +110,7 @@ impl Checker {
             }
         }
         if line.starts_with(PANIC) {
-            self.errors
-                .push(format!("kernel panic outside a test: {line}"));
+            self.error(format!("kernel panic outside a test: {line}"));
             return Flow::Abort;
         }
         if self.plain {
@@ -106,25 +120,22 @@ impl Checker {
             return Flow::Continue;
         };
         if self.end.is_some() {
-            self.errors
-                .push(format!("output after the end line: {line}"));
+            self.error(format!("output after the end line: {line}"));
             return Flow::Continue;
         }
         let (word, args) = rest.split_once(' ').unwrap_or((rest, ""));
         match word {
             "begin" => match (self.begin, args.parse::<usize>()) {
                 (None, Ok(n)) => self.begin = Some(n),
-                (Some(_), _) => self.errors.push("second begin line".into()),
-                (_, Err(_)) => self.errors.push(format!("malformed begin line: {line}")),
+                (Some(_), _) => self.error("second begin line".into()),
+                (_, Err(_)) => self.error(format!("malformed begin line: {line}")),
             },
             "run" | "ok" | "fail" if self.begin.is_none() => {
-                self.errors
-                    .push(format!("result before the begin line: {line}"));
+                self.error(format!("result before the begin line: {line}"));
             }
             "run" => {
                 if let Some(prev) = self.running.replace(args.to_string()) {
-                    self.errors
-                        .push(format!("{args} started before {prev} reported a result"));
+                    self.error(format!("{args} started before {prev} reported a result"));
                 }
             }
             "ok" => {
@@ -145,27 +156,30 @@ impl Checker {
                     self.end = Some(counts);
                     return Flow::Ended;
                 }
-                None => self.errors.push(format!("malformed end line: {line}")),
+                None => self.error(format!("malformed end line: {line}")),
             },
-            _ => self.errors.push(format!("unknown protocol line: {line}")),
+            _ => self.error(format!("unknown protocol line: {line}")),
         }
         Flow::Continue
     }
 
     fn check_running(&mut self, name: &str) {
         if self.running.take().as_deref() != Some(name) {
-            self.errors
-                .push(format!("result for {name} without a run line for it"));
+            self.error(format!("result for {name} without a run line for it"));
         }
     }
 
     fn record_name(&mut self, name: &str) -> bool {
         if name.is_empty() || name.contains(char::is_whitespace) {
-            self.errors.push(format!("malformed test name {name:?}"));
+            self.error(format!("malformed test name {name:?}"));
+            return false;
+        }
+        if self.names.len() >= MAX_TESTS {
+            self.error(format!("more than {MAX_TESTS} tests"));
             return false;
         }
         if !self.names.insert(name.to_string()) {
-            self.errors.push(format!("test {name} reported twice"));
+            self.error(format!("test {name} reported twice"));
             return false;
         }
         true
@@ -173,7 +187,7 @@ impl Checker {
 
     pub fn finish(mut self, exit: Exit, timeout_secs: u64) -> Report {
         match exit {
-            Exit::Timeout => self.errors.push(format!(
+            Exit::Timeout => self.error(format!(
                 "timeout after {timeout_secs} s ({})",
                 match (&self.begin, &self.running) {
                     (None, _) => "no begin line".to_string(),
@@ -181,29 +195,28 @@ impl Checker {
                     _ => "no end line".to_string(),
                 }
             )),
-            Exit::NoPowerOff => self
-                .errors
-                .push("the kernel printed the end line but did not power off".into()),
+            Exit::NoPowerOff => {
+                self.error("the kernel printed the end line but did not power off".into())
+            }
             Exit::Status(Some(0)) | Exit::Aborted => {}
-            Exit::Status(Some(c)) => self.errors.push(format!("QEMU exited with status {c}")),
-            Exit::Status(None) => self.errors.push("QEMU was killed by a signal".into()),
+            Exit::Status(Some(c)) => self.error(format!("QEMU exited with status {c}")),
+            Exit::Status(None) => self.error("QEMU was killed by a signal".into()),
         }
         let ran = self.ok.len() + self.failed.len();
         match self.begin {
             None if self.plain => {}
-            None => self.errors.push("no begin line".into()),
+            None => self.error("no begin line".into()),
             Some(n) if self.end.is_some() && n != ran => {
-                self.errors
-                    .push(format!("begin announced {n} tests, {ran} reported"));
+                self.error(format!("begin announced {n} tests, {ran} reported"));
             }
             _ => {}
         }
         match self.end {
             None if matches!(exit, Exit::Status(_)) && !self.plain => {
-                self.errors.push("QEMU exited without an end line".into());
+                self.error("QEMU exited without an end line".into());
             }
             Some((p, f)) if (p, f) != (self.ok.len(), self.failed.len()) => {
-                self.errors.push(format!(
+                self.error(format!(
                     "end line says pass={p} fail={f}, lines say pass={} fail={}",
                     self.ok.len(),
                     self.failed.len()
@@ -212,40 +225,49 @@ impl Checker {
             _ => {}
         }
         let mut expected_failures = 0;
-        for (name, msg) in &self.failed {
-            if self.expect_panic.contains(name) {
+        let failed = std::mem::take(&mut self.failed);
+        let expect_panic = std::mem::take(&mut self.expect_panic);
+        let ok = std::mem::take(&mut self.ok);
+        let expect_lines = std::mem::take(&mut self.expect_lines);
+        let seen_lines = std::mem::take(&mut self.seen_expect_lines);
+        for (name, msg) in &failed {
+            if expect_panic.contains(name) {
                 if msg.starts_with("panic ") {
                     expected_failures += 1;
                 } else {
-                    self.errors.push(format!(
+                    self.error(format!(
                         "{name} failed as expected but not with a panic: {msg}"
                     ));
                 }
             } else {
-                self.errors.push(format!("{name} failed: {msg}"));
+                self.error(format!("{name} failed: {msg}"));
             }
         }
         if self.end.is_some() {
-            for name in &self.expect_panic {
-                if self.ok.contains(name) {
-                    self.errors
-                        .push(format!("{name} was expected to panic but passed"));
-                } else if !self.failed.iter().any(|(n, _)| n == name) {
-                    self.errors
-                        .push(format!("{name} was expected to panic but did not run"));
+            for name in &expect_panic {
+                if ok.contains(name) {
+                    self.error(format!("{name} was expected to panic but passed"));
+                } else if !failed.iter().any(|(n, _)| n == name) {
+                    self.error(format!("{name} was expected to panic but did not run"));
                 }
             }
         }
-        for (e, seen) in self.expect_lines.iter().zip(&self.seen_expect_lines) {
+        for (e, seen) in expect_lines.iter().zip(&seen_lines) {
             if !seen {
-                self.errors.push(format!("no output line contains {e:?}"));
+                self.error(format!("no output line contains {e:?}"));
             }
         }
         Report {
             passed: self.errors.is_empty(),
-            ok: self.ok.len(),
+            ok: ok.len(),
             expected_failures,
-            problems: self.errors,
+            problems: {
+                let mut p = self.errors;
+                if self.more_errors > 0 {
+                    p.push(format!("... and {} more problems", self.more_errors));
+                }
+                p
+            },
         }
     }
 }
@@ -259,6 +281,26 @@ fn parse_end(args: &str) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_guest_that_repeats_a_bad_line_keeps_a_bounded_report() {
+        let mut c = super::Checker::new(vec![], vec![]);
+        for _ in 0..100_000 {
+            let _ = c.feed("ZORAYA-TEST nonsense");
+        }
+        let r = c.finish(super::Exit::Timeout, 1);
+        assert!(!r.passed);
+        assert_eq!(r.problems.len(), super::MAX_ERRORS + 1);
+        assert!(r.problems.last().unwrap().contains("more problems"));
+        let mut c = super::Checker::new(vec![], vec![]);
+        let _ = c.feed("ZORAYA-TEST begin 1");
+        for i in 0..super::MAX_TESTS + 5 {
+            let _ = c.feed(&format!("ZORAYA-TEST run t{i}"));
+            let _ = c.feed(&format!("ZORAYA-TEST ok t{i}"));
+        }
+        let r = c.finish(super::Exit::Timeout, 1);
+        assert!(r.ok <= super::MAX_TESTS);
+    }
+
     use super::*;
 
     fn run(lines: &[&str], exit: Exit) -> Report {

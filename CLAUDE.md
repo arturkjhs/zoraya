@@ -51,13 +51,14 @@ Read `docs/design.md` first. It says what exists and where it lives.
 The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entries of 6a and 6c).
 
 - QEMU and guest programs run only through `tools/test-runner` or `make`, never directly. The runner caps a run's
-  output at 64 MiB and keeps the whole of it in `target/test-logs/`.
+  output at 64 MiB and keeps the whole of it in `target/test-logs/` (`zoraya-crash-test` keeps none, only its
+  bounded buffer).
 - Any ad-hoc command whose output can grow goes to a file, and is read with `tail`, `grep` or `head -c`; never stream it
   into the session.
 - No background command without a timeout: the runner's `--timeout`, a test's own limit, or (macOS has no `timeout`)
   `perl -e 'alarm N; exec @ARGV' COMMAND...`.
-- Every host-tested crate installs `zoraya_test_alloc::cap_memory!()` in its library and in every file of its `tests/`
-  (`make check-test-caps`). Mutation runs go through `make mutants` or `make mutants-host`, under
+- Every host-tested crate under `crates/` installs `zoraya_test_alloc::cap_memory!()` in its library and in every file
+  of its `tests/` (`make check-test-caps`); the `tools/` crates do not yet (`docs/backlog.md`). Mutation runs go through `make mutants` or `make mutants-host`, under
   `tools/mutants/watchdog.sh`.
 
 ## Work discipline

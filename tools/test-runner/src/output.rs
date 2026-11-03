@@ -48,6 +48,7 @@ pub fn read_line(reader: &mut impl BufRead, out: &mut Vec<u8>) -> Option<Read> {
     loop {
         let available = match reader.fill_buf() {
             Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(_) => return (r.bytes > 0).then_some(r),
         };
         if available.is_empty() {
