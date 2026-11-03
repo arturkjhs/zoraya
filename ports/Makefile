@@ -57,7 +57,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: ports fetch-ports check-ports sysroot libc rootfs tools musl headers posix \
+.PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make toybox busybox tcc tcc-host clean-ports FORCE
 .SUFFIXES:
 
@@ -402,6 +402,11 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STA
 # ---------------------------------------------------------------- the host checks
 
 HELLO_DIR := $(OBJ)/tcc-hello
+# The export check alone (INV-0100-1, INV-0100-2), for make test-libposix.
+check-libc: | tools
+	@$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)
+	@$(SURFACE_CHECK) check $(TIER_SPEC) $(LIBC) --allow-svc $(SVC_MEMBER)
+
 check-ports: | tools
 	@echo "== the tier list is the one ADR-0100 item 7's rule gives"
 	$(SURFACE_CHECK) list --check docs/research/task-02/libc-surface.csv $(TIER_LIST)

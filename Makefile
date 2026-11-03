@@ -225,6 +225,7 @@ POSIX_CORE := $(BUILD)/posix-core
 POSIX_CORE_SCRIPT := tests/posix-core/libposix.script
 test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	@$(MAKE) -s -f ports/Makefile libc
+	@$(MAKE) -s -f ports/Makefile check-libc
 	rm -rf $(POSIX_CORE) && mkdir -p $(POSIX_CORE)/root/bin $(POSIX_CORE)/root/work
 	cp -R rootfs/. $(POSIX_CORE)/root/
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c

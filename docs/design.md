@@ -410,8 +410,9 @@ the compositor now composes while QEMU's device still reads the framebuffer for 
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
-[ADR-0109](adr/0109-building-the-toolchain.md) and the proposed ADR-0140 to ADR-0143. Everything here runs on the
-host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6c. `ports/README.md` has the details.
+[ADR-0109](adr/0109-building-the-toolchain.md) and ADR-0140 to ADR-0144. Everything here runs on the host. Since
+stage 6c `libc.a` holds the real `zoraya-posix` ("`libposix` core (as built)" below), and C programs built against
+it run in Zoraya; the ported programs need 6d's process functions. `ports/README.md` has the details.
 
 - **`make fetch-ports`** downloads the archives of `ports/sources.lock` (TASK-02's pins and hashes, musl 1.2.5 added,
   tcc as GitHub's archive of the pinned commit) into `build/ports/src/` and refuses a wrong SHA-256. Each archive
@@ -425,10 +426,10 @@ host; nothing of it runs in Zoraya yet, because `zoraya-posix` is a stub until 6
   (`crt1.o crti.o ... -lc crtn.o`, `-z norelro`, no build id). It refuses `-D__linux__`, `-shared` and `-pie`. Neither
   `__linux__` nor `__unix__` is defined (ADR-0143).
 - **`tools/zoraya-ar`** writes deterministic GNU `ar` archives with a symbol index (also as `ranlib`).
-- **`libc.a`** is 737 objects of musl's retained directories, compiled with the system-call shim, and 513 members of
-  the stub `zoraya-posix` (ADR-0140: a generated Rust static library in which every function of the Rust half fails
-  with `ENOSYS` or traps, and which brings `compiler_builtins`). The shim routes eleven calls; 34 files it refuses
-  (33 that make other calls, and `ioctl.c`, which needs musl's Linux constants) are not compiled; 750 names outside the tier list (673 from musl, 77 from the Rust members) are renamed `__zoraya_*` in every object, so that the
+- **`libc.a`** is 737 objects of musl's retained directories, compiled with the system-call shim, and the 520 members
+  of `zoraya-posix`'s static library (stage 6c; in 6b it was ADR-0140's generated stub, in which every function failed
+  with `ENOSYS` or trapped), which also bring `core`, `alloc` and `compiler_builtins`. The shim routes eleven calls; 34 files it refuses
+  (33 that make other calls, and `ioctl.c`, which needs musl's Linux constants) are not compiled; 748 names outside the tier list are renamed `__zoraya_*` in every object, so that the
   archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141) and the five names ADR-0142 and
   ADR-0144 add in their files' `posix-surface-added` blocks. `<zoraya/posix.h>` (`ports/include/`) declares Zoraya's
   additions (ADR-0142). The sysroot also has
@@ -464,6 +465,7 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   `tools/posix-surface/results/`;
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
+- `make test-libposix`, the stage 6c criterion (below, under "How the in-QEMU tests run");
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP and reads QEMU screendumps back as text by matching every
   cell of the terminal's grid against every glyph of `zoraya-font`, exactly: the font draws each pixel in the text
@@ -494,6 +496,9 @@ How the in-QEMU tests run and report:
   `run <name>` line precedes each test, so a test that hangs is named in the timeout report.
 - A panicking test is reported as that test's failure. Recovery goes through `eret` to the next test, on a fresh
   stack and out of any exception context.
+- `make test-libposix` is stage 6c's criterion: it builds `libc.a` (which needs `make fetch-ports` once), runs the
+  export check on it, compiles `tests/posix-core/t_libposix.c` with `zcc`, puts it on an image, and plays
+  `tests/posix-core/libposix.script` under the host's accelerator and TCG, with `zoraya-fsck` after each.
 - `make test-files` is the roadmap's criterion: one image over two boots, with every file command and its errors, and
   `zoraya-fsck` after each. Then a disk that cannot be mounted (`init` stops after three restarts) and a write failed in
   QEMU's block layer with `blkdebug` (`--disk-write-error`: `init` restarts, and durable files are there).
@@ -631,6 +636,52 @@ TCG on a busy host the 8 MiB case reached 49 ms. **Does it need breaking up?** N
 10 ms slices; nothing in T1 forks one. It must be bounded with the others before untrusted code runs (ADR-0056), and
 copy-on-write (ADR-0102's revisit) removes it.
 
+## `libposix` core (as built)
+
+Stage 6c (TASK-20), on the accepted [ADR-0100](adr/0100-libposix-construction.md),
+[ADR-0103](adr/0103-file-descriptors.md), [ADR-0107](adr/0107-namespace-table-and-temp-service.md) and
+[ADR-0153](adr/0153-what-a-program-gets.md) rule 11, with the choices they leave open in
+[ADR-0180](adr/0180-libposix-core-choices-of-stage-6c.md) (proposed).
+
+- **The open description (ADR-0103).** `fsd`'s record of an open object holds a position and the append flag.
+  `zoraya-proto-file` gains `share` (another connection to the same description, `clone`'s rules), `seek`,
+  `set_flags`, `get_flags`, reads and writes at the position (inline and through the buffer) that move it inside the
+  request, `open_with_mode` (the POSIX mode of a create, ADR-0014 rule 6, answered with the object's kind, mode, ids and
+  times and whether this open made it) and `stat` (the volume's id, the object's id, exact times), ordinals 23 to 32.
+  No stage 4 request changed.
+- **The bootstrap record (ADR-0107).** `zoraya_abi::posix`: `ZPB1` with the process's facts, `umask`, cwd as an entry
+  and a path, each fd's kind and flags, and the namespace entries longest first with their handles in the message;
+  the fixed slots `BOOTSTRAP`, `BROKER`, `PROCESS_JOB`, `SELF` and `REPORT` at 1000 to 1004; a second message brings
+  `SELF`; `ZPR1` is a refused-path report (ADR-0153 rule 11). Both decoders are total.
+- **`crates/zoraya-posix`.** The Rust half of `libc.a`. Its logic has no `unsafe` and is tested on the host, the file
+  functions against the real `zoraya-fs-service` loop through a fake kernel (`tests/kernel`): the resolver (longest
+  prefix on component boundaries, `..` lexically, in both of ADR-0153's forms, links followed to 40), the fd table
+  (`dup`, `dup2`, per-fd `FD_CLOEXEC`), the `errno` table, `struct stat` from the service's metadata, and the file,
+  directory, descriptor and pipe functions. `ffi.rs` is the C boundary: start-up from the startup block and the
+  record, `malloc` and Rust's allocator on one `zoraya-heap` over memory objects, private anonymous `mmap`, the shim's
+  targets, and `ENOSYS` for the process functions of 6d. A path outside every entry is `ENOENT` and is reported
+  once on `REPORT`, at most 16 a process; a missing path inside an entry is never reported.
+- **`posixrun`** (`user/src/bin/posixrun.rs`) runs a C program from the volume through `image_create`, with a table
+  from its options, fds 0 to 2 (`/dev/null` and a stream it copies to the console, or a file shared into fd 1), a
+  `BROKER` channel nobody serves whose messages it counts, and the `REPORT` channel, whose reports it prints. It is
+  6c's launcher until the broker.
+
+Measured on the M4 under QEMU 11.1.2, `make test-libposix` (the normal kernel, 128 MiB, a 32 MiB image), one run:
+`posixrun -s` for the round trips from a native client (mean of 200), `t_libposix bench` for the rest, through
+`libposix` from C (an existing file opened and closed 200 times, `lseek(fd, 0, SEEK_CUR)` 500 times, 8 MiB written and
+read in 4 KiB and in 1 MiB calls), and the library's own count of the resolver's time (`ZORAYA_POSIX_STATS`).
+
+| | HVF | TCG |
+|---|---|---|
+| `seek` round trip; `share` round trip (native) | 11 µs; 18 µs | 295 µs; 467 µs |
+| `lseek` from C; `open` + `close` from C | 7.1 µs; 15.9 µs | 217 µs; 545 µs |
+| The resolver, per path (mean over the run) | 0.32 to 0.46 µs | 11 to 19 µs |
+| 4 KiB calls: write, read | 102 MB/s, 54 MB/s | 9.2 MB/s, 5.8 MB/s |
+| 1 MiB calls: write, read | 399 MB/s, 152 MB/s | 107 MB/s, 21 MB/s |
+
+An `lseek` is one round trip, and `open` one plus a channel and a close; the resolver is a few per cent of an `open`.
+Writes are into `fsd`'s cache of dirty blocks; reads come from it.
+
 ## Console input and the first process
 
 - **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
@@ -654,6 +705,9 @@ or `exit` turns the machine off.
 - `ls [dir]`, `cat file`, `write file text...` (replaces it), `append file text...`, `mkdir dir`, `rm path`,
   `mv old new`, `stat path`, `sync`, `cd [dir]`, `pwd`. Errors read `zosh: cat: NotFound`. `cd` takes `..`, in the
   shell. The service refuses `..` in any path, so `cat ../x` is `InvalidArgument`.
+- `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
+  the volume through `libposix`, with `/` the volume's root unless `-m` gives a table; its output comes to the console
+  (stage 6c; `user/src/bin/posixrun.rs` has the rest).
 - `ls-ramdisk` lists the programs. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
   the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
 - `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's handles, by type, as far as it can see them: below) and `help` are built in. `exit` alone ends
@@ -759,13 +813,18 @@ or `exit` turns the machine off.
   unmountable. The first create after each mount costs a commit (id reservation). A read-write mount holds the
   allocator bitmap in memory (one bit per block). `fsck --repair` cannot repair damaged tree blocks. Requests are
   served one at a time.
-- **Ports.** Nothing built by `make ports` runs yet: every program faults in the stub's `zoraya_posix_start` before
-  `main` until 6c (ADR-0140). dash's job-control patches (ADR-0142) are compiled, not run: the broker of 6d is their
+- **Ports.** The ported programs are built against the real `libc.a` but not run yet: they need 6d's `posix_spawn`,
+  `fork`, `wait*`, signals and terminal, which fail with `ENOSYS` until then. dash's job-control patches (ADR-0142) are compiled, not run: the broker of 6d is their
   first test. toybox has no mount table, file notification or path-based extended attributes on Zoraya (its
   portability patch fails them); no T1 applet uses them. tcc's host check uses a tcc compiled for the host from the same source, not the Zoraya binary (ADR-0143). Programs are
   installed with their debug information.
-- **CI not run.** The CI workflow (`.github/workflows/test.yml`) runs `make test` on Linux with TCG and, in a second
-  job, `make fetch-ports` and `make ports`; neither has run yet.
+- **CI.** The CI workflow (`.github/workflows/test.yml`) runs `make fetch-ports` and `make test` on Linux with TCG
+  (the fetch step for `make test-libposix`'s `libc.a`, ADR-0109) and, in a second job, `make ports`.
+- **`libposix` (stage 6c).** Process functions, signals, the terminal, `/tmp` and FIFOs are 6d's and fail with
+  `ENOSYS`. A file read or write through a bad pointer faults the process instead of `EFAULT` (streams give
+  `EFAULT`); listings have no `.` or `..` and number `d_ino` from 1; `O_TRUNC` of an existing non-empty file is a
+  second request; `CLOCK_REALTIME` is the monotonic clock `fsd` stamps files with; `st_blocks` comes from the size
+  (ADR-0180). `posixrun` is the only launcher of C programs until the broker, and only `zosh` names it.
 
 ## Roadmap
 
@@ -786,7 +845,7 @@ or `exit` turns the machine off.
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
 LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md), ports/patches/ and ports/musl/zoraya/ (ports/README.md)
-Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-crash, test-gui, test, adr-check,
+Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-libposix, test-crash, test-gui, test, adr-check,
                           fetch-ports, ports, check-ports
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
@@ -843,13 +902,16 @@ crates/                   no_std, host-tested
   zoraya-font/            Zoraya's bitmap font, its renderer and exact reader (ADR-0095)
   zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering (ADR-0096)
   zoraya-compositor/      the compositor's loop over a platform trait (ADR-0093, ADR-0094)
+  zoraya-posix/           the Rust half of libposix (ADR-0100): resolver, fd table, errno, the file functions; ffi.rs
+                          is the C boundary in libc.a; tests/kernel is a fake kernel over the real fs-service
 user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, compd,
-                          term, test programs
+                          term, posixrun (the launcher of C programs, stage 6c), test programs
   src/stack.rs            starts the driver and the service
   src/gui.rs              scans device pages, starts and restarts the GUI (init and t_gui)
 rootfs/                   the first contents of build/disk.img
 tests/shell/              scripts the runner plays on the serial line
 tests/gui/                the GUI script the runner plays over QMP
+tests/posix-core/         stage 6c's C criterion program and the script make test-libposix plays
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures
@@ -872,4 +934,4 @@ fuzz/                     cargo-fuzz targets for zoraya-fs (nightly; outside the
 build/                    kernel ELFs, disk images, logs/ and mutants/; ports/, sysroot/, rootfs-posix/ (not committed)
 ```
 
-The ADRs mention `libposix` and the broker. Neither exists yet; they arrive in stage 6.
+`libposix`'s file, descriptor, pipe and memory half exists (stage 6c); its process half and the broker arrive in 6d.

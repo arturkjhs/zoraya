@@ -58,7 +58,7 @@ prints the clang it uses.
 |---|---|---|
 | clang, any version that targets `aarch64-unknown-none-elf` and has `--ld-path` (`tools/zcc`) | Apple clang 21.0.0 (clang-2100.0.123.102) on the M4; on Linux CI the runner's `clang` (unverified here) | Xcode Command Line Tools / distribution |
 | `rust-lld` (through the toolchain's `gcc-ld/ld.lld`) | LLD 23.1.1, from Rust 1.99.1 | rustup, with the pinned toolchain; nothing to add |
-| `core` and `compiler_builtins` for `aarch64-unknown-none` (in `libc.a`'s stub, ADR-0140) | from Rust 1.99.1 | the pinned toolchain's target; not a crate from a registry |
+| `core`, `alloc` and `compiler_builtins` for `aarch64-unknown-none` (in `libc.a`, with `zoraya-posix`, ADR-0100) | from Rust 1.99.1 | the pinned toolchain's target; not a crate from a registry |
 | the host's C compiler (`cc`): dash's helpers, tcc's `c2str` and the host tcc of the link check | Apple clang 21.0.0 on the M4 | Xcode Command Line Tools / distribution |
 | `curl`, `shasum` or `sha256sum` (`make fetch-ports`) | curl 8.7.1 | macOS / distribution |
 | `patch`, `tar` with gzip and bzip2, `awk`, `sed` | the host's | macOS / distribution |

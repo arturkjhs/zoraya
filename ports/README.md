@@ -17,7 +17,6 @@ committed: only the lock, the patches and the build files below.
 | `musl/musl.mk`, `musl/excluded.txt` | which musl files `libc.a` retains (ADR-0100, ADR-0141) |
 | `musl/zoraya/` | musl's replaced `src/internal/syscall.h` (the shim), the empty `crt_arch.h` for `crt1.c`, and musl's patch |
 | `crt/crt1.S` | `_start` (ADR-0109 item 4) |
-| `posix-stub/` | the ENOSYS stub of `zoraya-posix` until 6c (ADR-0140) |
 | `include/zoraya/posix.h` | Zoraya's additions to the POSIX interface (ADR-0142), installed into the sysroot; the repository's BSD-2-Clause licence |
 | `compare-predefs.sh` | `zcc` and tcc must predefine the same identity (ADR-0143) |
 | `patches/<program>/` | patches to each program, applied in name order |
@@ -51,8 +50,10 @@ ADR-0109 revisit.
 ## How each program is built
 
 - **musl**: `musl/musl.mk` compiles the retained directories with `tools/zcc` and the
-  shim; `libc.a` is those objects and the stub's, with every name outside the tier
-  list renamed `__zoraya_*` (ADR-0141).
+  shim; `libc.a` is those objects and the members of `crates/zoraya-posix`'s static
+  library (built by `cargo rustc --crate-type staticlib`, stage 6c; ADR-0140's stub
+  until then), with every name outside the tier list renamed `__zoraya_*` (ADR-0141).
+  `make -f ports/Makefile libc` builds `libc.a` and the crt objects alone.
 - **dash**: `./configure --host=aarch64-unknown-zoraya`; its host helpers are compiled
   with `-include build/ports/obj/target-signals.h`.
 - **GNU make**: `./configure --host=aarch64-unknown-zoraya --disable-load --without-guile
