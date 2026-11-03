@@ -1,0 +1,140 @@
+--- a/configure
++++ b/configure
+@@ -233,7 +233,7 @@
+ 
+ Cross build options (experimental):
+   --cpu=CPU                target CPU [$cpu]
+-  --targetos=...           target OS (Darwin,WIN32,Android/Termux) [$targetos]
++  --targetos=...           target OS (Darwin,WIN32,Android/Termux,Zoraya) [$targetos]
+   --os-release=x.y.z       target os release x.y.z [$os_release] (with BSD systems)
+   --cross-prefix=PREFIX    use PREFIX for compile tools [$cross_prefix]
+ EOF
+@@ -385,6 +385,13 @@
+   DragonFly|OpenBSD|FreeBSD|NetBSD)
+     confvars_set BSD ldl=no
+     ;;
++  Zoraya)
++    # Zoraya (ADR-0109 item 7): ELF as on Linux, static only, no -run, no
++    # backtraces and no bounds checking (their run-time support is not
++    # ported); every link is -static.
++    confvars_set Zoraya backtrace=no bcheck=no
++    default tcc_switches "-static"
++    ;;
+   Android|Termux)
+     if test "$targetos" = "Termux"; then
+       targetos=Android
+@@ -672,6 +679,8 @@
+     CONFIG_WIN32=yes)       print_num TCC_TARGET_PE 1 ;;
+     CONFIG_OSX=yes)         print_num TCC_TARGET_MACHO 1 ;;
+     CONFIG_Android=yes)     print_num TARGETOS_ANDROID 1 ;;
++    CONFIG_Zoraya=yes)      print_num TARGETOS_Zoraya 1
++                            print_num CONFIG_TCC_STATIC 1 ;;
+     CONFIG_BSD=yes)         print_num TARGETOS_$targetos 1
+       case "$targetos" in
+         FreeBSD)    default tcc_elfinterp "/libexec/ld-elf.so.1";;
+--- a/conftest.c
++++ b/conftest.c
+@@ -21,6 +21,7 @@
+     "__OpenBSD__",          "TARGETOS_OpenBSD",
+     "__NetBSD__",           "TARGETOS_NetBSD",
+     "__linux__",            "TARGETOS_Linux",
++    "__zoraya__",           "TARGETOS_Zoraya",
+     "__ANDROID__",          "TARGETOS_ANDROID",
+ 
+     "__SIZEOF_POINTER__",   "PTR_SIZE",
+--- a/include/tccdefs.h
++++ b/include/tccdefs.h
+@@ -38,7 +38,7 @@
+     #define __SIZE_TYPE__ unsigned long
+     #define __PTRDIFF_TYPE__ long
+     #define __LP64__ 1
+-# if defined __linux__
++# if defined __linux__ || defined __zoraya__
+     #define __INT64_TYPE__ long
+ # else /* APPLE, BSD */
+     #define __INT64_TYPE__ long long
+@@ -60,6 +60,9 @@
+ #if defined _WIN32
+     #define __WCHAR_TYPE__ unsigned short
+     #define __WINT_TYPE__ unsigned short
++#elif defined __zoraya__
++    #define __WCHAR_TYPE__ unsigned int
++    #define __WINT_TYPE__ unsigned int
+ #elif defined __linux__
+     #define __WCHAR_TYPE__ int
+     #define __WINT_TYPE__ unsigned int
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -63,7 +63,9 @@
+ OBJ-x86_64-osx = $(X86_64_O) va_list.o $(OSX_O)
+ OBJ-i386-win32 = $(I386_O) chkstk.o $(WIN_O)
+ OBJ-x86_64-win32 = $(X86_64_O) chkstk.o $(WIN_O)
+-OBJ-arm64 = $(ARM64_O) armflush.o $(LIN_O)
++# Zoraya: armflush.o's __clear_cache serves -run only, which tcc for Zoraya
++# does not have (ADR-0109 item 7), and on arm64 it compiles only with tcc.
++OBJ-arm64 = $(ARM64_O) $(if $(CONFIG_Zoraya),,armflush.o) $(LIN_O)
+ OBJ-arm64-osx = $(ARM64_O) $(OSX_O)
+ OBJ-arm64-win32 = $(ARM64_O) chkstk.o $(WIN_O)
+ OBJ-arm = $(ARM_O) $(LIN_O)
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -1797,6 +1797,8 @@
+     "openbsd"
+ #elif TARGETOS_NetBSD
+     "netbsd"
++#elif TARGETOS_Zoraya
++    "unknown-zoraya"
+ #elif CONFIG_TCC_MUSL
+     "linux-musl"
+ #else
+--- a/tcc.c
++++ b/tcc.c
+@@ -203,6 +203,8 @@
+         " OpenBSD"
+ #elif TARGETOS_NetBSD
+         " NetBSD"
++#elif TARGETOS_Zoraya
++        " Zoraya"
+ #else
+         " Linux"
+ #endif
+--- a/tcc.h
++++ b/tcc.h
+@@ -224,6 +224,11 @@
+     || defined TARGETOS_NetBSD \
+     || defined TARGETOS_FreeBSD_kernel
+ # define TARGETOS_BSD 1
++#elif defined TARGETOS_Zoraya
++/* Zoraya: Linux's ELF code paths, without __linux__ (ADR-0109 item 7).
++   tcc for Zoraya is never native: no -run, so no dlopen and no executable
++   memory (ADR-0005). */
++# undef TCC_IS_NATIVE
+ #elif !(defined TCC_TARGET_PE || defined TCC_TARGET_MACHO)
+ # define TARGETOS_Linux 1 /* for tccdefs_.h */
+ #endif
+--- a/tccpp.c
++++ b/tccpp.c
+@@ -3559,6 +3559,12 @@
+     "__NetBSD__\0"
+ # elif TARGETOS_OpenBSD
+     "__OpenBSD__\0"
++# elif TARGETOS_Zoraya
++    /* the same identity as zcc's (clang for aarch64-unknown-none-elf with
++       -D__zoraya__): no Unix, no Linux; ELF and LP64 named as clang does */
++    "__zoraya__\0"
++    "__ELF__\0"
++    "_LP64\0"
+ # else
+     "__linux__\0"
+     "__linux\0"
+@@ -3566,8 +3572,10 @@
+     "__ANDROID__\0"
+ #  endif
+ # endif
++# if !TARGETOS_Zoraya
+     "__unix__\0"
+     "__unix\0"
++# endif
+ #endif
+     ;
+ 

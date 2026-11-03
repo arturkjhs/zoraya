@@ -1,0 +1,130 @@
+--- b/src/exec.c
++++ c/src/exec.c
+@@ -157,9 +157,10 @@
+  * usual diagnostics and 126/127 exit status).
+  */
+ static int
+-tryspawn(pid_t *pid, char *cmd, char **argv, char **envp)
++tryspawn(pid_t *pid, char *cmd, char **argv, char **envp,
++	 const posix_spawnattr_t *attr)
+ {
+-	int r = posix_spawn(pid, cmd, NULL, NULL, argv, envp);
++	int r = posix_spawn(pid, cmd, NULL, attr, argv, envp);
+ 
+ 	if (r == ENOEXEC) {
+ 		char *save0 = argv[0], *save1 = argv[-1];
+@@ -167,7 +168,7 @@
+ 
+ 		argv[0] = cmd;
+ 		argv[-1] = path_bshell;
+-		r = posix_spawn(pid, path_bshell, NULL, NULL, argv - 1, envp);
++		r = posix_spawn(pid, path_bshell, NULL, attr, argv - 1, envp);
+ 		argv[0] = save0;
+ 		argv[-1] = save1;
+ 	}
+@@ -175,19 +176,19 @@
+ }
+ 
+ pid_t
+-spawnexec(char **argv, const char *path, int idx)
++spawnexec(char **argv, const char *path, int idx, const posix_spawnattr_t *attr)
+ {
+ 	char **envp = environment();
+ 	pid_t pid;
+ 	int r;
+ 
+ 	if (strchr(argv[0], '/') != NULL)
+-		return tryspawn(&pid, argv[0], argv, envp) ? -1 : pid;
++		return tryspawn(&pid, argv[0], argv, envp, attr) ? -1 : pid;
+ 	while (padvance(&path, argv[0]) >= 0) {
+ 		char *cmdname = stackblock();
+ 
+ 		if (--idx < 0 && pathopt == NULL) {
+-			r = tryspawn(&pid, cmdname, argv, envp);
++			r = tryspawn(&pid, cmdname, argv, envp, attr);
+ 			if (!r)
+ 				return pid;
+ 			if (r != ENOENT && r != ENOTDIR)
+--- b/src/exec.h
++++ c/src/exec.h
+@@ -64,7 +64,8 @@
+ 
+ struct stat64;
+ 
+-pid_t spawnexec(char **, const char *, int);
++#include <spawn.h>
++pid_t spawnexec(char **, const char *, int, const posix_spawnattr_t *);
+ void shellexec(char **, const char *, int)
+     __attribute__((__noreturn__));
+ int padvance_magic(const char **path, const char *name, int magic);
+--- b/src/jobs.c
++++ c/src/jobs.c
+@@ -1016,16 +1016,67 @@
+ 	int pid;
+ 
+ 	jp = makejob(1);
++
++#ifdef __zoraya__
++	/*
++	 * Zoraya (ADR-0104 item 5, ADR-0142): every command starts with
++	 * posix_spawn, and what forkchild would do in the vfork child is said
++	 * as attributes. With job control the job is new, so its first process
++	 * leads a new group, and the terminal is handed to that group before
++	 * the child runs (POSIX_SPAWN_TCSETPGRP), by the parent; the stop
++	 * signals get their default action. In an interactive shell SIGINT,
++	 * SIGQUIT and SIGTERM do too. If posix_spawn fails, the vfork path
++	 * below runs and reports the error as dash always did.
++	 */
++	{
++		posix_spawnattr_t attr;
++		sigset_t dfl;
++		short flags = 0;
+ 
++		posix_spawnattr_init(&attr);
++		sigemptyset(&dfl);
++		if (iflag) {
++			sigaddset(&dfl, SIGINT);
++			sigaddset(&dfl, SIGQUIT);
++			sigaddset(&dfl, SIGTERM);
++			flags |= POSIX_SPAWN_SETSIGDEF;
++		}
++#if JOBS
++		/* posix_spawnattr_setflags takes a short: the flags must stay
++		   positive, below its sign bit (ADR-0142, Decision). */
++		_Static_assert((short)(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP |
++				       POSIX_SPAWN_TCSETPGRP) > 0,
++			       "POSIX_SPAWN_TCSETPGRP must fit a positive short");
++		if (jp->jobctl) {
++			sigaddset(&dfl, SIGTSTP);
++			sigaddset(&dfl, SIGTTOU);
++			posix_spawnattr_setpgroup(&attr, 0);
++			flags |= POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETPGROUP |
++				 POSIX_SPAWN_TCSETPGRP;
++		}
++#endif
++		if (flags) {
++			posix_spawnattr_setsigdefault(&attr, &dfl);
++			posix_spawnattr_setflags(&attr, flags);
++		}
++		pid = spawnexec(argv, path, idx, &attr);
++		posix_spawnattr_destroy(&attr);
++		if (pid > 0) {
++			forkparent(jp, n, FORK_FG, pid);
++			return jp;
++		}
++	}
++#else
+ 	/* TASK-02 M4: no job control and not interactive: the vfork child would do
+ 	 * nothing but exec, which posix_spawn expresses exactly. */
+ 	if (!jp->jobctl && !iflag) {
+-		pid = spawnexec(argv, path, idx);
++		pid = spawnexec(argv, path, idx, NULL);
+ 		if (pid > 0) {
+ 			forkparent(jp, n, FORK_FG, pid);
+ 			return jp;
+ 		}
+ 	}
++#endif
+ 
+ 	if (!mypid)
+ 		mypid = getpid();

@@ -1,0 +1,168 @@
+--- a/lib/portability.h
++++ b/lib/portability.h
+@@ -172,6 +172,10 @@
+ 
+ // Linux headers not listed by POSIX or LSB
+ #include <sys/mount.h>
++#ifdef __zoraya__
++// Zoraya: musl's struct statfs, which statfs_bsize() below needs.
++#include <sys/statfs.h>
++#endif
+ #ifdef __linux__
+ #include <sys/statfs.h>
+ #include <sys/swap.h>
+@@ -196,7 +200,7 @@
+ int personality(int);
+ #endif
+ 
+-#if defined(__APPLE__) || defined(__linux__)
++#if defined(__APPLE__) || defined(__linux__) || defined(__zoraya__)
+ // Linux and macOS has both have getxattr and friends in <sys/xattr.h>, but
+ // they aren't compatible.
+ #include <sys/xattr.h>
+--- a/lib/portability.c
++++ b/lib/portability.c
+@@ -166,6 +166,18 @@
+ 
+   return mtlist;
+ }
++#elif defined(__zoraya__)
++// Zoraya: no mount table; a process sees its namespace table (df and mount
++// are not built).
++int mountlist_istype(struct mtab_list *ml, char *typelist)
++{
++  return !typelist;
++}
++
++struct mtab_list *xgetmountlist(char *path)
++{
++  error_exit("no mount table on Zoraya");
++}
+ #else
+ #error
+ #endif
+@@ -261,6 +273,22 @@
+     }
+   }
+ }
++#elif defined(__zoraya__)
++// Zoraya: no file change notification (tail -f is not built).
++struct xnotify *xnotify_init(int max)
++{
++  error_exit("no file notification on Zoraya");
++}
++
++int xnotify_add(struct xnotify *not, int fd, char *path)
++{
++  error_exit("no file notification on Zoraya");
++}
++
++int xnotify_wait(struct xnotify *not, char **path)
++{
++  error_exit("no file notification on Zoraya");
++}
+ #else
+ #error
+ #endif
+@@ -368,6 +396,62 @@
+ #elif defined(__IsBSD__)
+ #warning no xattr support in BSD
+ // No xattr for bsd
++#elif defined(__zoraya__)
++// Zoraya: the descriptor forms are libposix's (which refuses them with
++// ENOTSUP, ADR-0014); the path forms are not in its surface and refuse here.
++ssize_t xattr_get(const char *path, const char *name, void *value, size_t size)
++{
++  errno = ENOTSUP;
++  return -1;
++}
++
++ssize_t xattr_lget(const char *path, const char *name, void *value, size_t size)
++{
++  errno = ENOTSUP;
++  return -1;
++}
++
++ssize_t xattr_fget(int fd, const char *name, void *value, size_t size)
++{
++  return fgetxattr(fd, name, value, size);
++}
++
++ssize_t xattr_list(const char *path, char *list, size_t size)
++{
++  errno = ENOTSUP;
++  return -1;
++}
++
++ssize_t xattr_llist(const char *path, char *list, size_t size)
++{
++  errno = ENOTSUP;
++  return -1;
++}
++
++ssize_t xattr_flist(int fd, char *list, size_t size)
++{
++  return flistxattr(fd, list, size);
++}
++
++ssize_t xattr_set(const char* path, const char* name,
++                  const void* value, size_t size, int flags)
++{
++  errno = ENOTSUP;
++  return -1;
++}
++
++ssize_t xattr_lset(const char* path, const char* name,
++                   const void* value, size_t size, int flags)
++{
++  errno = ENOTSUP;
++  return -1;
++}
++
++ssize_t xattr_fset(int fd, const char* name,
++                   const void* value, size_t size, int flags)
++{
++  return fsetxattr(fd, name, value, size, flags);
++}
+ #else
+ #error
+ #endif
+@@ -517,7 +601,8 @@
+ 
+ int dev_minor(int dev)
+ {
+-#if defined(__linux__)
++// Zoraya: musl's dev_t encoding, which is Linux's.
++#if defined(__linux__) || defined(__zoraya__)
+   return ((dev&0xfff00000)>>12)|(dev&0xff);
+ #elif defined(__APPLE__)
+   return dev&0xffffff;
+@@ -531,7 +616,7 @@
+ 
+ int dev_major(int dev)
+ {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(__zoraya__)
+   return (dev&0xfff00)>>8;
+ #elif defined(__APPLE__)
+   return (dev>>24)&0xff;
+@@ -545,7 +630,7 @@
+ 
+ int dev_makedev(int major, int minor)
+ {
+-#if defined(__linux__)
++#if defined(__linux__) || defined(__zoraya__)
+   return (minor&0xff)|((major&0xfff)<<8)|((minor&0xfff00)<<12);
+ #elif defined(__APPLE__)
+   return (minor&0xffffff)|((major&0xff)<<24);
+@@ -590,6 +675,10 @@
+     if (nn[i].num == statfs->f_type) s = nn[i].name;
+   if (!s) sprintf(s = libbuf, "0x%x", (unsigned)statfs->f_type);
+   return s;
++#elif defined(__zoraya__)
++  // Zoraya: one file system type, named by number (stat -f is not built).
++  sprintf(libbuf, "0x%x", (unsigned)statfs->f_type);
++  return libbuf;
+ #else
+ #error
+ #endif

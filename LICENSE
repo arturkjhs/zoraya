@@ -24,4 +24,6 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 The patches to third-party programs in tools/posix-surface/patches/ are not
-covered by this license; see tools/posix-surface/patches/README.md.
+covered by this license; see tools/posix-surface/patches/README.md. Nor are
+the patches and musl-derived files in ports/patches/ and ports/musl/zoraya/,
+each under the license of the program it changes; see ports/README.md.

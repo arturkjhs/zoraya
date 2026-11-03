@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "posix-surface-check"
+version = "0.1.0"
+dependencies = [
+ "zoraya-ar",
+]
+
+[[package]]
 name = "zoraya-abi"
 version = "0.1.0"
 dependencies = [
@@ -11,6 +18,10 @@ dependencies = [
 
 [[package]]
 name = "zoraya-adr-check"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-ar"
 version = "0.1.0"
 
 [[package]]
@@ -51,6 +62,14 @@ name = "zoraya-elf"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-elf-check"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-elf",
 ]
 
 [[package]]

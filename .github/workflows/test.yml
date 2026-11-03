@@ -24,3 +24,30 @@ jobs:
       - name: The logs of what failed
         if: failure()
         run: for f in build/logs/*.log; do echo "== $f"; tail -n 300 "$f"; done
+
+  # Stage 6b (ADR-0109): the ports, in a job of their own so that the QEMU
+  # tests above keep their time. The cache holds the downloaded archives,
+  # keyed by the lock; make fetch-ports verifies every hash either way.
+  ports:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: The host tools the ports need (clang; GNU make, sed, curl and bzip2 are in the image)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+          clang --version && make --version | head -1 && sed --version | head -1
+      - name: Cache the ports' archives
+        uses: actions/cache@v4
+        with:
+          path: build/ports/src
+          key: ports-src-${{ hashFiles('ports/sources.lock') }}
+      - name: make fetch-ports
+        run: make fetch-ports
+      - name: make ports (builds, then make check-ports)
+        run: make ports
+      - name: The logs of what failed
+        if: failure()
+        run: for f in build/ports/logs/*.log; do echo "== $f"; tail -n 100 "$f"; done

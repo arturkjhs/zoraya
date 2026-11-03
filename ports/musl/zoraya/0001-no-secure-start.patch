@@ -1,0 +1,23 @@
+--- a/src/env/__libc_start_main.c
++++ b/src/env/__libc_start_main.c
+@@ -39,6 +39,12 @@
+ 	__init_tls(aux);
+ 	__init_ssp((void *)aux[AT_RANDOM]);
+ 
++#ifdef __zoraya__
++	/* Zoraya: no program starts set-uid (ADR-0005), so a start is never
++	 * secure and fds 0 to 2 are not polled: the poll and the open of
++	 * /dev/null would be system calls the shim does not route (ADR-0141). */
++	(void)0;
++#else
+ 	if (aux[AT_UID]==aux[AT_EUID] && aux[AT_GID]==aux[AT_EGID]
+ 		&& !aux[AT_SECURE]) return;
+ 
+@@ -54,6 +60,7 @@
+ 		if (__sys_open("/dev/null", O_RDWR)<0)
+ 			a_crash();
+ 	libc.secure = 1;
++#endif
+ }
+ 
+ static void libc_start_init(void)

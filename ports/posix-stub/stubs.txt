@@ -1,0 +1,186 @@
+# The stub zoraya-posix (ADR-0140): every function libc.a needs from the Rust
+# half of ADR-0100, until TASK 6c writes it. One function per line: its kind,
+# then its name. The kinds (ports/posix-stub/stubs.awk turns them into Rust):
+#
+#   int    returns -1 with errno ENOSYS
+#   zero   returns 0 with errno ENOSYS (isatty: "not a terminal")
+#   ptr    returns NULL with errno ENOSYS
+#   sigerr returns SIG_ERR, (void *)-1, with errno ENOSYS
+#   err    returns ENOSYS itself (functions that return an error number)
+#   void   does nothing
+#   raw    returns -ENOSYS (the system-call shim's convention, syscall.h)
+#   trap   does not return: `brk #0x7a` ends the process with a fault
+#   u32:N  an unsigned int variable with the value N
+#
+# Arguments are not named: on AAPCS64 a function that ignores its arguments
+# may be called with any, variadic ones too.
+#
+# Section 1: the tier list's names that musl's retained files do not define
+# (ADR-0100 item 2's replaced directories and the excluded files). The check
+# `make check-ports` fails if this section and the archive disagree. Every one
+# fails, including the few that need no system (htonl, sigemptyset, the
+# posix_spawn attribute functions): they belong to the Rust half all the same.
+trap _exit
+trap abort
+int access
+sigerr bsd_signal
+ptr calloc
+int chdir
+int clock_gettime
+int close
+int closedir
+int dup
+int dup2
+int eaccess
+int execve
+int execvp
+int faccessat
+int fchmod
+int fchmodat
+int fchown
+int fchownat
+int fcntl
+ptr fdopendir
+int fgetxattr
+int flistxattr
+ptr fopen
+int fork
+void free
+int fsetxattr
+int fstat
+int fstatat
+int ftruncate
+int futimens
+ptr getcwd
+int getegid
+int geteuid
+int getgid
+int getloadavg
+ptr getlogin
+int getpgrp
+int getpid
+int getppid
+int getrlimit
+int getuid
+int htonl
+int ioctl
+zero isatty
+int kill
+int killpg
+int linkat
+int lseek
+int lstat
+ptr malloc
+int memfd_create
+int mkdirat
+int mkfifo
+int mknodat
+int mprotect
+int open
+int openat
+ptr opendir
+int pipe
+err posix_spawn
+err posix_spawn_file_actions_adddup2
+err posix_spawn_file_actions_destroy
+err posix_spawn_file_actions_init
+err posix_spawnattr_destroy
+err posix_spawnattr_init
+err posix_spawnattr_setflags
+err posix_spawnattr_setsigmask
+int pselect
+int raise
+int read
+ptr readdir
+int readlink
+int readlinkat
+ptr realloc
+int remove
+int rename
+int sem_init
+int sem_post
+int sem_wait
+int setpgid
+int setrlimit
+int sigaction
+int sigaddset
+int sigemptyset
+int sigfillset
+trap siglongjmp
+sigerr signal
+int sigprocmask
+int sigsuspend
+int stat
+int symlinkat
+int syscall
+int sysconf
+int tcgetattr
+int tcgetpgrp
+int tcsetpgrp
+int tee
+int times
+ptr tmpfile
+ptr ttyname
+int umask
+int uname
+int unlink
+int unlinkat
+int utimensat
+int vfork
+int wait
+int wait3
+int waitpid
+int write
+int writev
+
+# Section 2: names musl's retained files use that are not in the tier list.
+# The build hides the public ones (ADR-0141), so they are not exports.
+void __block_all_sigs
+void __restore_sigs
+int __clock_gettime
+err __clock_nanosleep
+u32:131072 __default_stacksize
+int __dup3
+ptr __libc_calloc
+void __libc_free
+ptr __libc_malloc
+void __lock
+void __unlock
+int __lseek
+ptr __map_file
+int __munmap
+void _pthread_cleanup_pop
+void _pthread_cleanup_push
+int connect
+int execl
+int getrandom
+int mkdir
+int munmap
+int pipe2
+err posix_spawn_file_actions_addclose
+err pthread_setcancelstate
+err pthread_sigmask
+int send
+int sendmsg
+int setgroups
+int setsid
+int socket
+int tcsetattr
+
+# Section 2b: the names accepted ADRs add to the surface (ADR-0142).
+err posix_spawnattr_setpgroup
+err posix_spawnattr_setsigdefault
+int zoraya_fork_group
+
+# Section 3: the functions the system-call shim routes to
+# (ports/musl/zoraya/syscall.h) and the start-up of ADR-0109 item 4.
+raw zoraya_posix_read
+raw zoraya_posix_readv
+raw zoraya_posix_writev
+raw zoraya_posix_close
+raw zoraya_posix_fcntl
+raw zoraya_posix_ioctl
+raw zoraya_posix_mmap
+raw zoraya_posix_set_tid_address
+trap zoraya_posix_exit_group
+trap zoraya_posix_start

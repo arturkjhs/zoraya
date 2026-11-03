@@ -42,6 +42,9 @@ members = [
     "tools/zoraya-fsck",
     "tools/mutants",
     "user",
+    "tools/zoraya-ar",
+    "tools/posix-surface-check",
+    "tools/zoraya-elf-check",
 ]
 # The fuzz targets need a nightly toolchain; they are a separate workspace.
 exclude = ["fuzz"]
@@ -87,6 +90,9 @@ default-members = [
     "tools/zoraya-mkfs",
     "tools/zoraya-fsck",
     "tools/mutants",
+    "tools/zoraya-ar",
+    "tools/posix-surface-check",
+    "tools/zoraya-elf-check",
 ]
 
 [workspace.package]

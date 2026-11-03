@@ -1,0 +1,98 @@
+M4 validation patch (TASK-02). Call site: dash src/jobs.c:1002 vforkexec, `pid = vfork()` (+ shellexec/tryexec
+in the child). M3 class: direct. For a non-interactive shell without job control the vfork child only execs,
+so the parent starts the command with posix_spawn, keeping dash's PATH walk and the ENOEXEC -> /bin/sh
+fallback. Any spawn failure falls back to the original vfork path (same diagnostics, 126/127). Interactive and
+job-control shells keep vfork (tcsetpgrp in the child has no posix_spawn equivalent).
+--- a/src/exec.c	2026-06-13 14:08:11.000000000 +0200
++++ b/src/exec.c	2026-10-21 00:42:29.747751026 +0200
+@@ -33,6 +33,7 @@
+  */
+ 
+ #include <sys/types.h>
++#include <spawn.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+ #include <fcntl.h>
+@@ -149,6 +150,53 @@
+ }
+ 
+ 
++/*
++ * TASK-02 M4: start a simple command with posix_spawn instead of vfork+execve.
++ * Same PATH walk and ENOEXEC -> /bin/sh fallback as shellexec/tryexec; returns the pid,
++ * or -1 so that the caller falls back to the original vfork path (which then produces the
++ * usual diagnostics and 126/127 exit status).
++ */
++static int
++tryspawn(pid_t *pid, char *cmd, char **argv, char **envp)
++{
++	int r = posix_spawn(pid, cmd, NULL, NULL, argv, envp);
++
++	if (r == ENOEXEC) {
++		char *save0 = argv[0], *save1 = argv[-1];
++		char *const path_bshell = _PATH_BSHELL;
++
++		argv[0] = cmd;
++		argv[-1] = path_bshell;
++		r = posix_spawn(pid, path_bshell, NULL, NULL, argv - 1, envp);
++		argv[0] = save0;
++		argv[-1] = save1;
++	}
++	return r;
++}
++
++pid_t
++spawnexec(char **argv, const char *path, int idx)
++{
++	char **envp = environment();
++	pid_t pid;
++	int r;
++
++	if (strchr(argv[0], '/') != NULL)
++		return tryspawn(&pid, argv[0], argv, envp) ? -1 : pid;
++	while (padvance(&path, argv[0]) >= 0) {
++		char *cmdname = stackblock();
++
++		if (--idx < 0 && pathopt == NULL) {
++			r = tryspawn(&pid, cmdname, argv, envp);
++			if (!r)
++				return pid;
++			if (r != ENOENT && r != ENOTDIR)
++				return -1;
++		}
++	}
++	return -1;
++}
++
+ STATIC void
+ tryexec(char *cmd, char **argv, char **envp)
+ {
+--- a/src/exec.h	2026-06-13 14:08:11.000000000 +0200
++++ b/src/exec.h	2026-10-21 00:42:29.747843067 +0200
+@@ -64,6 +64,7 @@
+ 
+ struct stat64;
+ 
++pid_t spawnexec(char **, const char *, int);
+ void shellexec(char **, const char *, int)
+     __attribute__((__noreturn__));
+ int padvance_magic(const char **path, const char *name, int magic);
+--- a/src/jobs.c	2026-06-13 03:49:51.000000000 +0200
++++ b/src/jobs.c	2026-10-21 00:42:29.747942942 +0200
+@@ -995,6 +995,16 @@
+ 
+ 	jp = makejob(1);
+ 
++	/* TASK-02 M4: no job control and not interactive: the vfork child would do
++	 * nothing but exec, which posix_spawn expresses exactly. */
++	if (!jp->jobctl && !iflag) {
++		pid = spawnexec(argv, path, idx);
++		if (pid > 0) {
++			forkparent(jp, n, FORK_FG, pid);
++			return jp;
++		}
++	}
++
+ 	if (!mypid)
+ 		mypid = getpid();
+ 	vforked = mypid;

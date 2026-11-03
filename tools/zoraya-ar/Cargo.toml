@@ -1,0 +1,11 @@
+[package]
+name = "zoraya-ar"
+description = "The archiver of the Zoraya toolchain: GNU ar format with a symbol index (ADR-0109 item 3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,115 @@
+#!/bin/sh
+# zcc: the C compiler driver for aarch64-unknown-zoraya (ADR-0109 item 1).
+#
+# It runs the host's clang for a bare AArch64 ELF target with the sysroot's
+# musl headers, and links static ET_EXEC programs with rust-lld from the
+# pinned Rust toolchain: crt1.o crti.o <inputs> -lc crtn.o, text from 4 MiB
+# (USER_LOW, ADR-0031, ADR-0108 item 5). Nothing Linux is defined: zcc
+# defines __zoraya__ and refuses -D__linux__ (INV-0109-2).
+#
+# Environment:
+#   ZORAYA_SYSROOT  the sysroot (default: build/sysroot of this repository)
+#   ZORAYA_CLANG    the clang to run (default: clang on PATH)
+#   ZORAYA_LD       an ld.lld-flavoured linker (default: rust-lld's gcc-ld
+#                   wrapper from the toolchain rustc reports)
+#
+# Usage is that of cc: -c, -S, -E and -M compile only; anything else links.
+# -nostdlib, -nostartfiles and -nodefaultlibs leave out what they say.
+set -eu
+
+# The repository from the script's own place, through any symbolic links to
+# it (build/ports/bin/aarch64-unknown-zoraya-cc is one).
+self=$0
+while [ -L "$self" ]; do
+    link=$(readlink "$self")
+    case "$link" in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+here=$(cd "$(dirname "$self")" && pwd)
+root=$(cd "$here/.." && pwd)
+sysroot=${ZORAYA_SYSROOT:-$root/build/sysroot}
+clang=${ZORAYA_CLANG:-clang}
+
+link=1
+startfiles=1
+defaultlibs=1
+prev=
+for a in "$@"; do
+    case "$prev" in
+    -D)
+        case "$a" in
+        __linux__|__linux__=*|__linux|__linux=*|linux|linux=*|__gnu_linux__|__gnu_linux__=*)
+            echo "zcc: refusing -D$a: Zoraya is not Linux (INV-0109-2)" >&2
+            exit 1;;
+        esac;;
+    -target)
+        echo "zcc: refusing -target $a: the target is aarch64-unknown-zoraya" >&2
+        exit 1;;
+    esac
+    case "$a" in
+    -D__linux__|-D__linux__=*|-D__linux|-D__linux=*|-Dlinux|-Dlinux=*|-D__gnu_linux__|-D__gnu_linux__=*|*,-D__linux*|*,-D__gnu_linux*|*,-Dlinux*|*,-D,__linux*|*,-D,__gnu_linux*|*,-D,linux*)
+        echo "zcc: refusing $a: Zoraya is not Linux (INV-0109-2)" >&2
+        exit 1;;
+    --target=*|-target=*|-Xclang|-Xpreprocessor|--define-macro*|@*)
+        echo "zcc: refusing $a: zcc sets the target and the preprocessor's definitions itself" >&2
+        exit 1;;
+    -shared|-rdynamic|-pie|-static-pie)
+        echo "zcc: refusing $a: Zoraya programs are static ET_EXEC (ADR-0033)" >&2
+        exit 1;;
+    -dumpmachine)
+        echo aarch64-unknown-zoraya
+        exit 0;;
+    -c|-S|-E|-M|-MM|-fsyntax-only|--version|-dumpversion|-print-*|--print-*)
+        link=0;;
+    -nostdlib)
+        startfiles=0; defaultlibs=0;;
+    -nostartfiles)
+        startfiles=0;;
+    -nodefaultlibs)
+        defaultlibs=0;;
+    esac
+    prev=$a
+done
+
+# Identity: __zoraya__, and the same OS and type macros as tcc for Zoraya
+# (ADR-0143; make check-ports compares them). clang's bare-metal target says
+# wint_t is int; musl's wint_t, and tcc's, is unsigned.
+# Code generation: AAPCS64 with FP and SIMD, static, no stack protector (no
+# AT_RANDOM source yet, ADR-0109 item 1). -nostdinc keeps the host's and
+# clang's own headers out: musl's are complete. The prefix map turns this
+# checkout's absolute path, in file names and the compilation directory, into
+# ".", so that objects do not depend on where the checkout is.
+set -- --target=aarch64-unknown-none-elf -D__zoraya__=1 \
+    -U__WINT_TYPE__ "-D__WINT_TYPE__=unsigned int" \
+    -nostdinc -isystem "$sysroot/usr/include" \
+    -fno-pic -fno-pie -fno-stack-protector \
+    "-ffile-prefix-map=$root=." -Qunused-arguments "$@"
+
+if [ "$link" = 0 ]; then
+    exec "$clang" "$@"
+fi
+
+if [ -z "${ZORAYA_LD:-}" ]; then
+    rustc=$(command -v rustc 2>/dev/null || echo "$HOME/.cargo/bin/rustc")
+    host=$(cd "$root" && "$rustc" -vV | sed -n 's/^host: //p')
+    ZORAYA_LD=$(cd "$root" && "$rustc" --print sysroot)/lib/rustlib/$host/bin/gcc-ld/ld.lld
+fi
+
+lib=$sysroot/usr/lib
+pre=
+post=
+if [ "$startfiles" = 1 ]; then
+    pre="$lib/crt1.o $lib/crti.o"
+    post="$lib/crtn.o"
+fi
+libs=
+if [ "$defaultlibs" = 1 ]; then
+    libs=-lc
+fi
+
+# -x none ends a -x the caller gave (as in `cc -x c -`), so that crtn.o is
+# an object, not C. The word splitting of $pre, $libs and $post is intended: the sysroot's path
+# is the repository's, which has no spaces (CLAUDE.md, Conventions).
+# shellcheck disable=SC2086
+exec "$clang" -static -nostdlib -fuse-ld=lld "--ld-path=$ZORAYA_LD" \
+    -Wl,--image-base=0x400000 -Wl,-z,norelro -Wl,--build-id=none \
+    -Wl,-z,noexecstack -L"$lib" $pre "$@" -x none $libs $post
