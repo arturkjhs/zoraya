@@ -808,7 +808,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             27 => {
                 let (_, m) = decode::<proto::OpenWithMode<'_>>(bytes, n)?;
                 let Ok(mode) = u16::try_from(m.mode) else {
-                    self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
+                    let s = status::INVALID_ARGUMENT;
+                    self.open_answer(i, t, true, s, ("", ""), None);
                     return Ok(());
                 };
                 let open = proto::Open {
@@ -816,7 +817,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                     rights: m.rights,
                     path: m.path,
                 };
-                self.open_as(i, t, &open, mode, m.description.0, handles);
+                self.open_as(i, t, &open, mode, m.description.0, true, handles);
             }
             28 => {
                 let (_, m) = decode::<proto::ReadCurrent>(bytes, n)?;
@@ -878,10 +879,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// `open`: a native client's create gets `0o644` (ADR-0014 rule 6).
     fn open(&mut self, i: usize, t: u32, m: &proto::Open<'_>, handles: &mut Vec<T::End>) {
-        self.open_as(i, t, m, 0o644, 0, handles);
+        self.open_as(i, t, m, 0o644, 0, false, handles);
     }
 
-    /// `open` with the mode of a create and the new description's flags.
+    /// `open` with the mode of a create and the new description's flags;
+    /// `full` answers with `OpenWithModeReply`.
+    #[allow(clippy::too_many_arguments)] // Reason: the request's parts, each used once.
     fn open_as(
         &mut self,
         i: usize,
@@ -889,18 +892,19 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         m: &proto::Open<'_>,
         mode: u16,
         description: u32,
+        full: bool,
         handles: &mut Vec<T::End>,
     ) {
         use proto::{open_flags as f, rights as r};
         if !self.room() {
-            return self.open_reply(i, t, status::TOO_MANY_OPEN, "", "");
+            return self.open_answer(i, t, full, status::TOO_MANY_OPEN, ("", ""), None);
         }
         let flags = m.flags.0;
         let creates = flags & (f::CREATE | f::UNNAMED) != 0;
         // A directory is opened, never made or truncated here: refused before
         // the engine runs, so that a refusal changes nothing (ADR-0010 rule 2).
         if flags & f::DIRECTORY != 0 && (creates || flags & f::TRUNCATE != 0) {
-            return self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
+            return self.open_answer(i, t, full, status::INVALID_ARGUMENT, ("", ""), None);
         }
         let mut needed = m.rights.0;
         if creates {
@@ -910,17 +914,20 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             needed |= r::WRITE;
         }
         let Some(dir) = self.handle_of(i) else {
-            return self.open_reply(i, t, status::STORAGE_FAILED, "", "");
+            return self.open_answer(i, t, full, status::STORAGE_FAILED, ("", ""), None);
         };
         if !self.has(i, needed) {
-            return self.open_reply(i, t, status::ACCESS_DENIED, "", "");
+            return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
         }
         let Some(end) = handles.first().copied() else {
-            return self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
+            return self.open_answer(i, t, full, status::INVALID_ARGUMENT, ("", ""), None);
         };
         if self.transport.kind(end) != HandleKind::Channel {
-            return self.open_reply(i, t, status::INVALID_ARGUMENT, "", "");
+            return self.open_answer(i, t, full, status::INVALID_ARGUMENT, ("", ""), None);
         }
+        // Ids are never reused and come in order (ADR-0014 rule 1), so an
+        // object at or past this id is one this request made.
+        let first_new = self.volume.next_id();
         let opened = if flags & f::UNNAMED != 0 {
             self.volume.create_unnamed(dir, mode)
         } else {
@@ -940,11 +947,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Ok(handle) => handle,
             Err(FsError::IsLink { remaining, target }) => {
                 let s = status::IS_LINK;
-                return self.open_reply(i, t, s, &remaining, &target);
+                return self.open_answer(i, t, full, s, (&remaining, &target), None);
             }
             Err(e) => {
                 let s = self.engine_status(&e);
-                return self.open_reply(i, t, s, "", "");
+                return self.open_answer(i, t, full, s, ("", ""), None);
             }
         };
         if flags & f::DIRECTORY != 0
@@ -954,18 +961,66 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             )
         {
             let _ = self.volume.close(handle);
-            return self.open_reply(i, t, status::NOT_DIRECTORY, "", "");
+            return self.open_answer(i, t, full, status::NOT_DIRECTORY, ("", ""), None);
         }
         handles.clear();
         let record = self.new_record(handle);
         if let Some(r) = self.records[record].as_mut() {
             r.flags = description;
         }
+        // What the full reply tells of the object, read before the
+        // connection exists: a connection the transport refuses closes the
+        // record, and with it the handle.
+        let attr = if full {
+            let a = self.volume.stat(handle);
+            self.after_engine();
+            a.ok()
+        } else {
+            None
+        };
         let s = match self.add_connection(end, record, m.rights.0) {
             Some(_) => status::OK,
             None => status::LIMIT_REACHED,
         };
-        self.open_reply(i, t, s, "", "");
+        let made = attr.map(|a| (a.id >= first_new, a));
+        self.open_answer(i, t, full, s, ("", ""), made.filter(|_| s == status::OK));
+    }
+
+    /// `open`'s reply, or `open_with_mode`'s with what it knows of the
+    /// object: `(created, attributes)`.
+    fn open_answer(
+        &mut self,
+        i: usize,
+        t: u32,
+        full: bool,
+        s: u32,
+        (remaining, target): (&str, &str),
+        made: Option<(bool, Attr)>,
+    ) {
+        if !full {
+            return self.open_reply(i, t, s, remaining, target);
+        }
+        let volume = self.volume.durable_root().volume_id;
+        let (created, a) = match made {
+            Some((created, a)) => (created, Some(a)),
+            None => (false, None),
+        };
+        let m = proto::OpenWithModeReply {
+            status: code(s),
+            remaining: Path(remaining),
+            target: Text(target),
+            created: Below(u32::from(created)),
+            volume: if a.is_some() { volume } else { 0 },
+            id: a.map_or(0, |a| a.id),
+            size: a.map_or(0, |a| a.size),
+            modified_seconds: a.map_or(0, |a| a.mtime.secs as u64),
+            modified_nanos: a.map_or(0, |a| a.mtime.nanos),
+            changed_seconds: a.map_or(0, |a| a.ctime.secs as u64),
+            changed_nanos: a.map_or(0, |a| a.ctime.nanos),
+            mode: a.map_or(0, |a| u32::from(a.posix_mode)),
+            kind: a.map_or(Below(0), |a| wire_kind(a.kind)),
+        };
+        self.reply(i, t, &m);
     }
 
     fn clone_connection(&mut self, i: usize, t: u32, rights: u32, handles: &mut Vec<T::End>) {

@@ -271,6 +271,8 @@ struct Rig {
     root: End,
     clock: TestClock,
     transaction: u32,
+    /// `open_with_mode`'s last reply: created, kind, mode, id and size.
+    last_open: (u32, u32, u32, u64, u64),
 }
 
 const NOW: Timestamp = Timestamp {
@@ -306,6 +308,7 @@ fn rig_with(plan: FaultPlan) -> Rig {
         root,
         clock,
         transaction: 0,
+        last_open: (0, 0, 0, 0, 0),
     }
 }
 
@@ -807,7 +810,8 @@ impl Rig {
             path: Path(path),
         };
         let reply = self.call(dir, &m, vec![end]);
-        let (_, r) = decode::<proto::OpenReply<'_>>(&reply, 0).unwrap();
+        let (_, r) = decode::<proto::OpenWithModeReply<'_>>(&reply, 0).unwrap();
+        self.last_open = (r.created.0, r.kind.0, r.mode, r.id, r.size);
         (r.status.0, end)
     }
 
@@ -1093,9 +1097,31 @@ fn open_with_mode_creates_with_that_mode() {
     let (s, f) = r.try_open_mode(root, "run", open_flags::CREATE, ANY, 0, 0o755);
     assert_eq!(s, status::OK);
     assert_eq!(r.mode_of(f), 0o755);
+    let (created, kind, mode, id, size) = r.last_open;
+    assert_eq!(
+        (created, kind, mode, size),
+        (1, proto::kind::FILE, 0o755, 0)
+    );
+    assert_eq!(r.write_text(f, 0, 0, b"abc").0, status::OK);
     let (s, g) = r.try_open_mode(root, "run", open_flags::CREATE, ANY, 0, 0o600);
     assert_eq!(s, status::OK);
     assert_eq!(r.mode_of(g), 0o755, "an existing file keeps its mode");
+    assert_eq!(
+        r.last_open,
+        (0, proto::kind::FILE, 0o755, id, 3),
+        "not made by this open"
+    );
+    let m = proto::MakeDirectory {
+        mode: 0o750,
+        name: Name("d"),
+    };
+    assert_eq!(r.done(root, &m, vec![]).0, status::OK);
+    let (s, _) = r.try_open_mode(root, "d", open_flags::DIRECTORY, rights::READ, 0, 0);
+    assert_eq!(s, status::OK);
+    let (created, kind, mode, _, _) = r.last_open;
+    assert_eq!((created, kind, mode), (0, proto::kind::DIRECTORY, 0o750));
+    let (s, _) = r.try_open_mode(root, "missing", 0, 0, 0, 0);
+    assert_eq!((s, r.last_open), (status::NOT_FOUND, (0, 0, 0, 0, 0)));
     let native = r.open(root, "native", open_flags::CREATE);
     assert_eq!(r.mode_of(native), 0o644, "a native create");
     let (s, u) = r.try_open_mode(root, "x", open_flags::UNNAMED, ANY, 0, 0o700);
@@ -1116,7 +1142,11 @@ fn open_with_mode_creates_with_that_mode() {
     assert_eq!(r.write_current(a, 0, b"cd"), (status::OK, 2));
     assert_eq!(r.seek(a, proto::whence::START, 0).0, status::OK);
     assert_eq!(r.write_current(a, 0, b"e"), (status::OK, 1));
-    assert_eq!(r.read_text(a, 0, 10).1, b"abcde");
+    assert_eq!(
+        r.read_text(a, 0, 10).1,
+        b"abcabcde",
+        "after the earlier abc"
+    );
 }
 
 /// The buffer requests at the position move it as the inline ones do.

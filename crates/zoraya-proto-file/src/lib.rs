@@ -302,13 +302,32 @@ protocol! {
     message GetFlags = 26, handles 0 {}
 
     /// `open` with the description's flags and, for a create, the POSIX mode
-    /// (ADR-0014 rule 6). The reply is `OpenReply`.
+    /// (ADR-0014 rule 6).
     message OpenWithMode<'a> = 27, handles 1 {
         flags: Flags<{ open_flags::ALL }>,
         rights: Rights,
         description: Flags<{ description_flags::ALL }>,
         mode: u32,
         path: Path<'a, MAX_PATH, false>,
+    }
+    /// `OpenReply`, and what `StatReply` gives of the object opened, and
+    /// whether this open made it: what a POSIX open needs to decide the rest
+    /// without another round trip.
+    message OpenWithModeReply<'a> = 27, handles 0 {
+        status: Code,
+        created: Below<2>,
+        volume: u64,
+        id: u64,
+        size: u64,
+        modified_seconds: u64,
+        modified_nanos: u32,
+        changed_seconds: u64,
+        changed_nanos: u32,
+        mode: u32,
+        kind: Kind,
+        /// With `IS_LINK`, as in `OpenReply`.
+        remaining: Path<'a, MAX_PATH, true>,
+        target: Text<'a, MAX_PATH>,
     }
 
     /// `read` at the position, which moves past what was read. The reply is
@@ -659,6 +678,25 @@ mod tests {
             },
             OpenWithMode<'_>,
             1
+        );
+        borrowed!(
+            OpenWithModeReply {
+                status: Below(status::OK),
+                remaining: Path(""),
+                target: Text(""),
+                created: Below(1),
+                volume: 1,
+                id: 9,
+                size: 0,
+                modified_seconds: 10,
+                modified_nanos: 11,
+                changed_seconds: 12,
+                changed_nanos: 13,
+                mode: 0o600,
+                kind: Below(kind::FILE),
+            },
+            OpenWithModeReply<'_>,
+            0
         );
         borrowed!(
             WriteCurrent {
