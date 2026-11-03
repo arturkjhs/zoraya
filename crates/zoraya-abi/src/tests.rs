@@ -1283,6 +1283,87 @@ mod bootstrap {
     }
 
     #[test]
+    fn every_kind_round_trips_and_the_boundaries_hold() {
+        for k in 0..=5u8 {
+            let kind = FdKind::from_raw(k).unwrap();
+            assert_eq!(kind as u8, k);
+            assert_eq!(kind.has_slot(), kind != FdKind::Null);
+        }
+        assert_eq!(FdKind::from_raw(6), None);
+        for k in 0..=4u8 {
+            assert_eq!(EntryKind::from_raw(k).unwrap() as u8, k);
+        }
+        assert_eq!(EntryKind::from_raw(5), None);
+        let mut out = std::vec![0; 3 * MAX_PATH];
+        let root = [Entry {
+            prefix: "/",
+            kind: EntryKind::Directory,
+            handle: 0,
+        }];
+        let facts = Facts {
+            umask: 0o777,
+            ..Facts::default()
+        };
+        assert!(
+            encode(&facts, 0, "", 0, "", &[], &root, 1, &mut out).is_some(),
+            "umask 0o777"
+        );
+        let exe = "e".repeat(MAX_PATH);
+        assert!(
+            encode(&FACTS, 0, &exe, 0, "", &[], &root, 1, &mut out).is_some(),
+            "MAX_PATH"
+        );
+        let fds: std::vec::Vec<Fd> = (0..OPEN_MAX)
+            .map(|fd| Fd {
+                fd,
+                kind: FdKind::Null,
+                flags: 0,
+                tty: NO_HANDLE,
+            })
+            .collect();
+        let mut big = std::vec![0; 16 * 1024];
+        assert!(
+            encode(&FACTS, 0, "", 0, "", &fds, &root, 1, &mut big).is_some(),
+            "OPEN_MAX fds"
+        );
+        let same_length = [
+            Entry {
+                prefix: "/aa",
+                kind: EntryKind::Directory,
+                handle: 0,
+            },
+            Entry {
+                prefix: "/bb",
+                kind: EntryKind::Directory,
+                handle: 1,
+            },
+        ];
+        assert!(encode(&FACTS, 0, "", 0, "", &[], &same_length, 2, &mut out).is_some());
+        let path = alloc_path(MAX_PATH);
+        let r = Report {
+            access: Access::Read,
+            dropped: 0,
+            path: &path,
+        };
+        let n = r.encode(&mut out).expect("a path of MAX_PATH bytes");
+        assert_eq!(Report::decode(&out[..n]), Some(r));
+        let longer = alloc_path(MAX_PATH + 1);
+        let r = Report {
+            access: Access::Read,
+            dropped: 0,
+            path: &longer,
+        };
+        assert!(r.encode(&mut out).is_none());
+    }
+
+    /// "/aaa...", `n` bytes in all.
+    fn alloc_path(n: usize) -> std::string::String {
+        let mut p = std::string::String::from("/");
+        p.push_str(&"a".repeat(n - 1));
+        p
+    }
+
+    #[test]
     fn the_fixed_slots_are_above_every_fd_and_distinct() {
         for (i, h) in slot::ALL.iter().enumerate() {
             assert!(h.slot() >= OPEN_MAX && h.slot() < crate::MAX_HANDLES);

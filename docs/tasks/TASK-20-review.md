@@ -52,7 +52,19 @@ test binary of `zoraya-posix` without the heap cap) and the fix; `9ce0ae9` bound
 
 ## Mutation testing
 
-(filled in below)
+cargo-mutants 27.1.0 through `make mutants-host`, two jobs, 300 s a mutant, under the watchdog, every test process
+capped at 512 MiB (after `fcf2c06`). `ffi.rs` is left out (`--exclude`): the host does not compile it, and its
+behaviour is `make test-libposix`'s. The other crates were run over the lines this task changed (`--in-diff`).
+
+| Crate | First run | Holes, now tested | Last run | Left |
+|---|---|---|---|---|
+| `zoraya-posix` (all but `ffi.rs`) | 717: 161 missed, 499 caught, 56 unviable, 1 timeout | the `mutant-triage` subagent's list: fd flags, `dup3`, `F_SETFL`, open's flags on the wire, an entry's root, `O_TMPFILE`, reports of a create, stream waits (the fake kernel gained a reader that acts during a wait), request counts at `MAX_INLINE`, `ENOSPC` after a partial write, special entries, `stat_at`'s empty path, links in `access` and `utimensat`, the root and dot names, temporary parents closed, `share`, the counters, `from_bootstrap`, replies that are not OK (crafted), `O_DSYNC`, and unit tests of `fd::same`, the signal bits, `User::part` and a tie of prefixes (`4c3e4c6`, `e11e5f6`) | 717: 46 missed, 614 caught, 56 unviable, 1 timeout, before `e11e5f6`'s two | 44, equivalent: `\|` to `^` (or `&`) on disjoint bits, rights of a connection on which nothing is ever sent or checked (cwd's, an `O_RDONLY` connection's `SYNC`), `EXCLUSIVE` without `CREATE`, a link kind that only `NO_FOLLOW` returns, the request size of a report, a peer-gone wait that the next read reports the same way, `User::part` clamping a length that is the remainder, `write_stream`'s arms after a wait whose retry gives the same result, and `isize::MAX` exactly, which no memory holds |
+| `zoraya-fs-service` (changed lines) | 87: 9 missed, 75 caught, 3 unviable | the durable flag of a write at the position; `connection_of`, unused, removed | not re-run | 2, equivalent: a write ending past `i64::MAX` is refused by the engine as well |
+| `zoraya-abi` (changed lines) | 162: 17 missed, 135 caught, 10 unviable | every kind's round trip, `has_slot`, the bounds `MAX_PATH`, `OPEN_MAX` fds, `umask` 0o777, prefixes of one length, a report's read access | 162: 1 missed, 151 caught, 10 unviable | 1, equivalent: a cwd entry past the end is refused later, as no entry is its directory |
+
+The triage found two places where the code, not the tests, was in question: names under a special entry answered four
+different errnos (now `ENOTDIR`, as POSIX has it), and a tie between equal prefixes, which a decoded record cannot
+have (the first wins, now tested).
 
 ## Check of the changed lines
 

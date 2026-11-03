@@ -675,7 +675,7 @@ read in 4 KiB and in 1 MiB calls), and the library's own count of the resolver's
 |---|---|---|
 | `seek` round trip; `share` round trip (native) | 11 µs; 18 µs | 295 µs; 467 µs |
 | `lseek` from C; `open` + `close` from C | 7.1 µs; 15.9 µs | 217 µs; 545 µs |
-| The resolver, per path (mean over the run) | 0.32 to 0.46 µs | 11 to 19 µs |
+| The resolver, per path (mean over the run) | 0.32 to 0.46 µs | 11 to 25 µs |
 | 4 KiB calls: write, read | 102 MB/s, 54 MB/s | 9.2 MB/s, 5.8 MB/s |
 | 1 MiB calls: write, read | 399 MB/s, 152 MB/s | 107 MB/s, 21 MB/s |
 
