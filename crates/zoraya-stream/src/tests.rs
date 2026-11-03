@@ -120,6 +120,7 @@ fn a_write_with_no_reader_is_refused_whatever_its_size() {
     for held in [0, 10, CAPACITY] {
         let mut ring = ring_at(0, held);
         ring.close_reader();
+        assert!(!ring.reader_open() && ring.writer_open());
         for requested in [0, 1, ATOMIC, ATOMIC + 1, CAPACITY] {
             assert_eq!(ring.accept(requested), Err(Refused::PeerClosed));
         }
@@ -141,7 +142,13 @@ fn a_read_returns_data_then_would_block_or_end_of_file() {
     assert_eq!(ring.available(0), Ok(0));
     ring.commit_read(10);
     assert_eq!(ring.available(1), Err(Refused::WouldBlock));
+    assert_eq!(
+        ring.available(0),
+        Ok(0),
+        "a read of nothing, even with nothing there"
+    );
     ring.close_writer();
+    assert!(!ring.writer_open() && ring.reader_open());
     assert_eq!(ring.available(1), Ok(0));
     let mut ring = ring_at(0, 3);
     ring.close_writer();
@@ -272,7 +279,11 @@ fn atomic_records_never_interleave() {
             }
         }
     }
+    // Bounded: a ring that wrongly returns nothing must fail here, not hang.
     while let Ok(bytes) = read(&mut ring, &storage, CAPACITY) {
+        if bytes.is_empty() {
+            break;
+        }
         received.extend_from_slice(&bytes);
     }
     assert!(would_block > 0, "the ring filled up at some point");
@@ -364,6 +375,7 @@ fn the_ring_behaves_as_a_queue() {
                 }
             }
             assert_eq!(ring.len(), model.len());
+            assert_eq!(ring.is_empty(), model.is_empty());
             let readable = !model.is_empty() || !writer;
             assert_eq!(ring.read_signals() & READABLE != 0, readable);
             assert_eq!(ring.read_signals() & PEER_CLOSED != 0, !writer);
