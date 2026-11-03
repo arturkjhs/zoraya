@@ -227,7 +227,8 @@ static void files(void)
 			x = x * 1103515245 + 12345;
 			if (blocks[i] && (x & 1)) {
 				for (size_t k = 0; k < sizes[i]; k++)
-					CHECK(blocks[i][k] == (unsigned char)(i + k));
+					if (blocks[i][k] != (unsigned char)(i + k))
+						CHECK(blocks[i][k] == (unsigned char)(i + k));
 				free(blocks[i]);
 				blocks[i] = NULL;
 			}
@@ -244,7 +245,8 @@ static void files(void)
 		unsigned char *grown = realloc(blocks[i], sizes[i] * 3);
 		CHECK(grown != NULL);
 		for (size_t k = 0; k < sizes[i]; k++)
-			CHECK(grown[k] == (unsigned char)(i + k));
+			if (grown[k] != (unsigned char)(i + k))
+				CHECK(grown[k] == (unsigned char)(i + k));
 		for (size_t k = sizes[i]; k < sizes[i] * 3; k++)
 			grown[k] = (unsigned char)(i + k);
 		blocks[i] = grown;

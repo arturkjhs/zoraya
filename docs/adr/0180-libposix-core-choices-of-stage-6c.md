@@ -53,7 +53,12 @@ The items:
     compares file times with `CLOCK_REALTIME`.
 13. **Observation before 6d.** ADR-0110 item 7's statistics travel to the broker, which is 6d's; the task's
     measurements need the resolver's cost per `open` now.
-14. **A launcher before the broker.** ADR-0107 has the broker and `libposix` build tables; neither exists for a native
+14. **Smaller points the code had to settle.** `fchmod` on an fd opened only to read: ADR-0014 rule 6 lets the owner
+    change the mode, but the fd's connection has no `WRITE`. `st_blocks`: ADR-0014 rule 9 says "allocated blocks",
+    which the service does not report. `writev`: one request per piece would make a line of musl's stdio (two pieces)
+    two appends. Times before 1970: `set_attributes` takes unsigned seconds. Start-up: ADR-0109 item 4 says the vector
+    goes on the stack and `AT_RANDOM` comes from the clock and handle generations.
+15. **A launcher before the broker.** ADR-0107 has the broker and `libposix` build tables; neither exists for a native
     program to start a C program in 6c.
 
 ## Decision drivers
@@ -119,7 +124,9 @@ The items:
    the open and the truncation are then two steps of the completion order, not one.
 5. **The record** is `zoraya_abi::posix`'s `ZPB1` (header 64 bytes, then the executable's path, cwd, 8-byte fd
    entries and the entries with their prefixes); the fixed slots are 1000 to 1004 (`BOOTSTRAP`, `BROKER`,
-   `PROCESS_JOB`, `SELF`, `REPORT`); the second message is the 4 bytes `ZPBS` with `SELF`; flag `ABSOLUTE` marks a
+   `PROCESS_JOB`, `SELF`, `REPORT`), of which a spawned child finds `SELF` not at its slot but in the second message,
+   the 4 bytes `ZPBS` with one handle (a spawner cannot list the child's own handle), and keeps it for 6d; `SELF`'s
+   slot is a `fork` child's (`self_slot`, ADR-0102); flag `ABSOLUTE` marks a
    table whose relative paths join cwd's absolute path (ADR-0153 rule 6), and its absence ADR-0107 item 6's form.
    Unknown flags, reserved bytes that are not zero, a handle index used twice, prefixes out of order or not normal,
    and a cwd entry that is not a directory are refused.
@@ -148,7 +155,14 @@ The items:
     `UTIME_NOW` uses it too. Every clock id 0 to 7 is that clock.
 13. **`ZORAYA_POSIX_STATS`** in the environment makes the library write one `POSIX-STATS` line of its counters to fd 2
     at exit (resolutions and their mean time, requests, seeks, shares, reports), until ADR-0110 item 7's statistics.
-14. **`posixrun`**, a native program in the ramdisk, is 6c's launcher: a table from its options (`/` by default),
+14. **The smaller points.** `fchmod` through a connection without `WRITE` reopens the fd's place with `WRITE` and
+    changes the mode only if that place still holds the fd's object (same volume and id), else `EACCES`; it widens
+    nothing a narrowed table did not already give, since the reopening goes through the table's own entry.
+    `st_blocks` is the size rounded up to 4 KiB, in 512-byte units (sparse files overstate). `writev` gathers pieces
+    of at most 60 KiB in all into one write, so a stdio line is one append. `utimensat` with negative seconds is
+    `EINVAL`. Start-up builds the vector in memory of the library's heap, not on the stack, and seeds `AT_RANDOM`
+    from the clock and an address (weak, as ADR-0109 item 4 labels it).
+15. **`posixrun`**, a native program in the ramdisk, is 6c's launcher: a table from its options (`/` by default),
     the program from the volume through `image_create`, fds 0 to 2 (`/dev/null` and a stream it copies to the
     console), a `BROKER` channel nobody serves and whose messages it counts, the `REPORT` channel, and a `Tmp` entry
     that is a volume directory standing in for 6d's service. It is not a broker: no pid, no `posix_spawn`.
@@ -185,6 +199,7 @@ The items:
 - A wall clock in the kernel: item 12.
 - A measured `O_TRUNC` workload where the second request shows, or a reader that sees the moment between: an
   owner-bit-aware truncation in the service.
-- 6d's broker: item 14.
+- 6d's broker: item 15.
+- A program that sets times before 1970 (`tar`, `cpio` of old archives): a signed `set_attributes`.
 
 ## Architect's decision

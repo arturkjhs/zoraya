@@ -40,6 +40,9 @@ pub struct Resolved {
     pub absolute: String,
     /// The path ended in `/`: it must name a directory.
     pub directory: bool,
+    /// The path's last component was `.` or `..`: it names no entry of a
+    /// directory, so the calls that take a name refuse it (`rmdir("d/.")`).
+    pub dot: bool,
 }
 
 /// Why a path led nowhere.
@@ -159,6 +162,11 @@ pub fn place<'p>(
     path: String,
     directory: bool,
 ) -> Result<Resolved, Refusal> {
+    // A joined path can outgrow what a request carries (4096 bytes) though
+    // each part did not.
+    if path.len() > PATH_MAX {
+        return Err(Refusal::Error(ENAMETOOLONG));
+    }
     match longest(prefixes, &path) {
         Some((entry, rest)) => Ok(Resolved {
             place: Place {
@@ -167,6 +175,7 @@ pub fn place<'p>(
             },
             absolute: path,
             directory,
+            dot: false,
         }),
         None => Err(Refusal::Outside(path)),
     }
@@ -189,7 +198,9 @@ pub fn resolve(
     };
     let joined = join(&base, floor, text);
     let directory = text.ends_with('/') || text.ends_with("/.") || text.ends_with("/..");
-    place(prefixes.iter().copied(), joined, directory)
+    let last = text.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let dot = last == "." || last == "..";
+    place(prefixes.iter().copied(), joined, directory || dot).map(|r| Resolved { dot, ..r })
 }
 
 /// Where resolution goes on after the service met a link (ADR-0107 item 7).
@@ -358,7 +369,23 @@ mod tests {
         let r = resolve(&TABLE, Form::EntryRelative, &cwd, b"x/").unwrap();
         assert!(r.directory, "a trailing slash names a directory");
         let r = resolve(&TABLE, Form::EntryRelative, &cwd, b"x/..").unwrap();
-        assert!(r.directory);
+        assert!(r.directory && r.dot);
+        for p in [&b"d/."[..], b".", b"..", b"d/../", b"/."] {
+            assert!(
+                resolve(&TABLE, Form::EntryRelative, &cwd, p).unwrap().dot,
+                "{p:?}"
+            );
+        }
+        for p in [&b"d"[..], b"d/", b"/", b"a.b", b"..x"] {
+            assert!(
+                !resolve(&TABLE, Form::EntryRelative, &cwd, p).unwrap().dot,
+                "{p:?}"
+            );
+        }
+        let deep = "a/".repeat(PATH_MAX / 2 - 2);
+        let far = at(4, &deep[..deep.len() - 1]);
+        let e = resolve(&TABLE, Form::EntryRelative, &far, b"bb/cc").unwrap_err();
+        assert_eq!(e.errno(), ENAMETOOLONG, "joined past PATH_MAX");
         assert!(
             !resolve(&TABLE, Form::EntryRelative, &cwd, b"x")
                 .unwrap()

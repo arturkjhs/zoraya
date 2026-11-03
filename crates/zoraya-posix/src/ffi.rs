@@ -308,8 +308,13 @@ unsafe impl Backing for Objects {
     fn grow(&mut self, pages: usize) -> Option<usize> {
         let size = (pages * PAGE_SIZE) as u64;
         let object = zoraya_rt::memory_create(size, MemoryFlags::NONE).ok()?;
-        let address = zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE).ok()?;
-        Some(address as usize)
+        match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
+            Ok(address) => Some(address as usize),
+            Err(_) => {
+                let _ = zoraya_rt::handle_close(object);
+                None
+            }
+        }
     }
 }
 
@@ -568,20 +573,23 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     // The second message: SELF, which a fork child gets otherwise.
     let mut second = [0u8; 16];
     let mut self_handle = Vec::new();
-    match read(sys, &mut second, &mut self_handle) {
-        Some(4) if &second[..4] == SELF_MESSAGE => {}
-        _ => {
-            for h in self_handle.drain(..) {
-                let _ = zoraya_rt::handle_close(h);
-            }
-        }
+    let kept = match read(sys, &mut second, &mut self_handle) {
+        Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => self_handle.pop(),
+        _ => None,
+    };
+    for h in self_handle.drain(..) {
+        let _ = zoraya_rt::handle_close(h);
     }
     let _ = zoraya_rt::handle_close(slot::BOOTSTRAP);
     let sys = RtSys {
         port: sys.port.take(),
     };
     match decoded {
-        Some(record) => Posix::from_bootstrap(sys, &record, &handles, at_slot, report),
+        Some(record) => {
+            let mut p = Posix::from_bootstrap(sys, &record, &handles, at_slot, report);
+            p.self_handle = kept;
+            p
+        }
         None => {
             for h in handles {
                 let _ = zoraya_rt::handle_close(h);
@@ -784,7 +792,34 @@ fn readv_all(fd: i32, parts: Vec<User>) -> Result<usize, i32> {
     })
 }
 
+/// The largest `writev` gathered into one write: what one request carries.
+const GATHER: usize = zoraya_proto_file::MAX_INLINE;
+
 fn writev_all(fd: i32, parts: Vec<User>) -> Result<usize, i32> {
+    // One write for what fits one request, so that musl's two iovecs of a
+    // line are one append (ADR-0010 rule 2), as writev is on Linux.
+    let total: usize = parts.iter().map(|u| u.length).sum();
+    if parts.len() > 1 && total <= GATHER {
+        let mut joined = Vec::new();
+        if joined.try_reserve_exact(total).is_ok() {
+            for u in &parts {
+                let at = joined.len();
+                joined.resize(at + u.length, 0);
+                // SAFETY: as `RtSys::copy_in`: memory the program passed.
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        u.address as *const u8,
+                        joined[at..].as_mut_ptr(),
+                        u.length,
+                    )
+                };
+            }
+            return state(|p| {
+                let r = p.write(fd, User::new(joined.as_ptr() as u64, joined.len()));
+                write_result(p, r)
+            });
+        }
+    }
     state(|p| {
         let mut done = 0;
         for u in parts {

@@ -160,6 +160,9 @@ pub struct Posix<S: Sys> {
     pub facts: Facts,
     pub exe: String,
     report: Option<S::H>,
+    /// The process itself, with `WAIT`, from the bootstrap channel's second
+    /// message (ADR-0107 item 5), for 6d's `REQUEST_PENDING` waits.
+    pub self_handle: Option<S::H>,
     reported: Vec<String>,
     report_dropped: u32,
     reports_sent: u32,
@@ -205,6 +208,7 @@ impl<S: Sys> Posix<S> {
             facts,
             exe: String::new(),
             report: None,
+            self_handle: None,
             reported: Vec::new(),
             report_dropped: 0,
             reports_sent: 0,
@@ -433,6 +437,7 @@ impl<S: Sys> Posix<S> {
         };
         if self.reports_sent >= MAX_REPORTS {
             self.report_dropped = self.report_dropped.saturating_add(1);
+            self.reported.push(path);
             return ENOENT;
         }
         let r = Report {
@@ -995,9 +1000,11 @@ impl<S: Sys> Posix<S> {
                         .wait(end, signals::WRITABLE | signals::PEER_CLOSED)
                         .map_err(|s| native(s, Call::Other))?;
                     if s & signals::WRITABLE == 0 && s & signals::PEER_CLOSED != 0 {
-                        return Err(EPIPE);
+                        return if done > 0 { Ok(done) } else { Err(EPIPE) };
                     }
                 }
+                // What was written counts; the next write meets EPIPE.
+                Err(Status::PeerClosed) if done > 0 => break,
                 Err(Status::PeerClosed) => return Err(EPIPE),
                 Err(s) if done == 0 => return Err(native(s, Call::Other)),
                 Err(_) => break,
@@ -1177,6 +1184,7 @@ impl<S: Sys> Posix<S> {
             absolute: path::absolute_of(&self.entries[entry].prefix, &parent.path),
             place: parent,
             directory: true,
+            dot: false,
         };
         let (at, o) = self.open_resolved(at, open_flags::DIRECTORY, wanted, 0, 0, Access::Write)?;
         Ok((o.conn, true, name, at.place.entry))
@@ -1190,7 +1198,7 @@ impl<S: Sys> Posix<S> {
 
     pub fn mkdir_at(&mut self, dirfd: i32, path: &[u8], mode: u32) -> Result<(), i32> {
         let r = self.resolve(dirfd, path, Access::Write)?;
-        if self.special(&r).is_some() || r.place.path.is_empty() {
+        if self.special(&r).is_some() || r.place.path.is_empty() || r.dot {
             return Err(EEXIST);
         }
         let (conn, temporary, name, _) = self.parent(&r, rights::CREATE)?;
@@ -1210,6 +1218,9 @@ impl<S: Sys> Posix<S> {
             return Err(EINVAL);
         }
         let r = self.resolve(dirfd, path, Access::Write)?;
+        if r.dot {
+            return Err(EINVAL);
+        }
         if self.special(&r).is_some() || r.place.path.is_empty() {
             return Err(EBUSY);
         }
@@ -1255,6 +1266,9 @@ impl<S: Sys> Posix<S> {
         if self.special(&from).is_some() || self.special(&to).is_some() {
             return Err(EXDEV);
         }
+        if from.dot || to.dot {
+            return Err(EINVAL);
+        }
         if from.place.path.is_empty() || to.place.path.is_empty() {
             return Err(EBUSY);
         }
@@ -1293,7 +1307,7 @@ impl<S: Sys> Posix<S> {
     pub fn symlink_at(&mut self, target: &[u8], dirfd: i32, path: &[u8]) -> Result<(), i32> {
         let target = path::check(target)?.to_string();
         let r = self.resolve(dirfd, path, Access::Write)?;
-        if self.special(&r).is_some() || r.place.path.is_empty() {
+        if self.special(&r).is_some() || r.place.path.is_empty() || r.dot {
             return Err(EEXIST);
         }
         let (conn, temporary, name, _) = self.parent(&r, rights::CREATE)?;
@@ -1386,10 +1400,19 @@ impl<S: Sys> Posix<S> {
                                 place,
                                 absolute,
                                 directory: false,
+                                dot: false,
                             };
+                            // Only if the name still holds this fd's object: after a
+                            // rename or a replace it holds another (ADR-0180).
+                            let (_, mine) = self.stat_conn(conn)?;
                             let (_, o) =
                                 self.open_resolved(r, 0, rights::WRITE, 0, 0, Access::Write)?;
-                            let result = self.set_attributes(o.conn, 1, mode, (0, 0));
+                            let same = (o.meta.volume, o.meta.id) == (mine.volume, mine.id);
+                            let result = if same {
+                                self.set_attributes(o.conn, 1, mode, (0, 0))
+                            } else {
+                                Err(EACCES)
+                            };
                             self.sys.close(o.conn);
                             result
                         }
@@ -1768,7 +1791,7 @@ impl<S: Sys> Posix<S> {
             None => return Err(EBADF),
         };
         let r = self.resolve(dirfd, path, Access::Write)?;
-        if self.special(&r).is_some() || r.place.path.is_empty() {
+        if self.special(&r).is_some() || r.place.path.is_empty() || r.dot {
             return Err(EEXIST);
         }
         let (dir, temporary, name, _) = self.parent(&r, rights::PUBLISH)?;
@@ -1787,8 +1810,8 @@ impl<S: Sys> Posix<S> {
             mode: Below(proto::publish_mode::NO_REPLACE),
             name: Name(name),
         };
-        // A file that already has a name cannot be published (EEXIST, as
-        // linkat over an existing name; INVALID_ARGUMENT from the service).
+        // A file the service holds as named refuses with INVALID_ARGUMENT:
+        // no hard links, so EPERM, as for a named fd above.
         match self.done(file, &m, &[token]) {
             Ok(_) => Ok(()),
             Err(EINVAL) => Err(EPERM),

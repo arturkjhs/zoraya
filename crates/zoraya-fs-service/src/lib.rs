@@ -974,7 +974,18 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let attr = if full {
             let a = self.volume.stat(handle);
             self.after_engine();
-            a.ok()
+            match a {
+                Ok(a) => Some(a),
+                // An answer without the mode would read as a mode of 0.
+                Err(e) => {
+                    self.records[record] = None;
+                    self.transport.close(end);
+                    let _ = self.volume.close(handle);
+                    self.after_engine();
+                    let s = self.engine_status(&e);
+                    return self.open_answer(i, t, full, s, ("", ""), None);
+                }
+            }
         } else {
             None
         };

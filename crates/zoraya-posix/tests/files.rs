@@ -622,3 +622,46 @@ fn process_constants_are_musls() {
     );
     assert_eq!((process::AT_FDCWD, process::F_DUPFD_CLOEXEC), (-100, 1030));
 }
+
+/// A last component of `.` or `..` names no entry of a directory: the calls
+/// that take a name refuse it instead of acting on the parent (review R1).
+#[test]
+fn dot_as_the_last_name_is_refused_by_the_naming_calls() {
+    let mut r = rig();
+    r.p.mkdir_at(AT_FDCWD, b"d", 0o755).unwrap();
+    assert_eq!(r.p.mkdir_at(AT_FDCWD, b"new/.", 0o755), Err(EEXIST));
+    assert_eq!(
+        r.p.stat_at(AT_FDCWD, b"new", 0),
+        Err(ENOENT),
+        "nothing made"
+    );
+    assert_eq!(r.p.unlink_at(AT_FDCWD, b"d/.", AT_REMOVEDIR), Err(EINVAL));
+    assert_eq!(r.p.unlink_at(AT_FDCWD, b"d/..", AT_REMOVEDIR), Err(EINVAL));
+    assert_eq!(r.p.rename(b"d/.", b"e"), Err(EINVAL));
+    assert_eq!(r.p.rename(b"d", b"d/.."), Err(EINVAL));
+    assert_eq!(r.p.symlink_at(b"x", AT_FDCWD, b"d/."), Err(EEXIST));
+    assert!(r.p.stat_at(AT_FDCWD, b"d", 0).is_ok(), "d untouched");
+    let fd = open(&mut r, "d/.", o::RDONLY, 0).unwrap();
+    r.p.is_directory(fd).unwrap();
+}
+
+/// `fchmod` through an fd opened to read changes the fd's own object, and
+/// never what its old name holds after a rename and a new create (R2).
+#[test]
+fn fchmod_by_place_acts_only_on_the_fds_object() {
+    let mut r = rig();
+    let fd = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    r.p.close(fd).unwrap();
+    let ro = open(&mut r, "f", o::RDONLY, 0).unwrap();
+    r.p.fchmod(ro, 0o600).unwrap();
+    assert_eq!(u32_at(&r.p.fstat(ro).unwrap(), 16) & 0o777, 0o600);
+    r.p.rename(b"f", b"g").unwrap();
+    let new = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+    assert_eq!(
+        r.p.fchmod(ro, 0o400),
+        Err(EACCES),
+        "f is another object now"
+    );
+    assert_eq!(u32_at(&r.p.fstat(new).unwrap(), 16) & 0o777, 0o644);
+    assert_eq!(u32_at(&r.p.fstat(ro).unwrap(), 16) & 0o777, 0o600);
+}

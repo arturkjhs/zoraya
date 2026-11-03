@@ -55,8 +55,10 @@ pub mod slot {
     pub const BROKER: Handle = Handle(1001);
     /// The process's own job (ADR-0104 item 4).
     pub const PROCESS_JOB: Handle = Handle(1002);
-    /// The process itself, with `WAIT`: the bootstrap channel's second
-    /// message brings it, since a spawner cannot list it.
+    /// The process itself, with `WAIT`, in a `fork` child (the snapshot's
+    /// `self_slot`, ADR-0102). A spawned child receives it in the bootstrap
+    /// channel's second message instead, at whatever slot that gives it,
+    /// since a spawner cannot list it.
     pub const SELF: Handle = Handle(1003);
     /// The write end of the channel refused paths are reported on.
     pub const REPORT: Handle = Handle(1004);

@@ -823,8 +823,8 @@ or `exit` turns the machine off.
 - **`libposix` (stage 6c).** Process functions, signals, the terminal, `/tmp` and FIFOs are 6d's and fail with
   `ENOSYS`. A file read or write through a bad pointer faults the process instead of `EFAULT` (streams give
   `EFAULT`); listings have no `.` or `..` and number `d_ino` from 1; `O_TRUNC` of an existing non-empty file is a
-  second request; `CLOCK_REALTIME` is the monotonic clock `fsd` stamps files with; `st_blocks` comes from the size
-  (ADR-0180). `posixrun` is the only launcher of C programs until the broker, and only `zosh` names it.
+  second request; `CLOCK_REALTIME` is the monotonic clock `fsd` stamps files with; `st_blocks` comes from the size;
+  times before 1970 cannot be set (ADR-0180). `posixrun` is the only launcher of C programs until the broker, and only `zosh` names it.
 
 ## Roadmap
 

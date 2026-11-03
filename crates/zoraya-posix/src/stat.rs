@@ -87,7 +87,7 @@ pub fn encode(kind: Kind, m: &Meta, uid: u32, gid: u32) -> [u8; SIZE] {
     put(48, &size.to_le_bytes());
     put(56, &(BLOCK as u32).to_le_bytes());
     // st_blocks in 512-byte units, from the size: ADR-0014 rule 9's blocks
-    // the service does not report (a stated deviation for sparse files).
+    // the service does not report (ADR-0180 item 14; sparse files overstate).
     put(
         64,
         &size
