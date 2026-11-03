@@ -54,7 +54,8 @@ Configuration should be typed and owned (CP-23). fish keeps shared settings in a
 - **Evidence against:** A setting must be declared before it can be used; the schema is spread over components'
   descriptions.
 - **Cost:** *(estimate)* A parser and a writer that keeps comments; about 500 lines.
-- **Precedent:** typed stores (DM-086) without their binary format.
+- **Precedent:** typed stores (DM-086) without their binary format. The postmortem records no configuration system
+  of a non-Unix system; the registry (Option D, DM-086) is the non-POSIX precedent.
 
 ### Option D: A typed key-value store (registry-like)
 - **Description:** A service holds typed settings; programs query it over a channel.
@@ -81,7 +82,7 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    | Name | Type | Default | Meaning |
    |---|---|---|---|
    | `shell.prompt` | text | `'{cwd}> '` | the prompt; `{cwd}` is the current directory with `~` for home |
-   | `shell.home` | path | `/home` | what `~` and `cd` alone mean (ADR-0150) |
+   | `shell.home` | path | `/home` | where an interactive shell starts, and what `~` and `cd` alone mean (ADR-0150) |
    | `shell.path` | text | `'/zoraya/bin /bin'` | where commands are looked for, in order |
    | `shell.history` | yes-no | `yes` | keep history in `/config/history` |
    | `shell.history-size` | number 0 100000 | `1000` | lines kept |
@@ -99,7 +100,8 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    - `settings --check` reads the file and reports every problem without changing anything.
    A change takes effect in the shell at once; other components read the file when they start.
 5. **Hand edits.** When a component reads the file, a line it cannot parse, an unknown name of its group or a bad
-   value is reported once as `/config/settings line N: PROBLEM` and the default is used; nothing stops.
+   value is reported once as `NAME: /config/settings line N: PROBLEM` (`zosh:`, `init:`, ADR-0155 rule 5) and the
+   default is used; nothing stops.
 6. **The start file.** `/config/start.zosh` is a `zosh` script run by an interactive shell before its first prompt,
    for functions and variables; a failure in it is reported with its line and the prompt still comes (ADR-0151's stop
    rule ends the script, not the shell). Scripts and `zosh -c` do not run it.

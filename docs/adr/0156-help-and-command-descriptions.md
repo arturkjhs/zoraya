@@ -59,7 +59,9 @@ completions in per-command files separate from the program, and can generate the
 - **Evidence against:** A new format to specify and parse; the ramdisk must expose descriptions without running
   programs; an external description for a POSIX program can still drift from that program.
 - **Cost:** *(estimate)* A parser crate (about 600 lines), a build step per program, a pager.
-- **Precedent:** fish's per-command completion files (separate, not embedded); the rest is new.
+- **Precedent:** fish's per-command completion files (separate, not embedded); the rest is new. The postmortem
+  records no manual or help system of a non-Unix system to compare (its Plan 9 and Oberon sections are about
+  namespaces and the text interface); PowerShell's generated help (Option B) is the non-POSIX precedent.
 
 ## Recommendation
 
@@ -86,16 +88,20 @@ Recommended: **Option C**. It is a recommendation, not a decision.
      mv, rm
    ```
    Keys: `name`, `summary` (one line), `usage` (one or more), `operand NAME KIND TEXT` (kinds of ADR-0153: `read`,
-   `write`, `create`, `remove`, `rename`, `tree`, or `text` for a non-path), `option SHORT LONG [ARG KIND] TEXT`,
-   `cwd read|write`, `exit CODE TEXT`, `setting NAME TYPE DEFAULT TEXT` (ADR-0157), `topic` instead of `name` for a
+   `write`, `create`, `remove`, `remove-tree`, `rename`, `tree`, or `text` for a non-path),
+   `option SHORT LONG [ARG KIND] TEXT` (an option that changes an operand's kind says so: `option -r --recursive
+   makes PATH remove-tree`), `cwd read|none`, `question` (ADR-0155 rule 6), `program PATH` (only in
+   `/zoraya/commands/`: the program file the description is for, ADR-0153 rule 10), `exit CODE TEXT`, `setting NAME TYPE DEFAULT TEXT` (ADR-0157), `topic` instead of `name` for a
    page that is not a command. Body sections are upper-case lines; the order is that of mdoc
    (`shell/survey.md#freebsd-sh-and-base-system`): DESCRIPTION (the untitled first part), EXAMPLES, FILES, EXIT
    STATUS, SEE ALSO. The parser is total and bounded; a file it refuses fails the build.
 2. **Where it lives.** A native program's description is in its ELF as a section `.zoraya.command`, which the loader
    ignores (ADR-0033, ADR-0108 item 5: only `PT_LOAD` is loaded). The ramdisk packer also stores each program's
    description as a ramdisk entry `NAME.cmd`, so the shell reads it without an image. Builtins' and topics'
-   descriptions are compiled into `zosh`. POSIX programs' descriptions are files in `/zoraya/commands/NAME.cmd`; a
-   description inside a program wins over a file.
+   descriptions are compiled into `zosh`. POSIX programs' descriptions are entries `commands/NAME.cmd` of the
+   ramdisk, which the shell shows as `/zoraya/commands/`, part of the system image and read-only; each names the
+   program file it is for, and the shell trusts it for that file alone (ADR-0153 rule 10). Nothing on the volume is
+   read as a description.
 3. **Readers.** `zoraya-command` (ADR-0155) parses argv and prints `--help`; the shell completes (ADR-0154), grants
    (ADR-0153) and shows help from the same parsed form. Functions get theirs from the comment lines above `fn`
    (ADR-0151): the first line is the summary, and parameters are `text` operands.
@@ -170,8 +176,8 @@ description checked (operand kinds are authority); that check belongs to the lau
 ## Invariants
 - **INV-0156-1.** The description parser is total: any byte string gives a description or an error with a line
   number, in bounded memory. *Check:* a deterministic random test in `make test-unit` and a target in `fuzz/`.
-- **INV-0156-2.** Every program in the ramdisk except test programs, every builtin and every file in
-  `/zoraya/commands/` has a description the parser accepts, and every option the program accepts is in it.
+- **INV-0156-2.** Every program in the ramdisk except the `t_*` test programs and the services, every builtin and every
+  entry of `/zoraya/commands/` has a description the parser accepts, and every option the program accepts is in it.
   *Check:* a build step that parses each description and fails on a missing or refused one; INV-0155-1 for options.
 - **INV-0156-3.** `NAME --help`, `help NAME` and Tab completion of `NAME --` list the same options. *Check:* a host
   test rendering all three from each description.

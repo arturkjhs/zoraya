@@ -5,9 +5,9 @@ they type (after the prompt) and what the screen shows. It follows the proposed 
 ADR disagree, one of them is wrong. Part 2 of TASK-18 runs this whole tour as a scripted session on the serial console
 and in the GUI terminal, so it cannot drift from the shell.
 
-The tour starts on an empty `/home`. Examples 15, 16 and 18 need stage 6 (TinyCC, running programs from the volume,
-byte streams), and so do the pipelines (19 to 21) and Ctrl-Z (28); everything else works on what exists today plus
-TASK-18. Messages written by TinyCC are TinyCC's own; Part 2 checks their exact text.
+The tour starts on an empty `/home`. Examples 15 to 17 and 27 need stage 6's TinyCC and POSIX programs (6a to 6e),
+the pipelines 19 to 21 need byte streams (6a), and Ctrl-Z in 28 needs `job_suspend` (6a); everything else works on
+what exists today plus TASK-18. Messages written by TinyCC are TinyCC's own; Part 2 checks their exact text.
 
 ## Getting your bearings
 
@@ -15,7 +15,7 @@ The shell starts in your home directory, `/home`, which the prompt shows as `~`.
 
 **1. The first screen.**
 ```
-zosh: type help to begin, or help tour
+Type help to begin, or help tour.
 ~>
 ```
 
@@ -39,17 +39,17 @@ Commands:
   help      show help
   history   list the lines you have run
   jobs      list jobs
-  kill      stop a job
+  kill      end a job
   ls        list a directory
   math      calculate
   mkdir     make a directory
   mv        move or rename
-  poweroff  turn the machine off
   pwd       print the current directory
   rm        remove files
   search    find lines that contain text
   set       set a variable
   settings  show or change settings
+  sleep     wait for some seconds
   slots     list the shell's handles
   source    run a script in this shell
   stat      describe a file
@@ -59,6 +59,7 @@ Commands:
   unset     remove a variable
   uptime    time since boot
   wait      wait for background jobs
+Demonstrations: echo-args exit-with fault hello spin stubborn
 ```
 
 **3. Where am I?**
@@ -112,13 +113,13 @@ agenda
 ~/project> echo *.txt
 meeting notes.txt minutes.txt
 ~/project> rm *.tmp
-zosh: no file matches *.tmp
+zosh: *.tmp: no file matches
 ```
 
 **8. A habit from bash.** The shell says what to type instead.
 ```
 ~/project> x=1
-zosh: x=1 is not a command
+zosh: x=1: not a command
   hint: to set a variable, type: set x 1
 ```
 
@@ -142,7 +143,7 @@ notes.txt:1: buy milk
 ~> echo $status
 1
 ```
-Finding nothing is a "no", status 1, and prints nothing.
+Finding nothing is a "no": status 1, nothing printed, and unlike a failure it does not stop the rest of the line.
 
 ## Getting help
 
@@ -166,7 +167,7 @@ cp        copy a file
 ```
 ~> cp --<Tab>
 --force    replace TO if it exists
---help     show how to use cp
+--help     show this help
 ~> cp --
 ```
 While you type, the shell also shows in faint text the last matching line from your history; the right arrow accepts
@@ -182,11 +183,11 @@ cp gets:
   in, out, err         the terminal
   ~                    read (current directory)
   ~/notes.txt          read (operand FROM)
-  ~/project            create (operand TO: notes.txt)
+  ~/project            create notes.txt (operand TO)
 ~> cp notes.txt project/notes.txt
 ```
 
-**15. Compiling a program.** TinyCC's description is installed with it, so the source and the output it names are
+**15. Compiling a program.** TinyCC's description comes with the system, so the source and the output it names are
 given to it.
 ```
 ~> echo '#include <stdio.h>' > hello.c
@@ -221,10 +222,11 @@ tcc gets (a POSIX program):
   in, out, err         the terminal
   ~/project            read (current directory)
   ~/project/main.c     read (operand FILE)
-  ~/project            create (option -o: main)
+  ~/project            create main (option -o)
   ~/include            read (+r)
   /bin /usr /etc       read (system)
-  /tmp                 read and write (this session's)
+  /proc/self/exe       read (system)
+  /tmp                 change anything in (this line's own)
   /dev/null
 ```
 
@@ -232,7 +234,7 @@ tcc gets (a POSIX program):
 ```
 ~/project> set g '+w /'
 ~/project> $g rm notes.txt
-zosh: no command '+w /'
+zosh: +w /: no such command
 ```
 
 ## Pipelines
@@ -281,8 +283,9 @@ notes.txt: 2 lines
 ~> ls *.bak
 notes.txt.bak
 ~> backup
-backup: missing argument FILE
+backup: missing operand FILE
 usage: backup FILE
+more: help backup
 ```
 (`...>` is the prompt for a line that continues.)
 
@@ -304,6 +307,7 @@ zosh: no file matches *.bak
 cd: nowhere: not found
 ~> mkdir project; echo 'not printed'
 mkdir: project: already exists
+(the rest of the line was not run)
 ~> echo $status
 1
 ```
@@ -352,7 +356,6 @@ sleep 5
 ~> jobs
 [1]  running   sleep 30
 ~> kill %1
-~> wait
 [1] sleep 30: terminated
 ```
 
@@ -363,7 +366,6 @@ sleep 5
 ~> exit
 1 job is still running; exit again to end it
 ~> kill %1
-~> wait
 [1] sleep 60: terminated
 ```
 

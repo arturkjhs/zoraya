@@ -30,8 +30,8 @@ Right, highlighting that marks an unknown command red, Tab with a list, prefix h
    DM-071), only the VT subset.
 3. Responsive: nothing the editor does on a key blocks on the filesystem or a program (fish's law of
    responsiveness, `shell/survey.md#fish`).
-4. UTF-8 throughout (CP-22, GR-015), and nothing a file name or program prints can move the person's cursor while they
-   edit (DM-071, DM-095).
+4. UTF-8 throughout (CP-22, GR-015), and nothing a file name or a background program prints can move the person's
+   cursor while they edit (DM-071, DM-095); a foreground program owns the terminal while it runs.
 5. Completion must come from the same description as help, so they agree (ADR-0156).
 
 ## Considered options
@@ -81,7 +81,8 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    screen and redraw), Enter (run, or continue if a quote or `{` is open, with the prompt `...> `), Ctrl-C (clear the
    line), Ctrl-D on an empty line prints `type exit to end the shell` and does nothing else: ending the shell powers
    the machine off (`docs/design.md`), so it is never one key.
-2. **History.** Every line run is kept once it has finished, a repeated line once, in `/config/history` (ADR-0157), at most
+2. **History.** Every line run is kept once it has finished; a line already kept moves to the end instead of being
+   kept twice; in `/config/history` (ADR-0157), at most
    `shell.history-size` lines (1,000). Up and Down walk the lines that start with what is already typed; Ctrl-R opens
    an incremental search shown on the line below. `history` lists them; `history --clear` empties the file.
 3. **Completion.** Tab completes the word at the cursor: command names (builtins, functions, programs in
@@ -92,8 +93,9 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    second Tab does nothing more. Paths are read through the file protocol (ADR-0055) with a deadline of 100 ms
    `[assumption]`, after which the list says `(listing too slow)`.
 4. **Suggestion.** While the cursor is at the end, the newest history line that starts with what is typed is shown
-   after the cursor in faint text; Right or Ctrl-F at the end accepts it, any other key ignores it. It never runs
-   unless accepted and Enter is pressed. `shell.suggestions = no` turns it off.
+   after the cursor in faint text; Right or Ctrl-F at the end accepts it, any other key ignores it. Before the line
+   runs or is abandoned (Enter, Ctrl-C) the suggestion is erased, so the screen keeps only what was typed. It never
+   runs unless accepted and Enter is pressed. `shell.suggestions = no` turns it off.
 5. **Highlighting.** The command word is shown in red while it names nothing (no builtin, function or program), and an
    unclosed quote is red to its end. Nothing else is coloured. `shell.colour = no` turns colour off everywhere.
 6. **Errors.** A parse error shows what, where and what to try: the message, the line, a caret under the place, and
@@ -103,11 +105,15 @@ Recommended: **Option C**. It is a recommendation, not a decision.
    scalar value and counts one column for each, which matches the GUI font (ADR-0095); on the serial line a wide
    character can misalign the cursor, a stated limitation. File names and anything else the shell prints cannot
    contain control characters (ADR-0013), and the shell replaces any C0 or C1 control character in text it prints
-   itself (values of variables, history) by `?`.
+   itself (values of variables, history) by `?`. Output of a background job that arrives while a line is being
+   edited is printed above it: the shell erases the line, writes the output with every control character but `\n`
+   and `\t` replaced by `?`, and redraws the line. A foreground job's output is passed as it is (ADR-0152 rule 1).
 8. **Both terminals.** The editor writes only the ADR-0096 subset: text, `\r`, `\n`, `\x08`, `ESC [ n C/D`,
    `ESC [ K`, `ESC [ J`, `ESC [ H`, and `ESC [ m` with bold, red and the new faint (below). The width is the GUI
    terminal's `Size` message, or `console.columns` (80) on the serial line, where nothing can be asked. A line longer
    than the width wraps, and the editor redraws from the line's start.
+9. **Start.** An interactive shell starts in `shell.home` (ADR-0157), prints `Type help to begin, or help tour.`
+   and its first prompt.
 
 **Examples.**
 
@@ -119,11 +125,11 @@ notes/  notes.txt
 ~> ls notes
 ~> cp --<Tab>
 --force    replace TO if it exists
---help     show how to use cp
+--help     show this help
 ~> cp --
 ~> sl
-zosh: no command 'sl'
-  did you mean: ls?
+zosh: sl: no such command
+  hint: did you mean ls?
 ~> for f in *.txt { echo $f
 ...> }
 a.txt
@@ -133,7 +139,7 @@ b.txt
 unclosed
 
 ~> if test -f a.txt { echo yes } else echo no }
-zosh: 'else' needs a block
+zosh: line 1: 'else' needs a block
   if test -f a.txt { echo yes } else echo no }
                                      ^
   hint: write: else { echo no }
@@ -141,8 +147,8 @@ zosh: 'else' needs a block
 type exit to end the shell
 ```
 
-While typing `mak`, with `make -C src` in history, the line reads `~> make -C src` with ` -C src` faint after the
-cursor; Right accepts it.
+While typing `mak`, with `make -C src` in history, the line reads `~> make -C src` with `e -C src` faint after the
+cursor; Right accepts it, and Enter without it runs `mak` and leaves `~> mak` on the screen.
 
 ### Effect of the vision
 

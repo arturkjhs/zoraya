@@ -66,7 +66,8 @@ Recommended: **Option A**, with C kept as a later addition. It is a recommendati
 
 1. **Streams of a command.** Every command has three: `in`, `out` and `err`, at fixed slots defined in
    `zoraya-abi` (ADR-0153). By default all three are the terminal (ADR-0154): the shell relays bytes between them and
-   the terminal, so programs never hold the console or the terminal channel.
+   the terminal, so programs never hold the console or the terminal channel. The foreground job's output is relayed
+   as it is; background output is handled by ADR-0154 rule 7.
 2. **Pipelines.** `a | b | c` creates one stream (ADR-0101) per `|`, gives each element the write end as `out` and
    the next element the read end as `in`, and starts all elements as one job (ADR-0158). `err` of every element goes
    to the terminal. `&|` sends `err` into the pipe as well.
@@ -77,8 +78,8 @@ Recommended: **Option A**, with C kept as a later addition. It is a recommendati
    pipe but bytes.
 5. **Builtins and functions in pipelines.** A builtin or function may be the first element of a pipeline, where the
    shell writes its output into the stream from its event loop, never blocking on it (ADR-0006: `WRITABLE`). A
-   builtin or function elsewhere in a pipeline is a parse error ("a function or builtin can only start a
-   pipeline"), until a later ADR runs functions as separate processes.
+   builtin or function elsewhere in a pipeline is a parse error (`zosh: NAME: a builtin or function can only start a
+   pipeline`), until a later ADR runs functions as separate processes.
 6. **Status.** A pipeline succeeds when every element succeeds (ADR-0151 rule 3); otherwise its `$status` is that of
    the rightmost element that failed. A writer that ends because its reader closed is not a failure: a native program
    that gets `PeerClosed` on `out` stops and exits 0 (ADR-0155), and a POSIX program ended by `SIGPIPE`
@@ -107,8 +108,8 @@ first line of the log
 ~> echo hello | cat
 hello
 ~> cat notes.txt | jobs
-zosh: a function or builtin can only start a pipeline
-  hint: jobs is built into the shell; run it on its own line
+zosh: jobs: a builtin or function can only start a pipeline
+  hint: run jobs on its own line
 ```
 
 ### Effect of the vision

@@ -84,20 +84,24 @@ Recommended: **Option B**, with the rules below. It is a recommendation, not a d
 
 1. **Words and commands.** A line is commands separated by `;` or a newline. A command is words separated by spaces
    or tabs. `#` at the start of a word begins a comment to the end of the line.
-2. **Quoting.** `'...'` is literal; inside it, `''` is one `'`. `"..."` is one word in which `$name`, `$name[i]`
+2. **Quoting.** `'...'` is literal: nothing inside it is special, and it cannot contain `'` (as in POSIX; write
+   `"it's"`). `"..."` is one word in which `$name`, `$name[i]`
    and `$(...)` are expanded and `\"`, `\\`, `\$`, `\n`, `\t` are escapes; nothing else is special. Outside quotes,
    `\` makes the next character literal (`my\ notes.txt`). Nothing else quotes.
 3. **Variables.** `set name value...` sets a list (`set name` sets the empty list); `unset name` removes it. `$name`
    expands to one argument per element, never split, never globbed; the empty list gives no argument and an empty
    string gives one empty argument. `$name[i]` is element `i` from 1, negative from the end; out of range is an error.
-   `count $name` prints the number of elements. Names are letters, digits and `_`, starting with a letter or `_`.
-   `name=value` alone is an error with a hint (example below).
+   `count $name` prints the number of elements. `set` takes `--global` (ADR-0151 rule 2) and
+   `--query NAME`, which succeeds when `NAME` is set and not empty (ADR-0151 rule 5). Names are letters, digits and `_`, starting with a letter or `_`.
+   `name=value` alone is an error with a hint (example below). The shell's own messages have the form
+   `zosh: SUBJECT: PROBLEM` with optional `  hint:` lines (ADR-0155 rule 5).
 4. **A word that mixes text and a list.** A word yields one argument per element of the one list in it
    (`$files.bak`); a word with two lists of more than one element is an error; a word with an empty list and other
    text is an error ("`$files` is empty"). So `$dir/*` never becomes `/*`.
 5. **Command substitution.** `$(command)` runs the command and gives one element per line of its output, without the
    line ends; inside `"..."` it gives the whole output as one string without the final line end. A substitution
-   whose command fails makes the command it is in fail (ADR-0151).
+   whose command fails makes the command it is in fail without running it, and the failure propagates by the stop rule
+   (ADR-0151).
 6. **The environment of programs.** Variables are the shell's own. `export name value` sets and marks a variable,
    `export name` marks an existing one; only marked variables go into a child's environment vector, as `name=value`,
    and a marked variable must hold exactly one element. `NAME=value command` adds `NAME` to that one command's
@@ -128,14 +132,14 @@ a.txt b.txt my notes.txt
 ~> echo $files.bak
 a.txt.bak b.txt.bak my notes.txt.bak
 ~> rm *.tmp
-zosh: no file matches *.tmp
+zosh: *.tmp: no file matches
 ~> x=1
-zosh: x=1 is not a command
+zosh: x=1: not a command
   hint: to set a variable, type: set x 1
 ~> echo "you are in $(pwd)"
 you are in /home
-~> echo it''s 'it''s'
-its it's
+~> echo "it's" 'a*b'
+it's a*b
 ```
 
 **What a bash user will trip over, and why it is acceptable.**
@@ -150,6 +154,8 @@ its it's
 | `rm *.tmp`, no match | error, nothing removed | the literal `*.tmp` was never wanted (driver 2) |
 | `` `cmd` ``, `$((1+2))`, heredocs, `{a,b}` | not supported | `$(cmd)`; `math` (ADR-0155); files or `echo`; typing both names |
 | `export X=1` | error with a hint (`export X 1`) | same rule as `set` |
+| `cmd \| read x`, `ls \| count` | error: a builtin can only start a pipeline (ADR-0152) | `set x $(cmd)`, `count $(ls)` |
+| `echo *` with a file `-n` | prints `./-n` | the price of rule 7's protection |
 
 ### Effect of the vision
 
@@ -186,6 +192,6 @@ what rule 7 matches.
 ## Revisit triggers
 - People repeatedly need to pass a list through one word (for example to join with commas): add a `join` builtin
   before syntax.
-- Measured confusion about `''` inside single quotes: switch to fish's `\'`.
+- People repeatedly need a `'` inside single quotes: add fish's `\'` escape there.
 
 ## Architect's decision

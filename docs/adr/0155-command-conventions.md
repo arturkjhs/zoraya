@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0004, ADR-0013, ADR-0055, ADR-0101, ADR-0151, ADR-0152, ADR-0153, ADR-0156
-- **Evidence:** DM-008, DM-052, DM-077, DM-095, CP-12, shell/survey.md#freebsd-sh-and-base-system, shell/survey.md#powershell, shell/survey.md#nushell, shell/survey.md#command-line-conventions, shell/survey.md#what-this-suggests-for-zosh
+- **Evidence:** DM-008, DM-052, DM-077, DM-095, CP-12, shell/survey.md#freebsd-sh-and-base-system, shell/survey.md#powershell, shell/survey.md#nushell, shell/survey.md#command-line-conventions, shell/survey.md#what-this-suggests-for-zosh, alternatives-postmortem.md#oberon
 
 ## Context
 
@@ -64,15 +64,18 @@ typed values at the request (CP-12).
 - **Evidence against:** Every native command depends on the crate and the description format; unusual syntaxes do not
   fit.
 - **Cost:** *(estimate)* A `no_std` crate of about 1,000 lines with tests; each command loses its own parsing.
-- **Precedent:** Nushell, PowerShell, clap-style derive parsers `[outside evidence: not fetched]`.
+- **Precedent:** Nushell, PowerShell, clap-style derive parsers `[assumption: not fetched]`. Outside Unix, Oberon's
+  text-as-command interface is the postmortem's nearest precedent of commands that a system, not each program,
+  presents uniformly (`alternatives-postmortem.md#oberon`); it has no option syntax to compare.
 
 ## Recommendation
 
 Recommended: **Option D**. It is a recommendation, not a decision.
 
 1. **Names.** The classic names stay for the classic file operations: `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`,
-   `stat`, `sync`, `head`. Every new command is one plain lower-case English word or two joined by `-`: `find`,
-   `search`, `settings`, `grants`, `history`, `status`. One name per command; no aliases shipped.
+   `stat`, `sync`, `head`, `sleep`. Every new command is one plain lower-case English word or two joined by `-`: `find`,
+   `search`, `settings`, `grants`, `history`, `status`. One name per command, one command per action; no aliases
+   shipped.
 2. **Options.** Every option has a long form `--name`; common ones also a short form `-n`. Short options without
    arguments group (`-fv`). An argument follows as `--name value`, `--name=value` or `-n value`. Options may appear
    anywhere before `--`; `--` ends them. An argument that starts with `./` is never an option, which is how a glob
@@ -88,7 +91,8 @@ Recommended: **Option D**. It is a recommendation, not a decision.
    and exits 0. A usage mistake prints the problem, the usage line and the `more:` line to `err`, and exits 2.
 4. **Output.** A successful command prints only its result, to `out`: `cp`, `mv`, `rm`, `mkdir` and `sync` print
    nothing; `--verbose` (`-v`) says what changed. A listing prints one item per line, so that it pipes (ADR-0152),
-   with directories ending in `/`; `--long` (`-l`) adds columns. No command pages, prompts or colours its output; the
+   with directories ending in `/`, sorted byte by byte (ADR-0013 rule 3); `find` sorts whole paths. `search` prints
+   `FILE:LINE: TEXT` for what it finds in files and the bare `TEXT` when it reads `in`. `--long` (`-l`) adds columns. No command pages, prompts or colours its output; the
    shell owns the terminal (ADR-0154).
 5. **Errors.** Every failure is one line to `err`: `NAME: SUBJECT: PROBLEM`, in lower case, no final period, then
    optionally indented lines `  hint: ...` saying what to try. `PROBLEM` comes from the status by one table in the
@@ -96,17 +100,21 @@ Recommended: **Option D**. It is a recommendation, not a decision.
    "is a directory", `NotDirectory` "not a directory", `NotGranted` and `AccessDenied` "not granted" (with a hint
    naming the `+r` or `+w` grant, ADR-0153), `StorageFailed` "the volume has failed", `TooManyOpen` "too many open
    files", any other status its name in words. Never the bare status name, never a number alone (DM-052, CP-12).
-6. **Exit codes.** 0 success; 1 failure, or "no" for a command that answers a question (`test`, `search` finding
-   nothing); 2 wrong usage. A command that stops because its `out` reader closed (`PeerClosed`, ADR-0101) exits 0
+6. **Exit codes.** 0 success; 1 failure; 2 wrong usage. A command whose description declares it a **question**
+   (`question` in its header: `test`, `search`) uses 0 for "yes", 1 for "no", 2 for wrong usage and 3 for a failure,
+   so the shell can tell "no" from an error (ADR-0151 rule 3). A command that stops because its `out` reader closed (`PeerClosed`, ADR-0101) exits 0
    and prints nothing (DM-077).
 7. **The shared crate** (`zoraya-command`, `no_std`, host-tested) parses argv from the description, prints `--help`
    and usage errors, formats errors and maps statuses, and handles `PeerClosed`. A native command may not parse argv
    itself.
 8. **Builtins and programs.** A builtin is what must act on the shell's own state or authority: `cd`, `pwd`, `set`,
    `unset`, `export`, `count`, `echo`, `test`, `math`, `source`, `exit`, `status`, `history`, `help`, `grants`,
-   `jobs`, `fg`, `bg`, `wait`, `kill`, `settings` (the shell owns `/config`, ADR-0157), `poweroff` (the shell holds
-   `Power`), `slots` and `uptime`. Everything that acts on files is a program and receives only what the line
-   designates (ADR-0153): `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `sync`, `head`, `find`, `search`. `search TEXT [PATH...]` reads `in` when
+   `jobs`, `fg`, `bg`, `wait`, `kill`, `settings` (the shell owns `/config`, ADR-0157), `slots` and `uptime`. `exit`
+   is the one way to end the shell and turn the machine off; `poweroff` goes, as a second name for it.
+   Everything that acts on files is a program and receives only what the line
+   designates (ADR-0153): `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `sync`, `head`, `sleep`, `find`,
+   `search`. The demonstration programs (`hello`, `spin`, `stubborn`, `fault`, `exit-with`, `echo-args`) have
+   descriptions and are listed by `help` apart from the commands; the `t_*` test programs and the services are not. `search TEXT [PATH...]` reads `in` when
    no path is given, and searches directories recursively. Builtins
    follow the same option, help, error and exit-code rules through the same crate. `write` and `append` go:
    redirection does their job (ADR-0152); `ls-ramdisk` becomes `ls /zoraya/bin`; `exit-code` becomes `status`; `run`
@@ -135,6 +143,10 @@ notes/list.txt:1: buy milk
 ~> search cheese notes
 ~> echo $status
 1
+~> search cheese nowhere
+search: nowhere: not found
+~> echo $status
+3
 ~> find '*.txt'
 a.txt
 b.txt

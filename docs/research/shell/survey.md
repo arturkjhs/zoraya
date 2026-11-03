@@ -5,7 +5,7 @@ research behind proposed ADR-0150 to ADR-0158. Every source in [Sources](#source
 (2026-11-03); the note there says what was read. Text is paraphrased; short quotations are marked. Where a page could
 not be fetched, the claim rests on a catalog entry (`DM-`, `GR-` in `../design-mistakes.md` and `../held-up-well.md`)
 or is left out. Three primary pages were refused to this session (Oils' own site with 403, the Monad Manifesto PDF
-was unreadable here, the bash manual with 429); the Oils documents were read from the project's GitHub mirror, and
+was unreadable here, the bash manual's Word Splitting page with 429); the Oils documents were read from the project's GitHub mirror, and
 Snover's argument is cited through DM-020, which quotes it.
 
 ## POSIX sh
@@ -70,8 +70,8 @@ not by a mechanism, so a utility's usage line, manual and behaviour can disagree
 **Confusing.** Everything in POSIX sh, plus the exceptions of `set -e`. BashFAQ 105 lists failures of errexit that
 surprise experienced users: `let i++` when `i` is 0 ends the script; a function called from `if` or `&&` runs with
 errexit off; `local x=$(cmd)` hides the failure; command substitution ignores it without `inherit_errexit`;
-`pipefail` can fail intermittently depending on pipe buffer sizes. Two of its three maintainers' recommendations are
-not to use it and to check errors explicitly [SH14].
+`pipefail` can fail intermittently depending on pipe buffer sizes. Two of the three personal recommendations at the end
+of the page are not to use it and to check errors explicitly [SH14].
 
 ## zsh
 
@@ -238,7 +238,8 @@ Not decisions; inputs to ADR-0150 to ADR-0158.
 
 ## Sources
 
-Each was fetched on 2026-11-03 (this session). "Primary" means the project's own documentation or the authors' paper.
+Each was fetched on 2026-11-03 (this session). SH38 was a search-engine summary, not a fetched page, and was dropped;
+the numbers were not reused. "Primary" means the project's own documentation or the authors' paper.
 
 - [SH1] The Open Group, POSIX.1-2024, Shell Command Language, https://pubs.opengroup.org/onlinepubs/9799919799/utilities/V3_chap02.html, primary. Read 2.6.5 field splitting, 2.6.6 pathname expansion, 2.8.2 exit status, 2.9.2 pipeline exit status and `pipefail`, 2.14.3 unmatched patterns, the `set -e` exceptions.
 - [SH2] FreeBSD, `sh(1)`, https://man.freebsd.org/cgi/man.cgi?query=sh&sektion=1&format=ascii, primary. Editing modes, history, `bind`, `ENV`, `pipefail`, conformance statement.

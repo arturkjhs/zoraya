@@ -82,19 +82,26 @@ Recommended: **Option B**, with D's typed status. It is a recommendation, not a 
    - `try { ... } catch { ... }`: runs the first block; if a failure stops it, runs the second with `$status` set to
      that failure. `try` without `catch` runs the block and swallows a failure.
 2. **Functions.** `fn NAME PARAM... { ... }` defines a command. Arguments bind to the named parameters in order;
-   all arguments are also in `$args`; too few arguments is a usage error naming the parameter. `return` ends a
-   function with success, `return N` with exit status N (1 to 255, a failure). Comment lines directly above `fn` are
+   all arguments are also in `$args`; too few arguments is a usage error, printed by the same renderer as a program's
+   (ADR-0155 rule 3) and with status 2. `return` and `return 0` end a function with success, `return N` with exit
+   status N (1 to 255, a failure); any other N is a usage error. Comment lines directly above `fn` are
    its help (ADR-0156). A function's variables are local unless `set --global`.
 3. **Success and failure.** A command succeeds when its record is `Exited` with code 0. A builtin or function
-   succeeds or fails as its page says. Anything else fails.
+   succeeds or fails as its page says. Anything else fails, with one exception: a command whose description declares
+   it a question (`test`, `search`, ADR-0155 rule 6) that exits 1 has answered "no". "No" sets `$status` to 1 and
+   makes a condition false, but it is not a failure and stops nothing; its errors use status 3. This is YSH's
+   `boolstatus` distinction (`shell/survey.md#oils-and-ysh`) declared per command.
 4. **The stop rule.** A failure that is not checked stops the line, block, function or script that contains it, and
-   propagates outward; at the prompt it stops the rest of the line. It is checked by the condition of `if` or
+   propagates outward; at the prompt it stops the rest of the line, and the shell then prints `(the rest of the line was not run)` when
+   there was a rest. It is checked by the condition of `if` or
    `while`, by `!`, by being the left side of `&&` or `||`, or by `try`. The check applies to the command written
    there, including the whole body of a function called there: inside that body the stop rule still holds, and the
    function's failure is what the condition sees. A pipeline fails when any element fails (ADR-0152).
 5. **`$status`.** After every command, `$status` is a one-element list: the decimal exit code for `Exited`
    (`0` on success), or one of `interrupted`, `terminated`, `hung-up`, `quit`, `request-N` (a `Custom(N)` request),
-   `killed`, `fault`, `limit`. `status` prints the whole last record in words; `status --code`, `--reason`,
+   `killed`, `fault`, `limit`, and for `Terminated` with no request kind (ADR-0046: a process that ended itself
+   with `exit_with_reason`, as a POSIX program does on `SIGPIPE` or a re-raised signal) `signal-N` when `detail` is a
+   POSIX signal number N, else `terminated`. `status` prints the whole last record in words; `status --code`, `--reason`,
    `--detail` print its fields. `set --query NAME` succeeds when `NAME` is set and not empty.
 6. **On screen.** The shell prints nothing for a success. A program that exits with a non-zero code has said why on
    its error stream (ADR-0155), so at the prompt the shell adds nothing; `status` shows the record. For every other
@@ -107,6 +114,7 @@ Recommended: **Option B**, with D's typed status. It is a recommendation, not a 
    | `Terminated`, `Interrupt` | `spin: interrupted` (with `(Ctrl-C)` when the terminal sent it) |
    | `Terminated`, `Terminate` / `Hangup` / `Quit` | `spin: terminated` / `hung up` / `quit` |
    | `Terminated`, `Custom(n)` | `spin: ended by request n` |
+   | `Terminated`, no request kind | `make: ended by signal 6` (`detail` a POSIX signal), else `make: terminated` |
    | `Killed` | `spin: killed` |
    | `Fault`, class C | `fault: crashed (data abort, class 0x24)` |
    | `Limit` | `hog: stopped at its limit` |
@@ -126,6 +134,7 @@ no
 made
 ~> mkdir build; echo made
 mkdir: build: already exists
+(the rest of the line was not run)
 ~> mkdir build || echo 'it was there'
 mkdir: build: already exists
 it was there
@@ -134,8 +143,9 @@ it was there
 ...>   echo "hello, $who"
 ...> }
 ~> greet
-greet: missing argument WHO
+greet: missing operand WHO
 usage: greet WHO
+more: help greet
 ~> greet Ada
 hello, Ada
 ~> spin
@@ -169,15 +179,14 @@ a failed `cd` or `mkdir` cannot let later commands act somewhere unintended.
   one runs exactly the branch that checks it. *Check:* host tests of the evaluator with a fake runner over every
   construct (sequence, `if`, `while`, `for`, `&&`, `||`, `!`, `try`, functions called as conditions, nested blocks).
 - **INV-0151-2.** `$status` and the screen line are a function of the exit record alone, for every reason and
-  request kind. *Check:* a host test over every `ExitReason` and `RequestKind` with codes 0, 1, 255 and details 0
-  and 2^32-1.
+  request kind, none included. *Check:* a host test over every `ExitReason` and every `RequestKind` and none, with
+  codes 0, 1, 255 and details 0, 13 and 2^32-1.
 - **INV-0151-3.** The shell treats a record as success exactly when it is `Exited` with code 0. *Check:* the same
   host test, asserting no other record is a success, including `Terminated` with detail 0.
 
 ## Open questions
 - Whether `try` should also offer the failing command's name and line as variables, as YSH's `_error` does.
-- Whether a "no" status (1) and an error status (2 and up) should be distinguished in conditions, as YSH's
-  `boolstatus` does; ADR-0155 keeps 1 for both "no" and "failed" for now.
+- Whether more commands than `test` and `search` should be questions; each one is declared in its description.
 
 ## Revisit triggers
 - People report the stop rule at the prompt as surprising often enough: make `;` at the prompt continue and print the
