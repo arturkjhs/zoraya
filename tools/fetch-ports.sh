@@ -1,5 +1,7 @@
 #!/bin/sh
-# Fills the ports' cache from ports/sources.lock (ADR-0109 item 6).
+# Fills the ports' cache from ports/sources.lock (ADR-0109 item 6). A line of
+# the lock may name more than one URL: the program's own, then mirrors.
+# FETCH_PORTS_RETRIES sets curl's retries per URL (default 4).
 #
 #   fetch-ports.sh LOCK CACHE              download what is missing, verify all
 #   fetch-ports.sh --verify LOCK CACHE NAME   verify one cached archive, offline
@@ -40,9 +42,9 @@ if [ -n "$only" ] && ! entries "$lock" | awk -v n="$only" '$1 == n { found = 1 }
 fi
 
 status=0
-entries "$lock" | while read -r name version hash file url; do
+entries "$lock" | while read -r name version hash file urls; do
     [ -z "$only" ] || [ "$name" = "$only" ] || continue
-    [ -n "$url" ] || { echo "fetch-ports: malformed line for $name in $lock" >&2; exit 1; }
+    [ -n "$urls" ] || { echo "fetch-ports: malformed line for $name in $lock" >&2; exit 1; }
     path=$cache/$file
     if [ -f "$path" ]; then
         got=$(sha256 "$path")
@@ -58,20 +60,32 @@ entries "$lock" | while read -r name version hash file url; do
         echo "fetch-ports: $path is missing: run 'make fetch-ports'" >&2
         exit 1
     fi
+    # The first URL is the program's own; the others are mirrors. Each is
+    # tried in turn, with retries on any error (a reset connection too) and
+    # time limits; whichever gives the locked SHA-256 enters the cache.
     tmp=$path.part
+    done=0
+    for url in $urls; do
+        rm -f "$tmp"
+        echo "fetch-ports: $name $version from $url"
+        if ! curl -fsSL --retry "${FETCH_PORTS_RETRIES:-4}" --retry-all-errors --retry-delay 5 \
+            --connect-timeout 30 --max-time 600 -o "$tmp" "$url"; then
+            echo "fetch-ports: download of $url failed" >&2
+            continue
+        fi
+        got=$(sha256 "$tmp")
+        if [ "$got" != "$hash" ]; then
+            echo "fetch-ports: $url has SHA-256 $got, the lock says $hash: refused" >&2
+            continue
+        fi
+        mv "$tmp" "$path"
+        done=1
+        break
+    done
     rm -f "$tmp"
-    echo "fetch-ports: $name $version from $url"
-    if ! curl -fsSL --retry 3 -o "$tmp" "$url"; then
-        rm -f "$tmp"
-        echo "fetch-ports: download of $url failed" >&2
+    if [ "$done" = 0 ]; then
+        echo "fetch-ports: no URL of $name gave the locked archive" >&2
         exit 1
     fi
-    got=$(sha256 "$tmp")
-    if [ "$got" != "$hash" ]; then
-        rm -f "$tmp"
-        echo "fetch-ports: $url has SHA-256 $got, the lock says $hash: refused" >&2
-        exit 1
-    fi
-    mv "$tmp" "$path"
 done || status=$?
 exit $status

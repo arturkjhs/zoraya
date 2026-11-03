@@ -50,4 +50,6 @@ jobs:
         run: make ports
       - name: The logs of what failed
         if: failure()
-        run: for f in build/ports/logs/*.log; do echo "== $f"; tail -n 100 "$f"; done
+        run: |
+          shopt -s nullglob
+          for f in build/ports/logs/*.log; do echo "== $f"; tail -n 100 "$f"; done
