@@ -1,6 +1,6 @@
 # ADR-0180: `libposix` core choices the stage 6 ADRs leave open
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0010, ADR-0013, ADR-0014, ADR-0052, ADR-0055, ADR-0100, ADR-0101, ADR-0103, ADR-0107, ADR-0109, ADR-0110, ADR-0140, ADR-0141, ADR-0153
 - **Evidence:** CP-11, CP-27, DM-023, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -209,3 +209,5 @@ The items:
 - A program that sets times before 1970 (`tar`, `cpio` of old archives): a signed `set_attributes`.
 
 ## Architect's decision
+
+Accepted 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
