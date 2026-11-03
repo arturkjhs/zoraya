@@ -57,8 +57,9 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
   into the session.
 - No background command without a timeout: the runner's `--timeout`, a test's own limit, or (macOS has no `timeout`)
   `perl -e 'alarm N; exec @ARGV' COMMAND...`.
-- Every host-tested crate under `crates/` installs `zoraya_test_alloc::cap_memory!()` in its library and in every file
-  of its `tests/` (`make check-test-caps`); the `tools/` crates do not yet (`docs/backlog.md`). Mutation runs go through `make mutants` or `make mutants-host`, under
+- Every host-tested crate under `crates/` installs `zoraya_test_alloc::cap_memory!()` in its library and in every
+  file of its `tests/` (`make check-test-caps`); the `tools/` crates do not yet (`docs/backlog.md`). Mutation runs
+  go through `make mutants` or `make mutants-host`, under
   `tools/mutants/watchdog.sh`.
 
 ## Work discipline

@@ -442,9 +442,7 @@ impl<S: Sys> Posix<S> {
             // Remembered up to a bound, so a program that names many paths
             // outside its table costs neither memory nor time without end.
             self.report_dropped = self.report_dropped.saturating_add(1);
-            if self.reported.len() < REMEMBERED {
-                self.reported.push(path);
-            }
+            self.remember(path);
             return ENOENT;
         }
         let r = Report {
@@ -464,8 +462,21 @@ impl<S: Sys> Posix<S> {
             // Never waiting: a report that does not fit is dropped, counted.
             None => self.report_dropped = self.report_dropped.saturating_add(1),
         }
-        self.reported.push(path);
+        self.remember(path);
         ENOENT
+    }
+
+    /// Keeps a refused path, so that it is never counted twice, up to
+    /// `REMEMBERED` of them, whatever became of its report.
+    fn remember(&mut self, path: String) {
+        if self.reported.len() < REMEMBERED {
+            self.reported.push(path);
+        }
+    }
+
+    /// Refused paths remembered, for tests.
+    pub fn remembered(&self) -> usize {
+        self.reported.len()
     }
 
     /// Where `dirfd` names paths from.

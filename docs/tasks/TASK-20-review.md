@@ -86,3 +86,18 @@ notes, all fixed in the commit after `d3a30ea`.
 
 The task allows one more check if this one found errors; it found one, so the lines changed by its fixes were checked
 once more (below).
+
+### The second and last check
+
+By a fifth subagent, read-only, of `git diff d3a30ea..4c4ac5d` (the fixes above): all nine fixes do what their
+dispositions say; no errors; one warning and three notes, fixed in the commit after `4c4ac5d`.
+
+| Id | Severity | Finding | Disposition |
+|---|---|---|---|
+| D1 | warning | The bound of 256 remembered paths held only past 16 sent reports: with every send failing, the list still grew. | Fixed: one `remember` bounds every path, sent, dropped or unsent; host test `refused_paths_are_remembered_up_to_a_bound`, with the report channel open and closed. |
+| D2 | note | With 100 problems kept, `finish`'s own verdict (the timeout, a failed test) was counted, not shown. | Fixed: `finish`'s findings are kept past the cap; the unit test checks the timeout is shown. |
+| D3 | note | No test held the 256 bound. | D1's test. |
+| D4 | note | A CLAUDE.md line ran past 120 columns. | Wrapped. |
+
+As the task asks, there is no third check.
+

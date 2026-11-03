@@ -1225,3 +1225,21 @@ fn a_dsync_write_is_durable() {
     let fd = open(&mut r, "f", o::WRONLY | o::CREAT | o::DSYNC, 0o644).unwrap();
     assert_eq!(r.write(fd, b"abcd"), Ok(4));
 }
+
+/// Refused paths are remembered up to a bound, whether their reports were
+/// sent, dropped past 16, or could not be sent at all.
+#[test]
+fn refused_paths_are_remembered_up_to_a_bound() {
+    for sendable in [true, false] {
+        let mut r = rig_without_root();
+        if !sendable {
+            let far = r.reports;
+            r.p.sys.close(far);
+        }
+        for i in 0..400 {
+            let path = format!("/outside/{i}");
+            assert_eq!(open(&mut r, &path, o::RDONLY, 0), Err(ENOENT));
+        }
+        assert_eq!(r.p.remembered(), process::REMEMBERED, "sendable {sendable}");
+    }
+}

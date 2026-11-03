@@ -75,6 +75,12 @@ pub const MAX_ERRORS: usize = 100;
 pub const MAX_TESTS: usize = 10_000;
 
 impl Checker {
+    /// `finish`'s own findings: a handful, each kept, past the cap too, so
+    /// that the reason a run failed is always shown.
+    fn verdict(&mut self, problem: String) {
+        self.errors.push(problem);
+    }
+
     fn error(&mut self, problem: String) {
         if self.errors.len() < MAX_ERRORS {
             self.errors.push(problem);
@@ -187,7 +193,7 @@ impl Checker {
 
     pub fn finish(mut self, exit: Exit, timeout_secs: u64) -> Report {
         match exit {
-            Exit::Timeout => self.error(format!(
+            Exit::Timeout => self.verdict(format!(
                 "timeout after {timeout_secs} s ({})",
                 match (&self.begin, &self.running) {
                     (None, _) => "no begin line".to_string(),
@@ -196,27 +202,27 @@ impl Checker {
                 }
             )),
             Exit::NoPowerOff => {
-                self.error("the kernel printed the end line but did not power off".into())
+                self.verdict("the kernel printed the end line but did not power off".into())
             }
             Exit::Status(Some(0)) | Exit::Aborted => {}
-            Exit::Status(Some(c)) => self.error(format!("QEMU exited with status {c}")),
-            Exit::Status(None) => self.error("QEMU was killed by a signal".into()),
+            Exit::Status(Some(c)) => self.verdict(format!("QEMU exited with status {c}")),
+            Exit::Status(None) => self.verdict("QEMU was killed by a signal".into()),
         }
         let ran = self.ok.len() + self.failed.len();
         match self.begin {
             None if self.plain => {}
-            None => self.error("no begin line".into()),
+            None => self.verdict("no begin line".into()),
             Some(n) if self.end.is_some() && n != ran => {
-                self.error(format!("begin announced {n} tests, {ran} reported"));
+                self.verdict(format!("begin announced {n} tests, {ran} reported"));
             }
             _ => {}
         }
         match self.end {
             None if matches!(exit, Exit::Status(_)) && !self.plain => {
-                self.error("QEMU exited without an end line".into());
+                self.verdict("QEMU exited without an end line".into());
             }
             Some((p, f)) if (p, f) != (self.ok.len(), self.failed.len()) => {
-                self.error(format!(
+                self.verdict(format!(
                     "end line says pass={p} fail={f}, lines say pass={} fail={}",
                     self.ok.len(),
                     self.failed.len()
@@ -235,26 +241,26 @@ impl Checker {
                 if msg.starts_with("panic ") {
                     expected_failures += 1;
                 } else {
-                    self.error(format!(
+                    self.verdict(format!(
                         "{name} failed as expected but not with a panic: {msg}"
                     ));
                 }
             } else {
-                self.error(format!("{name} failed: {msg}"));
+                self.verdict(format!("{name} failed: {msg}"));
             }
         }
         if self.end.is_some() {
             for name in &expect_panic {
                 if ok.contains(name) {
-                    self.error(format!("{name} was expected to panic but passed"));
+                    self.verdict(format!("{name} was expected to panic but passed"));
                 } else if !failed.iter().any(|(n, _)| n == name) {
-                    self.error(format!("{name} was expected to panic but did not run"));
+                    self.verdict(format!("{name} was expected to panic but did not run"));
                 }
             }
         }
         for (e, seen) in expect_lines.iter().zip(&seen_lines) {
             if !seen {
-                self.error(format!("no output line contains {e:?}"));
+                self.verdict(format!("no output line contains {e:?}"));
             }
         }
         Report {
@@ -289,8 +295,19 @@ mod tests {
         }
         let r = c.finish(super::Exit::Timeout, 1);
         assert!(!r.passed);
-        assert_eq!(r.problems.len(), super::MAX_ERRORS + 1);
-        assert!(r.problems.last().unwrap().contains("more problems"));
+        // 100 kept, finish's own verdicts (here the timeout), and the count.
+        assert!(
+            r.problems.len() <= super::MAX_ERRORS + 10,
+            "{}",
+            r.problems.len()
+        );
+        assert!(r.problems.iter().any(|p| p.contains("more problems")));
+        assert!(
+            r.problems
+                .iter()
+                .any(|p| p.contains("timed out") || p.contains("timeout")),
+            "the reason is shown"
+        );
         let mut c = super::Checker::new(vec![], vec![]);
         let _ = c.feed("ZORAYA-TEST begin 1");
         for i in 0..super::MAX_TESTS + 5 {
