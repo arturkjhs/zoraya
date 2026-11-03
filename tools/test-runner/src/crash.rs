@@ -10,6 +10,10 @@
 //! not lose or reorder writes that were not flushed. Host tests of `zoraya-fs`
 //! do that, at every step, against a simulated device.
 
+#[allow(dead_code)] // Reason: the crash test uses only the buffer bounds of the module.
+#[path = "output.rs"]
+mod output;
+
 use std::io::{Read, Write};
 use std::process::{Child, ChildStdin, Command, ExitCode, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -42,7 +46,8 @@ impl Guest {
             .map_err(|e| format!("{RUN_QEMU}: {e}"))?;
         let input = child.stdin.take().ok_or("no stdin")?;
         let mut output = child.stdout.take().ok_or("no stdout")?;
-        let (send, bytes) = mpsc::channel();
+        // Bounded: a guest that prints faster than it is read waits.
+        let (send, bytes) = mpsc::sync_channel(256);
         std::thread::spawn(move || {
             let mut buffer = [0; 4096];
             while let Ok(n) = output.read(&mut buffer) {
@@ -60,14 +65,16 @@ impl Guest {
         })
     }
 
-    fn pump(&mut self, until: Instant) -> bool {
+    /// Takes what arrives before `until`: false if nothing did; an error
+    /// past `output::LOG_CAP` of output.
+    fn pump(&mut self, until: Instant) -> Result<bool, String> {
         let left = until.saturating_duration_since(Instant::now());
         match self.bytes.recv_timeout(left) {
             Ok(bytes) => {
-                self.text.push_str(&String::from_utf8_lossy(&bytes));
-                true
+                output::keep(&mut self.text, &String::from_utf8_lossy(&bytes))?;
+                Ok(true)
             }
-            Err(_) => false,
+            Err(_) => Ok(false),
         }
     }
 
@@ -75,14 +82,20 @@ impl Guest {
         let until = Instant::now() + WAIT;
         loop {
             if self.text.contains("panicked") || self.text.contains("storage failed") {
-                return Err(format!("the guest failed:\n{}", self.text));
+                return Err(format!(
+                    "the guest failed:\n{}",
+                    output::excerpt(&self.text)
+                ));
             }
             if let Some(at) = self.text[self.seen..].find(wanted) {
                 self.seen += at + wanted.len();
                 return Ok(());
             }
-            if !self.pump(until) {
-                return Err(format!("no {wanted:?} in:\n{}", self.text));
+            if !self.pump(until)? {
+                return Err(format!(
+                    "no {wanted:?} in:\n{}",
+                    output::excerpt(&self.text)
+                ));
             }
         }
     }
@@ -100,7 +113,7 @@ impl Guest {
         self.child.kill().map_err(|e| e.to_string())?;
         self.child.wait().map_err(|e| e.to_string())?;
         while let Ok(bytes) = self.bytes.recv_timeout(Duration::from_secs(2)) {
-            self.text.push_str(&String::from_utf8_lossy(&bytes));
+            output::keep(&mut self.text, &String::from_utf8_lossy(&bytes))?;
         }
         Ok(std::mem::take(&mut self.text))
     }
@@ -186,7 +199,7 @@ fn round(kernel: &str, image: &str, delay: Duration, totals: &mut Totals) -> Res
     let text = guest.kill()?;
     for bad in ["crash: open", "crash: write", "crash: sync", "panicked"] {
         if text.contains(bad) {
-            return Err(format!("the writer failed:\n{text}"));
+            return Err(format!("the writer failed:\n{}", output::excerpt(&text)));
         }
     }
     let durable = last_durable(&text);
