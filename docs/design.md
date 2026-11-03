@@ -383,7 +383,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   ADR-0096 with ADR-0154's faint (SGR 2, ended by 22: the colour at half intensity), answers no query, and sends the shell the bytes keys make (`zoraya-proto-term`). It draws only the rows
   that changed, and commits again only after the last commit's reply.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
-  is full), input from `Input` messages. Without one it is stage 4's shell on the console.
+  is full), input from `Input` messages, and its width from `Size`. Without one it uses the console.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
   page, `compd`, `term`, and `zosh` with the volume at slot 5, the terminal at slot 6 and the console to write only. A
   dead driver is restarted alone, at most three times each, and handed to the compositor over the manager channel. A
@@ -694,35 +694,59 @@ Writes are into `fsd`'s cache of dirty blocks; reads come from it.
 `make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window; the serial line stays in the terminal for
 `init`'s reports, and Ctrl-A X there quits QEMU. The window shows a terminal running `zosh`, with the same commands as
 `make run` (below). Click the window to focus it; F12 moves focus to the next window. Shift with Page Up or Page Down
-scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `poweroff`
-or `exit` turns the machine off.
+scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `exit` closes
+the window and `init` opens a new one with a new shell; `poweroff` turns the machine off.
 
 ## Using the shell
 
-`make run` boots to `zosh$ ` on the serial console. Ctrl-A X leaves QEMU, and `poweroff` turns the machine off.
+`make run` boots to `zosh`, the native shell (TASK-18; ADR-0150 to ADR-0158), on the serial console: `Type help to
+begin, or help tour.` and the prompt `~> `. Ctrl-A X leaves QEMU. The language is described by `help language` and
+the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step 6.
 
-- `make run` attaches `build/disk.img`, made from `rootfs/` on first use. What you write stays there between runs:
-  delete the file to start again. Paths are relative to the current directory, or start with `/`.
-- `ls [dir]`, `cat file`, `write file text...` (replaces it), `append file text...`, `mkdir dir`, `rm path`,
-  `mv old new`, `stat path`, `sync`, `cd [dir]`, `pwd`. Errors read `zosh: cat: NotFound`. `cd` takes `..`, in the
-  shell. The service refuses `..` in any path, so `cat ../x` is `InvalidArgument`.
+- `make run` attaches `build/disk.img`, made from `rootfs/` on first use; delete it to start again. The shell starts
+  in `/home` (`shell.home`), shown as `~`; `/config` holds `settings`, `start.zosh` and `history` (ADR-0157). Without
+  a disk the shell starts in `/` and the file commands fail.
+- **Language.** Words split only at spaces; `'...'` is literal, `"..."` expands `$name` and `$(...)`. Variables are
+  lists (`set name 'my notes.txt'`, `$name` is one argument), never split or globbed; `$name[i]`, `count $name`.
+  `*`, `?` and `**` match names, a pattern that matches nothing is an error, and a match starting with `-` comes as
+  `./-name`. `if`/`else if`/`else`, `for NAME in WORDS`, `while`, `fn NAME PARAMS`, `try`/`catch`, `&&`, `||`, `!`.
+  A failure nothing checks stops the rest of the line (`(the rest of the line was not run)`), block, function or
+  script (`zosh: FILE line N: NAME: WHAT`). `$status` is the exit code or a word (`interrupted`, `fault`, ...);
+  `status` describes the last record. `>`, `>>`, `2>`, `&>` redirect builtins and functions; `export NAME VALUE`
+  and `NAME=value command` are the only environment a program gets.
+- **Commands.** Every command has a description in `user/describe/` (and the language's own in
+  `crates/zoraya-shell/describe/`): `NAME --help`, `help NAME` (paged), `help --search WORD`, Tab completion and
+  argument parsing all come from it. Builtins: `cd`, `pwd`, `set`, `unset`, `export`, `count`, `echo`, `test`,
+  `math`, `source`, `status`, `history`, `help`, `grants`, `jobs`, `fg`, `bg`, `wait`, `kill`, `settings`, `slots`,
+  `uptime`, `exit`, `poweroff`, `reboot`. Until step 7 the file commands `ls`, `cat`, `mkdir`, `rm`, `mv`, `stat` and
+  `sync` are built in too; `ls /zoraya/bin` lists the ramdisk's programs. Errors read `NAME: SUBJECT: PROBLEM`
+  (`cat: missing.txt: not found`), with a `hint:` when one is known; unknown commands get the nearest names or, for
+  `grep`, `wc`, `man`, `less`, `more` and `which`, what to type on Zoraya.
+- **Programs** from the ramdisk run by name in a job of their own, with only the console (and, for the test programs
+  that need them, a job, the ramdisk or the volume). A trailing `&` runs one in the background (`[1] sleep 30`);
+  `jobs`, `wait [%N]`, `kill [--interrupt|--terminate|--hangup|--quit|--kill] [%N]` and `fg [%N]` act on job
+  numbers, the smallest free from 1. A job's end is reported once, before a prompt or by `wait` and `kill`.
 - `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
   the volume through `libposix`, with `/` the volume's root unless `-m` gives a table; its output comes to the console
-  (stage 6c; `user/src/bin/posixrun.rs` has the rest).
-- `ls-ramdisk` lists the programs. `<program> [args...]` or `run <program> [args...]` runs one, and a trailing `&` runs it in
-  the background. `jobs`, `wait [%n]` and `kill [-int|-term|-hup|-quit] %n` work on job numbers.
-- `echo`, `uptime`, `exit-code` (the last record), `slots` (the shell's handles, by type, as far as it can see them: below) and `help` are built in. `exit` alone ends
-  the shell, and `init` then syncs and powers off; `exit <n>` is the demonstration program.
-- Ctrl-C clears the line at the prompt, and sends `Interrupt` to a foreground job's whole tree. The third one kills it,
-  which is more than TASK-11 asked: a job can ignore `Interrupt`.
-  Ctrl-\\ sends `Quit`. Ctrl-U kills the line, and Up and Down walk the last 32 lines.
-- Other keys read while a foreground job runs are dropped, and are not in the dropped count. Keys still in the ring
-  when the job ends do reach the prompt.
-- A report is the record of the job's first process. The shell waits for the whole job, so a first process that
-  exits 0 and leaves children looks clean.
-- A program ending otherwise than with exit 0 gets a short report such as `[exited 3]`, `[terminated: Interrupt]`,
-  `[fault: data abort, class 0x24]` or `[killed]`. A fault report gives the exception class, because that is what
-  `ExitRecord.detail` holds (ADR-0034): the kernel's own line above it has the address.
+  (stage 6c; `user/src/bin/posixrun.rs` has the rest). It is a test program: it has no description, so its
+  options are its own.
+- **Keys** (`help keys`): Left, Right, Home, End and the Ctrl forms, Ctrl-W, Ctrl-U, Ctrl-K, Ctrl-L; Up and Down walk
+  the lines that start with what is typed; Ctrl-R searches; Tab completes; Right at the end takes the faint
+  suggestion from history; the command word is red while it names nothing. Enter with an open quote or block
+  continues on `...> `. Ctrl-C drops the line, or interrupts the job in front (the third one kills it); Ctrl-\
+  sends Quit; Ctrl-D only says `type exit to end the shell`.
+- **Ending.** `exit` ends this shell and `init` starts a new one, on the console or in a new terminal window; with
+  jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off. `reboot` says it is not
+  available until the kernel has a reset call (proposed ADR-0159).
+- **Settings** (`help settings`): `settings`, `settings --all`, `settings NAME [VALUE]`, `settings --reset NAME`,
+  `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
+  `shell.suggestions`, `shell.colour`, `console.columns`.
+
+**Pending (TASK-18 Part 2).** Step 7: grants (`+r`, `+w`, designated operands, `grants` as ADR-0153 words it) and the
+file commands as programs (`cp`, `head`, `find`, `search` arrive then); `grants` today says what a program gets.
+Steps 8 and 9 after stage 6a: byte streams, pipelines (`|` is refused with a message), redirection of programs, `$(...)`
+of a program, Ctrl-Z, `bg`. Step 10 after 6d: POSIX programs. Step 11: the tour as a test on both terminals.
+Step 12: `reboot` (ADR-0159).
 
 ## Known limitations
 
@@ -744,6 +768,15 @@ or `exit` turns the machine off.
   and the shell reports how many bytes went. Any holder of the console's `READ` right can take input from the shell;
   children get `WRITE` only.
 
+- **Shell (TASK-18 Part 2, steps 1 to 6).** Programs print to the console, not through `zosh`: until step 8 there
+  are no streams, so `|`, a program's redirection and `$(...)` of a program are refused with a message, and keys
+  typed while a program runs reach nobody but Ctrl-C and Ctrl-\\. The file commands are builtins with the shell's
+  own access until step 7, and `grants` says so. A line wider than the terminal is drawn again on a new row when
+  edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` rewrites
+  `/config/settings` in place, not by publishing a new file (ADR-0157's open questions), and `/config/history` is
+  rewritten after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
+  ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). The third Ctrl-C kills a job, as before
+  ADR-0158 (step 9). `reboot` is not available (ADR-0159, proposed).
 - **GUI.** Programs started from `zosh` in the window print to the serial console: they have no byte stream to inherit
   until stage 6 (ADR-0096). The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps

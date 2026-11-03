@@ -1,111 +1,128 @@
-# The shell, from boot to power-off, through the serial line. TASK-11 step 3.
+# The shell, from boot to power-off, through the serial line. TASK-11 step 3,
+# rebuilt for the native shell (TASK-18 step 6). No disk here: the shell
+# starts in / and says it has no volume.
 ! panicked
 # Only the shell's own power_off ends this run (INV-0062-3).
 ! first process ended
-! no such program: hello
+! no such command: hello
 < heap check: Box and Vec work
 < timer check: 10 interrupts in
 < first process: init
-< zosh: type help
+< Type help to begin, or help tour.
 # The kernel starts one process (INV-0053-1), and it runs nothing but the shell.
-o first process: 
+o first process:
 x hello from EL0
-< zosh$ 
+< \r\n/> 
 # The shell holds what init listed, and the port it made: no Device, by type
 # (INV-0053-2).
 > slots\r
-< slots: 1:console 2:job 3:directory 4:power 5:port\r\n
-< zosh$ 
+< slots: 1:console 2:job 3:directory 4:power 5:memory 6:port
+< \r\n/> 
 # A command and its output (and the receive interrupt).
 > echo a  b\r
-< a b
-< zosh$ 
-# Listing the ramdisk (INV-0061-2).
-> ls-ramdisk\r
+< \r\na b
+< \r\n/> 
+# Listing the ramdisk (INV-0061-2): no descriptions among the programs.
+> ls /zoraya/bin\r
 < hello
-< zosh$ 
-# A bare name with arguments, and `run`.
-> echo-args one two\r
+x hello.cmd
+< \r\n/> 
+# A program with arguments, and its environment (INV-0150-4): only what is
+# exported, and the line's own NAME=value.
+> set secret 1; export shown 2\r
+< \r\n/> 
+> B=3 echo-args one 'two words'\r
 < arg 0: one
-< arg 1: two
-< zosh$ 
-> run hello\r
+< arg 1: two words
+< env 0: B=3
+< env 1: shown=2
+x secret
+< \r\n/> 
+# A program that exits non-zero said why itself: the shell adds nothing,
+# and $status and status say how it ended.
+> hello\r
 < hello from EL0
-< [exited 7]
-< zosh$ 
+< \r\n/> 
+> status\r
+< exit status 7
+< \r\n/> 
+> hello\r
+< hello from EL0
+< \r\n/> 
+> echo $status\r
+< \r\n7
+< \r\n/> 
 # Stage 3's criterion: a process spawns a child and waits through a port.
 > parent\r
 < parent: spawning child
 < child: hello from the child
 < parent: child ended
-< zosh$ 
-# A clean exit prints nothing; `exit-code` shows the last record.
-> exit 0\r
-< exit 0
-< zosh$ 
-x [exited
-> exit-code\r
-< [exited 0]
-< zosh$ 
-> exit 3\r
-< [exited 3]
-< zosh$ 
+< \r\n/> 
+> exit-with 3; echo not run\r
+< (the rest of the line was not run)
+x not run\r\n
+< \r\n/> 
 > nosuch\r
-< no such program: nosuch
-< zosh$ 
+< zosh: nosuch: no such command
+< \r\n/> 
+> grep milk notes.txt\r
+< zosh: grep: no such command\r\n  hint: on Zoraya this is search: search TEXT FILE...
+< \r\n/> 
 # A fault cannot take the shell down.
 > fault\r
-< [fault: data abort, class 0x24]
-< zosh$ 
+< fault: crashed (data abort, class 0x24)
+< \r\n/> 
 # Ctrl-C at the prompt clears the line.
 > half\x03
 < ^C
-< zosh$ 
+< \r\n/> 
 > echo cleared\r
 < \r\ncleared
-< zosh$ 
+< \r\n/> 
 # Ctrl-U and backspace.
 > wrong\x15echo fixez\x7fd\r
-< fixed
-< zosh$ 
+< \r\nfixed
+< \r\n/> 
 # Ctrl-C on a foreground job.
 > spin\r
 > \x03
-< [terminated: Interrupt]
-< zosh$ 
+< spin: interrupted (Ctrl-C)
+< \r\n/> 
+> echo $status\r
+< \r\ninterrupted
+< \r\n/> 
 # Ctrl-\ sends Quit.
 > sleep 60\r
 > \x1c
-< [terminated: Quit]
-< zosh$ 
+< sleep: quit
+< \r\n/> 
 # One Ctrl-C ends every child of `fanout`, and the job is gone.
 > fanout 8\r
 < fanout: 8 children spinning
 > \x03
-< [terminated: Interrupt]
-< zosh$ 
+< fanout: interrupted (Ctrl-C)
+< \r\n/> 
 > jobs\r
-< no jobs
-< zosh$ 
+< \r\n/>
 # None is left: ticking children go silent once the shell reports the end.
 > fanout 4 tick\r
 < tick
 > \x03
-< [terminated: Interrupt]
-< zosh$ 
+< fanout: interrupted (Ctrl-C)
+< \r\n/> 
 ~ 500 tick
 # The shell waits for the job, not its first process: no prompt while a child lives.
 > fanout 1 tick leave\r
 < tick
-~ 400 zosh$ 
+~ 400 \r\n/>
 > \x03
-< zosh$ 
+< \r\n/> 
 ~ 300 tick
 # A child holds only what the shell lists, and its console cannot read.
 > handles\r
-< slots: 1\r\n
+< slots: 1
 < console read: Err(AccessDenied)
-< zosh$ 
+< \r\n/> 
 # The third Ctrl-C kills a job that ignores Interrupt.
 > stubborn\r
 < stubborn: ignoring Interrupt
@@ -114,77 +131,100 @@ x [exited
 > \x03
 < ^C
 > \x03
-< [killed]
-< zosh$ 
-> kill\r
-< usage: kill
-< zosh$ 
+< stubborn: killed
+< \r\n/> 
+# Usage comes from the description (ADR-0155 rule 3, INV-0155-1).
+> kill --nope\r
+< kill: --nope: no such option\r\nusage: kill
+< more: help kill
+< \r\n/> 
+> sleep --help\r
+< sleep: wait for some seconds\r\nusage: sleep SECONDS
+< \r\n/> 
 > jobs &\r
-< & is for programs
-< zosh$ 
+< zosh: jobs: a builtin or function cannot run in the background
+< \r\n/> 
 # A program that floods the console still takes Ctrl-C.
 > flood\r
 < flood
 > \x03
-< [terminated: Interrupt]
-< zosh$ 
-# A background job with jobs, wait and kill.
+< flood: interrupted (Ctrl-C)
+< \r\n/> 
+# Background jobs with jobs, wait and kill (ADR-0158 rules 5 and 6).
 > sleep 60 &\r
-< [15] sleep
-< zosh$ 
+< [1] sleep 60
+< \r\n/> 
 > jobs\r
-< [15] running sleep
-< zosh$ 
-> kill -hup %15\r
-< [15] done sleep [terminated: Hangup]
-< zosh$ 
-> jobs\r
-< no jobs
-< zosh$ 
+< [1]  running   sleep 60
+< \r\n/> 
+> kill --hangup %1\r
+< [1] sleep 60: hung up
+< \r\n/> 
 > sleep 1 &\r
-< [16] sleep
-< zosh$ 
-> wait %16\r
-< [16] done sleep [exited 0]
+< [1] sleep 1
+< \r\n/> 
+> wait %1\r
+< [1] done: sleep 1
 # No prompt before the job ended.
-x zosh$ 
-< zosh$ 
+x \r\n/> 
+< \r\n/> 
 > sleep 1 &\r
-< [17] sleep
-< zosh$ 
+< [1] sleep 1
+< \r\n/> 
 > wait\r
-< [17] done sleep [exited 0]
-x zosh$ 
-< zosh$ 
-> wait\r
-< zosh$ 
-# History: Up recalls the last line, Down leaves it.
+< [1] done: sleep 1
+x \r\n/> 
+< \r\n/> 
+# History: Up recalls the last line that starts with what is typed.
 > echo remembered\r
 < \r\nremembered
-< zosh$ 
+< \r\n/> 
 > \e[A\r
 < \r\nremembered
-< zosh$ 
-> \e[A\e[B\e[A\r
+< \r\n/> 
+> ec\e[A\r
 < \r\nremembered
-< zosh$ 
+< \r\n/> 
 > uptime\r
-< up 
-< zosh$ 
+< up
+< \r\n/> 
+# The language: lists, loops, functions and failures (ADR-0150, ADR-0151).
+> for f in a b { echo item $f }\r
+< item a\r\nitem b
+< \r\n/> 
+> fn twice x { echo $x $x }; twice hi\r
+< hi hi
+< \r\n/> 
+> help twice\r
+< twice is a function, from the prompt
+< \r\n/> 
+> x=1\r
+< zosh: x=1: not a command\r\n  hint: to set a variable, type: set x 1
+< \r\n/> 
+> if test a = b { echo yes } else echo no }\r
+< zosh: line 1: 'else' needs a block
+<   hint: write: else { echo no }
+< \r\n/> 
+> help sleep\r
+< sleep is a program, /zoraya/bin/sleep
+< \r\n/> 
+> reboot\r
+< reboot: not available until the kernel has a reset call
+< \r\n/> 
 # A burst larger than the ring, during a job, drops bytes and counts them.
 > spin\r
 = 8192
 < bytes dropped]
 # The key itself can be lost in a burst, so it is sent until it lands.
-@ \x03 | [terminated: Interrupt]
-< zosh$ 
+@ \x03 | spin: interrupted
+< \r\n/> 
 > uptime\r
-< up 
-< zosh$ 
+< up
+< \r\n/> 
 # The count is reported once.
 > echo alive\r
 < \r\nalive
 x bytes dropped
-< zosh$ 
+< \r\n/> 
 # `poweroff` needs the handle only this process has (INV-0062-3).
 > poweroff\r

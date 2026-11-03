@@ -213,6 +213,11 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
 - Whether `rm` should ask before removing a directory tree at the terminal; Option D's answer is no prompts, only
   `--recursive`.
 - Machine-readable output (`--records`, ADR-0152 Option C) for listing commands, when a need is measured.
+- *Note, 2026-11-03 (TASK-18 Part 2, step 6):* INV-0155-1's check, every command and builtin run with `--help`
+  and `--no-such-option` in QEMU and compared with its description rendered on the host, needs a script
+  generated from the descriptions; it is built with the tour's scripted session (step 11), when the file
+  commands are programs (step 7). Until then `console.script` checks `sleep --help` and `kill --nope`, and every
+  builtin parses its arguments through `zoraya-command`.
 
 ## Revisit triggers
 - A ported or new command whose syntax the description cannot express.

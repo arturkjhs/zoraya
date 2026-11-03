@@ -1,7 +1,7 @@
 # More programs than a handle table has slots, so a handle kept per program
 # ends the run. One configuration: it is slow, and the rest is in console.script.
 ! panicked
-! zosh: exit:
-< zosh$ 
-* 1200 exit 0\r | zosh$ 
+! zosh: exit-with:
+< \r\n/> 
+* 1200 exit-with 0\r | \r\n/> 
 > poweroff\r

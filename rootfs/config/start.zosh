@@ -1,0 +1,6 @@
+# Run by every interactive zosh before its first prompt (ADR-0157 item 6).
+# Functions and variables you want in every session go here, for example:
+#
+#   fn backup file {
+#       cp $file $file.bak
+#   }

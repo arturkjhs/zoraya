@@ -34,6 +34,7 @@ zoraya-font = { path = "../crates/zoraya-font" }
 zoraya-term = { path = "../crates/zoraya-term" }
 zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-command = { path = "../crates/zoraya-command" }
+zoraya-settings = { path = "../crates/zoraya-settings" }
 
 [build-dependencies]
 zoraya-describe = { path = "../crates/zoraya-describe" }
@@ -221,8 +222,8 @@ test = false
 bench = false
 
 [[bin]]
-name = "exit"
-path = "src/bin/exit.rs"
+name = "exit-with"
+path = "src/bin/exit_with.rs"
 test = false
 bench = false
 

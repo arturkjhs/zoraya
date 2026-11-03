@@ -149,7 +149,9 @@ pub trait Host {
     fn close_output(&mut self, token: u32);
     /// The home directory (`shell.home`).
     fn home(&mut self) -> String;
-    /// True once if Ctrl-C was pressed while the shell itself was busy.
+    /// True once if Ctrl-C was pressed while the shell itself was busy in
+    /// a loop. Asked before each round of `while` and `for`; other keys
+    /// must be kept for the prompt.
     fn interrupted(&mut self) -> bool;
 }
 
@@ -240,7 +242,7 @@ pub struct State {
 }
 
 impl State {
-    fn new() -> State {
+    pub fn new() -> State {
         State {
             globals: BTreeMap::new(),
             frames: Vec::new(),
@@ -335,6 +337,12 @@ impl State {
     /// Where function `name` was defined: `/config/start.zosh`, or `the prompt`.
     pub fn function_origin(&self, name: &str) -> Option<&str> {
         self.origins.get(name).map(String::as_str)
+    }
+}
+
+impl Default for State {
+    fn default() -> State {
+        State::new()
     }
 }
 
@@ -833,6 +841,10 @@ impl<H: Host> Shell<H> {
                 let mut r = Result_::code(0);
                 self.state.loops += 1;
                 for item in items {
+                    if self.host.interrupted() {
+                        self.state.loops -= 1;
+                        return self.interrupted_stop(checked);
+                    }
                     if let Err(problem) = self.state.set(name, alloc::vec![item], false) {
                         r = self.report(&shell_error(name, &problem));
                         break;
@@ -1163,9 +1175,6 @@ impl<H: Host> Shell<H> {
     }
 
     fn simple(&mut self, src: &str, s: &Simple, background: bool, line: &str) -> Run {
-        if self.host.interrupted() {
-            return self.interrupted_stop(false);
-        }
         // `x=1` alone.
         if s.words.is_empty() {
             let a = &s.assignments[0];
@@ -1489,7 +1498,7 @@ impl<H: Host> Shell<H> {
                 terminal: self.sink_out() == Sink::Terminal,
                 ..Io::default()
             };
-            let mut state = core::mem::replace(&mut self.state, State::new());
+            let mut state = core::mem::take(&mut self.state);
             let code = self.host.builtin(&mut state, name, &d, &parsed, &mut io);
             self.state = state;
             self.out(&io.out);

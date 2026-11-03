@@ -1,11 +1,37 @@
-# When the shell ends, `init` powers off (ADR-0053). No poweroff here: QEMU's
-# status 0 comes from that path alone.
+# `exit` ends the shell, and `init` starts a new one in the same terminal: the
+# machine stays on (ADR-0155's Decision, INV-0155-5, INV-0155-6).
 ! panicked
-< zosh$ 
-# A job left running does not hold the machine up.
+! first process ended
+< Type help to begin, or help tour.
+< \r\n/> 
+# The first exit with a job running only warns; the second ends both.
 > sleep 60 &\r
-< sleep
-< zosh$ 
+< [1] sleep 60
+< \r\n/> 
+> exit\r
+< 1 job is still running; exit again to end it
+< \r\n/> 
+# Anything else between the two starts the count again.
+> echo between\r
+< \r\nbetween
+< \r\n/> 
+> exit\r
+< 1 job is still running; exit again to end it
+< \r\n/> 
+> exit\r
+< init: shell ended: ExitRecord { code: 0, reason: Exited
+< Type help to begin, or help tour.
+< \r\n/> 
+# A new shell: no jobs, and it runs commands.
+> jobs\r
+x [1]
+< \r\n/> 
+> echo again\r
+< \r\nagain
+< \r\n/> 
 > exit\r
 < init: shell ended
-< reason: Exited
+< Type help to begin, or help tour.
+< \r\n/> 
+x power off
+> poweroff\r

@@ -382,6 +382,7 @@ dependencies = [
  "zoraya-proto-term",
  "zoraya-protocol",
  "zoraya-rt",
+ "zoraya-settings",
  "zoraya-shell",
  "zoraya-term",
  "zoraya-virtio",

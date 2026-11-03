@@ -1,105 +1,110 @@
-# First boot of the roadmap's criterion, and every file command with its errors.
+# First boot of the roadmap's criterion, and every file command with its
+# errors (TASK-11, rebuilt for the native shell in TASK-18 step 6).
 ! panicked
 ! storage failed
 ! VolumeGone
-< zosh$ 
+< Type help to begin, or help tour.
+< \r\n~> 
+# The shell starts in an empty home (ADR-0154 rule 9).
+> pwd\r
+< \r\n/home
+< \r\n~> 
 > ls\r
-< README
-< docs/
-< hello.txt
-< zosh$ 
+< \r\n~> 
+> cd /\r
+< \r\n/> 
+> ls\r
+< README\r\nconfig/\r\ndocs/\r\nhello.txt\r\nhome/
+< \r\n/> 
 > cat hello.txt\r
 < hello from the filesystem
-< zosh$ 
+< \r\n/> 
 > cat missing\r
-< zosh: cat: NotFound
-< zosh$ 
+< cat: missing: not found
+< \r\n/> 
 > cat docs\r
-< zosh: cat: 
-< zosh$ 
-> write /notes.txt first line\r
-< zosh$ 
-> append notes.txt second line\r
-< zosh$ 
+< cat: docs: 
+< \r\n/> 
+> echo first line > /notes.txt\r
+< \r\n/> 
+> echo second line >> notes.txt\r
+< \r\n/> 
 > cat notes.txt\r
-< first line
-< second line
-< zosh$ 
+< first line\r\nsecond line
+< \r\n/> 
 > stat notes.txt\r
 < file size 23 mtime 
-< zosh$ 
+< \r\n/> 
 > stat docs\r
 < directory size
-< zosh$ 
+< \r\n/> 
 > stat missing\r
-< zosh: stat: NotFound
-< zosh$ 
+< stat: missing: not found
+< \r\n/> 
 > mkdir work\r
-< zosh$ 
+< \r\n/> 
 > mkdir work\r
-< zosh: mkdir: Exists
-< zosh$ 
+< mkdir: work: already exists
+< \r\n/> 
 > mkdir no/such/place\r
-< zosh: mkdir: NotFound
-< zosh$ 
+< mkdir: no/such/place: not found
+< \r\n/> 
 > cd work\r
-< zosh$ 
+< \r\n/work> 
 > pwd\r
-< /work
-< zosh$ 
-> write inner.txt kept\r
-< zosh$ 
+< \r\n/work
+< \r\n/work> 
+> echo kept > inner.txt\r
+< \r\n/work> 
 > cd ..\r
-< zosh$ 
-> pwd\r
-< /
-< zosh$ 
+< \r\n/> 
 > cd missing\r
-< zosh: cd: NotFound
-< zosh$ 
+< cd: missing: not found
+< \r\n/> 
 > cd hello.txt\r
-< zosh: cd: NotDirectory
-< zosh$ 
+< cd: hello.txt: not a directory
+< \r\n/> 
 > ls work\r
 < inner.txt
-< zosh$ 
+< \r\n/> 
 > rm work\r
-< zosh: rm: NotEmpty
-< zosh$ 
+< rm: work: not empty\r\n  hint: rm --recursive work removes it and everything in it
+< \r\n/> 
 > rm missing\r
-< zosh: rm: NotFound
-< zosh$ 
-> write gone.txt soon removed\r
-< zosh$ 
+< rm: missing: not found
+< \r\n/> 
+> echo soon removed > gone.txt\r
+< \r\n/> 
 > rm gone.txt\r
-< zosh$ 
+< \r\n/> 
 > cat gone.txt\r
-< zosh: cat: NotFound
-< zosh$ 
-> write old.txt moved\r
-< zosh$ 
+< cat: gone.txt: not found
+< \r\n/> 
+> echo moved > old.txt\r
+< \r\n/> 
 > mv old.txt work/new.txt\r
-< zosh$ 
+< \r\n/> 
 > mv missing other\r
-< zosh: mv: NotFound
-< zosh$ 
+< mv: missing: not found
+< \r\n/> 
 > cat old.txt\r
-< zosh: cat: NotFound
-< zosh$ 
+< cat: old.txt: not found
+< \r\n/> 
+# Paths are resolved by the shell: .. at / stays at /.
 > cat ../hello.txt\r
-< zosh: cat: InvalidArgument
-< zosh$ 
+< hello from the filesystem
+< \r\n/> 
 # A refused request leaves no handle behind: more than the shell's table holds.
-* 1100 cat ../x\r | zosh: cat: InvalidArgument
-< zosh$ 
+* 1100 cat ../x\r | cat: ../x: not found
+< \r\n/> 
 > cat hello.txt\r
 < hello from the filesystem
-< zosh$ 
+< \r\n/> 
 > mv\r
-< usage: mv
-< zosh$ 
+< mv: missing operand FROM\r\nusage: mv FROM TO
+< \r\n/> 
 > sync\r
-< zosh$ 
-> write unsynced.txt the shell never asked\r
-< zosh$ 
+< \r\n/> 
+> echo the shell never asked > unsynced.txt\r
+< \r\n/> 
 > poweroff\r

@@ -20,6 +20,7 @@
 //! type KEYS         press and release each key (escapes \r \e \\)
 //! key QCODE         press and release one QEMU key code, such as f12
 //! region X Y W H RGB  every pixel of the rectangle is the colour RGB (hex)
+//! window            a new window: the next `screen` looks from its top row
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
 //! exit              wait for QEMU to end with status 0
@@ -50,6 +51,7 @@ pub enum Step {
     Key(String),
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
+    Window,
     Exit,
 }
 
@@ -77,6 +79,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
             }
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
+            "window" => Step::Window,
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
@@ -204,6 +207,21 @@ pub fn qcode(c: char) -> Option<(&'static str, bool)> {
         '*' => ("8", true),
         '(' => ("9", true),
         ')' => ("0", true),
+        '@' => ("2", true),
+        '#' => ("3", true),
+        '^' => ("6", true),
+        '+' => ("equal", true),
+        '<' => ("comma", true),
+        '>' => ("dot", true),
+        '?' => ("slash", true),
+        '[' => ("bracket_left", false),
+        '{' => ("bracket_left", true),
+        ']' => ("bracket_right", false),
+        '}' => ("bracket_right", true),
+        '\\' => ("backslash", false),
+        '|' => ("backslash", true),
+        '`' => ("grave_accent", false),
+        '~' => ("grave_accent", true),
         _ => return None,
     })
 }
@@ -409,6 +427,10 @@ impl Run {
                     ms(&times[times.len() - 1]),
                     ms(&idle[2])
                 );
+                Ok(())
+            }
+            Step::Window => {
+                self.row = None;
                 Ok(())
             }
             Step::Exit => loop {

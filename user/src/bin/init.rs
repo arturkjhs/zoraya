@@ -5,7 +5,12 @@
 //! the filesystem service and the shell, each in a sub-job with only the
 //! handles it needs, and it supervises them. On any failure in the storage
 //! stack it ends the stack and the shell and starts them again, up to three
-//! times (ADR-0080). When the shell ends, it syncs and turns the machine off.
+//! times (ADR-0080). When the shell ends, it starts a new one in the same
+//! terminal (ADR-0155's Decision, ADR-0053's note): on the console, or in
+//! GUI mode in a new terminal window, since `exit` closed the last one.
+//! Only `poweroff` turns the machine off. A shell that ends other than with
+//! exit 0 three times in a row is not started again: `init` syncs and
+//! powers off, so a broken shell cannot loop forever.
 //!
 //! With a GPU and an input device, each alone on its page (ADR-0091), it
 //! also starts the GUI (ADR-0097): the drivers, the compositor, a terminal,
@@ -82,7 +87,7 @@ fn start_shell(root: Option<File>, terminal: Option<Handle>) -> Option<(Handle, 
 }
 
 fn power_down(root: Option<&File>, status_line: zoraya_abi::ExitRecord) -> ! {
-    println!("init: shell ended: {status_line:?}");
+    println!("init: powering off after: {status_line:?}");
     if let Some(root) = root
         && root.sync().is_err()
     {
@@ -94,11 +99,24 @@ fn power_down(root: Option<&File>, status_line: zoraya_abi::ExitRecord) -> ! {
     zoraya_user::process_exit(2)
 }
 
+/// The shell's record if it has ended with exit 0, which only `exit` gives:
+/// a shell whose terminal went exits 1.
+fn chose_to_end(shell: Handle) -> Option<zoraya_abi::ExitRecord> {
+    process_exit_record(shell)
+        .ok()
+        .filter(|r| r.reason == zoraya_abi::ExitReason::Exited && r.code == 0)
+}
+
 /// Why the shell and its terminal ended.
 enum Ended {
     Storage,
     Gui,
+    /// The shell ended by itself, with this record.
+    Shell(zoraya_abi::ExitRecord),
 }
+
+/// Shells in a row that may end otherwise than with exit 0.
+const SHELL_FAILURES: u32 = 3;
 
 fn subscribe(port: Handle, process: Handle, key: u64) {
     let terminated = process_signals::TERMINATED;
@@ -146,6 +164,7 @@ fn main() -> i32 {
     let mut gui_restarts = 0;
     let mut gui: Option<Gui> = None;
     let mut driver_restarts = (0, alloc::vec![0; devices.inputs.len()]);
+    let mut shell_failures = 0;
     if gui_devices.is_some() {
         println!(
             "init: gui: gpu on its own page, {} input device(s)",
@@ -211,10 +230,13 @@ fn main() -> i32 {
                 KEY_SHELL => {
                     // A shell that ended because its terminal went is a GUI
                     // failure; otherwise it chose to end.
+                    if let Some(record) = chose_to_end(shell.1) {
+                        break Ended::Shell(record);
+                    }
                     let terminal_gone =
                         terminal.is_some_and(|(t, _)| process_exit_record(t.process).is_ok());
                     if !terminal_gone {
-                        power_down(stack.as_ref().map(|s| &s.root), wait_exit(shell.1));
+                        break Ended::Shell(wait_exit(shell.1));
                     }
                     break Ended::Gui;
                 }
@@ -231,6 +253,11 @@ fn main() -> i32 {
                         println!("init: an input driver was restarted");
                         subscribe(port, r.process, k);
                     }
+                }
+                // `exit` closes the window too: a terminal that ends after
+                // its shell chose to end is no GUI failure (ADR-0155).
+                KEY_TERMINAL if chose_to_end(shell.1).is_some() => {
+                    break Ended::Shell(wait_exit(shell.1));
                 }
                 KEY_COMPOSITOR | KEY_TERMINAL => break Ended::Gui,
                 _ => break Ended::Storage,
@@ -253,6 +280,21 @@ fn main() -> i32 {
         }
         let _ = handle_close(port);
         match ended {
+            Ended::Shell(record) => {
+                println!("init: shell ended: {record:?}");
+                let clean = record.reason == zoraya_abi::ExitReason::Exited && record.code == 0;
+                shell_failures = if clean { 0 } else { shell_failures + 1 };
+                if shell_failures >= SHELL_FAILURES {
+                    println!("init: the shell failed {SHELL_FAILURES} times in a row");
+                    power_down(stack.as_ref().map(|s| &s.root), record);
+                }
+                // Written data is safe whatever the next shell does.
+                if let Some(s) = &stack
+                    && s.root.sync().is_err()
+                {
+                    println!("init: sync failed: what was written since the last sync may be lost");
+                }
+            }
             Ended::Gui => {
                 println!("init: the gui failed");
                 if let Some(g) = gui.take() {

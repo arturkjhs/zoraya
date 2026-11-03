@@ -11,8 +11,9 @@
 < init: storage failed
 < init: no more restarts
 x init: storage failed
-< zosh$ 
+< zosh: there is no volume
+< \r\n/> 
 > ls\r
-< zosh: no volume
-< zosh$ 
+< ls: there is no volume
+< \r\n/> 
 > poweroff\r

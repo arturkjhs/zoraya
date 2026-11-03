@@ -1,28 +1,39 @@
 # The roadmap's criterion for stage 5, as TASK-14 makes it: a terminal window
 # runs zosh, and keys typed into the window run commands, the file commands
-# of stage 4 among them. The screen is read back by exact glyph match (see
+# among them. The screen is read back by exact glyph match (see
 # tools/test-runner/src/gui.rs). The serial line's input is closed: keys
-# reach zosh only through the window (INV-0097-3).
+# reach zosh only through the window (INV-0097-3). Rebuilt for the native
+# shell in TASK-18 step 6.
 serial init: gui: gpu on its own page
-screen zosh: type help
-screen zosh$ _
+screen Type help to begin, or help tour.
+screen ~> _
 # Above and left of the window: the background. The window's frame: the
 # focused colour (ADR-0093, ADR-0094).
 region 0 0 1024 14 203040
 region 0 0 14 768 203040
 region 15 15 970 1 40a0ff
 region 15 15 1 490 40a0ff
-type write a.txt hi\r
-screen zosh$ _
+type echo hi > a.txt\r
+screen ~> _
 type cat a.txt\r
 screen hi
-screen zosh$ _
+screen ~> _
 # F12 with one window: focus stays, and typing goes on. (That F12 never reaches a
 # client is checked by t_gui: the terminal would send nothing for it anyway.)
 key f12
 type ls\r
 screen a.txt
-screen zosh$ _
+screen ~> _
+# exit closes the window, and init opens a new one with a new shell, since it
+# was the last (ADR-0155's Decision, INV-0155-5).
+type exit\r
+serial init: shell ended
+window
+screen Type help to begin, or help tour.
+screen ~> _
+type cat a.txt\r
+screen hi
+screen ~> _
 latency 10
 type poweroff\r
 exit

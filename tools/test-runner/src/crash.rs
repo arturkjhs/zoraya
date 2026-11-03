@@ -20,7 +20,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const RUN_QEMU: &str = "tools/run-qemu.sh";
-const PROMPT: &str = "zosh$ ";
+/// The shell's prompt in its home on a fresh line (TASK-18): a redraw of the
+/// line being typed starts with `\r`, not a line end.
+const PROMPT: &str = "\n~> ";
 const WAIT: Duration = Duration::from_secs(60);
 /// `T_COMMIT` and one commit, with room.
 const COMMITTED: Duration = Duration::from_secs(8);
@@ -236,7 +238,7 @@ fn without_sync(kernel: &str, image: &str) -> Result<(), String> {
     fresh(image)?;
     let mut guest = Guest::boot(kernel, image)?;
     guest.expect(PROMPT)?;
-    guest.send("write unsynced.txt nobody asked")?;
+    guest.send("echo nobody asked > unsynced.txt")?;
     guest.expect(PROMPT)?;
     std::thread::sleep(COMMITTED);
     guest.kill()?;
