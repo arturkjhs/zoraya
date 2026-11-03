@@ -5,7 +5,9 @@
 //! same code as at `spawn`; then it refuses what makes a program not static:
 //! a `PT_INTERP` or `PT_DYNAMIC` program header (ADR-0033, ADR-0109).
 
-#![forbid(unsafe_code)]
+// Only the capped allocator (capped.rs) has `unsafe`; everything else is
+// refused by this lint.
+#![deny(unsafe_code)]
 
 use zoraya_elf::{Program, Segment};
 
@@ -81,6 +83,13 @@ pub fn describe(program: &Program) -> String {
         .collect();
     format!("entry {:#x}, {}", program.entry, segs.join(", "))
 }
+
+#[allow(unsafe_code)]
+pub mod capped;
+
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: capped::Capped = capped::Capped::new(capped::LIMIT);
 
 #[cfg(test)]
 mod tests;

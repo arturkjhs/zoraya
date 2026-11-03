@@ -118,6 +118,11 @@ fn hide(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// The tool's memory ceiling (capped.rs).
+#[global_allocator]
+static ALLOCATOR: posix_surface_check::capped::Capped =
+    posix_surface_check::capped::Capped::new(posix_surface_check::capped::LIMIT);
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.split_first() {

@@ -26,6 +26,11 @@ fn walk(path: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// The tool's memory ceiling (capped.rs).
+#[global_allocator]
+static ALLOCATOR: zoraya_elf_check::capped::Capped =
+    zoraya_elf_check::capped::Capped::new(zoraya_elf_check::capped::LIMIT);
+
 fn main() -> ExitCode {
     let mut files = Vec::new();
     for a in std::env::args().skip(1) {

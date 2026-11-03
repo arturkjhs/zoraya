@@ -165,6 +165,11 @@ fn run(program: &str, args: &[String]) -> Result<(), String> {
     }
 }
 
+/// The tool's memory ceiling (capped.rs).
+#[global_allocator]
+static ALLOCATOR: zoraya_ar::capped::Capped =
+    zoraya_ar::capped::Capped::new(zoraya_ar::capped::LIMIT);
+
 fn main() -> ExitCode {
     let mut args = std::env::args();
     let program = args.next().unwrap_or_default();

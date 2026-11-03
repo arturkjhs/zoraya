@@ -12,7 +12,9 @@
 //! The index lists every global or weak symbol an ELF relocatable member
 //! defines, in member order and then symbol table order, as GNU `ar` does.
 
-#![forbid(unsafe_code)]
+// Only the capped allocator (capped.rs) has `unsafe`; everything else is
+// refused by this lint.
+#![deny(unsafe_code)]
 
 pub mod elf;
 
@@ -190,6 +192,13 @@ pub fn replace(members: &mut Vec<Member>, new: Member) {
         members.push(new);
     }
 }
+
+#[allow(unsafe_code)]
+pub mod capped;
+
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: capped::Capped = capped::Capped::new(capped::LIMIT);
 
 #[cfg(test)]
 mod tests;
