@@ -141,6 +141,10 @@ pub struct Stats {
     pub seeks: u64,
     pub requests: u64,
     pub reports: u64,
+    /// Messages to the broker (INV-0104-5: none on the file paths).
+    pub broker: u64,
+    /// `process_take_request` calls (INV-0106-2).
+    pub takes: u64,
 }
 
 /// An object opened, and what the open told of it.

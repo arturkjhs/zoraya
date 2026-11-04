@@ -163,7 +163,10 @@ impl<S: Sys> Posix<S> {
         loop {
             let n = if core::mem::take(&mut self.sigchld) {
                 SIGCHLD
-            } else if let Some((kind, detail)) = self.sys.take_request() {
+            } else if let Some((kind, detail)) = {
+                self.stats.takes += 1;
+                self.sys.take_request()
+            } {
                 signal::number(kind, detail)
             } else if let Some(n) = self.signals.next_unblocked() {
                 n
@@ -179,6 +182,13 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// Whether a library entry polls for requests (ADR-0106 item 5): only
+    /// with a handler installed (INV-0106-2), or a pending signal the mask
+    /// now lets through.
+    pub fn should_poll(&self) -> bool {
+        self.signals.handlers_installed() || self.signals.pending & !self.signals.blocked != 0
+    }
+
     // ------------------------------------------------------------ the broker
 
     /// Sends `m` to the broker and waits for its reply (in `self.input`).
@@ -189,6 +199,7 @@ impl<S: Sys> Posix<S> {
             }
             return Err(ENOSYS);
         };
+        self.stats.broker += 1;
         self.call(broker, m, moved).map_err(|_| EAGAIN)
     }
 

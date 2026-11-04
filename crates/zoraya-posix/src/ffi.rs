@@ -749,8 +749,8 @@ fn print_stats() {
         let mean = s.resolve_ns.checked_div(s.resolutions).unwrap_or(0);
         let _ = writeln!(
             line,
-            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={}",
-            s.resolutions, mean, s.requests, s.seeks, s.shares, s.reports
+            "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={} broker={} takes={}",
+            s.resolutions, mean, s.requests, s.seeks, s.shares, s.reports, s.broker, s.takes
         );
         let _ = p.write(2, User::new(line.as_ptr() as u64, line.len()));
     });
