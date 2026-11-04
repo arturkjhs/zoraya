@@ -5,9 +5,10 @@
 //! `unsafe` (INV-0100-3): C hands it pointers.
 //!
 //! Process functions (`fork`, `posix_spawn`, `wait*`, signals, `kill`, the
-//! terminal) are stage 6d's: here they fail with `ENOSYS`, as ADR-0140's stub
-//! did. A process has one thread (ADR-0100 item 5), so the state is a cell
-//! with no lock.
+//! terminal) are stage 6d's, in `procs`. A process has one thread (ADR-0100
+//! item 5), so the state is a cell with no lock.
+
+mod procs;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -27,7 +28,7 @@ use zoraya_heap::{Backing, Heap, PAGE_SIZE};
 
 use crate::errno::{self, *};
 use crate::path::PATH_MAX;
-use crate::process::{self, AT_EMPTY_PATH, AT_FDCWD, Posix, SIGPIPE, Target, o};
+use crate::process::{self, AT_EMPTY_PATH, AT_FDCWD, Desc, Posix, Target, o};
 use crate::stat;
 use crate::sys::{Sys, User};
 
@@ -179,6 +180,66 @@ impl Sys for RtSys {
 
     fn now(&mut self) -> u64 {
         zoraya_rt::clock_monotonic()
+    }
+
+    fn wait_any(
+        &mut self,
+        sources: &[(Handle, u32)],
+        deadline: Option<u64>,
+    ) -> Result<(usize, u32), Status> {
+        let port = match self.port {
+            Some(port) => port,
+            None => {
+                let port = zoraya_rt::port_create()?;
+                self.port = Some(port);
+                port
+            }
+        };
+        let mut subscribed = 0;
+        let mut r = Ok(());
+        for (i, &(h, wanted)) in sources.iter().enumerate() {
+            r = zoraya_rt::port_subscribe(port, h, wanted, i as u64 + 1, Mode::Level);
+            if r.is_err() {
+                break;
+            }
+            subscribed = i + 1;
+        }
+        let mut packets = [Packet::default()];
+        let waited = match r {
+            Ok(()) => {
+                zoraya_rt::port_wait(port, deadline.unwrap_or(DEADLINE_INFINITE), &mut packets)
+            }
+            Err(s) => Err(s),
+        };
+        for i in 0..subscribed {
+            let _ = zoraya_rt::port_unsubscribe(port, i as u64 + 1);
+        }
+        waited?;
+        let key = packets[0].key as usize;
+        if key == 0 || key > sources.len() {
+            return Err(Status::BadState);
+        }
+        Ok((key - 1, packets[0].signals))
+    }
+
+    fn signals_of(&mut self, h: Handle) -> Result<u32, Status> {
+        zoraya_rt::object_get_signals(h)
+    }
+
+    fn take_request(&mut self) -> Option<(zoraya_abi::RequestKind, u32)> {
+        zoraya_rt::process_take_request().ok()
+    }
+
+    fn set_disposition(
+        &mut self,
+        kind: zoraya_abi::RequestKind,
+        d: zoraya_abi::Disposition,
+    ) -> Result<(), Status> {
+        zoraya_rt::process_set_disposition(kind, d)
+    }
+
+    fn slot_of(&self, h: Handle) -> u32 {
+        h.slot()
     }
 }
 
@@ -535,9 +596,10 @@ const AT_RANDOM: usize = 25;
 const PT_PHDR: u32 = 6;
 const PHENT: usize = 56;
 
-/// The handle a spawner put at slot `fd` (generation 0, as `spawn` fills).
+/// The handle a spawner put for fd `fd` (generation 0, as `spawn` fills):
+/// at its number, fd 0's at `FD0`.
 fn at_slot(fd: u32) -> Handle {
-    Handle::from_parts(fd, 0).unwrap_or(slot::BOOTSTRAP)
+    Handle::from_parts(slot::of_fd(fd), 0).unwrap_or(slot::BOOTSTRAP)
 }
 
 /// Reads the bootstrap channel's two messages, if the process has one
@@ -561,7 +623,13 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
         .ok()
         .map(|_| slot::REPORT);
     let facts = abi::Facts::default();
+    let had_channel = zoraya_rt::handle_type(slot::BOOTSTRAP).is_ok();
     let Some(n) = read(sys, &mut record, &mut handles) else {
+        if had_channel {
+            // The spawner gave a channel and no record: it failed after the
+            // spawn (procs::send_record).
+            zoraya_rt::process_exit(127);
+        }
         return Posix::new(
             RtSys {
                 port: sys.port.take(),
@@ -654,7 +722,8 @@ extern "C" fn zoraya_posix_start(_stack: usize, start_c: extern "C" fn(*mut usiz
         vector.push(value);
     }
     let mut sys = RtSys { port: None };
-    let posix = bootstrap(&mut sys);
+    let mut posix = bootstrap(&mut sys);
+    procs::start_up(&mut posix);
     // SAFETY: start-up runs once, before anything else uses the state.
     unsafe { *STATE.state.get() = Some(posix) };
     let vector = vector.leak();
@@ -704,12 +773,6 @@ extern "C" fn zoraya_posix_exit_group(code: i64) -> ! {
     exit(code)
 }
 
-/// `SIGABRT`: the exit record says terminated by signal 6 (ADR-0004).
-#[unsafe(no_mangle)]
-extern "C" fn abort() -> ! {
-    zoraya_rt::process_exit_terminated(6)
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn zoraya_posix_set_tid_address(_p: i64) -> i64 {
     // musl keeps it as the thread's id: the process's, or 1 without one.
@@ -723,28 +786,14 @@ fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
 
 // ------------------------------------------------------------ files
 
-fn write_result(p: &mut Posix<RtSys>, r: Result<usize, i32>) -> Result<usize, i32> {
-    // ADR-0101, ADR-0106: SIGPIPE's default ends the process; ignored on
-    // entry, the write is EPIPE.
-    if r == Err(EPIPE) && p.facts.ignored & (1 << SIGPIPE) == 0 {
-        zoraya_rt::process_exit_terminated(SIGPIPE);
-    }
-    r
-}
-
 #[unsafe(no_mangle)]
 extern "C" fn read(fd: i32, buf: *mut u8, n: usize) -> isize {
-    size(user(buf, n).and_then(|u| state(|p| p.read(fd, u))))
+    size(user(buf, n).and_then(|u| procs::read_fd(fd, u)))
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn write(fd: i32, buf: *const u8, n: usize) -> isize {
-    size(user(buf, n).and_then(|u| {
-        state(|p| {
-            let r = p.write(fd, u);
-            write_result(p, r)
-        })
-    }))
+    size(user(buf, n).and_then(|u| procs::write_fd(fd, u)))
 }
 
 /// `struct iovec`s as `User`s.
@@ -774,22 +823,20 @@ unsafe fn vectors(iov: *const [usize; 2], count: i64) -> Result<Vec<User>, i32> 
 }
 
 fn readv_all(fd: i32, parts: Vec<User>) -> Result<usize, i32> {
-    state(|p| {
-        let mut done = 0;
-        for u in parts {
-            match p.read(fd, u) {
-                Ok(n) => {
-                    done += n;
-                    if n < u.length {
-                        break;
-                    }
+    let mut done = 0;
+    for u in parts {
+        match procs::read_fd(fd, u) {
+            Ok(n) => {
+                done += n;
+                if n < u.length {
+                    break;
                 }
-                Err(e) if done == 0 => return Err(e),
-                Err(_) => break,
             }
+            Err(e) if done == 0 => return Err(e),
+            Err(_) => break,
         }
-        Ok(done)
-    })
+    }
+    Ok(done)
 }
 
 /// The largest `writev` gathered into one write: what one request carries.
@@ -817,28 +864,23 @@ fn writev_all(fd: i32, parts: Vec<User>) -> Result<usize, i32> {
                     )
                 };
             }
-            return state(|p| {
-                let r = p.write(fd, User::new(joined.as_ptr() as u64, joined.len()));
-                write_result(p, r)
-            });
+            return procs::write_fd(fd, User::new(joined.as_ptr() as u64, joined.len()));
         }
     }
-    state(|p| {
-        let mut done = 0;
-        for u in parts {
-            match p.write(fd, u) {
-                Ok(n) => {
-                    done += n;
-                    if n < u.length {
-                        break;
-                    }
+    let mut done = 0;
+    for u in parts {
+        match procs::write_fd(fd, u) {
+            Ok(n) => {
+                done += n;
+                if n < u.length {
+                    break;
                 }
-                Err(e) if done == 0 => return write_result(p, Err(e)),
-                Err(_) => break,
             }
+            Err(e) if done == 0 => return Err(e),
+            Err(_) => break,
         }
-        Ok(done)
-    })
+    }
+    Ok(done)
 }
 
 #[unsafe(no_mangle)]
@@ -850,7 +892,7 @@ extern "C" fn writev(fd: i32, iov: *const [usize; 2], count: i32) -> isize {
 #[unsafe(no_mangle)]
 extern "C" fn zoraya_posix_read(fd: i64, buf: i64, n: i64) -> i64 {
     raw(user(buf as *const u8, n as usize)
-        .and_then(|u| state(|p| p.read(fd as i32, u)))
+        .and_then(|u| procs::read_fd(fd as i32, u))
         .map(|n| n as i64))
 }
 
@@ -1266,23 +1308,16 @@ extern "C" fn zoraya_posix_fcntl(fd: i64, command: i64, argument: i64) -> i64 {
     raw(state(|p| p.fcntl(fd as i32, command as i32, argument)).map(i64::from))
 }
 
-/// No terminal until 6d: every fd that exists answers `ENOTTY`, `TIOCGWINSZ`
-/// (musl's stdio asks it of stdout) among the rest.
-fn ioctl_of(fd: i32, _request: i64) -> Result<i32, i32> {
-    state(|p| {
-        p.isatty(fd)?;
-        Err(ENOTTY)
-    })
+/// A terminal's requests (ADR-0105 item 7); `ENOTTY` on anything else,
+/// `TIOCGWINSZ` (musl's stdio asks it of stdout) among the rest.
+#[unsafe(no_mangle)]
+extern "C" fn ioctl(fd: i32, request: i64, argument: i64) -> i32 {
+    int(procs::ioctl_tty(fd, request, argument))
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn ioctl(fd: i32, request: i64, _argument: i64) -> i32 {
-    int(ioctl_of(fd, request))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn zoraya_posix_ioctl(fd: i64, request: i64, _argument: i64) -> i64 {
-    raw(ioctl_of(fd as i32, request).map(i64::from))
+extern "C" fn zoraya_posix_ioctl(fd: i64, request: i64, argument: i64) -> i64 {
+    raw(procs::ioctl_tty(fd as i32, request, argument).map(i64::from))
 }
 
 #[unsafe(no_mangle)]
@@ -1459,26 +1494,6 @@ extern "C" fn ttyname(fd: i32) -> *mut c_char {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn tcgetattr(fd: i32, _t: *mut u8) -> i32 {
-    int(ioctl_of(fd, 0))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn tcsetattr(fd: i32, _a: i32, _t: *const u8) -> i32 {
-    int(ioctl_of(fd, 0))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn tcgetpgrp(fd: i32) -> i32 {
-    int(ioctl_of(fd, 0))
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn tcsetpgrp(fd: i32, _g: i32) -> i32 {
-    int(ioctl_of(fd, 0))
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn uname(out: *mut [u8; 65]) -> i32 {
     if out.is_null() {
         return int(Err(EFAULT));
@@ -1589,11 +1604,16 @@ extern "C" fn htonl(x: u32) -> u32 {
 
 // ------------------------------------------------------------ time
 
-/// `CLOCK_REALTIME` is the clock `fsd` stamps files with, the monotonic
-/// one, until there is a wall clock (ADR-0014's open question).
+/// `CLOCK_REALTIME` is the boot's time base plus the monotonic clock, the
+/// clock every `fsd` stamps files with (ADR-0191); the others are the
+/// monotonic clock.
 fn clock(id: i32) -> Result<u64, i32> {
+    let now = zoraya_rt::clock_monotonic();
     match id {
-        0..=7 => Ok(zoraya_rt::clock_monotonic()),
+        0 => Ok(with(|p| p.facts.realtime_base)
+            .unwrap_or(0)
+            .saturating_add(now)),
+        1..=7 => Ok(now),
         _ => Err(EINVAL),
     }
 }
@@ -1640,13 +1660,15 @@ extern "C" fn __clock_nanosleep(
     let length = (seconds as u64)
         .saturating_mul(1_000_000_000)
         .saturating_add(nanos as u64);
+    // The deadline on the monotonic clock: an absolute realtime one less
+    // the base.
     let deadline = if flags & TIMER_ABSTIME != 0 {
-        length
+        let base = now.saturating_sub(zoraya_rt::clock_monotonic());
+        length.saturating_sub(base)
     } else {
-        now.saturating_add(length)
+        zoraya_rt::clock_monotonic().saturating_add(length)
     };
-    zoraya_rt::sleep_until(deadline);
-    0
+    procs::nanosleep_until(deadline, _rem)
 }
 
 #[unsafe(no_mangle)]
@@ -1748,28 +1770,16 @@ extern "C" fn siglongjmp(env: *mut u8, value: i32) -> ! {
     unsafe { longjmp(env, value) }
 }
 
-// ------------------------------------------------------------ 6d's
+// ------------------------------------------------------------ outside T1
 
-/// Process functions, signals and the terminal are stage 6d's (TASK-20):
-/// each fails with `ENOSYS`, as ADR-0140's stub did.
+/// Names of the tier list that no measured T1 program needs working
+/// (sockets, `syscall`, `setsid`): each fails with `ENOSYS`, as ADR-0140's
+/// stub did.
 macro_rules! not_yet {
     (int $($name:ident)*) => {$(
         #[unsafe(no_mangle)]
         extern "C" fn $name() -> i32 {
             int(Err(ENOSYS))
-        }
-    )*};
-    (err $($name:ident)*) => {$(
-        #[unsafe(no_mangle)]
-        extern "C" fn $name() -> i32 {
-            ENOSYS
-        }
-    )*};
-    (sigerr $($name:ident)*) => {$(
-        #[unsafe(no_mangle)]
-        extern "C" fn $name() -> isize {
-            set_errno(ENOSYS);
-            -1
         }
     )*};
     (ptr $($name:ident)*) => {$(
@@ -1781,12 +1791,5 @@ macro_rules! not_yet {
     )*};
 }
 
-not_yet!(int execve execvp fork vfork kill killpg raise pselect setpgid sigaction
-    sigaddset sigemptyset sigfillset sigprocmask sigsuspend syscall tee wait wait3 waitpid
-    connect execl getrandom send sendmsg setgroups setsid socket zoraya_fork_group);
-not_yet!(err posix_spawn posix_spawn_file_actions_adddup2 posix_spawn_file_actions_destroy
-    posix_spawn_file_actions_init posix_spawnattr_destroy posix_spawnattr_init
-    posix_spawnattr_setflags posix_spawnattr_setsigmask posix_spawn_file_actions_addclose
-    pthread_sigmask posix_spawnattr_setpgroup posix_spawnattr_setsigdefault);
-not_yet!(sigerr bsd_signal signal);
+not_yet!(int syscall tee connect getrandom send sendmsg setgroups setsid socket);
 not_yet!(ptr __map_file);

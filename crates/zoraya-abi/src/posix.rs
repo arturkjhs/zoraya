@@ -63,8 +63,40 @@ pub mod slot {
     pub const SELF: Handle = Handle(1003);
     /// The write end of the channel refused paths are reported on.
     pub const REPORT: Handle = Handle(1004);
+    /// fd 0's handle: slot 0 holds none, so fd 0 is the one fd not at its
+    /// number (ADR-0190).
+    pub const FD0: Handle = Handle(1005);
 
-    pub const ALL: [Handle; 5] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT];
+    pub const ALL: [Handle; 6] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT, FD0];
+
+    /// The slot that holds fd `fd`'s handle: its number, but fd 0's.
+    pub const fn of_fd(fd: u32) -> u32 {
+        if fd == 0 { FD0.slot() } else { fd }
+    }
+}
+
+/// The rights of the job handles the broker gives (ADR-0104 items 2, 4 and
+/// 10). There is no call that reads a handle's rights, and a moved handle
+/// must list rights it holds, so the holders name them from here.
+pub mod job_rights {
+    use crate::Rights;
+
+    /// The broker's own handle to a process job.
+    pub const TABLE: Rights = Rights::DUPLICATE
+        .union(Rights::TRANSFER)
+        .union(Rights::WAIT)
+        .union(Rights::SIGNAL)
+        .union(Rights::CREATE_PROCESS)
+        .union(Rights::KILL);
+    /// The parent's handle to a child's process job.
+    pub const PARENT: Rights = Rights::WAIT
+        .union(Rights::DUPLICATE)
+        .union(Rights::TRANSFER);
+    /// A process's handle to its own process job, at `PROCESS_JOB`.
+    pub const OWN: Rights = Rights::CREATE_PROCESS.union(Rights::TRANSFER);
+    /// The terminal's handle to the foreground group's job and to the
+    /// session's.
+    pub const TERMINAL: Rights = Rights::SIGNAL.union(Rights::KILL);
 }
 
 /// `flags`: relative paths are joined to cwd's absolute path and `..` leaves

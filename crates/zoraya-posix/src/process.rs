@@ -108,12 +108,16 @@ pub enum Desc<H> {
         place: Option<Place>,
         listing: Listing,
     },
-    /// Stream ends: a pipe, or a terminal's output (6d).
+    /// Stream ends: a pipe, a FIFO, or a terminal. A FIFO keeps its
+    /// connection, whose closing tells the service the side has gone; a
+    /// terminal's input is its connection (ADR-0105 item 6), its output the
+    /// write end.
     Stream {
         read: Option<H>,
         write: Option<H>,
         nonblock: bool,
         tty: bool,
+        conn: Option<H>,
     },
     /// `/dev/null`.
     Null { access: u32 },
@@ -156,29 +160,43 @@ enum Outcome<H> {
 pub struct Posix<S: Sys> {
     pub sys: S,
     pub fds: Table<Desc<S::H>>,
-    entries: Vec<Entry<S::H>>,
-    form: Form,
-    cwd: Place,
-    cwd_conn: Option<S::H>,
+    pub(crate) entries: Vec<Entry<S::H>>,
+    pub(crate) form: Form,
+    pub(crate) cwd: Place,
+    pub(crate) cwd_conn: Option<S::H>,
     pub facts: Facts,
     pub exe: String,
-    report: Option<S::H>,
+    pub(crate) report: Option<S::H>,
     /// The process itself, with `WAIT`, from the bootstrap channel's second
     /// message (ADR-0107 item 5), for 6d's `REQUEST_PENDING` waits.
     pub self_handle: Option<S::H>,
     reported: Vec<String>,
     report_dropped: u32,
     reports_sent: u32,
-    scratch: Option<(S::H, u64)>,
-    out: Vec<u8>,
-    input: Vec<u8>,
+    pub(crate) scratch: Option<(S::H, u64)>,
+    pub(crate) out: Vec<u8>,
+    pub(crate) input: Vec<u8>,
     data: Vec<u8>,
-    handles: Vec<S::H>,
-    transaction: u32,
+    pub(crate) handles: Vec<S::H>,
+    pub(crate) transaction: u32,
     pub stats: Stats,
+    /// The signal state (ADR-0106).
+    pub signals: crate::signals::Signals,
+    /// The broker's connection at slot `BROKER` (ADR-0104), if any.
+    pub broker: Option<S::H>,
+    /// The process's own job at slot `PROCESS_JOB`, for `exec`.
+    pub process_job: Option<S::H>,
+    /// The children not yet waited for.
+    pub children: Vec<crate::jobs::Child<S::H>>,
+    /// `zoraya_fork_group`'s hint for the next `fork`.
+    pub fork_group: i32,
+    /// A child's end seen at a wait point: `SIGCHLD` to take.
+    pub sigchld: bool,
+    /// What `Read` a terminal connection has outstanding, by connection.
+    pub(crate) tty_reads: Vec<(S::H, u32)>,
 }
 
-fn native(s: Status, call: Call) -> i32 {
+pub(crate) fn native(s: Status, call: Call) -> i32 {
     errno::from_status(s, call)
 }
 
@@ -222,6 +240,13 @@ impl<S: Sys> Posix<S> {
             handles: Vec::with_capacity(4),
             transaction: 0,
             stats: Stats::default(),
+            signals: crate::signals::Signals::new(facts.ignored),
+            broker: None,
+            process_job: None,
+            children: Vec::new(),
+            fork_group: -1,
+            sigchld: false,
+            tty_reads: Vec::new(),
         }
     }
 
@@ -277,20 +302,23 @@ impl<S: Sys> Posix<S> {
                     write: None,
                     nonblock,
                     tty: false,
+                    conn: None,
                 },
                 FdKind::StreamWrite => Desc::Stream {
                     read: None,
                     write: Some(at_slot(fd.fd)),
                     nonblock,
                     tty: false,
+                    conn: None,
                 },
-                // The terminal connection is the broker's business (6d); the
-                // stream end at the slot is the data path.
+                // The output stream's end at the slot, the terminal
+                // connection in the message (ADR-0107 item 3).
                 FdKind::Tty => Desc::Stream {
                     read: None,
                     write: Some(at_slot(fd.fd)),
                     nonblock,
                     tty: true,
+                    conn: message.get(fd.tty as usize).copied(),
                 },
             };
             let _ = p.fds.install_at(fd.fd, desc);
@@ -330,7 +358,7 @@ impl<S: Sys> Posix<S> {
 
     /// Sends `m` on `conn`, moving `moved`, and waits for the reply, which is
     /// then `self.input[..size]`, with its handles in `self.handles`.
-    fn call<'m, M: Message<'m>>(
+    pub(crate) fn call<'m, M: Message<'m>>(
         &mut self,
         conn: S::H,
         m: &M,
@@ -388,7 +416,7 @@ impl<S: Sys> Posix<S> {
 
     /// The status of a reply of `size` bytes: every reply has it first, and
     /// the generic error reply has only it.
-    fn status_of(&self, size: usize) -> u32 {
+    pub(crate) fn status_of(&self, size: usize) -> u32 {
         let bytes = &self.input[..size];
         match Header::decode(bytes) {
             Ok((h, _)) if h.ordinal == ERROR_ORDINAL => {
@@ -403,7 +431,12 @@ impl<S: Sys> Posix<S> {
     }
 
     /// A request answered by `Done`: its count, or the `errno`.
-    fn done<'m, M: Message<'m>>(&mut self, conn: S::H, m: &M, moved: &[S::H]) -> Result<u64, i32> {
+    pub(crate) fn done<'m, M: Message<'m>>(
+        &mut self,
+        conn: S::H,
+        m: &M,
+        moved: &[S::H],
+    ) -> Result<u64, i32> {
         let size = self.call(conn, m, moved)?;
         match decode::<proto::Done>(&self.input[..size], 0) {
             Ok((_, d)) if d.status.0 == status::OK => Ok(d.count),
@@ -827,8 +860,10 @@ impl<S: Sys> Posix<S> {
                 self.sys.close(conn);
                 r
             }
-            Desc::Stream { read, write, .. } => {
-                for h in [read, write].into_iter().flatten() {
+            Desc::Stream {
+                read, write, conn, ..
+            } => {
+                for h in [read, write, conn].into_iter().flatten() {
                     self.sys.close(h);
                 }
                 Ok(())
@@ -885,6 +920,12 @@ impl<S: Sys> Posix<S> {
                     Ok(0)
                 }
             }
+            Some(&Desc::Stream {
+                tty: true,
+                conn: Some(conn),
+                nonblock,
+                ..
+            }) => self.read_tty(fd, conn, into, nonblock),
             Some(Desc::Stream { read: None, .. }) => Err(EBADF),
             Some(&Desc::Stream {
                 read: Some(end),
@@ -933,9 +974,7 @@ impl<S: Sys> Posix<S> {
                 Ok(n) => return Ok(n),
                 Err(Status::WouldBlock) if nonblock => return Err(EAGAIN),
                 Err(Status::WouldBlock) => {
-                    self.sys
-                        .wait(end, signals::READABLE | signals::PEER_CLOSED)
-                        .map_err(|s| native(s, Call::Other))?;
+                    self.wait_point(end, signals::READABLE | signals::PEER_CLOSED)?;
                 }
                 Err(s) => return Err(native(s, Call::Other)),
             }
@@ -1024,11 +1063,11 @@ impl<S: Sys> Posix<S> {
                     return if done > 0 { Ok(done) } else { Err(EAGAIN) };
                 }
                 Err(Status::WouldBlock) => {
-                    let s = match self.sys.wait(end, signals::WRITABLE | signals::PEER_CLOSED) {
+                    let s = match self.wait_point(end, signals::WRITABLE | signals::PEER_CLOSED) {
                         Ok(s) => s,
                         // What was written counts, as for any later error.
                         Err(_) if done > 0 => return Ok(done),
-                        Err(e) => return Err(native(e, Call::Other)),
+                        Err(e) => return Err(e),
                     };
                     if s & signals::WRITABLE == 0 && s & signals::PEER_CLOSED != 0 {
                         return if done > 0 { Ok(done) } else { Err(EPIPE) };
@@ -1713,6 +1752,7 @@ impl<S: Sys> Posix<S> {
                 write: None,
                 nonblock,
                 tty: false,
+                conn: None,
             },
             cloexec,
         );
@@ -1729,6 +1769,7 @@ impl<S: Sys> Posix<S> {
                 write: Some(write),
                 nonblock,
                 tty: false,
+                conn: None,
             },
             cloexec,
         );
@@ -1881,6 +1922,11 @@ impl<S: Sys> Posix<S> {
             }
         }
     }
+}
+
+/// True if a reply is not the generic error reply.
+pub(crate) fn reply_ok(bytes: &[u8]) -> bool {
+    Header::decode(bytes).is_ok_and(|(h, _)| h.ordinal != ERROR_ORDINAL)
 }
 
 /// What `look` found.

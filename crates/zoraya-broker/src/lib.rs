@@ -13,10 +13,13 @@
 
 extern crate alloc;
 
+pub mod session;
+
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use zoraya_abi::posix::job_rights;
 use zoraya_abi::posix::signal::{self, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU};
 use zoraya_abi::{ExitRecord, RequestKind, Rights, Status, job_signals};
 use zoraya_proto_posix::{
@@ -37,20 +40,13 @@ pub const FIRST_PID: u32 = 2;
 pub const LAST_PID: u32 = 0x7fff_ffff;
 
 /// The rights of a process job's handle in the table (ADR-0104 item 2).
-pub const JOB_RIGHTS: Rights = Rights::DUPLICATE
-    .union(Rights::TRANSFER)
-    .union(Rights::WAIT)
-    .union(Rights::SIGNAL)
-    .union(Rights::CREATE_PROCESS)
-    .union(Rights::KILL);
+pub const JOB_RIGHTS: Rights = job_rights::TABLE;
 /// The parent's handle to a child's process job (item 4).
-pub const PARENT_JOB_RIGHTS: Rights = Rights::WAIT
-    .union(Rights::DUPLICATE)
-    .union(Rights::TRANSFER);
+pub const PARENT_JOB_RIGHTS: Rights = job_rights::PARENT;
 /// The child's handle to its own process job (item 4).
-pub const CHILD_JOB_RIGHTS: Rights = Rights::CREATE_PROCESS.union(Rights::TRANSFER);
+pub const CHILD_JOB_RIGHTS: Rights = job_rights::OWN;
 /// The terminal's handle to the foreground group's job (item 10).
-pub const FOREGROUND_RIGHTS: Rights = Rights::SIGNAL.union(Rights::KILL);
+pub const FOREGROUND_RIGHTS: Rights = job_rights::TERMINAL;
 
 /// What the broker needs of the kernel.
 pub trait Kernel {

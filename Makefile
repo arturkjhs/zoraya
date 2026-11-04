@@ -43,14 +43,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
-	t_streams t_snapshot t_image t_suspend posixrun
+	t_streams t_snapshot t_image t_suspend posixrun broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-posix posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -236,6 +236,30 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
+
+# The stage 6d criterion (TASK-21): the POSIX session, dash on ttyd through
+# the broker, on an image of the ports' root (make ports' build/rootfs-posix),
+# rootfs/ and tests/posix-session/rootfs (with /etc/zoraya/session). Needs make
+# fetch-ports once, as make ports does. POSIX_SCRIPTS picks the scripts,
+# POSIX_ACCELS the accelerators.
+POSIX_SESSION := $(BUILD)/posix-session
+POSIX_SCRIPTS ?= tests/posix-session/session.script
+POSIX_ACCELS ?= auto tcg
+posix-image: $(KERNEL) tools-storage
+	@$(MAKE) -s -f ports/Makefile rootfs
+	rm -rf $(POSIX_SESSION)/root
+	mkdir -p $(POSIX_SESSION)/root
+	cp -R rootfs/. $(POSIX_SESSION)/root/
+	cp -R $(BUILD)/rootfs-posix/. $(POSIX_SESSION)/root/
+	cp -R tests/posix-session/rootfs/. $(POSIX_SESSION)/root/
+
+test-posix: posix-image $(RUNNER)
+	@for script in $(POSIX_SCRIPTS); do for accel in $(POSIX_ACCELS); do \
+	  name=$$(basename $$script .script); \
+	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(POSIX_SESSION)/disk.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $$script --label posix-$$name-$$accel -- \
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_SESSION)/disk.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_SESSION)/disk.img || exit 1; done; done
 
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
