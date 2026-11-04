@@ -74,6 +74,13 @@ pub struct Meta {
 
 /// The `struct stat` bytes for an object of `kind`, owned by `uid`/`gid`.
 pub fn encode(kind: Kind, m: &Meta, uid: u32, gid: u32) -> [u8; SIZE] {
+    // A FIFO of the temporary service is a file whose mode says S_IFIFO
+    // (ADR-0190 item 4).
+    let kind = if kind == Kind::File && m.mode & S_IFMT == S_IFIFO {
+        Kind::Fifo
+    } else {
+        kind
+    };
     let mut out = [0u8; SIZE];
     let mut put = |at: usize, bytes: &[u8]| out[at..at + bytes.len()].copy_from_slice(bytes);
     put(0, &m.volume.to_le_bytes());

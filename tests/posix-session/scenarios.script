@@ -1,0 +1,94 @@
+# The event sequences of TASK-02b (docs/research/task-02b/event-timelines.md)
+# as scenarios in the POSIX session (TASK-21), then the hostile cases.
+! panicked
+! ZORAYA-PANIC
+! ZORAYA-FAULT
+! t_posix: FAIL
+< PSURF>
+# W9a: Ctrl-C during a parallel recursive build of three levels. The
+# interrupt reaches every process of the foreground job at once; each leaf
+# make deletes its partial target and re-raises; dash reports 130. The
+# jobserver is make's FIFO in /tmp (the temporary service's FIFO nodes).
+> cd /src/w9 && make -j8\r
+< make[2]: Entering directory '/src/w9/b/2'
+~ 2000 PSURF>
+> \x03
+< Deleting file 't4.h'
+< Deleting file 't4.h'
+< Deleting file 't4.h'
+< Deleting file 't4.h'
+< PSURF>
+> echo status=$?; for d in a/1 a/2 b/1 b/2; do test -e $d/t4.h && echo left $d; done; echo checked\r
+< status=130
+< checked
+x left
+< PSURF>
+# W9b: SIGTERM to the top make: it goes down the tree by make's own sends,
+# each make deletes its partial target and re-raises; status 143. As measured
+# (event-timelines.md), a leaf may not have begun its target when SIGTERM
+# reaches it: three deletions at least, and no partial target left.
+> make -j8 > /tmp/w9b.log 2>&1 & sleep 6; kill $!; wait $!; echo term=$?\r
+< term=143
+< PSURF>
+> cat /tmp/w9b.log; for d in a/1 a/2 b/1 b/2; do test -e $d/t4.h && echo left $d; done; echo checked\r
+< Deleting file 't4.h'
+< Deleting file 't4.h'
+< Deleting file 't4.h'
+< checked
+x left
+< PSURF>
+# W10: background jobs with wait, concurrent pipelines, and a writer killed
+# by SIGPIPE on PeerClosed (yes | head), with the script TASK-02b ran.
+> cd /src/w10 && sh w10.sh parallel\r
+< subshell job done
+< background: 0 0
+< w10
+< w10
+< w10
+< pipeline status: 0
+< PSURF>
+> yes | head -n 1; echo "statuses ${?}"\r
+< y
+< statuses 0
+< PSURF>
+# Ctrl-Z (plan.md's risk): the broker's job_suspend of the foreground group,
+# fg's tcsetpgrp and SIGCONT; the group stopped whole runs its next child
+# after fg (review R1); then Ctrl-C of the continued job.
+> sh -c 'sleep 2; echo first; sleep 1; echo second; sleep 30'\r
+~ 700 PSURF>
+> \x1a
+< Stopped
+< PSURF> 
+> jobs\r
+< Stopped
+< PSURF> 
+> fg\r
+< first
+< second
+~ 500 PSURF>
+> \x03
+< PSURF> 
+> echo after=$?\r
+< after=130
+< PSURF> 
+# Hostile: a process that ignores every catchable signal. Ctrl-C reaches it
+# and is ignored; job_kill (kill -9) always ends it.
+> /bin/t_posix hostile &\r
+< hostile ignoring every signal
+> kill -INT $!; kill -TERM $!; kill -HUP $!; sleep 1; jobs\r
+< Running
+< PSURF>
+> kill -9 %1; wait %1; echo killed=$?\r
+< killed=137
+< PSURF>
+# A fork bomb in a sub-job, bounded by what exists today (ADR-0056 will add
+# quotas): forks until refused, then the session goes on.
+> t_posix forkbomb 400\r
+< t_posix: forkbomb made
+< t_posix: forkbomb passed
+< PSURF>
+> echo still-here\r
+< still-here
+< PSURF>
+> exit\r
+< BROKER-STATS

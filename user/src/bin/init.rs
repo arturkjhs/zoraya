@@ -9,17 +9,23 @@
 //!
 //! With a GPU and an input device, each alone on its page (ADR-0091), it
 //! also starts the GUI (ADR-0097): the drivers, the compositor, a terminal,
-//! and the shell in that terminal. A dead GUI driver is restarted alone; a
+//! and the shell in that terminal.
+//!
+//! When the volume has `/etc/zoraya/session` it starts a POSIX session
+//! instead of `zosh` (ADR-0104 item 12, ADR-0110 item 1): `ttyd` over the
+//! console, or over the GUI terminal's channel, and the broker, which starts
+//! the session's command; the session ending is the shell ending. A dead GUI driver is restarted alone; a
 //! dead compositor or terminal ends the GUI and the shell, and starts them
 //! again, up to three times.
 
 extern crate alloc;
 
 use zoraya_abi::spawn::Encoder;
+use zoraya_abi::spawn::{HandleEntry, Transfer};
 use zoraya_abi::{
-    CONSOLE, ConsoleObject, DEADLINE_INFINITE, DIRECTORY, DirectoryObject, Handle, JOB, JobFlags,
-    JobObject, Mode, ObjectType, POWER, Packet, PowerObject, Rights, channel_signals,
-    process_signals,
+    CONSOLE, ChannelObject, ConsoleObject, DEADLINE_INFINITE, DIRECTORY, DirectoryObject, Handle,
+    JOB, JobFlags, JobObject, Mode, ObjectType, POWER, Packet, PowerObject, Rights,
+    StreamReadObject, StreamWriteObject, channel_signals, process_signals,
 };
 use zoraya_fs_service::Restarts;
 use zoraya_user::files::{ALL, File};
@@ -28,8 +34,8 @@ use zoraya_user::gui::{
 };
 use zoraya_user::stack::{Stack, end_job, moved, start_stack};
 use zoraya_user::{
-    directory_lookup, dup, handle_close, job_create, port_create, port_subscribe, port_wait,
-    power_off, println, process_exit_record, spawn, wait_exit,
+    channel_create, directory_lookup, dup, handle_close, job_create, port_create, port_subscribe,
+    port_wait, power_off, println, process_exit_record, spawn, stream_create, wait_exit,
 };
 
 const KEY_DRIVER: u64 = 1;
@@ -40,7 +46,89 @@ const KEY_GPU: u64 = 5;
 const KEY_COMPOSITOR: u64 = 6;
 const KEY_TERMINAL: u64 = 7;
 const KEY_MANAGER: u64 = 8;
+const KEY_TTYD: u64 = 9;
 const KEY_INPUT: u64 = 16;
+
+/// A moved handle with its type's rights.
+fn give(slot: u32, handle: Handle, rights: Rights) -> HandleEntry {
+    HandleEntry {
+        slot,
+        handle,
+        rights,
+        transfer: Transfer::Move,
+    }
+}
+
+/// The POSIX session (ADR-0104 item 12, ADR-0105 item 1): `ttyd` with the
+/// backend, then the broker with the root connection, the terminal's
+/// control and first connections and the output stream's write end. `init`
+/// makes the stream and the channels and hands each end to its holder.
+struct Session {
+    ttyd: (Handle, Handle),
+    broker: (Handle, Handle),
+}
+
+fn start_session(root: &File, window: Option<Handle>) -> Option<Session> {
+    let base = root.time_base().unwrap_or(0);
+    let (out_read, out_write) = stream_create().ok()?;
+    let (control_service, control_broker) = channel_create().ok()?;
+    let (first_service, first_broker) = channel_create().ok()?;
+    let job = job_create(JOB, JobFlags::NONE).ok()?;
+    let image = directory_lookup(DIRECTORY, "ttyd").ok()?;
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, job, image);
+    let console = if window.is_some() {
+        Rights::WRITE
+    } else {
+        ConsoleObject::RIGHTS
+    };
+    e.handle(dup(CONSOLE.slot(), CONSOLE, console));
+    if let Some(w) = window {
+        e.handle(moved(5, w));
+    }
+    e.handle(moved(6, control_service));
+    e.handle(moved(7, first_service));
+    e.handle(give(8, out_read, StreamReadObject::RIGHTS));
+    e.arg(b"ttyd");
+    if window.is_some() {
+        e.arg(b"--window");
+    }
+    let length = e.finish()?;
+    let ttyd = spawn(&buffer[..length]).ok();
+    let _ = handle_close(image);
+    let ttyd = (job, ttyd?);
+    let job = job_create(JOB, JobFlags::POSIX).ok()?;
+    let image = directory_lookup(DIRECTORY, "broker").ok()?;
+    let root = root.clone_as(ALL).ok()?;
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, job, image);
+    // Written to by the broker and handed on to the temporary service.
+    e.handle(dup(
+        CONSOLE.slot(),
+        CONSOLE,
+        Rights::WRITE.union(Rights::DUPLICATE),
+    ));
+    e.handle(dup(JOB.slot(), job, JobObject::RIGHTS));
+    e.handle(dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS));
+    e.handle(give(5, root.end, ChannelObject::RIGHTS));
+    e.handle(moved(6, control_broker));
+    e.handle(moved(7, first_broker));
+    e.handle(give(8, out_write, StreamWriteObject::RIGHTS));
+    let base = alloc::format!("{base}");
+    for a in [&b"broker"[..], b"--time-base", base.as_bytes()] {
+        e.arg(a);
+    }
+    let length = e.finish()?;
+    let broker = spawn(&buffer[..length]).ok();
+    let _ = handle_close(image);
+    if broker.is_some() {
+        core::mem::forget(root);
+    }
+    Some(Session {
+        ttyd,
+        broker: (job, broker?),
+    })
+}
 
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
 /// terminal at slot 6. With a terminal the shell gets the console to write
@@ -180,8 +268,21 @@ fn main() -> i32 {
             }
         }
         let terminal: Option<(Running, Handle)> = gui.as_ref().and_then(start_terminal);
-        let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
-        let shell = start_shell(root, terminal.map(|t| t.1));
+        let wants_session = stack.as_ref().is_some_and(|s| {
+            s.root
+                .open("etc/zoraya/session", 0, zoraya_proto_file::rights::READ)
+                .is_ok()
+        });
+        let mut session = None;
+        let shell = if wants_session {
+            println!("init: /etc/zoraya/session: a POSIX session");
+            let root = &stack.as_ref().expect("a stack").root;
+            session = start_session(root, terminal.map(|t| t.1));
+            session.as_ref().map(|s| s.broker)
+        } else {
+            let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
+            start_shell(root, terminal.map(|t| t.1))
+        };
         let Some(shell) = shell else {
             println!("init: the shell did not start");
             if let Some(s) = stack.take() {
@@ -204,6 +305,9 @@ fn main() -> i32 {
             subscribe(port, t.process, KEY_TERMINAL);
         }
         subscribe(port, shell.1, KEY_SHELL);
+        if let Some(s) = &session {
+            subscribe(port, s.ttyd.1, KEY_TTYD);
+        }
         let ended = loop {
             let mut packets = [Packet::default()];
             port_wait(port, DEADLINE_INFINITE, &mut packets).expect("wait");
@@ -233,6 +337,13 @@ fn main() -> i32 {
                     }
                 }
                 KEY_COMPOSITOR | KEY_TERMINAL => break Ended::Gui,
+                KEY_TTYD => {
+                    let ttyd = session.as_ref().expect("a session").ttyd;
+                    let record = wait_exit(ttyd.1);
+                    println!("init: ttyd ended");
+                    end_job(shell);
+                    power_down(stack.as_ref().map(|s| &s.root), record);
+                }
                 _ => break Ended::Storage,
             }
             // ADR-0093, Decision: the compositor dropped a display driver
@@ -248,6 +359,9 @@ fn main() -> i32 {
             }
         };
         end_job(shell);
+        if let Some(s) = session.take() {
+            end_job(s.ttyd);
+        }
         if let Some((t, _)) = terminal {
             t.end();
         }

@@ -574,7 +574,8 @@ deterministic random mutations.
   and a flat wire format with total decoders. `blkd` and `fsd` serve them (TASK-13).
 - **`init` (`user/src/bin/init.rs`, ADR-0053).** The one process the kernel starts, with the console, its own job, the
   ramdisk directory, `Power` at slot 4 and `Device` handles from slot 5. It starts `zosh` in a sub-job with only what
-  the shell needs, and turns the machine off when the shell ends.
+  the shell needs, or, when the volume has `/etc/zoraya/session`, `ttyd` and the broker (stage 6d), and turns the
+  machine off when the shell or the session ends.
 - **Devices (`kernel/src/device.rs`, ADR-0054, ADR-0070).** One `Device` per page of `virtio,mmio` transports. A window
   has one holder at a time. An interrupt object masks its line when it fires, until `interrupt_ack`. `dma_pin` writes
   the object's physical runs as device addresses, and `dma_unpin` ends the pin and its handle. A pin that ends any
@@ -650,7 +651,8 @@ Stage 6c (TASK-20), on the accepted [ADR-0100](adr/0100-libposix-construction.md
   times and whether this open made it), `stat` (the volume's id, the object's id, exact times) and a listing with each
   entry's id (`read_directory_ids`), ordinals 23 to 33.
   No stage 4 request changed.
-- **The bootstrap record (ADR-0107).** `zoraya_abi::posix`: `ZPB1` with the process's facts, `umask`, cwd as an entry
+- **The bootstrap record (ADR-0107).** `zoraya_abi::posix`: `ZPB1` with the process's facts, `umask`, the ignored
+  set and the signal mask on entry (ADR-0190's Decision), the time base (ADR-0191), cwd as an entry
   and a path, each fd's kind and flags, and the namespace entries longest first with their handles in the message;
   the fixed slots `BOOTSTRAP`, `BROKER`, `PROCESS_JOB`, `SELF` and `REPORT` at 1000 to 1004; a second message brings
   `SELF`; `ZPR1` is a refused-path report (ADR-0153 rule 11). Both decoders are total.
@@ -683,11 +685,68 @@ read in 4 KiB and in 1 MiB calls), and the library's own count of the resolver's
 An `lseek` is one round trip, and `open` one plus a channel and a close; the resolver is a few per cent of an `open`.
 Writes are into `fsd`'s cache of dirty blocks; reads come from it.
 
+## Processes and the terminal (as built)
+
+Stage 6d (TASK-21), on the accepted [ADR-0102](adr/0102-snapshot-process.md) to
+[ADR-0108](adr/0108-programs-from-the-filesystem.md) and [ADR-0142](adr/0142-surface-for-dash-job-control.md),
+with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage-6d.md),
+[ADR-0191](adr/0191-one-time-base.md) (the time base) and [ADR-0192](adr/0192-snapshot-in-the-posix-tree.md)
+(`snapshot_process` into any `posix` job its handle allows), all accepted.
+
+- **The session.** When the root volume has `/etc/zoraya/session`, `init` starts `ttyd` and the broker instead of
+  `zosh` (ADR-0104 item 12): it makes the terminal's output stream and two channels, gives `ttyd` the read end and
+  the server ends with the console (or, with a GPU, the GUI terminal's channel), and the broker the write end, the
+  client ends, a root connection, its own `posix` job and the boot's time base. The broker starts `tmpd`
+  (`fsd --memory 16`), reads the session file (`command` and `env` lines, ADR-0190 item 8), and spawns the command
+  as pid 2 in a new group, in the foreground. The session ends when pid 2 is reaped and no other pid is live; the
+  broker prints `BROKER-STATS` and `init` turns the machine off.
+- **The broker (`crates/zoraya-broker`, `user/src/bin/broker.rs`).** The pid table, groups as jobs in the session
+  job, and `zoraya-proto-posix`'s requests, over a `Kernel` trait the host tests fake. A pid is never given twice;
+  `setpgid` never moves a process; `kill` is one `job_signal` on a group job, or each member by its stop record for
+  the stop signals. Orphans are the broker's. The mode with no first shell and `Group(job)` are in the logic and the
+  program (`--no-shell`); nothing starts that mode yet (TASK-18 Part 2).
+- **The terminal (`crates/zoraya-tty`, `user/src/bin/ttyd.rs`).** The line discipline (canonical, echo, ERASE, KILL,
+  EOF, `ICRNL`, `ONLCR`, INTR, QUIT, SUSP), connections tagged with a group, the foreground job, one held read per
+  connection. Ctrl-C is `job_signal(foreground, Interrupt)`; Ctrl-Z goes to the broker as `suspend`. Backends: the
+  serial console, and the stage 5 terminal window, to which `ttyd` speaks `zoraya-proto-term` as `zosh` does.
+- **The temporary directory service.** `fsd --memory MIB` over a `MemoryDevice`, with FIFO nodes: the service keeps
+  which objects are FIFOs (ADR-0190 item 4), and `fifo_open` (file ordinal 34) gives a stream end for a side, at
+  once, `ENXIO`, or held (INV-0006-9). Its clock is the boot's time base (`--base`).
+- **`libposix`'s process half.** `jobs.rs` (wait points, the broker's client, `waitpid`, the terminal read,
+  `inherit` and `fork_moves`), `signals.rs` (actions, mask, pending set), `wait.rs` (statuses), and `ffi/procs.rs`
+  (the C boundary: handlers between calls, `posix_spawn`, `execve` with `#!`, `fork` through `snapshot_process`,
+  `pselect`, `sigsuspend`, `nanosleep`, `kill`, the terminal's calls). fd 0's handle is at slot `FD0` (ADR-0190 item
+  1). `ZORAYA_POSIX_STATS` adds `POSIX-PROCESS` (the broker's round trips, forks); `ZORAYA_POSIX_DEBUG` says why a
+  fork, spawn or exec failed.
+- **Tests.** `make test-posix` boots `build/posix-session`'s image (the ports' root, `rootfs/`,
+  `tests/posix-session/rootfs`, `t_posix` and W10's files) and runs `session.script` (the plan's criterion),
+  `invariants.script` (`t_posix`'s checks) and `scenarios.script` (W9a, W9b, W10, the hostile cases) under HVF and
+  TCG; `make test-posix-gui` runs `gui.script` in the window.
+
+Measured on the M4 under QEMU 11.1.2, `make test-posix`'s `measure.script` (the normal kernel, 128 MiB), one run per
+accelerator: `ZORAYA_POSIX_STATS=1 t_posix bench` (20 each of `posix_spawn` and wait of a program that exits at
+once, `fork` and wait, `fork`, `exec` and wait) and `ZORAYA_POSIX_STATS=1 sh -c` with twenty subshells for dash's own
+fork; the broker's round trips are the library's count around each call (`POSIX-PROCESS`), means.
+
+| | HVF | TCG |
+|---|---|---|
+| `spawn_prepare` round trip (dash; `t_posix`) | 13 µs; 26 µs | 0.41 ms; 0.66 ms |
+| `spawn_commit` round trip (the new child runs first) | 0.47 to 0.89 ms | 2.0 ms |
+| `reap` round trip | 20 to 25 µs | 0.66 to 0.80 ms |
+| A fork of dash, in the parent; its `snapshot_process` | 1.32 ms; 0.36 ms | 12.9 ms; 8.5 ms |
+| `posix_spawn` and wait of a program exiting at once | 26 ms | 183 ms |
+| An `exec` (fork, exec and wait, less fork and wait) | 25 ms | 195 ms |
+
+An `exec` or a spawn is dominated by loading the image: the 1.4 MiB program read through the file protocol into a
+memory object, `image_create`, and `spawn`'s copy of its segments; nothing is cached between spawns of one program.
+A commit's time includes the child's first slice on the one CPU before the broker answers.
+
 ## Console input and the first process
 
 - **Console.** Raw bytes from the UART's receive interrupt, in a fixed ring (`crates/zoraya-console`), with a
   `READABLE` signal and `console_read`, which never blocks. The kernel has no line discipline (ADR-0060).
 - **First process.** `init` (ADR-0053). The kernel reports it and powers off if it ends.
+- **Line discipline.** Only in `ttyd` (ADR-0105, INV-0105-4: `make check-kernel-tty`).
 
 ## Using the GUI
 
@@ -821,11 +880,21 @@ or `exit` turns the machine off.
   installed with their debug information.
 - **CI.** The CI workflow (`.github/workflows/test.yml`) runs `make fetch-ports` and `make test` on Linux with TCG
   (the fetch step for `make test-libposix`'s `libc.a`, ADR-0109) and, in a second job, `make ports`.
-- **`libposix` (stage 6c).** Process functions, signals, the terminal, `/tmp` and FIFOs are 6d's and fail with
-  `ENOSYS`. A file read or write through a bad pointer faults the process instead of `EFAULT` (streams give
+- **`libposix` (stage 6c).** A file read or write through a bad pointer faults the process instead of `EFAULT` (streams give
   `EFAULT`); listings have no `.` or `..` (`d_ino` is the object's id, as `st_ino`); `O_TRUNC` of an existing non-empty file is a
-  second request; `CLOCK_REALTIME` is the monotonic clock `fsd` stamps files with; `st_blocks` comes from the size;
-  times before 1970 cannot be set (ADR-0180). `posixrun` is the only launcher of C programs until the broker, and only `zosh` names it.
+  second request; `st_blocks` comes from the size; times before 1970 cannot be set (ADR-0180).
+- **Processes and the terminal (stage 6d).** A blocked signal whose default terminates still ends the process
+  (ADR-0106 item 2); the mask itself is carried across `exec` and `posix_spawn` (ADR-0190's Decision). A stopped
+  child sends no `SIGCHLD` (ADR-0190 item 19). `pselect` reports a terminal ready at once (`poll_readable` is deferred, ADR-0105). Non-canonical
+  mode exists but nothing sets it; no `TOSTOP`, no `SIGTTOU`. The shell's fds 0 to 2 are three descriptions (ADR-0190
+  item 7). A FIFO fd passed by `spawn` is not counted as a side by `tmpd` (item 12), and a FIFO opened after its
+  writers left gets a fresh pair (ADR-0107 item 15). `execl` takes six arguments after `arg0` (item 13). `fork`
+  copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
+  memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). `zosh` does
+  not run POSIX programs yet (TASK-18 Part 2); a POSIX session and `zosh` do not share the console. Dates are the
+  root volume's (ADR-0191), not a clock's. In the GUI window under TCG, a burst of more than about 16 keys typed
+  through QMP loses its tail on the way to `ttyd`: a bug, in `docs/backlog.md`, to be fixed before stage 7b;
+  `make test-posix-gui` types lines of at most 16 keys.
 
 ## Roadmap
 
@@ -847,7 +916,7 @@ or `exit` turns the machine off.
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
 LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md), ports/patches/ and ports/musl/zoraya/ (ports/README.md)
-Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-libposix, test-crash, test-gui, test, adr-check,
+Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-libposix, test-posix, test-posix-gui, test-crash, test-gui, test, adr-check,
                           fetch-ports, ports, check-ports
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
@@ -900,6 +969,9 @@ crates/                   no_std, host-tested
                           of ADR-0091, and a device-side fake (feature `fake`)
   zoraya-virtio-gpu/, zoraya-virtio-input/  the GPU and input drivers' logic (ADR-0090, ADR-0092)
   zoraya-proto-display/, zoraya-proto-input/, zoraya-proto-gui/, zoraya-proto-term/  the GUI's protocols
+  zoraya-proto-posix/, zoraya-proto-tty/  the broker's and the terminal's protocols (ADR-0104, ADR-0105)
+  zoraya-broker/          the broker's logic: pids, groups, kill, the session file
+  zoraya-tty/             the terminal's logic: line discipline, connections, foreground
   zoraya-keymap/          key codes to text, the US layout (ADR-0092)
   zoraya-font/            Zoraya's bitmap font, its renderer and exact reader (ADR-0095)
   zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering (ADR-0096)
@@ -907,13 +979,16 @@ crates/                   no_std, host-tested
   zoraya-posix/           the Rust half of libposix (ADR-0100): resolver, fd table, errno, the file functions; ffi.rs
                           is the C boundary in libc.a; tests/kernel is a fake kernel over the real fs-service
 user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, compd,
-                          term, posixrun (the launcher of C programs, stage 6c), test programs
+                          term, posixrun (the launcher of C programs, stage 6c), broker and ttyd (the POSIX
+                          session, stage 6d), test programs
   src/stack.rs            starts the driver and the service
   src/gui.rs              scans device pages, starts and restarts the GUI (init and t_gui)
 rootfs/                   the first contents of build/disk.img
 tests/shell/              scripts the runner plays on the serial line
 tests/gui/                the GUI script the runner plays over QMP
 tests/posix-core/         stage 6c's C criterion program and the script make test-libposix plays
+tests/posix-session/      stage 6d's session: its root (/etc/zoraya/session, /home, W9's makefiles), t_posix.c, and
+                          the scripts make test-posix and make test-posix-gui play
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures

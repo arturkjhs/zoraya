@@ -4,25 +4,35 @@
 //! The filesystem service (ADR-0055) as a process: one volume, one thread.
 //! Slot 5 is the channel to the driver, slot 6 the end of the root connection,
 //! slot 7 the supervisor channel.
+//!
+//! `fsd --memory MIB` is the temporary directory service (ADR-0107 item 12):
+//! a fresh volume of that size in memory, with FIFO nodes, and no driver;
+//! slot 6 is the root connection's end and slot 7, when present, the
+//! supervisor channel.
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, EventObject, Handle, MapFlags, MemoryFlags, MemoryObject,
-    Mode, ObjectType, Packet, Status, channel_signals,
+    Mode, ObjectType, Packet, Rights, Status, StreamReadObject, StreamWriteObject, channel_signals,
 };
-use zoraya_fs::{Clock, MountOptions, Timestamp, Volume};
+use zoraya_fs::{Clock, MkfsOptions, MountOptions, Timestamp, Volume, mkfs};
 use zoraya_fs_service::block::{ChannelDevice, Link, LinkError};
-use zoraya_fs_service::{HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake};
+use zoraya_fs_service::memory::MemoryDevice;
+use zoraya_fs_service::{
+    Device, HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake, time_base,
+    wall_time,
+};
 use zoraya_proto_block as blk;
 use zoraya_proto_file::Failure;
 use zoraya_protocol::{Below, decode, encode};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, event_create, handle_duplicate, handle_type,
     memory_create, memory_map, memory_unmap, object_same, port_create, port_subscribe,
-    port_unsubscribe, port_wait, println,
+    port_unsubscribe, port_wait, println, startup, stream_create,
 };
 
 extern crate alloc;
@@ -59,15 +69,17 @@ impl Link for DriverLink {
     }
 }
 
+/// The boot's time base (ADR-0191): the root volume's service sets it from
+/// its volume at mount, a temporary one from `--base`.
+static BASE: AtomicU64 = AtomicU64::new(0);
+
 struct Time;
 
 impl Clock for Time {
     fn wall(&mut self) -> Timestamp {
-        // No device gives a date (ADR-0080): the engine keeps times rising.
-        Timestamp {
-            secs: (clock_monotonic() / 1_000_000_000) as i64,
-            nanos: 0,
-        }
+        // No device gives a date (ADR-0080): one base for the boot, plus the
+        // monotonic clock; the engine still keeps times rising.
+        wall_time(BASE.load(Ordering::Relaxed), clock_monotonic())
     }
 
     fn monotonic_ns(&mut self) -> u64 {
@@ -75,9 +87,20 @@ impl Clock for Time {
     }
 }
 
+/// The rights a handle keeps when it is moved or duplicated: a stream end's
+/// own, else a token's (the only other kind this service hands out).
+fn rights_of(h: Handle) -> Rights {
+    match handle_type(h) {
+        Ok("stream-read") => StreamReadObject::RIGHTS,
+        Ok("stream-write") => StreamWriteObject::RIGHTS,
+        _ => EventObject::RIGHTS,
+    }
+}
+
 struct Kernel {
     port: Handle,
-    supervisor: Handle,
+    /// `None` for a temporary service started with no supervisor.
+    supervisor: Option<Handle>,
     /// Which keys hold a subscription.
     subscribed: Vec<u64>,
 }
@@ -107,6 +130,7 @@ impl Transport for Kernel {
         let list = match handles.first() {
             Some(handle) => {
                 entries[0].handle = *handle;
+                entries[0].rights = rights_of(*handle);
                 &entries[..1]
             }
             None => &entries[..0],
@@ -151,7 +175,11 @@ impl Transport for Kernel {
     }
 
     fn duplicate(&mut self, end: Handle) -> Option<Handle> {
-        handle_duplicate(end, EventObject::RIGHTS).ok()
+        handle_duplicate(end, rights_of(end)).ok()
+    }
+
+    fn stream(&mut self) -> Option<(Handle, Handle)> {
+        stream_create().ok()
     }
 
     fn new_token(&mut self) -> Option<Handle> {
@@ -194,8 +222,10 @@ impl Transport for Kernel {
         };
         // A report that cannot be sent would leave `init` waiting on a
         // volume that has failed: ending the service is a report it hears.
-        let sent = encode(&m, 0, &mut out)
-            .is_ok_and(|length| channel_write(self.supervisor, &out[..length], &[]).is_ok());
+        let sent = self.supervisor.is_some_and(|supervisor| {
+            encode(&m, 0, &mut out)
+                .is_ok_and(|length| channel_write(supervisor, &out[..length], &[]).is_ok())
+        });
         if !sent {
             println!("fsd: the report did not go: ending");
             zoraya_user::process_exit(1);
@@ -226,8 +256,83 @@ fn slot(n: u64) -> Handle {
     Handle::new(n).expect("slot is not zero")
 }
 
+/// Serves the volume until every connection is gone.
+fn serve<D: Device>(volume: Volume<D, Time>, kernel: Kernel, root: Handle, fifos: bool) -> i32 {
+    let mut service = Box::new(Service::new(volume, kernel));
+    service.set_time_base(BASE.load(Ordering::Relaxed));
+    if fifos {
+        service.enable_fifos();
+    }
+    if !service.add_root(root) {
+        println!("fsd: the root connection cannot be served");
+        return 1;
+    }
+    service.run();
+    0
+}
+
+/// The value after `name` among the arguments, as a number.
+fn option(name: &[u8]) -> Option<u64> {
+    let mut argv = startup().argv;
+    while let Some(a) = argv.next() {
+        if a == name {
+            return core::str::from_utf8(argv.next()?).ok()?.parse().ok();
+        }
+    }
+    None
+}
+
+/// `--memory MIB`: the size of the temporary volume, if the option is there.
+fn memory_option() -> Option<u64> {
+    option(b"--memory").map(|mib| mib.clamp(1, 1024) << 20)
+}
+
+/// The temporary directory service: a fresh volume in memory (ADR-0107
+/// item 12), the root world-writable and sticky as `/tmp` is.
+fn temporary(size: u64) -> i32 {
+    // The boot's base, from whoever started this service (ADR-0191).
+    BASE.store(option(b"--base").unwrap_or(0), Ordering::Relaxed);
+    let root = slot(6);
+    let supervisor = slot(7);
+    let supervisor = handle_type(supervisor).is_ok().then_some(supervisor);
+    let Ok(memory) = memory_create(size, MemoryFlags::NONE) else {
+        println!("fsd: no memory for a {} MiB volume", size >> 20);
+        return 1;
+    };
+    let address = memory_map(memory, 0, size, MapFlags::WRITE).expect("map");
+    // SAFETY: this process's mapping of `size` bytes, kept for its life and
+    // touched by nothing but the device made over it here.
+    let bytes = unsafe { core::slice::from_raw_parts_mut(address as *mut u8, size as usize) };
+    let mut device = MemoryDevice::new(bytes);
+    let options = MkfsOptions {
+        volume_id: clock_monotonic() | 1,
+        now: Time.wall(),
+        root_mode: 0o1777,
+    };
+    if let Err(e) = mkfs(&mut device, options) {
+        println!("fsd: mkfs: {e:?}");
+        return 1;
+    }
+    let volume = match Volume::mount(device, Time, MountOptions::default()) {
+        Ok(volume) => volume,
+        Err(e) => {
+            println!("fsd: mount: {e:?}");
+            return 1;
+        }
+    };
+    let kernel = Kernel {
+        port: port_create().expect("port"),
+        supervisor,
+        subscribed: Vec::new(),
+    };
+    serve(volume, kernel, root, true)
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
+    if let Some(size) = memory_option() {
+        return temporary(size);
+    }
     let driver = slot(5);
     let root = slot(6);
     let supervisor = slot(7);
@@ -273,6 +378,9 @@ fn main() -> i32 {
             return 1;
         }
     };
+    // The root volume's service sets the boot's base (ADR-0191).
+    let latest = volume.last_assigned();
+    BASE.store(time_base(latest, clock_monotonic()), Ordering::Relaxed);
     let port = port_create().expect("port");
     port_subscribe(
         port,
@@ -284,14 +392,8 @@ fn main() -> i32 {
     .expect("subscribe");
     let kernel = Kernel {
         port,
-        supervisor,
+        supervisor: Some(supervisor),
         subscribed: Vec::new(),
     };
-    let mut service = Box::new(Service::new(volume, kernel));
-    if !service.add_root(root) {
-        println!("fsd: the root connection cannot be served");
-        return 1;
-    }
-    service.run();
-    0
+    serve(volume, kernel, root, false)
 }

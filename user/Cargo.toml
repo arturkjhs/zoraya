@@ -32,6 +32,10 @@ zoraya-compositor = { path = "../crates/zoraya-compositor" }
 zoraya-keymap = { path = "../crates/zoraya-keymap" }
 zoraya-font = { path = "../crates/zoraya-font" }
 zoraya-term = { path = "../crates/zoraya-term" }
+zoraya-broker = { path = "../crates/zoraya-broker" }
+zoraya-proto-posix = { path = "../crates/zoraya-proto-posix" }
+zoraya-proto-tty = { path = "../crates/zoraya-proto-tty" }
+zoraya-tty = { path = "../crates/zoraya-tty" }
 
 [lints]
 workspace = true
@@ -371,5 +375,15 @@ bench = false
 
 [[bin]]
 name = "posixrun"
+test = false
+bench = false
+
+[[bin]]
+name = "broker"
+test = false
+bench = false
+
+[[bin]]
+name = "ttyd"
 test = false
 bench = false

@@ -933,7 +933,11 @@ impl Handlers for Calls<'_> {
         let bytes = UserSlice::of(args.0)?.read()?;
         let request = SnapshotRequest::decode(&bytes)?;
         let job = self.job(request.job, Rights::CREATE_PROCESS)?;
-        if !job.is_within(self.process.job()) {
+        // As `spawn`, the handle's `CREATE_PROCESS` is the authority; the
+        // caller's job has the `posix` bit (`dispatch`) and so must the
+        // target's, so a copy never lands outside POSIX (ADR-0192). A fork
+        // child's process job sits beside its parent's (ADR-0104).
+        if !job.is_posix() {
             return Err(Status::AccessDenied);
         }
         let job = match request.group {

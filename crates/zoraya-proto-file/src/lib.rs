@@ -388,6 +388,26 @@ protocol! {
         entries: Seq<'a, IdEntry<'a>, MAX_ENTRIES>,
     }
 
+    /// On a connection to a FIFO node of the temporary directory service
+    /// (ADR-0107 item 14): a stream end for one side, answered at once for
+    /// a read side with `nonblock`, refused with `NOT_FOUND` (`ENXIO`) for
+    /// a write side with `nonblock` while no reader is there, and otherwise
+    /// held until the other side has a connection. `UNSUPPORTED` from a
+    /// service with no FIFOs, `INVALID_ARGUMENT` on an object that is not
+    /// one; failures are the generic error reply.
+    message FifoOpen = 34, handles 0 {
+        /// `fifo_side::READ` or `fifo_side::WRITE`.
+        side: Below<2>,
+        nonblock: Below<2>,
+    }
+    message FifoOpenReply = 34, handles 1 {
+        status: Code,
+    }
+
+    /// The boot's time base in `Done`'s count (ADR-0191): nanoseconds that
+    /// the service adds to the monotonic clock for the times it assigns.
+    message TimeBase = 35, handles 0 {}
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -395,7 +415,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 33] = [
+pub const REQUESTS: [(&str, u32); 35] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -429,7 +449,21 @@ pub const REQUESTS: [(&str, u32); 33] = [
     ("write_buffer_current", 31),
     ("stat", 32),
     ("read_directory_ids", 33),
+    ("fifo_open", 34),
+    ("time_base", 35),
 ];
+
+/// `fifo_open`'s side.
+pub mod fifo_side {
+    pub const READ: u32 = 0;
+    pub const WRITE: u32 = 1;
+}
+
+/// The type bits of a FIFO's `posix_mode` (`S_IFIFO`), which the temporary
+/// directory service gives their meaning (ADR-0107 item 13).
+pub const S_IFIFO: u32 = 0o010000;
+/// The type bits' mask (`S_IFMT`).
+pub const S_IFMT: u32 = 0o170000;
 
 #[cfg(test)]
 extern crate std;
@@ -553,6 +587,20 @@ mod tests {
         check(GetFlags {}, 0);
         check(Stat {}, 0);
         check(ReadDirectoryIds { cookie: 9 }, 0);
+        check(
+            FifoOpen {
+                side: Below(fifo_side::WRITE),
+                nonblock: Below(1),
+            },
+            0,
+        );
+        check(TimeBase {}, 0);
+        check(
+            FifoOpenReply {
+                status: Below(status::OK),
+            },
+            1,
+        );
         check(
             StatReply {
                 status: Below(0),

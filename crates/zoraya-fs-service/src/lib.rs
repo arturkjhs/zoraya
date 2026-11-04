@@ -11,7 +11,9 @@ extern crate alloc;
 extern crate std;
 
 pub mod block;
+pub mod memory;
 
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -134,6 +136,11 @@ pub trait Transport {
     /// Waits for work, up to the monotonic time `deadline`.
     fn wait(&mut self, deadline: Option<u64>) -> Wake;
     fn now(&mut self) -> u64;
+    /// A byte stream's two ends, read end first (ADR-0101), for a FIFO.
+    /// A service with no FIFOs never asks.
+    fn stream(&mut self) -> Option<(Self::End, Self::End)> {
+        None
+    }
 }
 
 /// The device a service runs on: lost for good once the driver is.
@@ -156,6 +163,17 @@ impl<L: block::Link> Device for block::ChannelDevice<L> {
 /// (INV-0055-9). It is the open description of ADR-0103: `share` attaches
 /// another connection to it, and every connection of it sees one position
 /// and one append flag.
+/// A FIFO node's streams and its open sides (ADR-0107 items 14 and 15).
+/// The service holds its own end of each side while that side has a
+/// connection, so that the other side sees an end only when the last one
+/// goes.
+struct Fifo<E> {
+    read: Option<E>,
+    write: Option<E>,
+    readers: u32,
+    writers: u32,
+}
+
 struct Record {
     handle: Handle,
     connections: u32,
@@ -189,11 +207,26 @@ struct Connection<E> {
     held: Option<HeldReply<E>>,
     /// The name `read_directory` goes on from, and its cookie.
     position: Option<(u64, String)>,
+    /// A FIFO side this connection opened: the object and the side.
+    fifo: Option<(u64, u32)>,
+    /// A `fifo_open` held until the other side comes (its transaction).
+    opening: Option<u32>,
 }
 
 pub struct Service<D: Device, C: Clock, T: Transport> {
     volume: Volume<D, C>,
     transport: T,
+    /// The FIFO nodes of a temporary directory service, by object id; `None`
+    /// on a volume whose type bits are stored verbatim (ADR-0107).
+    fifos: Option<BTreeMap<u64, Fifo<T::End>>>,
+    /// The objects made as FIFOs. ADR-0014's format holds 12 mode bits, so
+    /// the type bits ADR-0107 item 13 puts in `posix_mode` stay here, in the
+    /// service of a volume that lives no longer than it (ADR-0190).
+    fifo_nodes: BTreeSet<u64>,
+    /// The `open_with_mode` being served makes a FIFO if it creates.
+    fifo_create: bool,
+    /// What `time_base` answers (ADR-0191).
+    time_base: u64,
     connections: Vec<Option<Connection<T::End>>>,
     records: Vec<Option<Record>>,
     /// Handles held for clients (ADR-0055).
@@ -248,6 +281,26 @@ fn nanoseconds(t: Timestamp) -> u64 {
         .saturating_add(u64::from(t.nanos))
 }
 
+/// The boot's time base from the root volume (ADR-0191): the latest time the
+/// volume holds, less the monotonic clock now, so that the base plus the
+/// monotonic clock goes on from that time and never falls below it. A
+/// volume made before 1970 or by a clock ahead of this one gives 0 at
+/// least.
+pub fn time_base(latest: Timestamp, monotonic_ns: u64) -> u64 {
+    nanoseconds(latest)
+        .saturating_add(1)
+        .saturating_sub(monotonic_ns)
+}
+
+/// The wall clock of a service on the boot's time base.
+pub fn wall_time(base: u64, monotonic_ns: u64) -> Timestamp {
+    let t = base.saturating_add(monotonic_ns);
+    Timestamp {
+        secs: (t / 1_000_000_000) as i64,
+        nanos: (t % 1_000_000_000) as u32,
+    }
+}
+
 fn failure_code(reason: FailReason) -> u32 {
     use proto::failure::*;
     match reason {
@@ -265,6 +318,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         Service {
             volume,
             transport,
+            fifos: None,
+            fifo_nodes: BTreeSet::new(),
+            fifo_create: false,
+            time_base: 0,
             connections: Vec::new(),
             records: Vec::new(),
             open: 0,
@@ -279,6 +336,32 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             data: vec![0; proto::MAX_INLINE],
             handles: Vec::with_capacity(64),
         }
+    }
+
+    /// The time base `time_base` gives (ADR-0191).
+    pub fn set_time_base(&mut self, base: u64) {
+        self.time_base = base;
+    }
+
+    /// Gives `S_IFIFO` its meaning: `fifo_open` (the temporary directory
+    /// service, ADR-0107 item 14).
+    pub fn enable_fifos(&mut self) {
+        self.fifos = Some(BTreeMap::new());
+    }
+
+    /// The FIFO nodes with an open side, for tests.
+    pub fn open_fifos(&self) -> usize {
+        self.fifos.as_ref().map_or(0, BTreeMap::len)
+    }
+
+    /// The mode a reply gives: the stored bits, and `S_IFIFO` for a FIFO.
+    fn reported_mode(&self, a: &Attr) -> u32 {
+        let fifo = if self.fifo_nodes.contains(&a.id) {
+            proto::S_IFIFO
+        } else {
+            0
+        };
+        u32::from(a.posix_mode) | fifo
     }
 
     pub fn transport(&mut self) -> &mut T {
@@ -330,6 +413,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             token: None,
             held: None,
             position: None,
+            fifo: None,
+            opening: None,
         };
         if let Some(r) = self.records[record].as_mut() {
             r.connections += 1;
@@ -394,6 +479,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.transport.close(handle);
                 self.open -= 1;
             }
+        }
+        if let Some((id, side)) = c.fifo.take() {
+            self.fifo_closed(id, side);
         }
         let last = match self.records.get_mut(c.record).and_then(Option::as_mut) {
             Some(r) => {
@@ -800,7 +888,15 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             27 => {
                 let (_, m) = decode::<proto::OpenWithMode<'_>>(bytes, n)?;
-                let Ok(mode) = u16::try_from(m.mode) else {
+                // A FIFO's type bits are the temporary service's to keep;
+                // every other type bit is refused, as before.
+                let fifo = self.fifos.is_some() && m.mode & proto::S_IFMT == proto::S_IFIFO;
+                let bits = if fifo {
+                    m.mode & !proto::S_IFMT
+                } else {
+                    m.mode
+                };
+                let Ok(mode) = u16::try_from(bits) else {
                     let s = status::INVALID_ARGUMENT;
                     self.open_answer(i, t, true, s, ("", ""), None);
                     return Ok(());
@@ -810,7 +906,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                     rights: m.rights,
                     path: m.path,
                 };
+                self.fifo_create = fifo;
                 self.open_as(i, t, &open, mode, m.description.0, true, handles);
+                self.fifo_create = false;
             }
             28 => {
                 let (_, m) = decode::<proto::ReadCurrent>(bytes, n)?;
@@ -836,6 +934,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 let (_, m) = decode::<proto::ReadDirectoryIds>(bytes, n)?;
                 self.read_directory(i, t, m.cookie, true);
             }
+            34 => {
+                let (_, m) = decode::<proto::FifoOpen>(bytes, n)?;
+                self.fifo_open(i, t, m.side.0, m.nonblock.0 == 1);
+            }
+            35 => {
+                decode::<proto::TimeBase>(bytes, n)?;
+                self.done(i, t, status::OK, self.time_base);
+            }
             ERROR_ORDINAL..=u32::MAX => {
                 let m = ErrorReply {
                     status: status::UNSUPPORTED,
@@ -844,6 +950,201 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
         }
         Ok(())
+    }
+
+    fn error_reply(&mut self, i: usize, t: u32, s: u32) {
+        self.reply(i, t, &ErrorReply { status: s });
+    }
+
+    /// `fifo_open` (ADR-0107 item 14, INV-0006-9).
+    fn fifo_open(&mut self, i: usize, t: u32, side: u32, nonblock: bool) {
+        use proto::fifo_side::{READ, WRITE};
+        if self.fifos.is_none() {
+            return self.error_reply(i, t, status::UNSUPPORTED);
+        }
+        if self.connections[i]
+            .as_ref()
+            .is_some_and(|c| c.fifo.is_some())
+        {
+            return self.error_reply(i, t, status::INVALID_ARGUMENT);
+        }
+        let Some(handle) = self.handle_of(i) else {
+            return self.error_reply(i, t, status::STORAGE_FAILED);
+        };
+        let attr = self.volume.stat(handle);
+        self.after_engine();
+        let id = match attr {
+            Ok(a) if self.fifo_nodes.contains(&a.id) => a.id,
+            Ok(_) => return self.error_reply(i, t, status::INVALID_ARGUMENT),
+            Err(e) => {
+                let s = self.engine_status(&e);
+                return self.error_reply(i, t, s);
+            }
+        };
+        let right = if side == READ {
+            proto::rights::READ
+        } else {
+            proto::rights::WRITE
+        };
+        if !self.has(i, right) {
+            return self.error_reply(i, t, status::ACCESS_DENIED);
+        }
+        // The reply's end, and a fresh pair, take places in the table.
+        if self.open + 3 > MAX_OPEN {
+            return self.error_reply(i, t, status::TOO_MANY_OPEN);
+        }
+        let Some(fifos) = self.fifos.as_mut() else {
+            return;
+        };
+        let f = fifos.entry(id).or_insert(Fifo {
+            read: None,
+            write: None,
+            readers: 0,
+            writers: 0,
+        });
+        if side == WRITE && nonblock && f.readers == 0 {
+            // ENXIO: no reader (POSIX's open of a FIFO).
+            if f.read.is_none() && f.write.is_none() {
+                fifos.remove(&id);
+            }
+            return self.error_reply(i, t, status::NOT_FOUND);
+        }
+        // A side whose end was dropped starts a fresh pair (item 15).
+        let present = if side == READ {
+            f.read.is_some()
+        } else {
+            f.write.is_some()
+        };
+        if !present {
+            let old = (f.read.take(), f.write.take());
+            let Some((r, w)) = self.transport.stream() else {
+                if let Some(fifos) = self.fifos.as_mut()
+                    && let Some(f) = fifos.get_mut(&id)
+                {
+                    (f.read, f.write) = old;
+                    if f.read.is_none() && f.write.is_none() {
+                        fifos.remove(&id);
+                    }
+                }
+                return self.error_reply(i, t, status::LIMIT_REACHED);
+            };
+            for e in [old.0, old.1].into_iter().flatten() {
+                self.transport.close(e);
+                self.open -= 1;
+            }
+            self.open += 2;
+            if let Some(f) = self.fifos.as_mut().and_then(|x| x.get_mut(&id)) {
+                f.read = Some(r);
+                f.write = Some(w);
+            }
+        }
+        let Some(f) = self.fifos.as_mut().and_then(|x| x.get_mut(&id)) else {
+            return;
+        };
+        if side == READ {
+            f.readers += 1;
+        } else {
+            f.writers += 1;
+        }
+        let now = if side == READ {
+            nonblock || f.writers > 0
+        } else {
+            f.readers > 0
+        };
+        if let Some(c) = self.connections[i].as_mut() {
+            c.fifo = Some((id, side));
+            if !now {
+                c.opening = Some(t);
+            }
+        }
+        if now {
+            self.fifo_answer(i, t);
+        }
+        self.fifo_wake(id);
+    }
+
+    /// The reply to a `fifo_open`: a duplicate of the side's end.
+    fn fifo_answer(&mut self, i: usize, t: u32) {
+        use proto::fifo_side::READ;
+        let Some((id, side)) = self.connections[i].as_ref().and_then(|c| c.fifo) else {
+            return;
+        };
+        let end = self
+            .fifos
+            .as_ref()
+            .and_then(|x| x.get(&id))
+            .and_then(|f| if side == READ { f.read } else { f.write });
+        let dup = end.and_then(|e| self.transport.duplicate(e));
+        let Some(dup) = dup else {
+            return self.error_reply(i, t, status::LIMIT_REACHED);
+        };
+        self.open += 1;
+        let m = proto::FifoOpenReply {
+            status: code(status::OK),
+        };
+        match encode(&m, t, &mut self.output) {
+            Ok(length) => self.send(i, length, &[dup]),
+            Err(_) => {
+                self.drop_handles(&[dup]);
+                self.close_connection(i);
+            }
+        }
+    }
+
+    /// Answers the held opens of FIFO `id` whose other side is there now.
+    fn fifo_wake(&mut self, id: u64) {
+        use proto::fifo_side::READ;
+        let Some(f) = self.fifos.as_ref().and_then(|x| x.get(&id)) else {
+            return;
+        };
+        let (readers, writers) = (f.readers, f.writers);
+        for index in 0..self.connections.len() {
+            let ready = self.connections[index].as_mut().and_then(|c| match c.fifo {
+                Some((fid, side)) if fid == id => {
+                    let other = if side == READ { writers } else { readers };
+                    if other > 0 { c.opening.take() } else { None }
+                }
+                _ => None,
+            });
+            if let Some(t) = ready {
+                self.fifo_answer(index, t);
+            }
+        }
+    }
+
+    /// A connection that had opened a side of FIFO `id` is gone (ADR-0107
+    /// item 15): the last writer's going drops the service's write end, so
+    /// readers see end of file; the last reader's drops the read end, so
+    /// writers see `PeerClosed`.
+    fn fifo_closed(&mut self, id: u64, side: u32) {
+        use proto::fifo_side::READ;
+        let Some(fifos) = self.fifos.as_mut() else {
+            return;
+        };
+        let Some(f) = fifos.get_mut(&id) else {
+            return;
+        };
+        let mut drop = Vec::new();
+        if side == READ {
+            f.readers -= 1;
+            if f.readers == 0 {
+                drop.extend(f.read.take());
+            }
+        } else {
+            f.writers -= 1;
+            if f.writers == 0 {
+                drop.extend(f.write.take());
+            }
+        }
+        if f.readers == 0 && f.writers == 0 {
+            drop.extend(f.read.take());
+            drop.extend(f.write.take());
+            fifos.remove(&id);
+        }
+        for e in drop {
+            self.transport.close(e);
+            self.open -= 1;
+        }
     }
 
     fn denied(&mut self, i: usize, t: u32) -> Result<(), zoraya_protocol::WireError> {
@@ -990,6 +1291,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Some(_) => status::OK,
             None => status::LIMIT_REACHED,
         };
+        if self.fifo_create
+            && let Some(a) = attr.filter(|a| a.id >= first_new)
+        {
+            self.fifo_nodes.insert(a.id);
+        }
         let made = attr.map(|a| (a.id >= first_new, a));
         self.open_answer(i, t, full, s, ("", ""), made.filter(|_| s == status::OK));
     }
@@ -1025,7 +1331,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             modified_nanos: a.map_or(0, |a| a.mtime.nanos),
             changed_seconds: a.map_or(0, |a| a.ctime.secs as u64),
             changed_nanos: a.map_or(0, |a| a.ctime.nanos),
-            mode: a.map_or(0, |a| u32::from(a.posix_mode)),
+            mode: a.map_or(0, |a| self.reported_mode(&a)),
             kind: a.map_or(Below(0), |a| wire_kind(a.kind)),
         };
         self.reply(i, t, &m);
@@ -1249,7 +1555,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 size: a.size,
                 modified: nanoseconds(a.mtime),
                 changed: nanoseconds(a.ctime),
-                mode: u32::from(a.posix_mode),
+                mode: self.reported_mode(&a),
                 kind: wire_kind(a.kind),
             },
             Err(e) => proto::Attributes {
@@ -1591,7 +1897,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 modified_nanos: a.mtime.nanos,
                 changed_seconds: a.ctime.secs as u64,
                 changed_nanos: a.ctime.nanos,
-                mode: u32::from(a.posix_mode),
+                mode: self.reported_mode(&a),
                 kind: wire_kind(a.kind),
             },
             Err(e) => proto::StatReply {

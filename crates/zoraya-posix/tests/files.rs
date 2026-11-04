@@ -1438,3 +1438,44 @@ fn only_files_and_directories_are_objects() {
     assert!(!r.p.is_object(rd) && !r.p.is_object(wr) && !r.p.is_object(null));
     assert!(!r.p.is_object(99));
 }
+
+/// INV-0106-2's host half: the file paths take no request, and a library
+/// entry polls only once a handler is installed or a pending signal is let
+/// through.
+#[test]
+fn no_request_is_taken_on_the_file_paths_and_polls_wait_for_a_handler() {
+    use zoraya_posix::signals::{Action, SIG_BLOCK, SIG_UNBLOCK, bit};
+    let mut r = rig();
+    assert!(!r.p.should_poll());
+    for _ in 0..5 {
+        let fd = open(&mut r, "/f.txt", o::RDWR | o::CREAT, 0o644).unwrap();
+        assert_eq!(r.write(fd, b"data"), Ok(4));
+        assert_eq!(r.p.lseek(fd, 0, 0), Ok(0));
+        assert_eq!(r.read(fd, 4).unwrap(), b"data");
+        r.p.fstat(fd).unwrap();
+        r.p.close(fd).unwrap();
+        let (a, b) = r.p.pipe(0).unwrap();
+        r.p.close(a).unwrap();
+        r.p.close(b).unwrap();
+    }
+    assert_eq!(r.p.stats.takes, 0);
+    assert_eq!(r.p.stats.broker, 0, "INV-0104-5: no broker message either");
+    assert!(!r.p.should_poll());
+    // An ignored action is no reason to poll; a handler is.
+    r.p.signals.set(10, Some(Action::IGNORE)).unwrap();
+    assert!(!r.p.should_poll());
+    let handler = Action {
+        handler: 0x4000,
+        mask: 0,
+        flags: 0,
+    };
+    r.p.signals.set(10, Some(handler)).unwrap();
+    assert!(r.p.should_poll());
+    r.p.signals.set(10, Some(Action::DEFAULT)).unwrap();
+    // A pending signal polls once its block is lifted, not before.
+    r.p.signals.mask(SIG_BLOCK, Some(bit(15))).unwrap();
+    r.p.signals.pending |= bit(15);
+    assert!(!r.p.should_poll());
+    r.p.signals.mask(SIG_UNBLOCK, Some(bit(15))).unwrap();
+    assert!(r.p.should_poll());
+}
