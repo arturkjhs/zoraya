@@ -287,6 +287,20 @@ impl Z {
         Ok(())
     }
 
+    /// Writes `path` whole as a new unnamed file and publishes it over the
+    /// old one in one commit (ADR-0157 item 4, ADR-0010 rule 7): a crash
+    /// leaves the old file or the new, never a part.
+    fn publish_file(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        let abs = self.abs(path);
+        let (dir, name) = split_last(&abs);
+        let dir = self.open(dir, OPEN_DIRECTORY).map_err(problem)?;
+        let file = dir.create_unnamed().map_err(problem)?;
+        if !bytes.is_empty() {
+            file.write(0, 0, bytes).map_err(problem)?;
+        }
+        file.publish(&dir, name).map_err(problem)
+    }
+
     fn description(&mut self, name: &str) -> Option<Rc<Description>> {
         if let Some(d) = self.descriptions.get(name) {
             return Some(d.clone());
@@ -989,7 +1003,7 @@ impl Z {
 
     /// Writes the settings file and applies it at once (ADR-0157 item 4).
     fn write_settings(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.write_file(SETTINGS, bytes)?;
+        self.publish_file(SETTINGS, bytes)?;
         self.settings = zoraya_settings::read(bytes, &self.declared);
         Ok(())
     }

@@ -772,9 +772,8 @@ Step 12: `reboot` (ADR-0159).
   are no streams, so `|`, a program's redirection and `$(...)` of a program are refused with a message, and keys
   typed while a program runs reach nobody but Ctrl-C and Ctrl-\\. The file commands are builtins with the shell's
   own access until step 7, and `grants` says so. A line wider than the terminal is drawn again on a new row when
-  edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` rewrites
-  `/config/settings` in place, not by publishing a new file (ADR-0157's open questions), and `/config/history` is
-  rewritten after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
+  edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` publishes
+  a new `/config/settings` (ADR-0157 item 4); `/config/history` is rewritten in place after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
   ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). The third Ctrl-C kills a job, as before
   ADR-0158 (step 9). `reboot` is not available (ADR-0159, proposed).
 - **GUI.** Programs started from `zosh` in the window print to the serial console: they have no byte stream to inherit

@@ -2144,3 +2144,99 @@ fn a_page_of_the_longest_names_is_full() {
     assert_eq!(m.entries.iter().count(), proto::MAX_ENTRIES);
     assert!(m.entries.iter().all(|e| e.name.0.len() == 255));
 }
+
+fn narrow(r: &mut Rig, dir: End, name: &str, wanted: u32) -> (u32, End) {
+    let end = r.net.channel();
+    let m = proto::Narrow {
+        rights: Flags(wanted),
+        name: Name(name),
+    };
+    (r.done(dir, &m, vec![end]).0, end)
+}
+
+/// ADR-0055's note (ADR-0153 rule 2): a narrowed connection names its one
+/// name and nothing else, cannot list, cannot widen, and its clones and
+/// shares stay narrowed; "create or replace" works through it.
+#[test]
+fn a_narrowed_connection_names_only_its_name() {
+    let mut r = rig();
+    let root = r.root;
+    let other = r.open(root, "other.txt", open_flags::CREATE);
+    r.write_text(other, 0, 0, b"keep");
+    let create = rights::READ | rights::WRITE | rights::CREATE | rights::SYNC | rights::CLONE;
+    let (s, n) = narrow(&mut r, root, "new.txt", create);
+    assert_eq!(s, status::OK);
+    // Create, then replace by truncation.
+    let flags = open_flags::CREATE | open_flags::TRUNCATE;
+    let rw = rights::READ | rights::WRITE;
+    let (s, f) = r.try_open(n, "new.txt", flags, rw);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.write_text(f, 0, 0, b"first").0, status::OK);
+    let (s, f) = r.try_open(n, "new.txt", flags, rw);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.write_text(f, 0, 0, b"2").0, status::OK);
+    assert_eq!(r.read_text(f, 0, 10), (status::OK, b"2".to_vec()));
+    // Nothing else, nor the directory itself, nor below the name.
+    let denied = status::ACCESS_DENIED;
+    // (`..` and the empty path do not pass the wire: `Path` refuses them.)
+    for path in ["other.txt", "new.txt/x"] {
+        assert_eq!(r.try_open(n, path, 0, rights::READ).0, denied, "{path:?}");
+    }
+    let mk = proto::MakeDirectory {
+        mode: 0o755,
+        name: Name("d"),
+    };
+    assert_eq!(r.done(n, &mk, vec![]).0, denied);
+    // No listing.
+    let reply = r.call(n, &proto::ReadDirectory { cookie: 0 }, vec![]);
+    assert_eq!(status_of(&reply), denied);
+    // Without remove it cannot delete, even its own name.
+    let rm = proto::Remove {
+        name: Name("new.txt"),
+    };
+    assert_eq!(r.done(n, &rm, vec![]).0, denied);
+    // Clones and shares keep the one name; a narrower name is refused.
+    let c = r.net.channel();
+    let m = proto::Clone {
+        rights: Flags(rights::READ | rights::CLONE),
+    };
+    assert_eq!(r.done(n, &m, vec![c]).0, status::OK);
+    assert_eq!(r.try_open(c, "other.txt", 0, rights::READ).0, denied);
+    assert_eq!(r.try_open(c, "new.txt", 0, rights::READ).0, status::OK);
+    let (s, shared) = r.share(n, rights::READ);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.try_open(shared, "other.txt", 0, rights::READ).0, denied);
+    assert_eq!(narrow(&mut r, n, "other.txt", rights::READ).0, denied);
+    assert_eq!(narrow(&mut r, n, "new.txt", rights::READ).0, status::OK);
+    // No right it lacks. (A name of more than one component does not pass
+    // the wire: `Name` refuses it.)
+    assert_eq!(narrow(&mut r, n, "new.txt", rights::REMOVE).0, denied);
+    // Remove narrowed to one name removes it and no other.
+    let (_, rmn) = narrow(&mut r, root, "new.txt", rights::READ | rights::REMOVE);
+    let other_rm = proto::Remove {
+        name: Name("other.txt"),
+    };
+    assert_eq!(r.done(rmn, &other_rm, vec![]).0, denied);
+    assert_eq!(r.done(rmn, &rm, vec![]).0, status::OK);
+    assert_eq!(r.read_text(other, 0, 10), (status::OK, b"keep".to_vec()));
+    // Rename: each side names only its own name.
+    r.open(root, "a.txt", open_flags::CREATE);
+    let rename = rights::READ | rights::RENAME | rights::CREATE | rights::REMOVE | rights::CLONE;
+    let (_, from) = narrow(&mut r, root, "a.txt", rename);
+    let (_, to) = narrow(&mut r, root, "b.txt", rename);
+    let token = token_of(&mut r, to);
+    let wrong = proto::Rename {
+        mode: Below(0),
+        old: Name("a.txt"),
+        new: Name("c.txt"),
+    };
+    assert_eq!(r.done(from, &wrong, vec![token]).0, denied);
+    let token = token_of(&mut r, to);
+    let right = proto::Rename {
+        mode: Below(0),
+        old: Name("a.txt"),
+        new: Name("b.txt"),
+    };
+    assert_eq!(r.done(from, &right, vec![token]).0, status::OK);
+    assert_eq!(r.try_open(root, "b.txt", 0, rights::READ).0, status::OK);
+}

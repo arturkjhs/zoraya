@@ -163,6 +163,46 @@ impl File {
         done(&reply[..length]).map(|_| client)
     }
 
+    /// A connection to this directory with `wanted` rights through which
+    /// requests may name only `name` (ADR-0055's note, ADR-0153 rule 2).
+    pub fn narrow(&self, name: &str, wanted: u32) -> FsResult<File> {
+        let (client, server) = channel_create().map_err(|_| GONE)?;
+        let client = File { end: client };
+        let m = proto::Narrow {
+            rights: Flags(wanted),
+            name: Name(name),
+        };
+        let mut reply = Vec::new();
+        let (length, _) = call(
+            self.end,
+            &m,
+            &[moved(server, ChannelObject::RIGHTS)],
+            &mut reply,
+        )?;
+        done(&reply[..length]).map(|_| client)
+    }
+
+    /// A new file with no name yet in this directory (ADR-0010 rule 7):
+    /// written, then given a name by [`File::publish`].
+    pub fn create_unnamed(&self) -> FsResult<File> {
+        self.open("x", open_flags::UNNAMED, rights::ALL)
+    }
+
+    /// Gives this unnamed file `name` in `directory`, replacing a file of
+    /// that name in one commit (ADR-0010 rule 7), so a reader sees the old
+    /// file or the new one, never a part.
+    pub fn publish(&self, directory: &File, name: &str) -> FsResult<()> {
+        let token = directory.token()?;
+        let m = proto::Publish {
+            mode: Below(proto::publish_mode::REPLACE),
+            name: Name(name),
+        };
+        let mut reply = Vec::new();
+        let entry = moved(token, EventObject::RIGHTS);
+        let (length, _) = call(self.end, &m, &[entry], &mut reply)?;
+        done(&reply[..length]).map(|_| ())
+    }
+
     /// A second connection to this one's open description (ADR-0103): one
     /// position for both.
     pub fn share(&self, wanted: u32) -> FsResult<File> {

@@ -159,10 +159,9 @@ stays.
 - Whether `/config/history` belongs with configuration or in a separate state directory.
 - Whether settings changed by hand should reach a running component (a reload message), or only at start.
 
-- *Note, 2026-11-03 (TASK-18 Part 2, step 6):* item 4's atomic write (a new file published over the old) needs
-  ADR-0010's unnamed create and publish in the file client `zosh` uses, which has neither yet: `settings` writes
-  the whole file in place, so a crash during the write can leave it cut short, and the reader then reports the
-  damaged line and applies the default (INV-0157-3). To do with the client's next change.
+- *Note, 2026-11-03 (TASK-18 Part 2, step 6), resolved 2026-11-04 (step 7):* item 4's atomic write is built:
+  `settings` writes a new unnamed file and publishes it over `/config/settings` (ADR-0010 rule 7), through the file
+  client's `create_unnamed` and `publish`.
 
 ## Revisit triggers
 - A setting that needs a structure (a list of records): a typed list syntax, not a second file format.
