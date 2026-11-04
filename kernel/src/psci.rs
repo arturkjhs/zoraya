@@ -1,4 +1,4 @@
-//! PSCI calls (ARM DEN 0022). Only `SYSTEM_OFF` is used at stage 0.
+//! PSCI calls (ARM DEN 0022): `SYSTEM_OFF` and `SYSTEM_RESET` (ADR-0159).
 
 use core::arch::asm;
 
@@ -6,6 +6,8 @@ use zoraya_dtb::platform::{Psci, PsciMethod};
 
 /// `SYSTEM_OFF`, PSCI 0.2 and later (SMC32 function ID).
 const SYSTEM_OFF: u64 = 0x8400_0008;
+/// `SYSTEM_RESET`, PSCI 0.2 and later (SMC32 function ID).
+const SYSTEM_RESET: u64 = 0x8400_0009;
 
 fn call(method: PsciMethod, function: u64) -> u64 {
     let mut x0 = function;
@@ -37,4 +39,13 @@ pub fn system_off(psci: &Psci) -> i32 {
         return -1; // NOT_SUPPORTED
     }
     call(psci.method, SYSTEM_OFF) as i32
+}
+
+/// Resets the machine. Returns only if the call failed, with the PSCI error
+/// code, or at once if the device tree's PSCI has no `SYSTEM_RESET`.
+pub fn system_reset(psci: &Psci) -> i32 {
+    if !psci.has_system_reset {
+        return -1; // NOT_SUPPORTED
+    }
+    call(psci.method, SYSTEM_RESET) as i32
 }

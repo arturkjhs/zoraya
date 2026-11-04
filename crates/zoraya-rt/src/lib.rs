@@ -268,6 +268,15 @@ pub fn power_off(power: Handle) -> Status {
     }
 }
 
+/// Resets the machine (ADR-0159): returns only with why it did not,
+/// `NotSupported` when the platform has no reset.
+pub fn power_reset(power: Handle) -> Status {
+    match stubs::power_reset::<Svc>(power) {
+        Ok(_) => Status::Ok,
+        Err(status) => status,
+    }
+}
+
 /// A new memory object of `size` bytes, all committed and zeroed.
 pub fn memory_create(size: u64, flags: MemoryFlags) -> Result<Handle, Status> {
     handle(stubs::memory_create::<Svc>(Size(size), flags)?)

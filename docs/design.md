@@ -619,6 +619,9 @@ TASK-16, on the accepted [ADR-0101](adr/0101-byte-streams.md), [ADR-0102](adr/01
   process is marked stopped, and its thread parks on its next way to EL0, so none runs a user instruction after the
   call returns (one CPU). A process or job that joins a suspended tree starts stopped. Suspends do not nest.
 - **`object_get_signals`.** The bits asserted now, with `WAIT`: `WNOHANG` without a port.
+- **`power_reset`** (call 50, ADR-0159, TASK-18 step 12). Needs `POWER` on the `Power` object, as `power_off`; resets
+  through PSCI `SYSTEM_RESET` (`zoraya-dtb`'s `has_system_reset`, PSCI 0.2 and later), printing `resetting`, and
+  otherwise returns `NotSupported`, a new status (15).
 
 Measured on the M4 under QEMU 11.1.2, `make test`'s test kernel (128 MiB; `auto-*` under HVF, `tcg-*` under TCG),
 from `t_streams`, `t_suspend` and `t_snapshot`, in the final run of TASK-16 (a clean clone at `15c554a`), each
@@ -934,8 +937,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   second later the shell says `(Ctrl-C again to kill it)`, and the next Ctrl-C kills it. Ctrl-\ sends Quit, Ctrl-Z
   stops the job in front; Ctrl-D at the prompt only says `type exit to end the shell`.
 - **Ending.** `exit` ends this shell and `init` starts a new one, on the console or in a new terminal window; with
-  jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off. `reboot` says it is not
-  available until the kernel has a reset call (proposed ADR-0159).
+  jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off; `reboot` syncs and resets it
+  through PSCI `SYSTEM_RESET` (`power_reset`, ADR-0159), or says the machine cannot be reset.
 - **Streams** (ADR-0152, step 8). Every program gets `in`, `out` and `err` at the native slots 1001 to 1003
   (`zoraya_abi::native::slot`); `zoraya-rt`'s `print!` and `eprint!` write to them, each print of up to 512 bytes
   in one write, so that lines of two programs sharing a stream stay whole, and a program started without
@@ -952,8 +955,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
   `shell.suggestions`, `shell.colour`, `console.columns`.
 
-**Pending (TASK-18 Part 2).** Steps 7 to 10 are done. Step 11: the tour as a test on both terminals.
-Step 12: `reboot` (ADR-0159).
+**Pending (TASK-18 Part 2).** Steps 7 to 10 and 12 are done. Step 11: the tour as a test on both terminals.
 
 ## Known limitations
 
@@ -985,7 +987,8 @@ Step 12: `reboot` (ADR-0159).
   `&` or `bg` has its input at its end: only a job stopped in front gets the keys again. A line whose job Ctrl-Z
   stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
   is dropped without a message. A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
-  moves a file in one message, so it cannot copy a large program. `reboot` is not available (ADR-0159, proposed).
+  moves a file in one message, so it cannot copy a large program. Under the test runner, `run-qemu.sh --reboot` lets a reset start the guest
+  again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until

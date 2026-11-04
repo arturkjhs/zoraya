@@ -73,6 +73,7 @@ fn default_virt() {
     let psci = i.psci.unwrap();
     assert_eq!(psci.method, PsciMethod::Hvc);
     assert!(psci.has_system_off);
+    assert!(psci.has_system_reset);
     assert_eq!(psci.compatible, Some("arm,psci-1.0"));
 }
 

@@ -58,8 +58,8 @@ use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, console_dropped, console_entry,
     console_read, console_write, directory_entry, directory_lookup, dup, handle_close, handle_type,
     job_create, job_kill, job_resume, job_signal, job_suspend, object_get_signals, port_create,
-    port_subscribe, port_unsubscribe, port_wait, power_off, process_exit, process_exit_record,
-    spawn, stream_create, stream_read, stream_write,
+    port_subscribe, port_unsubscribe, port_wait, power_off, power_reset, process_exit,
+    process_exit_record, spawn, stream_create, stream_read, stream_write,
 };
 
 zoraya_user::describe!("system", "zosh");
@@ -2598,12 +2598,26 @@ impl Host for Z {
                 ));
                 1
             }
+            // ADR-0159: as poweroff, with a reset; it returns only when the
+            // machine has none.
             "reboot" => {
+                if let Some(root) = &self.root
+                    && let Err(s) = root.sync()
+                {
+                    io.err.push_str(&zoraya_command::error(
+                        "reboot",
+                        Some("sync"),
+                        &problem(s),
+                        &[],
+                    ));
+                }
+                show(&core::mem::take(&mut io.err));
+                let status = power_reset(POWER);
                 io.err.push_str(&zoraya_command::error(
                     "reboot",
                     None,
-                    "not available until the kernel has a reset call",
-                    &["poweroff turns the machine off; ADR-0159 proposes the reset call"],
+                    &zoraya_command::status_problem(status),
+                    &[],
                 ));
                 1
             }

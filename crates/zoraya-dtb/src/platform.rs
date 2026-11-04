@@ -185,6 +185,9 @@ pub struct Psci {
     /// True for `arm,psci-0.2` and later, which define `SYSTEM_OFF` with a
     /// fixed function ID. PSCI 0.1 (`arm,psci` only) does not.
     pub has_system_off: bool,
+    /// The same for `SYSTEM_RESET`, which PSCI 0.2 and later define with
+    /// `SYSTEM_OFF` (ADR-0159).
+    pub has_system_reset: bool,
     /// The most recent `arm,psci-X.Y` compatible string, if any.
     pub compatible: Option<&'static str>,
 }
@@ -397,6 +400,7 @@ pub fn psci(fdt: &Fdt<'_>) -> Option<Psci> {
     Some(Psci {
         method,
         has_system_off: compatible.is_some(),
+        has_system_reset: compatible.is_some(),
         compatible,
     })
 }

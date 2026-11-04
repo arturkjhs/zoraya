@@ -1,0 +1,20 @@
+# reboot restarts the machine (INV-0155-7, INV-0159-2, ADR-0159): with
+# run-qemu.sh --reboot a reset starts the guest again instead of ending
+# QEMU, so the boot and the shell come a second time; poweroff ends it.
+! panicked
+! first process ended
+! not supported
+< Type help to begin, or help tour.
+< \r\n/> 
+o Zoraya kernel
+> reboot\r
+< resetting
+< Zoraya kernel
+< first process: init
+< Type help to begin, or help tour.
+< \r\n/> 
+> echo again\r
+< \r\nagain
+< \r\n/> 
+x power off
+> poweroff\r

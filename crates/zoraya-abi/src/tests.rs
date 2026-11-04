@@ -90,7 +90,7 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
 /// come from one list, so a new status is judged here.
 #[test]
 fn no_status_means_interrupted() {
-    assert_eq!(Status::ALL.len(), 15);
+    assert_eq!(Status::ALL.len(), 16);
     for (raw, s) in Status::ALL.iter().enumerate() {
         assert_eq!(*s as usize, raw);
         assert_eq!(Status::from_raw(raw as u64), Some(*s));
@@ -336,6 +336,7 @@ echo! {
     console_dropped(console: Handle);
     directory_entry(directory: Handle, cookie: Cookie, entry: Bytes);
     power_off(power: Handle);
+    power_reset(power: Handle);
     memory_create(size: Size, flags: MemoryFlags);
     memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags);
     memory_unmap(address: Address, length: Size);

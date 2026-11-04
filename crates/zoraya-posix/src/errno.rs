@@ -78,6 +78,7 @@ pub const NATIVE: &[(Status, [i32; 3])] = &[
     // Only the library's own reads meet it, with buffers of the largest
     // message: a message past that is not one this library asked for.
     (Status::BufferTooSmall, [EMSGSIZE, EMSGSIZE, EMSGSIZE]),
+    (Status::NotSupported, [ENOTSUP, ENOTSUP, ENOTSUP]),
 ];
 
 /// `errno` for a native status in a call of kind `call`.

@@ -29,6 +29,8 @@
 #   --debug               TCG, wait for a debugger on tcp::1234
 #   --dumpdtb FILE        write the generated device tree to FILE and exit;
 #                         no kernel needed
+#   --reboot              a reset restarts the machine instead of ending QEMU
+#                         (without it, -no-reboot; ADR-0159, INV-0155-7)
 #   --print-cmd           print the QEMU command line on stderr first
 #   --probe-el2           no kernel needed: exit 0 if the accelerator can start
 #                         a machine at EL2 (virtualization=on). Exit 1, with the
@@ -55,6 +57,7 @@ machine=virt
 mode=interactive
 dumpdtb=
 print_cmd=0
+reboot=
 probe_el2=0
 keys=0
 test_disk=0
@@ -84,6 +87,7 @@ while [ $# -gt 0 ]; do
         --debug) mode=debug; accel=tcg; shift ;;
         --dumpdtb) [ $# -ge 2 ] || die "--dumpdtb needs a file"; dumpdtb=$2; shift 2 ;;
         --print-cmd) print_cmd=1; shift ;;
+        --reboot) reboot=1; shift ;;
         --probe-el2) probe_el2=1; shift ;;
         -h|--help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         -*) die "unknown option $1" ;;
@@ -130,7 +134,8 @@ elif [ -z "$kernel" ]; then
 fi
 
 set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
-    -smp "$smp" -m "$mem" -nodefaults -no-reboot
+    -smp "$smp" -m "$mem" -nodefaults
+[ -n "$reboot" ] || set -- "$@" -no-reboot
 [ -n "$kernel" ] && [ -z "$dumpdtb" ] && set -- "$@" -kernel "$kernel"
 
 # Interactive with --gui: QEMU's display opens a window. On macOS the

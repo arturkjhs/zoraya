@@ -209,9 +209,6 @@ x \r\n/>
 > help sleep\r
 < sleep is a program, /zoraya/bin/sleep
 < \r\n/> 
-> reboot\r
-< reboot: not available until the kernel has a reset call
-< \r\n/> 
 # A burst larger than the ring, during a job, drops bytes and counts them.
 > spin\r
 = 8192

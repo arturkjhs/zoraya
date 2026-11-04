@@ -9,7 +9,7 @@ use zoraya_abi::{
 };
 use zoraya_user::{
     assert_err, console_dropped, console_read, directory_entry, handle_close, handle_duplicate,
-    handle_type, port_create, port_subscribe, port_wait, power_off, raw_syscall,
+    handle_type, port_create, port_subscribe, port_wait, power_off, power_reset, raw_syscall,
 };
 
 /// `console_read`'s number.
@@ -92,10 +92,16 @@ fn types() {
     assert_err!(handle_type(port), Status::BadHandle);
 }
 
-/// INV-0062-1, INV-0062-2.
+/// INV-0062-1, INV-0062-2, and INV-0159-1 for `power_reset`: refused by
+/// the same handle check, and the machine goes on.
 fn power() {
     assert_eq!(power_off(POWER), Status::BadHandle, "no such handle here");
     assert_eq!(power_off(CONSOLE), Status::AccessDenied, "wrong right");
+    assert_eq!(power_reset(POWER), Status::BadHandle, "no such handle here");
+    assert_eq!(power_reset(CONSOLE), Status::AccessDenied, "wrong right");
+    let without = handle_duplicate(CONSOLE, Rights::WRITE).expect("a copy with less");
+    assert_eq!(power_reset(without), Status::AccessDenied, "no POWER right");
+    let _ = handle_close(without);
 }
 
 #[unsafe(no_mangle)]

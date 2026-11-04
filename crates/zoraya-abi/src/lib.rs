@@ -74,6 +74,9 @@ statuses! {
     PeerClosed = 13,
     /// The message stays; the sizes it needs have been reported.
     BufferTooSmall = 14,
+    /// The platform does not offer what the call asks: `power_reset` with no
+    /// reset in the firmware (ADR-0159).
+    NotSupported = 15,
 }
 
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
@@ -1095,6 +1098,7 @@ syscalls! {
     47 JobSuspend job_suspend(job: Handle) false;
     48 JobResume job_resume(job: Handle) false;
     49 ObjectGetSignals object_get_signals(handle: Handle) false;
+    50 PowerReset power_reset(power: Handle) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
