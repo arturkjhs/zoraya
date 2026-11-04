@@ -390,6 +390,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0180-3 | [ADR-0180](0180-libposix-core-choices-of-stage-6c.md) | `libc.a` contains no reference to a name it does not define, and `svc` only in `zoraya-rt`'s member. | `posix-surface-check check ... --allow-svc zoraya_rt-` in `make check-ports`, and the five broken archives. | checked: `make check-ports`, and `make test` through `make test-libposix`'s `check-libc` |
 | INV-0191-1 | [ADR-0191](0191-one-time-base.md) | A file written on the temporary volume after a file on the root volume has the later `mtime`, and the other way round, and `clock_gettime(CLOCK_REALTIME)` read after both is not below either. | `zoraya-fs-service`'s host test `a_file_in_tmp_written_after_one_in_home_is_later`, and the in-QEMU session test's `t_posix time`. | checked: `make test-unit` |
 | INV-0191-2 | [ADR-0191](0191-one-time-base.md) | The base is above every time the root volume holds when it is mounted. | the host test `the_base_goes_on_from_the_latest_stored_time`. | checked: `make test-unit` |
+| INV-0192-1 | [ADR-0192](0192-snapshot-in-the-posix-tree.md) | `snapshot_process` succeeds into a `posix` job beside the caller's within the caller's `posix` tree, and refuses a job outside that tree with `AccessDenied`. | `t_snapshot`'s `the_job_must_be_ours_and_open` for the refusal, and every `fork` of `make test-posix` (dash's pipelines and subshells) for the sibling. | checked: `make test-qemu`, `make test-posix` |
 
 ## Counts
 
@@ -492,4 +493,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0172](0172-rooms.md) Rooms: named sets of grants that programs run in, shown by the compositor | 10 |
 | [ADR-0180](0180-libposix-core-choices-of-stage-6c.md) `libposix` core choices the stage 6 ADRs leave open | 3 |
 | [ADR-0191](0191-one-time-base.md) One time base for every volume and for `CLOCK_REALTIME` | 2 |
-| **Total** | **384** |
+| [ADR-0192](0192-snapshot-in-the-posix-tree.md) `snapshot_process` creates in the caller's POSIX tree | 1 |
+| **Total** | **385** |

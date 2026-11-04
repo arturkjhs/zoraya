@@ -1760,21 +1760,7 @@ extern "C" fn execl(
 // ------------------------------------------------------------ fork
 
 /// With `ZORAYA_POSIX_DEBUG` in the environment, why a process call failed
-/// goes to fd 2: the library cannot tell C more than an `errno`.
-fn debug(what: &str, detail: impl core::fmt::Debug) {
-    let wanted = zoraya_rt::startup()
-        .envp
-        .any(|e| e.starts_with(b"ZORAYA_POSIX_DEBUG="));
-    if !wanted {
-        return;
-    }
-    use core::fmt::Write;
-    let mut line = String::new();
-    let _ = writeln!(line, "libposix: {what}: {detail:?}");
-    let _ = with(|p| p.write(2, User::new(line.as_ptr() as u64, line.len())));
-}
-
-/// `debug` from inside the state: written straight to fd 2.
+/// goes to fd 2: C sees only an `errno`.
 fn debug_later(p: &mut Posix<RtSys>, what: &str, detail: impl core::fmt::Debug) {
     let wanted = zoraya_rt::startup()
         .envp
@@ -1799,10 +1785,9 @@ extern "C" fn fork() -> i32 {
             0 => (bp::group::NEW, 0),
             g => (bp::group::JOIN, g as u32),
         };
-        let prepared = p.prepare(form, pgid, 0, true).map_err(|e| {
-            debug_later(p, "fork: prepare", e);
-            e
-        })?;
+        let prepared = p
+            .prepare(form, pgid, 0, true)
+            .inspect_err(|e| debug_later(p, "fork: prepare", e))?;
         let moves = match p.fork_moves(prepared.pgid, &prepared) {
             Ok(m) => m,
             Err(e) => {
