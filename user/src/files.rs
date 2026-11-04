@@ -122,6 +122,16 @@ impl Drop for File {
     }
 }
 
+/// What [`File::open_link`] found.
+pub enum Opened {
+    File(File),
+    /// A link: the rest of the path after it, and where it points.
+    Link {
+        remaining: alloc::string::String,
+        target: alloc::string::String,
+    },
+}
+
 impl File {
     pub fn open(&self, path: &str, flags: u32, wanted: u32) -> FsResult<File> {
         let (client, server) = channel_create().map_err(|_| GONE)?;
@@ -141,6 +151,35 @@ impl File {
         )?;
         match decode::<proto::OpenReply<'_>>(&reply[..length], 0) {
             Ok((_, r)) => check(r.status.0).map(|()| client),
+            Err(_) => Err(done(&reply[..length])
+                .err()
+                .unwrap_or(status::INVALID_ARGUMENT)),
+        }
+    }
+
+    /// `open`, or the link it met on the way: the part of `path` after the
+    /// link and the link's target (ADR-0013 rule 7).
+    pub fn open_link(&self, path: &str, flags: u32, wanted: u32) -> FsResult<Opened> {
+        let (client, server) = channel_create().map_err(|_| GONE)?;
+        let client = File { end: client };
+        let m = proto::Open {
+            flags: Flags(flags),
+            rights: Flags(wanted),
+            path: Path(path),
+        };
+        let mut reply = Vec::new();
+        let (length, _) = call(
+            self.end,
+            &m,
+            &[moved(server, ChannelObject::RIGHTS)],
+            &mut reply,
+        )?;
+        match decode::<proto::OpenReply<'_>>(&reply[..length], 0) {
+            Ok((_, r)) if r.status.0 == status::IS_LINK => Ok(Opened::Link {
+                remaining: r.remaining.0.into(),
+                target: r.target.0.into(),
+            }),
+            Ok((_, r)) => check(r.status.0).map(|()| Opened::File(client)),
             Err(_) => Err(done(&reply[..length])
                 .err()
                 .unwrap_or(status::INVALID_ARGUMENT)),
@@ -192,6 +231,50 @@ impl File {
                 next.push_str(remaining.trim_start_matches('/'));
             }
             path = next;
+        }
+        Err(status::IS_LINK)
+    }
+
+    /// Where the absolute normal `path`, read from this directory as `/`,
+    /// leads through link objects (ADR-0153 rule 5, by ADR-0107 item 7's
+    /// rules: a relative target from the link's directory, an absolute one
+    /// from `/`, `..` lexically, at most 40 links): `None` when it passes
+    /// through none. The path it leads to need not exist.
+    pub fn link_target(&self, path: &str) -> FsResult<Option<alloc::string::String>> {
+        let mut current = zoraya_resolve::join("/", 0, path);
+        let mut followed = false;
+        for _ in 0..40 {
+            let rel = current.trim_start_matches('/');
+            if rel.is_empty() {
+                return Ok(followed.then_some(current));
+            }
+            let (client, server) = channel_create().map_err(|_| GONE)?;
+            let _client = File { end: client };
+            let m = proto::Open {
+                flags: Flags(0),
+                rights: Flags(rights::READ),
+                path: Path(rel),
+            };
+            let mut reply = Vec::new();
+            let (length, _) = call(
+                self.end,
+                &m,
+                &[moved(server, ChannelObject::RIGHTS)],
+                &mut reply,
+            )?;
+            let Ok((_, r)) = decode::<proto::OpenReply<'_>>(&reply[..length], 0) else {
+                return Ok(followed.then_some(current));
+            };
+            if r.status.0 != status::IS_LINK {
+                return Ok(followed.then_some(current));
+            }
+            followed = true;
+            let remaining = r.remaining.0.trim_start_matches('/');
+            let consumed = rel[..rel.len() - r.remaining.0.len()].trim_end_matches('/');
+            let dir = consumed.rsplit_once('/').map_or("", |(d, _)| d);
+            let at = zoraya_resolve::join("/", 0, dir);
+            let next = zoraya_resolve::join(&at, 0, r.target.0);
+            current = zoraya_resolve::join(&next, 0, remaining);
         }
         Err(status::IS_LINK)
     }

@@ -897,7 +897,11 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   in the system image also gets a start-up record (ADR-0153 rule 8): the current directory to read, and each path
   operand as its kind gives it (`cp a b`: `a` to read, `b`'s directory narrowed to `b`), plus what `+r PATH` and
   `+w PATH` grant; `grants LINE` prints it. An operand from a value reaches only inside the current directory or a
-  grant. A path a program names outside its entries is refused and reported, and the shell prints the grant that
+  grant. A designated path through a link object (ADR-0153 rule 5) is designated as its target if that lies inside the
+  current directory or a grant of the line, and refused otherwise (`zosh: ~/w/out-link: leads through a link to
+  ~/secret.txt, ...`); a native program follows links itself against its table (`namespace`), so no link leads
+  outside its entries. Such a program holds its streams, its own job and its entries' connections, and no console.
+  A path a program names outside its entries is refused and reported, and the shell prints the grant that
   would allow it. Test programs (no description) get what TASK-11's shell gave them.
 - **Jobs** (ADR-0158, step 9; `zoraya_shell::jobs`). A line's pipeline is one job, numbered from 1 with the smallest
   free number. A trailing `&` runs it in the background (`[1] sleep 30`) with its input at its end. Ctrl-Z stops the
@@ -937,9 +941,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
   `shell.suggestions`, `shell.colour`, `console.columns`.
 
-**Pending (TASK-18 Part 2).** Step 7's rest: link objects (rule 5) are not yet resolved by the shell, and the in-QEMU
-halves of INV-0153-1, -2 and -7; `grants` today says what a program gets.
-Steps 8 and 9 are done (byte streams and jobs, above). Step 10: POSIX programs, and Ctrl-Z of their jobs through the
+**Pending (TASK-18 Part 2).** Steps 7, 8 and 9 are done (byte streams and jobs, above). Step 10: POSIX programs, and Ctrl-Z of their jobs through the
 broker. Step 11: the tour as a test on both terminals.
 Step 12: `reboot` (ADR-0159).
 

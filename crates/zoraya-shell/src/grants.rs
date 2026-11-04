@@ -245,6 +245,56 @@ fn fallback(access: &Access) -> String {
     }
 }
 
+/// Rule 5: a designated path that is or passes through a link object
+/// becomes the link's target when the target lies inside the current
+/// directory or a grant of the line; otherwise the line is refused, naming
+/// the path and the target. `target(abs)` gives where `abs` leads through
+/// its links (ADR-0107 item 7's rules), or `None` when it passes through
+/// none or does not exist. Grants are followed too: what the person named
+/// is what they looked at. The current directory's own entry is kept.
+pub fn through_links(
+    plan: Vec<Planned>,
+    cwd: &str,
+    home: &str,
+    mut target: impl FnMut(&str) -> Option<String>,
+) -> Result<Vec<Planned>, Refused> {
+    let is_grant = |e: &Planned| e.reason == "+r" || e.reason == "+w";
+    let mut roots: Vec<String> = alloc::vec![cwd.into()];
+    let mut out = plan;
+    for e in out.iter_mut().filter(|e| is_grant(e)) {
+        if let Some(t) = target(&e.path) {
+            e.path = t;
+        }
+        roots.push(e.path.clone());
+    }
+    for e in out.iter_mut() {
+        if is_grant(e) || e.reason == "current directory" {
+            continue;
+        }
+        let Some(t) = target(&e.path).filter(|t| *t != e.path) else {
+            continue;
+        };
+        if roots.iter().any(|r| zoraya_resolve::covers(r, &t)) {
+            e.reason = format!("{}, through a link at {}", e.reason, shown(&e.path, home));
+            e.path = t;
+            continue;
+        }
+        let marker = if e.access == Access::Read { "+r" } else { "+w" };
+        return Err(Refused {
+            subject: shown(&e.path, home),
+            problem: format!(
+                "leads through a link to {}, outside the current directory and this line's grants",
+                shown(&t, home)
+            ),
+            hint: Some(format!(
+                "to give it, put {marker} {} before the command",
+                shown(&t, home)
+            )),
+        });
+    }
+    Ok(out)
+}
+
 /// Merges a plan's entries by path, in the order each path first appears.
 /// Parts that all narrow to one name stay narrowed to it; otherwise the
 /// directory is given whole with the union of the rights, and a narrowed

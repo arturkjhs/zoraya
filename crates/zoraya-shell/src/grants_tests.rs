@@ -9,7 +9,7 @@ use zoraya_describe::Description;
 use zoraya_proto_file::rights;
 
 use crate::eval::Value;
-use crate::grants::{Access, Line, Planned, merge, plan, report, summary};
+use crate::grants::{Access, Line, Planned, Refused, merge, plan, report, summary, through_links};
 
 const CP: &str = "name cp\nsummary copy a file\nusage cp [--force] FROM TO\noperand FROM read the file\noperand TO create the copy\noption -f --force replace\n";
 const RM: &str = "name rm\nsummary remove files\nusage rm [--recursive] PATH...\noperand PATH... remove the files\noption -r --recursive all in it\nwhen --recursive PATH remove-tree\n";
@@ -264,4 +264,79 @@ fn entries_of_one_path_merge() {
     assert_eq!(m.len(), 1);
     assert_eq!(m[0].name, None);
     assert!(m[0].lines.iter().all(|(w, _)| w == "remove anything in"));
+}
+
+/// Rule 5: a designated path through a link gets the target only inside
+/// the current directory or a grant; otherwise the line is refused with
+/// the path and the target; grants are followed; the current directory's
+/// entry is left as it is.
+#[test]
+fn links_lead_only_inside_the_directory_or_a_grant() {
+    let links = |p: &str| -> Option<String> {
+        match p {
+            "/u/w/in-link" => Some("/u/w/inside.txt".into()),
+            "/u/w/out-link" => Some("/u/secret.txt".into()),
+            "/u/w/sub" => Some("/u/w/real".into()),
+            "/u/w/up" => Some("/u".into()),
+            "/u/w/g" => Some("/u/shared".into()),
+            "/u/w" => Some("/elsewhere".into()),
+            _ => None,
+        }
+    };
+    let cat = "name cat\nsummary c\nusage cat FILE...\noperand FILE... read f\n";
+    let p = go(cat, &["in-link", "plain"], &[], &[], true, "/u/w").unwrap();
+    let p = through_links(p, "/u/w", "/u", links).unwrap();
+    assert_eq!(
+        rows(&p),
+        [
+            ("/u/w".into(), Access::Read, "current directory".into()),
+            (
+                "/u/w/inside.txt".into(),
+                Access::Read,
+                "operand FILE, through a link at ~/w/in-link".into()
+            ),
+            ("/u/w/plain".into(), Access::Read, "operand FILE".into()),
+        ]
+    );
+    let p = go(cat, &["out-link"], &[], &[], true, "/u/w").unwrap();
+    assert_eq!(
+        through_links(p, "/u/w", "/u", links),
+        Err(Refused {
+            subject: "~/w/out-link".into(),
+            problem: "leads through a link to ~/secret.txt, outside the current directory and \
+                      this line's grants"
+                .into(),
+            hint: Some("to give it, put +r ~/secret.txt before the command".into()),
+        })
+    );
+    // A grant that covers the target allows it; a grant through a link
+    // is its target.
+    let p = go(cat, &["out-link"], &[], &[(false, "/u")], true, "/u/w").unwrap();
+    let p = through_links(p, "/u/w", "/u", links).unwrap();
+    assert!(p.iter().any(|e| e.path == "/u/secret.txt"), "{p:?}");
+    let p = go(cat, &["/u/shared/x"], &[], &[(false, "g")], true, "/u/w").unwrap();
+    let p = through_links(p, "/u/w", "/u", links).unwrap();
+    assert!(
+        p.iter().any(|e| e.path == "/u/shared" && e.reason == "+r"),
+        "{p:?}"
+    );
+    // A narrowed entry's directory through a link; a write kind asks +w.
+    let rm = "name rm\nsummary r\nusage rm PATH...\noperand PATH... remove x\n";
+    let p = go(rm, &["sub/a"], &[], &[], true, "/u/w").unwrap();
+    let p = through_links(p, "/u/w", "/u", links).unwrap();
+    assert!(
+        p.iter()
+            .any(|e| e.path == "/u/w/real" && e.access == Access::Remove("a".into())),
+        "{p:?}"
+    );
+    let p = go(rm, &["up/a"], &[], &[], true, "/u/w").unwrap();
+    let r = through_links(p, "/u/w", "/u", links).unwrap_err();
+    assert_eq!(
+        r.hint.as_deref(),
+        Some("to give it, put +w ~ before the command")
+    );
+    // The current directory's own entry is not followed.
+    let p = go(cat, &["plain"], &[], &[], true, "/u/w").unwrap();
+    let p = through_links(p, "/u/w", "/u", links).unwrap();
+    assert_eq!(p[0].path, "/u/w");
 }

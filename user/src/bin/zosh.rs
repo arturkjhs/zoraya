@@ -496,6 +496,7 @@ impl Z {
             // nothing but the current directory.
             _ => zoraya_command::Parsed::default(),
         };
+        let home = Z::home(self);
         let line = grants::Line {
             description: &d,
             parsed: &parsed,
@@ -504,7 +505,14 @@ impl Z {
             grants: exec.grants,
             base_system: base,
         };
-        match grants::plan(&line) {
+        let planned = grants::plan(&line).and_then(|p| {
+            // Rule 5: designated paths through link objects.
+            let root = self.root.as_ref();
+            grants::through_links(p, &self.cwd, &home, |abs| {
+                root.and_then(|r| r.link_target(abs).ok().flatten())
+            })
+        });
+        match planned {
             Ok(p) => Ok(Some(p)),
             Err(r) => {
                 let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
@@ -845,7 +853,12 @@ impl Z {
             e.handle(dup(CONSOLE.slot(), CONSOLE, rights));
             e.handle(dup(JOB.slot(), job, Rights::CREATE_PROCESS));
             e.handle(dup(DIRECTORY.slot(), DIRECTORY, Rights::LOOKUP));
+        } else if startup.is_some() {
+            // ADR-0153 rule 1: its own job, to start helpers inside it, and
+            // no console.
+            e.handle(dup(JOB.slot(), job, Rights::CREATE_PROCESS));
         } else {
+            // A test program gets what TASK-11's shell gave it.
             e.handle(console_entry());
         }
         if let Some(end) = startup {

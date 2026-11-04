@@ -18,7 +18,7 @@ use zoraya_abi::native::{EntryKind, Startup, slot};
 use zoraya_abi::posix::{Access, MAX_REPORTS, NO_HANDLE, Report};
 use zoraya_proto_file::{open_flags, rights, status};
 
-use crate::files::{File, FsResult};
+use crate::files::{File, FsResult, Opened};
 use crate::{channel_read, channel_write, handle_close, handle_type};
 
 /// One entry of the table, with its connection.
@@ -148,13 +148,45 @@ impl Namespace {
         let writes =
             flags & (open_flags::CREATE | open_flags::TRUNCATE) != 0 || wanted & rights::WRITE != 0;
         let access = if writes { Access::Write } else { Access::Read };
-        let (entry, rest) = self.serving(&abs, access)?;
-        let file = entry.file.as_ref().ok_or(status::NOT_FOUND)?;
-        if rest.is_empty() {
-            file.clone_as(wanted)
-        } else {
-            file.open(&rest, flags, wanted)
+        self.open_absolute(abs, flags, wanted, access)
+    }
+
+    /// Opens the absolute normal `abs`, following link objects as the
+    /// resolver does (ADR-0153 rules 5 and 6, ADR-0107 item 7): a relative
+    /// target from the link's directory, an absolute one from `/`, `..`
+    /// lexically, and the result served by the entry that covers it, so
+    /// that no link leads outside the table. At most `MAX_LINKS` links.
+    fn open_absolute(
+        &self,
+        mut abs: String,
+        flags: u32,
+        wanted: u32,
+        access: Access,
+    ) -> FsResult<File> {
+        for _ in 0..=zoraya_resolve::MAX_LINKS {
+            let (entry, rest) = self.serving(&abs, access)?;
+            let file = entry.file.as_ref().ok_or(status::NOT_FOUND)?;
+            if rest.is_empty() {
+                return file.clone_as(wanted);
+            }
+            match file.open_link(&rest, flags, wanted)? {
+                Opened::File(f) => return Ok(f),
+                Opened::Link { remaining, target } => {
+                    let consumed = rest
+                        .get(..rest.len().saturating_sub(remaining.len()))
+                        .unwrap_or("")
+                        .trim_end_matches('/');
+                    let link = zoraya_resolve::join(&entry.path, 0, consumed);
+                    let dir = match link.rfind('/') {
+                        Some(0) | None => "/",
+                        Some(cut) => &link[..cut],
+                    };
+                    let next = zoraya_resolve::join(dir, 0, &target);
+                    abs = zoraya_resolve::join(&next, 0, remaining.trim_start_matches('/'));
+                }
+            }
         }
+        Err(status::IS_LINK)
     }
 
     /// Runs `f` on the directory holding `path` and its last name, for the
@@ -182,8 +214,11 @@ impl Namespace {
         if rest.is_empty() {
             f(file, name)
         } else {
+            // The directory through any links; the name itself is not
+            // followed: removing or renaming a link acts on the link.
             let wanted = wanted | rights::READ | rights::CLONE;
-            let opened = file.open(&rest, open_flags::DIRECTORY, wanted)?;
+            let opened =
+                self.open_absolute(dir.into(), open_flags::DIRECTORY, wanted, Access::Write)?;
             f(&opened, name)
         }
     }

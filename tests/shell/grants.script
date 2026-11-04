@@ -1,0 +1,71 @@
+# What a command gets, in QEMU (TASK-18 step 7, ADR-0153): its handle table
+# and each entry's requests (INV-0153-1, INV-0153-2), link objects (rule 5,
+# INV-0153-2), and the report of a refused path (the native half of
+# INV-0153-7). The volume is rootfs/ with tests/shell/grants-root/ over
+# it: ~/secret.txt, and in ~/w inside.txt, real/deep.txt and the links
+# in-link -> inside.txt, out-link -> ../secret.txt, sub -> real, up -> ..
+# `probe` lists its slots, tries every request through each entry and opens
+# each PATH twice, to read and to change.
+! panicked
+! storage failed
+< Type help to begin
+< \r\n~> 
+> cd w\r
+< \r\n~/w> 
+# INV-0153-1: nothing designated. Its job, its three streams, its own heap
+# (it made that itself), the current directory's connection and the report
+# channel; nothing else, and the directory reads and lists only.
+> probe\r
+< slots: 2:job 1001:stream-read 1002:stream-write 1003:stream-write 1004:memory 1005:channel 1006:channel
+< entry /home/w directory: stat=ok widen=not granted list=ok create=not granted mkdir=not granted remove=not granted sync=not granted
+< \r\n~/w> 
+# INV-0153-2: each kind gives its rights and no more (ADR-0153 rule 2).
+> probe --read inside.txt --change real/deep.txt --tree real\r
+< entry /home/w/real/deep.txt file: stat=ok widen=not granted read=ok write=ok sync=ok
+< entry /home/w/inside.txt file: stat=ok widen=not granted read=ok write=not granted sync=not granted
+< entry /home/w/real directory: stat=ok widen=not granted list=ok create=ok mkdir=ok remove=ok sync=ok
+< entry /home/w directory: stat=ok widen=not granted list=ok create=not granted mkdir=not granted remove=not granted sync=not granted
+< \r\n~/w> 
+# A name to create: its directory, narrowed to that one name.
+> probe --create real/new.txt\r
+< entry /home/w/real directory: stat=ok widen=not granted list=not granted create=not granted mkdir=not granted remove=not granted sync=ok
+< \r\n~/w> 
+# INV-0153-7 (native half) and INV-0153-2 through a link: a path outside
+# every entry is refused, twice, and so is one that a link inside an entry
+# leads outside; both are one path, reported once. A missing path inside
+# an entry is not found, and never reported.
+> probe ../secret.txt inside.txt up/secret.txt missing.txt\r
+< path ../secret.txt: read=not granted change=not granted\r\npath ../secret.txt: read=not granted change=not granted
+< path inside.txt: read=ok change=not granted
+< path up/secret.txt: read=not granted change=not granted\r\npath up/secret.txt: read=not granted change=not granted
+< path missing.txt: read=not found change=not granted\r\npath missing.txt: read=not found change=not granted
+<   hint: probe tried to read ~/secret.txt, which it was not given\r\n  to allow it: +r ~ probe ../secret.txt
+x tried to read ~/w/
+< \r\n~/w> 
+# Rule 5: a designated link inside the current directory gives its target;
+# one leading outside is refused with the link and its target, until a
+# grant covers the target; grants shows the targets.
+> cat in-link\r
+< \r\ninside
+< \r\n~/w> 
+> cat out-link\r
+< zosh: ~/w/out-link: leads through a link to ~/secret.txt, outside the current directory and this line's grants\r\n  hint: to give it, put +r ~/secret.txt before the command
+x \nsecret\r
+< \r\n~/w> 
+> +r .. cat out-link\r
+< \r\nsecret
+< \r\n~/w> 
+> grants cat in-link sub/deep.txt\r
+<   ~/w/inside.txt       read (operand FILE, through a link at ~/w/in-link)\r\n  ~/w/real/deep.txt    read (operand FILE, through a link at ~/w/sub/deep.txt)
+< \r\n~/w> 
+> cat sub/deep.txt\r
+< \r\ndeep
+< \r\n~/w> 
+# A narrowed entry's directory through a link that leads outside.
+> rm up/secret.txt\r
+< zosh: ~/w/up: leads through a link to ~, outside the current directory and this line's grants\r\n  hint: to give it, put +w ~ before the command
+< \r\n~/w> 
+> cat ../secret.txt\r
+< \r\nsecret
+< \r\n~/w> 
+> poweroff\r

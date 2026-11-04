@@ -45,7 +45,7 @@ USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
+	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
@@ -217,6 +217,8 @@ FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
 STORAGE_DOWN := tests/shell/storage-down.script
 DEVICE_ERROR := tests/shell/device-error.script
+GRANTS_SCRIPT := tests/shell/grants.script
+GRANTS_ROOT := $(BUILD)/grants-root
 CRASH_IMAGE := $(BUILD)/crash.img
 CRASH_ROUNDS ?= 10
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
@@ -239,6 +241,11 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_WRITE) --label files-write -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_READ) --label files-read -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# What a command gets (ADR-0153): rootfs/ with link objects over it.
+	rm -rf $(GRANTS_ROOT) && mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(GRANTS_SCRIPT) --label grants -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # A volume that cannot be mounted: ADR-0080's limit on restarts, from `init`.
 # Then one failed write, injected in QEMU's block layer.
