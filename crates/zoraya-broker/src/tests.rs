@@ -1443,6 +1443,9 @@ fn reports_are_summed_maxed_and_joined() {
     assert!(t.add(&[0; 7], &[]).is_err(), "not a multiple of 8");
     assert!(t.add(&counters(&vec![0; NAMES.len() + 1]), &[]).is_err());
     assert!(t.add(&[], &[0; 513]).is_err());
+    let mut wide = Totals::default();
+    wide.add(&[], &[0x01; 512]).unwrap();
+    assert_eq!(wide.calls.len(), 512, "the largest bitmap is taken");
     assert_eq!(t.images, 3, "nothing counted from a refused report");
     t.live(3);
     t.live(2);

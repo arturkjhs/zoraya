@@ -382,6 +382,23 @@ fn call_log_refuses_a_taken_name() {
     );
 }
 
+/// `strb`'s immediate reaches byte 4095: 4096 functions are logged, 4097
+/// are refused.
+#[test]
+fn call_log_takes_at_most_4096_functions() {
+    let names: Vec<String> = (0..4097).map(|i| format!("f{i:04}")).collect();
+    let syms: Vec<(&str, u8, u16)> = names
+        .iter()
+        .map(|n| (n.as_str(), STB_GLOBAL, TEXT))
+        .collect();
+    let all = object(&syms, &[]);
+    let fewer = object(&syms[..4096], &[]);
+    let listed: BTreeSet<String> = names.iter().cloned().collect();
+    let (logged, _) = surface::call_log(&listed, &[elf::read(&fewer).unwrap()]).unwrap();
+    assert_eq!(logged.len(), 4096);
+    assert!(surface::call_log(&listed, &[elf::read(&all).unwrap()]).is_err());
+}
+
 /// The wrapper sets its own byte and branches with no frame; the bitmap
 /// holds one byte a function and its count.
 #[test]

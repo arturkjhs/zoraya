@@ -1486,13 +1486,20 @@ fn no_request_is_taken_on_the_file_paths_and_polls_wait_for_a_handler() {
 fn fsync_takes_a_file_and_refuses_a_pipe() {
     let mut r = rig();
     let fd = open(&mut r, "synced", RW_CREATE, 0o644).unwrap();
+    let before = r.p.stats.requests;
     assert_eq!(r.p.fsync(fd), Ok(()), "nothing written yet");
+    assert_eq!(
+        r.p.stats.requests, before,
+        "no request for an fd never written"
+    );
     assert_eq!(r.write(fd, b"data"), Ok(4));
+    let before = r.p.stats.requests;
     assert_eq!(
         r.p.fsync(fd),
         Ok(()),
         "written through: the status is asked"
     );
+    assert_eq!(r.p.stats.requests, before + 1, "one status request");
     let (rd, wr) = r.p.pipe(0).unwrap();
     assert_eq!(r.p.fsync(rd), Err(EINVAL));
     assert_eq!(r.p.fsync(wr), Err(EINVAL));

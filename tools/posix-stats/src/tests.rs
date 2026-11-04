@@ -196,3 +196,35 @@ fn exemptions_come_from_an_adrs_block_each_with_a_reason() {
     let real = include_str!("../../../docs/adr/0211-acceptance-choices-of-stage-6e.md");
     assert_eq!(exempt_names(real).unwrap().len(), 3);
 }
+
+#[test]
+fn the_tier_list_skips_comments_and_blank_lines_and_takes_the_first_word() {
+    let l = tier_list("# a comment\n\nopen\n  read static-only\n#write\n");
+    let want: BTreeSet<String> = ["open", "read"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(l, want);
+}
+
+/// A mean or a share with nothing to divide is "missing", not a number.
+#[test]
+fn figures_with_zero_divisors_are_missing() {
+    let s = parse(
+        "w-tcg",
+        "POSIX-STATS execs=0\nPOSIX-STATS exec_ns=5\nPOSIX-STATS spawns=0\nPOSIX-STATS spawn_ns=0\n\
+         POSIX-STATS forks=0\nPOSIX-STATS snapshot_ns=0\nPOSIX-STATS prepares=0\nPOSIX-STATS commits=0\n\
+         POSIX-STATS reaps=0\nPOSIX-STATS takes=1\nPOSIX-STATS syscalls=0\nPOSIX-STATS waits=3\n",
+    )
+    .unwrap();
+    let f: BTreeMap<&str, Option<String>> = s.figures().into_iter().collect();
+    for k in [
+        "wall time (s)",
+        "exec time, mean (ms)",
+        "share of wall time loading programs",
+        "snapshot_process time, mean (ms)",
+        "broker round trips per child (prepare, commit, reap)",
+        "request polls' share of system calls",
+        "wake-ups per second",
+    ] {
+        assert_eq!(f[k], None, "{k}");
+    }
+    assert_eq!(f["exec count"].as_deref(), Some("0"));
+}
