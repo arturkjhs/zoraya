@@ -3,7 +3,7 @@
 - **Status:** proposed
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0005, ADR-0100, ADR-0110, ADR-0141, ADR-0144
-- **Evidence:** CP-27, task-02/libc-surface.csv, task-02/method.md#m1-libc-api-surface
+- **Evidence:** CP-27, task-02/libc-surface.csv, task-02/method.md#m1-libc-api-surface, task-02/method.md#tiers-runs-and-sets
 
 ## Context
 
@@ -21,11 +21,16 @@ exactly the tier list (ADR-0141). TASK-22 found that W2 and W3 cannot link:
   difftime exp fabs flockfile floor fmod frexp ftello funlockfile getc gmtime_r ldexp localeconv log log10 log2
   pclose popen pow sin sqrt system tan ungetc`.
 
+- **pdpmake**, the comparison make W2 and W4 run with (ADR-0110 items 2 and 10; `task-02/method.md#tiers-runs-and-sets`
+  "comparison" runs), is a tool, not a product, but the tier list is the core runs' and has none of its own rows:
+  its link with `zcc` fails on `glob globfree isblank`, all three `comparison` or T3 rows of the CSV naming pdpmake.
+  It runs recipes through `system()`, which W3 needs too.
+
 W1's stage-2 tcc and W8's `mktab` link with the tier list (the first is the same program as the ported tcc). Of the
-45 names (the union, less `dlopen`, `dlsym`, `dlclose` and `dlerror`), `task-02/libc-surface.csv` has 9 at T2, 20 at
-T3, 4 `unused-applets`, 2 `comparison` and 10 not at all (`abs ceil difftime fabs flockfile floor frexp funlockfile
-ldexp localeconv`: libm and stdio names no measured tool imports). 35 are in `libc.a` already, hidden: 33 musl's
-(`math`, `stdio`, `time`, `locale`, `passwd`, `env`, `stdlib`), and `mkdir` and `munmap` the Rust half's. Ten are in
+48 names (the union, less `dlopen`, `dlsym`, `dlclose` and `dlerror`), `task-02/libc-surface.csv` has 9 at T2, 21 at
+T3, 4 `unused-applets`, 4 `comparison` and 10 not at all (`abs ceil difftime fabs flockfile floor frexp funlockfile
+ldexp localeconv`: libm and stdio names no measured tool imports). 38 are in `libc.a` already, hidden: 36 musl's
+(`math`, `stdio`, `time`, `locale`, `passwd`, `env`, `stdlib`, `regex`, `ctype`), and `mkdir` and `munmap` the Rust half's. Ten are in
 no object: `chmod rmdir symlink fsync gethostname utimes getrusage mmap` (musl's files make system calls the shim does
 not route, or are in directories ADR-0141 does not retain), `pclose` (musl's `pclose.c` is excluded for its
 `__sys_wait4`) and `system` (`src/process/` is not retained).
@@ -49,8 +54,8 @@ them for run-time extensions (`unixDlOpen`), which the W3 check never loads.
   write the ten that do not, each over a call the library has (below). `dlopen` and friends stay out, and W3's two
   compiles (`sqlite3.c` and `shell.c`, which calls `sqlite3_load_extension`) take `-DSQLITE_OMIT_LOAD_EXTENSION`,
   the one change to a measured command.
-- **Evidence for:** Drivers 1, 2 (except the one flag) and 4. Each name has its workload. Musl's own code serves 33 of the 35 that exist.
-- **Evidence against:** The exports grow from 248 to 293 names, past T1's measured 248 (CP-27's "small"); the list
+- **Evidence for:** Drivers 1, 2 (except the one flag) and 4. Each name has its workload. Musl's own code serves 36 of the 38 that exist.
+- **Evidence against:** The exports grow from 248 to 296 names, past T1's measured 248 (CP-27's "small"); the list
   is no longer "the tools' surface" but "the tools' and their products'". A flag on W3's command.
 - **Cost:** *(estimate)* 150 lines of Rust, a line of the shim, one musl file retained, one file un-excluded.
 - **Precedent:** ADR-0144 (two names for toybox's `sort` and `wc`, the same mechanism).
@@ -84,7 +89,8 @@ them for run-time extensions (`unixDlOpen`), which the W3 check never loads.
 
 **Recommendation (not a decision): Option A.**
 
-1. **The names**, in the block below, each with the workload whose link needs it.
+1. **The names**, in the block below, each with the workload whose link needs it (W2's `lua`, W3's `sqlite3`, and
+   pdpmake for W2 and W4).
 2. **The ten new ones**: `chmod`, `rmdir`, `symlink` and `utimes` are `fchmodat`, `unlinkat(AT_REMOVEDIR)`,
    `symlinkat` and `utimensat` from `AT_FDCWD`; `gethostname` is `uname`'s node name, as musl's file; `getrusage`
    gives zeros, as `wait3` does (no accounting); `mmap` is the C name of the shim's `zoraya_posix_mmap`; `pclose` is
@@ -123,7 +129,10 @@ getc
 gethostname
 getpwuid
 getrusage
+glob
+globfree
 gmtime_r
+isblank
 ldexp
 localeconv
 log
@@ -149,14 +158,15 @@ utimes
 
 **Tensions with accepted ADRs.**
 
-- *ADR-0005*: the exports exceed T1's measured list by the products' names; driver 1 holds, each name has a workload.
+- *ADR-0005*: the exports exceed T1's measured list by the products' names and pdpmake's; driver 1 holds, each name
+  has a workload.
 - *ADR-0110 driver 6*: one flag on W3's two compiles.
 - *ADR-0141*: one more musl file retained (`system.c`) and one un-excluded (`pclose.c`).
 
 ## Consequences
 
 - **Positive.** W2 and W3 link with musl's own code; the products' surface is written down for the first time.
-- **Negative.** 45 more exports; INV-0005-3's call log now sees products' calls too, which TASK-02 did not count.
+- **Negative.** 48 more exports; INV-0005-3's call log now sees products' calls too, which TASK-02 did not count.
 - **Follow-up.** The block's names in `libc.a`; the W3 flag; `t_posix products` in `make test-posix`; the products'
   links in W2 and W3 themselves.
 

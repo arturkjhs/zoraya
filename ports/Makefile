@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make toybox busybox tcc tcc-host clean-ports FORCE
+	dash make pdpmake toybox busybox tcc tcc-host workloads clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -93,7 +93,9 @@ define unpack
 	  exit 1; fi
 	@tools/fetch-ports.sh --verify $(LOCK) $(CACHE) $(1)
 	rm -rf $@.tmp && mkdir -p $@.tmp
-	cd $@.tmp && tar xf $(CACHE)/$(call lock_file,$(1))
+	@# SQLite's amalgamation is a zip, which GNU tar does not read.
+	cd $@.tmp && case $(call lock_file,$(1)) in *.zip) unzip -q $(CACHE)/$(call lock_file,$(1));; \
+	  *) tar xf $(CACHE)/$(call lock_file,$(1));; esac
 	rm -rf $@ && mv $@.tmp/* $@ && rmdir $@.tmp
 	@for p in $(sort $(wildcard $(2)/*.patch)); do \
 	  echo "patch $$p"; patch -s -p1 -d $@ < $$p || exit 1; done
@@ -271,6 +273,21 @@ $(GMAKE_BIN): $(GMAKE) $(SYSROOT_STAMP) ports/config.site
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GMAKE) V=1,make)
 	@touch $@
 
+# ---------------------------------------------------------------- pdpmake
+
+# pdpmake, TASK-02's comparison make (W2 and W4 run with it, ADR-0110): its
+# own Makefile, unpatched; recipes go through system(), proposed ADR-0210.
+PDPMAKE := $(WORK)/pdpmake
+PDPMAKE_BIN := $(PDPMAKE)/make
+pdpmake: $(PDPMAKE_BIN)
+$(PDPMAKE): $(LOCK) $(wildcard ports/patches/pdpmake/*.patch)
+	$(call unpack,pdpmake,ports/patches/pdpmake)
+	@touch $@
+$(PDPMAKE_BIN): $(PDPMAKE) $(SYSROOT_STAMP)
+	rm -f $(PDPMAKE_BIN)
+	@$(call logged,$(MAKE) -C $(PDPMAKE) make CC=$(ZCC) CFLAGS="$(CROSS_CFLAGS)",pdpmake)
+	@touch $@
+
 # ---------------------------------------------------------------- toybox
 
 # The T1 applets of applets-by-tier.tsv, plus sort, wc and yes (ADR-0109
@@ -388,10 +405,11 @@ libc: $(SYSROOT_STAMP)
 # busybox with a link per applet (ADR-0108 item 6), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STAMP) $(TCC_SYSROOT) $(SYSROOT_STAMP)
+$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STAMP) $(TCC_SYSROOT) $(SYSROOT_STAMP)
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh
 	cp $(GMAKE_BIN) $(ROOTFS)/bin/make
+	cp $(PDPMAKE_BIN) $(ROOTFS)/bin/pdpmake
 	cp $(TCC_BIN) $(ROOTFS)/bin/tcc && ln -s tcc $(ROOTFS)/bin/cc
 	cp $(TOYBOX_BIN) $(ROOTFS)/bin/toybox
 	for a in $(TOYBOX_APPLETS); do ln -s toybox $(ROOTFS)/bin/$$a; done
@@ -399,6 +417,34 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STA
 	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
 	@touch $@
+
+# ---------------------------------------------------------------- the workloads' sources
+
+# The trees the acceptance workloads build inside Zoraya (ADR-0110 item 1),
+# as sources.lock pins them, in build/ports/workloads/: tcc (with the ports'
+# patches, for its Zoraya target, ADR-0109 item 8), Lua, SQLite's
+# amalgamation and GNU hello (W4). Nothing is built here.
+WORKLOADS := $(PORTS)/workloads
+WORKLOADS_STAMP := $(OBJ)/workloads.stamp
+workloads: $(WORKLOADS_STAMP)
+$(WORKLOADS)/tcc: $(LOCK) $(wildcard ports/patches/tcc/*.patch)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,tcc,ports/patches/tcc)
+	@touch $@
+$(WORKLOADS)/lua: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,lua,ports/patches/lua)
+	@touch $@
+$(WORKLOADS)/sqlite: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,sqlite,ports/patches/sqlite)
+	@touch $@
+$(WORKLOADS)/hello: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,hello,ports/patches/hello)
+	@touch $@
+$(WORKLOADS_STAMP): $(addprefix $(WORKLOADS)/,tcc lua sqlite hello)
+	@mkdir -p $(dir $@) && touch $@
 
 # ---------------------------------------------------------------- the host checks
 
@@ -422,7 +468,7 @@ check-ports: | tools
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
-	@for l in dash make busybox toybox tcc libtcc1 musl; do \
+	@for l in dash make pdpmake busybox toybox tcc libtcc1 musl; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi
