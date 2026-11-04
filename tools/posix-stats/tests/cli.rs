@@ -49,7 +49,8 @@ fn table_prints_and_w4_fails_without_a_counter_or_the_accelerator() {
     );
     assert!(!run(&["table", "--w4"]).0);
     assert!(!run(&["table", d.join("missing.log").to_str().unwrap()]).0);
-    assert!(!run(&["nothing"]).0);
+    let (ok, _, err) = run(&["nothing"]);
+    assert!(!ok && err.contains("{table|--calls}"), "{err}");
     assert!(!run(&[]).0);
 }
 
@@ -69,13 +70,14 @@ fn calls_pass_fail_and_refuse_as_they_should() {
     let names = d.join("calls.txt");
     // The order: kill (0), open (1), read (2), writev (3).
     std::fs::write(&names, "kill\nopen\nread\nwritev\n").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    let hash = posix_stats::list_hash(&["kill", "open", "read", "writev"].map(String::from));
+    let session = |calls: &str| format!("POSIX-STATS max_calls_list={hash}\nPOSIX-CALLS {calls}\n");
     let both = d.join("posix-w8-auto.log");
-    std::fs::write(&both, "POSIX-CALLS 06\n").unwrap();
+    std::fs::write(&both, session("06")).unwrap();
     let only_open = d.join("posix-w5-tcg.log");
-    std::fs::write(&only_open, "POSIX-CALLS 02\n").unwrap();
+    std::fs::write(&only_open, session("02")).unwrap();
     let none = d.join("posix-w10-tcg.log");
-    std::fs::write(&none, "POSIX-STATS images=1\n").unwrap();
+    std::fs::write(&none, format!("POSIX-STATS max_calls_list={hash}\n")).unwrap();
     let a = |logs: &[&PathBuf], req: &[&str]| {
         let mut v: Vec<String> = vec![
             "--calls".into(),
@@ -95,6 +97,10 @@ fn calls_pass_fail_and_refuse_as_they_should() {
     let (ok, out, err) = call(a(&[&both], &["w8"]));
     assert!(ok, "{out}{err}");
     assert!(
+        !err.contains("stale"),
+        "writev is exempt and not called: {err}"
+    );
+    assert!(
         out.contains("calls over 1 runs: 2 functions called"),
         "{out}"
     );
@@ -107,10 +113,18 @@ fn calls_pass_fail_and_refuse_as_they_should() {
     assert!(!ok && err.contains("no log of w5"), "{err}");
     let (ok, _, err) = call(a(&[&both, &none], &[]));
     assert!(!ok && err.contains("no POSIX-CALLS"), "{err}");
-    // A log older than the call list is refused.
-    std::thread::sleep(std::time::Duration::from_millis(20));
-    std::fs::write(&names, "kill\nopen\nread\nwritev\n").unwrap();
-    let (ok, _, err) = call(a(&[&both], &[]));
-    assert!(!ok && err.contains("older than"), "{err}");
+    // An exemption for a called function is stale, and said so.
+    let called = d.join("posix-w9-int-tcg.log");
+    std::fs::write(&called, session("0e")).unwrap();
+    let (ok, _, err) = call(a(&[&called], &[]));
+    assert!(ok && err.contains("stale: writev"), "{err}");
+    // A log of another list (another libc.a), or of none, is refused.
+    let other = d.join("posix-w1-tcg.log");
+    std::fs::write(&other, "POSIX-STATS max_calls_list=12345\nPOSIX-CALLS 06\n").unwrap();
+    let (ok, _, err) = call(a(&[&other], &[]));
+    assert!(!ok && err.contains("another libc.a"), "{err}");
+    let bare = d.join("posix-w3-tcg.log");
+    std::fs::write(&bare, "POSIX-CALLS 06\n").unwrap();
+    assert!(!call(a(&[&bare], &[])).0, "no list hash at all");
     assert!(!run(&["--calls", "x"]).0);
 }

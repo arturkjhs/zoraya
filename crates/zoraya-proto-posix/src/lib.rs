@@ -120,6 +120,9 @@ pub mod stats {
         "spawn_ns",
         "max_spawn_buffer",
         "max_fds",
+        // The hash of the call log's order, the same in every process of one
+        // image: the largest is that value (TASK-22 review C3).
+        "max_calls_list",
     ];
     /// The longest counter list and bitmap a report carries.
     pub const MAX_COUNTERS: usize = 64;

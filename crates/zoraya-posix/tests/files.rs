@@ -1537,6 +1537,7 @@ fn every_reported_counter_has_its_own_source() {
         spawns: 21,
         spawn_ns: 22,
         max_spawn_buffer: 23,
+        calls_list: 24,
         inherit_failed_at: 0,
     };
     let values: Vec<u64> = NAMES.iter().map(|n| s.counter(n, 100, 200)).collect();

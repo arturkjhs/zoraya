@@ -228,3 +228,13 @@ fn figures_with_zero_divisors_are_missing() {
     }
     assert_eq!(f["exec count"].as_deref(), Some("0"));
 }
+
+/// The same function as posix-surface-check's: FNV-1a's offset basis for
+/// nothing, and order matters.
+#[test]
+fn the_list_hash_is_fnv_1a_over_the_lines() {
+    assert_eq!(list_hash(&[]), 0xcbf2_9ce4_8422_2325);
+    let ab = list_hash(&["a".into(), "b".into()]);
+    assert_ne!(ab, list_hash(&["b".into(), "a".into()]));
+    assert_ne!(ab, list_hash(&["ab".into()]));
+}

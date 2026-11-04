@@ -801,6 +801,8 @@ unsafe extern "C" {
     /// `posix-surface-check calllog` with `libc.a`).
     static mut __zoraya_calls: [u8; 0];
     static __zoraya_calls_count: u32;
+    /// The hash of the bitmap's order (posix-surface-check's `list_hash`).
+    static __zoraya_calls_list: u64;
 }
 
 /// The call log's bytes.
@@ -824,6 +826,8 @@ fn called() -> &'static mut [u8] {
 #[cfg(feature = "stats")]
 fn report_stats(p: &mut Posix<RtSys>) {
     let calls = process::pack_calls(called());
+    // SAFETY: `calls.S` defines `__zoraya_calls_list`, read-only data.
+    p.stats.calls_list = unsafe { ptr::read(&raw const __zoraya_calls_list) };
     let counters = p.stats.encode(
         zoraya_proto_posix::stats::NAMES,
         zoraya_rt::take_syscalls(),
@@ -834,13 +838,12 @@ fn report_stats(p: &mut Posix<RtSys>) {
 }
 
 /// Counting from zero: after a report, and in a `fork` child, whose copy of
-/// the parent's counters is the parent's to report.
+/// the parent's counters is the parent's to report. `inherit_failed_at`
+/// goes too: a later failure's debug line must not show an earlier one's
+/// fd (the TASK-22 mutants).
 #[cfg(feature = "stats")]
 fn restart_stats(p: &mut Posix<RtSys>) {
-    p.stats = process::Stats {
-        inherit_failed_at: p.stats.inherit_failed_at,
-        ..process::Stats::default()
-    };
+    p.stats = process::Stats::default();
     called().fill(0);
     p.fds.restart_peak();
     let _ = zoraya_rt::take_syscalls();

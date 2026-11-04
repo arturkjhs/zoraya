@@ -412,7 +412,16 @@ fn call_log_assembly_names_its_byte_and_target() {
         !w.contains("\tstp") && !w.contains("\tbl "),
         "no frame, no call"
     );
-    let b = surface::call_log_bitmap(300);
+    let b = surface::call_log_bitmap(300, 0xabc);
+    assert!(b.contains("__zoraya_calls_list:\n\t.quad 0xabc\n"));
+    // FNV-1a's published value for "a", then the newline.
+    let one = surface::list_hash(&["a".to_string()]);
+    assert_ne!(one, surface::list_hash(&["b".to_string()]));
+    assert_ne!(
+        surface::list_hash(&["a".into(), "b".into()]),
+        surface::list_hash(&["b".into(), "a".into()]),
+        "the order counts"
+    );
     assert!(b.contains("__zoraya_calls:\n\t.zero 300\n"));
     assert!(b.contains("__zoraya_calls_count:\n\t.word 300\n"));
 }

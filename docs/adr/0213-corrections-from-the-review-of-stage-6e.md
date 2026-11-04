@@ -72,9 +72,11 @@ accepted, so the changes and statements go here rather than into them.
 5. **Counters:** `broker` counts a process's round trips before its report, so the report itself and an `exec`'s
    `ExecCommit` after it are not in it (about two an `exec` and one an exit fewer than `BROKER-STATS`);
    `peak_tmp_bytes` includes the temporary volume's own blocks, so it is the volume's peak use, not the files'.
-6. **The call log's check** fails when a measured name is not logged at all, refuses a log older than the call
-   list it is decoded with (a log of another `libc.a` would decode to other names), matches each run's logs by
-   their exact names, and warns of an exemption for a function that is called.
+6. **The call log's check** fails when a measured name is not logged at all, matches each run's logs by their exact
+   names, and warns of an exemption for a function that is called. Each log carries the hash of the call log's
+   order: `calllog` puts the FNV-1a hash of `zoraya-calls.txt` into `libc.a` (`__zoraya_calls_list`), every process
+   reports it as `max_calls_list`, and `posix-stats --calls` refuses a log whose hash is not the hash of the list it
+   decodes with (a log of another `libc.a` would decode to other names).
 
 ## Consequences
 

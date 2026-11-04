@@ -15,8 +15,8 @@
 use std::process::ExitCode;
 
 use posix_stats::{
-    W4_REQUIRED, call_names, called, check_calls, exempt_names, measured, missing, parse, table,
-    tier_list,
+    W4_REQUIRED, call_names, called, check_calls, exempt_names, list_hash, measured, missing,
+    parse, table, tier_list,
 };
 
 fn read(path: &str) -> Result<String, String> {
@@ -82,24 +82,23 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
             ok = false;
         }
     }
-    // The bitmaps' order is the list's of the build that wrote them: a log
-    // older than the list may come from another build (review R2).
-    let listed = std::fs::metadata(names)
-        .and_then(|m| m.modified())
-        .map_err(|e| format!("{names}: {e}"))?;
-    for l in logs {
-        let written = std::fs::metadata(l)
-            .and_then(|m| m.modified())
-            .map_err(|e| format!("{l}: {e}"))?;
-        if written < listed {
-            eprintln!(
-                "posix-stats: {l} is older than {names}: it may come from another libc.a; run make test-posix and make test-posix-long again"
-            );
-            ok = false;
-        }
-    }
     let names = call_names(&read(names)?);
     let sessions: Vec<_> = logs.iter().map(|l| session(l)).collect::<Result<_, _>>()?;
+    // The bitmaps' order is the list's of the build that wrote them: each
+    // session's max_calls_list is that list's hash (review C3).
+    let want = list_hash(&names);
+    for s in &sessions {
+        match s.counters.get("max_calls_list") {
+            Some(&h) if h == want => {}
+            got => {
+                eprintln!(
+                    "posix-stats: {} was written by another libc.a's call log (list hash {got:x?}, this list's {want:x}): run its make target again",
+                    s.name
+                );
+                ok = false;
+            }
+        }
+    }
     let bitmaps: Vec<&[u8]> = sessions.iter().filter_map(|s| s.calls.as_deref()).collect();
     if bitmaps.len() != sessions.len() {
         for s in sessions.iter().filter(|s| s.calls.is_none()) {

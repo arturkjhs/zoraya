@@ -199,7 +199,7 @@ fn calllog(args: &[String]) -> Result<(), String> {
     // A hyphen is in no function's name, so no wrapper's file is this one.
     write(
         "zoraya-calls.S".into(),
-        surface::call_log_bitmap(logged.len()),
+        surface::call_log_bitmap(logged.len(), surface::list_hash(&logged)),
     )
 }
 

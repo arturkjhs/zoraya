@@ -250,6 +250,19 @@ pub fn call_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// FNV-1a, 64 bits, over the names each followed by a newline, as
+/// `posix-surface-check calllog` puts it into `libc.a`.
+pub fn list_hash(names: &[String]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for n in names {
+        for &b in n.as_bytes().iter().chain(b"\n") {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
 /// The names whose bit is set in any of `bitmaps`.
 pub fn called(names: &[String], bitmaps: &[&[u8]]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();

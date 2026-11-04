@@ -168,6 +168,8 @@ pub struct Stats {
     pub spawn_ns: u64,
     /// The largest `spawn` buffer built, in bytes (ADR-0042's 64 KiB).
     pub max_spawn_buffer: u64,
+    /// The hash of the call log's order, from `libc.a` (0 without it).
+    pub calls_list: u64,
     /// What the last failed `inherit` was making: the child's fd, or 1000
     /// and the entry's index (for `ZORAYA_POSIX_DEBUG`).
     pub inherit_failed_at: u32,
@@ -204,6 +206,7 @@ impl Stats {
             "spawn_ns" => self.spawn_ns,
             "max_spawn_buffer" => self.max_spawn_buffer,
             "max_fds" => max_fds,
+            "max_calls_list" => self.calls_list,
             _ => 0,
         }
     }

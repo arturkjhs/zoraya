@@ -16,7 +16,7 @@
 < ./mktab 2 > t2.h
 ~ 300 PSURF>
 > \x03
-< Deleting file
+< Deleting file 't
 < PSURF> 
 % w9-int
 > echo W9-STATUS $?\r

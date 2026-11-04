@@ -14,12 +14,12 @@
 < PSURF> 
 > make -j4 > /tmp/w9.log 2>&1 & echo $! > /tmp/make.pid\r
 < PSURF> 
-> until ls */*/t?.h > /dev/null 2>&1; do sleep 0.1; done; kill -TERM $(cat /tmp/make.pid); wait $(cat /tmp/make.pid); echo W9-STATUS $?\r
+> until ls */*/t?.h > /dev/null 2>&1 || ! kill -0 $(cat /tmp/make.pid); do sleep 0.1; done; kill -TERM $(cat /tmp/make.pid); wait $(cat /tmp/make.pid); echo W9-STATUS $?\r
 < W9-STATUS 143
 < PSURF> 
 % w9-term
 > cat /tmp/w9.log\r
-< Deleting file
+< Deleting file 't
 < PSURF> 
 > sh /tests/w9-check.sh /work/w9-term\r
 < W9-PARTIAL 0
