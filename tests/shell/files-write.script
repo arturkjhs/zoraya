@@ -103,6 +103,36 @@
 > mv\r
 < mv: missing operand FROM\r\nusage: mv FROM TO
 < \r\n/> 
+# The file commands of zoraya-commands (TASK-18 step 7), still builtins.
+> cp hello.txt copy.txt\r
+< \r\n/> 
+> cp hello.txt copy.txt\r
+< cp: copy.txt: already exists\r\n  hint: cp --force hello.txt copy.txt replaces it
+< \r\n/> 
+> head --lines 1 notes.txt\r
+< \r\nfirst line\r\n/> 
+> find '*.txt'\r
+< copy.txt\r\ndocs/about.txt\r\nhello.txt\r\nnotes.txt
+< \r\n/> 
+> search second notes.txt\r
+< notes.txt:2: second line
+< \r\n/> 
+> search nothing notes.txt; echo $status\r
+< \r\n1
+< \r\n/> 
+# Settings, written by publishing a new file (ADR-0157 item 4).
+> settings shell.colour no\r
+< \r\n/> 
+> settings\r
+< shell.colour = no
+< \r\n/> 
+> cat /config/settings\r
+< shell.colour = no
+< \r\n/> 
+> settings --reset shell.colour\r
+< \r\n/> 
+> settings\r
+< \r\n/> 
 > sync\r
 < \r\n/> 
 > echo the shell never asked > unsynced.txt\r

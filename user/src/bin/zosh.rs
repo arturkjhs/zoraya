@@ -76,7 +76,7 @@ const BUILTINS: [&str; 16] = [
     "cd", "pwd", "history", "help", "grants", "jobs", "fg", "bg", "wait", "kill", "settings",
     "slots", "uptime", "exit", "poweroff", "reboot",
 ];
-const FILE_COMMANDS: [&str; 7] = ["ls", "cat", "mkdir", "rm", "mv", "stat", "sync"];
+const FILE_COMMANDS: [&str; 11] = zoraya_commands::NAMES;
 /// The help topics (ADR-0156 item 4), in the order `help` lists them.
 const TOPICS: [&str; 7] = [
     "language", "grants", "jobs", "keys", "settings", "errors", "tour",
@@ -584,132 +584,12 @@ impl Z {
                 "there is no volume",
                 &[],
             ));
-            return 1;
+            return i32::from(zoraya_command::failure_code(d));
         }
-        let mut failed = false;
-        let mut fail = |io: &mut Io, subject: &str, status: u32, hints: &[&str]| {
-            io.err.push_str(&zoraya_command::error(
-                name,
-                Some(subject),
-                &problem(status),
-                hints,
-            ));
-            failed = true;
-        };
-        match name {
-            "ls" => {
-                let dir = p.operand(d, "DIR").unwrap_or(".");
-                match self.entries(dir) {
-                    Ok(list) => {
-                        for (n, is_dir) in list {
-                            io.out.push_str(&editor::printable(&n));
-                            io.out.push_str(if is_dir { "/\n" } else { "\n" });
-                        }
-                    }
-                    Err(s) => fail(io, dir, s, &[]),
-                }
-            }
-            "cat" => {
-                for file in p.operand_values(d, "FILE") {
-                    let read = self.open(file, 0).and_then(|f| read_all(&f));
-                    match read {
-                        Ok(bytes) => match core::str::from_utf8(&bytes) {
-                            Ok(text) => {
-                                io.out.push_str(text);
-                                if !text.is_empty() && !text.ends_with('\n') {
-                                    io.out.push('\n');
-                                }
-                            }
-                            Err(_) => io
-                                .out
-                                .push_str(&format!("{} bytes of binary\n", bytes.len())),
-                        },
-                        Err(s) => fail(io, file, s, &[]),
-                    }
-                }
-            }
-            "mkdir" => {
-                for dir in p.operand_values(d, "DIR") {
-                    let made = self.parent(dir).and_then(|(f, n)| f.make_directory(&n));
-                    if let Err(s) = made {
-                        fail(io, dir, s, &[]);
-                    }
-                }
-            }
-            "rm" => {
-                let recursive = p.flag(d, "recursive");
-                for path in p.operand_values(d, "PATH") {
-                    let result = if recursive {
-                        self.remove_tree(path)
-                    } else {
-                        self.parent(path).and_then(|(f, n)| f.remove(&n))
-                    };
-                    if let Err(s) = result {
-                        let hint = format!("rm --recursive {path} removes it and everything in it");
-                        let hints: &[&str] = if s == zoraya_proto_file::status::NOT_EMPTY {
-                            &[&hint]
-                        } else {
-                            &[]
-                        };
-                        fail(io, path, s, hints);
-                    }
-                }
-            }
-            "mv" => {
-                let (from, to) = (
-                    p.operand(d, "FROM").unwrap_or(""),
-                    p.operand(d, "TO").unwrap_or(""),
-                );
-                let moved = self.parent(from).and_then(|(a, an)| {
-                    let (b, bn) = self.parent(to)?;
-                    a.rename(&an, &b, &bn)
-                });
-                if let Err(s) = moved {
-                    fail(io, from, s, &[]);
-                }
-            }
-            "stat" => {
-                for path in p.operand_values(d, "PATH") {
-                    match self.open(path, 0).and_then(|f| f.stat()) {
-                        Ok(s) => {
-                            let kind = match s.kind {
-                                proto_kind::DIRECTORY => "directory",
-                                proto_kind::LINK => "link",
-                                _ => "file",
-                            };
-                            io.out.push_str(&format!(
-                                "{kind} size {} mtime {} ctime {} mode {:o}\n",
-                                s.size,
-                                s.modified / 1_000_000_000,
-                                s.changed / 1_000_000_000,
-                                s.mode
-                            ));
-                        }
-                        Err(s) => fail(io, path, s, &[]),
-                    }
-                }
-            }
-            "sync" => {
-                if let Some(Err(s)) = self.root.as_ref().map(File::sync) {
-                    io.err
-                        .push_str(&zoraya_command::error("sync", None, &problem(s), &[]));
-                    failed = true;
-                }
-            }
-            _ => {}
-        }
-        i32::from(failed)
-    }
-
-    fn remove_tree(&self, path: &str) -> FsResult<()> {
-        let abs = self.abs(path);
-        if let Ok(list) = self.entries(&abs) {
-            for (name, _) in list {
-                self.remove_tree(&format!("{abs}/{name}"))?;
-            }
-        }
-        let (dir, name) = self.parent(&abs)?;
-        dir.remove(&name)
+        let (code, o) = zoraya_commands::run(name, d, p, &mut Volume(self));
+        io.out.push_str(&o.out);
+        io.err.push_str(&o.err);
+        i32::from(code)
     }
 
     fn help(&mut self, state: &State, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
@@ -1456,6 +1336,79 @@ fn ramdisk_programs() -> Vec<String> {
     }
     names.sort_unstable_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
     names
+}
+
+/// The volume as the file commands see it, with the shell's own access
+/// until the commands are programs (TASK-18 step 7).
+struct Volume<'a>(&'a Z);
+
+impl zoraya_commands::Files for Volume<'_> {
+    fn list(&mut self, dir: &str) -> Result<Vec<(String, zoraya_commands::Kind)>, u32> {
+        let dir = self.0.open(dir, OPEN_DIRECTORY)?;
+        let mut out = Vec::new();
+        dir.list(&mut |name, kind| out.push((name.into(), kind_of(kind))))?;
+        Ok(out)
+    }
+
+    fn read(&mut self, path: &str) -> Result<Vec<u8>, u32> {
+        read_all(&self.0.open(path, 0)?)
+    }
+
+    fn create(&mut self, path: &str, bytes: &[u8], replace: bool) -> Result<(), u32> {
+        let exclusive = if replace {
+            open_flags::TRUNCATE
+        } else {
+            open_flags::EXCLUSIVE
+        };
+        let file = self.0.open(path, open_flags::CREATE | exclusive)?;
+        if !bytes.is_empty() {
+            file.write(0, 0, bytes)?;
+        }
+        Ok(())
+    }
+
+    fn make_directory(&mut self, path: &str) -> Result<(), u32> {
+        let (dir, name) = self.0.parent(path)?;
+        dir.make_directory(&name)
+    }
+
+    fn remove(&mut self, path: &str) -> Result<(), u32> {
+        let (dir, name) = self.0.parent(path)?;
+        dir.remove(&name)
+    }
+
+    fn rename(&mut self, from: &str, to: &str) -> Result<(), u32> {
+        let (a, an) = self.0.parent(from)?;
+        let (b, bn) = self.0.parent(to)?;
+        a.rename(&an, &b, &bn)
+    }
+
+    fn stat(&mut self, path: &str) -> Result<zoraya_commands::Stat, u32> {
+        let s = self.0.open(path, 0)?.stat()?;
+        Ok(zoraya_commands::Stat {
+            kind: kind_of(s.kind),
+            size: s.size,
+            modified: s.modified,
+            changed: s.changed,
+            mode: s.mode,
+        })
+    }
+
+    fn sync(&mut self) -> Result<(), u32> {
+        self.0
+            .root
+            .as_ref()
+            .ok_or(zoraya_command::FILE_GONE)?
+            .sync()
+    }
+}
+
+fn kind_of(kind: u32) -> zoraya_commands::Kind {
+    match kind {
+        proto_kind::DIRECTORY => zoraya_commands::Kind::Directory,
+        proto_kind::LINK => zoraya_commands::Kind::Link,
+        _ => zoraya_commands::Kind::File,
+    }
 }
 
 /// The editor's view of the shell.

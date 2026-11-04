@@ -1,0 +1,20 @@
+[package]
+name = "zoraya-commands"
+description = "The file commands' logic (ADR-0155 rule 8): ls, cat, cp, mv, rm, mkdir, stat, sync, head, find, search over a Files trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-command = { path = "../zoraya-command" }
+zoraya-describe = { path = "../zoraya-describe" }
+zoraya-proto-file = { path = "../zoraya-proto-file" }
+zoraya-shell = { path = "../zoraya-shell" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

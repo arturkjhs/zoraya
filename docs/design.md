@@ -718,8 +718,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `crates/zoraya-shell/describe/`): `NAME --help`, `help NAME` (paged), `help --search WORD`, Tab completion and
   argument parsing all come from it. Builtins: `cd`, `pwd`, `set`, `unset`, `export`, `count`, `echo`, `test`,
   `math`, `source`, `status`, `history`, `help`, `grants`, `jobs`, `fg`, `bg`, `wait`, `kill`, `settings`, `slots`,
-  `uptime`, `exit`, `poweroff`, `reboot`. Until step 7 the file commands `ls`, `cat`, `mkdir`, `rm`, `mv`, `stat` and
-  `sync` are built in too; `ls /zoraya/bin` lists the ramdisk's programs. Errors read `NAME: SUBJECT: PROBLEM`
+  `uptime`, `exit`, `poweroff`, `reboot`. Until the rest of step 7 the file commands `ls`, `cat`, `cp`, `mv`, `rm`,
+  `mkdir`, `stat`, `sync`, `head`, `find` and `search` are built in too, over `zoraya-commands`; `ls /zoraya/bin` lists the ramdisk's programs. Errors read `NAME: SUBJECT: PROBLEM`
   (`cat: missing.txt: not found`), with a `hint:` when one is known; unknown commands get the nearest names or, for
   `grep`, `wc`, `man`, `less`, `more` and `which`, what to type on Zoraya.
 - **Programs** from the ramdisk run by name in a job of their own, with only the console (and, for the test programs
@@ -743,7 +743,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `shell.suggestions`, `shell.colour`, `console.columns`.
 
 **Pending (TASK-18 Part 2).** Step 7: grants (`+r`, `+w`, designated operands, `grants` as ADR-0153 words it) and the
-file commands as programs (`cp`, `head`, `find`, `search` arrive then); `grants` today says what a program gets.
+file commands as programs; `grants` today says what a program gets.
 Steps 8 and 9 after stage 6a: byte streams, pipelines (`|` is refused with a message), redirection of programs, `$(...)`
 of a program, Ctrl-Z, `bg`. Step 10 after 6d: POSIX programs. Step 11: the tour as a test on both terminals.
 Step 12: `reboot` (ADR-0159).
@@ -925,6 +925,7 @@ crates/                   no_std, host-tested
   zoraya-shell/           zosh's language (parser, globs, evaluator over a host trait, ADR-0150, ADR-0151),
                           its line editor and exit records in words; describe/ holds the language builtins' pages
   zoraya-describe/        command descriptions (NAME.cmd): the total parser of ADR-0156
+  zoraya-commands/        the file commands' logic over a Files trait: the shell's builtins now, the programs later
   zoraya-settings/        /config/settings: a total reader and a writer that keeps every other line (ADR-0157)
   zoraya-command/         what every native command shares: argv from its description, --help, error lines,
                           statuses in words, exit codes (ADR-0155)

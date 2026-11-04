@@ -35,6 +35,7 @@ zoraya-term = { path = "../crates/zoraya-term" }
 zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-command = { path = "../crates/zoraya-command" }
 zoraya-settings = { path = "../crates/zoraya-settings" }
+zoraya-commands = { path = "../crates/zoraya-commands" }
 
 [build-dependencies]
 zoraya-describe = { path = "../crates/zoraya-describe" }
