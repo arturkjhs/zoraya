@@ -388,6 +388,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0180-1 | [ADR-0180](0180-libposix-core-choices-of-stage-6c.md) | A request at the position moves it by exactly what it read or wrote, for every connection of the description, and an explicit offset moves it not at all. | `zoraya-fs-service`'s host tests (`interleaved_requests_at_the_position_lose_no_update`, `shared_connections_see_one_position`, `buffer_requests_at_the_position_move_it`). | checked: `make test-unit` |
 | INV-0180-2 | [ADR-0180](0180-libposix-core-choices-of-stage-6c.md) | `open` never truncates a file whose owner write bit is clear, and never refuses a file it created for its mode. | `zoraya-posix`'s host test `owner_bits_are_applied_as_posix_would`, against the real service. | checked: `make test-unit` |
 | INV-0180-3 | [ADR-0180](0180-libposix-core-choices-of-stage-6c.md) | `libc.a` contains no reference to a name it does not define, and `svc` only in `zoraya-rt`'s member. | `posix-surface-check check ... --allow-svc zoraya_rt-` in `make check-ports`, and the five broken archives. | checked: `make check-ports`, and `make test` through `make test-libposix`'s `check-libc` |
+| INV-0191-1 | [ADR-0191](0191-one-time-base.md) | A file written on the temporary volume after a file on the root volume has the later `mtime`, and the other way round, and `clock_gettime(CLOCK_REALTIME)` read after both is not below either. | `zoraya-fs-service`'s host test `a_file_in_tmp_written_after_one_in_home_is_later`, and the in-QEMU session test's `t_posix time`. | checked: `make test-unit` |
+| INV-0191-2 | [ADR-0191](0191-one-time-base.md) | The base is above every time the root volume holds when it is mounted. | the host test `the_base_goes_on_from_the_latest_stored_time`. | checked: `make test-unit` |
 
 ## Counts
 
@@ -489,4 +491,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0171](0171-list-settings.md) A list type for settings (a change to ADR-0157) | 3 |
 | [ADR-0172](0172-rooms.md) Rooms: named sets of grants that programs run in, shown by the compositor | 10 |
 | [ADR-0180](0180-libposix-core-choices-of-stage-6c.md) `libposix` core choices the stage 6 ADRs leave open | 3 |
-| **Total** | **382** |
+| [ADR-0191](0191-one-time-base.md) One time base for every volume and for `CLOCK_REALTIME` | 2 |
+| **Total** | **384** |

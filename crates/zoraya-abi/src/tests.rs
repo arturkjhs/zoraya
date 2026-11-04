@@ -944,6 +944,7 @@ mod bootstrap {
         gid: 1000,
         umask: 0o022,
         ignored: 1 << 13,
+        realtime_base: 1_800_000_000_123_456_789,
     };
 
     const FDS: [Fd; 4] = [
@@ -1213,14 +1214,16 @@ mod bootstrap {
             Bootstrap::decode(&m[..n], 4).is_none(),
             "another header size"
         );
-        for at in 56..HEADER_SIZE {
-            let mut m = b;
-            m[at] = 1;
-            assert!(
-                Bootstrap::decode(&m[..n], 4).is_none(),
-                "reserved byte {at}"
-            );
-        }
+        // What were reserved bytes carry the time base (ADR-0191): any
+        // value is a base, and it reads back.
+        assert_eq!(
+            Bootstrap::decode(&b[..n], 4).unwrap().facts.realtime_base,
+            FACTS.realtime_base
+        );
+        let mut m = b;
+        m[63] = 0xff;
+        let base = Bootstrap::decode(&m[..n], 4).unwrap().facts.realtime_base;
+        assert_eq!(base >> 56, 0xff);
         // The fd kinds and entry kinds past the last are refused.
         let fd_kind = HEADER_SIZE + 4 + "/bin/t_libposix".len() + 4 + "home/Київ".len() + 4;
         assert_eq!(b[fd_kind], FdKind::Null as u8);

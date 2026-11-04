@@ -225,6 +225,8 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     fifo_nodes: BTreeSet<u64>,
     /// The `open_with_mode` being served makes a FIFO if it creates.
     fifo_create: bool,
+    /// What `time_base` answers (ADR-0191).
+    time_base: u64,
     connections: Vec<Option<Connection<T::End>>>,
     records: Vec<Option<Record>>,
     /// Handles held for clients (ADR-0055).
@@ -279,6 +281,26 @@ fn nanoseconds(t: Timestamp) -> u64 {
         .saturating_add(u64::from(t.nanos))
 }
 
+/// The boot's time base from the root volume (ADR-0191): the latest time the
+/// volume holds, less the monotonic clock now, so that the base plus the
+/// monotonic clock goes on from that time and never falls below it. A
+/// volume made before 1970 or by a clock ahead of this one gives 0 at
+/// least.
+pub fn time_base(latest: Timestamp, monotonic_ns: u64) -> u64 {
+    nanoseconds(latest)
+        .saturating_add(1)
+        .saturating_sub(monotonic_ns)
+}
+
+/// The wall clock of a service on the boot's time base.
+pub fn wall_time(base: u64, monotonic_ns: u64) -> Timestamp {
+    let t = base.saturating_add(monotonic_ns);
+    Timestamp {
+        secs: (t / 1_000_000_000) as i64,
+        nanos: (t % 1_000_000_000) as u32,
+    }
+}
+
 fn failure_code(reason: FailReason) -> u32 {
     use proto::failure::*;
     match reason {
@@ -299,6 +321,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             fifos: None,
             fifo_nodes: BTreeSet::new(),
             fifo_create: false,
+            time_base: 0,
             connections: Vec::new(),
             records: Vec::new(),
             open: 0,
@@ -313,6 +336,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             data: vec![0; proto::MAX_INLINE],
             handles: Vec::with_capacity(64),
         }
+    }
+
+    /// The time base `time_base` gives (ADR-0191).
+    pub fn set_time_base(&mut self, base: u64) {
+        self.time_base = base;
     }
 
     /// Gives `S_IFIFO` its meaning: `fifo_open` (the temporary directory
@@ -909,6 +937,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             34 => {
                 let (_, m) = decode::<proto::FifoOpen>(bytes, n)?;
                 self.fifo_open(i, t, m.side.0, m.nonblock.0 == 1);
+            }
+            35 => {
+                decode::<proto::TimeBase>(bytes, n)?;
+                self.done(i, t, status::OK, self.time_base);
             }
             ERROR_ORDINAL..=u32::MAX => {
                 let m = ErrorReply {

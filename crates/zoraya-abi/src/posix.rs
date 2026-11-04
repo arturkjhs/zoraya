@@ -15,7 +15,8 @@
 //! cwd entry        u32, an index into the entries
 //! fd count         u32
 //! entry count      u32
-//! reserved         8 bytes, zero
+//! realtime base   u64: nanoseconds added to the monotonic clock for
+//!                  `CLOCK_REALTIME`, one per boot (ADR-0191); 0 for none
 //! exe              u32 length, bytes: the executable's path
 //! cwd              u32 length, bytes: relative to the cwd entry's prefix
 //! fds              FD_SIZE bytes each: fd u32, kind u8, flags u8, tty u8,
@@ -226,6 +227,9 @@ pub struct Facts {
     pub gid: u32,
     pub umask: u32,
     pub ignored: u32,
+    /// The boot's time base (ADR-0191): `CLOCK_REALTIME` is this plus the
+    /// monotonic clock; 0 when the spawner had none.
+    pub realtime_base: u64,
 }
 
 /// One fd of the record.
@@ -327,6 +331,7 @@ impl<'a> Bootstrap<'a> {
             gid: word(5)?,
             umask: word(6)?,
             ignored: word(7)?,
+            realtime_base: u64::from(word(12)?) | (u64::from(word(13)?) << 32),
         };
         let flags = word(8)?;
         let cwd_entry = word(9)?;
@@ -334,7 +339,6 @@ impl<'a> Bootstrap<'a> {
         let entry_count = word(11)? as usize;
         if facts.umask > 0o777
             || flags & !FLAGS != 0
-            || bytes.get(56..HEADER_SIZE)? != [0; 8]
             || fd_count > OPEN_MAX as usize
             || cwd_entry as usize >= entry_count
         {
@@ -504,7 +508,7 @@ pub fn encode(
     ] {
         put(&word.to_le_bytes())?;
     }
-    put(&[0; 8])?;
+    put(&facts.realtime_base.to_le_bytes())?;
     for text in [exe, cwd] {
         put(&u32::try_from(text.len()).ok()?.to_le_bytes())?;
         put(text.as_bytes())?;

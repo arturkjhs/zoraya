@@ -12,6 +12,7 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
@@ -22,7 +23,8 @@ use zoraya_fs::{Clock, MkfsOptions, MountOptions, Timestamp, Volume, mkfs};
 use zoraya_fs_service::block::{ChannelDevice, Link, LinkError};
 use zoraya_fs_service::memory::MemoryDevice;
 use zoraya_fs_service::{
-    Device, HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake,
+    Device, HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake, time_base,
+    wall_time,
 };
 use zoraya_proto_block as blk;
 use zoraya_proto_file::Failure;
@@ -67,15 +69,17 @@ impl Link for DriverLink {
     }
 }
 
+/// The boot's time base (ADR-0191): the root volume's service sets it from
+/// its volume at mount, a temporary one from `--base`.
+static BASE: AtomicU64 = AtomicU64::new(0);
+
 struct Time;
 
 impl Clock for Time {
     fn wall(&mut self) -> Timestamp {
-        // No device gives a date (ADR-0080): the engine keeps times rising.
-        Timestamp {
-            secs: (clock_monotonic() / 1_000_000_000) as i64,
-            nanos: 0,
-        }
+        // No device gives a date (ADR-0080): one base for the boot, plus the
+        // monotonic clock; the engine still keeps times rising.
+        wall_time(BASE.load(Ordering::Relaxed), clock_monotonic())
     }
 
     fn monotonic_ns(&mut self) -> u64 {
@@ -255,6 +259,7 @@ fn slot(n: u64) -> Handle {
 /// Serves the volume until every connection is gone.
 fn serve<D: Device>(volume: Volume<D, Time>, kernel: Kernel, root: Handle, fifos: bool) -> i32 {
     let mut service = Box::new(Service::new(volume, kernel));
+    service.set_time_base(BASE.load(Ordering::Relaxed));
     if fifos {
         service.enable_fifos();
     }
@@ -266,21 +271,27 @@ fn serve<D: Device>(volume: Volume<D, Time>, kernel: Kernel, root: Handle, fifos
     0
 }
 
-/// `--memory MIB`: the size of the temporary volume, if the option is there.
-fn memory_option() -> Option<u64> {
+/// The value after `name` among the arguments, as a number.
+fn option(name: &[u8]) -> Option<u64> {
     let mut argv = startup().argv;
     while let Some(a) = argv.next() {
-        if a == b"--memory" {
-            let mib: u64 = core::str::from_utf8(argv.next()?).ok()?.parse().ok()?;
-            return Some(mib.clamp(1, 1024) << 20);
+        if a == name {
+            return core::str::from_utf8(argv.next()?).ok()?.parse().ok();
         }
     }
     None
 }
 
+/// `--memory MIB`: the size of the temporary volume, if the option is there.
+fn memory_option() -> Option<u64> {
+    option(b"--memory").map(|mib| mib.clamp(1, 1024) << 20)
+}
+
 /// The temporary directory service: a fresh volume in memory (ADR-0107
 /// item 12), the root world-writable and sticky as `/tmp` is.
 fn temporary(size: u64) -> i32 {
+    // The boot's base, from whoever started this service (ADR-0191).
+    BASE.store(option(b"--base").unwrap_or(0), Ordering::Relaxed);
     let root = slot(6);
     let supervisor = slot(7);
     let supervisor = handle_type(supervisor).is_ok().then_some(supervisor);
@@ -367,6 +378,9 @@ fn main() -> i32 {
             return 1;
         }
     };
+    // The root volume's service sets the boot's base (ADR-0191).
+    let latest = volume.last_assigned();
+    BASE.store(time_base(latest, clock_monotonic()), Ordering::Relaxed);
     let port = port_create().expect("port");
     port_subscribe(
         port,

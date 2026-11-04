@@ -404,6 +404,10 @@ protocol! {
         status: Code,
     }
 
+    /// The boot's time base in `Done`'s count (ADR-0191): nanoseconds that
+    /// the service adds to the monotonic clock for the times it assigns.
+    message TimeBase = 35, handles 0 {}
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -411,7 +415,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 34] = [
+pub const REQUESTS: [(&str, u32); 35] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -446,6 +450,7 @@ pub const REQUESTS: [(&str, u32); 34] = [
     ("stat", 32),
     ("read_directory_ids", 33),
     ("fifo_open", 34),
+    ("time_base", 35),
 ];
 
 /// `fifo_open`'s side.
@@ -589,6 +594,7 @@ mod tests {
             },
             0,
         );
+        check(TimeBase {}, 0);
         check(
             FifoOpenReply {
                 status: Below(status::OK),
