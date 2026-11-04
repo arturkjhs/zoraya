@@ -967,8 +967,7 @@ Step 12: `reboot` (ADR-0159).
   programs start: its output is held, up to the 1 MiB of a `$(...)`, and then fed (ADR-0152 rule 5 allows it to be
   written as it is made). Every byte of output is copied through `zosh` (ADR-0152's open question on the relay's
   cost). Keys typed to a program are cooked by `zosh`: cursor keys are dropped, and the line is sent at Enter. A test
-  program that writes with `console_write` itself still reaches the serial console, not the window. A line wider than the terminal is drawn again on a new row when
-  edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` publishes
+  program that writes with `console_write` itself still reaches the serial console, not the window. `settings` publishes
   a new `/config/settings` (ADR-0157 item 4); `/config/history` is rewritten in place after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
   ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). A job brought to the front with `fg` after
   `&` or `bg` has its input at its end: only a job stopped in front gets the keys again. A line whose job Ctrl-Z

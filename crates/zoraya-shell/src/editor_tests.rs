@@ -57,27 +57,35 @@ fn feed(e: &mut Editor, a: &mut Fake, keys: &[u8]) -> (String, Key) {
     (out, last)
 }
 
-/// The screen as text, after a simple terminal: `\r` to column 0, `\x08`
-/// and `ESC [ n D` left, `ESC [ n C` right, `ESC [ K` clears to the end,
-/// SGR dropped. Gives the last line.
+/// The screen as text, after a simple terminal 80 columns wide (see
+/// [`screen_wide`]). Gives the last line.
 pub(crate) fn screen(bytes: &str) -> String {
     screen_lines(bytes).pop().unwrap_or_default()
 }
 
 /// [`screen`]'s every line.
 pub(crate) fn screen_lines(bytes: &str) -> Vec<String> {
-    let mut lines: Vec<Vec<char>> = vec![Vec::new()];
-    let mut col = 0usize;
+    screen_wide(bytes, 80)
+}
+
+/// The rows of a terminal `width` columns wide after `bytes`: `\r` to
+/// column 0, `\n` to the next row's start, `\x08` and `ESC [ n D` left,
+/// `ESC [ n C` right, `ESC [ n A` up, `ESC [ K` clears to the row's end,
+/// `ESC [ J` to the screen's end, `ESC [ H` home; a character past the last
+/// column goes to the next row first (a terminal that waits to wrap). SGR
+/// is ignored.
+pub(crate) fn screen_wide(bytes: &str, width: usize) -> Vec<String> {
+    let mut rows: Vec<Vec<char>> = vec![Vec::new()];
+    let (mut row, mut col) = (0usize, 0usize);
     let mut chars = bytes.chars().peekable();
     while let Some(c) = chars.next() {
-        let line = lines.last_mut().unwrap();
         match c {
             '\r' => col = 0,
             '\n' => {
-                lines.push(Vec::new());
+                row += 1;
                 col = 0;
             }
-            '\x08' => col = col.saturating_sub(1),
+            '\x08' => col = col.min(width - 1).saturating_sub(1),
             '\x1b' => {
                 chars.next(); // [
                 let mut n = String::new();
@@ -91,13 +99,30 @@ pub(crate) fn screen_lines(bytes: &str) -> Vec<String> {
                 }
                 let n: usize = n.parse().unwrap_or(1);
                 match fin {
-                    'D' => col = col.saturating_sub(n),
-                    'C' => col += n,
-                    'K' => line.truncate(col),
+                    'A' => row = row.saturating_sub(n),
+                    'C' => col = (col + n).min(width - 1),
+                    'D' => col = col.min(width - 1).saturating_sub(n),
+                    'H' => (row, col) = (0, 0),
+                    'K' | 'J' => {
+                        if let Some(r) = rows.get_mut(row) {
+                            r.truncate(col);
+                        }
+                        if fin == 'J' {
+                            rows.truncate(row + 1);
+                        }
+                    }
                     _ => {}
                 }
             }
             c => {
+                if col >= width {
+                    row += 1;
+                    col = 0;
+                }
+                while rows.len() <= row {
+                    rows.push(Vec::new());
+                }
+                let line = &mut rows[row];
                 while line.len() < col {
                     line.push(' ');
                 }
@@ -109,8 +134,11 @@ pub(crate) fn screen_lines(bytes: &str) -> Vec<String> {
                 col += 1;
             }
         }
+        while rows.len() <= row {
+            rows.push(Vec::new());
+        }
     }
-    lines.iter().map(|l| l.iter().collect()).collect()
+    rows.iter().map(|l| l.iter().collect()).collect()
 }
 
 pub(crate) fn without_sgr(s: &str) -> String {
@@ -365,6 +393,72 @@ fn long_lines_stay_correct() {
     assert_eq!(e.text(), "");
 }
 
+/// A line wider than the terminal is redrawn in place (ADR-0154 rule 8 as
+/// changed on 2026-11-04): edits away from its end leave exactly its rows,
+/// prompt and text, with nothing above or below, and a line that ends at
+/// the right edge is followed by a line end.
+#[test]
+fn long_lines_are_redrawn_in_place() {
+    for width in [7, 20, 33] {
+        let mut e = Editor::new(Options {
+            width,
+            suggestions: false,
+            ..Options::default()
+        });
+        let mut screen_bytes = String::from("before\n");
+        e.start("~> ", &mut screen_bytes);
+        let mut a = fake();
+        let mut text = String::from("echo ");
+        text.push_str(&"a".repeat(2 * width));
+        let (o, _) = feed(&mut e, &mut a, text.as_bytes());
+        screen_bytes.push_str(&o);
+        // Into the middle, insert, delete, and to the start and back.
+        for keys in [
+            b"\x1b[D\x1b[D\x1b[D\x1b[D\x1b[D\x1b[D\x1b[D".as_slice(),
+            b"XY",
+            b"\x7f",
+            &[CTRL_A],
+            b"Z",
+            &[CTRL_E],
+        ] {
+            let (o, _) = feed(&mut e, &mut a, keys);
+            in_subset(&o).unwrap();
+            screen_bytes.push_str(&o);
+            let rows = screen_wide(&without_sgr(&screen_bytes), width);
+            assert_eq!(rows[0], "before", "nothing above is touched ({width})");
+            let shown: String = rows[1..].concat();
+            let want = alloc::format!("~> {}", e.text());
+            assert_eq!(shown, want, "{width}: {rows:?}");
+            let cells = want.chars().count();
+            assert_eq!(rows.len() - 1, cells / width + 1, "{width}: {rows:?}");
+        }
+        // Typing at the end writes only what is typed (and a line end at
+        // the edge), and the rows stay right.
+        for _ in 0..width + 1 {
+            let (o, _) = feed(&mut e, &mut a, b"b");
+            assert_eq!(o.trim_end_matches('\n'), "b", "{width}");
+            screen_bytes.push_str(&o);
+            let rows = screen_wide(&without_sgr(&screen_bytes), width);
+            assert_eq!(rows[1..].concat(), alloc::format!("~> {}", e.text()));
+        }
+        assert!(e.text().starts_with("Zecho a"), "{}", e.text());
+        assert!(e.text().contains("aX"), "{}", e.text());
+    }
+    // Ending at the edge: the cursor goes to the next row at once.
+    let mut e = Editor::new(Options {
+        width: 10,
+        suggestions: false,
+        ..Options::default()
+    });
+    let mut out = String::new();
+    e.start("~> ", &mut out);
+    let mut a = fake();
+    let (o, _) = feed(&mut e, &mut a, b"echo xy");
+    out.push_str(&o);
+    assert!(out.ends_with('\n'), "{out:?}");
+    assert_eq!(screen_wide(&without_sgr(&out), 10), ["~> echo xy", ""]);
+}
+
 #[test]
 fn a_parse_error_has_a_caret_and_a_hint() {
     let line = "if test -f a.txt { echo yes } else echo no }";
@@ -403,7 +497,7 @@ fn in_subset(out: &str) -> Result<(), String> {
                     }
                 };
                 let ok = match fin {
-                    'C' | 'D' => !params.is_empty(),
+                    'A' | 'C' | 'D' => !params.is_empty(),
                     'K' | 'J' | 'H' => params.is_empty(),
                     'm' => matches!(params.as_str(), "" | "0" | "1" | "2" | "22" | "31"),
                     _ => false,

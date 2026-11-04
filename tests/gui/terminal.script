@@ -26,6 +26,56 @@ key f12
 type ls | search a\r
 screen a.txt
 screen ~> _
+# A line wider than the window (80 columns) is redrawn in place (ADR-0154
+# rule 8 as changed on 2026-11-04): an edit near its start rewrites its two
+# rows, and the row below stays empty; the editor before this drew the
+# line again there. Rows are 20 pixels high from y 20 (the compositor's
+# origin and the terminal's padding).
+chord ctrl l
+# In pieces the screen confirms: under TCG a burst of keys can fill
+# term's channel to zosh, and term drops keys (docs/backlog.md).
+type echo aaaaaaa
+window
+screen ~> echo aaaaaaa_
+type aaaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaa_
+type aaaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
+type aaaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
+type aaaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
+type aaaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
+type aaaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+screen aaaaaaa_
+type aaaaaaaaaaa
+window
+screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+screen aaaaaaaaaaaaaaaaaa_
+chord ctrl a
+key right
+key right
+key right
+key right
+key right
+type Z
+chord ctrl e
+window
+screen ~> echo Zaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+screen aaaaaaaaaaaaaaaaaaa_
+region 20 60 960 20 000000
+type \r
+screen Zaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+screen aaaaaaaaaaa
+screen ~> _
 # exit closes the window, and init opens a new one with a new shell, since it
 # was the last (ADR-0155's Decision, INV-0155-5).
 type exit\r

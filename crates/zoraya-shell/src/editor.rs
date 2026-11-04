@@ -3,13 +3,15 @@
 //! text, the command word in red while it names nothing, and continuation
 //! lines (`...> `) while a quote or block is open.
 //!
-//! It writes only ADR-0096's subset as extended by ADR-0154 (rule 8): text,
-//! `\r`, `\n`, `\x08`, `ESC [ n C`, `ESC [ n D`, `ESC [ K`, `ESC [ J`,
-//! `ESC [ H` and `ESC [ m` with 0, 1, 2, 22 and 31 (INV-0154-2). That subset
-//! has no cursor-up, so a line wider than the terminal cannot be redrawn in
-//! place: while the prompt and the line fit on one row every key redraws the
-//! row; past that, typing and Backspace at the end stay incremental, and any
-//! other edit draws the line again on a new row.
+//! It writes only ADR-0096's subset as extended by ADR-0154 (rule 8, with
+//! the architect's change of 2026-11-04): text, `\r`, `\n`, `\x08`,
+//! `ESC [ n A`, `ESC [ n C`, `ESC [ n D`, `ESC [ K`, `ESC [ J`, `ESC [ H` and
+//! `ESC [ m` with 0, 1, 2, 22 and 31 (INV-0154-2). Every redraw goes up to
+//! the row the entry's line starts on, writes it again, clears below and puts
+//! the cursor back, so a line wider than the terminal is redrawn in place. A
+//! line that ends exactly at the right edge is followed by a line end, so
+//! that the cursor's row is the same on terminals that wrap at once and on
+//! those that wait for the next character.
 
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -132,10 +134,11 @@ pub struct Editor {
     /// The terminal's state: the line shown, the cursor's column, and
     /// whether the editor still knows where the line starts.
     shown_suggestion: bool,
-    long: bool,
+    /// The row, counted from the line's first, the cursor is on.
+    row: usize,
 }
 
-fn width(s: &str) -> usize {
+fn width_of(s: &str) -> usize {
     s.chars().count()
 }
 
@@ -187,7 +190,7 @@ impl Editor {
             tabbed: false,
             options,
             shown_suggestion: false,
-            long: false,
+            row: 0,
         }
     }
 
@@ -246,7 +249,7 @@ impl Editor {
         self.typed = None;
         self.search = None;
         self.tabbed = false;
-        self.long = false;
+        self.row = 0;
         self.shown_suggestion = false;
         out.push_str(&self.prompt);
     }
@@ -254,8 +257,7 @@ impl Editor {
     /// Draws the prompt and line again on a new row, as after output that
     /// came while editing (rule 7).
     pub fn redraw(&mut self, out: &mut String) {
-        self.long = false;
-        out.push_str(self.current_prompt());
+        self.row = 0;
         self.refresh(out);
     }
 
@@ -270,13 +272,18 @@ impl Editor {
         self.redraw(out);
     }
 
-    /// Erases the row, so output can be printed where it was; follow with
-    /// [`Editor::redraw`].
+    /// Erases the entry's line, so output can be printed where it was;
+    /// follow with [`Editor::redraw`].
     pub fn hide(&mut self, out: &mut String) {
-        if self.long {
-            out.push('\n');
-        } else {
-            out.push_str("\r\x1b[K");
+        self.up(out);
+        out.push_str("\r\x1b[J");
+        self.row = 0;
+    }
+
+    /// To the row the line starts on.
+    fn up(&self, out: &mut String) {
+        if self.row > 0 {
+            out.push_str(&format!("\x1b[{}A", self.row));
         }
     }
 
@@ -389,12 +396,15 @@ impl Editor {
         s
     }
 
-    fn fits(&self, extra: usize) -> bool {
-        visible(self.current_prompt()) + self.line.len() + extra < self.options.width.max(1)
+    /// Redraws the line: prompt, text, suggestion, and the cursor in place.
+    fn refresh_with(&mut self, out: &mut String, assist: Option<&mut dyn Assist>) {
+        self.draw(out, assist, false);
     }
 
-    /// Redraws the row: prompt, line, suggestion, and the cursor in place.
-    fn refresh_with(&mut self, out: &mut String, assist: Option<&mut dyn Assist>) {
+    /// Draws the line from its first row; `at_end` leaves the cursor after
+    /// it, for a line end to follow.
+    fn draw(&mut self, out: &mut String, assist: Option<&mut dyn Assist>, at_end: bool) {
+        let width = self.options.width.max(1);
         if let Some(search) = &self.search {
             let found = search
                 .found
@@ -402,48 +412,28 @@ impl Editor {
                 .cloned()
                 .unwrap_or_default();
             let line = format!("search: {}  {}", search.query, printable(&found));
-            let line: String = line
-                .chars()
-                .take(self.options.width.saturating_sub(1))
-                .collect();
+            let line: String = line.chars().take(width.saturating_sub(1)).collect();
             out.push('\r');
             out.push_str(&line);
             out.push_str("\x1b[K");
             return;
         }
-        if !self.fits(0) {
-            if !self.long {
-                // The line no longer fits: from here keys at the end write
-                // incrementally; the rest draws a new row.
-                self.long = true;
-            }
-            out.push('\n');
-            out.push_str(self.current_prompt());
-            out.push_str(&printable(&self.text()));
-            let back = self.line.len() - self.cursor;
-            if back > 0 {
-                out.push_str(&format!("\x1b[{back}D"));
-            }
-            self.shown_suggestion = false;
-            return;
-        }
-        self.long = false;
+        self.up(out);
         out.push('\r');
+        let prompt = visible(self.current_prompt());
         out.push_str(self.current_prompt());
         match assist {
             Some(a) => out.push_str(&self.highlighted(a)),
             None => out.push_str(&printable(&self.text())),
         }
-        let mut tail = 0;
+        let mut cells = prompt + self.line.len();
         self.shown_suggestion = false;
-        if let Some(s) = self.suggestion() {
-            let room = self
-                .options
-                .width
-                .saturating_sub(1 + visible(self.current_prompt()) + self.line.len());
+        if let Some(s) = self.suggestion().filter(|_| !at_end) {
+            // On the row the line ends on only, so it never wraps.
+            let room = width - 1 - cells % width;
             let s: String = printable(&s).chars().take(room).collect();
             if !s.is_empty() {
-                tail = width(&s);
+                cells += width_of(&s);
                 if self.options.colour {
                     out.push_str(FAINT);
                     out.push_str(&s);
@@ -454,45 +444,66 @@ impl Editor {
                 self.shown_suggestion = true;
             }
         }
-        out.push_str("\x1b[K");
-        let back = tail + self.line.len() - self.cursor;
-        if back > 0 {
-            out.push_str(&format!("\x1b[{back}D"));
+        out.push_str("\x1b[J");
+        if cells > 0 && cells.is_multiple_of(width) {
+            out.push('\n');
         }
+        let (end_row, end_col) = (cells / width, cells % width);
+        let target = prompt + if at_end { self.line.len() } else { self.cursor };
+        let (row, col) = (target / width, target % width);
+        if end_row > row {
+            out.push_str(&format!("\x1b[{}A", end_row - row));
+        }
+        if (end_row, end_col) != (row, col) {
+            out.push('\r');
+            if col > 0 {
+                out.push_str(&format!("\x1b[{col}C"));
+            }
+        }
+        self.row = row;
     }
 
     fn refresh(&mut self, out: &mut String) {
         self.refresh_with(out, None);
     }
 
-    /// Erases a shown suggestion before the line runs or is dropped.
+    /// Draws the line without a suggestion or search, with the cursor after
+    /// it, before the line runs or is dropped.
     fn settle(&mut self, out: &mut String, assist: &mut dyn Assist) {
-        if self.shown_suggestion || self.search.is_some() {
-            self.search = None;
-            let saved = self.options.suggestions;
-            self.options.suggestions = false;
-            self.refresh_with(out, Some(assist));
-            self.options.suggestions = saved;
-        } else if !self.long {
-            // Put the cursor at the end so the line ends cleanly.
-            let forward = self.line.len() - self.cursor;
-            if forward > 0 {
-                out.push_str(&format!("\x1b[{forward}C"));
-            }
-        }
+        self.search = None;
+        self.draw(out, Some(assist), true);
     }
 
     fn insert(&mut self, c: char, out: &mut String, assist: &mut dyn Assist) {
-        if self.lines.iter().map(|l| width(l) + 1).sum::<usize>() + self.line.len() >= MAX_CHARS {
+        if self.lines.iter().map(|l| width_of(l) + 1).sum::<usize>() + self.line.len() >= MAX_CHARS
+        {
             return;
         }
-        let at_end = self.cursor == self.line.len();
+        // Typing at the end writes just the character when nothing drawn
+        // changes with it, so that a long line costs no redraw per key.
+        let before = (self.cursor == self.line.len()
+            && self.search.is_none()
+            && !self.shown_suggestion
+            && !c.is_control())
+        .then(|| self.highlighted(assist));
         self.line.insert(self.cursor, c);
         self.cursor += 1;
         self.tabbed = false;
-        if self.long && at_end {
-            out.push_str(&printable(c.encode_utf8(&mut [0; 4])));
-            return;
+        if let Some(before) = before
+            && self.suggestion().is_none()
+        {
+            let after = self.highlighted(assist);
+            let typed = printable(c.encode_utf8(&mut [0; 4]));
+            if after.strip_prefix(before.as_str()) == Some(typed.as_str()) {
+                out.push_str(&typed);
+                let width = self.options.width.max(1);
+                let cells = visible(self.current_prompt()) + self.line.len();
+                if cells.is_multiple_of(width) {
+                    out.push('\n');
+                }
+                self.row = cells / width;
+                return;
+            }
         }
         self.refresh_with(out, Some(assist));
     }
@@ -558,7 +569,7 @@ impl Editor {
         }
         out.push('\r');
         out.push_str("\x1b[K");
-        self.long = false;
+        self.row = 0;
         self.refresh_with(out, Some(assist));
     }
 
@@ -648,7 +659,7 @@ impl Editor {
             let mut rows = 0;
             for (i, t) in texts.iter().enumerate() {
                 let t = printable(t);
-                let w = width(&t);
+                let w = width_of(&t);
                 if i > 0 && row + 2 + w >= self.options.width {
                     out.push('\n');
                     rows += 1;
@@ -668,7 +679,7 @@ impl Editor {
         if texts.len() > limit && with_summary {
             out.push_str(&format!("(and {} more)\n", texts.len() - limit));
         }
-        self.long = false;
+        self.row = 0;
         out.push_str(self.current_prompt());
         self.refresh_with(out, Some(assist));
     }
@@ -758,7 +769,7 @@ impl Editor {
                 if self.line.is_empty() && self.lines.is_empty() {
                     out.push_str("^D\ntype exit to end the shell\n");
                     out.push_str(self.current_prompt());
-                    self.long = false;
+                    self.row = 0;
                 } else if self.cursor < self.line.len() {
                     self.line.remove(self.cursor);
                     self.refresh_with(out, Some(assist));
@@ -789,7 +800,7 @@ impl Editor {
             }
             CTRL_L => {
                 out.push_str("\x1b[H\x1b[J");
-                self.long = false;
+                self.row = 0;
                 out.push_str(self.current_prompt());
                 self.refresh_with(out, Some(assist));
                 Key::Edited
@@ -810,16 +821,9 @@ impl Editor {
             }
             BACKSPACE | DELETE => {
                 if self.cursor > 0 {
-                    let at_end = self.cursor == self.line.len();
                     self.cursor -= 1;
                     self.line.remove(self.cursor);
-                    let column = (visible(self.current_prompt()) + self.cursor + 1)
-                        % self.options.width.max(1);
-                    if self.long && at_end && column != 0 {
-                        out.push_str("\x08 \x08");
-                    } else {
-                        self.refresh_with(out, Some(assist));
-                    }
+                    self.refresh_with(out, Some(assist));
                 }
                 Key::Edited
             }
@@ -942,7 +946,7 @@ impl Editor {
             self.lines.push(self.text());
             self.line.clear();
             self.cursor = 0;
-            self.long = false;
+            self.row = 0;
             out.push_str(CONTINUATION);
             return Key::Edited;
         }

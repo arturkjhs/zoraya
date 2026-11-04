@@ -64,6 +64,7 @@ sources or with QEMU's own tracing. The sweep since `e423bb5` holds frames once 
 | - | Stage 6e (TASK-22) | A process ended by a signal sends no statistics (ADR-0211 item 3): W9's interrupted makes are not in its totals. |
 | - | Stage 6e (TASK-22) | INV-0109-1's check of tcc's `a.out` from the W1 check on the host needs the file out of the image (ADR-0110's Option D tool, deferred); W1's `./t` running is the check today. |
 | - | Stage 6e (TASK-22) | The POSIX session's guest needs 512 MiB: every POSIX process holds a 1 MiB heap step at least (`zoraya-heap`'s `GROW_SIZE` on eagerly committed objects); a smaller first step would let 128 MiB hold W8 at `-j4`. |
+| - | `term` (TASK-18 step 7) | Keys that find `term`'s channel to the shell full are dropped and counted (`[input: N bytes dropped]`): under TCG, a burst of some 60 keys typed through QMP at once loses keys, with the old editor as with the new. `tests/gui/terminal.script` types a long line in pieces. A window could hold keys until the shell reads them instead. |
 | - | `ttyd` (TASK-21 review R13) | A reply that finds the client's channel full is dropped; a client has one request out and a held read, so it does not happen today. |
 | - | Broker (ADR-0104, "Trust at stage 6") | A process can name any of its pids' records it is the parent of; the kernel has no query tying a process handle to a job. |
 | - | `ports/` (ADR-0143) | The host check of tcc's link step uses a tcc compiled for the host from the same source; the Zoraya tcc's own output is first seen in W1 (6e). |

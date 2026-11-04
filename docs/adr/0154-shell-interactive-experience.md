@@ -215,7 +215,10 @@ terminal draws faint itself. CP-25's out-of-band control is unaffected: these ar
   stay incremental, and any other edit draws the prompt and line again on a new row, leaving the old rows above.
   Adding `ESC [ n A` to the subset would allow redrawing in place; that is a change to ADR-0096 and this ADR for the
   architect. INV-0154-2 is checked against the subset as listed. *Resolved 2026-11-04:* the architect added it (the
-  Decision above).
+  Decision above). *Implemented 2026-11-04 (step 7):* every redraw goes up to the line's first row with `ESC [ n A`,
+  writes prompt and line again and clears below with `ESC [ J`; a line ending at the right edge is followed by a
+  line end. INV-0154-2's checker holds `A`; `long_lines_are_redrawn_in_place` checks the rows on a simulated
+  terminal at three widths, and `tests/gui/terminal.script` a two-row line in the window.
 
 ## Revisit triggers
 - The serial console measured to lag while typing because of redraws: redraw only from the cursor.

@@ -356,7 +356,11 @@ impl Run {
     fn wait_screen(&mut self, text: &str) -> Result<Duration, String> {
         let start = Instant::now();
         loop {
-            self.pump()?;
+            // The screen's own timeout comes first, so that it says what
+            // the screen shows.
+            if Instant::now() <= self.deadline {
+                self.pump()?;
+            }
             let rows = self.qmp.screen()?.rows();
             let from = self.row.map_or(0, |r| r + 1);
             if let Some(at) = rows.iter().skip(from).position(|r| r == text) {
