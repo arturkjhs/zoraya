@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn a_name_given_again_replaces_the_base() {
-        let s = parse("env TERM=vt100\nenv HOME=/home/x\n").unwrap();
+        let s = parse("env TERM=vt100\nenv HOME=/tmp/x\n").unwrap();
         let env = environment(&s);
         assert!(env.contains(&String::from("TERM=vt100")));
         assert!(!env.contains(&String::from("TERM=dumb")));

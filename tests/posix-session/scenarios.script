@@ -9,8 +9,8 @@
 # interrupt reaches every process of the foreground job at once; each leaf
 # make deletes its partial target and re-raises; dash reports 130. The
 # jobserver is make's FIFO in /tmp (the temporary service's FIFO nodes).
-> cd /home/w9 && make -j8\r
-< make[2]: Entering directory '/home/w9/b/2'
+> cd /src/w9 && make -j8\r
+< make[2]: Entering directory '/src/w9/b/2'
 ~ 2000 PSURF>
 > \x03
 < Deleting file 't4.h'
@@ -39,7 +39,7 @@ x left
 < PSURF>
 # W10: background jobs with wait, concurrent pipelines, and a writer killed
 # by SIGPIPE on PeerClosed (yes | head), with the script TASK-02b ran.
-> cd /home/w10 && sh w10.sh parallel\r
+> cd /src/w10 && sh w10.sh parallel\r
 < subshell job done
 < background: 0 0
 < w10

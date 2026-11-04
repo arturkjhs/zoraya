@@ -257,9 +257,9 @@ posix-image: $(KERNEL) tools-storage
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_SESSION)/root/bin/t_posix
 	@# W10 as TASK-02b ran it (ADR-0110 item 1): the script and mktab.c.
-	mkdir -p $(POSIX_SESSION)/root/home/w10
+	mkdir -p $(POSIX_SESSION)/root/src/w10
 	cp tools/posix-surface/workloads/w10/w10.sh tools/posix-surface/workloads/w8/mktab.c \
-	  $(POSIX_SESSION)/root/home/w10/
+	  $(POSIX_SESSION)/root/src/w10/
 
 test-posix: posix-image $(RUNNER)
 	@for script in $(POSIX_SCRIPTS); do for accel in $(POSIX_ACCELS); do \

@@ -8,7 +8,7 @@ screen PSURF> _
 type echo hi|tr h H\r
 screen Hi
 screen PSURF> _
-type cd /home/gui\r
+type cd /src/gui\r
 screen PSURF> _
 type echo a > f\r
 screen PSURF> _

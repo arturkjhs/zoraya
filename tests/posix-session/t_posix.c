@@ -23,7 +23,7 @@
  *                      read with SA_RESTART resumes
  *   t_posix files      a file workload (INV-0104-5, INV-0106-2 with
  *                      ZORAYA_POSIX_STATS: broker=0 takes=0)
- *   t_posix time       INV-0191-1: a file in /tmp after one in /home is
+ *   t_posix time       INV-0191-1: a file in /tmp after one on the root volume is
  *                      later, and CLOCK_REALTIME is not below either
  *   t_posix intcount NAME
  *                      counts SIGINT until SIGTERM or one SIGINT
@@ -544,12 +544,12 @@ static void make_file(const char *path)
 
 static void time_base(void)
 {
-	make_file("/home/time-a");
+	make_file("/src/time-a");
 	make_file("/tmp/time-b");
-	make_file("/home/time-c");
-	long long a = mtime_of("/home/time-a");
+	make_file("/src/time-c");
+	long long a = mtime_of("/src/time-a");
 	long long b = mtime_of("/tmp/time-b");
-	long long c = mtime_of("/home/time-c");
+	long long c = mtime_of("/src/time-c");
 	struct timespec now;
 	CHECK(clock_gettime(CLOCK_REALTIME, &now) == 0);
 	long long n = (long long)now.tv_sec * 1000000000LL + now.tv_nsec;
@@ -559,8 +559,8 @@ static void time_base(void)
 	CHECK(n >= c && n >= b);
 	/* A date after 2020: the root volume's, not the boot's uptime. */
 	CHECK(now.tv_sec > 1577836800);
-	unlink("/home/time-a");
-	unlink("/home/time-c");
+	unlink("/src/time-a");
+	unlink("/src/time-c");
 	unlink("/tmp/time-b");
 	passed();
 }
