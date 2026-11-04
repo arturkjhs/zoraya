@@ -490,6 +490,30 @@ extern "C" fn wait(status: *mut i32) -> i32 {
     wait_child(-1, status, 0)
 }
 
+/// The shim's target for musl's `__sys_wait4` (`pclose.c`, proposed
+/// ADR-0210): `waitpid` with the result or `-errno`, and a zero `struct
+/// rusage` as `wait3` gives.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_wait4(pid: i64, status: i64, options: i64, usage: i64) -> i64 {
+    if usage != 0 {
+        // SAFETY: C's contract: `usage` is NULL or a `struct rusage`.
+        unsafe { ptr::write_bytes(usage as *mut u8, 0, 144) };
+    }
+    poll();
+    let status = status as *mut i32;
+    match restartable(|p| p.waitpid(pid as i32, options as i32)) {
+        Ok(Some((child, s))) => {
+            if !status.is_null() {
+                // SAFETY: C's contract: `status` is NULL or an int.
+                unsafe { status.write(s) };
+            }
+            i64::from(child)
+        }
+        Ok(None) => 0,
+        Err(e) => -i64::from(e),
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn wait3(status: *mut i32, options: i32, usage: *mut u8) -> i32 {
     if !usage.is_null() {
@@ -1281,6 +1305,7 @@ fn spawn_into(
         let _ = zoraya_rt::handle_close(boot_child);
         return Err(E2BIG);
     };
+    p.stats.max_spawn_buffer = p.stats.max_spawn_buffer.max(length as u64);
     let process = match zoraya_rt::spawn(&buffer[..length]) {
         Ok(h) => h,
         Err(s) => {
@@ -1612,7 +1637,15 @@ extern "C" fn posix_spawn(
         actions: &actions,
     };
     poll();
-    match state(|p| spawn_child(p, &path, &argv, &envp, &start)) {
+    let started = zoraya_rt::clock_monotonic();
+    match state(|p| {
+        let r = spawn_child(p, &path, &argv, &envp, &start);
+        if r.is_ok() {
+            p.stats.spawns += 1;
+            p.stats.spawn_ns += zoraya_rt::clock_monotonic().saturating_sub(started);
+        }
+        r
+    }) {
         Ok(child) => {
             if !pid.is_null() {
                 // SAFETY: C's contract: `pid` is NULL or a `pid_t`.
@@ -1630,6 +1663,7 @@ extern "C" fn posix_spawn(
 /// own job, the broker told, and this image ends. Returns only on failure.
 fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
     poll();
+    let started = zoraya_rt::clock_monotonic();
     let r = state(|p| {
         let job = p.process_job.ok_or(ENOSYS)?;
         let (image, argv, exe) = resolve_program(p, path, argv).inspect_err(|e| {
@@ -1673,6 +1707,11 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
         // whatever happens (review R5); a failed commit leaves the broker's
         // record on the old image, which then reads as its exit.
         p.process_job = None;
+        // This image's report goes before the hand-over, while the broker
+        // still answers its connection (ADR-0110 item 7).
+        p.stats.execs += 1;
+        p.stats.exec_ns += zoraya_rt::clock_monotonic().saturating_sub(started);
+        super::report_stats(p);
         let committed = match zoraya_rt::handle_duplicate(process, rights_of(process)) {
             Ok(dup) => p.broker_simple(&bp::ExecCommit {}, &[dup, server]),
             Err(_) => {
@@ -1878,6 +1917,7 @@ extern "C" fn fork() -> i32 {
                 // item 5): its own facts, a port of its own.
                 p.sys.port = None;
                 p.after_fork_in_child(prepared.pid, prepared.pgid);
+                super::restart_stats(p);
                 Ok(0)
             }
             Err(s) => {

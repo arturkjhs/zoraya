@@ -61,7 +61,7 @@ prints the clang it uses.
 | `core`, `alloc` and `compiler_builtins` for `aarch64-unknown-none` (in `libc.a`, with `zoraya-posix`, ADR-0100) | from Rust 1.99.1 | the pinned toolchain's target; not a crate from a registry |
 | the host's C compiler (`cc`): dash's helpers, tcc's `c2str` and the host tcc of the link check | Apple clang 21.0.0 on the M4 | Xcode Command Line Tools / distribution |
 | `curl`, `shasum` or `sha256sum` (`make fetch-ports`) | curl 8.7.1 | macOS / distribution |
-| `patch`, `tar` with gzip and bzip2, `awk`, `sed` | the host's | macOS / distribution |
+| `patch`, `tar` with gzip and bzip2, `unzip` (SQLite's archive), `awk`, `sed` | the host's | macOS / distribution |
 | GNU sed, as `gsed` or `sed` (toybox's build scripts) | GNU sed 4.10 (Homebrew `gnu-sed`) on the M4 | `brew install gnu-sed` on macOS; the default `sed` on Linux |
 
 `rust-objcopy`, which ADR-0109 item 10 lists, is not used: it needs the `llvm-tools` component, which the minimal
@@ -82,6 +82,10 @@ measured T1 workloads).
 | toybox | 0.8.15 | 0BSD | `cat head ls mv rm sleep touch true uname sort wc yes` |
 | busybox | 1.38.0 | GPL-2.0-only | `tr`, `diff` |
 | TinyCC | `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (`COPYING` 2.1, the LGPL files version 2 or later; some files permissive) | `/bin/tcc`, `libtcc1.a` |
+| pdpmake | `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` (2.0.4) | public domain (the Unlicense) | `/bin/pdpmake`, TASK-02's comparison make for W2 and W4 (ADR-0110) |
+| Lua | 5.5.1 | MIT | W2's source, in the image only, built inside Zoraya |
+| SQLite | 3540100 | public domain | W3's source, in the image only, built inside Zoraya |
+| GNU hello | 2.12.3 | GPL-3.0-or-later | W4's source, in the image only, built inside Zoraya |
 
 ### Mutation testing
 

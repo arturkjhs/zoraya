@@ -430,14 +430,17 @@ it run in Zoraya; the ported programs need 6d's process functions. `ports/README
   of `zoraya-posix`'s static library (stage 6c; in 6b it was ADR-0140's generated stub, in which every function failed
   with `ENOSYS` or trapped), which also bring `core`, `alloc` and `compiler_builtins`. The shim routes eleven calls; 34 files it refuses
   (33 that make other calls, and `ioctl.c`, which needs musl's Linux constants) are not compiled; 748 names outside the tier list are renamed `__zoraya_*` in every object, so that the
-  archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141) and the five names ADR-0142 and
-  ADR-0144 add in their files' `posix-surface-added` blocks. `<zoraya/posix.h>` (`ports/include/`) declares Zoraya's
+  archive exports exactly the 243 names of `docs/adr/posix-surface-T1.txt` (ADR-0141) and the names ADR-0142,
+  ADR-0144 and ADR-0210 add in their files' `posix-surface-added` blocks (5 and 48: ADR-0210's are what the
+  workloads' own programs and pdpmake link against). Each exported function is reached through a call-log wrapper
+  (`zw-NAME.o`, ADR-0211), and `usr/lib/zoraya-calls.txt` gives the bitmap's order; `POSIX_STATS=0` builds without
+  it. `<zoraya/posix.h>` (`ports/include/`) declares Zoraya's
   additions (ADR-0142). The sysroot also has
   `crt1.o` (`ports/crt/crt1.S` and musl's `_start_c`), musl's `crti.o` and `crtn.o`, musl's empty libraries, and
   tcc's `libtcc1.a` and headers in `usr/lib/tcc`.
 - **The ports.** All build with `zcc`, and none with `__linux__`: dash (TASK-02's M4 patch and ADR-0142's two
   job-control patches: the fork group hint, and `vforkexec` through `posix_spawn` with `SETPGROUP` and
-  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), busybox (`tr`, `diff`, unpatched), toybox (`cat head
+  `POSIX_SPAWN_TCSETPGRP`), GNU make (one line of `config.sub`), pdpmake (unpatched, stage 6e), busybox (`tr`, `diff`, unpatched), toybox (`cat head
   ls mv rm sleep touch true uname sort wc yes`; one patch gives `lib/portability.[ch]` a Zoraya branch at the seven
   places that stop an unknown OS with `#error`, and the link needs ADR-0144's `atoll` and `getdelim`) and tcc (a
   `Zoraya` target and a fix for `SHF_EXCLUDE` sections). toybox's scripts need GNU sed. `build/rootfs-posix` has the
@@ -466,6 +469,7 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-libposix`, the stage 6c criterion (below, under "How the in-QEMU tests run");
+- `make test-posix`, stage 6e's acceptance in `make test` ("Stage 6 acceptance" above); on CI a job of its own;
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP and reads QEMU screendumps back as text by matching every
   cell of the terminal's grid against every glyph of `zoraya-font`, exactly: the font draws each pixel in the text
@@ -718,10 +722,9 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `pselect`, `sigsuspend`, `nanosleep`, `kill`, the terminal's calls). fd 0's handle is at slot `FD0` (ADR-0190 item
   1). `ZORAYA_POSIX_STATS` adds `POSIX-PROCESS` (the broker's round trips, forks); `ZORAYA_POSIX_DEBUG` says why a
   fork, spawn or exec failed.
-- **Tests.** `make test-posix` boots `build/posix-session`'s image (the ports' root, `rootfs/`,
-  `tests/posix-session/rootfs`, `t_posix` and W10's files) and runs `session.script` (the plan's criterion),
-  `invariants.script` (`t_posix`'s checks) and `scenarios.script` (W9a, W9b, W10, the hostile cases) under HVF and
-  TCG; `make test-posix-gui` runs `gui.script` in the window.
+- **Tests.** Stage 6e's acceptance, below ("Stage 6 acceptance: the toolchain inside Zoraya"), and
+  `make test-posix`'s `invariants.script` (`t_posix`'s checks) and `scenarios.script` (SIGPIPE, `make` with two rules,
+  Ctrl-Z, the hostile cases); `make test-posix-gui` runs `gui.script` in the window.
 
 Measured on the M4 under QEMU 11.1.2, `make test-posix`'s `measure.script` (the normal kernel, 128 MiB), one run per
 accelerator: `ZORAYA_POSIX_STATS=1 t_posix bench` (20 each of `posix_spawn` and wait of a program that exits at
@@ -740,6 +743,115 @@ fork; the broker's round trips are the library's count around each call (`POSIX-
 An `exec` or a spawn is dominated by loading the image: the 1.4 MiB program read through the file protocol into a
 memory object, `image_create`, and `spawn`'s copy of its segments; nothing is cached between spawns of one program.
 A commit's time includes the child's first slice on the one CPU before the broker answers.
+
+## Stage 6 acceptance: the toolchain inside Zoraya (as built)
+
+Stage 6e (TASK-22), on the accepted [ADR-0110](adr/0110-acceptance-harness.md) and
+[ADR-0005](adr/0005-posix-scope.md), with [ADR-0210](adr/0210-surface-for-the-workloads-products.md) (the names the
+workloads' own programs link against), [ADR-0211](adr/0211-acceptance-choices-of-stage-6e.md) (the harness's
+choices) and [ADR-0212](adr/0212-loading-programs-and-cis-budget.md) (what fits CI), all accepted. Inside Zoraya, tcc
+builds itself, Lua and SQLite, with GNU make, pdpmake and dash, and the measured shell session, W8's recursive build,
+its interruption and W10's background jobs run as TASK-02 and TASK-02b ran them on Linux, with the same commands and
+checks.
+
+**What a POSIX session has.** The image `make posix-image` builds (`build/posix-disk.img`, from `build/posix/root`):
+the ports in `/bin` (dash as `sh`, GNU make, pdpmake, tcc as `cc`, toybox's `cat head ls mv rm sleep touch true
+uname sort wc yes`, busybox's `tr diff`), the sysroot in `/usr` (tcc's headers and `libc.a`), `/etc/passwd` and
+`/etc/group` with the session's one identity, the workloads' sources as `ports/sources.lock` pins them in `/src`
+(`tcc`, `lua`, `sqlite`, `hello`, `w8`, `w10`, `w3`), a fresh tree per build in `/work` (copied by
+`tests/posix/trees.sh` on the host: T1 has no `cp`), the scripts in `/tests`, and `/sets/t1p`, where `make` is
+pdpmake. The session runs dash with `PS1='PSURF> '`, `ENV=/dev/null`, `PATH=/bin:/usr/bin`, `HOME=/home`,
+`TERM=dumb`, as TASK-02's `env -i` did. The guest has 512 MiB: W8 at `-j4` ran out of 128 MiB (ADR-0211 item 9).
+
+**Running a workload by hand.** `make posix-image`, then boot it with the serial console in the terminal (Ctrl-A X
+leaves QEMU):
+
+```sh
+make posix-image
+target/debug/zoraya-mkfs --size 256M --from build/posix/root build/posix-disk.img
+tools/run-qemu.sh --mem 512M --disk build/posix-disk.img build/zoraya-kernel.elf
+```
+
+and at the `PSURF>` prompt:
+
+| Workload | Command | It passes when it prints |
+|---|---|---|
+| W1, tcc builds itself | `sh /tests/w1.sh` | `W1-OK`, `W1-STATUS 0` |
+| W2, Lua with pdpmake and with GNU make | `sh /tests/w2.sh serial` | `W2-OK w2-p`, `W2-OK w2-g` |
+| W2-j, Lua at `-j2`, `-j4`, both jobserver styles | `sh /tests/w2.sh parallel` | four `W2-OK` |
+| W3, SQLite | `sh /tests/w3.sh serial` | `W3-OK w3` |
+| W3-j | `sh /tests/w3.sh parallel` | four `W3-OK` |
+| W8, the recursive build, five ways | `sh /tests/w8.sh` | five `W8-OK`, `W8-RECIPES ... 72` |
+| W10, background jobs and pipelines | `sh /tests/w10.sh` | `W10-OK` |
+| W4, GNU hello's `configure` (not acceptance) | `sh /tests/w4.sh` | how far it gets |
+| The roadmap's criterion | `cd /home && printf 'int main(){puts("hello");}' > h.c && tcc h.c && ./a.out` | `hello` |
+
+Each tree in `/work` is for one build; boot a fresh image to run one again. W5 and W9 are interactive:
+`tests/posix/w5.script`, `w9-int.script` and `w9-term.script` list their keys. `exit` ends the session; the broker
+then prints the session's `POSIX-STATS` and `POSIX-CALLS` lines and the machine powers off.
+
+**The targets.**
+- `make test-posix` (a step of `make test`; on CI a job of its own, ADR-0212): the export check of `libc.a`
+  (INV-0005-1, INV-0005-2), then `tcc hello.c && ./a.out`, W5, W8, W9 (Ctrl-C and SIGTERM), W10, `invariants.script`
+  and `scenarios.script`, each a fresh boot under HVF (on a Mac) and TCG, `zoraya-fsck` after each; W8 under the
+  first accelerator only.
+- `make test-posix-long` (not in `make test`; stage 6 is not merged without it): W1, W2, W2-j, W3, W3-j under both,
+  W8 under the second, then `make posix-calls`.
+- `make posix-calls`: `tools/posix-stats --calls` over the logs of the nine T1 runs (`target/test-logs/posix-*.log`)
+  against the tier list: it fails on a function TASK-02 saw called that no run calls (INV-0005-3, INV-0110-2), except
+  ADR-0211 item 16's three, named on every run.
+- `make measure-w4`: T2's applets linked against `libc.a` (`ports/Makefile t2-probe`), W4 and the W5 extension
+  (Ctrl-Z, `fg`, `bg`), and `build/w4-report.md` (INV-0110-3), which ends with the order to T2 decided by the
+  architect.
+- `make posix-table`: the table below from the logs there are.
+
+**Observation.** `libc.a` is built with `zoraya-posix`'s `stats` feature and the call log (ADR-0211): each exported
+function is a two-instruction wrapper that sets its byte of a bitmap, so a program's calls are logged and the
+library's own are not, as TASK-02's interposer saw. Each process sends its counters and bitmap to the broker before
+it exits or `exec`s; a process ended by a signal does not. The runner's `% NAME` steps give wall time on the host.
+
+**Measured** on the M4 under QEMU 11.1.2 (one CPU, 512 MiB), one run per accelerator, from the clean clone's `make
+test` and `make test-posix-long` of TASK-22 (`make posix-table`), beside Linux: TASK-02's and TASK-02b's counts on the Alpine aarch64 VM
+(four cores; `tools/posix-surface/results/syscall-surface.csv`, `par/syscall-delta.csv`; durations under `strace`,
+which TASK-02 recorded only for W8). "Programs loaded" is `exec` plus `posix_spawn` on Zoraya, `execve` on Linux
+(each `vfork`+`execve` there is a `posix_spawn` here).
+
+| Workload | Wall time, HVF / TCG | Linux | Programs loaded (Linux) | Share loading, HVF / TCG | `fork`s; mean `snapshot_process`, HVF / TCG |
+|---|---|---|---|---|---|
+| W1 (configure, make, check) | 3.5 s / 35 s | – | 59 (64) | 44 % / 32 % | 11; 0.68 / 7.2 ms |
+| W2 (pdpmake, then GNU make) | 7.9 s / 74 s | – | 128 (127) | 65 % / 52 % | 2; 0.66 / 11 ms |
+| W2-j (four builds) | 13 s / 134 s | 0.3 to 0.5 s a build | 181 (4 × 43 + checks) | 61 % / 48 % | 4; 0.77 / 14 ms |
+| W3 | 1.1 s / 11 s | – | 7 (6) | 24 % / 17 % | 3; 0.60 / 8.2 ms |
+| W3-j (four builds) | 4.3 s / 45 s | 0.2 s a build | 25 (4 × 4 + checks) | 23 % / 15 % | 12; 0.59 / 7.5 ms |
+| W5 (session) | 2.2 s / 3.8 s | – | 8 (8) | 12 % / 52 % | 3; 0.76 / 8.8 ms |
+| W8 (five builds) | 89 s / 488 s | 13.4, 6.8, 3.4 s at `-j1`, `-j2`, `-j4` | 571 (5 × 111) | 61 % / 66 % | 20; 0.44 / 10 ms |
+| W9, Ctrl-C; SIGTERM (each once tables are being written) | 4.5 / 30 s; 4.8 / 97 s | – | – | – | none; 18 / 83 (the shell's wait loop) |
+| W10 (parallel, serial) | 4.4 s / 25 s | – | 24 | 36 % / 32 % | 12; 1.7 / 9.8 ms |
+| `tcc hello.c && ./a.out` | 0.4 s / 4.6 s | – | 2 | 11 % / 8 % | 0 |
+
+The guest has one CPU, so W8 takes the same time at every `-j` (89 s is 17.7 s a build under HVF): `-j` gives
+nothing here (`docs/backlog.md`). Loading programs is the largest single cost: each `exec` and `posix_spawn` reads
+the whole program through the file protocol (99 ms mean in W8 under HVF, 423 ms under TCG); an image cache in the
+broker is the next task (ADR-0212's Decision). Every child takes three broker round trips (prepare, commit, reap) in
+every workload. The rest of ADR-0110 item 11, over every run above: path resolution 0.46 to 0.76 µs mean under HVF
+(W1: 1,892 resolutions, 0.46 µs) and 33 to 119 µs under TCG; `share` 0 to 1,115 and `seek` 12 to 85,298 requests a
+run; the request poll is 0.1 to 0.5 % of system calls in the builds and 5 to 21 % in the interactive sessions; W8 at
+`-j4` wakes a process 5 times a second under HVF; the largest `spawn` buffer is 1,120 bytes of ADR-0042's 64 KiB; at
+most 13 pids live at once of ADR-0031's 255, and 10 fds open in one process; `/tmp` at most 52 KiB (the temporary
+volume's own blocks included).
+
+**W4** (`make measure-w4`, `build/w4-report.md`): GNU hello's `configure` stops in its first lines under both makes,
+`sed: not found` and `expr: not found` (T2's applets are not built), after 120 forks of dash: `snapshot_process` 0.55
+ms mean under HVF and 5.7 ms under TCG, the whole fork in the parent 0.68 and 10.7 ms. T2's applets do not link
+against `libc.a`: toybox's (T2's 31 of `applets-by-tier.tsv`) lack 20 names (`regcomp`, `regexec`, `regerror`,
+`getline`, `mkdtemp`, `getgrgid`, `getgrnam`, `getgroups`, `getgrouplist`, `link`, `lchown`, `mknod`, `dirname`,
+`dprintf`, `getentropy`, `gethostbyname`, `hstrerror`, `__h_errno_location`, `sethostname`, `towlower`), busybox's
+`awk expr gzip` 9 (`regcomp`, `regexec`, `regerror`, `regfree`, `rand`, `srand`, `strncasecmp`, `fileno_unlocked`,
+`fputs_unlocked`). On Linux W4 forked 1,167 times without `exec` (764 in `configure`, 403 in `make`) and ran 2,881
+programs: at these means its forks would cost about 0.8 s under HVF and 13 s under TCG, and its loads, at W8's mean
+of 95 ms and 580 ms, about 270 s and 1,700 s. The fork is not what T2 waits for; loading programs is. The order to
+T2, as the architect decided (2026-11-04): the image cache first (ADR-0212), then T2's 29 missing names, then W4
+measured for real.
 
 ## Console input and the first process
 
@@ -873,13 +985,19 @@ or `exit` turns the machine off.
   unmountable. The first create after each mount costs a commit (id reservation). A read-write mount holds the
   allocator bitmap in memory (one bit per block). `fsck --repair` cannot repair damaged tree blocks. Requests are
   served one at a time.
-- **Ports.** The ported programs are built against the real `libc.a` but not run yet: they need 6d's `posix_spawn`,
-  `fork`, `wait*`, signals and terminal, which fail with `ENOSYS` until then. dash's job-control patches (ADR-0142) are compiled, not run: the broker of 6d is their
-  first test. toybox has no mount table, file notification or path-based extended attributes on Zoraya (its
+- **Ports.** toybox has no mount table, file notification or path-based extended attributes on Zoraya (its
   portability patch fails them); no T1 applet uses them. tcc's host check uses a tcc compiled for the host from the same source, not the Zoraya binary (ADR-0143). Programs are
   installed with their debug information.
-- **CI.** The CI workflow (`.github/workflows/test.yml`) runs `make fetch-ports` and `make test` on Linux with TCG
-  (the fetch step for `make test-libposix`'s `libc.a`, ADR-0109) and, in a second job, `make ports`.
+- **CI.** The CI workflow (`.github/workflows/test.yml`) runs `make fetch-ports` and `make test TEST_SKIP=test-posix`
+  on Linux with TCG (the fetch step for the ports and `libc.a`, ADR-0109), `make test-posix` in a second job and
+  `make ports` in a third (ADR-0212). CI has no HVF, so W8 runs there under TCG alone; `make test-posix-long` and
+  `make measure-w4` run only where someone runs them.
+- **Stage 6 acceptance (stage 6e).** One CPU: `-j` gives no speed. Every `exec` and `posix_spawn` reads the whole
+  program file, debug information included (ADR-0212). A process ended by a signal reports no statistics. W9's
+  interruption point is wall-clock on the host, so it differs with the accelerator (ADR-0110). SQLite's run-time
+  extensions are compiled out (`-DSQLITE_OMIT_LOAD_EXTENSION`, ADR-0210: no `dlopen`). T2's applets are not built, so
+  GNU hello's `configure` does not get far (`build/w4-report.md`). `getrusage` gives zeros and `clock` elapsed time;
+  `fsync` makes nothing durable beyond `O_SYNC` (ADR-0210).
 - **`libposix` (stage 6c).** A file read or write through a bad pointer faults the process instead of `EFAULT` (streams give
   `EFAULT`); listings have no `.` or `..` (`d_ino` is the object's id, as `st_ino`); `O_TRUNC` of an existing non-empty file is a
   second request; `st_blocks` comes from the size; times before 1970 cannot be set (ADR-0180).
@@ -987,7 +1105,8 @@ rootfs/                   the first contents of build/disk.img
 tests/shell/              scripts the runner plays on the serial line
 tests/gui/                the GUI script the runner plays over QMP
 tests/posix-core/         stage 6c's C criterion program and the script make test-libposix plays
-tests/posix-session/      stage 6d's session: its root (/etc/zoraya/session, /home, W9's makefiles), t_posix.c, and
+tests/posix/              the POSIX session: its root (/etc/zoraya/session, /etc/passwd, /home, /tests/wN.sh,
+                          /sets/t1p), trees.sh, t_posix.c, one runner script per workload, and
                           the scripts make test-posix and make test-posix-gui play
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
@@ -1004,7 +1123,10 @@ tools/
   zcc                     the C compiler driver for aarch64-unknown-zoraya (ADR-0109)
   fetch-ports.sh          downloads and verifies the ports' archives (make fetch-ports)
   zoraya-ar/              the archiver: GNU ar with a symbol index
-  posix-surface-check/    libc.a against the tier list, the svc scan, the hiding of other names
+  posix-surface-check/    libc.a against the tier list, the svc scan, the hiding of other names, the call log's
+                          wrappers (calllog)
+  posix-stats/            the stage 6 table and the W4 report from the runner's logs, and the call log's union
+                          against the tier list (--calls)
   zoraya-elf-check/       zoraya-elf over programs on the host (INV-0109-1)
   footprint/              a process's memory for the watchdog (macOS's physical footprint), and memhog
 ports/                    stage 6b: sources.lock, the build of the sysroot and the ports, patches (ports/README.md)

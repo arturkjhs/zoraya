@@ -19,8 +19,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use zoraya_fs::{
-    Attr, BlockDevice, Clock, FailReason, FsError, Handle, MAX_ATOMIC_WRITE, ObjKind, OpenOptions,
-    PublishMode, RenameMode, Timestamp, Volume,
+    Attr, BLOCK_SIZE, BlockDevice, Clock, FailReason, FsError, Handle, MAX_ATOMIC_WRITE, ObjKind,
+    OpenOptions, PublishMode, RenameMode, Timestamp, Volume,
 };
 use zoraya_proto_file::{self as proto, Code, Kind as WireKind, status};
 use zoraya_protocol::{
@@ -235,6 +235,10 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     /// Reads reported as `StorageFailed`, not to be counted as corrupt.
     outage_reads: u64,
     told_lost: bool,
+    /// The most blocks the space map held in use since the mount, sampled
+    /// after every request; `status` answers it in bytes (ADR-0110 item 7's
+    /// peak `/tmp`, ADR-0211).
+    peak_used: u64,
     retry_at: Option<u64>,
     next_cookie: u64,
     /// Bytes every read so far gave a client: the requests at the position
@@ -328,6 +332,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             buffers: 0,
             outage_reads: 0,
             told_lost: false,
+            peak_used: 0,
             retry_at: None,
             next_cookie: 1,
             read_count: 0,
@@ -552,6 +557,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// After every engine call: ADR-0054's loss, then ADR-0016 rule 8's report.
     fn after_engine(&mut self) {
+        if let Some(used) = self.volume.used_blocks() {
+            self.peak_used = self.peak_used.max(used);
+        }
         if self.volume.device().is_lost() && !self.told_lost {
             self.told_lost = true;
             self.volume.device_lost();
@@ -831,7 +839,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 } else {
                     status::OK
                 };
-                self.done(i, t, s, 0);
+                // The count: the peak of the space in use since the mount.
+                let peak = self.peak_used.max(self.volume.used_blocks().unwrap_or(0));
+                self.done(i, t, s, peak * BLOCK_SIZE as u64);
             }
             17 => {
                 decode::<proto::CorruptReads>(bytes, n)?;

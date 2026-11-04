@@ -1,0 +1,70 @@
+# Scenarios of the POSIX session beyond the workloads (TASK-21): SIGPIPE on
+# PeerClosed, make with two rules through /bin/sh (stage 6d's criterion),
+# Ctrl-Z, and the hostile cases. W9 and W10, TASK-02b's event sequences,
+# are w9-int.script, w9-term.script and w10.script (ADR-0110 items 2 and 4).
+! -FAIL
+! panicked
+! ZORAYA-PANIC
+! ZORAYA-FAULT
+! t_posix: FAIL
+< PSURF>
+# A writer killed by SIGPIPE on PeerClosed.
+> yes | head -n 1; echo "statuses ${?}"\r
+< y
+< statuses 0
+< PSURF>
+# make with two rules through /bin/sh (ADR-0109; stage 6d's criterion).
+> cd /home\r
+< PSURF>
+> printf 'all: b\\nb: a\\n\\tcat a > b\\na:\\n\\techo made > a\\n' > Makefile\r
+< PSURF>
+> make && cat b\r
+< echo made > a
+< cat a > b
+< made
+< PSURF>
+> make; echo again=$?\r
+< Nothing to be done
+< again=0
+< PSURF>
+# Ctrl-Z (plan.md's risk): the broker's job_suspend of the foreground group,
+# fg's tcsetpgrp and SIGCONT; the group stopped whole runs its next child
+# after fg (review R1); then Ctrl-C of the continued job.
+> sh -c 'sleep 2; echo first; sleep 1; echo second; sleep 30'\r
+~ 700 PSURF>
+> \x1a
+< Stopped
+< PSURF> 
+> jobs\r
+< Stopped
+< PSURF> 
+> fg\r
+< first
+< second
+~ 500 PSURF>
+> \x03
+< PSURF> 
+> echo after=$?\r
+< after=130
+< PSURF> 
+# Hostile: a process that ignores every catchable signal. Ctrl-C reaches it
+# and is ignored; job_kill (kill -9) always ends it.
+> /bin/t_posix hostile &\r
+< hostile ignoring every signal
+> kill -INT $!; kill -TERM $!; kill -HUP $!; sleep 1; jobs\r
+< Running
+< PSURF>
+> kill -9 %1; wait %1; echo killed=$?\r
+< killed=137
+< PSURF>
+# A fork bomb in a sub-job, bounded by what exists today (ADR-0056 will add
+# quotas): forks until refused, then the session goes on.
+> t_posix forkbomb 400\r
+< t_posix: forkbomb made
+< t_posix: forkbomb passed
+< PSURF>
+> echo still-here\r
+< still-here
+< PSURF>
+> exit\r
+< BROKER-STATS

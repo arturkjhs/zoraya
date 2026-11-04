@@ -1,0 +1,33 @@
+# W9, SIGTERM (ADR-0110 item 4): W8 at -j4 in the background, its pid in a
+# file, and SIGTERM to that top make alone, as
+# tools/posix-surface/remote/w9_session.py sent it, once a table exists (the
+# time TASK-02b's 1.5 s reached; review R1); status 143, a target deleted,
+# no partial target and no process left.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+# The cd on a line of its own: `cd X && make &` would put both in a
+# background subshell, whose pid is not make's (review R1's fix).
+> cd /work/w9-term\r
+% boot
+< PSURF> 
+> make -j4 > /tmp/w9.log 2>&1 & echo $! > /tmp/make.pid\r
+< PSURF> 
+> until ls */*/t?.h > /dev/null 2>&1 || ! kill -0 $(cat /tmp/make.pid); do sleep 0.1; done; kill -TERM $(cat /tmp/make.pid); wait $(cat /tmp/make.pid); echo W9-STATUS $?\r
+< W9-STATUS 143
+< PSURF> 
+% w9-term
+> cat /tmp/w9.log\r
+< Deleting file 't
+< PSURF> 
+> sh /tests/w9-check.sh /work/w9-term\r
+< W9-PARTIAL 0
+< PSURF> 
+> sleep 0.5; t_posix live 3000\r
+< W9-LEFT 0
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

@@ -1,0 +1,21 @@
+# W1 (ADR-0110 items 2 and 6, make test-posix-long): /tests/w1.sh, tcc
+# compiles itself inside Zoraya, then the stage-2 tcc compiles and runs a
+# program.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> sh /tests/w1.sh\r
+% boot
+< W1-STEP make
+% w1-configure
+< W1-STEP check
+% w1-make
+< W1-OK
+< W1-STATUS 0
+% w1-check
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

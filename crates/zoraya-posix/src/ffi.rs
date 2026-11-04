@@ -574,6 +574,27 @@ extern "C" fn munmap(address: *mut u8, length: usize) -> i32 {
     unit(unmap(address as u64, length as u64))
 }
 
+/// The C name of the mapping call (ADR-0210): musl's `mmap.c` is
+/// not compiled, so the shim's target serves C callers too, with `MAP_FAILED`
+/// and `errno` for an error.
+#[unsafe(no_mangle)]
+extern "C" fn mmap(a: *mut u8, length: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut u8 {
+    let r = zoraya_posix_mmap(
+        a as i64,
+        length as i64,
+        i64::from(prot),
+        i64::from(flags),
+        i64::from(fd),
+        off,
+    );
+    if r < 0 {
+        set_errno((-r) as i32);
+        usize::MAX as *mut u8
+    } else {
+        r as *mut u8
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn __munmap(address: *mut u8, length: usize) -> i32 {
     munmap(address, length)
@@ -772,10 +793,73 @@ fn print_stats() {
     });
 }
 
+// ------------------------------------------------------------ the report
+
+#[cfg(feature = "stats")]
+unsafe extern "C" {
+    /// The call log's bitmap, one byte a function (`calls.S`, made by
+    /// `posix-surface-check calllog` with `libc.a`).
+    static mut __zoraya_calls: [u8; 0];
+    static __zoraya_calls_count: u32;
+    /// The hash of the bitmap's order (posix-surface-check's `list_hash`).
+    static __zoraya_calls_list: u64;
+}
+
+/// The call log's bytes.
+#[cfg(feature = "stats")]
+fn called() -> &'static mut [u8] {
+    // SAFETY: `calls.S` defines `__zoraya_calls` as `__zoraya_calls_count`
+    // bytes for the life of the process. One thread: the wrappers' stores
+    // and this slice never run at once, and only the report and the fork
+    // child's restart take the slice, each for one call.
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            (&raw mut __zoraya_calls).cast::<u8>(),
+            ptr::read(&raw const __zoraya_calls_count) as usize,
+        )
+    }
+}
+
+/// ADR-0110 item 7: the counters and the call log to the broker, before an
+/// exit or an `exec`'s hand-over; then counting starts again, so that an
+/// `exec` that fails afterwards reports only what came later.
+#[cfg(feature = "stats")]
+fn report_stats(p: &mut Posix<RtSys>) {
+    let calls = process::pack_calls(called());
+    // SAFETY: `calls.S` defines `__zoraya_calls_list`, read-only data.
+    p.stats.calls_list = unsafe { ptr::read(&raw const __zoraya_calls_list) };
+    let counters = p.stats.encode(
+        zoraya_proto_posix::stats::NAMES,
+        zoraya_rt::take_syscalls(),
+        p.fds.peak() as u64,
+    );
+    let _ = p.report_stats(&counters, &calls);
+    restart_stats(p);
+}
+
+/// Counting from zero: after a report, and in a `fork` child, whose copy of
+/// the parent's counters is the parent's to report. `inherit_failed_at`
+/// goes too: a later failure's debug line must not show an earlier one's
+/// fd (the TASK-22 mutants).
+#[cfg(feature = "stats")]
+fn restart_stats(p: &mut Posix<RtSys>) {
+    p.stats = process::Stats::default();
+    called().fill(0);
+    p.fds.restart_peak();
+    let _ = zoraya_rt::take_syscalls();
+}
+
+#[cfg(not(feature = "stats"))]
+fn report_stats(_p: &mut Posix<RtSys>) {}
+
+#[cfg(not(feature = "stats"))]
+fn restart_stats(_p: &mut Posix<RtSys>) {}
+
 /// Ends the process with `code` (`_exit`, `_Exit`, and the shim's
 /// `exit_group`).
 fn exit(code: i64) -> ! {
     print_stats();
+    let _ = with(report_stats);
     zoraya_rt::process_exit((code & 0xff) as i32)
 }
 
@@ -1039,6 +1123,12 @@ extern "C" fn unlink(path: *const c_char) -> i32 {
     unlinkat(AT_FDCWD, path, 0)
 }
 
+/// ADR-0210: `unlinkat` with `AT_REMOVEDIR`, as musl's `rmdir.c`.
+#[unsafe(no_mangle)]
+extern "C" fn rmdir(path: *const c_char) -> i32 {
+    unlinkat(AT_FDCWD, path, process::AT_REMOVEDIR as i32)
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn remove(path: *const c_char) -> i32 {
     // SAFETY: C's contract: `path` is a string.
@@ -1058,6 +1148,12 @@ extern "C" fn symlinkat(target: *const c_char, dirfd: i32, path: *const c_char) 
     // SAFETY: C's contract: both are strings.
     let (target, path) = unsafe { (c_str(target), c_str(path)) };
     unit(target.and_then(|t| path.and_then(|path| state(|p| p.symlink_at(t, dirfd, path)))))
+}
+
+/// ADR-0210: `symlinkat` from the working directory.
+#[unsafe(no_mangle)]
+extern "C" fn symlink(target: *const c_char, path: *const c_char) -> i32 {
+    symlinkat(target, AT_FDCWD, path)
 }
 
 #[unsafe(no_mangle)]
@@ -1107,6 +1203,18 @@ extern "C" fn fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: i32) -
     // SAFETY: C's contract: `path` is a string.
     let path = unsafe { c_str(path) };
     unit(path.and_then(|path| state(|p| p.fchmod_at(dirfd, path, mode, flags as u32))))
+}
+
+/// ADR-0210: `fchmodat` from the working directory.
+#[unsafe(no_mangle)]
+extern "C" fn chmod(path: *const c_char, mode: u32) -> i32 {
+    fchmodat(AT_FDCWD, path, mode, 0)
+}
+
+/// ADR-0210 item 3: see `Posix::fsync`.
+#[unsafe(no_mangle)]
+extern "C" fn fsync(fd: i32) -> i32 {
+    unit(state(|p| p.fsync(fd)))
 }
 
 /// ADR-0014 rule 5: the session's own ids succeed and change nothing.
@@ -1185,6 +1293,28 @@ extern "C" fn futimens(fd: i32, times: *const [i64; 2]) -> i32 {
     // SAFETY: C's contract for futimens.
     let mtime = unsafe { mtime_of(times) };
     unit(state(|p| p.set_mtime(Target::Fd(fd), mtime, 0)))
+}
+
+/// ADR-0210: `utimensat` with the two `struct timeval`s turned into
+/// `struct timespec`s; NULL is now, as for `utimensat`.
+#[unsafe(no_mangle)]
+extern "C" fn utimes(path: *const c_char, times: *const [i64; 2]) -> i32 {
+    if times.is_null() {
+        return utimensat(AT_FDCWD, path, ptr::null(), 0);
+    }
+    // SAFETY: C's contract: `times` is NULL or two `struct timeval`s.
+    let [a, m] = unsafe { [times.read(), times.add(1).read()] };
+    let micros = |t: [i64; 2]| {
+        if (0..1_000_000).contains(&t[1]) {
+            Ok([t[0], t[1] * 1000])
+        } else {
+            Err(EINVAL)
+        }
+    };
+    match (micros(a), micros(m)) {
+        (Ok(a), Ok(m)) => utimensat(AT_FDCWD, path, [a, m].as_ptr(), 0),
+        _ => int(Err(EINVAL)),
+    }
 }
 
 // ------------------------------------------------------------ directories
@@ -1533,6 +1663,28 @@ extern "C" fn uname(out: *mut [u8; 65]) -> i32 {
     0
 }
 
+/// ADR-0210: `uname`'s node name, as musl's `gethostname.c`:
+/// truncated to `len`, with a NUL when it fits.
+#[unsafe(no_mangle)]
+extern "C" fn gethostname(name: *mut u8, len: usize) -> i32 {
+    let mut uts = [[0u8; 65]; 6];
+    uname(uts.as_mut_ptr());
+    let node = &uts[1];
+    let n = node.iter().position(|&b| b == 0).unwrap_or(node.len());
+    let k = len.min(n + 1);
+    if k == 0 {
+        return 0;
+    }
+    // SAFETY: C's contract: `name` holds `len` bytes, and `k <= len`.
+    unsafe {
+        ptr::copy_nonoverlapping(node.as_ptr(), name, k);
+        if k == len {
+            name.add(k - 1).write(0);
+        }
+    }
+    0
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn sysconf(name: i32) -> i64 {
     match name {
@@ -1699,6 +1851,27 @@ extern "C" fn times(out: *mut [i64; 4]) -> i64 {
     ticks
 }
 
+const RUSAGE_SELF: i32 = 0;
+const RUSAGE_CHILDREN: i32 = -1;
+/// One thread: the thread's use is the process's (review R15).
+const RUSAGE_THREAD: i32 = 1;
+
+/// ADR-0210: no accounting of resources (as `wait3`): a zero
+/// `struct rusage` (144 bytes) for the process, its one thread or its
+/// children.
+#[unsafe(no_mangle)]
+extern "C" fn getrusage(who: i32, usage: *mut u8) -> i32 {
+    if who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD {
+        return int(Err(EINVAL));
+    }
+    if usage.is_null() {
+        return int(Err(EFAULT));
+    }
+    // SAFETY: C's contract: `usage` is a `struct rusage`.
+    unsafe { ptr::write_bytes(usage, 0, 144) };
+    0
+}
+
 // ------------------------------------------------------------ threads
 
 /// ADR-0100 item 5: one thread, so a semaphore is a count (musl's `sem_t`
@@ -1753,6 +1926,11 @@ extern "C" fn pthread_setcancelstate(_new: i32, old: *mut i32) -> i32 {
     }
     0
 }
+
+/// One thread and no cancellation (ADR-0100 item 5): musl's `system.c`
+/// calls it first; nothing is ever pending.
+#[unsafe(no_mangle)]
+extern "C" fn pthread_testcancel() {}
 
 #[unsafe(no_mangle)]
 extern "C" fn __lock(_l: *mut i32) {}

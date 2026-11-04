@@ -1479,3 +1479,80 @@ fn no_request_is_taken_on_the_file_paths_and_polls_wait_for_a_handler() {
     r.p.signals.mask(SIG_UNBLOCK, Some(bit(15))).unwrap();
     assert!(r.p.should_poll());
 }
+
+/// `fsync` (ADR-0210 item 3): a file's fd succeeds, written or not;
+/// a pipe is `EINVAL`, a closed fd `EBADF`.
+#[test]
+fn fsync_takes_a_file_and_refuses_a_pipe() {
+    let mut r = rig();
+    let fd = open(&mut r, "synced", RW_CREATE, 0o644).unwrap();
+    let before = r.p.stats.requests;
+    assert_eq!(r.p.fsync(fd), Ok(()), "nothing written yet");
+    assert_eq!(
+        r.p.stats.requests, before,
+        "no request for an fd never written"
+    );
+    assert_eq!(r.write(fd, b"data"), Ok(4));
+    let before = r.p.stats.requests;
+    assert_eq!(
+        r.p.fsync(fd),
+        Ok(()),
+        "written through: the status is asked"
+    );
+    assert_eq!(r.p.stats.requests, before + 1, "one status request");
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    assert_eq!(r.p.fsync(rd), Err(EINVAL));
+    assert_eq!(r.p.fsync(wr), Err(EINVAL));
+    r.p.close(fd).unwrap();
+    assert_eq!(r.p.fsync(fd), Err(EBADF));
+}
+
+/// ADR-0110 item 7: every counter the broker names comes from a field of
+/// its own, in the protocol's order; the call log packs to bits.
+#[test]
+fn every_reported_counter_has_its_own_source() {
+    use zoraya_posix::process::{Stats, pack_calls};
+    use zoraya_proto_posix::stats::NAMES;
+    let s = Stats {
+        resolutions: 1,
+        resolve_ns: 2,
+        shares: 3,
+        seeks: 4,
+        requests: 5,
+        reports: 6,
+        broker: 7,
+        takes: 8,
+        prepares: 9,
+        prepare_ns: 10,
+        commits: 11,
+        commit_ns: 12,
+        reaps: 13,
+        reap_ns: 14,
+        forks: 15,
+        fork_ns: 16,
+        snapshot_ns: 17,
+        waits: 18,
+        execs: 19,
+        exec_ns: 20,
+        spawns: 21,
+        spawn_ns: 22,
+        max_spawn_buffer: 23,
+        calls_list: 24,
+        inherit_failed_at: 0,
+    };
+    let values: Vec<u64> = NAMES.iter().map(|n| s.counter(n, 100, 200)).collect();
+    let mut seen = values.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), NAMES.len(), "no two names share a source");
+    assert!(!values.contains(&0), "every name is known: {values:?}");
+    assert_eq!(s.counter("syscalls", 100, 200), 100);
+    assert_eq!(s.counter("max_fds", 100, 200), 200);
+    assert_eq!(s.counter("unknown", 100, 200), 0);
+    let bytes = s.encode(NAMES, 100, 200);
+    assert_eq!(bytes.len(), NAMES.len() * 8);
+    assert_eq!(u64_at(&bytes, 8), s.takes, "the second name's value");
+    assert_eq!(pack_calls(&[1, 0, 0, 0, 0, 0, 0, 0, 0, 7]), [0x01, 0x02]);
+    assert_eq!(pack_calls(&[]), Vec::<u8>::new());
+    assert_eq!(pack_calls(&[0, 1, 1]), [0x06]);
+}

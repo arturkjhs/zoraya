@@ -1,0 +1,22 @@
+# W3-j (ADR-0110 items 2 and 6): the W3 Makefile at -j2 and -j4, both
+# jobserver styles.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> sh /tests/w3.sh parallel\r
+% boot
+< W3-OK w3j-pipe-j2
+% w3j-pipe-j2
+< W3-OK w3j-fifo-j2
+% w3j-fifo-j2
+< W3-OK w3j-pipe-j4
+% w3j-pipe-j4
+< W3-OK w3j-fifo-j4
+% w3j-fifo-j4
+< W3-STATUS 0
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

@@ -41,7 +41,8 @@ ELF_CHECK := $(ROOT)/target/debug/zoraya-elf-check
 TIER_LIST := docs/adr/posix-surface-T1.txt
 # The names libc.a may export: the generated list, and the blocks of the ADRs
 # that add names (posix-surface-check's LIST+ADR form).
-ADDED_ADRS := docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md
+ADDED_ADRS := docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
+	docs/adr/0210-surface-for-the-workloads-products.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -58,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make toybox busybox tcc tcc-host clean-ports FORCE
+	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -92,7 +93,9 @@ define unpack
 	  exit 1; fi
 	@tools/fetch-ports.sh --verify $(LOCK) $(CACHE) $(1)
 	rm -rf $@.tmp && mkdir -p $@.tmp
-	cd $@.tmp && tar xf $(CACHE)/$(call lock_file,$(1))
+	@# SQLite's amalgamation is a zip, which GNU tar does not read.
+	cd $@.tmp && case $(call lock_file,$(1)) in *.zip) unzip -q $(CACHE)/$(call lock_file,$(1));; \
+	  *) tar xf $(CACHE)/$(call lock_file,$(1));; esac
 	rm -rf $@ && mv $@.tmp/* $@ && rmdir $@.tmp
 	@for p in $(sort $(wildcard $(2)/*.patch)); do \
 	  echo "patch $$p"; patch -s -p1 -d $@ < $$p || exit 1; done
@@ -144,11 +147,16 @@ POSIX_TARGET := $(ROOT)/target/posix
 # The member of libc.a that may hold `svc` (INV-0100-2): zoraya-rt's object.
 SVC_MEMBER := zoraya_rt-
 POSIX_LIB := $(POSIX_TARGET)/aarch64-unknown-none/release/libzoraya_posix.a
+# ADR-0110 item 7, ADR-0211: the `stats` feature and the call log are
+# on in the image the stage 6 tests boot, which is the only one; POSIX_STATS=0
+# builds libc.a without either.
+POSIX_STATS ?= 1
+POSIX_FEATURES := $(if $(filter 1,$(POSIX_STATS)),--features stats)
 posix: $(POSIX_LIB)
 $(POSIX_LIB): FORCE
 	RUSTFLAGS="--remap-path-prefix=$(ROOT)=. -C codegen-units=1" CARGO_PROFILE_RELEASE_DEBUG=0 \
 	  $(CARGO) rustc -q -p zoraya-posix --release --target aarch64-unknown-none \
-	  --target-dir $(POSIX_TARGET) --crate-type staticlib
+	  --target-dir $(POSIX_TARGET) --crate-type staticlib $(POSIX_FEATURES)
 
 # ---------------------------------------------------------------- libc.a
 
@@ -157,6 +165,9 @@ $(POSIX_LIB): FORCE
 # object and writes the list of renames.
 LIBC := $(SYSROOT)/usr/lib/libc.a
 LIBC_DIR := $(OBJ)/libc
+# The call log's order: function i of the bitmap is line i (ADR-0110 item 7);
+# tools/posix-stats decodes POSIX-CALLS with it.
+LIBC_CALLS := $(SYSROOT)/usr/lib/zoraya-calls.txt
 $(LIBC): $(MUSL_LIST) $(POSIX_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
 	rm -rf $(LIBC_DIR) && mkdir -p $(LIBC_DIR)/stub $(LIBC_DIR)/out
 	cd $(LIBC_DIR)/stub && $(ZAR) x $(POSIX_LIB)
@@ -164,8 +175,25 @@ $(LIBC): $(MUSL_LIST) $(POSIX_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_C
 	  $$(for m in $$($(ZAR) t $(POSIX_LIB)); do echo $(LIBC_DIR)/stub/$$m; done) > $(LIBC_DIR)/hidden.txt
 	@echo "libc.a: hid $$(wc -l < $(LIBC_DIR)/hidden.txt | tr -d ' ') names outside the tier list: $(LIBC_DIR)/hidden.txt"
 	@mkdir -p $(dir $@)
-	rm -f $@ && cd $(LIBC_DIR)/out && $(ZAR) rcs $@ \
+ifeq ($(POSIX_STATS),1)
+	@# The call log: each exported function renamed to __zoraya_real_NAME in
+	@# every member, a wrapper member zw-NAME.o in its place, the bitmap in
+	@# zoraya-calls.o.
+	mkdir -p $(LIBC_DIR)/logged $(LIBC_DIR)/calls
+	$(SURFACE_CHECK) calllog $(TIER_SPEC) $(LIBC_DIR)/logged $(LIBC_DIR)/calls \
+	  $$(for o in $$(cat $(MUSL_LIST)); do echo $(LIBC_DIR)/out/$$(basename $$o); done) \
+	  $$(for m in $$($(ZAR) t $(POSIX_LIB)); do echo $(LIBC_DIR)/out/$$m; done) > $(LIBC_DIR)/calls.txt
+	cd $(LIBC_DIR)/calls && for f in *.S; do echo $$f; done | sed 's/\.S$$//' | \
+	  xargs -P 8 -I{} sh -c '$(ZCC) -c -o zw-{}.o {}.S' && mv zw-zoraya-calls.o zoraya-calls.o
+	@echo "libc.a: the call log wraps $$(wc -l < $(LIBC_DIR)/calls.txt | tr -d ' ') functions: $(LIBC_DIR)/calls.txt"
+	rm -f $@ && cd $(LIBC_DIR)/logged && $(ZAR) rcs $@ \
+	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(POSIX_LIB)) \
+	  $$(cd ../calls && ls zw-*.o zoraya-calls.o | sed 's|^|../calls/|')
+	cp $(LIBC_DIR)/calls.txt $(LIBC_CALLS)
+else
+	rm -f $@ $(LIBC_CALLS) && cd $(LIBC_DIR)/out && $(ZAR) rcs $@ \
 	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(POSIX_LIB))
+endif
 
 # ---------------------------------------------------------------- crt
 
@@ -268,6 +296,21 @@ $(GMAKE_BIN): $(GMAKE) $(SYSROOT_STAMP) ports/config.site
 	  $(CROSS_TOOLS) CFLAGS="$(CROSS_CFLAGS)",make-configure)
 	rm -f $(GMAKE_BIN)
 	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(GMAKE) V=1,make)
+	@touch $@
+
+# ---------------------------------------------------------------- pdpmake
+
+# pdpmake, TASK-02's comparison make (W2 and W4 run with it, ADR-0110): its
+# own Makefile, unpatched; recipes go through system(), ADR-0210.
+PDPMAKE := $(WORK)/pdpmake
+PDPMAKE_BIN := $(PDPMAKE)/make
+pdpmake: $(PDPMAKE_BIN)
+$(PDPMAKE): $(LOCK) $(wildcard ports/patches/pdpmake/*.patch)
+	$(call unpack,pdpmake,ports/patches/pdpmake)
+	@touch $@
+$(PDPMAKE_BIN): $(PDPMAKE) $(SYSROOT_STAMP)
+	rm -f $(PDPMAKE_BIN)
+	@$(call logged,$(MAKE) -C $(PDPMAKE) make CC=$(ZCC) CFLAGS="$(CROSS_CFLAGS)",pdpmake)
 	@touch $@
 
 # ---------------------------------------------------------------- toybox
@@ -387,10 +430,11 @@ libc: $(SYSROOT_STAMP)
 # busybox with a link per applet (ADR-0108 item 6), the sysroot as /usr.
 ROOTFS_STAMP := $(OBJ)/rootfs.stamp
 rootfs: $(ROOTFS_STAMP)
-$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STAMP) $(TCC_SYSROOT) $(SYSROOT_STAMP)
+$(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STAMP) $(TCC_SYSROOT) $(SYSROOT_STAMP)
 	rm -rf $(ROOTFS) && mkdir -p $(ROOTFS)/bin $(ROOTFS)/usr
 	cp $(DASH_BIN) $(ROOTFS)/bin/dash && ln -s dash $(ROOTFS)/bin/sh
 	cp $(GMAKE_BIN) $(ROOTFS)/bin/make
+	cp $(PDPMAKE_BIN) $(ROOTFS)/bin/pdpmake
 	cp $(TCC_BIN) $(ROOTFS)/bin/tcc && ln -s tcc $(ROOTFS)/bin/cc
 	cp $(TOYBOX_BIN) $(ROOTFS)/bin/toybox
 	for a in $(TOYBOX_APPLETS); do ln -s toybox $(ROOTFS)/bin/$$a; done
@@ -398,6 +442,75 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX_BIN) $(TCC_STA
 	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
 	@touch $@
+
+# ---------------------------------------------------------------- the workloads' sources
+
+# The trees the acceptance workloads build inside Zoraya (ADR-0110 item 1),
+# as sources.lock pins them, in build/ports/workloads/: tcc (with the ports'
+# patches, for its Zoraya target, ADR-0109 item 8), Lua, SQLite's
+# amalgamation and GNU hello (W4). Nothing is built here.
+WORKLOADS := $(PORTS)/workloads
+WORKLOADS_STAMP := $(OBJ)/workloads.stamp
+workloads: $(WORKLOADS_STAMP)
+$(WORKLOADS)/tcc: $(LOCK) $(wildcard ports/patches/tcc/*.patch)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,tcc,ports/patches/tcc)
+	@touch $@
+$(WORKLOADS)/lua: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,lua,ports/patches/lua)
+	@touch $@
+$(WORKLOADS)/sqlite: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,sqlite,ports/patches/sqlite)
+	@touch $@
+$(WORKLOADS)/hello: $(LOCK)
+	@mkdir -p $(WORKLOADS)
+	$(call unpack,hello,ports/patches/hello)
+	@touch $@
+$(WORKLOADS_STAMP): $(addprefix $(WORKLOADS)/,tcc lua sqlite hello)
+	@mkdir -p $(dir $@) && touch $@
+
+# ---------------------------------------------------------------- T2's applets, probed
+
+# For make measure-w4's report (ADR-0110 item 10): T2's toybox and busybox
+# applets of applets-by-tier.tsv (with sort, wc and yes), built against this
+# libc.a, which exports T1's list and the added blocks only. The links are
+# expected to fail: the names they lack go to $(T2_PROBE). Nothing is
+# installed; T2's rows are not stage 6's.
+T2_TOYBOX_APPLETS := arch basename cat chmod cp cpio dirname echo env find grep head hostname id \
+	install ln ls mkdir mktemp mv rm rmdir sed sleep sort tar touch true uname wc xargs yes
+T2_BUSYBOX_APPLETS := awk diff expr gzip tr
+T2_PROBE := $(LOGS)/t2-probe.txt
+T2_TOYBOX := $(WORK)/toybox-t2
+T2_BUSYBOX := $(WORK)/busybox-t2
+t2-probe: $(T2_PROBE)
+$(T2_TOYBOX): $(LOCK) $(wildcard ports/patches/toybox/*.patch)
+	$(call unpack,toybox,ports/patches/toybox)
+	@touch $@
+$(T2_BUSYBOX): $(LOCK)
+	$(call unpack,busybox,ports/patches/busybox)
+	@touch $@
+$(T2_PROBE): $(T2_TOYBOX) $(T2_BUSYBOX) $(SYSROOT_STAMP)
+	@$(MAKE) -C $(T2_TOYBOX) allnoconfig HOSTCC=$(HOSTCC) SED=$(GSED) > $(LOGS)/t2-toybox.log 2>&1
+	@$(call kconfig_on,$(T2_TOYBOX),$(T2_TOYBOX_APPLETS))
+	@yes '' | $(MAKE) -C $(T2_TOYBOX) oldconfig HOSTCC=$(HOSTCC) SED=$(GSED) > /dev/null 2>&1
+	-@$(CROSS_ENV) $(MAKE) -C $(T2_TOYBOX) toybox V=1 CC=$(ZCC) HOSTCC=$(HOSTCC) \
+	  CFLAGS="$(CROSS_CFLAGS)" SED=$(GSED) LDOPTIMIZE=-Wl$(comma)--gc-sections NOSTRIP=1 \
+	  >> $(LOGS)/t2-toybox.log 2>&1
+	@$(MAKE) -C $(T2_BUSYBOX) allnoconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > $(LOGS)/t2-busybox.log 2>&1
+	@sed -e 's/^CONFIG_SH_IS_ASH=y/# CONFIG_SH_IS_ASH is not set/' \
+	  -e 's/^# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' \
+	  $(T2_BUSYBOX)/.config > $(T2_BUSYBOX)/.config.new && mv $(T2_BUSYBOX)/.config.new $(T2_BUSYBOX)/.config
+	@$(call kconfig_on,$(T2_BUSYBOX),$(T2_BUSYBOX_APPLETS))
+	@yes '' | $(MAKE) -C $(T2_BUSYBOX) oldconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > /dev/null 2>&1
+	-@$(CROSS_ENV) KCONFIG_NOTIMESTAMP=1 $(MAKE) -C $(T2_BUSYBOX) V=1 HOSTCC=$(HOSTCC) \
+	  CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar LD=$(TOOLBIN)/aarch64-unknown-zoraya-ld \
+	  SKIP_STRIP=y >> $(LOGS)/t2-busybox.log 2>&1
+	@for p in toybox busybox; do \
+	  names=$$(sed -n 's/.*undefined symbol: \([A-Za-z0-9_]*\).*/\1/p' $(LOGS)/t2-$$p.log | sort -u); \
+	  echo "$$p: $$(echo $$names | wc -w | tr -d ' ') names: $$(echo $$names)"; done > $@
+	@cat $@
 
 # ---------------------------------------------------------------- the host checks
 
@@ -421,7 +534,7 @@ check-ports: | tools
 	@echo "== every program of the root file system loads (INV-0109-1)"
 	$(ELF_CHECK) $(ROOTFS)/bin
 	@echo "== no port was compiled with __linux__ (INV-0109-2, INV-0143-1)"
-	@for l in dash make busybox toybox tcc libtcc1 musl; do \
+	@for l in dash make pdpmake busybox toybox tcc libtcc1 musl; do \
 	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
 	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
 	@if $(ZCC) -D__linux__ -E -x c /dev/null > /dev/null 2>&1; then echo "zcc accepted -D__linux__"; exit 1; fi

@@ -158,9 +158,78 @@ pub struct Stats {
     pub forks: u64,
     pub fork_ns: u64,
     pub snapshot_ns: u64,
+    /// Kernel waits at wait points (ADR-0106): the process's wake-ups.
+    pub waits: u64,
+    /// `execve` that started its new image, from the call to the start;
+    /// `posix_spawn` that made a child, whole (ADR-0110 item 7).
+    pub execs: u64,
+    pub exec_ns: u64,
+    pub spawns: u64,
+    pub spawn_ns: u64,
+    /// The largest `spawn` buffer built, in bytes (ADR-0042's 64 KiB).
+    pub max_spawn_buffer: u64,
+    /// The hash of the call log's order, from `libc.a` (0 without it).
+    pub calls_list: u64,
     /// What the last failed `inherit` was making: the child's fd, or 1000
     /// and the entry's index (for `ZORAYA_POSIX_DEBUG`).
     pub inherit_failed_at: u32,
+}
+
+impl Stats {
+    /// Counter `name` of `zoraya_proto_posix::stats::NAMES`, with the
+    /// system calls and the peak of open fds, which are kept elsewhere; 0
+    /// for a name it does not know.
+    pub fn counter(&self, name: &str, syscalls: u64, max_fds: u64) -> u64 {
+        match name {
+            "syscalls" => syscalls,
+            "takes" => self.takes,
+            "waits" => self.waits,
+            "requests" => self.requests,
+            "broker" => self.broker,
+            "seeks" => self.seeks,
+            "shares" => self.shares,
+            "resolutions" => self.resolutions,
+            "resolve_ns" => self.resolve_ns,
+            "reports" => self.reports,
+            "prepares" => self.prepares,
+            "prepare_ns" => self.prepare_ns,
+            "commits" => self.commits,
+            "commit_ns" => self.commit_ns,
+            "reaps" => self.reaps,
+            "reap_ns" => self.reap_ns,
+            "forks" => self.forks,
+            "fork_ns" => self.fork_ns,
+            "snapshot_ns" => self.snapshot_ns,
+            "execs" => self.execs,
+            "exec_ns" => self.exec_ns,
+            "spawns" => self.spawns,
+            "spawn_ns" => self.spawn_ns,
+            "max_spawn_buffer" => self.max_spawn_buffer,
+            "max_fds" => max_fds,
+            "max_calls_list" => self.calls_list,
+            _ => 0,
+        }
+    }
+
+    /// The counters of a report, eight bytes each in `names`' order.
+    pub fn encode(&self, names: &[&str], syscalls: u64, max_fds: u64) -> Vec<u8> {
+        names
+            .iter()
+            .flat_map(|n| self.counter(n, syscalls, max_fds).to_le_bytes())
+            .collect()
+    }
+}
+
+/// The call log's bytes (one a function, non-zero once called) packed as a
+/// report's bitmap: bit `i % 8` of byte `i / 8` for function `i`.
+pub fn pack_calls(called: &[u8]) -> Vec<u8> {
+    let mut out = alloc::vec![0u8; called.len().div_ceil(8)];
+    for (i, &c) in called.iter().enumerate() {
+        if c != 0 {
+            out[i / 8] |= 1 << (i % 8);
+        }
+    }
+    out
 }
 
 /// An object opened, and what the open told of it.
@@ -954,6 +1023,27 @@ impl<S: Sys> Posix<S> {
                 let _ = self.release(desc);
                 Err(EMFILE)
             }
+        }
+    }
+
+    /// `fsync` (ADR-0210 item 3): a file's writes are already in
+    /// the service, durable for an `O_SYNC` description (ADR-0103 item 14);
+    /// a description written through asks `status`, as `close` does, so a
+    /// failed volume is `EIO`. Nothing else is made durable. A stream or
+    /// `/dev/null` is `EINVAL`, as POSIX gives for a pipe.
+    pub fn fsync(&mut self, fd: i32) -> Result<(), i32> {
+        match self.fds.get(fd) {
+            None => Err(EBADF),
+            Some(Desc::Object { conn, written, .. }) => {
+                if !*written {
+                    return Ok(());
+                }
+                let conn = *conn;
+                self.done(conn, &proto::Status {}, &[])
+                    .map(|_| ())
+                    .map_err(|_| EIO)
+            }
+            Some(Desc::Stream { .. } | Desc::Null { .. }) => Err(EINVAL),
         }
     }
 

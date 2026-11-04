@@ -109,3 +109,28 @@ fn many_files_split_tree() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// ADR-0211 item 4: `used_blocks` is the space map's count, the
+/// volume's own blocks included: fewer than the volume holds, more after a
+/// committed write, fewer again after the file goes.
+#[test]
+fn used_blocks_follows_the_space_map() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(256), &clock);
+    let empty = v.used_blocks().expect("mounted");
+    assert!(empty > 1 && empty < 256, "{empty}");
+    let root = v.root();
+    let f = v.open(root, "big", create()).unwrap();
+    v.write(f, 0, &vec![9u8; 64 * 1024]).unwrap();
+    v.sync().unwrap();
+    let full = v.used_blocks().unwrap();
+    assert!(
+        full >= empty + 16,
+        "64 KiB is 16 blocks: {empty} then {full}"
+    );
+    v.close(f).unwrap();
+    v.unlink(root, "big").unwrap();
+    v.sync().unwrap();
+    let after = v.used_blocks().unwrap();
+    assert!(after < full && after >= empty, "{empty}, {full}, {after}");
+}

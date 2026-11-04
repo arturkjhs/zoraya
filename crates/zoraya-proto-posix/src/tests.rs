@@ -38,6 +38,11 @@ fn every_message_round_trips_and_decodes_totally() {
         sid: 0
     });
     round_trip!(SpawnCommit => SpawnCommit { pid: 13 });
+    round_trip!(ReportStats<'_> => ReportStats {
+        counters: Data(&[1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]),
+        calls: Data(&[0x81, 0x01])
+    });
+    round_trip!(ReportStatsReply => ReportStatsReply { status: Below(status::OK) });
     round_trip!(SpawnCommitReply => SpawnCommitReply {
         status: Below(status::OK)
     });

@@ -1,0 +1,24 @@
+# W8 (ADR-0110 item 2): /tests/w8.sh, the recursive build serial and at -j2
+# and -j4 in both jobserver styles, each checked.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> sh /tests/w8.sh\r
+% boot
+< W8-STEP w8-pipe-j2
+% w8-j1
+< W8-STEP w8-fifo-j2
+% w8-pipe-j2
+< W8-STEP w8-pipe-j4
+% w8-fifo-j2
+< W8-STEP w8-fifo-j4
+% w8-pipe-j4
+< W8-OK w8-fifo-j4
+% w8-fifo-j4
+< W8-STATUS 0
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

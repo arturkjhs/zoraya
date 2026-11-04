@@ -1,0 +1,17 @@
+# W2 (ADR-0110 items 2 and 6): Lua with pdpmake, then with GNU make.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> sh /tests/w2.sh serial\r
+% boot
+< W2-OK w2-p
+% w2-p
+< W2-OK w2-g
+% w2-g
+< W2-STATUS 0
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS
