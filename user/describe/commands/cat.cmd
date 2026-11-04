@@ -1,7 +1,7 @@
 name     cat
 summary  print files
-usage    cat FILE...
-operand  FILE...  read  the files to print, in order
+usage    cat [FILE...]
+operand  [FILE...]  read  the files to print, in order; the input if none is given
 exit     0  printed
 exit     1  a file could not be printed
 ---

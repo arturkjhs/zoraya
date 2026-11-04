@@ -10,6 +10,14 @@ struct Mem {
     files: BTreeMap<String, Vec<u8>>,
     dirs: Vec<String>,
     synced: bool,
+    /// The input, and how much of it each read gives.
+    input: Vec<u8>,
+    chunk: usize,
+    /// Bytes of input read.
+    taken: usize,
+    /// Output taken by `print`, when `printing`.
+    printing: bool,
+    printed: String,
 }
 
 impl Mem {
@@ -160,6 +168,91 @@ impl Files for Mem {
         self.synced = true;
         Ok(())
     }
+
+    fn read_input(&mut self, buffer: &mut [u8]) -> Result<usize, Status> {
+        let n = (self.input.len() - self.taken)
+            .min(buffer.len())
+            .min(self.chunk.max(1));
+        buffer[..n].copy_from_slice(&self.input[self.taken..self.taken + n]);
+        self.taken += n;
+        Ok(n)
+    }
+
+    fn print(&mut self, text: &str) -> bool {
+        if self.printing {
+            self.printed.push_str(text);
+        }
+        self.printing
+    }
+}
+
+fn with_input(text: &[u8], chunk: usize) -> Mem {
+    let mut m = Mem::new(&[("a.txt", "one\n")], &[]);
+    m.input = text.to_vec();
+    m.chunk = chunk;
+    m
+}
+
+/// ADR-0152 rule 1: with no file, `cat`, `head` and `search` read their
+/// input; a UTF-8 sequence cut between reads stays whole.
+#[test]
+fn commands_read_their_input_when_given_no_file() {
+    let text = "Київ milk\nPlzeň\nmilk again\nlast, no newline";
+    for chunk in [1, 2, 3, 7, 4096] {
+        let mut m = with_input(text.as_bytes(), chunk);
+        assert_eq!(
+            go(&mut m, &["cat"]),
+            (0, text.into(), String::new()),
+            "{chunk}"
+        );
+        let mut m = with_input(text.as_bytes(), chunk);
+        let (code, out, _) = go(&mut m, &["search", "milk"]);
+        assert_eq!(
+            (code, out.as_str()),
+            (0, "Київ milk\nmilk again\n"),
+            "{chunk}"
+        );
+        let mut m = with_input(text.as_bytes(), chunk);
+        assert_eq!(go(&mut m, &["search", "nope"]).0, 1, "no is an answer");
+        let mut m = with_input(text.as_bytes(), chunk);
+        let (_, out, _) = go(&mut m, &["head", "--lines", "2"]);
+        assert_eq!(out, "Київ milk\nPlzeň\n", "{chunk}");
+        let mut m = with_input(text.as_bytes(), chunk);
+        let (_, out, _) = go(&mut m, &["head", "--lines", "9"]);
+        assert_eq!(out, "Київ milk\nPlzeň\nmilk again\nlast, no newline\n");
+    }
+    let mut m = with_input(b"bad \xff byte\n", 1);
+    assert_eq!(go(&mut m, &["cat"]).1, "bad \u{fffd} byte\n");
+    // A file operand is read instead of the input.
+    let mut m = with_input(b"input\n", 4096);
+    assert_eq!(go(&mut m, &["cat", "a.txt"]).1, "one\n");
+    assert_eq!(m.taken, 0);
+}
+
+/// `head` stops reading once it has its lines, so that a writer before it
+/// finds its reader gone (INV-0155-4's host half).
+#[test]
+fn head_reads_no_more_than_it_needs() {
+    let mut big = Vec::new();
+    for i in 0..10_000 {
+        big.extend_from_slice(format!("line {i}\n").as_bytes());
+    }
+    let mut m = with_input(&big, 512);
+    let (_, out, _) = go(&mut m, &["head", "--lines", "1"]);
+    assert_eq!(out, "line 0\n");
+    assert!(m.taken <= 512, "read {} bytes", m.taken);
+}
+
+/// Long output goes out as it is made when the caller takes it.
+#[test]
+fn long_output_is_printed_as_it_comes() {
+    let big = "x".repeat(3 * PRINT_AT) + "\n";
+    let mut m = with_input(big.as_bytes(), 1000);
+    m.printing = true;
+    let (code, out, _) = go(&mut m, &["cat"]);
+    assert_eq!(code, 0);
+    assert!(m.printed.len() >= PRINT_AT, "printed {}", m.printed.len());
+    assert_eq!(m.printed + &out, big);
 }
 
 fn description(name: &str) -> Description {
@@ -243,7 +336,8 @@ fn the_tours_find_and_search() {
     );
     // A question's failure is 3 (ADR-0155 rule 6).
     assert_eq!(go(&mut m, &["search", "x", "nowhere"]).0, 3);
-    assert_eq!(go(&mut m, &["search", "x"]).0, 3);
+    // No PATH: the input, empty here, so the answer is no.
+    assert_eq!(go(&mut m, &["search", "x"]).0, 1);
 }
 
 #[test]

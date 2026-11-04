@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use zoraya_command::{Outcome, Parsed, exit};
 use zoraya_describe::Description;
 
-use crate::{print, process_exit, startup};
+use crate::{eprint, print, process_exit, startup};
 
 /// A command's description and its arguments as text.
 pub struct Command {
@@ -27,7 +27,7 @@ pub fn start(description: &str) -> Command {
             Ok(s) => args.push(String::from(s)),
             Err(_) => {
                 let e = zoraya_command::UsageError(alloc::format!("argument {}: not UTF-8", i + 1));
-                print!("{}", zoraya_command::usage_error(&d, &e));
+                eprint!("{}", zoraya_command::usage_error(&d, &e));
                 process_exit(i32::from(exit::USAGE));
             }
         }
@@ -47,7 +47,7 @@ impl Command {
                 process_exit(i32::from(exit::SUCCESS));
             }
             Err(e) => {
-                print!("{}", zoraya_command::usage_error(&self.d, &e));
+                eprint!("{}", zoraya_command::usage_error(&self.d, &e));
                 process_exit(i32::from(exit::USAGE));
             }
         }
@@ -55,7 +55,7 @@ impl Command {
 
     /// Prints `NAME: SUBJECT: PROBLEM` (rule 5).
     pub fn error(&self, subject: Option<&str>, problem: &str) {
-        print!(
+        eprint!(
             "{}",
             zoraya_command::error(&self.d.name, subject, problem, &[])
         );

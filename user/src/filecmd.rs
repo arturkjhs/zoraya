@@ -10,7 +10,7 @@ use zoraya_proto_file::{kind as proto_kind, open_flags, rights};
 
 use crate::files::read_all;
 use crate::namespace::{self, Namespace};
-use crate::{command, print};
+use crate::{command, eprint, input_read, print};
 
 struct Table(&'static Namespace);
 
@@ -79,6 +79,15 @@ impl Files for Table {
     fn sync(&mut self) -> Result<(), u32> {
         Err(zoraya_proto_file::status::ACCESS_DENIED)
     }
+
+    fn read_input(&mut self, buffer: &mut [u8]) -> Result<usize, u32> {
+        input_read(buffer).map_err(|_| zoraya_proto_file::status::STORAGE_FAILED)
+    }
+
+    fn print(&mut self, text: &str) -> bool {
+        print!("{text}");
+        true
+    }
 }
 
 /// The whole of a file command's `main`.
@@ -91,6 +100,6 @@ pub fn main(name: &str, description: &str) -> i32 {
     };
     let (code, o) = zoraya_commands::run(name, &c.d, &p, &mut Table(ns));
     print!("{}", o.out);
-    print!("{}", o.err);
+    eprint!("{}", o.err);
     i32::from(code)
 }

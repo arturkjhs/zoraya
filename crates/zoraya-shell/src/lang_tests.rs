@@ -10,12 +10,14 @@ use zoraya_abi::{ExitReason, ExitRecord, RequestKind};
 use zoraya_command::Parsed;
 use zoraya_describe::Description;
 
-use crate::eval::{Exec, Found, Host, Io, Ran, Shell, Sink, State, Value};
+use crate::eval::{Found, Host, Io, Pipe, Ran, Shell, Sink, State, Value};
 use crate::record::{self, exited};
+use crate::syntax::Stream;
 use crate::syntax::{self, Error};
 
-/// A program the fake host knows: what it does when run.
-type Program = fn(&[Value]) -> ExitRecord;
+/// A program the fake host knows: what it does with its arguments and
+/// input, and what it prints.
+type Program = fn(&[Value], &str) -> (ExitRecord, String);
 
 #[derive(Default)]
 struct Fake {
@@ -37,23 +39,45 @@ const QUESTION: &str =
 impl Fake {
     fn new() -> Fake {
         let mut f = Fake::default();
-        f.programs.insert("ok", |_| exited(0));
-        f.programs.insert("fail", |_| exited(1));
-        f.programs.insert("ask", |args| {
-            exited(if args.first().is_some_and(|a| a.text == "yes") {
-                0
-            } else {
-                1
-            })
+        f.programs.insert("ok", |_, _| (exited(0), String::new()));
+        f.programs.insert("fail", |_, _| (exited(1), String::new()));
+        f.programs.insert("ask", |args, _| {
+            let yes = args.first().is_some_and(|a| a.text == "yes");
+            (exited(if yes { 0 } else { 1 }), String::new())
         });
-        f.programs.insert("spin", |_| record::interrupted());
-        f.programs.insert("crash", |_| ExitRecord {
-            code: 0,
-            reason: ExitReason::Fault,
-            detail: 0x24,
-            request_kind: None,
+        f.programs
+            .insert("spin", |_, _| (record::interrupted(), String::new()));
+        f.programs.insert("crash", |_, _| {
+            let r = ExitRecord {
+                code: 0,
+                reason: ExitReason::Fault,
+                detail: 0x24,
+                request_kind: None,
+            };
+            (r, String::new())
         });
-        f.programs.insert("prog", |_| exited(0));
+        f.programs.insert("prog", |_, _| (exited(0), String::new()));
+        // Prints its arguments, one per line.
+        f.programs.insert("say", |args, _| {
+            let mut out = String::new();
+            for a in args {
+                out.push_str(&a.text);
+                out.push('\n');
+            }
+            (exited(0), out)
+        });
+        f.programs
+            .insert("upper", |_, input| (exited(0), input.to_uppercase()));
+        // A POSIX writer whose reader closed: SIGPIPE.
+        f.programs.insert("piped", |_, _| {
+            let r = ExitRecord {
+                code: 0,
+                reason: ExitReason::Terminated,
+                detail: crate::eval::SIGPIPE,
+                request_kind: None,
+            };
+            (r, String::new())
+        });
         for name in [
             "a.txt",
             "b.txt",
@@ -109,17 +133,47 @@ impl Host for Fake {
         0
     }
 
-    fn program(&mut self, exec: &Exec<'_>) -> Ran {
-        let f = self.programs[exec.name];
-        let args: Vec<String> = exec.args.iter().map(|a| a.text.clone()).collect();
-        self.runs.push((exec.name.into(), args, exec.env.to_vec()));
-        if exec.background {
+    /// Runs the programs in turn, each reading what the one before printed.
+    fn program(&mut self, pipe: &Pipe<'_>) -> Ran {
+        for exec in pipe.programs {
+            let args: Vec<String> = exec.args.iter().map(|a| a.text.clone()).collect();
+            self.runs.push((exec.name.into(), args, exec.env.to_vec()));
+        }
+        if pipe.background {
             return Ran::Background(1);
         }
-        let record = f(exec.args);
+        let mut input = String::from(pipe.input.unwrap_or(""));
+        let mut records = Vec::new();
+        for exec in pipe.programs {
+            let (record, out) = self.programs[exec.name](exec.args, &input);
+            records.push(record);
+            input = out;
+        }
+        let last = pipe.programs.last().expect("a program");
+        let mut out = pipe.out;
+        let mut opened = None;
+        for (stream, append, path) in last.redirects {
+            if *stream == Stream::Out {
+                let t = self.open_output(path, *append).expect("opened");
+                out = Sink::File(t);
+                opened = Some(t);
+            }
+        }
+        let mut captured = String::new();
+        match out {
+            Sink::Capture => captured = input,
+            other => self.write(other, &input),
+        }
+        if let Some(t) = opened {
+            self.close_output(t);
+        }
+        let ctrl_c = records
+            .iter()
+            .any(|r| r.request_kind == Some(RequestKind::Interrupt));
         Ran::Ended {
-            record,
-            ctrl_c: record.request_kind == Some(RequestKind::Interrupt),
+            records,
+            ctrl_c,
+            captured,
         }
     }
 
@@ -784,4 +838,127 @@ fn every_language_description_parses() {
         assert_eq!(d.name, name);
     }
     let _ = vec![0];
+}
+
+/// INV-0152-3: the status rule over every combination of three elements'
+/// records: success, a failure, another failure, a question's "no" and a
+/// writer ended by `SIGPIPE`.
+#[test]
+fn a_pipelines_status_follows_rule_6_for_every_combination() {
+    use crate::eval::{Member, SIGPIPE, pipeline_status};
+    let sigpipe = ExitRecord {
+        code: 0,
+        reason: ExitReason::Terminated,
+        detail: SIGPIPE,
+        request_kind: None,
+    };
+    let kinds = [
+        ("ok", exited(0), false),
+        ("fail", exited(1), false),
+        ("fail3", exited(3), false),
+        ("no", exited(1), true),
+        ("sigpipe", sigpipe, false),
+        ("yes-question", exited(0), true),
+        ("fail2-question", exited(2), true),
+    ];
+    for a in &kinds {
+        for b in &kinds {
+            for c in &kinds {
+                let elements = [a, b, c];
+                let members: Vec<Member> = elements
+                    .iter()
+                    .map(|(_, record, question)| Member {
+                        record: *record,
+                        question: *question,
+                    })
+                    .collect();
+                let r = pipeline_status(&members);
+                // The rule, as ADR-0152 says it, element by element.
+                let mut failure = None;
+                for (i, (name, record, _)) in elements.iter().enumerate() {
+                    let fine = match *name {
+                        "ok" | "yes-question" | "no" => true,
+                        "sigpipe" => i < 2,
+                        _ => false,
+                    };
+                    if !fine {
+                        failure = Some(*record);
+                    }
+                }
+                let names: Vec<&str> = elements.iter().map(|e| e.0).collect();
+                match failure {
+                    Some(record) => {
+                        assert_eq!(r.record, record, "{names:?}");
+                        assert!(r.failed(), "{names:?}");
+                    }
+                    None if c.0 == "no" => {
+                        assert!(r.no && !r.failed(), "{names:?}");
+                        assert_eq!(r.record, exited(1), "{names:?}");
+                    }
+                    None => assert!(r.success() && !r.no, "{names:?}"),
+                }
+            }
+        }
+    }
+}
+
+/// ADR-0152 rules 2, 4 and 5: bytes pass along a pipeline; a builtin or
+/// function may start one; `$(...)` takes a pipeline's output.
+#[test]
+fn pipelines_pass_output_along() {
+    let mut sh = shell();
+    assert_eq!(run(&mut sh, "say a b | upper"), "A\nB\n");
+    assert_eq!(ran(&sh), ["say a b", "upper"]);
+    assert_eq!(run(&mut sh, "echo hi | upper"), "HI\n");
+    assert_eq!(
+        run(&mut sh, "fn two { echo x; echo y }; two | upper | upper"),
+        "X\nY\n"
+    );
+    assert_eq!(run(&mut sh, "set l $(say a b c | upper); count $l"), "3\n");
+    assert_eq!(run(&mut sh, "echo $(say q)"), "q\n");
+    assert_eq!(run(&mut sh, "say q | upper > out.txt"), "");
+    assert_eq!(sh.host.files["out.txt"], "Q\n");
+    // `&|` sends err into the pipe; `|` leaves it on the terminal.
+    let both = run(&mut sh, "count --nope &| upper");
+    assert!(both.starts_with("COUNT: --NOPE: NO SUCH OPTION"), "{both}");
+    let apart = run(&mut sh, "count --nope | upper");
+    assert!(
+        apart.starts_with("count: --nope: no such option"),
+        "{apart}"
+    );
+    sh.host.runs.clear();
+    assert_eq!(
+        run(&mut sh, "say a | echo b"),
+        "zosh: echo: a builtin or function can only start a pipeline\n  hint: run echo on its own line\n"
+    );
+    assert!(
+        run(&mut sh, "say a | nope").starts_with("zosh: nope: no such command"),
+        "a missing program"
+    );
+    assert!(sh.host.runs.is_empty(), "nothing of either ran");
+    assert_eq!(
+        run(&mut sh, "echo a | upper &"),
+        "zosh: echo: a builtin or function cannot run in the background\n"
+    );
+    run(&mut sh, "say a | upper &");
+    assert_eq!(ran(&sh), ["say a", "upper"]);
+}
+
+/// ADR-0152 rule 6 in the language: failures stop the line, a question's
+/// "no" does not, and `SIGPIPE` before the last element is not a failure.
+#[test]
+fn pipeline_failures_stop_the_line_and_answers_do_not() {
+    let mut sh = shell();
+    assert_eq!(run(&mut sh, "say x | ask; echo after $status"), "after 1\n");
+    assert_eq!(run(&mut sh, "piped | ok; echo after $status"), "after 0\n");
+    assert!(!run(&mut sh, "ok | piped; echo after").contains("after"));
+    assert!(!run(&mut sh, "fail | ok; echo after").contains("after"));
+    assert_eq!(
+        run(&mut sh, "try { fail | ok } catch { echo $status }"),
+        "1\n"
+    );
+    assert_eq!(
+        run(&mut sh, "if say x | ask { echo yes } else { echo no }"),
+        "no\n"
+    );
 }

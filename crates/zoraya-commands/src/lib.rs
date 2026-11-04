@@ -59,6 +59,62 @@ pub trait Files {
     fn rename(&mut self, from: &str, to: &str) -> Result<(), Status>;
     fn stat(&mut self, path: &str) -> Result<Stat, Status>;
     fn sync(&mut self) -> Result<(), Status>;
+    /// Reads the command's input (ADR-0152 rule 1) into `buffer`: 0 at its
+    /// end. A caller with no input has none.
+    fn read_input(&mut self, buffer: &mut [u8]) -> Result<usize, Status> {
+        let _ = buffer;
+        Ok(0)
+    }
+    /// Takes output as it is made, so that a long result need not be held
+    /// whole; false when it does not, and the text stays in [`Output`].
+    fn print(&mut self, text: &str) -> bool {
+        let _ = text;
+        false
+    }
+}
+
+/// Output held past this is offered to [`Files::print`].
+pub const PRINT_AT: usize = 4096;
+
+/// The input as text, a piece at a time: a UTF-8 sequence cut between two
+/// reads is joined; bytes that are not UTF-8 become U+FFFD.
+struct Input {
+    carry: Vec<u8>,
+    ended: bool,
+}
+
+impl Input {
+    fn new() -> Input {
+        Input {
+            carry: Vec::new(),
+            ended: false,
+        }
+    }
+
+    /// The next piece, or `None` at the end.
+    fn next<F: Files>(&mut self, files: &mut F) -> Result<Option<String>, Status> {
+        if self.ended {
+            return Ok(None);
+        }
+        let mut buffer = [0u8; 4096];
+        let n = files.read_input(&mut buffer)?;
+        if n == 0 {
+            self.ended = true;
+            let rest = core::mem::take(&mut self.carry);
+            return Ok((!rest.is_empty()).then(|| String::from_utf8_lossy(&rest).into_owned()));
+        }
+        self.carry.extend_from_slice(&buffer[..n]);
+        let keep = match core::str::from_utf8(&self.carry) {
+            Ok(_) => 0,
+            // An incomplete sequence at the end waits for the next read.
+            Err(e) if e.error_len().is_none() => self.carry.len() - e.valid_up_to(),
+            Err(_) => 0,
+        };
+        let cut = self.carry.len() - keep;
+        let text = String::from_utf8_lossy(&self.carry[..cut]).into_owned();
+        self.carry.drain(..cut);
+        Ok(Some(text))
+    }
 }
 
 /// What a command wrote.
@@ -97,6 +153,42 @@ struct Run<'a, F: Files> {
 }
 
 impl<F: Files> Run<'_, F> {
+    /// Offers held output to the caller once there is enough of it.
+    fn flush(&mut self) {
+        if self.o.out.len() >= PRINT_AT && self.files.print(&self.o.out) {
+            self.o.out.clear();
+        }
+    }
+
+    /// Runs `line` on each line of the input, until it says to stop.
+    fn input_lines(&mut self, mut line: impl FnMut(&mut Self, &str) -> bool) {
+        let mut input = Input::new();
+        let mut partial = String::new();
+        loop {
+            match input.next(self.files) {
+                Ok(Some(text)) => {
+                    partial.push_str(&text);
+                    while let Some(at) = partial.find('\n') {
+                        let whole: String = partial.drain(..=at).collect();
+                        if !line(self, &whole[..at]) {
+                            return;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    if !partial.is_empty() {
+                        line(self, &partial);
+                    }
+                    return;
+                }
+                Err(s) => {
+                    self.fail("input", s, &[]);
+                    return;
+                }
+            }
+        }
+    }
+
     fn fail(&mut self, subject: &str, s: Status, hints: &[&str]) {
         self.o
             .err
@@ -172,7 +264,24 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
             }
         }
         "cat" => {
-            for file in p.operand_values(d, "FILE") {
+            let files = p.operand_values(d, "FILE");
+            if files.is_empty() {
+                let mut input = Input::new();
+                loop {
+                    match input.next(r.files) {
+                        Ok(Some(text)) => {
+                            r.o.out.push_str(&text);
+                            r.flush();
+                        }
+                        Ok(None) => break,
+                        Err(s) => {
+                            r.fail("input", s, &[]);
+                            break;
+                        }
+                    }
+                }
+            }
+            for file in files {
                 match r.files.read(file) {
                     Ok(bytes) => match core::str::from_utf8(&bytes) {
                         Ok(text) => {
@@ -283,6 +392,18 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
                 },
             };
             let files = p.operand_values(d, "FILE");
+            if files.is_empty() && lines > 0 {
+                // Stops reading once it has them: a writer before it in a
+                // pipeline then finds its reader gone (ADR-0155 rule 6).
+                let mut left = lines;
+                r.input_lines(|r, line| {
+                    r.o.out.push_str(line);
+                    r.o.out.push('\n');
+                    r.flush();
+                    left -= 1;
+                    left > 0
+                });
+            }
             let several = files.len() > 1;
             for (i, file) in files.iter().enumerate() {
                 match r.files.read(file) {
@@ -351,16 +472,19 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
         "search" => {
             let text = p.operand(d, "TEXT").unwrap_or("");
             let paths = p.operand_values(d, "PATH");
-            if paths.is_empty() {
-                r.o.err.push_str(&error(
-                    "search",
-                    None,
-                    "reading input needs byte streams, which zosh does not use yet",
-                    &["name the files to search: search TEXT FILE..."],
-                ));
-                return (failure_code(d), r.o);
-            }
             let mut any = false;
+            if paths.is_empty() {
+                // The input: each matching line as it is.
+                r.input_lines(|r, line| {
+                    if line.contains(text) {
+                        any = true;
+                        r.o.out.push_str(line);
+                        r.o.out.push('\n');
+                        r.flush();
+                    }
+                    true
+                });
+            }
             for path in paths {
                 let mut files = Vec::new();
                 match r.files.stat(path) {

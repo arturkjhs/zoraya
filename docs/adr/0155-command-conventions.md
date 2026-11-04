@@ -223,6 +223,11 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
   (ADR-0153 rule 1). The other file commands are programs. *Decided by the architect, 2026-11-04 (recorded by an
   agent):* `sync` stays a builtin, because flushing gives no access to any file, so a line need not grant anything
   for it.
+- *Note, 2026-11-04 (TASK-18 Part 2, step 8):* INV-0155-4 is checked in `files-write.script` with `cat` and
+  `search` writing 256 KiB (four times a stream's capacity) into `head --lines 1`: each exits 0 and prints nothing.
+  `ls` and `find` would need a directory whose listing passes 64 KiB, which the test volume does not have; they
+  print through the same runtime path (`zoraya-rt`'s `Output`, `PeerClosed` → exit 0), so the check covers them
+  by construction, not by a run.
 
 ## Revisit triggers
 - A ported or new command whose syntax the description cannot express.

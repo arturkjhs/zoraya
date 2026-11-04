@@ -10,9 +10,11 @@
 //! With a channel at slot 6 the shell runs in a GUI terminal (ADR-0096): its
 //! output and input go over that channel, and it does not read the console.
 //!
-//! Until TASK-18 step 7 the file commands (`ls`, `cat`, `mkdir`, `rm`, `mv`,
-//! `stat`, `sync`) are built in, and programs print to the console: they get
-//! no byte streams before step 8 (docs/design.md).
+//! Every program gets three byte streams (ADR-0152): `in`, `out` and `err`.
+//! A pipeline is one job with one stream per `|`; every other stream end is
+//! the shell's, which relays it from its event loop without ever blocking on
+//! it: output to the terminal, a file or a `$(...)`, and input from typed
+//! keys, a file or the output of the builtin that started the pipeline.
 
 extern crate alloc;
 
@@ -28,29 +30,32 @@ use zoraya_abi::posix::{self, NO_HANDLE};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     CONSOLE, ChannelObject, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB,
-    JobFlags, MAX_HANDLES, Mode, ObjectType, POWER, Packet, RequestKind, Rights, Status,
-    channel_signals, console_signals, job_signals,
+    JobFlags, MAX_HANDLES, Mode, ObjectType, POWER, Packet, RequestKind, Rights, STREAM_ATOMIC,
+    Status, StreamReadObject, StreamWriteObject, channel_signals, console_signals, job_signals,
+    stream_signals,
 };
 use zoraya_abi::{ChannelEntry, native};
 use zoraya_command::Parsed;
 use zoraya_describe::{Description, What};
-use zoraya_proto_file::{kind as proto_kind, open_flags, write_flags};
+use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
 use zoraya_proto_term::{Input as TermInput, MAX_OUTPUT, Output as TermOutput, Size as TermSize};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_shell::editor::{self, Assist, Completion, Editor, Key, Options};
 use zoraya_shell::eval::{
-    self, Exec, Found, Host, Io, LANGUAGE, Ran, Shell, Sink, State, function_description,
+    self, Exec, Found, Host, Io, LANGUAGE, Member, Pipe, Ran, Shell, Sink, State,
+    function_description, pipeline_status,
 };
 use zoraya_shell::grants;
 use zoraya_shell::record;
 use zoraya_shell::syntax;
+use zoraya_shell::syntax::Stream;
 use zoraya_user::descriptions;
 use zoraya_user::files::{ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_all};
 use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, console_dropped, console_entry,
     console_read, console_write, directory_entry, directory_lookup, dup, handle_close, handle_type,
     job_create, job_kill, job_signal, port_create, port_subscribe, port_unsubscribe, port_wait,
-    power_off, process_exit, process_exit_record, spawn,
+    power_off, process_exit, process_exit_record, spawn, stream_create, stream_read, stream_write,
 };
 
 zoraya_user::describe!("system", "zosh");
@@ -133,15 +138,36 @@ fn terminal_write(end: Handle, bytes: &[u8]) -> fmt::Result {
 /// Where the shell writes: its terminal, or the console. The console takes
 /// `\n` alone; the kernel adds the `\r`.
 fn show(s: &str) {
-    if s.is_empty() {
+    show_bytes(s.as_bytes());
+}
+
+/// [`show`] for bytes: a foreground program's output, passed as it is
+/// (ADR-0154 rule 7).
+fn show_bytes(bytes: &[u8]) {
+    if bytes.is_empty() {
         return;
     }
     let _ = match terminal() {
-        Some(end) => terminal_write(end, s.as_bytes()),
-        None => console_write(CONSOLE, s.as_bytes())
+        Some(end) => terminal_write(end, bytes),
+        None => console_write(CONSOLE, bytes)
             .map(|_| ())
             .map_err(|_| fmt::Error),
     };
+}
+
+/// A background job's output as the terminal gets it (ADR-0154 rule 7):
+/// every control character but `\n` and `\t` becomes `?`.
+fn tamed(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                '?'
+            } else {
+                c
+            }
+        })
+        .collect()
 }
 
 /// Joins `path` to the absolute `cwd` and normalises it lexically: `..`
@@ -186,20 +212,74 @@ fn problem(status: u32) -> String {
 struct Job {
     number: u32,
     job: Handle,
-    process: Handle,
+    /// One per element of the pipeline, in order.
+    processes: Vec<Handle>,
+    /// Each element's name, whether it is a question command, and the read
+    /// end of its `REPORT` channel (ADR-0153 rule 11).
+    elements: Vec<(String, bool, Option<Handle>)>,
     line: String,
-    /// The read end of the job's `REPORT` channel (ADR-0153 rule 11).
-    report: Option<Handle>,
+    /// What its output gave a `$(...)`.
+    captured: Vec<u8>,
 }
 
 impl Drop for Job {
     /// A background job's reports are not read (ADR-0158 rule 6 reports its
-    /// end only): the channel goes with it.
+    /// end only): the channels go with it.
     fn drop(&mut self) {
-        if let Some(r) = self.report.take() {
-            let _ = handle_close(r);
+        for (_, _, report) in &mut self.elements {
+            if let Some(r) = report.take() {
+                let _ = handle_close(r);
+            }
         }
     }
+}
+
+/// Port keys of the shell's stream ends: above every job's.
+const STREAM_KEY: u64 = 1 << 32;
+/// Most bytes one relay passes before the loop looks at other events.
+const RELAY_CHUNK: usize = 4096;
+/// Most bytes a `$(...)` keeps of a program's output.
+const MAX_CAPTURE: usize = syntax::MAX_SOURCE;
+
+/// Where a relayed stream's bytes go.
+enum Dest {
+    Terminal,
+    File(File),
+    Capture,
+}
+
+/// A stream a job writes and the shell reads.
+struct Relay {
+    key: u64,
+    job: u32,
+    end: Handle,
+    dest: Dest,
+    /// A background job's line so far: its output is shown in whole lines.
+    partial: Vec<u8>,
+}
+
+/// What the shell writes into a job's stream.
+enum Source {
+    /// The output of the builtin or function that started the pipeline.
+    Text,
+    /// A file, from this offset.
+    File(File, u64),
+    /// The keys typed while the job is in front.
+    Keys,
+}
+
+/// A stream the shell writes and a job reads.
+struct Feed {
+    key: u64,
+    job: u32,
+    end: Handle,
+    source: Source,
+    pending: Vec<u8>,
+    at: usize,
+    /// No more will come: close once `pending` is written.
+    closing: bool,
+    /// The signals subscribed now.
+    armed: u32,
 }
 
 /// A program's start-up channel, and the report channel's end the shell
@@ -240,6 +320,17 @@ struct Z {
     columns: usize,
     /// Keys read but not yet used: typed after an Enter, for the next prompt.
     pending: Vec<u8>,
+    relays: Vec<Relay>,
+    feeds: Vec<Feed>,
+    next_stream: u64,
+    /// The job in front, which gets the keys.
+    foreground: Option<u32>,
+    /// A line is being edited: background output goes above it.
+    at_prompt: bool,
+    /// The line typed to a foreground job so far, and an escape sequence
+    /// being skipped.
+    typed: Vec<u8>,
+    escape: bool,
 }
 
 impl Z {
@@ -565,6 +656,136 @@ impl Z {
         show(&text);
     }
 
+    /// One element's start-up table and image, or why it may not run.
+    fn ready(&mut self, exec: &Exec<'_>) -> Result<(Handle, Option<Table>), String> {
+        let table = match self.plan_for(exec)? {
+            None => None,
+            Some(plan) if self.root.is_none() && !plan.is_empty() => {
+                return Err(zoraya_command::error(
+                    exec.name,
+                    None,
+                    "there is no volume",
+                    &[],
+                ));
+            }
+            Some(plan) => Some(self.table(&plan)?),
+        };
+        match directory_lookup(DIRECTORY, exec.name) {
+            Ok(image) => Ok((image, table)),
+            Err(s) => {
+                if let Some(t) = table {
+                    let _ = handle_close(t.startup);
+                    let _ = handle_close(t.report);
+                }
+                Err(zoraya_command::error(
+                    "zosh",
+                    Some(exec.name),
+                    &zoraya_command::status_problem(s),
+                    &[],
+                ))
+            }
+        }
+    }
+
+    /// The output destination a sink names.
+    fn dest(&self, sink: Sink) -> Result<Dest, String> {
+        match sink {
+            Sink::Terminal => Ok(Dest::Terminal),
+            Sink::Capture => Ok(Dest::Capture),
+            Sink::File(token) => {
+                let o = self
+                    .outputs
+                    .get(&token)
+                    .ok_or_else(|| String::from("zosh: an output file is gone\n"))?;
+                let file = o
+                    .file
+                    .clone_as(file_rights::READ | file_rights::WRITE)
+                    .map_err(|s| zoraya_command::error("zosh", None, &problem(s), &[]))?;
+                Ok(Dest::File(file))
+            }
+        }
+    }
+
+    /// Each element's `in`, `out` and `err` (ADR-0152 rules 1 to 3, ADR-0158
+    /// rule 2). Every end made for the children is added to `given`, for
+    /// the shell to close once they are started.
+    fn streams(
+        &mut self,
+        number: u32,
+        pipe: &Pipe<'_>,
+        given: &mut Vec<Handle>,
+    ) -> Result<Vec<[Handle; 3]>, String> {
+        let fail = |s: Status| {
+            zoraya_command::error("zosh", None, &zoraya_command::status_problem(s), &[])
+        };
+        let n = pipe.programs.len();
+        let mut pipes = Vec::new();
+        for _ in 1..n {
+            let (read, write) = stream_create().map_err(fail)?;
+            given.push(read);
+            given.push(write);
+            pipes.push((read, write));
+        }
+        // The pipeline's own out and err: one relay when both go one way.
+        let out = self.relay(number, self.dest(pipe.out)?).map_err(fail)?;
+        given.push(out);
+        let err = if pipe.err == pipe.out {
+            out
+        } else {
+            let e = self.relay(number, self.dest(pipe.err)?).map_err(fail)?;
+            given.push(e);
+            e
+        };
+        let first = match pipe.input {
+            Some(text) => self.feed(number, Source::Text, text.as_bytes().to_vec()),
+            None if pipe.background => Z::empty_input(),
+            None => self.feed(number, Source::Keys, Vec::new()),
+        }
+        .map_err(fail)?;
+        given.push(first);
+        let mut all = Vec::new();
+        for (i, exec) in pipe.programs.iter().enumerate() {
+            let mut ends = [
+                if i == 0 { first } else { pipes[i - 1].0 },
+                if i + 1 < n { pipes[i].1 } else { out },
+                if exec.err_too && i + 1 < n {
+                    pipes[i].1
+                } else {
+                    err
+                },
+            ];
+            // Rule 3: the shell opens the file itself, before the command
+            // starts, and relays it.
+            for (stream, append, path) in exec.redirects {
+                let opened = if *stream == Stream::In {
+                    let file = self
+                        .open(path, 0)
+                        .map_err(|s| zoraya_command::error("zosh", Some(path), &problem(s), &[]))?;
+                    self.feed(number, Source::File(file, 0), Vec::new())
+                } else {
+                    let flags = open_flags::CREATE | if *append { 0 } else { open_flags::TRUNCATE };
+                    let file = self
+                        .open(path, flags)
+                        .map_err(|s| zoraya_command::error("zosh", Some(path), &problem(s), &[]))?;
+                    self.relay(number, Dest::File(file))
+                }
+                .map_err(fail)?;
+                given.push(opened);
+                match stream {
+                    Stream::In => ends[0] = opened,
+                    Stream::Out => ends[1] = opened,
+                    Stream::Err => ends[2] = opened,
+                    Stream::Both => {
+                        ends[1] = opened;
+                        ends[2] = opened;
+                    }
+                }
+            }
+            all.push(ends);
+        }
+        Ok(all)
+    }
+
     // --- Jobs ---
 
     fn free_number(&self) -> u32 {
@@ -573,13 +794,15 @@ impl Z {
             .unwrap_or(1)
     }
 
+    /// Spawns one element into `job`, with its three stream ends.
     fn spawn_in_job(
         &self,
+        job: Handle,
         image: Handle,
         exec: &Exec<'_>,
         startup: Option<Handle>,
-    ) -> Result<(Handle, Handle), Status> {
-        let job = job_create(JOB, JobFlags::NONE)?;
+        streams: [Handle; 3],
+    ) -> Result<Handle, Status> {
         let mut buffer = alloc::vec![0u8; 16 * 1024];
         let mut e = Encoder::new(&mut buffer, job, image);
         let volume = if NEED_VOLUME.contains(&exec.name) {
@@ -611,6 +834,22 @@ impl Z {
                 transfer: Transfer::Move,
             });
         }
+        let [input, output, error] = streams;
+        e.handle(dup(
+            native::slot::IN.slot(),
+            input,
+            StreamReadObject::RIGHTS,
+        ));
+        e.handle(dup(
+            native::slot::OUT.slot(),
+            output,
+            StreamWriteObject::RIGHTS,
+        ));
+        e.handle(dup(
+            native::slot::ERR.slot(),
+            error,
+            StreamWriteObject::RIGHTS,
+        ));
         for a in exec.args {
             e.arg(a.text.as_bytes());
         }
@@ -621,38 +860,323 @@ impl Z {
             Some(length) => spawn(&buffer[..length]),
             None => Err(Status::InvalidArgument),
         };
-        match result {
-            Ok(process) => {
-                core::mem::forget(volume);
-                Ok((job, process))
+        if result.is_ok() {
+            core::mem::forget(volume);
+        }
+        result
+    }
+
+    // --- Streams (ADR-0152) ---
+
+    fn stream_key(&mut self) -> u64 {
+        self.next_stream += 1;
+        STREAM_KEY + self.next_stream
+    }
+
+    /// A stream job `number` writes and the shell relays to `dest`; gives
+    /// the write end, for the shell to close once the job has it.
+    fn relay(&mut self, number: u32, dest: Dest) -> Result<Handle, Status> {
+        let (read, write) = stream_create()?;
+        let key = self.stream_key();
+        let wanted = stream_signals::READABLE | stream_signals::PEER_CLOSED;
+        if let Err(e) = port_subscribe(self.port, read, wanted, key, Mode::Level) {
+            let _ = handle_close(read);
+            let _ = handle_close(write);
+            return Err(e);
+        }
+        self.relays.push(Relay {
+            key,
+            job: number,
+            end: read,
+            dest,
+            partial: Vec::new(),
+        });
+        Ok(write)
+    }
+
+    /// A stream the shell writes from `source` and job `number` reads;
+    /// gives the read end.
+    fn feed(&mut self, number: u32, source: Source, text: Vec<u8>) -> Result<Handle, Status> {
+        let (read, write) = stream_create()?;
+        let key = self.stream_key();
+        let closing = matches!(source, Source::Text);
+        self.feeds.push(Feed {
+            key,
+            job: number,
+            end: write,
+            source,
+            pending: text,
+            at: 0,
+            closing,
+            armed: 0,
+        });
+        let at = self.feeds.len() - 1;
+        self.pump_feed(at);
+        Ok(read)
+    }
+
+    /// An `in` at its end already (ADR-0158 rule 2).
+    fn empty_input() -> Result<Handle, Status> {
+        let (read, write) = stream_create()?;
+        let _ = handle_close(write);
+        Ok(read)
+    }
+
+    /// Passes what relay `at` holds: one chunk, or with `all` everything
+    /// until its writers are gone. Gives false once the relay is closed.
+    fn pump_relay(&mut self, at: usize, all: bool) -> bool {
+        let mut bytes = [0u8; RELAY_CHUNK];
+        loop {
+            let r = &self.relays[at];
+            let n = match stream_read(r.end, &mut bytes) {
+                Ok(0) | Err(Status::PeerClosed) => {
+                    let r = self.relays.remove(at);
+                    let _ = handle_close(r.end);
+                    if !r.partial.is_empty() {
+                        let mut rest = r.partial;
+                        rest.push(b'\n');
+                        self.background_output(&rest);
+                    }
+                    return false;
+                }
+                Ok(n) => n,
+                Err(_) => return true,
+            };
+            let front = self.foreground == Some(self.relays[at].job);
+            match &mut self.relays[at].dest {
+                Dest::Terminal if front => show_bytes(&bytes[..n]),
+                Dest::Terminal => {
+                    let r = &mut self.relays[at];
+                    r.partial.extend_from_slice(&bytes[..n]);
+                    if let Some(cut) = r.partial.iter().rposition(|b| *b == b'\n') {
+                        let lines: Vec<u8> = r.partial.drain(..=cut).collect();
+                        self.background_output(&lines);
+                    }
+                }
+                Dest::File(file) => {
+                    let _ = file.write(0, write_flags::APPEND, &bytes[..n]);
+                }
+                Dest::Capture => {
+                    let number = self.relays[at].job;
+                    if let Some(j) = self.jobs.iter_mut().find(|j| j.number == number) {
+                        let room = MAX_CAPTURE.saturating_sub(j.captured.len());
+                        j.captured.extend_from_slice(&bytes[..n.min(room)]);
+                    }
+                }
             }
-            Err(e) => {
-                let _ = handle_close(job);
-                Err(e)
+            if !all {
+                return true;
             }
         }
     }
 
-    /// The job with port key `key` ended: its record, and the job removed.
-    fn take_ended(&mut self, key: u64) -> Option<(Job, ExitRecord)> {
+    /// A background job's lines: above the line being edited, or now.
+    fn background_output(&mut self, bytes: &[u8]) {
+        let text = tamed(bytes);
+        if self.at_prompt {
+            self.notices.push(text);
+        } else {
+            show(&text);
+        }
+    }
+
+    /// Subscribes feed `at` to `wanted`, if it is not already.
+    fn arm(&mut self, at: usize, wanted: u32) {
+        let f = &mut self.feeds[at];
+        if f.armed == wanted {
+            return;
+        }
+        let _ = port_unsubscribe(self.port, f.key);
+        if port_subscribe(self.port, f.end, wanted, f.key, Mode::Level).is_ok() {
+            f.armed = wanted;
+        } else {
+            f.armed = 0;
+        }
+    }
+
+    fn close_feed(&mut self, at: usize) {
+        let f = self.feeds.remove(at);
+        let _ = handle_close(f.end);
+    }
+
+    /// Writes what feed `at` has, as far as the stream takes it without
+    /// waiting (INV-0152-2).
+    fn pump_feed(&mut self, at: usize) {
+        loop {
+            let f = &mut self.feeds[at];
+            if f.at >= f.pending.len() {
+                f.pending.clear();
+                f.at = 0;
+                if let Source::File(file, offset) = &mut f.source {
+                    let mut chunk = alloc::vec![0u8; STREAM_ATOMIC];
+                    match file.read(*offset, &mut chunk) {
+                        Ok(n) if n > 0 => {
+                            chunk.truncate(n);
+                            *offset += n as u64;
+                            f.pending = chunk;
+                        }
+                        _ => f.closing = true,
+                    }
+                }
+                if f.pending.is_empty() {
+                    if f.closing {
+                        self.close_feed(at);
+                    } else {
+                        // Keys: nothing to write until some are typed.
+                        self.arm(at, stream_signals::PEER_CLOSED);
+                    }
+                    return;
+                }
+            }
+            let f = &mut self.feeds[at];
+            let end = (f.at + STREAM_ATOMIC).min(f.pending.len());
+            match stream_write(f.end, &f.pending[f.at..end]) {
+                Ok(n) => f.at += n,
+                Err(Status::WouldBlock) => {
+                    self.arm(at, stream_signals::WRITABLE | stream_signals::PEER_CLOSED);
+                    return;
+                }
+                // The reader is gone: nothing more is wanted.
+                Err(_) => {
+                    self.close_feed(at);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// One port packet: a stream's, or a job's end. Gives an ended job.
+    fn event(&mut self, packet: &Packet) -> Option<(Job, Vec<ExitRecord>)> {
+        if packet.key >= STREAM_KEY {
+            if let Some(at) = self.relays.iter().position(|r| r.key == packet.key) {
+                self.pump_relay(at, false);
+            } else if let Some(at) = self.feeds.iter().position(|f| f.key == packet.key) {
+                if packet.signals & stream_signals::PEER_CLOSED != 0 {
+                    self.close_feed(at);
+                } else {
+                    self.pump_feed(at);
+                }
+            }
+            return None;
+        }
+        self.take_ended(packet.key)
+    }
+
+    /// A key for the foreground job's `in`, as a terminal in canonical mode
+    /// gives it: echoed, a line at a time, Backspace editing it, Ctrl-D
+    /// ending the input. Gives what to echo.
+    fn type_key(&mut self, number: u32, key: u8, echo: &mut Vec<u8>) {
+        let Some(at) = self
+            .feeds
+            .iter()
+            .position(|f| f.job == number && matches!(f.source, Source::Keys))
+        else {
+            return;
+        };
+        if self.escape {
+            // `ESC [ ... final`: cursor keys have no meaning here.
+            self.escape = !(0x40..=0x7e).contains(&key) || key == b'[';
+            return;
+        }
+        match key {
+            b'\r' | b'\n' => {
+                echo.push(b'\n');
+                self.typed.push(b'\n');
+                let line = core::mem::take(&mut self.typed);
+                self.feeds[at].pending.extend_from_slice(&line);
+                self.pump_feed(at);
+            }
+            0x7f | 0x08 => {
+                // One character back: its continuation bytes too.
+                while let Some(b) = self.typed.pop() {
+                    if b & 0xc0 != 0x80 {
+                        echo.extend_from_slice(b"\x08 \x08");
+                        break;
+                    }
+                }
+            }
+            editor::CTRL_D => {
+                let line = core::mem::take(&mut self.typed);
+                let f = &mut self.feeds[at];
+                if line.is_empty() {
+                    f.closing = true;
+                } else {
+                    f.pending.extend_from_slice(&line);
+                }
+                self.pump_feed(at);
+            }
+            0x1b => self.escape = true,
+            b'\t' => {
+                self.typed.push(key);
+                echo.push(key);
+            }
+            k if k >= 0x20 => {
+                self.typed.push(k);
+                echo.push(k);
+            }
+            _ => {}
+        }
+    }
+
+    /// Job `number`'s streams: the relays emptied, the feeds closed.
+    fn finish_streams(&mut self, number: u32) {
+        while let Some(at) = self.relays.iter().position(|r| r.job == number) {
+            if self.pump_relay(at, true) {
+                // A writer outlived the job (it cannot: the job held them
+                // all); stop rather than wait.
+                let r = self.relays.remove(at);
+                let _ = handle_close(r.end);
+            }
+        }
+        while let Some(at) = self.feeds.iter().position(|f| f.job == number) {
+            self.close_feed(at);
+        }
+    }
+
+    /// The job with port key `key` ended: its records, and the job removed.
+    fn take_ended(&mut self, key: u64) -> Option<(Job, Vec<ExitRecord>)> {
         let at = self
             .jobs
             .iter()
             .position(|j| JOB_KEY + u64::from(j.number) == key)?;
+        let number = self.jobs[at].number;
+        self.finish_streams(number);
+        let at = self.jobs.iter().position(|j| j.number == number)?;
         let job = self.jobs.remove(at);
         let _ = port_unsubscribe(self.port, key);
-        let record = process_exit_record(job.process).unwrap_or_else(|_| record::exited(0));
-        let _ = handle_close(job.process);
+        let records = job
+            .processes
+            .iter()
+            .map(|p| {
+                let r = process_exit_record(*p).unwrap_or_else(|_| record::exited(0));
+                let _ = handle_close(*p);
+                r
+            })
+            .collect();
         let _ = handle_close(job.job);
-        Some((job, record))
+        Some((job, records))
+    }
+
+    /// The status of a job's pipeline (ADR-0152 rule 6).
+    fn status_of(job: &Job, records: &[ExitRecord]) -> ExitRecord {
+        let members: Vec<Member> = records
+            .iter()
+            .zip(&job.elements)
+            .map(|(record, (_, question, _))| Member {
+                record: *record,
+                question: *question,
+            })
+            .collect();
+        pipeline_status(&members).record
     }
 
     /// A background job's end, in ADR-0158 rule 6's words.
-    fn notice(job: &Job, record: &ExitRecord) -> String {
-        if record::is_success(record) {
+    fn notice(job: &Job, records: &[ExitRecord]) -> String {
+        let record = Z::status_of(job, records);
+        if record::is_success(&record) {
             format!("[{}] done: {}\n", job.number, job.line)
         } else {
-            format!("[{}] {}: {}\n", job.number, job.line, record::what(record))
+            format!("[{}] {}: {}\n", job.number, job.line, record::what(&record))
         }
     }
 
@@ -715,14 +1239,16 @@ impl Z {
         keys
     }
 
-    /// Waits for a foreground job, passing it Ctrl-C and Ctrl-\. Other
-    /// keys are dropped: there is no stream to give them to (step 8).
-    /// Waits for job `number` in front; gives its record, whether Ctrl-C
-    /// interrupted it, and its report channel.
-    fn wait_foreground(&mut self, number: u32) -> (ExitRecord, bool, Option<Handle>) {
+    /// Waits for job `number` in front, giving it the keys: Ctrl-C and
+    /// Ctrl-\\ as job signals, the rest to its `in` (ADR-0158 rule 3).
+    /// Gives the job and its records, and whether Ctrl-C interrupted it.
+    fn wait_foreground(&mut self, number: u32) -> (Job, Vec<ExitRecord>, bool) {
         let mut interrupts = 0;
         let mut ctrl_c = false;
-        loop {
+        self.foreground = Some(number);
+        self.typed.clear();
+        self.escape = false;
+        let ended = 'wait: loop {
             // Keys typed ahead of the job reach it first.
             let mut keys = core::mem::take(&mut self.pending);
             if keys.is_empty() {
@@ -733,23 +1259,25 @@ impl Z {
                 for packet in &packets[..count] {
                     if packet.key == CONSOLE_KEY {
                         keys.extend(self.read_keys());
-                    } else if let Some((job, record)) = self.take_ended(packet.key) {
+                    } else if let Some((job, records)) = self.event(packet) {
                         if job.number == number {
-                            let mut job = job;
-                            return (record, ctrl_c, job.report.take());
+                            break 'wait (job, records);
                         }
-                        self.notices.push(Z::notice(&job, &record));
+                        self.notices.push(Z::notice(&job, &records));
                     }
                 }
             }
             let Some(job) = self.jobs.iter().find(|j| j.number == number).map(|j| j.job) else {
                 continue;
             };
+            let mut echo = Vec::new();
             for key in keys {
                 match key {
                     editor::CTRL_C => {
                         interrupts += 1;
                         ctrl_c = true;
+                        show_bytes(&echo);
+                        echo.clear();
                         show("^C\n");
                         if interrupts >= PATIENCE {
                             let _ = job_kill(job);
@@ -758,14 +1286,19 @@ impl Z {
                         }
                     }
                     editor::CTRL_BACKSLASH => {
+                        show_bytes(&echo);
+                        echo.clear();
                         show("^\\\n");
                         let _ = job_signal(job, RequestKind::Quit, 0);
                     }
-                    // No stream to give other keys to yet (step 8).
-                    _ => {}
+                    k => self.type_key(number, k, &mut echo),
                 }
             }
-        }
+            show_bytes(&echo);
+        };
+        self.foreground = None;
+        self.typed.clear();
+        (ended.0, ended.1, ctrl_c)
     }
 
     /// Waits until job `number` ends or `deadline` passes; reports ends.
@@ -789,8 +1322,8 @@ impl Z {
                         show("^C\n");
                         return false;
                     }
-                } else if let Some((job, record)) = self.take_ended(packet.key) {
-                    show(&Z::notice(&job, &record));
+                } else if let Some((job, records)) = self.event(packet) {
+                    show(&Z::notice(&job, &records));
                 }
             }
         }
@@ -1018,8 +1551,8 @@ impl Z {
                     if let Some(k) = self.read_keys().first() {
                         return *k;
                     }
-                } else if let Some((job, record)) = self.take_ended(packet.key) {
-                    self.notices.push(Z::notice(&job, &record));
+                } else if let Some((job, records)) = self.event(packet) {
+                    self.notices.push(Z::notice(&job, &records));
                 }
             }
         }
@@ -1164,8 +1697,7 @@ impl Z {
             env: &[],
             grants: &given,
             redirects: &[],
-            background: false,
-            line: "",
+            err_too: false,
         };
         match self.plan_for(&exec) {
             Err(e) => {
@@ -1323,10 +1855,13 @@ impl Host for Z {
                     .map(|j| j.line.clone())
                     .unwrap_or_default();
                 show(&format!("{line}\n"));
-                let (record, ctrl_c, report) = self.wait_foreground(n);
-                if let Some(r) = report {
-                    self.hints(r, &line, &line);
+                let (mut job, records, ctrl_c) = self.wait_foreground(n);
+                for (name, _, report) in &mut job.elements {
+                    if let Some(r) = report.take() {
+                        self.hints(r, name, &line);
+                    }
                 }
+                let record = Z::status_of(&job, &records);
                 if let Some(l) = record::screen_line(&line, &record, ctrl_c) {
                     show(&format!("{l}\n"));
                 }
@@ -1447,18 +1982,12 @@ impl Host for Z {
         }
     }
 
-    fn program(&mut self, exec: &Exec<'_>) -> Ran {
-        if !exec.redirects.is_empty() {
-            let msg = format!(
-                "zosh: {}: redirection of a program needs byte streams, which arrive with TASK-18 step 8\n",
-                exec.name
-            );
-            show(&msg);
-            return Ran::Refused(1);
-        }
+    fn program(&mut self, pipe: &Pipe<'_>) -> Ran {
         // `ls /zoraya/bin` lists the ramdisk (ADR-0155 rule 8), which no
         // table can give a program.
-        if exec.name == "ls"
+        if let [exec] = pipe.programs
+            && exec.name == "ls"
+            && exec.redirects.is_empty()
             && exec.args.len() == 1
             && self.abs(&exec.args[0].text) == "/zoraya/bin"
         {
@@ -1467,94 +1996,142 @@ impl Host for Z {
                 text.push_str(&n);
                 text.push('\n');
             }
-            show(&text);
+            let mut captured = String::new();
+            match pipe.out {
+                Sink::Capture => captured = text,
+                other => Host::write(self, other, &text),
+            }
             return Ran::Ended {
-                record: record::exited(0),
+                records: alloc::vec![record::exited(0)],
                 ctrl_c: false,
+                captured,
             };
         }
-        let table = match self.plan_for(exec) {
-            Err(e) => {
-                show(&e);
-                return Ran::Refused(1);
-            }
-            Ok(None) => None,
-            Ok(Some(plan)) if self.root.is_none() && !plan.is_empty() => {
-                show(&zoraya_command::error(
-                    exec.name,
-                    None,
-                    "there is no volume",
-                    &[],
-                ));
-                return Ran::Refused(1);
-            }
-            Ok(Some(plan)) => match self.table(&plan) {
-                Ok(t) => Some(t),
-                Err(e) => {
-                    show(&e);
-                    return Ran::Refused(1);
-                }
-            },
-        };
         if self.jobs.len() >= MAX_JOBS {
             show("zosh: too many jobs\n");
             return Ran::Refused(1);
         }
-        let image = match directory_lookup(DIRECTORY, exec.name) {
-            Ok(i) => i,
-            Err(s) => {
-                show(&zoraya_command::error(
-                    "zosh",
-                    Some(exec.name),
-                    &zoraya_command::status_problem(s),
-                    &[],
-                ));
-                return Ran::Refused(1);
-            }
-        };
-        let started = self.spawn_in_job(image, exec, table.as_ref().map(|t| t.startup));
-        let _ = handle_close(image);
-        let report = table.as_ref().map(|t| t.report);
-        let (job, process) = match started {
-            Ok(both) => both,
-            Err(s) => {
-                if let Some(r) = report {
-                    let _ = handle_close(r);
+        // Every element's table and image before anything starts.
+        let mut ready: Vec<(Handle, Option<Table>)> = Vec::new();
+        let give_back = |ready: Vec<(Handle, Option<Table>)>| {
+            for (image, table) in ready {
+                let _ = handle_close(image);
+                if let Some(t) = table {
+                    let _ = handle_close(t.startup);
+                    let _ = handle_close(t.report);
                 }
+            }
+        };
+        for exec in pipe.programs {
+            match self.ready(exec) {
+                Ok(r) => ready.push(r),
+                Err(e) => {
+                    show(&e);
+                    give_back(ready);
+                    return Ran::Refused(1);
+                }
+            }
+        }
+        let number = self.free_number();
+        let job = match job_create(JOB, JobFlags::NONE) {
+            Ok(j) => j,
+            Err(s) => {
                 show(&zoraya_command::error(
                     "zosh",
-                    Some(exec.name),
+                    None,
                     &zoraya_command::status_problem(s),
                     &[],
                 ));
+                give_back(ready);
                 return Ran::Refused(1);
             }
         };
-        let number = self.free_number();
-        let key = JOB_KEY + u64::from(number);
-        if port_subscribe(self.port, job, job_signals::TERMINATED, key, Mode::Level).is_err() {
-            let _ = job_kill(job);
-            let _ = handle_close(process);
-            let _ = handle_close(job);
-            return Ran::Refused(1);
+        let mut given = Vec::new();
+        let streams = self.streams(number, pipe, &mut given);
+        let mut processes = Vec::new();
+        let mut elements = Vec::new();
+        let mut failed = streams.as_ref().err().cloned();
+        if let Ok(streams) = &streams {
+            for ((exec, (image, table)), ends) in pipe.programs.iter().zip(ready).zip(streams) {
+                let startup = table.as_ref().map(|t| t.startup);
+                let started = if failed.is_none() {
+                    self.spawn_in_job(job, image, exec, startup, *ends)
+                } else {
+                    Err(Status::BadState)
+                };
+                let _ = handle_close(image);
+                let report = table.map(|t| t.report);
+                let question = self.description(exec.name).is_some_and(|d| d.question);
+                elements.push((exec.name.to_string(), question, report));
+                match started {
+                    Ok(p) => processes.push(p),
+                    Err(s) if failed.is_none() => {
+                        if let Some(t) = startup {
+                            let _ = handle_close(t);
+                        }
+                        failed = Some(zoraya_command::error(
+                            "zosh",
+                            Some(exec.name),
+                            &zoraya_command::status_problem(s),
+                            &[],
+                        ));
+                    }
+                    Err(_) => {
+                        if let Some(t) = startup {
+                            let _ = handle_close(t);
+                        }
+                    }
+                }
+            }
+        } else {
+            give_back(ready);
         }
-        let line = exec.line.trim_end_matches(['&', ' ']).to_string();
-        self.jobs.push(Job {
+        // INV-0152-1: the shell keeps none of the ends it gave.
+        for h in given {
+            let _ = handle_close(h);
+        }
+        let key = JOB_KEY + u64::from(number);
+        if failed.is_none()
+            && port_subscribe(self.port, job, job_signals::TERMINATED, key, Mode::Level).is_err()
+        {
+            failed = Some("zosh: too many jobs\n".into());
+        }
+        let line = pipe.line.trim_end_matches(['&', ' ']).to_string();
+        let record = Job {
             number,
             job,
-            process,
+            processes,
+            elements,
             line: line.clone(),
-            report,
-        });
-        if exec.background {
+            captured: Vec::new(),
+        };
+        if let Some(e) = failed {
+            let _ = job_kill(job);
+            for p in &record.processes {
+                let _ = handle_close(*p);
+            }
+            let _ = handle_close(job);
+            self.finish_streams(number);
+            show(&e);
+            return Ran::Refused(1);
+        }
+        self.jobs.push(record);
+        if pipe.background {
             show(&format!("[{number}] {line}\n"));
             return Ran::Background(number);
         }
-        let (record, ctrl_c, report) = self.wait_foreground(number);
-        if let Some(r) = report {
-            self.hints(r, exec.name, &line);
+        let (mut job, records, ctrl_c) = self.wait_foreground(number);
+        for (name, _, report) in &mut job.elements {
+            if let Some(r) = report.take() {
+                self.hints(r, name, &line);
+            }
         }
-        Ran::Ended { record, ctrl_c }
+        let captured = String::from_utf8_lossy(&job.captured).into_owned();
+        Ran::Ended {
+            records,
+            ctrl_c,
+            captured,
+        }
     }
 
     fn list(&mut self, dir: &str) -> Option<Vec<(String, bool)>> {
@@ -1934,6 +2511,13 @@ fn main() -> i32 {
         rows: 24,
         columns: 80,
         pending: Vec::new(),
+        relays: Vec::new(),
+        feeds: Vec::new(),
+        next_stream: 0,
+        foreground: None,
+        at_prompt: false,
+        typed: Vec::new(),
+        escape: false,
     };
     // Settings (ADR-0157 item 5): each problem once, and the defaults apply.
     if z.root.is_some() {
@@ -1981,6 +2565,7 @@ fn main() -> i32 {
         out.clear();
         editor.start(&prompt, &mut out);
         show(&out);
+        shell.host.at_prompt = true;
         let entry = 'read: loop {
             // Keys typed ahead of this prompt come first.
             let mut keys = core::mem::take(&mut shell.host.pending);
@@ -1992,8 +2577,8 @@ fn main() -> i32 {
                 for packet in &packets[..count] {
                     if packet.key == CONSOLE_KEY {
                         keys.extend(shell.host.read_keys());
-                    } else if let Some((job, record)) = shell.host.take_ended(packet.key) {
-                        shell.host.notices.push(Z::notice(&job, &record));
+                    } else if let Some((job, records)) = shell.host.event(packet) {
+                        shell.host.notices.push(Z::notice(&job, &records));
                     }
                 }
             }
@@ -2028,6 +2613,7 @@ fn main() -> i32 {
             }
             screen.flush();
         };
+        shell.host.at_prompt = false;
         let Some(entry) = entry else { continue };
         if entry.trim().is_empty() {
             continue;

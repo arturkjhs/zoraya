@@ -73,7 +73,7 @@ pub enum Found {
     Nothing,
 }
 
-/// A command for the host to run as a program.
+/// A program of a pipeline, for the host to run.
 #[derive(Debug)]
 pub struct Exec<'a> {
     pub name: &'a str,
@@ -81,19 +81,41 @@ pub struct Exec<'a> {
     /// `NAME=value` for the child's environment (ADR-0150 rule 6).
     pub env: &'a [String],
     pub grants: &'a [(bool, Value)],
+    /// Its own redirections, which take the place of what the pipeline
+    /// gives that stream (ADR-0152 rule 3).
     pub redirects: &'a [(Stream, bool, String)],
+    /// `&|` after it: its `err` goes into the pipe too (ADR-0152 rule 2).
+    pub err_too: bool,
+}
+
+/// A pipeline of programs (ADR-0152 rules 1 and 2): one stream per `|`,
+/// all started as one job.
+#[derive(Debug)]
+pub struct Pipe<'a> {
+    pub programs: &'a [Exec<'a>],
+    /// What the first program reads: the output of the builtin or function
+    /// that started the pipeline (rule 5). `None`: the terminal, for a
+    /// foreground job; nothing (end of file) for a background one.
+    pub input: Option<&'a str>,
+    /// Where the last program's `out` and every `err` go, unless a
+    /// redirection says otherwise.
+    pub out: Sink,
+    pub err: Sink,
     pub background: bool,
     /// The line as written, for job lists.
     pub line: &'a str,
 }
 
-/// How a program ended, or why it did not start.
+/// How a pipeline ended, or why it did not start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ran {
     Ended {
-        record: ExitRecord,
+        /// One per program, in order.
+        records: Vec<ExitRecord>,
         /// The terminal's Ctrl-C sent its interrupt.
         ctrl_c: bool,
+        /// What went to [`Sink::Capture`].
+        captured: String,
     },
     /// Started in the background as job `n`.
     Background(u32),
@@ -137,7 +159,7 @@ pub trait Host {
         parsed: &Parsed<'_>,
         io: &mut Io,
     ) -> i32;
-    fn program(&mut self, exec: &Exec<'_>) -> Ran;
+    fn program(&mut self, pipe: &Pipe<'_>) -> Ran;
     /// `dir` is `""` for the current directory.
     fn list(&mut self, dir: &str) -> Option<Vec<(String, bool)>>;
     /// A whole file, as text.
@@ -748,29 +770,125 @@ impl<H: Host> Shell<H> {
         line: &str,
     ) -> Run {
         let checked = checked || p.negated;
-        if p.elements.len() > 1 {
-            for e in &p.elements[1..] {
-                if let Some(name) = self.runs_in_shell(&e.command) {
-                    let mut err =
-                        shell_error(&name, "a builtin or function can only start a pipeline");
-                    err.hints.push(format!("run {name} on its own line"));
-                    return Ok(self.report(&err));
-                }
-            }
-            let mut err = shell_error(
-                "|",
-                "pipelines need byte streams, which zosh does not use yet",
-            );
-            err.hints
-                .push("this arrives with TASK-18 step 8 (docs/design.md)".into());
-            return Ok(self.report(&err));
-        }
-        let r = self.element(src, &p.elements[0], checked, background, line)?;
+        let r = if p.elements.len() > 1 {
+            self.several(src, p, checked, background, line)?
+        } else {
+            self.element(src, &p.elements[0], checked, background, line)?
+        };
         if p.negated {
             let ok = !r.success();
             return Ok(Result_::code(if ok { 0 } else { 1 }));
         }
         Ok(r)
+    }
+
+    /// A pipeline of more than one element (ADR-0152 rules 2, 5 and 6).
+    fn several(
+        &mut self,
+        src: &str,
+        p: &Pipeline,
+        checked: bool,
+        background: bool,
+        line: &str,
+    ) -> Run {
+        for e in &p.elements[1..] {
+            if let Some(name) = self.runs_in_shell(&e.command) {
+                self.last_name = name.clone();
+                return Ok(self.report(&only_first(&name)));
+            }
+        }
+        let first = &p.elements[0];
+        let in_shell = self.runs_in_shell(&first.command);
+        let mut members = Vec::new();
+        let mut input = None;
+        if let Some(name) = &in_shell {
+            if background {
+                self.last_name = name.clone();
+                return Ok(self.report(&shell_error(
+                    name,
+                    "a builtin or function cannot run in the background",
+                )));
+            }
+            // Rule 5: its output is the first program's input.
+            self.state.captures.push(String::new());
+            let err = if first.err_too {
+                Sink::Capture
+            } else {
+                self.sink_err()
+            };
+            self.state.sinks.push((Sink::Capture, err));
+            let r = self.element(src, first, true, false, line);
+            self.state.sinks.pop();
+            let text = self.state.captures.pop().unwrap_or_default();
+            let r = r?;
+            members.push(Member {
+                record: r.record,
+                question: r.no,
+            });
+            input = Some(text);
+        }
+        let rest = if in_shell.is_some() {
+            &p.elements[1..]
+        } else {
+            &p.elements[..]
+        };
+        let mut prepared = Vec::new();
+        for e in rest {
+            let Command::Simple(s) = &e.command else {
+                return Ok(self.report(&shell_error("|", "only commands can be piped")));
+            };
+            match self.program_of(src, s) {
+                Ok(mut x) => {
+                    x.err_too = e.err_too;
+                    prepared.push(x);
+                }
+                Err(r) => return Ok(r),
+            }
+        }
+        let execs: Vec<Exec<'_>> = prepared.iter().map(Prepared::exec).collect();
+        let pipe = Pipe {
+            programs: &execs,
+            input: input.as_deref(),
+            out: self.sink_out(),
+            err: self.sink_err(),
+            background,
+            line,
+        };
+        let ran = self.host.program(&pipe);
+        let questions: Vec<bool> = prepared
+            .iter()
+            .map(|x| self.host.description(&x.name).is_some_and(|d| d.question))
+            .collect();
+        let _ = checked;
+        match ran {
+            Ran::Ended {
+                records,
+                ctrl_c,
+                captured,
+            } => {
+                self.emit(Sink::Capture, &captured);
+                for (record, question) in records.into_iter().zip(questions) {
+                    members.push(Member { record, question });
+                }
+                let mut r = pipeline_status(&members);
+                r.ctrl_c = ctrl_c;
+                Ok(r)
+            }
+            Ran::Background(_) => Ok(Result_::code(0)),
+            Ran::Refused(code) => Ok(Result_::code(code)),
+        }
+    }
+
+    /// A pipeline element after the first: a program, prepared to run.
+    fn program_of(&mut self, src: &str, s: &Simple) -> Result<Prepared, Result_> {
+        let args = self.arguments(src, s)?;
+        let name = args[0].text.clone();
+        self.last_name = name.clone();
+        match self.find(&name) {
+            Found::Program => self.prepare(src, s, &args),
+            Found::Nothing => Err(self.not_found(&name)),
+            _ => Err(self.report(&only_first(&name))),
+        }
     }
 
     /// The name of a builtin or function the element would run in the shell.
@@ -1188,31 +1306,11 @@ impl<H: Host> Shell<H> {
                 .push(format!("to set a variable, type: set {} {value}", a.name));
             return Ok(self.report(&e));
         }
-        let mut args: Vec<Value> = Vec::new();
-        for (i, w) in s.words.iter().enumerate() {
-            let context = if i > 0 && args.first().is_some_and(|a| a.text == "set") {
-                Context::EmptyOk
-            } else {
-                Context::Command
-            };
-            match self.expand(src, w, context) {
-                Ok(v) => args.extend(v),
-                Err(e) => {
-                    self.last_name = "zosh".into();
-                    return Ok(self.report(&e));
-                }
-            }
-        }
-        let Some(first) = args.first().cloned() else {
-            self.last_name = "zosh".into();
-            let e = shell_error(
-                src.get(s.words[0].span.start..s.words[0].span.end)
-                    .unwrap_or(""),
-                "gives no command name",
-            );
-            return Ok(self.report(&e));
+        let args = match self.arguments(src, s) {
+            Ok(a) => a,
+            Err(r) => return Ok(r),
         };
-        let name = first.text.clone();
+        let name = args[0].text.clone();
         self.last_name = name.clone();
         let found = self.find(&name);
         if found != Found::Program && !s.grants.is_empty() {
@@ -1225,26 +1323,7 @@ impl<H: Host> Shell<H> {
             )));
         }
         match found {
-            Found::Nothing => {
-                let mut e = shell_error(&name, "no such command");
-                if let Some((_, hint)) = UNIX_HINTS.iter().find(|(n, _)| *n == name) {
-                    e.hints.push((*hint).into());
-                } else if name.contains('=') && name.split('=').next().is_some_and(syntax::is_name)
-                {
-                    let (n, v) = name.split_once('=').unwrap_or_default();
-                    e.hints
-                        .push(format!("to set a variable, type: set {n} {v}"));
-                } else {
-                    let mut names = self.host.names();
-                    names.extend(self.state.function_names());
-                    names.extend(LANGUAGE.iter().map(|n| n.to_string()));
-                    let near = nearest(&name, &names);
-                    if !near.is_empty() {
-                        e.hints.push(format!("did you mean {}?", near.join(" or ")));
-                    }
-                }
-                Ok(self.report(&e))
-            }
+            Found::Nothing => Ok(self.not_found(&name)),
             Found::Program => self.program(src, s, &args, background, line),
             Found::Function => {
                 let f = self.state.function(&name).expect("found");
@@ -1254,6 +1333,56 @@ impl<H: Host> Shell<H> {
                 self.with_redirects(src, s, |shell| Ok(shell.builtin(&name, &args[1..], found)))
             }
         }
+    }
+
+    /// A simple command's words, expanded; at least the name.
+    fn arguments(&mut self, src: &str, s: &Simple) -> Result<Vec<Value>, Result_> {
+        let mut args: Vec<Value> = Vec::new();
+        for (i, w) in s.words.iter().enumerate() {
+            let context = if i > 0 && args.first().is_some_and(|a| a.text == "set") {
+                Context::EmptyOk
+            } else {
+                Context::Command
+            };
+            match self.expand(src, w, context) {
+                Ok(v) => args.extend(v),
+                Err(e) => {
+                    self.last_name = "zosh".into();
+                    return Err(self.report(&e));
+                }
+            }
+        }
+        if args.is_empty() {
+            self.last_name = "zosh".into();
+            let e = shell_error(
+                src.get(s.words[0].span.start..s.words[0].span.end)
+                    .unwrap_or(""),
+                "gives no command name",
+            );
+            return Err(self.report(&e));
+        }
+        Ok(args)
+    }
+
+    /// `zosh: NAME: no such command`, with a hint when one is near.
+    fn not_found(&mut self, name: &str) -> Result_ {
+        let mut e = shell_error(name, "no such command");
+        if let Some((_, hint)) = UNIX_HINTS.iter().find(|(n, _)| *n == name) {
+            e.hints.push((*hint).into());
+        } else if name.contains('=') && name.split('=').next().is_some_and(syntax::is_name) {
+            let (n, v) = name.split_once('=').unwrap_or_default();
+            e.hints
+                .push(format!("to set a variable, type: set {n} {v}"));
+        } else {
+            let mut names = self.host.names();
+            names.extend(self.state.function_names());
+            names.extend(LANGUAGE.iter().map(|n| n.to_string()));
+            let near = nearest(name, &names);
+            if !near.is_empty() {
+                e.hints.push(format!("did you mean {}?", near.join(" or ")));
+            }
+        }
+        self.report(&e)
     }
 
     /// Runs `f` with the statement's redirections as its output.
@@ -1326,22 +1455,16 @@ impl<H: Host> Shell<H> {
         r
     }
 
-    fn program(
-        &mut self,
-        src: &str,
-        s: &Simple,
-        args: &[Value],
-        background: bool,
-        line: &str,
-    ) -> Run {
+    /// A program's environment, grants and redirections, expanded.
+    fn prepare(&mut self, src: &str, s: &Simple, args: &[Value]) -> Result<Prepared, Result_> {
         let mut own = Vec::new();
         for a in &s.assignments {
             let v = match self.expand(src, &a.value, Context::Command) {
                 Ok(v) => v,
-                Err(e) => return Ok(self.report(&e)),
+                Err(e) => return Err(self.report(&e)),
             };
             if v.len() != 1 {
-                return Ok(self.report(&shell_error(
+                return Err(self.report(&shell_error(
                     &a.name,
                     "an environment value is exactly one value",
                 )));
@@ -1352,11 +1475,11 @@ impl<H: Host> Shell<H> {
         for g in &s.grants {
             let v = match self.expand(src, &g.path, Context::Command) {
                 Ok(v) => v,
-                Err(e) => return Ok(self.report(&e)),
+                Err(e) => return Err(self.report(&e)),
             };
             if v.len() != 1 || !g.path.is_literal_source() && v.len() != 1 {
                 let marker = if g.write { "+w" } else { "+r" };
-                return Ok(self.report(&shell_error(marker, "needs exactly one path")));
+                return Err(self.report(&shell_error(marker, "needs exactly one path")));
             }
             grants.push((g.write, v[0].clone()));
         }
@@ -1365,29 +1488,59 @@ impl<H: Host> Shell<H> {
             match self.expand(src, &r.target, Context::Command) {
                 Ok(v) if v.len() == 1 => redirects.push((r.stream, r.append, v[0].text.clone())),
                 Ok(_) => {
-                    return Ok(self.report(&shell_error(
+                    return Err(self.report(&shell_error(
                         src.get(r.target.span.start..r.target.span.end)
                             .unwrap_or(""),
                         "a redirection needs exactly one file",
                     )));
                 }
-                Err(e) => return Ok(self.report(&e)),
+                Err(e) => return Err(self.report(&e)),
             }
         }
         let env = self.state.environment(&own);
-        let name = args[0].text.clone();
-        let exec = Exec {
-            name: &name,
-            args: &args[1..],
-            env: &env,
-            grants: &grants,
-            redirects: &redirects,
+        Ok(Prepared {
+            name: args[0].text.clone(),
+            args: args[1..].to_vec(),
+            env,
+            grants,
+            redirects,
+            err_too: false,
+        })
+    }
+
+    fn program(
+        &mut self,
+        src: &str,
+        s: &Simple,
+        args: &[Value],
+        background: bool,
+        line: &str,
+    ) -> Run {
+        let prepared = match self.prepare(src, s, args) {
+            Ok(p) => p,
+            Err(r) => return Ok(r),
+        };
+        let exec = [prepared.exec()];
+        let pipe = Pipe {
+            programs: &exec,
+            input: None,
+            out: self.sink_out(),
+            err: self.sink_err(),
             background,
             line,
         };
-        match self.host.program(&exec) {
-            Ran::Ended { record, ctrl_c } => {
-                let question = self.host.description(&name).is_some_and(|d| d.question);
+        match self.host.program(&pipe) {
+            Ran::Ended {
+                records,
+                ctrl_c,
+                captured,
+            } => {
+                self.emit(Sink::Capture, &captured);
+                let record = records.first().copied().unwrap_or_else(|| exited(0));
+                let question = self
+                    .host
+                    .description(&prepared.name)
+                    .is_some_and(|d| d.question);
                 Ok(Result_ {
                     record,
                     no: question && is_success_no(&record),
@@ -1515,6 +1668,74 @@ impl<H: Host> Shell<H> {
 }
 
 /// A question's "no": exit code 1.
+/// A program's expanded words and settings, owned while its pipeline runs.
+struct Prepared {
+    name: String,
+    args: Vec<Value>,
+    env: Vec<String>,
+    grants: Vec<(bool, Value)>,
+    redirects: Vec<(Stream, bool, String)>,
+    err_too: bool,
+}
+
+impl Prepared {
+    fn exec(&self) -> Exec<'_> {
+        Exec {
+            name: &self.name,
+            args: &self.args,
+            env: &self.env,
+            grants: &self.grants,
+            redirects: &self.redirects,
+            err_too: self.err_too,
+        }
+    }
+}
+
+fn only_first(name: &str) -> ShellError {
+    let mut err = shell_error(name, "a builtin or function can only start a pipeline");
+    err.hints.push(format!("run {name} on its own line"));
+    err
+}
+
+/// One element of a pipeline as it ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Member {
+    pub record: ExitRecord,
+    /// A question command (ADR-0151 rule 3): exit 1 is its "no".
+    pub question: bool,
+}
+
+/// `SIGPIPE`'s number, in a POSIX program's `Terminated` record (ADR-0101).
+pub const SIGPIPE: u32 = 13;
+
+/// A pipeline's status (ADR-0152 rule 6, INV-0152-3). An element fails
+/// unless it succeeded, answered "no", or (not being the last) ended by
+/// `SIGPIPE` because its reader closed. With a failure the status is the
+/// rightmost failure's; else "no" when the last element answered "no";
+/// else success.
+pub fn pipeline_status(members: &[Member]) -> Result_ {
+    let last = members.len().saturating_sub(1);
+    let answered_no = |m: &Member| m.question && is_success_no(&m.record);
+    let failed = members.iter().enumerate().rev().find(|(i, m)| {
+        let sigpipe = m.record.reason == zoraya_abi::ExitReason::Terminated
+            && m.record.detail == SIGPIPE
+            && *i != last;
+        !is_success(&m.record) && !answered_no(m) && !sigpipe
+    });
+    if let Some((_, m)) = failed {
+        return Result_::of(m.record);
+    }
+    match members.last() {
+        Some(m) if answered_no(m) => Result_ {
+            record: m.record,
+            no: true,
+            ctrl_c: false,
+            reported: false,
+        },
+        _ => Result_::code(0),
+    }
+}
+
 fn is_success_no(r: &ExitRecord) -> bool {
     r.reason == zoraya_abi::ExitReason::Exited && r.code == 1
 }

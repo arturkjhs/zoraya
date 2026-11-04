@@ -121,6 +121,62 @@
 > search nothing notes.txt; echo $status\r
 < \r\n1
 < \r\n/> 
+# Byte streams (TASK-18 step 8, ADR-0152): pipelines, $(...) and
+# redirection of programs.
+> ls | search .txt\r
+< copy.txt\r\nhello.txt\r\nnotes.txt
+< \r\n/> 
+> cat notes.txt | head --lines 1\r
+< \r\nfirst line\r\n/> 
+> echo hi there | cat\r
+< hi there
+< \r\n/> 
+> set n $(ls | search .txt); count $n\r
+< \r\n3
+< \r\n/> 
+> ls | search zzz; echo $status\r
+< \r\n1
+< \r\n/> 
+> cat notes.txt > copied.txt; cat copied.txt\r
+< first line\r\nsecond line
+< \r\n/> 
+> search line < copied.txt; rm copied.txt\r
+< first line\r\nsecond line
+< \r\n/> 
+# INV-0152-1: each element holds the stream ends the pipeline gives it;
+# every reader above ended on end of file, so the shell kept no write end.
+> echo-args --streams | cat\r
+< in: stream-read\r\nout: stream-write\r\nerr: stream-write
+< \r\n/> 
+# INV-0155-4: a writer whose reader closed exits 0 and says nothing. The
+# file is 256 KiB, four times a stream's capacity.
+> echo 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopq > b0\r
+< \r\n/> 
+> cat b0 b0 b0 b0 b0 b0 b0 b0 > b1; cat b1 b1 b1 b1 b1 b1 b1 b1 > b2\r
+< \r\n/> 
+> cat b2 b2 b2 b2 b2 b2 b2 b2 > b3; cat b3 b3 b3 b3 b3 b3 b3 b3 > big\r
+< \r\n/> 
+> rm b0 b1 b2 b3; stat big\r
+< file size 262144 
+< \r\n/> 
+> cat big | head --lines 1; echo $status\r
+< \r\n0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopq\r\n0
+< \r\n/> 
+> search q big | head --lines 1; echo $status\r
+< \r\nbig:1: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopq\r\n0
+< \r\n/> 
+# INV-0152-2: a builtin's 256 KiB into a reader that never reads. The shell
+# does not wait on the full stream: it still takes keys, and Ctrl-C ends the
+# job long before its 60 s.
+> set x $(cat big)\r
+< \r\n/> 
+> echo $x | sleep 60\r
+~ 300 \r\n/>
+> \x03
+< sleep: interrupted (Ctrl-C)
+< \r\n/> 
+> rm big; set x\r
+< \r\n/> 
 # What a program is given (ADR-0153): grants shows it and runs nothing.
 > grants cp hello.txt work/copy.txt\r
 < cp gets:\r\n  in, out, err         the terminal\r\n  /                    read (current directory)\r\n  /hello.txt           read (operand FROM)\r\n  /work                create or replace copy.txt (operand TO)

@@ -801,14 +801,23 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
 - **Ending.** `exit` ends this shell and `init` starts a new one, on the console or in a new terminal window; with
   jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off. `reboot` says it is not
   available until the kernel has a reset call (proposed ADR-0159).
+- **Streams** (ADR-0152, step 8). Every program gets `in`, `out` and `err` at the native slots 1001 to 1003
+  (`zoraya_abi::native::slot`); `zoraya-rt`'s `print!` and `eprint!` write to them, and a program started without
+  them (by a test or a service) prints to the console. `zosh` holds the other ends and relays them from its event
+  loop, never waiting on a stream: output to the terminal (the window, in the GUI), a file or a `$(...)`; input from
+  the keys (echoed a line at a time, Backspace and Ctrl-D as a terminal in canonical mode gives them), a `< FILE`, or
+  the output of the builtin or function that starts the pipeline. `a | b | c` is one job with one stream per `|`;
+  `&|` sends `err` into the pipe too; `>`, `>>`, `<`, `2>`, `2>>` and `&>` work on programs. A pipeline's status is
+  ADR-0152 rule 6's (`zoraya_shell::eval::pipeline_status`). `cat`, `head` and `search` read their input when given
+  no file; a writer whose reader closed exits 0 (`PeerClosed`). A background job's `in` is at its end, and its output
+  comes in whole lines above the line being edited, control characters shown as `?`.
 - **Settings** (`help settings`): `settings`, `settings --all`, `settings NAME [VALUE]`, `settings --reset NAME`,
   `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
   `shell.suggestions`, `shell.colour`, `console.columns`.
 
 **Pending (TASK-18 Part 2).** Step 7's rest: link objects (rule 5) are not yet resolved by the shell, and the in-QEMU
 halves of INV-0153-1, -2 and -7; `grants` today says what a program gets.
-Steps 8 and 9 after stage 6a: byte streams, pipelines (`|` is refused with a message), redirection of programs, `$(...)`
-of a program, Ctrl-Z, `bg`. Step 10 after 6d: POSIX programs. Step 11: the tour as a test on both terminals.
+Step 8 is done (byte streams, below). Step 9: Ctrl-Z and `bg`. Step 10: POSIX programs. Step 11: the tour as a test on both terminals.
 Step 12: `reboot` (ADR-0159).
 
 ## Known limitations
@@ -831,16 +840,16 @@ Step 12: `reboot` (ADR-0159).
   and the shell reports how many bytes went. Any holder of the console's `READ` right can take input from the shell;
   children get `WRITE` only.
 
-- **Shell (TASK-18 Part 2, steps 1 to 6).** Programs print to the console, not through `zosh`: until step 8 there
-  are no streams, so `|`, a program's redirection and `$(...)` of a program are refused with a message, and keys
-  typed while a program runs reach nobody but Ctrl-C and Ctrl-\\. Programs print to the console, so in the GUI their output is on the
-  serial line, not in the window; keys typed while a program runs are dropped. A line wider than the terminal is drawn again on a new row when
+- **Shell (TASK-18 Part 2, steps 1 to 8).** A builtin or function that starts a pipeline runs to its end before the
+  programs start: its output is held, up to the 1 MiB of a `$(...)`, and then fed (ADR-0152 rule 5 allows it to be
+  written as it is made). Every byte of output is copied through `zosh` (ADR-0152's open question on the relay's
+  cost). Keys typed to a program are cooked by `zosh`: cursor keys are dropped, and the line is sent at Enter. A test
+  program that writes with `console_write` itself still reaches the serial console, not the window. A line wider than the terminal is drawn again on a new row when
   edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` publishes
   a new `/config/settings` (ADR-0157 item 4); `/config/history` is rewritten in place after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
   ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). The third Ctrl-C kills a job, as before
   ADR-0158 (step 9). `reboot` is not available (ADR-0159, proposed).
-- **GUI.** Programs started from `zosh` in the window print to the serial console: they have no byte stream to inherit
-  until stage 6 (ADR-0096). The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
+- **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until
   ADR-0056. Attaching a new display driver still waits for it, up to 2 s per call; `init` blocks up to 6 s while it

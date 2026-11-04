@@ -39,6 +39,12 @@ pub mod slot {
     use crate::Handle;
     /// The start-up channel's end: read before `main` and closed.
     pub const STARTUP: Handle = Handle(1000);
+    /// The command's three streams (ADR-0152 rule 1): the read end of `in`,
+    /// the write ends of `out` and `err`. A program without them (a test
+    /// program the kernel started, a service) prints to the console.
+    pub const IN: Handle = Handle(1001);
+    pub const OUT: Handle = Handle(1002);
+    pub const ERR: Handle = Handle(1003);
 }
 
 /// What an entry is (ADR-0153 rule 2).

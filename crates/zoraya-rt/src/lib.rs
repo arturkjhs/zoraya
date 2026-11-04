@@ -21,6 +21,7 @@ use zoraya_abi::{
     Mode, OBJECT_TYPES, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind,
     Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, request_from_value, stubs,
 };
+use zoraya_abi::{DEADLINE_INFINITE, STREAM_ATOMIC, native, stream_signals};
 
 const MAX_MESSAGE_HANDLES: usize = 64;
 
@@ -506,12 +507,110 @@ impl fmt::Write for Console {
     }
 }
 
-/// Prints to the console, with no newline.
+/// Whether the process holds a stream's write end at `slot`: 0 unknown,
+/// 1 no, 2 yes. Asked once per slot.
+static STREAM_AT: [core::sync::atomic::AtomicU8; 2] = [
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+];
+
+fn stream_at(which: usize, slot: Handle) -> bool {
+    use core::sync::atomic::Ordering;
+    match STREAM_AT[which].load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let yes = handle_type(slot) == Ok("stream-write");
+            STREAM_AT[which].store(if yes { 2 } else { 1 }, Ordering::Relaxed);
+            yes
+        }
+    }
+}
+
+/// Writes all of `bytes` to a stream, waiting while it is full (ADR-0101).
+fn stream_write_all(end: Handle, mut bytes: &[u8]) -> Result<(), Status> {
+    while !bytes.is_empty() {
+        let chunk = &bytes[..bytes.len().min(STREAM_ATOMIC)];
+        match stream_write(end, chunk) {
+            Ok(n) => bytes = &bytes[n..],
+            Err(Status::WouldBlock) => {
+                wait_for(end, stream_signals::WRITABLE | stream_signals::PEER_CLOSED)?
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// The command's output (ADR-0152 rule 1): the `OUT` stream when `zosh`
+/// gave one, else the console. A reader that has gone ends the program
+/// quietly with 0 (ADR-0155 rule 6, INV-0155-4).
+pub struct Output;
+
+impl fmt::Write for Output {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if !stream_at(0, native::slot::OUT) {
+            return Console.write_str(s);
+        }
+        match stream_write_all(native::slot::OUT, s.as_bytes()) {
+            Ok(()) => Ok(()),
+            Err(Status::PeerClosed) => process_exit(0),
+            Err(_) => Err(fmt::Error),
+        }
+    }
+}
+
+/// Waits until `end` asserts one of `wanted`.
+fn wait_for(end: Handle, wanted: u32) -> Result<(), Status> {
+    let port = port_create()?;
+    let subscribed = port_subscribe(port, end, wanted, 1, Mode::Level);
+    if subscribed.is_ok() {
+        let mut packets = [Packet::default()];
+        let _ = port_wait(port, DEADLINE_INFINITE, &mut packets);
+    }
+    let _ = handle_close(port);
+    subscribed
+}
+
+/// Reads the command's input (ADR-0152 rule 1) into `buffer`, waiting
+/// while it is empty: 0 at its end. A program with no `IN` stream has no
+/// input.
+pub fn input_read(buffer: &mut [u8]) -> Result<usize, Status> {
+    if buffer.is_empty() || handle_type(native::slot::IN) != Ok("stream-read") {
+        return Ok(0);
+    }
+    loop {
+        match stream_read(native::slot::IN, buffer) {
+            Ok(n) => return Ok(n),
+            Err(Status::WouldBlock) => wait_for(
+                native::slot::IN,
+                stream_signals::READABLE | stream_signals::PEER_CLOSED,
+            )?,
+            Err(Status::PeerClosed) => return Ok(0),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// The command's error output: the `ERR` stream when it has one, else the
+/// console.
+pub struct ErrOut;
+
+impl fmt::Write for ErrOut {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if !stream_at(1, native::slot::ERR) {
+            return Console.write_str(s);
+        }
+        stream_write_all(native::slot::ERR, s.as_bytes()).map_err(|_| fmt::Error)
+    }
+}
+
+/// Prints to the command's output, with no newline.
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = write!($crate::Console, $($arg)*);
+        let _ = write!($crate::Output, $($arg)*);
     }};
 }
 
@@ -519,13 +618,30 @@ macro_rules! print {
 macro_rules! println {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = writeln!($crate::Console, $($arg)*);
+        let _ = writeln!($crate::Output, $($arg)*);
+    }};
+}
+
+/// Prints to the command's error output, with no newline.
+#[macro_export]
+macro_rules! eprint {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let _ = write!($crate::ErrOut, $($arg)*);
+    }};
+}
+
+#[macro_export]
+macro_rules! eprintln {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let _ = writeln!($crate::ErrOut, $($arg)*);
     }};
 }
 
 #[cfg(feature = "entry")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    println!("user panic: {info}");
+    eprintln!("user panic: {info}");
     process_exit(101)
 }
