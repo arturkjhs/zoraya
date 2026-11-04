@@ -1213,9 +1213,11 @@ impl<K: Kernel> Broker<K> {
         if !g.session {
             return Err(status::NOT_PERMITTED);
         }
+        // TRANSFER so that it can be moved; the move lists the terminal's
+        // rights, which it then holds.
         let job = self
             .kernel
-            .duplicate(g.job, FOREGROUND_RIGHTS)
+            .duplicate(g.job, FOREGROUND_RIGHTS.union(Rights::TRANSFER))
             .map_err(|_| status::AGAIN)?;
         self.foreground = Some(pgid);
         actions.push(Action::Foreground { group: pgid, job });

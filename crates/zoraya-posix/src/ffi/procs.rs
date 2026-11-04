@@ -970,10 +970,16 @@ fn load_fd(p: &mut Posix<RtSys>, fd: i32) -> Result<Program, i32> {
     if !head.starts_with(b"\x7fELF") || size == 0 {
         return Err(ENOEXEC);
     }
-    let object = zoraya_rt::memory_create(size, MemoryFlags::NONE).map_err(|_| ENOMEM)?;
-    let address = match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
+    // Whole pages for the object; the image is the file's length.
+    let pages = size.next_multiple_of(PAGE_SIZE as u64);
+    let object = zoraya_rt::memory_create(pages, MemoryFlags::NONE).map_err(|s| {
+        debug_later(p, "load: memory_create", (s, pages));
+        ENOMEM
+    })?;
+    let address = match zoraya_rt::memory_map(object, 0, pages, MapFlags::WRITE) {
         Ok(a) => a,
-        Err(_) => {
+        Err(s) => {
+            debug_later(p, "load: memory_map", (s, pages));
             let _ = zoraya_rt::handle_close(object);
             return Err(ENOMEM);
         }
@@ -990,8 +996,13 @@ fn load_fd(p: &mut Posix<RtSys>, fd: i32) -> Result<Program, i32> {
         }
         Ok(())
     })();
-    let _ = zoraya_rt::memory_unmap(address, size);
-    let image = filled.and_then(|()| zoraya_rt::image_create(object, size).map_err(|_| ENOEXEC));
+    let _ = zoraya_rt::memory_unmap(address, pages);
+    let image = filled.and_then(|()| {
+        zoraya_rt::image_create(object, size).map_err(|s| {
+            debug_later(p, "load: image_create", s);
+            ENOEXEC
+        })
+    });
     let _ = zoraya_rt::handle_close(object);
     image.map(Program::Elf)
 }
@@ -1270,6 +1281,7 @@ fn spawn_into(
     let process = match zoraya_rt::spawn(&buffer[..length]) {
         Ok(h) => h,
         Err(s) => {
+            debug_later(p, "spawn", s);
             // A refused spawn moved nothing (INV-0042-3).
             undo_made(&made, &record.handles);
             let _ = zoraya_rt::handle_close(boot);
@@ -1600,7 +1612,9 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
     poll();
     let r = state(|p| {
         let job = p.process_job.ok_or(ENOSYS)?;
-        let (image, argv, exe) = resolve_program(p, path, argv)?;
+        let (image, argv, exe) = resolve_program(p, path, argv).inspect_err(|e| {
+            debug_later(p, "exec: load", e);
+        })?;
         let (server, client) = match zoraya_rt::channel_create() {
             Ok(c) => c,
             Err(_) => {
@@ -1745,6 +1759,34 @@ extern "C" fn execl(
 
 // ------------------------------------------------------------ fork
 
+/// With `ZORAYA_POSIX_DEBUG` in the environment, why a process call failed
+/// goes to fd 2: the library cannot tell C more than an `errno`.
+fn debug(what: &str, detail: impl core::fmt::Debug) {
+    let wanted = zoraya_rt::startup()
+        .envp
+        .any(|e| e.starts_with(b"ZORAYA_POSIX_DEBUG="));
+    if !wanted {
+        return;
+    }
+    use core::fmt::Write;
+    let mut line = String::new();
+    let _ = writeln!(line, "libposix: {what}: {detail:?}");
+    let _ = with(|p| p.write(2, User::new(line.as_ptr() as u64, line.len())));
+}
+
+/// `debug` from inside the state: written straight to fd 2.
+fn debug_later(p: &mut Posix<RtSys>, what: &str, detail: impl core::fmt::Debug) {
+    let wanted = zoraya_rt::startup()
+        .envp
+        .any(|e| e.starts_with(b"ZORAYA_POSIX_DEBUG="));
+    if wanted {
+        use core::fmt::Write;
+        let mut line = String::new();
+        let _ = writeln!(line, "libposix: {what}: {detail:?}");
+        let _ = p.write(2, User::new(line.as_ptr() as u64, line.len()));
+    }
+}
+
 /// `fork` (ADR-0102's wrapper): the pid first, the move list, the snapshot;
 /// the parent commits, the child sets its facts right.
 #[unsafe(no_mangle)]
@@ -1757,10 +1799,14 @@ extern "C" fn fork() -> i32 {
             0 => (bp::group::NEW, 0),
             g => (bp::group::JOIN, g as u32),
         };
-        let prepared = p.prepare(form, pgid, 0, true)?;
+        let prepared = p.prepare(form, pgid, 0, true).map_err(|e| {
+            debug_later(p, "fork: prepare", e);
+            e
+        })?;
         let moves = match p.fork_moves(prepared.pgid, &prepared) {
             Ok(m) => m,
             Err(e) => {
+                debug_later(p, "fork: moves", e);
                 let _ = zoraya_rt::handle_close(prepared.child_job);
                 let _ = zoraya_rt::handle_close(prepared.broker_end);
                 let _ = zoraya_rt::handle_close(prepared.parent_job);
@@ -1796,6 +1842,7 @@ extern "C" fn fork() -> i32 {
                 Ok(0)
             }
             Err(s) => {
+                debug_later(p, "fork: snapshot_process", s);
                 for (_, h) in moves {
                     let _ = zoraya_rt::handle_close(h);
                 }

@@ -657,7 +657,11 @@ fn the_foreground_is_a_group_of_the_session_and_the_terminal_gets_its_job() {
         })
         .expect("the terminal is told");
     assert_eq!(s.b.kernel.object(job), s.group_job(a.pid));
-    assert_eq!(s.b.kernel.handles[&job].1, FOREGROUND_RIGHTS);
+    assert_eq!(
+        s.b.kernel.handles[&job].1,
+        FOREGROUND_RIGHTS.union(Rights::TRANSFER),
+        "the terminal's rights, and TRANSFER for the move"
+    );
     s.b.kernel.close(job);
     let (r, _) = s.ask(a.conn, &message(&proto::Tcgetpgrp {}), vec![]);
     assert_eq!(decode::<TcgetpgrpReply>(&r, 0).unwrap().1.pgid, a.pid);

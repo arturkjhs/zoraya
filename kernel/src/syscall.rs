@@ -933,7 +933,9 @@ impl Handlers for Calls<'_> {
         let bytes = UserSlice::of(args.0)?.read()?;
         let request = SnapshotRequest::decode(&bytes)?;
         let job = self.job(request.job, Rights::CREATE_PROCESS)?;
-        if !job.is_within(self.process.job()) {
+        // The caller's tree is its POSIX tree (ADR-0192): a fork child's
+        // process job sits beside its parent's, in a group job (ADR-0104).
+        if !job.is_within(self.process.job().posix_root()) {
             return Err(Status::AccessDenied);
         }
         let job = match request.group {

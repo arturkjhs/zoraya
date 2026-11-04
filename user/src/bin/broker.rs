@@ -485,7 +485,8 @@ impl Server {
                 transfer: Transfer::Move,
             })
             .collect();
-        if channel_write(self.control, &self.out[..n], &entries).is_err() {
+        if let Err(s) = channel_write(self.control, &self.out[..n], &entries) {
+            println!("broker: the terminal's control channel refused a message: {s:?}");
             for &(h, _) in moved {
                 let _ = handle_close(h);
             }
@@ -623,7 +624,8 @@ fn main() -> i32 {
         };
         server.act(&mut core, actions);
         // The session job, for hangup (ADR-0105 item 3).
-        if let Ok(job) = handle_duplicate(session_job, zoraya_broker::FOREGROUND_RIGHTS) {
+        let rights = zoraya_broker::FOREGROUND_RIGHTS.union(Rights::TRANSFER);
+        if let Ok(job) = handle_duplicate(session_job, rights) {
             server.control_call(&tp::Session {}, &[(job, zoraya_broker::FOREGROUND_RIGHTS)]);
         }
         let Some(process) = spawn_first(&first, image, &root, &tmp, &program, &s, base) else {

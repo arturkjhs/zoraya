@@ -116,6 +116,20 @@ impl Job {
     }
 
     /// True if this job is `ancestor` or lies under it.
+    /// The outermost job of the run of `posix` jobs this one ends: the root
+    /// of the POSIX tree a snapshot may create in (ADR-0192). A job without
+    /// the bit is its own.
+    pub fn posix_root(&self) -> &Job {
+        let mut job = self;
+        while job.posix
+            && let Some(parent) = job.parent.as_deref()
+            && parent.posix
+        {
+            job = parent;
+        }
+        job
+    }
+
     pub fn is_within(&self, ancestor: &Job) -> bool {
         let mut job = self;
         loop {
