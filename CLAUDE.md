@@ -90,6 +90,7 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
 - Every external crate used by the kernel or a `no_std` crate is listed in `docs/dependencies.md` with its exact
   version, license, purpose, and the reason it is not written in-house. Adding one is a decision (see above).
 - Only permissively licensed (MIT, Apache-2.0, BSD, ISC or Zlib) `no_std` crates. Prefer writing small things yourself.
+  A data file that is not code (the TLS root store, ADR-0228) may also be `CDLA-Permissive-2.0`; code never.
 - Host-side tools use `std` only unless a dependency is recorded the same way.
 
 ## Kernel code
