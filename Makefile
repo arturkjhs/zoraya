@@ -54,7 +54,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -145,37 +145,62 @@ RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
 EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
 	case $$? in 0) ;; 1) echo "[$(1)] skipped: $$reason"; exit 0 ;; *) exit 1 ;; esac;
 
-test-qemu: $(TEST_KERNEL) $(RUNNER) tools-storage
+# One target per machine configuration (CI runs each as a job of its own,
+# ADR-0213's Decision); make test-qemu runs them all, in this order, on one
+# test disk, with zoraya-fsck after each.
+QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2 tcg-el2 tcg-smp4-gicv3
+test-qemu: $(addprefix test-qemu-,$(QEMU_CONFIGS))
+
+test-qemu-disk: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
+
+test-qemu-auto-default: test-qemu-disk
 	$(RUN_TEST) --label auto-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
 		--expect-line "memory: 131072 KiB total" \
 		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
 		--expect-line "t_gui: all passed" \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-auto-smp4-2g: test-qemu-disk
 	$(RUN_TEST) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-auto-el2: test-qemu-disk
 	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST) --label auto-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-default: test-qemu-disk
 	$(RUN_TEST) --label tcg-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
 		--expect-line "gic: version 2" --expect-line "t_gui: all passed" \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-smp4-gicv2: test-qemu-disk
 	$(RUN_TEST) --label tcg-smp4-gicv2 \
 		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-el2: test-qemu-disk
 	$(RUN_TEST) --label tcg-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" --expect-line "psci: arm,psci-1.0 via smc" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
+	target/debug/zoraya-fsck $(TEST_DISK)
+
+test-qemu-tcg-smp4-gicv3: test-qemu-disk
 	$(RUN_TEST) --label tcg-smp4-gicv3 \
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
 		--expect-line "gic: version 3" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
-# One configuration, for working on the kernel.
 test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
@@ -280,8 +305,11 @@ posix-image: $(KERNEL) tools-storage
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
 # set from the first measured durations (TASK-22) with a margin of about
 # three; QEMU_TIMEOUT for the others.
-POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=900 w9-int=300 w9-term=300 \
-	w10=300 w4=1800 w5-jobs=300
+POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-term=600 \
+	w10=600 w4=1800 w5-jobs=300 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
+# W8's five builds: w8.script runs them in one boot; w8-BUILD.script runs one
+# (CI's jobs, ADR-0213's Decision).
+POSIX_W8_BUILDS := j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4
 POSIX_IMAGE_SIZE := 256M
 # The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
 # ("tcc: memory full"; every POSIX process holds at least its 1 MiB of heap,
@@ -485,10 +513,24 @@ check-test-caps:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-crash test-gui
-# Steps another CI job runs (CI: TEST_SKIP=test-posix, which has a job of its
-# own, ADR-0212); locally make test runs them all.
-TEST_SKIP ?=
-TEST_STEPS := $(filter-out $(TEST_SKIP),$(TEST_STEPS))
+TEST_STEPS += check-ci-jobs
+
+# CI (ADR-0213's Decision): one job builds what every test needs, and every
+# step of TEST_STEPS is a job of its own, test-qemu one a configuration and
+# test-posix one a script (and an accelerator where needed). ci-build is the
+# build job's; check-ci-jobs fails if the workflow leaves out a step, a
+# configuration, a script under an accelerator, or a W8 build.
+ci-build: $(KERNEL) $(TEST_KERNEL) $(RUNNER) tools-storage
+	@$(MAKE) -s -f ports/Makefile ports workloads
+	@$(MAKE) -s posix-image
+	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
+	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint
+
+CI_WORKFLOW ?= .github/workflows/test.yml
+check-ci-jobs:
+	@TEST_STEPS="$(TEST_STEPS)" QEMU_CONFIGS="$(QEMU_CONFIGS)" POSIX_SCRIPTS="$(POSIX_SCRIPTS)" \
+	  POSIX_ACCELS="$(POSIX_ACCELS)" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" \
+	  tools/check-ci-jobs.sh $(CI_WORKFLOW)
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

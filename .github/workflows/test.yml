@@ -1,5 +1,10 @@
-# Runs `make test` on Linux; QEMU uses TCG there (tools/run-qemu.sh picks
-# hvf only on an Apple Silicon Mac).
+# CI on Linux (QEMU uses TCG there: tools/run-qemu.sh picks hvf only on an
+# Apple Silicon Mac), split into small parallel jobs (ADR-0213's Decision):
+# one job builds everything once and hands build/ and target/ on; every step
+# of make test is a job of its own, test-qemu one a machine configuration and
+# test-posix one a script (with an accelerator where one run would be long).
+# `make check-ci-jobs` fails if this file leaves out a step, a configuration,
+# a script under an accelerator, or one of W8's builds.
 name: make test
 
 on:
@@ -10,17 +15,19 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # The ports, the sysroot, libc.a, the kernels, the user programs, the host
+  # tools and tests (built, not run) and the POSIX image (make ci-build), as
+  # one archive whose files keep their times.
+  build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Install QEMU, and clang for libc.a (make test-libposix, stage 6c)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm clang
+      - name: Install clang (zcc, libc.a and the ports) and zstd
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang zstd
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
-      # ADR-0109: the fetch step is outside make test, as the toolchain's
-      # install is; make test-libposix builds libc.a from musl's archive.
+      # ADR-0109: the fetch step is outside make test, as the toolchain's install is.
       - name: Cache the ports' archives
         uses: actions/cache@v4
         with:
@@ -28,65 +35,102 @@ jobs:
           key: ports-src-${{ hashFiles('ports/sources.lock') }}
       - name: make fetch-ports
         run: make fetch-ports
-      # make test-posix has a job of its own (ADR-0212's Decision).
-      - name: make test
-        run: make test TEST_SKIP=test-posix
-      - name: The logs of what failed
-        if: failure()
-        run: for f in build/logs/*.log; do echo "== $f"; tail -n 300 "$f"; done
-
-  # Stage 6e (ADR-0110, ADR-0212): the POSIX session's workloads, W5, W8,
-  # W9, W10 and tcc hello.c, in a job of their own: under TCG they do not
-  # fit beside the rest of make test in one job's 30 minutes.
-  posix:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install QEMU, and clang for libc.a and the ports
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm clang
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - name: Cache the ports' archives
-        uses: actions/cache@v4
+      - name: make ci-build
+        run: make ci-build
+      - name: Pack build/ and target/
+        run: tar --zstd -cf build.tar.zst --exclude=target/debug/incremental build target
+      - uses: actions/upload-artifact@v4
         with:
-          path: build/ports/src
-          key: ports-src-${{ hashFiles('ports/sources.lock') }}
-      - name: make fetch-ports
-        run: make fetch-ports
-      - name: make test-posix
-        run: make test-posix
-      - name: The runner's logs of what failed
-        if: failure()
-        run: |
-          shopt -s nullglob
-          for f in target/test-logs/posix-*.log; do echo "== $f"; tail -n 200 "$f"; done
-
-  # Stage 6b (ADR-0109): the ports, in a job of their own so that the QEMU
-  # tests above keep their time. The cache holds the downloaded archives,
-  # keyed by the lock; make fetch-ports verifies every hash either way.
-  ports:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - name: The host tools the ports need (clang; GNU make, sed, curl and bzip2 are in the image)
-        run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
-          clang --version && make --version | head -1 && sed --version | head -1
-      - name: Cache the ports' archives
-        uses: actions/cache@v4
-        with:
-          path: build/ports/src
-          key: ports-src-${{ hashFiles('ports/sources.lock') }}
-      - name: make fetch-ports
-        run: make fetch-ports
-      - name: make ports (builds, then make check-ports)
-        run: make ports
-      - name: The logs of what failed
+          name: build
+          path: build.tar.zst
+          retention-days: 2
+          compression-level: 0
+      - name: The ports' logs of what failed
         if: failure()
         run: |
           shopt -s nullglob
           for f in build/ports/logs/*.log; do echo "== $f"; tail -n 100 "$f"; done
+
+  # Steps that need nothing built.
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        cmd:
+          - make fmt-check
+          - make clippy
+          - make adr-check
+          - make check-user-access
+          - make check-kernel-tty
+          - make check-host-paths
+          - make check-test-caps
+          - make check-fetch-ports
+          - make check-ci-jobs
+    name: ${{ matrix.cmd }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Run
+        run: ${{ matrix.cmd }}
+
+  # Steps that run what the build job built. Before the archive is unpacked
+  # the checkout's files get an old time, so that make and cargo find what
+  # was built from them up to date and only run the tests.
+  tests:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        cmd:
+          - make test-unit
+          - make test-qemu-auto-default
+          - make test-qemu-auto-smp4-2g
+          - make test-qemu-auto-el2
+          - make test-qemu-tcg-default
+          - make test-qemu-tcg-smp4-gicv2
+          - make test-qemu-tcg-el2
+          - make test-qemu-tcg-smp4-gicv3
+          - make test-boot
+          - make test-files
+          - make test-libposix
+          - make test-posix-gui
+          - make test-crash
+          - make test-gui
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/hello.script tests/posix/w5.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w8-j1.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w8-pipe-j2.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w8-fifo-j2.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w8-pipe-j4.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w8-fifo-j4.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w9-int.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w9-term.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w9-term.script" POSIX_ACCELS="tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/w10.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/invariants.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/scenarios.script" POSIX_ACCELS="auto tcg"'
+    name: ${{ matrix.cmd }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU, clang and zstd
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm clang zstd
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/download-artifact@v4
+        with:
+          name: build
+      - name: Unpack, the sources older than what was built from them
+        run: |
+          git ls-files -z | xargs -0 touch -h -t 200001010000
+          tar --zstd -xf build.tar.zst
+      - name: Run
+        run: ${{ matrix.cmd }}
+      - name: The logs of what failed
+        if: failure()
+        run: |
+          shopt -s nullglob
+          for f in target/test-logs/*.log build/ports/logs/*.log; do echo "== $f"; tail -n 150 "$f"; done
