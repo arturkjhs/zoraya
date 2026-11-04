@@ -220,8 +220,9 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
   builtin parses its arguments through `zoraya-command`.
 - *Note, 2026-11-04 (TASK-18 Part 2, step 7):* `sync` stays a builtin. As a program it would need the `sync` right,
   which no entry of its table carries: its description has no operand and the current directory is given read-only
-  (ADR-0153 rule 1). Rule 8 names it among the programs; making it one needs a decision on what a line gives `sync`
-  (for the architect). The other file commands are programs.
+  (ADR-0153 rule 1). The other file commands are programs. *Decided by the architect, 2026-11-04 (recorded by an
+  agent):* `sync` stays a builtin, because flushing gives no access to any file, so a line need not grant anything
+  for it.
 
 ## Revisit triggers
 - A ported or new command whose syntax the description cannot express.
@@ -235,6 +236,8 @@ Accepted with a change, 2026-11-03. Decided by the architect; recorded by an age
 `exit` closes the shell, and `init` on the console starts a new one; `poweroff` and `reboot` remain explicit
 commands. In GUI mode `exit` closes the terminal window; if it was the last terminal window, `init` opens a new one
 (decided by the architect, 2026-11-03, in place of the agent's extension; revisit trigger: a launcher in stage 7).
+`sync` stays a builtin (the architect, 2026-11-04): flushing gives no access to any file, so a line need not grant
+anything for it; rule 8's list of programs loses it.
 `reboot` saying it is unavailable until the kernel has a reset call is accepted (2026-11-03); the reset call is a
 separate proposed ADR (ADR-0159). The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
 updated (notes in those ADRs, INV-0155-5 to -7; INV-0063-2's check moves to a test that ends `init` itself, ADR-0053's
