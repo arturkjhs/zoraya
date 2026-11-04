@@ -76,8 +76,8 @@ Before it stops, `configure` forks dash 120 times:
 - At those means, the 1,167 forks W4 made on Linux would cost about 0.8 s under HVF and 13 s under TCG.
 - W4's 2,881 program loads, at W8's means, would cost about 270 s and 1,700 s.
 
-**Recommendation on T2:** the fork is not what T2 waits for: eager copying holds at W4's volume, and no
-copy-on-write is needed for it. Before T2's acceptance, three things are needed:
+**Recommendation on T2**, accepted by the architect on 2026-11-04: the fork is not what T2 waits for: eager copying
+holds at W4's volume, and no copy-on-write is needed for it. Before T2's acceptance, in this order:
 
 1. The image cache (ADR-0212).
 2. T2's rows: the regex, group and directory names above.

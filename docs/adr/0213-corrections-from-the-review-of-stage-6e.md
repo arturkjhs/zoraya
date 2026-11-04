@@ -1,6 +1,6 @@
 # ADR-0213: Corrections and statements from the review of stage 6e
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0110, ADR-0210, ADR-0211, ADR-0212
 - **Evidence:** task-02b/parallel-surface.md#interruption-what-happens-to-the-build-w9, task-02/method.md#m1-libc-api-surface
@@ -78,6 +78,8 @@ accepted, so the changes and statements go here rather than into them.
    reports it as `max_calls_list`, and `posix-stats --calls` refuses a log whose hash is not the hash of the list it
    decodes with (a log of another `libc.a` would decode to other names).
 
+INV-0213-1 replaces INV-0212-1.
+
 ## Consequences
 
 - **Positive.** W9 shows the deletion of partial targets on every run; the statements above are written.
@@ -99,3 +101,5 @@ accepted, so the changes and statements go here rather than into them.
 - A W9 run that sees no deletion (the build already past every table when interrupted).
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request.

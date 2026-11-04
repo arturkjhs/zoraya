@@ -355,6 +355,8 @@ measure-w4: posix-image $(RUNNER)
 	{ echo "# W4: GNU hello's configure and make inside Zoraya"; echo; \
 	  echo '```'; cat $(BUILD)/ports/logs/t2-probe.txt; echo '```'; echo; \
 	  target/debug/posix-stats table --w4 $(foreach a,$(W4_ACCELS),$(POSIX_LOGS)/posix-w4-$(a).log); \
+	  echo; echo "The order to T2 (the architect, 2026-11-04): the image cache (ADR-0212), then T2's missing"; \
+	  echo "names above, then W4 measured for real (docs/backlog.md)."; \
 	  } > $(W4_REPORT)
 	@cat $(W4_REPORT)
 

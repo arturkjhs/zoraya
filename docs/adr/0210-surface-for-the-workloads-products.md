@@ -197,3 +197,8 @@ result by `t_posix products` (`make test-posix`'s `invariants.script`), and `fsy
 `fsync_takes_a_file_and_refuses_a_pipe`. Two are deliberately partial, not stubs, with no error: `getrusage` gives a
 zero `struct rusage` (no accounting, as `wait3`), and `fsync` makes nothing durable beyond what `O_SYNC` gave (item
 3). `clock` gives elapsed time: the CPU-time clocks read the monotonic clock (no CPU accounting, as `times`).
+
+Decided further on 2026-11-04 (Option A for `dlopen`): W3 keeps `-DSQLITE_OMIT_LOAD_EXTENSION`, and `libc.a` gets no
+`dlopen` stubs, so that the surface check keeps seeing a program that wants dynamic loading. Revisit trigger: when
+T2's ports show how many programs need `dlopen`. Decided by the architect; recorded by an agent at the architect's
+request.

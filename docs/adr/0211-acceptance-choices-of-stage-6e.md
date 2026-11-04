@@ -172,4 +172,5 @@ interposer logged "the first call per symbol per process image whose return addr
 
 ## Architect's decision
 
-Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request.
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request. Item 16, the three exemptions
+(`vfork`, `getopt_long`, `writev`) with their reasons, accepted 2026-11-04 by the architect's explicit decision.

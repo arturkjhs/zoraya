@@ -801,7 +801,8 @@ then prints the session's `POSIX-STATS` and `POSIX-CALLS` lines and the machine 
   against the tier list: it fails on a function TASK-02 saw called that no run calls (INV-0005-3, INV-0110-2), except
   ADR-0211 item 16's three, named on every run.
 - `make measure-w4`: T2's applets linked against `libc.a` (`ports/Makefile t2-probe`), W4 and the W5 extension
-  (Ctrl-Z, `fg`, `bg`), and `build/w4-report.md` (INV-0110-3).
+  (Ctrl-Z, `fg`, `bg`), and `build/w4-report.md` (INV-0110-3), which ends with the order to T2 decided by the
+  architect.
 - `make posix-table`: the table below from the logs there are.
 
 **Observation.** `libc.a` is built with `zoraya-posix`'s `stats` feature and the call log (ADR-0211): each exported
@@ -848,7 +849,9 @@ against `libc.a`: toybox's (T2's 31 of `applets-by-tier.tsv`) lack 20 names (`re
 `awk expr gzip` 9 (`regcomp`, `regexec`, `regerror`, `regfree`, `rand`, `srand`, `strncasecmp`, `fileno_unlocked`,
 `fputs_unlocked`). On Linux W4 forked 1,167 times without `exec` (764 in `configure`, 403 in `make`) and ran 2,881
 programs: at these means its forks would cost about 0.8 s under HVF and 13 s under TCG, and its loads, at W8's mean
-of 95 ms and 580 ms, about 270 s and 1,700 s. The fork is not what T2 waits for; loading programs is.
+of 95 ms and 580 ms, about 270 s and 1,700 s. The fork is not what T2 waits for; loading programs is. The order to
+T2, as the architect decided (2026-11-04): the image cache first (ADR-0212), then T2's 29 missing names, then W4
+measured for real.
 
 ## Console input and the first process
 
