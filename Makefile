@@ -305,10 +305,15 @@ endef
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
 	tests/posix/invariants.script tests/posix/scenarios.script
+# W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
+# where there is one, else TCG), and under the second in make
+# test-posix-long (ADR-0212's Decision, part 1).
+POSIX_ONCE := w8
 test-posix: posix-image $(RUNNER)
 	@$(MAKE) -s -f ports/Makefile check-libc
-	@for script in $(POSIX_SCRIPTS); do for accel in $(POSIX_ACCELS); do \
-	  $(posix_run) || exit 1; done; done
+	@for script in $(POSIX_SCRIPTS); do first=1; for accel in $(POSIX_ACCELS); do \
+	  case " $(POSIX_ONCE) " in *" $$(basename $$script .script) "*) [ $$first = 1 ] || continue;; esac; \
+	  first=0; $(posix_run) || exit 1; done; done
 
 # make test-posix-long (not in make test; stage 6 is not merged until it
 # passes, ADR-0110 item 6): the builds W1, W2, W3, W2-j and W3-j, then the
@@ -322,6 +327,8 @@ POSIX_LOGS := target/test-logs
 test-posix-long: posix-image $(RUNNER)
 	@for script in $(POSIX_LONG_SCRIPTS); do for accel in $(POSIX_ACCELS); do \
 	  $(posix_run) || exit 1; done; done
+	@for script in $(foreach w,$(POSIX_ONCE),tests/posix/$(w).script); do \
+	  for accel in $(wordlist 2,9,$(POSIX_ACCELS)); do $(posix_run) || exit 1; done; done
 	@$(MAKE) -s posix-calls
 
 # The call log's union alone, over the logs there are (INV-0110-2).
@@ -476,6 +483,10 @@ check-test-caps:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-crash test-gui
+# Steps another CI job runs (CI: TEST_SKIP=test-posix, which has a job of its
+# own, ADR-0212); locally make test runs them all.
+TEST_SKIP ?=
+TEST_STEPS := $(filter-out $(TEST_SKIP),$(TEST_STEPS))
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

@@ -1,6 +1,6 @@
 # ADR-0210: The surface the workloads' own programs need
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0005, ADR-0100, ADR-0110, ADR-0141, ADR-0144
 - **Evidence:** CP-27, task-02/libc-surface.csv, task-02/method.md#m1-libc-api-surface, task-02/method.md#tiers-runs-and-sets
@@ -188,3 +188,12 @@ utimes
 - A product that needs a name outside this block: a superseding ADR, as here.
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request. Condition: every
+added name is either implemented with a test or listed here as a deliberate stub with its errno; no silent `ENOSYS`.
+As recorded by TASK-22: every name of the block is a working function, none a stub. The 38 un-hidden ones are
+musl's own code or the Rust half's; the ten written here behave as item 2 and 3 say. Each is called with a checked
+result by `t_posix products` (`make test-posix`'s `invariants.script`), and `fsync` also by the host test
+`fsync_takes_a_file_and_refuses_a_pipe`. Two are deliberately partial, not stubs, with no error: `getrusage` gives a
+zero `struct rusage` (no accounting, as `wait3`), and `fsync` makes nothing durable beyond what `O_SYNC` gave (item
+3). `clock` gives elapsed time: the CPU-time clocks read the monotonic clock (no CPU accounting, as `times`).

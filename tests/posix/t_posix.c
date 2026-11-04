@@ -36,7 +36,8 @@
  *   t_posix forkbomb N forks until refused, N at most; reports the count
  *   t_posix products   proposed ADR-0210's functions the workloads' own
  *                      programs need: chmod, rmdir, symlink, utimes, fsync,
- *                      gethostname, getrusage, mmap, popen and pclose, system
+ *                      gethostname, getrusage, mmap, popen and pclose, system,
+ *                      and each of its names that is musl's own code
  *   t_posix live N     W9's "no process left" (ADR-0110 item 4): prints
  *                      W9-LEFT and the count of live pids from 3 to N other
  *                      than itself and its parent, by kill(pid, 0) (the
@@ -48,7 +49,12 @@
  *                      exec and wait (run with ZORAYA_POSIX_STATS for the
  *                      broker's round trips)
  */
+#include <ctype.h>
 #include <errno.h>
+#include <glob.h>
+#include <locale.h>
+#include <math.h>
+#include <pwd.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <spawn.h>
@@ -655,6 +661,56 @@ static void live(int last)
 	fflush(stdout);
 }
 
+/* ADR-0210's names that are musl's or the Rust half's own code: each called
+ * once with a result checked (the architect's condition on ADR-0210). */
+static int near(double a, double b)
+{
+	return fabs(a - b) < 1e-9;
+}
+
+static void products_musl(void)
+{
+	volatile double one = 1.0, two = 2.0, half = 0.5;
+	int e;
+	CHECK(abs(-3) == 3);
+	CHECK(near(acos(one), 0.0) && near(asin(0.0 * one), 0.0));
+	CHECK(near(atan2(one, one), M_PI / 4) && near(cos(0.0 * one), 1.0));
+	CHECK(near(sin(M_PI / 2 * one), 1.0) && near(tan(0.0 * one), 0.0));
+	CHECK(ceil(1.2 * one) == 2.0 && floor(1.8 * one) == 1.0 && fabs(-two) == 2.0);
+	CHECK(near(exp(0.0 * one), 1.0) && near(log(exp(two)), 2.0));
+	CHECK(near(log10(1000.0 * one), 3.0) && near(log2(8.0 * one), 3.0));
+	CHECK(near(pow(two, 10.0), 1024.0) && near(sqrt(16.0 * one), 4.0));
+	CHECK(near(fmod(7.5 * one, two), 1.5));
+	CHECK(near(frexp(8.0 * one, &e), half) && e == 4 && ldexp(half, 4) == 8.0);
+	CHECK(isblank(' ') && isblank('\t') && !isblank('x'));
+	CHECK(difftime(10, 4) == 6.0);
+	time_t t = 86400 + 3661;
+	struct tm tm;
+	CHECK(gmtime_r(&t, &tm) == &tm && tm.tm_mday == 2 && tm.tm_hour == 1 && tm.tm_min == 1);
+	CHECK(clock() != (clock_t)-1);
+	struct lconv *lc = localeconv();
+	CHECK(lc != NULL && !strcmp(lc->decimal_point, "."));
+	CHECK(setenv("P_VAR", "x", 1) == 0 && getenv("P_VAR") != NULL);
+	CHECK(unsetenv("P_VAR") == 0 && getenv("P_VAR") == NULL);
+	struct passwd *pw = getpwuid(getuid());
+	CHECK(pw != NULL && !strcmp(pw->pw_dir, "/home"));
+	FILE *f = fopen("/tmp/p-stdio", "w+");
+	CHECK(f != NULL && fputs("ab", f) >= 0);
+	rewind(f);
+	flockfile(f);
+	CHECK(getc(f) == 'a');
+	funlockfile(f);
+	CHECK(ungetc('z', f) == 'z' && getc(f) == 'z' && ftello(f) == 1);
+	CHECK(getc(f) == 'b' && getc(f) == EOF && feof(f));
+	clearerr(f);
+	CHECK(!feof(f) && fclose(f) == 0);
+	glob_t g;
+	CHECK(glob("/tmp/p-std*", 0, NULL, &g) == 0 && g.gl_pathc == 1);
+	CHECK(!strcmp(g.gl_pathv[0], "/tmp/p-stdio"));
+	globfree(&g);
+	CHECK(unlink("/tmp/p-stdio") == 0);
+}
+
 /* Proposed ADR-0210: what W2's and W3's programs call beyond the tier list. */
 static void products(void)
 {
@@ -707,6 +763,7 @@ static void products(void)
 	st2 = system("exit 5");
 	CHECK(WIFEXITED(st2) && WEXITSTATUS(st2) == 5);
 	CHECK(system(NULL) == 1);
+	products_musl();
 	passed();
 }
 

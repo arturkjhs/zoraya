@@ -1,6 +1,6 @@
 # ADR-0211: Choices of stage 6e that ADR-0110 leaves open
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0005, ADR-0100, ADR-0103, ADR-0104, ADR-0106, ADR-0110, ADR-0180, ADR-0190
 - **Evidence:** CP-27, task-02/method.md#m1-libc-api-surface, task-02/method.md#tiers-runs-and-sets
@@ -171,3 +171,5 @@ interposer logged "the first call per symbol per process image whose return addr
 - A client that reads `status`'s count.
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0212: Loading programs, and what of stage 6's acceptance fits CI
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0042, ADR-0051, ADR-0102, ADR-0104, ADR-0108, ADR-0110, ADR-0211
 - **Evidence:** task-02b/parallel-surface.md#concurrency-actually-achieved
@@ -80,6 +80,29 @@ decision.
 
 ## Recommendation
 
+### Decision
+
+**Accepted as two parts** (the architect's decision, 2026-11-04).
+
+1. **Now (TASK-22):** CI runs `make test-posix` as its own job, in parallel with the test job and with the same
+   30-minute limit (Option D); the test job's `make test` leaves `test-posix` out there, and locally `make test`
+   keeps it. In `make test-posix`, W8 runs under one accelerator, HVF where it is available and TCG otherwise; its
+   run under the other moves to `make test-posix-long`. No workload is cut or made easier.
+2. **Next, a separate task after stage 6e:** an image cache in the broker (Option A), on these conditions:
+   - The broker hands a cached image only to a caller that proves read access by passing its own open connection to
+     the program file.
+   - The broker reads the object's id and version (`ctime`, strictly increasing by ADR-0014) through that
+     connection itself; the caller's word is not taken.
+   - The key is (volume, object id, version).
+   - The cache is bounded and evicts.
+   - From ADR-0108: an image handle has `READ | DUPLICATE | TRANSFER` and `spawn` copies each segment from the
+     image's object at every spawn, so one image object can be spawned any number of times; the broker gives each
+     caller a duplicate of the handle (one handle and one message's move a spawn), and every child still costs its
+     segments' copy and frames. The cached image holds its memory object, the whole file (tcc: 1.7 MB with its debug
+     information, for 549 KB loaded), for as long as it is cached; that memory is what the bound limits.
+
+The original recommendation follows.
+
 **Recommendation (not a decision): Option A**, with Option C until it is built. A is the cost every POSIX program pays
 and the only one that brings W8 under TCG near its compute; C keeps `make test` inside CI's limit now.
 
@@ -91,6 +114,15 @@ and the only one that brings W8 under TCG near its compute; C keeps `make test` 
 
 ## Invariants
 
+- **INV-0212-2.** A process without read access to a program file never receives its image from the cache: the
+  broker gives an image only in answer to a request that carries an open connection to that file with `READ`, whose
+  object id and version the broker read itself. *Check:* the cache task's host tests of the broker (a request with a
+  connection without `READ`, to another object, or to an older version gets no image).
+- **INV-0212-3.** A cached image is the program file's current contents: its key holds the version the broker read,
+  and a file changed since has a later version and so another key. *Check:* the cache task's host test that rewrites
+  a program between two spawns.
+- **INV-0212-4.** The cache's memory is bounded: past its bound it evicts before it holds another image. *Check:*
+  the cache task's host test with more programs than the bound.
 - **INV-0212-1.** `make test` stays within CI's `timeout-minutes` with `make test-posix` in it. *Check:* CI itself
   (a run past the limit fails).
 
@@ -103,3 +135,6 @@ and the only one that brings W8 under TCG near its compute; C keeps `make test` 
 - CI's limit or runner changes; a cache built (W8 under both accelerators again).
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request. Changed from the
+recommendation: Option D now, and Option A as the next task on the conditions of the `### Decision` above.
