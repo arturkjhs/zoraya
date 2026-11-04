@@ -239,12 +239,14 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 
 # The stage 6d criterion (TASK-21): the POSIX session, dash on ttyd through
 # the broker, on an image of the ports' root (make ports' build/rootfs-posix),
-# rootfs/ and tests/posix-session/rootfs (with /etc/zoraya/session). Needs make
-# fetch-ports once, as make ports does. POSIX_SCRIPTS picks the scripts,
+# rootfs/ and tests/posix/rootfs (with /etc/zoraya/session), in ADR-0110's
+# layout: the root in build/posix/root, the image build/posix-disk.img. Needs
+# make fetch-ports once, as make ports does. POSIX_SCRIPTS picks the scripts,
 # POSIX_ACCELS the accelerators.
-POSIX_SESSION := $(BUILD)/posix-session
-POSIX_SCRIPTS ?= tests/posix-session/session.script tests/posix-session/invariants.script \
-	tests/posix-session/scenarios.script
+POSIX_SESSION := $(BUILD)/posix
+POSIX_DISK := $(BUILD)/posix-disk.img
+POSIX_SCRIPTS ?= tests/posix/session.script tests/posix/invariants.script \
+	tests/posix/scenarios.script
 POSIX_ACCELS ?= auto tcg
 posix-image: $(KERNEL) tools-storage
 	@$(MAKE) -s -f ports/Makefile rootfs
@@ -252,8 +254,8 @@ posix-image: $(KERNEL) tools-storage
 	mkdir -p $(POSIX_SESSION)/root
 	cp -R rootfs/. $(POSIX_SESSION)/root/
 	cp -R $(BUILD)/rootfs-posix/. $(POSIX_SESSION)/root/
-	cp -R tests/posix-session/rootfs/. $(POSIX_SESSION)/root/
-	tools/zcc -O2 -o $(POSIX_SESSION)/root/bin/t_posix tests/posix-session/t_posix.c
+	cp -R tests/posix/rootfs/. $(POSIX_SESSION)/root/
+	tools/zcc -O2 -o $(POSIX_SESSION)/root/bin/t_posix tests/posix/t_posix.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_SESSION)/root/bin/t_posix
 	@# W10 as TASK-02b ran it (ADR-0110 item 1): the script and mktab.c.
@@ -264,21 +266,21 @@ posix-image: $(KERNEL) tools-storage
 test-posix: posix-image $(RUNNER)
 	@for script in $(POSIX_SCRIPTS); do for accel in $(POSIX_ACCELS); do \
 	  name=$$(basename $$script .script); \
-	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(POSIX_SESSION)/disk.img && \
+	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(POSIX_DISK) && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $$script --label posix-$$name-$$accel -- \
-	    $(RUN_QEMU) --test --keys --disk $(POSIX_SESSION)/disk.img --accel $$accel $(KERNEL) && \
-	  target/debug/zoraya-fsck $(POSIX_SESSION)/disk.img || exit 1; done; done
+	    $(RUN_QEMU) --test --keys --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_DISK) || exit 1; done; done
 
 # The same session in the stage 5 terminal window (ttyd's window backend),
 # read back by screendump as make test-gui reads zosh.
-POSIX_GUI_SCRIPT := tests/posix-session/gui.script
+POSIX_GUI_SCRIPT := tests/posix/gui.script
 test-posix-gui: posix-image $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
-	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(POSIX_SESSION)/gui.img && \
+	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(BUILD)/posix-gui.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(POSIX_GUI_SCRIPT) --qmp $(BUILD)/posix-gui-$$accel.qmp \
 	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/posix-gui-$$accel.qmp \
-	    --disk $(POSIX_SESSION)/gui.img --accel $$accel $(KERNEL) && \
-	  target/debug/zoraya-fsck $(POSIX_SESSION)/gui.img || exit 1; done
+	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
 
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.

@@ -718,8 +718,8 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `pselect`, `sigsuspend`, `nanosleep`, `kill`, the terminal's calls). fd 0's handle is at slot `FD0` (ADR-0190 item
   1). `ZORAYA_POSIX_STATS` adds `POSIX-PROCESS` (the broker's round trips, forks); `ZORAYA_POSIX_DEBUG` says why a
   fork, spawn or exec failed.
-- **Tests.** `make test-posix` boots `build/posix-session`'s image (the ports' root, `rootfs/`,
-  `tests/posix-session/rootfs`, `t_posix` and W10's files) and runs `session.script` (the plan's criterion),
+- **Tests.** `make test-posix` boots `build/posix-disk.img`, made from `build/posix/root` (the ports' root, `rootfs/`,
+  `tests/posix/rootfs`, `t_posix` and W10's files) and runs `session.script` (the plan's criterion),
   `invariants.script` (`t_posix`'s checks) and `scenarios.script` (W9a, W9b, W10, the hostile cases) under HVF and
   TCG; `make test-posix-gui` runs `gui.script` in the window.
 
@@ -987,7 +987,7 @@ rootfs/                   the first contents of build/disk.img
 tests/shell/              scripts the runner plays on the serial line
 tests/gui/                the GUI script the runner plays over QMP
 tests/posix-core/         stage 6c's C criterion program and the script make test-libposix plays
-tests/posix-session/      stage 6d's session: its root (/etc/zoraya/session, /home, W9's makefiles), t_posix.c, and
+tests/posix/              stage 6d's session: its root (/etc/zoraya/session, /home, W9's makefiles), t_posix.c, and
                           the scripts make test-posix and make test-posix-gui play
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
