@@ -912,6 +912,17 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   a request (continuing a stopped job, so that it takes it) and waits up to 2 s. A job's end is reported once: by
   `wait` or `kill`, else before the next prompt or above the line being edited. `exit` with jobs warns once, and a
   second `exit` in a row ends them.
+- **POSIX programs** (ADR-0153 rule 10, step 10). On a volume with `/bin`, `init` starts the broker beside `zosh`
+  (`--no-shell`), which gives `zosh` a client connection and the temporary service's root. `shell.path` finds a
+  command in the ramdisk (`/zoraya/bin`) and then on the volume (`/bin`), or by a path with a `/`; a program of the
+  volume without the native mark (`.zoraya.native`, which `zoraya-rt` writes and `zoraya_elf::is_native` reads) runs
+  through the broker: `SpawnPrepareIn` in a `posix` job of the line's job, a bootstrap record `zosh` builds (the
+  toolchain set: `/bin`, `/usr` and `/etc` to read, `/dev/null`, `/proc/self/exe`; a `/tmp` of the line's own on the
+  temporary service, removed when the line ends; the current directory to read; and what a description of the
+  system image's designates, `tcc`, `make` and `dash` in `user/describe/posix/`), fds 0 to 2 on the line's streams,
+  `SpawnCommit`, and `Reap` when the job ends (`zoraya_user::posix_child`). `grants` shows the toolchain set. Ctrl-Z of
+  a line of POSIX programs sends `SIGTSTP` through the broker and says `[N] did not stop: LINE` if they do not.
+  A native program on the volume gets the current directory and its line's grants only.
 - `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
   the volume through `libposix`, with `/` the volume's root unless `-m` gives a table; its output comes to the console
   (stage 6c; `user/src/bin/posixrun.rs` has the rest). It is a test program: it has no description, so its
@@ -941,8 +952,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
   `shell.suggestions`, `shell.colour`, `console.columns`.
 
-**Pending (TASK-18 Part 2).** Steps 7, 8 and 9 are done (byte streams and jobs, above). Step 10: POSIX programs, and Ctrl-Z of their jobs through the
-broker. Step 11: the tour as a test on both terminals.
+**Pending (TASK-18 Part 2).** Steps 7 to 10 are done. Step 11: the tour as a test on both terminals.
 Step 12: `reboot` (ADR-0159).
 
 ## Known limitations
@@ -974,7 +984,8 @@ Step 12: `reboot` (ADR-0159).
   ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). A job brought to the front with `fg` after
   `&` or `bg` has its input at its end: only a job stopped in front gets the keys again. A line whose job Ctrl-Z
   stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
-  is dropped without a message. `reboot` is not available (ADR-0159, proposed).
+  is dropped without a message. A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
+  moves a file in one message, so it cannot copy a large program. `reboot` is not available (ADR-0159, proposed).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until

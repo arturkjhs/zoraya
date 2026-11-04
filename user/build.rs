@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 /// The groups under `describe/`, as `zosh` shows them.
-const GROUPS: [&str; 5] = ["builtins", "commands", "demos", "topics", "system"];
+const GROUPS: [&str; 6] = ["builtins", "commands", "demos", "posix", "topics", "system"];
 
 fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();

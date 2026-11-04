@@ -1630,7 +1630,12 @@ impl<H: Host> Shell<H> {
         let Some(d) = self.builtin_description(name) else {
             return self.report(&shell_error(name, "has no description"));
         };
-        let texts: Vec<&str> = args.iter().map(|a| a.text.as_str()).collect();
+        let mut texts: Vec<&str> = args.iter().map(|a| a.text.as_str()).collect();
+        // `grants LINE`: the line is the command's, options and all
+        // (`grants tcc main.c -o main`, ADR-0153 rule 7).
+        if name == "grants" && texts.first().is_some_and(|t| !t.starts_with('-')) {
+            texts.insert(0, "--");
+        }
         let parsed = match zoraya_command::parse(&d, &texts) {
             Ok(Outcome::Help) => {
                 let help = zoraya_command::help(&d);

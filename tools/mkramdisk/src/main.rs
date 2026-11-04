@@ -18,31 +18,7 @@ const GROUPS: [&str; 3] = ["commands", "demos", "system"];
 
 /// The bytes of the ELF64 section named `name`, if there is one.
 fn section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
-    let u16_at = |at: usize| Some(u16::from_le_bytes(elf.get(at..at + 2)?.try_into().ok()?));
-    let u32_at = |at: usize| Some(u32::from_le_bytes(elf.get(at..at + 4)?.try_into().ok()?));
-    let u64_at =
-        |at: usize| Some(u64::from_le_bytes(elf.get(at..at + 8)?.try_into().ok()?) as usize);
-    if elf.get(..4)? != b"\x7fELF" || elf.get(4)? != &2 {
-        return None;
-    }
-    let shoff = u64_at(0x28)?;
-    let (entsize, count, strndx) = (
-        usize::from(u16_at(0x3a)?),
-        usize::from(u16_at(0x3c)?),
-        usize::from(u16_at(0x3e)?),
-    );
-    let header = |i: usize| shoff.checked_add(i.checked_mul(entsize)?);
-    let strings = u64_at(header(strndx)? + 24)?;
-    for i in 0..count {
-        let h = header(i)?;
-        let start = strings.checked_add(u32_at(h)? as usize)?;
-        let end = start + elf.get(start..)?.iter().position(|b| *b == 0)?;
-        if &elf[start..end] == name.as_bytes() {
-            let (offset, size) = (u64_at(h + 24)?, u64_at(h + 32)?);
-            return elf.get(offset..offset.checked_add(size)?);
-        }
-    }
-    None
+    zoraya_elf::section(elf, name)
 }
 
 fn description_of(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -68,6 +44,14 @@ fn run(args: &[String]) -> Result<(), String> {
             .ok_or(format!("{path}: no usable file name"))?
             .to_owned();
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        // Every program of the ramdisk is native (ADR-0153 rule 9): this
+        // checks zoraya-rt's mark against zoraya-elf's reader.
+        if !zoraya_elf::is_native(&bytes) {
+            return Err(format!(
+                "{path}: it has no {} mark",
+                zoraya_elf::NATIVE_SECTION
+            ));
+        }
         let found = describe.as_deref().and_then(|d| description_of(d, &name));
         let description = match found {
             Some(file) => {

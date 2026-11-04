@@ -223,6 +223,7 @@ name = "zoraya-mkramdisk"
 version = "0.1.0"
 dependencies = [
  "zoraya-describe",
+ "zoraya-elf",
  "zoraya-ramdisk",
 ]
 
@@ -436,6 +437,7 @@ dependencies = [
  "zoraya-commands",
  "zoraya-compositor",
  "zoraya-describe",
+ "zoraya-elf",
  "zoraya-font",
  "zoraya-fs",
  "zoraya-fs-service",

@@ -114,6 +114,7 @@ jobs:
           - 'make test-posix POSIX_SCRIPTS="tests/posix/w10.script" POSIX_ACCELS="auto tcg"'
           - 'make test-posix POSIX_SCRIPTS="tests/posix/invariants.script" POSIX_ACCELS="auto tcg"'
           - 'make test-posix POSIX_SCRIPTS="tests/posix/scenarios.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/zosh.script" POSIX_ACCELS="auto tcg"'
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4

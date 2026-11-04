@@ -714,6 +714,15 @@ macro_rules! eprintln {
     }};
 }
 
+/// The mark of a native program (ADR-0153 rule 9): the linker script keeps
+/// it in a section of its own, never loaded, and `zosh` runs a program
+/// without it as a POSIX one. `zoraya_elf::NATIVE_MARK` is the same bytes;
+/// `zoraya-mkramdisk` checks every program of the ramdisk for it.
+#[cfg(feature = "entry")]
+#[used]
+#[unsafe(link_section = ".zoraya.native")]
+static NATIVE: [u8; 16] = *b"zoraya native 1\n";
+
 #[cfg(feature = "entry")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {

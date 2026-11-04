@@ -309,6 +309,11 @@ posix-image: $(KERNEL) tools-storage
 	  $(WORKLOADS_SRC)/w3/Makefile > $(POSIX_ROOT)/src/w3/Makefile
 	grep -c OMIT_LOAD_EXTENSION $(POSIX_ROOT)/src/w3/Makefile | grep -qx 2
 	tests/posix/trees.sh $(POSIX_ROOT)
+	@# The same root without the session file: init then starts zosh, with
+	@# the broker beside it (TASK-18 step 10, tests/posix/zosh*.script).
+	rm -rf $(POSIX_ZOSH_ROOT)
+	cp -R $(POSIX_ROOT) $(POSIX_ZOSH_ROOT)
+	rm $(POSIX_ZOSH_ROOT)/etc/zoraya/session
 
 # One boot per script under each accelerator, zoraya-fsck after each
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
@@ -320,6 +325,7 @@ POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-ter
 # (CI's jobs, ADR-0213's Decision).
 POSIX_W8_BUILDS := j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4
 POSIX_IMAGE_SIZE := 256M
+POSIX_ZOSH_ROOT := $(BUILD)/posix-zosh
 # The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
 # ("tcc: memory full"; every POSIX process holds at least its 1 MiB of heap,
 # its segments and 64 KiB of stack, and tmpd 16 MiB), with no leak across
@@ -329,7 +335,8 @@ POSIX_MEM ?= 512M
 define posix_run
 	name=$$(basename $$script .script); \
 	timeout=$$(echo " $(POSIX_TIMEOUTS) " | sed -n "s/.* $$name=\([0-9]*\) .*/\1/p"); \
-	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_ROOT) $(POSIX_DISK) > /dev/null && \
+	root=$(POSIX_ROOT); case $$name in zosh*) root=$(POSIX_ZOSH_ROOT);; esac; \
+	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $$root $(POSIX_DISK) > /dev/null && \
 	$(RUNNER) --timeout $${timeout:-$(QEMU_TIMEOUT)} --script $$script --label posix-$$name-$$accel -- \
 	  $(RUN_QEMU) --test --keys --mem $(POSIX_MEM) --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
 	target/debug/zoraya-fsck $(POSIX_DISK)
@@ -341,7 +348,7 @@ endef
 # scenarios.
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
-	tests/posix/invariants.script tests/posix/scenarios.script
+	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/zosh.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).

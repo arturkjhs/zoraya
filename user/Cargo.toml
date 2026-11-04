@@ -39,6 +39,7 @@ zoraya-commands = { path = "../crates/zoraya-commands" }
 zoraya-resolve = { path = "../crates/zoraya-resolve" }
 zoraya-broker = { path = "../crates/zoraya-broker" }
 zoraya-proto-posix = { path = "../crates/zoraya-proto-posix" }
+zoraya-elf = { path = "../crates/zoraya-elf" }
 zoraya-proto-tty = { path = "../crates/zoraya-proto-tty" }
 zoraya-tty = { path = "../crates/zoraya-tty" }
 

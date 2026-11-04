@@ -9,7 +9,10 @@ use zoraya_describe::Description;
 use zoraya_proto_file::rights;
 
 use crate::eval::Value;
-use crate::grants::{Access, Line, Planned, Refused, merge, plan, report, summary, through_links};
+use crate::grants::{
+    Access, Line, Planned, Refused, merge, plan, report, summary, through_links,
+    trusted_description,
+};
 
 const CP: &str = "name cp\nsummary copy a file\nusage cp [--force] FROM TO\noperand FROM read the file\noperand TO create the copy\noption -f --force replace\n";
 const RM: &str = "name rm\nsummary remove files\nusage rm [--recursive] PATH...\noperand PATH... remove the files\noption -r --recursive all in it\nwhen --recursive PATH remove-tree\n";
@@ -339,4 +342,30 @@ fn links_lead_only_inside_the_directory_or_a_grant() {
     let p = go(cat, &["plain"], &[], &[], true, "/u/w").unwrap();
     let p = through_links(p, "/u/w", "/u", links).unwrap();
     assert_eq!(p[0].path, "/u/w");
+}
+
+/// INV-0153-6: only a description of the system image's, for the path it
+/// names, applies to a POSIX program; `./tcc` or a copy gets none, and a
+/// description that names no program never applies.
+#[test]
+fn only_the_images_description_for_its_path_applies() {
+    let tcc =
+        d("name tcc\nsummary c\nusage tcc FILE...\nprogram /bin/tcc\noperand FILE... read f\n");
+    let make = d("name make\nsummary m\nusage make\nprogram /bin/make\n");
+    let native = d("name cat\nsummary c\nusage cat FILE...\noperand FILE... read f\n");
+    let trusted = [tcc, make, native];
+    assert_eq!(
+        trusted_description(&trusted, "/bin/tcc").map(|d| d.name.as_str()),
+        Some("tcc")
+    );
+    for path in [
+        "/u/w/tcc",
+        "/bin/tcc2",
+        "/usr/bin/tcc",
+        "tcc",
+        "/bin/cat",
+        "",
+    ] {
+        assert!(trusted_description(&trusted, path).is_none(), "{path}");
+    }
 }

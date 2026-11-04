@@ -391,3 +391,12 @@ pub fn report(name: &str, plan: &[Planned], home: &str, streams: &str) -> String
     }
     s
 }
+
+/// The description that applies to a POSIX program found at the absolute
+/// `path` (ADR-0153 rule 10, INV-0153-6): one of the system image's own,
+/// `trusted`, and only the one that names that path. A program reached any
+/// other way (`./tcc`, a copy, one the person built) gets none, and nothing
+/// on a volume is ever read for one.
+pub fn trusted_description<'a>(trusted: &'a [Description], path: &str) -> Option<&'a Description> {
+    trusted.iter().find(|d| d.program.as_deref() == Some(path))
+}

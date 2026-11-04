@@ -166,6 +166,9 @@ leave the job tree (CP-07). Threads: `job_suspend` stops every thread (ADR-0105 
   every point (during `kill`, `wait`, editing, between prompts).
 
 ## Open questions
+- *Note, 2026-11-04 (TASK-18 step 10):* rule 4 is built for lines of POSIX programs only (`SIGTSTP` through the
+  broker, `[N] did not stop` after half a second); a line mixing native and POSIX programs is stopped with
+  `job_suspend`, since a native element has no job of its own to suspend. Proposed in ADR-0200.
 - Whether a background job that reads should stop (bash) rather than see end of file; nothing measured.
 - Whether `fg` should take a job by name as well as by number (`%make`).
 

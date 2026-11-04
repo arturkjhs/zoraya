@@ -10,6 +10,7 @@ pub mod files;
 pub mod gui;
 mod heap;
 pub mod namespace;
+pub mod posix_child;
 pub mod stack;
 
 pub use zoraya_rt::*;

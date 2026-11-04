@@ -18,6 +18,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::rc::Rc;
@@ -52,6 +53,7 @@ use zoraya_shell::syntax;
 use zoraya_shell::syntax::Stream;
 use zoraya_user::descriptions;
 use zoraya_user::files::{ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_all};
+use zoraya_user::posix_child::{self, Broker};
 use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, console_dropped, console_entry,
     console_read, console_write, directory_entry, directory_lookup, dup, handle_close, handle_type,
@@ -173,6 +175,18 @@ fn tamed(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// Removes `name` from `dir`, and everything in it first.
+fn remove_tree(dir: &File, name: &str) {
+    if let Ok(sub) = dir.open(name, open_flags::DIRECTORY, ALL) {
+        let mut names: Vec<String> = Vec::new();
+        let _ = sub.list(&mut |n, _| names.push(n.into()));
+        for n in names {
+            remove_tree(&sub, &n);
+        }
+    }
+    let _ = dir.remove(name);
+}
+
 /// Joins `path` to the absolute `cwd` and normalises it lexically: `..`
 /// drops the last component and stays at `/` (ADR-0153 rule 6).
 fn resolve(cwd: &str, path: &str) -> String {
@@ -222,6 +236,11 @@ struct Job {
     elements: Vec<(String, bool, Option<Handle>)>,
     /// What its output gave a `$(...)`.
     captured: Vec<u8>,
+    /// Its POSIX elements (ADR-0153 rule 10): pid, group and process job.
+    posix: Vec<(u32, u32, Handle)>,
+    /// The line's own directory on the temporary service, when a POSIX
+    /// element has one.
+    tmp: Option<String>,
 }
 
 impl Drop for Job {
@@ -232,6 +251,9 @@ impl Drop for Job {
             if let Some(r) = report.take() {
                 let _ = handle_close(r);
             }
+        }
+        for (_, _, job) in self.posix.drain(..) {
+            let _ = handle_close(job);
         }
     }
 }
@@ -249,10 +271,62 @@ enum Escape {
     Ss3,
 }
 
+/// One element of a pipeline, ready to start.
+enum Ready {
+    /// A native program: its image and start-up record.
+    Native { image: Handle, table: Option<Table> },
+    /// A POSIX program (ADR-0153 rule 10): its image, absolute path, the
+    /// table of its bootstrap record with the current directory's index,
+    /// and its report channel's ends.
+    Posix {
+        image: Handle,
+        exe: String,
+        entries: Vec<posix_child::Entry>,
+        cwd_entry: u32,
+        report: (Handle, Handle),
+    },
+}
+
+impl Ready {
+    /// Gives back what was made for an element that will not start.
+    fn give_back(self) {
+        match self {
+            Ready::Native { image, table } => {
+                let _ = handle_close(image);
+                if let Some(t) = table {
+                    let _ = handle_close(t.startup);
+                    let _ = handle_close(t.report);
+                }
+            }
+            Ready::Posix {
+                image,
+                entries,
+                report,
+                ..
+            } => {
+                for h in [image, report.0, report.1]
+                    .into_iter()
+                    .chain(entries.iter().filter_map(|e| e.handle))
+                {
+                    let _ = handle_close(h);
+                }
+            }
+        }
+    }
+}
+
+/// The description a POSIX program without one of the image's is planned
+/// by: the current directory and the line's grants, nothing designated.
+const UNDESCRIBED: &str = "name     posix-program
+summary  a POSIX program without a description of the system image's
+usage    posix-program [ARG...]
+operand  [ARG...]  text  its arguments
+";
+
 /// How waiting for a job in front ended.
 enum Waited {
     /// It ended: its entry, its records, and whether Ctrl-C interrupted it.
-    Ended(jobs::Entry<Job>, Vec<ExitRecord>, bool),
+    Ended(Box<jobs::Entry<Job>>, Vec<ExitRecord>, bool),
     /// Ctrl-Z stopped it; it stays in the table as job `n`.
     Stopped(u32),
 }
@@ -354,6 +428,17 @@ struct Z {
     /// being skipped.
     typed: Vec<u8>,
     escape: Escape,
+    /// The session's broker beside the shell and its temporary service's
+    /// root (ADR-0153 rule 10), from `init` at slots 7 and 8.
+    broker: Option<Broker>,
+    tmp: Option<File>,
+    next_tmp: u32,
+    /// The `/tmp` directory of the line being started, once one is made.
+    line_tmp_name: Option<String>,
+    /// The boot's time base (ADR-0191), for POSIX programs' records.
+    realtime_base: u64,
+    /// Commands found on the volume through `shell.path`, by absolute path.
+    on_volume: BTreeMap<String, String>,
 }
 
 impl Z {
@@ -489,8 +574,19 @@ impl Z {
             }
             return Ok(None);
         };
+        self.plan_with(exec, &d, base).map(Some)
+    }
+
+    /// The plan of a line running `exec` under description `d` (rules 1
+    /// to 5); `base`: it is the system image's own.
+    fn plan_with(
+        &mut self,
+        exec: &Exec<'_>,
+        d: &Description,
+        base: bool,
+    ) -> Result<Vec<grants::Planned>, String> {
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        let parsed = match zoraya_command::parse(&d, &texts) {
+        let parsed = match zoraya_command::parse(d, &texts) {
             Ok(zoraya_command::Outcome::Run(p)) => p,
             // `--help` or a usage mistake: the program says so; it needs
             // nothing but the current directory.
@@ -498,7 +594,7 @@ impl Z {
         };
         let home = Z::home(self);
         let line = grants::Line {
-            description: &d,
+            description: d,
             parsed: &parsed,
             args: exec.args,
             cwd: &self.cwd,
@@ -513,7 +609,7 @@ impl Z {
             })
         });
         match planned {
-            Ok(p) => Ok(Some(p)),
+            Ok(p) => Ok(p),
             Err(r) => {
                 let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
                 Err(zoraya_command::error(
@@ -689,7 +785,10 @@ impl Z {
 
     /// One element's image and start-up table, and what it is given in
     /// `jobs`' words; or why it may not run.
-    fn ready(&mut self, exec: &Exec<'_>) -> Result<(Handle, Option<Table>, String), String> {
+    fn ready(&mut self, exec: &Exec<'_>) -> Result<(Ready, String), String> {
+        if let Some(path) = self.on_volume.get(exec.name).cloned() {
+            return self.ready_from_volume(exec, &path);
+        }
         let mut given = String::new();
         let table = match self.plan_for(exec)? {
             None => None,
@@ -707,7 +806,7 @@ impl Z {
             }
         };
         match directory_lookup(DIRECTORY, exec.name) {
-            Ok(image) => Ok((image, table, given)),
+            Ok(image) => Ok((Ready::Native { image, table }, given)),
             Err(s) => {
                 if let Some(t) = table {
                     let _ = handle_close(t.startup);
@@ -721,6 +820,237 @@ impl Z {
                 ))
             }
         }
+    }
+
+    /// A program of the volume: native when it carries the mark (rule 9),
+    /// with the current directory only, since no description of the
+    /// image's names it; else a POSIX program through the broker.
+    fn ready_from_volume(
+        &mut self,
+        exec: &Exec<'_>,
+        path: &str,
+    ) -> Result<(Ready, String), String> {
+        let fail = |problem: &str| zoraya_command::error("zosh", Some(exec.name), problem, &[]);
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| fail("there is no volume"))?;
+        let file = root
+            .open_followed(
+                path.trim_start_matches('/'),
+                0,
+                file_rights::READ | file_rights::CLONE,
+            )
+            .map_err(|s| fail(&problem(s)))?;
+        let (image, native) =
+            posix_child::load(&file).map_err(|s| fail(&zoraya_command::status_problem(s)))?;
+        drop(file);
+        let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes()).map_err(|_| fail("?"))?;
+        if native {
+            let plan = self.plan_with(exec, &undescribed, false);
+            let table = plan.and_then(|p| self.table(&p));
+            return match table {
+                Ok(t) => Ok((
+                    Ready::Native {
+                        image,
+                        table: Some(t),
+                    },
+                    String::new(),
+                )),
+                Err(e) => {
+                    let _ = handle_close(image);
+                    Err(e)
+                }
+            };
+        }
+        if self.broker.is_none() {
+            let _ = handle_close(image);
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                "a POSIX program, and this session has no broker to run it",
+                &["the broker runs beside zosh on a volume with /bin (ADR-0153 rule 10)"],
+            ));
+        }
+        let planned = self
+            .posix_plan(exec, path)
+            .and_then(|plan| self.posix_entries(exec, image, &plan).map(|t| (t, plan)));
+        let ((entries, cwd_entry), plan) = match planned {
+            Ok(x) => x,
+            Err(e) => {
+                let _ = handle_close(image);
+                return Err(e);
+            }
+        };
+        let report = match channel_create() {
+            Ok(r) => r,
+            Err(s) => {
+                let _ = handle_close(image);
+                for e in &entries {
+                    if let Some(h) = e.handle {
+                        let _ = handle_close(h);
+                    }
+                }
+                return Err(fail(&zoraya_command::status_problem(s)));
+            }
+        };
+        let given = grants::summary(&plan, &self.home());
+        Ok((
+            Ready::Posix {
+                image,
+                exe: path.into(),
+                entries,
+                cwd_entry,
+                report,
+            },
+            given,
+        ))
+    }
+
+    /// A POSIX program's plan: by the description of the system image's
+    /// that names `path` (INV-0153-6), or the current directory and the
+    /// line's grants alone.
+    fn posix_plan(&mut self, exec: &Exec<'_>, path: &str) -> Result<Vec<grants::Planned>, String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        match grants::trusted_description(&trusted, path) {
+            Some(d) => {
+                let d = d.clone();
+                self.plan_with(exec, &d, true)
+            }
+            None => {
+                let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes())
+                    .map_err(|_| String::from("zosh: a description of its own is refused\n"))?;
+                self.plan_with(exec, &undescribed, false)
+            }
+        }
+    }
+
+    /// The table of a POSIX program's bootstrap record (ADR-0153 rule 10):
+    /// what its plan designates, the current directory among it, then the
+    /// toolchain set (`/bin`, `/usr`, `/etc` to read, `/dev/null`,
+    /// `/proc/self/exe`) and the line's `/tmp`, longest prefix first. A
+    /// file is given through a directory that covers it: the record has
+    /// directory entries only.
+    fn posix_entries(
+        &mut self,
+        exec: &Exec<'_>,
+        image: Handle,
+        plan: &[grants::Planned],
+    ) -> Result<(Vec<posix_child::Entry>, u32), String> {
+        use zoraya_abi::posix::EntryKind as P;
+        let merged = grants::merge(plan);
+        let mut entries: Vec<posix_child::Entry> = Vec::new();
+        let close = |entries: &[posix_child::Entry]| {
+            for e in entries {
+                if let Some(h) = e.handle {
+                    let _ = handle_close(h);
+                }
+            }
+        };
+        let mut files: Vec<String> = Vec::new();
+        for m in &merged {
+            match self.open_entry(m) {
+                Ok(Some((file, native::EntryKind::Directory))) => {
+                    entries.push(posix_child::Entry {
+                        prefix: m.path.clone(),
+                        kind: P::Directory,
+                        handle: Some(file.end),
+                    });
+                    core::mem::forget(file);
+                }
+                Ok(Some((_, _))) => files.push(m.path.clone()),
+                // Missing: the program finds it missing.
+                Ok(None) => {}
+                Err(e) => {
+                    close(&entries);
+                    return Err(e);
+                }
+            }
+        }
+        let root = self.root.as_ref();
+        for dir in ["/bin", "/usr", "/etc"] {
+            if entries.iter().any(|e| e.prefix == dir) {
+                continue;
+            }
+            let wanted = file_rights::READ | file_rights::CLONE;
+            if let Some(f) = root.and_then(|r| {
+                r.open(dir.trim_start_matches('/'), open_flags::DIRECTORY, wanted)
+                    .ok()
+            }) {
+                entries.push(posix_child::Entry {
+                    prefix: dir.into(),
+                    kind: P::Directory,
+                    handle: Some(f.end),
+                });
+                core::mem::forget(f);
+            }
+        }
+        if let Some(tmp) = self.line_tmp()
+            && !entries.iter().any(|e| e.prefix == "/tmp")
+        {
+            entries.push(posix_child::Entry {
+                prefix: "/tmp".into(),
+                kind: P::Tmp,
+                handle: Some(tmp.end),
+            });
+            core::mem::forget(tmp);
+        }
+        entries.push(posix_child::Entry {
+            prefix: "/dev/null".into(),
+            kind: P::Null,
+            handle: None,
+        });
+        if let Ok(copy) = zoraya_user::handle_duplicate(image, zoraya_abi::ImageObject::RIGHTS) {
+            entries.push(posix_child::Entry {
+                prefix: "/proc/self/exe".into(),
+                kind: P::Image,
+                handle: Some(copy),
+            });
+        }
+        // A file must be reached through a directory entry.
+        for f in &files {
+            let covered = entries
+                .iter()
+                .any(|e| e.kind == P::Directory && zoraya_resolve::covers(&e.prefix, f));
+            if !covered {
+                close(&entries);
+                let shown = grants::shown(f, &self.home());
+                return Err(zoraya_command::error(
+                    "zosh",
+                    Some(exec.name),
+                    &format!("{shown}: a POSIX program is given directories only"),
+                    &["give the directory that holds it, with +r or +w"],
+                ));
+            }
+        }
+        entries.sort_by_key(|e| core::cmp::Reverse(e.prefix.len()));
+        let Some(cwd_entry) = entries.iter().position(|e| e.prefix == self.cwd) else {
+            close(&entries);
+            return Err(zoraya_command::error(
+                "zosh",
+                Some(exec.name),
+                "the current directory cannot be given",
+                &[],
+            ));
+        };
+        Ok((entries, cwd_entry as u32))
+    }
+
+    /// The line's directory on the temporary service: made on first use
+    /// for the line being started (`self.line_tmp_name`), and connected.
+    fn line_tmp(&mut self) -> Option<File> {
+        let tmp = self.tmp.as_ref()?;
+        if self.line_tmp_name.is_none() {
+            self.next_tmp += 1;
+            let name = format!("line-{}", self.next_tmp);
+            tmp.make_directory(&name).ok()?;
+            self.line_tmp_name = Some(name);
+        }
+        let name = self.line_tmp_name.as_deref()?;
+        tmp.open(name, open_flags::DIRECTORY, ALL).ok()
     }
 
     /// The output destination a sink names.
@@ -1190,6 +1520,54 @@ impl Z {
         }
     }
 
+    /// Ctrl-Z (ADR-0158 rule 4): `job_suspend` of the line's job; a job of
+    /// POSIX programs only gets `SIGTSTP` through the broker, which applies
+    /// each process's stop disposition, and has stopped once every
+    /// element's process job is suspended, within half a second.
+    fn stop_job(&mut self, number: u32) -> bool {
+        let Some(e) = self.jobs.get(number) else {
+            return false;
+        };
+        let p = &e.payload;
+        let all_posix = !p.posix.is_empty() && p.posix.len() == p.processes.len();
+        if !all_posix {
+            return job_suspend(p.job).is_ok();
+        }
+        let Some(broker) = self.broker.as_ref() else {
+            return false;
+        };
+        for (_, pgid, _) in &p.posix {
+            let _ = broker.signal_group(*pgid, zoraya_abi::posix::signal::SIGTSTP);
+        }
+        let deadline = clock_monotonic() + 500_000_000;
+        loop {
+            let all = p.posix.iter().all(|(_, _, j)| {
+                object_get_signals(*j).is_ok_and(|s| s & job_signals::SUSPENDED != 0)
+            });
+            if all {
+                return true;
+            }
+            if clock_monotonic() > deadline {
+                return false;
+            }
+            zoraya_user::sleep_until(clock_monotonic() + 10_000_000);
+        }
+    }
+
+    /// Continues job `number`: `job_resume`, and `SIGCONT` to its POSIX
+    /// groups through the broker.
+    fn resume_job(&mut self, number: u32) {
+        let Some(e) = self.jobs.get(number) else {
+            return;
+        };
+        let _ = job_resume(e.payload.job);
+        if let Some(broker) = self.broker.as_ref() {
+            for (_, pgid, _) in &e.payload.posix {
+                let _ = broker.signal_group(*pgid, zoraya_abi::posix::signal::SIGCONT);
+            }
+        }
+    }
+
     /// Job `number`'s input from the keys ends, after what was typed for it
     /// (ADR-0158 rule 2: a job in the background reads no key).
     fn close_keys(&mut self, number: u32) {
@@ -1208,14 +1586,19 @@ impl Z {
     /// Each job's state as the kernel has it: `SUSPENDED` on its job
     /// (ADR-0105 item 8).
     fn refresh_states(&mut self) {
+        let suspended =
+            |j: Handle| object_get_signals(j).is_ok_and(|s| s & job_signals::SUSPENDED != 0);
         for e in self.jobs.iter_mut() {
-            if let Ok(signals) = object_get_signals(e.payload.job) {
-                e.state = if signals & job_signals::SUSPENDED != 0 {
-                    JobState::Stopped
-                } else {
-                    JobState::Running
-                };
-            }
+            let p = &e.payload;
+            // A POSIX job stopped by the broker: each element's process job.
+            let posix_stopped = !p.posix.is_empty()
+                && p.posix.len() == p.processes.len()
+                && p.posix.iter().all(|(_, _, j)| suspended(*j));
+            e.state = if suspended(p.job) || posix_stopped {
+                JobState::Stopped
+            } else {
+                JobState::Running
+            };
         }
     }
 
@@ -1256,6 +1639,17 @@ impl Z {
             })
             .collect();
         let status = Z::status_of(job, &records);
+        // Its POSIX pids go, and the line's /tmp (ADR-0153 rule 10).
+        let pids: Vec<u32> = job.posix.iter().map(|(pid, _, _)| *pid).collect();
+        let tmp = job.tmp.clone();
+        if let Some(b) = &self.broker {
+            for pid in pids {
+                let _ = b.reap(pid);
+            }
+        }
+        if let (Some(t), Some(name)) = (&self.tmp, tmp) {
+            remove_tree(t, &name);
+        }
         let (entry, now) = if self.foreground == Some(number) {
             (self.jobs.remove(number)?, None)
         } else {
@@ -1369,7 +1763,7 @@ impl Z {
                     if packet.key == CONSOLE_KEY {
                         keys.extend(self.read_keys());
                     } else if let Some((entry, records)) = self.event(packet, At::Elsewhere) {
-                        break 'wait Waited::Ended(entry, records, ctrl_c);
+                        break 'wait Waited::Ended(Box::new(entry), records, ctrl_c);
                     }
                 }
             }
@@ -1401,14 +1795,17 @@ impl Z {
                         show_bytes(&echo);
                         echo.clear();
                         show("^Z\n");
-                        if job_suspend(job).is_ok()
-                            && let Some(e) = self.jobs.get_mut(number)
-                        {
-                            e.state = JobState::Stopped;
-                            show(&format!("[{number}] stopped: {}\n", e.line));
-                            // What was typed after it is the prompt's.
-                            self.pending = keys[i + 1..].to_vec();
-                            break 'wait Waited::Stopped(number);
+                        let stopped = self.stop_job(number);
+                        if let Some(e) = self.jobs.get_mut(number) {
+                            if stopped {
+                                e.state = JobState::Stopped;
+                                show(&format!("[{number}] stopped: {}\n", e.line));
+                                // What was typed after it is the prompt's.
+                                self.pending = keys[i + 1..].to_vec();
+                                break 'wait Waited::Stopped(number);
+                            }
+                            // ADR-0158 rule 4: it stays in front.
+                            show(&format!("[{number}] did not stop: {}\n", e.line));
                         }
                     }
                     k => self.type_key(number, k, &mut echo),
@@ -1822,6 +2219,29 @@ impl Z {
             redirects: &[],
             err_too: false,
         };
+        // A program of the volume: a POSIX one is shown with its toolchain
+        // set and its line's /tmp (rule 7).
+        if self.lookup(name) == Found::Program
+            && let Some(path) = self.on_volume.get(*name).cloned()
+        {
+            return match self.posix_plan(&exec, &path) {
+                Err(e) => {
+                    io.err.push_str(&e);
+                    1
+                }
+                Ok(plan) => {
+                    let home = self.home();
+                    let mut text = grants::report(name, &plan, &home, "the terminal");
+                    text.push_str(
+                        "  /bin, /usr, /etc     read (the toolchain set, a POSIX program's)\n  \
+                         /tmp                 this line's own, emptied when it ends\n  \
+                         /dev/null            to read and write\n",
+                    );
+                    io.out.push_str(&text);
+                    0
+                }
+            };
+        }
         match self.plan_for(&exec) {
             Err(e) => {
                 io.err.push_str(&e);
@@ -1843,8 +2263,32 @@ impl Z {
     }
 }
 
-impl Host for Z {
-    fn lookup(&mut self, name: &str) -> Found {
+impl Z {
+    /// Where `name` is on the volume, by `shell.path` (its `/zoraya/bin`
+    /// is the ramdisk) or, with a `/`, as a path.
+    fn find_on_volume(&mut self, name: &str) -> Option<String> {
+        if name.is_empty() || name.ends_with(".cmd") || name.ends_with('/') {
+            return None;
+        }
+        let candidates: Vec<String> = if name.contains('/') {
+            alloc::vec![self.abs(name)]
+        } else {
+            self.setting("shell.path")
+                .split_whitespace()
+                .filter(|d| *d != "/zoraya/bin")
+                .map(|d| resolve(d, name))
+                .collect()
+        };
+        let root = self.root.as_ref()?;
+        candidates.into_iter().find(|abs| {
+            root.open_followed(abs.trim_start_matches('/'), 0, file_rights::READ)
+                .and_then(|f| f.stat())
+                .is_ok_and(|st| st.kind != proto_kind::DIRECTORY)
+        })
+    }
+
+    /// A builtin, or a program of the ramdisk.
+    fn lookup_image(&mut self, name: &str) -> Found {
         if let Some(f) = self.found.get(name) {
             return *f;
         }
@@ -1866,6 +2310,22 @@ impl Host for Z {
             }
         };
         self.found.insert(name.into(), f);
+        f
+    }
+}
+
+impl Host for Z {
+    fn lookup(&mut self, name: &str) -> Found {
+        let f = self.lookup_image(name);
+        // The volume is looked at each time: what a line builds, the next
+        // runs (`tcc hello.c -o hello`, then `./hello`).
+        self.on_volume.remove(name);
+        if f == Found::Nothing
+            && let Some(path) = self.find_on_volume(name)
+        {
+            self.on_volume.insert(name.into(), path);
+            return Found::Program;
+        }
         f
     }
 
@@ -1985,15 +2445,14 @@ impl Host for Z {
                     return 1;
                 };
                 let line = e.line.clone();
-                let job = e.payload.job;
                 e.state = JobState::Running;
                 show(&format!("{line}\n"));
-                let _ = job_resume(job);
+                self.resume_job(n);
                 match self.wait_foreground(n) {
                     Waited::Stopped(_) => 1,
                     Waited::Ended(entry, records, ctrl_c) => {
                         let record = Z::status_of(&entry.payload, &records);
-                        let _ = self.ended_in_front(entry, records, ctrl_c);
+                        let _ = self.ended_in_front(*entry, records, ctrl_c);
                         if let Some(l) = record::screen_line(&line, &record, ctrl_c) {
                             show(&format!("{l}\n"));
                         }
@@ -2034,10 +2493,10 @@ impl Host for Z {
                     return 1;
                 }
                 e.state = JobState::Running;
-                let (job, line) = (e.payload.job, e.line.clone());
+                let line = e.line.clone();
                 // In the background its input is at its end (rule 2).
                 self.close_keys(n);
-                let _ = job_resume(job);
+                self.resume_job(n);
                 io.out.push_str(&format!("[{n}] {line} &\n"));
                 0
             }
@@ -2074,7 +2533,7 @@ impl Host for Z {
                         {
                             e.state = JobState::Running;
                             self.close_keys(n);
-                            let _ = job_resume(job);
+                            self.resume_job(n);
                         }
                     }
                     None => {
@@ -2182,21 +2641,19 @@ impl Host for Z {
             return Ran::Refused(1);
         }
         // Every element's table and image before anything starts.
-        let mut ready: Vec<(Handle, Option<Table>)> = Vec::new();
+        let mut ready: Vec<Ready> = Vec::new();
         let mut given_all: Vec<String> = Vec::new();
-        let give_back = |ready: Vec<(Handle, Option<Table>)>| {
-            for (image, table) in ready {
-                let _ = handle_close(image);
-                if let Some(t) = table {
-                    let _ = handle_close(t.startup);
-                    let _ = handle_close(t.report);
-                }
+        let give_back = |ready: Vec<Ready>| {
+            for r in ready {
+                r.give_back();
             }
         };
+        // A line's /tmp is made by its first POSIX element.
+        self.line_tmp_name = None;
         for exec in pipe.programs {
             match self.ready(exec) {
-                Ok((image, table, given)) => {
-                    ready.push((image, table));
+                Ok((r, given)) => {
+                    ready.push(r);
                     if !given.is_empty() {
                         given_all.push(given);
                     }
@@ -2226,9 +2683,76 @@ impl Host for Z {
         let streams = self.streams(number, pipe, &mut given);
         let mut processes = Vec::new();
         let mut elements = Vec::new();
+        let mut posix = Vec::new();
         let mut failed = streams.as_ref().err().cloned();
         if let Ok(streams) = &streams {
-            for ((exec, (image, table)), ends) in pipe.programs.iter().zip(ready).zip(streams) {
+            for ((exec, r), ends) in pipe.programs.iter().zip(ready).zip(streams) {
+                let (image, table) = match r {
+                    Ready::Native { image, table } => (image, table),
+                    Ready::Posix {
+                        image,
+                        exe,
+                        entries,
+                        cwd_entry,
+                        report,
+                    } => {
+                        let question = false;
+                        elements.push((exec.name.to_string(), question, Some(report.0)));
+                        if failed.is_some() {
+                            for h in [image, report.1]
+                                .into_iter()
+                                .chain(entries.iter().filter_map(|e| e.handle))
+                            {
+                                let _ = handle_close(h);
+                            }
+                            continue;
+                        }
+                        let mut args: Vec<&[u8]> = alloc::vec![exec.name.as_bytes()];
+                        args.extend(exec.args.iter().map(|a| a.text.as_bytes()));
+                        // PATH and HOME for a POSIX program unless the line
+                        // gives them (ADR-0104 item 12 gives a session's).
+                        let mut env: Vec<String> = exec.env.to_vec();
+                        let home = format!("HOME={}", self.home());
+                        for (name, value) in
+                            [("PATH=", "PATH=/bin:/usr/bin"), ("HOME=", home.as_str())]
+                        {
+                            if !env.iter().any(|v| v.starts_with(name)) {
+                                env.push(value.into());
+                            }
+                        }
+                        let env: Vec<&[u8]> = env.iter().map(|v| v.as_bytes()).collect();
+                        let launch = posix_child::Launch {
+                            line_job: job,
+                            image,
+                            exe: &exe,
+                            entries,
+                            cwd_entry,
+                            cwd: "",
+                            args: &args,
+                            env: &env,
+                            streams: *ends,
+                            report: report.1,
+                            realtime_base: self.realtime_base,
+                        };
+                        let broker = self.broker.as_ref().expect("checked by ready");
+                        match posix_child::launch(broker, launch) {
+                            Ok(c) => {
+                                processes.push(c.process);
+                                posix.push((c.pid, c.pgid, c.job));
+                            }
+                            Err(s) => {
+                                failed = Some(zoraya_command::error(
+                                    "zosh",
+                                    Some(exec.name),
+                                    &zoraya_command::status_problem(s),
+                                    &[],
+                                ));
+                            }
+                        }
+                        let _ = handle_close(image);
+                        continue;
+                    }
+                };
                 let startup = table.as_ref().map(|t| t.startup);
                 let started = if failed.is_none() {
                     self.spawn_in_job(job, image, exec, startup, *ends)
@@ -2277,6 +2801,8 @@ impl Host for Z {
             processes,
             elements,
             captured: Vec::new(),
+            posix,
+            tmp: self.line_tmp_name.take(),
         };
         if let Some(e) = failed {
             let _ = job_kill(job);
@@ -2301,7 +2827,7 @@ impl Host for Z {
         }
         match self.wait_foreground(number) {
             Waited::Stopped(n) => Ran::Stopped(n),
-            Waited::Ended(entry, records, ctrl_c) => self.ended_in_front(entry, records, ctrl_c),
+            Waited::Ended(entry, records, ctrl_c) => self.ended_in_front(*entry, records, ctrl_c),
         }
     }
 
@@ -2687,7 +3213,22 @@ fn main() -> i32 {
         at_prompt: false,
         typed: Vec::new(),
         escape: Escape::No,
+        broker: Handle::new(7)
+            .filter(|h| handle_type(*h) == Ok("channel"))
+            .map(|end| Broker { end }),
+        tmp: Handle::new(8)
+            .filter(|h| handle_type(*h) == Ok("channel"))
+            .map(|end| File { end }),
+        next_tmp: 0,
+        line_tmp_name: None,
+        realtime_base: 0,
+        on_volume: BTreeMap::new(),
     };
+    z.realtime_base = z
+        .root
+        .as_ref()
+        .and_then(|r| r.time_base().ok())
+        .unwrap_or(0);
     // Settings (ADR-0157 item 5): each problem once, and the defaults apply.
     if z.root.is_some() {
         if let Ok(bytes) = z.open(SETTINGS, 0).and_then(|f| read_all(&f)) {

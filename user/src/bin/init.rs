@@ -39,8 +39,9 @@ use zoraya_user::gui::{
 };
 use zoraya_user::stack::{Stack, end_job, moved, start_stack};
 use zoraya_user::{
-    channel_create, directory_lookup, dup, handle_close, job_create, port_create, port_subscribe,
-    port_wait, power_off, println, process_exit_record, spawn, stream_create, wait_exit,
+    channel_create, channel_read, clock_monotonic, directory_lookup, dup, handle_close, job_create,
+    port_create, port_subscribe, port_wait, power_off, println, process_exit_record, spawn,
+    stream_create, wait_exit,
 };
 
 const KEY_DRIVER: u64 = 1;
@@ -135,10 +136,84 @@ fn start_session(root: &File, window: Option<Handle>) -> Option<Session> {
     })
 }
 
+/// The broker beside `zosh` (ADR-0153 rule 10): no first shell, the root
+/// for its temporary service, and at slot 9 a channel on which it sends
+/// `zosh`'s client connection and the temporary service's root. Only on a
+/// volume with `/bin`, where the POSIX programs are; it ends with its shell.
+struct Beside {
+    job: (Handle, Handle),
+    client: Handle,
+    tmp: Handle,
+}
+
+fn start_broker(root: &File) -> Option<Beside> {
+    let wanted = zoraya_proto_file::rights::READ;
+    root.open("bin", zoraya_proto_file::open_flags::DIRECTORY, wanted)
+        .ok()?;
+    let base = root.time_base().unwrap_or(0);
+    let (handoff, handoff_broker) = channel_create().ok()?;
+    let job = job_create(JOB, JobFlags::POSIX).ok()?;
+    let image = directory_lookup(DIRECTORY, "broker").ok()?;
+    let root = root.clone_as(ALL).ok()?;
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, job, image);
+    e.handle(dup(
+        CONSOLE.slot(),
+        CONSOLE,
+        Rights::WRITE.union(Rights::DUPLICATE),
+    ));
+    e.handle(dup(JOB.slot(), job, JobObject::RIGHTS));
+    e.handle(dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS));
+    e.handle(give(5, root.end, ChannelObject::RIGHTS));
+    e.handle(moved(9, handoff_broker));
+    let base = alloc::format!("{base}");
+    for a in [
+        &b"broker"[..],
+        b"--time-base",
+        base.as_bytes(),
+        b"--no-shell",
+    ] {
+        e.arg(a);
+    }
+    let length = e.finish()?;
+    let broker = spawn(&buffer[..length]).ok();
+    let _ = handle_close(image);
+    let broker = broker?;
+    core::mem::forget(root);
+    // The hand-off: `ZPBC`, the client connection and the temporary root.
+    let port = port_create().ok()?;
+    let readable = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+    let _ = port_subscribe(port, handoff, readable, 1, Mode::Level);
+    let mut packets = [Packet::default()];
+    let _ = port_wait(port, clock_monotonic() + 5_000_000_000, &mut packets);
+    let _ = handle_close(port);
+    let mut bytes = [0u8; 16];
+    let mut handles = [handoff; 2];
+    let got = channel_read(handoff, &mut bytes, &mut handles);
+    let _ = handle_close(handoff);
+    match got {
+        Ok(s) if &bytes[..s.bytes as usize] == b"ZPBC" && s.handles == 2 => Some(Beside {
+            job: (job, broker),
+            client: handles[0],
+            tmp: handles[1],
+        }),
+        _ => {
+            println!("init: the broker gave no client connection");
+            end_job((job, broker));
+            None
+        }
+    }
+}
+
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
-/// terminal at slot 6. With a terminal the shell gets the console to write
+/// terminal at slot 6; with a broker beside it, its client connection at 7
+/// and the temporary service's root at 8. With a terminal the shell gets the console to write
 /// only: its input is the terminal's (INV-0097-3).
-fn start_shell(root: Option<File>, terminal: Option<Handle>) -> Option<(Handle, Handle)> {
+fn start_shell(
+    root: Option<File>,
+    terminal: Option<Handle>,
+    broker: Option<&Beside>,
+) -> Option<(Handle, Handle)> {
     let job = job_create(JOB, JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
     let mut buffer = [0; 512];
@@ -164,6 +239,10 @@ fn start_shell(root: Option<File>, terminal: Option<Handle>) -> Option<(Handle, 
     }
     if let Some(terminal) = terminal {
         e.handle(moved(6, terminal));
+    }
+    if let Some(b) = broker {
+        e.handle(moved(7, b.client));
+        e.handle(moved(8, b.tmp));
     }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
@@ -296,14 +375,16 @@ fn main() -> i32 {
                 .is_ok()
         });
         let mut session = None;
+        let mut beside = None;
         let shell = if wants_session {
             println!("init: /etc/zoraya/session: a POSIX session");
             let root = &stack.as_ref().expect("a stack").root;
             session = start_session(root, terminal.map(|t| t.1));
             session.as_ref().map(|s| s.broker)
         } else {
+            beside = stack.as_ref().and_then(|s| start_broker(&s.root));
             let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
-            start_shell(root, terminal.map(|t| t.1))
+            start_shell(root, terminal.map(|t| t.1), beside.as_ref())
         };
         let Some(shell) = shell else {
             println!("init: the shell did not start");
@@ -389,6 +470,9 @@ fn main() -> i32 {
             }
         };
         end_job(shell);
+        if let Some(b) = beside.take() {
+            end_job(b.job);
+        }
         let was_session = session.is_some();
         if let Some(s) = session.take() {
             end_job(s.ttyd);
