@@ -399,6 +399,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0210-1 | [ADR-0210](0210-surface-for-the-workloads-products.md) | `libc.a` exports every name of this block, each of the ten written here behaves as item 2 and 3 say, and W2 and W3 link inside Zoraya. | `make check-ports` (`posix-surface-check check` with this ADR in the list), `make test-posix`'s `t_posix products`, the host test `fsync_takes_a_file_and_refuses_a_pipe` (`zoraya-posix`), and `make test-posix-long`'s W2 and W3. | checked: `make check-ports`, `make test-unit`, `make test-posix` |
 | INV-0211-1 | [ADR-0211](0211-acceptance-choices-of-stage-6e.md) | Every exported function of `libc.a` is reached through its call-log wrapper, and `libc.a`'s own members reference only the real definitions. | `posix-surface-check`'s host tests (`call_log_wraps_exactly_the_listed_defined_functions`, `call_log_assembly_names_its_byte_and_target`), and `make check-ports`' export check on the built archive (the wrappers are the exports; a broken copy without one fails). | checked: `make test-unit`, `make check-ports` |
 | INV-0211-2 | [ADR-0211](0211-acceptance-choices-of-stage-6e.md) | A session's `POSIX-STATS` lines name every counter of `stats::NAMES`, `peak_pids` and `peak_tmp_bytes`, and the broker refuses a malformed report. | `zoraya-broker`'s host tests (`reports_are_summed_maxed_and_joined`, `a_report_is_taken_and_the_peak_of_live_pids_kept`), `zoraya-fs-service`'s `status_counts_the_peak_of_the_space_in_use`, and `tools/posix-stats`, which fails on a missing counter (INV-0110-3). | checked: `make test-unit` |
+| INV-0212-1 | [ADR-0212](0212-loading-programs-and-cis-budget.md) | `make test` stays within CI's `timeout-minutes` with `make test-posix` in it. | CI itself (a run past the limit fails). | not yet applicable (until the architect decides ADR-0212) |
 
 ## Counts
 
@@ -505,4 +506,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0192](0192-snapshot-in-the-posix-tree.md) `snapshot_process` creates where its job handle allows, in `posix` jobs | 1 |
 | [ADR-0210](0210-surface-for-the-workloads-products.md) The surface the workloads' own programs need | 1 |
 | [ADR-0211](0211-acceptance-choices-of-stage-6e.md) Choices of stage 6e that ADR-0110 leaves open | 2 |
-| **Total** | **393** |
+| [ADR-0212](0212-loading-programs-and-cis-budget.md) Loading programs, and what of stage 6's acceptance fits CI | 1 |
+| **Total** | **394** |

@@ -3,18 +3,20 @@
 //! - `table [--w4] LOG...` prints the stage 6 table of the logs' sessions;
 //!   with `--w4` it fails unless each carries INV-0110-3's counters and names
 //!   its accelerator.
-//! - `--calls NAMES LIST TSV LOG... [--require WORKLOAD...]` joins the logs'
+//! - `--calls NAMES LIST TSV EXEMPT LOG... [--require WORKLOAD...]` joins the logs'
 //!   POSIX-CALLS (NAMES is `usr/lib/zoraya-calls.txt`), compares them with
 //!   the tier list LIST and TASK-02's measured calls TSV
 //!   (`tools/posix-surface/results/dynamic-programs.tsv`), prints what was
 //!   called and not measured and what was measured and not called, and fails
 //!   when a measured tier-list function was never called (INV-0005-3,
-//!   INV-0110-2) or a required workload's log is missing.
+//!   INV-0110-2), unless EXEMPT (an ADR's `posix-calls-exempt` block, proposed
+//!   ADR-0211 item 16) names it, or a required workload's log is missing.
 
 use std::process::ExitCode;
 
 use posix_stats::{
-    W4_REQUIRED, call_names, called, check_calls, measured, missing, parse, table, tier_list,
+    W4_REQUIRED, call_names, called, check_calls, exempt_names, measured, missing, parse, table,
+    tier_list,
 };
 
 fn read(path: &str) -> Result<String, String> {
@@ -58,9 +60,10 @@ fn run_table(args: &[String]) -> Result<bool, String> {
 }
 
 fn run_calls(args: &[String]) -> Result<bool, String> {
-    let [names, list, tsv, rest @ ..] = args else {
-        return Err("usage: --calls NAMES LIST TSV LOG... [--require WORKLOAD...]".into());
+    let [names, list, tsv, exempt, rest @ ..] = args else {
+        return Err("usage: --calls NAMES LIST TSV EXEMPT LOG... [--require WORKLOAD...]".into());
     };
+    let exempt = exempt_names(&read(exempt)?).map_err(|e| format!("{exempt}: {e}"))?;
     let (logs, required) = match rest.iter().position(|a| a == "--require") {
         Some(i) => (&rest[..i], &rest[i + 1..]),
         None => (rest, &[][..]),
@@ -88,6 +91,7 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
         &tier_list(&read(list)?),
         &names,
         &measured(&read(tsv)?),
+        &exempt,
         &union,
     );
     println!(
@@ -100,6 +104,10 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
     show(
         "measured by TASK-02, never called (fails)",
         &r.uncalled_measured,
+    );
+    show(
+        "measured, never called, exempted (proposed ADR-0211 item 16)",
+        &r.uncalled_exempt,
     );
     show("static-only, never called", &r.uncalled_static_only);
     show("called, outside the tier list", &r.called_outside_list);

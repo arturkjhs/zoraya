@@ -329,6 +329,7 @@ posix-calls:
 	$(CARGO) build -q -p posix-stats
 	target/debug/posix-stats --calls $(BUILD)/sysroot/usr/lib/zoraya-calls.txt \
 	  docs/adr/posix-surface-T1.txt tools/posix-surface/results/dynamic-programs.tsv \
+	  docs/adr/0211-acceptance-choices-of-stage-6e.md \
 	  $(foreach r,$(POSIX_T1_RUNS),$(wildcard $(POSIX_LOGS)/posix-$(r)-*.log)) \
 	  --require $(POSIX_T1_RUNS)
 

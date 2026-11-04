@@ -143,7 +143,35 @@ fn the_union_fails_only_on_a_measured_function_never_called() {
     assert_eq!(r.called_not_measured, ["fork"]);
     assert_eq!(r.called_outside_list, ["glob"]);
     assert_eq!(r.not_logged, ["environ"]);
-    let r = check_calls(&list, &logged, &measured, &set(&["open", "read", "kill"]));
+    let r = check_calls(
+        &list,
+        &logged,
+        &measured,
+        &none,
+        &set(&["open", "read", "kill"]),
+    );
     assert!(r.passed());
     assert_eq!(r.uncalled_static_only, ["fork"]);
+    // An exemption passes a measured name, and only that one.
+    let r = check_calls(&list, &logged, &measured, &set(&["read"]), &set(&["open"]));
+    assert_eq!(r.uncalled_exempt, ["read"]);
+    assert_eq!(r.uncalled_measured, ["kill"]);
+}
+
+#[test]
+fn exemptions_come_from_an_adrs_block_each_with_a_reason() {
+    let adr = "x\n```posix-calls-exempt\nvfork the patch\n\ngetopt_long a build\n```\n";
+    let want: BTreeSet<String> = ["getopt_long", "vfork"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(exempt_names(adr).unwrap(), want);
+    assert!(exempt_names("no block").is_err());
+    assert!(
+        exempt_names("```posix-calls-exempt\nvfork\n```\n").is_err(),
+        "no reason"
+    );
+    assert!(exempt_names("```posix-calls-exempt\nvfork why\n").is_err());
+    let real = include_str!("../../../docs/adr/0211-acceptance-choices-of-stage-6e.md");
+    assert_eq!(exempt_names(real).unwrap().len(), 3);
 }

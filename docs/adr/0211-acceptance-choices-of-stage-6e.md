@@ -114,7 +114,21 @@ interposer logged "the first call per symbol per process image whose return addr
     T1's tools; `/tests/w4.sh` prints `W4-STOP` rather than `-FAIL` at the step that fails, and `make -f
     ports/Makefile t2-probe` links T2's applets against `libc.a` and lists the names they lack.
 
+16. **Three measured functions no run calls**, found by the first `make test-posix-long` (both accelerators, 20
+    runs, 159 functions called). Each was called on Linux by a build or a command stage 6 does not have, so
+    `posix-stats --calls` exempts exactly these, names them on every run, and fails on any other measured function
+    left uncalled:
+
+    ```posix-calls-exempt
+    vfork dash's vforkexec, which TASK-02 counted, is posix_spawn in the ported dash (TASK-02's M4 patch, ADR-0142)
+    getopt_long busybox's tr and diff in TASK-02 were the full binary; the ported busybox is allnoconfig (ADR-0109 item 6)
+    writev TASK-02b saw toybox call it in W8's check, through tail and grep, which T1 lacks and W8's check replaces (item 12)
+    ```
+
 **Tensions with accepted ADRs.**
+
+- *INV-0005-3*: three measured functions are exempted by item 16 rather than called; the invariant's own escape is
+  `static-only` with TASK-02's upper-bound justification, and these were observed, not only imported.
 
 - *ADR-0110 item 7* says "a bitmap of the tier-list functions it called first": the bitmap covers every exported
   function, the tier list's and the added blocks' (ADR-0142, ADR-0144, ADR-0210); `tools/posix-stats --calls` checks

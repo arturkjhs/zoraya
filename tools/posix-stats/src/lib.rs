@@ -308,6 +308,9 @@ pub struct CallReport {
     /// Tier-list functions TASK-02 did not see called (`static-only`) and
     /// no run here called.
     pub uncalled_static_only: Vec<String>,
+    /// Measured functions no run called that an ADR exempts, with a reason
+    /// (proposed ADR-0211 item 16).
+    pub uncalled_exempt: Vec<String>,
     /// Tier-list functions called here that TASK-02 never saw called.
     pub called_not_measured: Vec<String>,
     /// Functions called here outside the tier list (the added blocks).
@@ -322,10 +325,37 @@ impl CallReport {
     }
 }
 
+/// The names of an ADR's `posix-calls-exempt` block: the first word of each
+/// line, which must give a reason after it. No block is an error, so that a
+/// wrong file is not silently empty.
+pub fn exempt_names(adr: &str) -> Result<BTreeSet<String>, String> {
+    let mut lines = adr.lines().map(str::trim);
+    if !lines.any(|l| l == "```posix-calls-exempt") {
+        return Err("no posix-calls-exempt block".into());
+    }
+    let mut out = BTreeSet::new();
+    for l in lines {
+        if l == "```" {
+            return Ok(out);
+        }
+        if l.is_empty() {
+            continue;
+        }
+        match l.split_once(' ') {
+            Some((name, reason)) if !reason.trim().is_empty() => {
+                out.insert(name.to_string());
+            }
+            _ => return Err(format!("an exemption without a reason: {l}")),
+        }
+    }
+    Err("unterminated posix-calls-exempt block".into())
+}
+
 pub fn check_calls(
     list: &BTreeSet<String>,
     logged: &[String],
     measured: &BTreeSet<String>,
+    exempt: &BTreeSet<String>,
     called: &BTreeSet<String>,
 ) -> CallReport {
     let logged_set: BTreeSet<&String> = logged.iter().collect();
@@ -334,7 +364,9 @@ pub fn check_calls(
         if !logged_set.contains(n) {
             r.not_logged.push(n.clone());
         } else if !called.contains(n) {
-            if measured.contains(n) {
+            if measured.contains(n) && exempt.contains(n) {
+                r.uncalled_exempt.push(n.clone());
+            } else if measured.contains(n) {
                 r.uncalled_measured.push(n.clone());
             } else {
                 r.uncalled_static_only.push(n.clone());
