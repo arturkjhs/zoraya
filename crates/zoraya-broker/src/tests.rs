@@ -10,6 +10,7 @@ use std::vec::Vec;
 
 use zoraya_abi::ExitReason;
 use zoraya_abi::posix::signal::SIGINT;
+use zoraya_abi::posix::signal::{SIGTTIN, SIGTTOU};
 use zoraya_proto_posix as proto;
 use zoraya_protocol::testing::exercise;
 
@@ -36,6 +37,8 @@ struct Fake {
     next: u32,
     calls: Vec<Call>,
     fail_jobs: bool,
+    /// `job_kill` refuses with a full queue.
+    fail_kill: bool,
 }
 
 impl Fake {
@@ -135,6 +138,9 @@ impl Kernel for Fake {
     }
 
     fn job_kill(&mut self, job: u32) -> Result<(), Status> {
+        if self.fail_kill {
+            return Err(Status::LimitReached);
+        }
         let o = self.object(job);
         self.calls.push(Call::Kill(o));
         Ok(())
@@ -183,6 +189,8 @@ struct Session {
     b: Broker<Fake>,
     /// Connection → the pid it serves, from `Watch` actions.
     conns: BTreeMap<Conn, u32>,
+    /// The connection the last `Watch` action named.
+    watched: Option<Conn>,
     shell: Child,
 }
 
@@ -228,6 +236,7 @@ fn session(terminal: bool) -> Session {
     Session {
         b,
         conns,
+        watched: None,
         shell: Child {
             pid: first.pid,
             conn,
@@ -264,6 +273,7 @@ impl Session {
                 Action::Watch { conn, end } => {
                     let _ = end;
                     self.conns.insert(conn, 0);
+                    self.watched = Some(conn);
                 }
                 Action::Forget { conn } => {
                     self.conns.remove(&conn);
@@ -297,11 +307,8 @@ impl Session {
             return Err(status_of(&bytes));
         }
         let (_, m) = decode::<SpawnPrepared>(&bytes, 3).unwrap();
-        let conn = *self
-            .conns
-            .keys()
-            .find(|c| !before.contains(c))
-            .expect("a connection for the child");
+        let _ = before;
+        let conn = self.watched.take().expect("a connection for the child");
         self.conns.insert(conn, m.pid);
         let process = self.b.kernel.process_in(handles[1]);
         let p = self.b.kernel.duplicate(process, Rights::WAIT).unwrap();
@@ -324,7 +331,8 @@ impl Session {
 
     fn end(&mut self, c: &Child, code: i32) {
         self.b.kernel.exit(c.process, code);
-        let _ = self.b.terminated(c.pid);
+        let actions = self.b.terminated(c.pid);
+        forget(self, &actions);
     }
 
     fn kill(&mut self, from: &Child, target: u32, id: u32, signal: u32) -> u32 {
@@ -953,4 +961,396 @@ fn malformed_messages_are_refused_never_panic_and_leak_no_handle() {
     // Nothing on a connection that is not one.
     let mut s = s;
     assert!(s.b.request(usize::MAX, &valid[0], vec![]).is_empty());
+}
+
+// ---------------------------------------------------------------- the
+// tests the mutation run asked for (TASK-21-review.md, "Mutation testing").
+
+/// What `ask` does with the connections a direct request forgets.
+fn forget(s: &mut Session, actions: &[Action<u32>]) {
+    for a in actions {
+        if let Action::Forget { conn } = a {
+            s.conns.remove(conn);
+        }
+    }
+}
+
+fn lookup_of(s: &mut Session, from: &Child, what: u32, pid: u32) -> (u32, u32) {
+    let (r, _) = s.ask(
+        from.conn,
+        &message(&proto::Lookup {
+            what: Below(what),
+            pid,
+        }),
+        vec![],
+    );
+    let (_, l) = decode::<LookupReply>(&r, 0).unwrap();
+    (l.status.0, l.value)
+}
+
+fn statistics(s: &mut Session, from: &Child) -> StatisticsReply {
+    let (r, _) = s.ask(from.conn, &message(&proto::Statistics {}), vec![]);
+    decode::<StatisticsReply>(&r, 0).unwrap().1
+}
+
+#[test]
+fn statistics_count_by_ordinal_and_refusals() {
+    let mut s = session(true);
+    let shell = s.shell;
+    assert_eq!(statistics(&mut s, &shell).others, 1, "the request itself");
+    assert_eq!(s.kill(&shell, target::PID, shell.pid, 0), status::OK);
+    let st = statistics(&mut s, &shell);
+    assert_eq!((st.kills, st.others), (1, 2));
+    // A message too short for a header: refused, its handles closed.
+    let before = s.b.kernel.open_handles();
+    let h = s.b.kernel.new_object(Obj::Channel, Rights::NONE);
+    assert!(s.b.request(shell.conn, &[], vec![h]).is_empty());
+    assert_eq!(s.b.kernel.open_handles(), before);
+    assert_eq!(s.b.counts.refused, 1);
+    // An ordinal nobody knows.
+    let mut unknown = message(&proto::Tcgetpgrp {});
+    unknown[4..8].copy_from_slice(&99u32.to_le_bytes());
+    let (r, _) = s.ask(shell.conn, &unknown, vec![]);
+    assert_eq!(status_of(&r), status::UNSUPPORTED);
+    assert_eq!(s.b.counts.refused, 2);
+    // Both prepare forms count.
+    let (client, actions) = s.b.add_client().unwrap();
+    let conn = match actions[..] {
+        [Action::Watch { conn, .. }] => conn,
+        _ => panic!(),
+    };
+    s.conns.insert(conn, 0);
+    let own = s.b.kernel.new_object(Obj::Job { parent: None }, JOB_RIGHTS);
+    let (_, hs) = s.ask(
+        conn,
+        &message(&proto::SpawnPrepareIn { ignored: 0 }),
+        vec![own],
+    );
+    for x in hs {
+        s.b.kernel.close(x);
+    }
+    let _ = s.spawn(&shell, group::NEW, 0).unwrap();
+    assert_eq!(statistics(&mut s, &shell).prepares, 2);
+    s.b.kernel.close(client);
+}
+
+#[test]
+fn the_session_id_and_the_parent_are_reported() {
+    let mut s = session(true);
+    let shell = s.shell;
+    let (bytes, handles) = s.ask(
+        shell.conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::NEW),
+            pgid: 0,
+            ignored: 0,
+            fork: Below(0),
+        }),
+        vec![],
+    );
+    assert_eq!(decode::<SpawnPrepared>(&bytes, 3).unwrap().1.sid, 2);
+    for h in handles {
+        s.b.kernel.close(h);
+    }
+    assert_eq!(
+        lookup_of(&mut s, &shell, lookup::SID, shell.pid),
+        (status::OK, 2)
+    );
+    let a = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    assert_eq!(
+        lookup_of(&mut s, &shell, lookup::PPID, a.pid),
+        (status::OK, 2)
+    );
+    // A native client's child: no session, its parent the broker.
+    let (client, actions) = s.b.add_client().unwrap();
+    let conn = match actions[..] {
+        [Action::Watch { conn, .. }] => conn,
+        _ => panic!(),
+    };
+    s.conns.insert(conn, 0);
+    let zosh = Child {
+        pid: 0,
+        conn,
+        parent_job: 0,
+        child_job: 0,
+        process: 0,
+    };
+    let own = s.b.kernel.new_object(Obj::Job { parent: None }, JOB_RIGHTS);
+    let before: Vec<Conn> = s.conns.keys().copied().collect();
+    let (r, hs) = s.ask(
+        conn,
+        &message(&proto::SpawnPrepareIn { ignored: 0 }),
+        vec![own],
+    );
+    let (_, m) = decode::<SpawnPreparedIn>(&r, 3).unwrap();
+    let c_conn = *s.conns.keys().find(|k| !before.contains(k)).unwrap();
+    let c_process = s.b.kernel.process_in(hs[1]);
+    let p = s.b.kernel.duplicate(c_process, Rights::WAIT).unwrap();
+    s.ask(conn, &message(&proto::SpawnCommit { pid: m.pid }), vec![p]);
+    let c = Child {
+        pid: m.pid,
+        conn: c_conn,
+        parent_job: hs[0],
+        child_job: hs[1],
+        process: c_process,
+    };
+    assert_eq!(
+        lookup_of(&mut s, &shell, lookup::PPID, c.pid),
+        (status::OK, 1)
+    );
+    let (bytes, more) = s.ask(
+        conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::JOIN),
+            pgid: c.pid,
+            ignored: 0,
+            fork: Below(0),
+        }),
+        vec![],
+    );
+    assert_eq!(decode::<SpawnPrepared>(&bytes, 3).unwrap().1.sid, 0);
+    for h in more {
+        s.b.kernel.close(h);
+    }
+    // Outside the session: no terminal, no signal into the session, but its
+    // own group to join.
+    assert_eq!(
+        s.status(c.conn, &message(&proto::Tcsetpgrp { pgid: shell.pid })),
+        status::NOT_PERMITTED
+    );
+    assert_eq!(
+        s.kill(&c, target::PID, shell.pid, 15),
+        status::NOT_PERMITTED
+    );
+    assert!(s.b.kernel.calls.is_empty());
+    assert!(s.spawn(&c, group::JOIN, c.pid).is_ok());
+    let _ = zosh;
+    s.b.kernel.close(client);
+}
+
+#[test]
+fn stop_records_come_from_the_spawner_and_survive_exec_when_ignored() {
+    let mut s = session(true);
+    let shell = s.shell;
+    // An ignored SIGTTIN given at the prepare.
+    let (bytes, hs) = s.ask(
+        shell.conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::INHERIT),
+            pgid: 0,
+            ignored: 1 << SIGTTIN,
+            fork: Below(0),
+        }),
+        vec![],
+    );
+    let (_, m) = decode::<SpawnPrepared>(&bytes, 3).unwrap();
+    for h in hs {
+        s.b.kernel.close(h);
+    }
+    assert_eq!(s.kill(&shell, target::PID, m.pid, SIGTTIN), status::OK);
+    assert!(s.b.kernel.calls.is_empty(), "ignored");
+    // A fork child takes its parent's records; a spawned one does not.
+    let set = s.status(
+        shell.conn,
+        &message(&proto::SetStopDisposition {
+            signal: SIGTTOU,
+            disposition: Below(stop::IGNORE),
+        }),
+    );
+    assert_eq!(set, status::OK);
+    let (bytes, hs) = s.ask(
+        shell.conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::INHERIT),
+            pgid: 0,
+            ignored: 0,
+            fork: Below(1),
+        }),
+        vec![],
+    );
+    let (_, f) = decode::<SpawnPrepared>(&bytes, 3).unwrap();
+    for h in hs {
+        s.b.kernel.close(h);
+    }
+    assert_eq!(s.kill(&shell, target::PID, f.pid, SIGTTOU), status::OK);
+    assert!(s.b.kernel.calls.is_empty(), "the fork child ignores it too");
+    let g = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    assert_eq!(s.kill(&shell, target::PID, g.pid, SIGTTOU), status::OK);
+    assert_eq!(s.b.kernel.calls, [Call::Suspend(s.job_of(&g))]);
+    // An ignored SIGTTOU of one member keeps the group from a whole suspend.
+    let a = s.spawn(&shell, group::NEW, 0).unwrap();
+    let b = s.spawn(&shell, group::JOIN, a.pid).unwrap();
+    let st = s.status(
+        b.conn,
+        &message(&proto::SetStopDisposition {
+            signal: SIGTTOU,
+            disposition: Below(stop::IGNORE),
+        }),
+    );
+    assert_eq!(st, status::OK);
+    assert_eq!(s.kill(&shell, target::GROUP, a.pid, SIGTTOU), status::OK);
+    assert_eq!(s.b.kernel.calls, [Call::Suspend(s.job_of(&a))]);
+    // Across exec: ignored kept, caught reset.
+    let st = s.status(
+        a.conn,
+        &message(&proto::SetStopDisposition {
+            signal: SIGTTIN,
+            disposition: Below(stop::IGNORE),
+        }),
+    );
+    assert_eq!(st, status::OK);
+    let image = s.b.kernel.process_in(a.child_job);
+    let (server, _client) = s.b.kernel.channel_create().unwrap();
+    s.ask(a.conn, &message(&proto::ExecCommit {}), vec![image, server]);
+    assert_eq!(s.kill(&shell, target::PID, a.pid, SIGTTIN), status::OK);
+    assert!(s.b.kernel.calls.is_empty());
+}
+
+#[test]
+fn commit_abort_and_reap_keep_to_their_rules() {
+    let mut s = session(true);
+    let shell = s.shell;
+    let a = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    let b = s.spawn(&a, group::INHERIT, 0).unwrap();
+    // A prepare of a's, committed by someone else: NOT_CHILD.
+    let (bytes, hs) = s.ask(
+        a.conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::INHERIT),
+            pgid: 0,
+            ignored: 0,
+            fork: Below(0),
+        }),
+        vec![],
+    );
+    let (_, m) = decode::<SpawnPrepared>(&bytes, 3).unwrap();
+    let p = s.b.kernel.process_in(hs[1]);
+    let (r, _) = s.ask(
+        shell.conn,
+        &message(&proto::SpawnCommit { pid: m.pid }),
+        vec![p],
+    );
+    assert_eq!(status_of(&r), status::NOT_CHILD);
+    // A channel is not a process.
+    let (x, _y) = s.b.kernel.channel_create().unwrap();
+    let (r, _) = s.ask(
+        a.conn,
+        &message(&proto::SpawnCommit { pid: m.pid }),
+        vec![x],
+    );
+    assert_eq!(status_of(&r), status::INVALID);
+    for h in hs {
+        s.b.kernel.close(h);
+    }
+    // A committed pid is not committed again, nor aborted.
+    let p = s.b.kernel.process_in(a.child_job);
+    let kept = s.b.kernel.duplicate(p, Rights::WAIT).unwrap();
+    let (r, _) = s.ask(
+        shell.conn,
+        &message(&proto::SpawnCommit { pid: a.pid }),
+        vec![p],
+    );
+    assert_eq!(status_of(&r), status::INVALID);
+    let st = s.status(shell.conn, &message(&proto::SpawnAbort { pid: a.pid }));
+    assert_eq!(st, status::INVALID);
+    assert!(s.b.pids().contains(&a.pid));
+    // A child that ended before the broker saw it is reaped; a reap of it
+    // asks no further unwatch.
+    s.b.kernel.exit(kept, 4);
+    s.b.kernel.exit(a.process, 4);
+    let actions =
+        s.b.request(shell.conn, &message(&proto::Reap { pid: a.pid }), vec![]);
+    let reply = actions
+        .iter()
+        .find_map(|x| match x {
+            Action::Reply { bytes, .. } => Some(bytes.clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(decode::<Reaped>(&reply, 0).unwrap().1.code, 4);
+    // Its live child is the broker's now.
+    s.end(&b, 0);
+    assert!(!s.b.pids().contains(&b.pid));
+    assert!(s.b.counts.reaped_by_broker >= 1);
+    // A reap of an already-seen end unwatches nothing more.
+    let c = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    s.end(&c, 0);
+    let actions =
+        s.b.request(shell.conn, &message(&proto::Reap { pid: c.pid }), vec![]);
+    assert!(
+        !actions
+            .iter()
+            .any(|x| matches!(x, Action::UnwatchJob { .. }))
+    );
+    // A reap waits for the whole job, not one image.
+    let d = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    let image = s.b.kernel.process_in(d.child_job);
+    let (server, _c) = s.b.kernel.channel_create().unwrap();
+    let dup = s.b.kernel.duplicate(image, Rights::WAIT).unwrap();
+    s.ask(d.conn, &message(&proto::ExecCommit {}), vec![dup, server]);
+    s.b.kernel.exit(image, 7);
+    let (r, _) = s.ask(shell.conn, &message(&proto::Reap { pid: d.pid }), vec![]);
+    assert_eq!(status_of(&r), status::NOT_TERMINATED);
+}
+
+#[test]
+fn a_group_and_the_terminal_go_with_its_last_member() {
+    let mut s = session(true);
+    let shell = s.shell;
+    let c = s.spawn(&shell, group::NEW, 0).unwrap();
+    s.end(&c, 0);
+    s.ask(shell.conn, &message(&proto::Reap { pid: c.pid }), vec![]);
+    let (r, _) = s.ask(shell.conn, &message(&proto::Tcgetpgrp {}), vec![]);
+    assert_eq!(
+        decode::<TcgetpgrpReply>(&r, 0).unwrap().1.pgid,
+        2,
+        "untouched"
+    );
+    assert_eq!(
+        s.spawn(&shell, group::JOIN, c.pid).unwrap_err(),
+        status::NOT_PERMITTED
+    );
+    let d = s.spawn(&shell, group::NEW, 0).unwrap();
+    assert_eq!(
+        s.status(shell.conn, &message(&proto::Tcsetpgrp { pgid: d.pid })),
+        status::OK
+    );
+    s.end(&d, 0);
+    s.ask(shell.conn, &message(&proto::Reap { pid: d.pid }), vec![]);
+    let (r, _) = s.ask(shell.conn, &message(&proto::Tcgetpgrp {}), vec![]);
+    assert_eq!(decode::<TcgetpgrpReply>(&r, 0).unwrap().1.pgid, 0);
+}
+
+#[test]
+fn kill_bounds_suspend_members_and_a_full_queue() {
+    let mut s = session(true);
+    let shell = s.shell;
+    let c = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    assert_eq!(s.kill(&shell, target::PID, 999, 32), status::INVALID);
+    assert_eq!(s.kill(&shell, target::PID, c.pid, 31), status::OK);
+    assert_eq!(
+        s.b.kernel.calls,
+        [Call::Signal(s.job_of(&c), RequestKind::Custom(31), 31)]
+    );
+    let a = s.spawn(&shell, group::NEW, 0).unwrap();
+    s.status(shell.conn, &message(&proto::Tcsetpgrp { pgid: a.pid }));
+    s.b.suspend(a.pid, SIGTSTP);
+    assert_eq!(s.b.is_stopped(shell.pid), Some(0));
+    assert_eq!(s.b.is_stopped(a.pid), Some(SIGTSTP));
+    s.b.kernel.fail_kill = true;
+    assert_eq!(s.kill(&shell, target::PID, c.pid, 9), status::AGAIN);
+}
+
+#[test]
+fn a_first_process_that_did_not_start_leaves_no_pid() {
+    let mut k = Fake::default();
+    let root = k.new_object(Obj::Job { parent: None }, JOB_RIGHTS);
+    let session_job = k.job_create(root).unwrap();
+    let mut b = Broker::new(k, session_job, true);
+    let (first, _) = b.first().unwrap();
+    b.kernel.close(first.job);
+    b.kernel.close(first.broker_end);
+    b.abort_first();
+    assert!(b.pids().is_empty());
+    assert!(b.finished());
 }

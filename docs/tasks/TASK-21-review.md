@@ -41,8 +41,26 @@ offsets, the `fd_set` words, the file actions' `Box`, `execl`'s registers, the h
 
 ## Mutation testing
 
-See below (filled in after the run).
+`make mutants-host` (cargo-mutants 27.1.0, under the watchdog), sorted by the `mutant-triage` subagent; the script's
+re-run is the judge.
+
+| Crate | First run: caught, missed, unviable | Holes / equivalent | After the new tests |
+|---|---|---|---|
+| `zoraya-tty` | 179, 82, 22 (of 283) | 79 / 3 | 257 caught, 3 missed: the 3 equivalent (`discipline.rs:192:49` ×2, the erase branch only differs in echo it does not show with ECHOE off; `263:17 <` → `<=`, the one byte it changes takes the same branch) |
+| `zoraya-broker` | 209, 52, 118 (of 379, 35 min) | 48 / 4 | not re-run (35 min; the eleven tests the triage asked for pass: `make test-unit`) — equivalent: `session.rs:30` ×2 (`MAX_SIZE` is read nowhere), `lib.rs:668` (`client_child` is false wherever the call is reached) |
+| `zoraya-posix` `signals.rs`, `wait.rs` | 115, 15, 3 (of 133) | 12 / 3 | 127 caught, 3 missed: the 3 equivalent (`signals.rs:41` and `wait.rs:20`, `\|` → `^` on disjoint bits; `wait.rs:30`, the wildcard gives the same 11) |
+
+The broker's holes were the counts, the refusals' handle closing, `sid_of`, `in_session`, the stop records from the
+spawner and across `exec`, `commit` and `abort`'s refusals, a reap that waits for the whole job, a group and the
+terminal's foreground going with their last member, `kill`'s bounds, `suspend`'s members, and a full queue's
+`EAGAIN`. The tests are `statistics_count_by_ordinal_and_refusals`, `the_session_id_and_the_parent_are_reported`,
+`stop_records_come_from_the_spawner_and_survive_exec_when_ignored`, `commit_abort_and_reap_keep_to_their_rules`,
+`a_group_and_the_terminal_go_with_its_last_member`, `kill_bounds_suspend_members_and_a_full_queue` and
+`a_first_process_that_did_not_start_leaves_no_pid`. The rest of `zoraya-posix` (`jobs.rs`, the C boundary) runs only
+in QEMU and was not mutated (as in TASK-20, `ffi` is target-only).
 
 ## The check of the changed lines
 
-See below.
+Of the fixes (`645ee6a`): the broker's group resume and orphan removal, the terminal read's kept bytes and stash, the
+exec and commit error paths, and `ttyd`'s queued output read correctly. One more found and fixed (`6890931`): a closed
+terminal fd left its held read and kept bytes in the process's lists. No further round was needed.

@@ -171,6 +171,7 @@ mod tests {
             ("\nenv X\n", 2, "env without NAME=VALUE"),
             ("env 1X=y\n", 1, "not a variable name"),
             ("env =y\n", 1, "not a variable name"),
+            ("env A-B=y\n", 1, "not a variable name"),
             ("shell sh\n", 1, "unknown keyword"),
             ("env A=\"x\n", 1, "an unclosed quote"),
         ] {

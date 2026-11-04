@@ -364,6 +364,39 @@ mod tests {
     }
 
     #[test]
+    fn the_mutation_runs_cases() {
+        // A number outside 1 to 64 has no bit.
+        assert_eq!(bit(0), 0);
+        assert_eq!(bit(65), 0);
+        // A handler's mask keeps the standard signals but SIGKILL and SIGSTOP.
+        let mut s = Signals::new(0);
+        let a = Action {
+            handler: 0x4000,
+            mask: bit(SIGTERM) | bit(SIGKILL),
+            flags: 0,
+        };
+        s.set(SIGINT, Some(a)).unwrap();
+        let stored = Action {
+            mask: bit(SIGTERM),
+            ..a
+        };
+        assert_eq!(s.take(SIGINT), Taken::Run(stored));
+        // The highest standard signal is a signal.
+        assert_eq!(s.set(signal::MAX, None), Ok(Action::DEFAULT));
+        assert_eq!(
+            s.take(signal::MAX),
+            Taken::Default(DefaultAction::Terminate)
+        );
+        // Blocking what is blocked keeps it blocked.
+        s.mask(SIG_BLOCK, Some(bit(SIGTERM))).unwrap();
+        s.mask(SIG_BLOCK, Some(bit(SIGTERM))).unwrap();
+        assert_eq!(s.blocked, bit(SIGTERM));
+        // A handler without SA_RESETHAND stays.
+        s.enter(SIGINT, &stored);
+        assert_eq!(s.action(SIGINT), stored);
+    }
+
+    #[test]
     fn handlers_installed_and_catches() {
         let mut s = Signals::new(0);
         assert!(!s.handlers_installed());
