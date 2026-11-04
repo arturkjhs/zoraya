@@ -24,7 +24,9 @@ screen w=0
 type sleep 30\r
 chord ctrl c
 screen PSURF> _
-type echo s=$?\r
+# The leading newline puts the status on a row of its own even when the keys
+# arrive before dash has drawn its prompt again (type-ahead, under TCG).
+type echo "\\ns=$?"\r
 screen s=130
 screen PSURF> _
 type make\r
