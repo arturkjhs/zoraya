@@ -1332,6 +1332,8 @@ fn spawn_child(
         pgid: prepared.pgid,
         sid: prepared.sid,
         ignored,
+        // `SETSIGMASK`'s, else the parent's (ADR-0190 item 18).
+        blocked: crate::signals::to_record(start.mask.unwrap_or(p.signals.blocked)),
         ..p.facts
     };
     let child_job = prepared.child_job;
@@ -1640,8 +1642,11 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
                 return Err(EAGAIN);
             }
         };
+        // POSIX keeps the mask and every `SIG_IGN` across `execve`
+        // (ADR-0190 item 18).
         let facts = Facts {
             ignored: ignored_for(p, 0),
+            blocked: crate::signals::to_record(p.signals.blocked),
             ..p.facts
         };
         let start = Start {

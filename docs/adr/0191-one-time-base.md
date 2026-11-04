@@ -1,6 +1,6 @@
 # ADR-0191: One time base for every volume and for `CLOCK_REALTIME`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0014, ADR-0080, ADR-0104, ADR-0107, ADR-0180
 - **Evidence:** alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -142,3 +142,5 @@ when a clock must change after boot.
 - A second persistent volume, or networking (NTP).
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request.

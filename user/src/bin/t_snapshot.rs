@@ -7,8 +7,8 @@
 //!
 //! The test kernel starts it with the device handles, in a job without the
 //! `posix` bit. It checks the refusal there, then runs itself as `inner` in a
-//! `posix` job, with that job at slot 2, its own job at `OUTSIDE` and the
-//! first device at `DEVICE`.
+//! `posix` job, with that job at slot 2, its own job at `OUTSIDE`, a second
+//! `posix` job beside the first at `PEER` and the first device at `DEVICE`.
 
 extern crate alloc;
 
@@ -36,6 +36,8 @@ use zoraya_user::{
 };
 
 const OUTSIDE: u64 = 9;
+/// A `posix` job beside `inner`'s, outside its tree (ADR-0192).
+const PEER: u64 = 10;
 const DEVICE: u64 = 5;
 /// Where `inner` finds a pin `outer` made: a `posix` job cannot make one.
 const PIN: u64 = 6;
@@ -812,12 +814,28 @@ fn devices_refuse_a_snapshot() {
     close(&[child]);
 }
 
-/// INV-0003-4, INV-0046-2 and the job rules of ADR-0102 item 1.
+/// INV-0003-4, INV-0046-2 and the job rules of ADR-0102 item 1 as ADR-0192
+/// states them (INV-0192-1): the handle's `CREATE_PROCESS` is the authority,
+/// and the target job must have the `posix` bit.
 fn the_job_must_be_ours_and_open() {
     let weak =
         handle_duplicate(JOB, JobObject::RIGHTS.without(Rights::CREATE_PROCESS)).expect("dup");
     assert_err!(snap(weak, &[], 0, false), Status::AccessDenied);
-    assert_err!(snap(h(OUTSIDE), &[], 0, false), Status::AccessDenied); // outside our tree
+    let weak_peer =
+        handle_duplicate(h(PEER), JobObject::RIGHTS.without(Rights::CREATE_PROCESS)).expect("dup");
+    assert_err!(snap(weak_peer, &[], 0, false), Status::AccessDenied);
+    // A job without the `posix` bit is refused, with every right.
+    assert_err!(snap(h(OUTSIDE), &[], 0, false), Status::AccessDenied);
+    // A `posix` job outside our own tree is not: a fork child's job sits
+    // beside its parent's (ADR-0104).
+    let child = snap(h(PEER), &[], 0, false).expect("a snapshot into a job beside ours");
+    let Some(child) = child else { process_exit(3) };
+    assert_eq!(wait_exit(child).code, 3);
+    // A job we hold no handle to cannot be named: a handle value is not a
+    // job's name, so another session's jobs are out of reach.
+    for raw in [200u64, 0xffff, 0x1234_5678] {
+        assert_err!(snap(h(raw), &[], 0, false), Status::BadHandle);
+    }
     let memory = memory_create(4096, MemoryFlags::NONE).expect("memory");
     assert_err!(snap(memory, &[], 0, false), Status::AccessDenied);
     let port = port_create().expect("port");
@@ -841,7 +859,7 @@ fn the_job_must_be_ours_and_open() {
     let Some(child) = child else { process_exit(1) };
     job_kill(sibling).expect("kill");
     assert_eq!(wait_exit(child).reason, ExitReason::Killed);
-    close(&[weak, memory, killed, sibling, other, child]);
+    close(&[weak, weak_peer, memory, killed, sibling, other, child]);
 }
 
 /// Malformed buffers reach the kernel's decoder and fail there.
@@ -981,6 +999,7 @@ fn outer() -> i32 {
     let not_posix = job_create(JOB, JobFlags::NONE).expect("job");
     assert_err!(snap(not_posix, &[], 0, false), Status::AccessDenied);
     let posix = job_create(JOB, JobFlags::POSIX).expect("posix job");
+    let peer = job_create(JOB, JobFlags::POSIX).expect("posix job");
     // The gate is the caller's job, not the target's.
     assert_err!(snap(posix, &[], 0, false), Status::AccessDenied);
     let me = directory_lookup(DIRECTORY, "t_snapshot").expect("myself");
@@ -995,7 +1014,8 @@ fn outer() -> i32 {
     e.handle(console_entry())
         .handle(dup(2, posix, JobObject::RIGHTS))
         .handle(dup(3, DIRECTORY, zoraya_abi::DirectoryObject::RIGHTS))
-        .handle(dup(OUTSIDE as u32, JOB, JobObject::RIGHTS));
+        .handle(dup(OUTSIDE as u32, JOB, JobObject::RIGHTS))
+        .handle(dup(PEER as u32, peer, JobObject::RIGHTS));
     // Outside a `posix` job a pin can be made; it moves to `inner`.
     let pinned = memory_create(4096, MemoryFlags::NONE).expect("memory");
     if handle_type(h(DEVICE)) == Ok("device") {
@@ -1017,7 +1037,7 @@ fn outer() -> i32 {
     let length = e.finish().expect("room");
     let child = spawn(&buffer[..length]).expect("spawn inner");
     let record = wait_exit(child);
-    close(&[child, me, posix, not_posix, pinned]);
+    close(&[child, me, posix, peer, not_posix, pinned]);
     let _ = (StreamReadObject::RIGHTS, StreamWriteObject::RIGHTS);
     record.code
 }

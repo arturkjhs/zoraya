@@ -264,7 +264,7 @@ impl<S: Sys> Posix<S> {
             handles: Vec::with_capacity(4),
             transaction: 0,
             stats: Stats::default(),
-            signals: crate::signals::Signals::new(facts.ignored),
+            signals: crate::signals::Signals::starting(facts.ignored, facts.blocked),
             broker: None,
             process_job: None,
             children: Vec::new(),

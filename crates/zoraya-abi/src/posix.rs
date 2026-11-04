@@ -17,6 +17,9 @@
 //! entry count      u32
 //! realtime base   u64: nanoseconds added to the monotonic clock for
 //!                  `CLOCK_REALTIME`, one per boot (ADR-0191); 0 for none
+//! blocked          u32, the signal mask on entry, bit n for signal n
+//!                  (ADR-0190 item 18); SIGKILL and SIGSTOP never
+//! reserved         u32, zero
 //! exe              u32 length, bytes: the executable's path
 //! cwd              u32 length, bytes: relative to the cwd entry's prefix
 //! fds              FD_SIZE bytes each: fd u32, kind u8, flags u8, tty u8,
@@ -32,7 +35,7 @@ use crate::Handle;
 
 const MAGIC: &[u8; 4] = b"ZPB1";
 /// The size of this version's header.
-pub const HEADER_SIZE: usize = 64;
+pub const HEADER_SIZE: usize = 72;
 const FD_SIZE: usize = 8;
 const ENTRY_HEADER: usize = 8;
 
@@ -268,6 +271,8 @@ pub struct Facts {
     /// The boot's time base (ADR-0191): `CLOCK_REALTIME` is this plus the
     /// monotonic clock; 0 when the spawner had none.
     pub realtime_base: u64,
+    /// The signal mask on entry (ADR-0190 item 18), bit n for signal n.
+    pub blocked: u32,
 }
 
 /// One fd of the record.
@@ -370,12 +375,14 @@ impl<'a> Bootstrap<'a> {
             umask: word(6)?,
             ignored: word(7)?,
             realtime_base: u64::from(word(12)?) | (u64::from(word(13)?) << 32),
+            blocked: word(14)?,
         };
         let flags = word(8)?;
         let cwd_entry = word(9)?;
         let fd_count = word(10)? as usize;
         let entry_count = word(11)? as usize;
         if facts.umask > 0o777
+            || word(15)? != 0
             || flags & !FLAGS != 0
             || fd_count > OPEN_MAX as usize
             || cwd_entry as usize >= entry_count
@@ -547,6 +554,8 @@ pub fn encode(
         put(&word.to_le_bytes())?;
     }
     put(&facts.realtime_base.to_le_bytes())?;
+    put(&facts.blocked.to_le_bytes())?;
+    put(&0u32.to_le_bytes())?;
     for text in [exe, cwd] {
         put(&u32::try_from(text.len()).ok()?.to_le_bytes())?;
         put(text.as_bytes())?;

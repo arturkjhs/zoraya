@@ -945,6 +945,7 @@ mod bootstrap {
         umask: 0o022,
         ignored: 1 << 13,
         realtime_base: 1_800_000_000_123_456_789,
+        blocked: (1 << 2) | (1 << 17),
     };
 
     const FDS: [Fd; 4] = [
@@ -1225,6 +1226,23 @@ mod bootstrap {
         m[63] = 0xff;
         let base = Bootstrap::decode(&m[..n], 4).unwrap().facts.realtime_base;
         assert_eq!(base >> 56, 0xff);
+        // The mask on entry (ADR-0190 item 18) reads back; the word after it
+        // is reserved and must be zero.
+        assert_eq!(
+            Bootstrap::decode(&b[..n], 4).unwrap().facts.blocked,
+            FACTS.blocked
+        );
+        let mut m = b;
+        m[67] = 0x80;
+        assert_eq!(
+            Bootstrap::decode(&m[..n], 4).unwrap().facts.blocked >> 31,
+            1
+        );
+        for at in 68..72 {
+            let mut m = b;
+            m[at] = 1;
+            assert!(Bootstrap::decode(&m[..n], 4).is_none(), "reserved {at}");
+        }
         // The fd kinds and entry kinds past the last are refused.
         let fd_kind = HEADER_SIZE + 4 + "/bin/t_libposix".len() + 4 + "home/Київ".len() + 4;
         assert_eq!(b[fd_kind], FdKind::Null as u8);

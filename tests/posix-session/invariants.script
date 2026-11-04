@@ -30,6 +30,9 @@
 > t_posix raise\r
 < t_posix: raise passed
 < PSURF>
+> t_posix execmask\r
+< t_posix: execmask passed
+< PSURF>
 > t_posix eintr\r
 < t_posix: eintr passed
 < PSURF>

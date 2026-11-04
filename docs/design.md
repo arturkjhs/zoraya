@@ -651,7 +651,8 @@ Stage 6c (TASK-20), on the accepted [ADR-0100](adr/0100-libposix-construction.md
   times and whether this open made it), `stat` (the volume's id, the object's id, exact times) and a listing with each
   entry's id (`read_directory_ids`), ordinals 23 to 33.
   No stage 4 request changed.
-- **The bootstrap record (ADR-0107).** `zoraya_abi::posix`: `ZPB1` with the process's facts, `umask`, cwd as an entry
+- **The bootstrap record (ADR-0107).** `zoraya_abi::posix`: `ZPB1` with the process's facts, `umask`, the ignored
+  set and the signal mask on entry (ADR-0190's Decision), the time base (ADR-0191), cwd as an entry
   and a path, each fd's kind and flags, and the namespace entries longest first with their handles in the message;
   the fixed slots `BOOTSTRAP`, `BROKER`, `PROCESS_JOB`, `SELF` and `REPORT` at 1000 to 1004; a second message brings
   `SELF`; `ZPR1` is a refused-path report (ADR-0153 rule 11). Both decoders are total.
@@ -690,7 +691,7 @@ Stage 6d (TASK-21), on the accepted [ADR-0102](adr/0102-snapshot-process.md) to
 [ADR-0108](adr/0108-programs-from-the-filesystem.md) and [ADR-0142](adr/0142-surface-for-dash-job-control.md),
 with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage-6d.md),
 [ADR-0191](adr/0191-one-time-base.md) (the time base) and [ADR-0192](adr/0192-snapshot-in-the-posix-tree.md)
-(`snapshot_process`'s job tree), all proposed.
+(`snapshot_process` into any `posix` job its handle allows), all accepted.
 
 - **The session.** When the root volume has `/etc/zoraya/session`, `init` starts `ttyd` and the broker instead of
   `zosh` (ADR-0104 item 12): it makes the terminal's output stream and two channels, gives `ttyd` the read end and
@@ -883,7 +884,8 @@ or `exit` turns the machine off.
   `EFAULT`); listings have no `.` or `..` (`d_ino` is the object's id, as `st_ino`); `O_TRUNC` of an existing non-empty file is a
   second request; `st_blocks` comes from the size; times before 1970 cannot be set (ADR-0180).
 - **Processes and the terminal (stage 6d).** A blocked signal whose default terminates still ends the process
-  (ADR-0106 item 2). `pselect` reports a terminal ready at once (`poll_readable` is deferred, ADR-0105). Non-canonical
+  (ADR-0106 item 2); the mask itself is carried across `exec` and `posix_spawn` (ADR-0190's Decision). A stopped
+  child sends no `SIGCHLD` (ADR-0190 item 19). `pselect` reports a terminal ready at once (`poll_readable` is deferred, ADR-0105). Non-canonical
   mode exists but nothing sets it; no `TOSTOP`, no `SIGTTOU`. The shell's fds 0 to 2 are three descriptions (ADR-0190
   item 7). A FIFO fd passed by `spawn` is not counted as a side by `tmpd` (item 12), and a FIFO opened after its
   writers left gets a fresh pair (ADR-0107 item 15). `execl` takes six arguments after `arg0` (item 13). `fork`
@@ -891,8 +893,8 @@ or `exit` turns the machine off.
   memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). `zosh` does
   not run POSIX programs yet (TASK-18 Part 2); a POSIX session and `zosh` do not share the console. Dates are the
   root volume's (ADR-0191), not a clock's. In the GUI window under TCG, a burst of more than about 16 keys typed
-  through QMP loses its tail on the way to `ttyd` (the window's queue holds 64 messages, so the cause is not that
-  bound; unexplained, an open question of TASK-21); `make test-posix-gui` types lines of at most 16 keys.
+  through QMP loses its tail on the way to `ttyd`: a bug, in `docs/backlog.md`, to be fixed before stage 7b;
+  `make test-posix-gui` types lines of at most 16 keys.
 
 ## Roadmap
 

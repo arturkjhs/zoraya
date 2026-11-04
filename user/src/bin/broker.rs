@@ -307,6 +307,7 @@ fn spawn_first(
         umask: 0o022,
         ignored: 0,
         realtime_base: base,
+        blocked: 0,
     };
     let mut record = vec![0u8; MAX_WIRE_MESSAGE];
     let n = abi::encode(

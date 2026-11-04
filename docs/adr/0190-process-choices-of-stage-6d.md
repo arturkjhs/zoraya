@@ -1,6 +1,6 @@
 # ADR-0190: Process, terminal and temporary-service choices of stage 6d
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0014, ADR-0040, ADR-0042, ADR-0052, ADR-0055, ADR-0101, ADR-0102, ADR-0103, ADR-0104, ADR-0105, ADR-0106, ADR-0107, ADR-0108, ADR-0110, ADR-0142, ADR-0153
 - **Evidence:** alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -106,6 +106,20 @@ The items:
 
 ## Recommendation
 
+### Decision
+
+**Option A, item by item, except item 18** (the architect's decision, 2026-11-04). Item 18 is replaced: **the signal
+mask and every `SIG_IGN` disposition are carried across `exec`, as POSIX requires** (`nohup`; dash ignores `SIGINT`
+and `SIGQUIT` for the asynchronous lists of a non-interactive shell). The bootstrap record's header grows to 72
+bytes: `blocked` (u32, bit n for signal n, as `ignored`) and a reserved zero word follow `realtime_base`. `exec`
+writes the current mask and the ignored set; `posix_spawn` writes `POSIX_SPAWN_SETSIGMASK`'s mask, else the
+parent's, and the ignored set as item 11 says; the new image starts with that mask (`SIGKILL` and `SIGSTOP` never in
+it). Blocking stays ADR-0106 item 2's: a request taken while blocked waits in the library's pending set, and a
+blocked signal whose disposition is `SIG_DFL` and whose default terminates still ends the process at once (the kernel
+disposition does not change on block). INV-0190-5 states it.
+
+The original recommendation follows.
+
 **Recommendation (not a decision): Option A**, item by item:
 
 1. **fd 0's handle is at slot `FD0` (1005)**, a fixed slot above `OPEN_MAX` with the others
@@ -161,8 +175,8 @@ The items:
     failed to fd 2.
 17. **The record's fd flags gain `FD_READ` (2) and `FD_WRITE` (4)**: the spawner sets the description's access; a
     record with neither, as stage 6c's launcher writes, means read and write as before.
-18. **Not carried at stage 6:** every new image starts with an empty mask, and `POSIX_SPAWN_SETSIGMASK` is accepted
-    and not applied. No measured program execs with a signal blocked that it then relies on staying blocked (make's
+18. *(Replaced by the Decision above: the mask is carried.)* **Not carried at stage 6:** every new image starts with
+    an empty mask, and `POSIX_SPAWN_SETSIGMASK` is accepted and not applied. No measured program execs with a signal blocked that it then relies on staying blocked (make's
     blocked `SIGCHLD` is its own, in the parent). A record field is the fix when one does.
 19. **Not delivered at stage 6:** `SIGCHLD` comes for a child's end only; a stop is seen by `waitpid(WUNTRACED)`.
     dash waits for stops with `waitpid`, and no measured program has a `SIGCHLD` handler that counts stops.
@@ -171,8 +185,9 @@ The items:
 
 - Every item is exercised by `make test-posix`: the shell on the console, its pipelines, `make`'s jobserver FIFO,
   `exec` of scripts, signals at wait points.
-- Items 4, 7 and 12 are stated deviations from ADR-0107 item 13, ADR-0103 item 13 and ADR-0103 item 7; items 18
-  and 19 from POSIX and ADR-0106 item 3.
+- Items 4, 7 and 12 are stated deviations from ADR-0107 item 13, ADR-0103 item 13 and ADR-0103 item 7; item 19 from
+  POSIX and ADR-0106 item 3. Item 18, as decided, is not a deviation; the record of ADR-0107 gains its `blocked`
+  word.
 - Item 2's convention ends when a call reads a handle's rights (Option C).
 
 ## Invariants
@@ -185,6 +200,11 @@ The items:
   the type bits. *Check:* `zoraya-fs-service`'s host test `fifo_open_is_refused_where_it_has_no_meaning`.
 - **INV-0190-4.** A terminal read interrupted by a handler loses no input: the next read takes the held line. *Check:*
   `zoraya-tty`'s host test `a_second_read_while_one_is_held_is_busy` and `make test-posix`'s Ctrl-C steps.
+- **INV-0190-5.** A new image after `exec`, or a child of `posix_spawn`, starts with the mask the caller had (or
+  `POSIX_SPAWN_SETSIGMASK`'s) and with every signal the caller ignored still `SIG_IGN`: a child exec'd with `SIGINT`
+  ignored survives `job_signal` of `Interrupt`, and a signal blocked before `exec` stays blocked after it. *Check:*
+  `make test-posix`'s `invariants.script` (`t_posix execmask`, by `fork` and `exec` and by `posix_spawn`), and the
+  host tests `the_raw_header_is_checked` (`zoraya-abi`) and `the_mask_on_entry_is_kept` (`zoraya-posix`).
 
 ## Open questions
 
@@ -198,3 +218,7 @@ The items:
   a child as its reader (item 12).
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request. Changed from the
+recommendation: item 18 is replaced, the mask and every `SIG_IGN` disposition carried across `exec` as POSIX requires
+(the `### Decision` above), with INV-0190-5 and its tests.

@@ -1,6 +1,6 @@
-# ADR-0192: `snapshot_process` creates in the caller's POSIX tree
+# ADR-0192: `snapshot_process` creates where its job handle allows, in `posix` jobs
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0002, ADR-0003, ADR-0102, ADR-0104, ADR-0130
 - **Evidence:** CP-07
@@ -64,6 +64,18 @@ What is measured: nothing; the refusal was seen on the first run of `make test-p
 
 ## Recommendation
 
+### Decision
+
+**Option B, with two conditions** (the architect's decision, 2026-11-04). `snapshot_process` follows `spawn`'s rule:
+the target job handle's `CREATE_PROCESS` right is the authority, as ADR-0046 makes it for `spawn`. Two further
+conditions: the caller is in a job with the `posix` bit (already true: the call is personality-only, INV-0002-2), and
+the target job has the bit; a target without it is `AccessDenied`. There is no tree-membership check. This replaces
+ADR-0130 item 4's check; its status, `AccessDenied`, is unchanged for a missing right or a job without the bit. A
+process in one session cannot snapshot into another session's jobs because it holds no handle to them: a handle
+value it has not been given is `BadHandle`. `Job::posix_root` is gone from the kernel.
+
+The original recommendation follows.
+
 **Recommendation (not a decision): Option C.** "The caller's job tree" of ADR-0102 item 1 is the tree under the
 outermost job of the run of `posix` jobs that ends at the caller's job (`Job::posix_root`). This supersedes ADR-0130
 item 4's reading; its status, `AccessDenied`, is unchanged.
@@ -71,23 +83,30 @@ item 4's reading; its status, `AccessDenied`, is unchanged.
 ## Consequences
 
 - `fork` works with ADR-0104's jobs: the criterion of stage 6d runs on it.
-- A launcher that wants two POSIX trees kept apart starts each under a job without the bit, as `init` does.
-- `t_snapshot`'s "outside our tree" case still holds; a sibling case is covered by every `fork` of
-  `make test-posix`.
+- As decided, what keeps POSIX trees apart is the handles each holds, as for `spawn`: the broker hands a process only
+  the jobs of its own session (`spawn_prepare`'s `child_job`), and nothing hands a `posix` process a `CREATE_PROCESS`
+  handle to a native program's job, which the second condition refuses anyway.
+- `t_snapshot` checks the rule's four cases: a job beside the caller's is accepted, a handle without
+  `CREATE_PROCESS` and a job without the bit are `AccessDenied`, an unheld handle value is `BadHandle`.
 
 ## Invariants
 
-- **INV-0192-1.** `snapshot_process` succeeds into a `posix` job beside the caller's within the caller's `posix`
-  tree, and refuses a job outside that tree with `AccessDenied`. *Check:* `t_snapshot`'s
-  `the_job_must_be_ours_and_open` for the refusal, and every `fork` of `make test-posix` (dash's pipelines and
-  subshells) for the sibling.
+- **INV-0192-1.** `snapshot_process` succeeds into any `posix` job whose handle carries `CREATE_PROCESS`, inside the
+  caller's own job or not; it refuses a handle without `CREATE_PROCESS` and a job without the `posix` bit with
+  `AccessDenied`, and a handle value the caller does not hold with `BadHandle`. *Check:* `t_snapshot`'s
+  `the_job_must_be_ours_and_open` (a sibling `posix` job, a narrowed handle, a job without the bit, unheld values),
+  and every `fork` of `make test-posix` into the `child_job` of `spawn_prepare` (dash's pipelines and subshells).
 
 ## Open questions
 
-- Whether target 2 wants Option B's rule with a narrower handle policy instead.
+- None for stage 6. Target 2's sandboxes rest on which job handles a process is given.
 
 ## Revisit triggers
 
-- A design where two sessions share a `posix` ancestor.
+- A component that hands a `posix` process a `CREATE_PROCESS` handle to a job of another session.
 
 ## Architect's decision
+
+Accepted 2026-11-04. Decided by the architect; recorded by an agent at the architect's request. Changed from the
+recommendation: Option B with two conditions instead of Option C (the `### Decision` above), with the tests of
+INV-0192-1.

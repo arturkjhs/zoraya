@@ -17,6 +17,10 @@
  *   t_posix blocked    INV-0106-4: a blocked signal with a handler, with
  *                      SIG_IGN, with SIG_DFL
  *   t_posix raise      INV-0106-5: raise and kill of oneself with SIG_DFL
+ *   t_posix execmask   ADR-0190 item 18: SIG_IGN and the mask survive
+ *                      execve, and posix_spawn's SETSIGMASK applies: SIGINT
+ *                      ignored survives kill, SIGTERM blocked stays held
+ *                      until the new image unblocks it
  *   t_posix eintr      INV-0106-3, INV-0006-7: pselect, sigsuspend and
  *                      nanosleep give EINTR only after a handler; an
  *                      ignored or blocked signal does not wake pselect; a
@@ -173,6 +177,105 @@ static void cloexec(char *self)
 	CHECK(lseek(4, 0, SEEK_CUR) == 1);
 	unlink("/tmp/cloexec-a");
 	unlink("/tmp/cloexec-b");
+	passed();
+}
+
+/* sigismember is outside the tier list (ADR-0141): musl's set, bit n - 1. */
+static int in_set(const sigset_t *set, int n)
+{
+	return (int)((((const unsigned long *)set)[0] >> (n - 1)) & 1);
+}
+
+/* The image after exec (or posix_spawn): fd 3 reads "go", fd 4 writes. */
+static int execmask_child(void)
+{
+	sigset_t now;
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &now) == 0);
+	CHECK(in_set(&now, SIGTERM) == 1);
+	CHECK(in_set(&now, SIGINT) == 0);
+	struct sigaction a;
+	CHECK(sigaction(SIGINT, NULL, &a) == 0);
+	CHECK(a.sa_handler == SIG_IGN);
+	/* A handler of this image, held by the mask it came with (a blocked
+	 * SIG_DFL ends the process at once, ADR-0106 item 2). */
+	counted = 0;
+	handle(SIGTERM, count, 0);
+	char c;
+	CHECK(write(4, "r", 1) == 1);
+	/* The parent sends SIGINT and SIGTERM, then "g". */
+	CHECK(read(3, &c, 1) == 1);
+	pause_ms(50);
+	CHECK(counted == 0);
+	sigset_t term;
+	sigemptyset(&term);
+	sigaddset(&term, SIGTERM);
+	CHECK(sigprocmask(SIG_UNBLOCK, &term, NULL) == 0);
+	CHECK(counted == 1);
+	CHECK(write(4, "a", 1) == 1);
+	return 0;
+}
+
+static void execmask_run(pid_t pid, int go, int back)
+{
+	char c;
+	CHECK(read(back, &c, 1) == 1 && c == 'r');
+	CHECK(kill(pid, SIGINT) == 0);
+	CHECK(kill(pid, SIGTERM) == 0);
+	CHECK(write(go, "g", 1) == 1);
+	CHECK(read(back, &c, 1) == 1 && c == 'a');
+	int status = reap(pid);
+	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+static void execmask(char *self)
+{
+	char *argv[] = { self, "execmask-child", NULL };
+	sigset_t term;
+	sigemptyset(&term);
+	sigaddset(&term, SIGTERM);
+	int go[2], back[2];
+	/* execve after fork: the child's own SIG_IGN and mask. */
+	CHECK(pipe(go) == 0 && pipe(back) == 0);
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		signal(SIGINT, SIG_IGN);
+		sigprocmask(SIG_BLOCK, &term, NULL);
+		dup2(go[0], 3);
+		dup2(back[1], 4);
+		execve(self, argv, environ);
+		_exit(99);
+	}
+	close(go[0]);
+	close(back[1]);
+	execmask_run(pid, go[1], back[0]);
+	close(go[1]);
+	close(back[0]);
+	/* posix_spawn: the parent's SIG_IGN, SETSIGMASK's mask. */
+	CHECK(pipe(go) == 0 && pipe(back) == 0);
+	struct sigaction a, old;
+	memset(&a, 0, sizeof a);
+	a.sa_handler = SIG_IGN;
+	CHECK(sigaction(SIGINT, &a, &old) == 0);
+	posix_spawnattr_t attr;
+	posix_spawn_file_actions_t fa;
+	CHECK(posix_spawnattr_init(&attr) == 0);
+	CHECK(posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSIGMASK) == 0);
+	CHECK(posix_spawnattr_setsigmask(&attr, &term) == 0);
+	CHECK(posix_spawn_file_actions_init(&fa) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, go[0], 3) == 0);
+	CHECK(posix_spawn_file_actions_adddup2(&fa, back[1], 4) == 0);
+	CHECK(posix_spawn(&pid, self, &fa, &attr, argv, environ) == 0);
+	CHECK(sigaction(SIGINT, &old, NULL) == 0);
+	close(go[0]);
+	close(back[1]);
+	execmask_run(pid, go[1], back[0]);
+	close(go[1]);
+	close(back[0]);
+	/* The parent's own mask was never touched. */
+	sigset_t now;
+	CHECK(sigprocmask(SIG_BLOCK, NULL, &now) == 0);
+	CHECK(in_set(&now, SIGTERM) == 0);
 	passed();
 }
 
@@ -681,6 +784,10 @@ int main(int argc, char **argv)
 		statuses();
 	else if (!strcmp(argv[1], "blocked"))
 		blocked();
+	else if (!strcmp(argv[1], "execmask"))
+		execmask(SELF);
+	else if (!strcmp(argv[1], "execmask-child"))
+		return execmask_child();
 	else if (!strcmp(argv[1], "raise"))
 		raise_self();
 	else if (!strcmp(argv[1], "eintr"))

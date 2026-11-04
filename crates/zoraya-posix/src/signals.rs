@@ -39,6 +39,17 @@ pub const fn bit(n: u32) -> u64 {
 
 /// The signals no mask holds.
 const UNBLOCKABLE: u64 = bit(SIGKILL) | bit(SIGSTOP);
+
+/// A set in the bootstrap record's form (bit n for signal n, ADR-0107) from
+/// musl's (bit n - 1); the standard signals only.
+pub const fn to_record(set: u64) -> u32 {
+    ((set & STANDARD) << 1) as u32
+}
+
+/// A set in musl's form from the record's.
+pub const fn from_record(record: u32) -> u64 {
+    (record as u64 >> 1) & STANDARD
+}
 /// The standard signals, 1 to 31.
 const STANDARD: u64 = (1 << 31) - 1;
 
@@ -112,6 +123,12 @@ impl Signals {
     /// record marks as ignored on entry (ADR-0107 item 1), which stay
     /// ignored (bit n of `ignored` for signal n).
     pub fn new(ignored: u32) -> Signals {
+        Signals::starting(ignored, 0)
+    }
+
+    /// As [`Signals::new`], with the mask on entry (`blocked`, in the
+    /// record's form): POSIX keeps it across `execve` (ADR-0190 item 18).
+    pub fn starting(ignored: u32, blocked: u32) -> Signals {
         let mut actions = [Action::DEFAULT; 32];
         for (n, a) in actions.iter_mut().enumerate().skip(1) {
             if ignored & (1 << n) != 0 && n as u32 != SIGKILL && n as u32 != SIGSTOP {
@@ -120,7 +137,7 @@ impl Signals {
         }
         Signals {
             actions,
-            blocked: 0,
+            blocked: from_record(blocked) & !UNBLOCKABLE,
             pending: 0,
         }
     }
@@ -248,7 +265,7 @@ impl Signals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zoraya_abi::posix::signal::{SIGINT, SIGPIPE, SIGTERM};
+    use zoraya_abi::posix::signal::{SIGINT, SIGPIPE, SIGQUIT, SIGTERM};
 
     const HANDLER: Action = Action {
         handler: 0x4000,
@@ -268,6 +285,37 @@ mod tests {
         assert_eq!(s.action(SIGTERM), Action::DEFAULT);
         assert_eq!(s.kernel_disposition(SIGINT), Disposition::Ignore);
         assert_eq!(s.kernel_disposition(SIGTERM), Disposition::Terminate);
+    }
+
+    #[test]
+    fn the_mask_on_entry_is_kept() {
+        // ADR-0190 item 18: the record's mask (bit n) is musl's (bit n - 1).
+        assert_eq!(to_record(bit(SIGINT) | bit(31)), (1 << SIGINT) | (1 << 31));
+        assert_eq!(
+            from_record((1 << SIGINT) | 1),
+            bit(SIGINT),
+            "bit 0 is no signal"
+        );
+        for n in 1..=31 {
+            assert_eq!(from_record(to_record(bit(n))), bit(n), "{n}");
+        }
+        assert_eq!(to_record(bit(40)), 0, "not a standard signal");
+        let mut s = Signals::starting(
+            1 << SIGQUIT,
+            (1 << SIGINT) | (1 << SIGKILL) | (1 << SIGQUIT),
+        );
+        assert_eq!(
+            s.blocked,
+            bit(SIGINT) | bit(SIGQUIT),
+            "SIGKILL is never blocked"
+        );
+        assert_eq!(s.action(SIGQUIT), Action::IGNORE);
+        assert_eq!(Signals::new(0).blocked, 0);
+        // A handler installed after `exec` is held by the inherited mask.
+        s.set(SIGINT, Some(HANDLER)).unwrap();
+        assert_eq!(s.take(SIGINT), Taken::Pending);
+        s.mask(SIG_UNBLOCK, Some(bit(SIGINT))).unwrap();
+        assert_eq!(s.next_unblocked(), Some(SIGINT));
     }
 
     #[test]
