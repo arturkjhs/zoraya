@@ -521,7 +521,8 @@ TEST_STEPS += check-ci-jobs
 # build job's; check-ci-jobs fails if the workflow leaves out a step, a
 # configuration, a script under an accelerator, or a W8 build.
 ci-build: $(KERNEL) $(TEST_KERNEL) $(RUNNER) tools-storage
-	@$(MAKE) -s -f ports/Makefile ports workloads
+	@# Not -s: check-ports reads the compile commands in the ports' logs.
+	$(MAKE) -f ports/Makefile ports workloads
 	@$(MAKE) -s posix-image
 	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --no-run
 	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint
