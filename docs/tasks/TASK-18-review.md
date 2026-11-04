@@ -31,4 +31,18 @@ rule 2 removes a subscription when its handle closes, so the relays' and feeds' 
 
 ### Mutation testing
 
-Mutation testing of these lines follows in the next commit of this file.
+`make mutants-host` (cargo-mutants 27.1.0, under the watchdog) on `zoraya-shell` and `zoraya-commands`, limited with
+`--in-diff` to the lines step 8 and the fixes above changed, on the tree of the fixes (`1a41864`). The
+`mutant-triage` subagent sorted the survivors; the main model rechecked each verdict, and the re-run is the judge.
+
+| Crate | First run: caught, missed, timeouts | Holes / equivalent | After the new tests |
+|---|---|---|---|
+| `zoraya-shell` (`eval.rs`) | 35, 0, 0 (of 47, 12 unviable) | 0 / 0 | not needed |
+| `zoraya-commands` | 32, 10, 2 (of 44) | 8 / 2 | 40 caught, 2 missed, both equivalent; the 2 timeouts are mutants detected by tests that then never end |
+
+The two equivalent mutants replace `Files::read_input` with `Ok(0)` and `Files::print` with `false`, which are the
+default bodies themselves. The holes: the defaults were never run (only `Mem`, which overrides both, implemented
+`Files` in the tests, while `zosh`'s own `Files` uses them), a four-byte UTF-8 lead was never cut, `flush`'s threshold
+and its `&&` were not pinned, and `head`'s choice between its input and its files was not either.
+`a_caller_with_the_defaults_has_no_input_and_gets_all_output`, `input_gives_each_read_and_then_its_end`,
+`output_is_offered_only_past_print_at` and `head_reads_its_input_only_when_it_needs_it` kill them.

@@ -456,3 +456,112 @@ fn every_error_line_is_well_formed() {
         assert!(!parts[2].contains("NotFound") && !parts[2].ends_with('.'));
     }
 }
+
+/// `Files` over a `Mem`, forwarding what the trait requires, and then
+/// whatever else is given.
+macro_rules! over_mem {
+    ($name:ident { $($more:item)* }) => {
+        struct $name<'a>(&'a mut Mem);
+
+        impl Files for $name<'_> {
+            fn list(&mut self, dir: &str) -> Result<Vec<(String, Kind)>, Status> {
+                self.0.list(dir)
+            }
+            fn read(&mut self, path: &str) -> Result<Vec<u8>, Status> {
+                self.0.read(path)
+            }
+            fn create(&mut self, path: &str, bytes: &[u8], replace: bool) -> Result<(), Status> {
+                self.0.create(path, bytes, replace)
+            }
+            fn make_directory(&mut self, path: &str) -> Result<(), Status> {
+                self.0.make_directory(path)
+            }
+            fn remove(&mut self, path: &str) -> Result<(), Status> {
+                self.0.remove(path)
+            }
+            fn rename(&mut self, from: &str, to: &str) -> Result<(), Status> {
+                self.0.rename(from, to)
+            }
+            fn stat(&mut self, path: &str) -> Result<Stat, Status> {
+                self.0.stat(path)
+            }
+            fn sync(&mut self) -> Result<(), Status> {
+                self.0.sync()
+            }
+            $($more)*
+        }
+    };
+}
+
+// Both defaults, as the shell's own `Files` has them.
+over_mem!(Plain {});
+// Input, and the default `print`.
+over_mem!(Fed {
+    fn read_input(&mut self, buffer: &mut [u8]) -> Result<usize, Status> {
+        self.0.read_input(buffer)
+    }
+});
+
+/// The defaults: no input at all, and every byte of output kept in
+/// `Output`, however long (mutants of `read_input` and `print`).
+#[test]
+fn a_caller_with_the_defaults_has_no_input_and_gets_all_output() {
+    let mut m = Mem::new(&[], &[]);
+    assert_eq!(Input::new().next(&mut Plain(&mut m)), Ok(None));
+    let big = "x".repeat(3 * PRINT_AT) + "\n";
+    let mut m = with_input(big.as_bytes(), 1000);
+    let d = description("cat");
+    let p = zoraya_command::Parsed::default();
+    let (code, o) = run("cat", &d, &p, &mut Fed(&mut m));
+    assert_eq!((code, o.out), (0, big));
+}
+
+/// `Input` on its own: what one read gives, then the end, once.
+#[test]
+fn input_gives_each_read_and_then_its_end() {
+    let mut m = with_input(b"ab", 4096);
+    let mut input = Input::new();
+    assert_eq!(input.next(&mut m), Ok(Some("ab".into())));
+    assert_eq!(input.next(&mut m), Ok(None));
+    assert_eq!(input.next(&mut m), Ok(None));
+    let mut m = with_input(b"", 4096);
+    assert_eq!(Input::new().next(&mut m), Ok(None));
+    // A four-byte character cut anywhere stays whole.
+    for chunk in [1, 2, 3] {
+        let mut m = with_input("😀\n".as_bytes(), chunk);
+        assert_eq!(go(&mut m, &["cat"]).1, "😀\n", "{chunk}");
+    }
+}
+
+/// Output is offered to `print` only once it reaches `PRINT_AT`, and a
+/// caller that does not take it keeps it all; a character complete at the
+/// end of a read goes out with that read.
+#[test]
+fn output_is_offered_only_past_print_at() {
+    let mut m = with_input(b"small\n", 4096);
+    m.printing = true;
+    assert_eq!(go(&mut m, &["cat"]).1, "small\n");
+    assert_eq!(m.printed, "");
+    let big = "x".repeat(3 * PRINT_AT) + "\n";
+    let mut m = with_input(big.as_bytes(), 1000);
+    assert_eq!(go(&mut m, &["cat"]).1, big, "not printing: all kept");
+    let mut bytes = "x".repeat(PRINT_AT - 2).into_bytes();
+    bytes.extend_from_slice("é".as_bytes());
+    bytes.extend_from_slice(b"yyyyyyyyyy");
+    let mut m = with_input(&bytes, PRINT_AT);
+    m.printing = true;
+    go(&mut m, &["cat"]);
+    assert_eq!(m.printed.len(), PRINT_AT, "the first read's whole text");
+}
+
+/// `head` reads its input only when no file is named, and `--lines 0`
+/// reads none.
+#[test]
+fn head_reads_its_input_only_when_it_needs_it() {
+    let mut m = with_input(b"input\n", 4096);
+    assert_eq!(go(&mut m, &["head", "--lines", "1", "a.txt"]).1, "one\n");
+    assert_eq!(m.taken, 0);
+    let mut m = with_input(b"one\n", 4096);
+    assert_eq!(go(&mut m, &["head", "--lines", "0"]).1, "");
+    assert_eq!(m.taken, 0);
+}
