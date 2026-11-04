@@ -47,10 +47,23 @@ re-run is the judge.
 | Crate | First run: caught, missed, unviable | Holes / equivalent | After the new tests |
 |---|---|---|---|
 | `zoraya-tty` | 179, 82, 22 (of 283) | 79 / 3 | 257 caught, 3 missed: the 3 equivalent (`discipline.rs:192:49` ×2, the erase branch only differs in echo it does not show with ECHOE off; `263:17 <` → `<=`, the one byte it changes takes the same branch) |
-| `zoraya-broker` | 209, 52, 118 (of 379, 35 min) | 48 / 4 | not re-run (35 min; the eleven tests the triage asked for pass: `make test-unit`) — equivalent: `session.rs:30` ×2 (`MAX_SIZE` is read nowhere), `lib.rs:668` (`client_child` is false wherever the call is reached) |
+| `zoraya-broker` | 209, 52, 118 (of 379, 35 min) | 48 / 4 | re-run after the eleven tests (architect, 2026-11-04): 255 caught, 6 missed, 118 unviable (35 min); 3 holes closed by `a_reap_gives_the_ending_request_and_a_retired_end_is_counted` (a re-run of the six: 5 caught), 3 equivalent, rechecked below |
 | `zoraya-posix` `signals.rs`, `wait.rs` | 115, 15, 3 (of 133) | 12 / 3 | 127 caught, 3 missed: the 3 equivalent (`signals.rs:41` and `wait.rs:20`, `\|` → `^` on disjoint bits; `wait.rs:30`, the wildcard gives the same 11) |
 
-The broker's holes were the counts, the refusals' handle closing, `sid_of`, `in_session`, the stop records from the
+The broker's second run. Survivors, each rechecked by the main model, not the triage subagent:
+
+- `lib.rs:381:37` `+=` → `*=` (the refusal count of a retired end): a hole, the count stayed 0; killed by the new
+  test, which counts three refusals after `exec_commit`.
+- `lib.rs:480:73` `+` → `-` and `+` → `*` (`Reaped.kind` = `RequestKind::raw() + 1`): holes, no test ended a process
+  by a request; killed by the new test (Interrupt 1, Terminate 2, Quit 4).
+- `lib.rs:668:9` `client_child` → `false`: equivalent. Its one caller (line 661) asks it only when the record's
+  parent is `BROKER_PID`; a client's child is recorded with parent 0 (line 842), and `orphan`, the only code that sets
+  the parent to `BROKER_PID`, clears `client_child` in the same step (line 676), so the call is false wherever reached.
+- `session.rs:30:32` `*` → `+`: equivalent. `MAX_SIZE` is read nowhere in the workspace (`grep`: its definition
+  only), so its value changes nothing.
+- `session.rs:30:32` `*` → `/`: equivalent, for the same reason.
+
+The broker's holes of the first run were the counts, the refusals' handle closing, `sid_of`, `in_session`, the stop records from the
 spawner and across `exec`, `commit` and `abort`'s refusals, a reap that waits for the whole job, a group and the
 terminal's foreground going with their last member, `kill`'s bounds, `suspend`'s members, and a full queue's
 `EAGAIN`. The tests are `statistics_count_by_ordinal_and_refusals`, `the_session_id_and_the_parent_are_reported`,

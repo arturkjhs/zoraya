@@ -77,6 +77,20 @@ impl Fake {
         }
     }
 
+    /// Ends a process as a request of `kind` with a `Terminate`
+    /// disposition does (ADR-0046's `ExitRecord`).
+    fn end_by(&mut self, process_handle: u32, kind: RequestKind, detail: u32) {
+        let p = self.object(process_handle);
+        if let Some(Obj::Process { exit, .. }) = self.objects.get_mut(&p) {
+            *exit = Some(ExitRecord {
+                code: 0,
+                reason: ExitReason::Terminated,
+                detail,
+                request_kind: Some(kind),
+            });
+        }
+    }
+
     fn live_in(&self, job: u32) -> bool {
         self.objects.iter().any(|(_, o)| match o {
             Obj::Process { job: j, exit: None } => self.within(*j, job),
@@ -1353,4 +1367,46 @@ fn a_first_process_that_did_not_start_leaves_no_pid() {
     b.abort_first();
     assert!(b.pids().is_empty());
     assert!(b.finished());
+}
+
+/// Mutation holes of the second broker run (TASK-21 review): the kind a
+/// reap reports for a request's end, and a retired end's refusals counted.
+#[test]
+fn a_reap_gives_the_ending_request_and_a_retired_end_is_counted() {
+    let mut s = session(true);
+    let shell = s.shell;
+    for (kind, raw) in [
+        (RequestKind::Interrupt, 1),
+        (RequestKind::Terminate, 2),
+        (RequestKind::Quit, 4),
+    ] {
+        let c = s.spawn(&shell, group::INHERIT, 0).unwrap();
+        s.b.kernel.end_by(c.process, kind, 7);
+        let _ = s.b.terminated(c.pid);
+        let (r, _) = s.ask(shell.conn, &message(&proto::Reap { pid: c.pid }), vec![]);
+        let (_, e) = decode::<Reaped>(&r, 0).unwrap();
+        assert_eq!(
+            (e.status.0, e.reason, e.detail, e.kind),
+            (status::OK, ExitReason::Terminated as u32, 7, raw),
+            "{kind:?}"
+        );
+    }
+    // After exec_commit every request on the old end is refused and counted.
+    let c = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    let image = s.b.kernel.process_in(c.child_job);
+    let image_dup = s.b.kernel.duplicate(image, Rights::WAIT).unwrap();
+    let (server, client) = s.b.kernel.channel_create().unwrap();
+    let (r, _) = s.ask(
+        c.conn,
+        &message(&proto::ExecCommit {}),
+        vec![image_dup, server],
+    );
+    assert_eq!(status_of(&r), status::OK);
+    let before = s.b.counts.refused;
+    for n in 1..=3 {
+        let st = s.status(c.conn, &message(&proto::Tcgetpgrp {}));
+        assert_eq!(st, status::NOT_PERMITTED);
+        assert_eq!(s.b.counts.refused, before + n);
+    }
+    s.b.kernel.close(client);
 }
