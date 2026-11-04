@@ -158,6 +158,25 @@ fn the_union_fails_only_on_a_measured_function_never_called() {
     let r = check_calls(&list, &logged, &measured, &set(&["read"]), &set(&["open"]));
     assert_eq!(r.uncalled_exempt, ["read"]);
     assert_eq!(r.uncalled_measured, ["kill"]);
+    // A stale exemption is reported; a measured name not logged fails.
+    let r = check_calls(
+        &list,
+        &logged,
+        &measured,
+        &set(&["open"]),
+        &set(&["open", "read", "kill"]),
+    );
+    assert_eq!(r.stale_exemptions, ["open"]);
+    assert!(r.passed());
+    let r = check_calls(
+        &list,
+        &["fork", "kill", "open"].map(String::from),
+        &measured,
+        &none,
+        &set(&["open", "kill"]),
+    );
+    assert_eq!(r.measured_not_logged, ["read"]);
+    assert!(!r.passed());
 }
 
 #[test]

@@ -70,9 +70,30 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
     };
     let mut ok = true;
     for w in required {
-        if !logs.iter().any(|l| l.contains(&format!("posix-{w}-"))) {
+        let named = |l: &&String| {
+            ["auto", "hvf", "tcg"]
+                .iter()
+                .any(|a| l.ends_with(&format!("posix-{w}-{a}.log")))
+        };
+        if !logs.iter().any(|l| named(&l)) {
             eprintln!(
                 "posix-stats: no log of {w}: run make test-posix and make test-posix-long of the same build first"
+            );
+            ok = false;
+        }
+    }
+    // The bitmaps' order is the list's of the build that wrote them: a log
+    // older than the list may come from another build (review R2).
+    let listed = std::fs::metadata(names)
+        .and_then(|m| m.modified())
+        .map_err(|e| format!("{names}: {e}"))?;
+    for l in logs {
+        let written = std::fs::metadata(l)
+            .and_then(|m| m.modified())
+            .map_err(|e| format!("{l}: {e}"))?;
+        if written < listed {
+            eprintln!(
+                "posix-stats: {l} is older than {names}: it may come from another libc.a; run make test-posix and make test-posix-long again"
             );
             ok = false;
         }
@@ -112,6 +133,13 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
     show("static-only, never called", &r.uncalled_static_only);
     show("called, outside the tier list", &r.called_outside_list);
     show("tier-list data names, not logged", &r.not_logged);
+    show("measured, not logged (fails)", &r.measured_not_logged);
+    if !r.stale_exemptions.is_empty() {
+        eprintln!(
+            "posix-stats: warning: exempted but called, so the exemption is stale: {}",
+            r.stale_exemptions.join(" ")
+        );
+    }
     if !r.passed() {
         eprintln!("posix-stats: INV-0005-3: measured tier-list functions never called");
         ok = false;

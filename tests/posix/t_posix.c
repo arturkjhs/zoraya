@@ -749,6 +749,7 @@ static void products(void)
 	struct rusage ru;
 	memset(&ru, 0xff, sizeof ru);
 	CHECK(getrusage(RUSAGE_SELF, &ru) == 0 && ru.ru_maxrss == 0 && ru.ru_utime.tv_sec == 0);
+	CHECK(getrusage(1, &ru) == 0); /* RUSAGE_THREAD */
 	CHECK(getrusage(5, &ru) == -1 && errno == EINVAL);
 	char *m = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	CHECK(m != MAP_FAILED && m[0] == 0 && m[8191] == 0);

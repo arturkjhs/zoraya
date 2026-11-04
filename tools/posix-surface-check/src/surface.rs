@@ -422,6 +422,16 @@ pub fn call_log(list: &BTreeSet<String>, objects: &[Object<'_>]) -> Result<CallL
             }
         }
     }
+    // The library reads the bitmap (a reference); a definition would clash.
+    for taken in [CALLS_SYMBOL, CALLS_COUNT_SYMBOL] {
+        let defined = objects
+            .iter()
+            .flat_map(|o| o.symbols.iter())
+            .any(|s| s.name == taken && s.is_defined_global());
+        if defined {
+            return Err(format!("cannot log: {taken} is already defined"));
+        }
+    }
     if functions.len() > MAX_CALLS {
         return Err(format!(
             "{} functions to log, more than {MAX_CALLS}",

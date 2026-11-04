@@ -799,7 +799,7 @@ fn print_stats() {
 unsafe extern "C" {
     /// The call log's bitmap, one byte a function (`calls.S`, made by
     /// `posix-surface-check calllog` with `libc.a`).
-    static mut __zoraya_calls: u8;
+    static mut __zoraya_calls: [u8; 0];
     static __zoraya_calls_count: u32;
 }
 
@@ -812,7 +812,7 @@ fn called() -> &'static mut [u8] {
     // child's restart take the slice, each for one call.
     unsafe {
         core::slice::from_raw_parts_mut(
-            &raw mut __zoraya_calls,
+            (&raw mut __zoraya_calls).cast::<u8>(),
             ptr::read(&raw const __zoraya_calls_count) as usize,
         )
     }
@@ -1850,12 +1850,15 @@ extern "C" fn times(out: *mut [i64; 4]) -> i64 {
 
 const RUSAGE_SELF: i32 = 0;
 const RUSAGE_CHILDREN: i32 = -1;
+/// One thread: the thread's use is the process's (review R15).
+const RUSAGE_THREAD: i32 = 1;
 
 /// Proposed ADR-0210: no accounting of resources (as `wait3`): a zero
-/// `struct rusage` (144 bytes) for the process or its children.
+/// `struct rusage` (144 bytes) for the process, its one thread or its
+/// children.
 #[unsafe(no_mangle)]
 extern "C" fn getrusage(who: i32, usage: *mut u8) -> i32 {
-    if who != RUSAGE_SELF && who != RUSAGE_CHILDREN {
+    if who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD {
         return int(Err(EINVAL));
     }
     if usage.is_null() {

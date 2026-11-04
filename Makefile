@@ -337,7 +337,7 @@ posix-calls:
 	target/debug/posix-stats --calls $(BUILD)/sysroot/usr/lib/zoraya-calls.txt \
 	  docs/adr/posix-surface-T1.txt tools/posix-surface/results/dynamic-programs.tsv \
 	  docs/adr/0211-acceptance-choices-of-stage-6e.md \
-	  $(foreach r,$(POSIX_T1_RUNS),$(wildcard $(POSIX_LOGS)/posix-$(r)-*.log)) \
+	  $(foreach r,$(POSIX_T1_RUNS),$(wildcard $(foreach a,auto hvf tcg,$(POSIX_LOGS)/posix-$(r)-$(a).log))) \
 	  --require $(POSIX_T1_RUNS)
 
 # make measure-w4 (ADR-0110 items 10 and 12, not in make test): T2's

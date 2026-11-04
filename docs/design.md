@@ -836,8 +836,18 @@ every workload. The rest of ADR-0110 item 11, over every run above: path resolut
 (W1: 1,892 resolutions, 0.48 µs) and 33 to 123 µs under TCG; `share` 0 to 1,115 and `seek` 12 to 85,298 requests a
 run; the request poll is 0.1 to 0.5 % of system calls in the builds and 5 to 21 % in the interactive sessions; W8 at
 `-j4` wakes a process 5 times a second under HVF; the largest `spawn` buffer is 1,120 bytes of ADR-0042's 64 KiB; at
-most 13 pids live at once of ADR-0031's 255, and 10 fds open in one process; `/tmp` at most 48 KiB. W4's figures are
-in `build/w4-report.md` and the stage 6e report.
+most 13 pids live at once of ADR-0031's 255, and 10 fds open in one process; `/tmp` at most 48 KiB.
+
+**W4** (`make measure-w4`, `build/w4-report.md`): GNU hello's `configure` stops in its first lines under both makes,
+`sed: not found` and `expr: not found` (T2's applets are not built), after 120 forks of dash: `snapshot_process` 0.55
+ms mean under HVF and 5.7 ms under TCG, the whole fork in the parent 0.68 and 10.7 ms. T2's applets do not link
+against `libc.a`: toybox's (T2's 31 of `applets-by-tier.tsv`) lack 20 names (`regcomp`, `regexec`, `regerror`,
+`getline`, `mkdtemp`, `getgrgid`, `getgrnam`, `getgroups`, `getgrouplist`, `link`, `lchown`, `mknod`, `dirname`,
+`dprintf`, `getentropy`, `gethostbyname`, `hstrerror`, `__h_errno_location`, `sethostname`, `towlower`), busybox's
+`awk expr gzip` 9 (`regcomp`, `regexec`, `regerror`, `regfree`, `rand`, `srand`, `strncasecmp`, `fileno_unlocked`,
+`fputs_unlocked`). On Linux W4 forked 1,167 times without `exec` (764 in `configure`, 403 in `make`) and ran 2,881
+programs: at these means its forks would cost about 0.8 s under HVF and 13 s under TCG, and its loads, at W8's mean
+of 95 ms and 580 ms, about 270 s and 1,700 s. The fork is not what T2 waits for; loading programs is.
 
 ## Console input and the first process
 

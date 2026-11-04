@@ -184,7 +184,7 @@ ifeq ($(POSIX_STATS),1)
 	  $$(for o in $$(cat $(MUSL_LIST)); do echo $(LIBC_DIR)/out/$$(basename $$o); done) \
 	  $$(for m in $$($(ZAR) t $(POSIX_LIB)); do echo $(LIBC_DIR)/out/$$m; done) > $(LIBC_DIR)/calls.txt
 	cd $(LIBC_DIR)/calls && for f in *.S; do echo $$f; done | sed 's/\.S$$//' | \
-	  xargs -P 8 -I{} sh -c '$(ZCC) -c -o zw-{}.o {}.S' && mv zw-calls.o zoraya-calls.o
+	  xargs -P 8 -I{} sh -c '$(ZCC) -c -o zw-{}.o {}.S' && mv zw-zoraya-calls.o zoraya-calls.o
 	@echo "libc.a: the call log wraps $$(wc -l < $(LIBC_DIR)/calls.txt | tr -d ' ') functions: $(LIBC_DIR)/calls.txt"
 	rm -f $@ && cd $(LIBC_DIR)/logged && $(ZAR) rcs $@ \
 	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(POSIX_LIB)) \

@@ -2,6 +2,7 @@
 # PeerClosed, make with two rules through /bin/sh (stage 6d's criterion),
 # Ctrl-Z, and the hostile cases. W9 and W10, TASK-02b's event sequences,
 # are w9-int.script, w9-term.script and w10.script (ADR-0110 items 2 and 4).
+! -FAIL
 ! panicked
 ! ZORAYA-PANIC
 ! ZORAYA-FAULT

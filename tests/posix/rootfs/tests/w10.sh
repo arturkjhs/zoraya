@@ -9,9 +9,22 @@ for v in parallel serial; do
 	echo "W10-STEP $v"
 	sh w10.sh $v > out.txt 2>&1 || { echo "W10-FAIL $v $?"; rc=1; }
 done
+bg=0
 while read -r line; do
-	case $line in "pipeline status:"*) echo "W10-PIPELINE $line" ;; esac
+	case $line in
+	"pipeline status:"*) echo "W10-PIPELINE $line" ;;
+	"background: 0 0") bg=1 ;;
+	esac
 done < /work/w10-parallel/out.txt
+# Beyond TASK-02b's diff (review R13): both background jobs exited 0, and
+# each run gave its lines: subshell, background, the count, three w10s,
+# the status, the tables' count.
+[ "$bg" = 1 ] || { echo "W10-FAIL background statuses"; rc=1; }
+for v in parallel serial; do
+	n=0
+	while read -r line; do n=$((n + 1)); done < "/work/w10-$v/out.txt"
+	[ "$n" = 8 ] || { echo "W10-FAIL $v: $n lines"; rc=1; }
+done
 if diff /work/w10-parallel/out.txt /work/w10-serial/out.txt; then
 	echo "W10-OK"
 else

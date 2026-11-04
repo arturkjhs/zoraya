@@ -1,5 +1,7 @@
 # TASK-21's measurements (make test-posix POSIX_SCRIPTS=...measure.script):
 # the broker's round trips, an exec, a fork of dash. Under HVF and TCG.
+! -FAIL
+! ZORAYA-FAULT
 ! panicked
 ! ZORAYA-PANIC
 ! t_posix: FAIL

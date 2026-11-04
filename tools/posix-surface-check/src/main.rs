@@ -16,7 +16,7 @@
 //! - `calllog LIST OUTDIR ASMDIR OBJECT...` is the call log of ADR-0110 item 7
 //!   (INV-0005-3): every exported function's definition and the objects' own
 //!   references are renamed to `__zoraya_real_NAME` (the objects written into
-//!   OUTDIR), and ASMDIR gets one wrapper `NAME.S` a function and `calls.S`,
+//!   OUTDIR), and ASMDIR gets one wrapper `NAME.S` a function and `zoraya-calls.S`,
 //!   the bitmap; it prints the logged names, one a line, in the bitmap's
 //!   order.
 
@@ -196,7 +196,11 @@ fn calllog(args: &[String]) -> Result<(), String> {
         write(format!("{n}.S"), surface::call_log_wrapper(n, i))?;
         println!("{n}");
     }
-    write("calls.S".into(), surface::call_log_bitmap(logged.len()))
+    // A hyphen is in no function's name, so no wrapper's file is this one.
+    write(
+        "zoraya-calls.S".into(),
+        surface::call_log_bitmap(logged.len()),
+    )
 }
 
 /// The tool's memory ceiling (capped.rs).

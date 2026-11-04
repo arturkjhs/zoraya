@@ -317,11 +317,16 @@ pub struct CallReport {
     pub called_outside_list: Vec<String>,
     /// Tier-list names that are not functions of the call log (data).
     pub not_logged: Vec<String>,
+    /// Of those, the ones TASK-02 saw called: a measured name the call log
+    /// cannot see fails the check (review R7).
+    pub measured_not_logged: Vec<String>,
+    /// Exemptions for functions that were called after all: stale.
+    pub stale_exemptions: Vec<String>,
 }
 
 impl CallReport {
     pub fn passed(&self) -> bool {
-        self.uncalled_measured.is_empty()
+        self.uncalled_measured.is_empty() && self.measured_not_logged.is_empty()
     }
 }
 
@@ -363,6 +368,9 @@ pub fn check_calls(
     for n in list {
         if !logged_set.contains(n) {
             r.not_logged.push(n.clone());
+            if measured.contains(n) {
+                r.measured_not_logged.push(n.clone());
+            }
         } else if !called.contains(n) {
             if measured.contains(n) && exempt.contains(n) {
                 r.uncalled_exempt.push(n.clone());
@@ -378,6 +386,11 @@ pub fn check_calls(
     r.called_outside_list = called
         .iter()
         .filter(|n| !list.contains(*n))
+        .cloned()
+        .collect();
+    r.stale_exemptions = exempt
+        .iter()
+        .filter(|n| called.contains(*n))
         .cloned()
         .collect();
     r

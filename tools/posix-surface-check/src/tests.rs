@@ -361,6 +361,25 @@ fn call_log_refuses_a_taken_name() {
         &[],
     );
     assert!(surface::call_log(&list(&["read"]), &[elf::read(&a).unwrap()]).is_err());
+    let b = object(
+        &[
+            ("read", STB_GLOBAL, TEXT),
+            ("__zoraya_calls", STB_GLOBAL, TEXT),
+        ],
+        &[],
+    );
+    assert!(surface::call_log(&list(&["read"]), &[elf::read(&b).unwrap()]).is_err());
+    let c = object(
+        &[
+            ("read", STB_GLOBAL, TEXT),
+            ("__zoraya_calls", STB_GLOBAL, UNDEF),
+        ],
+        &[],
+    );
+    assert!(
+        surface::call_log(&list(&["read"]), &[elf::read(&c).unwrap()]).is_ok(),
+        "a reference to the bitmap is the library reading it"
+    );
 }
 
 /// The wrapper sets its own byte and branches with no frame; the bitmap
