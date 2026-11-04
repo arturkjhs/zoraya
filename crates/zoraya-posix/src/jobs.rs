@@ -384,7 +384,19 @@ impl<S: Sys> Posix<S> {
         if into.length == 0 {
             return Ok(0);
         }
+        // What an earlier answer gave beyond its reader's buffer (review R3).
+        if let Some(i) = self.tty_rest.iter().position(|(c, _)| *c == conn) {
+            let rest = &mut self.tty_rest[i].1;
+            let n = rest.len().min(into.length);
+            let bytes: Vec<u8> = rest.drain(..n).collect();
+            if rest.is_empty() {
+                self.tty_rest.swap_remove(i);
+            }
+            self.sys.copy_out(into.part(0, n), &bytes);
+            return Ok(n);
+        }
         loop {
+            let mut sent_now = false;
             let t = match self.tty_reads.iter().find(|(c, _)| *c == conn) {
                 Some(&(_, t)) => t,
                 None => {
@@ -398,34 +410,40 @@ impl<S: Sys> Posix<S> {
                         .channel_write(conn, &self.out[..n], &[])
                         .map_err(|_| EIO)?;
                     self.tty_reads.push((conn, t));
+                    sent_now = true;
                     t
                 }
             };
-            // The answer, when it comes.
-            let size = loop {
-                for h in self.handles.drain(..) {
-                    self.sys.close(h);
-                }
-                match self
-                    .sys
-                    .channel_read(conn, &mut self.input, &mut self.handles)
-                {
-                    Ok(n) => break n,
-                    Err(Status::WouldBlock) if nonblock => return Err(EAGAIN),
-                    Err(Status::WouldBlock) => {
-                        let s = self.wait_point(conn, signals::READABLE | signals::PEER_CLOSED)?;
-                        if s & signals::READABLE == 0 && s & signals::PEER_CLOSED != 0 {
+            // The answer: one another request's wait kept, or the next on
+            // the channel.
+            let reply: Vec<u8> = match self.tty_stash.iter().position(|(c, _)| *c == conn) {
+                Some(i) => self.tty_stash.swap_remove(i).1,
+                None => loop {
+                    for h in self.handles.drain(..) {
+                        self.sys.close(h);
+                    }
+                    match self
+                        .sys
+                        .channel_read(conn, &mut self.input, &mut self.handles)
+                    {
+                        Ok(n) => break self.input[..n].to_vec(),
+                        Err(Status::WouldBlock) if nonblock => return Err(EAGAIN),
+                        Err(Status::WouldBlock) => {
+                            let s =
+                                self.wait_point(conn, signals::READABLE | signals::PEER_CLOSED)?;
+                            if s & signals::READABLE == 0 && s & signals::PEER_CLOSED != 0 {
+                                self.tty_reads.retain(|(c, _)| *c != conn);
+                                return Ok(0);
+                            }
+                        }
+                        Err(_) => {
                             self.tty_reads.retain(|(c, _)| *c != conn);
                             return Ok(0);
                         }
                     }
-                    Err(_) => {
-                        self.tty_reads.retain(|(c, _)| *c != conn);
-                        return Ok(0);
-                    }
-                }
+                },
             };
-            let Ok((header, _)) = Header::decode(&self.input[..size]) else {
+            let Ok((header, _)) = Header::decode(&reply) else {
                 continue;
             };
             if header.transaction != t {
@@ -434,9 +452,15 @@ impl<S: Sys> Posix<S> {
             }
             self.tty_reads.retain(|(c, _)| *c != conn);
             if header.ordinal == ERROR_ORDINAL {
-                let s = decode::<ErrorReply>(&self.input[..size], 0)
-                    .map_or(tp::status::INVALID, |(_, e)| e.status);
+                let s =
+                    decode::<ErrorReply>(&reply, 0).map_or(tp::status::INVALID, |(_, e)| e.status);
                 if s == tp::status::NOT_FOREGROUND {
+                    if !sent_now {
+                        // The answer to a read held from before: the group
+                        // may be in the foreground again; ask afresh
+                        // (review R10).
+                        continue;
+                    }
                     // SIGTTIN (ADR-0105 item 8): EIO if ignored or blocked.
                     let a = self.signals.action(SIGTTIN);
                     if a.handler == crate::signals::SIG_IGN
@@ -454,15 +478,16 @@ impl<S: Sys> Posix<S> {
                 }
                 return Err(EIO);
             }
-            let Ok((_, r)) = decode::<tp::ReadReply<'_>>(&self.input[..size], 0) else {
+            let Ok((_, r)) = decode::<tp::ReadReply<'_>>(&reply, 0) else {
                 return Err(EIO);
             };
-            let got = r.bytes.0.len().min(into.length);
-            let bytes = &self.input[..size];
-            // Copied out of the reply in `self.input`.
-            let start = size - r.bytes.0.len();
-            let data: Vec<u8> = bytes[start..start + got].to_vec();
-            self.sys.copy_out(into.part(0, got), &data);
+            let bytes = r.bytes.0;
+            let got = bytes.len().min(into.length);
+            if got < bytes.len() {
+                self.tty_rest.push((conn, bytes[got..].to_vec()));
+            }
+            let mine = bytes[..got].to_vec();
+            self.sys.copy_out(into.part(0, got), &mine);
             return Ok(got);
         }
     }
@@ -810,6 +835,8 @@ impl<S: Sys> Posix<S> {
         let children: Vec<S::H> = self.children.drain(..).map(|c| c.job).collect();
         self.close_all(children);
         self.tty_reads.clear();
+        self.tty_stash.clear();
+        self.tty_rest.clear();
         self.signals.pending = 0;
         self.sigchld = false;
         self.fork_group = -1;

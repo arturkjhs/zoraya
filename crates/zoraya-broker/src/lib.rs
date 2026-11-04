@@ -149,6 +149,11 @@ struct Group<H> {
     members: usize,
     /// In the session job; a `Group(job)` group is not.
     session: bool,
+    /// Stopped as a whole by `job_suspend` of the group job: it is resumed
+    /// as a whole, since a member's resume leaves the group job suspended
+    /// and every process created in it after would start stopped (review
+    /// R1).
+    suspended: bool,
 }
 
 /// What the broker has counted.
@@ -671,6 +676,13 @@ impl<K: Kernel> Broker<K> {
         r.client_child = false;
         if r.terminated {
             self.reap_by_broker(pid, actions);
+        } else if r.process.is_none() {
+            // Prepared, never committed: its parent went in between. Whatever
+            // runs in the job ends with it, and the pid goes (review R2), or
+            // the session could never finish.
+            let job = r.job;
+            let _ = self.kernel.job_kill(job);
+            self.remove(pid, actions);
         }
     }
 
@@ -813,6 +825,7 @@ impl<K: Kernel> Broker<K> {
                     job,
                     members: 0,
                     session,
+                    suspended: false,
                 },
             );
         }
@@ -1139,6 +1152,9 @@ impl<K: Kernel> Broker<K> {
             });
             if stop && all_default && !live.is_empty() {
                 sent(self.kernel.job_suspend(job))?;
+                if let Some(g) = group.and_then(|g| self.groups.get_mut(&g)) {
+                    g.suspended = true;
+                }
                 for p in &live {
                     if let Some(r) = self.pids.get_mut(p) {
                         r.stopped = sig;
@@ -1176,7 +1192,19 @@ impl<K: Kernel> Broker<K> {
             }
             SIGCONT => {
                 let handler = r.stops[3] == stop::HANDLER;
-                let was = r.stopped;
+                let pgid = r.pgid;
+                // A group stopped whole is continued whole, every member.
+                if let Some(g) = self.groups.get_mut(&pgid)
+                    && g.suspended
+                {
+                    g.suspended = false;
+                    let group_job = g.job;
+                    sent(self.kernel.job_resume(group_job))?;
+                    for r in self.pids.values_mut().filter(|r| r.pgid == pgid) {
+                        r.stopped = 0;
+                    }
+                }
+                let was = self.pids.get(&pid).map_or(0, |r| r.stopped);
                 if was != 0 {
                     sent(self.kernel.job_resume(job))?;
                 }

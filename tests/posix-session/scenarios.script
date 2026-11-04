@@ -24,12 +24,13 @@
 x left
 < PSURF>
 # W9b: SIGTERM to the top make: it goes down the tree by make's own sends,
-# each make deletes its partial target and re-raises; status 143.
-> make -j8 > /tmp/w9b.log 2>&1 & sleep 3; kill $!; wait $!; echo term=$?\r
+# each make deletes its partial target and re-raises; status 143. As measured
+# (event-timelines.md), a leaf may not have begun its target when SIGTERM
+# reaches it: three deletions at least, and no partial target left.
+> make -j8 > /tmp/w9b.log 2>&1 & sleep 6; kill $!; wait $!; echo term=$?\r
 < term=143
 < PSURF>
 > cat /tmp/w9b.log; for d in a/1 a/2 b/1 b/2; do test -e $d/t4.h && echo left $d; done; echo checked\r
-< Deleting file 't4.h'
 < Deleting file 't4.h'
 < Deleting file 't4.h'
 < Deleting file 't4.h'
@@ -50,6 +51,26 @@ x left
 < y
 < statuses 0
 < PSURF>
+# Ctrl-Z (plan.md's risk): the broker's job_suspend of the foreground group,
+# fg's tcsetpgrp and SIGCONT; the group stopped whole runs its next child
+# after fg (review R1); then Ctrl-C of the continued job.
+> sh -c 'sleep 2; echo first; sleep 1; echo second; sleep 30'\r
+~ 700 PSURF>
+> \x1a
+< Stopped
+< PSURF> 
+> jobs\r
+< Stopped
+< PSURF> 
+> fg\r
+< first
+< second
+~ 500 PSURF>
+> \x03
+< PSURF> 
+> echo after=$?\r
+< after=130
+< PSURF> 
 # Hostile: a process that ignores every catchable signal. Ctrl-C reaches it
 # and is ignored; job_kill (kill -9) always ends it.
 > /bin/t_posix hostile &\r

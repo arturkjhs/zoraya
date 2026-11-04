@@ -566,10 +566,18 @@ fn stop_signals_follow_each_targets_disposition() {
         }),
     );
     assert_eq!(st, status::OK);
-    // SIGCONT resumes each, and clears the record.
+    // SIGCONT resumes the group job that was suspended whole (review R1:
+    // a member's resume would leave it suspended, and its next child would
+    // start stopped), and clears every record.
     assert_eq!(s.kill(&shell, target::GROUP, a.pid, SIGCONT), status::OK);
     let (ja, jb) = (s.job_of(&a), s.job_of(&b));
-    assert_eq!(s.b.kernel.calls, [Call::Resume(ja), Call::Resume(jb)]);
+    assert_eq!(s.b.kernel.calls, [Call::Resume(g)]);
+    assert_eq!(s.b.is_stopped(a.pid), Some(0));
+    assert_eq!(s.b.is_stopped(b.pid), Some(0));
+    // The same through one member (fg's kill of the job's first pid).
+    assert_eq!(s.kill(&shell, target::GROUP, a.pid, SIGTSTP), status::OK);
+    assert_eq!(s.kill(&shell, target::PID, b.pid, SIGCONT), status::OK);
+    assert_eq!(s.b.kernel.calls, [Call::Resume(g)]);
     assert_eq!(s.b.is_stopped(a.pid), Some(0));
     // b catches SIGTSTP, a ignores SIGTTIN.
     let set = |s: &mut Session, c: &Child, signal: u32, d: u32| {
@@ -760,6 +768,34 @@ fn only_the_parent_reaps_and_only_after_termination() {
 }
 
 #[test]
+fn a_prepared_pid_whose_parent_ends_is_killed_and_removed() {
+    // Review R2: a parent killed between prepare and commit.
+    let mut s = session(true);
+    let shell = s.shell;
+    let a = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    let (bytes, handles) = s.ask(
+        a.conn,
+        &message(&proto::SpawnPrepare {
+            group: Below(group::NEW),
+            pgid: 0,
+            ignored: 0,
+            fork: Below(1),
+        }),
+        vec![],
+    );
+    let (_, m) = decode::<SpawnPrepared>(&bytes, 3).unwrap();
+    for h in handles {
+        s.b.kernel.close(h);
+    }
+    let live = s.b.live();
+    s.b.kernel.calls.clear();
+    s.end(&a, 0);
+    assert!(!s.b.pids().contains(&m.pid), "the uncommitted pid is gone");
+    assert!(s.b.kernel.calls.iter().any(|c| matches!(c, Call::Kill(_))));
+    assert_eq!(s.b.live(), live - 2, "a and its prepared child");
+}
+
+#[test]
 fn the_session_ends_with_the_shell_and_the_last_pid() {
     let mut s = session(true);
     let shell = s.shell;
@@ -833,7 +869,8 @@ fn a_native_client_prepares_in_its_own_job_and_reaps_its_children() {
         status::NOT_PERMITTED
     );
     assert_eq!(s.kill(&zosh, target::GROUP, m.pid, 15), status::OK);
-    // The client goes: its child is an orphan.
+    // The client goes: its child, never committed, is killed and gone
+    // (review R2).
     let _ = s.b.closed(conn);
     let st = s.status(
         shell.conn,
@@ -842,7 +879,7 @@ fn a_native_client_prepares_in_its_own_job_and_reaps_its_children() {
             pid: m.pid,
         }),
     );
-    assert_eq!(st, status::OK);
+    assert_eq!(st, status::NO_SUCH_PROCESS);
     s.b.kernel.close(client);
 }
 

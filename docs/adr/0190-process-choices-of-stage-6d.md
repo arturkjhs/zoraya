@@ -62,6 +62,10 @@ The items:
     mode lives in the spawner's description, and a share asks for rights no wider than the connection has (ADR-0103
     item 1). A child that took every inherited file as read and write could not hand its write-only stdout on (W9b's
     `make > file &` failed so).
+18. **The mask across `exec` and `posix_spawn`.** POSIX keeps the signal mask across `execve` and gives a spawned
+    child `POSIX_SPAWN_SETSIGMASK`'s or the parent's; the record of ADR-0107 has no mask.
+19. **`SIGCHLD` for a stopped child.** ADR-0106 item 3 subscribes a child's job for `SUSPENDED` too when
+    `SA_NOCLDSTOP` is clear.
 
 ## Decision drivers
 
@@ -157,12 +161,18 @@ The items:
     failed to fd 2.
 17. **The record's fd flags gain `FD_READ` (2) and `FD_WRITE` (4)**: the spawner sets the description's access; a
     record with neither, as stage 6c's launcher writes, means read and write as before.
+18. **Not carried at stage 6:** every new image starts with an empty mask, and `POSIX_SPAWN_SETSIGMASK` is accepted
+    and not applied. No measured program execs with a signal blocked that it then relies on staying blocked (make's
+    blocked `SIGCHLD` is its own, in the parent). A record field is the fix when one does.
+19. **Not delivered at stage 6:** `SIGCHLD` comes for a child's end only; a stop is seen by `waitpid(WUNTRACED)`.
+    dash waits for stops with `waitpid`, and no measured program has a `SIGCHLD` handler that counts stops.
 
 ## Consequences
 
 - Every item is exercised by `make test-posix`: the shell on the console, its pipelines, `make`'s jobserver FIFO,
   `exec` of scripts, signals at wait points.
-- Items 4, 7 and 12 are stated deviations from ADR-0107 item 13, ADR-0103 item 13 and ADR-0103 item 7.
+- Items 4, 7 and 12 are stated deviations from ADR-0107 item 13, ADR-0103 item 13 and ADR-0103 item 7; items 18
+  and 19 from POSIX and ADR-0106 item 3.
 - Item 2's convention ends when a call reads a handle's rights (Option C).
 
 ## Invariants

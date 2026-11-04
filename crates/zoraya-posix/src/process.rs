@@ -214,6 +214,10 @@ pub struct Posix<S: Sys> {
     pub sigchld: bool,
     /// What `Read` a terminal connection has outstanding, by connection.
     pub(crate) tty_reads: Vec<(S::H, u32)>,
+    /// Answers to held terminal reads that another request's wait took.
+    pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
+    /// What a terminal read was given beyond the buffer that asked.
+    pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
 }
 
 pub(crate) fn native(s: Status, call: Call) -> i32 {
@@ -267,6 +271,8 @@ impl<S: Sys> Posix<S> {
             fork_group: -1,
             sigchld: false,
             tty_reads: Vec::new(),
+            tty_stash: Vec::new(),
+            tty_rest: Vec::new(),
         }
     }
 
@@ -421,6 +427,16 @@ impl<S: Sys> Posix<S> {
                         return Err(EIO);
                     };
                     if header.transaction != t {
+                        // A terminal read's answer that came while another
+                        // request was out: kept for the read (review R4).
+                        let held = self
+                            .tty_reads
+                            .iter()
+                            .any(|&(c, ht)| c == conn && ht == header.transaction);
+                        if held {
+                            self.tty_stash.push((conn, self.input[..size].to_vec()));
+                            continue;
+                        }
                         return Err(EIO);
                     }
                     return Ok(size);

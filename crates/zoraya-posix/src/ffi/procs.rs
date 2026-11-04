@@ -1359,7 +1359,18 @@ fn spawn_child(
             return Err(e);
         }
     };
-    commit(p, &prepared, process)?;
+    if let Err(e) = commit(p, &prepared, process) {
+        // The child runs with no record of the broker's: let it run rather
+        // than stay stopped, and give its pid back (review R6).
+        debug_later(p, "posix_spawn: commit", e);
+        if start.foreground {
+            let _ = zoraya_rt::process_resume(process);
+        }
+        let _ = zoraya_rt::handle_close(process);
+        let _ = zoraya_rt::handle_close(prepared.parent_job);
+        let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
+        return Err(e);
+    }
     if start.foreground {
         // The child cannot read the terminal before its group is the
         // foreground (ADR-0104 item 5).
@@ -1653,10 +1664,22 @@ fn exec(path: &[u8], argv: &[Vec<u8>], envp: &[Vec<u8>]) -> i32 {
                 return Err(e);
             }
         };
+        // The new image runs in this pid's job: from here this image ends
+        // whatever happens (review R5); a failed commit leaves the broker's
+        // record on the old image, which then reads as its exit.
         p.process_job = None;
-        let dup = zoraya_rt::handle_duplicate(process, rights_of(process)).map_err(|_| EAGAIN)?;
+        let committed = match zoraya_rt::handle_duplicate(process, rights_of(process)) {
+            Ok(dup) => p.broker_simple(&bp::ExecCommit {}, &[dup, server]),
+            Err(_) => {
+                let _ = zoraya_rt::handle_close(server);
+                Err(EAGAIN)
+            }
+        };
         let _ = zoraya_rt::handle_close(process);
-        p.broker_simple(&bp::ExecCommit {}, &[dup, server])?;
+        if let Err(e) = committed {
+            debug_later(p, "exec: commit", e);
+            zoraya_rt::process_exit(127);
+        }
         Ok(())
     });
     match r {
@@ -1818,14 +1841,27 @@ extern "C" fn fork() -> i32 {
                 handle: h,
             });
         }
-        let length = e.finish().ok_or(EAGAIN)?;
+        let Some(length) = e.finish() else {
+            for (_, h) in moves {
+                let _ = zoraya_rt::handle_close(h);
+            }
+            let _ = zoraya_rt::handle_close(prepared.parent_job);
+            let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
+            return Err(EAGAIN);
+        };
         let before = zoraya_rt::clock_monotonic();
         let snap = zoraya_rt::snapshot_process(&buffer[..length]);
         let snapshot_ns = zoraya_rt::clock_monotonic().saturating_sub(before);
         match snap {
             Ok(Some(process)) => {
                 // The parent: the moved handles are the child's now.
-                commit(p, &prepared, process)?;
+                if let Err(e) = commit(p, &prepared, process) {
+                    debug_later(p, "fork: commit", e);
+                    let _ = zoraya_rt::handle_close(process);
+                    let _ = zoraya_rt::handle_close(prepared.parent_job);
+                    let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
+                    return Err(e);
+                }
                 let _ = zoraya_rt::handle_close(process);
                 p.stats.forks += 1;
                 p.stats.snapshot_ns += snapshot_ns;

@@ -38,6 +38,7 @@ const OUTPUT: u32 = 8;
 
 const KEY_BACKEND: u64 = 1;
 const KEY_OUTPUT: u64 = 2;
+const KEY_WINDOW_ROOM: u64 = 3;
 const KEY_CONN: u64 = 1 << 32;
 
 fn slot(n: u32) -> Handle {
@@ -47,12 +48,22 @@ fn slot(n: u32) -> Handle {
 /// Where the terminal's bytes come from and go.
 enum Backend {
     Serial,
-    Window(Handle),
+    /// The window's channel, and what is still to go to it: the service
+    /// never blocks on the window, which would stop it reading the keys the
+    /// window sends (it drops what finds no room).
+    Window {
+        end: Handle,
+        pending: Vec<u8>,
+    },
 }
 
+/// Past this much unshown output, the service stops reading the output
+/// stream until the window has taken some: the writers wait, nothing is lost.
+const PENDING_LIMIT: usize = 64 * 1024;
+
 impl Backend {
-    /// Shows `bytes`, all of them.
-    fn show(&self, bytes: &[u8]) {
+    /// Shows `bytes`: all of them on the serial line; queued for the window.
+    fn show(&mut self, bytes: &[u8]) {
         match self {
             Backend::Serial => {
                 let mut at = 0;
@@ -63,36 +74,48 @@ impl Backend {
                     }
                 }
             }
-            Backend::Window(end) => {
-                let mut out = vec![0u8; term::MAX_OUTPUT + 64];
-                for part in bytes.chunks(term::MAX_OUTPUT) {
-                    let m = term::Output {
-                        bytes: zoraya_protocol::Data(part),
-                    };
-                    let Ok(n) = encode(&m, NO_REPLY, &mut out) else {
-                        return;
-                    };
-                    loop {
-                        match channel_write(*end, &out[..n], &[]) {
-                            Ok(()) => break,
-                            Err(Status::WouldBlock) => wait_writable(*end),
-                            Err(_) => return,
-                        }
-                    }
+            Backend::Window { pending, .. } => {
+                pending.extend_from_slice(bytes);
+                self.flush();
+            }
+        }
+    }
+
+    /// Sends what the window has room for, in messages as large as the
+    /// protocol allows.
+    fn flush(&mut self) {
+        let Backend::Window { end, pending } = self else {
+            return;
+        };
+        let mut out = vec![0u8; term::MAX_OUTPUT + 64];
+        while !pending.is_empty() {
+            let n = pending.len().min(term::MAX_OUTPUT);
+            let m = term::Output {
+                bytes: zoraya_protocol::Data(&pending[..n]),
+            };
+            let Ok(size) = encode(&m, NO_REPLY, &mut out) else {
+                pending.clear();
+                return;
+            };
+            match channel_write(*end, &out[..size], &[]) {
+                Ok(()) => {
+                    pending.drain(..n);
+                }
+                Err(Status::WouldBlock) => return,
+                Err(_) => {
+                    pending.clear();
+                    return;
                 }
             }
         }
     }
-}
 
-fn wait_writable(end: Handle) {
-    let Ok(port) = port_create() else { return };
-    let wanted = channel_signals::WRITABLE | channel_signals::PEER_CLOSED;
-    if port_subscribe(port, end, wanted, 1, Mode::Level).is_ok() {
-        let mut packets = [Packet::default()];
-        let _ = port_wait(port, DEADLINE_INFINITE, &mut packets);
+    fn pending(&self) -> usize {
+        match self {
+            Backend::Window { pending, .. } => pending.len(),
+            Backend::Serial => 0,
+        }
     }
-    let _ = handle_close(port);
 }
 
 struct Service {
@@ -188,29 +211,41 @@ impl Service {
                 }
                 true
             }
-            Backend::Window(end) => {
+            Backend::Window { end, .. } => {
+                // Everything queued, at every wake: the window drops keys
+                // that find its queue full (the GUI test under TCG lost them
+                // so), and the echo of a burst goes out as one message.
                 let mut got = [end; 1];
-                match channel_read(end, bytes, &mut got) {
-                    Ok(sizes) => {
-                        let n = sizes.bytes as usize;
-                        let ordinal = Header::decode(&bytes[..n]).map_or(0, |(h, _)| h.ordinal);
-                        if ordinal == term::Input::ORDINAL {
-                            if let Ok((_, m)) = decode::<term::Input<'_>>(&bytes[..n], 0) {
-                                let keys = m.bytes.0.to_vec();
-                                let actions = self.term.keys(&keys);
+                let mut keys = Vec::new();
+                let mut alive = true;
+                loop {
+                    match channel_read(end, bytes, &mut got) {
+                        Ok(sizes) => {
+                            let n = sizes.bytes as usize;
+                            let ordinal = Header::decode(&bytes[..n]).map_or(0, |(h, _)| h.ordinal);
+                            if ordinal == term::Input::ORDINAL {
+                                if let Ok((_, m)) = decode::<term::Input<'_>>(&bytes[..n], 0) {
+                                    keys.extend_from_slice(m.bytes.0);
+                                }
+                            } else if ordinal == term::Size::ORDINAL
+                                && let Ok((_, m)) = decode::<term::Size>(&bytes[..n], 0)
+                            {
+                                let actions = self.term.resize(m.rows, m.columns);
                                 self.act(actions);
                             }
-                        } else if ordinal == term::Size::ORDINAL
-                            && let Ok((_, m)) = decode::<term::Size>(&bytes[..n], 0)
-                        {
-                            let actions = self.term.resize(m.rows, m.columns);
-                            self.act(actions);
                         }
-                        true
+                        Err((Status::WouldBlock, _)) => break,
+                        Err(_) => {
+                            alive = false;
+                            break;
+                        }
                     }
-                    Err((Status::WouldBlock, _)) => true,
-                    Err(_) => false,
                 }
+                if !keys.is_empty() {
+                    let actions = self.term.keys(&keys);
+                    self.act(actions);
+                }
+                alive
             }
         }
     }
@@ -220,7 +255,10 @@ impl Service {
 fn main() -> i32 {
     let window = startup().argv.any(|a| a == b"--window");
     let backend = if window {
-        Backend::Window(slot(WINDOW))
+        Backend::Window {
+            end: slot(WINDOW),
+            pending: Vec::new(),
+        }
     } else {
         Backend::Serial
     };
@@ -242,7 +280,7 @@ fn main() -> i32 {
     s.watch(first_id, slot(FIRST));
     let backend_signals = match s.backend {
         Backend::Serial => (CONSOLE, console_signals::READABLE),
-        Backend::Window(end) => (
+        Backend::Window { end, .. } => (
             end,
             channel_signals::READABLE | channel_signals::PEER_CLOSED,
         ),
@@ -260,6 +298,9 @@ fn main() -> i32 {
     let mut bytes = vec![0u8; MAX_WIRE_MESSAGE];
     let mut shown = Vec::with_capacity(8192);
     let mut hung_up = false;
+    let mut waiting_room = false;
+    let mut reading_output = true;
+    let mut output_gone = false;
     loop {
         let mut packets = [Packet::default()];
         if port_wait(port, DEADLINE_INFINITE, &mut packets).is_err() {
@@ -284,10 +325,32 @@ fn main() -> i32 {
                 // Every writer gone: nothing more to show.
                 Err(_) => {
                     let _ = port_unsubscribe(port, KEY_OUTPUT);
+                    reading_output = false;
+                    output_gone = true;
                 }
             },
+            KEY_WINDOW_ROOM => s.backend.flush(),
             k if k >= KEY_CONN => s.connection((k - KEY_CONN) as Id, &mut bytes),
             _ => {}
+        }
+        // The window's room and the output stream, by what is still to go.
+        if let Backend::Window { end, .. } = s.backend {
+            let pending = s.backend.pending();
+            let room = channel_signals::WRITABLE | channel_signals::PEER_CLOSED;
+            if pending > 0 && !waiting_room {
+                waiting_room =
+                    port_subscribe(port, end, room, KEY_WINDOW_ROOM, Mode::Level).is_ok();
+            } else if pending == 0 && waiting_room {
+                let _ = port_unsubscribe(port, KEY_WINDOW_ROOM);
+                waiting_room = false;
+            }
+            if pending > PENDING_LIMIT && reading_output {
+                let _ = port_unsubscribe(port, KEY_OUTPUT);
+                reading_output = false;
+            } else if pending <= PENDING_LIMIT / 2 && !reading_output && !output_gone {
+                reading_output =
+                    port_subscribe(port, output, out_signals, KEY_OUTPUT, Mode::Level).is_ok();
+            }
         }
     }
 }

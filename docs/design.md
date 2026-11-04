@@ -874,7 +874,9 @@ or `exit` turns the machine off.
   copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
   memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). `zosh` does
   not run POSIX programs yet (TASK-18 Part 2); a POSIX session and `zosh` do not share the console. Dates are the
-  root volume's (ADR-0191), not a clock's.
+  root volume's (ADR-0191), not a clock's. In the GUI window under TCG, a burst of more than about 16 keys typed
+  through QMP loses its tail on the way to `ttyd` (the window's queue holds 64 messages, so the cause is not that
+  bound; unexplained, an open question of TASK-21); `make test-posix-gui` types lines of at most 16 keys.
 
 ## Roadmap
 

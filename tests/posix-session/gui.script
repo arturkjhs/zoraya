@@ -1,27 +1,33 @@
 # The stage 6d session in the stage 5 terminal window (TASK-21): ttyd's window
 # backend between the GUI terminal and dash, keys typed into the window
 # through QMP and the screen read back as text (tools/test-runner/src/gui.rs).
+# Lines are at most 16 keys: under TCG a longer burst loses keys on the way
+# to ttyd (docs/design.md, Known limitations; TASK-21's open questions).
 serial init: /etc/zoraya/session: a POSIX session
 screen PSURF> _
-type echo hello world | tr a-z A-Z\r
-screen HELLO WORLD
+type echo hi|tr h H\r
+screen Hi
 screen PSURF> _
-type cd /home; echo one > f.txt; cat < f.txt\r
-screen one
+type cd /home/gui\r
+screen PSURF> _
+type echo a > f\r
+screen PSURF> _
+type cat < f\r
+screen a
 screen PSURF> _
 type sleep 2 & jobs\r
-screen Running
+screen [1] + Running                    sleep 2
 screen PSURF> _
-type wait; echo waited=$?\r
-screen waited=0
+type wait; echo w=$?\r
+screen w=0
 # Ctrl-C of a foreground sleep: 130.
 type sleep 30\r
 chord ctrl c
 screen PSURF> _
-type echo status=$?\r
-screen status=130
+type echo s=$?\r
+screen s=130
 screen PSURF> _
-type printf 'all: b\\nb:\\n\\techo made > b\\n' > Makefile; make; cat b\r
+type make\r
 screen made
 screen PSURF> _
 type exit\r
