@@ -204,6 +204,9 @@ description checked (operand kinds are authority); that check belongs to the lau
   entry's bytes (`directory_lookup` gives an image, `directory_entry` a name), so `zosh` cannot read `NAME.cmd` from
   the ramdisk. Until such a call exists (a kernel ABI decision, for the architect), `zosh` has the same files
   compiled in, checked by `user/build.rs`, so all three copies come from one source file and one build.
+  *Architect, 2026-11-04 (recorded by an agent):* no new system call; the compiled-in descriptions are accepted
+  for now. The target, open: `zosh` reads `NAME.cmd` as a file through a file service (a read-only service over the
+  ramdisk, or the programs' directory on `fsd`), with no change to the ABI.
 
 ## Revisit triggers
 - A program whose interface cannot be described by operands and options (a sub-command tree such as `git`): add

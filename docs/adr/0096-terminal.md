@@ -68,6 +68,11 @@ The broker, sessions, the controlling terminal and `isatty`; byte streams for ch
 
 *Note, 2026-11-03 (the architect's decision on ADR-0154, recorded by an agent):* the output subset gains `ESC [ 2 m` (faint: the foreground at half intensity) and `ESC [ 22 m` (normal intensity), for the shell's suggestions. Who interprets Ctrl-C for the native shell's sessions is `zosh` itself (ADR-0158, ADR-0004's note).
 
+*Note, 2026-11-04 (the architect's decision on TASK-18 Part 2, recorded by an agent; superseding for the shell):* the
+shell's line editor may write `ESC [ n A` (cursor up), which this subset already holds, so that it redraws a line wider
+than the terminal in place (ADR-0154 rule 8 as changed). Nothing changes in what the terminal parses; the GUI script
+(`tests/gui/terminal.script`) checks a wrapped line edited in its middle by screendump.
+
 ## Consequences
 - **Positive.** A window that runs `zosh`, a parser stage 6 can grow, and no reply path for injected queries.
 - **Negative.** Children of `zosh` print to the serial console in GUI mode until stage 6. Programs that query the terminal get no answer and must use defaults.

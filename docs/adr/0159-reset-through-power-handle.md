@@ -1,6 +1,6 @@
 # ADR-0159: Resetting the machine through the `Power` handle
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-03
 - **Depends on:** ADR-0062, ADR-0155
 - **Evidence:** CP-01, CP-02
@@ -97,3 +97,6 @@ Recommended: **Option C**. It is a recommendation, not a decision.
 - A holder that should restart but not power off, or the reverse: Option D.
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-04. Decided by the architect; recorded by an agent at the architect's request. Built
+as TASK-18 plan step 12.

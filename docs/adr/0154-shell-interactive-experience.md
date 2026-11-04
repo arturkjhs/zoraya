@@ -78,6 +78,10 @@ Right, highlighting that marks an unknown command red, Tab with a list, prefix h
 
 Accepted as recommended (architect, 2026-11-03), with the hints for familiar Unix names in rule 6, from the tour.
 
+*Changed by the architect, 2026-11-04 (recorded by an agent at the architect's request):* rule 8's subset gains
+`ESC [ n A` (cursor up), so that a line longer than the width is redrawn from its start in place; ADR-0096 holds the
+sequence already (its note of this date). INV-0154-2 checks the subset with it.
+
 The original recommendation follows.
 
 Recommended: **Option C**. It is a recommendation, not a decision.
@@ -210,7 +214,8 @@ terminal draws faint itself. CP-25's out-of-band control is unaffected: these ar
   `editor`) redraws the row in place while prompt and line fit on one row; past that, typing and Backspace at the end
   stay incremental, and any other edit draws the prompt and line again on a new row, leaving the old rows above.
   Adding `ESC [ n A` to the subset would allow redrawing in place; that is a change to ADR-0096 and this ADR for the
-  architect. INV-0154-2 is checked against the subset as listed.
+  architect. INV-0154-2 is checked against the subset as listed. *Resolved 2026-11-04:* the architect added it (the
+  Decision above).
 
 ## Revisit triggers
 - The serial console measured to lag while typing because of redraws: redraw only from the cursor.
