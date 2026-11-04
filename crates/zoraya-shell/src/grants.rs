@@ -297,6 +297,21 @@ pub fn shown(path: &str, home: &str) -> String {
     }
 }
 
+/// What a job was given, as `jobs` shows it (ADR-0158 rule 5): each
+/// entry as `PATH: WORDS`, in the words of [`report`], joined by `, `.
+pub fn summary(plan: &[Planned], home: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for m in merge(plan) {
+        for (words, _) in &m.lines {
+            let part = format!("{}: {words}", shown(&m.path, home));
+            if !parts.contains(&part) {
+                parts.push(part);
+            }
+        }
+    }
+    parts.join(", ")
+}
+
 /// `grants`' report (rule 7, ADR-0153's examples): the streams, then each
 /// entry as it is given, one line per reason, with its rights in words.
 pub fn report(name: &str, plan: &[Planned], home: &str, streams: &str) -> String {

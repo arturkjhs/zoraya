@@ -272,6 +272,11 @@ test = false
 bench = false
 
 [[bin]]
+name = "requests"
+test = false
+bench = false
+
+[[bin]]
 name = "t_memory"
 test = false
 bench = false

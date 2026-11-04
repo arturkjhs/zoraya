@@ -123,14 +123,15 @@ x not run\r\n
 < slots: 1
 < console read: Err(AccessDenied)
 < \r\n/> 
-# The third Ctrl-C kills a job that ignores Interrupt.
+# A job that ignores Interrupt: a second later the shell says that the next
+# Ctrl-C kills it, and it does (ADR-0158 rule 3).
 > stubborn\r
 < stubborn: ignoring Interrupt
 > \x03
 < ^C
+< (Ctrl-C again to kill it)
 > \x03
 < ^C
-> \x03
 < stubborn: killed
 < \r\n/> 
 # Usage comes from the description (ADR-0155 rule 3, INV-0155-1).

@@ -46,6 +46,7 @@ use zoraya_shell::eval::{
     function_description, pipeline_status,
 };
 use zoraya_shell::grants;
+use zoraya_shell::jobs::{self, At, Exit, Jobs, State as JobState};
 use zoraya_shell::record;
 use zoraya_shell::syntax;
 use zoraya_shell::syntax::Stream;
@@ -54,8 +55,9 @@ use zoraya_user::files::{ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_
 use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, console_dropped, console_entry,
     console_read, console_write, directory_entry, directory_lookup, dup, handle_close, handle_type,
-    job_create, job_kill, job_signal, port_create, port_subscribe, port_unsubscribe, port_wait,
-    power_off, process_exit, process_exit_record, spawn, stream_create, stream_read, stream_write,
+    job_create, job_kill, job_resume, job_signal, job_suspend, object_get_signals, port_create,
+    port_subscribe, port_unsubscribe, port_wait, power_off, process_exit, process_exit_record,
+    spawn, stream_create, stream_read, stream_write,
 };
 
 zoraya_user::describe!("system", "zosh");
@@ -65,8 +67,9 @@ const CONSOLE_KEY: u64 = 1;
 const JOB_KEY: u64 = 1000;
 /// Jobs at once.
 const MAX_JOBS: usize = 16;
-/// Ctrl-Cs after which a foreground job that will not end is killed.
-const PATIENCE: u32 = 3;
+/// How long a job in front may go on after Ctrl-C before the shell says
+/// that the next Ctrl-C kills it (ADR-0158 rule 3).
+const KILL_OFFER_AFTER: u64 = 1_000_000_000;
 /// Programs that start others: they get their job and the directory too.
 const NEED_MORE: [&str; 3] = ["fanout", "parent", "posixrun"];
 /// Programs that use files: they get a connection at slot 5.
@@ -208,16 +211,15 @@ fn problem(status: u32) -> String {
     zoraya_command::file_problem(status)
 }
 
-/// A job started from a line.
+/// A job's handles and what the shell keeps of it; its number, line and
+/// state are its [`jobs::Entry`]'s.
 struct Job {
-    number: u32,
     job: Handle,
     /// One per element of the pipeline, in order.
     processes: Vec<Handle>,
     /// Each element's name, whether it is a question command, and the read
     /// end of its `REPORT` channel (ADR-0153 rule 11).
     elements: Vec<(String, bool, Option<Handle>)>,
-    line: String,
     /// What its output gave a `$(...)`.
     captured: Vec<u8>,
 }
@@ -245,6 +247,14 @@ enum Escape {
     Csi,
     /// `ESC O`, for one more byte.
     Ss3,
+}
+
+/// How waiting for a job in front ended.
+enum Waited {
+    /// It ended: its entry, its records, and whether Ctrl-C interrupted it.
+    Ended(jobs::Entry<Job>, Vec<ExitRecord>, bool),
+    /// Ctrl-Z stopped it; it stays in the table as job `n`.
+    Stopped(u32),
 }
 
 /// Port keys of the shell's stream ends: above every job's.
@@ -314,8 +324,8 @@ struct Z {
     /// The current directory's absolute path.
     cwd: String,
     port: Handle,
-    jobs: Vec<Job>,
-    notices: Vec<String>,
+    /// The jobs, and the notices waiting for the next prompt (ADR-0158).
+    jobs: Jobs<Job>,
     descriptions: BTreeMap<String, Rc<Description>>,
     found: BTreeMap<String, Found>,
     outputs: BTreeMap<u32, Output>,
@@ -329,8 +339,6 @@ struct Z {
     /// Keys read while the shell itself was busy.
     pending_interrupt: bool,
     dropped: u64,
-    /// The last line asked `exit` with jobs running.
-    exit_warned: bool,
     rows: usize,
     columns: usize,
     /// Keys read but not yet used: typed after an Enter, for the next prompt.
@@ -671,8 +679,10 @@ impl Z {
         show(&text);
     }
 
-    /// One element's start-up table and image, or why it may not run.
-    fn ready(&mut self, exec: &Exec<'_>) -> Result<(Handle, Option<Table>), String> {
+    /// One element's image and start-up table, and what it is given in
+    /// `jobs`' words; or why it may not run.
+    fn ready(&mut self, exec: &Exec<'_>) -> Result<(Handle, Option<Table>, String), String> {
+        let mut given = String::new();
         let table = match self.plan_for(exec)? {
             None => None,
             Some(plan) if self.root.is_none() && !plan.is_empty() => {
@@ -683,10 +693,13 @@ impl Z {
                     &[],
                 ));
             }
-            Some(plan) => Some(self.table(&plan)?),
+            Some(plan) => {
+                given = grants::summary(&plan, &self.home());
+                Some(self.table(&plan)?)
+            }
         };
         match directory_lookup(DIRECTORY, exec.name) {
-            Ok(image) => Ok((image, table)),
+            Ok(image) => Ok((image, table, given)),
             Err(s) => {
                 if let Some(t) = table {
                     let _ = handle_close(t.startup);
@@ -802,12 +815,6 @@ impl Z {
     }
 
     // --- Jobs ---
-
-    fn free_number(&self) -> u32 {
-        (1..)
-            .find(|n| self.jobs.iter().all(|j| j.number != *n))
-            .unwrap_or(1)
-    }
 
     /// Spawns one element into `job`, with its three stream ends.
     fn spawn_in_job(
@@ -990,9 +997,10 @@ impl Z {
                 }
                 Dest::Capture => {
                     let number = self.relays[at].job;
-                    if let Some(j) = self.jobs.iter_mut().find(|j| j.number == number) {
-                        let room = MAX_CAPTURE.saturating_sub(j.captured.len());
-                        j.captured.extend_from_slice(&bytes[..n.min(room)]);
+                    if let Some(j) = self.jobs.get_mut(number) {
+                        let captured = &mut j.payload.captured;
+                        let room = MAX_CAPTURE.saturating_sub(captured.len());
+                        captured.extend_from_slice(&bytes[..n.min(room)]);
                     }
                 }
             }
@@ -1006,7 +1014,7 @@ impl Z {
     fn background_output(&mut self, bytes: &[u8]) {
         let text = tamed(bytes);
         if self.at_prompt {
-            self.notices.push(text);
+            self.jobs.queue(text);
         } else {
             show(&text);
         }
@@ -1077,8 +1085,9 @@ impl Z {
         }
     }
 
-    /// One port packet: a stream's, or a job's end. Gives an ended job.
-    fn event(&mut self, packet: &Packet) -> Option<(Job, Vec<ExitRecord>)> {
+    /// One port packet: a stream's, or a job's end, which is reported as
+    /// `at` says (ADR-0158 rule 6). Gives the job in front when it ended.
+    fn event(&mut self, packet: &Packet, at: At) -> Option<(jobs::Entry<Job>, Vec<ExitRecord>)> {
         if packet.key >= STREAM_KEY {
             if let Some(at) = self.relays.iter().position(|r| r.key == packet.key) {
                 self.pump_relay(at, false);
@@ -1091,7 +1100,7 @@ impl Z {
             }
             return None;
         }
-        self.take_ended(packet.key)
+        self.take_ended(packet.key, at)
     }
 
     /// A key for the foreground job's `in`, as a terminal in canonical mode
@@ -1168,6 +1177,35 @@ impl Z {
         }
     }
 
+    /// Job `number`'s input from the keys ends, after what was typed for it
+    /// (ADR-0158 rule 2: a job in the background reads no key).
+    fn close_keys(&mut self, number: u32) {
+        while let Some(at) = self
+            .feeds
+            .iter()
+            .position(|f| f.job == number && matches!(f.source, Source::Keys))
+        {
+            let f = &mut self.feeds[at];
+            f.source = Source::Text;
+            f.closing = true;
+            self.pump_feed(at);
+        }
+    }
+
+    /// Each job's state as the kernel has it: `SUSPENDED` on its job
+    /// (ADR-0105 item 8).
+    fn refresh_states(&mut self) {
+        for e in self.jobs.iter_mut() {
+            if let Ok(signals) = object_get_signals(e.payload.job) {
+                e.state = if signals & job_signals::SUSPENDED != 0 {
+                    JobState::Stopped
+                } else {
+                    JobState::Running
+                };
+            }
+        }
+    }
+
     /// Job `number`'s streams: the relays emptied, the feeds closed.
     fn finish_streams(&mut self, number: u32) {
         while let Some(at) = self.relays.iter().position(|r| r.job == number) {
@@ -1183,18 +1221,19 @@ impl Z {
         }
     }
 
-    /// The job with port key `key` ended: its records, and the job removed.
-    fn take_ended(&mut self, key: u64) -> Option<(Job, Vec<ExitRecord>)> {
-        let at = self
+    /// The job with port key `key` ended: its streams emptied, its records
+    /// read and its handles closed. The job in front is removed and given
+    /// back, for its line to report; any other is reported as `at` says.
+    fn take_ended(&mut self, key: u64, at: At) -> Option<(jobs::Entry<Job>, Vec<ExitRecord>)> {
+        let number = self
             .jobs
             .iter()
-            .position(|j| JOB_KEY + u64::from(j.number) == key)?;
-        let number = self.jobs[at].number;
+            .find(|e| JOB_KEY + u64::from(e.number) == key)?
+            .number;
         self.finish_streams(number);
-        let at = self.jobs.iter().position(|j| j.number == number)?;
-        let job = self.jobs.remove(at);
         let _ = port_unsubscribe(self.port, key);
-        let records = job
+        let job = &self.jobs.get(number)?.payload;
+        let records: Vec<ExitRecord> = job
             .processes
             .iter()
             .map(|p| {
@@ -1203,8 +1242,17 @@ impl Z {
                 r
             })
             .collect();
-        let _ = handle_close(job.job);
-        Some((job, records))
+        let status = Z::status_of(job, &records);
+        let (entry, now) = if self.foreground == Some(number) {
+            (self.jobs.remove(number)?, None)
+        } else {
+            self.jobs.ended(number, &status, at)?
+        };
+        let _ = handle_close(entry.payload.job);
+        if let Some(text) = now {
+            show(&text);
+        }
+        (self.foreground == Some(number)).then_some((entry, records))
     }
 
     /// The status of a job's pipeline (ADR-0152 rule 6).
@@ -1218,16 +1266,6 @@ impl Z {
             })
             .collect();
         pipeline_status(&members).record
-    }
-
-    /// A background job's end, in ADR-0158 rule 6's words.
-    fn notice(job: &Job, records: &[ExitRecord]) -> String {
-        let record = Z::status_of(job, records);
-        if record::is_success(&record) {
-            format!("[{}] done: {}\n", job.number, job.line)
-        } else {
-            format!("[{}] {}: {}\n", job.number, job.line, record::what(&record))
-        }
     }
 
     /// Reads what keys are waiting, without blocking. Ctrl-C while the
@@ -1253,8 +1291,8 @@ impl Z {
                     Ok(2) => {
                         if let Ok((_, m)) = decode::<TermInput<'_>>(bytes, 0) {
                             if m.dropped > 0 {
-                                self.notices
-                                    .push(format!("[input: {} bytes dropped]\n", m.dropped));
+                                self.jobs
+                                    .queue(format!("[input: {} bytes dropped]\n", m.dropped));
                             }
                             keys.extend_from_slice(m.bytes.0);
                         }
@@ -1279,7 +1317,7 @@ impl Z {
             }
             let dropped = console_dropped(CONSOLE).unwrap_or(0);
             if dropped != self.dropped {
-                self.notices.push(format!(
+                self.jobs.queue(format!(
                     "[input: {} bytes dropped]\n",
                     dropped - self.dropped
                 ));
@@ -1289,50 +1327,55 @@ impl Z {
         keys
     }
 
-    /// Waits for job `number` in front, giving it the keys: Ctrl-C and
-    /// Ctrl-\\ as job signals, the rest to its `in` (ADR-0158 rule 3).
-    /// Gives the job and its records, and whether Ctrl-C interrupted it.
-    fn wait_foreground(&mut self, number: u32) -> (Job, Vec<ExitRecord>, bool) {
-        let mut interrupts = 0;
+    /// Waits for job `number` in front, giving it the keys (ADR-0158 rule
+    /// 3): Ctrl-C and Ctrl-\\ as job signals, Ctrl-Z as `job_suspend`, the
+    /// rest to its `in`. A Ctrl-C the job outlives by a second makes the
+    /// next one a kill, once the shell has said so.
+    fn wait_foreground(&mut self, number: u32) -> Waited {
         let mut ctrl_c = false;
+        let mut offer_at: Option<u64> = None;
+        let mut offered = false;
         self.foreground = Some(number);
         self.typed.clear();
         self.escape = Escape::No;
-        let ended = 'wait: loop {
+        let waited = 'wait: loop {
             // Keys typed ahead of the job reach it first.
             let mut keys = core::mem::take(&mut self.pending);
             if keys.is_empty() {
                 let mut packets = [Packet::default(); 8];
-                let Ok(count) = port_wait(self.port, DEADLINE_INFINITE, &mut packets) else {
+                let deadline = offer_at.unwrap_or(DEADLINE_INFINITE);
+                let Ok(count) = port_wait(self.port, deadline, &mut packets) else {
+                    // The job outlived its Ctrl-C by a second.
+                    if offer_at.take().is_some() && self.jobs.get(number).is_some() {
+                        show("(Ctrl-C again to kill it)\n");
+                        offered = true;
+                    }
                     continue;
                 };
                 for packet in &packets[..count] {
                     if packet.key == CONSOLE_KEY {
                         keys.extend(self.read_keys());
-                    } else if let Some((job, records)) = self.event(packet) {
-                        if job.number == number {
-                            break 'wait (job, records);
-                        }
-                        self.notices.push(Z::notice(&job, &records));
+                    } else if let Some((entry, records)) = self.event(packet, At::Elsewhere) {
+                        break 'wait Waited::Ended(entry, records, ctrl_c);
                     }
                 }
             }
-            let Some(job) = self.jobs.iter().find(|j| j.number == number).map(|j| j.job) else {
+            let Some(job) = self.jobs.get(number).map(|e| e.payload.job) else {
                 continue;
             };
             let mut echo = Vec::new();
-            for key in keys {
+            for (i, &key) in keys.iter().enumerate() {
                 match key {
                     editor::CTRL_C => {
-                        interrupts += 1;
                         ctrl_c = true;
                         show_bytes(&echo);
                         echo.clear();
                         show("^C\n");
-                        if interrupts >= PATIENCE {
+                        if offered {
                             let _ = job_kill(job);
                         } else {
                             let _ = job_signal(job, RequestKind::Interrupt, 0);
+                            offer_at.get_or_insert(clock_monotonic() + KILL_OFFER_AFTER);
                         }
                     }
                     editor::CTRL_BACKSLASH => {
@@ -1341,6 +1384,20 @@ impl Z {
                         show("^\\\n");
                         let _ = job_signal(job, RequestKind::Quit, 0);
                     }
+                    editor::CTRL_Z => {
+                        show_bytes(&echo);
+                        echo.clear();
+                        show("^Z\n");
+                        if job_suspend(job).is_ok()
+                            && let Some(e) = self.jobs.get_mut(number)
+                        {
+                            e.state = JobState::Stopped;
+                            show(&format!("[{number}] stopped: {}\n", e.line));
+                            // What was typed after it is the prompt's.
+                            self.pending = keys[i + 1..].to_vec();
+                            break 'wait Waited::Stopped(number);
+                        }
+                    }
                     k => self.type_key(number, k, &mut echo),
                 }
             }
@@ -1348,15 +1405,38 @@ impl Z {
         };
         self.foreground = None;
         self.typed.clear();
-        (ended.0, ended.1, ctrl_c)
+        waited
     }
 
-    /// Waits until job `number` ends or `deadline` passes; reports ends.
+    /// A job in front ended: its hints read (ADR-0153 rule 11), and its
+    /// records and output for the line.
+    fn ended_in_front(
+        &mut self,
+        mut entry: jobs::Entry<Job>,
+        records: Vec<ExitRecord>,
+        ctrl_c: bool,
+    ) -> Ran {
+        let line = entry.line.clone();
+        for (name, _, report) in &mut entry.payload.elements {
+            if let Some(r) = report.take() {
+                self.hints(r, name, &line);
+            }
+        }
+        let captured = String::from_utf8_lossy(&entry.payload.captured).into_owned();
+        Ran::Ended {
+            records,
+            ctrl_c,
+            captured,
+        }
+    }
+
+    /// Waits until job `number` ends, or every running job when `None`,
+    /// or `deadline` passes; reports ends as they come (ADR-0158 rule 6).
     fn wait_for(&mut self, number: Option<u32>, deadline: u64) -> bool {
         loop {
             let done = match number {
-                Some(n) => self.jobs.iter().all(|j| j.number != n),
-                None => self.jobs.is_empty(),
+                Some(n) => self.jobs.get(n).is_none(),
+                None => self.jobs.iter().all(|e| e.state == JobState::Stopped),
             };
             if done {
                 return true;
@@ -1372,8 +1452,8 @@ impl Z {
                         show("^C\n");
                         return false;
                     }
-                } else if let Some((job, records)) = self.event(packet) {
-                    show(&Z::notice(&job, &records));
+                } else {
+                    self.event(packet, At::Reporting);
                 }
             }
         }
@@ -1381,27 +1461,7 @@ impl Z {
 
     /// `%N`, or the newest job.
     fn which_job(&self, word: Option<&str>) -> Result<u32, String> {
-        match word {
-            None => self
-                .jobs
-                .iter()
-                .map(|j| j.number)
-                .max()
-                .ok_or_else(|| "no jobs".into()),
-            Some(w) => {
-                let n = w
-                    .strip_prefix('%')
-                    .and_then(zoraya_describe::parse_number)
-                    .filter(|n| *n > 0)
-                    .ok_or_else(|| format!("{w}: not a job; write %N"))?;
-                let n = n as u32;
-                if self.jobs.iter().any(|j| j.number == n) {
-                    Ok(n)
-                } else {
-                    Err(format!("{w}: no such job"))
-                }
-            }
-        }
+        self.jobs.which(word)
     }
 
     // --- Builtins ---
@@ -1601,8 +1661,8 @@ impl Z {
                     if let Some(k) = self.read_keys().first() {
                         return *k;
                     }
-                } else if let Some((job, records)) = self.event(packet) {
-                    self.notices.push(Z::notice(&job, &records));
+                } else {
+                    self.event(packet, At::Elsewhere);
                 }
             }
         }
@@ -1862,10 +1922,8 @@ impl Host for Z {
             "help" => self.help(state, d, p, io),
             "grants" => self.grants(p, io),
             "jobs" => {
-                for j in &self.jobs {
-                    io.out
-                        .push_str(&format!("[{}]  running   {}\n", j.number, j.line));
-                }
+                self.refresh_states();
+                io.out.push_str(&self.jobs.list());
                 0
             }
             "wait" => {
@@ -1880,51 +1938,95 @@ impl Host for Z {
                         }
                     },
                 };
-                for n in core::mem::take(&mut self.notices) {
-                    show(&n);
+                self.refresh_states();
+                if let Some(n) = which
+                    && self
+                        .jobs
+                        .get(n)
+                        .is_some_and(|e| e.state == JobState::Stopped)
+                {
+                    let problem = format!("%{n} is stopped");
+                    let hint = format!("fg %{n} or bg %{n} continues it");
+                    io.err
+                        .push_str(&zoraya_command::error("wait", None, &problem, &[&hint]));
+                    return 1;
                 }
+                show(&self.jobs.take_notices());
                 i32::from(!self.wait_for(which, DEADLINE_INFINITE))
             }
             "fg" => {
                 let n = match self.which_job(p.operand(d, "JOB")) {
                     Ok(n) => n,
-                    Err(_) => {
-                        io.err.push_str(&zoraya_command::error(
-                            "fg",
-                            None,
-                            "no job to continue",
-                            &[],
-                        ));
+                    Err(e) => {
+                        let problem = if p.operand(d, "JOB").is_some() {
+                            e
+                        } else {
+                            "no job to continue".into()
+                        };
+                        io.err
+                            .push_str(&zoraya_command::error("fg", None, &problem, &[]));
                         return 1;
                     }
                 };
-                let line = self
-                    .jobs
-                    .iter()
-                    .find(|j| j.number == n)
-                    .map(|j| j.line.clone())
-                    .unwrap_or_default();
+                let Some(e) = self.jobs.get_mut(n) else {
+                    return 1;
+                };
+                let line = e.line.clone();
+                let job = e.payload.job;
+                e.state = JobState::Running;
                 show(&format!("{line}\n"));
-                let (mut job, records, ctrl_c) = self.wait_foreground(n);
-                for (name, _, report) in &mut job.elements {
-                    if let Some(r) = report.take() {
-                        self.hints(r, name, &line);
+                let _ = job_resume(job);
+                match self.wait_foreground(n) {
+                    Waited::Stopped(_) => 1,
+                    Waited::Ended(entry, records, ctrl_c) => {
+                        let record = Z::status_of(&entry.payload, &records);
+                        let _ = self.ended_in_front(entry, records, ctrl_c);
+                        if let Some(l) = record::screen_line(&line, &record, ctrl_c) {
+                            show(&format!("{l}\n"));
+                        }
+                        i32::from(!record::is_success(&record))
                     }
                 }
-                let record = Z::status_of(&job, &records);
-                if let Some(l) = record::screen_line(&line, &record, ctrl_c) {
-                    show(&format!("{l}\n"));
-                }
-                i32::from(!record::is_success(&record))
             }
             "bg" => {
-                io.err.push_str(&zoraya_command::error(
-                    "bg",
-                    None,
-                    "no stopped job",
-                    &["Ctrl-Z arrives with TASK-18 step 9"],
-                ));
-                1
+                self.refresh_states();
+                let n = match p.operand(d, "JOB") {
+                    None => match self.jobs.newest_stopped() {
+                        Some(n) => n,
+                        None => {
+                            io.err.push_str(&zoraya_command::error(
+                                "bg",
+                                None,
+                                "no stopped job",
+                                &[],
+                            ));
+                            return 1;
+                        }
+                    },
+                    Some(w) => match self.which_job(Some(w)) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            io.err.push_str(&zoraya_command::error("bg", None, &e, &[]));
+                            return 1;
+                        }
+                    },
+                };
+                let Some(e) = self.jobs.get_mut(n) else {
+                    return 1;
+                };
+                if e.state == JobState::Running {
+                    let problem = format!("%{n} is already running");
+                    io.err
+                        .push_str(&zoraya_command::error("bg", None, &problem, &[]));
+                    return 1;
+                }
+                e.state = JobState::Running;
+                let (job, line) = (e.payload.job, e.line.clone());
+                // In the background its input is at its end (rule 2).
+                self.close_keys(n);
+                let _ = job_resume(job);
+                io.out.push_str(&format!("[{n}] {line} &\n"));
+                0
             }
             "kill" => {
                 let n = match self.which_job(p.operand(d, "JOB")) {
@@ -1935,7 +2037,7 @@ impl Host for Z {
                         return 1;
                     }
                 };
-                let Some(job) = self.jobs.iter().find(|j| j.number == n).map(|j| j.job) else {
+                let Some(job) = self.jobs.get(n).map(|e| e.payload.job) else {
                     return 1;
                 };
                 let kind = if p.flag(d, "interrupt") {
@@ -1949,13 +2051,24 @@ impl Host for Z {
                 } else {
                     Some(RequestKind::Terminate)
                 };
-                let _ = match kind {
-                    Some(k) => job_signal(job, k, 0),
-                    None => job_kill(job),
-                };
-                for n in core::mem::take(&mut self.notices) {
-                    show(&n);
+                match kind {
+                    Some(k) => {
+                        let _ = job_signal(job, k, 0);
+                        // A stopped job takes the request once it runs.
+                        self.refresh_states();
+                        if let Some(e) = self.jobs.get_mut(n)
+                            && e.state == JobState::Stopped
+                        {
+                            e.state = JobState::Running;
+                            self.close_keys(n);
+                            let _ = job_resume(job);
+                        }
+                    }
+                    None => {
+                        let _ = job_kill(job);
+                    }
                 }
+                show(&self.jobs.take_notices());
                 if !self.wait_for(Some(n), clock_monotonic() + 2_000_000_000) {
                     show(&format!("[{n}] still running; kill --kill %{n} ends it\n"));
                 }
@@ -1982,18 +2095,12 @@ impl Host for Z {
                 0
             }
             "exit" => {
-                if !self.jobs.is_empty() && !self.exit_warned {
-                    self.exit_warned = true;
-                    let n = self.jobs.len();
-                    io.err.push_str(&if n == 1 {
-                        "1 job is still running; exit again to end it\n".to_string()
-                    } else {
-                        format!("{n} jobs are still running; exit again to end them\n")
-                    });
+                if let Exit::Warn(text) = self.jobs.exit() {
+                    io.err.push_str(&text);
                     return 1;
                 }
-                for j in &self.jobs {
-                    let _ = job_kill(j.job);
+                for e in self.jobs.iter() {
+                    let _ = job_kill(e.payload.job);
                 }
                 show(&io.out);
                 process_exit(0)
@@ -2063,6 +2170,7 @@ impl Host for Z {
         }
         // Every element's table and image before anything starts.
         let mut ready: Vec<(Handle, Option<Table>)> = Vec::new();
+        let mut given_all: Vec<String> = Vec::new();
         let give_back = |ready: Vec<(Handle, Option<Table>)>| {
             for (image, table) in ready {
                 let _ = handle_close(image);
@@ -2074,7 +2182,12 @@ impl Host for Z {
         };
         for exec in pipe.programs {
             match self.ready(exec) {
-                Ok(r) => ready.push(r),
+                Ok((image, table, given)) => {
+                    ready.push((image, table));
+                    if !given.is_empty() {
+                        given_all.push(given);
+                    }
+                }
                 Err(e) => {
                     show(&e);
                     give_back(ready);
@@ -2082,7 +2195,7 @@ impl Host for Z {
                 }
             }
         }
-        let number = self.free_number();
+        let number = self.jobs.free_number();
         let job = match job_create(JOB, JobFlags::NONE) {
             Ok(j) => j,
             Err(s) => {
@@ -2146,13 +2259,10 @@ impl Host for Z {
         {
             failed = Some("zosh: too many jobs\n".into());
         }
-        let line = pipe.line.trim_end_matches(['&', ' ']).to_string();
         let record = Job {
-            number,
             job,
             processes,
             elements,
-            line: line.clone(),
             captured: Vec::new(),
         };
         if let Some(e) = failed {
@@ -2165,22 +2275,20 @@ impl Host for Z {
             show(&e);
             return Ran::Refused(1);
         }
-        self.jobs.push(record);
+        let added = self.jobs.add(pipe.line, given_all.join(", "), record);
+        debug_assert_eq!(added, number, "the streams were made for this number");
         if pipe.background {
+            let line = self
+                .jobs
+                .get(number)
+                .map(|e| e.line.clone())
+                .unwrap_or_default();
             show(&format!("[{number}] {line}\n"));
             return Ran::Background(number);
         }
-        let (mut job, records, ctrl_c) = self.wait_foreground(number);
-        for (name, _, report) in &mut job.elements {
-            if let Some(r) = report.take() {
-                self.hints(r, name, &line);
-            }
-        }
-        let captured = String::from_utf8_lossy(&job.captured).into_owned();
-        Ran::Ended {
-            records,
-            ctrl_c,
-            captured,
+        match self.wait_foreground(number) {
+            Waited::Stopped(n) => Ran::Stopped(n),
+            Waited::Ended(entry, records, ctrl_c) => self.ended_in_front(entry, records, ctrl_c),
         }
     }
 
@@ -2378,10 +2486,10 @@ impl Assist for Helper<'_> {
             return c;
         }
         if let Some(_n) = word.strip_prefix('%') {
-            for j in &self.shell.host.jobs {
-                let t = format!("%{}", j.number);
+            for e in self.shell.host.jobs.iter() {
+                let t = format!("%{}", e.number);
                 if t.starts_with(word) {
-                    c.candidates.push((t, Some(j.line.clone())));
+                    c.candidates.push((t, Some(e.line.clone())));
                 }
             }
             return c;
@@ -2545,8 +2653,7 @@ fn main() -> i32 {
         root,
         cwd: "/".into(),
         port,
-        jobs: Vec::new(),
-        notices: Vec::new(),
+        jobs: Jobs::default(),
         descriptions: BTreeMap::new(),
         found: BTreeMap::new(),
         outputs: BTreeMap::new(),
@@ -2557,7 +2664,6 @@ fn main() -> i32 {
         clear_history: false,
         pending_interrupt: false,
         dropped: 0,
-        exit_warned: false,
         rows: 24,
         columns: 80,
         pending: Vec::new(),
@@ -2606,9 +2712,8 @@ fn main() -> i32 {
     show(GREETING);
     let mut out = String::new();
     loop {
-        for n in core::mem::take(&mut shell.host.notices) {
-            show(&n);
-        }
+        // Ends read since the last prompt, before it (ADR-0158 rule 6).
+        show(&shell.host.jobs.take_notices());
         shell.host.history = editor.history().to_vec();
         editor.options = options(&shell.host);
         let prompt = shell.host.prompt();
@@ -2627,19 +2732,17 @@ fn main() -> i32 {
                 for packet in &packets[..count] {
                     if packet.key == CONSOLE_KEY {
                         keys.extend(shell.host.read_keys());
-                    } else if let Some((job, records)) = shell.host.event(packet) {
-                        shell.host.notices.push(Z::notice(&job, &records));
+                    } else {
+                        shell.host.event(packet, At::Elsewhere);
                     }
                 }
             }
-            if !shell.host.notices.is_empty() {
-                // Output that comes while a line is edited goes above it.
+            if shell.host.jobs.has_notices() {
+                // What comes while a line is edited goes above it, and the
+                // line is drawn again below (INV-0158-4).
                 out.clear();
-                editor.hide(&mut out);
-                for n in core::mem::take(&mut shell.host.notices) {
-                    out.push_str(&n);
-                }
-                editor.redraw(&mut out);
+                let text = shell.host.jobs.take_notices();
+                editor.above(&text, &mut out);
                 show(&out);
             }
             let mut screen = Screen::default();
@@ -2677,7 +2780,7 @@ fn main() -> i32 {
         }
         // A second exit counts only right after the first (ADR-0158 rule 7).
         if entry.trim() != "exit" {
-            shell.host.exit_warned = false;
+            shell.host.jobs.other_line();
         }
         run_entry(&mut shell, &entry);
         if core::mem::take(&mut shell.host.clear_history) {

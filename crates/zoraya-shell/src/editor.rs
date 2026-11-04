@@ -259,6 +259,17 @@ impl Editor {
         self.refresh(out);
     }
 
+    /// Shows `text` (whole lines) above the line being edited, which is
+    /// drawn again below it (ADR-0154 rule 7, ADR-0158 rule 6).
+    pub fn above(&mut self, text: &str, out: &mut String) {
+        if text.is_empty() {
+            return;
+        }
+        self.hide(out);
+        out.push_str(text);
+        self.redraw(out);
+    }
+
     /// Erases the row, so output can be printed where it was; follow with
     /// [`Editor::redraw`].
     pub fn hide(&mut self, out: &mut String) {

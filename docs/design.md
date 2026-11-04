@@ -898,9 +898,16 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   operand as its kind gives it (`cp a b`: `a` to read, `b`'s directory narrowed to `b`), plus what `+r PATH` and
   `+w PATH` grant; `grants LINE` prints it. An operand from a value reaches only inside the current directory or a
   grant. A path a program names outside its entries is refused and reported, and the shell prints the grant that
-  would allow it. Test programs (no description) get what TASK-11's shell gave them. A trailing `&` runs one in the background (`[1] sleep 30`);
-  `jobs`, `wait [%N]`, `kill [--interrupt|--terminate|--hangup|--quit|--kill] [%N]` and `fg [%N]` act on job
-  numbers, the smallest free from 1. A job's end is reported once, before a prompt or by `wait` and `kill`.
+  would allow it. Test programs (no description) get what TASK-11's shell gave them.
+- **Jobs** (ADR-0158, step 9; `zoraya_shell::jobs`). A line's pipeline is one job, numbered from 1 with the smallest
+  free number. A trailing `&` runs it in the background (`[1] sleep 30`) with its input at its end. Ctrl-Z stops the
+  job in front (`job_suspend`) and prints `[N] stopped: LINE`; the rest of that line is not run, as after Ctrl-C.
+  `jobs` lists `[N]  running|stopped  LINE   (what it was given)`, the state read from the job's `SUSPENDED`
+  signal; `fg [%N]` continues a job in front, `bg [%N]` a stopped one in the background (its input then ends);
+  `wait [%N]` waits for one or every running job; `kill [--interrupt|--terminate|--hangup|--quit|--kill] [%N]` sends
+  a request (continuing a stopped job, so that it takes it) and waits up to 2 s. A job's end is reported once: by
+  `wait` or `kill`, else before the next prompt or above the line being edited. `exit` with jobs warns once, and a
+  second `exit` in a row ends them.
 - `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
   the volume through `libposix`, with `/` the volume's root unless `-m` gives a table; its output comes to the console
   (stage 6c; `user/src/bin/posixrun.rs` has the rest). It is a test program: it has no description, so its
@@ -908,8 +915,9 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
 - **Keys** (`help keys`): Left, Right, Home, End and the Ctrl forms, Ctrl-W, Ctrl-U, Ctrl-K, Ctrl-L; Up and Down walk
   the lines that start with what is typed; Ctrl-R searches; Tab completes; Right at the end takes the faint
   suggestion from history; the command word is red while it names nothing. Enter with an open quote or block
-  continues on `...> `. Ctrl-C drops the line, or interrupts the job in front (the third one kills it); Ctrl-\
-  sends Quit; Ctrl-D only says `type exit to end the shell`.
+  continues on `...> `. Ctrl-C drops the line, or interrupts the job in front; if the job is still running a
+  second later the shell says `(Ctrl-C again to kill it)`, and the next Ctrl-C kills it. Ctrl-\ sends Quit, Ctrl-Z
+  stops the job in front; Ctrl-D at the prompt only says `type exit to end the shell`.
 - **Ending.** `exit` ends this shell and `init` starts a new one, on the console or in a new terminal window; with
   jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off. `reboot` says it is not
   available until the kernel has a reset call (proposed ADR-0159).
@@ -931,7 +939,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
 
 **Pending (TASK-18 Part 2).** Step 7's rest: link objects (rule 5) are not yet resolved by the shell, and the in-QEMU
 halves of INV-0153-1, -2 and -7; `grants` today says what a program gets.
-Step 8 is done (byte streams, below). Step 9: Ctrl-Z and `bg`. Step 10: POSIX programs. Step 11: the tour as a test on both terminals.
+Steps 8 and 9 are done (byte streams and jobs, above). Step 10: POSIX programs, and Ctrl-Z of their jobs through the
+broker. Step 11: the tour as a test on both terminals.
 Step 12: `reboot` (ADR-0159).
 
 ## Known limitations
@@ -954,15 +963,17 @@ Step 12: `reboot` (ADR-0159).
   and the shell reports how many bytes went. Any holder of the console's `READ` right can take input from the shell;
   children get `WRITE` only.
 
-- **Shell (TASK-18 Part 2, steps 1 to 8).** A builtin or function that starts a pipeline runs to its end before the
+- **Shell (TASK-18 Part 2, steps 1 to 9).** A builtin or function that starts a pipeline runs to its end before the
   programs start: its output is held, up to the 1 MiB of a `$(...)`, and then fed (ADR-0152 rule 5 allows it to be
   written as it is made). Every byte of output is copied through `zosh` (ADR-0152's open question on the relay's
   cost). Keys typed to a program are cooked by `zosh`: cursor keys are dropped, and the line is sent at Enter. A test
   program that writes with `console_write` itself still reaches the serial console, not the window. A line wider than the terminal is drawn again on a new row when
   edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` publishes
   a new `/config/settings` (ADR-0157 item 4); `/config/history` is rewritten in place after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
-  ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). Output written to a redirected file that
-  fails is dropped without a message. The third Ctrl-C kills a job, as before ADR-0158 (step 9). `reboot` is not available (ADR-0159, proposed).
+  ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). A job brought to the front with `fg` after
+  `&` or `bg` has its input at its end: only a job stopped in front gets the keys again. A line whose job Ctrl-Z
+  stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
+  is dropped without a message. `reboot` is not available (ADR-0159, proposed).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until

@@ -57,6 +57,7 @@ impl Fake {
             (r, String::new())
         });
         f.programs.insert("prog", |_, _| (exited(0), String::new()));
+        f.programs.insert("zee", |_, _| (exited(0), String::new()));
         // Prints its arguments, one per line.
         f.programs.insert("say", |args, _| {
             let mut out = String::new();
@@ -141,6 +142,10 @@ impl Host for Fake {
         }
         if pipe.background {
             return Ran::Background(1);
+        }
+        // Stopped by Ctrl-Z in front.
+        if pipe.programs.iter().any(|e| e.name == "zee") {
+            return Ran::Stopped(1);
         }
         let mut input = String::from(pipe.input.unwrap_or(""));
         let mut records = Vec::new();
@@ -961,6 +966,20 @@ fn pipeline_failures_stop_the_line_and_answers_do_not() {
         run(&mut sh, "if say x | ask { echo yes } else { echo no }"),
         "no\n"
     );
+}
+
+/// A job stopped in front stops its line as Ctrl-C does, with nothing more
+/// said: the host has said `[N] stopped: LINE` (ADR-0158 rule 3).
+#[test]
+fn a_stopped_job_stops_its_line() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "zee; echo after"),
+        "(the rest of the line was not run)\n"
+    );
+    assert_eq!(run(&mut sh, "status"), "interrupted\n");
+    assert_eq!(run(&mut sh, "say a | zee && echo after"), "");
+    assert_eq!(run(&mut sh, "zee"), "");
 }
 
 /// The report of a stopped line names the element whose record is the

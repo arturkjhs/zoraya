@@ -60,7 +60,12 @@ fn feed(e: &mut Editor, a: &mut Fake, keys: &[u8]) -> (String, Key) {
 /// The screen as text, after a simple terminal: `\r` to column 0, `\x08`
 /// and `ESC [ n D` left, `ESC [ n C` right, `ESC [ K` clears to the end,
 /// SGR dropped. Gives the last line.
-fn screen(bytes: &str) -> String {
+pub(crate) fn screen(bytes: &str) -> String {
+    screen_lines(bytes).pop().unwrap_or_default()
+}
+
+/// [`screen`]'s every line.
+pub(crate) fn screen_lines(bytes: &str) -> Vec<String> {
     let mut lines: Vec<Vec<char>> = vec![Vec::new()];
     let mut col = 0usize;
     let mut chars = bytes.chars().peekable();
@@ -105,10 +110,10 @@ fn screen(bytes: &str) -> String {
             }
         }
     }
-    lines.last().unwrap().iter().collect()
+    lines.iter().map(|l| l.iter().collect()).collect()
 }
 
-fn without_sgr(s: &str) -> String {
+pub(crate) fn without_sgr(s: &str) -> String {
     let mut out = String::new();
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {

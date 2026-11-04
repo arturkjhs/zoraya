@@ -9,7 +9,7 @@ use zoraya_describe::Description;
 use zoraya_proto_file::rights;
 
 use crate::eval::Value;
-use crate::grants::{Access, Line, Planned, merge, plan, report};
+use crate::grants::{Access, Line, Planned, merge, plan, report, summary};
 
 const CP: &str = "name cp\nsummary copy a file\nusage cp [--force] FROM TO\noperand FROM read the file\noperand TO create the copy\noption -f --force replace\n";
 const RM: &str = "name rm\nsummary remove files\nusage rm [--recursive] PATH...\noperand PATH... remove the files\noption -r --recursive all in it\nwhen --recursive PATH remove-tree\n";
@@ -212,6 +212,31 @@ fn grants_are_entries_with_their_reason() {
 /// Rule 2: one entry per path; one name stays narrowed, two names or a
 /// narrowed name beside a whole entry fall back to the whole directory, and
 /// `grants` says so (INV-0153-4).
+/// `jobs`' words for what a job got (ADR-0158 rule 5): the entries of
+/// `grants`, without the reasons, each once.
+#[test]
+fn a_jobs_summary_words_its_entries() {
+    let p = go(
+        CP,
+        &["notes.txt", "project/notes.txt"],
+        &[],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap();
+    assert_eq!(
+        summary(&p, "/u"),
+        "~: read, ~/notes.txt: read, ~/project: create or replace notes.txt"
+    );
+    let p = go(CP, &["a.txt", "b.txt"], &[], &[], true, "/u").unwrap();
+    assert_eq!(
+        summary(&p, "/u"),
+        "~: read, ~: create and change anything in, ~/a.txt: read"
+    );
+    assert_eq!(summary(&[], "/u"), "");
+}
+
 #[test]
 fn entries_of_one_path_merge() {
     let p = go(CP, &["a.txt", "b.txt"], &[], &[], true, "/u").unwrap();

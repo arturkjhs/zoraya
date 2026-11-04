@@ -45,7 +45,7 @@ USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
+	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
@@ -212,6 +212,7 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 SHELL_SCRIPT := tests/shell/console.script
 LEAK_SCRIPT := tests/shell/leak.script
 EXIT_SCRIPT := tests/shell/exit.script
+JOBS_SCRIPT := tests/shell/jobs.script
 FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
 STORAGE_DOWN := tests/shell/storage-down.script
@@ -222,6 +223,7 @@ RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
 	$(RUN_BOOT:$(SHELL_SCRIPT)=$(EXIT_SCRIPT)) --label exit-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
+	$(RUN_BOOT:$(SHELL_SCRIPT)=$(JOBS_SCRIPT)) --label jobs-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUNNER) --timeout 240 --script $(LEAK_SCRIPT) --label leak-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)

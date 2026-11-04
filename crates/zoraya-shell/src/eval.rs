@@ -119,6 +119,9 @@ pub enum Ran {
     },
     /// Started in the background as job `n`.
     Background(u32),
+    /// Stopped in front by Ctrl-Z, and kept as job `n` (ADR-0158 rule 3);
+    /// the host said so.
+    Stopped(u32),
     /// Not started; the host said why, already printed.
     Refused(i32),
 }
@@ -874,6 +877,7 @@ impl<H: Host> Shell<H> {
                 Ok(r)
             }
             Ran::Background(_) => Ok(Result_::code(0)),
+            Ran::Stopped(_) => Ok(stopped()),
             Ran::Refused(code) => Ok(Result_::code(code)),
         }
     }
@@ -1548,6 +1552,7 @@ impl<H: Host> Shell<H> {
                 })
             }
             Ran::Background(_) => Ok(Result_::code(0)),
+            Ran::Stopped(_) => Ok(stopped()),
             Ran::Refused(code) => Ok(Result_::code(code)),
         }
     }
@@ -1693,6 +1698,18 @@ fn only_first(name: &str) -> ShellError {
     let mut err = shell_error(name, "a builtin or function can only start a pipeline");
     err.hints.push(format!("run {name} on its own line"));
     err
+}
+
+/// A line whose job in front was stopped stops there, as at Ctrl-C: the
+/// rest of it does not run, and `$status` is an interrupted command's. The
+/// host has already said `[N] stopped: LINE`.
+fn stopped() -> Result_ {
+    Result_ {
+        record: record::interrupted(),
+        no: false,
+        ctrl_c: false,
+        reported: true,
+    }
 }
 
 /// One element of a pipeline as it ended.
