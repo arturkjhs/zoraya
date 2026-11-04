@@ -791,7 +791,7 @@ Each tree in `/work` is for one build; boot a fresh image to run one again. W5 a
 then prints the session's `POSIX-STATS` and `POSIX-CALLS` lines and the machine powers off.
 
 **The targets.**
-- `make test-posix` (a step of `make test`; on CI a job of its own, ADR-0212): the export check of `libc.a`
+- `make test-posix` (a step of `make test`; on CI one job a script, ADR-0213): the export check of `libc.a`
   (INV-0005-1, INV-0005-2), then `tcc hello.c && ./a.out`, W5, W8, W9 (Ctrl-C and SIGTERM), W10, `invariants.script`
   and `scenarios.script`, each a fresh boot under HVF (on a Mac) and TCG, `zoraya-fsck` after each; W8 under the
   first accelerator only.
@@ -988,10 +988,11 @@ or `exit` turns the machine off.
 - **Ports.** toybox has no mount table, file notification or path-based extended attributes on Zoraya (its
   portability patch fails them); no T1 applet uses them. tcc's host check uses a tcc compiled for the host from the same source, not the Zoraya binary (ADR-0143). Programs are
   installed with their debug information.
-- **CI.** The CI workflow (`.github/workflows/test.yml`) runs `make fetch-ports` and `make test TEST_SKIP=test-posix`
-  on Linux with TCG (the fetch step for the ports and `libc.a`, ADR-0109), `make test-posix` in a second job and
-  `make ports` in a third (ADR-0212). CI has no HVF, so W8 runs there under TCG alone; `make test-posix-long` and
-  `make measure-w4` run only where someone runs them.
+- **CI.** The CI workflow (`.github/workflows/test.yml`) runs on Linux with TCG, as small parallel jobs (ADR-0213's
+  Decision): one build job (`make fetch-ports`, `make ci-build`) hands `build/` and `target/` to the others, and every
+  step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
+  one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there;
+  `make test-posix-long` and `make measure-w4` run only where someone runs them.
 - **Stage 6 acceptance (stage 6e).** One CPU: `-j` gives no speed. Every `exec` and `posix_spawn` reads the whole
   program file, debug information included (ADR-0212). A process ended by a signal reports no statistics. W9's
   interruption point is wall-clock on the host, so it differs with the accelerator (ADR-0110). SQLite's run-time

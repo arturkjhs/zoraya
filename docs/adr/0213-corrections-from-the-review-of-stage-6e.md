@@ -48,6 +48,33 @@ accepted, so the changes and statements go here rather than into them.
 
 ## Recommendation
 
+### Decision
+
+**Option A and the statements below, accepted (2026-11-04); and CI split into small parallel jobs** (the architect's
+decision after the first CI run of the merged stage, 2026-11-04). That run (41841941979, commit `6eca1d7`) took:
+
+| Job | Time | What it showed |
+|---|---|---|
+| test (`make test TEST_SKIP=test-posix`) | 22 min 33 s | `test-qemu` 715 s, `test-unit` 262 s, `test-posix-gui` 143 s, `test-libposix` 76 s |
+| ports | 3 min 26 s | |
+| posix (`make test-posix`) | failed at 19 min 58 s | W8 under TCG: 226, 229 and 232 s a build, about 2.3 times the M4's TCG; the fourth build hit W8's 900 s timeout |
+
+No workload is cut. Instead:
+
+1. A build job builds once (`make ci-build`: the ports with their checks, `libc.a`, the kernels, the user programs,
+   the host tools, the host tests unrun, the POSIX image) and hands `build/` and `target/` on as one archive. Before
+   unpacking it, every test job sets its checkout's files to an old time, so that make and cargo find what was built
+   from them up to date.
+2. Every step of `TEST_STEPS` is a job of its own, `fail-fast: false`. `test-qemu` is one job a machine configuration
+   (`make test-qemu-CONFIG`). `test-posix` is split further: the export check with hello and W5; each of W8's five
+   builds (`w8-BUILD.script`); W9's Ctrl-C; W9's SIGTERM under each accelerator; W10; `invariants`; `scenarios`.
+3. The targets: CI under about 10 to 12 minutes of wall time, and no job above 10 minutes. Local `make test` is
+   unchanged, with one step added.
+4. `make check-ci-jobs`, a step of `make test`, fails if the workflow leaves out a step of `TEST_STEPS`, a
+   configuration of `test-qemu`, a script of `test-posix` under an accelerator, or one of W8's builds (INV-0213-3).
+
+The original recommendation follows.
+
 **Recommendation (not a decision): Option A**, and the statements below.
 
 1. **W9** as Option A says (`tests/posix/w9-int.script`, `w9-term.script`, `/tests/w9-check.sh`).
@@ -88,7 +115,10 @@ INV-0213-1 replaces INV-0212-1.
 ## Invariants
 
 - **INV-0213-1.** `make test` fits CI's `timeout-minutes` in the test job, and `make test-posix` in the posix job.
-  *Check:* CI itself.
+  *Check:* CI itself. By the Decision, the jobs are the split ones: each within its `timeout-minutes`.
+- **INV-0213-3.** CI runs every step of `make test`: every configuration of `test-qemu`, every script of
+  `test-posix` under every accelerator, and each of W8's builds. *Check:* `make check-ci-jobs`, a step of `make test`
+  and a CI job.
 - **INV-0213-2.** W9 interrupts a build with tables being written, sees at least one target deleted, and then no
   partial target and no process left. *Check:* `make test-posix`'s `w9-int.script` and `w9-term.script`.
 

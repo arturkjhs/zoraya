@@ -6,8 +6,9 @@
 # with dash's read and case, since T1's applets have neither (the same test:
 # the table's last line holds "0 };"). The recipe count is the recipes make
 # echoed that compile, generate or archive: 18 a leaf, 72 in all.
+# With arguments, only those builds (CI runs each in a job of its own).
 rc=0
-for b in j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4; do
+for b in ${*:-j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4}; do
 	id=w8-$b
 	case $b in
 	j1) args=-j1 ;;

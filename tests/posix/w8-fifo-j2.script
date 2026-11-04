@@ -1,0 +1,18 @@
+# W8's fifo-j2 build alone (ADR-0110 item 2; CI's job for it, ADR-0213's
+# Decision): /tests/w8.sh fifo-j2, with its check and recipe count. w8.script runs
+# all five in one boot.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> sh /tests/w8.sh fifo-j2\r
+% boot
+< W8-RECIPES w8-fifo-j2 72
+< W8-OK w8-fifo-j2
+% w8-fifo-j2
+< W8-STATUS 0
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

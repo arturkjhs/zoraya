@@ -403,8 +403,9 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0212-2 | [ADR-0212](0212-loading-programs-and-cis-budget.md) | A process without read access to a program file never receives its image from the cache: the broker gives an image only in answer to a request that carries an open connection to that file with `READ`, whose object id and version the broker read itself. | the cache task's host tests of the broker (a request with a connection without `READ`, to another object, or to an older version gets no image). | not yet applicable (until the image cache task) |
 | INV-0212-3 | [ADR-0212](0212-loading-programs-and-cis-budget.md) | A cached image is the program file's current contents: its key holds the version the broker read, and a file changed since has a later version and so another key. | the cache task's host test that rewrites a program between two spawns. | not yet applicable (until the image cache task) |
 | INV-0212-4 | [ADR-0212](0212-loading-programs-and-cis-budget.md) | The cache's memory is bounded: past its bound it evicts before it holds another image. | the cache task's host test with more programs than the bound. | not yet applicable (until the image cache task) |
-| INV-0213-1 | [ADR-0213](0213-corrections-from-the-review-of-stage-6e.md) | `make test` fits CI's `timeout-minutes` in the test job, and `make test-posix` in the posix job. | CI itself. | checked: CI (`.github/workflows/test.yml`: the test job, `make test TEST_SKIP=test-posix`, and the posix job, `make test-posix`) |
+| INV-0213-1 | [ADR-0213](0213-corrections-from-the-review-of-stage-6e.md) | `make test` fits CI's `timeout-minutes` in the test job, and `make test-posix` in the posix job. | CI itself. By the Decision, the jobs are the split ones: each within its `timeout-minutes`. | checked: CI (`.github/workflows/test.yml`: the build job and one job a step, configuration or script, each with its `timeout-minutes`) |
 | INV-0213-2 | [ADR-0213](0213-corrections-from-the-review-of-stage-6e.md) | W9 interrupts a build with tables being written, sees at least one target deleted, and then no partial target and no process left. | `make test-posix`'s `w9-int.script` and `w9-term.script`. | checked: `make test-posix` |
+| INV-0213-3 | [ADR-0213](0213-corrections-from-the-review-of-stage-6e.md) | CI runs every step of `make test`: every configuration of `test-qemu`, every script of `test-posix` under every accelerator, and each of W8's builds. | `make check-ci-jobs`, a step of `make test` and a CI job. | checked: `make check-ci-jobs` (`tools/check-ci-jobs.sh`) |
 
 ## Counts
 
@@ -512,5 +513,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0210](0210-surface-for-the-workloads-products.md) The surface the workloads' own programs need | 1 |
 | [ADR-0211](0211-acceptance-choices-of-stage-6e.md) Choices of stage 6e that ADR-0110 leaves open | 2 |
 | [ADR-0212](0212-loading-programs-and-cis-budget.md) Loading programs, and what of stage 6's acceptance fits CI | 4 |
-| [ADR-0213](0213-corrections-from-the-review-of-stage-6e.md) Corrections and statements from the review of stage 6e | 2 |
-| **Total** | **399** |
+| [ADR-0213](0213-corrections-from-the-review-of-stage-6e.md) Corrections and statements from the review of stage 6e | 3 |
+| **Total** | **400** |
