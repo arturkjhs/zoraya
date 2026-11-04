@@ -962,3 +962,22 @@ fn pipeline_failures_stop_the_line_and_answers_do_not() {
         "no\n"
     );
 }
+
+/// The report of a stopped line names the element whose record is the
+/// pipeline's status (ADR-0151 rule 6, ADR-0152 rule 6), not the last.
+#[test]
+fn a_pipelines_report_names_the_element_that_failed() {
+    let mut sh = shell();
+    let crash = "crash: crashed (data abort, class 0x24)\n";
+    assert_eq!(run(&mut sh, "crash | ok"), crash);
+    assert_eq!(run(&mut sh, "crash | piped | upper"), crash);
+    assert_eq!(run(&mut sh, "say x | crash | ok"), crash);
+    assert_eq!(
+        run(&mut sh, "crash | ok | piped"),
+        "piped: ended by signal 13\n"
+    );
+    assert_eq!(
+        run(&mut sh, "echo x | crash; echo after"),
+        alloc::format!("{crash}(the rest of the line was not run)\n")
+    );
+}

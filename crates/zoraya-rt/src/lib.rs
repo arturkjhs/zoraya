@@ -618,12 +618,68 @@ impl fmt::Write for ErrOut {
     }
 }
 
+/// Bytes one print gathers before it writes.
+pub const PRINT_BUFFER: usize = 512;
+
+/// Gathers the pieces of one print, so that a print of up to
+/// [`PRINT_BUFFER`] bytes reaches its stream in one write, which the stream
+/// keeps whole beside other writers' (ADR-0101: writes up to
+/// `STREAM_ATOMIC` are atomic). Two programs printing lines to one `err`
+/// then do not cut into each other's lines. A longer print is written in
+/// pieces of whole `str`s.
+pub struct Gather<W: fmt::Write> {
+    inner: W,
+    buffer: [u8; PRINT_BUFFER],
+    length: usize,
+}
+
+impl<W: fmt::Write> Gather<W> {
+    pub const fn new(inner: W) -> Gather<W> {
+        Gather {
+            inner,
+            buffer: [0; PRINT_BUFFER],
+            length: 0,
+        }
+    }
+
+    /// Writes what is gathered.
+    pub fn finish(mut self) -> fmt::Result {
+        self.flush()
+    }
+
+    fn flush(&mut self) -> fmt::Result {
+        let n = core::mem::take(&mut self.length);
+        if n == 0 {
+            return Ok(());
+        }
+        // The buffer holds whole `str`s only, so it is UTF-8.
+        let text = core::str::from_utf8(&self.buffer[..n]).map_err(|_| fmt::Error)?;
+        self.inner.write_str(text)
+    }
+}
+
+impl<W: fmt::Write> fmt::Write for Gather<W> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.length + s.len() > PRINT_BUFFER {
+            self.flush()?;
+        }
+        if s.len() > PRINT_BUFFER {
+            return self.inner.write_str(s);
+        }
+        self.buffer[self.length..self.length + s.len()].copy_from_slice(s.as_bytes());
+        self.length += s.len();
+        Ok(())
+    }
+}
+
 /// Prints to the command's output, with no newline.
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = write!($crate::Output, $($arg)*);
+        let mut gathered = $crate::Gather::new($crate::Output);
+        let _ = write!(gathered, $($arg)*);
+        let _ = gathered.finish();
     }};
 }
 
@@ -631,7 +687,9 @@ macro_rules! print {
 macro_rules! println {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = writeln!($crate::Output, $($arg)*);
+        let mut gathered = $crate::Gather::new($crate::Output);
+        let _ = writeln!(gathered, $($arg)*);
+        let _ = gathered.finish();
     }};
 }
 
@@ -640,7 +698,9 @@ macro_rules! println {
 macro_rules! eprint {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = write!($crate::ErrOut, $($arg)*);
+        let mut gathered = $crate::Gather::new($crate::ErrOut);
+        let _ = write!(gathered, $($arg)*);
+        let _ = gathered.finish();
     }};
 }
 
@@ -648,7 +708,9 @@ macro_rules! eprint {
 macro_rules! eprintln {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = writeln!($crate::ErrOut, $($arg)*);
+        let mut gathered = $crate::Gather::new($crate::ErrOut);
+        let _ = writeln!(gathered, $($arg)*);
+        let _ = gathered.finish();
     }};
 }
 

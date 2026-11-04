@@ -771,7 +771,7 @@ impl<H: Host> Shell<H> {
     ) -> Run {
         let checked = checked || p.negated;
         let r = if p.elements.len() > 1 {
-            self.several(src, p, checked, background, line)?
+            self.several(src, p, background, line)?
         } else {
             self.element(src, &p.elements[0], checked, background, line)?
         };
@@ -783,14 +783,7 @@ impl<H: Host> Shell<H> {
     }
 
     /// A pipeline of more than one element (ADR-0152 rules 2, 5 and 6).
-    fn several(
-        &mut self,
-        src: &str,
-        p: &Pipeline,
-        checked: bool,
-        background: bool,
-        line: &str,
-    ) -> Run {
+    fn several(&mut self, src: &str, p: &Pipeline, background: bool, line: &str) -> Run {
         for e in &p.elements[1..] {
             if let Some(name) = self.runs_in_shell(&e.command) {
                 self.last_name = name.clone();
@@ -800,6 +793,7 @@ impl<H: Host> Shell<H> {
         let first = &p.elements[0];
         let in_shell = self.runs_in_shell(&first.command);
         let mut members = Vec::new();
+        let mut names = Vec::new();
         let mut input = None;
         if let Some(name) = &in_shell {
             if background {
@@ -825,6 +819,7 @@ impl<H: Host> Shell<H> {
                 record: r.record,
                 question: r.no,
             });
+            names.push(name.clone());
             input = Some(text);
         }
         let rest = if in_shell.is_some() {
@@ -859,7 +854,6 @@ impl<H: Host> Shell<H> {
             .iter()
             .map(|x| self.host.description(&x.name).is_some_and(|d| d.question))
             .collect();
-        let _ = checked;
         match ran {
             Ran::Ended {
                 records,
@@ -869,6 +863,11 @@ impl<H: Host> Shell<H> {
                 self.emit(Sink::Capture, &captured);
                 for (record, question) in records.into_iter().zip(questions) {
                     members.push(Member { record, question });
+                }
+                names.extend(prepared.iter().map(|x| x.name.clone()));
+                // A stop reports the element that failed, not the last.
+                if let Some(i) = pipeline_failure(&members) {
+                    self.last_name = names[i].clone();
                 }
                 let mut r = pipeline_status(&members);
                 r.ctrl_c = ctrl_c;
@@ -1667,7 +1666,6 @@ impl<H: Host> Shell<H> {
     }
 }
 
-/// A question's "no": exit code 1.
 /// A program's expanded words and settings, owned while its pipeline runs.
 struct Prepared {
     name: String,
@@ -1714,16 +1712,8 @@ pub const SIGPIPE: u32 = 13;
 /// rightmost failure's; else "no" when the last element answered "no";
 /// else success.
 pub fn pipeline_status(members: &[Member]) -> Result_ {
-    let last = members.len().saturating_sub(1);
-    let answered_no = |m: &Member| m.question && is_success_no(&m.record);
-    let failed = members.iter().enumerate().rev().find(|(i, m)| {
-        let sigpipe = m.record.reason == zoraya_abi::ExitReason::Terminated
-            && m.record.detail == SIGPIPE
-            && *i != last;
-        !is_success(&m.record) && !answered_no(m) && !sigpipe
-    });
-    if let Some((_, m)) = failed {
-        return Result_::of(m.record);
+    if let Some(i) = pipeline_failure(members) {
+        return Result_::of(members[i].record);
     }
     match members.last() {
         Some(m) if answered_no(m) => Result_ {
@@ -1736,6 +1726,23 @@ pub fn pipeline_status(members: &[Member]) -> Result_ {
     }
 }
 
+/// The rightmost element that failed, by rule 6: the one whose record is
+/// the pipeline's status and whose name its report gives.
+pub fn pipeline_failure(members: &[Member]) -> Option<usize> {
+    let last = members.len().saturating_sub(1);
+    members.iter().enumerate().rposition(|(i, m)| {
+        let sigpipe = m.record.reason == zoraya_abi::ExitReason::Terminated
+            && m.record.detail == SIGPIPE
+            && i != last;
+        !is_success(&m.record) && !answered_no(m) && !sigpipe
+    })
+}
+
+fn answered_no(m: &Member) -> bool {
+    m.question && is_success_no(&m.record)
+}
+
+/// A question's "no": exit code 1.
 fn is_success_no(r: &ExitRecord) -> bool {
     r.reason == zoraya_abi::ExitReason::Exited && r.code == 1
 }

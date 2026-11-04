@@ -914,7 +914,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off. `reboot` says it is not
   available until the kernel has a reset call (proposed ADR-0159).
 - **Streams** (ADR-0152, step 8). Every program gets `in`, `out` and `err` at the native slots 1001 to 1003
-  (`zoraya_abi::native::slot`); `zoraya-rt`'s `print!` and `eprint!` write to them, and a program started without
+  (`zoraya_abi::native::slot`); `zoraya-rt`'s `print!` and `eprint!` write to them, each print of up to 512 bytes
+  in one write, so that lines of two programs sharing a stream stay whole, and a program started without
   them (by a test or a service) prints to the console. `zosh` holds the other ends and relays them from its event
   loop, never waiting on a stream: output to the terminal (the window, in the GUI), a file or a `$(...)`; input from
   the keys (echoed a line at a time, Backspace and Ctrl-D as a terminal in canonical mode gives them), a `< FILE`, or
@@ -922,7 +923,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `&|` sends `err` into the pipe too; `>`, `>>`, `<`, `2>`, `2>>` and `&>` work on programs. A pipeline's status is
   ADR-0152 rule 6's (`zoraya_shell::eval::pipeline_status`). `cat`, `head` and `search` read their input when given
   no file; a writer whose reader closed exits 0 (`PeerClosed`). A background job's `in` is at its end, and its output
-  comes in whole lines above the line being edited, control characters shown as `?`.
+  comes in whole lines (or 4 KiB pieces of a longer one) above the line being edited, control characters shown as
+  `?`.
 - **Settings** (`help settings`): `settings`, `settings --all`, `settings NAME [VALUE]`, `settings --reset NAME`,
   `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
   `shell.suggestions`, `shell.colour`, `console.columns`.
@@ -959,8 +961,8 @@ Step 12: `reboot` (ADR-0159).
   program that writes with `console_write` itself still reaches the serial console, not the window. A line wider than the terminal is drawn again on a new row when
   edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` publishes
   a new `/config/settings` (ADR-0157 item 4); `/config/history` is rewritten in place after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
-  ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). The third Ctrl-C kills a job, as before
-  ADR-0158 (step 9). `reboot` is not available (ADR-0159, proposed).
+  ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). Output written to a redirected file that
+  fails is dropped without a message. The third Ctrl-C kills a job, as before ADR-0158 (step 9). `reboot` is not available (ADR-0159, proposed).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
   a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until

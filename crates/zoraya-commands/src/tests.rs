@@ -223,6 +223,13 @@ fn commands_read_their_input_when_given_no_file() {
     }
     let mut m = with_input(b"bad \xff byte\n", 1);
     assert_eq!(go(&mut m, &["cat"]).1, "bad \u{fffd} byte\n");
+    // A sequence cut between reads stays whole after a byte that is not
+    // UTF-8 in the same read, and a lone lead byte at the end is replaced.
+    let bytes = [b"\xff".as_slice(), "€€".as_bytes(), b"\xe2"].concat();
+    for chunk in [2, 3, 4, 5] {
+        let mut m = with_input(&bytes, chunk);
+        assert_eq!(go(&mut m, &["cat"]).1, "\u{fffd}€€\u{fffd}", "{chunk}");
+    }
     // A file operand is read instead of the input.
     let mut m = with_input(b"input\n", 4096);
     assert_eq!(go(&mut m, &["cat", "a.txt"]).1, "one\n");

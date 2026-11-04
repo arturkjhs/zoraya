@@ -104,17 +104,32 @@ impl Input {
             return Ok((!rest.is_empty()).then(|| String::from_utf8_lossy(&rest).into_owned()));
         }
         self.carry.extend_from_slice(&buffer[..n]);
-        let keep = match core::str::from_utf8(&self.carry) {
-            Ok(_) => 0,
-            // An incomplete sequence at the end waits for the next read.
-            Err(e) if e.error_len().is_none() => self.carry.len() - e.valid_up_to(),
-            Err(_) => 0,
-        };
-        let cut = self.carry.len() - keep;
+        // An incomplete sequence at the end waits for the next read, even
+        // after bytes that are not UTF-8.
+        let cut = self.carry.len() - incomplete_tail(&self.carry);
         let text = String::from_utf8_lossy(&self.carry[..cut]).into_owned();
         self.carry.drain(..cut);
         Ok(Some(text))
     }
+}
+
+/// How many bytes at the end of `bytes` begin a UTF-8 sequence that more
+/// bytes could complete: 0 to 3.
+pub fn incomplete_tail(bytes: &[u8]) -> usize {
+    for back in 1..=bytes.len().min(3) {
+        let b = bytes[bytes.len() - back];
+        if b & 0xc0 == 0x80 {
+            continue;
+        }
+        let length = match b {
+            0xc2..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf4 => 4,
+            _ => return 0,
+        };
+        return if length > back { back } else { 0 };
+    }
+    0
 }
 
 /// What a command wrote.

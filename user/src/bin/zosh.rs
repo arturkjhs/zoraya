@@ -234,10 +234,25 @@ impl Drop for Job {
     }
 }
 
+/// Where the keys typed to a job are in an escape sequence, which is
+/// skipped.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Escape {
+    No,
+    /// After `ESC`.
+    Started,
+    /// `ESC [`, until a final byte.
+    Csi,
+    /// `ESC O`, for one more byte.
+    Ss3,
+}
+
 /// Port keys of the shell's stream ends: above every job's.
 const STREAM_KEY: u64 = 1 << 32;
 /// Most bytes one relay passes before the loop looks at other events.
 const RELAY_CHUNK: usize = 4096;
+/// Most bytes of a background job's unfinished line the shell holds.
+const MAX_HELD_LINE: usize = 4096;
 /// Most bytes a `$(...)` keeps of a program's output.
 const MAX_CAPTURE: usize = syntax::MAX_SOURCE;
 
@@ -330,7 +345,7 @@ struct Z {
     /// The line typed to a foreground job so far, and an escape sequence
     /// being skipped.
     typed: Vec<u8>,
-    escape: bool,
+    escape: Escape,
 }
 
 impl Z {
@@ -944,12 +959,29 @@ impl Z {
             };
             let front = self.foreground == Some(self.relays[at].job);
             match &mut self.relays[at].dest {
-                Dest::Terminal if front => show_bytes(&bytes[..n]),
+                Dest::Terminal if front => {
+                    // What it printed in the background comes first.
+                    let held = core::mem::take(&mut self.relays[at].partial);
+                    show(&tamed(&held));
+                    show_bytes(&bytes[..n]);
+                }
                 Dest::Terminal => {
                     let r = &mut self.relays[at];
                     r.partial.extend_from_slice(&bytes[..n]);
-                    if let Some(cut) = r.partial.iter().rposition(|b| *b == b'\n') {
-                        let lines: Vec<u8> = r.partial.drain(..=cut).collect();
+                    let cut = match r.partial.iter().rposition(|b| *b == b'\n') {
+                        Some(cut) => Some(cut + 1),
+                        // A line longer than this is shown in pieces, so
+                        // that the shell does not hold it all.
+                        None if r.partial.len() >= MAX_HELD_LINE => {
+                            Some(r.partial.len() - zoraya_commands::incomplete_tail(&r.partial))
+                        }
+                        None => None,
+                    };
+                    if let Some(cut) = cut {
+                        let mut lines: Vec<u8> = r.partial.drain(..cut).collect();
+                        if lines.last() != Some(&b'\n') {
+                            lines.push(b'\n');
+                        }
                         self.background_output(&lines);
                     }
                 }
@@ -1073,10 +1105,28 @@ impl Z {
         else {
             return;
         };
-        if self.escape {
-            // `ESC [ ... final`: cursor keys have no meaning here.
-            self.escape = !(0x40..=0x7e).contains(&key) || key == b'[';
-            return;
+        // `ESC [ ... final` and `ESC O x`: cursor and function keys have no
+        // meaning here.
+        match self.escape {
+            Escape::No => {}
+            Escape::Started => {
+                self.escape = match key {
+                    b'[' => Escape::Csi,
+                    b'O' => Escape::Ss3,
+                    _ => Escape::No,
+                };
+                return;
+            }
+            Escape::Csi => {
+                if (0x40..=0x7e).contains(&key) {
+                    self.escape = Escape::No;
+                }
+                return;
+            }
+            Escape::Ss3 => {
+                self.escape = Escape::No;
+                return;
+            }
         }
         match key {
             b'\r' | b'\n' => {
@@ -1105,7 +1155,7 @@ impl Z {
                 }
                 self.pump_feed(at);
             }
-            0x1b => self.escape = true,
+            0x1b => self.escape = Escape::Started,
             b'\t' => {
                 self.typed.push(key);
                 echo.push(key);
@@ -1247,7 +1297,7 @@ impl Z {
         let mut ctrl_c = false;
         self.foreground = Some(number);
         self.typed.clear();
-        self.escape = false;
+        self.escape = Escape::No;
         let ended = 'wait: loop {
             // Keys typed ahead of the job reach it first.
             let mut keys = core::mem::take(&mut self.pending);
@@ -2517,7 +2567,7 @@ fn main() -> i32 {
         foreground: None,
         at_prompt: false,
         typed: Vec::new(),
-        escape: false,
+        escape: Escape::No,
     };
     // Settings (ADR-0157 item 5): each problem once, and the defaults apply.
     if z.root.is_some() {
