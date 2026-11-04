@@ -132,10 +132,12 @@ fn the_union_fails_only_on_a_measured_function_never_called() {
         .map(String::from)
         .to_vec();
     let measured = set(&["open", "read", "kill"]);
+    let none = BTreeSet::new();
     let r = check_calls(
         &list,
         &logged,
         &measured,
+        &none,
         &set(&["open", "kill", "fork", "glob"]),
     );
     assert_eq!(r.uncalled_measured, ["read"]);

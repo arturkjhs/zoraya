@@ -411,10 +411,7 @@ const MAX_CALLS: usize = 4096;
 /// the wrapper and the library's own calls do not, as TASK-02's interposer saw
 /// only calls from outside musl. Data names (`environ`, `stdout`) are not
 /// wrapped.
-pub fn call_log(
-    list: &BTreeSet<String>,
-    objects: &[Object<'_>],
-) -> Result<CallLog, String> {
+pub fn call_log(list: &BTreeSet<String>, objects: &[Object<'_>]) -> Result<CallLog, String> {
     let mut all = BTreeSet::new();
     let mut functions = BTreeSet::new();
     for o in objects {
