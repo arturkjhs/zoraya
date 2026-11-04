@@ -347,6 +347,8 @@ clippy:
 	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
 	@# the user programs' features do not unify with it.
 	$(CARGO) clippy -p zoraya-posix --target $(TARGET) -- -D warnings
+	@# The stats feature (ADR-0110 item 7), as ports/Makefile builds libc.a.
+	$(CARGO) clippy -p zoraya-posix --target $(TARGET) --features stats -- -D warnings
 	$(CARGO) clippy -p zoraya-rt --no-default-features --target $(TARGET) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) -- -D warnings
 	$(CARGO) clippy $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test -- -D warnings

@@ -25,6 +25,9 @@ struct Entry<D> {
 pub struct Table<D> {
     fds: Vec<Option<Slot>>,
     entries: Vec<Option<Entry<D>>>,
+    /// The most fds open at once since [`Table::restart_peak`] (ADR-0110
+    /// item 7).
+    peak: usize,
 }
 
 impl<D> Default for Table<D> {
@@ -38,6 +41,7 @@ impl<D> Table<D> {
         Table {
             fds: Vec::new(),
             entries: Vec::new(),
+            peak: 0,
         }
     }
 
@@ -60,6 +64,17 @@ impl<D> Table<D> {
         if let Some(Some(e)) = self.entries.get_mut(slot.entry) {
             e.fds += 1;
         }
+        self.peak = self.peak.max(self.count());
+    }
+
+    /// The most fds open at once.
+    pub fn peak(&self) -> usize {
+        self.peak
+    }
+
+    /// Starts the peak again from the fds open now (a report was sent).
+    pub fn restart_peak(&mut self) {
+        self.peak = self.count();
     }
 
     fn new_entry(&mut self, item: D) -> usize {
@@ -241,6 +256,27 @@ mod tests {
         assert_eq!(t.get(-1), None);
         assert_eq!(t.get(OPEN_MAX as i32), None);
         assert_eq!(t.fds().collect::<vec::Vec<_>>(), vec![0, 1, 2, 5]);
+    }
+
+    /// ADR-0110 item 7: the peak follows the most fds open at once, through
+    /// install, dup and dup2, and starts again from the open ones.
+    #[test]
+    fn the_peak_is_the_most_fds_open_at_once() {
+        let mut t = Table::new();
+        assert_eq!(t.peak(), 0);
+        t.install(0, 'a', false).unwrap();
+        t.install(0, 'b', false).unwrap();
+        t.dup(0, 0, false).unwrap();
+        assert_eq!(t.peak(), 3);
+        t.close(1).unwrap();
+        t.close(2).unwrap();
+        assert_eq!(t.peak(), 3, "a peak does not fall");
+        t.dup2(0, 9, false).unwrap();
+        assert_eq!(t.peak(), 3);
+        t.restart_peak();
+        assert_eq!(t.peak(), 2, "fds 0 and 9");
+        t.install_at(4, 'c').unwrap();
+        assert_eq!(t.peak(), 3);
     }
 
     #[test]

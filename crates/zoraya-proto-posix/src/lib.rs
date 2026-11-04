@@ -13,7 +13,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use zoraya_protocol::{Below, protocol};
+use zoraya_protocol::{Below, Data, protocol};
 
 /// The status of every reply.
 pub mod status {
@@ -85,6 +85,46 @@ pub mod target {
 /// The ordinals the broker counts, for the counting broker of INV-0002-3 and
 /// INV-0104-5: [`Statistics`] gives one count per ordinal below this.
 pub const ORDINALS: usize = 16;
+
+/// What a process reports in [`ReportStats`] (ADR-0110 item 7): its counters,
+/// eight bytes each, little-endian, in the order of [`stats::NAMES`] (a
+/// shorter list is the first ones), and the bitmap of the exported functions
+/// it called, bit `i % 8` of byte `i / 8` for function `i` of `libc.a`'s call
+/// log (`usr/lib/zoraya-calls.txt`).
+pub mod stats {
+    /// The counters. Those that begin with `max_` are the largest any
+    /// process saw; the others are summed over the session.
+    pub const NAMES: &[&str] = &[
+        "syscalls",
+        "takes",
+        "waits",
+        "requests",
+        "broker",
+        "seeks",
+        "shares",
+        "resolutions",
+        "resolve_ns",
+        "reports",
+        "prepares",
+        "prepare_ns",
+        "commits",
+        "commit_ns",
+        "reaps",
+        "reap_ns",
+        "forks",
+        "fork_ns",
+        "snapshot_ns",
+        "execs",
+        "exec_ns",
+        "spawns",
+        "spawn_ns",
+        "max_spawn_buffer",
+        "max_fds",
+    ];
+    /// The longest counter list and bitmap a report carries.
+    pub const MAX_COUNTERS: usize = 64;
+    pub const MAX_CALL_BYTES: usize = 512;
+}
 
 protocol! {
     /// A pid, its process job and the child's broker connection, before the
@@ -219,6 +259,16 @@ protocol! {
         signal: u32,
     }
     message StopSelfReply = 13, handles 0 {
+        status: Code,
+    }
+
+    /// A process's counters and calls (ADR-0110 item 7), sent before it
+    /// exits and before an `exec` hands over; it then counts from zero.
+    message ReportStats<'a> = 15, handles 0 {
+        counters: Data<'a, { stats::MAX_COUNTERS * 8 }>,
+        calls: Data<'a, { stats::MAX_CALL_BYTES }>,
+    }
+    message ReportStatsReply = 15, handles 0 {
         status: Code,
     }
 

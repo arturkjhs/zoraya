@@ -401,6 +401,12 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     // -----------------------------------------------------------------------
     // State, failure and accounting.
 
+    /// The blocks the space map holds in use, the volume's own included;
+    /// `None` before a mount has read the map.
+    pub fn used_blocks(&self) -> Option<u64> {
+        self.space.as_ref().map(|s| s.block_count() - s.free())
+    }
+
     /// `None` while the volume is healthy; the reason once it is `Failed`.
     pub fn failure(&self) -> Option<FailReason> {
         self.failed

@@ -36,7 +36,10 @@ printf 'int strlcpy(char *d, const char *s, unsigned long n) { return 0; }\n' > 
 cp "$libc" extra.a && "$ar" r extra.a extra.o
 expect extra "export outside the tier list (INV-0100-1): strlcpy"
 
+# With the call log (ADR-0110 item 7) the export is the wrapper zw-puts.o and
+# puts.o holds __zoraya_real_puts: both go.
 cp "$libc" missing.a && "$ar" d missing.a puts.o
+if "$ar" t missing.a | grep -qx zw-puts.o; then "$ar" d missing.a zw-puts.o; fi
 expect missing "tier list name not defined: puts"
 
 printf '\t.text\n\t.globl __stray\n__stray:\n\tsvc #0\n\tret\n' > stray.s

@@ -14,6 +14,7 @@
 extern crate alloc;
 
 pub mod session;
+pub mod totals;
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -24,10 +25,11 @@ use zoraya_abi::posix::signal::{self, SIGCONT, SIGKILL, SIGSTOP, SIGTSTP, SIGTTI
 use zoraya_abi::{ExitRecord, RequestKind, Rights, Status, job_signals};
 use zoraya_proto_posix::{
     ExecCommit, ExecCommitReply, Kill, KillReply, Lookup, LookupReply, ORDINALS, Reap, Reaped,
-    SetPgid, SetPgidReply, SetStopDisposition, SetStopDispositionReply, SpawnAbort,
-    SpawnAbortReply, SpawnCommit, SpawnCommitReply, SpawnPrepare, SpawnPrepareIn, SpawnPrepared,
-    SpawnPreparedIn, Statistics, StatisticsReply, StopSelf, StopSelfReply, Tcgetpgrp,
-    TcgetpgrpReply, Tcsetpgrp, TcsetpgrpReply, group, lookup, status, stop, target,
+    ReportStats, ReportStatsReply, SetPgid, SetPgidReply, SetStopDisposition,
+    SetStopDispositionReply, SpawnAbort, SpawnAbortReply, SpawnCommit, SpawnCommitReply,
+    SpawnPrepare, SpawnPrepareIn, SpawnPrepared, SpawnPreparedIn, Statistics, StatisticsReply,
+    StopSelf, StopSelfReply, Tcgetpgrp, TcgetpgrpReply, Tcsetpgrp, TcsetpgrpReply, group, lookup,
+    status, stop, target,
 };
 use zoraya_protocol::{Below, ErrorReply, Header, MAX_WIRE_MESSAGE, Message, decode, encode};
 
@@ -175,6 +177,9 @@ pub struct Broker<K: Kernel> {
     sid: u32,
     foreground: Option<u32>,
     pub counts: Counts,
+    /// What the processes reported, and the peak of live pids (ADR-0110
+    /// item 7).
+    pub totals: totals::Totals,
     /// The shell's exit record, once the broker reaped it.
     pub shell_exit: Option<ExitRecord>,
     out: Vec<u8>,
@@ -209,6 +214,7 @@ impl<K: Kernel> Broker<K> {
             sid: 0,
             foreground: None,
             counts: Counts::default(),
+            totals: totals::Totals::default(),
             shell_exit: None,
             out: vec![0; MAX_WIRE_MESSAGE],
         }
@@ -567,6 +573,20 @@ impl<K: Kernel> Broker<K> {
                 let s = self.statistics();
                 answer!(s);
             }
+            o if o == ReportStats::ORDINAL => {
+                let m = parse!(ReportStats<'_>);
+                let r = self.totals.add(m.counters.0, m.calls.0);
+                if r.is_err() {
+                    self.counts.refused += 1;
+                }
+                answer!(ReportStatsReply {
+                    status: Below(if r.is_ok() {
+                        status::OK
+                    } else {
+                        status::INVALID
+                    }),
+                });
+            }
             _ => {
                 self.close_all(handles);
                 self.counts.refused += 1;
@@ -577,6 +597,10 @@ impl<K: Kernel> Broker<K> {
                     handles: Vec::new(),
                 });
             }
+        }
+        if ordinal == SpawnPrepare::ORDINAL || ordinal == SpawnPrepareIn::ORDINAL {
+            let live = self.live();
+            self.totals.live(live);
         }
         actions
     }

@@ -793,10 +793,70 @@ fn print_stats() {
     });
 }
 
+// ------------------------------------------------------------ the report
+
+#[cfg(feature = "stats")]
+unsafe extern "C" {
+    /// The call log's bitmap, one byte a function (`calls.S`, made by
+    /// `posix-surface-check calllog` with `libc.a`).
+    static mut __zoraya_calls: u8;
+    static __zoraya_calls_count: u32;
+}
+
+/// The call log's bytes.
+#[cfg(feature = "stats")]
+fn called() -> &'static mut [u8] {
+    // SAFETY: `calls.S` defines `__zoraya_calls` as `__zoraya_calls_count`
+    // bytes for the life of the process. One thread: the wrappers' stores
+    // and this slice never run at once, and only the report and the fork
+    // child's restart take the slice, each for one call.
+    unsafe {
+        core::slice::from_raw_parts_mut(
+            &raw mut __zoraya_calls,
+            ptr::read(&raw const __zoraya_calls_count) as usize,
+        )
+    }
+}
+
+/// ADR-0110 item 7: the counters and the call log to the broker, before an
+/// exit or an `exec`'s hand-over; then counting starts again, so that an
+/// `exec` that fails afterwards reports only what came later.
+#[cfg(feature = "stats")]
+fn report_stats(p: &mut Posix<RtSys>) {
+    let calls = process::pack_calls(called());
+    let counters = p.stats.encode(
+        zoraya_proto_posix::stats::NAMES,
+        zoraya_rt::take_syscalls(),
+        p.fds.peak() as u64,
+    );
+    let _ = p.report_stats(&counters, &calls);
+    restart_stats(p);
+}
+
+/// Counting from zero: after a report, and in a `fork` child, whose copy of
+/// the parent's counters is the parent's to report.
+#[cfg(feature = "stats")]
+fn restart_stats(p: &mut Posix<RtSys>) {
+    p.stats = process::Stats {
+        inherit_failed_at: p.stats.inherit_failed_at,
+        ..process::Stats::default()
+    };
+    called().fill(0);
+    p.fds.restart_peak();
+    let _ = zoraya_rt::take_syscalls();
+}
+
+#[cfg(not(feature = "stats"))]
+fn report_stats(_p: &mut Posix<RtSys>) {}
+
+#[cfg(not(feature = "stats"))]
+fn restart_stats(_p: &mut Posix<RtSys>) {}
+
 /// Ends the process with `code` (`_exit`, `_Exit`, and the shim's
 /// `exit_group`).
 fn exit(code: i64) -> ! {
     print_stats();
+    let _ = with(report_stats);
     zoraya_rt::process_exit((code & 0xff) as i32)
 }
 

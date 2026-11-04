@@ -147,11 +147,16 @@ POSIX_TARGET := $(ROOT)/target/posix
 # The member of libc.a that may hold `svc` (INV-0100-2): zoraya-rt's object.
 SVC_MEMBER := zoraya_rt-
 POSIX_LIB := $(POSIX_TARGET)/aarch64-unknown-none/release/libzoraya_posix.a
+# ADR-0110 item 7, proposed ADR-0211: the `stats` feature and the call log are
+# on in the image the stage 6 tests boot, which is the only one; POSIX_STATS=0
+# builds libc.a without either.
+POSIX_STATS ?= 1
+POSIX_FEATURES := $(if $(filter 1,$(POSIX_STATS)),--features stats)
 posix: $(POSIX_LIB)
 $(POSIX_LIB): FORCE
 	RUSTFLAGS="--remap-path-prefix=$(ROOT)=. -C codegen-units=1" CARGO_PROFILE_RELEASE_DEBUG=0 \
 	  $(CARGO) rustc -q -p zoraya-posix --release --target aarch64-unknown-none \
-	  --target-dir $(POSIX_TARGET) --crate-type staticlib
+	  --target-dir $(POSIX_TARGET) --crate-type staticlib $(POSIX_FEATURES)
 
 # ---------------------------------------------------------------- libc.a
 
@@ -160,6 +165,9 @@ $(POSIX_LIB): FORCE
 # object and writes the list of renames.
 LIBC := $(SYSROOT)/usr/lib/libc.a
 LIBC_DIR := $(OBJ)/libc
+# The call log's order: function i of the bitmap is line i (ADR-0110 item 7);
+# tools/posix-stats decodes POSIX-CALLS with it.
+LIBC_CALLS := $(SYSROOT)/usr/lib/zoraya-calls.txt
 $(LIBC): $(MUSL_LIST) $(POSIX_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_CHECK)
 	rm -rf $(LIBC_DIR) && mkdir -p $(LIBC_DIR)/stub $(LIBC_DIR)/out
 	cd $(LIBC_DIR)/stub && $(ZAR) x $(POSIX_LIB)
@@ -167,8 +175,25 @@ $(LIBC): $(MUSL_LIST) $(POSIX_LIB) $(TIER_LIST) $(ADDED_ADRS) $(ZAR) $(SURFACE_C
 	  $$(for m in $$($(ZAR) t $(POSIX_LIB)); do echo $(LIBC_DIR)/stub/$$m; done) > $(LIBC_DIR)/hidden.txt
 	@echo "libc.a: hid $$(wc -l < $(LIBC_DIR)/hidden.txt | tr -d ' ') names outside the tier list: $(LIBC_DIR)/hidden.txt"
 	@mkdir -p $(dir $@)
-	rm -f $@ && cd $(LIBC_DIR)/out && $(ZAR) rcs $@ \
+ifeq ($(POSIX_STATS),1)
+	@# The call log: each exported function renamed to __zoraya_real_NAME in
+	@# every member, a wrapper member zw-NAME.o in its place, the bitmap in
+	@# zoraya-calls.o.
+	mkdir -p $(LIBC_DIR)/logged $(LIBC_DIR)/calls
+	$(SURFACE_CHECK) calllog $(TIER_SPEC) $(LIBC_DIR)/logged $(LIBC_DIR)/calls \
+	  $$(for o in $$(cat $(MUSL_LIST)); do echo $(LIBC_DIR)/out/$$(basename $$o); done) \
+	  $$(for m in $$($(ZAR) t $(POSIX_LIB)); do echo $(LIBC_DIR)/out/$$m; done) > $(LIBC_DIR)/calls.txt
+	cd $(LIBC_DIR)/calls && for f in *.S; do echo $$f; done | sed 's/\.S$$//' | \
+	  xargs -P 8 -I{} sh -c '$(ZCC) -c -o zw-{}.o {}.S' && mv zw-calls.o zoraya-calls.o
+	@echo "libc.a: the call log wraps $$(wc -l < $(LIBC_DIR)/calls.txt | tr -d ' ') functions: $(LIBC_DIR)/calls.txt"
+	rm -f $@ && cd $(LIBC_DIR)/logged && $(ZAR) rcs $@ \
+	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(POSIX_LIB)) \
+	  $$(cd ../calls && ls zw-*.o zoraya-calls.o | sed 's|^|../calls/|')
+	cp $(LIBC_DIR)/calls.txt $(LIBC_CALLS)
+else
+	rm -f $@ $(LIBC_CALLS) && cd $(LIBC_DIR)/out && $(ZAR) rcs $@ \
 	  $$(for o in $$(cat $(MUSL_LIST)); do basename $$o; done) $$($(ZAR) t $(POSIX_LIB))
+endif
 
 # ---------------------------------------------------------------- crt
 

@@ -11,18 +11,27 @@ const SVC0: u32 = 0xd400_0001;
 const NOP: u32 = 0xd503_201f;
 
 /// An ELF64 AArch64 relocatable with one executable `.text` holding `code`
-/// and the given symbols (name, bind, shndx).
+/// and the given symbols (name, bind, shndx), every defined one a function.
 fn object(symbols: &[(&str, u8, u16)], code: &[u32]) -> Vec<u8> {
+    let kinds: Vec<(&str, u8, u16, u8)> = symbols
+        .iter()
+        .map(|&(n, b, i)| (n, b, i, if i == UNDEF { 0 } else { FUNC }))
+        .collect();
+    object_of_kinds(&kinds, code)
+}
+
+/// The same with each symbol's type given (name, bind, shndx, type).
+fn object_of_kinds(symbols: &[(&str, u8, u16, u8)], code: &[u32]) -> Vec<u8> {
     let text: Vec<u8> = code.iter().flat_map(|w| w.to_le_bytes()).collect();
     let mut strtab = vec![0u8];
     let mut symtab = vec![0u8; 24];
-    for (name, bind, shndx) in symbols {
+    for (name, bind, shndx, kind) in symbols {
         let off = strtab.len() as u32;
         strtab.extend_from_slice(name.as_bytes());
         strtab.push(0);
         let mut s = [0u8; 24];
         s[..4].copy_from_slice(&off.to_le_bytes());
-        s[4] = (bind << 4) | if *shndx == UNDEF { 0 } else { FUNC };
+        s[4] = (bind << 4) | kind;
         s[6..8].copy_from_slice(&shndx.to_le_bytes());
         symtab.extend_from_slice(&s);
     }
@@ -307,6 +316,69 @@ fn hide_refuses_a_taken_name() {
         &[],
     );
     assert!(surface::hide(&list(&NAMES), &[elf::read(&a).unwrap()]).is_err());
+}
+
+/// ADR-0110 item 7: the listed functions, global or weak, in name order; not
+/// data, not unlisted or internal names, not references alone.
+#[test]
+fn call_log_wraps_exactly_the_listed_defined_functions() {
+    const OBJECT: u8 = 1;
+    let a = object_of_kinds(
+        &[
+            ("read", STB_GLOBAL, TEXT, FUNC),
+            ("environ", STB_GLOBAL, TEXT, OBJECT),
+            ("frexpl", STB_GLOBAL, TEXT, FUNC),
+            ("open", STB_GLOBAL, UNDEF, 0),
+        ],
+        &[],
+    );
+    let b = object_of_kinds(
+        &[
+            ("open", STB_WEAK, TEXT, FUNC),
+            ("_exit", STB_GLOBAL, TEXT, FUNC),
+            ("close", STB_LOCAL, TEXT, FUNC),
+        ],
+        &[],
+    );
+    let objs = [elf::read(&a).unwrap(), elf::read(&b).unwrap()];
+    let names = list(&["read", "open", "_exit", "environ", "close", "write"]);
+    let (logged, renames) = surface::call_log(&names, &objs).unwrap();
+    assert_eq!(logged, ["_exit", "open", "read"]);
+    let want: Vec<(String, String)> = logged
+        .iter()
+        .map(|n| (n.clone(), format!("__zoraya_real_{n}")))
+        .collect();
+    assert_eq!(renames, want);
+}
+
+#[test]
+fn call_log_refuses_a_taken_name() {
+    let a = object(
+        &[
+            ("read", STB_GLOBAL, TEXT),
+            ("__zoraya_real_read", STB_GLOBAL, UNDEF),
+        ],
+        &[],
+    );
+    assert!(surface::call_log(&list(&["read"]), &[elf::read(&a).unwrap()]).is_err());
+}
+
+/// The wrapper sets its own byte and branches with no frame; the bitmap
+/// holds one byte a function and its count.
+#[test]
+fn call_log_assembly_names_its_byte_and_target() {
+    let w = surface::call_log_wrapper("printf", 7);
+    assert!(w.contains("\n\t.globl printf\n"));
+    assert!(w.contains("\tstrb w17, [x16, #7]\n"));
+    assert!(w.contains("\tb __zoraya_real_printf\n"));
+    assert!(w.contains(".section .text.printf,"));
+    assert!(
+        !w.contains("\tstp") && !w.contains("\tbl "),
+        "no frame, no call"
+    );
+    let b = surface::call_log_bitmap(300);
+    assert!(b.contains("__zoraya_calls:\n\t.zero 300\n"));
+    assert!(b.contains("__zoraya_calls_count:\n\t.word 300\n"));
 }
 
 const CSV: &str = include_str!("../../../docs/research/task-02/libc-surface.csv");

@@ -196,6 +196,14 @@ impl File {
         Err(status::IS_LINK)
     }
 
+    /// The most bytes the volume's blocks in use reached since its mount:
+    /// `status`'s count (proposed ADR-0211).
+    pub fn peak_used(&self) -> FsResult<u64> {
+        let mut reply = Vec::new();
+        let (length, _) = call(self.end, &proto::Status {}, &[], &mut reply)?;
+        done(&reply[..length])
+    }
+
     /// The boot's time base (ADR-0191), from the volume's service.
     pub fn time_base(&self) -> FsResult<u64> {
         let mut reply = Vec::new();

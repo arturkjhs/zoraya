@@ -5,6 +5,8 @@
 
 use super::*;
 use std::collections::BTreeMap;
+use std::format;
+use std::string::ToString;
 use std::vec;
 use std::vec::Vec;
 
@@ -12,6 +14,7 @@ use zoraya_abi::ExitReason;
 use zoraya_abi::posix::signal::SIGINT;
 use zoraya_abi::posix::signal::{SIGTTIN, SIGTTOU};
 use zoraya_proto_posix as proto;
+use zoraya_protocol::Data;
 use zoraya_protocol::testing::exercise;
 
 #[derive(Debug, Clone)]
@@ -1409,4 +1412,76 @@ fn a_reap_gives_the_ending_request_and_a_retired_end_is_counted() {
         assert_eq!(s.b.counts.refused, before + n);
     }
     s.b.kernel.close(client);
+}
+
+fn counters(values: &[u64]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// ADR-0110 item 7: the reports' counters are summed, the `max_` ones kept
+/// at their largest, the bitmaps joined; a malformed report is refused and
+/// counted; the lines name every counter and give the calls in hex.
+#[test]
+fn reports_are_summed_maxed_and_joined() {
+    use crate::totals::Totals;
+    use zoraya_proto_posix::stats::NAMES;
+    let max = NAMES.iter().position(|n| *n == "max_fds").unwrap();
+    let mut first = vec![0u64; NAMES.len()];
+    first[0] = 5;
+    first[max] = 9;
+    let mut second = vec![0u64; NAMES.len()];
+    second[0] = 7;
+    second[max] = 4;
+    let mut t = Totals::default();
+    t.add(&counters(&first), &[0x01]).unwrap();
+    t.add(&counters(&second), &[0x80, 0x02]).unwrap();
+    t.add(&counters(&[1]), &[]).unwrap();
+    assert_eq!(t.images, 3);
+    assert_eq!(t.counters[0], 13, "summed");
+    assert_eq!(t.counters[max], 9, "the largest");
+    assert_eq!(t.calls, [0x81, 0x02]);
+    assert!(t.add(&[0; 7], &[]).is_err(), "not a multiple of 8");
+    assert!(t.add(&counters(&vec![0; NAMES.len() + 1]), &[]).is_err());
+    assert!(t.add(&[], &[0; 513]).is_err());
+    assert_eq!(t.images, 3, "nothing counted from a refused report");
+    t.live(3);
+    t.live(2);
+    let lines = t.lines(Some(8192));
+    assert_eq!(lines[0], "POSIX-STATS images=3");
+    assert_eq!(lines[1], format!("POSIX-STATS {}=13", NAMES[0]));
+    assert!(lines.contains(&"POSIX-STATS max_fds=9".to_string()));
+    assert!(lines.contains(&"POSIX-STATS peak_pids=3".to_string()));
+    assert!(lines.contains(&"POSIX-STATS peak_tmp_bytes=8192".to_string()));
+    assert_eq!(lines.last().unwrap(), "POSIX-CALLS 8102");
+    assert_eq!(lines.len(), NAMES.len() + 4);
+    assert!(!t.lines(None).iter().any(|l| l.contains("peak_tmp")));
+}
+
+/// The request: a report from a process is answered OK and counted; a bad
+/// one is INVALID and refused; the peak of live pids follows the prepares.
+#[test]
+fn a_report_is_taken_and_the_peak_of_live_pids_kept() {
+    let mut s = session(true);
+    let shell = s.shell;
+    let m = message(&proto::ReportStats {
+        counters: Data(&counters(&[3, 4])),
+        calls: Data(&[0x10]),
+    });
+    assert_eq!(s.status(shell.conn, &m), status::OK);
+    assert_eq!(s.b.totals.images, 1);
+    assert_eq!(&s.b.totals.counters[..2], &[3, 4]);
+    let bad = message(&proto::ReportStats {
+        counters: Data(&[1, 2, 3]),
+        calls: Data(&[]),
+    });
+    let refused = s.b.counts.refused;
+    assert_eq!(s.status(shell.conn, &bad), status::INVALID);
+    assert_eq!(s.b.counts.refused, refused + 1);
+    let a = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    let b = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    assert_eq!(s.b.totals.peak_pids, 3, "the shell and two children");
+    s.end(&a, 0);
+    s.end(&b, 0);
+    let _ = s.spawn(&shell, group::INHERIT, 0).unwrap();
+    assert_eq!(s.b.totals.peak_pids, 3, "a peak, not the current count");
 }

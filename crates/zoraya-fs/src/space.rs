@@ -72,6 +72,10 @@ impl Space {
         self.free
     }
 
+    pub fn block_count(&self) -> u64 {
+        self.block_count
+    }
+
     pub fn is_used(&self, b: u64) -> bool {
         self.used
             .get((b / 64) as usize)

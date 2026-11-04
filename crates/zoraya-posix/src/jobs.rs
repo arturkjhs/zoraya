@@ -115,6 +115,12 @@ impl<S: Sys> Posix<S> {
         Ok(())
     }
 
+    /// Counts a kernel wait (ADR-0110 item 7's wake-ups).
+    fn count_wait(&mut self) -> &mut Self {
+        self.stats.waits += 1;
+        self
+    }
+
     /// Waits for `h` to assert one of `wanted` at a wait point: `EINTR` when a
     /// signal is to be delivered first (ADR-0106 item 3).
     pub fn wait_point(&mut self, h: S::H, wanted: u32) -> Result<u32, i32> {
@@ -136,12 +142,13 @@ impl<S: Sys> Posix<S> {
             return match deadline {
                 // Nothing to wait for and no end: a wait that never ends.
                 None => Err(EINVAL),
-                Some(_) => match self.sys.wait_any(&[], deadline) {
+                Some(_) => match self.count_wait().sys.wait_any(&[], deadline) {
                     Ok(_) | Err(Status::DeadlineExceeded) => Ok((None, None)),
                     Err(s) => Err(crate::errno::from_status(s, crate::errno::Call::Other)),
                 },
             };
         }
+        self.stats.waits += 1;
         match self.sys.wait_any(&sources, deadline) {
             Ok((i, s)) if i < own.len() => Ok((Some(i), Some(s))),
             Ok((i, _)) => {
@@ -201,6 +208,18 @@ impl<S: Sys> Posix<S> {
         };
         self.stats.broker += 1;
         self.call(broker, m, moved).map_err(|_| EAGAIN)
+    }
+
+    /// ADR-0110 item 7: the process's counters and call bitmap to the
+    /// broker, which sums them for the session.
+    pub fn report_stats(&mut self, counters: &[u8], calls: &[u8]) -> Result<(), i32> {
+        self.broker_simple(
+            &bp::ReportStats {
+                counters: zoraya_protocol::Data(counters),
+                calls: zoraya_protocol::Data(calls),
+            },
+            &[],
+        )
     }
 
     /// A broker request answered by a status only.
