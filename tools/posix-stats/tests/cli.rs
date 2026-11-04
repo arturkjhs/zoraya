@@ -47,7 +47,7 @@ fn table_prints_and_w4_fails_without_a_counter_or_the_accelerator() {
             .1
             .contains("| fork count | 2 |")
     );
-    assert!(run(&["table", "--w4"]).0 == false);
+    assert!(!run(&["table", "--w4"]).0);
     assert!(!run(&["table", d.join("missing.log").to_str().unwrap()]).0);
     assert!(!run(&["nothing"]).0);
     assert!(!run(&[]).0);
