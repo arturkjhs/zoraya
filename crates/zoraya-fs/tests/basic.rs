@@ -110,7 +110,7 @@ fn many_files_split_tree() {
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
 
-/// Proposed ADR-0211 item 4: `used_blocks` is the space map's count, the
+/// ADR-0211 item 4: `used_blocks` is the space map's count, the
 /// volume's own blocks included: fewer than the volume holds, more after a
 /// committed write, fewer again after the file goes.
 #[test]

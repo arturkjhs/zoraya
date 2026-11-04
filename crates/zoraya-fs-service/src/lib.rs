@@ -237,7 +237,7 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     told_lost: bool,
     /// The most blocks the space map held in use since the mount, sampled
     /// after every request; `status` answers it in bytes (ADR-0110 item 7's
-    /// peak `/tmp`, proposed ADR-0211).
+    /// peak `/tmp`, ADR-0211).
     peak_used: u64,
     retry_at: Option<u64>,
     next_cookie: u64,

@@ -2145,7 +2145,7 @@ fn a_page_of_the_longest_names_is_full() {
     assert!(m.entries.iter().all(|e| e.name.0.len() == 255));
 }
 
-/// Proposed ADR-0211: `status`'s count is the peak of the space in use since
+/// ADR-0211: `status`'s count is the peak of the space in use since
 /// the mount, in bytes: it grows with what is written and stays after it is
 /// removed (ADR-0110 item 7's peak `/tmp`).
 #[test]

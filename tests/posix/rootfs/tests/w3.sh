@@ -3,7 +3,7 @@
 # remote/workloads.sh W3 ran it from a dash script, then W3-check (a query
 # printing 42); `sh w3.sh parallel` is W3-j, TASK-02b's Makefile of the same
 # commands at -j2 and -j4 in both jobserver styles. Both compiles take
-# -DSQLITE_OMIT_LOAD_EXTENSION, proposed ADR-0210 item 4: libc.a has no
+# -DSQLITE_OMIT_LOAD_EXTENSION, ADR-0210 item 4: libc.a has no
 # dlopen (INV-0005-2), which SQLite's run-time extensions need.
 rc=0
 check() { # id

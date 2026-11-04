@@ -34,7 +34,7 @@
  *                      (INV-0105-1, run from the script)
  *   t_posix hostile    ignores every catchable signal, then sleeps
  *   t_posix forkbomb N forks until refused, N at most; reports the count
- *   t_posix products   proposed ADR-0210's functions the workloads' own
+ *   t_posix products   ADR-0210's functions the workloads' own
  *                      programs need: chmod, rmdir, symlink, utimes, fsync,
  *                      gethostname, getrusage, mmap, popen and pclose, system,
  *                      and each of its names that is musl's own code
@@ -711,7 +711,7 @@ static void products_musl(void)
 	CHECK(unlink("/tmp/p-stdio") == 0);
 }
 
-/* Proposed ADR-0210: what W2's and W3's programs call beyond the tier list. */
+/* ADR-0210: what W2's and W3's programs call beyond the tier list. */
 static void products(void)
 {
 	struct stat st;

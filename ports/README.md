@@ -74,7 +74,7 @@ ADR-0109 revisit.
 - **busybox**: `make allnoconfig`, the shell choice set to none, then `tr` and `diff`,
   as TASK-02's minimal builds.
 - **pdpmake**: its own `Makefile` with `CC=zcc`, unpatched; `/bin/pdpmake`. It runs
-  each recipe through `system()` (proposed ADR-0210).
+  each recipe through `system()` (ADR-0210).
 - **tcc**: `./configure --cpu=aarch64 --targetos=Zoraya ...` (ADR-0143), `tcc` and
   `libtcc1.a` (`arm64-libtcc1-usegcc=yes`, so by `zcc`); a second build of the same
   source by the host's compiler, rooted at `build/sysroot`, links `tests/hello.c` for

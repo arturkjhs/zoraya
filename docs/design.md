@@ -809,34 +809,35 @@ function is a two-instruction wrapper that sets its byte of a bitmap, so a progr
 library's own are not, as TASK-02's interposer saw. Each process sends its counters and bitmap to the broker before
 it exits or `exec`s; a process ended by a signal does not. The runner's `% NAME` steps give wall time on the host.
 
-**Measured** on the M4 under QEMU 11.1.2 (one CPU, 512 MiB), one run per accelerator, from `make test-posix` and
-`make test-posix-long` (`make posix-table`), beside Linux: TASK-02's and TASK-02b's counts on the Alpine aarch64 VM
+**Measured** on the M4 under QEMU 11.1.2 (one CPU, 512 MiB), one run per accelerator, from the clean clone's `make
+test` and `make test-posix-long` of TASK-22 (`make posix-table`), beside Linux: TASK-02's and TASK-02b's counts on the Alpine aarch64 VM
 (four cores; `tools/posix-surface/results/syscall-surface.csv`, `par/syscall-delta.csv`; durations under `strace`,
 which TASK-02 recorded only for W8). "Programs loaded" is `exec` plus `posix_spawn` on Zoraya, `execve` on Linux
 (each `vfork`+`execve` there is a `posix_spawn` here).
 
 | Workload | Wall time, HVF / TCG | Linux | Programs loaded (Linux) | Share loading, HVF / TCG | `fork`s; mean `snapshot_process`, HVF / TCG |
 |---|---|---|---|---|---|
-| W1 (configure, make, check) | 3.5 s / 35 s | – | 59 (64) | 44 % / 32 % | 11; 0.68 / 7.0 ms |
-| W2 (pdpmake, then GNU make) | 7.9 s / 75 s | – | 128 (127) | 65 % / 52 % | 2; 0.76 / 10 ms |
-| W2-j (four builds) | 13 s / 145 s | 0.3 to 0.5 s a build | 181 (4 × 43 + checks) | 60 % / 46 % | 4; 0.75 / 68 ms |
-| W3 | 1.1 s / 11 s | – | 7 (6) | 23 % / 16 % | 3; 0.64 / 8.3 ms |
-| W3-j (four builds) | 4.4 s / 45 s | 0.2 s a build | 25 (4 × 4 + checks) | 22 % / 15 % | 12; 0.60 / 7.7 ms |
-| W5 (session) | 2.2 s / 3.8 s | – | 8 (8) | 12 % / 53 % | 3; 0.77 / 8.9 ms |
-| W8 (five builds) | 88 s / 496 s | 13.4, 6.8, 3.4 s at `-j1`, `-j2`, `-j4` | 571 (5 × 111) | 61 % / 67 % | 20; 0.48 / 17 ms |
-| W9, Ctrl-C at 1.5 s; SIGTERM at 1.5 s | 1.5 / 49 s; 1.6 / 3.5 s | – | – | – | none; 3 (the shell's) |
-| W10 (parallel, serial) | 4.3 s / 26 s | – | 24 | 36 % / 33 % | 12; 1.7 / 10 ms |
-| `tcc hello.c && ./a.out` | 0.4 s / 4.7 s | – | 2 | 11 % / 8 % | 0 |
+| W1 (configure, make, check) | 3.5 s / 35 s | – | 59 (64) | 44 % / 32 % | 11; 0.68 / 7.2 ms |
+| W2 (pdpmake, then GNU make) | 7.9 s / 74 s | – | 128 (127) | 65 % / 52 % | 2; 0.66 / 11 ms |
+| W2-j (four builds) | 13 s / 134 s | 0.3 to 0.5 s a build | 181 (4 × 43 + checks) | 61 % / 48 % | 4; 0.77 / 14 ms |
+| W3 | 1.1 s / 11 s | – | 7 (6) | 24 % / 17 % | 3; 0.60 / 8.2 ms |
+| W3-j (four builds) | 4.3 s / 45 s | 0.2 s a build | 25 (4 × 4 + checks) | 23 % / 15 % | 12; 0.59 / 7.5 ms |
+| W5 (session) | 2.2 s / 3.8 s | – | 8 (8) | 12 % / 52 % | 3; 0.76 / 8.8 ms |
+| W8 (five builds) | 89 s / 488 s | 13.4, 6.8, 3.4 s at `-j1`, `-j2`, `-j4` | 571 (5 × 111) | 61 % / 66 % | 20; 0.44 / 10 ms |
+| W9, Ctrl-C; SIGTERM (each once tables are being written) | 4.5 / 30 s; 4.8 / 97 s | – | – | – | none; 18 / 83 (the shell's wait loop) |
+| W10 (parallel, serial) | 4.4 s / 25 s | – | 24 | 36 % / 32 % | 12; 1.7 / 9.8 ms |
+| `tcc hello.c && ./a.out` | 0.4 s / 4.6 s | – | 2 | 11 % / 8 % | 0 |
 
-The guest has one CPU, so W8 takes the same time at every `-j` (88 s is 17.6 s a build under HVF): `-j` gives
+The guest has one CPU, so W8 takes the same time at every `-j` (89 s is 17.7 s a build under HVF): `-j` gives
 nothing here (`docs/backlog.md`). Loading programs is the largest single cost: each `exec` and `posix_spawn` reads
 the whole program through the file protocol (99 ms mean in W8 under HVF, 423 ms under TCG); an image cache in the
 broker is the next task (ADR-0212's Decision). Every child takes three broker round trips (prepare, commit, reap) in
-every workload. The rest of ADR-0110 item 11, over every run above: path resolution 0.5 to 1.1 µs mean under HVF
-(W1: 1,892 resolutions, 0.48 µs) and 33 to 123 µs under TCG; `share` 0 to 1,115 and `seek` 12 to 85,298 requests a
+every workload. The rest of ADR-0110 item 11, over every run above: path resolution 0.46 to 0.76 µs mean under HVF
+(W1: 1,892 resolutions, 0.46 µs) and 33 to 119 µs under TCG; `share` 0 to 1,115 and `seek` 12 to 85,298 requests a
 run; the request poll is 0.1 to 0.5 % of system calls in the builds and 5 to 21 % in the interactive sessions; W8 at
 `-j4` wakes a process 5 times a second under HVF; the largest `spawn` buffer is 1,120 bytes of ADR-0042's 64 KiB; at
-most 13 pids live at once of ADR-0031's 255, and 10 fds open in one process; `/tmp` at most 48 KiB.
+most 13 pids live at once of ADR-0031's 255, and 10 fds open in one process; `/tmp` at most 52 KiB (the temporary
+volume's own blocks included).
 
 **W4** (`make measure-w4`, `build/w4-report.md`): GNU hello's `configure` stops in its first lines under both makes,
 `sed: not found` and `expr: not found` (T2's applets are not built), after 120 forks of dash: `snapshot_process` 0.55

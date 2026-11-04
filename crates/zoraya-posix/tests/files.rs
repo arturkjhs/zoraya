@@ -1480,7 +1480,7 @@ fn no_request_is_taken_on_the_file_paths_and_polls_wait_for_a_handler() {
     assert!(r.p.should_poll());
 }
 
-/// `fsync` (proposed ADR-0210 item 3): a file's fd succeeds, written or not;
+/// `fsync` (ADR-0210 item 3): a file's fd succeeds, written or not;
 /// a pipe is `EINVAL`, a closed fd `EBADF`.
 #[test]
 fn fsync_takes_a_file_and_refuses_a_pipe() {

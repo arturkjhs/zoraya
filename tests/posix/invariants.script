@@ -42,7 +42,7 @@
 < t_posix: files passed
 < broker=0 takes=0
 < PSURF>
-# Proposed ADR-0210: the functions the workloads' own programs need.
+# ADR-0210: the functions the workloads' own programs need.
 > t_posix products\r
 < t_posix: products passed
 < PSURF>

@@ -147,7 +147,7 @@ POSIX_TARGET := $(ROOT)/target/posix
 # The member of libc.a that may hold `svc` (INV-0100-2): zoraya-rt's object.
 SVC_MEMBER := zoraya_rt-
 POSIX_LIB := $(POSIX_TARGET)/aarch64-unknown-none/release/libzoraya_posix.a
-# ADR-0110 item 7, proposed ADR-0211: the `stats` feature and the call log are
+# ADR-0110 item 7, ADR-0211: the `stats` feature and the call log are
 # on in the image the stage 6 tests boot, which is the only one; POSIX_STATS=0
 # builds libc.a without either.
 POSIX_STATS ?= 1
@@ -301,7 +301,7 @@ $(GMAKE_BIN): $(GMAKE) $(SYSROOT_STAMP) ports/config.site
 # ---------------------------------------------------------------- pdpmake
 
 # pdpmake, TASK-02's comparison make (W2 and W4 run with it, ADR-0110): its
-# own Makefile, unpatched; recipes go through system(), proposed ADR-0210.
+# own Makefile, unpatched; recipes go through system(), ADR-0210.
 PDPMAKE := $(WORK)/pdpmake
 PDPMAKE_BIN := $(PDPMAKE)/make
 pdpmake: $(PDPMAKE_BIN)

@@ -15,7 +15,7 @@ RETAINED_DIRS := string ctype multibyte locale stdlib math regex search prng \
 # (ADR-0100 item 2).
 EXCEPTIONS := src/thread/aarch64/__set_thread_area.s
 # Single files of directories that are otherwise replaced: system.c calls
-# only functions libc.a has (proposed ADR-0210).
+# only functions libc.a has (ADR-0210).
 EXCEPTIONS_BASE := src/process/system.c
 
 EXCLUDED := $(shell sed -e 's/\#.*//' -e '/^[[:space:]]*$$/d' ports/musl/excluded.txt)

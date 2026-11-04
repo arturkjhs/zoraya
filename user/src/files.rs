@@ -197,7 +197,7 @@ impl File {
     }
 
     /// The most bytes the volume's blocks in use reached since its mount:
-    /// `status`'s count (proposed ADR-0211).
+    /// `status`'s count (ADR-0211).
     pub fn peak_used(&self) -> FsResult<u64> {
         let mut reply = Vec::new();
         let (length, _) = call(self.end, &proto::Status {}, &[], &mut reply)?;

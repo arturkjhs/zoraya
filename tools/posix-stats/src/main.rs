@@ -126,7 +126,7 @@ fn run_calls(args: &[String]) -> Result<bool, String> {
         &r.uncalled_measured,
     );
     show(
-        "measured, never called, exempted (proposed ADR-0211 item 16)",
+        "measured, never called, exempted (ADR-0211 item 16)",
         &r.uncalled_exempt,
     );
     show("static-only, never called", &r.uncalled_static_only);

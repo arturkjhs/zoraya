@@ -1026,7 +1026,7 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    /// `fsync` (proposed ADR-0210 item 3): a file's writes are already in
+    /// `fsync` (ADR-0210 item 3): a file's writes are already in
     /// the service, durable for an `O_SYNC` description (ADR-0103 item 14);
     /// a description written through asks `status`, as `close` does, so a
     /// failed volume is `EIO`. Nothing else is made durable. A stream or

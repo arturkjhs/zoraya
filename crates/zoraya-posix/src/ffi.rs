@@ -574,7 +574,7 @@ extern "C" fn munmap(address: *mut u8, length: usize) -> i32 {
     unit(unmap(address as u64, length as u64))
 }
 
-/// The C name of the mapping call (proposed ADR-0210): musl's `mmap.c` is
+/// The C name of the mapping call (ADR-0210): musl's `mmap.c` is
 /// not compiled, so the shim's target serves C callers too, with `MAP_FAILED`
 /// and `errno` for an error.
 #[unsafe(no_mangle)]
@@ -1123,7 +1123,7 @@ extern "C" fn unlink(path: *const c_char) -> i32 {
     unlinkat(AT_FDCWD, path, 0)
 }
 
-/// Proposed ADR-0210: `unlinkat` with `AT_REMOVEDIR`, as musl's `rmdir.c`.
+/// ADR-0210: `unlinkat` with `AT_REMOVEDIR`, as musl's `rmdir.c`.
 #[unsafe(no_mangle)]
 extern "C" fn rmdir(path: *const c_char) -> i32 {
     unlinkat(AT_FDCWD, path, process::AT_REMOVEDIR as i32)
@@ -1150,7 +1150,7 @@ extern "C" fn symlinkat(target: *const c_char, dirfd: i32, path: *const c_char) 
     unit(target.and_then(|t| path.and_then(|path| state(|p| p.symlink_at(t, dirfd, path)))))
 }
 
-/// Proposed ADR-0210: `symlinkat` from the working directory.
+/// ADR-0210: `symlinkat` from the working directory.
 #[unsafe(no_mangle)]
 extern "C" fn symlink(target: *const c_char, path: *const c_char) -> i32 {
     symlinkat(target, AT_FDCWD, path)
@@ -1205,13 +1205,13 @@ extern "C" fn fchmodat(dirfd: i32, path: *const c_char, mode: u32, flags: i32) -
     unit(path.and_then(|path| state(|p| p.fchmod_at(dirfd, path, mode, flags as u32))))
 }
 
-/// Proposed ADR-0210: `fchmodat` from the working directory.
+/// ADR-0210: `fchmodat` from the working directory.
 #[unsafe(no_mangle)]
 extern "C" fn chmod(path: *const c_char, mode: u32) -> i32 {
     fchmodat(AT_FDCWD, path, mode, 0)
 }
 
-/// Proposed ADR-0210 item 3: see `Posix::fsync`.
+/// ADR-0210 item 3: see `Posix::fsync`.
 #[unsafe(no_mangle)]
 extern "C" fn fsync(fd: i32) -> i32 {
     unit(state(|p| p.fsync(fd)))
@@ -1295,7 +1295,7 @@ extern "C" fn futimens(fd: i32, times: *const [i64; 2]) -> i32 {
     unit(state(|p| p.set_mtime(Target::Fd(fd), mtime, 0)))
 }
 
-/// Proposed ADR-0210: `utimensat` with the two `struct timeval`s turned into
+/// ADR-0210: `utimensat` with the two `struct timeval`s turned into
 /// `struct timespec`s; NULL is now, as for `utimensat`.
 #[unsafe(no_mangle)]
 extern "C" fn utimes(path: *const c_char, times: *const [i64; 2]) -> i32 {
@@ -1663,7 +1663,7 @@ extern "C" fn uname(out: *mut [u8; 65]) -> i32 {
     0
 }
 
-/// Proposed ADR-0210: `uname`'s node name, as musl's `gethostname.c`:
+/// ADR-0210: `uname`'s node name, as musl's `gethostname.c`:
 /// truncated to `len`, with a NUL when it fits.
 #[unsafe(no_mangle)]
 extern "C" fn gethostname(name: *mut u8, len: usize) -> i32 {
@@ -1856,7 +1856,7 @@ const RUSAGE_CHILDREN: i32 = -1;
 /// One thread: the thread's use is the process's (review R15).
 const RUSAGE_THREAD: i32 = 1;
 
-/// Proposed ADR-0210: no accounting of resources (as `wait3`): a zero
+/// ADR-0210: no accounting of resources (as `wait3`): a zero
 /// `struct rusage` (144 bytes) for the process, its one thread or its
 /// children.
 #[unsafe(no_mangle)]

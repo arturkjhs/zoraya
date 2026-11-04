@@ -322,7 +322,7 @@ pub struct CallReport {
     /// no run here called.
     pub uncalled_static_only: Vec<String>,
     /// Measured functions no run called that an ADR exempts, with a reason
-    /// (proposed ADR-0211 item 16).
+    /// (ADR-0211 item 16).
     pub uncalled_exempt: Vec<String>,
     /// Tier-list functions called here that TASK-02 never saw called.
     pub called_not_measured: Vec<String>,

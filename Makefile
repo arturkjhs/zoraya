@@ -269,7 +269,7 @@ posix-image: $(KERNEL) tools-storage
 	  $(BUILD)/ports/workloads/hello $(POSIX_ROOT)/src/
 	cp -R $(WORKLOADS_SRC)/w8 $(POSIX_ROOT)/src/w8
 	cp $(WORKLOADS_SRC)/w10/w10.sh $(WORKLOADS_SRC)/w8/mktab.c $(POSIX_ROOT)/src/w10/
-	@# W3-j's Makefile with proposed ADR-0210's flag on both compiles, as W3's.
+	@# W3-j's Makefile with ADR-0210's flag on both compiles, as W3's.
 	sed -e 's/-c sqlite3.c$$/-DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c/' \
 	  -e 's/tcc -c shell.c$$/tcc -DSQLITE_OMIT_LOAD_EXTENSION -c shell.c/' \
 	  $(WORKLOADS_SRC)/w3/Makefile > $(POSIX_ROOT)/src/w3/Makefile
@@ -286,7 +286,7 @@ POSIX_IMAGE_SIZE := 256M
 # The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
 # ("tcc: memory full"; every POSIX process holds at least its 1 MiB of heap,
 # its segments and 64 KiB of stack, and tmpd 16 MiB), with no leak across
-# repeated builds (proposed ADR-0211 item 9).
+# repeated builds (ADR-0211 item 9).
 POSIX_MEM ?= 512M
 # For script $$script under accelerator $$accel: the image, a boot, a check.
 define posix_run
