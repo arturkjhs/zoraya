@@ -1209,7 +1209,10 @@ fn spawn_into(
     start: &Start<'_>,
     suspended: bool,
 ) -> Result<Handle, i32> {
-    let inherited = p.inherit(start.actions, facts.pgid)?;
+    let inherited = p.inherit(start.actions, facts.pgid).inspect_err(|e| {
+        let at = p.stats.inherit_failed_at;
+        debug_later(p, "spawn: inherit", (e, at));
+    })?;
     let made: Vec<Handle> = inherited
         .slots
         .iter()
@@ -1312,7 +1315,8 @@ fn spawn_child(
     envp: &[Vec<u8>],
     start: &Start<'_>,
 ) -> Result<u32, i32> {
-    let (image, argv, exe) = resolve_program(p, path, argv)?;
+    let (image, argv, exe) =
+        resolve_program(p, path, argv).inspect_err(|e| debug_later(p, "posix_spawn: load", e))?;
     let ignored = ignored_for(p, start.defaults);
     let stops = ignored & ((1 << SIGTSTP) | (1 << SIGTTIN) | (1 << SIGTTOU) | (1 << SIGCONT));
     let prepared = match p.prepare(start.group.0, start.group.1, stops, false) {
@@ -1377,7 +1381,10 @@ fn commit(p: &mut Posix<RtSys>, prepared: &Prepared<Handle>, process: Handle) ->
     // At the type's rights: a moved handle lists what it holds, and the
     // library's channel writes list a type's (no call reads a handle's).
     let dup = zoraya_rt::handle_duplicate(process, rights_of(process)).map_err(|_| EAGAIN)?;
+    let start = zoraya_rt::clock_monotonic();
     p.broker_simple(&bp::SpawnCommit { pid: prepared.pid }, &[dup])?;
+    p.stats.commits += 1;
+    p.stats.commit_ns += zoraya_rt::clock_monotonic().saturating_sub(start);
     p.children.push(crate::jobs::Child {
         pid: prepared.pid,
         pgid: prepared.pgid,
@@ -1778,6 +1785,7 @@ fn debug_later(p: &mut Posix<RtSys>, what: &str, detail: impl core::fmt::Debug) 
 #[unsafe(no_mangle)]
 extern "C" fn fork() -> i32 {
     poll();
+    let started = zoraya_rt::clock_monotonic();
     let r = state(|p| {
         let hint = core::mem::replace(&mut p.fork_group, -1);
         let (form, pgid) = match hint {
@@ -1811,12 +1819,17 @@ extern "C" fn fork() -> i32 {
             });
         }
         let length = e.finish().ok_or(EAGAIN)?;
+        let before = zoraya_rt::clock_monotonic();
         let snap = zoraya_rt::snapshot_process(&buffer[..length]);
+        let snapshot_ns = zoraya_rt::clock_monotonic().saturating_sub(before);
         match snap {
             Ok(Some(process)) => {
                 // The parent: the moved handles are the child's now.
                 commit(p, &prepared, process)?;
                 let _ = zoraya_rt::handle_close(process);
+                p.stats.forks += 1;
+                p.stats.snapshot_ns += snapshot_ns;
+                p.stats.fork_ns += zoraya_rt::clock_monotonic().saturating_sub(started);
                 Ok(prepared.pid as i32)
             }
             Ok(None) => {

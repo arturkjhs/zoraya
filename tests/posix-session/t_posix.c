@@ -31,6 +31,10 @@
  *   t_posix hostile    ignores every catchable signal, then sleeps
  *   t_posix forkbomb N forks until refused, N at most; reports the count
  *   t_posix exit7      exits 7
+ *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
+ *                      a program exiting at once, fork and wait, fork and
+ *                      exec and wait (run with ZORAYA_POSIX_STATS for the
+ *                      broker's round trips)
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -613,6 +617,49 @@ static void forkbomb(int limit)
 	passed();
 }
 
+static double now_us(void)
+{
+	struct timespec t;
+	clock_gettime(CLOCK_MONOTONIC, &t);
+	return t.tv_sec * 1e6 + t.tv_nsec / 1e3;
+}
+
+static void bench(void)
+{
+	const int n = 20;
+	char *argv[] = { SELF, "exit7", NULL };
+	double t0 = now_us();
+	for (int i = 0; i < n; i++) {
+		pid_t pid;
+		CHECK(posix_spawn(&pid, SELF, NULL, NULL, argv, environ) == 0);
+		reap(pid);
+	}
+	double spawn = (now_us() - t0) / n;
+	t0 = now_us();
+	for (int i = 0; i < n; i++) {
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0)
+			_exit(0);
+		reap(pid);
+	}
+	double forked = (now_us() - t0) / n;
+	t0 = now_us();
+	for (int i = 0; i < n; i++) {
+		pid_t pid = fork();
+		CHECK(pid >= 0);
+		if (pid == 0) {
+			execve(SELF, argv, environ);
+			_exit(99);
+		}
+		CHECK(WEXITSTATUS(reap(pid)) == 7);
+	}
+	double execed = (now_us() - t0) / n;
+	printf("t_posix: bench spawn+wait %.0f us, fork+wait %.0f us, fork+exec+wait %.0f us, exec %.0f us\n",
+	       spawn, forked, execed, execed - forked);
+	passed();
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -650,6 +697,8 @@ int main(int argc, char **argv)
 		forkbomb(atoi(argv[2]));
 	else if (!strcmp(argv[1], "exit7"))
 		return 7;
+	else if (!strcmp(argv[1], "bench"))
+		bench();
 	else
 		return 2;
 	return 0;

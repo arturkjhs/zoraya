@@ -19,6 +19,8 @@
 //! screen TEXT       wait until a row below the last matched one reads TEXT
 //! type KEYS         press and release each key (escapes \r \e \\)
 //! key QCODE         press and release one QEMU key code, such as f12
+//! chord MOD QCODE   the same with MOD (ctrl, shift, alt) held, such as
+//!                   chord ctrl c
 //! region X Y W H RGB  every pixel of the rectangle is the colour RGB (hex)
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
@@ -48,6 +50,7 @@ pub enum Step {
     Screen(String),
     Type(Vec<u8>),
     Key(String),
+    Chord(String, String),
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
     Exit,
@@ -67,6 +70,13 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "screen" => Step::Screen(rest.to_string()),
             "type" => Step::Type(crate::script::unescape(rest).map_err(|e| bad(&e))?),
             "key" => Step::Key(rest.to_string()),
+            "chord" => {
+                let (m, code) = rest.split_once(' ').ok_or_else(|| bad("chord MOD QCODE"))?;
+                if !matches!(m, "ctrl" | "shift" | "alt") {
+                    return Err(bad("chord's modifier is ctrl, shift or alt"));
+                }
+                Step::Chord(m.to_string(), code.to_string())
+            }
             "region" => {
                 let v: Vec<&str> = rest.split_whitespace().collect();
                 if v.len() != 5 {
@@ -362,6 +372,12 @@ impl Run {
                 Ok(())
             }
             Step::Key(code) => self.qmp.press(code, false),
+            Step::Chord(m, code) => self.qmp.keys(&[
+                (m.as_str(), true),
+                (code.as_str(), true),
+                (code.as_str(), false),
+                (m.as_str(), false),
+            ]),
             Step::Region(x, y, w, h, colour) => {
                 let screen = self.qmp.screen()?;
                 for py in *y..y + h {
@@ -514,6 +530,12 @@ mod tests {
         assert_eq!(steps[4], Step::Region(0, 0, 2, 2, 0x20_3040));
         assert!(parse("region 1 2 3\n").is_err());
         assert!(parse("dance\n").is_err());
+        assert_eq!(
+            parse("chord ctrl c\n").unwrap(),
+            [Step::Chord("ctrl".into(), "c".into())]
+        );
+        assert!(parse("chord ctrl\n").is_err());
+        assert!(parse("chord meta c\n").is_err());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use zoraya_abi::posix::{EntryKind, FD_NONBLOCK, Fd, FdKind, NO_HANDLE};
+use zoraya_abi::posix::{EntryKind, FD_NONBLOCK, FD_READ, FD_WRITE, Fd, FdKind, NO_HANDLE};
 use zoraya_proto_file::{self as fp, rights};
 use zoraya_protocol::Flags;
 
@@ -227,7 +227,10 @@ impl<S: Sys> Posix<S> {
             ignored,
             fork: Below(u32::from(fork)),
         };
+        let start = self.sys.now();
         let n = self.broker_call(&m, &[])?;
+        self.stats.prepares += 1;
+        self.stats.prepare_ns += self.sys.now().saturating_sub(start);
         let handles = core::mem::take(&mut self.handles);
         match decode::<bp::SpawnPrepared>(&self.input[..n], handles.len()) {
             Ok((_, r)) => Ok(Prepared {
@@ -270,7 +273,10 @@ impl<S: Sys> Posix<S> {
     /// child is gone from the list.
     fn reap(&mut self, i: usize) -> Result<(u32, i32), i32> {
         let c = self.children[i];
+        let start = self.sys.now();
         let n = self.broker_call(&bp::Reap { pid: c.pid }, &[])?;
+        self.stats.reaps += 1;
+        self.stats.reap_ns += self.sys.now().saturating_sub(start);
         let (_, r) = decode::<bp::Reaped>(&self.input[..n], 0).map_err(|_| EINVAL)?;
         if r.status.0 != bp::status::OK {
             return Err(broker_errno(r.status.0));
@@ -589,6 +595,7 @@ impl<S: Sys> Posix<S> {
         out: &mut Inherit<S::H>,
     ) -> Result<(), i32> {
         for (&child, &parent) in map {
+            self.stats.inherit_failed_at = child;
             let desc = match self.fds.get(parent as i32) {
                 Some(Desc::Object {
                     conn,
@@ -611,7 +618,12 @@ impl<S: Sys> Posix<S> {
                 out.fds.push(Fd {
                     fd: child,
                     kind: if dir { FdKind::Dir } else { FdKind::File },
-                    flags: if nonblock { FD_NONBLOCK } else { 0 },
+                    flags: (if nonblock { FD_NONBLOCK } else { 0 })
+                        | match access & 3 {
+                            0 => FD_READ,
+                            1 => FD_WRITE,
+                            _ => FD_READ | FD_WRITE,
+                        },
                     tty: NO_HANDLE,
                 });
                 continue;
@@ -669,6 +681,7 @@ impl<S: Sys> Posix<S> {
             }
         }
         for i in 0..self.entries.len() {
+            self.stats.inherit_failed_at = 1000 + i as u32;
             let (kind, handle) = (self.entries[i].kind, self.entries[i].handle);
             let made = match (kind, handle) {
                 (EntryKind::Directory | EntryKind::Tmp, Some(h)) => Some(self.clone_conn(h)?),

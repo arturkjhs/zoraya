@@ -11,7 +11,8 @@ use alloc::vec::Vec;
 
 use zoraya_abi::Status;
 use zoraya_abi::posix::{
-    Access, Bootstrap, EntryKind, FD_NONBLOCK, Facts, FdKind, MAX_REPORTS, Report,
+    Access, Bootstrap, EntryKind, FD_NONBLOCK, FD_READ, FD_WRITE, Facts, FdKind, MAX_REPORTS,
+    Report,
 };
 use zoraya_proto_file::{
     self as proto, MAX_INLINE, description_flags, open_flags, rights, status, whence, write_flags,
@@ -145,6 +146,21 @@ pub struct Stats {
     pub broker: u64,
     /// `process_take_request` calls (INV-0106-2).
     pub takes: u64,
+    /// The broker's round trips, with their time in nanoseconds: prepare,
+    /// commit, reap (TASK-21's measurements).
+    pub prepares: u64,
+    pub prepare_ns: u64,
+    pub commits: u64,
+    pub commit_ns: u64,
+    pub reaps: u64,
+    pub reap_ns: u64,
+    /// `fork` in the parent, whole, and its `snapshot_process` alone.
+    pub forks: u64,
+    pub fork_ns: u64,
+    pub snapshot_ns: u64,
+    /// What the last failed `inherit` was making: the child's fd, or 1000
+    /// and the entry's index (for `ZORAYA_POSIX_DEBUG`).
+    pub inherit_failed_at: u32,
 }
 
 /// An object opened, and what the open told of it.
@@ -284,6 +300,11 @@ impl<S: Sys> Posix<S> {
         };
         for fd in record.fds() {
             let nonblock = fd.flags & FD_NONBLOCK != 0;
+            let access = match fd.flags & (FD_READ | FD_WRITE) {
+                FD_READ => o::RDONLY,
+                FD_WRITE => o::WRONLY,
+                _ => o::RDWR,
+            };
             let desc = match fd.kind {
                 FdKind::Null => Desc::Null { access: o::RDWR },
                 FdKind::File | FdKind::Dir => Desc::Object {
@@ -293,7 +314,7 @@ impl<S: Sys> Posix<S> {
                     } else {
                         Kind::File
                     },
-                    access: o::RDWR,
+                    access,
                     nonblock,
                     sync: false,
                     written: false,
@@ -786,6 +807,9 @@ impl<S: Sys> Posix<S> {
         if opened.kind == Kind::Directory && writes {
             return fail(self, EISDIR);
         }
+        if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFIFO {
+            return self.open_fifo(conn, flags);
+        }
         // ADR-0014 rule 6: as for a file's owner who is not root; an object
         // this open made is its creator's whatever its mode.
         let read = accmode != o::WRONLY;
@@ -815,6 +839,75 @@ impl<S: Sys> Posix<S> {
             listing: Listing::default(),
         };
         self.install(desc, flags & o::CLOEXEC != 0)
+    }
+
+    /// The side of a FIFO (ADR-0107 item 14, ADR-0190 item 5): `fifo_open`
+    /// on its connection gives the stream end; the connection stays with the
+    /// description, so the service sees the side close with it.
+    fn open_fifo(&mut self, conn: S::H, flags: u32) -> Result<i32, i32> {
+        let accmode = flags & 3;
+        let fail = |this: &mut Self, e: i32| {
+            this.sys.close(conn);
+            Err(e)
+        };
+        let side = match accmode {
+            o::RDONLY => proto::fifo_side::READ,
+            o::WRONLY => proto::fifo_side::WRITE,
+            // POSIX leaves O_RDWR on a FIFO undefined (ADR-0107 item 14).
+            _ => return fail(self, EINVAL),
+        };
+        let nonblock = flags & o::NONBLOCK != 0;
+        let m = proto::FifoOpen {
+            side: Below(side),
+            nonblock: Below(u32::from(nonblock)),
+        };
+        let size = match self.call(conn, &m, &[]) {
+            Ok(n) => n,
+            Err(e) => return fail(self, e),
+        };
+        let end = match decode::<proto::FifoOpenReply>(&self.input[..size], self.handles.len()) {
+            Ok((_, r)) if r.status.0 == status::OK => self.handles.pop(),
+            _ => None,
+        };
+        let Some(end) = end else {
+            let s = self.status_of(size);
+            // No reader for a non-blocking writer: POSIX's ENXIO.
+            let e = if s == status::NOT_FOUND {
+                ENXIO
+            } else {
+                errno::from_file(s)
+            };
+            return fail(self, e);
+        };
+        let (read, write) = if side == proto::fifo_side::READ {
+            (Some(end), None)
+        } else {
+            (None, Some(end))
+        };
+        let desc = Desc::Stream {
+            read,
+            write,
+            nonblock,
+            tty: false,
+            conn: Some(conn),
+        };
+        self.install(desc, flags & o::CLOEXEC != 0)
+    }
+
+    /// `mkfifo` and `mknod(S_IFIFO)` (ADR-0107 item 13): an exclusive create
+    /// with `S_IFIFO` on the temporary service; `EPERM` anywhere else,
+    /// whose service keeps no type bits.
+    pub fn mkfifo_at(&mut self, dirfd: i32, path: &[u8], mode: u32) -> Result<(), i32> {
+        let r = self.resolve(dirfd, path, Access::Write)?;
+        if self.entries.get(r.place.entry).map(|e| e.kind) != Some(EntryKind::Tmp) {
+            return Err(EPERM);
+        }
+        let wire = open_flags::CREATE | open_flags::EXCLUSIVE;
+        let mode = stat::S_IFIFO | (mode & 0o777 & !self.facts.umask);
+        let wanted = rights::READ | rights::CLONE;
+        let (_, opened) = self.open_resolved(r, wire, wanted, 0, mode, Access::Write)?;
+        self.sys.close(opened.conn);
+        Ok(())
     }
 
     fn open_special(&mut self, kind: EntryKind, r: &Resolved, flags: u32) -> Result<i32, i32> {

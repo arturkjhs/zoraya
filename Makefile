@@ -50,7 +50,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-posix posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-posix test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -243,7 +243,8 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 # fetch-ports once, as make ports does. POSIX_SCRIPTS picks the scripts,
 # POSIX_ACCELS the accelerators.
 POSIX_SESSION := $(BUILD)/posix-session
-POSIX_SCRIPTS ?= tests/posix-session/session.script
+POSIX_SCRIPTS ?= tests/posix-session/session.script tests/posix-session/invariants.script \
+	tests/posix-session/scenarios.script
 POSIX_ACCELS ?= auto tcg
 posix-image: $(KERNEL) tools-storage
 	@$(MAKE) -s -f ports/Makefile rootfs
@@ -267,6 +268,17 @@ test-posix: posix-image $(RUNNER)
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $$script --label posix-$$name-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_SESSION)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_SESSION)/disk.img || exit 1; done; done
+
+# The same session in the stage 5 terminal window (ttyd's window backend),
+# read back by screendump as make test-gui reads zosh.
+POSIX_GUI_SCRIPT := tests/posix-session/gui.script
+test-posix-gui: posix-image $(RUNNER)
+	@for accel in $(POSIX_ACCELS); do \
+	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(POSIX_SESSION)/gui.img && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(POSIX_GUI_SCRIPT) --qmp $(BUILD)/posix-gui-$$accel.qmp \
+	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/posix-gui-$$accel.qmp \
+	    --disk $(POSIX_SESSION)/gui.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(POSIX_SESSION)/gui.img || exit 1; done
 
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
@@ -345,6 +357,11 @@ adr-check:
 check-user-access:
 	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
 
+# INV-0105-4: no terminal policy in the kernel; the console stays a raw ring
+# (ADR-0060), and the line discipline is ttyd's.
+check-kernel-tty:
+	@! grep -rnE 'ICANON|ECHO|ISIG|VINTR|VQUIT|VSUSP|VERASE|VKILL|VEOF|ONLCR|TOSTOP|termios|winsize' kernel/src
+
 # No host paths or email addresses in tracked files (CLAUDE.md, Conventions), apart from
 # the configured git identity's address. docs/research/ and tools/posix-surface/results/
 # are cleaned separately. The brackets keep the pattern from matching this file.
@@ -369,7 +386,7 @@ check-test-caps:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-crash test-gui
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

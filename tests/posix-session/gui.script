@@ -1,0 +1,28 @@
+# The stage 6d session in the stage 5 terminal window (TASK-21): ttyd's window
+# backend between the GUI terminal and dash, keys typed into the window
+# through QMP and the screen read back as text (tools/test-runner/src/gui.rs).
+serial init: /etc/zoraya/session: a POSIX session
+screen PSURF> _
+type echo hello world | tr a-z A-Z\r
+screen HELLO WORLD
+screen PSURF> _
+type cd /home; echo one > f.txt; cat < f.txt\r
+screen one
+screen PSURF> _
+type sleep 2 & jobs\r
+screen Running
+screen PSURF> _
+type wait; echo waited=$?\r
+screen waited=0
+# Ctrl-C of a foreground sleep: 130.
+type sleep 30\r
+chord ctrl c
+screen PSURF> _
+type echo status=$?\r
+screen status=130
+screen PSURF> _
+type printf 'all: b\\nb:\\n\\techo made > b\\n' > Makefile; make; cat b\r
+screen made
+screen PSURF> _
+type exit\r
+exit

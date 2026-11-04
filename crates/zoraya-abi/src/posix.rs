@@ -107,6 +107,12 @@ const FLAGS: u32 = ABSOLUTE;
 
 /// An fd's flag that the description in the library holds (ADR-0103 item 4).
 pub const FD_NONBLOCK: u8 = 1;
+/// A file's access, which only the spawner's description knows (ADR-0190
+/// item 17): `FD_READ`, `FD_WRITE`, both, or neither for read and write as a
+/// record of stage 6c says.
+pub const FD_READ: u8 = 2;
+pub const FD_WRITE: u8 = 4;
+const FD_FLAGS: u8 = FD_NONBLOCK | FD_READ | FD_WRITE;
 
 /// The second message on the bootstrap channel, with the `SELF` handle.
 pub const SELF_MESSAGE: &[u8; 4] = b"ZPBS";
@@ -269,7 +275,7 @@ pub struct Facts {
 pub struct Fd {
     pub fd: u32,
     pub kind: FdKind,
-    /// `FD_NONBLOCK` or 0.
+    /// `FD_NONBLOCK`, `FD_READ`, `FD_WRITE`.
     pub flags: u8,
     /// For a `Tty`, the index of its terminal connection; else `NO_HANDLE`.
     pub tty: u8,
@@ -402,7 +408,7 @@ impl<'a> Bootstrap<'a> {
             };
             if fd >= OPEN_MAX
                 || last.is_some_and(|l| fd <= l)
-                || raw[5] & !FD_NONBLOCK != 0
+                || raw[5] & !FD_FLAGS != 0
                 || !tty_ok
                 || raw[7] != 0
             {

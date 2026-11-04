@@ -752,6 +752,22 @@ fn print_stats() {
             "POSIX-STATS resolutions={} resolve_ns_mean={} requests={} seeks={} shares={} reports={} broker={} takes={}",
             s.resolutions, mean, s.requests, s.seeks, s.shares, s.reports, s.broker, s.takes
         );
+        let mean = |total: u64, n: u64| total.checked_div(n).unwrap_or(0);
+        if s.prepares > 0 || s.forks > 0 {
+            let _ = writeln!(
+                line,
+                "POSIX-PROCESS prepares={} prepare_ns={} commits={} commit_ns={} reaps={} reap_ns={} forks={} fork_ns={} snapshot_ns={}",
+                s.prepares,
+                mean(s.prepare_ns, s.prepares),
+                s.commits,
+                mean(s.commit_ns, s.commits),
+                s.reaps,
+                mean(s.reap_ns, s.reaps),
+                s.forks,
+                mean(s.fork_ns, s.forks),
+                mean(s.snapshot_ns, s.forks)
+            );
+        }
         let _ = p.write(2, User::new(line.as_ptr() as u64, line.len()));
     });
 }
@@ -1405,16 +1421,17 @@ extern "C" fn tmpfile() -> *mut u8 {
     file
 }
 
-/// FIFOs live on the temporary directory service, which is 6d's (ADR-0107
-/// item 13); every other node type is `EPERM`.
+/// FIFOs live on the temporary directory service (ADR-0107 item 13); every
+/// other node type is `EPERM`.
 #[unsafe(no_mangle)]
-extern "C" fn mknodat(_dirfd: i32, path: *const c_char, mode: u32, _dev: u64) -> i32 {
+extern "C" fn mknodat(dirfd: i32, path: *const c_char, mode: u32, _dev: u64) -> i32 {
     // SAFETY: C's contract: `path` is a string.
-    if let Err(e) = unsafe { c_str(path) } {
-        return int(Err(e));
-    }
+    let path = match unsafe { c_str(path) } {
+        Ok(p) => p,
+        Err(e) => return int(Err(e)),
+    };
     if mode & stat::S_IFMT == stat::S_IFIFO {
-        int(Err(ENOSYS))
+        unit(state(|p| p.mkfifo_at(dirfd, path, mode)))
     } else {
         int(Err(EPERM))
     }

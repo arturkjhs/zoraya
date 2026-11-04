@@ -1176,7 +1176,8 @@ mod bootstrap {
         fds[3].fd = OPEN_MAX;
         assert!(bad(FACTS, 3, "", &fds, &e, 4), "an fd past OPEN_MAX");
         let mut fds = FDS;
-        fds[1].flags = 2;
+        // FD_READ and FD_WRITE are flags now (ADR-0190 item 17); 8 is not.
+        fds[1].flags = 8;
         assert!(bad(FACTS, 3, "", &fds, &e, 4), "an unknown fd flag");
         let mut fds = FDS;
         fds[0].tty = 0;
