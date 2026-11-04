@@ -490,6 +490,30 @@ extern "C" fn wait(status: *mut i32) -> i32 {
     wait_child(-1, status, 0)
 }
 
+/// The shim's target for musl's `__sys_wait4` (`pclose.c`, proposed
+/// ADR-0210): `waitpid` with the result or `-errno`, and a zero `struct
+/// rusage` as `wait3` gives.
+#[unsafe(no_mangle)]
+extern "C" fn zoraya_posix_wait4(pid: i64, status: i64, options: i64, usage: i64) -> i64 {
+    if usage != 0 {
+        // SAFETY: C's contract: `usage` is NULL or a `struct rusage`.
+        unsafe { ptr::write_bytes(usage as *mut u8, 0, 144) };
+    }
+    poll();
+    let status = status as *mut i32;
+    match restartable(|p| p.waitpid(pid as i32, options as i32)) {
+        Ok(Some((child, s))) => {
+            if !status.is_null() {
+                // SAFETY: C's contract: `status` is NULL or an int.
+                unsafe { status.write(s) };
+            }
+            i64::from(child)
+        }
+        Ok(None) => 0,
+        Err(e) => -i64::from(e),
+    }
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn wait3(status: *mut i32, options: i32, usage: *mut u8) -> i32 {
     if !usage.is_null() {

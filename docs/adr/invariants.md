@@ -396,6 +396,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0190-3 | [ADR-0190](0190-process-choices-of-stage-6d.md) | A FIFO made on the temporary service reports `S_IFIFO`, and a persistent volume's service refuses the type bits. | `zoraya-fs-service`'s host test `fifo_open_is_refused_where_it_has_no_meaning`. | checked: `make test-unit` |
 | INV-0190-4 | [ADR-0190](0190-process-choices-of-stage-6d.md) | A terminal read interrupted by a handler loses no input: the next read takes the held line. | `zoraya-tty`'s host test `a_second_read_while_one_is_held_is_busy` and `make test-posix`'s Ctrl-C steps. | checked: `make test-unit`, `make test-posix` |
 | INV-0190-5 | [ADR-0190](0190-process-choices-of-stage-6d.md) | A new image after `exec`, or a child of `posix_spawn`, starts with the mask the caller had (or `POSIX_SPAWN_SETSIGMASK`'s) and with every signal the caller ignored still `SIG_IGN`: a child exec'd with `SIGINT` ignored survives `job_signal` of `Interrupt`, and a signal blocked before `exec` stays blocked after it. | `make test-posix`'s `invariants.script` (`t_posix execmask`, by `fork` and `exec` and by `posix_spawn`), and the host tests `the_raw_header_is_checked` (`zoraya-abi`) and `the_mask_on_entry_is_kept` (`zoraya-posix`). | checked: `make test-unit`, `make test-posix` |
+| INV-0210-1 | [ADR-0210](0210-surface-for-the-workloads-products.md) | `libc.a` exports every name of this block, each of the ten written here behaves as item 2 and 3 say, and W2 and W3 link inside Zoraya. | `make check-ports` (`posix-surface-check check` with this ADR in the list), `make test-posix`'s `t_posix products`, the host test `fsync_takes_a_file_and_refuses_a_pipe` (`zoraya-posix`), and `make test-posix-long`'s W2 and W3. | checked: `make check-ports`, `make test-unit`, `make test-posix` |
 
 ## Counts
 
@@ -500,4 +501,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0190](0190-process-choices-of-stage-6d.md) Process, terminal and temporary-service choices of stage 6d | 5 |
 | [ADR-0191](0191-one-time-base.md) One time base for every volume and for `CLOCK_REALTIME` | 2 |
 | [ADR-0192](0192-snapshot-in-the-posix-tree.md) `snapshot_process` creates where its job handle allows, in `posix` jobs | 1 |
-| **Total** | **390** |
+| [ADR-0210](0210-surface-for-the-workloads-products.md) The surface the workloads' own programs need | 1 |
+| **Total** | **391** |

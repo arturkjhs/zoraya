@@ -957,6 +957,27 @@ impl<S: Sys> Posix<S> {
         }
     }
 
+    /// `fsync` (proposed ADR-0210 item 3): a file's writes are already in
+    /// the service, durable for an `O_SYNC` description (ADR-0103 item 14);
+    /// a description written through asks `status`, as `close` does, so a
+    /// failed volume is `EIO`. Nothing else is made durable. A stream or
+    /// `/dev/null` is `EINVAL`, as POSIX gives for a pipe.
+    pub fn fsync(&mut self, fd: i32) -> Result<(), i32> {
+        match self.fds.get(fd) {
+            None => Err(EBADF),
+            Some(Desc::Object { conn, written, .. }) => {
+                if !*written {
+                    return Ok(());
+                }
+                let conn = *conn;
+                self.done(conn, &proto::Status {}, &[])
+                    .map(|_| ())
+                    .map_err(|_| EIO)
+            }
+            Some(Desc::Stream { .. } | Desc::Null { .. }) => Err(EINVAL),
+        }
+    }
+
     /// Ends a description entry's handles; for a file written through, asks
     /// the service's `status` first (ADR-0103 item 6, ADR-0010).
     fn release(&mut self, desc: Desc<S::H>) -> Result<(), i32> {

@@ -25,12 +25,12 @@ src/misc/setrlimit.c
 src/misc/syscall.c
 src/misc/uname.c
 
-# stdio's files that open, remove or rename by path, or wait for a child:
-# zoraya-posix (fopen, remove, rename and tmpfile are tier rows). freopen stays:
-# it reaches the system through fopen and fcntl.
+# stdio's files that open, remove or rename by path: zoraya-posix (fopen,
+# remove, rename and tmpfile are tier rows). freopen stays: it reaches the
+# system through fopen and fcntl. pclose.c is compiled: the shim routes its
+# __sys_wait4 to waitpid (proposed ADR-0210).
 src/stdio/__fopen_rb_ca.c
 src/stdio/fopen.c
-src/stdio/pclose.c
 src/stdio/remove.c
 src/stdio/rename.c
 src/stdio/tempnam.c

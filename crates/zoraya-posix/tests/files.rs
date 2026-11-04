@@ -1479,3 +1479,23 @@ fn no_request_is_taken_on_the_file_paths_and_polls_wait_for_a_handler() {
     r.p.signals.mask(SIG_UNBLOCK, Some(bit(15))).unwrap();
     assert!(r.p.should_poll());
 }
+
+/// `fsync` (proposed ADR-0210 item 3): a file's fd succeeds, written or not;
+/// a pipe is `EINVAL`, a closed fd `EBADF`.
+#[test]
+fn fsync_takes_a_file_and_refuses_a_pipe() {
+    let mut r = rig();
+    let fd = open(&mut r, "synced", RW_CREATE, 0o644).unwrap();
+    assert_eq!(r.p.fsync(fd), Ok(()), "nothing written yet");
+    assert_eq!(r.write(fd, b"data"), Ok(4));
+    assert_eq!(
+        r.p.fsync(fd),
+        Ok(()),
+        "written through: the status is asked"
+    );
+    let (rd, wr) = r.p.pipe(0).unwrap();
+    assert_eq!(r.p.fsync(rd), Err(EINVAL));
+    assert_eq!(r.p.fsync(wr), Err(EINVAL));
+    r.p.close(fd).unwrap();
+    assert_eq!(r.p.fsync(fd), Err(EBADF));
+}

@@ -34,6 +34,9 @@
  *                      (INV-0105-1, run from the script)
  *   t_posix hostile    ignores every catchable signal, then sleeps
  *   t_posix forkbomb N forks until refused, N at most; reports the count
+ *   t_posix products   proposed ADR-0210's functions the workloads' own
+ *                      programs need: chmod, rmdir, symlink, utimes, fsync,
+ *                      gethostname, getrusage, mmap, popen and pclose, system
  *   t_posix exit7      exits 7
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
@@ -47,7 +50,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/resource.h>
 #include <sys/select.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -629,6 +635,61 @@ static void files(void)
 	passed();
 }
 
+/* Proposed ADR-0210: what W2's and W3's programs call beyond the tier list. */
+static void products(void)
+{
+	struct stat st;
+	char b[64];
+	unlink("/tmp/p-link");
+	rmdir("/tmp/p-dir");
+	int fd = open("/tmp/p-file", O_RDWR | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	CHECK(fsync(fd) == 0);
+	CHECK(write(fd, "data", 4) == 4);
+	CHECK(fsync(fd) == 0);
+	CHECK(close(fd) == 0);
+	int p[2];
+	CHECK(pipe(p) == 0);
+	CHECK(fsync(p[0]) == -1 && errno == EINVAL);
+	close(p[0]);
+	close(p[1]);
+	CHECK(chmod("/tmp/p-file", 0600) == 0);
+	CHECK(stat("/tmp/p-file", &st) == 0 && (st.st_mode & 07777) == 0600);
+	struct timeval tv[2] = {{1000000, 0}, {1234567, 500000}};
+	CHECK(utimes("/tmp/p-file", tv) == 0);
+	CHECK(stat("/tmp/p-file", &st) == 0 && st.st_mtim.tv_sec == 1234567 &&
+	      st.st_mtim.tv_nsec == 500000000);
+	tv[1].tv_usec = 1000000;
+	CHECK(utimes("/tmp/p-file", tv) == -1 && errno == EINVAL);
+	CHECK(symlink("p-file", "/tmp/p-link") == 0);
+	CHECK(readlink("/tmp/p-link", b, sizeof b) == 6 && !memcmp(b, "p-file", 6));
+	CHECK(mkdir("/tmp/p-dir", 0755) == 0);
+	CHECK(rmdir("/tmp/p-dir") == 0);
+	CHECK(rmdir("/tmp/p-dir") == -1 && errno == ENOENT);
+	CHECK(rmdir("/tmp/p-file") == -1 && errno == ENOTDIR);
+	CHECK(unlink("/tmp/p-link") == 0 && unlink("/tmp/p-file") == 0);
+	CHECK(gethostname(b, sizeof b) == 0 && !strcmp(b, "zoraya"));
+	CHECK(gethostname(b, 3) == 0 && !strcmp(b, "zo"));
+	struct rusage ru;
+	memset(&ru, 0xff, sizeof ru);
+	CHECK(getrusage(RUSAGE_SELF, &ru) == 0 && ru.ru_maxrss == 0 && ru.ru_utime.tv_sec == 0);
+	CHECK(getrusage(5, &ru) == -1 && errno == EINVAL);
+	char *m = mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	CHECK(m != MAP_FAILED && m[0] == 0 && m[8191] == 0);
+	m[100] = 7;
+	CHECK(munmap(m, 8192) == 0);
+	CHECK(mmap(0, 4096, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0) == MAP_FAILED);
+	FILE *f = popen("echo through-popen; exit 3", "r");
+	CHECK(f != NULL);
+	CHECK(fgets(b, sizeof b, f) != NULL && !strcmp(b, "through-popen\n"));
+	int st2 = pclose(f);
+	CHECK(WIFEXITED(st2) && WEXITSTATUS(st2) == 3);
+	st2 = system("exit 5");
+	CHECK(WIFEXITED(st2) && WEXITSTATUS(st2) == 5);
+	CHECK(system(NULL) == 1);
+	passed();
+}
+
 /* The mtime of `path` in nanoseconds. */
 static long long mtime_of(const char *path)
 {
@@ -802,6 +863,8 @@ int main(int argc, char **argv)
 		hostile();
 	else if (!strcmp(argv[1], "forkbomb") && argc > 2)
 		forkbomb(atoi(argv[2]));
+	else if (!strcmp(argv[1], "products"))
+		products();
 	else if (!strcmp(argv[1], "exit7"))
 		return 7;
 	else if (!strcmp(argv[1], "bench"))
