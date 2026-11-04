@@ -88,6 +88,31 @@ interposer logged "the first call per symbol per process image whose return addr
    (prepare, load, spawn, commit). Their sum over a workload's wall time is the share of loading programs.
 8. **Wake-ups** are `waits`, the kernel waits at wait points (ADR-0106); with `takes`, the request polls, and
    `syscalls`, the share of the poll is `takes / syscalls`.
+9. **The guest has 512 MiB in the POSIX session** (`POSIX_MEM`): W8 at `-j4` ran out of 128 MiB (`tcc: memory
+   full`), and four rounds of W8 at `-j2` in one boot showed no growth. Every POSIX process holds at least a 1 MiB
+   step of heap (`zoraya-heap`'s `GROW_SIZE`, eagerly committed objects), its copied segments and 64 KiB of stack;
+   `tmpd` holds 16 MiB.
+10. **The trees are copied on the host**: `tests/posix/trees.sh` makes a fresh copy of the pinned source in
+    `/work/ID` for every build, as TASK-02's harness did (`fresh_run`, `tree`); T1's applets have no `cp`, and the
+    copy is the harness's work, not the workload's (`task-02/method.md#tiers-runs-and-sets`).
+11. **pdpmake's set** is `/sets/t1p`, a directory whose `make` is `/bin/pdpmake`, first on `PATH` for W2's and W4's
+    pdpmake runs, as TASK-02's set `t1p`; the commands stay `make ...`.
+12. **Checks written with dash alone** where TASK-02b's used an applet T1 does not have: W8's `tail -n 1 | grep -q
+    "0 };"` is a `while read` loop and a `case`; W9's partial targets are the tables that exist and do not end that
+    way. W8 also counts the recipes it ran (72). W9's "no process left" is `t_posix live N`: `kill(pid, 0)` for
+    every pid from 3 to N but itself and its parent, which the broker answers from its table (`ESRCH` once reaped;
+    pids are never given twice); ADR-0110's open question of a `pids` aid.
+13. **Wall time is measured on the host**: the runner's `% NAME` step prints `RUNNER-TIME NAME SECONDS` since the
+    last mark, as TASK-02's harness timed outside the measured processes; nothing is added inside the guest.
+14. **The call log's check** reads the runner's full logs, `target/test-logs/posix-*.log` (ADR-0110 item 8 names
+    `build/logs/`, where `make test` keeps each step's terminal output, which the runner cuts to 400 lines). Its
+    `static-only` marks are computed, not stored: a tier-list function is `static-only` unless TASK-02's T0 and T1
+    `core` runs saw a measured program call it (`dynamic-programs.tsv`, 134 names, TASK-02's lower bound) or
+    TASK-02b added it (six). The tier list's file stays the CSV's alone, as `posix-surface-check list --check`
+    requires.
+15. **W4 records how far it gets**: T2's applets and rows are not built (TASK-22's scope), so `configure` meets
+    T1's tools; `/tests/w4.sh` prints `W4-STOP` rather than `-FAIL` at the step that fails, and `make -f
+    ports/Makefile t2-probe` links T2's applets against `libc.a` and lists the names they lack.
 
 **Tensions with accepted ADRs.**
 
@@ -96,6 +121,9 @@ interposer logged "the first call per symbol per process image whose return addr
   the tier list's and reports the others.
 - *ADR-0103 item 6* and ADR-0010's `status`: its count now carries the peak; its status is unchanged.
 - *INV-0103-3*'s check in `posixrun` excludes the report, as item 6 says.
+- *ADR-0110 item 8*: the logs' place and the computed marks (item 14).
+- *ADR-0110 item 4*: W9's partial count is of incomplete tables in the leaves, where W8's tables are (the ADR's
+  `for f in t*.h` names the top directory, which has none).
 
 ## Consequences
 

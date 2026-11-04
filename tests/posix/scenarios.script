@@ -1,55 +1,30 @@
-# The event sequences of TASK-02b (docs/research/task-02b/event-timelines.md)
-# as scenarios in the POSIX session (TASK-21), then the hostile cases.
+# Scenarios of the POSIX session beyond the workloads (TASK-21): SIGPIPE on
+# PeerClosed, make with two rules through /bin/sh (stage 6d's criterion),
+# Ctrl-Z, and the hostile cases. W9 and W10, TASK-02b's event sequences,
+# are w9-int.script, w9-term.script and w10.script (ADR-0110 items 2 and 4).
 ! panicked
 ! ZORAYA-PANIC
 ! ZORAYA-FAULT
 ! t_posix: FAIL
 < PSURF>
-# W9a: Ctrl-C during a parallel recursive build of three levels. The
-# interrupt reaches every process of the foreground job at once; each leaf
-# make deletes its partial target and re-raises; dash reports 130. The
-# jobserver is make's FIFO in /tmp (the temporary service's FIFO nodes).
-> cd /src/w9 && make -j8\r
-< make[2]: Entering directory '/src/w9/b/2'
-~ 2000 PSURF>
-> \x03
-< Deleting file 't4.h'
-< Deleting file 't4.h'
-< Deleting file 't4.h'
-< Deleting file 't4.h'
-< PSURF>
-> echo status=$?; for d in a/1 a/2 b/1 b/2; do test -e $d/t4.h && echo left $d; done; echo checked\r
-< status=130
-< checked
-x left
-< PSURF>
-# W9b: SIGTERM to the top make: it goes down the tree by make's own sends,
-# each make deletes its partial target and re-raises; status 143. As measured
-# (event-timelines.md), a leaf may not have begun its target when SIGTERM
-# reaches it: three deletions at least, and no partial target left.
-> make -j8 > /tmp/w9b.log 2>&1 & sleep 6; kill $!; wait $!; echo term=$?\r
-< term=143
-< PSURF>
-> cat /tmp/w9b.log; for d in a/1 a/2 b/1 b/2; do test -e $d/t4.h && echo left $d; done; echo checked\r
-< Deleting file 't4.h'
-< Deleting file 't4.h'
-< Deleting file 't4.h'
-< checked
-x left
-< PSURF>
-# W10: background jobs with wait, concurrent pipelines, and a writer killed
-# by SIGPIPE on PeerClosed (yes | head), with the script TASK-02b ran.
-> cd /src/w10 && sh w10.sh parallel\r
-< subshell job done
-< background: 0 0
-< w10
-< w10
-< w10
-< pipeline status: 0
-< PSURF>
+# A writer killed by SIGPIPE on PeerClosed.
 > yes | head -n 1; echo "statuses ${?}"\r
 < y
 < statuses 0
+< PSURF>
+# make with two rules through /bin/sh (ADR-0109; stage 6d's criterion).
+> cd /home\r
+< PSURF>
+> printf 'all: b\\nb: a\\n\\tcat a > b\\na:\\n\\techo made > a\\n' > Makefile\r
+< PSURF>
+> make && cat b\r
+< echo made > a
+< cat a > b
+< made
+< PSURF>
+> make; echo again=$?\r
+< Nothing to be done
+< again=0
 < PSURF>
 # Ctrl-Z (plan.md's risk): the broker's job_suspend of the foreground group,
 # fg's tcsetpgrp and SIGCONT; the group stopped whole runs its next child

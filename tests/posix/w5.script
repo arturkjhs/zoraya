@@ -1,0 +1,50 @@
+# W5 (ADR-0110 item 3): the measured interactive session, the steps of
+# tools/posix-surface/remote/w5_session.py verbatim, each waiting for the
+# prompt, with uname first (INV-0109-2). Ctrl-C after a second of the
+# foreground sleep, as the measurement's harness waited. A "\n" before an
+# expected line keeps it from matching the echo of the command.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> uname\r
+% boot
+< \nZoraya
+< PSURF> 
+> cd "$HOME"\r
+< PSURF> 
+> echo hello world | tr a-z A-Z > up.txt\r
+< PSURF> 
+> cat < up.txt\r
+< HELLO WORLD
+< PSURF> 
+> touch a.txt b.txt; ls *.txt\r
+< up.txt
+< PSURF> 
+> FOO=bar; export FOO; sh -c 'echo child sees $FOO'\r
+< child sees bar
+< PSURF> 
+> sleep 2 &\r
+< PSURF> 
+> jobs\r
+< Running
+< PSURF> 
+> sleep 30\r
+~ 1000 PSURF>
+> \x03
+< PSURF> 
+> echo status=$?\r
+< status=130
+< PSURF> 
+> cd /tmp; pwd; cd -\r
+< \n/tmp
+< \n/home
+< PSURF> 
+> wait; echo waited\r
+< \nwaited
+< PSURF> 
+% w5
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

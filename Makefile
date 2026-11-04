@@ -10,6 +10,10 @@
 #   make test-files files across two boots, restarts, a failed write
 #   make test-libposix C programs through libposix against fsd (stage 6c);
 #                   needs make fetch-ports once, as make ports does
+#   make test-posix the POSIX session: W5, W8, W9, W10, tcc hello.c (stage
+#                   6e, ADR-0110); make test-posix-long the builds W1, W2,
+#                   W3, W2-j, W3-j and the call log's union (not in make
+#                   test); make measure-w4 GNU hello's configure and make
 #   make test-crash kill QEMU at random points (CRASH_ROUNDS=200 for more)
 #   make test-gui   the GUI criterion: boot headless with --gui, type into the
 #                   window over QMP and read the screen back (HVF and TCG)
@@ -50,7 +54,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-posix test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -237,46 +241,126 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(POSIX_CORE)/disk.img || exit 1; done
 
-# The stage 6d criterion (TASK-21): the POSIX session, dash on ttyd through
-# the broker, on an image of the ports' root (make ports' build/rootfs-posix),
-# rootfs/ and tests/posix/rootfs (with /etc/zoraya/session), in ADR-0110's
-# layout: the root in build/posix/root, the image build/posix-disk.img. Needs
-# make fetch-ports once, as make ports does. POSIX_SCRIPTS picks the scripts,
-# POSIX_ACCELS the accelerators.
+# The POSIX session (TASK-21, ADR-0110): dash on ttyd through the broker, on
+# an image of the ports' root (make ports' build/rootfs-posix), rootfs/ and
+# tests/posix/rootfs (with /etc/zoraya/session and /tests/wN.sh), in
+# ADR-0110's layout: the root in build/posix/root, the image
+# build/posix-disk.img. The root also holds the workloads' sources as
+# ports/sources.lock pins them (/src), W8's and W10's files as TASK-02b ran
+# them, W3-j's Makefile, and a fresh tree per build in /work
+# (tests/posix/trees.sh). Needs make fetch-ports once, as make ports does.
 POSIX_SESSION := $(BUILD)/posix
+POSIX_ROOT := $(POSIX_SESSION)/root
 POSIX_DISK := $(BUILD)/posix-disk.img
-POSIX_SCRIPTS ?= tests/posix/session.script tests/posix/invariants.script \
-	tests/posix/scenarios.script
 POSIX_ACCELS ?= auto tcg
+WORKLOADS_SRC := tools/posix-surface/workloads
 posix-image: $(KERNEL) tools-storage
-	@$(MAKE) -s -f ports/Makefile rootfs
-	rm -rf $(POSIX_SESSION)/root
-	mkdir -p $(POSIX_SESSION)/root
-	cp -R rootfs/. $(POSIX_SESSION)/root/
-	cp -R $(BUILD)/rootfs-posix/. $(POSIX_SESSION)/root/
-	cp -R tests/posix/rootfs/. $(POSIX_SESSION)/root/
-	tools/zcc -O2 -o $(POSIX_SESSION)/root/bin/t_posix tests/posix/t_posix.c
+	@$(MAKE) -s -f ports/Makefile rootfs workloads
+	rm -rf $(POSIX_ROOT)
+	mkdir -p $(POSIX_ROOT)
+	cp -R rootfs/. $(POSIX_ROOT)/
+	cp -R $(BUILD)/rootfs-posix/. $(POSIX_ROOT)/
+	cp -R tests/posix/rootfs/. $(POSIX_ROOT)/
+	tools/zcc -O2 -o $(POSIX_ROOT)/bin/t_posix tests/posix/t_posix.c
 	$(CARGO) build -q -p zoraya-elf-check
-	target/debug/zoraya-elf-check $(POSIX_SESSION)/root/bin/t_posix
-	@# W10 as TASK-02b ran it (ADR-0110 item 1): the script and mktab.c.
-	mkdir -p $(POSIX_SESSION)/root/src/w10
-	cp tools/posix-surface/workloads/w10/w10.sh tools/posix-surface/workloads/w8/mktab.c \
-	  $(POSIX_SESSION)/root/src/w10/
+	target/debug/zoraya-elf-check $(POSIX_ROOT)/bin/t_posix
+	mkdir -p $(POSIX_ROOT)/src/w10 $(POSIX_ROOT)/src/w3
+	cp -R $(BUILD)/ports/workloads/tcc $(BUILD)/ports/workloads/lua $(BUILD)/ports/workloads/sqlite \
+	  $(BUILD)/ports/workloads/hello $(POSIX_ROOT)/src/
+	cp -R $(WORKLOADS_SRC)/w8 $(POSIX_ROOT)/src/w8
+	cp $(WORKLOADS_SRC)/w10/w10.sh $(WORKLOADS_SRC)/w8/mktab.c $(POSIX_ROOT)/src/w10/
+	@# W3-j's Makefile with proposed ADR-0210's flag on both compiles, as W3's.
+	sed -e 's/-c sqlite3.c$$/-DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c/' \
+	  -e 's/tcc -c shell.c$$/tcc -DSQLITE_OMIT_LOAD_EXTENSION -c shell.c/' \
+	  $(WORKLOADS_SRC)/w3/Makefile > $(POSIX_ROOT)/src/w3/Makefile
+	grep -c OMIT_LOAD_EXTENSION $(POSIX_ROOT)/src/w3/Makefile | grep -qx 2
+	tests/posix/trees.sh $(POSIX_ROOT)
 
+# One boot per script under each accelerator, zoraya-fsck after each
+# (ADR-0110 item 6). The runner's timeout per script comes from this table,
+# set from the first measured durations (TASK-22) with a margin of about
+# three; QEMU_TIMEOUT for the others.
+POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=900 w9-int=300 w9-term=300 \
+	w10=300 w4=1800 w5-jobs=300
+POSIX_IMAGE_SIZE := 256M
+# The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
+# ("tcc: memory full"; every POSIX process holds at least its 1 MiB of heap,
+# its segments and 64 KiB of stack, and tmpd 16 MiB), with no leak across
+# repeated builds (proposed ADR-0211 item 9).
+POSIX_MEM ?= 512M
+# For script $$script under accelerator $$accel: the image, a boot, a check.
+define posix_run
+	name=$$(basename $$script .script); \
+	timeout=$$(echo " $(POSIX_TIMEOUTS) " | sed -n "s/.* $$name=\([0-9]*\) .*/\1/p"); \
+	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_ROOT) $(POSIX_DISK) > /dev/null && \
+	$(RUNNER) --timeout $${timeout:-$(QEMU_TIMEOUT)} --script $$script --label posix-$$name-$$accel -- \
+	  $(RUN_QEMU) --test --keys --mem $(POSIX_MEM) --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
+	target/debug/zoraya-fsck $(POSIX_DISK)
+endef
+
+# make test-posix (a step of make test, ADR-0110 item 6): the export check
+# first (item 9: INV-0005-1, INV-0005-2), then W5, W8, W9 and W10 and the
+# roadmap's criterion (items 2 to 5), and stage 6d's invariants and
+# scenarios.
+POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
+	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
+	tests/posix/invariants.script tests/posix/scenarios.script
 test-posix: posix-image $(RUNNER)
+	@$(MAKE) -s -f ports/Makefile check-libc
 	@for script in $(POSIX_SCRIPTS); do for accel in $(POSIX_ACCELS); do \
-	  name=$$(basename $$script .script); \
-	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(POSIX_DISK) && \
-	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $$script --label posix-$$name-$$accel -- \
-	    $(RUN_QEMU) --test --keys --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
-	  target/debug/zoraya-fsck $(POSIX_DISK) || exit 1; done; done
+	  $(posix_run) || exit 1; done; done
+
+# make test-posix-long (not in make test; stage 6 is not merged until it
+# passes, ADR-0110 item 6): the builds W1, W2, W3, W2-j and W3-j, then the
+# call log's union over its own logs and those of make test-posix of the
+# same build (item 8, INV-0005-3, INV-0110-2), which fails naming make
+# test-posix when those are missing.
+POSIX_LONG_SCRIPTS ?= tests/posix/w1.script tests/posix/w2.script tests/posix/w2j.script \
+	tests/posix/w3.script tests/posix/w3j.script
+POSIX_T1_RUNS := w1 w2 w2j w3 w3j w5 w8 w9-int w9-term w10
+POSIX_LOGS := target/test-logs
+test-posix-long: posix-image $(RUNNER)
+	@for script in $(POSIX_LONG_SCRIPTS); do for accel in $(POSIX_ACCELS); do \
+	  $(posix_run) || exit 1; done; done
+	@$(MAKE) -s posix-calls
+
+# The call log's union alone, over the logs there are (INV-0110-2).
+posix-calls:
+	$(CARGO) build -q -p posix-stats
+	target/debug/posix-stats --calls $(BUILD)/sysroot/usr/lib/zoraya-calls.txt \
+	  docs/adr/posix-surface-T1.txt tools/posix-surface/results/dynamic-programs.tsv \
+	  $(foreach r,$(POSIX_T1_RUNS),$(wildcard $(POSIX_LOGS)/posix-$(r)-*.log)) \
+	  --require $(POSIX_T1_RUNS)
+
+# make measure-w4 (ADR-0110 items 10 and 12, not in make test): T2's
+# applets probed against libc.a, then GNU hello's configure and make (W4)
+# and the W5 extension under HVF (on a Mac) and TCG, and the W4 report,
+# which fails without every counter of INV-0110-3 and its accelerator.
+W4_ACCELS ?= $(if $(filter Darwin,$(shell uname -s)),hvf tcg,tcg)
+W4_SCRIPTS := tests/posix/w4.script tests/posix/w5-jobs.script
+W4_REPORT := $(BUILD)/w4-report.md
+measure-w4: posix-image $(RUNNER)
+	@$(MAKE) -s -f ports/Makefile t2-probe
+	@for script in $(W4_SCRIPTS); do for accel in $(W4_ACCELS); do \
+	  $(posix_run) || exit 1; done; done
+	$(CARGO) build -q -p posix-stats
+	{ echo "# W4: GNU hello's configure and make inside Zoraya"; echo; \
+	  echo '```'; cat $(BUILD)/ports/logs/t2-probe.txt; echo '```'; echo; \
+	  target/debug/posix-stats table --w4 $(foreach a,$(W4_ACCELS),$(POSIX_LOGS)/posix-w4-$(a).log); \
+	  } > $(W4_REPORT)
+	@cat $(W4_REPORT)
+
+# The stage 6 table from the logs there are (posix-stats table).
+posix-table:
+	$(CARGO) build -q -p posix-stats
+	target/debug/posix-stats table $(wildcard $(POSIX_LOGS)/posix-*-auto.log $(POSIX_LOGS)/posix-*-tcg.log)
 
 # The same session in the stage 5 terminal window (ttyd's window backend),
 # read back by screendump as make test-gui reads zosh.
 POSIX_GUI_SCRIPT := tests/posix/gui.script
 test-posix-gui: posix-image $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
-	  target/debug/zoraya-mkfs --size 64M --from $(POSIX_SESSION)/root $(BUILD)/posix-gui.img && \
+	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_ROOT) $(BUILD)/posix-gui.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(POSIX_GUI_SCRIPT) --qmp $(BUILD)/posix-gui-$$accel.qmp \
 	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/posix-gui-$$accel.qmp \
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \

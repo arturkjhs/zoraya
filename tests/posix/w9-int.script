@@ -1,0 +1,28 @@
+# W9, Ctrl-C (ADR-0110 item 4): W8 at -j4 in the foreground, interrupted
+# from the terminal after the measurement's middle delay, 1.5 s. dash
+# abandons the rest of a line after its foreground job died of SIGINT, so
+# the status, the partial targets and the processes left are asked on lines
+# of their own, as tools/posix-surface/remote/w9_session.py asked them.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> cd /work/w9-int && make -j4 >/dev/null\r
+% boot
+~ 1500 PSURF>
+> \x03
+< PSURF> 
+% w9-int
+> echo W9-STATUS $?\r
+< W9-STATUS 130
+< PSURF> 
+> sh /tests/w9-check.sh /work/w9-int\r
+< W9-PARTIAL 0
+< PSURF> 
+> sleep 0.5; t_posix live 3000\r
+< W9-LEFT 0
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

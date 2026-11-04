@@ -1,0 +1,55 @@
+# The W5 extension (ADR-0110 item 12; ADR-0004's open question): Ctrl-Z,
+# fg and bg in the interactive session. Run by make measure-w4, not by make
+# test, until the architect promotes it.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+# Ctrl-Z of a foreground job, then bg: it runs on in the background.
+> sh -c 'sleep 3; echo bg-finished'\r
+% boot
+~ 1000 PSURF>
+> \x1a
+< Stopped
+< PSURF> 
+> jobs\r
+< Stopped
+< PSURF> 
+> bg\r
+< PSURF> 
+> jobs\r
+< Running
+< PSURF> 
+> wait; echo waited=$?\r
+< bg-finished
+< waited=0
+< PSURF> 
+# Ctrl-Z, then fg: it finishes in the foreground.
+> sh -c 'sleep 2; echo fg-finished'\r
+~ 700 PSURF>
+> \x1a
+< Stopped
+< PSURF> 
+> fg\r
+< fg-finished
+< PSURF> 
+> echo after-fg=$?\r
+< after-fg=0
+< PSURF> 
+# Ctrl-Z, fg, then Ctrl-C of the continued job: 130.
+> sleep 30\r
+~ 1000 PSURF>
+> \x1a
+< Stopped
+< PSURF> 
+> fg\r
+~ 1000 PSURF>
+> \x03
+< PSURF> 
+> echo status=$?\r
+< status=130
+< PSURF> 
+% w5-jobs
+> exit\r
+< POSIX-STATS images=
+< BROKER-STATS

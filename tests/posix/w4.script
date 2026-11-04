@@ -1,0 +1,21 @@
+# W4 (ADR-0110 item 10, make measure-w4): /tests/w4.sh, GNU hello's
+# configure and make with GNU make and with pdpmake, measured; how far each
+# step gets is the result, so no step's failure fails the run.
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> sh /tests/w4.sh\r
+% boot
+< W4-CONFIGURE w4-g
+% w4-g-configure
+< W4-STEP w4-p configure
+% w4-g-rest
+< W4-CONFIGURE w4-p
+% w4-p-configure
+< W4-DONE
+% w4-p-rest
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

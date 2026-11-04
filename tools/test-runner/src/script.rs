@@ -13,6 +13,8 @@
 //! ~ MS TEXT       for MS milliseconds, fail if TEXT arrives
 //! @ KEYS | TEXT   send KEYS every 200 ms until TEXT appears
 //! * N KEYS | TEXT N times: send KEYS and wait for TEXT
+//! % NAME          print `RUNNER-TIME NAME SECONDS`, the time since the
+//!                 previous `%` (or the start), for the stage 6 tables
 //! ```
 //!
 //! TEXT and KEYS take the escapes \r \n \e \\ and \xHH.
@@ -38,6 +40,8 @@ pub enum Step {
     Quiet(u64, String),
     Until(Vec<u8>, String),
     Repeat(usize, Vec<u8>, String),
+    /// A time mark: the seconds since the last one, measured on the host.
+    Mark(String),
 }
 
 /// Text every run forbids: the kernel gave up.
@@ -127,6 +131,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 Step::Send(vec![b'x'; n])
             }
             "!" => Step::Forbid(rest.to_string()),
+            "%" => Step::Mark(rest.to_string()),
             _ => return Err(format!("line {number}: unknown step")),
         });
     }
@@ -336,8 +341,18 @@ fn steps_then_drain(
 ) -> Result<(), String> {
     let deadline = link.deadline;
     let far = deadline + Duration::from_secs(1);
+    let mut mark = Instant::now();
     for step in steps {
         match step {
+            Step::Mark(name) => {
+                let now = Instant::now();
+                let line = format!(
+                    "RUNNER-TIME {name} {:.3}",
+                    now.duration_since(mark).as_secs_f64()
+                );
+                link.out.counted_line(&line, false, line.len() + 1)?;
+                mark = now;
+            }
             Step::Forbid(text) => link.seen.forbid(text),
             Step::Send(bytes) => send(&mut stdin, bytes)?,
             Step::Expect(text) => {
@@ -456,7 +471,7 @@ mod tests {
 
     #[test]
     fn a_script_parses_and_a_bad_one_does_not() {
-        let steps = parse("# note\n\n< ready\n> go\\r\n= 3\n! bad\n").unwrap();
+        let steps = parse("# note\n\n< ready\n> go\\r\n= 3\n! bad\n% w1 make\n").unwrap();
         assert_eq!(
             steps,
             [
@@ -464,6 +479,7 @@ mod tests {
                 Step::Send(b"go\r".to_vec()),
                 Step::Send(b"xxx".to_vec()),
                 Step::Forbid("bad".into()),
+                Step::Mark("w1 make".into()),
             ]
         );
         assert!(parse("? what\n").is_err());
@@ -487,6 +503,14 @@ mod tests {
     #[test]
     fn a_clean_run_passes() {
         assert_eq!(shell("echo ready", "< ready\n", 5), Ok(()));
+    }
+
+    #[test]
+    fn a_time_mark_passes_and_changes_nothing() {
+        assert_eq!(
+            shell("echo ready", "% start\n< ready\n% ready\n", 5),
+            Ok(())
+        );
     }
 
     #[test]

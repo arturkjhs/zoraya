@@ -59,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
 .PHONY: ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
-	dash make pdpmake toybox busybox tcc tcc-host workloads clean-ports FORCE
+	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
 fetch-ports:
@@ -470,6 +470,47 @@ $(WORKLOADS)/hello: $(LOCK)
 	@touch $@
 $(WORKLOADS_STAMP): $(addprefix $(WORKLOADS)/,tcc lua sqlite hello)
 	@mkdir -p $(dir $@) && touch $@
+
+# ---------------------------------------------------------------- T2's applets, probed
+
+# For make measure-w4's report (ADR-0110 item 10): T2's toybox and busybox
+# applets of applets-by-tier.tsv (with sort, wc and yes), built against this
+# libc.a, which exports T1's list and the added blocks only. The links are
+# expected to fail: the names they lack go to $(T2_PROBE). Nothing is
+# installed; T2's rows are not stage 6's.
+T2_TOYBOX_APPLETS := arch basename cat chmod cp cpio dirname echo env find grep head hostname id \
+	install ln ls mkdir mktemp mv rm rmdir sed sleep sort tar touch true uname wc xargs yes
+T2_BUSYBOX_APPLETS := awk diff expr gzip tr
+T2_PROBE := $(LOGS)/t2-probe.txt
+T2_TOYBOX := $(WORK)/toybox-t2
+T2_BUSYBOX := $(WORK)/busybox-t2
+t2-probe: $(T2_PROBE)
+$(T2_TOYBOX): $(LOCK) $(wildcard ports/patches/toybox/*.patch)
+	$(call unpack,toybox,ports/patches/toybox)
+	@touch $@
+$(T2_BUSYBOX): $(LOCK)
+	$(call unpack,busybox,ports/patches/busybox)
+	@touch $@
+$(T2_PROBE): $(T2_TOYBOX) $(T2_BUSYBOX) $(SYSROOT_STAMP)
+	@$(MAKE) -C $(T2_TOYBOX) allnoconfig HOSTCC=$(HOSTCC) SED=$(GSED) > $(LOGS)/t2-toybox.log 2>&1
+	@$(call kconfig_on,$(T2_TOYBOX),$(T2_TOYBOX_APPLETS))
+	@yes '' | $(MAKE) -C $(T2_TOYBOX) oldconfig HOSTCC=$(HOSTCC) SED=$(GSED) > /dev/null 2>&1
+	-@$(CROSS_ENV) $(MAKE) -C $(T2_TOYBOX) toybox V=1 CC=$(ZCC) HOSTCC=$(HOSTCC) \
+	  CFLAGS="$(CROSS_CFLAGS)" SED=$(GSED) LDOPTIMIZE=-Wl$(comma)--gc-sections NOSTRIP=1 \
+	  >> $(LOGS)/t2-toybox.log 2>&1
+	@$(MAKE) -C $(T2_BUSYBOX) allnoconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > $(LOGS)/t2-busybox.log 2>&1
+	@sed -e 's/^CONFIG_SH_IS_ASH=y/# CONFIG_SH_IS_ASH is not set/' \
+	  -e 's/^# CONFIG_SH_IS_NONE is not set/CONFIG_SH_IS_NONE=y/' \
+	  $(T2_BUSYBOX)/.config > $(T2_BUSYBOX)/.config.new && mv $(T2_BUSYBOX)/.config.new $(T2_BUSYBOX)/.config
+	@$(call kconfig_on,$(T2_BUSYBOX),$(T2_BUSYBOX_APPLETS))
+	@yes '' | $(MAKE) -C $(T2_BUSYBOX) oldconfig HOSTCC=$(HOSTCC) KCONFIG_NOTIMESTAMP=1 > /dev/null 2>&1
+	-@$(CROSS_ENV) KCONFIG_NOTIMESTAMP=1 $(MAKE) -C $(T2_BUSYBOX) V=1 HOSTCC=$(HOSTCC) \
+	  CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar LD=$(TOOLBIN)/aarch64-unknown-zoraya-ld \
+	  SKIP_STRIP=y >> $(LOGS)/t2-busybox.log 2>&1
+	@for p in toybox busybox; do \
+	  names=$$(sed -n 's/.*undefined symbol: \([A-Za-z0-9_]*\).*/\1/p' $(LOGS)/t2-$$p.log | sort -u); \
+	  echo "$$p: $$(echo $$names | wc -w | tr -d ' ') names: $$(echo $$names)"; done > $@
+	@cat $@
 
 # ---------------------------------------------------------------- the host checks
 

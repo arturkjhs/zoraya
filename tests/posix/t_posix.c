@@ -37,6 +37,11 @@
  *   t_posix products   proposed ADR-0210's functions the workloads' own
  *                      programs need: chmod, rmdir, symlink, utimes, fsync,
  *                      gethostname, getrusage, mmap, popen and pclose, system
+ *   t_posix live N     W9's "no process left" (ADR-0110 item 4): prints
+ *                      W9-LEFT and the count of live pids from 3 to N other
+ *                      than itself and its parent, by kill(pid, 0) (the
+ *                      broker's table: ESRCH once a pid is reaped; pids are
+ *                      never given twice)
  *   t_posix exit7      exits 7
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
@@ -635,6 +640,21 @@ static void files(void)
 	passed();
 }
 
+static void live(int last)
+{
+	int n = 0;
+	for (int pid = 3; pid <= last; pid++) {
+		if (pid == getpid() || pid == getppid())
+			continue;
+		if (kill(pid, 0) == 0)
+			n++;
+		else
+			CHECK(errno == ESRCH);
+	}
+	printf("W9-LEFT %d\n", n);
+	fflush(stdout);
+}
+
 /* Proposed ADR-0210: what W2's and W3's programs call beyond the tier list. */
 static void products(void)
 {
@@ -865,6 +885,8 @@ int main(int argc, char **argv)
 		forkbomb(atoi(argv[2]));
 	else if (!strcmp(argv[1], "products"))
 		products();
+	else if (!strcmp(argv[1], "live") && argc > 2)
+		live(atoi(argv[2]));
 	else if (!strcmp(argv[1], "exit7"))
 		return 7;
 	else if (!strcmp(argv[1], "bench"))

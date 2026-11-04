@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "posix-stats"
+version = "0.1.0"
+
+[[package]]
 name = "posix-surface-check"
 version = "0.1.0"
 dependencies = [
