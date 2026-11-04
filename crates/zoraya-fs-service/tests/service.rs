@@ -2240,3 +2240,37 @@ fn a_narrowed_connection_names_only_its_name() {
     assert_eq!(r.done(from, &right, vec![token]).0, status::OK);
     assert_eq!(r.try_open(root, "b.txt", 0, rights::READ).0, status::OK);
 }
+
+/// ADR-0211: `status`'s count is the peak of the space in use since
+/// the mount, in bytes: it grows with what is written and stays after it is
+/// removed (ADR-0110 item 7's peak `/tmp`).
+#[test]
+fn status_counts_the_peak_of_the_space_in_use() {
+    let mut r = rig();
+    let root = r.root;
+    let (s, empty) = r.done(root, &proto::Status {}, vec![]);
+    assert_eq!(s, status::OK);
+    assert!(empty > 0, "the volume's own blocks are in use");
+    assert_eq!(empty % 4096, 0, "whole blocks");
+    let f = r.open(root, "big", open_flags::CREATE);
+    let chunk = [7u8; 2048];
+    for i in 0..64 {
+        assert_eq!(r.write_text(f, i * 2048, 0, &chunk).0, status::OK);
+    }
+    r.done(root, &proto::Sync {}, vec![]);
+    let (_, full) = r.done(root, &proto::Status {}, vec![]);
+    assert!(
+        full >= empty + 128 * 1024,
+        "128 KiB written: {empty} then {full}"
+    );
+    r.net.0.borrow_mut().closed.insert(f);
+    r.run();
+    assert_eq!(
+        r.done(root, &proto::Remove { name: Name("big") }, vec![]).0,
+        status::OK
+    );
+    r.done(root, &proto::Sync {}, vec![]);
+    let (_, after) = r.done(root, &proto::Status {}, vec![]);
+    assert_eq!(after, full.max(after), "a peak does not fall");
+    assert!(after >= full);
+}

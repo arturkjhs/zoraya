@@ -21,7 +21,10 @@
 //! fd 0 is `/dev/null`; fds 1 and 2 are one stream, whose bytes go to the
 //! console. The child's `BROKER` slot is a channel nobody serves, whose
 //! messages are counted (INV-0103-3), and `REPORT` the refused-path channel
-//! of ADR-0153 rule 11, whose reports are printed after the child ends.
+//! of ADR-0153 rule 11, whose reports are printed after the child ends. The
+//! one message answered is the statistics report a `libposix` built with
+//! `stats` sends before it exits (ADR-0110 item 7): it is observation, not a
+//! request of the file paths, so it is answered and not counted.
 
 extern crate alloc;
 
@@ -32,8 +35,8 @@ use zoraya_abi::posix::{self as abi, Entry, EntryKind, Fd, FdKind, NO_HANDLE, Re
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     ChannelEntry, ChannelObject, DEADLINE_INFINITE, ExitReason, Handle, JOB, JobFlags, JobObject,
-    MemoryFlags, Mode, ObjectType, Packet, Rights, StreamWriteObject, process_signals,
-    stream_signals,
+    MemoryFlags, Mode, ObjectType, Packet, Rights, StreamWriteObject, channel_signals,
+    process_signals, stream_signals,
 };
 use zoraya_proto_file::{open_flags, rights, whence};
 use zoraya_user::files::{ALL, File, status_name};
@@ -51,6 +54,26 @@ const CONSOLE: Handle = zoraya_abi::CONSOLE;
 fn fail(what: &str) -> ! {
     println!("posixrun: {what}");
     process_exit(125)
+}
+
+/// Answers a statistics report (ADR-0110 item 7) and gives 0; any other
+/// message is left unanswered and gives 1, to be counted.
+fn answer_report(end: Handle, message: &[u8]) -> u32 {
+    use zoraya_proto_posix::{ReportStats, ReportStatsReply, status};
+    use zoraya_protocol::{Below, Header, Message, encode};
+    match Header::decode(message) {
+        Ok((h, _)) if h.ordinal == ReportStats::ORDINAL => {
+            let mut out = [0u8; 64];
+            let reply = ReportStatsReply {
+                status: Below(status::OK),
+            };
+            if let Ok(n) = encode(&reply, h.transaction, &mut out) {
+                let _ = channel_write(end, &out[..n], &[]);
+            }
+            0
+        }
+        _ => 1,
+    }
 }
 
 /// A directory of the volume, by its absolute path, with `wanted`.
@@ -387,15 +410,28 @@ fn main() -> i32 {
         .unwrap_or_else(|_| fail("subscribe"));
     let wanted = stream_signals::READABLE | stream_signals::PEER_CLOSED;
     port_subscribe(port, out_read, wanted, 2, Mode::Level).unwrap_or_else(|_| fail("subscribe"));
+    port_subscribe(port, broker_mine, channel_signals::READABLE, 3, Mode::Level)
+        .unwrap_or_else(|_| fail("subscribe"));
     let mut ended = false;
     let mut open = true;
     let mut chunk = [0u8; 4096];
+    let mut broker = 0;
+    let mut bytes = alloc::vec![0u8; 64 * 1024];
+    let mut handles = [CONSOLE; 64];
     while !ended || open {
-        let mut packets = [Packet::default(); 2];
+        let mut packets = [Packet::default(); 3];
         let n = port_wait(port, DEADLINE_INFINITE, &mut packets).unwrap_or_else(|_| fail("wait"));
         for p in &packets[..n] {
             match p.key {
                 1 => ended = true,
+                3 => {
+                    if let Ok(sizes) = channel_read(broker_mine, &mut bytes, &mut handles) {
+                        broker += answer_report(broker_mine, &bytes[..sizes.bytes as usize]);
+                        for &h in &handles[..sizes.handles as usize] {
+                            let _ = handle_close(h);
+                        }
+                    }
+                }
                 _ => loop {
                     match stream_read(out_read, &mut chunk) {
                         Ok(0) => {
@@ -416,11 +452,8 @@ fn main() -> i32 {
     let record = process_exit_record(child).unwrap_or_else(|_| fail("record"));
 
     // What the child said to the broker that is not there (INV-0103-3).
-    let mut bytes = alloc::vec![0u8; 64 * 1024];
-    let mut handles = [CONSOLE; 64];
-    let mut broker = 0;
-    while channel_read(broker_mine, &mut bytes, &mut handles).is_ok() {
-        broker += 1;
+    while let Ok(sizes) = channel_read(broker_mine, &mut bytes, &mut handles) {
+        broker += answer_report(broker_mine, &bytes[..sizes.bytes as usize]);
     }
     println!("posixrun: broker messages {broker}");
     while let Ok(sizes) = channel_read(report_mine, &mut bytes, &mut handles) {

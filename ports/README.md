@@ -38,6 +38,16 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | toybox | 0.8.15 | 0BSD (`LICENSE`) | `patches/toybox/0001-zoraya-portability.patch` |
 | busybox | 1.38.0 | GPL-2.0-only (`LICENSE`) | none |
 | TinyCC | mob, commit `e23dabed154a8495f3ac1ff3cc9d04fa1c207893` | LGPL (`COPYING` is version 2.1; the LGPL-licensed files say version 2 or any later; some files, such as `arm64-gen.c`, carry a permissive notice) | `patches/tcc/0001-zoraya-target.patch`, `patches/tcc/0002-skip-shf-exclude-sections.patch` |
+| pdpmake | 2.0.4, commit `0faaf258c9b3eaa9f5e4f6842e2484cbea6f23f8` | public domain (`LICENSE`, the Unlicense) | none |
+| Lua | 5.5.1 | MIT (`doc/readme.html`) | none; W2's source, built inside Zoraya |
+| SQLite | 3.54.1 (amalgamation 3540100) | public domain (the blessing at the head of `sqlite3.c`) | none; W3's source, built inside Zoraya |
+| GNU hello | 2.12.3 | GPL-3.0-or-later (`COPYING`, `src/hello.c`) | none; W4's source, built inside Zoraya |
+
+Lua, SQLite and hello are not built on the host: `make -f ports/Makefile workloads`
+unpacks them into `build/ports/workloads/`, with tcc's tree (the ports' patches
+applied, for W1), and `make posix-image` copies them into the image (ADR-0110 item
+1). pdpmake, like tcc, is pinned by commit in TASK-02 and here by GitHub's archive
+of it; its SHA-256 was taken by TASK-22.
 
 TASK-02 pinned tcc by commit and fetched it with git. The cache holds the archive
 GitHub generates for that commit from the mirror `TinyCC/tinycc` (TASK-02 read tcc
@@ -63,6 +73,8 @@ ADR-0109 revisit.
   needs ADR-0144's two names.
 - **busybox**: `make allnoconfig`, the shell choice set to none, then `tr` and `diff`,
   as TASK-02's minimal builds.
+- **pdpmake**: its own `Makefile` with `CC=zcc`, unpatched; `/bin/pdpmake`. It runs
+  each recipe through `system()` (ADR-0210).
 - **tcc**: `./configure --cpu=aarch64 --targetos=Zoraya ...` (ADR-0143), `tcc` and
   `libtcc1.a` (`arm64-libtcc1-usegcc=yes`, so by `zcc`); a second build of the same
   source by the host's compiler, rooted at `build/sysroot`, links `tests/hello.c` for

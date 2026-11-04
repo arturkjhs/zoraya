@@ -1,0 +1,13 @@
+[package]
+name = "posix-stats"
+description = "Turns the POSIX session's POSIX-STATS, POSIX-CALLS and RUNNER-TIME lines into tables, and checks the call log's union against the tier list (ADR-0110 items 7 and 8)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

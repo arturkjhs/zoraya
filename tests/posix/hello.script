@@ -1,0 +1,17 @@
+# The roadmap's criterion for stage 6 (ADR-0110 item 5): tcc compiles a
+# program inside Zoraya, and it runs. "\nhello" is the program's line, not
+# the echo of the command.
+! -FAIL
+! panicked
+! ZORAYA-FAULT
+< PSURF> 
+> cd /home && printf 'int main(){puts("hello from tcc");return 0;}' > hello.c && tcc hello.c && ./a.out; echo "HELLO-STATUS $?"\r
+% boot
+< \nhello from tcc
+< HELLO-STATUS 0
+% hello
+< PSURF> 
+> exit\r
+< POSIX-STATS images=
+< POSIX-CALLS
+< BROKER-STATS

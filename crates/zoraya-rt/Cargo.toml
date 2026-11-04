@@ -17,6 +17,8 @@ bench = false
 # `main` (ADR-0109 item 4).
 default = ["entry"]
 entry = []
+# A count of system calls, for the stats of zoraya-posix (ADR-0110 item 7).
+count = []
 
 [dependencies]
 zoraya-abi = { path = "../zoraya-abi" }

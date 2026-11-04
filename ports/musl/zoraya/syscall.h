@@ -56,6 +56,7 @@ long zoraya_posix_fcntl(long fd, long cmd, long arg);
 long zoraya_posix_ioctl(long fd, long request, long arg);
 long zoraya_posix_mmap(long addr, long length, long prot, long flags, long fd, long offset);
 long zoraya_posix_set_tid_address(long tidptr);
+long zoraya_posix_wait4(long pid, long status, long options, long usage);
 _Noreturn void zoraya_posix_exit_group(long status);
 
 #define __zoraya_sys_SYS_read(fd, buf, n) zoraya_posix_read(__scc(fd), __scc(buf), __scc(n))
@@ -71,6 +72,11 @@ _Noreturn void zoraya_posix_exit_group(long status);
 /* _Exit calls exit_group, then exit in a loop; both end the process. */
 #define __zoraya_sys_SYS_exit_group(c) (zoraya_posix_exit_group(__scc(c)), 0L)
 #define __zoraya_sys_SYS_exit(c) (zoraya_posix_exit_group(__scc(c)), 0L)
+
+/* musl's internal name for wait4 (src/stdio/pclose.c), which musl's own
+ * syscall.h defines as the system call: here waitpid in zoraya-posix. */
+#define __sys_wait4(pid, st, opt, ru) \
+	zoraya_posix_wait4(__scc(pid), __scc(st), __scc(opt), __scc(ru))
 
 /* fcntl's third argument is absent for F_GETFL and F_GETFD. */
 #define __zoraya_sys_arg0(...) __scc(__VA_ARGS__ + 0)

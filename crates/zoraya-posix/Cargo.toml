@@ -12,6 +12,12 @@ license.workspace = true
 [lib]
 bench = false
 
+[features]
+# The counters and the call log of ADR-0110 item 7, reported to the broker
+# before each exit and exec. ports/Makefile builds libc.a with it (proposed
+# ADR-0211); the host's tests run without it.
+stats = ["zoraya-rt/count"]
+
 [dependencies]
 zoraya-abi = { path = "../zoraya-abi" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }

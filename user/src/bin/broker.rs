@@ -648,6 +648,11 @@ fn main() -> i32 {
             if let Some(e) = core.shell_exit {
                 println!("broker: the session's first process ended: {e:?}");
             }
+            // ADR-0110 item 7: what the processes reported, with the peak
+            // of /tmp from its service, before BROKER-STATS.
+            for line in core.totals.lines(tmp.peak_used().ok()) {
+                println!("{line}");
+            }
             statistics(&core);
             let _ = job_kill(tmp_job);
             return 0;

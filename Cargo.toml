@@ -57,6 +57,7 @@ members = [
     "tools/posix-surface-check",
     "tools/zoraya-elf-check",
     "tools/footprint",
+    "tools/posix-stats",
 ]
 # The fuzz targets need a nightly toolchain; they are a separate workspace.
 exclude = ["fuzz"]
@@ -116,6 +117,7 @@ default-members = [
     "tools/posix-surface-check",
     "tools/zoraya-elf-check",
     "tools/footprint",
+    "tools/posix-stats",
 ]
 
 [workspace.package]

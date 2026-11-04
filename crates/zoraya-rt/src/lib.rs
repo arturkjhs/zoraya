@@ -65,11 +65,24 @@ extern "C" fn __user_main() -> ! {
     process_exit(main())
 }
 
+/// The system calls this process made since the last [`take_syscalls`]
+/// (with the `count` feature: ADR-0110 item 7's share of the request poll).
+#[cfg(feature = "count")]
+static SYSCALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The count of system calls since the last call, which starts it again.
+#[cfg(feature = "count")]
+pub fn take_syscalls() -> u64 {
+    SYSCALLS.swap(0, core::sync::atomic::Ordering::Relaxed)
+}
+
 /// Makes a system call with up to six arguments, returning x0 and x1. Never
 /// inlined, so that the one `svc` stays in this crate's object, where
 /// INV-0100-2's scan of `libc.a` permits it.
 #[inline(never)]
 pub fn raw_syscall(number: u64, registers: [u64; 6]) -> (u64, u64) {
+    #[cfg(feature = "count")]
+    SYSCALLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let (status, value);
     // SAFETY: `svc` enters the kernel, which validates every value and
     // preserves everything but x0 and x1. Pointers are only read or written

@@ -13,6 +13,12 @@
 //! - `hide LIST OUTDIR OBJECT...` hides every defined name outside the list
 //!   (ADR-0141): it writes each object, renamed, into OUTDIR under its base
 //!   name and prints the renames, one `old new` pair per line.
+//! - `calllog LIST OUTDIR ASMDIR OBJECT...` is the call log of ADR-0110 item 7
+//!   (INV-0005-3): every exported function's definition and the objects' own
+//!   references are renamed to `__zoraya_real_NAME` (the objects written into
+//!   OUTDIR), and ASMDIR gets one wrapper `NAME.S` a function and `zoraya-calls.S`,
+//!   the bitmap; it prints the logged names, one a line, in the bitmap's
+//!   order.
 
 use std::collections::BTreeSet;
 use std::process::ExitCode;
@@ -156,6 +162,47 @@ fn hide(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn calllog(args: &[String]) -> Result<(), String> {
+    let [list, outdir, asmdir, paths @ ..] = args else {
+        return Err("usage: calllog LIST OUTDIR ASMDIR OBJECT...".into());
+    };
+    let names = names(list)?;
+    let files: Vec<(String, Vec<u8>)> = paths
+        .iter()
+        .map(|p| Ok((p.clone(), read(p)?)))
+        .collect::<Result<_, String>>()?;
+    let mut objects = Vec::new();
+    for (path, bytes) in &files {
+        objects.push(elf::read(bytes).map_err(|e| format!("{path}: {e}"))?);
+    }
+    let (logged, renames) = surface::call_log(&names, &objects)?;
+    let map: std::collections::BTreeMap<String, String> = renames.into_iter().collect();
+    for (path, bytes) in &files {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .ok_or(format!("{path}: no file name"))?;
+        let out = std::path::Path::new(outdir).join(name);
+        if out.exists() {
+            return Err(format!("{}: two objects with this name", out.display()));
+        }
+        let renamed = rename::rename(bytes, &map).map_err(|e| format!("{path}: {e}"))?;
+        std::fs::write(&out, renamed).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    let write = |file: String, text: String| {
+        let out = std::path::Path::new(asmdir).join(file);
+        std::fs::write(&out, text).map_err(|e| format!("{}: {e}", out.display()))
+    };
+    for (i, n) in logged.iter().enumerate() {
+        write(format!("{n}.S"), surface::call_log_wrapper(n, i))?;
+        println!("{n}");
+    }
+    // A hyphen is in no function's name, so no wrapper's file is this one.
+    write(
+        "zoraya-calls.S".into(),
+        surface::call_log_bitmap(logged.len(), surface::list_hash(&logged)),
+    )
+}
+
 /// The tool's memory ceiling (capped.rs).
 #[global_allocator]
 static ALLOCATOR: posix_surface_check::capped::Capped =
@@ -167,7 +214,8 @@ fn main() -> ExitCode {
         Some((cmd, rest)) if cmd == "list" => list(rest).map(|()| true),
         Some((cmd, rest)) if cmd == "check" => check(rest),
         Some((cmd, rest)) if cmd == "hide" => hide(rest).map(|()| true),
-        _ => Err("usage: posix-surface-check {list|check|hide} ...".into()),
+        Some((cmd, rest)) if cmd == "calllog" => calllog(rest).map(|()| true),
+        _ => Err("usage: posix-surface-check {list|check|hide|calllog} ...".into()),
     };
     match result {
         Ok(true) => ExitCode::SUCCESS,

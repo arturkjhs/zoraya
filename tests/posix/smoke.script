@@ -1,0 +1,11 @@
+# The first light of the POSIX session: dash at its prompt, one command, exit.
+! -FAIL
+! ZORAYA-FAULT
+! panicked
+! ZORAYA-PANIC
+< PSURF>
+> echo hello\r
+< hello
+< PSURF>
+> exit\r
+< BROKER-STATS

@@ -1,0 +1,73 @@
+# The invariants of stage 6d in QEMU (TASK-21): t_posix's checks through
+# libposix, the broker, ttyd and tmpd, run from dash; then the Ctrl-C of
+# INV-0105-1 with a foreground job of three and a background job of two.
+! panicked
+! ZORAYA-PANIC
+! ZORAYA-FAULT
+! FAIL
+< PSURF>
+> t_posix forkpos\r
+< t_posix: forkpos passed
+< PSURF>
+> t_posix cloexec\r
+< t_posix: cloexec passed
+< PSURF>
+> t_posix execwait\r
+< t_posix: execwait passed
+< PSURF>
+> t_posix groups\r
+< t_posix: groups passed
+< PSURF>
+> t_posix tcsetpgrp\r
+< t_posix: tcsetpgrp passed
+< PSURF>
+> t_posix statuses\r
+< t_posix: statuses passed
+< PSURF>
+> t_posix blocked\r
+< t_posix: blocked passed
+< PSURF>
+> t_posix raise\r
+< t_posix: raise passed
+< PSURF>
+> t_posix execmask\r
+< t_posix: execmask passed
+< PSURF>
+> t_posix eintr\r
+< t_posix: eintr passed
+< PSURF>
+# INV-0104-5 and INV-0106-2: no broker message and no request taken on the
+# file paths of a process with no handler.
+> ZORAYA_POSIX_STATS=1 t_posix files\r
+< t_posix: files passed
+< broker=0 takes=0
+< PSURF>
+# ADR-0210: the functions the workloads' own programs need.
+> t_posix products\r
+< t_posix: products passed
+< PSURF>
+# INV-0191-1 through the services.
+> t_posix time\r
+< t_posix: time passed
+< PSURF>
+# INV-0105-1: one Ctrl-C reaches the three of the foreground job and neither
+# of the background job.
+> (t_posix intcount b1 & t_posix intcount b2 & wait) &\r
+< ready
+< ready
+> t_posix intcount f1 | t_posix intcount f2 | t_posix intcount f3\r
+< ready
+< ready
+< ready
+> \x03
+< interrupts=1
+< interrupts=1
+< interrupts=1
+< PSURF>
+> kill %1; wait; echo background-ended\r
+< interrupts=0
+< interrupts=0
+< background-ended
+< PSURF>
+> exit\r
+< BROKER-STATS

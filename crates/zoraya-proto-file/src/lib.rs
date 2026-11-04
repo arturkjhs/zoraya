@@ -249,7 +249,9 @@ protocol! {
 
     message Sync = 15, handles 0 {}
 
-    /// The volume's state: `STORAGE_FAILED` if it has failed.
+    /// The volume's state: `STORAGE_FAILED` if it has failed. `Done`'s
+    /// count is the most bytes of blocks in use since the mount (proposed
+    /// ADR-0211).
     message Status = 16, handles 0 {}
 
     /// The count of corrupt reads (ADR-0012 rule 3), in `Done`'s count.
