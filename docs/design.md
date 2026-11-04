@@ -722,7 +722,23 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   `invariants.script` (`t_posix`'s checks) and `scenarios.script` (W9a, W9b, W10, the hostile cases) under HVF and
   TCG; `make test-posix-gui` runs `gui.script` in the window.
 
-MEASUREMENTS
+Measured on the M4 under QEMU 11.1.2, `make test-posix`'s `measure.script` (the normal kernel, 128 MiB), one run per
+accelerator: `ZORAYA_POSIX_STATS=1 t_posix bench` (20 each of `posix_spawn` and wait of a program that exits at
+once, `fork` and wait, `fork`, `exec` and wait) and `ZORAYA_POSIX_STATS=1 sh -c` with twenty subshells for dash's own
+fork; the broker's round trips are the library's count around each call (`POSIX-PROCESS`), means.
+
+| | HVF | TCG |
+|---|---|---|
+| `spawn_prepare` round trip (dash; `t_posix`) | 13 µs; 26 µs | 0.41 ms; 0.66 ms |
+| `spawn_commit` round trip (the new child runs first) | 0.47 to 0.89 ms | 2.0 ms |
+| `reap` round trip | 20 to 25 µs | 0.66 to 0.80 ms |
+| A fork of dash, in the parent; its `snapshot_process` | 1.32 ms; 0.36 ms | 12.9 ms; 8.5 ms |
+| `posix_spawn` and wait of a program exiting at once | 26 ms | 183 ms |
+| An `exec` (fork, exec and wait, less fork and wait) | 25 ms | 195 ms |
+
+An `exec` or a spawn is dominated by loading the image: the 1.4 MiB program read through the file protocol into a
+memory object, `image_create`, and `spawn`'s copy of its segments; nothing is cached between spawns of one program.
+A commit's time includes the child's first slice on the one CPU before the broker answers.
 
 ## Console input and the first process
 

@@ -976,6 +976,12 @@ impl<S: Sys> Posix<S> {
             Desc::Stream {
                 read, write, conn, ..
             } => {
+                if let Some(c) = conn {
+                    // A terminal's held read and what it kept go with it.
+                    self.tty_reads.retain(|(h, _)| *h != c);
+                    self.tty_stash.retain(|(h, _)| *h != c);
+                    self.tty_rest.retain(|(h, _)| *h != c);
+                }
                 for h in [read, write, conn].into_iter().flatten() {
                     self.sys.close(h);
                 }

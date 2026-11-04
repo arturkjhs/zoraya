@@ -356,3 +356,257 @@ mod proto_unknown {
         message Unknown = 99, handles 0 { x: u32 }
     }
 }
+
+// ---------------------------------------------------------------- the
+// tests the mutation run asked for (TASK-21-review.md, "Mutation testing").
+
+use discipline::bits::*;
+
+/// Feeds `bytes`, and gives the echo and what the last byte returned.
+fn feed(d: &mut Discipline, bytes: &[u8]) -> (Vec<u8>, Option<Signal>) {
+    let mut echo = Vec::new();
+    let mut last = None;
+    for &b in bytes {
+        last = d.input(b, &mut echo);
+    }
+    (echo, last)
+}
+
+fn with_lflag(lflag: u32) -> Discipline {
+    let mut d = Discipline::new();
+    d.attr.lflag = lflag;
+    d
+}
+
+#[test]
+fn the_counts_are_kept() {
+    let mut t = session();
+    t.request(1, &message(&Read { max: 100 }, 5), vec![]);
+    t.keys(b"x\n");
+    assert_eq!(t.counts.lines, 1);
+    t.keys(b"\x1a");
+    assert_eq!(t.counts.suspends, 1);
+    t.request(1, &message(&Foreground { group: 1 }, 3), vec![55]);
+    assert_eq!(t.counts.refused, 1);
+    t.request(1, b"xx", vec![]);
+    assert_eq!(t.counts.refused, 2);
+    t.request(1, &message(&Read { max: 10 }, 6), vec![]);
+    t.request(0, &message(&Foreground { group: 9 }, 7), vec![101]);
+    assert_eq!(t.counts.not_foreground, 1);
+    let a = t.request(0, &message(&Statistics {}, 8), vec![]);
+    let bytes = &replies(&a)[0].1;
+    assert_eq!(reply_status(bytes), status::OK);
+    let (_, s) = decode::<StatisticsReply>(bytes, 0).unwrap();
+    assert_eq!((s.lines, s.suspends, s.connections), (1, 1, 2));
+}
+
+#[test]
+fn a_signal_is_listed_after_the_echo_of_its_character() {
+    let mut t = session();
+    assert_eq!(
+        t.keys(b"\x03"),
+        [
+            Action::Show(b"^C".to_vec()),
+            Action::Signal {
+                job: 100,
+                kind: RequestKind::Interrupt,
+                detail: 2
+            }
+        ]
+    );
+    t.discipline.attr.lflag &= !ECHO;
+    assert_eq!(
+        t.keys(b"\x03"),
+        [Action::Signal {
+            job: 100,
+            kind: RequestKind::Interrupt,
+            detail: 2
+        }]
+    );
+}
+
+#[test]
+fn the_pending_queue_holds_16_kib_and_drops_the_rest() {
+    let mut d = with_lflag(0);
+    feed(&mut d, &vec![b'a'; discipline::MAX_PENDING]);
+    assert_eq!(d.dropped, 0);
+    feed(&mut d, b"a");
+    assert_eq!(d.dropped, 1);
+    assert_eq!(d.read(20_000).unwrap().len(), discipline::MAX_PENDING);
+}
+
+#[test]
+fn a_line_past_the_limit_is_dropped_and_counted() {
+    let mut d = Discipline::new();
+    feed(&mut d, &vec![b'a'; discipline::MAX_LINE]);
+    feed(&mut d, b"b\n");
+    assert_eq!(d.dropped, 1);
+    let mut want = vec![b'a'; discipline::MAX_LINE];
+    want.push(b'\n');
+    assert_eq!(d.read(10_000).unwrap(), want);
+}
+
+#[test]
+fn carriage_returns_follow_igncr_icrnl_and_inlcr() {
+    let mut d = Discipline::new();
+    d.attr.iflag = IGNCR;
+    feed(&mut d, b"a\rb\n");
+    assert_eq!(d.read(100).unwrap(), b"ab\n");
+    let mut d = Discipline::new();
+    d.attr.iflag = 0;
+    feed(&mut d, b"a\rb\n");
+    assert_eq!(d.read(100).unwrap(), b"a\rb\n");
+    let mut d = Discipline::new();
+    d.attr.iflag = INLCR;
+    feed(&mut d, b"a\n");
+    assert!(
+        d.read(100).is_none(),
+        "the newline became a carriage return"
+    );
+}
+
+#[test]
+fn signal_characters_are_ordinary_without_isig() {
+    let mut d = with_lflag(ICANON | ECHO);
+    assert_eq!(feed(&mut d, b"\x03").1, None);
+    feed(&mut d, b"\n");
+    assert_eq!(d.read(100).unwrap(), b"\x03\n");
+}
+
+#[test]
+fn a_signal_flushes_completed_lines_and_the_partial_one_unless_noflsh() {
+    let mut d = Discipline::new();
+    feed(&mut d, b"done\nab\x03");
+    assert!(!d.readable());
+    feed(&mut d, b"\n");
+    assert_eq!(d.read(100).unwrap(), b"\n");
+    let mut d = Discipline::new();
+    d.attr.lflag |= NOFLSH;
+    feed(&mut d, b"done\n\x03");
+    assert!(d.readable());
+}
+
+#[test]
+fn kill_echoes_by_echoke_and_echok() {
+    // Default: ECHOKE, each character erased.
+    let mut d = Discipline::new();
+    assert_eq!(feed(&mut d, b"ab\x15").0, b"ab\x08 \x08\x08 \x08");
+    // ECHOK without ECHOKE: a newline.
+    let mut d = with_lflag(ICANON | ECHO | ECHOE | ECHOK);
+    assert_eq!(feed(&mut d, b"ab\x15").0, b"ab\r\n");
+    // Neither: nothing after the characters.
+    let mut d = with_lflag(ICANON | ECHO | ECHOE);
+    assert_eq!(feed(&mut d, b"ab\x15").0, b"ab");
+}
+
+#[test]
+fn a_nul_is_an_ordinary_byte() {
+    let mut d = Discipline::new();
+    feed(&mut d, b"a\0b\n");
+    assert_eq!(d.read(100).unwrap(), b"a\0b\n");
+}
+
+#[test]
+fn echonl_echoes_a_newline_without_echo() {
+    let mut d = with_lflag(ICANON | ECHONL);
+    assert_eq!(feed(&mut d, b"a\n").0, b"\r\n");
+    let mut d = with_lflag(ICANON | ISIG);
+    assert!(feed(&mut d, b"a\n").0.is_empty());
+}
+
+#[test]
+fn erase_echoes_by_echo_echoe_and_echoctl() {
+    assert_eq!(
+        feed(&mut with_lflag(ICANON | ECHO | ISIG), b"ab\x7f").0,
+        b"ab"
+    );
+    assert!(
+        feed(&mut with_lflag(ICANON | ECHOE | ISIG), b"ab\x7f")
+            .0
+            .is_empty()
+    );
+    let mut d = Discipline::new();
+    assert_eq!(feed(&mut d, b"\x01\x7f").0, b"^A\x08 \x08\x08 \x08");
+    let mut d = Discipline::new();
+    assert_eq!(feed(&mut d, b" \x7f").0, b" \x08 \x08");
+    let mut d = with_lflag(ICANON | ECHO | ECHOE);
+    assert_eq!(feed(&mut d, b"\x01\x7f").0, b"\x01\x08 \x08");
+}
+
+#[test]
+fn raw_echo_shows_control_bytes_in_caret_form_except_tab_and_newline() {
+    let mut d = with_lflag(ISIG | ECHO | ECHOCTL);
+    assert_eq!(feed(&mut d, b"\x01\t\n\x7f").0, b"^A\t\r\n\x7f");
+}
+
+#[test]
+fn signal_characters_echo_by_echoctl() {
+    let mut d = with_lflag(ISIG | ICANON | ECHO);
+    assert_eq!(
+        feed(&mut d, b"\x03"),
+        (b"\x03".to_vec(), Some(Signal::Interrupt))
+    );
+    for (c, lflag, want) in [
+        (b' ', Termios::default().lflag, &b" "[..]),
+        (b'a', Termios::default().lflag, &b"a"[..]),
+        (0x7f, ISIG | ICANON | ECHO, &b"\x7f"[..]),
+        (0x7f, Termios::default().lflag, &b"^?"[..]),
+    ] {
+        let mut d = Discipline::new();
+        d.attr.lflag = lflag;
+        d.attr.cc[VINTR] = c;
+        assert_eq!(
+            feed(&mut d, &[c]),
+            (want.to_vec(), Some(Signal::Interrupt)),
+            "{c:#x}"
+        );
+    }
+}
+
+#[test]
+fn output_applies_onlcr_only_under_opost() {
+    for (oflag, want) in [
+        (0, &b"a\n"[..]),
+        (OPOST, b"a\n"),
+        (ONLCR, b"a\n"),
+        (OPOST | ONLCR, b"a\r\n"),
+    ] {
+        let mut d = Discipline::new();
+        d.attr.oflag = oflag;
+        let mut out = Vec::new();
+        d.output(b"a\n", &mut out);
+        assert_eq!(out, want, "oflag {oflag:#o}");
+    }
+}
+
+#[test]
+fn attributes_change_the_mode_without_losing_input() {
+    // Leaving canonical mode makes the partial line readable.
+    let mut d = Discipline::new();
+    feed(&mut d, b"ab");
+    let mut raw = d.attr;
+    raw.lflag &= !ICANON;
+    d.set(raw);
+    assert_eq!(d.read(100).unwrap(), b"ab");
+    // Canonical to canonical keeps the completed lines.
+    let mut d = Discipline::new();
+    feed(&mut d, b"x\nab");
+    let mut quiet = d.attr;
+    quiet.lflag &= !ECHO;
+    d.set(quiet);
+    assert!(d.readable());
+    assert_eq!(d.read(100).unwrap(), b"x\n");
+    // Raw to raw keeps what is queued.
+    let mut d = with_lflag(0);
+    feed(&mut d, b"q");
+    let mut a = d.attr;
+    a.lflag = ISIG;
+    d.set(a);
+    assert_eq!(d.read(100).unwrap(), b"q");
+    // Raw to canonical makes what is queued the line.
+    let mut d = with_lflag(0);
+    feed(&mut d, b"q");
+    d.set(Termios::default());
+    feed(&mut d, b"\n");
+    assert_eq!(d.read(100).unwrap(), b"q\n");
+}
