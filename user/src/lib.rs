@@ -5,9 +5,11 @@
 extern crate alloc;
 
 pub mod command;
+pub mod filecmd;
 pub mod files;
 pub mod gui;
 mod heap;
+pub mod namespace;
 pub mod stack;
 
 pub use zoraya_rt::*;

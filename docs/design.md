@@ -777,12 +777,16 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `crates/zoraya-shell/describe/`): `NAME --help`, `help NAME` (paged), `help --search WORD`, Tab completion and
   argument parsing all come from it. Builtins: `cd`, `pwd`, `set`, `unset`, `export`, `count`, `echo`, `test`,
   `math`, `source`, `status`, `history`, `help`, `grants`, `jobs`, `fg`, `bg`, `wait`, `kill`, `settings`, `slots`,
-  `uptime`, `exit`, `poweroff`, `reboot`. Until the rest of step 7 the file commands `ls`, `cat`, `cp`, `mv`, `rm`,
-  `mkdir`, `stat`, `sync`, `head`, `find` and `search` are built in too, over `zoraya-commands`; `ls /zoraya/bin` lists the ramdisk's programs. Errors read `NAME: SUBJECT: PROBLEM`
+  `uptime`, `exit`, `poweroff`, `reboot`. The file commands `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `head`, `find` and
+  `search` are programs (step 7), each given only what its line designates; `sync` stays built in; `ls /zoraya/bin` lists the ramdisk's programs. Errors read `NAME: SUBJECT: PROBLEM`
   (`cat: missing.txt: not found`), with a `hint:` when one is known; unknown commands get the nearest names or, for
   `grep`, `wc`, `man`, `less`, `more` and `which`, what to type on Zoraya.
-- **Programs** from the ramdisk run by name in a job of their own, with only the console (and, for the test programs
-  that need them, a job, the ramdisk or the volume). A trailing `&` runs one in the background (`[1] sleep 30`);
+- **Programs** from the ramdisk run by name in a job of their own, with the console. A program with a description
+  in the system image also gets a start-up record (ADR-0153 rule 8): the current directory to read, and each path
+  operand as its kind gives it (`cp a b`: `a` to read, `b`'s directory narrowed to `b`), plus what `+r PATH` and
+  `+w PATH` grant; `grants LINE` prints it. An operand from a value reaches only inside the current directory or a
+  grant. A path a program names outside its entries is refused and reported, and the shell prints the grant that
+  would allow it. Test programs (no description) get what TASK-11's shell gave them. A trailing `&` runs one in the background (`[1] sleep 30`);
   `jobs`, `wait [%N]`, `kill [--interrupt|--terminate|--hangup|--quit|--kill] [%N]` and `fg [%N]` act on job
   numbers, the smallest free from 1. A job's end is reported once, before a prompt or by `wait` and `kill`.
 - `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
@@ -801,8 +805,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
   `shell.suggestions`, `shell.colour`, `console.columns`.
 
-**Pending (TASK-18 Part 2).** Step 7: grants (`+r`, `+w`, designated operands, `grants` as ADR-0153 words it) and the
-file commands as programs; `grants` today says what a program gets.
+**Pending (TASK-18 Part 2).** Step 7's rest: link objects (rule 5) are not yet resolved by the shell, and the in-QEMU
+halves of INV-0153-1, -2 and -7; `grants` today says what a program gets.
 Steps 8 and 9 after stage 6a: byte streams, pipelines (`|` is refused with a message), redirection of programs, `$(...)`
 of a program, Ctrl-Z, `bg`. Step 10 after 6d: POSIX programs. Step 11: the tour as a test on both terminals.
 Step 12: `reboot` (ADR-0159).
@@ -829,8 +833,8 @@ Step 12: `reboot` (ADR-0159).
 
 - **Shell (TASK-18 Part 2, steps 1 to 6).** Programs print to the console, not through `zosh`: until step 8 there
   are no streams, so `|`, a program's redirection and `$(...)` of a program are refused with a message, and keys
-  typed while a program runs reach nobody but Ctrl-C and Ctrl-\\. The file commands are builtins with the shell's
-  own access until step 7, and `grants` says so. A line wider than the terminal is drawn again on a new row when
+  typed while a program runs reach nobody but Ctrl-C and Ctrl-\\. Programs print to the console, so in the GUI their output is on the
+  serial line, not in the window; keys typed while a program runs are dropped. A line wider than the terminal is drawn again on a new row when
   edited away from its end (ADR-0154's subset has no cursor-up; its open questions). `settings` publishes
   a new `/config/settings` (ADR-0157 item 4); `/config/history` is rewritten in place after every line. Descriptions are compiled into `zosh` as well as kept in each program and the
   ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). The third Ctrl-C kills a job, as before

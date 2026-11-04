@@ -24,12 +24,14 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use zoraya_abi::posix::{self, NO_HANDLE};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     CONSOLE, ChannelObject, DEADLINE_INFINITE, DIRECTORY, DirectoryEntry, ExitRecord, Handle, JOB,
     JobFlags, MAX_HANDLES, Mode, ObjectType, POWER, Packet, RequestKind, Rights, Status,
     channel_signals, console_signals, job_signals,
 };
+use zoraya_abi::{ChannelEntry, native};
 use zoraya_command::Parsed;
 use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, write_flags};
@@ -39,15 +41,16 @@ use zoraya_shell::editor::{self, Assist, Completion, Editor, Key, Options};
 use zoraya_shell::eval::{
     self, Exec, Found, Host, Io, LANGUAGE, Ran, Shell, Sink, State, function_description,
 };
+use zoraya_shell::grants;
 use zoraya_shell::record;
 use zoraya_shell::syntax;
 use zoraya_user::descriptions;
 use zoraya_user::files::{ALL, DIRECTORY as OPEN_DIRECTORY, File, FsResult, read_all};
 use zoraya_user::{
-    channel_read, channel_write, clock_monotonic, console_dropped, console_entry, console_read,
-    console_write, directory_entry, directory_lookup, dup, handle_close, handle_type, job_create,
-    job_kill, job_signal, port_create, port_subscribe, port_unsubscribe, port_wait, power_off,
-    process_exit, process_exit_record, spawn,
+    channel_create, channel_read, channel_write, clock_monotonic, console_dropped, console_entry,
+    console_read, console_write, directory_entry, directory_lookup, dup, handle_close, handle_type,
+    job_create, job_kill, job_signal, port_create, port_subscribe, port_unsubscribe, port_wait,
+    power_off, process_exit, process_exit_record, spawn,
 };
 
 zoraya_user::describe!("system", "zosh");
@@ -76,7 +79,9 @@ const BUILTINS: [&str; 16] = [
     "cd", "pwd", "history", "help", "grants", "jobs", "fg", "bg", "wait", "kill", "settings",
     "slots", "uptime", "exit", "poweroff", "reboot",
 ];
-const FILE_COMMANDS: [&str; 11] = zoraya_commands::NAMES;
+/// File commands still built in: `sync` needs the `sync` right, which no
+/// entry of a program's table carries (ADR-0155's open questions).
+const FILE_COMMANDS: [&str; 1] = ["sync"];
 /// The help topics (ADR-0156 item 4), in the order `help` lists them.
 const TOPICS: [&str; 7] = [
     "language", "grants", "jobs", "keys", "settings", "errors", "tour",
@@ -183,6 +188,25 @@ struct Job {
     job: Handle,
     process: Handle,
     line: String,
+    /// The read end of the job's `REPORT` channel (ADR-0153 rule 11).
+    report: Option<Handle>,
+}
+
+impl Drop for Job {
+    /// A background job's reports are not read (ADR-0158 rule 6 reports its
+    /// end only): the channel goes with it.
+    fn drop(&mut self) {
+        if let Some(r) = self.report.take() {
+            let _ = handle_close(r);
+        }
+    }
+}
+
+/// A program's start-up channel, and the report channel's end the shell
+/// reads after the job.
+struct Table {
+    startup: Handle,
+    report: Handle,
 }
 
 /// An output file a redirection opened.
@@ -322,6 +346,225 @@ impl Z {
         Some(d)
     }
 
+    // --- Grants (ADR-0153) ---
+
+    /// The description of program `name`, and whether it is the system
+    /// image's own: only those designate (rule 9, rule 10, INV-0153-6).
+    fn program_description(&mut self, name: &str) -> Option<(Rc<Description>, bool)> {
+        let ours = descriptions::COMMANDS
+            .iter()
+            .chain(descriptions::DEMOS)
+            .any(|(n, _)| *n == name);
+        if !ours {
+            return None;
+        }
+        self.description(name).map(|d| (d, true))
+    }
+
+    /// The plan for a line running `exec`, or why it may not run.
+    fn plan_for(&mut self, exec: &Exec<'_>) -> Result<Option<Vec<grants::Planned>>, String> {
+        let Some((d, base)) = self.program_description(exec.name) else {
+            if !exec.grants.is_empty() {
+                let e = zoraya_command::error(
+                    "zosh",
+                    Some(exec.name),
+                    "it reads no namespace, so a grant would give it nothing",
+                    &["a test program gets only what TASK-11's shell gave it"],
+                );
+                return Err(e);
+            }
+            return Ok(None);
+        };
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let parsed = match zoraya_command::parse(&d, &texts) {
+            Ok(zoraya_command::Outcome::Run(p)) => p,
+            // `--help` or a usage mistake: the program says so; it needs
+            // nothing but the current directory.
+            _ => zoraya_command::Parsed::default(),
+        };
+        let line = grants::Line {
+            description: &d,
+            parsed: &parsed,
+            args: exec.args,
+            cwd: &self.cwd,
+            grants: exec.grants,
+            base_system: base,
+        };
+        match grants::plan(&line) {
+            Ok(p) => Ok(Some(p)),
+            Err(r) => {
+                let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+                Err(zoraya_command::error(
+                    "zosh",
+                    Some(&r.subject),
+                    &r.problem,
+                    &hints,
+                ))
+            }
+        }
+    }
+
+    /// One merged entry's connection, from the shell's own root: `None`
+    /// for a path that does not exist (a missing entry, rule 2).
+    fn open_entry(&self, m: &grants::Merged) -> Result<Option<(File, native::EntryKind)>, String> {
+        let fail = |s: u32| zoraya_command::error("zosh", Some(&m.path), &problem(s), &[]);
+        if let Some(name) = &m.name {
+            let dir = match self.open(&m.path, OPEN_DIRECTORY) {
+                Ok(dir) => dir,
+                // A name to make in a directory that is not there.
+                Err(zoraya_proto_file::status::NOT_FOUND) => return Ok(None),
+                Err(s) => return Err(fail(s)),
+            };
+            let narrowed = dir.narrow(name, m.rights).map_err(fail)?;
+            return Ok(Some((narrowed, native::EntryKind::Directory)));
+        }
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| fail(zoraya_command::FILE_GONE))?;
+        let opened = match m.path.strip_prefix('/') {
+            Some("") | None => root.clone_as(m.rights),
+            Some(rel) => root.open(rel, 0, m.rights),
+        };
+        match opened {
+            Ok(file) => {
+                let kind = match file.stat() {
+                    Ok(s) if s.kind == proto_kind::DIRECTORY => native::EntryKind::Directory,
+                    Ok(_) => native::EntryKind::File,
+                    Err(s) => return Err(fail(s)),
+                };
+                Ok(Some((file, kind)))
+            }
+            Err(zoraya_proto_file::status::NOT_FOUND) => Ok(None),
+            Err(s) => Err(fail(s)),
+        }
+    }
+
+    /// Opens every entry of `plan` and sends the start-up record (rule 8)
+    /// with them on a new channel, whose other end the program gets.
+    fn table(&self, plan: &[grants::Planned]) -> Result<Table, String> {
+        let merged = grants::merge(plan);
+        let gone = || zoraya_command::error("zosh", None, "too many entries or handles", &[]);
+        let mut handles: Vec<ChannelEntry> = Vec::new();
+        let mut kinds = Vec::new();
+        for m in &merged {
+            match self.open_entry(m) {
+                Ok(Some((file, kind))) => {
+                    handles.push(ChannelEntry {
+                        handle: file.end,
+                        rights: ChannelObject::RIGHTS,
+                        transfer: Transfer::Move,
+                    });
+                    core::mem::forget(file);
+                    kinds.push((kind, (handles.len() - 1) as u8));
+                }
+                Ok(None) => kinds.push((native::EntryKind::Missing, NO_HANDLE)),
+                Err(e) => {
+                    for h in &handles {
+                        let _ = handle_close(h.handle);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        let close_all = |handles: &[ChannelEntry]| {
+            for h in handles {
+                let _ = handle_close(h.handle);
+            }
+        };
+        let Ok((report_ours, report_theirs)) = channel_create() else {
+            close_all(&handles);
+            return Err(gone());
+        };
+        handles.push(ChannelEntry {
+            handle: report_theirs,
+            rights: ChannelObject::RIGHTS,
+            transfer: Transfer::Move,
+        });
+        let slots = native::Slots {
+            report: (handles.len() - 1) as u8,
+            ..native::Slots::NONE
+        };
+        let entries: Vec<native::Entry<'_>> = merged
+            .iter()
+            .zip(&kinds)
+            .map(|(m, (kind, handle))| native::Entry {
+                path: &m.path,
+                kind: *kind,
+                handle: *handle,
+            })
+            .collect();
+        let mut bytes = alloc::vec![0u8; 64 * 1024];
+        let Some(n) = native::encode(&self.cwd, &slots, &entries, handles.len(), &mut bytes) else {
+            close_all(&handles);
+            let _ = handle_close(report_ours);
+            return Err(gone());
+        };
+        let Ok((ours, theirs)) = channel_create() else {
+            close_all(&handles);
+            let _ = handle_close(report_ours);
+            return Err(gone());
+        };
+        let sent = channel_write(ours, &bytes[..n], &handles);
+        let _ = handle_close(ours);
+        if sent.is_err() {
+            close_all(&handles);
+            let _ = handle_close(report_ours);
+            let _ = handle_close(theirs);
+            return Err(gone());
+        }
+        Ok(Table {
+            startup: theirs,
+            report: report_ours,
+        })
+    }
+
+    /// Rule 11: after a job, each refused path with the grant that allows it.
+    fn hints(&self, report: Handle, name: &str, line: &str) {
+        let mut seen: Vec<(String, bool)> = Vec::new();
+        let mut bytes = alloc::vec![0u8; 8192];
+        let mut handles = [report; 1];
+        while let Ok(sizes) = channel_read(report, &mut bytes, &mut handles) {
+            for h in &handles[..sizes.handles as usize] {
+                let _ = handle_close(*h);
+            }
+            if let Some(r) = posix::Report::decode(&bytes[..sizes.bytes as usize]) {
+                let write = r.access == posix::Access::Write;
+                if !seen.iter().any(|(p, _)| p == r.path) {
+                    seen.push((r.path.into(), write));
+                }
+            }
+        }
+        let _ = handle_close(report);
+        let home = self.home();
+        let mut dirs: Vec<String> = Vec::new();
+        let mut text = String::new();
+        for (path, write) in &seen {
+            let dir = split_last(path).0.to_string();
+            if dirs.contains(&dir) {
+                continue;
+            }
+            dirs.push(dir.clone());
+            if dirs.len() > 3 {
+                continue;
+            }
+            let (verb, grant) = if *write {
+                ("change", "+w")
+            } else {
+                ("read", "+r")
+            };
+            text.push_str(&format!(
+                "  hint: {name} tried to {verb} {}, which it was not given\n  to allow it: {grant} {} {line}\n",
+                grants::shown(path, &home),
+                grants::shown(&dir, &home)
+            ));
+        }
+        if dirs.len() > 3 {
+            text.push_str(&format!("  and {} more\n", dirs.len() - 3));
+        }
+        show(&text);
+    }
+
     // --- Jobs ---
 
     fn free_number(&self) -> u32 {
@@ -330,7 +573,12 @@ impl Z {
             .unwrap_or(1)
     }
 
-    fn spawn_in_job(&self, image: Handle, exec: &Exec<'_>) -> Result<(Handle, Handle), Status> {
+    fn spawn_in_job(
+        &self,
+        image: Handle,
+        exec: &Exec<'_>,
+        startup: Option<Handle>,
+    ) -> Result<(Handle, Handle), Status> {
         let job = job_create(JOB, JobFlags::NONE)?;
         let mut buffer = alloc::vec![0u8; 16 * 1024];
         let mut e = Encoder::new(&mut buffer, job, image);
@@ -354,6 +602,14 @@ impl Z {
             e.handle(dup(DIRECTORY.slot(), DIRECTORY, Rights::LOOKUP));
         } else {
             e.handle(console_entry());
+        }
+        if let Some(end) = startup {
+            e.handle(HandleEntry {
+                slot: native::slot::STARTUP.slot(),
+                handle: end,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
         }
         for a in exec.args {
             e.arg(a.text.as_bytes());
@@ -461,7 +717,9 @@ impl Z {
 
     /// Waits for a foreground job, passing it Ctrl-C and Ctrl-\. Other
     /// keys are dropped: there is no stream to give them to (step 8).
-    fn wait_foreground(&mut self, number: u32) -> (ExitRecord, bool) {
+    /// Waits for job `number` in front; gives its record, whether Ctrl-C
+    /// interrupted it, and its report channel.
+    fn wait_foreground(&mut self, number: u32) -> (ExitRecord, bool, Option<Handle>) {
         let mut interrupts = 0;
         let mut ctrl_c = false;
         loop {
@@ -477,7 +735,8 @@ impl Z {
                         keys.extend(self.read_keys());
                     } else if let Some((job, record)) = self.take_ended(packet.key) {
                         if job.number == number {
-                            return (record, ctrl_c);
+                            let mut job = job;
+                            return (record, ctrl_c, job.report.take());
                         }
                         self.notices.push(Z::notice(&job, &record));
                     }
@@ -565,18 +824,6 @@ impl Z {
     // --- Builtins ---
 
     fn file_command(&mut self, name: &str, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
-        let ramdisk = name == "ls"
-            && p.operand(d, "DIR")
-                .is_some_and(|dir| self.abs(dir) == "/zoraya/bin");
-        if ramdisk {
-            // The ramdisk's programs, until programs come from the volume
-            // (ADR-0108): descriptions are not programs.
-            for n in ramdisk_programs() {
-                io.out.push_str(&n);
-                io.out.push('\n');
-            }
-            return 0;
-        }
         if self.root.is_none() {
             io.err.push_str(&zoraya_command::error(
                 name,
@@ -647,12 +894,9 @@ impl Z {
                 },
             };
             (d, format!("{name} is built into the shell"))
-        } else if FILE_COMMANDS.contains(&name) {
+        } else if FILE_COMMANDS.contains(&name) && name == "sync" {
             match self.description(name) {
-                Some(d) => (
-                    d,
-                    format!("{name} is built into the shell until it becomes a program"),
-                ),
+                Some(d) => (d, format!("{name} is built into the shell")),
                 None => return 1,
             }
         } else if let Some(d) = self.description(name) {
@@ -888,14 +1132,17 @@ impl Z {
         Ok(())
     }
 
+    /// `grants LINE...`: what the command on the line would receive, and
+    /// nothing run (ADR-0153 rule 7, INV-0153-4).
     fn grants(&mut self, p: &Parsed<'_>, io: &mut Io) -> i32 {
         let words: Vec<&str> = p.operands.iter().map(|(_, w)| *w).collect();
-        let mut words = words.as_slice();
-        while let [g @ ("+r" | "+w"), _, rest @ ..] = words {
-            let _ = g;
-            words = rest;
+        let mut rest = words.as_slice();
+        let mut given: Vec<(bool, eval::Value)> = Vec::new();
+        while let [g @ ("+r" | "+w"), path, after @ ..] = rest {
+            given.push((*g == "+w", eval::Value::literal(path)));
+            rest = after;
         }
-        let Some(name) = words.first() else {
+        let Some((name, args)) = rest.split_first() else {
             io.err.push_str(&zoraya_command::error(
                 "grants",
                 None,
@@ -904,30 +1151,40 @@ impl Z {
             ));
             return 2;
         };
-        let shown = |s: &str| format!("  {s}\n");
-        if FILE_COMMANDS.contains(name) || BUILTINS.contains(name) || LANGUAGE.contains(name) {
+        if BUILTINS.contains(name) || LANGUAGE.contains(name) || FILE_COMMANDS.contains(name) {
             io.out.push_str(&format!(
-                "{name} is built into the shell: it acts with the shell's own access.\n"
+                "{name} is built into the shell: it acts with the shell's own access\n"
             ));
             return 0;
         }
-        io.out.push_str(&format!("{name} gets:\n"));
-        io.out.push_str(&shown(
-            "console              print (programs have no streams before TASK-18 step 8)",
-        ));
-        io.out.push_str(&shown("its own job"));
-        if NEED_MORE.contains(name) {
-            io.out
-                .push_str(&shown("the ramdisk          start programs"));
+        let values: Vec<eval::Value> = args.iter().map(|a| eval::Value::literal(a)).collect();
+        let exec = Exec {
+            name,
+            args: &values,
+            env: &[],
+            grants: &given,
+            redirects: &[],
+            background: false,
+            line: "",
+        };
+        match self.plan_for(&exec) {
+            Err(e) => {
+                io.err.push_str(&e);
+                1
+            }
+            Ok(None) => {
+                io.out.push_str(&format!(
+                    "{name} gets the console and its own job, and no files: it has no description\n"
+                ));
+                0
+            }
+            Ok(Some(plan)) => {
+                let home = self.home();
+                io.out
+                    .push_str(&grants::report(name, &plan, &home, "the terminal"));
+                0
+            }
         }
-        if NEED_VOLUME.contains(name) {
-            io.out.push_str(&shown(
-                "/                    the whole volume (a test program)",
-            ));
-        }
-        io.out
-            .push_str("  (files named on its line are given from TASK-18 step 7)\n");
-        0
     }
 }
 
@@ -1066,7 +1323,10 @@ impl Host for Z {
                     .map(|j| j.line.clone())
                     .unwrap_or_default();
                 show(&format!("{line}\n"));
-                let (record, ctrl_c) = self.wait_foreground(n);
+                let (record, ctrl_c, report) = self.wait_foreground(n);
+                if let Some(r) = report {
+                    self.hints(r, &line, &line);
+                }
                 if let Some(l) = record::screen_line(&line, &record, ctrl_c) {
                     show(&format!("{l}\n"));
                 }
@@ -1188,19 +1448,54 @@ impl Host for Z {
     }
 
     fn program(&mut self, exec: &Exec<'_>) -> Ran {
-        if !exec.redirects.is_empty() || !exec.grants.is_empty() {
-            let what = if exec.grants.is_empty() {
-                "redirection"
-            } else {
-                "a grant"
-            };
+        if !exec.redirects.is_empty() {
             let msg = format!(
-                "zosh: {}: {what} of a program needs byte streams or grants, which arrive with TASK-18 steps 7 and 8\n",
+                "zosh: {}: redirection of a program needs byte streams, which arrive with TASK-18 step 8\n",
                 exec.name
             );
             show(&msg);
             return Ran::Refused(1);
         }
+        // `ls /zoraya/bin` lists the ramdisk (ADR-0155 rule 8), which no
+        // table can give a program.
+        if exec.name == "ls"
+            && exec.args.len() == 1
+            && self.abs(&exec.args[0].text) == "/zoraya/bin"
+        {
+            let mut text = String::new();
+            for n in ramdisk_programs() {
+                text.push_str(&n);
+                text.push('\n');
+            }
+            show(&text);
+            return Ran::Ended {
+                record: record::exited(0),
+                ctrl_c: false,
+            };
+        }
+        let table = match self.plan_for(exec) {
+            Err(e) => {
+                show(&e);
+                return Ran::Refused(1);
+            }
+            Ok(None) => None,
+            Ok(Some(plan)) if self.root.is_none() && !plan.is_empty() => {
+                show(&zoraya_command::error(
+                    exec.name,
+                    None,
+                    "there is no volume",
+                    &[],
+                ));
+                return Ran::Refused(1);
+            }
+            Ok(Some(plan)) => match self.table(&plan) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    show(&e);
+                    return Ran::Refused(1);
+                }
+            },
+        };
         if self.jobs.len() >= MAX_JOBS {
             show("zosh: too many jobs\n");
             return Ran::Refused(1);
@@ -1217,11 +1512,15 @@ impl Host for Z {
                 return Ran::Refused(1);
             }
         };
-        let started = self.spawn_in_job(image, exec);
+        let started = self.spawn_in_job(image, exec, table.as_ref().map(|t| t.startup));
         let _ = handle_close(image);
+        let report = table.as_ref().map(|t| t.report);
         let (job, process) = match started {
             Ok(both) => both,
             Err(s) => {
+                if let Some(r) = report {
+                    let _ = handle_close(r);
+                }
                 show(&zoraya_command::error(
                     "zosh",
                     Some(exec.name),
@@ -1245,12 +1544,16 @@ impl Host for Z {
             job,
             process,
             line: line.clone(),
+            report,
         });
         if exec.background {
             show(&format!("[{number}] {line}\n"));
             return Ran::Background(number);
         }
-        let (record, ctrl_c) = self.wait_foreground(number);
+        let (record, ctrl_c, report) = self.wait_foreground(number);
+        if let Some(r) = report {
+            self.hints(r, exec.name, &line);
+        }
         Ran::Ended { record, ctrl_c }
     }
 

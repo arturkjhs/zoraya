@@ -218,6 +218,10 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
   generated from the descriptions; it is built with the tour's scripted session (step 11), when the file
   commands are programs (step 7). Until then `console.script` checks `sleep --help` and `kill --nope`, and every
   builtin parses its arguments through `zoraya-command`.
+- *Note, 2026-11-04 (TASK-18 Part 2, step 7):* `sync` stays a builtin. As a program it would need the `sync` right,
+  which no entry of its table carries: its description has no operand and the current directory is given read-only
+  (ADR-0153 rule 1). Rule 8 names it among the programs; making it one needs a decision on what a line gives `sync`
+  (for the architect). The other file commands are programs.
 
 ## Revisit triggers
 - A ported or new command whose syntax the description cannot express.

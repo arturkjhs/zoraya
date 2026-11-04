@@ -95,8 +95,9 @@
 < hello from the filesystem
 < \r\n/> 
 # A refused request leaves no handle behind: more than the shell's table holds.
-* 1100 cat ../x\r | cat: ../x: not found
-< \r\n/> 
+# cat is a program: the next line waits for the prompt, since keys typed while
+# a program runs reach nobody until byte streams (TASK-18 step 8).
+* 1100 cat ../x\r | cat: ../x: not found\r\n/> 
 > cat hello.txt\r
 < hello from the filesystem
 < \r\n/> 
@@ -119,6 +120,24 @@
 < \r\n/> 
 > search nothing notes.txt; echo $status\r
 < \r\n1
+< \r\n/> 
+# What a program is given (ADR-0153): grants shows it and runs nothing.
+> grants cp hello.txt work/copy.txt\r
+< cp gets:\r\n  in, out, err         the terminal\r\n  /                    read (current directory)\r\n  /hello.txt           read (operand FROM)\r\n  /work                create or replace copy.txt (operand TO)
+< \r\n/> 
+> cat work/copy.txt\r
+< cat: work/copy.txt: not found
+< \r\n/> 
+# An operand from a value reaches only inside the current directory (rule 4).
+> cd work\r
+< \r\n/work> 
+> set p ../hello.txt; rm $p\r
+< zosh: ../hello.txt: from a value, outside the current directory\r\n  hint: if that is meant, write +w / before the command
+< \r\n/work> 
+> cd /\r
+< \r\n/> 
+> cat hello.txt\r
+< hello from the filesystem
 < \r\n/> 
 # Settings, written by publishing a new file (ADR-0157 item 4).
 > settings shell.colour no\r

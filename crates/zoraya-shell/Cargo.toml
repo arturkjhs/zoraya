@@ -11,6 +11,8 @@ license.workspace = true
 zoraya-abi = { path = "../zoraya-abi" }
 zoraya-describe = { path = "../zoraya-describe" }
 zoraya-command = { path = "../zoraya-command" }
+zoraya-proto-file = { path = "../zoraya-proto-file" }
+zoraya-resolve = { path = "../zoraya-resolve" }
 
 [lints]
 workspace = true

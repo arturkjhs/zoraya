@@ -143,8 +143,11 @@ fn start_shell(root: Option<File>, terminal: Option<Handle>) -> Option<(Handle, 
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, job, image);
+    // In a window the shell writes the console and hands it to the programs
+    // it starts (which print there until byte streams), but never reads it
+    // (INV-0097-3).
     let console = if terminal.is_some() {
-        Rights::WRITE
+        Rights::WRITE.union(Rights::DUPLICATE)
     } else {
         ConsoleObject::RIGHTS
     };

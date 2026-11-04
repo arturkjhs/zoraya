@@ -15,14 +15,16 @@ region 15 15 970 1 40a0ff
 region 15 15 1 490 40a0ff
 type echo hi > a.txt\r
 screen ~> _
+# cat is a program: until byte streams (TASK-18 step 8) its output goes to
+# the serial console, not the window.
 type cat a.txt\r
-screen hi
+serial hi
 screen ~> _
 # F12 with one window: focus stays, and typing goes on. (That F12 never reaches a
 # client is checked by t_gui: the terminal would send nothing for it anyway.)
 key f12
 type ls\r
-screen a.txt
+serial a.txt
 screen ~> _
 # exit closes the window, and init opens a new one with a new shell, since it
 # was the last (ADR-0155's Decision, INV-0155-5).
@@ -31,8 +33,8 @@ serial init: shell ended
 window
 screen Type help to begin, or help tour.
 screen ~> _
-type cat a.txt\r
-screen hi
+type echo again\r
+screen again
 screen ~> _
 latency 10
 type poweroff\r

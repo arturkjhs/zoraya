@@ -36,6 +36,7 @@ zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-command = { path = "../crates/zoraya-command" }
 zoraya-settings = { path = "../crates/zoraya-settings" }
 zoraya-commands = { path = "../crates/zoraya-commands" }
+zoraya-resolve = { path = "../crates/zoraya-resolve" }
 zoraya-broker = { path = "../crates/zoraya-broker" }
 zoraya-proto-posix = { path = "../crates/zoraya-proto-posix" }
 zoraya-proto-tty = { path = "../crates/zoraya-proto-tty" }
@@ -392,5 +393,55 @@ bench = false
 
 [[bin]]
 name = "ttyd"
+test = false
+bench = false
+
+[[bin]]
+name = "ls"
+test = false
+bench = false
+
+[[bin]]
+name = "cat"
+test = false
+bench = false
+
+[[bin]]
+name = "cp"
+test = false
+bench = false
+
+[[bin]]
+name = "mv"
+test = false
+bench = false
+
+[[bin]]
+name = "rm"
+test = false
+bench = false
+
+[[bin]]
+name = "mkdir"
+test = false
+bench = false
+
+[[bin]]
+name = "stat"
+test = false
+bench = false
+
+[[bin]]
+name = "head"
+test = false
+bench = false
+
+[[bin]]
+name = "find"
+test = false
+bench = false
+
+[[bin]]
+name = "search"
 test = false
 bench = false

@@ -12,11 +12,14 @@ extern crate alloc;
 pub mod editor;
 pub mod eval;
 pub mod glob;
+pub mod grants;
 pub mod record;
 pub mod syntax;
 
 #[cfg(test)]
 mod editor_tests;
+#[cfg(test)]
+mod grants_tests;
 #[cfg(test)]
 mod lang_tests;
 
