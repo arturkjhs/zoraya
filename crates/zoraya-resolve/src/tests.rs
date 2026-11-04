@@ -1,0 +1,288 @@
+use super::*;
+use alloc::format;
+use alloc::string::ToString;
+
+const TABLE: [&str; 5] = ["/work/src/deep", "/work", "/tmp", "/dev/null", "/"];
+
+fn at(entry: usize, path: &str) -> Place {
+    Place {
+        entry,
+        path: path.to_string(),
+    }
+}
+
+fn go(form: Form, from: &Place, path: &str) -> Result<(usize, String), Refusal> {
+    resolve(&TABLE, form, from, path.as_bytes()).map(|r| (r.place.entry, r.place.path))
+}
+
+#[test]
+fn absolute_paths_take_the_longest_prefix_on_a_boundary() {
+    let cwd = at(4, "");
+    for form in [Form::EntryRelative, Form::Absolute] {
+        let ok = |p: &str, e: usize, rest: &str| {
+            assert_eq!(go(form, &cwd, p), Ok((e, rest.to_string())), "{p}")
+        };
+        ok("/work/a", 1, "a");
+        ok("/work", 1, "");
+        ok("/work/", 1, "");
+        ok("/workshop/a", 4, "workshop/a");
+        ok("/work/src/deep/x/y", 0, "x/y");
+        ok("/work/src/deeper", 1, "src/deeper");
+        ok("/tmp/GMfifo7", 2, "GMfifo7");
+        ok("/dev/null", 3, "");
+        ok("/dev/nullx", 4, "dev/nullx");
+        ok("//work///a/./b/", 1, "a/b");
+        ok("/../../work/a", 1, "a");
+        ok("/work/../tmp/x", 2, "x");
+        ok("/Київ/Plzeň", 4, "Київ/Plzeň");
+    }
+}
+
+/// The record refuses one prefix twice; a table built otherwise gives
+/// the first of them.
+#[test]
+fn of_two_equal_prefixes_the_first_wins() {
+    assert_eq!(longest(["/a", "/a"].into_iter(), "/a/x"), Some((0, "x")));
+    assert_eq!(longest(["/", "/a", "/a"].into_iter(), "/a"), Some((1, "")));
+}
+
+#[test]
+fn an_absolute_path_no_entry_covers_is_refused_as_outside() {
+    let table = ["/work", "/bin"];
+    let cwd = at(0, "");
+    let r = resolve(&table, Form::EntryRelative, &cwd, b"/etc/passwd");
+    assert_eq!(r, Err(Refusal::Outside("/etc/passwd".to_string())));
+    let r = resolve(&table, Form::EntryRelative, &cwd, b"/workshop");
+    assert_eq!(r, Err(Refusal::Outside("/workshop".to_string())));
+    let r = resolve(&table, Form::Absolute, &at(0, "a"), b"../../etc/./x/");
+    assert_eq!(r, Err(Refusal::Outside("/etc/x".to_string())));
+}
+
+#[test]
+fn relative_paths_and_dot_dot_in_each_form() {
+    let cwd = at(1, "a/b");
+    // Entry-relative: `..` stops at the root of cwd's entry, /work.
+    let er = Form::EntryRelative;
+    assert_eq!(go(er, &cwd, "c"), Ok((1, "a/b/c".into())));
+    assert_eq!(go(er, &cwd, ".."), Ok((1, "a".into())));
+    assert_eq!(go(er, &cwd, "../../../../etc"), Ok((1, "etc".into())));
+    assert_eq!(go(er, &cwd, "../../src/deep/z"), Ok((0, "z".into())));
+    assert_eq!(go(er, &at(2, ""), "../work/x"), Ok((2, "work/x".into())));
+    // Absolute: `..` leaves the entry, and only `/` holds it.
+    let ab = Form::Absolute;
+    assert_eq!(go(ab, &cwd, "../../../../etc"), Ok((4, "etc".into())));
+    assert_eq!(go(ab, &at(2, ""), "../work/x"), Ok((1, "x".into())));
+    assert_eq!(go(ab, &cwd, "../../../tmp"), Ok((2, "".into())));
+}
+
+#[test]
+fn bad_paths_are_refused_with_their_error() {
+    let cwd = at(4, "");
+    let e = |p: &[u8]| resolve(&TABLE, Form::EntryRelative, &cwd, p).unwrap_err();
+    assert_eq!(e(b""), Refusal::Error(Error::NotFound));
+    assert_eq!(e(b"/a/\xff"), Refusal::Error(Error::NotUtf8));
+    assert_eq!(e(&[b'a'; PATH_MAX]), Refusal::Error(Error::NameTooLong));
+    assert!(resolve(&TABLE, Form::EntryRelative, &cwd, &[b'a'; PATH_MAX - 1]).is_ok());
+    let r = resolve(&TABLE, Form::EntryRelative, &cwd, b"x/").unwrap();
+    assert!(r.directory, "a trailing slash names a directory");
+    let r = resolve(&TABLE, Form::EntryRelative, &cwd, b"x/..").unwrap();
+    assert!(r.directory && r.dot);
+    for p in [&b"d/."[..], b".", b"..", b"d/../", b"/."] {
+        assert!(
+            resolve(&TABLE, Form::EntryRelative, &cwd, p).unwrap().dot,
+            "{p:?}"
+        );
+    }
+    for p in [&b"d"[..], b"d/", b"/", b"a.b", b"..x"] {
+        assert!(
+            !resolve(&TABLE, Form::EntryRelative, &cwd, p).unwrap().dot,
+            "{p:?}"
+        );
+    }
+    let deep = "a/".repeat(PATH_MAX / 2 - 2);
+    let far = at(4, &deep[..deep.len() - 1]);
+    let e = resolve(&TABLE, Form::EntryRelative, &far, b"bb/cc").unwrap_err();
+    assert_eq!(
+        e,
+        Refusal::Error(Error::NameTooLong),
+        "joined past PATH_MAX"
+    );
+    assert!(
+        !resolve(&TABLE, Form::EntryRelative, &cwd, b"x")
+            .unwrap()
+            .directory
+    );
+    // Control characters are names for the service to judge, not here.
+    let r = resolve(&TABLE, Form::EntryRelative, &cwd, b"a\x01b").unwrap();
+    assert_eq!(r.place.path, "a\u{1}b");
+}
+
+#[test]
+fn links_resolve_from_their_directory_or_the_table() {
+    let er = Form::EntryRelative;
+    // /work/a/b/link/c with link -> ../x: /work/a/x/c.
+    let opened = at(1, "a/b/link/c");
+    let r = follow(&TABLE, er, &opened, "c", "../x", false).unwrap();
+    assert_eq!((r.place.entry, r.place.path.as_str()), (1, "a/x/c"));
+    // A relative target that climbs past the entry stays in it...
+    let r = follow(&TABLE, er, &opened, "c", "../../../../../etc", false).unwrap();
+    assert_eq!((r.place.entry, r.place.path.as_str()), (1, "etc/c"));
+    // ...unless the table is absolute.
+    let r = follow(
+        &TABLE,
+        Form::Absolute,
+        &opened,
+        "c",
+        "../../../../../etc",
+        false,
+    );
+    assert_eq!(r.unwrap().absolute, "/etc/c");
+    // An absolute target is read from the table.
+    let r = follow(&TABLE, er, &opened, "c", "/tmp/t", false).unwrap();
+    assert_eq!((r.place.entry, r.place.path.as_str()), (2, "t/c"));
+    // A link as the last component.
+    let r = follow(&TABLE, er, &at(1, "l"), "", "f", false).unwrap();
+    assert_eq!(r.place.path, "f");
+    let r = follow(&TABLE, er, &at(1, "d/l"), "", "f", true).unwrap();
+    assert_eq!((r.place.path.as_str(), r.directory), ("d/f", true));
+    assert_eq!(
+        follow(&TABLE, er, &opened, "c", "", false),
+        Err(Refusal::Error(Error::NotFound))
+    );
+    let long = "a/".repeat(PATH_MAX / 2);
+    assert_eq!(
+        follow(&TABLE, er, &opened, "c", &long, false),
+        Err(Refusal::Error(Error::NameTooLong))
+    );
+    let mut links = Links::default();
+    for _ in 0..MAX_LINKS {
+        assert_eq!(links.take(), Ok(()));
+    }
+    assert_eq!(links.take(), Err(Error::TooManyLinks));
+}
+
+#[test]
+fn split_gives_the_parent_and_the_name() {
+    let abc = at(1, "a/b/c");
+    let (p, n) = split(&abc).unwrap();
+    assert_eq!((p, n), (at(1, "a/b"), "c"));
+    let c = at(1, "c");
+    let (p, n) = split(&c).unwrap();
+    assert_eq!((p, n), (at(1, ""), "c"));
+    assert!(split(&at(1, "")).is_none());
+    assert_eq!(absolute_of("/", ""), "/");
+    assert_eq!(absolute_of("/", "a"), "/a");
+    assert_eq!(absolute_of("/w", ""), "/w");
+    assert_eq!(absolute_of("/w", "a/b"), "/w/a/b");
+}
+
+/// A component generator for the property tests: names, `.`, `..`,
+/// empty components and names that look like prefixes.
+fn random_path(next: &mut impl FnMut(u64) -> u64) -> String {
+    const PARTS: [&str; 10] = [
+        "..", ".", "", "work", "src", "deep", "tmp", "a", "dev", "null",
+    ];
+    let mut out = String::new();
+    if next(2) == 0 {
+        out.push('/');
+    }
+    for i in 0..next(8) {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(PARTS[next(PARTS.len() as u64) as usize]);
+    }
+    if out.is_empty() {
+        out.push('.');
+    }
+    out
+}
+
+/// INV-0107-2, INV-0002-4 and INV-0153-8, in both forms: whatever a path
+/// is, the entry chosen is the longest prefix covering the absolute
+/// result, the rest has no `.`, `..` or empty component, the result is
+/// `join`'s normal form, and in the entry-relative form a relative path
+/// never leaves cwd's entry.
+#[test]
+fn no_path_escapes_an_entry_in_either_form() {
+    let mut x = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move |n: u64| {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        x.wrapping_mul(0x2545_f491_4f6c_dd1d) % n
+    };
+    let tables: [&[&str]; 3] = [&TABLE, &["/work", "/tmp"], &["/"]];
+    for _ in 0..20_000 {
+        let table = tables[next(3) as usize];
+        let form = if next(2) == 0 {
+            Form::EntryRelative
+        } else {
+            Form::Absolute
+        };
+        let from = at(
+            next(table.len() as u64) as usize,
+            ["", "a", "a/b"][next(3) as usize],
+        );
+        let path = random_path(&mut next);
+        match resolve(table, form, &from, path.as_bytes()) {
+            Ok(r) => {
+                let rest = &r.place.path;
+                assert!(
+                    rest.is_empty()
+                        || rest
+                            .split('/')
+                            .all(|c| !c.is_empty() && c != "." && c != ".."),
+                    "{path} gave {rest}"
+                );
+                assert_eq!(absolute_of(table[r.place.entry], rest), r.absolute);
+                assert!(zoraya_abi::posix::is_absolute_normal(&r.absolute));
+                let best = table
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| covers(p, &r.absolute))
+                    .max_by_key(|(_, p)| p.len())
+                    .map(|(i, _)| i);
+                assert_eq!(best, Some(r.place.entry), "longest for {}", r.absolute);
+                if form == Form::EntryRelative && !path.starts_with('/') {
+                    let own = table[from.entry];
+                    assert!(
+                        covers(own, &r.absolute),
+                        "{path} from {own} left it: {}",
+                        r.absolute
+                    );
+                }
+            }
+            Err(Refusal::Outside(abs)) => {
+                assert!(table.iter().all(|p| !covers(p, &abs)), "{abs}");
+                assert!(zoraya_abi::posix::is_absolute_normal(&abs));
+                assert!(
+                    form == Form::Absolute || path.starts_with('/'),
+                    "entry-relative {path} from inside"
+                );
+            }
+            Err(e) => panic!("{path}: {e:?}"),
+        }
+    }
+}
+
+/// `..` at an entry's root resolves to that root (INV-0002-4's words),
+/// for every entry and depth.
+#[test]
+fn dot_dot_at_an_entry_root_stays_there() {
+    for (i, prefix) in TABLE.iter().enumerate() {
+        for depth in 1..5 {
+            let path = "../".repeat(depth);
+            let r = resolve(&TABLE, Form::EntryRelative, &at(i, ""), path.as_bytes()).unwrap();
+            assert_eq!(r.absolute, *prefix, "{} from {prefix}", path);
+            let r = resolve(
+                &TABLE,
+                Form::EntryRelative,
+                &at(i, ""),
+                format!("{path}x").as_bytes(),
+            )
+            .unwrap();
+            assert_eq!(r.place.entry, i);
+        }
+    }
+}

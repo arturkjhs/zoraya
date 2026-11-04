@@ -994,6 +994,8 @@ crates/                   no_std, host-tested
   zoraya-shell/           zosh's language (parser, globs, evaluator over a host trait, ADR-0150, ADR-0151),
                           its line editor and exit records in words; describe/ holds the language builtins' pages
   zoraya-describe/        command descriptions (NAME.cmd): the total parser of ADR-0156
+  zoraya-resolve/         the one path resolver (ADR-0107 items 6 and 7, ADR-0153 rule 6): libposix's path, the native
+                          runtime's and zosh's
   zoraya-commands/        the file commands' logic over a Files trait: the shell's builtins now, the programs later
   zoraya-settings/        /config/settings: a total reader and a writer that keeps every other line (ADR-0157)
   zoraya-command/         what every native command shares: argv from its description, --help, error lines,

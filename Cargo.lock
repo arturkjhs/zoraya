@@ -258,6 +258,7 @@ dependencies = [
  "zoraya-proto-posix",
  "zoraya-proto-tty",
  "zoraya-protocol",
+ "zoraya-resolve",
  "zoraya-rt",
  "zoraya-test-alloc",
 ]
@@ -337,6 +338,14 @@ dependencies = [
 name = "zoraya-ramdisk"
 version = "0.1.0"
 dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-resolve"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
  "zoraya-test-alloc",
 ]
 
