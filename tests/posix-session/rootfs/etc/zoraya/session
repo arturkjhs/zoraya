@@ -1,0 +1,5 @@
+# The POSIX session of make test-posix (ADR-0110 item 1): the measured
+# session's shell, prompt and environment.
+command sh -i
+env PS1="PSURF> "
+env ENV=/dev/null

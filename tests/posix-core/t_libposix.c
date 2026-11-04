@@ -325,8 +325,8 @@ static void files(void)
 	CHECK(clock_gettime(CLOCK_MONOTONIC, &t0) == 0);
 	CHECK(clock_gettime(CLOCK_MONOTONIC, &t1) == 0);
 	CHECK(t1.tv_sec > t0.tv_sec || (t1.tv_sec == t0.tv_sec && t1.tv_nsec >= t0.tv_nsec));
-	/* Process functions are 6d's. */
-	FAILS(fork(), ENOSYS);
+	/* Process functions came with 6d and need a broker that answers, which
+	 * posixrun's counting channel does not (make test-posix checks them). */
 
 	printf("t_libposix: files passed (%d checks)\n", checks);
 }

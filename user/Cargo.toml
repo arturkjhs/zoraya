@@ -36,6 +36,10 @@ zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-command = { path = "../crates/zoraya-command" }
 zoraya-settings = { path = "../crates/zoraya-settings" }
 zoraya-commands = { path = "../crates/zoraya-commands" }
+zoraya-broker = { path = "../crates/zoraya-broker" }
+zoraya-proto-posix = { path = "../crates/zoraya-proto-posix" }
+zoraya-proto-tty = { path = "../crates/zoraya-proto-tty" }
+zoraya-tty = { path = "../crates/zoraya-tty" }
 
 [build-dependencies]
 zoraya-describe = { path = "../crates/zoraya-describe" }
@@ -378,5 +382,15 @@ bench = false
 
 [[bin]]
 name = "posixrun"
+test = false
+bench = false
+
+[[bin]]
+name = "broker"
+test = false
+bench = false
+
+[[bin]]
+name = "ttyd"
 test = false
 bench = false

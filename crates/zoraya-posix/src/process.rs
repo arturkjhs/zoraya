@@ -11,7 +11,8 @@ use alloc::vec::Vec;
 
 use zoraya_abi::Status;
 use zoraya_abi::posix::{
-    Access, Bootstrap, EntryKind, FD_NONBLOCK, Facts, FdKind, MAX_REPORTS, Report,
+    Access, Bootstrap, EntryKind, FD_NONBLOCK, FD_READ, FD_WRITE, Facts, FdKind, MAX_REPORTS,
+    Report,
 };
 use zoraya_proto_file::{
     self as proto, MAX_INLINE, description_flags, open_flags, rights, status, whence, write_flags,
@@ -108,12 +109,16 @@ pub enum Desc<H> {
         place: Option<Place>,
         listing: Listing,
     },
-    /// Stream ends: a pipe, or a terminal's output (6d).
+    /// Stream ends: a pipe, a FIFO, or a terminal. A FIFO keeps its
+    /// connection, whose closing tells the service the side has gone; a
+    /// terminal's input is its connection (ADR-0105 item 6), its output the
+    /// write end.
     Stream {
         read: Option<H>,
         write: Option<H>,
         nonblock: bool,
         tty: bool,
+        conn: Option<H>,
     },
     /// `/dev/null`.
     Null { access: u32 },
@@ -137,6 +142,25 @@ pub struct Stats {
     pub seeks: u64,
     pub requests: u64,
     pub reports: u64,
+    /// Messages to the broker (INV-0104-5: none on the file paths).
+    pub broker: u64,
+    /// `process_take_request` calls (INV-0106-2).
+    pub takes: u64,
+    /// The broker's round trips, with their time in nanoseconds: prepare,
+    /// commit, reap (TASK-21's measurements).
+    pub prepares: u64,
+    pub prepare_ns: u64,
+    pub commits: u64,
+    pub commit_ns: u64,
+    pub reaps: u64,
+    pub reap_ns: u64,
+    /// `fork` in the parent, whole, and its `snapshot_process` alone.
+    pub forks: u64,
+    pub fork_ns: u64,
+    pub snapshot_ns: u64,
+    /// What the last failed `inherit` was making: the child's fd, or 1000
+    /// and the entry's index (for `ZORAYA_POSIX_DEBUG`).
+    pub inherit_failed_at: u32,
 }
 
 /// An object opened, and what the open told of it.
@@ -156,29 +180,47 @@ enum Outcome<H> {
 pub struct Posix<S: Sys> {
     pub sys: S,
     pub fds: Table<Desc<S::H>>,
-    entries: Vec<Entry<S::H>>,
-    form: Form,
-    cwd: Place,
-    cwd_conn: Option<S::H>,
+    pub(crate) entries: Vec<Entry<S::H>>,
+    pub(crate) form: Form,
+    pub(crate) cwd: Place,
+    pub(crate) cwd_conn: Option<S::H>,
     pub facts: Facts,
     pub exe: String,
-    report: Option<S::H>,
+    pub(crate) report: Option<S::H>,
     /// The process itself, with `WAIT`, from the bootstrap channel's second
     /// message (ADR-0107 item 5), for 6d's `REQUEST_PENDING` waits.
     pub self_handle: Option<S::H>,
     reported: Vec<String>,
     report_dropped: u32,
     reports_sent: u32,
-    scratch: Option<(S::H, u64)>,
-    out: Vec<u8>,
-    input: Vec<u8>,
+    pub(crate) scratch: Option<(S::H, u64)>,
+    pub(crate) out: Vec<u8>,
+    pub(crate) input: Vec<u8>,
     data: Vec<u8>,
-    handles: Vec<S::H>,
-    transaction: u32,
+    pub(crate) handles: Vec<S::H>,
+    pub(crate) transaction: u32,
     pub stats: Stats,
+    /// The signal state (ADR-0106).
+    pub signals: crate::signals::Signals,
+    /// The broker's connection at slot `BROKER` (ADR-0104), if any.
+    pub broker: Option<S::H>,
+    /// The process's own job at slot `PROCESS_JOB`, for `exec`.
+    pub process_job: Option<S::H>,
+    /// The children not yet waited for.
+    pub children: Vec<crate::jobs::Child<S::H>>,
+    /// `zoraya_fork_group`'s hint for the next `fork`.
+    pub fork_group: i32,
+    /// A child's end seen at a wait point: `SIGCHLD` to take.
+    pub sigchld: bool,
+    /// What `Read` a terminal connection has outstanding, by connection.
+    pub(crate) tty_reads: Vec<(S::H, u32)>,
+    /// Answers to held terminal reads that another request's wait took.
+    pub(crate) tty_stash: Vec<(S::H, Vec<u8>)>,
+    /// What a terminal read was given beyond the buffer that asked.
+    pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
 }
 
-fn native(s: Status, call: Call) -> i32 {
+pub(crate) fn native(s: Status, call: Call) -> i32 {
     errno::from_status(s, call)
 }
 
@@ -222,6 +264,15 @@ impl<S: Sys> Posix<S> {
             handles: Vec::with_capacity(4),
             transaction: 0,
             stats: Stats::default(),
+            signals: crate::signals::Signals::starting(facts.ignored, facts.blocked),
+            broker: None,
+            process_job: None,
+            children: Vec::new(),
+            fork_group: -1,
+            sigchld: false,
+            tty_reads: Vec::new(),
+            tty_stash: Vec::new(),
+            tty_rest: Vec::new(),
         }
     }
 
@@ -255,6 +306,11 @@ impl<S: Sys> Posix<S> {
         };
         for fd in record.fds() {
             let nonblock = fd.flags & FD_NONBLOCK != 0;
+            let access = match fd.flags & (FD_READ | FD_WRITE) {
+                FD_READ => o::RDONLY,
+                FD_WRITE => o::WRONLY,
+                _ => o::RDWR,
+            };
             let desc = match fd.kind {
                 FdKind::Null => Desc::Null { access: o::RDWR },
                 FdKind::File | FdKind::Dir => Desc::Object {
@@ -264,7 +320,7 @@ impl<S: Sys> Posix<S> {
                     } else {
                         Kind::File
                     },
-                    access: o::RDWR,
+                    access,
                     nonblock,
                     sync: false,
                     written: false,
@@ -277,20 +333,23 @@ impl<S: Sys> Posix<S> {
                     write: None,
                     nonblock,
                     tty: false,
+                    conn: None,
                 },
                 FdKind::StreamWrite => Desc::Stream {
                     read: None,
                     write: Some(at_slot(fd.fd)),
                     nonblock,
                     tty: false,
+                    conn: None,
                 },
-                // The terminal connection is the broker's business (6d); the
-                // stream end at the slot is the data path.
+                // The output stream's end at the slot, the terminal
+                // connection in the message (ADR-0107 item 3).
                 FdKind::Tty => Desc::Stream {
                     read: None,
                     write: Some(at_slot(fd.fd)),
                     nonblock,
                     tty: true,
+                    conn: message.get(fd.tty as usize).copied(),
                 },
             };
             let _ = p.fds.install_at(fd.fd, desc);
@@ -330,7 +389,7 @@ impl<S: Sys> Posix<S> {
 
     /// Sends `m` on `conn`, moving `moved`, and waits for the reply, which is
     /// then `self.input[..size]`, with its handles in `self.handles`.
-    fn call<'m, M: Message<'m>>(
+    pub(crate) fn call<'m, M: Message<'m>>(
         &mut self,
         conn: S::H,
         m: &M,
@@ -368,6 +427,16 @@ impl<S: Sys> Posix<S> {
                         return Err(EIO);
                     };
                     if header.transaction != t {
+                        // A terminal read's answer that came while another
+                        // request was out: kept for the read (review R4).
+                        let held = self
+                            .tty_reads
+                            .iter()
+                            .any(|&(c, ht)| c == conn && ht == header.transaction);
+                        if held {
+                            self.tty_stash.push((conn, self.input[..size].to_vec()));
+                            continue;
+                        }
                         return Err(EIO);
                     }
                     return Ok(size);
@@ -388,7 +457,7 @@ impl<S: Sys> Posix<S> {
 
     /// The status of a reply of `size` bytes: every reply has it first, and
     /// the generic error reply has only it.
-    fn status_of(&self, size: usize) -> u32 {
+    pub(crate) fn status_of(&self, size: usize) -> u32 {
         let bytes = &self.input[..size];
         match Header::decode(bytes) {
             Ok((h, _)) if h.ordinal == ERROR_ORDINAL => {
@@ -403,7 +472,12 @@ impl<S: Sys> Posix<S> {
     }
 
     /// A request answered by `Done`: its count, or the `errno`.
-    fn done<'m, M: Message<'m>>(&mut self, conn: S::H, m: &M, moved: &[S::H]) -> Result<u64, i32> {
+    pub(crate) fn done<'m, M: Message<'m>>(
+        &mut self,
+        conn: S::H,
+        m: &M,
+        moved: &[S::H],
+    ) -> Result<u64, i32> {
         let size = self.call(conn, m, moved)?;
         match decode::<proto::Done>(&self.input[..size], 0) {
             Ok((_, d)) if d.status.0 == status::OK => Ok(d.count),
@@ -749,6 +823,9 @@ impl<S: Sys> Posix<S> {
         if opened.kind == Kind::Directory && writes {
             return fail(self, EISDIR);
         }
+        if opened.kind == Kind::File && opened.meta.mode & stat::S_IFMT == stat::S_IFIFO {
+            return self.open_fifo(conn, flags);
+        }
         // ADR-0014 rule 6: as for a file's owner who is not root; an object
         // this open made is its creator's whatever its mode.
         let read = accmode != o::WRONLY;
@@ -778,6 +855,75 @@ impl<S: Sys> Posix<S> {
             listing: Listing::default(),
         };
         self.install(desc, flags & o::CLOEXEC != 0)
+    }
+
+    /// The side of a FIFO (ADR-0107 item 14, ADR-0190 item 5): `fifo_open`
+    /// on its connection gives the stream end; the connection stays with the
+    /// description, so the service sees the side close with it.
+    fn open_fifo(&mut self, conn: S::H, flags: u32) -> Result<i32, i32> {
+        let accmode = flags & 3;
+        let fail = |this: &mut Self, e: i32| {
+            this.sys.close(conn);
+            Err(e)
+        };
+        let side = match accmode {
+            o::RDONLY => proto::fifo_side::READ,
+            o::WRONLY => proto::fifo_side::WRITE,
+            // POSIX leaves O_RDWR on a FIFO undefined (ADR-0107 item 14).
+            _ => return fail(self, EINVAL),
+        };
+        let nonblock = flags & o::NONBLOCK != 0;
+        let m = proto::FifoOpen {
+            side: Below(side),
+            nonblock: Below(u32::from(nonblock)),
+        };
+        let size = match self.call(conn, &m, &[]) {
+            Ok(n) => n,
+            Err(e) => return fail(self, e),
+        };
+        let end = match decode::<proto::FifoOpenReply>(&self.input[..size], self.handles.len()) {
+            Ok((_, r)) if r.status.0 == status::OK => self.handles.pop(),
+            _ => None,
+        };
+        let Some(end) = end else {
+            let s = self.status_of(size);
+            // No reader for a non-blocking writer: POSIX's ENXIO.
+            let e = if s == status::NOT_FOUND {
+                ENXIO
+            } else {
+                errno::from_file(s)
+            };
+            return fail(self, e);
+        };
+        let (read, write) = if side == proto::fifo_side::READ {
+            (Some(end), None)
+        } else {
+            (None, Some(end))
+        };
+        let desc = Desc::Stream {
+            read,
+            write,
+            nonblock,
+            tty: false,
+            conn: Some(conn),
+        };
+        self.install(desc, flags & o::CLOEXEC != 0)
+    }
+
+    /// `mkfifo` and `mknod(S_IFIFO)` (ADR-0107 item 13): an exclusive create
+    /// with `S_IFIFO` on the temporary service; `EPERM` anywhere else,
+    /// whose service keeps no type bits.
+    pub fn mkfifo_at(&mut self, dirfd: i32, path: &[u8], mode: u32) -> Result<(), i32> {
+        let r = self.resolve(dirfd, path, Access::Write)?;
+        if self.entries.get(r.place.entry).map(|e| e.kind) != Some(EntryKind::Tmp) {
+            return Err(EPERM);
+        }
+        let wire = open_flags::CREATE | open_flags::EXCLUSIVE;
+        let mode = stat::S_IFIFO | (mode & 0o777 & !self.facts.umask);
+        let wanted = rights::READ | rights::CLONE;
+        let (_, opened) = self.open_resolved(r, wire, wanted, 0, mode, Access::Write)?;
+        self.sys.close(opened.conn);
+        Ok(())
     }
 
     fn open_special(&mut self, kind: EntryKind, r: &Resolved, flags: u32) -> Result<i32, i32> {
@@ -827,8 +973,16 @@ impl<S: Sys> Posix<S> {
                 self.sys.close(conn);
                 r
             }
-            Desc::Stream { read, write, .. } => {
-                for h in [read, write].into_iter().flatten() {
+            Desc::Stream {
+                read, write, conn, ..
+            } => {
+                if let Some(c) = conn {
+                    // A terminal's held read and what it kept go with it.
+                    self.tty_reads.retain(|(h, _)| *h != c);
+                    self.tty_stash.retain(|(h, _)| *h != c);
+                    self.tty_rest.retain(|(h, _)| *h != c);
+                }
+                for h in [read, write, conn].into_iter().flatten() {
                     self.sys.close(h);
                 }
                 Ok(())
@@ -885,6 +1039,12 @@ impl<S: Sys> Posix<S> {
                     Ok(0)
                 }
             }
+            Some(&Desc::Stream {
+                tty: true,
+                conn: Some(conn),
+                nonblock,
+                ..
+            }) => self.read_tty(fd, conn, into, nonblock),
             Some(Desc::Stream { read: None, .. }) => Err(EBADF),
             Some(&Desc::Stream {
                 read: Some(end),
@@ -933,9 +1093,7 @@ impl<S: Sys> Posix<S> {
                 Ok(n) => return Ok(n),
                 Err(Status::WouldBlock) if nonblock => return Err(EAGAIN),
                 Err(Status::WouldBlock) => {
-                    self.sys
-                        .wait(end, signals::READABLE | signals::PEER_CLOSED)
-                        .map_err(|s| native(s, Call::Other))?;
+                    self.wait_point(end, signals::READABLE | signals::PEER_CLOSED)?;
                 }
                 Err(s) => return Err(native(s, Call::Other)),
             }
@@ -1024,11 +1182,11 @@ impl<S: Sys> Posix<S> {
                     return if done > 0 { Ok(done) } else { Err(EAGAIN) };
                 }
                 Err(Status::WouldBlock) => {
-                    let s = match self.sys.wait(end, signals::WRITABLE | signals::PEER_CLOSED) {
+                    let s = match self.wait_point(end, signals::WRITABLE | signals::PEER_CLOSED) {
                         Ok(s) => s,
                         // What was written counts, as for any later error.
                         Err(_) if done > 0 => return Ok(done),
-                        Err(e) => return Err(native(e, Call::Other)),
+                        Err(e) => return Err(e),
                     };
                     if s & signals::WRITABLE == 0 && s & signals::PEER_CLOSED != 0 {
                         return if done > 0 { Ok(done) } else { Err(EPIPE) };
@@ -1713,6 +1871,7 @@ impl<S: Sys> Posix<S> {
                 write: None,
                 nonblock,
                 tty: false,
+                conn: None,
             },
             cloexec,
         );
@@ -1729,6 +1888,7 @@ impl<S: Sys> Posix<S> {
                 write: Some(write),
                 nonblock,
                 tty: false,
+                conn: None,
             },
             cloexec,
         );
@@ -1881,6 +2041,11 @@ impl<S: Sys> Posix<S> {
             }
         }
     }
+}
+
+/// True if a reply is not the generic error reply.
+pub(crate) fn reply_ok(bytes: &[u8]) -> bool {
+    Header::decode(bytes).is_ok_and(|(h, _)| h.ordinal != ERROR_ORDINAL)
 }
 
 /// What `look` found.

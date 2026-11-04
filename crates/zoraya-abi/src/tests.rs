@@ -944,6 +944,8 @@ mod bootstrap {
         gid: 1000,
         umask: 0o022,
         ignored: 1 << 13,
+        realtime_base: 1_800_000_000_123_456_789,
+        blocked: (1 << 2) | (1 << 17),
     };
 
     const FDS: [Fd; 4] = [
@@ -1175,7 +1177,8 @@ mod bootstrap {
         fds[3].fd = OPEN_MAX;
         assert!(bad(FACTS, 3, "", &fds, &e, 4), "an fd past OPEN_MAX");
         let mut fds = FDS;
-        fds[1].flags = 2;
+        // FD_READ and FD_WRITE are flags now (ADR-0190 item 17); 8 is not.
+        fds[1].flags = 8;
         assert!(bad(FACTS, 3, "", &fds, &e, 4), "an unknown fd flag");
         let mut fds = FDS;
         fds[0].tty = 0;
@@ -1213,13 +1216,32 @@ mod bootstrap {
             Bootstrap::decode(&m[..n], 4).is_none(),
             "another header size"
         );
-        for at in 56..HEADER_SIZE {
+        // What were reserved bytes carry the time base (ADR-0191): any
+        // value is a base, and it reads back.
+        assert_eq!(
+            Bootstrap::decode(&b[..n], 4).unwrap().facts.realtime_base,
+            FACTS.realtime_base
+        );
+        let mut m = b;
+        m[63] = 0xff;
+        let base = Bootstrap::decode(&m[..n], 4).unwrap().facts.realtime_base;
+        assert_eq!(base >> 56, 0xff);
+        // The mask on entry (ADR-0190 item 18) reads back; the word after it
+        // is reserved and must be zero.
+        assert_eq!(
+            Bootstrap::decode(&b[..n], 4).unwrap().facts.blocked,
+            FACTS.blocked
+        );
+        let mut m = b;
+        m[67] = 0x80;
+        assert_eq!(
+            Bootstrap::decode(&m[..n], 4).unwrap().facts.blocked >> 31,
+            1
+        );
+        for at in 68..72 {
             let mut m = b;
             m[at] = 1;
-            assert!(
-                Bootstrap::decode(&m[..n], 4).is_none(),
-                "reserved byte {at}"
-            );
+            assert!(Bootstrap::decode(&m[..n], 4).is_none(), "reserved {at}");
         }
         // The fd kinds and entry kinds past the last are refused.
         let fd_kind = HEADER_SIZE + 4 + "/bin/t_libposix".len() + 4 + "home/Київ".len() + 4;
@@ -1375,6 +1397,31 @@ mod bootstrap {
     }
 }
 
+#[test]
+fn signal_numbers_map_to_kinds_and_back() {
+    use crate::posix::signal::*;
+    assert_eq!(kind(2), Some(RequestKind::Interrupt));
+    assert_eq!(kind(15), Some(RequestKind::Terminate));
+    assert_eq!(kind(1), Some(RequestKind::Hangup));
+    assert_eq!(kind(3), Some(RequestKind::Quit));
+    assert_eq!(kind(17), Some(RequestKind::Custom(17)));
+    assert_eq!(kind(0), None);
+    assert_eq!(kind(32), None);
+    for n in 1..=MAX {
+        let k = kind(n).unwrap();
+        assert_eq!(number(k, n), n);
+        assert_eq!(number(k, 0), n, "the kind alone names the signal");
+    }
+    assert_eq!(number(RequestKind::Custom(40), 0), SIGTERM);
+    assert_eq!(number(RequestKind::Interrupt, 99), SIGINT);
+    let terminating: Vec<u32> = (1..=MAX).filter(|&n| default_terminates(n)).collect();
+    let mut expected: Vec<u32> = (1..=16).filter(|&n| n != 9).collect();
+    expected.extend([24, 25, 26, 27, 29, 30, 31]);
+    assert_eq!(terminating, expected);
+    let stops: Vec<u32> = (1..=MAX).filter(|&n| is_stop_or_continue(n)).collect();
+    assert_eq!(stops, [18, 19, 20, 21, 22]);
+}
+
 /// ADR-0153 rule 8's start-up record (INV-0153-5).
 mod native_startup {
     use crate::native::{Entry, EntryKind, Slots, Startup, encode};
@@ -1383,17 +1430,17 @@ mod native_startup {
     fn sample(out: &mut [u8]) -> usize {
         let entries = [
             Entry {
-                path: "/home",
+                path: "/work",
                 kind: EntryKind::Directory,
                 handle: 0,
             },
             Entry {
-                path: "/home/notes.txt",
+                path: "/work/notes.txt",
                 kind: EntryKind::File,
                 handle: 1,
             },
             Entry {
-                path: "/home/new.txt",
+                path: "/work/new.txt",
                 kind: EntryKind::Missing,
                 handle: NO_HANDLE,
             },
@@ -1405,7 +1452,7 @@ mod native_startup {
             job: 5,
             report: 6,
         };
-        encode("/home", &slots, &entries, 7, out).expect("encodes")
+        encode("/work", &slots, &entries, 7, out).expect("encodes")
     }
 
     #[test]
@@ -1413,10 +1460,10 @@ mod native_startup {
         let mut out = [0u8; 512];
         let n = sample(&mut out);
         let r = Startup::decode(&out[..n], 7).expect("decodes");
-        assert_eq!(r.cwd, "/home");
+        assert_eq!(r.cwd, "/work");
         assert_eq!(r.slots.report, 6);
         let paths: std::vec::Vec<&str> = r.entries().map(|e| e.path).collect();
-        assert_eq!(paths, ["/home/notes.txt", "/home/new.txt", "/home"]);
+        assert_eq!(paths, ["/work/notes.txt", "/work/new.txt", "/work"]);
         assert_eq!(r.entries().count(), r.entry_count());
     }
 

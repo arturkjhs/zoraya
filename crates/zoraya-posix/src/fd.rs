@@ -201,6 +201,16 @@ impl<D> Table<D> {
         self.entries.iter().flatten().count()
     }
 
+    /// Every live description, once each (for `fork`'s move list).
+    pub fn descriptions(&self) -> impl Iterator<Item = &D> + '_ {
+        self.entries.iter().flatten().map(|e| &e.item)
+    }
+
+    /// Every live description, to change in place (a `fork` child's).
+    pub fn descriptions_mut(&mut self) -> impl Iterator<Item = &mut D> + '_ {
+        self.entries.iter_mut().flatten().map(|e| &mut e.item)
+    }
+
     /// The fds in use, in order.
     pub fn fds(&self) -> impl Iterator<Item = u32> + '_ {
         self.fds

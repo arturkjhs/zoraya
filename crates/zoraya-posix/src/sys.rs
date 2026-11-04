@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 
-use zoraya_abi::Status;
+use zoraya_abi::{Disposition, RequestKind, Status};
 
 /// Memory of the program's: an address and a length the library never turns
 /// into a reference. Streams hand it to the kernel, which checks it; a copy
@@ -86,6 +86,45 @@ pub trait Sys {
 
     /// Nanoseconds on the monotonic clock.
     fn now(&mut self) -> u64;
+
+    /// Waits until one of `sources` asserts one of its signals, or until
+    /// `deadline` on the monotonic clock: which one, and what it asserts.
+    /// The wait points of ADR-0106 item 3. A kernel with no port waits on
+    /// the first source alone.
+    fn wait_any(
+        &mut self,
+        sources: &[(Self::H, u32)],
+        deadline: Option<u64>,
+    ) -> Result<(usize, u32), Status> {
+        let _ = deadline;
+        match sources.first() {
+            Some(&(h, wanted)) => self.wait(h, wanted).map(|s| (0, s)),
+            None => Err(Status::InvalidArgument),
+        }
+    }
+
+    /// The signals `h` asserts now (`object_get_signals`): `WNOHANG`.
+    fn signals_of(&mut self, h: Self::H) -> Result<u32, Status> {
+        let _ = h;
+        Err(Status::BadSyscall)
+    }
+
+    /// The next request of the process's queue (`process_take_request`).
+    fn take_request(&mut self) -> Option<(RequestKind, u32)> {
+        None
+    }
+
+    /// The slot a handle sits in (`fork`'s move list keeps slots).
+    fn slot_of(&self, h: Self::H) -> u32 {
+        let _ = h;
+        0
+    }
+
+    /// Sets the kernel's disposition for a request kind.
+    fn set_disposition(&mut self, kind: RequestKind, d: Disposition) -> Result<(), Status> {
+        let _ = (kind, d);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

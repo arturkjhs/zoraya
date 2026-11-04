@@ -147,6 +147,62 @@ impl File {
         }
     }
 
+    /// `open`, following symbolic links as the resolver does (ADR-0013 rule
+    /// 8): a relative target from the link's directory, an absolute one from
+    /// this directory, at most 40 links.
+    pub fn open_followed(&self, path: &str, flags: u32, wanted: u32) -> FsResult<File> {
+        let mut path = alloc::string::String::from(path.trim_start_matches('/'));
+        for _ in 0..40 {
+            let (client, server) = channel_create().map_err(|_| GONE)?;
+            let client = File { end: client };
+            let m = proto::Open {
+                flags: Flags(flags),
+                rights: Flags(wanted),
+                path: Path(&path),
+            };
+            let mut reply = Vec::new();
+            let (length, _) = call(
+                self.end,
+                &m,
+                &[moved(server, ChannelObject::RIGHTS)],
+                &mut reply,
+            )?;
+            let Ok((_, r)) = decode::<proto::OpenReply<'_>>(&reply[..length], 0) else {
+                return Err(done(&reply[..length])
+                    .err()
+                    .unwrap_or(status::INVALID_ARGUMENT));
+            };
+            if r.status.0 != status::IS_LINK {
+                return check(r.status.0).map(|()| client);
+            }
+            let remaining = r.remaining.0;
+            let consumed = &path[..path.len() - remaining.len()];
+            let consumed = consumed.trim_end_matches('/');
+            let dir = consumed.rsplit_once('/').map_or("", |(d, _)| d);
+            let target = r.target.0;
+            let mut next = if let Some(absolute) = target.strip_prefix('/') {
+                alloc::string::String::from(absolute)
+            } else if dir.is_empty() {
+                alloc::string::String::from(target)
+            } else {
+                alloc::format!("{dir}/{target}")
+            };
+            if !remaining.is_empty() {
+                next.push('/');
+                next.push_str(remaining.trim_start_matches('/'));
+            }
+            path = next;
+        }
+        Err(status::IS_LINK)
+    }
+
+    /// The boot's time base (ADR-0191), from the volume's service.
+    pub fn time_base(&self) -> FsResult<u64> {
+        let mut reply = Vec::new();
+        let (length, _) = call(self.end, &proto::TimeBase {}, &[], &mut reply)?;
+        done(&reply[..length])
+    }
+
     pub fn clone_as(&self, wanted: u32) -> FsResult<File> {
         let (client, server) = channel_create().map_err(|_| GONE)?;
         let client = File { end: client };

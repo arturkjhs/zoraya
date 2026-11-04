@@ -15,7 +15,11 @@
 //! cwd entry        u32, an index into the entries
 //! fd count         u32
 //! entry count      u32
-//! reserved         8 bytes, zero
+//! realtime base   u64: nanoseconds added to the monotonic clock for
+//!                  `CLOCK_REALTIME`, one per boot (ADR-0191); 0 for none
+//! blocked          u32, the signal mask on entry, bit n for signal n
+//!                  (ADR-0190 item 18); SIGKILL and SIGSTOP never
+//! reserved         u32, zero
 //! exe              u32 length, bytes: the executable's path
 //! cwd              u32 length, bytes: relative to the cwd entry's prefix
 //! fds              FD_SIZE bytes each: fd u32, kind u8, flags u8, tty u8,
@@ -31,7 +35,7 @@ use crate::Handle;
 
 const MAGIC: &[u8; 4] = b"ZPB1";
 /// The size of this version's header.
-pub const HEADER_SIZE: usize = 64;
+pub const HEADER_SIZE: usize = 72;
 const FD_SIZE: usize = 8;
 const ENTRY_HEADER: usize = 8;
 
@@ -62,8 +66,40 @@ pub mod slot {
     pub const SELF: Handle = Handle(1003);
     /// The write end of the channel refused paths are reported on.
     pub const REPORT: Handle = Handle(1004);
+    /// fd 0's handle: slot 0 holds none, so fd 0 is the one fd not at its
+    /// number (ADR-0190).
+    pub const FD0: Handle = Handle(1005);
 
-    pub const ALL: [Handle; 5] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT];
+    pub const ALL: [Handle; 6] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT, FD0];
+
+    /// The slot that holds fd `fd`'s handle: its number, but fd 0's.
+    pub const fn of_fd(fd: u32) -> u32 {
+        if fd == 0 { FD0.slot() } else { fd }
+    }
+}
+
+/// The rights of the job handles the broker gives (ADR-0104 items 2, 4 and
+/// 10). There is no call that reads a handle's rights, and a moved handle
+/// must list rights it holds, so the holders name them from here.
+pub mod job_rights {
+    use crate::Rights;
+
+    /// The broker's own handle to a process job.
+    pub const TABLE: Rights = Rights::DUPLICATE
+        .union(Rights::TRANSFER)
+        .union(Rights::WAIT)
+        .union(Rights::SIGNAL)
+        .union(Rights::CREATE_PROCESS)
+        .union(Rights::KILL);
+    /// The parent's handle to a child's process job.
+    pub const PARENT: Rights = Rights::WAIT
+        .union(Rights::DUPLICATE)
+        .union(Rights::TRANSFER);
+    /// A process's handle to its own process job, at `PROCESS_JOB`.
+    pub const OWN: Rights = Rights::CREATE_PROCESS.union(Rights::TRANSFER);
+    /// The terminal's handle to the foreground group's job and to the
+    /// session's.
+    pub const TERMINAL: Rights = Rights::SIGNAL.union(Rights::KILL);
 }
 
 /// `flags`: relative paths are joined to cwd's absolute path and `..` leaves
@@ -74,6 +110,12 @@ const FLAGS: u32 = ABSOLUTE;
 
 /// An fd's flag that the description in the library holds (ADR-0103 item 4).
 pub const FD_NONBLOCK: u8 = 1;
+/// A file's access, which only the spawner's description knows (ADR-0190
+/// item 17): `FD_READ`, `FD_WRITE`, both, or neither for read and write as a
+/// record of stage 6c says.
+pub const FD_READ: u8 = 2;
+pub const FD_WRITE: u8 = 4;
+const FD_FLAGS: u8 = FD_NONBLOCK | FD_READ | FD_WRITE;
 
 /// The second message on the bootstrap channel, with the `SELF` handle.
 pub const SELF_MESSAGE: &[u8; 4] = b"ZPBS";
@@ -147,6 +189,74 @@ impl EntryKind {
     }
 }
 
+/// Signal numbers (musl's AArch64 numbering, Linux's) and their request
+/// kinds (ADR-0106 item 1), for the broker and `libposix`.
+pub mod signal {
+    use crate::RequestKind;
+
+    pub const SIGHUP: u32 = 1;
+    pub const SIGINT: u32 = 2;
+    pub const SIGQUIT: u32 = 3;
+    pub const SIGABRT: u32 = 6;
+    pub const SIGKILL: u32 = 9;
+    pub const SIGPIPE: u32 = 13;
+    pub const SIGTERM: u32 = 15;
+    pub const SIGCHLD: u32 = 17;
+    pub const SIGCONT: u32 = 18;
+    pub const SIGSTOP: u32 = 19;
+    pub const SIGTSTP: u32 = 20;
+    pub const SIGTTIN: u32 = 21;
+    pub const SIGTTOU: u32 = 22;
+    pub const SIGURG: u32 = 23;
+    pub const SIGWINCH: u32 = 28;
+    /// The highest standard signal.
+    pub const MAX: u32 = 31;
+
+    /// The request kind of signal `n`, 1 to 31: the four fixed kinds, else
+    /// `Custom(n)`.
+    pub const fn kind(n: u32) -> Option<RequestKind> {
+        if n == 0 || n > MAX {
+            return None;
+        }
+        Some(match n {
+            SIGINT => RequestKind::Interrupt,
+            SIGTERM => RequestKind::Terminate,
+            SIGHUP => RequestKind::Hangup,
+            SIGQUIT => RequestKind::Quit,
+            _ => RequestKind::Custom(n),
+        })
+    }
+
+    /// The signal a request stands for: `detail` when it is a valid number,
+    /// else the kind's own (ADR-0046's rule); `Custom(n)` beyond 31 is 15.
+    pub const fn number(kind: RequestKind, detail: u32) -> u32 {
+        if detail >= 1 && detail <= MAX {
+            return detail;
+        }
+        match kind {
+            RequestKind::Interrupt => SIGINT,
+            RequestKind::Terminate => SIGTERM,
+            RequestKind::Hangup => SIGHUP,
+            RequestKind::Quit => SIGQUIT,
+            RequestKind::Custom(n) if n >= 1 && n <= MAX => n,
+            RequestKind::Custom(_) => SIGTERM,
+        }
+    }
+
+    /// True if the default action of signal `n` ends the process (ADR-0106
+    /// item 1: 1 to 16 but 9, 24 to 27, 29 to 31). `SIGKILL` is the kernel's
+    /// `job_kill`, not a request.
+    pub const fn default_terminates(n: u32) -> bool {
+        matches!(n, 1..=8 | 10..=16 | 24..=27 | 29..=31)
+    }
+
+    /// The stop signals and `SIGCONT`, which the broker carries out by the
+    /// target's disposition (ADR-0104 items 8a and 9).
+    pub const fn is_stop_or_continue(n: u32) -> bool {
+        matches!(n, SIGCONT..=SIGTTOU)
+    }
+}
+
 /// The process's POSIX identity (ADR-0107 item 1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Facts {
@@ -158,6 +268,11 @@ pub struct Facts {
     pub gid: u32,
     pub umask: u32,
     pub ignored: u32,
+    /// The boot's time base (ADR-0191): `CLOCK_REALTIME` is this plus the
+    /// monotonic clock; 0 when the spawner had none.
+    pub realtime_base: u64,
+    /// The signal mask on entry (ADR-0190 item 18), bit n for signal n.
+    pub blocked: u32,
 }
 
 /// One fd of the record.
@@ -165,7 +280,7 @@ pub struct Facts {
 pub struct Fd {
     pub fd: u32,
     pub kind: FdKind,
-    /// `FD_NONBLOCK` or 0.
+    /// `FD_NONBLOCK`, `FD_READ`, `FD_WRITE`.
     pub flags: u8,
     /// For a `Tty`, the index of its terminal connection; else `NO_HANDLE`.
     pub tty: u8,
@@ -259,14 +374,16 @@ impl<'a> Bootstrap<'a> {
             gid: word(5)?,
             umask: word(6)?,
             ignored: word(7)?,
+            realtime_base: u64::from(word(12)?) | (u64::from(word(13)?) << 32),
+            blocked: word(14)?,
         };
         let flags = word(8)?;
         let cwd_entry = word(9)?;
         let fd_count = word(10)? as usize;
         let entry_count = word(11)? as usize;
         if facts.umask > 0o777
+            || word(15)? != 0
             || flags & !FLAGS != 0
-            || bytes.get(56..HEADER_SIZE)? != [0; 8]
             || fd_count > OPEN_MAX as usize
             || cwd_entry as usize >= entry_count
         {
@@ -298,7 +415,7 @@ impl<'a> Bootstrap<'a> {
             };
             if fd >= OPEN_MAX
                 || last.is_some_and(|l| fd <= l)
-                || raw[5] & !FD_NONBLOCK != 0
+                || raw[5] & !FD_FLAGS != 0
                 || !tty_ok
                 || raw[7] != 0
             {
@@ -436,7 +553,9 @@ pub fn encode(
     ] {
         put(&word.to_le_bytes())?;
     }
-    put(&[0; 8])?;
+    put(&facts.realtime_base.to_le_bytes())?;
+    put(&facts.blocked.to_le_bytes())?;
+    put(&0u32.to_le_bytes())?;
     for text in [exe, cwd] {
         put(&u32::try_from(text.len()).ok()?.to_le_bytes())?;
         put(text.as_bytes())?;

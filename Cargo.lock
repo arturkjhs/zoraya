@@ -25,6 +25,17 @@ name = "zoraya-ar"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-broker"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-posix",
+ "zoraya-proto-tty",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-channel"
 version = "0.1.0"
 dependencies = [
@@ -244,6 +255,8 @@ dependencies = [
  "zoraya-fs-testkit",
  "zoraya-heap",
  "zoraya-proto-file",
+ "zoraya-proto-posix",
+ "zoraya-proto-tty",
  "zoraya-protocol",
  "zoraya-rt",
  "zoraya-test-alloc",
@@ -290,7 +303,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-posix"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-term"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-proto-tty"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
@@ -373,10 +402,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-tty"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-tty",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-broker",
  "zoraya-command",
  "zoraya-commands",
  "zoraya-compositor",
@@ -391,12 +431,15 @@ dependencies = [
  "zoraya-proto-file",
  "zoraya-proto-gui",
  "zoraya-proto-input",
+ "zoraya-proto-posix",
  "zoraya-proto-term",
+ "zoraya-proto-tty",
  "zoraya-protocol",
  "zoraya-rt",
  "zoraya-settings",
  "zoraya-shell",
  "zoraya-term",
+ "zoraya-tty",
  "zoraya-virtio",
  "zoraya-virtio-gpu",
  "zoraya-virtio-input",

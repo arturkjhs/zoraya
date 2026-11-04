@@ -14,10 +14,13 @@ extern crate std;
 
 pub mod errno;
 pub mod fd;
+pub mod jobs;
 pub mod path;
 pub mod process;
+pub mod signals;
 pub mod stat;
 pub mod sys;
+pub mod wait;
 
 #[cfg(all(target_arch = "aarch64", target_os = "none"))]
 mod ffi;

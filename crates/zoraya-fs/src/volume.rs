@@ -444,6 +444,12 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         self.io.reads
     }
 
+    /// The latest time assigned on this volume (ADR-0014 rule 3): every
+    /// later one is above it.
+    pub fn last_assigned(&self) -> Timestamp {
+        self.st.last_assigned
+    }
+
     /// The id the next created object will get (for tests that check ids).
     pub fn next_id(&self) -> u64 {
         self.st.next_id

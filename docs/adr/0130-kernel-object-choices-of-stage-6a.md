@@ -116,6 +116,9 @@ The original recommendation follows, accepted as written.
    table and the highest slot the call names; so a stale value in the copied memory stays stale in the child.
 4. **A job outside the caller's tree is `AccessDenied`.** A group outside the job is `InvalidArgument`, as in `spawn`.
    As everywhere in the kernel, a missing right is reported before a wrong kind.
+   *Note (2026-11-04):* the tree check is replaced by ADR-0192 (accepted): the job handle's `CREATE_PROCESS` is the
+   authority, as for `spawn`, and the target job must have the `posix` bit (`AccessDenied` otherwise); a `fork`
+   child's job sits beside its parent's (ADR-0104). The group rule and the order of the checks are unchanged.
 5. **`TPIDR_EL0` is copied**: it is the calling thread's register, and musl keeps its thread pointer there.
 6. **ASID exhaustion is `NoMemory`**, as `spawn` reports it today.
 7. **`job_suspend`/`job_resume`.** One flag per job, set or cleared over the whole tree under the tree's lock.
