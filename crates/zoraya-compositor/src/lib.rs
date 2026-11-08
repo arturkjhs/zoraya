@@ -196,6 +196,17 @@ pub struct Key {
     pub id: u32,
 }
 
+/// One room's group line in the switcher, from the compositor's records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchGroup {
+    pub name: String,
+    /// `None` for `home`.
+    pub colour: Option<zoraya_tokens::Color>,
+    pub untrusted: bool,
+    /// The room's grants in ADR-0153's words.
+    pub grants: String,
+}
+
 /// What a held pointer button is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Drag {
@@ -218,6 +229,10 @@ enum Drag {
 pub struct Switcher {
     pub windows: Vec<Key>,
     pub chosen: usize,
+    /// Each window's group (ADR-0160, ADR-0172 point 5): an index of
+    /// `groups`; windows of a group are together.
+    pub group: Vec<usize>,
+    pub groups: Vec<SwitchGroup>,
     /// Each window's pixels shrunk, made when it opens and when that window
     /// commits, never per frame (ADR-0160).
     pub thumbs: Vec<Vec<u32>>,
@@ -1356,10 +1371,61 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn open_switcher(&mut self, step: isize) {
-        let windows = self.switch_order();
-        if windows.is_empty() {
+        let order = self.switch_order();
+        if order.is_empty() {
             return;
         }
+        // Grouped by room: the focused window's room first, then `home`,
+        // then the table's order; most recent first inside a group.
+        let mut groups: Vec<SwitchGroup> = Vec::new();
+        let mut keyed: Vec<(usize, usize, Key)> = Vec::new();
+        for (n, key) in order.iter().enumerate() {
+            let r = self.record(key.client).cloned().unwrap_or_default();
+            let name = String::from(r.room_name());
+            let g = match groups.iter().position(|g| g.name == name) {
+                Some(g) => g,
+                None => {
+                    let grants = self
+                        .rooms
+                        .get(&name)
+                        .map(|room| {
+                            room.grants
+                                .iter()
+                                .map(|g| g.words())
+                                .collect::<Vec<_>>()
+                                .join("  ")
+                        })
+                        .unwrap_or_default();
+                    groups.push(SwitchGroup {
+                        colour: self.room_colour(&r),
+                        untrusted: r.untrusted,
+                        name,
+                        grants,
+                    });
+                    groups.len() - 1
+                }
+            };
+            keyed.push((g, n, *key));
+        }
+        let focused_group = keyed[0].0;
+        let rank = |g: usize| {
+            let name = groups[g].name.as_str();
+            if g == focused_group {
+                0
+            } else if name == zoraya_settings::rooms::HOME {
+                1
+            } else {
+                2 + self
+                    .rooms
+                    .rooms
+                    .iter()
+                    .position(|r| r.name == name)
+                    .unwrap_or(zoraya_settings::rooms::MAX_ROOMS)
+            }
+        };
+        keyed.sort_by_key(|(g, n, _)| (rank(*g), *n));
+        let windows: Vec<Key> = keyed.iter().map(|k| k.2).collect();
+        let group: Vec<usize> = keyed.iter().map(|k| k.0).collect();
         let chosen = (step.rem_euclid(windows.len() as isize)) as usize;
         let k = self.scale.factor();
         let thumbs = windows
@@ -1373,6 +1439,8 @@ impl<P: Platform> Compositor<P> {
         self.switcher = Some(Switcher {
             windows,
             chosen,
+            group,
+            groups,
             thumbs,
         });
         self.dirty(&self.screen());

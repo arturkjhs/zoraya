@@ -532,20 +532,45 @@ fn draw_switcher(
 ) {
     let ki = k as i32;
     let w = (SWITCHER_WIDTH * k) as i32;
-    // As many rows as fit, the chosen one among them (review 7b, 14).
+    // Rows under a group line per room (ADR-0172 point 5), as many as fit
+    // with the chosen one among them (review 7b, 14).
     let bar = space::BAR_HEIGHT.physical(zoraya_tokens::Scale::ONE) as i32 * ki;
-    let room =
-        ((c.height as i32 - 2 * bar) / ki - (SWITCHER_GROUP + 16) as i32).max(SWITCHER_ROW as i32);
-    let fits = ((room / SWITCHER_ROW as i32) as usize).max(1);
-    let first = s
-        .chosen
-        .saturating_sub(fits - 1)
-        .min(s.windows.len().saturating_sub(fits));
-    let shown = s.windows.len().min(fits);
-    let h = ((SWITCHER_GROUP + SWITCHER_ROW * shown as u32 + 16) * k) as i32;
+    let room = ((c.height as i32 - 2 * bar) / ki - 16).max((SWITCHER_GROUP + SWITCHER_ROW) as i32);
+    // Items: `None` a group line before row `i`, `Some(i)` row `i`.
+    let mut items: Vec<(Option<usize>, usize)> = Vec::new();
+    for i in 0..s.windows.len() {
+        let g = s.group.get(i).copied().unwrap_or(0);
+        if i == 0 || s.group.get(i - 1).copied().unwrap_or(0) != g {
+            items.push((None, g));
+        }
+        items.push((Some(i), g));
+    }
+    let height = |it: &(Option<usize>, usize)| {
+        if it.0.is_some() {
+            SWITCHER_ROW as i32
+        } else {
+            SWITCHER_GROUP as i32
+        }
+    };
+    let at = items
+        .iter()
+        .position(|it| it.0 == Some(s.chosen))
+        .unwrap_or(0);
+    // From the chosen row back while it fits, then forward.
+    let mut first = at;
+    let mut used = height(&items[at.min(items.len().saturating_sub(1))]);
+    while first > 0 && used + height(&items[first - 1]) <= room {
+        first -= 1;
+        used += height(&items[first]);
+    }
+    let mut last = at;
+    while last + 1 < items.len() && used + height(&items[last + 1]) <= room {
+        last += 1;
+        used += height(&items[last]);
+    }
+    let h = (used + 16) * ki;
     let x = (c.width as i32 - w) / 2;
-    let y = ((c.height as i32 - h) / 2)
-        .max(space::BAR_HEIGHT.physical(zoraya_tokens::Scale::ONE) as i32 * ki);
+    let y = ((c.height as i32 - h) / 2).max(bar);
     let material = Material {
         radius: space::RADIUS_POPUP.physical(zoraya_tokens::Scale::ONE) * k,
         shape: shape::CORNER,
@@ -562,40 +587,56 @@ fn draw_switcher(
     material.draw(c, paint::Rect::new(x, y, w, h));
     let body_px = text::BODY.physical(zoraya_tokens::Scale::ONE) * k;
     let caption_px = text::CAPTION.physical(zoraya_tokens::Scale::ONE) * k;
-    // The group line: the room's dot (home is grey) and its name.
-    let gy = y + 8 * ki;
     let dot = paint::rounded_rect(
         (8 * k) as usize,
         (8 * k) as usize,
         4 * k,
         zoraya_tokens::CornerShape::Circle,
     );
-    c.mask(&dot, x + 20 * ki, gy + 10 * ki, p.fg_text_secondary, 255);
-    draw_text(
-        c,
-        medium,
-        "home",
-        body_px,
-        x + 34 * ki,
-        gy + 18 * ki,
-        p.fg_text,
-    );
-    for (row_index, (i, key)) in s
-        .windows
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(shown)
-        .enumerate()
-    {
+    let mut cy = y + 8 * ki;
+    for (item, g) in items.iter().take(last + 1).skip(first) {
+        let Some(i) = item else {
+            // The group line: the room's dot (home is grey), its name in
+            // fg.text (the README's contrast rule), `untrusted`, its grants.
+            let group = s.groups.get(*g);
+            let colour = group.and_then(|g| g.colour).unwrap_or(p.fg_text_secondary);
+            c.mask(&dot, x + 20 * ki, cy + 10 * ki, colour, 255);
+            let name = group.map_or("home", |g| g.name.as_str());
+            let mut tx = x + 34 * ki;
+            tx += draw_text(c, medium, name, body_px, tx, cy + 18 * ki, p.fg_text);
+            if group.is_some_and(|g| g.untrusted) {
+                tx += 6 * ki;
+                tx += draw_text(c, ui, "untrusted", body_px, tx, cy + 18 * ki, p.fg_text);
+            }
+            if let Some(gr) = group.filter(|g| !g.grants.is_empty()) {
+                let old = c.set_clip(
+                    paint::Rect::new(x, cy, w - 16 * ki, SWITCHER_GROUP as i32 * ki)
+                        .intersect(&c.clip),
+                );
+                draw_text(
+                    c,
+                    ui,
+                    &gr.grants,
+                    caption_px,
+                    tx + 12 * ki,
+                    cy + 18 * ki,
+                    p.fg_text_secondary,
+                );
+                c.clip = old;
+            }
+            cy += SWITCHER_GROUP as i32 * ki;
+            continue;
+        };
+        let i = *i;
+        let key = s.windows[i];
+        let ry = cy;
+        cy += SWITCHER_ROW as i32 * ki;
         let Some(win) = windows
             .iter()
             .find(|w| w.client == key.client && w.id == key.id)
         else {
             continue;
         };
-        let _ = row_index;
-        let ry = y + ((SWITCHER_GROUP + SWITCHER_ROW * (i - first) as u32) * k) as i32 + 8 * ki;
         let row = paint::Rect::new(
             x + 12 * ki,
             ry,
