@@ -8,7 +8,7 @@ exit     0  removed
 exit     1  not removed
 ---
 Removes each PATH. A directory is removed only when it is empty, or with --recursive.
-A PATH that ends in . or .., or is /, is refused: name the directory itself.
+A PATH that is /, or whose last part is . or .., is refused: name the directory itself.
 Nothing asks first: what is removed is gone.
 
 EXAMPLES

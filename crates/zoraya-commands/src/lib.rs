@@ -402,7 +402,7 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
                     r.o.err.push_str(&error(
                         r.name,
                         Some(path),
-                        "a path that ends in . or .., or is /, is not removed",
+                        "a path that is /, or whose last part is . or .., is not removed",
                         &["name the directory itself, as in rm --recursive NAME"],
                     ));
                     r.failed = true;

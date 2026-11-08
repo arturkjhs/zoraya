@@ -744,7 +744,7 @@ fn rm_refuses_dot_dot_dot_and_the_root() {
             assert_eq!(code, 1, "{line:?}");
             assert!(
                 err.starts_with(&format!(
-                    "rm: {path}: a path that ends in . or .., or is /, is not removed\n"
+                    "rm: {path}: a path that is /, or whose last part is . or .., is not removed\n"
                 )) && err.contains("hint: name the directory itself"),
                 "{line:?}: {err:?}"
             );
