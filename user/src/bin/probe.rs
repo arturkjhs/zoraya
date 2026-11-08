@@ -18,7 +18,7 @@ use zoraya_proto_file::{open_flags, rights, write_flags};
 use zoraya_user::files::{File, FsResult};
 use zoraya_user::{command, handle_type, namespace, println};
 
-zoraya_user::describe!("demos", "probe");
+zoraya_user::describe!("tests", "probe");
 
 fn word<T>(r: &FsResult<T>) -> String {
     match r {

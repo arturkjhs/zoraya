@@ -7,7 +7,11 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 /// The groups under `describe/`, as `zosh` shows them.
-const GROUPS: [&str; 6] = ["builtins", "commands", "demos", "posix", "topics", "system"];
+/// `tests` holds the test programs' descriptions: they are used, but no
+/// listing (`help`, completion) shows them.
+const GROUPS: [&str; 7] = [
+    "builtins", "commands", "demos", "posix", "topics", "system", "tests",
+];
 
 fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();

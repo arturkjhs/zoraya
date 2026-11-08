@@ -54,7 +54,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -214,6 +214,7 @@ LEAK_SCRIPT := tests/shell/leak.script
 EXIT_SCRIPT := tests/shell/exit.script
 JOBS_SCRIPT := tests/shell/jobs.script
 REBOOT_SCRIPT := tests/shell/reboot.script
+CONVENTIONS_SCRIPT := tests/shell/conventions.script
 FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
 STORAGE_DOWN := tests/shell/storage-down.script
@@ -243,6 +244,10 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_WRITE) --label files-write -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_READ) --label files-read -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# INV-0155-1: every command's --help and usage error, with a volume.
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(CONVENTIONS_SCRIPT) --label conventions -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # What a command gets (ADR-0153): rootfs/ with link objects over it.
 	rm -rf $(GRANTS_ROOT) && mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
@@ -316,18 +321,24 @@ posix-image: $(KERNEL) tools-storage
 	rm -rf $(POSIX_ZOSH_ROOT)
 	cp -R $(POSIX_ROOT) $(POSIX_ZOSH_ROOT)
 	rm $(POSIX_ZOSH_ROOT)/etc/zoraya/session
+	@# The tour's (docs/tour.md): rootfs/ and the ports' programs, an empty
+	@# /home and no session file.
+	rm -rf $(POSIX_TOUR_ROOT)
+	mkdir -p $(POSIX_TOUR_ROOT)
+	cp -R rootfs/. $(BUILD)/rootfs-posix/. $(POSIX_TOUR_ROOT)/
 
 # One boot per script under each accelerator, zoraya-fsck after each
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
 # set from the first measured durations (TASK-22) with a margin of about
 # three; QEMU_TIMEOUT for the others.
 POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-term=600 \
-	w10=600 w4=1800 w5-jobs=300 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
+	w10=600 w4=1800 w5-jobs=300 tour=900 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
 # W8's five builds: w8.script runs them in one boot; w8-BUILD.script runs one
 # (CI's jobs, ADR-0213's Decision).
 POSIX_W8_BUILDS := j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4
 POSIX_IMAGE_SIZE := 256M
 POSIX_ZOSH_ROOT := $(BUILD)/posix-zosh
+POSIX_TOUR_ROOT := $(BUILD)/posix-tour
 # The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
 # ("tcc: memory full"; every POSIX process holds at least its 1 MiB of heap,
 # its segments and 64 KiB of stack, and tmpd 16 MiB), with no leak across
@@ -337,7 +348,7 @@ POSIX_MEM ?= 512M
 define posix_run
 	name=$$(basename $$script .script); \
 	timeout=$$(echo " $(POSIX_TIMEOUTS) " | sed -n "s/.* $$name=\([0-9]*\) .*/\1/p"); \
-	root=$(POSIX_ROOT); case $$name in zosh*) root=$(POSIX_ZOSH_ROOT);; esac; \
+	root=$(POSIX_ROOT); case $$name in zosh*) root=$(POSIX_ZOSH_ROOT);; tour*) root=$(POSIX_TOUR_ROOT);; esac; \
 	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $$root $(POSIX_DISK) > /dev/null && \
 	$(RUNNER) --timeout $${timeout:-$(QEMU_TIMEOUT)} --script $$script --label posix-$$name-$$accel -- \
 	  $(RUN_QEMU) --test --keys --mem $(POSIX_MEM) --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
@@ -350,7 +361,8 @@ endef
 # scenarios.
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
-	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/zosh.script
+	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/zosh.script \
+	tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
@@ -421,6 +433,19 @@ test-posix-gui: posix-image $(RUNNER)
 	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/posix-gui-$$accel.qmp \
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
+	@# The tour in the window (INV-0154-4), on the tour's image.
+	@for accel in $(POSIX_ACCELS); do \
+	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-gui.img > /dev/null && \
+	  $(RUNNER) --timeout 1200 --gui-script $(TOUR_GUI_SCRIPT) --qmp $(BUILD)/tour-gui-$$accel.qmp \
+	    --label tour-gui-$$accel -- $(RUN_QEMU) --test --gui --mem $(POSIX_MEM) --qmp $(BUILD)/tour-gui-$$accel.qmp \
+	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
+
+# The tour's two sessions, from docs/tour.md (INV-0154-4), and INV-0155-1's
+# from the descriptions; make test-unit fails when the committed ones differ.
+TOUR_GUI_SCRIPT := tests/posix/tour-gui.script
+tour-scripts:
+	$(CARGO) run -q -p zoraya-tour -- docs/tour.md tests/posix/tour.script $(TOUR_GUI_SCRIPT) $(CONVENTIONS_SCRIPT)
 
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.

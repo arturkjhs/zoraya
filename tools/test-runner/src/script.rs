@@ -5,6 +5,9 @@
 //! ```text
 //! # a comment
 //! < TEXT          wait until TEXT appears after the last match
+//! ^ TEXT          the same, and fail unless TEXT comes right after the last
+//!                 match: nothing but colour lies between (a line by line
+//!                 comparison, INV-0154-4)
 //! > KEYS          send KEYS
 //! = N             send N bytes of 'x' at once
 //! ! TEXT          fail if TEXT appears anywhere in the output, before or after
@@ -32,6 +35,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Expect(String),
+    Next(String),
     Send(Vec<u8>),
     Forbid(String),
     /// Not between the last two matches.
@@ -96,6 +100,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             .ok_or(format!("line {number}: no argument"))?;
         steps.push(match kind {
             "<" => Step::Expect(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
+            "^" => Step::Next(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             ">" => Step::Send(unescape(rest).map_err(|e| format!("line {number}: {e}"))?),
             "x" => Step::Absent(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "o" => Step::Once(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
@@ -234,6 +239,12 @@ impl Seen {
     /// How many times `text` has appeared.
     pub fn count(&self, text: &str) -> usize {
         self.text.matches(text).count()
+    }
+
+    /// What lay between the last two matches: before the last one, after
+    /// the one before it.
+    pub fn gap(&self, matched: usize) -> &str {
+        &self.text[self.before..self.from.saturating_sub(matched).max(self.before)]
     }
 
     /// True if `text` lies between the last two matches.
@@ -395,6 +406,13 @@ fn steps_then_drain(
             Step::Send(bytes) => send(&mut stdin, bytes)?,
             Step::Expect(text) => {
                 link.expect(text, far)?;
+            }
+            Step::Next(text) => {
+                link.expect(text, far)?;
+                let gap = link.seen.gap(text.len());
+                if !gap.is_empty() {
+                    return Err(format!("{gap:?} came before {text:?}"));
+                }
             }
             Step::Absent(text) => {
                 if link.seen.between(text) {
@@ -587,6 +605,13 @@ mod tests {
         let script = "printf 'a b c'";
         assert!(shell(script, "< a\n< c\nx b\n", 5).is_err());
         assert_eq!(shell(script, "< b\n< c\nx a\n", 5), Ok(()));
+    }
+
+    #[test]
+    fn next_wants_nothing_in_between() {
+        let script = "printf 'a\\nb\\nc\\n'";
+        assert_eq!(shell(script, "< a\n^ \\nb\n^ \\nc\n", 5), Ok(()));
+        assert!(shell(script, "< a\n^ \\nc\n", 5).is_err());
     }
 
     #[test]

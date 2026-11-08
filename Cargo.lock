@@ -418,6 +418,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-tour"
+version = "0.1.0"
+dependencies = [
+ "zoraya-command",
+ "zoraya-describe",
+]
+
+[[package]]
 name = "zoraya-tty"
 version = "0.1.0"
 dependencies = [

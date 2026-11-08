@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 /// Groups of `DIR` whose descriptions belong to programs in the ramdisk.
 /// Builtins and topics are compiled into `zosh` instead.
-const GROUPS: [&str; 3] = ["commands", "demos", "system"];
+const GROUPS: [&str; 4] = ["commands", "demos", "system", "tests"];
 
 /// The bytes of the ELF64 section named `name`, if there is one.
 fn section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {

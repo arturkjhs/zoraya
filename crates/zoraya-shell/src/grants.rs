@@ -166,13 +166,14 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             reason: "current directory".into(),
         });
     }
-    // Grants first, so that operands from values can be checked against
-    // them (rule 4).
+    // Grants are known first, so that operands from values can be checked
+    // against them (rule 4), and listed last, as the line reads.
     let mut granted: Vec<String> = Vec::new();
+    let mut grant_entries = Vec::new();
     for (write, value) in line.grants {
         let abs = join(line.cwd, 0, &value.text);
         granted.push(abs.clone());
-        out.push(Planned {
+        grant_entries.push(Planned {
             path: abs,
             access: if *write { Access::Tree } else { Access::Read },
             reason: if *write { "+w".into() } else { "+r".into() },
@@ -219,6 +220,7 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             designate(arg.kind, text, reason, &mut out)?;
         }
     }
+    out.extend(grant_entries);
     Ok(out)
 }
 
@@ -362,14 +364,34 @@ pub fn summary(plan: &[Planned], home: &str) -> String {
     parts.join(", ")
 }
 
-/// `grants`' report (rule 7, ADR-0153's examples): the streams, then each
-/// entry as it is given, one line per reason, with its rights in words.
-pub fn report(name: &str, plan: &[Planned], home: &str, streams: &str) -> String {
+/// `grants`' report (rule 7, ADR-0153's examples, the tour's 14 and 17):
+/// the streams, then each entry of the plan in the order of the line, its
+/// rights in words (rule 2's fallback words where a directory is given
+/// whole). A POSIX program's also shows its toolchain set (rule 10).
+pub fn report(name: &str, plan: &[Planned], home: &str, streams: &str, posix: bool) -> String {
+    let merged = merge(plan);
     let mut rows: Vec<(String, String)> = Vec::new();
     rows.push(("in, out, err".into(), streams.into()));
-    for m in merge(plan) {
-        for (words, reason) in &m.lines {
-            rows.push((shown(&m.path, home), format!("{words} ({reason})")));
+    for e in plan {
+        let narrowed = merged
+            .iter()
+            .find(|m| m.path == e.path)
+            .is_some_and(|m| m.name.is_some());
+        let words = if narrowed {
+            e.access.words()
+        } else {
+            fallback(&e.access)
+        };
+        rows.push((shown(&e.path, home), format!("{words} ({})", e.reason)));
+    }
+    if posix {
+        for (path, right) in [
+            ("/bin /usr /etc", "read (system)"),
+            ("/proc/self/exe", "read (system)"),
+            ("/tmp", "change anything in (this line's own)"),
+            ("/dev/null", ""),
+        ] {
+            rows.push((path.into(), right.into()));
         }
     }
     let width = rows
@@ -379,14 +401,20 @@ pub fn report(name: &str, plan: &[Planned], home: &str, streams: &str) -> String
         .unwrap_or(0)
         .max(19)
         + 2;
-    let mut s = format!("{name} gets:\n");
+    let mut s = if posix {
+        format!("{name} gets (a POSIX program):\n")
+    } else {
+        format!("{name} gets:\n")
+    };
     for (path, right) in rows {
-        s.push_str("  ");
-        s.push_str(&path);
-        for _ in path.chars().count()..width {
-            s.push(' ');
+        let mut row = format!("  {path}");
+        if !right.is_empty() {
+            for _ in path.chars().count()..width {
+                row.push(' ');
+            }
+            row.push_str(&right);
         }
-        s.push_str(&right);
+        s.push_str(&row);
         s.push('\n');
     }
     s

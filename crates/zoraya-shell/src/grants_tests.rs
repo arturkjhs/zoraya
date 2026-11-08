@@ -80,7 +80,7 @@ fn the_tours_example_14() {
     )
     .unwrap();
     assert_eq!(
-        report("cp", &p, "/u", "the terminal"),
+        report("cp", &p, "/u", "the terminal", false),
         "cp gets:
   in, out, err         the terminal
   ~                    read (current directory)
@@ -155,7 +155,8 @@ fn other_descriptions_give_at_most_read() {
         "/w",
     )
     .unwrap();
-    assert_eq!(p[1].access, Access::Tree, "+w is how a person gives more");
+    let last = p.last().expect("the grant");
+    assert_eq!(last.access, Access::Tree, "+w is how a person gives more");
 }
 
 /// INV-0153-3 and rule 4: an operand from a value designates only inside the
@@ -204,10 +205,10 @@ fn grants_are_entries_with_their_reason() {
         reasons,
         vec![
             ("/u/proj", "current directory"),
-            ("/u/include", "+r"),
-            ("/tmp/w", "+w"),
             ("/u/proj/main.c", "operand FILE"),
             ("/u/proj", "option -o"),
+            ("/u/include", "+r"),
+            ("/tmp/w", "+w"),
         ]
     );
 }
@@ -251,12 +252,12 @@ fn entries_of_one_path_merge() {
         Access::Read.rights() | Access::Create("b.txt".into()).rights()
     );
     assert_eq!(
-        report("cp", &p, "/u", "the terminal"),
+        report("cp", &p, "/u", "the terminal", false),
         "cp gets:
   in, out, err         the terminal
   ~                    read (current directory)
-  ~                    create and change anything in (operand TO)
   ~/a.txt              read (operand FROM)
+  ~                    create and change anything in (operand TO)
 "
     );
     let rm_d = "name rm\nsummary r\nusage rm PATH...\noperand PATH... remove x\ncwd none\n";
@@ -368,4 +369,35 @@ fn only_the_images_description_for_its_path_applies() {
     ] {
         assert!(trusted_description(&trusted, path).is_none(), "{path}");
     }
+}
+
+/// The tour's example 17: a POSIX program's report, in the line's order
+/// (grants last), with the toolchain set.
+#[test]
+fn a_posix_programs_report_shows_its_toolchain_set() {
+    let tcc = "name tcc\nsummary c\nusage tcc [-o FILE] FILE...\nprogram /bin/tcc\n\
+               option -o --output FILE create  out\noperand FILE... read src\n";
+    let p = go(
+        tcc,
+        &["main.c", "-o", "main"],
+        &[],
+        &[(false, "/u/include")],
+        true,
+        "/u/project",
+    )
+    .unwrap();
+    assert_eq!(
+        report("tcc", &p, "/u", "the terminal", true),
+        "tcc gets (a POSIX program):
+  in, out, err         the terminal
+  ~/project            read (current directory)
+  ~/project/main.c     read (operand FILE)
+  ~/project            create and change anything in (option -o)
+  ~/include            read (+r)
+  /bin /usr /etc       read (system)
+  /proc/self/exe       read (system)
+  /tmp                 change anything in (this line's own)
+  /dev/null
+"
+    );
 }

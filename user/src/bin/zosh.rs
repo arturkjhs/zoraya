@@ -539,6 +539,7 @@ impl Z {
             descriptions::DEMOS,
             descriptions::TOPICS,
             descriptions::SYSTEM,
+            descriptions::TESTS,
         ];
         let text = groups
             .iter()
@@ -555,9 +556,11 @@ impl Z {
     /// The description of program `name`, and whether it is the system
     /// image's own: only those designate (rule 9, rule 10, INV-0153-6).
     fn program_description(&mut self, name: &str) -> Option<(Rc<Description>, bool)> {
+        // Test programs are described too, though help lists none of them.
         let ours = descriptions::COMMANDS
             .iter()
             .chain(descriptions::DEMOS)
+            .chain(descriptions::TESTS)
             .any(|(n, _)| *n == name);
         if !ours {
             return None;
@@ -1935,15 +1938,18 @@ impl Z {
             return 0;
         }
         let Some(name) = p.operand(d, "NAME") else {
-            io.out.push_str("Topics: ");
-            io.out.push_str(&TOPICS.join(" "));
-            io.out.push_str("\nCommands:\n");
+            let mut page = format!("Topics: {}\nCommands:\n", TOPICS.join(" "));
             let list = self.commands(state);
-            let text = self.listing(state, &list, "  ");
-            io.out.push_str(&text);
+            page.push_str(&self.listing(state, &list, "  "));
             let demos: Vec<&str> = descriptions::DEMOS.iter().map(|(n, _)| *n).collect();
-            io.out
-                .push_str(&format!("Demonstrations: {}\n", demos.join(" ")));
+            page.push_str(&format!("Demonstrations: {}\n", demos.join(" ")));
+            // A screen at a time, as every help page (ADR-0156 item 5): a
+            // window has no scrollback to find the top in.
+            if io.terminal {
+                self.pager(&page);
+            } else {
+                io.out.push_str(&page);
+            }
             return 0;
         };
         let (page_d, first) = if let Some(f) = state.function(name) {
@@ -2245,13 +2251,8 @@ impl Z {
                 }
                 Ok(plan) => {
                     let home = self.home();
-                    let mut text = grants::report(name, &plan, &home, "the terminal");
-                    text.push_str(
-                        "  /bin, /usr, /etc     read (the toolchain set, a POSIX program's)\n  \
-                         /tmp                 this line's own, emptied when it ends\n  \
-                         /dev/null            to read and write\n",
-                    );
-                    io.out.push_str(&text);
+                    io.out
+                        .push_str(&grants::report(name, &plan, &home, "the terminal", true));
                     0
                 }
             };
@@ -2270,7 +2271,7 @@ impl Z {
             Ok(Some(plan)) => {
                 let home = self.home();
                 io.out
-                    .push_str(&grants::report(name, &plan, &home, "the terminal"));
+                    .push_str(&grants::report(name, &plan, &home, "the terminal", false));
                 0
             }
         }
@@ -3364,20 +3365,23 @@ fn main() -> i32 {
         if entry.trim().is_empty() {
             continue;
         }
-        editor.remember(&entry);
-        shell.host.history = editor.history().to_vec();
-        if shell.host.setting("shell.history") == "yes" && shell.host.root.is_some() {
-            let mut text = editor.history().join("\n");
-            text.push('\n');
-            let _ = shell.host.write_file(HISTORY, text.as_bytes());
-        }
         // A second exit counts only right after the first (ADR-0158 rule 7).
         if entry.trim() != "exit" {
             shell.host.jobs.other_line();
         }
         run_entry(&mut shell, &entry);
+        // The line joins the history once it has run, so that `history`
+        // lists what ran before it (the tour's example 21).
         if core::mem::take(&mut shell.host.clear_history) {
             editor.set_history(Vec::new());
+        } else {
+            editor.remember(&entry);
+        }
+        shell.host.history = editor.history().to_vec();
+        if shell.host.setting("shell.history") == "yes" && shell.host.root.is_some() {
+            let mut text = editor.history().join("\n");
+            text.push('\n');
+            let _ = shell.host.write_file(HISTORY, text.as_bytes());
         }
     }
 }

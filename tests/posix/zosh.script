@@ -20,10 +20,10 @@
 > echo 'int main(void) { return 7; }' > seven.c\r
 < \r\n~>
 > grants tcc seven.c -o seven\r
-< tcc gets:
+< tcc gets (a POSIX program):
 < ~/seven.c
-< the toolchain set
-< this line's own
+< /bin /usr /etc       read (system)
+< change anything in (this line's own)
 < \r\n~>
 > tcc seven.c -o seven\r
 < \r\n~>

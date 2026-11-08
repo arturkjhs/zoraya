@@ -711,7 +711,7 @@ with the choices they leave open in [ADR-0190](adr/0190-process-choices-of-stage
   job, and `zoraya-proto-posix`'s requests, over a `Kernel` trait the host tests fake. A pid is never given twice;
   `setpgid` never moves a process; `kill` is one `job_signal` on a group job, or each member by its stop record for
   the stop signals. Orphans are the broker's. The mode with no first shell and `Group(job)` are in the logic and the
-  program (`--no-shell`); nothing starts that mode yet (TASK-18 Part 2).
+  program (`--no-shell`), which `init` starts beside `zosh` on a volume with `/bin` (TASK-18 step 10).
 - **The terminal (`crates/zoraya-tty`, `user/src/bin/ttyd.rs`).** The line discipline (canonical, echo, ERASE, KILL,
   EOF, `ICRNL`, `ONLCR`, INTR, QUIT, SUSP), connections tagged with a group, the foreground job, one held read per
   connection. Ctrl-C is `job_signal(foreground, Interrupt)`; Ctrl-Z goes to the broker as `suspend`. Backends: the
@@ -873,90 +873,89 @@ the window and `init` opens a new one with a new shell; `poweroff` turns the mac
 
 ## Using the shell
 
-`make run` boots to `zosh`, the native shell (TASK-18; ADR-0150 to ADR-0158), on the serial console: `Type help to
-begin, or help tour.` and the prompt `~> `. Ctrl-A X leaves QEMU. The language is described by `help language` and
-the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step 6.
+`make run` boots to `zosh`, the native shell (TASK-18; ADR-0150 to ADR-0159 and ADR-0200), on the serial console:
+`Type help to begin, or help tour.` and the prompt `~> `; Ctrl-A X leaves QEMU, and `make run-gui` shows it in a
+terminal window. [`docs/tour.md`](tour.md) is how a person meets it, every example with its exact screen;
+`make test-posix` plays the whole tour on the serial console and `make test-posix-gui` in the window, from scripts
+that `zoraya-tour` generates from that file (INV-0154-4). This section follows the tour's order and adds where each
+part is built.
 
-- `make run` attaches `build/disk.img`, made from `rootfs/` on first use; delete it to start again. The shell starts
-  in `/home` (`shell.home`), shown as `~`; `/config` holds `settings`, `start.zosh` and `history` (ADR-0157). Without
-  a disk the shell starts in `/` and the file commands fail.
-- **Language.** Words split only at spaces; `'...'` is literal, `"..."` expands `$name` and `$(...)`. Variables are
-  lists (`set name 'my notes.txt'`, `$name` is one argument), never split or globbed; `$name[i]`, `count $name`.
-  `*`, `?` and `**` match names, a pattern that matches nothing is an error, and a match starting with `-` comes as
-  `./-name`. `if`/`else if`/`else`, `for NAME in WORDS`, `while`, `fn NAME PARAMS`, `try`/`catch`, `&&`, `||`, `!`.
-  A failure nothing checks stops the rest of the line (`(the rest of the line was not run)`), block, function or
-  script (`zosh: FILE line N: NAME: WHAT`). `$status` is the exit code or a word (`interrupted`, `fault`, ...);
-  `status` describes the last record. `>`, `>>`, `2>`, `&>` redirect builtins and functions; `export NAME VALUE`
-  and `NAME=value command` are the only environment a program gets.
-- **Commands.** Every command has a description in `user/describe/` (and the language's own in
-  `crates/zoraya-shell/describe/`): `NAME --help`, `help NAME` (paged), `help --search WORD`, Tab completion and
-  argument parsing all come from it. Builtins: `cd`, `pwd`, `set`, `unset`, `export`, `count`, `echo`, `test`,
-  `math`, `source`, `status`, `history`, `help`, `grants`, `jobs`, `fg`, `bg`, `wait`, `kill`, `settings`, `slots`,
-  `uptime`, `exit`, `poweroff`, `reboot`. The file commands `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `stat`, `head`, `find` and
-  `search` are programs (step 7), each given only what its line designates; `sync` stays built in; `ls /zoraya/bin` lists the ramdisk's programs. Errors read `NAME: SUBJECT: PROBLEM`
-  (`cat: missing.txt: not found`), with a `hint:` when one is known; unknown commands get the nearest names or, for
-  `grep`, `wc`, `man`, `less`, `more` and `which`, what to type on Zoraya.
-- **Programs** from the ramdisk run by name in a job of their own, with the console. A program with a description
-  in the system image also gets a start-up record (ADR-0153 rule 8): the current directory to read, and each path
-  operand as its kind gives it (`cp a b`: `a` to read, `b`'s directory narrowed to `b`), plus what `+r PATH` and
-  `+w PATH` grant; `grants LINE` prints it. An operand from a value reaches only inside the current directory or a
-  grant. A designated path through a link object (ADR-0153 rule 5) is designated as its target if that lies inside the
-  current directory or a grant of the line, and refused otherwise (`zosh: ~/w/out-link: leads through a link to
-  ~/secret.txt, ...`); a native program follows links itself against its table (`namespace`), so no link leads
-  outside its entries. Such a program holds its streams, its own job and its entries' connections, and no console.
-  A path a program names outside its entries is refused and reported, and the shell prints the grant that
-  would allow it. Test programs (no description) get what TASK-11's shell gave them.
-- **Jobs** (ADR-0158, step 9; `zoraya_shell::jobs`). A line's pipeline is one job, numbered from 1 with the smallest
-  free number. A trailing `&` runs it in the background (`[1] sleep 30`) with its input at its end. Ctrl-Z stops the
-  job in front, each native element by `job_suspend` of its own job (ADR-0200), and prints `[N] stopped: LINE`; the rest of that line is not run, as after Ctrl-C.
-  `jobs` lists `[N]  running|stopped  LINE   (what it was given)`, the state read from the job's `SUSPENDED`
-  signal; `fg [%N]` continues a job in front, `bg [%N]` a stopped one in the background (its input then ends);
-  `wait [%N]` waits for one or every running job; `kill [--interrupt|--terminate|--hangup|--quit|--kill] [%N]` sends
-  a request (continuing a stopped job, so that it takes it) and waits up to 2 s. A job's end is reported once: by
-  `wait` or `kill`, else before the next prompt or above the line being edited. `exit` with jobs warns once, and a
-  second `exit` in a row ends them.
-- **POSIX programs** (ADR-0153 rule 10, step 10). On a volume with `/bin`, `init` starts the broker beside `zosh`
-  (`--no-shell`), which gives `zosh` a client connection and the temporary service's root. `shell.path` finds a
-  command in the ramdisk (`/zoraya/bin`) and then on the volume (`/bin`), or by a path with a `/`; a program of the
-  volume without the native mark (`.zoraya.native`, which `zoraya-rt` writes and `zoraya_elf::is_native` reads) runs
-  through the broker: `SpawnPrepareIn` in a `posix` job of the line's job, a bootstrap record `zosh` builds (the
-  toolchain set: `/bin`, `/usr` and `/etc` to read, `/dev/null`, `/proc/self/exe`; a `/tmp` of the line's own on the
-  temporary service, removed when the line ends; the current directory to read; and what a description of the
-  system image's designates, `tcc`, `make` and `dash` in `user/describe/posix/`), fds 0 to 2 on the line's streams,
-  `SpawnCommit`, and `Reap` when the job ends (`zoraya_user::posix_child`). `grants` shows the toolchain set. Ctrl-Z of
-  a line stops each native element by `job_suspend` of its own job and sends `SIGTSTP` to each POSIX element through
-  the broker, whose handler runs first (ADR-0200); `[N] did not stop: LINE` if one does not stop within half a second.
-  A native program on the volume gets the current directory and its line's grants only.
-- `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
-  the volume through `libposix`, with `/` the volume's root unless `-m` gives a table; its output comes to the console
-  (stage 6c; `user/src/bin/posixrun.rs` has the rest). It is a test program: it has no description, so its
-  options are its own.
-- **Keys** (`help keys`): Left, Right, Home, End and the Ctrl forms, Ctrl-W, Ctrl-U, Ctrl-K, Ctrl-L; Up and Down walk
-  the lines that start with what is typed; Ctrl-R searches; Tab completes; Right at the end takes the faint
-  suggestion from history; the command word is red while it names nothing. Enter with an open quote or block
-  continues on `...> `. Ctrl-C drops the line, or interrupts the job in front; if the job is still running a
-  second later the shell says `(Ctrl-C again to kill it)`, and the next Ctrl-C kills it. Ctrl-\ sends Quit, Ctrl-Z
-  stops the job in front; Ctrl-D at the prompt only says `type exit to end the shell`.
-- **Ending.** `exit` ends this shell and `init` starts a new one, on the console or in a new terminal window; with
-  jobs running the first `exit` only warns. `poweroff` syncs and turns the machine off; `reboot` syncs and resets it
-  through PSCI `SYSTEM_RESET` (`power_reset`, ADR-0159), or says the machine cannot be reset.
-- **Streams** (ADR-0152, step 8). Every program gets `in`, `out` and `err` at the native slots 1001 to 1003
-  (`zoraya_abi::native::slot`); `zoraya-rt`'s `print!` and `eprint!` write to them, each print of up to 512 bytes
-  in one write, so that lines of two programs sharing a stream stay whole, and a program started without
-  them (by a test or a service) prints to the console. `zosh` holds the other ends and relays them from its event
-  loop, never waiting on a stream: output to the terminal (the window, in the GUI), a file or a `$(...)`; input from
-  the keys (echoed a line at a time, Backspace and Ctrl-D as a terminal in canonical mode gives them), a `< FILE`, or
-  the output of the builtin or function that starts the pipeline. `a | b | c` is one job with one stream per `|`;
-  `&|` sends `err` into the pipe too; `>`, `>>`, `<`, `2>`, `2>>` and `&>` work on programs. A pipeline's status is
-  ADR-0152 rule 6's (`zoraya_shell::eval::pipeline_status`). `cat` (its bytes unchanged, from a file or its input: ADR-0155's note), `head` and `search` read their input when given
-  no file; a writer whose reader closed exits 0 (`PeerClosed`). A background job's `in` is at its end, and its output
-  comes in whole lines (or 4 KiB pieces of a longer one) above the line being edited, control characters shown as
-  `?`.
-- **Settings** (`help settings`): `settings`, `settings --all`, `settings NAME [VALUE]`, `settings --reset NAME`,
-  `settings --check`; `shell.prompt`, `shell.home`, `shell.path`, `shell.history`, `shell.history-size`,
-  `shell.suggestions`, `shell.colour`, `console.columns`.
+- **Getting your bearings** (tour 1 to 3). The shell starts in `/home` (`shell.home`), shown as `~`; `/config` holds
+  `settings`, `start.zosh` and `history` (ADR-0157). `make run` attaches `build/disk.img`, made from `rootfs/` on
+  first use; without a disk the shell starts in `/` and file commands fail. `help` lists the topics, the commands
+  and the demonstrations a screen at a time; a command that succeeds prints only its result.
+- **Files and the language** (tour 4 to 8, 22 to 24; ADR-0150, ADR-0151; `zoraya_shell::syntax`, `glob`, `eval`).
+  Words split only at spaces; `'...'` is literal, `"..."` expands `$name` and `$(...)`. Variables are lists
+  (`set name 'meeting notes.txt'` is one argument), never split or globbed; `$name[i]`, `count $name`. `*`, `?` and
+  `**` match names, a pattern that matches nothing is an error, and a match that starts with `-` comes as
+  `./-name`. `if`/`else if`/`else`, `for NAME in WORDS`, `while`, `fn NAME PARAMS` (comment lines above it are its
+  help), `try`/`catch`, `&&`, `||`, `!`, `source FILE`; `...> ` continues an open block or quote. Bash habits get a
+  hint (`x=1`: `to set a variable, type: set x 1`; `grep`, `wc`, `man`, `less`, `more`, `which` when nothing of
+  that name exists). `export NAME VALUE` and `NAME=value command` are the only environment a program gets.
+- **Finding things and help** (tour 9 to 13; ADR-0154, ADR-0156; `zoraya-describe`, `zoraya-command`,
+  `zoraya_shell::editor`). Every command has a description in `user/describe/` (the language's own in
+  `crates/zoraya-shell/describe/`, POSIX programs' in `user/describe/posix/`, test programs' in
+  `user/describe/tests/`, unlisted): `NAME --help`, `help NAME` and `help --search WORD` (paged), Tab completion of
+  commands, paths and options, and argument parsing all come from it. A question command's "no" (`search` finding
+  nothing) is status 1 and stops nothing. The editor shows a faint suggestion from history (Right takes it), turns
+  an unknown command word red, searches history with Ctrl-R and prefix Up and Down, and redraws a line wider than
+  the terminal in place (`ESC [ n A`, ADR-0154's note).
+- **What a program is given** (tour 14 to 18; ADR-0153, ADR-0200; `zoraya_shell::grants`, `zoraya_user::namespace`).
+  A program gets `in`, `out` and `err`, its own job inside its line's, the current directory to read and a start-up
+  record (rule 8) with what its description designates: each path operand or option by its kind (`cp a b`: `a` to
+  read, `b`'s directory narrowed to `b`), and what `+r PATH` and `+w PATH` before the command grant. Nothing else:
+  no console, no volume root. `grants LINE` prints it in the order of the line. An operand from a value reaches only
+  inside the current directory or a grant (`set g '+w /'; $g rm x` is a command named `+w /`). A designated path
+  through a link object is given as its target only inside the current directory or a grant (rule 5), and a
+  native program follows links itself over its table, so no link leads out of it. A path a program names outside
+  its entries is refused and reported, and the shell prints the grant that would allow it; a missing path inside an
+  entry is just missing. Test programs without a description get what TASK-11's shell gave them.
+- **POSIX programs** (tour 15 to 17, 27; ADR-0153 rule 10, ADR-0200; `zoraya_user::posix_child`). On a volume with
+  `/bin`, `init` starts the broker beside `zosh` (`--no-shell`). `shell.path` (`/zoraya/bin /bin`) finds a command
+  in the ramdisk, then on the volume, or by a path with a `/`; a program without the native mark (`.zoraya.native`,
+  written by `zoraya-rt`, read by `zoraya_elf::is_native`) runs through the broker: `SpawnPrepareIn` in a `posix`
+  job of the line's job, a bootstrap record `zosh` builds (the toolchain set: `/bin`, `/usr` and `/etc` to read,
+  `/proc/self/exe`, `/dev/null`; a `/tmp` of the line's own, removed when the line ends; the current directory; and
+  what a description compiled into `zosh` designates for the path it names), fds 0 to 2 on the line's streams,
+  `PATH` and `HOME` unless the line sets them, `SpawnCommit`, and `Reap` at the end. TinyCC's messages are its own.
+- **Pipelines and streams** (tour 19 to 21; ADR-0152). `zosh` holds the shell's end of every stream and relays it
+  from its event loop, never waiting on one: output to the terminal, a file or a `$(...)` (one element per line);
+  input from the keys (a line at a time, as a terminal in canonical mode), a `< FILE` or the builtin or function
+  that starts the pipeline. `a | b | c` is one job with one stream per `|`; `&|` sends `err` too; `>`, `>>`, `<`,
+  `2>`, `2>>` and `&>` redirect programs, builtins and functions. A pipeline's status is ADR-0152 rule 6's
+  (`pipeline_status`); a writer whose reader closed exits 0. `zoraya-rt`'s `print!` writes a print of up to 512
+  bytes at once, so lines of two programs on one stream stay whole; `cat` passes bytes unchanged, and the terminal
+  shows bytes that are not UTF-8 as U+FFFD. A line joins the history once it has run.
+- **When things go wrong** (tour 25 to 27). Errors read `NAME: SUBJECT: PROBLEM` with a `hint:` when one is known
+  (ADR-0155). A failure nothing checks stops the rest of the line (`(the rest of the line was not run)`), block,
+  function or script (`zosh: FILE line N: NAME: WHAT`); `$status` is the exit code or a word (`interrupted`,
+  `crashed (...)`), and `status` describes the last record.
+- **Jobs** (tour 28 to 30; ADR-0158, ADR-0200; `zoraya_shell::jobs`). A line's pipeline is one job, numbered from 1;
+  `&` runs it in the background with its input at its end and its output above the line being edited. Ctrl-C
+  interrupts the job in front, and a second Ctrl-C after `(Ctrl-C again to kill it)` kills it; Ctrl-\ sends Quit;
+  Ctrl-Z stops it (each native element by `job_suspend` of its own job, each POSIX element by `SIGTSTP` through the
+  broker, whose handler runs first) and ends the line there. `jobs`, `fg`, `bg`, `wait` and `kill` act on `%N`; a
+  job's end is reported once, by `wait` or `kill` or before a prompt. `exit` with jobs warns once.
+- **Settings and ending** (tour 31, 32; ADR-0157, ADR-0159). `settings`, `settings NAME [VALUE]`,
+  `settings --reset NAME`, `settings --all`, `settings --check`; `shell.prompt`, `shell.home`, `shell.path`,
+  `shell.history`, `shell.history-size`, `shell.suggestions`, `shell.colour`, `console.columns`. `exit` ends this
+  shell and `init` starts a new one (a new window in the GUI); `poweroff` syncs and turns the machine off, `reboot`
+  syncs and resets it through PSCI `SYSTEM_RESET` (`power_reset`).
+- `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from the
+  volume through `libposix` without the broker (stage 6c's test launcher, `user/src/bin/posixrun.rs`).
 
-**Pending (TASK-18 Part 2).** Steps 7 to 10 and 12 are done. Step 11: the tour as a test on both terminals.
+## Conventions for commands
+
+Every native command follows ADR-0155, the style guide, through `zoraya-command` and its description (ADR-0156):
+one option syntax (`-f`, `--force`, grouped short options, `--` ends options, a value after an option or with
+`=`), `--help` printed from the description (`NAME: SUMMARY`, `usage:`, the options, `more: help NAME`), a usage
+mistake as `NAME: WHAT` with the usage and exit 2, errors as `NAME: SUBJECT: PROBLEM` with an optional `hint:`, and
+the words for statuses from one table (`not found`, `not granted`, ...). A command is quiet when it succeeds: it
+prints only its result. Exit 0 is success, 1 a failure or a question's "no", 2 a usage mistake, as its description
+lists them; a writer whose reader has gone exits 0. A command reads its arguments only through `zoraya-command`
+(INV-0155-2, `make check-argv`), and a description that designates paths is authority: only the system image's
+designate (ADR-0153's Decision). Builtins are the commands that act on the shell itself (`cd`, `set`, `jobs`, ...)
+and `sync`; the file commands are programs in the ramdisk.
 
 ## Known limitations
 
@@ -978,7 +977,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   and the shell reports how many bytes went. Any holder of the console's `READ` right can take input from the shell;
   children get `WRITE` only.
 
-- **Shell (TASK-18 Part 2, steps 1 to 9).** A builtin or function that starts a pipeline runs to its end before the
+- **Shell (TASK-18 Part 2).** A builtin or function that starts a pipeline runs to its end before the
   programs start: its output is held, up to the 1 MiB of a `$(...)`, and then fed (ADR-0152 rule 5 allows it to be
   written as it is made). Every byte of output is copied through `zosh` (ADR-0152's open question on the relay's
   cost). Keys typed to a program are cooked by `zosh`: cursor keys are dropped, and the line is sent at Enter. A test
@@ -1083,10 +1082,10 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   item 7). A FIFO fd passed by `spawn` is not counted as a side by `tmpd` (item 12), and a FIFO opened after its
   writers left gets a fresh pair (ADR-0107 item 15). `execl` takes six arguments after `arg0` (item 13). `fork`
   copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
-  memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). `zosh` does
-  not run POSIX programs yet (TASK-18 Part 2); a POSIX session and `zosh` do not share the console. Dates are the
+  memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). A POSIX
+  session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
   root volume's (ADR-0191), not a clock's. In the GUI window under TCG, a burst of more than about 16 keys typed
-  through QMP loses its tail on the way to `ttyd`: a bug, in `docs/backlog.md`, to be fixed before stage 7b;
+  through QMP loses its tail on the way to `ttyd` or `zosh`: a bug, in `docs/backlog.md`, to be fixed before stage 7b;
   `make test-posix-gui` types lines of at most 16 keys.
 
 ## Roadmap

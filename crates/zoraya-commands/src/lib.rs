@@ -287,7 +287,7 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
     let mut answer_no = false;
     match name {
         "ls" => {
-            let dir = p.operand(d, "DIR").unwrap_or(".");
+            let dir = p.operand(d, "PATH").unwrap_or(".");
             match r.sorted(dir) {
                 Ok(list) => {
                     for (n, kind) in list {
@@ -295,6 +295,11 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
                         r.o.out
                             .push_str(if kind == Kind::Directory { "/\n" } else { "\n" });
                     }
+                }
+                // A file is named, as it was written (`ls *.bak`).
+                Err(status::NOT_DIRECTORY) => {
+                    r.o.out.push_str(dir);
+                    r.o.out.push('\n');
                 }
                 Err(s) => r.fail(dir, s, &[]),
             }

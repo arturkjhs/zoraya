@@ -364,6 +364,11 @@ fn listings_are_sorted_with_directories_marked() {
         go(&mut m, &["ls", "nowhere"]),
         (1, "".into(), "ls: nowhere: not found\n".into())
     );
+    // A file is named as it was given (the tour's `ls *.bak`).
+    assert_eq!(
+        go(&mut m, &["ls", "notes.txt"]),
+        (0, "notes.txt\n".into(), String::new())
+    );
 }
 
 #[test]

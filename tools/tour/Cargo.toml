@@ -1,0 +1,15 @@
+[package]
+name = "zoraya-tour"
+description = "Turns the tour into the sessions that play it (INV-0154-4)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-describe = { path = "../../crates/zoraya-describe" }
+zoraya-command = { path = "../../crates/zoraya-command" }
+
+[lints]
+workspace = true

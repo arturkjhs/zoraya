@@ -12,7 +12,7 @@ use zoraya_user::{
     sleep_until,
 };
 
-zoraya_user::describe!("demos", "requests");
+zoraya_user::describe!("tests", "requests");
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
