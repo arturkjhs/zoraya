@@ -505,6 +505,27 @@ Measured (`t_gui` in the test kernel; MEASURE_7B):
 | The frame that opens the switcher (blur of the scene under it) | MEASURE_7B_HVF_SWITCH | MEASURE_7B_TCG_SWITCH |
 | A frame committed under the open switcher | MEASURE_7B_HVF_UNDER | MEASURE_7B_TCG_UNDER |
 
+## Keyboard layouts (as built)
+
+Stage 7c (TASK-24), on the accepted [ADR-0163](adr/0163-keyboard-layouts.md).
+
+- **Tables** (`zoraya-keymap`'s `layouts.rs`): `us` basic, `ua` unicode, `ru` winkeys and `cz` QWERTZ basic, four
+  levels a key (plain, Shift, AltGr, Shift+AltGr) of a character, a dead key or nothing, from the reference layouts
+  the survey records (`docs/research/desktop/survey.md#keyboard-layouts`). Third and fourth levels are only Czech's
+  and the Ukrainian ґ: the other layouts' are left out until something needs them.
+- **Dead keys**: thirteen accents with their compositions over Latin-1 and Latin Extended-A; a dead key then Space
+  gives the spacing accent, then a letter it does not compose passes the letter, and a second dead key replaces the
+  first; the state is cleared at a focus change and a switch. Caps Lock acts on case pairs only; the right Alt is
+  AltGr in a layout with a third level; Ctrl gives control characters by the US position of the key.
+- **Switching**: System+Space cycles the enabled layouts (`us ua cz` until 7f's `gui.keyboard-layouts`), Shift goes
+  back; held modifiers stay held, and the switch reaches no client as a key (INV-0163-4). The bar shows the active
+  layout's short name; a client hears `Layout { name }` when it gains focus and at each switch.
+- **The title**: `zosh` sends `Title` (its directory as the prompt shows it) at start and after each `cd`, out of band
+  (ADR-0168); `term` titles its window `zosh — <dir>`.
+- **The GUI test** `tests/gui/layouts.script` switches to `ua`, types a Ukrainian name, switches to `cz`, types
+  `příklad.txt` and letters only dead keys reach, and reads them back; the runner types each letter with the keys the
+  layout's table gives (`layout NAME`), a letter with no key through a dead key.
+
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
@@ -977,7 +998,8 @@ measured for real.
 desktop: the bar, and a terminal window running `zosh`, with the same commands as `make run` (below). Drag the title
 bar to move the window, its edges to resize it; the dash minimises it and the cross closes it (a new terminal opens).
 Alt+Tab (Option+Tab on a Mac) shows the switcher; F12 goes to the next window; Command+W, Command+M and Command+Left or
-Right close, minimise and tile. Shift with Page Up or Page Down
+Right close, minimise and tile; Command+Space switches the keyboard layout (US, UA, CZ; the bar shows which), and on
+the Czech layout the key right of `-` is the dead acute (with Shift the dead caron). Shift with Page Up or Page Down
 scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `exit` closes
 the window and `init` opens a new one with a new shell; `poweroff` turns the machine off.
 
