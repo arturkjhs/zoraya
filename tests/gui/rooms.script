@@ -61,6 +61,7 @@ screen * project  +w ~/project  +r /system
 shot rooms
 # Show-commands: every icon and chip with its line.
 chord meta slash
+pause 1000
 shot commands
 chord meta slash
 # The first terminal's shell turns the machine off.

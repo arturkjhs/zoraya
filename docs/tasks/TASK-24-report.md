@@ -9,6 +9,10 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | Item | Part | One-line recommendation |
 |---|---|---|
 | [ADR-0240](../adr/0240-fonts-embedded-until-the-launcher.md) (proposed) | 7a | Until 7d's launcher hands out `/system/fonts`, the programs `init` starts embed the unmodified fonts through `zoraya-fonts`; a gap ADR-0162 leaves, not a change of it. |
+| [ADR-0241](../adr/0241-window-corners-and-client-pixels.md) (proposed) | 7b | Round a window's lower corners over its body, as ADR-0161 and the mockups want, reading INV-0164-1 inside the window's shape; square lower corners are the one-line alternative. |
+| [ADR-0242](../adr/0242-the-panel-beside-init-in-stage-7d.md) (proposed) | 7d | `init` keeps the first terminal and its rules and starts the panel with the client manager; the panel launches every other terminal into the current room with its record. A staging of ADR-0168, so 7d is not mergeable without the architect. |
+| [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (proposed) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
+| [ADR-0244](../adr/0244-the-toolkits-own-events.md) (proposed) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
 | Pushing, merging and tagging | all | Not done: this session's permission settings refused `git push` (twice, at the first push of `work/7a`), so no part could be merged into `main`, tagged or seen by CI. Each part is on its local branch, the next part starts from it (TASK-24, "If a part cannot be merged"), and the commands to push, merge and tag are under "To finish by hand" below. |
 
 ## 7a: tokens and text
@@ -166,6 +170,194 @@ time for each step, not exclusive.
 | Review and its fixes | 30 min |
 | Mutation runs and their tests | 1 h 20 min (65 min of mutants) |
 
+
+## 7b: frames, windows and scale
+
+Branch `work/7b`, from `work/7a` (7a could not be merged into `main`: see the queue), with 7a's later commits
+merged in.
+
+### What was built
+
+- **`zoraya-paint`**: the compositor's drawing in integer arithmetic: rounded rectangles with the smooth corner (a
+  cubic superellipse spanning 1.6 radii, supersampled), outlines, soft shadows (three box passes), the `deep`
+  wallpaper in 16.16 fixed point with an integer sine, region blur, segments and polygons through `zoraya-text`'s
+  rasteriser, a clipped canvas that copies client pixels unchanged, and the trusted material (halo, glass, tint, band
+  of light, rim, border).
+- **The window protocol** (ADR-0160, ADR-0164), new ordinals: `DisplayScale`, `CreateToplevel`, `CreatePopup`,
+  `CommitTo`, `SetBuffer`, `SetTitle`, `Close`; events `Configure`, `CloseRequested`, `Minimised`, `WindowFocus`,
+  `WindowPointer`. Stage 5's `Create` and `Commit` stay (ttyd's window backend and `t_gui` use them).
+- **The compositor**, rewritten around windows: several per client, popups, frames drawn from the tokens (title bar,
+  title in Inter Medium, cross and dash, border, smooth corners, two-layer shadow), moves, resizes, minimise and
+  close (and close anyway), the system key's chords, Alt+Tab's switcher in the trusted material grouped by room,
+  F12, the top bar on the blurred wallpaper, the scale from the display width (`auto`), and the review's limits
+  (popups only from the focused window and clipped below the bar, resizes within the work area, a per-client
+  budget of buffers).
+- **`term`** as a toplevel that resizes its grid on `Configure` and ends on the close button; **`init`** takes that
+  as a closed window and opens a new terminal and shell.
+- **Tests and tools**: `tests/gui/windows.script` (move, minimise, F12, Alt+Tab, close); `make test-gui` runs both
+  scripts under HVF and TCG at scale 1 and under HVF at scale 2; `tools/run-qemu.sh --gui-scale 2`; the runner reads
+  at the display's scale, takes logical coordinates, and has `click`, `drag` and waiting `region` steps.
+
+### The 7b acceptance test
+
+`plan.md`: "the GUI test moves, minimises, restores and closes a terminal window over QMP, switches with Alt+Tab and
+F12, and passes at both scales". Done: `tests/gui/windows.script` and `tests/gui/terminal.script` pass in all six
+runs of `make test-gui` (HVF and TCG at scale 1, HVF at scale 2). Scale 2 runs under HVF only: TCG at 2048 × 1536
+would add minutes to every `make test` for what the HVF run and the host tests at scale 2 already show; recorded
+here as a decision.
+
+### Decisions taken without the architect
+
+- **Proposed [ADR-0241](../adr/0241-window-corners-and-client-pixels.md)**: round lower corners over a client's
+  pixels, INV-0164-1 read inside the window's shape (Option A, square lower corners, is one line).
+- **Placement**: the first frame at (72, 42) logical below the bar (the mockups' terminal at (72, 70)), cascaded by
+  32, never above the bar.
+- **F12** goes to the next window in the switcher's order (the focused one, the stack from the top, hidden ones
+  last), not in creation order.
+- **Close anyway**: a press between 5 and 20 s after an unanswered `CloseRequested`; a commit to the window clears the
+  ask (ADR-0160 gives 5 s as an assumption and no expiry).
+- **Deferred** to 7c and 7d, and reaching no client meanwhile: System+Space, System+Enter, System+R, System+?.
+- **No clock** in the bar: the wall clock (ADR-0226) is not built.
+- **Budgets**: eight toplevels and four popups a client, buffers at most four displays' worth, 32 windows in all.
+
+### Screens
+
+In `docs/research/desktop/shots/7b/` (864 KB):
+
+| File | What | Against the mockup |
+|---|---|---|
+| `desktop-qemu.png` | The desktop in QEMU at scale 1 (HVF; the TCG dump is byte for byte the same): the bar, the wallpaper, the terminal's frame and shadow. | `clear-field/terminal.png` and `desktop.png`: the same bar, wallpaper, title bar, buttons, corners and shadow. Not yet: the dock and the room chips (7d), the room badge, tints and grant pills (7d), the clock (no wall clock), the wider window. |
+| `desktop-qemu@2x.png` | The same at scale 2 (2048 × 1536). | `desktop@2x.png`: every frame dimension and glyph at twice the size, read back as the same text by the GUI test (INV-0164-2). |
+| `windows-light.png`, `windows-dark.png` | Two windows of the real compositor on the host (an ignored test, `samples`), focused and not, both sets. | The focused window's coloured buttons and stronger shadow against the other's grey ones, as `desktop.png` draws them. |
+| `switcher-light.png`, `switcher-dark.png` | The switcher open over them, both sets. | `switcher.png`: the material with its halo, the group line, a row per window with its own pixels shrunk and the chosen one highlighted. The mockup's two rooms and their badges come with 7d. |
+
+### Measurements
+
+`t_gui` in the test kernel, from `make test` on `work/7c` at 8640331 (it includes 7b), QEMU 11.1.2 on the M4 Mac mini;
+also in `docs/design.md`:
+
+| | HVF | TCG |
+|---|---|---|
+| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | 6.0 ms (155 frames/s) | 54 ms (17 frames/s) |
+| The frame that opens the switcher (blur of the scene under it) | 18.5 ms | 102 ms |
+| A frame committed under the open switcher | 18.6 ms | 100 ms |
+
+A commit under the open switcher blurs the scene again, so it costs what opening does; the pointer alone reuses the
+last frame. That `make test` run passed 19 of 21 steps, every GUI script under HVF and TCG at both scales included;
+the two that failed, `check-test-caps` (`zoraya-keymap`'s tests had no heap cap) and `check-tokens` (it exempted
+`tests.rs` but not the compositor's `tests_windows.rs`), are fixed in `013ed16` on `work/7c`.
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0160-1, -3 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0160-2, -4, -5, -6, -7 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0164-1, -3 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0164-2 | not yet applicable (stage 7) | checked: `make test-gui` |
+| INV-0094-2 | checked | replaced by INV-0160-2 |
+| INV-0241-1 (new, proposed ADR) | | checked: `make test-unit` |
+
+### Review
+
+`docs/tasks/TASK-24-review-7b.md`: 1 error (an unfocused client's popup over another client's window), 9 warnings,
+6 notes; all fixed or answered in `c2962fd`, with tests; no open error.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `main`, two at a time.
+
+- **`zoraya-paint`**: 166 survivors in the first run, in the rounded-rectangle coverage, the outlines, the blur's
+  passes and the wallpaper's integer sine; tests for each hole in `ba92c8e` (exact coverage at corner pixels, outline
+  depths, a blur against a direct average, the wallpaper's digest). The run's full counts were overwritten by the
+  compositor's run and are not reported.
+- **`zoraya-compositor`**: capped at 90 minutes after 460 of its mutants: 304 caught, 133 missed, 5 timed out, 18
+  unviable. The survivors were mostly the drag clamps (`drag_to`) and `reconfigure`'s rescaling; tests of every clamp,
+  resizes from each side and at scale 2, and rescaling in `2e8aaa4`. The mutants past the cap were not run.
+
+### Merge
+
+Not merged (the queue).
+
+### Time
+
+From the commits' times: the build to the design notes 46 minutes (18:17 to 19:03), the review and its fixes 15
+minutes, the mutation runs and their tests about an hour (19:49 to 20:49), overlapping 7c's writing.
+
+## 7c: keyboard layouts
+
+Branch `work/7c`, from `work/7b`, with 7b's later commits merged in.
+
+### What was built
+
+- **`zoraya-keymap`**: `us`, `ua`, `ru` and `cz` as tables of four levels per key (plain, Shift, AltGr,
+  Shift+AltGr), from the reference layouts the survey records; thirteen accents and their compositions over Latin-1
+  and Latin Extended-A; the dead-key machine (compose, Space for the spacing accent, any other key cancels, a second
+  dead key replaces the first); Caps Lock on case pairs; the right Alt as AltGr where a layout has a third level;
+  Ctrl's control characters from the active layout's Latin letters (the US ones in a Cyrillic layout); switching over
+  an enabled list.
+- **The compositor**: System+Space switches (Shift: back) over `us ua cz`, clears a dead key at a focus change and
+  keeps a chord's keys out of it, shows the layout in the bar, and sends `Layout { name }` (ordinal 24) to the focused
+  client when it gains focus and at every switch.
+- **The title** (ADR-0168): `zosh` sends `Title` (its directory as the prompt shows it) at start and after each `cd`;
+  `term` titles its window `zosh — <dir>`, never from output.
+- **The GUI runner** types under a layout (`layout NAME`), a letter with no key through a dead key, and `chord meta`
+  presses the system key; `tests/gui/layouts.script` runs in `make test-gui` under HVF and TCG.
+
+### The 7c acceptance test
+
+`plan.md`: "the GUI test switches to `ua`, types a Ukrainian name, switches to `cz`, types `příklad.txt` through dead
+keys, and reads both back". Done: `tests/gui/layouts.script` types `звіт-2026 ґанок` in `ua` and `příklad.txt ďóň` in
+`cz` (`ř`, `í` and `á` on their own keys as in the reference layout, `ď`, `ó` and `ň` through the dead caron and acute),
+reads the line back, and types `ls` after switching round to `us` (INV-0163-4's GUI half); it passes under HVF and
+TCG, whose screens are byte for byte the same.
+
+### Decisions taken without the architect
+
+- **The enabled layouts** are `us ua cz` and the active one `us` at start, ADR-0163's example, until 7f's settings
+  (`gui.keyboard-layouts`, `gui.keyboard-layout`).
+- **Third and fourth levels** are only Czech's and the Ukrainian ґ and backslash; the others' are left out until
+  something needs them, rather than guessed (listed in `layouts.rs`).
+- **Caps Lock** follows ADR-0163's case-pair rule, so it does not capitalise Czech's number-row letters as XKB's
+  semi-alphabetic key type does; stated in `docs/design.md`.
+- **Ctrl** uses the active layout's Latin letter (QWERTZ's Ctrl+Z is the key labelled Z), the US one in a Cyrillic
+  layout, as XKB desktops do (review finding 5).
+
+### Screens
+
+`docs/research/desktop/shots/7c/layouts-qemu.png`: the terminal with `echo звіт-2026 ґанок příklad.txt ďóň` typed
+under `ua` and `cz`, the window titled `zosh — ~` by the shell's `Title`, and `CZ` at the right of the bar
+(QEMU, HVF; the TCG dump is the same). Against `clear-field/desktop.png`: the layout indicator at the right of the bar
+as in the mockup (`UA` there), without the clock beside it (no wall clock yet). Light only: the indicator and the
+title are the bar's and the frame's, whose dark set 7b's screens show.
+
+### Measurements
+
+`plan.md` lists none for 7c.
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0163-1, -2, -3 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0163-4 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+
+### Review
+
+`docs/tasks/TASK-24-review-7c.md`: 2 errors (a dead key survived Enter, Backspace or a Ctrl chord), 5 warnings, 6
+notes; all fixed or answered in `f1594dd`, with tests; no open error.
+
+### Mutation testing
+
+`make mutants-host` on `zoraya-keymap` with `--in-diff` against `main`: run after 7d's `make test`; see 7d's section.
+
+### Merge
+
+Not merged (the queue).
+
+### Time
+
+About 2 h 30 min of writing, including two GUI runs; the review and its fixes 30 min.
 
 ## To finish by hand
 
