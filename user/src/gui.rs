@@ -174,7 +174,7 @@ pub fn manager_send<'a, M: Message<'a>>(
     } else {
         NEXT_TRANSACTION.fetch_add(1, Ordering::Relaxed).max(1)
     };
-    let mut out = [0u8; 64];
+    let mut out = [0u8; 512];
     let length = encode(m, transaction, &mut out).ok()?;
     let entries: Vec<ChannelEntry> = handle.into_iter().map(channel).collect();
     if channel_write(manager, &out[..length], &entries).is_err() {
@@ -294,6 +294,74 @@ impl Gui {
         Some(ours)
     }
 
+    /// A terminal's client in `home`, with its launch record: the shell
+    /// in it holds the volume's root (ADR-0168, ADR-0172 point 4).
+    pub fn new_terminal_client(&self) -> Option<Handle> {
+        let (ours, theirs) = channel_create().ok()?;
+        let m = gui::AddRoomClient {
+            untrusted: 0,
+            colour: 0,
+            room: zoraya_protocol::Data(b""),
+            app: zoraya_protocol::Data(b"term"),
+            entries: zoraya_protocol::Data(b"+w /"),
+            line: zoraya_protocol::Data(b"term"),
+        };
+        manager_send(self.manager, &m, Some(theirs), 0, &mut [])?;
+        Some(ours)
+    }
+
+    /// The panel (ADR-0168): its client manager, the volume's root and the
+    /// console; `None` if the compositor refuses or the panel does not
+    /// start.
+    pub fn start_panel(&self, root: &crate::files::File) -> Option<Running> {
+        let (ours, theirs) = channel_create().ok()?;
+        if !attached(self.manager, &gui::AttachClientManager {}, theirs) {
+            let _ = handle_close(ours);
+            return None;
+        }
+        let Ok(root) = root.clone_as(crate::files::ALL) else {
+            let _ = handle_close(ours);
+            return None;
+        };
+        // Its own job, to make its launches' jobs under it, and the image
+        // directory, to find what it launches.
+        let started = (|| {
+            use zoraya_abi::{DIRECTORY, DirectoryObject, JOB, JobFlags, JobObject};
+            let job = zoraya_rt::job_create(JOB, JobFlags::NONE).ok()?;
+            let image = zoraya_rt::directory_lookup(DIRECTORY, "panel").ok()?;
+            let mut buffer = [0; 512];
+            let mut e = zoraya_abi::spawn::Encoder::new(&mut buffer, job, image);
+            // The console to write and to hand to what it launches (to
+            // write only, INV-0097-3), as init's own shell has it.
+            let console = zoraya_abi::Rights::WRITE.union(zoraya_abi::Rights::DUPLICATE);
+            for entry in [
+                dup(zoraya_abi::CONSOLE.slot(), zoraya_abi::CONSOLE, console),
+                dup(JOB.slot(), job, JobObject::RIGHTS),
+                dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS),
+                moved(5, root.end),
+                moved(6, ours),
+            ] {
+                e.handle(entry);
+            }
+            let length = e.finish()?;
+            let process = zoraya_rt::spawn(&buffer[..length]).ok();
+            let _ = handle_close(image);
+            Some((job, process?))
+        })();
+        match started {
+            Some((job, process)) => {
+                // Moved into the panel with the spawn.
+                core::mem::forget(root);
+                Some(Running { job, process })
+            }
+            None => {
+                // Not taken: closed here (the root with its drop).
+                let _ = handle_close(ours);
+                None
+            }
+        }
+    }
+
     /// Starts the GPU driver again and gives it to the compositor.
     pub fn restart_gpu(&mut self) -> bool {
         if let Some(old) = self.gpud.take() {
@@ -344,7 +412,7 @@ impl Gui {
 /// Starts a terminal as a client of `gui`: the terminal process, and the
 /// shell's end of the terminal channel, for slot 6 of the shell.
 pub fn start_terminal(gui: &Gui) -> Option<(Running, Handle)> {
-    let client = gui.new_client()?;
+    let client = gui.new_terminal_client()?;
     let (shell, theirs) = channel_create().ok()?;
     let entries = [console(), moved(5, client), moved(6, theirs)];
     match start("term", &entries, &[]) {

@@ -1549,7 +1549,9 @@ impl<P: Platform> Compositor<P> {
             32 if one && decode::<gui::AddClient>(bytes, 1).is_ok() => {
                 (self.add_client(handles[0], Record::home()), true)
             }
-            37 if clients && one => match decode::<gui::AddRoomClient<'_>>(bytes, 1) {
+            // From either launcher: init's first terminal is `home`'s
+            // (proposed ADR-0242).
+            37 if one => match decode::<gui::AddRoomClient<'_>>(bytes, 1) {
                 Ok((_, m)) => match Record::of(&m) {
                     Some(r) => (self.add_client(handles[0], r), true),
                     None => (status::INVALID, false),

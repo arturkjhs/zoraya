@@ -374,6 +374,9 @@ fn main() -> i32 {
     let mut gui_allowed = gui_devices.is_some();
     let mut gui_restarts = 0;
     let mut gui: Option<Gui> = None;
+    // The panel (ADR-0168): started once per GUI, with the volume; it
+    // launches every terminal but the first (proposed ADR-0242).
+    let mut panel: Option<Running> = None;
     let mut driver_restarts = (0, alloc::vec![0; devices.inputs.len()]);
     let mut shell_failures = 0;
     if gui_devices.is_some() {
@@ -410,6 +413,14 @@ fn main() -> i32 {
             }
         }
         let terminal: Option<(Running, Handle)> = gui.as_ref().and_then(start_terminal);
+        if panel.is_none()
+            && let (Some(g), Some(s)) = (gui.as_ref(), stack.as_ref())
+        {
+            panel = g.start_panel(&s.root);
+            if panel.is_none() {
+                println!("init: the panel did not start");
+            }
+        }
         let wants_session = stack.as_ref().is_some_and(|s| {
             s.root
                 .open("etc/zoraya/session", 0, zoraya_proto_file::rights::READ)
@@ -552,6 +563,9 @@ fn main() -> i32 {
             Ended::Closed => println!("init: the terminal was closed"),
             Ended::Gui => {
                 println!("init: the gui failed");
+                if let Some(p) = panel.take() {
+                    p.end();
+                }
                 if let Some(g) = gui.take() {
                     driver_restarts = (g.gpu_restarts, g.input_restarts.clone());
                     g.end();
@@ -564,6 +578,10 @@ fn main() -> i32 {
             }
             Ended::Storage => {
                 println!("init: storage failed");
+                // Its root was the volume's: started again with the next.
+                if let Some(p) = panel.take() {
+                    p.end();
+                }
                 if let Some(s) = stack.take() {
                     s.end();
                 }

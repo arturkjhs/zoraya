@@ -610,3 +610,31 @@ fn rooms_samples() {
         write(&mut s, "commands");
     }
 }
+
+/// INV-0243-1: a room's colour reaches a window's body only through the
+/// untrusted edge; every other body pixel is the client's.
+#[test]
+fn a_rooms_window_shows_its_body_unchanged() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    let body_colour = 0x0012_3456;
+    let edge = space::ROOM_UNTRUSTED_EDGE.physical(Scale::ONE) as i64;
+    // Each window checked while it is the top one (no other's shadow on
+    // it): a trusted room's, then an untrusted room's.
+    for (client, room, skip) in [(0usize, "project", 0i64), (1, "agent-1", edge)] {
+        let end = s.room_client(panel, room, "term", "+w ~/x");
+        s.window_of(end, 200, 100, body_colour);
+        let body = s.c.window(Key { client, id: 1 }).unwrap().body_rect();
+        // A row through the middle, inside the edge where there is one.
+        let y = body.y + body.height / 2;
+        for x in body.x + skip..body.right() - skip {
+            assert_eq!(s.pixel(x, y), body_colour, "{room} at ({x}, {y})");
+        }
+        if skip > 0 {
+            let p = *s.c.appearance().palette();
+            assert_eq!(s.pixel(body.x, y), p.room_untrusted.pixel());
+            assert_eq!(s.pixel(body.right() - 1, y), p.room_untrusted.pixel());
+        }
+    }
+}

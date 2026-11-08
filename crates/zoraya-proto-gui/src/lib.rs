@@ -280,10 +280,11 @@ protocol! {
     /// deadline and was dropped (ADR-0093, Decision).
     message DisplayHung = 36, handles 0 {}
 
-    /// Manager, on the client manager only (ADR-0168, ADR-0172 point 4): a
-    /// new client launched in a room, with the compositor's end of its
-    /// channel and its launch record, which the compositor draws and no
-    /// client message changes (INV-0172-1). The reply is `ManagerDone`.
+    /// Manager (ADR-0168, ADR-0172 point 4): a new client launched in a
+    /// room, with the compositor's end of its channel and its launch
+    /// record, which the compositor draws and no client message changes
+    /// (INV-0172-1). From the panel, and from `init` for its first
+    /// terminal (proposed ADR-0242). The reply is `ManagerDone`.
     message AddRoomClient<'a> = 37, handles 1 {
         /// 1 for an untrusted room.
         untrusted: u32,
@@ -333,8 +334,9 @@ pub const CLIENT_REQUESTS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 pub const CLIENT_EVENTS: [u32; 9] = [16, 17, 18, 19, 20, 21, 22, 23, 24];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 5] = [32, 33, 34, 35, 38];
-/// The ordinals only the client manager may send (ADR-0168), besides
-/// `AddClient` and `Stats`.
+/// The ordinals only a manager may send besides `MANAGER_REQUESTS`:
+/// `AddRoomClient` from either, the rooms and the dock from the client
+/// manager only (ADR-0168).
 pub const CLIENT_MANAGER_REQUESTS: [u32; 3] = [37, 39, 40];
 /// What the compositor sends the manager unasked.
 pub const MANAGER_EVENTS: [u32; 2] = [36, 41];

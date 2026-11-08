@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-panel"
+description = "The panel's launch logic (ADR-0168, ADR-0172): launch records, the dock's presses, the rooms."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-settings = { path = "../zoraya-settings" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

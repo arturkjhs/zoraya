@@ -454,6 +454,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0230-4 | [ADR-0230](0230-network-testing.md) | W11 to W13 and `t_net` pass under HVF and TCG from a clean checkout. | `make test-net`, a step of `make test`. | not yet applicable (stage 8) |
 | INV-0240-1 | [ADR-0240](0240-fonts-embedded-until-the-launcher.md) | Only the files of `fonts/`, through `zoraya-fonts`, are embedded as fonts in a program. | a grep in `make check-tokens` for `include_bytes!` of a `.ttf` outside `crates/zoraya-fonts`. | checked: `make check-tokens` |
 | INV-0241-1 | [ADR-0241](0241-window-corners-and-client-pixels.md) | Inside the window's shape, every client pixel of the body reaches the display unchanged; outside it, none does. | the compositor's host tests at scale 1 and 2 (`an_image_is_copied_unchanged_where_covered` in `zoraya-paint`, `at_scale_two_sizes_are_logical_and_pixels_unchanged` in `zoraya-compositor`). | checked: `make test-unit` |
+| INV-0242-1 | [ADR-0242](0242-the-panel-beside-init-in-stage-7d.md) | `SetRooms` and `SetDock` are accepted only on the client manager, the drivers' messages only on the driver manager, `AddRoomClient` on either manager, and none of them on a client's channel. | host test of the compositor sending each manager ordinal on each endpoint. | checked: `make test-unit` |
+| INV-0243-1 | [ADR-0243](0243-a-rooms-tint-on-the-frame-only.md) | A room's colour reaches a window's body only through the untrusted edge (ADR-0172 point 6): every other body pixel is the client's. | the compositor's host test that a room's window shows its body pixels unchanged inside the edge. | checked: `make test-unit` |
 
 ## Counts
 
@@ -577,4 +579,6 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0230](0230-network-testing.md) Testing the network without the Internet: user-mode networking, the runner as the far end, a capture on failure | 4 |
 | [ADR-0240](0240-fonts-embedded-until-the-launcher.md) Fonts embedded in the programs `init` starts, until the launcher exists | 1 |
 | [ADR-0241](0241-window-corners-and-client-pixels.md) Round window corners over a client's pixels | 1 |
-| **Total** | **448** |
+| [ADR-0242](0242-the-panel-beside-init-in-stage-7d.md) The panel beside `init` in stage 7d | 1 |
+| [ADR-0243](0243-a-rooms-tint-on-the-frame-only.md) A room's tint on the frame, not on the client's pixels | 1 |
+| **Total** | **450** |

@@ -261,6 +261,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-panel"
+version = "0.1.0"
+dependencies = [
+ "zoraya-settings",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-pmm"
 version = "0.1.0"
 dependencies = [
@@ -498,6 +506,7 @@ dependencies = [
  "zoraya-fs-service",
  "zoraya-heap",
  "zoraya-keymap",
+ "zoraya-panel",
  "zoraya-proto-block",
  "zoraya-proto-display",
  "zoraya-proto-file",

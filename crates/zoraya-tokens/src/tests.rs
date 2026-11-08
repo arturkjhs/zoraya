@@ -375,8 +375,22 @@ fn random_text_never_panics_the_line_reader() {
 fn room_slots_name_their_colours() {
     for p in [&crate::LIGHT, &crate::DARK] {
         assert_eq!(
-            [p.room(1), p.room(2), p.room(3), p.room(4), p.room(0), p.room(5)],
-            [p.room_1, p.room_2, p.room_3, p.room_4, p.room_untrusted, p.room_untrusted]
+            [
+                p.room(1),
+                p.room(2),
+                p.room(3),
+                p.room(4),
+                p.room(0),
+                p.room(5)
+            ],
+            [
+                p.room_1,
+                p.room_2,
+                p.room_3,
+                p.room_4,
+                p.room_untrusted,
+                p.room_untrusted
+            ]
         );
     }
 }

@@ -46,7 +46,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench t_text \
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel t_gui guibench t_text \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
@@ -459,7 +459,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels),
 # with three times the time: every screendump read is four times larger.
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 terminal:auto:2 windows:auto:2
+GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 terminal:auto:2 windows:auto:2
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
@@ -584,7 +584,7 @@ check-test-caps:
 # 0x00rrggbb, 0xaarrggbb), with or without an integer suffix; a duration is
 # any Duration::from_*. A line that is a size or a mask, not a colour, says
 # so with `// not a colour` (review finding 6).
-GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src user/src/bin/compd.rs user/src/bin/term.rs
+GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src crates/zoraya-ui/src crates/zoraya-panel/src user/src/bin/compd.rs user/src/bin/term.rs user/src/bin/panel.rs
 check-tokens:
 	@hits="$$(grep -rnE '0x[0-9a-fA-F_]+|Duration::from_' $(GUI_SOURCES) | grep -vE '/tests(_[a-z_]+)?\.rs:' | grep -v 'not a colour' | \
 	  perl -ne 'print if /Duration::from_/ || grep { (my $$d = $$_) =~ s/_//g; length($$d) == 6 || length($$d) == 8 } /0x([0-9a-fA-F_]+)(?:[ui](?:8|16|32|64|size))?\b/g' || true)"; \

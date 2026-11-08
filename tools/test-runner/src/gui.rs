@@ -106,6 +106,10 @@ fn file_safe(label: &str) -> String {
 /// not keep up with while it composes (traced as `virtio_input_queue_full`,
 /// TASK-24 7a). At this rate the queue holds 128 ms of typing.
 const KEY_INTERVAL: Duration = Duration::from_millis(8);
+/// The time after a click before the next step: the compositor reads its
+/// keyboard and its pointer as two devices, and a key typed with no pause
+/// may be read in the same round before the click (TASK-24 7d).
+const AFTER_CLICK: Duration = Duration::from_millis(150);
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -124,6 +128,12 @@ pub enum Step {
     Click(i64, i64),
     Layout(usize),
     Drag(i64, i64, i64, i64),
+    /// Reads the terminal whose body is at this logical point (a second
+    /// window), instead of the first.
+    Origin(i64, i64),
+    /// Points at (`false`) or clicks (`true`) the first pixel of a colour
+    /// in a logical rectangle: a part of the dock found by its colour.
+    AtColour(bool, u32, i64, i64, i64, i64),
     Window,
     Top(String),
     Shot(String),
@@ -189,6 +199,32 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 Step::Drag(x, y, x2, y2)
             }
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
+            "origin" => {
+                let v: Vec<i64> = rest
+                    .split_whitespace()
+                    .map(|n| n.parse().map_err(|_| bad("not a number")))
+                    .collect::<Result<_, _>>()?;
+                let [x, y] = v[..] else {
+                    return Err(bad("origin X Y"));
+                };
+                Step::Origin(x, y)
+            }
+            "clickc" | "pointc" => {
+                let v: Vec<&str> = rest.split_whitespace().collect();
+                if v.len() != 5 {
+                    return Err(bad("clickc RGB X Y W H"));
+                }
+                let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
+                let colour = u32::from_str_radix(v[0], 16).map_err(|_| bad("not a colour"))?;
+                Step::AtColour(
+                    kind == "clickc",
+                    colour,
+                    num(v[1])?,
+                    num(v[2])?,
+                    num(v[3])?,
+                    num(v[4])?,
+                )
+            }
             "window" => Step::Window,
             "top" => Step::Top(rest.to_string()),
             "shot" => {
@@ -271,10 +307,14 @@ impl Screen {
     /// The terminal's rows as text: the first window's body, where the
     /// compositor puts it, with the terminal's padding and grid.
     pub fn rows(&self, reader: &mut Reader) -> Vec<String> {
+        self.rows_at(reader, zoraya_compositor::first_body(self.scale()))
+    }
+
+    /// The rows of a terminal whose body is at `(ox, oy)`, physical.
+    pub fn rows_at(&self, reader: &mut Reader, (ox, oy): (i64, i64)) -> Vec<String> {
         let (columns, rows) = reader
             .look()
             .grid_for(self.width as u32, self.height as u32);
-        let (ox, oy) = zoraya_compositor::first_body(self.scale());
         reader.rows(
             columns,
             rows,
@@ -567,6 +607,9 @@ struct Run {
     /// The layout `type` types in (`layout`): an index of
     /// `zoraya_keymap::LAYOUTS`, 0 being us.
     layout: usize,
+    /// The body of the terminal read (`origin`), logical; the first's when
+    /// none.
+    origin: Option<(i64, i64)>,
 }
 
 impl Run {
@@ -603,7 +646,13 @@ impl Run {
             }
             let screen = self.qmp.screen()?;
             self.rescale(&screen);
-            let rows = screen.rows(&mut self.reader);
+            let rows = match self.origin {
+                Some((x, y)) => {
+                    let k = i64::from(screen.scale().factor());
+                    screen.rows_at(&mut self.reader, (x * k, y * k))
+                }
+                None => screen.rows(&mut self.reader),
+            };
             let from = self.row.map_or(0, |r| r + 1);
             let hit = |r: &String| {
                 if prefix {
@@ -801,12 +850,55 @@ impl Run {
                 }
                 std::thread::sleep(Duration::from_millis(5));
             },
+            Step::Origin(x, y) => {
+                self.origin = Some((*x, *y));
+                self.row = None;
+                Ok(())
+            }
+            Step::AtColour(click, colour, x, y, w, h) => loop {
+                if Instant::now() <= self.deadline {
+                    self.pump()?;
+                }
+                let screen = self.qmp.screen()?;
+                self.rescale(&screen);
+                let k = i64::from(screen.scale().factor());
+                let size = (screen.width, screen.height);
+                let found = (y * k..(y + h) * k)
+                    .flat_map(|py| (x * k..(x + w) * k).map(move |px| (px, py)))
+                    .find(|&(px, py)| {
+                        px >= 0
+                            && py >= 0
+                            && (px as usize) < screen.width
+                            && (py as usize) < screen.height
+                            && screen.at(px as usize, py as usize) == *colour
+                    });
+                if let Some(at) = found {
+                    self.qmp.pointer(at, size, None)?;
+                    if *click {
+                        self.qmp.pointer(at, size, Some(true))?;
+                        self.qmp.pointer(at, size, Some(false))?;
+                        std::thread::sleep(AFTER_CLICK);
+                    }
+                    return Ok(());
+                }
+                if Instant::now() > self.deadline {
+                    return Err(format!(
+                        "timeout waiting for {colour:06x} in {x} {y} {w} {h}"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            },
             Step::Click(x, y) => {
                 let (size, k) = self.display()?;
                 let at = (x * k, y * k);
                 self.qmp.pointer(at, size, None)?;
                 self.qmp.pointer(at, size, Some(true))?;
-                self.qmp.pointer(at, size, Some(false))
+                self.qmp.pointer(at, size, Some(false))?;
+                // The keyboard and the pointer are two devices: a key typed
+                // at once could be read before the click and go to the window
+                // focused before it. A hand takes longer.
+                std::thread::sleep(AFTER_CLICK);
+                Ok(())
             }
             Step::Drag(x, y, x2, y2) => {
                 let (size, k) = self.display()?;
@@ -896,6 +988,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             label: label.to_string(),
             deadline,
             row: None,
+            origin: None,
             reader: reader(),
             scale: Scale::ONE,
             layout: 0,
