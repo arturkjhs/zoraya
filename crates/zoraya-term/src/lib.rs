@@ -277,6 +277,43 @@ impl Term {
         }
     }
 
+    /// A new grid of `columns × rows` (each at least 1), keeping what fits
+    /// of the screen from its top left and the cursor inside; the
+    /// scrollback is kept at its old width, cut or padded per line when
+    /// shown. Everything is drawn again.
+    pub fn resize(&mut self, columns: usize, rows: usize) {
+        let (columns, rows) = (columns.max(1), rows.max(1));
+        if (columns, rows) == (self.columns, self.rows) {
+            return;
+        }
+        // Rows that would fall off the bottom scroll into the history first,
+        // so that the cursor's line stays on screen.
+        while self.y >= rows {
+            self.scroll();
+            self.y -= 1;
+        }
+        let mut screen = vec![BLANK; columns * rows];
+        for y in 0..rows.min(self.rows) {
+            for x in 0..columns.min(self.columns) {
+                screen[y * columns + x] = self.screen[y * self.columns + x];
+            }
+        }
+        let mut history = vec![BLANK; columns * SCROLLBACK];
+        for line in 0..SCROLLBACK {
+            for x in 0..columns.min(self.columns) {
+                history[line * columns + x] = self.history[line * self.columns + x];
+            }
+        }
+        self.screen = screen;
+        self.history = history;
+        self.columns = columns;
+        self.rows = rows;
+        self.x = self.x.min(columns - 1);
+        self.wrap = false;
+        self.view = 0;
+        self.dirty = vec![true; rows];
+    }
+
     pub const fn size(&self) -> (usize, usize) {
         (self.columns, self.rows)
     }

@@ -453,16 +453,18 @@ tour-scripts:
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
 GUI_IMAGE := $(BUILD)/gui.img
-GUI_SCRIPT := tests/gui/terminal.script
+# 7b (ADR-0160, ADR-0164): the terminal's script and the windows' script,
+# each under the host's accelerator and TCG at scale 1, and under the host's
+# accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels).
+GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 terminal:auto:2 windows:auto:2
 test-gui: $(KERNEL) $(RUNNER) tools-storage
-	target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE)
-	$(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(GUI_SCRIPT) --qmp $(BUILD)/gui-auto.qmp --label gui-auto -- \
-		$(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/gui-auto.qmp --disk $(GUI_IMAGE) --accel auto $(KERNEL)
-	target/debug/zoraya-fsck $(GUI_IMAGE)
-	target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE)
-	$(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(GUI_SCRIPT) --qmp $(BUILD)/gui-tcg.qmp --label gui-tcg -- \
-		$(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/gui-tcg.qmp --disk $(GUI_IMAGE) --accel tcg $(KERNEL)
-	target/debug/zoraya-fsck $(GUI_IMAGE)
+	@for run in $(GUI_RUNS); do \
+	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
+	  label=gui-$$script-$$accel-$$scale; \
+	  target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE) > /dev/null && \
+	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
+	    $(RUN_QEMU) --test --gui --gui-scale $$scale --mem 256M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
 test-crash: $(KERNEL) tools-storage

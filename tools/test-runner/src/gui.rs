@@ -28,6 +28,16 @@
 //! chord MOD QCODE   the same with MOD (ctrl, shift, alt) held, such as
 //!                   chord ctrl c
 //! region X Y W H RGB  every pixel of the rectangle is the colour RGB (hex)
+//! click X Y         move the pointer to (X, Y) and press and release the
+//!                   left button
+//! drag X Y X2 Y2    press the left button at (X, Y), move to (X2, Y2) in
+//!                   steps, release
+//!
+//! Coordinates are logical pixels: the runner multiplies them by the
+//! display's scale (ADR-0164), which it takes from the screendump's width
+//! as the compositor does (`zoraya_compositor::scale_for`), so one script
+//! runs at both scales. The terminal is read at the first window's body
+//! (`zoraya_compositor::first_body`).
 //! window            a new window: the next `screen` looks from its top row
 //! top TEXT          wait until the top row reads TEXT (a cleared screen),
 //!                   then a new window as `window`
@@ -52,9 +62,14 @@ use zoraya_term::Look;
 use zoraya_term::read::Reader;
 use zoraya_tokens::{Appearance, Scale};
 
-/// The reader of the terminal as `term` draws it: scale 1, the light set.
+/// The reader of the terminal as `term` draws it at `scale`, the light set.
+pub fn reader_at(scale: Scale) -> Reader {
+    Reader::new(Look::new(scale, Appearance::Light))
+}
+
+/// The reader at scale 1.
 pub fn reader() -> Reader {
-    Reader::new(Look::new(Scale::ONE, Appearance::Light))
+    reader_at(Scale::ONE)
 }
 
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
@@ -102,6 +117,8 @@ pub enum Step {
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
+    Click(i64, i64),
+    Drag(i64, i64, i64, i64),
     Window,
     Top(String),
     Shot(String),
@@ -142,6 +159,26 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 let num = |s: &str| s.parse::<i64>().map_err(|_| bad("not a number"));
                 let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
                 Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
+            }
+            "click" => {
+                let v: Vec<i64> = rest
+                    .split_whitespace()
+                    .map(|n| n.parse().map_err(|_| bad("not a number")))
+                    .collect::<Result<_, _>>()?;
+                let [x, y] = v[..] else {
+                    return Err(bad("click X Y"));
+                };
+                Step::Click(x, y)
+            }
+            "drag" => {
+                let v: Vec<i64> = rest
+                    .split_whitespace()
+                    .map(|n| n.parse().map_err(|_| bad("not a number")))
+                    .collect::<Result<_, _>>()?;
+                let [x, y, x2, y2] = v[..] else {
+                    return Err(bad("drag X Y X2 Y2"));
+                };
+                Step::Drag(x, y, x2, y2)
             }
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
             "window" => Step::Window,
@@ -218,17 +255,22 @@ impl Screen {
         self.pixels[y * self.width + x]
     }
 
-    /// The terminal's rows as text: the first window, at the compositor's
-    /// origin, with the terminal's padding and grid.
+    /// The display's scale, as the compositor chooses it.
+    pub fn scale(&self) -> Scale {
+        zoraya_compositor::scale_for(self.width as u32)
+    }
+
+    /// The terminal's rows as text: the first window's body, where the
+    /// compositor puts it, with the terminal's padding and grid.
     pub fn rows(&self, reader: &mut Reader) -> Vec<String> {
         let (columns, rows) = reader
             .look()
             .grid_for(self.width as u32, self.height as u32);
-        let (ox, oy) = zoraya_compositor::ORIGIN;
+        let (ox, oy) = zoraya_compositor::first_body(self.scale());
         reader.rows(
             columns,
             rows,
-            (ox as usize, oy as usize),
+            (ox.max(0) as usize, oy.max(0) as usize),
             (self.width, self.height),
             |x, y| self.at(x, y),
         )
@@ -382,6 +424,32 @@ impl Qmp {
         self.execute(&command).map(|_| ())
     }
 
+    /// The pointer to `(x, y)` of a `width × height` display (QMP's
+    /// absolute axes run from 0 to 32767), with the left button's change.
+    fn pointer(
+        &mut self,
+        (x, y): (i64, i64),
+        (width, height): (usize, usize),
+        button: Option<bool>,
+    ) -> Result<(), String> {
+        let axis = |v: i64, side: usize| {
+            (v.clamp(0, side as i64 - 1) * 32767 / (side as i64 - 1).max(1)) as u32
+        };
+        let mut events = format!(
+            r#"{{"type":"abs","data":{{"axis":"x","value":{}}}}},{{"type":"abs","data":{{"axis":"y","value":{}}}}}"#,
+            axis(x, width),
+            axis(y, height)
+        );
+        if let Some(down) = button {
+            events.push_str(&format!(
+                r#",{{"type":"btn","data":{{"down":{down},"button":"left"}}}}"#
+            ));
+        }
+        let command =
+            format!(r#"{{"execute":"input-send-event","arguments":{{"events":[{events}]}}}}"#);
+        self.execute(&command).map(|_| ())
+    }
+
     fn screen(&mut self) -> Result<Screen, String> {
         self.dump()?;
         let bytes = std::fs::read(&self.shot).map_err(|e| format!("{}: {e}", self.shot))?;
@@ -401,6 +469,8 @@ struct Run {
     /// The row of the last `screen` match.
     row: Option<usize>,
     reader: Reader,
+    /// The scale `reader` reads at.
+    scale: Scale,
 }
 
 impl Run {
@@ -435,7 +505,9 @@ impl Run {
             if Instant::now() <= self.deadline {
                 self.pump()?;
             }
-            let rows = self.qmp.screen()?.rows(&mut self.reader);
+            let screen = self.qmp.screen()?;
+            self.rescale(&screen);
+            let rows = screen.rows(&mut self.reader);
             let from = self.row.map_or(0, |r| r + 1);
             let hit = |r: &String| {
                 if prefix {
@@ -456,6 +528,25 @@ impl Run {
             }
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// Reads at the screen's scale from now on.
+    fn rescale(&mut self, screen: &Screen) {
+        let scale = screen.scale();
+        if scale != self.scale {
+            self.scale = scale;
+            self.reader = reader_at(scale);
+        }
+    }
+
+    /// The display's size and scale, from a screendump.
+    fn display(&mut self) -> Result<((usize, usize), i64), String> {
+        let screen = self.qmp.screen()?;
+        self.rescale(&screen);
+        Ok((
+            (screen.width, screen.height),
+            i64::from(screen.scale().factor()),
+        ))
     }
 
     fn step(&mut self, step: &Step) -> Result<(), String> {
@@ -494,8 +585,10 @@ impl Run {
             ]),
             Step::Region(x, y, w, h, colour) => {
                 let screen = self.qmp.screen()?;
-                for py in *y..y + h {
-                    for px in *x..x + w {
+                let k = i64::from(screen.scale().factor());
+                let (x, y, w, h) = (x * k, y * k, w * k, h * k);
+                for py in y..y + h {
+                    for px in x..x + w {
                         let p = screen.at(px as usize, py as usize);
                         if p != *colour {
                             return Err(format!("pixel {px},{py} is {p:06x}, not {colour:06x}"));
@@ -562,6 +655,29 @@ impl Run {
                 }
                 std::thread::sleep(Duration::from_millis(5));
             },
+            Step::Click(x, y) => {
+                let (size, k) = self.display()?;
+                let at = (x * k, y * k);
+                self.qmp.pointer(at, size, None)?;
+                self.qmp.pointer(at, size, Some(true))?;
+                self.qmp.pointer(at, size, Some(false))
+            }
+            Step::Drag(x, y, x2, y2) => {
+                let (size, k) = self.display()?;
+                self.qmp.pointer((x * k, y * k), size, None)?;
+                self.qmp.pointer((x * k, y * k), size, Some(true))?;
+                // In steps, as a hand moves: the compositor follows each.
+                const STEPS: i64 = 8;
+                for i in 1..=STEPS {
+                    let at = (
+                        (x + (x2 - x) * i / STEPS) * k,
+                        (y + (y2 - y) * i / STEPS) * k,
+                    );
+                    self.qmp.pointer(at, size, None)?;
+                    std::thread::sleep(KEY_INTERVAL);
+                }
+                self.qmp.pointer((x2 * k, y2 * k), size, Some(false))
+            }
             Step::Shot(name) => {
                 self.qmp.dump()?;
                 std::fs::create_dir_all("build/shots").map_err(|e| e.to_string())?;
@@ -635,6 +751,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             deadline,
             row: None,
             reader: reader(),
+            scale: Scale::ONE,
         };
         // A failure names its step, so that a script of a thousand says where.
         let r = steps.iter().enumerate().try_for_each(|(i, s)| {
@@ -691,6 +808,10 @@ mod tests {
         );
         assert!(parse("shot ../x\n").is_err());
         assert!(parse("shot\n").is_err());
+        assert_eq!(parse("click 3 4\n").unwrap(), [Step::Click(3, 4)]);
+        assert_eq!(parse("drag 1 2 3 4\n").unwrap(), [Step::Drag(1, 2, 3, 4)]);
+        assert!(parse("click 3\n").is_err());
+        assert!(parse("drag 1 2 3 x\n").is_err());
     }
 
     #[test]
@@ -719,7 +840,7 @@ mod tests {
         look.clear(&mut surface);
         term.render(&mut look, &mut surface, sw, true);
         let mut pixels = vec![0x0020_3040u32; w * h];
-        let (ox, oy) = zoraya_compositor::ORIGIN;
+        let (ox, oy) = zoraya_compositor::first_body(Scale::ONE);
         for y in 0..sh {
             for x in 0..sw {
                 pixels[(oy as usize + y) * w + ox as usize + x] = surface[y * sw + x];
