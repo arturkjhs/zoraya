@@ -243,6 +243,12 @@ protocol! {
         buttons: Flags<{ buttons::ALL }>,
     }
 
+    /// The active keyboard layout's name (ADR-0163: `us`, `ua`, `ru`,
+    /// `cz`), to the focused client when it gains focus and at every switch.
+    message Layout<'a> = 24, handles 0 {
+        name: Data<'a, 16>,
+    }
+
     /// Manager: a new client, with the compositor's end of its channel.
     message AddClient = 32, handles 1 {}
     message ManagerDone = 32, handles 0 {
@@ -276,7 +282,7 @@ protocol! {
 /// The ordinals a client may send.
 pub const CLIENT_REQUESTS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 8] = [16, 17, 18, 19, 20, 21, 22, 23];
+pub const CLIENT_EVENTS: [u32; 9] = [16, 17, 18, 19, 20, 21, 22, 23, 24];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 4] = [32, 33, 34, 35];
 /// What the compositor sends the manager unasked.

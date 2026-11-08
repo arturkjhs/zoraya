@@ -249,8 +249,10 @@ pub struct Compositor<P: Platform> {
     /// Keys whose press reached a client: their release reaches it too,
     /// even during a chord or the switcher (review 7b, 12).
     delivered: [u64; 8],
-    /// The keyboard layout's name in the bar (7c switches it).
-    layout: String,
+    /// The enabled keyboard layouts, indices of `zoraya_keymap::LAYOUTS`,
+    /// in switching order (ADR-0163: `gui.keyboard-layouts`, a setting from
+    /// 7f; `us ua cz` until then).
+    layouts: Vec<usize>,
     /// What changed on the screen this round.
     damage: Rect,
     /// Composed and not yet sent to the display driver.
@@ -316,7 +318,10 @@ impl<P: Platform> Compositor<P> {
             switcher_frame: Vec::new(),
             scene: false,
             delivered: [0; 8],
-            layout: String::from("US"),
+            layouts: ["us", "ua", "cz"]
+                .iter()
+                .filter_map(|n| zoraya_keymap::by_name(n))
+                .collect(),
             damage: Rect::default(),
             unflushed: Rect::default(),
             in_flight: None,
@@ -745,9 +750,18 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// A chord with the system key (ADR-0160): W closes, M minimises, Left
-    /// and Right tile; the others are reserved for later parts (Space for
-    /// 7c's layouts, Enter, R and ? for 7d) and reach no client either.
+    /// and Right tile, Space switches the keyboard layout (Shift: back,
+    /// ADR-0163); Enter, R and ? are reserved for 7d and reach no client
+    /// either.
     fn chord(&mut self, code_: u32) {
+        if code_ == code::SPACE {
+            let back = self.keymap.modifiers() & zoraya_keymap::SHIFT != 0;
+            let layouts = core::mem::take(&mut self.layouts);
+            self.keymap.switch(&layouts, back);
+            self.layouts = layouts;
+            self.layout_changed();
+            return;
+        }
         let Some(mut focus) = self.focus else { return };
         // A focused popup's chords are its window's.
         if let Some(i) = self.index(focus)
@@ -1310,12 +1324,46 @@ impl<P: Platform> Compositor<P> {
         self.dirty(&self.screen());
     }
 
+    /// The bar shows the new layout, and the focused client hears of it.
+    fn layout_changed(&mut self) {
+        let bar = Rect::new(
+            0,
+            0,
+            i64::from(self.width),
+            i64::from(space::BAR_HEIGHT.physical(self.scale)),
+        );
+        self.dirty(&bar);
+        if let Some(f) = self.focus {
+            self.send_layout(f.client);
+        }
+    }
+
+    fn send_layout(&mut self, client: usize) {
+        let name = self.keymap.layout().name;
+        let m = gui::Layout {
+            name: zoraya_protocol::Data(name.as_bytes()),
+        };
+        self.send_event_plain(client, &m);
+    }
+
+    /// The active layout's short name, for the bar.
+    pub fn layout_short(&self) -> &'static str {
+        self.keymap.layout().short
+    }
+
     fn set_focus(&mut self, key: Option<Key>) {
         if self.focus == key {
             return;
         }
         let old = self.focus;
         self.focus = key;
+        // A dead key typed into one window does not compose in the next.
+        self.keymap.clear_dead();
+        if let Some(k) = key
+            && old.is_none_or(|o| o.client != k.client)
+        {
+            self.send_layout(k.client);
+        }
         let f = self.frame();
         for (k, focused) in [(old, false), (key, true)] {
             let Some(k) = k else { continue };
