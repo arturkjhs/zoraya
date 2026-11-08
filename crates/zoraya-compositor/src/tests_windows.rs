@@ -1094,22 +1094,135 @@ fn a_release_reaches_the_client_that_saw_the_press() {
     assert!(keys_of(&s.f().take(a)).is_empty());
 }
 
-/// Review 7b, 13: a display of a new size reconfigures every toplevel.
+/// Mutation testing (7b): every clamp and side of a drag.
 #[test]
-fn a_new_display_size_reconfigures_the_windows() {
+fn drags_clamp_the_title_bar_and_resize_from_every_side() {
     let mut s = setup();
+    let (a, _, _) = s.toplevel(200, 100, 1);
+    s.f().take(a);
+    let title = |s: &Setup| {
+        let b = s.body(0, 1);
+        (b.x + 100, b.y - 18)
+    };
+    // Far left, held near its right end: at most all but two title
+    // heights off the screen.
+    let (tx, ty) = title(&s);
+    s.at(tx + 90, ty, Some(1));
+    s.at(0, ty, None);
+    s.at(0, ty, Some(0));
+    assert_eq!(s.body(0, 1).x, -200 + 72);
+    // Back to the middle, then far right, held just right of the buttons.
+    let b = s.body(0, 1);
+    s.at(b.x + 150, b.y - 18, Some(1));
+    s.at(300, b.y - 18, Some(0));
+    let b = s.body(0, 1);
+    s.at(b.x + 60, b.y - 18, Some(1));
+    s.at(i64::from(W) - 1, b.y - 18, Some(0));
+    assert_eq!(s.body(0, 1).x, i64::from(W) - 72);
+    // Far up: the title bar under the bar; far down: one row left.
+    let b = s.body(0, 1);
+    s.at(b.x + 60, b.y - 18, Some(1));
+    s.at(b.x + 60, 0, Some(0));
+    assert_eq!(s.body(0, 1).y, 28 + 36);
+    let b = s.body(0, 1);
+    s.at(b.x + 60, b.y - 18, Some(1));
+    s.at(b.x + 60, i64::from(H) - 1, Some(0));
+    assert_eq!(
+        s.body(0, 1).y,
+        i64::from(H) - 1,
+        "the title bar above the bottom edge"
+    );
+}
+
+#[test]
+fn resizes_from_the_left_and_the_top_and_down_to_one_pixel() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(200, 100, 1);
+    s.f().take(a);
+    let body = s.body(0, 1);
+    // The left grip by -30, the top grip by -20.
+    let o = s.outer(0, 1);
+    s.at(o.x + 1, o.y + 60, Some(1));
+    s.at(o.x - 29, o.y + 60, Some(0));
+    let b = s.body(0, 1);
+    assert_eq!(
+        (b.x, b.width, b.y, b.height),
+        (body.x - 30, body.width + 30, body.y, body.height)
+    );
+    let o = s.outer(0, 1);
+    s.at(o.x + 100, o.y + 1, Some(1));
+    s.at(o.x + 100, o.y - 9, Some(0));
+    let c = s.body(0, 1);
+    assert_eq!(
+        (c.y, c.height, c.x, c.width),
+        (b.y - 10, b.height + 10, b.x, b.width)
+    );
+    // Shrunk past nothing: one logical pixel at least.
+    let o = s.outer(0, 1);
+    s.at(o.right() - 2, o.bottom() - 2, Some(1));
+    s.at(0, 29, Some(0));
+    let d = s.body(0, 1);
+    assert_eq!((d.width, d.height), (1, 1));
+    let conf = configures(&s.f().take(a));
+    assert_eq!(
+        (conf.last().unwrap().width, conf.last().unwrap().height),
+        (1, 1)
+    );
+}
+
+#[test]
+fn a_resize_at_scale_two_keeps_whole_logical_pixels() {
+    let mut s = setup_with(|f| f.display_size = (2048, 1536));
     let (a, _, _) = s.toplevel(100, 50, 1);
     s.f().take(a);
-    s.f().display_size = (2048, 1536);
-    let d = s.f().channel(64);
-    let m = s.manager;
-    s.f().display = Some(d);
-    s.f().send(m, message(&gui::AttachDisplay {}, 9), vec![d]);
-    // The old driver is gone first.
-    s.c.step();
+    let o = s.outer(0, 1);
+    s.at(o.right() - 2, o.bottom() - 2, Some(1));
+    s.at(o.right() + 9, o.bottom() + 7, Some(0));
+    let b = s.body(0, 1);
+    assert_eq!((b.width % 2, b.height % 2), (0, 0));
     let c = configures(&s.f().take(a));
-    if let Some(c) = c.last() {
-        assert_eq!((c.width, c.height, c.scale), (100, 50, 2));
-        assert_eq!((s.body(0, 1).width, s.body(0, 1).height), (200, 100));
+    assert_eq!(
+        (c[0].width, c[0].height, c[0].scale),
+        (b.width as u32 / 2, b.height as u32 / 2, 2)
+    );
+}
+
+/// Review 7b, 13, and mutation testing: a display of a new size gives
+/// every toplevel its logical size at the new scale, configured.
+#[test]
+fn a_new_scale_doubles_every_toplevel_and_configures_each() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    let (b, _, _) = s.toplevel(60, 40, 2);
+    let (pa, pb) = (s.body(0, 1), s.body(1, 1));
+    s.f().take(a);
+    s.f().take(b);
+    // The display driver hangs and is dropped; one of twice the size
+    // attaches.
+    let old = s.f().display.unwrap();
+    s.f().display_dead = true;
+    s.commit_to(a, 1, 0, 0, 1, 1);
+    for _ in 0..4 {
+        if s.f().closed.contains(&old) {
+            break;
+        }
+        s.c.step();
+    }
+    assert!(s.f().closed.contains(&old));
+    s.f().display_dead = false;
+    s.f().display_size = (2048, 1536);
+    let d = s.f().channel(8);
+    assert_eq!(super::attach_display(&mut s, d), status::OK);
+    assert_eq!(s.c.scale(), zoraya_tokens::Scale::TWO);
+    for (end, client, p, (w, h)) in [(a, 0, pa, (100, 50)), (b, 1, pb, (60, 40))] {
+        let c = configures(&s.f().take(end));
+        let last = c.last().expect("a Configure");
+        assert_eq!((last.width, last.height, last.scale), (w, h, 2));
+        let now = s.body(client, 1);
+        assert_eq!(
+            (now.width, now.height),
+            (2 * i64::from(w), 2 * i64::from(h))
+        );
+        assert_eq!((now.x, now.y), (2 * p.x, 2 * p.y));
     }
 }
