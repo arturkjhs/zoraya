@@ -164,7 +164,7 @@ fn a_long_file_is_cut_at_a_line_and_reported() {
     while text.len() < crate::MAX_SIZE - 10 {
         text.push_str("# padding padding padding padding\n");
     }
-    text.push_str("wide +r /home/user/project/sub\n");
+    text.push_str("wide +r /srv/project/sub\n");
     let r = read(text.as_bytes());
     assert!(r.get("keep").is_some());
     assert!(r.get("wide").is_none(), "the cut line is not read");
