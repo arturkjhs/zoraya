@@ -100,3 +100,54 @@ every request but S2's, the value marks through globs and function calls, the bo
 the editor, history and captures, PSCI `SYSTEM_RESET` and its rights check, `Startup::decode`'s totality and handle
 bitmap, `zoraya_elf::section`, `Gather`, the reaping of POSIX pids when a line's job ends, and init's ordering of the
 shell's and the terminal's ends.
+
+### Mutation testing of the shell crates
+
+`make mutants-host` (cargo-mutants 27.1.0, under the watchdog, two mutants at once) on the four crates of the shell,
+whole. The first pass ran on the tree of the review (`453a796`), the second on the tree with S1 to S18 fixed and the
+first pass's tests (`15ae7f0`; `93bf692` for `zoraya-shell`, which adds S19). The `mutant-triage` subagent sorted the
+second pass's survivors of `zoraya-shell`; the main model rechecked every one called equivalent or unsure, and an
+`--iterate` run on `5d0d8db` (only the survivors and changed lines) is the judge.
+
+| Crate | First pass: missed of tested | Second pass: missed | Last run: missed, all equivalent |
+|---|---|---|---|
+| `zoraya-shell` | 327 of 1437 (953 caught, 17 timeouts, 140 unviable) | 65 of 1503 | 26 (`--iterate`, 382 run) |
+| `zoraya-describe` | 46 of 252 | 1 | 0 (rerun at `3498a4b`) |
+| `zoraya-command` | 15 of 124 | 1 | 1 |
+| `zoraya-commands` | 13 of 102 (3 timeouts) | 7 | 5 (rerun at `3498a4b`; 3 timeouts) |
+
+A timeout is a mutant the tests caught by never ending. The second pass of `zoraya-shell` first ran at 30 s a mutant:
+one test took 31 s because of S19. It was stopped, S19 fixed, and the crate run again. `make mutants-host` now takes
+its test timeout from the baseline (5 times it, at least 20 s) instead of a fixed 300 s, which had cost 5 minutes for
+each looping mutant.
+
+The equivalent mutants, each rechecked by the main model:
+
+- `zoraya-shell`, `grants.rs` `Access::rights` (14): `|` to `^`. Every operand is one distinct bit of
+  `zoraya_proto_file::rights`, so XOR and OR agree.
+- `editor.rs` `set_history` and `remember` `>` to `>=`: at the bound the cut is 0 and `drain(..0)` removes nothing.
+  `highlighted` `+` to `*` at 374: the arm is reached only at a byte that is no delimiter, so `end > at` and
+  `end.max(at + 1) == end.max(at)`. `key` `<` to `<=` at 726: the parameter string is compared only with one-byte
+  strings. `key` `&&` to `||` at 739: a decoded character with a lead byte of 0x80 or more is a control character
+  exactly in U+0080..U+009F. `complete` `==` to `!=` at 617: every candidate begins with the typed word (the
+  `Assist` contract, now stated, and what `zosh`'s completion does), so a common prefix that differs from the word is
+  longer than it.
+- `eval.rs` `variable` `>` to `>=` at 1290: index 0 is out of range either way, with the same message. `arguments`
+  `>` to `>=` at 1367: at index 0 there is no argument yet to be `set`. `element`'s guard `checked` to `true` at
+  1103: an unchecked element is a single-element pipeline whose result goes straight to `statement`, which raises
+  the same stop again (same record, name and flags, and since S21 the same `$status`).
+- `glob.rs` `matches` `+` to `*` at 114 and 115: the first re-enters the same `*` with the same state; the second
+  tries each position of the `*` once more and one step later, and reaches the same matches.
+- `syntax.rs` `comment` `+` to `*` at 326: the slice is trimmed, and the extra byte is the line end.
+- `zoraya-command`, `assign` `<` to `<=`: the count it guards is never above the required number there.
+- `zoraya-commands` (5): `Files::read_input`, `print` and `print_bytes` replaced by the default bodies themselves;
+  `emit_bytes` `&&` to `||` and `!` deleted at 183: `cat`, its only caller, never writes text output, so `o.out` is
+  empty there and the mutants can only print nothing.
+
+What the holes were, by kind, and what kills them: bounds tested only by name (`MAX_SIZE`, `MAX_VALUES` in one word,
+`math`'s 4096 tokens, the editor's `MAX_CHARS` and 256 continuation lines), arithmetic on the editor's rows and
+columns at a narrow width and on a listing's wraps, the editor's fast path for a typed character, loop counters
+after an interrupt, `.` steps toward the glob depth bound, `merge`'s folding, an option word after `grants`, `""`
+as a word, `io.terminal` for a builtin, and the address test of `value_of`, now `within` and tested with slices of
+one string. Three survivors were bugs, not holes: S18 (marks lost through parameters), S20 (`rm --recursive .`) and
+S21 (`$status` after an interrupted loop); S19 was found through the run's own slowness.

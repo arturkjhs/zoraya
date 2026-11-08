@@ -1621,3 +1621,21 @@ fn quoted_text_is_one_part() {
     assert_eq!(second_word_parts("echo 'x'\\y"), [Quoted("xy".into())]);
     assert_eq!(second_word_parts("echo \"\""), [Quoted(String::new())]);
 }
+
+/// A function that fails at the start of a pipeline stops its own body;
+/// the pipeline, which fails when any element fails (ADR-0151 rule 4),
+/// runs its programs and then stops the line.
+#[test]
+fn a_failing_function_stops_its_pipeline() {
+    let mut sh = shell();
+    run(&mut sh, "fn f { fail; echo x }");
+    let before = sh.host.runs.len();
+    let out = run(&mut sh, "f | ok; echo after");
+    let names: Vec<&str> = sh.host.runs[before..]
+        .iter()
+        .map(|r| r.0.as_str())
+        .collect();
+    assert_eq!(names, ["fail", "ok"], "{out:?}");
+    assert!(!out.contains("x\n"), "the body stopped: {out:?}");
+    assert!(!out.contains("after"), "{out:?}");
+}
