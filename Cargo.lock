@@ -535,6 +535,7 @@ dependencies = [
  "zoraya-text",
  "zoraya-tokens",
  "zoraya-tty",
+ "zoraya-ui",
  "zoraya-virtio",
  "zoraya-virtio-gpu",
  "zoraya-virtio-input",

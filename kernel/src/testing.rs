@@ -2110,10 +2110,7 @@ fn image_is_mapped_once() {
     let mut once = [0u64; WORDS];
     let mut twice = [0u64; WORDS];
     let size = (image.end - image.start) / PAGE_SIZE;
-    assert!(
-        size as usize <= WORDS * 64,
-        "image too large for the test"
-    );
+    assert!(size as usize <= WORDS * 64, "image too large for the test");
     paging::for_each_mapping(&mut |m| {
         // A mapping may be a block that overlaps the image only in part.
         let mut at = m.pa.max(image.start);
@@ -2127,10 +2124,7 @@ fn image_is_mapped_once() {
             at += PAGE_SIZE;
         }
     });
-    assert!(
-        twice.iter().all(|w| *w == 0),
-        "an image frame mapped twice"
-    );
+    assert!(twice.iter().all(|w| *w == 0), "an image frame mapped twice");
     assert!(once.iter().any(|w| *w != 0));
     expect_data_abort(
         read_at,

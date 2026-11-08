@@ -31,6 +31,7 @@ zoraya-proto-term = { path = "../crates/zoraya-proto-term" }
 zoraya-compositor = { path = "../crates/zoraya-compositor" }
 zoraya-keymap = { path = "../crates/zoraya-keymap" }
 zoraya-tokens = { path = "../crates/zoraya-tokens" }
+zoraya-ui = { path = "../crates/zoraya-ui" }
 zoraya-text = { path = "../crates/zoraya-text" }
 zoraya-fonts = { path = "../crates/zoraya-fonts" }
 zoraya-term = { path = "../crates/zoraya-term" }
