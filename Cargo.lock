@@ -470,6 +470,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-ui"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fonts",
+ "zoraya-paint",
+ "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
+]
+
+[[package]]
 name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
