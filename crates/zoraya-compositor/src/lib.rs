@@ -22,6 +22,7 @@
 extern crate alloc;
 
 mod draw;
+pub mod fields;
 pub mod rect;
 pub mod window;
 
@@ -2312,6 +2313,8 @@ extern crate std;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_fields;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

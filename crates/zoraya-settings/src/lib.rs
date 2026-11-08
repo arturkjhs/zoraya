@@ -64,7 +64,7 @@ fn parse_line(text: &str) -> Line<'_> {
 
 /// The lines of `bytes`, each as text if it is UTF-8 without control
 /// characters, with its number from 1.
-fn lines(bytes: &[u8]) -> impl Iterator<Item = (usize, Result<&str, &'static str>)> {
+pub(crate) fn lines(bytes: &[u8]) -> impl Iterator<Item = (usize, Result<&str, &'static str>)> {
     bytes.split(|b| *b == b'\n').enumerate().map(|(i, raw)| {
         let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
         let text = match core::str::from_utf8(raw) {
@@ -282,8 +282,12 @@ fn distance(a: &str, b: &str) -> usize {
     row[b.len()]
 }
 
+pub mod rooms;
+
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_rooms;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

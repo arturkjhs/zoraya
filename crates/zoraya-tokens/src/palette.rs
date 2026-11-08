@@ -101,6 +101,20 @@ pub struct Palette {
     pub term_white: Color,
 }
 
+impl Palette {
+    /// A room's colour (ADR-0172 point 7): slot 1 to 4 for a trusted room,
+    /// anything else (0) for the untrusted one.
+    pub const fn room(&self, slot: u8) -> Color {
+        match slot {
+            1 => self.room_1,
+            2 => self.room_2,
+            3 => self.room_3,
+            4 => self.room_4,
+            _ => self.room_untrusted,
+        }
+    }
+}
+
 /// The light set.
 pub const LIGHT: Palette = Palette {
     wallpaper_a: color(Set::Light, "wallpaper.a"),
