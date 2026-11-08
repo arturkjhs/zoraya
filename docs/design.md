@@ -964,7 +964,8 @@ prints only its result. Exit 0 is success, 1 a failure or a question's "no", 2 a
 lists them; a writer whose reader has gone exits 0. A command reads its arguments only through `zoraya-command`
 (INV-0155-2, `make check-argv`), and a description that designates paths is authority: only the system image's
 designate (ADR-0153's Decision). Builtins are the commands that act on the shell itself (`cd`, `set`, `jobs`, ...)
-and `sync`; the file commands are programs in the ramdisk.
+and `sync`; the file commands are programs in the ramdisk. `rm` refuses a path that ends in `.` or `..`, or is
+`/`, with or without `--recursive`: the directory is named by itself (TASK-18 review S20).
 
 ## Known limitations
 
