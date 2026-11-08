@@ -53,6 +53,85 @@ fn every_message_round_trips_and_decodes_totally() {
         dropped: 0,
         focused: true,
     });
+    total(DisplayScale {});
+    total(DisplayScaleReply {
+        status: ok,
+        width: 1024,
+        height: 768,
+        scale: 2,
+    });
+    total(CreateToplevel {
+        width: 640,
+        height: 480,
+    });
+    total(Created { status: ok, window: 3 });
+    total(CreatePopup {
+        parent: 1,
+        x: 10,
+        y: 20,
+        width: 100,
+        height: 50,
+    });
+    total(PopupCreated { status: ok, window: 4 });
+    total(CommitTo {
+        window: 1,
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+    });
+    total(CommitDone { status: ok });
+    total(SetBuffer {
+        window: 1,
+        width: 10,
+        height: 10,
+    });
+    total(BufferDone { status: ok });
+    let title = SetTitle {
+        window: 1,
+        text: zoraya_protocol::Data("zosh — ~/проект".as_bytes()),
+    };
+    let mut out = [0; 512];
+    let length = encode(&title, 1, &mut out).unwrap();
+    let (_, back) = decode::<SetTitle<'_>>(&out[..length], 0).unwrap();
+    assert_eq!(back, title);
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<SetTitle<'_>>(bytes, 0);
+    });
+    let long = [b'x'; MAX_TITLE + 1];
+    let too_long = SetTitle {
+        window: 1,
+        text: zoraya_protocol::Data(&long),
+    };
+    assert!(encode(&too_long, 1, &mut out).is_err());
+    total(TitleDone { status: ok });
+    total(Close { window: 1 });
+    total(CloseDone { status: ok });
+    total(Configure {
+        window: 1,
+        width: 640,
+        height: 480,
+        scale: 1,
+        dark: false,
+        motion: false,
+    });
+    total(CloseRequested { window: 1 });
+    total(Minimised {
+        window: 1,
+        hidden: true,
+    });
+    total(WindowFocus {
+        dropped: 0,
+        window: 1,
+        focused: true,
+    });
+    total(WindowPointer {
+        dropped: 2,
+        window: 1,
+        x: 3,
+        y: 4,
+        buttons: Flags(buttons::RIGHT),
+    });
     total(AddClient {});
     total(ManagerDone { status: ok });
     total(AttachDisplay {});

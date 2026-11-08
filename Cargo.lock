@@ -247,6 +247,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-paint"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
+]
+
+[[package]]
 name = "zoraya-pmm"
 version = "0.1.0"
 dependencies = [
