@@ -66,12 +66,14 @@ screen звіт-2026.txt
 screen ~> _
 type cat /texts/uk/
 key tab
+window
 prefix ~> cat /texts/uk/звіт-2026.txt
 type \r
 screen Привіт, світе! Ґанок, їжак, єнот.
 screen ~> _
 type cat /texts/cz/
 key tab
+window
 prefix ~> cat /texts/cz/příklad.txt
 type \r
 screen Příliš žluťoučký kůň úpěl ďábelské ódy.
