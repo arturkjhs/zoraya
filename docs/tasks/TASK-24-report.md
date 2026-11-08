@@ -227,7 +227,7 @@ In `docs/research/desktop/shots/7b/` (864 KB):
 | File | What | Against the mockup |
 |---|---|---|
 | `desktop-qemu.png` | The desktop in QEMU at scale 1 (HVF; the TCG dump is byte for byte the same): the bar, the wallpaper, the terminal's frame and shadow. | `clear-field/terminal.png` and `desktop.png`: the same bar, wallpaper, title bar, buttons, corners and shadow. Not yet: the dock and the room chips (7d), the room badge, tints and grant pills (7d), the clock (no wall clock), the wider window. |
-| `desktop-qemu@2x.png` | The same at scale 2 (2048 × 1536). | `desktop@2x.png`: every frame dimension and glyph at twice the size, read back as the same text by the GUI test (INV-0164-2). |
+| `desktop-qemu-2x.png` | The same at scale 2 (2048 × 1536). | The mockup's `desktop` screen at 2x: every frame dimension and glyph at twice the size, read back as the same text by the GUI test (INV-0164-2). |
 | `windows-light.png`, `windows-dark.png` | Two windows of the real compositor on the host (an ignored test, `samples`), focused and not, both sets. | The focused window's coloured buttons and stronger shadow against the other's grey ones, as `desktop.png` draws them. |
 | `switcher-light.png`, `switcher-dark.png` | The switcher open over them, both sets. | `switcher.png`: the material with its halo, the group line, a row per window with its own pixels shrunk and the chosen one highlighted. The mockup's two rooms and their badges come with 7d. |
 
