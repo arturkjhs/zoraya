@@ -282,7 +282,8 @@ impl<F: Files> Run<'_, F> {
         self.files.remove(path)
     }
 
-    /// `path`'s kind as its directory lists it, a link not followed.
+    /// `path`'s kind as its directory lists it, a link not followed. `rm`
+    /// has refused a path whose last step is empty, `.` or `..`.
     fn kind_unfollowed(&mut self, path: &str) -> Result<Kind, Status> {
         let trimmed = path.trim_end_matches('/');
         let (dir, name) = match trimmed.rsplit_once('/') {
@@ -290,9 +291,6 @@ impl<F: Files> Run<'_, F> {
             Some((d, n)) => (d, n),
             None => (".", trimmed),
         };
-        if name.is_empty() || name == "." || name == ".." {
-            return Ok(self.files.stat(path)?.kind);
-        }
         match self.files.list(dir) {
             Ok(list) => match list.into_iter().find(|(n, _)| n == name) {
                 Some((_, kind)) => Ok(kind),
@@ -301,6 +299,12 @@ impl<F: Files> Run<'_, F> {
             Err(_) => Ok(self.files.stat(path)?.kind),
         }
     }
+}
+
+/// The last step of `path`, trailing slashes dropped: `""` for the root.
+fn last_step(path: &str) -> &str {
+    let trimmed = path.trim_end_matches('/');
+    trimmed.rsplit_once('/').map_or(trimmed, |(_, n)| n)
 }
 
 /// Runs command `name` with its parsed arguments; gives its exit code and
@@ -385,6 +389,20 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
         "rm" => {
             let recursive = p.flag(d, "recursive");
             for path in p.operand_values(d, "PATH") {
+                // A path that ends in `.` or `..`, or is the root, names a
+                // directory only through another: `rm --recursive .` would
+                // empty the working directory (review S20). POSIX refuses
+                // these too.
+                if matches!(last_step(path), "" | "." | "..") {
+                    r.o.err.push_str(&error(
+                        r.name,
+                        Some(path),
+                        "a path that ends in . or .., or is /, is not removed",
+                        &["name the directory itself, as in rm --recursive NAME"],
+                    ));
+                    r.failed = true;
+                    continue;
+                }
                 let result = if recursive {
                     r.remove_tree(path, 0)
                 } else {

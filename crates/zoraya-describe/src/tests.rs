@@ -513,3 +513,15 @@ fn a_when_names_a_short_option_by_its_letter() {
         "when names an option the description lacks"
     );
 }
+
+/// Mutation testing: `MAX_SIZE` leaves room for a long page (the largest
+/// shipped description is under 1 KiB; one of 4 KiB is accepted).
+#[test]
+fn a_long_page_fits() {
+    let mut text = String::from("name x\nsummary s\nusage x\n---\n");
+    while text.len() < 4096 {
+        text.push_str(&"a".repeat(99));
+        text.push('\n');
+    }
+    assert!(parse(text.as_bytes()).is_ok());
+}

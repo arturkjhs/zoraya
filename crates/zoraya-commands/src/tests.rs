@@ -732,3 +732,30 @@ fn heads_count_is_not_negative() {
     assert_eq!(code, zoraya_command::exit::USAGE, "{out:?} {err:?}");
     assert!(err.contains("is not a count"), "{err:?}");
 }
+
+/// Review S20: `rm` refuses a path that ends in `.` or `..`, or is the
+/// root, with or without `--recursive`, and removes nothing.
+#[test]
+fn rm_refuses_dot_dot_dot_and_the_root() {
+    for path in [".", "..", "/", "t/.", "t/..", "t/./", "./"] {
+        for line in [vec!["rm", "--recursive", path], vec!["rm", path]] {
+            let mut m = Mem::new(&[("t/a.txt", "a"), ("b.txt", "b")], &["t"]);
+            let (code, _, err) = go(&mut m, &line);
+            assert_eq!(code, 1, "{line:?}");
+            assert!(
+                err.starts_with(&format!(
+                    "rm: {path}: a path that ends in . or .., or is /, is not removed\n"
+                )) && err.contains("hint: name the directory itself"),
+                "{line:?}: {err:?}"
+            );
+            assert!(
+                m.files.contains_key("t/a.txt") && m.files.contains_key("b.txt"),
+                "{line:?} removed nothing"
+            );
+        }
+    }
+    // A name that only starts with a dot is a name.
+    let mut m = Mem::new(&[(".hidden", "h"), ("t/..x", "x")], &["t"]);
+    assert_eq!(go(&mut m, &["rm", ".hidden", "t/..x"]).0, 0);
+    assert!(m.files.is_empty());
+}
