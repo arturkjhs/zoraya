@@ -41,6 +41,7 @@ window
 screen   pwd       print the current directory
 screen   reboot    start the machine again
 screen   rm        remove files
+screen   room      list, enter, make or remove rooms
 screen   search    find lines that contain text
 screen   set       set a variable
 screen   settings  show or change settings

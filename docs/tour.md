@@ -52,6 +52,7 @@ Commands:
   pwd       print the current directory
   reboot    start the machine again
   rm        remove files
+  room      list, enter, make or remove rooms
   search    find lines that contain text
   set       set a variable
   settings  show or change settings

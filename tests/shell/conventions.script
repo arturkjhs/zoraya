@@ -218,6 +218,33 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> room --help\r
+< \r\nroom: list, enter, make or remove rooms
+^ \r\nusage: room
+^ \r\n       room NAME
+^ \r\n       room --leave
+^ \r\n       room new NAME GRANT...
+^ \r\n       room remove NAME
+^ \r\n  --leave       go back to home
+^ \r\n  --untrusted   with new: an untrusted room (refused until quotas, ADR-0056)
+^ \r\n  --help        show this help
+^ \r\nmore: help room
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> room --no-such-option\r
+< \r\nroom: --no-such-option: no such option
+^ \r\nusage: room
+^ \r\n       room NAME
+^ \r\n       room --leave
+^ \r\n       room new NAME GRANT...
+^ \r\n       room remove NAME
+^ \r\nmore: help room
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > settings --help\r
 < \r\nsettings: show or change settings
 ^ \r\nusage: settings [--all]
