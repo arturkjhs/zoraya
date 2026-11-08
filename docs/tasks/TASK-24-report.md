@@ -73,11 +73,30 @@ of it and of both real fonts, drawn against a guard border) runs in `make test-u
 
 ### Screens
 
-MEASURE_SCREENS
+In `docs/research/desktop/shots/7a/` (108 KB), all at scale 1:
+
+| File | What | Against the mockup |
+|---|---|---|
+| `terminal-qemu.png` | The whole display after `tests/gui/terminal.script`'s Ukrainian and Czech steps, a QEMU screendump (`make test-gui`, HVF; the TCG dump is byte for byte the same). | `clear-field/terminal.png`: the same type (JetBrains Mono at 13 px), the same 8 × 18 cell and 14-pixel inset, `term.bg` and `term.fg`. Not yet: the frame, title bar, room tint and grant pills (7b, 7d), the bar and the dock (7b, 7d), the wallpaper (7b), and the wider window (107 columns in the mockup; 80 here until 7b's `Configure`). The background and the one-pixel frame are stage 5's in the tokens' `bg.desktop` and `accent`. |
+| `terminal-qemu-text.png` | The terminal's surface alone, cut from the same dump. | Glyph for glyph as the mockup draws its terminal: same rasterising model (8-bit coverage, no hinting, whole-pixel origins), the system's in fixed point where the tool's is `f32`, so single pixels of coverage can differ by one level. |
+| `terminal-host-light.png`, `terminal-host-dark.png` | The terminal in both sets, rendered on the host by the same crates (`cargo test -p zoraya-term -- --ignored samples`): red, green, blue, magenta, bold, faint, the cursor. The dark set cannot be shown in QEMU before 7f's settings. | The dark set's `term.*` colours as in `terminal-dark.png`; the prompt colours of the mockup (the room-coloured `project ~/project>`) are the shell's, not yet built. |
+| `text-sample.png` | Inter at 13 and 20 px and JetBrains Mono at 13 and 26 px with Ukrainian and Czech text and the box glyph, from `zoraya-text` on the host. | The mockups' fonts at the token sizes. |
+
 
 ### Measurements
 
-MEASURE_TABLE
+| | Host (M4, release) | HVF (debug, test kernel) | TCG (debug, test kernel) |
+|---|---|---|---|
+| A full 80 × 24 grid of Cyrillic, empty glyph cache | 0.52 ms | 0.47 to 0.57 ms | 4.5 to 4.6 ms |
+| The same from the cache | 0.30 ms | 0.36 to 0.44 ms | 3.7 to 3.8 ms |
+| Cache after two grids | 64 misses, 3,776 hits | the same | the same |
+
+From `t_text` in every `test-qemu` configuration of one `make test` (three HVF, four TCG) and `zoraya-text`'s
+`grid_cost` on the host. The rasteriser is fast enough and deterministic under TCG (the reference digests match
+in every configuration, and the HVF and TCG screendumps are identical), so no proposed ADR and no conservative path
+was needed. Kerning: Inter keeps its kerning in GPOS only and JetBrains Mono has none, so `kern` format 0 kerns
+nothing in the system's fonts (ADR-0162's open question; GPOS pair adjustment would be a later addition).
+
 
 ### Invariants
 
@@ -94,7 +113,10 @@ MEASURE_TABLE
 
 ### Review
 
-MEASURE_REVIEW
+`docs/tasks/TASK-24-review-7a.md`: 4 errors (three panics on hostile fonts and sizes, reproduced by the reviewer;
+one invariant status that claimed too much), 5 warnings, 4 notes. All fixed in `831a350`, with tests; the check of the
+changed lines found no open error. One more round was not needed.
+
 
 ### Mutation testing
 
@@ -110,4 +132,19 @@ MEASURE_TIME
 
 ## To finish by hand
 
-MEASURE_FINISH
+`git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,
+for each part that is complete:
+
+```
+git push -u origin work/7a
+# merge as TASK-24 says: from a detached HEAD at origin/main
+git fetch origin && git switch --detach origin/main
+git merge --no-ff work/7a -m "Merge work/7a: stage 7a, tokens and text (TASK-24)"
+git push origin HEAD:main          # then wait for every CI job
+git tag stage-7a && git push origin refs/tags/stage-7a
+```
+
+To try the desktop by hand: `make run-gui`; the window shows the terminal in JetBrains Mono. `ls /texts/uk`, `cat
+/texts/uk/` then Tab and Enter, and the same for `/texts/cz/`, show Ukrainian and Czech text; Shift with Page Up
+scrolls back.
+

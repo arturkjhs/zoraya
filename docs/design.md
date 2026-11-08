@@ -446,9 +446,13 @@ test kernel, one CPU), with an empty glyph cache and then from it.
 
 | | Host (M4, release) | HVF (debug) | TCG (debug) |
 |---|---|---|---|
-| Grid, empty cache | MEASURE_HOST_COLD | MEASURE_HVF_COLD | MEASURE_TCG_COLD |
-| Grid, from the cache | MEASURE_HOST_WARM | MEASURE_HVF_WARM | MEASURE_TCG_WARM |
-| Cache after two grids | 64 misses, 3,776 hits | MEASURE_HVF_CACHE | MEASURE_TCG_CACHE |
+| Grid, empty cache | 0.52 ms | 0.47 to 0.57 ms | 4.5 to 4.6 ms |
+| Grid, from the cache | 0.30 ms | 0.36 to 0.44 ms | 3.7 to 3.8 ms |
+| Cache after two grids | 64 misses, 3,776 hits | 64 misses, 3,776 hits | 64 misses, 3,776 hits |
+
+The ranges are the three HVF and four TCG configurations of one `make test` (2026-11-08). Rasterising costs little
+next to drawing: the 64 misses add about a fifth to the first grid. The screens of `make test-gui` under HVF and TCG
+are byte for byte the same (`build/shots/`).
 
 ## Cross toolchain and ports (as built)
 
