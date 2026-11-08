@@ -509,6 +509,9 @@ fn a_resize_keeps_what_fits_and_the_cursor_on_screen() {
     let mut pixels = vec![0u32; w * h];
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     assert_eq!(read_rows(&pixels, w, h, 6, 3)[0], "ok_");
+}
+
+#[test]
 fn clear_fills_the_whole_surface_with_the_background() {
     let look = look();
     let mut pixels = vec![0x00ab_cdefu32; 50 * 40];
