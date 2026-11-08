@@ -26,8 +26,8 @@ chord meta spc
 chord meta spc
 chord meta spc
 type ls /texts\r
-screen cz
-screen uk
+screen cz/
+screen uk/
 screen ~> _
 type poweroff\r
 exit
