@@ -163,7 +163,7 @@ impl Output {
         }
         if self.shown < HEAD {
             self.shown += 1;
-            println!("[{}] {text}", self.label);
+            say!("[{}] {text}", self.label);
         } else {
             self.tail.push_back(text);
             if self.tail.len() > TAIL {
@@ -217,7 +217,7 @@ impl Output {
             return;
         }
         if self.skipped > 0 {
-            println!(
+            say!(
                 "[{}] ... {} lines skipped; the whole output is in {}",
                 self.label,
                 self.skipped,
@@ -225,7 +225,7 @@ impl Output {
             );
         }
         for line in self.tail.drain(..) {
-            println!("[{}] {line}", self.label);
+            say!("[{}] {line}", self.label);
         }
     }
 }

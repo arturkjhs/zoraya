@@ -497,17 +497,17 @@ pub fn run(file: &str, label: &str, timeout: u64, command: &[String]) -> ExitCod
     {
         Ok(steps) => steps,
         Err(e) => {
-            eprintln!("[{label}] {file}: {e}");
+            esay!("[{label}] {file}: {e}");
             return ExitCode::FAILURE;
         }
     };
     match play(&steps, timeout, command, label) {
         Ok(()) => {
-            println!("[{label}] PASS: {} steps", steps.len());
+            say!("[{label}] PASS: {} steps", steps.len());
             ExitCode::SUCCESS
         }
         Err(e) => {
-            println!("[{label}] FAIL: {e}");
+            say!("[{label}] FAIL: {e}");
             ExitCode::FAILURE
         }
     }

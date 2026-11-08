@@ -483,7 +483,7 @@ impl Run {
                 }
                 idle.sort();
                 let ms = |d: &Duration| d.as_secs_f64() * 1000.0;
-                println!(
+                say!(
                     "[{}] measure: key to screendump {n} keys: min {:.1} ms, median {:.1} ms, max {:.1} ms; one screendump read alone {:.1} ms",
                     self.label,
                     ms(&times[0]),
@@ -533,7 +533,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     {
         Ok(steps) => steps,
         Err(e) => {
-            eprintln!("[{label}] {file}: {e}");
+            esay!("[{label}] {file}: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -547,7 +547,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[{label}] cannot start {}: {e}", command[0]);
+            esay!("[{label}] cannot start {}: {e}", command[0]);
             return ExitCode::FAILURE;
         }
     };
@@ -597,11 +597,11 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     let _ = std::fs::remove_file(qmp);
     match result {
         Ok(()) => {
-            println!("[{label}] PASS: {} steps", steps.len());
+            say!("[{label}] PASS: {} steps", steps.len());
             ExitCode::SUCCESS
         }
         Err(e) => {
-            println!("[{label}] FAIL: {e}");
+            say!("[{label}] FAIL: {e}");
             ExitCode::FAILURE
         }
     }

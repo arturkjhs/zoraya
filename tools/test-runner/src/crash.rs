@@ -10,6 +10,9 @@
 //! not lose or reorder writes that were not flushed. Host tests of `zoraya-fs`
 //! do that, at every step, against a simulated device.
 
+#[macro_use]
+#[path = "say.rs"]
+mod say;
 #[allow(dead_code)] // Reason: the crash test uses only the buffer bounds of the module.
 #[path = "output.rs"]
 mod output;
@@ -224,7 +227,7 @@ fn round(kernel: &str, image: &str, delay: Duration, totals: &mut Totals) -> Res
     if found > durable + 1 {
         totals.past_durable += 1;
     }
-    println!(
+    say!(
         "round {}: killed after {} ms, {} durable, {found} found",
         totals.rounds,
         delay.as_millis(),
@@ -250,7 +253,7 @@ fn without_sync(kernel: &str, image: &str) -> Result<(), String> {
     guest.expect(PROMPT)?;
     guest.power_off()?;
     fsck(image)?;
-    println!("no sync: durable after {} s", COMMITTED.as_secs());
+    say!("no sync: durable after {} s", COMMITTED.as_secs());
     Ok(())
 }
 
@@ -283,7 +286,7 @@ fn parse() -> Result<(u32, u64, String, String), String> {
 
 fn all() -> Result<(), String> {
     let (rounds, seed, kernel, image) = parse()?;
-    println!("seed {seed}");
+    say!("seed {seed}");
     let mut state = seed;
     let mut totals = Totals {
         rounds: 0,
@@ -295,7 +298,7 @@ fn all() -> Result<(), String> {
         let delay = Duration::from_millis(next(&mut state) % 2000);
         round(&kernel, &image, delay, &mut totals)?;
     }
-    println!(
+    say!(
         "crash test: {} rounds, all clean; {} durable files all intact; {} rounds with files past the last sync",
         totals.rounds, totals.durable_files, totals.past_durable
     );
@@ -306,7 +309,7 @@ fn main() -> ExitCode {
     match all() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("zoraya-crash-test: {e}");
+            esay!("zoraya-crash-test: {e}");
             ExitCode::FAILURE
         }
     }
