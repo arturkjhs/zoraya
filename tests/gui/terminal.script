@@ -76,6 +76,8 @@ prefix ~> cat /texts/cz/příklad.txt
 type \r
 screen Příliš žluťoučký kůň úpěl ďábelské ódy.
 screen ~> _
+# The screen of TASK-24's report (docs/research/desktop/shots/7a/).
+shot terminal-text
 # exit closes the window, and init opens a new one with a new shell, since it
 # was the last (ADR-0155's Decision, INV-0155-5).
 type exit\r
