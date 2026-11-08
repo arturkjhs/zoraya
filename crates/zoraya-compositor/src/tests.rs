@@ -1606,3 +1606,6 @@ fn a_display_driver_whose_queue_stays_full_is_hung() {
             .any(|r| decode::<gui::DisplayHung>(r, 0).is_ok())
     );
 }
+
+#[path = "tests_windows.rs"]
+mod windows;

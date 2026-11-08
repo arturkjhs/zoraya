@@ -99,7 +99,16 @@ impl<P: Platform> Compositor<P> {
         let mut c = Canvas::new(&mut pixels[..width * height], width);
         c.set_clip(prect(r));
         c.image(wallpaper, width, 0, 0, None);
-        // The bar: the blurred wallpaper under it, tinted, with its light.
+        for w in windows.iter().filter(|w| !w.hidden) {
+            let focused = *focus
+                == Some(crate::Key {
+                    client: w.client,
+                    id: w.id,
+                });
+            draw_window(&mut c, w, &f, scale.factor(), focused, p, title_text);
+        }
+        // The bar, above every window (INV-0160-7): the blurred wallpaper
+        // under it, tinted, with its light.
         let bar = space::BAR_HEIGHT.physical(scale) as i32;
         let bar_rect = paint::Rect::new(0, 0, width as i32, bar);
         if !bar_rect.intersect(&c.clip).is_empty() {
@@ -128,14 +137,6 @@ impl<P: Platform> Compositor<P> {
                 baseline,
                 p.fg_text,
             );
-        }
-        for w in windows.iter().filter(|w| !w.hidden) {
-            let focused = *focus
-                == Some(crate::Key {
-                    client: w.client,
-                    id: w.id,
-                });
-            draw_window(&mut c, w, &f, scale.factor(), focused, p, title_text);
         }
         if let Some(s) = switcher.as_ref() {
             draw_switcher(&mut c, s, windows, scale.factor(), p, ui, title_text);
