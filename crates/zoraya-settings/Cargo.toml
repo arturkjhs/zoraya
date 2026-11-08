@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-settings"
+description = "The settings file (/config/settings, ADR-0157): a total reader and a writer that keeps every other line."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-describe = { path = "../zoraya-describe" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

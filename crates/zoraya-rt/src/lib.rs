@@ -21,6 +21,7 @@ use zoraya_abi::{
     Mode, OBJECT_TYPES, Opaque, Out, Packet, PacketBuffer, PathBuffer, RangeIndex, RequestKind,
     Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, request_from_value, stubs,
 };
+use zoraya_abi::{DEADLINE_INFINITE, STREAM_ATOMIC, native, stream_signals};
 
 const MAX_MESSAGE_HANDLES: usize = 64;
 
@@ -61,7 +62,17 @@ unsafe extern "Rust" {
 #[cfg(feature = "entry")]
 #[unsafe(no_mangle)]
 extern "C" fn __user_main() -> ! {
+    learn_streams();
     process_exit(main())
+}
+
+/// Asks, before `main` runs, whether the streams' slots hold streams: then
+/// the table holds only what the spawn placed, so a handle the program
+/// makes later at one of those slots is never taken for one (review K8).
+pub fn learn_streams() {
+    let _ = stream_at(0, native::slot::OUT);
+    let _ = stream_at(1, native::slot::ERR);
+    let _ = stream_at(2, native::slot::IN);
 }
 
 /// The system calls this process made since the last [`take_syscalls`]
@@ -262,6 +273,15 @@ pub fn directory_entry(directory: Handle, cookie: u64, entry: &mut [u8]) -> Resu
 /// Turns the machine off. It returns only on a refusal.
 pub fn power_off(power: Handle) -> Status {
     match stubs::power_off::<Svc>(power) {
+        Ok(_) => Status::Ok,
+        Err(status) => status,
+    }
+}
+
+/// Resets the machine (ADR-0159): returns only with why it did not,
+/// `NotSupported` when the platform has no reset.
+pub fn power_reset(power: Handle) -> Status {
+    match stubs::power_reset::<Svc>(power) {
         Ok(_) => Status::Ok,
         Err(status) => status,
     }
@@ -519,12 +539,189 @@ impl fmt::Write for Console {
     }
 }
 
-/// Prints to the console, with no newline.
+/// Whether the process holds its stream at `slot` (the write end of `OUT`
+/// and `ERR`, the read end of `IN`): 0 unknown, 1 no, 2 yes. Asked once per
+/// slot, before `main` with the `entry` feature.
+static STREAM_AT: [core::sync::atomic::AtomicU8; 3] = [
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+    core::sync::atomic::AtomicU8::new(0),
+];
+
+fn stream_at(which: usize, slot: Handle) -> bool {
+    use core::sync::atomic::Ordering;
+    match STREAM_AT[which].load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let kind = if which == 2 {
+                "stream-read"
+            } else {
+                "stream-write"
+            };
+            let yes = handle_type(slot) == Ok(kind);
+            STREAM_AT[which].store(if yes { 2 } else { 1 }, Ordering::Relaxed);
+            yes
+        }
+    }
+}
+
+/// Writes all of `bytes` to a stream, waiting while it is full (ADR-0101).
+fn stream_write_all(end: Handle, mut bytes: &[u8]) -> Result<(), Status> {
+    while !bytes.is_empty() {
+        let chunk = &bytes[..bytes.len().min(STREAM_ATOMIC)];
+        match stream_write(end, chunk) {
+            Ok(n) => bytes = &bytes[n..],
+            Err(Status::WouldBlock) => {
+                wait_for(end, stream_signals::WRITABLE | stream_signals::PEER_CLOSED)?
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// The command's output (ADR-0152 rule 1): the `OUT` stream when `zosh`
+/// gave one, else the console. A reader that has gone ends the program
+/// quietly with 0 (ADR-0155 rule 6, INV-0155-4).
+pub struct Output;
+
+impl fmt::Write for Output {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if !stream_at(0, native::slot::OUT) {
+            return Console.write_str(s);
+        }
+        match stream_write_all(native::slot::OUT, s.as_bytes()) {
+            Ok(()) => Ok(()),
+            Err(Status::PeerClosed) => process_exit(0),
+            Err(_) => Err(fmt::Error),
+        }
+    }
+}
+
+/// Writes bytes to the command's output as they are (ADR-0155's note on
+/// R9): the `OUT` stream, else the console. A reader that has gone ends the
+/// program quietly with 0, as [`Output`] does.
+pub fn write_output(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if !stream_at(0, native::slot::OUT) {
+        let _ = console_write(CONSOLE, bytes);
+        return;
+    }
+    if let Err(Status::PeerClosed) = stream_write_all(native::slot::OUT, bytes) {
+        process_exit(0);
+    }
+}
+
+/// Waits until `end` asserts one of `wanted`.
+fn wait_for(end: Handle, wanted: u32) -> Result<(), Status> {
+    let port = port_create()?;
+    let subscribed = port_subscribe(port, end, wanted, 1, Mode::Level);
+    if subscribed.is_ok() {
+        let mut packets = [Packet::default()];
+        let _ = port_wait(port, DEADLINE_INFINITE, &mut packets);
+    }
+    let _ = handle_close(port);
+    subscribed
+}
+
+/// Reads the command's input (ADR-0152 rule 1) into `buffer`, waiting
+/// while it is empty: 0 at its end. A program with no `IN` stream has no
+/// input.
+pub fn input_read(buffer: &mut [u8]) -> Result<usize, Status> {
+    if buffer.is_empty() || !stream_at(2, native::slot::IN) {
+        return Ok(0);
+    }
+    loop {
+        match stream_read(native::slot::IN, buffer) {
+            Ok(n) => return Ok(n),
+            Err(Status::WouldBlock) => wait_for(
+                native::slot::IN,
+                stream_signals::READABLE | stream_signals::PEER_CLOSED,
+            )?,
+            Err(Status::PeerClosed) => return Ok(0),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// The command's error output: the `ERR` stream when it has one, else the
+/// console.
+pub struct ErrOut;
+
+impl fmt::Write for ErrOut {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if !stream_at(1, native::slot::ERR) {
+            return Console.write_str(s);
+        }
+        stream_write_all(native::slot::ERR, s.as_bytes()).map_err(|_| fmt::Error)
+    }
+}
+
+/// Bytes one print gathers before it writes.
+pub const PRINT_BUFFER: usize = 512;
+
+/// Gathers the pieces of one print, so that a print of up to
+/// [`PRINT_BUFFER`] bytes reaches its stream in one write, which the stream
+/// keeps whole beside other writers' (ADR-0101: writes up to
+/// `STREAM_ATOMIC` are atomic). Two programs printing lines to one `err`
+/// then do not cut into each other's lines. A longer print is written in
+/// pieces of whole `str`s.
+pub struct Gather<W: fmt::Write> {
+    inner: W,
+    buffer: [u8; PRINT_BUFFER],
+    length: usize,
+}
+
+impl<W: fmt::Write> Gather<W> {
+    pub const fn new(inner: W) -> Gather<W> {
+        Gather {
+            inner,
+            buffer: [0; PRINT_BUFFER],
+            length: 0,
+        }
+    }
+
+    /// Writes what is gathered.
+    pub fn finish(mut self) -> fmt::Result {
+        self.flush()
+    }
+
+    fn flush(&mut self) -> fmt::Result {
+        let n = core::mem::take(&mut self.length);
+        if n == 0 {
+            return Ok(());
+        }
+        // The buffer holds whole `str`s only, so it is UTF-8.
+        let text = core::str::from_utf8(&self.buffer[..n]).map_err(|_| fmt::Error)?;
+        self.inner.write_str(text)
+    }
+}
+
+impl<W: fmt::Write> fmt::Write for Gather<W> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.length + s.len() > PRINT_BUFFER {
+            self.flush()?;
+        }
+        if s.len() > PRINT_BUFFER {
+            return self.inner.write_str(s);
+        }
+        self.buffer[self.length..self.length + s.len()].copy_from_slice(s.as_bytes());
+        self.length += s.len();
+        Ok(())
+    }
+}
+
+/// Prints to the command's output, with no newline.
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = write!($crate::Console, $($arg)*);
+        let mut gathered = $crate::Gather::new($crate::Output);
+        let _ = write!(gathered, $($arg)*);
+        let _ = gathered.finish();
     }};
 }
 
@@ -532,13 +729,45 @@ macro_rules! print {
 macro_rules! println {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = writeln!($crate::Console, $($arg)*);
+        let mut gathered = $crate::Gather::new($crate::Output);
+        let _ = writeln!(gathered, $($arg)*);
+        let _ = gathered.finish();
     }};
 }
+
+/// Prints to the command's error output, with no newline.
+#[macro_export]
+macro_rules! eprint {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let mut gathered = $crate::Gather::new($crate::ErrOut);
+        let _ = write!(gathered, $($arg)*);
+        let _ = gathered.finish();
+    }};
+}
+
+#[macro_export]
+macro_rules! eprintln {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let mut gathered = $crate::Gather::new($crate::ErrOut);
+        let _ = writeln!(gathered, $($arg)*);
+        let _ = gathered.finish();
+    }};
+}
+
+/// The mark of a native program (ADR-0153 rule 9): the linker script keeps
+/// it in a section of its own, never loaded, and `zosh` runs a program
+/// without it as a POSIX one. `zoraya_elf::NATIVE_MARK` is the same bytes;
+/// `zoraya-mkramdisk` checks every program of the ramdisk for it.
+#[cfg(feature = "entry")]
+#[used]
+#[unsafe(link_section = ".zoraya.native")]
+static NATIVE: [u8; 16] = *b"zoraya native 1\n";
 
 #[cfg(feature = "entry")]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
-    println!("user panic: {info}");
+    eprintln!("user panic: {info}");
     process_exit(101)
 }

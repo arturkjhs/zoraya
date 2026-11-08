@@ -116,8 +116,8 @@ Accepted with a change (architect, 2026-11-03), and with additions the architect
   would allow it.
 - **The changes to accepted ADRs** declared below are accepted: `narrow` in ADR-0055, the broker changes in ADR-0104,
   ADR-0105 item 9 (with the revisit condition "before the first interactive POSIX program"), path resolution in
-  ADR-0107 and INV-0002-4 (recorded as INV-0153-8). Rule 11's report slot in ADR-0107's record is the agent's means
-  of carrying out the refused-path hint.
+  ADR-0107 and INV-0002-4 (recorded as INV-0153-8). Rule 11's report slot in ADR-0107's record, first proposed by
+  the agent as its means of carrying out the refused-path hint, is accepted by the architect (2026-11-03).
 
 The original recommendation follows.
 
@@ -376,6 +376,20 @@ natural extension once networking exists (CP-28); nothing here precludes it.
 - Whether the shell should print a hint after a POSIX command fails when that command is known to open paths from its
   input (`tcc`, `make`), since their own message says only "not found". *Settled by the Decision:* rule 11.
 - Which descriptions to ship for toybox applets, and whether toybox runs as POSIX programs with the toolchain set.
+- *Note, 2026-11-08 (TASK-18 Part 2, accepted by the architect):* rule 7's `grants` takes the whole rest of its line
+  as the command line, options included (`grants tcc main.c -o main`): unless its first word is an option of its
+  own (`grants --help`), its arguments are parsed as if `--` came first. The choices of the note below on when the
+  broker runs and on `PATH` and `HOME` are accepted too.
+- *Note, 2026-11-04 (TASK-18 step 10, how rule 10 is built; the two departures are ADR-0200, accepted 2026-11-08):* `init` starts the broker with
+  `--no-shell` beside each `zosh` only on a volume with `/bin`, and ends it with that shell. The trusted descriptions of
+  POSIX programs (`tcc`, `make`, `dash`, in `user/describe/posix/` with `program PATH`) are compiled into `zosh`, as
+  every other description is (ADR-0156's open questions), rather than read from a ramdisk `/zoraya/commands/`; only
+  the system image supplies them either way (`grants::trusted_description`). The record has directory entries only, so
+  a designated file reaches a POSIX program through a directory entry that covers it, or the line is refused. A POSIX
+  program gets `PATH=/bin:/usr/bin` and `HOME` unless the line sets them. Ctrl-Z of a line whose elements are all POSIX
+  programs goes through the broker (`SIGTSTP` to each element's group); a line mixing native and POSIX programs is
+  stopped with `job_suspend`, which stops its POSIX elements whatever their dispositions. Toybox runs with the
+  toolchain set and no description.
 
 ## Revisit triggers
 - People routinely type `+w /` or `+w .` for ordinary commands: descriptions are missing or wrong, or the default is
@@ -399,5 +413,5 @@ is told apart from a missing file by `libposix` (and `zoraya-rt`) and reported t
 program ends which path it tried and which `+r`/`+w` allows it (rule 11, INV-0153-7); an output operand means "create
 or replace this one name". The changes to accepted ADRs declared here are accepted: `narrow` in ADR-0055, the broker
 changes in ADR-0104, ADR-0105 item 9 with the revisit condition "before the first interactive POSIX program", path
-resolution in ADR-0107 and INV-0002-4. The `REPORT` slot in ADR-0107's record (rule 11) is how the agent carried out
-the refused-path hint the architect asked for; the architect did not name the slot itself.
+resolution in ADR-0107 and INV-0002-4. The `REPORT` slot in ADR-0107's record (rule 11), which the agent proposed to carry
+out the refused-path hint the architect asked for, is accepted by the architect (2026-11-03).

@@ -296,3 +296,64 @@ fn mutations_never_panic_and_never_accept_what_the_rules_refuse() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// An ELF64 file with one named section of `bytes`, and its string table.
+fn with_section(name: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut f = vec![0u8; 64];
+    f[..4].copy_from_slice(b"\x7fELF");
+    f[4] = 2;
+    f[5] = 1;
+    let data_at = f.len();
+    f.extend_from_slice(bytes);
+    let strings_at = f.len();
+    let mut strings = vec![0u8];
+    strings.extend_from_slice(name.as_bytes());
+    strings.push(0);
+    strings.extend_from_slice(b".shstrtab\0");
+    f.extend_from_slice(&strings);
+    let shoff = f.len();
+    let header = |name_at: u32, offset: usize, size: usize| {
+        let mut h = vec![0u8; 64];
+        h[..4].copy_from_slice(&name_at.to_le_bytes());
+        h[24..32].copy_from_slice(&(offset as u64).to_le_bytes());
+        h[32..40].copy_from_slice(&(size as u64).to_le_bytes());
+        h
+    };
+    f.extend(vec![0u8; 64]);
+    f.extend(header(1, data_at, bytes.len()));
+    f.extend(header(2 + name.len() as u32, strings_at, strings.len()));
+    f[0x28..0x30].copy_from_slice(&(shoff as u64).to_le_bytes());
+    f[0x3a..0x3c].copy_from_slice(&64u16.to_le_bytes());
+    f[0x3c..0x3e].copy_from_slice(&3u16.to_le_bytes());
+    f[0x3e..0x40].copy_from_slice(&2u16.to_le_bytes());
+    f
+}
+
+/// ADR-0153 rule 9: a program is native when it carries the mark; the
+/// reader is total.
+#[test]
+fn the_native_mark_is_found_and_nothing_else_counts() {
+    let native = with_section(zoraya_elf::NATIVE_SECTION, zoraya_elf::NATIVE_MARK);
+    assert!(zoraya_elf::is_native(&native));
+    assert_eq!(
+        zoraya_elf::section(&native, ".zoraya.native"),
+        Some(zoraya_elf::NATIVE_MARK.as_slice())
+    );
+    assert_eq!(zoraya_elf::section(&native, ".other"), None);
+    assert!(!zoraya_elf::is_native(&with_section(
+        ".zoraya.native",
+        b"something else 1"
+    )));
+    assert!(!zoraya_elf::is_native(&with_section(
+        ".zoraya.command",
+        zoraya_elf::NATIVE_MARK
+    )));
+    assert!(!zoraya_elf::is_native(b"not an elf"));
+    // Every prefix and every single-byte change of the file: no panic.
+    for n in 0..native.len() {
+        let _ = zoraya_elf::section(&native[..n], ".zoraya.native");
+        let mut bad = native.clone();
+        bad[n] ^= 0xff;
+        let _ = zoraya_elf::section(&bad, ".zoraya.native");
+    }
+}

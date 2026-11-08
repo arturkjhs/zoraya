@@ -4,9 +4,13 @@
 
 extern crate alloc;
 
+pub mod command;
+pub mod filecmd;
 pub mod files;
 pub mod gui;
 mod heap;
+pub mod namespace;
+pub mod posix_child;
 pub mod stack;
 
 pub use zoraya_rt::*;
@@ -63,6 +67,49 @@ pub fn wait_exit(process: Handle) -> ExitRecord {
     port_wait(port, DEADLINE_INFINITE, &mut packets).expect("wait");
     handle_close(port).expect("close");
     process_exit_record(process).expect("record")
+}
+
+/// The command descriptions, checked when this crate was built (ADR-0156):
+/// `(name, text)` for each group under `user/describe/`.
+pub mod descriptions {
+    include!(concat!(env!("OUT_DIR"), "/descriptions.rs"));
+}
+
+/// Puts this program's description, `user/describe/GROUP/NAME.cmd`, into its
+/// ELF as the section `.zoraya.command`, which no segment loads (ADR-0156
+/// item 2). The ramdisk packer checks that it matches the file. The program
+/// reads its own copy, `DESCRIPTION`, through [`command::start`].
+#[macro_export]
+macro_rules! describe {
+    ($group:literal, $name:literal) => {
+        const DESCRIPTION: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/describe/",
+            $group,
+            "/",
+            $name,
+            ".cmd"
+        ));
+
+        #[used]
+        #[unsafe(link_section = ".zoraya.command")]
+        static ZORAYA_COMMAND: [u8; include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/describe/",
+            $group,
+            "/",
+            $name,
+            ".cmd"
+        ))
+        .len()] = *include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/describe/",
+            $group,
+            "/",
+            $name,
+            ".cmd"
+        ));
+    };
 }
 
 /// Asserts a call's status.

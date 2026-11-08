@@ -45,16 +45,16 @@ USER_DIR := target/user/$(TARGET)/user
 USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_priv \
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
-	busy zosh echo-args sleep exit fault fanout flood ticker handles stubborn t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
+	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
-	t_streams t_snapshot t_image t_suspend posixrun broker ttyd
+	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -67,7 +67,7 @@ $(RAMDISK):
 	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user
 	$(CARGO) build -p zoraya-mkramdisk
 	@mkdir -p $(BUILD)
-	target/debug/zoraya-mkramdisk $@ $(addprefix $(USER_DIR)/,$(USER_PROGRAMS))
+	target/debug/zoraya-mkramdisk --describe user/describe $@ $(addprefix $(USER_DIR)/,$(USER_PROGRAMS))
 
 ramdisk: $(RAMDISK)
 
@@ -212,16 +212,23 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 SHELL_SCRIPT := tests/shell/console.script
 LEAK_SCRIPT := tests/shell/leak.script
 EXIT_SCRIPT := tests/shell/exit.script
+JOBS_SCRIPT := tests/shell/jobs.script
+REBOOT_SCRIPT := tests/shell/reboot.script
+CONVENTIONS_SCRIPT := tests/shell/conventions.script
 FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
 STORAGE_DOWN := tests/shell/storage-down.script
 DEVICE_ERROR := tests/shell/device-error.script
+GRANTS_SCRIPT := tests/shell/grants.script
+GRANTS_ROOT := $(BUILD)/grants-root
 CRASH_IMAGE := $(BUILD)/crash.img
 CRASH_ROUNDS ?= 10
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
 	$(RUN_BOOT:$(SHELL_SCRIPT)=$(EXIT_SCRIPT)) --label exit-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
+	$(RUN_BOOT:$(SHELL_SCRIPT)=$(JOBS_SCRIPT)) --label jobs-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
+	$(RUN_BOOT:$(SHELL_SCRIPT)=$(REBOOT_SCRIPT)) --label reboot-auto -- $(RUN_QEMU) --test --keys --reboot --accel auto $(KERNEL)
 	$(RUNNER) --timeout 240 --script $(LEAK_SCRIPT) --label leak-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)
@@ -237,6 +244,15 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_WRITE) --label files-write -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_READ) --label files-read -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# INV-0155-1: every command's --help and usage error, with a volume.
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(CONVENTIONS_SCRIPT) --label conventions -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# What a command gets (ADR-0153): rootfs/ with link objects over it.
+	rm -rf $(GRANTS_ROOT) && mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(GRANTS_SCRIPT) --label grants -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # A volume that cannot be mounted: ADR-0080's limit on restarts, from `init`.
 # Then one failed write, injected in QEMU's block layer.
@@ -300,17 +316,29 @@ posix-image: $(KERNEL) tools-storage
 	  $(WORKLOADS_SRC)/w3/Makefile > $(POSIX_ROOT)/src/w3/Makefile
 	grep -c OMIT_LOAD_EXTENSION $(POSIX_ROOT)/src/w3/Makefile | grep -qx 2
 	tests/posix/trees.sh $(POSIX_ROOT)
+	@# The same root without the session file: init then starts zosh, with
+	@# the broker beside it (TASK-18 step 10, tests/posix/zosh*.script).
+	rm -rf $(POSIX_ZOSH_ROOT)
+	cp -R $(POSIX_ROOT) $(POSIX_ZOSH_ROOT)
+	rm $(POSIX_ZOSH_ROOT)/etc/zoraya/session
+	@# The tour's (docs/tour.md): rootfs/ and the ports' programs, an empty
+	@# /home and no session file.
+	rm -rf $(POSIX_TOUR_ROOT)
+	mkdir -p $(POSIX_TOUR_ROOT)
+	cp -R rootfs/. $(BUILD)/rootfs-posix/. $(POSIX_TOUR_ROOT)/
 
 # One boot per script under each accelerator, zoraya-fsck after each
 # (ADR-0110 item 6). The runner's timeout per script comes from this table,
 # set from the first measured durations (TASK-22) with a margin of about
 # three; QEMU_TIMEOUT for the others.
 POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-term=600 \
-	w10=600 w4=1800 w5-jobs=300 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
+	w10=600 w4=1800 w5-jobs=300 tour=900 w8-j1=600 w8-pipe-j2=600 w8-fifo-j2=600 w8-pipe-j4=600 w8-fifo-j4=600
 # W8's five builds: w8.script runs them in one boot; w8-BUILD.script runs one
 # (CI's jobs, ADR-0213's Decision).
 POSIX_W8_BUILDS := j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4
 POSIX_IMAGE_SIZE := 256M
+POSIX_ZOSH_ROOT := $(BUILD)/posix-zosh
+POSIX_TOUR_ROOT := $(BUILD)/posix-tour
 # The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
 # ("tcc: memory full"; every POSIX process holds at least its 1 MiB of heap,
 # its segments and 64 KiB of stack, and tmpd 16 MiB), with no leak across
@@ -320,7 +348,8 @@ POSIX_MEM ?= 512M
 define posix_run
 	name=$$(basename $$script .script); \
 	timeout=$$(echo " $(POSIX_TIMEOUTS) " | sed -n "s/.* $$name=\([0-9]*\) .*/\1/p"); \
-	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_ROOT) $(POSIX_DISK) > /dev/null && \
+	root=$(POSIX_ROOT); case $$name in zosh*) root=$(POSIX_ZOSH_ROOT);; tour*) root=$(POSIX_TOUR_ROOT);; esac; \
+	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $$root $(POSIX_DISK) > /dev/null && \
 	$(RUNNER) --timeout $${timeout:-$(QEMU_TIMEOUT)} --script $$script --label posix-$$name-$$accel -- \
 	  $(RUN_QEMU) --test --keys --mem $(POSIX_MEM) --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
 	target/debug/zoraya-fsck $(POSIX_DISK)
@@ -332,7 +361,8 @@ endef
 # scenarios.
 POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.script \
 	tests/posix/w9-int.script tests/posix/w9-term.script tests/posix/w10.script \
-	tests/posix/invariants.script tests/posix/scenarios.script
+	tests/posix/invariants.script tests/posix/scenarios.script tests/posix/zosh.script \
+	tests/posix/tour.script
 # W8 runs under one accelerator here, the first of POSIX_ACCELS (auto: HVF
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
@@ -404,6 +434,22 @@ test-posix-gui: posix-image $(RUNNER)
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
 
+# The tour in the window (INV-0154-4), on the tour's image: a step of its
+# own, so that CI runs it as a job of its own (review K2).
+test-tour-gui: posix-image $(RUNNER)
+	@for accel in $(POSIX_ACCELS); do \
+	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-gui.img > /dev/null && \
+	  $(RUNNER) --timeout 1200 --gui-script $(TOUR_GUI_SCRIPT) --qmp $(BUILD)/tour-gui-$$accel.qmp \
+	    --label tour-gui-$$accel -- $(RUN_QEMU) --test --gui --mem $(POSIX_MEM) --qmp $(BUILD)/tour-gui-$$accel.qmp \
+	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
+
+# The tour's two sessions, from docs/tour.md (INV-0154-4), and INV-0155-1's
+# from the descriptions; make test-unit fails when the committed ones differ.
+TOUR_GUI_SCRIPT := tests/posix/tour-gui.script
+tour-scripts:
+	$(CARGO) run -q -p zoraya-tour -- docs/tour.md tests/posix/tour.script $(TOUR_GUI_SCRIPT) $(CONVENTIONS_SCRIPT)
+
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
 GUI_IMAGE := $(BUILD)/gui.img
@@ -436,12 +482,20 @@ mutants:
 # build/mutants/cargo/mutants.out/missed.txt. Not part of make test.
 # MUTANTS_HOST_ARGS adds cargo-mutants options, such as --in-diff FILE or
 # --exclude src/ffi.rs (code the host does not compile).
+# Each mutant's tests get MUTANTS_TIMEOUT_MULTIPLIER times the unmutated
+# baseline's test time, and at least MUTANTS_TIMEOUT_MIN seconds: a mutant
+# that loops costs seconds, not a fixed 300 (TASK-18's pass spent 5 min on
+# each of 17). MUTANTS_TIMEOUT=N sets N seconds instead, for a slow crate.
 CRATE ?= zoraya-virtio
+MUTANTS_TIMEOUT_MIN ?= 20
+MUTANTS_TIMEOUT_MULTIPLIER ?= 5
+MUTANTS_TIMEOUT ?=
+MUTANTS_TIMEOUT_ARGS = $(if $(MUTANTS_TIMEOUT),--timeout $(MUTANTS_TIMEOUT),--minimum-test-timeout $(MUTANTS_TIMEOUT_MIN) --timeout-multiplier $(MUTANTS_TIMEOUT_MULTIPLIER))
 mutants-host:
 	@command -v cargo-mutants >/dev/null || { echo "cargo-mutants is not installed: cargo install cargo-mutants --version 27.1.0 --locked (docs/dependencies.md)"; exit 2; }
 	@# cargo-mutants exits 2 when a mutant was missed and 3 on a timeout: results, not failures.
 	@$(CARGO) build -q -p zoraya-footprint
-	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 --timeout 300 $(MUTANTS_HOST_ARGS) -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
+	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 $(MUTANTS_TIMEOUT_ARGS) $(MUTANTS_HOST_ARGS) -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
 	  rc=$$?; tail -1 build/mutants/cargo.log; \
 	  case $$rc in 0|2|3) echo "missed: build/mutants/cargo/mutants.out/missed.txt";; \
 	  *) echo "cargo-mutants failed ($$rc), see build/mutants/cargo.log"; exit $$rc;; esac
@@ -483,6 +537,13 @@ adr-check:
 check-user-access:
 	@! grep -rnE 'ldtr|sttr' kernel/src --include='*.rs' --exclude=usercopy.rs
 
+# INV-0155-2: a program with a description (describe!) reads its arguments only
+# through zoraya-command (user/src/command.rs); only test programs, which have
+# none, may read argv themselves.
+check-argv:
+	@hits="$$(grep -l 'describe!(' user/src/bin/*.rs | xargs grep -n 'argv' || true)"; \
+	if [ -n "$$hits" ]; then echo "described programs that read argv themselves (INV-0155-2):"; echo "$$hits"; exit 1; fi
+
 # INV-0105-4: no terminal policy in the kernel; the console stays a raw ring
 # (ADR-0060), and the line discipline is ttyd's.
 check-kernel-tty:
@@ -512,7 +573,7 @@ check-test-caps:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
 TEST_STEPS += check-ci-jobs
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

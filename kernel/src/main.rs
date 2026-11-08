@@ -35,8 +35,9 @@ mod timer;
 
 #[cfg(not(feature = "qemu-test"))]
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use zoraya_abi::Status;
 use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::{GicKind, PlatformInfo, Psci, PsciMethod, UartSource};
 
@@ -47,6 +48,8 @@ pub const GIT_COMMIT: &str = env!("ZORAYA_GIT_COMMIT");
 
 /// PSCI conduit for shutdown: 0 none, 1 HVC, 2 SMC.
 static PSCI_CONDUIT: AtomicUsize = AtomicUsize::new(0);
+/// The device tree's PSCI has `SYSTEM_RESET` (ADR-0159).
+static PSCI_RESET: AtomicBool = AtomicBool::new(false);
 
 /// Called from boot.rs with the loader's `x0`, the exception level at entry
 /// and the image's physical base, at EL1, on the boot stack, with `.bss`
@@ -78,6 +81,7 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
             PsciMethod::Smc => 2,
         };
         PSCI_CONDUIT.store(conduit, Ordering::Relaxed);
+        PSCI_RESET.store(p.has_system_reset, Ordering::Relaxed);
     }
 
     let reserved_dropped = info.reserved.dropped;
@@ -277,6 +281,29 @@ pub fn run_first(name: &str) -> ! {
     shutdown()
 }
 
+/// Resets through PSCI `SYSTEM_RESET` (ADR-0159). Returns only when the
+/// platform has none or the call failed.
+pub fn reset() -> Status {
+    let method = match PSCI_CONDUIT.load(Ordering::Relaxed) {
+        1 => PsciMethod::Hvc,
+        2 => PsciMethod::Smc,
+        _ => return Status::NotSupported,
+    };
+    if !PSCI_RESET.load(Ordering::Relaxed) {
+        return Status::NotSupported;
+    }
+    println!("resetting");
+    let psci = Psci {
+        method,
+        has_system_off: true,
+        has_system_reset: true,
+        compatible: None,
+    };
+    let err = psci::system_reset(&psci);
+    println!("PSCI SYSTEM_RESET failed ({err})");
+    Status::NotSupported
+}
+
 /// Powers off through PSCI `SYSTEM_OFF`; halts if that is unavailable or fails.
 pub fn shutdown() -> ! {
     if !arch::stack_canary_intact() {
@@ -292,6 +319,7 @@ pub fn shutdown() -> ! {
             let psci = Psci {
                 method,
                 has_system_off: true,
+                has_system_reset: false,
                 compatible: None,
             };
             let err = psci::system_off(&psci);

@@ -1147,6 +1147,13 @@ fn console_and_listing_from_a_process() {
         run_program("t_console"),
         exited(ramdisk::get().len() as i32)
     );
+    // INV-0159-1: a `Power` handle without `POWER` (review K1). The program
+    // returns 0 only if both calls were refused and the machine went on.
+    let rights = <zoraya_abi::PowerObject as zoraya_abi::ObjectType>::RIGHTS
+        .without(zoraya_abi::Rights::POWER);
+    let extra = (zoraya_abi::POWER.slot(), object::Object::Power, rights);
+    let process = process::spawn_with_devices_and("t_console", Some(extra));
+    assert_eq!(process.expect("t_console").wait(), exited(0));
 }
 
 /// ADR-0051 from a process, and INV-0051-1 and -4 by the counters: after it

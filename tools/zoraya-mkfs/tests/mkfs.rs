@@ -128,3 +128,32 @@ fn empty_image() {
     let mut dev = FileDevice::open(&image, false).unwrap();
     assert!(check(&mut dev, CheckOptions::default()).is_clean());
 }
+
+/// An empty `.keep` only keeps an empty directory in git (as rootfs does for home): the
+/// directory is made, the file is not. A `.keep` with content is copied.
+#[test]
+fn an_empty_keep_file_is_not_copied() {
+    let dir = tmp("mkfs-keep");
+    let src = dir.join("tree");
+    fs::create_dir_all(src.join("home")).unwrap();
+    fs::write(src.join("home/.keep"), b"").unwrap();
+    fs::create_dir_all(src.join("other")).unwrap();
+    fs::write(src.join("other/.keep"), b"kept").unwrap();
+    let image = dir.join("disk.img");
+    let out = Command::new(env!("CARGO_BIN_EXE_zoraya-mkfs"))
+        .args(["--size", "16M", "--from"])
+        .arg(&src)
+        .arg(&image)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut dev = FileDevice::open(&image, false).unwrap();
+    let rep = check(&mut dev, CheckOptions::default());
+    assert!(rep.is_clean(), "{:?}", rep.problems);
+    // The root, home and other; only other/.keep.
+    assert_eq!((rep.stats.files, rep.stats.directories), (1, 3));
+}

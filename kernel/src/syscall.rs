@@ -1056,6 +1056,13 @@ impl Handlers for Calls<'_> {
         };
         crate::shutdown()
     }
+
+    fn power_reset(&mut self, power: Handle) -> Result<u64, Status> {
+        let Object::Power = self.object(power, Rights::POWER)? else {
+            return Err(Status::BadHandle);
+        };
+        Err(crate::reset())
+    }
 }
 
 /// Calls that exist only in the test kernel, outside `zoraya-abi`.

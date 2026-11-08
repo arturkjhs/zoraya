@@ -1,0 +1,117 @@
+# Job control through the serial line (TASK-18 step 9, ADR-0158). Ctrl-C,
+# Ctrl-\ and Ctrl-Z reach only the job in front, every process of it
+# (INV-0158-1); a job in the background reads no key (INV-0158-2); exit
+# ends nothing the first time and every job the second (INV-0158-3).
+# `requests NAME` says each request it takes, numbered, on its err; the two
+# elements of a pipeline start in either order, so a pause and `o` check
+# them.
+! panicked
+! first process ended
+# The background job takes one interrupt, from kill, and nothing else.
+! a: interrupt 2
+! b: interrupt 2
+! a: quit
+! b: quit
+! c: interrupt 3
+! d: interrupt 3
+! c: quit 2
+! d: quit 2
+< Type help to begin, or help tour.
+< \r\n/>
+# A job of two processes in the background, and one in front.
+> requests a | requests b &\r
+< [1] requests a | requests b
+< \r\n/>
+w a: ready
+w b: ready
+o a: ready
+o b: ready
+> requests c | requests d\r
+w c: ready
+w d: ready
+o c: ready
+o d: ready
+# Ctrl-C: an interrupt to both in front; a second later the shell offers
+# the kill.
+> \x03
+< ^C
+< (Ctrl-C again to kill it)
+o c: interrupt 1
+o d: interrupt 1
+# Ctrl-Z stops the job in front, and the prompt comes back.
+> \x1a
+< ^Z
+< [2] stopped: requests c | requests d
+< \r\n/>
+# jobs reads the stopped state from the kernel (SUSPENDED on the job).
+> jobs\r
+< [1]  running   requests a | requests b
+< [2]  stopped   requests c | requests d
+< \r\n/>
+> bg\r
+< [2] requests c | requests d &
+< \r\n/>
+> jobs\r
+< [2]  running   requests c | requests d
+< \r\n/>
+# fg: the job in front again; Ctrl-\ and Ctrl-C reach both of it.
+> fg %2\r
+< requests c | requests d
+> \x1c
+< ^\\
+w c: quit 1
+w d: quit 1
+o c: quit 1
+o d: quit 1
+> \x03
+< ^C
+< (Ctrl-C again to kill it)
+o c: interrupt 2
+o d: interrupt 2
+# The second Ctrl-C, once offered, kills.
+> \x03
+< ^C
+< requests c | requests d: killed
+< \r\n/>
+# The background job took none of those: its first interrupt is kill's.
+> kill --interrupt %1\r
+< [1] still running; kill --kill %1 ends it
+< \r\n/>
+o a: interrupt 1
+o b: interrupt 1
+# INV-0158-2: a background reader finds its input at its end at once, while
+# keys are typed at the prompt; they stay the prompt's.
+> requests --read e &\rtyped
+< e: end of input after 0 bytes
+< [2] done: requests --read e
+< /> typed
+> \x15jobs\r
+< [1]  running   requests a | requests b
+x [2]
+< \r\n/>
+# INV-0158-3: exit with a running and a stopped job ends nothing...
+> requests f\r
+< f: ready
+> \x1a
+< [2] stopped: requests f
+< \r\n/>
+> exit\r
+< 2 jobs are still running; exit again to end them
+< \r\n/>
+> jobs\r
+< [1]  running   requests a | requests b
+< [2]  stopped   requests f
+< \r\n/>
+# ...anything between counts again, and the second exit in a row ends both.
+> exit\r
+< 2 jobs are still running; exit again to end them
+< \r\n/>
+> exit\r
+< init: shell ended: ExitRecord { code: 0, reason: Exited
+< Type help to begin, or help tour.
+< \r\n/>
+> jobs\r
+x [1]
+< \r\n/>
+x power off
+> poweroff\r

@@ -47,6 +47,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-command"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-describe",
+ "zoraya-proto-file",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-commands"
+version = "0.1.0"
+dependencies = [
+ "zoraya-command",
+ "zoraya-describe",
+ "zoraya-proto-file",
+ "zoraya-shell",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-compositor"
 version = "0.1.0"
 dependencies = [
@@ -60,6 +81,13 @@ dependencies = [
 
 [[package]]
 name = "zoraya-console"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-describe"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
@@ -194,6 +222,8 @@ dependencies = [
 name = "zoraya-mkramdisk"
 version = "0.1.0"
 dependencies = [
+ "zoraya-describe",
+ "zoraya-elf",
  "zoraya-ramdisk",
 ]
 
@@ -233,6 +263,7 @@ dependencies = [
  "zoraya-proto-posix",
  "zoraya-proto-tty",
  "zoraya-protocol",
+ "zoraya-resolve",
  "zoraya-rt",
  "zoraya-test-alloc",
 ]
@@ -316,6 +347,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-resolve"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-rt"
 version = "0.1.0"
 dependencies = [
@@ -323,10 +362,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-settings"
+version = "0.1.0"
+dependencies = [
+ "zoraya-describe",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-shell"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-command",
+ "zoraya-describe",
+ "zoraya-proto-file",
+ "zoraya-resolve",
  "zoraya-test-alloc",
 ]
 
@@ -367,6 +418,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-tour"
+version = "0.1.0"
+dependencies = [
+ "zoraya-command",
+ "zoraya-describe",
+]
+
+[[package]]
 name = "zoraya-tty"
 version = "0.1.0"
 dependencies = [
@@ -382,7 +441,11 @@ version = "0.1.0"
 dependencies = [
  "zoraya-abi",
  "zoraya-broker",
+ "zoraya-command",
+ "zoraya-commands",
  "zoraya-compositor",
+ "zoraya-describe",
+ "zoraya-elf",
  "zoraya-font",
  "zoraya-fs",
  "zoraya-fs-service",
@@ -397,7 +460,9 @@ dependencies = [
  "zoraya-proto-term",
  "zoraya-proto-tty",
  "zoraya-protocol",
+ "zoraya-resolve",
  "zoraya-rt",
+ "zoraya-settings",
  "zoraya-shell",
  "zoraya-term",
  "zoraya-tty",

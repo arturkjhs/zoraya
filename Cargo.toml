@@ -29,12 +29,17 @@ members = [
     "crates/zoraya-term",
     "crates/zoraya-compositor",
     "crates/zoraya-shell",
+    "crates/zoraya-describe",
+    "crates/zoraya-command",
+    "crates/zoraya-settings",
+    "crates/zoraya-commands",
     "crates/zoraya-fs",
     "crates/zoraya-fs-testkit",
     "crates/zoraya-fs-service",
     "crates/zoraya-rt",
     "crates/zoraya-stream",
     "crates/zoraya-test-alloc",
+    "crates/zoraya-resolve",
     "crates/zoraya-posix",
     "crates/zoraya-proto-posix",
     "crates/zoraya-proto-tty",
@@ -53,6 +58,7 @@ members = [
     "tools/zoraya-elf-check",
     "tools/footprint",
     "tools/posix-stats",
+    "tools/tour",
 ]
 # The fuzz targets need a nightly toolchain; they are a separate workspace.
 exclude = ["fuzz"]
@@ -87,11 +93,16 @@ default-members = [
     "crates/zoraya-term",
     "crates/zoraya-compositor",
     "crates/zoraya-shell",
+    "crates/zoraya-describe",
+    "crates/zoraya-command",
+    "crates/zoraya-settings",
+    "crates/zoraya-commands",
     "crates/zoraya-fs",
     "crates/zoraya-fs-testkit",
     "crates/zoraya-fs-service",
     "crates/zoraya-stream",
     "crates/zoraya-test-alloc",
+    "crates/zoraya-resolve",
     "crates/zoraya-posix",
     "crates/zoraya-proto-posix",
     "crates/zoraya-proto-tty",
@@ -108,6 +119,7 @@ default-members = [
     "tools/zoraya-elf-check",
     "tools/footprint",
     "tools/posix-stats",
+    "tools/tour",
 ]
 
 [workspace.package]

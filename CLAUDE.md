@@ -60,7 +60,10 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
 - Every host-tested crate under `crates/` installs `zoraya_test_alloc::cap_memory!()` in its library and in every
   file of its `tests/` (`make check-test-caps`); the `tools/` crates do not yet (`docs/backlog.md`). Mutation runs
   go through `make mutants` or `make mutants-host`, under
-  `tools/mutants/watchdog.sh`.
+  `tools/mutants/watchdog.sh`. `make mutants-host` runs two mutants at once and gives each one's tests 5 times the
+  unmutated baseline's test time, at least 20 s (`MUTANTS_TIMEOUT_MULTIPLIER`, `MUTANTS_TIMEOUT_MIN`);
+  `MUTANTS_TIMEOUT=N` sets N seconds instead, for a crate whose tests are slow. Do not go back to a fixed long timeout:
+  each mutant that loops costs the whole of it.
 
 ## Work discipline
 

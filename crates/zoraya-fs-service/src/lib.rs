@@ -207,6 +207,9 @@ struct Connection<E> {
     held: Option<HeldReply<E>>,
     /// The name `read_directory` goes on from, and its cookie.
     position: Option<(u64, String)>,
+    /// A narrowed connection's one name (ADR-0055's note): every request
+    /// that names something must name exactly it.
+    only: Option<String>,
     /// A FIFO side this connection opened: the object and the side.
     fifo: Option<(u64, u32)>,
     /// A `fifo_open` held until the other side comes (its transaction).
@@ -418,6 +421,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             token: None,
             held: None,
             position: None,
+            only: None,
             fifo: None,
             opening: None,
         };
@@ -449,11 +453,32 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     /// A second connection to the same record, which no stage 4 request can
     /// ask for. It shows that the record does not depend on the connection.
     pub fn attach_second(&mut self, connection: usize, end: T::End) -> Option<usize> {
-        let (record, rights) = {
+        let (record, rights, only) = {
             let c = self.connections.get(connection)?.as_ref()?;
-            (c.record, c.rights)
+            (c.record, c.rights, c.only.clone())
         };
-        self.add_connection(end, record, rights)
+        let added = self.add_connection(end, record, rights)?;
+        self.set_only(added, only);
+        Some(added)
+    }
+
+    fn set_only(&mut self, index: usize, only: Option<String>) {
+        if let Some(c) = self.connections[index].as_mut() {
+            c.only = only;
+        }
+    }
+
+    fn only_of(&self, index: usize) -> Option<String> {
+        self.connections.get(index)?.as_ref()?.only.clone()
+    }
+
+    /// Whether connection `index` may name `name`: always, unless it is
+    /// narrowed to another name.
+    fn may_name(&self, index: usize, name: &str) -> bool {
+        self.connections
+            .get(index)
+            .and_then(Option::as_ref)
+            .is_none_or(|c| c.only.as_deref().is_none_or(|only| only == name))
     }
 
     /// Reads with no effect on the record, for tests.
@@ -762,7 +787,16 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             2 => {
                 let (_, m) = decode::<proto::Clone>(bytes, n)?;
-                self.clone_connection(i, t, m.rights.0, handles);
+                self.clone_connection(i, t, m.rights.0, None, handles);
+            }
+            36 => {
+                let (_, m) = decode::<proto::Narrow<'_>>(bytes, n)?;
+                // `Name` is one component already (zoraya-protocol).
+                let name = m.name.0;
+                if !self.may_name(i, name) {
+                    return self.denied(i, t);
+                }
+                self.clone_connection(i, t, m.rights.0, Some(name.into()), handles);
             }
             3 => {
                 let (_, m) = decode::<proto::Read>(bytes, n)?;
@@ -816,10 +850,16 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             13 => {
                 let (_, m) = decode::<proto::Remove<'_>>(bytes, n)?;
+                if !self.may_name(i, m.name.0) {
+                    return self.denied(i, t);
+                }
                 self.remove(i, t, m.name.0);
             }
             14 => {
                 let (_, m) = decode::<proto::MakeDirectory<'_>>(bytes, n)?;
+                if !self.may_name(i, m.name.0) {
+                    return self.denied(i, t);
+                }
                 self.make_directory(i, t, m.mode, m.name.0);
             }
             15 => {
@@ -870,6 +910,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             21 => {
                 let (_, m) = decode::<proto::MakeLink<'_>>(bytes, n)?;
+                if !self.may_name(i, m.name.0) {
+                    return self.denied(i, t);
+                }
                 self.make_link(i, t, m.name.0, m.target.0);
             }
             22 => {
@@ -1227,6 +1270,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         if !self.has(i, needed) {
             return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
         }
+        // A narrowed connection opens its one name and nothing else, nor
+        // itself by the empty path; an unnamed file has no name until it is
+        // published, which is checked then.
+        if flags & f::UNNAMED == 0 && !self.may_name(i, m.path.0) {
+            return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
+        }
         let Some(end) = handles.first().copied() else {
             return self.open_answer(i, t, full, status::INVALID_ARGUMENT, ("", ""), None);
         };
@@ -1270,6 +1319,21 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         {
             let _ = self.volume.close(handle);
             return self.open_answer(i, t, full, status::NOT_DIRECTORY, ("", ""), None);
+        }
+        // A narrowed connection gives its one name, not what lies in it: a
+        // directory of that name opens to read only (review S2; ADR-0055's
+        // note, INV-0153-2).
+        let reading = proto::rights::READ | proto::rights::CLONE;
+        if self.only_of(i).is_some()
+            && m.rights.0 & !reading != 0
+            && matches!(
+                self.volume.stat(handle).map(|a| a.kind),
+                Ok(ObjKind::Directory)
+            )
+        {
+            let _ = self.volume.close(handle);
+            self.after_engine();
+            return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
         }
         handles.clear();
         let record = self.new_record(handle);
@@ -1347,7 +1411,16 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.reply(i, t, &m);
     }
 
-    fn clone_connection(&mut self, i: usize, t: u32, rights: u32, handles: &mut Vec<T::End>) {
+    /// A new connection to the same object; `narrow` gives it one name,
+    /// and a narrowed connection's clone keeps its own.
+    fn clone_connection(
+        &mut self,
+        i: usize,
+        t: u32,
+        rights: u32,
+        narrow: Option<String>,
+        handles: &mut Vec<T::End>,
+    ) {
         if !self.room() {
             return self.done(i, t, status::TOO_MANY_OPEN, 0);
         }
@@ -1367,8 +1440,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Ok(handle) => {
                 handles.clear();
                 let record = self.new_record(handle);
+                let only = narrow.or_else(|| self.only_of(i));
                 let s = match self.add_connection(end, record, rights) {
-                    Some(_) => status::OK,
+                    Some(added) => {
+                        self.set_only(added, only);
+                        status::OK
+                    }
                     None => status::LIMIT_REACHED,
                 };
                 self.done(i, t, s, 0);
@@ -1598,7 +1675,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 this.reply(i, t, &m);
             }
         };
-        if !self.has(i, proto::rights::READ) {
+        // A narrowed connection's listing would show the names it may not use.
+        if !self.has(i, proto::rights::READ) || self.only_of(i).is_some() {
             return fail(status::ACCESS_DENIED, self);
         }
         let Some(handle) = self.handle_of(i) else {
@@ -1748,6 +1826,17 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         self.reply(i, t, &m);
     }
 
+    /// Whether the connection a token names may name `name`.
+    fn token_may_name(&mut self, token: T::End, name: &str) -> bool {
+        if self.transport.kind(token) != HandleKind::Token {
+            return true; // refused by token_directory
+        }
+        match self.token_target(token) {
+            Some(target) => self.may_name(target, name),
+            None => true,
+        }
+    }
+
     fn token_directory(&mut self, token: T::End, right: u32) -> Result<Handle, u32> {
         if self.transport.kind(token) != HandleKind::Token {
             return Err(status::INVALID_ARGUMENT);
@@ -1768,6 +1857,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let (Some(source), Some(token)) = (self.handle_of(i), handles.first().copied()) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
+        if !self.may_name(i, m.old.0) || !self.token_may_name(token, m.new.0) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
         let target = match self.token_directory(token, right) {
             Ok(target) => target,
             Err(s) => return self.done(i, t, s, 0),
@@ -1790,6 +1882,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let (Some(file), Some(token)) = (self.handle_of(i), handles.first().copied()) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
+        if !self.token_may_name(token, m.name.0) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
         let directory = match self.token_directory(token, right) {
             Ok(directory) => directory,
             Err(s) => return self.done(i, t, s, 0),
@@ -1949,8 +2044,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             return self.done(i, t, status::STORAGE_FAILED, 0);
         };
         handles.clear();
+        let only = self.only_of(i);
         let s = match self.add_connection(end, record, rights) {
-            Some(_) => status::OK,
+            Some(added) => {
+                self.set_only(added, only);
+                status::OK
+            }
             None => status::LIMIT_REACHED,
         };
         self.done(i, t, s, 0);

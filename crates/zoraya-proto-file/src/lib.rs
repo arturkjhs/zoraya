@@ -150,6 +150,15 @@ protocol! {
         rights: Rights,
     }
 
+    /// A new connection to this directory with equal or fewer rights,
+    /// through which requests may name only `name` (ADR-0055's note,
+    /// ADR-0153 rule 2): an operand that creates, replaces, removes or
+    /// renames one name. It cannot list the directory. Answered by `Done`.
+    message Narrow<'a> = 36, handles 1 {
+        rights: Rights,
+        name: Name<'a>,
+    }
+
     message Read = 3, handles 0 {
         offset: u64,
         length: u32,
@@ -417,7 +426,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 35] = [
+pub const REQUESTS: [(&str, u32); 36] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -453,6 +462,7 @@ pub const REQUESTS: [(&str, u32); 35] = [
     ("read_directory_ids", 33),
     ("fifo_open", 34),
     ("time_base", 35),
+    ("narrow", 36),
 ];
 
 /// `fifo_open`'s side.

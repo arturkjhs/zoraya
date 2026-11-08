@@ -32,10 +32,19 @@ zoraya-compositor = { path = "../crates/zoraya-compositor" }
 zoraya-keymap = { path = "../crates/zoraya-keymap" }
 zoraya-font = { path = "../crates/zoraya-font" }
 zoraya-term = { path = "../crates/zoraya-term" }
+zoraya-describe = { path = "../crates/zoraya-describe" }
+zoraya-command = { path = "../crates/zoraya-command" }
+zoraya-settings = { path = "../crates/zoraya-settings" }
+zoraya-commands = { path = "../crates/zoraya-commands" }
+zoraya-resolve = { path = "../crates/zoraya-resolve" }
 zoraya-broker = { path = "../crates/zoraya-broker" }
 zoraya-proto-posix = { path = "../crates/zoraya-proto-posix" }
+zoraya-elf = { path = "../crates/zoraya-elf" }
 zoraya-proto-tty = { path = "../crates/zoraya-proto-tty" }
 zoraya-tty = { path = "../crates/zoraya-tty" }
+
+[build-dependencies]
+zoraya-describe = { path = "../crates/zoraya-describe" }
 
 [lints]
 workspace = true
@@ -220,8 +229,8 @@ test = false
 bench = false
 
 [[bin]]
-name = "exit"
-path = "src/bin/exit.rs"
+name = "exit-with"
+path = "src/bin/exit_with.rs"
 test = false
 bench = false
 
@@ -260,6 +269,16 @@ bench = false
 
 [[bin]]
 name = "stubborn"
+test = false
+bench = false
+
+[[bin]]
+name = "probe"
+test = false
+bench = false
+
+[[bin]]
+name = "requests"
 test = false
 bench = false
 
@@ -385,5 +404,55 @@ bench = false
 
 [[bin]]
 name = "ttyd"
+test = false
+bench = false
+
+[[bin]]
+name = "ls"
+test = false
+bench = false
+
+[[bin]]
+name = "cat"
+test = false
+bench = false
+
+[[bin]]
+name = "cp"
+test = false
+bench = false
+
+[[bin]]
+name = "mv"
+test = false
+bench = false
+
+[[bin]]
+name = "rm"
+test = false
+bench = false
+
+[[bin]]
+name = "mkdir"
+test = false
+bench = false
+
+[[bin]]
+name = "stat"
+test = false
+bench = false
+
+[[bin]]
+name = "head"
+test = false
+bench = false
+
+[[bin]]
+name = "find"
+test = false
+bench = false
+
+[[bin]]
+name = "search"
 test = false
 bench = false

@@ -90,7 +90,7 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
 /// come from one list, so a new status is judged here.
 #[test]
 fn no_status_means_interrupted() {
-    assert_eq!(Status::ALL.len(), 15);
+    assert_eq!(Status::ALL.len(), 16);
     for (raw, s) in Status::ALL.iter().enumerate() {
         assert_eq!(*s as usize, raw);
         assert_eq!(Status::from_raw(raw as u64), Some(*s));
@@ -336,6 +336,7 @@ echo! {
     console_dropped(console: Handle);
     directory_entry(directory: Handle, cookie: Cookie, entry: Bytes);
     power_off(power: Handle);
+    power_reset(power: Handle);
     memory_create(size: Size, flags: MemoryFlags);
     memory_map(object: Handle, offset: Size, length: Size, flags: MapFlags);
     memory_unmap(address: Address, length: Size);
@@ -1420,4 +1421,131 @@ fn signal_numbers_map_to_kinds_and_back() {
     assert_eq!(terminating, expected);
     let stops: Vec<u32> = (1..=MAX).filter(|&n| is_stop_or_continue(n)).collect();
     assert_eq!(stops, [18, 19, 20, 21, 22]);
+}
+
+/// ADR-0153 rule 8's start-up record (INV-0153-5).
+mod native_startup {
+    use crate::native::{Entry, EntryKind, Slots, Startup, encode};
+    use crate::posix::NO_HANDLE;
+    use std::vec::Vec;
+
+    fn sample(out: &mut [u8]) -> usize {
+        let entries = [
+            Entry {
+                path: "/work",
+                kind: EntryKind::Directory,
+                handle: 0,
+            },
+            Entry {
+                path: "/work/notes.txt",
+                kind: EntryKind::File,
+                handle: 1,
+            },
+            Entry {
+                path: "/work/new.txt",
+                kind: EntryKind::Missing,
+                handle: NO_HANDLE,
+            },
+        ];
+        let slots = Slots {
+            input: 2,
+            output: 3,
+            error: 4,
+            job: 5,
+            report: 6,
+        };
+        encode("/work", &slots, &entries, 7, out).expect("encodes")
+    }
+
+    #[test]
+    fn a_record_round_trips_longest_first() {
+        let mut out = [0u8; 512];
+        let n = sample(&mut out);
+        let r = Startup::decode(&out[..n], 7).expect("decodes");
+        assert_eq!(r.cwd, "/work");
+        assert_eq!(r.slots.report, 6);
+        let paths: std::vec::Vec<&str> = r.entries().map(|e| e.path).collect();
+        assert_eq!(paths, ["/work/notes.txt", "/work/new.txt", "/work"]);
+        assert_eq!(r.entries().count(), r.entry_count());
+    }
+
+    #[test]
+    fn the_rules_are_kept() {
+        let mut out = [0u8; 512];
+        let d = |path, handle| Entry {
+            path,
+            kind: EntryKind::Directory,
+            handle,
+        };
+        // Not absolute or not normal, a handle used twice or out of range,
+        // a missing entry with a handle, too few handles in the message.
+        assert!(encode("home", &Slots::NONE, &[], 0, &mut out).is_none());
+        assert!(encode("/a/../b", &Slots::NONE, &[], 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a/", 0)], 1, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/b", 0)], 2, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 1)], 1, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/a", 1)], 2, &mut out).is_none());
+        // A path repeated with another of its length between (review K11).
+        let n = encode(
+            "/",
+            &Slots::NONE,
+            &[d("/a", 0), d("/b", 1), d("/c", 2)],
+            3,
+            &mut out,
+        )
+        .expect("three paths");
+        let at: Vec<usize> = (0..n - 5)
+            .filter(|&i| out[i..i + 5] == [2, 0, 0, 0, b'/'])
+            .map(|i| i + 5)
+            .collect();
+        assert_eq!(at.len(), 3);
+        out[at[2]] = out[at[0]];
+        assert!(
+            Startup::decode(&out[..n], 3).is_none(),
+            "a path given twice"
+        );
+        out[at[2]] = b'd';
+        assert!(Startup::decode(&out[..n], 3).is_some());
+        let missing = Entry {
+            path: "/x",
+            kind: EntryKind::Missing,
+            handle: 0,
+        };
+        assert!(encode("/", &Slots::NONE, &[missing], 1, &mut out).is_none());
+        let slots = Slots {
+            job: 0,
+            ..Slots::NONE
+        };
+        assert!(
+            encode("/", &slots, &[d("/", 0)], 1, &mut out).is_none(),
+            "job and entry share 0"
+        );
+        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, &mut out[..10]).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, &mut out).is_some());
+    }
+
+    #[test]
+    fn the_decoder_is_total() {
+        let mut out = [0u8; 512];
+        let n = sample(&mut out);
+        for cut in 0..n {
+            assert!(Startup::decode(&out[..cut], 7).is_none(), "cut at {cut}");
+        }
+        let mut x: u64 = 0x1234_5678_9abc_def0;
+        for _ in 0..200_000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let mut m = out[..n].to_vec();
+            let at = (x as usize) % n;
+            m[at] = (x >> 32) as u8;
+            if let Some(r) = Startup::decode(&m, 7) {
+                assert_eq!(r.entries().count(), r.entry_count());
+                for e in r.entries() {
+                    assert!(crate::posix::is_absolute_normal(e.path));
+                }
+            }
+            let _ = Startup::decode(&m, (x >> 40) as usize % 70);
+        }
+    }
 }

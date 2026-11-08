@@ -115,7 +115,7 @@ fn a_program_from_the_volume_runs_as_from_the_ramdisk(hello: &[u8]) {
     drop(file);
     let program = image_create(target, length).expect("an image of the file");
     handle_close(target).expect("the image holds the object");
-    assert_eq!(run(program, &[b"hello"]), expected, "same behaviour");
+    assert_eq!(run(program, &[]), expected, "same behaviour");
     assert_eq!(run(program, &[]), expected, "and again");
     handle_close(program).expect("close");
     stack.end();
@@ -269,9 +269,11 @@ fn the_startup_block_holds_the_program_headers(hello: &[u8]) {
     handle_close(me).expect("close");
     let (object, at, size) = object_with(hello);
     let program = image_create(object, hello.len() as u64).expect("image");
-    // `hello` ignores its arguments; the kernel wrote its block all the same.
+    // `hello` reads its arguments through its description and refuses
+    // these as a usage mistake (exit 2, ADR-0155): it could read the block
+    // the kernel wrote.
     let long = [b'a'; 4000];
-    assert_eq!(run(program, &[&long, b"b", b"c"]).code, 7);
+    assert_eq!(run(program, &[&long, b"b", b"c"]).code, 2);
     memory_unmap(at, size).expect("unmap");
     for h in [object, program] {
         handle_close(h).expect("close");

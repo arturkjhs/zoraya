@@ -150,6 +150,9 @@ fn fs_err(path: &Path, e: FsError) -> String {
 /// the volume does not accept (ADR-0013 rules 1 and 2) is an error naming
 /// the path. Hard links become separate files (ADR-0013 rule 5). Other file
 /// types are an error.
+/// The name of an empty file that only keeps its directory in git.
+pub const KEEP: &str = ".keep";
+
 pub fn populate<D: BlockDevice, C: Clock>(
     v: &mut Volume<D, C>,
     dir: Handle,
@@ -167,6 +170,11 @@ pub fn populate<D: BlockDevice, C: Clock>(
             .file_name()
             .into_string()
             .map_err(|_| format!("{}: name is not UTF-8", path.display()))?;
+        // An empty file `.keep` only keeps an empty directory in git
+        // (the home directory in rootfs): it is not copied.
+        if name == KEEP && std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() == 0) {
+            continue;
+        }
         let meta =
             std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let mode = (meta.permissions().mode() & 0o7777) as u16;

@@ -1,0 +1,114 @@
+# POSIX programs from zosh (TASK-18 step 10, ADR-0153 rule 10): the POSIX
+# image without its session file, so init starts zosh with the broker
+# beside it. A program of /bin without the native mark runs through the
+# broker with the toolchain set, a /tmp of its line's own and the line's
+# streams as fds 0, 1 and 2 (ADR-0152 rule 7).
+! panicked
+! ZORAYA-FAULT
+! -FAIL
+< Type help to begin
+< \r\n~>
+# A POSIX program by shell.path, and one in a pipeline after a builtin.
+> uname\r
+< \r\nZoraya
+< \r\n~>
+> echo three | wc -c\r
+< \r\n6
+< \r\n~>
+# tcc's description is the system image's (INV-0153-6): -o designates the
+# name to create, and grants shows the toolchain set.
+> echo 'int main(void) { return 7; }' > seven.c\r
+< \r\n~>
+> grants tcc seven.c -o seven\r
+< tcc gets (a POSIX program):
+< ~/seven.c
+< /bin /usr /etc       read (system)
+< change anything in (this line's own)
+< \r\n~>
+> tcc seven.c -o seven\r
+< \r\n~>
+> ./seven; echo after\r
+< (the rest of the line was not run)
+x \nafter\r
+< \r\n~>
+> status\r
+< exit status 7
+< \r\n~>
+# INV-0153-7, libposix's half from zosh: a path outside the table twice
+# and a missing one inside; one report, and none for the missing one.
+> toybox cat ../hello.txt ../hello.txt missing.txt\r
+< cat: missing.txt: No such file or directory
+<   hint: toybox tried to read /hello.txt, which it was not given\r\n  to allow it: +r / toybox cat
+x tried to read ~/missing.txt
+< \r\n~>
+# The processes of one line share its /tmp; the next line's is new.
+> echo 'echo x > /tmp/f; toybox ls /tmp; echo dash says $1' > t.sh\r
+< \r\n~>
+> dash t.sh hi\r
+< \r\nf\r\ndash says hi
+x hint
+< \r\n~>
+> toybox ls /tmp; echo listed\r
+< \r\nlisted
+x \nf\r
+< \r\n~>
+# Ctrl-Z of a POSIX job goes through the broker (ADR-0158 rule 4); jobs
+# reads the stop from its process job; fg continues it and Ctrl-C ends it.
+> toybox sleep 30\r
+~ 1500 zzz
+> \x1a
+< ^Z
+< [1] stopped: toybox sleep 30
+< \r\n~>
+> jobs\r
+< [1]  stopped   toybox sleep 30
+< \r\n~>
+> fg\r
+< toybox sleep 30
+~ 500 zzz
+> \x03
+< toybox sleep 30: interrupted (Ctrl-C)
+< \r\n~>
+# INV-0200-2 (ADR-0200 item 2): a line mixing a native program and a POSIX
+# program that catches SIGTSTP. Ctrl-Z suspends the native element's own
+# job and sends SIGTSTP through the broker, whose handler runs: it says it
+# restores the terminal, then stops. It cannot print once stopped, so its
+# line comes before it is, and before the shell says the line stopped.
+! tstp: continued\r\ntstp: continued
+> requests a | t_posix tstp\r
+w a: ready
+w tstp: ready
+o a: ready
+o tstp: ready
+> \x1a
+< ^Z
+< tstp: restoring the terminal
+< [1] stopped: requests a | t_posix tstp
+< \r\n~> 
+o tstp: restoring the terminal
+x tstp: continued
+> jobs\r
+< [1]  stopped   requests a | t_posix tstp
+< \r\n~> 
+# fg continues both; the POSIX program's handler takes the signal again.
+> fg\r
+< requests a | t_posix tstp
+< tstp: continued
+> \x03
+< ^C
+< (Ctrl-C again to kill it)
+> \x03
+< ^C
+< requests a | t_posix tstp: interrupted (Ctrl-C)
+< \r\n~> 
+# INV-0200-2's other half: an element that ignores SIGTSTP is not stopped
+# within half a second; the shell says so and the line stays in front.
+> t_posix notstp\r
+w notstp: ready
+> \x1a
+< ^Z
+< did not stop: t_posix notstp
+> \x03
+< t_posix: interrupted (Ctrl-C)
+< \r\n~> 
+> poweroff\r

@@ -78,6 +78,10 @@ Right, highlighting that marks an unknown command red, Tab with a list, prefix h
 
 Accepted as recommended (architect, 2026-11-03), with the hints for familiar Unix names in rule 6, from the tour.
 
+*Changed by the architect, 2026-11-04 (recorded by an agent at the architect's request):* rule 8's subset gains
+`ESC [ n A` (cursor up), so that a line longer than the width is redrawn from its start in place; ADR-0096 holds the
+sequence already (its note of this date). INV-0154-2 checks the subset with it.
+
 The original recommendation follows.
 
 Recommended: **Option C**. It is a recommendation, not a decision.
@@ -205,6 +209,16 @@ terminal draws faint itself. CP-25's out-of-band control is unaffected: these ar
 - Whether suggestions should also come from completions, as fish's do, or stay history-only (simpler, predictable).
 - Whether a history line should be kept when it failed to parse.
 - The right path-listing deadline once listing a large directory is measured.
+- *Note, 2026-11-03 (TASK-18 Part 2, step 4):* rule 8's subset has no cursor-up, so a line wider than the terminal
+  cannot be redrawn from its start in place once the cursor is on a later row. The editor (`zoraya-shell`'s
+  `editor`) redraws the row in place while prompt and line fit on one row; past that, typing and Backspace at the end
+  stay incremental, and any other edit draws the prompt and line again on a new row, leaving the old rows above.
+  Adding `ESC [ n A` to the subset would allow redrawing in place; that is a change to ADR-0096 and this ADR for the
+  architect. INV-0154-2 is checked against the subset as listed. *Resolved 2026-11-04:* the architect added it (the
+  Decision above). *Implemented 2026-11-04 (step 7):* every redraw goes up to the line's first row with `ESC [ n A`,
+  writes prompt and line again and clears below with `ESC [ J`; a line ending at the right edge is followed by a
+  line end. INV-0154-2's checker holds `A`; `long_lines_are_redrawn_in_place` checks the rows on a simulated
+  terminal at three widths, and `tests/gui/terminal.script` a two-row line in the window.
 
 ## Revisit triggers
 - The serial console measured to lag while typing because of redraws: redraw only from the cursor.

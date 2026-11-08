@@ -11,6 +11,9 @@ deterministic fuzz test on the pinned toolchain instead
 |---|---|
 | `mount_walk` | byte edits applied to a valid seed image (two-level tree, directories, files, a link object, an orphan), optionally with every checksum up to the root record recomputed |
 | `raw_image` | a mask XORed onto the first bytes of the seed image (root slots and early blocks), no checksums recomputed |
+| `editor_keys` | arbitrary key bytes to the line editor at any width (ADR-0154, INV-0154-1); the deterministic test is `crates/zoraya-shell/src/editor_tests.rs` |
+| `shell_parse` | arbitrary UTF-8 text as a shell line or script (ADR-0150, INV-0150-3); the deterministic test is `crates/zoraya-shell/src/lang_tests.rs` |
+| `describe` | arbitrary bytes as a command description (ADR-0156, INV-0156-1); the deterministic test is `crates/zoraya-describe/src/tests.rs` |
 
 Each input is mounted read-only and read-write, walked through the request
 API (every directory, name, file and link target) and checked with `fsck`.

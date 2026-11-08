@@ -17,11 +17,17 @@
 //! # a comment
 //! serial TEXT       wait until TEXT appears on the serial line
 //! screen TEXT       wait until a row below the last matched one reads TEXT
+//! prefix TEXT       the same for a row that begins with TEXT (a line being
+//!                   edited, whose faint suggestion follows what is typed)
+//! pause MS          wait MS milliseconds, reading the serial line
 //! type KEYS         press and release each key (escapes \r \e \\)
 //! key QCODE         press and release one QEMU key code, such as f12
 //! chord MOD QCODE   the same with MOD (ctrl, shift, alt) held, such as
 //!                   chord ctrl c
 //! region X Y W H RGB  every pixel of the rectangle is the colour RGB (hex)
+//! window            a new window: the next `screen` looks from its top row
+//! top TEXT          wait until the top row reads TEXT (a cleared screen),
+//!                   then a new window as `window`
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
 //! exit              wait for QEMU to end with status 0
@@ -43,16 +49,23 @@ use zoraya_term::{PAD, PALETTE, grid_for};
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
 /// Where the screendumps go, relative to QEMU's working directory.
 const SHOT: &str = "build/gui-screen.ppm";
+/// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
+/// silent QEMU fails the run instead of blocking it past its deadline.
+const QMP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Serial(String),
     Screen(String),
+    Prefix(String),
+    Pause(u64),
     Type(Vec<u8>),
     Key(String),
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
+    Window,
+    Top(String),
     Exit,
 }
 
@@ -68,6 +81,11 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
         steps.push(match kind {
             "serial" => Step::Serial(rest.to_string()),
             "screen" => Step::Screen(rest.to_string()),
+            "prefix" => Step::Prefix(rest.to_string()),
+            "pause" => Step::Pause(
+                rest.parse()
+                    .map_err(|_| bad("not a number of milliseconds"))?,
+            ),
             "type" => Step::Type(crate::script::unescape(rest).map_err(|e| bad(&e))?),
             "key" => Step::Key(rest.to_string()),
             "chord" => {
@@ -87,6 +105,8 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
             }
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
+            "window" => Step::Window,
+            "top" => Step::Top(rest.to_string()),
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
@@ -248,6 +268,10 @@ impl Qmp {
                 Err(_) => std::thread::sleep(Duration::from_millis(50)),
             }
         };
+        stream
+            .set_read_timeout(Some(QMP_TIMEOUT))
+            .and_then(|()| stream.set_write_timeout(Some(QMP_TIMEOUT)))
+            .map_err(|e| e.to_string())?;
         let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
         let mut q = Qmp { stream, reader };
         q.reply()?;
@@ -262,7 +286,7 @@ impl Qmp {
             if self
                 .reader
                 .read_line(&mut line)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("QMP: no reply within {} s ({e})", QMP_TIMEOUT.as_secs()))?
                 == 0
             {
                 return Err("QMP closed".into());
@@ -351,12 +375,29 @@ impl Run {
     }
 
     fn wait_screen(&mut self, text: &str) -> Result<Duration, String> {
+        self.wait_row(text, false)
+    }
+
+    /// A row below the last matched one that reads `text`, or with
+    /// `prefix` begins with it.
+    fn wait_row(&mut self, text: &str, prefix: bool) -> Result<Duration, String> {
         let start = Instant::now();
         loop {
-            self.pump()?;
+            // The screen's own timeout comes first, so that it says what
+            // the screen shows.
+            if Instant::now() <= self.deadline {
+                self.pump()?;
+            }
             let rows = self.qmp.screen()?.rows();
             let from = self.row.map_or(0, |r| r + 1);
-            if let Some(at) = rows.iter().skip(from).position(|r| r == text) {
+            let hit = |r: &String| {
+                if prefix {
+                    r.starts_with(text)
+                } else {
+                    r == text
+                }
+            };
+            if let Some(at) = rows.iter().skip(from).position(hit) {
                 self.row = Some(from + at);
                 return Ok(start.elapsed());
             }
@@ -380,6 +421,15 @@ impl Run {
                 std::thread::sleep(Duration::from_millis(20));
             },
             Step::Screen(text) => self.wait_screen(text).map(|_| ()),
+            Step::Prefix(text) => self.wait_row(text, true).map(|_| ()),
+            Step::Pause(ms) => {
+                let until = Instant::now() + Duration::from_millis(*ms);
+                while Instant::now() < until {
+                    self.pump()?;
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(())
+            }
             Step::Type(keys) => {
                 for c in String::from_utf8_lossy(keys).chars() {
                     let (code, shift) = qcode(c).ok_or(format!("no key for {c:?}"))?;
@@ -443,6 +493,27 @@ impl Run {
                 );
                 Ok(())
             }
+            Step::Window => {
+                self.row = None;
+                Ok(())
+            }
+            Step::Top(text) => loop {
+                if Instant::now() <= self.deadline {
+                    self.pump()?;
+                }
+                let rows = self.qmp.screen()?.rows();
+                if rows.first() == Some(text) {
+                    self.row = None;
+                    return Ok(());
+                }
+                if Instant::now() > self.deadline {
+                    return Err(format!(
+                        "timeout waiting for the top row to read {text:?}; the screen shows:\n{}",
+                        rows.join("\n")
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            },
             Step::Exit => loop {
                 self.pump()?;
                 match self.child.try_wait().map_err(|e| e.to_string())? {
@@ -507,7 +578,11 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             deadline,
             row: None,
         };
-        let r = steps.iter().try_for_each(|s| run.step(s));
+        // A failure names its step, so that a script of a thousand says where.
+        let r = steps.iter().enumerate().try_for_each(|(i, s)| {
+            run.step(s)
+                .map_err(|e| format!("step {} of {} ({s:?}): {e}", i + 1, steps.len()))
+        });
         // The last drain fails the run on a flood or forbidden text, not on
         // a deadline the steps already met.
         let r = r.and(match run.pump() {

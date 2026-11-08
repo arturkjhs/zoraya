@@ -65,6 +65,7 @@ jobs:
           - make check-user-access
           - make check-kernel-tty
           - make check-host-paths
+          - make check-argv
           - make check-test-caps
           - make check-fetch-ports
           - make check-ci-jobs
@@ -82,7 +83,9 @@ jobs:
   tests:
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The tour's sessions are long under TCG, which is every accelerator on
+    # GitHub's x86 runners (review K2); every other job stays within 10.
+    timeout-minutes: ${{ contains(matrix.cmd, 'tour') && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,6 +102,8 @@ jobs:
           - make test-files
           - make test-libposix
           - make test-posix-gui
+          - make test-tour-gui POSIX_ACCELS="auto"
+          - make test-tour-gui POSIX_ACCELS="tcg"
           - make test-crash
           - make test-gui
           - 'make test-posix POSIX_SCRIPTS="tests/posix/hello.script tests/posix/w5.script" POSIX_ACCELS="auto tcg"'
@@ -113,6 +118,9 @@ jobs:
           - 'make test-posix POSIX_SCRIPTS="tests/posix/w10.script" POSIX_ACCELS="auto tcg"'
           - 'make test-posix POSIX_SCRIPTS="tests/posix/invariants.script" POSIX_ACCELS="auto tcg"'
           - 'make test-posix POSIX_SCRIPTS="tests/posix/scenarios.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/zosh.script" POSIX_ACCELS="auto tcg"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="auto"'
+          - 'make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="tcg"'
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4

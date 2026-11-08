@@ -12,8 +12,8 @@ use alloc::vec::Vec;
 
 use zoraya_abi::spawn::{Encoder, Transfer};
 use zoraya_abi::{
-    ChannelEntry, Handle, JOB, JobFlags, MapFlags, MemoryFlags, ObjectType, Rights, Status,
-    process_signals,
+    ChannelEntry, Handle, JOB, JobFlags, MapFlags, MemoryFlags, Mode, ObjectType, Packet, Rights,
+    Status, channel_signals, process_signals,
 };
 use zoraya_keymap::code;
 use zoraya_proto_gui::{self as gui, status};
@@ -22,8 +22,8 @@ use zoraya_protocol::{Below, ErrorReply, Header, Message, NO_REPLY, Seq, decode,
 use zoraya_user::gui::{Gui, manager_send, scan, wait_reply};
 use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, console_entry, dup, handle_close,
-    handle_duplicate, image, job_create, job_kill, memory_create, memory_map, println,
-    process_exit_record, spawn, thread_yield, wait_exit,
+    handle_duplicate, image, job_create, job_kill, memory_create, memory_map, port_create,
+    port_subscribe, port_wait, println, process_exit_record, spawn, thread_yield, wait_exit,
 };
 
 extern crate alloc;
@@ -164,6 +164,35 @@ impl Client {
                 Err((s, _)) => panic!("read: {s:?}"),
             }
         }
+    }
+
+    /// Waits on this client's own channel, the one its keys arrive on, until
+    /// `done` holds for what has arrived, or two seconds pass; gives it all.
+    /// A round trip to the manager does not order the input driver's
+    /// channel, so it cannot tell that a key has reached its client.
+    fn drain_until(&mut self, done: impl Fn(&[(u32, Vec<u8>)]) -> bool) -> Vec<(u32, Vec<u8>)> {
+        let port = port_create().expect("port");
+        let readable = channel_signals::READABLE;
+        port_subscribe(port, self.end, readable, 1, Mode::Level).expect("subscribe");
+        let until = clock_monotonic() + 2_000_000_000;
+        let mut got = self.drain();
+        while !done(&got) && clock_monotonic() < until {
+            let mut packets = [Packet::default()];
+            let _ = port_wait(port, until, &mut packets);
+            got.extend(self.drain());
+        }
+        handle_close(port).expect("close");
+        got
+    }
+
+    /// Keys, waiting until `count` have arrived (or two seconds).
+    fn keys_wait(&mut self, count: usize) -> Vec<(u32, bool, u32, u32)> {
+        let is_key = |e: &(u32, Vec<u8>)| decode::<gui::Key>(&e.1, 0).is_ok();
+        self.drain_until(|got| got.iter().filter(|e| is_key(e)).count() >= count)
+            .iter()
+            .filter_map(|(_, b)| decode::<gui::Key>(b, 0).ok())
+            .map(|(_, k)| (k.code, k.pressed, k.text.0, k.dropped))
+            .collect()
     }
 
     fn keys(&mut self) -> Vec<(u32, bool, u32, u32)> {
@@ -335,29 +364,36 @@ fn rewritten_during_composition(gui: &Gui, a: &mut Client) {
 /// INV-0093-1, INV-0094-1, INV-0094-3: keys to the focused client only,
 /// F12 the compositor's, a deaf client loses only its own events.
 fn routing_and_focus(gui: &Gui, keyboard: &FakeInput, a: &mut Client, b: &mut Client) {
+    let focused = |e: &(u32, Vec<u8>)| decode::<gui::Focus>(&e.1, 0).is_ok_and(|(_, f)| f.focused);
+    let is_key = |e: &(u32, Vec<u8>)| decode::<gui::Key>(&e.1, 0).is_ok();
     a.drain();
     b.drain();
     keyboard.keys(&[(30, 1), (30, 0)]);
+    assert_eq!(
+        a.keys_wait(2),
+        [(30, true, 'a' as u32, 0), (30, false, 0, 0)]
+    );
+    // The compositor has read the frame. It is one thread, so a manager
+    // round trip now proves it has routed all of it: b would have had any.
     settle(gui);
-    assert_eq!(a.keys(), [(30, true, 'a' as u32, 0), (30, false, 0, 0)]);
     assert!(b.keys().is_empty(), "b is not focused");
     keyboard.keys(&[(code::F12, 1), (code::F12, 0)]);
+    let mut to_b = b.drain_until(|got| got.iter().any(focused));
+    // The release follows the press in the same frame.
     settle(gui);
+    to_b.extend(b.drain());
     let to_a = a.drain();
-    let to_b = b.drain();
-    let is_key = |e: &(u32, Vec<u8>)| e.0 == 16;
     assert!(
         !to_a.iter().any(is_key) && !to_b.iter().any(is_key),
         "F12 reached nobody"
     );
     assert!(
-        to_b.iter()
-            .any(|(o, bytes)| *o == 18
-                && decode::<gui::Focus>(bytes, 0).is_ok_and(|(_, f)| f.focused))
+        to_b.iter().any(focused),
+        "b got the focus within two seconds"
     );
     keyboard.keys(&[(48, 1)]);
+    assert_eq!(b.keys_wait(1), [(48, true, 'b' as u32, 0)]);
     settle(gui);
-    assert_eq!(b.keys(), [(48, true, 'b' as u32, 0)]);
     assert!(a.keys().is_empty());
     // b stops reading: its queue fills, and a is served throughout.
     for _ in 0..100 {
@@ -368,17 +404,23 @@ fn routing_and_focus(gui: &Gui, keyboard: &FakeInput, a: &mut Client, b: &mut Cl
     let first = b.keys();
     assert!(first.len() < 200, "some were dropped: {}", first.len());
     keyboard.keys(&[(48, 1)]);
-    settle(gui);
     // The first event b gets after it had no room carries the count. (The
     // compositor may still have been taking the flood when b drained, so
     // what follows is not only the last key.)
-    let after = b.keys();
+    let after = b.keys_wait(1);
     assert!(
         after.first().is_some_and(|k| k.3 > 0),
         "the count arrives: {after:?}"
     );
-    // Back to a for the rest.
+    // Back to a for the rest. Its Focus must arrive here, not in the next
+    // test, which expects a to hear nothing; the flood's tail may still be
+    // queued ahead of the F12 frame.
     keyboard.keys(&[(code::F12, 1), (code::F12, 0)]);
+    let back = a.drain_until(|got| got.iter().any(focused));
+    assert!(
+        back.iter().any(focused),
+        "a got the focus back within two seconds"
+    );
     settle(gui);
     a.drain();
     b.drain();

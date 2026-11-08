@@ -266,7 +266,7 @@ for sockets would be one more kind.
 `/dev/urandom` (toybox, `direct`, no T1 applet uses it); `/etc/profile`; a persistent `/tmp`; bind-style overlays of
 several entries on one prefix; a batch `clone` for spawn.
 
-*Note, 2026-11-03 (the architect's decision on ADR-0153, recorded by an agent):* `zosh` is a third builder of the table. In its tables cwd is an absolute path and a relative path is resolved from it (item 6's second form, INV-0153-8). Item 5's fixed slots gain `REPORT` (the agent's means of carrying out the architect's refused-path hint), the write end of a channel on which `libposix` reports paths no entry covers, once each (ADR-0153 rule 11, INV-0153-7); the call still fails with `ENOENT`.
+*Note, 2026-11-03 (the architect's decision on ADR-0153, recorded by an agent):* `zosh` is a third builder of the table. In its tables cwd is an absolute path and a relative path is resolved from it (item 6's second form, INV-0153-8). Item 5's fixed slots gain `REPORT` (proposed by the agent to carry out the architect's refused-path hint, accepted by the architect on 2026-11-03), the write end of a channel on which `libposix` reports paths no entry covers, once each (ADR-0153 rule 11, INV-0153-7); the call still fails with `ENOENT`.
 
 ## Consequences
 

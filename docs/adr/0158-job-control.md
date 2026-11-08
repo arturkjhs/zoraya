@@ -166,6 +166,13 @@ leave the job tree (CP-07). Threads: `job_suspend` stops every thread (ADR-0105 
   every point (during `kill`, `wait`, editing, between prompts).
 
 ## Open questions
+- *Note, 2026-11-04 (TASK-18 step 10):* rule 4 was first built for lines of POSIX programs only. *Settled
+  2026-11-08 by ADR-0200 (accepted):* each native element of a line has a job of its own, which Ctrl-Z suspends,
+  and every POSIX element gets `SIGTSTP` through the broker (INV-0200-2).
+- *Note, 2026-11-08 (TASK-18 Part 2, accepted by the architect):* a line whose job in front Ctrl-Z stops goes no
+  further, as after Ctrl-C: the rest of it does not run, `$status` is that of an interrupted command, and `try`
+  catches it. A job brought to the front with `fg` after `&` or `bg` has its input at its end (rule 2 closed it);
+  only a job that Ctrl-Z stopped in front gets the keys again.
 - Whether a background job that reads should stop (bash) rather than see end of file; nothing measured.
 - Whether `fg` should take a job by name as well as by number (`%make`).
 

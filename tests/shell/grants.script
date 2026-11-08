@@ -1,0 +1,78 @@
+# What a command gets, in QEMU (TASK-18 step 7, ADR-0153): its handle table
+# and each entry's requests (INV-0153-1, INV-0153-2), link objects (rule 5,
+# INV-0153-2), and the report of a refused path (the native half of
+# INV-0153-7). The volume is rootfs/ with tests/shell/grants-root/ over
+# it: /t/secret.txt, and in /t/w inside.txt, real/deep.txt and the links
+# in-link -> inside.txt, out-link -> ../secret.txt, sub -> real, up -> ..
+# `probe` lists its slots, tries every request through each entry and opens
+# each PATH twice, to read and to change.
+! panicked
+! storage failed
+< Type help to begin
+< \r\n~> 
+> cd /t/w\r
+< \r\n/t/w> 
+# INV-0153-1: nothing designated. Its job, its three streams, its own heap
+# (it made that itself), the current directory's connection and the report
+# channel; nothing else, and the directory reads and lists only.
+> probe\r
+< slots: 2:job 1001:stream-read 1002:stream-write 1003:stream-write 1004:memory 1005:channel 1006:channel
+< entry /t/w directory: stat=ok widen=not granted list=ok create=not granted mkdir=not granted remove=not granted sync=not granted rename=not granted token=ok share=not granted narrow=not granted unnamed=not granted
+< \r\n/t/w> 
+# INV-0153-2: each kind gives its rights and no more (ADR-0153 rule 2).
+> probe --read inside.txt --change real/deep.txt --tree real\r
+# A path inside an entry that gives it as much takes no entry of its own
+# (review S3, S9): the tree covers real/deep.txt, the current directory
+# inside.txt. The first entry follows the slots directly.
+< slots: 2:job 1001:stream-read 1002:stream-write 1003:stream-write 1004:memory 1005:channel 1006:channel 1007:channel
+^ \r\nentry /t/w/real directory: stat=ok widen=not granted list=ok create=ok mkdir=ok remove=ok sync=ok rename=ok token=ok share=not granted narrow=not granted unnamed=not granted
+< entry /t/w directory: stat=ok widen=not granted list=ok create=not granted mkdir=not granted remove=not granted sync=not granted rename=not granted token=ok share=not granted narrow=not granted unnamed=not granted
+< \r\n/t/w> 
+# A file to change, alone: an entry of its own, which reads and writes it
+# and nothing more.
+> probe --change real/deep.txt\r
+< entry /t/w/real/deep.txt file: stat=ok widen=not granted read=ok write=ok sync=ok
+< \r\n/t/w> 
+# A name to create: its directory, narrowed to that one name.
+> probe --create real/new.txt\r
+< entry /t/w/real directory: stat=ok widen=not granted list=not granted create=not granted mkdir=not granted remove=not granted sync=ok
+< \r\n/t/w> 
+# INV-0153-7 (native half) and INV-0153-2 through a link: a path outside
+# every entry is refused, twice, and so is one that a link inside an entry
+# leads outside; both are one path, reported once. A missing path inside
+# an entry is not found, and never reported.
+> probe ../secret.txt inside.txt up/secret.txt missing.txt\r
+< path ../secret.txt: read=not granted change=not granted\r\npath ../secret.txt: read=not granted change=not granted
+< path inside.txt: read=ok change=not granted
+< path up/secret.txt: read=not granted change=not granted\r\npath up/secret.txt: read=not granted change=not granted
+< path missing.txt: read=not found change=not granted\r\npath missing.txt: read=not found change=not granted
+<   hint: probe tried to read /t/secret.txt, which it was not given\r\n  to allow it: +r /t probe ../secret.txt
+x tried to read /t/w/
+< \r\n/t/w> 
+# Rule 5: a designated link inside the current directory gives its target;
+# one leading outside is refused with the link and its target, until a
+# grant covers the target; grants shows the targets.
+> cat in-link\r
+< \r\ninside
+< \r\n/t/w> 
+> cat out-link\r
+< zosh: /t/w/out-link: leads through a link to /t/secret.txt, outside the current directory and this line's grants\r\n  hint: to give it, put +r /t/secret.txt before the command
+x \nsecret\r
+< \r\n/t/w> 
+> +r .. cat out-link\r
+< \r\nsecret
+< \r\n/t/w> 
+> grants cat in-link sub/deep.txt\r
+<   /t/w/inside.txt      read (operand FILE, through a link at /t/w/in-link)\r\n  /t/w/real/deep.txt   read (operand FILE, through a link at /t/w/sub/deep.txt)
+< \r\n/t/w> 
+> cat sub/deep.txt\r
+< \r\ndeep
+< \r\n/t/w> 
+# A narrowed entry's directory through a link that leads outside.
+> rm up/secret.txt\r
+< zosh: /t/w/up: leads through a link to /t, outside the current directory and this line's grants\r\n  hint: to give it, put +w /t before the command
+< \r\n/t/w> 
+> cat ../secret.txt\r
+< \r\nsecret
+< \r\n/t/w> 
+> poweroff\r

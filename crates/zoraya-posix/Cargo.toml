@@ -24,6 +24,7 @@ zoraya-proto-file = { path = "../zoraya-proto-file" }
 zoraya-proto-posix = { path = "../zoraya-proto-posix" }
 zoraya-proto-tty = { path = "../zoraya-proto-tty" }
 zoraya-protocol = { path = "../zoraya-protocol" }
+zoraya-resolve = { path = "../zoraya-resolve" }
 
 [target.'cfg(target_os = "none")'.dependencies]
 zoraya-rt = { path = "../zoraya-rt", default-features = false }

@@ -5,11 +5,16 @@
 //! ```text
 //! # a comment
 //! < TEXT          wait until TEXT appears after the last match
+//! ^ TEXT          the same, and fail unless TEXT comes right after the last
+//!                 match: nothing but colour lies between (a line by line
+//!                 comparison, INV-0154-4)
 //! > KEYS          send KEYS
 //! = N             send N bytes of 'x' at once
 //! ! TEXT          fail if TEXT appears anywhere in the output, before or after
 //! x TEXT          fail if TEXT lies between the last two matches
 //! o TEXT          fail unless TEXT has appeared exactly once so far
+//! w TEXT          wait until TEXT has come since the last match, in any
+//!                 order with what else came; the last match stays where it is
 //! ~ MS TEXT       for MS milliseconds, fail if TEXT arrives
 //! @ KEYS | TEXT   send KEYS every 200 ms until TEXT appears
 //! * N KEYS | TEXT N times: send KEYS and wait for TEXT
@@ -32,11 +37,14 @@ use std::time::{Duration, Instant};
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Expect(String),
+    Next(String),
     Send(Vec<u8>),
     Forbid(String),
     /// Not between the last two matches.
     Absent(String),
     Once(String),
+    /// Waits for text after the last match, which it does not move.
+    Wait(String),
     Quiet(u64, String),
     Until(Vec<u8>, String),
     Repeat(usize, Vec<u8>, String),
@@ -96,9 +104,11 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             .ok_or(format!("line {number}: no argument"))?;
         steps.push(match kind {
             "<" => Step::Expect(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
+            "^" => Step::Next(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             ">" => Step::Send(unescape(rest).map_err(|e| format!("line {number}: {e}"))?),
             "x" => Step::Absent(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "o" => Step::Once(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
+            "w" => Step::Wait(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "~" => {
                 let (ms, text) = rest
                     .split_once(' ')
@@ -152,11 +162,49 @@ pub struct Seen {
     searched: usize,
     /// The text `take` last looked for, and how far it has looked.
     looking: Option<(String, usize)>,
+    /// The start of an escape sequence cut at the end of the last read.
+    pending: Vec<u8>,
+}
+
+/// Drops SGR sequences (`ESC [ digits ; ... m`): colour and faint are not
+/// text, so scripts match what a person reads (ADR-0154). Gives the bytes
+/// kept, and the start of a sequence the input ends inside.
+pub fn strip_sgr(bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            let mut j = i + 1;
+            if j == bytes.len() {
+                return (out, bytes[i..].to_vec());
+            }
+            if bytes[j] == b'[' {
+                j += 1;
+                while j < bytes.len() && (bytes[j].is_ascii_digit() || bytes[j] == b';') {
+                    j += 1;
+                }
+                if j == bytes.len() {
+                    return (out, bytes[i..].to_vec());
+                }
+                if bytes[j] == b'm' {
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    (out, Vec::new())
 }
 
 impl Seen {
     pub fn add(&mut self, bytes: &[u8]) -> Result<(), String> {
-        output::keep(&mut self.text, &String::from_utf8_lossy(bytes))
+        let mut all = core::mem::take(&mut self.pending);
+        all.extend_from_slice(bytes);
+        let (kept, pending) = strip_sgr(&all);
+        self.pending = pending;
+        output::keep(&mut self.text, &String::from_utf8_lossy(&kept))
     }
 
     pub fn forbid(&mut self, text: &str) {
@@ -196,6 +244,12 @@ impl Seen {
     /// How many times `text` has appeared.
     pub fn count(&self, text: &str) -> usize {
         self.text.matches(text).count()
+    }
+
+    /// What lay between the last two matches: before the last one, after
+    /// the one before it.
+    pub fn gap(&self, matched: usize) -> &str {
+        &self.text[self.before..self.from.saturating_sub(matched).max(self.before)]
     }
 
     /// True if `text` lies between the last two matches.
@@ -358,6 +412,13 @@ fn steps_then_drain(
             Step::Expect(text) => {
                 link.expect(text, far)?;
             }
+            Step::Next(text) => {
+                link.expect(text, far)?;
+                let gap = link.seen.gap(text.len());
+                if !gap.is_empty() {
+                    return Err(format!("{gap:?} came before {text:?}"));
+                }
+            }
             Step::Absent(text) => {
                 if link.seen.between(text) {
                     return Err(format!("{text:?} appeared where it must not"));
@@ -367,6 +428,19 @@ fn steps_then_drain(
                 let count = link.seen.count(text);
                 if count != 1 {
                     return Err(format!("{text:?} appeared {count} times"));
+                }
+            }
+            Step::Wait(text) => {
+                while !link.seen.since_match().contains(text.as_str()) {
+                    if let Some(bad) = link.seen.violation() {
+                        return Err(format!("forbidden output: {bad}"));
+                    }
+                    if Instant::now() >= link.deadline {
+                        return Err(format!("timed out waiting for {text:?}"));
+                    }
+                    if !link.receive(link.deadline)? {
+                        return Err(format!("output ended before {text:?}"));
+                    }
                 }
             }
             Step::Quiet(ms, text) => {
@@ -460,6 +534,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sgr_is_dropped_even_when_cut() {
+        assert_eq!(strip_sgr(b"a\x1b[31mb\x1b[mc\x1b[2Kd").0, b"abc\x1b[2Kd");
+        let mut seen = Seen::default();
+        seen.add(b"x\x1b[2").unwrap();
+        seen.add(b"2my\x1b").unwrap();
+        seen.add(b"[mz").unwrap();
+        assert!(seen.take("xyz"));
+    }
+
+    #[test]
     fn escapes_become_bytes() {
         assert_eq!(
             unescape("a\\r\\e[A\\x03\\\\\\n").unwrap(),
@@ -542,9 +626,28 @@ mod tests {
     }
 
     #[test]
+    fn next_wants_nothing_in_between() {
+        let script = "printf 'a\\nb\\nc\\n'";
+        assert_eq!(shell(script, "< a\n^ \\nb\n^ \\nc\n", 5), Ok(()));
+        assert!(shell(script, "< a\n^ \\nc\n", 5).is_err());
+    }
+
+    #[test]
     fn once_counts_the_whole_output() {
         assert_eq!(shell("echo a b", "< b\no a\n", 5), Ok(()));
         assert!(shell("echo a a b", "< b\no a\n", 5).is_err());
+    }
+
+    #[test]
+    fn wait_leaves_the_last_match() {
+        let script = "echo a; sleep 0.2; echo c; echo b";
+        // b is waited for, then c (before it) is still found by `<`.
+        assert_eq!(shell(script, "< a\nw b\n< c\n< b\n", 5), Ok(()));
+        assert!(
+            shell("echo a b", "< b\nw a\n", 2).is_err(),
+            "only after the match"
+        );
+        assert!(shell("echo a", "< a\nw z\n", 1).is_err());
     }
 
     #[test]

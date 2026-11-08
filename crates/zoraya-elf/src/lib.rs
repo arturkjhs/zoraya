@@ -266,3 +266,57 @@ fn read_segment(ph: &[u8], file_len: u64, low: u64, high: u64) -> Result<Segment
         execute,
     })
 }
+
+/// The section a native program carries (ADR-0153 rule 9): a program without
+/// it is a POSIX program.
+pub const NATIVE_SECTION: &str = ".zoraya.native";
+/// Its contents, which `zoraya-rt` writes.
+pub const NATIVE_MARK: &[u8; 16] = b"zoraya native 1\n";
+
+/// The bytes of the ELF64 section named `name`, if `file` has one. Total:
+/// any input gives a result, never a panic.
+pub fn section<'a>(file: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    let u16_at = |at: usize| {
+        let b = file.get(at..at.checked_add(2)?)?;
+        Some(u16::from_le_bytes([b[0], b[1]]))
+    };
+    let u32_at = |at: usize| {
+        let b = file.get(at..at.checked_add(4)?)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let u64_at = |at: usize| -> Option<usize> {
+        let b = file.get(at..at.checked_add(8)?)?;
+        let mut a = [0u8; 8];
+        a.copy_from_slice(b);
+        usize::try_from(u64::from_le_bytes(a)).ok()
+    };
+    if file.get(..4)? != b"\x7fELF" || *file.get(4)? != ELFCLASS64 {
+        return None;
+    }
+    let shoff = u64_at(0x28)?;
+    let entsize = usize::from(u16_at(0x3a)?);
+    let count = usize::from(u16_at(0x3c)?);
+    let strndx = usize::from(u16_at(0x3e)?);
+    if entsize < 64 {
+        return None;
+    }
+    let header = |i: usize| shoff.checked_add(i.checked_mul(entsize)?);
+    let strings = u64_at(header(strndx)?.checked_add(24)?)?;
+    for i in 0..count {
+        let h = header(i)?;
+        let start = strings.checked_add(u32_at(h)? as usize)?;
+        let rest = file.get(start..)?;
+        let end = rest.iter().position(|b| *b == 0)?;
+        if &rest[..end] == name.as_bytes() {
+            let offset = u64_at(h.checked_add(24)?)?;
+            let size = u64_at(h.checked_add(32)?)?;
+            return file.get(offset..offset.checked_add(size)?);
+        }
+    }
+    None
+}
+
+/// Whether `file` is a native program (ADR-0153 rule 9).
+pub fn is_native(file: &[u8]) -> bool {
+    section(file, NATIVE_SECTION) == Some(NATIVE_MARK.as_slice())
+}

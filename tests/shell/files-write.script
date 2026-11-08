@@ -1,105 +1,215 @@
-# First boot of the roadmap's criterion, and every file command with its errors.
+# First boot of the roadmap's criterion, and every file command with its
+# errors (TASK-11, rebuilt for the native shell in TASK-18 step 6).
 ! panicked
 ! storage failed
 ! VolumeGone
-< zosh$ 
+< Type help to begin, or help tour.
+< \r\n~> 
+# The shell starts in an empty home (ADR-0154 rule 9).
+> pwd\r
+< \r\n/home
+< \r\n~> 
 > ls\r
-< README
-< docs/
-< hello.txt
-< zosh$ 
+< \r\n~> 
+> cd /\r
+< \r\n/> 
+> ls\r
+< README\r\nconfig/\r\ndocs/\r\nhello.txt\r\nhome/
+< \r\n/> 
 > cat hello.txt\r
 < hello from the filesystem
-< zosh$ 
+< \r\n/> 
 > cat missing\r
-< zosh: cat: NotFound
-< zosh$ 
+< cat: missing: not found
+< \r\n/> 
 > cat docs\r
-< zosh: cat: 
-< zosh$ 
-> write /notes.txt first line\r
-< zosh$ 
-> append notes.txt second line\r
-< zosh$ 
+< cat: docs: 
+< \r\n/> 
+> echo first line > /notes.txt\r
+< \r\n/> 
+> echo second line >> notes.txt\r
+< \r\n/> 
 > cat notes.txt\r
-< first line
-< second line
-< zosh$ 
+< first line\r\nsecond line
+< \r\n/> 
 > stat notes.txt\r
 < file size 23 mtime 
-< zosh$ 
+< \r\n/> 
 > stat docs\r
 < directory size
-< zosh$ 
+< \r\n/> 
 > stat missing\r
-< zosh: stat: NotFound
-< zosh$ 
+< stat: missing: not found
+< \r\n/> 
 > mkdir work\r
-< zosh$ 
+< \r\n/> 
 > mkdir work\r
-< zosh: mkdir: Exists
-< zosh$ 
+< mkdir: work: already exists
+< \r\n/> 
 > mkdir no/such/place\r
-< zosh: mkdir: NotFound
-< zosh$ 
+< mkdir: no/such/place: not found
+< \r\n/> 
 > cd work\r
-< zosh$ 
+< \r\n/work> 
 > pwd\r
-< /work
-< zosh$ 
-> write inner.txt kept\r
-< zosh$ 
+< \r\n/work
+< \r\n/work> 
+> echo kept > inner.txt\r
+< \r\n/work> 
 > cd ..\r
-< zosh$ 
-> pwd\r
-< /
-< zosh$ 
+< \r\n/> 
 > cd missing\r
-< zosh: cd: NotFound
-< zosh$ 
+< cd: missing: not found
+< \r\n/> 
 > cd hello.txt\r
-< zosh: cd: NotDirectory
-< zosh$ 
+< cd: hello.txt: not a directory
+< \r\n/> 
 > ls work\r
 < inner.txt
-< zosh$ 
+< \r\n/> 
 > rm work\r
-< zosh: rm: NotEmpty
-< zosh$ 
+< rm: work: not empty\r\n  hint: rm --recursive work removes it and everything in it
+< \r\n/> 
 > rm missing\r
-< zosh: rm: NotFound
-< zosh$ 
-> write gone.txt soon removed\r
-< zosh$ 
+< rm: missing: not found
+< \r\n/> 
+> echo soon removed > gone.txt\r
+< \r\n/> 
 > rm gone.txt\r
-< zosh$ 
+< \r\n/> 
 > cat gone.txt\r
-< zosh: cat: NotFound
-< zosh$ 
-> write old.txt moved\r
-< zosh$ 
+< cat: gone.txt: not found
+< \r\n/> 
+> echo moved > old.txt\r
+< \r\n/> 
 > mv old.txt work/new.txt\r
-< zosh$ 
+< \r\n/> 
 > mv missing other\r
-< zosh: mv: NotFound
-< zosh$ 
+< mv: missing: not found
+< \r\n/> 
 > cat old.txt\r
-< zosh: cat: NotFound
-< zosh$ 
+< cat: old.txt: not found
+< \r\n/> 
+# Paths are resolved by the shell: .. at / stays at /.
 > cat ../hello.txt\r
-< zosh: cat: InvalidArgument
-< zosh$ 
+< hello from the filesystem
+< \r\n/> 
 # A refused request leaves no handle behind: more than the shell's table holds.
-* 1100 cat ../x\r | zosh: cat: InvalidArgument
-< zosh$ 
+# cat is a program: the next line waits for the prompt, since keys typed while
+# a program runs reach nobody until byte streams (TASK-18 step 8).
+* 1100 cat ../x\r | cat: ../x: not found\r\n/> 
 > cat hello.txt\r
 < hello from the filesystem
-< zosh$ 
+< \r\n/> 
 > mv\r
-< usage: mv
-< zosh$ 
+< mv: missing operand FROM\r\nusage: mv FROM TO
+< \r\n/> 
+# The file commands of zoraya-commands (TASK-18 step 7), still builtins.
+> cp hello.txt copy.txt\r
+< \r\n/> 
+> cp hello.txt copy.txt\r
+< cp: copy.txt: already exists\r\n  hint: cp --force hello.txt copy.txt replaces it
+< \r\n/> 
+> head --lines 1 notes.txt\r
+< \r\nfirst line\r\n/> 
+> find '*.txt'\r
+< copy.txt\r\ndocs/about.txt\r\nhello.txt\r\nnotes.txt
+< \r\n/> 
+> search second notes.txt\r
+< notes.txt:2: second line
+< \r\n/> 
+> search nothing notes.txt; echo $status\r
+< \r\n1
+< \r\n/> 
+# Byte streams (TASK-18 step 8, ADR-0152): pipelines, $(...) and
+# redirection of programs.
+> ls | search .txt\r
+< copy.txt\r\nhello.txt\r\nnotes.txt
+< \r\n/> 
+> cat notes.txt | head --lines 1\r
+< \r\nfirst line\r\n/> 
+> echo hi there | cat\r
+< hi there
+< \r\n/> 
+> set n $(ls | search .txt); count $n\r
+< \r\n3
+< \r\n/> 
+> ls | search zzz; echo $status\r
+< \r\n1
+< \r\n/> 
+> cat notes.txt > copied.txt; cat copied.txt\r
+< first line\r\nsecond line
+< \r\n/> 
+> search line < copied.txt; rm copied.txt\r
+< first line\r\nsecond line
+< \r\n/> 
+# INV-0152-1: each element holds the stream ends the pipeline gives it;
+# every reader above ended on end of file, so the shell kept no write end.
+> echo-args --streams | cat\r
+< in: stream-read\r\nout: stream-write\r\nerr: stream-write
+< \r\n/> 
+# INV-0155-4: a writer whose reader closed exits 0 and says nothing. The
+# file is 256 KiB, four times a stream's capacity.
+> echo 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopq > b0\r
+< \r\n/> 
+> cat b0 b0 b0 b0 b0 b0 b0 b0 > b1; cat b1 b1 b1 b1 b1 b1 b1 b1 > b2\r
+< \r\n/> 
+> cat b2 b2 b2 b2 b2 b2 b2 b2 > b3; cat b3 b3 b3 b3 b3 b3 b3 b3 > big\r
+< \r\n/> 
+> rm b0 b1 b2 b3; stat big\r
+< file size 262144 
+< \r\n/> 
+> cat big | head --lines 1; echo $status\r
+< \r\n0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopq\r\n0
+< \r\n/> 
+> search q big | head --lines 1; echo $status\r
+< \r\nbig:1: 0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnopq\r\n0
+< \r\n/> 
+# INV-0152-2: a builtin's 256 KiB into a reader that never reads. The shell
+# does not wait on the full stream: it still takes keys, and Ctrl-C ends the
+# job long before its 60 s.
+> set x $(cat big)\r
+< \r\n/> 
+> echo $x | sleep 60\r
+~ 300 \r\n/>
+> \x03
+< sleep: interrupted (Ctrl-C)
+< \r\n/> 
+> rm big; set x\r
+< \r\n/> 
+# What a program is given (ADR-0153): grants shows it and runs nothing.
+> grants cp hello.txt work/copy.txt\r
+< cp gets:\r\n  in, out, err         the terminal\r\n  /                    read (current directory)\r\n  /hello.txt           read (operand FROM)\r\n  /work                create or replace copy.txt (operand TO)
+< \r\n/> 
+> cat work/copy.txt\r
+< cat: work/copy.txt: not found
+< \r\n/> 
+# An operand from a value reaches only inside the current directory (rule 4).
+> cd work\r
+< \r\n/work> 
+> set p ../hello.txt; rm $p\r
+< zosh: ../hello.txt: from a value, outside the current directory\r\n  hint: if that is meant, write +w / before the command
+< \r\n/work> 
+> cd /\r
+< \r\n/> 
+> cat hello.txt\r
+< hello from the filesystem
+< \r\n/> 
+# Settings, written by publishing a new file (ADR-0157 item 4).
+> settings shell.colour no\r
+< \r\n/> 
+> settings\r
+< shell.colour = no
+< \r\n/> 
+> cat /config/settings\r
+< shell.colour = no
+< \r\n/> 
+> settings --reset shell.colour\r
+< \r\n/> 
+> settings\r
+< \r\n/> 
 > sync\r
-< zosh$ 
-> write unsynced.txt the shell never asked\r
-< zosh$ 
+< \r\n/> 
+> echo the shell never asked > unsynced.txt\r
+< \r\n/> 
 > poweroff\r

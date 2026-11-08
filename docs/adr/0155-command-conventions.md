@@ -73,8 +73,8 @@ typed values at the request (CP-12).
 ### Decision
 
 Accepted with a change (architect, 2026-11-03): `exit` ends the shell, and `init` on the console starts a new one;
-the machine stays on. In GUI mode `init` does the same in the window's terminal: that is the agent's extension of the
-decision, to be confirmed. `poweroff` and `reboot` are explicit builtins: the shell holds `Power` (ADR-0062), and
+the machine stays on. In GUI mode `exit` closes the shell's terminal window, and if that was the last terminal
+window, `init` opens a new one (the architect's decision, 2026-11-03; revisit when stage 7 brings a launcher). `poweroff` and `reboot` are explicit builtins: the shell holds `Power` (ADR-0062), and
 `reboot` needs a kernel call to reset the machine, which does not exist yet (ADR-0062's note, `docs/backlog.md`).
 Rule 8 is amended accordingly. From the tour, also: `count --lines FILE...` counts lines, and a native program's
 `not granted` message carries no hint, since the shell prints it (ADR-0153 rule 11).
@@ -210,18 +210,44 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
   boot banner again.
 
 ## Open questions
+- *Note, 2026-11-08 (the architect's decision on TASK-18's review R9):* `cat` passes bytes unchanged, from a file or
+  from its input alike: no byte that is not UTF-8 is replaced, no line end is added, nothing is summarised as
+  binary. Showing such bytes safely is the display's job (`zosh`'s relay and the terminal), as it is for a
+  background job's output.
 - Whether `rm` should ask before removing a directory tree at the terminal; Option D's answer is no prompts, only
   `--recursive`.
 - Machine-readable output (`--records`, ADR-0152 Option C) for listing commands, when a need is measured.
+- *Note, 2026-11-03 (TASK-18 Part 2, step 6):* INV-0155-1's check, every command and builtin run with `--help`
+  and `--no-such-option` in QEMU and compared with its description rendered on the host, needs a script
+  generated from the descriptions; it is built with the tour's scripted session (step 11), when the file
+  commands are programs (step 7). Until then `console.script` checks `sleep --help` and `kill --nope`, and every
+  builtin parses its arguments through `zoraya-command`.
+- *Note, 2026-11-04 (TASK-18 Part 2, step 7):* `sync` stays a builtin. As a program it would need the `sync` right,
+  which no entry of its table carries: its description has no operand and the current directory is given read-only
+  (ADR-0153 rule 1). The other file commands are programs. *Decided by the architect, 2026-11-04 (recorded by an
+  agent):* `sync` stays a builtin, because flushing gives no access to any file, so a line need not grant anything
+  for it.
+- *Note, 2026-11-04 (TASK-18 Part 2, step 8):* INV-0155-4 is checked in `files-write.script` with `cat` and
+  `search` writing 256 KiB (four times a stream's capacity) into `head --lines 1`: each exits 0 and prints nothing.
+  `ls` and `find` would need a directory whose listing passes 64 KiB, which the test volume does not have; they
+  print through the same runtime path (`zoraya-rt`'s `Output`, `PeerClosed` → exit 0), so the check covers them
+  by construction, not by a run.
 
 ## Revisit triggers
 - A ported or new command whose syntax the description cannot express.
 - People repeatedly typing the GNU spelling of an option that has another name here: add it as the long form.
+- A launcher in stage 7: revisit what `exit` in the last GUI terminal window does (the architect's condition,
+  2026-11-03).
 
 ## Architect's decision
 
 Accepted with a change, 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
 `exit` closes the shell, and `init` on the console starts a new one; `poweroff` and `reboot` remain explicit
-commands. The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
+commands. In GUI mode `exit` closes the terminal window; if it was the last terminal window, `init` opens a new one
+(decided by the architect, 2026-11-03, in place of the agent's extension; revisit trigger: a launcher in stage 7).
+`sync` stays a builtin (the architect, 2026-11-04): flushing gives no access to any file, so a line need not grant
+anything for it; rule 8's list of programs loses it.
+`reboot` saying it is unavailable until the kernel has a reset call is accepted (2026-11-03); the reset call is a
+separate proposed ADR (ADR-0159). The related ADRs (ADR-0053, ADR-0062) and invariants about the end of the first process's shell are
 updated (notes in those ADRs, INV-0155-5 to -7; INV-0063-2's check moves to a test that ends `init` itself, ADR-0053's
 note).
