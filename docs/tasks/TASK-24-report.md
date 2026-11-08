@@ -149,7 +149,8 @@ the watchdog), 65 of the part's 90 minutes:
 
 ### Merge
 
-Not merged: see the queue. `work/7a` is complete locally; 7b starts from it.
+Not merged: see the queue. `work/7a` is complete locally at `ad9becd`, where a full `make test` from the snapshot
+worktree passed (every step, 1,055 host tests, the seven QEMU configurations, both GUI runs); 7b starts from it.
 
 ### Time
 
