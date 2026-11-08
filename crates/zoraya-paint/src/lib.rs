@@ -108,7 +108,7 @@ const SAMPLES: i64 = 4;
 
 /// Whether the subsample at `(x, y)` (in 1/`SAMPLES` pixels, from the
 /// corner's outer point, inward) is inside a corner of radius `r` pixels.
-fn inside_corner(shape: CornerShape, r: i64, x: i64, y: i64) -> bool {
+pub(crate) fn inside_corner(shape: CornerShape, r: i64, x: i64, y: i64) -> bool {
     match shape {
         CornerShape::Circle => {
             // The quarter circle centred r in from the corner.
@@ -201,7 +201,7 @@ pub fn rounded_outline(w: usize, h: usize, r: u32, t: u32, shape: CornerShape) -
 
 /// One box pass of radius `r` over a channel of `w × h`, the edges
 /// repeated (`clamp`) or faded to nothing.
-fn box_pass(src: &[u32], dst: &mut [u32], w: usize, h: usize, r: usize, clamp: bool) {
+pub(crate) fn box_pass(src: &[u32], dst: &mut [u32], w: usize, h: usize, r: usize, clamp: bool) {
     let win = (2 * r + 1) as u32;
     let mut tmp = vec![0u32; w * h];
     let get = |v: &[u32], i: isize, n: usize, stride: usize, base: usize| -> u32 {

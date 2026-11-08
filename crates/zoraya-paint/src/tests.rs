@@ -257,3 +257,332 @@ fn samples() {
         std::fs::write(std::format!("{dir}/paint-{name}.ppm"), out).unwrap();
     }
 }
+
+// Tests for the holes cargo-mutants found in 7b (TASK-24), from the
+// mutant-triage subagent's list.
+
+#[test]
+fn rect_edges_and_disjoint_boxes() {
+    let a = Rect::new(0, 0, 10, 10);
+    assert_eq!(a.intersect(&Rect::new(20, 0, 5, 5)), Rect::default());
+    assert_eq!(a.intersect(&Rect::new(0, 20, 5, 5)), Rect::default());
+    assert_eq!(a.grow(3), Rect::new(-3, -3, 16, 16));
+    assert!(!a.contains(9, 10) && !a.contains(10, 9) && a.contains(0, 0));
+}
+
+#[test]
+fn a_mask_reads_zero_outside_its_size() {
+    let m = Mask {
+        w: 4,
+        h: 2,
+        cov: vec![255; 8],
+    };
+    assert_eq!((m.at(3, 1), m.at(4, 0), m.at(0, 2)), (255, 0, 0));
+}
+
+#[test]
+fn a_partly_covered_corner_pixel_has_its_subsample_coverage() {
+    // Exact subsample counts of 16, from the corner tests in lib.rs.
+    let count = |shape, r: i64, cx: i64, cy: i64| {
+        let mut n = 0;
+        for sy in 0..4 {
+            for sx in 0..4 {
+                if super::inside_corner(shape, r, cx * 4 + sx, cy * 4 + sy) {
+                    n += 1;
+                }
+            }
+        }
+        (n * 255 / 16) as u8
+    };
+    let c = rounded_rect(20, 20, 4, CornerShape::Circle);
+    assert_eq!(c.at(1, 1), count(CornerShape::Circle, 4, 1, 1));
+    assert!(c.at(1, 1) > 0 && c.at(1, 1) < 255);
+    let s = rounded_rect(40, 40, 10, CornerShape::Smooth);
+    assert_eq!(s.at(3, 3), count(CornerShape::Smooth, 10, 3, 3));
+    assert!(s.at(3, 3) > 0 && s.at(3, 3) < 255);
+    assert_eq!(corner_span(CornerShape::Smooth, 10), 16);
+    assert_eq!(corner_span(CornerShape::Circle, 10), 10);
+}
+
+#[test]
+fn a_thin_outline_is_the_frame_inside_its_edge() {
+    assert_eq!(
+        rounded_outline(3, 10, 0, 1, CornerShape::Circle).at(1, 5),
+        0
+    );
+    assert_eq!(
+        rounded_outline(10, 3, 0, 1, CornerShape::Circle).at(5, 1),
+        0
+    );
+    assert!(
+        rounded_outline(3, 10, 0, 2, CornerShape::Circle)
+            .cov
+            .iter()
+            .all(|c| *c == 255)
+    );
+    assert!(
+        rounded_outline(10, 3, 0, 2, CornerShape::Circle)
+            .cov
+            .iter()
+            .all(|c| *c == 255)
+    );
+    let o = rounded_outline(6, 6, 0, 1, CornerShape::Circle);
+    assert_eq!((o.at(4, 4), o.at(0, 4), o.at(5, 4)), (0, 255, 255));
+    let o = rounded_outline(8, 8, 0, 2, CornerShape::Circle);
+    assert_eq!(
+        (o.at(0, 3), o.at(1, 3), o.at(2, 3), o.at(5, 5)),
+        (255, 255, 0, 0)
+    );
+    // A round outline: outer coverage times one less the inner's.
+    let o = rounded_outline(20, 20, 4, 1, CornerShape::Circle);
+    let outer = rounded_rect(20, 20, 4, CornerShape::Circle);
+    let inner = rounded_rect(18, 18, 3, CornerShape::Circle);
+    for (x, y) in [(1, 1), (1, 2), (2, 2), (2, 1), (3, 1)] {
+        let want = outer.at(x, y) as u32 * (255 - inner.at(x - 1, y - 1) as u32) / 255;
+        assert_eq!(o.at(x, y) as u32, want, "({x}, {y})");
+    }
+}
+
+#[test]
+fn a_blur_repeats_the_edge_of_its_region() {
+    // Two columns, the lower half white, blurred down the columns: each
+    // column is what the same step gives along a row, the ends repeated
+    // (the bottom stays near white, the top near black).
+    let mut px: Vec<u32> = (0..16)
+        .map(|i| if i >= 8 { 0x00ff_ffff } else { 0 })
+        .collect();
+    blur_region(&mut px, 2, Rect::new(0, 0, 2, 8), 6);
+    let mut row: Vec<u32> = (0..8)
+        .map(|i| if i >= 4 { 0x00ff_ffff } else { 0 })
+        .collect();
+    blur_region(&mut row, 8, Rect::new(0, 0, 8, 1), 6);
+    for y in 0..8 {
+        assert_eq!(px[y * 2], row[y], "row {y}");
+        assert_eq!(px[y * 2 + 1], row[y], "row {y}");
+    }
+    assert!(
+        row[7] & 0xff > 200 && row[0] & 0xff < 55,
+        "{:x} {:x}",
+        row[7],
+        row[0]
+    );
+}
+
+/// Three box passes of radius 2 over one impulse of 0xfd.
+fn impulse_row() -> Vec<u32> {
+    let mut v = vec![0u32; 9];
+    v[4] = 0xfd;
+    let mut out = vec![0u32; 9];
+    super::box_pass(&v.clone(), &mut out, 9, 1, 2, true);
+    v.copy_from_slice(&out);
+    super::box_pass(&v.clone(), &mut out, 9, 1, 2, true);
+    v.copy_from_slice(&out);
+    super::box_pass(&v.clone(), &mut out, 9, 1, 2, true);
+    out
+}
+
+#[test]
+fn one_impulse_blurs_the_same_in_a_row_and_a_column() {
+    let want = impulse_row();
+    assert_eq!(want, [16, 22, 31, 37, 39, 37, 31, 22, 16]);
+    let mut row = vec![0u32; 9];
+    row[4] = 0xfd;
+    blur_region(&mut row, 9, Rect::new(0, 0, 9, 1), 6);
+    assert_eq!(row, want);
+    let mut col = vec![0u32; 9];
+    col[4] = 0xfd;
+    blur_region(&mut col, 1, Rect::new(0, 0, 1, 9), 6);
+    assert_eq!(col, want);
+}
+
+#[test]
+fn a_region_inside_the_image_is_blurred_in_place_and_clipped_at_the_bottom() {
+    let mut px = vec![0u32; 20 * 5];
+    px[2 * 20 + 7] = 0x00fd_fdfd;
+    blur_region(&mut px, 20, Rect::new(3, 2, 9, 1), 6);
+    let want = impulse_row();
+    for x in 0..20 {
+        for y in 0..5 {
+            let p = px[y * 20 + x];
+            if y == 2 && (3..=11).contains(&x) {
+                let v = want[x - 3];
+                assert_eq!(p, v << 16 | v << 8 | v, "({x}, {y})");
+            } else {
+                assert_eq!(p, 0, "({x}, {y})");
+            }
+        }
+    }
+    let mut px: Vec<u32> = (0..50).map(|i| i as u32).collect();
+    let before = px.clone();
+    blur_region(&mut px, 10, Rect::new(0, 3, 10, 5), 6);
+    assert_eq!(&px[..30], &before[..30]);
+}
+
+#[test]
+fn a_shadow_without_blur_is_the_shape_and_one_with_it_spills() {
+    let (s, margin) = shadow(40, 20, 6, CornerShape::Smooth, 0);
+    assert_eq!(margin, 2);
+    let r = rounded_rect(40, 20, 6, CornerShape::Smooth);
+    for y in 0..20 {
+        for x in 0..40 {
+            assert_eq!(s.at(x + 2, y + 2), r.at(x, y));
+        }
+    }
+    let (s, margin) = shadow(40, 20, 6, CornerShape::Smooth, 12);
+    assert_eq!(margin, 26);
+    assert!(s.at(25, 36) > 0, "past the left edge");
+}
+
+#[test]
+fn a_vertical_segment_and_isqrt() {
+    let m = segment(20, 20, (10, 2), (10, 12), 2);
+    assert_eq!(
+        (m.at(9, 6), m.at(10, 6), m.at(8, 6), m.at(11, 6)),
+        (255, 255, 0, 0)
+    );
+    assert_eq!(
+        (isqrt(1), isqrt(2), isqrt(4), isqrt(99), isqrt(0), isqrt(-3)),
+        (1, 1, 2, 9, 0, 0)
+    );
+}
+
+#[test]
+fn fill_blend_mask_and_band_paint_what_they_say() {
+    const GUARD: u32 = 0x0055_5555;
+    let mut px = vec![GUARD; 30 * 30];
+    {
+        let mut c = Canvas::new(&mut px, 30);
+        c.set_clip(Rect::new(5, 5, 20, 20));
+        c.fill(Rect::new(0, 0, 30, 30), LIGHT.bg_window);
+    }
+    assert_eq!(px[10 * 30 + 10], LIGHT.bg_window.pixel());
+    assert_eq!(px[2 * 30 + 2], GUARD);
+    let black = Color::of_pixel(0);
+    let mut px = vec![0u32; 4 * 6];
+    {
+        let mut c = Canvas::new(&mut px, 4);
+        c.blend(Rect::new(0, 0, 2, 1), LIGHT.shadow, 255);
+        let m = Mask {
+            w: 2,
+            h: 2,
+            cov: vec![10, 20, 30, 40],
+        };
+        c.mask(&m, 1, 1, LIGHT.accent, 255);
+        c.band(Rect::new(3, 0, 1, 5), LIGHT.accent, 50, 200);
+    }
+    assert_eq!(px[0], LIGHT.shadow.pixel());
+    for (i, (x, y)) in [(1, 1), (2, 1), (1, 2), (2, 2)].iter().enumerate() {
+        let cov = [10u8, 20, 30, 40][i];
+        assert_eq!(
+            px[y * 4 + x],
+            black.blend(LIGHT.accent, cov).pixel(),
+            "({x}, {y})"
+        );
+    }
+    for (row, a) in [50u8, 80, 110, 140, 170].iter().enumerate() {
+        assert_eq!(
+            px[row * 4 + 3],
+            black.blend(LIGHT.accent, *a).pixel(),
+            "row {row}"
+        );
+    }
+}
+
+fn material(radius: u32) -> Material {
+    Material {
+        radius,
+        shape: CornerShape::Smooth,
+        blur: 0,
+        halo_blur: 0,
+        tint: LIGHT.bg_overlay,
+        tint_alpha: 128,
+        glow: LIGHT.glow,
+        glow_alpha: 0,
+        halo_alpha: 0,
+        border: LIGHT.border,
+        scale: 1,
+    }
+}
+
+/// A canvas whose every row has its own colour.
+fn rows(w: usize, h: usize) -> Vec<u32> {
+    (0..w * h)
+        .map(|i| ((i / w) as u32 * 0x0003_0507) & 0x00ff_ffff)
+        .collect()
+}
+
+#[test]
+fn the_material_glass_halo_glow_and_rim() {
+    let under = rows(60, 260);
+    let at = |v: &[u32], x: usize, y: usize| v[y * 60 + x];
+    // Glass: what is under, tinted, inside the shape; the corner outside.
+    let mut px = under.clone();
+    material(8).draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 10, 20, 20));
+    assert_eq!(
+        at(&px, 15, 15),
+        Color::of_pixel(at(&under, 15, 15))
+            .blend(LIGHT.bg_overlay, 128)
+            .pixel()
+    );
+    assert_eq!(at(&px, 5, 10), at(&under, 5, 10));
+    // A halo only with alpha and blur.
+    let mut m = material(4);
+    m.halo_alpha = 110;
+    m.halo_blur = 6;
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(10, 10, 20, 20));
+    assert_ne!(at(&px, 8, 20), at(&under, 8, 20));
+    m.halo_blur = 0;
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(10, 10, 20, 20));
+    assert_eq!(at(&px, 8, 20), at(&under, 8, 20));
+    // The band of light: a third of the height, from half the alpha.
+    let mut m = material(4);
+    m.tint_alpha = 0;
+    m.glow_alpha = 150;
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 5, 40, 30));
+    let band = |y: u32, h: u32| ((150u32 / 2) * (h - y) / h) as u8;
+    assert_eq!(
+        at(&px, 25, 7),
+        Color::of_pixel(at(&under, 25, 7))
+            .blend(LIGHT.glow, band(2, 10))
+            .pixel()
+    );
+    // The rim, one pixel inside the edge, in tint towards glow.
+    let rim = LIGHT.bg_overlay.blend(LIGHT.glow, 150).pixel();
+    assert_eq!(at(&px, 6, 20), rim);
+    assert_eq!(at(&px, 43, 20), rim);
+    assert_eq!(at(&px, 46, 20), at(&under, 46, 20));
+    // The band stops at 48 pixels on a tall surface.
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 5, 40, 200));
+    assert_eq!(
+        at(&px, 25, 37),
+        Color::of_pixel(at(&under, 25, 37))
+            .blend(LIGHT.glow, band(32, 48))
+            .pixel()
+    );
+    // Without glow, no rim.
+    let mut m = material(4);
+    m.glow_alpha = 0;
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 5, 40, 30));
+    assert_ne!(at(&px, 6, 20), rim);
+    // Narrow and scaled surfaces: rims where they fit, no panic.
+    let mut m = material(0);
+    m.glow_alpha = 150;
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 5, 3, 20));
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 40, 20, 3));
+    m.scale = 2;
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 60, 3, 20));
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 90, 10, 3));
+    let mut px = under.clone();
+    m.draw(&mut Canvas::new(&mut px, 60), Rect::new(5, 120, 40, 30));
+    assert_eq!(
+        at(&px, 7, 135),
+        LIGHT.bg_overlay.blend(LIGHT.glow, 150).pixel(),
+        "two pixels in at scale 2"
+    );
+}
