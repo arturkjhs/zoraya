@@ -459,7 +459,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels),
 # with three times the time: every screendump read is four times larger.
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 terminal:auto:2 windows:auto:2
+GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 terminal:auto:2 windows:auto:2
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \

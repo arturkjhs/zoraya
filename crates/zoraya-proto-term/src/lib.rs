@@ -9,6 +9,8 @@ use zoraya_protocol::{Data, protocol};
 
 pub const MAX_OUTPUT: usize = 4096;
 pub const MAX_INPUT: usize = 256;
+/// The longest `Title`, in bytes (a window title's limit less `zosh — `).
+pub const MAX_TITLE: usize = 240;
 
 protocol! {
     /// Shell to terminal, with no reply.
@@ -26,6 +28,13 @@ protocol! {
     message Size = 3, handles 0 {
         columns: u32,
         rows: u32,
+    }
+
+    /// Shell to terminal, out of band (ADR-0168): the shell's current
+    /// directory as its prompt shows it, at start and after each `cd`; the
+    /// terminal titles its window with it and never from output.
+    message Title<'a> = 4, handles 0 {
+        text: Data<'a, MAX_TITLE>,
     }
 }
 
@@ -69,6 +78,23 @@ mod tests {
         let length = encode(&size, 0, &mut out).unwrap();
         assert_eq!(decode::<Size>(&out[..length], 0).unwrap().1, size);
     }
+
+    #[test]
+    fn a_title_round_trips_and_a_long_one_is_refused() {
+        let mut out = [0u8; 512];
+        let t = Title {
+            text: Data("~/проект".as_bytes()),
+        };
+        let n = encode(&t, NO_REPLY_FOR_TESTS, &mut out).unwrap();
+        assert_eq!(decode::<Title<'_>>(&out[..n], 0).unwrap().1, t);
+        exercise(&out[..n], |b| {
+            let _ = decode::<Title<'_>>(b, 0);
+        });
+        let long = [b'x'; MAX_TITLE + 1];
+        assert!(encode(&Title { text: Data(&long) }, 0, &mut out).is_err());
+    }
+
+    const NO_REPLY_FOR_TESTS: u32 = 0;
 
     #[test]
     fn output_and_input_past_their_limits_are_refused() {

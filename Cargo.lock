@@ -424,6 +424,7 @@ name = "zoraya-test-runner"
 version = "0.1.0"
 dependencies = [
  "zoraya-compositor",
+ "zoraya-keymap",
  "zoraya-term",
  "zoraya-tokens",
 ]
