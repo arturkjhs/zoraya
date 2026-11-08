@@ -590,6 +590,10 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   `room new`, enters it by its chip, launches a terminal in it (its prompt `project ~/project>`, its title bar's tint
   read back), and shows the commands; under HVF and TCG.
 
+Measured (`t_gui`, `make test-qemu` at bedd670, 2026-11-08): `zoraya-ui` painting a settings-like page of 640 × 480
+(headings, a radio group, a switch, a check box, a list, a field, two buttons) takes 0.35 ms with an empty glyph cache
+and 0.23 ms after under HVF, 5.0 ms and 3.2 ms under TCG; the settings window itself comes with 7f.
+
 Not built in 7d, each waiting for a later step: the rooms overview (System+R) and the `+` chip's form; the hover card
 of a window's pills; the switcher grouped by room (it shows `home` only); one job per room (each launch has its own
 job under the panel's); `room NAME COMMAND`, `room add` and `room drop`; the `Room` message from a shell to its
