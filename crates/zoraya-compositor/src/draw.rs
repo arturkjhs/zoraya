@@ -28,7 +28,7 @@ pub const POINTER: [[u8; 8]; 11] = [
     [2, 2, 0, 0, 0, 0, 0, 0],
 ];
 
-fn prect(r: Rect) -> paint::Rect {
+pub(crate) fn prect(r: Rect) -> paint::Rect {
     let c = |v: i64| v.clamp(i32::MIN as i64 / 2, i32::MAX as i64 / 2) as i32;
     paint::Rect::new(c(r.x), c(r.y), c(r.width), c(r.height))
 }
@@ -61,6 +61,8 @@ impl<P: Platform> Compositor<P> {
         for w in &mut self.windows {
             w.chrome = None;
         }
+        self.fielded.clear();
+        self.fields_dirty = true;
     }
 
     /// The pixels of `r` of the screen, from the wallpaper up.
@@ -79,6 +81,9 @@ impl<P: Platform> Compositor<P> {
                 w.chrome = Some(chrome(w, &f, scale.factor()));
             }
         }
+        let views = self.win_views();
+        let dock = self.dock_view();
+        let commands = self.commands;
         let Compositor {
             platform,
             windows,
@@ -86,12 +91,19 @@ impl<P: Platform> Compositor<P> {
             pointer,
             switcher,
             wallpaper,
+            fielded,
             blurred,
             ui,
             title_text,
+            mono,
             keymap,
             ..
         } = self;
+        let ground = if fielded.len() == wallpaper.len() {
+            &*fielded
+        } else {
+            &*wallpaper
+        };
         let layout = keymap.layout().short;
         let pixels = platform.pixels();
         if pixels.len() < width * height {
@@ -99,10 +111,12 @@ impl<P: Platform> Compositor<P> {
         }
         let mut c = Canvas::new(&mut pixels[..width * height], width);
         c.set_clip(prect(r));
-        c.image(wallpaper, width, 0, 0, None);
+        c.image(ground, width, 0, 0, None);
         let bar_h = space::BAR_HEIGHT.physical(scale) as i32;
         let work = paint::Rect::new(0, bar_h, width as i32, height as i32 - bar_h);
-        for w in windows.iter().filter(|w| !w.hidden) {
+        let none = crate::draw_rooms::WinView::default();
+        for (i, w) in windows.iter().enumerate().filter(|(_, w)| !w.hidden) {
+            let view = views.get(i).unwrap_or(&none);
             let focused = *focus
                 == Some(crate::Key {
                     client: w.client,
@@ -114,9 +128,47 @@ impl<P: Platform> Compositor<P> {
             } else {
                 c.set_clip(c.clip.intersect(&work))
             };
-            draw_window(&mut c, w, &f, scale.factor(), focused, p, title_text);
+            draw_window(
+                &mut c,
+                w,
+                &f,
+                scale.factor(),
+                focused,
+                p,
+                (title_text, ui, mono),
+                view,
+            );
             c.clip = old;
         }
+        // The show-commands tags over the windows (ADR-0172 point 8).
+        if commands {
+            for (i, w) in windows
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| !w.hidden && w.framed())
+            {
+                if let Some(v) = views.get(i) {
+                    crate::draw_rooms::frame_tags(
+                        &mut c,
+                        prect(w.outer(&f)),
+                        v,
+                        scale.factor(),
+                        p,
+                        (title_text, mono),
+                    );
+                }
+            }
+        }
+        // The dock, above every window too (INV-0168-3).
+        crate::draw_rooms::dock(
+            &mut c,
+            &dock,
+            blurred,
+            width,
+            scale.factor(),
+            p,
+            (title_text, ui, mono),
+        );
         // The bar, above every window (INV-0160-7): the blurred wallpaper
         // under it, tinted, with its light.
         let bar = space::BAR_HEIGHT.physical(scale) as i32;
@@ -137,6 +189,19 @@ impl<P: Platform> Compositor<P> {
             let baseline = bar / 2 + (px as i32 * 7 / 20);
             let pad = 14 * s;
             draw_text(&mut c, title_text, "Zoraya", px, pad, baseline, p.fg_text);
+            if commands {
+                let heading = crate::draw_rooms::COMMANDS_HEADING;
+                let hw = title_text.measure(heading, px);
+                draw_text(
+                    &mut c,
+                    title_text,
+                    heading,
+                    px,
+                    width as i32 / 2 - hw / 2,
+                    baseline,
+                    p.fg_text,
+                );
+            }
             let lw = title_text.measure(layout, px);
             draw_text(
                 &mut c,
@@ -220,7 +285,7 @@ pub fn thumb(w: &Window, k: u32) -> Vec<u32> {
 }
 
 /// Draws `text` with the pen at `(x, baseline)` within the canvas's clip.
-fn draw_text(
+pub(crate) fn draw_text(
     c: &mut Canvas<'_>,
     t: &mut zoraya_text::Text<'static>,
     s: &str,
@@ -299,6 +364,7 @@ fn chrome(w: &Window, f: &crate::Frame, s: u32) -> Chrome {
 }
 
 /// One window: shadow, frame, body, border, title and buttons.
+#[allow(clippy::too_many_arguments)] // One call site; a struct would only rename them.
 fn draw_window(
     c: &mut Canvas<'_>,
     w: &Window,
@@ -306,8 +372,14 @@ fn draw_window(
     s: u32,
     focused: bool,
     p: &Palette,
-    title: &mut zoraya_text::Text<'static>,
+    texts: (
+        &mut zoraya_text::Text<'static>,
+        &mut zoraya_text::Text<'static>,
+        &mut zoraya_text::Text<'static>,
+    ),
+    view: &crate::draw_rooms::WinView,
 ) {
+    let (title, ui, mono) = texts;
     let body = prect(w.body_rect());
     let Some(ch) = w.chrome.as_ref() else { return };
     if !w.framed() {
@@ -354,6 +426,7 @@ fn draw_window(
         p.bg_frame
     };
     c.mask(&ch.outer, o.x, o.y, bar_color, 255);
+    crate::draw_rooms::tint(c, &ch.outer, o, view);
     // The body: the client's pixels where its buffer reaches, the paper
     // where a resize has made the body larger than the buffer; inside the
     // window's shape (its lower corners are round).
@@ -385,6 +458,7 @@ fn draw_window(
     }
     c.clip = old;
     c.mask(&ch.outline, o.x, o.y, p.border, 255);
+    crate::draw_rooms::edge(c, o, f, s, view, p);
     // The buttons: a cross and a dash, coloured on the focused window and
     // grey elsewhere (`frame.buttons = glyphs`); a close the client has not
     // obeyed for five seconds is filled, offering to close anyway.
@@ -427,14 +501,18 @@ fn draw_window(
     let px = text::BODY.physical(zoraya_tokens::Scale::ONE) * s;
     let tw = title.measure(&w.title, px);
     let start = o.x + (MINIMISE_X as i32 + 18) * si;
-    let tx = (o.x + o.w / 2 - tw / 2).max(start);
+    // The badge and the pills at the right (ADR-0172 point 5), clipped to
+    // the title bar like the title.
+    let bar_all = paint::Rect::new(o.x, o.y, o.w, f.title as i32);
+    let old = c.set_clip(bar_all.intersect(&c.clip));
+    let end = crate::draw_rooms::badge_and_pills(c, o, f, s, view, p, start, (ui, mono));
+    c.clip = old;
+    let end = end.min(o.right() - 8 * si);
+    let tx = (o.x + o.w / 2 - tw / 2)
+        .max(start)
+        .min((end - tw).max(start));
     let baseline = o.y + f.title as i32 / 2 + px as i32 * 7 / 20;
-    let bar = paint::Rect::new(
-        start,
-        o.y,
-        (o.right() - 8 * si - start).max(0),
-        f.title as i32,
-    );
+    let bar = paint::Rect::new(start, o.y, (end - start).max(0), f.title as i32);
     let old = c.set_clip(bar.intersect(&c.clip));
     draw_text(c, title, &w.title, px, tx, baseline, p.fg_text);
     c.clip = old;

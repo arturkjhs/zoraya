@@ -111,7 +111,7 @@ pub fn paint(
         .copied()
         .filter(|w| colours.get(w.room).copied().flatten().is_some())
         .collect();
-    let height = if width == 0 { 0 } else { px.len() / width };
+    let height = px.len().checked_div(width).unwrap_or(0);
     let screen = Rect::new(0, 0, width as i64, height as i64);
     let mut changed = Vec::new();
     for (room, c) in colours.iter().enumerate() {

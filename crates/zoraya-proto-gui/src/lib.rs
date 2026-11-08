@@ -24,7 +24,7 @@
 use zoraya_protocol::{Below, Data, Flags, protocol};
 
 /// One of `status`.
-pub type Status = Below<7>;
+pub type Status = Below<8>;
 
 pub mod status {
     pub const OK: u32 = 0;
@@ -41,6 +41,8 @@ pub mod status {
     pub const EXISTS: u32 = 5;
     /// The compositor does not know the ordinal here.
     pub const UNSUPPORTED: u32 = 6;
+    /// A manager's record, room table or dock list that does not parse.
+    pub const INVALID: u32 = 7;
 }
 
 /// Modifier bits of a key event.
@@ -277,6 +279,52 @@ protocol! {
     /// Compositor to manager, unasked: the display driver missed its
     /// deadline and was dropped (ADR-0093, Decision).
     message DisplayHung = 36, handles 0 {}
+
+    /// Manager, on the client manager only (ADR-0168, ADR-0172 point 4): a
+    /// new client launched in a room, with the compositor's end of its
+    /// channel and its launch record, which the compositor draws and no
+    /// client message changes (INV-0172-1). The reply is `ManagerDone`.
+    message AddRoomClient<'a> = 37, handles 1 {
+        /// 1 for an untrusted room.
+        untrusted: u32,
+        /// The room's colour slot, 1 to 4; 0 for `home` and untrusted.
+        colour: u32,
+        /// The room's name; empty for `home`.
+        room: Data<'a, 24>,
+        /// The application, as the dock names it (`term`, `edit`).
+        app: Data<'a, 16>,
+        /// The record's entries in ADR-0153's words, one a line.
+        entries: Data<'a, MAX_ENTRIES>,
+        /// The `zosh` line that made the record (`room project term`).
+        line: Data<'a, MAX_LINE>,
+    }
+
+    /// Driver manager: the client manager's channel, for the panel
+    /// (ADR-0168). The reply is `ManagerDone`.
+    message AttachClientManager = 38, handles 1 {}
+
+    /// Client manager: the room table as `/config/rooms` writes it, and
+    /// the current room (empty for `home`), for the dock's chips and the
+    /// fields (ADR-0172). The reply is `ManagerDone`.
+    message SetRooms<'a> = 39, handles 0 {
+        current: Data<'a, 24>,
+        rooms: Data<'a, MAX_ROOMS_TEXT>,
+    }
+
+    /// Client manager: the dock's applications, one a line, `NAME` a tab
+    /// and the line that launches it (`edit\tedit FILE`). The reply is
+    /// `ManagerDone`.
+    message SetDock<'a> = 40, handles 0 {
+        apps: Data<'a, MAX_DOCK_TEXT>,
+    }
+
+    /// Compositor to the client manager, unasked: the person pressed the
+    /// dock (ADR-0168). `kind` is one of [`dock`]; `index` the application
+    /// in `SetDock`'s order or the room (0 `home`, then the table's order).
+    message DockPressed = 41, handles 0 {
+        kind: u32,
+        index: u32,
+    }
 }
 
 /// The ordinals a client may send.
@@ -284,9 +332,28 @@ pub const CLIENT_REQUESTS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /// The ordinals the compositor sends a client unasked.
 pub const CLIENT_EVENTS: [u32; 9] = [16, 17, 18, 19, 20, 21, 22, 23, 24];
 /// The ordinals only the manager may send.
-pub const MANAGER_REQUESTS: [u32; 4] = [32, 33, 34, 35];
+pub const MANAGER_REQUESTS: [u32; 5] = [32, 33, 34, 35, 38];
+/// The ordinals only the client manager may send (ADR-0168), besides
+/// `AddClient` and `Stats`.
+pub const CLIENT_MANAGER_REQUESTS: [u32; 3] = [37, 39, 40];
 /// What the compositor sends the manager unasked.
-pub const MANAGER_EVENTS: [u32; 1] = [36];
+pub const MANAGER_EVENTS: [u32; 2] = [36, 41];
+
+/// `DockPressed`'s kinds.
+pub mod dock {
+    /// An application's icon with no window, or System+Enter's terminal.
+    pub const LAUNCH: u32 = 0;
+    /// A room's chip: enter the room.
+    pub const ROOM: u32 = 1;
+    /// The `+` chip: a new room.
+    pub const NEW_ROOM: u32 = 2;
+}
+
+/// The longest launch record's entries, room table and dock list.
+pub const MAX_ENTRIES: usize = 1024;
+pub const MAX_LINE: usize = 256;
+pub const MAX_ROOMS_TEXT: usize = 3072;
+pub const MAX_DOCK_TEXT: usize = 1024;
 
 #[cfg(test)]
 extern crate std;

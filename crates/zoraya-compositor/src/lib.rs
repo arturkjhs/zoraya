@@ -22,8 +22,10 @@
 extern crate alloc;
 
 mod draw;
+pub mod draw_rooms;
 pub mod fields;
 pub mod rect;
+pub mod rooms;
 pub mod window;
 
 use alloc::string::String;
@@ -39,6 +41,7 @@ use zoraya_text::{Font, FontList, Text};
 use zoraya_tokens::{Appearance, Scale, space};
 
 pub use rect::Rect;
+pub use rooms::{Cell, DockApp, DockGeometry, Record};
 use window::Buffer;
 pub use window::{Frame, Window, WindowKind, Zone};
 
@@ -65,6 +68,7 @@ pub const SCALE_TWO_FROM: u32 = 1920;
 /// from `CLIENT_KEY`.
 pub const MANAGER_KEY: u64 = 1;
 pub const DISPLAY_KEY: u64 = 2;
+pub const CLIENT_MANAGER_KEY: u64 = 3;
 pub const INPUT_KEY: u64 = 16;
 pub const CLIENT_KEY: u64 = 64;
 /// How long the display driver may take to answer a flush before the
@@ -168,6 +172,8 @@ struct Client<E> {
     dropped: u32,
     /// The id its next window gets (from 1).
     next_id: u32,
+    /// Its launch record, from the manager only (INV-0172-1).
+    record: Record,
 }
 
 /// What composition has cost.
@@ -220,6 +226,23 @@ pub struct Switcher {
 pub struct Compositor<P: Platform> {
     platform: P,
     manager: P::End,
+    /// The panel's channel (ADR-0168): launch records, rooms, the dock.
+    client_manager: Option<P::End>,
+    /// The room table and the current room, from the panel (ADR-0172).
+    rooms: zoraya_settings::rooms::Rooms,
+    current_room: String,
+    /// The dock's applications, from the panel.
+    dock_apps: Vec<DockApp>,
+    dock: DockGeometry,
+    /// What the dock showed when last drawn.
+    dock_sig: String,
+    /// The application icon under the pointer: its tooltip is shown.
+    hover: Option<usize>,
+    /// Show-commands mode (System+?, ADR-0172 point 8).
+    commands: bool,
+    /// The wallpaper with the rooms' fields on it.
+    fielded: Vec<u32>,
+    fields_dirty: bool,
     display: Option<P::End>,
     inputs: Vec<Option<P::End>>,
     clients: Vec<Option<Client<P::End>>>,
@@ -268,6 +291,7 @@ pub struct Compositor<P: Platform> {
     blurred: Vec<u32>,
     ui: Text<'static>,
     title_text: Text<'static>,
+    mono: Text<'static>,
     message: Vec<u8>,
     handles: Vec<P::End>,
     out: [u8; 512],
@@ -299,6 +323,16 @@ impl<P: Platform> Compositor<P> {
         let mut c = Compositor {
             platform,
             manager,
+            client_manager: None,
+            rooms: zoraya_settings::rooms::Rooms::default(),
+            current_room: String::new(),
+            dock_apps: Vec::new(),
+            dock: DockGeometry::default(),
+            dock_sig: String::new(),
+            hover: None,
+            commands: false,
+            fielded: Vec::new(),
+            fields_dirty: true,
             display: None,
             inputs: vec![None; MAX_INPUTS],
             clients: (0..MAX_CLIENTS).map(|_| None).collect(),
@@ -332,6 +366,7 @@ impl<P: Platform> Compositor<P> {
             blurred: Vec::new(),
             ui: Text::new(fonts(zoraya_fonts::INTER_REGULAR)),
             title_text: Text::new(fonts(zoraya_fonts::INTER_MEDIUM)),
+            mono: Text::new(fonts(zoraya_fonts::MONO_REGULAR)),
             message: vec![0; 4096],
             handles: Vec::new(),
             out: [0; 512],
@@ -368,6 +403,10 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// The client that has keyboard focus, by index.
+    pub fn appearance(&self) -> Appearance {
+        self.appearance
+    }
+
     pub fn focus(&self) -> Option<usize> {
         self.focus.map(|k| k.client)
     }
@@ -429,7 +468,8 @@ impl<P: Platform> Compositor<P> {
         self.platform.wait(&mut ready, deadline);
         for key in ready {
             match key {
-                MANAGER_KEY => self.manager_message(),
+                MANAGER_KEY => self.manager_message(false),
+                CLIENT_MANAGER_KEY => self.manager_message(true),
                 DISPLAY_KEY => self.display_message(),
                 k if (INPUT_KEY..INPUT_KEY + MAX_INPUTS as u64).contains(&k) => {
                     self.input_message((k - INPUT_KEY) as usize);
@@ -762,6 +802,17 @@ impl<P: Platform> Compositor<P> {
     /// ADR-0163); Enter, R and ? are reserved for 7d and reach no client
     /// either.
     fn chord(&mut self, code_: u32) {
+        if code_ == code::ENTER {
+            self.new_terminal();
+            return;
+        }
+        if code_ == code::SLASH {
+            self.commands = !self.commands;
+            self.dock_changed();
+            let s = self.screen();
+            self.dirty(&s);
+            return;
+        }
         if code_ == code::SPACE {
             let back = self.keymap.modifiers() & zoraya_keymap::SHIFT != 0;
             let layouts = core::mem::take(&mut self.layouts);
@@ -812,6 +863,9 @@ impl<P: Platform> Compositor<P> {
         self.damage = self.damage.union(&self.pointer_rect(x, y));
         self.pending_pointer = true;
         self.drag_to(x, y);
+        if self.drag.is_none() {
+            self.dock_hover(x, y);
+        }
     }
 
     fn pointer_rect(&self, x: i64, y: i64) -> Rect {
@@ -844,6 +898,10 @@ impl<P: Platform> Compositor<P> {
         if y < i64::from(space::BAR_HEIGHT.physical(self.scale)) {
             return None;
         }
+        // So is the dock (INV-0168-3).
+        if self.dock_cell(x, y).is_some() {
+            return None;
+        }
         self.windows
             .iter()
             .rev()
@@ -853,6 +911,12 @@ impl<P: Platform> Compositor<P> {
 
     fn press(&mut self, button: u32) {
         let Some((x, y)) = self.pointer else { return };
+        if let Some(cell) = self.dock_cell(x, y) {
+            if button == gui::buttons::LEFT {
+                self.dock_press(cell);
+            }
+            return;
+        }
         let hit = self.under(x, y);
         // A press anywhere but on a popup closes the popups (ADR-0160).
         let on_popup = hit.is_some_and(|(k, _)| {
@@ -1008,8 +1072,14 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn release(&mut self) {
-        if let Some(Drag::Resize { window, .. }) = self.drag.take() {
-            self.configure(window);
+        match self.drag.take() {
+            Some(Drag::Resize { window, .. }) => {
+                self.configure(window);
+                self.fields_dirty = true;
+            }
+            // The fields follow a move at its end (ADR-0172 point 5(d)).
+            Some(Drag::Move { .. }) => self.fields_dirty = true,
+            None => {}
         }
     }
 
@@ -1094,6 +1164,7 @@ impl<P: Platform> Compositor<P> {
 
     /// Hides or shows a window; a hidden one loses focus to the next.
     fn set_hidden(&mut self, key: Key, hidden: bool) {
+        self.fields_dirty = true;
         let Some(i) = self.index(key) else { return };
         if self.windows[i].hidden == hidden || !self.windows[i].framed() {
             return;
@@ -1169,6 +1240,7 @@ impl<P: Platform> Compositor<P> {
     /// System+Left and System+Right: the left or right half of the work
     /// area (ADR-0160, Option E's first step).
     fn tile(&mut self, key: Key, right: bool) {
+        self.fields_dirty = true;
         let Some(i) = self.index(key) else { return };
         if self.windows[i].kind != WindowKind::Toplevel {
             return;
@@ -1182,7 +1254,7 @@ impl<P: Platform> Compositor<P> {
             x0 + f.border,
             bar + f.title,
             half - 2 * f.border,
-            i64::from(self.height) - bar - f.title - f.border,
+            self.work_area().bottom() - bar - f.title - f.border,
         );
         body.width -= body.width % s;
         body.height -= body.height % s;
@@ -1202,6 +1274,7 @@ impl<P: Platform> Compositor<P> {
     /// at the new scale (clamped to the display) and is configured again
     /// (ADR-0164); legacy surfaces keep their buffers (review 7b, 13).
     fn reconfigure(&mut self, old_scale: u32) {
+        self.fields_dirty = true;
         let k = self.scale.factor();
         let (w, h) = (self.width, self.height);
         let keys: Vec<Key> = self
@@ -1431,14 +1504,31 @@ impl<P: Platform> Compositor<P> {
 
     // ---- clients ----------------------------------------------------------
 
-    fn manager_message(&mut self) {
+    /// A message on the driver manager (`init`'s, `clients` false) or the
+    /// client manager (the panel's, ADR-0168). Each takes its own ordinals
+    /// and no other: the drivers only from `init`, the rooms, the dock and
+    /// the launch records only from the panel (or `AddClient`, a `home`
+    /// client, from either).
+    fn manager_message(&mut self, clients: bool) {
+        let end = if clients {
+            match self.client_manager {
+                Some(e) => e,
+                None => return,
+            }
+        } else {
+            self.manager
+        };
         let mut message = core::mem::take(&mut self.message);
         let mut handles = core::mem::take(&mut self.handles);
         handles.clear();
-        let incoming = self.platform.read(self.manager, &mut message, &mut handles);
+        let incoming = self.platform.read(end, &mut message, &mut handles);
         let Incoming::Message(n) = incoming else {
             for h in handles.drain(..) {
                 self.platform.close(h);
+            }
+            if clients && matches!(incoming, Incoming::Closed | Incoming::Refused) {
+                self.platform.close(end);
+                self.client_manager = None;
             }
             self.message = message;
             self.handles = handles;
@@ -1453,11 +1543,42 @@ impl<P: Platform> Compositor<P> {
             &[],
         ));
         let one = handles.len() == 1;
+        let none = handles.is_empty();
+        let driver = !clients;
         let (s, used) = match header.ordinal {
             32 if one && decode::<gui::AddClient>(bytes, 1).is_ok() => {
-                (self.add_client(handles[0]), true)
+                (self.add_client(handles[0], Record::home()), true)
             }
-            33 if one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
+            37 if clients && one => match decode::<gui::AddRoomClient<'_>>(bytes, 1) {
+                Ok((_, m)) => match Record::of(&m) {
+                    Some(r) => (self.add_client(handles[0], r), true),
+                    None => (status::INVALID, false),
+                },
+                Err(_) => (status::INVALID, false),
+            },
+            39 if clients && none => match decode::<gui::SetRooms<'_>>(bytes, 0) {
+                Ok((_, m)) => (self.set_rooms(m.current.0, m.rooms.0), false),
+                Err(_) => (status::INVALID, false),
+            },
+            40 if clients && none => match decode::<gui::SetDock<'_>>(bytes, 0) {
+                Ok((_, m)) => (self.set_dock(m.apps.0), false),
+                Err(_) => (status::INVALID, false),
+            },
+            38 if driver && one && decode::<gui::AttachClientManager>(bytes, 1).is_ok() => {
+                let h = handles[0];
+                let s = if self.platform.kind(h) == Kind::Channel
+                    && self.client_manager.is_none()
+                    && self.platform.watch(h, CLIENT_MANAGER_KEY)
+                {
+                    self.client_manager = Some(h);
+                    status::OK
+                } else {
+                    self.platform.close(h);
+                    status::UNSUPPORTED
+                };
+                (s, true)
+            }
+            33 if driver && one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
                 let h = handles[0];
                 let s = if self.platform.kind(h) == Kind::Channel {
                     self.attach_display(h)
@@ -1467,7 +1588,7 @@ impl<P: Platform> Compositor<P> {
                 };
                 (s, true)
             }
-            34 if one && decode::<gui::AttachInput>(bytes, 1).is_ok() => {
+            34 if driver && one && decode::<gui::AttachInput>(bytes, 1).is_ok() => {
                 let h = handles[0];
                 let s = if self.platform.kind(h) == Kind::Channel {
                     self.attach_input(h)
@@ -1477,7 +1598,7 @@ impl<P: Platform> Compositor<P> {
                 };
                 (s, true)
             }
-            35 if handles.is_empty() && decode::<gui::Stats>(bytes, 0).is_ok() => {
+            35 if none && decode::<gui::Stats>(bytes, 0).is_ok() => {
                 let s = self.stats;
                 let m = gui::StatsReply {
                     frames: s.frames,
@@ -1488,7 +1609,7 @@ impl<P: Platform> Compositor<P> {
                     hangs: s.hangs,
                 };
                 let length = reply(&m, header.transaction, &mut self.out);
-                self.platform.write(self.manager, &self.out[..length], &[]);
+                self.platform.write(end, &self.out[..length], &[]);
                 self.message = message;
                 self.handles = handles;
                 return;
@@ -1506,13 +1627,13 @@ impl<P: Platform> Compositor<P> {
         if header.transaction != NO_REPLY {
             let m = gui::ManagerDone { status: Below(s) };
             let length = reply(&m, header.transaction, &mut self.out);
-            self.platform.write(self.manager, &self.out[..length], &[]);
+            self.platform.write(end, &self.out[..length], &[]);
         }
         self.message = message;
         self.handles = handles;
     }
 
-    fn add_client(&mut self, end: P::End) -> u32 {
+    fn add_client(&mut self, end: P::End, record: Record) -> u32 {
         if self.platform.kind(end) != Kind::Channel {
             self.platform.close(end);
             return status::UNSUPPORTED;
@@ -1530,6 +1651,7 @@ impl<P: Platform> Compositor<P> {
             commit: None,
             dropped: 0,
             next_id: 1,
+            record,
         });
         status::OK
     }
@@ -1542,6 +1664,7 @@ impl<P: Platform> Compositor<P> {
     /// focus moves to the top window if it had it. A toplevel takes its
     /// popups with it.
     fn remove_window(&mut self, key: Key) {
+        self.fields_dirty = true;
         let Some(i) = self.index(key) else { return };
         let w = self.windows.remove(i);
         let f = self.frame();
@@ -1948,6 +2071,7 @@ impl<P: Platform> Compositor<P> {
             close_asked: None,
             chrome: None,
         });
+        self.fields_dirty = true;
         let key = Key { client: slot, id };
         let f = self.frame();
         if let Some(i) = self.index(key) {
@@ -2214,6 +2338,11 @@ impl<P: Platform> Compositor<P> {
         // Over the switcher, a change of the scene draws everything again
         // (its glass is a blur of the scene); the pointer alone is drawn on
         // the frame last composed.
+        if self.fields_dirty {
+            // The dots and icons follow the windows; the fields too.
+            self.dock_changed();
+            self.update_fields();
+        }
         let scene = core::mem::take(&mut self.scene);
         let reuse = self.switcher.is_some() && !scene && !self.switcher_frame.is_empty();
         if self.switcher.is_some() && scene {
@@ -2315,6 +2444,8 @@ extern crate std;
 mod tests;
 #[cfg(test)]
 mod tests_fields;
+#[cfg(test)]
+extern crate zoraya_shell;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

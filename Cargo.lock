@@ -78,6 +78,8 @@ dependencies = [
  "zoraya-proto-gui",
  "zoraya-proto-input",
  "zoraya-protocol",
+ "zoraya-settings",
+ "zoraya-shell",
  "zoraya-test-alloc",
  "zoraya-text",
  "zoraya-tokens",
