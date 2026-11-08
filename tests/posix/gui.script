@@ -1,12 +1,15 @@
 # The stage 6d session in the stage 5 terminal window (TASK-21): ttyd's window
 # backend between the GUI terminal and dash, keys typed into the window
 # through QMP and the screen read back as text (tools/test-runner/src/gui.rs).
-# Lines are at most 16 keys: under TCG a longer burst loses keys on the way
-# to ttyd (docs/design.md, Known limitations; TASK-21's open questions).
+# Lines are typed whole: under TCG term once dropped the tail of a long
+# burst on its way to ttyd; it now holds keys until ttyd reads (TASK-24 7a).
 serial init: /etc/zoraya/session: a POSIX session
 screen PSURF> _
 type echo hi|tr h H\r
 screen Hi
+screen PSURF> _
+type echo the quick brown fox jumps over the lazy dog | tr a-z A-Z\r
+screen THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG
 screen PSURF> _
 type cd /src/gui\r
 screen PSURF> _

@@ -1096,9 +1096,8 @@ component is `.` or `..`, with or without `--recursive`; `project/` is `project`
   copies eagerly with interrupts masked (ADR-0102). Nothing bounds a fork bomb but the kernel's 255 processes and
   memory (ADR-0056). The broker trusts what a process says of its own pid (ADR-0104, "Trust at stage 6"). A POSIX
   session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
-  root volume's (ADR-0191), not a clock's. In the GUI window under TCG, a burst of more than about 16 keys typed
-  through QMP loses its tail on the way to `ttyd` or `zosh`: a bug, in `docs/backlog.md`, to be fixed before stage 7b;
-  `make test-posix-gui` and `make test-tour-gui` type lines of at most 16 keys.
+  root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
+  read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
 
 ## Roadmap
 

@@ -33,31 +33,10 @@ screen ~> _
 # origin and the terminal's padding).
 chord ctrl l
 top ~> _
-# In pieces the screen confirms: under TCG a burst of keys can fill
-# term's channel to zosh, and term drops keys (docs/backlog.md).
-type echo aaaaaaa
-window
-screen ~> echo aaaaaaa_
-type aaaaaaaaaaaa
-window
-screen ~> echo aaaaaaaaaaaaaaaaaaa_
-type aaaaaaaaaaaa
-window
-screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
-type aaaaaaaaaaaa
-window
-screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
-type aaaaaaaaaaaa
-window
-screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
-type aaaaaaaaaaaa
-window
-screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_
-type aaaaaaaaaaaa
-window
-screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-screen aaaaaaa_
-type aaaaaaaaaaa
+# A whole line in one burst: under TCG term once dropped the keys that
+# found its channel to zosh full; it now holds them until the shell reads
+# (docs/backlog.md, TASK-24 7a).
+type echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 window
 screen ~> echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 screen aaaaaaaaaaaaaaaaaa_

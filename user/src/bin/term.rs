@@ -20,13 +20,18 @@ use zoraya_term::{PAD, Term, grid_for, key_bytes, surface_size};
 use zoraya_user::gui::wait_reply;
 use zoraya_user::{
     channel_read, channel_write, handle_close, handle_duplicate, memory_create, memory_map,
-    port_create, port_subscribe, port_wait, println,
+    port_create, port_subscribe, port_unsubscribe, port_wait, println,
 };
 
 extern crate alloc;
 
 const KEY_COMPOSITOR: u64 = 1;
 const KEY_SHELL: u64 = 2;
+/// The shell's end has room again, subscribed only while keys wait.
+const KEY_WRITABLE: u64 = 3;
+/// Key bytes held for a shell that is slow to read them. A person cannot
+/// type this far ahead; past it keys are dropped and counted.
+const PENDING_MAX: usize = 4096;
 /// Shell messages taken per wake, so that keys and frames stay prompt.
 const BATCH: usize = 16;
 
@@ -39,8 +44,15 @@ struct Window {
     height: usize,
     /// A commit waits for its frame callback.
     outstanding: bool,
-    /// Input the shell's queue had no room for.
+    /// Key bytes not yet sent: the shell's queue was full. They go out
+    /// together, up to `MAX_INPUT` a message, when it has room (the TCG
+    /// key-burst loss, docs/backlog.md).
+    pending: Vec<u8>,
+    /// Input that did not fit in `pending`.
     dropped: u32,
+    port: Handle,
+    /// `KEY_WRITABLE` is subscribed.
+    waiting: bool,
     message: Vec<u8>,
 }
 
@@ -98,22 +110,51 @@ impl Window {
         }
     }
 
+    /// Queues key bytes for the shell; `flush` sends them.
     fn send(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
+        let room = PENDING_MAX - self.pending.len();
+        let taken = bytes.len().min(room);
+        self.pending.extend_from_slice(&bytes[..taken]);
+        self.dropped = self.dropped.saturating_add((bytes.len() - taken) as u32);
+    }
+
+    /// Sends what keys wait, in as few messages as fit, and stops at the
+    /// first the shell's queue has no room for: the rest wait for
+    /// `WRITABLE`, in order.
+    fn flush(&mut self) {
+        while !self.pending.is_empty() {
+            let n = self.pending.len().min(MAX_INPUT);
+            let m = Input {
+                dropped: self.dropped,
+                bytes: Data(&self.pending[..n]),
+            };
+            let mut out = [0u8; 64 + MAX_INPUT];
+            let Ok(length) = encode(&m, NO_REPLY, &mut out) else {
+                self.pending.clear();
+                break;
+            };
+            match channel_write(self.shell, &out[..length], &[]) {
+                Ok(()) => {
+                    self.dropped = 0;
+                    self.pending.drain(..n);
+                }
+                // The shell is slow: the terminal does not wait for it.
+                Err(_) => break,
+            }
         }
-        let m = Input {
-            dropped: self.dropped,
-            bytes: Data(bytes),
-        };
-        let mut out = [0u8; 64 + MAX_INPUT];
-        let Ok(n) = encode(&m, NO_REPLY, &mut out) else {
-            return;
-        };
-        match channel_write(self.shell, &out[..n], &[]) {
-            Ok(()) => self.dropped = 0,
-            // The shell is slow: the terminal does not wait for it.
-            Err(_) => self.dropped = self.dropped.saturating_add(bytes.len() as u32),
+        let want = !self.pending.is_empty();
+        if want && !self.waiting {
+            self.waiting = port_subscribe(
+                self.port,
+                self.shell,
+                channel_signals::WRITABLE,
+                KEY_WRITABLE,
+                Mode::Level,
+            )
+            .is_ok();
+        } else if !want && self.waiting {
+            let _ = port_unsubscribe(self.port, KEY_WRITABLE);
+            self.waiting = false;
         }
     }
 
@@ -233,6 +274,7 @@ fn main() -> i32 {
     if let Ok(n) = encode(&size_message, NO_REPLY, &mut out) {
         let _ = channel_write(shell, &out[..n], &[]);
     }
+    let port = port_create().expect("port");
     let mut window = Window {
         compositor,
         shell,
@@ -241,16 +283,18 @@ fn main() -> i32 {
         stride: width,
         height,
         outstanding: false,
+        pending: Vec::new(),
         dropped: 0,
+        port,
+        waiting: false,
         message: alloc::vec![0u8; 8192],
     };
     window.term.render(window.pixels, width, true);
     window.commit(0, height);
-    let port = port_create().expect("port");
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     port_subscribe(port, compositor, wanted, KEY_COMPOSITOR, Mode::Level).expect("subscribe");
     port_subscribe(port, shell, wanted, KEY_SHELL, Mode::Level).expect("subscribe");
-    let mut packets = [Packet::default(); 2];
+    let mut packets = [Packet::default(); 3];
     loop {
         let Ok(count) = port_wait(port, DEADLINE_INFINITE, &mut packets) else {
             return 1;
@@ -258,9 +302,11 @@ fn main() -> i32 {
         for p in &packets[..count] {
             match p.key {
                 KEY_COMPOSITOR => window.compositor_messages(),
-                _ => window.shell_messages(),
+                KEY_SHELL => window.shell_messages(),
+                _ => {}
             }
         }
+        window.flush();
         window.show();
     }
 }
