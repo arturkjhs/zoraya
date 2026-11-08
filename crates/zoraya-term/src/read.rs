@@ -36,6 +36,10 @@ pub fn candidates() -> impl Iterator<Item = char> {
         .flat_map(|(a, b)| (a..=b).filter_map(char::from_u32))
 }
 
+/// What a cell that matches no candidate reads as: not a candidate, so
+/// that it is never taken for a real `?` (review finding 10).
+pub const NO_MATCH: char = '\u{FFFD}';
+
 /// A cell's pixels, row by row.
 type Pixels = Vec<u32>;
 
@@ -90,8 +94,9 @@ impl Reader {
 
     /// The character of a cell whose pixels `pixel(x, y)` gives: `' '` for
     /// a blank cell in the default background, `'_'` for a cell of one
-    /// other colour (the block cursor), `'?'` for anything else that
-    /// matches no character in any of the terminal's colours.
+    /// other colour (the block cursor, or a blank cell with an SGR
+    /// background: the two read alike), and [`NO_MATCH`] for anything else
+    /// that matches no character in any of the terminal's colours.
     pub fn read(&mut self, pixel: impl Fn(usize, usize) -> u32) -> char {
         let cell = self.look.cell;
         let (w, h) = (cell.width as usize, cell.height as usize);
@@ -129,7 +134,7 @@ impl Reader {
                 }
             }
         }
-        '?'
+        NO_MATCH
     }
 
     /// `text` as the reader would read it back from the terminal's default
@@ -150,7 +155,7 @@ impl Reader {
 
     /// The rows of a terminal surface whose top left is at `(left, top)`
     /// in a picture `pixel(x, y)` of `width × height`, as text without
-    /// trailing spaces; a cell past the picture reads as `'?'`.
+    /// trailing spaces; a cell past the picture reads as [`NO_MATCH`].
     pub fn rows(
         &mut self,
         columns: usize,
@@ -167,7 +172,7 @@ impl Reader {
                         let (ox, oy) = self.look.cell_origin(c, r);
                         let (x, y) = (left + ox, top + oy);
                         if x + cw > width || y + ch > height {
-                            return '?';
+                            return NO_MATCH;
                         }
                         self.read(|dx, dy| pixel(x + dx, y + dy))
                     })

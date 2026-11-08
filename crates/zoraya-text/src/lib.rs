@@ -24,6 +24,22 @@ pub use font::{Error, Font, Outline, Point};
 pub use raster::Bitmap;
 use zoraya_tokens::Color;
 
+/// The largest size in pixels per em drawn; a larger request draws at it.
+/// Bounds every glyph's raster and every product of a size (review finding
+/// 3; ADR-0162's "any size" read as any size up to this).
+pub const MAX_PX: u32 = 512;
+
+/// A size within `1..=MAX_PX`.
+pub const fn clamp_px(px: u32) -> u32 {
+    if px == 0 {
+        1
+    } else if px > MAX_PX {
+        MAX_PX
+    } else {
+        px
+    }
+}
+
 /// Fonts in a fallback list (ADR-0162: UI, then mono, then the box).
 pub const MAX_FONTS: usize = 4;
 
@@ -71,6 +87,7 @@ impl<'a> FontList<'a> {
 
     /// The advance of a glyph at `px`, in 26.6.
     pub fn advance(&self, source: Source, glyph: u16, px: u32) -> i32 {
+        let px = clamp_px(px);
         match self.font(source) {
             Some(f) => raster::scale(f.advance(glyph) as i32, px, f.units_per_em),
             None => box_advance(px) as i32 * raster::ONE,
@@ -81,6 +98,7 @@ impl<'a> FontList<'a> {
     /// and line gap at `px`, rounded up, in pixels; for an empty list, the
     /// box's.
     pub fn metrics(&self, px: u32) -> LineMetrics {
+        let px = clamp_px(px);
         let Some(f) = self.fonts.first() else {
             return LineMetrics {
                 ascent: px,
@@ -89,7 +107,9 @@ impl<'a> FontList<'a> {
             };
         };
         let up = |v: i32| {
-            (raster::scale(v, px, f.units_per_em) + raster::ONE - 1).div_euclid(raster::ONE)
+            raster::scale(v, px, f.units_per_em)
+                .saturating_add(raster::ONE - 1)
+                .div_euclid(raster::ONE)
         };
         LineMetrics {
             ascent: up(f.ascent as i32).max(0) as u32,
@@ -153,6 +173,7 @@ pub const fn is_combining(c: char) -> bool {
 
 impl Shaper for Simple {
     fn shape(&self, fonts: &FontList<'_>, text: &str, px: u32, out: &mut Vec<Positioned>) -> i32 {
+        let px = clamp_px(px);
         // The pen in 26.6; each glyph's origin is snapped to a whole pixel.
         let mut pen: i32 = 0;
         let mut last_origin: i32 = 0;
@@ -179,7 +200,7 @@ impl Shaper for Simple {
                     f.units_per_em,
                 ));
             }
-            let x = (pen + raster::ONE / 2).div_euclid(raster::ONE);
+            let x = pen.saturating_add(raster::ONE / 2).div_euclid(raster::ONE);
             out.push(Positioned {
                 source,
                 glyph,
@@ -191,7 +212,7 @@ impl Shaper for Simple {
             pen = pen.saturating_add(fonts.advance(source, glyph, px));
             previous = Some((source, glyph));
         }
-        (pen + raster::ONE / 2).div_euclid(raster::ONE)
+        pen.saturating_add(raster::ONE / 2).div_euclid(raster::ONE)
     }
 }
 
@@ -257,7 +278,7 @@ impl GlyphCache {
         let key = Key {
             source,
             glyph,
-            px: px.min(u16::MAX as u32) as u16,
+            px: clamp_px(px) as u16,
         };
         let first = self.slot(&key);
         let second = if self.slots.len() > 1 {
@@ -279,9 +300,12 @@ impl GlyphCache {
                 .font(source)
                 .and_then(|f| raster::render_glyph(f, glyph, px, &mut self.scratch))
                 .unwrap_or_else(|| box_glyph(fonts, px));
-            // The first way's glyph moves to the second, unless the second
-            // is free; the new one takes the first.
-            if self.slots[second].is_none() {
+            // A free way takes it; else the first way's glyph moves to
+            // the second and the new one takes the first.
+            if self.slots[first].is_none() {
+                self.slots[first] = Some((key, bitmap));
+                first
+            } else if self.slots[second].is_none() {
                 self.slots[second] = Some((key, bitmap));
                 second
             } else {
@@ -302,6 +326,7 @@ impl GlyphCache {
 /// The box at `px`: as high as the first font's ascent's seven tenths,
 /// one pixel inside its advance, standing on the baseline.
 pub fn box_glyph(fonts: &FontList<'_>, px: u32) -> Bitmap {
+    let px = clamp_px(px);
     let ascent = fonts.metrics(px).ascent;
     let height = (ascent * 7 / 10).max(3);
     let width = box_advance(px).saturating_sub(2).max(2);
@@ -389,7 +414,12 @@ impl Target<'_> {
                 if px < x0 || px >= x1 {
                     continue;
                 }
-                let c = bitmap.coverage[by * bitmap.width + bx];
+                // A caller's own bitmap may be short: never index past it.
+                let c = bitmap
+                    .coverage
+                    .get(by * bitmap.width + bx)
+                    .copied()
+                    .unwrap_or(0);
                 if c == 0 {
                     continue;
                 }

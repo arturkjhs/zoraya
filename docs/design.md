@@ -106,8 +106,11 @@ format stable, compatibility between format versions is not guaranteed: volumes 
 [ADR-0097](adr/0097-init-gui-mode-and-qemu-command-line.md), proposed in TASK-14 and built as recommended; the
 architect accepts or changes them at review). A virtio-gpu 2D driver and virtio-input drivers in user processes, each
 on a device page of its own; a compositor that copies committed damage from clients' memory objects into its own
-copies and owns input and focus; a bitmap font of Zoraya's own; a terminal that speaks a VT subset to the shell over a
-channel; and `init`'s GUI mode. "GUI (as built)" below describes the code.
+copies and owns input and focus; a terminal that speaks a VT subset to the shell over a channel; and `init`'s GUI
+mode. "GUI (as built)" below describes the code. Stage 7 (TASK-24) builds the desktop of
+[ADR-0160](adr/0160-window-management.md) to [ADR-0172](adr/0172-rooms.md) on it, part by part; 7a replaced stage 5's
+bitmap font with the design tokens of [ADR-0161](adr/0161-design-system.md) and the text of
+[ADR-0162](adr/0162-fonts-and-text.md) ("Tokens and text" below).
 
 **Kernel foundations** ([ADR-0020](adr/0020-kernel-address-space.md) to
 [ADR-0024](adr/0024-kernel-fault-policy.md)). Address space, physical memory, heap, interrupts and time, and kernel
@@ -378,10 +381,13 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   `zoraya-keymap`; pointer events to the surface under the pointer. A button press focuses and raises; F12 moves focus
   to the next window and reaches no client. Events that do not fit a client's queue are dropped and counted for it.
   At most 8 clients. With no display driver it goes on; a new one gets the same framebuffer and one full flush.
-- **`term`** (`zoraya-term`, `zoraya-font`, ADR-0095, ADR-0096). A compositor client with an 80 × 24 grid of 12 × 20
-  cells (968 × 488 pixels) and 500 lines of scrollback (Shift with Page Up or Page Down). It parses the VT subset of
-  ADR-0096 with ADR-0154's faint (SGR 2, ended by 22: the colour at half intensity), answers no query, and sends the shell the bytes keys make (`zoraya-proto-term`). It draws only the rows
-  that changed, and commits again only after the last commit's reply.
+- **`term`** (`zoraya-term`, `zoraya-text`, ADR-0096, ADR-0162). A compositor client with an 80 × 24 grid of 8 × 18
+  cells (JetBrains Mono at `text.mono`, 13 pixels at scale 1) inside `padding.terminal` (14), 668 × 460 pixels, and
+  500 lines of scrollback (Shift with Page Up or Page Down). It parses the VT subset of ADR-0096 with ADR-0154's faint
+  (SGR 2, ended by 22: half way to the background), draws bold (SGR 1) with JetBrains Mono Bold, takes its colours
+  from the `term.*` tokens of the light set, answers no query, and sends the shell the bytes keys make
+  (`zoraya-proto-term`): it holds up to 4 KiB of keys the shell has not read yet and sends them as soon as the shell's
+  queue has room. It draws only the rows that changed, and commits again only after the last commit's reply.
 - **`zosh`** uses a channel at slot 6 as its terminal: output as `Output` messages (waiting while the terminal's queue
   is full), input from `Input` messages, and its width from `Size`. Without one it uses the console.
 - **`init`** (ADR-0097). With a GPU page and an input page it starts the storage stack, `gpud`, an `inputd` per input
@@ -406,6 +412,43 @@ screendump is from QMP's key event to the first screendump that shows the charac
 Under HVF the flush that no longer blocks (ADR-0093, Decision) lowered the full-redraw rate from about 1017 frames/s
 and raised compose time from 0.48 ms, between runs of the same tests; under TCG nothing moved. A guess, not measured:
 the compositor now composes while QEMU's device still reads the framebuffer for the previous flush.
+
+## Tokens and text (as built)
+
+Stage 7a (TASK-24), on the accepted [ADR-0161](adr/0161-design-system.md) and
+[ADR-0162](adr/0162-fonts-and-text.md), with proposed [ADR-0240](adr/0240-fonts-embedded-until-the-launcher.md).
+
+- **`zoraya-tokens`** reads `crates/zoraya-tokens/tokens.txt`, which is the architect's direction file
+  (`docs/research/desktop/mockups/clear-field/tokens.txt`, compared by a test), at compile time with a `const`
+  parser: a missing name or a bad value fails the build. Sizes are `Logical` values that only the crate can make and
+  that become physical pixels only through a `Scale` (1 or 2); colours are `Color`s of the light or the dark
+  `Palette`, blended in sRGB with integer arithmetic; durations are `Millis`. `make check-tokens` keeps colour and
+  duration literals out of the compositor, the terminal and the GUI programs (INV-0161-1).
+- **`zoraya-text`** is ADR-0162's Option C: a TrueType `glyf` reader that checks every offset (`cmap` 4 and 12,
+  `kern` 0, composites at most 8 deep and 256 components, at most 4,096 points and 64 contours, else the box), a
+  scan-line rasteriser in 26.6 fixed point whose coverage is exact integer arithmetic (the same bytes on every host and
+  in QEMU: reference digests on the host and in `t_text`, INV-0162-2), a two-way set-associative glyph cache of 1,024
+  glyphs that counts its hits, the `Shaper` trait with the simple shaper (fallback along a font list, combining marks
+  over their base at no advance), the box glyph drawn by the rasteriser, and drawing that never leaves its clip
+  (INV-0162-1, with a fuzz test over mutated fonts, hand-built hostile fonts and random strings). Sizes are 1 to 512
+  pixels per em: a larger request draws at 512, which bounds every glyph's raster. Inter keeps its kerning in GPOS, which the reader does not read,
+  and JetBrains Mono has none: `kern` 0 kerns nothing in the system's fonts today (ADR-0162's open question).
+- **Fonts** (`fonts/`, `zoraya-fonts`): Inter 4.1 Regular and Medium, JetBrains Mono 2.304 Regular and Bold, unmodified,
+  with their licences, in a fonts table of `docs/dependencies.md` checked by hash (INV-0162-5). Until the launcher of
+  7d hands out `/system/fonts`, the programs that draw text embed them (ADR-0240): `term` grows by about 0.96 MB.
+- **Reading screens back.** `zoraya_term::read` draws every character a cell may hold (printable ASCII, Latin-1,
+  Latin Extended-A, Cyrillic with Ґ ґ) with the terminal's fonts, size and colours, and a cell reads as the character
+  whose pixels are identical. Twenty Cyrillic and Latin letters are drawn alike by any font (А and A, і and i, ...):
+  they read as the Latin, and the GUI runner compares a script's text in the same classes (INV-0162-4 lists them).
+
+Measured, `plan.md`'s figures for 7a: drawing a full 80 × 24 grid of Cyrillic in the terminal's look (`t_text`, the
+test kernel, one CPU), with an empty glyph cache and then from it.
+
+| | Host (M4, release) | HVF (debug) | TCG (debug) |
+|---|---|---|---|
+| Grid, empty cache | MEASURE_HOST_COLD | MEASURE_HVF_COLD | MEASURE_TCG_COLD |
+| Grid, from the cache | MEASURE_HOST_WARM | MEASURE_HVF_WARM | MEASURE_TCG_WARM |
+| Cache after two grids | 64 misses, 3,776 hits | MEASURE_HVF_CACHE | MEASURE_TCG_CACHE |
 
 ## Cross toolchain and ports (as built)
 
@@ -474,12 +517,14 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   `tests/posix/zosh.script` (POSIX programs from `zosh`, ADR-0153 rule 10, ADR-0200) and `tests/posix/tour.script`,
   the whole of `docs/tour.md`, whose GUI twin `make test-tour-gui` plays (INV-0154-4);
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
-  The runner (`tools/test-runner/src/gui.rs`) types over QMP and reads QEMU screendumps back as text by matching every
-  cell of the terminal's grid against every glyph of `zoraya-font`, exactly: the font draws each pixel in the text
-  colour or the background and PPM is lossless, so the tolerance is zero. It also checks the background and the
-  focused frame pixel by pixel. `tests/gui/terminal.script` waits for the prompt, writes and reads a file, runs a
-  pipeline, presses F12, edits a line wider than the window and checks that it is redrawn in place, measures key
-  latency, and powers off. The serial line's input is
+  The runner (`tools/test-runner/src/gui.rs`) types over QMP, one key every 8 ms (QEMU's virtio-input queue holds 16
+  keys and drops what a busy guest has not taken), and reads QEMU screendumps back as text with `zoraya_term::read`:
+  every cell of the terminal's grid is matched exactly against every character drawn by the same crates, and PPM is
+  lossless, so the tolerance is zero. It also checks the background and the focused frame pixel by pixel, and `shot
+  NAME` keeps a screen in `build/shots/`. `tests/gui/terminal.script` waits for the prompt, writes and reads a file, runs a
+  pipeline, presses F12, types a line wider than the window in one burst and checks that it is redrawn in place,
+  reads Ukrainian and Czech names and text back (from `rootfs/texts/`, completed with Tab until 7c's layouts), measures
+  key latency, and powers off. The serial line's input is
   closed, so keys reach `zosh` only through the window;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
@@ -1185,8 +1230,11 @@ crates/                   no_std, host-tested
   zoraya-broker/          the broker's logic: pids, groups, kill, the session file
   zoraya-tty/             the terminal's logic: line discipline, connections, foreground
   zoraya-keymap/          key codes to text, the US layout (ADR-0092)
-  zoraya-font/            Zoraya's bitmap font, its renderer and exact reader (ADR-0095)
-  zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering (ADR-0096)
+  zoraya-tokens/          the design tokens from tokens.txt, read at compile time (ADR-0161)
+  zoraya-text/            TrueType reader, fixed-point rasteriser, glyph cache, simple shaper (ADR-0162)
+  zoraya-fonts/           the system fonts of fonts/ as bytes (ADR-0162, ADR-0240)
+  zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering and the exact
+                          reader of its cells (ADR-0096, ADR-0162)
   zoraya-compositor/      the compositor's loop over a platform trait (ADR-0093, ADR-0094)
   zoraya-posix/           the Rust half of libposix (ADR-0100): resolver, fd table, errno, the file functions; ffi.rs
                           is the C boundary in libc.a; tests/kernel is a fake kernel over the real fs-service
@@ -1199,6 +1247,7 @@ user/                     the programs in the ramdisk, on zoraya-rt: init, zosh,
   describe/               command descriptions (ADR-0156): builtins/, commands/, demos/, topics/, system/;
                           build.rs refuses a bad one, describe! puts one in its program's ELF
 rootfs/                   the first contents of build/disk.img
+fonts/                    the system fonts, unmodified, with their licences (docs/dependencies.md, Fonts)
 tests/shell/              scripts the runner plays on the serial line
 tests/gui/                the GUI script the runner plays over QMP
 tests/posix-core/         stage 6c's C criterion program and the script make test-libposix plays

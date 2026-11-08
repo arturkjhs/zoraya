@@ -441,3 +441,44 @@ fn scrolling_and_cursor_moves_redraw_their_rows() {
     t.render(&mut look, &mut pixels, w, false);
     assert_eq!(read_rows(&pixels, w, h, 10, 2), ["h", "Z"]);
 }
+
+/// The terminal in both sets, for TASK-24's report: a PPM per set into the
+/// directory `ZORAYA_TERM_SAMPLES` names (the dark set cannot be shown in
+/// QEMU until 7f's settings).
+#[test]
+#[ignore = "writes screens: ZORAYA_TERM_SAMPLES=dir cargo test -p zoraya-term -- --ignored samples"]
+fn samples() {
+    let Ok(dir) = std::env::var("ZORAYA_TERM_SAMPLES") else {
+        return;
+    };
+    let session = concat!(
+        "Type help to begin, or help tour.\n",
+        "~> ls /texts/uk\n",
+        "звіт-2026.txt\n",
+        "~> cat /texts/uk/звіт-2026.txt\n",
+        "Привіт, світе! Ґанок, їжак, єнот.\n",
+        "~> cat /texts/cz/příklad.txt\n",
+        "Příliš žluťoučký kůň úpěl ďábelské ódy.\n",
+        "~> cat нема.txt\n",
+        "\x1b[31mcat: нема.txt: not found\x1b[m\n",
+        "~> \x1b[1mbold\x1b[22m and \x1b[2mfaint\x1b[22m, \x1b[32mgreen\x1b[m, \x1b[34mblue\x1b[m, \x1b[35mmagenta\x1b[m\n",
+        "~> echo \x1b[2mhi > a.txt\x1b[22m",
+    );
+    for (name, appearance) in [
+        ("terminal-light", Appearance::Light),
+        ("terminal-dark", Appearance::Dark),
+    ] {
+        let mut look = Look::new(Scale::ONE, appearance);
+        let mut t = Term::new(80, 24);
+        t.write(session.as_bytes());
+        let (w, h) = look.surface_size(80, 24);
+        let mut pixels = vec![0u32; w * h];
+        look.clear(&mut pixels);
+        t.render(&mut look, &mut pixels, w, true);
+        let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for p in &pixels {
+            out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+        }
+        std::fs::write(format!("{dir}/{name}.ppm"), out).unwrap();
+    }
+}

@@ -33,7 +33,7 @@
 //!                   then a new window as `window`
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
-//! shot NAME         keep the screen as `build/shots/NAME.ppm` (the screens
+//! shot NAME         keep the screen as `build/shots/NAME-LABEL.ppm` (the screens
 //!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
 //! ```
@@ -61,7 +61,23 @@ const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
 /// Where the screendumps go, relative to QEMU's working directory: one file
 /// per run's label, so that two runs at once do not read each other's.
 fn shot_path(label: &str) -> String {
-    format!("build/gui-screen-{label}.ppm")
+    format!("build/gui-screen-{}.ppm", file_safe(label))
+}
+
+/// A label as part of a file name: anything but letters, digits, `-` and
+/// `_` becomes `_`, so that a label never leaves `build/` or breaks the
+/// QMP command it is quoted in.
+fn file_safe(label: &str) -> String {
+    label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 /// The time between two keys a `type` step presses: a fast keyboard's rate
 /// (USB full speed polls every 8 ms). QEMU's virtio-input event queue holds
@@ -549,7 +565,8 @@ impl Run {
             Step::Shot(name) => {
                 self.qmp.dump()?;
                 std::fs::create_dir_all("build/shots").map_err(|e| e.to_string())?;
-                let to = format!("build/shots/{name}.ppm");
+                // One file per run: gui-auto and gui-tcg keep their own.
+                let to = format!("build/shots/{name}-{}.ppm", file_safe(&self.label));
                 std::fs::copy(&self.qmp.shot, &to).map_err(|e| format!("{to}: {e}"))?;
                 Ok(())
             }

@@ -116,11 +116,14 @@ impl Window {
     }
 
     /// Queues key bytes for the shell; `flush` sends them.
+    /// A key's bytes go whole or not at all, so that the shell never gets
+    /// half an escape sequence or half a UTF-8 letter.
     fn send(&mut self, bytes: &[u8]) {
-        let room = PENDING_MAX - self.pending.len();
-        let taken = bytes.len().min(room);
-        self.pending.extend_from_slice(&bytes[..taken]);
-        self.dropped = self.dropped.saturating_add((bytes.len() - taken) as u32);
+        if self.pending.len() + bytes.len() <= PENDING_MAX {
+            self.pending.extend_from_slice(bytes);
+        } else {
+            self.dropped = self.dropped.saturating_add(bytes.len() as u32);
+        }
     }
 
     /// Sends what keys wait, in as few messages as fit, and stops at the
@@ -135,6 +138,8 @@ impl Window {
             };
             let mut out = [0u8; 64 + MAX_INPUT];
             let Ok(length) = encode(&m, NO_REPLY, &mut out) else {
+                // Cannot happen for n <= MAX_INPUT; counted if it does.
+                self.dropped = self.dropped.saturating_add(self.pending.len() as u32);
                 self.pending.clear();
                 break;
             };
@@ -143,8 +148,17 @@ impl Window {
                     self.dropped = 0;
                     self.pending.drain(..n);
                 }
-                // The shell is slow: the terminal does not wait for it.
-                Err(_) => break,
+                // The shell is slow: the terminal does not wait for it, and
+                // WRITABLE says when its queue has room.
+                Err(Status::WouldBlock) => break,
+                // Any other refusal (no kernel memory) leaves WRITABLE
+                // asserted: waiting for it would spin, so these keys are
+                // dropped and counted (review finding 8).
+                Err(_) => {
+                    self.dropped = self.dropped.saturating_add(self.pending.len() as u32);
+                    self.pending.clear();
+                    break;
+                }
             }
         }
         let want = !self.pending.is_empty();

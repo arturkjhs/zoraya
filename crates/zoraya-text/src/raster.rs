@@ -276,21 +276,28 @@ pub struct Bitmap {
 }
 
 /// A font unit value at `px` pixels per em, in 26.6, rounded half up.
+/// Saturates at the ends of `i32` (review finding 1).
 pub fn scale(v: i32, px: u32, units_per_em: u16) -> i32 {
     let n = v as i64 * px as i64 * ONE as i64;
-    let d = units_per_em as i64;
-    div_floor(2 * n + d, 2 * d) as i32
+    let d = (units_per_em as i64).max(1);
+    div_floor(2 * n + d, 2 * d).clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
 /// The largest bitmap side, in pixels, at `px` pixels per em: a hostile
 /// font with points far outside the em is clipped, not allocated for.
-fn max_side(px: u32) -> i32 {
+pub fn max_side(px: u32) -> i32 {
     (px as i32).saturating_mul(4).saturating_add(8)
 }
 
 /// Rasterises an outline at `px` pixels per em with the pen at the origin.
 pub fn render_outline(outline: &Outline, px: u32, units_per_em: u16) -> Bitmap {
-    let map = |p: &Point| (scale(p.x, px, units_per_em), -scale(p.y, px, units_per_em));
+    let px = crate::clamp_px(px);
+    let map = |p: &Point| {
+        (
+            scale(p.x, px, units_per_em),
+            scale(p.y, px, units_per_em).saturating_neg(),
+        )
+    };
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     for p in &outline.points {
         let (x, y) = map(p);
@@ -344,8 +351,11 @@ pub fn render_glyph(font: &Font<'_>, glyph: u16, px: u32, scratch: &mut Outline)
 /// The box glyph (ADR-0162), drawn by the rasteriser itself: a hollow
 /// rectangle `width × height` pixels with a stroke of `stroke`, its top
 /// left at `(left, top)` from the pen.
+/// Sides are at most [`crate::MAX_PX`] times 4 plus 8 (review finding 5).
 pub fn render_box(width: u32, height: u32, stroke: u32, left: i32, top: i32) -> Bitmap {
-    let (w, h, s) = (width as usize, height as usize, stroke.max(1) as i32);
+    let side = max_side(crate::MAX_PX) as u32;
+    let (width, height, stroke) = (width.min(side), height.min(side), stroke.clamp(1, side));
+    let (w, h, s) = (width as usize, height as usize, stroke as i32);
     let mut r = Raster::new(w, h);
     let (x1, y1) = (width as i32 * ONE, height as i32 * ONE);
     let rect = |r: &mut Raster, a: (i32, i32), b: (i32, i32), clockwise: bool| {

@@ -115,6 +115,16 @@ fn every_font_file_is_listed_with_its_sha256() {
         })
         .collect();
     assert_eq!(table.len(), FILES.len(), "{table:?}");
+    // Every file of fonts/ is one of FILES (review finding 9).
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fonts");
+    let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    on_disk.sort();
+    let mut named: Vec<String> = FILES.iter().map(|(n, _)| String::from(*n)).collect();
+    named.sort();
+    assert_eq!(on_disk, named);
     for (name, bytes) in FILES {
         let listed = table
             .iter()

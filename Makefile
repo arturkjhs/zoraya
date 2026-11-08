@@ -573,11 +573,15 @@ check-test-caps:
 
 # INV-0161-1: no colour or duration literal in a GUI crate; they come from
 # zoraya-tokens. The crates ADR-0161 names that exist (the compositor, the
-# terminal, the GUI programs), tests excepted. A colour is 0xrrggbb or
-# 0x00rrggbb, with or without the digit separator.
+# terminal, the GUI programs), tests excepted. A colour is a hexadecimal
+# literal of six or eight digits once the separators are gone (0xrrggbb,
+# 0x00rrggbb, 0xaarrggbb), with or without an integer suffix; a duration is
+# any Duration::from_*. A line that is a size or a mask, not a colour, says
+# so with `// not a colour` (review finding 6).
 GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src user/src/bin/compd.rs user/src/bin/term.rs
 check-tokens:
-	@hits="$$(grep -rnE '0x(00)?[0-9a-fA-F]{2}_?[0-9a-fA-F]{4}\b|Duration::from_millis' $(GUI_SOURCES) | grep -v '/tests\.rs:' || true)"; \
+	@hits="$$(grep -rnE '0x[0-9a-fA-F_]+|Duration::from_' $(GUI_SOURCES) | grep -v '/tests\.rs:' | grep -v 'not a colour' | \
+	  perl -ne 'print if /Duration::from_/ || grep { (my $$d = $$_) =~ s/_//g; length($$d) == 6 || length($$d) == 8 } /0x([0-9a-fA-F_]+)(?:[ui](?:8|16|32|64|size))?\b/g' || true)"; \
 	if [ -n "$$hits" ]; then echo "colour or duration literals outside zoraya-tokens (INV-0161-1):"; echo "$$hits"; exit 1; fi
 	@# INV-0240-1: fonts are embedded only through zoraya-fonts.
 	@hits="$$(grep -rn 'include_bytes!(.*\.ttf' crates tools user | grep -v '^crates/zoraya-fonts/' | grep -v '/tests\.rs:' || true)"; \

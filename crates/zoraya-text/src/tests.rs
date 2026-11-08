@@ -34,31 +34,47 @@ fn be(v: &[i32]) -> Vec<u8> {
 /// A font of three glyphs: 0 empty, 1 a triangle (from 'A'), 2 a
 /// composite of glyph 1 moved right by 100 (from 'B'). cmap format 4.
 pub fn tiny_font() -> Vec<u8> {
+    let mut triangle = be(&[1, 0, 0, 0, 0, 2, 0]);
+    triangle.extend_from_slice(&[1, 1, 1]);
+    triangle.extend(be(&[0, 600, -300, 0, 0, 700]));
+    // flags ARGS_ARE_WORDS | ARGS_ARE_XY, glyph 1, dx 100, dy 0
+    let composite = be(&[-1, 0, 0, 0, 0, 0x0003, 1, 100, 0]);
+    build_font(1000, 800, [500, 600, 700], triangle, composite)
+}
+
+/// A font of glyph 0 (empty), glyph 1 from 'A' and glyph 2 from 'B', with
+/// these units per em, ascent and advances, and a kern pair (1, 2) = -50.
+pub fn build_font(
+    units: u16,
+    ascent: i16,
+    advances: [u16; 3],
+    mut one: Vec<u8>,
+    mut two: Vec<u8>,
+) -> Vec<u8> {
     let mut head = vec![0u8; 54];
-    head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+    head[18..20].copy_from_slice(&units.to_be_bytes());
     let mut hhea = vec![0u8; 36];
-    hhea[4..6].copy_from_slice(&800u16.to_be_bytes());
+    hhea[4..6].copy_from_slice(&ascent.to_be_bytes());
     hhea[6..8].copy_from_slice(&(-200i16).to_be_bytes());
     hhea[34..36].copy_from_slice(&3u16.to_be_bytes());
     let mut maxp = vec![0u8; 6];
     maxp[4..6].copy_from_slice(&3u16.to_be_bytes());
-    let hmtx = be(&[500, 0, 600, 0, 700, 0]);
-    let mut triangle = be(&[1, 0, 0, 0, 0, 2, 0]);
-    triangle.extend_from_slice(&[1, 1, 1]);
-    triangle.extend(be(&[0, 600, -300, 0, 0, 700]));
-    if triangle.len() % 2 == 1 {
-        triangle.push(0);
+    let hmtx: Vec<u8> = advances
+        .iter()
+        .flat_map(|a| [a.to_be_bytes(), [0, 0]].concat())
+        .collect();
+    if one.len() % 2 == 1 {
+        one.push(0);
     }
-    // flags ARGS_ARE_WORDS | ARGS_ARE_XY, glyph 1, dx 100, dy 0
-    let composite = be(&[-1, 0, 0, 0, 0, 0x0003, 1, 100, 0]);
-    let mut glyf = triangle.clone();
-    glyf.extend_from_slice(&composite);
-    let loca = be(&[
-        0,
-        0,
-        (triangle.len() / 2) as i32,
-        ((triangle.len() + composite.len()) / 2) as i32,
-    ]);
+    if two.len() % 2 == 1 {
+        two.push(0);
+    }
+    let mut glyf = one.clone();
+    glyf.extend_from_slice(&two);
+    let mut loca = Vec::new();
+    for o in [0, 0, one.len() / 2, (one.len() + two.len()) / 2] {
+        loca.extend_from_slice(&(o as u16).to_be_bytes());
+    }
     let mut sub = be(&[4, 32, 0, 4, 0, 0, 0]);
     sub.extend(be(&[66, 0xFFFF, 0, 65, 0xFFFF]));
     sub.extend(be(&[1 - 65, 1]));
@@ -95,6 +111,137 @@ pub fn tiny_font() -> Vec<u8> {
         out.extend_from_slice(d);
     }
     out
+}
+
+/// A simple glyph of `points` on-curve points, every x and y delta the
+/// given 16-bit value: coordinates run to the ends of the range.
+fn extreme_glyph(points: usize, dx: i16, dy: i16) -> Vec<u8> {
+    let mut g = be(&[1, 0, 0, 0, 0, points as i32 - 1, 0]);
+    g.extend(std::iter::repeat_n(1u8, points));
+    for _ in 0..points {
+        g.extend_from_slice(&dx.to_be_bytes());
+    }
+    for _ in 0..points {
+        g.extend_from_slice(&dy.to_be_bytes());
+    }
+    g
+}
+
+/// A composite of glyph `of` scaled by `scale` (2.14) and moved by
+/// (-32768, 32767).
+fn scaled_composite(of: i32, scale: i16) -> Vec<u8> {
+    be(&[
+        -1,
+        0,
+        0,
+        0,
+        0,
+        0x0003 | 0x0008,
+        of,
+        -32768,
+        32767,
+        scale as i32,
+    ])
+}
+
+#[test]
+fn hostile_fonts_and_sizes_draw_inside_and_never_panic() {
+    // INV-0162-1 at the edges the review found (TASK-24 7a review, 1 to 5):
+    // coordinates and sums at the ends of i32, a tiny em, a huge advance,
+    // composites that saturate, long text, sizes up to u32::MAX, a huge
+    // ascent for the box.
+    let fonts = [
+        build_font(
+            16,
+            800,
+            [0, 65535, 65535],
+            extreme_glyph(1024, -32768, -32768),
+            scaled_composite(1, -0x8000),
+        ),
+        build_font(
+            16,
+            32767,
+            [65535, 65535, 0],
+            extreme_glyph(1024, 32767, 32767),
+            scaled_composite(2, 0x7fff),
+        ),
+        build_font(
+            16384,
+            -32768,
+            [1, 0, 65535],
+            extreme_glyph(4096, 32767, -32768),
+            scaled_composite(1, 0x4000),
+        ),
+    ];
+    let long: String = "A".repeat(4000) + &"B".repeat(4000) + "\u{10FFFD}AB";
+    for data in &fonts {
+        let f = Font::parse(data).unwrap();
+        let mut text = Text::new(FontList::new([f]));
+        for px in [0, 1, 16, 512, 513, 41_943_039, u32::MAX] {
+            guarded(|t| {
+                text.draw(t, "AB\u{10FFFD}", px, 10, 30, zoraya_tokens::LIGHT.fg_text);
+                text.draw(
+                    t,
+                    &long,
+                    px,
+                    i32::MIN + 1,
+                    i32::MAX - 1,
+                    zoraya_tokens::LIGHT.fg_text,
+                );
+                let cell = CellMetrics::of(&text.fonts, px);
+                text.draw_cell(
+                    t,
+                    cell,
+                    (10, 10),
+                    '\u{10FFFD}',
+                    px,
+                    (zoraya_tokens::LIGHT.fg_text, zoraya_tokens::LIGHT.bg_view),
+                );
+            });
+            let _ = text.measure(&long, px);
+            let b = box_glyph(&text.fonts, px);
+            let side = raster::max_side(MAX_PX) as usize;
+            assert!(b.width <= side && b.height <= side);
+        }
+    }
+}
+
+#[test]
+fn random_strings_through_the_real_fonts_stay_inside() {
+    // INV-0162-1's random strings: seeded, over every block the fonts map
+    // and some they do not.
+    let mut seed = 0x9e37_79b9u32;
+    let mut next = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    for list in [mono_list(), ui_list()] {
+        let mut text = Text::new(list);
+        for _ in 0..300 {
+            let s: String = (0..next() % 24)
+                .filter_map(|_| char::from_u32(next() % 0x3000))
+                .collect();
+            let px = 1 + next() % 80;
+            let (x, y) = ((next() % 120) as i32 - 30, (next() % 120) as i32 - 30);
+            guarded(|t| {
+                text.draw(t, &s, px, x, y, zoraya_tokens::DARK.fg_text);
+            });
+        }
+    }
+}
+
+#[test]
+fn a_short_bitmap_draws_what_it_has() {
+    let b = Bitmap {
+        width: 4,
+        height: 4,
+        left: 0,
+        top: 0,
+        coverage: vec![255; 3],
+    };
+    guarded(|t| t.draw(&b, 10, 10, zoraya_tokens::LIGHT.fg_text));
 }
 
 #[test]
