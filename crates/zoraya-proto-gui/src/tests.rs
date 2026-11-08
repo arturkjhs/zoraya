@@ -64,7 +64,10 @@ fn every_message_round_trips_and_decodes_totally() {
         width: 640,
         height: 480,
     });
-    total(Created { status: ok, window: 3 });
+    total(Created {
+        status: ok,
+        window: 3,
+    });
     total(CreatePopup {
         parent: 1,
         x: 10,
@@ -72,7 +75,10 @@ fn every_message_round_trips_and_decodes_totally() {
         width: 100,
         height: 50,
     });
-    total(PopupCreated { status: ok, window: 4 });
+    total(PopupCreated {
+        status: ok,
+        window: 4,
+    });
     total(CommitTo {
         window: 1,
         x: 0,

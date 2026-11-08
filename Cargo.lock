@@ -71,12 +71,15 @@ dependencies = [
 name = "zoraya-compositor"
 version = "0.1.0"
 dependencies = [
+ "zoraya-fonts",
  "zoraya-keymap",
+ "zoraya-paint",
  "zoraya-proto-display",
  "zoraya-proto-gui",
  "zoraya-proto-input",
  "zoraya-protocol",
  "zoraya-test-alloc",
+ "zoraya-text",
  "zoraya-tokens",
 ]
 

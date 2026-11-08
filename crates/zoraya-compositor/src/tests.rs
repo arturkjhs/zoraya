@@ -9,9 +9,13 @@ use std::vec::Vec;
 use super::*;
 use zoraya_protocol::{Seq, WireError};
 
-const W: u32 = 320;
-const H: u32 = 200;
+const W: u32 = 640;
+const H: u32 = 480;
 const FRAMEBUFFER: u32 = 999;
+/// The first window's body at scale 1: the frame at `ORIGIN` below the
+/// 28-pixel bar, inside a 1-pixel border and under a 36-pixel title bar.
+const BX: i64 = 73;
+const BY: i64 = 106;
 
 #[derive(Default)]
 struct Peer {
@@ -439,6 +443,11 @@ impl Setup {
     fn pixel(&mut self, x: i64, y: i64) -> u32 {
         self.f().frame[(y * i64::from(W) + x) as usize]
     }
+
+    /// The wallpaper's pixel: what is shown where nothing else is.
+    fn paper(&self, x: i64, y: i64) -> u32 {
+        self.c.wallpaper[(y * i64::from(W) + x) as usize]
+    }
 }
 
 /// Every event a client got, as (ordinal, bytes).
@@ -492,7 +501,7 @@ fn the_display_is_attached_at_start() {
     // The first round shows the whole screen once.
     s.c.step();
     assert_eq!(s.f().flushes, [(0, 0, W, H)]);
-    assert_eq!(s.pixel(0, 0), BACKGROUND);
+    assert_eq!(s.pixel(5, i64::from(H) - 5), s.paper(5, i64::from(H) - 5));
 }
 
 #[test]
@@ -508,21 +517,22 @@ fn a_window_appears_after_its_commit() {
         .memory(vec![0x0012_3456; 100 * 50], 100 * 50 * 4, false);
     assert_eq!(s.create(end, 100, 50, memory), status::OK);
     let area = s.c.placement(0).unwrap();
-    assert_eq!((area.x, area.y), ORIGIN);
+    assert_eq!((area.x, area.y), (BX, BY));
     // Created, not yet committed: the compositor's copy is black.
-    assert_eq!(s.pixel(ORIGIN.0, ORIGIN.1), 0);
-    assert_eq!(s.pixel(ORIGIN.0 - 1, ORIGIN.1), BORDER_FOCUSED);
+    assert_eq!(s.pixel(BX, BY), 0);
+    let border = zoraya_tokens::LIGHT.border.pixel();
+    assert_eq!(s.pixel(BX - 1, BY + 10), border);
     s.f().flushes.clear();
     assert_eq!(s.commit(end, 0, 0, 100, 50), status::OK);
-    assert_eq!(s.pixel(ORIGIN.0, ORIGIN.1), 0x0012_3456);
-    assert_eq!(s.pixel(ORIGIN.0 + 99, ORIGIN.1 + 49), 0x0012_3456);
-    assert_eq!(s.pixel(ORIGIN.0 + 100, ORIGIN.1 + 50), BORDER_FOCUSED);
-    assert_eq!(s.f().flushes, [(16, 16, 100, 50)]);
+    assert_eq!(s.pixel(BX, BY), 0x0012_3456);
+    assert_eq!(s.pixel(BX + 50, BY + 25), 0x0012_3456);
+    assert_eq!(s.pixel(BX + 100, BY + 10), border);
+    assert_eq!(s.f().flushes, [(73, 106, 100, 50)]);
     assert_eq!(s.c.stats().commits, 1);
     // Damage of part of it flushes that part.
     s.f().flushes.clear();
     assert_eq!(s.commit(end, 10, 20, 5, 3), status::OK);
-    assert_eq!(s.f().flushes, [(26, 36, 5, 3)]);
+    assert_eq!(s.f().flushes, [(83, 126, 5, 3)]);
 }
 
 /// INV-0093-3.
@@ -586,7 +596,7 @@ fn hostile_surfaces_and_damage_are_refused_and_others_go_on() {
     }
     // The good client is served throughout.
     assert_eq!(s.commit(good, 0, 0, 20, 20), status::OK);
-    assert_eq!(s.pixel(ORIGIN.0, ORIGIN.1), 7);
+    assert_eq!(s.pixel(BX, BY), 7);
 }
 
 /// INV-0093-2: the manager's and drivers' ordinals mean nothing on a client
@@ -657,24 +667,27 @@ fn a_client_cannot_use_manager_or_input_messages() {
 fn shared_pixels_are_read_once_and_composed_from_the_copy() {
     let mut s = setup();
     let end = s.client(64);
-    let memory = s.f().memory(vec![], 16 * 16 * 4, true);
-    assert_eq!(s.create(end, 16, 16, memory), status::OK);
-    assert_eq!(s.commit(end, 0, 0, 16, 16), status::OK);
-    assert_eq!(s.f().memory[&memory].reads.get(), 256);
+    let memory = s.f().memory(vec![], 32 * 32 * 4, true);
+    assert_eq!(s.create(end, 32, 32, memory), status::OK);
+    assert_eq!(s.commit(end, 0, 0, 32, 32), status::OK);
+    assert_eq!(s.f().memory[&memory].reads.get(), 1024);
+    // The upper half, above the round lower corners.
     let shown: Vec<u32> = (0..16)
-        .flat_map(|y| (0..16).map(move |x| (x, y)))
-        .map(|(x, y)| s.pixel(ORIGIN.0 + x, ORIGIN.1 + y))
+        .flat_map(|y| (0..32).map(move |x| (x, y)))
+        .map(|(x, y)| s.pixel(BX + x, BY + y))
         .collect();
-    assert_eq!(shown, (1..=256).collect::<Vec<u32>>());
+    assert_eq!(shown, (1..=512).collect::<Vec<u32>>());
     // A redraw for another reason (a second window on top, then gone)
     // composes from the copy and reads no client memory.
+    let spot = (BX + (CASCADE as i64) + 2, BY + (CASCADE as i64) + 2);
+    let before = s.pixel(spot.0, spot.1);
     let (other, _) = s.window(8, 8, 5);
     let reads = s.f().memory[&memory].reads.get();
     s.f().peers.get_mut(&other).unwrap().gone = true;
     s.c.step();
     assert_eq!(s.f().memory[&memory].reads.get(), reads);
-    assert_eq!(s.pixel(ORIGIN.0 + CASCADE, ORIGIN.1 + CASCADE), BACKGROUND);
-    assert_eq!(s.pixel(ORIGIN.0 + 15, ORIGIN.1 + 15), 256);
+    assert_eq!(s.pixel(spot.0, spot.1), before);
+    assert_eq!(s.pixel(BX + 15, BY + 15), 15 * 32 + 16);
 }
 
 /// INV-0093-5: a client that never reads, or floods commits, stops nobody.
@@ -766,7 +779,7 @@ fn pointer_events_go_only_to_the_surface_under_it() {
     s.f().take(b);
     // Axis values are scaled to the screen: the B window's interior.
     let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
-    let (bx, by) = (ORIGIN.0 + CASCADE + 40, ORIGIN.1 + CASCADE + 40);
+    let (bx, by) = (BX + (CASCADE as i64) + 40, BY + (CASCADE as i64) + 40);
     s.point(scale(bx, W), scale(by, H), None);
     let got: Vec<_> = s
         .f()
@@ -783,7 +796,7 @@ fn pointer_events_go_only_to_the_surface_under_it() {
     );
     assert!(events(&s.f().take(a)).is_empty());
     // Over A only (outside B): A hears, B does not.
-    s.point(scale(ORIGIN.0 + 2, W), scale(ORIGIN.1 + 2, H), Some(1));
+    s.point(scale(BX + 2, W), scale(BY + 2, H), Some(1));
     assert!(
         s.f()
             .take(a)
@@ -806,11 +819,12 @@ fn pointer_events_go_only_to_the_surface_under_it() {
     assert!(events(&s.f().take(a)).is_empty() && events(&s.f().take(b)).is_empty());
     assert_eq!(s.c.focus(), Some(0));
     // The pointer is drawn, and moving it repairs what was under it.
+    let under = s.pixel(1, 2);
     s.point(0, 0, None);
     assert_eq!(s.pixel(0, 0), zoraya_tokens::LIGHT.fg_text.pixel());
     assert_eq!(s.pixel(1, 2), zoraya_tokens::LIGHT.bg_control.pixel());
     s.point(65535, 65535, None);
-    assert_eq!(s.pixel(1, 2), BACKGROUND);
+    assert_eq!(s.pixel(1, 2), under);
 }
 
 /// INV-0094-2: no client message changes focus.
@@ -881,6 +895,8 @@ fn a_full_client_loses_only_its_own_events() {
 #[test]
 fn a_closed_client_leaves_and_focus_moves_to_the_top() {
     let mut s = setup();
+    s.c.step();
+    let before = s.pixel(BX + 5, BY + 5);
     let (a, memory) = s.window(10, 10, 1);
     let (b, _) = s.window(10, 10, 2);
     s.f().take(b);
@@ -896,7 +912,7 @@ fn a_closed_client_leaves_and_focus_moves_to_the_top() {
             .iter()
             .any(|m| decode::<gui::Focus>(m, 0).is_ok_and(|(_, f)| f.focused))
     );
-    assert_eq!(s.pixel(ORIGIN.0, ORIGIN.1), BACKGROUND);
+    assert_eq!(s.pixel(BX + 5, BY + 5), before);
 }
 
 #[test]
@@ -969,7 +985,7 @@ fn a_lost_display_is_replaced_and_the_screen_shown_again() {
     assert_eq!(d.status.0, status::OK);
     assert_eq!(s.f().attaches, 2);
     assert_eq!(s.f().flushes, [(0, 0, W, H)]);
-    assert_eq!(s.pixel(ORIGIN.0, ORIGIN.1), 4);
+    assert_eq!(s.pixel(BX, BY), 4);
     // A second display while one is attached is refused.
     let extra = s.f().channel(8);
     s.f()
@@ -1061,15 +1077,17 @@ fn stats_count_frames_and_commits() {
 #[test]
 fn windows_are_cascaded_and_kept_on_screen() {
     let mut s = setup();
+    // Larger than the work area: at the corner, the title bar on screen.
     s.window(W, H, 1);
-    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((0, 0)));
+    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((1, 36)));
     s.window(W - 10, H - 10, 1);
+    // Its title bar stays on the screen.
     let r = s.c.placement(1).unwrap();
-    assert!(r.right() <= i64::from(W) && r.bottom() <= i64::from(H));
+    assert!(r.x >= 1 && r.right() <= i64::from(W) && r.y - 36 >= 0);
     s.window(10, 10, 1);
     assert_eq!(
         s.c.placement(2).map(|r| (r.x, r.y)),
-        Some((ORIGIN.0 + 2 * CASCADE, ORIGIN.1 + 2 * CASCADE))
+        Some((BX + 2 * (CASCADE as i64), BY + 2 * (CASCADE as i64)))
     );
 }
 
@@ -1096,17 +1114,23 @@ fn wire_errors_are_not_panics() {
 // Holes cargo-mutants found (TASK-14 review).
 
 #[test]
-fn the_frame_is_one_pixel_all_round_and_nothing_more() {
+fn the_frame_is_the_compositors_drawing() {
+    // ADR-0160's frame around a 100 × 50 body: the title bar above in
+    // bg.frame.focused, a one-pixel border all round, the shadow outside.
     let mut s = setup();
-    s.window(100, 50, 7);
-    let (x, y) = ORIGIN;
-    assert_eq!(s.pixel(x + 10, y - 1), BORDER_FOCUSED);
-    assert_eq!(s.pixel(x + 100, y + 10), BORDER_FOCUSED);
-    assert_eq!(s.pixel(x + 10, y + 50), BORDER_FOCUSED);
-    assert_eq!(s.pixel(x + 101, y + 10), BACKGROUND);
-    assert_eq!(s.pixel(x + 10, y + 51), BACKGROUND);
-    assert_eq!(s.pixel(x + 10, y - 2), BACKGROUND);
-    assert_eq!(s.pixel(310, y - 2), BACKGROUND);
+    let (end, _) = s.window(100, 50, 7);
+    s.commit(end, 0, 0, 100, 50);
+    let (x, y) = (BX, BY);
+    let p = zoraya_tokens::LIGHT;
+    assert_eq!(s.pixel(x + 60, y - 30), p.bg_frame_focused.pixel());
+    assert_eq!(s.pixel(x - 1, y + 10), p.border.pixel());
+    assert_eq!(s.pixel(x + 100, y + 10), p.border.pixel());
+    assert_eq!(s.pixel(x + 50, y + 50), p.border.pixel());
+    assert_eq!(s.pixel(x + 50, y - 36), p.border.pixel());
+    assert_eq!(s.pixel(x + 50, y + 25), 7);
+    // Outside the border: no frame colour, and the shadow darkens below.
+    assert_ne!(s.pixel(x + 101, y + 10), p.border.pixel());
+    assert_ne!(s.pixel(x + 50, y + 52), s.paper(x + 50, y + 52));
 }
 
 /// Attaches `end` as a new display through the manager, and gives the
@@ -1190,7 +1214,7 @@ fn a_display_of_a_new_size_is_taken() {
 fn a_one_pixel_wide_display_is_composed() {
     let mut s = setup_with(|f| f.display_size = (1, 4));
     s.c.step();
-    assert_eq!(s.f().frame[0], BACKGROUND);
+    assert_eq!(s.f().flushes, [(0, 0, 1, 4)]);
 }
 
 #[test]
@@ -1224,15 +1248,19 @@ fn an_object_of_some_pages_but_too_few_is_refused() {
 }
 
 #[test]
-fn f12_follows_creation_order_not_client_slots() {
+fn f12_goes_to_the_next_window_in_the_switchers_order() {
     let mut s = setup();
     let ends = [s.client(64), s.client(64), s.client(64)];
     for i in [2, 1, 0] {
         let memory = s.f().memory(vec![1; 16], 64, false);
         assert_eq!(s.create(ends[i], 4, 4, memory), status::OK);
     }
+    // The first window took focus; the stack's top is the last created.
     assert_eq!(s.c.focus(), Some(2));
     s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    assert_eq!(s.c.focus(), Some(0));
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    // Then the stack from the top down: every window in turn.
     assert_eq!(s.c.focus(), Some(1));
 }
 
@@ -1240,7 +1268,7 @@ fn f12_follows_creation_order_not_client_slots() {
 fn a_window_that_nearly_fills_the_screen_starts_at_the_corner() {
     let mut s = setup();
     s.window(W - 1, H - 1, 1);
-    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((0, 0)));
+    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((1, 36)));
 }
 
 #[test]
@@ -1250,7 +1278,7 @@ fn a_part_of_a_surface_is_composed_from_its_own_pixels() {
     let memory = s.f().memory((0..256).collect(), 1024, false);
     assert_eq!(s.create(end, 16, 16, memory), status::OK);
     assert_eq!(s.commit(end, 3, 2, 4, 4), status::OK);
-    let (x, y) = ORIGIN;
+    let (x, y) = (BX, BY);
     assert_eq!(s.pixel(x + 3, y + 2), 2 * 16 + 3);
     assert_eq!(s.pixel(x + 6, y + 5), 5 * 16 + 6);
     assert_eq!(s.pixel(x + 2, y + 2), 0, "outside the commit");
@@ -1264,7 +1292,7 @@ fn pointer_and_focus_events_carry_the_dropped_count() {
     s.f().take(a);
     s.f().take(b);
     let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
-    let (x, y) = ORIGIN;
+    let (x, y) = (BX, BY);
     s.f().peers.get_mut(&a).unwrap().room = 0;
     s.point(scale(x + 2, W), scale(y + 2, H), None);
     s.point(scale(x + 5, W), scale(y + 5, H), None);
@@ -1298,15 +1326,26 @@ fn a_closed_client_flushes_just_its_frame() {
     let mut s = setup();
     let (a, _) = s.window(10, 10, 1);
     let (_b, _) = s.window(10, 10, 2);
+    let f = s.c.frame();
+    let reach = |s: &Setup, client| {
+        let k = Key { client, id: 0 };
+        s.c.window(k).unwrap().reach(&f)
+    };
+    // a's window and shadow, and b's (focus moved to b): one rectangle.
+    let both = reach(&s, 0)
+        .union(&reach(&s, 1))
+        .intersect(&Rect::new(0, 0, W.into(), H.into()));
     s.f().flushes.clear();
     s.f().peers.get_mut(&a).unwrap().gone = true;
     s.c.step();
-    // a's frame and b's (focus moved to b): one rectangle holding both.
-    let (x, y) = ORIGIN;
-    let side = CASCADE + 12;
     assert_eq!(
         s.f().flushes,
-        [((x - 1) as u32, (y - 1) as u32, side as u32, side as u32)]
+        [(
+            both.x as u32,
+            both.y as u32,
+            both.width as u32,
+            both.height as u32
+        )]
     );
 }
 
@@ -1323,7 +1362,8 @@ fn the_last_axis_value_is_the_last_pixel() {
         .filter_map(|m| decode::<gui::Pointer>(m, 0).ok())
         .map(|(_, p)| (p.x, p.y))
         .collect();
-    assert_eq!(got, [(W - 1, H - 1)]);
+    // The window is at (1, 36): the last pixel is (W - 2, H - 37) in it.
+    assert_eq!(got, [(W - 2, H - 37)]);
 }
 
 fn press(s: &mut Setup, x: u32, y: u32, button: u32, value: u32) {
@@ -1356,7 +1396,7 @@ fn press(s: &mut Setup, x: u32, y: u32, button: u32, value: u32) {
 #[test]
 fn any_button_click_raises_the_window_under_it() {
     let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
-    let (x, y) = ORIGIN;
+    let (x, y) = (BX, BY);
     for button in [code::BTN_LEFT, code::BTN_RIGHT, code::BTN_MIDDLE] {
         let mut s = setup();
         let (a, _) = s.window(60, 60, 1);
@@ -1369,7 +1409,10 @@ fn any_button_click_raises_the_window_under_it() {
         assert_eq!(s.pixel(overlap.0, overlap.1), 1, "button {button:#x}");
         assert_eq!(s.c.focus(), Some(0));
         // b is still shown where a does not cover it.
-        assert_eq!(s.pixel(x + CASCADE + 59, y + CASCADE + 59), 2);
+        assert_eq!(
+            s.pixel(x + (CASCADE as i64) + 50, y + (CASCADE as i64) + 50),
+            2
+        );
         press(&mut s, scale(x + 2, W), scale(y + 2, H), button, 0);
         // A click on the window already on top changes nothing on screen.
         s.f().flushes.clear();
@@ -1388,7 +1431,7 @@ fn buttons_are_held_and_released() {
     let (a, _) = s.window(60, 60, 1);
     s.f().take(a);
     let scale = |p: i64, side: u32| (p * 65535 / i64::from(side - 1)) as u32;
-    let (x, y) = ORIGIN;
+    let (x, y) = (BX, BY);
     press(&mut s, scale(x + 2, W), scale(y + 2, H), code::BTN_LEFT, 1);
     press(&mut s, scale(x + 4, W), scale(y + 4, H), code::BTN_LEFT, 0);
     let got: Vec<u32> = s
@@ -1512,7 +1555,7 @@ fn frames_composed_during_a_flush_go_out_together() {
     assert_eq!(s.commit(a, 0, 0, 1, 1), status::OK);
     assert_eq!(s.commit(a, 10, 10, 2, 2), status::OK);
     assert_eq!(s.commit(a, 30, 5, 1, 1), status::OK);
-    let (x, y) = ORIGIN;
+    let (x, y) = (BX, BY);
     assert_eq!(s.f().flushes, [(x as u32, y as u32, 1, 1)]);
     // The answer to the first arrives: the next flush is the union of the
     // other two.

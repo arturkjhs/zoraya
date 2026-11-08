@@ -20,6 +20,14 @@ pub mod code {
     pub const SPACE: u32 = 57;
     pub const CAPS_LOCK: u32 = 58;
     pub const F12: u32 = 88;
+    pub const W: u32 = 17;
+    pub const R: u32 = 19;
+    pub const M: u32 = 50;
+    pub const SLASH: u32 = 53;
+    /// The system key of ADR-0160 (Super; the Command keys on a Mac
+    /// keyboard under QEMU).
+    pub const LEFT_META: u32 = 125;
+    pub const RIGHT_META: u32 = 126;
     pub const RIGHT_CTRL: u32 = 97;
     pub const RIGHT_ALT: u32 = 100;
     pub const HOME: u32 = 102;
