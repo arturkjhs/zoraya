@@ -120,15 +120,52 @@ changed lines found no open error. One more round was not needed.
 
 ### Mutation testing
 
-MEASURE_MUTANTS
+`make mutants-host` (cargo-mutants 27.1.0, `--in-diff` against `main`, two jobs, timeouts from the baseline, under
+the watchdog), 65 of the part's 90 minutes:
+
+| Crate | Mutants | Caught | Missed | Unviable | Timeouts | Time |
+|---|---|---|---|---|---|---|
+| `zoraya-text`, first run | 1,032 | 798 | 189 | 18 | 27 | 21 min |
+| `zoraya-tokens` | 344 | 123 | 27 | 191 | 3 | 18 min |
+| `zoraya-term` | 121 | 103 | 10 | 8 | 0 | 4 min |
+| `zoraya-text`, after the new tests | 1,055 | 910 | 98 | 18 | 29 | 22 min |
+
+- `zoraya-text`: the 189 survivors were sorted by function by the main model; most lay in code no test reached
+  (composites with scales and matrices, the choice of `cmap` and `kern` subtables, contours off the curve, the box,
+  the cache's ways). `tests_holes.rs` (`e28665b`) covers them, and one of its tests, against each pixel's exact area,
+  found a real bias: the floor division of edge crossings made shallow edges' pixels up to three levels too full;
+  crossings now round to the nearest (the reference digests changed with it). 98 survive the second run, not sorted
+  within the cap: 19 in `Raster::row`'s splitting (changes within the exact-area test's tolerance of two levels, by
+  sampling), 12 in the cache's slot hash and ways (any slot function gives the same pixels), the rest in defensive
+  bounds of the font reader and in `draw_cell`'s centring of a fallback glyph. They are the first thing to sort when
+  `zoraya-text` is next worked on.
+- `zoraya-tokens` and `zoraya-term`: the `mutant-triage` subagent sorted all 37. Equivalent, rechecked by the main
+  model: `Color::blend`'s and `parse_color`'s `|` to `^` (disjoint bits), `content_end`'s second loop start (the first
+  `if` returns on a leading `#`), `starts_with`'s guard (unreachable on trimmed keys), `find`'s, `word`'s and `lines`'
+  `<` to `<=` on a pass that reads nothing, `yes_no` to false (no token is `yes`), `put`'s `c < BRIGHT` to `<=` (no
+  colour index 8 reaches it), and `read`'s `&&` to `||` over colours that equal the background. The 26 holes have tests
+  (`7dfa524`), and the one marked unsure (`canonical` of blank and `_`) has a test in every look.
+
 
 ### Merge
 
-Not merged: see the queue. `work/7a` is complete locally; 7b starts from it.
+Not merged: see the queue. `work/7a` is complete locally at `ad9becd`, where a full `make test` from the snapshot
+worktree passed (every step, 1,055 host tests, the seven QEMU configurations, both GUI runs); 7b starts from it.
 
 ### Time
 
-MEASURE_TIME
+From the commits' times (2026-11-08) and the logs; builds and tests overlap with writing, so the rows are wall
+time for each step, not exclusive.
+
+| Step | Time |
+|---|---|
+| Reading the task, the ADRs, the code; fetching the fonts | 15 min |
+| The two backlog fixes (writing, the TCG trace, three GUI runs) | 1 h 10 min |
+| `zoraya-tokens`, `zoraya-text`, `zoraya-fonts`, the terminal and the reader (writing and host tests) | 1 h 30 min |
+| Full `make test` (two runs) | 50 min |
+| Review and its fixes | 30 min |
+| Mutation runs and their tests | 1 h 20 min (65 min of mutants) |
+
 
 ## To finish by hand
 
