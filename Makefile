@@ -482,12 +482,20 @@ mutants:
 # build/mutants/cargo/mutants.out/missed.txt. Not part of make test.
 # MUTANTS_HOST_ARGS adds cargo-mutants options, such as --in-diff FILE or
 # --exclude src/ffi.rs (code the host does not compile).
+# Each mutant's tests get MUTANTS_TIMEOUT_MULTIPLIER times the unmutated
+# baseline's test time, and at least MUTANTS_TIMEOUT_MIN seconds: a mutant
+# that loops costs seconds, not a fixed 300 (TASK-18's pass spent 5 min on
+# each of 17). MUTANTS_TIMEOUT=N sets N seconds instead, for a slow crate.
 CRATE ?= zoraya-virtio
+MUTANTS_TIMEOUT_MIN ?= 20
+MUTANTS_TIMEOUT_MULTIPLIER ?= 5
+MUTANTS_TIMEOUT ?=
+MUTANTS_TIMEOUT_ARGS = $(if $(MUTANTS_TIMEOUT),--timeout $(MUTANTS_TIMEOUT),--minimum-test-timeout $(MUTANTS_TIMEOUT_MIN) --timeout-multiplier $(MUTANTS_TIMEOUT_MULTIPLIER))
 mutants-host:
 	@command -v cargo-mutants >/dev/null || { echo "cargo-mutants is not installed: cargo install cargo-mutants --version 27.1.0 --locked (docs/dependencies.md)"; exit 2; }
 	@# cargo-mutants exits 2 when a mutant was missed and 3 on a timeout: results, not failures.
 	@$(CARGO) build -q -p zoraya-footprint
-	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 --timeout 300 $(MUTANTS_HOST_ARGS) -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
+	@mkdir -p build/mutants; tools/mutants/watchdog.sh $(CARGO) mutants -p $(CRATE) -j 2 $(MUTANTS_TIMEOUT_ARGS) $(MUTANTS_HOST_ARGS) -o build/mutants/cargo > build/mutants/cargo.log 2>&1; \
 	  rc=$$?; tail -1 build/mutants/cargo.log; \
 	  case $$rc in 0|2|3) echo "missed: build/mutants/cargo/mutants.out/missed.txt";; \
 	  *) echo "cargo-mutants failed ($$rc), see build/mutants/cargo.log"; exit $$rc;; esac
