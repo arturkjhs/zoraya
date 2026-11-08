@@ -292,7 +292,14 @@ fn the_toolkit_sends_nothing() {
         .split("\n[")
         .next()
         .unwrap();
-    for forbidden in ["zoraya-rt", "zoraya-channel", "zoraya-user", "zoraya-abi"] {
+    for forbidden in [
+        "zoraya-rt",
+        "zoraya-channel",
+        "zoraya-user",
+        "zoraya-abi",
+        "zoraya-proto",
+        "zoraya-protocol",
+    ] {
         assert!(!deps.contains(forbidden), "{forbidden}");
     }
 }

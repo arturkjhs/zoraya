@@ -102,6 +102,12 @@ A POSIX program launched in a room gets a namespace table built by the launcher 
 - Focusing a window has no `zosh` form: whether to give it one (a word for the compositor's focus, not the shell's `fg`), or to leave the switcher as the only gesture without text.
 - One job per room across launchers needs a channel from the shell to the panel (or the panel to own every room job and the shell to ask it); until then two launchers in one room are two jobs.
 - More than four trusted rooms: repeat colours, a fifth slot, or a limit.
+- *(Check note, stage 7d, ADR-0001 rule 6.)* INV-0172-6 to -10's screendump checks run on the host against the real
+  compositor's pixels (`zoraya-compositor`'s `tests_rooms.rs` and `tests_fields.rs`): the GUI runner cannot compute the
+  wallpaper a field is compared with, and the GUI script reads the room's tinted title bar only. INV-0172-2's in-QEMU
+  half and INV-0172-3 wait for untrusted rooms (refused until ADR-0056's quotas) and for ADR-0170's drops (7f).
+  INV-0172-4's host tests wait for the room's grants to move from `zosh` into `zoraya-shell`'s planner, where
+  INV-0153-2's cases live; in 7d `zosh` adds them after the planner, and the GUI script shows `room`.
 - Whether `home` should show the launch record's pills at all, or only coloured rooms should.
 - Whether a room should remember its windows and restore them when entered (a session per room), which Option B would give.
 - Whether a shell's `Room` message to its terminal is enough, or the shell should run a new terminal per room.

@@ -584,7 +584,7 @@ check-test-caps:
 # 0x00rrggbb, 0xaarrggbb), with or without an integer suffix; a duration is
 # any Duration::from_*. A line that is a size or a mask, not a colour, says
 # so with `// not a colour` (review finding 6).
-GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src crates/zoraya-ui/src crates/zoraya-panel/src user/src/bin/compd.rs user/src/bin/term.rs user/src/bin/panel.rs
+GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src crates/zoraya-ui/src crates/zoraya-app/src crates/zoraya-panel/src user/src/bin/compd.rs user/src/bin/term.rs user/src/bin/panel.rs
 check-tokens:
 	@hits="$$(grep -rnE '0x[0-9a-fA-F_]+|Duration::from_' $(GUI_SOURCES) | grep -vE '/tests(_[a-z_]+)?\.rs:' | grep -v 'not a colour' | \
 	  perl -ne 'print if /Duration::from_/ || grep { (my $$d = $$_) =~ s/_//g; length($$d) == 6 || length($$d) == 8 } /0x([0-9a-fA-F_]+)(?:[ui](?:8|16|32|64|size))?\b/g' || true)"; \

@@ -25,6 +25,17 @@ name = "zoraya-adr-check"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-app"
+version = "0.1.0"
+dependencies = [
+ "zoraya-proto-gui",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+ "zoraya-tokens",
+ "zoraya-ui",
+]
+
+[[package]]
 name = "zoraya-ar"
 version = "0.1.0"
 
