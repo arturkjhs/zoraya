@@ -348,7 +348,7 @@ impl Window {
                 self.term.write(m.bytes.0);
             } else if let Ok((_, t)) = decode::<Title<'_>>(bytes, 0) {
                 // `zosh — <directory>` (ADR-0168), never from output.
-                let mut title = alloc::vec::Vec::with_capacity(t.text.0.len() + 8);
+                let mut title = alloc::vec::Vec::with_capacity(t.text.0.len() + 9);
                 title.extend_from_slice("zosh — ".as_bytes());
                 title.extend_from_slice(t.text.0);
                 let m = gui::SetTitle {

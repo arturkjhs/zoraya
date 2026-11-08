@@ -515,8 +515,11 @@ Stage 7c (TASK-24), on the accepted [ADR-0163](adr/0163-keyboard-layouts.md).
   and the Ukrainian ґ: the other layouts' are left out until something needs them.
 - **Dead keys**: thirteen accents with their compositions over Latin-1 and Latin Extended-A; a dead key then Space
   gives the spacing accent, then a letter it does not compose passes the letter, and a second dead key replaces the
-  first; the state is cleared at a focus change and a switch. Caps Lock acts on case pairs only; the right Alt is
-  AltGr in a layout with a third level; Ctrl gives control characters by the US position of the key.
+  first; any other key (Enter, an arrow, a Ctrl chord) cancels it, a key the compositor takes (a chord) leaves it as
+  it was, and the state is cleared at a focus change and a switch. Caps Lock acts on case pairs only (it does not
+  capitalise Czech's number-row letters, as XKB's semi-alphabetic type would); the right Alt is
+  AltGr in a layout with a third level (held across a switch, it keeps its role until released); Ctrl gives control
+  characters by the key's Latin character in the active layout, the US one in a Cyrillic layout.
 - **Switching**: System+Space cycles the enabled layouts (`us ua cz` until 7f's `gui.keyboard-layouts`), Shift goes
   back; held modifiers stay held, and the switch reaches no client as a key (INV-0163-4). The bar shows the active
   layout's short name; a client hears `Layout { name }` when it gains focus and at each switch.

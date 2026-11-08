@@ -1195,3 +1195,36 @@ fn a_dead_key_does_not_carry_to_another_window() {
         .collect();
     assert_eq!(got, "e", "not é");
 }
+
+/// INV-0163-4 with a key held across the switch, `Layout` to the focused
+/// client only, and a chord that does not arm a dead key (review 7c, 3, 10).
+#[test]
+fn a_switch_keeps_a_held_key_and_tells_only_the_focused_client() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    let (b, _, _) = s.toplevel(100, 50, 2);
+    s.f().take(a);
+    s.f().take(b);
+    let meta = code::LEFT_META;
+    // 'a' (code 30) held across a switch to ua: the client gets its press
+    // and its release with the same code, nothing else.
+    s.keys(&[
+        (30, 1),
+        (meta, 1),
+        (code::SPACE, 1),
+        (code::SPACE, 0),
+        (meta, 0),
+        (30, 0),
+    ]);
+    let out = s.f().take(a);
+    let keys: Vec<(u32, bool)> = keys_of(&out).iter().map(|k| (k.0, k.1)).collect();
+    assert_eq!(keys, [(30, true), (30, false)]);
+    assert_eq!(layouts_of(&out), ["ua"]);
+    assert!(layouts_of(&s.f().take(b)).is_empty(), "b is not focused");
+    // To cz; System+= is a chord and arms nothing: the next e is e.
+    s.keys(&[(meta, 1), (code::SPACE, 1), (code::SPACE, 0), (meta, 0)]);
+    assert_eq!(s.c.layout_short(), "CZ");
+    s.keys(&[(meta, 1), (13, 1), (13, 0), (meta, 0), (18, 1), (18, 0)]);
+    let text: std::string::String = keys_of(&s.f().take(a)).iter().filter_map(|k| k.2).collect();
+    assert_eq!(text, "e");
+}

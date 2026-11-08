@@ -675,7 +675,14 @@ impl<P: Platform> Compositor<P> {
             }
             _ => {}
         }
+        // A key the compositor takes (a chord, the switcher's keys) does
+        // not touch the dead key the client may be typing (review 7c, 3).
+        let dead = self.keymap.dead();
         let key = self.keymap.key(code_, value);
+        let taken = self.meta != 0 || self.switcher.is_some() || code_ == code::F12;
+        if taken {
+            self.keymap.set_dead(dead);
+        }
         let alt = key.modifiers & zoraya_keymap::ALT != 0;
         let shift = key.modifiers & zoraya_keymap::SHIFT != 0;
         let bit = (code_ as usize) < 512;

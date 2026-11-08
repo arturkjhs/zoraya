@@ -3,9 +3,11 @@
 //! files as `docs/research/desktop/survey.md#keyboard-layouts` describes
 //! them: per key code four levels (plain, Shift, AltGr, Shift+AltGr), each a
 //! character, a dead key or nothing. The level 3 and 4 symbols other than
-//! Czech's and the Ukrainian ґ are left out (`None`): nothing in stage 7
-//! needs them, and a table that is shorter than xkeyboard-config's is more
-//! honest than a guessed one (the task report lists them).
+//! Czech's and the Ukrainian ґ and backslash are left out (`None`): nothing
+//! in stage 7 needs them, and a table that is shorter than
+//! xkeyboard-config's is more honest than a guessed one (the task report
+//! lists them). Caps Lock acts on case pairs only, so it does not capitalise
+//! Czech's number-row letters as XKB's semi-alphabetic type does.
 
 use crate::Accent::{self, *};
 
@@ -184,7 +186,7 @@ const UA_KEYS: [(u32, [Out; 4]); 47] = {
         k2(39, 'ж', 'Ж'),
         k2(40, 'є', 'Є'),
         // ґ on the key right of ], the backslash on AltGr.
-        k4(43, [c('ґ'), c('Ґ'), c('\\'), c('/')]),
+        k4(43, [c('ґ'), c('Ґ'), c('\\'), c('|')]),
         k2(44, 'я', 'Я'),
         k2(45, 'ч', 'Ч'),
         k2(46, 'с', 'С'),
@@ -305,8 +307,8 @@ pub const CZ: Layout = Layout {
         k4(32, [c('d'), c('D'), c('Đ'), N]),
         k4(33, [c('f'), c('F'), c('['), N]),
         k4(34, [c('g'), c('G'), c(']'), N]),
-        k2(35, 'h', 'H'),
-        k2(36, 'j', 'J'),
+        k4(35, [c('h'), c('H'), c('`'), N]),
+        k4(36, [c('j'), c('J'), c('\''), N]),
         k4(37, [c('k'), c('K'), c('ł'), N]),
         k4(38, [c('l'), c('L'), c('Ł'), N]),
         k4(39, [c('ů'), c('"'), c('$'), d(DoubleAcute)]),
@@ -318,7 +320,7 @@ pub const CZ: Layout = Layout {
         k4(47, [c('v'), c('V'), c('@'), N]),
         k4(48, [c('b'), c('B'), c('{'), N]),
         k4(49, [c('n'), c('N'), c('}'), N]),
-        k2(50, 'm', 'M'),
+        k4(50, [c('m'), c('M'), c('^'), N]),
         k4(51, [c(','), c('?'), c('<'), N]),
         k4(52, [c('.'), c(':'), c('>'), N]),
         k4(53, [c('-'), c('_'), c('*'), N]),
