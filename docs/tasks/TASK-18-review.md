@@ -139,7 +139,8 @@ The equivalent mutants, each rechecked by the main model:
 - `glob.rs` `matches` `+` to `*` at 114 and 115: the first re-enters the same `*` with the same state; the second
   tries each position of the `*` once more and one step later, and reaches the same matches.
 - `syntax.rs` `comment` `+` to `*` at 326: the slice is trimmed, and the extra byte is the line end.
-- `zoraya-command`, `assign` `<` to `<=`: the count it guards is never above the required number there.
+- `zoraya-command`, `assign` `<` to `<=` at 218: with exactly as many arguments as required operands the search for a
+  missing one also runs, and `left` reaches 0 only after the last required operand, so it finds none.
 - `zoraya-commands` (5): `Files::read_input`, `print` and `print_bytes` replaced by the default bodies themselves;
   `emit_bytes` `&&` to `||` and `!` deleted at 183: `cat`, its only caller, never writes text output, so `o.out` is
   empty there and the mutants can only print nothing.
