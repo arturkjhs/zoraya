@@ -75,7 +75,7 @@ impl<P: Platform> Compositor<P> {
         let f = self.frame();
         // Make the masks of windows that need them first.
         for w in &mut self.windows {
-            if w.framed() && w.chrome.as_ref().is_none_or(|c| c.size != w.body) {
+            if w.chrome.as_ref().is_none_or(|c| c.size != w.body) {
                 w.chrome = Some(chrome(w, &f, scale.factor()));
             }
         }
@@ -99,13 +99,22 @@ impl<P: Platform> Compositor<P> {
         let mut c = Canvas::new(&mut pixels[..width * height], width);
         c.set_clip(prect(r));
         c.image(wallpaper, width, 0, 0, None);
+        let bar_h = space::BAR_HEIGHT.physical(scale) as i32;
+        let work = paint::Rect::new(0, bar_h, width as i32, height as i32 - bar_h);
         for w in windows.iter().filter(|w| !w.hidden) {
             let focused = *focus
                 == Some(crate::Key {
                     client: w.client,
                     id: w.id,
                 });
+            // A popup is clipped to the work area, below the bar.
+            let old = if w.framed() {
+                c.clip
+            } else {
+                c.set_clip(c.clip.intersect(&work))
+            };
             draw_window(&mut c, w, &f, scale.factor(), focused, p, title_text);
+            c.clip = old;
         }
         // The bar, above every window (INV-0160-7): the blurred wallpaper
         // under it, tinted, with its light.
@@ -141,21 +150,72 @@ impl<P: Platform> Compositor<P> {
         if let Some(s) = switcher.as_ref() {
             draw_switcher(&mut c, s, windows, scale.factor(), p, ui, title_text);
         }
-        if let Some((px, py)) = *pointer {
-            let s = scale.factor() as i32;
-            for (dy, line) in POINTER.iter().enumerate() {
-                for (dx, dot) in line.iter().enumerate() {
-                    if *dot == 0 {
-                        continue;
-                    }
-                    let color = if *dot == 1 { p.bg_control } else { p.fg_text };
-                    let x = px as i32 + dx as i32 * s;
-                    let y = py as i32 + dy as i32 * s;
-                    c.fill(paint::Rect::new(x, y, s, s), color);
-                }
-            }
+        draw_pointer(&mut c, *pointer, scale.factor(), p);
+    }
+
+    /// Keeps the screen as composed with the switcher open.
+    pub(crate) fn keep_switcher_frame(&mut self) {
+        let n = self.width as usize * self.height as usize;
+        let pixels = self.platform.pixels();
+        if pixels.len() >= n {
+            self.switcher_frame.clear();
+            self.switcher_frame.extend_from_slice(&pixels[..n]);
         }
     }
+
+    /// `r` of the screen from the frame kept with the switcher open, and
+    /// the pointer on it: a pointer that moves over the switcher blurs
+    /// nothing again (review 7b, 6).
+    pub(crate) fn restore(&mut self, r: Rect) {
+        let width = self.width as usize;
+        let p = self.palette();
+        let scale = self.scale.factor();
+        let pointer = self.pointer;
+        let Compositor {
+            platform,
+            switcher_frame,
+            ..
+        } = self;
+        let pixels = platform.pixels();
+        if switcher_frame.len() != pixels.len().min(switcher_frame.len())
+            || pixels.len() < switcher_frame.len()
+        {
+            return;
+        }
+        let mut c = Canvas::new(&mut pixels[..switcher_frame.len()], width);
+        c.set_clip(prect(r));
+        c.image(switcher_frame, width, 0, 0, None);
+        draw_pointer(&mut c, pointer, scale, p);
+    }
+}
+
+/// The pointer at its place, `scale` times its 8 × 11 dots.
+fn draw_pointer(c: &mut Canvas<'_>, pointer: Option<(i64, i64)>, scale: u32, p: &Palette) {
+    let Some((px, py)) = pointer else { return };
+    let s = scale as i32;
+    for (dy, line) in POINTER.iter().enumerate() {
+        for (dx, dot) in line.iter().enumerate() {
+            if *dot == 0 {
+                continue;
+            }
+            let color = if *dot == 1 { p.bg_control } else { p.fg_text };
+            let x = px as i32 + dx as i32 * s;
+            let y = py as i32 + dy as i32 * s;
+            c.fill(paint::Rect::new(x, y, s, s), color);
+        }
+    }
+}
+
+/// A window's thumbnail for the switcher: its own pixels shrunk.
+pub fn thumb(w: &Window, k: u32) -> Vec<u32> {
+    let (tw, th) = ((THUMB.0 * k) as usize, (THUMB.1 * k) as usize);
+    shrink(
+        &w.copy,
+        w.buffer.width as usize,
+        w.buffer.height as usize,
+        tw,
+        th,
+    )
 }
 
 /// Draws `text` with the pen at `(x, baseline)` within the canvas's clip.
@@ -177,8 +237,26 @@ fn draw_text(
     t.draw(&mut target, s, px, x, baseline, color)
 }
 
-/// The masks of a framed window at its body size.
+/// The masks of a window at its body size: a popup's shadow, or a framed
+/// window's shape, border, shadows and body.
 fn chrome(w: &Window, f: &crate::Frame, s: u32) -> Chrome {
+    if !w.framed() {
+        let blur = (shadow::POPUP_BLUR.physical(zoraya_tokens::Scale::ONE) * s) as usize;
+        let shadows = alloc::vec![paint::shadow(
+            w.body.0 as usize,
+            w.body.1 as usize,
+            0,
+            shape::CORNER,
+            blur
+        )];
+        return Chrome {
+            size: w.body,
+            outer: Mask::default(),
+            outline: Mask::default(),
+            shadows,
+            body: Mask::default(),
+        };
+    }
     let o = w.outer(f);
     let (ow, oh) = (o.width.max(0) as usize, o.height.max(0) as usize);
     let outer = paint::rounded_rect(ow, oh, f.radius, shape::CORNER);
@@ -202,11 +280,20 @@ fn chrome(w: &Window, f: &crate::Frame, s: u32) -> Chrome {
             )
         })
         .collect();
+    let b = w.body_rect();
+    let (bx, by) = ((b.x - o.x) as usize, (b.y - o.y) as usize);
+    let mut body = Mask::new(w.body.0 as usize, w.body.1 as usize);
+    for y in 0..body.h {
+        for x in 0..body.w {
+            body.cov[y * body.w + x] = outer.at(x + bx, y + by);
+        }
+    }
     Chrome {
         size: w.body,
         outer,
         outline,
         shadows,
+        body,
     }
 }
 
@@ -221,27 +308,22 @@ fn draw_window(
     title: &mut zoraya_text::Text<'static>,
 ) {
     let body = prect(w.body_rect());
+    let Some(ch) = w.chrome.as_ref() else { return };
     if !w.framed() {
-        // A popup: a soft shadow and its pixels.
-        let (m, margin) = paint::shadow(
-            body.w.max(0) as usize,
-            body.h.max(0) as usize,
-            0,
-            shape::CORNER,
-            (shadow::POPUP_BLUR.physical(zoraya_tokens::Scale::ONE) * s) as usize,
-        );
+        // A popup: its cached soft shadow and its pixels.
         let off = (shadow::POPUP_OFFSET.physical(zoraya_tokens::Scale::ONE) * s) as i32;
-        c.mask(
-            &m,
-            body.x - margin as i32,
-            body.y + off - margin as i32,
-            p.shadow,
-            shadow::POPUP_ALPHA,
-        );
+        if let Some((m, margin)) = ch.shadows.first() {
+            c.mask(
+                m,
+                body.x - *margin as i32,
+                body.y + off - *margin as i32,
+                p.shadow,
+                shadow::POPUP_ALPHA,
+            );
+        }
         c.image(&w.copy, w.buffer.width as usize, body.x, body.y, None);
         return;
     }
-    let Some(ch) = w.chrome.as_ref() else { return };
     let o = prect(w.outer(f));
     if o.intersect(&c.clip).is_empty() && prect(w.reach(f)).intersect(&c.clip).is_empty() {
         return;
@@ -274,25 +356,32 @@ fn draw_window(
     // The body: the client's pixels where its buffer reaches, the paper
     // where a resize has made the body larger than the buffer; inside the
     // window's shape (its lower corners are round).
-    let mut body_mask = Mask::new(body.w.max(0) as usize, body.h.max(0) as usize);
-    for y in 0..body_mask.h {
-        for x in 0..body_mask.w {
-            body_mask.cov[y * body_mask.w + x] = ch
-                .outer
-                .at(x + (body.x - o.x) as usize, y + (body.y - o.y) as usize);
-        }
-    }
-    c.mask(&body_mask, body.x, body.y, p.bg_window, 255);
     let bw = (w.buffer.width as usize).min(body.w.max(0) as usize);
     let bh = (w.buffer.height as usize).min(body.h.max(0) as usize);
-    let old = c.set_clip(paint::Rect::new(body.x, body.y, bw as i32, bh as i32).intersect(&c.clip));
-    let mut cut = Mask::new(w.buffer.width as usize, w.buffer.height as usize);
-    for y in 0..bh {
-        for x in 0..bw {
-            cut.cov[y * cut.w + x] = body_mask.at(x, y);
-        }
+    let same = (w.buffer.width, w.buffer.height) == w.body;
+    if !same {
+        // A resize the client has not answered yet: the paper where the
+        // old buffer does not reach.
+        c.mask(&ch.body, body.x, body.y, p.bg_window, 255);
     }
-    c.image(&w.copy, w.buffer.width as usize, body.x, body.y, Some(&cut));
+    let old = c.set_clip(paint::Rect::new(body.x, body.y, bw as i32, bh as i32).intersect(&c.clip));
+    if same {
+        c.image(
+            &w.copy,
+            w.buffer.width as usize,
+            body.x,
+            body.y,
+            Some(&ch.body),
+        );
+    } else {
+        let mut cut = Mask::new(w.buffer.width as usize, w.buffer.height as usize);
+        for y in 0..bh {
+            for x in 0..bw {
+                cut.cov[y * cut.w + x] = ch.body.at(x, y);
+            }
+        }
+        c.image(&w.copy, w.buffer.width as usize, body.x, body.y, Some(&cut));
+    }
     c.clip = old;
     c.mask(&ch.outline, o.x, o.y, p.border, 255);
     // The buttons: a cross and a dash, coloured on the focused window and
@@ -364,7 +453,17 @@ fn draw_switcher(
 ) {
     let ki = k as i32;
     let w = (SWITCHER_WIDTH * k) as i32;
-    let h = ((SWITCHER_GROUP + SWITCHER_ROW * s.windows.len() as u32 + 16) * k) as i32;
+    // As many rows as fit, the chosen one among them (review 7b, 14).
+    let bar = space::BAR_HEIGHT.physical(zoraya_tokens::Scale::ONE) as i32 * ki;
+    let room =
+        ((c.height as i32 - 2 * bar) / ki - (SWITCHER_GROUP + 16) as i32).max(SWITCHER_ROW as i32);
+    let fits = ((room / SWITCHER_ROW as i32) as usize).max(1);
+    let first = s
+        .chosen
+        .saturating_sub(fits - 1)
+        .min(s.windows.len().saturating_sub(fits));
+    let shown = s.windows.len().min(fits);
+    let h = ((SWITCHER_GROUP + SWITCHER_ROW * shown as u32 + 16) * k) as i32;
     let x = (c.width as i32 - w) / 2;
     let y = ((c.height as i32 - h) / 2)
         .max(space::BAR_HEIGHT.physical(zoraya_tokens::Scale::ONE) as i32 * ki);
@@ -402,14 +501,22 @@ fn draw_switcher(
         gy + 18 * ki,
         p.fg_text,
     );
-    for (i, key) in s.windows.iter().enumerate() {
+    for (row_index, (i, key)) in s
+        .windows
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(shown)
+        .enumerate()
+    {
         let Some(win) = windows
             .iter()
             .find(|w| w.client == key.client && w.id == key.id)
         else {
             continue;
         };
-        let ry = y + ((SWITCHER_GROUP + SWITCHER_ROW * i as u32) * k) as i32 + 8 * ki;
+        let _ = row_index;
+        let ry = y + ((SWITCHER_GROUP + SWITCHER_ROW * (i - first) as u32) * k) as i32 + 8 * ki;
         let row = paint::Rect::new(
             x + 12 * ki,
             ry,
@@ -427,16 +534,12 @@ fn draw_switcher(
         }
         // The thumbnail: the window's own pixels, box-filtered.
         let (tw, th) = ((THUMB.0 * k) as usize, (THUMB.1 * k) as usize);
-        let thumb = shrink(
-            &win.copy,
-            win.buffer.width as usize,
-            win.buffer.height as usize,
-            tw,
-            th,
-        );
+        let Some(thumb) = s.thumbs.get(i).filter(|t| t.len() == tw * th) else {
+            continue;
+        };
         let tx = row.x + 8 * ki;
         let ty = row.y + (row.h - th as i32) / 2;
-        c.image(&thumb, tw, tx, ty, None);
+        c.image(thumb, tw, tx, ty, None);
         let edge = paint::rounded_outline(tw, th, 0, k, zoraya_tokens::CornerShape::Circle);
         c.mask(&edge, tx, ty, p.border, 255);
         let label = if win.title.is_empty() {

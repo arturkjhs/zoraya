@@ -1077,13 +1077,13 @@ fn stats_count_frames_and_commits() {
 #[test]
 fn windows_are_cascaded_and_kept_on_screen() {
     let mut s = setup();
-    // Larger than the work area: at the corner, the title bar on screen.
+    // Larger than the work area: at the corner, the title bar under the bar.
     s.window(W, H, 1);
-    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((1, 36)));
+    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((1, 64)));
     s.window(W - 10, H - 10, 1);
     // Its title bar stays on the screen.
     let r = s.c.placement(1).unwrap();
-    assert!(r.x >= 1 && r.right() <= i64::from(W) && r.y - 36 >= 0);
+    assert!(r.x >= 1 && r.right() <= i64::from(W) && r.y - 36 >= 28);
     s.window(10, 10, 1);
     assert_eq!(
         s.c.placement(2).map(|r| (r.x, r.y)),
@@ -1268,7 +1268,7 @@ fn f12_goes_to_the_next_window_in_the_switchers_order() {
 fn a_window_that_nearly_fills_the_screen_starts_at_the_corner() {
     let mut s = setup();
     s.window(W - 1, H - 1, 1);
-    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((1, 36)));
+    assert_eq!(s.c.placement(0).map(|r| (r.x, r.y)), Some((1, 64)));
 }
 
 #[test]
@@ -1362,8 +1362,8 @@ fn the_last_axis_value_is_the_last_pixel() {
         .filter_map(|m| decode::<gui::Pointer>(m, 0).ok())
         .map(|(_, p)| (p.x, p.y))
         .collect();
-    // The window is at (1, 36): the last pixel is (W - 2, H - 37) in it.
-    assert_eq!(got, [(W - 2, H - 37)]);
+    // The window is at (1, 64): the last pixel is (W - 2, H - 65) in it.
+    assert_eq!(got, [(W - 2, H - 65)]);
 }
 
 fn press(s: &mut Setup, x: u32, y: u32, button: u32, value: u32) {

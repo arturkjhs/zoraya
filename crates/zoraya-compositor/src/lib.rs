@@ -211,6 +211,9 @@ enum Drag {
 pub struct Switcher {
     pub windows: Vec<Key>,
     pub chosen: usize,
+    /// Each window's pixels shrunk, made when it opens and when that window
+    /// commits, never per frame (ADR-0160).
+    pub thumbs: Vec<Vec<u32>>,
 }
 
 pub struct Compositor<P: Platform> {
@@ -238,6 +241,14 @@ pub struct Compositor<P: Platform> {
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
     switcher: Option<Switcher>,
+    /// The screen as last composed with the switcher open: a pointer that
+    /// only moves over it is drawn on this, not on a new blur.
+    switcher_frame: Vec<u32>,
+    /// Something but the pointer changed this round.
+    scene: bool,
+    /// Keys whose press reached a client: their release reaches it too,
+    /// even during a chord or the switcher (review 7b, 12).
+    delivered: [u64; 8],
     /// The keyboard layout's name in the bar (7c switches it).
     layout: String,
     /// What changed on the screen this round.
@@ -302,6 +313,9 @@ impl<P: Platform> Compositor<P> {
             drag: None,
             pending_pointer: false,
             switcher: None,
+            switcher_frame: Vec::new(),
+            scene: false,
+            delivered: [0; 8],
             layout: String::from("US"),
             damage: Rect::default(),
             unflushed: Rect::default(),
@@ -480,8 +494,10 @@ impl<P: Platform> Compositor<P> {
             self.width = info.width;
             self.height = info.height;
             self.attached = true;
+            let old = self.scale.factor();
             self.scale = scale_for(info.width);
             self.make_wallpaper();
+            self.reconfigure(old);
         }
         let length = reply(&display::Attach {}, 2, &mut self.out);
         let message = self.out;
@@ -495,7 +511,7 @@ impl<P: Platform> Compositor<P> {
         self.display = Some(end);
         self.platform.watch(end, DISPLAY_KEY);
         // Everything, once: a new driver shows nothing until told.
-        self.damage = self.damage.union(&self.screen());
+        self.dirty(&self.screen());
         self.in_flight = None;
         self.stuck_since = None;
         status::OK
@@ -657,6 +673,21 @@ impl<P: Platform> Compositor<P> {
         let key = self.keymap.key(code_, value);
         let alt = key.modifiers & zoraya_keymap::ALT != 0;
         let shift = key.modifiers & zoraya_keymap::SHIFT != 0;
+        let bit = (code_ as usize) < 512;
+        let (word, mask) = ((code_ as usize / 64) % 8, 1u64 << (code_ % 64));
+        if !key.pressed && bit && self.delivered[word] & mask != 0 {
+            self.delivered[word] &= !mask;
+            if let Some(focus) = self.focus {
+                let m = gui::Key {
+                    dropped: 0,
+                    code: code_,
+                    pressed: false,
+                    modifiers: Flags(key.modifiers),
+                    text: Below(0),
+                };
+                self.send_event(focus.client, m);
+            }
+        }
         // Releasing Alt chooses in the open switcher.
         if self.switcher.is_some() && !alt && !key.pressed {
             if matches!(code_, code::LEFT_ALT | code::RIGHT_ALT) {
@@ -695,6 +726,14 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let Some(focus) = self.focus else { return };
+        if !key.pressed {
+            // Its press did not reach a client (it began a chord), or its
+            // release was sent above.
+            return;
+        }
+        if bit {
+            self.delivered[word] |= mask;
+        }
         let m = gui::Key {
             dropped: 0,
             code: code_,
@@ -709,7 +748,16 @@ impl<P: Platform> Compositor<P> {
     /// and Right tile; the others are reserved for later parts (Space for
     /// 7c's layouts, Enter, R and ? for 7d) and reach no client either.
     fn chord(&mut self, code_: u32) {
-        let Some(focus) = self.focus else { return };
+        let Some(mut focus) = self.focus else { return };
+        // A focused popup's chords are its window's.
+        if let Some(i) = self.index(focus)
+            && let WindowKind::Popup { parent } = self.windows[i].kind
+        {
+            focus = Key {
+                client: focus.client,
+                id: parent,
+            };
+        }
         match code_ {
             code::W => self.ask_close(focus),
             code::M => self.set_hidden(focus, true),
@@ -719,11 +767,22 @@ impl<P: Platform> Compositor<P> {
         }
     }
 
+    /// Marks `r` of the screen to be composed again.
+    fn dirty(&mut self, r: &Rect) -> Rect {
+        if !r.is_empty() {
+            self.scene = true;
+        }
+        self.damage = self.damage.union(r);
+        self.damage
+    }
+
     fn move_pointer(&mut self, x: i64, y: i64) {
         let old = self.pointer;
         if old == Some((x, y)) {
             return;
         }
+        // The pointer alone is not the scene: over the switcher it is drawn
+        // on the last frame.
         if let Some((ox, oy)) = old {
             self.damage = self.damage.union(&self.pointer_rect(ox, oy));
         }
@@ -759,6 +818,10 @@ impl<P: Platform> Compositor<P> {
     /// The topmost visible window holding the point, and the zone.
     fn under(&self, x: i64, y: i64) -> Option<(Key, Zone)> {
         let f = self.frame();
+        // The bar is the compositor's: nothing under it is reached there.
+        if y < i64::from(space::BAR_HEIGHT.physical(self.scale)) {
+            return None;
+        }
         self.windows
             .iter()
             .rev()
@@ -846,7 +909,8 @@ impl<P: Platform> Compositor<P> {
                 );
                 let (mx, my) = (w.x - ox, w.y - oy);
                 let after = w.reach(&f);
-                self.damage = self.damage.union(&before).union(&after);
+                self.dirty(&before);
+                self.dirty(&after);
                 // Its popups move with it.
                 for j in 0..self.windows.len() {
                     let p = &mut self.windows[j];
@@ -857,7 +921,8 @@ impl<P: Platform> Compositor<P> {
                         p.x += mx;
                         p.y += my;
                         let after = p.reach(&f);
-                        self.damage = self.damage.union(&before).union(&after);
+                        self.dirty(&before);
+                        self.dirty(&after);
                     }
                 }
             }
@@ -891,6 +956,19 @@ impl<P: Platform> Compositor<P> {
                     r.y = (body.bottom() - h).max(bar + f.title);
                     r.height = body.bottom() - r.y;
                 }
+                // At most the work area (review 7b, 2): a window cannot be
+                // grown past the display by moving it and resizing again.
+                let max_w = i64::from(self.width) - 2 * f.border;
+                let max_h = i64::from(self.height) - bar - f.title - f.border;
+                if r.width > max_w {
+                    if left {
+                        r.x += r.width - max_w;
+                    }
+                    r.width = max_w;
+                }
+                if r.height > max_h {
+                    r.height = max_h;
+                }
                 // Whole logical pixels.
                 r.width -= r.width % s;
                 r.height -= r.height % s;
@@ -900,7 +978,8 @@ impl<P: Platform> Compositor<P> {
                 w.body = (r.width.max(s) as u32, r.height.max(s) as u32);
                 w.chrome = None;
                 let after = w.reach(&f);
-                self.damage = self.damage.union(&before).union(&after);
+                self.dirty(&before);
+                self.dirty(&after);
             }
             None => {}
         }
@@ -927,6 +1006,10 @@ impl<P: Platform> Compositor<P> {
         let Some(i) = self.index(key) else { return };
         let w = &self.windows[i];
         let body = w.body_rect();
+        // On the border of a legacy surface: not in its body (review 7b, 11).
+        if !body.contains(x, y) {
+            return;
+        }
         let (px, py) = ((x - body.x) as u32, (y - body.y) as u32);
         if w.kind == WindowKind::Legacy {
             let m = gui::Pointer {
@@ -982,7 +1065,7 @@ impl<P: Platform> Compositor<P> {
         }
         let f = self.frame();
         for w in &moved {
-            self.damage = self.damage.union(&w.reach(&f));
+            self.dirty(&w.reach(&f));
         }
         self.windows.extend(moved);
     }
@@ -994,8 +1077,11 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         self.windows[i].hidden = hidden;
+        if hidden {
+            self.close_popups_of(key);
+        }
         let f = self.frame();
-        self.damage = self.damage.union(&self.windows[i].reach(&f));
+        self.dirty(&self.windows[i].reach(&f));
         if self.windows[i].kind == WindowKind::Toplevel {
             self.send_event_plain(
                 key.client,
@@ -1016,11 +1102,34 @@ impl<P: Platform> Compositor<P> {
         }
     }
 
-    /// The person asked to close: the client is told; a second press five
-    /// seconds later ends a client that did not close (ADR-0160).
+    /// Closes the popups of `parent`, telling their client.
+    fn close_popups_of(&mut self, parent: Key) {
+        let popups: Vec<Key> = self
+            .windows
+            .iter()
+            .filter(|w| {
+                w.client == parent.client && w.kind == (WindowKind::Popup { parent: parent.id })
+            })
+            .map(Self::key_of)
+            .collect();
+        for p in popups {
+            self.send_event_plain(p.client, &gui::CloseRequested { window: p.id });
+            self.remove_window(p);
+        }
+    }
+
+    /// The person asked to close: the client is told. Between five and
+    /// twenty seconds later, if the client has committed nothing to the
+    /// window since (a hung client), a second press ends it (ADR-0160's
+    /// "close anyway"); after that, or once it commits, a press asks again
+    /// (review 7b, 4).
     fn ask_close(&mut self, key: Key) {
         let now = self.platform.now();
         let Some(i) = self.index(key) else { return };
+        let asked = self.windows[i].close_asked;
+        if asked.is_some_and(|at| now.saturating_sub(at) >= 4 * CLOSE_GRACE_NS) {
+            self.windows[i].close_asked = None;
+        }
         match self.windows[i].close_asked {
             Some(at) if now.saturating_sub(at) >= CLOSE_GRACE_NS => {
                 self.drop_client(key.client);
@@ -1029,7 +1138,7 @@ impl<P: Platform> Compositor<P> {
             None => {
                 self.windows[i].close_asked = Some(now);
                 let f = self.frame();
-                self.damage = self.damage.union(&self.windows[i].title_bar(&f));
+                self.dirty(&self.windows[i].title_bar(&f));
                 self.send_event_plain(key.client, &gui::CloseRequested { window: key.id });
             }
         }
@@ -1062,8 +1171,37 @@ impl<P: Platform> Compositor<P> {
         w.body = (body.width.max(s) as u32, body.height.max(s) as u32);
         w.chrome = None;
         let after = w.reach(&f);
-        self.damage = self.damage.union(&before).union(&after);
+        self.dirty(&before);
+        self.dirty(&after);
         self.configure(key);
+    }
+
+    /// After the display changed size: every toplevel keeps its logical size
+    /// at the new scale (clamped to the display) and is configured again
+    /// (ADR-0164); legacy surfaces keep their buffers (review 7b, 13).
+    fn reconfigure(&mut self, old_scale: u32) {
+        let k = self.scale.factor();
+        let (w, h) = (self.width, self.height);
+        let keys: Vec<Key> = self
+            .windows
+            .iter()
+            .filter(|w| w.kind == WindowKind::Toplevel)
+            .map(Self::key_of)
+            .collect();
+        for win in &mut self.windows {
+            win.chrome = None;
+            if win.kind != WindowKind::Toplevel {
+                continue;
+            }
+            let lw = (win.body.0 / old_scale.max(1)).max(1);
+            let lh = (win.body.1 / old_scale.max(1)).max(1);
+            win.body = ((lw * k).min(w), (lh * k).min(h));
+            win.x = win.x / i64::from(old_scale.max(1)) * i64::from(k);
+            win.y = win.y / i64::from(old_scale.max(1)) * i64::from(k);
+        }
+        for key in keys {
+            self.configure(key);
+        }
     }
 
     /// Sends a toplevel its size, the scale and the appearance.
@@ -1128,8 +1266,21 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let chosen = (step.rem_euclid(windows.len() as isize)) as usize;
-        self.switcher = Some(Switcher { windows, chosen });
-        self.damage = self.damage.union(&self.screen());
+        let k = self.scale.factor();
+        let thumbs = windows
+            .iter()
+            .map(|key| {
+                self.index(*key)
+                    .map(|i| draw::thumb(&self.windows[i], k))
+                    .unwrap_or_default()
+            })
+            .collect();
+        self.switcher = Some(Switcher {
+            windows,
+            chosen,
+            thumbs,
+        });
+        self.dirty(&self.screen());
     }
 
     fn step_switcher(&mut self, step: isize) {
@@ -1137,14 +1288,15 @@ impl<P: Platform> Compositor<P> {
             let n = s.windows.len() as isize;
             s.chosen = (s.chosen as isize + step).rem_euclid(n) as usize;
         }
-        self.damage = self.damage.union(&self.screen());
+        self.dirty(&self.screen());
     }
 
     fn choose_in_switcher(&mut self) {
         let Some(s) = self.switcher.take() else {
             return;
         };
-        self.damage = self.damage.union(&self.screen());
+        self.switcher_frame = Vec::new();
+        self.dirty(&self.screen());
         if let Some(k) = s.windows.get(s.chosen).copied()
             && self.index(k).is_some()
         {
@@ -1154,7 +1306,8 @@ impl<P: Platform> Compositor<P> {
 
     fn close_switcher(&mut self) {
         self.switcher = None;
-        self.damage = self.damage.union(&self.screen());
+        self.switcher_frame = Vec::new();
+        self.dirty(&self.screen());
     }
 
     fn set_focus(&mut self, key: Option<Key>) {
@@ -1167,7 +1320,7 @@ impl<P: Platform> Compositor<P> {
         for (k, focused) in [(old, false), (key, true)] {
             let Some(k) = k else { continue };
             let Some(i) = self.index(k) else { continue };
-            self.damage = self.damage.union(&self.windows[i].reach(&f));
+            self.dirty(&self.windows[i].reach(&f));
             if self.windows[i].kind == WindowKind::Legacy {
                 self.send_event(
                     k.client,
@@ -1336,13 +1489,16 @@ impl<P: Platform> Compositor<P> {
         let Some(i) = self.index(key) else { return };
         let w = self.windows.remove(i);
         let f = self.frame();
-        self.damage = self.damage.union(&w.reach(&f));
+        self.dirty(&w.reach(&f));
         self.unmap(&w.buffer);
         if let Some(n) = &w.next {
             self.unmap(n);
         }
         if let Some(s) = self.switcher.as_mut() {
-            s.windows.retain(|k| *k != key);
+            if let Some(at) = s.windows.iter().position(|k| *k == key) {
+                s.windows.remove(at);
+                s.thumbs.remove(at);
+            }
             if s.windows.is_empty() {
                 self.switcher = None;
             } else {
@@ -1369,14 +1525,39 @@ impl<P: Platform> Compositor<P> {
         }
         if self.focus == Some(key) {
             self.focus = None;
-            let top = self
-                .windows
-                .iter()
-                .rev()
-                .find(|w| !w.hidden && w.framed())
-                .map(Self::key_of);
+            let parent = match w.kind {
+                WindowKind::Popup { parent } => Some(Key {
+                    client: key.client,
+                    id: parent,
+                })
+                .filter(|k| self.index(*k).is_some()),
+                _ => None,
+            };
+            let top = parent.or_else(|| {
+                self.windows
+                    .iter()
+                    .rev()
+                    .find(|w| !w.hidden && w.framed())
+                    .map(Self::key_of)
+            });
             self.set_focus(top);
         }
+    }
+
+    /// The pixels a client's buffers hold, all windows together.
+    fn client_pixels(&self, slot: usize) -> u64 {
+        self.windows
+            .iter()
+            .filter(|w| w.client == slot)
+            .map(|w| u64::from(w.buffer.width) * u64::from(w.buffer.height))
+            .sum()
+    }
+
+    /// Whether a client may have `more` pixels of buffers: at most four
+    /// displays' worth, so that one client cannot take the compositor's
+    /// memory (review 7b, 10).
+    fn within_budget(&self, slot: usize, more: u64) -> bool {
+        self.client_pixels(slot) + more <= 4 * u64::from(self.width) * u64::from(self.height)
     }
 
     fn drop_client(&mut self, slot: usize) {
@@ -1605,6 +1786,7 @@ impl<P: Platform> Compositor<P> {
         width: u32,
         height: u32,
         memory: P::End,
+        with_copy: bool,
     ) -> Result<(Buffer, Vec<u32>), u32> {
         if self.platform.kind(memory) != Kind::Memory {
             self.platform.close(memory);
@@ -1619,11 +1801,13 @@ impl<P: Platform> Compositor<P> {
             return Err(status::BAD_BUFFER);
         };
         let mut copy = Vec::new();
-        if copy.try_reserve_exact(pixels).is_err() {
-            self.platform.unmap(address, length);
-            return Err(status::NO_MEMORY);
+        if with_copy {
+            if copy.try_reserve_exact(pixels).is_err() {
+                self.platform.unmap(address, length);
+                return Err(status::NO_MEMORY);
+            }
+            copy.resize(pixels, 0);
         }
-        copy.resize(pixels, 0);
         Ok((
             Buffer {
                 address,
@@ -1682,7 +1866,11 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return Err(status::BAD_BUFFER);
         }
-        let (buffer, copy) = self.map_buffer(bw, bh, memory)?;
+        if !self.within_budget(slot, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::NO_MEMORY);
+        }
+        let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
         let (x, y) = self.place(bw, bh);
         if let Some(c) = self.clients[slot].as_mut()
             && kind != WindowKind::Legacy
@@ -1707,7 +1895,7 @@ impl<P: Platform> Compositor<P> {
         let key = Key { client: slot, id };
         let f = self.frame();
         if let Some(i) = self.index(key) {
-            self.damage = self.damage.union(&self.windows[i].reach(&f));
+            self.dirty(&self.windows[i].reach(&f));
         }
         // A new window takes focus only if none has it (ADR-0094).
         if self.focus.is_none() {
@@ -1738,46 +1926,76 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return Err(status::NO_SURFACE);
         };
+        // A popup is opened by the window that has focus, or by one of its
+        // popups (ADR-0160: "a popup it opens while it has focus"); an
+        // unfocused client cannot put one over another's window (review
+        // 7b, 1).
+        let focused = self.focus.is_some_and(|f| {
+            f == parent
+                || (f.client == slot
+                    && self.index(f).is_some_and(|i| {
+                        self.windows[i].kind == (WindowKind::Popup { parent: m.parent })
+                    }))
+        });
+        if !focused {
+            self.platform.close(memory);
+            return Err(status::UNSUPPORTED);
+        }
         if open >= gui::MAX_POPUPS || self.windows.len() >= MAX_WINDOWS {
             self.platform.close(memory);
             return Err(status::NO_MEMORY);
         }
         let s = self.scale.factor();
+        let bar = space::BAR_HEIGHT.physical(self.scale);
         let (bw, bh) = (m.width.saturating_mul(s), m.height.saturating_mul(s));
-        if !(1..=self.width).contains(&bw) || !(1..=self.height).contains(&bh) {
+        let fits =
+            (1..=self.width).contains(&bw) && (1..=self.height.saturating_sub(bar)).contains(&bh);
+        if !fits || !self.within_budget(slot, u64::from(bw) * u64::from(bh)) {
             self.platform.close(memory);
             return Err(status::BAD_BUFFER);
         }
         let body = self.windows[pi].body_rect();
-        let (buffer, copy) = self.map_buffer(bw, bh, memory)?;
-        // Relative to the parent's body, then kept on the display.
-        let x = (body.x + i64::from(m.x.min(1 << 20)) * i64::from(s))
-            .clamp(0, i64::from(self.width - bw));
-        let y = (body.y + i64::from(m.y.min(1 << 20)) * i64::from(s))
-            .clamp(0, i64::from(self.height - bh));
+        let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        // Relative to the parent's body, drawn clipped to the work area
+        // below the bar.
+        let x = body.x + i64::from(m.x.min(1 << 20)) * i64::from(s);
+        let y = body.y + i64::from(m.y.min(1 << 20)) * i64::from(s);
         let id = self.clients[slot].as_ref().map_or(1, |c| c.next_id);
         if let Some(c) = self.clients[slot].as_mut() {
             c.next_id = c.next_id.wrapping_add(1).max(1);
         }
-        self.windows.push(Window {
-            client: slot,
-            id,
-            kind: WindowKind::Popup { parent: m.parent },
-            x,
-            y,
-            body: (bw, bh),
-            buffer,
-            copy,
-            next: None,
-            title: String::new(),
-            hidden: false,
-            close_asked: None,
-            chrome: None,
-        });
+        // Directly above its parent and the parent's other popups.
+        let mut at = pi + 1;
+        while at < self.windows.len()
+            && self.windows[at].client == slot
+            && self.windows[at].kind == (WindowKind::Popup { parent: m.parent })
+        {
+            at += 1;
+        }
+        self.windows.insert(
+            at,
+            Window {
+                client: slot,
+                id,
+                kind: WindowKind::Popup { parent: m.parent },
+                x,
+                y,
+                body: (bw, bh),
+                buffer,
+                copy,
+                next: None,
+                title: String::new(),
+                hidden: false,
+                close_asked: None,
+                chrome: None,
+            },
+        );
         let f = self.frame();
         if let Some(i) = self.index(Key { client: slot, id }) {
-            self.damage = self.damage.union(&self.windows[i].reach(&f));
+            self.dirty(&self.windows[i].reach(&f));
         }
+        // It takes keyboard focus while open (ADR-0160).
+        self.set_focus(Some(Key { client: slot, id }));
         Ok(id)
     }
 
@@ -1802,12 +2020,18 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return status::BAD_BUFFER;
         }
-        match self.map_buffer(bw, bh, memory) {
-            Ok((buffer, copy)) => {
+        let old =
+            u64::from(self.windows[i].buffer.width) * u64::from(self.windows[i].buffer.height);
+        let more = (u64::from(bw) * u64::from(bh)).saturating_sub(old);
+        if !self.within_budget(slot, more) {
+            self.platform.close(memory);
+            return status::NO_MEMORY;
+        }
+        // The copy is made at the first commit.
+        match self.map_buffer(bw, bh, memory, false) {
+            Ok((buffer, _)) => {
                 let w = &mut self.windows[i];
                 let old = w.next.replace(buffer);
-                // The copy is made at the first commit; keep it ready.
-                drop(copy);
                 if let Some(o) = old {
                     self.platform.unmap(o.address, o.length);
                 }
@@ -1836,7 +2060,8 @@ impl<P: Platform> Compositor<P> {
         let f = self.frame();
         let w = &mut self.windows[i];
         w.title = title;
-        self.damage = self.damage.union(&w.title_bar(&f));
+        let bar = w.title_bar(&f);
+        self.dirty(&bar);
         status::OK
     }
 
@@ -1849,9 +2074,11 @@ impl<P: Platform> Compositor<P> {
         let n = self.windows.iter().filter(|w| w.framed()).count() as i64;
         let ow = i64::from(bw) + 2 * f.border;
         let oh = i64::from(bh) + f.title + f.border;
+        // Kept on the screen where it fits, and never above `low`: a window
+        // taller than the work area hangs below the screen's edge, its
+        // title bar under the bar (review 7b, 5).
         let fit = |start: i64, side: i64, low: i64, screen: i64| -> i64 {
-            let room = screen - side;
-            start.min(room).max(low.min(room.max(0)))
+            start.min(screen - side).max(low)
         };
         let x = fit(
             i64::from(ORIGIN.0 + CASCADE * n as u32) * s,
@@ -1887,6 +2114,14 @@ impl<P: Platform> Compositor<P> {
             let old = core::mem::replace(&mut w.buffer, next);
             w.copy = copy;
             self.platform.unmap(old.address, old.length);
+            // All of it: a first commit of a part shows the rest as the
+            // client drew it, not as zeros (review 7b, 7).
+            let w = &mut self.windows[i];
+            if !self.platform.copy_from(w.buffer.address, &mut w.copy) {
+                return status::BAD_BUFFER;
+            }
+            let all = w.body_rect();
+            self.dirty(&all);
         }
         let w = &mut self.windows[i];
         let Some(r) = Rect::from_client(x, y, width, height, w.buffer.width, w.buffer.height)
@@ -1903,7 +2138,16 @@ impl<P: Platform> Compositor<P> {
             }
         }
         let screen = r.translate(w.x, w.y).intersect(&w.body_rect());
-        self.damage = self.damage.union(&screen);
+        // A client that commits is alive: a close press asks it again.
+        w.close_asked = None;
+        let key = Key { client: slot, id };
+        self.dirty(&screen);
+        if let Some(sw) = self.switcher.as_mut()
+            && let Some(at) = sw.windows.iter().position(|k| *k == key)
+        {
+            let w = &self.windows[i];
+            sw.thumbs[at] = draw::thumb(w, self.scale.factor());
+        }
         self.stats.commits += 1;
         status::OK
     }
@@ -1911,16 +2155,26 @@ impl<P: Platform> Compositor<P> {
     // ---- composition ------------------------------------------------------
 
     fn finish_round(&mut self) {
-        // Over the switcher, everything under it is drawn again: its glass
-        // is a blur of the scene.
-        if self.switcher.is_some() && !self.damage.is_empty() {
+        // Over the switcher, a change of the scene draws everything again
+        // (its glass is a blur of the scene); the pointer alone is drawn on
+        // the frame last composed.
+        let scene = core::mem::take(&mut self.scene);
+        let reuse = self.switcher.is_some() && !scene && !self.switcher_frame.is_empty();
+        if self.switcher.is_some() && scene {
             self.damage = self.screen();
         }
         let damage = self.damage.intersect(&self.screen());
         self.damage = Rect::default();
         if !damage.is_empty() {
             let start = self.platform.now();
-            self.compose(damage);
+            if reuse {
+                self.restore(damage);
+            } else {
+                self.compose(damage);
+                if self.switcher.is_some() {
+                    self.keep_switcher_frame();
+                }
+            }
             self.stats.compose_ns += self.platform.now().saturating_sub(start);
             self.stats.frames += 1;
             self.unflushed = self.unflushed.union(&damage);

@@ -41,6 +41,8 @@ pub struct Chrome {
     pub outline: Mask,
     /// The shadow's layers, each with its margin.
     pub shadows: Vec<(Mask, usize)>,
+    /// The body's coverage: the window's shape over the body.
+    pub body: Mask,
 }
 
 pub struct Window {

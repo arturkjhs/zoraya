@@ -453,6 +453,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0230-3 | [ADR-0230](0230-network-testing.md) | The network step is skipped, not failed, on a host whose QEMU lacks user-mode networking, and `make test`'s summary lists the skip. | a runner host test with a fake `qemu` that rejects `-netdev user`. | not yet applicable (stage 8) |
 | INV-0230-4 | [ADR-0230](0230-network-testing.md) | W11 to W13 and `t_net` pass under HVF and TCG from a clean checkout. | `make test-net`, a step of `make test`. | not yet applicable (stage 8) |
 | INV-0240-1 | [ADR-0240](0240-fonts-embedded-until-the-launcher.md) | Only the files of `fonts/`, through `zoraya-fonts`, are embedded as fonts in a program. | a grep in `make check-tokens` for `include_bytes!` of a `.ttf` outside `crates/zoraya-fonts`. | checked: `make check-tokens` |
+| INV-0241-1 | [ADR-0241](0241-window-corners-and-client-pixels.md) | Inside the window's shape, every client pixel of the body reaches the display unchanged; outside it, none does. | the compositor's host tests at scale 1 and 2 (`an_image_is_copied_unchanged_where_covered` in `zoraya-paint`, `at_scale_two_sizes_are_logical_and_pixels_unchanged` in `zoraya-compositor`). | checked: `make test-unit` |
 
 ## Counts
 
@@ -575,4 +576,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0229](0229-network-configuration.md) Network configuration: net.* settings declared by netd, state shown by net status | 3 |
 | [ADR-0230](0230-network-testing.md) Testing the network without the Internet: user-mode networking, the runner as the far end, a capture on failure | 4 |
 | [ADR-0240](0240-fonts-embedded-until-the-launcher.md) Fonts embedded in the programs `init` starts, until the launcher exists | 1 |
-| **Total** | **447** |
+| [ADR-0241](0241-window-corners-and-client-pixels.md) Round window corners over a client's pixels | 1 |
+| **Total** | **448** |

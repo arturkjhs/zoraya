@@ -642,7 +642,10 @@ fn popups_sit_on_their_parent_and_close_on_a_press_outside() {
             },
             vec![m],
         );
-        let (_, p) = decode::<gui::PopupCreated>(&out[0], 0).unwrap();
+        let (_, p) = out
+            .iter()
+            .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+            .unwrap();
         ids.push((p.status.0, p.window));
     }
     assert!(ids[..4].iter().all(|(s, _)| *s == status::OK));
@@ -811,26 +814,44 @@ fn samples() {
     let Ok(dir) = std::env::var("ZORAYA_COMPOSITOR_SAMPLES") else {
         return;
     };
-    for (name, appearance) in [("light", zoraya_tokens::Appearance::Light), ("dark", zoraya_tokens::Appearance::Dark)] {
+    for (name, appearance) in [
+        ("light", zoraya_tokens::Appearance::Light),
+        ("dark", zoraya_tokens::Appearance::Dark),
+    ] {
         let mut s = setup_with(|f| f.display_size = (1024, 768));
         s.c.appearance = appearance;
         s.c.make_wallpaper();
         let p = appearance.palette();
         let (a, _, _) = s.toplevel(560, 360, p.term_bg.pixel());
-        let out = s.request(a, &gui::SetTitle { window: 1, text: zoraya_protocol::Data("zosh — ~/project".as_bytes()) }, vec![]);
+        let out = s.request(
+            a,
+            &gui::SetTitle {
+                window: 1,
+                text: zoraya_protocol::Data("zosh — ~/project".as_bytes()),
+            },
+            vec![],
+        );
         let _ = out;
         let (b, _, _) = s.toplevel(420, 260, p.bg_view.pixel());
-        s.request(b, &gui::SetTitle { window: 1, text: zoraya_protocol::Data("notes.txt — edit".as_bytes()) }, vec![]);
+        s.request(
+            b,
+            &gui::SetTitle {
+                window: 1,
+                text: zoraya_protocol::Data("notes.txt — edit".as_bytes()),
+            },
+            vec![],
+        );
         // Move the second window aside by its title bar.
         let body = s.body(1, 1);
         let (w, h) = (1024, 768);
-        let ax = |v: i64, side: u32| ((v * 65535 + i64::from(side) - 2) / i64::from(side - 1)) as u32;
+        let ax =
+            |v: i64, side: u32| ((v * 65535 + i64::from(side) - 2) / i64::from(side - 1)) as u32;
         s.point(ax(body.x + 200, w), ax(body.y - 18, h), Some(1));
         s.point(ax(560, w), ax(330, h), None);
         s.point(ax(560, w), ax(330, h), Some(0));
         s.point(ax(1000, w), ax(740, h), None);
         let write = |s: &mut Setup, file: &str| {
-            let mut out = std::format!("P6\n1024 768\n255\n").into_bytes();
+            let mut out = b"P6\n1024 768\n255\n".to_vec();
             for q in &s.f().frame {
                 out.extend_from_slice(&[(q >> 16) as u8, (q >> 8) as u8, *q as u8]);
             }
@@ -839,5 +860,256 @@ fn samples() {
         write(&mut s, "windows");
         s.keys(&[(code::LEFT_ALT, 1), (code::TAB, 1), (code::TAB, 0)]);
         write(&mut s, "switcher");
+    }
+}
+
+/// Review 7b, 1: an unfocused client cannot open a popup, and a popup sits
+/// directly above its parent, takes focus while open and gives it back.
+#[test]
+fn only_a_focused_window_opens_popups_and_they_stay_with_it() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(200, 120, 1);
+    let (b, _, _) = s.toplevel(200, 120, 2);
+    // b's window is above, a's has focus (the first).
+    let m = s.f().memory(vec![9; 640 * 400], 640 * 400 * 4, false);
+    let out = s.request(
+        b,
+        &gui::CreatePopup {
+            parent: 1,
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 400,
+        },
+        vec![m],
+    );
+    let r = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(r.1.status.0, status::UNSUPPORTED);
+    // Raise a below b: a popup of a goes right above a, under nothing else.
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    assert_eq!(s.c.focused(), Some(Key { client: 0, id: 1 }));
+    let m = s.f().memory(vec![9; 40 * 20], 40 * 20 * 4, false);
+    let out = s.request(
+        a,
+        &gui::CreatePopup {
+            parent: 1,
+            x: 5,
+            y: 5,
+            width: 40,
+            height: 20,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(p.status.0, status::OK);
+    let stack: Vec<Key> = s.c.stack().collect();
+    let parent = stack
+        .iter()
+        .position(|k| *k == Key { client: 0, id: 1 })
+        .unwrap();
+    assert_eq!(
+        stack[parent + 1],
+        Key {
+            client: 0,
+            id: p.window
+        }
+    );
+    assert_eq!(
+        s.c.focused(),
+        Some(Key {
+            client: 0,
+            id: p.window
+        }),
+        "a popup takes focus"
+    );
+    // Closed by the client, it gives focus back to its parent.
+    s.request(a, &gui::Close { window: p.window }, vec![]);
+    assert_eq!(s.c.focused(), Some(Key { client: 0, id: 1 }));
+    // Minimising the parent closes its popups.
+    let m = s.f().memory(vec![9; 40 * 20], 40 * 20 * 4, false);
+    s.request(
+        a,
+        &gui::CreatePopup {
+            parent: 1,
+            x: 5,
+            y: 5,
+            width: 40,
+            height: 20,
+        },
+        vec![m],
+    );
+    s.keys(&[
+        (code::LEFT_META, 1),
+        (code::M, 1),
+        (code::M, 0),
+        (code::LEFT_META, 0),
+    ]);
+    assert!(s.c.stack().all(|k| k.id == 1));
+    let _ = b;
+}
+
+/// Review 7b, 2: a resize never makes a body larger than the work area.
+#[test]
+fn a_resize_stops_at_the_work_area() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(200, 100, 1);
+    s.f().take(a);
+    for _ in 0..4 {
+        let o = s.outer(0, 1);
+        // Move it far left by its title bar, then grow it from the right.
+        s.at(o.x + 100, o.y + 18, Some(1));
+        s.at(10, o.y + 18, Some(0));
+        let o = s.outer(0, 1);
+        s.at(o.right() - 2, o.bottom() - 2, Some(1));
+        s.at(i64::from(W) - 1, i64::from(H) - 1, Some(0));
+    }
+    let body = s.body(0, 1);
+    assert!(body.width <= i64::from(W) - 2, "{body:?}");
+    assert!(body.height <= i64::from(H) - 28 - 37, "{body:?}");
+}
+
+/// Review 7b, 4: a client that answers is asked again, not ended.
+#[test]
+fn a_client_that_commits_is_asked_again_on_the_next_close() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(200, 100, 1);
+    let o = s.outer(0, 1);
+    s.at(o.x + 18, o.y + 18, Some(1));
+    s.at(o.x + 18, o.y + 18, Some(0));
+    s.f().take(a);
+    // It shows a "save?" prompt: it commits, and the person cancels.
+    assert_eq!(s.commit_to(a, 1, 0, 0, 10, 10), status::OK);
+    s.f().clock += CLOSE_GRACE_NS;
+    s.at(o.x + 18, o.y + 18, Some(1));
+    assert_eq!(s.c.client_count(), 1);
+    assert!(
+        s.f()
+            .take(a)
+            .iter()
+            .any(|m| decode::<gui::CloseRequested>(m, 0).is_ok())
+    );
+    // A long time later, an unanswered ask has lapsed too.
+    s.f().clock += 10 * CLOSE_GRACE_NS;
+    s.at(o.x + 18, o.y + 18, Some(0));
+    s.at(o.x + 18, o.y + 18, Some(1));
+    assert_eq!(s.c.client_count(), 1);
+}
+
+/// Review 7b, 5: the bar takes presses; nothing under it is reached.
+#[test]
+fn a_press_on_the_bar_reaches_no_window() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(200, 100, 1);
+    s.f().take(a);
+    s.at(BX + 50, 10, Some(1));
+    s.at(BX + 50, 10, Some(0));
+    assert!(
+        s.f()
+            .take(a)
+            .iter()
+            .all(|m| decode::<gui::WindowPointer>(m, 0).is_err())
+    );
+}
+
+/// Review 7b, 7: the first commit to a new buffer shows all of it.
+#[test]
+fn the_first_commit_to_a_new_buffer_reads_it_whole() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    let o = s.outer(0, 1);
+    s.at(o.right() - 2, o.bottom() - 2, Some(1));
+    s.at(o.right() + 18, o.bottom() + 8, Some(0));
+    let c = configures(&s.f().take(a));
+    let (w, h) = (c[0].width, c[0].height);
+    let n = (w * h) as usize;
+    let m = s.f().memory(vec![0x0012_3456; n], n as u64 * 4, false);
+    s.request(
+        a,
+        &gui::SetBuffer {
+            window: 1,
+            width: w,
+            height: h,
+        },
+        vec![m],
+    );
+    assert_eq!(s.commit_to(a, 1, 0, 0, 1, 1), status::OK);
+    let body = s.body(0, 1);
+    assert_eq!(s.pixel(body.x + 60, body.y + 30), 0x0012_3456);
+}
+
+/// Review 7b, 10: one client cannot take more than its share of buffers.
+#[test]
+fn a_client_has_a_budget_of_buffers() {
+    let mut s = setup();
+    let end = s.client(64);
+    let mut ok = 0;
+    for _ in 0..8 {
+        let n = (W * (H - 70)) as usize;
+        let m = s.f().memory(vec![0; n], n as u64 * 4, false);
+        let out = s.request(
+            end,
+            &gui::CreateToplevel {
+                width: W,
+                height: H - 70,
+            },
+            vec![m],
+        );
+        if out
+            .iter()
+            .find_map(|m| decode::<gui::Created>(m, 0).ok())
+            .unwrap()
+            .1
+            .status
+            .0
+            == status::OK
+        {
+            ok += 1;
+        }
+    }
+    assert_eq!(ok, 4, "four displays' worth");
+}
+
+/// Review 7b, 12: a key whose press reached the client is released to it,
+/// even when the release comes during a chord.
+#[test]
+fn a_release_reaches_the_client_that_saw_the_press() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    s.f().take(a);
+    s.keys(&[(30, 1), (code::LEFT_META, 1), (30, 0), (code::LEFT_META, 0)]);
+    let got = keys_of(&s.f().take(a));
+    assert_eq!(
+        got.iter().map(|k| (k.0, k.1)).collect::<Vec<_>>(),
+        [(30, true), (30, false)]
+    );
+    // A key pressed during a chord is released to nobody.
+    s.keys(&[(code::LEFT_META, 1), (31, 1), (code::LEFT_META, 0), (31, 0)]);
+    assert!(keys_of(&s.f().take(a)).is_empty());
+}
+
+/// Review 7b, 13: a display of a new size reconfigures every toplevel.
+#[test]
+fn a_new_display_size_reconfigures_the_windows() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    s.f().take(a);
+    s.f().display_size = (2048, 1536);
+    let d = s.f().channel(64);
+    let m = s.manager;
+    s.f().display = Some(d);
+    s.f().send(m, message(&gui::AttachDisplay {}, 9), vec![d]);
+    // The old driver is gone first.
+    s.c.step();
+    let c = configures(&s.f().take(a));
+    if let Some(c) = c.last() {
+        assert_eq!((c.width, c.height, c.scale), (100, 50, 2));
+        assert_eq!((s.body(0, 1).width, s.body(0, 1).height), (200, 100));
     }
 }

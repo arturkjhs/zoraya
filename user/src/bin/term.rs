@@ -96,13 +96,20 @@ fn ask<'a, M: zoraya_protocol::Message<'a>>(
 fn buffer(width: usize, height: usize) -> Option<(&'static mut [u32], (u64, u64), ChannelEntry)> {
     let size = (width * height * 4).next_multiple_of(4096) as u64;
     let memory = memory_create(size, MemoryFlags::NONE).ok()?;
-    let address = memory_map(memory, 0, size, MapFlags::WRITE).ok()?;
+    let Ok(address) = memory_map(memory, 0, size, MapFlags::WRITE) else {
+        let _ = handle_close(memory);
+        return None;
+    };
+    let view = handle_duplicate(memory, Rights::READ.union(Rights::TRANSFER));
+    let _ = handle_close(memory);
+    let Ok(view) = view else {
+        let _ = memory_unmap(address, size);
+        return None;
+    };
     // SAFETY: a new writable mapping of `size` bytes, page-aligned, kept
     // until the window gets another buffer and reached only through this
     // slice, which is replaced before the mapping goes.
     let pixels = unsafe { core::slice::from_raw_parts_mut(address as *mut u32, width * height) };
-    let view = handle_duplicate(memory, Rights::READ.union(Rights::TRANSFER)).ok()?;
-    let _ = handle_close(memory);
     let entry = ChannelEntry {
         handle: view,
         rights: Rights::READ,

@@ -278,9 +278,9 @@ impl Term {
     }
 
     /// A new grid of `columns × rows` (each at least 1), keeping what fits
-    /// of the screen from its top left and the cursor inside; the
-    /// scrollback is kept at its old width, cut or padded per line when
-    /// shown. Everything is drawn again.
+    /// of the screen from its top left and the cursor inside; each line of
+    /// the scrollback is cut or padded to the new width. Everything is
+    /// drawn again.
     pub fn resize(&mut self, columns: usize, rows: usize) {
         let (columns, rows) = (columns.max(1), rows.max(1));
         if (columns, rows) == (self.columns, self.rows) {
