@@ -230,7 +230,21 @@ fn parse(text: &str) -> Result<Option<Room>, String> {
 /// free slot after every line with one.
 pub fn read(bytes: &[u8]) -> Rooms {
     let mut out = Rooms::default();
-    let bytes = &bytes[..bytes.len().min(MAX_SIZE)];
+    // Past MAX_SIZE the file is cut at the last whole line before it, and
+    // that is reported: a cut line could read as a wider grant.
+    let cut = bytes.len() > MAX_SIZE;
+    let bytes = if cut {
+        let head = &bytes[..MAX_SIZE];
+        &head[..head.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)]
+    } else {
+        bytes
+    };
+    if cut {
+        out.problems.push(Problem {
+            line: 1 + bytes.iter().filter(|b| **b == b'\n').count(),
+            problem: String::from("the file is longer than 256 KiB; the rest is ignored"),
+        });
+    }
     for (line, text) in lines(bytes) {
         let problem = match text.map_err(String::from).and_then(parse) {
             Ok(None) => continue,
@@ -294,25 +308,20 @@ pub fn add(bytes: &[u8], room: &Room) -> Result<Vec<u8>, RoomRefusal> {
     Ok(out)
 }
 
-/// The file without `name`'s line (its first, the one that counts); every
-/// other byte kept.
+/// The file without `name`'s lines (every one: a second line of a name
+/// would count once the first is gone); every other byte kept.
 pub fn remove(bytes: &[u8], name: &str) -> Result<Vec<u8>, RoomRefusal> {
     let parts: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
-    let k = parts
-        .iter()
-        .position(|raw| {
-            let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
-            core::str::from_utf8(raw)
-                .ok()
-                .and_then(|t| parse(t).ok().flatten())
-                .is_some_and(|r| r.name == name)
-        })
-        .ok_or(RoomRefusal::NoSuchRoom)?;
-    let kept: Vec<&[u8]> = parts
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| *i != k)
-        .map(|(_, p)| *p)
-        .collect();
+    let is_it = |raw: &&[u8]| {
+        let raw = raw.strip_suffix(b"\r").unwrap_or(raw);
+        core::str::from_utf8(raw)
+            .ok()
+            .and_then(|t| parse(t).ok().flatten())
+            .is_some_and(|r| r.name == name)
+    };
+    if !parts.iter().any(is_it) {
+        return Err(RoomRefusal::NoSuchRoom);
+    }
+    let kept: Vec<&[u8]> = parts.iter().filter(|p| !is_it(p)).copied().collect();
     Ok(kept.join(&b'\n'))
 }

@@ -328,7 +328,11 @@ impl Gui {
         let started = (|| {
             use zoraya_abi::{DIRECTORY, DirectoryObject, JOB, JobFlags, JobObject};
             let job = zoraya_rt::job_create(JOB, JobFlags::NONE).ok()?;
-            let image = zoraya_rt::directory_lookup(DIRECTORY, "panel").ok()?;
+            let Ok(image) = zoraya_rt::directory_lookup(DIRECTORY, "panel") else {
+                let _ = zoraya_rt::job_kill(job);
+                let _ = handle_close(job);
+                return None;
+            };
             let mut buffer = [0; 512];
             let mut e = zoraya_abi::spawn::Encoder::new(&mut buffer, job, image);
             // The console to write and to hand to what it launches (to
@@ -343,9 +347,14 @@ impl Gui {
             ] {
                 e.handle(entry);
             }
-            let length = e.finish()?;
-            let process = zoraya_rt::spawn(&buffer[..length]).ok();
+            let process = e
+                .finish()
+                .and_then(|length| zoraya_rt::spawn(&buffer[..length]).ok());
             let _ = handle_close(image);
+            if process.is_none() {
+                let _ = zoraya_rt::job_kill(job);
+                let _ = handle_close(job);
+            }
             Some((job, process?))
         })();
         match started {

@@ -169,7 +169,16 @@ impl Panel {
     /// The table as read again from `/config/rooms`; a current room that
     /// is gone leaves for `home`. Gives whether anything changed.
     pub fn reload(&mut self, bytes: &[u8]) -> bool {
-        let rooms = zoraya_settings::rooms::read(bytes);
+        let mut rooms = zoraya_settings::rooms::read(bytes);
+        // What the compositor can be told is what the panel keeps: rooms
+        // past `MAX_ROOMS_TEXT` are left out of both, and reported.
+        while rooms_text(&rooms).len() > MAX_ROOMS_TEXT {
+            rooms.rooms.pop();
+            rooms.problems.push(zoraya_settings::Problem {
+                line: 0,
+                problem: String::from("the room table is longer than the compositor takes; the last rooms are left out"),
+            });
+        }
         let changed = rooms.rooms != self.rooms.rooms;
         self.rooms = rooms;
         let gone = self
@@ -192,6 +201,10 @@ impl Panel {
     pub fn pressed(&mut self, kind: u32, index: u32) -> Action {
         match kind {
             LAUNCH => match APPS.get(index as usize) {
+                // Nothing runs in an untrusted room until quotas exist
+                // (ADR-0056, TASK-24): `room new --untrusted` is refused, and
+                // so is a launch in a hand-written untrusted room.
+                _ if self.room().is_some_and(|r| r.untrusted) => Action::Nothing,
                 Some(("term", _)) => Action::Launch(terminal(self.room())),
                 _ => Action::Nothing,
             },
@@ -215,18 +228,26 @@ impl Panel {
     /// `SetRooms`' text: every room's line as the writer writes it (the
     /// colours the reader gave included).
     pub fn rooms_text(&self) -> String {
-        let mut s = String::new();
-        for r in &self.rooms.rooms {
-            s.push_str(&r.line());
-            s.push('\n');
-        }
-        s
+        rooms_text(&self.rooms)
     }
 
     /// `SetRooms`' current room: empty for `home`.
     pub fn current_name(&self) -> &str {
         self.current.as_deref().filter(|c| *c != HOME).unwrap_or("")
     }
+}
+
+/// The longest room table `SetRooms` carries (`zoraya-proto-gui`'s
+/// `MAX_ROOMS_TEXT`; the panel checks they agree).
+pub const MAX_ROOMS_TEXT: usize = 3072;
+
+fn rooms_text(rooms: &Rooms) -> String {
+    let mut s = String::new();
+    for r in &rooms.rooms {
+        s.push_str(&r.line());
+        s.push('\n');
+    }
+    s
 }
 
 /// `SetDock`'s text: `NAME\tLINE` a line.

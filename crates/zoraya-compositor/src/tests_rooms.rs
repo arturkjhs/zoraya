@@ -144,6 +144,46 @@ fn each_manager_takes_only_its_own_ordinals() {
     s.f().send(m2, message(&rooms, 9), vec![]);
     s.c.step();
     assert_eq!(done(&mut s, m2), status::UNSUPPORTED);
+    // SetDock on init's channel; AttachInput and Stats on the panel's.
+    let m3 = s.manager;
+    s.f().send(
+        m3,
+        message(
+            &gui::SetDock {
+                apps: zoraya_protocol::Data(b"x\tx\n"),
+            },
+            9,
+        ),
+        vec![],
+    );
+    s.c.step();
+    assert_eq!(done(&mut s, m3), status::UNSUPPORTED);
+    let i = s.f().channel(64);
+    s.f().send(panel, message(&gui::AttachInput {}, 9), vec![i]);
+    s.c.step();
+    assert_eq!(done(&mut s, panel), status::UNSUPPORTED);
+    s.f().send(panel, message(&gui::Stats {}, 9), vec![]);
+    s.c.step();
+    let out = s.f().take(panel);
+    assert!(
+        decode::<gui::StatsReply>(out.last().unwrap(), 0).is_ok(),
+        "Stats on either"
+    );
+    // AddRoomClient on init's channel: its first terminal (ADR-0242).
+    let t = s.f().channel(64);
+    let m4 = s.manager;
+    let first = gui::AddRoomClient {
+        untrusted: 0,
+        colour: 0,
+        room: zoraya_protocol::Data(b""),
+        app: zoraya_protocol::Data(b"term"),
+        entries: zoraya_protocol::Data(b"+w /"),
+        line: zoraya_protocol::Data(b"term"),
+    };
+    s.f().send(m4, message(&first, 9), vec![t]);
+    s.c.step();
+    assert_eq!(done(&mut s, m4), status::OK);
+    assert_eq!(s.c.record(0).map(|r| r.app.as_str()), Some("term"));
     // Records that do not fit their room are refused whole.
     assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
     for (room, untrusted, colour, app, entries) in [
@@ -172,7 +212,7 @@ fn each_manager_takes_only_its_own_ordinals() {
             "{room} {untrusted} {colour} {app}"
         );
     }
-    assert_eq!(s.c.client_count(), 0);
+    assert_eq!(s.c.client_count(), 1, "init's terminal only");
     // A bad table, or a current room not in it, changes nothing.
     assert_eq!(s.set_rooms(panel, "nowhere", ROOMS), status::INVALID);
     assert_eq!(s.set_rooms(panel, "", "Bad line\n"), status::INVALID);
@@ -184,7 +224,7 @@ fn each_manager_takes_only_its_own_ordinals() {
     let _ = a;
     s.f().peers.get_mut(&panel).unwrap().gone = true;
     s.c.step();
-    assert_eq!(s.c.client_count(), 1);
+    assert_eq!(s.c.client_count(), 2);
     assert_eq!(s.c.rooms().rooms.len(), 2);
 }
 
@@ -212,27 +252,73 @@ fn no_client_message_changes_a_record_or_its_pixels() {
         },
         vec![],
     );
-    for ordinal in gui::CLIENT_REQUESTS
-        .iter()
-        .chain(&gui::CLIENT_MANAGER_REQUESTS)
-        .chain(&[32, 38])
-    {
-        let mut bytes = message(&gui::Stats {}, 1);
-        bytes[..4].copy_from_slice(&ordinal.to_le_bytes());
-        bytes.extend_from_slice(&[0x41; 64]);
-        s.f().send(a, bytes, vec![]);
+    // The spoofing title leaves the badge and the pills as they were.
+    let now: Vec<u32> = (o.right() - 120..o.right() - 2)
+        .map(|x| s.pixel(x, o.y + 14))
+        .collect();
+    assert_eq!(now, badge_area, "the badge and pills are the compositor's");
+    // Every manager message, well formed, on a client's channel: none
+    // changes a record, the table or the dock (INV-0172-1, INV-0242-1). A
+    // client the compositor drops for it is replaced and the next is sent.
+    let dock = s.c.dock_apps().to_vec();
+    let mut client = a;
+    let manager: Vec<(Vec<u8>, bool)> = vec![
+        (message(&gui::AddClient {}, 3), true),
+        (
+            message(
+                &gui::AddRoomClient {
+                    untrusted: 0,
+                    colour: 1,
+                    room: zoraya_protocol::Data(b"project"),
+                    app: zoraya_protocol::Data(b"term"),
+                    entries: zoraya_protocol::Data(b"+w /"),
+                    line: zoraya_protocol::Data(b"term"),
+                },
+                3,
+            ),
+            true,
+        ),
+        (message(&gui::AttachDisplay {}, 3), true),
+        (message(&gui::AttachInput {}, 3), true),
+        (message(&gui::AttachClientManager {}, 3), true),
+        (
+            message(
+                &gui::SetRooms {
+                    current: zoraya_protocol::Data(b""),
+                    rooms: zoraya_protocol::Data(b"evil --colour 2 +w /\n"),
+                },
+                3,
+            ),
+            false,
+        ),
+        (
+            message(
+                &gui::SetDock {
+                    apps: zoraya_protocol::Data(b"evil\tevil\n"),
+                },
+                3,
+            ),
+            false,
+        ),
+    ];
+    for (bytes, handle) in manager {
+        let clients = s.c.client_count();
+        let handles = if handle {
+            vec![s.f().channel(64)]
+        } else {
+            vec![]
+        };
+        s.f().send(client, bytes, handles);
         s.c.step();
-        if s.c.client_count() == 0 {
-            break;
+        assert_eq!(s.c.rooms(), &rooms);
+        assert_eq!(s.c.dock_apps(), &dock[..]);
+        assert!(s.c.client_count() <= clients, "no client added by a client");
+        if s.c.record(0).is_some() {
+            assert_eq!(s.c.record(0).cloned(), record);
+        } else {
+            client = s.room_client(panel, "project", "term", "+w ~/project\n+r ~/include");
+            s.window_of(client, 400, 200, 0x0011_2233);
         }
-    }
-    assert_eq!(s.c.record(0).cloned().or(record.clone()), record);
-    assert_eq!(s.c.rooms(), &rooms);
-    if s.c.client_count() == 1 {
-        let now: Vec<u32> = (o.right() - 120..o.right() - 2)
-            .map(|x| s.pixel(x, o.y + 14))
-            .collect();
-        assert_eq!(now, badge_area, "the badge and pills are the compositor's");
     }
 }
 
@@ -450,6 +536,18 @@ fn the_dock_is_never_covered() {
         !out.iter()
             .any(|m| decode::<gui::WindowPointer>(m, 0).is_ok())
     );
+    // In the dock's padding, outside every cell: still the dock's, nothing
+    // for the window (review 7d, 5).
+    let d = s.c.dock().rect;
+    let (px, py) = (d.x + 3, d.y + d.height / 2);
+    assert!(s.outer(0, 1).contains(px, py));
+    s.press_at(px, py);
+    assert!(dock_pressed(&s.f().take(panel)).is_empty());
+    let out = s.f().take(a);
+    assert!(
+        !out.iter()
+            .any(|m| decode::<gui::WindowPointer>(m, 0).is_ok())
+    );
 }
 
 #[test]
@@ -529,7 +627,8 @@ fn every_gesture_has_its_text() {
         let concrete = line
             .replace("APP", "term")
             .replace("NAME", "project")
-            .replace("LAYOUT", "ua");
+            .replace("LAYOUT", "ua")
+            .replace("PATH", "~/project");
         assert!(zoraya_shell::syntax::parse(&concrete).is_ok(), "{concrete}");
     }
 }

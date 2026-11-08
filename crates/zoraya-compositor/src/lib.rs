@@ -913,8 +913,8 @@ impl<P: Platform> Compositor<P> {
         if y < i64::from(space::BAR_HEIGHT.physical(self.scale)) {
             return None;
         }
-        // So is the dock (INV-0168-3).
-        if self.dock_cell(x, y).is_some() {
+        // So is the dock, its padding included (INV-0168-3).
+        if self.dock.rect.contains(x, y) {
             return None;
         }
         self.windows
@@ -926,8 +926,10 @@ impl<P: Platform> Compositor<P> {
 
     fn press(&mut self, button: u32) {
         let Some((x, y)) = self.pointer else { return };
-        if let Some(cell) = self.dock_cell(x, y) {
-            if button == gui::buttons::LEFT {
+        if self.dock.rect.contains(x, y) {
+            if button == gui::buttons::LEFT
+                && let Some(cell) = self.dock_cell(x, y)
+            {
                 self.dock_press(cell);
             }
             return;

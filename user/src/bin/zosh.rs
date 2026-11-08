@@ -2356,6 +2356,17 @@ impl Z {
                 &["room lists them; room new makes one"],
             ));
         };
+        if room.untrusted {
+            // Nothing runs untrusted until quotas exist (review 7d, 1).
+            return Err(zoraya_command::error(
+                "room",
+                Some(name),
+                "untrusted rooms wait for quotas",
+                &[
+                    "ADR-0056: until a room's memory and processes can be limited, no program runs untrusted",
+                ],
+            ));
+        }
         if let Some(g) = room.grants.iter().find(|g| g.write) {
             let dir = self.room_path(&g.path);
             if self.open(&dir, OPEN_DIRECTORY).is_ok() {

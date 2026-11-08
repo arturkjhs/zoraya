@@ -62,6 +62,11 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
     // Every room: its own grants, its name, nothing of another room.
     for (i, room) in p.rooms.rooms.clone().iter().enumerate() {
         assert_eq!(p.pressed(ROOM, i as u32 + 1), Action::Entered);
+        // Nothing runs in an untrusted room until quotas (ADR-0056).
+        if room.untrusted {
+            assert_eq!(p.pressed(LAUNCH, 0), Action::Nothing, "{}", room.name);
+            continue;
+        }
         let Action::Launch(l) = p.pressed(LAUNCH, 0) else {
             panic!()
         };
@@ -120,4 +125,17 @@ fn the_compositor_is_told_the_table_and_the_dock() {
     let again = zoraya_settings::rooms::read(p.rooms_text().as_bytes());
     assert_eq!(again.rooms, p.rooms.rooms);
     assert_eq!(dock_text(), "term\tterm\n");
+}
+
+#[test]
+fn the_table_kept_is_the_table_told() {
+    let mut text = String::new();
+    for i in 0..30 {
+        text.push_str(&format!("r{i} +r /{}\n", "a".repeat(150)));
+    }
+    let mut p = Panel::default();
+    p.reload(text.as_bytes());
+    assert!(p.rooms_text().len() <= MAX_ROOMS_TEXT);
+    assert!(p.rooms.rooms.len() < 30);
+    assert!(!p.rooms.problems.is_empty());
 }

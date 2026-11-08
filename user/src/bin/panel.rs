@@ -37,6 +37,8 @@ const KEY_MANAGER: u64 = 1;
 /// (the shell has no channel to the panel, ADR-0172's open question).
 const RELOAD_NS: u64 = 1_000_000_000;
 const ROOMS: &str = "config/rooms";
+// The panel keeps the table it can tell the compositor (review 7d, 6).
+const _: () = assert!(zoraya_panel::MAX_ROOMS_TEXT == gui::MAX_ROOMS_TEXT);
 
 fn send<'a, M: Message<'a>>(manager: Handle, m: &M, handle: Option<Handle>) -> bool {
     let mut out = alloc::vec![0u8; 8192];
@@ -109,13 +111,19 @@ fn spawn_program(
     };
     let mut buffer = [0u8; 1024];
     let mut e = Encoder::new(&mut buffer, job, file);
+    // Handles moved in: a failed spawn leaves them to the caller
+    // (INV-0042-3), which closes them here.
+    let mut taken = Vec::new();
     for s in handles {
         let entry = match s.give {
             Give::Console => dup(s.slot, CONSOLE, Rights::WRITE),
             Give::Job => dup(s.slot, job, JobObject::RIGHTS),
             Give::Directory => dup(s.slot, DIRECTORY, DirectoryObject::RIGHTS),
             other => match take(other) {
-                Some(h) => moved(s.slot, h),
+                Some(h) => {
+                    taken.push(h);
+                    moved(s.slot, h)
+                }
                 None => continue,
             },
         };
@@ -126,6 +134,11 @@ fn spawn_program(
     }
     let ok = e.finish().is_some_and(|n| spawn(&buffer[..n]).is_ok());
     let _ = handle_close(file);
+    if !ok {
+        for h in taken {
+            let _ = handle_close(h);
+        }
+    }
     // The job stays with the program: ending the panel does not end it
     // (ADR-0168: launched applications keep running).
     let _ = handle_close(job);
@@ -149,6 +162,7 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
         line: Data(l.line.as_bytes()),
     };
     if !send(manager, &m, Some(compositor_end)) {
+        println!("panel: the launch record is too large for the compositor");
         let _ = handle_close(client);
         return;
     }
@@ -171,10 +185,10 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
             }
             _ => None,
         });
-        if ok {
-            // Moved into the program with the spawn.
-            core::mem::forget(root_clone);
-        } else {
+        // Moved into the program, or closed by `spawn_program`: either way
+        // no longer this File's to close.
+        core::mem::forget(root_clone);
+        if !ok {
             println!("panel: {} did not start", p.image);
         }
     }
@@ -226,14 +240,15 @@ fn main() -> i32 {
             let Ok((_, d)) = decode::<gui::DockPressed>(&bytes[..sizes.bytes as usize], 0) else {
                 continue;
             };
-            // The table as it is now, so that a chip names today's room.
-            if reload(&mut panel, root.as_ref()) {
-                tell_rooms(manager, &panel);
-            }
+            // The press against the table the compositor drew (review 7d,
+            // 6); the file is read again after it.
             match panel.pressed(d.kind, d.index) {
                 Action::Launch(l) => launch(&l, manager, root.as_ref()),
                 Action::Entered => tell_rooms(manager, &panel),
                 Action::Nothing => {}
+            }
+            if reload(&mut panel, root.as_ref()) {
+                tell_rooms(manager, &panel);
             }
         }
         if clock_monotonic() >= next_reload {

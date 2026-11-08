@@ -140,9 +140,9 @@ fn the_writer_keeps_every_other_byte() {
         remove(MOCKUP.as_bytes(), "nobody"),
         Err(RoomRefusal::NoSuchRoom)
     );
-    // The first of two lines of a name is the one removed.
+    // Every line of a name goes (review 7d, 14).
     let two = b"a --colour 1\nb --colour 2\na --colour 3\n";
-    assert_eq!(remove(two, "a").unwrap(), b"b --colour 2\na --colour 3\n");
+    assert_eq!(remove(two, "a").unwrap(), b"b --colour 2\n");
     let mut many = Vec::new();
     for i in 0..MAX_ROOMS {
         many = add(
@@ -155,4 +155,18 @@ fn the_writer_keeps_every_other_byte() {
         .unwrap();
     }
     assert_eq!(add(&many, &room), Err(RoomRefusal::TooMany));
+}
+
+/// Review 7d, 7: a file past MAX_SIZE is cut at a whole line, and said so.
+#[test]
+fn a_long_file_is_cut_at_a_line_and_reported() {
+    let mut text = String::from("keep +r /system\n");
+    while text.len() < crate::MAX_SIZE - 10 {
+        text.push_str("# padding padding padding padding\n");
+    }
+    text.push_str("wide +r /home/user/project/sub\n");
+    let r = read(text.as_bytes());
+    assert!(r.get("keep").is_some());
+    assert!(r.get("wide").is_none(), "the cut line is not read");
+    assert!(r.problems.iter().any(|p| p.problem.contains("256 KiB")));
 }

@@ -697,7 +697,7 @@ pub const GESTURES: [(&str, &str); 7] = [
     ("minimise", "bg APP"),
     ("dock-launch", "APP"),
     ("dock-room", "room NAME"),
-    ("dock-new-room", "room new NAME"),
+    ("dock-new-room", "room new NAME +w PATH"),
     ("new-terminal", "term"),
     ("layout", "settings gui.keyboard-layout LAYOUT"),
 ];
