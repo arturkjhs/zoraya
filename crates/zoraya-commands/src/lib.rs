@@ -301,6 +301,11 @@ impl<F: Files> Run<'_, F> {
     }
 }
 
+/// Whether `path` is the root itself: one slash or more, and nothing else.
+fn is_root(path: &str) -> bool {
+    !path.is_empty() && path.trim_end_matches('/').is_empty()
+}
+
 /// The last step of `path`, trailing slashes dropped: `""` for the root.
 fn last_step(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
@@ -393,7 +398,7 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
                 // directory only through another: `rm --recursive .` would
                 // empty the working directory (review S20). POSIX refuses
                 // these too.
-                if matches!(last_step(path), "" | "." | "..") {
+                if is_root(path) || matches!(last_step(path), "." | "..") {
                     r.o.err.push_str(&error(
                         r.name,
                         Some(path),
@@ -401,6 +406,12 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
                         &["name the directory itself, as in rm --recursive NAME"],
                     ));
                     r.failed = true;
+                    continue;
+                }
+                // An empty path names no file, as for POSIX (`ENOENT`);
+                // joined to the working directory it would name that.
+                if path.is_empty() {
+                    r.fail(path, status::NOT_FOUND, &[]);
                     continue;
                 }
                 let result = if recursive {

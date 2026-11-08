@@ -759,3 +759,42 @@ fn rm_refuses_dot_dot_dot_and_the_root() {
     assert_eq!(go(&mut m, &["rm", ".hidden", "t/..x"]).0, 0);
     assert!(m.files.is_empty());
 }
+
+/// Review S20: a trailing slash, as `ls` prints a directory and completion
+/// writes one, is not refused: `rm --recursive project/` removes `project`,
+/// and `rm empty/` an empty directory.
+#[test]
+fn rm_takes_a_directory_with_a_trailing_slash() {
+    let mut m = Mem::new(
+        &[
+            ("project/a.txt", "a"),
+            ("project/sub/b.txt", "b"),
+            ("kept.txt", "k"),
+        ],
+        &["project", "project/sub", "empty"],
+    );
+    let (code, _, err) = go(&mut m, &["rm", "--recursive", "project/"]);
+    assert_eq!((code, err.as_str()), (0, ""));
+    assert!(!m.dirs.iter().any(|d| d.starts_with("project")));
+    assert!(!m.files.keys().any(|f| f.starts_with("project")));
+    let (code, _, err) = go(&mut m, &["rm", "empty//"]);
+    assert_eq!((code, err.as_str()), (0, ""));
+    assert!(!m.dirs.contains(&"empty".to_string()));
+    assert!(m.files.contains_key("kept.txt"));
+}
+
+/// Review S20: an empty operand is not the root: it is not found (as for
+/// POSIX), and it removes nothing, though joined to the working directory
+/// it would name that.
+#[test]
+fn rm_of_an_empty_path_is_not_the_roots_refusal() {
+    for line in [vec!["rm", "--recursive", ""], vec!["rm", ""]] {
+        let mut m = Mem::new(&[("t/a.txt", "a"), ("b.txt", "b")], &["t"]);
+        let (code, _, err) = go(&mut m, &line);
+        assert_eq!(code, 1, "{line:?}: {err:?}");
+        assert!(!err.contains("is not removed"), "{line:?}: {err:?}");
+        assert!(err.starts_with("rm: : not found\n"), "{line:?}: {err:?}");
+        assert!(m.files.contains_key("t/a.txt") && m.files.contains_key("b.txt"));
+        assert!(m.dirs.contains(&"t".to_string()));
+    }
+}
