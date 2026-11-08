@@ -490,3 +490,53 @@ fn each_access_has_exactly_its_rights() {
     assert_eq!(shown("/uxy", "/u"), "/uxy");
     assert_eq!(shown("/abc", "/"), "/abc");
 }
+
+/// Mutation testing: an operand is an argument's when its bytes are inside
+/// that argument's, by address; slices of one string fix the layout.
+#[test]
+fn within_is_by_address() {
+    use crate::grants::within;
+    let s = "a".repeat(1001);
+    assert!(within(&s, &s[1..]));
+    assert!(within(&s[..1], &s[..1]));
+    assert!(within(&s[1..], &s[1..]));
+    assert!(!within(&s[..1], &s[1..]), "the next bytes are not inside");
+    assert!(!within(&s[1..], &s[..1]), "the bytes before are not inside");
+    assert!(!within(&s[1..2], &s[1..3]));
+    let copy = s.clone();
+    assert!(!within(&copy, &s), "the same text elsewhere is not");
+}
+
+/// Mutation testing: a value of one character is an argument's too.
+#[test]
+fn a_one_character_argument_is_found() {
+    assert!(go(RM, &["/"], &[], &[], true, "/u/proj").is_ok());
+}
+
+/// Mutation testing: how `merge` folds an entry into one that covers it.
+#[test]
+fn merge_folds_only_what_is_covered() {
+    // A narrowed outer does not lend its rights to a plain inner entry.
+    let p = go(CP, &["x/y/z", "x/y"], &[], &[], true, "/u").unwrap();
+    assert_eq!(merge(&p).len(), 2, "{:?}", merge(&p));
+    // An unrelated entry keeps its own rights.
+    let p = go(CP, &["/w/f", "x"], &[], &[(true, "/u")], true, "/u").unwrap();
+    let m = merge(&p);
+    let f = m.iter().find(|e| e.path == "/w/f").expect("/w/f");
+    assert_eq!(f.rights, Access::Read.rights(), "{m:?}");
+    // Rights are joined, and only a covered entry with no more rights goes.
+    let cat = "name cat\nsummary c\nusage cat FILE...\noperand FILE... read f\n";
+    let p = go(
+        cat,
+        &["x"],
+        &[],
+        &[(false, "/u"), (true, "/u/d")],
+        true,
+        "/u/d",
+    )
+    .unwrap();
+    let m = merge(&p);
+    assert_eq!(m.len(), 2, "{m:?}");
+    let d = m.iter().find(|e| e.path == "/u/d").expect("/u/d");
+    assert_eq!(d.rights, Access::Tree.rights(), "{m:?}");
+}

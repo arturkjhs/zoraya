@@ -888,3 +888,105 @@ fn a_listing_wraps_and_stops() {
     let (out, _) = feed(&mut e, &mut a, b"\t");
     assert!(without_sgr(&out).contains("\nnotes/\n"), "{out:?} {one:?}");
 }
+
+/// Mutation testing: the newest entry that extends the typed text is
+/// suggested, even when an entry equal to the text is newer still.
+#[test]
+fn a_suggestion_skips_an_entry_equal_to_the_text() {
+    let mut a = fake();
+    let mut e = editor().0;
+    e.remember("make -C src");
+    e.remember("make");
+    let (out, _) = feed(&mut e, &mut a, b"make");
+    assert!(out.contains("\x1b[2m -C src\x1b[22m"), "{out:?}");
+}
+
+/// Mutation testing: where the cursor goes after a suggestion on a narrow
+/// screen, and the line end at a multiple of the width.
+#[test]
+fn rows_and_columns_on_a_narrow_screen() {
+    let mut a = fake();
+    let mut e = narrow(20);
+    e.remember("echo xxxxxxxx");
+    let (out, _) = feed(&mut e, &mut a, b"echo ");
+    let d = last_draw(&out);
+    assert!(d.ends_with("\x1b[22m\x1b[J\r\x1b[8C"), "{d:?}");
+    assert!(!d.contains("\x1b[3A"), "{d:?}");
+    // "~> echo xy" fills 10 columns: the cursor moves to the next row.
+    let mut e = narrow(10);
+    let (out, _) = feed(&mut e, &mut a, b"echo xy\x1b[D");
+    assert_eq!(screen_wide(&without_sgr(&out), 10), ["~> echo xy", ""]);
+    let mut e = narrow(10);
+    let (out, _) = feed(&mut e, &mut a, b"echo xyz\x1b[D");
+    assert!(!out.contains("\x1b[0C"), "{out:?}");
+}
+
+/// Mutation testing: an entry holds MAX_CHARS characters, a continuation
+/// line counting one more for its line end.
+#[test]
+fn an_entry_holds_max_chars() {
+    let mut a = fake();
+    // A long entry from the history, then keys past the bound: typing
+    // each of 4096 keys would redraw a long line 4096 times.
+    let mut e = editor().0;
+    e.remember(&"a".repeat(MAX_CHARS - 4));
+    feed(&mut e, &mut a, b"\x1b[A");
+    feed(&mut e, &mut a, &[b'a'; 10]);
+    assert_eq!(e.text().chars().count(), MAX_CHARS);
+    let mut e = editor().0;
+    e.remember(&"a".repeat(MAX_CHARS - 20));
+    feed(&mut e, &mut a, b"if ok {\r\x1b[A");
+    feed(&mut e, &mut a, &[b'a'; 20]);
+    assert_eq!(e.text().chars().count(), MAX_CHARS - "if ok {".len() - 1);
+}
+
+/// Mutation testing: typing writes the character alone only at the line's
+/// end with nothing faint shown; elsewhere the line is redrawn.
+#[test]
+fn a_typed_character_redraws_unless_it_only_extends_the_line() {
+    let mut a = fake();
+    let mut e = editor().0;
+    let (mut all, _) = feed(&mut e, &mut a, b"echo aa\x1b[D\x1b[D");
+    all.push_str(&feed(&mut e, &mut a, b"a").0);
+    assert_eq!(screen(&without_sgr(&all)), "~> echo aaa");
+    let mut e = editor().0;
+    e.remember("echo hello");
+    let (mut all, _) = feed(&mut e, &mut a, b"echo he");
+    all.push_str(&feed(&mut e, &mut a, b"x").0);
+    assert_eq!(screen(&without_sgr(&all)), "~> echo hex");
+}
+
+/// Mutation testing: where a listing's rows wrap.
+#[test]
+fn a_listing_wraps_where_its_names_end() {
+    let list = |width: usize, names: &[&str]| {
+        let mut e = narrow(width);
+        let mut a = fake();
+        a.completion.candidates = names.iter().map(|n| (String::from(*n), None)).collect();
+        let (out, _) = feed(&mut e, &mut a, b"ls \t\t");
+        without_sgr(&out)
+    };
+    let (a18, b18) = ("a".repeat(18), "b".repeat(18));
+    let out = list(20, &[&a18, &b18]);
+    assert_eq!(out.split('\n').nth(1), Some(a18.as_str()), "{out:?}");
+    let d12 = "d".repeat(12);
+    let out = list(20, &["abc", &d12]);
+    assert!(out.contains("\nabc  dddddddddddd\n"), "{out:?}");
+    let out = list(20, &["aaaaa", "bbbbb", "ccccc"]);
+    assert!(out.contains("\naaaaa  bbbbb  ccccc\n"), "{out:?}");
+}
+
+/// Mutation testing: an entry takes at most 256 continuation lines; the
+/// next Enter gives the entry as it is.
+#[test]
+fn an_entry_takes_at_most_256_continuation_lines() {
+    let mut a = fake();
+    let mut e = editor().0;
+    feed(&mut e, &mut a, b"if ok {");
+    for n in 0..256 {
+        let (_, k) = feed(&mut e, &mut a, b"\r");
+        assert!(matches!(k, Key::Edited), "Enter {n}");
+    }
+    let (_, k) = feed(&mut e, &mut a, b"\r");
+    assert!(matches!(k, Key::Line(_)));
+}

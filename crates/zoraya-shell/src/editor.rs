@@ -53,7 +53,7 @@ pub trait Assist {
     fn incomplete(&mut self, text: &str) -> bool;
     /// Candidates for the word that ends at `cursor` (a byte offset in
     /// `line`): where the word starts, and each candidate with an optional
-    /// summary.
+    /// summary. Every candidate begins with the word as typed.
     fn complete(&mut self, line: &str, cursor: usize) -> Completion;
 }
 

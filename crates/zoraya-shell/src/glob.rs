@@ -334,6 +334,8 @@ mod tests {
             let expect = usize::from(n < MAX_DEPTH);
             assert_eq!(found(&literal, &mut chain(n)), expect, "{literal}");
             assert_eq!(found(&any, &mut chain(n)), expect, "{any}");
+            let dots = format!("{}*.txt", "./".repeat(n));
+            assert_eq!(found(&dots, &mut chain(0)), expect, "{dots}");
         }
     }
 

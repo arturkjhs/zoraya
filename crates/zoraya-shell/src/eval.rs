@@ -607,6 +607,9 @@ impl<H: Host> Shell<H> {
                     }
                 }
                 Err(Flow::Stop(f)) => {
+                    // A loop's interrupt comes here without a statement
+                    // that recorded it (review S21).
+                    self.state.last = f.record;
                     if !f.reported
                         && let Some(line) = record::screen_line(&f.name, &f.record, f.ctrl_c)
                     {

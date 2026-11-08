@@ -35,6 +35,8 @@ struct Fake {
     outputs: BTreeMap<u32, (String, bool)>,
     next: u32,
     interrupts: u32,
+    /// `io.terminal` of each run of the builtin `pager`.
+    terminals: Vec<bool>,
 }
 
 const QUESTION: &str =
@@ -133,7 +135,7 @@ impl Host for Fake {
     fn lookup(&mut self, name: &str) -> Found {
         if self.programs.contains_key(name) {
             Found::Program
-        } else if name == "grants" {
+        } else if name == "grants" || name == "pager" {
             Found::Builtin
         } else {
             Found::Nothing
@@ -146,6 +148,7 @@ impl Host for Fake {
             "grants" => {
                 "name grants\nsummary show\nusage grants LINE...\noperand LINE... text l\ncwd none\n"
             }
+            "pager" => "name pager\nsummary page\nusage pager\ncwd none\n",
             _ => return None,
         };
         Some(Rc::new(zoraya_describe::parse(text.as_bytes()).unwrap()))
@@ -160,11 +163,15 @@ impl Host for Fake {
     fn builtin(
         &mut self,
         _: &mut State,
-        _: &str,
+        name: &str,
         _: &Description,
         _: &Parsed<'_>,
-        _: &mut Io,
+        io: &mut Io,
     ) -> i32 {
+        if name == "pager" {
+            self.terminals.push(io.terminal);
+            io.out.push_str("paged\n");
+        }
         0
     }
 
@@ -1105,6 +1112,12 @@ fn grants_sees_the_line_as_a_run_would() {
         run(&mut sh, "set g +w; grants $g / rm x"),
         "command +w\narg / true\narg rm true\narg x true\n"
     );
+    // Mutation testing: an option after the command's name is the
+    // command's, not grants'.
+    assert_eq!(
+        run(&mut sh, "grants cp -f x"),
+        "command cp\narg -f true\narg x true\n"
+    );
 }
 
 fn invalid(line: &str) -> (usize, String) {
@@ -1184,6 +1197,8 @@ fn maths_bounds_are_exact() {
     assert_eq!(math(&sum(257)), Ok(257));
     assert_eq!(math(&sum(2048)), Ok(2048));
     assert!(math(&sum(2049)).is_err());
+    // Exactly 4096 tokens: a sign, 2048 numbers and 2047 operators.
+    assert_eq!(math(&alloc::format!("-1{}", "+1".repeat(2047))), Ok(2046));
     assert_eq!(math(&alloc::format!("{}1", "-".repeat(255))), Ok(-1));
     assert!(math(&alloc::format!("{}1", "-".repeat(257))).is_err());
 }
@@ -1340,6 +1355,9 @@ fn parameters_keep_the_callers_marks_and_variables_are_data() {
     assert_eq!(sh.host.marks.last(), Some(&vec![false]), "for gives data");
     run(&mut sh, "fn pre f { prog x$f }; pre ../y");
     assert_eq!(sh.host.marks.last(), Some(&vec![false]), "mixed with text");
+    // Mutation testing: a quoted variable is one text piece, and data.
+    run(&mut sh, "set v x; prog \"$v\"");
+    assert_eq!(sh.host.marks.last(), Some(&vec![false]), "a quoted value");
 }
 
 /// Mutation testing: the edit distance behind "did you mean", exactly.
@@ -1512,4 +1530,94 @@ fn a_lines_end_and_a_short_help() {
         panic!();
     };
     assert_eq!(f.doc.len(), 32);
+}
+
+/// Mutation testing: an interrupted or broken loop leaves no loop open, so
+/// a later `continue` is outside one and stops its line.
+#[test]
+fn an_interrupted_loop_leaves_no_loop_open() {
+    let note = "zosh: continue: not inside a loop\n(the rest of the line was not run)\n";
+    for (n, setup) in [
+        (1, "for x in 1 2 { echo $x }"),
+        (3, "while test 1 = 1 { echo x }"),
+        (0, "while break { echo x }"),
+    ] {
+        let mut sh = shell();
+        sh.host.interrupts = n;
+        run(&mut sh, setup);
+        let out = run(&mut sh, "continue; echo after");
+        assert!(out.ends_with(note), "{setup}: {out:?}");
+        assert!(!out.contains("after\n"), "{setup}: {out:?}");
+    }
+}
+
+/// Mutation testing and review S21: a loop interrupted inside a function
+/// stops the function's line, and `$status` is an interrupted command's.
+#[test]
+fn an_interrupt_inside_a_function_stops_its_line() {
+    let mut sh = shell();
+    run(&mut sh, "fn f { while test 1 = 1 { echo x } }");
+    sh.host.interrupts = 3;
+    let out = run(&mut sh, "f; echo after");
+    assert!(!out.contains("after"), "{out:?}");
+    assert_eq!(run(&mut sh, "echo $status"), "interrupted\n");
+    // Review S21: at the prompt too, as for a program at Ctrl-C.
+    sh.host.interrupts = 3;
+    run(&mut sh, "while test 1 = 1 { echo x }");
+    assert_eq!(run(&mut sh, "echo $status"), "interrupted\n");
+    sh.host.interrupts = 1;
+    run(&mut sh, "for x in 1 2 { echo $x }");
+    assert_eq!(run(&mut sh, "echo $status"), "interrupted\n");
+}
+
+/// Mutation testing: one word may expand to exactly MAX_VALUES values.
+#[test]
+fn one_word_of_max_values() {
+    let mut sh = shell();
+    const PART: usize = 1000;
+    run(&mut sh, &alloc::format!("set a{}", " w".repeat(PART)));
+    let all = alloc::format!("set v{}", " $a".repeat(crate::eval::MAX_VALUES / PART));
+    assert_eq!(run(&mut sh, &all), "");
+    assert_eq!(
+        run(&mut sh, "count $v"),
+        alloc::format!("{}\n", crate::eval::MAX_VALUES)
+    );
+}
+
+/// Mutation testing: `""` is one empty word.
+#[test]
+fn an_empty_double_quoted_word_is_a_word() {
+    let mut sh = shell();
+    assert_eq!(run(&mut sh, "count \"\""), "1\n");
+    assert_eq!(run(&mut sh, "count '' \"\""), "2\n");
+}
+
+/// Mutation testing: a builtin is told whether its output goes to the
+/// terminal (it may page it).
+#[test]
+fn a_builtin_knows_when_its_output_is_the_terminal() {
+    let mut sh = shell();
+    run(&mut sh, "pager");
+    run(&mut sh, "echo $(pager)");
+    assert_eq!(sh.host.terminals, [true, false]);
+}
+
+/// The parts of the second word of `src`, a simple command.
+fn second_word_parts(src: &str) -> Vec<crate::syntax::Part> {
+    let block = crate::syntax::parse(src).unwrap();
+    match &block.statements[0].chain.first.elements[0].command {
+        crate::syntax::Command::Simple(s) => s.words[1].parts.clone(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Mutation testing: quoted text is one part, with no empty part before
+/// it, and runs of quoted and escaped text join.
+#[test]
+fn quoted_text_is_one_part() {
+    use crate::syntax::Part::Quoted;
+    assert_eq!(second_word_parts("echo 'abc'"), [Quoted("abc".into())]);
+    assert_eq!(second_word_parts("echo \"abc\""), [Quoted("abc".into())]);
+    assert_eq!(second_word_parts("echo 'x'\\y"), [Quoted("xy".into())]);
+    assert_eq!(second_word_parts("echo \"\""), [Quoted(String::new())]);
 }

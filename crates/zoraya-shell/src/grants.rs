@@ -153,12 +153,14 @@ fn entries_for(kind: Kind, abs: &str, reason: &str, out: &mut Vec<Planned>) {
 /// it, the whole word or a piece of it (`-C$d`, `--directory=$d`, which
 /// the parser gives as part of a word; review S1).
 fn value_of<'v>(args: &'v [Value], text: &str) -> Option<&'v Value> {
-    let start = text.as_ptr() as usize;
-    let end = start + text.len();
-    args.iter().find(|a| {
-        let a_start = a.text.as_ptr() as usize;
-        a_start <= start && end <= a_start + a.text.len()
-    })
+    args.iter().find(|a| within(&a.text, text))
+}
+
+/// Whether `inner` is a slice of `outer`'s bytes (by address: the same text
+/// elsewhere is not).
+pub(crate) fn within(outer: &str, inner: &str) -> bool {
+    let (o, i) = (outer.as_ptr() as usize, inner.as_ptr() as usize);
+    o <= i && i + inner.len() <= o + outer.len()
 }
 
 /// Plans the entries of a line (rules 1 to 4).
