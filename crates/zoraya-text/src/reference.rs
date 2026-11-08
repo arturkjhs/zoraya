@@ -33,12 +33,12 @@ pub const CASES: [(Which, u32); 6] = [
 /// The digests, FNV-1a 64 over every glyph's size, placement and coverage.
 /// Change them only with a deliberate change of the rasteriser.
 pub const REFERENCE: [u64; 6] = [
-    0x785f_a41a_377a_bab0,
-    0xee28_ef4b_b1ab_981a,
-    0xc412_3613_9e4f_9453,
-    0x2d22_e867_86eb_3a0d,
-    0xa6b6_ebd2_aba6_4999,
-    0xe4ca_528b_cc86_aa02,
+    0x23dd_5894_3f3a_1285,
+    0x9179_dc6d_cbcf_c98e,
+    0x54f4_ea08_312f_68a2,
+    0x9bab_6418_4c02_4808,
+    0x9dea_185c_8b78_9a4e,
+    0x30c1_4bf0_eb46_0c1a,
 ];
 
 fn fnv(bytes: &[u8]) -> u64 {

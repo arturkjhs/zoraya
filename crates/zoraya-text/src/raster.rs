@@ -35,6 +35,19 @@ fn div_floor(a: i64, b: i64) -> i64 {
     a.div_euclid(b)
 }
 
+/// Division rounded to the nearest, halves away from zero, for any signs:
+/// the crossings of a segment with cell and row boundaries, so that the
+/// rounding has no bias (review of 7a's mutants: floors made a shallow
+/// edge's pixels a level or three too full).
+fn div_round(a: i128, b: i128) -> i128 {
+    let (a, b) = if b < 0 { (-a, -b) } else { (a, b) };
+    if a >= 0 {
+        (a + b / 2) / b
+    } else {
+        -((-a + b / 2) / b)
+    }
+}
+
 impl Raster {
     pub fn new(width: usize, height: usize) -> Raster {
         let stride = width + 2;
@@ -111,7 +124,7 @@ impl Raster {
             }
             // The height reached at the boundary, from the segment's start,
             // so that rounding does not accumulate.
-            let reached = div_floor(d as i64 * (boundary - x0) as i64, dx) as i32;
+            let reached = div_round(d as i128 * (boundary - x0) as i128, dx as i128) as i32;
             self.cell(row, x, boundary, reached - done);
             done = reached;
             x = boundary;
@@ -145,7 +158,7 @@ impl Raster {
         );
         let x_at = |y: i32| -> i32 {
             // i128: a hostile segment spans the whole i32 range both ways.
-            let t = (dx as i128 * (y as i64 - ay64) as i128).div_euclid(dy as i128);
+            let t = div_round(dx as i128 * (y as i64 - ay64) as i128, dy as i128);
             (ax64 as i128 + t).clamp(0, w as i128) as i32
         };
         let mut y = top;

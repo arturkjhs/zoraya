@@ -509,4 +509,47 @@ fn a_resize_keeps_what_fits_and_the_cursor_on_screen() {
     let mut pixels = vec![0u32; w * h];
     assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     assert_eq!(read_rows(&pixels, w, h, 6, 3)[0], "ok_");
+fn clear_fills_the_whole_surface_with_the_background() {
+    let look = look();
+    let mut pixels = vec![0x00ab_cdefu32; 50 * 40];
+    look.clear(&mut pixels);
+    let bg = look.colors[usize::from(DEFAULT_BG)].pixel();
+    assert!(pixels.iter().all(|p| *p == bg));
+}
+
+#[test]
+fn cells_at_the_pictures_edge_read_only_when_whole() {
+    // Mutation testing (7a): the reader's bound on the picture's edge.
+    let mut look = look();
+    let mut t = Term::new(10, 3);
+    t.write(b"xxxxxxxxxx\nxxxxxxxxxx\nxxxxxxxxxx");
+    let (w, h) = look.surface_size(10, 3);
+    let mut pixels = vec![0u32; w * h];
+    look.clear(&mut pixels);
+    t.render(&mut look, &mut pixels, w, false);
+    let pad = look.pad;
+    let mut reader = Reader::new(Look::new(Scale::ONE, Appearance::Light));
+    let exact = reader.rows(10, 3, (0, 0), (w - pad, h - pad), |x, y| pixels[y * w + x]);
+    assert_eq!(exact, ["xxxxxxxxxx"; 3]);
+    let short = reader.rows(10, 3, (0, 0), (w - pad - 1, h - pad), |x, y| {
+        pixels[y * w + x]
+    });
+    assert!(
+        short.iter().all(|r| r.ends_with(crate::read::NO_MATCH)),
+        "{short:?}"
+    );
+    let low = reader.rows(10, 3, (0, 0), (w - pad, h - pad - 1), |x, y| {
+        pixels[y * w + x]
+    });
+    assert!(
+        low[2].chars().all(|c| c == crate::read::NO_MATCH),
+        "{low:?}"
+    );
+    // Blank and the cursor's mark stay themselves in every look.
+    for scale in [Scale::ONE, Scale::TWO] {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let mut r = Reader::new(Look::new(scale, appearance));
+            assert_eq!(r.canonical(" _"), " _");
+        }
+    }
 }
