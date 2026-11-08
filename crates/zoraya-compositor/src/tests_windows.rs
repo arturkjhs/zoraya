@@ -801,3 +801,43 @@ fn the_shrunk_thumbnail_averages_its_pixels() {
     assert_eq!(draw::shrink(&src, 2, 2, 4, 4)[0], 0);
     assert!(draw::shrink(&[], 0, 0, 3, 3).iter().all(|p| *p == 0));
 }
+
+/// Scenes of the real compositor at 1024 × 768 in both sets, for TASK-24's
+/// report (the dark set cannot be shown in QEMU until 7f's settings):
+/// `ZORAYA_COMPOSITOR_SAMPLES=dir cargo test -p zoraya-compositor -- --ignored samples`.
+#[test]
+#[ignore = "writes images"]
+fn samples() {
+    let Ok(dir) = std::env::var("ZORAYA_COMPOSITOR_SAMPLES") else {
+        return;
+    };
+    for (name, appearance) in [("light", zoraya_tokens::Appearance::Light), ("dark", zoraya_tokens::Appearance::Dark)] {
+        let mut s = setup_with(|f| f.display_size = (1024, 768));
+        s.c.appearance = appearance;
+        s.c.make_wallpaper();
+        let p = appearance.palette();
+        let (a, _, _) = s.toplevel(560, 360, p.term_bg.pixel());
+        let out = s.request(a, &gui::SetTitle { window: 1, text: zoraya_protocol::Data("zosh — ~/project".as_bytes()) }, vec![]);
+        let _ = out;
+        let (b, _, _) = s.toplevel(420, 260, p.bg_view.pixel());
+        s.request(b, &gui::SetTitle { window: 1, text: zoraya_protocol::Data("notes.txt — edit".as_bytes()) }, vec![]);
+        // Move the second window aside by its title bar.
+        let body = s.body(1, 1);
+        let (w, h) = (1024, 768);
+        let ax = |v: i64, side: u32| ((v * 65535 + i64::from(side) - 2) / i64::from(side - 1)) as u32;
+        s.point(ax(body.x + 200, w), ax(body.y - 18, h), Some(1));
+        s.point(ax(560, w), ax(330, h), None);
+        s.point(ax(560, w), ax(330, h), Some(0));
+        s.point(ax(1000, w), ax(740, h), None);
+        let write = |s: &mut Setup, file: &str| {
+            let mut out = std::format!("P6\n1024 768\n255\n").into_bytes();
+            for q in &s.f().frame {
+                out.extend_from_slice(&[(q >> 16) as u8, (q >> 8) as u8, *q as u8]);
+            }
+            std::fs::write(std::format!("{dir}/{file}-{name}.ppm"), out).unwrap();
+        };
+        write(&mut s, "windows");
+        s.keys(&[(code::LEFT_ALT, 1), (code::TAB, 1), (code::TAB, 0)]);
+        write(&mut s, "switcher");
+    }
+}

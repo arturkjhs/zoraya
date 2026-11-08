@@ -96,8 +96,9 @@ run: $(KERNEL) $(DISK)
 	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
 
 # The GUI (ADR-0097): a window on the host; the serial line stays here.
+GUI_SCALE ?= 1
 run-gui: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --gui --mem 256M --disk $(DISK) $(KERNEL)
+	$(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 256M --disk $(DISK) $(KERNEL)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
