@@ -33,6 +33,8 @@
 //!                   then a new window as `window`
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
+//! shot NAME         keep the screen as `build/shots/NAME.ppm` (the screens
+//!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
 //! ```
 //!
@@ -56,8 +58,19 @@ pub fn reader() -> Reader {
 }
 
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
-/// Where the screendumps go, relative to QEMU's working directory.
-const SHOT: &str = "build/gui-screen.ppm";
+/// Where the screendumps go, relative to QEMU's working directory: one file
+/// per run's label, so that two runs at once do not read each other's.
+fn shot_path(label: &str) -> String {
+    format!("build/gui-screen-{label}.ppm")
+}
+/// The time between two keys a `type` step presses: a fast keyboard's rate
+/// (USB full speed polls every 8 ms). QEMU's virtio-input event queue holds
+/// 64 events, 16 keys (a press and a release, each with its SYN), and QEMU
+/// drops events when the guest has not handed buffers back; QMP alone can
+/// inject a key in well under a millisecond, which a guest under TCG does
+/// not keep up with while it composes (traced as `virtio_input_queue_full`,
+/// TASK-24 7a). At this rate the queue holds 128 ms of typing.
+const KEY_INTERVAL: Duration = Duration::from_millis(8);
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -75,6 +88,7 @@ pub enum Step {
     Latency(usize),
     Window,
     Top(String),
+    Shot(String),
     Exit,
 }
 
@@ -116,6 +130,16 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
             "window" => Step::Window,
             "top" => Step::Top(rest.to_string()),
+            "shot" => {
+                let ok = !rest.is_empty()
+                    && rest
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                if !ok {
+                    return Err(bad("shot NAME, of letters, digits, - and _"));
+                }
+                Step::Shot(rest.to_string())
+            }
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
@@ -249,6 +273,7 @@ pub fn qcode(c: char) -> Option<(&'static str, bool)> {
 struct Qmp {
     stream: UnixStream,
     reader: BufReader<UnixStream>,
+    shot: String,
 }
 
 impl Qmp {
@@ -265,7 +290,11 @@ impl Qmp {
             .and_then(|()| stream.set_write_timeout(Some(QMP_TIMEOUT)))
             .map_err(|e| e.to_string())?;
         let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
-        let mut q = Qmp { stream, reader };
+        let mut q = Qmp {
+            stream,
+            reader,
+            shot: shot_path("gui"),
+        };
         q.reply()?;
         q.execute(r#"{"execute":"qmp_capabilities"}"#)?;
         Ok(q)
@@ -329,10 +358,17 @@ impl Qmp {
         }
     }
 
+    fn dump(&mut self) -> Result<(), String> {
+        let command = format!(
+            r#"{{"execute":"screendump","arguments":{{"filename":"{}"}}}}"#,
+            self.shot
+        );
+        self.execute(&command).map(|_| ())
+    }
+
     fn screen(&mut self) -> Result<Screen, String> {
-        let command = format!(r#"{{"execute":"screendump","arguments":{{"filename":"{SHOT}"}}}}"#);
-        self.execute(&command)?;
-        let bytes = std::fs::read(SHOT).map_err(|e| format!("{SHOT}: {e}"))?;
+        self.dump()?;
+        let bytes = std::fs::read(&self.shot).map_err(|e| format!("{}: {e}", self.shot))?;
         parse_ppm(&bytes)
     }
 }
@@ -429,6 +465,7 @@ impl Run {
                 for c in String::from_utf8_lossy(keys).chars() {
                     let (code, shift) = qcode(c).ok_or(format!("no key for {c:?}"))?;
                     self.qmp.press(code, shift)?;
+                    std::thread::sleep(KEY_INTERVAL);
                 }
                 Ok(())
             }
@@ -509,6 +546,13 @@ impl Run {
                 }
                 std::thread::sleep(Duration::from_millis(5));
             },
+            Step::Shot(name) => {
+                self.qmp.dump()?;
+                std::fs::create_dir_all("build/shots").map_err(|e| e.to_string())?;
+                let to = format!("build/shots/{name}.ppm");
+                std::fs::copy(&self.qmp.shot, &to).map_err(|e| format!("{to}: {e}"))?;
+                Ok(())
+            }
             Step::Exit => loop {
                 self.pump()?;
                 match self.child.try_wait().map_err(|e| e.to_string())? {
@@ -562,7 +606,8 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
     });
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let result = Qmp::connect(qmp, deadline).and_then(|q| {
+    let result = Qmp::connect(qmp, deadline).and_then(|mut q| {
+        q.shot = shot_path(label);
         let mut run = Run {
             child,
             qmp: q,
@@ -623,6 +668,12 @@ mod tests {
         );
         assert!(parse("chord ctrl\n").is_err());
         assert!(parse("chord meta c\n").is_err());
+        assert_eq!(
+            parse("shot term-1\n").unwrap(),
+            [Step::Shot("term-1".into())]
+        );
+        assert!(parse("shot ../x\n").is_err());
+        assert!(parse("shot\n").is_err());
     }
 
     #[test]
