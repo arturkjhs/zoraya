@@ -376,7 +376,11 @@ natural extension once networking exists (CP-28); nothing here precludes it.
 - Whether the shell should print a hint after a POSIX command fails when that command is known to open paths from its
   input (`tcc`, `make`), since their own message says only "not found". *Settled by the Decision:* rule 11.
 - Which descriptions to ship for toybox applets, and whether toybox runs as POSIX programs with the toolchain set.
-- *Note, 2026-11-04 (TASK-18 step 10, how rule 10 is built; the two departures are proposed in ADR-0200):* `init` starts the broker with
+- *Note, 2026-11-08 (TASK-18 Part 2, accepted by the architect):* rule 7's `grants` takes the whole rest of its line
+  as the command line, options included (`grants tcc main.c -o main`): unless its first word is an option of its
+  own (`grants --help`), its arguments are parsed as if `--` came first. The choices of the note below on when the
+  broker runs and on `PATH` and `HOME` are accepted too.
+- *Note, 2026-11-04 (TASK-18 step 10, how rule 10 is built; the two departures are ADR-0200, accepted 2026-11-08):* `init` starts the broker with
   `--no-shell` beside each `zosh` only on a volume with `/bin`, and ends it with that shell. The trusted descriptions of
   POSIX programs (`tcc`, `make`, `dash`, in `user/describe/posix/` with `program PATH`) are compiled into `zosh`, as
   every other description is (ADR-0156's open questions), rather than read from a ramdisk `/zoraya/commands/`; only

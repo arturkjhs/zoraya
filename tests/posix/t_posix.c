@@ -44,6 +44,9 @@
  *                      broker's table: ESRCH once a pid is reaped; pids are
  *                      never given twice)
  *   t_posix exit7      exits 7
+ *   t_posix tstp       INV-0200-2: catches SIGTSTP; on it says that it
+ *                      restores the terminal, then stops with the default
+ *                      action; continued, it catches it again and says so
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
  *                      exec and wait (run with ZORAYA_POSIX_STATS for the
@@ -902,6 +905,34 @@ static void bench(void)
 	passed();
 }
 
+/* INV-0200-2: what an editor does on Ctrl-Z, put the terminal back, then
+ * stop. Only async-signal-safe calls in the handler. */
+static void on_tstp(int sig)
+{
+	static const char restoring[] = "tstp: restoring the terminal\n";
+	static const char continued[] = "tstp: continued\n";
+	(void)sig;
+	sigset_t set;
+	write(2, restoring, sizeof restoring - 1);
+	/* The default action, unblocked: the stop happens here. */
+	signal(SIGTSTP, SIG_DFL);
+	sigemptyset(&set);
+	sigaddset(&set, SIGTSTP);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	raise(SIGTSTP);
+	signal(SIGTSTP, on_tstp);
+	write(2, continued, sizeof continued - 1);
+}
+
+static void tstp(void)
+{
+	static const char ready[] = "tstp: ready\n";
+	signal(SIGTSTP, on_tstp);
+	write(2, ready, sizeof ready - 1);
+	for (;;)
+		pause_ms(1000);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -947,6 +978,8 @@ int main(int argc, char **argv)
 		live(atoi(argv[2]));
 	else if (!strcmp(argv[1], "exit7"))
 		return 7;
+	else if (!strcmp(argv[1], "tstp"))
+		tstp();
 	else if (!strcmp(argv[1], "bench"))
 		bench();
 	else

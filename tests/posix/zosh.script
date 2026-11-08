@@ -69,4 +69,35 @@ x \nf\r
 > \x03
 < toybox sleep 30: interrupted (Ctrl-C)
 < \r\n~>
+# INV-0200-2 (ADR-0200 item 2): a line mixing a native program and a POSIX
+# program that catches SIGTSTP. Ctrl-Z suspends the native element's own
+# job and sends SIGTSTP through the broker, whose handler runs: it says it
+# restores the terminal, then stops. It cannot print once stopped, so its
+# line comes before it is.
+! tstp: continued\r\ntstp: continued
+> requests a | t_posix tstp\r
+~ 1500 zzz
+o a: ready
+o tstp: ready
+> \x1a
+< ^Z
+< [1] stopped: requests a | t_posix tstp
+< \r\n~> 
+~ 500 zzz
+o tstp: restoring the terminal
+x tstp: continued
+> jobs\r
+< [1]  stopped   requests a | t_posix tstp
+< \r\n~> 
+# fg continues both; the POSIX program's handler takes the signal again.
+> fg\r
+< requests a | t_posix tstp
+< tstp: continued
+> \x03
+< ^C
+< (Ctrl-C again to kill it)
+> \x03
+< ^C
+< requests a | t_posix tstp: interrupted (Ctrl-C)
+< \r\n~> 
 > poweroff\r

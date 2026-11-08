@@ -88,6 +88,11 @@ impl Files for Table {
         print!("{text}");
         true
     }
+
+    fn print_bytes(&mut self, bytes: &[u8]) -> bool {
+        crate::write_output(bytes);
+        true
+    }
 }
 
 /// The whole of a file command's `main`.
@@ -100,6 +105,7 @@ pub fn main(name: &str, description: &str) -> i32 {
     };
     let (code, o) = zoraya_commands::run(name, &c.d, &p, &mut Table(ns));
     print!("{}", o.out);
+    crate::write_output(&o.raw);
     eprint!("{}", o.err);
     i32::from(code)
 }

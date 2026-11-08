@@ -1,6 +1,6 @@
 # ADR-0200: Running POSIX programs from `zosh`: where trusted descriptions live, and stopping mixed lines
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-04
 - **Depends on:** ADR-0153, ADR-0156, ADR-0158
 - **Evidence:** CP-01, alternatives-postmortem.md#fuchsia--zircon-incl-starnix
@@ -77,9 +77,10 @@ committing.
 ## Invariants
 - **INV-0200-1.** A POSIX program's description applies only if it is compiled into `zosh` and names the path the
   command resolved to. *Check:* the host test of `grants::trusted_description` (INV-0153-6's).
-- **INV-0200-2.** Ctrl-Z of a line whose elements are all POSIX programs stops it only through the broker, and says
-  `[N] did not stop: LINE` when an element's process job is not suspended within half a second. *Check:* an in-QEMU
-  test with a POSIX program that ignores `SIGTSTP`.
+- **INV-0200-2.** Ctrl-Z of a line stops each native element by `job_suspend` of its own job and each POSIX element
+  only through the broker, so a POSIX program's `SIGTSTP` handler runs before it stops; the shell says
+  `[N] did not stop: LINE` when an element is not stopped within half a second. *Check:* an in-QEMU test of a line
+  mixing a native program and a POSIX program that catches `SIGTSTP`, restores the terminal and then stops.
 
 ## Open questions
 - Whether a ramdisk read call is wanted for other reasons (help pages, settings defaults); then item 1 moves to it.
@@ -89,3 +90,8 @@ committing.
 - A POSIX program used from `zosh` handles `SIGTSTP` (an interactive one, after ADR-0105 item 9's revisit).
 
 ## Architect's decision
+
+Accepted as recommended, 2026-11-08. Decided by the architect; recorded by an agent at the architect's request.
+Item 1: the descriptions of POSIX programs are compiled into `zosh` for now, with the same target as ADR-0156's open
+item: reading `NAME.cmd` as a file through a file service. Item 2: Option C, built now, with a test in which a POSIX
+program that catches `SIGTSTP` restores the terminal before it stops.

@@ -908,7 +908,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   would allow it. Test programs (no description) get what TASK-11's shell gave them.
 - **Jobs** (ADR-0158, step 9; `zoraya_shell::jobs`). A line's pipeline is one job, numbered from 1 with the smallest
   free number. A trailing `&` runs it in the background (`[1] sleep 30`) with its input at its end. Ctrl-Z stops the
-  job in front (`job_suspend`) and prints `[N] stopped: LINE`; the rest of that line is not run, as after Ctrl-C.
+  job in front, each native element by `job_suspend` of its own job (ADR-0200), and prints `[N] stopped: LINE`; the rest of that line is not run, as after Ctrl-C.
   `jobs` lists `[N]  running|stopped  LINE   (what it was given)`, the state read from the job's `SUSPENDED`
   signal; `fg [%N]` continues a job in front, `bg [%N]` a stopped one in the background (its input then ends);
   `wait [%N]` waits for one or every running job; `kill [--interrupt|--terminate|--hangup|--quit|--kill] [%N]` sends
@@ -924,7 +924,8 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   temporary service, removed when the line ends; the current directory to read; and what a description of the
   system image's designates, `tcc`, `make` and `dash` in `user/describe/posix/`), fds 0 to 2 on the line's streams,
   `SpawnCommit`, and `Reap` when the job ends (`zoraya_user::posix_child`). `grants` shows the toolchain set. Ctrl-Z of
-  a line of POSIX programs sends `SIGTSTP` through the broker and says `[N] did not stop: LINE` if they do not.
+  a line stops each native element by `job_suspend` of its own job and sends `SIGTSTP` to each POSIX element through
+  the broker, whose handler runs first (ADR-0200); `[N] did not stop: LINE` if one does not stop within half a second.
   A native program on the volume gets the current directory and its line's grants only.
 - `posixrun [-m PREFIX=PATH[:ro]]... [-C CWD] [-o FILE] [-e NAME=VALUE]... PROGRAM [ARG]...` runs a C program from
   the volume through `libposix`, with `/` the volume's root unless `-m` gives a table; its output comes to the console
@@ -947,7 +948,7 @@ the tour (`docs/research/shell/tour.md`); this is what exists after TASK-18 step
   the keys (echoed a line at a time, Backspace and Ctrl-D as a terminal in canonical mode gives them), a `< FILE`, or
   the output of the builtin or function that starts the pipeline. `a | b | c` is one job with one stream per `|`;
   `&|` sends `err` into the pipe too; `>`, `>>`, `<`, `2>`, `2>>` and `&>` work on programs. A pipeline's status is
-  ADR-0152 rule 6's (`zoraya_shell::eval::pipeline_status`). `cat`, `head` and `search` read their input when given
+  ADR-0152 rule 6's (`zoraya_shell::eval::pipeline_status`). `cat` (its bytes unchanged, from a file or its input: ADR-0155's note), `head` and `search` read their input when given
   no file; a writer whose reader closed exits 0 (`PeerClosed`). A background job's `in` is at its end, and its output
   comes in whole lines (or 4 KiB pieces of a longer one) above the line being edited, control characters shown as
   `?`.

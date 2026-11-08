@@ -210,6 +210,10 @@ decisions (`docs/design.md`, "Using the shell", is rewritten from the tour).
   boot banner again.
 
 ## Open questions
+- *Note, 2026-11-08 (the architect's decision on TASK-18's review R9):* `cat` passes bytes unchanged, from a file or
+  from its input alike: no byte that is not UTF-8 is replaced, no line end is added, nothing is summarised as
+  binary. Showing such bytes safely is the display's job (`zosh`'s relay and the terminal), as it is for a
+  background job's output.
 - Whether `rm` should ask before removing a directory tree at the terminal; Option D's answer is no prompts, only
   `--recursive`.
 - Machine-readable output (`--records`, ADR-0152 Option C) for listing commands, when a need is measured.

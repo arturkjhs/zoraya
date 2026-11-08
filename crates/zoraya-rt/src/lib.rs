@@ -582,6 +582,22 @@ impl fmt::Write for Output {
     }
 }
 
+/// Writes bytes to the command's output as they are (ADR-0155's note on
+/// R9): the `OUT` stream, else the console. A reader that has gone ends the
+/// program quietly with 0, as [`Output`] does.
+pub fn write_output(bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    if !stream_at(0, native::slot::OUT) {
+        let _ = console_write(CONSOLE, bytes);
+        return;
+    }
+    if let Err(Status::PeerClosed) = stream_write_all(native::slot::OUT, bytes) {
+        process_exit(0);
+    }
+}
+
 /// Waits until `end` asserts one of `wanted`.
 fn wait_for(end: Handle, wanted: u32) -> Result<(), Status> {
     let port = port_create()?;

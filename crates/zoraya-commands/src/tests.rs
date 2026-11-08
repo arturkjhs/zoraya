@@ -15,9 +15,10 @@ struct Mem {
     chunk: usize,
     /// Bytes of input read.
     taken: usize,
-    /// Output taken by `print`, when `printing`.
+    /// Output taken by `print` and `print_bytes`, when `printing`.
     printing: bool,
     printed: String,
+    printed_bytes: Vec<u8>,
 }
 
 impl Mem {
@@ -184,6 +185,13 @@ impl Files for Mem {
         }
         self.printing
     }
+
+    fn print_bytes(&mut self, bytes: &[u8]) -> bool {
+        if self.printing {
+            self.printed_bytes.extend_from_slice(bytes);
+        }
+        self.printing
+    }
 }
 
 fn with_input(text: &[u8], chunk: usize) -> Mem {
@@ -221,14 +229,17 @@ fn commands_read_their_input_when_given_no_file() {
         let (_, out, _) = go(&mut m, &["head", "--lines", "9"]);
         assert_eq!(out, "Київ milk\nPlzeň\nmilk again\nlast, no newline\n");
     }
-    let mut m = with_input(b"bad \xff byte\n", 1);
-    assert_eq!(go(&mut m, &["cat"]).1, "bad \u{fffd} byte\n");
     // A sequence cut between reads stays whole after a byte that is not
-    // UTF-8 in the same read, and a lone lead byte at the end is replaced.
+    // UTF-8 in the same read, and a lone lead byte at the end is replaced:
+    // in the lines `search` reads.
     let bytes = [b"\xff".as_slice(), "€€".as_bytes(), b"\xe2"].concat();
     for chunk in [2, 3, 4, 5] {
         let mut m = with_input(&bytes, chunk);
-        assert_eq!(go(&mut m, &["cat"]).1, "\u{fffd}€€\u{fffd}", "{chunk}");
+        assert_eq!(
+            go(&mut m, &["search", "€"]).1,
+            "\u{fffd}€€\u{fffd}\n",
+            "{chunk}"
+        );
     }
     // A file operand is read instead of the input.
     let mut m = with_input(b"input\n", 4096);
@@ -253,13 +264,36 @@ fn head_reads_no_more_than_it_needs() {
 /// Long output goes out as it is made when the caller takes it.
 #[test]
 fn long_output_is_printed_as_it_comes() {
-    let big = "x".repeat(3 * PRINT_AT) + "\n";
+    let big = "x\n".repeat(3 * PRINT_AT);
     let mut m = with_input(big.as_bytes(), 1000);
     m.printing = true;
-    let (code, out, _) = go(&mut m, &["cat"]);
+    let (code, out, _) = go(&mut m, &["search", "x"]);
     assert_eq!(code, 0);
     assert!(m.printed.len() >= PRINT_AT, "printed {}", m.printed.len());
     assert_eq!(m.printed + &out, big);
+}
+
+/// R9 (ADR-0155's note): `cat` passes bytes unchanged, from its input or a
+/// file: nothing replaced, no line end added, nothing summarised; a caller
+/// that takes bytes gets them as they come.
+#[test]
+fn cat_passes_bytes_unchanged() {
+    let odd = b"bad \xff byte \xe2\x82 and no line end".to_vec();
+    for chunk in [1, 3, 4096] {
+        let mut m = with_input(&odd, chunk);
+        assert_eq!(go_raw(&mut m, &["cat"]), (0, odd.clone()), "{chunk}");
+    }
+    let mut m = Mem::new(&[], &[]);
+    m.files.insert("odd.bin".into(), odd.clone());
+    m.files.insert("plain".into(), b"no end".to_vec());
+    assert_eq!(
+        go_raw(&mut m, &["cat", "odd.bin", "plain"]),
+        (0, [odd.clone(), b"no end".to_vec()].concat())
+    );
+    let mut m = with_input(&odd, 5);
+    m.printing = true;
+    assert_eq!(go_raw(&mut m, &["cat"]), (0, Vec::new()));
+    assert_eq!(m.printed_bytes, odd, "taken as they came");
 }
 
 fn description(name: &str) -> Description {
@@ -288,7 +322,22 @@ fn go(m: &mut Mem, line: &[&str]) -> (u8, String, String) {
         other => panic!("{line:?}: {other:?}"),
     };
     let (code, o) = run(line[0], &d, &p, m);
-    (code, o.out, o.err)
+    let mut out = o.out;
+    out.push_str(&String::from_utf8_lossy(&o.raw));
+    (code, out, o.err)
+}
+
+/// [`go`], giving the bytes of out (text, then raw) and the code.
+fn go_raw(m: &mut Mem, line: &[&str]) -> (u8, Vec<u8>) {
+    let d = description(line[0]);
+    let p = match zoraya_command::parse(&d, &line[1..]) {
+        Ok(zoraya_command::Outcome::Run(p)) => p,
+        other => panic!("{line:?}: {other:?}"),
+    };
+    let (code, o) = run(line[0], &d, &p, m);
+    let mut out = o.out.into_bytes();
+    out.extend_from_slice(&o.raw);
+    (code, out)
 }
 
 fn tour() -> Mem {
@@ -513,7 +562,20 @@ fn a_caller_with_the_defaults_has_no_input_and_gets_all_output() {
     let d = description("cat");
     let p = zoraya_command::Parsed::default();
     let (code, o) = run("cat", &d, &p, &mut Fed(&mut m));
-    assert_eq!((code, o.out), (0, big));
+    assert_eq!(
+        (code, o.raw),
+        (0, big.into_bytes()),
+        "bytes are held, not lost"
+    );
+    let text = "x\n".repeat(3 * PRINT_AT);
+    let mut m = with_input(text.as_bytes(), 1000);
+    let d = description("search");
+    let p = match zoraya_command::parse(&d, &["x"]) {
+        Ok(zoraya_command::Outcome::Run(p)) => p,
+        other => panic!("{other:?}"),
+    };
+    let (code, o) = run("search", &d, &p, &mut Fed(&mut m));
+    assert_eq!((code, o.out), (0, text), "text is held, not lost");
 }
 
 /// `Input` on its own: what one read gives, then the end, once.
@@ -529,7 +591,7 @@ fn input_gives_each_read_and_then_its_end() {
     // A four-byte character cut anywhere stays whole.
     for chunk in [1, 2, 3] {
         let mut m = with_input("😀\n".as_bytes(), chunk);
-        assert_eq!(go(&mut m, &["cat"]).1, "😀\n", "{chunk}");
+        assert_eq!(go(&mut m, &["head", "--lines", "1"]).1, "😀\n", "{chunk}");
     }
 }
 
@@ -540,18 +602,15 @@ fn input_gives_each_read_and_then_its_end() {
 fn output_is_offered_only_past_print_at() {
     let mut m = with_input(b"small\n", 4096);
     m.printing = true;
-    assert_eq!(go(&mut m, &["cat"]).1, "small\n");
+    assert_eq!(go(&mut m, &["head", "--lines", "9"]).1, "small\n");
     assert_eq!(m.printed, "");
     let big = "x".repeat(3 * PRINT_AT) + "\n";
     let mut m = with_input(big.as_bytes(), 1000);
-    assert_eq!(go(&mut m, &["cat"]).1, big, "not printing: all kept");
-    let mut bytes = "x".repeat(PRINT_AT - 2).into_bytes();
-    bytes.extend_from_slice("é".as_bytes());
-    bytes.extend_from_slice(b"yyyyyyyyyy");
-    let mut m = with_input(&bytes, PRINT_AT);
-    m.printing = true;
-    go(&mut m, &["cat"]);
-    assert_eq!(m.printed.len(), PRINT_AT, "the first read's whole text");
+    assert_eq!(
+        go(&mut m, &["head", "--lines", "9"]).1,
+        big,
+        "not printing: all kept"
+    );
 }
 
 /// `head` reads its input only when no file is named, and `--lines 0`

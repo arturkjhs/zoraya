@@ -71,6 +71,12 @@ pub trait Files {
         let _ = text;
         false
     }
+    /// Takes bytes for `out` as they are made; false when it does not, and
+    /// they stay in [`Output::raw`].
+    fn print_bytes(&mut self, bytes: &[u8]) -> bool {
+        let _ = bytes;
+        false
+    }
 }
 
 /// Output held past this is offered to [`Files::print`].
@@ -137,6 +143,10 @@ pub fn incomplete_tail(bytes: &[u8]) -> usize {
 pub struct Output {
     pub out: String,
     pub err: String,
+    /// Bytes for `out` that a caller did not take as they were made
+    /// ([`Files::print_bytes`]): `cat`'s, as they are (ADR-0155's note on
+    /// R9). They follow `out`.
+    pub raw: Vec<u8>,
 }
 
 /// The commands this crate runs.
@@ -168,6 +178,17 @@ struct Run<'a, F: Files> {
 }
 
 impl<F: Files> Run<'_, F> {
+    /// Bytes for `out`, unchanged: to the caller as they come, else held.
+    fn emit_bytes(&mut self, bytes: &[u8]) {
+        if !self.o.out.is_empty() && self.files.print(&self.o.out) {
+            self.o.out.clear();
+        }
+        if self.o.raw.is_empty() && self.o.out.is_empty() && self.files.print_bytes(bytes) {
+            return;
+        }
+        self.o.raw.extend_from_slice(bytes);
+    }
+
     /// Offers held output to the caller once there is enough of it.
     fn flush(&mut self) {
         if self.o.out.len() >= PRINT_AT && self.files.print(&self.o.out) {
@@ -278,17 +299,16 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
                 Err(s) => r.fail(dir, s, &[]),
             }
         }
+        // Bytes unchanged, from the input or the files alike (ADR-0155's
+        // note on R9): showing them safely is the display's job.
         "cat" => {
             let files = p.operand_values(d, "FILE");
             if files.is_empty() {
-                let mut input = Input::new();
+                let mut buffer = [0u8; 4096];
                 loop {
-                    match input.next(r.files) {
-                        Ok(Some(text)) => {
-                            r.o.out.push_str(&text);
-                            r.flush();
-                        }
-                        Ok(None) => break,
+                    match r.files.read_input(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(n) => r.emit_bytes(&buffer[..n]),
                         Err(s) => {
                             r.fail("input", s, &[]);
                             break;
@@ -298,18 +318,7 @@ pub fn run<F: Files>(name: &str, d: &Description, p: &Parsed<'_>, files: &mut F)
             }
             for file in files {
                 match r.files.read(file) {
-                    Ok(bytes) => match core::str::from_utf8(&bytes) {
-                        Ok(text) => {
-                            r.o.out.push_str(text);
-                            if !text.is_empty() && !text.ends_with('\n') {
-                                r.o.out.push('\n');
-                            }
-                        }
-                        Err(_) => {
-                            r.o.out
-                                .push_str(&format!("{} bytes of binary\n", bytes.len()))
-                        }
-                    },
+                    Ok(bytes) => r.emit_bytes(&bytes),
                     Err(s) => r.fail(file, s, &[]),
                 }
             }

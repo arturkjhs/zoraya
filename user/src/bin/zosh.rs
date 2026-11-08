@@ -238,6 +238,8 @@ struct Job {
     captured: Vec<u8>,
     /// Its POSIX elements (ADR-0153 rule 10): pid, group and process job.
     posix: Vec<(u32, u32, Handle)>,
+    /// Its native elements' own jobs, inside the line's (ADR-0200 item 2).
+    native: Vec<Handle>,
     /// The line's own directory on the temporary service, when a POSIX
     /// element has one.
     tmp: Option<String>,
@@ -253,6 +255,9 @@ impl Drop for Job {
             }
         }
         for (_, _, job) in self.posix.drain(..) {
+            let _ = handle_close(job);
+        }
+        for job in self.native.drain(..) {
             let _ = handle_close(job);
         }
     }
@@ -1520,31 +1525,29 @@ impl Z {
         }
     }
 
-    /// Ctrl-Z (ADR-0158 rule 4): `job_suspend` of the line's job; a job of
-    /// POSIX programs only gets `SIGTSTP` through the broker, which applies
-    /// each process's stop disposition, and has stopped once every
-    /// element's process job is suspended, within half a second.
+    /// Ctrl-Z (ADR-0158 rule 4, ADR-0200 item 2): `job_suspend` of each
+    /// native element's own job, and `SIGTSTP` through the broker to each
+    /// POSIX element, which applies its disposition (a handler runs first).
+    /// Stopped once every element is, within half a second.
     fn stop_job(&mut self, number: u32) -> bool {
         let Some(e) = self.jobs.get(number) else {
             return false;
         };
         let p = &e.payload;
-        let all_posix = !p.posix.is_empty() && p.posix.len() == p.processes.len();
-        if !all_posix {
-            return job_suspend(p.job).is_ok();
+        for j in &p.native {
+            let _ = job_suspend(*j);
         }
-        let Some(broker) = self.broker.as_ref() else {
-            return false;
-        };
-        for (_, pgid, _) in &p.posix {
-            let _ = broker.signal_group(*pgid, zoraya_abi::posix::signal::SIGTSTP);
+        if !p.posix.is_empty() {
+            let Some(broker) = self.broker.as_ref() else {
+                return false;
+            };
+            for (_, pgid, _) in &p.posix {
+                let _ = broker.signal_group(*pgid, zoraya_abi::posix::signal::SIGTSTP);
+            }
         }
         let deadline = clock_monotonic() + 500_000_000;
         loop {
-            let all = p.posix.iter().all(|(_, _, j)| {
-                object_get_signals(*j).is_ok_and(|s| s & job_signals::SUSPENDED != 0)
-            });
-            if all {
+            if Z::all_stopped(p) {
                 return true;
             }
             if clock_monotonic() > deadline {
@@ -1554,13 +1557,26 @@ impl Z {
         }
     }
 
-    /// Continues job `number`: `job_resume`, and `SIGCONT` to its POSIX
-    /// groups through the broker.
+    /// Every element of the job is stopped: its own job, or a POSIX one's
+    /// process job, `SUSPENDED`.
+    fn all_stopped(p: &Job) -> bool {
+        let suspended =
+            |j: Handle| object_get_signals(j).is_ok_and(|s| s & job_signals::SUSPENDED != 0);
+        (!p.native.is_empty() || !p.posix.is_empty())
+            && p.native.iter().all(|j| suspended(*j))
+            && p.posix.iter().all(|(_, _, j)| suspended(*j))
+    }
+
+    /// Continues job `number`: `job_resume` of its jobs, and `SIGCONT` to its
+    /// POSIX groups through the broker.
     fn resume_job(&mut self, number: u32) {
         let Some(e) = self.jobs.get(number) else {
             return;
         };
         let _ = job_resume(e.payload.job);
+        for j in &e.payload.native {
+            let _ = job_resume(*j);
+        }
         if let Some(broker) = self.broker.as_ref() {
             for (_, pgid, _) in &e.payload.posix {
                 let _ = broker.signal_group(*pgid, zoraya_abi::posix::signal::SIGCONT);
@@ -1590,11 +1606,8 @@ impl Z {
             |j: Handle| object_get_signals(j).is_ok_and(|s| s & job_signals::SUSPENDED != 0);
         for e in self.jobs.iter_mut() {
             let p = &e.payload;
-            // A POSIX job stopped by the broker: each element's process job.
-            let posix_stopped = !p.posix.is_empty()
-                && p.posix.len() == p.processes.len()
-                && p.posix.iter().all(|(_, _, j)| suspended(*j));
-            e.state = if suspended(p.job) || posix_stopped {
+            // Stopped element by element (ADR-0200 item 2).
+            e.state = if suspended(p.job) || Z::all_stopped(p) {
                 JobState::Stopped
             } else {
                 JobState::Running
@@ -1888,6 +1901,7 @@ impl Z {
         }
         let (code, o) = zoraya_commands::run(name, d, p, &mut Volume(self));
         io.out.push_str(&o.out);
+        io.out.push_str(&String::from_utf8_lossy(&o.raw));
         io.err.push_str(&o.err);
         i32::from(code)
     }
@@ -2698,6 +2712,7 @@ impl Host for Z {
         let mut processes = Vec::new();
         let mut elements = Vec::new();
         let mut posix = Vec::new();
+        let mut native = Vec::new();
         let mut failed = streams.as_ref().err().cloned();
         if let Ok(streams) = &streams {
             for ((exec, r), ends) in pipe.programs.iter().zip(ready).zip(streams) {
@@ -2768,10 +2783,19 @@ impl Host for Z {
                     }
                 };
                 let startup = table.as_ref().map(|t| t.startup);
-                let started = if failed.is_none() {
-                    self.spawn_in_job(job, image, exec, startup, *ends)
+                // A job of its own inside the line's (ADR-0200 item 2), so
+                // that Ctrl-Z can stop it apart from the POSIX elements.
+                let own = if failed.is_none() {
+                    job_create(job, JobFlags::NONE)
                 } else {
                     Err(Status::BadState)
+                };
+                let started = match own {
+                    Ok(own) => {
+                        native.push(own);
+                        self.spawn_in_job(own, image, exec, startup, *ends)
+                    }
+                    Err(s) => Err(s),
                 };
                 let _ = handle_close(image);
                 let report = table.map(|t| t.report);
@@ -2816,6 +2840,7 @@ impl Host for Z {
             elements,
             captured: Vec::new(),
             posix,
+            native,
             tmp: self.line_tmp_name.take(),
         };
         if let Some(e) = failed {
