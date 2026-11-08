@@ -3,13 +3,16 @@
 //! screendumps, which are read as text.
 //!
 //! **How the screen is read.** The compositor puts the first window at a
-//! fixed place, and the terminal draws every character with `zoraya-font`,
-//! whose pixels are each either the text colour or the background. A
-//! screendump is lossless (PPM), so each cell of the terminal's grid is
-//! matched against every glyph exactly: the tolerance is zero, and a cell
-//! that matches no glyph reads as `?`. The block cursor, a cell of one
-//! colour, reads as `_`. Regions outside the window are checked pixel by
-//! pixel against a stated colour.
+//! fixed place, and the terminal draws every character with `zoraya-text`,
+//! deterministically (INV-0162-2). A screendump is lossless (PPM), so each
+//! cell of the terminal's grid is matched exactly against every character
+//! drawn by the same crate with the same fonts, size and colours
+//! (`zoraya_term::read`): the tolerance is zero, and a cell that matches
+//! no character reads as `?`. The block cursor, a cell of one colour,
+//! reads as `_`. Letters every font draws alike (Latin `A` and Cyrillic
+//! `А`) read as the Latin one, and a script's text is compared in the same
+//! classes. Regions outside the window are checked pixel by pixel against
+//! a stated colour.
 //!
 //! A script is lines, run in order:
 //!
@@ -43,8 +46,14 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::output;
-use zoraya_font::{CELL_HEIGHT, CELL_WIDTH, recognise};
-use zoraya_term::{PAD, PALETTE, grid_for};
+use zoraya_term::Look;
+use zoraya_term::read::Reader;
+use zoraya_tokens::{Appearance, Scale};
+
+/// The reader of the terminal as `term` draws it: scale 1, the light set.
+pub fn reader() -> Reader {
+    Reader::new(Look::new(Scale::ONE, Appearance::Light))
+}
 
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
 /// Where the screendumps go, relative to QEMU's working directory.
@@ -171,36 +180,19 @@ impl Screen {
 
     /// The terminal's rows as text: the first window, at the compositor's
     /// origin, with the terminal's padding and grid.
-    pub fn rows(&self) -> Vec<String> {
-        let (columns, rows) = grid_for(self.width as u32, self.height as u32);
+    pub fn rows(&self, reader: &mut Reader) -> Vec<String> {
+        let (columns, rows) = reader
+            .look()
+            .grid_for(self.width as u32, self.height as u32);
         let (ox, oy) = zoraya_compositor::ORIGIN;
-        let (left, top) = (ox as usize + PAD, oy as usize + PAD);
-        let bg = PALETTE[usize::from(zoraya_term::DEFAULT_BG)];
-        (0..rows)
-            .map(|r| {
-                let line: String = (0..columns)
-                    .map(|c| {
-                        let (x, y) = (left + c * CELL_WIDTH, top + r * CELL_HEIGHT);
-                        if x + CELL_WIDTH > self.width || y + CELL_HEIGHT > self.height {
-                            return '?';
-                        }
-                        let pixel = |dx: usize, dy: usize| self.at(x + dx, y + dy);
-                        match recognise(pixel, bg) {
-                            Some(c) => c,
-                            None if solid(&pixel) => '_',
-                            None => '?',
-                        }
-                    })
-                    .collect();
-                line.trim_end().to_string()
-            })
-            .collect()
+        reader.rows(
+            columns,
+            rows,
+            (ox as usize, oy as usize),
+            (self.width, self.height),
+            |x, y| self.at(x, y),
+        )
     }
-}
-
-fn solid(pixel: &dyn Fn(usize, usize) -> u32) -> bool {
-    let first = pixel(0, 0);
-    (0..CELL_HEIGHT).all(|y| (0..CELL_WIDTH).all(|x| pixel(x, y) == first))
 }
 
 /// QMP's key code for a character, and whether Shift is needed.
@@ -356,6 +348,7 @@ struct Run {
     deadline: Instant,
     /// The row of the last `screen` match.
     row: Option<usize>,
+    reader: Reader,
 }
 
 impl Run {
@@ -382,13 +375,15 @@ impl Run {
     /// `prefix` begins with it.
     fn wait_row(&mut self, text: &str, prefix: bool) -> Result<Duration, String> {
         let start = Instant::now();
+        let want = self.reader.canonical(text);
+        let text = want.as_str();
         loop {
             // The screen's own timeout comes first, so that it says what
             // the screen shows.
             if Instant::now() <= self.deadline {
                 self.pump()?;
             }
-            let rows = self.qmp.screen()?.rows();
+            let rows = self.qmp.screen()?.rows(&mut self.reader);
             let from = self.row.map_or(0, |r| r + 1);
             let hit = |r: &String| {
                 if prefix {
@@ -459,7 +454,7 @@ impl Run {
             Step::Latency(n) => {
                 let mut times = Vec::new();
                 let row = self.row;
-                let prompt = self.qmp.screen()?.rows()[row.unwrap_or(0)].clone();
+                let prompt = self.qmp.screen()?.rows(&mut self.reader)[row.unwrap_or(0)].clone();
                 let base = prompt.trim_end_matches('_').to_string();
                 for i in 1..=*n {
                     self.row = row.map(|r| r.wrapping_sub(1));
@@ -478,7 +473,7 @@ impl Run {
                 let mut idle = Vec::new();
                 for _ in 0..5 {
                     let start = Instant::now();
-                    let _ = self.qmp.screen()?.rows();
+                    let _ = self.qmp.screen()?.rows(&mut self.reader);
                     idle.push(start.elapsed());
                 }
                 idle.sort();
@@ -501,8 +496,8 @@ impl Run {
                 if Instant::now() <= self.deadline {
                     self.pump()?;
                 }
-                let rows = self.qmp.screen()?.rows();
-                if rows.first() == Some(text) {
+                let rows = self.qmp.screen()?.rows(&mut self.reader);
+                if rows.first() == Some(&self.reader.canonical(text)) {
                     self.row = None;
                     return Ok(());
                 }
@@ -577,6 +572,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             label: label.to_string(),
             deadline,
             row: None,
+            reader: reader(),
         };
         // A failure names its step, so that a script of a thousand says where.
         let r = steps.iter().enumerate().try_for_each(|(i, s)| {
@@ -646,12 +642,14 @@ mod tests {
     #[test]
     fn the_terminal_reads_back_as_text() {
         let (w, h) = (1024usize, 768usize);
-        let (columns, rows) = grid_for(w as u32, h as u32);
+        let mut look = Look::new(Scale::ONE, Appearance::Light);
+        let (columns, rows) = look.grid_for(w as u32, h as u32);
         let mut term = zoraya_term::Term::new(columns, rows);
-        term.write(b"zosh$ cat a.txt\nhi\nzosh$ ");
-        let (sw, sh) = zoraya_term::surface_size(columns, rows);
+        term.write("zosh$ cat a.txt\nhi звіт-2026.txt příklad.txt\nzosh$ ".as_bytes());
+        let (sw, sh) = look.surface_size(columns, rows);
         let mut surface = vec![0u32; sw * sh];
-        term.render(&mut surface, sw, true);
+        look.clear(&mut surface);
+        term.render(&mut look, &mut surface, sw, true);
         let mut pixels = vec![0x0020_3040u32; w * h];
         let (ox, oy) = zoraya_compositor::ORIGIN;
         for y in 0..sh {
@@ -664,9 +662,10 @@ mod tests {
             height: h,
             pixels,
         };
-        let text = screen.rows();
+        let mut reader = reader();
+        let text = screen.rows(&mut reader);
         assert_eq!(text[0], "zosh$ cat a.txt");
-        assert_eq!(text[1], "hi");
+        assert_eq!(text[1], reader.canonical("hi звіт-2026.txt příklad.txt"));
         assert_eq!(text[2], "zosh$ _");
         assert!(text[3..].iter().all(String::is_empty));
     }

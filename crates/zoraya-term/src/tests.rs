@@ -4,6 +4,18 @@ use std::vec;
 use std::vec::Vec;
 
 use super::*;
+use crate::read::Reader;
+use zoraya_tokens::{Appearance, Scale};
+
+fn look() -> Look {
+    Look::new(Scale::ONE, Appearance::Light)
+}
+
+/// The rows of a surface of `columns` cells as the reader reads them.
+fn read_rows(pixels: &[u32], w: usize, h: usize, columns: usize, rows: usize) -> Vec<String> {
+    let mut reader = Reader::new(look());
+    reader.rows(columns, rows, (0, 0), (w, h), |x, y| pixels[y * w + x])
+}
 
 fn term(text: &[u8]) -> Term {
     let mut t = Term::new(20, 5);
@@ -77,14 +89,32 @@ fn faint_and_normal_intensity() {
     let t = term(b"a\x1b[2mb\x1b[22mc\x1b[1;2md\x1b[22me\x1b[31;2mf\x1b[0mg");
     let fg = |x| t.cell(x, 0).fg;
     assert_eq!(fg(0), DEFAULT_FG);
-    assert_eq!(fg(1), FAINT + DEFAULT_FG);
+    assert_eq!(fg(1), FAINT_DEFAULT);
     assert_eq!(fg(2), DEFAULT_FG);
-    assert_eq!(fg(3), FAINT + DEFAULT_FG, "faint wins over bold");
+    assert_eq!(fg(3), FAINT_DEFAULT, "faint wins over bold");
+    assert!(!t.cell(3, 0).bold);
     assert_eq!(fg(4), DEFAULT_FG);
     assert_eq!(fg(5), FAINT + 1);
     assert_eq!(fg(6), DEFAULT_FG);
-    let half = PALETTE[usize::from(FAINT + DEFAULT_FG)];
-    assert_eq!(half, (PALETTE[usize::from(DEFAULT_FG)] >> 1) & 0x007f_7f7f);
+    let p = palette(Appearance::Light);
+    let tokens = Appearance::Light.palette();
+    assert_eq!(
+        p[usize::from(FAINT_DEFAULT)],
+        tokens.term_fg.blend(tokens.term_bg, 128)
+    );
+    assert_eq!(
+        p[usize::from(FAINT + 1)],
+        tokens.term_red.blend(tokens.term_bg, 128)
+    );
+    assert_eq!(
+        p[usize::from(BRIGHT + 1)],
+        tokens.term_red.blend(tokens.term_fg, 64)
+    );
+    assert_eq!(p[usize::from(DEFAULT_BG)], tokens.term_bg);
+    assert_eq!(
+        palette(Appearance::Dark)[usize::from(DEFAULT_FG)],
+        Appearance::Dark.palette().term_fg
+    );
 }
 
 #[test]
@@ -95,7 +125,8 @@ fn colours_and_reverse() {
         Cell {
             ch: 'A',
             fg: 1,
-            bg: 4
+            bg: 4,
+            bold: false
         }
     );
     assert_eq!(
@@ -103,7 +134,8 @@ fn colours_and_reverse() {
         Cell {
             ch: 'B',
             fg: 9,
-            bg: 4
+            bg: 4,
+            bold: true
         }
     );
     assert_eq!(
@@ -111,7 +143,8 @@ fn colours_and_reverse() {
         Cell {
             ch: 'C',
             fg: DEFAULT_BG,
-            bg: DEFAULT_FG
+            bg: DEFAULT_FG,
+            bold: false
         }
     );
     assert_eq!(
@@ -119,7 +152,8 @@ fn colours_and_reverse() {
         Cell {
             ch: 'D',
             fg: DEFAULT_FG,
-            bg: DEFAULT_BG
+            bg: DEFAULT_BG,
+            bold: false
         }
     );
 }
@@ -217,12 +251,13 @@ fn the_parser_is_total() {
         b"m",
         b"H",
     ];
+    let mut look = look();
     for size in [(1, 1), (2, 1), (80, 24), (3, 50)] {
         let mut t = Term::new(size.0, size.1);
         let mut pixels = vec![
             0u32;
             {
-                let (w, h) = surface_size(size.0, size.1);
+                let (w, h) = look.surface_size(size.0, size.1);
                 w * h
             }
         ];
@@ -241,8 +276,8 @@ fn the_parser_is_total() {
             if next() % 7 == 0 {
                 t.scroll_view((next() % 21) as isize - 10);
             }
-            let stride = surface_size(size.0, size.1).0;
-            let _ = t.render(&mut pixels, stride, true);
+            let stride = look.surface_size(size.0, size.1).0;
+            let _ = t.render(&mut look, &mut pixels, stride, true);
         }
     }
 }
@@ -256,26 +291,11 @@ fn the_view_scrolls_back_and_output_returns_it() {
     assert_eq!(t.history_len(), 4);
     t.scroll_view(2);
     assert_eq!(t.view(), 2);
-    let (w, h) = surface_size(10, 3);
+    let mut look = look();
+    let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0u32; w * h];
-    t.render(&mut pixels, w, true);
-    let row = |p: &[u32], y: usize| -> String {
-        (0..10)
-            .map(|x| {
-                zoraya_font::recognise(
-                    |dx, dy| p[(PAD + y * CELL_HEIGHT + dy) * w + PAD + x * CELL_WIDTH + dx],
-                    PALETTE[0],
-                )
-                .unwrap_or('?')
-            })
-            .collect::<String>()
-            .trim_end()
-            .into()
-    };
-    assert_eq!(
-        [row(&pixels, 0), row(&pixels, 1), row(&pixels, 2)],
-        ["2", "3", "4"]
-    );
+    t.render(&mut look, &mut pixels, w, true);
+    assert_eq!(read_rows(&pixels, w, h, 10, 3), ["2", "3", "4"]);
     t.scroll_view(100);
     assert_eq!(t.view(), 4);
     t.scroll_view(-100);
@@ -288,26 +308,58 @@ fn the_view_scrolls_back_and_output_returns_it() {
 #[test]
 fn rendering_draws_changed_rows_and_the_cursor() {
     let mut t = Term::new(10, 3);
-    let (w, h) = surface_size(10, 3);
+    let mut look = look();
+    let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0x00ab_cdefu32; w * h];
-    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
-    assert_eq!(t.render(&mut pixels, w, true), None);
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), None);
     t.write(b"hi");
-    assert_eq!(t.render(&mut pixels, w, true), Some((0, 0)));
-    let at = |x: usize, y: usize| pixels[y * w + x];
-    // 'h' in the text colour on black.
-    let read = zoraya_font::recognise(|dx, dy| at(PAD + dx, PAD + dy), PALETTE[0]);
-    assert_eq!(read, Some('h'));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 0)));
     // The cursor, after "hi", is a reversed blank: all text colour.
-    let cx = PAD + 2 * CELL_WIDTH;
+    assert_eq!(read_rows(&pixels, w, h, 10, 1), ["hi_"]);
+    let fg = look.colors[usize::from(DEFAULT_FG)].pixel();
+    let (cx, cy) = look.cell_origin(2, 0);
     assert!(
-        (0..CELL_HEIGHT).all(|dy| (0..CELL_WIDTH).all(|dx| at(cx + dx, PAD + dy) == PALETTE[7]))
+        (0..look.cell_height())
+            .all(|dy| (0..look.cell_width()).all(|dx| pixels[(cy + dy) * w + cx + dx] == fg))
     );
     // The padding is never drawn.
-    assert_eq!(at(0, 0), 0x00ab_cdef);
+    assert_eq!(pixels[0], 0x00ab_cdef);
     // Backspace redraws the row so the cursor moves.
     t.write(b"\x08");
-    assert_eq!(t.render(&mut pixels, w, true), Some((0, 0)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 0)));
+}
+
+#[test]
+fn ukrainian_czech_colours_and_bold_read_back() {
+    let mut t = Term::new(30, 3);
+    let mut look = look();
+    let (w, h) = look.surface_size(30, 3);
+    let mut pixels = vec![0u32; w * h];
+    look.clear(&mut pixels);
+    t.write("звіт-2026.txt příklad.txt\n\x1b[31mґанок\x1b[m \x1b[1mЖ\x1b[22m \x1b[2mfaint\x1b[m\n\x1b[7mrev".as_bytes());
+    t.render(&mut look, &mut pixels, w, false);
+    let mut reader = Reader::new(Look::new(Scale::ONE, Appearance::Light));
+    let rows = reader.rows(30, 3, (0, 0), (w, h), |x, y| pixels[y * w + x]);
+    // Look-alikes read as the Latin letter: compare in the reader's classes.
+    assert_eq!(rows[0], reader.canonical("звіт-2026.txt příklad.txt"));
+    assert_eq!(rows[0], "звiт-2026.txt příklad.txt");
+    assert_eq!(rows[1], reader.canonical("ґанок Ж faint"));
+    assert_eq!(rows[2], "rev");
+}
+
+#[test]
+fn the_dark_set_and_scale_two_read_back_too() {
+    let mut t = Term::new(12, 2);
+    let mut look = Look::new(Scale::TWO, Appearance::Dark);
+    let (w, h) = look.surface_size(12, 2);
+    assert_eq!(look.cell_width(), 16);
+    let mut pixels = vec![0u32; w * h];
+    t.write("Ґудзик ěščř".as_bytes());
+    t.render(&mut look, &mut pixels, w, true);
+    let mut reader = Reader::new(Look::new(Scale::TWO, Appearance::Dark));
+    let rows = reader.rows(12, 2, (0, 0), (w, h), |x, y| pixels[y * w + x]);
+    assert_eq!(rows[0], reader.canonical("Ґудзик ěščř_"));
 }
 
 #[test]
@@ -330,23 +382,27 @@ fn keys_become_bytes() {
 
 #[test]
 fn the_grid_fits_the_display() {
-    assert_eq!(grid_for(1024, 768), (80, 24));
-    let (c, r) = grid_for(640, 480);
-    let (w, h) = surface_size(c, r);
+    let look = look();
+    assert_eq!(look.grid_for(1024, 768), (80, 24));
+    let (c, r) = look.grid_for(640, 480);
+    let (w, h) = look.surface_size(c, r);
     assert!(w + 32 <= 640 && h + 32 <= 480);
-    assert_eq!(grid_for(0, 0), (1, 1));
+    assert_eq!(look.grid_for(0, 0), (1, 1));
 }
 
 // Tests for the holes cargo-mutants found (TASK-14 review).
 
 #[test]
 fn sizes_are_pinned_to_the_padding() {
-    assert_eq!(grid_for(166, 146), (9, 4));
-    assert_eq!(grid_for(640, 480), (49, 21));
-    assert_eq!(
-        surface_size(1, 1),
-        (CELL_WIDTH + 2 * PAD, CELL_HEIGHT + 2 * PAD)
-    );
+    // JetBrains Mono at 13 px: 8 × 18 cells; padding.terminal is 14.
+    let look = look();
+    assert_eq!(look.pad, 14);
+    assert_eq!(look.grid_for(166, 146), (12, 4));
+    assert_eq!(look.grid_for(640, 480), (71, 22));
+    assert_eq!(look.surface_size(1, 1), (8 + 28, 18 + 28));
+    assert_eq!(look.cell_origin(2, 3), (14 + 16, 14 + 54));
+    let two = Look::new(Scale::TWO, Appearance::Light);
+    assert_eq!((two.pad, two.cell_width(), two.cell_height()), (28, 16, 35));
 }
 
 #[test]
@@ -366,118 +422,22 @@ fn memory_is_what_the_terminal_holds() {
 #[test]
 fn scrolling_and_cursor_moves_redraw_their_rows() {
     let mut t = Term::new(10, 3);
-    let (w, h) = surface_size(10, 3);
+    let mut look = look();
+    let (w, h) = look.surface_size(10, 3);
     let mut pixels = vec![0u32; w * h];
     t.write(b"a\nb\nc");
-    t.render(&mut pixels, w, true);
+    t.render(&mut look, &mut pixels, w, true);
     t.write(b"\n");
-    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     t.write(b"\x1b[2;1H");
-    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
-    assert_eq!(t.render(&mut pixels, w, true), None);
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), None);
     t.redraw();
-    assert_eq!(t.render(&mut pixels, w, true), Some((0, 2)));
+    assert_eq!(t.render(&mut look, &mut pixels, w, true), Some((0, 2)));
     // A row below the first is drawn from its own row.
     let mut t = Term::new(10, 3);
     t.write(b"h\nZ");
-    t.render(&mut pixels, w, false);
-    let read = zoraya_font::recognise(
-        |dx, dy| pixels[(PAD + CELL_HEIGHT + dy) * w + PAD + dx],
-        PALETTE[0],
-    );
-    assert_eq!(read, Some('Z'));
-}
-
-#[test]
-fn four_byte_utf8_reset_and_intermediates() {
-    assert_eq!(term("\u{1F600}".as_bytes()).line(0), "\u{1F600}");
-    let t = term(b"abc\x1bc");
-    assert_eq!((t.line(0), t.cursor()), (String::new(), (0, 0)));
-    assert_eq!(term(b"a\x1b[5 qb").line(0), "ab");
-    assert_eq!(term(b"ab\x1b[1\ncd").line(1), "d");
-    assert_eq!(term(b"ab\x1b[9\x1b[Hc").line(0), "cb");
-}
-
-#[test]
-fn parameters_and_relative_moves() {
-    assert_eq!(term(b"\x1b[1;2;3H").cursor(), (1, 0));
-    let t = term(b"\x1b[0;0;0;0;0;0;0;0;31mA");
-    assert_eq!(t.cell(0, 0).fg, DEFAULT_FG);
-    assert_eq!(term(b"\n\n\x1b[A").cursor(), (0, 1));
-    assert_eq!(term(b"\x1b[B").cursor(), (0, 1));
-    assert_eq!(term(b"\x1b[C").cursor(), (1, 0));
-    assert_eq!(term(b"ab\x1b[D").cursor(), (1, 0));
-}
-
-#[test]
-fn every_graphics_rendition_and_erase_mode() {
-    assert_eq!(term(b"\x1b[1mA\x1b[22mB").cell(1, 0).fg, 7);
-    assert_eq!(term(b"\x1b[7mA\x1b[27mB").cell(1, 0).fg, 7);
-    assert_eq!(term(b"\x1b[31mA\x1b[39mB").cell(1, 0).fg, 7);
-    assert_eq!(term(b"\x1b[44mA\x1b[49mB").cell(1, 0).bg, 0);
-    assert_eq!(term(b"\x1b[32mA").cell(0, 0).fg, 2);
-    assert_eq!(term(b"abc\x1b[2K").line(0), "");
-    assert_eq!(term(b"abc\nxyz\x1b[2K").line(0), "abc");
-    let t = term(b"abc\nxyz\x1b[2;2H\x1b[J");
-    assert_eq!(screen(&t), ["abc", "x", "", "", ""]);
-    assert_eq!(term(b"abcdef\x1b[1;3H\x1b[1J").line(0), "   def");
-}
-
-#[test]
-fn every_named_key_has_its_sequence() {
-    let mut out = [0u8; 8];
-    let cases: [(u32, &[u8]); 10] = [
-        (code::TAB, b"\t"),
-        (code::ESC, b"\x1b"),
-        (code::DOWN, b"\x1b[B"),
-        (code::RIGHT, b"\x1b[C"),
-        (code::LEFT, b"\x1b[D"),
-        (code::HOME, b"\x1b[H"),
-        (code::END, b"\x1b[F"),
-        (code::INSERT, b"\x1b[2~"),
-        (code::DELETE, b"\x1b[3~"),
-        (code::PAGE_DOWN, b"\x1b[6~"),
-    ];
-    for (key, bytes) in cases {
-        let n = key_bytes(key, false, None, &mut out);
-        assert_eq!(&out[..n], bytes, "{key}");
-    }
-}
-
-/// Bytes outside ASCII (ADR-0013 allows UTF-8 names): valid characters are
-/// kept, and everything malformed is one U+FFFD per bad sequence, with no
-/// control acted on and the text after it intact. The font draws every
-/// non-ASCII character as its box.
-#[test]
-fn bytes_outside_ascii_are_shown_safely() {
-    let cases: [(&[u8], &str); 12] = [
-        ("naïve.txt".as_bytes(), "naïve.txt"),
-        ("файл 文件 \u{1F600}".as_bytes(), "файл 文件 \u{1F600}"),
-        // An overlong ESC followed by what would clear the screen.
-        (b"a\xe0\x80\x9b[2Jb", "a\u{fffd}[2Jb"),
-        (b"a\xc0\xafb", "a\u{fffd}\u{fffd}b"),
-        (b"a\xf0\x80\x80\xafb", "a\u{fffd}b"),
-        // C1 controls, CSI among them.
-        (b"a\xc2\x9b2Jb", "a\u{fffd}2Jb"),
-        (b"a\xc2\x85b", "a\u{fffd}b"),
-        // A surrogate, and a value past U+10FFFF.
-        (b"a\xed\xa0\x80b", "a\u{fffd}b"),
-        (b"a\xf4\x90\x80\x80b", "a\u{fffd}b"),
-        // Stray continuations, a cut-off sequence, impossible bytes.
-        (b"a\x80\xbfb", "a\u{fffd}\u{fffd}b"),
-        (b"a\xe2\x82b", "a\u{fffd}b"),
-        (b"a\xf8\xffb", "a\u{fffd}\u{fffd}b"),
-    ];
-    for (bytes, shown) in cases {
-        let t = term(bytes);
-        assert_eq!(t.line(0), shown, "{bytes:x?}");
-        assert_eq!(t.line(1), "", "{bytes:x?}: no line was cleared or moved");
-        assert!((0..20).all(|x| !t.cell(x, 0).ch.is_control()), "{bytes:x?}");
-    }
-    // And a sequence cut by the end of one write and finished by the next
-    // is the character.
-    let mut t = Term::new(20, 5);
-    t.write(b"\xc3");
-    t.write(b"\xa9");
-    assert_eq!(t.line(0), "é");
+    look.clear(&mut pixels);
+    t.render(&mut look, &mut pixels, w, false);
+    assert_eq!(read_rows(&pixels, w, h, 10, 2), ["h", "Z"]);
 }

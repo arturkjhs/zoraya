@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-text"
+description = "Zoraya's TrueType reader, fixed-point rasteriser, glyph cache and simple shaper (ADR-0162)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-tokens = { path = "../zoraya-tokens" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

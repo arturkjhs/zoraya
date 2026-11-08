@@ -9,7 +9,7 @@ license.workspace = true
 
 [dependencies]
 # Zoraya's own crates, to read the screen as the terminal draws it.
-zoraya-font = { path = "../../crates/zoraya-font" }
+zoraya-tokens = { path = "../../crates/zoraya-tokens" }
 zoraya-term = { path = "../../crates/zoraya-term" }
 zoraya-compositor = { path = "../../crates/zoraya-compositor" }
 

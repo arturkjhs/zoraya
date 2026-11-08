@@ -300,7 +300,9 @@ fn all() -> Result<(), String> {
     }
     say!(
         "crash test: {} rounds, all clean; {} durable files all intact; {} rounds with files past the last sync",
-        totals.rounds, totals.durable_files, totals.past_durable
+        totals.rounds,
+        totals.durable_files,
+        totals.past_durable
     );
     Ok(())
 }

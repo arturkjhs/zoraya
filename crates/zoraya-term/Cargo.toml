@@ -8,7 +8,9 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-zoraya-font = { path = "../zoraya-font" }
+zoraya-fonts = { path = "../zoraya-fonts" }
+zoraya-text = { path = "../zoraya-text" }
+zoraya-tokens = { path = "../zoraya-tokens" }
 zoraya-keymap = { path = "../zoraya-keymap" }
 
 [lints]

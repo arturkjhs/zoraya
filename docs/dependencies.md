@@ -11,13 +11,31 @@ purpose, and the reason it is not written in-house. Only permissively licensed (
 The kernel uses `core` and `alloc`, and user programs `core`. The crates under `crates/` use only `core` (and `alloc`:
 `zoraya-fs`), and their tests use `std`, with seeded generators instead of a property-testing crate. `zoraya-fs-testkit`,
 `zoraya-mkfs` and `zoraya-fsck` (TASK-07) use only `std` and the workspace's own crates. The GUI's crates (TASK-14: `zoraya-virtio-gpu`, `zoraya-virtio-input`, the four `zoraya-proto-*` of
-the GUI, `zoraya-keymap`, `zoraya-font`, `zoraya-term`, `zoraya-compositor`) use only `core` and `alloc` and each
-other. The font in `zoraya-font` was drawn for Zoraya (ADR-0095) and is under the repository's BSD-2-Clause licence: no
-font file and no rasteriser crate is embedded. The host-side tools
+the GUI, `zoraya-keymap`, `zoraya-tokens`, `zoraya-text`, `zoraya-fonts`, `zoraya-term`, `zoraya-compositor`) use only `core` and `alloc` and each
+other. The GUI's text is `zoraya-text`, written for Zoraya (ADR-0162), with no rasteriser crate; its fonts are data,
+in the table below. The host-side tools
 (`zoraya-test-runner`, `zoraya-adr-check`, `zoraya-mkramdisk`, `zoraya-mutants`) use
-only `std`, and the test runner also the workspace's `zoraya-font`, `zoraya-term` and `zoraya-compositor`, to read the
+only `std`, and the test runner also the workspace's `zoraya-text`, `zoraya-term` and `zoraya-compositor`, to read the
 screen as the terminal draws it. `Cargo.lock` has no registry entries, so no build needs network access once the toolchain in
 `rust-toolchain.toml` is installed.
+
+## Fonts
+
+Fonts are a kind of dependency of their own (ADR-0162): data, not code, embedded in the programs that draw text. Each
+file in `fonts/` is unmodified from its release (the OFL restricts modified versions, `desktop/survey.md#the-ofl-next-to-bsd-code`), ships with its licence text, and is listed here with its SHA-256; `zoraya-fonts`'s
+host test hashes every file against this table (INV-0162-5). The releases are the archives `tools/mockups/fetch-fonts.sh`
+downloads and checks (Inter 4.1, SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`, and
+JetBrains Mono 2.304, `6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf`), from which the files below
+were extracted on 2026-11-08 (TASK-24, 7a).
+
+| File | Release | Licence | Used by | Purpose | SHA-256 |
+|---|---|---|---|---|---|
+| `fonts/Inter-Regular.ttf` | Inter 4.1, `extras/ttf/` | OFL-1.1 | `zoraya-fonts` | the UI font (`font.ui`) | `40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82` |
+| `fonts/Inter-Medium.ttf` | Inter 4.1, `extras/ttf/` | OFL-1.1 | `zoraya-fonts` | titles and headings (`font.ui.medium`) | `97ad806f526e41546d46365bb3a393145f75b7b1568913db74549ad8b8dba872` |
+| `fonts/JetBrainsMono-Regular.ttf` | JetBrains Mono 2.304, `fonts/ttf/` | OFL-1.1 | `zoraya-fonts` | the terminal (`font.mono`) | `a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f` |
+| `fonts/JetBrainsMono-Bold.ttf` | JetBrains Mono 2.304, `fonts/ttf/` | OFL-1.1 | `zoraya-fonts` | bold in the terminal (`font.mono.bold`) | `5590990c82e097397517f275f430af4546e1c45cff408bde4255dad142479dcb` |
+| `fonts/Inter-LICENSE.txt` | Inter 4.1, `LICENSE.txt` | OFL-1.1 | | Inter's licence | `262481e844521b326f5ecd053e59b98c8b2da78c8ee1bdbb6e8174305e54935a` |
+| `fonts/JetBrainsMono-OFL.txt` | JetBrains Mono 2.304, `OFL.txt` | OFL-1.1 | | JetBrains Mono's licence | `30f0c136e3c88e422d0791acd97238870f9054a9729bc34cf2ff0d4ed8cac4ad` |
 
 ## Fuzzing (outside the workspace)
 

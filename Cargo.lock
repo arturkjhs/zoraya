@@ -77,6 +77,7 @@ dependencies = [
  "zoraya-proto-input",
  "zoraya-protocol",
  "zoraya-test-alloc",
+ "zoraya-tokens",
 ]
 
 [[package]]
@@ -124,7 +125,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zoraya-font"
+name = "zoraya-fonts"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
@@ -230,6 +231,9 @@ dependencies = [
 [[package]]
 name = "zoraya-mockups"
 version = "0.1.0"
+dependencies = [
+ "zoraya-tokens",
+]
 
 [[package]]
 name = "zoraya-mutants"
@@ -392,9 +396,11 @@ dependencies = [
 name = "zoraya-term"
 version = "0.1.0"
 dependencies = [
- "zoraya-font",
+ "zoraya-fonts",
  "zoraya-keymap",
  "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
 ]
 
 [[package]]
@@ -406,12 +412,27 @@ name = "zoraya-test-runner"
 version = "0.1.0"
 dependencies = [
  "zoraya-compositor",
- "zoraya-font",
  "zoraya-term",
+ "zoraya-tokens",
+]
+
+[[package]]
+name = "zoraya-text"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+ "zoraya-tokens",
 ]
 
 [[package]]
 name = "zoraya-time"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-tokens"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
@@ -446,7 +467,7 @@ dependencies = [
  "zoraya-compositor",
  "zoraya-describe",
  "zoraya-elf",
- "zoraya-font",
+ "zoraya-fonts",
  "zoraya-fs",
  "zoraya-fs-service",
  "zoraya-heap",
@@ -465,6 +486,8 @@ dependencies = [
  "zoraya-settings",
  "zoraya-shell",
  "zoraya-term",
+ "zoraya-text",
+ "zoraya-tokens",
  "zoraya-tty",
  "zoraya-virtio",
  "zoraya-virtio-gpu",

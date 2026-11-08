@@ -12,11 +12,11 @@ use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Rights, Status,
     channel_signals,
 };
-use zoraya_font::CELL_HEIGHT;
 use zoraya_proto_gui::{self as gui, modifiers};
 use zoraya_proto_term::{Input, MAX_INPUT, Output, Size};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{PAD, Term, grid_for, key_bytes, surface_size};
+use zoraya_term::{Look, Term, key_bytes};
+use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::gui::wait_reply;
 use zoraya_user::{
     channel_read, channel_write, handle_close, handle_duplicate, memory_create, memory_map,
@@ -39,6 +39,7 @@ struct Window {
     compositor: Handle,
     shell: Handle,
     term: Term,
+    look: Look,
     pixels: &'static mut [u32],
     stride: usize,
     height: usize,
@@ -103,9 +104,13 @@ impl Window {
         if self.outstanding {
             return;
         }
-        if let Some((first, last)) = self.term.render(self.pixels, self.stride, true) {
-            let y = PAD + first * CELL_HEIGHT;
-            let h = (last - first + 1) * CELL_HEIGHT;
+        if let Some((first, last)) =
+            self.term
+                .render(&mut self.look, self.pixels, self.stride, true)
+        {
+            let cell = self.look.cell_height();
+            let y = self.look.pad + first * cell;
+            let h = (last - first + 1) * cell;
             self.commit(y, h.min(self.height - y));
         }
     }
@@ -239,8 +244,10 @@ fn main() -> i32 {
         println!("term: no display");
         return 1;
     }
-    let (columns, rows) = grid_for(display.width, display.height);
-    let (width, height) = surface_size(columns, rows);
+    // Scale 1 and the light set until 7b's Configure carries them.
+    let look = Look::new(Scale::ONE, Appearance::Light);
+    let (columns, rows) = look.grid_for(display.width, display.height);
+    let (width, height) = look.surface_size(columns, rows);
     let size = (width * height * 4).next_multiple_of(4096) as u64;
     let memory = memory_create(size, MemoryFlags::NONE).expect("surface memory");
     let address = memory_map(memory, 0, size, MapFlags::WRITE).expect("map the surface");
@@ -279,6 +286,7 @@ fn main() -> i32 {
         compositor,
         shell,
         term: Term::new(columns, rows),
+        look,
         pixels,
         stride: width,
         height,
@@ -289,7 +297,10 @@ fn main() -> i32 {
         waiting: false,
         message: alloc::vec![0u8; 8192],
     };
-    window.term.render(window.pixels, width, true);
+    window.look.clear(window.pixels);
+    window
+        .term
+        .render(&mut window.look, window.pixels, width, true);
     window.commit(0, height);
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     port_subscribe(port, compositor, wanted, KEY_COMPOSITOR, Mode::Level).expect("subscribe");

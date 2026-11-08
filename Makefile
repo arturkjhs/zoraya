@@ -46,7 +46,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench \
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term t_gui guibench t_text \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
@@ -502,7 +502,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -571,9 +571,21 @@ check-test-caps:
 	    grep -rqs -e 'cap_memory!' -e 'Capped::new' "$$d/src" || bad="$$bad $$d/src"; fi; done; \
 	if [ -n "$$bad" ]; then echo "no heap cap in:$$bad"; exit 1; fi
 
+# INV-0161-1: no colour or duration literal in a GUI crate; they come from
+# zoraya-tokens. The crates ADR-0161 names that exist (the compositor, the
+# terminal, the GUI programs), tests excepted. A colour is 0xrrggbb or
+# 0x00rrggbb, with or without the digit separator.
+GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src user/src/bin/compd.rs user/src/bin/term.rs
+check-tokens:
+	@hits="$$(grep -rnE '0x(00)?[0-9a-fA-F]{2}_?[0-9a-fA-F]{4}\b|Duration::from_millis' $(GUI_SOURCES) | grep -v '/tests\.rs:' || true)"; \
+	if [ -n "$$hits" ]; then echo "colour or duration literals outside zoraya-tokens (INV-0161-1):"; echo "$$hits"; exit 1; fi
+	@# INV-0240-1: fonts are embedded only through zoraya-fonts.
+	@hits="$$(grep -rn 'include_bytes!(.*\.ttf' crates tools user | grep -v '^crates/zoraya-fonts/' | grep -v '/tests\.rs:' || true)"; \
+	if [ -n "$$hits" ]; then echo "fonts embedded outside zoraya-fonts (INV-0240-1):"; echo "$$hits"; exit 1; fi
+
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
 TEST_STEPS += check-ci-jobs
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

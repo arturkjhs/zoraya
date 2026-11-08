@@ -202,7 +202,8 @@ fn main() -> ExitCode {
     if report.passed {
         say!(
             "[{label}] PASS: {} passed, {} expected failures",
-            report.ok, report.expected_failures
+            report.ok,
+            report.expected_failures
         );
         ExitCode::SUCCESS
     } else {

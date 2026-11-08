@@ -25,6 +25,7 @@ use zoraya_proto_input as input;
 use zoraya_protocol::{Below, ErrorReply, Flags, Header, Message, NO_REPLY, decode, encode};
 
 pub use rect::Rect;
+use zoraya_tokens::LIGHT;
 
 /// Client connections at once `[assumption, ADR-0093]`.
 pub const MAX_CLIENTS: usize = 8;
@@ -33,9 +34,14 @@ pub const MAX_INPUTS: usize = 4;
 /// Where the first window goes, and how far each later one moves.
 pub const ORIGIN: (i64, i64) = (16, 16);
 pub const CASCADE: i64 = 32;
-pub const BACKGROUND: u32 = 0x0020_3040;
-pub const BORDER: u32 = 0x0060_6060;
-pub const BORDER_FOCUSED: u32 = 0x0040_a0ff;
+/// Stage 5's background and frame, in the light set's tokens until 7b
+/// draws ADR-0160's frames (INV-0161-1).
+pub const BACKGROUND: u32 = LIGHT.bg_desktop.pixel();
+pub const BORDER: u32 = LIGHT.border_strong.pixel();
+pub const BORDER_FOCUSED: u32 = LIGHT.accent.pixel();
+/// The pointer's fill and outline.
+const POINTER_FILL: u32 = LIGHT.bg_control.pixel();
+const POINTER_EDGE: u32 = LIGHT.fg_text.pixel();
 
 /// Port keys: the manager, the display, inputs from `INPUT_KEY`, clients
 /// from `CLIENT_KEY`.
@@ -1142,8 +1148,11 @@ impl<P: Platform> Compositor<P> {
                     if *dot == 0 || !r.contains(x, y) {
                         continue;
                     }
-                    pixels[y as usize * width + x as usize] =
-                        if *dot == 1 { 0x00ff_ffff } else { 0 };
+                    pixels[y as usize * width + x as usize] = if *dot == 1 {
+                        POINTER_FILL
+                    } else {
+                        POINTER_EDGE
+                    };
                 }
             }
         }

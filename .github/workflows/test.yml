@@ -67,6 +67,7 @@ jobs:
           - make check-host-paths
           - make check-argv
           - make check-test-caps
+          - make check-tokens
           - make check-fetch-ports
           - make check-ci-jobs
     name: ${{ matrix.cmd }}

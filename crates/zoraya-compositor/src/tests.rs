@@ -807,8 +807,8 @@ fn pointer_events_go_only_to_the_surface_under_it() {
     assert_eq!(s.c.focus(), Some(0));
     // The pointer is drawn, and moving it repairs what was under it.
     s.point(0, 0, None);
-    assert_eq!(s.pixel(0, 0), 0);
-    assert_eq!(s.pixel(1, 2), 0x00ff_ffff);
+    assert_eq!(s.pixel(0, 0), zoraya_tokens::LIGHT.fg_text.pixel());
+    assert_eq!(s.pixel(1, 2), zoraya_tokens::LIGHT.bg_control.pixel());
     s.point(65535, 65535, None);
     assert_eq!(s.pixel(1, 2), BACKGROUND);
 }
