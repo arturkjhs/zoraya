@@ -282,6 +282,8 @@ fn logical_arithmetic_keeps_the_type_and_saturates() {
     assert_eq!(Scale::new(2), Some(Scale::TWO));
     assert_eq!(Scale::new(3), None);
     assert_eq!(Scale::TWO.logical(27).physical(Scale::ONE), 13);
+    assert_eq!(space::UNIT.times(2) - space::UNIT, space::UNIT);
+    assert_eq!((Scale::ONE.factor(), Scale::TWO.factor()), (1, 2));
 }
 
 #[test]
@@ -301,6 +303,11 @@ fn the_value_readers_refuse_what_is_not_their_form() {
     assert_eq!(parse_int(b""), None);
     assert_eq!(parse_int(b"4x"), None);
     assert_eq!(parse_int(b"1234567890"), None);
+    assert_eq!(parse_int(b"123456789"), Some(123_456_789));
+    assert_eq!(parse_color(b"#00000F").map(Color::pixel), Some(0x0f));
+    assert_eq!(parse_milli(b"12.5"), Some(12_500));
+    assert_eq!(parse_milli(b"123456"), Some(123_456_000));
+    assert_eq!(parse_milli(b"1234567"), None);
     assert_eq!(parse_color(b"#a0B0c0").map(Color::pixel), Some(0xa0b0c0));
     assert_eq!(parse_color(b"#a0b0c"), None);
     assert_eq!(parse_color(b"a0b0c0f"), None);
@@ -316,8 +323,7 @@ fn the_value_readers_refuse_what_is_not_their_form() {
 
 #[test]
 fn comments_and_prefixes_read_as_the_mockup_tool_reads_them() {
-    let text =
-        "# a comment\n a = 1 # note\nlight: c = #102030\ndark: c = #405060 \n\nbad line\nb = \n";
+    let text = "# a comment\n a = 1 # note\nlight: c = #102030\ndark: c = #405060 \n\nbad line\nb = \n  #x=1\nd = 1 #\ne =\t1\n";
     let got: Vec<_> = lines(text).collect();
     assert_eq!(
         got,
@@ -327,8 +333,22 @@ fn comments_and_prefixes_read_as_the_mockup_tool_reads_them() {
             Ok((Set::Dark, "c", "#405060")),
             Err(6),
             Err(7),
+            Ok((Set::Plain, "d", "1")),
+            Ok((Set::Plain, "e", "1")),
         ]
     );
+}
+
+#[test]
+fn a_line_at_the_end_without_a_newline_is_found() {
+    assert_eq!(crate::parse::find(b"a = 1", Set::Plain, b"a"), Some((4, 5)));
+    assert_eq!(crate::parse::find(b"a = 1", Set::Light, b"a"), None);
+}
+
+#[test]
+#[should_panic(expected = "fewer words")]
+fn reading_a_word_past_the_last_panics() {
+    let _ = crate::parse::word("ease.standard", 4);
 }
 
 #[test]
