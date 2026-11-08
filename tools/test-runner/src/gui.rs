@@ -27,7 +27,8 @@
 //! key QCODE         press and release one QEMU key code, such as f12
 //! chord MOD QCODE   the same with MOD (ctrl, shift, alt) held, such as
 //!                   chord ctrl c
-//! region X Y W H RGB  every pixel of the rectangle is the colour RGB (hex)
+//! region X Y W H RGB  wait until every pixel of the rectangle is the colour
+//!                   RGB (hex)
 //! click X Y         move the pointer to (X, Y) and press and release the
 //!                   left button
 //! drag X Y X2 Y2    press the left button at (X, Y), move to (X2, Y2) in
@@ -583,20 +584,33 @@ impl Run {
                 (code.as_str(), false),
                 (m.as_str(), false),
             ]),
-            Step::Region(x, y, w, h, colour) => {
+            // Waits for the colour, as `screen` waits for text: under TCG
+            // the compositor may not have drawn yet what a pointer step did.
+            Step::Region(x, y, w, h, colour) => loop {
+                if Instant::now() <= self.deadline {
+                    self.pump()?;
+                }
                 let screen = self.qmp.screen()?;
                 let k = i64::from(screen.scale().factor());
                 let (x, y, w, h) = (x * k, y * k, w * k, h * k);
-                for py in y..y + h {
+                let mut wrong = None;
+                'scan: for py in y..y + h {
                     for px in x..x + w {
                         let p = screen.at(px as usize, py as usize);
                         if p != *colour {
-                            return Err(format!("pixel {px},{py} is {p:06x}, not {colour:06x}"));
+                            wrong = Some((px, py, p));
+                            break 'scan;
                         }
                     }
                 }
-                Ok(())
-            }
+                let Some((px, py, p)) = wrong else {
+                    return Ok(());
+                };
+                if Instant::now() > self.deadline {
+                    return Err(format!("pixel {px},{py} is {p:06x}, not {colour:06x}"));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            },
             Step::Latency(n) => {
                 let mut times = Vec::new();
                 let row = self.row;
