@@ -1,0 +1,18 @@
+[package]
+name = "zoraya-paint"
+description = "The compositor's drawing in integer arithmetic: rounded shapes, shadows, blur, the wallpaper, the trusted material (ADR-0160, ADR-0161)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-tokens = { path = "../zoraya-tokens" }
+zoraya-text = { path = "../zoraya-text" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
