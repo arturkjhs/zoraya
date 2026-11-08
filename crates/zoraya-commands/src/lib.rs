@@ -262,16 +262,44 @@ impl<F: Files> Run<'_, F> {
         Ok(())
     }
 
+    /// Removes `path` and, for a directory, everything in it. Kinds come
+    /// from the directory's listing, which never follows a link: a link is
+    /// removed as itself, and what it leads to stays (review S4).
     fn remove_tree(&mut self, path: &str, depth: usize) -> Result<(), Status> {
+        let kind = self.kind_unfollowed(path)?;
+        self.remove_entry(path, kind, depth)
+    }
+
+    fn remove_entry(&mut self, path: &str, kind: Kind, depth: usize) -> Result<(), Status> {
         if depth > MAX_DEPTH {
             return Err(status::LIMIT_REACHED);
         }
-        if self.files.stat(path)?.kind == Kind::Directory {
-            for (name, _) in self.sorted(path)? {
-                self.remove_tree(&join(path, &name), depth + 1)?;
+        if kind == Kind::Directory {
+            for (name, k) in self.sorted(path)? {
+                self.remove_entry(&join(path, &name), k, depth + 1)?;
             }
         }
         self.files.remove(path)
+    }
+
+    /// `path`'s kind as its directory lists it, a link not followed.
+    fn kind_unfollowed(&mut self, path: &str) -> Result<Kind, Status> {
+        let trimmed = path.trim_end_matches('/');
+        let (dir, name) = match trimmed.rsplit_once('/') {
+            Some(("", n)) => ("/", n),
+            Some((d, n)) => (d, n),
+            None => (".", trimmed),
+        };
+        if name.is_empty() || name == "." || name == ".." {
+            return Ok(self.files.stat(path)?.kind);
+        }
+        match self.files.list(dir) {
+            Ok(list) => match list.into_iter().find(|(n, _)| n == name) {
+                Some((_, kind)) => Ok(kind),
+                None => Err(status::NOT_FOUND),
+            },
+            Err(_) => Ok(self.files.stat(path)?.kind),
+        }
     }
 }
 

@@ -316,3 +316,63 @@ fn closed_output_ends_quietly() {
     assert_eq!(output_failed(Status::PeerClosed), Some(0));
     assert_eq!(output_failed(Status::NoMemory), None);
 }
+
+/// Mutation testing: a letter option with no digit option beside it, and
+/// a long option's value that would be `--`.
+#[test]
+fn letters_are_options_and_dash_dash_is_no_value() {
+    let cp = d(CP);
+    let p = run(&cp, &["-f", "a", "b"]);
+    assert!(p.flag(&cp, "force"));
+    assert_eq!(p.operand(&cp, "FROM"), Some("a"));
+    assert_eq!(
+        usage(&d(RM), &["--lines", "--", "x"]),
+        "--lines: needs a value"
+    );
+}
+
+/// Mutation testing: a page with operands only, with options only, and
+/// with settings.
+#[test]
+fn a_page_has_what_its_description_has() {
+    let search = page(&d(SEARCH), "");
+    assert!(
+        search.contains("\n  TEXT   what to look for\n  PATH   where to look (read)\n"),
+        "{search}"
+    );
+    let v = page(
+        &d("name v\nsummary s\nusage v\noption -v --verbose say more\n"),
+        "",
+    );
+    assert_eq!(v, "V\n\ns\n\nusage: v\n\n  -v, --verbose   say more\n");
+    let none = page(&d("name n\nsummary s\nusage n\n"), "");
+    assert_eq!(none, "N\n\ns\n\nusage: n\n", "no blank line for nothing");
+    let x = page(
+        &d("name x\nsummary s\nusage x\nsetting shell.size number 0 100000 1000 lines kept\n"),
+        "",
+    );
+    assert!(
+        x.ends_with(
+            "usage: x\n\nSETTINGS\n  shell.size  number 0 100000, default 1000: lines kept\n"
+        ),
+        "{x}"
+    );
+}
+
+/// Mutation testing: the statuses with wording of their own.
+#[test]
+fn the_fixed_status_wordings_are_exact() {
+    for (status, words) in [
+        (Status::NotFound, "not found"),
+        (Status::AccessDenied, "not granted"),
+        (Status::NoMemory, "out of memory"),
+        (Status::LimitReached, "a limit was reached"),
+        (Status::DeadlineExceeded, "took too long"),
+        (Status::PeerClosed, "the other end is gone"),
+        (Status::BadHandle, "not a usable handle"),
+        (Status::InvalidArgument, "not a valid argument"),
+        (Status::NotSupported, "not supported by this machine"),
+    ] {
+        assert_eq!(status_problem(status), words);
+    }
+}

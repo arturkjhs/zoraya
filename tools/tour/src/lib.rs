@@ -45,10 +45,7 @@ pub enum Step {
 /// `PROMPT>` or `PROMPT> TEXT`: a prompt is `...`, or `~` or `/` and a path
 /// without spaces.
 fn prompt_line(line: &str) -> Option<(String, Option<String>)> {
-    let (prompt, rest) = match line.split_once('>') {
-        Some(x) => x,
-        None => return None,
-    };
+    let (prompt, rest) = line.split_once('>')?;
     let is_prompt = prompt == "..."
         || ((prompt.starts_with('~') || prompt.starts_with('/'))
             && !prompt.contains(' ')
@@ -252,7 +249,9 @@ pub fn gui(markdown: &str) -> String {
                         let _ = writeln!(s, "screen {prompt}> _");
                     }
                     if prompt != "..." {
-                        let _ = writeln!(s, "chord ctrl l\nwindow");
+                        // The cleared screen before what follows is looked
+                        // for, which could match the old one (review K12).
+                        let _ = writeln!(s, "chord ctrl l\ntop {prompt}> _");
                     }
                     let chars: Vec<char> = t.chars().collect();
                     let mut typed = String::new();
@@ -407,7 +406,11 @@ pub fn described(root: &std::path::Path) -> Vec<Described> {
             if f.extension().and_then(|e| e.to_str()) != Some("cmd") {
                 continue;
             }
-            let name = f.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let name = f
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             let text = std::fs::read_to_string(&f).unwrap_or_default();
             out.push(Described { name, text });
         }
@@ -431,8 +434,8 @@ pub fn conventions(commands: &[Described]) -> Result<String, String> {
         let _ = writeln!(s, "> status\\r\n< \\r\\n{words}\n^ \\r\\n~>");
     };
     for c in commands {
-        let d = zoraya_describe::parse(c.text.as_bytes())
-            .map_err(|e| format!("{}: {e}", c.name))?;
+        let d =
+            zoraya_describe::parse(c.text.as_bytes()).map_err(|e| format!("{}: {e}", c.name))?;
         let lines = |s: &mut String, text: &str| {
             for (i, line) in text.lines().enumerate() {
                 let op = if i == 0 { '<' } else { '^' };

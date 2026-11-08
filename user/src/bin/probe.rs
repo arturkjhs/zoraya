@@ -40,6 +40,7 @@ fn requests(file: &File, kind: native::EntryKind) -> String {
         say("read", word(&file.read(0, &mut b)));
         say("write", word(&file.write(0, write_flags::APPEND, b"")));
         say("sync", word(&file.sync()));
+        say("share", word(&file.share(rights::ALL)));
         return out;
     }
     say("list", word(&file.list(&mut |_, _| {})));
@@ -51,8 +52,25 @@ fn requests(file: &File, kind: native::EntryKind) -> String {
     say("create", word(&created));
     say("mkdir", word(&file.make_directory("probe.dir")));
     say("remove", word(&file.remove("probe.tmp")));
-    let _ = file.remove("probe.dir");
     say("sync", word(&file.sync()));
+    // The rest of ADR-0055's requests (review K10), after the ones above so
+    // that their words keep their places.
+    say("rename", word(&file.rename("probe.dir", file, "probe.mv")));
+    let _ = file.remove("probe.dir");
+    let _ = file.remove("probe.mv");
+    let token = file.token();
+    say("token", word(&token));
+    if let Ok(t) = token {
+        let _ = zoraya_user::handle_close(t);
+    }
+    say("share", word(&file.share(rights::ALL)));
+    say("narrow", word(&file.narrow("probe.tmp", rights::ALL)));
+    let unnamed = file.create_unnamed();
+    say("unnamed", word(&unnamed));
+    if let Ok(u) = &unnamed {
+        say("publish", word(&u.publish(file, "probe.pub")));
+        let _ = file.remove("probe.pub");
+    }
     out
 }
 

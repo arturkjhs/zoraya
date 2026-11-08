@@ -71,9 +71,6 @@
 ^ \r\n~>
 > cd project\r
 < \r\n~/project>
-> pwd\r
-< \r\n/home/project
-^ \r\n~/project>
 > cd\r
 < \r\n~>
 > cd project\r

@@ -149,9 +149,16 @@ fn entries_for(kind: Kind, abs: &str, reason: &str, out: &mut Vec<Planned>) {
     }
 }
 
-/// The value an operand's text came from, by identity of its text.
+/// The value an operand's text came from: the argument whose text holds
+/// it, the whole word or a piece of it (`-C$d`, `--directory=$d`, which
+/// the parser gives as part of a word; review S1).
 fn value_of<'v>(args: &'v [Value], text: &str) -> Option<&'v Value> {
-    args.iter().find(|a| core::ptr::eq(a.text.as_str(), text))
+    let start = text.as_ptr() as usize;
+    let end = start + text.len();
+    args.iter().find(|a| {
+        let a_start = a.text.as_ptr() as usize;
+        a_start <= start && end <= a_start + a.text.len()
+    })
 }
 
 /// Plans the entries of a line (rules 1 to 4).
@@ -185,15 +192,31 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
                 return Ok(());
             }
             let abs = join(line.cwd, 0, text);
-            let literal = value_of(line.args, text).is_none_or(|v| v.literal);
-            let inside = covers(line.cwd, &abs) || granted.iter().any(|g| covers(g, &abs));
+            // A text that is no argument's is taken as from a value: the
+            // check fails closed.
+            let literal = value_of(line.args, text).is_some_and(|v| v.literal);
+            // A kind that narrows the parent needs the path strictly below:
+            // a value naming the current directory itself would give its
+            // parent (review S16).
+            let narrows = matches!(
+                kind,
+                Kind::Create | Kind::Remove | Kind::RemoveTree | Kind::Rename
+            );
+            let within = |base: &str| covers(base, &abs) && !(narrows && abs == base);
+            let inside = within(line.cwd) || granted.iter().any(|g| within(g));
             if !literal && !inside {
                 let parent = parent_and_name(&abs).map_or_else(|| "/".to_string(), |(p, _)| p);
+                // The least grant that would cover it (review S10).
+                let (marker, dir) = if kind == Kind::Read {
+                    ("+r", abs.clone())
+                } else {
+                    ("+w", parent)
+                };
                 return Err(Refused {
                     subject: text.into(),
                     problem: "from a value, outside the current directory".into(),
                     hint: Some(format!(
-                        "if that is meant, write +w {parent} before the command"
+                        "if that is meant, write {marker} {dir} before the command"
                     )),
                 });
             }
@@ -302,6 +325,12 @@ pub fn through_links(
 /// directory is given whole with the union of the rights, and a narrowed
 /// part is shown in rule 2's fallback words, so `grants` says what is given.
 pub fn merge(plan: &[Planned]) -> Vec<Merged> {
+    covered(by_path(plan))
+}
+
+/// The entries of a plan merged by exact path, in the order each first
+/// appears.
+fn by_path(plan: &[Planned]) -> Vec<Merged> {
     let mut paths: Vec<&str> = Vec::new();
     for e in plan {
         if !paths.contains(&e.path.as_str()) {
@@ -336,6 +365,57 @@ pub fn merge(plan: &[Planned]) -> Vec<Merged> {
             }
         })
         .collect()
+}
+
+/// Entries inside others (review S3, S9): a path is served by the entry
+/// with the longest prefix alone, so an entry inside an undivided one gets
+/// that one's rights as well (a narrowed one is undivided then too, since
+/// the covering entry already allows more), and an entry that adds nothing
+/// to one that covers it is left out: `+w ~` reaches into a current
+/// directory below it, and `cat *.txt` takes one entry, not one a file.
+fn covered(mut merged: Vec<Merged>) -> Vec<Merged> {
+    let n = merged.len();
+    for i in 0..n {
+        for j in 0..n {
+            if i == j || merged[j].name.is_some() {
+                continue;
+            }
+            let (outer, inner) = (merged[j].path.clone(), merged[i].path.clone());
+            if outer != inner && resolve_covers(&outer, &inner) {
+                let more = merged[j].rights;
+                let m = &mut merged[i];
+                if m.name.is_some() && more & m.rights == m.rights {
+                    m.name = None;
+                }
+                if m.name.is_none() {
+                    m.rights |= more;
+                }
+            }
+        }
+    }
+    let keep: Vec<bool> = (0..n)
+        .map(|i| {
+            let m = &merged[i];
+            !(0..n).any(|j| {
+                let o = &merged[j];
+                j != i
+                    && o.name.is_none()
+                    && m.name.is_none()
+                    && o.path != m.path
+                    && resolve_covers(&o.path, &m.path)
+                    && o.rights & m.rights == m.rights
+            })
+        })
+        .collect();
+    merged
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(m, k)| k.then_some(m))
+        .collect()
+}
+
+fn resolve_covers(outer: &str, inner: &str) -> bool {
+    zoraya_resolve::covers(outer, inner)
 }
 
 /// A path as `grants` shows it: `~` for home.

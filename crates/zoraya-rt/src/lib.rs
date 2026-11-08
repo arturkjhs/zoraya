@@ -62,7 +62,17 @@ unsafe extern "Rust" {
 #[cfg(feature = "entry")]
 #[unsafe(no_mangle)]
 extern "C" fn __user_main() -> ! {
+    learn_streams();
     process_exit(main())
+}
+
+/// Asks, before `main` runs, whether the streams' slots hold streams: then
+/// the table holds only what the spawn placed, so a handle the program
+/// makes later at one of those slots is never taken for one (review K8).
+pub fn learn_streams() {
+    let _ = stream_at(0, native::slot::OUT);
+    let _ = stream_at(1, native::slot::ERR);
+    let _ = stream_at(2, native::slot::IN);
 }
 
 /// The system calls this process made since the last [`take_syscalls`]
@@ -529,9 +539,11 @@ impl fmt::Write for Console {
     }
 }
 
-/// Whether the process holds a stream's write end at `slot`: 0 unknown,
-/// 1 no, 2 yes. Asked once per slot.
-static STREAM_AT: [core::sync::atomic::AtomicU8; 2] = [
+/// Whether the process holds its stream at `slot` (the write end of `OUT`
+/// and `ERR`, the read end of `IN`): 0 unknown, 1 no, 2 yes. Asked once per
+/// slot, before `main` with the `entry` feature.
+static STREAM_AT: [core::sync::atomic::AtomicU8; 3] = [
+    core::sync::atomic::AtomicU8::new(0),
     core::sync::atomic::AtomicU8::new(0),
     core::sync::atomic::AtomicU8::new(0),
 ];
@@ -542,7 +554,12 @@ fn stream_at(which: usize, slot: Handle) -> bool {
         1 => false,
         2 => true,
         _ => {
-            let yes = handle_type(slot) == Ok("stream-write");
+            let kind = if which == 2 {
+                "stream-read"
+            } else {
+                "stream-write"
+            };
+            let yes = handle_type(slot) == Ok(kind);
             STREAM_AT[which].store(if yes { 2 } else { 1 }, Ordering::Relaxed);
             yes
         }
@@ -614,7 +631,7 @@ fn wait_for(end: Handle, wanted: u32) -> Result<(), Status> {
 /// while it is empty: 0 at its end. A program with no `IN` stream has no
 /// input.
 pub fn input_read(buffer: &mut [u8]) -> Result<usize, Status> {
-    if buffer.is_empty() || handle_type(native::slot::IN) != Ok("stream-read") {
+    if buffer.is_empty() || !stream_at(2, native::slot::IN) {
         return Ok(0);
     }
     loop {

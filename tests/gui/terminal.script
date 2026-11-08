@@ -32,6 +32,7 @@ screen ~> _
 # line again there. Rows are 20 pixels high from y 20 (the compositor's
 # origin and the terminal's padding).
 chord ctrl l
+top ~> _
 # In pieces the screen confirms: under TCG a burst of keys can fill
 # term's channel to zosh, and term drops keys (docs/backlog.md).
 type echo aaaaaaa

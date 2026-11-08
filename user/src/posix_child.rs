@@ -17,17 +17,30 @@ use zoraya_abi::{
     StreamReadObject, StreamWriteObject, channel_signals,
 };
 use zoraya_proto_posix as bp;
-use zoraya_protocol::{Below, MAX_WIRE_MESSAGE, Message, decode, encode};
+use zoraya_protocol::{Below, Header, MAX_WIRE_MESSAGE, Message, decode, encode};
 
 use crate::{
     channel_create, channel_read, channel_write, handle_close, handle_duplicate, job_create,
-    port_create, port_subscribe, port_wait, spawn,
+    job_kill, port_create, port_subscribe, port_wait, spawn,
 };
 
 /// A client connection to the broker, with no pid (ADR-0153's note on
 /// ADR-0104).
 pub struct Broker {
     pub end: Handle,
+    /// The last request's transaction number; a reply is read only if it
+    /// carries its request's (review K5).
+    pub transaction: core::cell::Cell<u32>,
+}
+
+impl Broker {
+    /// The connection `end`.
+    pub fn new(end: Handle) -> Broker {
+        Broker {
+            end,
+            transaction: core::cell::Cell::new(0),
+        }
+    }
 }
 
 /// What `SpawnPrepareIn` gave.
@@ -56,26 +69,55 @@ impl Broker {
                 let _ = handle_close(e.handle);
             }
         };
-        let Ok(length) = encode(m, 1, &mut bytes) else {
+        let t = self.transaction.get().wrapping_add(1).max(1);
+        self.transaction.set(t);
+        let Ok(length) = encode(m, t, &mut bytes) else {
             unsent();
             return Err(Status::InvalidArgument);
         };
-        if let Err(s) = channel_write(self.end, &bytes[..length], handles) {
+        // The port before the request, so that no failure after the write
+        // leaves its reply to be read as the next one's (review K5).
+        let port = match port_create() {
+            Ok(port) => port,
+            Err(s) => {
+                unsent();
+                return Err(s);
+            }
+        };
+        let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+        if let Err(s) = port_subscribe(port, self.end, wanted, 1, Mode::Level) {
+            let _ = handle_close(port);
             unsent();
             return Err(s);
         }
-        let port = port_create()?;
-        let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
-        let waited = port_subscribe(port, self.end, wanted, 1, Mode::Level).and_then(|()| {
+        if let Err(s) = channel_write(self.end, &bytes[..length], handles) {
+            let _ = handle_close(port);
+            unsent();
+            return Err(s);
+        }
+        let reply = loop {
             let mut packets = [Packet::default()];
-            port_wait(port, DEADLINE_INFINITE, &mut packets).map(|_| ())
-        });
+            if let Err(s) = port_wait(port, DEADLINE_INFINITE, &mut packets) {
+                break Err(s);
+            }
+            bytes.resize(MAX_WIRE_MESSAGE, 0);
+            let mut got = [self.end; 4];
+            let sizes = match channel_read(self.end, &mut bytes, &mut got) {
+                Ok(sizes) => sizes,
+                Err((s, _)) => break Err(s),
+            };
+            bytes.truncate(sizes.bytes as usize);
+            let got = got[..sizes.handles as usize].to_vec();
+            if Header::decode(&bytes).is_ok_and(|(h, _)| h.transaction == t) {
+                break Ok((bytes, got));
+            }
+            // A reply to an earlier request, which gave up: dropped.
+            for h in got {
+                let _ = handle_close(h);
+            }
+        };
         let _ = handle_close(port);
-        waited?;
-        let mut got = [self.end; 4];
-        let sizes = channel_read(self.end, &mut bytes, &mut got).map_err(|(s, _)| s)?;
-        bytes.truncate(sizes.bytes as usize);
-        Ok((bytes, got[..sizes.handles as usize].to_vec()))
+        reply
     }
 
     /// `spawn_prepare(Group(job))`: a pid whose process job the broker makes
@@ -376,9 +418,17 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         }
     };
     // The record with its connections, then the child's own handle.
-    let written = channel_write(boot, &record[..n], &moved);
-    if written.is_err() {
+    // A child that did not get its record, or that the broker did not take,
+    // is ended and its pid given back (review K4).
+    let gone = |s: Status| {
+        let _ = job_kill(p.parent_job);
+        let _ = handle_close(process);
+        fail(s, &p)
+    };
+    if let Err(s) = channel_write(boot, &record[..n], &moved) {
         close_entries(&l.entries);
+        let _ = handle_close(boot);
+        return Err(gone(s));
     }
     if let Ok(me) = handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
         let entry = [ChannelEntry {
@@ -390,9 +440,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     }
     let _ = handle_close(boot);
     if let Err(s) = broker.commit(p.pid, process) {
-        let _ = handle_close(process);
-        let _ = handle_close(p.parent_job);
-        return Err(s);
+        return Err(gone(s));
     }
     Ok(Child {
         pid: p.pid,

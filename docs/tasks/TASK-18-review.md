@@ -46,3 +46,53 @@ default bodies themselves. The holes: the defaults were never run (only `Mem`, w
 and its `&&` were not pinned, and `head`'s choice between its input and its files was not either.
 `a_caller_with_the_defaults_has_no_input_and_gets_all_output`, `input_gives_each_read_and_then_its_end`,
 `output_is_offered_only_past_print_at` and `head_reads_its_input_only_when_it_needs_it` kill them.
+
+## The whole of Part 2 (steps 1 to 12), at `453a796`
+
+Read, in two halves by the main model in sessions that wrote none of the code: (S) the host crates and the shell
+program (`zoraya-shell`, `zoraya-describe`, `zoraya-command`, `zoraya-commands`, `zoraya-settings`,
+`zoraya-resolve`, `tools/tour`, `zosh`, `user/src/{namespace,files,filecmd,command}.rs`, the POSIX launch), against
+ADR-0150 to ADR-0159, ADR-0200 and `docs/adr/invariants.md`; (K) the kernel, ABI and runtime changes, the runner,
+the scripts, the Makefile and the CI workflow. Host tests were run in both; nothing in QEMU. Every finding below was
+then fixed or stated, and the fixes were checked again by reading their diff and by `make test`.
+
+### Findings and dispositions
+
+| Id | Severity | Finding | Disposition |
+|---|---|---|---|
+| S1 | high | An option argument attached to its option (`-o$x`, `--output=$x`) was taken as literal, so rule 4 did not apply to it: `grants::value_of` matched a whole word by identity, and "not found" meant literal. | Fixed: a designated text is a value's if it lies inside one, and fails closed when no word contains it. `values_inside_a_word_are_values`. |
+| S2 | medium | A connection narrowed to one name widened through it: opening that name as a directory gave a connection with the requested rights and no narrowing, so `create`, `remove` or `rename NAME` reached the whole tree below NAME (INV-0153-2). | Fixed in the file service: a narrowed connection opens its name as a directory to read and list only (`ACCESS_DENIED` for more). `a_narrowed_name_that_is_a_directory_opens_to_read_only`; `docs/design.md` says so. |
+| S3 | medium | An entry inside a broader one hid the broader rights: `+w ~ prog` in `~/project` left `~/project` read only, since a path is served by its longest entry. | Fixed: `merge` gives every entry the rights of each entry that covers it (`covered`). `entries_inside_others_take_their_rights`. |
+| S4 | medium | `rm --recursive` followed link objects and removed what they pointed at. | Fixed: `remove_tree` learns each entry's kind from its parent's listing and never follows a link; a link is removed as itself. `removing_a_tree_never_follows_a_link`. |
+| S5 | medium | A redirection target from a value (`echo x > $f`) was opened with the shell's own access, outside rule 4. | Fixed: a redirection target from a value must lie inside the current directory or a grant of the element. `a_redirection_from_a_value_stays_inside`. |
+| S6 | medium | `grants LINE` did not show what the line would get (INV-0153-4): every word was literal, markers from values counted as grants, and a native volume program got the POSIX report. | Fixed: the builtin evaluates the line as a run does (marks kept, markers literal only) and asks the host for the program's kind. `grants_sees_the_line_as_a_run_would`, `a_posix_programs_report_shows_its_toolchain_set`. |
+| S7 | medium | INV-0153-3's named cases (`+r` and `+w /` as values, empty and two-element lists, link objects from variables) had no tests, nor had the arity refusal. | Fixed: `a_grant_is_written_and_is_one_path` and the rule-5 cases of `grants.script`. |
+| S8 | low | A glob after `+r`/`+w` with one match was accepted (rule 3 refuses a pattern); the arity check repeated one clause. | Fixed: a grant's word with an active pattern is refused ("a grant names one path: a pattern is not one"); same test. |
+| S9 | medium | A line with more than about 62 designated paths could not run (64 entries), undocumented. | Fixed with S3: a path covered with the same rights by another entry gets no entry of its own. The limit left (64 distinct entries) is in `docs/design.md`'s limitations. |
+| S10 | low | Rule 4's hint always offered `+w` on the parent, also for a read. | Fixed: the hint offers `+r` for a read operand. |
+| S11 | low | The refused-path hint put the grant before the whole line, where it does not reach a later element. | Fixed: in a pipeline the hint says "put +r DIR before NAME in the line". |
+| S12 | low | A line that failed after a POSIX element started left its pid unreaped in the broker and its `/tmp` directory. | Fixed: the refusal paths reap the killed POSIX elements and remove the line's `/tmp`. |
+| S13 | low | Patterns with `.` or `..` components never matched. | Fixed: they are steps, not names to list. `dot_and_dot_dot_are_steps`. |
+| S14 | low | Repeated `**` did combinatorial work. | Fixed: `**/**` is one `**`, and a pattern makes at most 10 000 listings. `repeated_any_is_one_and_listings_are_bounded`. |
+| S15 | low | The tour's step 15 promised a narrowed output that its own example does not get. | Fixed: step 15 says that both names are in the current directory, given whole, and points to step 17. |
+| S16 | low | A value naming the current directory itself designated its name in the parent. | Fixed: kinds that narrow the parent want a path strictly below the current directory or a grant. In `values_inside_a_word_are_values`. |
+| S17 | low | History entries of several lines came back as separate lines after a restart. | Fixed: a line end inside an entry is kept in `/config/history` as U+001E and restored on reading. |
+| K1 | medium | INV-0159-1's check never used a `Power` handle: the "without `POWER`" case was a console handle. | Fixed: the test kernel starts `t_console` a second time with a `Power` handle without `POWER`; `power_reset` and `power_off` are refused and it returns 0. Status text corrected. |
+| K2 | medium | The tour jobs would likely pass CI's 10-minute job limit under TCG (GitHub's runners have only TCG). | Fixed: `tour.script` is one job per accelerator, the GUI tour is a step of its own (`make test-tour-gui`), one job per accelerator, and jobs whose command names the tour may take 30 minutes. The measured times are in the task report. |
+| K3 | medium | Fixed sleeps stood in for readiness before `o` checks and before Ctrl-Z to a program that installs a handler. | Fixed: the runner's new step `w TEXT` waits for TEXT since the last match (`wait_leaves_the_last_match`); `jobs.script` and `zosh.script` wait for the `ready` and `quit` lines. The tour's `pause 1000` before Ctrl-C and Ctrl-Z stays: it goes to native programs, whose job exists before zosh reads the key, so there is no race to lose. |
+| K4 | low | A POSIX child whose record could not be written, or that the broker did not commit, was left running with its pid prepared. | Fixed: its process job is killed and the pid aborted. |
+| K5 | low | A failed `Broker::call` after its write left the reply to be read as the next call's; every request was transaction 1. | Fixed: the port is made and subscribed before the write, requests are numbered, and a reply of another number is dropped. |
+| K6 | low | init's broker start leaked its job, hand-off ends and image on failure paths, and a broker it gave up on kept running. | Fixed: one cleanup on every way out (`spawn_broker` closes its image whatever happens). |
+| K7 | low | init waited a fixed 5 s for the broker's hand-off. | Fixed: it waits for the hand-off or the broker's `TERMINATED`, with no deadline. |
+| K8 | low | `zoraya-rt` judged its stream slots on first use, when a handle the program made could be at one of them. | Fixed: the entry asks before `main`, when the table holds only what the spawn placed; `input_read` uses the same answer. |
+| K9 | low | INV-0200-2's "did not stop" half was untested, and the order handler, stop, report was not checked. | Fixed: `t_posix notstp` ignores `SIGTSTP` and `zosh.script` expects `did not stop`; zosh passes on a job's output while it waits for the stop, and the script expects `restoring the terminal` before `[1] stopped`. |
+| K10 | low | `probe` did not try `rename`, `token`, `share`, `narrow`, or an unnamed file and `publish`. | Fixed: it tries them, after the others, and `grants.script` expects their words. |
+| K11 | low | `Startup::decode` accepted a path repeated with another path of its length between. | Fixed: any repeated path is refused; in `the_rules_are_kept`. |
+| K12 | low | A GUI script's `window` after Ctrl-L could match the screen before the clear. | Fixed: the runner's new step `top TEXT` waits until the top row reads TEXT; the generator and `terminal.script` use it after Ctrl-L. |
+| K13 | low | INV-0155-1's Status still said "not yet applicable". | Already fixed by step 11 before the review ended: `checked: make test-files (tests/shell/conventions.script)`. |
+
+Checked and found sound, among others: `zoraya-resolve`'s path rules and link following, the service's narrowing of
+every request but S2's, the value marks through globs and function calls, the bounds of `math`, the settings reader,
+the editor, history and captures, PSCI `SYSTEM_RESET` and its rights check, `Startup::decode`'s totality and handle
+bitmap, `zoraya_elf::section`, `Gather`, the reaping of POSIX pids when a line's job ends, and init's ordering of the
+shell's and the terminal's ends.

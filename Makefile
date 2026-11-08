@@ -54,7 +54,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -433,7 +433,10 @@ test-posix-gui: posix-image $(RUNNER)
 	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/posix-gui-$$accel.qmp \
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
-	@# The tour in the window (INV-0154-4), on the tour's image.
+
+# The tour in the window (INV-0154-4), on the tour's image: a step of its
+# own, so that CI runs it as a job of its own (review K2).
+test-tour-gui: posix-image $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
 	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-gui.img > /dev/null && \
 	  $(RUNNER) --timeout 1200 --gui-script $(TOUR_GUI_SCRIPT) --qmp $(BUILD)/tour-gui-$$accel.qmp \
@@ -562,7 +565,7 @@ check-test-caps:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
 TEST_STEPS += check-ci-jobs
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

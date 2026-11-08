@@ -104,8 +104,28 @@ fn power() {
     let _ = handle_close(without);
 }
 
+/// INV-0159-1 (and INV-0062-2) with a `Power` handle that lacks `POWER`:
+/// the test kernel starts this program a second time with one, at `POWER`'s
+/// slot. Both calls are refused, and the program goes on to return 0.
+fn power_without_the_right() -> i32 {
+    assert_eq!(
+        power_reset(POWER),
+        Status::AccessDenied,
+        "a Power handle without POWER"
+    );
+    assert_eq!(
+        power_off(POWER),
+        Status::AccessDenied,
+        "a Power handle without POWER"
+    );
+    0
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
+    if handle_type(POWER) == Ok("power") {
+        return power_without_the_right();
+    }
     input();
     types();
     let names = listing();

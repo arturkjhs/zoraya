@@ -10,7 +10,7 @@ use zoraya_proto_file::rights;
 
 use crate::eval::Value;
 use crate::grants::{
-    Access, Line, Planned, Refused, merge, plan, report, summary, through_links,
+    Access, Line, Planned, Refused, merge, plan, report, shown, summary, through_links,
     trusted_description,
 };
 
@@ -186,6 +186,40 @@ fn values_reach_only_inside_the_directory_or_a_grant() {
     assert_eq!(p[1].path, "/config");
 }
 
+/// Review S1: a value attached to its option (`-o$x`, `--output=$x`) is a
+/// value, as one written apart is; S16: a value may not name the current
+/// directory itself for a kind that narrows its parent; S10: the hint asks
+/// `+r` for a read.
+#[test]
+fn values_inside_a_word_are_values() {
+    for word in ["-o/config/settings", "--output=/config/settings"] {
+        let e = go(TCC, &["a.c", word], &[word], &[], true, "/u/proj").unwrap_err();
+        assert_eq!(
+            e.problem, "from a value, outside the current directory",
+            "{word}"
+        );
+        assert_eq!(
+            e.hint.as_deref(),
+            Some("if that is meant, write +w /config before the command")
+        );
+    }
+    assert!(go(TCC, &["a.c", "-oout"], &["-oout"], &[], true, "/u/proj").is_ok());
+    assert!(
+        go(TCC, &["a.c", "-o/x"], &[], &[], true, "/u/proj").is_ok(),
+        "typed: designates"
+    );
+    for v in [".", ""] {
+        let e = go(RM, &[v], &[v], &[], true, "/u/proj");
+        assert!(e.is_err(), "{v:?} names the current directory");
+    }
+    let cat = "name cat\nsummary c\nusage cat FILE...\noperand FILE... read f\n";
+    let e = go(cat, &["/etc/x"], &["/etc/x"], &[], true, "/u/proj").unwrap_err();
+    assert_eq!(
+        e.hint.as_deref(),
+        Some("if that is meant, write +r /etc/x before the command")
+    );
+}
+
 #[test]
 fn grants_are_entries_with_their_reason() {
     let p = go(
@@ -231,12 +265,12 @@ fn a_jobs_summary_words_its_entries() {
     .unwrap();
     assert_eq!(
         summary(&p, "/u"),
-        "~: read, ~/notes.txt: read, ~/project: create or replace notes.txt"
+        "~: read, ~/project: create or replace notes.txt"
     );
     let p = go(CP, &["a.txt", "b.txt"], &[], &[], true, "/u").unwrap();
     assert_eq!(
         summary(&p, "/u"),
-        "~: read, ~: create and change anything in, ~/a.txt: read"
+        "~: read, ~: create and change anything in"
     );
     assert_eq!(summary(&[], "/u"), "");
 }
@@ -245,7 +279,7 @@ fn a_jobs_summary_words_its_entries() {
 fn entries_of_one_path_merge() {
     let p = go(CP, &["a.txt", "b.txt"], &[], &[], true, "/u").unwrap();
     let m = merge(&p);
-    assert_eq!(m.len(), 2, "/u and /u/a.txt");
+    assert_eq!(m.len(), 1, "/u; /u/a.txt is inside it with no more rights");
     assert_eq!(m[0].name, None);
     assert_eq!(
         m[0].rights,
@@ -400,4 +434,59 @@ fn a_posix_programs_report_shows_its_toolchain_set() {
   /dev/null
 "
     );
+}
+
+/// Review S3 and S9: an entry inside an undivided one gets its rights too,
+/// a narrowed one inside a wider grant is undivided, and an entry that adds
+/// nothing to one covering it is left out.
+#[test]
+fn entries_inside_others_take_their_rights() {
+    let cat = "name cat\nsummary c\nusage cat FILE...\noperand FILE... read f\n";
+    // `~/project> +w ~ cat x`: the current directory is writable too.
+    let p = go(cat, &["x"], &[], &[(true, "/u")], true, "/u/project").unwrap();
+    let m = merge(&p);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(
+        (m[0].path.as_str(), m[0].rights),
+        ("/u", Access::Tree.rights())
+    );
+    // A narrowed remove inside `+w .` does not keep its sibling from it.
+    let rm = "name rm\nsummary r\nusage rm PATH...\noperand PATH... remove x\n";
+    let p = go(rm, &["sub/a"], &[], &[(true, ".")], true, "/u").unwrap();
+    let m = merge(&p);
+    assert!(m.iter().all(|e| e.name.is_none()), "{m:?}");
+    assert!(
+        m.iter()
+            .all(|e| e.rights & Access::Tree.rights() == Access::Tree.rights()),
+        "{m:?}"
+    );
+    // Seventy files read in the current directory: one entry.
+    let names: Vec<String> = (0..70).map(|i| alloc::format!("f{i}.txt")).collect();
+    let args: Vec<&str> = names.iter().map(String::as_str).collect();
+    let p = go(cat, &args, &[], &[], true, "/u").unwrap();
+    assert_eq!(merge(&p).len(), 1);
+    // A narrowed create in another directory stays narrowed.
+    let p = go(CP, &["a", "d/b"], &[], &[], true, "/u").unwrap();
+    assert!(merge(&p).iter().any(|e| e.name.as_deref() == Some("b")));
+}
+
+/// Mutation testing: each kind's rights, exactly, and a path shown under
+/// the home only when it is inside it.
+#[test]
+fn each_access_has_exactly_its_rights() {
+    use rights::*;
+    assert_eq!(Access::Read.rights(), READ | CLONE);
+    assert_eq!(Access::Change.rights(), READ | WRITE | SYNC | CLONE);
+    assert_eq!(
+        Access::Create("x".into()).rights(),
+        READ | WRITE | CREATE | SYNC | CLONE
+    );
+    assert_eq!(Access::Remove("x".into()).rights(), READ | REMOVE | CLONE);
+    assert_eq!(
+        Access::Rename("x".into()).rights(),
+        READ | RENAME | CREATE | REMOVE | CLONE
+    );
+    assert_eq!(shown("/u/a", "/u"), "~/a");
+    assert_eq!(shown("/uxy", "/u"), "/uxy");
+    assert_eq!(shown("/abc", "/"), "/abc");
 }

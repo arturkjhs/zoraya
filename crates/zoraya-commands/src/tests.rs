@@ -9,6 +9,9 @@ use alloc::string::ToString;
 struct Mem {
     files: BTreeMap<String, Vec<u8>>,
     dirs: Vec<String>,
+    /// Link objects: path to the path they lead to; followed by everything
+    /// but a listing and `remove`, as the file service does.
+    links: BTreeMap<String, String>,
     synced: bool,
     /// The input, and how much of it each read gives.
     input: Vec<u8>,
@@ -43,6 +46,19 @@ impl Mem {
         }
     }
 
+    /// `p` with any link at its start followed.
+    fn follow(&self, p: &str) -> String {
+        for (link, target) in &self.links {
+            if p == link {
+                return target.clone();
+            }
+            if let Some(rest) = p.strip_prefix(&format!("{link}/")) {
+                return format!("{target}/{rest}");
+            }
+        }
+        p.to_string()
+    }
+
     fn parent_exists(&self, p: &str) -> bool {
         match p.rsplit_once('/') {
             Some((dir, _)) => self.dirs.iter().any(|d| d == dir),
@@ -53,7 +69,7 @@ impl Mem {
 
 impl Files for Mem {
     fn list(&mut self, dir: &str) -> Result<Vec<(String, Kind)>, Status> {
-        let dir = Mem::norm(dir);
+        let dir = self.follow(&Mem::norm(dir));
         if !self.dirs.contains(&dir) {
             return Err(if self.files.contains_key(&dir) {
                 status::NOT_DIRECTORY
@@ -80,6 +96,14 @@ impl Files for Mem {
                 && !rest.contains('/')
             {
                 out.push((rest.to_string(), Kind::Directory));
+            }
+        }
+        for l in self.links.keys() {
+            if let Some(rest) = l.strip_prefix(&prefix)
+                && !rest.is_empty()
+                && !rest.contains('/')
+            {
+                out.push((rest.to_string(), Kind::Link));
             }
         }
         out.reverse(); // any order
@@ -123,7 +147,7 @@ impl Files for Mem {
 
     fn remove(&mut self, path: &str) -> Result<(), Status> {
         let p = Mem::norm(path);
-        if self.files.remove(&p).is_some() {
+        if self.links.remove(&p).is_some() || self.files.remove(&p).is_some() {
             return Ok(());
         }
         if self.dirs.contains(&p) {
@@ -147,7 +171,7 @@ impl Files for Mem {
     }
 
     fn stat(&mut self, path: &str) -> Result<Stat, Status> {
-        let p = Mem::norm(path);
+        let p = self.follow(&Mem::norm(path));
         let (kind, size) = if self.dirs.contains(&p) {
             (Kind::Directory, 0)
         } else {
@@ -628,4 +652,83 @@ fn head_reads_its_input_only_when_it_needs_it() {
     let mut m = with_input(b"one\n", 4096);
     assert_eq!(go(&mut m, &["head", "--lines", "0"]).1, "");
     assert_eq!(m.taken, 0);
+}
+
+/// Review S4: `rm --recursive` removes a link object as itself and never
+/// goes into it, so what the link leads to stays.
+#[test]
+fn removing_a_tree_never_follows_a_link() {
+    let mut m = Mem::new(
+        &[("tree/a.txt", "a"), ("kept/b.txt", "b")],
+        &["tree", "kept"],
+    );
+    m.links.insert("tree/lnk".into(), "kept".into());
+    m.links.insert("top-link".into(), "kept".into());
+    assert_eq!(go(&mut m, &["rm", "--recursive", "tree"]).0, 0);
+    assert!(!m.dirs.contains(&"tree".to_string()));
+    assert!(
+        m.files.contains_key("kept/b.txt"),
+        "the link's target stays"
+    );
+    assert_eq!(go(&mut m, &["rm", "--recursive", "top-link"]).0, 0);
+    assert!(!m.links.contains_key("top-link"));
+    assert!(m.files.contains_key("kept/b.txt"), "the link alone goes");
+}
+
+/// A chain of `n` directories below `t`: `t/d/d/...`.
+fn chain(n: usize) -> Mem {
+    let mut dirs = vec![String::from("t")];
+    for _ in 0..n {
+        let next = format!("{}/d", dirs.last().expect("one at least"));
+        dirs.push(next);
+    }
+    let names: Vec<&str> = dirs.iter().map(String::as_str).collect();
+    Mem::new(&[], &names)
+}
+
+/// The depth bound of a walk and of a removal: `MAX_DEPTH` levels below
+/// the named directory are walked, one more is refused (mutation testing).
+#[test]
+fn a_tree_is_walked_and_removed_to_its_depth_bound() {
+    let mut m = chain(MAX_DEPTH);
+    let (code, out, _) = go(&mut m, &["find", "d", "t"]);
+    assert_eq!(
+        (code, out.lines().count()),
+        (0, MAX_DEPTH),
+        "every level found"
+    );
+    assert_eq!(go(&mut m, &["rm", "--recursive", "t"]).0, 0);
+    assert!(!m.dirs.contains(&"t".to_string()));
+    let mut m = chain(MAX_DEPTH + 1);
+    let (code, _, err) = go(&mut m, &["find", "d", "t"]);
+    assert!(
+        code != 0 && !err.is_empty(),
+        "too deep is said: {code} {err:?}"
+    );
+    assert_ne!(go(&mut m, &["rm", "--recursive", "t"]).0, 0);
+    assert!(
+        m.dirs.contains(&"t".to_string()),
+        "a refused removal keeps the top"
+    );
+}
+
+/// `incomplete_tail` holds back only a sequence that is cut: a whole one
+/// at the end is complete (mutation testing).
+#[test]
+fn a_whole_sequence_at_the_end_is_not_held() {
+    for c in ["é", "€", "𝄞"] {
+        let b = c.as_bytes();
+        assert_eq!(incomplete_tail(b), 0, "{c}");
+        assert_eq!(incomplete_tail(&b[..b.len() - 1]), b.len() - 1, "{c} cut");
+    }
+}
+
+/// `head --lines` takes a count: a negative one is a usage error (mutation
+/// testing).
+#[test]
+fn heads_count_is_not_negative() {
+    let mut m = Mem::new(&[("a.txt", "1\n2\n")], &[]);
+    let (code, out, err) = go(&mut m, &["head", "--lines", "-1", "a.txt"]);
+    assert_eq!(code, zoraya_command::exit::USAGE, "{out:?} {err:?}");
+    assert!(err.contains("is not a count"), "{err:?}");
 }

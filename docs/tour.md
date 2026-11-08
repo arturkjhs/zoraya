@@ -4,7 +4,7 @@ This is how a person new to Zoraya meets its shell, written as they would read i
 they type (after the prompt) and what the screen shows. It is the tour of TASK-18 Part 1
 (`docs/research/shell/tour.md`, kept as it was decided) brought to the shell as built; the differences are listed at
 the end. `make test-posix` plays every example of this file on the serial console (`tests/posix/tour.script`) and
-`make test-posix-gui` in the GUI terminal (`tests/posix/tour-gui.script`); both scripts are generated from this file
+`make test-tour-gui` in the GUI terminal (`tests/posix/tour-gui.script`); both scripts are generated from this file
 by `zoraya-tour`, and a host test fails when either differs from what this file gives (INV-0154-4), so the tour and
 the shell cannot drift apart.
 
@@ -95,8 +95,6 @@ call Ada
 notes.txt
 project/
 ~> cd project
-~/project> pwd
-/home/project
 ~/project> cd
 ~> cd project
 ~/project>
@@ -208,8 +206,9 @@ cp gets:
 ```
 
 **15. Compiling a program.** TinyCC is part of the base system and its description comes with it, so the source it
-reads and the output it names are given to it: `-o hello` means "create or replace this one name", so compiling
-again simply replaces the program.
+reads and the output it names are given to it: `-o hello` asks for "create or replace this one name", and compiling
+again simply replaces the program. Here both names are in the current directory, which tcc is given whole; step 17's
+`grants` shows that, and why.
 ```
 ~> echo '#include <stdio.h>' > hello.c
 ~> echo 'int main(void) { printf("hello, world\n"); return 0; }' >> hello.c

@@ -26,6 +26,8 @@
 //!                   chord ctrl c
 //! region X Y W H RGB  every pixel of the rectangle is the colour RGB (hex)
 //! window            a new window: the next `screen` looks from its top row
+//! top TEXT          wait until the top row reads TEXT (a cleared screen),
+//!                   then a new window as `window`
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
 //! exit              wait for QEMU to end with status 0
@@ -63,6 +65,7 @@ pub enum Step {
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
     Window,
+    Top(String),
     Exit,
 }
 
@@ -103,6 +106,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             }
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
             "window" => Step::Window,
+            "top" => Step::Top(rest.to_string()),
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
@@ -493,6 +497,23 @@ impl Run {
                 self.row = None;
                 Ok(())
             }
+            Step::Top(text) => loop {
+                if Instant::now() <= self.deadline {
+                    self.pump()?;
+                }
+                let rows = self.qmp.screen()?.rows();
+                if rows.first() == Some(text) {
+                    self.row = None;
+                    return Ok(());
+                }
+                if Instant::now() > self.deadline {
+                    return Err(format!(
+                        "timeout waiting for the top row to read {text:?}; the screen shows:\n{}",
+                        rows.join("\n")
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            },
             Step::Exit => loop {
                 self.pump()?;
                 match self.child.try_wait().map_err(|e| e.to_string())? {

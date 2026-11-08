@@ -22,11 +22,13 @@
 > requests a | requests b &\r
 < [1] requests a | requests b
 < \r\n/>
-~ 800 zzz
+w a: ready
+w b: ready
 o a: ready
 o b: ready
 > requests c | requests d\r
-~ 800 zzz
+w c: ready
+w d: ready
 o c: ready
 o d: ready
 # Ctrl-C: an interrupt to both in front; a second later the shell offers
@@ -57,7 +59,8 @@ o d: interrupt 1
 < requests c | requests d
 > \x1c
 < ^\\
-~ 600 zzz
+w c: quit 1
+w d: quit 1
 o c: quit 1
 o d: quit 1
 > \x03

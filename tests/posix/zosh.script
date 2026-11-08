@@ -73,17 +73,18 @@ x \nf\r
 # program that catches SIGTSTP. Ctrl-Z suspends the native element's own
 # job and sends SIGTSTP through the broker, whose handler runs: it says it
 # restores the terminal, then stops. It cannot print once stopped, so its
-# line comes before it is.
+# line comes before it is, and before the shell says the line stopped.
 ! tstp: continued\r\ntstp: continued
 > requests a | t_posix tstp\r
-~ 1500 zzz
+w a: ready
+w tstp: ready
 o a: ready
 o tstp: ready
 > \x1a
 < ^Z
+< tstp: restoring the terminal
 < [1] stopped: requests a | t_posix tstp
 < \r\n~> 
-~ 500 zzz
 o tstp: restoring the terminal
 x tstp: continued
 > jobs\r
@@ -99,5 +100,15 @@ x tstp: continued
 > \x03
 < ^C
 < requests a | t_posix tstp: interrupted (Ctrl-C)
+< \r\n~> 
+# INV-0200-2's other half: an element that ignores SIGTSTP is not stopped
+# within half a second; the shell says so and the line stays in front.
+> t_posix notstp\r
+w notstp: ready
+> \x1a
+< ^Z
+< did not stop: t_posix notstp
+> \x03
+< t_posix: interrupted (Ctrl-C)
 < \r\n~> 
 > poweroff\r

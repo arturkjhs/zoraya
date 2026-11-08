@@ -13,6 +13,8 @@
 //! ! TEXT          fail if TEXT appears anywhere in the output, before or after
 //! x TEXT          fail if TEXT lies between the last two matches
 //! o TEXT          fail unless TEXT has appeared exactly once so far
+//! w TEXT          wait until TEXT has come since the last match, in any
+//!                 order with what else came; the last match stays where it is
 //! ~ MS TEXT       for MS milliseconds, fail if TEXT arrives
 //! @ KEYS | TEXT   send KEYS every 200 ms until TEXT appears
 //! * N KEYS | TEXT N times: send KEYS and wait for TEXT
@@ -41,6 +43,8 @@ pub enum Step {
     /// Not between the last two matches.
     Absent(String),
     Once(String),
+    /// Waits for text after the last match, which it does not move.
+    Wait(String),
     Quiet(u64, String),
     Until(Vec<u8>, String),
     Repeat(usize, Vec<u8>, String),
@@ -104,6 +108,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             ">" => Step::Send(unescape(rest).map_err(|e| format!("line {number}: {e}"))?),
             "x" => Step::Absent(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "o" => Step::Once(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
+            "w" => Step::Wait(text_of(rest).map_err(|e| format!("line {number}: {e}"))?),
             "~" => {
                 let (ms, text) = rest
                     .split_once(' ')
@@ -425,6 +430,19 @@ fn steps_then_drain(
                     return Err(format!("{text:?} appeared {count} times"));
                 }
             }
+            Step::Wait(text) => {
+                while !link.seen.since_match().contains(text.as_str()) {
+                    if let Some(bad) = link.seen.violation() {
+                        return Err(format!("forbidden output: {bad}"));
+                    }
+                    if Instant::now() >= link.deadline {
+                        return Err(format!("timed out waiting for {text:?}"));
+                    }
+                    if !link.receive(link.deadline)? {
+                        return Err(format!("output ended before {text:?}"));
+                    }
+                }
+            }
             Step::Quiet(ms, text) => {
                 let until = Instant::now() + Duration::from_millis(*ms);
                 let start = link.seen.since_match().len();
@@ -618,6 +636,18 @@ mod tests {
     fn once_counts_the_whole_output() {
         assert_eq!(shell("echo a b", "< b\no a\n", 5), Ok(()));
         assert!(shell("echo a a b", "< b\no a\n", 5).is_err());
+    }
+
+    #[test]
+    fn wait_leaves_the_last_match() {
+        let script = "echo a; sleep 0.2; echo c; echo b";
+        // b is waited for, then c (before it) is still found by `<`.
+        assert_eq!(shell(script, "< a\nw b\n< c\n< b\n", 5), Ok(()));
+        assert!(
+            shell("echo a b", "< b\nw a\n", 2).is_err(),
+            "only after the match"
+        );
+        assert!(shell("echo a", "< a\nw z\n", 1).is_err());
     }
 
     #[test]

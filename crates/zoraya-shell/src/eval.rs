@@ -174,6 +174,10 @@ pub trait Host {
     fn close_output(&mut self, token: u32);
     /// The home directory (`shell.home`).
     fn home(&mut self) -> String;
+    /// The current directory, absolute.
+    fn cwd(&mut self) -> String;
+    /// `grants`: what running `exec` would give, printed into `io`.
+    fn grants(&mut self, state: &mut State, exec: &Exec<'_>, io: &mut Io) -> i32;
     /// True once if Ctrl-C was pressed while the shell itself was busy in
     /// a loop. Asked before each round of `while` and `for`; other keys
     /// must be kept for the prompt.
@@ -309,17 +313,20 @@ impl State {
         if var.exported && values.len() != 1 {
             return Err(format!("{name} is exported, so it holds exactly one value"));
         }
-        var.values = values;
+        // Rule 4 (ADR-0153): a variable's values are data, whatever marks
+        // the words that gave them had; only a call's parameters and
+        // `$args` keep the caller's marks, and they are not set here.
+        var.values = values.iter().map(|v| Value::data(&v.text)).collect();
         Ok(())
     }
 
-    fn unset(&mut self, name: &str) -> bool {
+    fn unset(&mut self, name: &str) {
         if let Some(frame) = self.frames.last_mut()
             && frame.remove(name).is_some()
         {
-            return true;
+            return;
         }
-        self.globals.remove(name).is_some()
+        self.globals.remove(name);
     }
 
     /// Every variable name visible here, sorted.
@@ -514,6 +521,8 @@ enum Context {
     Command,
     /// `for` values and `set`: a pattern that matches nothing is empty.
     EmptyOk,
+    /// The path after `+r` or `+w`: no pattern (rule 3).
+    Grant,
 }
 
 impl<H: Host> Shell<H> {
@@ -1211,7 +1220,10 @@ impl<H: Host> Shell<H> {
         let literal = w.is_literal_source();
         for n in 0..count {
             let mut chars: Vec<(char, bool)> = Vec::new();
-            let mut value_literal = literal;
+            // A word that is one variable alone has its value's mark (a
+            // parameter keeps the caller's, ADR-0153 rule 4); any other
+            // word with a variable in it is data.
+            let mut value_literal = literal || (pieces.len() == 1 && !lists.is_empty());
             for piece in &pieces {
                 match piece {
                     Piece::Text(t, active) => chars.extend(t.chars().map(|c| (c, *active))),
@@ -1227,6 +1239,13 @@ impl<H: Host> Shell<H> {
                 }
             }
             match glob::pattern(&chars) {
+                // Rule 3: a grant is one path as written (review S8).
+                Some(_) if context == Context::Grant => {
+                    return Err(shell_error(
+                        &source,
+                        "a grant names one path: a pattern is not one",
+                    ));
+                }
                 None => out.push(Value {
                     text: chars.iter().map(|(c, _)| c).collect(),
                     literal: value_literal,
@@ -1367,6 +1386,59 @@ impl<H: Host> Shell<H> {
         Ok(args)
     }
 
+    /// `grants LINE` (ADR-0153 rule 7, review S6): the line's words with
+    /// their marks, `+r` and `+w` only as written, so that the host plans
+    /// exactly what running the line would give.
+    fn grants(&mut self, state: &mut State, args: &[Value], io: &mut Io) -> i32 {
+        let mut rest = args;
+        let mut given: Vec<(bool, Value)> = Vec::new();
+        while let [g, path, after @ ..] = rest {
+            if !(g.literal && (g.text == "+r" || g.text == "+w")) {
+                break;
+            }
+            given.push((g.text == "+w", path.clone()));
+            rest = after;
+        }
+        let Some((first, args)) = rest.split_first() else {
+            io.err.push_str(
+                "grants: missing operand LINE\nusage: grants LINE...\nmore: help grants\n",
+            );
+            return 2;
+        };
+        let exec = Exec {
+            name: &first.text,
+            args,
+            env: &[],
+            grants: &given,
+            redirects: &[],
+            err_too: false,
+        };
+        self.host.grants(state, &exec, io)
+    }
+
+    /// Rule 4 for a redirection (review S5): a target from a value reaches
+    /// only inside the current directory or a grant of the line, as an
+    /// operand from a value does; one written out goes where it says.
+    fn redirect_target(&mut self, v: &Value, grants: &[(bool, Value)]) -> Result<(), ShellError> {
+        if v.literal {
+            return Ok(());
+        }
+        let cwd = self.host.cwd();
+        let abs = zoraya_resolve::join(&cwd, 0, &v.text);
+        let inside = |base: &str| zoraya_resolve::covers(base, &abs);
+        if inside(&cwd)
+            || grants
+                .iter()
+                .any(|(_, g)| inside(&zoraya_resolve::join(&cwd, 0, &g.text)))
+        {
+            return Ok(());
+        }
+        let mut e = shell_error(&v.text, "from a value, outside the current directory");
+        e.hints
+            .push("if that is meant, write the path out on the line".into());
+        Err(e)
+    }
+
     /// `zosh: NAME: no such command`, with a hint when one is near.
     fn not_found(&mut self, name: &str) -> Result_ {
         let mut e = shell_error(name, "no such command");
@@ -1402,7 +1474,15 @@ impl<H: Host> Shell<H> {
         let mut opened = Vec::new();
         for r in &s.redirects {
             let target = match self.expand(src, &r.target, Context::Command) {
-                Ok(v) if v.len() == 1 => v[0].text.clone(),
+                Ok(v) if v.len() == 1 => match self.redirect_target(&v[0], &[]) {
+                    Ok(()) => v[0].text.clone(),
+                    Err(e) => {
+                        for t in opened {
+                            self.host.close_output(t);
+                        }
+                        return Ok(self.report(&e));
+                    }
+                },
                 Ok(_) => {
                     for t in opened {
                         self.host.close_output(t);
@@ -1476,11 +1556,11 @@ impl<H: Host> Shell<H> {
         }
         let mut grants = Vec::new();
         for g in &s.grants {
-            let v = match self.expand(src, &g.path, Context::Command) {
+            let v = match self.expand(src, &g.path, Context::Grant) {
                 Ok(v) => v,
                 Err(e) => return Err(self.report(&e)),
             };
-            if v.len() != 1 || !g.path.is_literal_source() && v.len() != 1 {
+            if v.len() != 1 {
                 let marker = if g.write { "+w" } else { "+r" };
                 return Err(self.report(&shell_error(marker, "needs exactly one path")));
             }
@@ -1489,7 +1569,12 @@ impl<H: Host> Shell<H> {
         let mut redirects = Vec::new();
         for r in &s.redirects {
             match self.expand(src, &r.target, Context::Command) {
-                Ok(v) if v.len() == 1 => redirects.push((r.stream, r.append, v[0].text.clone())),
+                Ok(v) if v.len() == 1 => {
+                    if let Err(e) = self.redirect_target(&v[0], &grants) {
+                        return Err(self.report(&e));
+                    }
+                    redirects.push((r.stream, r.append, v[0].text.clone()));
+                }
                 Ok(_) => {
                     return Err(self.report(&shell_error(
                         src.get(r.target.span.start..r.target.span.end)
@@ -1661,7 +1746,11 @@ impl<H: Host> Shell<H> {
                 ..Io::default()
             };
             let mut state = core::mem::take(&mut self.state);
-            let code = self.host.builtin(&mut state, name, &d, &parsed, &mut io);
+            let code = if name == "grants" {
+                self.grants(&mut state, args, &mut io)
+            } else {
+                self.host.builtin(&mut state, name, &d, &parsed, &mut io)
+            };
             self.state = state;
             self.out(&io.out);
             self.err(&io.err);

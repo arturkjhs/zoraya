@@ -12,6 +12,9 @@ use alloc::vec::Vec;
 pub const MAX_MATCHES: usize = 10_000;
 /// Deepest `**` descends.
 pub const MAX_DEPTH: usize = 32;
+/// Most directory listings one pattern may ask (review S14): each is a
+/// round trip to a file service.
+pub const MAX_LISTS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
@@ -140,9 +143,20 @@ struct Walk<'a, L: Lister> {
     lister: &'a mut L,
     out: Vec<String>,
     full: bool,
+    lists: usize,
 }
 
 impl<L: Lister> Walk<'_, L> {
+    /// A listing, counted against [`MAX_LISTS`].
+    fn list(&mut self, path: &str) -> Option<Vec<(String, bool)>> {
+        if self.lists >= MAX_LISTS {
+            self.full = true;
+            return None;
+        }
+        self.lists += 1;
+        self.lister.list(path)
+    }
+
     /// `path` is a directory (or the start); match `rest` below it.
     fn walk(&mut self, path: &str, rest: &[Component], depth: usize) {
         if self.full || depth > MAX_DEPTH {
@@ -153,9 +167,14 @@ impl<L: Lister> Walk<'_, L> {
             return;
         };
         if let Component::Any = first {
+            // `**/**` is `**` (review S14).
+            if let Some(Component::Any) = after.first() {
+                self.walk(path, after, depth);
+                return;
+            }
             // Zero directories, then each directory one deeper.
             self.walk(path, after, depth + 1);
-            let Some(entries) = self.lister.list(path) else {
+            let Some(entries) = self.list(path) else {
                 return;
             };
             for (name, dir) in entries {
@@ -166,9 +185,14 @@ impl<L: Lister> Walk<'_, L> {
             return;
         }
         if let Some(name) = first.is_literal() {
+            // `.` and `..` are steps, which no listing holds (review S13).
+            if name == "." || name == ".." {
+                self.walk(&join(path, &name), after, depth + 1);
+                return;
+            }
             // A literal component is checked against the listing too, so
             // that only what exists is given.
-            let Some(entries) = self.lister.list(path) else {
+            let Some(entries) = self.list(path) else {
                 return;
             };
             if let Some((_, dir)) = entries.iter().find(|(n, _)| *n == name)
@@ -181,7 +205,7 @@ impl<L: Lister> Walk<'_, L> {
         let Component::Tokens(tokens) = first else {
             return;
         };
-        let Some(entries) = self.lister.list(path) else {
+        let Some(entries) = self.list(path) else {
             return;
         };
         for (name, dir) in entries {
@@ -208,6 +232,7 @@ pub fn expand<L: Lister>(p: &Pattern, lister: &mut L) -> Vec<String> {
         lister,
         out: Vec::new(),
         full: false,
+        lists: 0,
     };
     w.walk(start, &p.components, 0);
     let mut out = w.out;
@@ -219,4 +244,147 @@ pub fn expand<L: Lister>(p: &Pattern, lister: &mut L) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::collections::BTreeMap;
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec;
+
+    /// A tree, listed by normal path; counts its listings.
+    struct Tree {
+        dirs: BTreeMap<String, Vec<(String, bool)>>,
+        lists: usize,
+    }
+
+    impl Lister for Tree {
+        fn list(&mut self, dir: &str) -> Option<Vec<(String, bool)>> {
+            self.lists += 1;
+            let key = zoraya_resolve::join("/w", 0, dir);
+            self.dirs.get(&key).cloned()
+        }
+    }
+
+    fn tree() -> Tree {
+        let mut dirs = BTreeMap::new();
+        dirs.insert(
+            "/".into(),
+            vec![("w".into(), true), ("top.txt".into(), false)],
+        );
+        dirs.insert(
+            "/w".into(),
+            vec![("a.txt".into(), false), ("d".into(), true)],
+        );
+        dirs.insert("/w/d".into(), vec![("e".into(), true)]);
+        dirs.insert("/w/d/e".into(), vec![("f.txt".into(), false)]);
+        Tree { dirs, lists: 0 }
+    }
+
+    fn chars(s: &str) -> Vec<(char, bool)> {
+        s.chars().map(|c| (c, true)).collect()
+    }
+
+    /// Review S13: `.` and `..` are steps, as written.
+    #[test]
+    fn dot_and_dot_dot_are_steps() {
+        let mut t = tree();
+        let p = pattern(&chars("../*.txt")).expect("a pattern");
+        assert_eq!(expand(&p, &mut t), ["../top.txt"]);
+        let p = pattern(&chars("./*.txt")).expect("a pattern");
+        assert_eq!(expand(&p, &mut t), ["./a.txt"]);
+        let p = pattern(&chars("d/../*.txt")).expect("a pattern");
+        assert_eq!(expand(&p, &mut t), ["d/../a.txt"]);
+    }
+
+    /// `n` directories `d` in a chain below `/w`, with `a.txt` at the
+    /// bottom.
+    fn chain(n: usize) -> Tree {
+        let mut dirs = BTreeMap::new();
+        let mut at = String::from("/w");
+        for _ in 0..n {
+            dirs.insert(at.clone(), vec![("d".into(), true)]);
+            at.push_str("/d");
+        }
+        dirs.insert(at, vec![("a.txt".into(), false)]);
+        Tree { dirs, lists: 0 }
+    }
+
+    fn found(text: &str, t: &mut Tree) -> usize {
+        expand(&pattern(&chars(text)).expect("a pattern"), t).len()
+    }
+
+    /// Mutation testing: every kind of step counts toward `MAX_DEPTH`, the
+    /// deepest match is found and one level more is not.
+    #[test]
+    fn every_step_counts_toward_the_depth_bound() {
+        let deepest = (0..40)
+            .take_while(|n| found("**/a.txt", &mut chain(*n)) == 1)
+            .count();
+        assert_eq!(
+            deepest,
+            MAX_DEPTH - 1,
+            "a.txt below MAX_DEPTH - 2 directories"
+        );
+        for n in [MAX_DEPTH - 1, MAX_DEPTH] {
+            let literal = format!("{}*.txt", "d/".repeat(n));
+            let any = format!("{}a.txt", "*/".repeat(n));
+            let expect = usize::from(n < MAX_DEPTH);
+            assert_eq!(found(&literal, &mut chain(n)), expect, "{literal}");
+            assert_eq!(found(&any, &mut chain(n)), expect, "{any}");
+        }
+    }
+
+    /// Mutation testing: `**` skips hidden directories, and a literal step
+    /// is followed only to an entry of its name and kind.
+    #[test]
+    fn literal_steps_and_hidden_directories() {
+        let mut t = tree();
+        t.dirs.insert(
+            "/w".into(),
+            vec![
+                ("-n".into(), false),
+                (".hid".into(), true),
+                ("a.txt".into(), false),
+                ("sub".into(), true),
+            ],
+        );
+        t.dirs
+            .insert("/w/.hid".into(), vec![("a.txt".into(), false)]);
+        t.dirs
+            .insert("/w/sub".into(), vec![("c.txt".into(), false)]);
+        let mut e = |p: &str| expand(&pattern(&chars(p)).expect("a pattern"), &mut t);
+        assert_eq!(e("**/a.txt"), ["a.txt"]);
+        assert_eq!(e("sub/*.txt"), ["sub/c.txt"]);
+        assert_eq!(e("*/c.txt"), ["sub/c.txt"]);
+        assert!(e("a.txt/*").is_empty(), "a file is no step");
+    }
+
+    /// Review S14: repeated `**` is one, and the listings are bounded.
+    #[test]
+    fn repeated_any_is_one_and_listings_are_bounded() {
+        let mut t = tree();
+        let p = pattern(&chars("**/*.txt")).expect("a pattern");
+        let once = expand(&p, &mut t);
+        let lists = t.lists;
+        let mut t = tree();
+        let p = pattern(&chars("**/**/**/**/**/**/*.txt")).expect("a pattern");
+        assert_eq!(expand(&p, &mut t), once);
+        assert_eq!(t.lists, lists, "no more listings than one **");
+        // A tree wider than the budget stops at it.
+        let mut wide = Tree {
+            dirs: BTreeMap::new(),
+            lists: 0,
+        };
+        let names: Vec<(String, bool)> = (0..200).map(|i| (alloc::format!("d{i}"), true)).collect();
+        wide.dirs.insert("/w".into(), names.clone());
+        for i in 0..200 {
+            wide.dirs.insert(alloc::format!("/w/d{i}"), names.clone());
+        }
+        let p = pattern(&chars("**/nomatch")).expect("a pattern");
+        let _ = expand(&p, &mut wide);
+        assert!(wide.lists <= MAX_LISTS, "{}", wide.lists);
+    }
 }

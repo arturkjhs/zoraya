@@ -1427,6 +1427,7 @@ fn signal_numbers_map_to_kinds_and_back() {
 mod native_startup {
     use crate::native::{Entry, EntryKind, Slots, Startup, encode};
     use crate::posix::NO_HANDLE;
+    use std::vec::Vec;
 
     fn sample(out: &mut [u8]) -> usize {
         let entries = [
@@ -1484,6 +1485,27 @@ mod native_startup {
         assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/b", 0)], 2, &mut out).is_none());
         assert!(encode("/", &Slots::NONE, &[d("/a", 1)], 1, &mut out).is_none());
         assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/a", 1)], 2, &mut out).is_none());
+        // A path repeated with another of its length between (review K11).
+        let n = encode(
+            "/",
+            &Slots::NONE,
+            &[d("/a", 0), d("/b", 1), d("/c", 2)],
+            3,
+            &mut out,
+        )
+        .expect("three paths");
+        let at: Vec<usize> = (0..n - 5)
+            .filter(|&i| out[i..i + 5] == [2, 0, 0, 0, b'/'])
+            .map(|i| i + 5)
+            .collect();
+        assert_eq!(at.len(), 3);
+        out[at[2]] = out[at[0]];
+        assert!(
+            Startup::decode(&out[..n], 3).is_none(),
+            "a path given twice"
+        );
+        out[at[2]] = b'd';
+        assert!(Startup::decode(&out[..n], 3).is_some());
         let missing = Entry {
             path: "/x",
             kind: EntryKind::Missing,

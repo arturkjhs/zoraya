@@ -39,7 +39,7 @@ use zoraya_user::gui::{
 };
 use zoraya_user::stack::{Stack, end_job, moved, start_stack};
 use zoraya_user::{
-    channel_create, channel_read, clock_monotonic, directory_lookup, dup, handle_close, job_create,
+    channel_create, channel_read, directory_lookup, dup, handle_close, job_create, job_kill,
     port_create, port_subscribe, port_wait, power_off, println, process_exit_record, spawn,
     stream_create, wait_exit,
 };
@@ -152,57 +152,95 @@ fn start_broker(root: &File) -> Option<Beside> {
         .ok()?;
     let base = root.time_base().unwrap_or(0);
     let (handoff, handoff_broker) = channel_create().ok()?;
-    let job = job_create(JOB, JobFlags::POSIX).ok()?;
-    let image = directory_lookup(DIRECTORY, "broker").ok()?;
-    let root = root.clone_as(ALL).ok()?;
-    let mut buffer = [0; 512];
-    let mut e = Encoder::new(&mut buffer, job, image);
-    e.handle(dup(
-        CONSOLE.slot(),
-        CONSOLE,
-        Rights::WRITE.union(Rights::DUPLICATE),
-    ));
-    e.handle(dup(JOB.slot(), job, JobObject::RIGHTS));
-    e.handle(dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS));
-    e.handle(give(5, root.end, ChannelObject::RIGHTS));
-    e.handle(moved(9, handoff_broker));
-    let base = alloc::format!("{base}");
-    for a in [
-        &b"broker"[..],
-        b"--time-base",
-        base.as_bytes(),
-        b"--no-shell",
-    ] {
-        e.arg(a);
-    }
-    let length = e.finish()?;
-    let broker = spawn(&buffer[..length]).ok();
-    let _ = handle_close(image);
-    let broker = broker?;
-    core::mem::forget(root);
+    // Every way out below closes what was made before it (review K6).
+    let Ok(job) = job_create(JOB, JobFlags::POSIX) else {
+        let _ = handle_close(handoff);
+        let _ = handle_close(handoff_broker);
+        return None;
+    };
+    let Some(broker) = spawn_broker(root, base, job, handoff_broker) else {
+        let _ = handle_close(handoff);
+        let _ = handle_close(handoff_broker);
+        let _ = job_kill(job);
+        let _ = handle_close(job);
+        return None;
+    };
     // The hand-off: `ZPBC`, the client connection and the temporary root.
-    let port = port_create().ok()?;
-    let readable = channel_signals::READABLE | channel_signals::PEER_CLOSED;
-    let _ = port_subscribe(port, handoff, readable, 1, Mode::Level);
-    let mut packets = [Packet::default()];
-    let _ = port_wait(port, clock_monotonic() + 5_000_000_000, &mut packets);
-    let _ = handle_close(port);
-    let mut bytes = [0u8; 16];
-    let mut handles = [handoff; 2];
-    let got = channel_read(handoff, &mut bytes, &mut handles);
+    // No deadline (review K7): a broker that ends without one is seen by its
+    // `TERMINATED`, and one that is merely slow under TCG is waited for.
+    let got = match port_create() {
+        Ok(port) => {
+            let readable = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+            let terminated = process_signals::TERMINATED;
+            let subscribed = port_subscribe(port, handoff, readable, 1, Mode::Level)
+                .and_then(|()| port_subscribe(port, broker, terminated, 2, Mode::Level));
+            let mut packets = [Packet::default()];
+            let waited = subscribed
+                .and_then(|()| port_wait(port, DEADLINE_INFINITE, &mut packets).map(|_| ()));
+            let _ = handle_close(port);
+            let mut bytes = [0u8; 16];
+            let mut handles = [handoff; 2];
+            waited.ok().and_then(|()| {
+                let s = channel_read(handoff, &mut bytes, &mut handles).ok()?;
+                if &bytes[..s.bytes as usize] == b"ZPBC" && s.handles == 2 {
+                    return Some((handles[0], handles[1]));
+                }
+                for h in &handles[..s.handles as usize] {
+                    let _ = handle_close(*h);
+                }
+                None
+            })
+        }
+        Err(_) => None,
+    };
     let _ = handle_close(handoff);
     match got {
-        Ok(s) if &bytes[..s.bytes as usize] == b"ZPBC" && s.handles == 2 => Some(Beside {
+        Some((client, tmp)) => Some(Beside {
             job: (job, broker),
-            client: handles[0],
-            tmp: handles[1],
+            client,
+            tmp,
         }),
-        _ => {
+        None => {
             println!("init: the broker gave no client connection");
             end_job((job, broker));
             None
         }
     }
+}
+
+/// Spawns the broker in `job`, with the hand-off end at slot 9; the image and
+/// every handle not handed over are closed whatever happens.
+fn spawn_broker(root: &File, base: u64, job: Handle, handoff: Handle) -> Option<Handle> {
+    let image = directory_lookup(DIRECTORY, "broker").ok()?;
+    let spawned = root.clone_as(ALL).ok().and_then(|root| {
+        let mut buffer = [0; 512];
+        let mut e = Encoder::new(&mut buffer, job, image);
+        e.handle(dup(
+            CONSOLE.slot(),
+            CONSOLE,
+            Rights::WRITE.union(Rights::DUPLICATE),
+        ));
+        e.handle(dup(JOB.slot(), job, JobObject::RIGHTS));
+        e.handle(dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS));
+        e.handle(give(5, root.end, ChannelObject::RIGHTS));
+        e.handle(moved(9, handoff));
+        let base = alloc::format!("{base}");
+        for a in [
+            &b"broker"[..],
+            b"--time-base",
+            base.as_bytes(),
+            b"--no-shell",
+        ] {
+            e.arg(a);
+        }
+        let length = e.finish()?;
+        let broker = spawn(&buffer[..length]).ok()?;
+        // Moved into the broker with the spawn.
+        core::mem::forget(root);
+        Some(broker)
+    });
+    let _ = handle_close(image);
+    spawned
 }
 
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its

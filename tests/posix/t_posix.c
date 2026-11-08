@@ -47,6 +47,8 @@
  *   t_posix tstp       INV-0200-2: catches SIGTSTP; on it says that it
  *                      restores the terminal, then stops with the default
  *                      action; continued, it catches it again and says so
+ *   t_posix notstp     INV-0200-2's other half: ignores SIGTSTP, so a
+ *                      Ctrl-Z does not stop it
  *   t_posix bench      the measurements of TASK-21: posix_spawn and wait of
  *                      a program exiting at once, fork and wait, fork and
  *                      exec and wait (run with ZORAYA_POSIX_STATS for the
@@ -933,6 +935,16 @@ static void tstp(void)
 		pause_ms(1000);
 }
 
+/* INV-0200-2: a program Ctrl-Z does not stop. */
+static void notstp(void)
+{
+	static const char ready[] = "notstp: ready\n";
+	signal(SIGTSTP, SIG_IGN);
+	write(2, ready, sizeof ready - 1);
+	for (;;)
+		pause_ms(1000);
+}
+
 int main(int argc, char **argv)
 {
 	if (argc < 2)
@@ -980,6 +992,8 @@ int main(int argc, char **argv)
 		return 7;
 	else if (!strcmp(argv[1], "tstp"))
 		tstp();
+	else if (!strcmp(argv[1], "notstp"))
+		notstp();
 	else if (!strcmp(argv[1], "bench"))
 		bench();
 	else

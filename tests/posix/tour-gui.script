@@ -6,7 +6,7 @@ serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type help
 window
 prefix ~> help
@@ -57,7 +57,7 @@ screen   wait      wait for background jobs
 screen Demonstrations: echo-args exit-with fault hello spin stubborn
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type pwd
 window
 prefix ~> pwd
@@ -66,7 +66,7 @@ window
 screen /home
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type ls
 window
 prefix ~> ls
@@ -74,7 +74,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'buy mi
 window
 prefix ~> echo 'buy mi
@@ -88,7 +88,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'call A
 window
 prefix ~> echo 'call A
@@ -102,7 +102,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cat notes.tx
 window
 prefix ~> cat notes.tx
@@ -115,7 +115,7 @@ screen buy milk
 screen call Ada
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type mkdir projec
 window
 prefix ~> mkdir projec
@@ -126,7 +126,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type ls
 window
 prefix ~> ls
@@ -136,7 +136,7 @@ screen notes.txt
 screen project/
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cd project
 window
 prefix ~> cd project
@@ -144,16 +144,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
-type pwd
-window
-prefix ~/project> pwd
-type \r
-window
-screen /home/project
-screen ~/project> _
-chord ctrl l
-window
+top ~/project> _
 type cd
 window
 prefix ~/project> cd
@@ -161,7 +152,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cd project
 window
 prefix ~> cd project
@@ -169,7 +160,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type set name 'me
 window
 prefix ~/project> set name 'me
@@ -183,7 +174,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type echo agenda 
 window
 prefix ~/project> echo agenda
@@ -194,7 +185,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type cp $name min
 window
 prefix ~/project> cp $name min
@@ -205,7 +196,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type ls
 window
 prefix ~/project> ls
@@ -215,7 +206,7 @@ screen meeting notes.txt
 screen minutes.txt
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type cat $name
 window
 prefix ~/project> cat $name
@@ -224,7 +215,7 @@ window
 screen agenda
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type echo *.txt
 window
 prefix ~/project> echo *.txt
@@ -233,7 +224,7 @@ window
 screen meeting notes.txt minutes.txt
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type rm *.tmp
 window
 prefix ~/project> rm *.tmp
@@ -242,7 +233,7 @@ window
 screen zosh: *.tmp: no file matches
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type x=1
 window
 prefix ~/project> x=1
@@ -252,7 +243,7 @@ screen zosh: x=1: not a command
 screen   hint: to set a variable, type: set x 1
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type cd
 window
 prefix ~/project> cd
@@ -260,7 +251,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type find '*.txt'
 window
 prefix ~> find '*.txt'
@@ -271,7 +262,7 @@ screen project/meeting notes.txt
 screen project/minutes.txt
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type search milk 
 window
 prefix ~> search milk
@@ -283,7 +274,7 @@ window
 screen notes.txt:1: buy milk
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type search chees
 window
 prefix ~> search chees
@@ -294,7 +285,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo $status
 window
 prefix ~> echo $status
@@ -303,7 +294,7 @@ window
 screen 1
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type grep milk no
 window
 prefix ~> grep milk no
@@ -316,7 +307,7 @@ screen zosh: grep: no such command
 screen   hint: on Zoraya this is search: search TEXT FILE...
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type man cp
 window
 prefix ~> man cp
@@ -326,7 +317,7 @@ screen zosh: man: no such command
 screen   hint: on Zoraya this is help: help NAME
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type count --line
 window
 prefix ~> count --line
@@ -338,7 +329,7 @@ window
 screen 2
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cp --help
 window
 prefix ~> cp --help
@@ -351,7 +342,7 @@ screen   --help        show this help
 screen more: help cp
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type help --searc
 window
 prefix ~> help --searc
@@ -363,7 +354,7 @@ window
 screen cp        copy a file
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cp --
 window
 prefix ~> cp --
@@ -374,7 +365,7 @@ screen --help     show this help
 prefix ~> cp --
 chord ctrl u
 chord ctrl l
-window
+top ~> _
 type grants cp no
 window
 prefix ~> grants cp no
@@ -396,7 +387,7 @@ screen   ~/notes.txt          read (operand FROM)
 screen   ~/project            create or replace notes.txt (operand TO)
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cp notes.txt
 window
 prefix ~> cp notes.txt
@@ -410,7 +401,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo '#inclu
 window
 prefix ~> echo '#inclu
@@ -424,7 +415,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'int ma
 window
 prefix ~> echo 'int ma
@@ -447,7 +438,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type tcc hello.c 
 window
 prefix ~> tcc hello.c
@@ -458,7 +449,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type ./hello
 window
 prefix ~> ./hello
@@ -467,7 +458,7 @@ window
 screen hello, world
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo '#inclu
 window
 prefix ~> echo '#inclu
@@ -481,7 +472,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'int ma
 window
 prefix ~> echo 'int ma
@@ -504,7 +495,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type tcc hello.c 
 window
 prefix ~> tcc hello.c
@@ -515,7 +506,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type ./hello
 window
 prefix ~> ./hello
@@ -524,7 +515,7 @@ window
 screen hello again
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type mkdir includ
 window
 prefix ~> mkdir includ
@@ -535,7 +526,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo '#defin
 window
 prefix ~> echo '#defin
@@ -555,7 +546,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cd project
 window
 prefix ~> cd project
@@ -563,7 +554,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type echo '#inclu
 window
 prefix ~/project> echo '#inclu
@@ -580,7 +571,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type echo '#inclu
 window
 prefix ~/project> echo '#inclu
@@ -594,7 +585,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type echo 'int ma
 window
 prefix ~/project> echo 'int ma
@@ -617,7 +608,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type tcc main.c -
 window
 prefix ~/project> tcc main.c -
@@ -631,7 +622,7 @@ screen   hint: tcc tried to read ~/include/greet.h, which it was not given
 screen   to allow it: +r ~/include tcc main.c -o main
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type +r ~/include
 window
 prefix ~/project> +r ~/include
@@ -645,7 +636,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type ./main
 window
 prefix ~/project> ./main
@@ -654,7 +645,7 @@ window
 screen hi there
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type grants +r ~/
 window
 prefix ~/project> grants +r ~/
@@ -681,7 +672,7 @@ screen   /tmp                 change anything in (this line's own)
 screen   /dev/null
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type set g '+w /'
 window
 prefix ~/project> set g '+w /'
@@ -689,7 +680,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type $g rm notes.
 window
 prefix ~/project> $g rm notes.
@@ -701,7 +692,7 @@ window
 screen zosh: +w /: no such command
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type cat ~/notes.
 window
 prefix ~/project> cat ~/notes.
@@ -716,7 +707,7 @@ window
 screen call Ada
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type ls | head --
 window
 prefix ~/project> ls | head --
@@ -728,7 +719,7 @@ window
 screen main
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type set lines $(
 window
 prefix ~/project> set lines $(
@@ -742,7 +733,7 @@ type \r
 window
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type count $lines
 window
 prefix ~/project> count $lines
@@ -751,7 +742,7 @@ window
 screen 2
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type echo $lines[
 window
 prefix ~/project> echo $lines[
@@ -763,7 +754,7 @@ window
 screen call Ada
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type history | se
 window
 prefix ~/project> history | se
@@ -780,7 +771,7 @@ screen +r ~/include tcc main.c -o main
 screen grants +r ~/include tcc main.c -o main
 screen ~/project> _
 chord ctrl l
-window
+top ~/project> _
 type cd
 window
 prefix ~/project> cd
@@ -788,7 +779,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type for f in *.c
 window
 prefix ~> for f in *.c
@@ -810,7 +801,7 @@ screen hello.c: 2 lines
 screen notes.txt: 2 lines
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type fn backup fi
 window
 prefix ~> fn backup fi
@@ -836,7 +827,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type backup notes
 window
 prefix ~> backup notes
@@ -847,7 +838,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type ls *.bak
 window
 prefix ~> ls *.bak
@@ -856,7 +847,7 @@ window
 screen notes.txt.bak
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type backup
 window
 prefix ~> backup
@@ -867,7 +858,7 @@ screen usage: backup FILE
 screen more: help backup
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'for f 
 window
 prefix ~> echo 'for f
@@ -881,7 +872,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo '    rm
 window
 prefix ~> echo '    rm
@@ -895,7 +886,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo '}' >> 
 window
 prefix ~> echo '}' >>
@@ -906,7 +897,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type source tidy.
 window
 prefix ~> source tidy.
@@ -917,7 +908,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type ls *.bak
 window
 prefix ~> ls *.bak
@@ -926,7 +917,7 @@ window
 screen zosh: *.bak: no file matches
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cd nowhere
 window
 prefix ~> cd nowhere
@@ -935,7 +926,7 @@ window
 screen cd: nowhere: not found
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type mkdir projec
 window
 prefix ~> mkdir projec
@@ -951,7 +942,7 @@ screen mkdir: project: already exists
 screen (the rest of the line was not run)
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo $status
 window
 prefix ~> echo $status
@@ -960,7 +951,7 @@ window
 screen 1
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type cat missing.
 window
 prefix ~> cat missing.
@@ -979,7 +970,7 @@ screen cat: missing.txt: not found
 screen no file, carrying on
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type try { cp not
 window
 prefix ~> try { cp not
@@ -1017,7 +1008,7 @@ screen   hint: cp --force notes.txt notes.old replaces it
 screen stopped with status 1
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'tcc br
 window
 prefix ~> echo 'tcc br
@@ -1034,7 +1025,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type echo 'echo b
 window
 prefix ~> echo 'echo b
@@ -1048,7 +1039,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type source build
 window
 prefix ~> source build
@@ -1062,7 +1053,7 @@ screen zosh: build.zosh line 1: tcc: exit status 1
 screen (the rest of build.zosh was not run)
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type spin
 window
 prefix ~> spin
@@ -1074,7 +1065,7 @@ screen ^C
 screen spin: interrupted (Ctrl-C)
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type sleep 5
 window
 prefix ~> sleep 5
@@ -1086,7 +1077,7 @@ screen ^Z
 screen [1] stopped: sleep 5
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type fg
 window
 prefix ~> fg
@@ -1095,7 +1086,7 @@ window
 screen sleep 5
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type sleep 30 &
 window
 prefix ~> sleep 30 &
@@ -1104,7 +1095,7 @@ window
 screen [1] sleep 30
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type jobs
 window
 prefix ~> jobs
@@ -1113,7 +1104,7 @@ window
 screen [1]  running   sleep 30
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type kill %1
 window
 prefix ~> kill %1
@@ -1122,7 +1113,7 @@ window
 screen [1] sleep 30: terminated
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type sleep 60 &
 window
 prefix ~> sleep 60 &
@@ -1131,7 +1122,7 @@ window
 screen [1] sleep 60
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type exit
 window
 prefix ~> exit
@@ -1140,7 +1131,7 @@ window
 screen 1 job is still running; exit again to end it
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type kill %1
 window
 prefix ~> kill %1
@@ -1149,7 +1140,7 @@ window
 screen [1] sleep 60: terminated
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type settings
 window
 prefix ~> settings
@@ -1157,7 +1148,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type settings she
 window
 prefix ~> settings she
@@ -1173,7 +1164,7 @@ screen shell.suggestions = yes   (default)
 screen   yes-no: suggestions from history
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type settings she
 window
 prefix ~> settings she
@@ -1187,7 +1178,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type settings
 window
 prefix ~> settings
@@ -1196,7 +1187,7 @@ window
 screen shell.suggestions = no
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type settings she
 window
 prefix ~> settings she
@@ -1212,7 +1203,7 @@ screen settings: shell.sugestions: no such setting
 screen   hint: did you mean shell.suggestions?
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type settings --r
 window
 prefix ~> settings --r
@@ -1226,7 +1217,7 @@ type \r
 window
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type exit
 window
 prefix ~> exit
@@ -1236,7 +1227,7 @@ window
 screen Type help to begin, or help tour.
 screen ~> _
 chord ctrl l
-window
+top ~> _
 type poweroff
 window
 prefix ~> poweroff

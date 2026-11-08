@@ -586,3 +586,305 @@ fn random_keys() {
         let _ = e.text().to_string();
     }
 }
+
+fn editor_with(o: Options) -> Editor {
+    let mut e = Editor::new(o);
+    let mut out = String::new();
+    e.start("~> ", &mut out);
+    e
+}
+
+fn narrow(width: usize) -> Editor {
+    editor_with(Options {
+        width,
+        ..Options::default()
+    })
+}
+
+/// The bytes of the last redraw in `out` (from its last `\r`).
+fn last_draw(out: &str) -> &str {
+    out.rfind("\r~> ").map_or(out, |at| &out[at..])
+}
+
+/// Mutation testing: moving keys, each alone.
+#[test]
+fn every_moving_key_moves() {
+    let mut a = fake();
+    let cases: [(&[u8], &str, usize); 9] = [
+        (b"ab\x1bOHz", "zab", 1),
+        (b"ab\x1bOH\x1bOFc", "abc", 3),
+        (b"xy\x1bODz", "xzy", 2),
+        (b"ab\x02c", "acb", 2),
+        (b"ab\x02\x06c", "abc", 3),
+        (b"ab\x1b[D\x1b[Cc", "abc", 3),
+        (b"xy\x1b[D\x04", "x", 1),
+        (b"echo a \x17", "echo ", 5),
+        (b"\x0e", "", 0),
+    ];
+    for (keys, text, cursor) in cases {
+        let mut e = editor().0;
+        feed(&mut e, &mut a, keys);
+        assert_eq!((e.text().as_str(), e.cursor()), (text, cursor), "{keys:?}");
+    }
+    let mut e = editor().0;
+    feed(&mut e, &mut a, b"echo wor");
+    assert_eq!(e.cursor(), 8);
+}
+
+/// Mutation testing: the history's bounds, from the file and as it grows.
+#[test]
+fn the_history_keeps_its_size() {
+    let lines = |n: usize| (0..n).map(|i| alloc::format!("l{i}")).collect::<Vec<_>>();
+    let mut e = editor_with(Options {
+        history_size: 2,
+        ..Options::default()
+    });
+    e.set_history(lines(5));
+    assert_eq!(e.history(), ["l3", "l4"]);
+    let mut e = editor().0;
+    e.set_history(vec!["ls".into()]);
+    assert_eq!(e.history(), ["ls"]);
+    e.set_history(vec!["make -C src".into(), "ls".into()]);
+    feed(&mut e, &mut fake(), b"ma\x1b[A");
+    assert_eq!(e.text(), "make -C src");
+    let mut e = editor_with(Options {
+        history_size: 2,
+        ..Options::default()
+    });
+    for h in ["a", "b", "c"] {
+        e.remember(h);
+    }
+    assert_eq!(e.history(), ["b", "c"]);
+    let mut e = editor_with(Options {
+        history_size: 1,
+        ..Options::default()
+    });
+    e.remember("a");
+    e.remember("b");
+    assert_eq!(e.history(), ["b"]);
+    let mut e = editor().0;
+    e.remember("   ");
+    assert!(e.history().is_empty());
+}
+
+/// Mutation testing: Down after several Ups, and a multi-line entry is
+/// not a prefix match.
+#[test]
+fn down_comes_back_one_at_a_time() {
+    let mut a = fake();
+    let mut e = editor().0;
+    for h in ["make -C src", "make all", "make test"] {
+        e.remember(h);
+    }
+    feed(&mut e, &mut a, b"ma\x1b[A\x1b[A\x1b[A");
+    assert_eq!(e.text(), "make -C src");
+    feed(&mut e, &mut a, b"\x1b[B");
+    assert_eq!(e.text(), "make all");
+    let mut e = editor().0;
+    for h in ["make", "m\nx", "mo"] {
+        e.remember(h);
+    }
+    feed(&mut e, &mut a, b"m\x1b[A\x1b[A\x1b[B");
+    assert_eq!(e.text(), "mo");
+}
+
+/// Mutation testing: what is red, what is not.
+#[test]
+fn what_is_red() {
+    let red = |keys: &[u8]| {
+        let mut e = editor().0;
+        let (out, _) = feed(&mut e, &mut fake(), keys);
+        String::from(last_draw(&out))
+    };
+    for keys in [&b" sl"[..], b"ls; sl", b"+r ~/x sl", b"if xyz"] {
+        let d = red(keys);
+        let word = core::str::from_utf8(keys)
+            .unwrap()
+            .rsplit(' ')
+            .next()
+            .unwrap();
+        assert!(
+            d.contains(&alloc::format!("\x1b[31m{word}")),
+            "{keys:?}: {d:?}"
+        );
+    }
+    for keys in [&b"a=b"[..], b"$x", b"for f in a b", b"echo 'a\\'"] {
+        let d = red(keys);
+        assert!(!d.contains("\x1b[31m"), "{keys:?}: {d:?}");
+    }
+    let d = red(b"echo \"a\\\"b");
+    assert!(d.contains("\x1b[31m\"a\\\"b"), "{d:?}");
+}
+
+/// Mutation testing: the bytes a redraw writes, which the screen model
+/// cannot tell apart (it reads `ESC [ 0 A` as no move).
+#[test]
+fn a_redraw_writes_no_move_of_zero() {
+    let mut a = fake();
+    let mut e = editor().0;
+    let (out, _) = feed(&mut e, &mut a, b"e\x7f");
+    assert!(
+        !out.contains("\x1b[0A") && !out.contains("\x1b[0C"),
+        "{out:?}"
+    );
+    let mut e = editor().0;
+    let (out, _) = feed(&mut e, &mut a, b"ec\x7f");
+    assert!(
+        out.ends_with("\r~> e\x1b[J") || out.ends_with("\x1b[J"),
+        "{out:?}"
+    );
+    assert!(!out.ends_with("C"), "no move back at the end: {out:?}");
+    let mut e = editor().0;
+    let (out, _) = feed(&mut e, &mut a, b"ab\x1b[D");
+    assert!(out.ends_with("\r\x1b[4C"), "{out:?}");
+    let mut e = narrow(10);
+    let (out, _) = feed(&mut e, &mut a, b"echo xy\x7f");
+    assert!(
+        !out.contains("\x1b[0C") && !out.contains("\x1b[0A"),
+        "{out:?}"
+    );
+    let mut e = narrow(10);
+    let (out, _) = feed(&mut e, &mut a, b"echo xyz\x7f");
+    assert!(!out.is_empty());
+    let mut e = Editor::new(Options::default());
+    let mut out = String::new();
+    e.start("", &mut out);
+    let (out, _) = feed(&mut e, &mut a, &[CTRL_L]);
+    assert!(out.starts_with("\x1b[H\x1b[J"), "{out:?}");
+    assert!(!out.contains('\n'), "{out:?}");
+}
+
+/// Mutation testing: a suggestion's place, length and cursor.
+#[test]
+fn a_suggestion_keeps_to_its_row() {
+    let mut a = fake();
+    let mut e = editor().0;
+    e.remember("make -C src");
+    let (out, _) = feed(&mut e, &mut a, b"mak");
+    assert!(out.ends_with("\x1b[22m\x1b[J\r\x1b[6C"), "{out:?}");
+    let (out, _) = feed(&mut e, &mut a, b"\x1b[D");
+    assert!(!out.contains("\x1b[2m"), "none in mid-line: {out:?}");
+    let (out, _) = feed(&mut e, &mut a, b"\x1b[Cx");
+    assert!(
+        without_sgr(&out).contains("\r~> makx"),
+        "a full redraw: {out:?}"
+    );
+    let mut e = editor().0;
+    e.remember("ls -l");
+    feed(&mut e, &mut a, b"ls -l");
+    let (out, _) = feed(&mut e, &mut a, b"x");
+    assert_eq!(out, "x", "the whole entry typed: no suggestion is left");
+    let mut e = editor().0;
+    e.remember("make -C src");
+    e.remember("cat");
+    let (out, _) = feed(&mut e, &mut a, b"m");
+    assert!(out.contains("\x1b[2make -C src"), "{out:?}");
+    let mut e = narrow(10);
+    e.remember("echo hello world");
+    let (out, _) = feed(&mut e, &mut a, b"ech");
+    assert!(last_draw(&out).contains("\x1b[2mo h\x1b[22m"), "{out:?}");
+    let mut e = editor().0;
+    e.remember("echo x");
+    let (out, _) = feed(&mut e, &mut a, b"if ok {\rec");
+    assert!(
+        !out.contains("\x1b[2m"),
+        "no suggestion on a continuation line: {out:?}"
+    );
+    let mut e = editor().0;
+    let (out, _) = feed(&mut e, &mut a, b"aa\x1b[Da");
+    assert!(
+        without_sgr(&out).ends_with("\r~> aaa\x1b[J\r\x1b[5C"),
+        "a full redraw: {out:?}"
+    );
+}
+
+/// Mutation testing: `above` draws the line again, and printable hides
+/// control characters.
+#[test]
+fn above_and_printable() {
+    let mut a = fake();
+    let mut e = editor().0;
+    feed(&mut e, &mut a, b"echo half");
+    let mut out = String::new();
+    e.above("note\n", &mut out);
+    assert_eq!(screen(&without_sgr(&out)), "~> echo half");
+    assert_eq!(printable("\x01\x7f\u{9b}a"), "???a");
+}
+
+/// Mutation testing: the bounds of an entry, a search query, and the
+/// continuation lines.
+#[test]
+fn an_entry_and_a_search_have_their_bounds() {
+    let mut a = fake();
+    let mut e = editor().0;
+    let (_, k) = feed(&mut e, &mut a, b"if ok {\r\ra");
+    assert_eq!(
+        (k, e.text()),
+        (Key::Edited, "a".into()),
+        "an empty line among them"
+    );
+    let mut e = editor().0;
+    feed(&mut e, &mut a, b"if ok {\r");
+    let (out, _) = feed(&mut e, &mut a, &[CTRL_D]);
+    assert!(out.is_empty(), "{out:?}");
+    let mut e = editor().0;
+    e.remember(&"a".repeat(256));
+    feed(&mut e, &mut a, &[CTRL_R]);
+    feed(&mut e, &mut a, &[b'a'; 256]);
+    let (_, k) = feed(&mut e, &mut a, b"b\r");
+    assert_eq!(k, Key::Line("a".repeat(256)));
+    let mut e = editor().0;
+    e.remember("tcc main.c -o main");
+    feed(&mut e, &mut a, &[CTRL_R]);
+    let (_, k) = feed(&mut e, &mut a, b"mainx\x7f\r");
+    assert_eq!(k, Key::Line("tcc main.c -o main".into()));
+    feed(&mut e, &mut a, &[CTRL_R]);
+    feed(&mut e, &mut a, b"main");
+    let (_, k) = feed(&mut e, &mut a, &[CTRL_C]);
+    assert_eq!(k, Key::Interrupt);
+    let mut e = editor().0;
+    e.remember("tcc main.c -o main");
+    feed(&mut e, &mut a, &[CTRL_R]);
+    feed(&mut e, &mut a, b"main");
+    feed(&mut e, &mut a, &[ESC]);
+    feed(&mut e, &mut a, b"x");
+    assert!(e.text() != "tcc main.c -o mainx", "{}", e.text());
+}
+
+/// Mutation testing: the listing of completions wraps at the width and
+/// stops at its limit.
+#[test]
+fn a_listing_wraps_and_stops() {
+    let list = |width: usize, names: &[String], summaries: bool| {
+        let mut e = narrow(width);
+        let mut a = fake();
+        a.completion.candidates = names
+            .iter()
+            .map(|n| (n.clone(), summaries.then(|| String::from("s"))))
+            .collect();
+        let (out, _) = feed(&mut e, &mut a, b"ls \t\t");
+        without_sgr(&out)
+    };
+    let three: Vec<String> = ["aaaaaa", "bbbbbb", "cccccc"].map(String::from).to_vec();
+    let out = list(20, &three, false);
+    assert!(out.contains("\naaaaaa  bbbbbb\ncccccc\n"), "{out:?}");
+    let four: Vec<String> = ["aaaaa", "bbbbb", "ccccc", "ddddd"]
+        .map(String::from)
+        .to_vec();
+    let out = list(26, &four, false);
+    assert!(out.contains("\naaaaa  bbbbb  ccccc\nddddd\n"), "{out:?}");
+    let many: Vec<String> = (0..30).map(|i| alloc::format!("{i:0>40}")).collect();
+    let out = list(80, &many, false);
+    assert_eq!(out.matches("0000").count() / 10, 24, "{out:?}");
+    let out = list(80, &many, true);
+    assert!(out.contains("(and 6 more)"), "{out:?}");
+    let out = list(80, &many[..24], true);
+    assert!(!out.contains("more)"), "{out:?}");
+    let one: Vec<String> = vec!["notes/".into()];
+    let mut e = editor().0;
+    let mut a = fake();
+    a.completion.candidates = vec![("notes/".into(), None)];
+    feed(&mut e, &mut a, b"ls notes/");
+    let (out, _) = feed(&mut e, &mut a, b"\t");
+    assert!(without_sgr(&out).contains("\nnotes/\n"), "{out:?} {one:?}");
+}

@@ -1320,6 +1320,21 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             let _ = self.volume.close(handle);
             return self.open_answer(i, t, full, status::NOT_DIRECTORY, ("", ""), None);
         }
+        // A narrowed connection gives its one name, not what lies in it: a
+        // directory of that name opens to read only (review S2; ADR-0055's
+        // note, INV-0153-2).
+        let reading = proto::rights::READ | proto::rights::CLONE;
+        if self.only_of(i).is_some()
+            && m.rights.0 & !reading != 0
+            && matches!(
+                self.volume.stat(handle).map(|a| a.kind),
+                Ok(ObjKind::Directory)
+            )
+        {
+            let _ = self.volume.close(handle);
+            self.after_engine();
+            return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
+        }
         handles.clear();
         let record = self.new_record(handle);
         if let Some(r) = self.records[record].as_mut() {

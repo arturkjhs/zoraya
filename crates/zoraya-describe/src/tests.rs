@@ -175,6 +175,16 @@ fn refusals_name_their_line() {
         ("---\nEXAMPLES\nEXAMPLES\n", 6),
         ("a\tb\u{7}\n", 4),
         ("x \u{85}\n", 4),
+        // Mutation testing: the name rules, one character class at a time.
+        ("setting a.b yes-no yes t\nsetting a.b yes-no no t\n", 5),
+        ("operand 1 read t\n", 4),
+        ("operand FILe read t\n", 4),
+        ("option --1 t\n", 4),
+        ("option --a_b t\n", 4),
+        ("setting A.b yes-no yes t\n", 4),
+        ("option -+ --plus t\n", 4),
+        ("exit -0 t\n", 4),
+        ("---\na\u{7}b\n", 5),
     ];
     for (extra, line) in cases {
         let e = refused(&format!("{base}{extra}"));
@@ -341,4 +351,165 @@ fn the_parser_is_total() {
             Err(e) => assert!(e.line <= lines, "{e} of {lines}"),
         }
     }
+}
+
+fn header(extra: &str) -> Description {
+    let text = format!("name x\nsummary s\nusage x\n{extra}");
+    parse(text.as_bytes()).unwrap_or_else(|e| panic!("{text:?}: {e}"))
+}
+
+fn problem(extra: &str) -> &'static str {
+    refused(&format!("name x\nsummary s\nusage x\n{extra}")).problem
+}
+
+/// Mutation testing: the bounds are inclusive, a description of
+/// `MAX_SIZE` bytes and a line of `MAX_LINE` are accepted.
+#[test]
+fn the_largest_description_and_line_are_accepted() {
+    let mut text = String::from("name x\nsummary s\nusage x\n---\n");
+    while text.len() < MAX_SIZE {
+        let room = MAX_SIZE - text.len();
+        let n = room.min(1000);
+        if n == 1 {
+            // A last line of its newline only.
+            text.push('\n');
+        } else {
+            text.push_str(&"a".repeat(n - 1));
+            text.push('\n');
+        }
+    }
+    assert_eq!(text.len(), MAX_SIZE);
+    assert!(parse(text.as_bytes()).is_ok());
+    let mut over = text.clone();
+    over.push('\n');
+    assert_eq!(refused(&over).line, 0);
+    let summary = format!("summary {}", "s".repeat(MAX_LINE - 8));
+    assert_eq!(summary.len(), MAX_LINE);
+    let d = parse(format!("name x\n{summary}\nusage x\n").as_bytes()).expect("a full line");
+    assert_eq!(d.summary.len(), MAX_LINE - 8);
+}
+
+/// Mutation testing: what other crates ask of a kind and a setting type.
+#[test]
+fn kinds_and_types_say_themselves() {
+    assert_eq!(Kind::Read.shown(), "read");
+    assert_eq!(Kind::Create.shown(), "created");
+    assert!(!Kind::Text.is_path());
+    assert!(Kind::Read.is_path());
+    assert_eq!(
+        SettingType::Number {
+            min: 0,
+            max: 100000
+        }
+        .word(),
+        "number 0 100000"
+    );
+    assert_eq!(SettingType::YesNo.word(), "yes-no");
+    assert_eq!(
+        parse_number("999999999999999999"),
+        Some(999_999_999_999_999_999)
+    );
+    assert_eq!(
+        format!(
+            "{}",
+            Error {
+                line: 4,
+                problem: "x"
+            }
+        ),
+        "line 4: x"
+    );
+    assert_eq!(
+        format!(
+            "{}",
+            Error {
+                line: 0,
+                problem: "x"
+            }
+        ),
+        "x"
+    );
+}
+
+/// Mutation testing: escapes inside double quotes, and quoting a value
+/// with both kinds of quote.
+#[test]
+fn escapes_quote_and_unquote() {
+    assert_eq!(split_value("\"a\\\"b\""), Ok(("a\"b".into(), "")));
+    assert_eq!(split_value("\"a\"b"), Err("text follows a closing quote"));
+    let value = "it's a\"b\\c";
+    let quoted = quote_value(value);
+    assert_eq!(split_value(&quoted), Ok((value.into(), "")));
+    assert_eq!(quote_value("it's \"x\""), "\"it's \\\"x\\\"\"");
+}
+
+/// Mutation testing: what each name may hold.
+#[test]
+fn names_take_their_characters() {
+    let d = parse(b"name a-b2\nsummary s\nusage x\n").expect("hyphen and digit");
+    assert_eq!(d.name, "a-b2");
+    assert_eq!(refused("name a_b\nsummary s\nusage x\n").line, 1);
+    let d = header("operand A_B read t\noperand FILE2 read t\noption --dry-run t\n");
+    assert_eq!(d.operands[0].name, "A_B");
+    assert_eq!(d.operands[1].name, "FILE2");
+    assert_eq!(d.options[0].long, "dry-run");
+}
+
+/// Mutation testing: the setting and exit rules give their own problem.
+#[test]
+fn settings_and_exits_are_checked() {
+    assert_eq!(
+        problem("setting a.b number 5 1 3 t\n"),
+        "MIN is larger than MAX"
+    );
+    let d = header("setting a.b number 3 3 3 t\n");
+    assert_eq!(d.settings[0].ty, SettingType::Number { min: 3, max: 3 });
+    assert_eq!(
+        problem("setting a.b yes-no yes t\nsetting a.b yes-no no t\n"),
+        "this setting appears twice"
+    );
+    assert_eq!(problem("exit -0 t\n"), "an exit code is 0 to 255");
+    assert_eq!(header("cwd read\n").cwd, Cwd::Read);
+    let d = parse(b"name x\nsummary a\tb\nusage x\n").expect("a tab is text");
+    assert_eq!(d.summary, "a\tb");
+}
+
+/// Mutation testing: every key a command has and a topic has not.
+#[test]
+fn a_topic_has_no_command_keys() {
+    for key in [
+        "option -f --force t\n",
+        "when --force A read\n",
+        "cwd read\n",
+        "question\n",
+        "program /bin/x\n",
+        "exit 0 ok\n",
+        "setting a.b text x t\n",
+    ] {
+        let e = refused(&format!("topic t\nsummary s\n{key}"));
+        assert_eq!(
+            (e.line, e.problem),
+            (0, "a topic has only a summary and a body"),
+            "{key:?}"
+        );
+    }
+}
+
+/// Mutation testing: `when` names a short option by its one letter.
+#[test]
+fn a_when_names_a_short_option_by_its_letter() {
+    let base = "option -f --force t\noperand A text t\n";
+    let d = header(&format!("{base}when -f A read\n"));
+    assert_eq!(
+        d.whens,
+        [When {
+            option: 0,
+            operand: 0,
+            kind: Kind::Read
+        }]
+    );
+    assert_eq!(
+        problem(&format!("{base}when -fx A read\n")),
+        "when names an option the description lacks"
+    );
 }

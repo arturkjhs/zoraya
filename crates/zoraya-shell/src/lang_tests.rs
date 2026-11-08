@@ -10,7 +10,7 @@ use zoraya_abi::{ExitReason, ExitRecord, RequestKind};
 use zoraya_command::Parsed;
 use zoraya_describe::Description;
 
-use crate::eval::{Found, Host, Io, Pipe, Ran, Shell, Sink, State, Value};
+use crate::eval::{Exec, Found, Host, Io, Pipe, Ran, Shell, Sink, State, Value};
 use crate::record::{self, exited};
 use crate::syntax::Stream;
 use crate::syntax::{self, Error};
@@ -27,6 +27,10 @@ struct Fake {
     programs: BTreeMap<&'static str, Program>,
     /// Every program run: its name and arguments.
     runs: Vec<(String, Vec<String>, Vec<String>)>,
+    /// The grants of every program run: `+w`, the path, its mark.
+    granted: Vec<(bool, String, bool)>,
+    /// The marks of every program run's arguments (ADR-0153 rule 4).
+    marks: Vec<Vec<bool>>,
     screen: String,
     outputs: BTreeMap<u32, (String, bool)>,
     next: u32,
@@ -57,6 +61,9 @@ impl Fake {
             (r, String::new())
         });
         f.programs.insert("prog", |_, _| (exited(0), String::new()));
+        // One write as large as a line may be, for the capture's limit.
+        f.programs
+            .insert("big", |_, _| (exited(0), "x".repeat(syntax::MAX_SOURCE)));
         f.programs.insert("zee", |_, _| (exited(0), String::new()));
         // Prints its arguments, one per line.
         f.programs.insert("say", |args, _| {
@@ -105,16 +112,43 @@ impl Fake {
 }
 
 impl Host for Fake {
+    fn cwd(&mut self) -> String {
+        alloc::format!("/{}", self.cwd)
+    }
+
+    /// The grants and arguments it was asked about, with their marks.
+    fn grants(&mut self, _: &mut State, exec: &Exec<'_>, io: &mut Io) -> i32 {
+        for (w, v) in exec.grants {
+            io.out
+                .push_str(&alloc::format!("grant {w} {} {}\n", v.text, v.literal));
+        }
+        io.out.push_str(&alloc::format!("command {}\n", exec.name));
+        for a in exec.args {
+            io.out
+                .push_str(&alloc::format!("arg {} {}\n", a.text, a.literal));
+        }
+        0
+    }
+
     fn lookup(&mut self, name: &str) -> Found {
         if self.programs.contains_key(name) {
             Found::Program
+        } else if name == "grants" {
+            Found::Builtin
         } else {
             Found::Nothing
         }
     }
 
     fn description(&mut self, name: &str) -> Option<Rc<Description>> {
-        (name == "ask").then(|| Rc::new(zoraya_describe::parse(QUESTION.as_bytes()).unwrap()))
+        let text = match name {
+            "ask" => QUESTION,
+            "grants" => {
+                "name grants\nsummary show\nusage grants LINE...\noperand LINE... text l\ncwd none\n"
+            }
+            _ => return None,
+        };
+        Some(Rc::new(zoraya_describe::parse(text.as_bytes()).unwrap()))
     }
 
     fn names(&mut self) -> Vec<String> {
@@ -137,7 +171,12 @@ impl Host for Fake {
     /// Runs the programs in turn, each reading what the one before printed.
     fn program(&mut self, pipe: &Pipe<'_>) -> Ran {
         for exec in pipe.programs {
+            for (w, v) in exec.grants {
+                self.granted.push((*w, v.text.clone(), v.literal));
+            }
             let args: Vec<String> = exec.args.iter().map(|a| a.text.clone()).collect();
+            self.marks
+                .push(exec.args.iter().map(|a| a.literal).collect());
             self.runs.push((exec.name.into(), args, exec.env.to_vec()));
         }
         if pipe.background {
@@ -999,4 +1038,473 @@ fn a_pipelines_report_names_the_element_that_failed() {
         run(&mut sh, "echo x | crash; echo after"),
         alloc::format!("{crash}(the rest of the line was not run)\n")
     );
+}
+
+/// INV-0153-3's cases (review S7, S8): a grant is `+r` or `+w` written on
+/// the line and one path; from a value it is no grant, an empty or longer
+/// list is refused, and so is a pattern, even one that matches one name.
+#[test]
+fn a_grant_is_written_and_is_one_path() {
+    let mut sh = shell();
+    let out = run(&mut sh, "set none; +w $none ok");
+    assert_eq!(out, "zosh: +w: needs exactly one path\n");
+    let out = run(&mut sh, "set two a b; +w $two ok");
+    assert_eq!(out, "zosh: +w: needs exactly one path\n");
+    let out = run(&mut sh, "+r a* ok");
+    assert!(out.starts_with("zosh: a*: a grant names one path"), "{out}");
+    assert!(
+        sh.host.granted.is_empty(),
+        "none of those ran: {:?}",
+        sh.host.granted
+    );
+    // A marker from a value is a word, not a grant: the command is `+w /`.
+    let out = run(&mut sh, "set g '+w /'; $g ok");
+    assert!(out.starts_with("zosh: +w /: no such command"), "{out}");
+    assert!(sh.host.granted.is_empty());
+    // Written, with a path from a value: a grant, the value marked.
+    run(&mut sh, "set d sub; +w $d ok");
+    assert_eq!(sh.host.granted, [(true, "sub".into(), false)]);
+    run(&mut sh, "+r a.txt ok");
+    assert_eq!(sh.host.granted[1], (false, "a.txt".into(), true));
+}
+
+/// Review S5: a redirection's target from a value reaches only inside the
+/// current directory (or a grant of a program's line); written out, it
+/// goes where it says.
+#[test]
+fn a_redirection_from_a_value_stays_inside() {
+    let mut sh = shell();
+    sh.host.cwd = "sub".into();
+    let out = run(&mut sh, "set f /config/settings; echo x > $f");
+    assert!(
+        out.starts_with("zosh: /config/settings: from a value, outside"),
+        "{out}"
+    );
+    assert!(!sh.host.files.contains_key("config/settings"));
+    let out = run(&mut sh, "set f /config/settings; say x > $f");
+    assert!(
+        out.starts_with("zosh: /config/settings: from a value, outside"),
+        "{out}"
+    );
+    assert_eq!(run(&mut sh, "set f out.txt; echo x > $f"), "");
+    assert_eq!(sh.host.files["sub/out.txt"], "x\n");
+    assert_eq!(run(&mut sh, "echo y > /written.txt"), "");
+    assert!(sh.host.files.contains_key("written.txt"));
+}
+
+/// Review S6: `grants` gets the line as a run would: marks kept, `+r` and
+/// `+w` grants only as written.
+#[test]
+fn grants_sees_the_line_as_a_run_would() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "set d sub; grants +w $d cp $d x"),
+        "grant true sub false\ncommand cp\narg sub false\narg x true\n"
+    );
+    assert_eq!(
+        run(&mut sh, "set g +w; grants $g / rm x"),
+        "command +w\narg / true\narg rm true\narg x true\n"
+    );
+}
+
+fn invalid(line: &str) -> (usize, String) {
+    match syntax::parse(line) {
+        Err(Error::Invalid { at, problem, .. }) => (at, problem),
+        other => panic!("{line:?}: {other:?}"),
+    }
+}
+
+fn says(sh: &mut Shell<Fake>, line: &str) -> String {
+    run(sh, line)
+}
+
+/// Mutation testing: `unset`, `set` alone and `set --query`, and the size
+/// of a list a variable holds.
+#[test]
+fn variables_are_set_listed_queried_and_unset() {
+    let mut sh = shell();
+    run(&mut sh, "set x 1");
+    assert_eq!(says(&mut sh, "set"), "status 0\nx 1\n");
+    assert_eq!(says(&mut sh, "set --query x || echo unset"), "");
+    run(&mut sh, "set e ''");
+    assert_eq!(says(&mut sh, "set --query e || echo unset"), "unset\n");
+    run(&mut sh, "unset x");
+    assert!(says(&mut sh, "echo $x").contains("$x: not set"));
+    run(&mut sh, "set my_name 1");
+    assert_eq!(says(&mut sh, "echo $my_name"), "1\n");
+    assert!(says(&mut sh, "set a.b 1").contains("not a variable name"));
+    let words = |n: usize| alloc::format!("set v{}", " w".repeat(n));
+    assert_eq!(says(&mut sh, &words(crate::eval::MAX_VALUES)), "");
+    assert!(says(&mut sh, &words(crate::eval::MAX_VALUES + 1)).contains("too many values"));
+}
+
+/// Mutation testing: what `test` checks and says.
+#[test]
+fn test_checks_kinds_and_text() {
+    let mut sh = shell();
+    let yn = |sh: &mut Shell<Fake>, check: &str| {
+        says(
+            sh,
+            &alloc::format!("if test {check} {{ echo y }} else {{ echo n }}"),
+        )
+    };
+    assert_eq!(yn(&mut sh, "-d a.txt"), "n\n");
+    assert_eq!(yn(&mut sh, "-f sub"), "n\n");
+    assert_eq!(yn(&mut sh, "-f a.txt"), "y\n");
+    assert_eq!(yn(&mut sh, "-d sub"), "y\n");
+    assert_eq!(yn(&mut sh, "a '!=' b"), "y\n");
+    assert_eq!(yn(&mut sh, "a '!=' a"), "n\n");
+    assert_eq!(yn(&mut sh, "a = a"), "y\n");
+    let unknown = yn(&mut sh, "a foo b");
+    assert!(
+        unknown.ends_with("n\n") && !unknown.lines().any(|l| l == "y"),
+        "{unknown:?}"
+    );
+    assert!(says(&mut sh, "test -d").contains("one PATH is needed"));
+    assert!(says(&mut sh, "test a").contains("not a check test knows"));
+}
+
+/// Mutation testing: `math`'s bounds are exact.
+#[test]
+fn maths_bounds_are_exact() {
+    use crate::eval::math;
+    // 4096 tokens: 2048 numbers and 2047 operators, then one more pair.
+    let sum = |terms: usize| {
+        let mut s = String::from("1");
+        for _ in 1..terms {
+            s.push_str("+1");
+        }
+        s
+    };
+    assert_eq!(math(&sum(257)), Ok(257));
+    assert_eq!(math(&sum(2048)), Ok(2048));
+    assert!(math(&sum(2049)).is_err());
+    assert_eq!(math(&alloc::format!("{}1", "-".repeat(255))), Ok(-1));
+    assert!(math(&alloc::format!("{}1", "-".repeat(257))).is_err());
+}
+
+/// Mutation testing: every fault class in words, a signal number only
+/// in range, and the Ctrl-C note only for an interrupt from it.
+#[test]
+fn records_name_their_classes_and_causes() {
+    let fault = |detail| ExitRecord {
+        code: 0,
+        reason: ExitReason::Fault,
+        detail,
+        request_kind: None,
+    };
+    for (class, name) in [
+        (0x00, "unknown instruction"),
+        (0x15, "system call"),
+        (0x20, "instruction abort"),
+        (0x21, "instruction abort"),
+        (0x22, "pc alignment"),
+        (0x26, "stack alignment"),
+        (0x3c, "breakpoint"),
+    ] {
+        assert_eq!(
+            record::what(&fault(class)),
+            alloc::format!("crashed ({name}, class {class:#x})")
+        );
+    }
+    let ended = |detail, kind| ExitRecord {
+        code: 0,
+        reason: ExitReason::Terminated,
+        detail,
+        request_kind: kind,
+    };
+    assert_eq!(record::what(&ended(0, None)), "terminated");
+    assert_eq!(record::what(&ended(u32::MAX, None)), "terminated");
+    let t = ended(0, Some(RequestKind::Terminate));
+    assert_eq!(
+        record::screen_line("p", &t, true).as_deref(),
+        Some("p: terminated")
+    );
+    let i = ended(0, Some(RequestKind::Interrupt));
+    assert_eq!(
+        record::screen_line("p", &i, false).as_deref(),
+        Some("p: interrupted")
+    );
+    assert_eq!(record::describe(&exited(2)), "exit status 2");
+    assert_eq!(record::describe(&exited(0)), "succeeded (exit status 0)");
+}
+
+/// Mutation testing: what the parser calls incomplete, and the problem
+/// each mistake names.
+#[test]
+fn each_syntax_mistake_names_its_own_problem() {
+    for incomplete in ["fn", "fn f\n", "for", "!"] {
+        assert_eq!(
+            syntax::parse(incomplete),
+            Err(Error::Incomplete),
+            "{incomplete:?}"
+        );
+    }
+    for (line, problem) in [
+        ("; echo", "a ; with no command before it"),
+        ("else { }", "'else' with no block before it"),
+        ("for f in a; { echo $f }", "for needs a block"),
+        ("+r", "+r needs a path"),
+        ("+r;", "+r needs a path"),
+        ("| x", "| with no command before it"),
+        ("& x", "& with no command before it"),
+        ("&& x", "&& with no command before it"),
+        (
+            "{ echo }",
+            "a block needs if, for, while, fn or try before it",
+        ),
+        ("echo >", "a redirection needs a file name"),
+        ("echo > # x", "a redirection needs a file name"),
+        ("echo a }", "unexpected text"),
+        ("echo a {", "unexpected text"),
+        ("echo $(if ok { echo a) })", "unexpected text"),
+        ("if ok { if ok { echo } }x }", "unexpected text"),
+        ("fn if { echo }", ""),
+        ("fn 1x { echo }", ""),
+        ("fn a.b { echo }", ""),
+    ] {
+        let (_, got) = invalid(line);
+        if !problem.is_empty() {
+            assert_eq!(got, problem, "{line:?}");
+        }
+    }
+    let (at, _) = invalid("echo $x[0]");
+    assert_eq!(at, 7, "at the index");
+    let long = "x".repeat(syntax::MAX_SOURCE + 1);
+    assert_eq!(invalid(&long).0, 0);
+    assert!(syntax::parse(&long[1..]).is_ok(), "MAX_SOURCE bytes parse");
+}
+
+/// Mutation testing: lines the parser takes as they are written.
+#[test]
+fn the_parser_takes_what_is_well_formed() {
+    for line in [
+        "return",
+        "return;",
+        "fn r { return }",
+        "fn back-up file { echo }",
+        "fn back_up file { echo }",
+        "echo a & echo b",
+    ] {
+        assert!(syntax::parse(line).is_ok(), "{line:?}");
+    }
+    let nested = alloc::format!("{}ok{}", "if ok { ".repeat(63), " }".repeat(63));
+    assert!(syntax::parse(&nested).is_ok());
+    assert!(syntax::parse(&"echo $(ok) ".repeat(70)).is_ok());
+    let block = syntax::parse("echo a; ) echo b").map(|b| b.statements.len());
+    assert!(block != Ok(1), "nothing after a ) is dropped: {block:?}");
+    let mut sh = shell();
+    run(&mut sh, "set x V");
+    assert_eq!(says(&mut sh, "echo )"), ")\n");
+    assert_eq!(says(&mut sh, "echo a)"), "a)\n");
+    assert_eq!(says(&mut sh, "echo $(echo x) a)"), "x a)\n");
+    assert_eq!(says(&mut sh, "echo ~''"), "/house\n");
+    assert_eq!(says(&mut sh, "echo ab\"$x\""), "abV\n");
+    assert_eq!(says(&mut sh, "if ok \\\n{ echo yes }"), "yes\n");
+    assert_eq!(says(&mut sh, "echo }x"), "}x\n");
+    let doc = alloc::format!("{}fn f {{\n}}\n", "# n\n".repeat(33));
+    run(&mut sh, &doc);
+    assert!(says(&mut sh, "!x").contains("x"));
+}
+
+/// ADR-0153 rule 4 (mutation testing found it broken): a function's
+/// parameters and `$args` keep the marks of the words the caller wrote;
+/// a variable that `set` or `for` gave is data, and so is a word that
+/// mixes a variable with text.
+#[test]
+fn parameters_keep_the_callers_marks_and_variables_are_data() {
+    let mut sh = shell();
+    run(&mut sh, "fn view f { prog $f; prog $args }");
+    run(&mut sh, "view ../x");
+    let marks = &sh.host.marks;
+    assert_eq!(
+        marks[marks.len() - 2..],
+        [vec![true], vec![true]],
+        "typed at the call"
+    );
+    run(&mut sh, "set p ../x; view $p");
+    let marks = &sh.host.marks;
+    assert_eq!(
+        marks[marks.len() - 2..],
+        [vec![false], vec![false]],
+        "a value at the call"
+    );
+    run(&mut sh, "set q ../x; prog $q");
+    assert_eq!(sh.host.marks.last(), Some(&vec![false]), "set gives data");
+    run(&mut sh, "for v in ../x { prog $v }");
+    assert_eq!(sh.host.marks.last(), Some(&vec![false]), "for gives data");
+    run(&mut sh, "fn pre f { prog x$f }; pre ../y");
+    assert_eq!(sh.host.marks.last(), Some(&vec![false]), "mixed with text");
+}
+
+/// Mutation testing: the edit distance behind "did you mean", exactly.
+#[test]
+fn the_distance_is_exact() {
+    use crate::eval::distance;
+    let a64 = "a".repeat(64);
+    let b64 = alloc::format!("{}b", "a".repeat(63));
+    for (a, b, limit, d) in [
+        ("ab", "abc", 1, 1),
+        ("ab", "a", 2, 1),
+        ("xyz", "q", 5, 3),
+        ("a", "xy", 2, 2),
+        ("zab", "zba", 2, 1),
+        ("abcd", "xy", 2, 3),
+        ("abcdef", "a", 2, 3),
+        (a64.as_str(), b64.as_str(), 2, 1),
+        (b64.as_str(), a64.as_str(), 2, 1),
+    ] {
+        assert_eq!(distance(a, b, limit), d, "{a} {b} {limit}");
+    }
+    assert_eq!(distance(&"a".repeat(65), &a64, 1), 2, "too long to compare");
+    assert_eq!(distance(&a64, &"a".repeat(65), 1), 2);
+    let mut sh = shell();
+    assert_eq!(run(&mut sh, "zzzzzz"), "zosh: zzzzzz: no such command\n");
+}
+
+/// Mutation testing: indexes, chains, scripts and calls.
+#[test]
+fn indexes_chains_scripts_and_calls() {
+    let mut sh = shell();
+    run(&mut sh, "set a x; set b y; set files a.txt b.txt");
+    assert_eq!(run(&mut sh, "echo $a$b"), "xy\n");
+    assert_eq!(run(&mut sh, "echo $files[1] $files[-2]"), "a.txt a.txt\n");
+    assert!(run(&mut sh, "echo $files[-3]").contains("$files[-3]: out of range: it has 2"));
+    sh.host.runs.clear();
+    run(&mut sh, "ok && fail && ok; ok 2");
+    assert_eq!(ran(&sh), ["ok", "fail", "ok 2"]);
+    sh.host
+        .files
+        .insert("last.zosh".into(), "echo one\nfail\n".into());
+    let out = run(&mut sh, "source last.zosh");
+    assert!(
+        out.contains("last.zosh line 2") && !out.contains("the rest of"),
+        "{out}"
+    );
+    sh.host
+        .files
+        .insert("set.zosh".into(), "set made 1\n".into());
+    run(&mut sh, "source set.zosh");
+    assert_eq!(run(&mut sh, "echo $made"), "1\n");
+    sh.host.files.insert("hi.zosh".into(), "echo hi\n".into());
+    assert_eq!(
+        run(&mut sh, &"source hi.zosh; ".repeat(70)),
+        "hi\n".repeat(70)
+    );
+    run(&mut sh, "fn f { ok }");
+    assert_eq!(run(&mut sh, &"f; ".repeat(70)), "");
+    assert_eq!(sh.state.function_origin("f"), Some("the prompt"));
+    sh.host
+        .files
+        .insert("lib.zosh".into(), "fn g { ok }\n".into());
+    run(&mut sh, "source lib.zosh");
+    assert_eq!(sh.state.function_origin("g"), Some("lib.zosh"));
+    run(&mut sh, "fn h { echo $e.x }; set e");
+    assert!(
+        run(&mut sh, "h").contains("$e.x"),
+        "the function's own text"
+    );
+    assert!(run(&mut sh, "fn set { ok }").contains("is a builtin"));
+    run(&mut sh, "set two 1 2");
+    assert!(run(&mut sh, "fn r { return $two }; r").contains("return"));
+}
+
+/// Mutation testing: `continue` outside a loop, after every way a loop
+/// can end.
+#[test]
+fn continue_outside_a_loop_after_any_loop() {
+    for setup in [
+        "for x in 1 { echo $x }",
+        "while fail { echo x }",
+        "for x in 1 { fail }",
+        "while test 1 = 1 { fail }",
+        "while ok { break }",
+        "for x in 1 2 { break }",
+    ] {
+        let mut sh = shell();
+        run(&mut sh, setup);
+        let out = run(&mut sh, "continue; echo after");
+        assert!(
+            out.contains("continue: not inside a loop"),
+            "{setup}: {out}"
+        );
+        assert!(!out.contains("after"), "{setup}: {out}");
+    }
+    for (n, setup) in [
+        (1, "for x in 1 2 { echo $x }"),
+        (3, "while test 1 = 1 { echo x }"),
+    ] {
+        let mut sh = shell();
+        sh.host.interrupts = n;
+        run(&mut sh, setup);
+        assert!(
+            run(&mut sh, "continue").contains("not inside a loop"),
+            "{setup}"
+        );
+    }
+}
+
+/// Mutation testing: what runs in the shell in a pipeline, substitutions,
+/// redirections and grants of one path, and options of a builtin.
+#[test]
+fn compound_commands_substitutions_and_redirections() {
+    let mut sh = shell();
+    for c in [
+        "if ok { echo b }",
+        "for x in 1 { echo b }",
+        "while fail { echo b }",
+        "try { echo b }",
+        "fn q { echo b }",
+    ] {
+        let out = run(&mut sh, &alloc::format!("say a | {c}"));
+        assert!(out.contains("can only start a pipeline"), "{c}: {out}");
+    }
+    assert_eq!(run(&mut sh, "if ok { echo a } | upper"), "A\n");
+    assert_eq!(run(&mut sh, "for x in a { echo $x } | upper"), "A\n");
+    assert_eq!(run(&mut sh, "try { echo a } | upper"), "A\n");
+    assert!(run(&mut sh, "echo $(fail && ok)").contains("its command failed"));
+    assert!(run(&mut sh, "fn f3 { echo $(echo x; return 3) }; f3").contains("its command failed"));
+    assert_eq!(
+        run(&mut sh, "fn g0 { echo $(echo x; return 0) }; g0"),
+        "x\n"
+    );
+    run(&mut sh, "set files *.txt");
+    sh.host.runs.clear();
+    assert!(run(&mut sh, "echo x > $files").contains("exactly one file"));
+    assert!(run(&mut sh, "prog > $files").contains("exactly one file"));
+    assert!(ran(&sh).is_empty());
+    assert!(!run(&mut sh, "+r a.txt prog").contains("zosh"));
+    assert!(!run(&mut sh, "set p a.txt; +r $p prog").contains("zosh"));
+    assert!(run(&mut sh, "+r *.txt prog").contains("a pattern is not one"));
+    let out = run(&mut sh, "echo hi --nope");
+    assert!(out.contains("--nope: no such option"), "{out}");
+    assert_eq!(run(&mut sh, "test -d nope; echo after"), "after\n");
+    assert!(!run(&mut sh, "math 1 / 0; echo after").contains("after"));
+    run(&mut sh, "set v $(echo ''; big)");
+    assert_eq!(run(&mut sh, "count $v"), "1\n");
+}
+
+/// Mutation testing: a line's end says the last answer, and a function's
+/// one-line help has no description section.
+#[test]
+fn a_lines_end_and_a_short_help() {
+    let mut sh = shell();
+    let b = syntax::parse("ask no").unwrap();
+    assert!(sh.run_line("ask no", &b).status.no);
+    let b = syntax::parse("spin").unwrap();
+    assert!(sh.run_line("spin", &b).status.ctrl_c);
+    for (src, sections) in [("# one\nfn f {\n}\n", 0), ("# one\n# two\nfn f {\n}\n", 1)] {
+        let block = syntax::parse(src).unwrap();
+        let syntax::Command::Fn(f) = &block.statements[0].chain.first.elements[0].command else {
+            panic!();
+        };
+        let d = crate::eval::function_description(f);
+        assert_eq!(d.sections.len(), sections, "{src:?}");
+    }
+    let doc = alloc::format!("{}fn f {{\n}}\n", "# n\n".repeat(33));
+    let block = syntax::parse(&doc).unwrap();
+    let syntax::Command::Fn(f) = &block.statements[0].chain.first.elements[0].command else {
+        panic!();
+    };
+    assert_eq!(f.doc.len(), 32);
 }

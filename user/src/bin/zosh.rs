@@ -80,6 +80,9 @@ const NEED_VOLUME: [&str; 4] = ["crashwriter", "crashcheck", "fsbench", "posixru
 const SETTINGS: &str = "/config/settings";
 const START: &str = "/config/start.zosh";
 const HISTORY: &str = "/config/history";
+/// A line end inside one history entry, as `/config/history` keeps it: the
+/// record separator, which no key types.
+const ENTRY_BREAK: &str = "\u{1e}";
 /// The first line of every interactive shell (ADR-0154 rule 9).
 const GREETING: &str = "Type help to begin, or help tour.\n";
 
@@ -288,6 +291,8 @@ enum Ready {
         exe: String,
         entries: Vec<posix_child::Entry>,
         cwd_entry: u32,
+        /// The current directory below that entry.
+        cwd: String,
         report: (Handle, Handle),
     },
 }
@@ -746,7 +751,7 @@ impl Z {
     }
 
     /// Rule 11: after a job, each refused path with the grant that allows it.
-    fn hints(&self, report: Handle, name: &str, line: &str) {
+    fn hints(&self, report: Handle, name: &str, line: Option<&str>) {
         let mut seen: Vec<(String, bool)> = Vec::new();
         let mut bytes = alloc::vec![0u8; 8192];
         let mut handles = [report; 1];
@@ -779,10 +784,14 @@ impl Z {
             } else {
                 ("read", "+r")
             };
+            let shown = grants::shown(&dir, &home);
+            let allow = match line {
+                Some(line) => format!("{grant} {shown} {line}"),
+                None => format!("put {grant} {shown} before {name} in the line"),
+            };
             text.push_str(&format!(
-                "  hint: {name} tried to {verb} {}, which it was not given\n  to allow it: {grant} {} {line}\n",
+                "  hint: {name} tried to {verb} {}, which it was not given\n  to allow it: {allow}\n",
                 grants::shown(path, &home),
-                grants::shown(&dir, &home)
             ));
         }
         if dirs.len() > 3 {
@@ -883,7 +892,7 @@ impl Z {
         let planned = self
             .posix_plan(exec, path)
             .and_then(|plan| self.posix_entries(exec, image, &plan).map(|t| (t, plan)));
-        let ((entries, cwd_entry), plan) = match planned {
+        let ((entries, cwd_entry, cwd), plan) = match planned {
             Ok(x) => x,
             Err(e) => {
                 let _ = handle_close(image);
@@ -909,6 +918,7 @@ impl Z {
                 exe: path.into(),
                 entries,
                 cwd_entry,
+                cwd,
                 report,
             },
             given,
@@ -947,7 +957,7 @@ impl Z {
         exec: &Exec<'_>,
         image: Handle,
         plan: &[grants::Planned],
-    ) -> Result<(Vec<posix_child::Entry>, u32), String> {
+    ) -> Result<(Vec<posix_child::Entry>, u32, String), String> {
         use zoraya_abi::posix::EntryKind as P;
         let merged = grants::merge(plan);
         let mut entries: Vec<posix_child::Entry> = Vec::new();
@@ -1035,7 +1045,13 @@ impl Z {
             }
         }
         entries.sort_by_key(|e| core::cmp::Reverse(e.prefix.len()));
-        let Some(cwd_entry) = entries.iter().position(|e| e.prefix == self.cwd) else {
+        // The current directory is its own entry, or below the one that
+        // covers it (review S3: an entry inside a wider one is left out).
+        let prefixes: Vec<&str> = entries.iter().map(|e| e.prefix.as_str()).collect();
+        let found = zoraya_resolve::longest(prefixes.iter().copied(), &self.cwd)
+            .filter(|(i, _)| entries[*i].kind == P::Directory)
+            .map(|(i, rest)| (i, String::from(rest)));
+        let Some((cwd_entry, cwd_rest)) = found else {
             close(&entries);
             return Err(zoraya_command::error(
                 "zosh",
@@ -1044,7 +1060,31 @@ impl Z {
                 &[],
             ));
         };
-        Ok((entries, cwd_entry as u32))
+        Ok((entries, cwd_entry as u32, cwd_rest))
+    }
+
+    /// The line's `/tmp`, made for a line that will not run, goes.
+    fn drop_line_tmp(&mut self) {
+        if let (Some(t), Some(name)) = (&self.tmp, self.line_tmp_name.take()) {
+            remove_tree(t, &name);
+        }
+    }
+
+    /// Reaps the POSIX pids of a killed line once each process job has
+    /// ended (up to a second each; the broker refuses one still running).
+    fn reap_killed(&mut self, posix: &[(u32, u32, Handle)]) {
+        let Some(broker) = self.broker.as_ref() else {
+            return;
+        };
+        for (pid, _, job) in posix {
+            let deadline = clock_monotonic() + 1_000_000_000;
+            while !object_get_signals(*job).is_ok_and(|s| s & job_signals::TERMINATED != 0)
+                && clock_monotonic() < deadline
+            {
+                zoraya_user::sleep_until(clock_monotonic() + 10_000_000);
+            }
+            let _ = broker.reap(*pid);
+        }
     }
 
     /// The line's directory on the temporary service: made on first use
@@ -1550,13 +1590,32 @@ impl Z {
         }
         let deadline = clock_monotonic() + 500_000_000;
         loop {
-            if Z::all_stopped(p) {
+            let stopped = self
+                .jobs
+                .get(number)
+                .is_some_and(|e| Z::all_stopped(&e.payload));
+            // What it wrote before it stopped (a POSIX handler restoring the
+            // terminal) is shown before the shell says it stopped (review K9).
+            self.drain_relays(number);
+            if stopped {
                 return true;
             }
             if clock_monotonic() > deadline {
                 return false;
             }
             zoraya_user::sleep_until(clock_monotonic() + 10_000_000);
+        }
+    }
+
+    /// Passes everything job `number`'s relays hold now, without waiting.
+    fn drain_relays(&mut self, number: u32) {
+        let mut at = 0;
+        while at < self.relays.len() {
+            if self.relays[at].job == number && !self.pump_relay(at, true) {
+                // Closed and removed: the next one is now at `at`.
+                continue;
+            }
+            at += 1;
         }
     }
 
@@ -1843,9 +1902,12 @@ impl Z {
         ctrl_c: bool,
     ) -> Ran {
         let line = entry.line.clone();
+        // A grant belongs before its own element (rule 3, review S11): a
+        // pipeline's hint names the element instead of the whole line.
+        let alone = entry.payload.elements.len() == 1;
         for (name, _, report) in &mut entry.payload.elements {
             if let Some(r) = report.take() {
-                self.hints(r, name, &line);
+                self.hints(r, name, alone.then_some(line.as_str()));
             }
         }
         let captured = String::from_utf8_lossy(&entry.payload.captured).into_owned();
@@ -2207,44 +2269,34 @@ impl Z {
 
     /// `grants LINE...`: what the command on the line would receive, and
     /// nothing run (ADR-0153 rule 7, INV-0153-4).
-    fn grants(&mut self, p: &Parsed<'_>, io: &mut Io) -> i32 {
-        let words: Vec<&str> = p.operands.iter().map(|(_, w)| *w).collect();
-        let mut rest = words.as_slice();
-        let mut given: Vec<(bool, eval::Value)> = Vec::new();
-        while let [g @ ("+r" | "+w"), path, after @ ..] = rest {
-            given.push((*g == "+w", eval::Value::literal(path)));
-            rest = after;
-        }
-        let Some((name, args)) = rest.split_first() else {
-            io.err.push_str(&zoraya_command::error(
-                "grants",
-                None,
-                "missing operand LINE",
-                &[],
-            ));
-            return 2;
-        };
-        if BUILTINS.contains(name) || LANGUAGE.contains(name) || FILE_COMMANDS.contains(name) {
+    /// `grants LINE` (rule 7): what running the line would give, planned
+    /// as a run plans it (review S6).
+    fn grants_report(&mut self, exec: &Exec<'_>, io: &mut Io) -> i32 {
+        let name = exec.name;
+        if BUILTINS.contains(&name) || LANGUAGE.contains(&name) || FILE_COMMANDS.contains(&name) {
             io.out.push_str(&format!(
                 "{name} is built into the shell: it acts with the shell's own access\n"
             ));
             return 0;
         }
-        let values: Vec<eval::Value> = args.iter().map(|a| eval::Value::literal(a)).collect();
-        let exec = Exec {
-            name,
-            args: &values,
-            env: &[],
-            grants: &given,
-            redirects: &[],
-            err_too: false,
-        };
         // A program of the volume: a POSIX one is shown with its toolchain
-        // set and its line's /tmp (rule 7).
+        // set and its line's /tmp; a native one as a run gives it.
         if self.lookup(name) == Found::Program
-            && let Some(path) = self.on_volume.get(*name).cloned()
+            && let Some(path) = self.on_volume.get(name).cloned()
         {
-            return match self.posix_plan(&exec, &path) {
+            let native = self.root.as_ref().is_some_and(|r| {
+                r.open_followed(path.trim_start_matches('/'), 0, file_rights::READ)
+                    .and_then(|f| read_all(&f))
+                    .is_ok_and(|bytes| zoraya_elf::is_native(&bytes))
+            });
+            let plan = if native {
+                zoraya_describe::parse(UNDESCRIBED.as_bytes())
+                    .map_err(|_| String::from("zosh: a description of its own is refused\n"))
+                    .and_then(|d| self.plan_with(exec, &d, false))
+            } else {
+                self.posix_plan(exec, &path)
+            };
+            return match plan {
                 Err(e) => {
                     io.err.push_str(&e);
                     1
@@ -2252,12 +2304,12 @@ impl Z {
                 Ok(plan) => {
                     let home = self.home();
                     io.out
-                        .push_str(&grants::report(name, &plan, &home, "the terminal", true));
+                        .push_str(&grants::report(name, &plan, &home, "the terminal", !native));
                     0
                 }
             };
         }
-        match self.plan_for(&exec) {
+        match self.plan_for(exec) {
             Err(e) => {
                 io.err.push_str(&e);
                 1
@@ -2330,6 +2382,14 @@ impl Z {
 }
 
 impl Host for Z {
+    fn cwd(&mut self) -> String {
+        self.cwd.clone()
+    }
+
+    fn grants(&mut self, _: &mut State, exec: &Exec<'_>, io: &mut Io) -> i32 {
+        self.grants_report(exec, io)
+    }
+
     fn lookup(&mut self, name: &str) -> Found {
         let f = self.lookup_image(name);
         // The volume is looked at each time: what a line builds, the next
@@ -2408,7 +2468,6 @@ impl Host for Z {
                 0
             }
             "help" => self.help(state, d, p, io),
-            "grants" => self.grants(p, io),
             "jobs" => {
                 self.refresh_states();
                 io.out.push_str(&self.jobs.list());
@@ -2690,6 +2749,7 @@ impl Host for Z {
                 Err(e) => {
                     show(&e);
                     give_back(ready);
+                    self.drop_line_tmp();
                     return Ran::Refused(1);
                 }
             }
@@ -2705,6 +2765,7 @@ impl Host for Z {
                     &[],
                 ));
                 give_back(ready);
+                self.drop_line_tmp();
                 return Ran::Refused(1);
             }
         };
@@ -2724,6 +2785,7 @@ impl Host for Z {
                         exe,
                         entries,
                         cwd_entry,
+                        cwd,
                         report,
                     } => {
                         let question = false;
@@ -2757,7 +2819,7 @@ impl Host for Z {
                             exe: &exe,
                             entries,
                             cwd_entry,
-                            cwd: "",
+                            cwd: &cwd,
                             args: &args,
                             env: &env,
                             streams: *ends,
@@ -2846,11 +2908,17 @@ impl Host for Z {
         };
         if let Some(e) = failed {
             let _ = job_kill(job);
+            // Its POSIX pids go once their jobs have ended, and its /tmp
+            // (review S12).
+            self.reap_killed(&record.posix);
             for p in &record.processes {
                 let _ = handle_close(*p);
             }
             let _ = handle_close(job);
             self.finish_streams(number);
+            if let (Some(t), Some(name)) = (&self.tmp, &record.tmp) {
+                remove_tree(t, name);
+            }
             show(&e);
             return Ran::Refused(1);
         }
@@ -3255,7 +3323,7 @@ fn main() -> i32 {
         escape: Escape::No,
         broker: Handle::new(7)
             .filter(|h| handle_type(*h) == Ok("channel"))
-            .map(|end| Broker { end }),
+            .map(Broker::new),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(|end| File { end }),
@@ -3295,7 +3363,7 @@ fn main() -> i32 {
     if z.setting("shell.history") == "yes"
         && let Ok(text) = z.read_text(HISTORY)
     {
-        editor.set_history(text.lines().map(String::from).collect());
+        editor.set_history(text.lines().map(|l| l.replace(ENTRY_BREAK, "\n")).collect());
     }
     let mut shell = Shell::new(z);
     if shell.host.root.is_some()
@@ -3379,7 +3447,14 @@ fn main() -> i32 {
         }
         shell.host.history = editor.history().to_vec();
         if shell.host.setting("shell.history") == "yes" && shell.host.root.is_some() {
-            let mut text = editor.history().join("\n");
+            // One line a file line: a line end inside an entry (a block
+            // typed over several lines) is kept as ENTRY_BREAK (review S17).
+            let lines: Vec<String> = editor
+                .history()
+                .iter()
+                .map(|e| e.replace('\n', ENTRY_BREAK))
+                .collect();
+            let mut text = lines.join("\n");
             text.push('\n');
             let _ = shell.host.write_file(HISTORY, text.as_bytes());
         }

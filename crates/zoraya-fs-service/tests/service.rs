@@ -2274,3 +2274,29 @@ fn status_counts_the_peak_of_the_space_in_use() {
     assert_eq!(after, full.max(after), "a peak does not fall");
     assert!(after >= full);
 }
+
+/// Review S2: a narrowed connection's one name, when it is a directory,
+/// opens to read only, so nothing inside it can be made, changed or
+/// removed through the narrowing.
+#[test]
+fn a_narrowed_name_that_is_a_directory_opens_to_read_only() {
+    let mut r = rig();
+    let root = r.root;
+    let mk = proto::MakeDirectory {
+        mode: 0o755,
+        name: Name("d"),
+    };
+    assert_eq!(r.done(root, &mk, vec![]).0, status::OK);
+    for wanted in [
+        rights::READ | rights::WRITE | rights::CREATE | rights::SYNC | rights::CLONE,
+        rights::READ | rights::REMOVE | rights::CLONE,
+    ] {
+        let (s, n) = narrow(&mut r, root, "d", wanted);
+        assert_eq!(s, status::OK);
+        let wide = rights::READ | rights::CREATE | rights::REMOVE | rights::CLONE;
+        let (s, _) = r.try_open(n, "d", open_flags::DIRECTORY, wide);
+        assert_eq!(s, status::ACCESS_DENIED, "{wanted:#x}");
+        let (s, _) = r.try_open(n, "d", open_flags::DIRECTORY, rights::READ);
+        assert_eq!(s, status::OK, "{wanted:#x}");
+    }
+}

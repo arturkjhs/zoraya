@@ -175,7 +175,10 @@ impl<'a> Startup<'a> {
         }
         let start = at;
         let mut previous: Option<&str> = None;
-        for _ in 0..entry_count {
+        // Every path so far: a repeated path is refused even when entries of
+        // its length lie between the two (review K11).
+        let mut seen = [""; MAX_ENTRIES];
+        for n in 0..entry_count {
             let head = bytes.get(at..at.checked_add(ENTRY_HEADER)?)?;
             let kind = EntryKind::from_raw(head[0])?;
             let handle = head[1];
@@ -188,11 +191,13 @@ impl<'a> Startup<'a> {
             if head[2..4] != [0, 0]
                 || !handle_ok
                 || !is_absolute_normal(path)
-                || previous.is_some_and(|p| p.len() < path.len() || p == path)
+                || previous.is_some_and(|p| p.len() < path.len())
+                || seen[..n].contains(&path)
             {
                 return None;
             }
             previous = Some(path);
+            seen[n] = path;
             at = end;
         }
         if at != bytes.len() {

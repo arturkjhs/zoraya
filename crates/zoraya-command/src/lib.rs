@@ -428,7 +428,6 @@ fn write_settings(d: &Description, s: &mut String, done: &mut bool) {
 /// A kernel status in words (rule 5): never the bare name, never a number.
 pub fn status_problem(status: Status) -> String {
     let fixed = match status {
-        Status::NotFound => "not found",
         Status::AccessDenied => "not granted",
         Status::NoMemory => "out of memory",
         Status::LimitReached => "a limit was reached",

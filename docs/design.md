@@ -469,18 +469,23 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
 - `make check-fetch-ports`: the ports' fetch step against a local file, offline (INV-0109-3, INV-0109-4);
 - the in-QEMU tests in seven machine configurations, with `build/test-disk.img` attached and `zoraya-fsck` after them;
 - `make test-libposix`, the stage 6c criterion (below, under "How the in-QEMU tests run");
-- `make test-posix`, stage 6e's acceptance in `make test` ("Stage 6 acceptance" above); on CI a job of its own;
+- `make test-posix`, stage 6e's acceptance in `make test` ("Stage 6 acceptance" above); on CI a job of its own. Two
+  of its scripts run on images without the session file, so that `zosh` starts with the broker beside it:
+  `tests/posix/zosh.script` (POSIX programs from `zosh`, ADR-0153 rule 10, ADR-0200) and `tests/posix/tour.script`,
+  the whole of `docs/tour.md`, whose GUI twin `make test-tour-gui` plays (INV-0154-4);
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP and reads QEMU screendumps back as text by matching every
   cell of the terminal's grid against every glyph of `zoraya-font`, exactly: the font draws each pixel in the text
   colour or the background and PPM is lossless, so the tolerance is zero. It also checks the background and the
-  focused frame pixel by pixel. `tests/gui/terminal.script` waits for the prompt, types `write a.txt hi` and
-  `cat a.txt`, sees `hi`, presses F12, runs `ls`, measures key latency, and powers off. The serial line's input is
+  focused frame pixel by pixel. `tests/gui/terminal.script` waits for the prompt, writes and reads a file, runs a
+  pipeline, presses F12, edits a line wider than the window and checks that it is redrawn in place, measures key
+  latency, and powers off. The serial line's input is
   closed, so keys reach `zosh` only through the window;
 - `make test-boot`, which builds the normal kernel and boots it under every machine configuration. The test runner
   plays `tests/shell/console.script` on the serial line and checks the output, through to `poweroff` and QEMU's status
-  0; `tests/shell/leak.script` runs more programs than a handle table has slots, and `tests/shell/exit.script` ends the
-  shell.
+  0; `tests/shell/leak.script` runs more programs than a handle table has slots, `tests/shell/exit.script` ends the
+  shell, `tests/shell/jobs.script` checks job control (INV-0158-1 to -3, with the `requests` test program) and
+  `tests/shell/reboot.script` resets the machine (`run-qemu.sh --reboot`, INV-0155-7).
 
 | Label | Accelerator | Machine | Checks beyond the test list |
 |---|---|---|---|
@@ -504,7 +509,9 @@ How the in-QEMU tests run and report:
   export check on it, compiles `tests/posix-core/t_libposix.c` with `zcc`, puts it on an image, and plays
   `tests/posix-core/libposix.script` under the host's accelerator and TCG, with `zoraya-fsck` after each.
 - `make test-files` is the roadmap's criterion: one image over two boots, with every file command and its errors, and
-  `zoraya-fsck` after each. Then a disk that cannot be mounted (`init` stops after three restarts) and a write failed in
+  `zoraya-fsck` after each; `tests/shell/conventions.script` runs every builtin and native command with `--help` and
+  an unknown option (INV-0155-1), and `tests/shell/grants.script` checks what a command gets, through link objects
+  too (ADR-0153, with the `probe` test program). Then a disk that cannot be mounted (`init` stops after three restarts) and a write failed in
   QEMU's block layer with `blkdebug` (`--disk-write-error`: `init` restarts, and durable files are there).
 - `make test-crash` kills QEMU at a random point of `crashwriter`, 10 rounds by default, and runs `zoraya-fsck` and
   `crashcheck` after each: every file reported durable whole, and what exists a prefix of the writer's order. One more
@@ -876,7 +883,7 @@ the window and `init` opens a new one with a new shell; `poweroff` turns the mac
 `make run` boots to `zosh`, the native shell (TASK-18; ADR-0150 to ADR-0159 and ADR-0200), on the serial console:
 `Type help to begin, or help tour.` and the prompt `~> `; Ctrl-A X leaves QEMU, and `make run-gui` shows it in a
 terminal window. [`docs/tour.md`](tour.md) is how a person meets it, every example with its exact screen;
-`make test-posix` plays the whole tour on the serial console and `make test-posix-gui` in the window, from scripts
+`make test-posix` plays the whole tour on the serial console and `make test-tour-gui` in the window, from scripts
 that `zoraya-tour` generates from that file (INV-0154-4). This section follows the tour's order and adds where each
 part is built.
 
@@ -903,7 +910,9 @@ part is built.
 - **What a program is given** (tour 14 to 18; ADR-0153, ADR-0200; `zoraya_shell::grants`, `zoraya_user::namespace`).
   A program gets `in`, `out` and `err`, its own job inside its line's, the current directory to read and a start-up
   record (rule 8) with what its description designates: each path operand or option by its kind (`cp a b`: `a` to
-  read, `b`'s directory narrowed to `b`), and what `+r PATH` and `+w PATH` before the command grant. Nothing else:
+  read, `b`'s directory narrowed to `b`; when that one name is a directory, the file service opens it through the
+  narrowed connection to read and list only, so "create or replace this one name" never reaches what is inside it),
+  and what `+r PATH` and `+w PATH` before the command grant. Nothing else:
   no console, no volume root. `grants LINE` prints it in the order of the line. An operand from a value reaches only
   inside the current directory or a grant (`set g '+w /'; $g rm x` is a command named `+w /`). A designated path
   through a link object is given as its target only inside the current directory or a grant (rule 5), and a
@@ -986,7 +995,9 @@ and `sync`; the file commands are programs in the ramdisk.
   ramdisk: no call reads a ramdisk entry (ADR-0156's open questions). A job brought to the front with `fg` after
   `&` or `bg` has its input at its end: only a job stopped in front gets the keys again. A line whose job Ctrl-Z
   stopped counts as interrupted (`$status`, and `try` catches it). Output written to a redirected file that fails
-  is dropped without a message. A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
+  is dropped without a message. A program's start-up record holds at most 64 entries (`native::MAX_ENTRIES`): a path
+  covered with the same rights by another entry takes none, but a line naming more distinct paths than that is refused.
+  A POSIX program has no terminal from `zosh` (ADR-0153): `isatty` is false. Native `cp`
   moves a file in one message, so it cannot copy a large program. Under the test runner, `run-qemu.sh --reboot` lets a reset start the guest
   again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
@@ -1086,7 +1097,7 @@ and `sync`; the file commands are programs in the ramdisk.
   session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
   root volume's (ADR-0191), not a clock's. In the GUI window under TCG, a burst of more than about 16 keys typed
   through QMP loses its tail on the way to `ttyd` or `zosh`: a bug, in `docs/backlog.md`, to be fixed before stage 7b;
-  `make test-posix-gui` types lines of at most 16 keys.
+  `make test-posix-gui` and `make test-tour-gui` type lines of at most 16 keys.
 
 ## Roadmap
 
@@ -1109,7 +1120,7 @@ and `sync`; the file commands are programs in the ramdisk.
 CLAUDE.md                 rules for agents
 .claude/agents/           the test-runner and mutant-triage subagents
 LICENSE                   BSD-2-Clause, except tools/posix-surface/patches/ (its README.md), ports/patches/ and ports/musl/zoraya/ (ports/README.md)
-Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-libposix, test-posix, test-posix-gui, test-crash, test-gui, test, adr-check,
+Makefile                  build, run, run-gui, debug, test-unit, test-qemu, test-boot, test-files, test-libposix, test-posix, test-posix-gui, test-tour-gui, test-crash, test-gui, test, adr-check,
                           fetch-ports, ports, check-ports
 rust-toolchain.toml       pinned stable toolchain and target
 .cargo/config.toml        kernel runner (tools/run-qemu.sh) and cargo aliases
@@ -1193,7 +1204,7 @@ tests/gui/                the GUI script the runner plays over QMP
 tests/posix-core/         stage 6c's C criterion program and the script make test-libposix plays
 tests/posix/              the POSIX session: its root (/etc/zoraya/session, /etc/passwd, /home, /tests/wN.sh,
                           /sets/t1p), trees.sh, t_posix.c, one runner script per workload, and
-                          the scripts make test-posix and make test-posix-gui play
+                          the scripts make test-posix, make test-posix-gui and make test-tour-gui play
 tools/
   run-qemu.sh             the only place that knows the QEMU command line
   dump-dtb-fixtures.sh    regenerates the zoraya-dtb fixtures

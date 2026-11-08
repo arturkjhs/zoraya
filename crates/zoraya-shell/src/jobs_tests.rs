@@ -182,3 +182,19 @@ fn notices_say_how_a_job_ended() {
         "[1] false-ish: exit status 4\n"
     );
 }
+
+/// Mutation testing: the table's size, and a notice queued for the prompt.
+#[test]
+fn the_table_counts_and_queues() {
+    let mut j: Jobs<()> = Jobs::default();
+    assert!(j.is_empty());
+    assert_eq!(j.len(), 0);
+    j.add("a", String::new(), ());
+    j.add("b", String::new(), ());
+    assert!(!j.is_empty());
+    assert_eq!(j.len(), 2);
+    assert!(!j.has_notices());
+    j.queue("[1] stopped: spin\n".into());
+    assert!(j.has_notices());
+    assert_eq!(j.take_notices(), "[1] stopped: spin\n");
+}
