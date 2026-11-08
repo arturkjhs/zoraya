@@ -1133,9 +1133,14 @@ fn variables_are_set_listed_queried_and_unset() {
     run(&mut sh, "set my_name 1");
     assert_eq!(says(&mut sh, "echo $my_name"), "1\n");
     assert!(says(&mut sh, "set a.b 1").contains("not a variable name"));
-    let words = |n: usize| alloc::format!("set v{}", " w".repeat(n));
-    assert_eq!(says(&mut sh, &words(crate::eval::MAX_VALUES)), "");
-    assert!(says(&mut sh, &words(crate::eval::MAX_VALUES + 1)).contains("too many values"));
+    // The bound counts expanded values: a variable of 1000 words, used
+    // MAX_VALUES / 1000 times, reaches it without a long line to parse.
+    const PART: usize = 1000;
+    assert_eq!(crate::eval::MAX_VALUES % PART, 0);
+    run(&mut sh, &alloc::format!("set a{}", " w".repeat(PART)));
+    let words = |n: usize| alloc::format!("set v{}", " $a".repeat(n));
+    assert_eq!(says(&mut sh, &words(crate::eval::MAX_VALUES / PART)), "");
+    assert!(says(&mut sh, &words(crate::eval::MAX_VALUES / PART + 1)).contains("too many values"));
 }
 
 /// Mutation testing: what `test` checks and says.

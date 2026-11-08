@@ -48,13 +48,15 @@ impl<H: Host> Shell<H> {
         args: &[Value],
     ) -> i32 {
         // Operands as values, keeping their marks: each parsed operand is
-        // a slice of one argument's text.
+        // one argument's text, and they come in the arguments' order, so
+        // one forward walk finds them (a search from the start each time
+        // was quadratic in a long list, review S19).
+        let mut rest = args.iter();
         let operands: Vec<Value> = p
             .operands
             .iter()
             .map(|(_, t)| {
-                args.iter()
-                    .find(|a| core::ptr::eq(a.text.as_str(), *t))
+                rest.find(|a| core::ptr::eq(a.text.as_str(), *t))
                     .cloned()
                     .unwrap_or_else(|| Value::data(t))
             })
