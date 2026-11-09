@@ -1625,5 +1625,7 @@ mod windows;
 mod drops;
 #[path = "tests_rooms.rs"]
 mod rooms;
+#[path = "tests_settings.rs"]
+mod settings;
 #[path = "tests_sheets.rs"]
 mod sheets;

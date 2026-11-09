@@ -26,6 +26,7 @@ pub mod draw_rooms;
 pub mod fields;
 pub mod rect;
 pub mod rooms;
+pub mod settings;
 pub mod window;
 
 use alloc::string::String;
@@ -290,6 +291,10 @@ pub struct Compositor<P: Platform> {
     height: u32,
     scale: Scale,
     appearance: Appearance,
+    /// `gui.motion` (ADR-0169), told to clients in `Configure`.
+    motion: bool,
+    /// `gui.scale`: 0 is `auto` (ADR-0164); read at start only.
+    fixed_scale: u32,
     attached: bool,
     keymap: Keymap,
     /// The system key is held (either side).
@@ -384,6 +389,8 @@ impl<P: Platform> Compositor<P> {
             height: 0,
             scale: Scale::ONE,
             appearance: Appearance::Light,
+            motion: true,
+            fixed_scale: 0,
             attached: false,
             keymap: Keymap::new(),
             meta: 0,
@@ -422,6 +429,54 @@ impl<P: Platform> Compositor<P> {
             c.attach_input(*i);
         }
         c
+    }
+
+    /// As [`Compositor::new`], with the settings read at start (ADR-0169):
+    /// the scale they fix applies to the display attached here.
+    pub fn with_settings(
+        platform: P,
+        manager: P::End,
+        display: Option<P::End>,
+        inputs: &[P::End],
+        s: settings::GuiSettings,
+    ) -> Compositor<P> {
+        let mut c = Compositor::new(platform, manager, None, inputs);
+        c.fixed_scale = s.scale;
+        c.apply_settings(s);
+        if let Some(d) = display {
+            c.attach_display(d);
+        }
+        c
+    }
+
+    /// Applies checked settings: the theme to the frames, the wallpaper's
+    /// blur and every window's `Configure`, motion likewise, the layouts
+    /// and the active one at once; the scale waits for the next session.
+    pub fn apply_settings(&mut self, s: settings::GuiSettings) {
+        let appearance = if s.dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
+        let restyle = appearance != self.appearance || s.motion != self.motion;
+        self.appearance = appearance;
+        self.motion = s.motion;
+        if restyle && self.attached {
+            self.make_wallpaper();
+            self.fields_dirty = true;
+            let keys: Vec<Key> = self.windows.iter().map(Self::key_of).collect();
+            for k in keys {
+                self.configure(k);
+            }
+            let screen = self.screen();
+            self.dirty(&screen);
+        }
+        let layout_changed = s.layouts != self.layouts || s.layout != self.keymap.layout_index();
+        self.layouts = s.layouts;
+        self.keymap.set_layout(s.layout);
+        if layout_changed {
+            self.layout_changed();
+        }
     }
 
     pub fn platform(&mut self) -> &mut P {
@@ -585,7 +640,11 @@ impl<P: Platform> Compositor<P> {
             self.height = info.height;
             self.attached = true;
             let old = self.scale.factor();
-            self.scale = scale_for(info.width);
+            self.scale = match self.fixed_scale {
+                1 => Scale::ONE,
+                2 => Scale::new(2).unwrap_or(Scale::ONE),
+                _ => scale_for(info.width),
+            };
             self.make_wallpaper();
             self.reconfigure(old);
         }
@@ -1550,7 +1609,7 @@ impl<P: Platform> Compositor<P> {
             height: w.body.1 / s,
             scale: s,
             dark: self.appearance == Appearance::Dark,
-            motion: false,
+            motion: self.motion,
         };
         self.send_event_plain(key.client, &m);
     }
@@ -1857,6 +1916,30 @@ impl<P: Platform> Compositor<P> {
             },
             40 if clients && none => match decode::<gui::SetDock<'_>>(bytes, 0) {
                 Ok((_, m)) => (self.set_dock(m.apps.0), false),
+                Err(_) => (status::INVALID, false),
+            },
+            43 if clients && none => match decode::<gui::ApplySettings<'_>>(bytes, 0) {
+                Ok((_, m)) => {
+                    fn t(d: &[u8]) -> &str {
+                        // Not UTF-8: a word no declaration takes.
+                        core::str::from_utf8(d).unwrap_or("\u{0}")
+                    }
+                    let s = settings::checked(
+                        t(m.theme.0),
+                        t(m.motion.0),
+                        t(m.scale.0),
+                        t(m.wallpaper.0),
+                        t(m.layouts.0),
+                        t(m.layout.0),
+                    );
+                    match s {
+                        Some(s) => {
+                            self.apply_settings(s);
+                            (status::OK, false)
+                        }
+                        None => (status::INVALID, false),
+                    }
+                }
                 Err(_) => (status::INVALID, false),
             },
             38 if driver && one && decode::<gui::AttachClientManager>(bytes, 1).is_ok() => {

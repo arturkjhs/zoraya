@@ -782,8 +782,10 @@ fn item_type<'a>(ty: &str, rest: &'a str, line: usize) -> Result<(SettingType, &
             };
             let mut choices = Vec::new();
             for c in list.split('|') {
-                if !is_long_name(c) {
-                    return err(line, "a choice is lower-case words joined by |");
+                // A word, or a number (ADR-0169's `gui.scale`, `auto|1|2`).
+                let number = !c.is_empty() && c.len() <= 9 && c.bytes().all(|b| b.is_ascii_digit());
+                if !is_long_name(c) && !number {
+                    return err(line, "a choice is lower-case words or numbers joined by |");
                 }
                 push(&mut choices, String::from(c), line)?;
             }

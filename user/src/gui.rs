@@ -238,8 +238,13 @@ pub struct Gui {
 }
 
 impl Gui {
-    /// Starts the drivers, then the compositor with their channels.
-    pub fn start(gpu: (Handle, u32), inputs: &[(Handle, u32)]) -> Option<Gui> {
+    /// Starts the drivers, then the compositor with their channels and
+    /// `config`, `/config` to read its settings from (ADR-0169), at slot 11.
+    pub fn start(
+        gpu: (Handle, u32),
+        inputs: &[(Handle, u32)],
+        config: Option<Handle>,
+    ) -> Option<Gui> {
         let (gpud, display) = start_driver("gpud", gpu)?;
         let mut inputd = Vec::new();
         let mut ends = Vec::new();
@@ -267,8 +272,11 @@ impl Gui {
             return None;
         };
         let mut entries = alloc::vec![console(), moved(5, theirs), moved(6, display)];
-        for (i, end) in ends.iter().enumerate() {
+        for (i, end) in ends.iter().take(4).enumerate() {
             entries.push(moved(7 + i as u32, *end));
+        }
+        if let Some(c) = config {
+            entries.push(moved(11, c));
         }
         let Some((job, process)) = start("compd", &entries, &[]) else {
             let _ = handle_close(manager);

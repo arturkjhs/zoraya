@@ -350,6 +350,20 @@ protocol! {
     /// record, which the compositor draws and no client message changes
     /// (INV-0172-1). From the panel, and from `init` for its first
     /// terminal (proposed ADR-0242). The reply is `ManagerDone`.
+    /// Client manager only (the panel, ADR-0169): the desktop's settings
+    /// after the settings window changed them, in the words of their
+    /// declarations in the compositor's description (`dark`, `yes`,
+    /// `auto`, `''`, `us ua`, `ua`). The compositor checks each again and
+    /// applies them all, or none (`INVALID`). The reply is `ManagerDone`.
+    message ApplySettings<'a> = 43, handles 0 {
+        theme: Data<'a, 16>,
+        motion: Data<'a, 16>,
+        scale: Data<'a, 16>,
+        wallpaper: Data<'a, MAX_LINE>,
+        layouts: Data<'a, 64>,
+        layout: Data<'a, 16>,
+    }
+
     message AddRoomClient<'a> = 37, handles 1 {
         /// 1 for an untrusted room.
         untrusted: u32,
@@ -413,7 +427,7 @@ pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:
 /// `AddRoomClient` from either, the rooms and the dock from the client
 /// manager only (ADR-0168).
-pub const CLIENT_MANAGER_REQUESTS: [u32; 3] = [37, 39, 40];
+pub const CLIENT_MANAGER_REQUESTS: [u32; 4] = [37, 39, 40, 43];
 /// What the compositor sends the manager unasked.
 pub const MANAGER_EVENTS: [u32; 2] = [36, 41];
 

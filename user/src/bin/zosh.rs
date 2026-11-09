@@ -83,6 +83,8 @@ const NEED_VOLUME: [&str; 4] = ["crashwriter", "crashcheck", "fsbench", "posixru
 const SETTINGS: &str = "/config/settings";
 /// The room table (ADR-0172 point 1).
 const ROOMS: &str = "/config/rooms";
+/// The compositor's description, for the desktop's settings (ADR-0169).
+const COMPD: &str = include_str!("../../describe/system/compd.cmd");
 const START: &str = "/config/start.zosh";
 const HISTORY: &str = "/config/history";
 /// A line end inside one history entry, as `/config/history` keeps it: the
@@ -3905,7 +3907,12 @@ fn main() -> i32 {
         .filter(|h| handle_type(*h) == Ok("channel"))
         .map(|end| Held::Root(File { end }))
         .or_else(|| table.map(Held::table));
-    let declared = c.d.settings.clone();
+    // The shell's settings and the desktop's, which the compositor
+    // declares (ADR-0169): `settings` knows both.
+    let mut declared = c.d.settings.clone();
+    if let Ok(d) = zoraya_describe::parse(COMPD.as_bytes()) {
+        declared.extend(d.settings);
+    }
     let mut z = Z {
         root,
         cwd: "/".into(),

@@ -13,10 +13,11 @@ use zoraya_abi::{
     Mode, ObjectType, Packet, Status, channel_signals,
 };
 use zoraya_compositor::{Compositor, Incoming, Kind, Outgoing, Platform};
+use zoraya_user::files::File;
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, handle_type,
     memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_unsubscribe,
-    port_wait,
+    port_wait, println,
 };
 
 extern crate alloc;
@@ -206,6 +207,21 @@ fn main() -> i32 {
     let manager = channel_at(5).expect("a manager channel at slot 5");
     let display = channel_at(6);
     let inputs: Vec<Handle> = (7..11).filter_map(channel_at).collect();
-    let mut compositor = Compositor::new(system, manager, display, &inputs);
+    // The desktop's settings, once, at start (ADR-0169); bad lines are
+    // reported and keep their defaults.
+    let bytes = channel_at(11)
+        .map(|end| File { end })
+        .and_then(|config| {
+            let f = config
+                .open("settings", 0, zoraya_proto_file::rights::READ)
+                .ok()?;
+            zoraya_user::files::read_all(&f).ok()
+        })
+        .unwrap_or_default();
+    let (settings, problems) = zoraya_compositor::settings::read(&bytes);
+    for p in problems {
+        println!("{p}");
+    }
+    let mut compositor = Compositor::with_settings(system, manager, display, &inputs, settings);
     compositor.run()
 }

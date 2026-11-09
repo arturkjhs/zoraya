@@ -18,6 +18,7 @@ zoraya-text = { path = "../zoraya-text" }
 zoraya-fonts = { path = "../zoraya-fonts" }
 zoraya-paint = { path = "../zoraya-paint" }
 zoraya-settings = { path = "../zoraya-settings" }
+zoraya-describe = { path = "../zoraya-describe" }
 
 [lints]
 workspace = true

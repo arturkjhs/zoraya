@@ -569,3 +569,22 @@ fn list_settings_are_declared() {
     assert_eq!(list_text(&["a".into(), "b c".into()]), "a 'b c'");
     assert_eq!(list_items(""), Ok(std::vec![]));
 }
+
+/// A choice's words may be numbers (`gui.scale`, ADR-0169), not mixed
+/// case, punctuation or empty.
+#[test]
+fn choices_of_words_and_numbers() {
+    let head = "name t\nsummary s\nusage t\n";
+    let one = |line: &str| parse(std::format!("{head}{line}\n").as_bytes());
+    let d = one("setting a.b choice auto|1|2 auto scale").unwrap();
+    assert!(d.settings[0].ty.check("2").is_ok());
+    assert!(d.settings[0].ty.check("3").is_err());
+    for bad in [
+        "choice Auto|1 1 t",
+        "choice a||b a t",
+        "choice a|b. a t",
+        "choice 1.5|2 2 t",
+    ] {
+        assert!(one(&std::format!("setting a.b {bad}")).is_err(), "{bad}");
+    }
+}
