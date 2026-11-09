@@ -134,7 +134,7 @@ fn the_compositor_is_told_the_table_and_the_dock() {
     assert_eq!(p.rooms_text(), "b --colour 1\na --colour 3 +r /system\n");
     let again = zoraya_settings::rooms::read(p.rooms_text().as_bytes());
     assert_eq!(again.rooms, p.rooms.rooms);
-    assert_eq!(dock_text(), "term\tterm\n");
+    assert_eq!(dock_text(), "term\tterm\nfiles\tfiles\n");
 }
 
 #[test]
@@ -169,4 +169,58 @@ fn a_table_at_the_limit_is_kept() {
     p.reload(at.as_bytes());
     assert_eq!(p.rooms.rooms.len(), 18);
     assert!(p.rooms.problems.is_empty());
+}
+
+/// INV-0168-2's host half: of the applications only `files` holds the
+/// volume's root; every other holds its data directory, its chooser
+/// channel (not in an untrusted room) and what the person opened, and the
+/// record shows each.
+#[test]
+fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let gives = |l: &Launch| -> Vec<Give> { l.programs[0].handles.iter().map(|s| s.give).collect() };
+    let opened = application(None, "t_open", Some("+r ~/notes.txt"));
+    assert_eq!(
+        gives(&opened),
+        [
+            Give::Console,
+            Give::Compositor,
+            Give::Chooser,
+            Give::Data,
+            Give::Opened
+        ]
+    );
+    assert_eq!(opened.entries, ["+w /data/home/t_open", "+r ~/notes.txt"]);
+    assert_eq!(opened.line, "t_open ~/notes.txt");
+    let files = application(None, "files", None);
+    assert!(gives(&files).contains(&Give::Root));
+    assert!(gives(&files).contains(&Give::Launcher));
+    assert!(files.entries.contains(&String::from("+w /")));
+    for app in ["t_open", "edit"] {
+        let l = application(None, app, None);
+        assert!(!gives(&l).contains(&Give::Root), "{app}");
+        assert!(!l.entries.iter().any(|e| e == "+w /"), "{app}");
+    }
+    // In a room: its grants, its own data directory, its line.
+    let project = p.rooms.get("project").cloned();
+    let l = application(project.as_ref(), "t_open", None);
+    assert_eq!(l.entries[0], "+w ~/project");
+    assert!(l.entries.contains(&String::from("+w /data/project/t_open")));
+    assert_eq!(l.line, "room project t_open");
+    // An untrusted room's applications get no chooser.
+    let agent = p.rooms.get("agent-1").cloned();
+    let l = application(agent.as_ref(), "t_open", None);
+    assert!(!gives(&l).contains(&Give::Chooser));
+    // The dock's files icon launches files; openers by extension.
+    p.current = None;
+    let Action::Launch(l) = p.pressed(LAUNCH, 1) else {
+        panic!()
+    };
+    assert_eq!(l.app, "files");
+    assert_eq!(opener("plán.TXT"), Some("t_open"));
+    assert_eq!(opener("a.md"), Some("t_open"));
+    assert_eq!(opener(".txt"), None);
+    assert_eq!(opener("main.c"), None);
+    assert_eq!(data_dir(None, "files"), "/data/home/files");
 }
