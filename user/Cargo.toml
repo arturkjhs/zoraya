@@ -30,7 +30,9 @@ zoraya-proto-gui = { path = "../crates/zoraya-proto-gui" }
 zoraya-proto-term = { path = "../crates/zoraya-proto-term" }
 zoraya-compositor = { path = "../crates/zoraya-compositor" }
 zoraya-keymap = { path = "../crates/zoraya-keymap" }
-zoraya-font = { path = "../crates/zoraya-font" }
+zoraya-tokens = { path = "../crates/zoraya-tokens" }
+zoraya-text = { path = "../crates/zoraya-text" }
+zoraya-fonts = { path = "../crates/zoraya-fonts" }
 zoraya-term = { path = "../crates/zoraya-term" }
 zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-command = { path = "../crates/zoraya-command" }
@@ -364,6 +366,11 @@ bench = false
 
 [[bin]]
 name = "t_gui"
+test = false
+bench = false
+
+[[bin]]
+name = "t_text"
 test = false
 bench = false
 

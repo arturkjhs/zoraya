@@ -121,8 +121,8 @@ if [ "$probe_el2" = 1 ]; then
     # Each probe runs in a subshell that waits for it (the "exit $?" keeps the
     # shell from exec'ing it), so the report of QEMU's abort goes to the
     # subshell's stderr, which is discarded, not to ours.
-    ("$0" --accel hvf --dumpdtb "$dir/plain.dtb"; exit $?) >/dev/null 2>&1 || exit 0
-    ("$0" --accel hvf --machine-opt virtualization=on --dumpdtb "$dir/el2.dtb"; exit $?) >/dev/null 2>&1 && exit 0
+    ("$0" --accel hvf --dumpdtb "$dir/plain.dtb"; exit $?) </dev/null >/dev/null 2>&1 || exit 0
+    ("$0" --accel hvf --machine-opt virtualization=on --dumpdtb "$dir/el2.dtb"; exit $?) </dev/null >/dev/null 2>&1 && exit 0
     echo "HVF on this Mac has no EL2 (needs M3 or later)"
     exit 1
 fi
@@ -190,7 +190,11 @@ if [ "$print_cmd" = 1 ]; then
     echo "$*" >&2
 fi
 
-if [ "$mode" = test ] && [ "$keys" = 0 ]; then
+# A test run or a device-tree dump never reads the terminal: QEMU would make
+# an inherited terminal non-blocking, and the runner's and make's writes to it
+# would fail with EAGAIN (docs/backlog.md). With --keys stdin is the
+# runner's pipe.
+if { [ "$mode" = test ] && [ "$keys" = 0 ]; } || [ -n "$dumpdtb" ]; then
     exec "$@" </dev/null
 fi
 exec "$@"

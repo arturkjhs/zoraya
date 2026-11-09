@@ -474,6 +474,10 @@ static TESTS: &[Test] = &[
         name: "gui_from_a_process",
         run: gui_from_a_process,
     },
+    Test {
+        name: "text_renders_the_reference_digests",
+        run: text_renders_the_reference_digests,
+    },
     // Last, so that it covers every test before it.
     Test {
         name: "streams_from_a_process",
@@ -1280,6 +1284,12 @@ fn gui_from_a_process() {
         .expect("program in the ramdisk")
         .wait();
     assert_eq!(record, exited(0));
+}
+
+/// INV-0162-2 in QEMU: the fonts render to the host's digests, and the
+/// grid measurement of 7a (`t_text`).
+fn text_renders_the_reference_digests() {
+    assert_eq!(run_program("t_text"), exited(0));
 }
 
 /// plan.md's measurements: printed, and not judged.

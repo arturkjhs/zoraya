@@ -9,3 +9,7 @@ license.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# ADR-0161: the system's const parser and the tool's parser read the same files.
+zoraya-tokens = { path = "../../crates/zoraya-tokens" }

@@ -21,6 +21,8 @@
 //! FILE --qmp PATH` it plays a GUI script through QEMU's QMP socket at PATH
 //! (see `gui.rs`).
 
+#[macro_use]
+mod say;
 mod gui;
 mod output;
 mod protocol;
@@ -49,8 +51,8 @@ struct Args {
 }
 
 fn usage(msg: &str) -> ExitCode {
-    eprintln!("zoraya-test-runner: {msg}");
-    eprintln!(
+    esay!("zoraya-test-runner: {msg}");
+    esay!(
         "usage: zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]... \
          [--expect-line TEXT]... [--script FILE] [--gui-script FILE --qmp PATH] -- COMMAND..."
     );
@@ -127,7 +129,7 @@ fn main() -> ExitCode {
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[{label}] cannot start {}: {e}", args.command[0]);
+            esay!("[{label}] cannot start {}: {e}", args.command[0]);
             return ExitCode::FAILURE;
         }
     };
@@ -166,8 +168,8 @@ fn main() -> ExitCode {
                 if let Err(flood) = out.counted_line(&line, read.cut, read.bytes) {
                     kill(&mut child);
                     out.finish();
-                    println!("[{label}] FAIL:");
-                    println!("[{label}]   {flood}");
+                    say!("[{label}] FAIL:");
+                    say!("[{label}]   {flood}");
                     return ExitCode::FAILURE;
                 }
                 match checker.feed(&line) {
@@ -198,15 +200,16 @@ fn main() -> ExitCode {
     out.finish();
     let report = checker.finish(exit, args.timeout);
     if report.passed {
-        println!(
+        say!(
             "[{label}] PASS: {} passed, {} expected failures",
-            report.ok, report.expected_failures
+            report.ok,
+            report.expected_failures
         );
         ExitCode::SUCCESS
     } else {
-        println!("[{label}] FAIL:");
+        say!("[{label}] FAIL:");
         for p in &report.problems {
-            println!("[{label}]   {p}");
+            say!("[{label}]   {p}");
         }
         ExitCode::FAILURE
     }

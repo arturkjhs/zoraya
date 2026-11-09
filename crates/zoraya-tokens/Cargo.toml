@@ -1,6 +1,6 @@
 [package]
-name = "zoraya-font"
-description = "Zoraya's own bitmap font and its renderer (ADR-0095)."
+name = "zoraya-tokens"
+description = "Zoraya's design tokens, read at compile time from tokens.txt (ADR-0161)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

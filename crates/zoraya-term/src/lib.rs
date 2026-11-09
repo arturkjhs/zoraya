@@ -1,6 +1,7 @@
 //! The terminal's logic (ADR-0096), with no IPC: a parser for the VT subset
 //! the shell may send, a grid of cells with a fixed scrollback, the bytes
-//! keys produce, and rendering into a surface with `zoraya-font`.
+//! keys produce, and rendering into a surface with `zoraya-text` in the
+//! colours and sizes of `zoraya-tokens` (ADR-0161, ADR-0162).
 //!
 //! Output is hostile input here. The parser is total, every string it skips
 //! is cut at a bound, the cursor stays inside the grid, and memory is fixed
@@ -13,11 +14,14 @@
 
 extern crate alloc;
 
+pub mod read;
+
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zoraya_font::{CELL_HEIGHT, CELL_WIDTH};
 use zoraya_keymap::code;
+use zoraya_text::{CellMetrics, Font, FontList, Rect, Target, Text};
+use zoraya_tokens::{Appearance, Color, Scale, space, text};
 
 /// Lines kept above the screen `[assumption, ADR-0096]`.
 pub const SCROLLBACK: usize = 500;
@@ -25,56 +29,152 @@ pub const SCROLLBACK: usize = 500;
 pub const MAX_PARAMS: usize = 8;
 /// Bytes of an `OSC`, `DCS` or similar string before it is cut.
 pub const MAX_STRING: usize = 4096;
-/// Pixels between the grid and the surface's edge.
-pub const PAD: usize = 4;
 
-/// The 8 colours, their bright forms for bold, then their faint forms at
-/// half intensity (SGR 2, added by ADR-0154).
-pub const PALETTE: [u32; 24] = [
-    0x0000_0000,
-    0x00c0_3030,
-    0x0030_c030,
-    0x00c0_a030,
-    0x0040_60e0,
-    0x00b0_40c0,
-    0x0030_b0b0,
-    0x00c0_c0c0,
-    0x0060_6060,
-    0x00ff_6060,
-    0x0060_ff60,
-    0x00ff_e060,
-    0x0080_a0ff,
-    0x00ff_80ff,
-    0x0060_ffff,
-    0x00ff_ffff,
-    0x0000_0000,
-    0x0060_1818,
-    0x0018_6018,
-    0x0060_5018,
-    0x0020_3070,
-    0x0058_2060,
-    0x0018_5858,
-    0x0060_6060,
-];
-/// Where the faint colours start in [`PALETTE`].
+/// Colour indices of a cell: the 8 colours (`term.black` to `term.white`),
+/// their bright forms for bold, their faint forms (SGR 2, ADR-0154), then
+/// the default foreground and background (`term.fg`, `term.bg`) and the
+/// faint default foreground.
+pub const COLORS: usize = 27;
+/// Where the bright colours start.
+pub const BRIGHT: u8 = 8;
+/// Where the faint colours start.
 pub const FAINT: u8 = 16;
-pub const DEFAULT_FG: u8 = 7;
-pub const DEFAULT_BG: u8 = 0;
+pub const DEFAULT_FG: u8 = 24;
+pub const DEFAULT_BG: u8 = 25;
+pub const FAINT_DEFAULT: u8 = 26;
 
-/// The grid the terminal uses on a display of `width × height` pixels: 80 ×
-/// 24, less on a small display, at least 1 × 1. The GUI test reads the
-/// screen with the same numbers.
-pub fn grid_for(width: u32, height: u32) -> (usize, usize) {
-    // Room for the padding and the compositor's frame and placement.
-    let fit = |side: u32, cell: usize| (side as usize).saturating_sub(2 * PAD + 40) / cell;
-    let columns = 80.min(fit(width, CELL_WIDTH)).max(1);
-    let rows = 24.min(fit(height, CELL_HEIGHT)).max(1);
-    (columns, rows)
+/// The terminal's colours in one appearance, indexed as [`COLORS`] says.
+/// The bright forms are derived (ADR-0161: "the bright eight are derived
+/// by the terminal until a direction wants them as tokens"): a quarter of
+/// the way towards `term.fg`, so they gain contrast on `term.bg` in both
+/// sets; the faint ones are half way towards `term.bg`.
+pub fn palette(appearance: Appearance) -> [Color; COLORS] {
+    let p = appearance.palette();
+    let base = [
+        p.term_black,
+        p.term_red,
+        p.term_green,
+        p.term_yellow,
+        p.term_blue,
+        p.term_magenta,
+        p.term_cyan,
+        p.term_white,
+    ];
+    let mut out = [p.term_bg; COLORS];
+    for (i, c) in base.iter().enumerate() {
+        out[i] = *c;
+        out[BRIGHT as usize + i] = c.blend(p.term_fg, 64);
+        out[FAINT as usize + i] = c.blend(p.term_bg, 128);
+    }
+    out[DEFAULT_FG as usize] = p.term_fg;
+    out[DEFAULT_BG as usize] = p.term_bg;
+    out[FAINT_DEFAULT as usize] = p.term_fg.blend(p.term_bg, 128);
+    out
 }
 
-/// The surface size, in pixels, of a grid of `columns × rows`.
-pub const fn surface_size(columns: usize, rows: usize) -> (usize, usize) {
-    (columns * CELL_WIDTH + 2 * PAD, rows * CELL_HEIGHT + 2 * PAD)
+/// How the terminal draws: its fonts, cell, padding and colours at one
+/// scale and appearance. The test runner reads screens with the same.
+pub struct Look {
+    pub regular: Text<'static>,
+    pub bold: Text<'static>,
+    pub cell: CellMetrics,
+    /// The text size in physical pixels (`text.mono` at the scale).
+    pub px: u32,
+    /// Pixels between the grid and the surface's edge (`padding.terminal`).
+    pub pad: usize,
+    pub colors: [Color; COLORS],
+}
+
+/// A monospace font list: JetBrains Mono, then Inter for what it lacks
+/// (ADR-0162's monospace fallback), then the box.
+fn mono(first: &'static [u8]) -> FontList<'static> {
+    let fonts = [first, zoraya_fonts::INTER_REGULAR]
+        .into_iter()
+        .filter_map(|d| Font::parse(d).ok());
+    FontList::new(fonts)
+}
+
+impl Look {
+    pub fn new(scale: Scale, appearance: Appearance) -> Look {
+        let regular = Text::new(mono(zoraya_fonts::MONO_REGULAR));
+        let bold = Text::new(mono(zoraya_fonts::MONO_BOLD));
+        let px = text::MONO.physical(scale);
+        let cell = CellMetrics::of(&regular.fonts, px);
+        Look {
+            regular,
+            bold,
+            cell,
+            px,
+            pad: space::PADDING_TERMINAL.physical(scale) as usize,
+            colors: palette(appearance),
+        }
+    }
+
+    pub fn cell_width(&self) -> usize {
+        self.cell.width as usize
+    }
+
+    pub fn cell_height(&self) -> usize {
+        self.cell.height as usize
+    }
+
+    /// The grid on a display of `width × height` pixels: 80 × 24, less on
+    /// a small display, at least 1 × 1. The GUI test reads the screen with
+    /// the same numbers.
+    pub fn grid_for(&self, width: u32, height: u32) -> (usize, usize) {
+        // Room for the padding and the compositor's frame and placement.
+        let fit = |side: u32, cell: usize| (side as usize).saturating_sub(2 * self.pad + 40) / cell;
+        let columns = 80.min(fit(width, self.cell_width())).max(1);
+        let rows = 24.min(fit(height, self.cell_height())).max(1);
+        (columns, rows)
+    }
+
+    /// The surface size, in pixels, of a grid of `columns × rows`.
+    pub fn surface_size(&self, columns: usize, rows: usize) -> (usize, usize) {
+        (
+            columns * self.cell_width() + 2 * self.pad,
+            rows * self.cell_height() + 2 * self.pad,
+        )
+    }
+
+    /// The top left of cell `(x, y)` in the surface.
+    pub fn cell_origin(&self, x: usize, y: usize) -> (usize, usize) {
+        (
+            self.pad + x * self.cell_width(),
+            self.pad + y * self.cell_height(),
+        )
+    }
+
+    /// Draws one cell into `pixels` (rows of `stride`).
+    pub fn draw_cell(&mut self, pixels: &mut [u32], stride: usize, x: usize, y: usize, cell: Cell) {
+        let (px, py) = self.cell_origin(x, y);
+        let fg = self.colors[usize::from(cell.fg) % COLORS];
+        let bg = self.colors[usize::from(cell.bg) % COLORS];
+        let mut target = Target {
+            pixels,
+            stride,
+            clip: Rect::new(0, 0, stride as u32, u32::MAX),
+        };
+        let text = if cell.bold {
+            &mut self.bold
+        } else {
+            &mut self.regular
+        };
+        text.draw_cell(
+            &mut target,
+            self.cell,
+            (px as i32, py as i32),
+            cell.ch,
+            self.px,
+            (fg, bg),
+        );
+    }
+
+    /// Fills the whole surface with the background, padding included.
+    pub fn clear(&self, pixels: &mut [u32]) {
+        let bg = self.colors[DEFAULT_BG as usize].pixel();
+        pixels.fill(bg);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,12 +182,15 @@ pub struct Cell {
     pub ch: char,
     pub fg: u8,
     pub bg: u8,
+    /// Drawn with the bold font (SGR 1).
+    pub bold: bool,
 }
 
 const BLANK: Cell = Cell {
     ch: ' ',
     fg: DEFAULT_FG,
     bg: DEFAULT_BG,
+    bold: false,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,6 +541,7 @@ impl Term {
             ch: ' ',
             fg: DEFAULT_FG,
             bg: self.bg,
+            bold: false,
         }
     }
 
@@ -485,17 +589,19 @@ impl Term {
             self.carriage_return();
             self.newline();
         }
-        let fg = if self.faint {
-            self.fg % 8 + FAINT
-        } else {
-            self.fg + if self.bold { 8 } else { 0 }
+        let fg = match (self.fg, self.faint) {
+            (DEFAULT_FG, true) => FAINT_DEFAULT,
+            (c, true) => c % 8 + FAINT,
+            (c, false) if self.bold && c < BRIGHT => c + BRIGHT,
+            (c, false) => c,
         };
+        let bold = self.bold && !self.faint;
         let (fg, bg) = if self.reverse {
             (self.bg, fg)
         } else {
             (fg, self.bg)
         };
-        self.screen[self.y * self.columns + self.x] = Cell { ch, fg, bg };
+        self.screen[self.y * self.columns + self.x] = Cell { ch, fg, bg, bold };
         self.touch(self.y);
         if self.x + 1 == self.columns {
             self.wrap = true;
@@ -565,10 +671,12 @@ impl Term {
     }
 
     /// Draws the rows that changed into `pixels`, a surface of `stride`
-    /// pixels per row made with [`surface_size`], and gives the rows drawn,
-    /// first and last, if any. `cursor` draws the cursor as a reversed cell.
+    /// pixels per row made with [`Look::surface_size`], and gives the rows
+    /// drawn, first and last, if any. `cursor` draws the cursor as a
+    /// reversed cell.
     pub fn render(
         &mut self,
+        look: &mut Look,
         pixels: &mut [u32],
         stride: usize,
         cursor: bool,
@@ -585,10 +693,7 @@ impl Term {
                 if here {
                     core::mem::swap(&mut cell.fg, &mut cell.bg);
                 }
-                let fg = PALETTE[usize::from(cell.fg) % PALETTE.len()];
-                let bg = PALETTE[usize::from(cell.bg) % PALETTE.len()];
-                let (px, py) = (PAD + x * CELL_WIDTH, PAD + y * CELL_HEIGHT);
-                zoraya_font::draw(pixels, stride, px, py, cell.ch, fg, bg);
+                look.draw_cell(pixels, stride, x, y, cell);
             }
             drawn = Some(match drawn {
                 None => (y, y),

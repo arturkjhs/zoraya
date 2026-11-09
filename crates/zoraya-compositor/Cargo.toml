@@ -13,6 +13,7 @@ zoraya-proto-display = { path = "../zoraya-proto-display" }
 zoraya-proto-gui = { path = "../zoraya-proto-gui" }
 zoraya-proto-input = { path = "../zoraya-proto-input" }
 zoraya-keymap = { path = "../zoraya-keymap" }
+zoraya-tokens = { path = "../zoraya-tokens" }
 
 [lints]
 workspace = true

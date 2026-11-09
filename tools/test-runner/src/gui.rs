@@ -3,13 +3,16 @@
 //! screendumps, which are read as text.
 //!
 //! **How the screen is read.** The compositor puts the first window at a
-//! fixed place, and the terminal draws every character with `zoraya-font`,
-//! whose pixels are each either the text colour or the background. A
-//! screendump is lossless (PPM), so each cell of the terminal's grid is
-//! matched against every glyph exactly: the tolerance is zero, and a cell
-//! that matches no glyph reads as `?`. The block cursor, a cell of one
-//! colour, reads as `_`. Regions outside the window are checked pixel by
-//! pixel against a stated colour.
+//! fixed place, and the terminal draws every character with `zoraya-text`,
+//! deterministically (INV-0162-2). A screendump is lossless (PPM), so each
+//! cell of the terminal's grid is matched exactly against every character
+//! drawn by the same crate with the same fonts, size and colours
+//! (`zoraya_term::read`): the tolerance is zero, and a cell that matches
+//! no character reads as `?`. The block cursor, a cell of one colour,
+//! reads as `_`. Letters every font draws alike (Latin `A` and Cyrillic
+//! `А`) read as the Latin one, and a script's text is compared in the same
+//! classes. Regions outside the window are checked pixel by pixel against
+//! a stated colour.
 //!
 //! A script is lines, run in order:
 //!
@@ -30,6 +33,8 @@
 //!                   then a new window as `window`
 //! latency N         type `x` N times at the prompt, timing each until it
 //!                   shows, then erase them
+//! shot NAME         keep the screen as `build/shots/NAME-LABEL.ppm` (the screens
+//!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
 //! ```
 //!
@@ -43,12 +48,45 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::output;
-use zoraya_font::{CELL_HEIGHT, CELL_WIDTH, recognise};
-use zoraya_term::{PAD, PALETTE, grid_for};
+use zoraya_term::Look;
+use zoraya_term::read::Reader;
+use zoraya_tokens::{Appearance, Scale};
+
+/// The reader of the terminal as `term` draws it: scale 1, the light set.
+pub fn reader() -> Reader {
+    Reader::new(Look::new(Scale::ONE, Appearance::Light))
+}
 
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
-/// Where the screendumps go, relative to QEMU's working directory.
-const SHOT: &str = "build/gui-screen.ppm";
+/// Where the screendumps go, relative to QEMU's working directory: one file
+/// per run's label, so that two runs at once do not read each other's.
+fn shot_path(label: &str) -> String {
+    format!("build/gui-screen-{}.ppm", file_safe(label))
+}
+
+/// A label as part of a file name: anything but letters, digits, `-` and
+/// `_` becomes `_`, so that a label never leaves `build/` or breaks the
+/// QMP command it is quoted in.
+fn file_safe(label: &str) -> String {
+    label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+/// The time between two keys a `type` step presses: a fast keyboard's rate
+/// (USB full speed polls every 8 ms). QEMU's virtio-input event queue holds
+/// 64 events, 16 keys (a press and a release, each with its SYN), and QEMU
+/// drops events when the guest has not handed buffers back; QMP alone can
+/// inject a key in well under a millisecond, which a guest under TCG does
+/// not keep up with while it composes (traced as `virtio_input_queue_full`,
+/// TASK-24 7a). At this rate the queue holds 128 ms of typing.
+const KEY_INTERVAL: Duration = Duration::from_millis(8);
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -66,6 +104,7 @@ pub enum Step {
     Latency(usize),
     Window,
     Top(String),
+    Shot(String),
     Exit,
 }
 
@@ -107,6 +146,16 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
             "window" => Step::Window,
             "top" => Step::Top(rest.to_string()),
+            "shot" => {
+                let ok = !rest.is_empty()
+                    && rest
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                if !ok {
+                    return Err(bad("shot NAME, of letters, digits, - and _"));
+                }
+                Step::Shot(rest.to_string())
+            }
             "exit" => Step::Exit,
             _ => return Err(bad("unknown step")),
         });
@@ -171,36 +220,19 @@ impl Screen {
 
     /// The terminal's rows as text: the first window, at the compositor's
     /// origin, with the terminal's padding and grid.
-    pub fn rows(&self) -> Vec<String> {
-        let (columns, rows) = grid_for(self.width as u32, self.height as u32);
+    pub fn rows(&self, reader: &mut Reader) -> Vec<String> {
+        let (columns, rows) = reader
+            .look()
+            .grid_for(self.width as u32, self.height as u32);
         let (ox, oy) = zoraya_compositor::ORIGIN;
-        let (left, top) = (ox as usize + PAD, oy as usize + PAD);
-        let bg = PALETTE[usize::from(zoraya_term::DEFAULT_BG)];
-        (0..rows)
-            .map(|r| {
-                let line: String = (0..columns)
-                    .map(|c| {
-                        let (x, y) = (left + c * CELL_WIDTH, top + r * CELL_HEIGHT);
-                        if x + CELL_WIDTH > self.width || y + CELL_HEIGHT > self.height {
-                            return '?';
-                        }
-                        let pixel = |dx: usize, dy: usize| self.at(x + dx, y + dy);
-                        match recognise(pixel, bg) {
-                            Some(c) => c,
-                            None if solid(&pixel) => '_',
-                            None => '?',
-                        }
-                    })
-                    .collect();
-                line.trim_end().to_string()
-            })
-            .collect()
+        reader.rows(
+            columns,
+            rows,
+            (ox as usize, oy as usize),
+            (self.width, self.height),
+            |x, y| self.at(x, y),
+        )
     }
-}
-
-fn solid(pixel: &dyn Fn(usize, usize) -> u32) -> bool {
-    let first = pixel(0, 0);
-    (0..CELL_HEIGHT).all(|y| (0..CELL_WIDTH).all(|x| pixel(x, y) == first))
 }
 
 /// QMP's key code for a character, and whether Shift is needed.
@@ -257,6 +289,7 @@ pub fn qcode(c: char) -> Option<(&'static str, bool)> {
 struct Qmp {
     stream: UnixStream,
     reader: BufReader<UnixStream>,
+    shot: String,
 }
 
 impl Qmp {
@@ -273,7 +306,11 @@ impl Qmp {
             .and_then(|()| stream.set_write_timeout(Some(QMP_TIMEOUT)))
             .map_err(|e| e.to_string())?;
         let reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
-        let mut q = Qmp { stream, reader };
+        let mut q = Qmp {
+            stream,
+            reader,
+            shot: shot_path("gui"),
+        };
         q.reply()?;
         q.execute(r#"{"execute":"qmp_capabilities"}"#)?;
         Ok(q)
@@ -337,10 +374,17 @@ impl Qmp {
         }
     }
 
+    fn dump(&mut self) -> Result<(), String> {
+        let command = format!(
+            r#"{{"execute":"screendump","arguments":{{"filename":"{}"}}}}"#,
+            self.shot
+        );
+        self.execute(&command).map(|_| ())
+    }
+
     fn screen(&mut self) -> Result<Screen, String> {
-        let command = format!(r#"{{"execute":"screendump","arguments":{{"filename":"{SHOT}"}}}}"#);
-        self.execute(&command)?;
-        let bytes = std::fs::read(SHOT).map_err(|e| format!("{SHOT}: {e}"))?;
+        self.dump()?;
+        let bytes = std::fs::read(&self.shot).map_err(|e| format!("{}: {e}", self.shot))?;
         parse_ppm(&bytes)
     }
 }
@@ -356,6 +400,7 @@ struct Run {
     deadline: Instant,
     /// The row of the last `screen` match.
     row: Option<usize>,
+    reader: Reader,
 }
 
 impl Run {
@@ -382,13 +427,15 @@ impl Run {
     /// `prefix` begins with it.
     fn wait_row(&mut self, text: &str, prefix: bool) -> Result<Duration, String> {
         let start = Instant::now();
+        let want = self.reader.canonical(text);
+        let text = want.as_str();
         loop {
             // The screen's own timeout comes first, so that it says what
             // the screen shows.
             if Instant::now() <= self.deadline {
                 self.pump()?;
             }
-            let rows = self.qmp.screen()?.rows();
+            let rows = self.qmp.screen()?.rows(&mut self.reader);
             let from = self.row.map_or(0, |r| r + 1);
             let hit = |r: &String| {
                 if prefix {
@@ -434,6 +481,7 @@ impl Run {
                 for c in String::from_utf8_lossy(keys).chars() {
                     let (code, shift) = qcode(c).ok_or(format!("no key for {c:?}"))?;
                     self.qmp.press(code, shift)?;
+                    std::thread::sleep(KEY_INTERVAL);
                 }
                 Ok(())
             }
@@ -459,7 +507,7 @@ impl Run {
             Step::Latency(n) => {
                 let mut times = Vec::new();
                 let row = self.row;
-                let prompt = self.qmp.screen()?.rows()[row.unwrap_or(0)].clone();
+                let prompt = self.qmp.screen()?.rows(&mut self.reader)[row.unwrap_or(0)].clone();
                 let base = prompt.trim_end_matches('_').to_string();
                 for i in 1..=*n {
                     self.row = row.map(|r| r.wrapping_sub(1));
@@ -478,12 +526,12 @@ impl Run {
                 let mut idle = Vec::new();
                 for _ in 0..5 {
                     let start = Instant::now();
-                    let _ = self.qmp.screen()?.rows();
+                    let _ = self.qmp.screen()?.rows(&mut self.reader);
                     idle.push(start.elapsed());
                 }
                 idle.sort();
                 let ms = |d: &Duration| d.as_secs_f64() * 1000.0;
-                println!(
+                say!(
                     "[{}] measure: key to screendump {n} keys: min {:.1} ms, median {:.1} ms, max {:.1} ms; one screendump read alone {:.1} ms",
                     self.label,
                     ms(&times[0]),
@@ -501,8 +549,8 @@ impl Run {
                 if Instant::now() <= self.deadline {
                     self.pump()?;
                 }
-                let rows = self.qmp.screen()?.rows();
-                if rows.first() == Some(text) {
+                let rows = self.qmp.screen()?.rows(&mut self.reader);
+                if rows.first() == Some(&self.reader.canonical(text)) {
                     self.row = None;
                     return Ok(());
                 }
@@ -514,6 +562,14 @@ impl Run {
                 }
                 std::thread::sleep(Duration::from_millis(5));
             },
+            Step::Shot(name) => {
+                self.qmp.dump()?;
+                std::fs::create_dir_all("build/shots").map_err(|e| e.to_string())?;
+                // One file per run: gui-auto and gui-tcg keep their own.
+                let to = format!("build/shots/{name}-{}.ppm", file_safe(&self.label));
+                std::fs::copy(&self.qmp.shot, &to).map_err(|e| format!("{to}: {e}"))?;
+                Ok(())
+            }
             Step::Exit => loop {
                 self.pump()?;
                 match self.child.try_wait().map_err(|e| e.to_string())? {
@@ -533,7 +589,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     {
         Ok(steps) => steps,
         Err(e) => {
-            eprintln!("[{label}] {file}: {e}");
+            esay!("[{label}] {file}: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -547,7 +603,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[{label}] cannot start {}: {e}", command[0]);
+            esay!("[{label}] cannot start {}: {e}", command[0]);
             return ExitCode::FAILURE;
         }
     };
@@ -567,7 +623,8 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
     });
     let deadline = Instant::now() + Duration::from_secs(timeout);
-    let result = Qmp::connect(qmp, deadline).and_then(|q| {
+    let result = Qmp::connect(qmp, deadline).and_then(|mut q| {
+        q.shot = shot_path(label);
         let mut run = Run {
             child,
             qmp: q,
@@ -577,6 +634,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             label: label.to_string(),
             deadline,
             row: None,
+            reader: reader(),
         };
         // A failure names its step, so that a script of a thousand says where.
         let r = steps.iter().enumerate().try_for_each(|(i, s)| {
@@ -597,11 +655,11 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
     let _ = std::fs::remove_file(qmp);
     match result {
         Ok(()) => {
-            println!("[{label}] PASS: {} steps", steps.len());
+            say!("[{label}] PASS: {} steps", steps.len());
             ExitCode::SUCCESS
         }
         Err(e) => {
-            println!("[{label}] FAIL: {e}");
+            say!("[{label}] FAIL: {e}");
             ExitCode::FAILURE
         }
     }
@@ -627,6 +685,12 @@ mod tests {
         );
         assert!(parse("chord ctrl\n").is_err());
         assert!(parse("chord meta c\n").is_err());
+        assert_eq!(
+            parse("shot term-1\n").unwrap(),
+            [Step::Shot("term-1".into())]
+        );
+        assert!(parse("shot ../x\n").is_err());
+        assert!(parse("shot\n").is_err());
     }
 
     #[test]
@@ -646,12 +710,14 @@ mod tests {
     #[test]
     fn the_terminal_reads_back_as_text() {
         let (w, h) = (1024usize, 768usize);
-        let (columns, rows) = grid_for(w as u32, h as u32);
+        let mut look = Look::new(Scale::ONE, Appearance::Light);
+        let (columns, rows) = look.grid_for(w as u32, h as u32);
         let mut term = zoraya_term::Term::new(columns, rows);
-        term.write(b"zosh$ cat a.txt\nhi\nzosh$ ");
-        let (sw, sh) = zoraya_term::surface_size(columns, rows);
+        term.write("zosh$ cat a.txt\nhi звіт-2026.txt příklad.txt\nzosh$ ".as_bytes());
+        let (sw, sh) = look.surface_size(columns, rows);
         let mut surface = vec![0u32; sw * sh];
-        term.render(&mut surface, sw, true);
+        look.clear(&mut surface);
+        term.render(&mut look, &mut surface, sw, true);
         let mut pixels = vec![0x0020_3040u32; w * h];
         let (ox, oy) = zoraya_compositor::ORIGIN;
         for y in 0..sh {
@@ -664,9 +730,10 @@ mod tests {
             height: h,
             pixels,
         };
-        let text = screen.rows();
+        let mut reader = reader();
+        let text = screen.rows(&mut reader);
         assert_eq!(text[0], "zosh$ cat a.txt");
-        assert_eq!(text[1], "hi");
+        assert_eq!(text[1], reader.canonical("hi звіт-2026.txt příklad.txt"));
         assert_eq!(text[2], "zosh$ _");
         assert!(text[3..].iter().all(String::is_empty));
     }
