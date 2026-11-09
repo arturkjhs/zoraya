@@ -355,7 +355,11 @@ impl Gui {
         }
     }
 
-    pub fn start_panel(&self, root: &crate::files::File, chooser: Option<Handle>) -> Option<Running> {
+    pub fn start_panel(
+        &self,
+        root: &crate::files::File,
+        chooser: Option<Handle>,
+    ) -> Option<Running> {
         let (ours, theirs) = channel_create().ok()?;
         if !attached(self.manager, &gui::AttachClientManager {}, theirs) {
             let _ = handle_close(ours);

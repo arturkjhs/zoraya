@@ -115,7 +115,9 @@ fn ask_of(bytes: &[u8]) -> Option<Result<Ask, ()>> {
             })
             .map_err(|_| ()),
         3 => decode::<pc::PickDirectory>(bytes, 0)
-            .map(|(_, m)| Ask::Pick { write: m.write.0 == 1 })
+            .map(|(_, m)| Ask::Pick {
+                write: m.write.0 == 1,
+            })
             .map_err(|_| ()),
         _ => Err(()),
     })
@@ -188,7 +190,11 @@ impl Chooser {
                     let _ = handle_close(*h);
                 }
             }
-            let s = if ok { answer::CANCELLED } else { answer::INVALID };
+            let s = if ok {
+                answer::CANCELLED
+            } else {
+                answer::INVALID
+            };
             reply(panel, &pc::Added { status: Below(s) }, t, None);
         }
     }
@@ -197,7 +203,9 @@ impl Chooser {
     fn requests(&mut self, i: usize) {
         let mut bytes = vec![0u8; 1024];
         loop {
-            let Some(r) = self.apps[i].as_ref() else { return };
+            let Some(r) = self.apps[i].as_ref() else {
+                return;
+            };
             let end = r.end;
             let mut handles = [end; 1];
             let sizes = match channel_read(end, &mut bytes, &mut handles) {
@@ -216,7 +224,9 @@ impl Chooser {
             let cancelled = |s: u32| pc::Cancelled { status: Below(s) };
             match ask_of(msg) {
                 Some(Ok(ask)) => {
-                    let Some(r) = self.apps[i].as_mut() else { return };
+                    let Some(r) = self.apps[i].as_mut() else {
+                        return;
+                    };
                     if r.pending.is_some() {
                         reply(end, &cancelled(answer::BUSY), t, None);
                     } else {
@@ -245,9 +255,15 @@ impl Chooser {
     /// Shows the next request's sheet, if none is shown.
     fn next(&mut self) {
         while self.shown.is_none() {
-            let Some(i) = self.queue.pop_front() else { return };
-            let Some(r) = self.apps[i].as_ref() else { continue };
-            let Some((t, ask)) = r.pending.clone() else { continue };
+            let Some(i) = self.queue.pop_front() else {
+                return;
+            };
+            let Some(r) = self.apps[i].as_ref() else {
+                continue;
+            };
+            let Some((t, ask)) = r.pending.clone() else {
+                continue;
+            };
             let browser = Browser::new(ask, &r.name, &self.home);
             let (end, tag) = (r.end, r.tag);
             match Sheet::open(&mut self.app, &mut self.fs, self.root, browser, tag) {
@@ -271,7 +287,9 @@ impl Chooser {
             if h == Happened::Gone {
                 return false;
             }
-            let Some((i, sheet)) = self.shown.as_mut() else { continue };
+            let Some((i, sheet)) = self.shown.as_mut() else {
+                continue;
+            };
             let i = *i;
             let Some(outcome) = sheet.event(&mut self.app, &mut self.fs, self.root, h) else {
                 continue;
@@ -279,8 +297,12 @@ impl Chooser {
             let window = sheet.window;
             self.shown = None;
             self.app.close(window);
-            let Some(r) = self.apps[i].as_mut() else { continue };
-            let Some((t, _)) = r.pending.take() else { continue };
+            let Some(r) = self.apps[i].as_mut() else {
+                continue;
+            };
+            let Some((t, _)) = r.pending.take() else {
+                continue;
+            };
             let (end, tag) = (r.end, r.tag);
             match outcome {
                 Outcome::Chosen { handle, grant } => {

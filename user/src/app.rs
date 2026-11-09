@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
-    ChannelEntry, ChannelObject, DEADLINE_INFINITE, EventObject, Handle, MapFlags, MemoryFlags, ObjectType,
-    Mode, Packet, Rights, Status, channel_signals,
+    ChannelEntry, ChannelObject, DEADLINE_INFINITE, EventObject, Handle, MapFlags, MemoryFlags,
+    Mode, ObjectType, Packet, Rights, Status, channel_signals,
 };
 use zoraya_rt::{
     channel_create, channel_read, channel_write, handle_close, handle_duplicate, handle_type,

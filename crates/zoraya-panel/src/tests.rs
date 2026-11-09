@@ -179,7 +179,8 @@ fn a_table_at_the_limit_is_kept() {
 fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
     let mut p = Panel::default();
     assert!(p.reload(ROOMS));
-    let gives = |l: &Launch| -> Vec<Give> { l.programs[0].handles.iter().map(|s| s.give).collect() };
+    let gives =
+        |l: &Launch| -> Vec<Give> { l.programs[0].handles.iter().map(|s| s.give).collect() };
     let opened = application(None, "t_open", Some("+r ~/notes.txt"));
     assert_eq!(
         gives(&opened),
