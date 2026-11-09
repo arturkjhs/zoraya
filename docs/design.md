@@ -568,8 +568,10 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   command's grants from that table, and refuses a path it was not given with ADR-0153's hint (`hint: cp tried to
   change ~/copy.txt, which it was not given`, `to allow it: +w ~ cp notes.txt ~/copy.txt`); a room's shell takes its
   room from the table, since it cannot read `/config/rooms`; a trusted room's shell also holds `+r /bin`, `+r /usr`
-  and `+r /etc` (the toolchain, unless a room grant covers it; ADR-0172's decision of 2026-11-09), so POSIX programs
-  run in rooms (`tests/posix/room-gui.script`); a grant
+  and `+r /etc` (the toolchain, unless a room grant covers it; ADR-0172's decision of 2026-11-09), and every shell
+  the panel launches has a broker beside it (slots 7 and 8, as `init` gives its first; `user/src/beside.rs`), which
+  ends when the shell's connection closes and nothing it started runs, so POSIX programs run in rooms
+  (`tests/posix/room-gui.script`); a grant
   whose path does not exist gives it nothing to hold or list. A tree entry cannot publish (ADR-0153's table), so such
   a shell writes `/config/rooms` and `/config/settings` in place, not by an atomic replace (accepted for now; the
   crash window is in `docs/backlog.md`). The
