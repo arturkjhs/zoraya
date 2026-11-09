@@ -543,7 +543,9 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-app",
  "zoraya-broker",
+ "zoraya-chooser",
  "zoraya-command",
  "zoraya-commands",
  "zoraya-compositor",
@@ -552,10 +554,12 @@ dependencies = [
  "zoraya-fonts",
  "zoraya-fs",
  "zoraya-fs-service",
+ "zoraya-fsclient",
  "zoraya-heap",
  "zoraya-keymap",
  "zoraya-panel",
  "zoraya-proto-block",
+ "zoraya-proto-chooser",
  "zoraya-proto-display",
  "zoraya-proto-file",
  "zoraya-proto-gui",
