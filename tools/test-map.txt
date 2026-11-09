@@ -41,6 +41,7 @@ crates/zoraya-keymap/         test-gui
 crates/zoraya-panel/          test-gui
 crates/zoraya-proto-gui/      test-gui
 crates/zoraya-proto-display/  test-gui
+crates/zoraya-virtio-gpu/    test-gui
 crates/zoraya-proto-input/    test-gui
 crates/zoraya-proto-chooser/  test-gui
 crates/zoraya-chooser/        test-gui

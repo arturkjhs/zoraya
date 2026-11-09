@@ -722,6 +722,41 @@ the wallpaper setting accepts only `''` (no image decoder); copy and paste in th
 answers them); the clipboard's entries (only text); a `settings` command reaching the running compositor (the next
 session, as ADR-0169's open question says).
 
+## The display follows the window (as built)
+
+Stage 7g (TASK-24), by proposed [ADR-0246](adr/0246-the-display-follows-the-window.md):
+
+- **`gpud`** looks for virtio-gpu's display event every 100 ms between requests (`events_read`, one register read),
+  asks `GET_DISPLAY_INFO` and tells the compositor a new size with `Resized`. When it may tell is
+  `zoraya-virtio-gpu`'s `Announce`: once something is attached, for a size other than the attached one, one before
+  each `Info`, and none between an `Info` and the request after it, since the compositor takes the next message on
+  the channel as its reply (INV-0246-2). A second `Attach` at a new size makes the other resource, shows it on
+  scanout 0, then unreferences the old one and unpins its framebuffer.
+- **The compositor**, once any flush in flight is answered, asks `Info` and attaches a framebuffer of the new size
+  (none when the size came back to its own); `compd` releases the one before once the new is shown. The scale comes
+  from `gui.scale` or, under `auto`, from the width (2 from 1920 pixels); popups close, and sheets too at a new
+  scale; every toplevel keeps its logical size as far as the work area holds it and is moved back into it, legacy
+  windows are moved back, and every toplevel hears `Configure`; the bar and the dock follow the width.
+- **`gui.scale`** applies at once from the settings window too.
+- **Tests**: host tests of `Announce` and of the second resource (`zoraya-virtio-gpu`), and of the compositor with
+  a fake driver that changes size; `make test-gui` boots the terminal's script at 1600 × 1000 and 1920 × 1200 too
+  (`tools/run-qemu.sh --gui-size`). QEMU's QMP has no command that resizes a console, so no test in QEMU resizes a
+  running guest.
+
+Measured (`compd`'s own report, `make test-gui` with the terminal's script at 75ab053, 2026-11-10, QEMU 11.1.2 on
+the M4 Mac mini): each new size costs the wallpaper and its blur once, then a full redraw.
+
+| | HVF, 1600 × 1000 | HVF, 1920 × 1200 (scale 2) | TCG, 1600 × 1000 | TCG, 1920 × 1200 (scale 2) |
+|---|---|---|---|---|
+| The wallpaper and its blur | 36 ms | 51 ms | 138 ms | 199 ms |
+| The first frame | 1 ms | 2 ms | 16 ms | 26 ms |
+| The next 100 frames: mean | 1.9 ms | 6.3 ms | 8.9 ms | 34 ms |
+| The next 100 frames: longest | 17 ms | 50 ms | 114 ms | 463 ms |
+
+Not built in 7g: a window a client creates larger than the work area is not made smaller (at 1920 × 1200 the
+terminal's 80 × 24 runs under the dock); popups do not learn a new scale (they close instead); the compositor's
+`call` still takes the next message as its reply, so the handshake's order rests on `gpud` (review 7g, A).
+
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
