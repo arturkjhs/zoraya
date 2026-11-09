@@ -297,6 +297,17 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 Some(theirs)
             }
             Give::Opened => opened.take(),
+            // `/config` narrowed to the one file (ADR-0169).
+            Give::Config => {
+                let rights = zoraya_panel::CONFIG_RIGHTS;
+                let config = root?
+                    .open("config", zoraya_proto_file::open_flags::DIRECTORY, rights)
+                    .ok()?;
+                let f = config.narrow("settings", rights).ok()?;
+                let h = f.end;
+                core::mem::forget(f);
+                Some(h)
+            }
             _ => None,
         });
         if let Some(ours) = launcher {
@@ -337,6 +348,29 @@ fn watch_launcher(st: &mut State, end: Handle) {
 
 /// `OpenWith` from a file manager: the file's application is launched in
 /// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
+/// `/config/settings` as the compositor reads it, sent as `ApplySettings`.
+fn apply_settings(st: &State) -> bool {
+    let Some(root) = st.root.as_ref() else {
+        return false;
+    };
+    let bytes = root
+        .open("config/settings", 0, zoraya_proto_file::rights::READ)
+        .ok()
+        .and_then(|f| zoraya_user::files::read_all(&f).ok())
+        .unwrap_or_default();
+    let (s, _) = zoraya_compositor::settings::read(&bytes);
+    let w = zoraya_compositor::settings::words(&s);
+    let m = gui::ApplySettings {
+        theme: Data(w[0].as_bytes()),
+        motion: Data(w[1].as_bytes()),
+        scale: Data(w[2].as_bytes()),
+        wallpaper: Data(w[3].as_bytes()),
+        layouts: Data(w[4].as_bytes()),
+        layout: Data(w[5].as_bytes()),
+    };
+    send(st.manager, &m, None)
+}
+
 fn launcher_requests(st: &mut State, i: usize) {
     let Some(end) = st.launchers[i] else { return };
     let mut bytes = alloc::vec![0u8; 2048];
@@ -357,6 +391,23 @@ fn launcher_requests(st: &mut State, i: usize) {
         let got: Vec<Handle> = handles[..sizes.handles as usize].to_vec();
         let msg = &bytes[..sizes.bytes as usize];
         let t = zoraya_protocol::Header::decode(msg).map_or(0, |(h, _)| h.transaction);
+        // The settings window changed /config/settings (ADR-0169): read it
+        // and tell the compositor, which checks every value again.
+        if decode::<zoraya_proto_chooser::SettingsChanged>(msg, got.len()).is_ok() {
+            let sent = apply_settings(st);
+            let r = zoraya_proto_chooser::SettingsApplied {
+                status: zoraya_protocol::Below(if sent {
+                    zoraya_proto_chooser::status::CANCELLED
+                } else {
+                    zoraya_proto_chooser::status::FAILED
+                }),
+            };
+            let mut out = [0u8; 64];
+            if let Ok(n) = encode(&r, t, &mut out) {
+                let _ = channel_write(end, &out[..n], &[]);
+            }
+            continue;
+        }
         let status = match decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len()) {
             Ok((_, m)) => {
                 let name = core::str::from_utf8(m.name.0).unwrap_or("");

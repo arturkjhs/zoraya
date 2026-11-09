@@ -134,7 +134,10 @@ fn the_compositor_is_told_the_table_and_the_dock() {
     assert_eq!(p.rooms_text(), "b --colour 1\na --colour 3 +r /system\n");
     let again = zoraya_settings::rooms::read(p.rooms_text().as_bytes());
     assert_eq!(again.rooms, p.rooms.rooms);
-    assert_eq!(dock_text(), "term\tterm\nfiles\tfiles\n");
+    assert_eq!(
+        dock_text(),
+        "term\tterm\nfiles\tfiles\nsettings\tsettings\n"
+    );
 }
 
 #[test]
@@ -224,4 +227,40 @@ fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
     assert_eq!(opener(".txt"), None);
     assert_eq!(opener("main.c"), None);
     assert_eq!(data_dir(None, "files"), "/data/home/files");
+}
+
+/// INV-0169-4's host half: no launch the panel makes carries /config with
+/// a writing right but the settings window's, and its record says so.
+#[test]
+fn only_the_settings_window_gets_config() {
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    for (app, _) in APPS {
+        let l = match app {
+            "term" => terminal(None),
+            a => application(None, a, None),
+        };
+        let config = l
+            .programs
+            .iter()
+            .any(|pr| pr.handles.iter().any(|h| h.give == Give::Config));
+        assert_eq!(config, app == "settings", "{app}");
+        assert_eq!(
+            l.entries.iter().any(|e| e == "+w /config/settings"),
+            app == "settings",
+            "{app}"
+        );
+    }
+    for (_, app) in OPENERS {
+        let l = application(None, app, Some("+r ~/a.txt"));
+        assert!(
+            !l.programs
+                .iter()
+                .any(|pr| pr.handles.iter().any(|h| h.give == Give::Config))
+        );
+    }
+    assert_eq!(
+        CONFIG_RIGHTS & zoraya_proto_file::rights::PUBLISH,
+        zoraya_proto_file::rights::PUBLISH
+    );
 }

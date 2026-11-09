@@ -1,0 +1,2 @@
+# The layouts the test switches between (ADR-0169; the default is us alone).
+gui.keyboard-layouts = us ua cz

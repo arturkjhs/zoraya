@@ -120,6 +120,17 @@ protocol! {
     message Opening = 32, handles 0 {
         status: Below<4>,
     }
+
+    /// The settings window to the panel (ADR-0169): `/config/settings`
+    /// changed; the panel reads it and tells the compositor
+    /// (`ApplySettings`). `SettingsApplied`'s status is the compositor's
+    /// answer (`status::CANCELLED` for applied, as `Added` uses it;
+    /// `INVALID` when it refused the values).
+    message SettingsChanged = 33, handles 0 {}
+
+    message SettingsApplied = 33, handles 0 {
+        status: Below<4>,
+    }
 }
 
 /// The application requests' ordinals.
@@ -129,7 +140,7 @@ pub const ANSWERS: [u32; 2] = [8, 9];
 /// The panel's requests.
 pub const PANEL_REQUESTS: [u32; 1] = [16];
 /// The file manager's request to the panel.
-pub const LAUNCHER_REQUESTS: [u32; 1] = [32];
+pub const LAUNCHER_REQUESTS: [u32; 2] = [32, 33];
 
 #[cfg(test)]
 extern crate std;

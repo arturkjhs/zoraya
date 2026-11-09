@@ -47,6 +47,9 @@ pub enum Give {
     Launcher,
     /// The file opened: a read connection to it (ADR-0167 point 1).
     Opened,
+    /// `/config` narrowed to `settings`, to read, write and publish: the
+    /// settings window alone (ADR-0169, INV-0169-4).
+    Config,
     /// The shell's start-up record (ADR-0153 rule 8) at slot 1000: what
     /// it holds, its room's grants or home's, never the volume's root
     /// (ADR-0242's condition).
@@ -101,8 +104,20 @@ pub struct Launch {
 }
 
 /// The applications the dock lists, with the line each is launched by.
-/// `edit` and `settings` come with 7f.
-pub const APPS: [(&str, &str); 2] = [("term", "term"), ("files", "files")];
+pub const APPS: [(&str, &str); 3] = [
+    ("term", "term"),
+    ("files", "files"),
+    ("settings", "settings"),
+];
+
+/// The rights the settings window holds on `/config` narrowed to
+/// `settings` (ADR-0169: read, write, create, publish, sync, clone).
+pub const CONFIG_RIGHTS: u32 = zoraya_proto_file::rights::READ
+    | zoraya_proto_file::rights::WRITE
+    | zoraya_proto_file::rights::CREATE
+    | zoraya_proto_file::rights::PUBLISH
+    | zoraya_proto_file::rights::SYNC
+    | zoraya_proto_file::rights::CLONE;
 
 /// The application that opens a file of each extension (ADR-0168 point 4:
 /// file types by extension, an assumption). Until `edit` (7f), the test
@@ -165,6 +180,19 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
             give: Give::Launcher,
         });
         entries.push(String::from("+w /"));
+    }
+    // The settings window: the one file it changes, and the panel to tell
+    // (ADR-0169); no other record carries /config to write (INV-0169-4).
+    if app == "settings" {
+        handles.push(Slot {
+            slot: 8,
+            give: Give::Config,
+        });
+        handles.push(Slot {
+            slot: 9,
+            give: Give::Launcher,
+        });
+        entries.push(String::from("+w /config/settings"));
     }
     let mut line = String::from(app);
     if let Some(words) = opened {
