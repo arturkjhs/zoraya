@@ -349,7 +349,14 @@ notes; all fixed or answered in `f1594dd`, with tests; no open error.
 
 ### Mutation testing
 
-`make mutants-host` on `zoraya-keymap` with `--in-diff` against `main`: run after 7d's `make test`; see 7d's section.
+`make mutants-host` on `zoraya-keymap` with `--in-diff` against `main` (run on `work/7d`, after 7d's `make test`):
+122 mutants in 42 seconds, 13 missed, 82 caught, 27 unviable. Eleven were holes: an index past the layouts, the dead
+key's accessors (`dead`, `clear_dead`), the right Alt's release in either role, AltGr's fallbacks to the third and the
+plain level, and the Ukrainian digits (a mutated `const` loop left them empty). Tests for each in `a618df7` (on
+`work/7d`, since 7c is not merged): 2 missed after them. Both are equivalent for the shipped tables, as the main model
+checked: `text`'s fallback guard `level >= 2` made `true` changes only keys with an empty first or second level, and
+`has_altgr`'s `||` made `&&` only a layout with a third level and no fourth; a test of the tables now asserts that
+neither exists (`every_key_has_its_first_two_levels`).
 
 ### Merge
 

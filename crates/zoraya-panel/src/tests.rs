@@ -139,3 +139,24 @@ fn the_table_kept_is_the_table_told() {
     assert!(p.rooms.rooms.len() < 30);
     assert!(!p.rooms.problems.is_empty());
 }
+
+/// Mutants 7d: a table of exactly `MAX_ROOMS_TEXT` is kept whole.
+#[test]
+fn a_table_at_the_limit_is_kept() {
+    let mut head = String::new();
+    for i in 0..17 {
+        head.push_str(&format!("r{i} +r /{}\n", "a".repeat(150)));
+    }
+    let at = (1..200)
+        .map(|n| format!("{head}last +r /{}\n", "b".repeat(n)))
+        .find(|t| {
+            let mut p = Panel::default();
+            p.reload(t.as_bytes());
+            p.rooms_text().len() == MAX_ROOMS_TEXT
+        })
+        .expect("some length is exactly at the limit");
+    let mut p = Panel::default();
+    p.reload(at.as_bytes());
+    assert_eq!(p.rooms.rooms.len(), 18);
+    assert!(p.rooms.problems.is_empty());
+}

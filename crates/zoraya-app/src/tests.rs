@@ -15,6 +15,10 @@ struct Fake {
     commits: VecDeque<u32>,
     titles: Vec<String>,
     sizes: Vec<(u32, u32)>,
+    /// The display's scale (0 reads as 1).
+    scale: u32,
+    /// Each commit's width and height in pixels.
+    committed: Vec<(u32, u32)>,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -35,7 +39,7 @@ impl Platform for Fake {
                     status: ok,
                     width: 1024,
                     height: 768,
-                    scale: 1,
+                    scale: self.scale.max(1),
                 },
                 t,
             )),
@@ -51,7 +55,11 @@ impl Platform for Fake {
                     t,
                 ));
             }
-            7 => self.commits.push_back(t),
+            7 => {
+                let (_, c) = decode::<gui::CommitTo>(bytes, 0).unwrap();
+                self.committed.push((c.width, c.height));
+                self.commits.push_back(t);
+            }
             8 => self
                 .inbox
                 .push_back(reply(&gui::BufferDone { status: ok }, t)),
@@ -251,4 +259,109 @@ fn a_configure_gives_a_new_buffer_and_pointer_events_reach_widgets() {
     });
     app.platform.event(&key(keys::ENTER));
     assert_eq!(app.wait(), Happened::Gone);
+}
+
+/// Mutants 7d: at scale 2 the buffer and each commit are in pixels, twice
+/// the logical size each way.
+#[test]
+fn scale_two_buffers_and_commits_are_in_pixels() {
+    let fake = Fake {
+        scale: 2,
+        ..Fake::default()
+    };
+    let mut app = App::connect(fake, Appearance::Light).unwrap();
+    let id = app.open("t", form(), 30, 20).unwrap();
+    assert_eq!(app.platform.buffers[0].len(), 60 * 40);
+    assert_eq!(app.platform.committed, [(60, 40)]);
+    app.platform.frame();
+    app.platform.event(&gui::Configure {
+        window: id,
+        width: 50,
+        height: 10,
+        scale: 2,
+        dark: false,
+        motion: true,
+    });
+    assert_eq!(app.wait(), Happened::Gone);
+    assert_eq!(app.platform.buffers[1].len(), 100 * 20);
+    assert_eq!(app.platform.committed, [(60, 40), (100, 20)]);
+}
+
+/// Mutants 7d: a reply is matched by its ordinal and its transaction; a
+/// stale one of the same ordinal waits in the queue.
+#[test]
+fn a_stale_reply_is_not_taken_for_the_answer() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    app.platform.inbox.push_back(reply(
+        &gui::Created {
+            status: zoraya_protocol::Below(status::OK),
+            window: 77,
+        },
+        9999,
+    ));
+    let id = app.open("t", form(), 40, 20).unwrap();
+    assert_eq!(id, 1);
+}
+
+/// Mutants 7d: two windows are each their own: the second is found, and
+/// closing it frees its buffer and not the first's.
+#[test]
+fn two_windows_are_each_found() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let a = app.open("a", form(), 40, 20).unwrap();
+    let b = app.open("b", form(), 50, 20).unwrap();
+    assert!(app.window(a).is_some());
+    assert_eq!(app.window(b).unwrap().size.0, Scale::ONE.logical(50));
+    app.close(b);
+    assert!(app.platform.buffers[1].is_empty());
+    assert_eq!(app.platform.buffers[0].len(), 40 * 20);
+    assert!(app.window(a).is_some());
+    assert!(app.window(b).is_none());
+}
+
+/// Mutants 7d: a Configure at the window's size or of zero width or
+/// height gives no new buffer.
+#[test]
+fn a_configure_that_changes_nothing_is_ignored() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("t", form(), 40, 20).unwrap();
+    app.platform.frame();
+    for (width, height) in [(40, 20), (0, 30), (30, 0)] {
+        app.platform.event(&gui::Configure {
+            window: id,
+            width,
+            height,
+            scale: 1,
+            dark: false,
+            motion: true,
+        });
+    }
+    assert_eq!(app.wait(), Happened::Gone);
+    assert!(!app.platform.sent.contains(&8), "{:?}", app.platform.sent);
+    assert_eq!(app.platform.buffers.len(), 1);
+}
+
+/// Mutants 7d: another window losing focus leaves the focused one's.
+#[test]
+fn another_window_losing_focus_keeps_the_focus() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let a = app.open("a", form(), 200, 120).unwrap();
+    let b = app.open("b", form(), 200, 120).unwrap();
+    for (window, focused) in [(a, true), (b, false)] {
+        app.platform.event(&gui::WindowFocus {
+            dropped: 0,
+            window,
+            focused,
+        });
+    }
+    app.platform.event(&key(keys::TAB));
+    app.platform.event(&key(keys::TAB));
+    app.platform.event(&key(keys::ENTER));
+    assert_eq!(
+        app.wait(),
+        Happened::Ui {
+            window: a,
+            response: Response::Activated(2)
+        }
+    );
 }

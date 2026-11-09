@@ -170,3 +170,78 @@ fn a_long_file_is_cut_at_a_line_and_reported() {
     assert!(r.get("wide").is_none(), "the cut line is not read");
     assert!(r.problems.iter().any(|p| p.problem.contains("256 KiB")));
 }
+
+/// Mutants 7d: the bounds of a grant's path, a line's words, a repeated
+/// flag, the number of rooms and a writer's grants.
+#[test]
+fn every_bound_is_where_it_says() {
+    let long = |n: usize| format!("/{}", "a".repeat(n - 1));
+    assert!(is_grant_path(&long(MAX_PATH)));
+    assert!(!is_grant_path(&long(MAX_PATH + 1)));
+    assert!(!is_grant_path("/a\u{7}"));
+
+    let grants = (0..MAX_GRANTS)
+        .map(|i| format!(" +r /g{i}"))
+        .collect::<String>();
+    // 4 + 2 * MAX_GRANTS words is still a line; one more is not.
+    let at = format!("full --colour 1{grants} x\n");
+    let past = format!("full --colour 1{grants} x y\n");
+    let p = |t: &str| read(t.as_bytes()).problems[0].problem.clone();
+    assert!(p(&at).contains("not --untrusted"), "{}", p(&at));
+    assert_eq!(p(&past), "too many grants");
+
+    assert!(p("twice --untrusted --untrusted\n").contains("not --untrusted"));
+    assert!(p("twice --colour 1 --colour 2\n").contains("not --untrusted"));
+
+    let many: String = (0..=MAX_ROOMS).map(|i| format!("r{i}\n")).collect();
+    let r = read(many.as_bytes());
+    assert_eq!(r.rooms.len(), MAX_ROOMS);
+    assert_eq!(r.problems.len(), 1);
+    assert_eq!(r.problems[0].line, MAX_ROOMS + 1);
+    assert!(r.problems[0].problem.contains("more than"));
+
+    let room = |n: usize| Room {
+        name: String::from("new"),
+        untrusted: false,
+        colour: 1,
+        grants: (0..n)
+            .map(|i| Grant {
+                write: false,
+                path: format!("/g{i}"),
+            })
+            .collect(),
+    };
+    assert!(add(b"", &room(MAX_GRANTS)).is_ok());
+    assert_eq!(add(b"", &room(MAX_GRANTS + 1)), Err(RoomRefusal::TooMany));
+}
+
+/// Mutants 7d: the cut keeps every whole line, and only those, and names
+/// the first line it drops; a file of exactly MAX_SIZE is not cut.
+#[test]
+fn the_cut_is_exact() {
+    let last = "last +r /system/xyz\n";
+    // Comments, then `last` ending 16 bytes before the limit.
+    let pad = |end: usize| {
+        let mut t = String::new();
+        while t.len() < end - 100 {
+            t.push_str("# padding padding padding padding\n");
+        }
+        t.push_str(&"#".repeat(end - t.len() - 1));
+        t.push('\n');
+        t
+    };
+    let mut text = pad(crate::MAX_SIZE - 16 - last.len());
+    text.push_str(last);
+    let kept_lines = text.matches('\n').count();
+    // `wide +r /srv/pro` is the part before the limit: a wider grant.
+    text.push_str("wide +r /srv/project/sub\n");
+    let r = read(text.as_bytes());
+    assert_eq!(r.get("last").unwrap().grants[0].path, "/system/xyz");
+    assert!(r.get("wide").is_none(), "the cut line is not read");
+    assert_eq!(r.problems.len(), 1);
+    assert_eq!(r.problems[0].line, kept_lines + 1);
+
+    let exact = pad(crate::MAX_SIZE);
+    assert_eq!(exact.len(), crate::MAX_SIZE);
+    assert!(read(exact.as_bytes()).problems.is_empty());
+}
