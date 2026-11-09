@@ -165,6 +165,8 @@ pub trait Platform {
     /// [`Platform::now`], and gives the keys.
     fn wait(&mut self, ready: &mut Vec<u64>, deadline: Option<u64>);
     fn now(&mut self) -> u64;
+    /// A line for the console (the timings below); by default nothing.
+    fn note(&mut self, _line: &str) {}
 }
 
 struct Client<E> {
@@ -197,7 +199,18 @@ pub struct Stats {
     pub flushes: u64,
     /// Display drivers dropped for missing their deadline.
     pub hangs: u64,
+    /// The last wallpaper and its blur, made at a display's attach.
+    pub wallpaper_ns: u64,
+    /// The first frame composed after it: the whole screen.
+    pub first_frame_ns: u64,
+    /// The frames after the first, until 100 of them are reported.
+    pub steady_frames: u64,
+    pub steady_ns: u64,
+    pub steady_max_ns: u64,
 }
+
+/// How many frames after the first are timed and reported.
+const STEADY_FRAMES: u64 = 100;
 
 /// A window, named by its client's slot and its id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +260,9 @@ struct Carried<E> {
     source: Key,
     entry: E,
     name: String,
+    /// The label's logical width, measured once: the damaged room
+    /// follows it (a 64-byte name can be wider than `CARRIED_WIDTH`).
+    width: i64,
 }
 
 /// The switcher overlay while open (ADR-0160): the windows in the order
@@ -704,7 +720,11 @@ impl<P: Platform> Compositor<P> {
             self.attached = true;
             let old = self.scale.factor();
             self.scale = self.chosen_scale();
+            let start = self.platform.now();
             self.make_wallpaper();
+            self.stats.wallpaper_ns = self.platform.now().saturating_sub(start);
+            self.stats.first_frame_ns = 0;
+            self.stats.steady_frames = 0;
             self.reconfigure(old);
         }
         let length = reply(&display::Attach {}, 2, &mut self.out);
@@ -1124,9 +1144,13 @@ impl<P: Platform> Compositor<P> {
     /// Where the dragged entry's label is drawn, beside the pointer.
     fn carried_rect(&self, x: i64, y: i64) -> Rect {
         let s = i64::from(self.scale.factor());
+        let label = self
+            .carried
+            .as_ref()
+            .map_or(CARRIED_WIDTH, |c| c.width.max(CARRIED_WIDTH));
         // With the material's halo around the label (16 px to 34 px below
         // the pointer).
-        Rect::new(x - 16 * s, y - 24 * s, (CARRIED_WIDTH + 64) * s, 96 * s)
+        Rect::new(x - 16 * s, y - 24 * s, (label + 64) * s, 96 * s)
     }
 
     /// `Offer`: the clipboard's new text, from the client just asked to
@@ -1167,10 +1191,15 @@ impl<P: Platform> Compositor<P> {
         }) && self.buttons & gui::buttons::LEFT != 0;
         match (held && channel && self.carried.is_none(), name) {
             (true, Some(name)) => {
+                // As `draw` lays the label out: the name at the caption's
+                // size, 20 px of padding, and a few for rounding at scale 2.
+                let cap = zoraya_tokens::text::CAPTION.physical(Scale::ONE);
+                let width = i64::from(self.title_text.measure(&name, cap)) + 20 + 4;
                 self.carried = Some(Carried {
                     source: key,
                     entry,
                     name,
+                    width,
                 });
                 if let Some((x, y)) = self.pointer {
                     self.dirty(&self.carried_rect(x, y));
@@ -3172,6 +3201,35 @@ impl<P: Platform> Compositor<P> {
 
     // ---- composition ------------------------------------------------------
 
+    /// The first frame after a display's attach, then 100 more: reported
+    /// on the console once each (design.md's measurements).
+    fn timed(&mut self, took: u64) {
+        let s = &mut self.stats;
+        if s.first_frame_ns == 0 {
+            s.first_frame_ns = took.max(1);
+            let line = alloc::format!(
+                "compd: {}x{}: wallpaper and blur {} ms, first frame {} ms",
+                self.width,
+                self.height,
+                s.wallpaper_ns / 1_000_000,
+                took / 1_000_000
+            );
+            self.platform.note(&line);
+        } else if s.steady_frames < STEADY_FRAMES {
+            s.steady_frames += 1;
+            s.steady_ns += took;
+            s.steady_max_ns = s.steady_max_ns.max(took);
+            if s.steady_frames == STEADY_FRAMES {
+                let line = alloc::format!(
+                    "compd: the next {STEADY_FRAMES} frames: mean {} us, longest {} us",
+                    s.steady_ns / STEADY_FRAMES / 1000,
+                    s.steady_max_ns / 1000
+                );
+                self.platform.note(&line);
+            }
+        }
+    }
+
     fn finish_round(&mut self) {
         // Over the switcher, a change of the scene draws everything again
         // (its glass is a blur of the scene); the pointer alone is drawn on
@@ -3198,8 +3256,10 @@ impl<P: Platform> Compositor<P> {
                     self.keep_switcher_frame();
                 }
             }
-            self.stats.compose_ns += self.platform.now().saturating_sub(start);
+            let took = self.platform.now().saturating_sub(start);
+            self.stats.compose_ns += took;
             self.stats.frames += 1;
+            self.timed(took);
             self.unflushed = self.unflushed.union(&damage);
         }
         // The frame callback: the commit is copied and composed. It does

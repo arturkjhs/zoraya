@@ -28,10 +28,10 @@ pub const ROWS: u32 = 6;
 /// The most names a folder's listing shows.
 pub const MAX_LISTED: usize = 512;
 
-const UP: u32 = 1;
+pub(crate) const UP: u32 = 1;
 const LIST: u32 = 2;
 const NAME: u32 = 3;
-const CANCEL: u32 = 4;
+pub(crate) const CANCEL: u32 = 4;
 const CONFIRM: u32 = 5;
 
 /// How a sheet ended.
@@ -174,6 +174,12 @@ impl Sheet {
             }),
         ])));
         Box::new(Escapes(vec![Box::new(Column::new(column))]))
+    }
+
+    /// The first row the list shows.
+    #[cfg(test)]
+    pub(crate) const fn top(&self) -> usize {
+        self.top
     }
 
     fn refresh<P: Platform>(&mut self, app: &mut App<P>) {

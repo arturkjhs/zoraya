@@ -833,6 +833,9 @@ fn values_are_read_by_id_and_details_stand_at_the_right() {
         Box::new(list),
         Box::new(Menu::new(8, &["Open"])),
         button(9),
+        // Ids 0 and 1 after a button: found only where they are.
+        Box::new(TextField::new(0, "zero")),
+        Box::new(TextField::new(1, "one")),
     ]);
     let (mut w, mut px) = window(Box::new(tree), 300, 400, &mut p);
     assert_eq!(w.value(3), Value::Text("plán.txt"));
@@ -843,6 +846,8 @@ fn values_are_read_by_id_and_details_stand_at_the_right() {
     assert_eq!(w.value(8), Value::Index(Some(0)));
     assert_eq!(w.value(9), Value::None);
     assert_eq!(w.value(99), Value::None);
+    assert_eq!(w.value(0), Value::Text("zero"));
+    assert_eq!(w.value(1), Value::Text("one"));
     // Tab to the list (field, check box, switch, radio, list) and Down.
     for _ in 0..5 {
         w.event(key(keys::TAB));
@@ -859,4 +864,9 @@ fn values_are_read_by_id_and_details_stand_at_the_right() {
     };
     assert!(ink(list_y + 28, 200..280, &px), "the detail at the right");
     assert!(!ink(list_y, 150..280, &px), "no detail on the first row");
+    // The detail ends a control's padding inside the row's right edge.
+    assert!(
+        !ink(list_y + 28, 272..280, &px),
+        "nothing in the row's right padding"
+    );
 }

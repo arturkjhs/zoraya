@@ -14,7 +14,8 @@
 //! Arguments: `--time-base N`, the boot's base (ADR-0191); `--no-shell`, the
 //! mode with no first shell (ADR-0153's note), in which slot 9 is a channel
 //! on which the broker sends a client connection and the temporary
-//! service's root, and serves for ever.
+//! service's root, and serves until every client connection has closed and
+//! no process it started is live.
 
 extern crate alloc;
 
@@ -654,6 +655,12 @@ fn main() -> i32 {
                 println!("{line}");
             }
             statistics(&core);
+            let _ = job_kill(tmp_job);
+            return 0;
+        }
+        // Beside a native shell: its shell (every client) is gone and
+        // nothing it started runs; the broker ends with it.
+        if no_shell && core.abandoned() {
             let _ = job_kill(tmp_job);
             return 0;
         }

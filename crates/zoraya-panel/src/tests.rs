@@ -24,6 +24,39 @@ fn spawned(l: &Launch) -> Vec<Spawned> {
 /// INV-0168-1 and INV-0172-2, the host half: a launch gives each program
 /// exactly the handles its record lists, the record names its room, and
 /// it holds the room's entries and no other room's.
+/// The toolchain a trusted room's shell reads: added after the room's
+/// grants, unless a grant covers it, and never with a write.
+#[test]
+fn a_rooms_shell_reads_the_toolchain() {
+    let room = |grants: &str| {
+        let mut p = Panel::default();
+        assert!(p.reload(format!("r {grants}\n").as_bytes()));
+        assert_eq!(p.pressed(ROOM, 1), Action::Entered);
+        let Action::Launch(l) = p.pressed(LAUNCH, 0) else {
+            panic!("{grants}")
+        };
+        l.entries
+    };
+    assert_eq!(
+        room("+w ~/project"),
+        ["+w ~/project", "+r /bin", "+r /usr", "+r /etc"]
+    );
+    assert_eq!(room("+w /usr"), ["+w /usr", "+r /bin", "+r /etc"]);
+    assert_eq!(
+        room("+r /usr/lib"),
+        ["+r /usr/lib", "+r /bin", "+r /usr", "+r /etc"]
+    );
+    assert_eq!(
+        room("+r /binaries"),
+        ["+r /binaries", "+r /bin", "+r /usr", "+r /etc"]
+    );
+    assert_eq!(room("+r /"), ["+r /"]);
+    assert_eq!(
+        room("+w /etc/x +r /etc"),
+        ["+w /etc/x", "+r /etc", "+r /bin", "+r /usr"]
+    );
+}
+
 #[test]
 fn a_launch_gives_exactly_its_record_in_its_room() {
     let mut p = Panel::default();
@@ -51,7 +84,9 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             (2, Give::Job),
             (3, Give::Directory),
             (STARTUP_SLOT, Give::Startup),
-            (6, Give::Terminal)
+            (6, Give::Terminal),
+            (7, Give::Broker),
+            (8, Give::Tmp)
         ]
     );
     assert!(s[1].2.is_empty());
@@ -78,14 +113,20 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             Some(room.name.as_str())
         );
         assert_eq!(l.line, format!("room {} term", room.name));
-        // INV-0172-2: exactly the room's grants, shown and held.
-        let mine: Vec<String> = room.grants.iter().map(|g| g.words()).collect();
-        assert_eq!(l.entries, mine);
-        let held: Vec<(String, bool)> = room
+        // INV-0172-2: exactly the room's grants and the toolchain read-only
+        // where no grant covers it, shown and held.
+        let mut held: Vec<(String, bool)> = room
             .grants
             .iter()
             .map(|g| (g.path.clone(), g.write))
             .collect();
+        for t in TOOLCHAIN_GRANTS {
+            if !room.grants.iter().any(|g| g.path == "/" || g.path == t) {
+                held.push((String::from(t), false));
+            }
+        }
+        let mine: Vec<String> = held.iter().map(|(p, w)| grant_words(p, *w)).collect();
+        assert_eq!(l.entries, mine);
         assert_eq!(l.holds, held);
         for other in p.rooms.rooms.iter().filter(|o| o.name != room.name) {
             for g in &other.grants {

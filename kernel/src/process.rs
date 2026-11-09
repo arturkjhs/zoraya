@@ -694,6 +694,11 @@ pub fn spawn_with_devices_and(
 /// Starts a process from ELF bytes, in the root job.
 #[cfg(feature = "qemu-test")]
 pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
+    spawn_bytes_as(name, file, false)
+}
+
+#[cfg(feature = "qemu-test")]
+fn spawn_bytes_as(name: &str, file: &[u8], suspended: bool) -> Result<Arc<Process>, SpawnError> {
     // A job of its own, so that killing it leaves the root usable.
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
@@ -705,7 +710,7 @@ pub fn spawn_bytes(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> 
         argv: Strings::empty(),
         envp: Strings::empty(),
         dispositions: [Disposition::Terminate; REQUEST_KINDS],
-        suspended: false,
+        suspended,
     })
 }
 
@@ -745,6 +750,14 @@ pub fn spawn(name: &str) -> Result<Arc<Process>, SpawnError> {
     spawn_bytes(name, file)
 }
 
+/// As [`spawn`], but suspended before its first instruction (ADR-0003): it
+/// holds its address space and ASID, and runs nothing until resumed.
+#[cfg(feature = "qemu-test")]
+pub fn spawn_suspended(name: &str) -> Result<Arc<Process>, SpawnError> {
+    let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
+    spawn_bytes_as(name, file, true)
+}
+
 /// Ends the running process (ADR-0041). Every kind of exit comes here.
 pub fn exit_current(record: ExitRecord) -> ! {
     // This function does not return, so nothing it holds at the end would
@@ -755,6 +768,10 @@ pub fn exit_current(record: ExitRecord) -> ! {
         .clone();
     // SAFETY: no table is the safe value.
     unsafe { mmu::set_user_table(None) };
+    // From here to `sched::exit_current` nothing may block or yield: the
+    // scheduler would install `process.ttbr0()` again, a root freed below
+    // with an ASID another process may already hold. A process has one
+    // thread, so no other CPU can be using the space either.
     let space = process.space.lock().take();
     #[cfg(feature = "qemu-test")]
     {

@@ -1362,3 +1362,64 @@ fn a_switch_keeps_a_held_key_and_tells_only_the_focused_client() {
     let text: std::string::String = keys_of(&s.f().take(a)).iter().filter_map(|k| k.2).collect();
     assert_eq!(text, "e");
 }
+
+/// A window is raised with its popups; another window of the same client
+/// stays where it was.
+#[test]
+fn raising_a_window_carries_its_popups_and_no_other_window() {
+    let mut s = setup();
+    let (a, _, ida) = s.toplevel(200, 120, 1);
+    let m = s.f().memory(vec![7; 20 * 10], 800, false);
+    let out = s.request(
+        a,
+        &gui::CreatePopup {
+            parent: ida,
+            x: 100,
+            y: 20,
+            width: 20,
+            height: 10,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    let (_, second) = s.toplevel_of(a, 200, 120, 2);
+    let (_, _, idb) = s.toplevel(200, 120, 3);
+    let key = |client, id| Key { client, id };
+    assert_eq!(
+        s.c.stack().collect::<Vec<_>>(),
+        [key(0, ida), key(0, p.window), key(0, second), key(1, idb)]
+    );
+    // Raised (a press would close the popup: the switcher's way).
+    s.c.activate(key(0, ida));
+    assert_eq!(
+        s.c.stack().collect::<Vec<_>>(),
+        [key(0, second), key(1, idb), key(0, ida), key(0, p.window)]
+    );
+}
+
+/// A popup's outline is its body: no title bar, no border.
+#[test]
+fn a_popups_outline_is_its_body() {
+    let mut s = setup();
+    let (a, _, ida) = s.toplevel(200, 120, 1);
+    let m = s.f().memory(vec![7; 20 * 10], 800, false);
+    let out = s.request(
+        a,
+        &gui::CreatePopup {
+            parent: ida,
+            x: 10,
+            y: 20,
+            width: 20,
+            height: 10,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(s.outer(0, p.window), s.body(0, p.window));
+}

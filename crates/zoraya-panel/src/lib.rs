@@ -54,6 +54,12 @@ pub enum Give {
     /// it holds, its room's grants or home's, never the volume's root
     /// (ADR-0242's condition).
     Startup,
+    /// A client connection of the broker started beside the shell
+    /// (ADR-0153 rule 10), so that it runs POSIX programs; none on a volume
+    /// without `/bin`.
+    Broker,
+    /// That broker's temporary service's root, the shell's `/tmp`.
+    Tmp,
 }
 
 /// The start-up record's slot (`zoraya-abi`'s `native::slot::STARTUP`).
@@ -65,6 +71,21 @@ pub const STARTUP_SLOT: u32 = 1000;
 /// (ADR-0242's condition; a decision recorded for the architect).
 pub const HOME_GRANTS: [(&str, bool); 4] =
     [("/", false), ("~", true), ("/config", true), ("/tmp", true)];
+
+/// What a trusted room's shell holds besides the room's grants: the
+/// toolchain, read-only, so that POSIX programs run in rooms (the
+/// architect's decision of 2026-11-09, recorded in ADR-0172). A room grant
+/// that already covers one of them stands for it.
+pub const TOOLCHAIN_GRANTS: [&str; 3] = ["/bin", "/usr", "/etc"];
+
+/// Whether grant path `outer` covers `path`.
+fn covers(outer: &str, path: &str) -> bool {
+    outer == "/"
+        || path == outer
+        || path
+            .strip_prefix(outer)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
 
 /// A grant's words, as the pills and `grants` say it.
 pub fn grant_words(path: &str, write: bool) -> String {
@@ -223,7 +244,7 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
 
 /// A terminal launched in `room`: `term` with the compositor's channel and
 /// its end of the shell's channel; `zosh` with a start-up record of exactly
-/// the room's grants (home's in `home`), never the volume's root
+/// the room's grants and the toolchain read-only (home's in `home`), never the volume's root
 /// (ADR-0242's condition), its end of the channel, the console to write,
 /// its job and the image directory, started in the room. The record shows
 /// what the shell holds, and nothing else.
@@ -235,7 +256,16 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             args.push(String::from("--room"));
             args.push(r.name.clone());
             line = format!("room {} term", r.name);
-            r.grants.iter().map(|g| (g.path.clone(), g.write)).collect()
+            let mut holds: Vec<(String, bool)> =
+                r.grants.iter().map(|g| (g.path.clone(), g.write)).collect();
+            if !r.untrusted {
+                for t in TOOLCHAIN_GRANTS {
+                    if !r.grants.iter().any(|g| covers(&g.path, t)) {
+                        holds.push((String::from(t), false));
+                    }
+                }
+            }
+            holds
         }
         None => HOME_GRANTS
             .iter()
@@ -290,6 +320,14 @@ pub fn terminal(room: Option<&Room>) -> Launch {
                     Slot {
                         slot: 6,
                         give: Give::Terminal,
+                    },
+                    Slot {
+                        slot: 7,
+                        give: Give::Broker,
+                    },
+                    Slot {
+                        slot: 8,
+                        give: Give::Tmp,
                     },
                 ],
                 args,

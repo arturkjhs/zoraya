@@ -8,15 +8,15 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zoraya_app::{App, Platform, Poll};
+use zoraya_app::{App, Happened, Platform, Poll};
 use zoraya_fsclient::{Client, Link};
 use zoraya_proto_file::{self as fp, rights};
 use zoraya_proto_gui as gui;
 use zoraya_protocol::{Below, Flags, Header, Message, decode, encode};
 use zoraya_tokens::Appearance;
-use zoraya_ui::keys;
+use zoraya_ui::{Response, keys};
 
-use crate::session::{Outcome, Sheet};
+use crate::session::{CANCEL, Outcome, ROWS, Sheet, UP};
 use crate::{Access, Ask, Browser};
 
 fn message<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -308,8 +308,17 @@ struct Rig {
 }
 
 fn rig(ask: Ask) -> Rig {
+    rig_with(ask, &[])
+}
+
+/// The same, with more files in the volume.
+fn rig_with(ask: Ask, files: &[&str]) -> Rig {
     let mut app = App::connect(Gui::default(), Appearance::Light).unwrap();
-    let mut fs = Client::new(Disk::new());
+    let mut disk = Disk::new();
+    for f in files {
+        disk.tree.insert(String::from(*f), Some(1));
+    }
+    let mut fs = Client::new(disk);
     let browser = Browser::new(ask, "edit", "/home");
     let sheet = Sheet::open(&mut app, &mut fs, 1, browser, 4).unwrap();
     assert_eq!(app.platform.sheets, [(4, sheet.browser.ask.sheet())]);
@@ -485,4 +494,118 @@ fn a_folder_picked_to_change_is_given_whole() {
     let c = &r.fs.link.conns[&handle];
     assert_eq!(c.path, "/home/project");
     assert_eq!(c.rights, Access::Tree.rights());
+}
+
+/// The list scrolls only as far as keeps the selection in view.
+#[test]
+fn the_list_scrolls_only_to_keep_the_selection_in_view() {
+    let files: Vec<String> = (0..10).map(|i| alloc::format!("/home/f{i}.txt")).collect();
+    let names: Vec<&str> = files.iter().map(String::as_str).collect();
+    let mut r = rig_with(
+        Ask::Open {
+            filters: Vec::new(),
+        },
+        &names,
+    );
+    assert!(r.sheet.browser.entries.len() > ROWS as usize + 2);
+    let keys_ = |r: &mut Rig, code: u32, n: usize| {
+        for _ in 0..n {
+            key(r, code, None);
+        }
+        assert_eq!(run(r), None);
+    };
+    // Down to row 7: rows 2 to 7 shown.
+    keys_(&mut r, keys::DOWN, 8);
+    assert_eq!(r.sheet.browser.selected, Some(7));
+    assert_eq!(r.sheet.top(), 2);
+    // Up to row 3, still in view: no scroll.
+    keys_(&mut r, keys::UP, 4);
+    assert_eq!(r.sheet.top(), 2);
+    // Up to row 1, above it: it becomes the first.
+    keys_(&mut r, keys::UP, 2);
+    assert_eq!(r.sheet.browser.selected, Some(1));
+    assert_eq!(r.sheet.top(), 1);
+}
+
+/// The sheet ends when the compositor goes, and answers only for its own
+/// window.
+#[test]
+fn the_sheet_ends_when_its_compositor_is_gone_and_ignores_other_windows() {
+    let mut r = rig(Ask::Open {
+        filters: Vec::new(),
+    });
+    let other = Happened::Ui {
+        window: 9,
+        response: Response::Activated(CANCEL),
+    };
+    assert_eq!(r.sheet.event(&mut r.app, &mut r.fs, 1, other), None);
+    assert_eq!(
+        r.sheet.event(&mut r.app, &mut r.fs, 1, Happened::Gone),
+        Some(Outcome::Cancelled(zoraya_proto_chooser::status::CANCELLED))
+    );
+}
+
+/// The ‹ button goes one folder up.
+#[test]
+fn the_up_button_goes_one_folder_up() {
+    let mut r = rig(Ask::Open {
+        filters: Vec::new(),
+    });
+    key(&mut r, keys::DOWN, None);
+    key(&mut r, keys::ENTER, None);
+    assert_eq!(run(&mut r), None);
+    assert_eq!(r.sheet.browser.dir(), "/home/project");
+    let up = Happened::Ui {
+        window: 1,
+        response: Response::Activated(UP),
+    };
+    assert_eq!(r.sheet.event(&mut r.app, &mut r.fs, 1, up), None);
+    assert_eq!(r.sheet.browser.dir(), "/home");
+}
+
+/// Open with a folder selected: its button enters the folder and gives
+/// nothing.
+#[test]
+fn a_folder_selected_for_open_is_entered_by_the_open_button() {
+    let mut r = rig(Ask::Open {
+        filters: Vec::new(),
+    });
+    key(&mut r, keys::DOWN, None);
+    // Tab to Cancel, then Open.
+    for _ in 0..2 {
+        key(&mut r, keys::TAB, None);
+    }
+    key(&mut r, keys::ENTER, None);
+    assert_eq!(run(&mut r), None);
+    assert_eq!(r.sheet.browser.dir(), "/home/project");
+    assert!(r.fs.link.made.iter().all(|c| c.rights == rights::READ));
+}
+
+/// The sheet is laid out where a press finds it: a press down the
+/// middle of the sheet reaches a row of the list before anything else.
+#[test]
+fn a_press_on_the_list_selects_its_row() {
+    let mut r = rig(Ask::Open {
+        filters: Vec::new(),
+    });
+    let mut found = None;
+    for y in (0..crate::session::HEIGHT).step_by(4) {
+        for buttons in [gui::buttons::LEFT, 0] {
+            let m = gui::WindowPointer {
+                dropped: 0,
+                window: 1,
+                x: crate::session::WIDTH / 2,
+                y,
+                buttons: Flags(buttons),
+                serial: 1,
+            };
+            r.app.platform.inbox.push_back(message(&m, 0));
+        }
+        assert_eq!(run(&mut r), None, "at {y}");
+        if r.sheet.browser.selected.is_some() {
+            found = Some(y);
+            break;
+        }
+    }
+    assert!(found.is_some(), "no press selects a row");
 }

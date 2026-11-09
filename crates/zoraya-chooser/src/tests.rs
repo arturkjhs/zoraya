@@ -74,6 +74,17 @@ fn a_listing_is_folders_first_then_names_and_filtered() {
 /// of ADR-0153's table, by the shell's own `Access`.
 #[test]
 fn each_pick_gives_the_kind_and_rights_of_its_request() {
+    // Each request has its own heading.
+    let asks = [
+        Ask::Open { filters: vec![] },
+        Ask::Save {
+            suggested: "a.txt".into(),
+            filters: vec![],
+        },
+        Ask::Pick { write: true },
+    ];
+    let kinds: Vec<u32> = asks.iter().map(Ask::sheet).collect();
+    assert_eq!(kinds, [sheet::OPEN, sheet::SAVE, sheet::PICK]);
     let mut b = open("");
     assert_eq!(b.pending(), None, "nothing picked yet");
     b.select(4);
@@ -113,6 +124,10 @@ fn each_pick_gives_the_kind_and_rights_of_its_request() {
     assert_eq!(g.line, "create or replace ~/new.txt");
     assert_eq!(g.pill, "+c ~/new.txt");
     assert_eq!(g.words, "+c new.txt");
+    // Selecting a folder leaves the name as it was.
+    s.select(0);
+    assert!(s.entries[0].dir);
+    assert_eq!(s.name, "new.txt");
     // Picking a file takes its name; an invalid name gives nothing.
     s.select(2);
     assert_eq!(s.name, "Makefile");
@@ -177,6 +192,8 @@ fn rows_enter_folders_and_confirm_files() {
     assert_eq!(b.selected, Some(5));
     b.select(99);
     assert_eq!(b.selected, Some(5), "an out-of-range row changes nothing");
+    b.select(b.entries.len());
+    assert_eq!(b.selected, Some(5), "nor does the row just past the end");
 }
 
 #[test]
@@ -189,6 +206,8 @@ fn sizes_read_as_the_mockups_write_them() {
         (1200, "1.2 kB"),
         (1949, "1.9 kB"),
         (1950, "2.0 kB"),
+        (9_949, "9.9 kB"),
+        (10_000, "10 kB"),
         (15_000, "15 kB"),
         (999_999, "1000 kB"),
         (2_100_000, "2.1 MB"),

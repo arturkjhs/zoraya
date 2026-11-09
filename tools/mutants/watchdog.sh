@@ -60,6 +60,15 @@ measured() {
     fi
 }
 
+# Kills $1 and every process under it, children first: a test runner killed
+# alone leaves its QEMU guest running, holding its disk image (2026-11-09).
+kill_tree() {
+    for child in $(ps -A -o pid=,ppid= | awk -v p="$1" '$2 == p { print $1 }'); do
+        kill_tree "$child"
+    done
+    kill -9 "$1" 2>/dev/null
+}
+
 watch() {
     while kill -0 "$root" 2>/dev/null; do
         list=$(measured)
@@ -67,7 +76,7 @@ watch() {
             [ -n "$pid" ] || continue
             if [ "$rss" -gt $((per_process_mb * 1024)) ]; then
                 echo "watchdog: killed $pid ($cmd) at $((rss / 1024)) MiB, above $per_process_mb MiB" >&2
-                kill -9 "$pid" 2>/dev/null
+                kill_tree "$pid"
             fi
         done
         total=$(echo "$list" | awk '{ s += $2 } END { print s + 0 }')
@@ -75,7 +84,7 @@ watch() {
             biggest=$(echo "$list" | sort -k2 -n -r | head -1)
             set -- $biggest
             echo "watchdog: all together $((total / 1024)) MiB, above $total_mb MiB: killed $1 ($3) at $(($2 / 1024)) MiB" >&2
-            kill -9 "$1" 2>/dev/null
+            kill_tree "$1"
         fi
         sleep 1
     done
