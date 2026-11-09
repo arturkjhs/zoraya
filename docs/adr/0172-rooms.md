@@ -107,8 +107,9 @@ A POSIX program launched in a room gets a namespace table built by the launcher 
   wallpaper a field is compared with, and the GUI script reads the room's tinted title bar only. INV-0172-2's in-QEMU
   half and INV-0172-3 wait for untrusted rooms (refused until ADR-0056's quotas) and for ADR-0170's drops (7f).
   Since ADR-0242's condition (accepted 2026-11-09) a room's terminal holds exactly the room's grants, in its shell's
-  start-up record, and never the volume's root: `zoraya-panel`'s host test checks that the record and the entries shown
-  are the room's grants and nothing else, and `tests/gui/rooms.script` that a write outside the room's `+w` is refused
+  start-up record, and never the volume's root, with the toolchain read-only (the decision below): `zoraya-panel`'s
+  host tests check that the record and the entries shown are the room's grants and the toolchain and nothing else,
+  `tests/posix/room-gui.script` (in `make test-tour-gui`) that a room's terminal runs the volume's POSIX programs, and `tests/gui/rooms.script` that a write outside the room's `+w` is refused
   with ADR-0153's hint; a launch in an untrusted room is refused.
   INV-0172-4's host tests wait for the room's grants to move from `zosh` into `zoraya-shell`'s planner, where
   INV-0153-2's cases live; in 7d `zosh` adds them after the planner, and the GUI script shows `room`.
@@ -127,3 +128,13 @@ Accepted 2026-11-03, with one change: the README's reserved two-pixel untrusted 
 (`room.untrusted.edge`, ADR-0161). The compositor draws it on every window of an untrusted room, also when no
 field is drawn (one room on screen, a maximised window); no trusted room colour may produce it. INV-0172-10
 states it, checkable by screendump. Decided by the architect; recorded by an agent at the architect's request.
+
+2026-11-09, with ADR-0242's condition (a terminal's shell holds its room's grants, never the volume's root):
+- The first terminal, in `home`, holds `+r /`, `+w ~`, `+w /config` and `+w /tmp`: the volume to read, and the
+  person's files, configuration and temporary files to change.
+- A trusted room's shell also holds the toolchain set read-only, `+r /bin`, `+r /usr` and `+r /etc`, so that POSIX
+  programs run in rooms; a room grant that already covers one of them stands for it. The pills show these entries too.
+- A shell holding a tree entry, which cannot publish (ADR-0153's table), writes `/config/rooms` (and
+  `/config/settings`) in place, not by an atomic replace: accepted for now; the crash window is in `docs/backlog.md`.
+
+Accepted 2026-11-09. Decided by the architect; recorded by an agent at the architect's request.

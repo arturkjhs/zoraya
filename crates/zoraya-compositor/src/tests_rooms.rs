@@ -1054,3 +1054,67 @@ fn app_names_are_lowercase_letters_digits_dashes_and_underscores() {
         assert_eq!(done(&mut s, panel), want, "{app}");
     }
 }
+
+/// Show-commands (ADR-0172 point 8): each window's tag is inside its own
+/// frame, at its body's lower left, and the window above covers the tag of
+/// the one below as it covers the window; nothing changes over another
+/// window or outside the windows but the dock and the bar.
+#[test]
+fn a_windows_tag_stays_in_its_own_frame() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    let a = s.room_client(panel, "project", "term", "+w ~/project");
+    let ida = s.window_of(a, 300, 200, 0x0040_4040);
+    let b = s.room_client(panel, "project", "term", "+w ~/project");
+    let idb = s.window_of(b, 300, 200, 0x0060_6060);
+    let (oa, ob) = (s.outer(0, ida), s.outer(1, idb));
+    assert!(!oa.intersect(&ob).is_empty(), "the two overlap");
+    let before = s.f().frame.clone();
+    s.keys(&[
+        (code::RIGHT_META, 1),
+        (code::SLASH, 1),
+        (code::SLASH, 0),
+        (code::RIGHT_META, 0),
+    ]);
+    assert!(s.c.commands());
+    assert_eq!(
+        (s.outer(0, ida), s.outer(1, idb)),
+        (oa, ob),
+        "nothing moved"
+    );
+    let after = s.f().frame.clone();
+    let bar = i64::from(space::BAR_HEIGHT.physical(s.c.scale()));
+    let strip = s.c.dock_strip();
+    // A tag's zone with its material's halo: the lower left of its
+    // window, inside it.
+    let zone = |o: Rect| Rect::new(o.x, o.bottom() - 64, o.width * 2 / 3, 64);
+    let (mut in_a, mut in_b) = (0, 0);
+    for y in bar..i64::from(H) - strip {
+        for x in 0..i64::from(W) {
+            let i = (y * i64::from(W) + x) as usize;
+            if before[i] == after[i] {
+                continue;
+            }
+            let p = Rect::new(x, y, 1, 1);
+            if !ob.intersect(&p).is_empty() {
+                assert!(
+                    !zone(ob).intersect(&p).is_empty(),
+                    "({x}, {y}) in the upper window"
+                );
+                in_b += 1;
+            } else {
+                assert!(
+                    !oa.intersect(&p).is_empty(),
+                    "({x}, {y}) outside the windows"
+                );
+                assert!(
+                    !zone(oa).intersect(&p).is_empty(),
+                    "({x}, {y}) in the lower window"
+                );
+                in_a += 1;
+            }
+        }
+    }
+    assert!(in_a > 0 && in_b > 0, "both tags are drawn: {in_a} {in_b}");
+}

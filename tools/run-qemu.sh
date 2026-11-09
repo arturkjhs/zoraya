@@ -148,11 +148,16 @@ set -- "$QEMU" -machine "$machine" -accel "$accel" -cpu "$cpu" \
 # Meta on a chord (measured on 2026-11-03 with QEMU 11.1.2, whose default
 # already does so; docs/research/desktop/command-key.md), which
 # the stage 7 desktop needs for its system key (ADR-0160). Cmd-Tab stays
-# the system's. --display-opts replaces the whole value.
+# the system's. zoom-to-fit=on scales the picture with the window, so a
+# larger window shows the desktop larger. The tablet's coordinates are
+# meant to follow the view; that the pointer still lands where it points
+# and that Command still reaches the guest is checked by hand (make run-gui,
+# TASK-24's report), since no test opens the cocoa window.
+# --display-opts replaces the whole value.
 display=none
 if [ "$gui" = 1 ] && [ "$mode" = interactive ]; then
     display=default
-    [ "$(uname -s)" = Darwin ] && display=cocoa,left-command-key=on
+    [ "$(uname -s)" = Darwin ] && display=cocoa,left-command-key=on,zoom-to-fit=on
 fi
 [ -n "$display_opts" ] && display=$display_opts
 case $mode in

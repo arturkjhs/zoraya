@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]...
+//!                    [--known-failure NAME=NOTE]...
 //!                    [--expect-line TEXT]... -- tools/run-qemu.sh --test ... KERNEL
 //! ```
 //!
@@ -42,6 +43,7 @@ struct Args {
     label: String,
     timeout: u64,
     expect_panic: Vec<String>,
+    known_failure: Vec<(String, String)>,
     expect_line: Vec<String>,
     plain: bool,
     script: Option<String>,
@@ -53,7 +55,7 @@ struct Args {
 fn usage(msg: &str) -> ExitCode {
     esay!("zoraya-test-runner: {msg}");
     esay!(
-        "usage: zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]... \
+        "usage: zoraya-test-runner [--label L] [--timeout SECS] [--plain] [--expect-panic NAME]... [--known-failure NAME=NOTE]... \
          [--expect-line TEXT]... [--script FILE] [--gui-script FILE --qmp PATH] -- COMMAND..."
     );
     ExitCode::from(2)
@@ -64,6 +66,7 @@ fn parse_args() -> Result<Args, String> {
         label: "qemu".into(),
         timeout: 60,
         expect_panic: Vec::new(),
+        known_failure: Vec::new(),
         expect_line: Vec::new(),
         plain: false,
         script: None,
@@ -82,6 +85,13 @@ fn parse_args() -> Result<Args, String> {
                     .map_err(|_| "--timeout needs whole seconds".to_string())?;
             }
             "--expect-panic" => a.expect_panic.push(value()?),
+            "--known-failure" => {
+                let v = value()?;
+                let (name, note) = v
+                    .split_once('=')
+                    .ok_or("--known-failure needs NAME=NOTE".to_string())?;
+                a.known_failure.push((name.into(), note.into()));
+            }
             "--expect-line" => a.expect_line.push(value()?),
             "--plain" => a.plain = true,
             "--script" => a.script = Some(value()?),
@@ -153,7 +163,11 @@ fn main() -> ExitCode {
     let mut checker = if args.plain {
         Checker::plain(args.expect_line.clone())
     } else {
-        Checker::new(args.expect_panic.clone(), args.expect_line.clone())
+        let mut c = Checker::new(args.expect_panic.clone(), args.expect_line.clone());
+        for (name, note) in &args.known_failure {
+            c = c.known_failure(name.clone(), note.clone());
+        }
+        c
     };
     let deadline = Instant::now() + Duration::from_secs(args.timeout);
     let mut ended_at: Option<Instant> = None;
@@ -199,6 +213,9 @@ fn main() -> ExitCode {
 
     out.finish();
     let report = checker.finish(exit, args.timeout);
+    for k in &report.known {
+        say!("[{label}] {k}");
+    }
     if report.passed {
         say!(
             "[{label}] PASS: {} passed, {} expected failures",

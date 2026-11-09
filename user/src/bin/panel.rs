@@ -266,6 +266,21 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         .map(|(p, _)| p.as_str())
         .unwrap_or("/");
     let data_path = zoraya_panel::data_dir(room, l.app);
+    // A broker beside the shell, on a volume with /bin (ADR-0153 rule 10):
+    // it ends when the shell's client closes and nothing it started runs.
+    let wants_broker = l
+        .programs
+        .iter()
+        .any(|p| p.handles.iter().any(|s| s.give == Give::Broker));
+    let beside = if wants_broker {
+        st.root.as_ref().and_then(zoraya_user::beside::start_broker)
+    } else {
+        None
+    };
+    let (mut broker, mut tmp) = (
+        beside.as_ref().map(|b| b.client),
+        beside.as_ref().map(|b| b.tmp),
+    );
     for (i, p) in l.programs.iter().enumerate() {
         let root = st.root.as_ref();
         let chooser = st.chooser;
@@ -297,6 +312,8 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 Some(theirs)
             }
             Give::Opened => opened.take(),
+            Give::Broker => broker.take(),
+            Give::Tmp => tmp.take(),
             _ => None,
         });
         if let Some(ours) = launcher {
@@ -310,12 +327,18 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
             println!("panel: {} did not start", p.image);
         }
     }
-    for h in client
+    let unused = client
         .into_iter()
         .chain(ends.into_iter().flatten())
-        .chain(opened)
-    {
+        .chain(opened);
+    for h in unused.chain(broker).chain(tmp) {
         let _ = handle_close(h);
+    }
+    // The broker's job stays with it, as a launched program's does; with
+    // its client unused (the shell did not start) it ends at once.
+    if let Some(b) = beside {
+        let _ = handle_close(b.job.0);
+        let _ = handle_close(b.job.1);
     }
 }
 

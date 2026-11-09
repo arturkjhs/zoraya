@@ -908,6 +908,41 @@ fn a_native_client_prepares_in_its_own_job_and_reaps_its_children() {
     s.b.kernel.close(client);
 }
 
+/// A broker with no first shell ends when its last client is gone and
+/// nothing it started is live; one with a session never does that way.
+#[test]
+fn a_broker_beside_a_shell_is_abandoned_when_its_clients_close() {
+    let mut k = Fake::default();
+    let broker_job = k.new_object(Obj::Job { parent: None }, JOB_RIGHTS);
+    let session_job = k.job_create(broker_job).unwrap();
+    let mut b = Broker::new(k, session_job, false);
+    assert!(!b.abandoned(), "no client yet");
+    let (one, actions) = b.add_client().unwrap();
+    let [Action::Watch { conn: c1, .. }] = actions[..] else {
+        panic!()
+    };
+    let (two, actions) = b.add_client().unwrap();
+    let [Action::Watch { conn: c2, .. }] = actions[..] else {
+        panic!()
+    };
+    assert!(!b.abandoned());
+    let _ = b.closed(c1);
+    assert!(!b.abandoned(), "one client left");
+    let _ = b.closed(c2);
+    assert!(b.abandoned());
+    b.kernel.close(one);
+    b.kernel.close(two);
+    // A session's broker: finished, never abandoned.
+    let mut s = session(true);
+    let (client, actions) = s.b.add_client().unwrap();
+    let [Action::Watch { conn, .. }] = actions[..] else {
+        panic!()
+    };
+    let _ = s.b.closed(conn);
+    assert!(!s.b.abandoned());
+    s.b.kernel.close(client);
+}
+
 #[test]
 fn a_failed_job_creation_is_eagain_and_leaks_nothing() {
     let mut s = session(true);

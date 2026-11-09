@@ -13,7 +13,7 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | [ADR-0242](../adr/0242-the-panel-beside-init-in-stage-7d.md) (accepted 2026-11-09) | 7d | `init` keeps the first terminal and its rules and starts the panel with the client manager; the panel launches every other terminal into the current room with its record. A staging of ADR-0168, so 7d is not mergeable without the architect. |
 | [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (accepted 2026-11-09) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
 | [ADR-0244](../adr/0244-the-toolkits-own-events.md) (accepted 2026-11-09) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
-| What `home` gives a terminal's shell | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
+| What `home` gives a terminal's shell (accepted 2026-11-09, recorded in ADR-0172) | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
 | Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
@@ -418,6 +418,28 @@ it passes under HVF and TCG in `make test-gui`. The widget tests run in `make te
   ADR-0172's open questions.
 - **The dock's applications** are `term` only until 7e and 7f add theirs.
 
+### After the architect's decisions (2026-11-09)
+
+- **ADR-0242's condition.** A terminal's shell holds a start-up record of exactly its room's grants, never the volume's
+  root; the first terminal holds what `home` gives (`+r /`, `+w ~`, `+w /config`, `+w /tmp`, accepted and recorded in
+  ADR-0172). `rooms.script` writes outside `~/project` from the room's terminal and reads ADR-0153's hint.
+- **The toolchain in rooms** (the architect's decision, ADR-0172): a trusted room's shell also holds `+r /bin`,
+  `+r /usr`, `+r /etc` unless a room grant covers one. Holding them was not enough: a terminal launched by the panel had
+  no broker, so `echo hi | tr h H` printed nothing. The panel now starts a broker beside every shell it launches, as
+  `init` does for its first (the start moved to `user/src/beside.rs`), and a broker with no first shell ends when its
+  shell's connection closes and nothing it started runs (`zoraya-broker`'s `abandoned`, with a host test). A shell
+  holding a table follows a link inside the covering entry (`/bin/tr -> busybox`), never out of it.
+  `tests/posix/room-gui.script`, in `make test-tour-gui`, runs `tr`, `ls` and `uname` in a room's terminal on the
+  tour's image. `rooms.script` checks that the room's terminal has exactly five pills (no `+w /`) by where its badge
+  falls (a check at scale 1; `make test` runs rooms at scale 1 only).
+- **`/config/rooms` written in place**: accepted for now; the crash window is a backlog row.
+- **Show-commands** (the architect's review of `commands-qemu.png`): each window's tag is drawn with its window,
+  clipped to its frame, at its body's lower left, so a window above covers it and it never lies over another window or
+  stacks with another tag; it shows the close gesture's line only (minimise hides a window, which is not the shell's
+  `bg`, so it moved to the gestures without text, with the reason); a dock tile whose name and command are the same
+  word shows one line; a chip keeps its own width, centred over its line. A host test turns the mode on over two
+  overlapping windows and checks that only each window's tag zone changes. The screen is retaken.
+
 ### Screens
 
 Under `docs/research/desktop/shots/7d/` (712 KB):
@@ -427,11 +449,16 @@ Under `docs/research/desktop/shots/7d/` (712 KB):
   Against `clear-field/rooms.png`: the field, the tint, the badge and the chips as in the mockup. Not there: the Rooms
   sheet (System+R), which no 7d ADR asks for (the shell's `room` is the way in); the field's header tag is hidden
   under the `home` window here; the untrusted room (no way to make one, as above); the clock; the other applications'
-  tiles. The terminal's pills include `+w /` because every terminal holds the root (above).
+  tiles. Retaken after ADR-0242's condition: the room's terminal shows its grants and the toolchain (`+w ~/project`,
+  `+r /texts`, `+r /bin`, `+r /usr`, `+r /etc`) and no `+w /`; the first terminal shows `home`'s four.
 - `dock-qemu.png`: dock B with the terminal tile, its two running dots and the `home` chip, against `clear-field/dock.png`;
   the same materials, sizes and dots, with one tile instead of five.
-- `commands-qemu.png`: show-commands mode, each tile and chip with the text of its command, against
-  `clear-field/commands.png`, with the same reduction.
+- `commands-qemu.png` (retaken after the architect's review): show-commands mode. Each window's `kill term` tag sits
+  inside its own frame at the body's lower left, covered by the windows above it as the mockup's are; the dock's
+  terminal tile has one line (`term` is its name and its command), each chip its own width with its line centred under
+  it. Against `clear-field/commands.png`: the same placement and materials; the mockup's room tag on a window
+  (`room project`) and its `bg` tag (for a program started with `&`) are not drawn, since minimising is not the
+  shell's `bg` and the field's header names the room.
 - `rooms-light.png`, `rooms-dark.png`: the compositor's own rendering on the host (the ignored test `rooms_samples`)
   of three rooms with an untrusted one, in both themes: the reserved hue, the two-pixel edge, the word `untrusted`,
   the folded pills and the fields cut back between rooms, which the QEMU desktop cannot show yet.
