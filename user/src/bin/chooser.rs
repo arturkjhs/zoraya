@@ -285,11 +285,20 @@ impl Chooser {
             };
             let (end, tag) = (r.end, r.tag);
             match outcome {
+                // A grant the frame could not show is not given: the pills
+                // say what a window holds (review 7e, 9).
+                Outcome::Chosen { handle, grant } if grant.pill.len() > gui::MAX_LINE => {
+                    let _ = handle_close(handle);
+                    let c = pc::Cancelled {
+                        status: Below(answer::FAILED),
+                    };
+                    reply(end, &c, t, None);
+                }
                 Outcome::Chosen { handle, grant } => {
                     let m = pc::Chosen {
                         kind: Below(grant.kind),
                         name: Data(grant.shown.as_bytes()),
-                        words: Data(grant.line.as_bytes()),
+                        words: Data(grant.words.as_bytes()),
                     };
                     reply(end, &m, t, Some(handle));
                     // The frame's pills show it (ADR-0172 point 4).

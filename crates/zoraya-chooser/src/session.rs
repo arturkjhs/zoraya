@@ -217,6 +217,8 @@ impl Sheet {
                 {
                     self.browser.name = String::from(t);
                 }
+                // The grant's line follows the name typed (review 7e, 7).
+                self.refresh(app);
                 Step::None
             }
             Response::Activated(NAME) | Response::Activated(CONFIRM) => {

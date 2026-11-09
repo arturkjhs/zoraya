@@ -177,6 +177,9 @@ struct Client<E> {
     /// Marked by the driver manager's `AddSystemClient` (the chooser): it
     /// may create sheets and report grants (proposed ADR-0245).
     system: bool,
+    /// Left presses on its bodies delivered to it: its own count, so that
+    /// no client learns of the presses another got (review 7e, 4).
+    presses: u32,
 }
 
 /// What composition has cost.
@@ -213,8 +216,9 @@ pub struct SwitchGroup {
 /// How long after its press a drag may name it (ADR-0170).
 const DRAG_WITHIN_NS: u64 = 500_000_000;
 
-/// The dragged entry's label's widest, logical pixels.
-const CARRIED_WIDTH: i64 = 260;
+/// The dragged entry's label's widest, logical pixels: 64 characters of
+/// the caption face, with the material's padding.
+const CARRIED_WIDTH: i64 = 520;
 
 /// What a held pointer button is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,13 +237,12 @@ enum Drag {
     },
 }
 
-/// An entry being dragged (ADR-0170): from whose window, the connection,
-/// its label and its grant's words.
+/// An entry being dragged (ADR-0170): from whose window, the connection
+/// and its display name.
 struct Carried<E> {
     source: Key,
     entry: E,
     name: String,
-    words: String,
 }
 
 /// The switcher overlay while open (ADR-0160): the windows in the order
@@ -298,8 +301,7 @@ pub struct Compositor<P: Platform> {
     /// The window whose body holds the left button the compositor
     /// delivered to it: the only one that may start a drag (ADR-0170).
     body_press: Option<(Key, u32, u64)>,
-    /// Left presses delivered to a body, counted: `WindowPointer`'s serial.
-    press_serial: u32,
+
     /// The entry being dragged; no client hears of the pointer meanwhile.
     carried: Option<Carried<P::End>>,
     /// The pointer moved or a button changed this frame.
@@ -389,7 +391,6 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             drag: None,
             body_press: None,
-            press_serial: 0,
             carried: None,
             pending_pointer: false,
             switcher: None,
@@ -784,6 +785,25 @@ impl<P: Platform> Compositor<P> {
                 self.send_event(focus.client, m);
             }
         }
+        // Escape ends a drag with nothing delivered (ADR-0170); while one
+        // is carried no key reaches a client.
+        if let Some(c) = self.carried.take() {
+            if key.pressed && code_ == code::ESC {
+                if let Some((x, y)) = self.pointer {
+                    self.dirty(&self.carried_rect(x, y));
+                }
+                self.platform.close(c.entry);
+                self.send_event_plain(
+                    c.source.client,
+                    &gui::DragEnded {
+                        window: c.source.id,
+                    },
+                );
+            } else {
+                self.carried = Some(c);
+            }
+            return;
+        }
         // Releasing Alt chooses in the open switcher.
         if self.switcher.is_some() && !alt && !key.pressed {
             if matches!(code_, code::LEFT_ALT | code::RIGHT_ALT) {
@@ -932,34 +952,35 @@ impl<P: Platform> Compositor<P> {
     /// Where the dragged entry's label is drawn, beside the pointer.
     fn carried_rect(&self, x: i64, y: i64) -> Rect {
         let s = i64::from(self.scale.factor());
-        Rect::new(x + 12 * s, y + 4 * s, CARRIED_WIDTH * s, 40 * s)
+        // With the material's halo around the label (16 px to 34 px below
+        // the pointer).
+        Rect::new(x - 16 * s, y - 24 * s, (CARRIED_WIDTH + 64) * s, 96 * s)
     }
 
     /// `Drag`: the entry is carried while the client's body press is held.
     fn start_drag(&mut self, slot: usize, d: &gui::Drag<'_>, entry: P::End) -> u32 {
-        let (window, name, words) = (d.window, d.name.0, d.words.0);
         let key = Key {
             client: slot,
-            id: window,
+            id: d.window,
         };
-        let text = |b: &[u8]| {
-            core::str::from_utf8(b)
-                .ok()
-                .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
-                .map(String::from)
-        };
+        // One display name, drawn in the trusted material: no path, no
+        // control or bidirectional character; and a connection.
+        let name = core::str::from_utf8(d.name.0)
+            .ok()
+            .filter(|t| !t.is_empty() && !t.contains('/') && rooms::plain_text(t))
+            .map(String::from);
+        let channel = self.platform.kind(entry) == Kind::Channel;
         // That press, still held, named within 500 ms of it (ADR-0170).
         let now = self.platform.now();
         let held = self.body_press.is_some_and(|(k, serial, at)| {
             k == key && serial == d.serial && now.saturating_sub(at) <= DRAG_WITHIN_NS
         }) && self.buttons & gui::buttons::LEFT != 0;
-        match (held && self.carried.is_none(), text(name), text(words)) {
-            (true, Some(name), Some(words)) => {
+        match (held && channel && self.carried.is_none(), name) {
+            (true, Some(name)) => {
                 self.carried = Some(Carried {
                     source: key,
                     entry,
                     name,
-                    words,
                 });
                 if let Some((x, y)) = self.pointer {
                     self.dirty(&self.carried_rect(x, y));
@@ -984,7 +1005,15 @@ impl<P: Platform> Compositor<P> {
             let (key, _) = self.under(x, y)?;
             let i = self.index(key)?;
             let w = &self.windows[i];
-            let ok = w.framed() && w.owner().is_none() && self.sheet_of(key).is_none();
+            // Not into an untrusted room's window: its drops wait for the
+            // compositor's confirming card (ADR-0172 point 6, INV-0172-3).
+            let untrusted = self
+                .clients
+                .get(key.client)
+                .and_then(Option::as_ref)
+                .is_some_and(|c| c.record.untrusted);
+            let ok =
+                w.framed() && w.owner().is_none() && self.sheet_of(key).is_none() && !untrusted;
             let body = w.body_rect();
             let s = i64::from(self.scale.factor());
             let at = (
@@ -1002,13 +1031,14 @@ impl<P: Platform> Compositor<P> {
                 x,
                 y,
                 name: zoraya_protocol::Data(c.name.as_bytes()),
-                words: zoraya_protocol::Data(c.words.as_bytes()),
             };
             let length = reply(&m, NO_REPLY, &mut self.out);
             let end = cl.end;
             let sent = entry.take().into_iter().collect::<Vec<_>>();
             if self.platform.write(end, &self.out[..length], &sent) == Outgoing::Sent {
-                let _ = self.add_entry(key.client, &c.words);
+                // The pill in ADR-0170's words, the compositor's own.
+                let words = alloc::format!("dropped: {} read", c.name);
+                let _ = self.add_entry(key.client, &words);
             } else {
                 entry = sent.into_iter().next();
             }
@@ -1067,6 +1097,10 @@ impl<P: Platform> Compositor<P> {
 
     fn press(&mut self, button: u32) {
         let Some((x, y)) = self.pointer else { return };
+        // Another button during a drag raises, focuses and presses nothing.
+        if self.carried.is_some() {
+            return;
+        }
         if self.dock.rect.contains(x, y) {
             if button == gui::buttons::LEFT
                 && let Some(cell) = self.dock_cell(x, y)
@@ -1137,9 +1171,11 @@ impl<P: Platform> Compositor<P> {
                 });
             }
             Zone::Body => {
-                self.press_serial = self.press_serial.wrapping_add(1);
                 let now = self.platform.now();
-                self.body_press = Some((key, self.press_serial, now));
+                if let Some(c) = self.clients.get_mut(key.client).and_then(Option::as_mut) {
+                    c.presses = c.presses.wrapping_add(1);
+                    self.body_press = Some((key, c.presses, now));
+                }
             }
         }
     }
@@ -1304,7 +1340,7 @@ impl<P: Platform> Compositor<P> {
                 x: px / s,
                 y: py / s,
                 buttons: Flags(self.buttons),
-                serial: self.press_serial,
+                serial: self.clients[key.client].as_ref().map_or(0, |c| c.presses),
             };
             self.send_event(key.client, m);
         }
@@ -2113,6 +2149,7 @@ impl<P: Platform> Compositor<P> {
             next_id: 1,
             record,
             system: false,
+            presses: 0,
         });
         status::OK
     }

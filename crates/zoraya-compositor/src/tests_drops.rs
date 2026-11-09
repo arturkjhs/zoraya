@@ -63,11 +63,14 @@ fn drag(s: &mut Setup, end: u32, window: u32, entry: u32) -> u32 {
 }
 
 fn drag_named(s: &mut Setup, end: u32, window: u32, entry: u32, serial: u32) -> u32 {
+    drag_as(s, end, window, entry, serial, "notes.txt")
+}
+
+fn drag_as(s: &mut Setup, end: u32, window: u32, entry: u32, serial: u32, name: &str) -> u32 {
     let m = gui::Drag {
         window,
         serial,
-        name: zoraya_protocol::Data(b"notes.txt"),
-        words: zoraya_protocol::Data(b"+r ~/notes.txt"),
+        name: zoraya_protocol::Data(name.as_bytes()),
     };
     s.f().send(end, message(&m, 4), vec![entry]);
     s.c.step();
@@ -109,16 +112,13 @@ fn a_drop_gives_the_window_under_the_pointer_the_entry_and_its_pill() {
         .iter()
         .find_map(|r| decode::<gui::Drop<'_>>(r, 1).ok())
         .expect("the target gets the drop");
-    assert_eq!(
-        (d.name.0, d.words.0),
-        (&b"notes.txt"[..], &b"+r ~/notes.txt"[..])
-    );
+    assert_eq!(d.name.0, b"notes.txt", "a display name, never a path");
     assert_eq!(t.s.f().given, [(t.b, entry)]);
     assert!(
         t.s.c
             .record(1)
-            .is_some_and(|r| r.entries.iter().any(|e| e == "+r ~/notes.txt")),
-        "the target's frame shows the grant"
+            .is_some_and(|r| r.entries.iter().any(|e| e == "dropped: notes.txt read")),
+        "the target's frame shows the grant, in the compositor's words"
     );
     assert!(ordinals(&t.s.f().take(t.a)).contains(&26), "DragEnded");
     assert!(!t.s.f().closed.contains(&entry));
@@ -172,17 +172,98 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
     let e6 = t.s.f().channel(1);
     assert_eq!(drag_named(&mut t.s, t.a, t.ida, e6, now), status::BAD_RANGE);
     at(&mut t.s, px, py, Some(0));
-    // Malformed words are refused.
-    at(&mut t.s, px, py, Some(1));
-    let e4 = t.s.f().channel(1);
-    let m = gui::Drag {
-        window: t.ida,
-        serial: 0,
-        name: zoraya_protocol::Data(b"a\x1b[31m"),
-        words: zoraya_protocol::Data(b"+r ~/a"),
-    };
-    t.s.f().send(t.a, message(&m, 4), vec![e4]);
-    t.s.c.step();
-    assert!(t.s.f().closed.contains(&e4));
+    // A name the compositor would draw falsely, or a path, or an entry
+    // that is no connection: refused, the entry closed.
+    for (name, memory) in [
+        ("a\u{1b}[31m", false),
+        ("gpj.exe\u{202e}txt", false),
+        ("../etc/passwd", false),
+        ("", false),
+        ("notes.txt", true),
+    ] {
+        at(&mut t.s, px, py, Some(1));
+        let n = serial(&mut t.s, t.a);
+        let e = if memory {
+            t.s.f().memory(vec![0; 4], 16, false)
+        } else {
+            t.s.f().channel(1)
+        };
+        assert_eq!(
+            drag_as(&mut t.s, t.a, t.ida, e, n, name),
+            status::BAD_RANGE,
+            "{name:?}"
+        );
+        assert!(t.s.f().closed.contains(&e), "{name:?}");
+        at(&mut t.s, px, py, Some(0));
+    }
     let _ = done;
+}
+
+/// Each client counts only its own presses (review 7e, 4), and an untrusted
+/// room's window gets no drop until the compositor's confirming card exists
+/// (ADR-0172 point 6, INV-0172-3).
+#[test]
+fn serials_are_per_client_and_untrusted_windows_take_no_drop() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(
+        s.set_rooms(panel, "", "agent-1 --untrusted +w ~/sandbox\n"),
+        status::OK
+    );
+    let a = s.room_client(panel, "", "files", "+w /");
+    let ida = s.window_of(a, 300, 200, 0x0040_4040);
+    let oa = s.outer(0, ida);
+    let end = s.f().channel(64);
+    let m = gui::AddRoomClient {
+        untrusted: 1,
+        colour: 0,
+        tag: 0,
+        room: zoraya_protocol::Data(b"agent-1"),
+        app: zoraya_protocol::Data(b"agent"),
+        entries: zoraya_protocol::Data(b"+w ~/sandbox"),
+        line: zoraya_protocol::Data(b"agent"),
+    };
+    s.f().send(panel, message(&m, 7), vec![end]);
+    s.c.step();
+    assert_eq!(done(&mut s, panel), status::OK);
+    let idb = s.window_of(end, 300, 200, 0x0060_6060);
+    let ob = s.outer(1, idb);
+    // Presses on the untrusted window: its own count only.
+    let (bx, by) = (ob.right() - 15, ob.bottom() - 15);
+    for _ in 0..3 {
+        at(&mut s, bx, by, Some(1));
+        at(&mut s, bx, by, Some(0));
+    }
+    let (px, py) = (oa.x + 10, oa.y + 60);
+    at(&mut s, px, py, Some(1));
+    assert_eq!(serial(&mut s, a), 1, "a's first press, whatever b got");
+    let e = s.f().channel(1);
+    assert_eq!(drag(&mut s, a, ida, e), status::OK);
+    let (tx, ty) = (ob.right() - 15, ob.bottom() - 15);
+    at(&mut s, tx, ty, None);
+    at(&mut s, tx, ty, Some(0));
+    assert!(
+        s.f().given.is_empty(),
+        "nothing given to an untrusted window"
+    );
+    assert!(s.f().closed.contains(&e));
+}
+
+/// Escape ends a drag with nothing delivered, and keys reach no client
+/// meanwhile (ADR-0170).
+#[test]
+fn escape_ends_a_drag() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let e = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, e), status::OK);
+    t.s.f().take(t.a);
+    t.s.keys(&[(code::ESC, 1), (code::ESC, 0)]);
+    assert!(t.s.f().closed.contains(&e));
+    let got = ordinals(&t.s.f().take(t.a));
+    assert!(got.contains(&26) && !got.contains(&16), "{got:?}");
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, tx, ty, Some(0));
+    assert!(t.s.f().given.is_empty());
 }

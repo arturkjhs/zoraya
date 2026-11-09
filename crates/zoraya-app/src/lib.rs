@@ -75,7 +75,7 @@ pub enum Happened {
     Dropped(u32),
 }
 
-/// A dropped entry (ADR-0170): the connection, its name, its grant's words
+/// A dropped entry (ADR-0170): the connection, its display name
 /// and where in the window's body it was dropped, in logical pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dropped<E> {
@@ -83,7 +83,6 @@ pub struct Dropped<E> {
     pub x: u32,
     pub y: u32,
     pub name: alloc::string::String,
-    pub words: alloc::string::String,
     pub entry: E,
 }
 
@@ -299,7 +298,6 @@ impl<P: Platform> App<P> {
             x: d.x,
             y: d.y,
             name: text(d.name.0),
-            words: text(d.words.0),
             entry,
         });
     }
@@ -310,21 +308,24 @@ impl<P: Platform> App<P> {
     }
 
     /// Starts a drag of one entry from `window` (ADR-0170), while its body
-    /// holds the left button: the compositor refuses it otherwise, and then
-    /// closes the entry. Whether it was accepted.
-    pub fn drag(&mut self, window: u32, entry: P::End, name: &str, words: &str) -> bool {
-        if self.held != Some(window) {
-            return false;
+    /// holds the left press the compositor delivered: `Ok` when the
+    /// compositor carries it; `Err(Some(entry))` when it was not sent (no
+    /// press held, or a name too long), the entry the caller's again;
+    /// `Err(None)` when the compositor refused it and closed the entry.
+    pub fn drag(&mut self, window: u32, entry: P::End, name: &str) -> Result<(), Option<P::End>> {
+        if self.held != Some(window) || name.is_empty() || name.len() > gui::MAX_DROPPED_NAME {
+            return Err(Some(entry));
         }
         let m = gui::Drag {
             window,
             serial: self.serial,
             name: Data(name.as_bytes()),
-            words: Data(words.as_bytes()),
         };
-        self.call(&m, Some(entry))
+        let ok = self
+            .call(&m, Some(entry))
             .and_then(|r| decode::<gui::DragDone>(&r, 0).ok().map(|(_, d)| d.status.0))
-            == Some(status::OK)
+            == Some(status::OK);
+        if ok { Ok(()) } else { Err(None) }
     }
 
     /// Whether `window`'s body holds the left button.

@@ -86,6 +86,7 @@ fn each_pick_gives_the_kind_and_rights_of_its_request() {
     assert_eq!(g.rights() & rights::WRITE, 0);
     assert_eq!(g.shown, "plán.txt");
     assert_eq!(g.line, "+r ~/project/plán.txt edit");
+    assert_eq!(g.words, "+r plán.txt", "Chosen carries no path (ADR-0167)");
     assert_eq!(g.pill, "+r ~/project/plán.txt");
     assert_eq!(b.sentence(), "edit will be given this file, to read:");
     // A folder cannot be opened as a file.
@@ -111,6 +112,7 @@ fn each_pick_gives_the_kind_and_rights_of_its_request() {
     );
     assert_eq!(g.line, "create or replace ~/new.txt");
     assert_eq!(g.pill, "+c ~/new.txt");
+    assert_eq!(g.words, "+c new.txt");
     // Picking a file takes its name; an invalid name gives nothing.
     s.select(2);
     assert_eq!(s.name, "Makefile");

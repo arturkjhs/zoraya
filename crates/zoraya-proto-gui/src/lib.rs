@@ -231,16 +231,16 @@ protocol! {
     /// The client starts a drag of one entry (ADR-0170) from `window`,
     /// whose body holds the left button the compositor delivered to it,
     /// naming that press's `serial` within 500 ms of it: the entry's
-    /// connection, its name for the drag's label and its grant
-    /// in ADR-0153's words for the target's pills (`+r ~/notes.txt`).
+    /// connection and its display name (one name, no `/`), which the
+    /// compositor shows beside the pointer and in the target's pill as
+    /// `dropped: NAME read`; the client chooses no other word of it.
     /// Refused (`BAD_RANGE`) when no press of the client's is held. The
     /// reply is `DragDone`; at the release the compositor sends the source
     /// `DragEnded` and the window under the pointer `Drop`.
     message Drag<'a> = 13, handles 1 {
         window: u32,
         serial: u32,
-        name: Data<'a, MAX_LINE>,
-        words: Data<'a, MAX_LINE>,
+        name: Data<'a, MAX_DROPPED_NAME>,
     }
     message DragDone = 13, handles 0 {
         status: Status,
@@ -288,8 +288,9 @@ protocol! {
         x: u32,
         y: u32,
         buttons: Flags<{ buttons::ALL }>,
-        /// The serial of the last left press the compositor delivered to
-        /// this client: what a `Drag` names (ADR-0170).
+        /// How many left presses on its bodies the compositor delivered to
+        /// this client, counted for it alone: what a `Drag` names
+        /// (ADR-0170).
         serial: u32,
     }
 
@@ -300,14 +301,13 @@ protocol! {
     }
 
     /// An entry dropped on `window` at `(x, y)` in its body (ADR-0170): the
-    /// connection, its name and its grant's words. The window saw nothing
-    /// of the drag before.
+    /// connection, read only, and its display name, never a path
+    /// (ADR-0167). The window saw nothing of the drag before.
     message Drop<'a> = 25, handles 1 {
         window: u32,
         x: u32,
         y: u32,
-        name: Data<'a, MAX_LINE>,
-        words: Data<'a, MAX_LINE>,
+        name: Data<'a, MAX_DROPPED_NAME>,
     }
 
     /// The source's drag ended (a drop or none: the source is not told
@@ -430,6 +430,8 @@ pub mod dock {
 /// The longest launch record's entries, room table and dock list.
 pub const MAX_ENTRIES: usize = 1024;
 pub const MAX_LINE: usize = 256;
+/// The longest display name a drag carries.
+pub const MAX_DROPPED_NAME: usize = 64;
 pub const MAX_ROOMS_TEXT: usize = 3072;
 pub const MAX_DOCK_TEXT: usize = 1024;
 

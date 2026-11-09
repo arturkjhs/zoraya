@@ -421,25 +421,17 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
         x: 5,
         y: 6,
         name: Data(b"notes.txt"),
-        words: Data(b"+r ~/notes.txt"),
     };
     app.platform.event_with(&drop, 77);
     assert_eq!(app.wait(), Happened::Dropped(id));
     let d = app.take_drop().unwrap();
     assert_eq!(
-        (
-            d.window,
-            d.x,
-            d.y,
-            d.name.as_str(),
-            d.words.as_str(),
-            d.entry
-        ),
-        (id, 5, 6, "notes.txt", "+r ~/notes.txt", 77)
+        (d.window, d.x, d.y, d.name.as_str(), d.entry),
+        (id, 5, 6, "notes.txt", 77)
     );
     assert!(app.take_drop().is_none());
     // No press held: no request is sent.
-    assert!(!app.drag(id, 5, "a", "+r ~/a"));
+    assert_eq!(app.drag(id, 5, "a"), Err(Some(5)));
     assert!(!app.platform.sent.contains(&13));
     let pointer = |buttons| gui::WindowPointer {
         dropped: 0,
@@ -452,11 +444,12 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
     app.platform.event(&pointer(gui::buttons::LEFT));
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
     assert!(app.held(id));
-    assert!(app.drag(id, 5, "a", "+r ~/a"));
+    assert_eq!(app.drag(id, 5, &"x".repeat(65)), Err(Some(5)), "too long");
+    assert_eq!(app.drag(id, 5, "a"), Ok(()));
     assert_eq!(app.platform.drag_serials, [3]);
     assert_eq!(app.platform.given.last(), Some(&5));
     app.platform.drag_status = status::BAD_RANGE;
-    assert!(!app.drag(id, 6, "a", "+r ~/a"));
+    assert_eq!(app.drag(id, 6, "a"), Err(None));
     app.platform.event(&pointer(0));
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
     assert!(!app.held(id));

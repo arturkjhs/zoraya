@@ -76,9 +76,12 @@ pub struct Grant {
     pub kind: u32,
     /// The display name the application gets.
     pub shown: String,
-    /// The line under the list and in `Chosen`: the grant as the shell
-    /// would make it (`+r ~/project/plán.txt edit`).
+    /// The line under the list: the grant as the shell would make it
+    /// (`+r ~/project/plán.txt edit`), for the person only.
     pub line: String,
+    /// `Chosen`'s words: the kind and the display name, never the path
+    /// (ADR-0167: an application never learns where what it got is).
+    pub words: String,
     /// The frame's pill (`+r ~/project/plán.txt`).
     pub pill: String,
 }
@@ -280,12 +283,17 @@ impl Browser {
             Access::Create(_) => format!("create or replace {shown}"),
             _ => format!("{flag} {shown} {}", self.app),
         };
+        let display = match path.rsplit('/').next() {
+            Some("") | None => String::from("/"),
+            Some(n) => n.to_string(),
+        };
         Grant {
             dir,
             name,
             access,
             kind,
-            shown: path.rsplit('/').next().unwrap_or("").to_string(),
+            words: format!("{flag} {display}"),
+            shown: display,
             line,
             pill: format!("{flag} {shown}"),
         }

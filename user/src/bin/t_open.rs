@@ -139,8 +139,10 @@ enum Answer {
     Waiting,
     /// The connection and the name shown.
     Chosen(Handle, String),
-    /// Nothing chosen, or the chooser is gone.
+    /// Nothing chosen.
     Ended,
+    /// The chooser is gone.
+    Gone,
 }
 
 /// The chooser's answer, if one is there.
@@ -152,7 +154,7 @@ fn answer(chooser: Handle) -> Answer {
         Err((Status::WouldBlock, _)) => return Answer::Waiting,
         Err(_) => {
             println!("t_open: the chooser is gone");
-            return Answer::Ended;
+            return Answer::Gone;
         }
     };
     let got = &handles[..sizes.handles as usize];
@@ -183,7 +185,7 @@ fn main() -> i32 {
         println!("t_open: no compositor");
         return 1;
     };
-    let chooser = channel(6);
+    let mut chooser = channel(6);
     let Some(mut app) = App::connect(Gui::new(compositor), Appearance::Light) else {
         println!("t_open: no compositor");
         return 1;
@@ -222,7 +224,7 @@ fn main() -> i32 {
                 // A file dropped on the window: read it, try to change it.
                 Happened::Dropped(_) => {
                     while let Some(d) = app.take_drop() {
-                        println!("t_open: dropped {}", d.words);
+                        println!("t_open: dropped {}", d.name);
                         let said = read_then_write(&mut fs, d.entry, &d.name);
                         fs.close(d.entry);
                         app.replace(window, tree(&said));
@@ -244,10 +246,22 @@ fn main() -> i32 {
                 _ => {}
             }
         }
-        if let (Some(c), Some(was_save)) = (chooser, asked) {
+        // Read each round: a closed channel stays readable, and would wake
+        // the port for ever (review 7e, 24).
+        if let Some(c) = chooser {
+            let was_save = asked.unwrap_or(false);
             match answer(c) {
                 Answer::Waiting => {}
                 Answer::Ended => asked = None,
+                Answer::Gone => {
+                    asked = None;
+                    let _ = zoraya_rt::port_unsubscribe(port, KEY_CHOOSER);
+                    let _ = handle_close(c);
+                    chooser = None;
+                }
+                Answer::Chosen(h, _) if asked.is_none() => {
+                    let _ = handle_close(h);
+                }
                 Answer::Chosen(h, shown) => {
                     asked = None;
                     let said = if was_save {

@@ -47,7 +47,16 @@ fn is_app_name(s: &str) -> bool {
 }
 
 fn text_line(s: &str) -> bool {
-    !s.chars().any(char::is_control)
+    plain_text(s)
+}
+
+/// Text the compositor draws in its trusted material: no control character
+/// and no bidirectional override or isolate, which would reorder what the
+/// person reads (review 7e, 19).
+pub(crate) fn plain_text(s: &str) -> bool {
+    !s.chars().any(|c| {
+        c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    })
 }
 
 impl Record {

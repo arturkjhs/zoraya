@@ -35,7 +35,7 @@ pause 1000
 shot open
 key down
 type \r
-serial t_open: given +r ~/notes.txt t_open
+serial t_open: given +r notes.txt
 serial t_open: opened notes.txt: 6 bytes: "hello"
 serial t_open: write to notes.txt refused
 # Save (the focus stays on Open across the window's new tree): the
@@ -46,7 +46,7 @@ pause 1000
 key tab
 shot save
 type \r
-serial t_open: given create or replace ~/nový.txt
+serial t_open: given +c nový.txt
 serial t_open: saved nový.txt
 serial t_open: other.txt beside nový.txt refused
 # A drop (ADR-0170): t_open moved aside by its title bar, the file
@@ -57,8 +57,8 @@ drag 300 152 700 450
 click 540 120
 pause 500
 drag 160 207 800 520 600
-serial files: dragging +r ~/notes.txt
-serial t_open: dropped +r ~/notes.txt
+serial files: dragging notes.txt
+serial t_open: dropped notes.txt
 serial t_open: opened notes.txt: 6 bytes: "hello"
 serial t_open: write to notes.txt refused
 pause 500

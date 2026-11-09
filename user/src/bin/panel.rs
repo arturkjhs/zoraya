@@ -344,13 +344,15 @@ fn launcher_requests(st: &mut State, i: usize) {
         let mut handles = [end; 1];
         let sizes = match channel_read(end, &mut bytes, &mut handles) {
             Ok(s) => s,
-            Err((Status::PeerClosed, _)) => {
+            Err((Status::WouldBlock, _)) => return,
+            // Gone, or a message it cannot read (too large): it would stay
+            // at the head and wake the panel for ever (review 7e, 10).
+            Err(_) => {
                 let _ = zoraya_user::port_unsubscribe(st.port, KEY_LAUNCHER + i as u64);
                 let _ = handle_close(end);
                 st.launchers[i] = None;
                 return;
             }
-            Err(_) => return,
         };
         let got: Vec<Handle> = handles[..sizes.handles as usize].to_vec();
         let msg = &bytes[..sizes.bytes as usize];

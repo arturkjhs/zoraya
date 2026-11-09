@@ -141,20 +141,16 @@ fn open_with(
 }
 
 /// Starts a drag of `path` from `window`, with one read-only connection.
-fn drag(
-    app: &mut App<Gui>,
-    fs: &mut Client<Files>,
-    root: Handle,
-    window: u32,
-    path: &str,
-    words: &str,
-) {
+fn drag(app: &mut App<Gui>, fs: &mut Client<Files>, root: Handle, window: u32, path: &str) {
     let Ok(file) = fs.open(root, path, 0, rights::READ | rights::CLONE) else {
         return;
     };
     let name = path.rsplit('/').next().unwrap_or(path);
-    if app.drag(window, file, name, words) {
-        println!("files: dragging {words}");
+    match app.drag(window, file, name) {
+        Ok(()) => println!("files: dragging {name}"),
+        // Not sent: still ours to close (refused, the compositor did).
+        Err(Some(f)) => fs.close(f),
+        Err(None) => {}
     }
 }
 
@@ -197,8 +193,8 @@ fn main() -> i32 {
                     Some(Value::Index(i)) => i,
                     _ => None,
                 };
-                if let Act::OpenWith { path, words } = m.activate(row) {
-                    drag(&mut app, &mut fs, root, w, &path, &words);
+                if let Act::OpenWith { path, .. } = m.activate(row) {
+                    drag(&mut app, &mut fs, root, w, &path);
                 }
                 continue;
             }

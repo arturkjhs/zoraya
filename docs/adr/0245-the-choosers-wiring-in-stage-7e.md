@@ -81,6 +81,12 @@ ADR-0167 names (`Open`, `Save`, `PickDirectory`, `Chosen`, `Cancelled`) plus thr
   `tests/gui/files.script` (the write is refused).
 
 ## Open questions
+- From the review of 7e: whether a sheet should ignore input for a moment after it maps and ignore keys held from
+  before (an application could time a request so that the person's next key confirms it); re-placing a sheet when
+  the scale or the display changes; the owner's popups while its sheet is open; a `Save` onto an existing folder's
+  name; the re-clone of `OpenWith`'s connection waits on the file manager's channel (`files` is a program of the image).
+- Drops (ADR-0170) as built in 7e: the pill is the compositor's `dropped: NAME read`, the name a display name the
+  source chose (at most 64 bytes, no `/`); a drop on an untrusted room's window waits for the confirming card.
 - Whether the file manager should hold the root (INV-0168-2 allows it) or the person's home and the rooms' grants.
 - Whether `Chosen`'s words for `Save` should be the shell's line or the sheet's sentence (now the sentence).
 
