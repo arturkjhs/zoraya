@@ -458,10 +458,12 @@ GUI_IMAGE := $(BUILD)/gui.img
 # each under the host's accelerator and TCG at scale 1, and under the host's
 # accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels),
 # with three times the time: every screendump read is four times larger.
+# The terminal script also boots at 1600 x 1000 and 1920 x 1200 (ADR-0246: any
+# size the driver takes; the compositor picks scale 1 and 2 from the width).
 # A script's image is rootfs, with tests/gui/SCRIPT.root/ over it when there is
 # one (the layouts' settings file, ADR-0169's gui.keyboard-layouts).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 settings:auto:1 settings:tcg:1 terminal:auto:2 windows:auto:2
+GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 settings:auto:1 settings:tcg:1 terminal:auto:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
@@ -470,9 +472,10 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	    rm -rf $(BUILD)/gui-root && mkdir -p $(BUILD)/gui-root && \
 	    cp -R rootfs/. tests/gui/$$script.root/. $(BUILD)/gui-root/ && root=$(BUILD)/gui-root; fi; \
 	  target/debug/zoraya-mkfs --size 16M --from $$root $(GUI_IMAGE) > /dev/null && \
-	  timeout=$(QEMU_TIMEOUT); [ $$scale = 2 ] && timeout=$(GUI_TIMEOUT_2); \
+	  timeout=$(QEMU_TIMEOUT); [ $$scale = 1 ] || timeout=$(GUI_TIMEOUT_2); \
+	  case $$scale in *x*) size="--gui-size $$scale" ;; *) size="--gui-scale $$scale" ;; esac; \
 	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
-	    $(RUN_QEMU) --test --gui --gui-scale $$scale --mem 256M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
+	    $(RUN_QEMU) --test --gui $$size --mem 256M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
