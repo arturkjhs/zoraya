@@ -528,6 +528,7 @@ pub fn run(start: usize) -> ! {
     for (i, t) in TESTS.iter().enumerate().skip(start) {
         println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
+        sched::set_test_slice(0);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
         bump(&PASSED);
@@ -1485,10 +1486,24 @@ fn exited_processes_leave_nothing_behind() {
     assert_eq!(frames::stats(), before);
 }
 
+/// The 255 processes are held suspended, and run one at a time afterwards.
+/// A `hello` that runs takes a heap step of `zoraya_heap::GROW_SIZE` (1 MiB)
+/// for its first allocation, so 255 of them running at once would need more
+/// than the 128 MiB of most configurations: how many were part-way through
+/// at the same time depended on how far each got in its slices, and a slow
+/// host failed the test with "memory allocation of 5 bytes failed" (exit
+/// 101; docs/backlog.md). The short slice stands for such a host: with the
+/// processes running while they were spawned, 219 of the 255 failed so.
 fn running_out_of_asids_is_an_error() {
+    /// Frames one running `hello` may need on top of its suspended self:
+    /// its heap step, twice over for the step's tables and what else it
+    /// takes while it runs.
+    const ROOM: u64 = 2 * (zoraya_heap::GROW_SIZE as u64) / zoraya_pmm::FRAME_SIZE;
+    sched::set_test_slice(500_000);
+    let before = frames::stats().free;
     let mut live = Vec::new();
     let failure = loop {
-        match process::spawn("hello") {
+        match process::spawn_suspended("hello") {
             Ok(process) => live.push(process),
             Err(e) => break e,
         }
@@ -1496,7 +1511,14 @@ fn running_out_of_asids_is_an_error() {
     };
     assert_eq!(failure, SpawnError::NoMemory);
     assert_eq!(live.len(), 255, "ASID 0 belongs to no process");
+    let free = frames::stats().free;
+    println!(
+        "running_out_of_asids: 255 suspended processes take {} frames, {free} stay free",
+        before - free
+    );
+    assert!(free >= ROOM, "no room for a running process beside them");
     for process in live {
+        process.resume().expect("resume");
         assert_eq!(process.wait(), exited(7));
     }
     assert_eq!(run_program("hello"), exited(7), "ASIDs come back");
