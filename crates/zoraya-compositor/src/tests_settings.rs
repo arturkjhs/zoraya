@@ -8,7 +8,7 @@ use super::rooms::done;
 use super::*;
 use crate::settings::{GuiSettings, checked, read, words};
 
-fn apply(s: &mut Setup, end: u32, w: [&str; 6]) -> u32 {
+pub(super) fn apply(s: &mut Setup, end: u32, w: [&str; 6]) -> u32 {
     let m = gui::ApplySettings {
         theme: zoraya_protocol::Data(w[0].as_bytes()),
         motion: zoraya_protocol::Data(w[1].as_bytes()),
@@ -128,4 +128,69 @@ fn the_scale_set_applies_to_the_display_at_start() {
     let c = Compositor::with_settings(f2, manager, Some(display), &[], fixed);
     assert_eq!(c.scale().factor(), 2, "640 wide, but the setting says 2");
     let _ = &mut s;
+}
+
+/// The `Configure`s `end` was sent since the last take.
+fn configures(s: &mut Setup, end: u32) -> Vec<gui::Configure> {
+    s.f()
+        .take(end)
+        .iter()
+        .filter_map(|m| decode::<gui::Configure>(m, 0).ok().map(|(_, c)| c))
+        .collect()
+}
+
+#[test]
+fn either_the_theme_or_the_motion_alone_restyles_the_windows() {
+    let mut s = setup();
+    let panel = s.panel();
+    let client = s.client(64);
+    let _ = s.window_of(client, 40, 30, 0x0011_2233);
+    s.f().take(client);
+    let still = ["light", "no", "auto", "", "us", "us"];
+    assert_eq!(apply(&mut s, panel, still), status::OK);
+    let got = configures(&mut s, client);
+    assert!(got.iter().any(|c| !c.dark && !c.motion), "motion: {got:?}");
+    let dark = ["dark", "no", "auto", "", "us", "us"];
+    assert_eq!(apply(&mut s, panel, dark), status::OK);
+    let got = configures(&mut s, client);
+    assert!(got.iter().any(|c| c.dark && !c.motion), "theme: {got:?}");
+}
+
+#[test]
+fn a_change_of_layouts_alone_configures_no_window() {
+    let mut s = setup();
+    let panel = s.panel();
+    let client = s.client(64);
+    let _ = s.window_of(client, 40, 30, 0x0011_2233);
+    s.f().take(client);
+    let layouts = ["light", "yes", "auto", "", "us ua", "us"];
+    assert_eq!(apply(&mut s, panel, layouts), status::OK);
+    assert_eq!(configures(&mut s, client), vec![]);
+}
+
+#[test]
+fn a_fixed_scale_of_one_is_sent_and_kept_as_one() {
+    let one = GuiSettings {
+        scale: 1,
+        ..GuiSettings::default()
+    };
+    let w = words(&one);
+    assert_eq!(w[2], "1");
+    let w: Vec<&str> = w.iter().map(String::as_str).collect();
+    assert_eq!(checked(w[0], w[1], w[2], w[3], w[4], w[5]), Some(one));
+}
+
+#[test]
+fn a_fixed_scale_of_one_holds_on_a_wide_display() {
+    let fixed = GuiSettings {
+        scale: 1,
+        ..GuiSettings::default()
+    };
+    let mut f = Fake::new();
+    f.display_size = (2048, 1536);
+    let manager = f.channel(64);
+    let display = f.channel(64);
+    f.display = Some(display);
+    let c = Compositor::with_settings(f, manager, Some(display), &[], fixed);
+    assert_eq!(c.scale().factor(), 1, "2048 wide, but the setting says 1");
 }

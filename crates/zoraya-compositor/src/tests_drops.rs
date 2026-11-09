@@ -11,6 +11,7 @@ const ROOMS: &str = "project --colour 1 +w ~/project\n";
 
 struct Two {
     s: Setup,
+    panel: u32,
     a: u32,
     b: u32,
     ida: u32,
@@ -30,6 +31,7 @@ fn two() -> Two {
     let (oa, ob) = (s.outer(0, ida), s.outer(1, idb));
     Two {
         s,
+        panel,
         a,
         b,
         ida,
@@ -370,4 +372,56 @@ fn a_large_clipboard_is_kept_and_pasted_whole() {
         .find_map(|m| decode::<gui::Paste<'_>>(m, 0).ok())
         .expect("Paste");
     assert_eq!(p.text.0, big.as_bytes());
+}
+
+/// Applying settings tells the focused client of a change of layouts,
+/// of the list or of the one in use, and of nothing else.
+#[test]
+fn the_focused_client_hears_of_a_change_of_layouts_and_only_of_that() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.b);
+    let heard = |t: &mut Two, w: [&str; 6]| {
+        let panel = t.panel;
+        assert_eq!(super::settings::apply(&mut t.s, panel, w), status::OK);
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter(|m| decode::<gui::Layout<'_>>(m, 0).is_ok())
+            .count()
+    };
+    // The same settings twice: the second time nothing changed.
+    heard(&mut t, ["light", "yes", "auto", "", "us", "us"]);
+    assert_eq!(heard(&mut t, ["light", "yes", "auto", "", "us", "us"]), 0);
+    assert_eq!(
+        heard(&mut t, ["light", "yes", "auto", "", "us ua", "us"]),
+        1
+    );
+    assert_eq!(
+        heard(&mut t, ["light", "yes", "auto", "", "us ua", "ua"]),
+        1
+    );
+}
+
+/// A client that goes away takes only its own pending `Copy` with it.
+#[test]
+fn a_copy_asked_of_one_client_outlives_another_clients_going() {
+    let mut t = two();
+    let (ax, ay) = (t.oa.x + 15, t.oa.y + 40);
+    at(&mut t.s, ax, ay, Some(1));
+    at(&mut t.s, ax, ay, Some(0));
+    chord(&mut t.s, code::C);
+    assert!(
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .any(|m| decode::<gui::Copy>(m, 0).is_ok()),
+        "Copy to the focused client"
+    );
+    let b = t.b;
+    t.s.f().peers.get_mut(&b).unwrap().gone = true;
+    t.s.c.step();
+    assert_eq!(offer(&mut t.s, t.a, "x"), status::OK);
 }
