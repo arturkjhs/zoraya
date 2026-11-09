@@ -136,7 +136,7 @@ fn the_compositor_is_told_the_table_and_the_dock() {
     assert_eq!(again.rooms, p.rooms.rooms);
     assert_eq!(
         dock_text(),
-        "term\tterm\nfiles\tfiles\nsettings\tsettings\n"
+        "term\tterm\nfiles\tfiles\nedit\tedit\nsettings\tsettings\n"
     );
 }
 
@@ -222,8 +222,9 @@ fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
         panic!()
     };
     assert_eq!(l.app, "files");
-    assert_eq!(opener("plán.TXT"), Some("t_open"));
-    assert_eq!(opener("a.md"), Some("t_open"));
+    assert_eq!(opener("plán.TXT"), Some("edit"));
+    assert_eq!(opener("a.md"), Some("edit"));
+    assert_eq!(opener("notes.test"), Some("t_open"));
     assert_eq!(opener(".txt"), None);
     assert_eq!(opener("main.c"), None);
     assert_eq!(data_dir(None, "files"), "/data/home/files");

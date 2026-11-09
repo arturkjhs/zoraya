@@ -585,6 +585,7 @@ dependencies = [
  "zoraya-commands",
  "zoraya-compositor",
  "zoraya-describe",
+ "zoraya-editor",
  "zoraya-elf",
  "zoraya-files",
  "zoraya-fonts",

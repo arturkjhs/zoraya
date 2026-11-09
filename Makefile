@@ -46,7 +46,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings t_gui guibench t_text \
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh

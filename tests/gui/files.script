@@ -9,7 +9,7 @@
 serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
-type echo hello > notes.txt\r
+type echo hello > notes.test\r
 screen ~> _
 # The file manager from the dock, in home: its window is the second.
 click 477 723
@@ -17,12 +17,13 @@ pause 1500
 click 400 120
 region 162 108 100 4 f7f7f8
 shot files
-# The list: notes.txt, its only row; Enter opens it with t_open (by its
-# name), which reads it and cannot write it.
+# The list: notes.test, its only row; Enter opens it with t_open (by its
+# extension, .test, the test application's), which reads it and cannot
+# write it.
 key tab
 key down
 type \r
-serial files: opened +r ~/notes.txt
+serial files: opened +r ~/notes.test
 serial t_open: opened the opened file: 6 bytes: "hello"
 serial t_open: write to the opened file refused
 # t_open's window is the third: focus it, then Open through the chooser.
@@ -35,9 +36,9 @@ pause 1000
 shot open
 key down
 type \r
-serial t_open: given +r notes.txt
-serial t_open: opened notes.txt: 6 bytes: "hello"
-serial t_open: write to notes.txt refused
+serial t_open: given +r notes.test
+serial t_open: opened notes.test: 6 bytes: "hello"
+serial t_open: write to notes.test refused
 # Save (the focus stays on Open across the window's new tree): the
 # sheet's name field holds the suggested name; Enter in it saves.
 key tab
@@ -50,27 +51,27 @@ serial t_open: given +c nový.txt
 serial t_open: saved nový.txt
 serial t_open: other.txt beside nový.txt refused
 # A drop (ADR-0170): t_open moved aside by its title bar, the file
-# manager raised by its own, and notes.txt dragged from the list onto
+# manager raised by its own, and notes.test dragged from the list onto
 # t_open, the press held long enough for files to answer it. t_open gets
 # the file to read, and its frame the pill.
 drag 300 152 700 450
 click 540 120
 pause 500
 drag 160 207 800 520 600
-serial files: dragging notes.txt
-serial t_open: dropped notes.txt
-serial t_open: opened notes.txt: 6 bytes: "hello"
-serial t_open: write to notes.txt refused
+serial files: dragging notes.test
+serial t_open: dropped notes.test
+serial t_open: opened notes.test: 6 bytes: "hello"
+serial t_open: write to notes.test refused
 pause 500
 shot drop
-# The first terminal sees what was saved, and notes.txt unchanged.
+# The first terminal sees what was saved, and notes.test unchanged.
 click 400 80
 region 130 76 100 4 f7f7f8
 origin 73 106
 type ls\r
-screen notes.txt
+screen notes.test
 screen nový.txt
-type cat notes.txt\r
+type cat notes.test\r
 screen hello
 screen ~> _
 type poweroff\r

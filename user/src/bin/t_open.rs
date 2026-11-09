@@ -115,7 +115,7 @@ fn ask(chooser: Handle, save: bool, t: u32) -> bool {
             &pc::Save {
                 title: Data(b""),
                 suggested: Data("nový.txt".as_bytes()),
-                filters: Data(b"txt md"),
+                filters: Data(b"txt md test"),
             },
             t,
             &mut out,
@@ -124,7 +124,7 @@ fn ask(chooser: Handle, save: bool, t: u32) -> bool {
         encode(
             &pc::Open {
                 title: Data(b""),
-                filters: Data(b"txt md"),
+                filters: Data(b"txt md test"),
             },
             t,
             &mut out,

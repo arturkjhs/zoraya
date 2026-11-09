@@ -104,9 +104,10 @@ pub struct Launch {
 }
 
 /// The applications the dock lists, with the line each is launched by.
-pub const APPS: [(&str, &str); 3] = [
+pub const APPS: [(&str, &str); 4] = [
     ("term", "term"),
     ("files", "files"),
+    ("edit", "edit"),
     ("settings", "settings"),
 ];
 
@@ -120,9 +121,9 @@ pub const CONFIG_RIGHTS: u32 = zoraya_proto_file::rights::READ
     | zoraya_proto_file::rights::CLONE;
 
 /// The application that opens a file of each extension (ADR-0168 point 4:
-/// file types by extension, an assumption). Until `edit` (7f), the test
-/// application `t_open` opens text.
-pub const OPENERS: [(&str, &str); 2] = [("txt", "t_open"), ("md", "t_open")];
+/// file types by extension, an assumption): text in `edit`; `.test` in
+/// the test application `t_open` (stage 7e's acceptance test).
+pub const OPENERS: [(&str, &str); 3] = [("txt", "edit"), ("md", "edit"), ("test", "t_open")];
 
 /// The application for `name`, by its extension.
 pub fn opener(name: &str) -> Option<&'static str> {

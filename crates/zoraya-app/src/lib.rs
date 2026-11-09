@@ -216,6 +216,19 @@ impl<P: Platform> App<P> {
         Some(c.window)
     }
 
+    /// Gives `window` a new title (the frame draws it, ADR-0160).
+    pub fn set_title(&mut self, window: u32, title: &str) -> bool {
+        let m = gui::SetTitle {
+            window,
+            text: Data(title.as_bytes()),
+        };
+        self.call(&m, None).and_then(|r| {
+            decode::<gui::TitleDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) == Some(status::OK)
+    }
+
     fn add_window(&mut self, id: u32, root: Box<dyn Widget>, (w, h): (u32, u32), buffer: usize) {
         let mut ui = Window::new(root, (self.scale_logical(w), self.scale_logical(h)));
         ui.layout(&mut self.painter);
