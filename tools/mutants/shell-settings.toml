@@ -1,0 +1,77 @@
+# zoraya-shell: how `settings` arguments become operands and options
+# (ADR-0171: `NAME -ITEM`, `+ITEM --at N`). Survivors of 7f's cargo-mutants
+# run (TASK-24): no host test reached the code until the fake host
+# described `settings`. Host tests only.
+tests = ["cargo test -q -p zoraya-shell"]
+timeout = 300
+
+[[mutant]]
+id = "S-first-dash"
+file = "crates/zoraya-shell/src/eval.rs"
+find = '''
+            && texts.first().is_some_and(|t| !t.starts_with('-'))
+            && texts.len() > 1'''
+replace = '''
+            && texts.first().is_some_and(|t| t.starts_with('-'))
+            && texts.len() > 1'''
+note = "7f eval.rs:1730:46: settings_reset_takes_its_name_as_the_options_argument"
+
+[[mutant]]
+id = "S-len-eq"
+file = "crates/zoraya-shell/src/eval.rs"
+find = '''
+            && texts.first().is_some_and(|t| !t.starts_with('-'))
+            && texts.len() > 1'''
+replace = '''
+            && texts.first().is_some_and(|t| !t.starts_with('-'))
+            && texts.len() == 1'''
+note = "7f eval.rs:1731:28: a_dash_item_after_a_settings_name_is_a_value"
+
+[[mutant]]
+id = "S-at-ne"
+file = "crates/zoraya-shell/src/eval.rs"
+find = 'texts.iter().position(|t| *t == "--at")'
+replace = 'texts.iter().position(|t| *t != "--at")'
+note = "7f eval.rs:1734:59: settings_at_stays_an_option_wherever_it_stands"
+
+[[mutant]]
+id = "S-at-room-le"
+file = "crates/zoraya-shell/src/eval.rs"
+find = '&& i + 1 < texts.len()'
+replace = '&& i + 1 <= texts.len()'
+note = "7f eval.rs:1735:26: a_settings_at_with_nothing_after_it_is_a_value"
+
+[[mutant]]
+id = "S-at-room-minus"
+file = "crates/zoraya-shell/src/eval.rs"
+find = '&& i + 1 < texts.len()'
+replace = '&& i - 1 < texts.len()'
+note = "7f eval.rs:1735:22: a_settings_at_with_nothing_after_it_is_a_value"
+
+[[mutant]]
+id = "S-drain-times"
+file = "crates/zoraya-shell/src/eval.rs"
+find = 'at = texts.drain(i..i + 2).collect();'
+replace = 'at = texts.drain(i..i * 2).collect();'
+note = "7f eval.rs:1737:39: settings_at_stays_an_option_wherever_it_stands"
+
+[[mutant]]
+id = "S-insert-or"
+file = "crates/zoraya-shell/src/eval.rs"
+find = 'if texts.len() > 1 && texts[1] != "--" {'
+replace = 'if texts.len() > 1 || texts[1] != "--" {'
+note = "7f eval.rs:1739:32: a_dash_item_after_a_settings_name_is_a_value"
+
+[[mutant]]
+id = "S-insert-eq"
+file = "crates/zoraya-shell/src/eval.rs"
+find = 'if texts.len() > 1 && texts[1] != "--" {'
+replace = 'if texts.len() > 1 && texts[1] == "--" {'
+note = "7f eval.rs:1739:44: a_dash_item_after_a_settings_name_is_a_value"
+
+[[mutant]]
+id = "S-insert-ge"
+file = "crates/zoraya-shell/src/eval.rs"
+find = 'if texts.len() > 1 && texts[1] != "--" {'
+replace = 'if texts.len() >= 1 && texts[1] != "--" {'
+note = "7f eval.rs:1739:28: settings_at_stays_an_option_wherever_it_stands"
