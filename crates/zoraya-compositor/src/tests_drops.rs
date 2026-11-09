@@ -20,7 +20,12 @@ struct Two {
 
 /// Two windows, `files` and `t_open`, the second above the first.
 fn two() -> Two {
-    let mut s = setup();
+    two_on(W, H)
+}
+
+/// The same on a display of `w × h`.
+fn two_on(w: u32, h: u32) -> Two {
+    let mut s = setup_with(|f| f.display_size = (w, h));
     let panel = s.panel();
     assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
     let a = s.room_client(panel, "project", "files", "+w /");
@@ -269,4 +274,172 @@ fn escape_ends_a_drag() {
     let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
     at(&mut t.s, tx, ty, Some(0));
     assert!(t.s.f().given.is_empty());
+}
+
+/// Other keys, and an Escape that is only released, leave the drag carried
+/// and reach no client; the drop still lands.
+#[test]
+fn only_an_escape_press_ends_a_drag() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let e = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, e), status::OK);
+    t.s.f().take(t.a);
+    t.s.keys(&[(30, 1), (30, 0), (code::ESC, 0)]);
+    assert!(!t.s.f().closed.contains(&e));
+    let got = ordinals(&t.s.f().take(t.a));
+    assert!(!got.contains(&26) && !got.contains(&16), "{got:?}");
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, tx, ty, None);
+    at(&mut t.s, tx, ty, Some(0));
+    assert_eq!(t.s.f().given, [(t.b, e)]);
+}
+
+/// The drop says where it landed, in the target body's logical pixels, at
+/// both scales.
+#[test]
+fn a_drop_lands_at_the_pointer_in_the_targets_logical_pixels() {
+    for (w, h) in [(W, H), (2048, 1536)] {
+        let mut t = two_on(w, h);
+        let k = i64::from(t.s.c.scale().factor());
+        let (px, py) = (t.oa.x + 10 * k, t.oa.y + 60 * k);
+        at(&mut t.s, px, py, Some(1));
+        let entry = t.s.f().channel(1);
+        assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+        t.s.f().take(t.b);
+        let body = t.s.c.window(Key { client: 1, id: 1 }).unwrap().body_rect();
+        let (tx, ty) = (t.ob.right() - 15 * k, t.ob.bottom() - 13 * k);
+        at(&mut t.s, tx, ty, None);
+        at(&mut t.s, tx, ty, Some(0));
+        let got = t.s.f().take(t.b);
+        let (_, d) = got
+            .iter()
+            .find_map(|r| decode::<gui::Drop<'_>>(r, 1).ok())
+            .expect("the target gets the drop");
+        let want = ((tx - body.x) / k, (ty - body.y) / k);
+        assert!(want.0 > 1 && want.1 > 1);
+        assert_eq!((i64::from(d.x), i64::from(d.y)), want, "{w} × {h}");
+    }
+}
+
+/// A press the compositor no longer knows to be held, after the input
+/// driver that delivered it is lost, starts no drag.
+#[test]
+fn a_press_from_a_lost_input_driver_starts_no_drag() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let tablet = t.s.tablet;
+    t.s.f().peers.get_mut(&tablet).unwrap().gone = true;
+    t.s.c.step();
+    assert!(t.s.f().closed.contains(&tablet));
+    let e = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, e), status::BAD_RANGE);
+    assert!(t.s.f().closed.contains(&e));
+}
+
+/// The target's frame shows its new pill once the drop lands: the title
+/// bar is composed again, though the pointer never passed over it.
+#[test]
+fn the_targets_title_bar_is_composed_again_with_the_dropped_pill() {
+    let mut t = two();
+    // The source moved down by its title bar, off the target's.
+    let (gx, gy) = (t.oa.x + 150, t.oa.y + 10);
+    at(&mut t.s, gx, gy, Some(1));
+    at(&mut t.s, gx, gy + 240, None);
+    at(&mut t.s, gx, gy + 240, Some(0));
+    t.oa = t.s.outer(0, t.ida);
+    let f = t.s.c.frame();
+    assert!(t.oa.y > t.ob.y + f.title + 60, "{:?}", t.oa);
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    // The target's title bar, inside its border.
+    let strip = Rect::new(t.ob.x + 1, t.ob.y + 1, t.ob.width - 2, f.title - 2);
+    let pixels = |s: &mut Setup| {
+        let mut v = Vec::new();
+        for y in strip.y..strip.bottom() {
+            for x in strip.x..strip.right() {
+                v.push(s.pixel(x, y));
+            }
+        }
+        v
+    };
+    let before = pixels(&mut t.s);
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    // Into the target's body, the label's room below its title bar.
+    let (tx, ty) = (t.ob.right() - 15, t.ob.y + f.title + 40);
+    at(&mut t.s, tx, ty, None);
+    at(&mut t.s, tx, ty, Some(0));
+    assert_eq!(t.s.f().given, [(t.b, entry)]);
+    assert!(pixels(&mut t.s) != before, "the pill is shown");
+}
+
+/// The carried name is drawn on the material beside the pointer, its halo
+/// with it, while the pointer moves; where it was, the screen comes back
+/// as it was. At both scales, with a long name.
+#[test]
+fn the_carried_name_is_composed_beside_the_pointer_and_cleaned_after() {
+    // Wide letters: the label is most of the room kept for it.
+    let name = "QUARTERLY PLANNING MEMO FOR THE WHOLE TEAM WITH DRAFTS MWM.TXT";
+    for (w, h, p1, p2) in [
+        (1280, 800, (500, 450), (500, 100)),
+        (2048, 1536, (200, 900), (200, 1300)),
+    ] {
+        let mut t = two_on(w, h);
+        let k = i64::from(t.s.c.scale().factor());
+        let cap = zoraya_tokens::text::CAPTION.physical(Scale::ONE) * k as u32;
+        let label_w = i64::from(t.s.c.title_text.measure(name, cap)) + 20 * k;
+        // Wide enough that a room cut short loses its end, narrow enough
+        // for the room kept for it.
+        assert!(
+            (440 * k..=550 * k).contains(&label_w),
+            "the name's label is {label_w} wide"
+        );
+        let width = w as usize;
+        let px = |s: &mut Setup, x: i64, y: i64| s.f().frame[y as usize * width + x as usize];
+        // The label box: 16 to 34 logical pixels below, from 16 right of
+        // the pointer.
+        let (lx, ly, lh) = (p1.0 + 16 * k, p1.1 + 11 * k, 23 * k);
+        let probes = [
+            ("top", lx + label_w / 2, ly + 2 * k),
+            ("end", lx + label_w - 4 * k, ly + lh / 2),
+            ("bottom", lx + label_w / 2, ly + lh - 3 * k),
+            ("halo", lx - 4 * k, ly + lh / 2),
+        ];
+        let area = Rect::new(p1.0 - 16 * k, p1.1, label_w + 40 * k, 40 * k);
+        let snap = |s: &mut Setup| {
+            let mut v = Vec::new();
+            for y in area.y..area.bottom() {
+                for x in area.x..area.right() {
+                    v.push(px(s, x, y));
+                }
+            }
+            v
+        };
+        at(&mut t.s, p2.0, p2.1, None);
+        let clean = snap(&mut t.s);
+        let under: Vec<u32> = probes.iter().map(|&(_, x, y)| px(&mut t.s, x, y)).collect();
+        let (sx, sy) = (t.oa.x + 10 * k, t.oa.y + 60 * k);
+        at(&mut t.s, sx, sy, Some(1));
+        let n = serial(&mut t.s, t.a);
+        // The label's top where the drag starts: the pointer, still, is
+        // not composed again with it.
+        let top = (sx + 16 * k + label_w / 2, sy + 13 * k);
+        let was = px(&mut t.s, top.0, top.1);
+        let entry = t.s.f().channel(1);
+        assert_eq!(drag_as(&mut t.s, t.a, t.ida, entry, n, name), status::OK);
+        assert_ne!(
+            px(&mut t.s, top.0, top.1),
+            was,
+            "the label's top at the press"
+        );
+        at(&mut t.s, p1.0, p1.1, None);
+        for (&(what, x, y), was) in probes.iter().zip(&under) {
+            assert_ne!(px(&mut t.s, x, y), *was, "the label's {what} at {w} × {h}");
+        }
+        at(&mut t.s, p2.0, p2.1, None);
+        assert!(snap(&mut t.s) == clean, "nothing stays at {w} × {h}");
+    }
 }
