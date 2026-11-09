@@ -75,6 +75,8 @@ fn a_text_field_edits_by_character() {
     w.event(key(keys::HOME));
     assert_eq!(w.event(key(keys::DELETE)), Response::Changed(3));
     w.event(key(keys::END));
+    assert_eq!(w.event(key(keys::ENTER)), Response::Activated(3));
+    assert_eq!(w.value(3), Value::Text("вітř"));
     assert_eq!(
         w.event(typed('\u{7}')),
         Response::None,

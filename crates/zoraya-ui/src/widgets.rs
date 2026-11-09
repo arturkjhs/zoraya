@@ -232,6 +232,8 @@ impl Widget for TextField {
             keys::RIGHT => self.cursor = (self.cursor + 1).min(n),
             keys::HOME => self.cursor = 0,
             keys::END => self.cursor = n,
+            // Enter submits what was typed (the chooser's name, a form).
+            keys::ENTER => return Response::Activated(self.id),
             keys::BACKSPACE if self.cursor > 0 => {
                 let (a, b) = (self.byte(self.cursor - 1), self.byte(self.cursor));
                 self.value.replace_range(a..b, "");

@@ -1,0 +1,63 @@
+# Stage 7e's criterion (TASK-24, docs/research/desktop/plan.md, ADR-0167,
+# ADR-0168): the file manager opens a file in a test application through
+# the panel, read-only; the application then asks the chooser to open a
+# file, which it can read and cannot write, and to save one, which it can
+# write, and nothing beside it. Coordinates are logical at scale 1
+# (1024 x 768): the dock's files icon at (477, 723); each new window 32
+# further right and down from the first terminal's frame at (72, 70).
+# bg.frame.focused is f7f7f8.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+type echo hello > notes.txt\r
+screen ~> _
+# The file manager from the dock, in home: its window is the second.
+click 477 723
+pause 1500
+click 400 120
+region 162 108 100 4 f7f7f8
+shot files
+# The list: notes.txt, its only row; Enter opens it with t_open (by its
+# name), which reads it and cannot write it.
+key tab
+key down
+type \r
+serial files: opened +r ~/notes.txt
+serial t_open: opened the opened file: 6 bytes: "hello"
+serial t_open: write to the opened file refused
+# t_open's window is the third: focus it, then Open through the chooser.
+pause 500
+click 300 152
+region 194 140 100 4 f7f7f8
+key tab
+type \r
+pause 1000
+shot open
+key down
+type \r
+serial t_open: given +r ~/notes.txt t_open
+serial t_open: opened notes.txt: 6 bytes: "hello"
+serial t_open: write to notes.txt refused
+# Save (the focus stays on Open across the window's new tree): the
+# sheet's name field holds the suggested name; Enter in it saves.
+key tab
+type \r
+pause 1000
+key tab
+shot save
+type \r
+serial t_open: given create or replace ~/nový.txt
+serial t_open: saved nový.txt
+serial t_open: other.txt beside nový.txt refused
+# The first terminal sees what was saved, and notes.txt unchanged.
+click 400 80
+region 130 76 100 4 f7f7f8
+origin 73 106
+type ls\r
+screen notes.txt
+screen nový.txt
+type cat notes.txt\r
+screen hello
+screen ~> _
+type poweroff\r
+exit

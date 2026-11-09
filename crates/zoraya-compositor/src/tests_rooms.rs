@@ -194,6 +194,9 @@ fn each_manager_takes_only_its_own_ordinals() {
         ("", 1, 0, "term", ""),
         ("Bad", 0, 1, "term", ""),
         ("project", 0, 1, "", ""),
+        ("project", 0, 1, "T_open", ""),
+        ("project", 0, 1, "t open", ""),
+        ("project", 0, 1, "t.open", ""),
         ("project", 0, 1, "term", "+w ~/a\u{1b}[31m"),
         ("project", 2, 1, "term", ""),
     ] {
@@ -225,9 +228,12 @@ fn each_manager_takes_only_its_own_ordinals() {
     // The panel going away leaves the clients and the table.
     let a = s.room_client(panel, "project", "term", "+w ~/project");
     let _ = a;
+    // A program's name as the ramdisk has it, with `_` (t_open).
+    let b = s.room_client(panel, "project", "t_open", "+r ~/notes.txt");
+    let _ = b;
     s.f().peers.get_mut(&panel).unwrap().gone = true;
     s.c.step();
-    assert_eq!(s.c.client_count(), 2);
+    assert_eq!(s.c.client_count(), 3);
     assert_eq!(s.c.rooms().rooms.len(), 2);
 }
 

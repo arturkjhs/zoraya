@@ -43,7 +43,7 @@ fn is_app_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 16
         && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 fn text_line(s: &str) -> bool {
