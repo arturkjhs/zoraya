@@ -41,5 +41,8 @@ screen ~> _
 # otherwise reached no window, 2026-11-09).
 click 400 80
 region 130 76 100 4 f7f7f8
+# Keys typed at once after the focusing click can be lost under TCG (the
+# first five of poweroff, locally and on CI); a hand is not that quick.
+pause 500
 type poweroff\r
 exit
