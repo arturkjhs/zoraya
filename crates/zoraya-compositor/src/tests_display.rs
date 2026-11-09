@@ -208,3 +208,88 @@ fn popups_close_and_legacy_windows_come_back_at_a_new_size() {
     let legacy_frame = s.outer(1, lk.id);
     assert!(inside(&s, legacy_frame), "{legacy_frame:?}");
 }
+
+#[test]
+fn a_window_larger_than_the_new_work_area_fills_it_exactly() {
+    let mut s = setup_with(|f| f.display_size = (1280, 800));
+    let end = s.client(64);
+    let id = s.window_of(end, 300, 200, 0x0040_4040);
+    s.f().take(end);
+    // Tiled to the right half: far right, nearly the work area's height.
+    s.keys(&[
+        (code::RIGHT_META, 1),
+        (code::RIGHT, 1),
+        (code::RIGHT, 0),
+        (code::RIGHT_META, 0),
+    ]);
+    s.f().take(end);
+    resize(&mut s, 640, 360);
+    let (area, outer) = (s.c.work_area(), s.outer(0, id));
+    assert_eq!(outer, area, "the frame is the work area, to the pixel");
+    let f = s.c.frame();
+    let c = configures(&s.f().take(end));
+    assert_eq!(
+        (i64::from(c[0].width), i64::from(c[0].height)),
+        (area.width - 2 * f.border, area.height - f.title - f.border)
+    );
+}
+
+#[test]
+fn a_window_keeps_its_logical_place_from_scale_two_to_one() {
+    let mut s = setup_with(|f| f.display_size = (2048, 1536));
+    let end = s.client(64);
+    let id = s.window_of(end, 300, 200, 0x0040_4040);
+    let before = s.c.window(Key { client: 0, id }).unwrap();
+    let (x, y) = (before.x, before.y);
+    assert_eq!(s.c.scale().factor(), 2);
+    resize(&mut s, 1600, 1200);
+    let after = s.c.window(Key { client: 0, id }).unwrap();
+    assert_eq!((after.x, after.y), (x / 2, y / 2), "the same logical place");
+    assert_eq!(after.body, (300, 200));
+}
+
+#[test]
+fn a_sheet_stays_at_a_new_size_and_closes_at_a_new_scale() {
+    use super::sheets::{sheet, system, tagged};
+    let mut s = setup_with(|f| f.display_size = (1280, 800));
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 260, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 200, 100).0, status::OK);
+    let sheets = |s: &Setup| s.c.stack().filter(|k| k.client == 1).count();
+    assert_eq!(sheets(&s), 1);
+    resize(&mut s, 1600, 1000);
+    assert_eq!(sheets(&s), 1, "the same scale: it stays with its owner");
+    resize(&mut s, 1920, 1200);
+    assert_eq!(sheets(&s), 0, "scale 2: it closes");
+    let told = s
+        .f()
+        .take(chooser)
+        .iter()
+        .any(|m| decode::<gui::CloseRequested>(m, 0).is_ok());
+    assert!(told, "and its client hears so");
+}
+
+#[test]
+fn a_resized_with_a_handle_or_a_malformed_one_drops_the_driver() {
+    for bad in [true, false] {
+        let mut s = setup();
+        let display = s.f().display.unwrap();
+        let m = display::Resized {
+            width: 800,
+            height: 600,
+        };
+        let mut bytes = message(&m, 0);
+        let handles = if bad {
+            vec![s.f().channel(1)]
+        } else {
+            bytes.truncate(bytes.len() - 4);
+            vec![]
+        };
+        s.f().send(display, bytes, handles);
+        s.c.step();
+        assert!(s.f().closed.contains(&display), "handle {bad}");
+        assert_eq!(s.c.size(), (W, H));
+    }
+}
