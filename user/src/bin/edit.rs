@@ -183,6 +183,8 @@ fn main() -> i32 {
                     ..
                 } => {
                     status.clear();
+                    // An edit after the warning needs a new one.
+                    discard_armed = false;
                     continue;
                 }
                 // The clipboard (ADR-0170): the selection offered, cut on

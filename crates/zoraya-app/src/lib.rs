@@ -132,9 +132,16 @@ pub struct App<P: Platform> {
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
-    // As large as any message: an `Offer` carries up to 32 KiB.
-    let mut out = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
-    let n = encode(m, transaction, &mut out).unwrap_or(0);
+    // Most messages are small; an `Offer` carries up to 32 KiB, so a
+    // message that does not fit is encoded again into the largest.
+    let mut out = vec![0u8; 1024];
+    let n = match encode(m, transaction, &mut out) {
+        Ok(n) => n,
+        Err(_) => {
+            out = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
+            encode(m, transaction, &mut out).unwrap_or(0)
+        }
+    };
     out.truncate(n);
     out
 }

@@ -112,8 +112,23 @@ fn main() -> i32 {
             } => {
                 // The change applies to the file as it is now: a `settings`
                 // command run meanwhile is kept (review 7f, 4).
+                let shown = s.clone();
                 s = zoraya_compositor::settings::read(&current(&config)).0;
                 match app.window(window) {
+                    // The layout in use is chosen by its place in the list
+                    // the page showed: that layout, if the file still
+                    // enables it (review 7f's check).
+                    Some(w) if id == zoraya_settings_window::ACTIVE => {
+                        match changed(&shown, id, w.value(id)) {
+                            Ok(want) if s.layouts.contains(&want.layout) => {
+                                let mut n = s.clone();
+                                n.layout = want.layout;
+                                Ok(n)
+                            }
+                            Ok(_) => Err("that layout is no longer enabled"),
+                            Err(e) => Err(e),
+                        }
+                    }
                     Some(w) => changed(&s, id, w.value(id)),
                     None => continue,
                 }

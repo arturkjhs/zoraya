@@ -215,3 +215,64 @@ By the main model, after the review.
 | 14 | Fixed. A file that is not UTF-8 is not opened (saving would have corrupted it); the name suggested for a file opened from the file manager is `untitled.txt`. |
 | 15 | Open (note): copy and paste in the toolkit's text fields; recorded in design.md's "not built". |
 | 16 | As the ADRs allow; recorded. |
+
+## Check of the fixes
+
+By the reviewer, reading `git show 1f5fe7c`. No tests were run for this check. "Confirmed" means the changed lines fix
+the finding and add no new problem in the review's areas (trust boundary, rights narrowing, `unsafe`; the commit adds
+no `unsafe`).
+
+- **1 (offer over 4 KiB): confirmed, but the fix causes the new issue under 2.** The compositor's `message` buffer and
+  `zoraya-app`'s send and receive buffers are now `MAX_WIRE_MESSAGE` (64 KiB), the kernel's `MAX_MESSAGE`. A 32 KiB
+  `Offer` fits. The new test covers 20 KiB.
+- **2 (paste over 490 bytes): confirmed, with a new issue (error).** `out` is now a 64 KiB `Vec`, so `Paste` is encoded
+  whole. But `term` reads the compositor's channel into an 8192-byte buffer (`user/src/bin/term.rs:436`). It treats any
+  read error except WouldBlock as fatal: `Err(_) => zoraya_user::process_exit(1)` (`:277-285`).
+  - *Scenario:* copy more than about 8 KiB in `edit`, focus a terminal and press System+V. `channel_read` returns
+    `BufferTooSmall` and `term` exits, ending the shell session. Before the fix, the paste was an empty message that
+    `term` ignored.
+  - *Fix:* give `term`'s buffer the size `MAX_WIRE_MESSAGE`, or have the compositor send `Paste` only to clients that
+    can read it. Also check every other compositor client that does not use `zoraya-app` (`t_gui`, `guibench`) for the
+    same pattern.
+- **3 (paste into an untrusted window): confirmed.** `Paste` is not sent when the focused client's record is
+  `untrusted`, the same test the drop path makes. `Copy` is still sent to such a window, which ADR-0172 allows.
+- **4 (stale values in the settings window): confirmed, with one small new issue (note).** `s` is read again from the
+  file before `changed`, so a change made in a terminal meanwhile is kept. The controls send absolute values (theme,
+  motion, scale, layout check boxes), except `ACTIVE`, which sends an index into the list the old page showed.
+  - *Scenario:* if `gui.keyboard-layouts` changed in the file since the page was built (`us ua` became `cz us ua`), a
+    click on "Ukrainian" (index 1) selects `us`.
+  - *Fix:* compare the old page's list with the re-read `s.layouts` and refuse or rebuild the page when they differ,
+    or give each `ACTIVE` choice its layout's name.
+- **5 (Open discards unsaved changes): confirmed, with one gap (note).** The first Open over unsaved changes now only
+  arms a warning, and nothing is lost until the chooser returns a file. But `discard_armed` is reset only by the next
+  Open or Save as.
+  - *Scenario:* click Open once (warning shown), keep typing, and much later click Open. The chooser opens without a
+    new warning, and the new text is discarded.
+  - *Fix:* reset `discard_armed` on `Response::Changed(TEXT)`, on Save and on Find, so the warning applies only to the
+    click right after it.
+- **6 (file over 4 Mi characters cut on save): confirmed.** `text_of` refuses a file of more than `MAX_CHARS`
+  characters, on both the file-manager path and the chooser path, and the status says why.
+- **8 (launcher requests): confirmed.** The panel records which program each launcher channel was given to (`l.app`).
+  It takes `SettingsChanged` only from `settings` and `OpenWith` only from `files`. Any other request is answered
+  `INVALID` and its handles are closed, and the `OpenWith` path still reduces the given handle to `READ|CLONE`.
+  `watch_launcher` has a single caller, which was updated.
+- **9 (`SettingsApplied` documentation): confirmed.** The doc now says what the status carries.
+- **10 (misplaced doc comments): confirmed.** The `AddRoomClient` and `OpenWith` comments are back on their items.
+- **11 (pending `Copy` after its client leaves): confirmed.** `drop_client` clears `copy_asked` for its slot. It is the
+  only place that empties a client slot (`clients[slot].take()`).
+- **14 (non-UTF-8 files; the suggested name): confirmed.** A file that is not UTF-8 is not opened. The suggested name is
+  now `untitled.txt`, so the window title of a file opened from the file manager also says `untitled.txt`. That is
+  accurate for a read-only grant, though a little odd.
+- **Performance (note, not a correctness problem).** `App::poll`, `App::wait` and `App::call` now allocate and zero
+  64 KiB on every call, and `message()` allocates 64 KiB on every send. `edit` calls `poll` in a loop on every wake-up.
+  One buffer kept in `App` and reused would avoid this.
+
+### After the check
+
+- The new error (a paste over 8 KiB ended a focused terminal): fixed; `term` reads into a buffer of the largest
+  message.
+- 4's gap: the layout in use is resolved by its place in the list the page showed, then applied only if the file
+  still enables it.
+- 5's gap: any edit after the warning needs a new one.
+- Performance: a sent message is encoded into 1 KiB first and into the largest only when it does not fit; the 64 KiB
+  receive buffer per call remains, recorded as a note.
