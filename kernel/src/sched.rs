@@ -25,6 +25,29 @@ use crate::timer;
 /// A running user thread's time slice.
 const SLICE_NS: u64 = 10_000_000;
 
+/// A shorter slice a test asked for, or 0 for [`SLICE_NS`]. It stands for a
+/// slow host, where a slice holds fewer guest instructions.
+#[cfg(feature = "qemu-test")]
+static TEST_SLICE_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Sets the slice of user threads switched to from now on; 0 restores
+/// [`SLICE_NS`]. The harness restores it before every test.
+#[cfg(feature = "qemu-test")]
+pub fn set_test_slice(ns: u64) {
+    TEST_SLICE_NS.store(ns, Ordering::Relaxed);
+}
+
+fn slice_ns() -> u64 {
+    #[cfg(feature = "qemu-test")]
+    {
+        let ns = TEST_SLICE_NS.load(Ordering::Relaxed);
+        if ns != 0 {
+            return ns;
+        }
+    }
+    SLICE_NS
+}
+
 const READY: u8 = 0;
 const RUNNING: u8 = 1;
 const BLOCKED: u8 = 2;
@@ -276,7 +299,7 @@ fn schedule() {
         }
         let user = next.process.is_some();
         if user && !s.ready.is_empty() {
-            let end = timer::now().plus_nanos(SLICE_NS);
+            let end = timer::now().plus_nanos(slice_ns());
             s.slice = timer::arm_reserved(end, end_of_slice, 0).ok();
         }
         let ttbr0 = next.process.as_ref().map(|p| p.ttbr0());

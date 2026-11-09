@@ -57,13 +57,6 @@ struct Test {
 // as a panic, and `--expect-line` checks what the report said.
 const EXPECTED_FAILURES: usize = 9;
 
-/// Quarantined (docs/backlog.md, "ASID fault"): on more than one CPU this
-/// test may fail until the fault is fixed, and the runner is told so
-/// (`--known-failure`) in the smp4 configurations only.
-const KNOWN_FAILURE: &str = "running_out_of_asids_is_an_error";
-/// Set when [`KNOWN_FAILURE`] failed.
-static KNOWN_FAILED: AtomicBool = AtomicBool::new(false);
-
 static TESTS: &[Test] = &[
     Test {
         name: "device_tree_found_and_parsed",
@@ -528,6 +521,7 @@ pub fn run(start: usize) -> ! {
     for (i, t) in TESTS.iter().enumerate().skip(start) {
         println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
+        sched::set_test_slice(0);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
         bump(&PASSED);
@@ -556,9 +550,6 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     let Some(t) = TESTS.get(i) else { return };
     CURRENT.store(NONE, Ordering::Relaxed);
     bump(&FAILED);
-    if t.name == KNOWN_FAILURE {
-        KNOWN_FAILED.store(true, Ordering::Relaxed);
-    }
     crate::print!("ZORAYA-TEST fail {} panic ", t.name);
     let _ = write!(console::OneLine, "{}", crate::panic::Report(info));
     println!();
@@ -1485,20 +1476,68 @@ fn exited_processes_leave_nothing_behind() {
     assert_eq!(frames::stats(), before);
 }
 
+/// The 255 processes are held suspended, and run one at a time afterwards.
+/// A `hello` that runs takes a heap step of `zoraya_heap::GROW_SIZE` (1 MiB)
+/// for its first allocation, so 255 of them running at once would need more
+/// than the 128 MiB of most configurations: how many were part-way through
+/// at the same time depended on how far each got in its slices, and a slow
+/// host failed the test with "memory allocation of 5 bytes failed" (exit
+/// 101; docs/backlog.md). The short slice stands for such a host: with the
+/// processes running while they were spawned, 219 of the 255 failed so.
 fn running_out_of_asids_is_an_error() {
+    /// Frames one running `hello` may need on top of its suspended self:
+    /// its heap step, twice over for the step's tables and what else it
+    /// takes while it runs.
+    const ROOM: u64 = 2 * (zoraya_heap::GROW_SIZE as u64) / zoraya_pmm::FRAME_SIZE;
+    sched::set_test_slice(500_000);
+    let before = frames::stats().free;
     let mut live = Vec::new();
     let failure = loop {
-        match process::spawn("hello") {
+        match process::spawn_suspended("hello") {
             Ok(process) => live.push(process),
-            Err(e) => break e,
+            Err(e) => break Some(e),
         }
-        assert!(live.len() <= 255, "more live processes than ASIDs");
+        if live.len() > 255 {
+            break None;
+        }
     };
-    assert_eq!(failure, SpawnError::NoMemory);
-    assert_eq!(live.len(), 255, "ASID 0 belongs to no process");
-    for process in live {
-        assert_eq!(process.wait(), exited(7));
+    let free = frames::stats().free;
+    println!(
+        "running_out_of_asids: {} suspended processes take {} frames, {free} stay free",
+        live.len(),
+        before.saturating_sub(free)
+    );
+    // Nothing is asserted until every process has ended: a failed test does
+    // not unwind (`on_panic`), so a panic while they are held would keep
+    // their ASIDs and frames from every later test.
+    let held = live.len();
+    let room = free >= ROOM;
+    let mut records = Vec::new();
+    let mut again = None;
+    if failure == Some(SpawnError::NoMemory) && held == 255 && room {
+        for (i, process) in live.into_iter().enumerate() {
+            process.resume().expect("resume");
+            records.push(process.wait());
+            if i == 0 {
+                // The first one's ASID comes back while 254 are still held.
+                again = Some(process::spawn("hello").map(|p| p.wait()));
+            }
+        }
+    } else {
+        // Ended before their first instruction (`user_thread_start`).
+        for process in &live {
+            let _ = process.signal(RequestKind::Terminate, 0);
+            let _ = process.resume();
+        }
+        for process in live {
+            process.wait();
+        }
     }
+    assert_eq!(failure, Some(SpawnError::NoMemory));
+    assert_eq!(held, 255, "ASID 0 belongs to no process");
+    assert!(room, "no room for a running process beside them");
+    assert!(records.iter().all(|r| *r == exited(7)), "{records:?}");
+    assert_eq!(again, Some(Ok(exited(7))), "an ASID comes back at once");
     assert_eq!(run_program("hello"), exited(7), "ASIDs come back");
 }
 
@@ -2247,9 +2286,8 @@ fn stack_canary_intact() {
 
 fn harness_resumes_after_panic() {
     // Runs after the deliberate failures: the harness recorded exactly those
-    // and came back to run this test, and the quarantined one if it failed.
-    let known = usize::from(KNOWN_FAILED.load(Ordering::Relaxed) && platform().1.cpu_count > 1);
-    assert_eq!(FAILED.load(Ordering::Relaxed), EXPECTED_FAILURES + known);
+    // and came back to run this test.
+    assert_eq!(FAILED.load(Ordering::Relaxed), EXPECTED_FAILURES);
 }
 
 /// Frames `hold_frames` took, as a list through the frames themselves: the
