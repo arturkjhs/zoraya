@@ -777,6 +777,44 @@ pub fn key_bytes(key: u32, shift: bool, text: Option<char>, out: &mut [u8; 8]) -
     sequence.len()
 }
 
+/// What one wait on the compositor's channel gave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Waited {
+    /// A message of this many bytes.
+    Message(usize),
+    /// Nothing within the wait: the compositor is alive but slow.
+    Nothing,
+    /// The channel is closed: the compositor is gone.
+    Gone,
+}
+
+/// Waits for a reply, skipping the events that may come first
+/// (`is_event`), for as long as the channel is open: a compositor that is
+/// slow to start (its wallpaper, its blur, its first frame: seconds under
+/// TCG) is waited for, and `on_slow` runs once, when the first wait gives
+/// nothing; one that is gone gives `None`. `term` never panics on either.
+pub fn await_reply(
+    mut wait: impl FnMut(&mut [u8]) -> Waited,
+    reply: &mut [u8],
+    is_event: impl Fn(&[u8]) -> bool,
+    mut on_slow: impl FnMut(),
+) -> Option<usize> {
+    let mut told = false;
+    loop {
+        match wait(reply) {
+            Waited::Message(n) if n <= reply.len() && !is_event(&reply[..n]) => return Some(n),
+            Waited::Message(_) => {}
+            Waited::Nothing => {
+                if !told {
+                    told = true;
+                    on_slow();
+                }
+            }
+            Waited::Gone => return None,
+        }
+    }
+}
+
 #[cfg(test)]
 extern crate std;
 

@@ -556,3 +556,49 @@ fn cells_at_the_pictures_edge_read_only_when_whole() {
         }
     }
 }
+
+/// A slow compositor is waited for (and said so once), events before the
+/// reply are skipped, and one that is gone gives no reply: no panic either
+/// way (CI, 2026-11-09: a first frame slower than term's old 5 s).
+#[test]
+fn a_reply_is_awaited_while_the_compositor_lives() {
+    use std::vec::Vec;
+    let script = |steps: Vec<Waited>| {
+        let mut steps = steps.into_iter();
+        move |buf: &mut [u8]| {
+            let w = steps.next().unwrap_or(Waited::Gone);
+            if let Waited::Message(n) = w {
+                // An event is a message starting 'e'.
+                buf[0] = if n == 1 { b'e' } else { b'r' };
+            }
+            w
+        }
+    };
+    let is_event = |m: &[u8]| m.first() == Some(&b'e');
+    let mut reply = [0u8; 8];
+    let mut slow = 0;
+    let steps = std::vec![
+        Waited::Nothing,
+        Waited::Nothing,
+        Waited::Nothing,
+        Waited::Message(1),
+        Waited::Message(4),
+    ];
+    let got = await_reply(script(steps), &mut reply, is_event, || slow += 1);
+    assert_eq!(got, Some(4));
+    assert_eq!(slow, 1, "said once");
+    let got = await_reply(
+        script(std::vec![Waited::Nothing, Waited::Gone]),
+        &mut reply,
+        is_event,
+        || {},
+    );
+    assert_eq!(got, None);
+    let got = await_reply(
+        script(std::vec![Waited::Message(99)]),
+        &mut reply,
+        is_event,
+        || {},
+    );
+    assert_eq!(got, None, "too long a message is not a reply; then gone");
+}
