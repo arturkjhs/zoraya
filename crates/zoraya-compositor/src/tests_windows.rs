@@ -5,7 +5,7 @@
 use super::*;
 
 /// A pointer axis value for a pixel of a `side`-pixel display.
-fn axis(p: i64, side: u32) -> u32 {
+pub(super) fn axis(p: i64, side: u32) -> u32 {
     let d = i64::from(side - 1);
     ((p * 65535 + d - 1) / d) as u32
 }
@@ -70,7 +70,7 @@ impl Setup {
 
     /// Moves the pointer to `(x, y)` physical, with the left button's
     /// change if any.
-    fn at(&mut self, x: i64, y: i64, button: Option<u32>) {
+    pub(super) fn at(&mut self, x: i64, y: i64, button: Option<u32>) {
         let (w, h) = self.c.size();
         self.point(axis(x, w), axis(y, h), button);
     }

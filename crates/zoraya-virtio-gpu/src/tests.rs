@@ -524,3 +524,32 @@ fn a_new_size_shows_the_other_resource_then_drops_the_old() {
     assert_eq!(seen[0].words[0], RESOURCE);
     assert_eq!(seen[3].words[0], 2);
 }
+
+#[test]
+fn a_new_size_is_told_once_and_never_between_info_and_the_next_request() {
+    let mut a = Announce::default();
+    // Nothing attached yet: nothing to tell.
+    assert!(!a.tell((1600, 1000)));
+    a.info((1024, 768));
+    assert!(!a.may_ask(), "Attach uses the size Info gave");
+    a.served(Some((1024, 768)));
+    assert!(a.may_ask());
+    assert!(!a.tell((1024, 768)), "the attached size");
+    assert!(a.tell((1600, 1000)));
+    assert!(!a.tell((1280, 800)), "one before each Info");
+    // The compositor asks: no Resized until the request after the Info.
+    a.info((1280, 800));
+    assert!(!a.may_ask() && !a.tell((1440, 900)));
+    a.served(Some((1280, 800)));
+    assert!(!a.tell((1280, 800)));
+    assert!(a.tell((1440, 900)), "a later change is told");
+    // Back to the attached size before the compositor asks: it skips the
+    // Attach, and its flush ends the wait.
+    a.info((1280, 800));
+    a.served(None);
+    assert!(a.may_ask() && !a.tell((1280, 800)));
+    // A Resized that did not fit the queue is due again.
+    assert!(a.tell((800, 600)));
+    a.unsent();
+    assert!(a.tell((800, 600)));
+}

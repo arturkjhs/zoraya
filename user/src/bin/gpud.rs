@@ -21,7 +21,7 @@ use zoraya_user::{
     memory_map, port_create, port_subscribe, port_wait, println, startup,
 };
 use zoraya_virtio::{Registers, Shared};
-use zoraya_virtio_gpu::{Error, Gpu, MAX_RUNS, Rect, SHARED_MEMORY};
+use zoraya_virtio_gpu::{Announce, Error, Gpu, MAX_RUNS, Rect, SHARED_MEMORY};
 
 extern crate alloc;
 
@@ -93,12 +93,8 @@ struct Driver {
     port: Handle,
     pin: Option<Handle>,
     reply: [u8; 64],
-    /// The size of the framebuffer attached last.
-    attached: (u32, u32),
-    /// A `Resized` was sent and no `Info` has come since (ADR-0246: one at
-    /// a time, so that it never stands where the compositor waits for a
-    /// reply).
-    told: bool,
+    /// When a new display size may be told (ADR-0246).
+    announce: Announce,
 }
 
 impl Driver {
@@ -186,7 +182,6 @@ impl Driver {
                     // longer reads that memory.
                     let _ = dma_unpin(old);
                 }
-                self.attached = self.gpu.size();
                 status::OK
             }
             // Refused before any command: nothing reached the device.
@@ -195,8 +190,9 @@ impl Driver {
                 self.status(e)
             }
             // A command failed part-way: the device may hold the backing,
-            // and a resource exists. Stop the device first (review R4); the
-            // old pin, if any, goes with the process.
+            // and a resource exists. Stop the device first (review R4); an
+            // older pin, if any, stays quarantined by the kernel with the
+            // device (ADR-0070), never unpinned while the device may read it.
             Err(_) => {
                 self.pin = Some(pin);
                 self.lost()
@@ -204,12 +200,14 @@ impl Driver {
         }
     }
 
-    /// After a display event, tells the compositor the new size (ADR-0246):
-    /// only once something is attached, only when the size differs from the
-    /// attached one, and only one `Resized` before its `Info`. A size the
-    /// device gives while one is unanswered reaches the compositor in that
-    /// `Info`.
+    /// After a display event, tells the compositor the new size (ADR-0246),
+    /// when [`Announce`] allows: never between an `Info` and the request
+    /// after it (the size is not even asked then, so `Attach` uses the size
+    /// `Info` gave), and one `Resized` before each `Info`.
     fn display_event(&mut self) {
+        if !self.announce.may_ask() {
+            return;
+        }
         if self.gpu.display_changed() {
             match self.run(|gpu, wait| gpu.display_info(wait).map(|_| ())) {
                 Ok(()) => {}
@@ -219,7 +217,7 @@ impl Driver {
             }
         }
         let size = self.gpu.size();
-        if self.pin.is_none() || self.told || size == self.attached {
+        if self.pin.is_none() || !self.announce.tell(size) {
             return;
         }
         let m = Resized {
@@ -229,12 +227,9 @@ impl Driver {
         let mut out = [0u8; 64];
         match encode(&m, NO_REPLY, &mut out) {
             Ok(n) => match channel_write(self.client, &out[..n], &[]) {
-                Ok(()) => {
-                    println!("gpud: display {}x{}", size.0, size.1);
-                    self.told = true;
-                }
+                Ok(()) => println!("gpud: display {}x{}", size.0, size.1),
                 // A full queue: the next look tries again.
-                Err(Status::WouldBlock) => {}
+                Err(Status::WouldBlock) => self.announce.unsent(),
                 Err(_) => self.stop(),
             },
             Err(_) => self.stop(),
@@ -271,7 +266,6 @@ impl Driver {
         }
         match header.ordinal {
             1 if decode::<Info>(bytes, received).is_ok() => {
-                self.told = false;
                 let (width, height) = self.gpu.size();
                 let m = InfoReply {
                     status: Below(status::OK),
@@ -280,12 +274,17 @@ impl Driver {
                     format: FORMAT_XRGB,
                 };
                 self.respond(t, &m);
+                self.announce.info((width, height));
+                return;
             }
             2 if decode::<Attach>(bytes, received).is_ok() => {
                 let memory = handles[0];
                 let s = self.attach(memory);
                 let _ = handle_close(memory);
                 self.done(t, s);
+                let attached = (s == status::OK).then(|| self.gpu.size());
+                self.announce.served(attached);
+                return;
             }
             3 => match decode::<Flush>(bytes, received) {
                 Ok((_, f)) => {
@@ -318,6 +317,8 @@ impl Driver {
                 );
             }
         }
+        // Any other request ends the window after an `Info`.
+        self.announce.served(None);
     }
 }
 
@@ -371,8 +372,7 @@ fn main() -> i32 {
         port,
         pin: None,
         reply: [0; 64],
-        attached: (0, 0),
-        told: false,
+        announce: Announce::default(),
     };
     match driver.run(|gpu, wait| gpu.display_info(wait).map(|_| ())) {
         Ok(()) => {

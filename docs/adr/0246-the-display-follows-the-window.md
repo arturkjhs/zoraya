@@ -55,14 +55,19 @@ can hand the compositor a size change through a fake driver.
 - **Precedent:** None that does this on purpose.
 
 ### Option C: The driver reports the new size; the compositor attaches a new framebuffer (Linux DRM's hotplug)
-- **Description:** On the configuration interrupt `gpud` reads `events_read`, clears it, asks `GET_DISPLAY_INFO`
-  and, when the size changed, sends the compositor an event `Resized { width, height }` (a new ordinal of ADR-0090's
+- **Description:** Between requests, every 100 ms (one register read; the configuration interrupt is not used),
+  `gpud` reads `events_read`, clears the display event, asks `GET_DISPLAY_INFO` and, when the size differs from the
+  attached one, sends the compositor an event `Resized { width, height }` (a new ordinal of ADR-0090's
   protocol, from driver to compositor, the first message the driver sends unasked). The compositor answers with `Info`
   and a new `Attach` of a framebuffer of that size; `gpud` makes a second resource, backs it, points scanout 0 at it
   and unreferences the old one, so the old framebuffer stays shown until the new one is complete. The compositor's
-  attach path does the rest: scale from `gui.scale` or the width, wallpaper, bar and dock, windows moved back on
-  screen and maximised or tiled windows resized, `Configure` to every window whose size or scale changed. A burst of
-  events is coalesced: the compositor acts on the latest size once its in-flight flush is answered.
+  attach path does the rest: scale from `gui.scale` or the width, wallpaper, bar and dock, every toplevel kept at its
+  logical size as far as the work area holds it and moved back into it, legacy windows moved back, popups closed
+  (sheets too at a new scale), and a `Configure` to every toplevel. A burst of events is coalesced: the compositor acts
+  on the latest size once its in-flight flush is answered. The compositor's `Info` and `Attach` take the next message
+  on the channel as their reply, so the driver sends one `Resized` before each `Info` and none between an `Info` and
+  the request after it, and its `Attach` uses the size that `Info` gave; a size back at the attached one is not
+  attached again (the whole-screen flush that follows ends the driver's wait).
 - **Evidence for:** Drivers 1 to 4. It is what Linux's virtio-gpu DRM driver does (a hotplug event, then the
   compositor reads the new mode and makes new framebuffers); Windows broadcasts `WM_DISPLAYCHANGE` and every top-level
   window lays out again (desktop/survey.md#display-scaling records the per-monitor relayout).
@@ -106,9 +111,11 @@ that stays the first size.
 
 ## Invariants
 - **INV-0246-1.** After a display size change the compositor composes only into a framebuffer of the new size, and
-  every window's frame lies at least partly on screen. *Check:* host test of the compositor with a fake display.
-- **INV-0246-2.** `gpud` sends `Resized` only for a size from 1 to 4096 a side that differs from the size it last
-  reported. *Check:* host test of `zoraya-virtio-gpu` with a fake device.
+  every toplevel's and legacy window's frame lies in the work area when the display is at least as large as the bar,
+  the dock's strip and one title bar. *Check:* host test of the compositor with a fake display.
+- **INV-0246-2.** `gpud` sends `Resized` only once something is attached, only for a size (1 to 4096 a side) that
+  differs from the attached one, one before each `Info`, and none between an `Info` and the request after it.
+  *Check:* host test of `zoraya-virtio-gpu`'s `Announce`, which `gpud` asks before each `Resized`.
 
 ## Open questions
 - Whether cocoa reports the window size in pixels or points on a Retina display (the source multiplies by the backing

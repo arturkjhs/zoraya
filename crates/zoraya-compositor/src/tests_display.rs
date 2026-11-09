@@ -139,3 +139,72 @@ fn a_scale_set_in_the_settings_applies_at_once() {
     let c = configures(&s.f().take(end));
     assert_eq!((c[0].width, c[0].height, c[0].scale), (400, 200, 1));
 }
+
+#[test]
+fn a_size_back_to_the_attached_one_attaches_nothing_and_flushes_all() {
+    let mut s = setup();
+    let attaches = s.f().attaches;
+    // The driver said 800 × 600, but the display was back at W × H when the
+    // compositor asked: the driver would refuse a second framebuffer of the
+    // same size.
+    let display = s.f().display.unwrap();
+    let m = display::Resized {
+        width: 800,
+        height: 600,
+    };
+    s.f().send(display, message(&m, 0), vec![]);
+    s.c.step();
+    s.c.step();
+    assert_eq!(s.c.size(), (W, H));
+    assert_eq!(s.f().attaches, attaches, "no Attach");
+    assert!(!s.f().closed.contains(&display), "the driver stays");
+    // The whole screen goes out: the driver's next request after its Info.
+    assert_eq!(s.f().flushes.last(), Some(&(0, 0, W, H)));
+}
+
+#[test]
+fn popups_close_and_legacy_windows_come_back_at_a_new_size() {
+    let mut s = setup_with(|f| f.display_size = (1280, 800));
+    let end = s.client(64);
+    let id = s.window_of(end, 300, 200, 0x0040_4040);
+    // The first window has the focus, so it may open a popup.
+    let (legacy, _) = s.window(100, 80, 3);
+    s.f().take(legacy);
+    let m = s.f().memory(vec![7; 20 * 10], 800, false);
+    let out = s.request(
+        end,
+        &gui::CreatePopup {
+            parent: id,
+            x: 10,
+            y: 20,
+            width: 20,
+            height: 10,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(p.status.0, status::OK);
+    // The display shrinks below the legacy window's place (its frame
+    // reaches y = 219; the new work area ends far above that).
+    let lk = s.c.stack().find(|k| k.client == 1).unwrap();
+    assert!(s.outer(1, lk.id).bottom() > 160);
+    resize(&mut s, 320, 260);
+    let closed = s
+        .f()
+        .take(end)
+        .iter()
+        .any(|m| decode::<gui::CloseRequested>(m, 0).is_ok_and(|(_, c)| c.window == p.window));
+    assert!(closed, "the popup is closed, and its client told");
+    assert!(
+        s.c.window(Key {
+            client: 0,
+            id: p.window
+        })
+        .is_none()
+    );
+    let legacy_frame = s.outer(1, lk.id);
+    assert!(inside(&s, legacy_frame), "{legacy_frame:?}");
+}

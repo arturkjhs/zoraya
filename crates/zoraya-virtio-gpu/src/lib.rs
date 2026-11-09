@@ -413,6 +413,61 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
     }
 }
 
+/// When the driver may tell its client a new display size (ADR-0246),
+/// apart from the device so that the host tests reach it. The client asks
+/// `Info` and then `Attach` with `call`s that take the next message on the
+/// channel as their reply, so no `Resized` may stand between them; and the
+/// size `Attach` uses must be the one `Info` gave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Announce {
+    /// A `Resized` was sent and no `Info` has come since.
+    told: bool,
+    /// The size the last `Info` reply gave, until the next request: the
+    /// display's size is not asked again before then.
+    offered: Option<(u32, u32)>,
+    /// The size of the framebuffer attached last, if any.
+    attached: Option<(u32, u32)>,
+}
+
+impl Announce {
+    /// `Info` was answered with `size`.
+    pub fn info(&mut self, size: (u32, u32)) {
+        self.told = false;
+        self.offered = Some(size);
+    }
+
+    /// A request other than `Info` was served; `attached` is the size of a
+    /// framebuffer it attached.
+    pub fn served(&mut self, attached: Option<(u32, u32)>) {
+        self.offered = None;
+        if attached.is_some() {
+            self.attached = attached;
+        }
+    }
+
+    /// Whether the display's size may be asked now (not between an `Info`
+    /// and the request after it).
+    pub fn may_ask(&self) -> bool {
+        self.offered.is_none()
+    }
+
+    /// Whether to send `Resized` for a display of `size`: something is
+    /// attached, at another size, no `Resized` is unanswered, and no `Info`
+    /// is waiting for its `Attach`. A true answer counts it as sent.
+    pub fn tell(&mut self, size: (u32, u32)) -> bool {
+        let due = !self.told && self.offered.is_none() && self.attached.is_some_and(|a| a != size);
+        if due {
+            self.told = true;
+        }
+        due
+    }
+
+    /// The `Resized` could not be sent (a full queue): it is due again.
+    pub fn unsent(&mut self) {
+        self.told = false;
+    }
+}
+
 #[cfg(test)]
 mod tests;
 

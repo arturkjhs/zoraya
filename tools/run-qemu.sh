@@ -195,10 +195,14 @@ if [ "$gui" = 1 ]; then
     esac
     # ADR-0246: any size the driver takes (1 to 4096 a side).
     if [ -n "$gui_size" ]; then
+        case $gui_size in *x*) ;; *) die "--gui-size is WxH, each from 1 to 4096" ;; esac
         xres=${gui_size%x*} yres=${gui_size#*x}
-        case $xres$yres in
-            *[!0-9]* | "") die "--gui-size is WxH" ;;
-        esac
+        for side in "$xres" "$yres"; do
+            case $side in
+                "" | *[!0-9]*) die "--gui-size is WxH, each from 1 to 4096" ;;
+            esac
+            [ "$side" -ge 1 ] && [ "$side" -le 4096 ] || die "--gui-size is WxH, each from 1 to 4096"
+        done
     fi
     set -- "$@" -device virtio-gpu-device,bus=virtio-mmio-bus.23,xres=$xres,yres=$yres \
         -device virtio-keyboard-device,bus=virtio-mmio-bus.15 \
