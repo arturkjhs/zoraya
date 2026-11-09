@@ -25,6 +25,17 @@ name = "zoraya-adr-check"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-app"
+version = "0.1.0"
+dependencies = [
+ "zoraya-proto-gui",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+ "zoraya-tokens",
+ "zoraya-ui",
+]
+
+[[package]]
 name = "zoraya-ar"
 version = "0.1.0"
 
@@ -78,6 +89,8 @@ dependencies = [
  "zoraya-proto-gui",
  "zoraya-proto-input",
  "zoraya-protocol",
+ "zoraya-settings",
+ "zoraya-shell",
  "zoraya-test-alloc",
  "zoraya-text",
  "zoraya-tokens",
@@ -256,6 +269,14 @@ dependencies = [
  "zoraya-test-alloc",
  "zoraya-text",
  "zoraya-tokens",
+]
+
+[[package]]
+name = "zoraya-panel"
+version = "0.1.0"
+dependencies = [
+ "zoraya-settings",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -470,6 +491,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-ui"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fonts",
+ "zoraya-paint",
+ "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
+]
+
+[[package]]
 name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
@@ -485,6 +517,7 @@ dependencies = [
  "zoraya-fs-service",
  "zoraya-heap",
  "zoraya-keymap",
+ "zoraya-panel",
  "zoraya-proto-block",
  "zoraya-proto-display",
  "zoraya-proto-file",
@@ -502,6 +535,7 @@ dependencies = [
  "zoraya-text",
  "zoraya-tokens",
  "zoraya-tty",
+ "zoraya-ui",
  "zoraya-virtio",
  "zoraya-virtio-gpu",
  "zoraya-virtio-input",

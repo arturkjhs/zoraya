@@ -1,6 +1,7 @@
 name     zosh
 summary  the shell
 usage    zosh
+option   --room NAME text  start in the room NAME, as the desktop's dock launches it
 cwd      none
 setting  shell.prompt        text   '{cwd}> '  the prompt; {cwd} is the current directory with ~ for home
 setting  shell.home          path   /home  where an interactive shell starts, and what ~ and cd alone mean

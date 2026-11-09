@@ -1,0 +1,21 @@
+[package]
+name = "zoraya-ui"
+description = "Zoraya's widget toolkit: widgets, layout, painting and events from the tokens (ADR-0165)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# INV-0165-2: no channel, no runtime: the toolkit sends nothing.
+[dependencies]
+zoraya-tokens = { path = "../zoraya-tokens" }
+zoraya-text = { path = "../zoraya-text" }
+zoraya-fonts = { path = "../zoraya-fonts" }
+zoraya-paint = { path = "../zoraya-paint" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

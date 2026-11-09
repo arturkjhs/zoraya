@@ -35,6 +35,7 @@
 <   pwd       print the current directory
 ^ \r\n  reboot    start the machine again
 ^ \r\n  rm        remove files
+^ \r\n  room      list, enter, make or remove rooms
 ^ \r\n  search    find lines that contain text
 ^ \r\n  set       set a variable
 ^ \r\n  settings  show or change settings

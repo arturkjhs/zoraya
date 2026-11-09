@@ -624,6 +624,51 @@ fn full_redraw(gui: &Gui) {
     let _ = handle_close(f.end);
 }
 
+/// 7d's measurement (plan.md: "the toolkit's paint time for the settings
+/// window"): a settings-like page of `zoraya-ui` widgets, 640 × 480 at
+/// scale 1, painted once with an empty glyph cache and then ten times.
+fn toolkit_paint() {
+    use alloc::boxed::Box;
+    use zoraya_tokens::{Appearance, Scale};
+    use zoraya_ui::{
+        Button, CheckBox, Column, Label, ListView, Painter, RadioGroup, Row, Separator, Switch,
+        TextField, Widget, Window,
+    };
+    let page: Vec<Box<dyn Widget>> = alloc::vec![
+        Box::new(Label::new("Appearance")),
+        Box::new(RadioGroup::new(1, &["Light", "Dark"], 0)),
+        Box::new(Switch::new(2, true)),
+        Box::new(CheckBox::new(3, "Wallpaper follows the time of day", false)),
+        Box::new(Separator::new()),
+        Box::new(Label::new("Keyboard")),
+        Box::new(ListView::new(4, &["US", "Українська", "Čeština"])),
+        Box::new(TextField::new(5, "gui.keyboard-layouts us ua cz")),
+        Box::new(Row::new(alloc::vec![
+            Box::new(Button::new(6, "Cancel")) as Box<dyn Widget>,
+            Box::new(Button::new(7, "Apply")),
+        ])),
+    ];
+    let mut p = Painter::new(Scale::ONE, Appearance::Light);
+    let size = (Scale::ONE.logical(640), Scale::ONE.logical(480));
+    let mut w = Window::new(Box::new(Column::new(page)), size);
+    w.layout(&mut p);
+    let mut pixels = alloc::vec![0u32; 640 * 480];
+    let t = clock_monotonic();
+    w.paint(&mut p, &mut pixels, 640);
+    let first = clock_monotonic() - t;
+    let rounds = 10;
+    let t = clock_monotonic();
+    for _ in 0..rounds {
+        w.paint(&mut p, &mut pixels, 640);
+    }
+    let each = (clock_monotonic() - t) / rounds;
+    println!(
+        "t_gui: measure: toolkit paint of a settings page 640 x 480: {} us the first time, {} us after",
+        first / 1000,
+        each / 1000
+    );
+}
+
 /// 7b's measurements (plan.md): a frame composed with the switcher open
 /// (its glass blurs what is under it), and frames committed under it.
 fn switcher_cost(gui: &Gui, keyboard: &FakeInput) {
@@ -676,6 +721,7 @@ fn main() -> i32 {
     a_hung_display_driver_stalls_nobody(&mut gui, &keyboard, &mut a, &mut b);
     full_redraw(&gui);
     switcher_cost(&gui, &keyboard);
+    toolkit_paint();
     let _ = handle_close(a.end);
     let _ = handle_close(b.end);
     let _ = handle_close(keyboard.0);

@@ -57,7 +57,12 @@ impl Setup {
             .expect("a CommitDone")
     }
 
-    fn request<'a, M: Message<'a>>(&mut self, end: u32, m: &M, handles: Vec<u32>) -> Vec<Vec<u8>> {
+    pub(super) fn request<'a, M: Message<'a>>(
+        &mut self,
+        end: u32,
+        m: &M,
+        handles: Vec<u32>,
+    ) -> Vec<Vec<u8>> {
         self.f().send(end, message(m, 11), handles);
         self.c.step();
         self.f().take(end)
@@ -74,7 +79,7 @@ impl Setup {
         self.c.window(Key { client, id }).unwrap().body_rect()
     }
 
-    fn outer(&self, client: usize, id: u32) -> Rect {
+    pub(super) fn outer(&self, client: usize, id: u32) -> Rect {
         let f = self.c.frame();
         self.c.window(Key { client, id }).unwrap().outer(&f)
     }
@@ -364,12 +369,27 @@ fn system_w_asks_to_close_and_left_and_right_tile() {
     );
     s.keys(&[(meta, 1), (code::LEFT, 1), (code::LEFT, 0), (meta, 0)]);
     let c = configures(&s.f().take(a));
-    // Half of 640 less the border each side; the work area's height less
-    // the bar, the title bar and the bottom border.
-    assert_eq!((c[0].width, c[0].height), (318, 480 - 28 - 36 - 1));
+    // Half of 640 less the border each side; the work area's height (the
+    // screen less the bar and the dock's strip, 76) less the title bar and
+    // the bottom border.
+    assert_eq!((c[0].width, c[0].height), (318, 480 - 28 - 76 - 36 - 1));
     assert_eq!(s.body(0, 1).x, 1);
     s.keys(&[(meta, 1), (code::RIGHT, 1), (code::RIGHT, 0), (meta, 0)]);
     assert_eq!(s.body(0, 1).x, 321);
+}
+
+/// Mutants 7d: at scale 2 a tiled window is half the logical width less
+/// its two borders.
+#[test]
+fn tiling_at_scale_two() {
+    let mut s = setup_with(|f| f.display_size = (2048, 1536));
+    let (a, _, _) = s.toplevel(100, 60, 1);
+    s.f().take(a);
+    let meta = code::RIGHT_META;
+    s.keys(&[(meta, 1), (code::LEFT, 1), (code::LEFT, 0), (meta, 0)]);
+    let c = configures(&s.f().take(a));
+    assert_eq!(c[0].width, 1024 / 2 - 2);
+    assert_eq!(s.body(0, 1).width, 1020);
 }
 
 /// The title bar moves the window; the buttons minimise and close; a

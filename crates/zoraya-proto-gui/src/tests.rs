@@ -195,6 +195,10 @@ fn the_client_protocol_has_no_path_for_pixels_or_input() {
         assert!(!CLIENT_REQUESTS.contains(&ordinal) && !CLIENT_EVENTS.contains(&ordinal));
         assert!(!MANAGER_REQUESTS.contains(&ordinal));
     }
+    for ordinal in CLIENT_MANAGER_REQUESTS {
+        assert!(!CLIENT_REQUESTS.contains(&ordinal) && !CLIENT_EVENTS.contains(&ordinal));
+        assert!(!MANAGER_REQUESTS.contains(&ordinal) && !MANAGER_EVENTS.contains(&ordinal));
+    }
     // Everything a client receives: no handles.
     assert_eq!(<DisplayReply as Message>::HANDLES, 0);
     assert_eq!(<Done as Message>::HANDLES, 0);
@@ -250,4 +254,49 @@ fn the_client_protocol_has_no_path_for_pixels_or_input() {
         .unwrap(),
     ];
     assert!(sizes.iter().all(|s| *s <= 16 + 24));
+}
+
+/// The client manager's messages (ADR-0168, ADR-0172) round-trip and
+/// decode any bytes without panicking.
+#[test]
+fn the_client_managers_messages() {
+    let mut out = [0; 8192];
+    let add = AddRoomClient {
+        untrusted: 1,
+        colour: 0,
+        room: zoraya_protocol::Data(b"agent-1"),
+        app: zoraya_protocol::Data(b"term"),
+        entries: zoraya_protocol::Data("+w ~/sandbox/agent-1\n+r ~/Документи".as_bytes()),
+        line: zoraya_protocol::Data(b"room agent-1 term"),
+    };
+    let length = encode(&add, 3, &mut out).unwrap();
+    assert_eq!(
+        decode::<AddRoomClient<'_>>(&out[..length], 1).unwrap().1,
+        add
+    );
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<AddRoomClient<'_>>(bytes, 1);
+    });
+    let rooms = SetRooms {
+        current: zoraya_protocol::Data(b"project"),
+        rooms: zoraya_protocol::Data(b"project --colour 1 +w ~/project\n"),
+    };
+    let length = encode(&rooms, 4, &mut out).unwrap();
+    assert_eq!(decode::<SetRooms<'_>>(&out[..length], 0).unwrap().1, rooms);
+    let dock = SetDock {
+        apps: zoraya_protocol::Data(b"term\tterm\nedit\tedit FILE\n"),
+    };
+    let length = encode(&dock, 5, &mut out).unwrap();
+    assert_eq!(decode::<SetDock<'_>>(&out[..length], 0).unwrap().1, dock);
+    let long = [b'x'; MAX_ROOMS_TEXT + 1];
+    let too_long = SetRooms {
+        current: zoraya_protocol::Data(b""),
+        rooms: zoraya_protocol::Data(&long),
+    };
+    assert!(encode(&too_long, 1, &mut out).is_err());
+    total(DockPressed {
+        kind: dock::ROOM,
+        index: 2,
+    });
+    total(AttachClientManager {});
 }

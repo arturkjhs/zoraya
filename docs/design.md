@@ -506,6 +506,10 @@ Measured (`t_gui` in the test kernel, `make test-qemu-auto-default` and `make te
 | The frame that opens the switcher (blur of the scene under it) | 18.8 ms | 107 ms |
 | A frame committed under the open switcher | 18.7 ms | 104 ms |
 
+A commit under the open switcher blurs the scene again (its glass is a blur of what is under it), so it costs what
+opening does; a pointer that only moves over it reuses the last frame. Under TCG a full redraw is 55 ms: every GUI
+script passes under TCG, typing at 8 ms a key with the frames that lag behind it.
+
 The compositor's start and its frames (`compd`'s own report on the console, `make test-gui`'s terminal script,
 2026-11-09, QEMU 11.1.2 on the M4 Mac mini; GitHub's runners are about 2.3 times slower under TCG):
 
@@ -545,6 +549,86 @@ Stage 7c (TASK-24), on the accepted [ADR-0163](adr/0163-keyboard-layouts.md).
 - **The GUI test** `tests/gui/layouts.script` switches to `ua`, types a Ukrainian name, switches to `cz`, types
   `příklad.txt` and letters only dead keys reach, and reads them back; the runner types each letter with the keys the
   layout's table gives (`layout NAME`), a letter with no key through a dead key.
+
+## Rooms, the dock and the panel (as built)
+
+Stage 7d (TASK-24), on the accepted [ADR-0165](adr/0165-widget-toolkit.md), [ADR-0168](adr/0168-first-applications.md)
+and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-panel-beside-init-in-stage-7d.md),
+[ADR-0243](adr/0243-a-rooms-tint-on-the-frame-only.md) and [ADR-0244](adr/0244-the-toolkits-own-events.md).
+
+- **`zoraya-ui`**: label, button, text field (editing by character), check box, switch, radio group, list, scroll
+  view, separator, menu, dialog, progress bar; rows, columns and grids with `gap.controls` and `padding.window`;
+  painting through `zoraya-paint` and `zoraya-text` from the tokens, every widget clipped to its rectangle
+  (INV-0165-1); Tab and Shift+Tab over the focusable widgets, arrows in lists and radio groups, Enter, Escape closing a
+  menu or dialog (INV-0165-4). Widgets take two events of their own, a key press and a logical pointer (ADR-0244).
+- **`zoraya-app`**: an application's loop over a `Platform` (the compositor's channel and memory objects): it opens
+  toplevels of widget trees, paints and commits one frame at a time, answers `Configure` with a new buffer, and turns
+  keys, the pointer, focus and `CloseRequested` into widget events or into what the application acts on. It sends
+  only client requests (INV-0165-2). No program uses it yet: `files`, `edit` and `settings` (7e, 7f) will.
+- **The room table**: `/config/rooms`, one room a line, `NAME [--untrusted] [--colour N] +r PATH +w PATH...`, read
+  and written by `zoraya-settings`' `rooms` module (a total reader, the writer keeping every other byte); a trusted
+  room without `--colour` takes the lowest free slot, more than four repeat the least used.
+- **`room` in `zosh`**: `room` lists (the current one marked `*`), `room NAME` enters (the prompt shows the name, the
+  current directory becomes the room's first `+w` directory, every line gets the room's grants, which `grants` shows
+  as `(room NAME)`), `room --leave`, `room new NAME +w PATH...` (a path under home is written with `~`), `room remove
+  NAME`. `room new --untrusted` is refused with a hint naming ADR-0056. The panel starts a shell in a room with
+  `zosh --room NAME`.
+- **The panel** (`panel`, ADR-0168; `zoraya-panel` holds its logic): `init` starts it once per GUI with the client
+  manager (`AttachClientManager`), a clone of the root, the console to write, its job and the image directory. It
+  reads `/config/rooms` at start, at every dock press and every second, tells the compositor the table and the current
+  room (`SetRooms`) and the dock's applications (`SetDock`), and on `DockPressed` launches a terminal into the current
+  room (the dock's icon with no window, or System+Enter) or enters a chip's room. A launch gives `term` the
+  compositor's channel and its end of the shell's channel, and `zosh` the console, its job, the image directory, its
+  end and a start-up record (ADR-0153 rule 8) of exactly its room's grants, never the volume's root (ADR-0242's
+  condition); nothing else (INV-0168-1). `home` gives `+r /`, `+w ~`, `+w /config` and `+w /tmp`: the volume to read,
+  and the person's files, configuration and temporary files to change. The shell serves its own files and every
+  command's grants from that table, and refuses a path it was not given with ADR-0153's hint (`hint: cp tried to
+  change ~/copy.txt, which it was not given`, `to allow it: +w ~ cp notes.txt ~/copy.txt`); a room's shell takes its
+  room from the table, since it cannot read `/config/rooms`; a trusted room's shell also holds `+r /bin`, `+r /usr`
+  and `+r /etc` (the toolchain, unless a room grant covers it; ADR-0172's decision of 2026-11-09), and every shell
+  the panel launches has a broker beside it (slots 7 and 8, as `init` gives its first; `user/src/beside.rs`), which
+  ends when the shell's connection closes and nothing it started runs, so POSIX programs run in rooms
+  (`tests/posix/room-gui.script`); a grant
+  whose path does not exist gives it nothing to hold or list. A tree entry cannot publish (ADR-0153's table), so such
+  a shell writes `/config/rooms` and `/config/settings` in place, not by an atomic replace (accepted for now; the
+  crash window is in `docs/backlog.md`). The
+  console's shell keeps the root. The compositor learns the client with its record (`AddRoomClient`: the room, its
+  trust and colour, the application, the entries in ADR-0153's words, the line), and the pills show exactly what the
+  shell holds. `init` still starts the first terminal, with `home`'s record, and tells the compositor its entries
+  itself (ADR-0242).
+- **What the compositor draws of rooms**, from its records only (INV-0172-1): the title bar tinted by the room at 46 of
+  255 (the body stays the client's, ADR-0243); at the right of the title bar the room's dot and name with `untrusted`,
+  and the record's entries as pills, folded into `+N` when they do not fit; on every window of an untrusted room an
+  edge of `room.untrusted.edge` pixels in `room.untrusted` inside the border (INV-0172-10). *Fields*: when two or more
+  rooms have windows on screen, each coloured room's windows grown by `field.padding` with round corners, `field.gap`
+  inside the work area and cut back from every other coloured room by the gap, at alpha 34 with a one-pixel line, a
+  header with the room's name and grants above its top-most window (INV-0172-6 to -9). They are drawn into a copy of
+  the wallpaper when a window appears, goes, is hidden, shown, tiled, or ends a move or a resize, never per frame.
+- **The dock** (the README's dock B), drawn by the compositor above every window (INV-0168-3) on the blurred
+  wallpaper: a tile per application (the panel's list, then any other with a window), a dot under it per room it has
+  windows in (`home` grey), a ring in `room.untrusted` around an application with an untrusted window, a divider, a
+  chip per room (`home` first, the current one filled with its colour at 46 and outlined), and `+`. A press on an icon
+  shows and raises the application's windows, or asks the panel to launch it when it has none; a chip asks the panel
+  to enter its room; `+` does nothing yet (the rooms overview is not built). The hovered icon's name and line stand in
+  a tooltip of the trusted material. The dock's strip (76 pixels) is reserved: tiling ends above it.
+- **Show-commands** (System+?): every icon and chip has its line under it and the dock grows by 30 pixels (the
+  fields are recomputed above it), every window has its close and minimise lines (`kill term · bg term`) under its
+  title bar, and the bar's middle says how to leave. One table holds every gesture's text, and the gestures without
+  one say why (focus, tiling, moves; ADR-0172's open question; INV-0172-5).
+- **The GUI test** `tests/gui/rooms.script` starts a second terminal from the panel and reads its shell's `slots`
+  (exactly its record's handles), hides both terminals and brings them back from the dock, makes a room with
+  `room new`, enters it by its chip, launches a terminal in it (its prompt `project ~/project>`, its title bar's tint
+  read back), and shows the commands; under HVF and TCG.
+
+Measured (`t_gui`, `make test-qemu` at bedd670, 2026-11-08): `zoraya-ui` painting a settings-like page of 640 × 480
+(headings, a radio group, a switch, a check box, a list, a field, two buttons) takes 0.35 ms with an empty glyph cache
+and 0.23 ms after under HVF, 5.0 ms and 3.2 ms under TCG; the settings window itself comes with 7f.
+
+Not built in 7d, each waiting for a later step: the rooms overview (System+R) and the `+` chip's form; the hover card
+of a window's pills; the switcher grouped by room (it shows `home` only); one job per room (each launch has its own
+job under the panel's); `room NAME COMMAND`, `room add` and `room drop`; the `Room` message from a shell to its
+terminal; the panel starting the first terminal and the new shell after `exit` (ADR-0242). Fields follow a move at
+its end, not during the drag.
 
 ## Cross toolchain and ports (as built)
 
@@ -1022,6 +1106,13 @@ Right close, minimise and tile; Command+Space switches the keyboard layout (US, 
 the Czech layout the key right of `-` is the dead acute (with Shift the dead caron). Shift with Page Up or Page Down
 scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `exit` closes
 the window and `init` opens a new one with a new shell; `poweroff` turns the machine off.
+
+The dock at the bottom shows the terminal's icon and the rooms. Command+Return (System+Enter) or a press on the icon
+when no terminal is open starts another terminal; a press on the icon brings back hidden terminals. In a shell,
+`room new project +w ~/project` makes a room: its chip appears in the dock within a second; a press on the chip makes
+it the current room, and the next terminal opens in it, its title bar tinted and its grants shown as pills.
+Command+? (Command+Shift+/) shows every gesture's command line, and again hides them. A terminal the dock started
+closes when its shell exits.
 
 ## Using the shell
 

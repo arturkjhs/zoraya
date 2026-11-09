@@ -397,7 +397,7 @@ mod tests {
         assert_eq!(typed(&mut m, code::SPACE), Some(' '));
         m.key(code::LEFT_SHIFT, 1);
         assert_eq!(m.modifiers(), SHIFT);
-        assert_eq!(typed(&mut m, 30), Some('A'));
+        assert_eq!(typed(&mut m, 19), Some('R'));
         assert_eq!(typed(&mut m, 2), Some('!'));
         assert_eq!(typed(&mut m, 53), Some('?'));
         m.key(code::RIGHT_SHIFT, 1);
@@ -414,7 +414,7 @@ mod tests {
         m.key(code::CAPS_LOCK, 2);
         m.key(code::CAPS_LOCK, 0);
         assert_eq!(m.modifiers(), CAPS);
-        assert_eq!(typed(&mut m, 30), Some('A'));
+        assert_eq!(typed(&mut m, 19), Some('R'));
         assert_eq!(typed(&mut m, 2), Some('1'));
         m.key(code::LEFT_SHIFT, 1);
         assert_eq!(typed(&mut m, 30), Some('a'));
@@ -925,6 +925,90 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// 7c's mutants: AltGr's fallbacks, its release, the Ukrainian digits,
+    /// an index past the layouts, and the dead key's accessors.
+    #[test]
+    fn altgr_falls_back_and_ends_at_its_release() {
+        let mut m = Keymap::new();
+        m.set_layout(by_name("cz").unwrap());
+        m.key(code::RIGHT_ALT, 1);
+        // No third level: the plain key, not the Shift one.
+        assert_eq!(typed(&mut m, 12), Some('='));
+        assert_eq!(typed(&mut m, 16), Some('\\'));
+        m.key(code::LEFT_SHIFT, 1);
+        // No fourth or third level: the Shift level.
+        assert_eq!(typed(&mut m, 19), Some('R'));
+        // No fourth level but a third: the third.
+        assert_eq!(typed(&mut m, 16), Some('\\'));
+        m.key(code::LEFT_SHIFT, 0);
+        m.key(code::RIGHT_ALT, 0);
+        assert_eq!(typed(&mut m, 16), Some('q'), "AltGr ends at its release");
+    }
+
+    #[test]
+    fn ukrainian_digits_and_layout_indices() {
+        let mut m = Keymap::new();
+        m.set_layout(by_name("ua").unwrap());
+        assert_eq!(typed(&mut m, 2), Some('1'));
+        m.key(code::LEFT_SHIFT, 1);
+        assert_eq!(typed(&mut m, 4), Some('№'));
+        m.key(code::LEFT_SHIFT, 0);
+        let ua = m.layout;
+        m.set_layout(LAYOUTS.len());
+        assert_eq!(m.layout, ua, "an index past the layouts changes nothing");
+    }
+
+    #[test]
+    fn the_dead_key_is_seen_and_cleared() {
+        let mut m = Keymap::new();
+        m.set_layout(by_name("cz").unwrap());
+        assert_eq!(m.dead(), None);
+        assert_eq!(typed(&mut m, 13), None);
+        assert_eq!(m.dead(), Some(Accent::Acute));
+        m.clear_dead();
+        assert_eq!(m.dead(), None);
+        assert_eq!(typed(&mut m, 18), Some('e'), "no accent after clear_dead");
+    }
+
+    /// A right Alt used as Alt (a layout without AltGr) is Alt only while
+    /// held, and its release leaves the left Alt as it is.
+    #[test]
+    fn the_right_alt_as_alt_ends_at_its_release() {
+        let mut m = Keymap::new();
+        m.key(code::LEFT_ALT, 1);
+        m.key(code::RIGHT_ALT, 1);
+        assert_ne!(m.modifiers() & ALT, 0);
+        m.key(code::RIGHT_ALT, 0);
+        assert_ne!(m.modifiers() & ALT, 0, "the left Alt is still held");
+        m.key(code::LEFT_ALT, 0);
+        assert_eq!(m.modifiers() & ALT, 0);
+        m.key(code::RIGHT_ALT, 1);
+        m.key(code::RIGHT_ALT, 0);
+        assert_eq!(m.modifiers() & ALT, 0, "released");
+    }
+
+    /// What makes two mutants of 7c equivalent, checked: no key lacks its
+    /// first or second level (so `text`'s fallbacks start at the third),
+    /// and a layout with a third level has a key with a fourth too.
+    #[test]
+    fn every_key_has_its_first_two_levels() {
+        for l in LAYOUTS.iter() {
+            for (code, levels) in l.keys {
+                assert!(
+                    levels[0] != Out::None && levels[1] != Out::None,
+                    "{} {code}",
+                    l.name
+                );
+            }
+            let third = l.keys.iter().any(|(_, v)| v[2] != Out::None);
+            let both = l
+                .keys
+                .iter()
+                .any(|(_, v)| v[2] != Out::None && v[3] != Out::None);
+            assert_eq!(third, both, "{}", l.name);
         }
     }
 }

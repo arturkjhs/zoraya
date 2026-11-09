@@ -2153,25 +2153,28 @@ fn identity_map_is_gone() {
 
 fn image_is_mapped_once() {
     let image = memory::kernel_image_phys();
-    let mut frames = [0u8; 4096];
+    // A bit per image frame seen once and one per frame seen twice: 64 MiB
+    // of image in 4 KiB of stack (the ramdisk grows with each program).
+    const WORDS: usize = 256;
+    let mut once = [0u64; WORDS];
+    let mut twice = [0u64; WORDS];
     let size = (image.end - image.start) / PAGE_SIZE;
-    assert!(
-        size as usize <= frames.len(),
-        "image too large for the test"
-    );
+    assert!(size as usize <= WORDS * 64, "image too large for the test");
     paging::for_each_mapping(&mut |m| {
         // A mapping may be a block that overlaps the image only in part.
         let mut at = m.pa.max(image.start);
         while at < (m.pa + m.size).min(image.end) {
-            frames[((at - image.start) / PAGE_SIZE) as usize] += 1;
+            let i = ((at - image.start) / PAGE_SIZE) as usize;
+            let (w, b) = (i / 64, 1u64 << (i % 64));
+            if once[w] & b != 0 {
+                twice[w] |= b;
+            }
+            once[w] |= b;
             at += PAGE_SIZE;
         }
     });
-    assert!(
-        frames.iter().all(|n| *n <= 1),
-        "an image frame mapped twice"
-    );
-    assert!(frames.iter().take(size as usize).any(|n| *n == 1));
+    assert!(twice.iter().all(|w| *w == 0), "an image frame mapped twice");
+    assert!(once.iter().any(|w| *w != 0));
     expect_data_abort(
         read_at,
         memory::phys_to_virt(image.start),

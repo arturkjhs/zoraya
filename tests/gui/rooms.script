@@ -1,0 +1,86 @@
+# Stage 7d's criterion (TASK-24, docs/research/desktop/plan.md, ADR-0168,
+# ADR-0172): a second terminal starts from the panel with the handles its
+# launch record lists, hidden windows restore from the panel's dock, a room
+# made in the shell appears in the dock and a terminal launched in it is
+# in the room. Coordinates are logical at scale 1 (1024 x 768): the first
+# terminal's frame at (72, 70), each next one 32 further right and down;
+# the dock's icons from y 702, their dots at y 745, the chips' dots at
+# y 722 (zoraya_compositor::rooms). Colours: fg.text.secondary 5b5f67
+# (home's dot), room.1 2f7f8f (the first room), bg.frame.focused f7f7f8,
+# and d3e1e5 that ground with room.1 at TITLE_TINT (46 of 255).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+# The terminal's icon, its home dot, and its tooltip under the pointer.
+pointc 5b5f67 200 743 600 5
+shot dock
+# A second terminal from the panel (System+Enter), in home. Its shell holds
+# what its launch record lists: the console, its job, the image directory
+# and its terminal, no power at slot 4 and no volume root at 5: what home
+# gives came in its start-up record (ADR-0242's condition); what follows
+# (a memory object, a port) is the shell's own.
+chord meta ret
+origin 105 138
+screen Type help to begin, or help tour.
+screen ~> _
+# A new window takes focus only from the person (ADR-0094): its title bar,
+# then its focused ground (bg.frame.focused) before any key.
+click 400 120
+region 162 108 100 4 f7f7f8
+type slots\r
+prefix slots: 1:console 2:job 3:directory 6:channel
+screen ~> _
+# Both hidden by their dashes; the dock's icon brings them back in their
+# stacking order, the first on top and focused.
+click 146 120
+click 114 88
+clickc 5b5f67 200 743 600 5
+origin 73 106
+type echo back\r
+screen back
+screen ~> _
+# A room made in the shell (ADR-0172 point 3): written to /config/rooms,
+# read by the panel, shown as a chip. An untrusted one waits for quotas.
+type mkdir project\r
+screen ~> _
+type room new project +w ~/project +r /texts\r
+screen project --colour 1 +w ~/project +r /texts
+screen ~> _
+type room new agent-1 --untrusted +w ~/sandbox\r
+prefix room: agent-1: untrusted rooms wait for quotas
+# The chip enters the room; System+Enter launches a terminal in it.
+clickc 2f7f8f 300 719 600 7
+chord meta ret
+origin 137 170
+screen Type help to begin, or help tour.
+screen project ~/project> _
+click 450 152
+# The focused ground tinted by room.1 (ADR-0172 point 5).
+region 194 140 100 4 d3e1e5
+type room\r
+screen * project  +w ~/project  +r /texts
+# ADR-0242's condition: the room's shell holds the room's grants and
+# nothing else; a write outside ~/project is refused with ADR-0153's hint.
+type echo hi > notes.txt\r
+screen project ~/project> _
+type cp notes.txt ~/copy.txt\r
+screen zosh: ~/copy.txt: not given to this shell
+screen   hint: cp tried to change ~/copy.txt, which it was not given
+screen   to allow it: +w ~ cp notes.txt ~/copy.txt
+shot rooms
+# Its pills are exactly five: the room's two grants and the toolchain to
+# read (+r /bin, +r /usr, +r /etc), no +w /. The last ends at 741 and the
+# room's badge dot (room.1) follows at 750; a sixth pill would push it on.
+region 742 143 6 3 d3e1e5
+region 750 151 5 3 2f7f8f
+# Show-commands: every icon and chip with its line.
+chord meta slash
+pause 1000
+shot commands
+chord meta slash
+# The first terminal's shell turns the machine off.
+click 400 80
+region 130 76 100 4 f7f7f8
+origin 73 106
+type poweroff\r
+exit

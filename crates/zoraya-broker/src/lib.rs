@@ -182,6 +182,9 @@ pub struct Broker<K: Kernel> {
     pub totals: totals::Totals,
     /// The shell's exit record, once the broker reaped it.
     pub shell_exit: Option<ExitRecord>,
+    /// Whether a native client was ever added (the mode with no first
+    /// shell).
+    had_client: bool,
     out: Vec<u8>,
 }
 
@@ -212,6 +215,7 @@ impl<K: Kernel> Broker<K> {
             connections: Vec::new(),
             next_pid: FIRST_PID,
             sid: 0,
+            had_client: false,
             foreground: None,
             counts: Counts::default(),
             totals: totals::Totals::default(),
@@ -256,6 +260,17 @@ impl<K: Kernel> Broker<K> {
     /// first shell.
     pub fn finished(&self) -> bool {
         self.sid != 0 && !self.pids.contains_key(&self.sid) && self.live() == 0
+    }
+
+    /// With no first shell (a broker beside a native shell, ADR-0153's
+    /// note): a client was added, every client connection has closed, and
+    /// no process is live. Such a broker has nothing left to serve and
+    /// ends, so that one started per launched terminal ends with it.
+    pub fn abandoned(&self) -> bool {
+        self.sid == 0
+            && self.had_client
+            && !self.connections.contains(&Some(Peer::Client))
+            && self.live() == 0
     }
 
     /// Prepares the session's first process: pid 2, leader of a new group,
@@ -307,6 +322,7 @@ impl<K: Kernel> Broker<K> {
     pub fn add_client(&mut self) -> Result<WithActions<K::H, K::H>, Status> {
         let (server, client) = self.kernel.channel_create()?;
         let conn = self.add_connection(Peer::Client);
+        self.had_client = true;
         Ok((client, vec![Action::Watch { conn, end: server }]))
     }
 

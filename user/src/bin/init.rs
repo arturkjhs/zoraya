@@ -33,15 +33,15 @@ use zoraya_abi::{
     StreamReadObject, StreamWriteObject, channel_signals, process_signals,
 };
 use zoraya_fs_service::Restarts;
+use zoraya_user::beside::{Beside, start_broker};
 use zoraya_user::files::{ALL, File};
 use zoraya_user::gui::{
     Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
 };
 use zoraya_user::stack::{Stack, end_job, moved, start_stack};
 use zoraya_user::{
-    channel_create, channel_read, directory_lookup, dup, handle_close, job_create, job_kill,
-    port_create, port_subscribe, port_wait, power_off, println, process_exit_record, spawn,
-    stream_create, wait_exit,
+    channel_create, directory_lookup, dup, handle_close, job_create, port_create, port_subscribe,
+    port_wait, power_off, println, process_exit_record, spawn, stream_create, wait_exit,
 };
 
 const KEY_DRIVER: u64 = 1;
@@ -136,113 +136,6 @@ fn start_session(root: &File, window: Option<Handle>) -> Option<Session> {
     })
 }
 
-/// The broker beside `zosh` (ADR-0153 rule 10): no first shell, the root
-/// for its temporary service, and at slot 9 a channel on which it sends
-/// `zosh`'s client connection and the temporary service's root. Only on a
-/// volume with `/bin`, where the POSIX programs are; it ends with its shell.
-struct Beside {
-    job: (Handle, Handle),
-    client: Handle,
-    tmp: Handle,
-}
-
-fn start_broker(root: &File) -> Option<Beside> {
-    let wanted = zoraya_proto_file::rights::READ;
-    root.open("bin", zoraya_proto_file::open_flags::DIRECTORY, wanted)
-        .ok()?;
-    let base = root.time_base().unwrap_or(0);
-    let (handoff, handoff_broker) = channel_create().ok()?;
-    // Every way out below closes what was made before it (review K6).
-    let Ok(job) = job_create(JOB, JobFlags::POSIX) else {
-        let _ = handle_close(handoff);
-        let _ = handle_close(handoff_broker);
-        return None;
-    };
-    let Some(broker) = spawn_broker(root, base, job, handoff_broker) else {
-        let _ = handle_close(handoff);
-        let _ = handle_close(handoff_broker);
-        let _ = job_kill(job);
-        let _ = handle_close(job);
-        return None;
-    };
-    // The hand-off: `ZPBC`, the client connection and the temporary root.
-    // No deadline (review K7): a broker that ends without one is seen by its
-    // `TERMINATED`, and one that is merely slow under TCG is waited for.
-    let got = match port_create() {
-        Ok(port) => {
-            let readable = channel_signals::READABLE | channel_signals::PEER_CLOSED;
-            let terminated = process_signals::TERMINATED;
-            let subscribed = port_subscribe(port, handoff, readable, 1, Mode::Level)
-                .and_then(|()| port_subscribe(port, broker, terminated, 2, Mode::Level));
-            let mut packets = [Packet::default()];
-            let waited = subscribed
-                .and_then(|()| port_wait(port, DEADLINE_INFINITE, &mut packets).map(|_| ()));
-            let _ = handle_close(port);
-            let mut bytes = [0u8; 16];
-            let mut handles = [handoff; 2];
-            waited.ok().and_then(|()| {
-                let s = channel_read(handoff, &mut bytes, &mut handles).ok()?;
-                if &bytes[..s.bytes as usize] == b"ZPBC" && s.handles == 2 {
-                    return Some((handles[0], handles[1]));
-                }
-                for h in &handles[..s.handles as usize] {
-                    let _ = handle_close(*h);
-                }
-                None
-            })
-        }
-        Err(_) => None,
-    };
-    let _ = handle_close(handoff);
-    match got {
-        Some((client, tmp)) => Some(Beside {
-            job: (job, broker),
-            client,
-            tmp,
-        }),
-        None => {
-            println!("init: the broker gave no client connection");
-            end_job((job, broker));
-            None
-        }
-    }
-}
-
-/// Spawns the broker in `job`, with the hand-off end at slot 9; the image and
-/// every handle not handed over are closed whatever happens.
-fn spawn_broker(root: &File, base: u64, job: Handle, handoff: Handle) -> Option<Handle> {
-    let image = directory_lookup(DIRECTORY, "broker").ok()?;
-    let spawned = root.clone_as(ALL).ok().and_then(|root| {
-        let mut buffer = [0; 512];
-        let mut e = Encoder::new(&mut buffer, job, image);
-        e.handle(dup(
-            CONSOLE.slot(),
-            CONSOLE,
-            Rights::WRITE.union(Rights::DUPLICATE),
-        ));
-        e.handle(dup(JOB.slot(), job, JobObject::RIGHTS));
-        e.handle(dup(DIRECTORY.slot(), DIRECTORY, DirectoryObject::RIGHTS));
-        e.handle(give(5, root.end, ChannelObject::RIGHTS));
-        e.handle(moved(9, handoff));
-        let base = alloc::format!("{base}");
-        for a in [
-            &b"broker"[..],
-            b"--time-base",
-            base.as_bytes(),
-            b"--no-shell",
-        ] {
-            e.arg(a);
-        }
-        let length = e.finish()?;
-        let broker = spawn(&buffer[..length]).ok()?;
-        // Moved into the broker with the spawn.
-        core::mem::forget(root);
-        Some(broker)
-    });
-    let _ = handle_close(image);
-    spawned
-}
-
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
 /// terminal at slot 6; with a broker beside it, its client connection at 7
 /// and the temporary service's root at 8. With a terminal the shell gets the console to write
@@ -272,8 +165,20 @@ fn start_shell(
         .without(Rights::DUPLICATE)
         .without(Rights::TRANSFER);
     e.handle(dup(POWER.slot(), POWER, power));
+    // On the console the shell holds the volume's root; in a window, what
+    // `home` gives (ADR-0242's condition), as a start-up record.
+    let mut root_moved = false;
     if let Some(root) = &root {
-        e.handle(moved(5, root.end));
+        if terminal.is_some() {
+            let home = zoraya_user::namespace::shell_home(root);
+            let holds = zoraya_panel::terminal(None).holds;
+            if let Some(r) = zoraya_user::namespace::record(root, &home, &home, &holds) {
+                e.handle(moved(zoraya_panel::STARTUP_SLOT, r));
+            }
+        } else {
+            e.handle(moved(5, root.end));
+            root_moved = true;
+        }
     }
     if let Some(terminal) = terminal {
         e.handle(moved(6, terminal));
@@ -284,10 +189,12 @@ fn start_shell(
     }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
-    if process.is_some() {
+    if process.is_some() && root_moved {
         // Moved: the shell's now.
         core::mem::forget(root);
-    } else if let Some(terminal) = terminal {
+    } else if process.is_none()
+        && let Some(terminal) = terminal
+    {
         let _ = handle_close(terminal);
     }
     let _ = handle_close(image);
@@ -374,6 +281,9 @@ fn main() -> i32 {
     let mut gui_allowed = gui_devices.is_some();
     let mut gui_restarts = 0;
     let mut gui: Option<Gui> = None;
+    // The panel (ADR-0168): started once per GUI, with the volume; it
+    // launches every terminal but the first (proposed ADR-0242).
+    let mut panel: Option<Running> = None;
     let mut driver_restarts = (0, alloc::vec![0; devices.inputs.len()]);
     let mut shell_failures = 0;
     if gui_devices.is_some() {
@@ -410,6 +320,14 @@ fn main() -> i32 {
             }
         }
         let terminal: Option<(Running, Handle)> = gui.as_ref().and_then(start_terminal);
+        if panel.is_none()
+            && let (Some(g), Some(s)) = (gui.as_ref(), stack.as_ref())
+        {
+            panel = g.start_panel(&s.root);
+            if panel.is_none() {
+                println!("init: the panel did not start");
+            }
+        }
         let wants_session = stack.as_ref().is_some_and(|s| {
             s.root
                 .open("etc/zoraya/session", 0, zoraya_proto_file::rights::READ)
@@ -552,6 +470,9 @@ fn main() -> i32 {
             Ended::Closed => println!("init: the terminal was closed"),
             Ended::Gui => {
                 println!("init: the gui failed");
+                if let Some(p) = panel.take() {
+                    p.end();
+                }
                 if let Some(g) = gui.take() {
                     driver_restarts = (g.gpu_restarts, g.input_restarts.clone());
                     g.end();
@@ -564,6 +485,10 @@ fn main() -> i32 {
             }
             Ended::Storage => {
                 println!("init: storage failed");
+                // Its root was the volume's: started again with the next.
+                if let Some(p) = panel.take() {
+                    p.end();
+                }
                 if let Some(s) = stack.take() {
                     s.end();
                 }

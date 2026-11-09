@@ -17,9 +17,11 @@ zoraya-tokens = { path = "../zoraya-tokens" }
 zoraya-text = { path = "../zoraya-text" }
 zoraya-fonts = { path = "../zoraya-fonts" }
 zoraya-paint = { path = "../zoraya-paint" }
+zoraya-settings = { path = "../zoraya-settings" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }
+zoraya-shell = { path = "../zoraya-shell" }
