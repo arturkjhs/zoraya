@@ -16,7 +16,7 @@ use zoraya_compositor::{Compositor, Incoming, Kind, Outgoing, Platform};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, handle_type,
     memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_unsubscribe,
-    port_wait,
+    port_wait, println,
 };
 
 extern crate alloc;
@@ -189,6 +189,10 @@ impl Platform for System {
 
     fn now(&mut self) -> u64 {
         clock_monotonic()
+    }
+
+    fn note(&mut self, line: &str) {
+        println!("{line}");
     }
 }
 
