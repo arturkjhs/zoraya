@@ -686,7 +686,7 @@ impl Z {
         );
         if let Some(r) = &self.room {
             s.push_str(&format!(
-                "  this shell holds room {}'s grants and nothing else: room shows them\n",
+                "  this shell holds room {}'s grants and the toolchain to read, nothing else: room shows them\n",
                 r.name
             ));
         }

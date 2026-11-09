@@ -67,9 +67,12 @@ type cp notes.txt ~/copy.txt\r
 screen zosh: ~/copy.txt: not given to this shell
 screen   hint: cp tried to change ~/copy.txt, which it was not given
 screen   to allow it: +w ~ cp notes.txt ~/copy.txt
-# Its pills are the room's two grants: no +w / where the first stood.
-region 540 148 25 3 d3e1e5
 shot rooms
+# Its pills are exactly five: the room's two grants and the toolchain to
+# read (+r /bin, +r /usr, +r /etc), no +w /. The last ends at 741 and the
+# room's badge dot (room.1) follows at 750; a sixth pill would push it on.
+region 742 143 6 3 d3e1e5
+region 750 151 5 3 2f7f8f
 # Show-commands: every icon and chip with its line.
 chord meta slash
 pause 1000

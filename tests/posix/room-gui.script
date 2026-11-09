@@ -1,0 +1,38 @@
+# A trusted room's shell reads the toolchain (the architect's decision of
+# 2026-11-09, ADR-0172): on the tour's image, which has /bin and /usr, a
+# terminal launched in a room holds the room's grants and +r /bin, +r /usr
+# and +r /etc, and runs POSIX programs from them. Coordinates as in
+# tests/gui/rooms.script: the second terminal's frame at (104, 102), the
+# room's chip found by room.1 (2f7f8f) on the dock's row, d3e1e5 the
+# focused ground tinted by room.1.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+type mkdir project\r
+screen ~> _
+type room new project +w ~/project\r
+screen project --colour 1 +w ~/project
+screen ~> _
+clickc 2f7f8f 300 719 600 7
+chord meta ret
+origin 105 138
+screen Type help to begin, or help tour.
+screen project ~/project> _
+click 400 120
+region 162 108 100 4 d3e1e5
+# A pipeline of the shell's echo and the volume's tr, then ls and uname.
+type echo hi | tr h H\r
+screen Hi
+screen project ~/project> _
+type echo a > a.txt; ls\r
+screen a.txt
+screen project ~/project> _
+type uname\r
+screen Zoraya
+screen project ~/project> _
+# The first terminal's shell turns the machine off.
+click 400 80
+region 130 76 100 4 f7f7f8
+origin 73 106
+type poweroff\r
+exit

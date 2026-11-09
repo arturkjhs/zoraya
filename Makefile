@@ -437,13 +437,18 @@ test-posix-gui: posix-image $(RUNNER)
 
 # The tour in the window (INV-0154-4), on the tour's image: a step of its
 # own, so that CI runs it as a job of its own (review K2).
+# Then a terminal in a room runs the volume's POSIX programs (ADR-0172,
+# the toolchain a trusted room's shell reads).
+ROOM_GUI_SCRIPT := tests/posix/room-gui.script
 test-tour-gui: posix-image $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
+	  for run in tour-gui:$(TOUR_GUI_SCRIPT):1200 room-gui:$(ROOM_GUI_SCRIPT):$(QEMU_TIMEOUT); do \
+	  name=$$(echo $$run | cut -d: -f1); script=$$(echo $$run | cut -d: -f2); limit=$$(echo $$run | cut -d: -f3); \
 	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_TOUR_ROOT) $(BUILD)/posix-gui.img > /dev/null && \
-	  $(RUNNER) --timeout 1200 --gui-script $(TOUR_GUI_SCRIPT) --qmp $(BUILD)/tour-gui-$$accel.qmp \
-	    --label tour-gui-$$accel -- $(RUN_QEMU) --test --gui --mem $(POSIX_MEM) --qmp $(BUILD)/tour-gui-$$accel.qmp \
+	  $(RUNNER) --timeout $$limit --gui-script $$script --qmp $(BUILD)/$$name-$$accel.qmp \
+	    --label $$name-$$accel -- $(RUN_QEMU) --test --gui --mem $(POSIX_MEM) --qmp $(BUILD)/$$name-$$accel.qmp \
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
-	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
+	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done; done
 
 # The tour's two sessions, from docs/tour.md (INV-0154-4), and INV-0155-1's
 # from the descriptions; make test-unit fails when the committed ones differ.
