@@ -199,6 +199,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-fsclient"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fs",
+ "zoraya-fs-service",
+ "zoraya-fs-testkit",
+ "zoraya-proto-file",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-handle"
 version = "0.1.0"
 dependencies = [
