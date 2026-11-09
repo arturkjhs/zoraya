@@ -293,3 +293,58 @@ fn a_resized_with_a_handle_or_a_malformed_one_drops_the_driver() {
         assert_eq!(s.c.size(), (W, H));
     }
 }
+
+#[test]
+fn a_window_wider_and_taller_than_the_work_area_shrinks_to_it() {
+    let mut s = setup_with(|f| f.display_size = (1280, 800));
+    let end = s.client(64);
+    let f = s.c.frame();
+    // Wider and taller than the work area of a smaller display.
+    let big = s.window_of(end, 760, 560, 0x0040_4040);
+    resize(&mut s, 640, 360);
+    let area = s.c.work_area();
+    let w = s.c.window(Key { client: 0, id: big }).unwrap();
+    assert_eq!(
+        (i64::from(w.body.0), i64::from(w.body.1)),
+        (area.width - 2 * f.border, area.height - f.title - f.border),
+        "as large as the work area holds"
+    );
+    assert_eq!((w.x, w.y), (area.x + f.border, area.y + f.title));
+}
+
+#[test]
+fn a_legacy_window_wider_than_the_work_area_keeps_its_corner_in_it() {
+    let mut s = setup_with(|f| f.display_size = (1280, 800));
+    let (legacy, _) = s.window(900, 500, 3);
+    s.f().take(legacy);
+    resize(&mut s, 640, 360);
+    let (f, area) = (s.c.frame(), s.c.work_area());
+    let k = s.c.stack().next().unwrap();
+    let w = s.c.window(k).unwrap();
+    assert_eq!(w.body, (900, 500), "never resized");
+    assert_eq!((w.x, w.y), (area.x + f.border, area.y + f.title));
+}
+
+#[test]
+fn at_scale_two_a_large_window_fills_the_work_area_to_the_pixel() {
+    let mut s = setup_with(|f| f.display_size = (2560, 1600));
+    let end = s.client(64);
+    let id = s.window_of(end, 1200, 700, 0x0040_4040);
+    resize(&mut s, 2000, 1200);
+    assert_eq!(s.c.scale().factor(), 2);
+    let (f, area) = (s.c.frame(), s.c.work_area());
+    let w = s.c.window(Key { client: 0, id }).unwrap();
+    let even = |v: i64| v - v % 2;
+    assert_eq!(
+        (i64::from(w.body.0), i64::from(w.body.1)),
+        (
+            even(area.width - 2 * f.border),
+            even(area.height - f.title - f.border)
+        )
+    );
+    assert_eq!(
+        s.outer(0, id).right(),
+        area.right() - (area.width - 2 * f.border) % 2
+    );
+    assert_eq!(w.y, area.y + f.title);
+}

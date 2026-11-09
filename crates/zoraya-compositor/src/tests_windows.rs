@@ -75,7 +75,7 @@ impl Setup {
         self.point(axis(x, w), axis(y, h), button);
     }
 
-    fn body(&self, client: usize, id: u32) -> Rect {
+    pub(super) fn body(&self, client: usize, id: u32) -> Rect {
         self.c.window(Key { client, id }).unwrap().body_rect()
     }
 
