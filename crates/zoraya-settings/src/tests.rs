@@ -297,3 +297,52 @@ fn lists_are_read_written_and_edited() {
         Ok("cz ua".into())
     );
 }
+
+/// INV-0171-3: items of every kind of character (spaces, both quotes,
+/// backslashes) written as a line and read back are the same items;
+/// deterministic, over a fixed alphabet.
+#[test]
+fn list_lines_round_trip() {
+    let d = zoraya_describe::parse(GUI.as_bytes()).unwrap().settings;
+    let alphabet = ['a', 'ž', ' ', '\'', '"', '\\', '#', '='];
+    let mut seed: u32 = 7;
+    let mut next = || {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        seed >> 16
+    };
+    for _ in 0..300 {
+        let count = (next() % 5) as usize;
+        let items: Vec<String> = (0..count)
+            .map(|_| {
+                let len = 1 + (next() % 6) as usize;
+                (0..len)
+                    .map(|_| alphabet[(next() as usize) % alphabet.len()])
+                    .collect()
+            })
+            .collect();
+        let value = zoraya_describe::list_text(&items);
+        let f = set(b"", &d, "gui.names", &value).unwrap();
+        let v = read(&f, &d);
+        assert!(v.problems.is_empty(), "{items:?}: {:?}", v.problems);
+        assert_eq!(
+            zoraya_describe::list_items(v.get("gui.names").unwrap()).unwrap(),
+            items
+        );
+    }
+}
+
+/// INV-0171-2: a bad item in any position gives the default, reported
+/// once, never part of the list.
+#[test]
+fn a_bad_item_anywhere_gives_the_default() {
+    let d = zoraya_describe::parse(GUI.as_bytes()).unwrap().settings;
+    let good = ["us", "ua", "cz"];
+    for at in 0..=good.len() {
+        let mut items: Vec<&str> = good.to_vec();
+        items.insert(at, "uk");
+        let line = std::format!("gui.keyboard-layouts = {}\n", items.join(" "));
+        let v = read(line.as_bytes(), &d);
+        assert_eq!(v.get("gui.keyboard-layouts"), Some("us"), "{line}");
+        assert_eq!(v.problems.len(), 1, "{line}");
+    }
+}

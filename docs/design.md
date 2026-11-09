@@ -654,6 +654,39 @@ Not built in 7e: the rooms' own launches of `files` with a narrower root; the ap
 manager starts in `home`; the chooser's centred-window style; `multiple` in `Open`; a sheet's re-placement when the
 scale changes; the confirming card for drops on an untrusted window; the clipboard (7f).
 
+## Settings, the editor and the clipboard (as built)
+
+Stage 7f (TASK-24), by [ADR-0169](adr/0169-settings.md), [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md) and
+[ADR-0171](adr/0171-list-settings.md):
+
+- **The desktop's settings** are declared in the compositor's description (`user/describe/system/compd.cmd`, which
+  `compd` embeds and `zosh` knows): `gui.theme`, `gui.motion`, `gui.scale` (`auto`, `1`, `2`), `gui.wallpaper`,
+  `gui.keyboard-layouts` (ADR-0171's list: of `us ua ru cz`, 1 to 4, unique; default `us`) and
+  `gui.keyboard-layout`. `init` gives the compositor `/config` to read at slot 11; it reads the file once at start
+  (each bad line reported, its default kept; a fixed scale applies to the display). `settings` in `zosh` shows a
+  list's items with their indices and takes `settings NAME ITEM...`, `+ITEM [--at N]` and `-ITEM`.
+- **The settings window** (`settings`, its logic in `zoraya-settings-window`): appearance and keyboard on one page,
+  each control bound to its declaration. Every change is written at once, atomically (a new file published over the
+  old one, through `/config` narrowed to `settings`, which no other launch gets to write, INV-0169-4), then
+  `SettingsChanged` goes to the panel, which reads the file and sends the compositor `ApplySettings`; the compositor
+  checks every value again and applies them all or none. The theme reaches the frames, the wallpaper's blur and every
+  window's `Configure`, and `zoraya-app` repaints its windows in it; the layouts apply at once; the scale at the next
+  session.
+- **The editor** (`edit`, its buffer and view in `zoraya-editor`): one file, opened from the file manager (read only)
+  or through the chooser, saved through the chooser's `Save` and then again to that name; cursor and selection by
+  characters, undo and redo (1000 edits), find, and a question before a close with unsaved changes.
+- **The clipboard** (ADR-0170): System+C and System+X send the focused window `Copy`; its `Offer` within 500 ms of
+  that is kept, any other refused; System+V sends the focused window `Paste`. No message reads the clipboard back.
+  `edit` copies, cuts and pastes; drops are 7e's.
+- **The GUI test** `tests/gui/settings.script` (HVF and TCG): the theme turns dark in the settings window and the
+  frames follow; Czech is enabled and put in use and the terminal types by it at once; `edit` takes Czech text on
+  that layout and saves `poznámky.txt` through the chooser; the file manager lists it.
+
+Not built in 7f: the terminal keeps the light set (its screen is read in the GUI tests by the light set's glyphs);
+the wallpaper setting accepts only `''` (no image decoder); copy and paste in the toolkit's text fields (only `edit`
+answers them); the clipboard's entries (only text); a `settings` command reaching the running compositor (the next
+session, as ADR-0169's open question says).
+
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
@@ -1119,24 +1152,38 @@ measured for real.
 - **First process.** `init` (ADR-0053). The kernel reports it and powers off if it ends.
 - **Line discipline.** Only in `ttyd` (ADR-0105, INV-0105-4: `make check-kernel-tty`).
 
-## Using the GUI
+## Using the desktop
 
 `make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window (`make run-gui GUI_SCALE=2` at 2048 ×
-1536); the serial line stays in the terminal for `init`'s reports, and Ctrl-A X there quits QEMU. The window shows the
-desktop: the bar, and a terminal window running `zosh`, with the same commands as `make run` (below). Drag the title
-bar to move the window, its edges to resize it; the dash minimises it and the cross closes it (a new terminal opens).
-Alt+Tab (Option+Tab on a Mac) shows the switcher; F12 goes to the next window; Command+W, Command+M and Command+Left or
-Right close, minimise and tile; Command+Space switches the keyboard layout (US, UA, CZ; the bar shows which), and on
-the Czech layout the key right of `-` is the dead acute (with Shift the dead caron). Shift with Page Up or Page Down
-scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `exit` closes
-the window and `init` opens a new one with a new shell; `poweroff` turns the machine off.
+1536). On a Mac the window scales its picture when it is enlarged, and Command is the system key (written System
+below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
 
-The dock at the bottom shows the terminal's icon and the rooms. Command+Return (System+Enter) or a press on the icon
-when no terminal is open starts another terminal; a press on the icon brings back hidden terminals. In a shell,
-`room new project +w ~/project` makes a room: its chip appears in the dock within a second; a press on the chip makes
-it the current room, and the next terminal opens in it, its title bar tinted and its grants shown as pills.
-Command+? (Command+Shift+/) shows every gesture's command line, and again hides them. A terminal the dock started
-closes when its shell exits.
+- **What is on the screen.** The bar at the top (the layout in use at its right; the chooser's mark in its middle
+  while a sheet is open), the windows, and the dock at the bottom: Terminal, Files, Edit and Settings, then the rooms'
+  chips and `+`. A dot under a tile is a room in which that application has a window.
+- **Windows.** Drag a title bar to move a window, an edge to resize it; the dash minimises it and the cross closes
+  it. Alt+Tab shows the switcher, grouped by room; F12 goes to the next window; System+W, System+M, System+Left and
+  System+Right close, minimise and tile; System+Enter opens a terminal. A new window takes the keyboard when you
+  click it.
+- **Terminal.** `zosh`, with the commands of `make run` (Using the shell, below); Shift with Page Up or Page Down
+  scrolls back. `exit` closes it; in the first terminal `init` opens a new one; `poweroff` turns the machine off.
+- **Files.** Your home folder: a row opens a folder or opens a file with its application (`.txt` and `.md` in Edit),
+  read only; New folder, Rename and Delete (asked twice) act on the folder shown; drag a file onto a window to give
+  it that file to read (its frame then shows `dropped: NAME read`).
+- **Edit.** Open… and Save as… show the chooser's sheet under the window: pick a file, or a name in a folder, and
+  only that is given to Edit (the frame's pills show it). Save writes to the name chosen; Find selects the next
+  match; Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all. Closing with unsaved changes asks first.
+- **Copy and paste.** System+C copies what is selected, System+X cuts it, System+V pastes; nothing else can read
+  what was copied.
+- **Settings.** Theme (light or dark), motion, scale (at the next session) and the keyboard: the layouts
+  System+Space switches between and the one in use. A change is saved to `/config/settings` and applied at once.
+  `settings gui.theme dark` in a terminal writes the same file; the desktop reads it at the next session.
+- **Keyboard layouts.** System+Space switches (US, UA, RU, CZ, those enabled in Settings); on the Czech layout the
+  key right of `-` is the dead acute, with Shift the dead caron.
+- **Rooms.** `room new project +w ~/project` in a terminal makes a room; its chip appears in the dock. Press the chip,
+  then an application's tile: it opens in the room, holding the room's grants and nothing else (and, for a terminal,
+  the toolchain to read), its title bar tinted and its grants shown as pills. System+? shows every gesture's command
+  line.
 
 ## Using the shell
 

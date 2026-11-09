@@ -72,6 +72,10 @@ Nothing here depends on POSIX.
 - **INV-0171-3.** The value syntax round-trips: the writer's line, parsed by ADR-0150's word rules, gives back the items, for items with spaces and quotes included. *Check:* a host property test over random items.
 
 ## Open questions
+- *(Check note, stage 7f.)* INV-0171-1: `zoraya-settings`' `lists_are_read_written_and_edited` (append, insert,
+  remove, replace, each bound and `unique`, the file unchanged on refusal). INV-0171-2:
+  `a_bad_item_anywhere_gives_the_default`. INV-0171-3: `list_lines_round_trip` (300 deterministic random lists over
+  spaces, quotes, backslashes and `#`).
 - Whether `--at N` is worth having in the first version.
 - Whether a list of records should come before target 3 needs it.
 

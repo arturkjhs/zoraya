@@ -80,6 +80,10 @@ A POSIX program in a terminal copies and pastes through the terminal client, whi
 - **INV-0170-5.** Contents over the bound, and a second offer or drag while one is in flight, are refused and leave the clipboard unchanged. *Check:* host test at the bounds.
 
 ## Open questions
+- *(Check note, stage 7f.)* INV-0170-1 and -2: `tests_drops.rs`'s `the_clipboard_moves_only_on_the_persons_chords`
+  (an unprompted `Offer`, another client's, a late one and a second one are refused; `Paste` only to the focused
+  window on System+V). INV-0170-5: the protocol's bound (32 KiB, `MAX_CLIPBOARD`) refuses larger contents at decode,
+  and a second drag while one is carried is refused (test).
 - *(Check note, stage 7e, ADR-0001 rule 6.)* Drag-and-drop is built in 7e, the clipboard in 7f. INV-0170-3 and
   INV-0170-4: `zoraya-compositor`'s `tests_drops.rs` (no pointer event reaches any window during a drag, the source
   gets only `DragDone` and `DragEnded`, the target only `Drop`; the entry is passed on once and closed on every other
