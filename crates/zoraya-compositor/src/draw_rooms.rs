@@ -405,8 +405,12 @@ pub fn dock(
                 }
                 if v.commands {
                     let b1 = label_y(cr.y);
-                    let w = title_t.measure(&app.name, cap);
-                    draw_text(c, title_t, &app.name, cap, centre - w / 2, b1, p.fg_text);
+                    // The name above its line, or the line alone when they
+                    // are the same word (`term`).
+                    if app.name != app.line {
+                        let w = title_t.measure(&app.name, cap);
+                        draw_text(c, title_t, &app.name, cap, centre - w / 2, b1, p.fg_text);
+                    }
                     let w = mono.measure(&app.line, cap);
                     draw_text(
                         c,
@@ -425,6 +429,14 @@ pub fn dock(
                 };
                 let col = colour.unwrap_or(p.fg_text_secondary);
                 let cy = cr.y + (icon - chip_h) / 2;
+                // The chip at its own width, centred in its cell (wider in
+                // show-commands mode, for the line under it).
+                let mut natural = 33 * si + title_t.measure(name, cap);
+                if *untrusted {
+                    natural += 5 * si + ui.measure("untrusted", cap);
+                }
+                let natural = natural.max(chip_h).min(cr.w);
+                let cr = paint::Rect::new(centre - natural / 2, cr.y, natural, cr.h);
                 let m = paint::rounded_rect(
                     cr.w as usize,
                     chip_h as usize,
@@ -656,8 +668,10 @@ pub fn icon_glyph(
     }
 }
 
-/// The show-commands tags (ADR-0172 point 8) over a window: its close and
-/// minimise gestures' lines above its buttons.
+/// The show-commands tag of a window (ADR-0172 point 8): its close
+/// gesture's line, anchored inside its own frame at the body's lower left.
+/// The caller draws it with the window and clipped to it, so a window above
+/// covers it as it covers the window, and it never lies over another.
 pub fn frame_tags(
     c: &mut Canvas<'_>,
     o: paint::Rect,
@@ -674,15 +688,14 @@ pub fn frame_tags(
     }
     let (t, mono) = texts;
     let si = k as i32;
-    let line = format!("kill {}  ·  bg {}", v.app, v.app);
-    // Just under the title bar, over the window's own pixels while the
-    // mode lasts, clear of the field's header above the window.
-    let title = space::FRAME_HEIGHT.physical(Scale::ONE) as i32 * si;
+    let line = format!("kill {}", v.app);
+    let cap = text::CAPTION.physical(Scale::ONE) * k;
+    let w = mono.measure(&line, cap) + 20 * si;
     tag(
         c,
         &[(line.as_str(), true)],
-        o.x + 60 * si,
-        o.y + title + 27 * si,
+        o.x + 12 * si + w / 2,
+        o.y + o.h - 12 * si,
         k,
         p,
         (t, mono),
@@ -692,9 +705,8 @@ pub fn frame_tags(
 /// The text form of every gesture the compositor and the panel own (ADR-0172
 /// point 8, INV-0172-5): the handler and its `zosh` line, with `APP`,
 /// `NAME` and `LAYOUT` for what the gesture names.
-pub const GESTURES: [(&str, &str); 7] = [
+pub const GESTURES: [(&str, &str); 6] = [
     ("close", "kill APP"),
-    ("minimise", "bg APP"),
     ("dock-launch", "APP"),
     ("dock-room", "room NAME"),
     ("dock-new-room", "room new NAME +w PATH"),
@@ -704,7 +716,11 @@ pub const GESTURES: [(&str, &str); 7] = [
 
 /// The gestures with no `zosh` form, and why: the table is whole, and what
 /// has no line says so (ADR-0172's open question on focus).
-pub const WITHOUT_TEXT: [(&str, &str); 6] = [
+pub const WITHOUT_TEXT: [(&str, &str); 7] = [
+    (
+        "minimise",
+        "hiding a window is not the shell's bg: the program keeps running in the foreground",
+    ),
     (
         "switcher",
         "focus is not the shell's fg (ADR-0172, open question)",

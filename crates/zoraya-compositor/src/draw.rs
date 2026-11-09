@@ -138,26 +138,21 @@ impl<P: Platform> Compositor<P> {
                 (title_text, ui, mono),
                 view,
             );
-            c.clip = old;
-        }
-        // The show-commands tags over the windows (ADR-0172 point 8).
-        if commands {
-            for (i, w) in windows
-                .iter()
-                .enumerate()
-                .filter(|(_, w)| !w.hidden && w.framed())
-            {
-                if let Some(v) = views.get(i) {
-                    crate::draw_rooms::frame_tags(
-                        &mut c,
-                        prect(w.outer(&f)),
-                        v,
-                        scale.factor(),
-                        p,
-                        (title_text, mono),
-                    );
-                }
+            // Its show-commands tag (ADR-0172 point 8), with it and inside
+            // it: a window above covers both.
+            if commands && w.framed() {
+                let outer = prect(w.outer(&f));
+                c.set_clip(c.clip.intersect(&outer));
+                crate::draw_rooms::frame_tags(
+                    &mut c,
+                    outer,
+                    view,
+                    scale.factor(),
+                    p,
+                    (title_text, mono),
+                );
             }
+            c.clip = old;
         }
         // The dock, above every window too (INV-0168-3).
         crate::draw_rooms::dock(
