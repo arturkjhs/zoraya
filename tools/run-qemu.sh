@@ -23,6 +23,8 @@
 #   --gui                 attach a virtio GPU (1024x768), keyboard and tablet,
 #                         each alone on its page (ADR-0091, ADR-0097). Without
 #                         --test, open QEMU's default display window
+#   --gui-scale N         with --gui: 1 (1024x768) or 2 (2048x1536, the
+#                         compositor's scale 2, ADR-0164)
 #   --qmp PATH            a QMP socket at PATH, for screendumps and keys
 #   --display-opts OPTS   the interactive display and its suboptions (with
 #                         --gui; ignored with --test); the default is below
@@ -64,6 +66,7 @@ test_disk=0
 write_error=0
 disk=
 gui=0
+gui_scale=1
 qmp=
 display_opts=
 kernel=
@@ -82,6 +85,7 @@ while [ $# -gt 0 ]; do
         --disk-write-error) write_error=1; shift ;;
         --disk) [ $# -ge 2 ] || die "--disk needs a file"; disk=$2; shift 2 ;;
         --gui) gui=1; shift ;;
+        --gui-scale) [ $# -ge 2 ] || die "--gui-scale needs 1 or 2"; gui_scale=$2; shift 2 ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
@@ -178,7 +182,14 @@ fi
 # Each GUI device alone on a page of eight transports (ADR-0091): QEMU puts
 # the first -device without bus= on transport 31, the disk's, page 3.
 if [ "$gui" = 1 ]; then
-    set -- "$@" -device virtio-gpu-device,bus=virtio-mmio-bus.23,xres=1024,yres=768 \
+    # ADR-0164: --gui-scale 2 asks for twice the pixels; the compositor
+    # takes scale 2 from a display at least 1920 wide.
+    case $gui_scale in
+        1) xres=1024 yres=768 ;;
+        2) xres=2048 yres=1536 ;;
+        *) die "--gui-scale is 1 or 2" ;;
+    esac
+    set -- "$@" -device virtio-gpu-device,bus=virtio-mmio-bus.23,xres=$xres,yres=$yres \
         -device virtio-keyboard-device,bus=virtio-mmio-bus.15 \
         -device virtio-tablet-device,bus=virtio-mmio-bus.7
 fi

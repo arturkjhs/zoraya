@@ -624,6 +624,38 @@ fn full_redraw(gui: &Gui) {
     let _ = handle_close(f.end);
 }
 
+/// 7b's measurements (plan.md): a frame composed with the switcher open
+/// (its glass blurs what is under it), and frames committed under it.
+fn switcher_cost(gui: &Gui, keyboard: &FakeInput) {
+    let mut f = Client::connect(gui);
+    assert_eq!(f.create(600, 400, 0x0030_6090), status::OK);
+    assert_eq!(f.whole(), status::OK);
+    settle(gui);
+    let before = stats(gui);
+    keyboard.keys(&[(code::LEFT_ALT, 1), (code::TAB, 1), (code::TAB, 0)]);
+    // Two round trips: the input and the frame it causes are behind them.
+    settle(gui);
+    settle(gui);
+    let opened = stats(gui);
+    let rounds = 10;
+    for i in 0..rounds {
+        f.pixels.fill(0x0010_1010 * (i % 8));
+        assert_eq!(f.whole(), status::OK);
+    }
+    let under = stats(gui);
+    keyboard.keys(&[(code::LEFT_ALT, 0)]);
+    settle(gui);
+    let per = |a: &gui::StatsReply, b: &gui::StatsReply| {
+        (b.compose_ns - a.compose_ns) / (b.frames - a.frames).max(1) / 1000
+    };
+    println!(
+        "t_gui: measure: switcher open {} us/frame, frames under it {} us/frame",
+        per(&before, &opened),
+        per(&opened, &under)
+    );
+    let _ = handle_close(f.end);
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let devices = scan();
@@ -643,6 +675,7 @@ fn main() -> i32 {
     driver_restarts(&mut gui, &mut a);
     a_hung_display_driver_stalls_nobody(&mut gui, &keyboard, &mut a, &mut b);
     full_redraw(&gui);
+    switcher_cost(&gui, &keyboard);
     let _ = handle_close(a.end);
     let _ = handle_close(b.end);
     let _ = handle_close(keyboard.0);

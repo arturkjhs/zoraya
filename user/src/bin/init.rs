@@ -321,6 +321,9 @@ enum Ended {
     Gui,
     /// The shell ended by itself, with this record.
     Shell(zoraya_abi::ExitRecord),
+    /// The person closed the terminal's window: it ended with 0 (ADR-0160's
+    /// close button), which ends its shell as `exit` would.
+    Closed,
 }
 
 /// Shells in a row that may end otherwise than with exit 0.
@@ -485,6 +488,11 @@ fn main() -> i32 {
                 KEY_TERMINAL if chose_to_end(shell.1).is_some() => {
                     break Ended::Shell(wait_exit(shell.1));
                 }
+                KEY_TERMINAL
+                    if terminal.is_some_and(|(t, _)| chose_to_end(t.process).is_some()) =>
+                {
+                    break Ended::Closed;
+                }
                 KEY_COMPOSITOR | KEY_TERMINAL => break Ended::Gui,
                 KEY_TTYD => {
                     let ttyd = session.as_ref().expect("a session").ttyd;
@@ -540,6 +548,8 @@ fn main() -> i32 {
                     println!("init: sync failed: what was written since the last sync may be lost");
                 }
             }
+            // A new terminal and shell, as after `exit`; not a failure.
+            Ended::Closed => println!("init: the terminal was closed"),
             Ended::Gui => {
                 println!("init: the gui failed");
                 if let Some(g) = gui.take() {

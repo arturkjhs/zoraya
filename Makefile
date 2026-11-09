@@ -96,8 +96,9 @@ run: $(KERNEL) $(DISK)
 	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
 
 # The GUI (ADR-0097): a window on the host; the serial line stays here.
+GUI_SCALE ?= 1
 run-gui: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --gui --mem 256M --disk $(DISK) $(KERNEL)
+	$(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 256M --disk $(DISK) $(KERNEL)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
@@ -453,16 +454,21 @@ tour-scripts:
 # The stage 5 criterion (TASK-14): the GUI headless, keys through QMP, the
 # screen read back as text. Under the host's accelerator and under TCG.
 GUI_IMAGE := $(BUILD)/gui.img
-GUI_SCRIPT := tests/gui/terminal.script
+# 7b (ADR-0160, ADR-0164): the terminal's script and the windows' script,
+# each under the host's accelerator and TCG at scale 1, and under the host's
+# accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels),
+# with three times the time: every screendump read is four times larger.
+GUI_TIMEOUT_2 ?= 540
+GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 terminal:auto:2 windows:auto:2
 test-gui: $(KERNEL) $(RUNNER) tools-storage
-	target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE)
-	$(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(GUI_SCRIPT) --qmp $(BUILD)/gui-auto.qmp --label gui-auto -- \
-		$(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/gui-auto.qmp --disk $(GUI_IMAGE) --accel auto $(KERNEL)
-	target/debug/zoraya-fsck $(GUI_IMAGE)
-	target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE)
-	$(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(GUI_SCRIPT) --qmp $(BUILD)/gui-tcg.qmp --label gui-tcg -- \
-		$(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/gui-tcg.qmp --disk $(GUI_IMAGE) --accel tcg $(KERNEL)
-	target/debug/zoraya-fsck $(GUI_IMAGE)
+	@for run in $(GUI_RUNS); do \
+	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
+	  label=gui-$$script-$$accel-$$scale; \
+	  target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE) > /dev/null && \
+	  timeout=$(QEMU_TIMEOUT); [ $$scale = 2 ] && timeout=$(GUI_TIMEOUT_2); \
+	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
+	    $(RUN_QEMU) --test --gui --gui-scale $$scale --mem 256M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
+	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
 test-crash: $(KERNEL) tools-storage
@@ -580,7 +586,7 @@ check-test-caps:
 # so with `// not a colour` (review finding 6).
 GUI_SOURCES := crates/zoraya-compositor/src crates/zoraya-term/src user/src/bin/compd.rs user/src/bin/term.rs
 check-tokens:
-	@hits="$$(grep -rnE '0x[0-9a-fA-F_]+|Duration::from_' $(GUI_SOURCES) | grep -v '/tests\.rs:' | grep -v 'not a colour' | \
+	@hits="$$(grep -rnE '0x[0-9a-fA-F_]+|Duration::from_' $(GUI_SOURCES) | grep -vE '/tests(_[a-z_]+)?\.rs:' | grep -v 'not a colour' | \
 	  perl -ne 'print if /Duration::from_/ || grep { (my $$d = $$_) =~ s/_//g; length($$d) == 6 || length($$d) == 8 } /0x([0-9a-fA-F_]+)(?:[ui](?:8|16|32|64|size))?\b/g' || true)"; \
 	if [ -n "$$hits" ]; then echo "colour or duration literals outside zoraya-tokens (INV-0161-1):"; echo "$$hits"; exit 1; fi
 	@# INV-0240-1: fonts are embedded only through zoraya-fonts.

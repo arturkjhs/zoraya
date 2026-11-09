@@ -1,20 +1,31 @@
-//! The compositor (ADR-0093, ADR-0094) as a loop over a [`Platform`], so
-//! that it runs on the host against hostile clients.
+//! The compositor (ADR-0093, ADR-0094, ADR-0160, ADR-0164) as a loop over a
+//! [`Platform`], so that it runs on the host against hostile clients.
 //!
 //! Clients draw into memory objects of their own and commit damage. The
 //! compositor copies each committed rectangle once into a copy it owns,
-//! composes the screen only from its copies, flushes one rectangle per round
-//! to the display driver, and then replies to each commit: the frame
-//! callback. It never waits for a client. Keys go to the focused surface,
-//! pointer events to the surface under the pointer, and F12 is its own.
+//! composes the screen only from its copies and its own drawing, flushes
+//! one rectangle per round to the display driver, and then replies to each
+//! commit: the frame callback. It never waits for a client.
+//!
+//! Stage 7b (ADR-0160): every toplevel has a frame the compositor draws
+//! from the tokens (title bar, title, close and minimise buttons, border,
+//! rounded corners, shadow); the person moves, resizes, minimises, restores
+//! and closes windows; a client may have several windows and popups; the
+//! system key's chords, Alt+Tab and F12 are the compositor's, and Alt+Tab
+//! opens the switcher overlay in the trusted material; the top bar is the
+//! compositor's own. Sizes sent to clients are logical, at one scale for
+//! the display (ADR-0164).
 
 #![no_std]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
+mod draw;
 pub mod rect;
+pub mod window;
 
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -23,25 +34,31 @@ use zoraya_proto_display as display;
 use zoraya_proto_gui::{self as gui, status};
 use zoraya_proto_input as input;
 use zoraya_protocol::{Below, ErrorReply, Flags, Header, Message, NO_REPLY, decode, encode};
+use zoraya_text::{Font, FontList, Text};
+use zoraya_tokens::{Appearance, Scale, space};
 
 pub use rect::Rect;
-use zoraya_tokens::LIGHT;
+use window::Buffer;
+pub use window::{Frame, Window, WindowKind, Zone};
 
 /// Client connections at once `[assumption, ADR-0093]`.
 pub const MAX_CLIENTS: usize = 8;
 /// Input drivers at once.
 pub const MAX_INPUTS: usize = 4;
-/// Where the first window goes, and how far each later one moves.
-pub const ORIGIN: (i64, i64) = (16, 16);
-pub const CASCADE: i64 = 32;
-/// Stage 5's background and frame, in the light set's tokens until 7b
-/// draws ADR-0160's frames (INV-0161-1).
-pub const BACKGROUND: u32 = LIGHT.bg_desktop.pixel();
-pub const BORDER: u32 = LIGHT.border_strong.pixel();
-pub const BORDER_FOCUSED: u32 = LIGHT.accent.pixel();
-/// The pointer's fill and outline.
-const POINTER_FILL: u32 = LIGHT.bg_control.pixel();
-const POINTER_EDGE: u32 = LIGHT.fg_text.pixel();
+/// Windows of all clients at once, popups included.
+pub const MAX_WINDOWS: usize = 32;
+/// Toplevel windows one client may have `[assumption]`.
+pub const MAX_TOPLEVELS: usize = 8;
+/// Where the first window's frame goes, in logical pixels from the top
+/// left of the work area (below the bar), and how far each later one
+/// moves: the mockups' terminal window is at (72, 70).
+pub const ORIGIN: (u32, u32) = (72, 42);
+pub const CASCADE: u32 = 32;
+/// How long a client has to close after the person asked, before the
+/// close button offers to close it anyway (ADR-0160, an assumption).
+pub const CLOSE_GRACE_NS: u64 = 5_000_000_000;
+/// The display width from which the scale is 2 (ADR-0164's `auto`).
+pub const SCALE_TWO_FROM: u32 = 1920;
 
 /// Port keys: the manager, the display, inputs from `INPUT_KEY`, clients
 /// from `CLIENT_KEY`.
@@ -55,20 +72,28 @@ pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
 
-/// The pointer: 1 is white, 2 is black, 0 is clear.
-const POINTER: [[u8; 8]; 11] = [
-    [2, 0, 0, 0, 0, 0, 0, 0],
-    [2, 2, 0, 0, 0, 0, 0, 0],
-    [2, 1, 2, 0, 0, 0, 0, 0],
-    [2, 1, 1, 2, 0, 0, 0, 0],
-    [2, 1, 1, 1, 2, 0, 0, 0],
-    [2, 1, 1, 1, 1, 2, 0, 0],
-    [2, 1, 1, 1, 1, 1, 2, 0],
-    [2, 1, 1, 1, 1, 1, 1, 2],
-    [2, 1, 1, 2, 2, 2, 2, 2],
-    [2, 1, 2, 0, 0, 0, 0, 0],
-    [2, 2, 0, 0, 0, 0, 0, 0],
-];
+/// The scale for a display `width` physical pixels wide (ADR-0164: `auto`
+/// until the setting exists).
+pub const fn scale_for(width: u32) -> Scale {
+    if width >= SCALE_TWO_FROM {
+        Scale::TWO
+    } else {
+        Scale::ONE
+    }
+}
+
+/// Where the first window's body lies on a display at `scale`: the frame
+/// at `ORIGIN` below the bar, the title bar above the body. The GUI test
+/// reads the terminal there.
+pub fn first_body(scale: Scale) -> (i64, i64) {
+    let f = Frame::at(scale);
+    let s = i64::from(scale.factor());
+    let bar = i64::from(space::BAR_HEIGHT.physical(scale));
+    (
+        i64::from(ORIGIN.0) * s + f.border,
+        bar + i64::from(ORIGIN.1) * s + f.title,
+    )
+}
 
 /// What came on a channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,48 +158,15 @@ pub trait Platform {
     fn now(&mut self) -> u64;
 }
 
-struct Surface {
-    width: u32,
-    height: u32,
-    /// Where the surface's top left is on the screen.
-    x: i64,
-    y: i64,
-    address: u64,
-    length: u64,
-    /// The compositor's own copy: what it composes from.
-    copy: Vec<u32>,
-}
-
-impl Surface {
-    fn area(&self) -> Rect {
-        Rect::new(
-            self.x,
-            self.y,
-            i64::from(self.width),
-            i64::from(self.height),
-        )
-    }
-
-    /// The area with its one-pixel frame.
-    fn frame(&self) -> Rect {
-        Rect::new(
-            self.x - 1,
-            self.y - 1,
-            i64::from(self.width) + 2,
-            i64::from(self.height) + 2,
-        )
-    }
-}
-
 struct Client<E> {
     end: E,
-    surface: Option<Surface>,
-    /// A commit waiting for the round's flush: its transaction.
-    commit: Option<u32>,
+    /// A commit waiting for the round's flush: its transaction and its
+    /// reply's ordinal (`FrameDone` or `CommitDone`).
+    commit: Option<(u32, u32)>,
     /// Events dropped since the last that reached it.
     dropped: u32,
-    /// The order surfaces were created in, for F12.
-    created: u64,
+    /// The id its next window gets (from 1).
+    next_id: u32,
 }
 
 /// What composition has cost.
@@ -190,24 +182,75 @@ pub struct Stats {
     pub hangs: u64,
 }
 
+/// A window, named by its client's slot and its id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Key {
+    pub client: usize,
+    pub id: u32,
+}
+
+/// What a held pointer button is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drag {
+    /// Moving the window: the pointer's offset from the body's top left.
+    Move { window: Key, dx: i64, dy: i64 },
+    /// Resizing: the sides that move, and the body when the drag began.
+    Resize {
+        window: Key,
+        left: bool,
+        top: bool,
+        right: bool,
+        bottom: bool,
+        start: (i64, i64),
+        body: Rect,
+    },
+}
+
+/// The switcher overlay while open (ADR-0160): the windows in the order
+/// shown, and the chosen one.
+pub struct Switcher {
+    pub windows: Vec<Key>,
+    pub chosen: usize,
+    /// Each window's pixels shrunk, made when it opens and when that window
+    /// commits, never per frame (ADR-0160).
+    pub thumbs: Vec<Vec<u32>>,
+}
+
 pub struct Compositor<P: Platform> {
     platform: P,
     manager: P::End,
     display: Option<P::End>,
     inputs: Vec<Option<P::End>>,
     clients: Vec<Option<Client<P::End>>>,
-    /// Surfaces, bottom first, by client index.
-    order: Vec<usize>,
-    focus: Option<usize>,
+    /// Every window, bottom of the stack first.
+    windows: Vec<Window>,
+    focus: Option<Key>,
+    /// The display in physical pixels, and its scale.
     width: u32,
     height: u32,
+    scale: Scale,
+    appearance: Appearance,
     attached: bool,
     keymap: Keymap,
+    /// The system key is held (either side).
+    meta: u8,
     /// Where the pointer is, once a pointer has spoken.
     pointer: Option<(i64, i64)>,
     buttons: u32,
+    drag: Option<Drag>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
+    switcher: Option<Switcher>,
+    /// The screen as last composed with the switcher open: a pointer that
+    /// only moves over it is drawn on this, not on a new blur.
+    switcher_frame: Vec<u32>,
+    /// Something but the pointer changed this round.
+    scene: bool,
+    /// Keys whose press reached a client: their release reaches it too,
+    /// even during a chord or the switcher (review 7b, 12).
+    delivered: [u64; 8],
+    /// The keyboard layout's name in the bar (7c switches it).
+    layout: String,
     /// What changed on the screen this round.
     damage: Rect,
     /// Composed and not yet sent to the display driver.
@@ -216,16 +259,28 @@ pub struct Compositor<P: Platform> {
     in_flight: Option<u64>,
     /// Since when a flush has been waiting for room in the driver's queue.
     stuck_since: Option<u64>,
-    created: u64,
     stats: Stats,
+    /// The wallpaper and its blurred copy, made when the display attaches.
+    wallpaper: Vec<u32>,
+    blurred: Vec<u32>,
+    ui: Text<'static>,
+    title_text: Text<'static>,
     message: Vec<u8>,
     handles: Vec<P::End>,
-    out: [u8; 128],
+    out: [u8; 512],
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, transaction: u32, out: &mut [u8]) -> usize {
     // Every message here is small and fixed: encoding cannot fail.
     encode(m, transaction, out).unwrap_or(0)
+}
+
+fn fonts(primary: &'static [u8]) -> FontList<'static> {
+    FontList::new(
+        [primary, zoraya_fonts::MONO_REGULAR]
+            .into_iter()
+            .filter_map(|d| Font::parse(d).ok()),
+    )
 }
 
 impl<P: Platform> Compositor<P> {
@@ -244,24 +299,36 @@ impl<P: Platform> Compositor<P> {
             display: None,
             inputs: vec![None; MAX_INPUTS],
             clients: (0..MAX_CLIENTS).map(|_| None).collect(),
-            order: Vec::new(),
+            windows: Vec::new(),
             focus: None,
             width: 0,
             height: 0,
+            scale: Scale::ONE,
+            appearance: Appearance::Light,
             attached: false,
             keymap: Keymap::new(),
+            meta: 0,
             pointer: None,
             buttons: 0,
+            drag: None,
             pending_pointer: false,
+            switcher: None,
+            switcher_frame: Vec::new(),
+            scene: false,
+            delivered: [0; 8],
+            layout: String::from("US"),
             damage: Rect::default(),
             unflushed: Rect::default(),
             in_flight: None,
             stuck_since: None,
-            created: 0,
             stats: Stats::default(),
+            wallpaper: Vec::new(),
+            blurred: Vec::new(),
+            ui: Text::new(fonts(zoraya_fonts::INTER_REGULAR)),
+            title_text: Text::new(fonts(zoraya_fonts::INTER_MEDIUM)),
             message: vec![0; 4096],
             handles: Vec::new(),
-            out: [0; 128],
+            out: [0; 512],
         };
         if let Some(d) = display {
             c.attach_display(d);
@@ -276,27 +343,63 @@ impl<P: Platform> Compositor<P> {
         &mut self.platform
     }
 
+    /// The display in physical pixels.
     pub const fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    pub const fn scale(&self) -> Scale {
+        self.scale
     }
 
     pub const fn stats(&self) -> Stats {
         self.stats
     }
 
-    /// The client that has keyboard focus, by index.
-    pub const fn focus(&self) -> Option<usize> {
+    /// The window that has keyboard focus.
+    pub const fn focused(&self) -> Option<Key> {
         self.focus
     }
 
-    /// Where a client's surface is on the screen, if it has one.
+    /// The client that has keyboard focus, by index.
+    pub fn focus(&self) -> Option<usize> {
+        self.focus.map(|k| k.client)
+    }
+
+    /// Where a client's first visible window's body is on the screen.
     pub fn placement(&self, client: usize) -> Option<Rect> {
-        let c = self.clients.get(client)?.as_ref()?;
-        c.surface.as_ref().map(Surface::area)
+        self.windows
+            .iter()
+            .find(|w| w.client == client)
+            .map(Window::body_rect)
+    }
+
+    /// A window, if it exists.
+    pub fn window(&self, key: Key) -> Option<&Window> {
+        self.windows
+            .iter()
+            .find(|w| w.client == key.client && w.id == key.id)
+    }
+
+    /// The windows, bottom of the stack first.
+    pub fn stack(&self) -> impl Iterator<Item = Key> + '_ {
+        self.windows.iter().map(|w| Key {
+            client: w.client,
+            id: w.id,
+        })
+    }
+
+    pub fn switcher(&self) -> Option<&Switcher> {
+        self.switcher.as_ref()
     }
 
     pub fn client_count(&self) -> usize {
         self.clients.iter().flatten().count()
+    }
+
+    /// The frame's sizes at the display's scale.
+    pub fn frame(&self) -> Frame {
+        Frame::at(self.scale)
     }
 
     /// Runs forever.
@@ -382,43 +485,33 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(end);
             return status::UNSUPPORTED;
         }
-        if (info.width, info.height) != (self.width, self.height) || !self.attached {
-            let Some(frame) = self.platform.framebuffer(info.width, info.height) else {
-                self.platform.close(end);
-                return status::NO_MEMORY;
-            };
+        let new_size = (info.width, info.height) != (self.width, self.height) || !self.attached;
+        let Some(frame) = self.platform.framebuffer(info.width, info.height) else {
+            self.platform.close(end);
+            return status::NO_MEMORY;
+        };
+        if new_size {
             self.width = info.width;
             self.height = info.height;
             self.attached = true;
-            let length = reply(&display::Attach {}, 2, &mut self.out);
-            let message = self.out;
-            let done = self
-                .platform
-                .call(end, &message[..length], &[frame], &mut answer);
-            if !Self::done_ok(done, &answer) {
-                self.platform.close(end);
-                return status::UNSUPPORTED;
-            }
-        } else {
-            // A new driver for the same display: the same framebuffer.
-            let Some(frame) = self.platform.framebuffer(info.width, info.height) else {
-                self.platform.close(end);
-                return status::NO_MEMORY;
-            };
-            let length = reply(&display::Attach {}, 2, &mut self.out);
-            let message = self.out;
-            let done = self
-                .platform
-                .call(end, &message[..length], &[frame], &mut answer);
-            if !Self::done_ok(done, &answer) {
-                self.platform.close(end);
-                return status::UNSUPPORTED;
-            }
+            let old = self.scale.factor();
+            self.scale = scale_for(info.width);
+            self.make_wallpaper();
+            self.reconfigure(old);
+        }
+        let length = reply(&display::Attach {}, 2, &mut self.out);
+        let message = self.out;
+        let done = self
+            .platform
+            .call(end, &message[..length], &[frame], &mut answer);
+        if !Self::done_ok(done, &answer) {
+            self.platform.close(end);
+            return status::UNSUPPORTED;
         }
         self.display = Some(end);
         self.platform.watch(end, DISPLAY_KEY);
         // Everything, once: a new driver shows nothing until told.
-        self.damage = self.damage.union(&self.screen());
+        self.dirty(&self.screen());
         self.in_flight = None;
         self.stuck_since = None;
         status::OK
@@ -505,7 +598,9 @@ impl<P: Platform> Compositor<P> {
                 self.inputs[slot] = None;
                 // Keys it held down will never be released (review R10).
                 self.keymap = Keymap::new();
+                self.meta = 0;
                 self.buttons = 0;
+                self.drag = None;
             }
         }
         self.message = message;
@@ -540,9 +635,12 @@ impl<P: Platform> Compositor<P> {
         if button != 0 {
             if value == 0 {
                 self.buttons &= !button;
+                if button == gui::buttons::LEFT {
+                    self.release();
+                }
             } else {
                 if value == 1 {
-                    self.click();
+                    self.press(button);
                 }
                 self.buttons |= button;
             }
@@ -552,15 +650,90 @@ impl<P: Platform> Compositor<P> {
         if (0x110..0x200).contains(&code_) {
             return;
         }
+        // The system key: held, and never a client's (INV-0160-3).
+        match code_ {
+            code::LEFT_META => {
+                self.meta = if value != 0 {
+                    self.meta | 1
+                } else {
+                    self.meta & !1
+                };
+                return;
+            }
+            code::RIGHT_META => {
+                self.meta = if value != 0 {
+                    self.meta | 2
+                } else {
+                    self.meta & !2
+                };
+                return;
+            }
+            _ => {}
+        }
         let key = self.keymap.key(code_, value);
-        // F12 is the compositor's: no client sees it (INV-0094-1).
-        if code_ == code::F12 {
-            if value == 1 {
-                self.next_focus();
+        let alt = key.modifiers & zoraya_keymap::ALT != 0;
+        let shift = key.modifiers & zoraya_keymap::SHIFT != 0;
+        let bit = (code_ as usize) < 512;
+        let (word, mask) = ((code_ as usize / 64) % 8, 1u64 << (code_ % 64));
+        if !key.pressed && bit && self.delivered[word] & mask != 0 {
+            self.delivered[word] &= !mask;
+            if let Some(focus) = self.focus {
+                let m = gui::Key {
+                    dropped: 0,
+                    code: code_,
+                    pressed: false,
+                    modifiers: Flags(key.modifiers),
+                    text: Below(0),
+                };
+                self.send_event(focus.client, m);
+            }
+        }
+        // Releasing Alt chooses in the open switcher.
+        if self.switcher.is_some() && !alt && !key.pressed {
+            if matches!(code_, code::LEFT_ALT | code::RIGHT_ALT) {
+                self.choose_in_switcher();
             }
             return;
         }
-        let Some(client) = self.focus else { return };
+        if self.switcher.is_some() {
+            if key.pressed {
+                match code_ {
+                    code::TAB => self.step_switcher(if shift { -1 } else { 1 }),
+                    code::ESC => self.close_switcher(),
+                    _ => {}
+                }
+            }
+            return;
+        }
+        if self.meta != 0 {
+            // Every chord with the system key is the compositor's.
+            if key.pressed && value == 1 {
+                self.chord(code_);
+            }
+            return;
+        }
+        if code_ == code::TAB && alt {
+            if value == 1 {
+                self.open_switcher(if shift { -1 } else { 1 });
+            }
+            return;
+        }
+        // F12: the backup for Alt+Tab, the next window at once (INV-0094-1).
+        if code_ == code::F12 {
+            if value == 1 {
+                self.next_window();
+            }
+            return;
+        }
+        let Some(focus) = self.focus else { return };
+        if !key.pressed {
+            // Its press did not reach a client (it began a chord), or its
+            // release was sent above.
+            return;
+        }
+        if bit {
+            self.delivered[word] |= mask;
+        }
         let m = gui::Key {
             dropped: 0,
             code: code_,
@@ -568,7 +741,39 @@ impl<P: Platform> Compositor<P> {
             modifiers: Flags(key.modifiers),
             text: Below(key.text.map_or(0, u32::from)),
         };
-        self.send_event(client, m);
+        self.send_event(focus.client, m);
+    }
+
+    /// A chord with the system key (ADR-0160): W closes, M minimises, Left
+    /// and Right tile; the others are reserved for later parts (Space for
+    /// 7c's layouts, Enter, R and ? for 7d) and reach no client either.
+    fn chord(&mut self, code_: u32) {
+        let Some(mut focus) = self.focus else { return };
+        // A focused popup's chords are its window's.
+        if let Some(i) = self.index(focus)
+            && let WindowKind::Popup { parent } = self.windows[i].kind
+        {
+            focus = Key {
+                client: focus.client,
+                id: parent,
+            };
+        }
+        match code_ {
+            code::W => self.ask_close(focus),
+            code::M => self.set_hidden(focus, true),
+            code::LEFT => self.tile(focus, false),
+            code::RIGHT => self.tile(focus, true),
+            _ => {}
+        }
+    }
+
+    /// Marks `r` of the screen to be composed again.
+    fn dirty(&mut self, r: &Rect) -> Rect {
+        if !r.is_empty() {
+            self.scene = true;
+        }
+        self.damage = self.damage.union(r);
+        self.damage
     }
 
     fn move_pointer(&mut self, x: i64, y: i64) {
@@ -576,119 +781,560 @@ impl<P: Platform> Compositor<P> {
         if old == Some((x, y)) {
             return;
         }
+        // The pointer alone is not the scene: over the switcher it is drawn
+        // on the last frame.
         if let Some((ox, oy)) = old {
-            self.damage = self.damage.union(&pointer_rect(ox, oy));
+            self.damage = self.damage.union(&self.pointer_rect(ox, oy));
         }
         self.pointer = Some((x, y));
-        self.damage = self.damage.union(&pointer_rect(x, y));
+        self.damage = self.damage.union(&self.pointer_rect(x, y));
         self.pending_pointer = true;
+        self.drag_to(x, y);
     }
 
-    /// After a frame: tell the surface under the pointer where it is.
+    fn pointer_rect(&self, x: i64, y: i64) -> Rect {
+        let s = i64::from(self.scale.factor());
+        Rect::new(
+            x,
+            y,
+            draw::POINTER[0].len() as i64 * s,
+            draw::POINTER.len() as i64 * s,
+        )
+    }
+
+    fn index(&self, key: Key) -> Option<usize> {
+        self.windows
+            .iter()
+            .position(|w| w.client == key.client && w.id == key.id)
+    }
+
+    fn key_of(w: &Window) -> Key {
+        Key {
+            client: w.client,
+            id: w.id,
+        }
+    }
+
+    /// The topmost visible window holding the point, and the zone.
+    fn under(&self, x: i64, y: i64) -> Option<(Key, Zone)> {
+        let f = self.frame();
+        // The bar is the compositor's: nothing under it is reached there.
+        if y < i64::from(space::BAR_HEIGHT.physical(self.scale)) {
+            return None;
+        }
+        self.windows
+            .iter()
+            .rev()
+            .filter(|w| !w.hidden)
+            .find_map(|w| w.zone(&f, self.scale, x, y).map(|z| (Self::key_of(w), z)))
+    }
+
+    fn press(&mut self, button: u32) {
+        let Some((x, y)) = self.pointer else { return };
+        let hit = self.under(x, y);
+        // A press anywhere but on a popup closes the popups (ADR-0160).
+        let on_popup = hit.is_some_and(|(k, _)| {
+            self.index(k)
+                .is_some_and(|i| matches!(self.windows[i].kind, WindowKind::Popup { .. }))
+        });
+        if !on_popup {
+            let popups: Vec<Key> = self
+                .windows
+                .iter()
+                .filter(|w| matches!(w.kind, WindowKind::Popup { .. }))
+                .map(Self::key_of)
+                .collect();
+            for p in popups {
+                self.send_event_plain(p.client, &gui::CloseRequested { window: p.id });
+                self.remove_window(p);
+            }
+        }
+        let Some((key, zone)) = hit else { return };
+        self.raise(key);
+        self.set_focus(Some(key));
+        if button != gui::buttons::LEFT {
+            return;
+        }
+        let Some(i) = self.index(key) else { return };
+        let body = self.windows[i].body_rect();
+        match zone {
+            Zone::Close => self.ask_close(key),
+            Zone::Minimise => self.set_hidden(key, true),
+            Zone::Title => {
+                self.drag = Some(Drag::Move {
+                    window: key,
+                    dx: x - body.x,
+                    dy: y - body.y,
+                });
+            }
+            Zone::Grip {
+                left,
+                top,
+                right,
+                bottom,
+            } => {
+                self.drag = Some(Drag::Resize {
+                    window: key,
+                    left,
+                    top,
+                    right,
+                    bottom,
+                    start: (x, y),
+                    body,
+                });
+            }
+            Zone::Body => {}
+        }
+    }
+
+    /// The pointer moves while a button holds a drag: the window follows,
+    /// and its client sees nothing until the end (ADR-0160).
+    fn drag_to(&mut self, x: i64, y: i64) {
+        let f = self.frame();
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        match self.drag {
+            Some(Drag::Move { window, dx, dy }) => {
+                let Some(i) = self.index(window) else { return };
+                let before = self.windows[i].reach(&f);
+                // The title bar stays reachable: below the bar, and a part
+                // of it on the screen.
+                let w = &mut self.windows[i];
+                let min_x = -i64::from(w.body.0) + 2 * f.title;
+                let max_x = i64::from(self.width) - 2 * f.title;
+                let (ox, oy) = (w.x, w.y);
+                w.x = (x - dx).clamp(min_x, max_x.max(min_x));
+                w.y = (y - dy).clamp(
+                    bar + f.title,
+                    i64::from(self.height).max(bar + f.title + 1) - 1,
+                );
+                let (mx, my) = (w.x - ox, w.y - oy);
+                let after = w.reach(&f);
+                self.dirty(&before);
+                self.dirty(&after);
+                // Its popups move with it.
+                for j in 0..self.windows.len() {
+                    let p = &mut self.windows[j];
+                    if p.client == window.client
+                        && p.kind == (WindowKind::Popup { parent: window.id })
+                    {
+                        let before = p.reach(&f);
+                        p.x += mx;
+                        p.y += my;
+                        let after = p.reach(&f);
+                        self.dirty(&before);
+                        self.dirty(&after);
+                    }
+                }
+            }
+            Some(Drag::Resize {
+                window,
+                left,
+                top,
+                right,
+                bottom,
+                start,
+                body,
+            }) => {
+                let Some(i) = self.index(window) else { return };
+                let before = self.windows[i].reach(&f);
+                let (ddx, ddy) = (x - start.0, y - start.1);
+                let s = i64::from(self.scale.factor());
+                let mut r = body;
+                if right {
+                    r.width = (body.width + ddx).max(s);
+                }
+                if bottom {
+                    r.height = (body.height + ddy).max(s);
+                }
+                if left {
+                    let w = (body.width - ddx).max(s);
+                    r.x = body.right() - w;
+                    r.width = w;
+                }
+                if top {
+                    let h = (body.height - ddy).max(s);
+                    r.y = (body.bottom() - h).max(bar + f.title);
+                    r.height = body.bottom() - r.y;
+                }
+                // At most the work area (review 7b, 2): a window cannot be
+                // grown past the display by moving it and resizing again.
+                let max_w = i64::from(self.width) - 2 * f.border;
+                let max_h = i64::from(self.height) - bar - f.title - f.border;
+                if r.width > max_w {
+                    if left {
+                        r.x += r.width - max_w;
+                    }
+                    r.width = max_w;
+                }
+                if r.height > max_h {
+                    r.height = max_h;
+                }
+                // Whole logical pixels.
+                r.width -= r.width % s;
+                r.height -= r.height % s;
+                let w = &mut self.windows[i];
+                w.x = r.x;
+                w.y = r.y;
+                w.body = (r.width.max(s) as u32, r.height.max(s) as u32);
+                w.chrome = None;
+                let after = w.reach(&f);
+                self.dirty(&before);
+                self.dirty(&after);
+            }
+            None => {}
+        }
+    }
+
+    fn release(&mut self) {
+        if let Some(Drag::Resize { window, .. }) = self.drag.take() {
+            self.configure(window);
+        }
+    }
+
+    /// After a frame: tell the window under the pointer where it is.
     fn pointer_moved_or_pressed(&mut self) {
         if !core::mem::take(&mut self.pending_pointer) {
             return;
         }
         let Some((x, y)) = self.pointer else { return };
-        let Some(client) = self.under(x, y) else {
+        if self.drag.is_some() {
+            return;
+        }
+        let Some((key, Zone::Body)) = self.under(x, y) else {
             return;
         };
-        let Some(area) = self.clients[client]
-            .as_ref()
-            .and_then(|c| c.surface.as_ref())
-            .map(Surface::area)
-        else {
+        let Some(i) = self.index(key) else { return };
+        let w = &self.windows[i];
+        let body = w.body_rect();
+        // On the border of a legacy surface: not in its body (review 7b, 11).
+        if !body.contains(x, y) {
             return;
-        };
-        let m = gui::Pointer {
-            dropped: 0,
-            x: (x - area.x) as u32,
-            y: (y - area.y) as u32,
-            buttons: Flags(self.buttons),
-        };
-        self.send_event(client, m);
-    }
-
-    /// The topmost client whose surface holds the point.
-    fn under(&self, x: i64, y: i64) -> Option<usize> {
-        self.order.iter().rev().copied().find(|i| {
-            self.clients[*i]
-                .as_ref()
-                .and_then(|c| c.surface.as_ref())
-                .is_some_and(|s| s.area().contains(x, y))
-        })
-    }
-
-    fn click(&mut self) {
-        let Some((x, y)) = self.pointer else { return };
-        if let Some(client) = self.under(x, y) {
-            self.raise(client);
-            self.set_focus(Some(client));
+        }
+        let (px, py) = ((x - body.x) as u32, (y - body.y) as u32);
+        if w.kind == WindowKind::Legacy {
+            let m = gui::Pointer {
+                dropped: 0,
+                x: px,
+                y: py,
+                buttons: Flags(self.buttons),
+            };
+            self.send_event(key.client, m);
+        } else {
+            let s = self.scale.factor();
+            let m = gui::WindowPointer {
+                dropped: 0,
+                window: key.id,
+                x: px / s,
+                y: py / s,
+                buttons: Flags(self.buttons),
+            };
+            self.send_event(key.client, m);
         }
     }
 
-    fn raise(&mut self, client: usize) {
-        if let Some(at) = self.order.iter().position(|i| *i == client)
-            && at + 1 != self.order.len()
-        {
-            self.order.remove(at);
-            self.order.push(client);
-            if let Some(frame) = self.frame_of(client) {
-                self.damage = self.damage.union(&frame);
+    // ---- windows ----------------------------------------------------------
+
+    /// Raises a window, with its popups above it.
+    fn raise(&mut self, key: Key) {
+        let Some(i) = self.index(key) else { return };
+        let target = match self.windows[i].kind {
+            WindowKind::Popup { parent } => Key {
+                client: key.client,
+                id: parent,
+            },
+            _ => key,
+        };
+        let Some(t) = self.index(target) else { return };
+        // Already on top with its popups: nothing changes on the screen.
+        let above_are_popups = self.windows[t + 1..].iter().all(|w| {
+            w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id })
+        });
+        if above_are_popups {
+            return;
+        }
+        let mut moved: Vec<Window> = Vec::new();
+        moved.push(self.windows.remove(t));
+        let mut j = 0;
+        while j < self.windows.len() {
+            let w = &self.windows[j];
+            if w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id }) {
+                moved.push(self.windows.remove(j));
+            } else {
+                j += 1;
+            }
+        }
+        let f = self.frame();
+        for w in &moved {
+            self.dirty(&w.reach(&f));
+        }
+        self.windows.extend(moved);
+    }
+
+    /// Hides or shows a window; a hidden one loses focus to the next.
+    fn set_hidden(&mut self, key: Key, hidden: bool) {
+        let Some(i) = self.index(key) else { return };
+        if self.windows[i].hidden == hidden || !self.windows[i].framed() {
+            return;
+        }
+        self.windows[i].hidden = hidden;
+        if hidden {
+            self.close_popups_of(key);
+        }
+        let f = self.frame();
+        self.dirty(&self.windows[i].reach(&f));
+        if self.windows[i].kind == WindowKind::Toplevel {
+            self.send_event_plain(
+                key.client,
+                &gui::Minimised {
+                    window: key.id,
+                    hidden,
+                },
+            );
+        }
+        if hidden && self.focus == Some(key) {
+            let next = self
+                .windows
+                .iter()
+                .rev()
+                .find(|w| !w.hidden && w.framed())
+                .map(Self::key_of);
+            self.set_focus(next);
+        }
+    }
+
+    /// Closes the popups of `parent`, telling their client.
+    fn close_popups_of(&mut self, parent: Key) {
+        let popups: Vec<Key> = self
+            .windows
+            .iter()
+            .filter(|w| {
+                w.client == parent.client && w.kind == (WindowKind::Popup { parent: parent.id })
+            })
+            .map(Self::key_of)
+            .collect();
+        for p in popups {
+            self.send_event_plain(p.client, &gui::CloseRequested { window: p.id });
+            self.remove_window(p);
+        }
+    }
+
+    /// The person asked to close: the client is told. Between five and
+    /// twenty seconds later, if the client has committed nothing to the
+    /// window since (a hung client), a second press ends it (ADR-0160's
+    /// "close anyway"); after that, or once it commits, a press asks again
+    /// (review 7b, 4).
+    fn ask_close(&mut self, key: Key) {
+        let now = self.platform.now();
+        let Some(i) = self.index(key) else { return };
+        let asked = self.windows[i].close_asked;
+        if asked.is_some_and(|at| now.saturating_sub(at) >= 4 * CLOSE_GRACE_NS) {
+            self.windows[i].close_asked = None;
+        }
+        match self.windows[i].close_asked {
+            Some(at) if now.saturating_sub(at) >= CLOSE_GRACE_NS => {
+                self.drop_client(key.client);
+            }
+            Some(_) => {}
+            None => {
+                self.windows[i].close_asked = Some(now);
+                let f = self.frame();
+                self.dirty(&self.windows[i].title_bar(&f));
+                self.send_event_plain(key.client, &gui::CloseRequested { window: key.id });
             }
         }
     }
 
-    fn frame_of(&self, client: usize) -> Option<Rect> {
-        self.clients[client]
-            .as_ref()?
-            .surface
-            .as_ref()
-            .map(Surface::frame)
-    }
-
-    /// F12: the next surface in creation order after the focused one.
-    fn next_focus(&mut self) {
-        let mut surfaces: Vec<(u64, usize)> = self
-            .clients
-            .iter()
-            .enumerate()
-            .filter_map(|(i, c)| {
-                c.as_ref()
-                    .filter(|c| c.surface.is_some())
-                    .map(|c| (c.created, i))
-            })
-            .collect();
-        if surfaces.is_empty() {
+    /// System+Left and System+Right: the left or right half of the work
+    /// area (ADR-0160, Option E's first step).
+    fn tile(&mut self, key: Key, right: bool) {
+        let Some(i) = self.index(key) else { return };
+        if self.windows[i].kind != WindowKind::Toplevel {
             return;
         }
-        surfaces.sort_unstable();
-        let next = match self
-            .focus
-            .and_then(|f| surfaces.iter().position(|(_, i)| *i == f))
-        {
-            Some(at) => surfaces[(at + 1) % surfaces.len()].1,
-            None => surfaces[0].1,
-        };
-        self.raise(next);
-        self.set_focus(Some(next));
+        let f = self.frame();
+        let s = i64::from(self.scale.factor());
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let half = i64::from(self.width) / 2;
+        let x0 = if right { half } else { 0 };
+        let mut body = Rect::new(
+            x0 + f.border,
+            bar + f.title,
+            half - 2 * f.border,
+            i64::from(self.height) - bar - f.title - f.border,
+        );
+        body.width -= body.width % s;
+        body.height -= body.height % s;
+        let before = self.windows[i].reach(&f);
+        let w = &mut self.windows[i];
+        w.x = body.x;
+        w.y = body.y;
+        w.body = (body.width.max(s) as u32, body.height.max(s) as u32);
+        w.chrome = None;
+        let after = w.reach(&f);
+        self.dirty(&before);
+        self.dirty(&after);
+        self.configure(key);
     }
 
-    fn set_focus(&mut self, client: Option<usize>) {
-        if self.focus == client {
+    /// After the display changed size: every toplevel keeps its logical size
+    /// at the new scale (clamped to the display) and is configured again
+    /// (ADR-0164); legacy surfaces keep their buffers (review 7b, 13).
+    fn reconfigure(&mut self, old_scale: u32) {
+        let k = self.scale.factor();
+        let (w, h) = (self.width, self.height);
+        let keys: Vec<Key> = self
+            .windows
+            .iter()
+            .filter(|w| w.kind == WindowKind::Toplevel)
+            .map(Self::key_of)
+            .collect();
+        for win in &mut self.windows {
+            win.chrome = None;
+            if win.kind != WindowKind::Toplevel {
+                continue;
+            }
+            let lw = (win.body.0 / old_scale.max(1)).max(1);
+            let lh = (win.body.1 / old_scale.max(1)).max(1);
+            win.body = ((lw * k).min(w), (lh * k).min(h));
+            win.x = win.x / i64::from(old_scale.max(1)) * i64::from(k);
+            win.y = win.y / i64::from(old_scale.max(1)) * i64::from(k);
+        }
+        for key in keys {
+            self.configure(key);
+        }
+    }
+
+    /// Sends a toplevel its size, the scale and the appearance.
+    fn configure(&mut self, key: Key) {
+        let Some(i) = self.index(key) else { return };
+        let w = &self.windows[i];
+        if w.kind != WindowKind::Toplevel {
+            return;
+        }
+        let s = self.scale.factor();
+        let m = gui::Configure {
+            window: key.id,
+            width: w.body.0 / s,
+            height: w.body.1 / s,
+            scale: s,
+            dark: self.appearance == Appearance::Dark,
+            motion: false,
+        };
+        self.send_event_plain(key.client, &m);
+    }
+
+    /// F12: the next window, hidden ones included, raised and focused.
+    fn next_window(&mut self) {
+        let order = self.switch_order();
+        if order.is_empty() {
+            return;
+        }
+        let next = order[1 % order.len()];
+        self.activate(next);
+    }
+
+    /// The framed windows in the switcher's order: the focused first, then
+    /// the stack from the top, hidden ones last.
+    fn switch_order(&self) -> Vec<Key> {
+        let mut v: Vec<Key> = Vec::new();
+        if let Some(f) = self.focus
+            && self.index(f).is_some_and(|i| self.windows[i].framed())
+        {
+            v.push(f);
+        }
+        for hidden in [false, true] {
+            for w in self.windows.iter().rev() {
+                let k = Self::key_of(w);
+                if w.framed() && w.hidden == hidden && !v.contains(&k) {
+                    v.push(k);
+                }
+            }
+        }
+        v
+    }
+
+    /// Shows, raises and focuses a window.
+    fn activate(&mut self, key: Key) {
+        self.set_hidden(key, false);
+        self.raise(key);
+        self.set_focus(Some(key));
+    }
+
+    fn open_switcher(&mut self, step: isize) {
+        let windows = self.switch_order();
+        if windows.is_empty() {
+            return;
+        }
+        let chosen = (step.rem_euclid(windows.len() as isize)) as usize;
+        let k = self.scale.factor();
+        let thumbs = windows
+            .iter()
+            .map(|key| {
+                self.index(*key)
+                    .map(|i| draw::thumb(&self.windows[i], k))
+                    .unwrap_or_default()
+            })
+            .collect();
+        self.switcher = Some(Switcher {
+            windows,
+            chosen,
+            thumbs,
+        });
+        self.dirty(&self.screen());
+    }
+
+    fn step_switcher(&mut self, step: isize) {
+        if let Some(s) = self.switcher.as_mut() {
+            let n = s.windows.len() as isize;
+            s.chosen = (s.chosen as isize + step).rem_euclid(n) as usize;
+        }
+        self.dirty(&self.screen());
+    }
+
+    fn choose_in_switcher(&mut self) {
+        let Some(s) = self.switcher.take() else {
+            return;
+        };
+        self.switcher_frame = Vec::new();
+        self.dirty(&self.screen());
+        if let Some(k) = s.windows.get(s.chosen).copied()
+            && self.index(k).is_some()
+        {
+            self.activate(k);
+        }
+    }
+
+    fn close_switcher(&mut self) {
+        self.switcher = None;
+        self.switcher_frame = Vec::new();
+        self.dirty(&self.screen());
+    }
+
+    fn set_focus(&mut self, key: Option<Key>) {
+        if self.focus == key {
             return;
         }
         let old = self.focus;
-        self.focus = client;
-        for (c, focused) in [(old, false), (client, true)] {
-            if let Some(c) = c {
-                if let Some(frame) = self.frame_of(c) {
-                    self.damage = self.damage.union(&frame);
-                }
+        self.focus = key;
+        let f = self.frame();
+        for (k, focused) in [(old, false), (key, true)] {
+            let Some(k) = k else { continue };
+            let Some(i) = self.index(k) else { continue };
+            self.dirty(&self.windows[i].reach(&f));
+            if self.windows[i].kind == WindowKind::Legacy {
                 self.send_event(
-                    c,
+                    k.client,
                     gui::Focus {
                         dropped: 0,
+                        focused,
+                    },
+                );
+            } else {
+                self.send_event(
+                    k.client,
+                    gui::WindowFocus {
+                        dropped: 0,
+                        window: k.id,
                         focused,
                     },
                 );
@@ -702,7 +1348,7 @@ impl<P: Platform> Compositor<P> {
     where
         M: for<'a> Message<'a> + WithDropped,
     {
-        let Some(c) = self.clients[client].as_mut() else {
+        let Some(c) = self.clients.get_mut(client).and_then(Option::as_mut) else {
             return;
         };
         m.set_dropped(c.dropped);
@@ -712,6 +1358,18 @@ impl<P: Platform> Compositor<P> {
             Outgoing::Full => c.dropped = c.dropped.saturating_add(1),
             // Its close arrives as a message of its own.
             Outgoing::Closed => {}
+        }
+    }
+
+    /// An event with no dropped count of its own: a lost one is counted
+    /// for the next that carries one.
+    fn send_event_plain<'b, M: Message<'b>>(&mut self, client: usize, m: &M) {
+        let Some(c) = self.clients.get_mut(client).and_then(Option::as_mut) else {
+            return;
+        };
+        let length = reply(m, NO_REPLY, &mut self.out);
+        if self.platform.write(c.end, &self.out[..length], &[]) == Outgoing::Full {
+            c.dropped = c.dropped.saturating_add(1);
         }
     }
 
@@ -813,28 +1471,107 @@ impl<P: Platform> Compositor<P> {
         }
         self.clients[slot] = Some(Client {
             end,
-            surface: None,
             commit: None,
             dropped: 0,
-            created: 0,
+            next_id: 1,
         });
         status::OK
     }
 
-    fn drop_client(&mut self, slot: usize) {
-        let Some(c) = self.clients[slot].take() else {
-            return;
-        };
-        if let Some(s) = c.surface {
-            self.platform.unmap(s.address, s.length);
-            self.damage = self.damage.union(&s.frame());
+    fn unmap(&mut self, b: &Buffer) {
+        self.platform.unmap(b.address, b.length);
+    }
+
+    /// Removes a window: its buffers go, the screen under it is redrawn,
+    /// focus moves to the top window if it had it. A toplevel takes its
+    /// popups with it.
+    fn remove_window(&mut self, key: Key) {
+        let Some(i) = self.index(key) else { return };
+        let w = self.windows.remove(i);
+        let f = self.frame();
+        self.dirty(&w.reach(&f));
+        self.unmap(&w.buffer);
+        if let Some(n) = &w.next {
+            self.unmap(n);
         }
-        self.platform.close(c.end);
-        self.order.retain(|i| *i != slot);
-        if self.focus == Some(slot) {
+        if let Some(s) = self.switcher.as_mut() {
+            if let Some(at) = s.windows.iter().position(|k| *k == key) {
+                s.windows.remove(at);
+                s.thumbs.remove(at);
+            }
+            if s.windows.is_empty() {
+                self.switcher = None;
+            } else {
+                s.chosen = s.chosen.min(s.windows.len() - 1);
+            }
+        }
+        if self.drag.is_some_and(|d| match d {
+            Drag::Move { window, .. } | Drag::Resize { window, .. } => window == key,
+        }) {
+            self.drag = None;
+        }
+        if w.framed() {
+            let popups: Vec<Key> = self
+                .windows
+                .iter()
+                .filter(|p| {
+                    p.client == key.client && p.kind == (WindowKind::Popup { parent: key.id })
+                })
+                .map(Self::key_of)
+                .collect();
+            for p in popups {
+                self.remove_window(p);
+            }
+        }
+        if self.focus == Some(key) {
             self.focus = None;
-            let top = self.order.last().copied();
+            let parent = match w.kind {
+                WindowKind::Popup { parent } => Some(Key {
+                    client: key.client,
+                    id: parent,
+                })
+                .filter(|k| self.index(*k).is_some()),
+                _ => None,
+            };
+            let top = parent.or_else(|| {
+                self.windows
+                    .iter()
+                    .rev()
+                    .find(|w| !w.hidden && w.framed())
+                    .map(Self::key_of)
+            });
             self.set_focus(top);
+        }
+    }
+
+    /// The pixels a client's buffers hold, all windows together.
+    fn client_pixels(&self, slot: usize) -> u64 {
+        self.windows
+            .iter()
+            .filter(|w| w.client == slot)
+            .map(|w| u64::from(w.buffer.width) * u64::from(w.buffer.height))
+            .sum()
+    }
+
+    /// Whether a client may have `more` pixels of buffers: at most four
+    /// displays' worth, so that one client cannot take the compositor's
+    /// memory (review 7b, 10).
+    fn within_budget(&self, slot: usize, more: u64) -> bool {
+        self.client_pixels(slot) + more <= 4 * u64::from(self.width) * u64::from(self.height)
+    }
+
+    fn drop_client(&mut self, slot: usize) {
+        let keys: Vec<Key> = self
+            .windows
+            .iter()
+            .filter(|w| w.client == slot)
+            .map(Self::key_of)
+            .collect();
+        for k in keys {
+            self.remove_window(k);
+        }
+        if let Some(c) = self.clients[slot].take() {
+            self.platform.close(c.end);
         }
     }
 
@@ -883,48 +1620,140 @@ impl<P: Platform> Compositor<P> {
             return;
         };
         let t = header.transaction;
-        let done = |s: u32| gui::Done { status: Below(s) };
+        let n = handles.len();
+        let ready = if self.attached {
+            status::OK
+        } else {
+            status::NO_SURFACE
+        };
         match header.ordinal {
-            1 if decode::<gui::Display>(bytes, handles.len()).is_ok() => {
-                let s = if self.attached {
-                    status::OK
-                } else {
-                    status::NO_SURFACE
-                };
+            1 if decode::<gui::Display>(bytes, n).is_ok() => {
                 let m = gui::DisplayReply {
-                    status: Below(s),
+                    status: Below(ready),
                     width: self.width,
                     height: self.height,
                 };
                 self.answer(slot, &m, t);
             }
-            2 => match decode::<gui::Create>(bytes, handles.len()) {
-                Ok((_, m)) => {
-                    let memory = handles.remove(0);
-                    let s = self.create(slot, m.width, m.height, memory);
-                    self.answer(slot, &done(s), t);
-                }
-                Err(_) => self.answer(slot, &done(status::BAD_BUFFER), t),
-            },
-            3 => match decode::<gui::Commit>(bytes, handles.len()) {
-                Ok((_, m)) => {
-                    let s = self.commit(slot, m);
-                    if s == status::OK {
-                        if let Some(c) = self.clients[slot].as_mut() {
-                            c.commit = Some(t);
-                        }
-                    } else {
-                        let m = gui::FrameDone { status: Below(s) };
-                        self.answer(slot, &m, t);
+            2 => {
+                let s = match decode::<gui::Create>(bytes, n) {
+                    Ok((_, m)) => {
+                        let memory = handles.remove(0);
+                        self.create(slot, WindowKind::Legacy, m.width, m.height, memory)
+                            .map_or_else(|e| e, |_| status::OK)
                     }
+                    Err(_) => status::BAD_BUFFER,
+                };
+                self.answer(slot, &gui::Done { status: Below(s) }, t);
+            }
+            3 => {
+                let s = match decode::<gui::Commit>(bytes, n) {
+                    Ok((_, m)) => self.commit(slot, 0, (m.x, m.y, m.width, m.height)),
+                    Err(_) => status::BAD_RANGE,
+                };
+                self.commit_reply(slot, s, t, 3);
+            }
+            4 if decode::<gui::DisplayScale>(bytes, n).is_ok() => {
+                let s = self.scale.factor();
+                let m = gui::DisplayScaleReply {
+                    status: Below(ready),
+                    width: self.width / s,
+                    height: self.height / s,
+                    scale: s,
+                };
+                self.answer(slot, &m, t);
+            }
+            5 => {
+                let (s, window) = match decode::<gui::CreateToplevel>(bytes, n) {
+                    Ok((_, m)) => {
+                        let memory = handles.remove(0);
+                        match self.create(slot, WindowKind::Toplevel, m.width, m.height, memory) {
+                            Ok(id) => (status::OK, id),
+                            Err(e) => (e, 0),
+                        }
+                    }
+                    Err(_) => (status::BAD_BUFFER, 0),
+                };
+                self.answer(
+                    slot,
+                    &gui::Created {
+                        status: Below(s),
+                        window,
+                    },
+                    t,
+                );
+                if s == status::OK {
+                    self.configure(Key {
+                        client: slot,
+                        id: window,
+                    });
                 }
-                Err(_) => {
-                    let m = gui::FrameDone {
-                        status: Below(status::BAD_RANGE),
-                    };
-                    self.answer(slot, &m, t);
-                }
-            },
+            }
+            6 => {
+                let (s, window) = match decode::<gui::CreatePopup>(bytes, n) {
+                    Ok((_, m)) => {
+                        let memory = handles.remove(0);
+                        match self.create_popup(slot, m, memory) {
+                            Ok(id) => (status::OK, id),
+                            Err(e) => (e, 0),
+                        }
+                    }
+                    Err(_) => (status::BAD_BUFFER, 0),
+                };
+                self.answer(
+                    slot,
+                    &gui::PopupCreated {
+                        status: Below(s),
+                        window,
+                    },
+                    t,
+                );
+            }
+            7 => {
+                let s = match decode::<gui::CommitTo>(bytes, n) {
+                    Ok((_, m)) if m.window != 0 => {
+                        self.commit(slot, m.window, (m.x, m.y, m.width, m.height))
+                    }
+                    Ok(_) => status::NO_SURFACE,
+                    Err(_) => status::BAD_RANGE,
+                };
+                self.commit_reply(slot, s, t, 7);
+            }
+            8 => {
+                let s = match decode::<gui::SetBuffer>(bytes, n) {
+                    Ok((_, m)) => {
+                        let memory = handles.remove(0);
+                        self.set_buffer(slot, m, memory)
+                    }
+                    Err(_) => status::BAD_BUFFER,
+                };
+                self.answer(slot, &gui::BufferDone { status: Below(s) }, t);
+            }
+            9 => {
+                let s = match decode::<gui::SetTitle<'_>>(bytes, n) {
+                    Ok((_, m)) => self.set_title(slot, m.window, m.text.0),
+                    Err(_) => status::BAD_RANGE,
+                };
+                self.answer(slot, &gui::TitleDone { status: Below(s) }, t);
+            }
+            10 => {
+                let s = match decode::<gui::Close>(bytes, n) {
+                    Ok((_, m)) => {
+                        let key = Key {
+                            client: slot,
+                            id: m.window,
+                        };
+                        if m.window != 0 && self.index(key).is_some() {
+                            self.remove_window(key);
+                            status::OK
+                        } else {
+                            status::NO_SURFACE
+                        }
+                    }
+                    Err(_) => status::BAD_RANGE,
+                };
+                self.answer(slot, &gui::CloseDone { status: Below(s) }, t);
+            }
             // Anything else, the manager's and the drivers' ordinals among
             // them, is unknown here (INV-0093-2).
             _ => self.answer(
@@ -937,22 +1766,31 @@ impl<P: Platform> Compositor<P> {
         }
     }
 
-    fn create(&mut self, slot: usize, width: u32, height: u32, memory: P::End) -> u32 {
-        let Some(c) = self.clients[slot].as_ref() else {
-            return status::UNSUPPORTED;
-        };
-        if c.surface.is_some() {
-            self.platform.close(memory);
-            return status::EXISTS;
+    /// A commit's reply: at the end of the round if it worked (the frame
+    /// callback), now if not.
+    fn commit_reply(&mut self, slot: usize, s: u32, t: u32, ordinal: u32) {
+        if s == status::OK {
+            if let Some(c) = self.clients[slot].as_mut() {
+                c.commit = Some((t, ordinal));
+            }
+        } else if ordinal == 3 {
+            self.answer(slot, &gui::FrameDone { status: Below(s) }, t);
+        } else {
+            self.answer(slot, &gui::CommitDone { status: Below(s) }, t);
         }
-        if !self.attached {
+    }
+
+    /// Maps a client's buffer of `width × height` buffer pixels.
+    fn map_buffer(
+        &mut self,
+        width: u32,
+        height: u32,
+        memory: P::End,
+        with_copy: bool,
+    ) -> Result<(Buffer, Vec<u32>), u32> {
+        if self.platform.kind(memory) != Kind::Memory {
             self.platform.close(memory);
-            return status::NO_SURFACE;
-        }
-        let fits = (1..=self.width).contains(&width) && (1..=self.height).contains(&height);
-        if !fits || self.platform.kind(memory) != Kind::Memory {
-            self.platform.close(memory);
-            return status::BAD_BUFFER;
+            return Err(status::BAD_BUFFER);
         }
         let pixels = width as usize * height as usize;
         let length = (pixels as u64 * 4).next_multiple_of(4096);
@@ -960,79 +1798,356 @@ impl<P: Platform> Compositor<P> {
         let address = self.platform.map(memory, length);
         self.platform.close(memory);
         let Some(address) = address else {
-            return status::BAD_BUFFER;
+            return Err(status::BAD_BUFFER);
         };
         let mut copy = Vec::new();
-        if copy.try_reserve_exact(pixels).is_err() {
-            self.platform.unmap(address, length);
-            return status::NO_MEMORY;
+        if with_copy {
+            if copy.try_reserve_exact(pixels).is_err() {
+                self.platform.unmap(address, length);
+                return Err(status::NO_MEMORY);
+            }
+            copy.resize(pixels, 0);
         }
-        copy.resize(pixels, 0);
-        let (x, y) = self.place(width, height);
-        let created = self.created;
-        self.created += 1;
-        if let Some(c) = self.clients[slot].as_mut() {
-            c.surface = Some(Surface {
-                width,
-                height,
-                x,
-                y,
+        Ok((
+            Buffer {
                 address,
                 length,
-                copy,
-            });
-            c.created = created;
+                width,
+                height,
+            },
+            copy,
+        ))
+    }
+
+    /// A legacy surface (`width × height` buffer pixels) or a toplevel
+    /// (`width × height` logical), placed by the compositor.
+    fn create(
+        &mut self,
+        slot: usize,
+        kind: WindowKind,
+        width: u32,
+        height: u32,
+        memory: P::End,
+    ) -> Result<u32, u32> {
+        let Some(c) = self.clients[slot].as_ref() else {
+            self.platform.close(memory);
+            return Err(status::UNSUPPORTED);
+        };
+        let mine = self.windows.iter().filter(|w| w.client == slot);
+        let refuse = match kind {
+            WindowKind::Legacy => mine
+                .clone()
+                .any(|w| w.kind == WindowKind::Legacy)
+                .then_some(status::EXISTS),
+            _ => (mine.filter(|w| w.kind == WindowKind::Toplevel).count() >= MAX_TOPLEVELS)
+                .then_some(status::NO_MEMORY),
+        };
+        let id = if kind == WindowKind::Legacy {
+            0
+        } else {
+            c.next_id
+        };
+        if let Some(e) = refuse.or((self.windows.len() >= MAX_WINDOWS).then_some(status::NO_MEMORY))
+        {
+            self.platform.close(memory);
+            return Err(e);
         }
-        self.order.push(slot);
-        if let Some(frame) = self.frame_of(slot) {
-            self.damage = self.damage.union(&frame);
+        if !self.attached {
+            self.platform.close(memory);
+            return Err(status::NO_SURFACE);
         }
-        // A new surface takes focus only if none has it (ADR-0094).
+        let s = self.scale.factor();
+        let (bw, bh) = match kind {
+            WindowKind::Legacy => (width, height),
+            _ => (width.saturating_mul(s), height.saturating_mul(s)),
+        };
+        let fits = (1..=self.width).contains(&bw) && (1..=self.height).contains(&bh);
+        if !fits {
+            self.platform.close(memory);
+            return Err(status::BAD_BUFFER);
+        }
+        if !self.within_budget(slot, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::NO_MEMORY);
+        }
+        let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        let (x, y) = self.place(bw, bh);
+        if let Some(c) = self.clients[slot].as_mut()
+            && kind != WindowKind::Legacy
+        {
+            c.next_id = c.next_id.wrapping_add(1).max(1);
+        }
+        self.windows.push(Window {
+            client: slot,
+            id,
+            kind,
+            x,
+            y,
+            body: (bw, bh),
+            buffer,
+            copy,
+            next: None,
+            title: String::new(),
+            hidden: false,
+            close_asked: None,
+            chrome: None,
+        });
+        let key = Key { client: slot, id };
+        let f = self.frame();
+        if let Some(i) = self.index(key) {
+            self.dirty(&self.windows[i].reach(&f));
+        }
+        // A new window takes focus only if none has it (ADR-0094).
         if self.focus.is_none() {
-            self.set_focus(Some(slot));
+            self.set_focus(Some(key));
         }
+        Ok(id)
+    }
+
+    fn create_popup(
+        &mut self,
+        slot: usize,
+        m: gui::CreatePopup,
+        memory: P::End,
+    ) -> Result<u32, u32> {
+        let parent = Key {
+            client: slot,
+            id: m.parent,
+        };
+        let open = self
+            .windows
+            .iter()
+            .filter(|w| w.client == slot && matches!(w.kind, WindowKind::Popup { .. }))
+            .count();
+        let Some(pi) = self
+            .index(parent)
+            .filter(|i| self.windows[*i].kind == WindowKind::Toplevel)
+        else {
+            self.platform.close(memory);
+            return Err(status::NO_SURFACE);
+        };
+        // A popup is opened by the window that has focus, or by one of its
+        // popups (ADR-0160: "a popup it opens while it has focus"); an
+        // unfocused client cannot put one over another's window (review
+        // 7b, 1).
+        let focused = self.focus.is_some_and(|f| {
+            f == parent
+                || (f.client == slot
+                    && self.index(f).is_some_and(|i| {
+                        self.windows[i].kind == (WindowKind::Popup { parent: m.parent })
+                    }))
+        });
+        if !focused {
+            self.platform.close(memory);
+            return Err(status::UNSUPPORTED);
+        }
+        if open >= gui::MAX_POPUPS || self.windows.len() >= MAX_WINDOWS {
+            self.platform.close(memory);
+            return Err(status::NO_MEMORY);
+        }
+        let s = self.scale.factor();
+        let bar = space::BAR_HEIGHT.physical(self.scale);
+        let (bw, bh) = (m.width.saturating_mul(s), m.height.saturating_mul(s));
+        let fits =
+            (1..=self.width).contains(&bw) && (1..=self.height.saturating_sub(bar)).contains(&bh);
+        if !fits || !self.within_budget(slot, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::BAD_BUFFER);
+        }
+        let body = self.windows[pi].body_rect();
+        let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        // Relative to the parent's body, drawn clipped to the work area
+        // below the bar.
+        let x = body.x + i64::from(m.x.min(1 << 20)) * i64::from(s);
+        let y = body.y + i64::from(m.y.min(1 << 20)) * i64::from(s);
+        let id = self.clients[slot].as_ref().map_or(1, |c| c.next_id);
+        if let Some(c) = self.clients[slot].as_mut() {
+            c.next_id = c.next_id.wrapping_add(1).max(1);
+        }
+        // Directly above its parent and the parent's other popups.
+        let mut at = pi + 1;
+        while at < self.windows.len()
+            && self.windows[at].client == slot
+            && self.windows[at].kind == (WindowKind::Popup { parent: m.parent })
+        {
+            at += 1;
+        }
+        self.windows.insert(
+            at,
+            Window {
+                client: slot,
+                id,
+                kind: WindowKind::Popup { parent: m.parent },
+                x,
+                y,
+                body: (bw, bh),
+                buffer,
+                copy,
+                next: None,
+                title: String::new(),
+                hidden: false,
+                close_asked: None,
+                chrome: None,
+            },
+        );
+        let f = self.frame();
+        if let Some(i) = self.index(Key { client: slot, id }) {
+            self.dirty(&self.windows[i].reach(&f));
+        }
+        // It takes keyboard focus while open (ADR-0160).
+        self.set_focus(Some(Key { client: slot, id }));
+        Ok(id)
+    }
+
+    /// A new buffer at the size of the last `Configure`; the old pixels
+    /// stay until the first commit to it (INV-0160-5).
+    fn set_buffer(&mut self, slot: usize, m: gui::SetBuffer, memory: P::End) -> u32 {
+        let key = Key {
+            client: slot,
+            id: m.window,
+        };
+        let Some(i) = self
+            .index(key)
+            .filter(|i| self.windows[*i].kind == WindowKind::Toplevel)
+        else {
+            self.platform.close(memory);
+            return status::NO_SURFACE;
+        };
+        let s = self.scale.factor();
+        let (bw, bh) = (m.width.saturating_mul(s), m.height.saturating_mul(s));
+        // Only the size the compositor configured (INV-0160-5, INV-0164-3).
+        if (bw, bh) != self.windows[i].body {
+            self.platform.close(memory);
+            return status::BAD_BUFFER;
+        }
+        let old =
+            u64::from(self.windows[i].buffer.width) * u64::from(self.windows[i].buffer.height);
+        let more = (u64::from(bw) * u64::from(bh)).saturating_sub(old);
+        if !self.within_budget(slot, more) {
+            self.platform.close(memory);
+            return status::NO_MEMORY;
+        }
+        // The copy is made at the first commit.
+        match self.map_buffer(bw, bh, memory, false) {
+            Ok((buffer, _)) => {
+                let w = &mut self.windows[i];
+                let old = w.next.replace(buffer);
+                if let Some(o) = old {
+                    self.platform.unmap(o.address, o.length);
+                }
+                status::OK
+            }
+            Err(e) => e,
+        }
+    }
+
+    fn set_title(&mut self, slot: usize, window: u32, text: &[u8]) -> u32 {
+        let key = Key {
+            client: slot,
+            id: window,
+        };
+        let Some(i) = self
+            .index(key)
+            .filter(|i| self.windows[*i].kind == WindowKind::Toplevel)
+        else {
+            return status::NO_SURFACE;
+        };
+        let Ok(t) = core::str::from_utf8(text) else {
+            return status::BAD_RANGE;
+        };
+        // Control characters are shown as nothing (INV-0160-6).
+        let title: String = t.chars().filter(|c| !c.is_control()).collect();
+        let f = self.frame();
+        let w = &mut self.windows[i];
+        w.title = title;
+        let bar = w.title_bar(&f);
+        self.dirty(&bar);
         status::OK
     }
 
-    /// The first window at `ORIGIN`, later ones cascaded, kept on screen.
-    fn place(&self, width: u32, height: u32) -> (i64, i64) {
-        let n = self.order.len() as i64;
-        let fit = |start: i64, side: u32, screen: u32| -> i64 {
-            let room = i64::from(screen) - i64::from(side) - 1;
-            if room < 1 {
-                1.min(room.max(0))
-            } else {
-                start.min(room)
-            }
+    /// The first window's frame at `ORIGIN` below the bar, later ones
+    /// cascaded, kept on screen; returns the body's top left.
+    fn place(&self, bw: u32, bh: u32) -> (i64, i64) {
+        let f = self.frame();
+        let s = i64::from(self.scale.factor());
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let n = self.windows.iter().filter(|w| w.framed()).count() as i64;
+        let ow = i64::from(bw) + 2 * f.border;
+        let oh = i64::from(bh) + f.title + f.border;
+        // Kept on the screen where it fits, and never above `low`: a window
+        // taller than the work area hangs below the screen's edge, its
+        // title bar under the bar (review 7b, 5).
+        let fit = |start: i64, side: i64, low: i64, screen: i64| -> i64 {
+            start.min(screen - side).max(low)
         };
-        let x = fit(ORIGIN.0 + CASCADE * n, width, self.width);
-        let y = fit(ORIGIN.1 + CASCADE * n, height, self.height);
-        (x, y)
+        let x = fit(
+            i64::from(ORIGIN.0 + CASCADE * n as u32) * s,
+            ow,
+            0,
+            i64::from(self.width),
+        );
+        let y = fit(
+            bar + i64::from(ORIGIN.1 + CASCADE * n as u32) * s,
+            oh,
+            bar,
+            i64::from(self.height),
+        );
+        (x + f.border, y + f.title)
     }
 
-    /// Copies a committed rectangle into the client's own copy, once
-    /// (INV-0093-4). The rectangle must be inside the surface.
-    fn commit(&mut self, slot: usize, m: gui::Commit) -> u32 {
-        let Some(c) = self.clients[slot].as_mut() else {
-            return status::UNSUPPORTED;
-        };
-        let Some(s) = c.surface.as_mut() else {
+    /// Copies a committed rectangle into the window's own copy, once
+    /// (INV-0093-4). The rectangle must be inside the buffer.
+    fn commit(&mut self, slot: usize, id: u32, (x, y, width, height): (u32, u32, u32, u32)) -> u32 {
+        let Some(i) = self.index(Key { client: slot, id }) else {
             return status::NO_SURFACE;
         };
-        let Some(r) = Rect::from_client(m.x, m.y, m.width, m.height, s.width, s.height) else {
+        // A buffer given since the last commit becomes the shown one now.
+        if let Some(next) = self.windows[i].next.take() {
+            let pixels = next.width as usize * next.height as usize;
+            let mut copy = Vec::new();
+            if copy.try_reserve_exact(pixels).is_err() {
+                self.platform.unmap(next.address, next.length);
+                return status::NO_MEMORY;
+            }
+            copy.resize(pixels, 0);
+            let w = &mut self.windows[i];
+            let old = core::mem::replace(&mut w.buffer, next);
+            w.copy = copy;
+            self.platform.unmap(old.address, old.length);
+            // All of it: a first commit of a part shows the rest as the
+            // client drew it, not as zeros (review 7b, 7).
+            let w = &mut self.windows[i];
+            if !self.platform.copy_from(w.buffer.address, &mut w.copy) {
+                return status::BAD_BUFFER;
+            }
+            let all = w.body_rect();
+            self.dirty(&all);
+        }
+        let w = &mut self.windows[i];
+        let Some(r) = Rect::from_client(x, y, width, height, w.buffer.width, w.buffer.height)
+        else {
             return status::BAD_RANGE;
         };
-        let stride = s.width as usize;
+        let stride = w.buffer.width as usize;
         for row in r.y..r.bottom() {
             let at = row as usize * stride + r.x as usize;
-            let out = &mut s.copy[at..at + r.width as usize];
-            let address = s.address + at as u64 * 4;
+            let out = &mut w.copy[at..at + r.width as usize];
+            let address = w.buffer.address + at as u64 * 4;
             if !self.platform.copy_from(address, out) {
                 return status::BAD_BUFFER;
             }
         }
-        let screen = r.translate(s.x, s.y);
-        self.damage = self.damage.union(&screen);
+        let screen = r.translate(w.x, w.y).intersect(&w.body_rect());
+        // A client that commits is alive: a close press asks it again.
+        w.close_asked = None;
+        let key = Key { client: slot, id };
+        self.dirty(&screen);
+        if let Some(sw) = self.switcher.as_mut()
+            && let Some(at) = sw.windows.iter().position(|k| *k == key)
+        {
+            let w = &self.windows[i];
+            sw.thumbs[at] = draw::thumb(w, self.scale.factor());
+        }
         self.stats.commits += 1;
         status::OK
     }
@@ -1040,11 +2155,26 @@ impl<P: Platform> Compositor<P> {
     // ---- composition ------------------------------------------------------
 
     fn finish_round(&mut self) {
+        // Over the switcher, a change of the scene draws everything again
+        // (its glass is a blur of the scene); the pointer alone is drawn on
+        // the frame last composed.
+        let scene = core::mem::take(&mut self.scene);
+        let reuse = self.switcher.is_some() && !scene && !self.switcher_frame.is_empty();
+        if self.switcher.is_some() && scene {
+            self.damage = self.screen();
+        }
         let damage = self.damage.intersect(&self.screen());
         self.damage = Rect::default();
         if !damage.is_empty() {
             let start = self.platform.now();
-            self.compose(damage);
+            if reuse {
+                self.restore(damage);
+            } else {
+                self.compose(damage);
+                if self.switcher.is_some() {
+                    self.keep_switcher_frame();
+                }
+            }
             self.stats.compose_ns += self.platform.now().saturating_sub(start);
             self.stats.frames += 1;
             self.unflushed = self.unflushed.union(&damage);
@@ -1052,13 +2182,16 @@ impl<P: Platform> Compositor<P> {
         // The frame callback: the commit is copied and composed. It does
         // not wait for the display driver (ADR-0093, Decision).
         for slot in 0..MAX_CLIENTS {
-            let Some(t) = self.clients[slot].as_mut().and_then(|c| c.commit.take()) else {
+            let Some((t, ordinal)) = self.clients[slot].as_mut().and_then(|c| c.commit.take())
+            else {
                 continue;
             };
-            let m = gui::FrameDone {
-                status: Below(status::OK),
-            };
-            self.answer(slot, &m, t);
+            let ok = Below(status::OK);
+            if ordinal == 3 {
+                self.answer(slot, &gui::FrameDone { status: ok }, t);
+            } else {
+                self.answer(slot, &gui::CommitDone { status: ok }, t);
+            }
         }
         self.send_flush();
     }
@@ -1094,73 +2227,6 @@ impl<P: Platform> Compositor<P> {
             Outgoing::Closed => self.lose_display(),
         }
     }
-
-    /// Recomposes `r` of the screen from the copies: background, windows
-    /// bottom to top with their frames, then the pointer.
-    fn compose(&mut self, r: Rect) {
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let focus = self.focus;
-        let Compositor {
-            platform,
-            clients,
-            order,
-            pointer,
-            ..
-        } = self;
-        let pixels = platform.pixels();
-        if pixels.len() < width * height {
-            return;
-        }
-        for y in r.y..r.bottom() {
-            let row = y as usize * width;
-            pixels[row + r.x as usize..row + r.right() as usize].fill(BACKGROUND);
-        }
-        for &i in order.iter() {
-            let Some(s) = clients[i].as_ref().and_then(|c| c.surface.as_ref()) else {
-                continue;
-            };
-            let border = if focus == Some(i) {
-                BORDER_FOCUSED
-            } else {
-                BORDER
-            };
-            let frame = s.frame().intersect(&r);
-            for y in frame.y..frame.bottom() {
-                let row = y as usize * width;
-                pixels[row + frame.x as usize..row + frame.right() as usize].fill(border);
-            }
-            let area = s.area().intersect(&r);
-            for y in area.y..area.bottom() {
-                let row = y as usize * width;
-                let sy = (y - s.y) as usize;
-                let sx = (area.x - s.x) as usize;
-                let from = sy * s.width as usize + sx;
-                let count = area.width as usize;
-                pixels[row + area.x as usize..row + area.x as usize + count]
-                    .copy_from_slice(&s.copy[from..from + count]);
-            }
-        }
-        if let Some((px, py)) = *pointer {
-            for (dy, line) in POINTER.iter().enumerate() {
-                for (dx, dot) in line.iter().enumerate() {
-                    let (x, y) = (px + dx as i64, py + dy as i64);
-                    if *dot == 0 || !r.contains(x, y) {
-                        continue;
-                    }
-                    pixels[y as usize * width + x as usize] = if *dot == 1 {
-                        POINTER_FILL
-                    } else {
-                        POINTER_EDGE
-                    };
-                }
-            }
-        }
-    }
-}
-
-fn pointer_rect(x: i64, y: i64) -> Rect {
-    Rect::new(x, y, POINTER[0].len() as i64, POINTER.len() as i64)
 }
 
 /// Events carry the count dropped before them.
@@ -1168,23 +2234,23 @@ pub trait WithDropped {
     fn set_dropped(&mut self, dropped: u32);
 }
 
-impl WithDropped for gui::Key {
-    fn set_dropped(&mut self, dropped: u32) {
-        self.dropped = dropped;
-    }
+macro_rules! with_dropped {
+    ($($t:ty),*) => {
+        $(impl WithDropped for $t {
+            fn set_dropped(&mut self, dropped: u32) {
+                self.dropped = dropped;
+            }
+        })*
+    };
 }
 
-impl WithDropped for gui::Pointer {
-    fn set_dropped(&mut self, dropped: u32) {
-        self.dropped = dropped;
-    }
-}
-
-impl WithDropped for gui::Focus {
-    fn set_dropped(&mut self, dropped: u32) {
-        self.dropped = dropped;
-    }
-}
+with_dropped!(
+    gui::Key,
+    gui::Pointer,
+    gui::Focus,
+    gui::WindowFocus,
+    gui::WindowPointer
+);
 
 #[cfg(test)]
 extern crate std;

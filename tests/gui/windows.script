@@ -1,0 +1,40 @@
+# Stage 7b's criterion (TASK-24, docs/research/desktop/plan.md): the GUI
+# test moves, minimises, restores and closes a terminal window over QMP,
+# switches with Alt+Tab and F12, and passes at both scales. Coordinates
+# are logical: the terminal's frame is at (72, 70), 670 wide, its title bar
+# 36 high, the close cross at (90, 88) and the minimise dash at (114, 88)
+# (ADR-0160; zoraya_compositor::ORIGIN under the 28-pixel bar).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+region 130 76 200 4 f7f7f8
+region 72 120 1 300 d7d9de
+shot windows-start
+# Moved by its title bar, (100, 50) and back.
+drag 300 88 400 138
+region 230 126 200 4 f7f7f8
+region 172 170 1 300 d7d9de
+drag 400 138 300 88
+region 130 76 200 4 f7f7f8
+# Minimised by the dash; F12 brings it back, and it takes keys again.
+click 114 88
+key f12
+type echo restored\r
+screen restored
+screen ~> _
+# Minimised again; Alt+Tab (the switcher, chosen on Alt's release) brings
+# it back.
+click 114 88
+chord alt tab
+type echo switched\r
+screen switched
+screen ~> _
+# Closed by the cross: the terminal ends, and init opens a new one with a
+# new shell, as after exit.
+click 90 88
+serial init: the terminal was closed
+window
+screen Type help to begin, or help tour.
+screen ~> _
+type poweroff\r
+exit

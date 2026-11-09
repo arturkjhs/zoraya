@@ -7,13 +7,11 @@
 serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.
 screen ~> _
-# Above and left of the window: the background (bg.desktop). The window's
-# frame: the focused colour (accent), around the terminal's 668 x 460
-# surface (ADR-0093, ADR-0094; the tokens since TASK-24 7a).
-region 0 0 1024 14 cfd6df
-region 0 0 14 768 cfd6df
-region 15 15 670 1 3b4f6b
-region 15 15 1 462 3b4f6b
+# The window's frame (ADR-0160, TASK-24 7b), in logical pixels: the title
+# bar in bg.frame.focused between the buttons and the title, the border
+# down the left side.
+region 130 76 200 4 f7f7f8
+region 72 120 1 300 d7d9de
 type echo hi > a.txt\r
 screen ~> _
 # cat is a program: its output comes back to the window through zosh's
@@ -30,8 +28,8 @@ screen ~> _
 # A line wider than the window (80 columns) is redrawn in place (ADR-0154
 # rule 8 as changed on 2026-11-04): an edit near its start rewrites its two
 # rows, and the row below stays empty; the editor before this drew the
-# line again there. Rows are 18 pixels high from y 30 (the compositor's
-# origin and the terminal's padding), and an empty row is term.bg.
+# line again there. Rows are 18 pixels high from y 120 (the body at 106 and
+# the terminal's padding), and an empty row is term.bg.
 chord ctrl l
 top ~> _
 # A whole line in one burst: under TCG term once dropped the keys that
@@ -52,7 +50,7 @@ chord ctrl e
 window
 screen ~> echo Zaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 screen aaaaaaaaaaaaaaaaaaa_
-region 30 66 640 18 ffffff
+region 87 156 640 18 ffffff
 type \r
 screen Zaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 screen aaaaaaaaaaa

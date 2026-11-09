@@ -4,6 +4,11 @@
 //! The terminal (ADR-0096): a client of the compositor at slot 5, and the
 //! terminal end of the shell's channel at slot 6. It draws what the shell
 //! writes, and sends the shell the bytes keys make. It answers no query.
+//!
+//! Since stage 7b it is a toplevel window (ADR-0160): its size is logical
+//! at the display's scale (ADR-0164), a `Configure` of another size gives
+//! the grid a new size and the window a new buffer, and the close button
+//! (`CloseRequested`) ends it, as `exit` in the shell does.
 
 use alloc::vec::Vec;
 
@@ -20,7 +25,7 @@ use zoraya_tokens::{Appearance, Scale};
 use zoraya_user::gui::wait_reply;
 use zoraya_user::{
     channel_read, channel_write, handle_close, handle_duplicate, memory_create, memory_map,
-    port_create, port_subscribe, port_unsubscribe, port_wait, println,
+    memory_unmap, port_create, port_subscribe, port_unsubscribe, port_wait, println,
 };
 
 extern crate alloc;
@@ -40,7 +45,12 @@ struct Window {
     shell: Handle,
     term: Term,
     look: Look,
+    /// The compositor's name for the window, and the display's scale.
+    id: u32,
+    scale: u32,
     pixels: &'static mut [u32],
+    /// The buffer's mapping: its address and length.
+    mapped: (u64, u64),
     stride: usize,
     height: usize,
     /// A commit waits for its frame callback.
@@ -81,9 +91,37 @@ fn ask<'a, M: zoraya_protocol::Message<'a>>(
     }
 }
 
+/// A buffer of `width × height` pixels: the writable mapping, and a
+/// read-only view for the compositor (ADR-0093).
+fn buffer(width: usize, height: usize) -> Option<(&'static mut [u32], (u64, u64), ChannelEntry)> {
+    let size = (width * height * 4).next_multiple_of(4096) as u64;
+    let memory = memory_create(size, MemoryFlags::NONE).ok()?;
+    let Ok(address) = memory_map(memory, 0, size, MapFlags::WRITE) else {
+        let _ = handle_close(memory);
+        return None;
+    };
+    let view = handle_duplicate(memory, Rights::READ.union(Rights::TRANSFER));
+    let _ = handle_close(memory);
+    let Ok(view) = view else {
+        let _ = memory_unmap(address, size);
+        return None;
+    };
+    // SAFETY: a new writable mapping of `size` bytes, page-aligned, kept
+    // until the window gets another buffer and reached only through this
+    // slice, which is replaced before the mapping goes.
+    let pixels = unsafe { core::slice::from_raw_parts_mut(address as *mut u32, width * height) };
+    let entry = ChannelEntry {
+        handle: view,
+        rights: Rights::READ,
+        transfer: Transfer::Move,
+    };
+    Some((pixels, (address, size), entry))
+}
+
 impl Window {
     fn commit(&mut self, y: usize, height: usize) {
-        let m = gui::Commit {
+        let m = gui::CommitTo {
+            window: self.id,
             x: 0,
             y: y as u32,
             width: self.stride as u32,
@@ -98,6 +136,62 @@ impl Window {
             // Not sent: draw it all again next time (review S2).
             self.term.redraw();
         }
+    }
+
+    /// The window is to be `width × height` logical pixels: a grid that
+    /// fits, a buffer of exactly that size, everything drawn again, and
+    /// the shell told the new grid.
+    fn configure(&mut self, width: u32, height: u32) {
+        let (pw, ph) = (
+            (width * self.scale) as usize,
+            (height * self.scale) as usize,
+        );
+        if (pw, ph) == (self.stride, self.height) || pw == 0 || ph == 0 {
+            return;
+        }
+        let Some((pixels, mapped, entry)) = buffer(pw, ph) else {
+            return;
+        };
+        let m = gui::SetBuffer {
+            window: self.id,
+            width,
+            height,
+        };
+        let mut out = [0u8; 64];
+        let Ok(n) = encode(&m, NO_REPLY, &mut out) else {
+            return;
+        };
+        if channel_write(self.compositor, &out[..n], &[entry]).is_err() {
+            let _ = memory_unmap(mapped.0, mapped.1);
+            return;
+        }
+        let old = core::mem::replace(&mut self.mapped, mapped);
+        self.pixels = pixels;
+        // The old slice was replaced above: nothing refers to the old
+        // mapping any more.
+        let _ = memory_unmap(old.0, old.1);
+        self.stride = pw;
+        self.height = ph;
+        let cw = self.look.cell_width();
+        let ch = self.look.cell_height();
+        let columns = pw.saturating_sub(2 * self.look.pad) / cw;
+        let rows = ph.saturating_sub(2 * self.look.pad) / ch;
+        self.term.resize(columns, rows);
+        let (columns, rows) = self.term.size();
+        self.look.clear(self.pixels);
+        self.term.redraw();
+        let size = Size {
+            columns: columns as u32,
+            rows: rows as u32,
+        };
+        if let Ok(n) = encode(&size, NO_REPLY, &mut out) {
+            let _ = channel_write(self.shell, &out[..n], &[]);
+        }
+        // The whole buffer goes with the next commit.
+        self.outstanding = false;
+        self.term
+            .render(&mut self.look, self.pixels, self.stride, true);
+        self.commit(0, self.height);
     }
 
     fn show(&mut self) {
@@ -195,7 +289,16 @@ impl Window {
                 continue;
             };
             match header.ordinal {
-                3 => self.outstanding = false,
+                7 => self.outstanding = false,
+                19 => {
+                    if let Ok((_, c)) = decode::<gui::Configure>(bytes, 0)
+                        && c.window == self.id
+                    {
+                        self.configure(c.width, c.height);
+                    }
+                }
+                // The close button: the terminal ends, as `exit` does.
+                20 => zoraya_user::process_exit(0),
                 16 => {
                     let Ok((_, k)) = decode::<gui::Key>(bytes, 0) else {
                         continue;
@@ -252,42 +355,46 @@ fn main() -> i32 {
     let compositor = slot(5);
     let shell = slot(6);
     let mut reply = [0u8; 64];
-    let n = ask(compositor, &gui::Display {}, &[], &mut reply).expect("the compositor answers");
-    let (_, display) = decode::<gui::DisplayReply>(&reply[..n], 0).expect("a display reply");
+    let n =
+        ask(compositor, &gui::DisplayScale {}, &[], &mut reply).expect("the compositor answers");
+    let (_, display) = decode::<gui::DisplayScaleReply>(&reply[..n], 0).expect("a display reply");
     if display.status.0 != gui::status::OK {
         println!("term: no display");
         return 1;
     }
-    // Scale 1 and the light set until 7b's Configure carries them.
-    let look = Look::new(Scale::ONE, Appearance::Light);
-    let (columns, rows) = look.grid_for(display.width, display.height);
+    // The light set until 7f's settings (ADR-0169); the scale is the
+    // display's (ADR-0164).
+    let scale = Scale::new(display.scale).unwrap_or(Scale::ONE);
+    let k = scale.factor() as usize;
+    let look = Look::new(scale, Appearance::Light);
+    let (columns, rows) = look.grid_for(display.width * k as u32, display.height * k as u32);
     let (width, height) = look.surface_size(columns, rows);
-    let size = (width * height * 4).next_multiple_of(4096) as u64;
-    let memory = memory_create(size, MemoryFlags::NONE).expect("surface memory");
-    let address = memory_map(memory, 0, size, MapFlags::WRITE).expect("map the surface");
-    // SAFETY: a new writable mapping of `size` bytes, page-aligned, kept for
-    // the process's life and reached only through this slice.
-    let pixels = unsafe { core::slice::from_raw_parts_mut(address as *mut u32, width * height) };
-    // The compositor gets a read-only view (ADR-0093).
-    let view = handle_duplicate(memory, Rights::READ.union(Rights::TRANSFER)).expect("view");
-    let entry = ChannelEntry {
-        handle: view,
-        rights: Rights::READ,
-        transfer: Transfer::Move,
+    // Whole logical pixels.
+    let (width, height) = (width.next_multiple_of(k), height.next_multiple_of(k));
+    let Some((pixels, mapped, entry)) = buffer(width, height) else {
+        println!("term: no memory for the window");
+        return 1;
     };
-    let create = gui::Create {
-        width: width as u32,
-        height: height as u32,
+    let create = gui::CreateToplevel {
+        width: (width / k) as u32,
+        height: (height / k) as u32,
     };
     let n = ask(compositor, &create, &[entry], &mut reply).expect("the compositor answers");
-    match decode::<gui::Done>(&reply[..n], 0) {
-        Ok((_, d)) if d.status.0 == gui::status::OK => {}
+    let id = match decode::<gui::Created>(&reply[..n], 0) {
+        Ok((_, d)) if d.status.0 == gui::status::OK => d.window,
         other => {
-            println!("term: no surface: {other:?}");
+            println!("term: no window: {other:?}");
             return 1;
         }
+    };
+    let mut out = [0u8; 300];
+    let title = gui::SetTitle {
+        window: id,
+        text: Data(b"zosh"),
+    };
+    if let Ok(n) = encode(&title, NO_REPLY, &mut out) {
+        let _ = channel_write(compositor, &out[..n], &[]);
     }
-    let mut out = [0u8; 64];
     let size_message = Size {
         columns: columns as u32,
         rows: rows as u32,
@@ -301,7 +408,10 @@ fn main() -> i32 {
         shell,
         term: Term::new(columns, rows),
         look,
+        id,
+        scale: k as u32,
         pixels,
+        mapped,
         stride: width,
         height,
         outstanding: false,

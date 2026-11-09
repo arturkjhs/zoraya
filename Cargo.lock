@@ -71,12 +71,15 @@ dependencies = [
 name = "zoraya-compositor"
 version = "0.1.0"
 dependencies = [
+ "zoraya-fonts",
  "zoraya-keymap",
+ "zoraya-paint",
  "zoraya-proto-display",
  "zoraya-proto-gui",
  "zoraya-proto-input",
  "zoraya-protocol",
  "zoraya-test-alloc",
+ "zoraya-text",
  "zoraya-tokens",
 ]
 
@@ -244,6 +247,15 @@ name = "zoraya-pagetable"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-paint"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
 ]
 
 [[package]]

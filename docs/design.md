@@ -454,6 +454,57 @@ The ranges are the three HVF and four TCG configurations of one `make test` (202
 next to drawing: the 64 misses add about a fifth to the first grid. The screens of `make test-gui` under HVF and TCG
 are byte for byte the same (`build/shots/`).
 
+## Windows and frames (as built)
+
+Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) and
+[ADR-0164](adr/0164-display-scaling.md).
+
+- **Windows.** A client may have up to eight toplevel windows (`CreateToplevel`, sized in logical pixels, its buffer
+  the logical size times the scale) and four popups (`CreatePopup`, relative to a toplevel's body, above it, closed by
+  a press anywhere but on a popup); stage 5's `Create` is still a framed surface of its own. The compositor places
+  every window (the first frame at (72, 42) below the bar, then cascaded by 32), stacks it, and sends a toplevel
+  `Configure` (its logical size, the scale, light or dark, motion) at creation and after a resize; a new buffer
+  (`SetBuffer`, only at the configured size) is shown from its first commit, and until then the old pixels stay, on
+  the paper where the body is larger (INV-0160-5). Nothing a client sends moves, raises, focuses or decorates a window
+  (INV-0160-2).
+- **Frames** (`zoraya-paint`, integer arithmetic only): a title bar of `frame.height` in `bg.frame` or
+  `bg.frame.focused`, the client's title (`SetTitle`, UTF-8, at most 256 bytes, control characters dropped) in Inter
+  Medium, clipped to the bar, the close cross and the minimise dash at 18 and 42 logical pixels from the left
+  (coloured on the focused window, `fg.text.disabled` elsewhere), a one-pixel `border`, smooth corners of
+  `radius.window` (a cubic superellipse spanning 1.6 radii), and a two-layer shadow whose alpha tells the focused
+  window. The frame is drawn from the tokens alone (INV-0160-1). Room tints, badges and grant pills come with 7d.
+- **The person's gestures.** A press on the title bar moves the window (its title bar stays below the bar and on
+  the screen); a press within `frame.grip` of a toplevel's edge resizes it, and the client hears of it only at the
+  release (`Configure`); the dash minimises (`Minimised`); the cross sends `CloseRequested`, and five seconds later a
+  second press ends a client that did not close. The system key (Super; the Command keys under QEMU on a Mac) is the
+  compositor's with every chord: System+W asks to close, System+M minimises, System+Left and System+Right tile to a
+  half; System+Space, Enter, R and ? are reserved for 7c and 7d and reach no client either (INV-0160-3). Alt+Tab
+  opens the switcher (Tab and Shift+Tab move, Alt's release chooses and shows a hidden window, Esc leaves it); F12
+  goes at once to the next window in the same order (the focused one, then the stack from the top, hidden ones last).
+- **The bar and the wallpaper.** The wallpaper is ADR-0161's `deep` one, computed once per display size in 16.16
+  fixed point, with a blurred copy for the glass. The top bar (`bar.height`) is that glass tinted with `bg.overlay`
+  at `panel.alpha`, with its band of light and a bottom border, "Zoraya" at the left and the layout at the right; it
+  is drawn above every window, and no client reaches it (INV-0160-7). There is no clock: the wall clock of ADR-0226
+  is not built yet.
+- **The switcher** is drawn in the trusted material (a blur of the scene under it, the tint, the band of light, the
+  rim, the halo), a group line per room (only `home` until 7d) and a row per window with its own pixels shrunk by a
+  box filter, its title, and "hidden" for a minimised one.
+- **Scale** (ADR-0164). The compositor takes scale 2 for a display at least 1920 pixels wide (the setting `auto`
+  until 7f's `gui.scale`); `DisplayScale` gives the logical size and the scale, every size a client hears is logical,
+  pointer events to a toplevel are logical, and a client's pixels reach the screen unchanged (INV-0164-1).
+  `tools/run-qemu.sh --gui-scale 2` asks QEMU for 2048 × 1536.
+- **`term`** is a toplevel named `zosh`: a `Configure` of another size gives its grid and buffer a new size (and the
+  shell a `Size`), and the close button ends it; `init` takes a terminal that ended with 0 as a closed window and
+  starts a new terminal and shell, as after `exit`.
+
+Measured (`t_gui` in the test kernel; MEASURE_7B):
+
+| | HVF | TCG |
+|---|---|---|
+| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | MEASURE_7B_HVF_COMPOSE | MEASURE_7B_TCG_COMPOSE |
+| The frame that opens the switcher (blur of the scene under it) | MEASURE_7B_HVF_SWITCH | MEASURE_7B_TCG_SWITCH |
+| A frame committed under the open switcher | MEASURE_7B_HVF_UNDER | MEASURE_7B_TCG_UNDER |
+
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
@@ -921,9 +972,12 @@ measured for real.
 
 ## Using the GUI
 
-`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window; the serial line stays in the terminal for
-`init`'s reports, and Ctrl-A X there quits QEMU. The window shows a terminal running `zosh`, with the same commands as
-`make run` (below). Click the window to focus it; F12 moves focus to the next window. Shift with Page Up or Page Down
+`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window (`make run-gui GUI_SCALE=2` at 2048 ×
+1536); the serial line stays in the terminal for `init`'s reports, and Ctrl-A X there quits QEMU. The window shows the
+desktop: the bar, and a terminal window running `zosh`, with the same commands as `make run` (below). Drag the title
+bar to move the window, its edges to resize it; the dash minimises it and the cross closes it (a new terminal opens).
+Alt+Tab (Option+Tab on a Mac) shows the switcher; F12 goes to the next window; Command+W, Command+M and Command+Left or
+Right close, minimise and tile. Shift with Page Up or Page Down
 scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `exit` closes
 the window and `init` opens a new one with a new shell; `poweroff` turns the machine off.
 
@@ -1238,9 +1292,11 @@ crates/                   no_std, host-tested
   zoraya-tokens/          the design tokens from tokens.txt, read at compile time (ADR-0161)
   zoraya-text/            TrueType reader, fixed-point rasteriser, glyph cache, simple shaper (ADR-0162)
   zoraya-fonts/           the system fonts of fonts/ as bytes (ADR-0162, ADR-0240)
+  zoraya-paint/           the compositor's drawing in integers: corners, shadows, blur, wallpaper, the material
   zoraya-term/            the terminal: VT-subset parser, grid, scrollback, keys to bytes, rendering and the exact
                           reader of its cells (ADR-0096, ADR-0162)
-  zoraya-compositor/      the compositor's loop over a platform trait (ADR-0093, ADR-0094)
+  zoraya-compositor/      the compositor's loop over a platform trait (ADR-0093, ADR-0094); windows, frames,
+                          gestures, chords, the switcher, the bar (ADR-0160, ADR-0164; window.rs, draw.rs)
   zoraya-posix/           the Rust half of libposix (ADR-0100): resolver, fd table, errno, the file functions; ffi.rs
                           is the C boundary in libc.a; tests/kernel is a fake kernel over the real fs-service
 user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, compd,

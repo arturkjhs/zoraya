@@ -6,13 +6,22 @@
 //! carries pixels to a client, names another client, or makes input
 //! (INV-0093-2).
 //!
+//! **Windows** (ADR-0160, ADR-0164; stage 7b). A client learns the logical
+//! display size and the scale (`DisplayScale`), creates any number of
+//! toplevel windows (`CreateToplevel`, a memory object of the logical size
+//! times the scale) and popups, commits damage to each (`CommitTo`), and
+//! gets a new buffer to a window after a `Configure` (`SetBuffer`). The
+//! compositor frames every toplevel; nothing a client sends sets a window's
+//! position, stacking, decoration or focus (INV-0160-2). `Create` and
+//! `Commit` stay for one surface per connection until every client moves.
+//!
 //! **Manager.** Only `init` holds the manager channel: it adds clients and
 //! attaches drivers.
 
 #![no_std]
 #![forbid(unsafe_code)]
 
-use zoraya_protocol::{Below, Flags, protocol};
+use zoraya_protocol::{Below, Data, Flags, protocol};
 
 /// One of `status`.
 pub type Status = Below<7>;
@@ -50,6 +59,12 @@ pub mod buttons {
     pub const MIDDLE: u32 = 4;
     pub const ALL: u32 = 7;
 }
+
+/// The longest window title, in bytes of UTF-8 (ADR-0160).
+pub const MAX_TITLE: usize = 256;
+
+/// Popups a client may have open at once (ADR-0160).
+pub const MAX_POPUPS: usize = 4;
 
 /// One past the last Unicode scalar value: `text` is below it, and 0 is no
 /// text. A receiver still converts it with `char::from_u32`.
@@ -110,6 +125,124 @@ protocol! {
         focused: bool,
     }
 
+    /// The display's logical size and its scale (ADR-0164): a buffer is the
+    /// logical size times the scale in each direction.
+    message DisplayScale = 4, handles 0 {}
+    message DisplayScaleReply = 4, handles 0 {
+        status: Status,
+        width: u32,
+        height: u32,
+        scale: u32,
+    }
+
+    /// A toplevel window of `width × height` logical pixels; its memory
+    /// object holds that times the scale, `0x00RRGGBB` row by row. The
+    /// compositor places, frames and stacks it; `Configure` follows.
+    message CreateToplevel = 5, handles 1 {
+        width: u32,
+        height: u32,
+    }
+    message Created = 5, handles 0 {
+        status: Status,
+        window: u32,
+    }
+
+    /// A popup (a menu, a completion list): no frame, at `(x, y)` logical
+    /// pixels from the top left of the parent's body, clipped to the
+    /// display, closed when the person presses outside it.
+    message CreatePopup = 6, handles 1 {
+        parent: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    }
+    message PopupCreated = 6, handles 0 {
+        status: Status,
+        window: u32,
+    }
+
+    /// Shows a rectangle (buffer pixels) of a window; the reply is the
+    /// frame callback.
+    message CommitTo = 7, handles 0 {
+        window: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    }
+    message CommitDone = 7, handles 0 {
+        status: Status,
+    }
+
+    /// A new buffer for a window at the logical size of its last
+    /// `Configure`; the old pixels stay until the first commit to it.
+    message SetBuffer = 8, handles 1 {
+        window: u32,
+        width: u32,
+        height: u32,
+    }
+    message BufferDone = 8, handles 0 {
+        status: Status,
+    }
+
+    /// The window's title, UTF-8, drawn by the compositor in the frame.
+    message SetTitle<'a> = 9, handles 0 {
+        window: u32,
+        text: Data<'a, MAX_TITLE>,
+    }
+    message TitleDone = 9, handles 0 {
+        status: Status,
+    }
+
+    /// The client closes its own window.
+    message Close = 10, handles 0 {
+        window: u32,
+    }
+    message CloseDone = 10, handles 0 {
+        status: Status,
+    }
+
+    /// How a window is to be drawn: its logical size, the scale and the
+    /// appearance (ADR-0160; ADR-0164 and ADR-0169 add no field). Sent at
+    /// creation and whenever any of it changes.
+    message Configure = 19, handles 0 {
+        window: u32,
+        width: u32,
+        height: u32,
+        scale: u32,
+        dark: bool,
+        motion: bool,
+    }
+
+    /// The person asked to close the window (its button or System+W).
+    message CloseRequested = 20, handles 0 {
+        window: u32,
+    }
+
+    /// The window was hidden or shown again.
+    message Minimised = 21, handles 0 {
+        window: u32,
+        hidden: bool,
+    }
+
+    /// A window of this client gained or lost keyboard focus; keys go to
+    /// the client's focused window.
+    message WindowFocus = 22, handles 0 {
+        dropped: u32,
+        window: u32,
+        focused: bool,
+    }
+
+    /// The pointer over a window's body, in logical pixels.
+    message WindowPointer = 23, handles 0 {
+        dropped: u32,
+        window: u32,
+        x: u32,
+        y: u32,
+        buttons: Flags<{ buttons::ALL }>,
+    }
+
     /// Manager: a new client, with the compositor's end of its channel.
     message AddClient = 32, handles 1 {}
     message ManagerDone = 32, handles 0 {
@@ -141,9 +274,9 @@ protocol! {
 }
 
 /// The ordinals a client may send.
-pub const CLIENT_REQUESTS: [u32; 3] = [1, 2, 3];
+pub const CLIENT_REQUESTS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 3] = [16, 17, 18];
+pub const CLIENT_EVENTS: [u32; 8] = [16, 17, 18, 19, 20, 21, 22, 23];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 4] = [32, 33, 34, 35];
 /// What the compositor sends the manager unasked.
