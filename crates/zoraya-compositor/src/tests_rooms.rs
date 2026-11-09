@@ -1027,3 +1027,30 @@ fn the_appearance_is_the_one_set() {
     s.c.appearance = zoraya_tokens::Appearance::Dark;
     assert_eq!(s.c.appearance(), zoraya_tokens::Appearance::Dark);
 }
+
+/// App names are lowercase letters, digits, dashes and underscores.
+#[test]
+fn app_names_are_lowercase_letters_digits_dashes_and_underscores() {
+    let mut s = setup();
+    let panel = s.panel();
+    for (app, want) in [
+        ("edit-2", status::OK),
+        ("t_open", status::OK),
+        ("Edit", status::INVALID),
+        ("edit 2", status::INVALID),
+    ] {
+        let end = s.f().channel(64);
+        let m = gui::AddRoomClient {
+            untrusted: 0,
+            colour: 0,
+            tag: 0,
+            room: zoraya_protocol::Data(b""),
+            app: zoraya_protocol::Data(app.as_bytes()),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(b"term"),
+        };
+        s.f().send(panel, message(&m, 7), vec![end]);
+        s.c.step();
+        assert_eq!(done(&mut s, panel), want, "{app}");
+    }
+}
