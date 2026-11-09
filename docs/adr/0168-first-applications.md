@@ -79,7 +79,8 @@ A POSIX program launched from the desktop runs in the broker's session with a te
 - Whether the panel and `init`'s session table should be one program (ADR-0097 Option C's session launcher): the panel is that launcher for applications; `init` keeps drivers.
 - File types by extension is an assumption; a type registry is a later ADR.
 - *(Check note, stage 7d, ADR-0001 rule 6.)* INV-0168-2's check waits for `/system/apps` and its launch records and for
-  `edit` (7e, 7f): in 7d the panel launches only terminals, whose shell holds the root by this ADR. INV-0168-1's GUI
+  `edit` (7e, 7f): in 7d the panel launches only terminals, whose shell holds, by ADR-0242's accepted condition, its
+  room's grants (`home`'s for the first terminal and for `home`) and not the volume's root. INV-0168-1's GUI
   half reads the launched shell's `slots` (exactly its record's handles) and shows the dock's tooltip in a screendump
   (`tests/gui/rooms.script`); the hover card of the window's pills waits for the hover card (ADR-0172 point 5).
 

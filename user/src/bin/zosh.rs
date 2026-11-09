@@ -408,8 +408,151 @@ struct Output {
     file: File,
 }
 
+/// What the shell holds of the volume (ADR-0153; ADR-0242's condition):
+/// the root with its rights (the console's shell), or the entries of the
+/// start-up record a terminal's shell is given: its room's grants, or
+/// home's. A path no entry covers is not the shell's to open or to give.
+enum Held {
+    Root(File),
+    Table(Vec<HeldEntry>),
+}
+
+struct HeldEntry {
+    /// Absolute and normal.
+    path: String,
+    file: File,
+    /// What the connection allows: a tree entry's rights, or read's.
+    rights: u32,
+    dir: bool,
+}
+
+/// The rights of a `+w` entry (ADR-0153's `tree`) and of a `+r` one.
+const TREE_RIGHTS: u32 = file_rights::ALL & !file_rights::PUBLISH;
+const READ_RIGHTS: u32 = file_rights::READ | file_rights::CLONE;
+
+impl Held {
+    /// The table of a start-up record: each entry's rights found once, by
+    /// asking for a tree entry's.
+    fn table(ns: zoraya_user::namespace::Namespace) -> Held {
+        let mut entries = Vec::new();
+        for e in ns.entries {
+            let Some(file) = e.file else { continue };
+            let rights = match file.clone_as(TREE_RIGHTS) {
+                Ok(_) => TREE_RIGHTS,
+                Err(_) => READ_RIGHTS,
+            };
+            let dir = e.kind == native::EntryKind::Directory;
+            entries.push(HeldEntry {
+                path: e.path,
+                file,
+                rights,
+                dir,
+            });
+        }
+        Held::Table(entries)
+    }
+
+    /// The entry covering the absolute `abs`, and the path below it.
+    fn covering(&self, abs: &str) -> Option<(&HeldEntry, String)> {
+        let Held::Table(entries) = self else {
+            return None;
+        };
+        let (i, rest) = zoraya_resolve::longest(entries.iter().map(|e| e.path.as_str()), abs)?;
+        Some((&entries[i], String::from(rest)))
+    }
+
+    /// Whether the shell holds `abs`, to write when `write` (INV-0172-4).
+    fn covers(&self, abs: &str, write: bool) -> bool {
+        match self {
+            Held::Root(_) => true,
+            Held::Table(_) => self.covering(abs).is_some_and(|(e, rest)| {
+                (e.dir || rest.is_empty()) && (!write || e.rights & file_rights::WRITE != 0)
+            }),
+        }
+    }
+
+    /// Opens `rel` (from `/`) with at most `wanted`: within the covering
+    /// entry's rights in a table.
+    fn open(&self, rel: &str, flags: u32, wanted: u32) -> FsResult<File> {
+        match self {
+            Held::Root(f) => f.open(rel, flags, wanted),
+            Held::Table(_) => {
+                let abs = format!("/{}", rel.trim_start_matches('/'));
+                let (e, rest) = self
+                    .covering(&abs)
+                    .ok_or(zoraya_proto_file::status::ACCESS_DENIED)?;
+                let w = wanted & e.rights;
+                if rest.is_empty() {
+                    e.file.clone_as(w)
+                } else if e.dir {
+                    e.file.open(&rest, flags, w)
+                } else {
+                    Err(zoraya_proto_file::status::ACCESS_DENIED)
+                }
+            }
+        }
+    }
+
+    fn clone_as(&self, wanted: u32) -> FsResult<File> {
+        match self {
+            Held::Root(f) => f.clone_as(wanted),
+            Held::Table(_) => self.open("", OPEN_DIRECTORY, wanted),
+        }
+    }
+
+    /// As `open`; a table does not follow a link out of its entry.
+    fn open_followed(&self, rel: &str, flags: u32, wanted: u32) -> FsResult<File> {
+        match self {
+            Held::Root(f) => f.open_followed(rel, flags, wanted),
+            Held::Table(_) => self.open(rel, flags, wanted),
+        }
+    }
+
+    fn link_target(&self, abs: &str) -> FsResult<Option<String>> {
+        match self {
+            Held::Root(f) => f.link_target(abs),
+            Held::Table(_) => Ok(None),
+        }
+    }
+
+    fn sync(&self) -> FsResult<()> {
+        match self {
+            Held::Root(f) => f.sync(),
+            Held::Table(entries) => {
+                for e in entries
+                    .iter()
+                    .filter(|e| e.rights & file_rights::WRITE != 0)
+                {
+                    e.file.sync()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The volume's time base (ADR-0191), from any connection to it.
+    fn time_base(&self) -> FsResult<u64> {
+        match self {
+            Held::Root(f) => f.time_base(),
+            Held::Table(entries) => entries
+                .first()
+                .ok_or(zoraya_proto_file::status::ACCESS_DENIED)?
+                .file
+                .time_base(),
+        }
+    }
+
+    /// The root, only when held whole.
+    fn root(&self) -> Option<&File> {
+        match self {
+            Held::Root(f) => Some(f),
+            Held::Table(_) => None,
+        }
+    }
+}
+
 struct Z {
-    root: Option<File>,
+    root: Option<Held>,
     /// The current directory's absolute path.
     cwd: String,
     port: Handle,
@@ -517,6 +660,39 @@ impl Z {
         resolve(&self.cwd, path)
     }
 
+    /// ADR-0153's hint for `abs`, which `who` would read or (`write`)
+    /// change and this shell was not given (ADR-0242's condition); `None`
+    /// when the shell holds it.
+    fn not_given(&self, who: &str, abs: &str, write: bool, line: Option<&str>) -> Option<String> {
+        let held = self.root.as_ref()?;
+        if held.covers(abs, write) {
+            return None;
+        }
+        let home = Z::home(self);
+        let dir = if write { split_last(abs).0 } else { abs };
+        let (verb, grant) = if write {
+            ("change", "+w")
+        } else {
+            ("read", "+r")
+        };
+        let path = grants::shown(abs, &home);
+        let dir = grants::shown(if dir.is_empty() { "/" } else { dir }, &home);
+        let allow = match line {
+            Some(l) => format!("{grant} {dir} {l}"),
+            None => format!("put {grant} {dir} before {who} in the line"),
+        };
+        let mut s = format!(
+            "zosh: {path}: not given to this shell\n  hint: {who} tried to {verb} {path}, which it was not given\n  to allow it: {allow}\n"
+        );
+        if let Some(r) = &self.room {
+            s.push_str(&format!(
+                "  this shell holds room {}'s grants and nothing else: room shows them\n",
+                r.name
+            ));
+        }
+        Some(s)
+    }
+
     fn open(&self, path: &str, flags: u32) -> FsResult<File> {
         let root = self.root.as_ref().ok_or(zoraya_command::FILE_GONE)?;
         let abs = self.abs(path);
@@ -566,11 +742,26 @@ impl Z {
         let abs = self.abs(path);
         let (dir, name) = split_last(&abs);
         let dir = self.open(dir, OPEN_DIRECTORY).map_err(problem)?;
-        let file = dir.create_unnamed().map_err(problem)?;
-        if !bytes.is_empty() {
-            file.write(0, 0, bytes).map_err(problem)?;
+        let published = dir.create_unnamed().and_then(|file| {
+            if !bytes.is_empty() {
+                file.write(0, 0, bytes)?;
+            }
+            file.publish(&dir, name)
+        });
+        match published {
+            // A tree entry cannot publish (ADR-0153's table): a shell that
+            // holds one (ADR-0242's condition) writes the file in place.
+            Err(zoraya_proto_file::status::ACCESS_DENIED) => {
+                let file = self
+                    .open(&abs, open_flags::CREATE | open_flags::TRUNCATE)
+                    .map_err(problem)?;
+                if !bytes.is_empty() {
+                    file.write(0, 0, bytes).map_err(problem)?;
+                }
+                Ok(())
+            }
+            other => other.map_err(problem),
         }
-        file.publish(&dir, name).map_err(problem)
     }
 
     fn description(&mut self, name: &str) -> Option<Rc<Description>> {
@@ -681,6 +872,14 @@ impl Z {
     /// for a path that does not exist (a missing entry, rule 2).
     fn open_entry(&self, m: &grants::Merged) -> Result<Option<(File, native::EntryKind)>, String> {
         let fail = |s: u32| zoraya_command::error("zosh", Some(&m.path), &problem(s), &[]);
+        let write = m.rights & file_rights::WRITE != 0;
+        let abs = match &m.name {
+            Some(name) => resolve(&m.path, name),
+            None => m.path.clone(),
+        };
+        if let Some(hint) = self.not_given("the command", &abs, write, None) {
+            return Err(hint);
+        }
         if let Some(name) = &m.name {
             let dir = match self.open(&m.path, OPEN_DIRECTORY) {
                 Ok(dir) => dir,
@@ -860,6 +1059,24 @@ impl Z {
                 ));
             }
             Some(plan) => {
+                // ADR-0242's condition: an entry this shell was not given
+                // is refused with ADR-0153's hint, before anything runs.
+                // The line as the person wrote it: paths with `~`.
+                let home = self.home();
+                let line = core::iter::once(String::from(exec.name))
+                    .chain(exec.args.iter().map(|a| grants::shown(&a.text, &home)))
+                    .collect::<Vec<String>>()
+                    .join(" ");
+                for m in grants::merge(&plan) {
+                    let write = m.rights & file_rights::WRITE != 0;
+                    let abs = match &m.name {
+                        Some(name) => resolve(&m.path, name),
+                        None => m.path.clone(),
+                    };
+                    if let Some(hint) = self.not_given(exec.name, &abs, write, Some(&line)) {
+                        return Err(hint);
+                    }
+                }
                 given = grants::summary(&plan, &self.home());
                 Some(self.table(&plan)?)
             }
@@ -1256,7 +1473,10 @@ impl Z {
         let mut buffer = alloc::vec![0u8; 16 * 1024];
         let mut e = Encoder::new(&mut buffer, job, image);
         let volume = if NEED_VOLUME.contains(&exec.name) {
-            self.root.as_ref().and_then(|v| v.clone_as(ALL).ok())
+            self.root
+                .as_ref()
+                .and_then(Held::root)
+                .and_then(|v| v.clone_as(ALL).ok())
         } else {
             None
         };
@@ -2348,7 +2568,27 @@ impl Z {
             return Ok(());
         }
         let rooms = self.read_rooms();
-        let Some(room) = rooms.get(name).cloned() else {
+        // A room's own shell cannot read the table: its room is what it
+        // holds (ADR-0242's condition).
+        let home = self.home();
+        let held = match &self.root {
+            Some(Held::Table(entries)) if rooms.rooms.is_empty() => {
+                Some(zoraya_settings::rooms::Room {
+                    name: name.into(),
+                    untrusted: false,
+                    colour: 0,
+                    grants: entries
+                        .iter()
+                        .map(|e| zoraya_settings::rooms::Grant {
+                            write: e.rights & file_rights::WRITE != 0,
+                            path: grants::shown(&e.path, &home),
+                        })
+                        .collect(),
+                })
+            }
+            _ => None,
+        };
+        let Some(room) = rooms.get(name).cloned().or(held) else {
             return Err(zoraya_command::error(
                 "room",
                 Some(name),
@@ -2395,7 +2635,14 @@ impl Z {
         let current = self.room.as_ref().map(|r| r.name.clone());
         match words.as_slice() {
             [] => {
-                let table = self.read_rooms();
+                let mut table = self.read_rooms();
+                // A room's own shell cannot read the table: it lists the
+                // room it holds (ADR-0242's condition).
+                if let Some(r) = &self.room
+                    && table.get(&r.name).is_none()
+                {
+                    table.rooms.push(r.clone());
+                }
                 let mark = |n: &str| {
                     if current.as_deref() == Some(n) {
                         "* "
@@ -2472,12 +2719,13 @@ impl Z {
                     // The shell in a terminal holds the volume's root
                     // (ADR-0168, INV-0168-2); a shell without it holds no
                     // path to give.
-                    if self.root.is_none() {
+                    let abs = self.room_path(&path);
+                    if !self.root.as_ref().is_some_and(|h| h.covers(&abs, write)) {
                         return fail(
                             io,
                             Some(pair[1]),
                             "outside what this shell holds",
-                            &["this shell has no volume"],
+                            &["grants shows what a line here is given"],
                         );
                     }
                     given.push(Grant { write, path });
@@ -3242,6 +3490,10 @@ impl Host for Z {
     }
 
     fn open_output(&mut self, path: &str, append: bool) -> Result<u32, String> {
+        let abs = self.abs(path);
+        if let Some(hint) = self.not_given("zosh", &abs, true, None) {
+            return Err(hint);
+        }
         let flags = open_flags::CREATE | if append { 0 } else { open_flags::TRUNCATE };
         let file = self.open(path, flags).map_err(problem)?;
         self.next_output += 1;
@@ -3580,9 +3832,14 @@ fn main() -> i32 {
         )
         .expect("subscribe to the console"),
     }
+    // The root at slot 5 (the console's shell), or a start-up record of
+    // what a terminal's shell holds (ADR-0242's condition).
+    let table = zoraya_user::namespace::take();
+    let start_cwd = table.as_ref().map(|t| t.cwd.clone());
     let root = Handle::new(5)
         .filter(|h| handle_type(*h) == Ok("channel"))
-        .map(|end| File { end });
+        .map(|end| Held::Root(File { end }))
+        .or_else(|| table.map(Held::table));
     let declared = c.d.settings.clone();
     let mut z = Z {
         root,
@@ -3640,6 +3897,9 @@ fn main() -> i32 {
         let home = z.home();
         if z.open(&home, OPEN_DIRECTORY).is_ok() {
             z.cwd = home;
+        } else if let Some(cwd) = start_cwd {
+            // A room's shell holds no home: it starts where its record says.
+            z.cwd = cwd;
         } else {
             show(&format!("zosh: {home}: not found; starting in /\n"));
         }

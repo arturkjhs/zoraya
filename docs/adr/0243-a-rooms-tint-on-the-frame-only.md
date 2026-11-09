@@ -1,6 +1,6 @@
 # ADR-0243: A room's tint on the frame, not on the client's pixels
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-08
 - **Depends on:** ADR-0160, ADR-0161, ADR-0164, ADR-0172, ADR-0241
 - **Evidence:** desktop/survey.md#spoofing-and-the-trusted-path, desktop/survey.md#eross-trusted-window-system
@@ -72,3 +72,7 @@ Recommended: **Option B**, as built in stage 7d. It is a recommendation, not a d
 - A measured confusion between rooms with neutral bodies.
 
 ## Architect's decision
+
+Accepted 2026-11-09. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted: the room's tint on the frame only; the compositor never changes client pixels.

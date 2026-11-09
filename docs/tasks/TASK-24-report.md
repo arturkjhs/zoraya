@@ -8,12 +8,13 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 
 | Item | Part | One-line recommendation |
 |---|---|---|
-| [ADR-0240](../adr/0240-fonts-embedded-until-the-launcher.md) (proposed) | 7a | Until 7d's launcher hands out `/system/fonts`, the programs `init` starts embed the unmodified fonts through `zoraya-fonts`; a gap ADR-0162 leaves, not a change of it. |
-| [ADR-0241](../adr/0241-window-corners-and-client-pixels.md) (proposed) | 7b | Round a window's lower corners over its body, as ADR-0161 and the mockups want, reading INV-0164-1 inside the window's shape; square lower corners are the one-line alternative. |
-| [ADR-0242](../adr/0242-the-panel-beside-init-in-stage-7d.md) (proposed) | 7d | `init` keeps the first terminal and its rules and starts the panel with the client manager; the panel launches every other terminal into the current room with its record. A staging of ADR-0168, so 7d is not mergeable without the architect. |
-| [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (proposed) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
-| [ADR-0244](../adr/0244-the-toolkits-own-events.md) (proposed) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
-| Pushing, merging and tagging | all | Not done: this session's permission settings refused `git push` (twice, at the first push of `work/7a`), so no part could be merged into `main`, tagged or seen by CI. Each part is on its local branch, the next part starts from it (TASK-24, "If a part cannot be merged"), and the commands to push, merge and tag are under "To finish by hand" below. |
+| [ADR-0240](../adr/0240-fonts-embedded-until-the-launcher.md) (accepted 2026-11-09) | 7a | Until 7d's launcher hands out `/system/fonts`, the programs `init` starts embed the unmodified fonts through `zoraya-fonts`; a gap ADR-0162 leaves, not a change of it. |
+| [ADR-0241](../adr/0241-window-corners-and-client-pixels.md) (accepted 2026-11-09) | 7b | Round a window's lower corners over its body, as ADR-0161 and the mockups want, reading INV-0164-1 inside the window's shape; square lower corners are the one-line alternative. |
+| [ADR-0242](../adr/0242-the-panel-beside-init-in-stage-7d.md) (accepted 2026-11-09) | 7d | `init` keeps the first terminal and its rules and starts the panel with the client manager; the panel launches every other terminal into the current room with its record. A staging of ADR-0168, so 7d is not mergeable without the architect. |
+| [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (accepted 2026-11-09) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
+| [ADR-0244](../adr/0244-the-toolkits-own-events.md) (accepted 2026-11-09) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
+| What `home` gives a terminal's shell | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
+| Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
 

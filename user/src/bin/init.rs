@@ -272,8 +272,20 @@ fn start_shell(
         .without(Rights::DUPLICATE)
         .without(Rights::TRANSFER);
     e.handle(dup(POWER.slot(), POWER, power));
+    // On the console the shell holds the volume's root; in a window, what
+    // `home` gives (ADR-0242's condition), as a start-up record.
+    let mut root_moved = false;
     if let Some(root) = &root {
-        e.handle(moved(5, root.end));
+        if terminal.is_some() {
+            let home = zoraya_user::namespace::shell_home(root);
+            let holds = zoraya_panel::terminal(None).holds;
+            if let Some(r) = zoraya_user::namespace::record(root, &home, &home, &holds) {
+                e.handle(moved(zoraya_panel::STARTUP_SLOT, r));
+            }
+        } else {
+            e.handle(moved(5, root.end));
+            root_moved = true;
+        }
     }
     if let Some(terminal) = terminal {
         e.handle(moved(6, terminal));
@@ -284,10 +296,12 @@ fn start_shell(
     }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
-    if process.is_some() {
+    if process.is_some() && root_moved {
         // Moved: the shell's now.
         core::mem::forget(root);
-    } else if let Some(terminal) = terminal {
+    } else if process.is_none()
+        && let Some(terminal) = terminal
+    {
         let _ = handle_close(terminal);
     }
     let _ = handle_close(image);

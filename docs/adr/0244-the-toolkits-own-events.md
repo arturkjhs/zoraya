@@ -1,6 +1,6 @@
 # ADR-0244: The toolkit's own two events, translated by `zoraya-app`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-08
 - **Depends on:** ADR-0093, ADR-0160, ADR-0164, ADR-0165
 - **Evidence:** desktop/survey.md#own-no_std-widgets, desktop/survey.md#egui-and-iced
@@ -64,3 +64,5 @@ types come from, not what the toolkit sends (nothing) or how it behaves.
 - A widget that needs a protocol event the two do not carry (a drop, ADR-0170).
 
 ## Architect's decision
+
+Accepted 2026-11-09. Decided by the architect; recorded by an agent at the architect's request.

@@ -15,8 +15,9 @@ screen ~> _
 pointc 5b5f67 200 743 600 5
 shot dock
 # A second terminal from the panel (System+Enter), in home. Its shell holds
-# what its launch record lists: the console, its job, the image directory,
-# the volume's root and its terminal, and no power at slot 4; what follows
+# what its launch record lists: the console, its job, the image directory
+# and its terminal, no power at slot 4 and no volume root at 5: what home
+# gives came in its start-up record (ADR-0242's condition); what follows
 # (a memory object, a port) is the shell's own.
 chord meta ret
 origin 105 138
@@ -27,7 +28,7 @@ screen ~> _
 click 400 120
 region 162 108 100 4 f7f7f8
 type slots\r
-prefix slots: 1:console 2:job 3:directory 5:channel 6:channel 7:
+prefix slots: 1:console 2:job 3:directory 6:channel
 screen ~> _
 # Both hidden by their dashes; the dock's icon brings them back in their
 # stacking order, the first on top and focused.
@@ -42,8 +43,8 @@ screen ~> _
 # read by the panel, shown as a chip. An untrusted one waits for quotas.
 type mkdir project\r
 screen ~> _
-type room new project +w ~/project +r /system\r
-screen project --colour 1 +w ~/project +r /system
+type room new project +w ~/project +r /texts\r
+screen project --colour 1 +w ~/project +r /texts
 screen ~> _
 type room new agent-1 --untrusted +w ~/sandbox\r
 prefix room: agent-1: untrusted rooms wait for quotas
@@ -57,7 +58,17 @@ click 450 152
 # The focused ground tinted by room.1 (ADR-0172 point 5).
 region 194 140 100 4 d3e1e5
 type room\r
-screen * project  +w ~/project  +r /system
+screen * project  +w ~/project  +r /texts
+# ADR-0242's condition: the room's shell holds the room's grants and
+# nothing else; a write outside ~/project is refused with ADR-0153's hint.
+type echo hi > notes.txt\r
+screen project ~/project> _
+type cp notes.txt ~/copy.txt\r
+screen zosh: ~/copy.txt: not given to this shell
+screen   hint: cp tried to change ~/copy.txt, which it was not given
+screen   to allow it: +w ~ cp notes.txt ~/copy.txt
+# Its pills are the room's two grants: no +w / where the first stood.
+region 540 148 25 3 d3e1e5
 shot rooms
 # Show-commands: every icon and chip with its line.
 chord meta slash

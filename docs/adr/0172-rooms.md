@@ -106,9 +106,10 @@ A POSIX program launched in a room gets a namespace table built by the launcher 
   compositor's pixels (`zoraya-compositor`'s `tests_rooms.rs` and `tests_fields.rs`): the GUI runner cannot compute the
   wallpaper a field is compared with, and the GUI script reads the room's tinted title bar only. INV-0172-2's in-QEMU
   half and INV-0172-3 wait for untrusted rooms (refused until ADR-0056's quotas) and for ADR-0170's drops (7f).
-  INV-0172-2 as a whole waits too: the only program a room launches in 7d is a terminal, whose shell holds the volume's
-  root by ADR-0168 (INV-0168-2), so it holds more than the room's entries; `zoraya-panel`'s host test checks the
-  record's handles and entries only, and a launch in an untrusted room is refused.
+  Since ADR-0242's condition (accepted 2026-11-09) a room's terminal holds exactly the room's grants, in its shell's
+  start-up record, and never the volume's root: `zoraya-panel`'s host test checks that the record and the entries shown
+  are the room's grants and nothing else, and `tests/gui/rooms.script` that a write outside the room's `+w` is refused
+  with ADR-0153's hint; a launch in an untrusted room is refused.
   INV-0172-4's host tests wait for the room's grants to move from `zosh` into `zoraya-shell`'s planner, where
   INV-0153-2's cases live; in 7d `zosh` adds them after the planner, and the GUI script shows `room`.
 - Whether `home` should show the launch record's pills at all, or only coloured rooms should.
