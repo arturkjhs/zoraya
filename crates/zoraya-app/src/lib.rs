@@ -36,6 +36,30 @@ pub trait Platform {
     fn buffer(&mut self, pixels: usize) -> Option<(Self::End, usize)>;
     fn pixels(&mut self, buffer: usize) -> &mut [u32];
     fn free(&mut self, buffer: usize);
+    /// The handle the message last received carried, taken (a drop's
+    /// entry, ADR-0170); the platform closes one nobody took before it
+    /// receives the next. By default messages carry none.
+    fn handle(&mut self) -> Option<Self::End> {
+        None
+    }
+    /// The next message if one is there, without waiting, for a program
+    /// that waits on other channels too (the chooser). By default it waits.
+    fn poll(&mut self, bytes: &mut [u8]) -> Poll {
+        match self.receive(bytes) {
+            Some(n) => Poll::Message(n),
+            None => Poll::Gone,
+        }
+    }
+}
+
+/// What [`Platform::poll`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poll {
+    Message(usize),
+    /// Nothing yet.
+    Empty,
+    /// The compositor is gone.
+    Gone,
 }
 
 /// What happened, for the application to act on.
@@ -47,6 +71,19 @@ pub enum Happened {
     CloseRequested(u32),
     /// The compositor is gone.
     Gone,
+    /// An entry was dropped on `window`: [`App::take_drop`] gives it.
+    Dropped(u32),
+}
+
+/// A dropped entry (ADR-0170): the connection, its display name
+/// and where in the window's body it was dropped, in logical pixels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped<E> {
+    pub window: u32,
+    pub x: u32,
+    pub y: u32,
+    pub name: alloc::string::String,
+    pub entry: E,
 }
 
 struct Win {
@@ -74,6 +111,13 @@ pub struct App<P: Platform> {
     /// in that order.
     commits: VecDeque<u32>,
     next_transaction: u32,
+    /// Entries dropped and not yet taken.
+    drops: VecDeque<Dropped<P::End>>,
+    /// The window whose body holds the left button, as the last pointer
+    /// event said: where a drag may start.
+    held: Option<u32>,
+    /// The serial of the last left press delivered, for a drag to name.
+    serial: u32,
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
@@ -96,6 +140,9 @@ impl<P: Platform> App<P> {
             queued: VecDeque::new(),
             commits: VecDeque::new(),
             next_transaction: 1,
+            drops: VecDeque::new(),
+            held: None,
+            serial: 0,
         };
         let reply = app.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -120,6 +167,7 @@ impl<P: Platform> App<P> {
         loop {
             let n = self.platform.receive(&mut bytes)?;
             let got = &bytes[..n];
+            self.received(got);
             match Header::decode(got) {
                 Ok((h, _)) if h.ordinal == M::ORDINAL && h.transaction == t => {
                     return Some(got.to_vec());
@@ -155,16 +203,7 @@ impl<P: Platform> App<P> {
             self.platform.free(buffer);
             return None;
         };
-        let mut ui = Window::new(root, (self.scale_logical(w), self.scale_logical(h)));
-        ui.layout(&mut self.painter);
-        self.windows.push(Win {
-            id: c.window,
-            ui,
-            size: (w, h),
-            buffer,
-            in_flight: false,
-            dirty: true,
-        });
+        self.add_window(c.window, root, (w, h), buffer);
         let t = Data(title.as_bytes());
         self.call(
             &gui::SetTitle {
@@ -177,6 +216,123 @@ impl<P: Platform> App<P> {
         Some(c.window)
     }
 
+    fn add_window(&mut self, id: u32, root: Box<dyn Widget>, (w, h): (u32, u32), buffer: usize) {
+        let mut ui = Window::new(root, (self.scale_logical(w), self.scale_logical(h)));
+        ui.layout(&mut self.painter);
+        self.windows.push(Win {
+            id,
+            ui,
+            size: (w, h),
+            buffer,
+            in_flight: false,
+            dirty: true,
+        });
+    }
+
+    /// Opens a sheet of `w × h` logical pixels under the window of the
+    /// client the panel tagged `tag` (a system client only: the chooser,
+    /// ADR-0167); `kind` is the heading the compositor draws.
+    pub fn open_sheet(
+        &mut self,
+        tag: u32,
+        kind: u32,
+        root: Box<dyn Widget>,
+        w: u32,
+        h: u32,
+    ) -> Option<u32> {
+        let (memory, buffer) = self.new_buffer(w, h)?;
+        let m = gui::CreateSheet {
+            tag,
+            kind: zoraya_protocol::Below(kind),
+            width: w,
+            height: h,
+        };
+        let reply = self.call(&m, Some(memory));
+        let created = reply
+            .as_deref()
+            .and_then(|r| decode::<gui::SheetCreated>(r, 0).ok())
+            .map(|(_, c)| c);
+        let Some(c) = created.filter(|c| c.status.0 == status::OK) else {
+            self.platform.free(buffer);
+            return None;
+        };
+        self.add_window(c.window, root, (w, h), buffer);
+        self.repaint(c.window);
+        Some(c.window)
+    }
+
+    /// The next thing to act on if the compositor has sent it, without
+    /// waiting: `None` when nothing is there.
+    pub fn poll(&mut self) -> Option<Happened> {
+        let mut bytes = vec![0u8; 4096];
+        loop {
+            let got = match self.queued.pop_front() {
+                Some(b) => b,
+                None => match self.platform.poll(&mut bytes) {
+                    Poll::Message(n) => {
+                        self.received(&bytes[..n]);
+                        bytes[..n].to_vec()
+                    }
+                    Poll::Empty => return None,
+                    Poll::Gone => return Some(Happened::Gone),
+                },
+            };
+            if let Some(h) = self.handle(&got) {
+                return Some(h);
+            }
+        }
+    }
+
+    /// A message just received: a drop's entry is taken with it, before
+    /// anything else is received (the platform closes it otherwise).
+    fn received(&mut self, got: &[u8]) {
+        let Ok((_, d)) = decode::<gui::Drop<'_>>(got, 1) else {
+            return;
+        };
+        let Some(entry) = self.platform.handle() else {
+            return;
+        };
+        let text = |b: &[u8]| alloc::string::String::from(core::str::from_utf8(b).unwrap_or(""));
+        self.drops.push_back(Dropped {
+            window: d.window,
+            x: d.x,
+            y: d.y,
+            name: text(d.name.0),
+            entry,
+        });
+    }
+
+    /// The oldest dropped entry not yet taken.
+    pub fn take_drop(&mut self) -> Option<Dropped<P::End>> {
+        self.drops.pop_front()
+    }
+
+    /// Starts a drag of one entry from `window` (ADR-0170), while its body
+    /// holds the left press the compositor delivered: `Ok` when the
+    /// compositor carries it; `Err(Some(entry))` when it was not sent (no
+    /// press held, or a name too long), the entry the caller's again;
+    /// `Err(None)` when the compositor refused it and closed the entry.
+    pub fn drag(&mut self, window: u32, entry: P::End, name: &str) -> Result<(), Option<P::End>> {
+        if self.held != Some(window) || name.is_empty() || name.len() > gui::MAX_DROPPED_NAME {
+            return Err(Some(entry));
+        }
+        let m = gui::Drag {
+            window,
+            serial: self.serial,
+            name: Data(name.as_bytes()),
+        };
+        let ok = self
+            .call(&m, Some(entry))
+            .and_then(|r| decode::<gui::DragDone>(&r, 0).ok().map(|(_, d)| d.status.0))
+            == Some(status::OK);
+        if ok { Ok(()) } else { Err(None) }
+    }
+
+    /// Whether `window`'s body holds the left button.
+    pub fn held(&self, window: u32) -> bool {
+        self.held == Some(window)
+    }
+
     fn scale_logical(&self, v: u32) -> Logical {
         Scale::ONE.logical(v)
     }
@@ -185,6 +341,18 @@ impl<P: Platform> App<P> {
     pub fn window(&mut self, id: u32) -> Option<&mut Window> {
         let i = self.index(id)?;
         Some(&mut self.windows[i].ui)
+    }
+
+    /// Puts `root` in `window` in place of its tree, keeping its focus, and
+    /// lays it out and paints it.
+    pub fn replace(&mut self, id: u32, root: Box<dyn Widget>) {
+        let Some(i) = self.index(id) else { return };
+        let App {
+            painter, windows, ..
+        } = self;
+        windows[i].ui.root = root;
+        windows[i].ui.layout(painter);
+        self.repaint(id);
     }
 
     /// Paints `window` and commits it, unless a commit is in flight: then
@@ -282,7 +450,10 @@ impl<P: Platform> App<P> {
             let got = match self.queued.pop_front() {
                 Some(b) => b,
                 None => match self.platform.receive(&mut bytes) {
-                    Some(n) => bytes[..n].to_vec(),
+                    Some(n) => {
+                        self.received(&bytes[..n]);
+                        bytes[..n].to_vec()
+                    }
                     None => return Happened::Gone,
                 },
             };
@@ -358,8 +529,17 @@ impl<P: Platform> App<P> {
                     },
                 )
             }
+            25 => {
+                let (_, d) = decode::<gui::Drop<'_>>(got, 1).ok()?;
+                self.drops
+                    .iter()
+                    .any(|x| x.window == d.window)
+                    .then_some(Happened::Dropped(d.window))
+            }
             23 => {
                 let (_, p) = decode::<gui::WindowPointer>(got, 0).ok()?;
+                self.held = (p.buttons.0 & gui::buttons::LEFT != 0).then_some(p.window);
+                self.serial = p.serial;
                 let e = Event::Pointer {
                     x: self.scale_logical(p.x),
                     y: self.scale_logical(p.y),

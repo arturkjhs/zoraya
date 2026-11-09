@@ -75,6 +75,27 @@ fn a_text_field_edits_by_character() {
     w.event(key(keys::HOME));
     assert_eq!(w.event(key(keys::DELETE)), Response::Changed(3));
     w.event(key(keys::END));
+    assert_eq!(w.event(key(keys::ENTER)), Response::Activated(3));
+    assert_eq!(w.value(3), Value::Text("вітř"));
+    // Rebuilt with its cursor: typing goes where it was.
+    let (mut w, _) = window(
+        Box::new(TextField::with_cursor(4, "abc", 1)),
+        200,
+        28,
+        &mut p,
+    );
+    w.move_focus(false);
+    w.event(typed('x'));
+    assert_eq!(w.value(4), Value::Text("axbc"));
+    let (mut w, _) = window(
+        Box::new(TextField::with_cursor(4, "ab", 9)),
+        200,
+        28,
+        &mut p,
+    );
+    w.move_focus(false);
+    w.event(typed('x'));
+    assert_eq!(w.value(4), Value::Text("abx"));
     assert_eq!(
         w.event(typed('\u{7}')),
         Response::None,
@@ -795,4 +816,57 @@ fn text_and_the_small_parts_are_where_they_belong() {
     f.event(&key(keys::HOME));
     f.event(&key(keys::END));
     assert_eq!(f.cursor, 3);
+}
+
+/// Proposed ADR-0244: the application reads what the person set by the
+/// widget's id; a list's details stand right-aligned in the secondary ink.
+#[test]
+fn values_are_read_by_id_and_details_stand_at_the_right() {
+    let mut p = painter();
+    let mut list = ListView::new(7, &["include", "main.c"]);
+    list.details = vec![String::new(), String::from("1.9 kB")];
+    let tree = Column::new(vec![
+        Box::new(TextField::new(3, "plán.txt")),
+        Box::new(CheckBox::new(4, "untrusted", true)),
+        Box::new(Switch::new(5, false)),
+        Box::new(RadioGroup::new(6, &["a", "b"], 1)),
+        Box::new(list),
+        Box::new(Menu::new(8, &["Open"])),
+        button(9),
+        // Ids 0 and 1 after a button: found only where they are.
+        Box::new(TextField::new(0, "zero")),
+        Box::new(TextField::new(1, "one")),
+    ]);
+    let (mut w, mut px) = window(Box::new(tree), 300, 400, &mut p);
+    assert_eq!(w.value(3), Value::Text("plán.txt"));
+    assert_eq!(w.value(4), Value::On(true));
+    assert_eq!(w.value(5), Value::On(false));
+    assert_eq!(w.value(6), Value::Index(Some(1)));
+    assert_eq!(w.value(7), Value::Index(None));
+    assert_eq!(w.value(8), Value::Index(Some(0)));
+    assert_eq!(w.value(9), Value::None);
+    assert_eq!(w.value(99), Value::None);
+    assert_eq!(w.value(0), Value::Text("zero"));
+    assert_eq!(w.value(1), Value::Text("one"));
+    // Tab to the list (field, check box, switch, radio, list) and Down.
+    for _ in 0..5 {
+        w.event(key(keys::TAB));
+    }
+    w.event(key(keys::DOWN));
+    assert_eq!(w.value(7), Value::Index(Some(0)));
+    w.paint(&mut p, &mut px, 300);
+    // The list's second row: the size's ink at the right, none in the
+    // first row's right half.
+    let list_y = 20 + 28 + 8 + 28 + 8 + 28 + 8 + 56 + 8;
+    let secondary = LIGHT.fg_text_secondary.pixel();
+    let ink = |y0: usize, xs: core::ops::Range<usize>, px: &[u32]| {
+        (y0..y0 + 28).any(|y| xs.clone().any(|x| px[y * 300 + x] == secondary))
+    };
+    assert!(ink(list_y + 28, 200..280, &px), "the detail at the right");
+    assert!(!ink(list_y, 150..280, &px), "no detail on the first row");
+    // The detail ends a control's padding inside the row's right edge.
+    assert!(
+        !ink(list_y + 28, 272..280, &px),
+        "nothing in the row's right padding"
+    );
 }

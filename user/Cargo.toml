@@ -39,6 +39,11 @@ zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-command = { path = "../crates/zoraya-command" }
 zoraya-settings = { path = "../crates/zoraya-settings" }
 zoraya-panel = { path = "../crates/zoraya-panel" }
+zoraya-app = { path = "../crates/zoraya-app" }
+zoraya-chooser = { path = "../crates/zoraya-chooser" }
+zoraya-files = { path = "../crates/zoraya-files" }
+zoraya-fsclient = { path = "../crates/zoraya-fsclient" }
+zoraya-proto-chooser = { path = "../crates/zoraya-proto-chooser" }
 zoraya-commands = { path = "../crates/zoraya-commands" }
 zoraya-resolve = { path = "../crates/zoraya-resolve" }
 zoraya-broker = { path = "../crates/zoraya-broker" }
@@ -363,6 +368,21 @@ bench = false
 
 [[bin]]
 name = "panel"
+test = false
+bench = false
+
+[[bin]]
+name = "chooser"
+test = false
+bench = false
+
+[[bin]]
+name = "t_open"
+test = false
+bench = false
+
+[[bin]]
+name = "files"
 test = false
 bench = false
 

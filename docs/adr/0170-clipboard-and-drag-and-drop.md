@@ -80,6 +80,13 @@ A POSIX program in a terminal copies and pastes through the terminal client, whi
 - **INV-0170-5.** Contents over the bound, and a second offer or drag while one is in flight, are refused and leave the clipboard unchanged. *Check:* host test at the bounds.
 
 ## Open questions
+- *(Check note, stage 7e, ADR-0001 rule 6.)* Drag-and-drop is built in 7e, the clipboard in 7f. INV-0170-3 and
+  INV-0170-4: `zoraya-compositor`'s `tests_drops.rs` (no pointer event reaches any window during a drag, the source
+  gets only `DragDone` and `DragEnded`, the target only `Drop`; the entry is passed on once and closed on every other
+  end), with two clients rather than three. `DragDone`, the reply to `Drag`, stands for `DragStarted`. The press's
+  serial is a field of `WindowPointer`, counted per client (review notes 51). INV-0170-1, -2 and -5 need the
+  clipboard's half (7f); their drop half is in the same tests. A drop on an untrusted room's window is not delivered
+  until the confirming card exists (INV-0172-3).
 - The 500 ms reply bound and the 1 MiB text bound.
 - Whether a menu item's click should become a compositor gesture through EWS's distinguished regions, and at what cost in the toolkit.
 - Whether a drop should ever carry more than `read` (a `tree` entry for a directory), and by what gesture the person would say so.

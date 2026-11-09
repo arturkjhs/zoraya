@@ -737,3 +737,85 @@ pub const WITHOUT_TEXT: [(&str, &str); 7] = [
 
 /// The bar's trusted mark while the show-commands mode is open.
 pub const COMMANDS_HEADING: &str = "Show commands · System+? to leave";
+
+/// A sheet's heading (ADR-0167): what it asks and for which application,
+/// the application from the compositor's own record, never the request.
+pub fn sheet_heading(kind: u32, app: &str) -> String {
+    let what = match kind {
+        1 => "Save a file",
+        2 => "Choose a folder",
+        _ => "Open a file",
+    };
+    if app.is_empty() {
+        String::from(what)
+    } else {
+        alloc::format!("{what} for {app}")
+    }
+}
+
+/// The system emblem (ADR-0167): a Z on a rounded square in
+/// `bg.frame.system`, `18 × 18` logical pixels from `x`, centred on `cy`.
+pub fn emblem(
+    c: &mut Canvas<'_>,
+    x: i32,
+    cy: i32,
+    k: u32,
+    p: &Palette,
+    t: &mut zoraya_text::Text<'static>,
+) -> i32 {
+    let si = k as i32;
+    let side = 18 * si;
+    let y = cy - side / 2;
+    let m = paint::rounded_rect(side as usize, side as usize, 4 * k, shape::CORNER);
+    c.mask(&m, x, y, p.bg_frame_system, 255);
+    let o = paint::rounded_outline(side as usize, side as usize, 4 * k, k, shape::CORNER);
+    c.mask(&o, x, y, p.border, 255);
+    let px = text::BODY.physical(Scale::ONE) * k;
+    let w = t.measure("Z", px);
+    draw_text(
+        c,
+        t,
+        "Z",
+        px,
+        x + (side - w) / 2,
+        cy + px as i32 * 7 / 20,
+        p.fg_text,
+    );
+    side
+}
+
+/// A sheet's strip, above its body: the trusted material, the emblem and
+/// the heading, all the compositor's (ADR-0167's first mark; INV-0167-4).
+pub fn sheet_strip(
+    c: &mut Canvas<'_>,
+    w: &crate::window::Window,
+    f: &crate::Frame,
+    k: u32,
+    p: &Palette,
+    t: &mut zoraya_text::Text<'static>,
+) {
+    let o = prect(w.outer(f));
+    let strip = paint::Rect::new(o.x, o.y, o.w, f.title as i32);
+    if strip.intersect(&c.clip).is_empty() {
+        return;
+    }
+    material(p, k, 0).draw(c, strip);
+    let si = k as i32;
+    c.fill(
+        paint::Rect::new(o.x, strip.y + strip.h - si, o.w, si),
+        p.border,
+    );
+    let cy = strip.y + strip.h / 2;
+    let x = o.x + 12 * si;
+    let side = emblem(c, x, cy, k, p, t);
+    let px = text::BODY.physical(Scale::ONE) * k;
+    draw_text(
+        c,
+        t,
+        &w.title,
+        px,
+        x + side + 10 * si,
+        cy + px as i32 * 7 / 20,
+        p.fg_text,
+    );
+}

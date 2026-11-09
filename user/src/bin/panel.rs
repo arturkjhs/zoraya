@@ -145,42 +145,127 @@ fn spawn_program(
     ok
 }
 
-/// A launch (ADR-0168): the compositor learns the client with its record,
-/// then the record's programs are spawned.
-fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
+/// What the panel keeps between launches.
+struct State {
+    manager: Handle,
+    root: Option<File>,
+    /// The chooser's registration channel (proposed ADR-0245), from `init`.
+    chooser: Option<Handle>,
+    next_tag: u32,
+    port: Handle,
+    /// The channels of running file managers, watched for `OpenWith`.
+    launchers: Vec<Option<Handle>>,
+}
+
+const KEY_LAUNCHER: u64 = 100;
+/// The rights of a data directory: ADR-0153's `tree`.
+const TREE: u32 = zoraya_proto_file::rights::ALL & !zoraya_proto_file::rights::PUBLISH;
+
+/// The application's data directory, made if it is not there.
+fn data_dir(root: &File, path: &str) -> Option<File> {
+    let mut at = String::new();
+    for part in path.trim_start_matches('/').split('/') {
+        if !at.is_empty() {
+            at.push('/');
+        }
+        at.push_str(part);
+        if root
+            .open(&at, zoraya_proto_file::open_flags::DIRECTORY, TREE)
+            .is_err()
+        {
+            let (parent, name) = at.rsplit_once('/').unwrap_or(("", at.as_str()));
+            let made = if parent.is_empty() {
+                root.make_directory(name)
+            } else {
+                root.open(parent, zoraya_proto_file::open_flags::DIRECTORY, TREE)
+                    .and_then(|d| d.make_directory(name))
+            };
+            if made.is_err() {
+                return None;
+            }
+        }
+    }
+    root.open(&at, zoraya_proto_file::open_flags::DIRECTORY, TREE)
+        .ok()
+}
+
+/// Registers an application's chooser channel under its tag; gives the
+/// application's end.
+fn chooser_channel(chooser: Handle, tag: u32, app: &str) -> Option<Handle> {
+    let (app_end, chooser_end) = channel_create().ok()?;
+    let m = zoraya_proto_chooser::AddApplication {
+        tag,
+        name: Data(app.as_bytes()),
+    };
+    let mut out = alloc::vec![0u8; 512];
+    let n = encode(&m, 1, &mut out).ok()?;
+    let entry = ChannelEntry {
+        handle: chooser_end,
+        rights: ChannelObject::RIGHTS,
+        transfer: Transfer::Move,
+    };
+    if channel_write(chooser, &out[..n], &[entry]).is_err() {
+        let _ = handle_close(chooser_end);
+        let _ = handle_close(app_end);
+        return None;
+    }
+    let mut reply = [0u8; 64];
+    let ok = zoraya_user::gui::wait_reply(chooser, &mut reply, 2_000_000_000)
+        .and_then(|n| decode::<zoraya_proto_chooser::Added>(&reply[..n], 0).ok())
+        .is_some_and(|(_, a)| a.status.0 == 0);
+    if ok {
+        Some(app_end)
+    } else {
+        let _ = handle_close(app_end);
+        None
+    }
+}
+
+/// A launch (ADR-0168): the compositor learns the client with its record
+/// and its tag, then the record's programs are spawned with exactly the
+/// handles it lists; `opened` is the file the person opened, if any.
+fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     let Ok((client, compositor_end)) = channel_create() else {
         return;
     };
+    let tag = st.next_tag;
+    st.next_tag = st.next_tag.wrapping_add(1).max(1);
     let entries = l.entries.join("\n");
     let room = l.room.as_ref();
     let m = gui::AddRoomClient {
         untrusted: u32::from(room.is_some_and(|r| r.untrusted)),
         colour: room.map_or(0, |r| u32::from(r.colour)),
+        tag,
         room: Data(room.map_or(&b""[..], |r| r.name.as_bytes())),
         app: Data(l.app.as_bytes()),
         entries: Data(entries.as_bytes()),
         line: Data(l.line.as_bytes()),
     };
-    if !send(manager, &m, Some(compositor_end)) {
+    if !send(st.manager, &m, Some(compositor_end)) {
         println!("panel: the launch record is too large for the compositor");
         let _ = handle_close(client);
+        if let Some(h) = opened {
+            let _ = handle_close(h);
+        }
         return;
     }
-    let Ok((term_end, shell_end)) = channel_create() else {
-        let _ = handle_close(client);
-        return;
+    let terminal = if l.app == "term" {
+        channel_create().ok()
+    } else {
+        None
     };
     let mut client = Some(client);
-    let mut ends = [Some(term_end), Some(shell_end)];
+    let mut ends = [terminal.map(|t| t.0), terminal.map(|t| t.1)];
     // What the shell holds: its room's grants or home's, never the root
     // (ADR-0242's condition); it starts in the first it may change.
-    let home = root.map(zoraya_user::namespace::shell_home);
+    let home = st.root.as_ref().map(zoraya_user::namespace::shell_home);
     let cwd = l
         .holds
         .iter()
         .find(|(_, w)| *w)
         .map(|(p, _)| p.as_str())
         .unwrap_or("/");
+    let data_path = zoraya_panel::data_dir(room, l.app);
     // A broker beside the shell, on a volume with /bin (ADR-0153 rule 10):
     // it ends when the shell's client closes and nothing it started runs.
     let wants_broker = l
@@ -188,7 +273,7 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
         .iter()
         .any(|p| p.handles.iter().any(|s| s.give == Give::Broker));
     let beside = if wants_broker {
-        root.and_then(zoraya_user::beside::start_broker)
+        st.root.as_ref().and_then(zoraya_user::beside::start_broker)
     } else {
         None
     };
@@ -197,6 +282,9 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
         beside.as_ref().map(|b| b.tmp),
     );
     for (i, p) in l.programs.iter().enumerate() {
+        let root = st.root.as_ref();
+        let chooser = st.chooser;
+        let mut launcher = None;
         let ok = spawn_program(p.image, &p.handles, &p.args, |g| match g {
             Give::Compositor => client.take(),
             Give::Terminal => ends[i.min(1)].take(),
@@ -205,15 +293,44 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
                 let start = zoraya_user::namespace::expand(cwd, home);
                 zoraya_user::namespace::record(root?, home, &start, &l.holds)
             }
+            Give::Chooser => chooser_channel(chooser?, tag, l.app),
+            Give::Data => {
+                let d = data_dir(root?, &data_path)?;
+                let h = d.end;
+                core::mem::forget(d);
+                Some(h)
+            }
+            Give::Root => {
+                let r = root?.clone_as(zoraya_user::files::ALL).ok()?;
+                let h = r.end;
+                core::mem::forget(r);
+                Some(h)
+            }
+            Give::Launcher => {
+                let (ours, theirs) = channel_create().ok()?;
+                launcher = Some(ours);
+                Some(theirs)
+            }
+            Give::Opened => opened.take(),
             Give::Broker => broker.take(),
             Give::Tmp => tmp.take(),
             _ => None,
         });
+        if let Some(ours) = launcher {
+            if ok {
+                watch_launcher(st, ours);
+            } else {
+                let _ = handle_close(ours);
+            }
+        }
         if !ok {
             println!("panel: {} did not start", p.image);
         }
     }
-    let unused = client.into_iter().chain(ends.into_iter().flatten());
+    let unused = client
+        .into_iter()
+        .chain(ends.into_iter().flatten())
+        .chain(opened);
     for h in unused.chain(broker).chain(tmp) {
         let _ = handle_close(h);
     }
@@ -222,6 +339,91 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
     if let Some(b) = beside {
         let _ = handle_close(b.job.0);
         let _ = handle_close(b.job.1);
+    }
+}
+
+fn watch_launcher(st: &mut State, end: Handle) {
+    let i = match st.launchers.iter().position(Option::is_none) {
+        Some(i) => i,
+        None => {
+            st.launchers.push(None);
+            st.launchers.len() - 1
+        }
+    };
+    let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+    if port_subscribe(st.port, end, wanted, KEY_LAUNCHER + i as u64, Mode::Level).is_ok() {
+        st.launchers[i] = Some(end);
+    } else {
+        let _ = handle_close(end);
+    }
+}
+
+/// `OpenWith` from a file manager: the file's application is launched in
+/// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
+fn launcher_requests(st: &mut State, i: usize) {
+    let Some(end) = st.launchers[i] else { return };
+    let mut bytes = alloc::vec![0u8; 2048];
+    loop {
+        let mut handles = [end; 1];
+        let sizes = match channel_read(end, &mut bytes, &mut handles) {
+            Ok(s) => s,
+            Err((Status::WouldBlock, _)) => return,
+            // Gone, or a message it cannot read (too large): it would stay
+            // at the head and wake the panel for ever (review 7e, 10).
+            Err(_) => {
+                let _ = zoraya_user::port_unsubscribe(st.port, KEY_LAUNCHER + i as u64);
+                let _ = handle_close(end);
+                st.launchers[i] = None;
+                return;
+            }
+        };
+        let got: Vec<Handle> = handles[..sizes.handles as usize].to_vec();
+        let msg = &bytes[..sizes.bytes as usize];
+        let t = zoraya_protocol::Header::decode(msg).map_or(0, |(h, _)| h.transaction);
+        let status = match decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len()) {
+            Ok((_, m)) => {
+                let name = core::str::from_utf8(m.name.0).unwrap_or("");
+                let words = core::str::from_utf8(m.words.0).unwrap_or("");
+                match zoraya_panel::opener(name) {
+                    Some(app) if !words.chars().any(char::is_control) => {
+                        // Whatever the sender gave, the application gets
+                        // the file to read only (ADR-0153's `+r`).
+                        let given = zoraya_user::files::File { end: got[0] };
+                        let read = given.clone_as(
+                            zoraya_proto_file::rights::READ | zoraya_proto_file::rights::CLONE,
+                        );
+                        drop(given);
+                        match read {
+                            Ok(f) => {
+                                let h = f.end;
+                                core::mem::forget(f);
+                                let l = zoraya_panel::application(None, app, Some(words));
+                                launch(st, &l, Some(h));
+                                0
+                            }
+                            Err(_) => zoraya_proto_chooser::status::FAILED,
+                        }
+                    }
+                    _ => {
+                        let _ = handle_close(got[0]);
+                        zoraya_proto_chooser::status::FAILED
+                    }
+                }
+            }
+            Err(_) => {
+                for h in &got {
+                    let _ = handle_close(*h);
+                }
+                zoraya_proto_chooser::status::INVALID
+            }
+        };
+        let r = zoraya_proto_chooser::Opening {
+            status: zoraya_protocol::Below(status),
+        };
+        let mut out = [0u8; 64];
+        if let Ok(n) = encode(&r, t, &mut out) {
+            let _ = channel_write(end, &out[..n], &[]);
+        }
     }
 }
 
@@ -249,10 +451,18 @@ fn main() -> i32 {
     if port_subscribe(port, manager, wanted, KEY_MANAGER, Mode::Level).is_err() {
         return 1;
     }
+    let mut st = State {
+        manager,
+        root,
+        chooser: channel(7),
+        next_tag: 1,
+        port,
+        launchers: Vec::new(),
+    };
     let mut next_reload = clock_monotonic() + RELOAD_NS;
     let mut bytes = alloc::vec![0u8; 512];
     loop {
-        let mut packets = [Packet::default()];
+        let mut packets = [Packet::default(); 4];
         let _ = port_wait(port, next_reload, &mut packets);
         loop {
             let mut handles = [manager; 1];
@@ -271,16 +481,19 @@ fn main() -> i32 {
             // The press against the table the compositor drew (review 7d,
             // 6); the file is read again after it.
             match panel.pressed(d.kind, d.index) {
-                Action::Launch(l) => launch(&l, manager, root.as_ref()),
+                Action::Launch(l) => launch(&mut st, &l, None),
                 Action::Entered => tell_rooms(manager, &panel),
                 Action::Nothing => {}
             }
-            if reload(&mut panel, root.as_ref()) {
+            if reload(&mut panel, st.root.as_ref()) {
                 tell_rooms(manager, &panel);
             }
         }
+        for i in 0..st.launchers.len() {
+            launcher_requests(&mut st, i);
+        }
         if clock_monotonic() >= next_reload {
-            if reload(&mut panel, root.as_ref()) {
+            if reload(&mut panel, st.root.as_ref()) {
                 tell_rooms(manager, &panel);
             }
             next_reload = clock_monotonic() + RELOAD_NS;

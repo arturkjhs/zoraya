@@ -303,6 +303,7 @@ impl Gui {
         let m = gui::AddRoomClient {
             untrusted: 0,
             colour: 0,
+            tag: 0,
             room: zoraya_protocol::Data(b""),
             app: zoraya_protocol::Data(b"term"),
             entries: zoraya_protocol::Data(entries.as_bytes()),
@@ -315,7 +316,50 @@ impl Gui {
     /// The panel (ADR-0168): its client manager, the volume's root and the
     /// console; `None` if the compositor refuses or the panel does not
     /// start.
-    pub fn start_panel(&self, root: &crate::files::File) -> Option<Running> {
+    /// Starts the chooser (ADR-0167, proposed ADR-0245): the volume's
+    /// root, a compositor channel the driver manager marks as a system
+    /// client's, and its end of the channel the panel registers
+    /// applications on; gives the panel's end.
+    pub fn start_chooser(&self, root: &crate::files::File) -> Option<(Running, Handle)> {
+        let (ours, theirs) = channel_create().ok()?;
+        if !attached(self.manager, &gui::AddSystemClient {}, theirs) {
+            let _ = handle_close(ours);
+            return None;
+        }
+        let Ok((panel, chooser)) = channel_create() else {
+            let _ = handle_close(ours);
+            return None;
+        };
+        let Ok(root) = root.clone_as(crate::files::ALL) else {
+            let _ = handle_close(ours);
+            let _ = handle_close(panel);
+            let _ = handle_close(chooser);
+            return None;
+        };
+        let entries = [
+            console(),
+            moved(5, root.end),
+            moved(6, ours),
+            moved(7, chooser),
+        ];
+        match start("chooser", &entries, &[]) {
+            Some((job, process)) => {
+                // Moved into the chooser with the spawn.
+                core::mem::forget(root);
+                Some((Running { job, process }, panel))
+            }
+            None => {
+                let _ = handle_close(panel);
+                None
+            }
+        }
+    }
+
+    pub fn start_panel(
+        &self,
+        root: &crate::files::File,
+        chooser: Option<Handle>,
+    ) -> Option<Running> {
         let (ours, theirs) = channel_create().ok()?;
         if !attached(self.manager, &gui::AttachClientManager {}, theirs) {
             let _ = handle_close(ours);
@@ -348,6 +392,10 @@ impl Gui {
                 moved(6, ours),
             ] {
                 e.handle(entry);
+            }
+            // The chooser's registration channel (proposed ADR-0245).
+            if let Some(c) = chooser {
+                e.handle(moved(7, c));
             }
             let process = e
                 .finish()

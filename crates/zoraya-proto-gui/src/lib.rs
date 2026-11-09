@@ -201,6 +201,51 @@ protocol! {
     message Close = 10, handles 0 {
         window: u32,
     }
+    /// System client only (the chooser, marked by `AddSystemClient`): a
+    /// sheet of `width × height` logical pixels under the focused window of
+    /// the client the panel tagged `tag` (ADR-0160, ADR-0167). `kind` is
+    /// `zoraya-proto-chooser`'s `sheet`, for the heading the compositor
+    /// draws above the sheet and in the bar. The reply is `SheetCreated`.
+    message CreateSheet = 11, handles 1 {
+        tag: u32,
+        kind: Below<3>,
+        width: u32,
+        height: u32,
+    }
+    message SheetCreated = 11, handles 0 {
+        status: Status,
+        window: u32,
+    }
+
+    /// System client only: the person granted the client tagged `tag` an
+    /// entry, in ADR-0153's words, for its frame's pills (ADR-0172 point
+    /// 4). The reply is `GrantedDone`.
+    message Granted<'a> = 12, handles 0 {
+        tag: u32,
+        words: Data<'a, MAX_LINE>,
+    }
+    message GrantedDone = 12, handles 0 {
+        status: Status,
+    }
+
+    /// The client starts a drag of one entry (ADR-0170) from `window`,
+    /// whose body holds the left button the compositor delivered to it,
+    /// naming that press's `serial` within 500 ms of it: the entry's
+    /// connection and its display name (one name, no `/`), which the
+    /// compositor shows beside the pointer and in the target's pill as
+    /// `dropped: NAME read`; the client chooses no other word of it.
+    /// Refused (`BAD_RANGE`) when no press of the client's is held. The
+    /// reply is `DragDone`; at the release the compositor sends the source
+    /// `DragEnded` and the window under the pointer `Drop`.
+    message Drag<'a> = 13, handles 1 {
+        window: u32,
+        serial: u32,
+        name: Data<'a, MAX_DROPPED_NAME>,
+    }
+    message DragDone = 13, handles 0 {
+        status: Status,
+    }
+
     message CloseDone = 10, handles 0 {
         status: Status,
     }
@@ -243,12 +288,32 @@ protocol! {
         x: u32,
         y: u32,
         buttons: Flags<{ buttons::ALL }>,
+        /// How many left presses on its bodies the compositor delivered to
+        /// this client, counted for it alone: what a `Drag` names
+        /// (ADR-0170).
+        serial: u32,
     }
 
     /// The active keyboard layout's name (ADR-0163: `us`, `ua`, `ru`,
     /// `cz`), to the focused client when it gains focus and at every switch.
     message Layout<'a> = 24, handles 0 {
         name: Data<'a, 16>,
+    }
+
+    /// An entry dropped on `window` at `(x, y)` in its body (ADR-0170): the
+    /// connection, read only, and its display name, never a path
+    /// (ADR-0167). The window saw nothing of the drag before.
+    message Drop<'a> = 25, handles 1 {
+        window: u32,
+        x: u32,
+        y: u32,
+        name: Data<'a, MAX_DROPPED_NAME>,
+    }
+
+    /// The source's drag ended (a drop or none: the source is not told
+    /// which, ADR-0170).
+    message DragEnded = 26, handles 0 {
+        window: u32,
     }
 
     /// Manager: a new client, with the compositor's end of its channel.
@@ -290,6 +355,10 @@ protocol! {
         untrusted: u32,
         /// The room's colour slot, 1 to 4; 0 for `home` and untrusted.
         colour: u32,
+        /// The panel's tag for this client, which it also gives the
+        /// chooser with the application's chooser channel, so that a sheet
+        /// finds its owner (ADR-0160, proposed ADR-0245); 0 for none.
+        tag: u32,
         /// The room's name; empty for `home`.
         room: Data<'a, 24>,
         /// The application, as the dock names it (`term`, `edit`).
@@ -303,6 +372,11 @@ protocol! {
     /// Driver manager: the client manager's channel, for the panel
     /// (ADR-0168). The reply is `ManagerDone`.
     message AttachClientManager = 38, handles 1 {}
+
+    /// Driver manager: a client whose windows are system windows and who
+    /// may create sheets and report grants (the chooser, ADR-0167). The
+    /// reply is `ManagerDone`.
+    message AddSystemClient = 42, handles 1 {}
 
     /// Client manager: the room table as `/config/rooms` writes it, and
     /// the current room (empty for `home`), for the dock's chips and the
@@ -329,11 +403,13 @@ protocol! {
 }
 
 /// The ordinals a client may send.
-pub const CLIENT_REQUESTS: [u32; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+pub const CLIENT_REQUESTS: [u32; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+/// The client requests only a system client may send (proposed ADR-0245).
+pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 9] = [16, 17, 18, 19, 20, 21, 22, 23, 24];
+pub const CLIENT_EVENTS: [u32; 11] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26];
 /// The ordinals only the manager may send.
-pub const MANAGER_REQUESTS: [u32; 5] = [32, 33, 34, 35, 38];
+pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:
 /// `AddRoomClient` from either, the rooms and the dock from the client
 /// manager only (ADR-0168).
@@ -354,6 +430,8 @@ pub mod dock {
 /// The longest launch record's entries, room table and dock list.
 pub const MAX_ENTRIES: usize = 1024;
 pub const MAX_LINE: usize = 256;
+/// The longest display name a drag carries.
+pub const MAX_DROPPED_NAME: usize = 64;
 pub const MAX_ROOMS_TEXT: usize = 3072;
 pub const MAX_DOCK_TEXT: usize = 1024;
 

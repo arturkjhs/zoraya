@@ -34,17 +34,29 @@ pub struct Record {
     pub entries: Vec<String>,
     /// The line that made the record.
     pub line: String,
+    /// The panel's tag (proposed ADR-0245): how a sheet finds this client;
+    /// 0 for none.
+    pub tag: u32,
 }
 
 fn is_app_name(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 16
         && s.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
 }
 
 fn text_line(s: &str) -> bool {
-    !s.chars().any(char::is_control)
+    plain_text(s)
+}
+
+/// Text the compositor draws in its trusted material: no control character
+/// and no bidirectional override or isolate, which would reorder what the
+/// person reads (review 7e, 19).
+pub(crate) fn plain_text(s: &str) -> bool {
+    !s.chars().any(|c| {
+        c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    })
 }
 
 impl Record {
@@ -95,6 +107,7 @@ impl Record {
             app: app.into(),
             entries,
             line: line.into(),
+            tag: m.tag,
         })
     }
 

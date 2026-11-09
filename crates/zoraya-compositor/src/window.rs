@@ -21,6 +21,10 @@ pub enum WindowKind {
     Toplevel,
     /// A popup of the toplevel `parent` (a window id of the same client).
     Popup { parent: u32 },
+    /// A sheet (ADR-0160, ADR-0167): a system client's window hung under
+    /// the title bar of another client's window, moved and stacked with it,
+    /// under a strip the compositor draws.
+    Sheet { owner_client: usize, owner_id: u32 },
 }
 
 /// A buffer a client gave: its mapping, its size in buffer pixels.
@@ -96,7 +100,21 @@ impl Frame {
 
 impl Window {
     pub fn framed(&self) -> bool {
-        !matches!(self.kind, WindowKind::Popup { .. })
+        !matches!(
+            self.kind,
+            WindowKind::Popup { .. } | WindowKind::Sheet { .. }
+        )
+    }
+
+    /// The window a sheet hangs under: its client and id.
+    pub fn owner(&self) -> Option<(usize, u32)> {
+        match self.kind {
+            WindowKind::Sheet {
+                owner_client,
+                owner_id,
+            } => Some((owner_client, owner_id)),
+            _ => None,
+        }
     }
 
     /// The body on the screen.
@@ -113,6 +131,10 @@ impl Window {
     /// around both. A popup is its body.
     pub fn outer(&self, f: &Frame) -> Rect {
         let b = self.body_rect();
+        // A sheet's strip, the compositor's, is above its body.
+        if self.owner().is_some() {
+            return Rect::new(b.x, b.y - f.title, b.width, b.height + f.title);
+        }
         if !self.framed() {
             return b;
         }
@@ -172,6 +194,14 @@ impl Window {
         let o = self.outer(f);
         if !o.contains(x, y) {
             return None;
+        }
+        // On a sheet, the strip is no client's: `Title`, which moves nothing.
+        if self.owner().is_some() {
+            return Some(if self.body_rect().contains(x, y) {
+                Zone::Body
+            } else {
+                Zone::Title
+            });
         }
         if !self.framed() {
             return Some(Zone::Body);

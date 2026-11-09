@@ -1,0 +1,26 @@
+[package]
+name = "zoraya-chooser"
+description = "The chooser's logic (ADR-0167): what the person may pick, and the grant each pick gives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-app = { path = "../zoraya-app" }
+zoraya-fsclient = { path = "../zoraya-fsclient" }
+zoraya-paint = { path = "../zoraya-paint" }
+zoraya-proto-chooser = { path = "../zoraya-proto-chooser" }
+zoraya-proto-file = { path = "../zoraya-proto-file" }
+zoraya-protocol = { path = "../zoraya-protocol" }
+zoraya-shell = { path = "../zoraya-shell" }
+zoraya-tokens = { path = "../zoraya-tokens" }
+zoraya-ui = { path = "../zoraya-ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-proto-gui = { path = "../zoraya-proto-gui" }
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

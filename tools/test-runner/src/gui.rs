@@ -34,8 +34,8 @@
 //!                   RGB (hex)
 //! click X Y         move the pointer to (X, Y) and press and release the
 //!                   left button
-//! drag X Y X2 Y2    press the left button at (X, Y), move to (X2, Y2) in
-//!                   steps, release
+//! drag X Y X2 Y2 [HOLD]  press the left button at (X, Y), hold it HOLD ms,
+//!                   move to (X2, Y2) in steps, release
 //!
 //! Coordinates are logical pixels: the runner multiplies them by the
 //! display's scale (ADR-0164), which it takes from the screendump's width
@@ -143,7 +143,8 @@ pub enum Step {
     Latency(usize),
     Click(i64, i64),
     Layout(usize),
-    Drag(i64, i64, i64, i64),
+    /// From, to, and how long the press is held before the move, in ms.
+    Drag(i64, i64, i64, i64, u64),
     /// Reads the terminal whose body is at this logical point (a second
     /// window), instead of the first.
     Origin(i64, i64),
@@ -209,10 +210,12 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                     .split_whitespace()
                     .map(|n| n.parse().map_err(|_| bad("not a number")))
                     .collect::<Result<_, _>>()?;
-                let [x, y, x2, y2] = v[..] else {
-                    return Err(bad("drag X Y X2 Y2"));
+                let (x, y, x2, y2, hold) = match v[..] {
+                    [x, y, x2, y2] => (x, y, x2, y2, 0),
+                    [x, y, x2, y2, h] if h >= 0 => (x, y, x2, y2, h as u64),
+                    _ => return Err(bad("drag X Y X2 Y2 [HOLD_MS]")),
                 };
-                Step::Drag(x, y, x2, y2)
+                Step::Drag(x, y, x2, y2, hold)
             }
             "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
             "origin" => {
@@ -943,10 +946,13 @@ impl Run {
                 std::thread::sleep(AFTER_CLICK);
                 Ok(())
             }
-            Step::Drag(x, y, x2, y2) => {
+            Step::Drag(x, y, x2, y2, hold) => {
                 let (size, k) = self.display()?;
                 self.qmp.pointer((x * k, y * k), size, None)?;
                 self.qmp.pointer((x * k, y * k), size, Some(true))?;
+                // A hand holds a press before it moves: long enough for the
+                // program under it to answer the press (a drag's start).
+                std::thread::sleep(Duration::from_millis(*hold));
                 // In steps, as a hand moves: the compositor follows each.
                 const STEPS: i64 = 8;
                 for i in 1..=STEPS {
@@ -1095,7 +1101,15 @@ mod tests {
         assert_eq!(parse("layout cz\n").unwrap(), [Step::Layout(3)]);
         assert!(parse("layout de\n").is_err());
         assert!(parse("chord meta spc\n").is_ok());
-        assert_eq!(parse("drag 1 2 3 4\n").unwrap(), [Step::Drag(1, 2, 3, 4)]);
+        assert_eq!(
+            parse("drag 1 2 3 4\n").unwrap(),
+            [Step::Drag(1, 2, 3, 4, 0)]
+        );
+        assert_eq!(
+            parse("drag 1 2 3 4 500\n").unwrap(),
+            [Step::Drag(1, 2, 3, 4, 500)]
+        );
+        assert!(parse("drag 1 2 3 4 -5\n").is_err());
         assert!(parse("click 3\n").is_err());
         assert!(parse("drag 1 2 3 x\n").is_err());
     }

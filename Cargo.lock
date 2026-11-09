@@ -58,6 +58,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-chooser"
+version = "0.1.0"
+dependencies = [
+ "zoraya-app",
+ "zoraya-fsclient",
+ "zoraya-paint",
+ "zoraya-proto-chooser",
+ "zoraya-proto-file",
+ "zoraya-proto-gui",
+ "zoraya-protocol",
+ "zoraya-shell",
+ "zoraya-test-alloc",
+ "zoraya-tokens",
+ "zoraya-ui",
+]
+
+[[package]]
 name = "zoraya-command"
 version = "0.1.0"
 dependencies = [
@@ -141,6 +158,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-files"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-shell",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-fonts"
 version = "0.1.0"
 dependencies = [
@@ -185,6 +211,18 @@ dependencies = [
  "zoraya-fs",
  "zoraya-fs-testkit",
  "zoraya-mkfs",
+]
+
+[[package]]
+name = "zoraya-fsclient"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fs",
+ "zoraya-fs-service",
+ "zoraya-fs-testkit",
+ "zoraya-proto-file",
+ "zoraya-protocol",
+ "zoraya-test-alloc",
 ]
 
 [[package]]
@@ -307,6 +345,14 @@ dependencies = [
 
 [[package]]
 name = "zoraya-proto-block"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-proto-chooser"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
@@ -506,19 +552,24 @@ name = "zoraya-user"
 version = "0.1.0"
 dependencies = [
  "zoraya-abi",
+ "zoraya-app",
  "zoraya-broker",
+ "zoraya-chooser",
  "zoraya-command",
  "zoraya-commands",
  "zoraya-compositor",
  "zoraya-describe",
  "zoraya-elf",
+ "zoraya-files",
  "zoraya-fonts",
  "zoraya-fs",
  "zoraya-fs-service",
+ "zoraya-fsclient",
  "zoraya-heap",
  "zoraya-keymap",
  "zoraya-panel",
  "zoraya-proto-block",
+ "zoraya-proto-chooser",
  "zoraya-proto-display",
  "zoraya-proto-file",
  "zoraya-proto-gui",

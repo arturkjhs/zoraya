@@ -223,6 +223,43 @@ pub trait Widget {
     fn closes_on_escape(&self) -> bool {
         false
     }
+    /// The id the application gave it, if it has one.
+    fn id(&self) -> Option<u32> {
+        None
+    }
+    /// What the person set in it, for the application to read after a
+    /// `Changed` or `Activated` (proposed ADR-0244).
+    fn value(&self) -> Value<'_> {
+        Value::None
+    }
+}
+
+/// A widget's value, by [`Widget::value`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Value<'a> {
+    None,
+    /// A list's selected row or a radio group's choice.
+    Index(Option<usize>),
+    /// A field's text.
+    Text(&'a str),
+    /// A check box's or a switch's state.
+    On(bool),
+}
+
+/// The path to the widget with `id` in the tree, depth first.
+fn find(w: &mut dyn Widget, id: u32, path: &mut Vec<usize>) -> bool {
+    if w.id() == Some(id) {
+        return true;
+    }
+    let n = w.children().len();
+    for i in 0..n {
+        path.push(i);
+        if find(w.children()[i].as_mut(), id, path) {
+            return true;
+        }
+        path.pop();
+    }
+    false
 }
 
 /// A window's widget tree with its keyboard focus (ADR-0165): Tab and
@@ -282,6 +319,15 @@ impl Window {
             size,
             focus: None,
         }
+    }
+
+    /// The value of the widget with `id`.
+    pub fn value(&mut self, id: u32) -> Value<'_> {
+        let mut path = Vec::new();
+        if !find(self.root.as_mut(), id, &mut path) {
+            return Value::None;
+        }
+        at_path(self.root.as_mut(), &path).map_or(Value::None, |w| w.value())
     }
 
     /// Lays the tree out over the whole window.

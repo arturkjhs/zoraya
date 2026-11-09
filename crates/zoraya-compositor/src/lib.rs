@@ -176,6 +176,12 @@ struct Client<E> {
     next_id: u32,
     /// Its launch record, from the manager only (INV-0172-1).
     record: Record,
+    /// Marked by the driver manager's `AddSystemClient` (the chooser): it
+    /// may create sheets and report grants (proposed ADR-0245).
+    system: bool,
+    /// Left presses on its bodies delivered to it: its own count, so that
+    /// no client learns of the presses another got (review 7e, 4).
+    presses: u32,
 }
 
 /// What composition has cost.
@@ -220,6 +226,13 @@ pub struct SwitchGroup {
     pub grants: String,
 }
 
+/// How long after its press a drag may name it (ADR-0170).
+const DRAG_WITHIN_NS: u64 = 500_000_000;
+
+/// The dragged entry's label's widest, logical pixels: 64 characters of
+/// the caption face, with the material's padding.
+const CARRIED_WIDTH: i64 = 520;
+
 /// What a held pointer button is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Drag {
@@ -235,6 +248,17 @@ enum Drag {
         start: (i64, i64),
         body: Rect,
     },
+}
+
+/// An entry being dragged (ADR-0170): from whose window, the connection
+/// and its display name.
+struct Carried<E> {
+    source: Key,
+    entry: E,
+    name: String,
+    /// The label's logical width, measured once: the damaged room
+    /// follows it (a 64-byte name can be wider than `CARRIED_WIDTH`).
+    width: i64,
 }
 
 /// The switcher overlay while open (ADR-0160): the windows in the order
@@ -290,6 +314,12 @@ pub struct Compositor<P: Platform> {
     pointer: Option<(i64, i64)>,
     buttons: u32,
     drag: Option<Drag>,
+    /// The window whose body holds the left button the compositor
+    /// delivered to it: the only one that may start a drag (ADR-0170).
+    body_press: Option<(Key, u32, u64)>,
+
+    /// The entry being dragged; no client hears of the pointer meanwhile.
+    carried: Option<Carried<P::End>>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
     switcher: Option<Switcher>,
@@ -376,6 +406,8 @@ impl<P: Platform> Compositor<P> {
             pointer: None,
             buttons: 0,
             drag: None,
+            body_press: None,
+            carried: None,
             pending_pointer: false,
             switcher: None,
             switcher_frame: Vec::new(),
@@ -773,6 +805,27 @@ impl<P: Platform> Compositor<P> {
                 self.send_event(focus.client, m);
             }
         }
+        // Escape ends a drag with nothing delivered (ADR-0170); while one
+        // is carried no key reaches a client.
+        if let Some(c) = self.carried.take() {
+            if key.pressed && code_ == code::ESC {
+                // The press that started it starts nothing again.
+                self.body_press = None;
+                if let Some((x, y)) = self.pointer {
+                    self.dirty(&self.carried_rect(x, y));
+                }
+                self.platform.close(c.entry);
+                self.send_event_plain(
+                    c.source.client,
+                    &gui::DragEnded {
+                        window: c.source.id,
+                    },
+                );
+            } else {
+                self.carried = Some(c);
+            }
+            return;
+        }
         // Releasing Alt chooses in the open switcher.
         if self.switcher.is_some() && !alt && !key.pressed {
             if matches!(code_, code::LEFT_ALT | code::RIGHT_ALT) {
@@ -854,14 +907,26 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let Some(mut focus) = self.focus else { return };
-        // A focused popup's chords are its window's.
-        if let Some(i) = self.index(focus)
-            && let WindowKind::Popup { parent } = self.windows[i].kind
-        {
-            focus = Key {
-                client: focus.client,
-                id: parent,
-            };
+        // A focused popup's chords are its window's; a sheet's, its owner's.
+        if let Some(i) = self.index(focus) {
+            match self.windows[i].kind {
+                WindowKind::Popup { parent } => {
+                    focus = Key {
+                        client: focus.client,
+                        id: parent,
+                    };
+                }
+                WindowKind::Sheet {
+                    owner_client,
+                    owner_id,
+                } => {
+                    focus = Key {
+                        client: owner_client,
+                        id: owner_id,
+                    };
+                }
+                _ => {}
+            }
         }
         match code_ {
             code::W => self.ask_close(focus),
@@ -893,11 +958,131 @@ impl<P: Platform> Compositor<P> {
         }
         self.pointer = Some((x, y));
         self.damage = self.damage.union(&self.pointer_rect(x, y));
+        if self.carried.is_some() {
+            if let Some((ox, oy)) = old {
+                self.dirty(&self.carried_rect(ox, oy));
+            }
+            self.dirty(&self.carried_rect(x, y));
+        }
         self.pending_pointer = true;
         self.drag_to(x, y);
         if self.drag.is_none() {
             self.dock_hover(x, y);
         }
+    }
+
+    /// Where the dragged entry's label is drawn, beside the pointer.
+    fn carried_rect(&self, x: i64, y: i64) -> Rect {
+        let s = i64::from(self.scale.factor());
+        let label = self
+            .carried
+            .as_ref()
+            .map_or(CARRIED_WIDTH, |c| c.width.max(CARRIED_WIDTH));
+        // With the material's halo around the label (16 px to 34 px below
+        // the pointer).
+        Rect::new(x - 16 * s, y - 24 * s, (label + 64) * s, 96 * s)
+    }
+
+    /// `Drag`: the entry is carried while the client's body press is held.
+    fn start_drag(&mut self, slot: usize, d: &gui::Drag<'_>, entry: P::End) -> u32 {
+        let key = Key {
+            client: slot,
+            id: d.window,
+        };
+        // One display name, drawn in the trusted material: no path, no
+        // control or bidirectional character; and a connection.
+        let name = core::str::from_utf8(d.name.0)
+            .ok()
+            .filter(|t| !t.is_empty() && !t.contains('/') && rooms::plain_text(t))
+            .map(String::from);
+        let channel = self.platform.kind(entry) == Kind::Channel;
+        // That press, still held, named within 500 ms of it (ADR-0170).
+        let now = self.platform.now();
+        let held = self.body_press.is_some_and(|(k, serial, at)| {
+            k == key && serial == d.serial && now.saturating_sub(at) <= DRAG_WITHIN_NS
+        }) && self.buttons & gui::buttons::LEFT != 0;
+        match (held && channel && self.carried.is_none(), name) {
+            (true, Some(name)) => {
+                // As `draw` lays the label out: the name at the caption's
+                // size, 20 px of padding, and a few for rounding at scale 2.
+                let cap = zoraya_tokens::text::CAPTION.physical(Scale::ONE);
+                let width = i64::from(self.title_text.measure(&name, cap)) + 20 + 4;
+                self.carried = Some(Carried {
+                    source: key,
+                    entry,
+                    name,
+                    width,
+                });
+                if let Some((x, y)) = self.pointer {
+                    self.dirty(&self.carried_rect(x, y));
+                }
+                status::OK
+            }
+            _ => {
+                self.platform.close(entry);
+                status::BAD_RANGE
+            }
+        }
+    }
+
+    /// The release: the window under the pointer gets the entry and the
+    /// pill; over nothing, or over the source, nothing is delivered. The
+    /// source hears only that its drag ended.
+    fn drop_carried(&mut self, c: Carried<P::End>) {
+        if let Some((x, y)) = self.pointer {
+            self.dirty(&self.carried_rect(x, y));
+        }
+        let target = self.pointer.and_then(|(x, y)| {
+            let (key, _) = self.under(x, y)?;
+            let i = self.index(key)?;
+            let w = &self.windows[i];
+            // Not into an untrusted room's window: its drops wait for the
+            // compositor's confirming card (ADR-0172 point 6, INV-0172-3).
+            let untrusted = self
+                .clients
+                .get(key.client)
+                .and_then(Option::as_ref)
+                .is_some_and(|c| c.record.untrusted);
+            let ok =
+                w.framed() && w.owner().is_none() && self.sheet_of(key).is_none() && !untrusted;
+            let body = w.body_rect();
+            let s = i64::from(self.scale.factor());
+            let at = (
+                ((x - body.x).max(0) / s) as u32,
+                ((y - body.y).max(0) / s) as u32,
+            );
+            (ok && key.client != c.source.client).then_some((key, at))
+        });
+        let mut entry = Some(c.entry);
+        if let Some((key, (x, y))) = target
+            && let Some(cl) = self.clients.get(key.client).and_then(Option::as_ref)
+        {
+            let m = gui::Drop {
+                window: key.id,
+                x,
+                y,
+                name: zoraya_protocol::Data(c.name.as_bytes()),
+            };
+            let length = reply(&m, NO_REPLY, &mut self.out);
+            let end = cl.end;
+            let sent = entry.take().into_iter().collect::<Vec<_>>();
+            if self.platform.write(end, &self.out[..length], &sent) == Outgoing::Sent {
+                // The pill in ADR-0170's words, the compositor's own.
+                let words = alloc::format!("dropped: {} read", c.name);
+                let _ = self.add_entry(key.client, &words);
+            } else {
+                entry = sent.into_iter().next();
+            }
+        }
+        if let Some(e) = entry {
+            self.platform.close(e);
+        }
+        self.send_event_plain(
+            c.source.client,
+            &gui::DragEnded {
+                window: c.source.id,
+            },
+        );
     }
 
     fn pointer_rect(&self, x: i64, y: i64) -> Rect {
@@ -943,6 +1128,10 @@ impl<P: Platform> Compositor<P> {
 
     fn press(&mut self, button: u32) {
         let Some((x, y)) = self.pointer else { return };
+        // Another button during a drag raises, focuses and presses nothing.
+        if self.carried.is_some() {
+            return;
+        }
         if self.dock.rect.contains(x, y) {
             if button == gui::buttons::LEFT
                 && let Some(cell) = self.dock_cell(x, y)
@@ -972,6 +1161,15 @@ impl<P: Platform> Compositor<P> {
         let Some((key, zone)) = hit else { return };
         self.raise(key);
         self.set_focus(Some(key));
+        // A sheet's strip does nothing; a window with a sheet open can be
+        // moved by its title bar and nothing else (ADR-0160).
+        let is_sheet = self
+            .index(key)
+            .is_some_and(|i| self.windows[i].owner().is_some());
+        if (is_sheet && zone != Zone::Body) || (self.sheet_of(key).is_some() && zone != Zone::Title)
+        {
+            return;
+        }
         if button != gui::buttons::LEFT {
             return;
         }
@@ -1003,13 +1201,26 @@ impl<P: Platform> Compositor<P> {
                     body,
                 });
             }
-            Zone::Body => {}
+            Zone::Body => {
+                let now = self.platform.now();
+                if let Some(c) = self.clients.get_mut(key.client).and_then(Option::as_mut) {
+                    c.presses = c.presses.wrapping_add(1);
+                    self.body_press = Some((key, c.presses, now));
+                }
+            }
         }
     }
 
     /// The pointer moves while a button holds a drag: the window follows,
     /// and its client sees nothing until the end (ADR-0160).
     fn drag_to(&mut self, x: i64, y: i64) {
+        self.drag_window_to(x, y);
+        if let Some(Drag::Move { window, .. } | Drag::Resize { window, .. }) = self.drag {
+            self.place_sheets(window);
+        }
+    }
+
+    fn drag_window_to(&mut self, x: i64, y: i64) {
         let f = self.frame();
         let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
         match self.drag {
@@ -1106,6 +1317,10 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn release(&mut self) {
+        self.body_press = None;
+        if let Some(c) = self.carried.take() {
+            self.drop_carried(c);
+        }
         match self.drag.take() {
             Some(Drag::Resize { window, .. }) => {
                 self.configure(window);
@@ -1123,12 +1338,15 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let Some((x, y)) = self.pointer else { return };
-        if self.drag.is_some() {
+        if self.drag.is_some() || self.carried.is_some() {
             return;
         }
         let Some((key, Zone::Body)) = self.under(x, y) else {
             return;
         };
+        if self.sheet_of(key).is_some() {
+            return;
+        }
         let Some(i) = self.index(key) else { return };
         let w = &self.windows[i];
         let body = w.body_rect();
@@ -1153,6 +1371,7 @@ impl<P: Platform> Compositor<P> {
                 x: px / s,
                 y: py / s,
                 buttons: Flags(self.buttons),
+                serial: self.clients[key.client].as_ref().map_or(0, |c| c.presses),
             };
             self.send_event(key.client, m);
         }
@@ -1168,22 +1387,29 @@ impl<P: Platform> Compositor<P> {
                 client: key.client,
                 id: parent,
             },
+            WindowKind::Sheet {
+                owner_client,
+                owner_id,
+            } => Key {
+                client: owner_client,
+                id: owner_id,
+            },
             _ => key,
         };
         let Some(t) = self.index(target) else { return };
-        // Already on top with its popups: nothing changes on the screen.
-        let above_are_popups = self.windows[t + 1..].iter().all(|w| {
-            w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id })
-        });
-        if above_are_popups {
+        let rides = |w: &Window| {
+            (w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id }))
+                || w.owner() == Some((target.client, target.id))
+        };
+        // Already on top with its popups and sheet: nothing changes.
+        if self.windows[t + 1..].iter().all(rides) {
             return;
         }
         let mut moved: Vec<Window> = Vec::new();
         moved.push(self.windows.remove(t));
         let mut j = 0;
         while j < self.windows.len() {
-            let w = &self.windows[j];
-            if w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id }) {
+            if rides(&self.windows[j]) {
                 moved.push(self.windows.remove(j));
             } else {
                 j += 1;
@@ -1206,6 +1432,11 @@ impl<P: Platform> Compositor<P> {
         self.windows[i].hidden = hidden;
         if hidden {
             self.close_popups_of(key);
+        }
+        for w in self.windows.iter_mut() {
+            if w.owner() == Some((key.client, key.id)) {
+                w.hidden = hidden;
+            }
         }
         let f = self.frame();
         self.dirty(&self.windows[i].reach(&f));
@@ -1302,6 +1533,7 @@ impl<P: Platform> Compositor<P> {
         self.dirty(&before);
         self.dirty(&after);
         self.configure(key);
+        self.place_sheets(key);
     }
 
     /// After the display changed size: every toplevel keeps its logical size
@@ -1520,6 +1752,9 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn set_focus(&mut self, key: Option<Key>) {
+        // While a sheet is open its owner's focus is the sheet's: the owner
+        // gets no input (ADR-0160).
+        let key = key.map(|k| self.sheet_of(k).unwrap_or(k));
         if self.focus == key {
             return;
         }
@@ -1667,6 +1902,16 @@ impl<P: Platform> Compositor<P> {
                 };
                 (s, true)
             }
+            42 if driver && one && decode::<gui::AddSystemClient>(bytes, 1).is_ok() => {
+                let h = handles[0];
+                let s = self.add_client(h, Record::home());
+                if s == status::OK
+                    && let Some(c) = self.clients.iter_mut().flatten().find(|c| c.end == h)
+                {
+                    c.system = true;
+                }
+                (s, true)
+            }
             33 if driver && one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
                 let h = handles[0];
                 let s = if self.platform.kind(h) == Kind::Channel {
@@ -1722,6 +1967,199 @@ impl<P: Platform> Compositor<P> {
         self.handles = handles;
     }
 
+    fn is_system(&self, slot: usize) -> bool {
+        self.clients
+            .get(slot)
+            .and_then(Option::as_ref)
+            .is_some_and(|c| c.system)
+    }
+
+    /// The sheet open under `owner`, if any.
+    fn sheet_of(&self, owner: Key) -> Option<Key> {
+        self.windows
+            .iter()
+            .find(|w| w.owner() == Some((owner.client, owner.id)))
+            .map(Self::key_of)
+    }
+
+    /// Puts `owner`'s sheet under its title bar, centred on it: its strip
+    /// starts on the line between the owner's title bar and body, where no
+    /// client's pixels are (ADR-0167's third mark).
+    fn place_sheets(&mut self, owner: Key) {
+        let f = self.frame();
+        let Some(oi) = self.index(owner) else { return };
+        let ob = self.windows[oi].body_rect();
+        for j in 0..self.windows.len() {
+            if self.windows[j].owner() != Some((owner.client, owner.id)) {
+                continue;
+            }
+            let before = self.windows[j].reach(&f);
+            let w = &mut self.windows[j];
+            w.x = ob.x + (ob.width - i64::from(w.body.0)) / 2;
+            w.y = ob.y - f.border + f.title;
+            let after = w.reach(&f);
+            self.dirty(&before);
+            self.dirty(&after);
+        }
+    }
+
+    /// `CreateSheet` from a system client: a sheet under the focused (or
+    /// else the topmost) window of the client the panel tagged `m.tag`,
+    /// headed with what it asks and the owner's application from the
+    /// compositor's own record (ADR-0167), with the keyboard.
+    fn create_sheet(
+        &mut self,
+        slot: usize,
+        m: gui::CreateSheet,
+        memory: P::End,
+    ) -> Result<u32, u32> {
+        let refuse = |me: &mut Self, e: u32| {
+            me.platform.close(memory);
+            Err(e)
+        };
+        let owner_slot = (m.tag != 0)
+            .then(|| {
+                self.clients
+                    .iter()
+                    .position(|c| c.as_ref().is_some_and(|c| c.record.tag == m.tag))
+            })
+            .flatten();
+        let Some(owner_slot) = owner_slot.filter(|o| *o != slot) else {
+            return refuse(self, status::NO_SURFACE);
+        };
+        let owner = self
+            .focus
+            .filter(|f| f.client == owner_slot)
+            .and_then(|f| self.index(f))
+            .filter(|i| self.windows[*i].kind == WindowKind::Toplevel)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .rposition(|w| w.client == owner_slot && w.kind == WindowKind::Toplevel)
+            });
+        let Some(oi) = owner else {
+            return refuse(self, status::NO_SURFACE);
+        };
+        let owner = Self::key_of(&self.windows[oi]);
+        if self.sheet_of(owner).is_some() {
+            return refuse(self, status::EXISTS);
+        }
+        if self.windows.len() >= MAX_WINDOWS {
+            return refuse(self, status::NO_MEMORY);
+        }
+        let s = self.scale.factor();
+        let f = self.frame();
+        let (bw, bh) = (m.width.saturating_mul(s), m.height.saturating_mul(s));
+        let room = self.height.saturating_sub(f.title as u32);
+        if !(1..=self.width).contains(&bw)
+            || !(1..=room).contains(&bh)
+            || !self.within_budget(slot, u64::from(bw) * u64::from(bh))
+        {
+            return refuse(self, status::BAD_BUFFER);
+        }
+        let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        let app = self.clients[owner_slot]
+            .as_ref()
+            .map(|c| c.record.app.clone())
+            .unwrap_or_default();
+        let id = self.clients[slot].as_ref().map_or(1, |c| c.next_id);
+        if let Some(c) = self.clients[slot].as_mut() {
+            c.next_id = c.next_id.wrapping_add(1).max(1);
+        }
+        // Directly above its owner and the owner's popups.
+        let mut at = oi + 1;
+        while at < self.windows.len()
+            && self.windows[at].client == owner.client
+            && self.windows[at].kind == (WindowKind::Popup { parent: owner.id })
+        {
+            at += 1;
+        }
+        let hidden = self.windows[oi].hidden;
+        self.windows.insert(
+            at,
+            Window {
+                client: slot,
+                id,
+                kind: WindowKind::Sheet {
+                    owner_client: owner.client,
+                    owner_id: owner.id,
+                },
+                x: 0,
+                y: 0,
+                body: (bw, bh),
+                buffer,
+                copy,
+                next: None,
+                title: crate::draw_rooms::sheet_heading(m.kind.0, &app),
+                hidden,
+                close_asked: None,
+                chrome: None,
+            },
+        );
+        self.place_sheets(owner);
+        let key = Key { client: slot, id };
+        if self
+            .focus
+            .is_some_and(|f| f == owner || f.client == owner.client)
+            || self.focus.is_none()
+        {
+            self.set_focus(Some(key));
+        }
+        // The bar's middle shows the heading while the sheet is open.
+        self.dirty_bar();
+        Ok(id)
+    }
+
+    /// `Granted` from a system client: the entry joins the record of the
+    /// client tagged `tag`, so that its frame shows it (ADR-0172 point 4).
+    fn granted(&mut self, tag: u32, words: &[u8]) -> u32 {
+        let Ok(words) = core::str::from_utf8(words) else {
+            return status::BAD_RANGE;
+        };
+        if tag == 0 || words.is_empty() || !rooms::plain_text(words) {
+            return status::BAD_RANGE;
+        }
+        let Some(slot) = self
+            .clients
+            .iter()
+            .position(|c| c.as_ref().is_some_and(|c| c.record.tag == tag))
+        else {
+            return status::NO_SURFACE;
+        };
+        self.add_entry(slot, words)
+    }
+
+    /// An entry joins the record of client `slot` and its frames show it.
+    fn add_entry(&mut self, slot: usize, words: &str) -> u32 {
+        let Some(c) = self.clients[slot].as_mut() else {
+            return status::NO_SURFACE;
+        };
+        if !c.record.entries.iter().any(|e| e == words) {
+            if c.record.entries.len() >= rooms::MAX_RECORD_ENTRIES {
+                return status::NO_MEMORY;
+            }
+            c.record.entries.push(String::from(words));
+        }
+        let f = self.frame();
+        let mine: Vec<Rect> = self
+            .windows
+            .iter()
+            .filter(|w| w.client == slot && w.framed())
+            .map(|w| w.reach(&f))
+            .collect();
+        for r in mine {
+            self.dirty(&r);
+        }
+        status::OK
+    }
+
+    /// Marks the bar to be composed again.
+    fn dirty_bar(&mut self) {
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let r = Rect::new(0, 0, i64::from(self.width), bar);
+        self.dirty(&r);
+    }
+
     fn add_client(&mut self, end: P::End, record: Record) -> u32 {
         if self.platform.kind(end) != Kind::Channel {
             self.platform.close(end);
@@ -1741,6 +2179,8 @@ impl<P: Platform> Compositor<P> {
             dropped: 0,
             next_id: 1,
             record,
+            system: false,
+            presses: 0,
         });
         status::OK
     }
@@ -1758,6 +2198,9 @@ impl<P: Platform> Compositor<P> {
         let w = self.windows.remove(i);
         let f = self.frame();
         self.dirty(&w.reach(&f));
+        if w.owner().is_some() {
+            self.dirty_bar();
+        }
         self.unmap(&w.buffer);
         if let Some(n) = &w.next {
             self.unmap(n);
@@ -1790,6 +2233,11 @@ impl<P: Platform> Compositor<P> {
             for p in popups {
                 self.remove_window(p);
             }
+            // Its sheet closes: the chooser is told, and cancels.
+            if let Some(sheet) = self.sheet_of(key) {
+                self.send_event_plain(sheet.client, &gui::CloseRequested { window: sheet.id });
+                self.remove_window(sheet);
+            }
         }
         if self.focus == Some(key) {
             self.focus = None;
@@ -1797,6 +2245,14 @@ impl<P: Platform> Compositor<P> {
                 WindowKind::Popup { parent } => Some(Key {
                     client: key.client,
                     id: parent,
+                })
+                .filter(|k| self.index(*k).is_some()),
+                WindowKind::Sheet {
+                    owner_client,
+                    owner_id,
+                } => Some(Key {
+                    client: owner_client,
+                    id: owner_id,
                 })
                 .filter(|k| self.index(*k).is_some()),
                 _ => None,
@@ -2022,8 +2478,47 @@ impl<P: Platform> Compositor<P> {
                 };
                 self.answer(slot, &gui::CloseDone { status: Below(s) }, t);
             }
+            11 if self.is_system(slot) => {
+                let (s, window) = match decode::<gui::CreateSheet>(bytes, n) {
+                    Ok((_, m)) => {
+                        let memory = handles.remove(0);
+                        match self.create_sheet(slot, m, memory) {
+                            Ok(id) => (status::OK, id),
+                            Err(e) => (e, 0),
+                        }
+                    }
+                    Err(_) => (status::BAD_BUFFER, 0),
+                };
+                self.answer(
+                    slot,
+                    &gui::SheetCreated {
+                        status: Below(s),
+                        window,
+                    },
+                    t,
+                );
+            }
+            13 => {
+                let s = match decode::<gui::Drag<'_>>(bytes, n) {
+                    Ok((_, m)) => {
+                        let entry = handles.remove(0);
+                        self.start_drag(slot, &m, entry)
+                    }
+                    Err(_) => status::BAD_BUFFER,
+                };
+                self.answer(slot, &gui::DragDone { status: Below(s) }, t);
+            }
+            12 if self.is_system(slot) => {
+                let s = match decode::<gui::Granted<'_>>(bytes, n) {
+                    Ok((_, m)) => self.granted(m.tag, m.words.0),
+                    Err(_) => status::BAD_RANGE,
+                };
+                self.answer(slot, &gui::GrantedDone { status: Below(s) }, t);
+            }
             // Anything else, the manager's and the drivers' ordinals among
-            // them, is unknown here (INV-0093-2).
+            // them, and a sheet or a grant from a client the driver manager
+            // did not mark (INV-0160-7, INV-0167-4), is unknown here
+            // (INV-0093-2).
             _ => self.answer(
                 slot,
                 &ErrorReply {

@@ -12,12 +12,12 @@ use crate::rooms::Cell;
 const ROOMS: &str =
     "project --colour 1 +w ~/project +r ~/include\nagent-1 --untrusted +w ~/sandbox/agent-1\n";
 
-fn axis(p: i64, side: u32) -> u32 {
+pub(super) fn axis(p: i64, side: u32) -> u32 {
     let d = i64::from(side - 1);
     ((p * 65535 + d - 1) / d) as u32
 }
 
-fn done(s: &mut Setup, end: u32) -> u32 {
+pub(super) fn done(s: &mut Setup, end: u32) -> u32 {
     let out = s.f().take(end);
     let last = out.last().expect("a reply");
     let (_, d) = decode::<gui::ManagerDone>(last, 0).unwrap_or_else(|e| panic!("{e:?}: {out:?}"));
@@ -26,7 +26,7 @@ fn done(s: &mut Setup, end: u32) -> u32 {
 
 impl Setup {
     /// The panel's client manager, attached by the driver manager.
-    fn panel(&mut self) -> u32 {
+    pub(super) fn panel(&mut self) -> u32 {
         let end = self.f().channel(64);
         let m = self.manager;
         self.f()
@@ -37,7 +37,7 @@ impl Setup {
     }
 
     /// A client of `room` (empty: `home`) for `app`, added by the panel.
-    fn room_client(&mut self, panel: u32, room: &str, app: &str, entries: &str) -> u32 {
+    pub(super) fn room_client(&mut self, panel: u32, room: &str, app: &str, entries: &str) -> u32 {
         let r = self.c.rooms().get(room).cloned();
         let (untrusted, colour) =
             r.map_or((0, 0), |r| (u32::from(r.untrusted), u32::from(r.colour)));
@@ -45,6 +45,7 @@ impl Setup {
         let m = gui::AddRoomClient {
             untrusted,
             colour,
+            tag: 0,
             room: zoraya_protocol::Data(room.as_bytes()),
             app: zoraya_protocol::Data(app.as_bytes()),
             entries: zoraya_protocol::Data(entries.as_bytes()),
@@ -56,7 +57,7 @@ impl Setup {
         end
     }
 
-    fn set_rooms(&mut self, panel: u32, current: &str, table: &str) -> u32 {
+    pub(super) fn set_rooms(&mut self, panel: u32, current: &str, table: &str) -> u32 {
         let m = gui::SetRooms {
             current: zoraya_protocol::Data(current.as_bytes()),
             rooms: zoraya_protocol::Data(table.as_bytes()),
@@ -76,7 +77,7 @@ impl Setup {
     }
 
     /// A toplevel of an existing client.
-    fn window_of(&mut self, end: u32, w: u32, h: u32, colour: u32) -> u32 {
+    pub(super) fn window_of(&mut self, end: u32, w: u32, h: u32, colour: u32) -> u32 {
         let s = self.c.scale().factor();
         let n = (w * s * h * s) as usize;
         let memory = self.f().memory(vec![colour; n], n as u64 * 4, false);
@@ -105,7 +106,7 @@ impl Setup {
         id
     }
 
-    fn press_at(&mut self, x: i64, y: i64) {
+    pub(super) fn press_at(&mut self, x: i64, y: i64) {
         let (w, h) = self.f().display_size;
         self.point(axis(x, w), axis(y, h), Some(1));
         self.point(axis(x, w), axis(y, h), Some(0));
@@ -175,6 +176,7 @@ fn each_manager_takes_only_its_own_ordinals() {
     let first = gui::AddRoomClient {
         untrusted: 0,
         colour: 0,
+        tag: 0,
         room: zoraya_protocol::Data(b""),
         app: zoraya_protocol::Data(b"term"),
         entries: zoraya_protocol::Data(b"+w /"),
@@ -192,6 +194,9 @@ fn each_manager_takes_only_its_own_ordinals() {
         ("", 1, 0, "term", ""),
         ("Bad", 0, 1, "term", ""),
         ("project", 0, 1, "", ""),
+        ("project", 0, 1, "T_open", ""),
+        ("project", 0, 1, "t open", ""),
+        ("project", 0, 1, "t.open", ""),
         ("project", 0, 1, "term", "+w ~/a\u{1b}[31m"),
         ("project", 2, 1, "term", ""),
     ] {
@@ -199,6 +204,7 @@ fn each_manager_takes_only_its_own_ordinals() {
         let m = gui::AddRoomClient {
             untrusted,
             colour,
+            tag: 0,
             room: zoraya_protocol::Data(room.as_bytes()),
             app: zoraya_protocol::Data(app.as_bytes()),
             entries: zoraya_protocol::Data(entries.as_bytes()),
@@ -222,9 +228,12 @@ fn each_manager_takes_only_its_own_ordinals() {
     // The panel going away leaves the clients and the table.
     let a = s.room_client(panel, "project", "term", "+w ~/project");
     let _ = a;
+    // A program's name as the ramdisk has it, with `_` (t_open).
+    let b = s.room_client(panel, "project", "t_open", "+r ~/notes.txt");
+    let _ = b;
     s.f().peers.get_mut(&panel).unwrap().gone = true;
     s.c.step();
-    assert_eq!(s.c.client_count(), 2);
+    assert_eq!(s.c.client_count(), 3);
     assert_eq!(s.c.rooms().rooms.len(), 2);
 }
 
@@ -269,6 +278,7 @@ fn no_client_message_changes_a_record_or_its_pixels() {
                 &gui::AddRoomClient {
                     untrusted: 0,
                     colour: 1,
+                    tag: 0,
                     room: zoraya_protocol::Data(b"project"),
                     app: zoraya_protocol::Data(b"term"),
                     entries: zoraya_protocol::Data(b"+w /"),
@@ -749,6 +759,7 @@ fn manager_requests_take_exactly_their_handles() {
     let record = gui::AddRoomClient {
         untrusted: 0,
         colour: 0,
+        tag: 0,
         room: zoraya_protocol::Data(b""),
         app: zoraya_protocol::Data(b"term"),
         entries: zoraya_protocol::Data(b""),
@@ -1015,6 +1026,33 @@ fn the_appearance_is_the_one_set() {
     let mut s = setup();
     s.c.appearance = zoraya_tokens::Appearance::Dark;
     assert_eq!(s.c.appearance(), zoraya_tokens::Appearance::Dark);
+}
+
+/// App names are lowercase letters, digits, dashes and underscores.
+#[test]
+fn app_names_are_lowercase_letters_digits_dashes_and_underscores() {
+    let mut s = setup();
+    let panel = s.panel();
+    for (app, want) in [
+        ("edit-2", status::OK),
+        ("t_open", status::OK),
+        ("Edit", status::INVALID),
+        ("edit 2", status::INVALID),
+    ] {
+        let end = s.f().channel(64);
+        let m = gui::AddRoomClient {
+            untrusted: 0,
+            colour: 0,
+            tag: 0,
+            room: zoraya_protocol::Data(b""),
+            app: zoraya_protocol::Data(app.as_bytes()),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(b"term"),
+        };
+        s.f().send(panel, message(&m, 7), vec![end]);
+        s.c.step();
+        assert_eq!(done(&mut s, panel), want, "{app}");
+    }
 }
 
 /// Show-commands (ADR-0172 point 8): each window's tag is inside its own

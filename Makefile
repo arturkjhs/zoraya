@@ -58,7 +58,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel t_gui guibench t_text \
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files t_gui guibench t_text \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
@@ -480,7 +480,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
@@ -580,9 +580,13 @@ check-kernel-tty:
 # No host paths or email addresses in tracked files (CLAUDE.md, Conventions), apart from
 # the configured git identity's address. docs/research/ and tools/posix-surface/results/
 # are cleaned separately. The brackets keep the pattern from matching this file.
+# Host paths: macOS's users' folders, and this host's own home directory (on Linux
+# /home/NAME); not every /home/, which is Zoraya's own home folder
+# (shell.home, /data/home/APP).
 check-host-paths:
 	@id="$$(git config user.email)"; \
-	hits="$$(git grep -n -I -E '/Use[r]s/|/hom[e]/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}' -- . \
+	home="$$(echo "$$HOME" | sed 's/[.[\*^$$]/\\&/g')"; \
+	hits="$$(git grep -n -I -E "/Use[r]s/|$${home:-/nonexistent}/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}" -- . \
 	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
 

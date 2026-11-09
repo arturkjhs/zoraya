@@ -540,6 +540,111 @@ Not merged: proposed ADR-0242 stages an accepted ADR's decision, and `git push` 
 About 3 h 30 min of writing (the crates, the panel, the GUI test and the review, to 22:25), 1 h for `make test` and
 its fixes, the mutation runs 90 min (capped), and their triage and tests 1 h 20 min.
 
+## 7e: chooser and files
+
+Branch `work/7e`, from `work/7d`.
+
+### What was built
+
+- **`zoraya-proto-chooser`** (`Open`, `Save`, `PickDirectory`, `Chosen`, `Cancelled`; the panel's `AddApplication`; the
+  file manager's `OpenWith`), **`zoraya-fsclient`** (a file-protocol client over any link, tested against the real file
+  service in-process), **`zoraya-chooser`** (what a sheet lists, what may be picked, the grant each pick gives in
+  ADR-0153's rights, and the sheet itself over `zoraya-app`), **`zoraya-files`** (the file manager's decisions).
+- **The compositor**: sheets for system clients (`AddSystemClient`, `CreateSheet`, `Granted`), drawn with the
+  trusted strip, emblem and heading, and the bar's mark; drops (`Drag`, `Drop`, `DragEnded`, ADR-0170), with the press
+  serial in `WindowPointer`.
+- **Programs**: `chooser`, `files`, `t_open`; the panel launches applications with a chooser channel, a data directory
+  `/data/ROOM/APP` and, from the file manager, the opened file read-only.
+- **The toolkit**: a text field answers Enter; a field keeps its cursor when rebuilt; `zoraya-app` takes a drop's
+  handle with its message and starts drags only from a held press.
+
+### The 7e acceptance test
+
+`plan.md`: "the GUI test opens a file from the file manager in a test application through the chooser over QMP, the
+application reads it and cannot write it (`Open`) or can (`Save`)". Done: `tests/gui/files.script` (58 steps, HVF and
+TCG, in `make test-gui`) opens `notes.txt` from `files` in `t_open` (read, the write refused), opens it again
+through the chooser's sheet (the same), saves `nový.txt` through it (written; a second name beside it refused), drags
+`notes.txt` from `files` onto `t_open` (read, the write refused), and lists both files in the first terminal.
+
+### Decisions taken without the architect
+
+- Proposed **ADR-0245**: the chooser's wiring (registration by the panel with the compositor tag, sheets only from
+  system clients, `Save` as the folder narrowed to one name, the data directory, `OpenWith` read-only). It fills gaps
+  of ADR-0167 and ADR-0168 and changes neither.
+- Drops follow ADR-0170 with the press serial as a field of `WindowPointer` counted per client, `DragDone` standing
+  for `DragStarted`, and the pill in ADR-0170's words, written by the compositor.
+
+### Screens
+
+Under `docs/research/desktop/shots/7e/` (light, HVF, scale 1):
+
+- `files-qemu.png`: the file manager over the first terminal, with its pills (`+w /data/home/files`, `+w /`).
+- `open-qemu.png`, `save-qemu.png`: the chooser's sheets under `t_open`, against `clear-field/chooser.png`. As in the
+  mockup: the strip with the emblem `Z` and "Open a file for t_open", the same heading in the bar, the sheet hung under
+  its owner's title bar, the sentence and the grant's line, Cancel and the primary action. Not as in the mockup: no
+  file-type icons and no frame around the list (the toolkit's list has neither yet), no breadcrumb chevrons (the sheet
+  shows `~` and an Up button), and the sheet is wider than its small owner (the mockup's owner is the editor).
+- `drop-qemu.png`: after the drop, `t_open`'s frame with the compositor's pill `dropped: notes.txt read`, against
+  `clear-field/drop.png`, which shows the drag in flight with its label; the screendump is taken after the release.
+
+### Measurements
+
+The chooser's round trip, in `docs/design.md`: about 0.9 ms from the request to the sheet and 9 to 10.5 ms from the
+confirming key to the answer under HVF; 17.5 to 22.5 ms and 70 to 75 ms under TCG.
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0167-1, -2, -4 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0167-3 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0168-2 | not yet applicable (stage 7) | checked: `make test-unit` (the in-QEMU half waits for `edit`, 7f) |
+| INV-0170-3, -4 | not yet applicable (stage 7) | checked: `make test-unit` (the clipboard's half in 7f) |
+
+### Review
+
+`docs/tasks/TASK-24-review-7e.md`: 2 errors, 10 warnings, 14 notes. Both errors fixed (a dragging client wrote the
+target's pill; applications learned the path of what they were given), and most warnings; the rest are recorded in
+ADR-0245's open questions. The check of the changed lines confirmed the fixes and found a new warning (the name
+field's cursor jumped to the end when the sheet was rebuilt), fixed with a test, and two small gaps, fixed.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `work/7d`, one crate after another (47 minutes, 44 of them the
+compositor); the survivors sorted by the `mutant-triage` subagent; tests added for the holes; every equivalent
+rechecked by the main model; then the crates other than the compositor run again (4 minutes), and the compositor's
+holes applied by hand one by one, six of them kept in `tools/mutants/desktop-7e.toml` (`make mutants`: 6 caught).
+
+| Crate | Mutants | Missed first | Missed again | Of those, equivalent |
+|---|---|---|---|---|
+| `zoraya-files` | 31 | 0 | - | - |
+| `zoraya-chooser` | 145 | 24 | 4 | 4 |
+| `zoraya-fsclient` | 75 | 9 | 0 (10 time out) | - |
+| `zoraya-proto-chooser` | 0 (all generated by `protocol!`) | - | - | - |
+| `zoraya-panel` | 13 | 0 | - | - |
+| `zoraya-app` | 48 | 6 | 0 | - |
+| `zoraya-ui` | 45 | 6 | 1 | 1 |
+| `zoraya-compositor` | 199 | 56 | not run again (by hand) | 6 |
+
+- **Tests added** (`9c61734` to `af29409`): the drag's keys, the drop's place at both scales, a press from a lost
+  tablet, the target's pill, the carried label's pixels and its cleaning; a sheet's refusals (zero width, too tall,
+  over the budget), owner, focus, stacking above its owner's popups, presses on its strip and its edge, and the
+  focus after it closes; raising a window with its popups and sheet and no other; the chooser's heading kinds, sizes
+  near 10 kB, the scroll, the events of other windows, the Up and Open buttons; the file client against replies the
+  real service never sends (a token without a handle, an error with one, exactly 16 MiB, no space); `zoraya-app`'s
+  sheet, its longest dragged name and `replace`; `zoraya-ui`'s ids 0 and 1.
+- **A bug found by the tests** (`dc5d6b0`): the carried label's damaged room was 520 logical pixels, and a 64-byte
+  name of wide letters measures over 700, so its end was drawn outside the damage and stayed on screen. The room is
+  now the measured name's.
+- **The equivalents**: in the compositor, four shifts of the label's damaged room that stay left of or above the
+  label, a room of `(520 * 64) * s` clipped to the screen, and dirtying other windows' frames in `add_entry` (both
+  recompose an unchanged scene: only the flush's extent grows); in the chooser, `e.dir` in `pending` (Pick lists only
+  folders), `<=` at `i == top` in the scroll, `>=` for two lengths that never tie, and the sheet's `Escapes::measure`
+  (nothing measures the root; `Window` lays it over the window's size); in `zoraya-ui`, `Button::id` as `None`, which
+  shows only when two widgets share an id.
+- **Not verified**: the compositor's `2046:16` (`+=` to `*=`) loops forever under the mutant; it was not run by hand,
+  since a test that never returns outlives the runner's alarm.
+
 ## To finish by hand
 
 `git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,

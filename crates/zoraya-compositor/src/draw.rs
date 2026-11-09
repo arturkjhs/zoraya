@@ -97,6 +97,7 @@ impl<P: Platform> Compositor<P> {
         let views = self.win_views();
         let dock = self.dock_view();
         let commands = self.commands;
+        let carried = self.carried.as_ref().map(|c| c.name.clone());
         let Compositor {
             platform,
             windows,
@@ -151,6 +152,9 @@ impl<P: Platform> Compositor<P> {
                 (title_text, ui, mono),
                 view,
             );
+            if w.owner().is_some() {
+                crate::draw_rooms::sheet_strip(&mut c, w, &f, scale.factor(), p, title_text);
+            }
             // Its show-commands tag (ADR-0172 point 8), with it and inside
             // it: a window above covers both.
             if commands && w.framed() {
@@ -197,7 +201,29 @@ impl<P: Platform> Compositor<P> {
             let baseline = bar / 2 + (px as i32 * 7 / 20);
             let pad = 14 * s;
             draw_text(&mut c, title_text, "Zoraya", px, pad, baseline, p.fg_text);
-            if commands {
+            // An open sheet's mark in the bar's middle, which no client can
+            // paint (ADR-0167's second mark; INV-0167-4).
+            let sheet = windows
+                .iter()
+                .find(|w| w.owner().is_some() && !w.hidden)
+                .map(|w| w.title.as_str());
+            if let Some(heading) = sheet {
+                let k = scale.factor();
+                let hw = title_text.measure(heading, px);
+                let side = 18 * s;
+                let gap = 10 * s;
+                let x = width as i32 / 2 - (side + gap + hw) / 2;
+                crate::draw_rooms::emblem(&mut c, x, bar / 2, k, p, title_text);
+                draw_text(
+                    &mut c,
+                    title_text,
+                    heading,
+                    px,
+                    x + side + gap,
+                    baseline,
+                    p.fg_text,
+                );
+            } else if commands {
                 let heading = crate::draw_rooms::COMMANDS_HEADING;
                 let hw = title_text.measure(heading, px);
                 draw_text(
@@ -223,6 +249,23 @@ impl<P: Platform> Compositor<P> {
         }
         if let Some(s) = switcher.as_ref() {
             draw_switcher(&mut c, s, windows, scale.factor(), p, ui, title_text);
+        }
+        // A dragged entry's name beside the pointer, on the trusted
+        // material (ADR-0170).
+        if let (Some(name), Some((px, py))) = (carried, *pointer) {
+            let k = scale.factor();
+            let si = k as i32;
+            let cap = text::CAPTION.physical(zoraya_tokens::Scale::ONE) * k;
+            let w = title_text.measure(&name, cap) + 20 * si;
+            crate::draw_rooms::tag(
+                &mut c,
+                &[(name.as_str(), false)],
+                px as i32 + 16 * si + w / 2,
+                py as i32 + 34 * si,
+                k,
+                p,
+                (title_text, mono),
+            );
         }
         draw_pointer(&mut c, *pointer, scale.factor(), p);
     }

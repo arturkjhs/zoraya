@@ -19,6 +19,16 @@ struct Fake {
     scale: u32,
     /// Each commit's width and height in pixels.
     committed: Vec<(u32, u32)>,
+    /// Handles queued with the inbox's messages, by position; the one the
+    /// last received message carried; and those sent with a request.
+    carried: VecDeque<Option<u32>>,
+    last: Option<u32>,
+    given: Vec<u32>,
+    /// What a `Drag` is answered, and the serials drags named.
+    drag_status: u32,
+    drag_serials: Vec<u32>,
+    /// What a `CreateSheet` is answered: refused, or the sheet 5.
+    refuse_sheet: bool,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -28,9 +38,10 @@ fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
 impl Platform for Fake {
     type End = u32;
 
-    fn send(&mut self, bytes: &[u8], _handle: Option<u32>) -> bool {
+    fn send(&mut self, bytes: &[u8], handle: Option<u32>) -> bool {
         let (h, _) = Header::decode(bytes).unwrap();
         self.sent.push(h.ordinal);
+        self.given.extend(handle);
         let ok = zoraya_protocol::Below(status::OK);
         let t = h.transaction;
         match h.ordinal {
@@ -73,13 +84,51 @@ impl Platform for Fake {
             10 => self
                 .inbox
                 .push_back(reply(&gui::CloseDone { status: ok }, t)),
+            11 => {
+                let status = if self.refuse_sheet {
+                    status::UNSUPPORTED
+                } else {
+                    status::OK
+                };
+                self.inbox.push_back(reply(
+                    &gui::SheetCreated {
+                        status: zoraya_protocol::Below(status),
+                        window: 5,
+                    },
+                    t,
+                ));
+            }
+            13 => {
+                let (_, d) = decode::<gui::Drag<'_>>(bytes, 1).unwrap();
+                self.drag_serials.push(d.serial);
+                self.inbox.push_back(reply(
+                    &gui::DragDone {
+                        status: zoraya_protocol::Below(self.drag_status),
+                    },
+                    t,
+                ));
+            }
             _ => {}
         }
         true
     }
 
+    fn handle(&mut self) -> Option<u32> {
+        self.last.take()
+    }
+
     fn receive(&mut self, bytes: &mut [u8]) -> Option<usize> {
         let m = self.inbox.pop_front()?;
+        // Messages queued before the handles' list was kept carry none.
+        let n = self.inbox.len() + 1;
+        while self.carried.len() > n {
+            self.carried.pop_front();
+        }
+        self.last = if self.carried.len() == n {
+            self.carried.pop_front().flatten()
+        } else {
+            None
+        };
         bytes[..m.len()].copy_from_slice(&m);
         Some(m.len())
     }
@@ -101,6 +150,15 @@ impl Platform for Fake {
 impl Fake {
     fn event<'a, M: Message<'a>>(&mut self, m: &M) {
         self.inbox.push_back(message(m, 0));
+    }
+
+    /// An event with a handle: the handles' list then covers the inbox.
+    fn event_with<'a, M: Message<'a>>(&mut self, m: &M, h: u32) {
+        while self.carried.len() < self.inbox.len() {
+            self.carried.push_back(None);
+        }
+        self.inbox.push_back(message(m, 0));
+        self.carried.push_back(Some(h));
     }
 
     /// Answers the oldest commit.
@@ -240,6 +298,7 @@ fn a_configure_gives_a_new_buffer_and_pointer_events_reach_widgets() {
         x: 10,
         y: 10,
         buttons: zoraya_protocol::Flags(gui::buttons::LEFT),
+        serial: 1,
     });
     assert_eq!(
         app.wait(),
@@ -364,4 +423,76 @@ fn another_window_losing_focus_keeps_the_focus() {
             response: Response::Activated(2)
         }
     );
+}
+
+/// ADR-0170: a dropped entry is taken with its message, even when it came
+/// while a reply was awaited, and given once; a drag starts only from the
+/// window whose body holds the left button.
+#[test]
+fn drops_are_taken_and_drags_start_only_from_a_held_press() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("t_open", form(), 200, 120).unwrap();
+    let drop = gui::Drop {
+        window: id,
+        x: 5,
+        y: 6,
+        name: Data(b"notes.txt"),
+    };
+    app.platform.event_with(&drop, 77);
+    assert_eq!(app.wait(), Happened::Dropped(id));
+    let d = app.take_drop().unwrap();
+    assert_eq!(
+        (d.window, d.x, d.y, d.name.as_str(), d.entry),
+        (id, 5, 6, "notes.txt", 77)
+    );
+    assert!(app.take_drop().is_none());
+    // No press held: no request is sent.
+    assert_eq!(app.drag(id, 5, "a"), Err(Some(5)));
+    assert!(!app.platform.sent.contains(&13));
+    let pointer = |buttons| gui::WindowPointer {
+        dropped: 0,
+        window: id,
+        x: 10,
+        y: 10,
+        buttons: zoraya_protocol::Flags(buttons),
+        serial: 3,
+    };
+    app.platform.event(&pointer(gui::buttons::LEFT));
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    assert!(app.held(id));
+    assert_eq!(app.drag(id, 5, &"x".repeat(65)), Err(Some(5)), "too long");
+    assert_eq!(app.drag(id, 5, &"x".repeat(64)), Ok(()), "the longest");
+    assert_eq!(app.drag(id, 5, "a"), Ok(()));
+    assert_eq!(app.platform.drag_serials, [3, 3]);
+    assert_eq!(app.platform.given.last(), Some(&5));
+    app.platform.drag_status = status::BAD_RANGE;
+    assert_eq!(app.drag(id, 6, "a"), Err(None));
+    app.platform.event(&pointer(0));
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    assert!(!app.held(id));
+}
+
+/// A sheet opens under its tag with the compositor's window id; a refused
+/// one gives nothing and frees its buffer.
+#[test]
+fn a_sheet_is_opened_under_its_tag_and_its_id_returned() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    assert_eq!(app.open_sheet(4, 0, form(), 160, 80), Some(5));
+    assert!(app.window(5).is_some());
+    assert!(app.platform.sent.contains(&11));
+    app.platform.refuse_sheet = true;
+    let buffers = app.platform.buffers.len();
+    assert_eq!(app.open_sheet(4, 0, form(), 160, 80), None);
+    assert_eq!(app.platform.buffers.len(), buffers + 1);
+    assert!(app.platform.buffers.last().unwrap().is_empty(), "freed");
+}
+
+/// A window's tree replaced is the one its values are read from.
+#[test]
+fn replacing_a_tree_shows_the_new_one() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("edit", form(), 200, 120).unwrap();
+    app.replace(id, Box::new(TextField::new(1, "other.txt")));
+    let w = app.window(id).unwrap();
+    assert_eq!(w.value(1), zoraya_ui::Value::Text("other.txt"));
 }

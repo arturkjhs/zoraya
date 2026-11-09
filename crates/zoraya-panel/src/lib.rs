@@ -33,6 +33,20 @@ pub enum Give {
     /// The shell's end of the terminal's channel (`zosh`), or the
     /// terminal's end (`term`).
     Terminal,
+    /// The application's channel to the chooser (ADR-0167; none in an
+    /// untrusted room, ADR-0172).
+    Chooser,
+    /// The application's data directory, `/data/ROOM/APP`, to change
+    /// anything in (ADR-0167 point 2; proposed ADR-0245).
+    Data,
+    /// The volume's root with its rights: `files` alone of the
+    /// applications (ADR-0168, INV-0168-2).
+    Root,
+    /// A channel back to the panel, for `files` to open a file with its
+    /// application (ADR-0168 point 4).
+    Launcher,
+    /// The file opened: a read connection to it (ADR-0167 point 1).
+    Opened,
     /// The shell's start-up record (ADR-0153 rule 8) at slot 1000: what
     /// it holds, its room's grants or home's, never the volume's root
     /// (ADR-0242's condition).
@@ -108,9 +122,96 @@ pub struct Launch {
 }
 
 /// The applications the dock lists, with the line each is launched by.
-/// Stage 7d has the terminal; `files`, `edit` and `settings` come with 7e
-/// and 7f.
-pub const APPS: [(&str, &str); 1] = [("term", "term")];
+/// `edit` and `settings` come with 7f.
+pub const APPS: [(&str, &str); 2] = [("term", "term"), ("files", "files")];
+
+/// The application that opens a file of each extension (ADR-0168 point 4:
+/// file types by extension, an assumption). Until `edit` (7f), the test
+/// application `t_open` opens text.
+pub const OPENERS: [(&str, &str); 2] = [("txt", "t_open"), ("md", "t_open")];
+
+/// The application for `name`, by its extension.
+pub fn opener(name: &str) -> Option<&'static str> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    if stem.is_empty() {
+        return None;
+    }
+    let ext = ext.to_lowercase();
+    OPENERS.iter().find(|(e, _)| *e == ext).map(|(_, a)| *a)
+}
+
+/// The data directory of `app` in `room` (`None` is `home`).
+pub fn data_dir(room: Option<&Room>, app: &str) -> String {
+    format!("/data/{}/{app}", room.map_or(HOME, |r| r.name.as_str()))
+}
+
+/// An application launched in `room` (ADR-0167 point 2): the console to
+/// write, its compositor channel, its chooser channel (not in an untrusted
+/// room), its data directory to change anything in; `files` also the
+/// volume's root and a channel to the panel; and `opened`, the file the
+/// person opened, read only, with the words that name it. The record
+/// shows the room's grants, the data directory and the file.
+pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>) -> Launch {
+    let mut handles = vec![
+        Slot {
+            slot: 1,
+            give: Give::Console,
+        },
+        Slot {
+            slot: 5,
+            give: Give::Compositor,
+        },
+    ];
+    if !room.is_some_and(|r| r.untrusted) {
+        handles.push(Slot {
+            slot: 6,
+            give: Give::Chooser,
+        });
+    }
+    handles.push(Slot {
+        slot: 7,
+        give: Give::Data,
+    });
+    let mut entries: Vec<String> = room
+        .map(|r| r.grants.iter().map(|g| g.words()).collect())
+        .unwrap_or_default();
+    entries.push(grant_words(&data_dir(room, app), true));
+    if app == "files" {
+        handles.push(Slot {
+            slot: 8,
+            give: Give::Root,
+        });
+        handles.push(Slot {
+            slot: 9,
+            give: Give::Launcher,
+        });
+        entries.push(String::from("+w /"));
+    }
+    let mut line = String::from(app);
+    if let Some(words) = opened {
+        handles.push(Slot {
+            slot: 10,
+            give: Give::Opened,
+        });
+        entries.push(String::from(words));
+        line = format!("{app} {}", words.trim_start_matches("+r ").trim());
+    }
+    if let Some(r) = room {
+        line = format!("room {} {line}", r.name);
+    }
+    Launch {
+        app,
+        room: room.cloned(),
+        entries,
+        line,
+        holds: Vec::new(),
+        programs: vec![Program {
+            image: app,
+            handles,
+            args: Vec::new(),
+        }],
+    }
+}
 
 /// A terminal launched in `room`: `term` with the compositor's channel and
 /// its end of the shell's channel; `zosh` with a start-up record of exactly
@@ -271,6 +372,7 @@ impl Panel {
                 // so is a launch in a hand-written untrusted room.
                 _ if self.room().is_some_and(|r| r.untrusted) => Action::Nothing,
                 Some(("term", _)) => Action::Launch(terminal(self.room())),
+                Some((app, _)) => Action::Launch(application(self.room(), app, None)),
                 _ => Action::Nothing,
             },
             ROOM => {
