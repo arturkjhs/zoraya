@@ -558,9 +558,13 @@ check-kernel-tty:
 # No host paths or email addresses in tracked files (CLAUDE.md, Conventions), apart from
 # the configured git identity's address. docs/research/ and tools/posix-surface/results/
 # are cleaned separately. The brackets keep the pattern from matching this file.
+# Host paths: macOS's users' folders, and this host's own home directory (on Linux
+# /home/NAME); not every /home/, which is Zoraya's own home folder
+# (shell.home, /data/home/APP).
 check-host-paths:
 	@id="$$(git config user.email)"; \
-	hits="$$(git grep -n -I -E '/Use[r]s/|/hom[e]/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}' -- . \
+	home="$$(echo "$$HOME" | sed 's/[.[\*^$$]/\\&/g')"; \
+	hits="$$(git grep -n -I -E "/Use[r]s/|$${home:-/nonexistent}/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}" -- . \
 	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
 
