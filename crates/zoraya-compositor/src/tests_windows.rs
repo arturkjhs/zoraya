@@ -378,6 +378,20 @@ fn system_w_asks_to_close_and_left_and_right_tile() {
     assert_eq!(s.body(0, 1).x, 321);
 }
 
+/// Mutants 7d: at scale 2 a tiled window is half the logical width less
+/// its two borders.
+#[test]
+fn tiling_at_scale_two() {
+    let mut s = setup_with(|f| f.display_size = (2048, 1536));
+    let (a, _, _) = s.toplevel(100, 60, 1);
+    s.f().take(a);
+    let meta = code::RIGHT_META;
+    s.keys(&[(meta, 1), (code::LEFT, 1), (code::LEFT, 0), (meta, 0)]);
+    let c = configures(&s.f().take(a));
+    assert_eq!(c[0].width, 1024 / 2 - 2);
+    assert_eq!(s.body(0, 1).width, 1020);
+}
+
 /// The title bar moves the window; the buttons minimise and close; a
 /// grip resizes, with `Configure` only at the end (ADR-0160).
 #[test]

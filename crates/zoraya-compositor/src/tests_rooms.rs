@@ -737,3 +737,282 @@ fn a_rooms_window_shows_its_body_unchanged() {
         }
     }
 }
+
+// Mutants 7d: what the first tests left unread.
+
+/// A request of the client manager's or the driver manager's with the
+/// wrong number of handles is refused, and the handles are closed.
+#[test]
+fn manager_requests_take_exactly_their_handles() {
+    let mut s = setup();
+    let panel = s.panel();
+    let record = gui::AddRoomClient {
+        untrusted: 0,
+        colour: 0,
+        room: zoraya_protocol::Data(b""),
+        app: zoraya_protocol::Data(b"term"),
+        entries: zoraya_protocol::Data(b""),
+        line: zoraya_protocol::Data(b"term"),
+    };
+    for to_init in [false, true] {
+        let to = if to_init { s.manager } else { panel };
+        let a = s.f().channel(64);
+        let b = s.f().channel(64);
+        for handles in [vec![], vec![a, b]] {
+            s.f().send(to, message(&record, 7), handles.clone());
+            s.c.step();
+            assert_eq!(done(&mut s, to), status::UNSUPPORTED, "{handles:?}");
+            assert!(handles.iter().all(|h| s.f().closed.contains(h)));
+        }
+    }
+    assert_eq!(s.c.client_count(), 0);
+    // AttachClientManager: one channel, on init's channel only.
+    let m = s.manager;
+    let a = s.f().channel(64);
+    let b = s.f().channel(64);
+    for (to, handles) in [(m, vec![]), (m, vec![a, b]), (panel, vec![])] {
+        s.f().send(
+            to,
+            message(&gui::AttachClientManager {}, 4),
+            handles.clone(),
+        );
+        s.c.step();
+        assert_eq!(done(&mut s, to), status::UNSUPPORTED);
+        assert!(handles.iter().all(|h| s.f().closed.contains(h)));
+    }
+}
+
+/// The panel stays attached when its channel has nothing to read and when
+/// init's channel closes.
+#[test]
+fn the_panel_stays_attached() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    assert_eq!(s.set_dock(panel, "term\tterm\n"), status::OK);
+    let chip = |s: &Setup| {
+        let r =
+            s.c.dock()
+                .cells
+                .iter()
+                .find(|x| x.0 == Cell::Chip(0))
+                .unwrap()
+                .1;
+        (r.x + r.width / 2, r.y + r.height / 2)
+    };
+    s.c.manager_message(true);
+    let (x, y) = chip(&s);
+    s.press_at(x, y);
+    assert_eq!(dock_pressed(&s.f().take(panel)), [(gui::dock::ROOM, 0)]);
+    let m = s.manager;
+    s.f().peers.get_mut(&m).unwrap().gone = true;
+    s.c.step();
+    assert!(!s.f().closed.contains(&panel));
+    s.press_at(x, y);
+    assert_eq!(dock_pressed(&s.f().take(panel)), [(gui::dock::ROOM, 0)]);
+}
+
+/// A room's window is badged with its room, an untrusted one says so, and
+/// a `home` window has no badge.
+#[test]
+fn badges_name_the_room() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    let p = *s.c.appearance().palette();
+    for room in ["project", "agent-1", ""] {
+        let end = s.room_client(panel, room, "term", "+w ~/a");
+        s.window_of(end, 200, 100, 0x0040_4040);
+    }
+    let badges: Vec<Option<String>> = s.c.win_views().into_iter().map(|v| v.badge).collect();
+    assert_eq!(
+        badges,
+        [
+            Some(String::from("project")),
+            Some(String::from("agent-1  untrusted")),
+            None
+        ]
+    );
+    // The project window's badge dot is in room.1, in its title row.
+    let o = s.outer(0, 1);
+    let row = o.y + s.c.frame().title / 2;
+    assert!((o.x..o.right()).any(|x| s.pixel(x, row) == p.room(1).pixel()));
+}
+
+/// At scale 2 the untrusted edge is four pixels on every side.
+#[test]
+fn the_untrusted_edge_at_scale_two() {
+    let mut s = setup_with(|f| f.display_size = (2048, 1536));
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    let p = *s.c.appearance().palette();
+    let agent = s.room_client(panel, "agent-1", "term", "");
+    s.window_of(agent, 300, 160, 0x0040_4040);
+    let o = s.outer(0, 1);
+    let b = s.c.frame().border;
+    let t = space::ROOM_UNTRUSTED_EDGE.physical(Scale::TWO) as i64;
+    assert_eq!(t, 4);
+    let (mx, my) = (o.x + o.width / 2, o.y + o.height / 2);
+    let u = p.room_untrusted.pixel();
+    // `Setup::pixel` reads rows of the 640-pixel test display.
+    let px = |s: &mut Setup, x: i64, y: i64| {
+        let w = i64::from(s.f().display_size.0);
+        s.f().frame[(y * w + x) as usize]
+    };
+    for d in 0..t {
+        assert_eq!(px(&mut s, o.x + b + d, my), u, "left {d}");
+        assert_eq!(px(&mut s, o.right() - 1 - b - d, my), u, "right {d}");
+        assert_eq!(px(&mut s, mx, o.bottom() - 1 - b - d), u, "bottom {d}");
+    }
+    assert_ne!(px(&mut s, o.x + b + t, my), u);
+    assert_ne!(px(&mut s, mx, o.bottom() - 1 - b - t), u);
+}
+
+/// The switcher lists the focused window's room, then `home`, then the
+/// table's order, whatever the order of use.
+#[test]
+fn the_switcher_groups_the_focused_room_then_home_then_the_table() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    // C (agent-1), A (project), B (home), apart from each other.
+    let c = s.room_client(panel, "agent-1", "term", "");
+    s.window_of(c, 150, 80, 1);
+    let a = s.room_client(panel, "project", "term", "");
+    s.window_of(a, 150, 80, 2);
+    let b = s.room_client(panel, "", "term", "");
+    s.window_of(b, 150, 80, 3);
+    let k = |client| Key { client, id: 1 };
+    let focus = |s: &mut Setup, client: usize| {
+        let o = s.outer(client, 1);
+        s.press_at(o.right() - 30, o.y + 6);
+        assert_eq!(s.c.focused(), Some(k(client)), "{client} focused");
+    };
+    let open = |s: &mut Setup| {
+        s.keys(&[(code::LEFT_ALT, 1), (code::TAB, 1), (code::TAB, 0)]);
+        let w = s.c.switcher().unwrap().windows.clone();
+        s.keys(&[(code::ESC, 1), (code::ESC, 0), (code::LEFT_ALT, 0)]);
+        w
+    };
+    // Used in the order agent-1, home: home's first, then the table's
+    // project before agent-1, which was used more recently.
+    focus(&mut s, 0);
+    focus(&mut s, 2);
+    assert_eq!(open(&mut s), [k(2), k(1), k(0)]);
+    // Used in the order home, agent-1, project: project's, then home
+    // before agent-1, which was used more recently.
+    focus(&mut s, 2);
+    focus(&mut s, 0);
+    focus(&mut s, 1);
+    assert_eq!(open(&mut s), [k(1), k(2), k(0)]);
+}
+
+fn cell_rect(s: &Setup, c: Cell) -> Rect {
+    s.c.dock().cells.iter().find(|x| x.0 == c).unwrap().1
+}
+
+/// The dock's dots in their rooms' colours, home's first; the current
+/// chip's fill; a chip's dot; the hovered tile's lift and its tooltip; the
+/// divider in `border`. Dark: in the light set the tile and the lift are
+/// both white.
+#[test]
+fn the_dock_paints_its_parts_where_its_cells_are() {
+    let mut s = setup();
+    s.c.appearance = zoraya_tokens::Appearance::Dark;
+    s.c.make_wallpaper();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    assert_eq!(
+        s.set_dock(panel, "term\tterm\nedit\tedit FILE\n"),
+        status::OK
+    );
+    let p = *s.c.appearance().palette();
+    let t1 = s.room_client(panel, "project", "term", "");
+    s.window_of(t1, 200, 100, 1);
+    let t2 = s.room_client(panel, "", "term", "");
+    s.window_of(t2, 200, 100, 2);
+
+    let r = cell_rect(&s, Cell::App(0));
+    let centre = r.x + r.width / 2;
+    let dot_y = r.y + r.height + 3;
+    assert_eq!(s.pixel(centre - 3, dot_y), p.fg_text_secondary.pixel());
+    assert_eq!(s.pixel(centre + 4, dot_y), p.room(1).pixel());
+
+    let chip = cell_rect(&s, Cell::Chip(1));
+    let chip_h = i64::from(crate::rooms::CHIP_HEIGHT);
+    let cy = chip.y + (r.height - chip_h) / 2 + chip_h / 2;
+    assert_eq!(s.pixel(chip.x + 13, cy), p.room(1).pixel());
+    let home_chip = cell_rect(&s, Cell::Chip(0));
+    let before = (s.pixel(chip.x + 4, cy), s.pixel(home_chip.x + 4, cy));
+    assert_eq!(s.set_rooms(panel, "project", ROOMS), status::OK);
+    let after = (s.pixel(chip.x + 4, cy), s.pixel(home_chip.x + 4, cy));
+    assert_ne!(before.0, after.0, "project's chip is filled as current");
+    assert_ne!(before.1, after.1, "home's chip is no longer");
+
+    let dock = s.c.dock().rect;
+    let pad = i64::from(space::DOCK_PADDING.physical(Scale::ONE));
+    let d = s.c.dock().divider;
+    let mid = dock.y + pad + r.height / 2;
+    assert_eq!(s.pixel(d, mid), p.border.pixel());
+    assert_ne!(s.pixel(d + 1, mid), p.border.pixel());
+
+    let edit = cell_rect(&s, Cell::App(1));
+    let ec = edit.x + edit.width / 2;
+    let tile = (ec - r.height / 2 + 3, edit.y + r.height / 2);
+    let plus = cell_rect(&s, Cell::Plus);
+    let above = |s: &mut Setup, x: i64| s.pixel(x, dock.y - 10);
+    let quiet = (
+        s.pixel(tile.0, tile.1),
+        above(&mut s, ec),
+        above(&mut s, plus.x + plus.width / 2),
+    );
+    let (w, h) = s.f().display_size;
+    s.point(axis(ec, w), axis(edit.y + r.height / 2, h), None);
+    assert_eq!(s.c.hovered(), Some(1));
+    assert_ne!(
+        s.pixel(tile.0, tile.1),
+        quiet.0,
+        "the hovered tile is lifted"
+    );
+    assert_ne!(above(&mut s, ec), quiet.1, "its tooltip is over it");
+    assert_eq!(
+        above(&mut s, plus.x + plus.width / 2),
+        quiet.2,
+        "and not elsewhere"
+    );
+}
+
+/// The title is drawn beside the badge and the pills.
+#[test]
+fn a_rooms_window_shows_its_title() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", ROOMS), status::OK);
+    let end = s.room_client(panel, "project", "term", "+w ~/project");
+    let id = s.window_of(end, 400, 120, 0x0040_4040);
+    let o = s.outer(0, id);
+    let band = |s: &mut Setup| -> Vec<u32> {
+        (o.y + 6..o.y + 22)
+            .flat_map(|y| (o.x + 40..o.right() - 160).map(move |x| (x, y)))
+            .map(|(x, y)| s.pixel(x, y))
+            .collect()
+    };
+    let empty = band(&mut s);
+    s.request(
+        end,
+        &gui::SetTitle {
+            window: id,
+            text: zoraya_protocol::Data("zosh".as_bytes()),
+        },
+        vec![],
+    );
+    assert_ne!(band(&mut s), empty, "the title is drawn");
+}
+
+/// The palette the frames are drawn in is the appearance set.
+#[test]
+fn the_appearance_is_the_one_set() {
+    let mut s = setup();
+    s.c.appearance = zoraya_tokens::Appearance::Dark;
+    assert_eq!(s.c.appearance(), zoraya_tokens::Appearance::Dark);
+}

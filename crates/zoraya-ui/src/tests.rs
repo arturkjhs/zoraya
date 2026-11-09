@@ -704,3 +704,95 @@ fn menus_dialogs_separators_and_bars_measure_and_lay_out() {
     label.layout(rect(1, 2, 80, 28), &mut p);
     assert_eq!(label.rect(), rect(1, 2, 80, 28));
 }
+
+/// Mutants 7d, second round: text widths and baselines, the cursor bar,
+/// the knob's and the label's places, the focus ring on the chosen dot
+/// only, a row of three, a grid away from the top.
+#[test]
+fn text_and_the_small_parts_are_where_they_belong() {
+    let mut p = painter();
+    let w1 = p.ui.measure("Save", 13).max(0) as u32;
+    assert_eq!(p.text_width("Save"), l(w1));
+    let mut p2 = Painter::new(Scale::TWO, Appearance::Light);
+    let w2 = p2.ui.measure("Save", 26).max(0) as u32;
+    assert_eq!(p2.text_width("Save"), Scale::TWO.logical(w2 + 1));
+
+    // A label's ink sits on its baseline, 18 in a 28-high row at 13 px.
+    let (mut w, mut px) = window(Box::new(Label::new("Name")), 120, 28, &mut p);
+    w.paint(&mut p, &mut px, 120);
+    let ground = px[0];
+    let inked = |y: usize, px: &[u32]| (0..120).any(|x| px[y * 120 + x] != ground);
+    let lowest = (0..28).rev().find(|y| inked(*y, &px)).expect("ink");
+    assert!((16..=18).contains(&lowest), "lowest inked row {lowest}");
+
+    // A button's label is centred.
+    let tw = p.text_width("Save").physical(Scale::ONE) as usize;
+    let (mut w, mut px) = window(button(1), 120, 28, &mut p);
+    w.paint(&mut p, &mut px, 120);
+    let left = (0..120)
+        .find(|x| (8..20).any(|y| px[y * 120 + x] == LIGHT.fg_text.pixel()))
+        .expect("label ink");
+    let pad = (120 - tw) / 2;
+    assert!(left + 3 >= pad && left <= pad + 3, "left {left}, pad {pad}");
+
+    // The cursor bar after the text before it, inset by the unit.
+    let mut field = TextField::new(1, "ab");
+    field.cursor = 2;
+    let (mut w, mut px) = window(Box::new(field), 200, 28, &mut p);
+    w.event(key(keys::TAB));
+    w.paint(&mut p, &mut px, 200);
+    let x = 8 + p.text_width("ab").physical(Scale::ONE) as usize;
+    let at = |x: usize, y: usize| px[y * 200 + x];
+    assert_eq!(at(x, 4), LIGHT.fg_text.pixel());
+    assert_eq!(at(x, 23), LIGHT.fg_text.pixel());
+    assert_ne!(at(x, 3), LIGHT.fg_text.pixel());
+    assert_ne!(at(x, 24), LIGHT.fg_text.pixel());
+
+    // The knob is inset by half the unit from the top and the start.
+    let (mut w, mut px) = window(Box::new(Switch::new(1, true)), 48, 28, &mut p);
+    w.paint(&mut p, &mut px, 48);
+    assert_eq!(px[48 + 34], LIGHT.accent.pixel(), "above the knob");
+    let (mut w, mut px) = window(Box::new(Switch::new(1, false)), 48, 28, &mut p);
+    w.paint(&mut p, &mut px, 48);
+    assert_eq!(
+        px[14 * 48 + 1],
+        LIGHT.border_strong.pixel(),
+        "before the knob"
+    );
+
+    // A radio group's labels start past the dot and the gap; the ring is
+    // on the chosen dot only.
+    let (mut w, mut px) = window(
+        Box::new(RadioGroup::new(1, &["a", "b"], 0)),
+        200,
+        56,
+        &mut p,
+    );
+    w.event(key(keys::TAB));
+    w.paint(&mut p, &mut px, 200);
+    assert!((0..56).all(|y| (18..25).all(|x| px[y * 200 + x] != LIGHT.fg_text.pixel())));
+    assert_eq!(px[13 * 200], LIGHT.accent.pixel());
+    assert_ne!(px[41 * 200], LIGHT.accent.pixel());
+    assert_ne!(px[41 * 200 + 1], LIGHT.accent.pixel());
+
+    // At scale 2 the ring is four pixels deep.
+    let size = (l(120), l(28));
+    let mut win = Window::new(button(1), size);
+    win.layout(&mut p2);
+    win.event(key(keys::TAB));
+    let mut px = vec![0u32; 240 * 56];
+    win.paint(&mut p2, &mut px, 240);
+    assert_eq!(px[28 * 240 + 3], LIGHT.accent.pixel());
+
+    let (bw, _) = Button::new(0, "Save").measure(&mut p);
+    let mut row = Row::new(vec![button(1), button(2), button(3)]);
+    assert_eq!(row.measure(&mut p).0, bw.times(3) + l(16));
+    let mut grid = Grid::new(2, vec![button(1), button(2)]);
+    grid.layout(LRect::new(l(0), l(10), bw.times(2) + l(8), l(20)), &mut p);
+    assert_eq!(grid.children[0].rect().h, l(20));
+
+    let mut f = TextField::new(1, "abc");
+    f.event(&key(keys::HOME));
+    f.event(&key(keys::END));
+    assert_eq!(f.cursor, 3);
+}
