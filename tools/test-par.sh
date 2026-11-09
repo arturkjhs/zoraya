@@ -31,8 +31,13 @@ checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host
 # The QEMU lanes, each a list of steps sharing an image: test-files and
 # test-crash write build/crash.img; test-posix-gui and test-tour-gui
 # build/posix-gui.img.
-lanes="test-qemu;test-boot test-libposix;test-files test-crash;test-posix;test-posix-gui test-tour-gui;test-gui"
-all_lanes=$(echo "$lanes" | tr ';' ' ')
+# test-boot runs alone, before the lanes: its console test needs a burst to
+# overflow the guest's ring while a job runs, which other guests' load can
+# keep from happening (2026-11-09).
+solo="test-boot"
+lanes="test-qemu;test-libposix;test-files test-crash;test-posix;test-posix-gui test-tour-gui;test-gui"
+all_lanes="$solo $(echo "$lanes" | tr ';' ' ')"
+
 
 if [ -n "$internal" ]; then
     wanted=${WANTED:- $* }
@@ -101,8 +106,12 @@ t0=$(date +%s)
 build_status=$?
 build_time=$(($(date +%s) - t0))
 
-# 2. The lanes: the host lane, and the QEMU lanes, max_qemu at once.
+# 2. The steps that run alone, then the lanes: the host lane, and the QEMU
+# lanes, max_qemu at once.
 if [ "$build_status" = 0 ]; then
+    for s in $solo; do
+        has "$s" && tools/mutants/watchdog.sh "$0" __step "$s"
+    done
     if has test-unit; then
         WANTED="$wanted" tools/mutants/watchdog.sh "$0" __step test-unit &
         host=$!
