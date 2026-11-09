@@ -454,3 +454,29 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
     assert!(!app.held(id));
 }
+
+/// ADR-0170's two events: a Copy asks for an offer, a Paste gives text.
+#[test]
+fn copy_and_paste_reach_the_application() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("edit", form(), 200, 120).unwrap();
+    app.platform.event(&gui::Copy {
+        window: id,
+        cut: true,
+    });
+    assert_eq!(
+        app.wait(),
+        Happened::Copy {
+            window: id,
+            cut: true
+        }
+    );
+    app.platform.event(&gui::Paste {
+        window: id,
+        text: Data("kůň".as_bytes()),
+    });
+    assert_eq!(app.wait(), Happened::Pasted(id));
+    assert_eq!(app.take_paste().as_deref(), Some("kůň"));
+    assert_eq!(app.take_paste(), None);
+    assert!(!app.offer(&"x".repeat(gui::MAX_CLIPBOARD + 1)));
+}

@@ -73,6 +73,11 @@ pub enum Happened {
     Gone,
     /// An entry was dropped on `window`: [`App::take_drop`] gives it.
     Dropped(u32),
+    /// The person asked `window` to copy (or, `cut`, to cut) its
+    /// selection: answer with [`App::offer`] (ADR-0170).
+    Copy { window: u32, cut: bool },
+    /// The person pasted into `window`: [`App::take_paste`] gives the text.
+    Pasted(u32),
 }
 
 /// A dropped entry (ADR-0170): the connection, its display name
@@ -118,6 +123,8 @@ pub struct App<P: Platform> {
     held: Option<u32>,
     /// The serial of the last left press delivered, for a drag to name.
     serial: u32,
+    /// The text of the last `Paste`, until taken.
+    pasted: Option<alloc::string::String>,
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
@@ -143,6 +150,7 @@ impl<P: Platform> App<P> {
             drops: VecDeque::new(),
             held: None,
             serial: 0,
+            pasted: None,
         };
         let reply = app.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -339,6 +347,27 @@ impl<P: Platform> App<P> {
             .and_then(|r| decode::<gui::DragDone>(&r, 0).ok().map(|(_, d)| d.status.0))
             == Some(status::OK);
         if ok { Ok(()) } else { Err(None) }
+    }
+
+    /// Answers a `Copy` with `text` (within 500 ms of it, ADR-0170);
+    /// whether the compositor kept it.
+    pub fn offer(&mut self, text: &str) -> bool {
+        if text.len() > gui::MAX_CLIPBOARD {
+            return false;
+        }
+        let m = gui::Offer {
+            text: Data(text.as_bytes()),
+        };
+        self.call(&m, None).and_then(|r| {
+            decode::<gui::OfferDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) == Some(status::OK)
+    }
+
+    /// The text of the last paste, once.
+    pub fn take_paste(&mut self) -> Option<alloc::string::String> {
+        self.pasted.take()
     }
 
     /// Whether `window`'s body holds the left button.
@@ -541,6 +570,20 @@ impl<P: Platform> App<P> {
                         modifiers: k.modifiers.0,
                     },
                 )
+            }
+            27 => {
+                let (_, c) = decode::<gui::Copy>(got, 0).ok()?;
+                Some(Happened::Copy {
+                    window: c.window,
+                    cut: c.cut,
+                })
+            }
+            28 => {
+                let (_, p) = decode::<gui::Paste<'_>>(got, 0).ok()?;
+                self.pasted = Some(alloc::string::String::from(
+                    core::str::from_utf8(p.text.0).ok()?,
+                ));
+                Some(Happened::Pasted(p.window))
             }
             25 => {
                 let (_, d) = decode::<gui::Drop<'_>>(got, 1).ok()?;

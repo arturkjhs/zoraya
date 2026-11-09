@@ -170,6 +170,23 @@ fn main() -> i32 {
                     status.clear();
                     continue;
                 }
+                // The clipboard (ADR-0170): the selection offered, cut on
+                // a cut; a paste typed over the selection.
+                Happened::Copy { cut, .. } => {
+                    let selected = buffer.borrow().selected();
+                    if !selected.is_empty() && app.offer(&selected) && cut {
+                        buffer.borrow_mut().cut();
+                        rebuild = true;
+                    }
+                    continue;
+                }
+                Happened::Pasted(_) => {
+                    if let Some(text) = app.take_paste() {
+                        buffer.borrow_mut().insert(&text);
+                        rebuild = true;
+                    }
+                    continue;
+                }
                 _ => continue,
             };
             match id {
