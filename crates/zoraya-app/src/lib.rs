@@ -36,6 +36,24 @@ pub trait Platform {
     fn buffer(&mut self, pixels: usize) -> Option<(Self::End, usize)>;
     fn pixels(&mut self, buffer: usize) -> &mut [u32];
     fn free(&mut self, buffer: usize);
+    /// The next message if one is there, without waiting, for a program
+    /// that waits on other channels too (the chooser). By default it waits.
+    fn poll(&mut self, bytes: &mut [u8]) -> Poll {
+        match self.receive(bytes) {
+            Some(n) => Poll::Message(n),
+            None => Poll::Gone,
+        }
+    }
+}
+
+/// What [`Platform::poll`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Poll {
+    Message(usize),
+    /// Nothing yet.
+    Empty,
+    /// The compositor is gone.
+    Gone,
 }
 
 /// What happened, for the application to act on.
@@ -155,16 +173,7 @@ impl<P: Platform> App<P> {
             self.platform.free(buffer);
             return None;
         };
-        let mut ui = Window::new(root, (self.scale_logical(w), self.scale_logical(h)));
-        ui.layout(&mut self.painter);
-        self.windows.push(Win {
-            id: c.window,
-            ui,
-            size: (w, h),
-            buffer,
-            in_flight: false,
-            dirty: true,
-        });
+        self.add_window(c.window, root, (w, h), buffer);
         let t = Data(title.as_bytes());
         self.call(
             &gui::SetTitle {
@@ -177,6 +186,70 @@ impl<P: Platform> App<P> {
         Some(c.window)
     }
 
+    fn add_window(&mut self, id: u32, root: Box<dyn Widget>, (w, h): (u32, u32), buffer: usize) {
+        let mut ui = Window::new(root, (self.scale_logical(w), self.scale_logical(h)));
+        ui.layout(&mut self.painter);
+        self.windows.push(Win {
+            id,
+            ui,
+            size: (w, h),
+            buffer,
+            in_flight: false,
+            dirty: true,
+        });
+    }
+
+    /// Opens a sheet of `w × h` logical pixels under the window of the
+    /// client the panel tagged `tag` (a system client only: the chooser,
+    /// ADR-0167); `kind` is the heading the compositor draws.
+    pub fn open_sheet(
+        &mut self,
+        tag: u32,
+        kind: u32,
+        root: Box<dyn Widget>,
+        w: u32,
+        h: u32,
+    ) -> Option<u32> {
+        let (memory, buffer) = self.new_buffer(w, h)?;
+        let m = gui::CreateSheet {
+            tag,
+            kind: zoraya_protocol::Below(kind),
+            width: w,
+            height: h,
+        };
+        let reply = self.call(&m, Some(memory));
+        let created = reply
+            .as_deref()
+            .and_then(|r| decode::<gui::SheetCreated>(r, 0).ok())
+            .map(|(_, c)| c);
+        let Some(c) = created.filter(|c| c.status.0 == status::OK) else {
+            self.platform.free(buffer);
+            return None;
+        };
+        self.add_window(c.window, root, (w, h), buffer);
+        self.repaint(c.window);
+        Some(c.window)
+    }
+
+    /// The next thing to act on if the compositor has sent it, without
+    /// waiting: `None` when nothing is there.
+    pub fn poll(&mut self) -> Option<Happened> {
+        let mut bytes = vec![0u8; 4096];
+        loop {
+            let got = match self.queued.pop_front() {
+                Some(b) => b,
+                None => match self.platform.poll(&mut bytes) {
+                    Poll::Message(n) => bytes[..n].to_vec(),
+                    Poll::Empty => return None,
+                    Poll::Gone => return Some(Happened::Gone),
+                },
+            };
+            if let Some(h) = self.handle(&got) {
+                return Some(h);
+            }
+        }
+    }
+
     fn scale_logical(&self, v: u32) -> Logical {
         Scale::ONE.logical(v)
     }
@@ -185,6 +258,18 @@ impl<P: Platform> App<P> {
     pub fn window(&mut self, id: u32) -> Option<&mut Window> {
         let i = self.index(id)?;
         Some(&mut self.windows[i].ui)
+    }
+
+    /// Puts `root` in `window` in place of its tree, keeping its focus, and
+    /// lays it out and paints it.
+    pub fn replace(&mut self, id: u32, root: Box<dyn Widget>) {
+        let Some(i) = self.index(id) else { return };
+        let App {
+            painter, windows, ..
+        } = self;
+        windows[i].ui.root = root;
+        windows[i].ui.layout(painter);
+        self.repaint(id);
     }
 
     /// Paints `window` and commits it, unless a commit is in flight: then

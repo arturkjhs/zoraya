@@ -796,3 +796,46 @@ fn text_and_the_small_parts_are_where_they_belong() {
     f.event(&key(keys::END));
     assert_eq!(f.cursor, 3);
 }
+
+/// Proposed ADR-0244: the application reads what the person set by the
+/// widget's id; a list's details stand right-aligned in the secondary ink.
+#[test]
+fn values_are_read_by_id_and_details_stand_at_the_right() {
+    let mut p = painter();
+    let mut list = ListView::new(7, &["include", "main.c"]);
+    list.details = vec![String::new(), String::from("1.9 kB")];
+    let tree = Column::new(vec![
+        Box::new(TextField::new(3, "plán.txt")),
+        Box::new(CheckBox::new(4, "untrusted", true)),
+        Box::new(Switch::new(5, false)),
+        Box::new(RadioGroup::new(6, &["a", "b"], 1)),
+        Box::new(list),
+        Box::new(Menu::new(8, &["Open"])),
+        button(9),
+    ]);
+    let (mut w, mut px) = window(Box::new(tree), 300, 400, &mut p);
+    assert_eq!(w.value(3), Value::Text("plán.txt"));
+    assert_eq!(w.value(4), Value::On(true));
+    assert_eq!(w.value(5), Value::On(false));
+    assert_eq!(w.value(6), Value::Index(Some(1)));
+    assert_eq!(w.value(7), Value::Index(None));
+    assert_eq!(w.value(8), Value::Index(Some(0)));
+    assert_eq!(w.value(9), Value::None);
+    assert_eq!(w.value(99), Value::None);
+    // Tab to the list (field, check box, switch, radio, list) and Down.
+    for _ in 0..5 {
+        w.event(key(keys::TAB));
+    }
+    w.event(key(keys::DOWN));
+    assert_eq!(w.value(7), Value::Index(Some(0)));
+    w.paint(&mut p, &mut px, 300);
+    // The list's second row: the size's ink at the right, none in the
+    // first row's right half.
+    let list_y = 20 + 28 + 8 + 28 + 8 + 28 + 8 + 56 + 8;
+    let secondary = LIGHT.fg_text_secondary.pixel();
+    let ink = |y0: usize, xs: core::ops::Range<usize>, px: &[u32]| {
+        (y0..y0 + 28).any(|y| xs.clone().any(|x| px[y * 300 + x] == secondary))
+    };
+    assert!(ink(list_y + 28, 200..280, &px), "the detail at the right");
+    assert!(!ink(list_y, 150..280, &px), "no detail on the first row");
+}

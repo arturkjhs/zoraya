@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use zoraya_paint::{Canvas, rounded_outline, rounded_rect};
 use zoraya_tokens::{Color, Logical, shape, space, text};
 
-use crate::{Event, LRect, Painter, Response, Widget, focus_ring, keys};
+use crate::{Event, LRect, Painter, Response, Value, Widget, focus_ring, keys};
 
 /// Fills `r` with `color` in a rounded shape of `radius`.
 fn shape_fill(p: &Painter, c: &mut Canvas<'_>, r: LRect, radius: Logical, color: Color) {
@@ -148,6 +148,9 @@ impl Widget for Button {
     fn focusable(&self) -> bool {
         true
     }
+    fn id(&self) -> Option<u32> {
+        Some(self.id)
+    }
 }
 
 /// One line of editable text: a cursor as a character index, editing by
@@ -255,6 +258,12 @@ impl Widget for TextField {
     fn focusable(&self) -> bool {
         true
     }
+    fn id(&self) -> Option<u32> {
+        Some(self.id)
+    }
+    fn value(&self) -> Value<'_> {
+        Value::Text(&self.value)
+    }
 }
 
 /// A box with a check mark and a label.
@@ -348,6 +357,12 @@ impl Widget for CheckBox {
     fn focusable(&self) -> bool {
         true
     }
+    fn id(&self) -> Option<u32> {
+        Some(self.id)
+    }
+    fn value(&self) -> Value<'_> {
+        Value::On(self.checked)
+    }
 }
 
 /// An on and off switch: a track in `accent` when on, a knob.
@@ -416,6 +431,12 @@ impl Widget for Switch {
     }
     fn focusable(&self) -> bool {
         true
+    }
+    fn id(&self) -> Option<u32> {
+        Some(self.id)
+    }
+    fn value(&self) -> Value<'_> {
+        Value::On(self.on)
     }
 }
 
@@ -514,12 +535,21 @@ impl Widget for RadioGroup {
     fn focusable(&self) -> bool {
         true
     }
+    fn id(&self) -> Option<u32> {
+        Some(self.id)
+    }
+    fn value(&self) -> Value<'_> {
+        Value::Index(Some(self.chosen))
+    }
 }
 
 /// Rows of text with a selection; arrows move it, Enter activates it.
 pub struct ListView {
     pub id: u32,
     pub rows: Vec<String>,
+    /// Each row's detail, right-aligned in `fg.text.secondary` (a size);
+    /// empty for none.
+    pub details: Vec<String>,
     pub selected: Option<usize>,
     /// The first row shown.
     pub top: usize,
@@ -531,6 +561,7 @@ impl ListView {
         ListView {
             id,
             rows: rows.iter().map(|r| String::from(*r)).collect(),
+            details: Vec::new(),
             selected: None,
             top: 0,
             rect: LRect::default(),
@@ -592,6 +623,15 @@ impl Widget for ListView {
             c.fill(row.physical(p.scale), bg);
             let label = self.rows[i].clone();
             p.label(c, &label, row, space::PADDING_CONTROL, fg, false);
+            if let Some(d) = self.details.get(i).filter(|d| !d.is_empty()).cloned() {
+                let pad = row.w - space::PADDING_CONTROL - p.text_width(&d);
+                let secondary = if self.selected == Some(i) {
+                    fg
+                } else {
+                    p.palette.fg_text_secondary
+                };
+                p.label(c, &d, row, pad, secondary, false);
+            }
         }
         if focused {
             focus_ring(p, c, self.rect);
@@ -637,6 +677,12 @@ impl Widget for ListView {
     }
     fn focusable(&self) -> bool {
         true
+    }
+    fn id(&self) -> Option<u32> {
+        Some(self.id)
+    }
+    fn value(&self) -> Value<'_> {
+        Value::Index(self.selected)
     }
 }
 
@@ -791,6 +837,12 @@ impl Widget for Menu {
     }
     fn closes_on_escape(&self) -> bool {
         true
+    }
+    fn id(&self) -> Option<u32> {
+        Some(self.list.id)
+    }
+    fn value(&self) -> Value<'_> {
+        Value::Index(self.list.selected)
     }
 }
 
