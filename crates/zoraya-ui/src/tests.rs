@@ -334,3 +334,373 @@ fn layout_places_children_with_gaps_and_scales() {
     w.paint(&mut p, &mut px, 400);
     assert_eq!(px[100 * 400 + 8], zoraya_tokens::DARK.bg_control.pixel());
 }
+
+// Mutants 7d: what the first tests left unread (rectangles, values, the
+// order of focus, the pixels of the small controls).
+
+fn l(n: u32) -> zoraya_tokens::Logical {
+    Scale::ONE.logical(n)
+}
+
+fn rect(x: u32, y: u32, w: u32, h: u32) -> LRect {
+    LRect::new(l(x), l(y), l(w), l(h))
+}
+
+fn pointer(x: u32, y: u32, buttons: u32) -> Event {
+    Event::Pointer {
+        x: l(x),
+        y: l(y),
+        buttons,
+    }
+}
+
+fn button(id: u32) -> Box<dyn Widget> {
+    Box::new(Button::new(id, "Save"))
+}
+
+#[test]
+fn rows_columns_and_grids_place_their_children_exactly() {
+    let mut p = painter();
+    let (bw, bh) = Button::new(0, "Save").measure(&mut p);
+    assert_eq!(bw, p.text_width("Save") + l(32));
+    assert_eq!(bh, l(28));
+
+    let mut col = Column::new(vec![button(1), button(2), button(3)]);
+    assert_eq!(col.measure(&mut p), (bw + l(40), l(3 * 28 + 2 * 8 + 40)));
+    col.layout(rect(0, 0, 300, 200), &mut p);
+    assert_eq!(col.rect(), rect(0, 0, 300, 200));
+    for (i, c) in col.children.iter().enumerate() {
+        assert_eq!(c.rect(), rect(20, 20 + 36 * i as u32, 260, 28));
+    }
+    let mut short = Column::new(vec![button(1), button(2)]);
+    short.layout(rect(0, 0, 300, 60), &mut p);
+    assert_eq!(short.children[0].rect(), rect(20, 20, 260, 20));
+    assert_eq!(short.children[1].rect(), rect(20, 48, 260, 0));
+
+    let mut row = Row::new(vec![button(1), button(2)]);
+    assert_eq!(row.measure(&mut p), (bw.times(2) + l(8), l(28)));
+    row.layout(rect(5, 7, 500, 28), &mut p);
+    assert_eq!(row.rect(), rect(5, 7, 500, 28));
+    assert_eq!(row.children[0].rect(), LRect::new(l(5), l(7), bw, l(28)));
+    assert_eq!(
+        row.children[1].rect(),
+        LRect::new(l(13) + bw, l(7), bw, l(28))
+    );
+    row.padding = space::PADDING_WINDOW;
+    assert_eq!(row.measure(&mut p), (bw.times(2) + l(48), l(68)));
+    let mut narrow = Row::new(vec![button(1), button(2)]);
+    let width = bw.times(2) + l(8) - l(10);
+    narrow.layout(LRect::new(l(0), l(0), width, l(28)), &mut p);
+    assert_eq!(narrow.children[1].rect().right(), width);
+
+    let mut grid = Grid::new(2, vec![button(1), button(2), button(3)]);
+    assert_eq!(grid.measure(&mut p), (bw.times(2) + l(8), l(64)));
+    let gr = LRect::new(l(10), l(10), bw.times(2) + l(8), l(64));
+    grid.layout(gr, &mut p);
+    assert_eq!(grid.rect(), gr);
+    assert_eq!(grid.children[0].rect(), LRect::new(l(10), l(10), bw, l(28)));
+    assert_eq!(
+        grid.children[1].rect(),
+        LRect::new(l(18) + bw, l(10), bw, l(28))
+    );
+    assert_eq!(grid.children[2].rect(), LRect::new(l(10), l(46), bw, l(28)));
+    let mut tight = Grid::new(2, vec![button(1), button(2)]);
+    let gn = LRect::new(l(0), l(0), bw.times(2), l(20));
+    tight.layout(gn, &mut p);
+    assert_eq!(tight.children[1].rect().right(), gn.right());
+    assert_eq!(tight.children[0].rect().h, l(20));
+    let (mut w, _) = window(
+        Box::new(Grid::new(2, vec![button(1), button(2)])),
+        300,
+        100,
+        &mut p,
+    );
+    w.event(key(keys::TAB));
+    assert_eq!(w.focused(), Some(vec![0]));
+}
+
+#[test]
+fn a_press_lands_only_in_its_rectangle_and_focuses_what_it_lands_on() {
+    let mut p = painter();
+    let lh = Label::new("x").measure(&mut p).1.physical(Scale::ONE);
+    let y2 = 20 + 28 + 8 + lh + 8;
+    let col = Column::new(vec![button(1), Box::new(Label::new("x")), button(2)]);
+    let (mut w, _) = window(Box::new(col), 300, 200, &mut p);
+    // The first button is (20, 20, 260, 28).
+    for (x, y) in [(19, 25), (280, 25), (100, 48), (25, 19)] {
+        assert_eq!(w.event(pointer(x, y, 1)), Response::None, "{x},{y}");
+    }
+    assert_eq!(w.focused(), None);
+    assert_eq!(w.event(pointer(20, 20, 1)), Response::Activated(1));
+    assert_eq!(w.event(pointer(279, 47, 1)), Response::Activated(1));
+    assert_eq!(w.focused(), Some(vec![0]));
+    // A press on the label, which takes no focus, leaves it.
+    w.event(pointer(30, 60, 1));
+    assert_eq!(w.focused(), Some(vec![0]));
+    // A hover neither activates nor focuses.
+    assert_eq!(w.event(pointer(30, y2 + 4, 0)), Response::None);
+    assert_eq!(w.focused(), Some(vec![0]));
+    assert_eq!(w.event(pointer(30, y2 + 4, 1)), Response::Activated(2));
+    assert_eq!(w.focused(), Some(vec![2]));
+
+    // Outside the window, nothing.
+    let radio = RadioGroup::new(3, &["a", "b"], 0);
+    let (mut w, _) = window(Box::new(radio), 200, 56, &mut p);
+    assert_eq!(w.event(pointer(500, 20, 1)), Response::None);
+}
+
+#[test]
+fn tab_goes_forward_in_tree_order_and_shift_tab_from_nothing_to_the_last() {
+    let mut p = painter();
+    let tree = || -> Box<dyn Widget> {
+        Box::new(Column::new(vec![
+            button(1),
+            Box::new(TextField::new(2, "")),
+            button(3),
+        ]))
+    };
+    let (mut w, _) = window(tree(), 300, 200, &mut p);
+    w.event(key(keys::TAB));
+    assert_eq!(w.focused(), Some(vec![0]));
+    w.event(key(keys::TAB));
+    assert_eq!(w.focused(), Some(vec![1]));
+    let back = Event::Key {
+        code: keys::TAB,
+        text: None,
+        modifiers: keys::SHIFT,
+    };
+    w.event(back);
+    assert_eq!(w.focused(), Some(vec![0]));
+    let (mut w, _) = window(tree(), 300, 200, &mut p);
+    w.event(back);
+    assert_eq!(w.focused(), Some(vec![2]));
+}
+
+#[test]
+fn a_text_field_edits_at_its_cursor() {
+    let mut f = TextField::new(1, "ab");
+    assert_eq!(f.cursor, 2);
+    assert_eq!(f.event(&typed('c')), Response::Changed(1));
+    assert_eq!((f.value.as_str(), f.cursor), ("abc", 3));
+    assert_eq!(f.event(&key(keys::LEFT)), Response::Repaint);
+    assert_eq!(f.event(&typed('X')), Response::Changed(1));
+    assert_eq!((f.value.as_str(), f.cursor), ("abXc", 3));
+    assert_eq!(f.event(&key(keys::BACKSPACE)), Response::Changed(1));
+    assert_eq!((f.value.as_str(), f.cursor), ("abc", 2));
+    f.event(&key(keys::RIGHT));
+    f.event(&key(keys::RIGHT));
+    assert_eq!(f.cursor, 3);
+    f.event(&key(keys::HOME));
+    assert_eq!(f.cursor, 0);
+    assert_eq!(f.event(&key(keys::BACKSPACE)), Response::None);
+    assert_eq!(f.event(&key(keys::DELETE)), Response::Changed(1));
+    assert_eq!((f.value.as_str(), f.cursor), ("bc", 0));
+    f.event(&key(keys::RIGHT));
+    assert_eq!(f.event(&key(keys::DELETE)), Response::Changed(1));
+    assert_eq!((f.value.as_str(), f.cursor), ("b", 1));
+    f.event(&key(keys::END));
+    assert_eq!(f.event(&key(keys::DELETE)), Response::None);
+    f.event(&key(keys::LEFT));
+    f.event(&key(keys::LEFT));
+    assert_eq!(f.cursor, 0);
+    let mut p = painter();
+    assert_eq!(f.measure(&mut p).1, l(28));
+}
+
+#[test]
+fn a_check_box_and_a_switch_paint_their_parts_and_flip() {
+    let mut p = painter();
+    let mut c = CheckBox::new(1, "Bold", false);
+    assert_eq!(c.measure(&mut p), (l(17 + 8) + p.text_width("Bold"), l(28)));
+    assert_eq!(c.event(&key(keys::SPACE)), Response::Changed(1));
+    assert!(c.checked);
+    c.layout(rect(0, 0, 200, 28), &mut p);
+    assert_eq!(c.rect(), rect(0, 0, 200, 28));
+    assert_eq!(c.event(&pointer(5, 5, 1)), Response::Changed(1));
+    assert!(!c.checked);
+    assert_eq!(c.event(&pointer(5, 5, 0)), Response::None);
+
+    let (mut w, mut px) = window(Box::new(CheckBox::new(1, "Bold", true)), 200, 28, &mut p);
+    w.paint(&mut p, &mut px, 200);
+    // The box is (0, 5, 17, 17), its mark (4, 9, 9, 9).
+    for (x, y) in [(2, 10), (6, 6), (15, 13), (6, 20)] {
+        assert_eq!(px[y * 200 + x], LIGHT.accent.pixel(), "{x},{y}");
+    }
+    assert_eq!(px[13 * 200 + 8], LIGHT.fg_text_on_accent.pixel());
+    // The label starts past the box and the gap.
+    assert!((0..28).all(|y| (17..25).all(|x| px[y * 200 + x] != LIGHT.fg_text.pixel())));
+    assert!((0..28).any(|y| (25..60).any(|x| px[y * 200 + x] == LIGHT.fg_text.pixel())));
+
+    let mut s = Switch::new(2, true);
+    assert_eq!(s.measure(&mut p), (l(48), l(28)));
+    assert_eq!(s.event(&key(keys::ENTER)), Response::Changed(2));
+    assert!(!s.on);
+    for on in [true, false] {
+        let (mut w, mut px) = window(Box::new(Switch::new(2, on)), 48, 28, &mut p);
+        w.paint(&mut p, &mut px, 48);
+        let at = |x: usize| px[14 * 48 + x];
+        if on {
+            // The knob (22, 2, 24, 24) at the right of an accent track.
+            assert_eq!(at(20), LIGHT.accent.pixel());
+            assert_eq!(at(24), LIGHT.bg_control.pixel());
+            assert_eq!(at(34), LIGHT.bg_control.pixel());
+        } else {
+            assert_eq!(at(4), LIGHT.bg_control.pixel());
+            assert_eq!(at(14), LIGHT.bg_control.pixel());
+            assert_eq!(at(28), LIGHT.border_strong.pixel());
+            assert_eq!(at(36), LIGHT.border_strong.pixel());
+        }
+    }
+}
+
+#[test]
+fn a_radio_group_wraps_its_arrows_and_picks_the_row_under_a_press() {
+    let mut p = painter();
+    let mut g = RadioGroup::new(1, &["one", "two", "three"], 0);
+    assert_eq!(g.measure(&mut p), (p.text_width("three") + l(25), l(84)));
+    assert_eq!(g.event(&key(keys::DOWN)), Response::Changed(1));
+    assert_eq!(g.chosen, 1);
+    assert_eq!(g.event(&key(keys::UP)), Response::Changed(1));
+    assert_eq!(g.chosen, 0);
+    g.event(&key(keys::UP));
+    assert_eq!(g.chosen, 2);
+    g.event(&key(keys::DOWN));
+    assert_eq!(g.chosen, 0);
+    g.layout(rect(0, 10, 200, 84), &mut p);
+    for (y, chosen) in [
+        (20, 0),
+        (37, 0),
+        (38, 1),
+        (40, 1),
+        (66, 2),
+        (80, 2),
+        (500, 2),
+    ] {
+        g.chosen = 1;
+        assert_eq!(g.event(&pointer(5, y, 1)), Response::Changed(1));
+        assert_eq!(g.chosen, chosen, "y {y}");
+    }
+    assert_eq!(g.event(&pointer(5, 40, 0)), Response::None);
+
+    let (mut w, mut px) = window(
+        Box::new(RadioGroup::new(1, &["a", "b"], 0)),
+        200,
+        56,
+        &mut p,
+    );
+    w.paint(&mut p, &mut px, 200);
+    // The chosen dot is filled with the accent, the other is not.
+    assert_eq!(px[14 * 200 + 8], LIGHT.accent.pixel());
+    assert_eq!(px[42 * 200 + 8], LIGHT.bg_control.pixel());
+    assert_ne!(px[2 * 200 + 8], LIGHT.accent.pixel());
+}
+
+#[test]
+fn a_list_moves_its_selection_by_key_and_by_press_from_its_top_row() {
+    let mut p = painter();
+    let rows: Vec<String> = (0..20).map(|i| std::format!("row {i}")).collect();
+    let names: Vec<&str> = rows.iter().map(String::as_str).collect();
+    let mut list = ListView::new(1, &names);
+    assert_eq!(list.measure(&mut p), (l(168), l(224)));
+    list.layout(rect(0, 10, 200, 112), &mut p);
+    assert_eq!(list.event(&key(keys::ENTER)), Response::None);
+    list.event(&key(keys::DOWN));
+    assert_eq!(list.selected, Some(0));
+    list.event(&key(keys::DOWN));
+    assert_eq!(list.selected, Some(1));
+    assert_eq!(list.event(&key(keys::ENTER)), Response::Activated(1));
+    assert_eq!(list.event(&key(keys::END)), Response::Changed(1));
+    assert_eq!((list.selected, list.top), (Some(19), 16));
+    list.event(&key(keys::DOWN));
+    assert_eq!(list.selected, Some(19));
+    list.event(&key(keys::UP));
+    assert_eq!(list.selected, Some(18));
+    list.event(&key(keys::HOME));
+    assert_eq!((list.selected, list.top), (Some(0), 0));
+    assert_eq!(list.event(&pointer(5, 40, 0)), Response::None);
+    assert_eq!(list.event(&pointer(5, 40, 2)), Response::None);
+    assert_eq!(list.event(&pointer(5, 40, 1)), Response::Changed(1));
+    assert_eq!(list.selected, Some(1));
+    list.event(&pointer(5, 37, 1));
+    assert_eq!(list.selected, Some(0));
+    list.event(&pointer(5, 38, 1));
+    assert_eq!(list.selected, Some(1));
+    list.top = 10;
+    list.event(&pointer(5, 40, 1));
+    assert_eq!(list.selected, Some(11));
+
+    let mut few = ListView::new(2, &["a", "b", "c"]);
+    few.layout(rect(0, 10, 200, 112), &mut p);
+    assert_eq!(few.event(&pointer(5, 100, 1)), Response::None);
+    assert_eq!(few.event(&pointer(5, 20, 1)), Response::Changed(2));
+    assert_eq!(few.selected, Some(0));
+    let long = "a long row of the list, wider than its least width of six rows";
+    let mut wide = ListView::new(3, &[long]);
+    assert_eq!(wide.measure(&mut p).0, p.text_width(long) + l(16));
+}
+
+#[test]
+fn a_scroll_view_stays_within_its_content_also_when_it_grows() {
+    let mut p = painter();
+    let rows = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    let mut v = ScrollView::new(Box::new(ListView::new(1, &rows)));
+    assert_eq!(v.measure(&mut p), (l(168), l(112)));
+    v.layout(rect(0, 0, 200, 56), &mut p);
+    assert_eq!(v.rect(), rect(0, 0, 200, 56));
+    assert_eq!(v.child[0].rect(), rect(0, 0, 200, 56));
+    v.scroll(true, &mut p);
+    assert_eq!(v.offset, l(28));
+    for _ in 0..30 {
+        v.scroll(true, &mut p);
+    }
+    assert_eq!(v.offset, l(168));
+    v.scroll(false, &mut p);
+    assert_eq!(v.offset, l(140));
+    v.scroll(true, &mut p);
+    // A taller frame: the offset comes back so the frame is full.
+    v.layout(rect(0, 0, 200, 112), &mut p);
+    assert_eq!(v.offset, l(112));
+    assert_eq!(v.child[0].rect().h, l(112));
+    let (mut w, mut px) = window(
+        Box::new(ScrollView::new(Box::new(ListView::new(1, &rows)))),
+        200,
+        56,
+        &mut p,
+    );
+    w.event(key(keys::TAB));
+    assert_eq!(w.focused(), Some(vec![0]));
+    w.paint(&mut p, &mut px, 200);
+    assert_eq!(px[50 * 200 + 190], LIGHT.bg_view.pixel());
+}
+
+#[test]
+fn menus_dialogs_separators_and_bars_measure_and_lay_out() {
+    let mut p = painter();
+    let mut m = Menu::new(4, &["Open", "Save"]);
+    assert_eq!(m.event(&key(keys::ESC)), Response::Closed);
+    let mut list = ListView::new(4, &["Open", "Save"]);
+    assert_eq!(m.measure(&mut p), list.measure(&mut p));
+    m.layout(rect(3, 4, 100, 56), &mut p);
+    assert_eq!(m.rect(), rect(3, 4, 100, 56));
+    assert_eq!(m.list.rect(), rect(3, 4, 100, 56));
+    assert!(m.focusable());
+
+    let mut d = Dialog::new(
+        "Delete it?",
+        vec![Button::new(1, "No"), Button::new(2, "Yes")],
+    );
+    let measured = d.column[0].measure(&mut p);
+    assert_eq!(d.measure(&mut p), measured);
+    d.layout(rect(0, 0, 300, 120), &mut p);
+    assert_eq!(d.rect(), rect(0, 0, 300, 120));
+    assert_eq!(d.column[0].rect(), rect(0, 0, 300, 120));
+    let (mut w, mut px) = window(Box::new(d), 300, 120, &mut p);
+    w.paint(&mut p, &mut px, 300);
+    assert_eq!(px[110 * 300 + 290], LIGHT.bg_window.pixel());
+
+    assert_eq!(Separator::new().measure(&mut p), (l(0), l(4)));
+    assert_eq!(ProgressBar::new(500).measure(&mut p), (l(168), l(8)));
+    let mut label = Label::new("Name");
+    label.layout(rect(1, 2, 80, 28), &mut p);
+    assert_eq!(label.rect(), rect(1, 2, 80, 28));
+}

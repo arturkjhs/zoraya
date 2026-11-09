@@ -647,7 +647,6 @@ pub struct ScrollView {
     /// How far down the child is scrolled, in logical pixels.
     pub offset: Logical,
     rect: LRect,
-    content: Logical,
 }
 
 impl ScrollView {
@@ -656,22 +655,18 @@ impl ScrollView {
             child: alloc::vec![child],
             offset: Logical::ZERO,
             rect: LRect::default(),
-            content: Logical::ZERO,
         }
     }
 
     /// Scrolls by `lines` control heights (negative: up), within the child.
     pub fn scroll(&mut self, down: bool, p: &mut Painter) {
         let step = space::CONTROL_HEIGHT;
-        let max = self.content - self.rect.h;
+        // `layout` keeps the offset within the content.
         self.offset = if down {
-            (self.offset + step).max(Logical::ZERO)
+            self.offset + step
         } else {
             self.offset - step
         };
-        if self.offset > max {
-            self.offset = max;
-        }
         let r = self.rect;
         self.layout(r, p);
     }
@@ -685,7 +680,11 @@ impl Widget for ScrollView {
     fn layout(&mut self, r: LRect, p: &mut Painter) {
         self.rect = r;
         let (_, h) = self.child[0].measure(p);
-        self.content = h;
+        // At most the content less the frame, also after the frame grows:
+        // a frame of a new size shows no blank past the content.
+        if self.offset > h - r.h {
+            self.offset = h - r.h;
+        }
         // The child's top is above the frame by the offset: its rectangle
         // starts at the frame's top with its height cut by the offset, so
         // that nothing is placed above the frame in logical units.
