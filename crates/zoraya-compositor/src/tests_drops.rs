@@ -349,3 +349,25 @@ fn the_clipboard_moves_only_on_the_persons_chords() {
     assert_eq!(p.text.0, "kůň".as_bytes());
     assert!(!ordinals(&t.s.f().take(t.a)).contains(&28));
 }
+
+/// The clipboard holds its whole bound: 20 KiB offered, the same pasted
+/// (review 7f, 1 and 2: the compositor's buffers were 4 KiB and 512 bytes).
+#[test]
+fn a_large_clipboard_is_kept_and_pasted_whole() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    chord(&mut t.s, code::C);
+    let big: String = "kůň ".repeat(4000);
+    assert!(big.len() > 20_000);
+    assert_eq!(offer(&mut t.s, t.b, &big), status::OK);
+    t.s.f().take(t.b);
+    chord(&mut t.s, code::V);
+    let got = t.s.f().take(t.b);
+    let (_, p) = got
+        .iter()
+        .find_map(|m| decode::<gui::Paste<'_>>(m, 0).ok())
+        .expect("Paste");
+    assert_eq!(p.text.0, big.as_bytes());
+}

@@ -57,6 +57,17 @@ struct Target {
     name: String,
 }
 
+/// The text of a file, or why it is not opened: not UTF-8 (saving would
+/// corrupt it), or larger than the editor holds (saving would cut it;
+/// review 7f, 6 and 14).
+fn text_of(bytes: &[u8]) -> Result<&str, String> {
+    let t = core::str::from_utf8(bytes).map_err(|_| String::from("it is not UTF-8 text"))?;
+    if t.chars().count() > zoraya_editor::MAX_CHARS {
+        return Err(String::from("it is larger than the editor holds"));
+    }
+    Ok(t)
+}
+
 fn editor(buffer: &Rc<RefCell<Buffer>>, status: &str, find: &str) -> Box<dyn Widget> {
     Box::new(Column::new(vec![
         Box::new(Row::new(vec![
@@ -111,13 +122,16 @@ fn main() -> i32 {
     // A file opened from the file manager: read it; it is read-only, so a
     // save asks where.
     if let Some(file) = channel(10) {
-        match fs.read_all(file) {
-            Ok(bytes) => {
-                *buffer.borrow_mut() = Buffer::new(&String::from_utf8_lossy(&bytes));
-                name = String::from("the opened file");
-                println!("edit: opened {} bytes", bytes.len());
+        let read = fs
+            .read_all(file)
+            .map_err(|e| format!("it could not be read ({e})"))
+            .and_then(|b| text_of(&b).map(|t| (b.len(), Buffer::new(t))));
+        match read {
+            Ok((n, b)) => {
+                *buffer.borrow_mut() = b;
+                println!("edit: opened {n} bytes");
             }
-            Err(e) => status = format!("The file could not be read ({e})."),
+            Err(e) => status = format!("The file is not opened: {e}."),
         }
         fs.close(file);
     }
@@ -143,6 +157,7 @@ fn main() -> i32 {
     // closes after it.
     let mut asked: Option<(bool, bool)> = None;
     let mut asking_to_close = false;
+    let mut discard_armed = false;
     let mut transaction = 1;
     let mut packets = [Packet::default(); 4];
     loop {
@@ -199,7 +214,17 @@ fn main() -> i32 {
                     asking_to_close = false;
                     save_then_close = true;
                 }
+                // Open over unsaved changes asks first: a second Open
+                // discards them (review 7f, 5).
+                OPEN if asked.is_none() && buffer.borrow().modified() && !discard_armed => {
+                    discard_armed = true;
+                    status = String::from(
+                        "There are unsaved changes: Save first, or press Open again to discard them.",
+                    );
+                    rebuild = true;
+                }
                 OPEN | SAVE_AS if asked.is_none() => {
+                    discard_armed = false;
                     if let Some(c) = chooser {
                         transaction += 1;
                         let save = id == SAVE_AS;
@@ -293,17 +318,20 @@ fn main() -> i32 {
                         }
                         target = Some(t);
                     } else {
-                        match fs.read_all(h) {
-                            Ok(bytes) => {
-                                *buffer.borrow_mut() =
-                                    Buffer::new(&String::from_utf8_lossy(&bytes));
-                                println!("edit: opened {shown} ({} bytes)", bytes.len());
+                        let read = fs
+                            .read_all(h)
+                            .map_err(|e| format!("it could not be read ({e})"))
+                            .and_then(|b| text_of(&b).map(|t| (b.len(), Buffer::new(t))));
+                        match read {
+                            Ok((n, b)) => {
+                                *buffer.borrow_mut() = b;
+                                println!("edit: opened {shown} ({n} bytes)");
                                 status = String::new();
                                 if let Some(old) = target.take() {
                                     fs.close(old.dir);
                                 }
                             }
-                            Err(e) => status = format!("{shown} could not be read ({e})."),
+                            Err(e) => status = format!("{shown} is not opened: {e}."),
                         }
                         fs.close(h);
                     }

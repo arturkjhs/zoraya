@@ -372,11 +372,6 @@ protocol! {
     /// deadline and was dropped (ADR-0093, Decision).
     message DisplayHung = 36, handles 0 {}
 
-    /// Manager (ADR-0168, ADR-0172 point 4): a new client launched in a
-    /// room, with the compositor's end of its channel and its launch
-    /// record, which the compositor draws and no client message changes
-    /// (INV-0172-1). From the panel, and from `init` for its first
-    /// terminal (proposed ADR-0242). The reply is `ManagerDone`.
     /// Client manager only (the panel, ADR-0169): the desktop's settings
     /// after the settings window changed them, in the words of their
     /// declarations in the compositor's description (`dark`, `yes`,
@@ -391,6 +386,11 @@ protocol! {
         layout: Data<'a, 16>,
     }
 
+    /// Manager (ADR-0168, ADR-0172 point 4): a new client launched in a
+    /// room, with the compositor's end of its channel and its launch
+    /// record, which the compositor draws and no client message changes
+    /// (INV-0172-1). From the panel, and from `init` for its first
+    /// terminal (proposed ADR-0242). The reply is `ManagerDone`.
     message AddRoomClient<'a> = 37, handles 1 {
         /// 1 for an untrusted room.
         untrusted: u32,

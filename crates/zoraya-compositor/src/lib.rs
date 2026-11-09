@@ -346,7 +346,9 @@ pub struct Compositor<P: Platform> {
     mono: Text<'static>,
     message: Vec<u8>,
     handles: Vec<P::End>,
-    out: [u8; 512],
+    /// Events and replies, encoded: as large as any message (a `Paste`
+    /// carries the clipboard's 32 KiB).
+    out: Vec<u8>,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, transaction: u32, out: &mut [u8]) -> usize {
@@ -425,9 +427,9 @@ impl<P: Platform> Compositor<P> {
             ui: Text::new(fonts(zoraya_fonts::INTER_REGULAR)),
             title_text: Text::new(fonts(zoraya_fonts::INTER_MEDIUM)),
             mono: Text::new(fonts(zoraya_fonts::MONO_REGULAR)),
-            message: vec![0; 4096],
+            message: vec![0; zoraya_protocol::MAX_WIRE_MESSAGE],
             handles: Vec::new(),
-            out: [0; 512],
+            out: vec![0; zoraya_protocol::MAX_WIRE_MESSAGE],
         };
         if let Some(d) = display {
             c.attach_display(d);
@@ -615,7 +617,7 @@ impl<P: Platform> Compositor<P> {
         }
         let mut answer = [0u8; 64];
         let length = reply(&display::Info {}, 1, &mut self.out);
-        let message = self.out;
+        let message = self.out.clone();
         let Some(n) = self
             .platform
             .call(end, &message[..length], &[], &mut answer)
@@ -656,7 +658,7 @@ impl<P: Platform> Compositor<P> {
             self.reconfigure(old);
         }
         let length = reply(&display::Attach {}, 2, &mut self.out);
-        let message = self.out;
+        let message = self.out.clone();
         let done = self
             .platform
             .call(end, &message[..length], &[frame], &mut answer);
@@ -954,8 +956,15 @@ impl<P: Platform> Compositor<P> {
         }
         // Copy, cut and paste (ADR-0170), to the focused window itself.
         if let (Some(f), code::C | code::X | code::V) = (self.focus, code_) {
+            // Not into an untrusted room's window: its pastes wait for the
+            // compositor's confirming card (ADR-0172 point 6, INV-0172-3).
+            let untrusted = self
+                .clients
+                .get(f.client)
+                .and_then(Option::as_ref)
+                .is_some_and(|c| c.record.untrusted);
             if code_ == code::V {
-                if !self.clipboard.is_empty() {
+                if !self.clipboard.is_empty() && !untrusted {
                     let text = core::mem::take(&mut self.clipboard);
                     let m = gui::Paste {
                         window: f.id,
@@ -2387,6 +2396,11 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn drop_client(&mut self, slot: usize) {
+        // A Copy asked of this client is not answered by the next one to
+        // take its slot (review 7f, 11).
+        if self.copy_asked.is_some_and(|(c, _)| c == slot) {
+            self.copy_asked = None;
+        }
         let keys: Vec<Key> = self
             .windows
             .iter()

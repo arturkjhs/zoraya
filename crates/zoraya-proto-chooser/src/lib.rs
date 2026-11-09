@@ -123,9 +123,11 @@ protocol! {
 
     /// The settings window to the panel (ADR-0169): `/config/settings`
     /// changed; the panel reads it and tells the compositor
-    /// (`ApplySettings`). `SettingsApplied`'s status is the compositor's
-    /// answer (`status::CANCELLED` for applied, as `Added` uses it;
-    /// `INVALID` when it refused the values).
+    /// (`ApplySettings`, which checks every value again). Only the settings
+    /// window's channel may send it. `SettingsApplied`'s status says
+    /// whether the panel sent the settings on (`status::CANCELLED`, as
+    /// `Added` uses it) or could not (`FAILED`); the compositor's own
+    /// answer is not carried back.
     message SettingsChanged = 33, handles 0 {}
 
     message SettingsApplied = 33, handles 0 {

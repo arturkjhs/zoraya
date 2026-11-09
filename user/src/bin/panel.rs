@@ -154,7 +154,10 @@ struct State {
     next_tag: u32,
     port: Handle,
     /// The channels of running file managers, watched for `OpenWith`.
-    launchers: Vec<Option<Handle>>,
+    /// Each launcher channel and the application it was given to: `files`
+    /// may ask `OpenWith`, `settings` `SettingsChanged`, nothing else
+    /// (review 7f, 8).
+    launchers: Vec<Option<(Handle, &'static str)>>,
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -312,7 +315,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         });
         if let Some(ours) = launcher {
             if ok {
-                watch_launcher(st, ours);
+                watch_launcher(st, ours, l.app);
             } else {
                 let _ = handle_close(ours);
             }
@@ -330,7 +333,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     }
 }
 
-fn watch_launcher(st: &mut State, end: Handle) {
+fn watch_launcher(st: &mut State, end: Handle, app: &'static str) {
     let i = match st.launchers.iter().position(Option::is_none) {
         Some(i) => i,
         None => {
@@ -340,14 +343,12 @@ fn watch_launcher(st: &mut State, end: Handle) {
     };
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     if port_subscribe(st.port, end, wanted, KEY_LAUNCHER + i as u64, Mode::Level).is_ok() {
-        st.launchers[i] = Some(end);
+        st.launchers[i] = Some((end, app));
     } else {
         let _ = handle_close(end);
     }
 }
 
-/// `OpenWith` from a file manager: the file's application is launched in
-/// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
 /// `/config/settings` as the compositor reads it, sent as `ApplySettings`.
 fn apply_settings(st: &State) -> bool {
     let Some(root) = st.root.as_ref() else {
@@ -371,8 +372,14 @@ fn apply_settings(st: &State) -> bool {
     send(st.manager, &m, None)
 }
 
+/// `OpenWith` from the file manager: the file's application is launched in
+/// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
+/// `SettingsChanged` from the settings window: the file is read and sent
+/// to the compositor.
 fn launcher_requests(st: &mut State, i: usize) {
-    let Some(end) = st.launchers[i] else { return };
+    let Some((end, app)) = st.launchers[i] else {
+        return;
+    };
     let mut bytes = alloc::vec![0u8; 2048];
     loop {
         let mut handles = [end; 1];
@@ -393,7 +400,9 @@ fn launcher_requests(st: &mut State, i: usize) {
         let t = zoraya_protocol::Header::decode(msg).map_or(0, |(h, _)| h.transaction);
         // The settings window changed /config/settings (ADR-0169): read it
         // and tell the compositor, which checks every value again.
-        if decode::<zoraya_proto_chooser::SettingsChanged>(msg, got.len()).is_ok() {
+        if app == "settings"
+            && decode::<zoraya_proto_chooser::SettingsChanged>(msg, got.len()).is_ok()
+        {
             let sent = apply_settings(st);
             let r = zoraya_proto_chooser::SettingsApplied {
                 status: zoraya_protocol::Below(if sent {
@@ -408,7 +417,10 @@ fn launcher_requests(st: &mut State, i: usize) {
             }
             continue;
         }
-        let status = match decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len()) {
+        let open_with = decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len())
+            .ok()
+            .filter(|_| app == "files");
+        let status = match open_with.ok_or(()) {
             Ok((_, m)) => {
                 let name = core::str::from_utf8(m.name.0).unwrap_or("");
                 let words = core::str::from_utf8(m.words.0).unwrap_or("");

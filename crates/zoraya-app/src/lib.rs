@@ -132,7 +132,8 @@ pub struct App<P: Platform> {
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
-    let mut out = vec![0u8; 1024];
+    // As large as any message: an `Offer` carries up to 32 KiB.
+    let mut out = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
     let n = encode(m, transaction, &mut out).unwrap_or(0);
     out.truncate(n);
     out
@@ -177,7 +178,7 @@ impl<P: Platform> App<P> {
         if !self.platform.send(&message(m, t), handle) {
             return None;
         }
-        let mut bytes = vec![0u8; 4096];
+        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
         loop {
             let n = self.platform.receive(&mut bytes)?;
             let got = &bytes[..n];
@@ -291,7 +292,7 @@ impl<P: Platform> App<P> {
     /// The next thing to act on if the compositor has sent it, without
     /// waiting: `None` when nothing is there.
     pub fn poll(&mut self) -> Option<Happened> {
-        let mut bytes = vec![0u8; 4096];
+        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
         loop {
             let got = match self.queued.pop_front() {
                 Some(b) => b,
@@ -508,7 +509,7 @@ impl<P: Platform> App<P> {
     /// The next thing the application must act on; everything else (sizes,
     /// focus, frame replies, repaints) is handled here.
     pub fn wait(&mut self) -> Happened {
-        let mut bytes = vec![0u8; 4096];
+        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
         loop {
             let got = match self.queued.pop_front() {
                 Some(b) => b,

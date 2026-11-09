@@ -109,10 +109,15 @@ fn main() -> i32 {
             Happened::Ui {
                 response: Response::Changed(id),
                 ..
-            } => match app.window(window) {
-                Some(w) => changed(&s, id, w.value(id)),
-                None => continue,
-            },
+            } => {
+                // The change applies to the file as it is now: a `settings`
+                // command run meanwhile is kept (review 7f, 4).
+                s = zoraya_compositor::settings::read(&current(&config)).0;
+                match app.window(window) {
+                    Some(w) => changed(&s, id, w.value(id)),
+                    None => continue,
+                }
+            }
             _ => continue,
         };
         let status: String = match result {
