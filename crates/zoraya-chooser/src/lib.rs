@@ -361,11 +361,16 @@ pub fn size_text(bytes: u64) -> String {
     }
 }
 
+pub mod session;
+pub use session::{Outcome, Sheet};
+
 #[cfg(test)]
 extern crate std;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_session;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

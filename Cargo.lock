@@ -61,11 +61,17 @@ dependencies = [
 name = "zoraya-chooser"
 version = "0.1.0"
 dependencies = [
+ "zoraya-app",
+ "zoraya-fsclient",
+ "zoraya-paint",
  "zoraya-proto-chooser",
  "zoraya-proto-file",
+ "zoraya-proto-gui",
  "zoraya-protocol",
  "zoraya-shell",
  "zoraya-test-alloc",
+ "zoraya-tokens",
+ "zoraya-ui",
 ]
 
 [[package]]
