@@ -73,6 +73,11 @@ pub enum Happened {
     Gone,
     /// An entry was dropped on `window`: [`App::take_drop`] gives it.
     Dropped(u32),
+    /// The person asked `window` to copy (or, `cut`, to cut) its
+    /// selection: answer with [`App::offer`] (ADR-0170).
+    Copy { window: u32, cut: bool },
+    /// The person pasted into `window`: [`App::take_paste`] gives the text.
+    Pasted(u32),
 }
 
 /// A dropped entry (ADR-0170): the connection, its display name
@@ -118,11 +123,25 @@ pub struct App<P: Platform> {
     held: Option<u32>,
     /// The serial of the last left press delivered, for a drag to name.
     serial: u32,
+    /// The text of the last `Paste`, until taken.
+    pasted: Option<alloc::string::String>,
+    /// The theme the windows are painted in, and whether they may move
+    /// (`Configure`, ADR-0169).
+    pub appearance: Appearance,
+    pub motion: bool,
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
+    // Most messages are small; an `Offer` carries up to 32 KiB, so a
+    // message that does not fit is encoded again into the largest.
     let mut out = vec![0u8; 1024];
-    let n = encode(m, transaction, &mut out).unwrap_or(0);
+    let n = match encode(m, transaction, &mut out) {
+        Ok(n) => n,
+        Err(_) => {
+            out = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
+            encode(m, transaction, &mut out).unwrap_or(0)
+        }
+    };
     out.truncate(n);
     out
 }
@@ -143,6 +162,9 @@ impl<P: Platform> App<P> {
             drops: VecDeque::new(),
             held: None,
             serial: 0,
+            pasted: None,
+            appearance,
+            motion: true,
         };
         let reply = app.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -163,7 +185,7 @@ impl<P: Platform> App<P> {
         if !self.platform.send(&message(m, t), handle) {
             return None;
         }
-        let mut bytes = vec![0u8; 4096];
+        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
         loop {
             let n = self.platform.receive(&mut bytes)?;
             let got = &bytes[..n];
@@ -216,6 +238,19 @@ impl<P: Platform> App<P> {
         Some(c.window)
     }
 
+    /// Gives `window` a new title (the frame draws it, ADR-0160).
+    pub fn set_title(&mut self, window: u32, title: &str) -> bool {
+        let m = gui::SetTitle {
+            window,
+            text: Data(title.as_bytes()),
+        };
+        self.call(&m, None).and_then(|r| {
+            decode::<gui::TitleDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) == Some(status::OK)
+    }
+
     fn add_window(&mut self, id: u32, root: Box<dyn Widget>, (w, h): (u32, u32), buffer: usize) {
         let mut ui = Window::new(root, (self.scale_logical(w), self.scale_logical(h)));
         ui.layout(&mut self.painter);
@@ -264,7 +299,7 @@ impl<P: Platform> App<P> {
     /// The next thing to act on if the compositor has sent it, without
     /// waiting: `None` when nothing is there.
     pub fn poll(&mut self) -> Option<Happened> {
-        let mut bytes = vec![0u8; 4096];
+        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
         loop {
             let got = match self.queued.pop_front() {
                 Some(b) => b,
@@ -326,6 +361,27 @@ impl<P: Platform> App<P> {
             .and_then(|r| decode::<gui::DragDone>(&r, 0).ok().map(|(_, d)| d.status.0))
             == Some(status::OK);
         if ok { Ok(()) } else { Err(None) }
+    }
+
+    /// Answers a `Copy` with `text` (within 500 ms of it, ADR-0170);
+    /// whether the compositor kept it.
+    pub fn offer(&mut self, text: &str) -> bool {
+        if text.len() > gui::MAX_CLIPBOARD {
+            return false;
+        }
+        let m = gui::Offer {
+            text: Data(text.as_bytes()),
+        };
+        self.call(&m, None).and_then(|r| {
+            decode::<gui::OfferDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) == Some(status::OK)
+    }
+
+    /// The text of the last paste, once.
+    pub fn take_paste(&mut self) -> Option<alloc::string::String> {
+        self.pasted.take()
     }
 
     /// Whether `window`'s body holds the left button.
@@ -407,6 +463,21 @@ impl<P: Platform> App<P> {
         let Some(i) = self.index(c.window) else {
             return;
         };
+        // The theme (ADR-0169): every window repainted in the new palette.
+        let appearance = if c.dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
+        if appearance != self.appearance {
+            self.appearance = appearance;
+            self.painter.palette = appearance.palette();
+            let ids: Vec<u32> = self.windows.iter().map(|w| w.id).collect();
+            for id in ids {
+                self.repaint(id);
+            }
+        }
+        self.motion = c.motion;
         if (c.width, c.height) == self.windows[i].size || c.width == 0 || c.height == 0 {
             return;
         }
@@ -445,7 +516,7 @@ impl<P: Platform> App<P> {
     /// The next thing the application must act on; everything else (sizes,
     /// focus, frame replies, repaints) is handled here.
     pub fn wait(&mut self) -> Happened {
-        let mut bytes = vec![0u8; 4096];
+        let mut bytes = vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE];
         loop {
             let got = match self.queued.pop_front() {
                 Some(b) => b,
@@ -528,6 +599,20 @@ impl<P: Platform> App<P> {
                         modifiers: k.modifiers.0,
                     },
                 )
+            }
+            27 => {
+                let (_, c) = decode::<gui::Copy>(got, 0).ok()?;
+                Some(Happened::Copy {
+                    window: c.window,
+                    cut: c.cut,
+                })
+            }
+            28 => {
+                let (_, p) = decode::<gui::Paste<'_>>(got, 0).ok()?;
+                self.pasted = Some(alloc::string::String::from(
+                    core::str::from_utf8(p.text.0).ok()?,
+                ));
+                Some(Happened::Pasted(p.window))
             }
             25 => {
                 let (_, d) = decode::<gui::Drop<'_>>(got, 1).ok()?;

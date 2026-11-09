@@ -26,6 +26,7 @@ pub mod draw_rooms;
 pub mod fields;
 pub mod rect;
 pub mod rooms;
+pub mod settings;
 pub mod window;
 
 use alloc::string::String;
@@ -306,6 +307,10 @@ pub struct Compositor<P: Platform> {
     height: u32,
     scale: Scale,
     appearance: Appearance,
+    /// `gui.motion` (ADR-0169), told to clients in `Configure`.
+    motion: bool,
+    /// `gui.scale`: 0 is `auto` (ADR-0164); read at start only.
+    fixed_scale: u32,
     attached: bool,
     keymap: Keymap,
     /// The system key is held (either side).
@@ -320,6 +325,11 @@ pub struct Compositor<P: Platform> {
 
     /// The entry being dragged; no client hears of the pointer meanwhile.
     carried: Option<Carried<P::End>>,
+    /// The clipboard's text (ADR-0170): set only by an `Offer` answering a
+    /// `Copy`, given only in a `Paste` on System+V.
+    clipboard: String,
+    /// The client asked to copy, and when: its `Offer` is taken then.
+    copy_asked: Option<(usize, u64)>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
     switcher: Option<Switcher>,
@@ -352,7 +362,9 @@ pub struct Compositor<P: Platform> {
     mono: Text<'static>,
     message: Vec<u8>,
     handles: Vec<P::End>,
-    out: [u8; 512],
+    /// Events and replies, encoded: as large as any message (a `Paste`
+    /// carries the clipboard's 32 KiB).
+    out: Vec<u8>,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, transaction: u32, out: &mut [u8]) -> usize {
@@ -400,6 +412,8 @@ impl<P: Platform> Compositor<P> {
             height: 0,
             scale: Scale::ONE,
             appearance: Appearance::Light,
+            motion: true,
+            fixed_scale: 0,
             attached: false,
             keymap: Keymap::new(),
             meta: 0,
@@ -407,6 +421,8 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             drag: None,
             body_press: None,
+            clipboard: String::new(),
+            copy_asked: None,
             carried: None,
             pending_pointer: false,
             switcher: None,
@@ -427,9 +443,9 @@ impl<P: Platform> Compositor<P> {
             ui: Text::new(fonts(zoraya_fonts::INTER_REGULAR)),
             title_text: Text::new(fonts(zoraya_fonts::INTER_MEDIUM)),
             mono: Text::new(fonts(zoraya_fonts::MONO_REGULAR)),
-            message: vec![0; 4096],
+            message: vec![0; zoraya_protocol::MAX_WIRE_MESSAGE],
             handles: Vec::new(),
-            out: [0; 512],
+            out: vec![0; zoraya_protocol::MAX_WIRE_MESSAGE],
         };
         if let Some(d) = display {
             c.attach_display(d);
@@ -438,6 +454,54 @@ impl<P: Platform> Compositor<P> {
             c.attach_input(*i);
         }
         c
+    }
+
+    /// As [`Compositor::new`], with the settings read at start (ADR-0169):
+    /// the scale they fix applies to the display attached here.
+    pub fn with_settings(
+        platform: P,
+        manager: P::End,
+        display: Option<P::End>,
+        inputs: &[P::End],
+        s: settings::GuiSettings,
+    ) -> Compositor<P> {
+        let mut c = Compositor::new(platform, manager, None, inputs);
+        c.fixed_scale = s.scale;
+        c.apply_settings(s);
+        if let Some(d) = display {
+            c.attach_display(d);
+        }
+        c
+    }
+
+    /// Applies checked settings: the theme to the frames, the wallpaper's
+    /// blur and every window's `Configure`, motion likewise, the layouts
+    /// and the active one at once; the scale waits for the next session.
+    pub fn apply_settings(&mut self, s: settings::GuiSettings) {
+        let appearance = if s.dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
+        let restyle = appearance != self.appearance || s.motion != self.motion;
+        self.appearance = appearance;
+        self.motion = s.motion;
+        if restyle && self.attached {
+            self.make_wallpaper();
+            self.fields_dirty = true;
+            let keys: Vec<Key> = self.windows.iter().map(Self::key_of).collect();
+            for k in keys {
+                self.configure(k);
+            }
+            let screen = self.screen();
+            self.dirty(&screen);
+        }
+        let layout_changed = s.layouts != self.layouts || s.layout != self.keymap.layout_index();
+        self.layouts = s.layouts;
+        self.keymap.set_layout(s.layout);
+        if layout_changed {
+            self.layout_changed();
+        }
     }
 
     pub fn platform(&mut self) -> &mut P {
@@ -569,7 +633,7 @@ impl<P: Platform> Compositor<P> {
         }
         let mut answer = [0u8; 64];
         let length = reply(&display::Info {}, 1, &mut self.out);
-        let message = self.out;
+        let message = self.out.clone();
         let Some(n) = self
             .platform
             .call(end, &message[..length], &[], &mut answer)
@@ -601,7 +665,11 @@ impl<P: Platform> Compositor<P> {
             self.height = info.height;
             self.attached = true;
             let old = self.scale.factor();
-            self.scale = scale_for(info.width);
+            self.scale = match self.fixed_scale {
+                1 => Scale::ONE,
+                2 => Scale::new(2).unwrap_or(Scale::ONE),
+                _ => scale_for(info.width),
+            };
             let start = self.platform.now();
             self.make_wallpaper();
             self.stats.wallpaper_ns = self.platform.now().saturating_sub(start);
@@ -610,7 +678,7 @@ impl<P: Platform> Compositor<P> {
             self.reconfigure(old);
         }
         let length = reply(&display::Attach {}, 2, &mut self.out);
-        let message = self.out;
+        let message = self.out.clone();
         let done = self
             .platform
             .call(end, &message[..length], &[frame], &mut answer);
@@ -906,6 +974,36 @@ impl<P: Platform> Compositor<P> {
             self.layout_changed();
             return;
         }
+        // Copy, cut and paste (ADR-0170), to the focused window itself.
+        if let (Some(f), code::C | code::X | code::V) = (self.focus, code_) {
+            // Not into an untrusted room's window: its pastes wait for the
+            // compositor's confirming card (ADR-0172 point 6, INV-0172-3).
+            let untrusted = self
+                .clients
+                .get(f.client)
+                .and_then(Option::as_ref)
+                .is_some_and(|c| c.record.untrusted);
+            if code_ == code::V {
+                if !self.clipboard.is_empty() && !untrusted {
+                    let text = core::mem::take(&mut self.clipboard);
+                    let m = gui::Paste {
+                        window: f.id,
+                        text: zoraya_protocol::Data(text.as_bytes()),
+                    };
+                    self.send_event_plain(f.client, &m);
+                    self.clipboard = text;
+                }
+            } else {
+                let now = self.platform.now();
+                self.copy_asked = Some((f.client, now));
+                let m = gui::Copy {
+                    window: f.id,
+                    cut: code_ == code::X,
+                };
+                self.send_event_plain(f.client, &m);
+            }
+            return;
+        }
         let Some(mut focus) = self.focus else { return };
         // A focused popup's chords are its window's; a sheet's, its owner's.
         if let Some(i) = self.index(focus) {
@@ -981,6 +1079,24 @@ impl<P: Platform> Compositor<P> {
         // With the material's halo around the label (16 px to 34 px below
         // the pointer).
         Rect::new(x - 16 * s, y - 24 * s, (label + 64) * s, 96 * s)
+    }
+
+    /// `Offer`: the clipboard's new text, from the client just asked to
+    /// copy and within 500 ms of it (ADR-0170), and only then.
+    fn offer(&mut self, slot: usize, text: &[u8]) -> u32 {
+        let now = self.platform.now();
+        let asked = self
+            .copy_asked
+            .is_some_and(|(c, at)| c == slot && now.saturating_sub(at) <= DRAG_WITHIN_NS);
+        let Ok(text) = core::str::from_utf8(text) else {
+            return status::BAD_RANGE;
+        };
+        if !asked {
+            return status::BAD_RANGE;
+        }
+        self.copy_asked = None;
+        self.clipboard = String::from(text);
+        status::OK
     }
 
     /// `Drag`: the entry is carried while the client's body press is held.
@@ -1579,7 +1695,7 @@ impl<P: Platform> Compositor<P> {
             height: w.body.1 / s,
             scale: s,
             dark: self.appearance == Appearance::Dark,
-            motion: false,
+            motion: self.motion,
         };
         self.send_event_plain(key.client, &m);
     }
@@ -1886,6 +2002,30 @@ impl<P: Platform> Compositor<P> {
             },
             40 if clients && none => match decode::<gui::SetDock<'_>>(bytes, 0) {
                 Ok((_, m)) => (self.set_dock(m.apps.0), false),
+                Err(_) => (status::INVALID, false),
+            },
+            43 if clients && none => match decode::<gui::ApplySettings<'_>>(bytes, 0) {
+                Ok((_, m)) => {
+                    fn t(d: &[u8]) -> &str {
+                        // Not UTF-8: a word no declaration takes.
+                        core::str::from_utf8(d).unwrap_or("\u{0}")
+                    }
+                    let s = settings::checked(
+                        t(m.theme.0),
+                        t(m.motion.0),
+                        t(m.scale.0),
+                        t(m.wallpaper.0),
+                        t(m.layouts.0),
+                        t(m.layout.0),
+                    );
+                    match s {
+                        Some(s) => {
+                            self.apply_settings(s);
+                            (status::OK, false)
+                        }
+                        None => (status::INVALID, false),
+                    }
+                }
                 Err(_) => (status::INVALID, false),
             },
             38 if driver && one && decode::<gui::AttachClientManager>(bytes, 1).is_ok() => {
@@ -2285,6 +2425,11 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn drop_client(&mut self, slot: usize) {
+        // A Copy asked of this client is not answered by the next one to
+        // take its slot (review 7f, 11).
+        if self.copy_asked.is_some_and(|(c, _)| c == slot) {
+            self.copy_asked = None;
+        }
         let keys: Vec<Key> = self
             .windows
             .iter()
@@ -2497,6 +2642,13 @@ impl<P: Platform> Compositor<P> {
                     },
                     t,
                 );
+            }
+            14 => {
+                let s = match decode::<gui::Offer<'_>>(bytes, n) {
+                    Ok((_, m)) => self.offer(slot, m.text.0),
+                    Err(_) => status::BAD_BUFFER,
+                };
+                self.answer(slot, &gui::OfferDone { status: Below(s) }, t);
             }
             13 => {
                 let s = match decode::<gui::Drag<'_>>(bytes, n) {

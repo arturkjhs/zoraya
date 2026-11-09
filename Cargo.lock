@@ -99,6 +99,7 @@ dependencies = [
 name = "zoraya-compositor"
 version = "0.1.0"
 dependencies = [
+ "zoraya-describe",
  "zoraya-fonts",
  "zoraya-keymap",
  "zoraya-paint",
@@ -132,6 +133,17 @@ name = "zoraya-dtb"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-editor"
+version = "0.1.0"
+dependencies = [
+ "zoraya-paint",
+ "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
+ "zoraya-ui",
 ]
 
 [[package]]
@@ -313,6 +325,7 @@ dependencies = [
 name = "zoraya-panel"
 version = "0.1.0"
 dependencies = [
+ "zoraya-proto-file",
  "zoraya-settings",
  "zoraya-test-alloc",
 ]
@@ -453,6 +466,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-settings-window"
+version = "0.1.0"
+dependencies = [
+ "zoraya-compositor",
+ "zoraya-describe",
+ "zoraya-keymap",
+ "zoraya-settings",
+ "zoraya-test-alloc",
+ "zoraya-tokens",
+ "zoraya-ui",
+]
+
+[[package]]
 name = "zoraya-shell"
 version = "0.1.0"
 dependencies = [
@@ -559,6 +585,7 @@ dependencies = [
  "zoraya-commands",
  "zoraya-compositor",
  "zoraya-describe",
+ "zoraya-editor",
  "zoraya-elf",
  "zoraya-files",
  "zoraya-fonts",
@@ -581,6 +608,7 @@ dependencies = [
  "zoraya-resolve",
  "zoraya-rt",
  "zoraya-settings",
+ "zoraya-settings-window",
  "zoraya-shell",
  "zoraya-term",
  "zoraya-text",

@@ -154,7 +154,10 @@ struct State {
     next_tag: u32,
     port: Handle,
     /// The channels of running file managers, watched for `OpenWith`.
-    launchers: Vec<Option<Handle>>,
+    /// Each launcher channel and the application it was given to: `files`
+    /// may ask `OpenWith`, `settings` `SettingsChanged`, nothing else
+    /// (review 7f, 8).
+    launchers: Vec<Option<(Handle, &'static str)>>,
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -312,13 +315,24 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 Some(theirs)
             }
             Give::Opened => opened.take(),
+            // `/config` narrowed to the one file (ADR-0169).
+            Give::Config => {
+                let rights = zoraya_panel::CONFIG_RIGHTS;
+                let config = root?
+                    .open("config", zoraya_proto_file::open_flags::DIRECTORY, rights)
+                    .ok()?;
+                let f = config.narrow("settings", rights).ok()?;
+                let h = f.end;
+                core::mem::forget(f);
+                Some(h)
+            }
             Give::Broker => broker.take(),
             Give::Tmp => tmp.take(),
             _ => None,
         });
         if let Some(ours) = launcher {
             if ok {
-                watch_launcher(st, ours);
+                watch_launcher(st, ours, l.app);
             } else {
                 let _ = handle_close(ours);
             }
@@ -342,7 +356,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     }
 }
 
-fn watch_launcher(st: &mut State, end: Handle) {
+fn watch_launcher(st: &mut State, end: Handle, app: &'static str) {
     let i = match st.launchers.iter().position(Option::is_none) {
         Some(i) => i,
         None => {
@@ -352,16 +366,43 @@ fn watch_launcher(st: &mut State, end: Handle) {
     };
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     if port_subscribe(st.port, end, wanted, KEY_LAUNCHER + i as u64, Mode::Level).is_ok() {
-        st.launchers[i] = Some(end);
+        st.launchers[i] = Some((end, app));
     } else {
         let _ = handle_close(end);
     }
 }
 
-/// `OpenWith` from a file manager: the file's application is launched in
+/// `/config/settings` as the compositor reads it, sent as `ApplySettings`.
+fn apply_settings(st: &State) -> bool {
+    let Some(root) = st.root.as_ref() else {
+        return false;
+    };
+    let bytes = root
+        .open("config/settings", 0, zoraya_proto_file::rights::READ)
+        .ok()
+        .and_then(|f| zoraya_user::files::read_all(&f).ok())
+        .unwrap_or_default();
+    let (s, _) = zoraya_compositor::settings::read(&bytes);
+    let w = zoraya_compositor::settings::words(&s);
+    let m = gui::ApplySettings {
+        theme: Data(w[0].as_bytes()),
+        motion: Data(w[1].as_bytes()),
+        scale: Data(w[2].as_bytes()),
+        wallpaper: Data(w[3].as_bytes()),
+        layouts: Data(w[4].as_bytes()),
+        layout: Data(w[5].as_bytes()),
+    };
+    send(st.manager, &m, None)
+}
+
+/// `OpenWith` from the file manager: the file's application is launched in
 /// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
+/// `SettingsChanged` from the settings window: the file is read and sent
+/// to the compositor.
 fn launcher_requests(st: &mut State, i: usize) {
-    let Some(end) = st.launchers[i] else { return };
+    let Some((end, app)) = st.launchers[i] else {
+        return;
+    };
     let mut bytes = alloc::vec![0u8; 2048];
     loop {
         let mut handles = [end; 1];
@@ -380,7 +421,29 @@ fn launcher_requests(st: &mut State, i: usize) {
         let got: Vec<Handle> = handles[..sizes.handles as usize].to_vec();
         let msg = &bytes[..sizes.bytes as usize];
         let t = zoraya_protocol::Header::decode(msg).map_or(0, |(h, _)| h.transaction);
-        let status = match decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len()) {
+        // The settings window changed /config/settings (ADR-0169): read it
+        // and tell the compositor, which checks every value again.
+        if app == "settings"
+            && decode::<zoraya_proto_chooser::SettingsChanged>(msg, got.len()).is_ok()
+        {
+            let sent = apply_settings(st);
+            let r = zoraya_proto_chooser::SettingsApplied {
+                status: zoraya_protocol::Below(if sent {
+                    zoraya_proto_chooser::status::CANCELLED
+                } else {
+                    zoraya_proto_chooser::status::FAILED
+                }),
+            };
+            let mut out = [0u8; 64];
+            if let Ok(n) = encode(&r, t, &mut out) {
+                let _ = channel_write(end, &out[..n], &[]);
+            }
+            continue;
+        }
+        let open_with = decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len())
+            .ok()
+            .filter(|_| app == "files");
+        let status = match open_with.ok_or(()) {
             Ok((_, m)) => {
                 let name = core::str::from_utf8(m.name.0).unwrap_or("");
                 let words = core::str::from_utf8(m.words.0).unwrap_or("");

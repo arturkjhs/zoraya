@@ -336,7 +336,7 @@ fn setup_with(change: impl FnOnce(&mut Fake)) -> Setup {
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
-    let mut out = vec![0; 4096];
+    let mut out = vec![0; zoraya_protocol::MAX_WIRE_MESSAGE];
     let n = encode(m, transaction, &mut out).unwrap();
     out.truncate(n);
     out
@@ -1625,5 +1625,7 @@ mod windows;
 mod drops;
 #[path = "tests_rooms.rs"]
 mod rooms;
+#[path = "tests_settings.rs"]
+mod settings;
 #[path = "tests_sheets.rs"]
 mod sheets;

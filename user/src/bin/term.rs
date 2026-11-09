@@ -475,7 +475,9 @@ fn main() -> i32 {
         dropped: 0,
         port,
         waiting: false,
-        message: alloc::vec![0u8; 8192],
+        // As large as any message: a `Paste` carries up to 32 KiB, and a
+        // read into less is an error (review 7f's check).
+        message: alloc::vec![0u8; zoraya_protocol::MAX_WIRE_MESSAGE],
     };
     window.look.clear(window.pixels);
     window

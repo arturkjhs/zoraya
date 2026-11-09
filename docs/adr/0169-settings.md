@@ -88,6 +88,14 @@ Nothing here depends on POSIX.
 - **INV-0169-4.** No launch record the panel builds carries `/config` with a writing right except the settings window's, and no client holds a channel on which `ApplySettings` is accepted. *Check:* a host test over the panel's launch records (INV-0168-1) and a host test sending `ApplySettings` on a client channel and asserting `Unsupported`.
 
 ## Open questions
+- *(Check note, stage 7f, ADR-0001 rule 6.)* INV-0169-1: `zoraya-compositor`'s `tests_settings.rs` reads every key
+  from its declaration (`compd.cmd`), and `zoraya-settings`' and `zoraya-describe`'s tests check each type's values.
+  INV-0169-2: the same tests (a bad line keeps its default and is reported; `ApplySettings` with any value outside its
+  type, or a layout outside the list, is refused and changes nothing), deterministic cases rather than a fuzz.
+  INV-0169-3: `zoraya-settings-window`'s tests (every other line kept, byte for byte); the write is a publish of a new
+  file, atomic by ADR-0010; the interleaving test is not written. INV-0169-4: `zoraya-panel`'s
+  `only_the_settings_window_gets_config` and `tests_settings.rs` (`ApplySettings` from a client or the driver manager
+  is refused); `tests/gui/settings.script` runs the whole path.
 - Whether the compositor should re-read the file on a `settings` command from the shell (a reload message from `zosh` to the panel would need a channel `zosh` does not hold); ADR-0157's open question, left to it.
 - Whether `gui.scale` should be applied live (ADR-0164's re-creation) or at the next session.
 

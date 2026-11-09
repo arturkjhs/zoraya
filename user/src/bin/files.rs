@@ -154,6 +154,11 @@ fn drag(app: &mut App<Gui>, fs: &mut Client<Files>, root: Handle, window: u32, p
     }
 }
 
+/// The folder shown and its rows, on the console (for the GUI tests).
+fn say_listed(m: &Manager) {
+    println!("files: {} lists {}", m.shown(), m.rows().join(" "));
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let channel = |slot: u64| Handle::new(slot).filter(|h| handle_type(*h) == Ok("channel"));
@@ -170,7 +175,10 @@ fn main() -> i32 {
     let mut m = Manager::new(&home, &home);
     let mut status = String::new();
     match list(&mut fs, root, &home) {
-        Ok(entries) => m.show(&home, entries),
+        Ok(entries) => {
+            m.show(&home, entries);
+            say_listed(&m);
+        }
         Err(e) => status = e,
     }
     let Some(window) = app.open("Files", tree(&m, &status, ""), WIDTH, HEIGHT) else {
@@ -284,7 +292,10 @@ fn main() -> i32 {
         };
         if let Some(dir) = show {
             match list(&mut fs, root, &dir) {
-                Ok(entries) => m.show(&dir, entries),
+                Ok(entries) => {
+                    m.show(&dir, entries);
+                    say_listed(&m);
+                }
                 Err(e) => status = e,
             }
         }

@@ -40,6 +40,7 @@
 
 extern crate alloc;
 
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
@@ -219,10 +220,48 @@ pub struct Exit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingType {
     YesNo,
-    Number { min: i64, max: i64 },
+    Number {
+        min: i64,
+        max: i64,
+    },
     Text,
     Path,
     Choice(Vec<String>),
+    /// ADR-0171: items of one type, `min` to `max` of them, `unique`
+    /// refusing a repeated one. The value is the items as words
+    /// ([`list_text`]).
+    List {
+        item: alloc::boxed::Box<SettingType>,
+        min: usize,
+        max: usize,
+        unique: bool,
+    },
+}
+
+/// The most items a list may be declared to hold, and the bound when a
+/// declaration gives none (ADR-0171, `[assumption]`).
+pub const MAX_LIST: usize = 64;
+
+/// A list's value as its items: words of ADR-0150's syntax, an item with a
+/// space quoted; the empty text is the empty list.
+pub fn list_items(value: &str) -> core::result::Result<Vec<String>, &'static str> {
+    let mut items = Vec::new();
+    let mut rest = value.trim_matches([' ', '\t']);
+    while !rest.is_empty() {
+        let (item, after) = split_value(rest)?;
+        if items.len() >= MAX_LIST {
+            return Err("more items than a list holds");
+        }
+        items.push(item);
+        rest = after;
+    }
+    Ok(items)
+}
+
+/// Items as a list's value: each quoted only when it must be.
+pub fn list_text(items: &[String]) -> String {
+    let words: Vec<String> = items.iter().map(|i| quote_value(i)).collect();
+    words.join(" ")
 }
 
 impl SettingType {
@@ -237,6 +276,27 @@ impl SettingType {
             SettingType::Text => true,
             SettingType::Path => value.starts_with('/'),
             SettingType::Choice(choices) => choices.iter().any(|c| c == value),
+            SettingType::List {
+                item,
+                min,
+                max,
+                unique,
+            } => {
+                let items = list_items(value).map_err(String::from)?;
+                for (i, it) in items.iter().enumerate() {
+                    item.check(it)?;
+                    if *unique && items[..i].contains(it) {
+                        return Err(format!("{} is in the list twice", quote_value(it)));
+                    }
+                }
+                if items.len() < *min || items.len() > *max {
+                    return Err(format!(
+                        "a list of {} items, not {min} to {max}",
+                        items.len()
+                    ));
+                }
+                true
+            }
         };
         if ok {
             return Ok(());
@@ -256,7 +316,7 @@ impl SettingType {
                 s.push_str(" is not one of ");
                 s.push_str(&choices.join(", "));
             }
-            SettingType::Text => {}
+            SettingType::Text | SettingType::List { .. } => {}
         }
         Err(s)
     }
@@ -277,6 +337,18 @@ impl SettingType {
             SettingType::Choice(c) => {
                 let mut s = String::from("choice ");
                 s.push_str(&c.join("|"));
+                s
+            }
+            SettingType::List {
+                item,
+                min,
+                max,
+                unique,
+            } => {
+                let mut s = format!("list of {} {min} {max}", item.word());
+                if *unique {
+                    s.push_str(" unique");
+                }
                 s
             }
         }
@@ -629,9 +701,61 @@ fn parse_setting(rest: &str, line: usize) -> Result<Setting> {
     if !is_setting_name(name) {
         return err(line, "a setting's name is GROUP.NAME in lower case");
     }
-    let Some((ty, mut rest)) = next_word(rest) else {
+    let Some((ty, rest)) = next_word(rest) else {
         return err(line, "a setting needs a type");
     };
+    let (ty, rest) = if ty == "list" {
+        let Some(("of", after)) = next_word(rest) else {
+            return err(line, "a list is `list of TYPE`");
+        };
+        let Some((word, after)) = next_word(after) else {
+            return err(line, "a list is `list of TYPE`");
+        };
+        let (item, mut rest) = item_type(word, after, line)?;
+        let (mut min, mut max) = (0, MAX_LIST);
+        if let Some((a, r1)) = next_word(rest)
+            && let Some((b, r2)) = next_word(r1)
+            && let (Some(a), Some(b)) = (parse_number(a), parse_number(b))
+        {
+            if a < 0 || a > b || b > MAX_LIST as i64 {
+                return err(
+                    line,
+                    "a list's MIN and MAX are counts from 0 to 64, MIN first",
+                );
+            }
+            (min, max) = (a as usize, b as usize);
+            rest = r2;
+        }
+        let mut unique = false;
+        if let Some(("unique", r)) = next_word(rest) {
+            unique = true;
+            rest = r;
+        }
+        let ty = SettingType::List {
+            item: alloc::boxed::Box::new(item),
+            min,
+            max,
+            unique,
+        };
+        (ty, rest)
+    } else {
+        item_type(ty, rest, line)?
+    };
+    let (default, rest) = split_value(rest).map_err(|problem| Error { line, problem })?;
+    if ty.check(&default).is_err() {
+        return err(line, "the default is not of the setting's type");
+    }
+    Ok(Setting {
+        name: name.into(),
+        ty,
+        default,
+        text: text_of(rest, line)?,
+    })
+}
+
+/// One of the five item types (ADR-0157 rule 3), and what follows it.
+fn item_type<'a>(ty: &str, rest: &'a str, line: usize) -> Result<(SettingType, &'a str)> {
+    let mut rest = rest;
     let ty = match ty {
         "yes-no" => SettingType::YesNo,
         "text" => SettingType::Text,
@@ -658,8 +782,10 @@ fn parse_setting(rest: &str, line: usize) -> Result<Setting> {
             };
             let mut choices = Vec::new();
             for c in list.split('|') {
-                if !is_long_name(c) {
-                    return err(line, "a choice is lower-case words joined by |");
+                // A word, or a number (ADR-0169's `gui.scale`, `auto|1|2`).
+                let number = !c.is_empty() && c.len() <= 9 && c.bytes().all(|b| b.is_ascii_digit());
+                if !is_long_name(c) && !number {
+                    return err(line, "a choice is lower-case words or numbers joined by |");
                 }
                 push(&mut choices, String::from(c), line)?;
             }
@@ -668,16 +794,7 @@ fn parse_setting(rest: &str, line: usize) -> Result<Setting> {
         }
         _ => return err(line, "an unknown setting type"),
     };
-    let (default, rest) = split_value(rest).map_err(|problem| Error { line, problem })?;
-    if ty.check(&default).is_err() {
-        return err(line, "the default is not of the setting's type");
-    }
-    Ok(Setting {
-        name: name.into(),
-        ty,
-        default,
-        text: text_of(rest, line)?,
-    })
+    Ok((ty, rest))
 }
 
 fn check_text(text: &str) -> Result<()> {

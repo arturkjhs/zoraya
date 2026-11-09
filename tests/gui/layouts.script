@@ -1,7 +1,7 @@
 # Stage 7c's criterion (TASK-24, docs/research/desktop/plan.md): the GUI test
 # switches to ua, types a Ukrainian name, switches to cz, types příklad.txt
 # through dead keys, and reads both back (ADR-0163). The layouts are us, ua
-# and cz in that order (gui.keyboard-layouts until 7f); System+Space (meta)
+# and cz in that order (gui.keyboard-layouts in layouts.root/config/settings); System+Space (meta)
 # switches, and `layout` tells the runner which keys type a letter.
 serial init: gui: gpu on its own page
 screen Type help to begin, or help tour.

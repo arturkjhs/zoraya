@@ -335,6 +335,13 @@ impl File {
         self.open("x", open_flags::UNNAMED, rights::ALL)
     }
 
+    /// As [`File::create_unnamed`], with only `wanted`: what a connection
+    /// with fewer rights than every one may ask (the settings window's
+    /// `/config`, ADR-0169).
+    pub fn create_unnamed_with(&self, wanted: u32) -> FsResult<File> {
+        self.open("x", open_flags::UNNAMED, wanted)
+    }
+
     /// Gives this unnamed file `name` in `directory`, replacing a file of
     /// that name in one commit (ADR-0010 rule 7), so a reader sees the old
     /// file or the new one, never a part.

@@ -1,0 +1,22 @@
+[package]
+name = "zoraya-settings-window"
+description = "The settings window's logic (ADR-0169): its page, and each change as the new settings file."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-compositor = { path = "../zoraya-compositor" }
+zoraya-describe = { path = "../zoraya-describe" }
+zoraya-keymap = { path = "../zoraya-keymap" }
+zoraya-settings = { path = "../zoraya-settings" }
+zoraya-ui = { path = "../zoraya-ui" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
+zoraya-tokens = { path = "../zoraya-tokens" }

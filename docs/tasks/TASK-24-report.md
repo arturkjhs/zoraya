@@ -14,6 +14,9 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (accepted 2026-11-09) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
 | [ADR-0244](../adr/0244-the-toolkits-own-events.md) (accepted 2026-11-09) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
 | What `home` gives a terminal's shell (accepted 2026-11-09, recorded in ADR-0172) | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
+| [ADR-0245](../adr/0245-the-choosers-wiring-in-stage-7e.md) (proposed) | 7e | The chooser's wiring: registered by the panel with the compositor's tag, sheets only from system clients, `Save` as the folder narrowed to one name, the data directory `/data/ROOM/APP`, `OpenWith` read-only. Fills gaps of ADR-0167 and ADR-0168. |
+| INV-0168-2 against INV-0169-4 | 7f | INV-0168-2 gives the file manager the volume's root, `/config` included, while INV-0169-4 says no launch but the settings window gets `/config` to write. Which wins (narrow the file manager's root, or reword INV-0169-4) is the architect's; the panel's test checks the `Config` slot only. |
+| `/config/rooms` and `/config/settings` written in place by a shell (accepted for now, 2026-11-09) | 7d | A crash between truncate and write loses the file; in `docs/backlog.md`. |
 | Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
@@ -154,8 +157,9 @@ the watchdog), 65 of the part's 90 minutes:
 
 ### Merge
 
-Not merged: see the queue. `work/7a` is complete locally at `ad9becd`, where a full `make test` from the snapshot
-worktree passed (every step, 1,055 host tests, the seven QEMU configurations, both GUI runs); 7b starts from it.
+Merged to `main` at `f984e21` once pushes were allowed; `stage-7a` and `zosh-1` are on it, tagged under the
+architect's rule that a CI failing only on `running_out_of_asids_is_an_error` counts as green (the fault was fixed on
+`fix/asid` by another agent). Before that, a full `make test` from the snapshot worktree passed at `ad9becd`.
 
 ### Time
 
@@ -278,7 +282,11 @@ the two that failed, `check-test-caps` (`zoraya-keymap`'s tests had no heap cap)
 
 ### Merge
 
-Not merged (the queue).
+Merged at `a0f8f61`. Its CI on `main` failed: `term` panicked when the compositor answered late at scale 2 under
+CI's TCG (`fix/term-wait`, merged at `e73a2b1`, made the wait longer; its CI then failed only on the GUI job's
+timeout). `tools/test-tiers` made `term` wait as long as the compositor lives, made the wallpaper cheap (9.3 s to
+0.28 s at scale 2 under TCG) and gave the GUI job 30 minutes; its merge `039ba9e` was the first green commit on `main`
+containing 7b (run 42683536960), and `stage-7b` is on it.
 
 ### Time
 
@@ -361,7 +369,9 @@ neither exists (`every_key_has_its_first_two_levels`).
 
 ### Merge
 
-Not merged (the queue).
+The full CI on the branch passed (run 42684037780); merged at `1b61843`, whose CI on `main` passed after a rerun of
+the POSIX scenarios job (Ctrl-Z that did not stop a job, `docs/backlog.md`; the script was fixed in 7e). `stage-7c`
+is on `1b61843`.
 
 ### Time
 
@@ -533,7 +543,11 @@ minutes in all; the survivors sorted by the `mutant-triage` subagent, every equi
 
 ### Merge
 
-Not merged: proposed ADR-0242 stages an accepted ADR's decision, and `git push` is refused (the queue).
+After the architect's decisions (ADR-0172's record, the toolchain read-only in a trusted room's shell) and the
+show-commands fix, the branch's full CI (run 42686860180) failed in both GUI tours: on CI's slow runner the ends of
+long typed lines were lost, as `main`'s were locally with QEMU moved to the efficiency cores. `fix/type-pacing`
+(merged at `d03bff1`) makes the GUI runner wait for the guest every eight keys. The branch's CI then passed (run
+42707071806, the scenarios job after a rerun); merged at `e161ec7`, green on `main` (run 42710913168); `stage-7d`.
 
 ### Time
 
@@ -645,41 +659,136 @@ holes applied by hand one by one, six of them kept in `tools/mutants/desktop-7e.
 - **Not verified**: the compositor's `2046:16` (`+=` to `*=`) loops forever under the mutant; it was not run by hand,
   since a test that never returns outlives the runner's alarm.
 
-## To finish by hand
+### Merge
 
-`git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,
-for each part that is complete:
+After `main` was merged in (7d's later work: the broker beside a shell, the show-commands tags per window), the
+branch's full CI passed on the first run (42711274447), the scenarios script with its first sleep of 5 s. Merged at
+`32f8a44`, green on `main` (run 42714400871); `stage-7e`.
 
-```
-git push -u origin work/7a
-# merge as TASK-24 says: from a detached HEAD at origin/main
-git fetch origin && git switch --detach origin/main
-git merge --no-ff work/7a -m "Merge work/7a: stage 7a, tokens and text (TASK-24)"
-git push origin HEAD:main          # then wait for every CI job
-git tag stage-7a && git push origin refs/tags/stage-7a
-```
+### Time
 
-Then the same for `work/7b` and `work/7c` (each from the new `origin/main`, merging `origin/main` into the branch
-first). `work/7d` waits for the architect's decision on ADR-0242; once it is accepted (or changed and 7d brought in
-line):
+From the commits' times: 01:38 to 21:16 on 2026-11-09, interleaved with 7d's decisions, the fixes on `main` and
+7f; the mutation runs 47 and 4 minutes, the triage 12 minutes, the tests for its holes about 28 minutes.
 
-```
-git push -u origin work/7b work/7c work/7d
-git fetch origin && git switch --detach origin/main
-git merge --no-ff work/7b -m "Merge work/7b: stage 7b, frames, windows and scale (TASK-24)"
-git push origin HEAD:main          # CI green, then:
-git tag stage-7b && git push origin refs/tags/stage-7b
-# likewise work/7c ("keyboard layouts", stage-7c) and work/7d ("toolkit, dock and rooms", stage-7d)
-```
+## 7f: editor, settings, configuration, clipboard
+
+Branch `work/7f`, from `work/7e`.
+
+### What was built
+
+- **List settings** (ADR-0171): the type `list of TYPE [MIN MAX] [unique]` in `zoraya-describe`, the reader and
+  writer in `zoraya-settings`, and `settings NAME ITEM...`, `+ITEM [--at N]` and `-ITEM` in `zosh`.
+- **The desktop's settings** (ADR-0169): `gui.theme`, `gui.motion`, `gui.scale`, `gui.wallpaper`,
+  `gui.keyboard-layouts` and `gui.keyboard-layout`, declared in `user/describe/system/compd.cmd`, which `compd`
+  embeds; the compositor reads `/config/settings` once at start and applies a change only through `ApplySettings` on
+  its manager channel, checking every value again; the panel turns the settings window's `SettingsChanged` into
+  `ApplySettings`.
+- **The settings window** (`settings`, its logic in `zoraya-settings-window`): appearance and keyboard on one page;
+  each change written at once by publishing a new file over the old one through `/config` narrowed to `settings`.
+- **The editor** (`edit`, its buffer and view in `zoraya-editor`): one file opened from the file manager (read only)
+  or through the chooser, saved through `Save`; cursor and selection by characters, undo and redo, find, and a
+  question before closing over unsaved changes.
+- **The clipboard** (ADR-0170): System+C, System+X and System+V; `Copy`, `Offer` and `Paste`; `edit` copies, cuts
+  and pastes. `zoraya-app` repaints its windows in the theme a `Configure` brings.
+
+### The 7f acceptance test
+
+`plan.md`: the settings window changes the theme and the frames follow; TASK-24 adds the clipboard and the
+editor. Done: `tests/gui/settings.script` (61 steps, HVF and TCG, in `make test-gui`) turns the theme dark in the
+settings window and reads the frames back dark, enables Czech and puts it in use and types by it in the terminal at
+once, takes Czech text in `edit` on that layout, saves `poznámky.txt` through the chooser's sheet, and finds it in the
+file manager's list. `tests/gui/files.script` opens `.txt` and `.md` files in `edit` and `.test` ones in `t_open`.
+
+### Decisions taken without the architect
+
+- No new ADR. Within ADR-0169: the scale applies at the next session (its open question), and a `settings` command
+  in a terminal reaches the running compositor at the next session too.
+- Within ADR-0170: an `Offer` is kept only from the client just sent `Copy`, within 500 ms, once; a paste into an
+  untrusted room's window is held back as drops are, until the confirming card exists.
+- For the architect: INV-0168-2 gives `files` the volume's root, which includes `/config`, while INV-0169-4 says no
+  launch but the settings window gets `/config` to write. The panel's test checks the `Config` slot only (review 7f,
+  item 7).
+
+### Screens
+
+Under `docs/research/desktop/shots/7f/` (HVF, scale 1):
+
+- `settings-qemu.png` against `clear-field/settings.png`, and `dark-qemu.png` against `settings-dark.png`. As in the
+  mockup: the title with its two pills, the page's sections, the theme's two choices, motion as a switch. Not as in
+  the mockup: no sidebar of sections and no card around the controls (one page, the toolkit has no card yet), square
+  check marks for the choices where the mockup has round radios, the scale as three choices on their own lines, and
+  no line of the equivalent `settings` command under the controls. The terminal stays light in the dark theme (its
+  screen is read by the light set's glyphs in the GUI tests).
+- `czech-qemu.png`: Czech in use, the bar's `CZ`, Czech typed in the terminal.
+- `edit-qemu.png`: the editor with Czech text; `save-sheet-qemu.png`: its Save sheet; `files-lists-qemu.png`: the
+  file manager listing the saved file.
+
+### Measurements
+
+A change in the settings window, in `docs/design.md`: written in 0.15 to 0.27 ms and applied in 0.3 ms under HVF
+(20 ms for the theme, which restyles every window and makes the wallpaper's blur again); under TCG 3.8 to 35 ms and
+4.3 to 34 ms.
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0169-1, -3 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0169-2, -4 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0170-1, -2, -5; the clipboard's halves of -3 and -4 | not yet applicable (stage 7); 7e: drops | checked: `make test-unit` |
+| INV-0171-1 to -3 | not yet applicable (stage 7) | checked: `make test-unit` |
+
+### Review
+
+`docs/tasks/TASK-24-review-7f.md`: 2 errors, 5 warnings, 9 notes. Both errors (a clipboard of more than 4 KiB ended
+the copying application; a paste of more than about 490 bytes was lost) fixed by reading and writing the protocol's
+largest message; every warning fixed. The check of the changed lines confirmed the fixes and found a new error (a
+paste over 8 KiB ended a focused terminal), fixed, and two gaps, fixed. The notes left are recorded in the review.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `work/7e`, one crate after another (14 minutes); the survivors sorted
+by the `mutant-triage` subagent; tests added for every hole; every equivalent rechecked by the main model; each hole
+applied again by hand from lists in `tools/mutants/` (`editor.toml`, `shell-settings.toml`,
+`compositor-settings.toml`, `settings-7f.toml`: 90 mutants, 90 caught).
+
+| Crate | Mutants | Missed first | Equivalent | Holes, now caught |
+|---|---|---|---|---|
+| `zoraya-editor` | 316 | 128 | 7 | 121 |
+| `zoraya-shell` | 22 | 17 | 1 | 16 |
+| `zoraya-compositor` | 59 | 10 | - | 10 |
+| `zoraya-panel` | 12 | 8 | 5 | 3 |
+| `zoraya-describe` | 43 | 7 | - | 7 |
+| `zoraya-settings-window` | 33 | 6 | - | 6 |
+| `zoraya-app` | 32 | 6 | - | 6 |
+| `zoraya-settings` | 16 | 0 | - | - |
+
+- The equivalents: the editor's view `id` (3: its only reader finds no value in the view either way), `<=` for `<`
+  where equality assigns the same value (`follow`) or draws an empty rectangle (a selection's cell), Down on the last
+  line (2 forms that reach the same end of text); the shell's `>=` for `>` with one word; the panel's `^` for `|`
+  over six distinct bits (5).
+- The `zoraya-shell` hunk (`settings`' `--at` and `--`) was reached by no host test: the test host now describes
+  `settings`. The editor's view painted no text in its one paint test (the cursor bar alone passed it); the new tests
+  paint at an offset and check rows, cells, the selection and the bar.
+- The settings description said `auto` gives scale 2 from 2048 pixels wide; the compositor's threshold is 1920. The
+  description now says 1920.
+
+## To check by hand
+
+- **The resizable window** (`tools/run-qemu.sh`'s `zoom-to-fit=on`, merged at `cc4e2dd`): no test opens the cocoa
+  window. With `make run-gui`, enlarge QEMU's window, then check that a click lands where the pointer points (a title
+  bar's close button, a dock tile) and that Command+Space still switches the layout.
 
 To try the desktop by hand: `make run-gui`; the window shows the terminal in JetBrains Mono. `ls /texts/uk`, `cat
 /texts/uk/` then Tab and Enter, and the same for `/texts/cz/`, show Ukrainian and Czech text; Shift with Page Up
 scrolls back.
 
-
-From 7b on (`work/7d` has everything): drag a window by its title bar, System+Left and System+Right tile it, Alt+Tab
+From 7b on: drag a window by its title bar, System+Left and System+Right tile it, Alt+Tab
 opens the switcher, grouped by room. From 7c: System+Space switches the layout (`us`, `ua`, `cz`, shown at the right
 of the bar). From 7d: the terminal tile in the dock (or System+Enter) opens another terminal; in a terminal, `room new
 project +w ~/project +r /system` makes a room, its chip appears in the dock; press it, then the terminal tile, and
 the new terminal's title bar carries the room's tint, badge and pills, with a field around its windows while `home`
-has windows too. System+? shows every gesture's text.
+has windows too. System+? shows every gesture's text. From 7e: the Files tile opens the file manager; a `.txt`
+opened there opens in the editor, read only, and a drag of it onto another window gives that window the file. From
+7f: the Settings tile (theme, motion and keyboard layouts applied at once, the scale at the next session), the Edit tile
+(open and save through the chooser's sheet), and System+C, System+X, System+V in the editor.

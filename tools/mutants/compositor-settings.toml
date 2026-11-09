@@ -1,0 +1,81 @@
+# zoraya-compositor: settings applied (ADR-0169) and the clipboard's
+# pending Copy (ADR-0170). Survivors of 7f's cargo-mutants run (TASK-24),
+# each killed by a test added for it. Host tests only, about a minute each.
+tests = ["cargo test -q -p zoraya-compositor"]
+timeout = 600
+
+[[mutant]]
+id = "C-restyle-and"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let restyle = appearance != self.appearance || s.motion != self.motion;'
+replace = 'let restyle = appearance != self.appearance && s.motion != self.motion;'
+note = "7f lib.rs:470:53: either_the_theme_or_the_motion_alone_restyles_the_windows"
+
+[[mutant]]
+id = "C-restyle-theme"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let restyle = appearance != self.appearance || s.motion != self.motion;'
+replace = 'let restyle = appearance == self.appearance || s.motion != self.motion;'
+note = "7f lib.rs:470:34: either_the_theme_or_the_motion_alone_restyles_the_windows"
+
+[[mutant]]
+id = "C-restyle-motion"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let restyle = appearance != self.appearance || s.motion != self.motion;'
+replace = 'let restyle = appearance != self.appearance || s.motion == self.motion;'
+note = "7f lib.rs:470:65: either_the_theme_or_the_motion_alone_restyles_the_windows"
+
+[[mutant]]
+id = "C-restyle-attached"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if restyle && self.attached {'
+replace = 'if restyle || self.attached {'
+note = "7f lib.rs:473:20: a_change_of_layouts_alone_configures_no_window"
+
+[[mutant]]
+id = "C-layout-and"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let layout_changed = s.layouts != self.layouts || s.layout != self.keymap.layout_index();'
+replace = 'let layout_changed = s.layouts != self.layouts && s.layout != self.keymap.layout_index();'
+note = "7f lib.rs:483:56: the_focused_client_hears_of_a_change_of_layouts_and_only_of_that"
+
+[[mutant]]
+id = "C-layout-list"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let layout_changed = s.layouts != self.layouts || s.layout != self.keymap.layout_index();'
+replace = 'let layout_changed = s.layouts == self.layouts || s.layout != self.keymap.layout_index();'
+note = "7f lib.rs:483:40: the_focused_client_hears_of_a_change_of_layouts_and_only_of_that"
+
+[[mutant]]
+id = "C-layout-active"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let layout_changed = s.layouts != self.layouts || s.layout != self.keymap.layout_index();'
+replace = 'let layout_changed = s.layouts != self.layouts || s.layout == self.keymap.layout_index();'
+note = "7f lib.rs:483:68: the_focused_client_hears_of_a_change_of_layouts_and_only_of_that"
+
+[[mutant]]
+id = "C-fixed-one"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+                1 => Scale::ONE,
+                2 => Scale::new(2).unwrap_or(Scale::ONE),'''
+replace = '''
+                2 => Scale::new(2).unwrap_or(Scale::ONE),'''
+note = "7f lib.rs:653:17: a_fixed_scale_of_one_holds_on_a_wide_display"
+
+[[mutant]]
+id = "C-copy-other"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if self.copy_asked.is_some_and(|(c, _)| c == slot) {'
+replace = 'if self.copy_asked.is_some_and(|(c, _)| c != slot) {'
+note = "7f lib.rs:2401:51: a_copy_asked_of_one_client_outlives_another_clients_going"
+
+[[mutant]]
+id = "C-words-one"
+file = "crates/zoraya-compositor/src/settings.rs"
+find = '''
+            1 => String::from("1"),
+            2 => String::from("2"),'''
+replace = '''
+            2 => String::from("2"),'''
+note = "7f settings.rs:147:13: a_fixed_scale_of_one_is_sent_and_kept_as_one"

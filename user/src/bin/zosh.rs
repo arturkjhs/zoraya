@@ -83,6 +83,8 @@ const NEED_VOLUME: [&str; 4] = ["crashwriter", "crashcheck", "fsbench", "posixru
 const SETTINGS: &str = "/config/settings";
 /// The room table (ADR-0172 point 1).
 const ROOMS: &str = "/config/rooms";
+/// The compositor's description, for the desktop's settings (ADR-0169).
+const COMPD: &str = include_str!("../../describe/system/compd.cmd");
 const START: &str = "/config/start.zosh";
 const HISTORY: &str = "/config/history";
 /// A line end inside one history entry, as `/config/history` keeps it: the
@@ -2457,7 +2459,7 @@ impl Z {
             };
             io.out.push_str(&format!(
                 "{}{default}\n  {}: {}\n",
-                zoraya_settings::line(&s.name, value),
+                zoraya_settings::typed_line(&s.name, value, &s.ty),
                 s.ty.word(),
                 s.text
             ));
@@ -2484,14 +2486,79 @@ impl Z {
         }
         let all = p.flag(d, "all");
         let name = p.operand(d, "NAME");
-        let value = p.operand(d, "VALUE");
+        let values = p.operand_values(d, "VALUE");
+        let at = p.value(d, "at");
+        // A list (ADR-0171): its items, +ITEM, -ITEM.
+        if let Some(name) = name
+            && let Some(s) = declared.iter().find(|s| s.name == name)
+            && matches!(s.ty, zoraya_describe::SettingType::List { .. })
+        {
+            let v = zoraya_settings::read(&bytes, &declared);
+            let current = v.get(name).unwrap_or(&s.default).to_string();
+            if values.is_empty() {
+                show_one(io, s, &current);
+                let items = zoraya_describe::list_items(&current).unwrap_or_default();
+                for (i, item) in items.iter().enumerate() {
+                    io.out
+                        .push_str(&format!("  {i} {}\n", zoraya_describe::quote_value(item)));
+                }
+                return 0;
+            }
+            use zoraya_settings::ListEdit;
+            let edit = match (values.as_slice(), at) {
+                ([one], None) if one.len() > 1 && one.starts_with('+') => {
+                    ListEdit::Append(one[1..].into())
+                }
+                ([one], Some(n)) if one.len() > 1 && one.starts_with('+') => {
+                    match n.parse::<usize>() {
+                        Ok(n) => ListEdit::Insert(one[1..].into(), n),
+                        Err(_) => return fail(io, name, &format!("--at {n} is not an index"), &[]),
+                    }
+                }
+                ([one], None) if one.len() > 1 && one.starts_with('-') => {
+                    ListEdit::Remove(one[1..].into())
+                }
+                (items, None) => {
+                    ListEdit::Replace(items.iter().map(|i| String::from(*i)).collect())
+                }
+                (_, Some(_)) => return fail(io, name, "--at goes with one +ITEM", &[]),
+            };
+            let new = match zoraya_settings::edit_list(&current, edit, &s.ty) {
+                Ok(new) => new,
+                Err(zoraya_settings::Refusal::Value(problem)) => {
+                    return fail(io, name, &problem, &[]);
+                }
+                Err(zoraya_settings::Refusal::Unknown(_)) => return self.unknown_setting(io, name),
+            };
+            return match zoraya_settings::set(&bytes, &declared, name, &new) {
+                Ok(f) => match self.write_settings(&f) {
+                    Ok(()) => 0,
+                    Err(e) => fail(io, SETTINGS, &e, &[]),
+                },
+                Err(zoraya_settings::Refusal::Value(problem)) => fail(io, name, &problem, &[]),
+                Err(zoraya_settings::Refusal::Unknown(_)) => self.unknown_setting(io, name),
+            };
+        }
+        if at.is_some() {
+            return fail(io, "--at", "goes with a list's +ITEM", &[]);
+        }
+        if values.len() > 1 {
+            return fail(
+                io,
+                name.unwrap_or(""),
+                "takes one value; quote a value with spaces",
+                &[],
+            );
+        }
+        let value = values.first().copied();
         match (name, value) {
             (None, _) => {
                 let v = zoraya_settings::read(&bytes, &declared);
                 for s in &declared {
                     let current = v.get(&s.name).unwrap_or(&s.default);
                     if all || current != s.default {
-                        io.out.push_str(&zoraya_settings::line(&s.name, current));
+                        io.out
+                            .push_str(&zoraya_settings::typed_line(&s.name, current, &s.ty));
                         io.out.push('\n');
                     }
                 }
@@ -3852,7 +3919,12 @@ fn main() -> i32 {
         .filter(|h| handle_type(*h) == Ok("channel"))
         .map(|end| Held::Root(File { end }))
         .or_else(|| table.map(Held::table));
-    let declared = c.d.settings.clone();
+    // The shell's settings and the desktop's, which the compositor
+    // declares (ADR-0169): `settings` knows both.
+    let mut declared = c.d.settings.clone();
+    if let Ok(d) = zoraya_describe::parse(COMPD.as_bytes()) {
+        declared.extend(d.settings);
+    }
     let mut z = Z {
         root,
         cwd: "/".into(),

@@ -27,6 +27,11 @@ struct Fake {
     /// What a `Drag` is answered, and the serials drags named.
     drag_status: u32,
     drag_serials: Vec<u32>,
+    /// What a `SetTitle` and an `Offer` are answered; the length of
+    /// each text offered.
+    title_status: u32,
+    offer_status: u32,
+    offered: Vec<usize>,
     /// What a `CreateSheet` is answered: refused, or the sheet 5.
     refuse_sheet: bool,
 }
@@ -78,12 +83,26 @@ impl Platform for Fake {
                 let (_, m) = decode::<gui::SetTitle<'_>>(bytes, 0).unwrap();
                 self.titles
                     .push(String::from_utf8(m.text.0.to_vec()).unwrap());
-                self.inbox
-                    .push_back(reply(&gui::TitleDone { status: ok }, t));
+                self.inbox.push_back(reply(
+                    &gui::TitleDone {
+                        status: zoraya_protocol::Below(self.title_status),
+                    },
+                    t,
+                ));
             }
             10 => self
                 .inbox
                 .push_back(reply(&gui::CloseDone { status: ok }, t)),
+            14 => {
+                let (_, o) = decode::<gui::Offer<'_>>(bytes, 0).unwrap();
+                self.offered.push(o.text.0.len());
+                self.inbox.push_back(reply(
+                    &gui::OfferDone {
+                        status: zoraya_protocol::Below(self.offer_status),
+                    },
+                    t,
+                ));
+            }
             11 => {
                 let status = if self.refuse_sheet {
                     status::UNSUPPORTED
@@ -470,6 +489,82 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
     app.platform.event(&pointer(0));
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
     assert!(!app.held(id));
+}
+
+/// ADR-0170's two events: a Copy asks for an offer, a Paste gives text.
+#[test]
+fn copy_and_paste_reach_the_application() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("edit", form(), 200, 120).unwrap();
+    app.platform.event(&gui::Copy {
+        window: id,
+        cut: true,
+    });
+    assert_eq!(
+        app.wait(),
+        Happened::Copy {
+            window: id,
+            cut: true
+        }
+    );
+    app.platform.event(&gui::Paste {
+        window: id,
+        text: Data("kůň".as_bytes()),
+    });
+    assert_eq!(app.wait(), Happened::Pasted(id));
+    assert_eq!(app.take_paste().as_deref(), Some("kůň"));
+    assert_eq!(app.take_paste(), None);
+    assert!(!app.offer(&"x".repeat(gui::MAX_CLIPBOARD + 1)));
+}
+
+/// ADR-0169: a Configure with the dark theme repaints every window in it.
+#[test]
+fn the_theme_follows_configure() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("edit", form(), 200, 120).unwrap();
+    app.platform.frame();
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    let light = app.platform.buffers.last().unwrap()[0];
+    app.platform.event(&gui::Configure {
+        window: id,
+        width: 200,
+        height: 120,
+        scale: 1,
+        dark: true,
+        motion: false,
+    });
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    assert_eq!(app.appearance, Appearance::Dark);
+    assert!(!app.motion);
+    let dark = app.platform.buffers.last().unwrap()[0];
+    assert_ne!(light, dark, "repainted in the dark palette");
+    assert_eq!(dark, zoraya_tokens::DARK.bg_window.pixel());
+}
+
+/// `set_title` says whether the compositor kept the title.
+#[test]
+fn set_title_says_whether_the_compositor_kept_it() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app
+        .open("one", Box::new(Button::new(1, "OK")), 200, 100)
+        .unwrap();
+    assert!(app.set_title(id, "two"));
+    app.platform.title_status = status::INVALID;
+    assert!(!app.set_title(id, "three"));
+    let titles = &app.platform.titles;
+    assert_eq!(titles[titles.len() - 2..], ["two", "three"]);
+}
+
+/// `offer` says whether the compositor kept the text, and sends a text
+/// of the largest size whole.
+#[test]
+fn an_offer_kept_is_reported_and_the_largest_is_sent() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    assert!(app.offer("kůň"));
+    assert!(app.offer(&"x".repeat(gui::MAX_CLIPBOARD)));
+    assert_eq!(app.platform.offered, ["kůň".len(), gui::MAX_CLIPBOARD]);
+    app.platform.offer_status = status::BAD_RANGE;
+    assert!(!app.offer("late"));
 }
 
 /// A sheet opens under its tag with the compositor's window id; a refused

@@ -309,7 +309,18 @@ fn main() -> i32 {
             && gui_allowed
             && let Some(gpu) = gui_devices
         {
-            gui = Gui::start(gpu, &devices.inputs);
+            // `/config` to read, for the compositor's settings (ADR-0169).
+            let config = stack.as_ref().and_then(|s| {
+                let rights = zoraya_proto_file::rights::READ | zoraya_proto_file::rights::CLONE;
+                let f = s
+                    .root
+                    .open("config", zoraya_proto_file::open_flags::DIRECTORY, rights)
+                    .ok()?;
+                let end = f.end;
+                core::mem::forget(f);
+                Some(end)
+            });
+            gui = Gui::start(gpu, &devices.inputs, config);
             // A driver's restarts count over the boot, not per GUI start
             // (review R6).
             if let Some(g) = gui.as_mut() {

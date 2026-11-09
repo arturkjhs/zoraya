@@ -11,6 +11,7 @@ const ROOMS: &str = "project --colour 1 +w ~/project\n";
 
 struct Two {
     s: Setup,
+    panel: u32,
     a: u32,
     b: u32,
     ida: u32,
@@ -35,6 +36,7 @@ fn two_on(w: u32, h: u32) -> Two {
     let (oa, ob) = (s.outer(0, ida), s.outer(1, idb));
     Two {
         s,
+        panel,
         a,
         b,
         ida,
@@ -274,6 +276,159 @@ fn escape_ends_a_drag() {
     let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
     at(&mut t.s, tx, ty, Some(0));
     assert!(t.s.f().given.is_empty());
+}
+
+fn offer(s: &mut Setup, end: u32, text: &str) -> u32 {
+    let m = gui::Offer {
+        text: zoraya_protocol::Data(text.as_bytes()),
+    };
+    s.f().send(end, message(&m, 8), vec![]);
+    s.c.step();
+    s.f()
+        .take(end)
+        .iter()
+        .find_map(|r| decode::<gui::OfferDone>(r, 0).ok())
+        .map(|(_, d)| d.status.0)
+        .expect("an OfferDone")
+}
+
+fn chord(s: &mut Setup, key: u32) {
+    s.keys(&[
+        (code::RIGHT_META, 1),
+        (key, 1),
+        (key, 0),
+        (code::RIGHT_META, 0),
+    ]);
+}
+
+/// INV-0170-1 and -2: the clipboard is set only by an `Offer` answering
+/// the `Copy` the compositor sent that client, within 500 ms, and given
+/// only in a `Paste` to the focused window on System+V; nothing else
+/// reveals it.
+#[test]
+fn the_clipboard_moves_only_on_the_persons_chords() {
+    let mut t = two();
+    // Unprompted: refused.
+    assert_eq!(offer(&mut t.s, t.a, "secret"), status::BAD_RANGE);
+    // b focused by a press (a new window takes focus only from the
+    // person); System+V with nothing copied sends nothing.
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.b);
+    chord(&mut t.s, code::V);
+    assert!(!ordinals(&t.s.f().take(t.b)).contains(&28));
+    // System+C asks the focused client; its offer within 500 ms is kept,
+    // another client's is not.
+    chord(&mut t.s, code::C);
+    let got = t.s.f().take(t.b);
+    let (_, c) = got
+        .iter()
+        .find_map(|m| decode::<gui::Copy>(m, 0).ok())
+        .expect("Copy to the focused client");
+    assert!(!c.cut);
+    assert_eq!(offer(&mut t.s, t.a, "from a"), status::BAD_RANGE);
+    assert_eq!(offer(&mut t.s, t.b, "kůň"), status::OK);
+    assert_eq!(
+        offer(&mut t.s, t.b, "again"),
+        status::BAD_RANGE,
+        "once per Copy"
+    );
+    // System+X: a cut; too late an offer is refused.
+    chord(&mut t.s, code::X);
+    assert!(
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::Copy>(m, 0).ok())
+            .any(|(_, c)| c.cut)
+    );
+    t.s.f().clock += 600_000_000;
+    assert_eq!(offer(&mut t.s, t.b, "late"), status::BAD_RANGE);
+    // System+V gives the focused client the text, and no one else.
+    t.s.f().take(t.a);
+    chord(&mut t.s, code::V);
+    let got = t.s.f().take(t.b);
+    let (_, p) = got
+        .iter()
+        .find_map(|m| decode::<gui::Paste<'_>>(m, 0).ok())
+        .expect("Paste");
+    assert_eq!(p.text.0, "kůň".as_bytes());
+    assert!(!ordinals(&t.s.f().take(t.a)).contains(&28));
+}
+
+/// The clipboard holds its whole bound: 20 KiB offered, the same pasted
+/// (review 7f, 1 and 2: the compositor's buffers were 4 KiB and 512 bytes).
+#[test]
+fn a_large_clipboard_is_kept_and_pasted_whole() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    chord(&mut t.s, code::C);
+    let big: String = "kůň ".repeat(4000);
+    assert!(big.len() > 20_000);
+    assert_eq!(offer(&mut t.s, t.b, &big), status::OK);
+    t.s.f().take(t.b);
+    chord(&mut t.s, code::V);
+    let got = t.s.f().take(t.b);
+    let (_, p) = got
+        .iter()
+        .find_map(|m| decode::<gui::Paste<'_>>(m, 0).ok())
+        .expect("Paste");
+    assert_eq!(p.text.0, big.as_bytes());
+}
+
+/// Applying settings tells the focused client of a change of layouts,
+/// of the list or of the one in use, and of nothing else.
+#[test]
+fn the_focused_client_hears_of_a_change_of_layouts_and_only_of_that() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.b);
+    let heard = |t: &mut Two, w: [&str; 6]| {
+        let panel = t.panel;
+        assert_eq!(super::settings::apply(&mut t.s, panel, w), status::OK);
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter(|m| decode::<gui::Layout<'_>>(m, 0).is_ok())
+            .count()
+    };
+    // The same settings twice: the second time nothing changed.
+    heard(&mut t, ["light", "yes", "auto", "", "us", "us"]);
+    assert_eq!(heard(&mut t, ["light", "yes", "auto", "", "us", "us"]), 0);
+    assert_eq!(
+        heard(&mut t, ["light", "yes", "auto", "", "us ua", "us"]),
+        1
+    );
+    assert_eq!(
+        heard(&mut t, ["light", "yes", "auto", "", "us ua", "ua"]),
+        1
+    );
+}
+
+/// A client that goes away takes only its own pending `Copy` with it.
+#[test]
+fn a_copy_asked_of_one_client_outlives_another_clients_going() {
+    let mut t = two();
+    let (ax, ay) = (t.oa.x + 15, t.oa.y + 40);
+    at(&mut t.s, ax, ay, Some(1));
+    at(&mut t.s, ax, ay, Some(0));
+    chord(&mut t.s, code::C);
+    assert!(
+        t.s.f()
+            .take(t.a)
+            .iter()
+            .any(|m| decode::<gui::Copy>(m, 0).is_ok()),
+        "Copy to the focused client"
+    );
+    let b = t.b;
+    t.s.f().peers.get_mut(&b).unwrap().gone = true;
+    t.s.c.step();
+    assert_eq!(offer(&mut t.s, t.a, "x"), status::OK);
 }
 
 /// Other keys, and an Escape that is only released, leave the drag carried

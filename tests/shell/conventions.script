@@ -248,12 +248,15 @@
 > settings --help\r
 < \r\nsettings: show or change settings
 ^ \r\nusage: settings [--all]
-^ \r\n       settings NAME [VALUE]
+^ \r\n       settings NAME [VALUE...]
+^ \r\n       settings NAME +ITEM [--at N]
+^ \r\n       settings NAME -ITEM
 ^ \r\n       settings --reset NAME
 ^ \r\n       settings --check
 ^ \r\n  -a, --all      list every setting, not only the ones you changed
 ^ \r\n  --reset NAME   remove NAME from the file: its default applies
 ^ \r\n  --check        report every problem in /config/settings, and change nothing
+^ \r\n  --at N         with +ITEM: put it before item N of the list, from 0
 ^ \r\n  --help         show this help
 ^ \r\nmore: help settings
 ^ \r\n~>
@@ -263,7 +266,9 @@
 > settings --no-such-option\r
 < \r\nsettings: --no-such-option: no such option
 ^ \r\nusage: settings [--all]
-^ \r\n       settings NAME [VALUE]
+^ \r\n       settings NAME [VALUE...]
+^ \r\n       settings NAME +ITEM [--at N]
+^ \r\n       settings NAME -ITEM
 ^ \r\n       settings --reset NAME
 ^ \r\n       settings --check
 ^ \r\nmore: help settings

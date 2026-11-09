@@ -708,7 +708,7 @@ fn main() -> i32 {
         println!("t_gui: no GPU attached: skipped");
         return 0;
     };
-    let mut gui = Gui::start(gpu, &devices.inputs).expect("the GUI starts");
+    let mut gui = Gui::start(gpu, &devices.inputs, None).expect("the GUI starts");
     let keyboard = FakeInput::attach(&gui);
     let mut a = Client::connect(&gui);
     let mut b = Client::connect(&gui);

@@ -18,7 +18,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use zoraya_describe::{Setting, is_setting_name, quote_value, split_value};
+use zoraya_describe::{
+    Setting, SettingType, is_setting_name, list_items, list_text, quote_value, split_value,
+};
 
 /// Largest file read, in bytes; the rest is reported and ignored.
 pub const MAX_SIZE: usize = 256 * 1024;
@@ -36,9 +38,11 @@ pub struct Problem {
 enum Line<'a> {
     /// Blank or a comment.
     Other,
+    /// `raw` is the text after `=`: one value, or a list's words
+    /// ([`value_of`] reads it by the setting's type).
     Setting {
         name: &'a str,
-        value: String,
+        raw: &'a str,
     },
     Bad(&'static str),
 }
@@ -55,10 +59,19 @@ fn parse_line(text: &str) -> Line<'_> {
     if !is_setting_name(name) {
         return Line::Bad("not a setting name: GROUP.NAME in lower case");
     }
-    match split_value(rest) {
-        Ok((value, "")) => Line::Setting { name, value },
-        Ok(_) => Line::Bad("text after the value; quote a value with spaces"),
-        Err(problem) => Line::Bad(problem),
+    Line::Setting { name, raw: rest }
+}
+
+/// A line's value by the setting's type: a list's words as its canonical
+/// text (ADR-0171), any other type one word.
+fn value_of(raw: &str, ty: &SettingType) -> Result<String, &'static str> {
+    if matches!(ty, SettingType::List { .. }) {
+        return list_items(raw).map(|items| list_text(&items));
+    }
+    match split_value(raw) {
+        Ok((value, "")) => Ok(value),
+        Ok(_) => Err("text after the value; quote a value with spaces"),
+        Err(problem) => Err(problem),
     }
 }
 
@@ -96,7 +109,12 @@ impl Values {
 pub fn read(bytes: &[u8], declared: &[Setting]) -> Values {
     let mut v = Values::default();
     for d in declared {
-        v.values.insert(d.name.clone(), d.default.clone());
+        // A list's default in its canonical words, as a line's value is.
+        let default = match (&d.ty, list_items(&d.default)) {
+            (SettingType::List { .. }, Ok(items)) => list_text(&items),
+            _ => d.default.clone(),
+        };
+        v.values.insert(d.name.clone(), default);
     }
     let groups: Vec<&str> = declared
         .iter()
@@ -121,7 +139,7 @@ pub fn read(bytes: &[u8], declared: &[Setting]) -> Values {
         match parse_line(text) {
             Line::Other => {}
             Line::Bad(p) => problem(number, p.into()),
-            Line::Setting { name, value } => {
+            Line::Setting { name, raw } => {
                 let group = name.split_once('.').map_or("", |(g, _)| g);
                 if !groups.contains(&group) {
                     continue;
@@ -135,6 +153,13 @@ pub fn read(bytes: &[u8], declared: &[Setting]) -> Values {
                     continue;
                 }
                 seen.push(name.into());
+                let value = match value_of(raw, &d.ty) {
+                    Ok(v) => v,
+                    Err(p) => {
+                        problem(number, p.into());
+                        continue;
+                    }
+                };
                 match d.ty.check(&value) {
                     Ok(()) => found.push((name.into(), value)),
                     Err(p) => problem(number, format!("{name}: {p}")),
@@ -158,6 +183,61 @@ pub fn read(bytes: &[u8], declared: &[Setting]) -> Values {
 /// The line `NAME = VALUE` as the writer writes it.
 pub fn line(name: &str, value: &str) -> String {
     format!("{name} = {}", quote_value(value))
+}
+
+/// The line for a setting of type `ty`: a list's items as words, bare
+/// where they can be (`gui.keyboard-layouts = us ua cz`, ADR-0171).
+pub fn typed_line(name: &str, value: &str, ty: &SettingType) -> String {
+    if matches!(ty, SettingType::List { .. }) {
+        let items = list_items(value).unwrap_or_default();
+        if items.is_empty() {
+            return format!("{name} =");
+        }
+        return format!("{name} = {}", list_text(&items));
+    }
+    line(name, value)
+}
+
+/// A change to a list (ADR-0171's command forms): replace it, append an
+/// item, remove the first equal item, or insert before an index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListEdit {
+    Replace(Vec<String>),
+    Append(String),
+    Remove(String),
+    Insert(String, usize),
+}
+
+/// The list `current` (a value) after `edit`, checked against `ty`.
+pub fn edit_list(current: &str, edit: ListEdit, ty: &SettingType) -> Result<String, Refusal> {
+    let mut items = list_items(current).map_err(|p| Refusal::Value(p.into()))?;
+    match edit {
+        ListEdit::Replace(new) => items = new,
+        ListEdit::Append(item) => items.push(item),
+        ListEdit::Remove(item) => match items.iter().position(|i| *i == item) {
+            Some(at) => {
+                items.remove(at);
+            }
+            None => {
+                return Err(Refusal::Value(format!(
+                    "{} is not in the list",
+                    quote_value(&item)
+                )));
+            }
+        },
+        ListEdit::Insert(item, at) => {
+            if at > items.len() {
+                return Err(Refusal::Value(format!(
+                    "the list has {} items; --at {at} is past its end",
+                    items.len()
+                )));
+            }
+            items.insert(at, item);
+        }
+    }
+    let value = list_text(&items);
+    ty.check(&value).map_err(Refusal::Value)?;
+    Ok(value)
 }
 
 /// Why a change was refused.
@@ -188,7 +268,7 @@ pub fn set(
             quote_value(value)
         )));
     }
-    let new = line(name, value);
+    let new = typed_line(name, value, &d.ty);
     let mut out = Vec::with_capacity(bytes.len() + new.len() + 1);
     let mut done = false;
     let parts: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();

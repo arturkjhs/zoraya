@@ -232,3 +232,77 @@ pub fn home(fs: &mut zoraya_fsclient::Client<Files>, root: Handle) -> alloc::str
     let v = zoraya_settings::read(&bytes, &declared);
     alloc::string::String::from(v.get("shell.home").unwrap_or("/home"))
 }
+
+/// An application's side of its chooser channel (ADR-0167): one request
+/// at a time, and its answer read when the channel is readable.
+pub mod chooser {
+    use alloc::string::String;
+    use alloc::vec;
+
+    use zoraya_abi::{Handle, Status};
+    use zoraya_proto_chooser as pc;
+    use zoraya_protocol::{Data, Header, decode, encode};
+    use zoraya_rt::{channel_read, channel_write, handle_close};
+
+    /// Asks to open a file (`suggested` `None`) or to save one under a
+    /// name starting as `suggested`; `filters` are extensions.
+    pub fn ask(chooser: Handle, suggested: Option<&str>, filters: &str, t: u32) -> bool {
+        let mut out = vec![0u8; 1024];
+        let n = match suggested {
+            Some(name) => encode(
+                &pc::Save {
+                    title: Data(b""),
+                    suggested: Data(name.as_bytes()),
+                    filters: Data(filters.as_bytes()),
+                },
+                t,
+                &mut out,
+            ),
+            None => encode(
+                &pc::Open {
+                    title: Data(b""),
+                    filters: Data(filters.as_bytes()),
+                },
+                t,
+                &mut out,
+            ),
+        };
+        n.is_ok_and(|n| channel_write(chooser, &out[..n], &[]).is_ok())
+    }
+
+    /// What the chooser's channel held.
+    pub enum Answer {
+        /// Nothing yet.
+        Waiting,
+        /// The connection and the display name.
+        Chosen(Handle, String),
+        /// Nothing chosen, with the chooser's status.
+        Ended(u32),
+        /// The chooser is gone.
+        Gone,
+    }
+
+    /// The chooser's answer, if one is there.
+    pub fn answer(chooser: Handle) -> Answer {
+        let mut bytes = vec![0u8; 2048];
+        let mut handles = [chooser; 1];
+        let sizes = match channel_read(chooser, &mut bytes, &mut handles) {
+            Ok(s) => s,
+            Err((Status::WouldBlock, _)) => return Answer::Waiting,
+            Err(_) => return Answer::Gone,
+        };
+        let got = &handles[..sizes.handles as usize];
+        let msg = &bytes[..sizes.bytes as usize];
+        let ordinal = Header::decode(msg).map_or(0, |(h, _)| h.ordinal);
+        if ordinal == 8
+            && let Ok((_, m)) = decode::<pc::Chosen<'_>>(msg, got.len())
+        {
+            let shown = String::from(core::str::from_utf8(m.name.0).unwrap_or("?"));
+            return Answer::Chosen(got[0], shown);
+        }
+        for h in got {
+            let _ = handle_close(*h);
+        }
+        Answer::Ended(decode::<pc::Cancelled>(msg, 0).map_or(u32::MAX, |(_, c)| c.status.0))
+    }
+}

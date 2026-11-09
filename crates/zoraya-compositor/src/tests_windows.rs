@@ -139,7 +139,8 @@ fn a_toplevel_is_configured_framed_and_shown() {
         (c[0].window, c[0].width, c[0].height, c[0].scale),
         (1, 120, 80, 1)
     );
-    assert!(!c[0].dark && !c[0].motion);
+    // The light theme, and motion, by the declarations' defaults (ADR-0169).
+    assert!(!c[0].dark && c[0].motion);
     assert!(ordinals(&out).contains(&22), "the first window takes focus");
     assert_eq!(s.body(0, 1), Rect::new(BX, BY, 120, 80));
     assert_eq!(s.commit_to(end, 1, 0, 0, 120, 80), status::OK);

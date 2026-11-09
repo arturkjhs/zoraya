@@ -1,0 +1,156 @@
+# Stage 7f's settings outside the compositor: the panel's rights for the
+# settings window (ADR-0169), list declarations (ADR-0171), the settings
+# window's page and changes, and zoraya-app's answers to SetTitle and
+# Offer. Survivors of 7f's cargo-mutants run (TASK-24), each killed by a
+# test added for it. Host tests only.
+timeout = 300
+
+[[mutant]]
+id = "P-rights"
+file = "crates/zoraya-panel/src/lib.rs"
+find = '''
+pub const CONFIG_RIGHTS: u32 = zoraya_proto_file::rights::READ
+    | zoraya_proto_file::rights::WRITE'''
+replace = '''
+pub const CONFIG_RIGHTS: u32 = zoraya_proto_file::rights::READ
+    & zoraya_proto_file::rights::WRITE'''
+tests = ["cargo test -q -p zoraya-panel"]
+note = "7f lib.rs:117:5: the_settings_window_holds_the_six_rights_of_adr_0169"
+
+[[mutant]]
+id = "D-unique"
+file = "crates/zoraya-describe/src/lib.rs"
+find = 'if *unique && items[..i].contains(it) {'
+replace = 'if *unique || items[..i].contains(it) {'
+tests = ["cargo test -q -p zoraya-describe"]
+note = "7f lib.rs:288:32: a_list_repeats_its_items_unless_it_is_unique"
+
+[[mutant]]
+id = "D-min-zero"
+file = "crates/zoraya-describe/src/lib.rs"
+find = 'if a < 0 || a > b || b > MAX_LIST as i64 {'
+replace = 'if a <= 0 || a > b || b > MAX_LIST as i64 {'
+tests = ["cargo test -q -p zoraya-describe"]
+note = "7f lib.rs:720:18: list_bounds_may_be_equal_and_reach_both_ends"
+
+[[mutant]]
+id = "D-min-max-equal"
+file = "crates/zoraya-describe/src/lib.rs"
+find = 'if a < 0 || a > b || b > MAX_LIST as i64 {'
+replace = 'if a < 0 || a >= b || b > MAX_LIST as i64 {'
+tests = ["cargo test -q -p zoraya-describe"]
+note = "7f lib.rs:720:27: list_bounds_may_be_equal_and_reach_both_ends"
+
+[[mutant]]
+id = "D-max-64"
+file = "crates/zoraya-describe/src/lib.rs"
+find = 'if a < 0 || a > b || b > MAX_LIST as i64 {'
+replace = 'if a < 0 || a > b || b >= MAX_LIST as i64 {'
+tests = ["cargo test -q -p zoraya-describe"]
+note = "7f lib.rs:720:36: list_bounds_may_be_equal_and_reach_both_ends"
+
+[[mutant]]
+id = "D-bounds-and"
+file = "crates/zoraya-describe/src/lib.rs"
+find = 'if a < 0 || a > b || b > MAX_LIST as i64 {'
+replace = 'if a < 0 && a > b || b > MAX_LIST as i64 {'
+tests = ["cargo test -q -p zoraya-describe"]
+note = "7f lib.rs:720:22: a_list_with_bad_bounds_names_the_bounds"
+
+[[mutant]]
+id = "D-min-negative"
+file = "crates/zoraya-describe/src/lib.rs"
+find = 'if a < 0 || a > b || b > MAX_LIST as i64 {'
+replace = 'if a == 0 || a > b || b > MAX_LIST as i64 {'
+tests = ["cargo test -q -p zoraya-describe"]
+note = "7f lib.rs:720:18: a_list_with_bad_bounds_names_the_bounds"
+
+[[mutant]]
+id = "W-label"
+file = "crates/zoraya-settings-window/src/lib.rs"
+find = '"ua" => "Ukrainian",'
+replace = '"ua" => "",'
+tests = ["cargo test -q -p zoraya-settings-window"]
+note = "7f lib.rs:33:5: each_layout_has_its_name_on_the_page"
+
+[[mutant]]
+id = "W-scale-one"
+file = "crates/zoraya-settings-window/src/lib.rs"
+find = '''
+        1 => 1,
+        2 => 2,
+        _ => 0,'''
+replace = '''
+        2 => 2,
+        _ => 0,'''
+tests = ["cargo test -q -p zoraya-settings-window"]
+note = "7f lib.rs:59:9: the_page_shows_a_fixed_scale"
+
+[[mutant]]
+id = "W-scale-two"
+file = "crates/zoraya-settings-window/src/lib.rs"
+find = '''
+        1 => 1,
+        2 => 2,
+        _ => 0,'''
+replace = '''
+        1 => 1,
+        _ => 0,'''
+tests = ["cargo test -q -p zoraya-settings-window"]
+note = "7f lib.rs:60:9: the_page_shows_a_fixed_scale"
+
+[[mutant]]
+id = "W-layout-range"
+file = "crates/zoraya-settings-window/src/lib.rs"
+find = 'if (LAYOUT..LAYOUT + zoraya_keymap::LAYOUTS.len() as u32).contains(&id) =>'
+replace = 'if (LAYOUT..LAYOUT * zoraya_keymap::LAYOUTS.len() as u32).contains(&id) =>'
+tests = ["cargo test -q -p zoraya-settings-window"]
+note = "7f lib.rs:113:32: a_control_past_the_last_layout_is_not_a_control"
+
+[[mutant]]
+id = "W-layout-on"
+file = "crates/zoraya-settings-window/src/lib.rs"
+find = 'if on && !n.layouts.contains(&l) {'
+replace = 'if on || !n.layouts.contains(&l) {'
+tests = ["cargo test -q -p zoraya-settings-window"]
+note = "7f lib.rs:116:19: a_layout_turned_to_the_state_it_has_changes_nothing"
+
+[[mutant]]
+id = "A-title"
+file = "crates/zoraya-app/src/lib.rs"
+find = '''
+            decode::<gui::TitleDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) == Some(status::OK)'''
+replace = '''
+            decode::<gui::TitleDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) != Some(status::OK)'''
+tests = ["cargo test -q -p zoraya-app"]
+note = "7f lib.rs:251:12: set_title_says_whether_the_compositor_kept_it"
+
+[[mutant]]
+id = "A-offer-largest"
+file = "crates/zoraya-app/src/lib.rs"
+find = 'if text.len() > gui::MAX_CLIPBOARD {'
+replace = 'if text.len() >= gui::MAX_CLIPBOARD {'
+tests = ["cargo test -q -p zoraya-app"]
+note = "7f lib.rs:369:23: an_offer_kept_is_reported_and_the_largest_is_sent"
+
+[[mutant]]
+id = "A-offer-status"
+file = "crates/zoraya-app/src/lib.rs"
+find = '''
+            decode::<gui::OfferDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) == Some(status::OK)'''
+replace = '''
+            decode::<gui::OfferDone>(&r, 0)
+                .ok()
+                .map(|(_, d)| d.status.0)
+        }) != Some(status::OK)'''
+tests = ["cargo test -q -p zoraya-app"]
+note = "7f lib.rs:379:12: an_offer_kept_is_reported_and_the_largest_is_sent"

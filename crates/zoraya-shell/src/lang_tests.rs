@@ -135,7 +135,7 @@ impl Host for Fake {
     fn lookup(&mut self, name: &str) -> Found {
         if self.programs.contains_key(name) {
             Found::Program
-        } else if name == "grants" || name == "pager" {
+        } else if name == "grants" || name == "pager" || name == "settings" {
             Found::Builtin
         } else {
             Found::Nothing
@@ -149,6 +149,7 @@ impl Host for Fake {
                 "name grants\nsummary show\nusage grants LINE...\noperand LINE... text l\ncwd none\n"
             }
             "pager" => "name pager\nsummary page\nusage pager\ncwd none\n",
+            "settings" => include_str!("../../../user/describe/builtins/settings.cmd"),
             _ => return None,
         };
         Some(Rc::new(zoraya_describe::parse(text.as_bytes()).unwrap()))
@@ -164,13 +165,26 @@ impl Host for Fake {
         &mut self,
         _: &mut State,
         name: &str,
-        _: &Description,
-        _: &Parsed<'_>,
+        d: &Description,
+        parsed: &Parsed<'_>,
         io: &mut Io,
     ) -> i32 {
         if name == "pager" {
             self.terminals.push(io.terminal);
             io.out.push_str("paged\n");
+        }
+        // `settings` prints what it was given, as parsed: its options by
+        // long name and its operands by name.
+        if name == "settings" {
+            for (o, arg) in &parsed.options {
+                let arg = arg.unwrap_or("");
+                io.out
+                    .push_str(&alloc::format!("option {} {arg}\n", d.options[*o].long));
+            }
+            for (o, text) in &parsed.operands {
+                io.out
+                    .push_str(&alloc::format!("operand {} {text}\n", d.operands[*o].name));
+            }
         }
         0
     }
@@ -1638,4 +1652,48 @@ fn a_failing_function_stops_its_pipeline() {
     assert_eq!(names, ["fail", "ok"], "{out:?}");
     assert!(!out.contains("x\n"), "the body stopped: {out:?}");
     assert!(!out.contains("after"), "{out:?}");
+}
+
+#[test]
+fn settings_reset_takes_its_name_as_the_options_argument() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "settings --reset shell.colour"),
+        "option reset shell.colour\n"
+    );
+}
+
+#[test]
+fn a_dash_item_after_a_settings_name_is_a_value() {
+    let mut sh = shell();
+    let want = "operand NAME gui.keyboard-layouts\noperand VALUE -cz\n";
+    assert_eq!(run(&mut sh, "settings gui.keyboard-layouts -cz"), want);
+    assert_eq!(run(&mut sh, "settings gui.keyboard-layouts -- -cz"), want);
+}
+
+#[test]
+fn settings_at_stays_an_option_wherever_it_stands() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "settings gui.keyboard-layouts +ru --at 1"),
+        "option at 1\noperand NAME gui.keyboard-layouts\noperand VALUE +ru\n"
+    );
+    assert_eq!(
+        run(&mut sh, "settings gui.keyboard-layouts us ua +ru --at 1"),
+        "option at 1\noperand NAME gui.keyboard-layouts\noperand VALUE us\n\
+         operand VALUE ua\noperand VALUE +ru\n"
+    );
+    assert_eq!(
+        run(&mut sh, "settings gui.keyboard-layouts --at 1"),
+        "option at 1\noperand NAME gui.keyboard-layouts\n"
+    );
+}
+
+#[test]
+fn a_settings_at_with_nothing_after_it_is_a_value() {
+    let mut sh = shell();
+    assert_eq!(
+        run(&mut sh, "settings gui.keyboard-layouts +ru --at"),
+        "operand NAME gui.keyboard-layouts\noperand VALUE +ru\noperand VALUE --at\n"
+    );
 }

@@ -58,7 +58,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	f_undef f_exdata f_stack f_brk f_wfi f_align regsave lone koverflow copyfar \
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
-	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files t_gui guibench t_text \
+	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
 	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
@@ -477,16 +477,21 @@ GUI_IMAGE := $(BUILD)/gui.img
 # each under the host's accelerator and TCG at scale 1, and under the host's
 # accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels),
 # with three times the time: every screendump read is four times larger.
+# A script's image is rootfs, with tests/gui/SCRIPT.root/ over it when there is
+# one (the layouts' settings file, ADR-0169's gui.keyboard-layouts).
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 settings:auto:1 settings:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
 	  label=gui-$$script-$$accel-$$scale; \
-	  target/debug/zoraya-mkfs --size 16M --from rootfs $(GUI_IMAGE) > /dev/null && \
+	  root=rootfs; if [ -d tests/gui/$$script.root ]; then \
+	    rm -rf $(BUILD)/gui-root && mkdir -p $(BUILD)/gui-root && \
+	    cp -R rootfs/. tests/gui/$$script.root/. $(BUILD)/gui-root/ && root=$(BUILD)/gui-root; fi; \
+	  target/debug/zoraya-mkfs --size 16M --from $$root $(GUI_IMAGE) > /dev/null && \
 	  timeout=$(QEMU_TIMEOUT); [ $$scale = 2 ] && timeout=$(GUI_TIMEOUT_2); \
 	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
 	    $(RUN_QEMU) --test --gui --gui-scale $$scale --mem 256M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
