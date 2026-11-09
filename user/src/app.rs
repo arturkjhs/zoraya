@@ -15,7 +15,7 @@ use zoraya_rt::{
 };
 
 /// Waits until `end` is readable or closed.
-fn wait(end: Handle) -> bool {
+pub fn wait(end: Handle) -> bool {
     let Ok(port) = port_create() else {
         return false;
     };
@@ -195,4 +195,26 @@ impl zoraya_fsclient::Link for Files {
     fn close(&mut self, h: Handle) {
         let _ = handle_close(h);
     }
+}
+
+/// The shell's description, for `shell.home`'s default and type.
+const ZOSH: &str = include_str!("../describe/system/zosh.cmd");
+
+/// `shell.home`, as the shell reads it from `/config/settings` through
+/// `root`.
+pub fn home(fs: &mut zoraya_fsclient::Client<Files>, root: Handle) -> alloc::string::String {
+    let declared = zoraya_describe::parse(ZOSH.as_bytes())
+        .map(|d| d.settings)
+        .unwrap_or_default();
+    let bytes = fs
+        .open(root, "config/settings", 0, zoraya_proto_file::rights::READ)
+        .ok()
+        .and_then(|f| {
+            let b = fs.read_all(f).ok();
+            fs.close(f);
+            b
+        })
+        .unwrap_or_default();
+    let v = zoraya_settings::read(&bytes, &declared);
+    alloc::string::String::from(v.get("shell.home").unwrap_or("/home"))
 }

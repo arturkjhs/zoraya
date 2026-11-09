@@ -43,8 +43,6 @@ const KEY_PANEL: u64 = 2;
 const KEY_APP: u64 = 100;
 /// The most applications registered at once.
 const MAX_APPS: usize = 64;
-/// The shell's description, for `shell.home`'s default and type.
-const ZOSH: &str = include_str!("../../describe/system/zosh.cmd");
 
 struct Registered {
     end: Handle,
@@ -80,24 +78,6 @@ fn reply<'a, M: Message<'a>>(end: Handle, m: &M, t: u32, handle: Option<Handle>)
     {
         let _ = handle_close(h);
     }
-}
-
-/// `shell.home`, as the shell reads it from `/config/settings`.
-fn home(fs: &mut Client<Files>, root: Handle) -> String {
-    let declared = zoraya_describe::parse(ZOSH.as_bytes())
-        .map(|d| d.settings)
-        .unwrap_or_default();
-    let bytes = fs
-        .open(root, "config/settings", 0, zoraya_proto_file::rights::READ)
-        .ok()
-        .and_then(|f| {
-            let b = fs.read_all(f).ok();
-            fs.close(f);
-            b
-        })
-        .unwrap_or_default();
-    let v = zoraya_settings::read(&bytes, &declared);
-    String::from(v.get("shell.home").unwrap_or("/home"))
 }
 
 fn ask_of(bytes: &[u8]) -> Option<Result<Ask, ()>> {
@@ -350,7 +330,7 @@ fn main() -> i32 {
         return 1;
     }
     let mut fs = Client::new(Files);
-    let home = home(&mut fs, root);
+    let home = zoraya_user::app::home(&mut fs, root);
     let mut c = Chooser {
         app,
         fs,

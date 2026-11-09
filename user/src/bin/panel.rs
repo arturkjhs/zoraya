@@ -361,9 +361,23 @@ fn launcher_requests(st: &mut State, i: usize) {
                 let words = core::str::from_utf8(m.words.0).unwrap_or("");
                 match zoraya_panel::opener(name) {
                     Some(app) if !words.chars().any(char::is_control) => {
-                        let l = zoraya_panel::application(None, app, Some(words));
-                        launch(st, &l, Some(got[0]));
-                        0
+                        // Whatever the sender gave, the application gets
+                        // the file to read only (ADR-0153's `+r`).
+                        let given = zoraya_user::files::File { end: got[0] };
+                        let read = given.clone_as(
+                            zoraya_proto_file::rights::READ | zoraya_proto_file::rights::CLONE,
+                        );
+                        drop(given);
+                        match read {
+                            Ok(f) => {
+                                let h = f.end;
+                                core::mem::forget(f);
+                                let l = zoraya_panel::application(None, app, Some(words));
+                                launch(st, &l, Some(h));
+                                0
+                            }
+                            Err(_) => zoraya_proto_chooser::status::FAILED,
+                        }
                     }
                     _ => {
                         let _ = handle_close(got[0]);
