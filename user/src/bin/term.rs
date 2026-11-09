@@ -18,7 +18,7 @@ use zoraya_abi::{
     channel_signals,
 };
 use zoraya_proto_gui::{self as gui, modifiers};
-use zoraya_proto_term::{Input, MAX_INPUT, Output, Size};
+use zoraya_proto_term::{Input, MAX_INPUT, Output, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_term::{Look, Term, Waited, await_reply, key_bytes};
 use zoraya_tokens::{Appearance, Scale};
@@ -374,8 +374,22 @@ impl Window {
                 }
                 Err(_) => zoraya_user::process_exit(1),
             };
-            if let Ok((_, m)) = decode::<Output<'_>>(&self.message[..length], 0) {
+            let bytes = &self.message[..length];
+            if let Ok((_, m)) = decode::<Output<'_>>(bytes, 0) {
                 self.term.write(m.bytes.0);
+            } else if let Ok((_, t)) = decode::<Title<'_>>(bytes, 0) {
+                // `zosh — <directory>` (ADR-0168), never from output.
+                let mut title = alloc::vec::Vec::with_capacity(t.text.0.len() + 9);
+                title.extend_from_slice("zosh — ".as_bytes());
+                title.extend_from_slice(t.text.0);
+                let m = gui::SetTitle {
+                    window: self.id,
+                    text: Data(&title),
+                };
+                let mut out = [0u8; 320];
+                if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
+                    let _ = channel_write(self.compositor, &out[..n], &[]);
+                }
             }
         }
     }

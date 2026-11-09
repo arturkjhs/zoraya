@@ -39,7 +39,10 @@ use zoraya_abi::{ChannelEntry, native};
 use zoraya_command::Parsed;
 use zoraya_describe::{Description, What};
 use zoraya_proto_file::{kind as proto_kind, open_flags, rights as file_rights, write_flags};
-use zoraya_proto_term::{Input as TermInput, MAX_OUTPUT, Output as TermOutput, Size as TermSize};
+use zoraya_proto_term::{
+    Input as TermInput, MAX_OUTPUT, MAX_TITLE, Output as TermOutput, Size as TermSize,
+    Title as TermTitle,
+};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
 use zoraya_shell::editor::{self, Assist, Completion, Editor, Key, Options};
 use zoraya_shell::eval::{
@@ -460,18 +463,41 @@ impl Z {
         self.setting("shell.home")
     }
 
-    /// The prompt: `shell.prompt` with `{cwd}` the current directory, `~`
-    /// for home.
-    fn prompt(&self) -> String {
+    /// The current directory as the prompt shows it: `~` for home.
+    fn shown_cwd(&self) -> String {
         let home = self.home();
-        let shown = if self.cwd == home {
+        if self.cwd == home {
             "~".to_string()
         } else if let Some(rest) = self.cwd.strip_prefix(&home).filter(|r| r.starts_with('/')) {
             format!("~{rest}")
         } else {
             self.cwd.clone()
+        }
+    }
+
+    /// The prompt: `shell.prompt` with `{cwd}` the current directory, `~`
+    /// for home.
+    fn prompt(&self) -> String {
+        self.setting("shell.prompt")
+            .replace("{cwd}", &self.shown_cwd())
+    }
+
+    /// Tells a GUI terminal the directory for its window's title (ADR-0168),
+    /// out of band; on the console there is nothing to tell.
+    fn send_title(&self) {
+        let Some(end) = terminal() else { return };
+        let shown = self.shown_cwd();
+        let mut cut = shown.len().min(MAX_TITLE);
+        while !shown.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let m = TermTitle {
+            text: Data(&shown.as_bytes()[..cut]),
         };
-        self.setting("shell.prompt").replace("{cwd}", &shown)
+        let mut out = [0u8; MAX_TITLE + 64];
+        if let Ok(n) = encode(&m, NO_REPLY, &mut out) {
+            let _ = channel_write(end, &out[..n], &[]);
+        }
     }
 
     fn abs(&self, path: &str) -> String {
@@ -2436,6 +2462,7 @@ impl Host for Z {
                 match self.open(&abs, OPEN_DIRECTORY) {
                     Ok(_) => {
                         self.cwd = abs;
+                        self.send_title();
                         0
                     }
                     Err(s) => {
@@ -3365,6 +3392,7 @@ fn main() -> i32 {
     {
         editor.set_history(text.lines().map(|l| l.replace(ENTRY_BREAK, "\n")).collect());
     }
+    z.send_title();
     let mut shell = Shell::new(z);
     if shell.host.root.is_some()
         && let Ok(text) = shell.host.read_text(START)

@@ -1226,3 +1226,118 @@ fn a_new_scale_doubles_every_toplevel_and_configures_each() {
         assert_eq!((now.x, now.y), (2 * p.x, 2 * p.y));
     }
 }
+
+fn layouts_of(out: &[Vec<u8>]) -> Vec<std::string::String> {
+    out.iter()
+        .filter_map(|m| decode::<gui::Layout<'_>>(m, 0).ok())
+        .map(|(_, l)| std::string::String::from_utf8_lossy(l.name.0).into_owned())
+        .collect()
+}
+
+/// ADR-0163 in the compositor: System+Space cycles us, ua, cz (Shift:
+/// back), the focused client hears the layout, keys give the layout's
+/// letters, and a switch reaches no client as a key (INV-0163-4).
+#[test]
+fn system_space_switches_the_layout_and_the_client_hears_it() {
+    let mut s = setup();
+    // The first client hears the layout when it gains focus.
+    let end = s.client(64);
+    let n = 100 * 50;
+    let m = s.f().memory(vec![1; n], n as u64 * 4, false);
+    let out = s.request(
+        end,
+        &gui::CreateToplevel {
+            width: 100,
+            height: 50,
+        },
+        vec![m],
+    );
+    assert_eq!(layouts_of(&out), ["us"], "on focus");
+    let a = end;
+    assert_eq!(s.c.layout_short(), "US");
+    let meta = code::LEFT_META;
+    // With Shift held from before: the switch goes back (us → cz), and
+    // the client sees Shift's press and release and nothing of Space.
+    s.keys(&[
+        (code::LEFT_SHIFT, 1),
+        (meta, 1),
+        (code::SPACE, 1),
+        (code::SPACE, 0),
+        (meta, 0),
+        (code::LEFT_SHIFT, 0),
+    ]);
+    assert_eq!(s.c.layout_short(), "CZ");
+    let out = s.f().take(a);
+    assert_eq!(layouts_of(&out), ["cz"]);
+    let keys: Vec<(u32, bool)> = keys_of(&out).iter().map(|k| (k.0, k.1)).collect();
+    assert_eq!(keys, [(code::LEFT_SHIFT, true), (code::LEFT_SHIFT, false)]);
+    s.keys(&[(meta, 1), (code::SPACE, 1), (code::SPACE, 0), (meta, 0)]);
+    assert_eq!(s.c.layout_short(), "US");
+    s.keys(&[(meta, 1), (code::SPACE, 1), (code::SPACE, 0), (meta, 0)]);
+    assert_eq!(s.c.layout_short(), "UA");
+    s.f().take(a);
+    s.keys(&[(16, 1), (16, 0), (43, 1), (43, 0)]);
+    let text: std::string::String = keys_of(&s.f().take(a)).iter().filter_map(|k| k.2).collect();
+    assert_eq!(text, "йґ");
+}
+
+#[test]
+fn a_dead_key_does_not_carry_to_another_window() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    let (b, _, _) = s.toplevel(100, 50, 2);
+    let meta = code::LEFT_META;
+    // To cz (back from us), the dead acute, then focus moves.
+    s.keys(&[
+        (code::LEFT_SHIFT, 1),
+        (meta, 1),
+        (code::SPACE, 1),
+        (code::SPACE, 0),
+        (meta, 0),
+        (code::LEFT_SHIFT, 0),
+    ]);
+    s.keys(&[(13, 1), (13, 0)]);
+    s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    s.f().take(a);
+    s.f().take(b);
+    s.keys(&[(18, 1), (18, 0)]);
+    let got: std::string::String = [a, b]
+        .iter()
+        .flat_map(|e| keys_of(&s.f().take(*e)))
+        .filter_map(|k| k.2)
+        .collect();
+    assert_eq!(got, "e", "not é");
+}
+
+/// INV-0163-4 with a key held across the switch, `Layout` to the focused
+/// client only, and a chord that does not arm a dead key (review 7c, 3, 10).
+#[test]
+fn a_switch_keeps_a_held_key_and_tells_only_the_focused_client() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 50, 1);
+    let (b, _, _) = s.toplevel(100, 50, 2);
+    s.f().take(a);
+    s.f().take(b);
+    let meta = code::LEFT_META;
+    // 'a' (code 30) held across a switch to ua: the client gets its press
+    // and its release with the same code, nothing else.
+    s.keys(&[
+        (30, 1),
+        (meta, 1),
+        (code::SPACE, 1),
+        (code::SPACE, 0),
+        (meta, 0),
+        (30, 0),
+    ]);
+    let out = s.f().take(a);
+    let keys: Vec<(u32, bool)> = keys_of(&out).iter().map(|k| (k.0, k.1)).collect();
+    assert_eq!(keys, [(30, true), (30, false)]);
+    assert_eq!(layouts_of(&out), ["ua"]);
+    assert!(layouts_of(&s.f().take(b)).is_empty(), "b is not focused");
+    // To cz; System+= is a chord and arms nothing: the next e is e.
+    s.keys(&[(meta, 1), (code::SPACE, 1), (code::SPACE, 0), (meta, 0)]);
+    assert_eq!(s.c.layout_short(), "CZ");
+    s.keys(&[(meta, 1), (13, 1), (13, 0), (meta, 0), (18, 1), (18, 0)]);
+    let text: std::string::String = keys_of(&s.f().take(a)).iter().filter_map(|k| k.2).collect();
+    assert_eq!(text, "e");
+}

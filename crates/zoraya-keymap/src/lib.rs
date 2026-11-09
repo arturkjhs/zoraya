@@ -51,56 +51,123 @@ pub const CTRL: u32 = 2;
 pub const ALT: u32 = 4;
 pub const CAPS: u32 = 8;
 
-/// The US layout: code, unshifted, shifted. Codes not here give no text.
-const US: [(u32, u8, u8); 47] = [
-    (2, b'1', b'!'),
-    (3, b'2', b'@'),
-    (4, b'3', b'#'),
-    (5, b'4', b'$'),
-    (6, b'5', b'%'),
-    (7, b'6', b'^'),
-    (8, b'7', b'&'),
-    (9, b'8', b'*'),
-    (10, b'9', b'('),
-    (11, b'0', b')'),
-    (12, b'-', b'_'),
-    (13, b'=', b'+'),
-    (16, b'q', b'Q'),
-    (17, b'w', b'W'),
-    (18, b'e', b'E'),
-    (19, b'r', b'R'),
-    (20, b't', b'T'),
-    (21, b'y', b'Y'),
-    (22, b'u', b'U'),
-    (23, b'i', b'I'),
-    (24, b'o', b'O'),
-    (25, b'p', b'P'),
-    (26, b'[', b'{'),
-    (27, b']', b'}'),
-    (30, b'a', b'A'),
-    (31, b's', b'S'),
-    (32, b'd', b'D'),
-    (33, b'f', b'F'),
-    (34, b'g', b'G'),
-    (35, b'h', b'H'),
-    (36, b'j', b'J'),
-    (37, b'k', b'K'),
-    (38, b'l', b'L'),
-    (39, b';', b':'),
-    (40, b'\'', b'"'),
-    (41, b'`', b'~'),
-    (43, b'\\', b'|'),
-    (44, b'z', b'Z'),
-    (45, b'x', b'X'),
-    (46, b'c', b'C'),
-    (47, b'v', b'V'),
-    (48, b'b', b'B'),
-    (49, b'n', b'N'),
-    (50, b'm', b'M'),
-    (51, b',', b'<'),
-    (52, b'.', b'>'),
-    (53, b'/', b'?'),
-];
+pub mod layouts;
+
+pub use layouts::{LAYOUTS, Layout, Out, by_name};
+
+/// A dead key's accent (ADR-0163).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accent {
+    Acute,
+    Caron,
+    Ring,
+    Diaeresis,
+    Circumflex,
+    Grave,
+    Tilde,
+    Breve,
+    Ogonek,
+    Dot,
+    DoubleAcute,
+    Cedilla,
+    Macron,
+}
+
+impl Accent {
+    pub const ALL: [Accent; 13] = [
+        Accent::Acute,
+        Accent::Caron,
+        Accent::Ring,
+        Accent::Diaeresis,
+        Accent::Circumflex,
+        Accent::Grave,
+        Accent::Tilde,
+        Accent::Breve,
+        Accent::Ogonek,
+        Accent::Dot,
+        Accent::DoubleAcute,
+        Accent::Cedilla,
+        Accent::Macron,
+    ];
+
+    /// The spacing character a dead key followed by Space gives.
+    pub const fn spacing(self) -> char {
+        match self {
+            Accent::Acute => '´',
+            Accent::Caron => 'ˇ',
+            Accent::Ring => '˚',
+            Accent::Diaeresis => '¨',
+            Accent::Circumflex => '^',
+            Accent::Grave => '`',
+            Accent::Tilde => '~',
+            Accent::Breve => '˘',
+            Accent::Ogonek => '˛',
+            Accent::Dot => '˙',
+            Accent::DoubleAcute => '˝',
+            Accent::Cedilla => '¸',
+            Accent::Macron => '¯',
+        }
+    }
+
+    /// The bases this accent composes with and their letters, lower case
+    /// then upper case, over Latin-1 and Latin Extended-A.
+    const fn pairs(self) -> &'static str {
+        match self {
+            Accent::Acute => "aáeéiíoóuúyýcćnńsśzźrŕlĺAÁEÉIÍOÓUÚYÝCĆNŃSŚZŹRŔLĹ",
+            Accent::Caron => "cčdďeěnňrřsštťzžlľCČDĎEĚNŇRŘSŠTŤZŽLĽ",
+            Accent::Ring => "uůaåUŮAÅ",
+            Accent::Diaeresis => "aäeëiïoöuüyÿAÄEËIÏOÖUÜYŸ",
+            Accent::Circumflex => "aâeêiîoôuûcĉgĝhĥjĵsŝwŵyŷAÂEÊIÎOÔUÛCĈGĜHĤJĴSŜWŴYŶ",
+            Accent::Grave => "aàeèiìoòuùAÀEÈIÌOÒUÙ",
+            Accent::Tilde => "aãnñoõiĩuũAÃNÑOÕIĨUŨ",
+            Accent::Breve => "aăgğuŭAĂGĞUŬ",
+            Accent::Ogonek => "aąeęiįuųAĄEĘIĮUŲ",
+            Accent::Dot => "zżeėgġcċIİZŻEĖGĠCĊ",
+            Accent::DoubleAcute => "oőuűOŐUŰ",
+            Accent::Cedilla => "cçsştţgģkķlļnņrŗCÇSŞTŢGĢKĶLĻNŅRŖ",
+            Accent::Macron => "aāeēiīoōuūAĀEĒIĪOŌUŪ",
+        }
+    }
+
+    /// The letter this accent makes with `base`, if any.
+    pub fn compose(self, base: char) -> Option<char> {
+        let mut chars = self.pairs().chars();
+        while let (Some(b), Some(l)) = (chars.next(), chars.next()) {
+            if b == base {
+                return Some(l);
+            }
+        }
+        None
+    }
+}
+
+/// The letter Ctrl uses for a key: the active layout's own plain Latin
+/// letter or punctuation (so Ctrl+Z is the key labelled Z on a QWERTZ
+/// keyboard), else the US one (a Cyrillic layout), as XKB desktops do
+/// (review 7c, 5).
+fn ctrl_base(layout: &Layout, code: u32) -> Option<char> {
+    let ascii = |o: Out| match o {
+        Out::Char(c) if c.is_ascii_graphic() => Some(c),
+        _ => None,
+    };
+    ascii(layout.levels(code)[0]).or_else(|| ascii(layouts::US.levels(code)[0]))
+}
+
+/// Keys that change modifier state and leave a dead key pending.
+const fn is_modifier(code: u32) -> bool {
+    matches!(
+        code,
+        code::LEFT_SHIFT
+            | code::RIGHT_SHIFT
+            | code::LEFT_CTRL
+            | code::RIGHT_CTRL
+            | code::LEFT_ALT
+            | code::RIGHT_ALT
+            | code::CAPS_LOCK
+            | code::LEFT_META
+            | code::RIGHT_META
+    )
+}
 
 /// One key as a client gets it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,13 +178,17 @@ pub struct Key {
     pub text: Option<char>,
 }
 
-/// The layout and the modifier state.
+/// The active layout, the modifier state and the dead-key state.
 #[derive(Debug, Default)]
 pub struct Keymap {
     shift: u8,
     ctrl: u8,
     alt: u8,
+    /// The right Alt as AltGr, in a layout that has a third level.
+    altgr: bool,
     caps: bool,
+    layout: usize,
+    dead: Option<Accent>,
 }
 
 fn side(held: &mut u8, bit: u8, pressed: bool) {
@@ -134,7 +205,10 @@ impl Keymap {
             shift: 0,
             ctrl: 0,
             alt: 0,
+            altgr: false,
             caps: false,
+            layout: 0,
+            dead: None,
         }
     }
 
@@ -155,8 +229,58 @@ impl Keymap {
         m
     }
 
+    /// The active layout.
+    pub fn layout(&self) -> &'static Layout {
+        &LAYOUTS[self.layout % LAYOUTS.len()]
+    }
+
+    pub fn layout_index(&self) -> usize {
+        self.layout
+    }
+
+    /// Makes `index` of [`LAYOUTS`] active; a switch clears the dead key
+    /// and nothing else (ADR-0163: held modifiers stay held).
+    pub fn set_layout(&mut self, index: usize) {
+        if index < LAYOUTS.len() {
+            self.layout = index;
+            self.dead = None;
+            // A right Alt held across the switch keeps the role it had
+            // until it is released: no modifier changes (INV-0163-4).
+        }
+    }
+
+    /// The dead key pending, if any.
+    pub fn dead(&self) -> Option<Accent> {
+        self.dead
+    }
+
+    /// Puts back a dead key state: the compositor keeps a chord's keys
+    /// from touching it (review 7c, 3).
+    pub fn set_dead(&mut self, dead: Option<Accent>) {
+        self.dead = dead;
+    }
+
+    /// The next of `enabled` (indices of [`LAYOUTS`]) after the active
+    /// one, or the one before with `back`; the first if the active one is
+    /// not among them.
+    pub fn switch(&mut self, enabled: &[usize], back: bool) {
+        if enabled.is_empty() {
+            return;
+        }
+        let next = match enabled.iter().position(|i| *i == self.layout) {
+            Some(at) if back => enabled[(at + enabled.len() - 1) % enabled.len()],
+            Some(at) => enabled[(at + 1) % enabled.len()],
+            None => enabled[0],
+        };
+        self.set_layout(next);
+    }
+
+    /// Forgets a dead key typed but not completed (on a focus change).
+    pub fn clear_dead(&mut self) {
+        self.dead = None;
+    }
+
     /// Takes one key event: `value` 0 released, 1 pressed, 2 repeated.
-    /// Total over every code and value (INV-0092-3).
     pub fn key(&mut self, code: u32, value: u32) -> Key {
         let pressed = value != 0;
         match code {
@@ -165,9 +289,15 @@ impl Keymap {
             code::LEFT_CTRL => side(&mut self.ctrl, 1, pressed),
             code::RIGHT_CTRL => side(&mut self.ctrl, 2, pressed),
             code::LEFT_ALT => side(&mut self.alt, 1, pressed),
+            code::RIGHT_ALT if self.layout().has_altgr() => self.altgr = pressed,
             code::RIGHT_ALT => side(&mut self.alt, 2, pressed),
             code::CAPS_LOCK if value == 1 => self.caps = !self.caps,
             _ => {}
+        }
+        if !pressed && code == code::RIGHT_ALT {
+            // Released whichever role it had.
+            self.altgr = false;
+            self.alt &= !2;
         }
         let modifiers = self.modifiers();
         let text = if pressed { self.text(code) } else { None };
@@ -179,29 +309,75 @@ impl Keymap {
         }
     }
 
-    fn text(&self, code: u32) -> Option<char> {
-        if code == code::SPACE {
-            return Some(if self.ctrl != 0 { '\0' } else { ' ' });
-        }
-        let &(_, plain, shifted) = US.iter().find(|(c, _, _)| *c == code)?;
-        let letter = plain.is_ascii_lowercase();
+    fn text(&mut self, code: u32) -> Option<char> {
+        // Any other key cancels a dead key (ADR-0163); one that makes no
+        // letter here (Enter, an arrow, a Ctrl chord) cancels it too
+        // (review 7c, 1 and 2). Modifiers leave it for the next key.
+        let pending = if is_modifier(code) {
+            return None;
+        } else {
+            self.dead.take()
+        };
         if self.ctrl != 0 {
+            if code == code::SPACE {
+                return Some('\0');
+            }
             // Ctrl with a letter, or with the punctuation of 0x1b..0x1f.
-            return match plain {
-                b'a'..=b'z' => Some(char::from(plain - b'a' + 1)),
-                b'[' => Some('\u{1b}'),
-                b'\\' => Some('\u{1c}'),
-                b']' => Some('\u{1d}'),
+            return match ctrl_base(self.layout(), code)? {
+                c @ 'a'..='z' => Some(char::from(c as u8 - b'a' + 1)),
+                '[' => Some('\u{1b}'),
+                '\\' => Some('\u{1c}'),
+                ']' => Some('\u{1d}'),
                 _ => None,
             };
         }
-        let upper = (self.shift != 0) ^ (letter && self.caps);
-        Some(char::from(if upper { shifted } else { plain }))
+        if code == code::SPACE {
+            // A dead key then Space: the spacing accent.
+            return Some(pending.map_or(' ', Accent::spacing));
+        }
+        let levels = self.layout().levels(code);
+        if levels == [Out::None; 4] {
+            return None;
+        }
+        // Caps Lock inverts Shift for keys whose two levels in the group
+        // used are a case pair.
+        let base = if self.altgr { 2 } else { 0 };
+        let pair = match (levels[base], levels[base + 1]) {
+            (Out::Char(a), Out::Char(b)) => a != b && a.to_uppercase().eq(core::iter::once(b)),
+            _ => false,
+        };
+        let shifted = (self.shift != 0) ^ (pair && self.caps);
+        let level = usize::from(shifted) + base;
+        let out = match levels[level] {
+            // With AltGr: a fourth level with nothing falls back to the
+            // third, a third with nothing to the plain key (review 7c, 4).
+            Out::None if level == 3 && levels[2] != Out::None => levels[2],
+            Out::None if level >= 2 => levels[level - 2],
+            o => o,
+        };
+        match out {
+            Out::Dead(a) => {
+                // A second dead key replaces the first.
+                self.dead = Some(a);
+                None
+            }
+            Out::Char(ch) => match pending {
+                // The composed letter; else the key as it is, losing
+                // nothing typed (ADR-0163).
+                Some(a) => Some(a.compose(ch).unwrap_or(ch)),
+                None => Some(ch),
+            },
+            Out::None => None,
+        }
     }
 }
 
 #[cfg(test)]
 extern crate std;
+
+// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
+#[cfg(test)]
+zoraya_test_alloc::cap_memory!();
 
 #[cfg(test)]
 mod tests {
@@ -344,8 +520,411 @@ mod tests {
             }
         }
     }
-}
 
-// A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
-#[cfg(test)]
-zoraya_test_alloc::cap_memory!();
+    fn on(m: &mut Keymap, name: &str) {
+        m.set_layout(by_name(name).unwrap());
+    }
+
+    /// INV-0163-1: total over every code, modifier state, dead-key state
+    /// and layout; at most one character a key.
+    #[test]
+    fn translation_is_total_over_every_layout() {
+        for layout in 0..LAYOUTS.len() {
+            for dead in core::iter::once(None).chain(Accent::ALL.iter().copied().map(Some)) {
+                for mods in 0..16u32 {
+                    let mut m = Keymap::new();
+                    m.set_layout(layout);
+                    for (bit, code) in [
+                        (1, code::LEFT_SHIFT),
+                        (2, code::RIGHT_ALT),
+                        (4, code::CAPS_LOCK),
+                        (8, code::LEFT_CTRL),
+                    ] {
+                        if mods & bit != 0 {
+                            m.key(code, 1);
+                            if code == code::CAPS_LOCK {
+                                m.key(code, 0);
+                            }
+                        }
+                    }
+                    for code in 0..0x300 {
+                        m.dead = dead;
+                        let k = m.key(code, 1);
+                        let _ = k.text;
+                        m.key(code, 0);
+                    }
+                }
+            }
+        }
+    }
+
+    fn word(m: &mut Keymap, keys: &[(u32, bool, bool)]) -> std::string::String {
+        let mut out = std::string::String::new();
+        for (code, shift, altgr) in keys {
+            if *shift {
+                m.key(code::LEFT_SHIFT, 1);
+            }
+            if *altgr {
+                m.key(code::RIGHT_ALT, 1);
+            }
+            if let Some(c) = typed(m, *code) {
+                out.push(c);
+            }
+            if *altgr {
+                m.key(code::RIGHT_ALT, 0);
+            }
+            if *shift {
+                m.key(code::LEFT_SHIFT, 0);
+            }
+        }
+        out
+    }
+
+    /// INV-0163-2: the letters of the reference layouts, both cases.
+    #[test]
+    fn the_reference_letters_are_produced() {
+        let mut m = Keymap::new();
+        on(&mut m, "cz");
+        let row: std::string::String = (2..=11).filter_map(|c| typed(&mut m, c)).collect();
+        assert_eq!(row, "+ěščřžýáíé");
+        m.key(code::LEFT_SHIFT, 1);
+        let digits: std::string::String = (2..=11).filter_map(|c| typed(&mut m, c)).collect();
+        assert_eq!(digits, "1234567890");
+        assert_eq!(typed(&mut m, 26), Some('/'));
+        m.key(code::LEFT_SHIFT, 0);
+        assert_eq!(
+            (typed(&mut m, 26), typed(&mut m, 39)),
+            (Some('ú'), Some('ů'))
+        );
+        assert_eq!(
+            (typed(&mut m, 21), typed(&mut m, 44)),
+            (Some('z'), Some('y')),
+            "QWERTZ"
+        );
+        // ď ť ň through the dead caron (Shift with =), ó through the acute.
+        assert_eq!(
+            word(
+                &mut m,
+                &[
+                    (13, true, false),
+                    (32, false, false),
+                    (13, true, false),
+                    (20, false, false),
+                    (13, true, false),
+                    (49, false, false),
+                    (13, false, false),
+                    (24, false, false)
+                ]
+            ),
+            "ďťňó"
+        );
+        assert_eq!(
+            word(
+                &mut m,
+                &[
+                    (13, true, false),
+                    (32, true, false),
+                    (13, true, false),
+                    (49, true, false),
+                    (13, false, false),
+                    (24, true, false)
+                ]
+            ),
+            "ĎŇÓ"
+        );
+        assert_eq!(word(&mut m, &[(3, false, true), (18, false, true)]), "@€");
+        on(&mut m, "ua");
+        assert_eq!(
+            word(
+                &mut m,
+                &[
+                    (43, false, false),
+                    (40, false, false),
+                    (31, false, false),
+                    (27, false, false),
+                    (41, false, false)
+                ]
+            ),
+            "ґєії'"
+        );
+        assert_eq!(
+            word(
+                &mut m,
+                &[
+                    (43, true, false),
+                    (40, true, false),
+                    (31, true, false),
+                    (27, true, false),
+                    (41, true, false)
+                ]
+            ),
+            "ҐЄІЇʼ"
+        );
+        assert_eq!(word(&mut m, &[(22, false, true), (22, true, true)]), "ґҐ");
+        assert_eq!(
+            word(
+                &mut m,
+                &[(35, false, false), (25, false, false), (22, false, false)]
+            ),
+            "рзг"
+        );
+        on(&mut m, "ru");
+        assert_eq!(
+            word(
+                &mut m,
+                &[
+                    (41, false, false),
+                    (31, false, false),
+                    (27, false, false),
+                    (40, false, false)
+                ]
+            ),
+            "ёыъэ"
+        );
+        assert_eq!(
+            word(
+                &mut m,
+                &[
+                    (41, true, false),
+                    (31, true, false),
+                    (27, true, false),
+                    (40, true, false)
+                ]
+            ),
+            "ЁЫЪЭ"
+        );
+        assert_eq!(
+            word(
+                &mut m,
+                &[(4, true, false), (5, true, false), (7, true, false)]
+            ),
+            "№;:"
+        );
+        // Caps Lock gives capitals of Cyrillic letters too, not of digits.
+        m.key(code::CAPS_LOCK, 1);
+        m.key(code::CAPS_LOCK, 0);
+        assert_eq!(word(&mut m, &[(16, false, false), (2, false, false)]), "Й1");
+    }
+
+    /// INV-0163-3: a dead key emits at most one character and never loses
+    /// the base; with Space, the spacing accent.
+    #[test]
+    fn dead_keys_compose_or_pass_the_base() {
+        let bases: std::vec::Vec<char> = ('a'..='z')
+            .chain('A'..='Z')
+            .chain(['ě', 'ж', '1'])
+            .collect();
+        for accent in Accent::ALL {
+            let mut m = Keymap::new();
+            on(&mut m, "cz");
+            for base in &bases {
+                m.dead = Some(accent);
+                // Type the base through the US layout's key for it, if any.
+                let Some(code) = (0..0x80).find(|c| layouts::US.levels(*c)[0] == Out::Char(*base))
+                else {
+                    continue;
+                };
+                m.set_layout(0);
+                m.dead = Some(accent);
+                let got = typed(&mut m, code);
+                assert_eq!(
+                    got,
+                    Some(accent.compose(*base).unwrap_or(*base)),
+                    "{accent:?} {base}"
+                );
+            }
+            m.dead = Some(accent);
+            assert_eq!(typed(&mut m, code::SPACE), Some(accent.spacing()));
+            assert_eq!(
+                typed(&mut m, code::SPACE),
+                Some(' '),
+                "the dead key is used once"
+            );
+        }
+        // A second dead key replaces the first.
+        let mut m = Keymap::new();
+        on(&mut m, "cz");
+        assert_eq!(
+            word(
+                &mut m,
+                &[(13, false, false), (13, true, false), (19, false, false)]
+            ),
+            "ř"
+        );
+        // A dead key then a key with no letter: the dead key goes, the key
+        // passes.
+        assert_eq!(word(&mut m, &[(13, false, false), (53, false, false)]), "-");
+        assert_eq!(Accent::Caron.compose('r'), Some('ř'));
+        assert_eq!(Accent::Ring.compose('U'), Some('Ů'));
+        assert_eq!(Accent::Acute.compose('q'), None);
+    }
+
+    /// INV-0163-4: a switch changes no modifier and clears only the dead key.
+    #[test]
+    fn a_switch_keeps_modifiers_and_clears_the_dead_key() {
+        let mut m = Keymap::new();
+        let enabled = [0, by_name("ua").unwrap(), by_name("cz").unwrap()];
+        m.key(code::LEFT_SHIFT, 1);
+        m.switch(&enabled, false);
+        assert_eq!(m.layout().name, "ua");
+        assert_eq!(m.modifiers(), SHIFT);
+        assert_eq!(typed(&mut m, 16), Some('Й'));
+        m.key(code::LEFT_SHIFT, 0);
+        m.switch(&enabled, false);
+        assert_eq!(m.layout().short, "CZ");
+        m.key(13, 1);
+        m.key(13, 0);
+        m.switch(&enabled, true);
+        m.switch(&enabled, false);
+        assert_eq!(typed(&mut m, 18), Some('e'), "the dead acute was cleared");
+        m.switch(&enabled, false);
+        assert_eq!(m.layout().name, "us", "round");
+        m.switch(&enabled, true);
+        assert_eq!(m.layout().name, "cz");
+        m.set_layout(by_name("ru").unwrap());
+        m.switch(&enabled, false);
+        assert_eq!(m.layout().name, "us", "from one not enabled, the first");
+        m.switch(&[], false);
+        assert_eq!(m.layout().name, "us");
+        m.set_layout(99);
+        assert_eq!(m.layout().name, "us");
+        // The right Alt held across a switch keeps its role until released:
+        // no modifier changes (INV-0163-4).
+        on(&mut m, "cz");
+        m.key(code::RIGHT_ALT, 1);
+        assert_eq!(m.modifiers(), 0, "AltGr is no modifier for clients");
+        m.set_layout(0);
+        assert_eq!(m.modifiers(), 0);
+        m.key(code::RIGHT_ALT, 0);
+        assert_eq!(m.modifiers(), 0);
+        m.key(code::RIGHT_ALT, 1);
+        assert_eq!(m.modifiers(), ALT, "in us the right Alt is Alt");
+        on(&mut m, "cz");
+        assert_eq!(m.modifiers(), ALT);
+        m.key(code::RIGHT_ALT, 0);
+        assert!(!layouts::US.has_altgr() && layouts::CZ.has_altgr());
+        m.key(code::LEFT_CTRL, 1);
+        on(&mut m, "ua");
+        assert_eq!(
+            typed(&mut m, 46),
+            Some('\u{3}'),
+            "Ctrl+C by the US position"
+        );
+        // On QWERTZ, Ctrl+Z is the key labelled Z (review 7c, 5).
+        on(&mut m, "cz");
+        assert_eq!(typed(&mut m, 21), Some('\u{1a}'));
+        assert_eq!(typed(&mut m, 44), Some('\u{19}'));
+        m.key(code::LEFT_CTRL, 0);
+        assert_eq!(m.layout_index(), by_name("cz").unwrap());
+        m.clear_dead();
+    }
+
+    /// Review 7c, 1, 2 and 4: keys with no letter and Ctrl chords cancel a
+    /// dead key; modifiers keep it; AltGr's fourth level falls back to the
+    /// third.
+    #[test]
+    fn non_letters_cancel_a_dead_key_and_altgr_falls_back_to_level_three() {
+        let mut m = Keymap::new();
+        on(&mut m, "cz");
+        for cancel in [
+            code::ENTER,
+            code::BACKSPACE,
+            code::TAB,
+            code::LEFT,
+            code::ESC,
+        ] {
+            typed(&mut m, 13);
+            typed(&mut m, cancel);
+            assert_eq!(typed(&mut m, 18), Some('e'), "after {cancel}");
+        }
+        typed(&mut m, 13);
+        m.key(code::LEFT_CTRL, 1);
+        assert_eq!(typed(&mut m, 46), Some('\u{3}'));
+        m.key(code::LEFT_CTRL, 0);
+        assert_eq!(typed(&mut m, 18), Some('e'), "after Ctrl+C");
+        // Shift between the dead key and the letter keeps it: É.
+        typed(&mut m, 13);
+        m.key(code::LEFT_SHIFT, 1);
+        assert_eq!(typed(&mut m, 18), Some('É'));
+        m.key(code::LEFT_SHIFT, 0);
+        // Shift+AltGr+k: no fourth level, so the third, ł; Caps too.
+        assert_eq!(word(&mut m, &[(37, true, true), (37, false, true)]), "łł");
+        m.key(code::CAPS_LOCK, 1);
+        m.key(code::CAPS_LOCK, 0);
+        assert_eq!(word(&mut m, &[(37, false, true)]), "ł");
+        m.key(code::CAPS_LOCK, 1);
+        m.key(code::CAPS_LOCK, 0);
+        assert_eq!(
+            word(
+                &mut m,
+                &[(35, false, true), (36, false, true), (50, false, true)]
+            ),
+            "`'^"
+        );
+        assert_eq!(m.dead(), None);
+        m.set_dead(Some(Accent::Ring));
+        assert_eq!(typed(&mut m, 22), Some('ů'));
+    }
+
+    /// INV-0163-1's "exactly one output": a press gives at most one
+    /// character, and only a dead key or a key with no letter gives none.
+    #[test]
+    fn a_press_gives_at_most_one_character_in_every_layout() {
+        for (layout, table) in LAYOUTS.iter().enumerate() {
+            let mut m = Keymap::new();
+            m.set_layout(layout);
+            for code in 0..0x300u32 {
+                if is_modifier(code) {
+                    continue;
+                }
+                let levels = table.levels(code);
+                let k = m.key(code, 1);
+                m.key(code, 0);
+                let dead = matches!(levels[0], Out::Dead(_));
+                match k.text {
+                    Some(_) => assert!(!dead, "{code}"),
+                    None => assert!(
+                        dead || levels[0] == Out::None,
+                        "{} {code}",
+                        LAYOUTS[layout].name
+                    ),
+                }
+                m.clear_dead();
+            }
+        }
+    }
+
+    /// INV-0163-3 over the base letters of every layout: each dead key and
+    /// each letter a layout types composes or passes the letter.
+    #[test]
+    fn every_accent_composes_or_passes_every_base_of_every_layout() {
+        for (layout, table) in LAYOUTS.iter().enumerate() {
+            for (code, levels) in table.keys {
+                for (level, out) in levels.iter().enumerate().take(2) {
+                    let Out::Char(base) = out else { continue };
+                    for accent in Accent::ALL {
+                        let mut m = Keymap::new();
+                        m.set_layout(layout);
+                        if level == 1 {
+                            m.key(code::LEFT_SHIFT, 1);
+                        }
+                        m.set_dead(Some(accent));
+                        let got = typed(&mut m, *code);
+                        let want = if *code == code::SPACE {
+                            accent.spacing()
+                        } else {
+                            accent.compose(*base).unwrap_or(*base)
+                        };
+                        // A Caps-free key at its level gives its letter.
+                        assert_eq!(
+                            got,
+                            Some(want),
+                            "{} {accent:?} {base}",
+                            LAYOUTS[layout].name
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

@@ -497,13 +497,14 @@ Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) an
   shell a `Size`), and the close button ends it; `init` takes a terminal that ended with 0 as a closed window and
   starts a new terminal and shell, as after `exit`.
 
-Measured (`t_gui` in the test kernel; MEASURE_7B):
+Measured (`t_gui` in the test kernel, `make test-qemu-auto-default` and `make test-qemu-tcg-default` at 9659e2d,
+2026-11-09, QEMU 11.1.2 on the M4 Mac mini):
 
 | | HVF | TCG |
 |---|---|---|
-| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | MEASURE_7B_HVF_COMPOSE | MEASURE_7B_TCG_COMPOSE |
-| The frame that opens the switcher (blur of the scene under it) | MEASURE_7B_HVF_SWITCH | MEASURE_7B_TCG_SWITCH |
-| A frame committed under the open switcher | MEASURE_7B_HVF_UNDER | MEASURE_7B_TCG_UNDER |
+| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | 6.1 ms | 55 ms |
+| The frame that opens the switcher (blur of the scene under it) | 18.8 ms | 107 ms |
+| A frame committed under the open switcher | 18.7 ms | 104 ms |
 
 The compositor's start and its frames (`compd`'s own report on the console, `make test-gui`'s terminal script,
 2026-11-09, QEMU 11.1.2 on the M4 Mac mini; GitHub's runners are about 2.3 times slower under TCG):
@@ -520,6 +521,30 @@ scaled up bilinearly (both are smooth): at full size they took 202 ms, 589 ms, 1
 under TCG on CI's runner more than a client's first wait, so `term` panicked (main, 2026-11-09). `term` now waits as
 long as the compositor lives. A window's frame and shadow are made once per size and kept (`chrome`); a frame
 composes only the damaged region. The longest frames are the full redraws (a window shown, the switcher).
+
+## Keyboard layouts (as built)
+
+Stage 7c (TASK-24), on the accepted [ADR-0163](adr/0163-keyboard-layouts.md).
+
+- **Tables** (`zoraya-keymap`'s `layouts.rs`): `us` basic, `ua` unicode, `ru` winkeys and `cz` QWERTZ basic, four
+  levels a key (plain, Shift, AltGr, Shift+AltGr) of a character, a dead key or nothing, from the reference layouts
+  the survey records (`docs/research/desktop/survey.md#keyboard-layouts`). Third and fourth levels are only Czech's
+  and the Ukrainian ґ: the other layouts' are left out until something needs them.
+- **Dead keys**: thirteen accents with their compositions over Latin-1 and Latin Extended-A; a dead key then Space
+  gives the spacing accent, then a letter it does not compose passes the letter, and a second dead key replaces the
+  first; any other key (Enter, an arrow, a Ctrl chord) cancels it, a key the compositor takes (a chord) leaves it as
+  it was, and the state is cleared at a focus change and a switch. Caps Lock acts on case pairs only (it does not
+  capitalise Czech's number-row letters, as XKB's semi-alphabetic type would); the right Alt is
+  AltGr in a layout with a third level (held across a switch, it keeps its role until released); Ctrl gives control
+  characters by the key's Latin character in the active layout, the US one in a Cyrillic layout.
+- **Switching**: System+Space cycles the enabled layouts (`us ua cz` until 7f's `gui.keyboard-layouts`), Shift goes
+  back; held modifiers stay held, and the switch reaches no client as a key (INV-0163-4). The bar shows the active
+  layout's short name; a client hears `Layout { name }` when it gains focus and at each switch.
+- **The title**: `zosh` sends `Title` (its directory as the prompt shows it) at start and after each `cd`, out of band
+  (ADR-0168); `term` titles its window `zosh — <dir>`.
+- **The GUI test** `tests/gui/layouts.script` switches to `ua`, types a Ukrainian name, switches to `cz`, types
+  `příklad.txt` and letters only dead keys reach, and reads them back; the runner types each letter with the keys the
+  layout's table gives (`layout NAME`), a letter with no key through a dead key.
 
 ## Cross toolchain and ports (as built)
 
@@ -993,7 +1018,8 @@ measured for real.
 desktop: the bar, and a terminal window running `zosh`, with the same commands as `make run` (below). Drag the title
 bar to move the window, its edges to resize it; the dash minimises it and the cross closes it (a new terminal opens).
 Alt+Tab (Option+Tab on a Mac) shows the switcher; F12 goes to the next window; Command+W, Command+M and Command+Left or
-Right close, minimise and tile. Shift with Page Up or Page Down
+Right close, minimise and tile; Command+Space switches the keyboard layout (US, UA, CZ; the bar shows which), and on
+the Czech layout the key right of `-` is the dead acute (with Shift the dead caron). Shift with Page Up or Page Down
 scrolls back. Programs started from the shell print to the serial line, not the window (Known limitations). `exit` closes
 the window and `init` opens a new one with a new shell; `poweroff` turns the machine off.
 

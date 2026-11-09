@@ -102,9 +102,10 @@ impl<P: Platform> Compositor<P> {
             blurred,
             ui,
             title_text,
-            layout,
+            keymap,
             ..
         } = self;
+        let layout = keymap.layout().short;
         let pixels = platform.pixels();
         if pixels.len() < width * height {
             return;

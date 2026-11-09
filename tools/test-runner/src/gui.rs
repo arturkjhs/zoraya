@@ -25,8 +25,11 @@
 //! pause MS          wait MS milliseconds, reading the serial line
 //! type KEYS         press and release each key (escapes \r \e \\)
 //! key QCODE         press and release one QEMU key code, such as f12
-//! chord MOD QCODE   the same with MOD (ctrl, shift, alt) held, such as
-//!                   chord ctrl c
+//! chord MOD QCODE   the same with MOD (ctrl, shift, alt, meta) held, such
+//!                   as chord ctrl c; chord meta spc switches the layout
+//! layout NAME       type the following text as keys of the layout NAME
+//!                   (us, ua, ru, cz; ADR-0163), a letter with no key of its
+//!                   own through a dead key: it presses nothing itself
 //! region X Y W H RGB  wait until every pixel of the rectangle is the colour
 //!                   RGB (hex)
 //! click X Y         move the pointer to (X, Y) and press and release the
@@ -127,6 +130,7 @@ pub enum Step {
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
     Click(i64, i64),
+    Layout(usize),
     Drag(i64, i64, i64, i64),
     Window,
     Top(String),
@@ -155,8 +159,8 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "key" => Step::Key(rest.to_string()),
             "chord" => {
                 let (m, code) = rest.split_once(' ').ok_or_else(|| bad("chord MOD QCODE"))?;
-                if !matches!(m, "ctrl" | "shift" | "alt") {
-                    return Err(bad("chord's modifier is ctrl, shift or alt"));
+                if !matches!(m, "ctrl" | "shift" | "alt" | "meta") {
+                    return Err(bad("chord's modifier is ctrl, shift, alt or meta"));
                 }
                 Step::Chord(m.to_string(), code.to_string())
             }
@@ -169,6 +173,9 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 let colour = u32::from_str_radix(v[4], 16).map_err(|_| bad("not a colour"))?;
                 Step::Region(num(v[0])?, num(v[1])?, num(v[2])?, num(v[3])?, colour)
             }
+            "layout" => Step::Layout(
+                zoraya_keymap::by_name(rest).ok_or_else(|| bad("layout us, ua, ru or cz"))?,
+            ),
             "click" => {
                 let v: Vec<i64> = rest
                     .split_whitespace()
@@ -284,6 +291,91 @@ impl Screen {
             |x, y| self.at(x, y),
         )
     }
+}
+
+/// QEMU's key code name for an evdev key code of the typing area.
+pub fn qcode_of(code: u32) -> Option<&'static str> {
+    const ROW1: [&str; 12] = [
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "minus", "equal",
+    ];
+    const ROW2: [&str; 12] = [
+        "q",
+        "w",
+        "e",
+        "r",
+        "t",
+        "y",
+        "u",
+        "i",
+        "o",
+        "p",
+        "bracket_left",
+        "bracket_right",
+    ];
+    const ROW3: [&str; 11] = [
+        "a",
+        "s",
+        "d",
+        "f",
+        "g",
+        "h",
+        "j",
+        "k",
+        "l",
+        "semicolon",
+        "apostrophe",
+    ];
+    const ROW4: [&str; 10] = ["z", "x", "c", "v", "b", "n", "m", "comma", "dot", "slash"];
+    let c = code as usize;
+    Some(match code {
+        2..=13 => ROW1[c - 2],
+        16..=27 => ROW2[c - 16],
+        30..=40 => ROW3[c - 30],
+        44..=53 => ROW4[c - 44],
+        41 => "grave_accent",
+        43 => "backslash",
+        57 => "spc",
+        86 => "less",
+        _ => return None,
+    })
+}
+
+/// A key to press: its evdev code, and Shift and AltGr held.
+pub type Press = (u32, bool, bool);
+
+/// The keys that type `c` in a layout: its own key at some level, or a dead
+/// key and a base the accent composes it with (ADR-0163).
+pub fn presses(layout: &zoraya_keymap::Layout, c: char) -> Option<Vec<Press>> {
+    use zoraya_keymap::{Accent, Out};
+    // The lowest level first: a plain key over one with Shift or AltGr.
+    let find = |want: Out| -> Option<Press> {
+        (0..4).find_map(|l| {
+            layout
+                .keys
+                .iter()
+                .find(|(_, levels)| levels[l] == want)
+                .map(|(code, _)| (*code, l % 2 == 1, l >= 2))
+        })
+    };
+    if let Some(p) = find(Out::Char(c)) {
+        return Some(vec![p]);
+    }
+    for accent in Accent::ALL {
+        let Some(dead) = find(Out::Dead(accent)) else {
+            continue;
+        };
+        for (_, levels) in layout.keys {
+            for o in levels {
+                if let Out::Char(base) = o
+                    && accent.compose(*base) == Some(c)
+                    && let Some(b) = find(*o)
+                {
+                    return Some(vec![dead, b]);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// QMP's key code for a character, and whether Shift is needed.
@@ -480,6 +572,9 @@ struct Run {
     reader: Reader,
     /// The scale `reader` reads at.
     scale: Scale,
+    /// The layout `type` types in (`layout`): an index of
+    /// `zoraya_keymap::LAYOUTS`, 0 being us.
+    layout: usize,
 }
 
 impl Run {
@@ -583,20 +678,57 @@ impl Run {
                 Ok(())
             }
             Step::Type(keys) => {
+                let layout = &zoraya_keymap::LAYOUTS[self.layout];
                 for c in String::from_utf8_lossy(keys).chars() {
-                    let (code, shift) = qcode(c).ok_or(format!("no key for {c:?}"))?;
-                    self.qmp.press(code, shift)?;
-                    std::thread::sleep(self.key_interval());
+                    // Under us, and for Enter, Tab and Space in any layout,
+                    // the plain table; else the layout's keys.
+                    let plain = qcode(c).filter(|_| {
+                        self.layout == 0 || !c.is_alphanumeric() && !c.is_ascii_punctuation()
+                    });
+                    if let Some((code, shift)) = plain {
+                        self.qmp.press(code, shift)?;
+                        std::thread::sleep(self.key_interval());
+                        continue;
+                    }
+                    let keys =
+                        presses(layout, c).ok_or(format!("no key for {c:?} in {}", layout.name))?;
+                    for (code, shift, altgr) in keys {
+                        let q = qcode_of(code).ok_or(format!("no QEMU key for code {code}"))?;
+                        let mut events = Vec::new();
+                        if altgr {
+                            events.push(("alt_r", true));
+                        }
+                        if shift {
+                            events.push(("shift", true));
+                        }
+                        events.push((q, true));
+                        events.push((q, false));
+                        if shift {
+                            events.push(("shift", false));
+                        }
+                        if altgr {
+                            events.push(("alt_r", false));
+                        }
+                        self.qmp.keys(&events)?;
+                        std::thread::sleep(self.key_interval());
+                    }
                 }
                 Ok(())
             }
+            Step::Layout(index) => {
+                self.layout = *index;
+                Ok(())
+            }
             Step::Key(code) => self.qmp.press(code, false),
-            Step::Chord(m, code) => self.qmp.keys(&[
-                (m.as_str(), true),
-                (code.as_str(), true),
-                (code.as_str(), false),
-                (m.as_str(), false),
-            ]),
+            Step::Chord(m, code) => {
+                let m = if m == "meta" { "meta_l" } else { m.as_str() };
+                self.qmp.keys(&[
+                    (m, true),
+                    (code.as_str(), true),
+                    (code.as_str(), false),
+                    (m, false),
+                ])
+            }
             // Waits for the colour, as `screen` waits for text: under TCG
             // the compositor may not have drawn yet what a pointer step did.
             Step::Region(x, y, w, h, colour) => loop {
@@ -701,7 +833,7 @@ impl Run {
                         (y + (y2 - y) * i / STEPS) * k,
                     );
                     self.qmp.pointer(at, size, None)?;
-                    std::thread::sleep(KEY_INTERVAL);
+                    std::thread::sleep(self.key_interval());
                 }
                 self.qmp.pointer((x2 * k, y2 * k), size, Some(false))
             }
@@ -779,6 +911,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             row: None,
             reader: reader(),
             scale: Scale::ONE,
+            layout: 0,
         };
         // A failure names its step, so that a script of a thousand says where.
         let r = steps.iter().enumerate().try_for_each(|(i, s)| {
@@ -828,7 +961,7 @@ mod tests {
             [Step::Chord("ctrl".into(), "c".into())]
         );
         assert!(parse("chord ctrl\n").is_err());
-        assert!(parse("chord meta c\n").is_err());
+        assert!(parse("chord hyper c\n").is_err());
         assert_eq!(
             parse("shot term-1\n").unwrap(),
             [Step::Shot("term-1".into())]
@@ -836,6 +969,9 @@ mod tests {
         assert!(parse("shot ../x\n").is_err());
         assert!(parse("shot\n").is_err());
         assert_eq!(parse("click 3 4\n").unwrap(), [Step::Click(3, 4)]);
+        assert_eq!(parse("layout cz\n").unwrap(), [Step::Layout(3)]);
+        assert!(parse("layout de\n").is_err());
+        assert!(parse("chord meta spc\n").is_ok());
         assert_eq!(parse("drag 1 2 3 4\n").unwrap(), [Step::Drag(1, 2, 3, 4)]);
         assert!(parse("click 3\n").is_err());
         assert!(parse("drag 1 2 3 x\n").is_err());
@@ -884,6 +1020,32 @@ mod tests {
         assert_eq!(text[1], reader.canonical("hi звіт-2026.txt příklad.txt"));
         assert_eq!(text[2], "zosh$ _");
         assert!(text[3..].iter().all(String::is_empty));
+    }
+
+    #[test]
+    fn letters_of_every_layout_have_keys_and_dead_keys_reach_the_rest() {
+        let cz = &zoraya_keymap::LAYOUTS[3];
+        assert_eq!(presses(cz, 'ř'), Some(vec![(6, false, false)]));
+        assert_eq!(presses(cz, '1'), Some(vec![(2, true, false)]));
+        // ď has no key: the dead caron (Shift with =) and d.
+        assert_eq!(
+            presses(cz, 'ď'),
+            Some(vec![(13, true, false), (32, false, false)])
+        );
+        assert_eq!(
+            presses(cz, 'ó'),
+            Some(vec![(13, false, false), (24, false, false)])
+        );
+        assert_eq!(presses(cz, '€'), Some(vec![(18, false, true)]));
+        let ua = &zoraya_keymap::LAYOUTS[1];
+        for c in "звіт-ґанок".chars() {
+            let p = presses(ua, c).unwrap_or_else(|| panic!("{c}"));
+            assert!(p.iter().all(|(code, _, _)| qcode_of(*code).is_some()));
+        }
+        assert_eq!(presses(ua, 'Ж'), Some(vec![(39, true, false)]));
+        assert!(presses(ua, 'q').is_none());
+        assert_eq!(qcode_of(13), Some("equal"));
+        assert_eq!(qcode_of(200), None);
     }
 
     #[test]

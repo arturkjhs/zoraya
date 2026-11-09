@@ -475,7 +475,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \

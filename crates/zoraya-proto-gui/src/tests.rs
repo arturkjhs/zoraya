@@ -104,6 +104,11 @@ fn every_message_round_trips_and_decodes_totally() {
     exercise(&out[..length], |bytes| {
         let _ = decode::<SetTitle<'_>>(bytes, 0);
     });
+    let layout = Layout {
+        name: zoraya_protocol::Data(b"ua"),
+    };
+    let length = encode(&layout, 0, &mut out).unwrap();
+    assert_eq!(decode::<Layout<'_>>(&out[..length], 0).unwrap().1, layout);
     let long = [b'x'; MAX_TITLE + 1];
     let too_long = SetTitle {
         window: 1,
