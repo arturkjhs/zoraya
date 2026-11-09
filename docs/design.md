@@ -505,6 +505,22 @@ Measured (`t_gui` in the test kernel; MEASURE_7B):
 | The frame that opens the switcher (blur of the scene under it) | MEASURE_7B_HVF_SWITCH | MEASURE_7B_TCG_SWITCH |
 | A frame committed under the open switcher | MEASURE_7B_HVF_UNDER | MEASURE_7B_TCG_UNDER |
 
+The compositor's start and its frames (`compd`'s own report on the console, `make test-gui`'s terminal script,
+2026-11-09, QEMU 11.1.2 on the M4 Mac mini; GitHub's runners are about 2.3 times slower under TCG):
+
+| | HVF, 1024 × 768 | TCG, 1024 × 768 | HVF, 2048 × 1536 | TCG, 2048 × 1536 |
+|---|---|---|---|---|
+| The wallpaper and its blur, at a display's attach | 21 ms | 71 ms | 84 ms | 282 ms |
+| The first frame | under 1 ms | 8 ms | 2 ms | 32 ms |
+| The next 100 frames: mean | 1.2 ms | 7.6 ms | 3.8 ms | 24 ms |
+| The next 100 frames: longest | 17 ms | 121 ms | 51 ms | 467 ms |
+
+The wallpaper and its blur are made once per display size and appearance, at a quarter of the size each way and
+scaled up bilinearly (both are smooth): at full size they took 202 ms, 589 ms, 1.08 s and 9.3 s, and at scale 2
+under TCG on CI's runner more than a client's first wait, so `term` panicked (main, 2026-11-09). `term` now waits as
+long as the compositor lives. A window's frame and shadow are made once per size and kept (`chrome`); a frame
+composes only the damaged region. The longest frames are the full redraws (a window shown, the switcher).
+
 ## Keyboard layouts (as built)
 
 Stage 7c (TASK-24), on the accepted [ADR-0163](adr/0163-keyboard-layouts.md).

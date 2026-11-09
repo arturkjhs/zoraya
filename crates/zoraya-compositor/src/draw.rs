@@ -40,6 +40,10 @@ pub const SWITCHER_ROW: u32 = 64;
 pub const SWITCHER_GROUP: u32 = 32;
 pub const THUMB: (u32, u32) = (80, 52);
 
+/// How much smaller the wallpaper and its blur are made than the screen,
+/// each way, before they are scaled up.
+const WALLPAPER_DIVISOR: usize = 4;
+
 impl<P: Platform> Compositor<P> {
     fn palette(&self) -> &'static Palette {
         self.appearance.palette()
@@ -47,17 +51,26 @@ impl<P: Platform> Compositor<P> {
 
     /// The wallpaper and its blurred copy, once per display size or
     /// appearance (ADR-0161: never per frame).
+    ///
+    /// Both are smooth, so both are made at a quarter of the size each way
+    /// and scaled up: at 2048 x 1536 under TCG the full size took 9.3 s
+    /// (2026-11-09), longer than a client's first wait.
     pub(crate) fn make_wallpaper(&mut self) {
         let (w, h) = (self.width as usize, self.height as usize);
-        self.wallpaper = paint::wallpaper::deep(w, h, self.palette());
-        self.blurred = self.wallpaper.clone();
+        let (sw, sh) = (
+            (w / WALLPAPER_DIVISOR).max(2),
+            (h / WALLPAPER_DIVISOR).max(2),
+        );
+        let mut small = paint::wallpaper::deep(sw, sh, self.palette());
+        self.wallpaper = paint::upscale(&small, sw, sh, w, h);
         let radius = glow::PANEL_BLUR.physical(self.scale) as usize;
         paint::blur_region(
-            &mut self.blurred,
-            w,
-            paint::Rect::new(0, 0, w as i32, h as i32),
-            radius,
+            &mut small,
+            sw,
+            paint::Rect::new(0, 0, sw as i32, sh as i32),
+            radius.div_ceil(WALLPAPER_DIVISOR),
         );
+        self.blurred = paint::upscale(&small, sw, sh, w, h);
         for w in &mut self.windows {
             w.chrome = None;
         }
