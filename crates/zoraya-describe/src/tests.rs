@@ -570,6 +570,42 @@ fn list_settings_are_declared() {
     assert_eq!(list_items(""), Ok(std::vec![]));
 }
 
+#[test]
+fn a_list_repeats_its_items_unless_it_is_unique() {
+    let head = "name t\nsummary s\nusage t\n";
+    let d = parse(std::format!("{head}setting a.b list of text 0 3 'x x' t\n").as_bytes()).unwrap();
+    assert!(d.settings[0].ty.check("x x").is_ok());
+}
+
+#[test]
+fn list_bounds_may_be_equal_and_reach_both_ends() {
+    let head = "name t\nsummary s\nusage t\n";
+    let one = |line: &str| parse(std::format!("{head}{line}\n").as_bytes());
+    for good in [
+        "setting a.b list of text 2 2 'x y' t",
+        "setting a.b list of text 0 2 'x' t",
+        "setting a.b list of text 0 64 'x' t",
+    ] {
+        assert!(one(good).is_ok(), "{good}");
+    }
+}
+
+#[test]
+fn a_list_with_bad_bounds_names_the_bounds() {
+    let head = "name t\nsummary s\nusage t\n";
+    let one = |line: &str| parse(std::format!("{head}{line}\n").as_bytes());
+    for bad in [
+        "setting a.b list of text 3 2 'x' t",
+        "setting a.b list of text -1 3 'x' t",
+    ] {
+        let e = one(bad).unwrap_err();
+        assert_eq!(
+            e.problem, "a list's MIN and MAX are counts from 0 to 64, MIN first",
+            "{bad}"
+        );
+    }
+}
+
 /// A choice's words may be numbers (`gui.scale`, ADR-0169), not mixed
 /// case, punctuation or empty.
 #[test]

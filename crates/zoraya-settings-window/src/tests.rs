@@ -64,3 +64,41 @@ fn the_page_shows_the_settings() {
     assert_eq!(w.value(LAYOUT + 1), Value::On(false));
     assert_eq!(w.value(ACTIVE), Value::Index(Some(0)));
 }
+
+#[test]
+fn each_layout_has_its_name_on_the_page() {
+    let names: alloc::vec::Vec<&str> = (0..zoraya_keymap::LAYOUTS.len())
+        .map(layout_label)
+        .collect();
+    assert_eq!(names, ["English (US)", "Ukrainian", "Russian", "Czech"]);
+}
+
+#[test]
+fn the_page_shows_a_fixed_scale() {
+    let l = |v| zoraya_tokens::Scale::ONE.logical(v);
+    for (file, want) in [
+        (&b"gui.scale = 1\n"[..], 1),
+        (b"gui.scale = 2\n", 2),
+        (b"", 0),
+    ] {
+        let mut w = zoraya_ui::Window::new(page(&s(file), ""), (l(480), l(400)));
+        assert_eq!(w.value(SCALE), Value::Index(Some(want)));
+    }
+}
+
+#[test]
+fn a_control_past_the_last_layout_is_not_a_control() {
+    let now = s(b"");
+    let past = LAYOUT + zoraya_keymap::LAYOUTS.len() as u32;
+    assert!(changed(&now, past, Value::On(true)).is_err());
+}
+
+#[test]
+fn a_layout_turned_to_the_state_it_has_changes_nothing() {
+    let cz = zoraya_keymap::by_name("cz").unwrap();
+    let now = s(b"");
+    let on = changed(&now, LAYOUT, Value::On(true)).unwrap();
+    assert_eq!(on.layouts, vec![0], "us is on already");
+    let off = changed(&now, LAYOUT + cz as u32, Value::On(false)).unwrap();
+    assert_eq!(off.layouts, vec![0], "cz is off already");
+}

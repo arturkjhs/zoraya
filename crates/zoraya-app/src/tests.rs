@@ -27,6 +27,11 @@ struct Fake {
     /// What a `Drag` is answered, and the serials drags named.
     drag_status: u32,
     drag_serials: Vec<u32>,
+    /// What a `SetTitle` and an `Offer` are answered; the length of
+    /// each text offered.
+    title_status: u32,
+    offer_status: u32,
+    offered: Vec<usize>,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -76,12 +81,26 @@ impl Platform for Fake {
                 let (_, m) = decode::<gui::SetTitle<'_>>(bytes, 0).unwrap();
                 self.titles
                     .push(String::from_utf8(m.text.0.to_vec()).unwrap());
-                self.inbox
-                    .push_back(reply(&gui::TitleDone { status: ok }, t));
+                self.inbox.push_back(reply(
+                    &gui::TitleDone {
+                        status: zoraya_protocol::Below(self.title_status),
+                    },
+                    t,
+                ));
             }
             10 => self
                 .inbox
                 .push_back(reply(&gui::CloseDone { status: ok }, t)),
+            14 => {
+                let (_, o) = decode::<gui::Offer<'_>>(bytes, 0).unwrap();
+                self.offered.push(o.text.0.len());
+                self.inbox.push_back(reply(
+                    &gui::OfferDone {
+                        status: zoraya_protocol::Below(self.offer_status),
+                    },
+                    t,
+                ));
+            }
             13 => {
                 let (_, d) = decode::<gui::Drag<'_>>(bytes, 1).unwrap();
                 self.drag_serials.push(d.serial);
@@ -503,4 +522,30 @@ fn the_theme_follows_configure() {
     let dark = app.platform.buffers.last().unwrap()[0];
     assert_ne!(light, dark, "repainted in the dark palette");
     assert_eq!(dark, zoraya_tokens::DARK.bg_window.pixel());
+}
+
+/// `set_title` says whether the compositor kept the title.
+#[test]
+fn set_title_says_whether_the_compositor_kept_it() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app
+        .open("one", Box::new(Button::new(1, "OK")), 200, 100)
+        .unwrap();
+    assert!(app.set_title(id, "two"));
+    app.platform.title_status = status::INVALID;
+    assert!(!app.set_title(id, "three"));
+    let titles = &app.platform.titles;
+    assert_eq!(titles[titles.len() - 2..], ["two", "three"]);
+}
+
+/// `offer` says whether the compositor kept the text, and sends a text
+/// of the largest size whole.
+#[test]
+fn an_offer_kept_is_reported_and_the_largest_is_sent() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    assert!(app.offer("kůň"));
+    assert!(app.offer(&"x".repeat(gui::MAX_CLIPBOARD)));
+    assert_eq!(app.platform.offered, ["kůň".len(), gui::MAX_CLIPBOARD]);
+    app.platform.offer_status = status::BAD_RANGE;
+    assert!(!app.offer("late"));
 }

@@ -265,3 +265,15 @@ fn only_the_settings_window_gets_config() {
         zoraya_proto_file::rights::PUBLISH
     );
 }
+
+#[test]
+fn the_settings_window_holds_the_six_rights_of_adr_0169() {
+    use zoraya_proto_file::rights::*;
+    // Read, write, create, publish, sync and clone; not remove or rename.
+    assert_eq!(CONFIG_RIGHTS, 0b1110_0111);
+    assert_eq!(
+        CONFIG_RIGHTS,
+        READ | WRITE | CREATE | PUBLISH | SYNC | CLONE
+    );
+    assert_eq!(CONFIG_RIGHTS & (REMOVE | RENAME), 0);
+}
