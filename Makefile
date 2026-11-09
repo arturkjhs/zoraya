@@ -36,6 +36,18 @@
 CARGO ?= $(shell command -v cargo 2>/dev/null || echo $(HOME)/.cargo/bin/cargo)
 TARGET := aarch64-unknown-none
 BUILD := build
+
+# Local runs skip what CI runs anyway: the TCG configurations and runs, the
+# tour's second run (under TCG) and crash rounds past 2. FULL=1 runs
+# everything; CI (where GitHub sets CI=true) always does.
+FULL ?= $(if $(CI),1,0)
+ifeq ($(FULL),1)
+LOCAL_ACCELS := auto tcg
+else
+LOCAL_ACCELS := auto
+endif
+# A recipe line that runs only with FULL=1.
+FULL_ONLY = [ "$(FULL)" = 1 ] || exit 0;
 KERNEL := $(BUILD)/zoraya-kernel.elf
 TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
@@ -54,7 +66,7 @@ QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -150,7 +162,8 @@ EL2_OR_SKIP = reason=$$($(RUN_QEMU) --accel auto --probe-el2); \
 # ADR-0213's Decision); make test-qemu runs them all, in this order, on one
 # test disk, with zoraya-fsck after each.
 QEMU_CONFIGS := auto-default auto-smp4-2g auto-el2 tcg-default tcg-smp4-gicv2 tcg-el2 tcg-smp4-gicv3
-test-qemu: $(addprefix test-qemu-,$(QEMU_CONFIGS))
+QEMU_RUN := $(if $(filter 1,$(FULL)),$(QEMU_CONFIGS),$(filter auto-%,$(QEMU_CONFIGS)))
+test-qemu: $(addprefix test-qemu-,$(QEMU_RUN))
 
 test-qemu-disk: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
@@ -223,7 +236,7 @@ DEVICE_ERROR := tests/shell/device-error.script
 GRANTS_SCRIPT := tests/shell/grants.script
 GRANTS_ROOT := $(BUILD)/grants-root
 CRASH_IMAGE := $(BUILD)/crash.img
-CRASH_ROUNDS ?= 10
+CRASH_ROUNDS ?= $(if $(filter 1,$(FULL)),10,2)
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
 
 test-boot: $(KERNEL) $(RUNNER)
@@ -234,10 +247,10 @@ test-boot: $(KERNEL) $(RUNNER)
 	$(RUN_BOOT) --label boot-auto -- $(RUN_QEMU) --test --keys --accel auto $(KERNEL)
 	$(RUN_BOOT) --label boot-auto-smp4-2g -- $(RUN_QEMU) --test --keys --accel auto --smp 4 --mem 2G $(KERNEL)
 	$(call EL2_OR_SKIP,boot-auto-el2) $(RUN_BOOT) --label boot-auto-el2 -- $(RUN_QEMU) --test --keys --accel auto --machine-opt virtualization=on $(KERNEL)
-	$(RUN_BOOT) --label boot-tcg -- $(RUN_QEMU) --test --keys --accel tcg $(KERNEL)
-	$(RUN_BOOT) --label boot-tcg-smp4-gicv2 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 $(KERNEL)
-	$(RUN_BOOT) --label boot-tcg-el2 -- $(RUN_QEMU) --test --keys --accel tcg --machine-opt virtualization=on $(KERNEL)
-	$(RUN_BOOT) --label boot-tcg-smp4-gicv3 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(KERNEL)
+	$(FULL_ONLY) $(RUN_BOOT) --label boot-tcg -- $(RUN_QEMU) --test --keys --accel tcg $(KERNEL)
+	$(FULL_ONLY) $(RUN_BOOT) --label boot-tcg-smp4-gicv2 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 $(KERNEL)
+	$(FULL_ONLY) $(RUN_BOOT) --label boot-tcg-el2 -- $(RUN_QEMU) --test --keys --accel tcg --machine-opt virtualization=on $(KERNEL)
+	$(FULL_ONLY) $(RUN_BOOT) --label boot-tcg-smp4-gicv3 -- $(RUN_QEMU) --test --keys --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(KERNEL)
 
 # The roadmap's criterion: two boots of one image, and the image is clean.
 test-files: $(KERNEL) $(RUNNER) tools-storage
@@ -277,7 +290,7 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 	tools/zcc -O2 -o $(POSIX_CORE)/root/bin/t_libposix tests/posix-core/t_libposix.c
 	$(CARGO) build -q -p zoraya-elf-check
 	target/debug/zoraya-elf-check $(POSIX_CORE)/root/bin/t_libposix
-	@for accel in auto tcg; do \
+	@for accel in $(LOCAL_ACCELS); do \
 	  target/debug/zoraya-mkfs --size 32M --from $(POSIX_CORE)/root $(POSIX_CORE)/disk.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(POSIX_CORE_SCRIPT) --label libposix-$$accel -- \
 	    $(RUN_QEMU) --test --keys --disk $(POSIX_CORE)/disk.img --accel $$accel $(KERNEL) && \
@@ -294,7 +307,7 @@ test-libposix: $(KERNEL) $(RUNNER) tools-storage
 POSIX_SESSION := $(BUILD)/posix
 POSIX_ROOT := $(POSIX_SESSION)/root
 POSIX_DISK := $(BUILD)/posix-disk.img
-POSIX_ACCELS ?= auto tcg
+POSIX_ACCELS ?= $(LOCAL_ACCELS)
 WORKLOADS_SRC := tools/posix-surface/workloads
 posix-image: $(KERNEL) tools-storage
 	@$(MAKE) -s -f ports/Makefile rootfs workloads
@@ -368,7 +381,8 @@ POSIX_SCRIPTS ?= tests/posix/hello.script tests/posix/w5.script tests/posix/w8.s
 # where there is one, else TCG), and under the second in make
 # test-posix-long (ADR-0212's Decision, part 1).
 POSIX_ONCE := w8
-test-posix: posix-image $(RUNNER)
+POSIX_IMAGE_DEP ?= posix-image
+test-posix: $(POSIX_IMAGE_DEP) $(RUNNER)
 	@$(MAKE) -s -f ports/Makefile check-libc
 	@for script in $(POSIX_SCRIPTS); do first=1; for accel in $(POSIX_ACCELS); do \
 	  case " $(POSIX_ONCE) " in *" $$(basename $$script .script) "*) [ $$first = 1 ] || continue;; esac; \
@@ -427,7 +441,7 @@ posix-table:
 # The same session in the stage 5 terminal window (ttyd's window backend),
 # read back by screendump as make test-gui reads zosh.
 POSIX_GUI_SCRIPT := tests/posix/gui.script
-test-posix-gui: posix-image $(RUNNER)
+test-posix-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
 	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_ROOT) $(BUILD)/posix-gui.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(POSIX_GUI_SCRIPT) --qmp $(BUILD)/posix-gui-$$accel.qmp \
@@ -440,7 +454,7 @@ test-posix-gui: posix-image $(RUNNER)
 # Then a terminal in a room runs the volume's POSIX programs (ADR-0172,
 # the toolchain a trusted room's shell reads).
 ROOM_GUI_SCRIPT := tests/posix/room-gui.script
-test-tour-gui: posix-image $(RUNNER)
+test-tour-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
 	  for run in tour-gui:$(TOUR_GUI_SCRIPT):1200 room-gui:$(ROOM_GUI_SCRIPT):$(QEMU_TIMEOUT); do \
 	  name=$$(echo $$run | cut -d: -f1); script=$$(echo $$run | cut -d: -f2); limit=$$(echo $$run | cut -d: -f3); \
@@ -463,8 +477,11 @@ GUI_IMAGE := $(BUILD)/gui.img
 # each under the host's accelerator and TCG at scale 1, and under the host's
 # accelerator at scale 2 (2048 x 1536; the same scripts in logical pixels),
 # with three times the time: every screendump read is four times larger.
+# The terminal also under TCG at scale 2, which is what CI's "auto" runs
+# (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 terminal:auto:2 windows:auto:2
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2
+GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \
@@ -618,8 +635,22 @@ ci-build: $(KERNEL) $(TEST_KERNEL) $(RUNNER) tools-storage
 CI_WORKFLOW ?= .github/workflows/test.yml
 check-ci-jobs:
 	@TEST_STEPS="$(TEST_STEPS)" QEMU_CONFIGS="$(QEMU_CONFIGS)" POSIX_SCRIPTS="$(POSIX_SCRIPTS)" \
-	  POSIX_ACCELS="$(POSIX_ACCELS)" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" \
+	  POSIX_ACCELS="auto tcg" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" \
 	  tools/check-ci-jobs.sh $(CI_WORKFLOW)
+
+# The tiers (CLAUDE.md, "Testing"): make check on every commit (seconds);
+# make test-changed for what a change touches (tools/test-map.txt, under
+# HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
+# at most 3 QEMU guests); make test for everything one step after another.
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs
+check:
+	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
+
+test-changed:
+	@MAKE="$(MAKE)" CARGO="$(CARGO)" tools/test-changed.sh
+
+test-par:
+	@MAKE="$(MAKE)" CARGO="$(CARGO)" FULL="$(FULL)" tools/test-par.sh
 
 ifeq ($(V),1)
 test: $(TEST_STEPS)

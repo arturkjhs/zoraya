@@ -67,7 +67,19 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
 
 ## Work discipline
 
-- A stage is not done until `make test` passes from a clean checkout. Run it; do not infer it.
+- Testing has tiers, fastest first:
+  - `make check` (fmt, clippy, adr-check and every `check-*`; seconds): before every commit.
+  - `make test-changed`: during work. It runs the host tests of the crates changed since `origin/main` and of the
+    crates that depend on them, and the QEMU steps that cover the changed paths (`tools/test-map.txt`; a path not
+    in the map runs every step), under HVF, in parallel. Add a line to the map when you add a directory.
+  - `make test-par`: every step, in parallel lanes (at most 3 QEMU guests and one host-test job, under the
+    watchdog). `make test`: every step, one after another.
+  - Locally the TCG runs, the tour's second run and crash rounds past 2 are skipped; CI runs them all, and `FULL=1`
+    runs them here.
+- Before a merge, run the full CI on the branch: push the tag `candidate/BRANCH` on its head (or
+  `gh workflow run test.yml --ref BRANCH`). A green full run there replaces the local `make test` from a clean
+  checkout; merge only when it is green. A stage is not done until that run, and then `main`'s, pass. Run them; do
+  not infer them.
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this
   session.
 - Logic that does not need hardware lives in a separate `no_std` crate under `crates/`, with host tests
