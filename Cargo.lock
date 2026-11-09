@@ -136,6 +136,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-editor"
+version = "0.1.0"
+dependencies = [
+ "zoraya-paint",
+ "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
+ "zoraya-ui",
+]
+
+[[package]]
 name = "zoraya-elf"
 version = "0.1.0"
 dependencies = [
