@@ -449,11 +449,16 @@ Under `docs/research/desktop/shots/7d/` (712 KB):
   Against `clear-field/rooms.png`: the field, the tint, the badge and the chips as in the mockup. Not there: the Rooms
   sheet (System+R), which no 7d ADR asks for (the shell's `room` is the way in); the field's header tag is hidden
   under the `home` window here; the untrusted room (no way to make one, as above); the clock; the other applications'
-  tiles. The terminal's pills include `+w /` because every terminal holds the root (above).
+  tiles. Retaken after ADR-0242's condition: the room's terminal shows its grants and the toolchain (`+w ~/project`,
+  `+r /texts`, `+r /bin`, `+r /usr`, `+r /etc`) and no `+w /`; the first terminal shows `home`'s four.
 - `dock-qemu.png`: dock B with the terminal tile, its two running dots and the `home` chip, against `clear-field/dock.png`;
   the same materials, sizes and dots, with one tile instead of five.
-- `commands-qemu.png`: show-commands mode, each tile and chip with the text of its command, against
-  `clear-field/commands.png`, with the same reduction.
+- `commands-qemu.png` (retaken after the architect's review): show-commands mode. Each window's `kill term` tag sits
+  inside its own frame at the body's lower left, covered by the windows above it as the mockup's are; the dock's
+  terminal tile has one line (`term` is its name and its command), each chip its own width with its line centred under
+  it. Against `clear-field/commands.png`: the same placement and materials; the mockup's room tag on a window
+  (`room project`) and its `bg` tag (for a program started with `&`) are not drawn, since minimising is not the
+  shell's `bg` and the field's header names the room.
 - `rooms-light.png`, `rooms-dark.png`: the compositor's own rendering on the host (the ignored test `rooms_samples`)
   of three rooms with an untrusted one, in both themes: the reserved hue, the two-pixel edge, the word `untrusted`,
   the folded pills and the fields cut back between rooms, which the QEMU desktop cannot show yet.
