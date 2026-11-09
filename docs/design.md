@@ -608,6 +608,52 @@ job under the panel's); `room NAME COMMAND`, `room add` and `room drop`; the `Ro
 terminal; the panel starting the first terminal and the new shell after `exit` (ADR-0242). Fields follow a move at
 its end, not during the drag.
 
+## The chooser, the file manager and drops (as built)
+
+Stage 7e (TASK-24), by [ADR-0167](adr/0167-granting-files-in-the-gui.md), [ADR-0168](adr/0168-first-applications.md)
+and [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md), with the proposed
+[ADR-0245](adr/0245-the-choosers-wiring-in-stage-7e.md):
+
+- **The chooser** (`chooser`, its logic in `zoraya-chooser`): a compositor client the driver manager marks with
+  `AddSystemClient`, holding the volume's root. The panel gives every application it launches outside an untrusted
+  room a chooser channel (slot 6) and hands the other end to the chooser with the application's compositor tag
+  (`AddApplication`). On `Open`, `Save` or `PickDirectory` the chooser lists the folder through `zoraya-fsclient` and
+  asks the compositor for a sheet under that application's window (`CreateSheet`, system clients only); the
+  compositor draws the strip with the emblem and "Open a file for APP", the bar's mark, and gives the owner no input
+  while the sheet is open. Only a key or a press in the sheet confirms; the answer is one connection with ADR-0153's
+  rights for the kind (`Open` reads; `Save` is the folder narrowed to the one name, with create's rights;
+  `PickDirectory` reads or is a `tree`), the display name and the kind's words (`+r plán.txt`), never the path; the
+  chooser then tells the compositor `Granted`, and the window's frame shows the pill (`+r ~/project/plán.txt`). One
+  sheet at a time; other requests wait.
+- **The data directory**: the panel makes `/data/ROOM/APP` (`/data/home/APP` in `home`) and gives it at slot 7 with
+  every right but publish.
+- **The file manager** (`files`, its logic in `zoraya-files`): a folder's list (folders first), Up, Open, New
+  folder, Rename and Delete (asked twice). It holds the root (INV-0168-2) and opens a file only through the panel:
+  `OpenWith` with a connection, which the panel clones down to read and clone, then launches the application for the
+  name's extension (`.txt` and `.md`: `t_open` in 7e, `edit` from 7f) with it at slot 10.
+- **Drops** (ADR-0170): a press on a file in `files` starts a drag of it, read only. The compositor takes `Drag` only
+  for the press it delivered to that client, still held and named by its serial within 500 ms; while the entry is
+  carried it draws its name beside the pointer and tells no client of the pointer or the keys; at the release the
+  window under the pointer gets `Drop` with the connection and the display name, and its frame the pill `dropped: NAME
+  read`; the source gets only `DragEnded`. Escape, a release over the source or over no window, or a window of an
+  untrusted room (until the confirming card exists, INV-0172-3) delivers nothing and closes the entry.
+- **The test application** `t_open`: Open and Save through the chooser, and drops; it prints on the console what it
+  read and whether a write was allowed.
+- **The GUI test** `tests/gui/files.script` (HVF and TCG): `files` opens `notes.txt` in `t_open` (read; the write
+  refused), `t_open` opens it through the chooser (the same) and saves `nový.txt` (written; a second name beside it
+  refused), `t_open` is moved aside and the file is dropped on it (read; the write refused), and the first terminal
+  lists both files.
+
+Measured (the chooser's round trip, plan 7e; `tests/gui/files.script`, 2026-11-09, QEMU 11.1.2 on the M4 Mac mini):
+from the request read to the sheet asked for, its folder listed and its first frame committed, 0.90 ms and 0.94 ms
+under HVF (Open, Save), 22.5 ms and 17.5 ms under TCG; from the confirming key to the connection made and the answer
+and the pill sent (the sheet's window closed first), 9.0 ms and 10.5 ms under HVF, 69.9 ms and 74.7 ms under TCG. The
+person's own time between the two is not counted.
+
+Not built in 7e: the rooms' own launches of `files` with a narrower root; the application opened from the file
+manager starts in `home`; the chooser's centred-window style; `multiple` in `Open`; a sheet's re-placement when the
+scale changes; the confirming card for drops on an untrusted window; the clipboard (7f).
+
 ## Cross toolchain and ports (as built)
 
 Stage 6b (TASK-17), on the accepted [ADR-0100](adr/0100-libposix-construction.md) and
