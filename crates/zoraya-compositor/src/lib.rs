@@ -309,6 +309,11 @@ pub struct Compositor<P: Platform> {
 
     /// The entry being dragged; no client hears of the pointer meanwhile.
     carried: Option<Carried<P::End>>,
+    /// The clipboard's text (ADR-0170): set only by an `Offer` answering a
+    /// `Copy`, given only in a `Paste` on System+V.
+    clipboard: String,
+    /// The client asked to copy, and when: its `Offer` is taken then.
+    copy_asked: Option<(usize, u64)>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
     switcher: Option<Switcher>,
@@ -398,6 +403,8 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             drag: None,
             body_press: None,
+            clipboard: String::new(),
+            copy_asked: None,
             carried: None,
             pending_pointer: false,
             switcher: None,
@@ -945,6 +952,29 @@ impl<P: Platform> Compositor<P> {
             self.layout_changed();
             return;
         }
+        // Copy, cut and paste (ADR-0170), to the focused window itself.
+        if let (Some(f), code::C | code::X | code::V) = (self.focus, code_) {
+            if code_ == code::V {
+                if !self.clipboard.is_empty() {
+                    let text = core::mem::take(&mut self.clipboard);
+                    let m = gui::Paste {
+                        window: f.id,
+                        text: zoraya_protocol::Data(text.as_bytes()),
+                    };
+                    self.send_event_plain(f.client, &m);
+                    self.clipboard = text;
+                }
+            } else {
+                let now = self.platform.now();
+                self.copy_asked = Some((f.client, now));
+                let m = gui::Copy {
+                    window: f.id,
+                    cut: code_ == code::X,
+                };
+                self.send_event_plain(f.client, &m);
+            }
+            return;
+        }
         let Some(mut focus) = self.focus else { return };
         // A focused popup's chords are its window's; a sheet's, its owner's.
         if let Some(i) = self.index(focus) {
@@ -1016,6 +1046,24 @@ impl<P: Platform> Compositor<P> {
         // With the material's halo around the label (16 px to 34 px below
         // the pointer).
         Rect::new(x - 16 * s, y - 24 * s, (CARRIED_WIDTH + 64) * s, 96 * s)
+    }
+
+    /// `Offer`: the clipboard's new text, from the client just asked to
+    /// copy and within 500 ms of it (ADR-0170), and only then.
+    fn offer(&mut self, slot: usize, text: &[u8]) -> u32 {
+        let now = self.platform.now();
+        let asked = self
+            .copy_asked
+            .is_some_and(|(c, at)| c == slot && now.saturating_sub(at) <= DRAG_WITHIN_NS);
+        let Ok(text) = core::str::from_utf8(text) else {
+            return status::BAD_RANGE;
+        };
+        if !asked {
+            return status::BAD_RANGE;
+        }
+        self.copy_asked = None;
+        self.clipboard = String::from(text);
+        status::OK
     }
 
     /// `Drag`: the entry is carried while the client's body press is held.
@@ -2551,6 +2599,13 @@ impl<P: Platform> Compositor<P> {
                     },
                     t,
                 );
+            }
+            14 => {
+                let s = match decode::<gui::Offer<'_>>(bytes, n) {
+                    Ok((_, m)) => self.offer(slot, m.text.0),
+                    Err(_) => status::BAD_BUFFER,
+                };
+                self.answer(slot, &gui::OfferDone { status: Below(s) }, t);
             }
             13 => {
                 let s = match decode::<gui::Drag<'_>>(bytes, n) {

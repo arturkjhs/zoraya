@@ -21,6 +21,9 @@ pub mod code {
     pub const CAPS_LOCK: u32 = 58;
     pub const F12: u32 = 88;
     pub const W: u32 = 17;
+    pub const C: u32 = 46;
+    pub const X: u32 = 45;
+    pub const V: u32 = 47;
     pub const R: u32 = 19;
     pub const M: u32 = 50;
     pub const SLASH: u32 = 53;

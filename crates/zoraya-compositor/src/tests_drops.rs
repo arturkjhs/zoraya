@@ -270,3 +270,82 @@ fn escape_ends_a_drag() {
     at(&mut t.s, tx, ty, Some(0));
     assert!(t.s.f().given.is_empty());
 }
+
+fn offer(s: &mut Setup, end: u32, text: &str) -> u32 {
+    let m = gui::Offer {
+        text: zoraya_protocol::Data(text.as_bytes()),
+    };
+    s.f().send(end, message(&m, 8), vec![]);
+    s.c.step();
+    s.f()
+        .take(end)
+        .iter()
+        .find_map(|r| decode::<gui::OfferDone>(r, 0).ok())
+        .map(|(_, d)| d.status.0)
+        .expect("an OfferDone")
+}
+
+fn chord(s: &mut Setup, key: u32) {
+    s.keys(&[
+        (code::RIGHT_META, 1),
+        (key, 1),
+        (key, 0),
+        (code::RIGHT_META, 0),
+    ]);
+}
+
+/// INV-0170-1 and -2: the clipboard is set only by an `Offer` answering
+/// the `Copy` the compositor sent that client, within 500 ms, and given
+/// only in a `Paste` to the focused window on System+V; nothing else
+/// reveals it.
+#[test]
+fn the_clipboard_moves_only_on_the_persons_chords() {
+    let mut t = two();
+    // Unprompted: refused.
+    assert_eq!(offer(&mut t.s, t.a, "secret"), status::BAD_RANGE);
+    // b focused by a press (a new window takes focus only from the
+    // person); System+V with nothing copied sends nothing.
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.b);
+    chord(&mut t.s, code::V);
+    assert!(!ordinals(&t.s.f().take(t.b)).contains(&28));
+    // System+C asks the focused client; its offer within 500 ms is kept,
+    // another client's is not.
+    chord(&mut t.s, code::C);
+    let got = t.s.f().take(t.b);
+    let (_, c) = got
+        .iter()
+        .find_map(|m| decode::<gui::Copy>(m, 0).ok())
+        .expect("Copy to the focused client");
+    assert!(!c.cut);
+    assert_eq!(offer(&mut t.s, t.a, "from a"), status::BAD_RANGE);
+    assert_eq!(offer(&mut t.s, t.b, "kůň"), status::OK);
+    assert_eq!(
+        offer(&mut t.s, t.b, "again"),
+        status::BAD_RANGE,
+        "once per Copy"
+    );
+    // System+X: a cut; too late an offer is refused.
+    chord(&mut t.s, code::X);
+    assert!(
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::Copy>(m, 0).ok())
+            .any(|(_, c)| c.cut)
+    );
+    t.s.f().clock += 600_000_000;
+    assert_eq!(offer(&mut t.s, t.b, "late"), status::BAD_RANGE);
+    // System+V gives the focused client the text, and no one else.
+    t.s.f().take(t.a);
+    chord(&mut t.s, code::V);
+    let got = t.s.f().take(t.b);
+    let (_, p) = got
+        .iter()
+        .find_map(|m| decode::<gui::Paste<'_>>(m, 0).ok())
+        .expect("Paste");
+    assert_eq!(p.text.0, "kůň".as_bytes());
+    assert!(!ordinals(&t.s.f().take(t.a)).contains(&28));
+}

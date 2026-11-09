@@ -246,6 +246,18 @@ protocol! {
         status: Status,
     }
 
+    /// The client's answer to `Copy` (ADR-0170): what it offers, text,
+    /// within 500 ms of the `Copy` the compositor sent it; at any other
+    /// time refused (`BAD_RANGE`). The compositor keeps it as the
+    /// clipboard; no message reads the clipboard back. The reply is
+    /// `OfferDone`.
+    message Offer<'a> = 14, handles 0 {
+        text: Data<'a, MAX_CLIPBOARD>,
+    }
+    message OfferDone = 14, handles 0 {
+        status: Status,
+    }
+
     message CloseDone = 10, handles 0 {
         status: Status,
     }
@@ -314,6 +326,21 @@ protocol! {
     /// which, ADR-0170).
     message DragEnded = 26, handles 0 {
         window: u32,
+    }
+
+    /// The person pressed System+C (`cut` false) or System+X in `window`
+    /// (ADR-0170): answer with `Offer`, and on a cut remove what was
+    /// offered.
+    message Copy = 27, handles 0 {
+        window: u32,
+        cut: bool,
+    }
+
+    /// The person pressed System+V in `window`: the clipboard's text, the
+    /// only way any client learns it (ADR-0170).
+    message Paste<'a> = 28, handles 0 {
+        window: u32,
+        text: Data<'a, MAX_CLIPBOARD>,
     }
 
     /// Manager: a new client, with the compositor's end of its channel.
@@ -417,11 +444,11 @@ protocol! {
 }
 
 /// The ordinals a client may send.
-pub const CLIENT_REQUESTS: [u32; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+pub const CLIENT_REQUESTS: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 /// The client requests only a system client may send (proposed ADR-0245).
 pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 11] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26];
+pub const CLIENT_EVENTS: [u32; 13] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:
@@ -444,6 +471,8 @@ pub mod dock {
 /// The longest launch record's entries, room table and dock list.
 pub const MAX_ENTRIES: usize = 1024;
 pub const MAX_LINE: usize = 256;
+/// The most bytes the clipboard holds (ADR-0170, an assumption).
+pub const MAX_CLIPBOARD: usize = 32 * 1024;
 /// The longest display name a drag carries.
 pub const MAX_DROPPED_NAME: usize = 64;
 pub const MAX_ROOMS_TEXT: usize = 3072;
