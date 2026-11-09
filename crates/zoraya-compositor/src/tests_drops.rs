@@ -51,9 +51,9 @@ fn serial(s: &mut Setup, end: u32) -> u32 {
         .unwrap()
         .outbox
         .iter()
-        .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+        .rev()
+        .find_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
         .map(|(_, p)| p.serial)
-        .last()
         .unwrap_or(0)
 }
 
