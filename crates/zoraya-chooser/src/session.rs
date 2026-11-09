@@ -166,7 +166,12 @@ impl Sheet {
         };
         column.push(Box::new(Row::new(vec![
             Box::new(Button::new(CANCEL, "Cancel")),
-            Box::new(Button::new(CONFIRM, verb)),
+            Box::new({
+                // The sheet's primary action, as the mockup draws it.
+                let mut b = Button::new(CONFIRM, verb);
+                b.default = true;
+                b
+            }),
         ])));
         Box::new(Escapes(vec![Box::new(Column::new(column))]))
     }

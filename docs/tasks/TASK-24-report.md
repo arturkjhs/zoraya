@@ -513,6 +513,74 @@ Not merged: proposed ADR-0242 stages an accepted ADR's decision, and `git push` 
 About 3 h 30 min of writing (the crates, the panel, the GUI test and the review, to 22:25), 1 h for `make test` and
 its fixes, the mutation runs 90 min (capped), and their triage and tests 1 h 20 min.
 
+## 7e: chooser and files
+
+Branch `work/7e`, from `work/7d`.
+
+### What was built
+
+- **`zoraya-proto-chooser`** (`Open`, `Save`, `PickDirectory`, `Chosen`, `Cancelled`; the panel's `AddApplication`; the
+  file manager's `OpenWith`), **`zoraya-fsclient`** (a file-protocol client over any link, tested against the real file
+  service in-process), **`zoraya-chooser`** (what a sheet lists, what may be picked, the grant each pick gives in
+  ADR-0153's rights, and the sheet itself over `zoraya-app`), **`zoraya-files`** (the file manager's decisions).
+- **The compositor**: sheets for system clients (`AddSystemClient`, `CreateSheet`, `Granted`), drawn with the
+  trusted strip, emblem and heading, and the bar's mark; drops (`Drag`, `Drop`, `DragEnded`, ADR-0170), with the press
+  serial in `WindowPointer`.
+- **Programs**: `chooser`, `files`, `t_open`; the panel launches applications with a chooser channel, a data directory
+  `/data/ROOM/APP` and, from the file manager, the opened file read-only.
+- **The toolkit**: a text field answers Enter; a field keeps its cursor when rebuilt; `zoraya-app` takes a drop's
+  handle with its message and starts drags only from a held press.
+
+### The 7e acceptance test
+
+`plan.md`: "the GUI test opens a file from the file manager in a test application through the chooser over QMP, the
+application reads it and cannot write it (`Open`) or can (`Save`)". Done: `tests/gui/files.script` (58 steps, HVF and
+TCG, in `make test-gui`) opens `notes.txt` from `files` in `t_open` (read, the write refused), opens it again
+through the chooser's sheet (the same), saves `nový.txt` through it (written; a second name beside it refused), drags
+`notes.txt` from `files` onto `t_open` (read, the write refused), and lists both files in the first terminal.
+
+### Decisions taken without the architect
+
+- Proposed **ADR-0245**: the chooser's wiring (registration by the panel with the compositor tag, sheets only from
+  system clients, `Save` as the folder narrowed to one name, the data directory, `OpenWith` read-only). It fills gaps
+  of ADR-0167 and ADR-0168 and changes neither.
+- Drops follow ADR-0170 with the press serial as a field of `WindowPointer` counted per client, `DragDone` standing
+  for `DragStarted`, and the pill in ADR-0170's words, written by the compositor.
+
+### Screens
+
+Under `docs/research/desktop/shots/7e/` (light, HVF, scale 1):
+
+- `files-qemu.png`: the file manager over the first terminal, with its pills (`+w /data/home/files`, `+w /`).
+- `open-qemu.png`, `save-qemu.png`: the chooser's sheets under `t_open`, against `clear-field/chooser.png`. As in the
+  mockup: the strip with the emblem `Z` and "Open a file for t_open", the same heading in the bar, the sheet hung under
+  its owner's title bar, the sentence and the grant's line, Cancel and the primary action. Not as in the mockup: no
+  file-type icons and no frame around the list (the toolkit's list has neither yet), no breadcrumb chevrons (the sheet
+  shows `~` and an Up button), and the sheet is wider than its small owner (the mockup's owner is the editor).
+- `drop-qemu.png`: after the drop, `t_open`'s frame with the compositor's pill `dropped: notes.txt read`, against
+  `clear-field/drop.png`, which shows the drag in flight with its label; the screendump is taken after the release.
+
+### Measurements
+
+The chooser's round trip, in `docs/design.md`: about 0.9 ms from the request to the sheet and 9 to 10.5 ms from the
+confirming key to the answer under HVF; 17.5 to 22.5 ms and 70 to 75 ms under TCG.
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0167-1, -2, -4 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0167-3 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0168-2 | not yet applicable (stage 7) | checked: `make test-unit` (the in-QEMU half waits for `edit`, 7f) |
+| INV-0170-3, -4 | not yet applicable (stage 7) | checked: `make test-unit` (the clipboard's half in 7f) |
+
+### Review
+
+`docs/tasks/TASK-24-review-7e.md`: 2 errors, 10 warnings, 14 notes. Both errors fixed (a dragging client wrote the
+target's pill; applications learned the path of what they were given), and most warnings; the rest are recorded in
+ADR-0245's open questions. The check of the changed lines confirmed the fixes and found a new warning (the name
+field's cursor jumped to the end when the sheet was rebuilt), fixed with a test, and two small gaps, fixed.
+
 ## To finish by hand
 
 `git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,
