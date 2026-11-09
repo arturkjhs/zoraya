@@ -377,6 +377,8 @@ fn main() -> i32 {
     // The panel (ADR-0168): started once per GUI, with the volume; it
     // launches every terminal but the first (proposed ADR-0242).
     let mut panel: Option<Running> = None;
+    // The chooser (ADR-0167), started with the panel and ended with it.
+    let mut chooser: Option<Running> = None;
     let mut driver_restarts = (0, alloc::vec![0; devices.inputs.len()]);
     let mut shell_failures = 0;
     if gui_devices.is_some() {
@@ -416,7 +418,17 @@ fn main() -> i32 {
         if panel.is_none()
             && let (Some(g), Some(s)) = (gui.as_ref(), stack.as_ref())
         {
-            panel = g.start_panel(&s.root);
+            let registration = match g.start_chooser(&s.root) {
+                Some((c, end)) => {
+                    chooser = Some(c);
+                    Some(end)
+                }
+                None => {
+                    println!("init: the chooser did not start");
+                    None
+                }
+            };
+            panel = g.start_panel(&s.root, registration);
             if panel.is_none() {
                 println!("init: the panel did not start");
             }
@@ -566,6 +578,9 @@ fn main() -> i32 {
                 if let Some(p) = panel.take() {
                     p.end();
                 }
+                if let Some(c) = chooser.take() {
+                    c.end();
+                }
                 if let Some(g) = gui.take() {
                     driver_restarts = (g.gpu_restarts, g.input_restarts.clone());
                     g.end();
@@ -581,6 +596,9 @@ fn main() -> i32 {
                 // Its root was the volume's: started again with the next.
                 if let Some(p) = panel.take() {
                     p.end();
+                }
+                if let Some(c) = chooser.take() {
+                    c.end();
                 }
                 if let Some(s) = stack.take() {
                     s.end();
