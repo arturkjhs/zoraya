@@ -60,6 +60,9 @@ struct Fake {
     attaches: u32,
     clock: u64,
     next: u32,
+    /// Handles the compositor passed to a client: only a drop's entry
+    /// (ADR-0170), as (the client's end, the handle).
+    given: Vec<(u32, u32)>,
 }
 
 impl Fake {
@@ -68,6 +71,7 @@ impl Fake {
             display_size: (W, H),
             info_format: display::FORMAT_XRGB,
             next: 100,
+            given: Vec::new(),
             ..Fake::default()
         }
     }
@@ -133,10 +137,7 @@ impl Platform for Fake {
     }
 
     fn write(&mut self, end: u32, bytes: &[u8], handles: &[u32]) -> Outgoing {
-        assert!(
-            handles.is_empty(),
-            "the compositor sends no client a handle"
-        );
+        let gives = !handles.is_empty();
         // The display driver: a flush is answered at once, unless it hangs.
         if Some(end) == self.display && !self.peers[&end].gone {
             if self.display_full {
@@ -171,6 +172,16 @@ impl Platform for Fake {
             return Outgoing::Full;
         }
         peer.outbox.push(bytes.to_vec());
+        if gives {
+            // Only a drop carries one, and one.
+            let (header, _) = Header::decode(bytes).unwrap();
+            assert_eq!(
+                (header.ordinal, handles.len()),
+                (25, 1),
+                "a handle only with a drop"
+            );
+            self.given.push((end, handles[0]));
+        }
         Outgoing::Sent
     }
 
@@ -1610,6 +1621,8 @@ fn a_display_driver_whose_queue_stays_full_is_hung() {
 #[path = "tests_windows.rs"]
 mod windows;
 
+#[path = "tests_drops.rs"]
+mod drops;
 #[path = "tests_rooms.rs"]
 mod rooms;
 #[path = "tests_sheets.rs"]

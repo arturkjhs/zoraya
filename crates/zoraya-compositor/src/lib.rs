@@ -210,6 +210,9 @@ pub struct SwitchGroup {
     pub grants: String,
 }
 
+/// The dragged entry's label's widest, logical pixels.
+const CARRIED_WIDTH: i64 = 260;
+
 /// What a held pointer button is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Drag {
@@ -225,6 +228,15 @@ enum Drag {
         start: (i64, i64),
         body: Rect,
     },
+}
+
+/// An entry being dragged (ADR-0170): from whose window, the connection,
+/// its label and its grant's words.
+struct Carried<E> {
+    source: Key,
+    entry: E,
+    name: String,
+    words: String,
 }
 
 /// The switcher overlay while open (ADR-0160): the windows in the order
@@ -280,6 +292,11 @@ pub struct Compositor<P: Platform> {
     pointer: Option<(i64, i64)>,
     buttons: u32,
     drag: Option<Drag>,
+    /// The window whose body holds the left button the compositor
+    /// delivered to it: the only one that may start a drag (ADR-0170).
+    body_press: Option<Key>,
+    /// The entry being dragged; no client hears of the pointer meanwhile.
+    carried: Option<Carried<P::End>>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
     switcher: Option<Switcher>,
@@ -366,6 +383,8 @@ impl<P: Platform> Compositor<P> {
             pointer: None,
             buttons: 0,
             drag: None,
+            body_press: None,
+            carried: None,
             pending_pointer: false,
             switcher: None,
             switcher_frame: Vec::new(),
@@ -891,11 +910,114 @@ impl<P: Platform> Compositor<P> {
         }
         self.pointer = Some((x, y));
         self.damage = self.damage.union(&self.pointer_rect(x, y));
+        if self.carried.is_some() {
+            if let Some((ox, oy)) = old {
+                self.dirty(&self.carried_rect(ox, oy));
+            }
+            self.dirty(&self.carried_rect(x, y));
+        }
         self.pending_pointer = true;
         self.drag_to(x, y);
         if self.drag.is_none() {
             self.dock_hover(x, y);
         }
+    }
+
+    /// Where the dragged entry's label is drawn, beside the pointer.
+    fn carried_rect(&self, x: i64, y: i64) -> Rect {
+        let s = i64::from(self.scale.factor());
+        Rect::new(x + 12 * s, y + 4 * s, CARRIED_WIDTH * s, 40 * s)
+    }
+
+    /// `Drag`: the entry is carried while the client's body press is held.
+    fn start_drag(
+        &mut self,
+        slot: usize,
+        window: u32,
+        name: &[u8],
+        words: &[u8],
+        entry: P::End,
+    ) -> u32 {
+        let key = Key {
+            client: slot,
+            id: window,
+        };
+        let text = |b: &[u8]| {
+            core::str::from_utf8(b)
+                .ok()
+                .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+                .map(String::from)
+        };
+        let held = self.body_press == Some(key) && self.buttons & gui::buttons::LEFT != 0;
+        match (held && self.carried.is_none(), text(name), text(words)) {
+            (true, Some(name), Some(words)) => {
+                self.carried = Some(Carried {
+                    source: key,
+                    entry,
+                    name,
+                    words,
+                });
+                if let Some((x, y)) = self.pointer {
+                    self.dirty(&self.carried_rect(x, y));
+                }
+                status::OK
+            }
+            _ => {
+                self.platform.close(entry);
+                status::BAD_RANGE
+            }
+        }
+    }
+
+    /// The release: the window under the pointer gets the entry and the
+    /// pill; over nothing, or over the source, nothing is delivered. The
+    /// source hears only that its drag ended.
+    fn drop_carried(&mut self, c: Carried<P::End>) {
+        if let Some((x, y)) = self.pointer {
+            self.dirty(&self.carried_rect(x, y));
+        }
+        let target = self.pointer.and_then(|(x, y)| {
+            let (key, _) = self.under(x, y)?;
+            let i = self.index(key)?;
+            let w = &self.windows[i];
+            let ok = w.framed() && w.owner().is_none() && self.sheet_of(key).is_none();
+            let body = w.body_rect();
+            let s = i64::from(self.scale.factor());
+            let at = (
+                ((x - body.x).max(0) / s) as u32,
+                ((y - body.y).max(0) / s) as u32,
+            );
+            (ok && key.client != c.source.client).then_some((key, at))
+        });
+        let mut entry = Some(c.entry);
+        if let Some((key, (x, y))) = target
+            && let Some(cl) = self.clients.get(key.client).and_then(Option::as_ref)
+        {
+            let m = gui::Drop {
+                window: key.id,
+                x,
+                y,
+                name: zoraya_protocol::Data(c.name.as_bytes()),
+                words: zoraya_protocol::Data(c.words.as_bytes()),
+            };
+            let length = reply(&m, NO_REPLY, &mut self.out);
+            let end = cl.end;
+            let sent = entry.take().into_iter().collect::<Vec<_>>();
+            if self.platform.write(end, &self.out[..length], &sent) == Outgoing::Sent {
+                let _ = self.add_entry(key.client, &c.words);
+            } else {
+                entry = sent.into_iter().next();
+            }
+        }
+        if let Some(e) = entry {
+            self.platform.close(e);
+        }
+        self.send_event_plain(
+            c.source.client,
+            &gui::DragEnded {
+                window: c.source.id,
+            },
+        );
     }
 
     fn pointer_rect(&self, x: i64, y: i64) -> Rect {
@@ -1010,7 +1132,7 @@ impl<P: Platform> Compositor<P> {
                     body,
                 });
             }
-            Zone::Body => {}
+            Zone::Body => self.body_press = Some(key),
         }
     }
 
@@ -1120,6 +1242,10 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn release(&mut self) {
+        self.body_press = None;
+        if let Some(c) = self.carried.take() {
+            self.drop_carried(c);
+        }
         match self.drag.take() {
             Some(Drag::Resize { window, .. }) => {
                 self.configure(window);
@@ -1137,7 +1263,7 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let Some((x, y)) = self.pointer else { return };
-        if self.drag.is_some() {
+        if self.drag.is_some() || self.carried.is_some() {
             return;
         }
         let Some((key, Zone::Body)) = self.under(x, y) else {
@@ -1924,6 +2050,11 @@ impl<P: Platform> Compositor<P> {
         else {
             return status::NO_SURFACE;
         };
+        self.add_entry(slot, words)
+    }
+
+    /// An entry joins the record of client `slot` and its frames show it.
+    fn add_entry(&mut self, slot: usize, words: &str) -> u32 {
         let Some(c) = self.clients[slot].as_mut() else {
             return status::NO_SURFACE;
         };
@@ -2289,6 +2420,16 @@ impl<P: Platform> Compositor<P> {
                     },
                     t,
                 );
+            }
+            13 => {
+                let s = match decode::<gui::Drag<'_>>(bytes, n) {
+                    Ok((_, m)) => {
+                        let entry = handles.remove(0);
+                        self.start_drag(slot, m.window, m.name.0, m.words.0, entry)
+                    }
+                    Err(_) => status::BAD_BUFFER,
+                };
+                self.answer(slot, &gui::DragDone { status: Below(s) }, t);
             }
             12 if self.is_system(slot) => {
                 let s = match decode::<gui::Granted<'_>>(bytes, n) {

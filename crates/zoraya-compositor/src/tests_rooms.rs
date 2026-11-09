@@ -37,7 +37,7 @@ impl Setup {
     }
 
     /// A client of `room` (empty: `home`) for `app`, added by the panel.
-    fn room_client(&mut self, panel: u32, room: &str, app: &str, entries: &str) -> u32 {
+    pub(super) fn room_client(&mut self, panel: u32, room: &str, app: &str, entries: &str) -> u32 {
         let r = self.c.rooms().get(room).cloned();
         let (untrusted, colour) =
             r.map_or((0, 0), |r| (u32::from(r.untrusted), u32::from(r.colour)));
@@ -57,7 +57,7 @@ impl Setup {
         end
     }
 
-    fn set_rooms(&mut self, panel: u32, current: &str, table: &str) -> u32 {
+    pub(super) fn set_rooms(&mut self, panel: u32, current: &str, table: &str) -> u32 {
         let m = gui::SetRooms {
             current: zoraya_protocol::Data(current.as_bytes()),
             rooms: zoraya_protocol::Data(table.as_bytes()),

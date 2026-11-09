@@ -140,6 +140,24 @@ fn open_with(
     }
 }
 
+/// Starts a drag of `path` from `window`, with one read-only connection.
+fn drag(
+    app: &mut App<Gui>,
+    fs: &mut Client<Files>,
+    root: Handle,
+    window: u32,
+    path: &str,
+    words: &str,
+) {
+    let Ok(file) = fs.open(root, path, 0, rights::READ | rights::CLONE) else {
+        return;
+    };
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if app.drag(window, file, name, words) {
+        println!("files: dragging {words}");
+    }
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let channel = |slot: u64| Handle::new(slot).filter(|h| handle_type(*h) == Ok("channel"));
@@ -169,6 +187,28 @@ fn main() -> i32 {
                 response: Response::Activated(id),
                 ..
             } => id,
+            // A press that picks a file starts a drag of it, read only
+            // (ADR-0170: a dropped file is a `read` entry).
+            Happened::Ui {
+                window: w,
+                response: Response::Changed(LIST),
+            } if app.held(w) => {
+                let row = match app.window(w).map(|x| x.value(LIST)) {
+                    Some(Value::Index(i)) => i,
+                    _ => None,
+                };
+                if let Act::OpenWith { path, words } = m.activate(row) {
+                    drag(&mut app, &mut fs, root, w, &path, &words);
+                }
+                continue;
+            }
+            // Nothing is dropped on the file manager in 7e.
+            Happened::Dropped(_) => {
+                while let Some(d) = app.take_drop() {
+                    let _ = handle_close(d.entry);
+                }
+                continue;
+            }
             _ => continue,
         };
         let (row, name) = match app.window(window) {

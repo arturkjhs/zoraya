@@ -219,6 +219,15 @@ fn main() -> i32 {
                     println!("t_open: closed");
                     return 0;
                 }
+                // A file dropped on the window: read it, try to change it.
+                Happened::Dropped(_) => {
+                    while let Some(d) = app.take_drop() {
+                        println!("t_open: dropped {}", d.words);
+                        let said = read_then_write(&mut fs, d.entry, &d.name);
+                        fs.close(d.entry);
+                        app.replace(window, tree(&said));
+                    }
+                }
                 Happened::Ui {
                     response: Response::Activated(id @ (OPEN | SAVE)),
                     ..

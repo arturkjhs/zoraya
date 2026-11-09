@@ -40,6 +40,8 @@ struct Mapped {
 pub struct Gui {
     pub end: Handle,
     buffers: Vec<Option<Mapped>>,
+    /// The handle the last message carried (a drop's entry), until taken.
+    last: Option<Handle>,
 }
 
 impl Gui {
@@ -47,15 +49,18 @@ impl Gui {
         Gui {
             end,
             buffers: Vec::new(),
+            last: None,
         }
     }
 
     fn read(&mut self, bytes: &mut [u8]) -> Result<usize, Status> {
         let mut handles = [self.end; 1];
         let sizes = channel_read(self.end, bytes, &mut handles).map_err(|(s, _)| s)?;
-        for h in &handles[..sizes.handles as usize] {
-            let _ = handle_close(*h);
+        // A handle not taken with the message before is closed now.
+        if let Some(h) = self.last.take() {
+            let _ = handle_close(h);
         }
+        self.last = handles[..sizes.handles as usize].first().copied();
         Ok(sizes.bytes as usize)
     }
 }
@@ -63,10 +68,19 @@ impl Gui {
 impl zoraya_app::Platform for Gui {
     type End = Handle;
 
+    fn handle(&mut self) -> Option<Handle> {
+        self.last.take()
+    }
+
     fn send(&mut self, bytes: &[u8], handle: Option<Handle>) -> bool {
+        // A buffer's view goes read-only; a dragged entry is a channel.
         let entry = handle.map(|h| ChannelEntry {
             handle: h,
-            rights: Rights::READ,
+            rights: if handle_type(h) == Ok("channel") {
+                ChannelObject::RIGHTS
+            } else {
+                Rights::READ
+            },
             transfer: Transfer::Move,
         });
         let entries: &[ChannelEntry] = match &entry {

@@ -36,6 +36,12 @@ pub trait Platform {
     fn buffer(&mut self, pixels: usize) -> Option<(Self::End, usize)>;
     fn pixels(&mut self, buffer: usize) -> &mut [u32];
     fn free(&mut self, buffer: usize);
+    /// The handle the message last received carried, taken (a drop's
+    /// entry, ADR-0170); the platform closes one nobody took before it
+    /// receives the next. By default messages carry none.
+    fn handle(&mut self) -> Option<Self::End> {
+        None
+    }
     /// The next message if one is there, without waiting, for a program
     /// that waits on other channels too (the chooser). By default it waits.
     fn poll(&mut self, bytes: &mut [u8]) -> Poll {
@@ -65,6 +71,20 @@ pub enum Happened {
     CloseRequested(u32),
     /// The compositor is gone.
     Gone,
+    /// An entry was dropped on `window`: [`App::take_drop`] gives it.
+    Dropped(u32),
+}
+
+/// A dropped entry (ADR-0170): the connection, its name, its grant's words
+/// and where in the window's body it was dropped, in logical pixels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped<E> {
+    pub window: u32,
+    pub x: u32,
+    pub y: u32,
+    pub name: alloc::string::String,
+    pub words: alloc::string::String,
+    pub entry: E,
 }
 
 struct Win {
@@ -92,6 +112,11 @@ pub struct App<P: Platform> {
     /// in that order.
     commits: VecDeque<u32>,
     next_transaction: u32,
+    /// Entries dropped and not yet taken.
+    drops: VecDeque<Dropped<P::End>>,
+    /// The window whose body holds the left button, as the last pointer
+    /// event said: where a drag may start.
+    held: Option<u32>,
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
@@ -114,6 +139,8 @@ impl<P: Platform> App<P> {
             queued: VecDeque::new(),
             commits: VecDeque::new(),
             next_transaction: 1,
+            drops: VecDeque::new(),
+            held: None,
         };
         let reply = app.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -138,6 +165,7 @@ impl<P: Platform> App<P> {
         loop {
             let n = self.platform.receive(&mut bytes)?;
             let got = &bytes[..n];
+            self.received(got);
             match Header::decode(got) {
                 Ok((h, _)) if h.ordinal == M::ORDINAL && h.transaction == t => {
                     return Some(got.to_vec());
@@ -239,7 +267,10 @@ impl<P: Platform> App<P> {
             let got = match self.queued.pop_front() {
                 Some(b) => b,
                 None => match self.platform.poll(&mut bytes) {
-                    Poll::Message(n) => bytes[..n].to_vec(),
+                    Poll::Message(n) => {
+                        self.received(&bytes[..n]);
+                        bytes[..n].to_vec()
+                    }
                     Poll::Empty => return None,
                     Poll::Gone => return Some(Happened::Gone),
                 },
@@ -248,6 +279,53 @@ impl<P: Platform> App<P> {
                 return Some(h);
             }
         }
+    }
+
+    /// A message just received: a drop's entry is taken with it, before
+    /// anything else is received (the platform closes it otherwise).
+    fn received(&mut self, got: &[u8]) {
+        let Ok((_, d)) = decode::<gui::Drop<'_>>(got, 1) else {
+            return;
+        };
+        let Some(entry) = self.platform.handle() else {
+            return;
+        };
+        let text = |b: &[u8]| alloc::string::String::from(core::str::from_utf8(b).unwrap_or(""));
+        self.drops.push_back(Dropped {
+            window: d.window,
+            x: d.x,
+            y: d.y,
+            name: text(d.name.0),
+            words: text(d.words.0),
+            entry,
+        });
+    }
+
+    /// The oldest dropped entry not yet taken.
+    pub fn take_drop(&mut self) -> Option<Dropped<P::End>> {
+        self.drops.pop_front()
+    }
+
+    /// Starts a drag of one entry from `window` (ADR-0170), while its body
+    /// holds the left button: the compositor refuses it otherwise, and then
+    /// closes the entry. Whether it was accepted.
+    pub fn drag(&mut self, window: u32, entry: P::End, name: &str, words: &str) -> bool {
+        if self.held != Some(window) {
+            return false;
+        }
+        let m = gui::Drag {
+            window,
+            name: Data(name.as_bytes()),
+            words: Data(words.as_bytes()),
+        };
+        self.call(&m, Some(entry))
+            .and_then(|r| decode::<gui::DragDone>(&r, 0).ok().map(|(_, d)| d.status.0))
+            == Some(status::OK)
+    }
+
+    /// Whether `window`'s body holds the left button.
+    pub fn held(&self, window: u32) -> bool {
+        self.held == Some(window)
     }
 
     fn scale_logical(&self, v: u32) -> Logical {
@@ -367,7 +445,10 @@ impl<P: Platform> App<P> {
             let got = match self.queued.pop_front() {
                 Some(b) => b,
                 None => match self.platform.receive(&mut bytes) {
-                    Some(n) => bytes[..n].to_vec(),
+                    Some(n) => {
+                        self.received(&bytes[..n]);
+                        bytes[..n].to_vec()
+                    }
                     None => return Happened::Gone,
                 },
             };
@@ -443,8 +524,16 @@ impl<P: Platform> App<P> {
                     },
                 )
             }
+            25 => {
+                let (_, d) = decode::<gui::Drop<'_>>(got, 1).ok()?;
+                self.drops
+                    .iter()
+                    .any(|x| x.window == d.window)
+                    .then_some(Happened::Dropped(d.window))
+            }
             23 => {
                 let (_, p) = decode::<gui::WindowPointer>(got, 0).ok()?;
+                self.held = (p.buttons.0 & gui::buttons::LEFT != 0).then_some(p.window);
                 let e = Event::Pointer {
                     x: self.scale_logical(p.x),
                     y: self.scale_logical(p.y),

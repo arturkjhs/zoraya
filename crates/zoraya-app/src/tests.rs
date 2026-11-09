@@ -19,6 +19,13 @@ struct Fake {
     scale: u32,
     /// Each commit's width and height in pixels.
     committed: Vec<(u32, u32)>,
+    /// Handles queued with the inbox's messages, by position; the one the
+    /// last received message carried; and those sent with a request.
+    carried: VecDeque<Option<u32>>,
+    last: Option<u32>,
+    given: Vec<u32>,
+    /// What a `Drag` is answered.
+    drag_status: u32,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -28,9 +35,10 @@ fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
 impl Platform for Fake {
     type End = u32;
 
-    fn send(&mut self, bytes: &[u8], _handle: Option<u32>) -> bool {
+    fn send(&mut self, bytes: &[u8], handle: Option<u32>) -> bool {
         let (h, _) = Header::decode(bytes).unwrap();
         self.sent.push(h.ordinal);
+        self.given.extend(handle);
         let ok = zoraya_protocol::Below(status::OK);
         let t = h.transaction;
         match h.ordinal {
@@ -73,13 +81,33 @@ impl Platform for Fake {
             10 => self
                 .inbox
                 .push_back(reply(&gui::CloseDone { status: ok }, t)),
+            13 => self.inbox.push_back(reply(
+                &gui::DragDone {
+                    status: zoraya_protocol::Below(self.drag_status),
+                },
+                t,
+            )),
             _ => {}
         }
         true
     }
 
+    fn handle(&mut self) -> Option<u32> {
+        self.last.take()
+    }
+
     fn receive(&mut self, bytes: &mut [u8]) -> Option<usize> {
         let m = self.inbox.pop_front()?;
+        // Messages queued before the handles' list was kept carry none.
+        let n = self.inbox.len() + 1;
+        while self.carried.len() > n {
+            self.carried.pop_front();
+        }
+        self.last = if self.carried.len() == n {
+            self.carried.pop_front().flatten()
+        } else {
+            None
+        };
         bytes[..m.len()].copy_from_slice(&m);
         Some(m.len())
     }
@@ -101,6 +129,15 @@ impl Platform for Fake {
 impl Fake {
     fn event<'a, M: Message<'a>>(&mut self, m: &M) {
         self.inbox.push_back(message(m, 0));
+    }
+
+    /// An event with a handle: the handles' list then covers the inbox.
+    fn event_with<'a, M: Message<'a>>(&mut self, m: &M, h: u32) {
+        while self.carried.len() < self.inbox.len() {
+            self.carried.push_back(None);
+        }
+        self.inbox.push_back(message(m, 0));
+        self.carried.push_back(Some(h));
     }
 
     /// Answers the oldest commit.
@@ -364,4 +401,55 @@ fn another_window_losing_focus_keeps_the_focus() {
             response: Response::Activated(2)
         }
     );
+}
+
+/// ADR-0170: a dropped entry is taken with its message, even when it came
+/// while a reply was awaited, and given once; a drag starts only from the
+/// window whose body holds the left button.
+#[test]
+fn drops_are_taken_and_drags_start_only_from_a_held_press() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("t_open", form(), 200, 120).unwrap();
+    let drop = gui::Drop {
+        window: id,
+        x: 5,
+        y: 6,
+        name: Data(b"notes.txt"),
+        words: Data(b"+r ~/notes.txt"),
+    };
+    app.platform.event_with(&drop, 77);
+    assert_eq!(app.wait(), Happened::Dropped(id));
+    let d = app.take_drop().unwrap();
+    assert_eq!(
+        (
+            d.window,
+            d.x,
+            d.y,
+            d.name.as_str(),
+            d.words.as_str(),
+            d.entry
+        ),
+        (id, 5, 6, "notes.txt", "+r ~/notes.txt", 77)
+    );
+    assert!(app.take_drop().is_none());
+    // No press held: no request is sent.
+    assert!(!app.drag(id, 5, "a", "+r ~/a"));
+    assert!(!app.platform.sent.contains(&13));
+    let pointer = |buttons| gui::WindowPointer {
+        dropped: 0,
+        window: id,
+        x: 10,
+        y: 10,
+        buttons: zoraya_protocol::Flags(buttons),
+    };
+    app.platform.event(&pointer(gui::buttons::LEFT));
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    assert!(app.held(id));
+    assert!(app.drag(id, 5, "a", "+r ~/a"));
+    assert_eq!(app.platform.given.last(), Some(&5));
+    app.platform.drag_status = status::BAD_RANGE;
+    assert!(!app.drag(id, 6, "a", "+r ~/a"));
+    app.platform.event(&pointer(0));
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    assert!(!app.held(id));
 }

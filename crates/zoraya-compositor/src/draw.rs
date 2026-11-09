@@ -84,6 +84,7 @@ impl<P: Platform> Compositor<P> {
         let views = self.win_views();
         let dock = self.dock_view();
         let commands = self.commands;
+        let carried = self.carried.as_ref().map(|c| c.name.clone());
         let Compositor {
             platform,
             windows,
@@ -240,6 +241,23 @@ impl<P: Platform> Compositor<P> {
         }
         if let Some(s) = switcher.as_ref() {
             draw_switcher(&mut c, s, windows, scale.factor(), p, ui, title_text);
+        }
+        // A dragged entry's name beside the pointer, on the trusted
+        // material (ADR-0170).
+        if let (Some(name), Some((px, py))) = (carried, *pointer) {
+            let k = scale.factor();
+            let si = k as i32;
+            let cap = text::CAPTION.physical(zoraya_tokens::Scale::ONE) * k;
+            let w = title_text.measure(&name, cap) + 20 * si;
+            crate::draw_rooms::tag(
+                &mut c,
+                &[(name.as_str(), false)],
+                px as i32 + 16 * si + w / 2,
+                py as i32 + 34 * si,
+                k,
+                p,
+                (title_text, mono),
+            );
         }
         draw_pointer(&mut c, *pointer, scale.factor(), p);
     }

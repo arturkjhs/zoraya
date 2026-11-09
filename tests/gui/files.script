@@ -49,6 +49,20 @@ type \r
 serial t_open: given create or replace ~/nový.txt
 serial t_open: saved nový.txt
 serial t_open: other.txt beside nový.txt refused
+# A drop (ADR-0170): t_open moved aside by its title bar, the file
+# manager raised by its own, and notes.txt dragged from the list onto
+# t_open, the press held long enough for files to answer it. t_open gets
+# the file to read, and its frame the pill.
+drag 300 152 700 450
+click 540 120
+pause 500
+drag 160 207 800 520 600
+serial files: dragging +r ~/notes.txt
+serial t_open: dropped +r ~/notes.txt
+serial t_open: opened notes.txt: 6 bytes: "hello"
+serial t_open: write to notes.txt refused
+pause 500
+shot drop
 # The first terminal sees what was saved, and notes.txt unchanged.
 click 400 80
 region 130 76 100 4 f7f7f8

@@ -228,6 +228,22 @@ protocol! {
         status: Status,
     }
 
+    /// The client starts a drag of one entry (ADR-0170) from `window`,
+    /// whose body holds the left button the compositor delivered to it:
+    /// the entry's connection, its name for the drag's label and its grant
+    /// in ADR-0153's words for the target's pills (`+r ~/notes.txt`).
+    /// Refused (`BAD_RANGE`) when no press of the client's is held. The
+    /// reply is `DragDone`; at the release the compositor sends the source
+    /// `DragEnded` and the window under the pointer `Drop`.
+    message Drag<'a> = 13, handles 1 {
+        window: u32,
+        name: Data<'a, MAX_LINE>,
+        words: Data<'a, MAX_LINE>,
+    }
+    message DragDone = 13, handles 0 {
+        status: Status,
+    }
+
     message CloseDone = 10, handles 0 {
         status: Status,
     }
@@ -276,6 +292,23 @@ protocol! {
     /// `cz`), to the focused client when it gains focus and at every switch.
     message Layout<'a> = 24, handles 0 {
         name: Data<'a, 16>,
+    }
+
+    /// An entry dropped on `window` at `(x, y)` in its body (ADR-0170): the
+    /// connection, its name and its grant's words. The window saw nothing
+    /// of the drag before.
+    message Drop<'a> = 25, handles 1 {
+        window: u32,
+        x: u32,
+        y: u32,
+        name: Data<'a, MAX_LINE>,
+        words: Data<'a, MAX_LINE>,
+    }
+
+    /// The source's drag ended (a drop or none: the source is not told
+    /// which, ADR-0170).
+    message DragEnded = 26, handles 0 {
+        window: u32,
     }
 
     /// Manager: a new client, with the compositor's end of its channel.
@@ -365,11 +398,11 @@ protocol! {
 }
 
 /// The ordinals a client may send.
-pub const CLIENT_REQUESTS: [u32; 12] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+pub const CLIENT_REQUESTS: [u32; 13] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 /// The client requests only a system client may send (proposed ADR-0245).
 pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 9] = [16, 17, 18, 19, 20, 21, 22, 23, 24];
+pub const CLIENT_EVENTS: [u32; 11] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:
