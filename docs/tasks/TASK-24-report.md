@@ -14,6 +14,9 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (accepted 2026-11-09) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
 | [ADR-0244](../adr/0244-the-toolkits-own-events.md) (accepted 2026-11-09) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
 | What `home` gives a terminal's shell (accepted 2026-11-09, recorded in ADR-0172) | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
+| [ADR-0245](../adr/0245-the-choosers-wiring-in-stage-7e.md) (proposed) | 7e | The chooser's wiring: registered by the panel with the compositor's tag, sheets only from system clients, `Save` as the folder narrowed to one name, the data directory `/data/ROOM/APP`, `OpenWith` read-only. Fills gaps of ADR-0167 and ADR-0168. |
+| INV-0168-2 against INV-0169-4 | 7f | INV-0168-2 gives the file manager the volume's root, `/config` included, while INV-0169-4 says no launch but the settings window gets `/config` to write. Which wins (narrow the file manager's root, or reword INV-0169-4) is the architect's; the panel's test checks the `Config` slot only. |
+| `/config/rooms` and `/config/settings` written in place by a shell (accepted for now, 2026-11-09) | 7d | A crash between truncate and write loses the file; in `docs/backlog.md`. |
 | Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
@@ -154,8 +157,9 @@ the watchdog), 65 of the part's 90 minutes:
 
 ### Merge
 
-Not merged: see the queue. `work/7a` is complete locally at `ad9becd`, where a full `make test` from the snapshot
-worktree passed (every step, 1,055 host tests, the seven QEMU configurations, both GUI runs); 7b starts from it.
+Merged to `main` at `f984e21` once pushes were allowed; `stage-7a` and `zosh-1` are on it, tagged under the
+architect's rule that a CI failing only on `running_out_of_asids_is_an_error` counts as green (the fault was fixed on
+`fix/asid` by another agent). Before that, a full `make test` from the snapshot worktree passed at `ad9becd`.
 
 ### Time
 
@@ -278,7 +282,11 @@ the two that failed, `check-test-caps` (`zoraya-keymap`'s tests had no heap cap)
 
 ### Merge
 
-Not merged (the queue).
+Merged at `a0f8f61`. Its CI on `main` failed: `term` panicked when the compositor answered late at scale 2 under
+CI's TCG (`fix/term-wait`, merged at `e73a2b1`, made the wait longer; its CI then failed only on the GUI job's
+timeout). `tools/test-tiers` made `term` wait as long as the compositor lives, made the wallpaper cheap (9.3 s to
+0.28 s at scale 2 under TCG) and gave the GUI job 30 minutes; its merge `039ba9e` was the first green commit on `main`
+containing 7b (run 42683536960), and `stage-7b` is on it.
 
 ### Time
 
@@ -361,7 +369,9 @@ neither exists (`every_key_has_its_first_two_levels`).
 
 ### Merge
 
-Not merged (the queue).
+The full CI on the branch passed (run 42684037780); merged at `1b61843`, whose CI on `main` passed after a rerun of
+the POSIX scenarios job (Ctrl-Z that did not stop a job, `docs/backlog.md`; the script was fixed in 7e). `stage-7c`
+is on `1b61843`.
 
 ### Time
 
@@ -533,7 +543,11 @@ minutes in all; the survivors sorted by the `mutant-triage` subagent, every equi
 
 ### Merge
 
-Not merged: proposed ADR-0242 stages an accepted ADR's decision, and `git push` is refused (the queue).
+After the architect's decisions (ADR-0172's record, the toolchain read-only in a trusted room's shell) and the
+show-commands fix, the branch's full CI (run 42686860180) failed in both GUI tours: on CI's slow runner the ends of
+long typed lines were lost, as `main`'s were locally with QEMU moved to the efficiency cores. `fix/type-pacing`
+(merged at `d03bff1`) makes the GUI runner wait for the guest every eight keys. The branch's CI then passed (run
+42707071806, the scenarios job after a rerun); merged at `e161ec7`, green on `main` (run 42710913168); `stage-7d`.
 
 ### Time
 
@@ -748,41 +762,22 @@ applied again by hand from lists in `tools/mutants/` (`editor.toml`, `shell-sett
 - The settings description said `auto` gives scale 2 from 2048 pixels wide; the compositor's threshold is 1920. The
   description now says 1920.
 
-## To finish by hand
+## To check by hand
 
-`git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,
-for each part that is complete:
-
-```
-git push -u origin work/7a
-# merge as TASK-24 says: from a detached HEAD at origin/main
-git fetch origin && git switch --detach origin/main
-git merge --no-ff work/7a -m "Merge work/7a: stage 7a, tokens and text (TASK-24)"
-git push origin HEAD:main          # then wait for every CI job
-git tag stage-7a && git push origin refs/tags/stage-7a
-```
-
-Then the same for `work/7b` and `work/7c` (each from the new `origin/main`, merging `origin/main` into the branch
-first). `work/7d` waits for the architect's decision on ADR-0242; once it is accepted (or changed and 7d brought in
-line):
-
-```
-git push -u origin work/7b work/7c work/7d
-git fetch origin && git switch --detach origin/main
-git merge --no-ff work/7b -m "Merge work/7b: stage 7b, frames, windows and scale (TASK-24)"
-git push origin HEAD:main          # CI green, then:
-git tag stage-7b && git push origin refs/tags/stage-7b
-# likewise work/7c ("keyboard layouts", stage-7c) and work/7d ("toolkit, dock and rooms", stage-7d)
-```
+- **The resizable window** (`tools/run-qemu.sh`'s `zoom-to-fit=on`, merged at `cc4e2dd`): no test opens the cocoa
+  window. With `make run-gui`, enlarge QEMU's window, then check that a click lands where the pointer points (a title
+  bar's close button, a dock tile) and that Command+Space still switches the layout.
 
 To try the desktop by hand: `make run-gui`; the window shows the terminal in JetBrains Mono. `ls /texts/uk`, `cat
 /texts/uk/` then Tab and Enter, and the same for `/texts/cz/`, show Ukrainian and Czech text; Shift with Page Up
 scrolls back.
 
-
-From 7b on (`work/7d` has everything): drag a window by its title bar, System+Left and System+Right tile it, Alt+Tab
+From 7b on: drag a window by its title bar, System+Left and System+Right tile it, Alt+Tab
 opens the switcher, grouped by room. From 7c: System+Space switches the layout (`us`, `ua`, `cz`, shown at the right
 of the bar). From 7d: the terminal tile in the dock (or System+Enter) opens another terminal; in a terminal, `room new
 project +w ~/project +r /system` makes a room, its chip appears in the dock; press it, then the terminal tile, and
 the new terminal's title bar carries the room's tint, badge and pills, with a field around its windows while `home`
-has windows too. System+? shows every gesture's text.
+has windows too. System+? shows every gesture's text. From 7e: the Files tile opens the file manager; a `.txt`
+opened there opens in the editor, read only, and a drag of it onto another window gives that window the file. From
+7f: the Settings tile (theme, motion and keyboard layouts applied at once, the scale at the next session), the Edit tile
+(open and save through the chooser's sheet), and System+C, System+X, System+V in the editor.
