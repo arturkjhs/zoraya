@@ -567,7 +567,9 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   and the person's files, configuration and temporary files to change. The shell serves its own files and every
   command's grants from that table, and refuses a path it was not given with ADR-0153's hint (`hint: cp tried to
   change ~/copy.txt, which it was not given`, `to allow it: +w ~ cp notes.txt ~/copy.txt`); a room's shell takes its
-  room from the table, since it cannot read `/config/rooms`, and runs no POSIX program (it holds no `/bin`). The
+  room from the table, since it cannot read `/config/rooms`, and runs no POSIX program (it holds no `/bin`); a grant
+  whose path does not exist gives it nothing to hold or list. A tree entry cannot publish (ADR-0153's table), so such
+  a shell writes `/config/rooms` and `/config/settings` in place, not by an atomic replace (a known limitation). The
   console's shell keeps the root. The compositor learns the client with its record (`AddRoomClient`: the room, its
   trust and colour, the application, the entries in ADR-0153's words, the line), and the pills show exactly what the
   shell holds. `init` still starts the first terminal, with `home`'s record, and tells the compositor its entries
