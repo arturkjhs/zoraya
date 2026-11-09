@@ -443,3 +443,32 @@ fn the_carried_name_is_composed_beside_the_pointer_and_cleaned_after() {
         assert!(snap(&mut t.s) == clean, "nothing stays at {w} × {h}");
     }
 }
+
+#[test]
+fn a_name_wider_than_the_kept_room_is_composed_to_its_end_and_cleaned_after() {
+    // 64 bytes, the longest name a drag carries, of the widest letter.
+    let name = "W".repeat(64);
+    let mut t = two_on(1280, 800);
+    let cap = zoraya_tokens::text::CAPTION.physical(Scale::ONE);
+    let label_w = i64::from(t.s.c.title_text.measure(&name, cap)) + 20;
+    assert!(label_w > 600, "the name's label is {label_w} wide");
+    let (p1, p2) = ((200, 450), (200, 100));
+    // Near the label's end, in its middle row.
+    let end = (p1.0 + 16 + label_w - 6, p1.1 + 22);
+    let px = |s: &mut Setup, x: i64, y: i64| s.f().frame[y as usize * 1280 + x as usize];
+    at(&mut t.s, p2.0, p2.1, None);
+    let under = px(&mut t.s, end.0, end.1);
+    let (sx, sy) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, sx, sy, Some(1));
+    let n = serial(&mut t.s, t.a);
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag_as(&mut t.s, t.a, t.ida, entry, n, &name), status::OK);
+    at(&mut t.s, p1.0, p1.1, None);
+    assert_ne!(px(&mut t.s, end.0, end.1), under, "the label's end");
+    at(&mut t.s, p2.0, p2.1, None);
+    assert_eq!(
+        px(&mut t.s, end.0, end.1),
+        under,
+        "nothing stays at the end"
+    );
+}

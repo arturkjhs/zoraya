@@ -243,6 +243,9 @@ struct Carried<E> {
     source: Key,
     entry: E,
     name: String,
+    /// The label's logical width, measured once: the damaged room
+    /// follows it (a 64-byte name can be wider than `CARRIED_WIDTH`).
+    width: i64,
 }
 
 /// The switcher overlay while open (ADR-0160): the windows in the order
@@ -954,9 +957,13 @@ impl<P: Platform> Compositor<P> {
     /// Where the dragged entry's label is drawn, beside the pointer.
     fn carried_rect(&self, x: i64, y: i64) -> Rect {
         let s = i64::from(self.scale.factor());
+        let label = self
+            .carried
+            .as_ref()
+            .map_or(CARRIED_WIDTH, |c| c.width.max(CARRIED_WIDTH));
         // With the material's halo around the label (16 px to 34 px below
         // the pointer).
-        Rect::new(x - 16 * s, y - 24 * s, (CARRIED_WIDTH + 64) * s, 96 * s)
+        Rect::new(x - 16 * s, y - 24 * s, (label + 64) * s, 96 * s)
     }
 
     /// `Drag`: the entry is carried while the client's body press is held.
@@ -979,10 +986,15 @@ impl<P: Platform> Compositor<P> {
         }) && self.buttons & gui::buttons::LEFT != 0;
         match (held && channel && self.carried.is_none(), name) {
             (true, Some(name)) => {
+                // As `draw` lays the label out: the name at the caption's
+                // size, 20 px of padding, and a few for rounding at scale 2.
+                let cap = zoraya_tokens::text::CAPTION.physical(Scale::ONE);
+                let width = i64::from(self.title_text.measure(&name, cap)) + 20 + 4;
                 self.carried = Some(Carried {
                     source: key,
                     entry,
                     name,
+                    width,
                 });
                 if let Some((x, y)) = self.pointer {
                     self.dirty(&self.carried_rect(x, y));
