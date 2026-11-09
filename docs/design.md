@@ -561,11 +561,17 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   reads `/config/rooms` at start, at every dock press and every second, tells the compositor the table and the current
   room (`SetRooms`) and the dock's applications (`SetDock`), and on `DockPressed` launches a terminal into the current
   room (the dock's icon with no window, or System+Enter) or enters a chip's room. A launch gives `term` the
-  compositor's channel and its end of the shell's channel, and `zosh` the console, its job, the image directory, the
-  volume's root (the shell in a terminal holds it, INV-0168-2) and its end; nothing else (INV-0168-1). The compositor
-  learns the client with its record (`AddRoomClient`: the room, its trust and colour, the application, the entries in
-  ADR-0153's words, the line). `init` still starts the first terminal, and tells the compositor its record (`home`,
-  `term`, `+w /`) itself (ADR-0242).
+  compositor's channel and its end of the shell's channel, and `zosh` the console, its job, the image directory, its
+  end and a start-up record (ADR-0153 rule 8) of exactly its room's grants, never the volume's root (ADR-0242's
+  condition); nothing else (INV-0168-1). `home` gives `+r /`, `+w ~`, `+w /config` and `+w /tmp`: the volume to read,
+  and the person's files, configuration and temporary files to change. The shell serves its own files and every
+  command's grants from that table, and refuses a path it was not given with ADR-0153's hint (`hint: cp tried to
+  change ~/copy.txt, which it was not given`, `to allow it: +w ~ cp notes.txt ~/copy.txt`); a room's shell takes its
+  room from the table, since it cannot read `/config/rooms`, and runs no POSIX program (it holds no `/bin`). The
+  console's shell keeps the root. The compositor learns the client with its record (`AddRoomClient`: the room, its
+  trust and colour, the application, the entries in ADR-0153's words, the line), and the pills show exactly what the
+  shell holds. `init` still starts the first terminal, with `home`'s record, and tells the compositor its entries
+  itself (ADR-0242).
 - **What the compositor draws of rooms**, from its records only (INV-0172-1): the title bar tinted by the room at 46 of
   255 (the body stays the client's, ADR-0243); at the right of the title bar the room's dot and name with `untrusted`,
   and the record's entries as pills, folded into `+N` when they do not fit; on every window of an untrusted room an

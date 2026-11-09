@@ -75,6 +75,16 @@ fn read_record() -> Option<Namespace> {
     })
 }
 
+/// The start-up record with its connections, for a program that keeps
+/// them itself (the shell in a terminal, ADR-0242's condition); `get` then
+/// finds none.
+pub fn take() -> Option<Namespace> {
+    let mut slot = NAMESPACE.0.borrow_mut();
+    let ns = read_record();
+    *slot = Some(None);
+    ns
+}
+
 /// The namespace, read on first use.
 pub fn get() -> Option<&'static Namespace> {
     let mut slot = NAMESPACE.0.borrow_mut();
@@ -222,4 +232,105 @@ impl Namespace {
             f(&opened, name)
         }
     }
+}
+
+/// The shell's description, for `shell.home`'s default.
+const ZOSH: &str = include_str!("../describe/system/zosh.cmd");
+
+/// `shell.home` as the shell reads it from `/config/settings`.
+pub fn shell_home(root: &File) -> String {
+    let declared = zoraya_describe::parse(ZOSH.as_bytes())
+        .map(|d| d.settings)
+        .unwrap_or_default();
+    let bytes = root
+        .open("config/settings", 0, rights::READ)
+        .ok()
+        .and_then(|f| crate::files::read_all(&f).ok())
+        .unwrap_or_default();
+    let values = zoraya_settings::read(&bytes, &declared);
+    String::from(values.get("shell.home").unwrap_or("/home"))
+}
+
+/// `~` and `~/...` as the home directory.
+pub fn expand(path: &str, home: &str) -> String {
+    if path == "~" {
+        String::from(home)
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        alloc::format!("{}/{rest}", home.trim_end_matches('/'))
+    } else {
+        String::from(path)
+    }
+}
+
+/// A start-up record (ADR-0153 rule 8) of `holds`, each `(path, write)`
+/// opened from `root` with ADR-0153's rights for `tree` (write) or `read`,
+/// starting in `cwd`; gives the end to put at its slot. What a terminal's
+/// shell holds instead of the volume's root (ADR-0242's condition).
+pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> Option<Handle> {
+    use zoraya_abi::native::{self, Slots};
+    use zoraya_abi::spawn::Transfer;
+    use zoraya_abi::{ChannelEntry, ChannelObject, ObjectType};
+    let mut paths = Vec::new();
+    let mut handles: Vec<ChannelEntry> = Vec::new();
+    let mut kinds = Vec::new();
+    let close = |handles: &[ChannelEntry]| {
+        for h in handles {
+            let _ = handle_close(h.handle);
+        }
+    };
+    for (path, write) in holds {
+        let abs = expand(path, home);
+        let wanted = if *write {
+            rights::ALL & !rights::PUBLISH
+        } else {
+            rights::READ | rights::CLONE
+        };
+        let opened = match abs.trim_start_matches('/') {
+            "" => root.clone_as(wanted),
+            rel => root.open(rel, 0, wanted),
+        };
+        match opened {
+            Ok(file) => {
+                let kind = match file.stat() {
+                    Ok(s) if s.kind == zoraya_proto_file::kind::DIRECTORY => EntryKind::Directory,
+                    _ => EntryKind::File,
+                };
+                handles.push(ChannelEntry {
+                    handle: file.end,
+                    rights: ChannelObject::RIGHTS,
+                    transfer: Transfer::Move,
+                });
+                core::mem::forget(file);
+                kinds.push((kind, (handles.len() - 1) as u8));
+            }
+            Err(_) => kinds.push((EntryKind::Missing, NO_HANDLE)),
+        }
+        paths.push(abs);
+    }
+    let entries: Vec<native::Entry<'_>> = paths
+        .iter()
+        .zip(&kinds)
+        .map(|(p, (kind, handle))| native::Entry {
+            path: p,
+            kind: *kind,
+            handle: *handle,
+        })
+        .collect();
+    let mut bytes = alloc::vec![0u8; 16 * 1024];
+    let Some(n) = native::encode(cwd, &Slots::NONE, &entries, handles.len(), &mut bytes) else {
+        close(&handles);
+        return None;
+    };
+    let Ok((ours, theirs)) = crate::channel_create() else {
+        close(&handles);
+        return None;
+    };
+    let sent = channel_write(ours, &bytes[..n], &handles);
+    let _ = handle_close(ours);
+    if sent.is_err() {
+        close(&handles);
+        let _ = handle_close(theirs);
+        return None;
+    }
+    Some(theirs)
 }

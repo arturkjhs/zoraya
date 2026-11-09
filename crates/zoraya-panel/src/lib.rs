@@ -33,9 +33,25 @@ pub enum Give {
     /// The shell's end of the terminal's channel (`zosh`), or the
     /// terminal's end (`term`).
     Terminal,
-    /// The volume's root with its rights: only the shell in a terminal
-    /// holds it (ADR-0168, INV-0168-2).
-    Root,
+    /// The shell's start-up record (ADR-0153 rule 8) at slot 1000: what
+    /// it holds, its room's grants or home's, never the volume's root
+    /// (ADR-0242's condition).
+    Startup,
+}
+
+/// The start-up record's slot (`zoraya-abi`'s `native::slot::STARTUP`).
+pub const STARTUP_SLOT: u32 = 1000;
+
+/// What `home` gives the shell of a terminal launched in it, as
+/// `(path, write)` with `~` for the home directory: the volume to read, and
+/// the person's own files, configuration and temporary files to change
+/// (ADR-0242's condition; a decision recorded for the architect).
+pub const HOME_GRANTS: [(&str, bool); 4] =
+    [("/", false), ("~", true), ("/config", true), ("/tmp", true)];
+
+/// A grant's words, as the pills and `grants` say it.
+pub fn grant_words(path: &str, write: bool) -> String {
+    format!("{} {path}", if write { "+w" } else { "+r" })
 }
 
 /// One handle of a launch: its slot and what it is.
@@ -64,6 +80,9 @@ pub struct Launch {
     pub entries: Vec<String>,
     /// The `zosh` line that does the same.
     pub line: String,
+    /// What the shell's start-up record holds, as `(path, write)` with `~`
+    /// for the home directory: exactly the entries shown.
+    pub holds: Vec<(String, bool)>,
     pub programs: Vec<Program>,
 }
 
@@ -73,25 +92,33 @@ pub struct Launch {
 pub const APPS: [(&str, &str); 1] = [("term", "term")];
 
 /// A terminal launched in `room`: `term` with the compositor's channel and
-/// its end of the shell's channel; `zosh` with the volume's root (the shell
-/// in a terminal holds it, INV-0168-2), its end of the channel, the
-/// console to write, its job and the image directory, started in the room.
-/// The record shows the root and the room's grants.
+/// its end of the shell's channel; `zosh` with a start-up record of exactly
+/// the room's grants (home's in `home`), never the volume's root
+/// (ADR-0242's condition), its end of the channel, the console to write,
+/// its job and the image directory, started in the room. The record shows
+/// what the shell holds, and nothing else.
 pub fn terminal(room: Option<&Room>) -> Launch {
-    let mut entries = vec![String::from("+w /")];
     let mut args = Vec::new();
     let mut line = String::from("term");
-    if let Some(r) = room {
-        entries.extend(r.grants.iter().map(|g| g.words()));
-        args.push(String::from("--room"));
-        args.push(r.name.clone());
-        line = format!("room {} term", r.name);
-    }
+    let holds: Vec<(String, bool)> = match room {
+        Some(r) => {
+            args.push(String::from("--room"));
+            args.push(r.name.clone());
+            line = format!("room {} term", r.name);
+            r.grants.iter().map(|g| (g.path.clone(), g.write)).collect()
+        }
+        None => HOME_GRANTS
+            .iter()
+            .map(|(p, w)| (String::from(*p), *w))
+            .collect(),
+    };
+    let entries = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
     Launch {
         app: "term",
         room: room.cloned(),
         entries,
         line,
+        holds,
         programs: vec![
             Program {
                 image: "term",
@@ -127,8 +154,8 @@ pub fn terminal(room: Option<&Room>) -> Launch {
                         give: Give::Directory,
                     },
                     Slot {
-                        slot: 5,
-                        give: Give::Root,
+                        slot: STARTUP_SLOT,
+                        give: Give::Startup,
                     },
                     Slot {
                         slot: 6,

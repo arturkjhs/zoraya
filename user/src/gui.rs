@@ -298,12 +298,14 @@ impl Gui {
     /// in it holds the volume's root (ADR-0168, ADR-0172 point 4).
     pub fn new_terminal_client(&self) -> Option<Handle> {
         let (ours, theirs) = channel_create().ok()?;
+        // What its shell holds: home's grants (ADR-0242's condition).
+        let entries = zoraya_panel::terminal(None).entries.join("\n");
         let m = gui::AddRoomClient {
             untrusted: 0,
             colour: 0,
             room: zoraya_protocol::Data(b""),
             app: zoraya_protocol::Data(b"term"),
-            entries: zoraya_protocol::Data(b"+w /"),
+            entries: zoraya_protocol::Data(entries.as_bytes()),
             line: zoraya_protocol::Data(b"term"),
         };
         manager_send(self.manager, &m, Some(theirs), 0, &mut [])?;

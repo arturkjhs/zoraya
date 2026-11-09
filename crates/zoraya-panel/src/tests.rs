@@ -30,7 +30,8 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
     assert!(p.reload(ROOMS));
     let home = terminal(None);
     assert_eq!(home.room, None);
-    assert_eq!(home.entries, ["+w /"]);
+    assert_eq!(home.entries, ["+r /", "+w ~", "+w /config", "+w /tmp"]);
+    assert_eq!(home.holds.len(), HOME_GRANTS.len());
     assert_eq!(home.line, "term");
     let s = spawned(&home);
     assert_eq!(s[0].0, "term");
@@ -49,16 +50,18 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             (1, Give::Console),
             (2, Give::Job),
             (3, Give::Directory),
-            (5, Give::Root),
+            (STARTUP_SLOT, Give::Startup),
             (6, Give::Terminal)
         ]
     );
     assert!(s[1].2.is_empty());
-    // Only the shell holds the root; the terminal holds no directory.
+    // Only the shell has a start-up record; nothing holds the volume's
+    // root, and home gives no write to `/` (ADR-0242's condition).
     for (image, handles, _) in &s {
-        let root = handles.iter().any(|h| h.1 == Give::Root);
-        assert_eq!(root, *image == "zosh", "{image}");
+        let record = handles.iter().any(|h| h.1 == Give::Startup);
+        assert_eq!(record, *image == "zosh", "{image}");
     }
+    assert!(!home.entries.contains(&String::from("+w /")));
     // Every room: its own grants, its name, nothing of another room.
     for (i, room) in p.rooms.rooms.clone().iter().enumerate() {
         assert_eq!(p.pressed(ROOM, i as u32 + 1), Action::Entered);
@@ -75,8 +78,15 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             Some(room.name.as_str())
         );
         assert_eq!(l.line, format!("room {} term", room.name));
+        // INV-0172-2: exactly the room's grants, shown and held.
         let mine: Vec<String> = room.grants.iter().map(|g| g.words()).collect();
-        assert_eq!(l.entries[1..], mine[..]);
+        assert_eq!(l.entries, mine);
+        let held: Vec<(String, bool)> = room
+            .grants
+            .iter()
+            .map(|g| (g.path.clone(), g.write))
+            .collect();
+        assert_eq!(l.holds, held);
         for other in p.rooms.rooms.iter().filter(|o| o.name != room.name) {
             for g in &other.grants {
                 assert!(

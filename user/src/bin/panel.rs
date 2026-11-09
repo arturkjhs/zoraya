@@ -26,7 +26,7 @@ use zoraya_abi::{
 use zoraya_panel::{Action, Give, Launch, Panel};
 use zoraya_proto_gui as gui;
 use zoraya_protocol::{Data, Message, NO_REPLY, decode, encode};
-use zoraya_user::files::{ALL, File, read_all};
+use zoraya_user::files::{File, read_all};
 use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, directory_lookup, dup,
     handle_close, handle_type, job_create, port_create, port_subscribe, port_wait, println, spawn,
@@ -172,22 +172,26 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
     };
     let mut client = Some(client);
     let mut ends = [Some(term_end), Some(shell_end)];
+    // What the shell holds: its room's grants or home's, never the root
+    // (ADR-0242's condition); it starts in the first it may change.
+    let home = root.map(zoraya_user::namespace::shell_home);
+    let cwd = l
+        .holds
+        .iter()
+        .find(|(_, w)| *w)
+        .map(|(p, _)| p.as_str())
+        .unwrap_or("/");
     for (i, p) in l.programs.iter().enumerate() {
-        let mut root_clone = None;
         let ok = spawn_program(p.image, &p.handles, &p.args, |g| match g {
             Give::Compositor => client.take(),
             Give::Terminal => ends[i.min(1)].take(),
-            Give::Root => {
-                let r = root?.clone_as(ALL).ok()?;
-                let h = r.end;
-                root_clone = Some(r);
-                Some(h)
+            Give::Startup => {
+                let home = home.as_deref()?;
+                let start = zoraya_user::namespace::expand(cwd, home);
+                zoraya_user::namespace::record(root?, home, &start, &l.holds)
             }
             _ => None,
         });
-        // Moved into the program, or closed by `spawn_program`: either way
-        // no longer this File's to close.
-        core::mem::forget(root_clone);
         if !ok {
             println!("panel: {} did not start", p.image);
         }

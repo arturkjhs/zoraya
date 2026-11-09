@@ -1,6 +1,6 @@
 # ADR-0242: The panel beside `init` in stage 7d
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-08
 - **Depends on:** ADR-0093, ADR-0097, ADR-0155, ADR-0160, ADR-0168, ADR-0172
 - **Evidence:** CP-17, alternatives-postmortem.md#genode, desktop/survey.md#haiku, desktop/survey.md#plan-9s-rio
@@ -95,3 +95,7 @@ panel's room job per room (ADR-0172 point 2) is a job per launched program under
 - The task that builds ADR-0155's restart in the panel, or the chooser (7e) needing the panel to own every client.
 
 ## Architect's decision
+
+Accepted 2026-11-09. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted as a staging of ADR-0168, with one condition that is part of 7d: a terminal launched into a room holds only that room's grants (`zosh` narrowed to the room's set), never the volume's root; the first terminal holds what the room `home` gives. The pills then show exactly that. A test: from a terminal in a room with `+w ~/project`, writing outside `~/project` is refused with ADR-0153's hint, and its pills show no `+w /`.
