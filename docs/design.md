@@ -674,7 +674,6 @@ Stage 7f (TASK-24), by [ADR-0169](adr/0169-settings.md), [ADR-0170](adr/0170-cli
   `SettingsChanged` goes to the panel, which reads the file and sends the compositor `ApplySettings`; the compositor
   checks every value again and applies them all or none. The theme reaches the frames, the wallpaper's blur and every
   window's `Configure`, and `zoraya-app` repaints its windows in it; the layouts apply at once; the scale too since 7g.
-
 - **The editor** (`edit`, its buffer and view in `zoraya-editor`): one file, opened from the file manager (read only)
   or through the chooser, saved through the chooser's `Save` and then again to that name; cursor and selection by
   characters, undo and redo (1000 edits), find, and a question before a close with unsaved changes.
@@ -1169,9 +1168,9 @@ measured for real.
 ## Using the desktop
 
 `make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window (`make run-gui GUI_SCALE=2` at 2048 ×
-1536). On a Mac the window can be resized and the desktop follows it (7g: the bar and the dock
-follow the width, windows stay in the work area, and from 1920 pixels wide the scale is 2), and Command is the system key (written System
-below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
+1536). On a Mac the window can be resized and the desktop follows it (7g: the bar and the dock follow the width,
+windows stay in the work area, and from 1920 pixels wide the scale is 2), and Command is the system key (written
+System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
 
 - **What is on the screen.** The bar at the top (the layout in use at its right; the chooser's mark in its middle
   while a sheet is open), the windows, and the dock at the bottom: Terminal, Files, Edit and Settings, then the rooms'

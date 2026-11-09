@@ -111,8 +111,9 @@ that stays the first size.
 
 ## Invariants
 - **INV-0246-1.** After a display size change the compositor composes only into a framebuffer of the new size, and
-  every toplevel's and legacy window's frame lies in the work area when the display is at least as large as the bar,
-  the dock's strip and one title bar. *Check:* host test of the compositor with a fake display.
+  every toplevel's frame lies in the work area when the work area holds at least a border, a title bar and one body
+  row, and every legacy window's frame lies in it when it fits there (a legacy window is never resized; one larger
+  than the work area keeps its top-left corner in it). *Check:* host test of the compositor with a fake display.
 - **INV-0246-2.** `gpud` sends `Resized` only once something is attached, only for a size (1 to 4096 a side) that
   differs from the attached one, one before each `Info`, and none between an `Info` and the request after it.
   *Check:* host test of `zoraya-virtio-gpu`'s `Announce`, which `gpud` asks before each `Resized`.

@@ -237,3 +237,81 @@ By the main model, after the review.
 | 12 | INV-0246-1 now says it holds when the display is at least as large as the bar, the dock's strip and one title bar. No test resizes to 1 or 4096 (recorded). |
 | 13 | Fixed: the index row's Depends-on cell. |
 | 14 | Recorded in the report: the GUI tests boot at four sizes; no test in QEMU resizes a running guest (QEMU's QMP cannot). |
+
+## Check of the fixes
+
+By the reviewer, reading `git show 9dbedd2`. I ran the host tests of `zoraya-virtio-gpu` (18 passed) and
+`zoraya-compositor` (117 passed, 2 ignored), and `make adr-check` (0 errors); QEMU was not run. "Confirmed" means the
+changed lines fix the finding and add no new problem in the review's areas (message ordering on the display channel,
+pins and mappings, trust boundary, sizes at the limits). The commit adds no `unsafe`.
+
+- **1 (second `Resized` read as `Done`): confirmed.** `Announce::info` sets `offered`, and `tell` is false while
+  `offered` is set; only the next request (`served`) clears it, after its reply has been written
+  (`gpud.rs:277-287`, `:320`). So the first message the compositor can find after `InfoReply` is that request's
+  `Done`. I traced the ways a `Resized` could still stand in front of a `call`: the compositor sends `Info` only in
+  `attach_display` (where `gpud` has nothing attached, so `tell` is false) and in `display_resized` (after reading the
+  one `Resized` that `told` allows). The settings rescale path does not call the driver. The `Info` that ends a resize
+  clears `told`, and a later size change is told only after the `Attach`'s `Done`, which the compositor then reads from
+  the channel through `display_message`. One thing remains for robustness (note A).
+- **2 (`Attach` used the newest size): confirmed.** `display_event` returns before `display_changed` while
+  `may_ask()` is false, so `GET_DISPLAY_INFO` is not sent between an `Info` and the request after it, and
+  `Gpu::attach` sees the size `InfoReply` gave. The event bit stays set in `events_read` and is read after the next
+  request, so nothing is lost. The guarantee lives in `gpud`'s call order, not in `Gpu::attach`'s API (note A).
+- **3 (size back at the attached one): confirmed.** `size_and_attach(.., true)` returns `OK` without an `Attach` when
+  `Info` gives the compositor's own size. `display_resized` then marks the whole screen, and the flush that follows is
+  the "request after `Info`" that clears `offered`. That flush always comes: `in_flight` is `None` in
+  `display_resized`, and a full queue retries it. The compositor's size and `gpud`'s attached size agree here, because
+  either both changed with a successful `Attach` or the driver was dropped (and a new driver goes through `again =
+  false`). The new test covers the path.
+- **4 (popups and sheets): confirmed.** `reconfigure` closes every popup, and every sheet when the scale changes. It
+  sends `CloseRequested` first and then calls `remove_window`, which is what a click outside a popup and the closing of
+  an owner already do. `remove_window` hands the focus back to the parent or owner, and the chooser treats
+  `CloseRequested` on its sheet as Cancel (`crates/zoraya-chooser/src/session.rs:203`). The popups are closed before
+  `keys` is collected, so the loop never touches a removed window. One consequence is now documented in ADR-0246: an
+  open menu closes at every step of a window drag, and a scale change from Settings cancels an open chooser.
+- **5 (legacy windows): confirmed, with one new issue (note B).** Legacy windows are clamped with the same bounds as
+  toplevels and keep their size.
+- **6 (wallpaper blur): confirmed.** `make_wallpaper` now runs after `self.scale` is set, in both branches.
+- **7 (checks): confirmed for `Announce`.** Its test drives the sequence of `info`, `served`, `tell` and `unsent`,
+  including "back to the attached size" and a full queue. The test does not show that `gpud` calls these at the right
+  places: `gpud` has no host test, so its wiring is checked only by reading it (I did, under 1). The compositor's fake
+  still answers `call` outside the channel, as the disposition says.
+- **8 (design.md): confirmed, with one small new issue (note C).**
+- **9 (ADR vs code): confirmed.** Option C, INV-0246-1 and INV-0246-2 now describe what is built.
+- **10 (`--gui-size`): confirmed.** Both sides are checked for being non-empty, digits only and within 1 to 4096. A
+  string without an `x`, or with a second `x` (`1600x1000x5` leaves `1600x1000` as the width), is refused.
+- **11 (old pin): confirmed.** The comment now says what happens.
+- **12 (small sizes): partly.** INV-0246-1 is narrowed, but its wording is still not true in one case (note B). No
+  test resizes to 1 or 4096; the disposition records that.
+- **13 (index row): confirmed.** The row now has its Depends-on cell.
+- **14 (no resize in QEMU): recorded,** as the disposition says.
+
+New notes:
+
+- **A. note.** `compd`'s `call` (`user/src/bin/compd.rs:190-216`) still takes the first message on the channel as the
+  reply. Correctness now rests entirely on `gpud` keeping `Announce`'s discipline, and `Gpu::attach` still reads
+  `self.width` instead of taking the size `Info` gave.
+  - *Scenario:* this is not a bug today. But a later change that asks the display's size anywhere else (for example a
+    status report), or a second unsolicited message, would bring back items 1 and 2 without any test failing.
+  - *Fix:* when a message in `call` has a `NO_REPLY` transaction, set it aside as "resized pending" and keep waiting.
+    Have `Gpu::attach` take `(width, height)` so that the crate itself enforces "the size `Info` gave".
+- **B. note.** Legacy windows are never resized, so INV-0246-1's new wording ("every toplevel's and legacy window's
+  frame lies in the work area when the display is at least as large as the bar, the dock's strip and one title bar")
+  is false for a legacy window larger than the work area.
+  - *Scenario:* a 668 × 460 legacy surface on a display shrunk to 640 × 400. `into` clamps it to the work area's left
+    and top edges, and its right and bottom parts lie outside.
+  - *Fix:* say "starts in the work area" or "lies at least partly in the work area" for legacy windows. The threshold
+    should also count the border and one body row (`most` in `reconfigure` needs `title + border + s`), not just one
+    title bar.
+- **C. note.** `docs/design.md:676` now ends its list item with an empty line before the next item ("the scale too
+  since 7g." then a blank line), which splits the list in two. The new sentence at `:1172-1173` runs past the file's
+  120-column width.
+
+### After the check
+
+- A: open, recorded here. The ordering holds by `gpud`'s `Announce`; the compositor's `call` still takes the next
+  message as its reply and `Gpu::attach` still reads its stored size. Making `call` set unsolicited messages aside is
+  a change of the platform trait for every driver call; left for when a second unsolicited message exists.
+- B: fixed in INV-0246-1's wording (toplevels when the work area holds a border, a title bar and one body row; a
+  legacy window when it fits, else its top-left corner).
+- C: fixed: the list in design.md's settings section is whole again, and the new lines of "Using the desktop" fit.
