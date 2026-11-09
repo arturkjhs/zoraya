@@ -1,0 +1,78 @@
+# Stage 7f's criterion (TASK-24, docs/research/desktop/plan.md, ADR-0169):
+# the settings window changes the theme and the active layout, and the
+# frames and the keys follow at once, without a restart; edit saves a Czech
+# file that the file manager then lists. Coordinates are logical at scale 1
+# (1024 x 768): the dock's tiles at y 722, term 377, files 427, edit 477,
+# settings 527; each new window 32 further right and down from the first
+# terminal's frame at (72, 70). bg.frame.focused is f7f7f8 light, 2f3136
+# dark.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+# The settings window from the dock, focused by its title bar.
+click 527 722
+pause 1500
+click 250 115
+region 200 106 60 4 f7f7f8
+shot settings
+# Dark: written, applied, and the focused frame turns dark.
+click 185 235
+serial settings: Saved and applied.
+region 200 106 60 4 2f3136
+shot dark
+# Czech on, then in use (the second of the enabled layouts).
+click 413 471
+serial settings: Saved and applied.
+click 342 535
+serial settings: Saved and applied.
+shot czech
+# The terminal, focused: on the Czech layout (QWERTZ) the keys of z and y
+# type y and z.
+click 400 80
+region 130 76 100 4 2f3136
+origin 73 106
+type echo zy\r
+screen yz
+screen ~> _
+# edit from the dock, focused; Czech text typed on the Czech layout.
+click 477 722
+pause 1500
+click 400 151
+region 200 140 60 4 2f3136
+click 400 300
+layout cz
+type Příliš žluťoučký kůň\r
+layout us
+shot edit
+# Save as: the chooser's sheet, the suggested name replaced by a Czech one.
+click 357 203
+pause 1000
+key tab
+key end
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+key backspace
+layout cz
+type poznámky.txt
+layout us
+shot save-sheet
+type \r
+serial edit: saved poznámky.txt
+# The file manager lists it.
+click 427 722
+serial files: ~ lists poznámky.txt
+shot files-lists
+# The first terminal turns the machine off.
+click 400 80
+origin 73 106
+type poweroff\r
+exit

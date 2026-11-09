@@ -480,3 +480,27 @@ fn copy_and_paste_reach_the_application() {
     assert_eq!(app.take_paste(), None);
     assert!(!app.offer(&"x".repeat(gui::MAX_CLIPBOARD + 1)));
 }
+
+/// ADR-0169: a Configure with the dark theme repaints every window in it.
+#[test]
+fn the_theme_follows_configure() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("edit", form(), 200, 120).unwrap();
+    app.platform.frame();
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    let light = app.platform.buffers.last().unwrap()[0];
+    app.platform.event(&gui::Configure {
+        window: id,
+        width: 200,
+        height: 120,
+        scale: 1,
+        dark: true,
+        motion: false,
+    });
+    while !matches!(app.poll(), None | Some(Happened::Gone)) {}
+    assert_eq!(app.appearance, Appearance::Dark);
+    assert!(!app.motion);
+    let dark = app.platform.buffers.last().unwrap()[0];
+    assert_ne!(light, dark, "repainted in the dark palette");
+    assert_eq!(dark, zoraya_tokens::DARK.bg_window.pixel());
+}

@@ -78,13 +78,16 @@ pub fn page(s: &GuiSettings, status: &str) -> Box<dyn Widget> {
         note("The scale takes effect at the next session."),
         heading("Keyboard"),
     ];
-    for i in 0..zoraya_keymap::LAYOUTS.len() {
-        column.push(Box::new(CheckBox::new(
-            LAYOUT + i as u32,
-            layout_label(i),
-            s.layouts.contains(&i),
-        )));
-    }
+    let boxes: Vec<Box<dyn Widget>> = (0..zoraya_keymap::LAYOUTS.len())
+        .map(|i| {
+            Box::new(CheckBox::new(
+                LAYOUT + i as u32,
+                layout_label(i),
+                s.layouts.contains(&i),
+            )) as Box<dyn Widget>
+        })
+        .collect();
+    column.push(Box::new(Row::new(boxes)));
     let enabled: Vec<&str> = s.layouts.iter().map(|i| layout_label(*i)).collect();
     let active = s.layouts.iter().position(|l| *l == s.layout).unwrap_or(0);
     column.push(row(

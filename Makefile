@@ -461,7 +461,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # A script's image is rootfs, with tests/gui/SCRIPT.root/ over it when there is
 # one (the layouts' settings file, ADR-0169's gui.keyboard-layouts).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 terminal:auto:2 windows:auto:2
+GUI_RUNS := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 files:auto:1 files:tcg:1 settings:auto:1 settings:tcg:1 terminal:auto:2 windows:auto:2
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
 	  script=$$(echo $$run | cut -d: -f1); accel=$$(echo $$run | cut -d: -f2); scale=$$(echo $$run | cut -d: -f3); \

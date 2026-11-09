@@ -3,7 +3,7 @@
 # the panel, read-only; the application then asks the chooser to open a
 # file, which it can read and cannot write, and to save one, which it can
 # write, and nothing beside it. Coordinates are logical at scale 1
-# (1024 x 768): the dock's files icon at (477, 723); each new window 32
+# (1024 x 768): the dock's files icon at (427, 723); each new window 32
 # further right and down from the first terminal's frame at (72, 70).
 # bg.frame.focused is f7f7f8.
 serial init: gui: gpu on its own page
@@ -12,7 +12,7 @@ screen ~> _
 type echo hello > notes.test\r
 screen ~> _
 # The file manager from the dock, in home: its window is the second.
-click 477 723
+click 427 723
 pause 1500
 click 400 120
 region 162 108 100 4 f7f7f8

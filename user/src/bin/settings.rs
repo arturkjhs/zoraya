@@ -28,8 +28,8 @@ use zoraya_user::app::Gui;
 use zoraya_user::files::{File, read_all};
 
 /// The window's logical size.
-const WIDTH: u32 = 440;
-const HEIGHT: u32 = 460;
+const WIDTH: u32 = 600;
+const HEIGHT: u32 = 520;
 
 /// The file as it is now (empty when there is none).
 fn current(config: &File) -> vec::Vec<u8> {
@@ -42,7 +42,11 @@ fn current(config: &File) -> vec::Vec<u8> {
 
 /// Writes `bytes` as a new file published over the old one.
 fn publish(config: &File, bytes: &[u8]) -> Result<(), u32> {
-    let file = config.create_unnamed()?;
+    let wanted = zoraya_proto_file::rights::READ
+        | zoraya_proto_file::rights::WRITE
+        | zoraya_proto_file::rights::PUBLISH
+        | zoraya_proto_file::rights::SYNC;
+    let file = config.create_unnamed_with(wanted)?;
     if !bytes.is_empty() {
         file.write(0, 0, bytes)?;
     }
@@ -119,8 +123,7 @@ fn main() -> i32 {
                     Ok(Ok(())) => {
                         s = new;
                         if announce(panel) {
-                            println!("settings: saved and applied");
-                            "Saved.".into()
+                            "Saved and applied.".into()
                         } else {
                             "Saved; it applies at the next session.".into()
                         }
@@ -130,6 +133,9 @@ fn main() -> i32 {
                 }
             }
         };
+        if !status.is_empty() {
+            println!("settings: {status}");
+        }
         app.replace(window, page(&s, &status));
     }
 }

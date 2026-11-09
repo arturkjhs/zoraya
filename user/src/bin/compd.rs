@@ -22,6 +22,10 @@ use zoraya_user::{
 
 extern crate alloc;
 
+// Its description declares the desktop's settings (ADR-0169), which
+// zoraya_compositor::settings reads from the same file.
+zoraya_user::describe!("system", "compd");
+
 /// How long a driver may take to answer.
 const DRIVER_NS: u64 = 2_000_000_000;
 
@@ -218,6 +222,9 @@ fn main() -> i32 {
             zoraya_user::files::read_all(&f).ok()
         })
         .unwrap_or_default();
+    // The same declarations the compositor reads (the packer checks this
+    // copy against the file).
+    debug_assert_eq!(DESCRIPTION, zoraya_compositor::settings::DESCRIPTION);
     let (settings, problems) = zoraya_compositor::settings::read(&bytes);
     for p in problems {
         println!("{p}");

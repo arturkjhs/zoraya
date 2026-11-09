@@ -125,6 +125,10 @@ pub struct App<P: Platform> {
     serial: u32,
     /// The text of the last `Paste`, until taken.
     pasted: Option<alloc::string::String>,
+    /// The theme the windows are painted in, and whether they may move
+    /// (`Configure`, ADR-0169).
+    pub appearance: Appearance,
+    pub motion: bool,
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
@@ -151,6 +155,8 @@ impl<P: Platform> App<P> {
             held: None,
             serial: 0,
             pasted: None,
+            appearance,
+            motion: true,
         };
         let reply = app.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -449,6 +455,21 @@ impl<P: Platform> App<P> {
         let Some(i) = self.index(c.window) else {
             return;
         };
+        // The theme (ADR-0169): every window repainted in the new palette.
+        let appearance = if c.dark {
+            Appearance::Dark
+        } else {
+            Appearance::Light
+        };
+        if appearance != self.appearance {
+            self.appearance = appearance;
+            self.painter.palette = appearance.palette();
+            let ids: Vec<u32> = self.windows.iter().map(|w| w.id).collect();
+            for id in ids {
+                self.repaint(id);
+            }
+        }
+        self.motion = c.motion;
         if (c.width, c.height) == self.windows[i].size || c.width == 0 || c.height == 0 {
             return;
         }
