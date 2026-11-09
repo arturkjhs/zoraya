@@ -58,6 +58,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-chooser"
+version = "0.1.0"
+dependencies = [
+ "zoraya-proto-chooser",
+ "zoraya-proto-file",
+ "zoraya-protocol",
+ "zoraya-shell",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-command"
 version = "0.1.0"
 dependencies = [
@@ -307,6 +318,14 @@ dependencies = [
 
 [[package]]
 name = "zoraya-proto-block"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-proto-chooser"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",

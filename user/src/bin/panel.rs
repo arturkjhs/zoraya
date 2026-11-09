@@ -156,6 +156,7 @@ fn launch(l: &Launch, manager: Handle, root: Option<&File>) {
     let m = gui::AddRoomClient {
         untrusted: u32::from(room.is_some_and(|r| r.untrusted)),
         colour: room.map_or(0, |r| u32::from(r.colour)),
+        tag: 0,
         room: Data(room.map_or(&b""[..], |r| r.name.as_bytes())),
         app: Data(l.app.as_bytes()),
         entries: Data(entries.as_bytes()),

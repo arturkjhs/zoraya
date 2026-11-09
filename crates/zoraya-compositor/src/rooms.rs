@@ -34,6 +34,9 @@ pub struct Record {
     pub entries: Vec<String>,
     /// The line that made the record.
     pub line: String,
+    /// The panel's tag (proposed ADR-0245): how a sheet finds this client;
+    /// 0 for none.
+    pub tag: u32,
 }
 
 fn is_app_name(s: &str) -> bool {
@@ -95,6 +98,7 @@ impl Record {
             app: app.into(),
             entries,
             line: line.into(),
+            tag: m.tag,
         })
     }
 

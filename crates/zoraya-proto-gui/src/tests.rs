@@ -264,6 +264,7 @@ fn the_client_managers_messages() {
     let add = AddRoomClient {
         untrusted: 1,
         colour: 0,
+        tag: 5,
         room: zoraya_protocol::Data(b"agent-1"),
         app: zoraya_protocol::Data(b"term"),
         entries: zoraya_protocol::Data("+w ~/sandbox/agent-1\n+r ~/Документи".as_bytes()),
@@ -299,4 +300,49 @@ fn the_client_managers_messages() {
         index: 2,
     });
     total(AttachClientManager {});
+}
+
+/// The sheet, the grant pill and the system mark (proposed ADR-0245):
+/// round trips, total decoding, and the kinds' range.
+#[test]
+fn the_system_clients_messages() {
+    let mut out = [0; 8192];
+    let sheet = CreateSheet {
+        tag: 4,
+        kind: Below(2),
+        width: 520,
+        height: 420,
+    };
+    let n = encode(&sheet, 3, &mut out).unwrap();
+    assert_eq!(decode::<CreateSheet>(&out[..n], 1).unwrap().1, sheet);
+    zoraya_protocol::testing::exercise(&out[..n], |b| {
+        let _ = decode::<CreateSheet>(b, 1);
+    });
+    assert!(
+        encode(
+            &CreateSheet {
+                kind: Below(3),
+                ..sheet
+            },
+            3,
+            &mut out
+        )
+        .is_err()
+    );
+    let g = Granted {
+        tag: 4,
+        words: zoraya_protocol::Data("+r ~/project/plán.txt".as_bytes()),
+    };
+    let n = encode(&g, 3, &mut out).unwrap();
+    assert_eq!(decode::<Granted<'_>>(&out[..n], 0).unwrap().1, g);
+    zoraya_protocol::testing::exercise(&out[..n], |b| {
+        let _ = decode::<Granted<'_>>(b, 0);
+    });
+    let n = encode(&AddSystemClient {}, 3, &mut out).unwrap();
+    assert!(decode::<AddSystemClient>(&out[..n], 1).is_ok());
+    assert!(decode::<AddSystemClient>(&out[..n], 0).is_err());
+    for o in SYSTEM_REQUESTS {
+        assert!(CLIENT_REQUESTS.contains(&o));
+    }
+    assert!(MANAGER_REQUESTS.contains(&42));
 }

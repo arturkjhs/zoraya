@@ -301,6 +301,7 @@ impl Gui {
         let m = gui::AddRoomClient {
             untrusted: 0,
             colour: 0,
+            tag: 0,
             room: zoraya_protocol::Data(b""),
             app: zoraya_protocol::Data(b"term"),
             entries: zoraya_protocol::Data(b"+w /"),

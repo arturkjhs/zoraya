@@ -45,6 +45,7 @@ impl Setup {
         let m = gui::AddRoomClient {
             untrusted,
             colour,
+            tag: 0,
             room: zoraya_protocol::Data(room.as_bytes()),
             app: zoraya_protocol::Data(app.as_bytes()),
             entries: zoraya_protocol::Data(entries.as_bytes()),
@@ -175,6 +176,7 @@ fn each_manager_takes_only_its_own_ordinals() {
     let first = gui::AddRoomClient {
         untrusted: 0,
         colour: 0,
+        tag: 0,
         room: zoraya_protocol::Data(b""),
         app: zoraya_protocol::Data(b"term"),
         entries: zoraya_protocol::Data(b"+w /"),
@@ -199,6 +201,7 @@ fn each_manager_takes_only_its_own_ordinals() {
         let m = gui::AddRoomClient {
             untrusted,
             colour,
+            tag: 0,
             room: zoraya_protocol::Data(room.as_bytes()),
             app: zoraya_protocol::Data(app.as_bytes()),
             entries: zoraya_protocol::Data(entries.as_bytes()),
@@ -269,6 +272,7 @@ fn no_client_message_changes_a_record_or_its_pixels() {
                 &gui::AddRoomClient {
                     untrusted: 0,
                     colour: 1,
+                    tag: 0,
                     room: zoraya_protocol::Data(b"project"),
                     app: zoraya_protocol::Data(b"term"),
                     entries: zoraya_protocol::Data(b"+w /"),
@@ -749,6 +753,7 @@ fn manager_requests_take_exactly_their_handles() {
     let record = gui::AddRoomClient {
         untrusted: 0,
         colour: 0,
+        tag: 0,
         room: zoraya_protocol::Data(b""),
         app: zoraya_protocol::Data(b"term"),
         entries: zoraya_protocol::Data(b""),
