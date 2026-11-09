@@ -108,6 +108,18 @@ protocol! {
     message Added = 16, handles 0 {
         status: Below<4>,
     }
+
+    /// The file manager to the panel: open this file with the application
+    /// for its name (ADR-0168 point 4); the connection reads it, and
+    /// `words` name it as the record shows it (`+r ~/notes.txt`).
+    message OpenWith<'a> = 32, handles 1 {
+        name: Data<'a, MAX_NAME>,
+        words: Data<'a, MAX_WORDS>,
+    }
+
+    message Opening = 32, handles 0 {
+        status: Below<4>,
+    }
 }
 
 /// The application requests' ordinals.
@@ -116,6 +128,8 @@ pub const APPLICATION_REQUESTS: [u32; 3] = [1, 2, 3];
 pub const ANSWERS: [u32; 2] = [8, 9];
 /// The panel's requests.
 pub const PANEL_REQUESTS: [u32; 1] = [16];
+/// The file manager's request to the panel.
+pub const LAUNCHER_REQUESTS: [u32; 1] = [32];
 
 #[cfg(test)]
 extern crate std;
