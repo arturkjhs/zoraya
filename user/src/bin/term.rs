@@ -72,6 +72,9 @@ fn slot(n: u64) -> Handle {
 }
 
 /// Sends `m` to the compositor and waits for its reply.
+/// How long `term` waits for one of the compositor's replies.
+const REPLY_WAIT_NS: u64 = 60_000_000_000;
+
 fn ask<'a, M: zoraya_protocol::Message<'a>>(
     end: Handle,
     m: &M,
@@ -81,9 +84,13 @@ fn ask<'a, M: zoraya_protocol::Message<'a>>(
     let mut out = [0u8; 64];
     let n = encode(m, 1, &mut out).ok()?;
     channel_write(end, &out[..n], handles).ok()?;
-    // Events may come first (a new surface gets `Focus`): skip them.
+    // Events may come first (a new surface gets `Focus`): skip them. The
+    // wait is long: at start the compositor makes the wallpaper and its
+    // blur and composes a whole frame, which at scale 2 under TCG on a slow
+    // host took more than 5 s (CI, 2026-11-09); a compositor that is gone
+    // ends the wait at once (PEER_CLOSED).
     loop {
-        let n = wait_reply(end, reply, 5_000_000_000)?;
+        let n = wait_reply(end, reply, REPLY_WAIT_NS)?;
         let ordinal = Header::decode(&reply[..n]).ok()?.0.ordinal;
         if !gui::CLIENT_EVENTS.contains(&ordinal) {
             return Some(n);
