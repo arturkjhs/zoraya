@@ -1495,22 +1495,49 @@ fn running_out_of_asids_is_an_error() {
     let failure = loop {
         match process::spawn_suspended("hello") {
             Ok(process) => live.push(process),
-            Err(e) => break e,
+            Err(e) => break Some(e),
         }
-        assert!(live.len() <= 255, "more live processes than ASIDs");
+        if live.len() > 255 {
+            break None;
+        }
     };
-    assert_eq!(failure, SpawnError::NoMemory);
-    assert_eq!(live.len(), 255, "ASID 0 belongs to no process");
     let free = frames::stats().free;
     println!(
-        "running_out_of_asids: 255 suspended processes take {} frames, {free} stay free",
-        before - free
+        "running_out_of_asids: {} suspended processes take {} frames, {free} stay free",
+        live.len(),
+        before.saturating_sub(free)
     );
-    assert!(free >= ROOM, "no room for a running process beside them");
-    for process in live {
-        process.resume().expect("resume");
-        assert_eq!(process.wait(), exited(7));
+    // Nothing is asserted until every process has ended: a failed test does
+    // not unwind (`on_panic`), so a panic while they are held would keep
+    // their ASIDs and frames from every later test.
+    let held = live.len();
+    let room = free >= ROOM;
+    let mut records = Vec::new();
+    let mut again = None;
+    if failure == Some(SpawnError::NoMemory) && held == 255 && room {
+        for (i, process) in live.into_iter().enumerate() {
+            process.resume().expect("resume");
+            records.push(process.wait());
+            if i == 0 {
+                // The first one's ASID comes back while 254 are still held.
+                again = Some(process::spawn("hello").map(|p| p.wait()));
+            }
+        }
+    } else {
+        // Ended before their first instruction (`user_thread_start`).
+        for process in &live {
+            let _ = process.signal(RequestKind::Terminate, 0);
+            let _ = process.resume();
+        }
+        for process in live {
+            process.wait();
+        }
     }
+    assert_eq!(failure, Some(SpawnError::NoMemory));
+    assert_eq!(held, 255, "ASID 0 belongs to no process");
+    assert!(room, "no room for a running process beside them");
+    assert!(records.iter().all(|r| *r == exited(7)), "{records:?}");
+    assert_eq!(again, Some(Ok(exited(7))), "an ASID comes back at once");
     assert_eq!(run_program("hello"), exited(7), "ASIDs come back");
 }
 

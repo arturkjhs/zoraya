@@ -768,6 +768,10 @@ pub fn exit_current(record: ExitRecord) -> ! {
         .clone();
     // SAFETY: no table is the safe value.
     unsafe { mmu::set_user_table(None) };
+    // From here to `sched::exit_current` nothing may block or yield: the
+    // scheduler would install `process.ttbr0()` again, a root freed below
+    // with an ASID another process may already hold. A process has one
+    // thread, so no other CPU can be using the space either.
     let space = process.space.lock().take();
     #[cfg(feature = "qemu-test")]
     {
