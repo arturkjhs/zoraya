@@ -1,0 +1,48 @@
+# Stage 7e's drops, sheets and file client (ADR-0170, ADR-0160, ADR-0167):
+# holes cargo-mutants found in its pass over 7e (TASK-24 report), kept so
+# that a run after the merge repeats the ones that guard a person's
+# consent or a connection. Host tests only.
+tests = ["cargo test -q -p zoraya-compositor --lib", "cargo test -q -p zoraya-fsclient --test service", "cargo test -q -p zoraya-chooser"]
+timeout = 600
+
+[[mutant]]
+id = "D-drag-held"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '}) && self.buttons & gui::buttons::LEFT != 0;'
+replace = '});'
+note = "a press whose input driver was lost still starts a drag"
+
+[[mutant]]
+id = "D-drag-escape"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if key.pressed && code_ == code::ESC {'
+replace = 'if key.pressed || code_ == code::ESC {'
+note = "any key ends a carried drag"
+
+[[mutant]]
+id = "D-sheet-owner-client"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '.filter(|f| f.client == owner_slot)'
+replace = '.filter(|f| f.client != owner_slot)'
+note = "a sheet hangs under another client's focused window"
+
+[[mutant]]
+id = "D-fs-unasked-handle"
+file = "crates/zoraya-fsclient/src/lib.rs"
+find = 'if !self.got.is_empty() && M::ORDINAL != proto::GetToken::ORDINAL {'
+replace = 'if false {'
+note = "a handle in a reply that asked for none stays open"
+
+[[mutant]]
+id = "D-fs-token-status"
+file = "crates/zoraya-fsclient/src/lib.rs"
+find = 'Ok((_, r)) if r.status.0 == status::OK && self.got.len() == 1 => self.got[0],'
+replace = 'Ok((_, r)) if self.got.len() == 1 => self.got[0],'
+note = "a token is taken from an error reply"
+
+[[mutant]]
+id = "D-chooser-other-window"
+file = "crates/zoraya-chooser/src/session.rs"
+find = 'Happened::Ui { window, response } if window == self.window => response,'
+replace = 'Happened::Ui { response, .. } => response,'
+note = "the sheet takes another window's answers as its own"

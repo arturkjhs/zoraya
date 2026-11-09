@@ -1,6 +1,6 @@
 # ADR-0241: Round window corners over a client's pixels
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-08
 - **Depends on:** ADR-0160, ADR-0161, ADR-0164
 - **Evidence:** desktop/survey.md#display-scaling, desktop/survey.md#macos-and-apples-human-interface-guidelines
@@ -69,3 +69,5 @@ architect prefers the invariant's letter, Option A is one line in `zoraya-compos
 - A client that needs its corners (a full-screen video): a full-screen mode without a frame.
 
 ## Architect's decision
+
+Accepted 2026-11-09. Decided by the architect; recorded by an agent at the architect's request.

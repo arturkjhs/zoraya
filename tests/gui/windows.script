@@ -36,5 +36,13 @@ serial init: the terminal was closed
 window
 screen Type help to begin, or help tour.
 screen ~> _
+# A new window takes focus only from the person (ADR-0094): its title bar,
+# then its focused ground, before any key (on CI's slower runner the keys
+# otherwise reached no window, 2026-11-09).
+click 400 80
+region 130 76 100 4 f7f7f8
+# Keys typed at once after the focusing click can be lost under TCG (the
+# first five of poweroff, locally and on CI); a hand is not that quick.
+pause 500
 type poweroff\r
 exit

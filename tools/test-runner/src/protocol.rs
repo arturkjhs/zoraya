@@ -43,6 +43,9 @@ pub enum Exit {
 #[derive(Debug, Default)]
 pub struct Checker {
     expect_panic: Vec<String>,
+    /// Quarantined tests and their backlog note: each may fail without
+    /// failing the run.
+    known_failures: Vec<(String, String)>,
     expect_lines: Vec<String>,
     seen_expect_lines: Vec<bool>,
     begin: Option<usize>,
@@ -66,6 +69,8 @@ pub struct Report {
     pub passed: bool,
     pub ok: usize,
     pub expected_failures: usize,
+    /// One line for each quarantined test that failed.
+    pub known: Vec<String>,
     pub problems: Vec<String>,
 }
 
@@ -97,6 +102,13 @@ impl Checker {
             expect_lines,
             ..Checker::default()
         }
+    }
+
+    /// Lets test `name` fail without failing the run; `note` names its
+    /// backlog entry.
+    pub fn known_failure(mut self, name: String, note: String) -> Checker {
+        self.known_failures.push((name, note));
+        self
     }
 
     /// For a kernel that speaks no protocol, such as the normal kernel: only
@@ -231,13 +243,16 @@ impl Checker {
             _ => {}
         }
         let mut expected_failures = 0;
+        let mut known = Vec::new();
         let failed = std::mem::take(&mut self.failed);
         let expect_panic = std::mem::take(&mut self.expect_panic);
         let ok = std::mem::take(&mut self.ok);
         let expect_lines = std::mem::take(&mut self.expect_lines);
         let seen_lines = std::mem::take(&mut self.seen_expect_lines);
         for (name, msg) in &failed {
-            if expect_panic.contains(name) {
+            if let Some((_, note)) = self.known_failures.iter().find(|(n, _)| n == name) {
+                known.push(format!("{name}: known failure, see backlog: {note}"));
+            } else if expect_panic.contains(name) {
                 if msg.starts_with("panic ") {
                     expected_failures += 1;
                 } else {
@@ -267,6 +282,7 @@ impl Checker {
             passed: self.errors.is_empty(),
             ok: ok.len(),
             expected_failures,
+            known,
             problems: {
                 let mut p = self.errors;
                 if self.more_errors > 0 {
@@ -447,6 +463,40 @@ mod tests {
         lines[FAIL_BOOM] = "ZORAYA-TEST fail boom something else";
         let r = run(&lines, Exit::Status(Some(0)));
         assert!(!r.passed);
+    }
+
+    #[test]
+    fn a_known_failure_fails_nothing_else() {
+        let mut lines = GOOD.to_vec();
+        lines[OK_C] = "ZORAYA-TEST fail c panic at y.rs:2:2: the ASID fault";
+        lines[END] = "ZORAYA-TEST end pass=1 fail=2";
+        let quarantined = |c: Checker| c.known_failure("c".into(), "ASID fault".into());
+        let mut c = quarantined(Checker::new(vec!["boom".into()], vec!["banner".into()]));
+        for l in &lines {
+            c.feed(l);
+        }
+        let r = c.finish(Exit::Status(Some(0)), 10);
+        assert!(r.passed, "{:?}", r.problems);
+        assert_eq!((r.ok, r.expected_failures), (1, 1));
+        assert_eq!(r.known, ["c: known failure, see backlog: ASID fault"]);
+        // It passing is fine too, and says nothing.
+        let mut c = quarantined(Checker::new(vec!["boom".into()], vec!["banner".into()]));
+        for l in GOOD {
+            c.feed(l);
+        }
+        let r = c.finish(Exit::Status(Some(0)), 10);
+        assert!(r.passed && r.known.is_empty());
+        // Another test failing still fails the run.
+        let mut lines = GOOD.to_vec();
+        lines[OK_A] = "ZORAYA-TEST fail a panic at z.rs:3:3: other";
+        lines[END] = "ZORAYA-TEST end pass=1 fail=2";
+        let mut c = quarantined(Checker::new(vec!["boom".into()], vec!["banner".into()]));
+        for l in &lines {
+            c.feed(l);
+        }
+        let r = c.finish(Exit::Status(Some(0)), 10);
+        assert!(!r.passed && r.known.is_empty());
+        assert_eq!(r.problems, ["a failed: panic at z.rs:3:3: other"]);
     }
 
     #[test]

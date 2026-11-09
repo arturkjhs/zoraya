@@ -497,17 +497,34 @@ Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) an
   shell a `Size`), and the close button ends it; `init` takes a terminal that ended with 0 as a closed window and
   starts a new terminal and shell, as after `exit`.
 
-Measured (`t_gui` in the test kernel, `make test` on `work/7c` at 8640331, 2026-11-08; QEMU 11.1.2 on the M4 Mac mini):
+Measured (`t_gui` in the test kernel, `make test-qemu-auto-default` and `make test-qemu-tcg-default` at 9659e2d,
+2026-11-09, QEMU 11.1.2 on the M4 Mac mini):
 
 | | HVF | TCG |
 |---|---|---|
-| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | 6.0 ms (155 frames/s) | 54 ms (17 frames/s) |
-| The frame that opens the switcher (blur of the scene under it) | 18.5 ms | 102 ms |
-| A frame committed under the open switcher | 18.6 ms | 100 ms |
+| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | 6.1 ms | 55 ms |
+| The frame that opens the switcher (blur of the scene under it) | 18.8 ms | 107 ms |
+| A frame committed under the open switcher | 18.7 ms | 104 ms |
 
 A commit under the open switcher blurs the scene again (its glass is a blur of what is under it), so it costs what
-opening does; a pointer that only moves over it reuses the last frame. Under TCG a full redraw is 54 ms: every GUI
+opening does; a pointer that only moves over it reuses the last frame. Under TCG a full redraw is 55 ms: every GUI
 script passes under TCG, typing at 8 ms a key with the frames that lag behind it.
+
+The compositor's start and its frames (`compd`'s own report on the console, `make test-gui`'s terminal script,
+2026-11-09, QEMU 11.1.2 on the M4 Mac mini; GitHub's runners are about 2.3 times slower under TCG):
+
+| | HVF, 1024 × 768 | TCG, 1024 × 768 | HVF, 2048 × 1536 | TCG, 2048 × 1536 |
+|---|---|---|---|---|
+| The wallpaper and its blur, at a display's attach | 21 ms | 71 ms | 84 ms | 282 ms |
+| The first frame | under 1 ms | 8 ms | 2 ms | 32 ms |
+| The next 100 frames: mean | 1.2 ms | 7.6 ms | 3.8 ms | 24 ms |
+| The next 100 frames: longest | 17 ms | 121 ms | 51 ms | 467 ms |
+
+The wallpaper and its blur are made once per display size and appearance, at a quarter of the size each way and
+scaled up bilinearly (both are smooth): at full size they took 202 ms, 589 ms, 1.08 s and 9.3 s, and at scale 2
+under TCG on CI's runner more than a client's first wait, so `term` panicked (main, 2026-11-09). `term` now waits as
+long as the compositor lives. A window's frame and shadow are made once per size and kept (`chrome`); a frame
+composes only the damaged region. The longest frames are the full redraws (a window shown, the switcher).
 
 ## Keyboard layouts (as built)
 
@@ -567,9 +584,14 @@ and [ADR-0172](adr/0172-rooms.md), with the proposed [ADR-0242](adr/0242-the-pan
   and the person's files, configuration and temporary files to change. The shell serves its own files and every
   command's grants from that table, and refuses a path it was not given with ADR-0153's hint (`hint: cp tried to
   change ~/copy.txt, which it was not given`, `to allow it: +w ~ cp notes.txt ~/copy.txt`); a room's shell takes its
-  room from the table, since it cannot read `/config/rooms`, and runs no POSIX program (it holds no `/bin`); a grant
+  room from the table, since it cannot read `/config/rooms`; a trusted room's shell also holds `+r /bin`, `+r /usr`
+  and `+r /etc` (the toolchain, unless a room grant covers it; ADR-0172's decision of 2026-11-09), and every shell
+  the panel launches has a broker beside it (slots 7 and 8, as `init` gives its first; `user/src/beside.rs`), which
+  ends when the shell's connection closes and nothing it started runs, so POSIX programs run in rooms
+  (`tests/posix/room-gui.script`); a grant
   whose path does not exist gives it nothing to hold or list. A tree entry cannot publish (ADR-0153's table), so such
-  a shell writes `/config/rooms` and `/config/settings` in place, not by an atomic replace (a known limitation). The
+  a shell writes `/config/rooms` and `/config/settings` in place, not by an atomic replace (accepted for now; the
+  crash window is in `docs/backlog.md`). The
   console's shell keeps the root. The compositor learns the client with its record (`AddRoomClient`: the room, its
   trust and colour, the application, the entries in ADR-0153's words, the line), and the pills show exactly what the
   shell holds. `init` still starts the first terminal, with `home`'s record, and tells the compositor its entries
@@ -1352,7 +1374,8 @@ component is `.` or `..`, with or without `--recursive`; `project/` is `project`
   HVF. It looks like QEMU's HVF register emulation, which a guest cannot change, so a process can read a cycle counter
   there.
 - **Tests.** The suite needs more memory than the 32 MiB of stage 1: `running_out_of_asids_is_an_error` needs room for
-  255 live processes.
+  255 live processes, which it holds suspended (59 frames each with `hello`), and runs one at a time: a running `hello`
+  takes a 1 MiB heap step, which 255 at once would not find in 128 MiB.
 - **PAN** is not used. A stray kernel access to user memory would not fault.
 - **Interrupts.** One priority, no nesting. FIQ and SError reports are untested, since nothing raises them.
   Interrupt handlers must not panic in a test that expects recovery: the interrupt would stay active.

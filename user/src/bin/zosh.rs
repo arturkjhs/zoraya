@@ -502,11 +502,23 @@ impl Held {
         }
     }
 
-    /// As `open`; a table does not follow a link out of its entry.
+    /// As `open`, following links. A table follows them inside the
+    /// covering entry only, through its own connection: a relative link
+    /// (the toolchain's `tr -> busybox`) resolves as on the volume; an
+    /// absolute one resolves from the entry, so it may not be found, and
+    /// never leads out of the entry.
     fn open_followed(&self, rel: &str, flags: u32, wanted: u32) -> FsResult<File> {
         match self {
             Held::Root(f) => f.open_followed(rel, flags, wanted),
-            Held::Table(_) => self.open(rel, flags, wanted),
+            Held::Table(_) => {
+                let abs = format!("/{}", rel.trim_start_matches('/'));
+                match self.covering(&abs) {
+                    Some((e, rest)) if e.dir && !rest.is_empty() => {
+                        e.file.open_followed(&rest, flags, wanted & e.rights)
+                    }
+                    _ => self.open(rel, flags, wanted),
+                }
+            }
         }
     }
 
@@ -688,7 +700,7 @@ impl Z {
         );
         if let Some(r) = &self.room {
             s.push_str(&format!(
-                "  this shell holds room {}'s grants and nothing else: room shows them\n",
+                "  this shell holds room {}'s grants and the toolchain: room shows them\n",
                 r.name
             ));
         }

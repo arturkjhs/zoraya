@@ -45,8 +45,26 @@ type Pixels = Vec<u32>;
 
 pub struct Reader {
     look: Look,
-    /// For each (foreground, background, bold), every candidate's pixels.
-    maps: BTreeMap<(u32, u32, bool), BTreeMap<Pixels, char>>,
+    /// For each (foreground, background, bold), every candidate by the
+    /// hash of its pixels: keeping the pixels themselves took gigabytes at
+    /// scale 2 (6.5 GB for one script, 2026-11-09). A hit is checked
+    /// pixel for pixel, so a reading is still exact.
+    maps: BTreeMap<(u32, u32, bool), BTreeMap<u64, char>>,
+    /// Hits already checked pixel for pixel: each is drawn and compared
+    /// once, not at every cell read.
+    checked: BTreeMap<(u32, u32, bool, u64), bool>,
+}
+
+/// FNV-1a over a cell's pixels.
+fn hash(pixels: &[u32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for p in pixels {
+        for b in p.to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
 }
 
 impl Reader {
@@ -54,6 +72,7 @@ impl Reader {
         Reader {
             look,
             maps: BTreeMap::new(),
+            checked: BTreeMap::new(),
         }
     }
 
@@ -79,17 +98,36 @@ impl Reader {
         pixels
     }
 
-    fn map(&mut self, fg: Color, bg: Color, bold: bool) -> &BTreeMap<Pixels, char> {
+    fn map(&mut self, fg: Color, bg: Color, bold: bool) -> &BTreeMap<u64, char> {
         let key = (fg.pixel(), bg.pixel(), bold);
         if !self.maps.contains_key(&key) {
             let mut map = BTreeMap::new();
             for c in candidates() {
                 let pixels = self.draw(c, fg, bg, bold);
-                map.entry(pixels).or_insert(c);
+                map.entry(hash(&pixels)).or_insert(c);
             }
             self.maps.insert(key, map);
         }
         &self.maps[&key]
+    }
+
+    /// The candidate drawn exactly as `pixels`, if any.
+    fn lookup(
+        &mut self,
+        pixels: &Pixels,
+        h: u64,
+        fg: Color,
+        bg: Color,
+        bold: bool,
+    ) -> Option<char> {
+        let c = *self.map(fg, bg, bold).get(&h)?;
+        let key = (fg.pixel(), bg.pixel(), bold, h);
+        if let Some(same) = self.checked.get(&key) {
+            return same.then_some(c);
+        }
+        let same = self.draw(c, fg, bg, bold) == *pixels;
+        self.checked.insert(key, same);
+        same.then_some(c)
     }
 
     /// The character of a cell whose pixels `pixel(x, y)` gives: `' '` for
@@ -127,10 +165,11 @@ impl Reader {
                 fgs.push(c);
             }
         }
+        let h = hash(&pixels);
         for bold in [false, true] {
             for fg in &fgs {
-                if let Some(c) = self.map(*fg, bg, bold).get(&pixels) {
-                    return *c;
+                if let Some(c) = self.lookup(&pixels, h, *fg, bg, bold) {
+                    return c;
                 }
             }
         }
@@ -148,7 +187,8 @@ impl Reader {
                     return c;
                 }
                 let pixels = self.draw(c, fg, bg, false);
-                self.map(fg, bg, false).get(&pixels).copied().unwrap_or(c)
+                let h = hash(&pixels);
+                self.lookup(&pixels, h, fg, bg, false).unwrap_or(c)
             })
             .collect()
     }

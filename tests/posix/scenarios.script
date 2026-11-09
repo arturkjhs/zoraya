@@ -29,8 +29,11 @@
 < PSURF>
 # Ctrl-Z (plan.md's risk): the broker's job_suspend of the foreground group,
 # fg's tcsetpgrp and SIGCONT; the group stopped whole runs its next child
-# after fg (review R1); then Ctrl-C of the continued job.
-> sh -c 'sleep 2; echo first; sleep 1; echo second; sleep 30'\r
+# after fg (review R1); then Ctrl-C of the continued job. The first sleep is
+# long enough that Ctrl-Z lands in it on CI's slow TCG runner too (it came
+# 3.3 s after the command there): a stop that lands while the group spawns
+# its next child is lost (docs/backlog.md).
+> sh -c 'sleep 5; echo first; sleep 1; echo second; sleep 30'\r
 ~ 700 PSURF>
 > \x1a
 < Stopped

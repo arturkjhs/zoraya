@@ -242,3 +242,254 @@ fn a_grant_from_the_chooser_joins_the_owners_pills() {
     let pills = &s.c.win_views()[0].pills;
     assert!(pills.iter().any(|p| p == "+r ~/project/plán.txt"));
 }
+
+/// The chooser's sheet, if one is open: its key and its owner.
+fn open_sheet(s: &Setup, chooser_slot: usize) -> Option<(Key, (usize, u32))> {
+    let key = s.c.stack().find(|k| k.client == chooser_slot)?;
+    Some((key, s.c.window(key)?.owner()?))
+}
+
+fn popup(s: &mut Setup, end: u32, parent: u32) -> u32 {
+    let m = s.f().memory(vec![7; 20 * 10], 800, false);
+    let out = s.request(
+        end,
+        &gui::CreatePopup {
+            parent,
+            x: 10,
+            y: 20,
+            width: 20,
+            height: 10,
+        },
+        vec![m],
+    );
+    let (_, p) = out
+        .iter()
+        .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+        .unwrap();
+    assert_eq!(p.status.0, status::OK);
+    p.window
+}
+
+/// A sheet is refused when it has no width, when it is taller than the
+/// screen below a strip, and when the chooser's buffers would pass four
+/// displays' worth of pixels.
+#[test]
+fn a_sheet_is_refused_when_too_wide_too_tall_or_over_the_budget() {
+    let mut s = setup();
+    let panel = s.panel();
+    let mut apps = Vec::new();
+    for tag in 4..9 {
+        let app = tagged(&mut s, panel, tag, "edit");
+        s.window_of(app, 200, 100, 0x0040_4040);
+        apps.push(app);
+    }
+    let chooser = system(&mut s);
+    let room = H - s.c.frame().title as u32;
+    assert_eq!(sheet(&mut s, chooser, 4, 0, 100).0, status::BAD_BUFFER);
+    assert_eq!(
+        sheet(&mut s, chooser, 4, 200, room + 1).0,
+        status::BAD_BUFFER
+    );
+    assert_eq!(sheet(&mut s, chooser, 4, W + 1, 100).0, status::BAD_BUFFER);
+    // Four of the largest fit the budget, a fifth does not.
+    for tag in 4..8 {
+        assert_eq!(sheet(&mut s, chooser, tag, W, room).0, status::OK, "{tag}");
+    }
+    assert_eq!(sheet(&mut s, chooser, 8, W, room).0, status::BAD_BUFFER);
+}
+
+/// The sheet hangs under the focused window of the tagged client, else
+/// under its topmost toplevel; never under another client's window.
+#[test]
+fn a_sheet_hangs_under_the_focused_window_of_its_tag() {
+    // Another client focused: the tagged client's topmost window.
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    let ida = s.window_of(a, 300, 200, 0x0040_4040);
+    let b = tagged(&mut s, panel, 5, "files");
+    let idb = s.window_of(b, 300, 200, 0x0060_6060);
+    s.c.activate(Key { client: 1, id: idb });
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    assert_eq!(open_sheet(&s, 2).map(|(_, o)| o), Some((0, ida)));
+    // The tagged client's focused window, though another of its own is
+    // above it (a new window takes no focus).
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    let first = s.window_of(a, 300, 200, 0x0040_4040);
+    let second = s.window_of(a, 300, 200, 0x0050_5050);
+    assert_ne!(first, second);
+    assert_eq!(
+        s.c.focused(),
+        Some(Key {
+            client: 0,
+            id: first
+        })
+    );
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    assert_eq!(open_sheet(&s, 1).map(|(_, o)| o), Some((0, first)));
+}
+
+/// A new sheet takes the keyboard from its owner or the owner's popup,
+/// never from another client's window.
+#[test]
+fn a_sheet_takes_the_focus_only_from_its_owners_client() {
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    s.window_of(a, 300, 200, 0x0040_4040);
+    let b = tagged(&mut s, panel, 5, "files");
+    let idb = s.window_of(b, 300, 200, 0x0060_6060);
+    let other = Key { client: 1, id: idb };
+    s.c.activate(other);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    assert_eq!(s.c.focused(), Some(other));
+    // The owner's popup focused: the sheet takes it.
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    let id = s.window_of(a, 300, 200, 0x0040_4040);
+    let p = popup(&mut s, a, id);
+    let body = s.c.window(Key { client: 0, id: p }).unwrap().body_rect();
+    s.press_at(body.x + 2, body.y + 2);
+    assert_eq!(s.c.focused(), Some(Key { client: 0, id: p }));
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let (key, _) = open_sheet(&s, 1).unwrap();
+    assert_eq!(s.c.focused(), Some(key));
+}
+
+/// The sheet goes directly above its owner's popups.
+#[test]
+fn a_sheet_stacks_above_its_owners_popups() {
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    let id = s.window_of(a, 300, 200, 0x0040_4040);
+    let p = popup(&mut s, a, id);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let (key, _) = open_sheet(&s, 1).unwrap();
+    let order: Vec<Key> = s.c.stack().collect();
+    assert_eq!(
+        order,
+        [Key { client: 0, id }, Key { client: 0, id: p }, key]
+    );
+}
+
+/// The sheet's strip moves nothing, and an owner with a sheet open takes
+/// no press but on its title bar: its close button does nothing.
+#[test]
+fn a_sheet_strip_takes_no_press_and_an_owner_with_a_sheet_takes_only_its_title() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    let id = s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let (key, _) = open_sheet(&s, 1).unwrap();
+    let before = s.c.window(key).unwrap().body_rect();
+    let f = s.c.frame();
+    let (w, h) = s.f().display_size;
+    let (x, y) = (before.x + 40, before.y - f.title / 2);
+    s.point(axis(x, w), axis(y, h), Some(1));
+    s.point(axis(x + 40, w), axis(y + 30, h), None);
+    s.point(axis(x + 40, w), axis(y + 30, h), Some(0));
+    assert_eq!(
+        s.c.window(key).unwrap().body_rect(),
+        before,
+        "the strip moves nothing"
+    );
+    s.f().take(app);
+    let o = s.outer(0, id);
+    let cy = o.y + f.border + f.title / 2;
+    s.press_at(o.x + i64::from(window::CLOSE_X), cy);
+    let told = s.f().take(app);
+    assert!(
+        !told
+            .iter()
+            .any(|m| decode::<gui::CloseRequested>(m, 0).is_ok()),
+        "the owner's close button is not pressed while its sheet is open"
+    );
+    assert!(s.c.window(Key { client: 0, id }).is_some());
+}
+
+/// The sheet's outline is its strip and its body: a press just above the
+/// body's bottom is the sheet's, and below its bottom it is not.
+#[test]
+fn a_press_at_the_sheet_edge_is_the_sheets_and_just_below_it_not() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    let ida = s.window_of(app, 300, 200, 0x0040_4040);
+    let other = tagged(&mut s, panel, 5, "files");
+    let idc = s.window_of(other, 300, 200, 0x0060_6060);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let (key, _) = open_sheet(&s, 2).unwrap();
+    // The owner and its sheet raised above the other window.
+    s.c.activate(Key { client: 0, id: ida });
+    let body = s.c.window(key).unwrap().body_rect();
+    s.f().take(chooser);
+    let (w, h) = s.f().display_size;
+    s.point(axis(body.x + 10, w), axis(body.bottom() - 5, h), None);
+    assert!(
+        events(&s.f().take(chooser)).iter().any(|(o, _)| *o == 23),
+        "the sheet's body takes the pointer"
+    );
+    // Far below the sheet, where no window is, a press changes nothing.
+    let c = Key { client: 1, id: idc };
+    s.c.activate(c);
+    let below = s.outer(1, idc).bottom() + 40;
+    assert!(below < i64::from(H) - 10);
+    s.press_at(body.x + 5, below);
+    assert_eq!(s.c.focused(), Some(c));
+}
+
+/// Closing a focused sheet gives the focus back to its owner, though
+/// another window is above them.
+#[test]
+fn closing_a_sheet_focuses_its_owner_under_another_window() {
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    let id = s.window_of(a, 300, 200, 0x0040_4040);
+    let b = tagged(&mut s, panel, 5, "files");
+    s.window_of(b, 300, 200, 0x0060_6060);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let (key, _) = open_sheet(&s, 2).unwrap();
+    assert_eq!(s.c.focused(), Some(key));
+    assert_eq!(s.c.stack().last().map(|k| k.client), Some(1));
+    s.f()
+        .send(chooser, message(&gui::Close { window: key.id }, 10), vec![]);
+    s.c.step();
+    assert_eq!(s.c.focused(), Some(Key { client: 0, id }));
+}
+
+/// A press on a sheet raises its owner with it, above another window.
+#[test]
+fn a_press_on_a_sheet_raises_its_owner_with_it() {
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    let id = s.window_of(a, 500, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let b = tagged(&mut s, panel, 5, "files");
+    let idb = s.window_of(b, 100, 60, 0x0060_6060);
+    let (key, _) = open_sheet(&s, 1).unwrap();
+    let ob = s.outer(2, idb);
+    let body = s.c.window(key).unwrap().body_rect();
+    let (x, y) = (body.x + 3, body.y + 3);
+    assert!(!ob.contains(x, y), "{body:?} {ob:?}");
+    s.press_at(x, y);
+    assert_eq!(
+        s.c.stack().collect::<Vec<_>>(),
+        [Key { client: 2, id: idb }, Key { client: 0, id }, key]
+    );
+}

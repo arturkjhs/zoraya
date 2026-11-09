@@ -1,0 +1,100 @@
+# What a change runs (tools/test-changed.sh): a path prefix and the steps of
+# make test that cover it. The longest prefix that matches a changed path
+# counts; a path no line matches runs every step. `check` alone means make
+# check only. Host tests are not listed: every changed crate's tests run,
+# with the tests of the crates that depend on it.
+#
+# PREFIX                      STEPS
+docs/                         check
+README                        check
+CLAUDE.md                     check
+.github/                      check
+.claude/                      check
+tools/test-map.txt            check
+
+# The kernel and its ABI: every machine configuration.
+kernel/                       test-qemu test-boot
+crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
+crates/zoraya-dtb/            test-qemu
+crates/zoraya-pmm/            test-qemu
+crates/zoraya-pagetable/      test-qemu
+crates/zoraya-heap/           test-qemu
+crates/zoraya-handle/         test-qemu
+crates/zoraya-events/         test-qemu
+crates/zoraya-channel/        test-qemu
+crates/zoraya-time/           test-qemu
+crates/zoraya-console/        test-qemu test-boot
+crates/zoraya-stream/         test-qemu
+crates/zoraya-ramdisk/        test-qemu test-boot
+crates/zoraya-elf/            test-qemu test-boot
+
+# The desktop.
+crates/zoraya-compositor/     test-gui
+crates/zoraya-term/           test-gui test-tour-gui
+crates/zoraya-ui/             test-gui
+crates/zoraya-app/            test-gui
+crates/zoraya-text/           test-gui test-qemu
+crates/zoraya-tokens/         test-gui
+crates/zoraya-fonts/          test-gui
+crates/zoraya-paint/          test-gui
+crates/zoraya-keymap/         test-gui
+crates/zoraya-panel/          test-gui
+crates/zoraya-proto-gui/      test-gui
+crates/zoraya-proto-display/  test-gui
+crates/zoraya-proto-input/    test-gui
+crates/zoraya-proto-chooser/  test-gui
+crates/zoraya-chooser/        test-gui
+crates/zoraya-fsclient/       test-gui
+crates/zoraya-files/          test-gui
+crates/zoraya-editor/         test-gui
+crates/zoraya-settings-window/ test-gui
+tests/gui/                    test-gui
+user/src/bin/compd.rs         test-gui
+user/src/bin/term.rs          test-gui test-tour-gui
+user/src/bin/gpud.rs          test-gui
+user/src/bin/inputd.rs        test-gui
+user/src/bin/panel.rs         test-gui
+user/src/bin/chooser.rs       test-gui
+user/src/bin/files.rs         test-gui
+user/src/bin/t_open.rs        test-gui
+user/src/bin/edit.rs          test-gui
+user/src/bin/settings.rs      test-gui
+user/src/bin/t_gui.rs         test-qemu
+user/src/gui.rs               test-gui test-qemu
+user/src/app.rs               test-gui
+
+# The POSIX personality.
+crates/zoraya-posix/          test-libposix test-posix test-posix-gui
+crates/zoraya-broker/         test-posix test-posix-gui
+crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
+user/src/bin/broker.rs        test-posix test-posix-gui
+user/src/bin/ttyd.rs          test-posix test-posix-gui
+user/src/bin/posixrun.rs      test-libposix test-posix
+user/src/posix_child.rs       test-posix
+ports/                        test-libposix test-posix test-posix-gui
+tests/posix/                  test-posix test-posix-gui test-tour-gui
+tests/posix-core/             test-libposix
+
+# The shell and its crates.
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui
+crates/zoraya-shell/          test-boot test-files test-tour-gui
+crates/zoraya-command/        test-boot test-files test-tour-gui
+crates/zoraya-describe/       test-files test-tour-gui
+crates/zoraya-settings/       test-files test-tour-gui test-gui
+user/describe/                test-files test-tour-gui
+docs/tour.md                  test-tour-gui
+tests/shell/                  test-boot test-files
+
+# Storage.
+crates/zoraya-fs/             test-files test-crash test-qemu
+crates/zoraya-fs-service/     test-files test-crash test-qemu
+crates/zoraya-proto-file/     test-files test-crash test-gui
+user/src/bin/fsd.rs           test-files test-crash
+user/src/bin/blkd.rs          test-files test-crash
+user/src/files.rs             test-files test-gui
+user/src/stack.rs             test-files test-crash
+rootfs/                       test-files test-gui test-tour-gui
+
+# Host tools with tests of their own only.
+tools/mutants/                check
+tools/footprint/              check

@@ -195,6 +195,10 @@ impl Platform for System {
     fn now(&mut self) -> u64 {
         clock_monotonic()
     }
+
+    fn note(&mut self, line: &str) {
+        println!("{line}");
+    }
 }
 
 fn channel_at(slot: u64) -> Option<Handle> {

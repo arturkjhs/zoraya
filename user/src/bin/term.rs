@@ -20,12 +20,11 @@ use zoraya_abi::{
 use zoraya_proto_gui::{self as gui, modifiers};
 use zoraya_proto_term::{Input, MAX_INPUT, Output, Size, Title};
 use zoraya_protocol::{Data, Header, NO_REPLY, decode, encode};
-use zoraya_term::{Look, Term, key_bytes};
+use zoraya_term::{Look, Term, Waited, await_reply, key_bytes};
 use zoraya_tokens::{Appearance, Scale};
-use zoraya_user::gui::wait_reply;
 use zoraya_user::{
-    channel_read, channel_write, handle_close, handle_duplicate, memory_create, memory_map,
-    memory_unmap, port_create, port_subscribe, port_unsubscribe, port_wait, println,
+    channel_read, channel_write, clock_monotonic, handle_close, handle_duplicate, memory_create,
+    memory_map, memory_unmap, port_create, port_subscribe, port_unsubscribe, port_wait, println,
 };
 
 extern crate alloc;
@@ -71,7 +70,39 @@ fn slot(n: u64) -> Handle {
     Handle::new(n).expect("slot is not zero")
 }
 
-/// Sends `m` to the compositor and waits for its reply.
+/// How long one wait for the compositor lasts before `term` says it is
+/// waiting; it waits on for as long as the compositor lives.
+const SLOW_NS: u64 = 5_000_000_000;
+
+/// One wait on `end`: a message, nothing within `nanos`, or the channel
+/// closed.
+fn wait_once(end: Handle, reply: &mut [u8], nanos: u64) -> Waited {
+    let Ok(port) = port_create() else {
+        return Waited::Gone;
+    };
+    let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
+    if port_subscribe(port, end, wanted, 1, Mode::Level).is_err() {
+        let _ = handle_close(port);
+        return Waited::Gone;
+    }
+    let mut packets = [Packet::default()];
+    let _ = port_wait(port, clock_monotonic() + nanos, &mut packets);
+    let _ = handle_close(port);
+    let mut handles = [end; 1];
+    match channel_read(end, reply, &mut handles) {
+        Ok(sizes) => {
+            for h in &handles[..sizes.handles as usize] {
+                let _ = handle_close(*h);
+            }
+            Waited::Message(sizes.bytes as usize)
+        }
+        Err((Status::WouldBlock, _)) => Waited::Nothing,
+        Err(_) => Waited::Gone,
+    }
+}
+
+/// Sends `m` to the compositor and waits for its reply, for as long as the
+/// compositor lives (`zoraya_term::await_reply`); `None` when it is gone.
 fn ask<'a, M: zoraya_protocol::Message<'a>>(
     end: Handle,
     m: &M,
@@ -81,14 +112,14 @@ fn ask<'a, M: zoraya_protocol::Message<'a>>(
     let mut out = [0u8; 64];
     let n = encode(m, 1, &mut out).ok()?;
     channel_write(end, &out[..n], handles).ok()?;
-    // Events may come first (a new surface gets `Focus`): skip them.
-    loop {
-        let n = wait_reply(end, reply, 5_000_000_000)?;
-        let ordinal = Header::decode(&reply[..n]).ok()?.0.ordinal;
-        if !gui::CLIENT_EVENTS.contains(&ordinal) {
-            return Some(n);
-        }
-    }
+    let is_event =
+        |r: &[u8]| Header::decode(r).map_or(true, |(h, _)| gui::CLIENT_EVENTS.contains(&h.ordinal));
+    await_reply(
+        |r| wait_once(end, r, SLOW_NS),
+        reply,
+        is_event,
+        || println!("term: waiting for the compositor"),
+    )
 }
 
 /// A buffer of `width × height` pixels: the writable mapping, and a
@@ -369,9 +400,14 @@ fn main() -> i32 {
     let compositor = slot(5);
     let shell = slot(6);
     let mut reply = [0u8; 64];
-    let n =
-        ask(compositor, &gui::DisplayScale {}, &[], &mut reply).expect("the compositor answers");
-    let (_, display) = decode::<gui::DisplayScaleReply>(&reply[..n], 0).expect("a display reply");
+    let Some(n) = ask(compositor, &gui::DisplayScale {}, &[], &mut reply) else {
+        println!("term: the compositor is gone");
+        return 1;
+    };
+    let Ok((_, display)) = decode::<gui::DisplayScaleReply>(&reply[..n], 0) else {
+        println!("term: the compositor's answer is not a display's");
+        return 1;
+    };
     if display.status.0 != gui::status::OK {
         println!("term: no display");
         return 1;
@@ -393,7 +429,10 @@ fn main() -> i32 {
         width: (width / k) as u32,
         height: (height / k) as u32,
     };
-    let n = ask(compositor, &create, &[entry], &mut reply).expect("the compositor answers");
+    let Some(n) = ask(compositor, &create, &[entry], &mut reply) else {
+        println!("term: the compositor is gone");
+        return 1;
+    };
     let id = match decode::<gui::Created>(&reply[..n], 0) {
         Ok((_, d)) if d.status.0 == gui::status::OK => d.window,
         other => {
@@ -416,7 +455,10 @@ fn main() -> i32 {
     if let Ok(n) = encode(&size_message, NO_REPLY, &mut out) {
         let _ = channel_write(shell, &out[..n], &[]);
     }
-    let port = port_create().expect("port");
+    let Ok(port) = port_create() else {
+        println!("term: no port");
+        return 1;
+    };
     let mut window = Window {
         compositor,
         shell,
@@ -443,8 +485,12 @@ fn main() -> i32 {
         .render(&mut window.look, window.pixels, width, true);
     window.commit(0, height);
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
-    port_subscribe(port, compositor, wanted, KEY_COMPOSITOR, Mode::Level).expect("subscribe");
-    port_subscribe(port, shell, wanted, KEY_SHELL, Mode::Level).expect("subscribe");
+    if port_subscribe(port, compositor, wanted, KEY_COMPOSITOR, Mode::Level).is_err()
+        || port_subscribe(port, shell, wanted, KEY_SHELL, Mode::Level).is_err()
+    {
+        println!("term: cannot wait on its channels");
+        return 1;
+    }
     let mut packets = [Packet::default(); 3];
     loop {
         let Ok(count) = port_wait(port, DEADLINE_INFINITE, &mut packets) else {

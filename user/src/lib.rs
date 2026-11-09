@@ -5,6 +5,7 @@
 extern crate alloc;
 
 pub mod app;
+pub mod beside;
 pub mod command;
 pub mod filecmd;
 pub mod files;

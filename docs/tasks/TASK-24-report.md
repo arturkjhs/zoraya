@@ -13,7 +13,7 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | [ADR-0242](../adr/0242-the-panel-beside-init-in-stage-7d.md) (accepted 2026-11-09) | 7d | `init` keeps the first terminal and its rules and starts the panel with the client manager; the panel launches every other terminal into the current room with its record. A staging of ADR-0168, so 7d is not mergeable without the architect. |
 | [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (accepted 2026-11-09) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
 | [ADR-0244](../adr/0244-the-toolkits-own-events.md) (accepted 2026-11-09) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
-| What `home` gives a terminal's shell | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
+| What `home` gives a terminal's shell (accepted 2026-11-09, recorded in ADR-0172) | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
 | Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
@@ -418,6 +418,28 @@ it passes under HVF and TCG in `make test-gui`. The widget tests run in `make te
   ADR-0172's open questions.
 - **The dock's applications** are `term` only until 7e and 7f add theirs.
 
+### After the architect's decisions (2026-11-09)
+
+- **ADR-0242's condition.** A terminal's shell holds a start-up record of exactly its room's grants, never the volume's
+  root; the first terminal holds what `home` gives (`+r /`, `+w ~`, `+w /config`, `+w /tmp`, accepted and recorded in
+  ADR-0172). `rooms.script` writes outside `~/project` from the room's terminal and reads ADR-0153's hint.
+- **The toolchain in rooms** (the architect's decision, ADR-0172): a trusted room's shell also holds `+r /bin`,
+  `+r /usr`, `+r /etc` unless a room grant covers one. Holding them was not enough: a terminal launched by the panel had
+  no broker, so `echo hi | tr h H` printed nothing. The panel now starts a broker beside every shell it launches, as
+  `init` does for its first (the start moved to `user/src/beside.rs`), and a broker with no first shell ends when its
+  shell's connection closes and nothing it started runs (`zoraya-broker`'s `abandoned`, with a host test). A shell
+  holding a table follows a link inside the covering entry (`/bin/tr -> busybox`), never out of it.
+  `tests/posix/room-gui.script`, in `make test-tour-gui`, runs `tr`, `ls` and `uname` in a room's terminal on the
+  tour's image. `rooms.script` checks that the room's terminal has exactly five pills (no `+w /`) by where its badge
+  falls (a check at scale 1; `make test` runs rooms at scale 1 only).
+- **`/config/rooms` written in place**: accepted for now; the crash window is a backlog row.
+- **Show-commands** (the architect's review of `commands-qemu.png`): each window's tag is drawn with its window,
+  clipped to its frame, at its body's lower left, so a window above covers it and it never lies over another window or
+  stacks with another tag; it shows the close gesture's line only (minimise hides a window, which is not the shell's
+  `bg`, so it moved to the gestures without text, with the reason); a dock tile whose name and command are the same
+  word shows one line; a chip keeps its own width, centred over its line. A host test turns the mode on over two
+  overlapping windows and checks that only each window's tag zone changes. The screen is retaken.
+
 ### Screens
 
 Under `docs/research/desktop/shots/7d/` (712 KB):
@@ -427,11 +449,16 @@ Under `docs/research/desktop/shots/7d/` (712 KB):
   Against `clear-field/rooms.png`: the field, the tint, the badge and the chips as in the mockup. Not there: the Rooms
   sheet (System+R), which no 7d ADR asks for (the shell's `room` is the way in); the field's header tag is hidden
   under the `home` window here; the untrusted room (no way to make one, as above); the clock; the other applications'
-  tiles. The terminal's pills include `+w /` because every terminal holds the root (above).
+  tiles. Retaken after ADR-0242's condition: the room's terminal shows its grants and the toolchain (`+w ~/project`,
+  `+r /texts`, `+r /bin`, `+r /usr`, `+r /etc`) and no `+w /`; the first terminal shows `home`'s four.
 - `dock-qemu.png`: dock B with the terminal tile, its two running dots and the `home` chip, against `clear-field/dock.png`;
   the same materials, sizes and dots, with one tile instead of five.
-- `commands-qemu.png`: show-commands mode, each tile and chip with the text of its command, against
-  `clear-field/commands.png`, with the same reduction.
+- `commands-qemu.png` (retaken after the architect's review): show-commands mode. Each window's `kill term` tag sits
+  inside its own frame at the body's lower left, covered by the windows above it as the mockup's are; the dock's
+  terminal tile has one line (`term` is its name and its command), each chip its own width with its line centred under
+  it. Against `clear-field/commands.png`: the same placement and materials; the mockup's room tag on a window
+  (`room project`) and its `bg` tag (for a program started with `&`) are not drawn, since minimising is not the
+  shell's `bg` and the field's header names the room.
 - `rooms-light.png`, `rooms-dark.png`: the compositor's own rendering on the host (the ignored test `rooms_samples`)
   of three rooms with an untrusted one, in both themes: the reserved hue, the two-pixel edge, the word `untrusted`,
   the folded pills and the fields cut back between rooms, which the QEMU desktop cannot show yet.
@@ -580,6 +607,43 @@ confirming key to the answer under HVF; 17.5 to 22.5 ms and 70 to 75 ms under TC
 target's pill; applications learned the path of what they were given), and most warnings; the rest are recorded in
 ADR-0245's open questions. The check of the changed lines confirmed the fixes and found a new warning (the name
 field's cursor jumped to the end when the sheet was rebuilt), fixed with a test, and two small gaps, fixed.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `work/7d`, one crate after another (47 minutes, 44 of them the
+compositor); the survivors sorted by the `mutant-triage` subagent; tests added for the holes; every equivalent
+rechecked by the main model; then the crates other than the compositor run again (4 minutes), and the compositor's
+holes applied by hand one by one, six of them kept in `tools/mutants/desktop-7e.toml` (`make mutants`: 6 caught).
+
+| Crate | Mutants | Missed first | Missed again | Of those, equivalent |
+|---|---|---|---|---|
+| `zoraya-files` | 31 | 0 | - | - |
+| `zoraya-chooser` | 145 | 24 | 4 | 4 |
+| `zoraya-fsclient` | 75 | 9 | 0 (10 time out) | - |
+| `zoraya-proto-chooser` | 0 (all generated by `protocol!`) | - | - | - |
+| `zoraya-panel` | 13 | 0 | - | - |
+| `zoraya-app` | 48 | 6 | 0 | - |
+| `zoraya-ui` | 45 | 6 | 1 | 1 |
+| `zoraya-compositor` | 199 | 56 | not run again (by hand) | 6 |
+
+- **Tests added** (`9c61734` to `af29409`): the drag's keys, the drop's place at both scales, a press from a lost
+  tablet, the target's pill, the carried label's pixels and its cleaning; a sheet's refusals (zero width, too tall,
+  over the budget), owner, focus, stacking above its owner's popups, presses on its strip and its edge, and the
+  focus after it closes; raising a window with its popups and sheet and no other; the chooser's heading kinds, sizes
+  near 10 kB, the scroll, the events of other windows, the Up and Open buttons; the file client against replies the
+  real service never sends (a token without a handle, an error with one, exactly 16 MiB, no space); `zoraya-app`'s
+  sheet, its longest dragged name and `replace`; `zoraya-ui`'s ids 0 and 1.
+- **A bug found by the tests** (`dc5d6b0`): the carried label's damaged room was 520 logical pixels, and a 64-byte
+  name of wide letters measures over 700, so its end was drawn outside the damage and stayed on screen. The room is
+  now the measured name's.
+- **The equivalents**: in the compositor, four shifts of the label's damaged room that stay left of or above the
+  label, a room of `(520 * 64) * s` clipped to the screen, and dirtying other windows' frames in `add_entry` (both
+  recompose an unchanged scene: only the flush's extent grows); in the chooser, `e.dir` in `pending` (Pick lists only
+  folders), `<=` at `i == top` in the scroll, `>=` for two lengths that never tie, and the sheet's `Escapes::measure`
+  (nothing measures the root; `Window` lays it over the window's size); in `zoraya-ui`, `Button::id` as `None`, which
+  shows only when two widgets share an id.
+- **Not verified**: the compositor's `2046:16` (`+=` to `*=`) loops forever under the mutant; it was not run by hand,
+  since a test that never returns outlives the runner's alarm.
 
 ## 7f: editor, settings, configuration, clipboard
 

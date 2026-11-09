@@ -32,6 +32,8 @@ struct Fake {
     title_status: u32,
     offer_status: u32,
     offered: Vec<usize>,
+    /// What a `CreateSheet` is answered: refused, or the sheet 5.
+    refuse_sheet: bool,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -97,6 +99,20 @@ impl Platform for Fake {
                 self.inbox.push_back(reply(
                     &gui::OfferDone {
                         status: zoraya_protocol::Below(self.offer_status),
+                    },
+                    t,
+                ));
+            }
+            11 => {
+                let status = if self.refuse_sheet {
+                    status::UNSUPPORTED
+                } else {
+                    status::OK
+                };
+                self.inbox.push_back(reply(
+                    &gui::SheetCreated {
+                        status: zoraya_protocol::Below(status),
+                        window: 5,
                     },
                     t,
                 ));
@@ -464,8 +480,9 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
     assert!(app.held(id));
     assert_eq!(app.drag(id, 5, &"x".repeat(65)), Err(Some(5)), "too long");
+    assert_eq!(app.drag(id, 5, &"x".repeat(64)), Ok(()), "the longest");
     assert_eq!(app.drag(id, 5, "a"), Ok(()));
-    assert_eq!(app.platform.drag_serials, [3]);
+    assert_eq!(app.platform.drag_serials, [3, 3]);
     assert_eq!(app.platform.given.last(), Some(&5));
     app.platform.drag_status = status::BAD_RANGE;
     assert_eq!(app.drag(id, 6, "a"), Err(None));
@@ -548,4 +565,29 @@ fn an_offer_kept_is_reported_and_the_largest_is_sent() {
     assert_eq!(app.platform.offered, ["kůň".len(), gui::MAX_CLIPBOARD]);
     app.platform.offer_status = status::BAD_RANGE;
     assert!(!app.offer("late"));
+}
+
+/// A sheet opens under its tag with the compositor's window id; a refused
+/// one gives nothing and frees its buffer.
+#[test]
+fn a_sheet_is_opened_under_its_tag_and_its_id_returned() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    assert_eq!(app.open_sheet(4, 0, form(), 160, 80), Some(5));
+    assert!(app.window(5).is_some());
+    assert!(app.platform.sent.contains(&11));
+    app.platform.refuse_sheet = true;
+    let buffers = app.platform.buffers.len();
+    assert_eq!(app.open_sheet(4, 0, form(), 160, 80), None);
+    assert_eq!(app.platform.buffers.len(), buffers + 1);
+    assert!(app.platform.buffers.last().unwrap().is_empty(), "freed");
+}
+
+/// A window's tree replaced is the one its values are read from.
+#[test]
+fn replacing_a_tree_shows_the_new_one() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    let id = app.open("edit", form(), 200, 120).unwrap();
+    app.replace(id, Box::new(TextField::new(1, "other.txt")));
+    let w = app.window(id).unwrap();
+    assert_eq!(w.value(1), zoraya_ui::Value::Text("other.txt"));
 }
