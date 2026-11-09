@@ -418,6 +418,28 @@ it passes under HVF and TCG in `make test-gui`. The widget tests run in `make te
   ADR-0172's open questions.
 - **The dock's applications** are `term` only until 7e and 7f add theirs.
 
+### After the architect's decisions (2026-11-09)
+
+- **ADR-0242's condition.** A terminal's shell holds a start-up record of exactly its room's grants, never the volume's
+  root; the first terminal holds what `home` gives (`+r /`, `+w ~`, `+w /config`, `+w /tmp`, accepted and recorded in
+  ADR-0172). `rooms.script` writes outside `~/project` from the room's terminal and reads ADR-0153's hint.
+- **The toolchain in rooms** (the architect's decision, ADR-0172): a trusted room's shell also holds `+r /bin`,
+  `+r /usr`, `+r /etc` unless a room grant covers one. Holding them was not enough: a terminal launched by the panel had
+  no broker, so `echo hi | tr h H` printed nothing. The panel now starts a broker beside every shell it launches, as
+  `init` does for its first (the start moved to `user/src/beside.rs`), and a broker with no first shell ends when its
+  shell's connection closes and nothing it started runs (`zoraya-broker`'s `abandoned`, with a host test). A shell
+  holding a table follows a link inside the covering entry (`/bin/tr -> busybox`), never out of it.
+  `tests/posix/room-gui.script`, in `make test-tour-gui`, runs `tr`, `ls` and `uname` in a room's terminal on the
+  tour's image. `rooms.script` checks that the room's terminal has exactly five pills (no `+w /`) by where its badge
+  falls (a check at scale 1; `make test` runs rooms at scale 1 only).
+- **`/config/rooms` written in place**: accepted for now; the crash window is a backlog row.
+- **Show-commands** (the architect's review of `commands-qemu.png`): each window's tag is drawn with its window,
+  clipped to its frame, at its body's lower left, so a window above covers it and it never lies over another window or
+  stacks with another tag; it shows the close gesture's line only (minimise hides a window, which is not the shell's
+  `bg`, so it moved to the gestures without text, with the reason); a dock tile whose name and command are the same
+  word shows one line; a chip keeps its own width, centred over its line. A host test turns the mode on over two
+  overlapping windows and checks that only each window's tag zone changes. The screen is retaken.
+
 ### Screens
 
 Under `docs/research/desktop/shots/7d/` (712 KB):
