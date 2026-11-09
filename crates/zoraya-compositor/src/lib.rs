@@ -210,6 +210,9 @@ pub struct SwitchGroup {
     pub grants: String,
 }
 
+/// How long after its press a drag may name it (ADR-0170).
+const DRAG_WITHIN_NS: u64 = 500_000_000;
+
 /// The dragged entry's label's widest, logical pixels.
 const CARRIED_WIDTH: i64 = 260;
 
@@ -294,7 +297,9 @@ pub struct Compositor<P: Platform> {
     drag: Option<Drag>,
     /// The window whose body holds the left button the compositor
     /// delivered to it: the only one that may start a drag (ADR-0170).
-    body_press: Option<Key>,
+    body_press: Option<(Key, u32, u64)>,
+    /// Left presses delivered to a body, counted: `WindowPointer`'s serial.
+    press_serial: u32,
     /// The entry being dragged; no client hears of the pointer meanwhile.
     carried: Option<Carried<P::End>>,
     /// The pointer moved or a button changed this frame.
@@ -384,6 +389,7 @@ impl<P: Platform> Compositor<P> {
             buttons: 0,
             drag: None,
             body_press: None,
+            press_serial: 0,
             carried: None,
             pending_pointer: false,
             switcher: None,
@@ -930,14 +936,8 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// `Drag`: the entry is carried while the client's body press is held.
-    fn start_drag(
-        &mut self,
-        slot: usize,
-        window: u32,
-        name: &[u8],
-        words: &[u8],
-        entry: P::End,
-    ) -> u32 {
+    fn start_drag(&mut self, slot: usize, d: &gui::Drag<'_>, entry: P::End) -> u32 {
+        let (window, name, words) = (d.window, d.name.0, d.words.0);
         let key = Key {
             client: slot,
             id: window,
@@ -948,7 +948,11 @@ impl<P: Platform> Compositor<P> {
                 .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
                 .map(String::from)
         };
-        let held = self.body_press == Some(key) && self.buttons & gui::buttons::LEFT != 0;
+        // That press, still held, named within 500 ms of it (ADR-0170).
+        let now = self.platform.now();
+        let held = self.body_press.is_some_and(|(k, serial, at)| {
+            k == key && serial == d.serial && now.saturating_sub(at) <= DRAG_WITHIN_NS
+        }) && self.buttons & gui::buttons::LEFT != 0;
         match (held && self.carried.is_none(), text(name), text(words)) {
             (true, Some(name), Some(words)) => {
                 self.carried = Some(Carried {
@@ -1132,7 +1136,11 @@ impl<P: Platform> Compositor<P> {
                     body,
                 });
             }
-            Zone::Body => self.body_press = Some(key),
+            Zone::Body => {
+                self.press_serial = self.press_serial.wrapping_add(1);
+                let now = self.platform.now();
+                self.body_press = Some((key, self.press_serial, now));
+            }
         }
     }
 
@@ -1296,6 +1304,7 @@ impl<P: Platform> Compositor<P> {
                 x: px / s,
                 y: py / s,
                 buttons: Flags(self.buttons),
+                serial: self.press_serial,
             };
             self.send_event(key.client, m);
         }
@@ -2425,7 +2434,7 @@ impl<P: Platform> Compositor<P> {
                 let s = match decode::<gui::Drag<'_>>(bytes, n) {
                     Ok((_, m)) => {
                         let entry = handles.remove(0);
-                        self.start_drag(slot, m.window, m.name.0, m.words.0, entry)
+                        self.start_drag(slot, &m, entry)
                     }
                     Err(_) => status::BAD_BUFFER,
                 };

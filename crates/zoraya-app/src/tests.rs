@@ -24,8 +24,9 @@ struct Fake {
     carried: VecDeque<Option<u32>>,
     last: Option<u32>,
     given: Vec<u32>,
-    /// What a `Drag` is answered.
+    /// What a `Drag` is answered, and the serials drags named.
     drag_status: u32,
+    drag_serials: Vec<u32>,
 }
 
 fn reply<'a, M: Message<'a>>(m: &M, t: u32) -> Vec<u8> {
@@ -81,12 +82,16 @@ impl Platform for Fake {
             10 => self
                 .inbox
                 .push_back(reply(&gui::CloseDone { status: ok }, t)),
-            13 => self.inbox.push_back(reply(
-                &gui::DragDone {
-                    status: zoraya_protocol::Below(self.drag_status),
-                },
-                t,
-            )),
+            13 => {
+                let (_, d) = decode::<gui::Drag<'_>>(bytes, 1).unwrap();
+                self.drag_serials.push(d.serial);
+                self.inbox.push_back(reply(
+                    &gui::DragDone {
+                        status: zoraya_protocol::Below(self.drag_status),
+                    },
+                    t,
+                ));
+            }
             _ => {}
         }
         true
@@ -277,6 +282,7 @@ fn a_configure_gives_a_new_buffer_and_pointer_events_reach_widgets() {
         x: 10,
         y: 10,
         buttons: zoraya_protocol::Flags(gui::buttons::LEFT),
+        serial: 1,
     });
     assert_eq!(
         app.wait(),
@@ -441,11 +447,13 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
         x: 10,
         y: 10,
         buttons: zoraya_protocol::Flags(buttons),
+        serial: 3,
     };
     app.platform.event(&pointer(gui::buttons::LEFT));
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
     assert!(app.held(id));
     assert!(app.drag(id, 5, "a", "+r ~/a"));
+    assert_eq!(app.platform.drag_serials, [3]);
     assert_eq!(app.platform.given.last(), Some(&5));
     app.platform.drag_status = status::BAD_RANGE;
     assert!(!app.drag(id, 6, "a", "+r ~/a"));

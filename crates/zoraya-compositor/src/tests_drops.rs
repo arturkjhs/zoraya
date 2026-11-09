@@ -43,9 +43,29 @@ fn at(s: &mut Setup, x: i64, y: i64, button: Option<u32>) {
     s.point(axis(x, w), axis(y, h), button);
 }
 
+/// The serial of the last pointer event the client got.
+fn serial(s: &mut Setup, end: u32) -> u32 {
+    s.f()
+        .peers
+        .get(&end)
+        .unwrap()
+        .outbox
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+        .map(|(_, p)| p.serial)
+        .last()
+        .unwrap_or(0)
+}
+
 fn drag(s: &mut Setup, end: u32, window: u32, entry: u32) -> u32 {
+    let serial = serial(s, end);
+    drag_named(s, end, window, entry, serial)
+}
+
+fn drag_named(s: &mut Setup, end: u32, window: u32, entry: u32, serial: u32) -> u32 {
     let m = gui::Drag {
         window,
+        serial,
         name: zoraya_protocol::Data(b"notes.txt"),
         words: zoraya_protocol::Data(b"+r ~/notes.txt"),
     };
@@ -125,22 +145,39 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
     // Dropped back on the source, or on no window: nothing delivered.
     for (x, y) in [(px, py + 4), (600, 40)] {
         at(&mut t.s, px, py, Some(1));
+        let n = serial(&mut t.s, t.a);
         let e = t.s.f().channel(1);
-        assert_eq!(drag(&mut t.s, t.a, t.ida, e), status::OK);
+        assert_eq!(drag_named(&mut t.s, t.a, t.ida, e, n), status::OK);
         // Only one carried at a time.
         let again = t.s.f().channel(1);
-        assert_eq!(drag(&mut t.s, t.a, t.ida, again), status::BAD_RANGE);
+        assert_eq!(
+            drag_named(&mut t.s, t.a, t.ida, again, n),
+            status::BAD_RANGE
+        );
         at(&mut t.s, x, y, None);
         at(&mut t.s, x, y, Some(0));
         assert!(t.s.f().closed.contains(&e), "({x}, {y})");
         assert!(ordinals(&t.s.f().take(t.a)).contains(&26));
     }
     assert!(t.s.f().given.is_empty());
+    // A press's serial, named: an older one, or after 500 ms, is refused.
+    at(&mut t.s, px, py, Some(1));
+    let now = serial(&mut t.s, t.a);
+    let e5 = t.s.f().channel(1);
+    assert_eq!(
+        drag_named(&mut t.s, t.a, t.ida, e5, now - 1),
+        status::BAD_RANGE
+    );
+    t.s.f().clock += 600_000_000;
+    let e6 = t.s.f().channel(1);
+    assert_eq!(drag_named(&mut t.s, t.a, t.ida, e6, now), status::BAD_RANGE);
+    at(&mut t.s, px, py, Some(0));
     // Malformed words are refused.
     at(&mut t.s, px, py, Some(1));
     let e4 = t.s.f().channel(1);
     let m = gui::Drag {
         window: t.ida,
+        serial: 0,
         name: zoraya_protocol::Data(b"a\x1b[31m"),
         words: zoraya_protocol::Data(b"+r ~/a"),
     };

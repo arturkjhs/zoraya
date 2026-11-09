@@ -142,6 +142,7 @@ fn every_message_round_trips_and_decodes_totally() {
         x: 3,
         y: 4,
         buttons: Flags(buttons::RIGHT),
+        serial: 5,
     });
     total(AddClient {});
     total(ManagerDone { status: ok });

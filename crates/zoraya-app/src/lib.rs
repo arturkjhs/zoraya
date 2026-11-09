@@ -117,6 +117,8 @@ pub struct App<P: Platform> {
     /// The window whose body holds the left button, as the last pointer
     /// event said: where a drag may start.
     held: Option<u32>,
+    /// The serial of the last left press delivered, for a drag to name.
+    serial: u32,
 }
 
 fn message<'a, M: Message<'a>>(m: &M, transaction: u32) -> Vec<u8> {
@@ -141,6 +143,7 @@ impl<P: Platform> App<P> {
             next_transaction: 1,
             drops: VecDeque::new(),
             held: None,
+            serial: 0,
         };
         let reply = app.call(&gui::DisplayScale {}, None)?;
         let (_, d) = decode::<gui::DisplayScaleReply>(&reply, 0).ok()?;
@@ -315,6 +318,7 @@ impl<P: Platform> App<P> {
         }
         let m = gui::Drag {
             window,
+            serial: self.serial,
             name: Data(name.as_bytes()),
             words: Data(words.as_bytes()),
         };
@@ -534,6 +538,7 @@ impl<P: Platform> App<P> {
             23 => {
                 let (_, p) = decode::<gui::WindowPointer>(got, 0).ok()?;
                 self.held = (p.buttons.0 & gui::buttons::LEFT != 0).then_some(p.window);
+                self.serial = p.serial;
                 let e = Event::Pointer {
                     x: self.scale_logical(p.x),
                     y: self.scale_logical(p.y),

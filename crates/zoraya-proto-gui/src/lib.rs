@@ -229,14 +229,16 @@ protocol! {
     }
 
     /// The client starts a drag of one entry (ADR-0170) from `window`,
-    /// whose body holds the left button the compositor delivered to it:
-    /// the entry's connection, its name for the drag's label and its grant
+    /// whose body holds the left button the compositor delivered to it,
+    /// naming that press's `serial` within 500 ms of it: the entry's
+    /// connection, its name for the drag's label and its grant
     /// in ADR-0153's words for the target's pills (`+r ~/notes.txt`).
     /// Refused (`BAD_RANGE`) when no press of the client's is held. The
     /// reply is `DragDone`; at the release the compositor sends the source
     /// `DragEnded` and the window under the pointer `Drop`.
     message Drag<'a> = 13, handles 1 {
         window: u32,
+        serial: u32,
         name: Data<'a, MAX_LINE>,
         words: Data<'a, MAX_LINE>,
     }
@@ -286,6 +288,9 @@ protocol! {
         x: u32,
         y: u32,
         buttons: Flags<{ buttons::ALL }>,
+        /// The serial of the last left press the compositor delivered to
+        /// this client: what a `Drag` names (ADR-0170).
+        serial: u32,
     }
 
     /// The active keyboard layout's name (ADR-0163: `us`, `ua`, `ru`,
