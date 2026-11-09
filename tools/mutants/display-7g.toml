@@ -1,0 +1,44 @@
+# Stage 7g's display that follows the window (ADR-0246): holes the review
+# and cargo-mutants found in 7g's re-layout and the Resized handshake,
+# applied by hand and kept so that a later run repeats them. Host tests only.
+tests = ["cargo test -q -p zoraya-compositor --lib", "cargo test -q -p zoraya-virtio-gpu"]
+timeout = 600
+
+[[mutant]]
+id = "G-tell-between"
+file = "crates/zoraya-virtio-gpu/src/lib.rs"
+find = 'let due = !self.told && self.offered.is_none() && self.attached'
+replace = 'let due = !self.told && self.attached'
+note = "gpud tells a new size between Info and Attach, where the compositor reads it as Attach's reply (review 7g, 1)"
+
+[[mutant]]
+id = "G-attach-same-size"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '        if again && !new_size {'
+replace = '        if again && new_size {'
+note = "a size back at the attached one is attached again, and the driver refuses it (review 7g, 3)"
+
+[[mutant]]
+id = "G-legacy-into"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '                    (win.x, win.y) = into(win.x, win.y, bw, bh);'
+replace = '                    let _ = into;'
+note = "a legacy window is left outside a smaller work area (review 7g, 5)"
+
+[[mutant]]
+id = "G-legacy-right-edge"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+                        (area.right() - f.border - bw).max(area.x + f.border),
+                    ),'''
+replace = '''
+                        (area.right() + f.border - bw).max(area.x + f.border),
+                    ),'''
+note = "a legacy window past the right edge stops two pixels beyond it"
+
+[[mutant]]
+id = "G-whole-logical"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let most = |v: i64| (v - v % s).max(s) as u32;'
+replace = 'let most = |v: i64| (v + v % s).max(s) as u32;'
+note = "at scale 2 an odd work area gives a body of half a logical pixel more than fits"

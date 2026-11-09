@@ -57,10 +57,12 @@ note = "7f lib.rs:483:68: the_focused_client_hears_of_a_change_of_layouts_and_on
 id = "C-fixed-one"
 file = "crates/zoraya-compositor/src/lib.rs"
 find = '''
-                1 => Scale::ONE,
-                2 => Scale::new(2).unwrap_or(Scale::ONE),'''
+            1 => Scale::ONE,
+            2 => Scale::new(2).unwrap_or(Scale::ONE),
+            _ => scale_for(self.width),'''
 replace = '''
-                2 => Scale::new(2).unwrap_or(Scale::ONE),'''
+            2 => Scale::new(2).unwrap_or(Scale::ONE),
+            _ => scale_for(self.width),'''
 note = "7f lib.rs:653:17: a_fixed_scale_of_one_holds_on_a_wide_display"
 
 [[mutant]]

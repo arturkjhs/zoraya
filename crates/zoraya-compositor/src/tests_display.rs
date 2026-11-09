@@ -348,3 +348,31 @@ fn at_scale_two_a_large_window_fills_the_work_area_to_the_pixel() {
     );
     assert_eq!(w.y, area.y + f.title);
 }
+
+#[test]
+fn a_legacy_window_past_the_new_right_edge_comes_back_against_it() {
+    let mut s = setup_with(|f| f.display_size = (1280, 800));
+    let (legacy, _) = s.window(100, 80, 3);
+    s.f().take(legacy);
+    let k = s.c.stack().next().unwrap();
+    // A display whose right edge is just short of the window's.
+    let x0 = s.c.window(k).unwrap().x;
+    resize(&mut s, (x0 + 100) as u32, 300);
+    let (f, area) = (s.c.frame(), s.c.work_area());
+    let w = s.c.window(k).unwrap();
+    assert_eq!(w.x, area.right() - f.border - 100, "against the right edge");
+}
+
+#[test]
+fn at_scale_two_an_odd_display_gives_bodies_of_whole_logical_pixels() {
+    let mut s = setup_with(|f| f.display_size = (2560, 1600));
+    let end = s.client(64);
+    let id = s.window_of(end, 1200, 700, 0x0040_4040);
+    resize(&mut s, 2001, 1203);
+    assert_eq!(s.c.scale().factor(), 2);
+    let area = s.c.work_area();
+    let w = s.c.window(Key { client: 0, id }).unwrap();
+    assert_eq!((w.body.0 % 2, w.body.1 % 2), (0, 0));
+    let outer = s.outer(0, id);
+    assert!(outer.right() <= area.right() && outer.bottom() <= area.bottom());
+}
