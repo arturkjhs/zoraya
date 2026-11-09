@@ -366,6 +366,152 @@ Not merged (the queue).
 
 About 2 h 30 min of writing, including two GUI runs; the review and its fixes 30 min.
 
+## 7d: toolkit, dock and rooms
+
+Branch `work/7d`, from `work/7c`, with 7c's later commits merged in.
+
+### What was built
+
+- **`zoraya-ui`** (ADR-0165): the first widgets (label, button, text field, check box, switch, radio group, list,
+  scroll view, separator, menu, dialog, progress bar; row, column and grid), a layout of logical units, painting
+  through `zoraya-paint` and `zoraya-text` with the tokens' Field set, keyboard focus and Tab order; it depends on no protocol crate (INV-0165-1)
+  and has no colour of its own (INV-0165-3).
+- **`zoraya-app`**: the client loop over a `Platform` trait (with a fake compositor in the tests): connect, open a
+  toplevel, repaint with one commit in flight (ADR-0093), Configure, close, and `wait()` for what the application must
+  act on; the toolkit's own key and pointer events (proposed ADR-0244).
+- **Rooms** (ADR-0172): `/config/rooms` read and written by `zoraya-settings` (total reader, a writer keeping every
+  other byte, colour slots); `room`, `room new NAME +w PATH...`, `room NAME` and `room remove NAME` in `zosh`, with the
+  prompt naming the room; the compositor's records per client (room, colour, entries), the title-bar tint, the badge
+  with its dot, the grant pills (folded into `+N`), the untrusted edge and word, and the fields around a room's windows
+  drawn only when two or more rooms have windows.
+- **Dock B and the top bar**, drawn by the compositor: tiles of neutral material, room-coloured running dots, the
+  untrusted ring, room chips and `+`, tooltips, show-commands mode (System+?), System+Enter for a new terminal, the
+  switcher grouped by room.
+- **The panel** (ADR-0168, proposed ADR-0242): a program `init` starts with the client manager; it reads the room
+  table, tells the compositor the table and the dock (`SetRooms`, `SetDock`), and on `DockPressed` launches a terminal
+  into the current room with the handles its launch record lists, or enters a room. `init` keeps the first terminal.
+- **Untrusted rooms**: drawn and tested (the reserved hue, the two-pixel edge, the word, INV-0172-10), but `room new
+  --untrusted` is refused naming ADR-0056, and the panel launches nothing in a hand-written untrusted line (review
+  finding 1); tests reach them only through the compositor's host tests.
+
+### The 7d acceptance test
+
+`plan.md`: "a second terminal starts from the panel with the handles its launch record lists, hidden windows restore
+from the panel, and the widget tests run on the host against the tokens". Done: `tests/gui/rooms.script` (47 steps)
+presses the dock's terminal tile and types in the new terminal, hides both windows by their dashes and brings them
+back from the dock's icon, makes a room in the shell (`room new project +w ~/project +r /system`), sees its chip
+appear, launches a terminal in it, reads its pills, its badge and its field from the screen, and shows the commands;
+it passes under HVF and TCG in `make test-gui`. The widget tests run in `make test-unit`.
+
+### Decisions taken without the architect
+
+- **The panel beside `init`** (proposed ADR-0242): the first terminal stays `init`'s, which sends its own record
+  (`home`, `term`, `+w /`) with `AddRoomClient`; every other terminal is the panel's. This stages ADR-0168's decision
+  that the panel starts applications, so **7d is not mergeable without the architect** (TASK-24, "If a part cannot be
+  merged"); 7e starts from `work/7d`.
+- **The room's tint on the title bar only** (proposed ADR-0243): the mockups' body tint would change the client's
+  pixels, which INV-0164-1 forbids.
+- **The toolkit's own events** (proposed ADR-0244).
+- **Every terminal holds the root** until 7e's chooser and `narrow` in launches: the pills show the room's record,
+  but INV-0172-2 ("exactly the room's entries") is back to not yet applicable (review finding 2), with the reason in
+  ADR-0172's open questions.
+- **The dock's applications** are `term` only until 7e and 7f add theirs.
+
+### Screens
+
+Under `docs/research/desktop/shots/7d/` (712 KB):
+
+- `rooms-qemu.png` (QEMU, HVF): a `home` terminal and two `project` terminals, the field around `project`'s windows,
+  the tinted title bar with its pills (`+w /`, `+w ~/project`, `+r /system`) and its badge, and the chips in the dock.
+  Against `clear-field/rooms.png`: the field, the tint, the badge and the chips as in the mockup. Not there: the Rooms
+  sheet (System+R), which no 7d ADR asks for (the shell's `room` is the way in); the field's header tag is hidden
+  under the `home` window here; the untrusted room (no way to make one, as above); the clock; the other applications'
+  tiles. The terminal's pills include `+w /` because every terminal holds the root (above).
+- `dock-qemu.png`: dock B with the terminal tile, its two running dots and the `home` chip, against `clear-field/dock.png`;
+  the same materials, sizes and dots, with one tile instead of five.
+- `commands-qemu.png`: show-commands mode, each tile and chip with the text of its command, against
+  `clear-field/commands.png`, with the same reduction.
+- `rooms-light.png`, `rooms-dark.png`: the compositor's own rendering on the host (the ignored test `rooms_samples`)
+  of three rooms with an untrusted one, in both themes: the reserved hue, the two-pixel edge, the word `untrusted`,
+  the folded pills and the fields cut back between rooms, which the QEMU desktop cannot show yet.
+
+### Measurements
+
+`plan.md` asks for the toolkit's paint time for the settings window: a settings-like page (headings, a radio group, a
+switch, a check box, a list, a field, two buttons) paints in 0.35 ms with an empty glyph cache and 0.23 ms after under
+HVF, 5.0 ms and 3.2 ms under TCG (`t_gui`'s `toolkit_paint`, in `docs/design.md`).
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0165-1, -2, -4 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0165-3 | not yet applicable (stage 7) | checked: `make check-tokens` |
+| INV-0168-1 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0168-3 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0172-1 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0172-5 to -10 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0172-2 | not yet applicable (stage 7) | unchanged, with the reason in ADR-0172's open questions |
+| INV-0242-1 (proposed) | new | checked: `make test-unit` |
+
+### Review
+
+`docs/tasks/TASK-24-review-7d.md`: 2 errors (an untrusted line in the file was usable; INV-0172-2 claimed), 7
+warnings, 5 notes; all fixed or answered in `ba5234d`, with tests; no open error.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `work/7c` (7d's own lines), one crate after another, capped at 90
+minutes in all; the survivors sorted by the `mutant-triage` subagent, every equivalent rechecked by the main model.
+
+| Crate | Mutants | Missed first | Missed after the tests | Of those, equivalent |
+|---|---|---|---|---|
+| `zoraya-settings` (rooms) | 121 | 18 | 0 | - |
+| `zoraya-panel` | 28 | 1 | 0 | - |
+| `zoraya-app` | 67 | 12 | 0 | - |
+| `zoraya-ui` | 443 | 196 | 9 | 5 |
+| `zoraya-compositor` | 1075 (529 run) | 431 | not run again | 11 |
+
+- **Settings, panel, app** (`18d193e`): the bounds of a grant path, a line's words, the room count and a writer's
+  grants; the exact cut of a long rooms file; a table of exactly `MAX_ROOMS_TEXT`; buffers and commits at scale 2, a
+  stale reply, two windows, ignored Configures, focus kept when another window loses it.
+- **`zoraya-ui`** (`f3fcda8`, `68c1bad`): the rectangles of rows, columns and grids, where a press lands and what it
+  focuses, Tab's order, a field's edits at its cursor, the controls' pixels and states. The triage found a real bug:
+  `ScrollView` clamped its offset only on a scroll, so a frame that grew showed a blank past the content; the clamp
+  is now in `layout`. The 5 equivalents: `children`' empty slice either way, `select`'s `<=` at `i == top`, two `>=`
+  in `ScrollView::layout` that assign the same value at equality, and `h + offset` there, the same as `h - offset`
+  now that the offset is clamped. The 4 holes left: the radio label's gap (antialiased pixels only) and the
+  `paint` of `ScrollView`, `Menu` and `Dialog`, hidden under their children's ground.
+- **`zoraya-compositor`**: 529 of 1075 mutants ran in the 85 minutes left by the cap (431 missed, 91 caught, 7
+  unviable, 2 timeouts); `rooms.rs` (`set_rooms`, `set_dock`, `Record::of`, `dock_press`), `fields.rs` and
+  `draw_rooms.rs` past line 582 were **not reached**. Of the misses, 11 are equivalent for scales 1 and 2, the only
+  ones `Scale::new` accepts (`(si + 1) / 4` is 0 for both, `(3 * si + 1) / 2` equals `(3 + si + 1) / 2`,
+  `(3 * k).div_ceil(2)` equals `(3 + k).div_ceil(2)`, a circle's radius clamped to half its side, a skipped dock draw
+  clipped anyway). The rest were holes, nearly all in drawing arithmetic; tests were added (`68c1bad`) first for the
+  trust boundary: a manager request with the wrong number of handles is refused and its handles closed, the panel
+  stays attached when its channel is empty and when `init`'s closes, each badge's text, the untrusted edge on every
+  side at scale 2, the switcher's room order against the order of use; then the dock's dots, chips, hover, tooltip
+  and divider, the title beside the pills, tiling at scale 2. They were not measured again under the cap. **Left for
+  a later run**: the compositor's whole 7d diff (about 3 hours at 2 workers), first `rooms.rs` and `fields.rs`.
+- **Noted by the triage, not changed in 7d**:
+  - The driver manager's channel closing (init gone) leaves it watched, as in stage 5; harmless while `init` never
+    exits.
+  - In the light set a dock tile and its hover lift are both white, so hovering shows only the tooltip.
+  - A button's label is measured in the regular face and drawn in the medium one, so it sits a little off centre.
+  - Escape closes a dialog or menu only at a window's root.
+  - `Dialog`'s comment says Enter activates the default button; any focused button does.
+
+  These are for 7f's settings window, the toolkit's first real user.
+
+### Merge
+
+Not merged: proposed ADR-0242 stages an accepted ADR's decision, and `git push` is refused (the queue).
+
+### Time
+
+About 3 h 30 min of writing (the crates, the panel, the GUI test and the review, to 22:25), 1 h for `make test` and
+its fixes, the mutation runs 90 min (capped), and their triage and tests 1 h 20 min.
+
 ## To finish by hand
 
 `git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,
@@ -380,7 +526,27 @@ git push origin HEAD:main          # then wait for every CI job
 git tag stage-7a && git push origin refs/tags/stage-7a
 ```
 
+Then the same for `work/7b` and `work/7c` (each from the new `origin/main`, merging `origin/main` into the branch
+first). `work/7d` waits for the architect's decision on ADR-0242; once it is accepted (or changed and 7d brought in
+line):
+
+```
+git push -u origin work/7b work/7c work/7d
+git fetch origin && git switch --detach origin/main
+git merge --no-ff work/7b -m "Merge work/7b: stage 7b, frames, windows and scale (TASK-24)"
+git push origin HEAD:main          # CI green, then:
+git tag stage-7b && git push origin refs/tags/stage-7b
+# likewise work/7c ("keyboard layouts", stage-7c) and work/7d ("toolkit, dock and rooms", stage-7d)
+```
+
 To try the desktop by hand: `make run-gui`; the window shows the terminal in JetBrains Mono. `ls /texts/uk`, `cat
 /texts/uk/` then Tab and Enter, and the same for `/texts/cz/`, show Ukrainian and Czech text; Shift with Page Up
 scrolls back.
 
+
+From 7b on (`work/7d` has everything): drag a window by its title bar, System+Left and System+Right tile it, Alt+Tab
+opens the switcher, grouped by room. From 7c: System+Space switches the layout (`us`, `ua`, `cz`, shown at the right
+of the bar). From 7d: the terminal tile in the dock (or System+Enter) opens another terminal; in a terminal, `room new
+project +w ~/project +r /system` makes a room, its chip appears in the dock; press it, then the terminal tile, and
+the new terminal's title bar carries the room's tint, badge and pills, with a field around its windows while `home`
+has windows too. System+? shows every gesture's text.
