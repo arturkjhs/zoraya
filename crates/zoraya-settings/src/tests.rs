@@ -218,3 +218,82 @@ fn any_file_is_read() {
     let big = vec![b'#'; MAX_SIZE + 10];
     assert_eq!(read(&big, &d).problems.len(), 1);
 }
+
+const GUI: &str = "name compd
+summary the compositor
+usage compd
+setting gui.keyboard-layouts list of choice us|ua|ru|cz 1 4 unique 'us' layouts, in switching order
+setting gui.keyboard-layout choice us|ua|ru|cz us the active layout
+setting gui.names list of text 'a \"b c\"' names
+";
+
+/// ADR-0171: a list read from its line's words, written back bare, and
+/// edited by the command's forms; every bound and the item type checked.
+#[test]
+fn lists_are_read_written_and_edited() {
+    let d = zoraya_describe::parse(GUI.as_bytes()).unwrap().settings;
+    let layouts = &d[0].ty;
+    assert_eq!(layouts.word(), "list of choice us|ua|ru|cz 1 4 unique");
+    let v = read(b"gui.keyboard-layouts = us  ua cz\n", &d);
+    assert_eq!(v.get("gui.keyboard-layouts"), Some("us ua cz"));
+    assert!(v.problems.is_empty());
+    assert_eq!(read(b"", &d).get("gui.names"), Some("a 'b c'"));
+    // Each bad line is reported and the default applies.
+    for (bad, why) in [
+        (
+            "gui.keyboard-layouts = us uk\n",
+            "uk is not one of us, ua, ru, cz",
+        ),
+        ("gui.keyboard-layouts = us us\n", "us is in the list twice"),
+        ("gui.keyboard-layouts =\n", "a list of 0 items, not 1 to 4"),
+        (
+            "gui.keyboard-layouts = us ua ru cz us\n",
+            "us is in the list twice",
+        ),
+        ("gui.keyboard-layouts = us 'ua\n", "a quote is not closed"),
+    ] {
+        let v = read(bad.as_bytes(), &d);
+        assert_eq!(v.get("gui.keyboard-layouts"), Some("us"), "{bad}");
+        assert!(
+            v.problems[0].problem.contains(why),
+            "{bad}: {:?}",
+            v.problems
+        );
+    }
+    // Written as words.
+    let f = set(b"# mine\n", &d, "gui.keyboard-layouts", "ua cz").unwrap();
+    assert_eq!(f, b"# mine\ngui.keyboard-layouts = ua cz\n");
+    let f = set(&f, &d, "gui.names", "x 'y z'").unwrap();
+    assert_eq!(read(&f, &d).get("gui.names"), Some("x 'y z'"));
+    let f = set(&f, &d, "gui.names", "").unwrap();
+    assert!(f.ends_with(b"gui.names =\n"));
+    assert_eq!(read(&f, &d).get("gui.names"), Some(""));
+    assert!(matches!(
+        set(b"", &d, "gui.keyboard-layouts", "us us"),
+        Err(Refusal::Value(_))
+    ));
+    // The command's forms.
+    let e = |cur: &str, edit| edit_list(cur, edit, layouts);
+    assert_eq!(e("us", ListEdit::Append("ua".into())), Ok("us ua".into()));
+    assert_eq!(
+        e("us ua", ListEdit::Insert("cz".into(), 1)),
+        Ok("us cz ua".into())
+    );
+    assert_eq!(
+        e("us ua", ListEdit::Insert("cz".into(), 2)),
+        Ok("us ua cz".into())
+    );
+    assert!(e("us ua", ListEdit::Insert("cz".into(), 3)).is_err());
+    assert_eq!(e("us ua", ListEdit::Remove("us".into())), Ok("ua".into()));
+    assert!(
+        e("us", ListEdit::Remove("us".into())).is_err(),
+        "at least one"
+    );
+    assert!(e("us", ListEdit::Remove("ru".into())).is_err());
+    assert!(e("us", ListEdit::Append("us".into())).is_err(), "unique");
+    assert!(e("us", ListEdit::Append("uk".into())).is_err());
+    assert_eq!(
+        e("us", ListEdit::Replace(vec!["cz".into(), "ua".into()])),
+        Ok("cz ua".into())
+    );
+}

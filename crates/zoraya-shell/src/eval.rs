@@ -1724,6 +1724,25 @@ impl<H: Host> Shell<H> {
         if name == "grants" && texts.first().is_some_and(|t| !t.starts_with('-')) {
             texts.insert(0, "--");
         }
+        // `settings NAME -ITEM` (ADR-0171): after a setting's name every
+        // word is a value, `-ua` too; `--at N` stays an option.
+        if name == "settings"
+            && texts.first().is_some_and(|t| !t.starts_with('-'))
+            && texts.len() > 1
+        {
+            let mut at = Vec::new();
+            if let Some(i) = texts.iter().position(|t| *t == "--at")
+                && i + 1 < texts.len()
+            {
+                at = texts.drain(i..i + 2).collect();
+            }
+            if texts.len() > 1 && texts[1] != "--" {
+                texts.insert(1, "--");
+            }
+            for (k, t) in at.into_iter().enumerate() {
+                texts.insert(k, t);
+            }
+        }
         let parsed = match zoraya_command::parse(&d, &texts) {
             Ok(Outcome::Help) => {
                 let help = zoraya_command::help(&d);

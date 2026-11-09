@@ -525,3 +525,47 @@ fn a_long_page_fits() {
     }
     assert!(parse(text.as_bytes()).is_ok());
 }
+
+/// ADR-0171's declarations: bounds, `unique`, and their refusals.
+#[test]
+fn list_settings_are_declared() {
+    let head = "name t\nsummary s\nusage t\n";
+    let one = |line: &str| parse(std::format!("{head}{line}\n").as_bytes());
+    let d = one("setting a.b list of number 0 9 2 3 '1 2' two or three digits").unwrap();
+    let SettingType::List {
+        min, max, unique, ..
+    } = &d.settings[0].ty
+    else {
+        panic!()
+    };
+    assert_eq!((*min, *max, *unique), (2, 3, false));
+    assert_eq!(d.settings[0].default, "1 2");
+    assert!(d.settings[0].ty.check("1 2 3").is_ok());
+    assert!(d.settings[0].ty.check("1 2 3 4").is_err());
+    assert!(d.settings[0].ty.check("1 x").is_err());
+    let d = one("setting a.b list of path '' paths").unwrap();
+    assert!(matches!(
+        d.settings[0].ty,
+        SettingType::List {
+            min: 0,
+            max: MAX_LIST,
+            ..
+        }
+    ));
+    for bad in [
+        "setting a.b list text 'x' t",
+        "setting a.b list of 'x' t",
+        "setting a.b list of text 3 2 'x' t",
+        "setting a.b list of text 0 65 'x' t",
+        "setting a.b list of choice x|y 1 2 unique 'x x' t",
+        "setting a.b list of choice x|y 1 2 'z' t",
+    ] {
+        assert!(one(bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        list_items("a 'b c' \"d\""),
+        Ok(std::vec!["a".into(), "b c".into(), "d".into()])
+    );
+    assert_eq!(list_text(&["a".into(), "b c".into()]), "a 'b c'");
+    assert_eq!(list_items(""), Ok(std::vec![]));
+}
