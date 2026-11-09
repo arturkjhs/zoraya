@@ -75,7 +75,7 @@ pub fn page(s: &GuiSettings, status: &str) -> Box<dyn Widget> {
             "Scale",
             Box::new(RadioGroup::new(SCALE, &["Automatic", "1", "2"], scale)),
         ),
-        note("The scale takes effect at the next session."),
+        note("Automatic is 2 on a display 1920 pixels wide or wider."),
         heading("Keyboard"),
     ];
     let boxes: Vec<Box<dyn Widget>> = (0..zoraya_keymap::LAYOUTS.len())

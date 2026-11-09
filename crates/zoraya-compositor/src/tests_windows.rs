@@ -95,7 +95,7 @@ impl Setup {
     }
 }
 
-fn configures(out: &[Vec<u8>]) -> Vec<gui::Configure> {
+pub(super) fn configures(out: &[Vec<u8>]) -> Vec<gui::Configure> {
     out.iter()
         .filter_map(|m| decode::<gui::Configure>(m, 0).ok())
         .map(|(_, c)| c)

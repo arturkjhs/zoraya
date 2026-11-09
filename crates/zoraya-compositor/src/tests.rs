@@ -58,6 +58,8 @@ struct Fake {
     refuse_attach: bool,
     flushes: Vec<(u32, u32, u32, u32)>,
     attaches: u32,
+    /// How often the compositor said the newest framebuffer is shown.
+    shown: u32,
     clock: u64,
     next: u32,
     /// Handles the compositor passed to a client: only a drop's entry
@@ -247,6 +249,10 @@ impl Platform for Fake {
 
     fn pixels(&mut self) -> &mut [u32] {
         &mut self.frame
+    }
+
+    fn framebuffer_shown(&mut self) {
+        self.shown += 1;
     }
 
     fn call(
@@ -1621,6 +1627,8 @@ fn a_display_driver_whose_queue_stays_full_is_hung() {
 #[path = "tests_windows.rs"]
 mod windows;
 
+#[path = "tests_display.rs"]
+mod display_size;
 #[path = "tests_drops.rs"]
 mod drops;
 #[path = "tests_rooms.rs"]

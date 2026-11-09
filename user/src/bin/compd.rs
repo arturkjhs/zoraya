@@ -36,10 +36,28 @@ struct Frame {
     height: u32,
 }
 
+/// Unmaps a framebuffer the driver no longer shows and closes its object.
+fn release(f: Frame) {
+    let Frame {
+        object,
+        pixels,
+        width,
+        height,
+    } = f;
+    let length = (u64::from(width) * u64::from(height) * 4).next_multiple_of(4096);
+    // The slice is not used past this line: its mapping goes next.
+    let address = pixels.as_ptr() as u64;
+    let _ = memory_unmap(address, length);
+    let _ = handle_close(object);
+}
+
 struct System {
     port: Handle,
     calls: Handle,
     frame: Option<Frame>,
+    /// The framebuffer before `frame`, until the driver shows `frame`
+    /// (ADR-0246): it may still be pinned until then.
+    older: Option<Frame>,
 }
 
 fn moved(handle: Handle) -> ChannelEntry {
@@ -136,17 +154,30 @@ impl Platform for System {
             // which this process keeps for its life and reaches only
             // through this slice.
             let slice = unsafe { core::slice::from_raw_parts_mut(address as *mut u32, pixels) };
-            // An older framebuffer stays mapped: a driver may still hold a
-            // pin on it until it is reset (ADR-0054).
-            self.frame = Some(Frame {
+            // The one before stays mapped until the driver shows this one: it
+            // may still hold a pin on it (ADR-0054). One before that is
+            // released now: its driver showed a later one, or was lost with
+            // its pins.
+            let new = Frame {
                 object,
                 pixels: slice,
                 width,
                 height,
-            });
+            };
+            if let Some(old) = self.frame.replace(new)
+                && let Some(gone) = self.older.replace(old)
+            {
+                release(gone);
+            }
         }
         let frame = self.frame.as_ref()?;
         handle_duplicate(frame.object, MemoryObject::RIGHTS).ok()
+    }
+
+    fn framebuffer_shown(&mut self) {
+        if let Some(old) = self.older.take() {
+            release(old);
+        }
     }
 
     fn pixels(&mut self) -> &mut [u32] {
@@ -207,6 +238,7 @@ fn main() -> i32 {
         port: port_create().expect("port"),
         calls: port_create().expect("port"),
         frame: None,
+        older: None,
     };
     let manager = channel_at(5).expect("a manager channel at slot 5");
     let display = channel_at(6);

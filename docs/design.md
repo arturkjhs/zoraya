@@ -1186,7 +1186,7 @@ below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X the
   match; Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all. Closing with unsaved changes asks first.
 - **Copy and paste.** System+C copies what is selected, System+X cuts it, System+V pastes; nothing else can read
   what was copied.
-- **Settings.** Theme (light or dark), motion, scale (at the next session) and the keyboard: the layouts
+- **Settings.** Theme (light or dark), motion, scale (Automatic follows the window's size) and the keyboard: the layouts
   System+Space switches between and the one in use. A change is saved to `/config/settings` and applied at once.
   `settings gui.theme dark` in a terminal writes the same file; the desktop reads it at the next session.
 - **Keyboard layouts.** System+Space switches (US, UA, RU, CZ, those enabled in Settings); on the Czech layout the
