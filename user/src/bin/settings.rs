@@ -20,7 +20,7 @@ use zoraya_abi::Handle;
 use zoraya_app::{App, Happened};
 use zoraya_proto_chooser as pc;
 use zoraya_protocol::{decode, encode};
-use zoraya_rt::{channel_read, channel_write, handle_type, println};
+use zoraya_rt::{channel_read, channel_write, clock_monotonic, handle_type, println};
 use zoraya_settings_window::{changed, page, written};
 use zoraya_tokens::Appearance;
 use zoraya_ui::Response;
@@ -138,11 +138,23 @@ fn main() -> i32 {
         let status: String = match result {
             Err(why) => why.into(),
             Ok(new) => {
+                let t0 = clock_monotonic();
                 let bytes = current(&config);
                 match written(&bytes, &new).map(|f| publish(&config, &f)) {
                     Ok(Ok(())) => {
                         s = new;
-                        if announce(panel) {
+                        let t1 = clock_monotonic();
+                        let applied = announce(panel);
+                        // The change's cost, for design.md: the file read,
+                        // written and published, then the panel's and the
+                        // compositor's round trip.
+                        let t2 = clock_monotonic();
+                        println!(
+                            "settings: measure: written {} us, applied {} us",
+                            (t1 - t0) / 1000,
+                            (t2 - t1) / 1000
+                        );
+                        if applied {
                             "Saved and applied.".into()
                         } else {
                             "Saved; it applies at the next session.".into()
