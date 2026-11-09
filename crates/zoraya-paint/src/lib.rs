@@ -293,7 +293,7 @@ pub fn upscale(src: &[u32], sw: usize, sh: usize, w: usize, h: usize) -> Vec<u32
         if n <= 1 || sn <= 1 {
             return (0, 0);
         }
-        let p = (i as u64 * (sn as u64 - 1) << 16) / (n as u64 - 1);
+        let p = ((i as u64 * (sn as u64 - 1)) << 16) / (n as u64 - 1);
         let whole = ((p >> 16) as usize).min(sn - 1);
         (whole, (p & 0xffff) as u32)
     };
