@@ -114,6 +114,14 @@ const KEY_INTERVAL: Duration = Duration::from_millis(8);
 /// 2026-11-09) they kept a TCG guest from draining the keys just typed, and
 /// keys were lost.
 const SCREEN_POLL: Duration = Duration::from_millis(150);
+/// Keys typed before `type` waits for the guest to catch up (`settle`): eight
+/// keys with Shift are 64 events, virtio-input's whole queue. A fixed interval
+/// suits a guest of one speed only: on CI's runner, and locally with QEMU on
+/// the efficiency cores, the ends of long lines were lost (2026-11-09).
+const KEYS_PER_SETTLE: usize = 8;
+/// The longest `settle` waits: a screen that keeps changing (a clock, a
+/// program's output) must not hold the typing for good.
+const SETTLE_MOST: Duration = Duration::from_secs(10);
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -593,6 +601,23 @@ impl Run {
         Ok(())
     }
 
+    /// Waits until two screendumps a poll apart are the same: the guest has
+    /// drawn every key typed so far, so virtio-input's queue is empty again.
+    fn settle(&mut self) -> Result<(), String> {
+        let until = Instant::now() + SETTLE_MOST;
+        let mut last = self.qmp.screen()?.pixels;
+        while Instant::now() < until {
+            self.pump()?;
+            std::thread::sleep(SCREEN_POLL);
+            let now = self.qmp.screen()?.pixels;
+            if now == last {
+                return Ok(());
+            }
+            last = now;
+        }
+        Ok(())
+    }
+
     fn wait_screen(&mut self, text: &str) -> Result<Duration, String> {
         self.wait_row(text, false)
     }
@@ -679,7 +704,12 @@ impl Run {
             }
             Step::Type(keys) => {
                 let layout = &zoraya_keymap::LAYOUTS[self.layout];
-                for c in String::from_utf8_lossy(keys).chars() {
+                let text = String::from_utf8_lossy(keys);
+                for (i, c) in text.chars().enumerate() {
+                    // Before the next eight, when the guest has drawn these.
+                    if i > 0 && i % KEYS_PER_SETTLE == 0 {
+                        self.settle()?;
+                    }
                     // Under us, and for Enter, Tab and Space in any layout,
                     // the plain table; else the layout's keys.
                     let plain = qcode(c).filter(|_| {
