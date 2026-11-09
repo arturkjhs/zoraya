@@ -82,14 +82,14 @@ can hand the compositor a size change through a fake driver.
 Recommended: **Option C**. It is a recommendation, not a decision.
 
 - **Scale.** At each new size the compositor picks the scale as at attach (ADR-0164): `gui.scale` 1 or 2 fixes it,
-  `auto` gives 2 from `SCALE_TWO_FROM` (1920) pixels wide. A width below what scale 2 needs for the bar, the dock and
-  one window (640 logical pixels) gives 1 under `auto`.
-- **Sizes.** Each side from 640 to 4096 pixels (ADR-0090's limit); a smaller size from the device is clamped up to
-  640 by 480 and shown in the top-left corner of the new scanout (the rest black), never refused.
+  `auto` gives 2 from `SCALE_TWO_FROM` (1920) pixels wide.
+- **Sizes.** Any size the driver accepts, 1 to 4096 pixels a side (ADR-0090's limit); a window larger than the new
+  work area is made smaller, and every window's frame is moved back into it.
 - **The settings window** shows `gui.scale` (`auto`, `1`, `2`); a change applies at once, by the same re-layout.
-- **Tests.** `make test-gui` boots at two sizes (1024 by 768 and 1600 by 1000 at scale 1, 2048 by 1536 at scale 2).
-  A host test of the compositor changes a fake display's size and checks the scale, the bar and dock, windows on
-  screen and the `Configure`s. A host test of `zoraya-virtio-gpu` feeds the display event and checks the re-created
+- **Tests.** `make test-gui` boots at two more sizes (1600 by 1000, scale 1; 1920 by 1200, scale 2 under `auto`) beside
+  1024 by 768 and 2048 by 1536.
+  A host test of the compositor changes a fake display's size and checks the scale, the framebuffer, windows in
+  the work area and the `Configure`s. A host test of `zoraya-virtio-gpu` feeds the display event and checks the re-created
   scanout. No GUI test resizes a running guest (no QMP command does).
 
 **Tensions with accepted ADRs.** *ADR-0164*'s "The scale ... from the display size" holds at each new size, and its

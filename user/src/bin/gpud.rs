@@ -11,11 +11,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use zoraya_abi::{
-    DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Status, channel_signals,
-    interrupt_signals,
+    Handle, MapFlags, MemoryFlags, Mode, Packet, Status, channel_signals, interrupt_signals,
 };
-use zoraya_proto_display::{Attach, Done, FORMAT_XRGB, Flush, Info, InfoReply, status};
-use zoraya_protocol::{Below, ErrorReply, Header, Message, decode, encode};
+use zoraya_proto_display::{Attach, Done, FORMAT_XRGB, Flush, Info, InfoReply, Resized, status};
+use zoraya_protocol::{Below, ErrorReply, Header, Message, NO_REPLY, decode, encode};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, device_interrupt, device_map, dma_pin,
     dma_release_quarantine, dma_unpin, handle_close, handle_type, interrupt_ack, memory_create,
@@ -30,6 +29,9 @@ extern crate alloc;
 const COMMAND_NS: u64 = 1_000_000_000;
 /// How often a wait looks at the queue without an interrupt.
 const POLL_NS: u64 = 10_000_000;
+/// How often the driver looks for a display event between requests
+/// (ADR-0246): one register read.
+const DISPLAY_POLL_NS: u64 = 100_000_000;
 /// Reported once: a wait passed 10 ms with no interrupt.
 static MISSED: AtomicBool = AtomicBool::new(false);
 
@@ -91,6 +93,12 @@ struct Driver {
     port: Handle,
     pin: Option<Handle>,
     reply: [u8; 64],
+    /// The size of the framebuffer attached last.
+    attached: (u32, u32),
+    /// A `Resized` was sent and no `Info` has come since (ADR-0246: one at
+    /// a time, so that it never stands where the compositor waits for a
+    /// reply).
+    told: bool,
 }
 
 impl Driver {
@@ -155,10 +163,10 @@ impl Driver {
         }
     }
 
+    /// Attaches `memory`: the first time, or again at a new display size
+    /// (ADR-0246), when the old framebuffer is unpinned once the new one is
+    /// shown. The same size twice is `BAD_BUFFER`, as before.
     fn attach(&mut self, memory: Handle) -> u32 {
-        if self.pin.is_some() {
-            return status::BAD_BUFFER;
-        }
         if handle_type(memory) != Ok("memory") {
             return status::BAD_BUFFER;
         }
@@ -173,7 +181,12 @@ impl Driver {
             .collect();
         match self.run(|gpu, wait| gpu.attach(&runs, wait)) {
             Ok(()) => {
-                self.pin = Some(pin);
+                if let Some(old) = self.pin.replace(pin) {
+                    // The device unreferenced the old resource: it no
+                    // longer reads that memory.
+                    let _ = dma_unpin(old);
+                }
+                self.attached = self.gpu.size();
                 status::OK
             }
             // Refused before any command: nothing reached the device.
@@ -182,11 +195,49 @@ impl Driver {
                 self.status(e)
             }
             // A command failed part-way: the device may hold the backing,
-            // and resource 1 exists. Stop the device first (review R4).
+            // and a resource exists. Stop the device first (review R4); the
+            // old pin, if any, goes with the process.
             Err(_) => {
                 self.pin = Some(pin);
                 self.lost()
             }
+        }
+    }
+
+    /// After a display event, tells the compositor the new size (ADR-0246):
+    /// only once something is attached, only when the size differs from the
+    /// attached one, and only one `Resized` before its `Info`. A size the
+    /// device gives while one is unanswered reaches the compositor in that
+    /// `Info`.
+    fn display_event(&mut self) {
+        if self.gpu.display_changed() {
+            match self.run(|gpu, wait| gpu.display_info(wait).map(|_| ())) {
+                Ok(()) => {}
+                // Scanout 0 off or too large: the display keeps its size.
+                Err(Error::NoDisplay | Error::Command(_)) => return,
+                Err(_) => self.lost(),
+            }
+        }
+        let size = self.gpu.size();
+        if self.pin.is_none() || self.told || size == self.attached {
+            return;
+        }
+        let m = Resized {
+            width: size.0,
+            height: size.1,
+        };
+        let mut out = [0u8; 64];
+        match encode(&m, NO_REPLY, &mut out) {
+            Ok(n) => match channel_write(self.client, &out[..n], &[]) {
+                Ok(()) => {
+                    println!("gpud: display {}x{}", size.0, size.1);
+                    self.told = true;
+                }
+                // A full queue: the next look tries again.
+                Err(Status::WouldBlock) => {}
+                Err(_) => self.stop(),
+            },
+            Err(_) => self.stop(),
         }
     }
 
@@ -220,6 +271,7 @@ impl Driver {
         }
         match header.ordinal {
             1 if decode::<Info>(bytes, received).is_ok() => {
+                self.told = false;
                 let (width, height) = self.gpu.size();
                 let m = InfoReply {
                     status: Below(status::OK),
@@ -319,6 +371,8 @@ fn main() -> i32 {
         port,
         pin: None,
         reply: [0; 64],
+        attached: (0, 0),
+        told: false,
     };
     match driver.run(|gpu, wait| gpu.display_info(wait).map(|_| ())) {
         Ok(()) => {
@@ -333,9 +387,11 @@ fn main() -> i32 {
     let mut message = vec![0u8; 256];
     let mut packets = [Packet::default()];
     loop {
-        if port_wait(requests, DEADLINE_INFINITE, &mut packets).is_err() {
-            driver.stop();
+        match port_wait(requests, clock_monotonic() + DISPLAY_POLL_NS, &mut packets) {
+            Ok(_) => driver.serve(&mut message),
+            Err(Status::DeadlineExceeded) => {}
+            Err(_) => driver.stop(),
         }
-        driver.serve(&mut message);
+        driver.display_event();
     }
 }

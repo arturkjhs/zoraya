@@ -51,10 +51,19 @@ protocol! {
         width: u32,
         height: u32,
     }
+
+    /// From the driver, unasked, after an `Attach`: the display now has this
+    /// size (ADR-0246). The compositor answers with `Info` and a new `Attach`;
+    /// the driver sends no other `Resized` before that `Info`.
+    message Resized = 4, handles 0 {
+        width: u32,
+        height: u32,
+    }
 }
 
-/// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 3] = [("info", 1), ("attach", 2), ("flush", 3)];
+/// Every ordinal, the driver's `Resized` included, for a test that none
+/// repeats.
+pub const REQUESTS: [(&str, u32); 4] = [("info", 1), ("attach", 2), ("flush", 3), ("resized", 4)];
 
 #[cfg(test)]
 extern crate std;
@@ -96,6 +105,10 @@ mod tests {
             y: 2,
             width: 3,
             height: 4,
+        });
+        total(Resized {
+            width: 1600,
+            height: 1000,
         });
     }
 

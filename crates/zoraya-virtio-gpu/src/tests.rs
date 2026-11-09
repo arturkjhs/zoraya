@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use zoraya_virtio::fake::{Device, Event, Fake};
@@ -48,13 +48,15 @@ struct Seen {
 struct Gpu0 {
     seen: Rc<RefCell<Vec<Seen>>>,
     device: Device,
+    /// The size `GET_DISPLAY_INFO` reports.
+    size: Rc<Cell<(u32, u32)>>,
 }
 
 fn word(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
 }
 
-fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>) {
+fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>, size: (u32, u32)) {
     while let Some(head) = f.next_available(0) {
         let chain = f.chain(0, head);
         assert_eq!(chain.len(), 2, "a request and a response");
@@ -80,7 +82,7 @@ fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>) {
             let (w, h, on) = match hostile {
                 Hostile::Disabled => (1024, 768, 0),
                 Hostile::Huge => (MAX_SIDE + 1, 768, 1),
-                _ => (1024u32, 768u32, 1u32),
+                _ => (size.0, size.1, 1u32),
             };
             response[24 + 8..24 + 12].copy_from_slice(&w.to_le_bytes());
             response[24 + 12..24 + 16].copy_from_slice(&h.to_le_bytes());
@@ -114,13 +116,19 @@ fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>) {
 fn device(hostile: Hostile) -> Gpu0 {
     let device = Device::new(DEVICE_GPU, BASE, SHARED_MEMORY);
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let log = seen.clone();
-    device.on(move |f, e| {
-        if e == Event::Notify(0) {
-            serve(f, hostile, &log);
+    let size = Rc::new(Cell::new((1024, 768)));
+    let (log, shown) = (seen.clone(), size.clone());
+    device.on(move |f, e| match e {
+        Event::Notify(0) => serve(f, hostile, &log, shown.get()),
+        // `events_clear`: the bits written there leave `events_read`.
+        Event::Config(4) => {
+            let read = word(&f.config, 0);
+            let clear = word(&f.config, 4);
+            f.config[0..4].copy_from_slice(&(read & !clear).to_le_bytes());
         }
+        _ => {}
     });
-    Gpu0 { seen, device }
+    Gpu0 { seen, device, size }
 }
 
 type FakeGpu = Gpu<zoraya_virtio::fake::FakeRegisters, zoraya_virtio::fake::FakeShared>;
@@ -420,4 +428,99 @@ fn a_run_of_exactly_the_largest_length_is_accepted() {
 #[test]
 fn the_shared_memory_is_what_the_layout_needs() {
     assert_eq!(SHARED_MEMORY, 36864);
+}
+
+/// The device reports a new display: its event bit, and the new size.
+fn resize(d: &Gpu0, w: u32, h: u32) {
+    d.size.set((w, h));
+    let mut s = d.device.state.borrow_mut();
+    let read = word(&s.config, 0) | config::EVENT_DISPLAY;
+    s.config[0..4].copy_from_slice(&read.to_le_bytes());
+}
+
+#[test]
+fn a_display_event_is_seen_once_and_cleared() {
+    let d = device(Hostile::None);
+    let mut gpu = ready(&d);
+    assert!(!gpu.display_changed());
+    resize(&d, 1600, 1000);
+    assert!(gpu.display_changed());
+    assert_eq!(word(&d.device.state.borrow().config, 0), 0, "cleared");
+    assert!(!gpu.display_changed());
+    assert_eq!(gpu.size(), (1024, 768), "the size is display_info's to ask");
+    assert_eq!(gpu.display_info(&mut no_wait()), Ok((1600, 1000)));
+}
+
+#[test]
+fn a_new_size_shows_the_other_resource_then_drops_the_old() {
+    let d = device(Hostile::None);
+    let mut gpu = ready(&d);
+    resize(&d, 1600, 1000);
+    assert!(gpu.display_changed());
+    gpu.display_info(&mut no_wait()).unwrap();
+    // Until the new attach, flushes go to the old resource at its size.
+    let r = |x, y, width, height| Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    assert_eq!(
+        gpu.flush(r(0, 0, 1600, 1000), &mut no_wait()),
+        Err(Error::BadRange)
+    );
+    d.seen.borrow_mut().clear();
+    gpu.flush(r(0, 0, 1024, 768), &mut no_wait()).unwrap();
+    assert_eq!(d.seen.borrow()[0].words[6], RESOURCE, "the old one");
+    // Backing for the old size does not cover the new one.
+    assert_eq!(
+        gpu.attach(&[(FRAME, WHOLE)], &mut no_wait()),
+        Err(Error::BadBacking)
+    );
+    d.seen.borrow_mut().clear();
+    let big = 1600 * 1000 * 4;
+    gpu.attach(&[(FRAME, big)], &mut no_wait()).unwrap();
+    let seen: Vec<(u32, Vec<u32>)> = d
+        .seen
+        .borrow()
+        .iter()
+        .map(|s| (s.kind, s.words.clone()))
+        .collect();
+    let kinds: Vec<u32> = seen.iter().map(|s| s.0).collect();
+    assert_eq!(
+        kinds,
+        [
+            cmd::RESOURCE_CREATE_2D,
+            cmd::RESOURCE_ATTACH_BACKING,
+            cmd::SET_SCANOUT,
+            cmd::RESOURCE_UNREF
+        ]
+    );
+    assert_eq!(seen[0].1[..4], [2, FORMAT, 1600, 1000], "resource 2");
+    assert_eq!(seen[1].1[0], 2);
+    assert_eq!(
+        seen[2].1[..6],
+        [0, 0, 1600, 1000, 0, 2],
+        "scanout 0 shows 2"
+    );
+    assert_eq!(seen[3].1[0], RESOURCE, "then 1 goes");
+    // The same size again is refused; flushes reach resource 2 at its size.
+    assert_eq!(
+        gpu.attach(&[(FRAME, big)], &mut no_wait()),
+        Err(Error::Attached)
+    );
+    d.seen.borrow_mut().clear();
+    gpu.flush(r(1000, 900, 600, 100), &mut no_wait()).unwrap();
+    let words = d.seen.borrow()[0].words.clone();
+    assert_eq!(words[4..7], [(900 * 1600 + 1000) * 4, 0, 2]);
+    // A third size goes back to resource 1, and drops 2.
+    resize(&d, 1280, 800);
+    assert!(gpu.display_changed());
+    gpu.display_info(&mut no_wait()).unwrap();
+    d.seen.borrow_mut().clear();
+    gpu.attach(&[(FRAME, 1280 * 800 * 4)], &mut no_wait())
+        .unwrap();
+    let seen = d.seen.borrow();
+    assert_eq!(seen[0].words[0], RESOURCE);
+    assert_eq!(seen[3].words[0], 2);
 }
