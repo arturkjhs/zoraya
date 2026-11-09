@@ -497,13 +497,14 @@ Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) an
   shell a `Size`), and the close button ends it; `init` takes a terminal that ended with 0 as a closed window and
   starts a new terminal and shell, as after `exit`.
 
-Measured (`t_gui` in the test kernel; MEASURE_7B):
+Measured (`t_gui` in the test kernel, `make test-qemu-auto-default` and `make test-qemu-tcg-default` at 9659e2d,
+2026-11-09, QEMU 11.1.2 on the M4 Mac mini):
 
 | | HVF | TCG |
 |---|---|---|
-| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | MEASURE_7B_HVF_COMPOSE | MEASURE_7B_TCG_COMPOSE |
-| The frame that opens the switcher (blur of the scene under it) | MEASURE_7B_HVF_SWITCH | MEASURE_7B_TCG_SWITCH |
-| A frame committed under the open switcher | MEASURE_7B_HVF_UNDER | MEASURE_7B_TCG_UNDER |
+| Full redraw of a 1024 × 768 legacy surface with its frame and shadow: compose per frame | 6.1 ms | 55 ms |
+| The frame that opens the switcher (blur of the scene under it) | 18.8 ms | 107 ms |
+| A frame committed under the open switcher | 18.7 ms | 104 ms |
 
 The compositor's start and its frames (`compd`'s own report on the console, `make test-gui`'s terminal script,
 2026-11-09, QEMU 11.1.2 on the M4 Mac mini; GitHub's runners are about 2.3 times slower under TCG):
