@@ -173,6 +173,14 @@ impl TextField {
         }
     }
 
+    /// A field whose cursor is before character `cursor` (at most the
+    /// end): a field rebuilt while the person types keeps its place.
+    pub fn with_cursor(id: u32, value: &str, cursor: usize) -> TextField {
+        let mut f = TextField::new(id, value);
+        f.cursor = cursor.min(f.cursor);
+        f
+    }
+
     fn byte(&self, chars: usize) -> usize {
         self.value
             .char_indices()

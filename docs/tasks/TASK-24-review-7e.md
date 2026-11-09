@@ -313,3 +313,29 @@ By the main model, after the review; each fix with a test where one could be wri
 | 24 | Fixed. `t_open` drops the chooser's channel when it closes. |
 | 25 | As ADR-0168 decides (INV-0168-2 lists `files`); recorded in ADR-0245's open questions. |
 | 26 | No change. |
+
+## Check of the fixes
+
+This check covers the changed lines of 9113cf7. It was done by reading the code only: no tests or QEMU runs. Only
+findings marked Fixed or Partly fixed are checked.
+
+| # | Result |
+|---|---|
+| 1 | **Confirmed.** `Drag` carries only `name` (at most 64 bytes, no `/`, `plain_text`) and the handle must be a channel. The pill is built by the compositor as `dropped: NAME read`. One part remains, and it is by design (ADR-0170: the compositor never opens an entry): the source still chooses the name, and the channel can be any channel. Now recorded in ADR-0245. |
+| 2 | **Confirmed.** `Chosen.words` is `+r NAME` or `+c NAME`, and `Drop` has no words. The path is kept only in the sheet's line and in the compositor's pill. |
+| 3 | **Confirmed.** `drop_carried` refuses a target whose record is untrusted: the entry is closed and the source gets `DragEnded`. |
+| 4 | **Confirmed.** Each client has its own `presses` counter. `body_press` and `WindowPointer.serial` both use the pressed client's own count, so no client sees another's presses. |
+| 7 | **Fixed, with a new issue (warning).** The line now follows the name, but `refresh` rebuilds the tree on every keystroke, and `TextField::new` (`crates/zoraya-ui/src/widgets.rs:167-173`) puts the cursor at the end. Typing or Backspace in the middle of the name moves the cursor to the end after one character: editing `nový.txt` to `nová.txt` from the middle gives the wrong name. Fix: keep the cursor across the rebuild, or update the label in place. |
+| 8 | **Confirmed.** `App::drag` refuses an empty name or one over `MAX_DROPPED_NAME` before encoding and gives the entry back, and `files` closes it. `message()` still sends an empty message when encoding fails, but the `Drag` fields can no longer fail to encode. |
+| 9 | **Confirmed.** `Chosen.words` is now short (at most 3 + 255 bytes, under 512). A pill over `MAX_LINE` closes the handle and answers `Cancelled(FAILED)`. When the record is full (finding 15), `Granted` can still fail while the connection was given. That case stays open, as the disposition says. |
+| 10 | **Partly fixed, as the disposition says.** Every read error except `WouldBlock`, including `BufferTooSmall`, now unsubscribes and closes that launcher channel, so the spinning is fixed. The blocking `clone_as` remains, recorded in ADR-0245. |
+| 11 | **Not fixed at 9113cf7.** The disposition says "fixed in 7e's invariants step", but `git diff work/7d...HEAD` still does not touch `docs/adr/invariants.md` or `docs/design.md`. INV-0167-x and INV-0170-x still read `not yet applicable`. This is still to be done before the merge. |
+| 12 | **Confirmed for ordinary names, with a small gap (uncertain).** The rectangle now spans 16 px left of the pointer to 568 px right of it, and from 24 px above to 72 px below. The label starts 16 px right of the pointer and is its measured width + 20 px wide. With `text.caption = 11`, 64 wide glyphs (`W`, `M`) may measure more than about 530 px and pass the edge. Clamping the label's drawn width to `CARRIED_WIDTH` would close the gap. |
+| 13 | **Confirmed, with a small gap (note).** Escape closes the entry, sends `DragEnded` and redraws, and while a drag is carried keys reach no client and `press` returns at once. But Escape leaves `body_press` set: while the left button is still held and within 500 ms of the press, the source can send `Drag` again with the same serial and restart the drag the person just cancelled. Fix: clear `body_press` on Escape. |
+| 19 | **Partly fixed (note).** `plain_text` now covers record lines (`AddRoomClient`) and drag names. `granted()` (`crates/zoraya-compositor/src/lib.rs:2088`) still checks only `char::is_control`. The chooser's pill holds a file name from the volume, and a name may contain U+202E, so a bidirectional override can still reach the trusted pill through `Granted`. Fix: use `rooms::plain_text` in `granted()`. Side effect: a file opened from `files` whose path holds such a character now makes the whole `AddRoomClient` fail, and the panel's message says the record is too large. |
+| 20 | **Confirmed for refusal before sending.** `App::drag` returns `Err(Some(entry))`, and `files` closes it. One latent leak remains: when `Gui::send` itself fails, the entry is neither sent nor returned (`Err(None)`). |
+| 24 | **Confirmed.** The chooser channel is read every round. `Gone` unsubscribes, closes and drops the channel, and a `Chosen` with nothing asked has its handle closed. |
+
+No new `unsafe` code. Rights narrowing does not change: `files` still drags with `READ | CLONE`, the panel's re-clone is
+unchanged, and the chooser's rights are still `Access::rights()`. New issues: one warning (7, the cursor) and two notes
+(13, re-drag after Escape; 19, bidirectional characters through `Granted`). Finding 11 is still to be done.

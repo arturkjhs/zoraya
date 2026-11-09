@@ -48,6 +48,9 @@ pub struct Sheet {
     pub window: u32,
     /// The list's first shown row.
     top: usize,
+    /// Where the name field's cursor is, kept across the sheet's rebuilds
+    /// while the person types (review 7e, check of 7).
+    name_cursor: Option<usize>,
 }
 
 impl Sheet {
@@ -64,6 +67,7 @@ impl Sheet {
             browser,
             window: 0,
             top: 0,
+            name_cursor: None,
         };
         sheet.list(fs, root);
         let kind = sheet.browser.ask.sheet();
@@ -142,7 +146,10 @@ impl Sheet {
             }),
         ];
         if matches!(b.ask, Ask::Save { .. }) {
-            column.push(Box::new(TextField::new(NAME, &b.name)));
+            column.push(Box::new(match self.name_cursor {
+                Some(c) => TextField::with_cursor(NAME, &b.name, c),
+                None => TextField::new(NAME, &b.name),
+            }));
         }
         let (sentence, line) = match b.pending() {
             Some(g) => (b.sentence(), g.line),
@@ -215,6 +222,16 @@ impl Sheet {
                 if let Some(w) = app.window(self.window)
                     && let Value::Text(t) = w.value(NAME)
                 {
+                    // One edit: an insertion leaves the cursor after the
+                    // first character that differs; a deletion, at it.
+                    let old = &self.browser.name;
+                    let same = old
+                        .chars()
+                        .zip(t.chars())
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    let grew = t.chars().count() > old.chars().count();
+                    self.name_cursor = Some(same + usize::from(grew));
                     self.browser.name = String::from(t);
                 }
                 // The grant's line follows the name typed (review 7e, 7).

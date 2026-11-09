@@ -442,6 +442,32 @@ fn a_name_saved_is_given_to_create_or_replace() {
     assert_eq!(c.rights, Access::Create(String::new()).rights());
 }
 
+/// The sheet is laid out again at every change of the name, and the
+/// field keeps its cursor: an edit in the middle of the name stays there.
+#[test]
+fn a_name_edited_in_the_middle_keeps_its_place() {
+    let mut r = rig(Ask::Save {
+        suggested: String::from("new.txt"),
+        filters: Vec::new(),
+    });
+    key(&mut r, keys::TAB, None);
+    // "new.txt": before the dot, insert "er", then delete the "w".
+    for _ in 0..4 {
+        key(&mut r, keys::LEFT, None);
+    }
+    key(&mut r, 18, Some('e'));
+    key(&mut r, 19, Some('r'));
+    for _ in 0..2 {
+        key(&mut r, keys::LEFT, None);
+    }
+    key(&mut r, keys::BACKSPACE, None);
+    key(&mut r, keys::ENTER, None);
+    let Some(Outcome::Chosen { grant, .. }) = run(&mut r) else {
+        panic!("not chosen");
+    };
+    assert_eq!(grant.access, Access::Create(String::from("neer.txt")));
+}
+
 /// PickDirectory with write: the folder with tree's rights.
 #[test]
 fn a_folder_picked_to_change_is_given_whole() {

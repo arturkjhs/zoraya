@@ -77,6 +77,25 @@ fn a_text_field_edits_by_character() {
     w.event(key(keys::END));
     assert_eq!(w.event(key(keys::ENTER)), Response::Activated(3));
     assert_eq!(w.value(3), Value::Text("вітř"));
+    // Rebuilt with its cursor: typing goes where it was.
+    let (mut w, _) = window(
+        Box::new(TextField::with_cursor(4, "abc", 1)),
+        200,
+        28,
+        &mut p,
+    );
+    w.move_focus(false);
+    w.event(typed('x'));
+    assert_eq!(w.value(4), Value::Text("axbc"));
+    let (mut w, _) = window(
+        Box::new(TextField::with_cursor(4, "ab", 9)),
+        200,
+        28,
+        &mut p,
+    );
+    w.move_focus(false);
+    w.event(typed('x'));
+    assert_eq!(w.value(4), Value::Text("abx"));
     assert_eq!(
         w.event(typed('\u{7}')),
         Response::None,

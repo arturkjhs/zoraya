@@ -789,6 +789,8 @@ impl<P: Platform> Compositor<P> {
         // is carried no key reaches a client.
         if let Some(c) = self.carried.take() {
             if key.pressed && code_ == code::ESC {
+                // The press that started it starts nothing again.
+                self.body_press = None;
                 if let Some((x, y)) = self.pointer {
                     self.dirty(&self.carried_rect(x, y));
                 }
@@ -2085,7 +2087,7 @@ impl<P: Platform> Compositor<P> {
         let Ok(words) = core::str::from_utf8(words) else {
             return status::BAD_RANGE;
         };
-        if tag == 0 || words.is_empty() || words.chars().any(char::is_control) {
+        if tag == 0 || words.is_empty() || !rooms::plain_text(words) {
             return status::BAD_RANGE;
         }
         let Some(slot) = self

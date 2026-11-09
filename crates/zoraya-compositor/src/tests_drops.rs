@@ -263,6 +263,9 @@ fn escape_ends_a_drag() {
     assert!(t.s.f().closed.contains(&e));
     let got = ordinals(&t.s.f().take(t.a));
     assert!(got.contains(&26) && !got.contains(&16), "{got:?}");
+    // The cancelled press, still held, starts no drag again.
+    let again = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, again), status::BAD_RANGE);
     let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
     at(&mut t.s, tx, ty, Some(0));
     assert!(t.s.f().given.is_empty());
