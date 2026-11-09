@@ -279,6 +279,48 @@ pub fn blur_region(pixels: &mut [u32], width: usize, r: Rect, radius: usize) {
     }
 }
 
+/// `src`, `sw × sh` pixels, scaled to `w × h` bilinearly, each channel
+/// apart: corner to corner, so the source's corners are the result's. For
+/// smooth images made at a fraction of the size (the wallpaper and its
+/// blur: a sixteenth of the work at a quarter of the size each way).
+pub fn upscale(src: &[u32], sw: usize, sh: usize, w: usize, h: usize) -> Vec<u32> {
+    let mut out = vec![0u32; w * h];
+    if sw == 0 || sh == 0 || src.len() < sw * sh || w == 0 || h == 0 {
+        return out;
+    }
+    // Fixed point, 16 bits: the source position of each column and row.
+    let pos = |i: usize, n: usize, sn: usize| -> (usize, u32) {
+        if n <= 1 || sn <= 1 {
+            return (0, 0);
+        }
+        let p = (i as u64 * (sn as u64 - 1) << 16) / (n as u64 - 1);
+        let whole = ((p >> 16) as usize).min(sn - 1);
+        (whole, (p & 0xffff) as u32)
+    };
+    let cols: Vec<(usize, u32)> = (0..w).map(|x| pos(x, w, sw)).collect();
+    let lerp = |a: u32, b: u32, t: u32| -> u32 {
+        let mut c = 0;
+        for shift in [0u32, 8, 16, 24] {
+            let (ca, cb) = ((a >> shift) & 0xff, (b >> shift) & 0xff);
+            let v = (ca * (0x10000 - t) + cb * t + 0x8000) >> 16;
+            c |= v.min(255) << shift;
+        }
+        c
+    };
+    for y in 0..h {
+        let (sy, ty) = pos(y, h, sh);
+        let sy1 = (sy + 1).min(sh - 1);
+        let (r0, r1) = (&src[sy * sw..sy * sw + sw], &src[sy1 * sw..sy1 * sw + sw]);
+        for (x, &(sx, tx)) in cols.iter().enumerate() {
+            let sx1 = (sx + 1).min(sw - 1);
+            let top = lerp(r0[sx], r0[sx1], tx);
+            let bottom = lerp(r1[sx], r1[sx1], tx);
+            out[y * w + x] = lerp(top, bottom, ty);
+        }
+    }
+    out
+}
+
 /// A soft shadow: the coverage of a rounded rectangle `w × h` blurred by
 /// `blur` pixels, in a mask `margin` larger on every side; `margin` is
 /// returned with it.

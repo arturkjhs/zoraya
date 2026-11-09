@@ -586,3 +586,29 @@ fn the_material_glass_halo_glow_and_rim() {
         "two pixels in at scale 2"
     );
 }
+
+/// The corners are the source's; a 2 × 1 ramp becomes a ramp; one pixel
+/// fills everything; nothing out of bounds on odd sizes.
+#[test]
+fn upscale_is_bilinear_corner_to_corner() {
+    let src = [0x00_00_00_00u32, 0xff_c8_64_00];
+    let out = upscale(&src, 2, 1, 5, 3);
+    assert_eq!(out.len(), 15);
+    for y in 0..3 {
+        assert_eq!(out[y * 5], src[0]);
+        assert_eq!(out[y * 5 + 4], src[1]);
+        assert_eq!(out[y * 5 + 2], 0x80_64_32_00, "the middle");
+    }
+    let ramp: std::vec::Vec<u32> = (0..5).map(|x| out[x] & 0xff00).collect();
+    assert!(ramp.windows(2).all(|p| p[0] <= p[1]));
+    assert_eq!(
+        upscale(&[0x0012_3456], 1, 1, 3, 2),
+        std::vec![0x0012_3456; 6]
+    );
+    let big = upscale(&src, 2, 1, 1023, 767);
+    assert_eq!(big.len(), 1023 * 767);
+    assert!(
+        upscale(&src, 3, 1, 4, 4).iter().all(|p| *p == 0),
+        "a short source"
+    );
+}
