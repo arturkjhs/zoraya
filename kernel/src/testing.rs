@@ -57,13 +57,6 @@ struct Test {
 // as a panic, and `--expect-line` checks what the report said.
 const EXPECTED_FAILURES: usize = 9;
 
-/// Quarantined (docs/backlog.md, "ASID fault"): on more than one CPU this
-/// test may fail until the fault is fixed, and the runner is told so
-/// (`--known-failure`) in the smp4 configurations only.
-const KNOWN_FAILURE: &str = "running_out_of_asids_is_an_error";
-/// Set when [`KNOWN_FAILURE`] failed.
-static KNOWN_FAILED: AtomicBool = AtomicBool::new(false);
-
 static TESTS: &[Test] = &[
     Test {
         name: "device_tree_found_and_parsed",
@@ -557,9 +550,6 @@ pub fn on_panic(info: &core::panic::PanicInfo<'_>) {
     let Some(t) = TESTS.get(i) else { return };
     CURRENT.store(NONE, Ordering::Relaxed);
     bump(&FAILED);
-    if t.name == KNOWN_FAILURE {
-        KNOWN_FAILED.store(true, Ordering::Relaxed);
-    }
     crate::print!("ZORAYA-TEST fail {} panic ", t.name);
     let _ = write!(console::OneLine, "{}", crate::panic::Report(info));
     println!();
@@ -2269,9 +2259,8 @@ fn stack_canary_intact() {
 
 fn harness_resumes_after_panic() {
     // Runs after the deliberate failures: the harness recorded exactly those
-    // and came back to run this test, and the quarantined one if it failed.
-    let known = usize::from(KNOWN_FAILED.load(Ordering::Relaxed) && platform().1.cpu_count > 1);
-    assert_eq!(FAILED.load(Ordering::Relaxed), EXPECTED_FAILURES + known);
+    // and came back to run this test.
+    assert_eq!(FAILED.load(Ordering::Relaxed), EXPECTED_FAILURES);
 }
 
 /// Frames `hold_frames` took, as a list through the frames themselves: the
