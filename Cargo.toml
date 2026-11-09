@@ -143,6 +143,18 @@ opt-level = 2
 [profile.dev.package.zoraya-fs-testkit]
 opt-level = 2
 
+# The GUI test runner reads every screendump cell by cell through these
+# (zoraya-term's reader): unoptimised, a GUI script spent most of its time
+# there (2026-11-09).
+[profile.dev.package.zoraya-term]
+opt-level = 2
+
+[profile.dev.package.zoraya-text]
+opt-level = 2
+
+[profile.dev.package.zoraya-test-runner]
+opt-level = 2
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 

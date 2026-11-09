@@ -101,8 +101,16 @@ fn file_safe(label: &str) -> String {
 /// drops events when the guest has not handed buffers back; QMP alone can
 /// inject a key in well under a millisecond, which a guest under TCG does
 /// not keep up with while it composes (traced as `virtio_input_queue_full`,
-/// TASK-24 7a). At this rate the queue holds 128 ms of typing.
+/// TASK-24 7a). At this rate the queue holds 128 ms of typing. At scale 2
+/// each key costs the guest four times the drawing: the interval is four
+/// times longer there (`key_interval`; keys were lost on CI's TCG at
+/// scale 2 at 8 ms, 2026-11-09).
 const KEY_INTERVAL: Duration = Duration::from_millis(8);
+/// The least time between two screendumps while a step waits for the
+/// screen: a dump holds QEMU, and back to back (once reading became fast,
+/// 2026-11-09) they kept a TCG guest from draining the keys just typed, and
+/// keys were lost.
+const SCREEN_POLL: Duration = Duration::from_millis(150);
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -527,7 +535,7 @@ impl Run {
                     rows.join("\n")
                 ));
             }
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(SCREEN_POLL);
         }
     }
 
@@ -541,6 +549,11 @@ impl Run {
     }
 
     /// The display's size and scale, from a screendump.
+    /// The time between two typed keys at the screen's scale.
+    fn key_interval(&self) -> Duration {
+        KEY_INTERVAL * self.scale.factor().pow(2)
+    }
+
     fn display(&mut self) -> Result<((usize, usize), i64), String> {
         let screen = self.qmp.screen()?;
         self.rescale(&screen);
@@ -573,7 +586,7 @@ impl Run {
                 for c in String::from_utf8_lossy(keys).chars() {
                     let (code, shift) = qcode(c).ok_or(format!("no key for {c:?}"))?;
                     self.qmp.press(code, shift)?;
-                    std::thread::sleep(KEY_INTERVAL);
+                    std::thread::sleep(self.key_interval());
                 }
                 Ok(())
             }
@@ -609,7 +622,7 @@ impl Run {
                 if Instant::now() > self.deadline {
                     return Err(format!("pixel {px},{py} is {p:06x}, not {colour:06x}"));
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(SCREEN_POLL);
             },
             Step::Latency(n) => {
                 let mut times = Vec::new();
@@ -667,7 +680,7 @@ impl Run {
                         rows.join("\n")
                     ));
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(SCREEN_POLL);
             },
             Step::Click(x, y) => {
                 let (size, k) = self.display()?;
