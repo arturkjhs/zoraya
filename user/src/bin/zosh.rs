@@ -742,11 +742,26 @@ impl Z {
         let abs = self.abs(path);
         let (dir, name) = split_last(&abs);
         let dir = self.open(dir, OPEN_DIRECTORY).map_err(problem)?;
-        let file = dir.create_unnamed().map_err(problem)?;
-        if !bytes.is_empty() {
-            file.write(0, 0, bytes).map_err(problem)?;
+        let published = dir.create_unnamed().and_then(|file| {
+            if !bytes.is_empty() {
+                file.write(0, 0, bytes)?;
+            }
+            file.publish(&dir, name)
+        });
+        match published {
+            // A tree entry cannot publish (ADR-0153's table): a shell that
+            // holds one (ADR-0242's condition) writes the file in place.
+            Err(zoraya_proto_file::status::ACCESS_DENIED) => {
+                let file = self
+                    .open(&abs, open_flags::CREATE | open_flags::TRUNCATE)
+                    .map_err(problem)?;
+                if !bytes.is_empty() {
+                    file.write(0, 0, bytes).map_err(problem)?;
+                }
+                Ok(())
+            }
+            other => other.map_err(problem),
         }
-        file.publish(&dir, name).map_err(problem)
     }
 
     fn description(&mut self, name: &str) -> Option<Rc<Description>> {
@@ -1046,9 +1061,11 @@ impl Z {
             Some(plan) => {
                 // ADR-0242's condition: an entry this shell was not given
                 // is refused with ADR-0153's hint, before anything runs.
-                let line = core::iter::once(exec.name)
-                    .chain(exec.args.iter().map(|a| a.text.as_str()))
-                    .collect::<Vec<&str>>()
+                // The line as the person wrote it: paths with `~`.
+                let home = self.home();
+                let line = core::iter::once(String::from(exec.name))
+                    .chain(exec.args.iter().map(|a| grants::shown(&a.text, &home)))
+                    .collect::<Vec<String>>()
                     .join(" ");
                 for m in grants::merge(&plan) {
                     let write = m.rights & file_rights::WRITE != 0;
@@ -2618,7 +2635,14 @@ impl Z {
         let current = self.room.as_ref().map(|r| r.name.clone());
         match words.as_slice() {
             [] => {
-                let table = self.read_rooms();
+                let mut table = self.read_rooms();
+                // A room's own shell cannot read the table: it lists the
+                // room it holds (ADR-0242's condition).
+                if let Some(r) = &self.room
+                    && table.get(&r.name).is_none()
+                {
+                    table.rooms.push(r.clone());
+                }
                 let mark = |n: &str| {
                     if current.as_deref() == Some(n) {
                         "* "

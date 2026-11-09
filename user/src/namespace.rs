@@ -285,9 +285,25 @@ pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> O
         } else {
             rights::READ | rights::CLONE
         };
-        let opened = match abs.trim_start_matches('/') {
+        let open = |rel: &str| match rel {
             "" => root.clone_as(wanted),
             rel => root.open(rel, 0, wanted),
+        };
+        let rel = abs.trim_start_matches('/');
+        // A folder the shell may change that is not there yet (`/config`
+        // on a new volume) is made, one level, so that the grant holds.
+        let opened = match open(rel) {
+            Err(status::NOT_FOUND) if *write && !rel.is_empty() => {
+                let (parent, name) = rel.rsplit_once('/').unwrap_or(("", rel));
+                let made = match parent {
+                    "" => root.make_directory(name),
+                    p => root
+                        .open(p, open_flags::DIRECTORY, rights::ALL)
+                        .and_then(|d| d.make_directory(name)),
+                };
+                made.and_then(|()| open(rel))
+            }
+            other => other,
         };
         match opened {
             Ok(file) => {

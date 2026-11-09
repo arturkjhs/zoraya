@@ -43,8 +43,8 @@ screen ~> _
 # read by the panel, shown as a chip. An untrusted one waits for quotas.
 type mkdir project\r
 screen ~> _
-type room new project +w ~/project +r /system\r
-screen project --colour 1 +w ~/project +r /system
+type room new project +w ~/project +r /texts\r
+screen project --colour 1 +w ~/project +r /texts
 screen ~> _
 type room new agent-1 --untrusted +w ~/sandbox\r
 prefix room: agent-1: untrusted rooms wait for quotas
@@ -58,7 +58,7 @@ click 450 152
 # The focused ground tinted by room.1 (ADR-0172 point 5).
 region 194 140 100 4 d3e1e5
 type room\r
-screen * project  +w ~/project  +r /system
+screen * project  +w ~/project  +r /texts
 # ADR-0242's condition: the room's shell holds the room's grants and
 # nothing else; a write outside ~/project is refused with ADR-0153's hint.
 type echo hi > notes.txt\r
@@ -68,7 +68,7 @@ screen zosh: ~/copy.txt: not given to this shell
 screen   hint: cp tried to change ~/copy.txt, which it was not given
 screen   to allow it: +w ~ cp notes.txt ~/copy.txt
 # Its pills are the room's two grants: no +w / where the first stood.
-region 524 150 30 3 d3e1e5
+region 540 148 25 3 d3e1e5
 shot rooms
 # Show-commands: every icon and chip with its line.
 chord meta slash
