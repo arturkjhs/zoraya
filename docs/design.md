@@ -682,6 +682,17 @@ Stage 7f (TASK-24), by [ADR-0169](adr/0169-settings.md), [ADR-0170](adr/0170-cli
   frames follow; Czech is enabled and put in use and the terminal types by it at once; `edit` takes Czech text on
   that layout and saves `poznámky.txt` through the chooser; the file manager lists it.
 
+
+Measured (`settings`' own report, `make test-gui GUI_RUNS="settings:auto:1 settings:tcg:1"` at f758a1d, 2026-11-09,
+QEMU 11.1.2 on the M4 Mac mini): a change in the settings window, from reading the file to the new file published,
+then from `SettingsChanged` to the panel's answer (the compositor has applied it):
+
+| | HVF: written | HVF: applied | TCG: written | TCG: applied |
+|---|---|---|---|---|
+| The theme turned dark (every window restyled, the wallpaper's blur made again) | 0.27 ms | 20 ms | 35 ms | 34 ms |
+| Czech enabled | 0.15 ms | 0.30 ms | 19 ms | 4.7 ms |
+| Czech put in use | 0.18 ms | 0.35 ms | 3.8 ms | 4.3 ms |
+
 Not built in 7f: the terminal keeps the light set (its screen is read in the GUI tests by the light set's glyphs);
 the wallpaper setting accepts only `''` (no image decoder); copy and paste in the toolkit's text fields (only `edit`
 answers them); the clipboard's entries (only text); a `settings` command reaching the running compositor (the next

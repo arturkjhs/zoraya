@@ -581,6 +581,109 @@ target's pill; applications learned the path of what they were given), and most 
 ADR-0245's open questions. The check of the changed lines confirmed the fixes and found a new warning (the name
 field's cursor jumped to the end when the sheet was rebuilt), fixed with a test, and two small gaps, fixed.
 
+## 7f: editor, settings, configuration, clipboard
+
+Branch `work/7f`, from `work/7e`.
+
+### What was built
+
+- **List settings** (ADR-0171): the type `list of TYPE [MIN MAX] [unique]` in `zoraya-describe`, the reader and
+  writer in `zoraya-settings`, and `settings NAME ITEM...`, `+ITEM [--at N]` and `-ITEM` in `zosh`.
+- **The desktop's settings** (ADR-0169): `gui.theme`, `gui.motion`, `gui.scale`, `gui.wallpaper`,
+  `gui.keyboard-layouts` and `gui.keyboard-layout`, declared in `user/describe/system/compd.cmd`, which `compd`
+  embeds; the compositor reads `/config/settings` once at start and applies a change only through `ApplySettings` on
+  its manager channel, checking every value again; the panel turns the settings window's `SettingsChanged` into
+  `ApplySettings`.
+- **The settings window** (`settings`, its logic in `zoraya-settings-window`): appearance and keyboard on one page;
+  each change written at once by publishing a new file over the old one through `/config` narrowed to `settings`.
+- **The editor** (`edit`, its buffer and view in `zoraya-editor`): one file opened from the file manager (read only)
+  or through the chooser, saved through `Save`; cursor and selection by characters, undo and redo, find, and a
+  question before closing over unsaved changes.
+- **The clipboard** (ADR-0170): System+C, System+X and System+V; `Copy`, `Offer` and `Paste`; `edit` copies, cuts
+  and pastes. `zoraya-app` repaints its windows in the theme a `Configure` brings.
+
+### The 7f acceptance test
+
+`plan.md`: the settings window changes the theme and the frames follow; TASK-24 adds the clipboard and the
+editor. Done: `tests/gui/settings.script` (61 steps, HVF and TCG, in `make test-gui`) turns the theme dark in the
+settings window and reads the frames back dark, enables Czech and puts it in use and types by it in the terminal at
+once, takes Czech text in `edit` on that layout, saves `poznámky.txt` through the chooser's sheet, and finds it in the
+file manager's list. `tests/gui/files.script` opens `.txt` and `.md` files in `edit` and `.test` ones in `t_open`.
+
+### Decisions taken without the architect
+
+- No new ADR. Within ADR-0169: the scale applies at the next session (its open question), and a `settings` command
+  in a terminal reaches the running compositor at the next session too.
+- Within ADR-0170: an `Offer` is kept only from the client just sent `Copy`, within 500 ms, once; a paste into an
+  untrusted room's window is held back as drops are, until the confirming card exists.
+- For the architect: INV-0168-2 gives `files` the volume's root, which includes `/config`, while INV-0169-4 says no
+  launch but the settings window gets `/config` to write. The panel's test checks the `Config` slot only (review 7f,
+  item 7).
+
+### Screens
+
+Under `docs/research/desktop/shots/7f/` (HVF, scale 1):
+
+- `settings-qemu.png` against `clear-field/settings.png`, and `dark-qemu.png` against `settings-dark.png`. As in the
+  mockup: the title with its two pills, the page's sections, the theme's two choices, motion as a switch. Not as in
+  the mockup: no sidebar of sections and no card around the controls (one page, the toolkit has no card yet), square
+  check marks for the choices where the mockup has round radios, the scale as three choices on their own lines, and
+  no line of the equivalent `settings` command under the controls. The terminal stays light in the dark theme (its
+  screen is read by the light set's glyphs in the GUI tests).
+- `czech-qemu.png`: Czech in use, the bar's `CZ`, Czech typed in the terminal.
+- `edit-qemu.png`: the editor with Czech text; `save-sheet-qemu.png`: its Save sheet; `files-lists-qemu.png`: the
+  file manager listing the saved file.
+
+### Measurements
+
+A change in the settings window, in `docs/design.md`: written in 0.15 to 0.27 ms and applied in 0.3 ms under HVF
+(20 ms for the theme, which restyles every window and makes the wallpaper's blur again); under TCG 3.8 to 35 ms and
+4.3 to 34 ms.
+
+### Invariants
+
+| Invariant | Before | After |
+|---|---|---|
+| INV-0169-1, -3 | not yet applicable (stage 7) | checked: `make test-unit` |
+| INV-0169-2, -4 | not yet applicable (stage 7) | checked: `make test-unit` and `make test-gui` |
+| INV-0170-1, -2, -5; the clipboard's halves of -3 and -4 | not yet applicable (stage 7); 7e: drops | checked: `make test-unit` |
+| INV-0171-1 to -3 | not yet applicable (stage 7) | checked: `make test-unit` |
+
+### Review
+
+`docs/tasks/TASK-24-review-7f.md`: 2 errors, 5 warnings, 9 notes. Both errors (a clipboard of more than 4 KiB ended
+the copying application; a paste of more than about 490 bytes was lost) fixed by reading and writing the protocol's
+largest message; every warning fixed. The check of the changed lines confirmed the fixes and found a new error (a
+paste over 8 KiB ended a focused terminal), fixed, and two gaps, fixed. The notes left are recorded in the review.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `work/7e`, one crate after another (14 minutes); the survivors sorted
+by the `mutant-triage` subagent; tests added for every hole; every equivalent rechecked by the main model; each hole
+applied again by hand from lists in `tools/mutants/` (`editor.toml`, `shell-settings.toml`,
+`compositor-settings.toml`, `settings-7f.toml`: 90 mutants, 90 caught).
+
+| Crate | Mutants | Missed first | Equivalent | Holes, now caught |
+|---|---|---|---|---|
+| `zoraya-editor` | 316 | 128 | 7 | 121 |
+| `zoraya-shell` | 22 | 17 | 1 | 16 |
+| `zoraya-compositor` | 59 | 10 | - | 10 |
+| `zoraya-panel` | 12 | 8 | 5 | 3 |
+| `zoraya-describe` | 43 | 7 | - | 7 |
+| `zoraya-settings-window` | 33 | 6 | - | 6 |
+| `zoraya-app` | 32 | 6 | - | 6 |
+| `zoraya-settings` | 16 | 0 | - | - |
+
+- The equivalents: the editor's view `id` (3: its only reader finds no value in the view either way), `<=` for `<`
+  where equality assigns the same value (`follow`) or draws an empty rectangle (a selection's cell), Down on the last
+  line (2 forms that reach the same end of text); the shell's `>=` for `>` with one word; the panel's `^` for `|`
+  over six distinct bits (5).
+- The `zoraya-shell` hunk (`settings`' `--at` and `--`) was reached by no host test: the test host now describes
+  `settings`. The editor's view painted no text in its one paint test (the cursor bar alone passed it); the new tests
+  paint at an offset and check rows, cells, the selection and the bar.
+- The settings description said `auto` gives scale 2 from 2048 pixels wide; the compositor's threshold is 1920. The
+  description now says 1920.
+
 ## To finish by hand
 
 `git push` was refused in this session, so these steps are the architect's (or a session allowed to push), in order,
