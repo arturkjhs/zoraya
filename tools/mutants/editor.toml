@@ -1,0 +1,407 @@
+# zoraya-editor: the buffer's edits, undo, find, and the text view's
+# geometry and keys. Survivors of 7f's cargo-mutants run (TASK-24), each
+# killed by a test added for it. Host tests only: seconds per mutant.
+tests = ["cargo test -q -p zoraya-editor"]
+timeout = 300
+
+[[mutant]]
+id = "E-empty"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'self.text.is_empty()'
+replace = 'true'
+note = "7f lib.rs:81:9: is_empty_tells_text_from_no_text"
+
+[[mutant]]
+id = "E-left-guard"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'Move::Left if !extend && a != b => a,'
+replace = 'Move::Left if true => a,'
+note = "7f lib.rs:143:27: a_left_without_a_selection_steps_back_one_character"
+
+[[mutant]]
+id = "E-left-or"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'Move::Left if !extend && a != b => a,'
+replace = 'Move::Left if !extend || a != b => a,'
+note = "7f lib.rs:143:35: a_left_without_a_selection_steps_back_one_character"
+
+[[mutant]]
+id = "E-remove-clamp"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'remove.min(self.text.len() - at)'
+replace = 'remove.min(self.text.len() + at)'
+note = "7f lib.rs:189:49: delete_at_the_end_does_nothing"
+
+[[mutant]]
+id = "E-max-plus"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'if self.text.len() - remove + insert.len() > MAX_CHARS {'
+replace = 'if self.text.len() + remove + insert.len() > MAX_CHARS {'
+note = "7f lib.rs:193:28: the_buffer_holds_max_chars_and_no_more"
+
+[[mutant]]
+id = "E-max-times"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'if self.text.len() - remove + insert.len() > MAX_CHARS {'
+replace = 'if (self.text.len() - remove) * insert.len() > MAX_CHARS {'
+note = "7f lib.rs:193:37: the_buffer_holds_max_chars_and_no_more"
+
+[[mutant]]
+id = "E-max-eq"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'if self.text.len() - remove + insert.len() > MAX_CHARS {'
+replace = 'if self.text.len() - remove + insert.len() == MAX_CHARS {'
+note = "7f lib.rs:193:52: the_buffer_holds_max_chars_and_no_more"
+
+[[mutant]]
+id = "E-max-ge"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'if self.text.len() - remove + insert.len() > MAX_CHARS {'
+replace = 'if self.text.len() - remove + insert.len() >= MAX_CHARS {'
+note = "7f lib.rs:193:52: the_buffer_holds_max_chars_and_no_more"
+
+[[mutant]]
+id = "E-insert-span"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'self.apply(a, b - a, &chars)'
+replace = 'self.apply(a, b + a, &chars)'
+note = "7f lib.rs:228:25: typing_and_backspace_mid_text_touch_only_their_span"
+
+[[mutant]]
+id = "E-backspace-span"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'return self.apply(a, b - a, &[]);'
+occurrence = 1
+replace = 'return self.apply(a, b + a, &[]);'
+note = "7f lib.rs:235:36: typing_and_backspace_mid_text_touch_only_their_span"
+
+[[mutant]]
+id = "E-redo-range"
+file = "crates/zoraya-editor/src/lib.rs"
+find = '.splice(e.at..e.at + e.removed.len(), e.inserted.iter().copied());'
+replace = '.splice(e.at..e.at - e.removed.len(), e.inserted.iter().copied());'
+note = "7f lib.rs:279:32: redo_removes_again_what_undo_put_back"
+
+[[mutant]]
+id = "E-redo-cursor-minus"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'self.cursor = e.at + e.inserted.len();'
+replace = 'self.cursor = e.at - e.inserted.len();'
+note = "7f lib.rs:280:28: redo_puts_the_cursor_after_what_it_typed"
+
+[[mutant]]
+id = "E-redo-cursor-times"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'self.cursor = e.at + e.inserted.len();'
+replace = 'self.cursor = e.at * e.inserted.len();'
+note = "7f lib.rs:280:28: redo_puts_the_cursor_after_what_it_typed"
+
+[[mutant]]
+id = "E-find-long"
+file = "crates/zoraya-editor/src/lib.rs"
+find = 'n.len() > self.text.len()'
+replace = 'n.len() >= self.text.len()'
+note = "7f lib.rs:291:36: find_accepts_a_needle_as_long_as_the_text"
+
+[[mutant]]
+id = "E-find-wrap-minus"
+file = "crates/zoraya-editor/src/lib.rs"
+find = '.chain(0..from.min(last + 1))'
+replace = '.chain(0..from.min(last - 1))'
+note = "7f lib.rs:297:37: find_wraps_to_a_match_at_the_last_position"
+
+[[mutant]]
+id = "E-find-wrap-times"
+file = "crates/zoraya-editor/src/lib.rs"
+find = '.chain(0..from.min(last + 1))'
+replace = '.chain(0..from.min(last * 1))'
+note = "7f lib.rs:297:37: find_wraps_to_a_match_at_the_last_position"
+
+[[mutant]]
+id = "V-metrics-lh"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let lh = (px as i32 * 3) / 2;'
+replace = 'let lh = (px as i32 + 3) / 2;'
+note = "7f view.rs:50:29: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-metrics-lh-mod"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let lh = (px as i32 * 3) / 2;'
+replace = 'let lh = (px as i32 * 3) % 2;'
+note = "7f view.rs:50:34: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-rows-one"
+file = "crates/zoraya-editor/src/view.rs"
+find = '(h / lh.max(1)).max(1) as usize'
+replace = '1'
+note = "7f view.rs:57:9: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-rows-pad"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let h = self.rect.physical(p.scale).h - 2 * pad;'
+replace = 'let h = self.rect.physical(p.scale).h + 2 * pad;'
+note = "7f view.rs:59:47: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-rows-div"
+file = "crates/zoraya-editor/src/view.rs"
+find = '(h / lh.max(1)).max(1) as usize'
+replace = '(h * lh.max(1)).max(1) as usize'
+note = "7f view.rs:60:12: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-follow"
+file = "crates/zoraya-editor/src/view.rs"
+find = '''
+        if line < self.top {
+            self.top = line;
+        } else if line >= self.top + rows {
+            self.top = line + 1 - rows;
+        }'''
+replace = ''
+note = "7f view.rs:65:9: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-follow-up-eq"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'if line < self.top {'
+replace = 'if line == self.top {'
+note = "7f view.rs:67:17: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-follow-up-gt"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'if line < self.top {'
+replace = 'if line > self.top {'
+note = "7f view.rs:67:17: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-follow-down"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'self.top = line + 1 - rows;'
+replace = 'self.top = line - 1 - rows;'
+note = "7f view.rs:70:29: a_scrolled_view_keeps_the_cursor_row_last"
+
+[[mutant]]
+id = "V-measure"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'space::CONTROL_HEIGHT.times(12),'
+replace = 'Logical::ZERO,'
+note = "7f view.rs:77:9: the_view_asks_for_twelve_by_eight_controls"
+
+[[mutant]]
+id = "V-rows-shown-or"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'if i >= self.top && i < self.top + rows {'
+replace = 'if i >= self.top || i < self.top + rows {'
+note = "7f view.rs:116:30: a_line_past_the_last_row_is_not_painted"
+
+[[mutant]]
+id = "V-rows-shown-le"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'if i >= self.top && i < self.top + rows {'
+replace = 'if i >= self.top && i <= self.top + rows {'
+note = "7f view.rs:116:35: a_line_past_the_last_row_is_not_painted"
+
+[[mutant]]
+id = "V-row-y"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let y = pr.y + pad + (i - self.top) as i32 * lh;'
+replace = 'let y = pr.y - pad + (i - self.top) as i32 * lh;'
+note = "7f view.rs:117:30: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-row-y-lh"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let y = pr.y + pad + (i - self.top) as i32 * lh;'
+replace = 'let y = pr.y + pad + (i - self.top) as i32 + lh;'
+note = "7f view.rs:117:60: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-x0"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let x0 = pr.x + pad;'
+replace = 'let x0 = pr.x - pad;'
+note = "7f view.rs:118:31: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-x0-times"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let x0 = pr.x + pad;'
+replace = 'let x0 = pr.x * pad;'
+note = "7f view.rs:118:31: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-sel-end"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'sb.min(start + n + 1)'
+replace = 'sb.min(start + n - 1)'
+note = "7f view.rs:120:63: a_selection_covers_its_cells_and_the_line_end"
+
+[[mutant]]
+id = "V-sel-shown"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'if a < z {'
+replace = 'if a == z {'
+note = "7f view.rs:121:22: a_selection_covers_its_cells_and_the_line_end"
+
+[[mutant]]
+id = "V-sel-x"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'x0 + (a - start) as i32 * cw,'
+replace = 'x0 + (a + start) as i32 * cw,'
+note = "7f view.rs:123:33: a_selection_covers_its_cells_and_the_line_end"
+
+[[mutant]]
+id = "V-sel-w"
+file = "crates/zoraya-editor/src/view.rs"
+find = '(z - a) as i32 * cw,'
+replace = '(z - a) as i32 + cw,'
+note = "7f view.rs:125:40: a_selection_covers_its_cells_and_the_line_end"
+
+[[mutant]]
+id = "V-baseline"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let baseline = y + lh / 2 + px as i32 * 7 / 20;'
+replace = 'let baseline = y - lh / 2 + px as i32 * 7 / 20;'
+note = "7f view.rs:135:34: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-baseline-px"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let baseline = y + lh / 2 + px as i32 * 7 / 20;'
+replace = 'let baseline = y + lh / 2 + px as i32 + 7 / 20;'
+note = "7f view.rs:135:55: each_line_is_painted_in_its_row_from_the_padding"
+
+[[mutant]]
+id = "V-bar-on-line"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'if focused && cur >= start && cur <= start + n {'
+replace = 'if focused && cur >= start && cur > start + n {'
+note = "7f view.rs:141:51: the_cursor_bar_sits_in_its_cell_on_its_line"
+
+[[mutant]]
+id = "V-bar-tab"
+file = "crates/zoraya-editor/src/view.rs"
+find = ".map(|ch| if ch == '\\t' { 4 } else { 1 })"
+replace = ".map(|ch| if ch != '\\t' { 4 } else { 1 })"
+note = "7f view.rs:145:41: the_cursor_bar_sits_in_its_cell_on_its_line"
+
+[[mutant]]
+id = "V-bar-x"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'x0 + col as i32 * cw,'
+replace = 'x0 - col as i32 * cw,'
+note = "7f view.rs:148:28: the_cursor_bar_sits_in_its_cell_on_its_line"
+
+[[mutant]]
+id = "V-bar-y"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'y + lh / 8,'
+replace = 'y - lh / 8,'
+note = "7f view.rs:149:27: the_cursor_bar_sits_in_its_cell_on_its_line"
+
+[[mutant]]
+id = "V-bar-h"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'lh - lh / 4,'
+replace = 'lh + lh / 4,'
+note = "7f view.rs:151:28: the_cursor_bar_sits_in_its_cell_on_its_line"
+
+[[mutant]]
+id = "V-line-start"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'start += n + 1;'
+replace = 'start += n - 1;'
+note = "7f view.rs:156:24: the_cursor_bar_sits_in_its_cell_on_its_line"
+
+[[mutant]]
+id = "V-redo-chord"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'KEY_Z if ctrl && shift => b.redo(),'
+replace = 'KEY_Z if false => b.redo(),'
+note = "7f view.rs:175:30: ctrl_shift_z_redoes_and_a_plain_z_or_y_is_typed"
+
+[[mutant]]
+id = "V-undo-plain"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'KEY_Z if ctrl => b.undo(),'
+replace = 'KEY_Z if true => b.undo(),'
+note = "7f view.rs:176:30: ctrl_shift_z_redoes_and_a_plain_z_or_y_is_typed"
+
+[[mutant]]
+id = "V-redo-plain"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'KEY_Y if ctrl => b.redo(),'
+replace = 'KEY_Y if true => b.redo(),'
+note = "7f view.rs:177:30: ctrl_shift_z_redoes_and_a_plain_z_or_y_is_typed"
+
+[[mutant]]
+id = "V-key-left"
+file = "crates/zoraya-editor/src/view.rs"
+find = '''
+                    keys::LEFT => {
+                        b.move_cursor(Move::Left, shift);
+                        false
+                    }'''
+replace = ''
+note = "7f view.rs:178: the_arrow_home_delete_and_tab_keys_act"
+
+[[mutant]]
+id = "V-key-delete"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'keys::DELETE => b.delete(),'
+replace = ''
+note = "7f view.rs:203: the_arrow_home_delete_and_tab_keys_act"
+
+[[mutant]]
+id = "V-key-tab"
+file = "crates/zoraya-editor/src/view.rs"
+find = '''keys::TAB => b.insert("\t"),'''
+replace = ''
+note = "7f view.rs:205: the_arrow_home_delete_and_tab_keys_act"
+
+[[mutant]]
+id = "V-typed-or"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'Some(ch) if !ctrl && !ch.is_control() => {'
+replace = 'Some(ch) if !ctrl || !ch.is_control() => {'
+note = "7f view.rs:207:43: control_characters_and_ctrl_letters_are_not_typed"
+
+[[mutant]]
+id = "V-press-buttons"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'buttons & 1 != 0 && self.rect.contains(x, y)'
+replace = 'buttons | 1 != 0 && self.rect.contains(x, y)'
+note = "7f view.rs:220:57: a_press_needs_the_left_button_inside_the_view"
+
+[[mutant]]
+id = "V-press-inside"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'buttons & 1 != 0 && self.rect.contains(x, y)'
+replace = 'buttons & 1 != 0 || self.rect.contains(x, y)'
+note = "7f view.rs:220:66: a_press_needs_the_left_button_inside_the_view"
+
+[[mutant]]
+id = "V-press-line"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let line = self.top + ((py - pr.y - pad).max(0) / lh.max(1)) as usize;'
+replace = 'let line = self.top + ((py + pr.y - pad).max(0) / lh.max(1)) as usize;'
+note = "7f view.rs:226:44: a_press_maps_to_the_line_and_column_under_it"
+
+[[mutant]]
+id = "V-press-col"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let col = ((px - pr.x - pad).max(0) + cw / 2) / cw.max(1);'
+replace = 'let col = ((px - pr.x - pad).max(0) - cw / 2) / cw.max(1);'
+note = "7f view.rs:227:53: a_press_maps_to_the_line_and_column_under_it"
+
+[[mutant]]
+id = "V-press-col-x"
+file = "crates/zoraya-editor/src/view.rs"
+find = 'let col = ((px - pr.x - pad).max(0) + cw / 2) / cw.max(1);'
+replace = 'let col = ((px + pr.x - pad).max(0) + cw / 2) / cw.max(1);'
+note = "7f view.rs:227:32: a_press_maps_to_the_line_and_column_under_it"
