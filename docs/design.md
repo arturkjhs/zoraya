@@ -1162,7 +1162,8 @@ component is `.` or `..`, with or without `--recursive`; `project/` is `project`
   HVF. It looks like QEMU's HVF register emulation, which a guest cannot change, so a process can read a cycle counter
   there.
 - **Tests.** The suite needs more memory than the 32 MiB of stage 1: `running_out_of_asids_is_an_error` needs room for
-  255 live processes.
+  255 live processes, which it holds suspended (59 frames each with `hello`), and runs one at a time: a running `hello`
+  takes a 1 MiB heap step, which 255 at once would not find in 128 MiB.
 - **PAN** is not used. A stray kernel access to user memory would not fault.
 - **Interrupts.** One priority, no nesting. FIQ and SError reports are untested, since nothing raises them.
   Interrupt handlers must not panic in a test that expects recovery: the interrupt would stay active.

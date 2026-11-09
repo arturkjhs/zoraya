@@ -1,6 +1,6 @@
 # ADR-0240: Fonts embedded in the programs `init` starts, until the launcher exists
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-08
 - **Depends on:** ADR-0053, ADR-0162, ADR-0168
 - **Evidence:** DM-081, desktop/survey.md#the-ofl-next-to-bsd-code, desktop/survey.md#candidate-fonts-and-their-licences
@@ -78,3 +78,5 @@ handle and adds the files to the system image.
 - The ramdisk's size matters (a limit of the image or of QEMU's loading).
 
 ## Architect's decision
+
+Accepted 2026-11-09. Decided by the architect; recorded by an agent at the architect's request.
