@@ -73,6 +73,9 @@ serial files: ~ lists poznámky.txt
 shot files-lists
 # The first terminal turns the machine off.
 click 400 80
+# Half a second after the focusing click: keys typed at once can be lost
+# (docs/backlog.md).
+pause 500
 origin 73 106
 type poweroff\r
 exit
