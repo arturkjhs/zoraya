@@ -103,6 +103,11 @@ fn file_safe(label: &str) -> String {
 /// not keep up with while it composes (traced as `virtio_input_queue_full`,
 /// TASK-24 7a). At this rate the queue holds 128 ms of typing.
 const KEY_INTERVAL: Duration = Duration::from_millis(8);
+/// The least time between two screendumps while a step waits for the
+/// screen: a dump holds QEMU, and back to back (once reading became fast,
+/// 2026-11-09) they kept a TCG guest from draining the keys just typed, and
+/// keys were lost.
+const SCREEN_POLL: Duration = Duration::from_millis(150);
 /// The longest wait for one QMP reply: QEMU answers in milliseconds, so a
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -527,7 +532,7 @@ impl Run {
                     rows.join("\n")
                 ));
             }
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(SCREEN_POLL);
         }
     }
 
@@ -609,7 +614,7 @@ impl Run {
                 if Instant::now() > self.deadline {
                     return Err(format!("pixel {px},{py} is {p:06x}, not {colour:06x}"));
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(SCREEN_POLL);
             },
             Step::Latency(n) => {
                 let mut times = Vec::new();
@@ -667,7 +672,7 @@ impl Run {
                         rows.join("\n")
                     ));
                 }
-                std::thread::sleep(Duration::from_millis(5));
+                std::thread::sleep(SCREEN_POLL);
             },
             Step::Click(x, y) => {
                 let (size, k) = self.display()?;
