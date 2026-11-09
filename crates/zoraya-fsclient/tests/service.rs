@@ -367,3 +367,149 @@ fn narrowed_and_cloned_connections_keep_only_their_rights() {
     assert_eq!(c.remove(dir, "notes.txt"), Err(status::ACCESS_DENIED));
     assert_eq!(c.narrow(root, "a/b", create), Err(status::INVALID_NAME));
 }
+
+/// A service that answers each request with what `answer` makes of it:
+/// replies the real service never sends, and records what was closed.
+struct Canned<F: FnMut(u32, &[u8]) -> (Vec<u8>, Vec<End>)> {
+    answer: F,
+    closed: Vec<End>,
+}
+
+impl<F: FnMut(u32, &[u8]) -> (Vec<u8>, Vec<End>)> Link for Canned<F> {
+    type Handle = End;
+
+    fn call(
+        &mut self,
+        _on: End,
+        request: &[u8],
+        _handles: &[End],
+        reply: &mut [u8],
+        got: &mut Vec<End>,
+    ) -> Option<usize> {
+        let (h, _) = zoraya_protocol::Header::decode(request).ok()?;
+        let (bytes, list) = (self.answer)(h.ordinal, request);
+        reply[..bytes.len()].copy_from_slice(&bytes);
+        got.extend(list);
+        Some(bytes.len())
+    }
+
+    fn channel(&mut self) -> Option<(End, End)> {
+        Some((90, 91))
+    }
+
+    fn close(&mut self, h: End) {
+        self.closed.push(h);
+    }
+}
+
+fn canned<F: FnMut(u32, &[u8]) -> (Vec<u8>, Vec<End>)>(answer: F) -> Client<Canned<F>> {
+    Client::new(Canned {
+        answer,
+        closed: Vec::new(),
+    })
+}
+
+fn wire<'a, M: zoraya_protocol::Message<'a>>(m: &M) -> Vec<u8> {
+    let mut out = vec![0; 64 * 1024];
+    let n = zoraya_protocol::encode(m, 1, &mut out).unwrap();
+    out.truncate(n);
+    out
+}
+
+fn done(status: u32, count: u64) -> Vec<u8> {
+    wire(&zoraya_proto_file::Done {
+        status: zoraya_protocol::Below(status),
+        count,
+    })
+}
+
+/// A token is taken only from an OK reply with its one handle; an error
+/// reply's handle is closed and its status returned.
+#[test]
+fn a_token_is_taken_only_from_an_ok_reply_with_one_handle() {
+    let mut c = canned(|ordinal, _| match ordinal {
+        18 => (
+            wire(&zoraya_proto_file::TokenReply {
+                status: zoraya_protocol::Below(status::NOT_FOUND),
+            }),
+            vec![77],
+        ),
+        _ => (done(status::OK, 0), vec![]),
+    });
+    assert_eq!(c.rename(5, "a", "b"), Err(status::NOT_FOUND));
+    assert_eq!(c.link.closed, [77]);
+    // OK, without its handle: refused.
+    let mut c = canned(|ordinal, _| match ordinal {
+        18 => (
+            wire(&zoraya_proto_file::TokenReply {
+                status: zoraya_protocol::Below(status::OK),
+            }),
+            vec![],
+        ),
+        _ => (done(status::OK, 0), vec![]),
+    });
+    assert_eq!(c.rename(5, "a", "b"), Err(status::INVALID_ARGUMENT));
+}
+
+/// Attributes give the service's error status.
+#[test]
+fn attributes_return_the_services_error_status() {
+    let mut c = canned(|_, _| {
+        let a = zoraya_proto_file::Attributes {
+            status: zoraya_protocol::Below(status::NOT_FOUND),
+            size: 1,
+            modified: 0,
+            changed: 0,
+            mode: 0,
+            kind: zoraya_protocol::Below(kind::FILE),
+        };
+        (wire(&a), vec![])
+    });
+    assert_eq!(c.attributes(5), Err(status::NOT_FOUND));
+}
+
+/// A file of exactly sixteen mebibytes reads back; one byte more is
+/// refused.
+#[test]
+fn read_all_takes_exactly_sixteen_mebibytes_and_refuses_more() {
+    let chunk = vec![7u8; zoraya_proto_file::MAX_INLINE];
+    for (size, want) in [
+        (zoraya_fsclient::MAX_READ, Ok(())),
+        (zoraya_fsclient::MAX_READ + 1, Err(status::LIMIT_REACHED)),
+    ] {
+        let mut c = canned(|_, request| {
+            let (_, r) = zoraya_protocol::decode::<zoraya_proto_file::Read>(request, 0).unwrap();
+            let left = size.saturating_sub(r.offset).min(u64::from(r.length)) as usize;
+            let m = zoraya_proto_file::ReadReply {
+                status: zoraya_protocol::Below(status::OK),
+                data: zoraya_protocol::Data(&chunk[..left]),
+            };
+            (wire(&m), vec![])
+        });
+        let got = c.read_all(5).map(|v| assert_eq!(v.len() as u64, size));
+        assert_eq!(got, want, "{size}");
+    }
+}
+
+/// A write the service takes none of is out of space.
+#[test]
+fn write_all_reports_no_space_when_nothing_is_written() {
+    let mut c = canned(|_, _| (done(status::OK, 0), vec![]));
+    assert_eq!(c.write_all(5, b"hello"), Err(status::NO_SPACE));
+}
+
+/// A handle in a reply that asked for none is closed.
+#[test]
+fn a_handle_no_request_asked_for_is_closed() {
+    let mut c = canned(|_, _| (done(status::OK, 0), vec![66]));
+    assert_eq!(c.remove(5, "a"), Ok(()));
+    assert_eq!(c.link.closed, [66]);
+}
+
+/// Closing a connection closes it on the link.
+#[test]
+fn close_tells_the_link() {
+    let mut c = canned(|_, _| (done(status::OK, 0), vec![]));
+    c.close(5);
+    assert_eq!(c.link.closed, [5]);
+}
