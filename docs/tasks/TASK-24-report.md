@@ -659,6 +659,17 @@ holes applied by hand one by one, six of them kept in `tools/mutants/desktop-7e.
 - **Not verified**: the compositor's `2046:16` (`+=` to `*=`) loops forever under the mutant; it was not run by hand,
   since a test that never returns outlives the runner's alarm.
 
+### Merge
+
+After `main` was merged in (7d's later work: the broker beside a shell, the show-commands tags per window), the
+branch's full CI passed on the first run (42711274447), the scenarios script with its first sleep of 5 s. Merged at
+`32f8a44`, green on `main` (run 42714400871); `stage-7e`.
+
+### Time
+
+From the commits' times: 01:38 to 21:16 on 2026-11-09, interleaved with 7d's decisions, the fixes on `main` and
+7f; the mutation runs 47 and 4 minutes, the triage 12 minutes, the tests for its holes about 28 minutes.
+
 ## 7f: editor, settings, configuration, clipboard
 
 Branch `work/7f`, from `work/7e`.
