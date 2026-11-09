@@ -78,6 +78,14 @@ POSIX programs reach files through the namespace table (ADR-0107); a POSIX progr
 - **INV-0167-4.** No client can obtain the system window tint, a sheet, the system emblem, the trusted material or a pixel in the bar's trusted-mark region: the compositor applies and paints them only for connections its manager marked. *Check:* host test sending every client ordinal and asserting the tint, the sheet count and the bar's pixels never change; the GUI test reads the chooser's frame colour, or the sheet's strip and the bar's middle when the direction uses the sheet.
 
 ## Open questions
+- *(Check note, stage 7e, ADR-0001 rule 6.)* INV-0167-1: `zoraya-chooser`'s `chosen_names_are_never_paths` (what
+  `Chosen` carries is a kind and a display name, for every kind of pick) and `zoraya-compositor`'s drop tests (a
+  `Drop` carries a display name, a dragged name with `/` is refused). INV-0167-2: `tests_session.rs` (no input, no
+  connection; Escape and the owner's close cancel). INV-0167-3: `tests_session.rs` compares each connection's rights
+  with `Access::rights()`, and `tests/gui/files.script` writes through an `Open` connection and is refused, through a
+  `Save` connection and is not, and beside it and is refused. INV-0167-4: `zoraya-compositor`'s `tests_sheets.rs`
+  (only a marked client makes a sheet or a grant; the strip and the bar's mark). The sheet's chooser draws its own body
+  (proposed ADR-0245).
 - How `init`'s session table and the panel share the launching of applications (ADR-0168 decides).
 - Whether the data directory per application should be created lazily.
 - Whether the panel's tooltip is enough of a `grants` for the GUI, or a "What this program has" window is needed.

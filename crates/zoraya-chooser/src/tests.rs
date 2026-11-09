@@ -197,3 +197,40 @@ fn sizes_read_as_the_mockups_write_them() {
         assert_eq!(size_text(bytes), text, "{bytes}");
     }
 }
+
+/// INV-0167-1: what `Chosen` tells the application is a display name and
+/// its kind, never a path: whatever the pick, deep in the volume or at its
+/// top, the words are the flag and one name.
+#[test]
+fn chosen_names_are_never_paths() {
+    let asks = [
+        Ask::Open { filters: vec![] },
+        Ask::Save {
+            suggested: "new.txt".into(),
+            filters: vec![],
+        },
+        Ask::Pick { write: false },
+        Ask::Pick { write: true },
+    ];
+    for ask in asks {
+        let mut b = Browser::new(ask.clone(), "edit", "/home");
+        b.show(project());
+        for row in 0..4 {
+            b.select(row);
+            if let Some(g) = b.pending() {
+                let (flag, name) = g.words.split_once(' ').unwrap();
+                assert!(["+r", "+w", "+c"].contains(&flag), "{}", g.words);
+                assert!(
+                    !name.contains('/') || name == "/",
+                    "{} for {ask:?}",
+                    g.words
+                );
+                assert_eq!(name, g.shown);
+            }
+        }
+    }
+    // The top of the volume is shown as `/`, which no one resolves.
+    let mut top = Browser::new(Ask::Pick { write: false }, "edit", "/");
+    top.show(vec![]);
+    assert_eq!(top.pending().map(|g| g.words), Some(String::from("+r /")));
+}

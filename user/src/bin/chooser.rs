@@ -32,8 +32,8 @@ use zoraya_proto_chooser::{self as pc, status as answer};
 use zoraya_proto_gui as gui;
 use zoraya_protocol::{Below, Data, Header, Message, decode, encode};
 use zoraya_rt::{
-    channel_read, channel_write, handle_close, handle_type, port_create, port_subscribe,
-    port_unsubscribe, port_wait, println,
+    channel_read, channel_write, clock_monotonic, handle_close, handle_type, port_create,
+    port_subscribe, port_unsubscribe, port_wait, println,
 };
 use zoraya_tokens::Appearance;
 use zoraya_user::app::{Files, Gui};
@@ -246,8 +246,16 @@ impl Chooser {
             };
             let browser = Browser::new(ask, &r.name, &self.home);
             let (end, tag) = (r.end, r.tag);
+            let start = clock_monotonic();
             match Sheet::open(&mut self.app, &mut self.fs, self.root, browser, tag) {
-                Some(sheet) => self.shown = Some((i, sheet)),
+                Some(sheet) => {
+                    // The round trip's first half (plan 7e's measurement):
+                    // the request read to the sheet asked for, its folder
+                    // listed and its first frame committed.
+                    let us = (clock_monotonic() - start) / 1000;
+                    println!("chooser: sheet in {us} us");
+                    self.shown = Some((i, sheet));
+                }
                 None => {
                     // No window of it to hang the sheet under.
                     if let Some(r) = self.apps[i].as_mut() {
@@ -271,6 +279,7 @@ impl Chooser {
                 continue;
             };
             let i = *i;
+            let start = clock_monotonic();
             let Some(outcome) = sheet.event(&mut self.app, &mut self.fs, self.root, h) else {
                 continue;
             };
@@ -310,6 +319,10 @@ impl Chooser {
                     if let Ok(n) = encode(&g, 0, &mut out) {
                         let _ = zoraya_app::Platform::send(&mut self.app.platform, &out[..n], None);
                     }
+                    // The second half: the confirming event to the
+                    // connection made and the answer and the pill sent.
+                    let us = (clock_monotonic() - start) / 1000;
+                    println!("chooser: answer in {us} us");
                 }
                 Outcome::Cancelled(s) => {
                     reply(end, &pc::Cancelled { status: Below(s) }, t, None);

@@ -76,6 +76,11 @@ A POSIX program launched from the desktop runs in the broker's session with a te
 - **INV-0168-3.** The panel's window cannot be covered, moved or closed by any client. *Check:* host test of the compositor's stacking with the panel as ADR-0160's bar kind (INV-0160-7).
 
 ## Open questions
+- *(Check note, stage 7e, ADR-0001 rule 6.)* INV-0168-2's host half: `zoraya-panel`'s
+  `an_application_gets_its_data_its_chooser_and_what_was_opened` and `a_launch_gives_exactly_its_record_in_its_room`
+  enumerate what every launch the panel makes holds (`files` alone gets the root; a terminal's shell its room's
+  grants, ADR-0242's condition). The in-QEMU half (`edit` cannot reach a name outside its data directory) waits for
+  `edit` (7f).
 - Whether the panel and `init`'s session table should be one program (ADR-0097 Option C's session launcher): the panel is that launcher for applications; `init` keeps drivers.
 - File types by extension is an assumption; a type registry is a later ADR.
 - *(Check note, stage 7d, ADR-0001 rule 6.)* INV-0168-2's check waits for `/system/apps` and its launch records and for
