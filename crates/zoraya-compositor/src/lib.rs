@@ -174,6 +174,9 @@ struct Client<E> {
     next_id: u32,
     /// Its launch record, from the manager only (INV-0172-1).
     record: Record,
+    /// Marked by the driver manager's `AddSystemClient` (the chooser): it
+    /// may create sheets and report grants (proposed ADR-0245).
+    system: bool,
 }
 
 /// What composition has cost.
@@ -837,14 +840,26 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         let Some(mut focus) = self.focus else { return };
-        // A focused popup's chords are its window's.
-        if let Some(i) = self.index(focus)
-            && let WindowKind::Popup { parent } = self.windows[i].kind
-        {
-            focus = Key {
-                client: focus.client,
-                id: parent,
-            };
+        // A focused popup's chords are its window's; a sheet's, its owner's.
+        if let Some(i) = self.index(focus) {
+            match self.windows[i].kind {
+                WindowKind::Popup { parent } => {
+                    focus = Key {
+                        client: focus.client,
+                        id: parent,
+                    };
+                }
+                WindowKind::Sheet {
+                    owner_client,
+                    owner_id,
+                } => {
+                    focus = Key {
+                        client: owner_client,
+                        id: owner_id,
+                    };
+                }
+                _ => {}
+            }
         }
         match code_ {
             code::W => self.ask_close(focus),
@@ -955,6 +970,15 @@ impl<P: Platform> Compositor<P> {
         let Some((key, zone)) = hit else { return };
         self.raise(key);
         self.set_focus(Some(key));
+        // A sheet's strip does nothing; a window with a sheet open can be
+        // moved by its title bar and nothing else (ADR-0160).
+        let is_sheet = self
+            .index(key)
+            .is_some_and(|i| self.windows[i].owner().is_some());
+        if (is_sheet && zone != Zone::Body) || (self.sheet_of(key).is_some() && zone != Zone::Title)
+        {
+            return;
+        }
         if button != gui::buttons::LEFT {
             return;
         }
@@ -993,6 +1017,13 @@ impl<P: Platform> Compositor<P> {
     /// The pointer moves while a button holds a drag: the window follows,
     /// and its client sees nothing until the end (ADR-0160).
     fn drag_to(&mut self, x: i64, y: i64) {
+        self.drag_window_to(x, y);
+        if let Some(Drag::Move { window, .. } | Drag::Resize { window, .. }) = self.drag {
+            self.place_sheets(window);
+        }
+    }
+
+    fn drag_window_to(&mut self, x: i64, y: i64) {
         let f = self.frame();
         let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
         match self.drag {
@@ -1112,6 +1143,9 @@ impl<P: Platform> Compositor<P> {
         let Some((key, Zone::Body)) = self.under(x, y) else {
             return;
         };
+        if self.sheet_of(key).is_some() {
+            return;
+        }
         let Some(i) = self.index(key) else { return };
         let w = &self.windows[i];
         let body = w.body_rect();
@@ -1151,22 +1185,29 @@ impl<P: Platform> Compositor<P> {
                 client: key.client,
                 id: parent,
             },
+            WindowKind::Sheet {
+                owner_client,
+                owner_id,
+            } => Key {
+                client: owner_client,
+                id: owner_id,
+            },
             _ => key,
         };
         let Some(t) = self.index(target) else { return };
-        // Already on top with its popups: nothing changes on the screen.
-        let above_are_popups = self.windows[t + 1..].iter().all(|w| {
-            w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id })
-        });
-        if above_are_popups {
+        let rides = |w: &Window| {
+            (w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id }))
+                || w.owner() == Some((target.client, target.id))
+        };
+        // Already on top with its popups and sheet: nothing changes.
+        if self.windows[t + 1..].iter().all(rides) {
             return;
         }
         let mut moved: Vec<Window> = Vec::new();
         moved.push(self.windows.remove(t));
         let mut j = 0;
         while j < self.windows.len() {
-            let w = &self.windows[j];
-            if w.client == target.client && w.kind == (WindowKind::Popup { parent: target.id }) {
+            if rides(&self.windows[j]) {
                 moved.push(self.windows.remove(j));
             } else {
                 j += 1;
@@ -1189,6 +1230,11 @@ impl<P: Platform> Compositor<P> {
         self.windows[i].hidden = hidden;
         if hidden {
             self.close_popups_of(key);
+        }
+        for w in self.windows.iter_mut() {
+            if w.owner() == Some((key.client, key.id)) {
+                w.hidden = hidden;
+            }
         }
         let f = self.frame();
         self.dirty(&self.windows[i].reach(&f));
@@ -1285,6 +1331,7 @@ impl<P: Platform> Compositor<P> {
         self.dirty(&before);
         self.dirty(&after);
         self.configure(key);
+        self.place_sheets(key);
     }
 
     /// After the display changed size: every toplevel keeps its logical size
@@ -1503,6 +1550,9 @@ impl<P: Platform> Compositor<P> {
     }
 
     fn set_focus(&mut self, key: Option<Key>) {
+        // While a sheet is open its owner's focus is the sheet's: the owner
+        // gets no input (ADR-0160).
+        let key = key.map(|k| self.sheet_of(k).unwrap_or(k));
         if self.focus == key {
             return;
         }
@@ -1650,6 +1700,16 @@ impl<P: Platform> Compositor<P> {
                 };
                 (s, true)
             }
+            42 if driver && one && decode::<gui::AddSystemClient>(bytes, 1).is_ok() => {
+                let h = handles[0];
+                let s = self.add_client(h, Record::home());
+                if s == status::OK
+                    && let Some(c) = self.clients.iter_mut().flatten().find(|c| c.end == h)
+                {
+                    c.system = true;
+                }
+                (s, true)
+            }
             33 if driver && one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
                 let h = handles[0];
                 let s = if self.platform.kind(h) == Kind::Channel {
@@ -1705,6 +1765,194 @@ impl<P: Platform> Compositor<P> {
         self.handles = handles;
     }
 
+    fn is_system(&self, slot: usize) -> bool {
+        self.clients
+            .get(slot)
+            .and_then(Option::as_ref)
+            .is_some_and(|c| c.system)
+    }
+
+    /// The sheet open under `owner`, if any.
+    fn sheet_of(&self, owner: Key) -> Option<Key> {
+        self.windows
+            .iter()
+            .find(|w| w.owner() == Some((owner.client, owner.id)))
+            .map(Self::key_of)
+    }
+
+    /// Puts `owner`'s sheet under its title bar, centred on it: its strip
+    /// starts on the line between the owner's title bar and body, where no
+    /// client's pixels are (ADR-0167's third mark).
+    fn place_sheets(&mut self, owner: Key) {
+        let f = self.frame();
+        let Some(oi) = self.index(owner) else { return };
+        let ob = self.windows[oi].body_rect();
+        for j in 0..self.windows.len() {
+            if self.windows[j].owner() != Some((owner.client, owner.id)) {
+                continue;
+            }
+            let before = self.windows[j].reach(&f);
+            let w = &mut self.windows[j];
+            w.x = ob.x + (ob.width - i64::from(w.body.0)) / 2;
+            w.y = ob.y - f.border + f.title;
+            let after = w.reach(&f);
+            self.dirty(&before);
+            self.dirty(&after);
+        }
+    }
+
+    /// `CreateSheet` from a system client: a sheet under the focused (or
+    /// else the topmost) window of the client the panel tagged `m.tag`,
+    /// headed with what it asks and the owner's application from the
+    /// compositor's own record (ADR-0167), with the keyboard.
+    fn create_sheet(
+        &mut self,
+        slot: usize,
+        m: gui::CreateSheet,
+        memory: P::End,
+    ) -> Result<u32, u32> {
+        let refuse = |me: &mut Self, e: u32| {
+            me.platform.close(memory);
+            Err(e)
+        };
+        let owner_slot = (m.tag != 0)
+            .then(|| {
+                self.clients
+                    .iter()
+                    .position(|c| c.as_ref().is_some_and(|c| c.record.tag == m.tag))
+            })
+            .flatten();
+        let Some(owner_slot) = owner_slot.filter(|o| *o != slot) else {
+            return refuse(self, status::NO_SURFACE);
+        };
+        let owner = self
+            .focus
+            .filter(|f| f.client == owner_slot)
+            .and_then(|f| self.index(f))
+            .filter(|i| self.windows[*i].kind == WindowKind::Toplevel)
+            .or_else(|| {
+                self.windows
+                    .iter()
+                    .rposition(|w| w.client == owner_slot && w.kind == WindowKind::Toplevel)
+            });
+        let Some(oi) = owner else {
+            return refuse(self, status::NO_SURFACE);
+        };
+        let owner = Self::key_of(&self.windows[oi]);
+        if self.sheet_of(owner).is_some() {
+            return refuse(self, status::EXISTS);
+        }
+        if self.windows.len() >= MAX_WINDOWS {
+            return refuse(self, status::NO_MEMORY);
+        }
+        let s = self.scale.factor();
+        let f = self.frame();
+        let (bw, bh) = (m.width.saturating_mul(s), m.height.saturating_mul(s));
+        let room = self.height.saturating_sub(f.title as u32);
+        if !(1..=self.width).contains(&bw)
+            || !(1..=room).contains(&bh)
+            || !self.within_budget(slot, u64::from(bw) * u64::from(bh))
+        {
+            return refuse(self, status::BAD_BUFFER);
+        }
+        let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        let app = self.clients[owner_slot]
+            .as_ref()
+            .map(|c| c.record.app.clone())
+            .unwrap_or_default();
+        let id = self.clients[slot].as_ref().map_or(1, |c| c.next_id);
+        if let Some(c) = self.clients[slot].as_mut() {
+            c.next_id = c.next_id.wrapping_add(1).max(1);
+        }
+        // Directly above its owner and the owner's popups.
+        let mut at = oi + 1;
+        while at < self.windows.len()
+            && self.windows[at].client == owner.client
+            && self.windows[at].kind == (WindowKind::Popup { parent: owner.id })
+        {
+            at += 1;
+        }
+        let hidden = self.windows[oi].hidden;
+        self.windows.insert(
+            at,
+            Window {
+                client: slot,
+                id,
+                kind: WindowKind::Sheet {
+                    owner_client: owner.client,
+                    owner_id: owner.id,
+                },
+                x: 0,
+                y: 0,
+                body: (bw, bh),
+                buffer,
+                copy,
+                next: None,
+                title: crate::draw_rooms::sheet_heading(m.kind.0, &app),
+                hidden,
+                close_asked: None,
+                chrome: None,
+            },
+        );
+        self.place_sheets(owner);
+        let key = Key { client: slot, id };
+        if self
+            .focus
+            .is_some_and(|f| f == owner || f.client == owner.client)
+            || self.focus.is_none()
+        {
+            self.set_focus(Some(key));
+        }
+        // The bar's middle shows the heading while the sheet is open.
+        self.dirty_bar();
+        Ok(id)
+    }
+
+    /// `Granted` from a system client: the entry joins the record of the
+    /// client tagged `tag`, so that its frame shows it (ADR-0172 point 4).
+    fn granted(&mut self, tag: u32, words: &[u8]) -> u32 {
+        let Ok(words) = core::str::from_utf8(words) else {
+            return status::BAD_RANGE;
+        };
+        if tag == 0 || words.is_empty() || words.chars().any(char::is_control) {
+            return status::BAD_RANGE;
+        }
+        let Some(slot) = self
+            .clients
+            .iter()
+            .position(|c| c.as_ref().is_some_and(|c| c.record.tag == tag))
+        else {
+            return status::NO_SURFACE;
+        };
+        let Some(c) = self.clients[slot].as_mut() else {
+            return status::NO_SURFACE;
+        };
+        if !c.record.entries.iter().any(|e| e == words) {
+            if c.record.entries.len() >= rooms::MAX_RECORD_ENTRIES {
+                return status::NO_MEMORY;
+            }
+            c.record.entries.push(String::from(words));
+        }
+        let f = self.frame();
+        let mine: Vec<Rect> = self
+            .windows
+            .iter()
+            .filter(|w| w.client == slot && w.framed())
+            .map(|w| w.reach(&f))
+            .collect();
+        for r in mine {
+            self.dirty(&r);
+        }
+        status::OK
+    }
+
+    /// Marks the bar to be composed again.
+    fn dirty_bar(&mut self) {
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let r = Rect::new(0, 0, i64::from(self.width), bar);
+        self.dirty(&r);
+    }
+
     fn add_client(&mut self, end: P::End, record: Record) -> u32 {
         if self.platform.kind(end) != Kind::Channel {
             self.platform.close(end);
@@ -1724,6 +1972,7 @@ impl<P: Platform> Compositor<P> {
             dropped: 0,
             next_id: 1,
             record,
+            system: false,
         });
         status::OK
     }
@@ -1741,6 +1990,9 @@ impl<P: Platform> Compositor<P> {
         let w = self.windows.remove(i);
         let f = self.frame();
         self.dirty(&w.reach(&f));
+        if w.owner().is_some() {
+            self.dirty_bar();
+        }
         self.unmap(&w.buffer);
         if let Some(n) = &w.next {
             self.unmap(n);
@@ -1773,6 +2025,11 @@ impl<P: Platform> Compositor<P> {
             for p in popups {
                 self.remove_window(p);
             }
+            // Its sheet closes: the chooser is told, and cancels.
+            if let Some(sheet) = self.sheet_of(key) {
+                self.send_event_plain(sheet.client, &gui::CloseRequested { window: sheet.id });
+                self.remove_window(sheet);
+            }
         }
         if self.focus == Some(key) {
             self.focus = None;
@@ -1780,6 +2037,14 @@ impl<P: Platform> Compositor<P> {
                 WindowKind::Popup { parent } => Some(Key {
                     client: key.client,
                     id: parent,
+                })
+                .filter(|k| self.index(*k).is_some()),
+                WindowKind::Sheet {
+                    owner_client,
+                    owner_id,
+                } => Some(Key {
+                    client: owner_client,
+                    id: owner_id,
                 })
                 .filter(|k| self.index(*k).is_some()),
                 _ => None,
@@ -2005,8 +2270,37 @@ impl<P: Platform> Compositor<P> {
                 };
                 self.answer(slot, &gui::CloseDone { status: Below(s) }, t);
             }
+            11 if self.is_system(slot) => {
+                let (s, window) = match decode::<gui::CreateSheet>(bytes, n) {
+                    Ok((_, m)) => {
+                        let memory = handles.remove(0);
+                        match self.create_sheet(slot, m, memory) {
+                            Ok(id) => (status::OK, id),
+                            Err(e) => (e, 0),
+                        }
+                    }
+                    Err(_) => (status::BAD_BUFFER, 0),
+                };
+                self.answer(
+                    slot,
+                    &gui::SheetCreated {
+                        status: Below(s),
+                        window,
+                    },
+                    t,
+                );
+            }
+            12 if self.is_system(slot) => {
+                let s = match decode::<gui::Granted<'_>>(bytes, n) {
+                    Ok((_, m)) => self.granted(m.tag, m.words.0),
+                    Err(_) => status::BAD_RANGE,
+                };
+                self.answer(slot, &gui::GrantedDone { status: Below(s) }, t);
+            }
             // Anything else, the manager's and the drivers' ordinals among
-            // them, is unknown here (INV-0093-2).
+            // them, and a sheet or a grant from a client the driver manager
+            // did not mark (INV-0160-7, INV-0167-4), is unknown here
+            // (INV-0093-2).
             _ => self.answer(
                 slot,
                 &ErrorReply {

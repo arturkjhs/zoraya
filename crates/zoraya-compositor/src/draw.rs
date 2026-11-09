@@ -138,6 +138,9 @@ impl<P: Platform> Compositor<P> {
                 (title_text, ui, mono),
                 view,
             );
+            if w.owner().is_some() {
+                crate::draw_rooms::sheet_strip(&mut c, w, &f, scale.factor(), p, title_text);
+            }
             c.clip = old;
         }
         // The show-commands tags over the windows (ADR-0172 point 8).
@@ -189,7 +192,29 @@ impl<P: Platform> Compositor<P> {
             let baseline = bar / 2 + (px as i32 * 7 / 20);
             let pad = 14 * s;
             draw_text(&mut c, title_text, "Zoraya", px, pad, baseline, p.fg_text);
-            if commands {
+            // An open sheet's mark in the bar's middle, which no client can
+            // paint (ADR-0167's second mark; INV-0167-4).
+            let sheet = windows
+                .iter()
+                .find(|w| w.owner().is_some() && !w.hidden)
+                .map(|w| w.title.as_str());
+            if let Some(heading) = sheet {
+                let k = scale.factor();
+                let hw = title_text.measure(heading, px);
+                let side = 18 * s;
+                let gap = 10 * s;
+                let x = width as i32 / 2 - (side + gap + hw) / 2;
+                crate::draw_rooms::emblem(&mut c, x, bar / 2, k, p, title_text);
+                draw_text(
+                    &mut c,
+                    title_text,
+                    heading,
+                    px,
+                    x + side + gap,
+                    baseline,
+                    p.fg_text,
+                );
+            } else if commands {
                 let heading = crate::draw_rooms::COMMANDS_HEADING;
                 let hw = title_text.measure(heading, px);
                 draw_text(

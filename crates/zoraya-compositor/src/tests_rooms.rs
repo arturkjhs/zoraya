@@ -12,12 +12,12 @@ use crate::rooms::Cell;
 const ROOMS: &str =
     "project --colour 1 +w ~/project +r ~/include\nagent-1 --untrusted +w ~/sandbox/agent-1\n";
 
-fn axis(p: i64, side: u32) -> u32 {
+pub(super) fn axis(p: i64, side: u32) -> u32 {
     let d = i64::from(side - 1);
     ((p * 65535 + d - 1) / d) as u32
 }
 
-fn done(s: &mut Setup, end: u32) -> u32 {
+pub(super) fn done(s: &mut Setup, end: u32) -> u32 {
     let out = s.f().take(end);
     let last = out.last().expect("a reply");
     let (_, d) = decode::<gui::ManagerDone>(last, 0).unwrap_or_else(|e| panic!("{e:?}: {out:?}"));
@@ -26,7 +26,7 @@ fn done(s: &mut Setup, end: u32) -> u32 {
 
 impl Setup {
     /// The panel's client manager, attached by the driver manager.
-    fn panel(&mut self) -> u32 {
+    pub(super) fn panel(&mut self) -> u32 {
         let end = self.f().channel(64);
         let m = self.manager;
         self.f()
@@ -77,7 +77,7 @@ impl Setup {
     }
 
     /// A toplevel of an existing client.
-    fn window_of(&mut self, end: u32, w: u32, h: u32, colour: u32) -> u32 {
+    pub(super) fn window_of(&mut self, end: u32, w: u32, h: u32, colour: u32) -> u32 {
         let s = self.c.scale().factor();
         let n = (w * s * h * s) as usize;
         let memory = self.f().memory(vec![colour; n], n as u64 * 4, false);
@@ -106,7 +106,7 @@ impl Setup {
         id
     }
 
-    fn press_at(&mut self, x: i64, y: i64) {
+    pub(super) fn press_at(&mut self, x: i64, y: i64) {
         let (w, h) = self.f().display_size;
         self.point(axis(x, w), axis(y, h), Some(1));
         self.point(axis(x, w), axis(y, h), Some(0));
