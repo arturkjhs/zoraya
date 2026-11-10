@@ -64,6 +64,8 @@ fn hang_display() -> i32 {
                     width: 1024,
                     height: 768,
                     format: FORMAT_XRGB,
+                    width_mm: 0,
+                    height_mm: 0,
                 },
                 t,
                 &mut out,

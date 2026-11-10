@@ -562,7 +562,7 @@ pub fn dock(
         )
     {
         let cr = prect(*cr);
-        let lines = [(app.name.as_str(), false), (app.line.as_str(), true)];
+        let lines = tooltip_lines(&app.name, &app.line);
         tag(
             c,
             &lines,
@@ -572,6 +572,16 @@ pub fn dock(
             p,
             (title_t, mono),
         );
+    }
+}
+
+/// The dock tooltip's lines: the name and the line, or the line alone when
+/// the name is the line already ("files", not "files files").
+pub fn tooltip_lines<'a>(name: &'a str, line: &'a str) -> Vec<(&'a str, bool)> {
+    if name == line {
+        alloc::vec![(line, true)]
+    } else {
+        alloc::vec![(name, false), (line, true)]
     }
 }
 
@@ -640,16 +650,38 @@ pub fn icon_glyph(
             }
         }
         "settings" => {
+            // A gear: eight teeth around a thick ring with a hole.
+            let m = gs / 2;
+            let ring_r = gs * 7 / 20;
+            let band = (gs / 6).max(thick as i32);
+            let d = ring_r * 2;
             let ring = paint::rounded_outline(
-                gs as usize,
-                gs as usize,
-                (gs / 2) as u32,
-                (2 * k).max(thick),
+                d as usize,
+                d as usize,
+                ring_r as u32,
+                band as u32,
                 CornerShape::Circle,
             );
-            c.mask(&ring, gx, gy, fg, 255);
-            let hub = gs / 3;
-            circle(c, gx + gs / 2, gy + gs / 2, hub, fg, 255);
+            c.mask(&ring, gx + m - ring_r, gy + m - ring_r, fg, 255);
+            // Unit directions in thousandths: every 45 degrees.
+            const DIRS: [(i32, i32); 8] = [
+                (1000, 0),
+                (707, 707),
+                (0, 1000),
+                (-707, 707),
+                (-1000, 0),
+                (-707, -707),
+                (0, -1000),
+                (707, -707),
+            ];
+            let (inner, outer) = (ring_r - band / 2, m - si);
+            let tooth = (gs / 6).max(2 * si) as u32;
+            for (dx, dy) in DIRS {
+                let a = (m + dx * inner / 1000, m + dy * inner / 1000);
+                let b = (m + dx * outer / 1000, m + dy * outer / 1000);
+                let seg = paint::segment(gs as usize, gs as usize, a, b, tooth);
+                c.mask(&seg, gx, gy, fg, 255);
+            }
         }
         _ => {
             let initial: String = app.chars().take(1).flat_map(char::to_uppercase).collect();

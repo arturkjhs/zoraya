@@ -794,8 +794,8 @@ fn at_scale_two_sizes_are_logical_and_pixels_unchanged() {
 fn the_first_body_is_where_the_runner_reads_it() {
     assert_eq!(first_body(zoraya_tokens::Scale::ONE), (BX, BY));
     assert_eq!(first_body(zoraya_tokens::Scale::TWO), (2 * BX, 2 * BY));
-    assert_eq!(scale_for(1024), zoraya_tokens::Scale::ONE);
-    assert_eq!(scale_for(1920), zoraya_tokens::Scale::TWO);
+    assert_eq!(scale_for(1024, 0), zoraya_tokens::Scale::ONE);
+    assert_eq!(scale_for(1920, 0), zoraya_tokens::Scale::TWO);
 }
 
 #[test]

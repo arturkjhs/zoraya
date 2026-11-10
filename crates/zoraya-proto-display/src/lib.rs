@@ -29,13 +29,16 @@ pub mod status {
 pub const FORMAT_XRGB: u32 = 1;
 
 protocol! {
-    /// The display's size and pixel format.
+    /// The display's size and pixel format, and its physical size in
+    /// millimetres, 0 by 0 when the driver cannot say (proposed ADR-0247).
     message Info = 1, handles 0 {}
     message InfoReply = 1, handles 0 {
         status: Status,
         width: u32,
         height: u32,
         format: u32,
+        width_mm: u32,
+        height_mm: u32,
     }
 
     /// The memory object to show: `width × height × 4` bytes, row by row.
@@ -95,6 +98,8 @@ mod tests {
             width: 1024,
             height: 768,
             format: FORMAT_XRGB,
+            width_mm: 330,
+            height_mm: 206,
         });
         total(Attach {});
         total(Done {

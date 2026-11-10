@@ -108,7 +108,9 @@ run: $(KERNEL) $(DISK)
 	$(RUN_QEMU) --disk $(DISK) $(KERNEL)
 
 # The GUI (ADR-0097): a window on the host; the serial line stays here.
-GUI_SCALE ?= 1
+# On macOS the window is on a Retina screen as a rule: twice the pixels,
+# scale 2 (the architect's check of 2026-11-10); GUI_SCALE=1 gives 1024x768.
+GUI_SCALE ?= $(if $(filter Darwin,$(shell uname -s)),2,1)
 run-gui: $(KERNEL) $(DISK)
 	$(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 256M --disk $(DISK) $(KERNEL)
 

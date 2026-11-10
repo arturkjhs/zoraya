@@ -24,8 +24,10 @@ pub mod cmd {
     pub const RESOURCE_FLUSH: u32 = 0x0104;
     pub const TRANSFER_TO_HOST_2D: u32 = 0x0105;
     pub const RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+    pub const GET_EDID: u32 = 0x010a;
     pub const OK_NODATA: u32 = 0x1100;
     pub const OK_DISPLAY_INFO: u32 = 0x1101;
+    pub const OK_EDID: u32 = 0x1104;
     /// The first error response; errors run up from here.
     pub const ERR_UNSPEC: u32 = 0x1200;
     pub const ERR_LAST: u32 = 0x1205;
@@ -48,18 +50,25 @@ pub mod config {
 }
 /// The largest display side accepted `[assumption, ADR-0090]`.
 pub const MAX_SIDE: u32 = 4096;
+/// `VIRTIO_GPU_F_EDID` (5.7.3): the device gives the display's EDID, where
+/// QEMU writes the window's physical size (proposed ADR-0247).
+pub const F_EDID: u32 = 1 << 1;
+/// The EDID block's bytes in `GET_EDID`'s response (5.7.6.8).
+pub const EDID_BYTES: usize = 1024;
+
 /// The most backing runs one attach carries.
 pub const MAX_RUNS: usize = 1024;
 
 const HEADER: usize = 24;
 const DISPLAY_INFO: usize = HEADER + 16 * 24;
+const EDID_RESPONSE: usize = HEADER + 8 + EDID_BYTES;
 const QUEUE: Layout = Layout::new(16, 0);
 const REQUEST_AT: usize = QUEUE.end;
 const MAX_REQUEST: usize = 32 + 16 * MAX_RUNS;
 const RESPONSE_AT: usize = (REQUEST_AT + MAX_REQUEST).next_multiple_of(4096);
 /// The shared memory the driver needs: a contiguous, zeroed object of this
 /// many bytes, pinned, whose device address is passed to [`Gpu::new`].
-pub const SHARED_MEMORY: usize = (RESPONSE_AT + 512).next_multiple_of(4096);
+pub const SHARED_MEMORY: usize = (RESPONSE_AT + EDID_RESPONSE).next_multiple_of(4096);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -151,14 +160,43 @@ pub struct Gpu<R, S> {
     height: u32,
     /// The resource on scanout 0 and its size, once attached.
     shown: Option<(u32, u32, u32)>,
+    /// Whether the device agreed to `F_EDID`.
+    edid: bool,
+    /// The display's physical size in millimetres as its EDID last gave
+    /// it, `(0, 0)` when unknown.
+    millimetres: (u32, u32),
+}
+
+/// The physical size in millimetres an EDID block states, `(0, 0)` when it
+/// states none that is believable: the first detailed timing descriptor's
+/// image size, else the base block's size in centimetres.
+pub fn edid_millimetres(edid: &[u8]) -> (u32, u32) {
+    const MAGIC: [u8; 8] = [0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+    if edid.len() < 128 || edid[..8] != MAGIC {
+        return (0, 0);
+    }
+    // At most 4095 mm or 2550 mm a side by the format; zero is "none".
+    let believable = |w: u32, h: u32| w > 0 && h > 0;
+    // A descriptor with a pixel clock is a timing (EDID 1.4, 3.10.2).
+    let d = &edid[54..72];
+    if d[0] != 0 || d[1] != 0 {
+        let w = u32::from(d[12]) | u32::from(d[14] >> 4) << 8;
+        let h = u32::from(d[13]) | u32::from(d[14] & 0x0F) << 8;
+        if believable(w, h) {
+            return (w, h);
+        }
+    }
+    let (w, h) = (u32::from(edid[21]) * 10, u32::from(edid[22]) * 10);
+    if believable(w, h) { (w, h) } else { (0, 0) }
 }
 
 impl<R: Registers, S: Shared> Gpu<R, S> {
-    /// Resets the device and brings it up with `VERSION_1` alone
-    /// (INV-0090-1) and the control queue. `shared` is `SHARED_MEMORY`
+    /// Resets the device and brings it up with `VERSION_1` and, when the
+    /// device offers it, `F_EDID` (proposed ADR-0247, a change to
+    /// INV-0090-1), and the control queue. `shared` is `SHARED_MEMORY`
     /// bytes at device address `base`, zeroed.
     pub fn new(mut registers: R, shared: S, base: u64) -> Result<Gpu<R, S>, Error> {
-        begin(&mut registers, DEVICE_GPU, 0)?;
+        let agreed = begin(&mut registers, DEVICE_GPU, F_EDID)?;
         let queue = Queue::new(0, QUEUE, base);
         queue.set_up(&mut registers)?;
         ready(&mut registers);
@@ -170,11 +208,19 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             width: 0,
             height: 0,
             shown: None,
+            edid: agreed & F_EDID != 0,
+            millimetres: (0, 0),
         })
     }
 
     pub const fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// The display's physical size in millimetres as last read with
+    /// [`Gpu::display_info`], `(0, 0)` when unknown.
+    pub const fn millimetres(&self) -> (u32, u32) {
+        self.millimetres
     }
 
     /// True once after the device reported that the display changed
@@ -283,7 +329,38 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         }
         self.width = width;
         self.height = height;
+        // The physical size with it; a device that cannot say is not broken
+        // for that, but one that answers wrongly is.
+        self.millimetres = match self.read_edid(wait) {
+            Ok(mm) => mm,
+            Err(Error::Command(_)) => (0, 0),
+            Err(e) => return Err(e),
+        };
         Ok((width, height))
+    }
+
+    /// Scanout 0's EDID, as a physical size (`(0, 0)` without `F_EDID`).
+    fn read_edid(
+        &mut self,
+        wait: &mut dyn FnMut() -> Result<(), Error>,
+    ) -> Result<(u32, u32), Error> {
+        if !self.edid {
+            return Ok((0, 0));
+        }
+        let mut r = Request {
+            shared: &mut self.shared,
+            at: 0,
+        };
+        r.header(cmd::GET_EDID).u32(0).u32(0);
+        let length = r.at;
+        self.call(length, cmd::OK_EDID, EDID_RESPONSE, wait)?;
+        let size = (self.shared.read32(RESPONSE_AT + HEADER) as usize).min(EDID_BYTES);
+        let mut edid = [0u8; 128];
+        let n = size.min(edid.len());
+        for (i, b) in edid[..n].iter_mut().enumerate() {
+            *b = self.shared.read8(RESPONSE_AT + HEADER + 8 + i);
+        }
+        Ok(edid_millimetres(&edid[..n]))
     }
 
     /// Makes a resource of the display's size, backs it with `runs` (device

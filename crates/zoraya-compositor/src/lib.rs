@@ -64,6 +64,12 @@ pub const CASCADE: u32 = 32;
 pub const CLOSE_GRACE_NS: u64 = 5_000_000_000;
 /// The display width from which the scale is 2 (ADR-0164's `auto`).
 pub const SCALE_TWO_FROM: u32 = 1920;
+/// The density, in pixels per inch, from which a display is dense (a
+/// Retina screen is about 220, a desktop monitor about 100), and the width
+/// from which a dense display gets scale 2: 640 logical pixels (proposed
+/// ADR-0247).
+pub const DENSE_PPI: u64 = 150;
+pub const DENSE_SCALE_TWO_FROM: u32 = 1280;
 
 /// Port keys: the manager, the display, inputs from `INPUT_KEY`, clients
 /// from `CLIENT_KEY`.
@@ -78,10 +84,14 @@ pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
 
-/// The scale for a display `width` physical pixels wide (ADR-0164: `auto`
-/// until the setting exists).
-pub const fn scale_for(width: u32) -> Scale {
-    if width >= SCALE_TWO_FROM {
+/// The scale `auto` gives a display `width` physical pixels wide whose
+/// width is `width_mm` millimetres (0: unknown): 2 from `SCALE_TWO_FROM`
+/// pixels (ADR-0164), or from `DENSE_SCALE_TWO_FROM` on a display of at
+/// least `DENSE_PPI` (proposed ADR-0247: a Retina window).
+pub const fn scale_for(width: u32, width_mm: u32) -> Scale {
+    // pixels / (mm / 25.4) >= ppi, in integers.
+    let dense = width_mm > 0 && width as u64 * 254 >= DENSE_PPI * 10 * width_mm as u64;
+    if width >= SCALE_TWO_FROM || (dense && width >= DENSE_SCALE_TWO_FROM) {
         Scale::TWO
     } else {
         Scale::ONE
@@ -305,9 +315,11 @@ pub struct Compositor<P: Platform> {
     /// Every window, bottom of the stack first.
     windows: Vec<Window>,
     focus: Option<Key>,
-    /// The display in physical pixels, and its scale.
+    /// The display in physical pixels, its width in millimetres (0:
+    /// unknown) and its scale.
     width: u32,
     height: u32,
+    width_mm: u32,
     scale: Scale,
     appearance: Appearance,
     /// `gui.motion` (ADR-0169), told to clients in `Configure`.
@@ -417,6 +429,7 @@ impl<P: Platform> Compositor<P> {
             focus: None,
             width: 0,
             height: 0,
+            width_mm: 0,
             scale: Scale::ONE,
             appearance: Appearance::Light,
             motion: true,
@@ -717,6 +730,7 @@ impl<P: Platform> Compositor<P> {
         if new_size {
             self.width = info.width;
             self.height = info.height;
+            self.width_mm = info.width_mm;
             self.attached = true;
             let old = self.scale.factor();
             self.scale = self.chosen_scale();
@@ -741,12 +755,12 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// The scale for the display's width: `gui.scale` 1 or 2 fixes it, `auto`
-    /// is 2 from `SCALE_TWO_FROM` pixels wide (ADR-0164, ADR-0246).
+    /// is [`scale_for`]'s (ADR-0164, ADR-0246, proposed ADR-0247).
     fn chosen_scale(&self) -> Scale {
         match self.fixed_scale {
             1 => Scale::ONE,
             2 => Scale::new(2).unwrap_or(Scale::ONE),
-            _ => scale_for(self.width),
+            _ => scale_for(self.width, self.width_mm),
         }
     }
 

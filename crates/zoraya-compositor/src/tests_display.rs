@@ -376,3 +376,42 @@ fn at_scale_two_an_odd_display_gives_bodies_of_whole_logical_pixels() {
     let outer = s.outer(0, id);
     assert!(outer.right() <= area.right() && outer.bottom() <= area.bottom());
 }
+
+/// Proposed ADR-0247: a dense display (a Retina window, whose size QEMU
+/// gives in pixels and whose width in millimetres it puts in the EDID) gets
+/// scale 2 from 1280 pixels wide; a display of ordinary density keeps
+/// ADR-0164's 1920; an unknown width in millimetres is ordinary.
+#[test]
+fn a_dense_display_gets_scale_two_sooner() {
+    let mut s = setup();
+    // A window of 800 by 500 points on a 220 ppi screen.
+    s.f().display_mm = (185, 115);
+    resize(&mut s, 1600, 1000);
+    assert_eq!(s.c.scale().factor(), 2);
+    // Smaller than 640 logical pixels: scale 1, however dense.
+    s.f().display_mm = (139, 87);
+    resize(&mut s, 1200, 750);
+    assert_eq!(s.c.scale().factor(), 1);
+    // A monitor of about 100 ppi, as wide in pixels: scale 1.
+    s.f().display_mm = (406, 254);
+    resize(&mut s, 1600, 1000);
+    assert_eq!(s.c.scale().factor(), 1);
+    // Unknown: the width alone.
+    s.f().display_mm = (0, 0);
+    resize(&mut s, 1700, 1000);
+    assert_eq!(s.c.scale().factor(), 1);
+    resize(&mut s, 1920, 1200);
+    assert_eq!(s.c.scale().factor(), 2);
+}
+
+#[test]
+fn scale_for_counts_the_density() {
+    use zoraya_tokens::Scale;
+    // 1280 px over 147.8 mm is 220 ppi; 216.7 mm is exactly 150 ppi.
+    assert_eq!(scale_for(1280, 148), Scale::TWO);
+    assert_eq!(scale_for(1279, 148), Scale::ONE);
+    assert_eq!(scale_for(1280, 216), Scale::TWO);
+    assert_eq!(scale_for(1280, 217), Scale::ONE);
+    assert_eq!(scale_for(1919, 0), Scale::ONE);
+    assert_eq!(scale_for(1920, 1000), Scale::TWO);
+}

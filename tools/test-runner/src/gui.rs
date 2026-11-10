@@ -320,7 +320,8 @@ impl Screen {
 
     /// The display's scale, as the compositor chooses it.
     pub fn scale(&self) -> Scale {
-        zoraya_compositor::scale_for(self.width as u32)
+        // No window in a test: QEMU states no physical size (ADR-0247).
+        zoraya_compositor::scale_for(self.width as u32, 0)
     }
 
     /// The terminal's rows as text: the first window's body, where the
