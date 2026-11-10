@@ -638,3 +638,117 @@ fn the_chooser_hears_the_show_commands_mode() {
     s.keys(&chord);
     assert_eq!(told(&mut s, chooser), [false]);
 }
+
+/// Review of the fix branch, 1: a key pressed within the guard stays the
+/// guard's until released; its repeats after the guard do not confirm.
+#[test]
+fn a_key_pressed_within_the_guard_repeats_to_no_one() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    s.f().take(chooser);
+    s.f().clock += 100_000_000;
+    s.keys(&[(code::ENTER, 1)]);
+    s.f().clock += SHEET_GUARD_NS;
+    s.keys(&[(code::ENTER, 2), (code::ENTER, 1)]);
+    assert!(keys_of(&s.f().take(chooser)).is_empty());
+    s.keys(&[(code::ENTER, 0), (code::ENTER, 1), (code::ENTER, 0)]);
+    let keys = keys_of(&s.f().take(chooser));
+    assert_eq!(keys.iter().filter(|k| k.1).count(), 1, "{keys:?}");
+}
+
+/// Review of the fix branch, 5: each sheet keeps its own guard.
+#[test]
+fn a_second_sheet_leaves_the_first_its_guard() {
+    let mut s = setup();
+    let panel = s.panel();
+    let a = tagged(&mut s, panel, 4, "edit");
+    s.window_of(a, 300, 200, 0x0040_4040);
+    let b = tagged(&mut s, panel, 5, "t_open");
+    s.window_of(b, 300, 200, 0x0060_6060);
+    let chooser = system(&mut s);
+    // b's window is focused (the newest); a's sheet first, then b's.
+    assert_eq!(sheet_at_once(&mut s, chooser, 5, 160, 80).0, status::OK);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    s.f().take(chooser);
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    assert!(keys_of(&s.f().take(chooser)).is_empty());
+}
+
+/// Review of the fix branch, 6: a lost input driver leaves no key or
+/// button the guard waits for.
+#[test]
+fn a_lost_input_driver_clears_the_guards_keys() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    s.keys(&[(code::ENTER, 1)]);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let k = s.keyboard;
+    s.f().peers.get_mut(&k).unwrap().gone = true;
+    s.c.step();
+    let new = s.f().channel(8);
+    let m = s.manager;
+    s.f().send(m, message(&gui::AttachInput {}, 7), vec![new]);
+    s.c.step();
+    s.keyboard = new;
+    s.f().take(chooser);
+    s.f().clock += SHEET_GUARD_NS * 2;
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    let keys = keys_of(&s.f().take(chooser));
+    assert_eq!(
+        keys.iter().map(|k| k.1).collect::<Vec<_>>(),
+        [true, false],
+        "the press and its release"
+    );
+}
+
+/// Review of the fix branch, 7: the guard runs from the sheet's first
+/// commit, when it can be seen, not from its creation.
+#[test]
+fn the_guard_starts_when_the_sheet_is_first_committed() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    let n = (160 * 80) as usize;
+    let memory = s.f().memory(vec![0; n], n as u64 * 4, false);
+    let m = gui::CreateSheet {
+        tag: 4,
+        kind: Below(0),
+        width: 160,
+        height: 80,
+    };
+    s.f().send(chooser, message(&m, 11), vec![memory]);
+    s.c.step();
+    let (_, r) = s
+        .f()
+        .take(chooser)
+        .iter()
+        .find_map(|r| decode::<gui::SheetCreated>(r, 0).ok())
+        .unwrap();
+    // Long after the creation, before any commit: the first commit starts
+    // the guard.
+    s.f().clock += SHEET_GUARD_NS * 3;
+    let c = gui::CommitTo {
+        window: r.window,
+        x: 0,
+        y: 0,
+        width: 160,
+        height: 80,
+    };
+    s.f().send(chooser, message(&c, 7), vec![]);
+    s.c.step();
+    s.f().take(chooser);
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    assert!(keys_of(&s.f().take(chooser)).is_empty());
+    s.f().clock += SHEET_GUARD_NS;
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    assert!(!keys_of(&s.f().take(chooser)).is_empty());
+}

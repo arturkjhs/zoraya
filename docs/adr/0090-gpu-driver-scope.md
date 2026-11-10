@@ -75,6 +75,9 @@ Nothing here depends on POSIX.
 - **INV-0090-3.** A response of the wrong type or length, or a used index past what was submitted, is a protocol break, after which the driver resets the device and sends no further command. *Check:* host tests against a hostile fake device, one per kind of lie, that each is reported as a protocol break; the reset and exit that follow are in `gpud`, checked by reading.
 
 ## Open questions
+- *(Check note, 2026-11-10, ADR-0001 rule 6.)* INV-0090-1's check now asserts `VERSION_1` and `F_EDID`: the
+  architect asked that the scale account for a Retina window (2026-11-10), which proposed ADR-0247 does through the
+  EDID. Until ADR-0247 is decided the code follows it; if it is rejected, `begin(..., 0)` restores the rule.
 - The cost of a flush round trip through `gpud`: measured by this task (frames per second of a full redraw).
 - *As built (TASK-14).* The first build missed completions under TCG. The cause, found by the review (R1): virtio-mmio's interrupt is edge-triggered on QEMU `virt`, and a completion that lands while the line is still high from the previous one makes no edge. The driver now takes the device's interrupt down and looks at the queue again before every wait. The wait also looks at the queue every 10 ms, and still gives up after a second, as a guard; the first time it does, the driver says so once on the console.
 - Whether `B8G8R8X8_UNORM` is what QEMU's screendump reports byte for byte: checked by the screendump test.

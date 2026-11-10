@@ -88,13 +88,15 @@ pub const SHEET_GUARD_NS: u64 = 500_000_000;
 
 /// What a new sheet ignores: everything until `until`, then the keys and
 /// buttons held down when it mapped (or pressed before `until`), each until
-/// its release.
+/// its release. `until` starts again at the sheet's first commit, when it
+/// can first be seen (review of the fix branch, 7).
 #[derive(Debug, Clone, Copy)]
 struct SheetGuard {
     sheet: Key,
     until: u64,
     keys: [u64; 8],
     buttons: u32,
+    shown: bool,
 }
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
@@ -375,7 +377,7 @@ pub struct Compositor<P: Platform> {
     /// Every key down now, by code (below 512).
     held: [u64; 8],
     /// The newest sheet's guard (ADR-0245).
-    sheet_guard: Option<SheetGuard>,
+    sheet_guards: Vec<SheetGuard>,
     /// The enabled keyboard layouts, indices of `zoraya_keymap::LAYOUTS`,
     /// in switching order (ADR-0163: `gui.keyboard-layouts`, a setting from
     /// 7f; `us ua cz` until then).
@@ -469,7 +471,7 @@ impl<P: Platform> Compositor<P> {
             scene: false,
             delivered: [0; 8],
             held: [0; 8],
-            sheet_guard: None,
+            sheet_guards: Vec::new(),
             layouts: ["us", "ua", "cz"]
                 .iter()
                 .filter_map(|n| zoraya_keymap::by_name(n))
@@ -885,6 +887,11 @@ impl<P: Platform> Compositor<P> {
                 self.keymap = Keymap::new();
                 self.meta = 0;
                 self.held = [0; 8];
+                self.delivered = [0; 8];
+                for g in &mut self.sheet_guards {
+                    g.keys = [0; 8];
+                    g.buttons = 0;
+                }
                 self.buttons = 0;
                 self.drag = None;
             }
@@ -920,7 +927,7 @@ impl<P: Platform> Compositor<P> {
         };
         if button != 0 {
             let now = self.platform.now();
-            if let Some(g) = self.sheet_guard.as_mut() {
+            for g in &mut self.sheet_guards {
                 if value == 0 {
                     g.buttons &= !button;
                 } else if value == 1 && now < g.until {
@@ -946,15 +953,24 @@ impl<P: Platform> Compositor<P> {
         }
         if (code_ as usize) < 512 {
             let (word, mask) = (code_ as usize / 64, 1u64 << (code_ % 64));
+            let now = self.platform.now();
             if value == 0 {
                 self.held[word] &= !mask;
                 // A key held from before the sheet mapped counts again
                 // once it is released.
-                if let Some(g) = self.sheet_guard.as_mut() {
+                for g in &mut self.sheet_guards {
                     g.keys[word] &= !mask;
                 }
             } else {
                 self.held[word] |= mask;
+                // A key pressed within the guard stays guarded until its
+                // release: its repeats after the guard are not the sheet's
+                // (review of the fix branch, 1).
+                for g in &mut self.sheet_guards {
+                    if now < g.until {
+                        g.keys[word] |= mask;
+                    }
+                }
             }
         }
         // The system key: held, and never a client's (INV-0160-3).
@@ -2358,12 +2374,9 @@ impl<P: Platform> Compositor<P> {
     /// any key in its first `SHEET_GUARD_NS`, and a key held from before it
     /// mapped until that key's release (ADR-0245).
     fn guards_key(&mut self, focus: Key, code_: u32) -> bool {
-        let Some(g) = self.sheet_guard else {
+        let Some(g) = self.sheet_guards.iter().find(|g| g.sheet == focus).copied() else {
             return false;
         };
-        if g.sheet != focus {
-            return false;
-        }
         let held = (code_ as usize) < 512 && g.keys[code_ as usize / 64] & (1 << (code_ % 64)) != 0;
         held || self.platform.now() < g.until
     }
@@ -2371,8 +2384,8 @@ impl<P: Platform> Compositor<P> {
     /// The buttons a pointer event to `key` carries: none in a new sheet's
     /// first `SHEET_GUARD_NS`, and never one held from before (ADR-0245).
     fn guarded_buttons(&mut self, key: Key) -> u32 {
-        match self.sheet_guard {
-            Some(g) if g.sheet == key => {
+        match self.sheet_guards.iter().find(|g| g.sheet == key).copied() {
+            Some(g) => {
                 if self.platform.now() < g.until {
                     0
                 } else {
@@ -2519,11 +2532,17 @@ impl<P: Platform> Compositor<P> {
         self.place_sheets(owner);
         let key = Key { client: slot, id };
         let until = self.platform.now().saturating_add(SHEET_GUARD_NS);
-        self.sheet_guard = Some(SheetGuard {
+        // One guard per sheet: a second sheet leaves the first's (review of
+        // the fix branch, 5); guards of sheets that are gone go.
+        let live: Vec<Key> = self.windows.iter().map(Self::key_of).collect();
+        self.sheet_guards
+            .retain(|g| live.contains(&g.sheet) && g.sheet != key);
+        self.sheet_guards.push(SheetGuard {
             sheet: key,
             until,
             keys: self.held,
             buttons: self.buttons,
+            shown: false,
         });
         if self
             .focus
@@ -3338,6 +3357,17 @@ impl<P: Platform> Compositor<P> {
             }
             let all = w.body_rect();
             self.dirty(&all);
+        }
+        // A sheet's first commit: it can be seen now, and its guard starts
+        // again (ADR-0245).
+        let now = self.platform.now();
+        if let Some(g) = self
+            .sheet_guards
+            .iter_mut()
+            .find(|g| g.sheet == Key { client: slot, id } && !g.shown)
+        {
+            g.shown = true;
+            g.until = now.saturating_add(SHEET_GUARD_NS);
         }
         let w = &mut self.windows[i];
         let Some(r) = Rect::from_client(x, y, width, height, w.buffer.width, w.buffer.height)

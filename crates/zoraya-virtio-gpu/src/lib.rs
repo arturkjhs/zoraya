@@ -329,11 +329,12 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         }
         self.width = width;
         self.height = height;
-        // The physical size with it; a device that cannot say is not broken
-        // for that, but one that answers wrongly is.
+        // The physical size with it: a device that refuses or answers it
+        // wrongly only leaves it unknown; the display still works (review
+        // of the fix branch, 8). A queue that stops answering is lost.
         self.millimetres = match self.read_edid(wait) {
             Ok(mm) => mm,
-            Err(Error::Command(_)) => (0, 0),
+            Err(Error::Command(_) | Error::Device) => (0, 0),
             Err(e) => return Err(e),
         };
         Ok((width, height))

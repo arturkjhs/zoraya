@@ -120,7 +120,15 @@ fn serve(
         } else {
             cmd::OK_NODATA
         };
+        // A short or mislabelled EDID answer.
+        let ok = if kind == cmd::GET_EDID && mm.0 == u32::MAX - 1 {
+            0x1300
+        } else {
+            ok
+        };
+        let short_edid = kind == cmd::GET_EDID && mm.0 == u32::MAX - 2;
         let (answer, length) = match hostile {
+            _ if short_edid => (cmd::OK_EDID, 40),
             Hostile::WrongType => (0x1300, response.len() as u32),
             Hostile::Errors => (cmd::ERR_UNSPEC + 5, 24),
             Hostile::ShortError => (cmd::ERR_UNSPEC + 5, 16),
@@ -659,4 +667,19 @@ fn an_edid_the_device_refuses_leaves_the_size_unknown() {
     let mut gpu = up(&d);
     assert_eq!(gpu.display_info(&mut no_wait()), Ok((1024, 768)));
     assert_eq!(gpu.millimetres(), (0, 0));
+}
+
+/// Review of the fix branch, 8: an EDID answer of the wrong kind or too
+/// short leaves the size unknown, and the display goes on.
+#[test]
+fn a_wrong_edid_answer_leaves_the_size_unknown() {
+    for bad in [u32::MAX - 1, u32::MAX - 2] {
+        let d = device(Hostile::None);
+        d.device.state.borrow_mut().device_features = [F_EDID, 1];
+        d.mm.set((bad, 0));
+        let mut gpu = up(&d);
+        assert_eq!(gpu.display_info(&mut no_wait()), Ok((1024, 768)));
+        assert_eq!(gpu.millimetres(), (0, 0));
+        gpu.attach(&[(FRAME, WHOLE)], &mut no_wait()).unwrap();
+    }
 }

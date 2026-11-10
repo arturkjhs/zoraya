@@ -228,6 +228,12 @@ fn chooser_channel(chooser: Handle, tag: u32, app: &str) -> Option<Handle> {
 /// and its tag, then the record's programs are spawned with exactly the
 /// handles it lists; `opened` is the file the person opened, if any.
 fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
+    // `files` never gets /config to change, whatever `~` is (INV-0169-4).
+    let mut confined = l.clone();
+    if let Some(root) = st.root.as_ref() {
+        zoraya_panel::confine_files(&mut confined, &zoraya_user::namespace::shell_home(root));
+    }
+    let l = &confined;
     let Ok((client, compositor_end)) = channel_create() else {
         return;
     };

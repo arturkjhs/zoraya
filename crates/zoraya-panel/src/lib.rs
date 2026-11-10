@@ -109,6 +109,44 @@ pub fn files_holds(room: Option<&Room>) -> Vec<(String, bool)> {
     holds
 }
 
+/// `files`' record checked against the home it expands `~` with: a hold
+/// to change that, expanded, reaches `/config` is made read-only, and the
+/// entries say so (review of the fix branch, 2: `shell.home` is a setting
+/// the person may set to `/` or `/config`).
+pub fn confine_files(l: &mut Launch, home: &str) {
+    if l.app != "files" {
+        return;
+    }
+    let expand = |p: &str| -> String {
+        match p.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                let h = home.trim_end_matches('/');
+                let joined = format!("{h}{rest}");
+                if joined.is_empty() {
+                    String::from("/")
+                } else {
+                    joined
+                }
+            }
+            _ => String::from(p),
+        }
+    };
+    let mut changed = false;
+    for (p, w) in &mut l.holds {
+        if *w && reaches_config(&expand(p)) {
+            *w = false;
+            changed = true;
+        }
+    }
+    if changed {
+        let data = l.entries.last().cloned();
+        l.entries = l.holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
+        if let Some(d) = data {
+            l.entries.push(d);
+        }
+    }
+}
+
 /// Whether grant path `outer` covers `path`.
 fn covers(outer: &str, path: &str) -> bool {
     outer == "/"
