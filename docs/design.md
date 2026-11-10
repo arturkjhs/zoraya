@@ -798,6 +798,10 @@ Stage 7h (TASK-24, the architect's request and the approved mockups
   the file manager tiled so that the drop lands on `t_open`. The runner gained `dclick`, `rclick`, `mclick`, `mdrag`
   and chords of several modifiers.
 
+Measured (`tests/gui/files-manage.script`, 2026-11-10, QEMU 11.1.2 on the M4 Mac mini, HVF): listing a folder of 2 to
+5 items with each one's size and time, 0.17 to 0.50 ms; right after a change, 6 to 28 ms (the file service commits
+first).
+
 Not built in 7h, or known: a trash (`docs/backlog.md`); a copy or delete that fails part way (a link inside a
 folder, no space, past 4096 entries) leaves what was done and says only "Cannot copy NAME"; a forwarded System chord's
 release carries no `SYSTEM`; `OpenTerminal` is not rate-limited (one request at a time per launcher channel, as

@@ -944,11 +944,19 @@ prints its holds, its status line and its order on the console, which the script
 
 ### Screens
 
-Under `docs/research/desktop/shots/7h/` (light, HVF, scale 1 and 2), beside the mockups they follow: SCREENS_7H
+Under `docs/research/desktop/shots/7h/` (light, HVF, scale 1 and 2), beside the mockups they follow: `files-home-qemu.png` (the
+mockup's `files.png`: the places, the toolbar, the list, the status line with free space), `files-select-qemu.png`
+(`files-select.png`: a Shift range and a Command pick), `files-rename-qemu.png` (`files-rename.png`),
+`files-delete-qemu.png` (`files-delete.png`), `files-menu-qemu.png` and `files-menu-commands-qemu.png` (the menu and
+its `zosh` lines), each also `@2x`. As in the mockups but for: `home`'s single place (the mockups show the room
+`project`), no `/system` place (not a folder of the volume), a neutral ring for a room's own grants (no room
+colour), the title "Files", and the dock and the show-commands tags the compositor draws.
 
 ### Measurements
 
-MEASURE_7H
+In `docs/design.md`: listing a folder of 2 to 5 items with each item's size and time takes 0.17 to 0.50 ms under HVF
+(`files: listed N items in T us`, `tests/gui/files-manage.script`, 2026-11-10); right after a change it takes 6 to
+28 ms, the file service committing first.
 
 ### Invariants
 
