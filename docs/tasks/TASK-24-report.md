@@ -1011,12 +1011,15 @@ Full CI on the branch green (run 42780861790, 43 of 43 jobs; the first two runs 
 
 For the next session (a fresh one; nothing of this session's context is needed):
 
-- **State**: `main` at `f6d83d3`, tags `stage-7a` to `stage-7h` and `stage-7`. ADR-0240 to ADR-0246 are accepted;
-  ADR-0247 (scale from the display's density) and ADR-0248 (what the file manager needs, including `Drag` naming a
-  held press within 3 s) are proposed, and the code follows both. ADR-0248 changes INV-0160-3 and INV-0170-2 and
-  says so (check notes in ADR-0160 and ADR-0170); ADR-0247 changes INV-0090-1 (ADR-0090's open questions).
-- **For the architect**: decide ADR-0247 and ADR-0248; an INV-0245-3 for the sheet's guard; try by hand
-  (`make run-gui`, see "To check by hand"): Retina scale 2, the resize, the file manager's pointer and keys.
+- **State**: `main` at the merge of `fix/adr-0052-ordinals` (full CI on the branch green, run 42806367325, 43 of 43),
+  tags `stage-7a` to `stage-7h` and `stage-7`. ADR-0240 to ADR-0248 are accepted (2026-11-10, decided by the
+  architect). ADR-0247 and ADR-0248 follow ADR-0052: `WindowPointerMods` (30), `DragEndedAt` (31) and
+  `OpenWithApp`/`OpeningApp` (35) carry the new fields, the old messages keep their layouts. INV-0245-3 (the sheet's
+  guard) is in `invariants.md`; INV-0090-1, INV-0160-3 and INV-0170-2 are restated under the new rules; the total is
+  502.
+- **For the architect**: `InfoReply` (ADR-0247) still gained `width_mm`/`height_mm` under its old ordinal (ADR-0052
+  would give it a new one; not in your decision, so left); say if it should be split like the others. ADR-0248 point 5
+  says INV-0170-3's `DragEnded` is read as either message. Try by hand (`make run-gui`, see "To check by hand").
 - **Backlog**: a trash in each writable place (`docs/backlog.md`); a copy or delete that fails part way leaves what
   was done; `Commands` lost when a client's channel is full.
 - **Working rules in force** (the architect, 2026-11-10): the session runs on Sonnet; `opus-review` only for the
