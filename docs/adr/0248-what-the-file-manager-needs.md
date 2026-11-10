@@ -43,6 +43,9 @@ Measured: nothing; host tests and the GUI tests of stage 7h.
      client's focused window* (a gesture inside the window, as browsers' transient activation): Copy path. Never from
      an untrusted room's client; a key gives no such right; the right goes with a focus change to another client, a
      System+C or System+X, and the client's end. A change to INV-0170-2.
+  4b. *A press may be named in `Drag` within 3 s, not 500 ms, while it is still held* (ADR-0170's 500 ms was an
+     `[assumption]`): a file manager repainting under TCG answers a press later than 500 ms (measured: the GUI test
+     of the folder drag fails at 500 ms and passes at 3 s). The copy reply keeps 500 ms.
   5. *`DragEnded` says where the drop was when it was on the source's own window* (`over`, `x`, `y`,
      `modifiers`), and nothing else; no handle moves. The source copies or moves what it already holds. A change to
      ADR-0170's `DragEnded`, not to INV-0170-3.

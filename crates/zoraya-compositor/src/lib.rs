@@ -280,6 +280,11 @@ pub struct SwitchGroup {
 
 /// How long after its press a drag may name it (ADR-0170).
 const DRAG_WITHIN_NS: u64 = 500_000_000;
+/// How long after a press a client may name it in `Drag`, while it is still
+/// held: ADR-0170's 500 ms was an assumption, and a file manager repainting
+/// under TCG answers a press later than that (proposed ADR-0248; the press
+/// must still be held, so nothing is taken after the person let go).
+const DRAG_NAMES_WITHIN_NS: u64 = 3_000_000_000;
 
 /// The dragged entry's label's widest, logical pixels: 64 characters of
 /// the caption face, with the material's padding.
@@ -1325,10 +1330,10 @@ impl<P: Platform> Compositor<P> {
             .filter(|t| !t.is_empty() && !t.contains('/') && rooms::plain_text(t))
             .map(String::from);
         let channel = self.platform.kind(entry) == Kind::Channel;
-        // That press, still held, named within 500 ms of it (ADR-0170).
+        // That press, still held, named within `DRAG_NAMES_WITHIN_NS` of it.
         let now = self.platform.now();
         let held = self.body_press.is_some_and(|(k, serial, at)| {
-            k == key && serial == d.serial && now.saturating_sub(at) <= DRAG_WITHIN_NS
+            k == key && serial == d.serial && now.saturating_sub(at) <= DRAG_NAMES_WITHIN_NS
         }) && self.buttons & gui::buttons::LEFT != 0;
         match (held && channel && self.carried.is_none(), name) {
             (true, Some(name)) => {

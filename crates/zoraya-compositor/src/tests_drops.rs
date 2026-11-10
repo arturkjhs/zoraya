@@ -167,7 +167,8 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
         assert!(ordinals(&t.s.f().take(t.a)).contains(&26));
     }
     assert!(t.s.f().given.is_empty());
-    // A press's serial, named: an older one, or after 500 ms, is refused.
+    // A press's serial, named: an older one, or after `DRAG_NAMES_WITHIN_NS`, is
+    // refused (ADR-0170 said 500 ms; proposed ADR-0248 allows 3 s).
     at(&mut t.s, px, py, Some(1));
     let now = serial(&mut t.s, t.a);
     let e5 = t.s.f().channel(1);
@@ -175,7 +176,7 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
         drag_named(&mut t.s, t.a, t.ida, e5, now - 1),
         status::BAD_RANGE
     );
-    t.s.f().clock += 600_000_000;
+    t.s.f().clock += DRAG_NAMES_WITHIN_NS + 1;
     let e6 = t.s.f().channel(1);
     assert_eq!(drag_named(&mut t.s, t.a, t.ida, e6, now), status::BAD_RANGE);
     at(&mut t.s, px, py, Some(0));

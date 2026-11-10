@@ -80,6 +80,15 @@ pub fn reader() -> Reader {
     reader_at(Scale::ONE)
 }
 
+/// How long a modifier key is held before and after a click or a drag's
+/// release, at least.
+const MODIFIER_SETTLE: Duration = Duration::from_millis(400);
+
+/// How long a drag's button is held after its last move, at least, so that
+/// a slow guest has answered the press before the release (a drag is taken
+/// only while its press is held, ADR-0170).
+const DRAG_SETTLE: Duration = Duration::from_millis(800);
+
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
 /// Where the screendumps go, relative to QEMU's working directory: one file
 /// per run's label, so that two runs at once do not read each other's.
@@ -795,6 +804,13 @@ impl Run {
 
     /// The display's size and scale, from a screendump.
     /// The time between two typed keys at the screen's scale.
+    /// Between a modifier key and the pointer's event (and back): the
+    /// keyboard and the tablet are two devices, read in no fixed order by
+    /// a slow guest, so the key must have been seen before the click.
+    fn modifier_settle(&self) -> Duration {
+        self.key_interval().max(MODIFIER_SETTLE)
+    }
+
     fn key_interval(&self) -> Duration {
         KEY_INTERVAL * self.scale.factor().pow(2)
     }
@@ -1047,10 +1063,10 @@ impl Run {
                 let code = modifier_qcode(m);
                 self.qmp.pointer(at, size, None)?;
                 self.qmp.keys(&[(code, true)])?;
-                std::thread::sleep(self.key_interval());
+                std::thread::sleep(self.modifier_settle());
                 self.qmp.pointer(at, size, Some(true))?;
                 self.qmp.pointer(at, size, Some(false))?;
-                std::thread::sleep(self.key_interval());
+                std::thread::sleep(self.modifier_settle());
                 self.qmp.keys(&[(code, false)])?;
                 std::thread::sleep(AFTER_CLICK);
                 Ok(())
@@ -1068,12 +1084,15 @@ impl Run {
                         (y + (y2 - y) * i / STEPS) * k,
                     );
                     self.qmp.pointer(at, size, None)?;
-                    std::thread::sleep(self.key_interval());
+                    std::thread::sleep(self.modifier_settle());
                 }
+                // The press is held until the program has answered it: a drag
+                // is taken only while its press is held (ADR-0170).
+                std::thread::sleep(DRAG_SETTLE);
                 self.qmp.keys(&[(code, true)])?;
-                std::thread::sleep(self.key_interval());
+                std::thread::sleep(self.modifier_settle());
                 self.qmp.pointer((x2 * k, y2 * k), size, Some(false))?;
-                std::thread::sleep(self.key_interval());
+                std::thread::sleep(self.modifier_settle());
                 self.qmp.keys(&[(code, false)])
             }
             Step::Drag(x, y, x2, y2, hold) => {
@@ -1093,6 +1112,7 @@ impl Run {
                     self.qmp.pointer(at, size, None)?;
                     std::thread::sleep(self.key_interval());
                 }
+                std::thread::sleep(DRAG_SETTLE);
                 self.qmp.pointer((x2 * k, y2 * k), size, Some(false))
             }
             Step::Shot(name) => {

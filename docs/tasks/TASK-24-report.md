@@ -986,6 +986,16 @@ replaced it) and a client's end (`a_place_is_logical_and_the_gesture_goes_with_f
 `|` against `^` of the system bit in `modifiers_now` (the keymap never sets that bit) and in the forwarded key's
 modifiers (the same). The new tests were not run against the mutants again (the cap).
 
+### The CI's first run
+
+The first full CI run (42773494801) failed in `make test-gui` only: `files-manage` under TCG. Reproduced locally with
+`GUI_RUNS=files-manage:tcg:1` (the local default skips TCG; `FULL=1` or a named run does it). Two causes: the
+runner sent a modifier key and a click as two devices' events too close together (a Command-click arrived plain), so it
+now holds the modifier 400 ms around the click; and a slow guest answered a press later than ADR-0170's 500 ms
+`[assumption]` for naming it in `Drag` (the press must still be held): measured, the folder drag fails at 500 ms and
+passes at 3 s, so `Drag` takes a held press within 3 s (proposed ADR-0248, point 4b; the copy reply keeps 500 ms).
+The runner also holds a drag's button 800 ms after its last move.
+
 ### Merge
 
 MERGE_7H
