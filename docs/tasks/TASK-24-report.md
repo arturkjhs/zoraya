@@ -909,7 +909,8 @@ checked by removing each half (time, held keys): each removal fails a test.
 
 ### Merge
 
-FIXES_MERGE
+Full CI on the branch green (run 42765790151, after a run cancelled by mistake); merged into `main` at `10267d0`;
+`main`'s CI green (run 42768220409). No tag: not a part of the stage; 7h, which contains it, is tagged.
 
 ## 7h: the file manager
 
