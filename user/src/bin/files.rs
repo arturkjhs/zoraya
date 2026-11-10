@@ -277,14 +277,25 @@ struct FileManager {
     model: Rc<RefCell<Model>>,
     window: u32,
     /// What the serial line was last told: the status line and the sort.
-    told: (String, String),
+    told: Told,
+}
+
+/// What the serial line was last told, for the GUI tests: they wait for
+/// each answer before the next key, which goes by another device.
+#[derive(Default)]
+struct Told {
+    status: String,
+    order: String,
+    keys: &'static str,
+    menu: bool,
+    asks: String,
 }
 
 impl FileManager {
     /// Tells the serial line a new status line or a new order, for the GUI
     /// tests (the window's text is not read from the screen).
     fn report(&mut self) {
-        let (status, order) = {
+        let (status, order, keys, menu, asks) = {
             let m = self.model.borrow();
             let col = match m.sort {
                 zoraya_files::Column::Name => "name",
@@ -293,15 +304,40 @@ impl FileManager {
             };
             let names: Vec<&str> = m.view().iter().map(|i| m.items[*i].name.as_str()).collect();
             let dir = if m.ascending { "up" } else { "down" };
-            (m.status(), format!("{col} {dir}: {}", names.join(" ")))
+            (
+                m.status(),
+                format!("{col} {dir}: {}", names.join(" ")),
+                match m.focus {
+                    zoraya_files::model::Focus::List => "list",
+                    zoraya_files::model::Focus::Search => "search",
+                },
+                m.menu.is_some(),
+                m.confirm_text().map(|c| c.0).unwrap_or_default(),
+            )
         };
-        if status != self.told.0 {
+        if status != self.told.status {
             println!("files: status {status}");
-            self.told.0 = status;
+            self.told.status = status;
         }
-        if order != self.told.1 {
+        if order != self.told.order {
             println!("files: sorted by {order}");
-            self.told.1 = order;
+            self.told.order = order;
+        }
+        if keys != self.told.keys {
+            println!("files: keys go to the {keys}");
+            self.told.keys = keys;
+        }
+        if menu != self.told.menu {
+            println!("files: menu {}", if menu { "open" } else { "closed" });
+            self.told.menu = menu;
+        }
+        if asks != self.told.asks {
+            if asks.is_empty() {
+                println!("files: asks nothing");
+            } else {
+                println!("files: asks {asks}");
+            }
+            self.told.asks = asks;
         }
     }
 
@@ -657,7 +693,10 @@ fn main() -> i32 {
         panel,
         model,
         window: 0,
-        told: (String::new(), String::new()),
+        told: Told {
+            keys: "list",
+            ..Told::default()
+        },
     };
     // What the places allow, as the file service answered (INV-0168-2:
     // never `/` nor `/config` to change).

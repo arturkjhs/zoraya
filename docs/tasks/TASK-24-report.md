@@ -994,7 +994,12 @@ runner sent a modifier key and a click as two devices' events too close together
 now holds the modifier 400 ms around the click; and a slow guest answered a press later than ADR-0170's 500 ms
 `[assumption]` for naming it in `Drag` (the press must still be held): measured, the folder drag fails at 500 ms and
 passes at 3 s, so `Drag` takes a held press within 3 s (proposed ADR-0248, point 4b; the copy reply keeps 500 ms).
-The runner also holds a drag's button 800 ms after its last move.
+The runner also holds a drag's button 800 ms after its last move. The second run (42777712396) failed in the same
+script at the rename: `serial` matches the whole log, so a wait for a status line that had printed before was
+satisfied at once and F2 (the keyboard) overtook the click (the tablet). The runner gained `then TEXT`, which waits for
+output after the last input step; `files-manage` uses it throughout, and `files` prints when the search takes the keys,
+when the menu opens or closes and when it asks before a delete, for the next key to wait for. Reproduced with QEMU on
+the efficiency cores (`taskpolicy -b`), as in 7d.
 
 ### Merge
 

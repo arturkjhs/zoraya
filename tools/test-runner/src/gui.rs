@@ -19,6 +19,9 @@
 //! ```text
 //! # a comment
 //! serial TEXT       wait until TEXT appears on the serial line
+//! then TEXT         wait until TEXT appears on the serial line after the
+//!                   last input step (a click, key, chord, type or drag): an
+//!                   earlier identical line does not count
 //! screen TEXT       wait until a row below the last matched one reads TEXT
 //! prefix TEXT       the same for a row that begins with TEXT (a line being
 //!                   edited, whose faint suggestion follows what is typed)
@@ -146,6 +149,7 @@ const QMP_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Serial(String),
+    Then(String),
     Screen(String),
     Prefix(String),
     Pause(u64),
@@ -192,6 +196,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
         let bad = |what: &str| format!("line {n}: {what}");
         steps.push(match kind {
             "serial" => Step::Serial(rest.to_string()),
+            "then" => Step::Then(rest.to_string()),
             "screen" => Step::Screen(rest.to_string()),
             "prefix" => Step::Prefix(rest.to_string()),
             "pause" => Step::Pause(
@@ -697,6 +702,9 @@ struct Run {
     serial: mpsc::Receiver<(String, output::Read)>,
     /// The serial line so far, at most `output::LOG_CAP` bytes.
     seen: String,
+    /// Where `seen` ended when the last input step began: `then` looks
+    /// from there.
+    mark: usize,
     out: output::Output,
     label: String,
     deadline: Instant,
@@ -825,7 +833,34 @@ impl Run {
     }
 
     fn step(&mut self, step: &Step) -> Result<(), String> {
+        // An input step: what the guest prints from now on is its answer.
+        if matches!(
+            step,
+            Step::Type(_)
+                | Step::Key(_)
+                | Step::Chord(..)
+                | Step::Click(..)
+                | Step::DoubleClick(..)
+                | Step::RightClick(..)
+                | Step::ModClick(..)
+                | Step::ModDrag(..)
+                | Step::Drag(..)
+        ) {
+            self.pump()?;
+            self.mark = self.seen.len();
+        }
         match step {
+            Step::Then(text) => loop {
+                self.pump()?;
+                if self
+                    .seen
+                    .get(self.mark..)
+                    .is_some_and(|t| t.contains(text.as_str()))
+                {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            },
             Step::Serial(text) => loop {
                 self.pump()?;
                 if self.seen.contains(text.as_str()) {
@@ -1183,6 +1218,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             qmp: q,
             serial: rx,
             seen: String::new(),
+            mark: 0,
             out: output::Output::new(label),
             label: label.to_string(),
             deadline,
@@ -1248,6 +1284,10 @@ mod tests {
         assert!(parse("shot ../x\n").is_err());
         assert!(parse("shot\n").is_err());
         assert_eq!(parse("click 3 4\n").unwrap(), [Step::Click(3, 4)]);
+        assert_eq!(
+            parse("then files: x\n").unwrap(),
+            [Step::Then(String::from("files: x"))]
+        );
         assert_eq!(parse("dclick 3 4\n").unwrap(), [Step::DoubleClick(3, 4)]);
         assert_eq!(parse("rclick 3 4\n").unwrap(), [Step::RightClick(3, 4)]);
         assert_eq!(
