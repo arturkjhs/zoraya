@@ -159,7 +159,7 @@ fn the_parts_are_where_the_mockup_draws_them() {
 fn a_click_selects_and_a_double_click_opens() {
     let mut r = rig(1);
     let (x, y) = Rig::row(3);
-    assert_eq!(r.click(x, y, 0), Response::Repaint);
+    assert_eq!(r.click(x, y, 0), Response::Activated(9));
     assert_eq!(r.model.borrow().selected_names(), ["notes.txt"]);
     later(DOUBLE_NS / 2);
     assert_eq!(r.click(x, y, 0), Response::Activated(9));
@@ -171,7 +171,7 @@ fn a_click_selects_and_a_double_click_opens() {
     later(DOUBLE_NS * 2);
     r.click(x, y, 0);
     later(DOUBLE_NS + 1);
-    assert_eq!(r.click(x, y, 0), Response::Repaint);
+    assert_eq!(r.click(x, y, 0), Response::Activated(9));
     // A folder opens on a double click.
     let (fx, fy) = Rig::row(0);
     later(DOUBLE_NS * 2);
@@ -389,4 +389,33 @@ fn a_drops_place_names_its_row() {
         None,
         "below the rows"
     );
+}
+
+/// A press right after a drag, or on another item at the same row, is no
+/// double click (the GUI test found it: the list changed under the row).
+#[test]
+fn a_drag_or_another_item_is_no_double_click() {
+    let mut r = rig(1);
+    let (x, y) = Rig::row(3);
+    later(DOUBLE_NS * 2);
+    r.at(x, y, 1, 0);
+    r.at(x + 10, y, 1, 0);
+    r.at(x + 10, y, 0, 0);
+    r.acts();
+    later(1000);
+    r.click(x, y, 0);
+    assert!(r.acts().is_empty(), "after a drag");
+    // The same row, another item there now.
+    later(DOUBLE_NS * 2);
+    r.click(x, y, 0);
+    let items = vec![
+        item("docs", true, 0),
+        item("include", true, 0),
+        item("main.c", false, 1),
+        item("zz.txt", false, 1),
+    ];
+    r.model.borrow_mut().show("/home/ann/project", items);
+    later(1000);
+    r.click(x, y, 0);
+    assert!(r.acts().is_empty(), "another item");
 }

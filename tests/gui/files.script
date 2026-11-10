@@ -16,11 +16,13 @@ click 427 723
 pause 1500
 click 400 120
 region 162 108 100 4 f7f7f8
+# What it holds, as the file service answered: the volume to read, ~ to
+# change, never / nor /config (INV-0168-2 as changed on 2026-11-10).
+serial files: holds +r / +w ~
 shot files
-# The list: notes.test, its only row; Enter opens it with t_open (by its
-# extension, .test, the test application's), which reads it and cannot
-# write it.
-key tab
+# The list: notes.test, its only row; Down and Enter open it with t_open
+# (by its extension, .test, the test application's), which reads it and
+# cannot write it.
 key down
 type \r
 serial files: opened +r ~/notes.test
@@ -52,20 +54,27 @@ serial t_open: saved nový.txt
 serial t_open: other.txt beside nový.txt refused
 # A drop (ADR-0170): t_open moved aside by its title bar, the file
 # manager raised by its own, and notes.test dragged from the list onto
-# t_open, the press held long enough for files to answer it. t_open gets
-# the file to read, and its frame the pill.
+# t_open: files starts the drag when the press moves (within the 500 ms in
+# which the compositor takes a drag of a press). t_open gets the file to
+# read, and its frame the pill.
 drag 300 152 700 450
 click 540 120
 pause 500
-drag 160 207 800 520 600
+# The file manager, wide, would cover t_open: System+Left tiles it to the
+# left half (its body at (1, 64), its first row at y 158).
+chord meta left
+pause 800
+shot tiled
+drag 305 158 700 540 100
 serial files: dragging notes.test
 serial t_open: dropped notes.test
 serial t_open: opened notes.test: 6 bytes: "hello"
 serial t_open: write to notes.test refused
 pause 500
 shot drop
-# The first terminal sees what was saved, and notes.test unchanged.
-click 400 80
+# The first terminal (its title bar's right end, beside the tiled file
+# manager) sees what was saved, and notes.test unchanged.
+click 620 80
 region 130 76 100 4 f7f7f8
 origin 73 106
 type ls\r

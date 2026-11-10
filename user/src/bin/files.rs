@@ -276,9 +276,35 @@ struct FileManager {
     panel: Handle,
     model: Rc<RefCell<Model>>,
     window: u32,
+    /// What the serial line was last told: the status line and the sort.
+    told: (String, String),
 }
 
 impl FileManager {
+    /// Tells the serial line a new status line or a new order, for the GUI
+    /// tests (the window's text is not read from the screen).
+    fn report(&mut self) {
+        let (status, order) = {
+            let m = self.model.borrow();
+            let col = match m.sort {
+                zoraya_files::Column::Name => "name",
+                zoraya_files::Column::Size => "size",
+                zoraya_files::Column::Modified => "modified",
+            };
+            let names: Vec<&str> = m.view().iter().map(|i| m.items[*i].name.as_str()).collect();
+            let dir = if m.ascending { "up" } else { "down" };
+            (m.status(), format!("{col} {dir}: {}", names.join(" ")))
+        };
+        if status != self.told.0 {
+            println!("files: status {status}");
+            self.told.0 = status;
+        }
+        if order != self.told.1 {
+            println!("files: sorted by {order}");
+            self.told.1 = order;
+        }
+    }
+
     fn say(&mut self, s: String) {
         if !s.is_empty() {
             println!("files: {s}");
@@ -523,6 +549,7 @@ impl FileManager {
 
     fn run(&mut self) -> i32 {
         loop {
+            self.report();
             match self.app.wait() {
                 Happened::Gone | Happened::CloseRequested(_) => return 0,
                 Happened::Ui {
@@ -590,7 +617,18 @@ fn main() -> i32 {
     };
     let home = zoraya_user::app::home(&mut fs, volume);
     let holds = places.holds();
-    let model_places = zoraya_files::places(&holds, &home);
+    // A place that is not there (the image's folder on a volume without
+    // one) is not shown.
+    let model_places: Vec<_> = zoraya_files::places(&holds, &home)
+        .into_iter()
+        .filter(|p| {
+            p.path == "/"
+                || places
+                    .open(&mut fs, &p.path, open_flags::DIRECTORY, rights::READ)
+                    .map(|h| fs.close(h))
+                    .is_ok()
+        })
+        .collect();
     // It starts in the first place it may change, else in the home.
     let start = holds
         .iter()
@@ -610,7 +648,23 @@ fn main() -> i32 {
         panel,
         model,
         window: 0,
+        told: (String::new(), String::new()),
     };
+    // What the places allow, as the file service answered (INV-0168-2:
+    // never `/` nor `/config` to change).
+    let mut holds = f.places.holds();
+    holds.sort();
+    let held: Vec<String> = holds
+        .iter()
+        .map(|(p, w)| {
+            format!(
+                "{} {}",
+                if *w { "+w" } else { "+r" },
+                f.model.borrow().shown(p)
+            )
+        })
+        .collect();
+    println!("files: holds {}", held.join(" "));
     f.refresh_free();
     f.show(&start);
     let Some(window) = f.app.open("Files", Box::new(view), WIDTH, HEIGHT) else {

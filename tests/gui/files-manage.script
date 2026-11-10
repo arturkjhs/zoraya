@@ -1,0 +1,128 @@
+# Stage 7h's file manager (the approved mockups, docs/research/desktop/
+# mockups/clear-field/files*.png): selection by click, Shift and Command,
+# sorting by a header, the keyboard (arrows, Enter, Command+Up, Delete with
+# its confirmation), search, rename in place, a new folder, a drag onto a
+# folder that moves (Alt: copies), a double click, the context menu with
+# Copy path and Open terminal here and its zosh lines in show-commands
+# mode, the places. files tells the serial line its holds, every status
+# line and every order. Coordinates are logical at scale 1: the file
+# manager is the second window, its body at (105, 138); its rows at
+# y = 232 + 28 n, its header at y 200, its toolbar at y 162.
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+type mkdir docs\r
+screen ~> _
+type echo a > a.txt\r
+screen ~> _
+type echo bb > b.txt\r
+screen ~> _
+type echo ccc > c.txt\r
+screen ~> _
+# The file manager from the dock, in home: the volume to read, ~ to change
+# (INV-0168-2: the file service refused the volume to write).
+click 427 723
+serial files: holds +r / +w ~
+serial files: ~ lists docs/ a.txt b.txt c.txt
+pause 1500
+# Focused by a click on its title bar (a new window does not take focus
+# from the terminal).
+click 545 119
+pause 500
+shot files-home
+# A click, Shift to extend, Command to take one away.
+click 409 260
+serial files: status 4 items · a.txt selected (2 B)
+mclick shift 409 316
+serial files: status 4 items · 3 selected (9 B)
+mclick meta 409 288
+serial files: status 4 items · 2 selected (6 B)
+pause 300
+shot files-select
+# The size header: largest first, again smallest first; the name header.
+click 805 200
+serial files: sorted by size down: docs c.txt b.txt a.txt
+click 805 200
+serial files: sorted by size up: docs a.txt b.txt c.txt
+click 349 200
+serial files: sorted by name up: docs a.txt b.txt c.txt
+# The keyboard: arrows, Enter into a folder, Command+Up back out.
+click 409 232
+serial files: status 4 items · docs selected (0 B)
+key down
+serial files: status 4 items · a.txt selected (2 B)
+key up
+serial files: status 4 items · docs selected (0 B)
+key ret
+serial files: ~/docs lists
+chord meta up
+serial files: ~ lists docs/ a.txt b.txt c.txt
+# Search in the folder shown.
+click 873 162
+type b
+serial files: status 1 item matching “b”
+key esc
+serial files: status 4 items
+# Rename in place: F2, the stem replaced, Enter keeps it.
+click 409 260
+serial files: status 4 items · a.txt selected (2 B)
+key f2
+pause 300
+shot files-rename
+type z
+key ret
+serial files: Renamed a.txt to z.txt.
+# Command+Shift+N: a new folder.
+chord meta+shift n
+serial files: Made New folder.
+# Delete asks first; Enter confirms. Rows: docs, New folder, b, c, z.
+click 409 288
+serial files: status 5 items · b.txt selected (3 B)
+key delete
+pause 500
+shot files-delete
+key ret
+serial files: Deleted b.txt.
+# A drag onto a folder moves; with Alt it copies. Rows: docs, New folder,
+# c.txt, z.txt.
+drag 409 288 409 232
+serial files: Moved c.txt to ~/docs.
+mdrag alt 409 288 409 232
+serial files: Copied z.txt to ~/docs.
+# A double click enters the folder.
+dclick 409 232
+serial files: ~/docs lists c.txt z.txt
+# The context menu on c.txt: Copy path.
+rclick 409 232
+pause 500
+shot files-menu
+click 439 408
+serial files: Copied ~/docs/c.txt.
+# In show-commands mode the menu writes each item's zosh line.
+chord meta slash
+rclick 409 232
+pause 500
+shot files-menu-commands
+key esc
+chord meta slash
+# Open terminal here: a terminal in this folder, in the window's room.
+rclick 409 232
+pause 300
+click 439 434
+serial files: A terminal in ~/docs.
+pause 1500
+# Up and back in the toolbar, and the place Home in the sidebar.
+click 545 119
+pause 300
+click 201 162
+serial files: ~ lists docs/ New folder/ z.txt
+click 131 162
+serial files: ~/docs lists
+click 180 234
+serial files: ~ lists docs/ New folder/ z.txt
+# The first terminal: power off.
+click 85 400
+pause 300
+origin 73 106
+type poweroff\r
+exit

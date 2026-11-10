@@ -80,8 +80,9 @@ pub struct FilesView {
     buttons: u32,
     /// The last left press: where, on which row, when.
     press: Option<(i32, i32, Option<usize>, u64)>,
-    /// The press before it, for a double click.
-    last_press: Option<(usize, u64)>,
+    /// The press before it, for a double click: on which item (by name,
+    /// in which folder) and when.
+    last_press: Option<(String, u64)>,
     dragged: bool,
     /// The crumbs' boxes from the last paint, physical x ranges.
     crumbs: Vec<(i32, i32)>,
@@ -337,12 +338,10 @@ impl FilesView {
         Hit::Nothing
     }
 
+    /// Every change is the program's to see: it carries out what the model
+    /// asks, if anything, and tells the serial line the status line.
     fn answer(&self) -> Response {
-        if self.model.borrow().acts.is_empty() {
-            Response::Repaint
-        } else {
-            Response::Activated(self.id)
-        }
+        Response::Activated(self.id)
     }
 
     /// A left press at physical `(x, y)` with `modifiers`.
@@ -360,7 +359,7 @@ impl FilesView {
         // keeps the name.
         if m.menu.is_some() && !matches!(hit, Hit::MenuItem(_) | Hit::Menu) {
             m.menu = None;
-            return Response::Repaint;
+            return Response::Activated(self.id);
         }
         match hit {
             Hit::Back => m.back(),
@@ -382,15 +381,20 @@ impl FilesView {
             }
             Hit::Header(c) => m.sort_by(c),
             Hit::Row(p) => {
+                let id = m
+                    .item_at(p)
+                    .map(|it| alloc::format!("{}/{}", m.dir, it.name))
+                    .unwrap_or_default();
                 let double = self
                     .last_press
-                    .is_some_and(|(q, at)| q == p && now.saturating_sub(at) <= DOUBLE_NS)
+                    .as_ref()
+                    .is_some_and(|(q, at)| *q == id && now.saturating_sub(*at) <= DOUBLE_NS)
                     && modifiers & (mods::SHIFT | mods::COMMAND) == 0;
                 if double {
                     self.last_press = None;
                     m.activate(p);
                 } else {
-                    self.last_press = Some((p, now));
+                    self.last_press = Some((id, now));
                     // A press on a selected row keeps the selection, so that
                     // a drag carries it; the click alone happens at release.
                     if !(m.is_selected(p) && modifiers & (mods::SHIFT | mods::COMMAND) == 0) {
@@ -423,7 +427,7 @@ impl FilesView {
             Hit::ListEnd => m.open_menu(lx as u32, ly as u32, None),
             _ => m.menu = None,
         }
-        Response::Repaint
+        Response::Activated(self.id)
     }
 
     fn pointer(&mut self, x: Logical, y: Logical, buttons: u32, modifiers: u32) -> Response {
@@ -451,7 +455,7 @@ impl FilesView {
                 let mut m = self.model.borrow_mut();
                 if !self.dragged && m.is_selected(p) && m.selection().len() > 1 {
                     m.click(p, modifiers);
-                    return Response::Repaint;
+                    return Response::Activated(self.id);
                 }
             }
             return Response::None;
@@ -463,6 +467,8 @@ impl FilesView {
             && ((x - x0).abs() > DRAG_START * k || (y - y0).abs() > DRAG_START * k)
         {
             self.dragged = true;
+            // A drag is no first click of a double click.
+            self.last_press = None;
             self.model.borrow_mut().start_drag(p);
             return self.answer();
         }
