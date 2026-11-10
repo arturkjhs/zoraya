@@ -51,6 +51,7 @@ fn a_button_paints_in_its_tokens_and_activates() {
         x: Scale::ONE.logical(10),
         y: Scale::ONE.logical(10),
         buttons: 1,
+        modifiers: 0,
     };
     assert_eq!(w.event(press), Response::Activated(7));
     // Focused: the ring in accent.
@@ -126,6 +127,7 @@ fn check_box_switch_and_radio_change_on_keys_and_presses() {
         x: Scale::ONE.logical(5),
         y: Scale::ONE.logical(5),
         buttons: 1,
+        modifiers: 0,
     };
     assert_eq!(w.event(press), Response::Changed(5));
     w.paint(&mut p, &mut px, 200);
@@ -372,6 +374,7 @@ fn pointer(x: u32, y: u32, buttons: u32) -> Event {
         x: l(x),
         y: l(y),
         buttons,
+        modifiers: 0,
     }
 }
 

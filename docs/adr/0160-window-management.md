@@ -95,6 +95,7 @@ Nothing here depends on POSIX. A POSIX program's terminal is a window of the ter
 - **INV-0160-7.** The bar kind, the sheet kind and the system tint are set only through the manager channel: no client ordinal creates a bar or a sheet, marks a window as a system window, paints into a bar's glass or its trusted-mark region, or raises a window above the bar. *Check:* host test sending every client ordinal and asserting the kinds, the bar's pixels and the stacking against the bar are unchanged.
 
 ## Open questions
+- *(Check note, 2026-11-10, ADR-0001 rule 6.)* On `work/7h` the compositor now forwards a System chord whose key is not in `TAKEN_CHORDS` to the focused client with `SYSTEM`, and its test checks that (proposed ADR-0248, built at the architect's request for the file manager); INV-0160-3's row stays `checked` for the rest of its rule. If ADR-0248 is refused, the undo is `TAKEN_CHORDS` covering every key, and the file manager falls back to Ctrl.
 - Whether `frame.height` of 28 logical pixels (36 in the second mist) and the button sizes suit a person: decided by the mockups.
 - Whether a bar's translucency should be the compositor's glass under an alpha buffer (above) or a bar that draws its own pixels over a blurred copy the compositor hands it; the first keeps the blurred copy in one place.
 - Whether the hover card and the show-commands tags need a kind of their own in the compositor, or are overlays like the switcher: the mockups draw them as overlays.

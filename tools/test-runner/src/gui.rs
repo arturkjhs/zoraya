@@ -19,6 +19,9 @@
 //! ```text
 //! # a comment
 //! serial TEXT       wait until TEXT appears on the serial line
+//! then TEXT         wait until TEXT appears on the serial line after the
+//!                   last input step (a click, key, chord, type or drag): an
+//!                   earlier identical line does not count
 //! screen TEXT       wait until a row below the last matched one reads TEXT
 //! prefix TEXT       the same for a row that begins with TEXT (a line being
 //!                   edited, whose faint suggestion follows what is typed)
@@ -36,6 +39,10 @@
 //!                   left button
 //! drag X Y X2 Y2 [HOLD]  press the left button at (X, Y), hold it HOLD ms,
 //!                   move to (X2, Y2) in steps, release
+//! dclick X Y        two left clicks at (X, Y) at once: a double click
+//! rclick X Y        a right click at (X, Y)
+//! mclick MOD X Y    a left click with MOD (shift, ctrl, alt, meta) held
+//! mdrag MOD X Y X2 Y2 [HOLD]  a drag with MOD held at its release
 //!
 //! Coordinates are logical pixels: the runner multiplies them by the
 //! display's scale (ADR-0164), which it takes from the screendump's width
@@ -75,6 +82,15 @@ pub fn reader_at(scale: Scale) -> Reader {
 pub fn reader() -> Reader {
     reader_at(Scale::ONE)
 }
+
+/// How long a modifier key is held before and after a click or a drag's
+/// release, at least.
+const MODIFIER_SETTLE: Duration = Duration::from_millis(400);
+
+/// How long a drag's button is held after its last move, at least, so that
+/// a slow guest has answered the press before the release (a drag is taken
+/// only while its press is held, ADR-0170).
+const DRAG_SETTLE: Duration = Duration::from_millis(800);
 
 const FORBIDDEN: [&str; 3] = ["ZORAYA-PANIC", "ZORAYA-FAULT", "panicked"];
 /// Where the screendumps go, relative to QEMU's working directory: one file
@@ -133,6 +149,7 @@ const QMP_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Serial(String),
+    Then(String),
     Screen(String),
     Prefix(String),
     Pause(u64),
@@ -142,6 +159,12 @@ pub enum Step {
     Region(i64, i64, i64, i64, u32),
     Latency(usize),
     Click(i64, i64),
+    DoubleClick(i64, i64),
+    RightClick(i64, i64),
+    /// A click with a modifier's QEMU key held.
+    ModClick(String, i64, i64),
+    /// A drag with a modifier held from before the release.
+    ModDrag(String, i64, i64, i64, i64, u64),
     Layout(usize),
     /// From, to, and how long the press is held before the move, in ms.
     Drag(i64, i64, i64, i64, u64),
@@ -157,6 +180,11 @@ pub enum Step {
     Exit,
 }
 
+/// QEMU's key code for a script's modifier name.
+fn modifier_qcode(m: &str) -> &str {
+    if m == "meta" { "meta_l" } else { m }
+}
+
 pub fn parse(text: &str) -> Result<Vec<Step>, String> {
     let mut steps = Vec::new();
     for (i, line) in text.lines().enumerate() {
@@ -168,6 +196,7 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
         let bad = |what: &str| format!("line {n}: {what}");
         steps.push(match kind {
             "serial" => Step::Serial(rest.to_string()),
+            "then" => Step::Then(rest.to_string()),
             "screen" => Step::Screen(rest.to_string()),
             "prefix" => Step::Prefix(rest.to_string()),
             "pause" => Step::Pause(
@@ -178,8 +207,13 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             "key" => Step::Key(rest.to_string()),
             "chord" => {
                 let (m, code) = rest.split_once(' ').ok_or_else(|| bad("chord MOD QCODE"))?;
-                if !matches!(m, "ctrl" | "shift" | "alt" | "meta") {
-                    return Err(bad("chord's modifier is ctrl, shift, alt or meta"));
+                if !m
+                    .split('+')
+                    .all(|m| matches!(m, "ctrl" | "shift" | "alt" | "meta"))
+                {
+                    return Err(bad(
+                        "chord's modifiers are ctrl, shift, alt or meta, joined by +",
+                    ));
                 }
                 Step::Chord(m.to_string(), code.to_string())
             }
@@ -204,6 +238,38 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                     return Err(bad("click X Y"));
                 };
                 Step::Click(x, y)
+            }
+            "dclick" | "rclick" => {
+                let v: Vec<i64> = rest
+                    .split_whitespace()
+                    .map(|n| n.parse().map_err(|_| bad("not a number")))
+                    .collect::<Result<_, _>>()?;
+                let [x, y] = v[..] else {
+                    return Err(bad("dclick X Y or rclick X Y"));
+                };
+                if kind == "dclick" {
+                    Step::DoubleClick(x, y)
+                } else {
+                    Step::RightClick(x, y)
+                }
+            }
+            "mclick" | "mdrag" => {
+                let (m, rest) = rest.split_once(' ').ok_or_else(|| bad("MOD and a place"))?;
+                if !matches!(m, "ctrl" | "shift" | "alt" | "meta") {
+                    return Err(bad("the modifier is ctrl, shift, alt or meta"));
+                }
+                let v: Vec<i64> = rest
+                    .split_whitespace()
+                    .map(|n| n.parse().map_err(|_| bad("not a number")))
+                    .collect::<Result<_, _>>()?;
+                match (kind, &v[..]) {
+                    ("mclick", [x, y]) => Step::ModClick(m.to_string(), *x, *y),
+                    ("mdrag", [x, y, x2, y2]) => Step::ModDrag(m.to_string(), *x, *y, *x2, *y2, 0),
+                    ("mdrag", [x, y, x2, y2, h]) if *h >= 0 => {
+                        Step::ModDrag(m.to_string(), *x, *y, *x2, *y2, *h as u64)
+                    }
+                    _ => return Err(bad("mclick MOD X Y or mdrag MOD X Y X2 Y2 [HOLD_MS]")),
+                }
             }
             "drag" => {
                 let v: Vec<i64> = rest
@@ -581,9 +647,29 @@ impl Qmp {
     /// absolute axes run from 0 to 32767), with the left button's change.
     fn pointer(
         &mut self,
+        at: (i64, i64),
+        size: (usize, usize),
+        button: Option<bool>,
+    ) -> Result<(), String> {
+        self.pointer_with(at, size, button.map(|d| ("left", d)))
+    }
+
+    /// The pointer to `(x, y)`, with one button's change, or with each of
+    /// `clicks` (button, down) in the same batch.
+    fn pointer_with(
+        &mut self,
+        at: (i64, i64),
+        size: (usize, usize),
+        button: Option<(&str, bool)>,
+    ) -> Result<(), String> {
+        self.pointer_batch(at, size, &button.into_iter().collect::<Vec<_>>())
+    }
+
+    fn pointer_batch(
+        &mut self,
         (x, y): (i64, i64),
         (width, height): (usize, usize),
-        button: Option<bool>,
+        clicks: &[(&str, bool)],
     ) -> Result<(), String> {
         let axis = |v: i64, side: usize| {
             (v.clamp(0, side as i64 - 1) * 32767 / (side as i64 - 1).max(1)) as u32
@@ -593,9 +679,9 @@ impl Qmp {
             axis(x, width),
             axis(y, height)
         );
-        if let Some(down) = button {
+        for (b, down) in clicks {
             events.push_str(&format!(
-                r#",{{"type":"btn","data":{{"down":{down},"button":"left"}}}}"#
+                r#",{{"type":"btn","data":{{"down":{down},"button":"{b}"}}}}"#
             ));
         }
         let command =
@@ -616,6 +702,9 @@ struct Run {
     serial: mpsc::Receiver<(String, output::Read)>,
     /// The serial line so far, at most `output::LOG_CAP` bytes.
     seen: String,
+    /// Where `seen` ended when the last input step began: `then` looks
+    /// from there.
+    mark: usize,
     out: output::Output,
     label: String,
     deadline: Instant,
@@ -723,6 +812,13 @@ impl Run {
 
     /// The display's size and scale, from a screendump.
     /// The time between two typed keys at the screen's scale.
+    /// Between a modifier key and the pointer's event (and back): the
+    /// keyboard and the tablet are two devices, read in no fixed order by
+    /// a slow guest, so the key must have been seen before the click.
+    fn modifier_settle(&self) -> Duration {
+        self.key_interval().max(MODIFIER_SETTLE)
+    }
+
     fn key_interval(&self) -> Duration {
         KEY_INTERVAL * self.scale.factor().pow(2)
     }
@@ -737,7 +833,34 @@ impl Run {
     }
 
     fn step(&mut self, step: &Step) -> Result<(), String> {
+        // An input step: what the guest prints from now on is its answer.
+        if matches!(
+            step,
+            Step::Type(_)
+                | Step::Key(_)
+                | Step::Chord(..)
+                | Step::Click(..)
+                | Step::DoubleClick(..)
+                | Step::RightClick(..)
+                | Step::ModClick(..)
+                | Step::ModDrag(..)
+                | Step::Drag(..)
+        ) {
+            self.pump()?;
+            self.mark = self.seen.len();
+        }
         match step {
+            Step::Then(text) => loop {
+                self.pump()?;
+                if self
+                    .seen
+                    .get(self.mark..)
+                    .is_some_and(|t| t.contains(text.as_str()))
+                {
+                    return Ok(());
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            },
             Step::Serial(text) => loop {
                 self.pump()?;
                 if self.seen.contains(text.as_str()) {
@@ -804,13 +927,13 @@ impl Run {
             }
             Step::Key(code) => self.qmp.press(code, false),
             Step::Chord(m, code) => {
-                let m = if m == "meta" { "meta_l" } else { m.as_str() };
-                self.qmp.keys(&[
-                    (m, true),
-                    (code.as_str(), true),
-                    (code.as_str(), false),
-                    (m, false),
-                ])
+                // Every modifier down, the key, then up in reverse.
+                let mods: Vec<&str> = m.split('+').map(modifier_qcode).collect();
+                let mut events: Vec<(&str, bool)> = mods.iter().map(|m| (*m, true)).collect();
+                events.push((code.as_str(), true));
+                events.push((code.as_str(), false));
+                events.extend(mods.iter().rev().map(|m| (*m, false)));
+                self.qmp.keys(&events)
             }
             // Waits for the colour, as `screen` waits for text: under TCG
             // the compositor may not have drawn yet what a pointer step did.
@@ -947,6 +1070,66 @@ impl Run {
                 std::thread::sleep(AFTER_CLICK);
                 Ok(())
             }
+            Step::DoubleClick(x, y) => {
+                let (size, k) = self.display()?;
+                let at = (x * k, y * k);
+                self.qmp.pointer(at, size, None)?;
+                // Four events of their own, at once: one batch is one frame
+                // of the tablet's, which the compositor reads as its last
+                // state.
+                for down in [true, false, true, false] {
+                    self.qmp.pointer(at, size, Some(down))?;
+                }
+                std::thread::sleep(AFTER_CLICK);
+                Ok(())
+            }
+            Step::RightClick(x, y) => {
+                let (size, k) = self.display()?;
+                let at = (x * k, y * k);
+                self.qmp.pointer(at, size, None)?;
+                self.qmp.pointer_with(at, size, Some(("right", true)))?;
+                self.qmp.pointer_with(at, size, Some(("right", false)))?;
+                std::thread::sleep(AFTER_CLICK);
+                Ok(())
+            }
+            Step::ModClick(m, x, y) => {
+                let (size, k) = self.display()?;
+                let at = (x * k, y * k);
+                let code = modifier_qcode(m);
+                self.qmp.pointer(at, size, None)?;
+                self.qmp.keys(&[(code, true)])?;
+                std::thread::sleep(self.modifier_settle());
+                self.qmp.pointer(at, size, Some(true))?;
+                self.qmp.pointer(at, size, Some(false))?;
+                std::thread::sleep(self.modifier_settle());
+                self.qmp.keys(&[(code, false)])?;
+                std::thread::sleep(AFTER_CLICK);
+                Ok(())
+            }
+            Step::ModDrag(m, x, y, x2, y2, hold) => {
+                let (size, k) = self.display()?;
+                let code = modifier_qcode(m);
+                self.qmp.pointer((x * k, y * k), size, None)?;
+                self.qmp.pointer((x * k, y * k), size, Some(true))?;
+                std::thread::sleep(Duration::from_millis(*hold));
+                const STEPS: i64 = 8;
+                for i in 1..=STEPS {
+                    let at = (
+                        (x + (x2 - x) * i / STEPS) * k,
+                        (y + (y2 - y) * i / STEPS) * k,
+                    );
+                    self.qmp.pointer(at, size, None)?;
+                    std::thread::sleep(self.modifier_settle());
+                }
+                // The press is held until the program has answered it: a drag
+                // is taken only while its press is held (ADR-0170).
+                std::thread::sleep(DRAG_SETTLE);
+                self.qmp.keys(&[(code, true)])?;
+                std::thread::sleep(self.modifier_settle());
+                self.qmp.pointer((x2 * k, y2 * k), size, Some(false))?;
+                std::thread::sleep(self.modifier_settle());
+                self.qmp.keys(&[(code, false)])
+            }
             Step::Drag(x, y, x2, y2, hold) => {
                 let (size, k) = self.display()?;
                 self.qmp.pointer((x * k, y * k), size, None)?;
@@ -964,6 +1147,7 @@ impl Run {
                     self.qmp.pointer(at, size, None)?;
                     std::thread::sleep(self.key_interval());
                 }
+                std::thread::sleep(DRAG_SETTLE);
                 self.qmp.pointer((x2 * k, y2 * k), size, Some(false))
             }
             Step::Shot(name) => {
@@ -1034,6 +1218,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             qmp: q,
             serial: rx,
             seen: String::new(),
+            mark: 0,
             out: output::Output::new(label),
             label: label.to_string(),
             deadline,
@@ -1099,6 +1284,27 @@ mod tests {
         assert!(parse("shot ../x\n").is_err());
         assert!(parse("shot\n").is_err());
         assert_eq!(parse("click 3 4\n").unwrap(), [Step::Click(3, 4)]);
+        assert_eq!(
+            parse("then files: x\n").unwrap(),
+            [Step::Then(String::from("files: x"))]
+        );
+        assert_eq!(parse("dclick 3 4\n").unwrap(), [Step::DoubleClick(3, 4)]);
+        assert_eq!(parse("rclick 3 4\n").unwrap(), [Step::RightClick(3, 4)]);
+        assert_eq!(
+            parse("mclick meta 3 4\n").unwrap(),
+            [Step::ModClick(String::from("meta"), 3, 4)]
+        );
+        assert_eq!(
+            parse("mdrag alt 1 2 3 4 300\n").unwrap(),
+            [Step::ModDrag(String::from("alt"), 1, 2, 3, 4, 300)]
+        );
+        assert!(parse("mclick hyper 3 4\n").is_err());
+        assert_eq!(
+            parse("chord meta+shift n\n").unwrap(),
+            [Step::Chord(String::from("meta+shift"), String::from("n"))]
+        );
+        assert!(parse("chord meta+hyper n\n").is_err());
+        assert!(parse("dclick 3\n").is_err());
         assert_eq!(parse("layout cz\n").unwrap(), [Step::Layout(3)]);
         assert!(parse("layout de\n").is_err());
         assert!(parse("chord meta spc\n").is_ok());

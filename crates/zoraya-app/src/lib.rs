@@ -78,8 +78,19 @@ pub enum Happened {
     Copy { window: u32, cut: bool },
     /// The person pasted into `window`: [`App::take_paste`] gives the text.
     Pasted(u32),
-    /// The show-commands mode turned on or off (to system clients only).
+    /// The show-commands mode turned on or off.
     Commands(bool),
+    /// A drag this program started ended over its own `window`, at
+    /// logical `(x, y)` in its body, with `modifiers` held (proposed
+    /// ADR-0248); nothing was handed over.
+    DroppedHere {
+        window: u32,
+        x: u32,
+        y: u32,
+        modifiers: u32,
+    },
+    /// A drag this program started ended anywhere else.
+    DragEnded(u32),
 }
 
 /// A dropped entry (ADR-0170): the connection, its display name
@@ -612,6 +623,20 @@ impl<P: Platform> App<P> {
                     cut: c.cut,
                 })
             }
+            26 => {
+                let (_, d) = decode::<gui::DragEnded>(got, 0).ok()?;
+                self.held = None;
+                Some(if d.over.0 == 1 {
+                    Happened::DroppedHere {
+                        window: d.window,
+                        x: d.x,
+                        y: d.y,
+                        modifiers: d.modifiers.0,
+                    }
+                } else {
+                    Happened::DragEnded(d.window)
+                })
+            }
             29 => {
                 let (_, c) = decode::<gui::Commands>(got, 0).ok()?;
                 self.commands = c.on;
@@ -639,6 +664,7 @@ impl<P: Platform> App<P> {
                     x: self.scale_logical(p.x),
                     y: self.scale_logical(p.y),
                     buttons: p.buttons.0,
+                    modifiers: p.modifiers.0,
                 };
                 self.ui_event(p.window, e)
             }

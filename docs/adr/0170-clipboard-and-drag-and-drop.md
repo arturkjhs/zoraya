@@ -80,6 +80,8 @@ A POSIX program in a terminal copies and pastes through the terminal client, whi
 - **INV-0170-5.** Contents over the bound, and a second offer or drag while one is in flight, are refused and leave the clipboard unchanged. *Check:* host test at the bounds.
 
 ## Open questions
+- *(Check note, 2026-11-10, ADR-0001 rule 6.)* On `work/7h` the compositor takes `Drag` for a still-held press within 3 s (`DRAG_NAMES_WITHIN_NS`) instead of the 500 ms assumption above (proposed ADR-0248, point 4b: TCG measurements); the copy reply keeps 500 ms. Its host test checks the 3 s.
+- *(Check note, 2026-11-10, ADR-0001 rule 6.)* On `work/7h` the compositor now also takes one unasked `Offer` within a second of a press in a trusted client's focused window, and its test checks that (proposed ADR-0248, built at the architect's request for the file manager); INV-0170-2's row stays `checked` for the rest of its rule. If ADR-0248 is refused, the undo is the offer rule's gesture branch removed, and the file manager falls back to Ctrl.
 - *(Check note, stage 7f.)* INV-0170-1 and -2: `tests_drops.rs`'s `the_clipboard_moves_only_on_the_persons_chords`
   (an unprompted `Offer`, another client's, a late one and a second one are refused; `Paste` only to the focused
   window on System+V). INV-0170-5: the protocol's bound (32 KiB, `MAX_CLIPBOARD`) refuses larger contents at decode,

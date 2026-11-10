@@ -598,6 +598,7 @@ fn a_press_on_the_list_selects_its_row() {
                 y,
                 buttons: Flags(buttons),
                 serial: 1,
+                modifiers: Flags(0),
             };
             r.app.platform.inbox.push_back(message(&m, 0));
         }

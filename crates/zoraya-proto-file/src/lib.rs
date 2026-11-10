@@ -419,6 +419,10 @@ protocol! {
     /// the service adds to the monotonic clock for the times it assigns.
     message TimeBase = 35, handles 0 {}
 
+    /// The volume's free bytes in `Done`'s count, on any connection: the
+    /// file manager's status line (proposed ADR-0248).
+    message FreeSpace = 37, handles 0 {}
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -426,7 +430,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 36] = [
+pub const REQUESTS: [(&str, u32); 37] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -463,6 +467,7 @@ pub const REQUESTS: [(&str, u32); 36] = [
     ("fifo_open", 34),
     ("time_base", 35),
     ("narrow", 36),
+    ("free_space", 37),
 ];
 
 /// `fifo_open`'s side.
@@ -607,6 +612,7 @@ mod tests {
             0,
         );
         check(TimeBase {}, 0);
+        check(FreeSpace {}, 0);
         check(
             FifoOpenReply {
                 status: Below(status::OK),

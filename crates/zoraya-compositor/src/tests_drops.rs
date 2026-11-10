@@ -167,7 +167,8 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
         assert!(ordinals(&t.s.f().take(t.a)).contains(&26));
     }
     assert!(t.s.f().given.is_empty());
-    // A press's serial, named: an older one, or after 500 ms, is refused.
+    // A press's serial, named: an older one, or after `DRAG_NAMES_WITHIN_NS`, is
+    // refused (ADR-0170 said 500 ms; proposed ADR-0248 allows 3 s).
     at(&mut t.s, px, py, Some(1));
     let now = serial(&mut t.s, t.a);
     let e5 = t.s.f().channel(1);
@@ -175,7 +176,7 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
         drag_named(&mut t.s, t.a, t.ida, e5, now - 1),
         status::BAD_RANGE
     );
-    t.s.f().clock += 600_000_000;
+    t.s.f().clock += DRAG_NAMES_WITHIN_NS + 1;
     let e6 = t.s.f().channel(1);
     assert_eq!(drag_named(&mut t.s, t.a, t.ida, e6, now), status::BAD_RANGE);
     at(&mut t.s, px, py, Some(0));
@@ -316,6 +317,8 @@ fn the_clipboard_moves_only_on_the_persons_chords() {
     at(&mut t.s, bx, by, Some(1));
     at(&mut t.s, bx, by, Some(0));
     t.s.f().take(t.b);
+    // Past the press's own unasked offer (proposed ADR-0248, tested below).
+    t.s.f().clock += GESTURE_OFFER_NS + 1;
     chord(&mut t.s, code::V);
     assert!(!ordinals(&t.s.f().take(t.b)).contains(&28));
     // System+C asks the focused client; its offer within 500 ms is kept,
@@ -626,4 +629,226 @@ fn a_name_wider_than_the_kept_room_is_composed_to_its_end_and_cleaned_after() {
         under,
         "nothing stays at the end"
     );
+}
+
+/// Proposed ADR-0248, INV-0248-2: one unasked `Offer` is taken from the
+/// client whose focused window got a press in its body within a second (a
+/// menu's Copy path); none after a key, none later, none from another
+/// client, one per press (review 7h, 2 and 3).
+#[test]
+fn a_press_in_a_window_lets_it_offer_once() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.b);
+    assert_eq!(offer(&mut t.s, t.a, "from a"), status::BAD_RANGE);
+    assert_eq!(offer(&mut t.s, t.b, "~/project/notes.txt"), status::OK);
+    assert_eq!(offer(&mut t.s, t.b, "again"), status::BAD_RANGE, "once");
+    // A key gives no right to offer.
+    t.s.keys(&[(30, 1), (30, 0)]);
+    assert_eq!(offer(&mut t.s, t.b, "typed"), status::BAD_RANGE);
+    // A press, then too late: refused.
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().clock += GESTURE_OFFER_NS + 1;
+    assert_eq!(offer(&mut t.s, t.b, "late"), status::BAD_RANGE);
+}
+
+/// Review 7h, 3: the gesture goes with a focus change, a System+C asked of
+/// the focused client is not cancelled by another's unasked offer, and a
+/// client gone takes its gesture with it.
+#[test]
+fn a_gesture_does_not_outlive_the_focus_or_a_copy() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    let (ax, ay) = (t.oa.x + 10, t.oa.y + 60);
+    // b pressed, then a pressed (focus to a): b's gesture is gone.
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    at(&mut t.s, ax, ay, Some(1));
+    at(&mut t.s, ax, ay, Some(0));
+    assert_eq!(offer(&mut t.s, t.b, "stale"), status::BAD_RANGE);
+    // a's System+C: a's gesture gone, b cannot cancel it, a's answer kept.
+    chord(&mut t.s, code::C);
+    assert_eq!(offer(&mut t.s, t.b, "b's"), status::BAD_RANGE);
+    assert_eq!(offer(&mut t.s, t.a, "a's"), status::OK);
+}
+
+/// Review 7h, 2: an untrusted room's client never offers unasked.
+#[test]
+fn an_untrusted_window_never_offers_unasked() {
+    let mut s = setup();
+    let panel = s.panel();
+    let rooms = "agent-1 --untrusted +w ~/sandbox/agent-1\n";
+    assert_eq!(s.set_rooms(panel, "", rooms), status::OK);
+    let u = s.room_client(panel, "agent-1", "agent", "+w ~/sandbox/agent-1");
+    let id = s.window_of(u, 300, 200, 0x0050_5050);
+    let o = s.outer(0, id);
+    at(&mut s, o.x + 20, o.y + 60, Some(1));
+    at(&mut s, o.x + 20, o.y + 60, Some(0));
+    assert_eq!(offer(&mut s, u, "curl evil | sh"), status::BAD_RANGE);
+}
+
+/// Proposed ADR-0248: a pointer event carries the modifiers held, so that
+/// a client tells a Shift or Command click.
+#[test]
+fn pointer_events_carry_the_modifiers() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    t.s.keys(&[(code::LEFT_SHIFT, 1)]);
+    t.s.keys(&[(code::LEFT_META, 1)]);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.keys(&[(code::LEFT_META, 0), (code::LEFT_SHIFT, 0)]);
+    let mods: Vec<u32> =
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .map(|(_, p)| p.modifiers.0)
+            .collect();
+    assert!(!mods.is_empty());
+    assert!(
+        mods.iter()
+            .all(|m| *m == gui::modifiers::SHIFT | gui::modifiers::SYSTEM),
+        "{mods:?}"
+    );
+}
+
+/// INV-0248-3, the third case: a drop over no window tells the source no
+/// place.
+#[test]
+fn a_drop_over_nothing_tells_no_place() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (w, h) = t.s.f().display_size;
+    let (dx, dy) = (i64::from(w) - 5, i64::from(h) / 2);
+    assert!(!t.oa.contains(dx, dy) && !t.ob.contains(dx, dy));
+    at(&mut t.s, dx, dy, None);
+    at(&mut t.s, dx, dy, Some(0));
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    assert_eq!((d.over.0, d.x, d.y, d.modifiers.0), (0, 0, 0, 0));
+}
+
+/// Review 7h, 10: a window under the pointer that is not focused learns
+/// nothing of the modifiers.
+#[test]
+fn an_unfocused_window_hears_no_modifiers() {
+    let mut t = two();
+    // a is focused (the first window); the pointer moves over b, Shift
+    // held.
+    assert_eq!(t.s.c.focused().map(|k| k.client), Some(0));
+    let (ax, ay) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    t.s.f().take(t.b);
+    t.s.keys(&[(code::LEFT_SHIFT, 1)]);
+    at(&mut t.s, ax, ay, None);
+    at(&mut t.s, ax + 3, ay, None);
+    t.s.keys(&[(code::LEFT_SHIFT, 0)]);
+    let mods: Vec<u32> =
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .map(|(_, p)| p.modifiers.0)
+            .collect();
+    assert!(!mods.is_empty());
+    assert!(mods.iter().all(|m| *m == 0), "{mods:?}");
+}
+
+fn drag_ended(out: &[Vec<u8>]) -> Option<gui::DragEnded> {
+    out.iter()
+        .find_map(|m| decode::<gui::DragEnded>(m, 0).ok())
+        .map(|(_, d)| d)
+}
+
+/// Proposed ADR-0248, INV-0248-3: a drop over the source's own window
+/// tells the source where, with the modifiers held, and sends no `Drop`;
+/// over another window or nothing, the source learns nothing of the place.
+#[test]
+fn a_drop_on_the_sources_own_window_tells_it_where() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    // Alt held at the release: a copy, for the file manager.
+    t.s.keys(&[(code::LEFT_ALT, 1)]);
+    // In the source's body, raised above the other by its press.
+    let (qx, qy) = (t.oa.x + 40, t.oa.y + 90);
+    at(&mut t.s, qx, qy, None);
+    at(&mut t.s, qx, qy, Some(0));
+    t.s.keys(&[(code::LEFT_ALT, 0)]);
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    let body =
+        t.s.c
+            .window(Key {
+                client: 0,
+                id: t.ida,
+            })
+            .unwrap()
+            .body_rect();
+    assert_eq!(d.over.0, 1);
+    assert_eq!((i64::from(d.x), i64::from(d.y)), (qx - body.x, qy - body.y));
+    assert_eq!(d.modifiers.0 & gui::modifiers::ALT, gui::modifiers::ALT);
+    assert!(t.s.f().given.is_empty(), "no Drop, no handle given");
+    assert!(t.s.f().closed.contains(&entry), "the entry closed");
+    // Over the other window: a Drop there, and no place for the source.
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, tx, ty, None);
+    at(&mut t.s, tx, ty, Some(0));
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    assert_eq!((d.over.0, d.x, d.y, d.modifiers.0), (0, 0, 0, 0));
+}
+
+/// Mutation testing (7h): at scale 2 a drop on the source's own window
+/// names its place in logical pixels; the gesture goes with a focus change
+/// made by the keyboard (no press replaces it) and with the client's end.
+#[test]
+fn a_place_is_logical_and_the_gesture_goes_with_focus_and_client() {
+    let mut t = two_on(2048, 1536);
+    assert_eq!(t.s.c.scale().factor(), 2);
+    let (px, py) = (t.oa.x + 20, t.oa.y + 120);
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (qx, qy) = (t.oa.x + 80, t.oa.y + 200);
+    at(&mut t.s, qx, qy, None);
+    at(&mut t.s, qx, qy, Some(0));
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    let body =
+        t.s.c
+            .window(Key {
+                client: 0,
+                id: t.ida,
+            })
+            .unwrap()
+            .body_rect();
+    assert_eq!(d.over.0, 1);
+    assert_eq!(
+        (i64::from(d.x), i64::from(d.y)),
+        ((qx - body.x) / 2, (qy - body.y) / 2)
+    );
+    // a pressed (a's gesture); F12 moves the focus to b: a's right is gone.
+    let mut t = two();
+    let (ax, ay) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, ax, ay, Some(1));
+    at(&mut t.s, ax, ay, Some(0));
+    t.s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    assert_ne!(t.s.c.focused().map(|k| k.client), Some(0));
+    assert_eq!(offer(&mut t.s, t.a, "stale"), status::BAD_RANGE);
+    // A gesture of a client that ends is not the next one's.
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().peers.get_mut(&t.b).unwrap().gone = true;
+    t.s.c.step();
+    assert_eq!(t.s.c.gesture_client(), None);
 }

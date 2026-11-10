@@ -230,6 +230,12 @@ impl<L: Link> Client<L> {
     }
 
     /// The object's size in bytes and its kind.
+    /// The volume's free bytes (proposed ADR-0248).
+    pub fn free_space(&mut self, conn: L::Handle) -> Result<u64, Status> {
+        let length = self.call(conn, &proto::FreeSpace {}, &[])?;
+        self.done(length)
+    }
+
     pub fn attributes(&mut self, conn: L::Handle) -> Result<(u64, u32), Status> {
         let length = self.call(conn, &proto::GetAttributes {}, &[])?;
         match decode::<proto::Attributes>(&self.reply[..length], 0) {
@@ -237,6 +243,24 @@ impl<L: Link> Client<L> {
             Ok((_, a)) => Err(a.status.0),
             Err(_) => Err(self.done(length).err().unwrap_or(status::INVALID_ARGUMENT)),
         }
+    }
+
+    /// A file's size, kind and modification time (nanoseconds since the
+    /// epoch, as the service keeps it).
+    pub fn info(&mut self, conn: L::Handle) -> Result<(u64, u32, u64), Status> {
+        let length = self.call(conn, &proto::GetAttributes {}, &[])?;
+        match decode::<proto::Attributes>(&self.reply[..length], 0) {
+            Ok((_, a)) if a.status.0 == status::OK => Ok((a.size, a.kind.0, a.modified)),
+            Ok((_, a)) => Err(a.status.0),
+            Err(_) => Err(self.done(length).err().unwrap_or(status::INVALID_ARGUMENT)),
+        }
+    }
+
+    /// The boot's time base (ADR-0191): nanoseconds the service adds to the
+    /// monotonic clock for the times it assigns.
+    pub fn time_base(&mut self, conn: L::Handle) -> Result<u64, Status> {
+        let length = self.call(conn, &proto::TimeBase {}, &[])?;
+        self.done(length)
     }
 
     /// The whole file, up to [`MAX_READ`] bytes.
@@ -319,10 +343,22 @@ impl<L: Link> Client<L> {
 
     /// Renames `old` to `new` in `dir`, refusing to replace `new`.
     pub fn rename(&mut self, dir: L::Handle, old: &str, new: &str) -> Result<(), Status> {
+        self.rename_into(dir, old, dir, new)
+    }
+
+    /// Moves `old` of `dir` to `new` in the directory `target` (the same
+    /// volume), refusing to replace `new`.
+    pub fn rename_into(
+        &mut self,
+        dir: L::Handle,
+        old: &str,
+        target: L::Handle,
+        new: &str,
+    ) -> Result<(), Status> {
         if !Name::is_valid(old) || !Name::is_valid(new) {
             return Err(status::INVALID_NAME);
         }
-        let length = self.call(dir, &proto::GetToken {}, &[])?;
+        let length = self.call(target, &proto::GetToken {}, &[])?;
         let token = match decode::<proto::TokenReply>(&self.reply[..length], self.got.len()) {
             Ok((_, r)) if r.status.0 == status::OK && self.got.len() == 1 => self.got[0],
             Ok((_, r)) => {

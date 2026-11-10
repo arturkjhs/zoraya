@@ -190,6 +190,9 @@ pub struct Launch {
     /// What the shell's start-up record holds, as `(path, write)` with `~`
     /// for the home directory: exactly the entries shown.
     pub holds: Vec<(String, bool)>,
+    /// The current directory to start in, when not the first hold it may
+    /// change (`OpenTerminal`, proposed ADR-0248).
+    pub cwd: Option<String>,
     pub programs: Vec<Program>,
 }
 
@@ -223,6 +226,17 @@ pub fn opener(name: &str) -> Option<&'static str> {
     }
     let ext = ext.to_lowercase();
     OPENERS.iter().find(|(e, _)| *e == ext).map(|(_, a)| *a)
+}
+
+/// The application that opens `name` when the file manager asks for
+/// `app` (empty: by the name's extension): only an application that opens
+/// files, and `edit` for any name (Open in edit).
+pub fn opener_for(name: &str, app: &str) -> Option<&'static str> {
+    match app {
+        "" => opener(name),
+        "edit" if !name.is_empty() => Some("edit"),
+        _ => None,
+    }
 }
 
 /// The data directory of `app` in `room` (`None` is `home`).
@@ -302,16 +316,23 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
     if let Some(r) = room {
         line = format!("room {} {line}", r.name);
     }
+    // The file manager says its room in its menu's lines (proposed
+    // ADR-0248).
+    let args = match room {
+        Some(r) if app == "files" => vec![String::from("--room"), r.name.clone()],
+        _ => Vec::new(),
+    };
     Launch {
         app,
         room: room.cloned(),
         entries,
         line,
         holds,
+        cwd: None,
         programs: vec![Program {
             image: app,
             handles,
-            args: Vec::new(),
+            args,
         }],
     }
 }
@@ -353,6 +374,7 @@ pub fn terminal(room: Option<&Room>) -> Launch {
         entries,
         line,
         holds,
+        cwd: None,
         programs: vec![
             Program {
                 image: "term",
@@ -408,6 +430,32 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             },
         ],
     }
+}
+
+/// A terminal launched in `room` (`None` is `home`) to start at `path`, an
+/// absolute path or one under `~` as the holds write it: only if one of
+/// the terminal's holds covers it (proposed ADR-0248, INV-0248-4). `home`
+/// is the shell's home, to compare `~/...` holds with an absolute path.
+pub fn terminal_at(room: Option<&Room>, path: &str, home: &str) -> Option<Launch> {
+    if path.is_empty() || path.chars().any(char::is_control) || path.split('/').any(|c| c == "..") {
+        return None;
+    }
+    let expand = |p: &str| -> String {
+        match p.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => format!("{home}{rest}"),
+            _ => String::from(p),
+        }
+    };
+    let abs = expand(path);
+    if !abs.starts_with('/') {
+        return None;
+    }
+    let mut l = terminal(room);
+    if !l.holds.iter().any(|(h, _)| covers(&expand(h), &abs)) {
+        return None;
+    }
+    l.cwd = Some(abs);
+    Some(l)
 }
 
 /// What a press on the dock asks of the panel.

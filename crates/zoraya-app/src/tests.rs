@@ -318,6 +318,7 @@ fn a_configure_gives_a_new_buffer_and_pointer_events_reach_widgets() {
         y: 10,
         buttons: zoraya_protocol::Flags(gui::buttons::LEFT),
         serial: 1,
+        modifiers: zoraya_protocol::Flags(0),
     });
     assert_eq!(
         app.wait(),
@@ -475,6 +476,7 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
         y: 10,
         buttons: zoraya_protocol::Flags(buttons),
         serial: 3,
+        modifiers: zoraya_protocol::Flags(0),
     };
     app.platform.event(&pointer(gui::buttons::LEFT));
     while !matches!(app.poll(), None | Some(Happened::Gone)) {}
@@ -590,4 +592,38 @@ fn replacing_a_tree_shows_the_new_one() {
     app.replace(id, Box::new(TextField::new(1, "other.txt")));
     let w = app.window(id).unwrap();
     assert_eq!(w.value(1), zoraya_ui::Value::Text("other.txt"));
+}
+
+/// Proposed ADR-0248: a drag that ends over its own window says where;
+/// one that ends elsewhere says only that it ended.
+#[test]
+fn a_drag_ended_over_its_own_window_says_where() {
+    let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
+    app.platform.event(&gui::DragEnded {
+        window: 3,
+        over: zoraya_protocol::Below(1),
+        x: 40,
+        y: 90,
+        modifiers: zoraya_protocol::Flags(gui::modifiers::ALT),
+    });
+    assert_eq!(
+        app.poll(),
+        Some(Happened::DroppedHere {
+            window: 3,
+            x: 40,
+            y: 90,
+            modifiers: gui::modifiers::ALT
+        })
+    );
+    app.platform.event(&gui::DragEnded {
+        window: 3,
+        over: zoraya_protocol::Below(0),
+        x: 0,
+        y: 0,
+        modifiers: zoraya_protocol::Flags(0),
+    });
+    assert_eq!(app.poll(), Some(Happened::DragEnded(3)));
+    app.platform.event(&gui::Commands { on: true });
+    assert_eq!(app.poll(), Some(Happened::Commands(true)));
+    assert!(app.commands);
 }

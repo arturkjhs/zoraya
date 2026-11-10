@@ -115,6 +115,10 @@ protocol! {
     message OpenWith<'a> = 32, handles 1 {
         name: Data<'a, MAX_NAME>,
         words: Data<'a, MAX_WORDS>,
+        /// Empty: the application for the name's extension; else the one
+        /// asked for, among those that open files (`edit`: the file
+        /// manager's Open in edit, proposed ADR-0248).
+        app: Data<'a, MAX_NAME>,
     }
 
     message Opening = 32, handles 0 {
@@ -133,6 +137,17 @@ protocol! {
     message SettingsApplied = 33, handles 0 {
         status: Below<4>,
     }
+
+    /// The file manager to the panel: a terminal in the file manager's
+    /// room with its current directory at `path` (proposed ADR-0248); the
+    /// panel launches it only if that room's holds cover `path`.
+    message OpenTerminal<'a> = 34, handles 0 {
+        path: Data<'a, MAX_WORDS>,
+    }
+
+    message TerminalOpened = 34, handles 0 {
+        status: Below<4>,
+    }
 }
 
 /// The application requests' ordinals.
@@ -142,7 +157,7 @@ pub const ANSWERS: [u32; 2] = [8, 9];
 /// The panel's requests.
 pub const PANEL_REQUESTS: [u32; 1] = [16];
 /// The file manager's request to the panel.
-pub const LAUNCHER_REQUESTS: [u32; 2] = [32, 33];
+pub const LAUNCHER_REQUESTS: [u32; 3] = [32, 33, 34];
 
 #[cfg(test)]
 extern crate std;

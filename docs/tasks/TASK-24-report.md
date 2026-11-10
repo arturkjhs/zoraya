@@ -14,10 +14,13 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | [ADR-0243](../adr/0243-a-rooms-tint-on-the-frame-only.md) (accepted 2026-11-09) | 7d | The room's tint on the title bar only; the mockups' 0.10 body tint would change client pixels (INV-0164-1). |
 | [ADR-0244](../adr/0244-the-toolkits-own-events.md) (accepted 2026-11-09) | 7d | `zoraya-ui` takes a key press and a logical pointer of its own, and `zoraya-app` translates the protocol into them. |
 | What `home` gives a terminal's shell (accepted 2026-11-09, recorded in ADR-0172) | 7d | ADR-0242's condition says the first terminal holds "what the room home gives"; no ADR lists it. Chosen: `+r /`, `+w ~`, `+w /config`, `+w /tmp` (read the volume; change the person's files, configuration and temporary files), so that `room new`, `settings`, the tour and POSIX programs keep working in the first terminal. Narrower (the mockup's `+w ~` alone) breaks those; the choice is the architect's to change. |
-| [ADR-0245](../adr/0245-the-choosers-wiring-in-stage-7e.md) (proposed) | 7e | The chooser's wiring: registered by the panel with the compositor's tag, sheets only from system clients, `Save` as the folder narrowed to one name, the data directory `/data/ROOM/APP`, `OpenWith` read-only. Fills gaps of ADR-0167 and ADR-0168. |
-| INV-0168-2 against INV-0169-4 | 7f | INV-0168-2 gives the file manager the volume's root, `/config` included, while INV-0169-4 says no launch but the settings window gets `/config` to write. Which wins (narrow the file manager's root, or reword INV-0169-4) is the architect's; the panel's test checks the `Config` slot only. |
+| [ADR-0245](../adr/0245-the-choosers-wiring-in-stage-7e.md) (accepted 2026-11-10) | 7e | Accepted with two conditions, built on `fix/7-decisions`: a sheet ignores input for 500 ms from its first commit and any key or button held from before (or pressed within it) until released; show-commands mode shows the grant's `zosh` line (`+w FOLDER APP · gives less: ...` for `Save`). |
+| INV-0168-2 against INV-0169-4 (decided 2026-11-10) | 7f | INV-0168-2 gave way: `files` holds the volume read-only and, to change, `~` in `home` or the room's grants, never `/config` (also through `~`, review of the fixes, 2); recorded in ADR-0168. |
 | `/config/rooms` and `/config/settings` written in place by a shell (accepted for now, 2026-11-09) | 7d | A crash between truncate and write loses the file; in `docs/backlog.md`. |
-| [ADR-0246](../adr/0246-the-display-follows-the-window.md) (proposed) | 7g | The display follows QEMU's window: `gpud` reports virtio-gpu's display event as `Resized`, the compositor attaches a framebuffer of the new size and lays out again; supersedes ADR-0164's size fixed at boot. Built and merged at the architect's request; the ADR's status is the architect's. |
+| [ADR-0246](../adr/0246-the-display-follows-the-window.md) (accepted 2026-11-10) | 7g | Option C; its two open questions wait for the architect's check by hand. |
+| [ADR-0247](../adr/0247-scale-from-the-displays-density.md) (proposed) | fixes | Scale 2 from 1280 pixels at 150 ppi or more, the physical size read from the EDID QEMU's cocoa window fills in; it changes INV-0090-1 (`VERSION_1` and `F_EDID`), which the code already follows at the architect's request: if rejected, `begin(..., 0)` restores the rule. |
+| [ADR-0248](../adr/0248-what-the-file-manager-needs.md) (proposed) | 7h | What the file manager needs: System chords the compositor does not take reach the focused client with `SYSTEM` (a change to INV-0160-3); pointer modifiers; `Commands` to every client; one unasked `Offer` within a second of a gesture in the window (a change to INV-0170-2); `DragEnded`'s place on the source's own window; `FreeSpace`; `OpenTerminal`. The file manager takes Ctrl where it takes Command, so it works if points 1 and 2 are refused. |
+| An INV-0245-3 for the sheet's guard | fixes | ADR-0245's condition (1) is built and tested (`tests_sheets.rs`) but has no invariant row; the architect may add one (review of the fixes, 12). |
 | Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
@@ -864,6 +867,144 @@ ADR-0246 is proposed, and 7g is merged as the other parts were, at the architect
 From the commits' times: 22:31 on 2026-11-09 to 00:46 on 2026-11-10 for the code, the review and its fixes, and
 the tests, with the three mutation runs (92 minutes) overlapping 7e's and 7f's merges.
 
+## The architect's decisions and fixes of 2026-11-10
+
+Branch `fix/7-decisions`, from `main` at `d036de3`.
+
+### What was built
+
+- **Retina** (the architect's check): `make run-gui` on macOS boots at 2048 × 1536 with scale 2 (`GUI_SCALE=1`
+  stays); proposed ADR-0247: `gpud` reads the window's physical size from the EDID (`VIRTIO_GPU_F_EDID`,
+  `GET_EDID`), `InfoReply` carries it, and `auto` gives scale 2 from 1280 pixels at 150 ppi or more. The settings
+  window's note says so. The dock's settings tile is a gear; a tooltip whose name is its line shows one line.
+- **ADR-0245 and ADR-0246 accepted** and recorded, with their invariant rows; ADR-0245's two conditions built (the
+  sheet's guard, the show-commands line through a new `Commands` event).
+- **INV-0168-2 gave way to INV-0169-4**: the panel gives `files` a start-up record (the volume to read, `~` or the
+  room's grants to change, nothing reaching `/config`, also through `~`), and no launch gets the root any more
+  (`Give::Root` is gone). Recorded in ADR-0168 with the changed rule; its in-QEMU half is 7h's (`files: holds +r /
+  +w ~` in `tests/gui/files.script`).
+- **A client's size never exceeds the work area**: a new toplevel too tall or wide for the work area is made smaller
+  below its cascade place (so the first window's body stays at `first_body`), windows are placed above the dock; a
+  test at 1920 × 1200.
+- **The Ctrl-Z flake**, traced in the broker (a forked session): the terminal's `Suspend` named the shell's own
+  group, which ignores SIGTSTP; the job's `tcsetpgrp` came a moment later on CI's slow runner. The script waits for
+  a word the job prints before Ctrl-Z, three rounds; a broker test forces the interleaving (it describes behaviour
+  the branch did not change: the bug was the script's).
+- **Housekeeping**: the merged remote branches deleted (`work/7a` to `work/7g`, `fix/term-wait`, `fix/term-no-panic`,
+  `fix/type-pacing`, `tools/test-tiers`, `tools/zoom-to-fit`); `.claude/agents/` gained `ci-watch`, `log-triage`
+  (haiku) and `opus-review` (opus), and `CLAUDE.md` says Sonnet sessions hand reviews, kernel, `unsafe` and security
+  boundaries to `opus-review`.
+
+### Review
+
+`docs/tasks/TASK-24-review-fixes.md`: 1 error (a key pressed within the guard reached the sheet through its repeats),
+4 warnings, 8 notes; fixed with tests or recorded where they apply. Left as limitations: `Commands` is lost when a
+client's channel is full (the next toggle tells it again); the Ctrl-Z fix assumes the terminal and the broker agree on
+the foreground once the job has printed.
+
+### Mutation testing
+
+`tools/mutants/display-density.toml` (4 hand mutants of the EDID and the dense rule): 4 caught. The sheet's guard was
+checked by removing each half (time, held keys): each removal fails a test.
+
+### Merge
+
+Full CI on the branch green (run 42765790151, after a run cancelled by mistake); merged into `main` at `10267d0`;
+`main`'s CI green (run 42768220409). No tag: not a part of the stage; 7h, which contains it, is tagged.
+
+## 7h: the file manager
+
+Branch `work/7h`, from `fix/7-decisions`, with `design/files` (the mockups) merged in. Asked by the architect on
+2026-11-10: a mockup first (approved, with a context menu added), then the implementation.
+
+### What was built
+
+See `docs/design.md`, "The file manager (as built)": the model and the window in `zoraya-files`, the program, proposed
+ADR-0248's widenings in the compositor, the file protocol and the panel, and the runner's new steps.
+
+### The 7h acceptance test
+
+The architect asked for GUI tests of each feature and screens compared with the mockup.
+`tests/gui/files-manage.script` (99 steps, in `make test-gui` under HVF and TCG) runs selection by click, Shift and
+Command; the Size and Name headers; arrows, Enter into a folder and Command+Up; search; F2 rename; Command+Shift+N;
+Delete with its card; a drag onto a folder that moves and one with Option that copies; a double click; the menu's Copy
+path and Open terminal here; the menu in show-commands mode; Up, Back and the Home place. `tests/gui/files.script`
+keeps 7e's flow (opening through the panel, the chooser, a drop that grants) on the new window. The file manager
+prints its holds, its status line and its order on the console, which the scripts read.
+
+### Decisions taken without the architect
+
+- Proposed ADR-0248 (the seven widenings above) instead of Ctrl-only keys and no Copy path, drop on folders or free
+  space.
+- A drop on one of the window's folders moves within one place and copies otherwise (or with Option), as Haiku's
+  Tracker does; from a place the window only reads it copies.
+- The room's own grants in the sidebar carry a neutral ring, not the room's colour: colour means a room and only the
+  compositor draws it (ADR-0172).
+- The window's title stays "Files" (the mockup's "project — files" names the room, which the frame's badge shows).
+- A delete removes a folder whole, as `rm --recursive` would, after the card names it.
+
+### Screens
+
+Under `docs/research/desktop/shots/7h/` (light, HVF, scale 1 and 2), beside the mockups they follow: `files-home-qemu.png` (the
+mockup's `files.png`: the places, the toolbar, the list, the status line with free space), `files-select-qemu.png`
+(`files-select.png`: a Shift range and a Command pick), `files-rename-qemu.png` (`files-rename.png`),
+`files-delete-qemu.png` (`files-delete.png`), `files-menu-qemu.png` and `files-menu-commands-qemu.png` (the menu and
+its `zosh` lines), each also `@2x`. As in the mockups but for: `home`'s single place (the mockups show the room
+`project`), no `/system` place (not a folder of the volume), a neutral ring for a room's own grants (no room
+colour), the title "Files", and the dock and the show-commands tags the compositor draws.
+
+### Measurements
+
+In `docs/design.md`: listing a folder of 2 to 5 items with each item's size and time takes 0.17 to 0.50 ms under HVF
+(`files: listed N items in T us`, `tests/gui/files-manage.script`, 2026-11-10); right after a change it takes 6 to
+28 ms, the file service committing first.
+
+### Invariants
+
+ADR-0248 is proposed: its four invariants are not in `docs/adr/invariants.md` until it is accepted; each has its host
+test (`tests_windows.rs`, `tests_drops.rs`, `zoraya-panel`'s `terminal_at` test). INV-0160-3 and INV-0170-2 are
+changed by it and still marked checked for what they say outside its points.
+
+### Review
+
+`docs/tasks/TASK-24-review-7h.md`: 4 errors (the host tests red at the reviewed commit; the gesture offer open to
+any key and any client, untrusted ones included; the gesture outliving a focus change and cancelling another's copy;
+`OpenTerminal` falling back to `home` for a room gone), 5 warnings, 7 notes. All errors fixed with tests; the
+warnings fixed or recorded (the two invariants ADR-0248 changes, the in-place message changes, copy and delete's
+partial results).
+
+### Mutation testing
+
+Under the 30-minute cap, for the trust boundary and grants only (the panel's launch logic and the compositor's
+changed lines; `zoraya-files`, plain UI code, skipped). `make mutants-host` with `--in-diff` against the fix branch:
+`zoraya-panel` 22 mutants (3 unviable), 16 caught, 3 missed, in 14 s; `zoraya-compositor` 52 mutants, 43 caught,
+9 missed, in 14 minutes. Missed and answered: `terminal_at`'s control-character and `~user` guards and `--room`
+only for `files` (a test each: `terminal_at_refuses_odd_paths_and_only_files_gets_a_room_argument`); a compositor
+chord acting on a repeat or a release, and a forwarded chord's modifiers (`a_chord_acts_on_its_press_and_a_forwarded_one_keeps_its_modifiers`);
+the place of a drop at scale 2, the gesture surviving a keyboard focus change (the earlier test was vacuous: a press
+replaced it) and a client's end (`a_place_is_logical_and_the_gesture_goes_with_focus_and_client`). Equivalent: the
+`|` against `^` of the system bit in `modifiers_now` (the keymap never sets that bit) and in the forwarded key's
+modifiers (the same). The new tests were not run against the mutants again (the cap).
+
+### The CI's first run
+
+The first full CI run (42773494801) failed in `make test-gui` only: `files-manage` under TCG. Reproduced locally with
+`GUI_RUNS=files-manage:tcg:1` (the local default skips TCG; `FULL=1` or a named run does it). Two causes: the
+runner sent a modifier key and a click as two devices' events too close together (a Command-click arrived plain), so it
+now holds the modifier 400 ms around the click; and a slow guest answered a press later than ADR-0170's 500 ms
+`[assumption]` for naming it in `Drag` (the press must still be held): measured, the folder drag fails at 500 ms and
+passes at 3 s, so `Drag` takes a held press within 3 s (proposed ADR-0248, point 4b; the copy reply keeps 500 ms).
+The runner also holds a drag's button 800 ms after its last move. The second run (42777712396) failed in the same
+script at the rename: `serial` matches the whole log, so a wait for a status line that had printed before was
+satisfied at once and F2 (the keyboard) overtook the click (the tablet). The runner gained `then TEXT`, which waits for
+output after the last input step; `files-manage` uses it throughout, and `files` prints when the search takes the keys,
+when the menu opens or closes and when it asks before a delete, for the next key to wait for. Reproduced with QEMU on
+the efficiency cores (`taskpolicy -b`), as in 7d.
+
+### Merge
+
+MERGE_7H
+
 ## To check by hand
 
 - **The resizable window** (`tools/run-qemu.sh`'s `zoom-to-fit=on`, merged at `cc4e2dd`): no test opens the cocoa
@@ -871,7 +1012,9 @@ the tests, with the three mutation runs (92 minutes) overlapping 7e's and 7f's m
   bar's close button, a dock tile) and that Command+Space still switches the layout.
 - **The display that follows the window** (7g): with `make run-gui`, drag QEMU's window larger and smaller; the bar
   and the dock should follow, windows stay in the work area, and past 1920 pixels wide the desktop turns to scale 2.
-  Whether cocoa reports the size in pixels or points on a Retina display is ADR-0246's open question.
+  Cocoa reports pixels (read in QEMU's source, ADR-0247); on a Retina screen scale 2 should hold from 1280 pixels.
+- **Retina** (the fixes): `make run-gui` on a Retina Mac should open at scale 2 with text of a monitor's size; a
+  window made smaller keeps scale 2 down to 1280 pixels (640 points).
 
 To try the desktop by hand: `make run-gui`; the window shows the terminal in JetBrains Mono. `ls /texts/uk`, `cat
 /texts/uk/` then Tab and Enter, and the same for `/texts/cz/`, show Ukrainian and Czech text; Shift with Page Up
@@ -883,6 +1026,7 @@ of the bar). From 7d: the terminal tile in the dock (or System+Enter) opens anot
 project +w ~/project +r /system` makes a room, its chip appears in the dock; press it, then the terminal tile, and
 the new terminal's title bar carries the room's tint, badge and pills, with a field around its windows while `home`
 has windows too. System+? shows every gesture's text. From 7e: the Files tile opens the file manager; a `.txt`
-opened there opens in the editor, read only, and a drag of it onto another window gives that window the file. From
+opened there opens in the editor, read only, and a drag of it onto another window gives that window the file (from
+7h, the file manager of the mockups: see design.md's "Using the desktop"). From
 7f: the Settings tile (theme, motion and keyboard layouts applied at once, the scale at the next session), the Edit tile
 (open and save through the chooser's sheet), and System+C, System+X, System+V in the editor.

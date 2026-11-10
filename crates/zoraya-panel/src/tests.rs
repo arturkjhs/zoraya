@@ -255,6 +255,8 @@ fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
     assert!(in_room.holds.contains(&(String::from("~/project"), true)));
     assert!(!in_room.holds.iter().any(|(p, _)| p == "~"));
     assert_eq!(in_room.line, "room project files");
+    assert_eq!(in_room.programs[0].args, ["--room", "project"]);
+    assert!(files.programs[0].args.is_empty());
     for app in ["t_open", "edit", "files"] {
         let l = application(None, app, None);
         assert!(!l.holds.iter().any(|(p, w)| p == "/" && *w), "{app}");
@@ -367,6 +369,91 @@ fn files_never_gets_config_to_change() {
     assert!(reaches_config("/config/settings"));
     assert!(!reaches_config("/configs"));
     assert!(!reaches_config("~"));
+}
+
+/// Proposed ADR-0248, INV-0248-4: Open terminal here launches a terminal
+/// in the file manager's room at the folder, only where that room's holds
+/// reach.
+#[test]
+fn a_terminal_opens_at_a_folder_only_inside_its_rooms_holds() {
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let project = p.rooms.get("project").cloned();
+    let l = terminal_at(project.as_ref(), "/home/ann/project/src", "/home/ann").unwrap();
+    assert_eq!(l.cwd.as_deref(), Some("/home/ann/project/src"));
+    assert_eq!(l.room.as_ref().map(|r| r.name.as_str()), Some("project"));
+    assert_eq!(l.line, "room project term");
+    // `~` is the shell's home.
+    let l = terminal_at(project.as_ref(), "~/include", "/home/ann").unwrap();
+    assert_eq!(l.cwd.as_deref(), Some("/home/ann/include"));
+    // The toolchain the room's shell reads is a hold too.
+    assert!(terminal_at(project.as_ref(), "/usr/include", "/home/ann").is_some());
+    // Outside the room: refused.
+    for bad in [
+        "/home/ann",
+        "/home/ann/other",
+        "/config",
+        "~/project/../secret",
+        "",
+        "rel/path",
+        "/home/ann/project\n",
+    ] {
+        assert!(
+            terminal_at(project.as_ref(), bad, "/home/ann").is_none(),
+            "{bad:?}"
+        );
+    }
+    // In home the volume is read, so any folder; the home terminal's
+    // record is home's.
+    let l = terminal_at(None, "/system", "/home/ann").unwrap();
+    assert_eq!(l.cwd.as_deref(), Some("/system"));
+    assert_eq!(l.holds, terminal(None).holds);
+    // An ordinary launch has no current directory of its own.
+    assert!(terminal(None).cwd.is_none());
+}
+
+/// Open in edit (proposed ADR-0248): `edit` for any name, nothing else by
+/// name; an empty request is by extension.
+#[test]
+fn the_file_manager_may_ask_for_edit_alone() {
+    assert_eq!(opener_for("main.c", "edit"), Some("edit"));
+    assert_eq!(opener_for("main.c", ""), None);
+    assert_eq!(opener_for("notes.test", ""), Some("t_open"));
+    assert_eq!(opener_for("notes.txt", "term"), None);
+    assert_eq!(opener_for("notes.txt", "settings"), None);
+    assert_eq!(opener_for("", "edit"), None);
+}
+
+/// Mutation testing (7h): control characters anywhere, `~user` and `~x`
+/// are refused; only `files` gets `--room`.
+#[test]
+fn terminal_at_refuses_odd_paths_and_only_files_gets_a_room_argument() {
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let project = p.rooms.get("project").cloned();
+    for bad in [
+        "/home/ann/project/a\nb",
+        "~/project/a\tb",
+        "~project",
+        "~x/y",
+    ] {
+        assert!(
+            terminal_at(project.as_ref(), bad, "/home/ann").is_none(),
+            "{bad:?}"
+        );
+        assert!(
+            terminal_at(None, bad, "/home/ann").is_none(),
+            "{bad:?} in home"
+        );
+    }
+    for app in ["edit", "settings", "t_open"] {
+        assert!(
+            application(project.as_ref(), app, None).programs[0]
+                .args
+                .is_empty(),
+            "{app}"
+        );
+    }
 }
 
 /// Review of the fix branch, 2: with `shell.home` at `/` or under

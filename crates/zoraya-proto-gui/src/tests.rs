@@ -143,7 +143,16 @@ fn every_message_round_trips_and_decodes_totally() {
         y: 4,
         buttons: Flags(buttons::RIGHT),
         serial: 5,
+        modifiers: Flags(modifiers::SHIFT | modifiers::SYSTEM),
     });
+    total(DragEnded {
+        window: 1,
+        over: Below(1),
+        x: 40,
+        y: 90,
+        modifiers: Flags(modifiers::ALT),
+    });
+    total(Commands { on: true });
     total(AddClient {});
     total(ManagerDone { status: ok });
     total(AttachDisplay {});
@@ -171,8 +180,9 @@ fn bad_fields_are_refused() {
         text: Below(0),
     };
     let length = encode(&key, 0, &mut out).unwrap();
-    // modifiers sit after dropped, code and the padded bool.
-    out[16 + 12] = 0x10;
+    // modifiers sit after dropped, code and the padded bool; 0x20 is past
+    // the system key's bit (proposed ADR-0248).
+    out[16 + 12] = 0x20;
     assert!(decode::<Key>(&out[..length], 0).is_err());
     let length = encode(&key, 0, &mut out).unwrap();
     out[16 + 16..16 + 20].copy_from_slice(&TEXT_LIMIT.to_le_bytes());

@@ -283,6 +283,7 @@ mod view {
             x: l(290),
             y: l(30),
             buttons: 1,
+            modifiers: 0,
         });
         assert_eq!(b.borrow().line_col(b.borrow().cursor()), (1, 5));
     }
@@ -403,12 +404,18 @@ mod view {
         paint(&mut v, &mut p, true);
         let l = |n: i32| Scale::ONE.logical(n as u32);
         let (x, y) = (l(AT.0 + 20), l(AT.1 + 10));
-        let moved = Event::Pointer { x, y, buttons: 0 };
+        let moved = Event::Pointer {
+            x,
+            y,
+            buttons: 0,
+            modifiers: 0,
+        };
         assert_eq!(v.event(&moved), Response::None);
         let outside = Event::Pointer {
             x: l(AT.0 + 20),
             y: l(AT.1 + 130),
             buttons: 1,
+            modifiers: 0,
         };
         assert_eq!(v.event(&outside), Response::None);
         assert_eq!(v.buffer.borrow().cursor(), 7, "the cursor stays");
@@ -553,6 +560,7 @@ mod view {
                 x: l(x),
                 y: l(y),
                 buttons: 1,
+                modifiers: 0,
             });
             let b = v.buffer.borrow();
             b.line_col(b.cursor())
