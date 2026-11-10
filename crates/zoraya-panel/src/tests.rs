@@ -423,3 +423,35 @@ fn the_file_manager_may_ask_for_edit_alone() {
     assert_eq!(opener_for("notes.txt", "settings"), None);
     assert_eq!(opener_for("", "edit"), None);
 }
+
+/// Mutation testing (7h): control characters anywhere, `~user` and `~x`
+/// are refused; only `files` gets `--room`.
+#[test]
+fn terminal_at_refuses_odd_paths_and_only_files_gets_a_room_argument() {
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let project = p.rooms.get("project").cloned();
+    for bad in [
+        "/home/ann/project/a\nb",
+        "~/project/a\tb",
+        "~project",
+        "~x/y",
+    ] {
+        assert!(
+            terminal_at(project.as_ref(), bad, "/home/ann").is_none(),
+            "{bad:?}"
+        );
+        assert!(
+            terminal_at(None, bad, "/home/ann").is_none(),
+            "{bad:?} in home"
+        );
+    }
+    for app in ["edit", "settings", "t_open"] {
+        assert!(
+            application(project.as_ref(), app, None).programs[0]
+                .args
+                .is_empty(),
+            "{app}"
+        );
+    }
+}

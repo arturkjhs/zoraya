@@ -1537,3 +1537,48 @@ fn every_system_chord_is_the_compositors_or_the_focused_clients() {
     s.keys(&[(meta, 1), (code::R, 1), (code::R, 0), (meta, 0)]);
     assert!(keys_of(&s.f().take(a)).is_empty());
 }
+
+/// Mutation testing (7h): a chord of the compositor's acts once, on the
+/// press, not on a repeat or a release; a forwarded chord carries the
+/// modifiers held with `SYSTEM`, no more and no fewer.
+#[test]
+fn a_chord_acts_on_its_press_and_a_forwarded_one_keeps_its_modifiers() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 60, 1);
+    s.f().take(a);
+    let meta = code::LEFT_META;
+    // System+? with a repeat and a release: the mode toggles once.
+    s.keys(&[
+        (meta, 1),
+        (code::SLASH, 1),
+        (code::SLASH, 2),
+        (code::SLASH, 0),
+        (meta, 0),
+    ]);
+    assert!(s.c.commands, "toggled once, not three times");
+    s.keys(&[(meta, 1), (code::SLASH, 1), (code::SLASH, 0), (meta, 0)]);
+    assert!(!s.c.commands);
+    // Shift and Ctrl held with System and a free key: exactly those and SYSTEM.
+    s.f().take(a);
+    s.keys(&[
+        (meta, 1),
+        (code::LEFT_SHIFT, 1),
+        (49, 1),
+        (49, 0),
+        (code::LEFT_SHIFT, 0),
+        (meta, 0),
+    ]);
+    let k: Vec<gui::Key> = s
+        .f()
+        .take(a)
+        .iter()
+        .filter_map(|m| decode::<gui::Key>(m, 0).ok())
+        .map(|(_, k)| k)
+        .filter(|k| k.pressed && k.code == 49)
+        .collect();
+    assert_eq!(k.len(), 1);
+    assert_eq!(
+        k[0].modifiers.0,
+        gui::modifiers::SHIFT | gui::modifiers::SYSTEM
+    );
+}

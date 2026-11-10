@@ -2201,6 +2201,12 @@ impl<P: Platform> Compositor<P> {
         self.keymap.layout().short
     }
 
+    /// The client whose press gives it one unasked offer, for a test.
+    #[cfg(test)]
+    fn gesture_client(&self) -> Option<usize> {
+        self.gesture.map(|(c, _)| c)
+    }
+
     fn set_focus(&mut self, key: Option<Key>) {
         // While a sheet is open its owner's focus is the sheet's: the owner
         // gets no input (ADR-0160).

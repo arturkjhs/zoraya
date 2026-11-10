@@ -805,3 +805,49 @@ fn a_drop_on_the_sources_own_window_tells_it_where() {
     let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
     assert_eq!((d.over.0, d.x, d.y, d.modifiers.0), (0, 0, 0, 0));
 }
+
+/// Mutation testing (7h): at scale 2 a drop on the source's own window
+/// names its place in logical pixels; the gesture goes with a focus change
+/// made by the keyboard (no press replaces it) and with the client's end.
+#[test]
+fn a_place_is_logical_and_the_gesture_goes_with_focus_and_client() {
+    let mut t = two_on(2048, 1536);
+    assert_eq!(t.s.c.scale().factor(), 2);
+    let (px, py) = (t.oa.x + 20, t.oa.y + 120);
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (qx, qy) = (t.oa.x + 80, t.oa.y + 200);
+    at(&mut t.s, qx, qy, None);
+    at(&mut t.s, qx, qy, Some(0));
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    let body =
+        t.s.c
+            .window(Key {
+                client: 0,
+                id: t.ida,
+            })
+            .unwrap()
+            .body_rect();
+    assert_eq!(d.over.0, 1);
+    assert_eq!(
+        (i64::from(d.x), i64::from(d.y)),
+        ((qx - body.x) / 2, (qy - body.y) / 2)
+    );
+    // a pressed (a's gesture); F12 moves the focus to b: a's right is gone.
+    let mut t = two();
+    let (ax, ay) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, ax, ay, Some(1));
+    at(&mut t.s, ax, ay, Some(0));
+    t.s.keys(&[(code::F12, 1), (code::F12, 0)]);
+    assert_ne!(t.s.c.focused().map(|k| k.client), Some(0));
+    assert_eq!(offer(&mut t.s, t.a, "stale"), status::BAD_RANGE);
+    // A gesture of a client that ends is not the next one's.
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().peers.get_mut(&t.b).unwrap().gone = true;
+    t.s.c.step();
+    assert_eq!(t.s.c.gesture_client(), None);
+}

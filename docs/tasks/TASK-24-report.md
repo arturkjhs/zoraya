@@ -975,7 +975,16 @@ partial results).
 
 ### Mutation testing
 
-MUTANTS_7H
+Under the 30-minute cap, for the trust boundary and grants only (the panel's launch logic and the compositor's
+changed lines; `zoraya-files`, plain UI code, skipped). `make mutants-host` with `--in-diff` against the fix branch:
+`zoraya-panel` 22 mutants (3 unviable), 16 caught, 3 missed, in 14 s; `zoraya-compositor` 52 mutants, 43 caught,
+9 missed, in 14 minutes. Missed and answered: `terminal_at`'s control-character and `~user` guards and `--room`
+only for `files` (a test each: `terminal_at_refuses_odd_paths_and_only_files_gets_a_room_argument`); a compositor
+chord acting on a repeat or a release, and a forwarded chord's modifiers (`a_chord_acts_on_its_press_and_a_forwarded_one_keeps_its_modifiers`);
+the place of a drop at scale 2, the gesture surviving a keyboard focus change (the earlier test was vacuous: a press
+replaced it) and a client's end (`a_place_is_logical_and_the_gesture_goes_with_focus_and_client`). Equivalent: the
+`|` against `^` of the system bit in `modifiers_now` (the keymap never sets that bit) and in the forwarded key's
+modifiers (the same). The new tests were not run against the mutants again (the cap).
 
 ### Merge
 
