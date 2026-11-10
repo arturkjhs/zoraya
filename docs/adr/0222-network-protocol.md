@@ -157,6 +157,12 @@ let n = conn.read(&mut buf)?;                          // stream_read, 0 at FIN
 - *ADR-0055*'s one-request-at-a-time rule per connection holds for the control and scope channels; the stream ends
   carry no requests.
 
+*Note, 2026-11-10 (the architect's decision on ADR-0262, recorded by an agent):* `connect` and `accept` take the
+client's far ends of two streams (ADR-0101) that the client created, instead of `netd` making them, so the 128 KiB of a
+connection is the client's room's memory (ADR-0261); the reply `connected { peer }` carries no handles; `netd` checks
+both handles and uses them only with non-blocking calls; and `connect`'s failure reasons gain `OverQuota`, for the
+room's account bound in `netd` (ADR-0262 item 2). This answers this ADR's open question on who creates the streams.
+
 ### Effect of the vision
 For target 2 nothing changes: the scope (ADR-0220) is checked at `connect`, `datagram` and `listen`; an established
 connection is three handles an agent can pass to a helper, which is Option D of ADR-0220. Threads: streams and

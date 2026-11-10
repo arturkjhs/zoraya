@@ -162,6 +162,10 @@ connect(fd, res->ai_addr, res->ai_addrlen);       /* netd: connect(Name("example
 - *ADR-0107 item 3*'s record gains the `Socket` kind and the `NET` slot (ADR-0220).
 - *ADR-0106 item 8* (`SIGPIPE` on `PeerClosed`) applies to sockets as it foresaw.
 
+*Note, 2026-11-10 (the architect's decision on ADR-0262 and ADR-0263, recorded by an agent):* `connect` passes
+`netd` the far ends of two streams `libposix` creates (ADR-0222's note), and item 11's table gains a row: `OverQuota`
+from `connect` or `socket` (the room's connection bound in `netd`) is `ENOBUFS`.
+
 ### Effect of the vision
 For target 2 nothing in the library is trusted: the scope is checked in `netd`, and a hostile program that edits its
 `getaddrinfo` cache gains nothing (a `connect(Name)` is still checked by name, a `connect(Address)` by address).

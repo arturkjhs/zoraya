@@ -1,0 +1,141 @@
+# ADR-0270: Bounded kernel work: long calls proceed in steps with interrupts enabled between them
+
+- **Status:** accepted
+- **Date:** 2026-11-10
+- **Depends on:** ADR-0030, ADR-0041, ADR-0050, ADR-0051, ADR-0056, ADR-0102, ADR-0261, ADR-0264
+- **Evidence:** CP-14, X-6, alternatives-postmortem.md#keykos--eros--capros-and-coyotos, quotas/survey.md#zoraya-today, quotas/survey.md#cpu
+
+## Context
+System calls run with interrupts masked, and some do work proportional to their argument (`docs/design.md`, "Known
+limitations", measured under HVF on 128 MiB): `memory_create` of all memory about 9 ms and closing that object about
+4 ms; closing a chain of 20,000 channel ends about 11 ms; `memory_map`, `dma_pin`, an address space's teardown and a
+device reset are "the same kind". `snapshot_process` copies every page with interrupts masked (ADR-0102 item 8:
+"ADR-0056 must bound it before untrusted code runs"), and ADR-0050 says of the channel teardown "ADR-0056 is what
+bounds a chain for untrusted code". A process's teardown does not even run on its own thread: `schedule()` calls
+`reap()`, which drops a dead thread, and with it its process, in whichever thread switches next
+(`kernel/src/sched.rs`), so the stall and its CPU time land on another job. With quotas a room can still ask for its
+whole `--mem` in one call, or free it in one exit: a limit bounds the size, not the time, and ADR-0264's CPU ceiling
+can only act at the next return to EL0 (`quotas/survey.md#zoraya-today`). KeyKOS's own list of warts records the
+same failure in a capability system: batched kernel work grew roughly linearly with RAM and could not be kept out of
+critical periods, so real-time support was poor (`alternatives-postmortem.md#keykos--eros--capros-and-coyotos`).
+
+## Decision drivers
+1. No program may hold the CPU in the kernel, or make the kernel hold it on its behalf, for longer than a fixed bound,
+   whatever its arguments, or ADR-0264's ceiling and the terminal's latency (INV-0264-3) mean nothing.
+2. A call keeps its all-or-nothing result (CP-14, ADR-0051's no-effect failure).
+3. The kernel stays non-preemptive (ADR-0030): the change must not add preemption of kernel code in general.
+4. The cost on small calls must be nil.
+5. Work done for a dead process is bounded like work done by a live one; its memory stays charged until freed.
+
+## Considered options
+
+### Option A: A preemptible kernel (Linux's `PREEMPT`, or voluntary points everywhere)
+- **Description:** Kernel code can be preempted outside locks, or calls `cond_resched` at many points
+  `[outside evidence: Linux's preemption models, not fetched]`.
+- **Evidence for:** Bounds latency everywhere at once.
+- **Evidence against:** Driver 3: every kernel path becomes reentrant, a large change for a small kernel.
+- **Cost:** *(estimate)* Large; a review of every lock and per-CPU assumption.
+- **Precedent:** Linux.
+
+### Option B: Cap the size of one call
+- **Description:** Refuse `memory_create` above, say, 16 MiB and `snapshot_process` of a process above a size, in a
+  limited job.
+- **Evidence for:** Trivial; bounds time by bounding size, for the calls that take a size.
+- **Evidence against:** Breaks programs that need large objects; `fork` of a large process becomes impossible, which
+  X-6's strict commit already makes expensive; does nothing for teardown, whose size is what the room accumulated.
+- **Cost:** *(estimate)* 20 lines.
+- **Precedent:** none found as a design.
+
+### Option C: Long work in steps, with interrupts enabled and a preemption point between steps; teardown on a kernel thread
+- **Description:** Every call whose work grows with an argument or with what it frees does it in steps of at most 64
+  pages (256 KiB) or 64 objects `[assumption]`; between steps it holds no spinlock, unmasks interrupts, and yields if
+  its slice has ended. The objects being built are not visible until the last step, so a failure part-way frees what
+  was done. Teardown of dead processes and closed objects moves from `reap()` to a kernel thread that does it in the
+  same steps, charged to the dead object's job until freed (ADR-0261).
+- **Evidence for:** Drivers 1 to 5: the bound is one step's time; the result stays all or nothing; preemption happens
+  only at points the call chooses, as blocking calls already do. It avoids KeyKOS's failure by keeping no batch
+  longer than a step (`alternatives-postmortem.md#keykos--eros--capros-and-coyotos`). The CPU ceiling's overrun is
+  then one step (`quotas/survey.md#cpu`). seL4 makes its long-running operations preemptible at points in the same way
+  `[outside evidence: the seL4 manual's preemption points, not found in the text extracted this session]`.
+- **Evidence against:** Each long call must be written as a loop with its state out of locks; a call can now be
+  interrupted by `job_kill`, which must free the partial work; freed memory returns later than today (after the
+  reaper's steps), so a room that exits and restarts may briefly see its own old charge.
+- **Cost:** *(estimate)* 150 lines per site, six sites, and the reaper thread (100 lines).
+- **Precedent:** voluntary preemption points; KeyKOS as the counter-example.
+
+### Option D: A pool of zeroed frames filled by an idle thread
+- **Description:** An idle-priority kernel thread zeroes free frames ahead, so `memory_create` takes zeroed ones.
+- **Evidence for:** Zeroing moves off the call's path entirely when the pool is full.
+- **Evidence against:** Does nothing for a snapshot's copy, a mapping, or a teardown; under load the pool is empty and
+  the call zeroes anyway.
+- **Cost:** *(estimate)* 200 lines.
+- **Precedent:** pre-zeroed pages are common `[outside evidence: not fetched]`.
+
+## Recommendation
+**Recommendation (not a decision): Option C** at every site that scales, and Option D only if a measurement asks for
+it.
+
+1. **Sites**, every system call path whose work grows with an argument or with what it frees: `memory_create`
+   (zeroing), `spawn` (the image copy and zeroing), `snapshot_process` (the copy), `memory_map` and `memory_unmap`
+   (page tables for a range), the close of a memory object (its frames), the teardown of a process (address space,
+   page tables, handle table) after its exit or `job_kill`, the teardown of a closed channel's chain (ADR-0050), and
+   `dma_pin` (drivers only, trusted, included for the bound).
+2. **Step.** At most 64 pages, 64 page-table entries' worth of range, or 64 objects `[assumption]`. Between steps: no
+   spinlock held, interrupts unmasked, `sched::preempt_point()` (which switches if the slice ended, ADR-0030).
+3. **All or nothing.** The object being built is not in any handle table until the last step; a failure or a
+   `job_kill` between steps frees the steps done and refunds their charge (ADR-0261).
+4. **Teardown on the reaper.** A kernel thread, `reaper`, takes dead threads, dead processes and closed objects from a
+   list that `reap()` (inside `schedule()`, where nothing may yield) only appends to, and frees them in steps with
+   preemption points. What it has not yet freed stays charged to its job (ADR-0261 point 9) and is shown as `held`.
+   The reaper is a kernel thread, never capped (ADR-0264 point 7), and runs in round robin with user threads, so the
+   CPU time of teardown is charged to no job: it is bounded per step and shared like any thread's, and a room that
+   exits in a loop makes the reaper work no faster than its own processes can be started again.
+5. **The bound.** The longest time with interrupts masked on any system call path, and in `schedule()`, is one step
+   plus the fixed work around it; a test measures it (INV-0270-1).
+
+**Tensions with accepted ADRs.** *ADR-0030:* system calls run with IRQ masked and preemption happens on return to EL0
+or at explicit yields; this adds explicit yields inside six calls and a kernel thread for teardown. *ADR-0041* and
+*ADR-0050:* teardown, specified as running masked "for as long as the chain lasts", runs in steps on the reaper.
+*ADR-0051:* `memory_create` and `memory_map` become loops, results unchanged. *ADR-0102 item 8:* fulfilled.
+
+**Examples.** Nothing new is typed. What a person sees is what does not happen: with `agent-1` at `--mem 512M`,
+
+```
+agent-1 ~/sandbox/agent-1> ./alloc 500M     # one memory_create of 500 MiB
+agent-1 ~/sandbox/agent-1> exit             # and its teardown
+```
+
+zeroes and then frees 2,000 steps of 256 KiB each, and a key typed meanwhile in another room's terminal is echoed
+within INV-0264-3's bound instead of after the whole zeroing or teardown.
+
+### Effect of the vision
+Untrusted code needs it; the general-purpose base gains a terminal that stays responsive while a large build forks
+and exits.
+
+## Consequences
+- **Positive.** The CPU ceiling and the terminal's latency hold under any argument a limited room may pass, and when it
+  exits.
+- **Negative.** Six calls become loops; kill during a call has a new path; memory returns a little later.
+- **Follow-up.** Q2 in `quotas/plan.md`.
+
+## Invariants
+- **INV-0270-1.** No system call, no call of `schedule()` and no timer callback keeps interrupts masked for more than 2 ms
+  `[assumption]` under HVF, with any arguments a limited job may pass. *Check:* in-QEMU test with the test kernel's
+  masked-time counter over every allocating and freeing system call at the room's whole limit (`memory_create`,
+  `memory_map` and `memory_unmap` of its range, closing the object, `snapshot_process` of a 64 MiB process, `spawn` of
+  the largest image), the close of a 10,000-endpoint chain, and the exit and the `job_kill` of a process holding the
+  room's whole memory.
+- **INV-0270-2.** A call killed between steps leaves no object and no charge. *Check:* in-QEMU test: `job_kill` from
+  another process during a large `memory_create` and a large `snapshot_process`, then `job_get_usage` and frame
+  statistics back to their starting values once the reaper is idle.
+
+## Open questions
+- The step size: measure zeroing and copying per page under HVF and TCG.
+
+## Revisit triggers
+- SMP (interrupts masked on one CPU stop less, but locks across steps matter more).
+- A new call whose work grows with an argument.
+
+## Architect's decision
+
+Accepted 2026-11-10. Decided by the architect; recorded by an agent at the architect's request. The numbers marked `[assumption]` are defaults until measured: each Q task of `docs/research/quotas/plan.md` measures the ones it implements and proposes changes with the numbers.
