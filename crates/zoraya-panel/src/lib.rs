@@ -190,6 +190,17 @@ pub fn opener(name: &str) -> Option<&'static str> {
     OPENERS.iter().find(|(e, _)| *e == ext).map(|(_, a)| *a)
 }
 
+/// The application that opens `name` when the file manager asks for
+/// `app` (empty: by the name's extension): only an application that opens
+/// files, and `edit` for any name (Open in edit).
+pub fn opener_for(name: &str, app: &str) -> Option<&'static str> {
+    match app {
+        "" => opener(name),
+        "edit" if !name.is_empty() => Some("edit"),
+        _ => None,
+    }
+}
+
 /// The data directory of `app` in `room` (`None` is `home`).
 pub fn data_dir(room: Option<&Room>, app: &str) -> String {
     format!("/data/{}/{app}", room.map_or(HOME, |r| r.name.as_str()))
@@ -267,6 +278,12 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
     if let Some(r) = room {
         line = format!("room {} {line}", r.name);
     }
+    // The file manager says its room in its menu's lines (proposed
+    // ADR-0248).
+    let args = match room {
+        Some(r) if app == "files" => vec![String::from("--room"), r.name.clone()],
+        _ => Vec::new(),
+    };
     Launch {
         app,
         room: room.cloned(),
@@ -277,7 +294,7 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
         programs: vec![Program {
             image: app,
             handles,
-            args: Vec::new(),
+            args,
         }],
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "zoraya-files"
-description = "The file manager's logic (plan 7e): the folder shown, its rows, and what each press asks for."
+description = "The file manager's logic and window (stage 7h): the folder shown, the selection, sorting, search, rename, delete, the menu, and what each gesture asks for."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,8 +8,10 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
-zoraya-protocol = { path = "../zoraya-protocol" }
-zoraya-shell = { path = "../zoraya-shell" }
+zoraya-paint = { path = "../zoraya-paint" }
+zoraya-text = { path = "../zoraya-text" }
+zoraya-tokens = { path = "../zoraya-tokens" }
+zoraya-ui = { path = "../zoraya-ui" }
 
 [lints]
 workspace = true

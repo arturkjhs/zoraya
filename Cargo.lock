@@ -173,9 +173,11 @@ dependencies = [
 name = "zoraya-files"
 version = "0.1.0"
 dependencies = [
- "zoraya-protocol",
- "zoraya-shell",
+ "zoraya-paint",
  "zoraya-test-alloc",
+ "zoraya-text",
+ "zoraya-tokens",
+ "zoraya-ui",
 ]
 
 [[package]]

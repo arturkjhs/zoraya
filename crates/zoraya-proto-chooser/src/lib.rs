@@ -115,6 +115,10 @@ protocol! {
     message OpenWith<'a> = 32, handles 1 {
         name: Data<'a, MAX_NAME>,
         words: Data<'a, MAX_WORDS>,
+        /// Empty: the application for the name's extension; else the one
+        /// asked for, among those that open files (`edit`: the file
+        /// manager's Open in edit, proposed ADR-0248).
+        app: Data<'a, MAX_NAME>,
     }
 
     message Opening = 32, handles 0 {

@@ -470,7 +470,8 @@ fn launcher_requests(st: &mut State, i: usize, panel: &Panel) {
             Ok((_, m)) => {
                 let name = core::str::from_utf8(m.name.0).unwrap_or("");
                 let words = core::str::from_utf8(m.words.0).unwrap_or("");
-                match zoraya_panel::opener(name) {
+                let asked = core::str::from_utf8(m.app.0).unwrap_or("?");
+                match zoraya_panel::opener_for(name, asked) {
                     Some(app) if !words.chars().any(char::is_control) => {
                         // Whatever the sender gave, the application gets
                         // the file to read only (ADR-0153's `+r`).

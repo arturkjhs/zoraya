@@ -255,6 +255,8 @@ fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
     assert!(in_room.holds.contains(&(String::from("~/project"), true)));
     assert!(!in_room.holds.iter().any(|(p, _)| p == "~"));
     assert_eq!(in_room.line, "room project files");
+    assert_eq!(in_room.programs[0].args, ["--room", "project"]);
+    assert!(files.programs[0].args.is_empty());
     for app in ["t_open", "edit", "files"] {
         let l = application(None, app, None);
         assert!(!l.holds.iter().any(|(p, w)| p == "/" && *w), "{app}");
@@ -408,4 +410,16 @@ fn a_terminal_opens_at_a_folder_only_inside_its_rooms_holds() {
     assert_eq!(l.holds, terminal(None).holds);
     // An ordinary launch has no current directory of its own.
     assert!(terminal(None).cwd.is_none());
+}
+
+/// Open in edit (proposed ADR-0248): `edit` for any name, nothing else by
+/// name; an empty request is by extension.
+#[test]
+fn the_file_manager_may_ask_for_edit_alone() {
+    assert_eq!(opener_for("main.c", "edit"), Some("edit"));
+    assert_eq!(opener_for("main.c", ""), None);
+    assert_eq!(opener_for("notes.test", ""), Some("t_open"));
+    assert_eq!(opener_for("notes.txt", "term"), None);
+    assert_eq!(opener_for("notes.txt", "settings"), None);
+    assert_eq!(opener_for("", "edit"), None);
 }

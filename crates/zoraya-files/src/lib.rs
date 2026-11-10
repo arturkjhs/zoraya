@@ -1,11 +1,9 @@
-//! The file manager's logic (plan 7e): the folder shown, its rows, and
-//! what each press asks the program to do. No I/O here: the program lists
-//! folders and carries out each [`Act`] through `zoraya-fsclient`, and
-//! opens a file only through the panel (`OpenWith`, ADR-0168 point 4),
-//! which launches the file's application with one read-only connection.
-//!
-//! Delete asks twice: the first press names what would go, the second, on
-//! the same row with nothing else between, removes it.
+//! The file manager's logic and its view (stage 7h): [`model`] holds the
+//! folder shown, the selection and what each gesture asks for, as [`Act`]s
+//! the program carries out through `zoraya-fsclient` and the panel;
+//! [`view`] is the window, a `zoraya-ui` widget drawn as the approved
+//! mockups draw it (`docs/research/desktop/mockups/clear-field/files*.png`).
+//! No I/O here.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -14,56 +12,12 @@ extern crate alloc;
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
 
-use zoraya_protocol::Name;
-use zoraya_shell::grants;
+pub mod format;
+pub mod model;
+pub mod view;
 
-/// One name in the folder shown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    pub name: String,
-    pub dir: bool,
-}
-
-/// What a press asks the program to do. Paths are absolute.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Act {
-    /// List this folder and show it.
-    Show(String),
-    /// Open `path` read-only and hand it to the panel; `words` are the
-    /// grant as the record and the pills say it.
-    OpenWith {
-        path: String,
-        words: String,
-    },
-    MakeDirectory {
-        dir: String,
-        name: String,
-    },
-    Rename {
-        dir: String,
-        old: String,
-        new: String,
-    },
-    Remove {
-        dir: String,
-        name: String,
-    },
-    /// Nothing to do; the status line says why.
-    Say(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Manager {
-    /// The folder shown, absolute.
-    pub dir: String,
-    pub home: String,
-    /// Folders first, then files, each by name.
-    pub entries: Vec<Entry>,
-    /// The row a first Delete press named.
-    delete_armed: Option<usize>,
-}
+pub use model::{Act, Column, Item, MENU, MenuItem, Model, Place};
 
 /// `name` in `dir`.
 pub fn join(dir: &str, name: &str) -> String {
@@ -85,133 +39,58 @@ pub fn parent(dir: &str) -> Option<String> {
     })
 }
 
-impl Manager {
-    pub fn new(dir: &str, home: &str) -> Manager {
-        Manager {
-            dir: String::from(dir),
-            home: String::from(home),
-            entries: Vec::new(),
-            delete_armed: None,
+/// The sidebar's places from the window's holds, as the panel words them
+/// (`+r /`, `+w ~`, `+w ~/project`): Home (what `~` allows, else read
+/// through the volume), each of the room's other grants, and `/system`.
+pub fn places(holds: &[(String, bool)], home: &str) -> alloc::vec::Vec<Place> {
+    let expand = |p: &str| -> String {
+        match p.strip_prefix('~') {
+            Some(r) if r.is_empty() || r.starts_with('/') => format!("{home}{r}"),
+            _ => String::from(p),
         }
-    }
-
-    /// The folder `dir` with what it holds.
-    pub fn show(&mut self, dir: &str, mut entries: Vec<Entry>) {
-        entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.cmp(&b.name)));
-        self.dir = String::from(dir);
-        self.entries = entries;
-        self.delete_armed = None;
-    }
-
-    /// The folder as the shell writes it (`~/project`).
-    pub fn shown(&self) -> String {
-        grants::shown(&self.dir, &self.home)
-    }
-
-    /// The list's rows: a folder ends in `/`.
-    pub fn rows(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .map(|e| {
-                if e.dir {
-                    format!("{}/", e.name)
-                } else {
-                    e.name.clone()
-                }
-            })
-            .collect()
-    }
-
-    fn entry(&self, row: Option<usize>) -> Result<&Entry, Act> {
-        row.and_then(|r| self.entries.get(r))
-            .ok_or_else(|| Act::Say(String::from("Nothing is selected.")))
-    }
-
-    /// Enter or Open on `row`: a folder is shown, a file is opened with
-    /// its application, read-only.
-    pub fn activate(&mut self, row: Option<usize>) -> Act {
-        self.delete_armed = None;
-        match self.entry(row) {
-            Ok(e) if e.dir => Act::Show(join(&self.dir, &e.name)),
-            Ok(e) => {
-                let path = join(&self.dir, &e.name);
-                let words = format!("+r {}", grants::shown(&path, &self.home));
-                Act::OpenWith { path, words }
-            }
-            Err(a) => a,
+    };
+    let mut out = alloc::vec::Vec::new();
+    let home_write = holds.iter().any(|(p, w)| *w && expand(p) == home);
+    out.push(Place {
+        label: String::from("Home"),
+        path: String::from(home),
+        write: home_write,
+        room: false,
+        system: false,
+    });
+    for (p, w) in holds {
+        let abs = expand(p);
+        if abs == "/" || abs == home {
+            continue;
         }
+        let label = abs.rsplit('/').next().unwrap_or(&abs);
+        out.push(Place {
+            label: String::from(label),
+            path: abs.clone(),
+            write: *w,
+            room: true,
+            system: false,
+        });
     }
-
-    pub fn up(&mut self) -> Act {
-        self.delete_armed = None;
-        match parent(&self.dir) {
-            Some(p) => Act::Show(p),
-            None => Act::Say(String::from("This is the top of the volume.")),
-        }
+    // The volume read whole: the image's folder is a place too.
+    if holds.iter().any(|(p, _)| p == "/") {
+        out.push(Place {
+            label: String::from("/system"),
+            path: String::from("/system"),
+            write: false,
+            room: false,
+            system: true,
+        });
+        // And the volume itself, read only, for the longest match.
+        out.push(Place {
+            label: String::from("/"),
+            path: String::from("/"),
+            write: false,
+            room: false,
+            system: true,
+        });
     }
-
-    fn valid(&self, name: &str) -> Result<(), Act> {
-        let name_ok = Name::is_valid(name) && name != "." && name != "..";
-        if !name_ok {
-            return Err(Act::Say(format!("\u{201c}{name}\u{201d} is not a name.")));
-        }
-        if self.entries.iter().any(|e| e.name == name) {
-            return Err(Act::Say(format!("{name} is already here.")));
-        }
-        Ok(())
-    }
-
-    pub fn new_folder(&mut self, name: &str) -> Act {
-        self.delete_armed = None;
-        let name = name.trim();
-        match self.valid(name) {
-            Ok(()) => Act::MakeDirectory {
-                dir: self.dir.clone(),
-                name: String::from(name),
-            },
-            Err(a) => a,
-        }
-    }
-
-    pub fn rename(&mut self, row: Option<usize>, name: &str) -> Act {
-        self.delete_armed = None;
-        let name = name.trim();
-        let old = match self.entry(row) {
-            Ok(e) => e.name.clone(),
-            Err(a) => return a,
-        };
-        if old == name {
-            return Act::Say(format!("{name} already has that name."));
-        }
-        match self.valid(name) {
-            Ok(()) => Act::Rename {
-                dir: self.dir.clone(),
-                old,
-                new: String::from(name),
-            },
-            Err(a) => a,
-        }
-    }
-
-    /// The first press on a row names it; the second removes it.
-    pub fn delete(&mut self, row: Option<usize>) -> Act {
-        let name = match self.entry(row) {
-            Ok(e) => e.name.clone(),
-            Err(a) => {
-                self.delete_armed = None;
-                return a;
-            }
-        };
-        if self.delete_armed.is_some() && self.delete_armed == row {
-            self.delete_armed = None;
-            return Act::Remove {
-                dir: self.dir.clone(),
-                name,
-            };
-        }
-        self.delete_armed = row;
-        Act::Say(format!("Delete {name}? Press Delete again."))
-    }
+    out
 }
 
 #[cfg(test)]
@@ -219,6 +98,9 @@ extern crate std;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_view;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]
