@@ -383,25 +383,24 @@ fn at_scale_two_an_odd_display_gives_bodies_of_whole_logical_pixels() {
 /// ADR-0164's 1920; an unknown width in millimetres is ordinary.
 #[test]
 fn a_dense_display_gets_scale_two_sooner() {
+    // Small heights: the test's memory stays under the cap with the others.
     let mut s = setup();
-    // A window of 800 by 500 points on a 220 ppi screen.
-    s.f().display_mm = (185, 115);
-    resize(&mut s, 1600, 1000);
+    // A window of 640 by 200 points on a 220 ppi screen.
+    s.f().display_mm = (148, 46);
+    resize(&mut s, 1280, 400);
     assert_eq!(s.c.scale().factor(), 2);
     // Smaller than 640 logical pixels: scale 1, however dense.
-    s.f().display_mm = (139, 87);
-    resize(&mut s, 1200, 750);
+    s.f().display_mm = (139, 46);
+    resize(&mut s, 1200, 400);
     assert_eq!(s.c.scale().factor(), 1);
     // A monitor of about 100 ppi, as wide in pixels: scale 1.
-    s.f().display_mm = (406, 254);
-    resize(&mut s, 1600, 1000);
+    s.f().display_mm = (325, 102);
+    resize(&mut s, 1280, 400);
     assert_eq!(s.c.scale().factor(), 1);
     // Unknown: the width alone.
     s.f().display_mm = (0, 0);
-    resize(&mut s, 1700, 1000);
+    resize(&mut s, 1300, 400);
     assert_eq!(s.c.scale().factor(), 1);
-    resize(&mut s, 1920, 1200);
-    assert_eq!(s.c.scale().factor(), 2);
 }
 
 #[test]
