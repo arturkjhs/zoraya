@@ -94,7 +94,7 @@ accepts Ctrl where it accepts Command, so that it works as Option B if points 1 
 - **INV-0248-2.** An unasked `Offer` is accepted only from a client of a trusted room whose focused window received a
   press in its body within the last second, once per press, and not after a focus change to another client or a
   System+C or System+X. *Check:* host tests of the compositor's offer rule.
-- **INV-0248-3.** `DragEnded` carries a place only when the drop was over the source's own window, and no `Drop` is
+- **INV-0248-3.** `DragEndedAt` carries a place only when the drop was over the source's own window, and no `Drop` is
   sent then. *Check:* host test of a drag released over the source, over another client and over nothing.
 - **INV-0248-4.** The panel launches `OpenTerminal`'s terminal only in the caller's room and only at a path that
   room's holds cover. *Check:* host test of the panel's launch logic.

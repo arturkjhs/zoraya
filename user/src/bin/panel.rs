@@ -474,15 +474,17 @@ fn launcher_requests(st: &mut State, i: usize) {
         // `OpenWithApp` names the application; the older `OpenWith` does
         // not (ADR-0052: a changed message is a new ordinal), so it asks
         // for the one of the name's extension.
-        let (named, request) = match decode::<zoraya_proto_chooser::OpenWithApp<'_>>(msg, got.len())
-        {
-            Ok((_, m)) => (Some((m.name.0, m.words.0, m.app.0)), true),
-            Err(_) => (
-                decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len())
-                    .ok()
-                    .map(|(_, m)| (m.name.0, m.words.0, &b""[..])),
-                false,
-            ),
+        // The reply follows the request's ordinal, whether or not it decodes.
+        let request = zoraya_protocol::Header::decode(msg)
+            .is_ok_and(|(h, _)| h.ordinal == zoraya_proto_chooser::OpenWithApp::ORDINAL);
+        let named = if request {
+            decode::<zoraya_proto_chooser::OpenWithApp<'_>>(msg, got.len())
+                .ok()
+                .map(|(_, m)| (m.name.0, m.words.0, m.app.0))
+        } else {
+            decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len())
+                .ok()
+                .map(|(_, m)| (m.name.0, m.words.0, &b""[..]))
         };
         let open_with = named.filter(|_| app == "files");
         let status = match open_with.ok_or(()) {
