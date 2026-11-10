@@ -9,7 +9,7 @@ use super::rooms::{axis, done};
 use super::*;
 
 /// A client of `app` added by the panel with `tag`.
-fn tagged(s: &mut Setup, panel: u32, tag: u32, app: &str) -> u32 {
+pub(super) fn tagged(s: &mut Setup, panel: u32, tag: u32, app: &str) -> u32 {
     let end = s.f().channel(64);
     let m = gui::AddRoomClient {
         untrusted: 0,
@@ -27,7 +27,7 @@ fn tagged(s: &mut Setup, panel: u32, tag: u32, app: &str) -> u32 {
 }
 
 /// The chooser: a client the driver manager marks.
-fn system(s: &mut Setup) -> u32 {
+pub(super) fn system(s: &mut Setup) -> u32 {
     let end = s.f().channel(64);
     let m = s.manager;
     s.f()
@@ -37,7 +37,7 @@ fn system(s: &mut Setup) -> u32 {
     end
 }
 
-fn sheet(s: &mut Setup, end: u32, tag: u32, w: u32, h: u32) -> (u32, u32) {
+pub(super) fn sheet(s: &mut Setup, end: u32, tag: u32, w: u32, h: u32) -> (u32, u32) {
     let k = s.c.scale().factor();
     let n = (w * k * h * k) as usize;
     let memory = s.f().memory(vec![0x00ff_00ff; n], n as u64 * 4, false);

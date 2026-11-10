@@ -148,6 +148,9 @@ pub trait Platform {
     /// that framebuffer.
     fn framebuffer(&mut self, width: u32, height: u32) -> Option<Self::End>;
     fn pixels(&mut self) -> &mut [u32];
+    /// The display driver shows the framebuffer made last: an older one may
+    /// be released (ADR-0246; a window dragged larger makes one per step).
+    fn framebuffer_shown(&mut self) {}
     /// Sends a request to a driver and waits, with a deadline, for its
     /// reply. None if the driver is gone or late. Used only to attach a
     /// display driver (`Info`, `Attach`); flushes do not wait.
@@ -309,7 +312,8 @@ pub struct Compositor<P: Platform> {
     appearance: Appearance,
     /// `gui.motion` (ADR-0169), told to clients in `Configure`.
     motion: bool,
-    /// `gui.scale`: 0 is `auto` (ADR-0164); read at start only.
+    /// `gui.scale`: 0 is `auto` (ADR-0164); read at start, and applied at once
+    /// by `ApplySettings` (ADR-0246).
     fixed_scale: u32,
     attached: bool,
     keymap: Keymap,
@@ -351,6 +355,9 @@ pub struct Compositor<P: Platform> {
     unflushed: Rect,
     /// When the one flush in flight was sent.
     in_flight: Option<u64>,
+    /// The driver sent `Resized` while a flush was in flight: the new size
+    /// is asked for once that flush is answered.
+    resized: bool,
     /// Since when a flush has been waiting for room in the driver's queue.
     stuck_since: Option<u64>,
     stats: Stats,
@@ -436,6 +443,7 @@ impl<P: Platform> Compositor<P> {
             damage: Rect::default(),
             unflushed: Rect::default(),
             in_flight: None,
+            resized: false,
             stuck_since: None,
             stats: Stats::default(),
             wallpaper: Vec::new(),
@@ -476,7 +484,7 @@ impl<P: Platform> Compositor<P> {
 
     /// Applies checked settings: the theme to the frames, the wallpaper's
     /// blur and every window's `Configure`, motion likewise, the layouts
-    /// and the active one at once; the scale waits for the next session.
+    /// and the active one, and the scale (ADR-0246), all at once.
     pub fn apply_settings(&mut self, s: settings::GuiSettings) {
         let appearance = if s.dark {
             Appearance::Dark
@@ -486,13 +494,24 @@ impl<P: Platform> Compositor<P> {
         let restyle = appearance != self.appearance || s.motion != self.motion;
         self.appearance = appearance;
         self.motion = s.motion;
-        if restyle && self.attached {
-            self.make_wallpaper();
+        self.fixed_scale = s.scale;
+        let rescale = self.attached && self.chosen_scale() != self.scale;
+        if (restyle || rescale) && self.attached {
             self.fields_dirty = true;
-            let keys: Vec<Key> = self.windows.iter().map(Self::key_of).collect();
-            for k in keys {
-                self.configure(k);
+            if rescale {
+                // Every toplevel at its logical size at the new scale, and
+                // configured (`reconfigure`: popups and sheets close).
+                let old = self.scale.factor();
+                self.scale = self.chosen_scale();
+                self.reconfigure(old);
+            } else {
+                let keys: Vec<Key> = self.windows.iter().map(Self::key_of).collect();
+                for k in keys {
+                    self.configure(k);
+                }
             }
+            // At the scale now in force: the blur's radius follows it.
+            self.make_wallpaper();
             let screen = self.screen();
             self.dirty(&screen);
         }
@@ -631,6 +650,42 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(end);
             return status::EXISTS;
         }
+        let s = self.size_and_attach(end, false);
+        if s != status::OK {
+            self.platform.close(end);
+            return s;
+        }
+        self.display = Some(end);
+        self.platform.watch(end, DISPLAY_KEY);
+        // Everything, once: a new driver shows nothing until told.
+        self.dirty(&self.screen());
+        self.in_flight = None;
+        self.stuck_since = None;
+        status::OK
+    }
+
+    /// The driver said the display has a new size (ADR-0246), and no flush
+    /// is in flight: the same `Info` and `Attach` as at attach, on the same
+    /// channel, and everything drawn again.
+    fn display_resized(&mut self) {
+        self.resized = false;
+        let Some(end) = self.display else { return };
+        if self.size_and_attach(end, true) != status::OK {
+            self.lose_display();
+            return;
+        }
+        self.unflushed = Rect::default();
+        self.dirty(&self.screen());
+    }
+
+    /// Asks the driver for the display's size, makes a framebuffer of it and
+    /// attaches it; at a new size, the scale, the wallpaper and every window
+    /// follow (`reconfigure`). `again`: the driver attached already and said
+    /// the size changed; if it changed back meanwhile, nothing is attached
+    /// (the driver refuses a second framebuffer of the same size), and the
+    /// whole-screen flush that follows ends its wait for `Attach`. The caller
+    /// closes `end` on a failure.
+    fn size_and_attach(&mut self, end: P::End, again: bool) -> u32 {
         let mut answer = [0u8; 64];
         let length = reply(&display::Info {}, 1, &mut self.out);
         let message = self.out.clone();
@@ -638,7 +693,6 @@ impl<P: Platform> Compositor<P> {
             .platform
             .call(end, &message[..length], &[], &mut answer)
         else {
-            self.platform.close(end);
             return status::UNSUPPORTED;
         };
         let info = match decode::<display::InfoReply>(&answer[..n], 0) {
@@ -646,18 +700,18 @@ impl<P: Platform> Compositor<P> {
                 m
             }
             _ => {
-                self.platform.close(end);
                 return status::UNSUPPORTED;
             }
         };
         let side = |v: u32| (1..=8192).contains(&v);
         if !side(info.width) || !side(info.height) {
-            self.platform.close(end);
             return status::UNSUPPORTED;
         }
         let new_size = (info.width, info.height) != (self.width, self.height) || !self.attached;
+        if again && !new_size {
+            return status::OK;
+        }
         let Some(frame) = self.platform.framebuffer(info.width, info.height) else {
-            self.platform.close(end);
             return status::NO_MEMORY;
         };
         if new_size {
@@ -665,11 +719,7 @@ impl<P: Platform> Compositor<P> {
             self.height = info.height;
             self.attached = true;
             let old = self.scale.factor();
-            self.scale = match self.fixed_scale {
-                1 => Scale::ONE,
-                2 => Scale::new(2).unwrap_or(Scale::ONE),
-                _ => scale_for(info.width),
-            };
+            self.scale = self.chosen_scale();
             let start = self.platform.now();
             self.make_wallpaper();
             self.stats.wallpaper_ns = self.platform.now().saturating_sub(start);
@@ -683,16 +733,21 @@ impl<P: Platform> Compositor<P> {
             .platform
             .call(end, &message[..length], &[frame], &mut answer);
         if !Self::done_ok(done, &answer) {
-            self.platform.close(end);
             return status::UNSUPPORTED;
         }
-        self.display = Some(end);
-        self.platform.watch(end, DISPLAY_KEY);
-        // Everything, once: a new driver shows nothing until told.
-        self.dirty(&self.screen());
-        self.in_flight = None;
-        self.stuck_since = None;
+        // The driver shows the new framebuffer: an older one can go.
+        self.platform.framebuffer_shown();
         status::OK
+    }
+
+    /// The scale for the display's width: `gui.scale` 1 or 2 fixes it, `auto`
+    /// is 2 from `SCALE_TWO_FROM` pixels wide (ADR-0164, ADR-0246).
+    fn chosen_scale(&self) -> Scale {
+        match self.fixed_scale {
+            1 => Scale::ONE,
+            2 => Scale::new(2).unwrap_or(Scale::ONE),
+            _ => scale_for(self.width),
+        }
     }
 
     fn done_ok(n: Option<usize>, answer: &[u8]) -> bool {
@@ -719,8 +774,24 @@ impl<P: Platform> Compositor<P> {
                 let sent = self.in_flight.take().unwrap_or(0);
                 self.stats.flushes += 1;
                 self.stats.flush_ns += self.platform.now().saturating_sub(sent);
-                // The latest frame, whatever was composed meanwhile.
-                self.send_flush();
+                if self.resized {
+                    self.display_resized();
+                } else {
+                    // The latest frame, whatever was composed meanwhile.
+                    self.send_flush();
+                }
+            }
+            // ADR-0246: a new display size. One at a time from the driver,
+            // and never while the compositor waits for `Info`'s reply.
+            Incoming::Message(n)
+                if handles.is_empty()
+                    && decode::<display::Resized>(&self.message[..n], 0).is_ok() =>
+            {
+                if self.in_flight.is_some() {
+                    self.resized = true;
+                } else {
+                    self.display_resized();
+                }
             }
             _ => {
                 for h in handles {
@@ -733,6 +804,7 @@ impl<P: Platform> Compositor<P> {
 
     fn lose_display(&mut self) {
         self.in_flight = None;
+        self.resized = false;
         self.stuck_since = None;
         if let Some(end) = self.display.take() {
             self.platform.close(end);
@@ -1652,13 +1724,42 @@ impl<P: Platform> Compositor<P> {
         self.place_sheets(key);
     }
 
-    /// After the display changed size: every toplevel keeps its logical size
-    /// at the new scale (clamped to the display) and is configured again
-    /// (ADR-0164); legacy surfaces keep their buffers (review 7b, 13).
+    /// After the display changed size or scale (ADR-0246): popups close, and
+    /// sheets too at a new scale; every toplevel keeps its logical size at the
+    /// new scale, as far as the work area holds it, its frame moved back into
+    /// the work area, and is configured again (ADR-0164); legacy surfaces keep
+    /// their buffers (review 7b, 13) and are only moved back.
     fn reconfigure(&mut self, old_scale: u32) {
         self.fields_dirty = true;
+        // Popups close, as at a press outside them (their place was the old
+        // layout's); at a new scale sheets close too: no `Configure` tells
+        // them the scale, and their client cancels (review 7g, 4).
+        let new_scale = old_scale != self.scale.factor();
+        let closing: Vec<Key> = self
+            .windows
+            .iter()
+            .filter(|w| match w.kind {
+                WindowKind::Popup { .. } => true,
+                WindowKind::Sheet { .. } => new_scale,
+                _ => false,
+            })
+            .map(Self::key_of)
+            .collect();
+        for p in closing {
+            self.send_event_plain(p.client, &gui::CloseRequested { window: p.id });
+            self.remove_window(p);
+        }
         let k = self.scale.factor();
-        let (w, h) = (self.width, self.height);
+        let s = i64::from(k);
+        let f = self.frame();
+        let area = self.work_area();
+        // The largest body whose frame fits the work area, in whole logical
+        // pixels.
+        let most = |v: i64| (v - v % s).max(s) as u32;
+        let (w, h) = (
+            most(area.width - 2 * f.border),
+            most(area.height - f.title - f.border),
+        );
         let keys: Vec<Key> = self
             .windows
             .iter()
@@ -1667,17 +1768,47 @@ impl<P: Platform> Compositor<P> {
             .collect();
         for win in &mut self.windows {
             win.chrome = None;
-            if win.kind != WindowKind::Toplevel {
-                continue;
+            let (bw, bh) = (i64::from(win.body.0), i64::from(win.body.1));
+            let into = |x: i64, y: i64, bw: i64, bh: i64| {
+                (
+                    x.clamp(
+                        area.x + f.border,
+                        (area.right() - f.border - bw).max(area.x + f.border),
+                    ),
+                    y.clamp(
+                        area.y + f.title,
+                        (area.bottom() - f.border - bh).max(area.y + f.title),
+                    ),
+                )
+            };
+            match win.kind {
+                // Never resized: only moved back into the work area.
+                WindowKind::Legacy => {
+                    (win.x, win.y) = into(win.x, win.y, bw, bh);
+                    continue;
+                }
+                WindowKind::Toplevel => {}
+                // Sheets follow their owners (`place_sheets` below).
+                _ => continue,
             }
             let lw = (win.body.0 / old_scale.max(1)).max(1);
             let lh = (win.body.1 / old_scale.max(1)).max(1);
             win.body = ((lw * k).min(w), (lh * k).min(h));
-            win.x = win.x / i64::from(old_scale.max(1)) * i64::from(k);
-            win.y = win.y / i64::from(old_scale.max(1)) * i64::from(k);
+            let x = win.x / i64::from(old_scale.max(1)) * s;
+            let y = win.y / i64::from(old_scale.max(1)) * s;
+            let (bw, bh) = (i64::from(win.body.0), i64::from(win.body.1));
+            win.x = x.clamp(
+                area.x + f.border,
+                (area.right() - f.border - bw).max(area.x + f.border),
+            );
+            win.y = y.clamp(
+                area.y + f.title,
+                (area.bottom() - f.border - bh).max(area.y + f.title),
+            );
         }
         for key in keys {
             self.configure(key);
+            self.place_sheets(key);
         }
     }
 

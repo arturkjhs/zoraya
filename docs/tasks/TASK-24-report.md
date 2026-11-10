@@ -17,6 +17,7 @@ measurements, the invariant delta, the review, the mutants, what was merged and 
 | [ADR-0245](../adr/0245-the-choosers-wiring-in-stage-7e.md) (proposed) | 7e | The chooser's wiring: registered by the panel with the compositor's tag, sheets only from system clients, `Save` as the folder narrowed to one name, the data directory `/data/ROOM/APP`, `OpenWith` read-only. Fills gaps of ADR-0167 and ADR-0168. |
 | INV-0168-2 against INV-0169-4 | 7f | INV-0168-2 gives the file manager the volume's root, `/config` included, while INV-0169-4 says no launch but the settings window gets `/config` to write. Which wins (narrow the file manager's root, or reword INV-0169-4) is the architect's; the panel's test checks the `Config` slot only. |
 | `/config/rooms` and `/config/settings` written in place by a shell (accepted for now, 2026-11-09) | 7d | A crash between truncate and write loses the file; in `docs/backlog.md`. |
+| [ADR-0246](../adr/0246-the-display-follows-the-window.md) (proposed) | 7g | The display follows QEMU's window: `gpud` reports virtio-gpu's display event as `Resized`, the compositor attaches a framebuffer of the new size and lays out again; supersedes ADR-0164's size fixed at boot. Built and merged at the architect's request; the ADR's status is the architect's. |
 | Pushing, merging and tagging | all | `git push` was refused until 2026-11-09, when the architect allowed it: `work/7a` to `work/7e` pushed; parts merged in order after CI is green and tagged `stage-7X` (see each part's Merge). |
 
 ## 7a: tokens and text
@@ -370,7 +371,7 @@ neither exists (`every_key_has_its_first_two_levels`).
 ### Merge
 
 The full CI on the branch passed (run 42684037780); merged at `1b61843`, whose CI on `main` passed after a rerun of
-the POSIX scenarios job (Ctrl-Z that did not stop a job, `docs/backlog.md`; the script was fixed in 7e). `stage-7c`
+the POSIX scenarios job (Ctrl-Z that did not stop a job, `docs/backlog.md`; still open: it failed again in 7g). `stage-7c`
 is on `1b61843`.
 
 ### Time
@@ -662,7 +663,7 @@ holes applied by hand one by one, six of them kept in `tools/mutants/desktop-7e.
 ### Merge
 
 After `main` was merged in (7d's later work: the broker beside a shell, the show-commands tags per window), the
-branch's full CI passed on the first run (42711274447), the scenarios script with its first sleep of 5 s. Merged at
+branch's full CI passed on the first run (42711274447). Merged at
 `32f8a44`, green on `main` (run 42714400871); `stage-7e`.
 
 ### Time
@@ -773,11 +774,104 @@ applied again by hand from lists in `tools/mutants/` (`editor.toml`, `shell-sett
 - The settings description said `auto` gives scale 2 from 2048 pixels wide; the compositor's threshold is 1920. The
   description now says 1920.
 
+## 7g: the display follows the window
+
+Branch `work/7g`, from `work/7f`. Added to TASK-24 by the architect on 2026-11-09, after the `zoom-to-fit=on` change to
+`tools/run-qemu.sh` (merged at `cc4e2dd`), which makes QEMU's macOS window resizable.
+
+### What was built
+
+- Proposed **ADR-0246**: the display follows the window, superseding ADR-0164's size fixed at boot (its scale,
+  protocol and invariants stand). Read in QEMU 11.1.2's source: the resizable cocoa window hands its size to the
+  console at each resize, which virtio-gpu reports as its display event; QEMU's QMP has no command that resizes a
+  console.
+- **`zoraya-proto-display`**: `Resized { width, height }`, the driver's first unasked message.
+- **`zoraya-virtio-gpu`**: the display event (`events_read`, cleared through `events_clear`); a second `Attach` at a
+  new size makes the other resource, shows it on scanout 0 and only then unreferences the old one; flushes go to the
+  resource shown, at its size; `Announce`, which says when the driver may tell a new size.
+- **`gpud`** looks for the event every 100 ms between requests, sends `Resized`, and unpins the old framebuffer once
+  the new one is shown.
+- **The compositor**: on `Resized`, after any flush in flight, the same `Info` and `Attach` as at attach (none when
+  the size came back to its own); the scale from `gui.scale` or the width; popups closed, sheets too at a new scale;
+  toplevels kept at their logical size as far as the work area holds them and moved back into it, legacy windows moved
+  back, every toplevel configured; `ApplySettings` applies `gui.scale` at once. `compd` releases the framebuffer
+  before once the new one is shown.
+- **`tools/run-qemu.sh --gui-size WxH`**, and `make test-gui` boots the terminal's script at 1600 × 1000 and
+  1920 × 1200 as well.
+
+### The 7g acceptance test
+
+TASK-24 asks for boots at two sizes, a host test of the compositor with a fake display that changes size, and a GUI
+test if QEMU can trigger a resize. Done: the terminal's script at 1600 × 1000 (scale 1) and 1920 × 1200 (scale 2
+under `auto`) in `make test-gui`, beside 1024 × 768 and 2048 × 1536; 15 host tests of the compositor in
+`tests_display.rs` (a new size and its scale, a resize behind a flush, a refused attach, a size back at the attached
+one, popups, sheets, legacy windows, the work area's edges at scales 1 and 2, the scale from the settings) and three
+of `zoraya-virtio-gpu` (the event, the second resource, `Announce`). No GUI test resizes a running guest: QEMU's QMP
+cannot. The resize itself is to be tried by hand ("To check by hand").
+
+### Decisions taken without the architect
+
+- Proposed **ADR-0246** (Option C: the driver reports, the compositor re-attaches), over keeping the fixed size,
+  restarting the driver at each size, or polling `Info`.
+- The display event is looked for every 100 ms instead of on the configuration interrupt: `gpud`'s interrupt wait is
+  part of each command, and a register read every 100 ms costs nothing.
+- At a new scale sheets close (their clients cancel) and popups close at any re-layout: neither hears `Configure`.
+
+### Screens
+
+Under `docs/research/desktop/shots/7g/` (light, HVF): `terminal-1600x1000-qemu.png` (scale 1: the bar across the
+whole width, the dock in its middle), `terminal-1920x1200-qemu.png` (scale 2 under `auto`; the terminal's own 80 × 24
+is taller than the work area and runs under the dock, a limitation recorded in `docs/design.md`), and
+`settings-scale-qemu.png` (the settings window's note on `Automatic`). There is no mockup of a resized display.
+
+### Measurements
+
+In `docs/design.md`: each new size costs the wallpaper and its blur once (36 and 51 ms under HVF at 1600 × 1000 and
+1920 × 1200, 138 and 199 ms under TCG), then a full redraw.
+
+### Invariants
+
+ADR-0246 is proposed: its invariants are not in `docs/adr/invariants.md` until it is accepted. Both have their
+checks: INV-0246-1, the compositor's host tests with the fake display; INV-0246-2, `Announce`'s host test.
+
+### Review
+
+`docs/tasks/TASK-24-review-7g.md`: 3 errors, 5 warnings, 6 notes. The errors were all in the handshake: `gpud`
+sent a second `Resized` right after `Info`, which the compositor read as `Attach`'s reply and dropped the driver;
+`Attach` used the device's newest size instead of the one `Info` gave; a size back at the attached one was attached
+again and refused. All fixed (`Announce`; no `Attach` at the same size) with tests, and every warning. The check of
+the changed lines confirmed all 14 and added three notes: two fixed, one (the compositor's `call` taking the next
+message as its reply) recorded as open.
+
+### Mutation testing
+
+`make mutants-host` with `--in-diff` against `work/7f`: `zoraya-virtio-gpu` 32 mutants, 1 missed (`CONFIG + 0`
+read as `CONFIG - 0`: equivalent); the compositor 90 mutants, 32 missed, then tests, then again (21 missed), tests
+again, and a third run (27 missed, of which 15 were `carried_rect`'s lines, in the diff only because `work/7f` had
+7e's fix of it by then). Of the 12 in 7g's code, 2 were caught by tests added after (applied by hand), 9 are
+equivalent (the lower bounds of the move back into the work area, which no window is ever past, since a move keeps
+windows on screen and halving a position at scale 2 to 1 keeps it past the bound; and the guards of the upper
+bounds on the toplevel path, whose body never exceeds the work area), and 1 is left: the legacy window's upper bound
+divided by the border, the same at scale 1. Five of the holes are in `tools/mutants/display-7g.toml` (`make
+mutants`: 5 caught). The three compositor runs took 92 minutes, two past the cap.
+
+### Merge
+
+ADR-0246 is proposed, and 7g is merged as the other parts were, at the architect's request in TASK-24's additions.
+
+### Time
+
+From the commits' times: 22:31 on 2026-11-09 to 00:46 on 2026-11-10 for the code, the review and its fixes, and
+the tests, with the three mutation runs (92 minutes) overlapping 7e's and 7f's merges.
+
 ## To check by hand
 
 - **The resizable window** (`tools/run-qemu.sh`'s `zoom-to-fit=on`, merged at `cc4e2dd`): no test opens the cocoa
   window. With `make run-gui`, enlarge QEMU's window, then check that a click lands where the pointer points (a title
   bar's close button, a dock tile) and that Command+Space still switches the layout.
+- **The display that follows the window** (7g): with `make run-gui`, drag QEMU's window larger and smaller; the bar
+  and the dock should follow, windows stay in the work area, and past 1920 pixels wide the desktop turns to scale 2.
+  Whether cocoa reports the size in pixels or points on a Retina display is ADR-0246's open question.
 
 To try the desktop by hand: `make run-gui`; the window shows the terminal in JetBrains Mono. `ls /texts/uk`, `cat
 /texts/uk/` then Tab and Enter, and the same for `/texts/cz/`, show Ukrainian and Czech text; Shift with Page Up

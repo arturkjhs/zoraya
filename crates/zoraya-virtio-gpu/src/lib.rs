@@ -19,6 +19,7 @@ pub use zoraya_virtio::Error as TransportError;
 pub mod cmd {
     pub const GET_DISPLAY_INFO: u32 = 0x0100;
     pub const RESOURCE_CREATE_2D: u32 = 0x0101;
+    pub const RESOURCE_UNREF: u32 = 0x0102;
     pub const SET_SCANOUT: u32 = 0x0103;
     pub const RESOURCE_FLUSH: u32 = 0x0104;
     pub const TRANSFER_TO_HOST_2D: u32 = 0x0105;
@@ -32,8 +33,19 @@ pub mod cmd {
 
 /// `B8G8R8X8_UNORM`: a pixel is the little-endian word `0x00RRGGBB`.
 pub const FORMAT: u32 = 2;
-/// The one resource the driver makes.
+/// The resource the driver makes first; a new display size gets the other
+/// one, `3 - RESOURCE` (ADR-0246), and the old one is unreferenced.
 pub const RESOURCE: u32 = 1;
+
+/// The configuration space (5.7.4): what the device has to say.
+pub mod config {
+    /// `events_read`: the events not yet cleared.
+    pub const EVENTS_READ: usize = 0;
+    /// `events_clear`: a bit written here clears it in `events_read`.
+    pub const EVENTS_CLEAR: usize = 4;
+    /// `VIRTIO_GPU_EVENT_DISPLAY`: the display's configuration changed.
+    pub const EVENT_DISPLAY: u32 = 1;
+}
 /// The largest display side accepted `[assumption, ADR-0090]`.
 pub const MAX_SIDE: u32 = 4096;
 /// The most backing runs one attach carries.
@@ -65,7 +77,7 @@ pub enum Error {
     BadBacking,
     /// Nothing is attached yet.
     NotAttached,
-    /// A resource exists already.
+    /// A resource of the display's size exists already.
     Attached,
 }
 
@@ -134,9 +146,11 @@ pub struct Gpu<R, S> {
     /// The device address of `shared`.
     base: u64,
     queue: Queue,
+    /// The display's size as `GET_DISPLAY_INFO` last gave it.
     width: u32,
     height: u32,
-    attached: bool,
+    /// The resource on scanout 0 and its size, once attached.
+    shown: Option<(u32, u32, u32)>,
 }
 
 impl<R: Registers, S: Shared> Gpu<R, S> {
@@ -155,12 +169,29 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             queue,
             width: 0,
             height: 0,
-            attached: false,
+            shown: None,
         })
     }
 
     pub const fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// True once after the device reported that the display changed
+    /// (`VIRTIO_GPU_EVENT_DISPLAY`), which it then clears; the new size is
+    /// [`Gpu::display_info`]'s to ask (ADR-0246).
+    pub fn display_changed(&mut self) -> bool {
+        let events = self
+            .registers
+            .read(zoraya_virtio::reg::CONFIG + config::EVENTS_READ);
+        if events & config::EVENT_DISPLAY == 0 {
+            return false;
+        }
+        self.registers.write(
+            zoraya_virtio::reg::CONFIG + config::EVENTS_CLEAR,
+            config::EVENT_DISPLAY,
+        );
+        true
     }
 
     /// Takes down an interrupt.
@@ -255,16 +286,24 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         Ok((width, height))
     }
 
-    /// Makes the resource, backs it with `runs` (device address, length) and
-    /// shows it on scanout 0. The runs must cover `width × height × 4` bytes.
+    /// Makes a resource of the display's size, backs it with `runs` (device
+    /// address, length) and shows it on scanout 0. The runs must cover `width ×
+    /// height × 4` bytes. Once attached, only a new display size (ADR-0246)
+    /// takes another: the other resource is made and shown, then the old one
+    /// is unreferenced, so the old backing stays shown until the new is.
     pub fn attach(
         &mut self,
         runs: &[(u64, u64)],
         wait: &mut dyn FnMut() -> Result<(), Error>,
     ) -> Result<(), Error> {
-        if self.attached {
+        if self
+            .shown
+            .is_some_and(|(_, w, h)| (w, h) == (self.width, self.height))
+        {
             return Err(Error::Attached);
         }
+        let old = self.shown.map(|(r, _, _)| r);
+        let resource = old.map_or(RESOURCE, |r| 3 - r);
         if self.width == 0 {
             return Err(Error::NoDisplay);
         }
@@ -290,7 +329,7 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             at: 0,
         };
         r.header(cmd::RESOURCE_CREATE_2D)
-            .u32(RESOURCE)
+            .u32(resource)
             .u32(FORMAT)
             .u32(width)
             .u32(height);
@@ -301,7 +340,7 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             at: 0,
         };
         r.header(cmd::RESOURCE_ATTACH_BACKING)
-            .u32(RESOURCE)
+            .u32(resource)
             .u32(count as u32);
         for (address, length) in &runs[..count] {
             r.u64(*address).u32(*length as u32).u32(0);
@@ -318,10 +357,19 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
             shared: &mut self.shared,
             at: 0,
         };
-        r.header(cmd::SET_SCANOUT).rect(whole).u32(0).u32(RESOURCE);
+        r.header(cmd::SET_SCANOUT).rect(whole).u32(0).u32(resource);
         let length = r.at;
         self.call(length, cmd::OK_NODATA, HEADER, wait)?;
-        self.attached = true;
+        self.shown = Some((resource, width, height));
+        if let Some(old) = old {
+            let mut r = Request {
+                shared: &mut self.shared,
+                at: 0,
+            };
+            r.header(cmd::RESOURCE_UNREF).u32(old).u32(0);
+            let length = r.at;
+            self.call(length, cmd::OK_NODATA, HEADER, wait)?;
+        }
         Ok(())
     }
 
@@ -332,13 +380,15 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         rect: Rect,
         wait: &mut dyn FnMut() -> Result<(), Error>,
     ) -> Result<(), Error> {
-        if !self.attached {
+        // The resource shown, at its own size: after a display event the
+        // display may already be larger than it.
+        let Some((resource, width, height)) = self.shown else {
             return Err(Error::NotAttached);
-        }
-        if !rect.inside(self.width, self.height) {
+        };
+        if !rect.inside(width, height) {
             return Err(Error::BadRange);
         }
-        let offset = (u64::from(rect.y) * u64::from(self.width) + u64::from(rect.x)) * 4;
+        let offset = (u64::from(rect.y) * u64::from(width) + u64::from(rect.x)) * 4;
         let mut r = Request {
             shared: &mut self.shared,
             at: 0,
@@ -346,7 +396,7 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         r.header(cmd::TRANSFER_TO_HOST_2D)
             .rect(rect)
             .u64(offset)
-            .u32(RESOURCE)
+            .u32(resource)
             .u32(0);
         let length = r.at;
         self.call(length, cmd::OK_NODATA, HEADER, wait)?;
@@ -356,10 +406,65 @@ impl<R: Registers, S: Shared> Gpu<R, S> {
         };
         r.header(cmd::RESOURCE_FLUSH)
             .rect(rect)
-            .u32(RESOURCE)
+            .u32(resource)
             .u32(0);
         let length = r.at;
         self.call(length, cmd::OK_NODATA, HEADER, wait)
+    }
+}
+
+/// When the driver may tell its client a new display size (ADR-0246),
+/// apart from the device so that the host tests reach it. The client asks
+/// `Info` and then `Attach` with `call`s that take the next message on the
+/// channel as their reply, so no `Resized` may stand between them; and the
+/// size `Attach` uses must be the one `Info` gave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Announce {
+    /// A `Resized` was sent and no `Info` has come since.
+    told: bool,
+    /// The size the last `Info` reply gave, until the next request: the
+    /// display's size is not asked again before then.
+    offered: Option<(u32, u32)>,
+    /// The size of the framebuffer attached last, if any.
+    attached: Option<(u32, u32)>,
+}
+
+impl Announce {
+    /// `Info` was answered with `size`.
+    pub fn info(&mut self, size: (u32, u32)) {
+        self.told = false;
+        self.offered = Some(size);
+    }
+
+    /// A request other than `Info` was served; `attached` is the size of a
+    /// framebuffer it attached.
+    pub fn served(&mut self, attached: Option<(u32, u32)>) {
+        self.offered = None;
+        if attached.is_some() {
+            self.attached = attached;
+        }
+    }
+
+    /// Whether the display's size may be asked now (not between an `Info`
+    /// and the request after it).
+    pub fn may_ask(&self) -> bool {
+        self.offered.is_none()
+    }
+
+    /// Whether to send `Resized` for a display of `size`: something is
+    /// attached, at another size, no `Resized` is unanswered, and no `Info`
+    /// is waiting for its `Attach`. A true answer counts it as sent.
+    pub fn tell(&mut self, size: (u32, u32)) -> bool {
+        let due = !self.told && self.offered.is_none() && self.attached.is_some_and(|a| a != size);
+        if due {
+            self.told = true;
+        }
+        due
+    }
+
+    /// The `Resized` could not be sent (a full queue): it is due again.
+    pub fn unsent(&mut self) {
+        self.told = false;
     }
 }
 

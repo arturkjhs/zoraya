@@ -364,7 +364,9 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   compositor's framebuffer object, pinned, becomes the resource's backing) and `Flush` (transfer and flush, refused
   outside the resource). Before each wait it takes the device's interrupt down and looks at the queue again:
   virtio-mmio is edge-triggered on QEMU `virt`. A wait also looks at the queue every 10 ms, as a guard, and gives up
-  after a second.
+  after a second. Since 7g (ADR-0246) it also looks for the display event every 100 ms between requests and tells
+  the compositor a new size (`Resized`); a second `Attach` at a new size gets the other resource on scanout 0, then
+  the old one is unreferenced and its pin released.
 - **`inputd`** (`zoraya-virtio-input`, ADR-0092). One process per device; it reads the configuration to learn whether
   it drives a keyboard or an absolute pointer, keeps 64 event buffers offered, checks every event, and sends one
   `zoraya-proto-input` frame per `SYN_REPORT`, with axes scaled to 0..65535. A frame that does not fit is dropped and
@@ -492,7 +494,8 @@ Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) an
 - **Scale** (ADR-0164). The compositor takes scale 2 for a display at least 1920 pixels wide (the setting `auto`
   until 7f's `gui.scale`); `DisplayScale` gives the logical size and the scale, every size a client hears is logical,
   pointer events to a toplevel are logical, and a client's pixels reach the screen unchanged (INV-0164-1).
-  `tools/run-qemu.sh --gui-scale 2` asks QEMU for 2048 × 1536.
+  `tools/run-qemu.sh --gui-scale 2` asks QEMU for 2048 × 1536, and `--gui-size WxH` for any size (7g). Since 7g the
+  display follows QEMU's window (ADR-0246, "The display follows the window" below).
 - **`term`** is a toplevel named `zosh`: a `Configure` of another size gives its grid and buffer a new size (and the
   shell a `Size`), and the close button ends it; `init` takes a terminal that ended with 0 as a closed window and
   starts a new terminal and shell, as after `exit`.
@@ -692,8 +695,7 @@ Stage 7f (TASK-24), by [ADR-0169](adr/0169-settings.md), [ADR-0170](adr/0170-cli
   old one, through `/config` narrowed to `settings`, which no other launch gets to write, INV-0169-4), then
   `SettingsChanged` goes to the panel, which reads the file and sends the compositor `ApplySettings`; the compositor
   checks every value again and applies them all or none. The theme reaches the frames, the wallpaper's blur and every
-  window's `Configure`, and `zoraya-app` repaints its windows in it; the layouts apply at once; the scale at the next
-  session.
+  window's `Configure`, and `zoraya-app` repaints its windows in it; the layouts apply at once; the scale too since 7g.
 - **The editor** (`edit`, its buffer and view in `zoraya-editor`): one file, opened from the file manager (read only)
   or through the chooser, saved through the chooser's `Save` and then again to that name; cursor and selection by
   characters, undo and redo (1000 edits), find, and a question before a close with unsaved changes.
@@ -719,6 +721,41 @@ Not built in 7f: the terminal keeps the light set (its screen is read in the GUI
 the wallpaper setting accepts only `''` (no image decoder); copy and paste in the toolkit's text fields (only `edit`
 answers them); the clipboard's entries (only text); a `settings` command reaching the running compositor (the next
 session, as ADR-0169's open question says).
+
+## The display follows the window (as built)
+
+Stage 7g (TASK-24), by proposed [ADR-0246](adr/0246-the-display-follows-the-window.md):
+
+- **`gpud`** looks for virtio-gpu's display event every 100 ms between requests (`events_read`, one register read),
+  asks `GET_DISPLAY_INFO` and tells the compositor a new size with `Resized`. When it may tell is
+  `zoraya-virtio-gpu`'s `Announce`: once something is attached, for a size other than the attached one, one before
+  each `Info`, and none between an `Info` and the request after it, since the compositor takes the next message on
+  the channel as its reply (INV-0246-2). A second `Attach` at a new size makes the other resource, shows it on
+  scanout 0, then unreferences the old one and unpins its framebuffer.
+- **The compositor**, once any flush in flight is answered, asks `Info` and attaches a framebuffer of the new size
+  (none when the size came back to its own); `compd` releases the one before once the new is shown. The scale comes
+  from `gui.scale` or, under `auto`, from the width (2 from 1920 pixels); popups close, and sheets too at a new
+  scale; every toplevel keeps its logical size as far as the work area holds it and is moved back into it, legacy
+  windows are moved back, and every toplevel hears `Configure`; the bar and the dock follow the width.
+- **`gui.scale`** applies at once from the settings window too.
+- **Tests**: host tests of `Announce` and of the second resource (`zoraya-virtio-gpu`), and of the compositor with
+  a fake driver that changes size; `make test-gui` boots the terminal's script at 1600 × 1000 and 1920 × 1200 too
+  (`tools/run-qemu.sh --gui-size`). QEMU's QMP has no command that resizes a console, so no test in QEMU resizes a
+  running guest.
+
+Measured (`compd`'s own report, `make test-gui` with the terminal's script at 75ab053, 2026-11-10, QEMU 11.1.2 on
+the M4 Mac mini): each new size costs the wallpaper and its blur once, then a full redraw.
+
+| | HVF, 1600 × 1000 | HVF, 1920 × 1200 (scale 2) | TCG, 1600 × 1000 | TCG, 1920 × 1200 (scale 2) |
+|---|---|---|---|---|
+| The wallpaper and its blur | 36 ms | 51 ms | 138 ms | 199 ms |
+| The first frame | 1 ms | 2 ms | 16 ms | 26 ms |
+| The next 100 frames: mean | 1.9 ms | 6.3 ms | 8.9 ms | 34 ms |
+| The next 100 frames: longest | 17 ms | 50 ms | 114 ms | 463 ms |
+
+Not built in 7g: a window a client creates larger than the work area is not made smaller (at 1920 × 1200 the
+terminal's 80 × 24 runs under the dock); popups do not learn a new scale (they close instead); the compositor's
+`call` still takes the next message as its reply, so the handshake's order rests on `gpud` (review 7g, A).
 
 ## Cross toolchain and ports (as built)
 
@@ -1188,8 +1225,9 @@ measured for real.
 ## Using the desktop
 
 `make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window (`make run-gui GUI_SCALE=2` at 2048 ×
-1536). On a Mac the window scales its picture when it is enlarged, and Command is the system key (written System
-below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
+1536). On a Mac the window can be resized and the desktop follows it (7g: the bar and the dock follow the width,
+windows stay in the work area, and from 1920 pixels wide the scale is 2), and Command is the system key (written
+System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
 
 - **What is on the screen.** The bar at the top (the layout in use at its right; the chooser's mark in its middle
   while a sheet is open), the windows, and the dock at the bottom: Terminal, Files, Edit and Settings, then the rooms'
@@ -1208,7 +1246,7 @@ below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X the
   match; Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all. Closing with unsaved changes asks first.
 - **Copy and paste.** System+C copies what is selected, System+X cuts it, System+V pastes; nothing else can read
   what was copied.
-- **Settings.** Theme (light or dark), motion, scale (at the next session) and the keyboard: the layouts
+- **Settings.** Theme (light or dark), motion, scale (Automatic follows the window's size) and the keyboard: the layouts
   System+Space switches between and the one in use. A change is saved to `/config/settings` and applied at once.
   `settings gui.theme dark` in a terminal writes the same file; the desktop reads it at the next session.
 - **Keyboard layouts.** System+Space switches (US, UA, RU, CZ, those enabled in Settings); on the Czech layout the

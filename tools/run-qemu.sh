@@ -25,6 +25,8 @@
 #                         --test, open QEMU's default display window
 #   --gui-scale N         with --gui: 1 (1024x768) or 2 (2048x1536, the
 #                         compositor's scale 2, ADR-0164)
+#   --gui-size WxH        with --gui: a display of W by H pixels instead
+#                         (ADR-0246; the compositor picks the scale)
 #   --qmp PATH            a QMP socket at PATH, for screendumps and keys
 #   --display-opts OPTS   the interactive display and its suboptions (with
 #                         --gui; ignored with --test); the default is below
@@ -67,6 +69,7 @@ write_error=0
 disk=
 gui=0
 gui_scale=1
+gui_size=
 qmp=
 display_opts=
 kernel=
@@ -86,6 +89,7 @@ while [ $# -gt 0 ]; do
         --disk) [ $# -ge 2 ] || die "--disk needs a file"; disk=$2; shift 2 ;;
         --gui) gui=1; shift ;;
         --gui-scale) [ $# -ge 2 ] || die "--gui-scale needs 1 or 2"; gui_scale=$2; shift 2 ;;
+        --gui-size) [ $# -ge 2 ] || die "--gui-size needs WxH"; gui_size=$2; shift 2 ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
@@ -194,6 +198,17 @@ if [ "$gui" = 1 ]; then
         2) xres=2048 yres=1536 ;;
         *) die "--gui-scale is 1 or 2" ;;
     esac
+    # ADR-0246: any size the driver takes (1 to 4096 a side).
+    if [ -n "$gui_size" ]; then
+        case $gui_size in *x*) ;; *) die "--gui-size is WxH, each from 1 to 4096" ;; esac
+        xres=${gui_size%x*} yres=${gui_size#*x}
+        for side in "$xres" "$yres"; do
+            case $side in
+                "" | *[!0-9]*) die "--gui-size is WxH, each from 1 to 4096" ;;
+            esac
+            [ "$side" -ge 1 ] && [ "$side" -le 4096 ] || die "--gui-size is WxH, each from 1 to 4096"
+        done
+    fi
     set -- "$@" -device virtio-gpu-device,bus=virtio-mmio-bus.23,xres=$xres,yres=$yres \
         -device virtio-keyboard-device,bus=virtio-mmio-bus.15 \
         -device virtio-tablet-device,bus=virtio-mmio-bus.7
