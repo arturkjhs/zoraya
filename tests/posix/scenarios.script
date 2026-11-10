@@ -29,10 +29,14 @@
 < PSURF>
 # Ctrl-Z (plan.md's risk): the broker's job_suspend of the foreground group,
 # fg's tcsetpgrp and SIGCONT; the group stopped whole runs its next child
-# after fg (review R1); then Ctrl-C of the continued job. On CI's runner the
-# job is sometimes not stopped (docs/backlog.md).
-> sh -c 'sleep 5; echo first; sleep 1; echo second; sleep 30'\r
-~ 700 PSURF>
+# after fg (review R1); then Ctrl-C of the continued job. Ctrl-Z goes only
+# once the job holds the terminal: before its tcsetpgrp it is the shell's,
+# which ignores it, as on any POSIX system (on CI's slow runner 700 ms after
+# Enter was too soon, docs/backlog.md). The job says so with a word the
+# echoed line does not hold (printf's \146 is "f"), and Ctrl-Z goes the
+# moment it shows, while sh is starting sleep: the tightest timing.
+> sh -c 'printf "in\\146g\\n"; sleep 5; echo first; sleep 1; echo second; sleep 30'\r
+< infg
 > \x1a
 < Stopped
 < PSURF> 
@@ -47,6 +51,24 @@
 < PSURF> 
 > echo after=$?\r
 < after=130
+< PSURF> 
+# Twice more at the same timing, each stopped and continued (the word
+# printed, end1, is not in the line fg echoes).
+> sh -c 'printf "in\\146g\\n"; sleep 2; echo end$((0+1))'\r
+< infg
+> \x1a
+< Stopped
+< PSURF> 
+> fg\r
+< end1
+< PSURF> 
+> sh -c 'printf "in\\146g\\n"; sleep 2; echo end$((1+1))'\r
+< infg
+> \x1a
+< Stopped
+< PSURF> 
+> fg\r
+< end2
 < PSURF> 
 # Hostile: a process that ignores every catchable signal. Ctrl-C reaches it
 # and is ignored; job_kill (kill -9) always ends it.
