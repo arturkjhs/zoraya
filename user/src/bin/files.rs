@@ -202,7 +202,8 @@ fn say_listed(m: &Manager) {
 fn main() -> i32 {
     let channel = |slot: u64| Handle::new(slot).filter(|h| handle_type(*h) == Ok("channel"));
     let places = Places::take();
-    let (Some(compositor), Some(volume), Some(panel)) = (channel(5), places.root(), channel(9)) else {
+    let (Some(compositor), Some(volume), Some(panel)) = (channel(5), places.root(), channel(9))
+    else {
         println!("files: missing the compositor, the volume or the panel");
         return 1;
     };
@@ -288,7 +289,12 @@ fn main() -> i32 {
             Act::OpenWith { path, words } => open_with(&mut fs, root, panel, &path, &words),
             Act::MakeDirectory { dir, name } => {
                 let r = root
-                    .open(&mut fs, &dir, open_flags::DIRECTORY, rights::ALL & !rights::PUBLISH)
+                    .open(
+                        &mut fs,
+                        &dir,
+                        open_flags::DIRECTORY,
+                        rights::ALL & !rights::PUBLISH,
+                    )
                     .and_then(|d| {
                         let r = fs.make_directory(d, &name);
                         fs.close(d);
@@ -303,7 +309,12 @@ fn main() -> i32 {
             }
             Act::Rename { dir, old, new } => {
                 let r = root
-                    .open(&mut fs, &dir, open_flags::DIRECTORY, rights::ALL & !rights::PUBLISH)
+                    .open(
+                        &mut fs,
+                        &dir,
+                        open_flags::DIRECTORY,
+                        rights::ALL & !rights::PUBLISH,
+                    )
                     .and_then(|d| {
                         let r = fs.rename(d, &old, &new);
                         fs.close(d);
@@ -318,7 +329,12 @@ fn main() -> i32 {
             }
             Act::Remove { dir, name } => {
                 let r = root
-                    .open(&mut fs, &dir, open_flags::DIRECTORY, rights::ALL & !rights::PUBLISH)
+                    .open(
+                        &mut fs,
+                        &dir,
+                        open_flags::DIRECTORY,
+                        rights::ALL & !rights::PUBLISH,
+                    )
                     .and_then(|d| {
                         let r = fs.remove(d, &name);
                         fs.close(d);

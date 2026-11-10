@@ -347,7 +347,11 @@ fn files_never_gets_config_to_change() {
             "{:?}",
             l.holds
         );
-        assert!(!l.entries.iter().any(|e| e == "+w /" || e.starts_with("+w /config")));
+        assert!(
+            !l.entries
+                .iter()
+                .any(|e| e == "+w /" || e.starts_with("+w /config"))
+        );
     }
     let l = application(wide.as_ref(), "files", None);
     assert_eq!(
