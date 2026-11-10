@@ -1523,3 +1523,68 @@ fn a_report_is_taken_and_the_peak_of_live_pids_kept() {
     let _ = s.spawn(&shell, group::INHERIT, 0).unwrap();
     assert_eq!(s.b.totals.peak_pids, 3, "a peak, not the current count");
 }
+
+/// The Ctrl-Z of `tests/posix/scenarios.script` on CI's slow runner
+/// (docs/backlog.md), forced: the suspend character arrives after the
+/// interactive shell read the line and forked the job, but before the
+/// job's own `tcsetpgrp` (dash's `forkchild`). The terminal's foreground is
+/// still the shell's group, which ignores SIGTSTP, so nothing stops: as on
+/// any POSIX system, the ^Z was the shell's. Once the job holds the
+/// terminal, the same character stops its whole group, a child the job
+/// starts afterwards included (it is made in the suspended group job).
+#[test]
+fn a_suspend_before_the_jobs_tcsetpgrp_is_the_shells() {
+    let mut s = session(true);
+    let shell = s.shell;
+    // dash, interactive with job control, ignores SIGTSTP.
+    let ignore = s.status(
+        shell.conn,
+        &message(&proto::SetStopDisposition {
+            signal: SIGTSTP,
+            disposition: Below(stop::IGNORE),
+        }),
+    );
+    assert_eq!(ignore, status::OK);
+    let (r, _) = s.ask(shell.conn, &message(&proto::Tcgetpgrp {}), vec![]);
+    assert_eq!(decode::<TcgetpgrpReply>(&r, 0).unwrap().1.pgid, shell.pid);
+    // The job is forked into its own group; its tcsetpgrp has not run.
+    let job = s.spawn(&shell, group::NEW, 0).unwrap();
+    s.b.kernel.calls.clear();
+    // ^Z now: the terminal names the shell's group (TRACE of 2026-11-10:
+    // "suspend group=2 fg=Some(2)", then "foreground told 3").
+    s.b.suspend(shell.pid, SIGTSTP);
+    assert!(s.b.kernel.calls.is_empty(), "the shell ignores it");
+    assert_eq!(s.b.is_stopped(job.pid), Some(0), "the job runs on");
+    assert_eq!(s.b.is_stopped(shell.pid), Some(0));
+    // The job's tcsetpgrp, from the job itself.
+    assert_eq!(
+        s.status(job.conn, &message(&proto::Tcsetpgrp { pgid: job.pid })),
+        status::OK
+    );
+    s.b.kernel.calls.clear();
+    // A ^Z that comes late, the shell's own group: still nothing.
+    s.b.suspend(shell.pid, SIGTSTP);
+    assert!(s.b.kernel.calls.is_empty());
+    // The ^Z for the job's group: its group job, whole.
+    s.b.suspend(job.pid, SIGTSTP);
+    let g = s.group_job(job.pid);
+    assert_eq!(s.b.kernel.calls, [Call::Suspend(g)]);
+    assert_eq!(s.b.is_stopped(job.pid), Some(SIGTSTP));
+    // The job's child forked while the group is stopped (sh starting
+    // `sleep` as the ^Z lands) is made in the suspended group job, and fg's
+    // SIGCONT resumes the group job whole (review R1).
+    let child = s.spawn(&job, group::INHERIT, 0).unwrap();
+    let mut up = Some(s.job_of(&child));
+    let mut under = false;
+    while let Some(j) = up {
+        under |= j == g;
+        up = match s.b.kernel.objects.get(&j) {
+            Some(Obj::Job { parent }) => *parent,
+            _ => None,
+        };
+    }
+    assert!(under, "the child's job is in the suspended group job");
+    s.b.kernel.calls.clear();
+    assert_eq!(s.kill(&shell, target::GROUP, job.pid, SIGCONT), status::OK);
+    assert_eq!(s.b.kernel.calls, [Call::Resume(g)]);
+}
