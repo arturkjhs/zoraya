@@ -303,12 +303,6 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 core::mem::forget(d);
                 Some(h)
             }
-            Give::Root => {
-                let r = root?.clone_as(zoraya_user::files::ALL).ok()?;
-                let h = r.end;
-                core::mem::forget(r);
-                Some(h)
-            }
             Give::Launcher => {
                 let (ours, theirs) = channel_create().ok()?;
                 launcher = Some(ours);

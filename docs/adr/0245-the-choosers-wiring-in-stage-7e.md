@@ -1,6 +1,6 @@
 # ADR-0245: The chooser's wiring, the data directory and opening from the file manager in stage 7e
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-09
 - **Depends on:** ADR-0153, ADR-0160, ADR-0167, ADR-0168, ADR-0172, ADR-0242
 - **Evidence:** desktop/survey.md#macoss-sandboxed-open-panel, desktop/survey.md#xdg-desktop-portal, desktop/survey.md#capdesk-and-e
@@ -94,3 +94,7 @@ ADR-0167 names (`Open`, `Save`, `PickDirectory`, `Chosen`, `Cancelled`) plus thr
 - A second launcher besides the panel; an application that needs more than one file per request.
 
 ## Architect's decision
+
+Accepted 2026-11-10. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A, with two conditions: (1) a sheet ignores input for 500 ms after it maps, and ignores any key held from before it mapped; done now, with a test. (2) `Chosen`'s words stay the sheet's sentence, and show-commands mode shows the shell's line; for `Save`, which has no line of its own in `zosh`, the least grant that covers the name, `+w PARENT APP` (the architect's answer of 2026-11-10).

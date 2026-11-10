@@ -1,6 +1,6 @@
 # ADR-0246: The display follows the window
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-09
 - **Depends on:** ADR-0090, ADR-0093, ADR-0097, ADR-0160, ADR-0164, ADR-0169
 - **Evidence:** desktop/survey.md#display-scaling
@@ -128,3 +128,7 @@ that stays the first size.
 - A QEMU that can resize a console from QMP: a GUI test of the resize itself.
 
 ## Architect's decision
+
+Accepted 2026-11-10. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C. Its two open questions wait for the architect's check by hand.

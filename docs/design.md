@@ -655,7 +655,9 @@ and [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md), with the proposed
 - **The data directory**: the panel makes `/data/ROOM/APP` (`/data/home/APP` in `home`) and gives it at slot 7 with
   every right but publish.
 - **The file manager** (`files`, its logic in `zoraya-files`): a folder's list (folders first), Up, Open, New
-  folder, Rename and Delete (asked twice). It holds the root (INV-0168-2) and opens a file only through the panel:
+  folder, Rename and Delete (asked twice). It holds the volume to read and, to change, `~` in `home` or its room's
+  grants, in a start-up record, never `/config` (INV-0168-2 as changed on 2026-11-10), and opens a file only through
+  the panel:
   `OpenWith` with a connection, which the panel clones down to read and clone, then launches the application for the
   name's extension (`.txt` and `.md`: `t_open` in 7e, `edit` from 7f) with it at slot 10.
 - **Drops** (ADR-0170): a press on a file in `files` starts a drag of it, read only. The compositor takes `Drag` only
