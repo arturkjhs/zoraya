@@ -278,14 +278,14 @@ impl FilesView {
                 Hit::Nothing
             };
         }
-        if let Some(r) = self.menu_rect(&m) {
-            if r.contains(x, y) {
-                return self
-                    .menu_rows(r)
-                    .into_iter()
-                    .find(|(_, row)| row.contains(x, y))
-                    .map_or(Hit::Menu, |(i, _)| Hit::MenuItem(i));
-            }
+        if let Some(r) = self.menu_rect(&m)
+            && r.contains(x, y)
+        {
+            return self
+                .menu_rows(r)
+                .into_iter()
+                .find(|(_, row)| row.contains(x, y))
+                .map_or(Hit::Menu, |(i, _)| Hit::MenuItem(i));
         }
         let [back, fwd, up, crumbs, search] = self.toolbar_parts();
         if back.contains(x, y) {
@@ -433,11 +433,6 @@ impl FilesView {
     fn pointer(&mut self, x: Logical, y: Logical, buttons: u32, modifiers: u32) -> Response {
         let k = self.k;
         let s = zoraya_tokens::Scale::new(k as u32).unwrap_or(zoraya_tokens::Scale::ONE);
-        let (px, py) = (
-            self.rect.x.physical(s) as i32 + 0 * k,
-            self.rect.y.physical(s) as i32,
-        );
-        let _ = (px, py);
         let (x, y) = (x.physical(s) as i32, y.physical(s) as i32);
         let was = self.buttons;
         self.buttons = buttons;
@@ -511,6 +506,7 @@ impl FilesView {
     }
 
     /// A folder or a page, `s` square at `(x, y)`.
+    #[allow(clippy::too_many_arguments)] // Drawing state, passed as it is used.
     fn icon(
         c: &mut Canvas<'_>,
         dir: bool,

@@ -422,9 +422,7 @@ impl Model {
     }
 
     fn select_only(&mut self, pos: usize) {
-        for s in &mut self.selected {
-            *s = false;
-        }
+        self.selected.fill(false);
         if let Some(i) = self.view.get(pos) {
             self.selected[*i] = true;
         }
@@ -433,9 +431,7 @@ impl Model {
     }
 
     fn select_range(&mut self, a: usize, b: usize) {
-        for s in &mut self.selected {
-            *s = false;
-        }
+        self.selected.fill(false);
         let (lo, hi) = (a.min(b), a.max(b));
         for p in lo..=hi.min(self.view.len().saturating_sub(1)) {
             let i = self.view[p];
@@ -453,9 +449,7 @@ impl Model {
         self.focus = Focus::List;
         if pos >= self.view.len() {
             if modifiers & (mods::SHIFT | mods::COMMAND) == 0 {
-                for s in &mut self.selected {
-                    *s = false;
-                }
+                self.selected.fill(false);
                 self.cursor = None;
                 self.anchor = None;
             }
@@ -655,9 +649,7 @@ impl Model {
             keys::F2 => self.start_rename(),
             keys::BACKSPACE => self.up(),
             keys::ESC => {
-                for s in &mut self.selected {
-                    *s = false;
-                }
+                self.selected.fill(false);
             }
             _ => {
                 // Typing in the list starts a search.

@@ -143,7 +143,16 @@ fn every_message_round_trips_and_decodes_totally() {
         y: 4,
         buttons: Flags(buttons::RIGHT),
         serial: 5,
+        modifiers: Flags(modifiers::SHIFT | modifiers::SYSTEM),
     });
+    total(DragEnded {
+        window: 1,
+        over: Below(1),
+        x: 40,
+        y: 90,
+        modifiers: Flags(modifiers::ALT),
+    });
+    total(Commands { on: true });
     total(AddClient {});
     total(ManagerDone { status: ok });
     total(AttachDisplay {});
