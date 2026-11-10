@@ -531,6 +531,13 @@ fn the_dock_is_never_covered() {
     assert_eq!(s.set_dock(panel, "term\tterm\n"), status::OK);
     let a = s.room_client(panel, "", "edit", "");
     s.window_of(a, 600, 400, 0x00ab_cdef);
+    // A window is placed in the work area; the person drags it down over
+    // the dock's place.
+    let o = s.outer(0, 1);
+    let (w, h) = s.f().display_size;
+    s.point(axis(o.x + 200, w), axis(o.y + 10, h), Some(1));
+    s.point(axis(o.x + 200, w), axis(o.y + 300, h), None);
+    s.point(axis(o.x + 200, w), axis(o.y + 300, h), Some(0));
     let (cell, r) = s.c.dock().cells[0];
     assert_eq!(cell, Cell::App(0));
     let (x, y) = (r.x + r.width / 2, r.y + r.height / 2);
@@ -1117,4 +1124,45 @@ fn a_windows_tag_stays_in_its_own_frame() {
         }
     }
     assert!(in_a > 0 && in_b > 0, "both tags are drawn: {in_a} {in_b}");
+}
+
+/// The architect's check of 2026-11-10: the dock's tooltip shows one line
+/// when the name and the line are the same ("files", not "files files").
+#[test]
+fn a_tooltip_says_a_line_once() {
+    use crate::draw_rooms::tooltip_lines;
+    assert_eq!(tooltip_lines("files", "files"), [("files", true)]);
+    assert_eq!(
+        tooltip_lines("files", "room project files"),
+        [("files", false), ("room project files", true)]
+    );
+}
+
+/// The settings tile is a gear: teeth at its edge, a ring, and a hole in
+/// the middle (not a ring with a dot), at both scales.
+#[test]
+fn the_settings_glyph_is_a_gear() {
+    use crate::draw_rooms::icon_glyph;
+    for k in [1u32, 2] {
+        let icon = 40 * k as i32;
+        let side = icon as usize;
+        let mut px = vec![0u32; side * side];
+        let mut t = zoraya_text::Text::new(crate::fonts(zoraya_fonts::INTER_REGULAR));
+        {
+            let mut c = zoraya_paint::Canvas::new(&mut px, side);
+            let white = zoraya_tokens::Color::of_pixel(0x00FF_FFFF);
+            icon_glyph(&mut c, "settings", 0, 0, icon, k, white, &mut t);
+        }
+        let at = |x: i32, y: i32| px[y as usize * side + x as usize] != 0;
+        let (m, gs) = (icon / 2, icon - 2 * (icon / 5));
+        assert!(!at(m, m), "a hole in the middle at scale {k}");
+        // A tooth straight up, at the glyph's edge, and the gap between
+        // two teeth at the same radius (22.5 degrees off).
+        let r = gs / 2 - 2 * k as i32;
+        assert!(at(m, m - r), "a tooth at scale {k}");
+        let (gx, gy) = (m + r * 383 / 1000, m - r * 924 / 1000);
+        assert!(!at(gx, gy), "a gap between teeth at scale {k}");
+        // The ring between hole and teeth.
+        assert!(at(m, m - gs * 7 / 20 + gs / 12), "the ring at scale {k}");
+    }
 }

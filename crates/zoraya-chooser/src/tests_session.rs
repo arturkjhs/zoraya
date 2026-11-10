@@ -609,3 +609,27 @@ fn a_press_on_the_list_selects_its_row() {
     }
     assert!(found.is_some(), "no press selects a row");
 }
+
+/// ADR-0245's condition (2): the sheet says its grant in its own words,
+/// and in show-commands mode in `zosh`'s; `Chosen`'s words stay the same.
+#[test]
+fn show_commands_mode_shows_the_shells_line() {
+    let mut r = rig(Ask::Save {
+        suggested: String::from("new.txt"),
+        filters: Vec::new(),
+    });
+    assert!(!r.sheet.commands);
+    assert_eq!(r.sheet.shown_line(), "create or replace ~/new.txt");
+    let none = r
+        .sheet
+        .event(&mut r.app, &mut r.fs, 1, Happened::Commands(true));
+    assert!(none.is_none());
+    assert!(r.sheet.commands);
+    assert_eq!(
+        r.sheet.shown_line(),
+        "+w ~ edit \u{b7} gives less: create or replace new.txt"
+    );
+    r.sheet
+        .event(&mut r.app, &mut r.fs, 1, Happened::Commands(false));
+    assert_eq!(r.sheet.shown_line(), "create or replace ~/new.txt");
+}

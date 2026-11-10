@@ -30,7 +30,7 @@ fn inside(s: &Setup, r: Rect) -> bool {
 fn a_new_size_is_attached_with_its_scale_and_the_windows_follow() {
     let mut s = setup();
     let end = s.client(64);
-    let id = s.window_of(end, 400, 300, 0x0040_4040);
+    let id = s.window_of(end, 400, 280, 0x0040_4040);
     s.f().take(end);
     let attaches = s.f().attaches;
     let shown = s.f().shown;
@@ -45,7 +45,7 @@ fn a_new_size_is_attached_with_its_scale_and_the_windows_follow() {
     let c = configures(&s.f().take(end));
     assert_eq!(
         (c[0].width, c[0].height, c[0].scale),
-        (400, 300, 1),
+        (400, 280, 1),
         "configured again at its size"
     );
     // Everything is drawn again, to the new size's edge.
@@ -56,7 +56,7 @@ fn a_new_size_is_attached_with_its_scale_and_the_windows_follow() {
     resize(&mut s, 2048, 1536);
     assert_eq!(s.c.scale().factor(), 2);
     let c = configures(&s.f().take(end));
-    assert_eq!((c[0].width, c[0].height, c[0].scale), (400, 300, 2));
+    assert_eq!((c[0].width, c[0].height, c[0].scale), (400, 280, 2));
     assert!(inside(&s, s.outer(0, id)));
 
     // Smaller than the window: it shrinks to the work area and stays on it.
@@ -375,4 +375,115 @@ fn at_scale_two_an_odd_display_gives_bodies_of_whole_logical_pixels() {
     assert_eq!((w.body.0 % 2, w.body.1 % 2), (0, 0));
     let outer = s.outer(0, id);
     assert!(outer.right() <= area.right() && outer.bottom() <= area.bottom());
+}
+
+/// Proposed ADR-0247: a dense display (a Retina window, whose size QEMU
+/// gives in pixels and whose width in millimetres it puts in the EDID) gets
+/// scale 2 from 1280 pixels wide; a display of ordinary density keeps
+/// ADR-0164's 1920; an unknown width in millimetres is ordinary.
+#[test]
+fn a_dense_display_gets_scale_two_sooner() {
+    // Small heights: the test's memory stays under the cap with the others.
+    let mut s = setup();
+    // A window of 640 by 200 points on a 220 ppi screen.
+    s.f().display_mm = (148, 46);
+    resize(&mut s, 1280, 400);
+    assert_eq!(s.c.scale().factor(), 2);
+    // Smaller than 640 logical pixels: scale 1, however dense.
+    s.f().display_mm = (139, 46);
+    resize(&mut s, 1200, 400);
+    assert_eq!(s.c.scale().factor(), 1);
+    // A monitor of about 100 ppi, as wide in pixels: scale 1.
+    s.f().display_mm = (325, 102);
+    resize(&mut s, 1280, 400);
+    assert_eq!(s.c.scale().factor(), 1);
+    // Unknown: the width alone.
+    s.f().display_mm = (0, 0);
+    resize(&mut s, 1300, 400);
+    assert_eq!(s.c.scale().factor(), 1);
+}
+
+#[test]
+fn scale_for_counts_the_density() {
+    use zoraya_tokens::Scale;
+    // 1280 px over 147.8 mm is 220 ppi; 216.7 mm is exactly 150 ppi.
+    assert_eq!(scale_for(1280, 148), Scale::TWO);
+    assert_eq!(scale_for(1279, 148), Scale::ONE);
+    assert_eq!(scale_for(1280, 216), Scale::TWO);
+    assert_eq!(scale_for(1280, 217), Scale::ONE);
+    assert_eq!(scale_for(1919, 0), Scale::ONE);
+    assert_eq!(scale_for(1920, 1000), Scale::TWO);
+}
+
+/// The 7g check: at 1920 by 1200 (scale 2) a terminal of 80 by 24 asked
+/// for more than the work area and ran under the dock. A toplevel is made
+/// to fit the work area at its creation, and told so in its `Configure`.
+#[test]
+fn a_new_toplevel_never_exceeds_the_work_area() {
+    let mut s = setup_with(|f| f.display_size = (1920, 1200));
+    assert_eq!(s.c.scale().factor(), 2);
+    let end = s.client(64);
+    // Logical 900 by 560: wider and taller than 960 by 600 less the bar,
+    // the dock and the frame.
+    let (lw, lh) = (900u32, 560u32);
+    let n = (lw * 2 * lh * 2) as usize;
+    let memory = s.f().memory(vec![0x0012_3456; n], n as u64 * 4, false);
+    let m = gui::CreateToplevel {
+        width: lw,
+        height: lh,
+    };
+    s.f().send(end, message(&m, 5), vec![memory]);
+    s.c.step();
+    let out = s.f().take(end);
+    let (_, created) = out
+        .iter()
+        .find_map(|r| decode::<gui::Created>(r, 0).ok())
+        .expect("created");
+    assert_eq!(created.status.0, status::OK);
+    let c = configures(&out);
+    let area = s.c.work_area();
+    let outer = s.outer(0, created.window);
+    assert!(inside(&s, outer), "{outer:?} in {area:?}");
+    // Told a smaller size, in whole logical pixels, at scale 2.
+    assert_eq!(c[0].scale, 2);
+    assert!(
+        c[0].height < lh && c[0].width <= lw,
+        "{:?}",
+        (c[0].width, c[0].height)
+    );
+    let body =
+        s.c.window(Key {
+            client: 0,
+            id: created.window,
+        })
+        .unwrap()
+        .body;
+    assert_eq!(body, (c[0].width * 2, c[0].height * 2));
+    // Made smaller where it was to stand: the GUI runner reads the first
+    // window's body there.
+    let r =
+        s.c.window(Key {
+            client: 0,
+            id: created.window,
+        })
+        .unwrap()
+        .body_rect();
+    assert_eq!((r.x, r.y), first_body(zoraya_tokens::Scale::TWO));
+    // A window that fits keeps its size.
+    let n = (200 * 2 * 100 * 2) as usize;
+    let memory = s.f().memory(vec![0; n], n as u64 * 4, false);
+    s.f().send(
+        end,
+        message(
+            &gui::CreateToplevel {
+                width: 200,
+                height: 100,
+            },
+            5,
+        ),
+        vec![memory],
+    );
+    s.c.step();
+    let c = configures(&s.f().take(end));
+    assert_eq!((c[0].width, c[0].height), (200, 100));
 }

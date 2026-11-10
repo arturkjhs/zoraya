@@ -72,7 +72,7 @@ A POSIX program launched from the desktop runs in the broker's session with a te
 
 ## Invariants
 - **INV-0168-1.** Every application the panel starts receives exactly the handles its launch record lists, the record names the room it was launched in (ADR-0172), and the record is shown to the person. *Check:* host test of the panel's launch logic against a fake `spawn` recording the handle list; the GUI test opens the tooltip of a running application and reads it.
-- **INV-0168-2.** A connection to the volume's root with its full rights is held only by `init`, the panel, the chooser, `files` and the shell in a terminal (ADR-0097's slot 5); every other program holds only what its launch record lists: its data directory, `/system/fonts` read-only, what the person gave it, and for the settings program `/config` narrowed to `settings` (ADR-0169). *Check:* host test enumerating the launch records of every application in `/system/apps` against this list; in-QEMU test that `edit` cannot reach a name outside its data directory (it has no other directory connection to try).
+- **INV-0168-2.** A connection to the volume's root with its full rights is held only by `init`, the panel, the chooser and the shell in a terminal (ADR-0097's slot 5); `files` holds the volume read-only and, to change, `~` in `home` or the room's grants when launched in a room, never `/config` (INV-0169-4); every other program holds only what its launch record lists: its data directory, `/system/fonts` read-only, what the person gave it, and for the settings program `/config` narrowed to `settings` (ADR-0169). *Check:* host test enumerating the launch records of every application in `/system/apps` against this list; in-QEMU test that `edit` cannot reach a name outside its data directory (it has no other directory connection to try), and that `files` cannot change `/config`.
 - **INV-0168-3.** The panel's window cannot be covered, moved or closed by any client. *Check:* host test of the compositor's stacking with the panel as ADR-0160's bar kind (INV-0160-7).
 
 ## Open questions
@@ -81,6 +81,10 @@ A POSIX program launched from the desktop runs in the broker's session with a te
   enumerate what every launch the panel makes holds (`files` alone gets the root; a terminal's shell its room's
   grants, ADR-0242's condition). The in-QEMU half (`edit` cannot reach a name outside its data directory) waits for
   `edit` (7f).
+- *(Check note, 2026-11-10, ADR-0001 rule 6.)* INV-0168-2 as changed: `zoraya-panel`'s host tests enumerate
+  `files`' holds in `home` and in rooms, with `shell.home` at `/` and under `/config` (`confine_files`). The in-QEMU
+  half for `files` (a change in `/config` refused) comes with the file manager of stage 7h, whose GUI test reaches
+  `/config` through its sidebar; until then the row's status is the host half.
 - Whether the panel and `init`'s session table should be one program (ADR-0097 Option C's session launcher): the panel is that launcher for applications; `init` keeps drivers.
 - File types by extension is an assumption; a type registry is a later ADR.
 - *(Check note, stage 7d, ADR-0001 rule 6.)* INV-0168-2's check waits for `/system/apps` and its launch records and for
@@ -96,3 +100,5 @@ A POSIX program launched from the desktop runs in the broker's session with a te
 ## Architect's decision
 
 Accepted 2026-11-03. Decided by the architect; recorded by an agent at the architect's request.
+
+Changed 2026-11-10. Decided by the architect; recorded by an agent at the architect's request. INV-0168-2 gives way to INV-0169-4: `files` holds the volume read-only, `~` to change, and the room's grants when launched in a room; only the settings window gets `/config` to write. INV-0168-2's text, the panel's launch record and the tests change with it. In a room `files` holds the room's grants in place of `~`, as the approved mockup of the file manager draws it ("Changes only in project; the rest is read only").

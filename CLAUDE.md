@@ -93,7 +93,12 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
 
 ## Models and loops
 
-- Code and reviews, including every independent review of a task, are done by the main model.
+- Code and reviews, including every independent review of a task, are done by the main model. An implementation
+  session may run on Sonnet; it then hands every independent review, kernel code, `unsafe` code, security boundaries
+  (grants and rights, the trusted UI, driver boundaries) and hard debugging to the `opus-review` subagent
+  (`.claude/agents/`).
+- Waiting for CI goes to the `ci-watch` subagent (it reports failing jobs and their first lines in at most 30 lines),
+  and finding the first real failure in a log to `log-triage`; both are cheap and read only.
 - Test runs and the sorting of mutants are not: run tests with `make test` (it prints a summary, with each step's log in
   `build/logs/`) or the `test-runner` subagent, and mutation tests with `make mutants` (survivors in
   `build/mutants/report.md`) and the `mutant-triage` subagent (`.claude/agents/`). Open a log only when its step

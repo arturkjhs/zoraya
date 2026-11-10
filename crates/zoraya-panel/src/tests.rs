@@ -238,13 +238,26 @@ fn an_application_gets_its_data_its_chooser_and_what_was_opened() {
     );
     assert_eq!(opened.entries, ["+w /data/home/t_open", "+r ~/notes.txt"]);
     assert_eq!(opened.line, "t_open ~/notes.txt");
+    // INV-0168-2 as changed on 2026-11-10: `files` holds the volume to
+    // read and `~` to change, in a start-up record, never the root.
     let files = application(None, "files", None);
-    assert!(gives(&files).contains(&Give::Root));
+    assert!(gives(&files).contains(&Give::Startup));
     assert!(gives(&files).contains(&Give::Launcher));
-    assert!(files.entries.contains(&String::from("+w /")));
-    for app in ["t_open", "edit"] {
+    assert_eq!(
+        files.holds,
+        [(String::from("/"), false), (String::from("~"), true)]
+    );
+    assert_eq!(files.entries, ["+r /", "+w ~", "+w /data/home/files"]);
+    // In a room: the volume to read and the room's grants.
+    let project = p.rooms.get("project").cloned();
+    let in_room = application(project.as_ref(), "files", None);
+    assert_eq!(in_room.holds[0], (String::from("/"), false));
+    assert!(in_room.holds.contains(&(String::from("~/project"), true)));
+    assert!(!in_room.holds.iter().any(|(p, _)| p == "~"));
+    assert_eq!(in_room.line, "room project files");
+    for app in ["t_open", "edit", "files"] {
         let l = application(None, app, None);
-        assert!(!gives(&l).contains(&Give::Root), "{app}");
+        assert!(!l.holds.iter().any(|(p, w)| p == "/" && *w), "{app}");
         assert!(!l.entries.iter().any(|e| e == "+w /"), "{app}");
     }
     // In a room: its grants, its own data directory, its line.
@@ -317,4 +330,65 @@ fn the_settings_window_holds_the_six_rights_of_adr_0169() {
         READ | WRITE | CREATE | PUBLISH | SYNC | CLONE
     );
     assert_eq!(CONFIG_RIGHTS & (REMOVE | RENAME), 0);
+}
+
+/// INV-0169-4 over `files`: a room's grant that would reach `/config` is
+/// given to read, and `+w /` adds nothing to the volume it reads already.
+#[test]
+fn files_never_gets_config_to_change() {
+    let mut p = Panel::default();
+    p.reload(b"wide +w / +w /config +w /config/rooms +w ~/project\n");
+    let wide = p.rooms.get("wide").cloned();
+    assert!(wide.is_some(), "{:?}", p.rooms.problems);
+    for room in [None, wide.as_ref()] {
+        let l = application(room, "files", None);
+        assert!(
+            !l.holds.iter().any(|(path, w)| *w && reaches_config(path)),
+            "{:?}",
+            l.holds
+        );
+        assert!(
+            !l.entries
+                .iter()
+                .any(|e| e == "+w /" || e.starts_with("+w /config"))
+        );
+    }
+    let l = application(wide.as_ref(), "files", None);
+    assert_eq!(
+        l.holds,
+        [
+            (String::from("/"), false),
+            (String::from("/config"), false),
+            (String::from("/config/rooms"), false),
+            (String::from("~/project"), true),
+        ]
+    );
+    assert!(reaches_config("/"));
+    assert!(reaches_config("/config/settings"));
+    assert!(!reaches_config("/configs"));
+    assert!(!reaches_config("~"));
+}
+
+/// Review of the fix branch, 2: with `shell.home` at `/` or under
+/// `/config`, `files`' `~` is given to read only.
+#[test]
+fn files_gets_no_config_through_its_home() {
+    for home in ["/", "/config", "/config/me"] {
+        let mut l = application(None, "files", None);
+        confine_files(&mut l, home);
+        assert_eq!(
+            l.holds,
+            [(String::from("/"), false), (String::from("~"), false)],
+            "{home}"
+        );
+        assert_eq!(l.entries, ["+r /", "+r ~", "+w /data/home/files"]);
+    }
+    let mut l = application(None, "files", None);
+    confine_files(&mut l, "/home/ann");
+    assert_eq!(l.holds[1], (String::from("~"), true));
+    assert_eq!(l.entries, ["+r /", "+w ~", "+w /data/home/files"]);
+    // Only `files`: a terminal in home keeps /config for `settings`.
+    let mut t = terminal(None);
+    confine_files(&mut t, "/");
+    assert!(t.holds.contains(&(String::from("/config"), true)));
 }

@@ -79,6 +79,11 @@ pub struct Grant {
     /// The line under the list: the grant as the shell would make it
     /// (`+r ~/project/plán.txt edit`), for the person only.
     pub line: String,
+    /// The `zosh` line that would give as much, shown in show-commands
+    /// mode (ADR-0245): the line itself, or for `Save`, which has no line of
+    /// its own, the least grant that covers the name and what the sheet
+    /// gives instead.
+    pub shell: String,
     /// `Chosen`'s words: the kind and the display name, never the path
     /// (ADR-0167: an application never learns where what it got is).
     pub words: String,
@@ -120,7 +125,7 @@ pub enum Step {
     /// List the new `path` (the program calls [`Browser::show`]).
     List,
     /// The person confirmed: make this grant.
-    Confirm(Grant),
+    Confirm(alloc::boxed::Box<Grant>),
 }
 
 impl Browser {
@@ -283,6 +288,17 @@ impl Browser {
             Access::Create(_) => format!("create or replace {shown}"),
             _ => format!("{flag} {shown} {}", self.app),
         };
+        let shell = match &access {
+            // The least `zosh` grant that covers the name is its folder to
+            // change: wider than the sheet's, which says so (the architect's
+            // answer of 2026-11-10).
+            Access::Create(name) => format!(
+                "+w {} {} \u{b7} gives less: create or replace {name}",
+                zoraya_shell::grants::shown(&dir, &self.home),
+                self.app
+            ),
+            _ => line.clone(),
+        };
         let display = match path.rsplit('/').next() {
             Some("") | None => String::from("/"),
             Some(n) => n.to_string(),
@@ -292,6 +308,7 @@ impl Browser {
             name,
             access,
             kind,
+            shell,
             words: format!("{flag} {display}"),
             shown: display,
             line,
@@ -315,7 +332,7 @@ impl Browser {
     /// the grant, if one can be made.
     pub fn confirm(&self) -> Step {
         match self.pending() {
-            Some(g) => Step::Confirm(g),
+            Some(g) => Step::Confirm(alloc::boxed::Box::new(g)),
             None => Step::None,
         }
     }

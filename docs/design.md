@@ -491,8 +491,10 @@ Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) an
 - **The switcher** is drawn in the trusted material (a blur of the scene under it, the tint, the band of light, the
   rim, the halo), a group line per room (only `home` until 7d) and a row per window with its own pixels shrunk by a
   box filter, its title, and "hidden" for a minimised one.
-- **Scale** (ADR-0164). The compositor takes scale 2 for a display at least 1920 pixels wide (the setting `auto`
-  until 7f's `gui.scale`); `DisplayScale` gives the logical size and the scale, every size a client hears is logical,
+- **Scale** (ADR-0164). The compositor takes scale 2 for a display at least 1920 pixels wide, or at least 1280 on a
+  display of 150 pixels per inch or more (proposed ADR-0247: QEMU's cocoa window gives its size in pixels and its
+  physical size in the EDID, which `gpud` reads with `VIRTIO_GPU_F_EDID` and passes in `InfoReply`) (the setting
+  `auto`; `gui.scale` 1 or 2 fixes it); `DisplayScale` gives the logical size and the scale, every size a client hears is logical,
   pointer events to a toplevel are logical, and a client's pixels reach the screen unchanged (INV-0164-1).
   `tools/run-qemu.sh --gui-scale 2` asks QEMU for 2048 × 1536, and `--gui-size WxH` for any size (7g). Since 7g the
   display follows QEMU's window (ADR-0246, "The display follows the window" below).
@@ -645,7 +647,10 @@ and [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md), with the proposed
   (`AddApplication`). On `Open`, `Save` or `PickDirectory` the chooser lists the folder through `zoraya-fsclient` and
   asks the compositor for a sheet under that application's window (`CreateSheet`, system clients only); the
   compositor draws the strip with the emblem and "Open a file for APP", the bar's mark, and gives the owner no input
-  while the sheet is open. Only a key or a press in the sheet confirms; the answer is one connection with ADR-0153's
+  while the sheet is open. Only a key or a press in the sheet confirms, and none in its first 500 ms nor a key or
+  button held from before it mapped (ADR-0245's condition, `SHEET_GUARD_NS`); in show-commands mode, which the
+  compositor tells system clients (`Commands`), the line under the sentence is the grant's `zosh` line (for `Save`,
+  `+w FOLDER APP · gives less: create or replace NAME`). The answer is one connection with ADR-0153's
   rights for the kind (`Open` reads; `Save` is the folder narrowed to the one name, with create's rights;
   `PickDirectory` reads or is a `tree`), the display name and the kind's words (`+r plán.txt`), never the path; the
   chooser then tells the compositor `Granted`, and the window's frame shows the pill (`+r ~/project/plán.txt`). One
@@ -653,7 +658,9 @@ and [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md), with the proposed
 - **The data directory**: the panel makes `/data/ROOM/APP` (`/data/home/APP` in `home`) and gives it at slot 7 with
   every right but publish.
 - **The file manager** (`files`, its logic in `zoraya-files`): a folder's list (folders first), Up, Open, New
-  folder, Rename and Delete (asked twice). It holds the root (INV-0168-2) and opens a file only through the panel:
+  folder, Rename and Delete (asked twice). It holds the volume to read and, to change, `~` in `home` or its room's
+  grants, in a start-up record, never `/config` (INV-0168-2 as changed on 2026-11-10), and opens a file only through
+  the panel:
   `OpenWith` with a connection, which the panel clones down to read and clone, then launches the application for the
   name's extension (`.txt` and `.md`: `t_open` in 7e, `edit` from 7f) with it at slot 10.
 - **Drops** (ADR-0170): a press on a file in `files` starts a drag of it, read only. The compositor takes `Drag` only
@@ -1224,10 +1231,10 @@ measured for real.
 
 ## Using the desktop
 
-`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window (`make run-gui GUI_SCALE=2` at 2048 ×
-1536). On a Mac the window can be resized and the desktop follows it (7g: the bar and the dock follow the width,
-windows stay in the work area, and from 1920 pixels wide the scale is 2), and Command is the system key (written
-System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
+`make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window: on macOS at 2048 × 1536 with scale 2,
+elsewhere at 1024 × 768 (`GUI_SCALE=1` or `GUI_SCALE=2` chooses). On a Mac the window can be resized and the desktop
+follows it (7g: the bar and the dock follow the width, windows stay in the work area, and from 1920 pixels wide the
+scale is 2, from 1280 on a Retina screen, proposed ADR-0247), and Command is the system key (written System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
 
 - **What is on the screen.** The bar at the top (the layout in use at its right; the chooser's mark in its middle
   while a sheet is open), the windows, and the dock at the bottom: Terminal, Files, Edit and Settings, then the rooms'

@@ -49,6 +49,8 @@ struct Fake {
     /// The display driver: its size, whether it answers, the flushes seen.
     display: Option<u32>,
     display_size: (u32, u32),
+    /// The physical size `Info` gives, in millimetres.
+    display_mm: (u32, u32),
     display_dead: bool,
     /// The display driver's queue is full: flushes cannot be sent.
     display_full: bool,
@@ -71,6 +73,7 @@ impl Fake {
     fn new() -> Fake {
         Fake {
             display_size: (W, H),
+            display_mm: (0, 0),
             info_format: display::FORMAT_XRGB,
             next: 100,
             given: Vec::new(),
@@ -275,6 +278,8 @@ impl Platform for Fake {
                     width: self.display_size.0,
                     height: self.display_size.1,
                     format: self.info_format,
+                    width_mm: self.display_mm.0,
+                    height_mm: self.display_mm.1,
                 },
                 t,
                 reply,

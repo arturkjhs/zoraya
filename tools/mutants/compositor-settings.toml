@@ -59,10 +59,10 @@ file = "crates/zoraya-compositor/src/lib.rs"
 find = '''
             1 => Scale::ONE,
             2 => Scale::new(2).unwrap_or(Scale::ONE),
-            _ => scale_for(self.width),'''
+            _ => scale_for(self.width, self.width_mm),'''
 replace = '''
             2 => Scale::new(2).unwrap_or(Scale::ONE),
-            _ => scale_for(self.width),'''
+            _ => scale_for(self.width, self.width_mm),'''
 note = "7f lib.rs:653:17: a_fixed_scale_of_one_holds_on_a_wide_display"
 
 [[mutant]]

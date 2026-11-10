@@ -64,6 +64,12 @@ pub const CASCADE: u32 = 32;
 pub const CLOSE_GRACE_NS: u64 = 5_000_000_000;
 /// The display width from which the scale is 2 (ADR-0164's `auto`).
 pub const SCALE_TWO_FROM: u32 = 1920;
+/// The density, in pixels per inch, from which a display is dense (a
+/// Retina screen is about 220, a desktop monitor about 100), and the width
+/// from which a dense display gets scale 2: 640 logical pixels (proposed
+/// ADR-0247).
+pub const DENSE_PPI: u64 = 150;
+pub const DENSE_SCALE_TWO_FROM: u32 = 1280;
 
 /// Port keys: the manager, the display, inputs from `INPUT_KEY`, clients
 /// from `CLIENT_KEY`.
@@ -75,13 +81,34 @@ pub const CLIENT_KEY: u64 = 64;
 /// How long the display driver may take to answer a flush before the
 /// compositor drops it and tells the manager (ADR-0093, Decision).
 pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
+/// How long a new sheet ignores the keyboard and the pointer's buttons, so
+/// that a key the person was about to press for the window below does not
+/// confirm a request timed to meet it (ADR-0245, the architect's condition).
+pub const SHEET_GUARD_NS: u64 = 500_000_000;
+
+/// What a new sheet ignores: everything until `until`, then the keys and
+/// buttons held down when it mapped (or pressed before `until`), each until
+/// its release. `until` starts again at the sheet's first commit, when it
+/// can first be seen (review of the fix branch, 7).
+#[derive(Debug, Clone, Copy)]
+struct SheetGuard {
+    sheet: Key,
+    until: u64,
+    keys: [u64; 8],
+    buttons: u32,
+    shown: bool,
+}
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
 
-/// The scale for a display `width` physical pixels wide (ADR-0164: `auto`
-/// until the setting exists).
-pub const fn scale_for(width: u32) -> Scale {
-    if width >= SCALE_TWO_FROM {
+/// The scale `auto` gives a display `width` physical pixels wide whose
+/// width is `width_mm` millimetres (0: unknown): 2 from `SCALE_TWO_FROM`
+/// pixels (ADR-0164), or from `DENSE_SCALE_TWO_FROM` on a display of at
+/// least `DENSE_PPI` (proposed ADR-0247: a Retina window).
+pub const fn scale_for(width: u32, width_mm: u32) -> Scale {
+    // pixels / (mm / 25.4) >= ppi, in integers.
+    let dense = width_mm > 0 && width as u64 * 254 >= DENSE_PPI * 10 * width_mm as u64;
+    if width >= SCALE_TWO_FROM || (dense && width >= DENSE_SCALE_TWO_FROM) {
         Scale::TWO
     } else {
         Scale::ONE
@@ -305,9 +332,11 @@ pub struct Compositor<P: Platform> {
     /// Every window, bottom of the stack first.
     windows: Vec<Window>,
     focus: Option<Key>,
-    /// The display in physical pixels, and its scale.
+    /// The display in physical pixels, its width in millimetres (0:
+    /// unknown) and its scale.
     width: u32,
     height: u32,
+    width_mm: u32,
     scale: Scale,
     appearance: Appearance,
     /// `gui.motion` (ADR-0169), told to clients in `Configure`.
@@ -345,6 +374,10 @@ pub struct Compositor<P: Platform> {
     /// Keys whose press reached a client: their release reaches it too,
     /// even during a chord or the switcher (review 7b, 12).
     delivered: [u64; 8],
+    /// Every key down now, by code (below 512).
+    held: [u64; 8],
+    /// The newest sheet's guard (ADR-0245).
+    sheet_guards: Vec<SheetGuard>,
     /// The enabled keyboard layouts, indices of `zoraya_keymap::LAYOUTS`,
     /// in switching order (ADR-0163: `gui.keyboard-layouts`, a setting from
     /// 7f; `us ua cz` until then).
@@ -417,6 +450,7 @@ impl<P: Platform> Compositor<P> {
             focus: None,
             width: 0,
             height: 0,
+            width_mm: 0,
             scale: Scale::ONE,
             appearance: Appearance::Light,
             motion: true,
@@ -436,6 +470,8 @@ impl<P: Platform> Compositor<P> {
             switcher_frame: Vec::new(),
             scene: false,
             delivered: [0; 8],
+            held: [0; 8],
+            sheet_guards: Vec::new(),
             layouts: ["us", "ua", "cz"]
                 .iter()
                 .filter_map(|n| zoraya_keymap::by_name(n))
@@ -717,6 +753,7 @@ impl<P: Platform> Compositor<P> {
         if new_size {
             self.width = info.width;
             self.height = info.height;
+            self.width_mm = info.width_mm;
             self.attached = true;
             let old = self.scale.factor();
             self.scale = self.chosen_scale();
@@ -741,12 +778,12 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// The scale for the display's width: `gui.scale` 1 or 2 fixes it, `auto`
-    /// is 2 from `SCALE_TWO_FROM` pixels wide (ADR-0164, ADR-0246).
+    /// is [`scale_for`]'s (ADR-0164, ADR-0246, proposed ADR-0247).
     fn chosen_scale(&self) -> Scale {
         match self.fixed_scale {
             1 => Scale::ONE,
             2 => Scale::new(2).unwrap_or(Scale::ONE),
-            _ => scale_for(self.width),
+            _ => scale_for(self.width, self.width_mm),
         }
     }
 
@@ -849,6 +886,12 @@ impl<P: Platform> Compositor<P> {
                 // Keys it held down will never be released (review R10).
                 self.keymap = Keymap::new();
                 self.meta = 0;
+                self.held = [0; 8];
+                self.delivered = [0; 8];
+                for g in &mut self.sheet_guards {
+                    g.keys = [0; 8];
+                    g.buttons = 0;
+                }
                 self.buttons = 0;
                 self.drag = None;
             }
@@ -883,6 +926,14 @@ impl<P: Platform> Compositor<P> {
             _ => 0,
         };
         if button != 0 {
+            let now = self.platform.now();
+            for g in &mut self.sheet_guards {
+                if value == 0 {
+                    g.buttons &= !button;
+                } else if value == 1 && now < g.until {
+                    g.buttons |= button;
+                }
+            }
             if value == 0 {
                 self.buttons &= !button;
                 if button == gui::buttons::LEFT {
@@ -899,6 +950,28 @@ impl<P: Platform> Compositor<P> {
         }
         if (0x110..0x200).contains(&code_) {
             return;
+        }
+        if (code_ as usize) < 512 {
+            let (word, mask) = (code_ as usize / 64, 1u64 << (code_ % 64));
+            let now = self.platform.now();
+            if value == 0 {
+                self.held[word] &= !mask;
+                // A key held from before the sheet mapped counts again
+                // once it is released.
+                for g in &mut self.sheet_guards {
+                    g.keys[word] &= !mask;
+                }
+            } else {
+                self.held[word] |= mask;
+                // A key pressed within the guard stays guarded until its
+                // release: its repeats after the guard are not the sheet's
+                // (review of the fix branch, 1).
+                for g in &mut self.sheet_guards {
+                    if now < g.until {
+                        g.keys[word] |= mask;
+                    }
+                }
+            }
         }
         // The system key: held, and never a client's (INV-0160-3).
         match code_ {
@@ -1009,6 +1082,9 @@ impl<P: Platform> Compositor<P> {
             // release was sent above.
             return;
         }
+        if self.guards_key(focus, code_) {
+            return;
+        }
         if bit {
             self.delivered[word] |= mask;
         }
@@ -1033,6 +1109,7 @@ impl<P: Platform> Compositor<P> {
         }
         if code_ == code::SLASH {
             self.commands = !self.commands;
+            self.tell_commands();
             self.dock_changed();
             let s = self.screen();
             self.dirty(&s);
@@ -1553,12 +1630,13 @@ impl<P: Platform> Compositor<P> {
             self.send_event(key.client, m);
         } else {
             let s = self.scale.factor();
+            let buttons = self.guarded_buttons(key);
             let m = gui::WindowPointer {
                 dropped: 0,
                 window: key.id,
                 x: px / s,
                 y: py / s,
-                buttons: Flags(self.buttons),
+                buttons: Flags(buttons),
                 serial: self.clients[key.client].as_ref().map_or(0, |c| c.presses),
             };
             self.send_event(key.client, m);
@@ -1753,13 +1831,7 @@ impl<P: Platform> Compositor<P> {
         let s = i64::from(k);
         let f = self.frame();
         let area = self.work_area();
-        // The largest body whose frame fits the work area, in whole logical
-        // pixels.
-        let most = |v: i64| (v - v % s).max(s) as u32;
-        let (w, h) = (
-            most(area.width - 2 * f.border),
-            most(area.height - f.title - f.border),
-        );
+        let (w, h) = self.largest_body();
         let keys: Vec<Key> = self
             .windows
             .iter()
@@ -1810,6 +1882,51 @@ impl<P: Platform> Compositor<P> {
             self.configure(key);
             self.place_sheets(key);
         }
+    }
+
+    /// The largest toplevel body whose frame fits the work area, in whole
+    /// logical pixels (physical).
+    fn largest_body(&self) -> (u32, u32) {
+        let s = i64::from(self.scale.factor());
+        let f = self.frame();
+        let area = self.work_area();
+        let most = |v: i64| (v - v % s).max(s) as u32;
+        (
+            most(area.width - 2 * f.border),
+            most(area.height - f.title - f.border),
+        )
+    }
+
+    /// A new toplevel's body: as asked when the work area holds it; else
+    /// made smaller to fit below its cascade place (so the first window's
+    /// body stays at `first_body`), or, where too little is left there, the
+    /// largest body the work area holds.
+    fn fitting_body(&self, bw: u32, bh: u32) -> (u32, u32) {
+        let (w, h) = self.largest_body();
+        let s = i64::from(self.scale.factor());
+        let f = self.frame();
+        let area = self.work_area();
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let n = self.windows.iter().filter(|w| w.framed()).count() as i64;
+        let top = bar + i64::from(ORIGIN.1 + CASCADE * n as u32) * s;
+        let left = i64::from(ORIGIN.0 + CASCADE * n as u32) * s;
+        let whole = |v: i64| (v - v.rem_euclid(s)).max(0) as u32;
+        let below = whole(area.bottom() - top - f.title - f.border);
+        let beside = whole(area.right() - left - 2 * f.border);
+        // A window that fits below its cascade place keeps its size; one
+        // that does not is made smaller to fit there while at least half
+        // the work area is left, else it keeps what the work area holds
+        // and `place` moves it up.
+        let fit = |asked: u32, most: u32, room: u32| -> u32 {
+            if asked <= room {
+                asked
+            } else if room >= most / 2 {
+                room.max(s as u32)
+            } else {
+                asked.min(most)
+            }
+        };
+        (fit(bw, w, beside), fit(bh, h, below))
     }
 
     /// Sends a toplevel its size, the scale and the appearance.
@@ -2181,6 +2298,14 @@ impl<P: Platform> Compositor<P> {
                 {
                     c.system = true;
                 }
+                // A chooser that starts while the mode is on hears it.
+                let slot = self
+                    .clients
+                    .iter()
+                    .position(|c| c.as_ref().is_some_and(|c| c.end == h));
+                if let Some(slot) = slot.filter(|_| s == status::OK && self.commands) {
+                    self.send_event_plain(slot, &gui::Commands { on: true });
+                }
                 (s, true)
             }
             33 if driver && one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
@@ -2243,6 +2368,43 @@ impl<P: Platform> Compositor<P> {
             .get(slot)
             .and_then(Option::as_ref)
             .is_some_and(|c| c.system)
+    }
+
+    /// Whether the guard of a new sheet keeps key `code_` from `focus`:
+    /// any key in its first `SHEET_GUARD_NS`, and a key held from before it
+    /// mapped until that key's release (ADR-0245).
+    fn guards_key(&mut self, focus: Key, code_: u32) -> bool {
+        let Some(g) = self.sheet_guards.iter().find(|g| g.sheet == focus).copied() else {
+            return false;
+        };
+        let held = (code_ as usize) < 512 && g.keys[code_ as usize / 64] & (1 << (code_ % 64)) != 0;
+        held || self.platform.now() < g.until
+    }
+
+    /// The buttons a pointer event to `key` carries: none in a new sheet's
+    /// first `SHEET_GUARD_NS`, and never one held from before (ADR-0245).
+    fn guarded_buttons(&mut self, key: Key) -> u32 {
+        match self.sheet_guards.iter().find(|g| g.sheet == key).copied() {
+            Some(g) => {
+                if self.platform.now() < g.until {
+                    0
+                } else {
+                    self.buttons & !g.buttons
+                }
+            }
+            _ => self.buttons,
+        }
+    }
+
+    /// Tells every system client the show-commands mode, so that the
+    /// chooser's sheet shows its grant's `zosh` line (ADR-0245).
+    fn tell_commands(&mut self) {
+        let m = gui::Commands { on: self.commands };
+        for slot in 0..self.clients.len() {
+            if self.is_system(slot) {
+                self.send_event_plain(slot, &m);
+            }
+        }
     }
 
     /// The sheet open under `owner`, if any.
@@ -2369,6 +2531,19 @@ impl<P: Platform> Compositor<P> {
         );
         self.place_sheets(owner);
         let key = Key { client: slot, id };
+        let until = self.platform.now().saturating_add(SHEET_GUARD_NS);
+        // One guard per sheet: a second sheet leaves the first's (review of
+        // the fix branch, 5); guards of sheets that are gone go.
+        let live: Vec<Key> = self.windows.iter().map(Self::key_of).collect();
+        self.sheet_guards
+            .retain(|g| live.contains(&g.sheet) && g.sheet != key);
+        self.sheet_guards.push(SheetGuard {
+            sheet: key,
+            until,
+            keys: self.held,
+            buttons: self.buttons,
+            shown: false,
+        });
         if self
             .focus
             .is_some_and(|f| f == owner || f.client == owner.client)
@@ -2917,6 +3092,16 @@ impl<P: Platform> Compositor<P> {
             return Err(status::NO_MEMORY);
         }
         let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        // A toplevel is never larger than the work area: its body is made
+        // to fit, and the `Configure` after `Created` tells the client the
+        // size to draw (the 7g check: a terminal of 80 by 24 at scale 2 on
+        // 1920 by 1200 ran under the dock). A legacy surface is never
+        // resized (ADR-0246).
+        let (bw, bh) = if kind == WindowKind::Toplevel {
+            self.fitting_body(bw, bh)
+        } else {
+            (bw, bh)
+        };
         let (x, y) = self.place(bw, bh);
         if let Some(c) = self.clients[slot].as_mut()
             && kind != WindowKind::Legacy
@@ -3127,17 +3312,20 @@ impl<P: Platform> Compositor<P> {
         let fit = |start: i64, side: i64, low: i64, screen: i64| -> i64 {
             start.min(screen - side).max(low)
         };
+        // Within the work area, above the dock (a toplevel fits it, see
+        // `create`).
+        let area = self.work_area();
         let x = fit(
             i64::from(ORIGIN.0 + CASCADE * n as u32) * s,
             ow,
             0,
-            i64::from(self.width),
+            area.right().min(i64::from(self.width)),
         );
         let y = fit(
             bar + i64::from(ORIGIN.1 + CASCADE * n as u32) * s,
             oh,
             bar,
-            i64::from(self.height),
+            area.bottom().min(i64::from(self.height)),
         );
         (x + f.border, y + f.title)
     }
@@ -3169,6 +3357,17 @@ impl<P: Platform> Compositor<P> {
             }
             let all = w.body_rect();
             self.dirty(&all);
+        }
+        // A sheet's first commit: it can be seen now, and its guard starts
+        // again (ADR-0245).
+        let now = self.platform.now();
+        if let Some(g) = self
+            .sheet_guards
+            .iter_mut()
+            .find(|g| g.sheet == Key { client: slot, id } && !g.shown)
+        {
+            g.shown = true;
+            g.until = now.saturating_add(SHEET_GUARD_NS);
         }
         let w = &mut self.windows[i];
         let Some(r) = Rect::from_client(x, y, width, height, w.buffer.width, w.buffer.height)

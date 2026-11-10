@@ -39,9 +39,6 @@ pub enum Give {
     /// The application's data directory, `/data/ROOM/APP`, to change
     /// anything in (ADR-0167 point 2; proposed ADR-0245).
     Data,
-    /// The volume's root with its rights: `files` alone of the
-    /// applications (ADR-0168, INV-0168-2).
-    Root,
     /// A channel back to the panel, for `files` to open a file with its
     /// application (ADR-0168 point 4).
     Launcher,
@@ -77,6 +74,78 @@ pub const HOME_GRANTS: [(&str, bool); 4] =
 /// architect's decision of 2026-11-09, recorded in ADR-0172). A room grant
 /// that already covers one of them stands for it.
 pub const TOOLCHAIN_GRANTS: [&str; 3] = ["/bin", "/usr", "/etc"];
+
+/// What `files` holds in `home`: the volume to read and the person's own
+/// files to change (INV-0168-2 as changed on 2026-11-10); in a room, the
+/// volume to read and the room's grants. Never `/config` to change
+/// (INV-0169-4).
+pub const FILES_HOME: [(&str, bool); 2] = [("/", false), ("~", true)];
+
+/// Whether a grant of `path` to change would reach `/config`, which only
+/// the settings window may change (INV-0169-4).
+pub fn reaches_config(path: &str) -> bool {
+    covers(path, "/config") || covers("/config", path)
+}
+
+/// What `files` holds in `room` (`None` is `home`), as `(path, write)`:
+/// the volume read-only, then `~` to change in `home` or the room's grants
+/// in a room, a grant that would reach `/config` read-only.
+pub fn files_holds(room: Option<&Room>) -> Vec<(String, bool)> {
+    let mut holds = vec![(String::from("/"), false)];
+    match room {
+        None => holds.extend(FILES_HOME[1..].iter().map(|(p, w)| (String::from(*p), *w))),
+        Some(r) => {
+            for g in &r.grants {
+                let write = g.write && !reaches_config(&g.path);
+                if g.path == "/" {
+                    // The volume is there already; to change it all would
+                    // reach /config.
+                    continue;
+                }
+                holds.push((g.path.clone(), write));
+            }
+        }
+    }
+    holds
+}
+
+/// `files`' record checked against the home it expands `~` with: a hold
+/// to change that, expanded, reaches `/config` is made read-only, and the
+/// entries say so (review of the fix branch, 2: `shell.home` is a setting
+/// the person may set to `/` or `/config`).
+pub fn confine_files(l: &mut Launch, home: &str) {
+    if l.app != "files" {
+        return;
+    }
+    let expand = |p: &str| -> String {
+        match p.strip_prefix('~') {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+                let h = home.trim_end_matches('/');
+                let joined = format!("{h}{rest}");
+                if joined.is_empty() {
+                    String::from("/")
+                } else {
+                    joined
+                }
+            }
+            _ => String::from(p),
+        }
+    };
+    let mut changed = false;
+    for (p, w) in &mut l.holds {
+        if *w && reaches_config(&expand(p)) {
+            *w = false;
+            changed = true;
+        }
+    }
+    if changed {
+        let data = l.entries.last().cloned();
+        l.entries = l.holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
+        if let Some(d) = data {
+            l.entries.push(d);
+        }
+    }
+}
 
 /// Whether grant path `outer` covers `path`.
 fn covers(outer: &str, path: &str) -> bool {
@@ -192,16 +261,21 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
         .map(|r| r.grants.iter().map(|g| g.words()).collect())
         .unwrap_or_default();
     entries.push(grant_words(&data_dir(room, app), true));
+    let mut holds = Vec::new();
+    // The file manager: a start-up record of the volume to read and what
+    // it may change (INV-0168-2, INV-0169-4), and a channel to the panel.
     if app == "files" {
+        holds = files_holds(room);
         handles.push(Slot {
-            slot: 8,
-            give: Give::Root,
+            slot: STARTUP_SLOT,
+            give: Give::Startup,
         });
         handles.push(Slot {
             slot: 9,
             give: Give::Launcher,
         });
-        entries.push(String::from("+w /"));
+        entries = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
+        entries.push(grant_words(&data_dir(room, app), true));
     }
     // The settings window: the one file it changes, and the panel to tell
     // (ADR-0169); no other record carries /config to write (INV-0169-4).
@@ -233,7 +307,7 @@ pub fn application(room: Option<&Room>, app: &'static str, opened: Option<&str>)
         room: room.cloned(),
         entries,
         line,
-        holds: Vec::new(),
+        holds,
         programs: vec![Program {
             image: app,
             handles,

@@ -50,13 +50,36 @@ struct Gpu0 {
     device: Device,
     /// The size `GET_DISPLAY_INFO` reports.
     size: Rc<Cell<(u32, u32)>>,
+    /// The physical size `GET_EDID` reports, in millimetres.
+    mm: Rc<Cell<(u32, u32)>>,
+}
+
+/// An EDID block as QEMU's generator writes one: the header, the size in
+/// centimetres, and the first detailed timing with the size in millimetres.
+fn edid_block(mm: (u32, u32)) -> [u8; 128] {
+    let mut e = [0u8; 128];
+    e[..8].copy_from_slice(&[0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]);
+    e[21] = (mm.0 / 10) as u8;
+    e[22] = (mm.1 / 10) as u8;
+    e[54] = 0x10;
+    e[55] = 0x27;
+    e[66] = (mm.0 & 0xFF) as u8;
+    e[67] = (mm.1 & 0xFF) as u8;
+    e[68] = (((mm.0 >> 8) & 0x0F) << 4 | ((mm.1 >> 8) & 0x0F)) as u8;
+    e
 }
 
 fn word(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().unwrap())
 }
 
-fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>, size: (u32, u32)) {
+fn serve(
+    f: &mut Fake,
+    hostile: Hostile,
+    seen: &RefCell<Vec<Seen>>,
+    size: (u32, u32),
+    mm: (u32, u32),
+) {
     while let Some(head) = f.next_available(0) {
         let chain = f.chain(0, head);
         assert_eq!(chain.len(), 2, "a request and a response");
@@ -88,10 +111,24 @@ fn serve(f: &mut Fake, hostile: Hostile, seen: &RefCell<Vec<Seen>>, size: (u32, 
             response[24 + 12..24 + 16].copy_from_slice(&h.to_le_bytes());
             response[24 + 16..24 + 20].copy_from_slice(&on.to_le_bytes());
             cmd::OK_DISPLAY_INFO
+        } else if kind == cmd::GET_EDID && mm.0 == u32::MAX {
+            cmd::ERR_UNSPEC
+        } else if kind == cmd::GET_EDID {
+            response[24..28].copy_from_slice(&128u32.to_le_bytes());
+            response[32..32 + 128].copy_from_slice(&edid_block(mm));
+            cmd::OK_EDID
         } else {
             cmd::OK_NODATA
         };
+        // A short or mislabelled EDID answer.
+        let ok = if kind == cmd::GET_EDID && mm.0 == u32::MAX - 1 {
+            0x1300
+        } else {
+            ok
+        };
+        let short_edid = kind == cmd::GET_EDID && mm.0 == u32::MAX - 2;
         let (answer, length) = match hostile {
+            _ if short_edid => (cmd::OK_EDID, 40),
             Hostile::WrongType => (0x1300, response.len() as u32),
             Hostile::Errors => (cmd::ERR_UNSPEC + 5, 24),
             Hostile::ShortError => (cmd::ERR_UNSPEC + 5, 16),
@@ -117,9 +154,10 @@ fn device(hostile: Hostile) -> Gpu0 {
     let device = Device::new(DEVICE_GPU, BASE, SHARED_MEMORY);
     let seen = Rc::new(RefCell::new(Vec::new()));
     let size = Rc::new(Cell::new((1024, 768)));
-    let (log, shown) = (seen.clone(), size.clone());
+    let mm = Rc::new(Cell::new((0, 0)));
+    let (log, shown, physical) = (seen.clone(), size.clone(), mm.clone());
     device.on(move |f, e| match e {
-        Event::Notify(0) => serve(f, hostile, &log, shown.get()),
+        Event::Notify(0) => serve(f, hostile, &log, shown.get(), physical.get()),
         // `events_clear`: the bits written there leave `events_read`.
         Event::Config(4) => {
             let read = word(&f.config, 0);
@@ -128,7 +166,12 @@ fn device(hostile: Hostile) -> Gpu0 {
         }
         _ => {}
     });
-    Gpu0 { seen, device, size }
+    Gpu0 {
+        seen,
+        device,
+        size,
+        mm,
+    }
 }
 
 type FakeGpu = Gpu<zoraya_virtio::fake::FakeRegisters, zoraya_virtio::fake::FakeShared>;
@@ -161,12 +204,14 @@ fn ready(d: &Gpu0) -> FakeGpu {
     gpu
 }
 
+/// INV-0090-1 as proposed ADR-0247 changes it: `VERSION_1` and `F_EDID`,
+/// nothing else, whatever the device offers.
 #[test]
-fn the_driver_negotiates_version_1_and_nothing_else() {
+fn the_driver_negotiates_version_1_and_edid_and_nothing_else() {
     let d = device(Hostile::None);
     d.device.state.borrow_mut().device_features = [u32::MAX, u32::MAX];
     let _gpu = up(&d);
-    assert_eq!(d.device.state.borrow().driver_features, [0, 1]);
+    assert_eq!(d.device.state.borrow().driver_features, [F_EDID, 1]);
     let status = d.device.state.borrow().status;
     assert_eq!(status & 4, 4, "DRIVER_OK");
 }
@@ -552,4 +597,89 @@ fn a_new_size_is_told_once_and_never_between_info_and_the_next_request() {
     assert!(a.tell((800, 600)));
     a.unsent();
     assert!(a.tell((800, 600)));
+}
+
+/// Proposed ADR-0247: with `F_EDID` the driver asks for the EDID after the
+/// display's size and keeps the physical size it states.
+#[test]
+fn the_display_info_brings_the_physical_size_from_the_edid() {
+    let d = device(Hostile::None);
+    d.device.state.borrow_mut().device_features = [F_EDID, 1];
+    d.size.set((2880, 1800));
+    d.mm.set((330, 206));
+    let mut gpu = up(&d);
+    assert_eq!(gpu.millimetres(), (0, 0));
+    assert_eq!(gpu.display_info(&mut no_wait()), Ok((2880, 1800)));
+    assert_eq!(gpu.millimetres(), (330, 206));
+    let seen = d.seen.borrow().clone();
+    assert_eq!(seen[1].kind, cmd::GET_EDID);
+    assert_eq!(seen[1].words, [0, 0], "scanout 0 and its padding");
+    assert_eq!(seen[1].room as usize, 24 + 8 + EDID_BYTES);
+    // A window made larger: the size follows the window, the density stays.
+    d.size.set((3200, 2000));
+    d.mm.set((367, 229));
+    gpu.display_info(&mut no_wait()).unwrap();
+    assert_eq!(gpu.millimetres(), (367, 229));
+}
+
+#[test]
+fn without_edid_the_physical_size_is_unknown_and_never_asked() {
+    let d = device(Hostile::None);
+    d.mm.set((330, 206));
+    let mut gpu = up(&d);
+    gpu.display_info(&mut no_wait()).unwrap();
+    assert_eq!(gpu.millimetres(), (0, 0));
+    assert!(d.seen.borrow().iter().all(|s| s.kind != cmd::GET_EDID));
+}
+
+#[test]
+fn an_edid_states_its_size_or_none() {
+    assert_eq!(edid_millimetres(&edid_block((330, 206))), (330, 206));
+    // Past 255 mm the high bits are in byte 68.
+    assert_eq!(edid_millimetres(&edid_block((597, 336))), (597, 336));
+    // No timing: the size in centimetres.
+    let mut e = edid_block((330, 206));
+    e[54] = 0;
+    e[55] = 0;
+    assert_eq!(edid_millimetres(&e), (330, 200));
+    // Neither: unknown.
+    e[21] = 0;
+    assert_eq!(edid_millimetres(&e), (0, 0));
+    // Not an EDID, too short, too large.
+    let mut bad = edid_block((330, 206));
+    bad[0] = 1;
+    assert_eq!(edid_millimetres(&bad), (0, 0));
+    assert_eq!(edid_millimetres(&edid_block((330, 206))[..127]), (0, 0));
+    // A timing with no width and no size in centimetres: unknown.
+    let mut flat = edid_block((330, 206));
+    flat[66] = 0;
+    flat[68] = 0;
+    flat[21] = 0;
+    assert_eq!(edid_millimetres(&flat), (0, 0));
+    assert_eq!(edid_millimetres(&[]), (0, 0));
+}
+
+#[test]
+fn an_edid_the_device_refuses_leaves_the_size_unknown() {
+    let d = device(Hostile::None);
+    d.device.state.borrow_mut().device_features = [F_EDID, 1];
+    d.mm.set((u32::MAX, 0));
+    let mut gpu = up(&d);
+    assert_eq!(gpu.display_info(&mut no_wait()), Ok((1024, 768)));
+    assert_eq!(gpu.millimetres(), (0, 0));
+}
+
+/// Review of the fix branch, 8: an EDID answer of the wrong kind or too
+/// short leaves the size unknown, and the display goes on.
+#[test]
+fn a_wrong_edid_answer_leaves_the_size_unknown() {
+    for bad in [u32::MAX - 1, u32::MAX - 2] {
+        let d = device(Hostile::None);
+        d.device.state.borrow_mut().device_features = [F_EDID, 1];
+        d.mm.set((bad, 0));
+        let mut gpu = up(&d);
+        assert_eq!(gpu.display_info(&mut no_wait()), Ok((1024, 768)));
+        assert_eq!(gpu.millimetres(), (0, 0));
+        gpu.attach(&[(FRAME, WHOLE)], &mut no_wait()).unwrap();
+    }
 }

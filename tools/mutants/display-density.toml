@@ -1,0 +1,33 @@
+# Proposed ADR-0247: the scale from the display's density, read from the
+# EDID. Holes found by hand, kept so that a later run repeats them. Host
+# tests only.
+tests = ["cargo test -q -p zoraya-compositor --lib", "cargo test -q -p zoraya-virtio-gpu"]
+timeout = 600
+
+[[mutant]]
+id = "D-no-edid"
+file = "crates/zoraya-virtio-gpu/src/lib.rs"
+find = 'let agreed = begin(&mut registers, DEVICE_GPU, F_EDID)?;'
+replace = 'let agreed = begin(&mut registers, DEVICE_GPU, 0)?;'
+note = "the driver never asks the EDID: a Retina window keeps scale 1"
+
+[[mutant]]
+id = "D-high-bits"
+file = "crates/zoraya-virtio-gpu/src/lib.rs"
+find = 'let w = u32::from(d[12]) | u32::from(d[14] >> 4) << 8;'
+replace = 'let w = u32::from(d[12]);'
+note = "a display wider than 255 mm reads as narrower, denser than it is"
+
+[[mutant]]
+id = "D-dense-any-width"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '(dense && width >= DENSE_SCALE_TWO_FROM)'
+replace = '(dense)'
+note = "a tiny dense window gets scale 2 and fewer than 640 logical pixels"
+
+[[mutant]]
+id = "D-unknown-dense"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let dense = width_mm > 0 && '
+replace = 'let dense = '
+note = "an unknown physical size (every test) reads as dense"

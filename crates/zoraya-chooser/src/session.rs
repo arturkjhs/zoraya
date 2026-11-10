@@ -38,7 +38,7 @@ const CONFIRM: u32 = 5;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome<H> {
     /// The person confirmed: the connection made with the grant's rights.
-    Chosen { handle: H, grant: Grant },
+    Chosen { handle: H, grant: Box<Grant> },
     /// Nothing given, and why (`zoraya-proto-chooser`'s `status`).
     Cancelled(u32),
 }
@@ -51,6 +51,9 @@ pub struct Sheet {
     /// Where the name field's cursor is, kept across the sheet's rebuilds
     /// while the person types (review 7e, check of 7).
     name_cursor: Option<usize>,
+    /// The show-commands mode: the grant's `zosh` line in place of the
+    /// sheet's own (ADR-0245).
+    pub commands: bool,
 }
 
 impl Sheet {
@@ -68,6 +71,7 @@ impl Sheet {
             window: 0,
             top: 0,
             name_cursor: None,
+            commands: app.commands,
         };
         sheet.list(fs, root);
         let kind = sheet.browser.ask.sheet();
@@ -112,6 +116,17 @@ impl Sheet {
         self.top = 0;
     }
 
+    /// The line under the sentence: the grant as the sheet says it, or in
+    /// show-commands mode its `zosh` line (ADR-0245); empty while nothing
+    /// can be confirmed.
+    pub fn shown_line(&self) -> String {
+        match self.browser.pending() {
+            Some(g) if self.commands => g.shell,
+            Some(g) => g.line,
+            None => String::new(),
+        }
+    }
+
     /// The sheet's widgets for the browser's state.
     fn tree(&self) -> Box<dyn Widget> {
         let b = &self.browser;
@@ -151,10 +166,7 @@ impl Sheet {
                 None => TextField::new(NAME, &b.name),
             }));
         }
-        let (sentence, line) = match b.pending() {
-            Some(g) => (b.sentence(), g.line),
-            None => (b.sentence(), String::new()),
-        };
+        let (sentence, line) = (b.sentence(), self.shown_line());
         let mut s = Label::new(&sentence);
         s.secondary = true;
         column.push(Box::new(s));
@@ -210,6 +222,11 @@ impl Sheet {
                 return Some(Outcome::Cancelled(answer::CANCELLED));
             }
             Happened::Ui { window, response } if window == self.window => response,
+            Happened::Commands(on) => {
+                self.commands = on;
+                self.refresh(app);
+                return None;
+            }
             _ => return None,
         };
         let step = match response {
@@ -281,7 +298,7 @@ impl Sheet {
         &mut self,
         fs: &mut Client<L>,
         root: L::Handle,
-        g: Grant,
+        g: Box<Grant>,
     ) -> Outcome<L::Handle> {
         let rights = g.rights();
         let made = match (&g.access, &g.name) {

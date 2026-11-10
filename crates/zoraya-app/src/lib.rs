@@ -78,6 +78,8 @@ pub enum Happened {
     Copy { window: u32, cut: bool },
     /// The person pasted into `window`: [`App::take_paste`] gives the text.
     Pasted(u32),
+    /// The show-commands mode turned on or off (to system clients only).
+    Commands(bool),
 }
 
 /// A dropped entry (ADR-0170): the connection, its display name
@@ -125,6 +127,8 @@ pub struct App<P: Platform> {
     serial: u32,
     /// The text of the last `Paste`, until taken.
     pasted: Option<alloc::string::String>,
+    /// The show-commands mode, as the compositor last said (system clients).
+    pub commands: bool,
     /// The theme the windows are painted in, and whether they may move
     /// (`Configure`, ADR-0169).
     pub appearance: Appearance,
@@ -163,6 +167,7 @@ impl<P: Platform> App<P> {
             held: None,
             serial: 0,
             pasted: None,
+            commands: false,
             appearance,
             motion: true,
         };
@@ -606,6 +611,11 @@ impl<P: Platform> App<P> {
                     window: c.window,
                     cut: c.cut,
                 })
+            }
+            29 => {
+                let (_, c) = decode::<gui::Commands>(got, 0).ok()?;
+                self.commands = c.on;
+                Some(Happened::Commands(c.on))
             }
             28 => {
                 let (_, p) = decode::<gui::Paste<'_>>(got, 0).ok()?;

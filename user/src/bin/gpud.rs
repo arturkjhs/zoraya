@@ -267,11 +267,14 @@ impl Driver {
         match header.ordinal {
             1 if decode::<Info>(bytes, received).is_ok() => {
                 let (width, height) = self.gpu.size();
+                let (width_mm, height_mm) = self.gpu.millimetres();
                 let m = InfoReply {
                     status: Below(status::OK),
                     width,
                     height,
                     format: FORMAT_XRGB,
+                    width_mm,
+                    height_mm,
                 };
                 self.respond(t, &m);
                 self.announce.info((width, height));

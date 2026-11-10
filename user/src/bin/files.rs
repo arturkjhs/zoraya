@@ -6,7 +6,9 @@
 //!
 //! Launched by the panel (`zoraya_panel::application`): slot 1 the
 //! console, 5 its compositor channel, 6 its chooser channel (unused), 7 its
-//! data directory, 8 the volume's root, 9 its channel to the panel.
+//! data directory, 9 its channel to the panel, and its start-up record: the
+//! volume to read and what it may change, `~` in `home` or the room's grants
+//! (INV-0168-2 as changed on 2026-11-10; never `/config`, INV-0169-4).
 
 #![no_std]
 #![no_main]
@@ -65,10 +67,47 @@ fn tree(m: &Manager, status: &str, name: &str) -> Box<dyn Widget> {
     ]))
 }
 
+/// The places the start-up record gives, as absolute paths with their
+/// connections: a path is opened through the one with the longest prefix
+/// that covers it.
+struct Places(Vec<(String, Handle)>);
+
+impl Places {
+    fn take() -> Places {
+        let mut v = Vec::new();
+        if let Some(ns) = zoraya_user::namespace::take() {
+            for e in ns.entries {
+                if let Some(f) = e.file {
+                    v.push((e.path, f.end));
+                    core::mem::forget(f);
+                }
+            }
+        }
+        Places(v)
+    }
+
+    /// The volume's root, read only.
+    fn root(&self) -> Option<Handle> {
+        self.0.iter().find(|(p, _)| p == "/").map(|(_, h)| *h)
+    }
+
+    fn open(
+        &self,
+        fs: &mut Client<Files>,
+        path: &str,
+        flags: u32,
+        wanted: u32,
+    ) -> Result<Handle, zoraya_fsclient::Status> {
+        let (i, rest) = zoraya_resolve::longest(self.0.iter().map(|(p, _)| p.as_str()), path)
+            .ok_or(zoraya_proto_file::status::ACCESS_DENIED)?;
+        fs.open(self.0[i].1, rest, flags, wanted)
+    }
+}
+
 /// The folder `dir`'s names, or why not.
-fn list(fs: &mut Client<Files>, root: Handle, dir: &str) -> Result<Vec<Entry>, String> {
-    let d = fs
-        .open(root, dir, open_flags::DIRECTORY, rights::READ)
+fn list(fs: &mut Client<Files>, root: &Places, dir: &str) -> Result<Vec<Entry>, String> {
+    let d = root
+        .open(fs, dir, open_flags::DIRECTORY, rights::READ)
         .map_err(|e| format!("{dir}: cannot open ({e})"))?;
     let listed = fs.list(d);
     fs.close(d);
@@ -86,12 +125,12 @@ fn list(fs: &mut Client<Files>, root: Handle, dir: &str) -> Result<Vec<Entry>, S
 /// Hands `path` to the panel with one read-only connection.
 fn open_with(
     fs: &mut Client<Files>,
-    root: Handle,
+    root: &Places,
     panel: Handle,
     path: &str,
     words: &str,
 ) -> String {
-    let file = match fs.open(root, path, 0, rights::READ | rights::CLONE) {
+    let file = match root.open(fs, path, 0, rights::READ | rights::CLONE) {
         Ok(f) => f,
         Err(e) => return format!("{path}: cannot open ({e})"),
     };
@@ -141,8 +180,8 @@ fn open_with(
 }
 
 /// Starts a drag of `path` from `window`, with one read-only connection.
-fn drag(app: &mut App<Gui>, fs: &mut Client<Files>, root: Handle, window: u32, path: &str) {
-    let Ok(file) = fs.open(root, path, 0, rights::READ | rights::CLONE) else {
+fn drag(app: &mut App<Gui>, fs: &mut Client<Files>, root: &Places, window: u32, path: &str) {
+    let Ok(file) = root.open(fs, path, 0, rights::READ | rights::CLONE) else {
         return;
     };
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -162,16 +201,19 @@ fn say_listed(m: &Manager) {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let channel = |slot: u64| Handle::new(slot).filter(|h| handle_type(*h) == Ok("channel"));
-    let (Some(compositor), Some(root), Some(panel)) = (channel(5), channel(8), channel(9)) else {
-        println!("files: missing the compositor, the root or the panel");
+    let places = Places::take();
+    let (Some(compositor), Some(volume), Some(panel)) = (channel(5), places.root(), channel(9))
+    else {
+        println!("files: missing the compositor, the volume or the panel");
         return 1;
     };
+    let root = &places;
     let Some(mut app) = App::connect(Gui::new(compositor), Appearance::Light) else {
         println!("files: no compositor");
         return 1;
     };
     let mut fs = Client::new(Files);
-    let home = zoraya_user::app::home(&mut fs, root);
+    let home = zoraya_user::app::home(&mut fs, volume);
     let mut m = Manager::new(&home, &home);
     let mut status = String::new();
     match list(&mut fs, root, &home) {
@@ -246,8 +288,13 @@ fn main() -> i32 {
             }
             Act::OpenWith { path, words } => open_with(&mut fs, root, panel, &path, &words),
             Act::MakeDirectory { dir, name } => {
-                let r = fs
-                    .open(root, &dir, open_flags::DIRECTORY, rights::ALL)
+                let r = root
+                    .open(
+                        &mut fs,
+                        &dir,
+                        open_flags::DIRECTORY,
+                        rights::ALL & !rights::PUBLISH,
+                    )
                     .and_then(|d| {
                         let r = fs.make_directory(d, &name);
                         fs.close(d);
@@ -261,8 +308,13 @@ fn main() -> i32 {
                 }
             }
             Act::Rename { dir, old, new } => {
-                let r = fs
-                    .open(root, &dir, open_flags::DIRECTORY, rights::ALL)
+                let r = root
+                    .open(
+                        &mut fs,
+                        &dir,
+                        open_flags::DIRECTORY,
+                        rights::ALL & !rights::PUBLISH,
+                    )
                     .and_then(|d| {
                         let r = fs.rename(d, &old, &new);
                         fs.close(d);
@@ -276,8 +328,13 @@ fn main() -> i32 {
                 }
             }
             Act::Remove { dir, name } => {
-                let r = fs
-                    .open(root, &dir, open_flags::DIRECTORY, rights::ALL)
+                let r = root
+                    .open(
+                        &mut fs,
+                        &dir,
+                        open_flags::DIRECTORY,
+                        rights::ALL & !rights::PUBLISH,
+                    )
                     .and_then(|d| {
                         let r = fs.remove(d, &name);
                         fs.close(d);
