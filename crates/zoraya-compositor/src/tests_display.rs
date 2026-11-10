@@ -30,7 +30,7 @@ fn inside(s: &Setup, r: Rect) -> bool {
 fn a_new_size_is_attached_with_its_scale_and_the_windows_follow() {
     let mut s = setup();
     let end = s.client(64);
-    let id = s.window_of(end, 400, 300, 0x0040_4040);
+    let id = s.window_of(end, 400, 280, 0x0040_4040);
     s.f().take(end);
     let attaches = s.f().attaches;
     let shown = s.f().shown;
@@ -45,7 +45,7 @@ fn a_new_size_is_attached_with_its_scale_and_the_windows_follow() {
     let c = configures(&s.f().take(end));
     assert_eq!(
         (c[0].width, c[0].height, c[0].scale),
-        (400, 300, 1),
+        (400, 280, 1),
         "configured again at its size"
     );
     // Everything is drawn again, to the new size's edge.
@@ -56,7 +56,7 @@ fn a_new_size_is_attached_with_its_scale_and_the_windows_follow() {
     resize(&mut s, 2048, 1536);
     assert_eq!(s.c.scale().factor(), 2);
     let c = configures(&s.f().take(end));
-    assert_eq!((c[0].width, c[0].height, c[0].scale), (400, 300, 2));
+    assert_eq!((c[0].width, c[0].height, c[0].scale), (400, 280, 2));
     assert!(inside(&s, s.outer(0, id)));
 
     // Smaller than the window: it shrinks to the work area and stays on it.
@@ -459,6 +459,16 @@ fn a_new_toplevel_never_exceeds_the_work_area() {
         .unwrap()
         .body;
     assert_eq!(body, (c[0].width * 2, c[0].height * 2));
+    // Made smaller where it was to stand: the GUI runner reads the first
+    // window's body there.
+    let r =
+        s.c.window(Key {
+            client: 0,
+            id: created.window,
+        })
+        .unwrap()
+        .body_rect();
+    assert_eq!((r.x, r.y), first_body(zoraya_tokens::Scale::TWO));
     // A window that fits keeps its size.
     let n = (200 * 2 * 100 * 2) as usize;
     let memory = s.f().memory(vec![0; n], n as u64 * 4, false);

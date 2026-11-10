@@ -1881,6 +1881,38 @@ impl<P: Platform> Compositor<P> {
         )
     }
 
+    /// A new toplevel's body: as asked when the work area holds it; else
+    /// made smaller to fit below its cascade place (so the first window's
+    /// body stays at `first_body`), or, where too little is left there, the
+    /// largest body the work area holds.
+    fn fitting_body(&self, bw: u32, bh: u32) -> (u32, u32) {
+        let (w, h) = self.largest_body();
+        let s = i64::from(self.scale.factor());
+        let f = self.frame();
+        let area = self.work_area();
+        let bar = i64::from(space::BAR_HEIGHT.physical(self.scale));
+        let n = self.windows.iter().filter(|w| w.framed()).count() as i64;
+        let top = bar + i64::from(ORIGIN.1 + CASCADE * n as u32) * s;
+        let left = i64::from(ORIGIN.0 + CASCADE * n as u32) * s;
+        let whole = |v: i64| (v - v.rem_euclid(s)).max(0) as u32;
+        let below = whole(area.bottom() - top - f.title - f.border);
+        let beside = whole(area.right() - left - 2 * f.border);
+        // A window that fits below its cascade place keeps its size; one
+        // that does not is made smaller to fit there while at least half
+        // the work area is left, else it keeps what the work area holds
+        // and `place` moves it up.
+        let fit = |asked: u32, most: u32, room: u32| -> u32 {
+            if asked <= room {
+                asked
+            } else if room >= most / 2 {
+                room.max(s as u32)
+            } else {
+                asked.min(most)
+            }
+        };
+        (fit(bw, w, beside), fit(bh, h, below))
+    }
+
     /// Sends a toplevel its size, the scale and the appearance.
     fn configure(&mut self, key: Key) {
         let Some(i) = self.index(key) else { return };
@@ -3047,8 +3079,7 @@ impl<P: Platform> Compositor<P> {
         // 1920 by 1200 ran under the dock). A legacy surface is never
         // resized (ADR-0246).
         let (bw, bh) = if kind == WindowKind::Toplevel {
-            let (w, h) = self.largest_body();
-            (bw.min(w), bh.min(h))
+            self.fitting_body(bw, bh)
         } else {
             (bw, bh)
         };
