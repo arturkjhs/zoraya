@@ -1247,7 +1247,7 @@ impl Painter<'_> {
         self.clear_dock(DOCK_REST, RUN_FILES_EDIT, Some(&PROJECT));
     }
 
-    fn pointer(&mut self, x: f32, y: f32) {
+    pub(crate) fn pointer(&mut self, x: f32, y: f32) {
         let fg = self.c("fg.text");
         let bg = self.c("bg.view");
         let pts = [
