@@ -85,6 +85,10 @@ case; nothing else of either.
 - The threshold of 150 pixels per inch and the 1280 pixels: chosen, not measured on a person's eyes; to be seen by
   hand with `make run-gui`.
 
+- A change of density alone (the window moved to a screen of another density at the same pixel size) is not
+  followed: `gpud` tells a new size only when the pixels change, and the compositor takes the physical size with it
+  (review of the fix branch, 9).
+
 ## Revisit triggers
 - A second display, or a display whose EDID lies about its size.
 

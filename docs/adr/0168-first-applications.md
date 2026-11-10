@@ -81,6 +81,10 @@ A POSIX program launched from the desktop runs in the broker's session with a te
   enumerate what every launch the panel makes holds (`files` alone gets the root; a terminal's shell its room's
   grants, ADR-0242's condition). The in-QEMU half (`edit` cannot reach a name outside its data directory) waits for
   `edit` (7f).
+- *(Check note, 2026-11-10, ADR-0001 rule 6.)* INV-0168-2 as changed: `zoraya-panel`'s host tests enumerate
+  `files`' holds in `home` and in rooms, with `shell.home` at `/` and under `/config` (`confine_files`). The in-QEMU
+  half for `files` (a change in `/config` refused) comes with the file manager of stage 7h, whose GUI test reaches
+  `/config` through its sidebar; until then the row's status is the host half.
 - Whether the panel and `init`'s session table should be one program (ADR-0097 Option C's session launcher): the panel is that launcher for applications; `init` keeps drivers.
 - File types by extension is an assumption; a type registry is a later ADR.
 - *(Check note, stage 7d, ADR-0001 rule 6.)* INV-0168-2's check waits for `/system/apps` and its launch records and for

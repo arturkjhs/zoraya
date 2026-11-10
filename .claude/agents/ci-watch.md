@@ -14,8 +14,8 @@ Setup: `export PATH=/opt/homebrew/bin:$PATH`; run from the repository root; `gh`
    `gh run list --workflow test.yml --branch NAME --limit 1 --json databaseId,status,conclusion,headSha`.
 2. Wait for it without streaming its output into the session: poll
    `gh run view ID --json status,conclusion` every 60 to 120 seconds (with `sleep` inside one Bash call of at most
-   9 minutes, `perl -e 'alarm 540; exec @ARGV' sh -c '...'`), until `status` is `completed`. Full runs take 20 to 60
-   minutes.
+   9 minutes, `perl -e 'alarm 540; exec @ARGV' sh -c '...'`), until `status` is `completed`. Where the session
+   refuses a foreground `sleep`, use the Monitor tool with an until-loop instead. Full runs take 20 to 60 minutes.
 3. Report, in at most 30 lines:
    - the run id, the commit (`headSha`, short) and the conclusion;
    - on failure, each failing job's name (`gh run view ID --json jobs --jq '.jobs[] | select(.conclusion=="failure") | .name'`);

@@ -455,3 +455,27 @@ fn terminal_at_refuses_odd_paths_and_only_files_gets_a_room_argument() {
         );
     }
 }
+
+/// Review of the fix branch, 2: with `shell.home` at `/` or under
+/// `/config`, `files`' `~` is given to read only.
+#[test]
+fn files_gets_no_config_through_its_home() {
+    for home in ["/", "/config", "/config/me"] {
+        let mut l = application(None, "files", None);
+        confine_files(&mut l, home);
+        assert_eq!(
+            l.holds,
+            [(String::from("/"), false), (String::from("~"), false)],
+            "{home}"
+        );
+        assert_eq!(l.entries, ["+r /", "+r ~", "+w /data/home/files"]);
+    }
+    let mut l = application(None, "files", None);
+    confine_files(&mut l, "/home/ann");
+    assert_eq!(l.holds[1], (String::from("~"), true));
+    assert_eq!(l.entries, ["+r /", "+w ~", "+w /data/home/files"]);
+    // Only `files`: a terminal in home keeps /config for `settings`.
+    let mut t = terminal(None);
+    confine_files(&mut t, "/");
+    assert!(t.holds.contains(&(String::from("/config"), true)));
+}
