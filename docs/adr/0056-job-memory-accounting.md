@@ -1,6 +1,6 @@
 # ADR-0056: Memory accounting by job
 
-- **Status:** proposed
+- **Status:** rejected
 - **Date:** 2026-11-01
 - **Depends on:** ADR-0003, ADR-0004, ADR-0006, ADR-0021, ADR-0022, ADR-0032, ADR-0040, ADR-0041, ADR-0046, ADR-0050, ADR-0051, ADR-0053, ADR-0054, ADR-0055
 - **Evidence:** DM-023, CP-07, CP-14, DM-030, DM-034, DM-100, DM-111, X-6, alternatives-postmortem.md#genode, alternatives-postmortem.md#l4-family-and-sel4, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, stage-4/sources.md#quotas
@@ -128,3 +128,5 @@ For target 1 it is not needed, since every process is trusted. For target 2 it i
 - Lazy commit, or a workload whose idle carved memory matters.
 
 ## Architect's decision
+
+Rejected 2026-11-10. Decided by the architect; recorded by an agent at the architect's request. Replaced by ADR-0260 to ADR-0270 (TASK-25); ADR-0261's Context says why this ADR was not revised in place. Reading rule: "ADR-0056" in an accepted ADR or in `docs/design.md` means ADR-0260 to ADR-0270.
