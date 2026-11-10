@@ -125,7 +125,7 @@ pub enum Step {
     /// List the new `path` (the program calls [`Browser::show`]).
     List,
     /// The person confirmed: make this grant.
-    Confirm(Grant),
+    Confirm(alloc::boxed::Box<Grant>),
 }
 
 impl Browser {
@@ -332,7 +332,7 @@ impl Browser {
     /// the grant, if one can be made.
     pub fn confirm(&self) -> Step {
         match self.pending() {
-            Some(g) => Step::Confirm(g),
+            Some(g) => Step::Confirm(alloc::boxed::Box::new(g)),
             None => Step::None,
         }
     }

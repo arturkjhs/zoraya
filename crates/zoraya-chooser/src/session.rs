@@ -38,7 +38,7 @@ const CONFIRM: u32 = 5;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome<H> {
     /// The person confirmed: the connection made with the grant's rights.
-    Chosen { handle: H, grant: Grant },
+    Chosen { handle: H, grant: Box<Grant> },
     /// Nothing given, and why (`zoraya-proto-chooser`'s `status`).
     Cancelled(u32),
 }
@@ -298,7 +298,7 @@ impl Sheet {
         &mut self,
         fs: &mut Client<L>,
         root: L::Handle,
-        g: Grant,
+        g: Box<Grant>,
     ) -> Outcome<L::Handle> {
         let rights = g.rights();
         let made = match (&g.access, &g.name) {
