@@ -6,6 +6,7 @@
 
 pub mod canvas;
 pub mod clear;
+pub mod files;
 pub mod png;
 pub mod raster;
 pub mod scene;

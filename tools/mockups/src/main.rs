@@ -54,7 +54,7 @@ fn render(out: &Path, direction: &str, fonts_dir: &Path, scales: &[usize]) -> Re
         ("settings", |p| p.screen_settings()),
         ("switcher", |p| p.screen_switcher()),
     ];
-    let clear: [(&str, Screen); 12] = [
+    let clear: [(&str, Screen); 16] = [
         ("desktop", |p| p.clear_desktop()),
         ("grants", |p| p.clear_grants()),
         ("drop", |p| p.clear_drop()),
@@ -67,6 +67,10 @@ fn render(out: &Path, direction: &str, fonts_dir: &Path, scales: &[usize]) -> Re
         ("dock", |p| p.clear_dock_screen()),
         ("dock-compare", |p| p.clear_dock_compare()),
         ("trust", |p| p.clear_trust()),
+        ("files", |p| p.clear_files()),
+        ("files-select", |p| p.clear_files_select()),
+        ("files-rename", |p| p.clear_files_rename()),
+        ("files-delete", |p| p.clear_files_delete()),
     ];
     let table: &[(&str, Screen)] = match tokens.str("concept") {
         "classic" => &classic,
