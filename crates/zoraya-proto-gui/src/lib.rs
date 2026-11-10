@@ -468,7 +468,7 @@ pub const CLIENT_REQUESTS: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1
 /// The client requests only a system client may send (proposed ADR-0245).
 pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 13] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28];
+pub const CLIENT_EVENTS: [u32; 14] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:

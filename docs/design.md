@@ -657,8 +657,7 @@ and [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md), with the proposed
   sheet at a time; other requests wait.
 - **The data directory**: the panel makes `/data/ROOM/APP` (`/data/home/APP` in `home`) and gives it at slot 7 with
   every right but publish.
-- **The file manager** (`files`, its logic in `zoraya-files`): a folder's list (folders first), Up, Open, New
-  folder, Rename and Delete (asked twice). It holds the volume to read and, to change, `~` in `home` or its room's
+- **The file manager** (`files`, its logic and window in `zoraya-files`; redesigned in 7h, below). It holds the volume to read and, to change, `~` in `home` or its room's
   grants, in a start-up record, never `/config` (INV-0168-2 as changed on 2026-11-10), and opens a file only through
   the panel:
   `OpenWith` with a connection, which the panel clones down to read and clone, then launches the application for the
@@ -763,6 +762,44 @@ the M4 Mac mini): each new size costs the wallpaper and its blur once, then a fu
 Not built in 7g: a window a client creates larger than the work area is not made smaller (at 1920 × 1200 the
 terminal's 80 × 24 runs under the dock); popups do not learn a new scale (they close instead); the compositor's
 `call` still takes the next message as its reply, so the handshake's order rests on `gpud` (review 7g, A).
+
+## The file manager (as built)
+
+Stage 7h (TASK-24, the architect's request and the approved mockups
+`docs/research/desktop/mockups/clear-field/files*.png`), with proposed [ADR-0248](adr/0248-what-the-file-manager-needs.md):
+
+- **`zoraya-files`**: `model` holds the folder shown and its items (name, size, modified), the view sorted by a column
+  (folders first; a header click sorts, again reverses) and filtered by the search, the selection (click, Shift for a
+  range from the anchor, Command or Ctrl to add or take away), the cursor, back and forward, rename in place (F2 or
+  Enter on the menu; the stem selected; Enter keeps, Escape leaves), delete asked first in a card, a new folder ("New
+  folder", "New folder 2", ...), the context menu with each item's `zosh` line (`edit`, `mv`, `rm`, `mkdir`, `room
+  NAME term · cd`), drops on its own folders, and the status line; every request is an `Act`. `view` is one
+  `zoraya-ui` widget drawing the toolbar (back, forward, up, the path as crumbs, search), the sidebar of places with
+  `+w` or `+r`, the list with its header, the status line with free space, the menu and the card, in the mockup's
+  measures at both scales. A place's room colour is not drawn by the application (ADR-0172: colour means a room, and
+  the compositor alone draws it): a neutral ring marks the room's own grants.
+- **`files`** carries out each act: lists through its places (the longest that covers a path; a place's write right
+  found by asking the service for a connection that writes), opens a file through the panel (`OpenWith`, with
+  `app: edit` for Open in edit), asks the panel for a terminal at a folder (`OpenTerminal`), offers a path to the
+  clipboard (an unasked `Offer` within a second of the menu's click), moves within a place (`rename_into` with the
+  target's token) and copies otherwise or with Option (a folder whole, at most 4096 entries and 32 deep), deletes a
+  folder whole, starts drags, and on `DragEnded` over one of its own folders copies or moves the selection there. It
+  prints its holds, every status line and every order on the console for the GUI tests.
+- **ADR-0248 (proposed)**: System chords the compositor does not take (`TAKEN_CHORDS`) reach the focused client with
+  `SYSTEM`; `WindowPointer` carries the modifiers; `Commands` goes to every client; one unasked `Offer` within
+  `GESTURE_OFFER_NS` of a press or key in the client's focused window; `DragEnded` carries the place of a drop on the
+  source's own window; `FreeSpace` in the file protocol; `OpenTerminal` launches a terminal in the caller's room at a
+  path that room's holds cover (`terminal_at`).
+- **Tests**: `zoraya-files`' host tests (the model, the view's hit-testing, gestures through the widget, painting at
+  both scales); `tests/gui/files-manage.script` (99 steps, HVF and TCG): selection, sorting, the keyboard, search,
+  rename, a new folder, delete with its card, a drag that moves and one that copies, a double click, the menu's Copy
+  path and Open terminal here, show-commands mode, up, back and the places; `tests/gui/files.script` as in 7e, with
+  the file manager tiled so that the drop lands on `t_open`. The runner gained `dclick`, `rclick`, `mclick`, `mdrag`
+  and chords of several modifiers.
+
+Not built in 7h: a trash (`docs/backlog.md`); moving or copying several files by a drag to another window (a drop
+carries one file, ADR-0170); a scroll wheel (the list follows the keyboard's cursor); the window's title stays
+"Files".
 
 ## Cross toolchain and ports (as built)
 
@@ -1245,9 +1282,12 @@ scale is 2, from 1280 on a Retina screen, proposed ADR-0247), and Command is the
   click it.
 - **Terminal.** `zosh`, with the commands of `make run` (Using the shell, below); Shift with Page Up or Page Down
   scrolls back. `exit` closes it; in the first terminal `init` opens a new one; `poweroff` turns the machine off.
-- **Files.** Your home folder: a row opens a folder or opens a file with its application (`.txt` and `.md` in Edit),
-  read only; New folder, Rename and Delete (asked twice) act on the folder shown; drag a file onto a window to give
-  it that file to read (its frame then shows `dropped: NAME read`).
+- **Files.** Your home folder (in a room, its places), as the 7h mockups draw it: double-click a folder to enter it
+  or a file to open it with its application (`.txt` and `.md` in Edit), read only; click, Shift-click and
+  Command-click select; the headers sort; arrows, Enter, Command+Up, F2 to rename in place, Delete (asked first),
+  Command+Shift+N for a new folder; type to search; right-click for the menu (Open in edit, Copy path, Open terminal
+  here); drag a file onto a folder to move it (Option: copy), onto a window to give it that file to read (its frame
+  then shows `dropped: NAME read`).
 - **Edit.** Open… and Save as… show the chooser's sheet under the window: pick a file, or a name in a folder, and
   only that is given to Edit (the frame's pills show it). Save writes to the name chosen; Find selects the next
   match; Ctrl+Z undoes, Ctrl+Y redoes, Ctrl+A selects all. Closing with unsaved changes asks first.

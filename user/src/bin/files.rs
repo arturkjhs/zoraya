@@ -314,8 +314,13 @@ impl FileManager {
 
     /// Lists `dir` into the model; on a failure says why and stays.
     fn show(&mut self, dir: &str) -> bool {
+        let start = clock_monotonic();
         match list(&mut self.fs, &self.places, dir) {
             Ok(items) => {
+                // A folder's listing with each item's size and time (7h's
+                // measurement, design.md).
+                let us = clock_monotonic().saturating_sub(start) / 1000;
+                println!("files: listed {} items in {us} us", items.len());
                 let mut m = self.model.borrow_mut();
                 m.show(dir, items);
                 let names: Vec<String> = m
