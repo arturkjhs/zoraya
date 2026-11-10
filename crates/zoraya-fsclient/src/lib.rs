@@ -230,6 +230,12 @@ impl<L: Link> Client<L> {
     }
 
     /// The object's size in bytes and its kind.
+    /// The volume's free bytes (proposed ADR-0248).
+    pub fn free_space(&mut self, conn: L::Handle) -> Result<u64, Status> {
+        let length = self.call(conn, &proto::FreeSpace {}, &[])?;
+        self.done(length)
+    }
+
     pub fn attributes(&mut self, conn: L::Handle) -> Result<(u64, u32), Status> {
         let length = self.call(conn, &proto::GetAttributes {}, &[])?;
         match decode::<proto::Attributes>(&self.reply[..length], 0) {

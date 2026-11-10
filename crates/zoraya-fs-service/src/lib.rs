@@ -883,6 +883,13 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 let peak = self.peak_used.max(self.volume.used_blocks().unwrap_or(0));
                 self.done(i, t, s, peak * BLOCK_SIZE as u64);
             }
+            37 => {
+                decode::<proto::FreeSpace>(bytes, n)?;
+                // Free blocks, as the volume's space map counts them; on any
+                // connection (proposed ADR-0248), like `Status`.
+                let free = self.volume.free_blocks().unwrap_or(0);
+                self.done(i, t, status::OK, free * BLOCK_SIZE as u64);
+            }
             17 => {
                 decode::<proto::CorruptReads>(bytes, n)?;
                 let count = self

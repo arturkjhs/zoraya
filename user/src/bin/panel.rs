@@ -153,11 +153,11 @@ struct State {
     chooser: Option<Handle>,
     next_tag: u32,
     port: Handle,
-    /// The channels of running file managers, watched for `OpenWith`.
-    /// Each launcher channel and the application it was given to: `files`
-    /// may ask `OpenWith`, `settings` `SettingsChanged`, nothing else
-    /// (review 7f, 8).
-    launchers: Vec<Option<(Handle, &'static str)>>,
+    /// Each launcher channel, the application it was given to and the room
+    /// it was launched in (`None` is `home`): `files` may ask `OpenWith` and
+    /// `OpenTerminal`, `settings` `SettingsChanged`, nothing else (review
+    /// 7f, 8).
+    launchers: Vec<Option<(Handle, &'static str, Option<String>)>>,
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -262,12 +262,13 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     // What the shell holds: its room's grants or home's, never the root
     // (ADR-0242's condition); it starts in the first it may change.
     let home = st.root.as_ref().map(zoraya_user::namespace::shell_home);
-    let cwd = l
-        .holds
-        .iter()
-        .find(|(_, w)| *w)
-        .map(|(p, _)| p.as_str())
-        .unwrap_or("/");
+    let cwd = l.cwd.as_deref().unwrap_or_else(|| {
+        l.holds
+            .iter()
+            .find(|(_, w)| *w)
+            .map(|(p, _)| p.as_str())
+            .unwrap_or("/")
+    });
     let data_path = zoraya_panel::data_dir(room, l.app);
     // A broker beside the shell, on a volume with /bin (ADR-0153 rule 10):
     // it ends when the shell's client closes and nothing it started runs.
@@ -326,7 +327,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         });
         if let Some(ours) = launcher {
             if ok {
-                watch_launcher(st, ours, l.app);
+                watch_launcher(st, ours, l.app, l.room.as_ref().map(|r| r.name.clone()));
             } else {
                 let _ = handle_close(ours);
             }
@@ -350,7 +351,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     }
 }
 
-fn watch_launcher(st: &mut State, end: Handle, app: &'static str) {
+fn watch_launcher(st: &mut State, end: Handle, app: &'static str, room: Option<String>) {
     let i = match st.launchers.iter().position(Option::is_none) {
         Some(i) => i,
         None => {
@@ -360,7 +361,7 @@ fn watch_launcher(st: &mut State, end: Handle, app: &'static str) {
     };
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     if port_subscribe(st.port, end, wanted, KEY_LAUNCHER + i as u64, Mode::Level).is_ok() {
-        st.launchers[i] = Some((end, app));
+        st.launchers[i] = Some((end, app, room));
     } else {
         let _ = handle_close(end);
     }
@@ -393,8 +394,8 @@ fn apply_settings(st: &State) -> bool {
 /// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
 /// `SettingsChanged` from the settings window: the file is read and sent
 /// to the compositor.
-fn launcher_requests(st: &mut State, i: usize) {
-    let Some((end, app)) = st.launchers[i] else {
+fn launcher_requests(st: &mut State, i: usize, panel: &Panel) {
+    let Some((end, app, room)) = st.launchers[i].clone() else {
         return;
     };
     let mut bytes = alloc::vec![0u8; 2048];
@@ -427,6 +428,34 @@ fn launcher_requests(st: &mut State, i: usize) {
                 } else {
                     zoraya_proto_chooser::status::FAILED
                 }),
+            };
+            let mut out = [0u8; 64];
+            if let Ok(n) = encode(&r, t, &mut out) {
+                let _ = channel_write(end, &out[..n], &[]);
+            }
+            continue;
+        }
+        // A terminal at a folder, in the file manager's own room (proposed
+        // ADR-0248): only where that room's holds reach.
+        if app == "files"
+            && let Ok((_, m)) = decode::<zoraya_proto_chooser::OpenTerminal<'_>>(msg, got.len())
+        {
+            let path = core::str::from_utf8(m.path.0).unwrap_or("");
+            let home = st.root.as_ref().map(zoraya_user::namespace::shell_home);
+            let room_rec = room.as_ref().and_then(|n| panel.rooms.get(n)).cloned();
+            let status = match zoraya_panel::terminal_at(
+                room_rec.as_ref(),
+                path,
+                home.as_deref().unwrap_or("/home"),
+            ) {
+                Some(l) => {
+                    launch(st, &l, None);
+                    0
+                }
+                None => zoraya_proto_chooser::status::FAILED,
+            };
+            let r = zoraya_proto_chooser::TerminalOpened {
+                status: zoraya_protocol::Below(status),
             };
             let mut out = [0u8; 64];
             if let Ok(n) = encode(&r, t, &mut out) {
@@ -547,7 +576,7 @@ fn main() -> i32 {
             }
         }
         for i in 0..st.launchers.len() {
-            launcher_requests(&mut st, i);
+            launcher_requests(&mut st, i, &panel);
         }
         if clock_monotonic() >= next_reload {
             if reload(&mut panel, st.root.as_ref()) {

@@ -2300,3 +2300,26 @@ fn a_narrowed_name_that_is_a_directory_opens_to_read_only() {
         assert_eq!(s, status::OK, "{wanted:#x}");
     }
 }
+
+/// Proposed ADR-0248: `FreeSpace` gives the volume's free bytes on any
+/// connection, and a write that takes blocks makes it smaller.
+#[test]
+fn free_space_counts_the_volumes_free_blocks() {
+    let mut r = rig();
+    let root = r.root;
+    let (s, before) = r.done(root, &proto::FreeSpace {}, vec![]);
+    assert_eq!(s, status::OK);
+    assert!(before > 0);
+    assert_eq!(before % 4096, 0, "whole blocks");
+    let f = r.open(root, "big", open_flags::CREATE);
+    let data = vec![7u8; 4096];
+    for k in 0..16u64 {
+        r.write_text(f, k * data.len() as u64, 0, &data);
+    }
+    // Blocks are taken at the commit.
+    assert_eq!(r.done(root, &proto::Sync {}, vec![]).0, status::OK);
+    let (_, after) = r.done(root, &proto::FreeSpace {}, vec![]);
+    assert!(after < before, "{after} < {before}");
+    // A file connection asks as well.
+    assert_eq!(r.done(f, &proto::FreeSpace {}, vec![]).0, status::OK);
+}

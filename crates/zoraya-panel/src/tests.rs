@@ -368,3 +368,44 @@ fn files_never_gets_config_to_change() {
     assert!(!reaches_config("/configs"));
     assert!(!reaches_config("~"));
 }
+
+/// Proposed ADR-0248, INV-0248-4: Open terminal here launches a terminal
+/// in the file manager's room at the folder, only where that room's holds
+/// reach.
+#[test]
+fn a_terminal_opens_at_a_folder_only_inside_its_rooms_holds() {
+    let mut p = Panel::default();
+    assert!(p.reload(ROOMS));
+    let project = p.rooms.get("project").cloned();
+    let l = terminal_at(project.as_ref(), "/home/ann/project/src", "/home/ann").unwrap();
+    assert_eq!(l.cwd.as_deref(), Some("/home/ann/project/src"));
+    assert_eq!(l.room.as_ref().map(|r| r.name.as_str()), Some("project"));
+    assert_eq!(l.line, "room project term");
+    // `~` is the shell's home.
+    let l = terminal_at(project.as_ref(), "~/include", "/home/ann").unwrap();
+    assert_eq!(l.cwd.as_deref(), Some("/home/ann/include"));
+    // The toolchain the room's shell reads is a hold too.
+    assert!(terminal_at(project.as_ref(), "/usr/include", "/home/ann").is_some());
+    // Outside the room: refused.
+    for bad in [
+        "/home/ann",
+        "/home/ann/other",
+        "/config",
+        "~/project/../secret",
+        "",
+        "rel/path",
+        "/home/ann/project\n",
+    ] {
+        assert!(
+            terminal_at(project.as_ref(), bad, "/home/ann").is_none(),
+            "{bad:?}"
+        );
+    }
+    // In home the volume is read, so any folder; the home terminal's
+    // record is home's.
+    let l = terminal_at(None, "/system", "/home/ann").unwrap();
+    assert_eq!(l.cwd.as_deref(), Some("/system"));
+    assert_eq!(l.holds, terminal(None).holds);
+    // An ordinary launch has no current directory of its own.
+    assert!(terminal(None).cwd.is_none());
+}
