@@ -414,3 +414,66 @@ fn scale_for_counts_the_density() {
     assert_eq!(scale_for(1919, 0), Scale::ONE);
     assert_eq!(scale_for(1920, 1000), Scale::TWO);
 }
+
+/// The 7g check: at 1920 by 1200 (scale 2) a terminal of 80 by 24 asked
+/// for more than the work area and ran under the dock. A toplevel is made
+/// to fit the work area at its creation, and told so in its `Configure`.
+#[test]
+fn a_new_toplevel_never_exceeds_the_work_area() {
+    let mut s = setup_with(|f| f.display_size = (1920, 1200));
+    assert_eq!(s.c.scale().factor(), 2);
+    let end = s.client(64);
+    // Logical 900 by 560: wider and taller than 960 by 600 less the bar,
+    // the dock and the frame.
+    let (lw, lh) = (900u32, 560u32);
+    let n = (lw * 2 * lh * 2) as usize;
+    let memory = s.f().memory(vec![0x0012_3456; n], n as u64 * 4, false);
+    let m = gui::CreateToplevel {
+        width: lw,
+        height: lh,
+    };
+    s.f().send(end, message(&m, 5), vec![memory]);
+    s.c.step();
+    let out = s.f().take(end);
+    let (_, created) = out
+        .iter()
+        .find_map(|r| decode::<gui::Created>(r, 0).ok())
+        .expect("created");
+    assert_eq!(created.status.0, status::OK);
+    let c = configures(&out);
+    let area = s.c.work_area();
+    let outer = s.outer(0, created.window);
+    assert!(inside(&s, outer), "{outer:?} in {area:?}");
+    // Told a smaller size, in whole logical pixels, at scale 2.
+    assert_eq!(c[0].scale, 2);
+    assert!(
+        c[0].height < lh && c[0].width <= lw,
+        "{:?}",
+        (c[0].width, c[0].height)
+    );
+    let body =
+        s.c.window(Key {
+            client: 0,
+            id: created.window,
+        })
+        .unwrap()
+        .body;
+    assert_eq!(body, (c[0].width * 2, c[0].height * 2));
+    // A window that fits keeps its size.
+    let n = (200 * 2 * 100 * 2) as usize;
+    let memory = s.f().memory(vec![0; n], n as u64 * 4, false);
+    s.f().send(
+        end,
+        message(
+            &gui::CreateToplevel {
+                width: 200,
+                height: 100,
+            },
+            5,
+        ),
+        vec![memory],
+    );
+    s.c.step();
+    let c = configures(&s.f().take(end));
+    assert_eq!((c[0].width, c[0].height), (200, 100));
+}

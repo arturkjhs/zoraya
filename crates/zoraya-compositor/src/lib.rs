@@ -1815,13 +1815,7 @@ impl<P: Platform> Compositor<P> {
         let s = i64::from(k);
         let f = self.frame();
         let area = self.work_area();
-        // The largest body whose frame fits the work area, in whole logical
-        // pixels.
-        let most = |v: i64| (v - v % s).max(s) as u32;
-        let (w, h) = (
-            most(area.width - 2 * f.border),
-            most(area.height - f.title - f.border),
-        );
+        let (w, h) = self.largest_body();
         let keys: Vec<Key> = self
             .windows
             .iter()
@@ -1872,6 +1866,19 @@ impl<P: Platform> Compositor<P> {
             self.configure(key);
             self.place_sheets(key);
         }
+    }
+
+    /// The largest toplevel body whose frame fits the work area, in whole
+    /// logical pixels (physical).
+    fn largest_body(&self) -> (u32, u32) {
+        let s = i64::from(self.scale.factor());
+        let f = self.frame();
+        let area = self.work_area();
+        let most = |v: i64| (v - v % s).max(s) as u32;
+        (
+            most(area.width - 2 * f.border),
+            most(area.height - f.title - f.border),
+        )
     }
 
     /// Sends a toplevel its size, the scale and the appearance.
@@ -3034,6 +3041,17 @@ impl<P: Platform> Compositor<P> {
             return Err(status::NO_MEMORY);
         }
         let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
+        // A toplevel is never larger than the work area: its body is made
+        // to fit, and the `Configure` after `Created` tells the client the
+        // size to draw (the 7g check: a terminal of 80 by 24 at scale 2 on
+        // 1920 by 1200 ran under the dock). A legacy surface is never
+        // resized (ADR-0246).
+        let (bw, bh) = if kind == WindowKind::Toplevel {
+            let (w, h) = self.largest_body();
+            (bw.min(w), bh.min(h))
+        } else {
+            (bw, bh)
+        };
         let (x, y) = self.place(bw, bh);
         if let Some(c) = self.clients[slot].as_mut()
             && kind != WindowKind::Legacy
@@ -3244,17 +3262,20 @@ impl<P: Platform> Compositor<P> {
         let fit = |start: i64, side: i64, low: i64, screen: i64| -> i64 {
             start.min(screen - side).max(low)
         };
+        // Within the work area, above the dock (a toplevel fits it, see
+        // `create`).
+        let area = self.work_area();
         let x = fit(
             i64::from(ORIGIN.0 + CASCADE * n as u32) * s,
             ow,
             0,
-            i64::from(self.width),
+            area.right().min(i64::from(self.width)),
         );
         let y = fit(
             bar + i64::from(ORIGIN.1 + CASCADE * n as u32) * s,
             oh,
             bar,
-            i64::from(self.height),
+            area.bottom().min(i64::from(self.height)),
         );
         (x + f.border, y + f.title)
     }

@@ -531,6 +531,13 @@ fn the_dock_is_never_covered() {
     assert_eq!(s.set_dock(panel, "term\tterm\n"), status::OK);
     let a = s.room_client(panel, "", "edit", "");
     s.window_of(a, 600, 400, 0x00ab_cdef);
+    // A window is placed in the work area; the person drags it down over
+    // the dock's place.
+    let o = s.outer(0, 1);
+    let (w, h) = s.f().display_size;
+    s.point(axis(o.x + 200, w), axis(o.y + 10, h), Some(1));
+    s.point(axis(o.x + 200, w), axis(o.y + 300, h), None);
+    s.point(axis(o.x + 200, w), axis(o.y + 300, h), Some(0));
     let (cell, r) = s.c.dock().cells[0];
     assert_eq!(cell, Cell::App(0));
     let (x, y) = (r.x + r.width / 2, r.y + r.height / 2);
