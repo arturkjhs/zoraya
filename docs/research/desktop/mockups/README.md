@@ -6,8 +6,8 @@ of the concept. The earlier directions (`mist`, `mist-v2`, `quiet`, `night`, `cl
 from the tree in the commit named under "Earlier directions" below, and the tool can still render them from that
 history. No ADR is accepted by this choice: ADR-0160 to ADR-0172 stay proposed and describe the chosen direction.
 
-`clear-field/` holds sixteen screens, each in the light set (`<screen>.png`) and the dark set (`<screen>-dark.png`) at
-scale 1 (1024 × 768), and the desktop and the four file manager screens also at scale 2 (`desktop@2x.png`, `files@2x.png` and the others, 2048 × 1536; the
+`clear-field/` holds eighteen screens, each in the light set (`<screen>.png`) and the dark set (`<screen>-dark.png`) at
+scale 1 (1024 × 768), and the desktop and the six file manager screens also at scale 2 (`desktop@2x.png`, `files@2x.png` and the others, 2048 × 1536; the
 token `screens.2x` names the screens rendered at scale 2). Every image is rendered by `tools/mockups` from
 `clear-field/tokens.txt` (the screens are in `clear.rs`, the shared drawing in `scene.rs`), with the tool's own
 TrueType rasteriser and PNG encoder (no crate), so what is shown is what the tokens say: ADR-0161 proposes the same
@@ -34,6 +34,8 @@ thumbnails' sources and the dialogs' contents are drawn by hand.
 | `files-select` | The list sorted by modified, newest first (the header clicked); a Shift range and one more row picked with Command; the keyboard's cursor ring. |
 | `files-rename` | Rename in place (Enter or F2): a field over the name, the stem selected. |
 | `files-delete` | Delete asks first: the application's own card on its paper (the glow is the compositor's alone), Delete in the error colour. |
+| `files-menu` | The context menu on a file (right-click): Open, Open in edit, Rename, Delete, New folder, Copy path, Open terminal here, with their keys (the architect's additions, 2026-11-10). |
+| `files-menu-commands` | The same menu in show-commands mode: each item's `zosh` line (`edit`, `mv`, `rm`, `mkdir`, `room project term`); Copy path has none. |
 
 To regenerate: `tools/mockups/fetch-fonts.sh` once (needs `curl`, `shasum`, `unzip` and `tar` on the host;
 downloads Inter 4.1, JetBrains Mono 2.304 and DejaVu 2.37 into `build/fonts/`, checking their SHA-256), then

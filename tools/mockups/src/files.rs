@@ -105,7 +105,26 @@ struct State {
     confirm: bool,
     status: &'static str,
     pointer: Option<(f32, f32)>,
+    /// The context menu at a point, and whether show-commands mode is on.
+    menu: Option<(f32, f32, bool)>,
 }
+
+/// The context menu's items on a file: label, shortcut, `zosh` line (the
+/// architect's additions of 2026-11-10). A separator before an item whose
+/// label starts with a tab.
+const MENU: [(&str, &str, &str); 7] = [
+    ("Open", "Enter", "edit ~/project/notes.txt"),
+    ("Open in edit", "", "edit ~/project/notes.txt"),
+    ("\tRename", "F2", "mv ~/project/notes.txt ~/project/NAME"),
+    ("Delete", "Delete", "rm ~/project/notes.txt"),
+    ("\tNew folder", "\u{2318}\u{21e7}N", "mkdir ~/project/NAME"),
+    ("\tCopy path", "", "(the clipboard: no zosh form)"),
+    (
+        "Open terminal here",
+        "",
+        "room project term \u{b7} cd ~/project",
+    ),
+];
 
 const SIDEBAR_W: f32 = 184.0;
 const TOOLBAR_H: f32 = 48.0;
@@ -536,6 +555,58 @@ impl Painter<'_> {
         self.button(dx - bw - 8.0, by, bw, "Cancel", false);
     }
 
+    /// The application's own menu (a popup on its paper: the glow is the
+    /// compositor's alone); in show-commands mode each item with its line.
+    fn files_menu(&mut self, x: f32, y: f32, commands: bool) {
+        let size = self.n("text.body");
+        let cap = self.n("text.caption");
+        let row_h = 26.0;
+        let pad = 6.0;
+        let seps = MENU.iter().filter(|(l, _, _)| l.starts_with('\t')).count() as f32;
+        let w = if commands { 430.0 } else { 236.0 };
+        let h = pad * 2.0 + row_h * MENU.len() as f32 + seps * 9.0;
+        let radius = self.n("radius.popup");
+        let (scrim, paper, border) = (self.c("shadow"), self.c("bg.window"), self.c("border"));
+        let (blur, off, alpha) = (
+            self.n("shadow.popup.blur"),
+            self.n("shadow.popup.offset"),
+            self.n("shadow.popup.alpha") as u8,
+        );
+        self.canvas
+            .shadow(x, y, w, h, radius, blur, off, scrim, alpha);
+        self.canvas.rounded_rect(x, y, w, h, radius, paper);
+        self.canvas
+            .stroke_rounded_rect(x, y, w, h, radius, 1.0, border);
+        let (fg, sec) = (self.c("fg.text"), self.c("fg.text.secondary"));
+        let sel = self.c("bg.selection");
+        let mut yy = y + pad;
+        for (i, (label, key, line)) in MENU.iter().enumerate() {
+            let label = if let Some(l) = label.strip_prefix('\t') {
+                self.canvas.line_h(x + 8.0, yy + 4.0, w - 16.0, 1.0, border);
+                yy += 9.0;
+                l
+            } else {
+                label
+            };
+            // The item under the pointer.
+            if i == 2 {
+                self.canvas
+                    .rounded_rect(x + 4.0, yy, w - 8.0, row_h, 5.0, sel);
+            }
+            let base = self.baseline(Face::Ui, size, yy, row_h);
+            self.text(Face::Ui, size, x + 14.0, base, label, fg);
+            if commands {
+                let b = self.baseline(Face::Mono, cap, yy, row_h);
+                self.text(Face::Mono, cap, x + 150.0, b, line, sec);
+            } else if !key.is_empty() {
+                let kw = self.fonts.width(Face::Ui, cap, key);
+                let b = self.baseline(Face::Ui, cap, yy, row_h);
+                self.text(Face::Ui, cap, x + w - 14.0 - kw, b, key, sec);
+            }
+            yy += row_h;
+        }
+    }
+
     fn files_screen(&mut self, st: State) {
         let win = self.files_window();
         self.clear_background(&[(win.r, win.room)]);
@@ -582,10 +653,17 @@ impl Painter<'_> {
         if st.confirm {
             self.files_confirm(body);
         }
+        if let Some((mx, my, commands)) = st.menu {
+            self.files_menu(mx, my, commands);
+        }
         if let Some((x, y)) = st.pointer {
             self.pointer(x, y);
         }
-        self.clear_bar("US", None);
+        let middle = st
+            .menu
+            .is_some_and(|m| m.2)
+            .then_some("Show commands \u{b7} System+? to leave");
+        self.clear_bar("US", middle);
         self.clear_dock(DOCK_REST, RUN_FILES_EDIT, Some(&PROJECT));
     }
 
@@ -599,6 +677,7 @@ impl Painter<'_> {
             confirm: false,
             status: "9 items \u{b7} notes.txt selected (2.1 kB)",
             pointer: Some((420.0, 318.0)),
+            menu: None,
         });
     }
 
@@ -613,6 +692,7 @@ impl Painter<'_> {
             confirm: false,
             status: "9 items \u{b7} 4 selected (6.1 kB)",
             pointer: Some((560.0, 340.0)),
+            menu: None,
         });
     }
 
@@ -626,6 +706,7 @@ impl Painter<'_> {
             confirm: false,
             status: "Enter keeps the name \u{b7} Escape leaves it",
             pointer: None,
+            menu: None,
         });
     }
 
@@ -639,6 +720,36 @@ impl Painter<'_> {
             confirm: true,
             status: "9 items \u{b7} 2 selected (2.1 kB)",
             pointer: None,
+            menu: None,
+        });
+    }
+
+    /// Files 5: the context menu on a file (right-click).
+    pub fn clear_files_menu(&mut self) {
+        self.files_screen(State {
+            sort: Sort::NameUp,
+            selected: &[5],
+            cursor: None,
+            renaming: None,
+            confirm: false,
+            status: "9 items \u{b7} notes.txt selected (2.1 kB)",
+            pointer: Some((452.0, 412.0)),
+            menu: Some((380.0, 328.0, false)),
+        });
+    }
+
+    /// Files 6: the same menu in show-commands mode (System+?): each item's
+    /// `zosh` line.
+    pub fn clear_files_menu_commands(&mut self) {
+        self.files_screen(State {
+            sort: Sort::NameUp,
+            selected: &[5],
+            cursor: None,
+            renaming: None,
+            confirm: false,
+            status: "9 items \u{b7} notes.txt selected (2.1 kB)",
+            pointer: Some((452.0, 412.0)),
+            menu: Some((380.0, 328.0, true)),
         });
     }
 }
