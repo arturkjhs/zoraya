@@ -1003,7 +1003,29 @@ the efficiency cores (`taskpolicy -b`), as in 7d.
 
 ### Merge
 
-MERGE_7H
+Full CI on the branch green (run 42780861790, 43 of 43 jobs; the first two runs failed in `make test-gui` only, see
+"The CI's first run" above, and one job of the third was cancelled and passed on a rerun); merged into `main` at
+`f6d83d3`; `main`'s CI green (run 42785052766, 43 of 43); tagged `stage-7h`.
+
+### Handoff
+
+For the next session (a fresh one; nothing of this session's context is needed):
+
+- **State**: `main` at `f6d83d3`, tags `stage-7a` to `stage-7h` and `stage-7`. ADR-0240 to ADR-0246 are accepted;
+  ADR-0247 (scale from the display's density) and ADR-0248 (what the file manager needs, including `Drag` naming a
+  held press within 3 s) are proposed, and the code follows both. ADR-0248 changes INV-0160-3 and INV-0170-2 and
+  says so (check notes in ADR-0160 and ADR-0170); ADR-0247 changes INV-0090-1 (ADR-0090's open questions).
+- **For the architect**: decide ADR-0247 and ADR-0248; an INV-0245-3 for the sheet's guard; try by hand
+  (`make run-gui`, see "To check by hand"): Retina scale 2, the resize, the file manager's pointer and keys.
+- **Backlog**: a trash in each writable place (`docs/backlog.md`); a copy or delete that fails part way leaves what
+  was done; `Commands` lost when a client's channel is full.
+- **Working rules in force** (the architect, 2026-11-10): the session runs on Sonnet; `opus-review` only for the
+  independent review and for a bug not found in two attempts; waiting on CI and reading logs go to `ci-watch` and
+  `log-triage` (haiku); mutation testing only for the kernel, the compositor's trust boundary, the chooser, grants
+  and rooms, at most 30 minutes a part; one review round; the full CI on the branch before a merge, the TCG GUI
+  runs by name before a push (`GUI_RUNS="NAME:tcg:1"`; the local default skips them, and the efficiency-core trick
+  `taskpolicy -b -p PID` on QEMU reproduces slow-runner timing); in a GUI script, `then TEXT` waits for output after
+  the last input, `serial TEXT` for any earlier output.
 
 ## To check by hand
 
