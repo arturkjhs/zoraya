@@ -70,7 +70,7 @@ Nothing here depends on POSIX.
 - **Follow-up.** Multiple scanouts and `EDID` when a person needs them; the cursor queue if the software pointer costs too much.
 
 ## Invariants
-- **INV-0090-1.** The driver negotiates `VERSION_1` and no other feature. *Check:* host test with a fake device that offers every feature bit, asserting what the driver wrote to `DriverFeatures`.
+- **INV-0090-1.** The driver negotiates `VERSION_1` and `VIRTIO_GPU_F_EDID` (ADR-0247) and no other feature. *Check:* host test with a fake device that offers every feature bit, asserting what the driver wrote to `DriverFeatures`.
 - **INV-0090-2.** No command reaches the device with a rectangle outside the resource, whatever the client sends. *Check:* host test of the display logic with hostile `Flush` and `Attach` messages against a recording fake device.
 - **INV-0090-3.** A response of the wrong type or length, or a used index past what was submitted, is a protocol break, after which the driver resets the device and sends no further command. *Check:* host tests against a hostile fake device, one per kind of lie, that each is reported as a protocol break; the reset and exit that follow are in `gpud`, checked by reading.
 

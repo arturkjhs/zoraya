@@ -886,7 +886,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             37 => {
                 decode::<proto::FreeSpace>(bytes, n)?;
                 // Free blocks, as the volume's space map counts them; on any
-                // connection (proposed ADR-0248), like `Status`.
+                // connection (ADR-0248), like `Status`.
                 let free = self.volume.free_blocks().unwrap_or(0);
                 self.done(i, t, status::OK, free * BLOCK_SIZE as u64);
             }

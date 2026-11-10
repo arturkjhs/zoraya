@@ -1,6 +1,6 @@
 # ADR-0247: The scale from the display's density, read from its EDID
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-10
 - **Depends on:** ADR-0090, ADR-0093, ADR-0164, ADR-0169, ADR-0246
 - **Evidence:** desktop/survey.md#display-scaling
@@ -93,3 +93,7 @@ case; nothing else of either.
 - A second display, or a display whose EDID lies about its size.
 
 ## Architect's decision
+
+Accepted 2026-11-10. Decided by the architect; recorded by an agent at the architect's request.
+
+Option A (INV-0090-1's change included).

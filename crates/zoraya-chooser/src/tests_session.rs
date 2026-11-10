@@ -591,7 +591,7 @@ fn a_press_on_the_list_selects_its_row() {
     let mut found = None;
     for y in (0..crate::session::HEIGHT).step_by(4) {
         for buttons in [gui::buttons::LEFT, 0] {
-            let m = gui::WindowPointer {
+            let m = gui::WindowPointerMods {
                 dropped: 0,
                 window: 1,
                 x: crate::session::WIDTH / 2,

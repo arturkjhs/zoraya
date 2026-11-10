@@ -204,7 +204,7 @@ fn ready(d: &Gpu0) -> FakeGpu {
     gpu
 }
 
-/// INV-0090-1 as proposed ADR-0247 changes it: `VERSION_1` and `F_EDID`,
+/// INV-0090-1 as ADR-0247 changes it: `VERSION_1` and `F_EDID`,
 /// nothing else, whatever the device offers.
 #[test]
 fn the_driver_negotiates_version_1_and_edid_and_nothing_else() {
@@ -599,7 +599,7 @@ fn a_new_size_is_told_once_and_never_between_info_and_the_next_request() {
     assert!(a.tell((800, 600)));
 }
 
-/// Proposed ADR-0247: with `F_EDID` the driver asks for the EDID after the
+/// ADR-0247: with `F_EDID` the driver asks for the EDID after the
 /// display's size and keeps the physical size it states.
 #[test]
 fn the_display_info_brings_the_physical_size_from_the_edid() {

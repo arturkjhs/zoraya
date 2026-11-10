@@ -377,7 +377,7 @@ fn at_scale_two_an_odd_display_gives_bodies_of_whole_logical_pixels() {
     assert!(outer.right() <= area.right() && outer.bottom() <= area.bottom());
 }
 
-/// Proposed ADR-0247: a dense display (a Retina window, whose size QEMU
+/// ADR-0247: a dense display (a Retina window, whose size QEMU
 /// gives in pixels and whose width in millimetres it puts in the EDID) gets
 /// scale 2 from 1280 pixels wide; a display of ordinary density keeps
 /// ADR-0164's 1920; an unknown width in millimetres is ordinary.

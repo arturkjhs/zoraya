@@ -143,9 +143,18 @@ fn every_message_round_trips_and_decodes_totally() {
         y: 4,
         buttons: Flags(buttons::RIGHT),
         serial: 5,
+    });
+    total(WindowPointerMods {
+        dropped: 2,
+        window: 1,
+        x: 3,
+        y: 4,
+        buttons: Flags(buttons::RIGHT),
+        serial: 5,
         modifiers: Flags(modifiers::SHIFT | modifiers::SYSTEM),
     });
-    total(DragEnded {
+    total(DragEnded { window: 1 });
+    total(DragEndedAt {
         window: 1,
         over: Below(1),
         x: 40,
@@ -181,7 +190,7 @@ fn bad_fields_are_refused() {
     };
     let length = encode(&key, 0, &mut out).unwrap();
     // modifiers sit after dropped, code and the padded bool; 0x20 is past
-    // the system key's bit (proposed ADR-0248).
+    // the system key's bit (ADR-0248).
     out[16 + 12] = 0x20;
     assert!(decode::<Key>(&out[..length], 0).is_err());
     let length = encode(&key, 0, &mut out).unwrap();
@@ -356,4 +365,37 @@ fn the_system_clients_messages() {
         assert!(CLIENT_REQUESTS.contains(&o));
     }
     assert!(MANAGER_REQUESTS.contains(&42));
+}
+
+/// ADR-0052: a changed message is a new ordinal. The pointer and drag-end
+/// events keep their older layouts, and the ones with more fields have
+/// their own ordinals, which the client lists contain once each.
+#[test]
+fn changed_events_have_new_ordinals() {
+    assert_eq!(
+        (WindowPointer::ORDINAL, WindowPointerMods::ORDINAL),
+        (23, 30)
+    );
+    assert_eq!((DragEnded::ORDINAL, DragEndedAt::ORDINAL), (26, 31));
+    let mut all = CLIENT_EVENTS.to_vec();
+    all.sort_unstable();
+    all.dedup();
+    assert_eq!(all.len(), CLIENT_EVENTS.len());
+    assert!(all.contains(&30) && all.contains(&31));
+    let mut out = [0u8; 64];
+    let n = encode(
+        &WindowPointerMods {
+            dropped: 0,
+            window: 1,
+            x: 2,
+            y: 3,
+            buttons: Flags(0),
+            serial: 4,
+            modifiers: Flags(modifiers::SYSTEM),
+        },
+        0,
+        &mut out,
+    )
+    .unwrap();
+    assert!(decode::<WindowPointer>(&out[..n], 0).is_err());
 }

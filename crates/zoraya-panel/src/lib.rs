@@ -191,7 +191,7 @@ pub struct Launch {
     /// for the home directory: exactly the entries shown.
     pub holds: Vec<(String, bool)>,
     /// The current directory to start in, when not the first hold it may
-    /// change (`OpenTerminal`, proposed ADR-0248).
+    /// change (`OpenTerminal`, ADR-0248).
     pub cwd: Option<String>,
     pub programs: Vec<Program>,
 }
@@ -434,7 +434,7 @@ pub fn terminal(room: Option<&Room>) -> Launch {
 
 /// A terminal launched in `room` (`None` is `home`) to start at `path`, an
 /// absolute path or one under `~` as the holds write it: only if one of
-/// the terminal's holds covers it (proposed ADR-0248, INV-0248-4). `home`
+/// the terminal's holds covers it (ADR-0248, INV-0248-4). `home`
 /// is the shell's home, to compare `~/...` holds with an absolute path.
 pub fn terminal_at(room: Option<&Room>, path: &str, home: &str) -> Option<Launch> {
     if path.is_empty() || path.chars().any(char::is_control) || path.split('/').any(|c| c == "..") {

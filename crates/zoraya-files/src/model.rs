@@ -39,7 +39,7 @@ pub mod mods {
     pub const CTRL: u32 = 2;
     pub const ALT: u32 = 4;
     pub const SYSTEM: u32 = 16;
-    /// Command (the system key, proposed ADR-0248) or Ctrl: the file
+    /// Command (the system key, ADR-0248) or Ctrl: the file
     /// manager takes either, so that it works if the system key's chords
     /// stay the compositor's.
     pub const COMMAND: u32 = SYSTEM | CTRL;
@@ -190,7 +190,7 @@ pub enum Act {
         dir: String,
         names: Vec<String>,
     },
-    /// Offer this text to the clipboard (proposed ADR-0248).
+    /// Offer this text to the clipboard (ADR-0248).
     CopyPath(String),
     /// A terminal in this folder, in the window's room.
     OpenTerminal(String),

@@ -420,7 +420,7 @@ protocol! {
     message TimeBase = 35, handles 0 {}
 
     /// The volume's free bytes in `Done`'s count, on any connection: the
-    /// file manager's status line (proposed ADR-0248).
+    /// file manager's status line (ADR-0248).
     message FreeSpace = 37, handles 0 {}
 
     /// A failed volume, on the supervisor channel (ADR-0080).

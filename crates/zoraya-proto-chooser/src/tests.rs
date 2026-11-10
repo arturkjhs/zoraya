@@ -70,6 +70,59 @@ fn every_message_round_trips_and_decodes_totally() {
         },
         1
     );
+    // ADR-0052: a changed message is a new ordinal, so the older
+    // `OpenWith` keeps its layout beside `OpenWithApp`.
+    round!(
+        OpenWith<'_>,
+        OpenWith {
+            name: Data(b"notes.txt"),
+            words: Data(b"+r ~/notes.txt"),
+        },
+        1
+    );
+    round!(
+        OpenWithApp<'_>,
+        OpenWithApp {
+            name: Data(b"notes.txt"),
+            words: Data(b"+r ~/notes.txt"),
+            app: Data(b"edit"),
+        },
+        1
+    );
+    round!(
+        Opening,
+        Opening {
+            status: Below(status::BUSY)
+        },
+        0
+    );
+    round!(
+        OpeningApp,
+        OpeningApp {
+            status: Below(status::BUSY)
+        },
+        0
+    );
+}
+
+#[test]
+fn the_launchers_ordinals_are_distinct_and_the_old_layouts_stay() {
+    let mut all = LAUNCHER_REQUESTS.to_vec();
+    all.sort_unstable();
+    all.dedup();
+    assert_eq!(all.len(), LAUNCHER_REQUESTS.len());
+    assert_eq!((OpenWith::ORDINAL, OpenWithApp::ORDINAL), (32, 35));
+    assert_eq!((Opening::ORDINAL, OpeningApp::ORDINAL), (32, 35));
+    // The old message with the new one's body is refused: nothing was
+    // widened under the old number.
+    let new = OpenWithApp {
+        name: Data(b"a"),
+        words: Data(b"b"),
+        app: Data(b"edit"),
+    };
+    let mut out = [0u8; 128];
+    let n = encode(&new, 0, &mut out).unwrap();
+    assert!(decode::<OpenWith<'_>>(&out[..n], 1).is_err());
 }
 
 #[test]

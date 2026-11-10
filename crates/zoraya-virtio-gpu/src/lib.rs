@@ -51,7 +51,7 @@ pub mod config {
 /// The largest display side accepted `[assumption, ADR-0090]`.
 pub const MAX_SIDE: u32 = 4096;
 /// `VIRTIO_GPU_F_EDID` (5.7.3): the device gives the display's EDID, where
-/// QEMU writes the window's physical size (proposed ADR-0247).
+/// QEMU writes the window's physical size (ADR-0247).
 pub const F_EDID: u32 = 1 << 1;
 /// The EDID block's bytes in `GET_EDID`'s response (5.7.6.8).
 pub const EDID_BYTES: usize = 1024;
@@ -192,7 +192,7 @@ pub fn edid_millimetres(edid: &[u8]) -> (u32, u32) {
 
 impl<R: Registers, S: Shared> Gpu<R, S> {
     /// Resets the device and brings it up with `VERSION_1` and, when the
-    /// device offers it, `F_EDID` (proposed ADR-0247, a change to
+    /// device offers it, `F_EDID` (ADR-0247, a change to
     /// INV-0090-1), and the control queue. `shared` is `SHARED_MEMORY`
     /// bytes at device address `base`, zeroed.
     pub fn new(mut registers: R, shared: S, base: u64) -> Result<Gpu<R, S>, Error> {

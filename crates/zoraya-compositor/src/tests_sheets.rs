@@ -447,7 +447,7 @@ fn a_press_at_the_sheet_edge_is_the_sheets_and_just_below_it_not() {
     let (w, h) = s.f().display_size;
     s.point(axis(body.x + 10, w), axis(body.bottom() - 5, h), None);
     assert!(
-        events(&s.f().take(chooser)).iter().any(|(o, _)| *o == 23),
+        events(&s.f().take(chooser)).iter().any(|(o, _)| *o == 30),
         "the sheet's body takes the pointer"
     );
     // Far below the sheet, where no window is, a press changes nothing.
@@ -527,7 +527,7 @@ fn a_new_sheet_ignores_input_for_500_ms() {
         .f()
         .take(chooser)
         .iter()
-        .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
         .map(|(_, p)| p.buttons.0)
         .collect();
     assert!(presses.iter().all(|b| *b == 0), "{presses:?}");
@@ -592,7 +592,7 @@ fn a_button_held_from_before_the_sheet_reaches_it_only_after_release() {
         s.f()
             .take(chooser)
             .iter()
-            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
             .map(|(_, p)| p.buttons.0)
             .collect()
     };
@@ -605,7 +605,7 @@ fn a_button_held_from_before_the_sheet_reaches_it_only_after_release() {
 }
 
 /// ADR-0245's condition (2): System+? tells the chooser, and every other
-/// client (proposed ADR-0248), that the show-commands mode is on or off.
+/// client (ADR-0248), that the show-commands mode is on or off.
 #[test]
 fn the_chooser_hears_the_show_commands_mode() {
     let mut s = setup();
@@ -631,7 +631,7 @@ fn the_chooser_hears_the_show_commands_mode() {
     };
     s.keys(&chord);
     assert_eq!(told(&mut s, chooser), [true]);
-    // Every client hears it (proposed ADR-0248: the file manager's menu).
+    // Every client hears it (ADR-0248: the file manager's menu).
     assert_eq!(told(&mut s, app), [true]);
     // A client added while the mode is on hears it at once.
     let late = system(&mut s);

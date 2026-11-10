@@ -471,14 +471,25 @@ fn launcher_requests(st: &mut State, i: usize) {
             }
             continue;
         }
-        let open_with = decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len())
-            .ok()
-            .filter(|_| app == "files");
+        // `OpenWithApp` names the application; the older `OpenWith` does
+        // not (ADR-0052: a changed message is a new ordinal), so it asks
+        // for the one of the name's extension.
+        let (named, request) = match decode::<zoraya_proto_chooser::OpenWithApp<'_>>(msg, got.len())
+        {
+            Ok((_, m)) => (Some((m.name.0, m.words.0, m.app.0)), true),
+            Err(_) => (
+                decode::<zoraya_proto_chooser::OpenWith<'_>>(msg, got.len())
+                    .ok()
+                    .map(|(_, m)| (m.name.0, m.words.0, &b""[..])),
+                false,
+            ),
+        };
+        let open_with = named.filter(|_| app == "files");
         let status = match open_with.ok_or(()) {
-            Ok((_, m)) => {
-                let name = core::str::from_utf8(m.name.0).unwrap_or("");
-                let words = core::str::from_utf8(m.words.0).unwrap_or("");
-                let asked = core::str::from_utf8(m.app.0).unwrap_or("?");
+            Ok((name, words, asked)) => {
+                let name = core::str::from_utf8(name).unwrap_or("");
+                let words = core::str::from_utf8(words).unwrap_or("");
+                let asked = core::str::from_utf8(asked).unwrap_or("?");
                 match zoraya_panel::opener_for(name, asked) {
                     Some(app) if !words.chars().any(char::is_control) => {
                         // Whatever the sender gave, the application gets
@@ -512,11 +523,14 @@ fn launcher_requests(st: &mut State, i: usize) {
                 zoraya_proto_chooser::status::INVALID
             }
         };
-        let r = zoraya_proto_chooser::Opening {
-            status: zoraya_protocol::Below(status),
-        };
+        let status = zoraya_protocol::Below(status);
         let mut out = [0u8; 64];
-        if let Ok(n) = encode(&r, t, &mut out) {
+        let n = if request {
+            encode(&zoraya_proto_chooser::OpeningApp { status }, t, &mut out)
+        } else {
+            encode(&zoraya_proto_chooser::Opening { status }, t, &mut out)
+        };
+        if let Ok(n) = n {
             let _ = channel_write(end, &out[..n], &[]);
         }
     }

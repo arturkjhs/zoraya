@@ -52,7 +52,7 @@ pub mod modifiers {
     pub const ALT: u32 = 4;
     pub const CAPS: u32 = 8;
     /// The system key, held in a chord the compositor does not take
-    /// (proposed ADR-0248); a key event with it is never one of the
+    /// (ADR-0248); a key event with it is never one of the
     /// compositor's chords.
     pub const SYSTEM: u32 = 16;
     pub const ALL: u32 = 31;
@@ -297,7 +297,8 @@ protocol! {
         focused: bool,
     }
 
-    /// The pointer over a window's body, in logical pixels.
+    /// The pointer over a window's body, in logical pixels. Superseded by
+    /// `WindowPointerMods` (the compositor no longer sends it, ADR-0052).
     message WindowPointer = 23, handles 0 {
         dropped: u32,
         window: u32,
@@ -308,8 +309,18 @@ protocol! {
         /// this client, counted for it alone: what a `Drag` names
         /// (ADR-0170).
         serial: u32,
-        /// The modifiers held (Shift, Ctrl, Alt, the system key), for a
-        /// Shift or Command click (proposed ADR-0248).
+    }
+
+    /// `WindowPointer` with the modifiers held (Shift, Ctrl, Alt, the
+    /// system key), for a Shift or Command click, to the focused client
+    /// only (ADR-0248). A new ordinal, not a changed layout (ADR-0052).
+    message WindowPointerMods = 30, handles 0 {
+        dropped: u32,
+        window: u32,
+        x: u32,
+        y: u32,
+        buttons: Flags<{ buttons::ALL }>,
+        serial: u32,
         modifiers: Flags<{ modifiers::ALL }>,
     }
 
@@ -330,10 +341,16 @@ protocol! {
     }
 
     /// The source's drag ended (a drop or none: the source is not told
-    /// which, ADR-0170), except a drop over the source's own window, whose
-    /// place in that window's body and the modifiers held it gets
-    /// (`over` 1, proposed ADR-0248): it holds what was dragged already.
+    /// which, ADR-0170).
     message DragEnded = 26, handles 0 {
+        window: u32,
+    }
+
+    /// `DragEnded` for a drop over the source's own window, with its place
+    /// in that window's body and the modifiers held (`over` 1), or `over`
+    /// 0 for any other end (ADR-0248): the source holds what was dragged
+    /// already. A new ordinal, not a changed layout (ADR-0052).
+    message DragEndedAt = 31, handles 0 {
         window: u32,
         over: Below<2>,
         x: u32,
@@ -358,7 +375,7 @@ protocol! {
 
     /// To every client: the show-commands mode (System+?, ADR-0172 point 8)
     /// is on or off, so that the chooser's sheet (ADR-0245) and the file
-    /// manager's menu (proposed ADR-0248) show their `zosh` lines.
+    /// manager's menu (ADR-0248) show their `zosh` lines.
     message Commands = 29, handles 0 {
         on: bool,
     }
@@ -468,7 +485,9 @@ pub const CLIENT_REQUESTS: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 1
 /// The client requests only a system client may send (proposed ADR-0245).
 pub const SYSTEM_REQUESTS: [u32; 2] = [11, 12];
 /// The ordinals the compositor sends a client unasked.
-pub const CLIENT_EVENTS: [u32; 14] = [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29];
+pub const CLIENT_EVENTS: [u32; 16] = [
+    16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+];
 /// The ordinals only the manager may send.
 pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:

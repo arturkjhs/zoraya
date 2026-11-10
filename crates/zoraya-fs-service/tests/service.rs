@@ -2301,7 +2301,7 @@ fn a_narrowed_name_that_is_a_directory_opens_to_read_only() {
     }
 }
 
-/// Proposed ADR-0248: `FreeSpace` gives the volume's free bytes on any
+/// ADR-0248: `FreeSpace` gives the volume's free bytes on any
 /// connection, and a write that takes blocks makes it smaller.
 #[test]
 fn free_space_counts_the_volumes_free_blocks() {

@@ -623,8 +623,8 @@ impl<P: Platform> App<P> {
                     cut: c.cut,
                 })
             }
-            26 => {
-                let (_, d) = decode::<gui::DragEnded>(got, 0).ok()?;
+            31 => {
+                let (_, d) = decode::<gui::DragEndedAt>(got, 0).ok()?;
                 self.held = None;
                 Some(if d.over.0 == 1 {
                     Happened::DroppedHere {
@@ -656,8 +656,8 @@ impl<P: Platform> App<P> {
                     .any(|x| x.window == d.window)
                     .then_some(Happened::Dropped(d.window))
             }
-            23 => {
-                let (_, p) = decode::<gui::WindowPointer>(got, 0).ok()?;
+            30 => {
+                let (_, p) = decode::<gui::WindowPointerMods>(got, 0).ok()?;
                 self.held = (p.buttons.0 & gui::buttons::LEFT != 0).then_some(p.window);
                 self.serial = p.serial;
                 let e = Event::Pointer {

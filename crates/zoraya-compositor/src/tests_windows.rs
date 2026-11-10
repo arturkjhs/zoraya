@@ -308,7 +308,7 @@ fn the_chords_are_the_compositors_and_the_switcher_reaches_every_window() {
         assert!(got.is_empty(), "keys reached a client: {got:?}");
     }
     // A chord the compositor does not take reaches the focused client
-    // alone, with `SYSTEM` and no text (proposed ADR-0248, INV-0248-1).
+    // alone, with `SYSTEM` and no text (ADR-0248, INV-0248-1).
     let focused = s.c.focused().unwrap();
     for k in [30, code::TAB, code::UP] {
         s.keys(&[(meta, 1), (k, 1), (k, 0), (meta, 0)]);
@@ -772,7 +772,7 @@ fn pointer_events_to_a_toplevel_are_logical_and_per_window() {
     let out = s.f().take(a);
     let p: Vec<(u32, u32, u32)> = out
         .iter()
-        .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+        .filter_map(|m| decode::<gui::WindowPointerMods>(m, 0).ok())
         .map(|(_, p)| (p.window, p.x, p.y))
         .collect();
     assert_eq!(p, [(1, 7, 9)]);
@@ -782,7 +782,7 @@ fn pointer_events_to_a_toplevel_are_logical_and_per_window() {
         s.f()
             .take(a)
             .iter()
-            .all(|m| decode::<gui::WindowPointer>(m, 0).is_err())
+            .all(|m| decode::<gui::WindowPointerMods>(m, 0).is_err())
     );
 }
 
@@ -1086,7 +1086,7 @@ fn a_press_on_the_bar_reaches_no_window() {
         s.f()
             .take(a)
             .iter()
-            .all(|m| decode::<gui::WindowPointer>(m, 0).is_err())
+            .all(|m| decode::<gui::WindowPointerMods>(m, 0).is_err())
     );
 }
 
@@ -1171,7 +1171,7 @@ fn a_release_reaches_the_client_that_saw_the_press() {
     ]);
     assert!(keys_of(&s.f().take(a)).is_empty());
     // One of a chord it does not take reaches the client, its release too
-    // (proposed ADR-0248).
+    // (ADR-0248).
     s.keys(&[(code::LEFT_META, 1), (31, 1), (code::LEFT_META, 0), (31, 0)]);
     let got = keys_of(&s.f().take(a));
     assert_eq!(

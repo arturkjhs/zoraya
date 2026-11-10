@@ -175,8 +175,8 @@ fn ask_panel<'a, M: zoraya_protocol::Message<'a>>(
         match channel_read(panel, &mut bytes, &mut handles) {
             Ok(s) => {
                 let msg = &bytes[..s.bytes as usize];
-                // Opening and TerminalOpened carry the same status.
-                break decode::<pc::Opening>(msg, 0)
+                // OpeningApp and TerminalOpened carry the same status.
+                break decode::<pc::OpeningApp>(msg, 0)
                     .map(|(_, o)| o.status.0)
                     .or_else(|_| decode::<pc::TerminalOpened>(msg, 0).map(|(_, o)| o.status.0))
                     .unwrap_or(u32::MAX);
@@ -400,7 +400,7 @@ impl FileManager {
         };
         let name = path.rsplit('/').next().unwrap_or(path);
         let words = format!("+r {shown}");
-        let msg = pc::OpenWith {
+        let msg = pc::OpenWithApp {
             name: Data(name.as_bytes()),
             words: Data(words.as_bytes()),
             app: Data(app.as_bytes()),
@@ -602,7 +602,7 @@ impl FileManager {
                     self.app.repaint(self.window);
                 }
                 // A drag of ours over one of our own folders: copy or move
-                // (proposed ADR-0248).
+                // (ADR-0248).
                 Happened::DroppedHere {
                     x, y, modifiers, ..
                 } => {

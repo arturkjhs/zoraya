@@ -492,7 +492,7 @@ Stage 7b (TASK-24), on the accepted [ADR-0160](adr/0160-window-management.md) an
   rim, the halo), a group line per room (only `home` until 7d) and a row per window with its own pixels shrunk by a
   box filter, its title, and "hidden" for a minimised one.
 - **Scale** (ADR-0164). The compositor takes scale 2 for a display at least 1920 pixels wide, or at least 1280 on a
-  display of 150 pixels per inch or more (proposed ADR-0247: QEMU's cocoa window gives its size in pixels and its
+  display of 150 pixels per inch or more (ADR-0247: QEMU's cocoa window gives its size in pixels and its
   physical size in the EDID, which `gpud` reads with `VIRTIO_GPU_F_EDID` and passes in `InfoReply`) (the setting
   `auto`; `gui.scale` 1 or 2 fixes it); `DisplayScale` gives the logical size and the scale, every size a client hears is logical,
   pointer events to a toplevel are logical, and a client's pixels reach the screen unchanged (INV-0164-1).
@@ -766,7 +766,7 @@ terminal's 80 × 24 runs under the dock); popups do not learn a new scale (they 
 ## The file manager (as built)
 
 Stage 7h (TASK-24, the architect's request and the approved mockups
-`docs/research/desktop/mockups/clear-field/files*.png`), with proposed [ADR-0248](adr/0248-what-the-file-manager-needs.md):
+`docs/research/desktop/mockups/clear-field/files*.png`), with [ADR-0248](adr/0248-what-the-file-manager-needs.md):
 
 - **`zoraya-files`**: `model` holds the folder shown and its items (name, size, modified), the view sorted by a column
   (folders first; a header click sorts, again reverses) and filtered by the search, the selection (click, Shift for a
@@ -784,12 +784,12 @@ Stage 7h (TASK-24, the architect's request and the approved mockups
   clipboard (an unasked `Offer` within a second of the menu's click: a press in its body, never in an untrusted
   room, the right gone with a focus change or a System+C), moves within a place (`rename_into` with the
   target's token) and copies otherwise or with Option (a folder whole, at most 4096 entries and 32 deep), deletes a
-  folder whole, starts drags, and on `DragEnded` over one of its own folders copies or moves the selection there. It
+  folder whole, starts drags, and on `DragEndedAt` over one of its own folders copies or moves the selection there. It
   prints its holds, every status line and every order on the console for the GUI tests.
-- **ADR-0248 (proposed)**: System chords the compositor does not take (`TAKEN_CHORDS`) reach the focused client with
-  `SYSTEM`; `WindowPointer` carries the modifiers (to the focused client only); `Commands` goes to every client; one
-  unasked `Offer` within `GESTURE_OFFER_NS` of a press in a trusted client's focused window; `DragEnded` carries the place of a drop on the
-  source's own window; `FreeSpace` in the file protocol; `OpenTerminal` launches a terminal in the caller's room at a
+- **ADR-0248 (accepted)**: System chords the compositor does not take (`TAKEN_CHORDS`) reach the focused client with
+  `SYSTEM`; `WindowPointerMods` (ordinal 30, beside `WindowPointer`) carries the modifiers (to the focused client only); `Commands` goes to every client; one
+  unasked `Offer` within `GESTURE_OFFER_NS` of a press in a trusted client's focused window; `DragEndedAt` (ordinal 31, beside `DragEnded`) carries the place of a drop on the
+  source's own window; `OpenWithApp` (panel channel, ordinal 35) names the application, the older `OpenWith` keeps its layout (ADR-0052); `FreeSpace` in the file protocol; `OpenTerminal` launches a terminal in the caller's room at a
   path that room's holds cover (`terminal_at`).
 - **Tests**: `zoraya-files`' host tests (the model, the view's hit-testing, gestures through the widget, painting at
   both scales); `tests/gui/files-manage.script` (99 steps, HVF and TCG): selection, sorting, the keyboard, search,
@@ -1279,7 +1279,7 @@ measured for real.
 `make run-gui` boots with a GPU, keyboard and tablet and opens QEMU's window: on macOS at 2048 × 1536 with scale 2,
 elsewhere at 1024 × 768 (`GUI_SCALE=1` or `GUI_SCALE=2` chooses). On a Mac the window can be resized and the desktop
 follows it (7g: the bar and the dock follow the width, windows stay in the work area, and from 1920 pixels wide the
-scale is 2, from 1280 on a Retina screen, proposed ADR-0247), and Command is the system key (written System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
+scale is 2, from 1280 on a Retina screen, ADR-0247), and Command is the system key (written System below). The serial line stays in the terminal for `init`'s reports; Ctrl-A X there quits QEMU.
 
 - **What is on the screen.** The bar at the top (the layout in use at its right; the chooser's mark in its middle
   while a sheet is open), the windows, and the dock at the bottom: Terminal, Files, Edit and Settings, then the rooms'

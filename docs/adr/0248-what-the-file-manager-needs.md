@@ -1,6 +1,6 @@
 # ADR-0248: What the file manager needs from the compositor, the panel and the file service (stage 7h)
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-10
 - **Depends on:** ADR-0055, ADR-0153, ADR-0160, ADR-0167, ADR-0168, ADR-0169, ADR-0170, ADR-0172, ADR-0245
 - **Evidence:** desktop/survey.md#macoss-sandboxed-open-panel, desktop/survey.md#haiku
@@ -36,7 +36,7 @@ Measured: nothing; host tests and the GUI tests of stage 7h.
   1. *System chords the compositor does not use* (anything but W, M, Space, Left, Right, Enter, R, ?, C, X, V) reach
      the focused client as a `Key` with a new modifier bit, `SYSTEM`. The compositor's chords never do. A change to
      INV-0160-3.
-  2. *`WindowPointer` carries the modifiers held* (Shift, Ctrl, Alt, `SYSTEM`), a new field.
+  2. *`WindowPointerMods`* (a new ordinal beside `WindowPointer`) carries the modifiers held (Shift, Ctrl, Alt, `SYSTEM`).
   3. *`Commands` goes to every client*, not only to system clients: one bit, the mode the person turned on. A change
      to ADR-0245's condition as recorded ("told to system clients").
   4. *An `Offer` is accepted unasked once within 1 s of a press the compositor delivered to the body of that
@@ -46,7 +46,7 @@ Measured: nothing; host tests and the GUI tests of stage 7h.
   4b. *A press may be named in `Drag` within 3 s, not 500 ms, while it is still held* (ADR-0170's 500 ms was an
      `[assumption]`): a file manager repainting under TCG answers a press later than 500 ms (measured: the GUI test
      of the folder drag fails at 500 ms and passes at 3 s). The copy reply keeps 500 ms.
-  5. *`DragEnded` says where the drop was when it was on the source's own window* (`over`, `x`, `y`,
+  5. *`DragEndedAt` (a new ordinal beside `DragEnded`) says where the drop was when it was on the source's own window* (`over`, `x`, `y`,
      `modifiers`), and nothing else; no handle moves. The source copies or moves what it already holds. A change to
      ADR-0170's `DragEnded`, not to INV-0170-3.
   6. *`FreeSpace`* (file protocol, ordinal 37): `Done`'s count is the volume's free bytes, on any connection.
@@ -57,9 +57,8 @@ Measured: nothing; host tests and the GUI tests of stage 7h.
 - **Evidence against:** A client now sees System+letter chords the compositor leaves free, so a later compositor
   chord takes a key some application may use (a list kept in one place, `TAKEN_CHORDS`). Any trusted application the
   person clicks in may replace the clipboard once within the second after the click, not only through Copy path
-  (review 7h, 2). Three messages gain fields under their old ordinals (`WindowPointer`, `DragEnded`, `OpenWith`),
-  against ADR-0052's "a changed method is a new ordinal": every encoder and decoder is in the tree and built together
-  (review 7h, 7). Pointer events carry the modifiers to the focused client only.
+  (review 7h, 2). Three messages that would gain fields take new ordinals instead, as ADR-0052 says (`WindowPointerMods` 30,
+  `DragEndedAt` 31, `OpenWithApp` 35 with `OpeningApp` 35); the old ones keep their layouts and linger. Pointer events carry the modifiers to the focused client only.
 - **Cost:** Built: about 300 lines outside the file manager.
 - **Precedent:** macOS sends Command chords the system does not take to the application; its open panel is a
   separate process (`desktop/survey.md#macoss-sandboxed-open-panel`). Haiku's Tracker copies on a drop onto a
@@ -107,3 +106,7 @@ accepts Ctrl where it accepts Command, so that it works as Option B if points 1 
 - A compositor chord that an application already uses.
 
 ## Architect's decision
+
+Accepted 2026-11-10. Decided by the architect; recorded by an agent at the architect's request.
+
+Accepted for the clipboard and focus rules, the 3 s bound for `Drag` on a still-held press, and the rest of what the file manager needs, except the exception to ADR-0052: the messages that gained fields under their old ordinals take new ordinals instead (`WindowPointerMods` 30, `DragEndedAt` 31 in the GUI protocol, `OpenWithApp` 35 in the launcher's), and the old messages keep their layouts. INV-0160-3 and INV-0170-2 stay checked under the new rules.

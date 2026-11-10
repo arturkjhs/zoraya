@@ -1167,7 +1167,7 @@ impl FilesView {
 }
 
 /// The row at logical `(x, y)` of the window's body, as a drop's place
-/// names it (`DragEnded`, proposed ADR-0248): by the list's geometry and
+/// names it (`DragEnded`, ADR-0248): by the list's geometry and
 /// the model's first row shown.
 pub fn row_at(m: &Model, x: u32, y: u32) -> Option<usize> {
     let (x, y) = (x as i32, y as i32);

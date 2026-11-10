@@ -371,7 +371,7 @@ fn files_never_gets_config_to_change() {
     assert!(!reaches_config("~"));
 }
 
-/// Proposed ADR-0248, INV-0248-4: Open terminal here launches a terminal
+/// ADR-0248, INV-0248-4: Open terminal here launches a terminal
 /// in the file manager's room at the folder, only where that room's holds
 /// reach.
 #[test]
@@ -412,7 +412,7 @@ fn a_terminal_opens_at_a_folder_only_inside_its_rooms_holds() {
     assert!(terminal(None).cwd.is_none());
 }
 
-/// Open in edit (proposed ADR-0248): `edit` for any name, nothing else by
+/// Open in edit (ADR-0248): `edit` for any name, nothing else by
 /// name; an empty request is by extension.
 #[test]
 fn the_file_manager_may_ask_for_edit_alone() {

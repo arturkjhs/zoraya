@@ -230,7 +230,7 @@ impl<L: Link> Client<L> {
     }
 
     /// The object's size in bytes and its kind.
-    /// The volume's free bytes (proposed ADR-0248).
+    /// The volume's free bytes (ADR-0248).
     pub fn free_space(&mut self, conn: L::Handle) -> Result<u64, Status> {
         let length = self.call(conn, &proto::FreeSpace {}, &[])?;
         self.done(length)

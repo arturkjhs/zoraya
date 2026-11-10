@@ -30,7 +30,7 @@ pub const FORMAT_XRGB: u32 = 1;
 
 protocol! {
     /// The display's size and pixel format, and its physical size in
-    /// millimetres, 0 by 0 when the driver cannot say (proposed ADR-0247).
+    /// millimetres, 0 by 0 when the driver cannot say (ADR-0247).
     message Info = 1, handles 0 {}
     message InfoReply = 1, handles 0 {
         status: Status,

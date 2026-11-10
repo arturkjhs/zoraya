@@ -79,10 +79,12 @@ ADR-0167 names (`Open`, `Save`, `PickDirectory`, `Chosen`, `Cancelled`) plus thr
   `application`, and the chooser's session tests (a sheet is opened with the registered tag).
 - **INV-0245-2.** A file the file manager opens reaches the application with `READ | CLONE` only. *Check:*
   `tests/gui/files.script` (the write is refused).
+- **INV-0245-3.** No input reaches a sheet within 500 ms of its mapping (its first commit), and no key or button held
+  from before reaches it until released. *Check:* the compositor's host tests of the sheet guard (a press, a key and a
+  key held from before, within and after the guard; a key pressed within it; two sheets; a lost input driver).
 
 ## Open questions
-- From the review of 7e: whether a sheet should ignore input for a moment after it maps and ignore keys held from
-  before (an application could time a request so that the person's next key confirms it); re-placing a sheet when
+- From the review of 7e: re-placing a sheet when
   the scale or the display changes; the owner's popups while its sheet is open; a `Save` onto an existing folder's
   name; the re-clone of `OpenWith`'s connection waits on the file manager's channel (`files` is a program of the image).
 - Drops (ADR-0170) as built in 7e: the pill is the compositor's `dropped: NAME read`, the name a display name the

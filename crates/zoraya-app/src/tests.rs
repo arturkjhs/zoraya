@@ -311,7 +311,7 @@ fn a_configure_gives_a_new_buffer_and_pointer_events_reach_widgets() {
         dark: true,
         motion: true,
     });
-    app.platform.event(&gui::WindowPointer {
+    app.platform.event(&gui::WindowPointerMods {
         dropped: 0,
         window: id,
         x: 10,
@@ -469,7 +469,7 @@ fn drops_are_taken_and_drags_start_only_from_a_held_press() {
     // No press held: no request is sent.
     assert_eq!(app.drag(id, 5, "a"), Err(Some(5)));
     assert!(!app.platform.sent.contains(&13));
-    let pointer = |buttons| gui::WindowPointer {
+    let pointer = |buttons| gui::WindowPointerMods {
         dropped: 0,
         window: id,
         x: 10,
@@ -594,12 +594,12 @@ fn replacing_a_tree_shows_the_new_one() {
     assert_eq!(w.value(1), zoraya_ui::Value::Text("other.txt"));
 }
 
-/// Proposed ADR-0248: a drag that ends over its own window says where;
+/// ADR-0248: a drag that ends over its own window says where;
 /// one that ends elsewhere says only that it ended.
 #[test]
 fn a_drag_ended_over_its_own_window_says_where() {
     let mut app = App::connect(Fake::default(), Appearance::Light).unwrap();
-    app.platform.event(&gui::DragEnded {
+    app.platform.event(&gui::DragEndedAt {
         window: 3,
         over: zoraya_protocol::Below(1),
         x: 40,
@@ -615,7 +615,7 @@ fn a_drag_ended_over_its_own_window_says_where() {
             modifiers: gui::modifiers::ALT
         })
     );
-    app.platform.event(&gui::DragEnded {
+    app.platform.event(&gui::DragEndedAt {
         window: 3,
         over: zoraya_protocol::Below(0),
         x: 0,

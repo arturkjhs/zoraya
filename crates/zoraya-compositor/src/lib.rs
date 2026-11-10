@@ -83,7 +83,7 @@ pub const CLIENT_KEY: u64 = 64;
 pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
 /// The keys whose chord with the system key is the compositor's (ADR-0160,
 /// ADR-0163, ADR-0168, ADR-0170, ADR-0172): with the system key, every other
-/// key reaches the focused client (proposed ADR-0248, INV-0248-1). A new
+/// key reaches the focused client (ADR-0248, INV-0248-1). A new
 /// chord goes here, and is checked against the applications' keys.
 pub const TAKEN_CHORDS: [u32; 11] = [
     code::ENTER,
@@ -104,7 +104,7 @@ pub const TAKEN_CHORDS: [u32; 11] = [
 /// confirm a request timed to meet it (ADR-0245, the architect's condition).
 pub const SHEET_GUARD_NS: u64 = 500_000_000;
 /// How long after a press or key in its focused window a client may offer
-/// the clipboard unasked (proposed ADR-0248).
+/// the clipboard unasked (ADR-0248).
 pub const GESTURE_OFFER_NS: u64 = 1_000_000_000;
 
 /// What a new sheet ignores: everything until `until`, then the keys and
@@ -125,7 +125,7 @@ pub const RETRY_NS: u64 = 10_000_000;
 /// The scale `auto` gives a display `width` physical pixels wide whose
 /// width is `width_mm` millimetres (0: unknown): 2 from `SCALE_TWO_FROM`
 /// pixels (ADR-0164), or from `DENSE_SCALE_TWO_FROM` on a display of at
-/// least `DENSE_PPI` (proposed ADR-0247: a Retina window).
+/// least `DENSE_PPI` (ADR-0247: a Retina window).
 pub const fn scale_for(width: u32, width_mm: u32) -> Scale {
     // pixels / (mm / 25.4) >= ppi, in integers.
     let dense = width_mm > 0 && width as u64 * 254 >= DENSE_PPI * 10 * width_mm as u64;
@@ -282,7 +282,7 @@ pub struct SwitchGroup {
 const DRAG_WITHIN_NS: u64 = 500_000_000;
 /// How long after a press a client may name it in `Drag`, while it is still
 /// held: ADR-0170's 500 ms was an assumption, and a file manager repainting
-/// under TCG answers a press later than that (proposed ADR-0248; the press
+/// under TCG answers a press later than that (ADR-0248; the press
 /// must still be held, so nothing is taken after the person let go).
 const DRAG_NAMES_WITHIN_NS: u64 = 3_000_000_000;
 
@@ -391,7 +391,7 @@ pub struct Compositor<P: Platform> {
     copy_asked: Option<(usize, u64)>,
     /// The last press or key the compositor delivered to a client's focused
     /// window, and when: one unasked `Offer` is taken within
-    /// `GESTURE_OFFER_NS` of it (proposed ADR-0248, INV-0248-2).
+    /// `GESTURE_OFFER_NS` of it (ADR-0248, INV-0248-2).
     gesture: Option<(usize, u64)>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
@@ -809,7 +809,7 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// The scale for the display's width: `gui.scale` 1 or 2 fixes it, `auto`
-    /// is [`scale_for`]'s (ADR-0164, ADR-0246, proposed ADR-0247).
+    /// is [`scale_for`]'s (ADR-0164, ADR-0246, ADR-0247).
     fn chosen_scale(&self) -> Scale {
         match self.fixed_scale {
             1 => Scale::ONE,
@@ -1061,7 +1061,7 @@ impl<P: Platform> Compositor<P> {
                 self.platform.close(c.entry);
                 self.send_event_plain(
                     c.source.client,
-                    &gui::DragEnded {
+                    &gui::DragEndedAt {
                         window: c.source.id,
                         over: Below(0),
                         x: 0,
@@ -1298,7 +1298,7 @@ impl<P: Platform> Compositor<P> {
             .copy_asked
             .is_some_and(|(c, at)| c == slot && now.saturating_sub(at) <= DRAG_WITHIN_NS);
         // Or once, within `GESTURE_OFFER_NS` of a press or key in its
-        // focused window (a menu's Copy path, proposed ADR-0248).
+        // focused window (a menu's Copy path, ADR-0248).
         let gestured = self
             .gesture
             .is_some_and(|(c, at)| c == slot && now.saturating_sub(at) <= GESTURE_OFFER_NS);
@@ -1412,7 +1412,7 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(e);
         }
         // Over the source's own window: where, so that it copies or moves
-        // what it holds already (proposed ADR-0248); no `Drop` was sent.
+        // what it holds already (ADR-0248); no `Drop` was sent.
         let own = self.pointer.and_then(|(x, y)| {
             let (key, zone) = self.under(x, y)?;
             let body = self.windows[self.index(key)?].body_rect();
@@ -1423,7 +1423,7 @@ impl<P: Platform> Compositor<P> {
         let modifiers = self.modifiers_now();
         self.send_event_plain(
             c.source.client,
-            &gui::DragEnded {
+            &gui::DragEndedAt {
                 window: c.source.id,
                 over: Below(u32::from(own.is_some())),
                 x: own.map_or(0, |o| o.0),
@@ -1434,7 +1434,7 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// The modifiers held, as key and pointer events carry them, the system
-    /// key as `SYSTEM` (proposed ADR-0248).
+    /// key as `SYSTEM` (ADR-0248).
     fn modifiers_now(&self) -> u32 {
         let system = if self.meta != 0 {
             gui::modifiers::SYSTEM
@@ -1730,7 +1730,7 @@ impl<P: Platform> Compositor<P> {
         } else {
             let s = self.scale.factor();
             let buttons = self.guarded_buttons(key);
-            let m = gui::WindowPointer {
+            let m = gui::WindowPointerMods {
                 dropped: 0,
                 window: key.id,
                 x: px / s,
@@ -2511,7 +2511,7 @@ impl<P: Platform> Compositor<P> {
 
     /// Tells every client the show-commands mode, so that the chooser's
     /// sheet and the file manager's menu show their `zosh` lines (ADR-0245,
-    /// proposed ADR-0248).
+    /// ADR-0248).
     fn tell_commands(&mut self) {
         let m = gui::Commands { on: self.commands };
         for slot in 0..self.clients.len() {
@@ -3650,7 +3650,7 @@ with_dropped!(
     gui::Pointer,
     gui::Focus,
     gui::WindowFocus,
-    gui::WindowPointer
+    gui::WindowPointerMods
 );
 
 #[cfg(test)]

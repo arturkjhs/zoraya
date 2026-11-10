@@ -551,7 +551,7 @@ fn the_dock_is_never_covered() {
     let out = s.f().take(a);
     assert!(
         !out.iter()
-            .any(|m| decode::<gui::WindowPointer>(m, 0).is_ok())
+            .any(|m| decode::<gui::WindowPointerMods>(m, 0).is_ok())
     );
     // In the dock's padding, outside every cell: still the dock's, nothing
     // for the window (review 7d, 5).
@@ -563,7 +563,7 @@ fn the_dock_is_never_covered() {
     let out = s.f().take(a);
     assert!(
         !out.iter()
-            .any(|m| decode::<gui::WindowPointer>(m, 0).is_ok())
+            .any(|m| decode::<gui::WindowPointerMods>(m, 0).is_ok())
     );
 }
 
