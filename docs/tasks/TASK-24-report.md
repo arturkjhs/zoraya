@@ -371,7 +371,7 @@ neither exists (`every_key_has_its_first_two_levels`).
 ### Merge
 
 The full CI on the branch passed (run 42684037780); merged at `1b61843`, whose CI on `main` passed after a rerun of
-the POSIX scenarios job (Ctrl-Z that did not stop a job, `docs/backlog.md`; the script was fixed in 7e). `stage-7c`
+the POSIX scenarios job (Ctrl-Z that did not stop a job, `docs/backlog.md`; still open: it failed again in 7g). `stage-7c`
 is on `1b61843`.
 
 ### Time
@@ -663,7 +663,7 @@ holes applied by hand one by one, six of them kept in `tools/mutants/desktop-7e.
 ### Merge
 
 After `main` was merged in (7d's later work: the broker beside a shell, the show-commands tags per window), the
-branch's full CI passed on the first run (42711274447), the scenarios script with its first sleep of 5 s. Merged at
+branch's full CI passed on the first run (42711274447). Merged at
 `32f8a44`, green on `main` (run 42714400871); `stage-7e`.
 
 ### Time
