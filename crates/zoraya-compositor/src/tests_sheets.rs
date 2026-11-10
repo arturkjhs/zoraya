@@ -37,7 +37,16 @@ pub(super) fn system(s: &mut Setup) -> u32 {
     end
 }
 
+/// A sheet, and the clock past its guard (ADR-0245), as a person's next
+/// key would find it.
 pub(super) fn sheet(s: &mut Setup, end: u32, tag: u32, w: u32, h: u32) -> (u32, u32) {
+    let r = sheet_at_once(s, end, tag, w, h);
+    s.f().clock += SHEET_GUARD_NS;
+    r
+}
+
+/// A sheet, with the clock where it mapped.
+pub(super) fn sheet_at_once(s: &mut Setup, end: u32, tag: u32, w: u32, h: u32) -> (u32, u32) {
     let k = s.c.scale().factor();
     let n = (w * k * h * k) as usize;
     let memory = s.f().memory(vec![0x00ff_00ff; n], n as u64 * 4, false);
@@ -492,4 +501,140 @@ fn a_press_on_a_sheet_raises_its_owner_with_it() {
         s.c.stack().collect::<Vec<_>>(),
         [Key { client: 2, id: idb }, Key { client: 0, id }, key]
     );
+}
+
+/// ADR-0245's condition (1): for 500 ms after it maps a sheet takes no key
+/// and no button, so a key timed to meet the request does not confirm it.
+#[test]
+fn a_new_sheet_ignores_input_for_500_ms() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    s.f().take(chooser);
+    s.f().take(app);
+    // Enter at once: to no one.
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    assert!(keys_of(&s.f().take(chooser)).is_empty());
+    assert!(keys_of(&s.f().take(app)).is_empty());
+    // A press on the sheet's body: no button reaches it.
+    let sheet = s.c.stack().find(|k| k.client == 1).unwrap();
+    let body = s.c.window(sheet).unwrap().body_rect();
+    s.press_at(body.x + 20, body.y + 20);
+    let presses: Vec<u32> = s
+        .f()
+        .take(chooser)
+        .iter()
+        .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+        .map(|(_, p)| p.buttons.0)
+        .collect();
+    assert!(presses.iter().all(|b| *b == 0), "{presses:?}");
+    // Just before the end, still nothing; after it, keys arrive.
+    s.f().clock += SHEET_GUARD_NS - 50_000_000;
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    assert!(keys_of(&s.f().take(chooser)).is_empty());
+    s.f().clock += 60_000_000;
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    assert!(!keys_of(&s.f().take(chooser)).is_empty());
+}
+
+/// ADR-0245's condition (1): a key held down before the sheet mapped
+/// (its repeats included) never reaches it; once released, the key is the
+/// sheet's again. A button held from before likewise.
+#[test]
+fn a_key_held_from_before_the_sheet_never_reaches_it() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    // Enter goes down in the editor; the sheet maps under it.
+    s.keys(&[(code::ENTER, 1)]);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    s.f().take(chooser);
+    s.f().clock += SHEET_GUARD_NS * 2;
+    // Repeats of the held Enter, long after: not the sheet's.
+    s.keys(&[(code::ENTER, 2), (code::ENTER, 2)]);
+    assert!(keys_of(&s.f().take(chooser)).is_empty());
+    // Released, then pressed again: the sheet's.
+    s.keys(&[(code::ENTER, 0)]);
+    s.keys(&[(code::ENTER, 1), (code::ENTER, 0)]);
+    let keys = keys_of(&s.f().take(chooser));
+    assert_eq!(
+        keys.iter().filter(|(_, pressed, _)| *pressed).count(),
+        1,
+        "{keys:?}"
+    );
+    // Another key that was not held is the sheet's at once.
+    s.keys(&[(30, 1), (30, 0)]);
+    assert!(!keys_of(&s.f().take(chooser)).is_empty());
+}
+
+#[test]
+fn a_button_held_from_before_the_sheet_reaches_it_only_after_release() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    assert_eq!(sheet_at_once(&mut s, chooser, 4, 160, 80).0, status::OK);
+    let sheet = s.c.stack().find(|k| k.client == 1).unwrap();
+    let body = s.c.window(sheet).unwrap().body_rect();
+    let (w, h) = s.f().display_size;
+    let (x, y) = (axis(body.x + 20, w), axis(body.y + 20, h));
+    // Pressed within the guard and held past it: never a press.
+    s.point(x, y, Some(1));
+    s.f().clock += SHEET_GUARD_NS * 2;
+    s.point(axis(body.x + 22, w), y, None);
+    let buttons = |s: &mut Setup| -> Vec<u32> {
+        s.f()
+            .take(chooser)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .map(|(_, p)| p.buttons.0)
+            .collect()
+    };
+    let held = buttons(&mut s);
+    assert!(!held.is_empty() && held.iter().all(|b| *b == 0), "{held:?}");
+    // Released and pressed again: the sheet's press.
+    s.point(x, y, Some(0));
+    s.point(x, y, Some(1));
+    assert!(buttons(&mut s).contains(&gui::buttons::LEFT));
+}
+
+/// ADR-0245's condition (2): System+? tells the chooser, and only system
+/// clients, that the show-commands mode is on or off.
+#[test]
+fn the_chooser_hears_the_show_commands_mode() {
+    let mut s = setup();
+    let panel = s.panel();
+    let app = tagged(&mut s, panel, 4, "edit");
+    s.window_of(app, 400, 300, 0x0040_4040);
+    let chooser = system(&mut s);
+    s.f().take(app);
+    s.f().take(chooser);
+    let chord = [
+        (code::RIGHT_META, 1),
+        (code::SLASH, 1),
+        (code::SLASH, 0),
+        (code::RIGHT_META, 0),
+    ];
+    let told = |s: &mut Setup, end: u32| -> Vec<bool> {
+        s.f()
+            .take(end)
+            .iter()
+            .filter_map(|m| decode::<gui::Commands>(m, 0).ok())
+            .map(|(_, c)| c.on)
+            .collect()
+    };
+    s.keys(&chord);
+    assert_eq!(told(&mut s, chooser), [true]);
+    assert!(told(&mut s, app).is_empty(), "not an application");
+    // A system client added while the mode is on hears it at once.
+    let late = system(&mut s);
+    assert_eq!(told(&mut s, late), [true]);
+    s.keys(&chord);
+    assert_eq!(told(&mut s, chooser), [false]);
 }

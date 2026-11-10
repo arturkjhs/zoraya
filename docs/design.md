@@ -647,7 +647,10 @@ and [ADR-0170](adr/0170-clipboard-and-drag-and-drop.md), with the proposed
   (`AddApplication`). On `Open`, `Save` or `PickDirectory` the chooser lists the folder through `zoraya-fsclient` and
   asks the compositor for a sheet under that application's window (`CreateSheet`, system clients only); the
   compositor draws the strip with the emblem and "Open a file for APP", the bar's mark, and gives the owner no input
-  while the sheet is open. Only a key or a press in the sheet confirms; the answer is one connection with ADR-0153's
+  while the sheet is open. Only a key or a press in the sheet confirms, and none in its first 500 ms nor a key or
+  button held from before it mapped (ADR-0245's condition, `SHEET_GUARD_NS`); in show-commands mode, which the
+  compositor tells system clients (`Commands`), the line under the sentence is the grant's `zosh` line (for `Save`,
+  `+w FOLDER APP · gives less: create or replace NAME`). The answer is one connection with ADR-0153's
   rights for the kind (`Open` reads; `Save` is the folder narrowed to the one name, with create's rights;
   `PickDirectory` reads or is a `tree`), the display name and the kind's words (`+r plán.txt`), never the path; the
   chooser then tells the compositor `Granted`, and the window's frame shows the pill (`+r ~/project/plán.txt`). One

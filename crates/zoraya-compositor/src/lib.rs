@@ -81,6 +81,21 @@ pub const CLIENT_KEY: u64 = 64;
 /// How long the display driver may take to answer a flush before the
 /// compositor drops it and tells the manager (ADR-0093, Decision).
 pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
+/// How long a new sheet ignores the keyboard and the pointer's buttons, so
+/// that a key the person was about to press for the window below does not
+/// confirm a request timed to meet it (ADR-0245, the architect's condition).
+pub const SHEET_GUARD_NS: u64 = 500_000_000;
+
+/// What a new sheet ignores: everything until `until`, then the keys and
+/// buttons held down when it mapped (or pressed before `until`), each until
+/// its release.
+#[derive(Debug, Clone, Copy)]
+struct SheetGuard {
+    sheet: Key,
+    until: u64,
+    keys: [u64; 8],
+    buttons: u32,
+}
 /// How often a flush that found the driver's queue full is tried again.
 pub const RETRY_NS: u64 = 10_000_000;
 
@@ -357,6 +372,10 @@ pub struct Compositor<P: Platform> {
     /// Keys whose press reached a client: their release reaches it too,
     /// even during a chord or the switcher (review 7b, 12).
     delivered: [u64; 8],
+    /// Every key down now, by code (below 512).
+    held: [u64; 8],
+    /// The newest sheet's guard (ADR-0245).
+    sheet_guard: Option<SheetGuard>,
     /// The enabled keyboard layouts, indices of `zoraya_keymap::LAYOUTS`,
     /// in switching order (ADR-0163: `gui.keyboard-layouts`, a setting from
     /// 7f; `us ua cz` until then).
@@ -449,6 +468,8 @@ impl<P: Platform> Compositor<P> {
             switcher_frame: Vec::new(),
             scene: false,
             delivered: [0; 8],
+            held: [0; 8],
+            sheet_guard: None,
             layouts: ["us", "ua", "cz"]
                 .iter()
                 .filter_map(|n| zoraya_keymap::by_name(n))
@@ -863,6 +884,7 @@ impl<P: Platform> Compositor<P> {
                 // Keys it held down will never be released (review R10).
                 self.keymap = Keymap::new();
                 self.meta = 0;
+                self.held = [0; 8];
                 self.buttons = 0;
                 self.drag = None;
             }
@@ -897,6 +919,14 @@ impl<P: Platform> Compositor<P> {
             _ => 0,
         };
         if button != 0 {
+            let now = self.platform.now();
+            if let Some(g) = self.sheet_guard.as_mut() {
+                if value == 0 {
+                    g.buttons &= !button;
+                } else if value == 1 && now < g.until {
+                    g.buttons |= button;
+                }
+            }
             if value == 0 {
                 self.buttons &= !button;
                 if button == gui::buttons::LEFT {
@@ -913,6 +943,19 @@ impl<P: Platform> Compositor<P> {
         }
         if (0x110..0x200).contains(&code_) {
             return;
+        }
+        if (code_ as usize) < 512 {
+            let (word, mask) = (code_ as usize / 64, 1u64 << (code_ % 64));
+            if value == 0 {
+                self.held[word] &= !mask;
+                // A key held from before the sheet mapped counts again
+                // once it is released.
+                if let Some(g) = self.sheet_guard.as_mut() {
+                    g.keys[word] &= !mask;
+                }
+            } else {
+                self.held[word] |= mask;
+            }
         }
         // The system key: held, and never a client's (INV-0160-3).
         match code_ {
@@ -1023,6 +1066,9 @@ impl<P: Platform> Compositor<P> {
             // release was sent above.
             return;
         }
+        if self.guards_key(focus, code_) {
+            return;
+        }
         if bit {
             self.delivered[word] |= mask;
         }
@@ -1047,6 +1093,7 @@ impl<P: Platform> Compositor<P> {
         }
         if code_ == code::SLASH {
             self.commands = !self.commands;
+            self.tell_commands();
             self.dock_changed();
             let s = self.screen();
             self.dirty(&s);
@@ -1567,12 +1614,13 @@ impl<P: Platform> Compositor<P> {
             self.send_event(key.client, m);
         } else {
             let s = self.scale.factor();
+            let buttons = self.guarded_buttons(key);
             let m = gui::WindowPointer {
                 dropped: 0,
                 window: key.id,
                 x: px / s,
                 y: py / s,
-                buttons: Flags(self.buttons),
+                buttons: Flags(buttons),
                 serial: self.clients[key.client].as_ref().map_or(0, |c| c.presses),
             };
             self.send_event(key.client, m);
@@ -2195,6 +2243,14 @@ impl<P: Platform> Compositor<P> {
                 {
                     c.system = true;
                 }
+                // A chooser that starts while the mode is on hears it.
+                let slot = self
+                    .clients
+                    .iter()
+                    .position(|c| c.as_ref().is_some_and(|c| c.end == h));
+                if let Some(slot) = slot.filter(|_| s == status::OK && self.commands) {
+                    self.send_event_plain(slot, &gui::Commands { on: true });
+                }
                 (s, true)
             }
             33 if driver && one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
@@ -2257,6 +2313,46 @@ impl<P: Platform> Compositor<P> {
             .get(slot)
             .and_then(Option::as_ref)
             .is_some_and(|c| c.system)
+    }
+
+    /// Whether the guard of a new sheet keeps key `code_` from `focus`:
+    /// any key in its first `SHEET_GUARD_NS`, and a key held from before it
+    /// mapped until that key's release (ADR-0245).
+    fn guards_key(&mut self, focus: Key, code_: u32) -> bool {
+        let Some(g) = self.sheet_guard else {
+            return false;
+        };
+        if g.sheet != focus {
+            return false;
+        }
+        let held = (code_ as usize) < 512 && g.keys[code_ as usize / 64] & (1 << (code_ % 64)) != 0;
+        held || self.platform.now() < g.until
+    }
+
+    /// The buttons a pointer event to `key` carries: none in a new sheet's
+    /// first `SHEET_GUARD_NS`, and never one held from before (ADR-0245).
+    fn guarded_buttons(&mut self, key: Key) -> u32 {
+        match self.sheet_guard {
+            Some(g) if g.sheet == key => {
+                if self.platform.now() < g.until {
+                    0
+                } else {
+                    self.buttons & !g.buttons
+                }
+            }
+            _ => self.buttons,
+        }
+    }
+
+    /// Tells every system client the show-commands mode, so that the
+    /// chooser's sheet shows its grant's `zosh` line (ADR-0245).
+    fn tell_commands(&mut self) {
+        let m = gui::Commands { on: self.commands };
+        for slot in 0..self.clients.len() {
+            if self.is_system(slot) {
+                self.send_event_plain(slot, &m);
+            }
+        }
     }
 
     /// The sheet open under `owner`, if any.
@@ -2383,6 +2479,13 @@ impl<P: Platform> Compositor<P> {
         );
         self.place_sheets(owner);
         let key = Key { client: slot, id };
+        let until = self.platform.now().saturating_add(SHEET_GUARD_NS);
+        self.sheet_guard = Some(SheetGuard {
+            sheet: key,
+            until,
+            keys: self.held,
+            buttons: self.buttons,
+        });
         if self
             .focus
             .is_some_and(|f| f == owner || f.client == owner.client)

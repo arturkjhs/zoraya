@@ -97,6 +97,7 @@ fn each_pick_gives_the_kind_and_rights_of_its_request() {
     assert_eq!(g.rights() & rights::WRITE, 0);
     assert_eq!(g.shown, "plán.txt");
     assert_eq!(g.line, "+r ~/project/plán.txt edit");
+    assert_eq!(g.shell, g.line, "an open's line is the shell's");
     assert_eq!(g.words, "+r plán.txt", "Chosen carries no path (ADR-0167)");
     assert_eq!(g.pill, "+r ~/project/plán.txt");
     assert_eq!(b.sentence(), "edit will be given this file, to read:");
@@ -122,6 +123,12 @@ fn each_pick_gives_the_kind_and_rights_of_its_request() {
         rights::READ | rights::WRITE | rights::CREATE | rights::SYNC | rights::CLONE
     );
     assert_eq!(g.line, "create or replace ~/new.txt");
+    // Show-commands mode's line: the least `zosh` grant that covers it,
+    // and what the sheet gives instead (ADR-0245).
+    assert_eq!(
+        g.shell,
+        "+w ~ edit \u{b7} gives less: create or replace new.txt"
+    );
     assert_eq!(g.pill, "+c ~/new.txt");
     assert_eq!(g.words, "+c new.txt");
     // Selecting a folder leaves the name as it was.

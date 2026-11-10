@@ -343,6 +343,13 @@ protocol! {
         text: Data<'a, MAX_CLIPBOARD>,
     }
 
+    /// To a system client (the chooser): the show-commands mode (System+?,
+    /// ADR-0172 point 8) is on or off, so that a sheet shows the `zosh`
+    /// line of its grant (ADR-0245, the architect's condition).
+    message Commands = 29, handles 0 {
+        on: bool,
+    }
+
     /// Manager: a new client, with the compositor's end of its channel.
     message AddClient = 32, handles 1 {}
     message ManagerDone = 32, handles 0 {
