@@ -52,6 +52,10 @@ fn model() -> Model {
     let dir = "/home/ann/project";
     let mut m = Model::new(dir, HOME, Some("project"), places(&project_holds(), HOME));
     m.now = NOW;
+    m.openers = vec![
+        (String::from("txt"), String::from("edit")),
+        (String::from("md"), String::from("edit")),
+    ];
     m.show(dir, project_items());
     m
 }
@@ -680,4 +684,46 @@ fn a_drop_on_a_folder_moves_in_one_place_and_copies_otherwise() {
     m.click(3, 0);
     m.start_drag(6);
     assert_eq!(m.selected_names(), ["plán.txt"]);
+}
+
+/// Review 7h, 8: a drop onto a folder that is another place copies even
+/// where both may change; from a folder the window only reads it copies.
+#[test]
+fn a_drop_into_another_place_or_from_a_read_only_one_copies() {
+    let holds = vec![
+        (String::from("/"), false),
+        (String::from("~"), true),
+        (String::from("~/project"), true),
+    ];
+    let mut m = Model::new(HOME, HOME, Some("wide"), places(&holds, HOME));
+    m.show(
+        HOME,
+        vec![item("project", true, 0, 0), item("a.txt", false, 2, 0)],
+    );
+    m.click(1, 0);
+    m.dropped_here(Some(0), 0);
+    assert_eq!(
+        acts(&mut m),
+        [Act::Transfer {
+            sources: vec![String::from("/home/ann/a.txt")],
+            target: String::from("/home/ann/project"),
+            copy: true,
+        }]
+    );
+    // Home read only: still a copy into the project.
+    let holds = vec![
+        (String::from("/"), false),
+        (String::from("~/project"), true),
+    ];
+    let mut m = Model::new(HOME, HOME, Some("narrow"), places(&holds, HOME));
+    m.show(
+        HOME,
+        vec![item("project", true, 0, 0), item("a.txt", false, 2, 0)],
+    );
+    m.click(1, 0);
+    m.dropped_here(Some(0), 0);
+    assert!(matches!(
+        acts(&mut m)[..],
+        [Act::Transfer { copy: true, .. }]
+    ));
 }

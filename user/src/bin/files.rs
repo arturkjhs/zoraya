@@ -640,6 +640,10 @@ fn main() -> i32 {
         .find(|(p, w)| *w && p != "/")
         .map_or(home.clone(), |(p, _)| p.clone());
     let mut m = Model::new(&start, &home, room.as_deref(), model_places);
+    m.openers = zoraya_panel::OPENERS
+        .iter()
+        .map(|(e, a)| (String::from(*e), String::from(*a)))
+        .collect();
     m.now = fs
         .time_base(volume)
         .map(|b| b.saturating_add(clock_monotonic()))

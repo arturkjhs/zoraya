@@ -37,9 +37,12 @@ Measured: nothing; host tests and the GUI tests of stage 7h.
      the focused client as a `Key` with a new modifier bit, `SYSTEM`. The compositor's chords never do. A change to
      INV-0160-3.
   2. *`WindowPointer` carries the modifiers held* (Shift, Ctrl, Alt, `SYSTEM`), a new field.
-  3. *`Commands` goes to every client*, not only to system clients: one bit, the mode the person turned on.
-  4. *An `Offer` is accepted unasked within 1 s of a press or key the compositor delivered to that client's focused
-     window* (a gesture inside the window, as browsers' transient activation): Copy path. A change to INV-0170-2.
+  3. *`Commands` goes to every client*, not only to system clients: one bit, the mode the person turned on. A change
+     to ADR-0245's condition as recorded ("told to system clients").
+  4. *An `Offer` is accepted unasked once within 1 s of a press the compositor delivered to the body of that
+     client's focused window* (a gesture inside the window, as browsers' transient activation): Copy path. Never from
+     an untrusted room's client; a key gives no such right; the right goes with a focus change to another client, a
+     System+C or System+X, and the client's end. A change to INV-0170-2.
   5. *`DragEnded` says where the drop was when it was on the source's own window* (`over`, `x`, `y`,
      `modifiers`), and nothing else; no handle moves. The source copies or moves what it already holds. A change to
      ADR-0170's `DragEnded`, not to INV-0170-3.
@@ -49,8 +52,11 @@ Measured: nothing; host tests and the GUI tests of stage 7h.
 - **Evidence for:** Drivers 1 to 4. Each widening carries only what the person did in that window; the system key
   still starts every compositor chord, and no client learns another's input.
 - **Evidence against:** A client now sees System+letter chords the compositor leaves free, so a later compositor
-  chord takes a key some application may use (a list kept in one place, `TAKEN_CHORDS`). Copy path writes the
-  clipboard without System+C, within a second of a click in the window.
+  chord takes a key some application may use (a list kept in one place, `TAKEN_CHORDS`). Any trusted application the
+  person clicks in may replace the clipboard once within the second after the click, not only through Copy path
+  (review 7h, 2). Three messages gain fields under their old ordinals (`WindowPointer`, `DragEnded`, `OpenWith`),
+  against ADR-0052's "a changed method is a new ordinal": every encoder and decoder is in the tree and built together
+  (review 7h, 7). Pointer events carry the modifiers to the focused client only.
 - **Cost:** Built: about 300 lines outside the file manager.
 - **Precedent:** macOS sends Command chords the system does not take to the application; its open panel is a
   separate process (`desktop/survey.md#macoss-sandboxed-open-panel`). Haiku's Tracker copies on a drop onto a
@@ -83,8 +89,9 @@ accepts Ctrl where it accepts Command, so that it works as Option B if points 1 
 - **INV-0248-1.** A chord with the system key whose key is in the compositor's table, Alt+Tab and F12 never reach a
   client; any other System chord reaches only the focused client, with `SYSTEM` set. *Check:* host test of the
   routing over every key with the system key held.
-- **INV-0248-2.** An unasked `Offer` is accepted only from the client whose focused window received a press or a key
-  within the last second, once per such gesture. *Check:* host test of the compositor's offer rule.
+- **INV-0248-2.** An unasked `Offer` is accepted only from a client of a trusted room whose focused window received a
+  press in its body within the last second, once per press, and not after a focus change to another client or a
+  System+C or System+X. *Check:* host tests of the compositor's offer rule.
 - **INV-0248-3.** `DragEnded` carries a place only when the drop was over the source's own window, and no `Drop` is
   sent then. *Check:* host test of a drag released over the source, over another client and over nothing.
 - **INV-0248-4.** The panel launches `OpenTerminal`'s terminal only in the caller's room and only at a path that

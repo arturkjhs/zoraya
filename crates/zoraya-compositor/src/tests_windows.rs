@@ -1488,3 +1488,52 @@ fn a_popups_outline_is_its_body() {
         .unwrap();
     assert_eq!(s.outer(0, p.window), s.body(0, p.window));
 }
+
+/// INV-0248-1 over every key: with the system key held, a key of the
+/// compositor's table never reaches a client; every other key reaches the
+/// focused client, with `SYSTEM`.
+#[test]
+fn every_system_chord_is_the_compositors_or_the_focused_clients() {
+    let mut s = setup();
+    let (a, _, _) = s.toplevel(100, 60, 1);
+    s.f().take(a);
+    let meta = code::LEFT_META;
+    for k in 1u32..0x110 {
+        if [code::LEFT_META, code::RIGHT_META].contains(&k)
+            || [
+                code::W,
+                code::M,
+                code::LEFT,
+                code::RIGHT,
+                code::ENTER,
+                code::SLASH,
+                code::SPACE,
+                code::R,
+            ]
+            .contains(&k)
+        {
+            // Those act (close, hide, tile, a terminal, the modes) and
+            // change the scene; R is checked below with the rest.
+            continue;
+        }
+        s.keys(&[(meta, 1), (k, 1), (k, 0), (meta, 0)]);
+        let got: Vec<gui::Key> = s
+            .f()
+            .take(a)
+            .iter()
+            .filter_map(|m| decode::<gui::Key>(m, 0).ok())
+            .map(|(_, k)| k)
+            .collect();
+        if TAKEN_CHORDS.contains(&k) {
+            assert!(got.is_empty(), "{k} is the compositor's");
+        } else {
+            let press = got.iter().find(|g| g.pressed);
+            assert!(
+                press.is_some_and(|p| p.code == k && p.modifiers.0 & gui::modifiers::SYSTEM != 0),
+                "{k} reaches the focused client"
+            );
+        }
+    }
+    s.keys(&[(meta, 1), (code::R, 1), (code::R, 0), (meta, 0)]);
+    assert!(keys_of(&s.f().take(a)).is_empty());
+}

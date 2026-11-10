@@ -89,26 +89,29 @@ drag 409 288 409 232
 serial files: Moved c.txt to ~/docs.
 mdrag alt 409 288 409 232
 serial files: Copied z.txt to ~/docs.
+# A folder copied whole (Option onto docs).
+mdrag alt 409 260 409 232
+serial files: Copied New folder to ~/docs.
 # A double click enters the folder.
 dclick 409 232
-serial files: ~/docs lists c.txt z.txt
-# The context menu on c.txt: Copy path.
-rclick 409 232
+serial files: ~/docs lists New folder/ c.txt z.txt
+# The context menu on c.txt (the second row): Copy path.
+rclick 409 260
 pause 500
 shot files-menu
-click 439 408
+click 439 436
 serial files: Copied ~/docs/c.txt.
 # In show-commands mode the menu writes each item's zosh line.
 chord meta slash
-rclick 409 232
+rclick 409 260
 pause 500
 shot files-menu-commands
 key esc
 chord meta slash
 # Open terminal here: a terminal in this folder, in the window's room.
-rclick 409 232
+rclick 409 260
 pause 300
-click 439 434
+click 439 462
 serial files: A terminal in ~/docs.
 pause 1500
 # Up and back in the toolbar, and the place Home in the sidebar.
@@ -120,6 +123,12 @@ click 131 162
 serial files: ~/docs lists
 click 180 234
 serial files: ~ lists docs/ New folder/ z.txt
+# A folder with everything in it deleted, after the card.
+click 409 232
+key delete
+pause 300
+key ret
+serial files: Deleted docs.
 # The first terminal: power off.
 click 85 400
 pause 300

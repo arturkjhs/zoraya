@@ -26,6 +26,7 @@ use zoraya_abi::{
 use zoraya_panel::{Action, Give, Launch, Panel};
 use zoraya_proto_gui as gui;
 use zoraya_protocol::{Data, Message, NO_REPLY, decode, encode};
+use zoraya_settings::rooms::Room;
 use zoraya_user::files::{File, read_all};
 use zoraya_user::{
     channel_create, channel_read, channel_write, clock_monotonic, directory_lookup, dup,
@@ -157,7 +158,7 @@ struct State {
     /// it was launched in (`None` is `home`): `files` may ask `OpenWith` and
     /// `OpenTerminal`, `settings` `SettingsChanged`, nothing else (review
     /// 7f, 8).
-    launchers: Vec<Option<(Handle, &'static str, Option<String>)>>,
+    launchers: Vec<Option<(Handle, &'static str, Option<Room>)>>,
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -327,7 +328,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         });
         if let Some(ours) = launcher {
             if ok {
-                watch_launcher(st, ours, l.app, l.room.as_ref().map(|r| r.name.clone()));
+                watch_launcher(st, ours, l.app, l.room.clone());
             } else {
                 let _ = handle_close(ours);
             }
@@ -351,7 +352,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     }
 }
 
-fn watch_launcher(st: &mut State, end: Handle, app: &'static str, room: Option<String>) {
+fn watch_launcher(st: &mut State, end: Handle, app: &'static str, room: Option<Room>) {
     let i = match st.launchers.iter().position(Option::is_none) {
         Some(i) => i,
         None => {
@@ -394,7 +395,7 @@ fn apply_settings(st: &State) -> bool {
 /// `home` with the file, read only (ADR-0167 point 1, ADR-0168 point 4).
 /// `SettingsChanged` from the settings window: the file is read and sent
 /// to the compositor.
-fn launcher_requests(st: &mut State, i: usize, panel: &Panel) {
+fn launcher_requests(st: &mut State, i: usize) {
     let Some((end, app, room)) = st.launchers[i].clone() else {
         return;
     };
@@ -442,9 +443,10 @@ fn launcher_requests(st: &mut State, i: usize, panel: &Panel) {
         {
             let path = core::str::from_utf8(m.path.0).unwrap_or("");
             let home = st.root.as_ref().map(zoraya_user::namespace::shell_home);
-            let room_rec = room.as_ref().and_then(|n| panel.rooms.get(n)).cloned();
+            // The room it was launched in, as it was then: never home's
+            // holds for a room since gone or renamed (review 7h, 4).
             let status = match zoraya_panel::terminal_at(
-                room_rec.as_ref(),
+                room.as_ref(),
                 path,
                 home.as_deref().unwrap_or("/home"),
             ) {
@@ -577,7 +579,7 @@ fn main() -> i32 {
             }
         }
         for i in 0..st.launchers.len() {
-            launcher_requests(&mut st, i, &panel);
+            launcher_requests(&mut st, i);
         }
         if clock_monotonic() >= next_reload {
             if reload(&mut panel, st.root.as_ref()) {

@@ -5,8 +5,8 @@
 name = clear-field
 appearance = both
 concept = clear
-screens = desktop grants drop chooser rooms switcher settings terminal commands dock dock-compare trust
-screens.2x = desktop
+screens = desktop grants drop chooser rooms switcher settings terminal commands dock dock-compare trust files files-select files-rename files-delete files-menu files-menu-commands
+screens.2x = desktop files files-select files-rename files-delete files-menu files-menu-commands
 font.ui = Inter-Regular.ttf
 font.ui.medium = Inter-Medium.ttf
 font.mono = JetBrainsMono-Regular.ttf

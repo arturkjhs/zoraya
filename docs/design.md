@@ -781,13 +781,14 @@ Stage 7h (TASK-24, the architect's request and the approved mockups
 - **`files`** carries out each act: lists through its places (the longest that covers a path; a place's write right
   found by asking the service for a connection that writes), opens a file through the panel (`OpenWith`, with
   `app: edit` for Open in edit), asks the panel for a terminal at a folder (`OpenTerminal`), offers a path to the
-  clipboard (an unasked `Offer` within a second of the menu's click), moves within a place (`rename_into` with the
+  clipboard (an unasked `Offer` within a second of the menu's click: a press in its body, never in an untrusted
+  room, the right gone with a focus change or a System+C), moves within a place (`rename_into` with the
   target's token) and copies otherwise or with Option (a folder whole, at most 4096 entries and 32 deep), deletes a
   folder whole, starts drags, and on `DragEnded` over one of its own folders copies or moves the selection there. It
   prints its holds, every status line and every order on the console for the GUI tests.
 - **ADR-0248 (proposed)**: System chords the compositor does not take (`TAKEN_CHORDS`) reach the focused client with
-  `SYSTEM`; `WindowPointer` carries the modifiers; `Commands` goes to every client; one unasked `Offer` within
-  `GESTURE_OFFER_NS` of a press or key in the client's focused window; `DragEnded` carries the place of a drop on the
+  `SYSTEM`; `WindowPointer` carries the modifiers (to the focused client only); `Commands` goes to every client; one
+  unasked `Offer` within `GESTURE_OFFER_NS` of a press in a trusted client's focused window; `DragEnded` carries the place of a drop on the
   source's own window; `FreeSpace` in the file protocol; `OpenTerminal` launches a terminal in the caller's room at a
   path that room's holds cover (`terminal_at`).
 - **Tests**: `zoraya-files`' host tests (the model, the view's hit-testing, gestures through the widget, painting at
@@ -797,7 +798,10 @@ Stage 7h (TASK-24, the architect's request and the approved mockups
   the file manager tiled so that the drop lands on `t_open`. The runner gained `dclick`, `rclick`, `mclick`, `mdrag`
   and chords of several modifiers.
 
-Not built in 7h: a trash (`docs/backlog.md`); moving or copying several files by a drag to another window (a drop
+Not built in 7h, or known: a trash (`docs/backlog.md`); a copy or delete that fails part way (a link inside a
+folder, no space, past 4096 entries) leaves what was done and says only "Cannot copy NAME"; a forwarded System chord's
+release carries no `SYSTEM`; `OpenTerminal` is not rate-limited (one request at a time per launcher channel, as
+`OpenWith`); moving or copying several files by a drag to another window (a drop
 carries one file, ADR-0170); a scroll wheel (the list follows the keyboard's cursor); the window's title stays
 "Files".
 

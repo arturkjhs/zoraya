@@ -377,7 +377,8 @@ fn it_paints_at_both_scales_with_the_selection_drawn() {
 
 #[test]
 fn a_drops_place_names_its_row() {
-    let r = rig(1);
+    let mut r = rig(1);
+    r.paint();
     let m = r.model.borrow();
     let (x, y) = Rig::row(1);
     assert_eq!(crate::view::row_at(&m, x as u32, y as u32), Some(1));
@@ -418,4 +419,32 @@ fn a_drag_or_another_item_is_no_double_click() {
     later(1000);
     r.click(x, y, 0);
     assert!(r.acts().is_empty(), "another item");
+}
+
+/// Review 7h, 5: a drop below the rows shown (on the status line, over a
+/// folder scrolled out of view) names no row.
+#[test]
+fn a_drop_below_the_rows_shown_names_none() {
+    let mut r = rig(1);
+    let mut items = Vec::new();
+    for i in 0..40 {
+        items.push(item(&alloc::format!("d{i:02}"), true, 0));
+    }
+    r.model.borrow_mut().show("/home/ann/project", items);
+    r.paint();
+    let m = r.model.borrow();
+    let rows = m.visible_rows;
+    assert!(rows > 0 && rows < 40);
+    let (x, last) = Rig::row(rows as i32 - 1);
+    assert_eq!(
+        crate::view::row_at(&m, x as u32, last as u32),
+        Some(rows - 1)
+    );
+    let (_, below) = Rig::row(rows as i32);
+    assert_eq!(crate::view::row_at(&m, x as u32, below as u32), None);
+    assert_eq!(
+        crate::view::row_at(&m, x as u32, 530),
+        None,
+        "the status line"
+    );
 }

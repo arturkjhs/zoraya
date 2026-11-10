@@ -1089,7 +1089,6 @@ impl<P: Platform> Compositor<P> {
             if bit {
                 self.delivered[word] |= mask;
             }
-            self.gesture = Some((focus.client, self.platform.now()));
             let m = gui::Key {
                 dropped: 0,
                 code: code_,
@@ -1125,7 +1124,6 @@ impl<P: Platform> Compositor<P> {
         if bit {
             self.delivered[word] |= mask;
         }
-        self.gesture = Some((focus.client, self.platform.now()));
         let m = gui::Key {
             dropped: 0,
             code: code_,
@@ -1183,6 +1181,9 @@ impl<P: Platform> Compositor<P> {
             } else {
                 let now = self.platform.now();
                 self.copy_asked = Some((f.client, now));
+                // A copy asked is the person's; no gesture's offer takes its
+                // place (review 7h, 3).
+                self.gesture = None;
                 let m = gui::Copy {
                     window: f.id,
                     cut: code_ == code::X,
@@ -1286,10 +1287,11 @@ impl<P: Platform> Compositor<P> {
         if !asked && !gestured {
             return status::BAD_RANGE;
         }
-        if !asked {
+        if asked {
+            self.copy_asked = None;
+        } else {
             self.gesture = None;
         }
-        self.copy_asked = None;
         self.clipboard = String::from(text);
         status::OK
     }
@@ -1542,7 +1544,11 @@ impl<P: Platform> Compositor<P> {
                 if let Some(c) = self.clients.get_mut(key.client).and_then(Option::as_mut) {
                     c.presses = c.presses.wrapping_add(1);
                     self.body_press = Some((key, c.presses, now));
-                    self.gesture = Some((key.client, now));
+                    // A press in its body, not a key, and never an untrusted
+                    // room's client (review 7h, 2): its unasked offer.
+                    if !c.record.untrusted {
+                        self.gesture = Some((key.client, now));
+                    }
                 }
             }
         }
@@ -1710,7 +1716,14 @@ impl<P: Platform> Compositor<P> {
                 y: py / s,
                 buttons: Flags(buttons),
                 serial: self.clients[key.client].as_ref().map_or(0, |c| c.presses),
-                modifiers: Flags(self.modifiers_now()),
+                // The modifiers only to the focused client: another window
+                // under the pointer learns nothing of the keys (review 7h,
+                // 10).
+                modifiers: Flags(if self.focus.is_some_and(|f| f.client == key.client) {
+                    self.modifiers_now()
+                } else {
+                    0
+                }),
             };
             self.send_event(key.client, m);
         }
@@ -2194,6 +2207,14 @@ impl<P: Platform> Compositor<P> {
         let key = key.map(|k| self.sheet_of(k).unwrap_or(k));
         if self.focus == key {
             return;
+        }
+        // A gesture is its window's client's while it keeps the focus
+        // (review 7h, 3).
+        if self
+            .gesture
+            .is_some_and(|(c, _)| key.is_none_or(|k| k.client != c))
+        {
+            self.gesture = None;
         }
         let old = self.focus;
         self.focus = key;
@@ -2798,6 +2819,9 @@ impl<P: Platform> Compositor<P> {
     fn drop_client(&mut self, slot: usize) {
         // A Copy asked of this client is not answered by the next one to
         // take its slot (review 7f, 11).
+        if self.gesture.is_some_and(|(c, _)| c == slot) {
+            self.gesture = None;
+        }
         if self.copy_asked.is_some_and(|(c, _)| c == slot) {
             self.copy_asked = None;
         }

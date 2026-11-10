@@ -958,7 +958,11 @@ changed by it and still marked checked for what they say outside its points.
 
 ### Review
 
-REVIEW_7H
+`docs/tasks/TASK-24-review-7h.md`: 4 errors (the host tests red at the reviewed commit; the gesture offer open to
+any key and any client, untrusted ones included; the gesture outliving a focus change and cancelling another's copy;
+`OpenTerminal` falling back to `home` for a room gone), 5 warnings, 7 notes. All errors fixed with tests; the
+warnings fixed or recorded (the two invariants ADR-0248 changes, the in-place message changes, copy and delete's
+partial results).
 
 ### Mutation testing
 

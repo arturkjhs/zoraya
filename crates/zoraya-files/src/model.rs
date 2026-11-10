@@ -226,8 +226,13 @@ pub struct Model {
     pub ascending: bool,
     /// One flag per item.
     selected: Vec<bool>,
-    /// The list's first row shown (the view keeps the cursor in sight).
+    /// The list's first row shown (the view keeps the cursor in sight),
+    /// and how many rows it shows (the view sets both when it lays out).
     pub top: usize,
+    pub visible_rows: usize,
+    /// The application for each extension, as the panel opens files
+    /// (`zoraya_panel::OPENERS`), for the menu's `zosh` lines.
+    pub openers: Vec<(String, String)>,
     /// View positions.
     pub anchor: Option<usize>,
     pub cursor: Option<usize>,
@@ -277,6 +282,8 @@ impl Model {
             ascending: true,
             selected: Vec::new(),
             top: 0,
+            visible_rows: 0,
+            openers: Vec::new(),
             anchor: None,
             cursor: None,
             back: Vec::new(),
@@ -306,7 +313,8 @@ impl Model {
             Vec::new()
         };
         let cursor_name = self.cursor_item().map(|i| self.items[i].name.clone());
-        if dir != self.dir {
+        let same = dir == self.dir;
+        if !same {
             self.top = 0;
         }
         self.dir = String::from(dir);
@@ -320,9 +328,11 @@ impl Model {
         self.confirm = None;
         self.menu = None;
         self.refilter();
+        // The cursor stays on its item only in the same folder (review 7h,
+        // 12).
         self.cursor = cursor_name
-            .and_then(|n| self.position_of(&n))
-            .filter(|_| dir == self.dir);
+            .filter(|_| same)
+            .and_then(|n| self.position_of(&n));
         self.anchor = self.cursor;
     }
 
@@ -920,15 +930,43 @@ impl Model {
             .as_ref()
             .and(self.menu.and_then(|m| m.item))
             .is_some_and(|i| self.items[i].dir);
+        // What the person's selection is, for Delete (review 7h, 11).
+        let selected: Vec<String> = self
+            .selected_names()
+            .iter()
+            .map(|n| self.shown(&join(&self.dir, n)))
+            .collect();
+        let name = String::from(t.rsplit('/').next().unwrap_or(&t));
+        let opener = name
+            .rsplit_once('.')
+            .filter(|(stem, _)| !stem.is_empty())
+            .and_then(|(_, ext)| {
+                let ext = lower(ext);
+                self.openers
+                    .iter()
+                    .find(|(e, _)| *e == ext)
+                    .map(|(_, a)| a.clone())
+            });
         match m {
             MenuItem::Open if dir_of => format!("cd {t}"),
-            MenuItem::Open | MenuItem::OpenInEdit => format!("edit {t}"),
+            // Open is the panel's opener for the name; Open in edit is edit.
+            MenuItem::Open => match opener {
+                Some(app) => format!("{app} {t}"),
+                None => format!("(no application opens {name})"),
+            },
+            MenuItem::OpenInEdit => format!("edit {t}"),
             MenuItem::Rename => format!("mv {t} {}", self.shown(&join(&self.dir, "NAME"))),
             MenuItem::Delete => {
-                if dir_of {
-                    format!("rm --recursive {t}")
+                let all = if selected.is_empty() {
+                    t.clone()
                 } else {
-                    format!("rm {t}")
+                    selected.join(" ")
+                };
+                let any_dir = self.selection().iter().any(|i| self.items[*i].dir) || dir_of;
+                if any_dir {
+                    format!("rm --recursive {all}")
+                } else {
+                    format!("rm {all}")
                 }
             }
             MenuItem::NewFolder => format!("mkdir {}", self.shown(&join(&self.dir, "NAME"))),
@@ -979,8 +1017,8 @@ impl Model {
 
     // ---- drags -----------------------------------------------------------
 
-    /// A drag starts from the row at `pos`: that file is carried (a folder
-    /// is not, ADR-0170's drop is a file).
+    /// A drag starts from the row at `pos`: that item is carried, a file or
+    /// a folder, as a read connection (ADR-0170).
     pub fn start_drag(&mut self, pos: usize) {
         let Some(it) = self.item_at(pos) else { return };
         let path = join(&self.dir, &it.name);

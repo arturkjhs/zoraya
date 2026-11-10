@@ -173,6 +173,7 @@ impl FilesView {
             }
         }
         m.top = m.top.min(n.saturating_sub(rows));
+        m.visible_rows = rows;
     }
 
     fn menu_rect(&self, m: &Model) -> Option<paint::Rect> {
@@ -1174,8 +1175,11 @@ pub fn row_at(m: &Model, x: u32, y: u32) -> Option<usize> {
     if x < SIDEBAR_W || y < first {
         return None;
     }
-    let pos = m.top + ((y - first) / ROW_H) as usize;
-    (pos < m.view().len()).then_some(pos)
+    // Only a row shown: not one scrolled out of view under the status line
+    // (review 7h, 5).
+    let row = ((y - first) / ROW_H) as usize;
+    let pos = m.top + row;
+    (row < m.visible_rows && pos < m.view().len()).then_some(pos)
 }
 
 impl Widget for FilesView {

