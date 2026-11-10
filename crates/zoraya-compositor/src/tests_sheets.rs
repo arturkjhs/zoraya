@@ -604,8 +604,8 @@ fn a_button_held_from_before_the_sheet_reaches_it_only_after_release() {
     assert!(buttons(&mut s).contains(&gui::buttons::LEFT));
 }
 
-/// ADR-0245's condition (2): System+? tells the chooser, and only system
-/// clients, that the show-commands mode is on or off.
+/// ADR-0245's condition (2): System+? tells the chooser, and every other
+/// client (proposed ADR-0248), that the show-commands mode is on or off.
 #[test]
 fn the_chooser_hears_the_show_commands_mode() {
     let mut s = setup();
@@ -631,8 +631,9 @@ fn the_chooser_hears_the_show_commands_mode() {
     };
     s.keys(&chord);
     assert_eq!(told(&mut s, chooser), [true]);
-    assert!(told(&mut s, app).is_empty(), "not an application");
-    // A system client added while the mode is on hears it at once.
+    // Every client hears it (proposed ADR-0248: the file manager's menu).
+    assert_eq!(told(&mut s, app), [true]);
+    // A client added while the mode is on hears it at once.
     let late = system(&mut s);
     assert_eq!(told(&mut s, late), [true]);
     s.keys(&chord);

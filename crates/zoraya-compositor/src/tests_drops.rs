@@ -316,6 +316,8 @@ fn the_clipboard_moves_only_on_the_persons_chords() {
     at(&mut t.s, bx, by, Some(1));
     at(&mut t.s, bx, by, Some(0));
     t.s.f().take(t.b);
+    // Past the press's own unasked offer (proposed ADR-0248, tested below).
+    t.s.f().clock += GESTURE_OFFER_NS + 1;
     chord(&mut t.s, code::V);
     assert!(!ordinals(&t.s.f().take(t.b)).contains(&28));
     // System+C asks the focused client; its offer within 500 ms is kept,
@@ -625,5 +627,101 @@ fn a_name_wider_than_the_kept_room_is_composed_to_its_end_and_cleaned_after() {
         px(&mut t.s, end.0, end.1),
         under,
         "nothing stays at the end"
+    );
+}
+
+/// Proposed ADR-0248, INV-0248-2: one unasked `Offer` is taken from the
+/// client whose focused window got a press or a key within a second (a
+/// menu's Copy path); none later, none from another client, one per
+/// gesture.
+#[test]
+fn a_gesture_in_a_window_lets_it_offer_once() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.f().take(t.b);
+    assert_eq!(offer(&mut t.s, t.a, "from a"), status::BAD_RANGE);
+    assert_eq!(offer(&mut t.s, t.b, "~/project/notes.txt"), status::OK);
+    assert_eq!(offer(&mut t.s, t.b, "again"), status::BAD_RANGE, "once");
+    // A key to it: once more; too late: refused.
+    t.s.keys(&[(30, 1), (30, 0)]);
+    t.s.f().clock += GESTURE_OFFER_NS + 1;
+    assert_eq!(offer(&mut t.s, t.b, "late"), status::BAD_RANGE);
+    t.s.keys(&[(30, 1), (30, 0)]);
+    assert_eq!(offer(&mut t.s, t.b, "in time"), status::OK);
+}
+
+fn drag_ended(out: &[Vec<u8>]) -> Option<gui::DragEnded> {
+    out.iter()
+        .find_map(|m| decode::<gui::DragEnded>(m, 0).ok())
+        .map(|(_, d)| d)
+}
+
+/// Proposed ADR-0248, INV-0248-3: a drop over the source's own window
+/// tells the source where, with the modifiers held, and sends no `Drop`;
+/// over another window or nothing, the source learns nothing of the place.
+#[test]
+fn a_drop_on_the_sources_own_window_tells_it_where() {
+    let mut t = two();
+    let (px, py) = (t.oa.x + 10, t.oa.y + 60);
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    // Alt held at the release: a copy, for the file manager.
+    t.s.keys(&[(code::LEFT_ALT, 1)]);
+    // In the source's body, raised above the other by its press.
+    let (qx, qy) = (t.oa.x + 40, t.oa.y + 90);
+    at(&mut t.s, qx, qy, None);
+    at(&mut t.s, qx, qy, Some(0));
+    t.s.keys(&[(code::LEFT_ALT, 0)]);
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    let body =
+        t.s.c
+            .window(Key {
+                client: 0,
+                id: t.ida,
+            })
+            .unwrap()
+            .body_rect();
+    assert_eq!(d.over.0, 1);
+    assert_eq!((i64::from(d.x), i64::from(d.y)), (qx - body.x, qy - body.y));
+    assert_eq!(d.modifiers.0 & gui::modifiers::ALT, gui::modifiers::ALT);
+    assert!(t.s.f().given.is_empty(), "no Drop, no handle given");
+    assert!(t.s.f().closed.contains(&entry), "the entry closed");
+    // Over the other window: a Drop there, and no place for the source.
+    at(&mut t.s, px, py, Some(1));
+    let entry = t.s.f().channel(1);
+    assert_eq!(drag(&mut t.s, t.a, t.ida, entry), status::OK);
+    let (tx, ty) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    at(&mut t.s, tx, ty, None);
+    at(&mut t.s, tx, ty, Some(0));
+    let d = drag_ended(&t.s.f().take(t.a)).expect("DragEnded");
+    assert_eq!((d.over.0, d.x, d.y, d.modifiers.0), (0, 0, 0, 0));
+}
+
+/// Proposed ADR-0248: a pointer event carries the modifiers held, so that
+/// a client tells a Shift or Command click.
+#[test]
+fn pointer_events_carry_the_modifiers() {
+    let mut t = two();
+    let (bx, by) = (t.ob.right() - 15, t.ob.bottom() - 15);
+    t.s.keys(&[(code::LEFT_SHIFT, 1)]);
+    t.s.keys(&[(code::LEFT_META, 1)]);
+    at(&mut t.s, bx, by, Some(1));
+    at(&mut t.s, bx, by, Some(0));
+    t.s.keys(&[(code::LEFT_META, 0), (code::LEFT_SHIFT, 0)]);
+    let mods: Vec<u32> =
+        t.s.f()
+            .take(t.b)
+            .iter()
+            .filter_map(|m| decode::<gui::WindowPointer>(m, 0).ok())
+            .map(|(_, p)| p.modifiers.0)
+            .collect();
+    assert!(!mods.is_empty());
+    assert!(
+        mods.iter()
+            .all(|m| *m == gui::modifiers::SHIFT | gui::modifiers::SYSTEM),
+        "{mods:?}"
     );
 }

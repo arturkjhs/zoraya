@@ -217,7 +217,9 @@ impl Widget for EditorView {
                     Response::Repaint
                 }
             }
-            Event::Pointer { x, y, buttons } if buttons & 1 != 0 && self.rect.contains(x, y) => {
+            Event::Pointer { x, y, buttons, .. }
+                if buttons & 1 != 0 && self.rect.contains(x, y) =>
+            {
                 // The cell under the press, by the last paint's metrics.
                 let (k, lh, cw, pad) = self.cell;
                 let scale = zoraya_tokens::Scale::new(k).unwrap_or(zoraya_tokens::Scale::ONE);

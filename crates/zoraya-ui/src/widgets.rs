@@ -45,7 +45,7 @@ fn shape_edge(p: &Painter, c: &mut Canvas<'_>, r: LRect, radius: Logical, color:
 
 /// A press of the primary button inside the widget.
 fn pressed_in(e: &Event, r: LRect) -> bool {
-    matches!(e, Event::Pointer { x, y, buttons } if *buttons & 1 != 0 && r.contains(*x, *y))
+    matches!(e, Event::Pointer { x, y, buttons, .. } if *buttons & 1 != 0 && r.contains(*x, *y))
 }
 
 /// Text, in `fg.text` (or `fg.text.secondary`).

@@ -81,11 +81,13 @@ pub enum Event {
         text: Option<char>,
         modifiers: u32,
     },
-    /// The pointer at a logical point, with the buttons held.
+    /// The pointer at a logical point, with the buttons held and the
+    /// modifiers (`zoraya-proto-gui`'s bits, the system key included).
     Pointer {
         x: Logical,
         y: Logical,
         buttons: u32,
+        modifiers: u32,
     },
     /// The widget gained or lost the window's keyboard focus.
     Focus(bool),
@@ -393,7 +395,7 @@ impl Window {
                 }
                 None => Response::None,
             },
-            Event::Pointer { x, y, buttons } => {
+            Event::Pointer { x, y, buttons, .. } => {
                 let mut path = Vec::new();
                 if !hit(self.root.as_mut(), x, y, &mut path) {
                     return Response::None;

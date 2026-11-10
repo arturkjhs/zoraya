@@ -299,13 +299,64 @@ fn the_chords_are_the_compositors_and_the_switcher_reaches_every_window() {
     // c is hidden (System+M on it, once focused).
     s.c.step();
     let meta = code::LEFT_META;
-    for k in [code::SPACE, code::R, code::SLASH, 28, 30, code::TAB] {
+    for k in [code::SPACE, code::R, code::SLASH, 28] {
         s.keys(&[(meta, 1), (k, 1), (k, 0), (meta, 0)]);
     }
     s.keys(&[(code::F12, 1), (code::F12, 0)]);
     for end in [a, b, c] {
         let got = keys_of(&s.f().take(end));
         assert!(got.is_empty(), "keys reached a client: {got:?}");
+    }
+    // A chord the compositor does not take reaches the focused client
+    // alone, with `SYSTEM` and no text (proposed ADR-0248, INV-0248-1).
+    let focused = s.c.focused().unwrap();
+    for k in [30, code::TAB, code::UP] {
+        s.keys(&[(meta, 1), (k, 1), (k, 0), (meta, 0)]);
+    }
+    for (i, end) in [a, b, c].into_iter().enumerate() {
+        let got: Vec<gui::Key> = s
+            .f()
+            .take(end)
+            .iter()
+            .filter_map(|m| decode::<gui::Key>(m, 0).ok())
+            .map(|(_, k)| k)
+            .collect();
+        if i == focused.client {
+            let pressed: Vec<u32> = got.iter().filter(|k| k.pressed).map(|k| k.code).collect();
+            assert_eq!(pressed, [30, code::TAB, code::UP]);
+            assert!(
+                got.iter()
+                    .filter(|k| k.pressed)
+                    .all(|k| { k.modifiers.0 & gui::modifiers::SYSTEM != 0 && k.text.0 == 0 })
+            );
+            assert_eq!(
+                got.iter().filter(|k| !k.pressed).count(),
+                3,
+                "and their releases"
+            );
+        } else {
+            assert!(got.is_empty(), "{i}: {}", got.len());
+        }
+    }
+    // Every key of the compositor's table is still its own.
+    for k in TAKEN_CHORDS {
+        if [
+            code::W,
+            code::M,
+            code::LEFT,
+            code::RIGHT,
+            code::ENTER,
+            code::SLASH,
+            code::SPACE,
+        ]
+        .contains(&k)
+        {
+            continue;
+        }
+        s.keys(&[(meta, 1), (k, 1), (k, 0), (meta, 0)]);
+        for end in [a, b, c] {
+            assert!(keys_of(&s.f().take(end)).is_empty(), "{k}");
+        }
     }
     let target = s.c.focused().unwrap();
     s.keys(&[(meta, 1), (code::M, 1), (code::M, 0), (meta, 0)]);
@@ -1110,9 +1161,23 @@ fn a_release_reaches_the_client_that_saw_the_press() {
         got.iter().map(|k| (k.0, k.1)).collect::<Vec<_>>(),
         [(30, true), (30, false)]
     );
-    // A key pressed during a chord is released to nobody.
-    s.keys(&[(code::LEFT_META, 1), (31, 1), (code::LEFT_META, 0), (31, 0)]);
+    // A key pressed during a chord of the compositor's is released to
+    // nobody.
+    s.keys(&[
+        (code::LEFT_META, 1),
+        (code::R, 1),
+        (code::LEFT_META, 0),
+        (code::R, 0),
+    ]);
     assert!(keys_of(&s.f().take(a)).is_empty());
+    // One of a chord it does not take reaches the client, its release too
+    // (proposed ADR-0248).
+    s.keys(&[(code::LEFT_META, 1), (31, 1), (code::LEFT_META, 0), (31, 0)]);
+    let got = keys_of(&s.f().take(a));
+    assert_eq!(
+        got.iter().map(|k| (k.0, k.1)).collect::<Vec<_>>(),
+        [(31, true), (31, false)]
+    );
 }
 
 /// Mutation testing (7b): every clamp and side of a drag.

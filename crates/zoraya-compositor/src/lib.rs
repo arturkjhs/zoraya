@@ -81,10 +81,31 @@ pub const CLIENT_KEY: u64 = 64;
 /// How long the display driver may take to answer a flush before the
 /// compositor drops it and tells the manager (ADR-0093, Decision).
 pub const FLUSH_DEADLINE_NS: u64 = 2_000_000_000;
+/// The keys whose chord with the system key is the compositor's (ADR-0160,
+/// ADR-0163, ADR-0168, ADR-0170, ADR-0172): with the system key, every other
+/// key reaches the focused client (proposed ADR-0248, INV-0248-1). A new
+/// chord goes here, and is checked against the applications' keys.
+pub const TAKEN_CHORDS: [u32; 11] = [
+    code::ENTER,
+    code::SLASH,
+    code::SPACE,
+    code::C,
+    code::X,
+    code::V,
+    code::W,
+    code::M,
+    code::LEFT,
+    code::RIGHT,
+    code::R,
+];
+
 /// How long a new sheet ignores the keyboard and the pointer's buttons, so
 /// that a key the person was about to press for the window below does not
 /// confirm a request timed to meet it (ADR-0245, the architect's condition).
 pub const SHEET_GUARD_NS: u64 = 500_000_000;
+/// How long after a press or key in its focused window a client may offer
+/// the clipboard unasked (proposed ADR-0248).
+pub const GESTURE_OFFER_NS: u64 = 1_000_000_000;
 
 /// What a new sheet ignores: everything until `until`, then the keys and
 /// buttons held down when it mapped (or pressed before `until`), each until
@@ -361,6 +382,10 @@ pub struct Compositor<P: Platform> {
     clipboard: String,
     /// The client asked to copy, and when: its `Offer` is taken then.
     copy_asked: Option<(usize, u64)>,
+    /// The last press or key the compositor delivered to a client's focused
+    /// window, and when: one unasked `Offer` is taken within
+    /// `GESTURE_OFFER_NS` of it (proposed ADR-0248, INV-0248-2).
+    gesture: Option<(usize, u64)>,
     /// The pointer moved or a button changed this frame.
     pending_pointer: bool,
     switcher: Option<Switcher>,
@@ -462,6 +487,7 @@ impl<P: Platform> Compositor<P> {
             body_press: None,
             clipboard: String::new(),
             copy_asked: None,
+            gesture: None,
             carried: None,
             pending_pointer: false,
             switcher: None,
@@ -1016,6 +1042,10 @@ impl<P: Platform> Compositor<P> {
                     c.source.client,
                     &gui::DragEnded {
                         window: c.source.id,
+                        over: Below(0),
+                        x: 0,
+                        y: 0,
+                        modifiers: Flags(0),
                     },
                 );
             } else {
@@ -1041,10 +1071,33 @@ impl<P: Platform> Compositor<P> {
             return;
         }
         if self.meta != 0 {
-            // Every chord with the system key is the compositor's.
-            if key.pressed && value == 1 {
-                self.chord(code_);
+            // A chord of the compositor's table is the compositor's alone
+            // (INV-0160-3, INV-0248-1).
+            if TAKEN_CHORDS.contains(&code_) {
+                if key.pressed && value == 1 {
+                    self.chord(code_);
+                }
+                return;
             }
+            // Any other reaches the focused client with `SYSTEM` (proposed
+            // ADR-0248: Command+Up, Command+Shift+N in the file manager);
+            // its release reaches it as every delivered key's does.
+            let Some(focus) = self.focus else { return };
+            if !key.pressed || self.guards_key(focus, code_) {
+                return;
+            }
+            if bit {
+                self.delivered[word] |= mask;
+            }
+            self.gesture = Some((focus.client, self.platform.now()));
+            let m = gui::Key {
+                dropped: 0,
+                code: code_,
+                pressed: true,
+                modifiers: Flags((key.modifiers & gui::modifiers::ALL) | gui::modifiers::SYSTEM),
+                text: Below(0),
+            };
+            self.send_event(focus.client, m);
             return;
         }
         if code_ == code::TAB && alt {
@@ -1072,6 +1125,7 @@ impl<P: Platform> Compositor<P> {
         if bit {
             self.delivered[word] |= mask;
         }
+        self.gesture = Some((focus.client, self.platform.now()));
         let m = gui::Key {
             dropped: 0,
             code: code_,
@@ -1221,11 +1275,19 @@ impl<P: Platform> Compositor<P> {
         let asked = self
             .copy_asked
             .is_some_and(|(c, at)| c == slot && now.saturating_sub(at) <= DRAG_WITHIN_NS);
+        // Or once, within `GESTURE_OFFER_NS` of a press or key in its
+        // focused window (a menu's Copy path, proposed ADR-0248).
+        let gestured = self
+            .gesture
+            .is_some_and(|(c, at)| c == slot && now.saturating_sub(at) <= GESTURE_OFFER_NS);
         let Ok(text) = core::str::from_utf8(text) else {
             return status::BAD_RANGE;
         };
-        if !asked {
+        if !asked && !gestured {
             return status::BAD_RANGE;
+        }
+        if !asked {
+            self.gesture = None;
         }
         self.copy_asked = None;
         self.clipboard = String::from(text);
@@ -1326,12 +1388,37 @@ impl<P: Platform> Compositor<P> {
         if let Some(e) = entry {
             self.platform.close(e);
         }
+        // Over the source's own window: where, so that it copies or moves
+        // what it holds already (proposed ADR-0248); no `Drop` was sent.
+        let own = self.pointer.and_then(|(x, y)| {
+            let (key, zone) = self.under(x, y)?;
+            let body = self.windows[self.index(key)?].body_rect();
+            let s = i64::from(self.scale.factor());
+            (key == c.source && zone == Zone::Body && body.contains(x, y))
+                .then(|| (((x - body.x) / s) as u32, ((y - body.y) / s) as u32))
+        });
+        let modifiers = self.modifiers_now();
         self.send_event_plain(
             c.source.client,
             &gui::DragEnded {
                 window: c.source.id,
+                over: Below(u32::from(own.is_some())),
+                x: own.map_or(0, |o| o.0),
+                y: own.map_or(0, |o| o.1),
+                modifiers: Flags(if own.is_some() { modifiers } else { 0 }),
             },
         );
+    }
+
+    /// The modifiers held, as key and pointer events carry them, the system
+    /// key as `SYSTEM` (proposed ADR-0248).
+    fn modifiers_now(&self) -> u32 {
+        let system = if self.meta != 0 {
+            gui::modifiers::SYSTEM
+        } else {
+            0
+        };
+        (self.keymap.modifiers() & gui::modifiers::ALL) | system
     }
 
     fn pointer_rect(&self, x: i64, y: i64) -> Rect {
@@ -1455,6 +1542,7 @@ impl<P: Platform> Compositor<P> {
                 if let Some(c) = self.clients.get_mut(key.client).and_then(Option::as_mut) {
                     c.presses = c.presses.wrapping_add(1);
                     self.body_press = Some((key, c.presses, now));
+                    self.gesture = Some((key.client, now));
                 }
             }
         }
@@ -1622,6 +1710,7 @@ impl<P: Platform> Compositor<P> {
                 y: py / s,
                 buttons: Flags(buttons),
                 serial: self.clients[key.client].as_ref().map_or(0, |c| c.presses),
+                modifiers: Flags(self.modifiers_now()),
             };
             self.send_event(key.client, m);
         }
@@ -2250,14 +2339,6 @@ impl<P: Platform> Compositor<P> {
                 {
                     c.system = true;
                 }
-                // A chooser that starts while the mode is on hears it.
-                let slot = self
-                    .clients
-                    .iter()
-                    .position(|c| c.as_ref().is_some_and(|c| c.end == h));
-                if let Some(slot) = slot.filter(|_| s == status::OK && self.commands) {
-                    self.send_event_plain(slot, &gui::Commands { on: true });
-                }
                 (s, true)
             }
             33 if driver && one && decode::<gui::AttachDisplay>(bytes, 1).is_ok() => {
@@ -2351,14 +2432,13 @@ impl<P: Platform> Compositor<P> {
         }
     }
 
-    /// Tells every system client the show-commands mode, so that the
-    /// chooser's sheet shows its grant's `zosh` line (ADR-0245).
+    /// Tells every client the show-commands mode, so that the chooser's
+    /// sheet and the file manager's menu show their `zosh` lines (ADR-0245,
+    /// proposed ADR-0248).
     fn tell_commands(&mut self) {
         let m = gui::Commands { on: self.commands };
         for slot in 0..self.clients.len() {
-            if self.is_system(slot) {
-                self.send_event_plain(slot, &m);
-            }
+            self.send_event_plain(slot, &m);
         }
     }
 
@@ -2577,6 +2657,10 @@ impl<P: Platform> Compositor<P> {
             system: false,
             presses: 0,
         });
+        // A client that starts while the mode is on hears it.
+        if self.commands {
+            self.send_event_plain(slot, &gui::Commands { on: true });
+        }
         status::OK
     }
 
