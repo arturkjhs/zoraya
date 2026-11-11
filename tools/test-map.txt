@@ -20,6 +20,7 @@ crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
 crates/zoraya-heap/           test-qemu
 crates/zoraya-handle/         test-qemu
+crates/zoraya-charge/         test-qemu
 crates/zoraya-events/         test-qemu
 crates/zoraya-channel/        test-qemu
 crates/zoraya-time/           test-qemu

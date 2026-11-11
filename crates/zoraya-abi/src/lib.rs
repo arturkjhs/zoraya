@@ -17,6 +17,7 @@ extern crate std;
 
 pub mod native;
 pub mod posix;
+pub mod quota;
 pub mod snapshot;
 pub mod spawn;
 
@@ -77,6 +78,10 @@ statuses! {
     /// The platform does not offer what the call asks: `power_reset` with no
     /// reset in the firmware (ADR-0159).
     NotSupported = 15,
+    /// A limit of the caller's job (or of an account in a service) refused the
+    /// request and nothing changed (ADR-0263). The kernel puts the field that
+    /// refused, a [`QuotaField`], in the value register.
+    OverQuota = 16,
 }
 
 /// Slots in a handle table (ADR-0040). Slot 0 does not exist.
@@ -148,7 +153,9 @@ impl Rights {
     pub const MAP: Rights = Rights(1 << 11);
     pub const INTERRUPT: Rights = Rights(1 << 12);
     pub const DMA: Rights = Rights(1 << 13);
-    const KNOWN: u32 = (1 << 14) - 1;
+    /// `job_set_limits` (ADR-0261 point 3).
+    pub const LIMIT: Rights = Rights(1 << 14);
+    const KNOWN: u32 = (1 << 15) - 1;
 
     /// Unknown bits are refused (CP-11).
     pub const fn from_raw(raw: u32) -> Option<Rights> {
@@ -227,6 +234,9 @@ pub mod job_signals {
     /// Between `job_suspend` and `job_resume` of this job or one above it
     /// (ADR-0105 item 8).
     pub const SUSPENDED: u32 = 1 << 2;
+    /// A charge was refused by this job's own limit (ADR-0263 point 3).
+    /// Cleared by `job_get_usage` with `UsageFlags::CLEAR`.
+    pub const OVER_QUOTA: u32 = 1 << 3;
 }
 
 /// Signal bits of the console (ADR-0060).
@@ -301,12 +311,14 @@ object_types! {
         COMMON.union(Rights::WAIT).union(Rights::SIGNAL).union(Rights::RESUME),
         Duplicable;
     JobObject "job"
-        Waiting::Signals(job_signals::TERMINATED | job_signals::SUSPENDED),
+        Waiting::Signals(
+            job_signals::TERMINATED | job_signals::SUSPENDED | job_signals::OVER_QUOTA),
         COMMON
             .union(Rights::WAIT)
             .union(Rights::SIGNAL)
             .union(Rights::CREATE_PROCESS)
-            .union(Rights::KILL),
+            .union(Rights::KILL)
+            .union(Rights::LIMIT),
         Duplicable;
     PortObject "port"
         Waiting::NotWaitable,
@@ -871,6 +883,35 @@ impl Arg for JobFlags {
     }
 }
 
+/// `job_get_usage`'s flags (ADR-0261 point 11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsageFlags(u32);
+
+impl UsageFlags {
+    pub const NONE: UsageFlags = UsageFlags(0);
+    /// Also clear the job's `OVER_QUOTA` signal.
+    pub const CLEAR: UsageFlags = UsageFlags(1);
+
+    pub const fn clears(self) -> bool {
+        self.0 & 1 != 0
+    }
+}
+
+impl Arg for UsageFlags {
+    const PARAM: Param = Param::Flags;
+
+    fn decode(r: &[u64]) -> Result<UsageFlags, Status> {
+        match word(r[0])? {
+            raw @ (0 | 1) => Ok(UsageFlags(raw)),
+            _ => Err(Status::InvalidArgument),
+        }
+    }
+
+    fn encode(&self, r: &mut [u64]) {
+        r[0] = u64::from(self.0);
+    }
+}
+
 macro_rules! flag_arg {
     ($type:ty, $from:expr, $to:expr) => {
         impl Arg for $type {
@@ -1099,6 +1140,8 @@ syscalls! {
     48 JobResume job_resume(job: Handle) false;
     49 ObjectGetSignals object_get_signals(handle: Handle) false;
     50 PowerReset power_reset(power: Handle) false;
+    51 JobSetLimits job_set_limits(job: Handle, limits: Bytes) false;
+    52 JobGetUsage job_get_usage(job: Handle, out: Bytes, flags: UsageFlags) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then
