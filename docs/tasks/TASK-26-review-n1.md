@@ -226,3 +226,27 @@ correctness.
   bytes per frame.
 - **ADR-0221 rule 6 note.** The note added to ADR-0221's open questions is within ADR-0001 rule 6, and the INV-0221-2
   row correctly stays `not yet applicable`.
+
+## Dispositions
+
+Fixes are in the commits of `work/n1` after this review (`git log 7bef8cf..`); the subjects name the finding.
+
+| # | Disposition |
+|---|---|
+| 1 | Fixed in "N1 review error 1 and warnings 3, 5": `zoraya_virtio_net::serve::Server` keeps what a full channel refused as bounded state (finished transmit slots as bits, one reply of each kind, one reason per transmit slot, a link flag) and writes it again on every event and on `WRITABLE`; a slot is `Tx::Done` until its `Sent` is written. Host tests: a full channel for 20 rounds then drained, no loss or duplicate, a slot not reusable before its `Sent`. |
+| 2 | Fixed in "N1 review error 2": `make check-ethd-maps` (`tools/check-ethd-maps.sh`, in `make check`, CI and the test map); INV-0280-1 says `checked: make check-ethd-maps` and its text says it is a source check, not a run in QEMU. |
+| 3 | Fixed in the first commit: a refusal is a `Rejected { slot, reason }` message (new in `zoraya-proto-nic`, ADR-0280 recommendation 4), never a `Sent`; `STILL_QUEUED` keeps the slot with the driver until its real `Sent`. Host and round-trip tests; `t_net` checks the reasons. |
+| 4 | Fixed in the first commit: `t_net` closes the channel and waits (10 s) for `ethd` to end by itself with exit code 0, prints which ending ran, then `dma_release_quarantine` must find nothing. The kill ending with frames in flight stays untested (open for N2, with INV-0221-3). |
+| 5 | Fixed: the dispatch is `serve.rs` in `zoraya-virtio-net` with 8 host tests (hostile client, handles closed, bounded reads) and in the fuzz target. |
+| 6 | Fixed in "N1 review warning 6": `run-qemu.sh --probe-net` (0 / 1 / 2); the step skips only on 1, listed by `make test`'s summary; fails on any other probe failure; fails on 1 too when `CI` is set. |
+| 7 | Fixed in "N1 review warning 7": a `hostfwd` and `tools/net-poke.sh`; SLIRP's who-has for `10.0.2.15` is answered in QEMU and the step greps the pcap for the reply (HVF run: 1 answered). Try 2 of 2 (try 1: SLIRP already knew the guest's MAC). TCG: see the report. |
+| 8 | Fixed: `Net::poll` takes at most `2 * SLOTS` receive entries per call. |
+| 9 | Open: `read_link` still reads `status` as two byte accesses and the MAC without `ConfigGeneration`. QEMU tolerates both; a `Registers::read16` and a generation loop are for the first real-device or N3 work. Not recorded elsewhere than here and the report. |
+| 10 | Fixed in the commit of warning 6 (report text) and the `ethd.rs` header comment. |
+| 11 | Fixed: `Net::undo` reposts and counts the frame; the Server uses it. |
+| 12 | Fixed in code and ADR: an `Attach` whose body does not decode ends the driver like every other undecodable message (recommendation 6 now says so, and that an `Attach` without a handle gets `BAD_OBJECT`). |
+| 13 | Fixed: `post` sets `Posted` after a successful `offer`. |
+| 14 | Fixed for the steps before the rounds (`next_not_received` gives unsolicited frames back and skips link messages); in the rounds a refused transmit panics on purpose and an unsolicited frame is released. |
+| 15 | Partly fixed: the target now drives the client half (messages, a full channel, link flips) and was compiled and run on 20000 random inputs in a scratch crate; not run under libFuzzer. Open: `fuzz/Cargo.lock` is stale (cargo regenerates it with network), and nothing in `make check` builds the fuzz workspace. |
+| 16 | Fixed: `kernel/` and `crates/zoraya-rt/` select `test-net`. Open: no step boots the normal kernel with `--net`, so the `ethd` that `init` starts is never run (N2). |
+| 17 | Open, accepted: one `QUEUE_NOTIFY` per slot; it matters for N3's throughput rows, not for correctness. |

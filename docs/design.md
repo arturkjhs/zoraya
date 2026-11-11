@@ -876,7 +876,8 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   `tests/posix/zosh.script` (POSIX programs from `zosh`, ADR-0153 rule 10, ADR-0200) and `tests/posix/tour.script`,
   the whole of `docs/tour.md`, whose GUI twin `make test-tour-gui` plays (INV-0154-4);
 - `make test-net` (N1): the test kernel with `--net` and a pcap, whose `t_net` runs `ethd` against the real device (under
-  TCG too with `FULL=1`); it is skipped on a QEMU without user-mode networking.
+  TCG too with `FULL=1`); it is skipped, and listed in the summary, on a QEMU without user-mode networking locally, and
+  fails there on CI.
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP, one key every 8 ms (QEMU's virtio-input queue holds 16
   keys and drops what a busy guest has not taken), and reads QEMU screendumps back as text with `zoraya_term::read`:
@@ -1482,10 +1483,10 @@ yet (N2): the driver is built and tested alone.
 - **`init`** starts `ethd` when a virtio-net device is alone on its page and keeps the channel open. It is not
   supervised until `netd` exists.
 - **`t_net`** (a test of the test kernel, `make test-net`) plays `netd`: it starts `ethd`, attaches a frames object, sends
-  hostile requests (refused), then sends 20 ARP who-has for `10.0.2.2` through the transmit path and reads SLIRP's
-  reply through the receive path. The step checks the pcap holds the reply too. A who-has for `10.0.2.15` from SLIRP
-  would be answered by hand; SLIRP did not send one in this test (it sends one only when the host starts a
-  connection to the guest), so that answer is host-tested only.
+  hostile requests (refused, with a reason), then sends 20 ARP who-has for `10.0.2.2` through the transmit path and reads
+  SLIRP's reply through the receive path. `make test-net` forwards a host port to the guest and connects to it, so that
+  SLIRP asks who has `10.0.2.15`; `t_net` answers by hand, and the step checks the pcap holds both replies. At the end
+  `t_net` closes the channel and expects `ethd` to reset the device, unpin both memories and exit with code 0 by itself.
 - **The ID register.** The kernel prints `ID_AA64ISAR0_EL1` at boot (ADR-0227's open question). QEMU 11.1.2:
   `0x0221100110212120` under HVF on the Apple CPU (AES 2, SHA1 1, SHA2 2, CRC32 1, atomics 2, RNDR 0), so RNDR is not
   there under HVF; TCG (`cortex-a72`): `0x0000000000011120` (AES 2, SHA1 1, SHA2 1, CRC32 1, atomics 0, RNDR 0), RNDR absent

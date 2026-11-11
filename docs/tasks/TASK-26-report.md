@@ -278,31 +278,38 @@ at or under about 6 minutes; the wall time of the run against the previous 27 mi
 
 - `crates/zoraya-virtio-net`: the virtio-net driver's logic over `zoraya-virtio`'s traits (`#![forbid(unsafe_code)]`):
   `VERSION_1` plus `MAC` and `STATUS` only, one receive and one transmit queue of 128 descriptors, two descriptors per
-  buffer, the MAC from the configuration space, slot states, every device value checked (table below). 24 host tests
-  against the fake device, with a 200-seed random mix of requests and lies.
+  buffer, the MAC from the configuration space, slot states, every device value checked (table below). Its module
+  `serve` is the client-facing half (messages in and out over a `Host` trait; what a full channel refused is kept as
+  bounded state and written again). 34 host tests against the fake device and a fake channel, with a 200-seed random
+  mix of requests and lies.
 - `crates/zoraya-proto-nic`: the frame protocol (`Info`, `Attach`, `Transmit`, `Release`; pushed `Received`, `Sent`,
-  `LinkChanged`) and `arp`, a bounds-checked ARP parser/builder/answerer; 12 host tests (truncations, wrong hardware or
+  `LinkChanged`, and `Rejected` with a reason for a refused transmit) and `arp`, a bounds-checked ARP parser/builder/answerer; 12 host tests (truncations, wrong hardware or
   protocol type or sizes, operations, multicast sender, total decoding of every message).
 - `user/src/bin/ethd.rs` (the process), `t_net.rs` (plays `netd` against the real device), `init` starts `ethd` when a
   virtio-net device is alone on its page (`gui::scan` gained `net`), the kernel prints `ID_AA64ISAR0_EL1`
   (`kernel/src/main.rs`), a kernel test `network_driver_answers_arp`.
 - `tools/run-qemu.sh --net`, `--net-pcap FILE`, `--net-capture-all` (`--net` with `--gui` refused); `make test-net`
   (a step of `make test`, `tools/ci-tests.txt`, a lane of `tools/test-par.sh`) and `make run-net`.
-- `fuzz/fuzz_targets/net_rx.rs` (ARP parser plus a hostile device and client). Not run: no nightly or `cargo-fuzz` on this
-  host. Its body was compiled and driven with 3000 random inputs in a scratch crate outside the repo.
+- `fuzz/fuzz_targets/net_rx.rs` (ARP parser, a hostile device, and the client half: arbitrary messages to `serve::Server`
+  over a channel that is sometimes full). Not run under libFuzzer: no nightly or `cargo-fuzz` on this host. Its body was
+  compiled and driven with 20000 random inputs in a scratch crate outside the repo (no panic).
 - Docs: `docs/design.md` "Network driver" (what exists, measurements, the provider check), ADR-0221's open-question note
   (rule 6).
 
 ### Decisions where the ADRs are silent
 
 - Proposed ADR-0280 (slot layout; recommendation: accept Option B, header in the driver's queue memory, so a slot is a
-  bare frame and the driver never reads frame bytes). Inside it: `Received.at` (wake time), `Sent` also reports refused
-  transmits, one contiguous object, any undecodable message ends the driver.
-- The plan says the runner sends the ARP who-has through SLIRP (a `guestfwd` attempt). SLIRP asks the guest for its MAC
-  only when the host starts a connection to it, and a `guestfwd` attempt needs a TCP stack (N2). So `t_net` sends the
-  who-has for the gateway itself, and the reply arrives through the receive path; both appear in the pcap, which
-  `make test-net` greps for the gateway's ARP reply. A who-has for `10.0.2.15` is answered by `arp::answer` in `t_net`,
-  but SLIRP sent none, so that answer is host-tested only. Open: provoke it from the runner (a `hostfwd`) in N2.
+  bare frame and the driver never reads frame bytes). Inside it: `Received.at` (wake time), `Rejected` (with a reason)
+  reports refused transmits and `Sent` only finished ones, nothing pushed is lost on a full channel (bounded state, not a
+  queue), one contiguous object, any undecodable message ends the driver.
+- The plan says the runner sends the ARP who-has through SLIRP. SLIRP asks the guest for its MAC only when the host
+  starts a connection to it and does not know it yet. So `t_net` sends the who-has for the gateway itself, and the reply
+  arrives through the receive path. For the acceptance (the guest answers an ARP request for `10.0.2.15`), `make
+  test-net` runs QEMU with `--net-forward 47015` (a `hostfwd` to the guest) while `tools/net-poke.sh` connects to that
+  port every quarter second; SLIRP then asks who has `10.0.2.15`, `t_net` answers by `arp::answer` through a transmit
+  slot, and the step greps the pcap for both the gateway's reply and the guest's. Try 1 showed IP frames only: SLIRP
+  had learned the guest's MAC from `t_net`'s own who-has, which had sender `10.0.2.15`. Try 2, with sender `10.0.2.30`,
+  works (HVF: 1 request answered).
 - No new crate dependency: `docs/dependencies.md` unchanged.
 - The provider check is recorded in `docs/design.md`, not in `docs/research/network/survey.md` (CLAUDE.md forbids edits to
   `docs/research/`).
@@ -311,8 +318,9 @@ at or under about 6 minutes; the wall time of the run against the previous 27 mi
 
 INV-0221-2: the driver half is checked (`cargo test -p zoraya-virtio-net -p zoraya-proto-nic`); the row stays `not yet
 applicable (stage 8)` for `netd`'s half (note in ADR-0221's open questions). New INV-0280-1 (proposed ADR): `checked:
-make check`. INV-0230-1 and -3 are partly covered (`restrict=on` under `--test`; the step skips without user-mode
-networking) but their checks (printed command line assertion, fake `qemu` runner test) are not written: still `not yet
+make check-ethd-maps` (a source check, part of `make check` and CI; the kernel cannot list a process's mappings, so
+there is no check in QEMU). INV-0230-1 and -3 are partly covered (`restrict=on` under `--test`; the step skips without
+user-mode networking, listed by `make test`'s summary, and fails on CI) but their checks (printed command line assertion, fake `qemu` runner test) are not written: still `not yet
 applicable (stage 8)`.
 
 ### Where a device-controlled number enters, and where it is checked (for the reviewer)
@@ -328,8 +336,8 @@ applicable (stage 8)`.
 | queue size | `Queue::set_up` | `QUEUE_NUM_MAX < 128` is `Error::Queue` |
 | MAC, link | `Net::new`, `read_link` | zero or multicast MAC is `Unusable`; link is one bit |
 | client slot, length | `Net::release`, `transmit` | slot range, state, length 14..=1514 before any index; refused is counted |
-| client attach | `Ethd::attach`, `Net::attach` | one pinned run of at least 196,608 bytes, `checked_add` on the address |
-| client message | `Ethd::handle` | `Header::decode` and `decode` are total; sequences bounded at 64; unknown ordinal ends the driver |
+| client attach | `Server::attach`, `Net::attach` | one pinned run of at least 196,608 bytes, `checked_add` on the address |
+| client message | `Server::handle` (`serve.rs`) | `Header::decode` and `decode` are total; sequences bounded at 64; unknown ordinal ends the driver |
 | frame bytes | none in `ethd` | the driver reads no slot; `t_net` parses with `arp::parse` (checked slices) |
 
 Buffers under DMA: the queue memory and the client's object are pinned (`dma_pin`) before the device sees an address, and
@@ -347,17 +355,17 @@ unpinned), then calls `dma_release_quarantine` and expects nothing to release. N
 
 ### Tests run
 
-- `cargo test -p zoraya-proto-nic -p zoraya-virtio-net`: 12 and 24 passed.
-- `make check`: all 13 steps pass (fmt, clippy, adr-check, the `check-*`, `check-ci-jobs`).
-- `make test-net` (HVF): PASS, 104 passed and 9 expected failures of the test kernel, `t_net: all passed`, pcap checked,
-  `zoraya-fsck` clean. `FULL=1 make test-net` also under TCG: PASS.
-- `make test-changed` (every step, the Makefile changed; HVF, local): all pass except `test-qemu` config `auto-smp4-2g`,
-  where `t_bound` (Q2) fails `assert_eq!(free_frames(), free)` in "create-loop: frames" (512647 against 512903, 256 frames
-  late). It fails the same way, twice in a row, on `main` at `9a74448` built from `git archive` in a scratch directory,
-  so it is not N1's; an SMP 4 problem of Q2's reaper (frames freed late) for the architect. `test-boot`, `test-files`,
-  `test-libposix`, `test-posix`, `test-posix-gui`, `test-tour-gui`, `test-gui`, `test-crash` pass; `test-net` is not in
-  `test-changed`'s list (run alone above).
-- Not run: the fuzz target; `make test-boot` with `--net` (the normal kernel starts `ethd` under `make run-net`, which no
+- `cargo test -p zoraya-proto-nic -p zoraya-virtio-net`: 12 and 34 passed (after the review fixes).
+- `make check`: all 14 steps pass (fmt, clippy, adr-check, the `check-*` including `check-ethd-maps`, `check-ci-jobs`).
+- `make test-net` (HVF), after the review fixes: PASS, 104 passed and 9 expected failures of the test kernel; `t_net`:
+  the gateway's ARP reply, 1 request for `10.0.2.15` answered, `ethd` ended by itself (reset, unpinned, exit 0),
+  `dma_release_quarantine` found nothing; `zoraya-fsck` clean; the pcap holds both replies. `FULL=1 make test-net`
+  (HVF then TCG): both PASS, same lines.
+- `make test-changed` after the review fixes (HVF, local; the Makefile changed, so every step but `test-net`): all pass
+  (`test-boot`, `test-qemu`, `test-libposix`, `test-files`, `test-crash`, `test-posix`, `test-posix-gui`, `test-tour-gui`,
+  `test-gui`; 404 s). The `t_bound` failure of `auto-smp4-2g` that the first run showed (also on `main`) did not occur in
+  this run: it is a flake of Q2's reaper, not N1's, and is not fixed here.
+- Not run: the fuzz target under libFuzzer; `make test-boot` with `--net` (the normal kernel starts `ethd` under `make run-net`, which no
   step boots).
 
 ### Measurements (`t_net`, 20 rounds, a single run each)
@@ -388,6 +396,6 @@ decides the randomness source and runs it on the target. No dependency row was a
 - Review: read `crates/zoraya-virtio-net/src/lib.rs` and `tests.rs`, `crates/zoraya-proto-nic/src/lib.rs`,
   `crates/zoraya-virtio/src/queue.rs` (`Queue::take`, `begin`), `user/src/bin/ethd.rs`, `user/src/bin/t_net.rs`,
   `tools/run-qemu.sh`, `docs/adr/0280-the-frame-slot-layout.md`, the `Makefile` `test-net` recipe, `fuzz/fuzz_targets/net_rx.rs`.
-- Open for N2: `netd` must create the object `CONTIGUOUS`; supervise `ethd` (`init` does not); provoke SLIRP's who-has from
-  the runner; the kill-with-frames-in-flight test; INV-0230-1/-3 checks; `fuzz/Cargo.lock` is not updated (the fuzz
-  workspace was not built).
+- Open for N2: `netd` must create the object `CONTIGUOUS`; supervise `ethd` (`init` does not); the
+  kill-with-frames-in-flight test; INV-0230-1/-3 checks; `fuzz/Cargo.lock` is not updated (the fuzz workspace was not
+  built; cargo regenerates it on the first run).
