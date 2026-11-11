@@ -56,3 +56,21 @@ copy, not before.
 
 Sonnet main session: implementation, tests, report. Haiku `test-runner`: all QEMU and `make test-changed` runs.
 Opus: the Q1 review.
+
+### Handoff after Q1's candidate run (for a fresh session)
+
+- **State:** branch `work/q1` (pushed at `2548c16`; one local docs commit after it: `docs/design.md`'s Quotas
+  section). Candidate tag `candidate/work-q1`, full CI run `42974811107` (watched by a `ci-watch` subagent; if its
+  result is not in this report, read it with `gh run view 42974811107 --json status,conclusion`). Nothing is merged or
+  tagged yet.
+- **Next:** if the run is green: push the docs commit, merge `origin/main` into the branch, merge into `main` with
+  `--no-ff` from a detached HEAD at `origin/main`, push `HEAD:main`, `ci-watch` on `main`'s run, then tag `stage-8-q1`
+  (`refs/tags/stage-8-q1`) and delete the branch. If red: `log-triage` on the failing job's log, fix forward.
+  Then Q2 (`work/q2` from `main`).
+- **Working rules from the architect (usage check, after the first hour):** keep the main session's context small (grep
+  first, read line ranges, repository questions to the Explore or a Haiku subagent); a fresh session after each merged
+  part and at large step boundaries; `opus-review` gets the diff and the names of the ADRs, not the exploring; Opus only
+  for the kernel, the charge and scheduler code, services' accounts, trust boundaries and `unsafe`, and a Sonnet
+  subagent reviews docs, tests and plain service code; report the cost per part by model.
+- **Cost per model, Q1:** not measured by the session (no counter is available to it); the architect's usage check says
+  the main session ran at about 290k tokens of context per request. Recorded as the reason for the rules above.
