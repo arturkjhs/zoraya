@@ -503,3 +503,60 @@ The kill rows include a 300 ms wait before the kill. SLIRP's lease: 24 h; no rou
   (Q3's netd account); (6) the fuzz targets never ran under libFuzzer, `fuzz/Cargo.lock` is not updated; (7) the burst bound of 64 is
   untuned; (8) a CI runner without a crates.io cache downloads the registry crates in each job (the workflow was not touched), and the
   CI `test-net` job must build the normal kernel too now.
+
+## Q4: the CPU ceiling (branch `work/q4`, on `work/n2`)
+
+### Built
+
+- **`crates/zoraya-cpu`** (new, `no_std`, host tests on a simulated clock): `CpuAcct` per job, `charge` (the run walks up
+  every ancestor; a run that crosses a period boundary counts only its later part to the budget), `decide` (unlimited,
+  run with a slice of `min(10 ms, budget left)` at least 50 us, or park), `set_limit` (1..=1000, not above the parent's
+  effective ceiling) and `RunQueue` (ready list plus one parked list; `pick` parks, `release` returns 64 at a time).
+  12 tests, among them INV-0264-1 and -4 over 2 s on the model and INV-0264-2.
+- **Kernel** `cpu.rs` (job tree adapter, `JobRef`, the period with a test setter, `usage`), `job.rs` (`cpu` leaf lock;
+  `set_limits` takes `cpu`, all or nothing with the others), `sched.rs` (charge at each switch, `pick`, slice armed also for a
+  lone limited thread, `period_end` deadline, `arm_release`), `timer.rs` (two reserved slots), `syscall.rs` (usage
+  record of 88 or 120 bytes; test call `SET_CPU_PERIOD` 0x7018).
+- **ABI**: `JobUsage.cpu: CpuUsage {limit, used_ns, period_used, parked}`, `USAGE_SIZE_CPU` = 120; the decoder reads an
+  88-byte record with the CPU words zero. `zoraya_rt::job_get_usage` asks for 120.
+- **Tests**: `t_cpu` (new, run by the test kernel as `cpu_ceiling_from_a_process`): INV-0264-1, -4, -2 and the wake-up
+  latency at 20, 10 and 100 ms; `t_quota` covers `cpu` in `job_set_limits` (range, parent, all or nothing).
+
+### Decisions where the ADRs are silent (proposed ADR-0285; recommendations)
+
+One parked list, not one per job; parking only in `pick`; a 50 us slice floor; at most 16 parks per pick; `cpu` 0 refused;
+every ancestor charged; IRQ time charged to the interrupted thread; a killed job's parked threads end at the next
+boundary; a 120-byte usage record; two reserved deadline slots; the period settable only in the test kernel. Numbers
+0285..0289 were taken for Q4, 0285 used.
+
+### Invariants delta
+
+INV-0264-1, -2, -4 checked (`cargo test -p zoraya-cpu`, `make test-qemu`). INV-0264-3 stays "not yet applicable" until Q6a:
+the GUI test needs `room new --cpu` and untrusted rooms (refused); its kernel half is in `t_cpu`. New INV-0285-1. The gate
+file gets `cpu-ceiling test-qemu Q4`; `cpu-spinners` stays `pending`, owner Q6a. Open-question notes in ADR-0264 and ADR-0270.
+
+### Measurements (HVF, default guest, test kernel, single runs)
+
+See `docs/design.md`, "Quotas", Q4. 8 spinners at 25% for 2 s: 502 ms of 500 ms; three rooms at 25% under 50%: 1006 ms of
+1000 ms; longest masked interval over the tests 314..1051 us (limit 2 ms), at most 69 units. Wake-up lateness (median / p99 /
+max): 10 ms period 0.75 / 5.6 / 5.7 ms; 20 ms 0.68 / 9.3 / 9.6 ms; 100 ms 0.68 / 49.7 / 50.1 ms. TCG not run locally.
+
+### Scheduler touch points (for the reviewer)
+
+Lock order `SCHED` then the timer queue then a job's `cpu` lock (leaf). `schedule()`: charge walk (<= 32 nodes) and `pick`
+(<= 16 parks, each a walk) with all exceptions masked; `period_end` (timer interrupt, SCHED held): <= 64 moves then an
+immediate re-arm; `arm_release` under SCHED; `JobRef` holds a raw pointer with one SAFETY comment (the thread, and so its
+process and the job chain, is held for the walk). `job.set_limits` reads and writes the `cpu` lock without SCHED: one CPU, no
+kernel preemption (SMP would need SCHED there). `timer::arm` leaves 2 slots instead of 1.
+
+### Not done
+
+- The GUI test of INV-0264-3 (Q6a dependency, above): not written, not run.
+- TCG and the `FULL=1` runs: CI's.
+- No measurement of the per-switch walk on `portbench`/`chanbench`.
+
+### Handoff
+
+Branch `work/q4` on `work/n2`, unmerged. Review: `crates/zoraya-cpu/src/lib.rs`, `kernel/src/sched.rs`, `kernel/src/cpu.rs`,
+`kernel/src/job.rs` (`set_limits`), `kernel/src/timer.rs`, `user/src/bin/t_cpu.rs`, ADR-0285. Commands: `cargo test -p zoraya-cpu`;
+`make test-qemu-one` (prints the `t_cpu:` lines); `make test-changed`.
