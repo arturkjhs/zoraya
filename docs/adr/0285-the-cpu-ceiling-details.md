@@ -9,7 +9,7 @@
 
 Q4 of TASK-26 builds ADR-0264 option D (CP-07; the survey of what other systems do is `quotas/survey.md#cpu`). The ADR fixes the unit, the 20 ms period, charging at each switch, the slice
 for the smaller of 10 ms and the budget left, parked lists with one global deadline, nesting, and the usage fields. The
-code needed a few more choices, each small and none against the ADR; they are listed so that a reviewer of the
+code needed a few more choices. Most are small additions; **two depart from the text of accepted ADR-0264** (point 3, interrupt time; point 5, where a woken thread waits) and are marked DEVIATION below and in "Tensions with accepted ADRs". They are listed so that a reviewer of the
 scheduler finds them in one place (CLAUDE.md, "Decisions"). **Measured** (`docs/design.md`, "Quotas", Q4): 8 spinners at
 25% used 502 ms of 500 ms in 2 s; three rooms at 25% under 50% used 1006 ms of 1000 ms; the longest masked interval over
 those tests 1051 us at most; an uncapped process's wake-up lateness next to two capped rooms at most 5.7, 9.6 and 50.1 ms
@@ -45,9 +45,13 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
 
 1. **One parked list for all jobs.** Every parked thread returns at the same boundary, so a list per job gains nothing
    and costs a list in every job record. A thread is parked only when it reaches the front of the run queue with its job
-   over budget (`RunQueue::pick`, `zoraya-cpu`); a thread woken or preempted just joins the run queue. At most 16
-   threads are parked by one pick (INV-0270-1: the walks are bounded); a thread after the 16th runs for the floor of
-   point 2 and is parked at its own next pick. `cpu.parked` counts parks on the job whose budget was spent.
+   over budget (`RunQueue::pick`, `zoraya-cpu`); a thread woken or preempted just joins the run queue and is parked
+   before it can run. **DEVIATION** from ADR-0264 point 5 ("a thread woken while its job is parked joins the parked
+   list"): the result is the same, no user instruction of a spent job runs, but the wake costs a walk in the next
+   `schedule`. At most 16 threads are parked by one pick (INV-0270-1: the walks are bounded); at that cap the next
+   thread goes back to the front, idle runs and calls `schedule` again, so the rest are parked in further masked
+   intervals and a spent job with 200 threads still runs one floor at most per period (review W1; host test with 200
+   threads and `t_cpu` with 40). `cpu.parked` counts parks on the job whose budget was spent.
 2. **A slice floor of 50 us.** The slice is the smaller of 10 ms and the budget left, but at least 50 us, so a job with a
    few microseconds left does not arm a timer for each. A job over budget by this floor is the overrun of ADR-0264 point
    4 (plus the time to the next return to EL0). A ceiling whose budget is below 50 us (under 0.25% of 20 ms) therefore
@@ -58,8 +62,9 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
    first, put back if the memory or process limit is refused.
 4. **Charging walks every ancestor, limited or not**, as Q1 does for memory: `used_ns` is the job's since creation, so
    `cpu.used_ns` is right for a job that gets a ceiling later. The cost is one lock and an add per ancestor per switch.
-   Interrupt handlers are not subtracted: the time a thread runs includes the interrupts that hit it (ADR-0264 point 3
-   says they charge no one; one CPU cannot separate them without reading the counter in every handler).
+   **DEVIATION** from ADR-0264 point 3 ("interrupt handlers charge no one"): the time a thread runs includes the
+   interrupts that hit it, since separating them needs the counter read in every handler. The effect is a ceiling a
+   little stricter than the sentence, never looser.
 5. **The boundary.** A run that crosses a period boundary counts only its part after the boundary to the new period's
    budget; the part before is in `used_ns`. A period's `period_used` reads as zero in the next period without work.
 6. **Release in batches of 64.** The deadline at the boundary moves 64 parked threads and, if more remain, arms itself
@@ -80,15 +85,22 @@ Rejected by ADR-0264 option A (`quotas/survey.md#linux-cgroups-v2`).
   a simulated clock; nothing in an unlimited job's path changes but a walk of its ancestors per switch.
 - **Negative.** A switch walks the job tree (at most 32 nodes, two lock operations each) with every exception masked; a
   floor of 50 us of overrun per period at most.
+- **Tensions with accepted ADRs.** ADR-0264 point 3 (interrupt time is charged to the interrupted thread) and point 5
+  (a woken thread of a spent job is parked at the next pick, not at the wake; one parked list, not one per job).
 - **Follow-up.** The GUI half of INV-0264-3 waits for rooms with `--cpu` (Q6a); weights and a burst allowance stay with
   ADR-0264's triggers.
 
 ## Invariants
 - **INV-0285-1.** A thread leaves the parked list only through `RunQueue::release`, and every park has a deadline
-  armed or the parked threads were returned at once. *Check:* `cargo test -p zoraya-cpu` (the model scheduler never
+  armed or a bounded batch of the parked threads was returned at once. *Check:* `cargo test -p zoraya-cpu` (the model scheduler never
   strands a thread) and `make test-qemu` (`t_cpu`: a parked spinner moves again next period).
 
 ## Open questions
+- *For the architect:* accept the two deviations above, or ask for interrupt time to be subtracted and for the wake to
+  park at once?
+- Rooms under one parent are not promised any share: with three rooms at 25% under 50%, one room used 0 ms in 2 s
+  while the other two used the parent's whole budget (`t_cpu`, measured). ADR-0264 has ceilings, not shares; weights
+  are its revisit trigger. Is that acceptable for untrusted rooms?
 - Whether the floor of 50 us should be a function of the period (it is 0.5% of 10 ms).
 - Whether the per-switch walk shows in `portbench` or `chanbench` (not measured here).
 - Lock order, for the reviewer: `SCHED`, then the timer queue's lock, then a job's `cpu` lock; the last is a leaf. The

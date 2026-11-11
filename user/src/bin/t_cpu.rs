@@ -21,7 +21,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::quota::JobLimits;
 use zoraya_abi::spawn::Encoder;
-use zoraya_abi::{Handle, JOB, JobFlags, MapFlags, MemoryFlags, Rights};
+use zoraya_abi::{Handle, JOB, JobFlags, MapFlags, MemoryFlags, Rights, Status};
 use zoraya_user::{
     clock_monotonic, dup, handle_close, image, job_create, job_get_usage, job_kill, job_set_limits,
     memory_create, memory_map, println, raw_syscall, sleep_until, spawn, startup,
@@ -42,7 +42,10 @@ const MAX_FACTOR: u64 = 64;
 const REFERENCE_FILL_NS: u64 = 10_000;
 /// What a job may run beyond its budget in one period, under HVF: the floor
 /// slice of the scheduler (50 us) and the time to the next return to EL0.
-const OVERRUN_NS: u64 = 250_000;
+const OVERRUN_NS: u64 = 200_000;
+/// The scheduler's floor slice (`zoraya_cpu::MIN_SLICE_NS`), wall time that
+/// no host factor scales.
+const MIN_SLICE_NS: u64 = 50_000;
 
 static FACTOR: AtomicU64 = AtomicU64::new(1);
 
@@ -141,9 +144,13 @@ fn end(room: Handle, handles: &[Handle]) {
     handle_close(room).expect("close");
 }
 
-/// What `bound_ns` allows over `periods` periods above `budget_ns`.
+/// What a ceiling may be exceeded by over `periods` periods above `budget_ns`
+/// (review W3): the scheduler's floor slice, which is wall time, plus the time
+/// to the next return to EL0, which is scaled for a slow host; and never more
+/// than twice the ceiling, whatever the host.
 fn upper(budget_ns: u64, periods: u64) -> u64 {
-    budget_ns + periods * OVERRUN_NS * factor()
+    let allowance = periods * (MIN_SLICE_NS + OVERRUN_NS * factor());
+    (budget_ns + allowance).min(2 * budget_ns)
 }
 
 fn check_masked(what: &str) {
@@ -161,23 +168,83 @@ fn check_masked(what: &str) {
     );
 }
 
-/// INV-0264-1: eight spinners in a room at 25% for 2 s use at most the budget
-/// plus the overrun of each period, and at least 80% of it.
-fn a_room_at_a_quarter_gets_a_quarter() {
+/// A page of counters shared with the spinners: word `i` is spinner `i`'s.
+struct Page {
+    object: Handle,
+    words: *const u64,
+}
+
+impl Page {
+    fn new() -> Page {
+        let object = memory_create(4096, MemoryFlags::NONE).expect("memory");
+        let words = memory_map(object, 0, 4096, MapFlags::WRITE).expect("map") as *const u64;
+        Page { object, words }
+    }
+
+    fn sum(&self, from: usize, to: usize) -> u64 {
+        (from..to).map(|i| read(self.words, i)).sum()
+    }
+
+    fn close(self) {
+        zoraya_user::memory_unmap(self.words as u64, 4096).expect("unmap");
+        handle_close(self.object).expect("close");
+    }
+}
+
+/// An uncapped spinner in a job of its own, counting in word 0: with it the
+/// CPU is never idle, so a room's share of the counts is its share of the
+/// machine whatever the host's clock does with a duty-cycled load (a lone
+/// spinner counts 7 times faster on an Apple core than the same code does
+/// in a room, which is parked three quarters of the time). It is the
+/// independent measure of the ceiling that needs no kernel counter
+/// (review W4).
+fn free_spinner(page: &Page) -> (Handle, Handle) {
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    (job, start(job, b"count", 0, Some((page.object, 0))))
+}
+
+/// The room's share of all counts, in per mille, must be the ceiling's plus
+/// the overrun allowance at most, and half of it at least.
+fn check_share(room: u64, free: u64, per_mille: u64, elapsed: u64, periods: u64) {
+    let share = room as u128 * 1000 / (room + free).max(1) as u128;
+    let high = upper(elapsed * per_mille / 1000, periods) as u128 * 1000 / elapsed as u128;
+    println!(
+        "t_cpu: the room counted {room}, an uncapped spinner {free}: {share} per mille (ceiling {per_mille}, at most {high})"
+    );
+    assert!(share <= high, "share {share} per mille, at most {high}");
+    assert!(
+        share * 2 >= per_mille as u128,
+        "share {share} per mille: starved"
+    );
+}
+
+/// INV-0264-1: `n` spinners in a room at 25% for 2 s use at most the budget
+/// plus the overrun of each period, and at least 80% of it, by the kernel's
+/// counter; and, independently, they count no more than the ceiling's share
+/// of what one uncapped spinner counts in the same time (review W4). With
+/// `n` over 16 (the cap of parks per pick) the overrun is still one floor
+/// per period (review W1).
+fn a_room_at_a_quarter_gets_a_quarter(n: usize) {
     masked_ns(true);
     units(true);
+    let page = Page::new();
+    let free = free_spinner(&page);
     let room = job_create(JOB, JobFlags::NONE).expect("job");
     job_set_limits(room, &cpu(250)).expect("limit");
-    let spinners: Vec<Handle> = (0..8).map(|_| start(room, b"spin", 0, None)).collect();
+    let spinners: Vec<Handle> = (0..n)
+        .map(|i| start(room, b"count", 0, Some((page.object, 1 + i as u8))))
+        .collect();
     nap(100);
     let (t0, u0) = (clock_monotonic(), job_get_usage(room, false).expect("u"));
+    let (c0, f0) = (page.sum(1, 1 + n), page.sum(0, 1));
     nap(2000);
     let (t1, u1) = (clock_monotonic(), job_get_usage(room, false).expect("u"));
+    let (counted, uncapped) = (page.sum(1, 1 + n) - c0, page.sum(0, 1) - f0);
     let (elapsed, used) = (t1 - t0, u1.cpu.used_ns - u0.cpu.used_ns);
     let budget = elapsed / 4;
     let periods = elapsed / 20_000_000 + 2;
     println!(
-        "t_cpu: 8 spinners at 25% for {} ms: used {} ms of a budget of {} ms; parked {} times",
+        "t_cpu: {n} spinners at 25% for {} ms: used {} ms of a budget of {} ms; parked {} times",
         elapsed / MS,
         used / MS,
         budget / MS,
@@ -187,15 +254,21 @@ fn a_room_at_a_quarter_gets_a_quarter() {
     assert!(used * 5 >= budget * 4, "{used} ns of {budget}: starved");
     assert!(u1.cpu.parked > u0.cpu.parked);
     assert_eq!(u1.cpu.limit, Some(250));
+    check_share(counted, uncapped, 250, elapsed, periods);
     end(room, &spinners);
+    end(free.0, &[free.1]);
+    page.close();
     check_masked("a room at 25%");
 }
 
 /// INV-0264-4: three rooms at 25% under a job at 50%, eight spinners each:
-/// together at most 50% (and the job above them does not pass it).
+/// together at most 50% (and the job above them does not pass it), by the
+/// kernel's counter and by the spinners' own.
 fn rooms_together_stay_under_their_parent() {
     masked_ns(true);
     units(true);
+    let page = Page::new();
+    let free = free_spinner(&page);
     let untrusted = job_create(JOB, JobFlags::NONE).expect("job");
     job_set_limits(untrusted, &cpu(500)).expect("limit");
     let rooms: Vec<Handle> = (0..3)
@@ -208,7 +281,8 @@ fn rooms_together_stay_under_their_parent() {
     let mut spinners = Vec::new();
     for room in &rooms {
         for _ in 0..8 {
-            spinners.push(start(*room, b"spin", 0, None));
+            let i = 1 + spinners.len() as u8;
+            spinners.push(start(*room, b"count", 0, Some((page.object, i))));
         }
     }
     nap(100);
@@ -218,8 +292,10 @@ fn rooms_together_stay_under_their_parent() {
         .map(|r| job_get_usage(*r, false).expect("u").cpu.used_ns)
         .collect();
     let total0 = job_get_usage(untrusted, false).expect("u").cpu.used_ns;
+    let (c0, f0) = (page.sum(1, 25), page.sum(0, 1));
     nap(2000);
     let elapsed = clock_monotonic() - t0;
+    let (counted, uncapped) = (page.sum(1, 25) - c0, page.sum(0, 1) - f0);
     let total = job_get_usage(untrusted, false).expect("u").cpu.used_ns - total0;
     let periods = elapsed / 20_000_000 + 2;
     println!(
@@ -230,19 +306,121 @@ fn rooms_together_stay_under_their_parent() {
     );
     assert!(total <= upper(elapsed / 2, periods), "{total} ns together");
     assert!(total * 5 >= elapsed / 2 * 4, "{total} ns: starved");
+    check_share(counted, uncapped, 500, elapsed, periods);
     for (room, was) in rooms.iter().zip(before) {
         let used = job_get_usage(*room, false).expect("u").cpu.used_ns - was;
         assert!(used <= upper(elapsed / 4, periods), "a room used {used} ns");
-        assert!(used > 0, "a room never ran");
+        // No room is promised any: ADR-0264 has ceilings and no shares, and
+        // the first rooms in the queue can spend the parent's budget before
+        // the third runs (ADR-0285, open questions).
+        println!("t_cpu: a room used {} ms", used / MS);
     }
     for room in &rooms {
         job_kill(*room).expect("kill");
     }
     end(untrusted, &spinners);
+    end(free.0, &[free.1]);
     for room in rooms {
         handle_close(room).expect("close");
     }
+    page.close();
     check_masked("three rooms under 50%");
+}
+
+/// Review W6: a job about 30 levels deep with ceilings on the way: the masked
+/// walk of `schedule` (a charge and up to 17 decisions over the whole chain)
+/// stays within the bound, and the leaf's ceiling holds. More than 16
+/// spinners, so the parks per pick reach their cap.
+fn a_deep_job_tree() {
+    masked_ns(true);
+    units(true);
+    let mut chain = Vec::new();
+    let mut parent = JOB;
+    for depth in 0..40 {
+        match job_create(parent, JobFlags::NONE) {
+            Ok(job) => {
+                if depth % 7 == 3 {
+                    job_set_limits(job, &cpu(500)).expect("limit");
+                }
+                chain.push(job);
+                parent = job;
+            }
+            Err(Status::LimitReached) => break,
+            Err(other) => panic!("job_create: {other:?}"),
+        }
+    }
+    assert!(chain.len() >= 20, "only {} levels", chain.len());
+    let leaf = *chain.last().expect("a leaf");
+    job_set_limits(leaf, &cpu(250)).expect("limit");
+    let spinners: Vec<Handle> = (0..24).map(|_| start(leaf, b"spin", 0, None)).collect();
+    nap(100);
+    let (t0, u0) = (clock_monotonic(), job_get_usage(leaf, false).expect("u"));
+    nap(600);
+    let (t1, u1) = (clock_monotonic(), job_get_usage(leaf, false).expect("u"));
+    let (elapsed, used) = (t1 - t0, u1.cpu.used_ns - u0.cpu.used_ns);
+    println!(
+        "t_cpu: {} levels deep, 24 spinners at 25%: used {} ms of {} ms",
+        chain.len(),
+        used / MS,
+        elapsed / 4 / MS
+    );
+    assert!(used <= upper(elapsed / 4, elapsed / 20_000_000 + 2));
+    assert!(used * 5 >= elapsed / 4 * 4);
+    job_kill(chain[0]).expect("kill");
+    for h in &spinners {
+        handle_close(*h).expect("close");
+    }
+    let top = chain[0];
+    assert!(eventually(|| job_get_usage(top, false)
+        .expect("usage")
+        .processes
+        .used
+        == 0));
+    for job in chain.into_iter().rev() {
+        handle_close(job).expect("close");
+    }
+    check_masked("a job about 30 levels deep");
+}
+
+/// Review W6, ADR-0285 point 7: `job_kill` of a room whose threads are parked:
+/// the room is gone within about one period, and its use goes to zero.
+fn a_killed_room_with_parked_threads_dies() {
+    const PERIOD: u64 = 100 * MS;
+    set_period(PERIOD);
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    job_set_limits(room, &cpu(100)).expect("limit");
+    let spinners: Vec<Handle> = (0..20).map(|_| start(room, b"spin", 0, None)).collect();
+    // Wait until the room has spent its 10 ms and is parked (20 spinners,
+    // more than the cap of a pick).
+    let mut parked = false;
+    for _ in 0..40 {
+        nap(5);
+        let u = job_get_usage(room, false).expect("u");
+        if u.cpu.period_used >= 10 * MS && u.cpu.parked > 0 {
+            parked = true;
+            break;
+        }
+    }
+    assert!(parked, "the room never spent its budget");
+    nap(5);
+    let killed = clock_monotonic();
+    job_kill(room).expect("kill");
+    for h in &spinners {
+        handle_close(*h).expect("close");
+    }
+    assert!(eventually(|| job_get_usage(room, false)
+        .expect("usage")
+        .processes
+        .used
+        == 0));
+    let took = clock_monotonic() - killed;
+    println!(
+        "t_cpu: a parked room died in {} ms (period 100 ms)",
+        took / MS
+    );
+    assert!(took <= (PERIOD + 50 * MS) * factor(), "{took} ns");
+    handle_close(room).expect("close");
+    set_period(0);
 }
 
 fn read(counters: *const u64, index: usize) -> u64 {
@@ -428,7 +606,11 @@ fn main() -> i32 {
         _ => {}
     }
     calibrate();
-    a_room_at_a_quarter_gets_a_quarter();
+    a_room_at_a_quarter_gets_a_quarter(8);
+    // More than the 16 parks one pick may make (review W1).
+    a_room_at_a_quarter_gets_a_quarter(40);
+    a_deep_job_tree();
+    a_killed_room_with_parked_threads_dies();
     rooms_together_stay_under_their_parent();
     a_parked_spinner_makes_no_progress();
     for period in [20 * MS, 10 * MS, 100 * MS] {

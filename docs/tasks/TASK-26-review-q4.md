@@ -165,3 +165,36 @@ time is recorded in ADR-0285 point 4.
   and reads missing CPU words as zero and no limit; a partial word (a buffer of 89 to 119 bytes) is ignored. The
   88-byte decode test is present.
 - **SMP configurations.** The kernel brings up one CPU, and nothing in the diff depends on the QEMU `-smp` value.
+
+## Dispositions
+
+Fixes are in the commits after `5aa3b09`.
+
+1. **Fixed.** At the cap of 16 parks per pick the next thread goes back to the front and `pick` returns `None`; idle runs and
+   calls `schedule` again, so no thread of a spent job runs beyond the floor. Woken threads still join the ready list and
+   are parked at the next pick before they run (stated as a deviation in ADR-0285). Tests: host, 200 threads in a spent job,
+   per-period bound; `t_cpu` with 40 spinners (share 165 per mille at 250, used 500 ms of 500).
+2. **Fixed.** `JobRef::of` is `unsafe` with a `# Safety` section; `JobTree` has a private field and `new()`; the callers
+   in `sched.rs` and `cpu.rs` have SAFETY comments.
+3. **Fixed.** `upper()` scales only the return-to-EL0 part (200 us) by the host factor, adds the unscaled 50 us floor, and
+   never exceeds twice the ceiling.
+4. **Fixed.** An uncapped spinner counts in a shared page next to the room, so the CPU never idles; the room's share of the
+   counts must be at most the ceiling plus the allowance and at least half the ceiling (181 and 165 per mille at 250 for 8
+   and 40 spinners, 446 at 500 for three rooms). A first attempt, comparing with a lone spinner's rate, showed the lone
+   spinner counting 7 times faster than the same code duty-cycled in a room (host clock behaviour), so it is not a
+   yardstick. The share is lower than the ceiling for the same reason; the test bounds it from above only strictly.
+5. **Fixed.** ADR-0285 names the two deviations (ADR-0264 points 3 and 5), has "Tensions with accepted ADRs" and a question
+   for the architect.
+6. **Fixed** except the arm-failure fallback: more than 16 parks in QEMU (40 and 24 spinners), a job about 30 levels deep
+   with ceilings on the way (masked 317 us, 54 units), `job_kill` of a room whose threads are parked (gone in 37 ms at a
+   100 ms period). The fallback when arming fails is unreachable (two slots are reserved for two users), now a bounded
+   batch with a retry at the next `schedule`; INV-0285-1's wording says so; no test could reach it.
+7. **Fixed** (the comment names the parked list). 8. **Fixed** (three words). 9. **Fixed** (bounded, see 6). 10. **Fixed.**
+11. **Fixed** (`SET_CPU_PERIOD` refuses a period under 1 ms).
+12. **Open:** the site of the largest masked interval is not attributed; after the fixes the maximum over `t_cpu` is 335 us.
+13. **Open for Q6a:** the check that no process in a room holds `LIMIT` on its own job, and that `room set --mem` re-sends the CPU
+    ceiling.
+14. **Accepted.**
+
+New finding while fixing: with three rooms at 25% under a 50% parent, one room used 0 ms in 2 s (the first two in the queue
+spent the parent's budget). ADR-0264 promises ceilings and no shares; recorded as a question in ADR-0285.

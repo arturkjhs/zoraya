@@ -568,3 +568,12 @@ test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui and 
 `boot-auto-smp4-2g` ("timed out waiting for bytes dropped]", the known input flake) and passed on `make test-boot` alone. The
 first `test-changed` attempt stopped at the build because this worktree had no ports archives; they were copied from another
 worktree's cache (no download).
+
+### After the review (`docs/tasks/TASK-26-review-q4.md`)
+
+Fixed W1 to W6 and notes 7 to 11 (dispositions in the review file). A spent job's threads never run past the cap of parks per
+pick (idle calls `schedule` again); `JobRef::of` is `unsafe`; the time allowance is scaled only in its EL0 part and capped at
+2x the ceiling; the ceiling is checked by counts next to an uncapped spinner as well as by `used_ns`; ADR-0285 names its two
+deviations from ADR-0264; new `t_cpu` cases: 40 spinners, a job about 30 levels deep, a kill of a parked room.
+New finding for the architect: no sharing among rooms under one parent (one of three used 0 ms in 2 s).
+Open: the site of the largest masked interval; Q6a's check of `LIMIT` inside rooms.

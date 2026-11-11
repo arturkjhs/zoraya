@@ -1493,7 +1493,13 @@ a key's latency; the terminal's own echo time comes on top of it. The GUI test o
 in `home` next to two untrusted rooms) was not written: it needs rooms with `--cpu` (Q6a) and untrusted rooms are
 refused (the gate). TCG was not run here; CI runs it with the calibration `t_bound` uses.
 
-Known limits of Q4: a ceiling below about 0.25% runs at about that (the 50 us floor); a thread parked when its job is
+After the review (W1): at the cap of 16 parks per pick the next spent thread goes back to the front and idle calls `schedule`
+again, so a spent job with 200 threads runs no more than one floor per period (host test); `t_cpu` runs 40 spinners in a
+room (500 ms of 500), a job about 30 levels deep (155 ms of 152 ms; masked 317 us) and a `job_kill` of a room whose threads are
+parked (gone in 37 ms at a 100 ms period). The ceiling is also checked by counts: next to an uncapped spinner (so the CPU
+never idles) a room at 250 counted 17 to 23% of the two (ceiling 25%), three rooms at 500 counted 45%.
+
+Known limits of Q4: rooms under one parent get no share (with three rooms at 25% under 50%, one used 0 ms in 2 s);  a ceiling below about 0.25% runs at about that (the 50 us floor); a thread parked when its job is
 killed ends at the next boundary (at most one period); IRQ time is charged to the interrupted thread; one CPU (an SMP kernel gives each CPU a share of one pool, ADR-0264).
 
 ## Network driver (stage 8, N1: the driver answers ARP)
