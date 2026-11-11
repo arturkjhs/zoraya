@@ -854,9 +854,27 @@ pub fn exit_current(record: ExitRecord) -> ! {
     loop {
         let entry = process.handles.lock().pop();
         match entry {
-            Some(entry) => object::close(entry),
+            Some(entry) => {
+                // The work of the whole exit is counted, not of each
+                // object: one unit for the handle, and the frames an object
+                // frees count themselves; a pause after each step of them
+                // (INV-0270-1).
+                crate::steps::before(object::weight(&entry));
+                crate::steps::count(1);
+                object::close(entry);
+            }
             None => break,
         }
+    }
+    // The mappings next, for the same reason, while the space is still the
+    // running one: dropping a mapping may free the object it was the last
+    // holder of. The process has one thread, which is here.
+    loop {
+        let holder = process.space.lock().as_mut().and_then(|s| s.pop_mapping());
+        let Some(holder) = holder else { break };
+        crate::steps::before(holder.weight());
+        crate::steps::count(1);
+        drop(holder);
     }
     // SAFETY: no table is the safe value.
     unsafe { mmu::set_user_table(None) };
@@ -938,10 +956,12 @@ pub fn return_to_user() {
 /// it ever ran ends it here, before its first instruction.
 #[unsafe(no_mangle)]
 extern "C" fn user_thread_start() {
-    // The thread returns to EL0, where IRQ is on, with no exception taken.
-    crate::steps::mask_ended();
     park_if_stopped();
     exit_if_requested();
+    // The thread returns to EL0, where IRQ is on, with no exception taken.
+    // The counter ends here and not before, so that the exit of a process
+    // killed before it ran is measured (INV-0270-1).
+    crate::steps::mask_ended();
 }
 
 /// Ends the running process for a synchronous exception from EL0 (ADR-0034).

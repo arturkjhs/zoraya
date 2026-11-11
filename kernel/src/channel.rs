@@ -162,16 +162,14 @@ pub fn needed_right(transfer: Transfer) -> zoraya_abi::Rights {
 /// (INV-0050-6).
 pub fn close(pair: &Pair, end: usize) {
     let mut work = close_one(pair, end);
-    let mut closed = 0usize;
     while let Some(mut message) = work.pop() {
         // A long chain goes on in steps of `STEP` messages, with no lock held
         // between them (ADR-0270): this runs to its end whatever the process
         // was asked, so the pause cannot fail.
-        closed += 1;
-        if closed.is_multiple_of(crate::steps::STEP) {
-            crate::steps::pause();
-        }
+        crate::steps::object();
         while let Some(entry) = message.handles.pop() {
+            crate::steps::before(object::weight(&entry));
+            crate::steps::count(1);
             object::end_subscriptions(&entry);
             match &entry.object {
                 Object::Channel(other, other_end) => {

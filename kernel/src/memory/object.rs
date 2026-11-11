@@ -13,11 +13,24 @@ use crate::reaper;
 use crate::steps::{self, STEP};
 use zoraya_abi::Status;
 
+/// The frame `done` frames after `first` in a run.
+fn run_frame(first: Frame, done: u64) -> Frame {
+    Frame::from_addr(first.addr() + done * FRAME_SIZE).expect("a frame of the run")
+}
+
 enum Frames {
     /// Any frames, in order.
     Scattered(Vec<Frame>),
     /// A run from one allocation.
     Run { first: Frame, count: u64 },
+}
+
+/// The work of dropping an object in units of a step, for `steps::before`
+/// to be called by a teardown that drops many: its frames if they are freed
+/// on the spot (at most a step), else one, since the reaper frees them.
+pub fn weight(object: &MemoryObject) -> usize {
+    let pages = (object.size() / FRAME_SIZE) as usize;
+    if pages > STEP { 1 } else { pages }
 }
 
 pub struct MemoryObject {
@@ -67,8 +80,25 @@ impl MemoryObject {
         };
         paid.kernel(charge::arc_cost::<MemoryObject>().saturating_add(list))?;
         let frames = if contiguous {
-            let first = frames::alloc_contig_zeroed(count).map_err(|_| Status::NoMemory)?;
-            Frames::Run { first, count }
+            let first = frames::alloc_contig(count).map_err(|_| Status::NoMemory)?;
+            // The object owns the run from here: a cancel or a failure below
+            // drops it, and its `Drop` frees the run and the charge. Nobody
+            // else can reach the frames until it is returned, so they are
+            // zeroed in steps with interrupts on (ADR-0270 point 2).
+            let run = MemoryObject {
+                frames: Frames::Run { first, count },
+                _paid: paid,
+            };
+            let mut done = 0;
+            while done < count {
+                if done > 0 {
+                    steps::between()?;
+                }
+                let n = (STEP as u64).min(count - done);
+                frames::zero_run(run_frame(first, done), n);
+                done += n;
+            }
+            return charge::prepaid_arc(run);
         } else {
             let mut list = Vec::new();
             list.try_reserve_exact(count as usize)
@@ -206,6 +236,15 @@ impl Drop for MemoryObject {
                 let list = core::mem::take(list);
                 let paid = core::mem::take(&mut self._paid);
                 reaper::release(list, paid);
+            }
+            // A large run goes to the reaper as well, to be freed in steps.
+            Frames::Run { first, count } if *count > STEP as u64 => {
+                let (first, count) = (*first, *count);
+                let paid = core::mem::take(&mut self._paid);
+                // Nothing is left for `free` below the match: the run is
+                // handed over whole.
+                self.frames = Frames::Scattered(Vec::new());
+                reaper::release_run(first, count, paid);
             }
             other => free(other),
         }

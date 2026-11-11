@@ -1242,6 +1242,13 @@ pub mod test_calls {
     pub const MASKED_MAX_NS: u64 = 0x7013;
     /// Returns the live event sources and ports, as `sources << 32 | ports`.
     pub const EVENTS_LIVE: u64 = 0x7014;
+    /// Returns the most units of work (frames, messages, objects) done in
+    /// one interval with IRQ masked since the last reset (INV-0270-1); x0 not
+    /// 0 resets it.
+    pub const MASKED_MAX_UNITS: u64 = 0x7015;
+    /// Returns how many times a step point ended a call with `Cancelled`
+    /// because its process was killed (INV-0270-2).
+    pub const CANCELLED: u64 = 0x7016;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1267,6 +1274,8 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
         test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames(a0))),
         test_calls::MASKED_MAX_NS => Some(Ok(crate::steps::masked_max_ns(a0 != 0))),
+        test_calls::MASKED_MAX_UNITS => Some(Ok(crate::steps::masked_max_units(a0 != 0))),
+        test_calls::CANCELLED => Some(Ok(crate::steps::cancelled())),
         test_calls::EVENTS_LIVE => {
             let (sources, ports) = port::EVENTS.lock().live();
             Some(Ok(((sources as u64) << 32) | ports as u64))

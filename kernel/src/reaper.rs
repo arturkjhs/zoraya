@@ -26,13 +26,14 @@ use crate::steps::STEP;
 const REAPER_STEP: usize = 1024;
 use crate::sync::SpinLock;
 
-/// Items the queue holds from the start; past them it grows, or a drop frees
-/// on the spot.
+/// Items the queue holds from the start; past them `grow_queue` doubles it.
 const QUEUE_ROOM: usize = 256;
 
 /// Frames to free and the charge they carry.
 struct Garbage {
     frames: Vec<Frame>,
+    /// A contiguous run not yet freed: first frame and count.
+    run: Option<(Frame, u64)>,
     _paid: Paid,
 }
 
@@ -68,9 +69,10 @@ pub fn start() {
 /// any drop may call it.
 pub fn release(frames: Vec<Frame>, paid: Paid) {
     let (frames, paid) = if frames.len() > STEP {
-        match defer(frames, paid) {
+        grow_queue();
+        match defer(frames, None, paid) {
             Ok(()) => return,
-            Err(back) => back,
+            Err((frames, _, paid)) => (frames, paid),
         }
     } else {
         (frames, paid)
@@ -81,20 +83,68 @@ pub fn release(frames: Vec<Frame>, paid: Paid) {
     drop(paid);
 }
 
+/// As [`release`], for a contiguous run of `count` frames at `first`.
+pub fn release_run(first: Frame, count: u64, paid: Paid) {
+    let paid = if count > STEP as u64 {
+        grow_queue();
+        match defer(Vec::new(), Some((first, count)), paid) {
+            Ok(()) => return,
+            Err((_, _, paid)) => paid,
+        }
+    } else {
+        paid
+    };
+    frames::free_contig(first, count);
+    drop(paid);
+}
+
+/// Makes room for one more item, outside the queue's lock: the queue doubles
+/// when full, so that no number of drops makes one free its frames on the
+/// spot (INV-0270-1). If the heap cannot grow it, `defer` fails and the drop
+/// frees on the spot, which is only the case at exhaustion.
+fn grow_queue() {
+    let (len, capacity) = {
+        let queue = QUEUE.lock();
+        (queue.items.len(), queue.items.capacity())
+    };
+    if len < capacity || QUEUE.lock().thread.is_none() {
+        return;
+    }
+    let mut bigger = Vec::new();
+    if bigger
+        .try_reserve_exact(capacity.max(QUEUE_ROOM) * 2)
+        .is_err()
+    {
+        return;
+    }
+    let mut queue = QUEUE.lock();
+    // Another drop may have grown it meanwhile.
+    if queue.items.len() == queue.items.capacity() {
+        bigger.append(&mut queue.items);
+        core::mem::swap(&mut queue.items, &mut bigger);
+    }
+    drop(queue);
+    // `bigger` is now the old, empty vector, or the unused new one: it goes
+    // back to the heap outside the lock.
+}
+
 /// Queues the frames, or gives them back if the queue has no room or the
 /// reaper is not running.
-fn defer(frames: Vec<Frame>, paid: Paid) -> Result<(), (Vec<Frame>, Paid)> {
+type Back = (Vec<Frame>, Option<(Frame, u64)>, Paid);
+
+fn defer(frames: Vec<Frame>, run: Option<(Frame, u64)>, paid: Paid) -> Result<(), Back> {
     let mut queue = QUEUE.lock();
     let Some(thread) = queue.thread.clone() else {
-        return Err((frames, paid));
+        return Err((frames, run, paid));
     };
-    // Never grows: a drop must not make the heap take frames, and a full
-    // queue means the drop frees on the spot.
+    // Never grows under the lock: `grow_queue` did it before, and a queue
+    // still full (the heap is exhausted) means the drop frees on the spot.
     if queue.items.len() == queue.items.capacity() {
-        return Err((frames, paid));
+        return Err((frames, run, paid));
     }
     queue.items.push(Garbage {
         frames,
+        run,
         _paid: paid,
     });
     drop(queue);
@@ -139,6 +189,20 @@ fn free_some(max: usize) -> bool {
             frames::free(frame);
             left -= 1;
         }
+        if let Some((first, count)) = item.run
+            && left > 0
+        {
+            let n = (left as u64).min(count);
+            frames::free_contig(first, n);
+            left -= n as usize;
+            item.run = (count > n).then(|| {
+                (
+                    Frame::from_addr(first.addr() + n * zoraya_pmm::FRAME_SIZE)
+                        .expect("in the run"),
+                    count - n,
+                )
+            });
+        }
         if left == 0 {
             break;
         }
@@ -168,7 +232,10 @@ fn reaper_main(_: usize) {
         // goes back to the heap and its charge is given back.
         let done = {
             let mut queue = QUEUE.lock();
-            let position = queue.items.iter().position(|g| g.frames.is_empty());
+            let position = queue
+                .items
+                .iter()
+                .position(|g| g.frames.is_empty() && g.run.is_none());
             position.map(|at| {
                 queue.busy = true;
                 queue.items.swap_remove(at)
@@ -177,6 +244,9 @@ fn reaper_main(_: usize) {
         if let Some(garbage) = done {
             drop(garbage);
             QUEUE.lock().busy = false;
+            // A preemption point after each item, so that a long queue of
+            // emptied items is not dropped in one turn (ADR-0270 point 4).
+            sched::yield_now();
             continue;
         }
         if freed {

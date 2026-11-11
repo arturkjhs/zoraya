@@ -130,6 +130,16 @@ impl TableMemory for UserMemory {
     }
 }
 
+impl Holder {
+    /// The work of dropping it, for `steps::before`.
+    pub fn weight(&self) -> usize {
+        match self {
+            Holder::Memory(object) => super::object::weight(object),
+            Holder::Device(_) => 1,
+        }
+    }
+}
+
 /// What a mapping keeps alive.
 pub enum Holder {
     // Read by nothing: holding them is the point.
@@ -361,6 +371,13 @@ impl AddressSpace {
             .position(|m| m.va == va && m.length == length)
             .ok_or(MappingError::NotMapped)?;
         Ok(self.mappings.remove(index).holder)
+    }
+
+    /// Takes the last mapping off the list and gives its holder, for an exit
+    /// that drops them in steps. The pages stay in the table, which nothing
+    /// runs on again: the table goes with the space.
+    pub fn pop_mapping(&mut self) -> Option<Holder> {
+        self.mappings.pop().map(|m| m.holder)
     }
 
     /// True if any mapping is of a device window (ADR-0054).
