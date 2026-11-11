@@ -1685,6 +1685,9 @@ stack has no TCP user yet (N3) and no DNS (N3).
   step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there;
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
+  The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
+  that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
+  (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".
 - **Stage 6 acceptance (stage 6e).** One CPU: `-j` gives no speed. Every `exec` and `posix_spawn` reads the whole
   program file, debug information included (ADR-0212). A process ended by a signal reports no statistics. W9's
   interruption point is wall-clock on the host, so it differs with the accelerator (ADR-0110). SQLite's run-time

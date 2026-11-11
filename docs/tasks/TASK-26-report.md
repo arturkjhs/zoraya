@@ -503,3 +503,34 @@ The kill rows include a 300 ms wait before the kill. SLIRP's lease: 24 h; no rou
   (Q3's netd account); (6) the fuzz targets never ran under libFuzzer, `fuzz/Cargo.lock` is not updated; (7) the burst bound of 64 is
   untuned; (8) a CI runner without a crates.io cache downloads the registry crates in each job (the workflow was not touched), and the
   CI `test-net` job must build the normal kernel too now.
+## CI image
+
+Why: on 2026-11-11 Ubuntu's mirrors were slow or unreachable for hours (a runner's apt fetched 1.4 MB in 8 minutes and
+the `build` job was cancelled in its apt step). Now the jobs of `.github/workflows/test.yml` run in an image with
+everything installed.
+
+- **Contents** (`.github/ci/Dockerfile`, `ubuntu:24.04` by tag: no digest was readable offline): build-essential,
+  clang, lld, llvm, zstd, `qemu-system-arm`, git, curl, patch, perl, python3, ruby, xz/bzip2/unzip/zip, gawk, and the
+  Rust toolchain of `rust-toolchain.toml` (channel, components, targets) in `/usr/local/{rustup,cargo}`, on `PATH`.
+  Jobs run as root; `safe.directory` is set system-wide.
+- **Tag:** `tools/ci-image-tag.sh` = first 16 hex digits of SHA-256 of `.github/ci/Dockerfile`,
+  `tools/ci-apt-install.sh` and `rust-toolchain.toml`. Image: `ghcr.io/<owner>/<repo>/ci:<tag>` (lowercase) and `:latest`.
+  Both workflows call the script.
+- **Rebuild:** `gh workflow run ci-image.yml --ref BRANCH` (always builds); it also runs on a push to `main` that
+  changes those files, and on `candidate/**` and `candidate-full/**` tags (skipped when the tag exists).
+- **Fallback chain:** test.yml's job `image` logs in to ghcr.io with the job token and runs `docker manifest inspect`;
+  `ref` is empty on any failure. With a ref, `build`, `checks` and `tests` use `container:` (no apt, no rustup
+  install). Without one, `container` is `null` (the bare runner) and the guarded steps install as before, through
+  `tools/ci-apt-install.sh`: skip when clang and zstd exist; 3 attempts on the runner's mirror; then
+  `mirrors.edge.kernel.org` and `mirror.math.princeton.edu` (noble, -updates, -security, x86_64 only); then the
+  cached .debs without the network. The Dockerfile builds with the same script.
+- **To verify on the first run** (not testable offline): (1) `ci-image.yml` builds and pushes (the push needs the
+  repository's Actions workflow permissions to allow packages; the package is created private and linked to the
+  repo); (2) `image` finds it (`image: ghcr.io/...` in its log); (3) `container: null` really is accepted when `ref`
+  is empty (run test.yml once before the image exists, e.g. on this branch); (4) with the image, the three jobs
+  start (the credentials are the job token, which needs `packages: read`; a fork's pull request has none and falls
+  back); (5) in the container: `git ls-files`, `make`, `qemu-system-aarch64`, rust-cache, `actions/cache` (zstd)
+  work; `check-host-paths` and `make check-ci-jobs` pass; (6) the ports build needs no tool the image lacks (the
+  runner image has more packages than the container).
+- **Build job time:** before, 3 min 10 s (green main run 42996307525, 2026-11-11, from the runner's own clang and
+  zstd). After: to be read from the first run with the image (`gh run view RUN --json jobs`).
