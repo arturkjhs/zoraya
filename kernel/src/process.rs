@@ -920,6 +920,8 @@ pub fn return_to_user() {
 /// it ever ran ends it here, before its first instruction.
 #[unsafe(no_mangle)]
 extern "C" fn user_thread_start() {
+    // The thread returns to EL0, where IRQ is on, with no exception taken.
+    crate::steps::mask_ended();
     park_if_stopped();
     exit_if_requested();
 }

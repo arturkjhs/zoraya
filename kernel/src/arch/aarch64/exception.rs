@@ -436,6 +436,16 @@ fn fatal(frame: &Frame, kind: u64) -> ! {
 /// [`KIND_OVERFLOW`]. Returning resumes the context in `frame`.
 #[unsafe(no_mangle)]
 extern "C" fn exception_dispatch(frame: &mut Frame, kind: u64) {
+    // The CPU masked IRQ on taking the exception; it is on again at the
+    // `eret` if the context returned to runs with it on (INV-0270-1).
+    crate::steps::mask_began();
+    dispatch_inner(frame, kind);
+    if frame.spsr & super::DAIF_I == 0 {
+        crate::steps::mask_ended();
+    }
+}
+
+fn dispatch_inner(frame: &mut Frame, kind: u64) {
     match kind {
         KIND_IRQ => match crate::irq::dispatch() {
             Ok(()) => return,

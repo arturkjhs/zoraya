@@ -88,6 +88,9 @@ pub fn stack_canary_intact() -> bool {
     unsafe { core::ptr::read_volatile(stack_canary_ptr()) == STACK_CANARY }
 }
 
+/// The IRQ mask bit of DAIF (and of SPSR).
+pub const DAIF_I: u64 = 1 << 7;
+
 /// Masks IRQ and FIQ on this CPU. SError stays as it is.
 pub fn mask_interrupts() {
     // SAFETY: setting mask bits has no effect on memory or on Rust's state.
@@ -105,6 +108,7 @@ pub fn mask_interrupts() {
 pub unsafe fn unmask_interrupts() {
     // SAFETY: the caller's contract. Not `nomem`, as in `mask_interrupts`.
     unsafe { asm!("msr daifclr, #3", options(nostack, preserves_flags)) };
+    crate::steps::mask_ended();
 }
 
 /// Allows IRQ, FIQ and SError: a new kernel thread's start, which may inherit
@@ -116,6 +120,7 @@ pub unsafe fn unmask_interrupts() {
 pub unsafe fn unmask_all() {
     // SAFETY: the caller's contract. Not `nomem`, as in `mask_interrupts`.
     unsafe { asm!("msr daifclr, #7", options(nostack, preserves_flags)) };
+    crate::steps::mask_ended();
 }
 
 /// Waits for an interrupt. A masked one wakes the CPU too, but runs only once
@@ -192,6 +197,9 @@ pub fn save_and_mask_all() -> u64 {
         asm!("mrs {}, daif", "msr daifset, #0xf", out(reg) daif,
              options(nostack, preserves_flags))
     };
+    if daif & DAIF_I == 0 {
+        crate::steps::mask_began();
+    }
     daif
 }
 
@@ -201,6 +209,9 @@ pub fn save_and_mask_interrupts() -> u64 {
     // SAFETY: reading DAIF has no side effects.
     unsafe { asm!("mrs {}, daif", out(reg) daif, options(nomem, nostack, preserves_flags)) };
     mask_interrupts();
+    if daif & DAIF_I == 0 {
+        crate::steps::mask_began();
+    }
     daif
 }
 
@@ -223,6 +234,9 @@ pub fn interrupt_mask() -> u64 {
 
 /// Restores a mask from [`save_and_mask_interrupts`].
 pub fn restore_interrupts(daif: u64) {
+    if daif & DAIF_I == 0 {
+        crate::steps::mask_ended();
+    }
     // SAFETY: `daif` was read from DAIF, so this returns to a state the CPU
     // was already in. It acts as a compiler barrier: critical sections end
     // here, not earlier.

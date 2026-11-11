@@ -27,6 +27,7 @@ mod process;
 mod psci;
 mod ramdisk;
 mod sched;
+mod steps;
 mod stream;
 mod sync;
 mod syscall;
