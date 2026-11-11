@@ -231,6 +231,40 @@ fn split_last(abs: &str) -> (&str, &str) {
     }
 }
 
+/// The rights and scope of the network connection a base-system command gets
+/// (see `Shell::table`): none, the status of the network, or the reach of
+/// the host and port of its `url` operand. A URL that does not parse gives
+/// no connection; the command says what is wrong with it.
+fn net_for(d: &Description, exec: &Exec<'_>) -> Option<(u32, Vec<u8>)> {
+    use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode, rights};
+    if d.needs_net_status {
+        return Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec()));
+    }
+    let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+    let Ok(zoraya_command::Outcome::Run(parsed)) = zoraya_command::parse(d, &texts) else {
+        return None;
+    };
+    let operand = d
+        .operands
+        .iter()
+        .find(|o| o.kind == zoraya_describe::Kind::Url)?;
+    let url = zoraya_http::parse_url(parsed.operand(d, &operand.name)?).ok()?;
+    let host = url.host.to_ascii_lowercase();
+    let target = match zoraya_http::parse_ipv4(&host) {
+        Some(a) => Target::Address(a),
+        None => Target::Name(&host),
+    };
+    let rule = ReachRule {
+        target,
+        ports: Ports::one(url.port),
+        protocols: Protocols::TCP,
+    };
+    let mut out = alloc::vec![0u8; 512];
+    let n = encode(&[rule], &[], &mut out)?;
+    out.truncate(n);
+    Some((rights::REACH, out))
+}
+
 fn problem(status: u32) -> String {
     zoraya_command::file_problem(status)
 }
@@ -931,7 +965,11 @@ impl Z {
 
     /// Opens every entry of `plan` and sends the start-up record (rule 8)
     /// with them on a new channel, whose other end the program gets.
-    fn table(&self, plan: &[grants::Planned], net_status: bool) -> Result<Table, String> {
+    fn table(
+        &self,
+        plan: &[grants::Planned],
+        net: Option<(u32, Vec<u8>)>,
+    ) -> Result<Table, String> {
         let merged = grants::merge(plan);
         let gone = || zoraya_command::error("zosh", None, "too many entries or handles", &[]);
         let mut handles: Vec<ChannelEntry> = Vec::new();
@@ -974,20 +1012,18 @@ impl Z {
             report: (handles.len() - 1) as u8,
             ..native::Slots::NONE
         };
-        // `needs net-status` of a base-system command (ADR-0224 item 2): a
-        // connection with the `status` right and no scope, made from the
-        // shell's own, so it can ask the state and nothing else. Without a
-        // network, or if `netd` refuses, the command gets none and says so.
-        if net_status
+        // A network connection for a base-system command, made from the
+        // shell's own with `narrow`: `needs net-status` (ADR-0224 item 2)
+        // gets the `status` right and no scope, so it can ask the state and
+        // nothing else; a `url` operand (item 3, N3) gets `reach` and a
+        // scope of exactly that host and port. Without a network, or if
+        // `netd` refuses, the command gets none and says so.
+        if let Some((rights, scope)) = net
             && let Some(root) = self.net
-            && let Ok(status) = zoraya_user::netclient::narrow(
-                root,
-                zoraya_abi::net::rights::STATUS,
-                zoraya_abi::net::Scope::EMPTY.as_bytes(),
-            )
+            && let Ok(connection) = zoraya_user::netclient::narrow(root, rights, &scope)
         {
             handles.push(ChannelEntry {
-                handle: status,
+                handle: connection,
                 rights: ChannelObject::RIGHTS,
                 transfer: Transfer::Move,
             });
@@ -1084,9 +1120,9 @@ impl Z {
             return self.ready_from_volume(exec, &path);
         }
         let mut given = String::new();
-        let net_status = self
+        let net = self
             .program_description(exec.name)
-            .is_some_and(|(d, base)| base && d.needs_net_status);
+            .and_then(|(d, base)| if base { net_for(&d, exec) } else { None });
         let table = match self.plan_for(exec)? {
             None => None,
             Some(plan) if self.root.is_none() && !plan.is_empty() => {
@@ -1117,7 +1153,7 @@ impl Z {
                     }
                 }
                 given = grants::summary(&plan, &self.home());
-                Some(self.table(&plan, net_status)?)
+                Some(self.table(&plan, net)?)
             }
         };
         match directory_lookup(DIRECTORY, exec.name) {
@@ -1163,7 +1199,7 @@ impl Z {
         let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes()).map_err(|_| fail("?"))?;
         if native {
             let plan = self.plan_with(exec, &undescribed, false);
-            let table = plan.and_then(|p| self.table(&p, false));
+            let table = plan.and_then(|p| self.table(&p, None));
             return match table {
                 Ok(t) => Ok((
                     Ready::Native {

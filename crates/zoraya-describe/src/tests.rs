@@ -470,6 +470,8 @@ fn kinds_and_types_say_themselves() {
     assert_eq!(Kind::Read.shown(), "read");
     assert_eq!(Kind::Create.shown(), "created");
     assert!(!Kind::Text.is_path());
+    assert!(!Kind::Url.is_path());
+    assert_eq!(Kind::parse("url"), Some(Kind::Url));
     assert!(Kind::Read.is_path());
     assert_eq!(
         SettingType::Number {

@@ -77,6 +77,61 @@ fn every_message_round_trips_and_decodes_totally() {
 }
 
 #[test]
+fn connect_and_the_connection_channel_messages_round_trip_and_are_total() {
+    let name = "test.zoraya";
+    let c = Connect {
+        name: Data(name.as_bytes()),
+        address: 0,
+        port: Below(8080),
+    };
+    let mut out = [0; 2048];
+    let length = encode(&c, 1, &mut out).unwrap();
+    let (_, back) = decode::<Connect<'_>>(&out[..length], 3).unwrap();
+    assert_eq!(
+        (back.name.0, back.address, back.port.0),
+        (name.as_bytes(), 0, 8080)
+    );
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<Connect<'_>>(bytes, 3);
+    });
+    // Exactly three handles.
+    for wrong in [0, 1, 2, 4] {
+        assert_eq!(
+            decode::<Connect<'_>>(&out[..length], wrong).err(),
+            Some(WireError::WrongHandles)
+        );
+    }
+    // A port above 65535 and a name over 253 bytes do not encode.
+    let bad = Connect {
+        name: Data(&[]),
+        address: 1,
+        port: Below(65536),
+    };
+    assert!(encode(&bad, 1, &mut out).is_err());
+    let long = [b'a'; 254];
+    let bad = Connect {
+        name: Data(&long),
+        address: 0,
+        port: Below(80),
+    };
+    assert!(encode(&bad, 1, &mut out).is_err());
+    total(Connecting {
+        status: Below(status::NOT_GRANTED),
+    });
+    total(Connected {
+        address: 0x0a00_0202,
+        port: Below(80),
+    });
+    total(Failed {
+        reason: Below(reason::OVER_LIMIT),
+    });
+    total(Reset {
+        why: Below(reset::ABORTED),
+    });
+    assert!(encode(&Failed { reason: Below(6) }, 1, &mut out).is_err());
+}
+
+#[test]
 fn extra_or_missing_handles_and_values_out_of_range_are_refused() {
     let mut out = [0; 256];
     let n = Narrow {

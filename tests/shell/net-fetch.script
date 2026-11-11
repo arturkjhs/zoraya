@@ -1,0 +1,81 @@
+# `fetch` against the host-side test server (N3; `make test-net-fetch`, which
+# turns @PORT@ and the @SUM...@ checksums into numbers). The guest is on QEMU's
+# user network without `restrict=on`: 10.0.2.2 is the host's 127.0.0.1, where
+# tools/test-httpd listens. The disk's /config/settings says
+# `net.hosts = test.zoraya=10.0.2.2`.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+# A page, byte for byte, by address.
+> fetch http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+
+< fetched over HTTP, byte for byte
+
+< \r\n~>
+# Bodies of every framing, by checksum: with a length, chunked (by name, which
+# `net.hosts` gives), and ended by the close.
+> fetch --sum http://10.0.2.2:@PORT@/pattern/1000000\r
+< 1000000 bytes fnv1a @SUM1M@ in
+< \r\n~>
+> fetch --sum http://test.zoraya:@PORT@/chunked/300000\r
+< 300000 bytes fnv1a @SUM300K@ in
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/close/70000\r
+< 70000 bytes fnv1a @SUM70K@ in
+< \r\n~>
+# More than the rings and the socket buffers hold, from a server that gives it
+# slowly and quickly.
+> fetch --sum http://10.0.2.2:@PORT@/pattern/4000000\r
+< 4000000 bytes fnv1a @SUM4M@ in
+< \r\n~>
+# A file, written and read back.
+> fetch --output page.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> cat page.txt\r
+< Zoraya test page
+
+< fetched over HTTP, byte for byte
+
+< \r\n~>
+# What goes wrong is said, and the exit status is 1.
+> fetch http://10.0.2.2:@PORT@/status/404\r
+< fetch: http://10.0.2.2:@PORT@/status/404: the server did not give the page (HTTP 404)
+< \r\n~>
+> status\r
+< \r\nexit status 1
+< \r\n~>
+> fetch http://10.0.2.2:@PORT@/redirect\r
+< the page has moved; redirects are not followed (HTTP 302)
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/reset\r
+< the connection ended before the page did
+< \r\n~>
+# Nothing listens on port 1 of the host: SLIRP answers the SYN with a reset.
+> fetch http://10.0.2.2:1/\r
+< the connection was refused
+< \r\n~>
+# A name asked of SLIRP's DNS forwarder at 10.0.2.3, which answers `localhost`
+# from the host's own table (no Internet needed): the answer is 127.0.0.1, an
+# address of this side of the network, so the connection is refused as local
+# (ADR-0223 item 4). A name that does not exist (`.invalid`, RFC 2606) is
+# unresolvable.
+> fetch http://localhost:@PORT@/\r
+< the name points at this machine's own network
+< \r\n~>
+> fetch http://nothing.invalid/\r
+< the name has no address
+< \r\n~>
+# Only http:// with a host.
+> fetch https://10.0.2.2/\r
+< only http:// addresses are understood
+< \r\n~>
+> fetch http://10.0.2.2:99999/\r
+< the port is not a number from 1 to 65535
+< \r\n~>
+x power off
+> poweroff\r

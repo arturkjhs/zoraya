@@ -4,7 +4,7 @@
 //! same function.
 
 use alloc::vec::Vec;
-use zoraya_abi::net::{Scope, rights};
+use zoraya_abi::net::{Protocols, Scope, rights};
 
 /// What a request asks, reduced to what the check needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,8 +13,20 @@ pub enum Request<'a> {
     Status,
     /// An echo run to an address.
     Ping { address: [u8; 4] },
+    /// A TCP connection to a name or an address and a port (N3).
+    Connect {
+        target: ConnectTarget<'a>,
+        port: u16,
+    },
     /// `narrow` with the rights and the encoded scope asked for.
     Narrow { rights: u32, scope: &'a [u8] },
+}
+
+/// What a `connect` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectTarget<'a> {
+    Name(&'a str),
+    Address([u8; 4]),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +77,12 @@ impl Connection {
         })
     }
 
+    /// The encoded scope, to judge answers against later (a name that
+    /// resolves to a local address, ADR-0223 item 4).
+    pub fn scope_bytes(&self) -> &[u8] {
+        &self.scope
+    }
+
     pub fn rights(&self) -> u32 {
         self.rights
     }
@@ -79,6 +97,16 @@ impl Connection {
             Request::Status => verdict(self.rights & rights::STATUS != 0),
             Request::Ping { address } => {
                 verdict(self.rights & rights::REACH != 0 && self.scope().reaches_address(address))
+            }
+            Request::Connect { target, port } => {
+                if self.rights & rights::REACH == 0 || port == 0 {
+                    return Verdict::NotGranted;
+                }
+                let scope = self.scope();
+                verdict(match target {
+                    ConnectTarget::Name(n) => scope.allows_name(n, port, Protocols::TCP),
+                    ConnectTarget::Address(a) => scope.allows_address(a, port, Protocols::TCP),
+                })
             }
             Request::Narrow { rights, scope } => {
                 if self.rights & rights::NARROW == 0 {

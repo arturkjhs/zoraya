@@ -22,21 +22,24 @@ use alloc::vec::Vec;
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, MemoryObject, Mode, ObjectType,
-    Packet, Status, channel_signals,
+    Packet, Status, channel_signals, stream_signals,
 };
 use zoraya_net::config;
+use zoraya_net::conn::{Client, Conns, Rd, Step, Wr};
 use zoraya_net::connection::Connection;
 use zoraya_net::nic::{Nic, Read, SlotMemory, Wire, Write};
 use zoraya_net::service::{Action, Service};
 use zoraya_net::stack::{Event, Stack};
+use zoraya_proto_net::{Failed, reason};
 use zoraya_proto_nic::{
     Attach, Done, Info, InfoReply, OBJECT_SIZE, SLOT_SIZE, SLOTS, status as nic_status,
 };
-use zoraya_protocol::{Header, decode, encode};
+use zoraya_protocol::{Below, Header, NO_REPLY, decode, encode};
 use zoraya_user::files::{File, read_all};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, handle_close, handle_type, memory_create,
     memory_map, port_create, port_subscribe, port_unsubscribe, port_wait, println, process_exit,
+    stream_read, stream_write,
 };
 
 zoraya_user::describe!("system", "netd");
@@ -48,6 +51,11 @@ const ROOT: u64 = 7;
 const KEY_ETHD: u64 = 1;
 const KEY_WRITABLE: u64 = 2;
 const KEY_CONNECTION: u64 = 100;
+/// Keys of the stream ends of TCP connections: `KEY_OUT + slot` for the
+/// client's outbound stream (readable), `KEY_IN + slot` for the inbound one
+/// (writable). A slot is below `zoraya_net::conn::MAX_CONNS`.
+const KEY_OUT: u64 = 1000;
+const KEY_IN: u64 = 2000;
 
 /// How long the driver may take to answer `info` and `attach`.
 const HANDSHAKE_NS: u64 = 5_000_000_000;
@@ -142,11 +150,130 @@ fn await_reply(port: Handle, end: Handle, ordinal: u32) -> Option<Vec<u8>> {
     }
 }
 
+/// The client's side of one TCP connection as `netd` holds it: the connection
+/// channel and the two stream ends the client passed with `connect` (it keeps
+/// the others, so the rings are its room's, ADR-0222's note of 2026-11-10).
+/// Only non-blocking calls are made on them, and a subscription exists only
+/// while `zoraya-net` says it waits for that end, so a stream that is ready
+/// but not wanted does not wake the loop.
+struct StreamClient {
+    port: Handle,
+    slot: usize,
+    channel: Handle,
+    /// The write end of the stream the client reads; `None` once closed.
+    inbound: Option<Handle>,
+    /// The read end of the stream the client writes.
+    outbound: Handle,
+    watching_out: bool,
+    watching_in: bool,
+}
+
+impl StreamClient {
+    /// Takes the three handles of a `connect` (types already checked).
+    fn new(port: Handle, slot: usize, handles: &[Handle]) -> StreamClient {
+        StreamClient {
+            port,
+            slot,
+            channel: handles[0],
+            inbound: Some(handles[1]),
+            outbound: handles[2],
+            watching_out: false,
+            watching_in: false,
+        }
+    }
+
+    /// Subscribes what the connection waits for and unsubscribes the rest.
+    /// `false` if a subscription is refused (a handle without the right to
+    /// wait): the connection cannot be served.
+    fn watch(&mut self, step: &Step) -> bool {
+        if step.done {
+            return true;
+        }
+        let mut ok = true;
+        if step.wants_out != self.watching_out {
+            let key = KEY_OUT + self.slot as u64;
+            if step.wants_out {
+                let wanted = stream_signals::READABLE | stream_signals::PEER_CLOSED;
+                ok &= port_subscribe(self.port, self.outbound, wanted, key, Mode::Level).is_ok();
+            } else {
+                let _ = port_unsubscribe(self.port, key);
+            }
+            self.watching_out = step.wants_out;
+        }
+        if let Some(inbound) = self.inbound
+            && step.wants_in != self.watching_in
+        {
+            let key = KEY_IN + self.slot as u64;
+            if step.wants_in {
+                let wanted = stream_signals::WRITABLE | stream_signals::PEER_CLOSED;
+                ok &= port_subscribe(self.port, inbound, wanted, key, Mode::Level).is_ok();
+            } else {
+                let _ = port_unsubscribe(self.port, key);
+            }
+            self.watching_in = step.wants_in;
+        }
+        ok
+    }
+}
+
+impl Client for StreamClient {
+    fn read_outbound(&mut self, buf: &mut [u8]) -> Rd {
+        if buf.is_empty() {
+            return Rd::Empty;
+        }
+        match stream_read(self.outbound, buf) {
+            // 0 is end of file: empty and no write end (ADR-0101).
+            Ok(0) => Rd::Eof,
+            Ok(n) => Rd::Data(n.min(buf.len())),
+            Err(Status::WouldBlock) => Rd::Empty,
+            // A handle that stopped being a stream end we may read.
+            Err(_) => Rd::Eof,
+        }
+    }
+
+    fn write_inbound(&mut self, data: &[u8]) -> Wr {
+        let Some(inbound) = self.inbound else {
+            return Wr::Gone;
+        };
+        match stream_write(inbound, data) {
+            Ok(n) if n > 0 => Wr::Wrote(n.min(data.len())),
+            Ok(_) | Err(Status::WouldBlock) => Wr::Full,
+            Err(_) => Wr::Gone,
+        }
+    }
+
+    fn close_inbound(&mut self) {
+        if let Some(h) = self.inbound.take() {
+            if self.watching_in {
+                let _ = port_unsubscribe(self.port, KEY_IN + self.slot as u64);
+                self.watching_in = false;
+            }
+            let _ = handle_close(h);
+        }
+    }
+
+    fn notify(&mut self, message: &[u8]) -> bool {
+        !message.is_empty() && channel_write(self.channel, message, &[]).is_ok()
+    }
+}
+
+impl Drop for StreamClient {
+    fn drop(&mut self) {
+        if self.watching_out {
+            let _ = port_unsubscribe(self.port, KEY_OUT + self.slot as u64);
+        }
+        self.close_inbound();
+        let _ = handle_close(self.outbound);
+        let _ = handle_close(self.channel);
+    }
+}
+
 /// Everything `netd` has once it is running.
 struct Netd {
     port: Handle,
     stack: Stack<Link>,
     service: Service,
+    conns: Conns<StreamClient>,
     /// The channel of each connection, by the service's id.
     channels: Vec<Option<Handle>>,
     ethd: Handle,
@@ -171,6 +298,12 @@ impl Netd {
             return;
         }
         self.channels[id] = Some(end);
+    }
+
+    /// Tells a client its `connect` failed, then lets go of its handles.
+    fn refuse(mut client: StreamClient, why: u32) {
+        let _ = client.notify(&failed(why));
+        client.close_inbound();
     }
 
     fn drop_connection(&mut self, id: usize) {
@@ -228,6 +361,39 @@ impl Netd {
                         return;
                     }
                 }
+                Action::Connect {
+                    target,
+                    port,
+                    scope,
+                    reply,
+                } => {
+                    // The client's channel end, then the write end of the
+                    // stream it reads and the read end of the stream it
+                    // writes: all three of the types the request says.
+                    let right = count == 3
+                        && handle_type(handles[0]) == Ok("channel")
+                        && handle_type(handles[1]) == Ok("stream-write")
+                        && handle_type(handles[2]) == Ok("stream-read");
+                    if !right {
+                        for h in &handles[..count] {
+                            let _ = handle_close(*h);
+                        }
+                        self.drop_connection(id);
+                        return;
+                    }
+                    self.write_to(id, &reply);
+                    let slot = self.conns.free_slot();
+                    let client = StreamClient::new(self.port, slot.unwrap_or(0), &handles[..3]);
+                    let now = Self::now_us();
+                    if slot.is_none() {
+                        Self::refuse(client, reason::OVER_LIMIT);
+                    } else if let Err((client, why)) =
+                        self.conns
+                            .open(&mut self.stack, client, target, port, &scope, now)
+                    {
+                        Self::refuse(client, why);
+                    }
+                }
                 other => {
                     for h in &handles[..count] {
                         let _ = handle_close(*h);
@@ -238,7 +404,7 @@ impl Netd {
                             self.drop_connection(id);
                             return;
                         }
-                        Action::Deferred | Action::Narrowed { .. } => {}
+                        Action::Deferred | Action::Narrowed { .. } | Action::Connect { .. } => {}
                     }
                 }
             }
@@ -250,8 +416,14 @@ impl Netd {
     fn turn(&mut self) -> Option<i64> {
         let now = Self::now_us();
         self.stack.link().pump();
-        let delay = self.stack.poll(now);
+        let (delay, finished) = self.conns.turn(&mut self.stack, now, |_, client, step| {
+            // A subscription the kernel refuses is not repaired: the client
+            // ends with its own close, or smoltcp's timeout.
+            let _ = client.watch(step);
+        });
         self.stack.link().flush();
+        // Dropping a client closes its handles and subscriptions.
+        drop(finished);
         for event in self.stack.take_events() {
             match event {
                 Event::Configured => {
@@ -305,6 +477,14 @@ impl Netd {
         }
         delay
     }
+}
+
+/// A `Failed` message for the connection channel.
+fn failed(why: u32) -> Vec<u8> {
+    let mut out = vec![0u8; 64];
+    let n = encode(&Failed { reason: Below(why) }, NO_REPLY, &mut out).unwrap_or(0);
+    out.truncate(n);
+    out
 }
 
 /// The settings, read once from the `/config` connection, then closed.
@@ -413,6 +593,7 @@ fn main() -> i32 {
         port,
         stack,
         service: Service::new(),
+        conns: Conns::new(),
         channels: Vec::new(),
         ethd,
         watching: false,
@@ -442,7 +623,9 @@ fn main() -> i32 {
             match p.key {
                 // Read in `turn`, with the timers.
                 KEY_ETHD | KEY_WRITABLE => {}
-                k if k >= KEY_CONNECTION => netd.serve((k - KEY_CONNECTION) as usize),
+                k if (KEY_CONNECTION..KEY_OUT).contains(&k) => {
+                    netd.serve((k - KEY_CONNECTION) as usize)
+                }
                 _ => {}
             }
         }

@@ -494,6 +494,7 @@ dependencies = [
  "smoltcp",
  "zoraya-abi",
  "zoraya-describe",
+ "zoraya-dns",
  "zoraya-net",
  "zoraya-proto-net",
  "zoraya-proto-nic",
@@ -727,6 +728,10 @@ name = "zoraya-test-alloc"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-test-httpd"
+version = "0.1.0"
+
+[[package]]
 name = "zoraya-test-runner"
 version = "0.1.0"
 dependencies = [
@@ -807,6 +812,7 @@ dependencies = [
  "zoraya-fs-service",
  "zoraya-fsclient",
  "zoraya-heap",
+ "zoraya-http",
  "zoraya-keymap",
  "zoraya-net",
  "zoraya-panel",

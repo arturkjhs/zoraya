@@ -59,14 +59,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd netd net t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui run-net test-net debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui run-net test-net test-net-fetch debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -264,7 +264,49 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 		*) echo "[net-auto] FAIL: no ICMP echo reply from 10.0.2.2 in $(NET_PCAP)"; exit 1 ;; esac ) && \
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-auto -- $(RUN_QEMU) --test --keys --net --accel auto $(KERNEL) && \
 	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
-	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" )
+	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
+	$(MAKE) --no-print-directory test-net-fetch
+
+# N3 (ADR-0222, ADR-0223): `fetch` in the guest against the host-side test
+# server (tools/test-httpd: 127.0.0.1 only, bounded, gone after 300 s or when
+# this recipe ends). The guest reaches it at 10.0.2.2 through SLIRP, which
+# needs the network without `restrict=on` (`--net-open`, tools/run-qemu.sh);
+# nothing else is reached. The disk's /config/settings gives `test.zoraya`
+# (net.hosts), so that a name is resolved too; the script's checksums come
+# from the server's own pattern function (`--checksum`).
+HTTPD := target/debug/zoraya-test-httpd
+NET_HTTP_PORT := 47080
+NET_FETCH_ROOT := $(BUILD)/net-fetch-root
+NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
+NET_FETCH_TEMPLATE := tests/shell/net-fetch.script
+NET_FETCH_SCRIPT := $(BUILD)/net-fetch.script
+NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $(3) $(KERNEL)
+
+$(HTTPD):
+	$(CARGO) build -q -p zoraya-test-httpd
+
+test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
+	sed -e 's/@PORT@/$(NET_HTTP_PORT)/g' \
+		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
+		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
+		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
+		-e "s/@SUM4M@/$$($(HTTPD) --checksum 4000000)/" \
+		$(NET_FETCH_TEMPLATE) > $(NET_FETCH_SCRIPT) && \
+	{ $(HTTPD) --port $(NET_HTTP_PORT) --lifetime 300 > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/net-httpd.pid); up=0; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do \
+		perl -MIO::Socket::INET -e 'exit(IO::Socket::INET->new(PeerAddr => "127.0.0.1:$(NET_HTTP_PORT)", Timeout => 1) ? 0 : 1)' && up=1 && break; sleep 0.5; done; \
+	if [ $$up != 1 ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[net-fetch] FAIL: the test server did not start (port $(NET_HTTP_PORT) taken?)"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd.log; exit 1; fi; \
+	$(call NET_FETCH_RUN,$(QEMU_TIMEOUT),net-fetch-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_FETCH_DISK); rc=$$?; fi; \
+	exit $$rc
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.

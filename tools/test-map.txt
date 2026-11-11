@@ -134,3 +134,10 @@ rootfs/                       test-files test-gui test-tour-gui
 # Host tools with tests of their own only.
 tools/mutants/                check
 tools/footprint/              check
+crates/zoraya-dns/           test-net
+crates/zoraya-http/          test-net
+user/src/bin/fetch.rs        test-net test-files
+user/src/netconn.rs          test-net
+user/describe/commands/fetch.cmd test-net test-files
+tests/shell/net-fetch.script test-net
+tools/test-httpd/            test-net

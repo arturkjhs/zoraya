@@ -8,7 +8,7 @@ fn run(limits: Limits, pieces: &[&[u8]]) -> (Result<(), Error>, Option<Head>, Ve
     let mut body = Vec::new();
     let mut result = Ok(());
     for piece in pieces {
-        match p.feed(piece, &mut |b| body.extend_from_slice(b)) {
+        match p.feed(piece, &mut |_, b| body.extend_from_slice(b)) {
             Ok(_) => {}
             Err(e) => {
                 result = Err(e);
@@ -91,7 +91,9 @@ fn bytes_after_the_end_are_not_the_body() {
     let mut p = Parser::new(Limits::DEFAULT);
     let mut body = Vec::new();
     let input = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhiEXTRA";
-    let n = p.feed(input, &mut |b| body.extend_from_slice(b)).unwrap();
+    let n = p
+        .feed(input, &mut |_, b| body.extend_from_slice(b))
+        .unwrap();
     assert_eq!(body, b"hi");
     assert!(p.is_done());
     assert_eq!(n, input.len() - 5);
@@ -288,8 +290,8 @@ fn bad_chunk_framing_is_refused() {
 #[test]
 fn an_error_is_final() {
     let mut p = Parser::new(Limits::DEFAULT);
-    assert!(p.feed(b"garbage\r\n\r\n", &mut |_| {}).is_err());
-    assert!(p.feed(b"HTTP/1.1 200 OK\r\n\r\n", &mut |_| {}).is_err());
+    assert!(p.feed(b"garbage\r\n\r\n", &mut |_, _| {}).is_err());
+    assert!(p.feed(b"HTTP/1.1 200 OK\r\n\r\n", &mut |_, _| {}).is_err());
     assert!(p.finish().is_err());
 }
 
@@ -361,7 +363,7 @@ fn hostile_bytes_never_panic_and_never_exceed_the_caps() {
         let mut p = Parser::new(limits);
         let mut got = 0u64;
         for piece in [&m[..cut], &m[cut..]] {
-            if p.feed(piece, &mut |b| got += b.len() as u64).is_err() {
+            if p.feed(piece, &mut |_, b| got += b.len() as u64).is_err() {
                 break;
             }
         }

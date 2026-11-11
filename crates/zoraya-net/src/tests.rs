@@ -801,3 +801,6 @@ mod nic;
 
 #[path = "service_tests.rs"]
 mod service;
+
+#[path = "conn_tests.rs"]
+mod conn;

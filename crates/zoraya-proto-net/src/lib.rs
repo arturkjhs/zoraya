@@ -1,8 +1,10 @@
 //! The protocol on a network connection (ADR-0220, ADR-0222 item 1 and 6,
 //! ADR-0229): the scope channel of `netd`. N2 declares what `netd` answers
-//! now: `status`, `ping` (a diagnostic echo, proposed ADR-0281) and `narrow`.
-//! `connect`, `datagram`, `listen` and `resolve` come with N3, each with a
-//! new ordinal; an unknown ordinal gets `ErrorReply` and the connection stays.
+//! now: `status`, `ping` (a diagnostic echo, proposed ADR-0281), `narrow`
+//! and, since N3, `connect` for TCP with the client's stream ends
+//! (ADR-0222 item 3 and its note of 2026-11-10; proposed ADR-0286).
+//! `datagram`, `listen` and `resolve` come later, each with a new ordinal; an
+//! unknown ordinal gets `ErrorReply` and the connection stays.
 //!
 //! One request at a time per connection (ADR-0055); `ping`'s reply comes when
 //! the run is over, so the connection is busy until then. Addresses are IPv4
@@ -35,6 +37,38 @@ pub mod status {
     pub const INVALID: u32 = 3;
     /// The network has no address yet, or no route.
     pub const UNAVAILABLE: u32 = 4;
+}
+
+/// Why a `connect` failed, as `Failed` says it on the connection channel
+/// (ADR-0222 item 3).
+pub mod reason {
+    /// The name has no address, or the servers did not answer.
+    pub const UNRESOLVABLE: u32 = 0;
+    /// The peer answered with a reset.
+    pub const REFUSED: u32 = 1;
+    /// No route, or the interface has no address.
+    pub const UNREACHABLE: u32 = 2;
+    /// No answer from the peer in time.
+    pub const TIMED_OUT: u32 = 3;
+    /// The name resolved to an address of this machine or its side of the
+    /// network and no address rule covers it (ADR-0223 item 4).
+    pub const LOCAL: u32 = 4;
+    /// A bound of `netd` (connections at once), until accounts (ADR-0056).
+    pub const OVER_LIMIT: u32 = 5;
+}
+
+/// One of `reason`.
+pub type Reason = Below<6>;
+
+/// Why an established connection ended abnormally, as `Reset` says it.
+pub mod reset {
+    /// The peer sent a reset.
+    pub const PEER: u32 = 0;
+    /// Nothing came back for too long.
+    pub const TIMED_OUT: u32 = 1;
+    /// `netd` ended it (the client closed a stream end it must keep, or the
+    /// network went away).
+    pub const ABORTED: u32 = 2;
 }
 
 /// Where the interface's address came from.
@@ -98,6 +132,42 @@ protocol! {
         rtt_max_us: u32,
     }
 
+    /// Opens a TCP connection to `name` (a host name; empty to use
+    /// `address`) and `port` (right `reach`, and a reach rule covering the
+    /// target). The three handles, in order: the server end of the
+    /// connection channel the client made, the *write* end of the stream the
+    /// client reads the peer's bytes from, and the *read* end of the stream
+    /// the client writes its bytes to; the client keeps the other ends, so
+    /// the 128 KiB of the connection are its own room's (ADR-0222's note of
+    /// 2026-11-10). `netd` replies at once (`Connecting`), then resolves
+    /// and connects, and sends `Connected` or `Failed` on the connection
+    /// channel.
+    message Connect<'a> = 3, handles 3 {
+        address: u32,
+        port: Below<65536>,
+        name: Data<'a, 253>,
+    }
+    message Connecting = 3, handles 0 {
+        status: Code,
+    }
+
+    /// On the connection channel, from `netd`: the connection is open.
+    message Connected = 16, handles 0 {
+        address: u32,
+        port: Below<65536>,
+    }
+    /// On the connection channel, from `netd`: it never opened. The stream
+    /// ends netd holds are closed after this.
+    message Failed = 17, handles 0 {
+        reason: Reason,
+    }
+    /// On the connection channel, from `netd`: it ended badly; the stream
+    /// ends are closed after this, data first (a reader sees what arrived
+    /// before the reset, then the end).
+    message Reset = 18, handles 0 {
+        why: Below<3>,
+    }
+
     /// Attaches a new connection with a scope inside this one's and rights no
     /// wider (right `narrow`, ADR-0220 item 5). The handle is the server
     /// end of a channel the caller made.
@@ -111,7 +181,15 @@ protocol! {
 }
 
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 3] = [("status", 1), ("ping", 2), ("narrow", 6)];
+pub const ORDINALS: [(&str, u32); 7] = [
+    ("status", 1),
+    ("ping", 2),
+    ("connect", 3),
+    ("narrow", 6),
+    ("connected", 16),
+    ("failed", 17),
+    ("reset", 18),
+];
 
 fn dotted(a: u32) -> String {
     let b = a.to_be_bytes();

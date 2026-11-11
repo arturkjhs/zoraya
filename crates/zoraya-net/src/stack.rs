@@ -115,9 +115,9 @@ struct PingRun {
 }
 
 pub struct Stack<L: Link> {
-    device: LinkDevice<L>,
-    iface: Interface,
-    sockets: SocketSet<'static>,
+    pub(crate) device: LinkDevice<L>,
+    pub(crate) iface: Interface,
+    pub(crate) sockets: SocketSet<'static>,
     dhcp: Option<SocketHandle>,
     icmp: SocketHandle,
     mac: [u8; 6],
@@ -126,6 +126,8 @@ pub struct Stack<L: Link> {
     static_up: bool,
     ping: Option<PingRun>,
     events: Vec<Event>,
+    /// TCP connections and the resolver (`tcp`, `dns`).
+    pub(crate) extra: crate::tcp::Extra,
 }
 
 fn octets(a: Ipv4Address) -> [u8; 4] {
@@ -169,6 +171,7 @@ impl<L: Link> Stack<L> {
             static_up: false,
             ping: None,
             events: Vec::new(),
+            extra: crate::tcp::Extra::default(),
         };
         stack
             .sockets

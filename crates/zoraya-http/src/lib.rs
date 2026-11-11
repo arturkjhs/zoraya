@@ -290,12 +290,16 @@ impl Parser {
         }
     }
 
-    /// Takes the next bytes. Body bytes go to `body`, in order, in pieces
-    /// that never exceed the input. Returns how many bytes it took; fewer
+    /// Takes the next bytes. Body bytes go to `body` with the head, in order,
+    /// in pieces that never exceed the input. Returns how many bytes it took; fewer
     /// than `input.len()` only when the response ended (what is left is
     /// beyond it, and ignored by the caller) or on an error (and then the
     /// parser accepts nothing more).
-    pub fn feed(&mut self, input: &[u8], body: &mut dyn FnMut(&[u8])) -> Result<usize, Error> {
+    pub fn feed(
+        &mut self,
+        input: &[u8],
+        body: &mut dyn FnMut(&Head, &[u8]),
+    ) -> Result<usize, Error> {
         match self.step(input, body) {
             Ok(n) => Ok(n),
             Err(e) => {
@@ -305,7 +309,7 @@ impl Parser {
         }
     }
 
-    fn step(&mut self, input: &[u8], body: &mut dyn FnMut(&[u8])) -> Result<usize, Error> {
+    fn step(&mut self, input: &[u8], body: &mut dyn FnMut(&Head, &[u8])) -> Result<usize, Error> {
         let mut at = 0;
         while at < input.len() {
             match self.state {
@@ -384,7 +388,7 @@ impl Parser {
         Ok(at)
     }
 
-    fn deliver(&mut self, bytes: &[u8], body: &mut dyn FnMut(&[u8])) -> Result<(), Error> {
+    fn deliver(&mut self, bytes: &[u8], body: &mut dyn FnMut(&Head, &[u8])) -> Result<(), Error> {
         if bytes.is_empty() {
             return Ok(());
         }
@@ -392,7 +396,11 @@ impl Parser {
         if self.body_bytes > self.limits.max_body {
             return Err(Error::BodyTooLarge);
         }
-        body(bytes);
+        // The head is known whenever a body byte is: no state with a body
+        // comes before it.
+        if let Some(head) = &self.head {
+            body(head, bytes);
+        }
         Ok(())
     }
 

@@ -17,6 +17,7 @@
 ^ \r\n  echo      print its arguments
 ^ \r\n  exit      end this shell; a new one starts
 ^ \r\n  export    give a variable to the programs you run
+^ \r\n  fetch     fetch a page over HTTP
 ^ \r\n  fg        continue a job in the foreground
 ^ \r\n  find      find files by name
 ^ \r\n  grants    show what a command would be given, without running it
@@ -29,10 +30,10 @@
 ^ \r\n  math      calculate
 ^ \r\n  mkdir     make a directory
 ^ \r\n  mv        move or rename
-^ \r\n  net       show the state of the network
 < -- space: next page, q: quit --
 > \x20
-<   poweroff  turn the machine off
+<   net       show the state of the network
+^ \r\n  poweroff  turn the machine off
 ^ \r\n  pwd       print the current directory
 ^ \r\n  reboot    start the machine again
 ^ \r\n  rm        remove files

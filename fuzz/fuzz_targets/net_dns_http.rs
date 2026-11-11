@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
             let mut p = Parser::new(limits);
             let mut got = 0u64;
             for piece in [&bytes[..cut], &bytes[cut..]] {
-                if p.feed(piece, &mut |b| got += b.len() as u64).is_err() {
+                if p.feed(piece, &mut |_, b| got += b.len() as u64).is_err() {
                     break;
                 }
             }

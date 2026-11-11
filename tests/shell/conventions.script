@@ -538,6 +538,25 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> fetch --help\r
+< \r\nfetch: fetch a page over HTTP
+^ \r\nusage: fetch [--output FILE] [--sum] URL
+^ \r\n  -o, --output FILE   write the page to FILE instead of the terminal
+^ \r\n  -s, --sum           print the size, an FNV-1a checksum and the time instead of the page
+^ \r\n  --help              show this help
+^ \r\nmore: help fetch
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> fetch --no-such-option\r
+< \r\nfetch: --no-such-option: no such option
+^ \r\nusage: fetch [--output FILE] [--sum] URL
+^ \r\nmore: help fetch
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > find --help\r
 < \r\nfind: find files by name
 ^ \r\nusage: find PATTERN [DIR]

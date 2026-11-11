@@ -35,6 +35,7 @@ Commands:
   echo      print its arguments
   exit      end this shell; a new one starts
   export    give a variable to the programs you run
+  fetch     fetch a page over HTTP
   fg        continue a job in the foreground
   find      find files by name
   grants    show what a command would be given, without running it
@@ -47,8 +48,8 @@ Commands:
   math      calculate
   mkdir     make a directory
   mv        move or rename
-  net       show the state of the network
 -- space: next page, q: quit --
+  net       show the state of the network
   poweroff  turn the machine off
   pwd       print the current directory
   reboot    start the machine again

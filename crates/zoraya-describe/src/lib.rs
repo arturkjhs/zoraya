@@ -74,10 +74,14 @@ pub enum Kind {
     Tree,
     /// Not a path.
     Text,
+    /// An `http://` URL: the base-system command is given a network
+    /// connection that reaches that host and port, nothing else (ADR-0224
+    /// item 3, N3).
+    Url,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 9] = [
         Kind::Read,
         Kind::Write,
         Kind::Create,
@@ -86,6 +90,7 @@ impl Kind {
         Kind::Rename,
         Kind::Tree,
         Kind::Text,
+        Kind::Url,
     ];
 
     pub fn parse(word: &str) -> Option<Kind> {
@@ -103,6 +108,7 @@ impl Kind {
             Kind::Rename => "rename",
             Kind::Tree => "tree",
             Kind::Text => "text",
+            Kind::Url => "url",
         }
     }
 
@@ -117,11 +123,12 @@ impl Kind {
             Kind::Rename => "renamed",
             Kind::Tree => "anything in it changed",
             Kind::Text => "text",
+            Kind::Url => "host and port reached",
         }
     }
 
     pub fn is_path(self) -> bool {
-        self != Kind::Text
+        !matches!(self, Kind::Text | Kind::Url)
     }
 }
 

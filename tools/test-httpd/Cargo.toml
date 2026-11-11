@@ -1,0 +1,11 @@
+[package]
+name = "zoraya-test-httpd"
+description = "A bounded HTTP/1.1 test server on 127.0.0.1 for make test-net: deterministic bodies of chosen size and framing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true

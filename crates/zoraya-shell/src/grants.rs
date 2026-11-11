@@ -135,7 +135,7 @@ fn entries_for(kind: Kind, abs: &str, reason: &str, out: &mut Vec<Planned>) {
         }
     };
     match kind {
-        Kind::Text => {}
+        Kind::Text | Kind::Url => {}
         Kind::Read => push(out, abs.into(), Access::Read),
         Kind::Write => push(out, abs.into(), Access::Change),
         Kind::Create => narrowed(out, Access::Create),

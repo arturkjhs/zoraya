@@ -10,11 +10,13 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, source, status as code,
+    Address, Connect, Connecting, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply,
+    source, status as code,
 };
 use zoraya_protocol::{ErrorReply, Header, Seq, decode, encode};
 
-use crate::connection::{Connection, Request, Verdict};
+use crate::conn::Target;
+use crate::connection::{ConnectTarget, Connection, Request, Verdict};
 use crate::link::Link;
 use crate::stack::{PingError, PingResult, Source, Stack};
 use zoraya_proto_net::{Code, MAX_DNS, NO_LEASE};
@@ -34,6 +36,15 @@ pub enum Action {
     /// Attach the handle that came with the request as connection `id`, then
     /// write `reply`.
     Narrowed { id: usize, reply: Vec<u8> },
+    /// Open a TCP connection with the three handles that came with the
+    /// request (channel, inbound write end, outbound read end) after writing
+    /// `reply`. `scope` is the encoded scope it was allowed under.
+    Connect {
+        target: Target,
+        port: u16,
+        scope: Vec<u8>,
+        reply: Vec<u8>,
+    },
     /// The request was malformed: close this connection.
     Close,
 }
@@ -166,6 +177,48 @@ impl Service {
                     Err(PingError::NoAddress) => {
                         Action::Reply(ping_reply(code::UNAVAILABLE, None, t))
                     }
+                }
+            }
+            3 => {
+                let Ok((_, m)) = decode::<Connect>(message, handles) else {
+                    return Action::Close;
+                };
+                let answer = |c| Action::Reply(reply(&Connecting { status: Below(c) }, t));
+                let port = m.port.0 as u16;
+                let target = if m.name.0.is_empty() {
+                    let a = m.address.to_be_bytes();
+                    if m.address == 0 {
+                        return answer(code::INVALID);
+                    }
+                    (ConnectTarget::Address(a), Target::Address(a))
+                } else {
+                    // A name is text a scope can match: valid, and not an
+                    // address spelled as a name.
+                    let Some(n) = core::str::from_utf8(m.name.0)
+                        .ok()
+                        .filter(|n| zoraya_abi::net::valid_name(n))
+                    else {
+                        return answer(code::INVALID);
+                    };
+                    (ConnectTarget::Name(n), Target::Name(n.into()))
+                };
+                match connection.decide(Request::Connect {
+                    target: target.0,
+                    port,
+                }) {
+                    Verdict::Allowed => Action::Connect {
+                        target: target.1,
+                        port,
+                        scope: connection.scope_bytes().to_vec(),
+                        reply: reply(
+                            &Connecting {
+                                status: Below(code::OK),
+                            },
+                            t,
+                        ),
+                    },
+                    Verdict::NotGranted => answer(code::NOT_GRANTED),
+                    Verdict::Invalid => answer(code::INVALID),
                 }
             }
             6 => {
