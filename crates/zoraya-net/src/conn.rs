@@ -24,11 +24,14 @@ use zoraya_proto_net::{Connected, Failed, Reset, reason, reset};
 use zoraya_protocol::{Below, NO_REPLY, encode};
 
 use crate::config::is_unicast;
-use crate::dns::{Found, Owner, ResolveFail, Start};
+use crate::dns::{Found, Owner, ResolveFail, Resolved, Start};
 use crate::link::Link;
 use crate::stack::Stack;
 use crate::tcp::{TcpError, TcpId, TcpPhase, TcpRecv, TcpSend};
 
+/// The first resolver token of a `resolve` request: below it a token is a
+/// connection's slot.
+pub const LOOKUP_BASE: u32 = 1 << 16;
 /// Connections in any phase at once.
 pub const MAX_CONNS: usize = 16;
 /// How long one address gets to answer the SYN (smoltcp retries inside it).
@@ -143,7 +146,9 @@ fn message<'a, M: zoraya_protocol::Message<'a>>(m: &M) -> Vec<u8> {
     out
 }
 
-fn is_local<L: Link>(stack: &Stack<L>, a: [u8; 4], now_us: i64) -> bool {
+/// Whether `a` is an address of this machine or its side of the network
+/// (ADR-0223 item 4).
+pub(crate) fn is_local<L: Link>(stack: &Stack<L>, a: [u8; 4], now_us: i64) -> bool {
     if !is_unicast(a) {
         return true;
     }
@@ -457,6 +462,9 @@ pub struct Conns<C> {
     /// [`Conns::take_released`]: each is one `Connections` charge to give
     /// back.
     released: Vec<usize>,
+    /// Answers of the resolver for `resolve` requests (tokens from
+    /// [`LOOKUP_BASE`]), not for a connection of this table.
+    lookups: Vec<Resolved>,
 }
 
 impl<C: Client> Default for Conns<C> {
@@ -464,6 +472,7 @@ impl<C: Client> Default for Conns<C> {
         Conns {
             slots: Vec::new(),
             released: Vec::new(),
+            lookups: Vec::new(),
         }
     }
 }
@@ -492,6 +501,11 @@ impl<C: Client> Conns<C> {
             .flatten()
             .filter(|c| c.owner.account == account && matches!(c.phase, Phase::Resolving))
             .count()
+    }
+
+    /// The resolver's answers to `resolve` requests since the last call.
+    pub fn take_lookups(&mut self) -> Vec<Resolved> {
+        core::mem::take(&mut self.lookups)
     }
 
     /// The accounts of the connections that ended since the last call, one
@@ -603,6 +617,10 @@ impl<C: Client> Conns<C> {
                 finished.push((id, c.client));
             }
         }
+        // What no connection claimed is a `resolve` request's answer (a
+        // token below `LOOKUP_BASE` with no connection is a gone one's).
+        self.lookups
+            .extend(results.into_iter().filter(|r| r.token >= LOOKUP_BASE));
         stack.tcp_reap();
         (total, finished)
     }

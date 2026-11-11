@@ -466,6 +466,11 @@ impl Netd {
         for account in self.conns.take_released() {
             self.service.connection_ended(account);
         }
+        for answer in self.conns.take_lookups() {
+            if let Some((id, bytes)) = self.service.resolve_done(&self.stack, answer, now) {
+                self.write_to(id, &bytes);
+            }
+        }
         for event in self.stack.take_events() {
             match event {
                 Event::Configured => {

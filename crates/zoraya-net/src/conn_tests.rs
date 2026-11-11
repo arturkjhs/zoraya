@@ -1055,3 +1055,228 @@ fn an_account_that_fills_its_cache_evicts_its_own_entries_not_another_accounts()
     ask(&mut w, none, "nothing.zoraya");
     assert!(!w.client.dns_cached("nothing.zoraya"));
 }
+
+/// `resolve` through the service over the scripted DNS server: the request
+/// is deferred, the resolver's answer comes out of `take_lookups`, and the
+/// service turns it into the reply (N4).
+mod resolve {
+    use super::*;
+    use crate::accounts::Kind;
+    use crate::service::{Action, Service};
+    use zoraya_abi::net::rights;
+    use zoraya_proto_net::{Address, NarrowAccount, Resolve, Resolved, status};
+    use zoraya_protocol::{Below, Data, encode};
+
+    fn ask(service: &mut Service, w: &mut World, id: usize, name: &str) -> Action {
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &Resolve {
+                name: Data(name.as_bytes()),
+            },
+            9,
+            &mut out,
+        )
+        .unwrap();
+        service.handle(id, &out[..n], 0, &mut w.client, w.now)
+    }
+
+    fn answer(bytes: &[u8]) -> (u32, Vec<[u8; 4]>) {
+        let (_, r) = decode::<Resolved<'_>>(bytes, 0).unwrap();
+        let list: Vec<Address> = r.addresses.iter().collect();
+        (
+            r.status.0,
+            list.iter().map(|a| a.address.to_be_bytes()).collect(),
+        )
+    }
+
+    /// Runs the world until the service has the reply for `id`.
+    fn reply_for(service: &mut Service, w: &mut World, id: usize) -> Vec<u8> {
+        for _ in 0..20_000 {
+            w.turn();
+            for a in w.conns.take_lookups() {
+                if let Some((to, bytes)) = service.resolve_done(&w.client, a, w.now) {
+                    assert_eq!(to, id);
+                    return bytes;
+                }
+            }
+        }
+        panic!("no answer");
+    }
+
+    #[test]
+    fn a_name_resolves_to_its_addresses_and_is_cached_on_the_account() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 300)]);
+        let mut service = Service::new();
+        let root = service.add(Connection::root()).unwrap();
+        let first = ask(&mut service, &mut w, root, "test.zoraya");
+        let Action::Deferred = first else {
+            panic!("deferred: {first:?}");
+        };
+        // The charge is held while it runs.
+        assert_eq!(service.accounts().used(0, Kind::Resolutions), 1);
+        let bytes = reply_for(&mut service, &mut w, root);
+        assert_eq!(answer(&bytes), (status::OK, vec![WEB]));
+        assert_eq!(service.accounts().used(0, Kind::Resolutions), 0);
+        assert_eq!(w.peer.dns_queries, 1, "one query for one resolve");
+        // A second resolve of the name is answered from the cache at once.
+        let Action::Reply(bytes) = ask(&mut service, &mut w, root, "test.zoraya") else {
+            panic!("cached");
+        };
+        assert_eq!(answer(&bytes), (status::OK, vec![WEB]));
+        assert_eq!(w.peer.dns_queries, 1);
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_and_one_that_is_not_in_scope_are_refused_apart() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| {
+            let mut m = q.to_vec();
+            m[2] = 0x81;
+            m[3] = 0x83;
+            vec![m]
+        });
+        let mut service = Service::new();
+        let only = Connection::new(
+            rights::REACH,
+            &scope_with(&[ReachRule {
+                target: zoraya_abi::net::Target::Name("gone.zoraya"),
+                ports: Ports::one(80),
+                protocols: Protocols::TCP,
+            }]),
+        )
+        .unwrap();
+        let id = service.add(only).unwrap();
+        let Action::Reply(bytes) = ask(&mut service, &mut w, id, "other.zoraya") else {
+            panic!("refused at once");
+        };
+        assert_eq!(answer(&bytes).0, status::NOT_GRANTED);
+        assert_eq!(
+            w.peer.dns_queries, 0,
+            "nothing was asked for the refused name"
+        );
+        let Action::Deferred = ask(&mut service, &mut w, id, "gone.zoraya") else {
+            panic!("deferred");
+        };
+        let bytes = reply_for(&mut service, &mut w, id);
+        assert_eq!(answer(&bytes), (status::UNRESOLVABLE, vec![]));
+        // No `reach` right: not granted either.
+        let status_only = service
+            .add(Connection::new(rights::STATUS, &scope_with(&[])).unwrap())
+            .unwrap();
+        let Action::Reply(bytes) = ask(&mut service, &mut w, status_only, "gone.zoraya") else {
+            panic!("refused");
+        };
+        assert_eq!(answer(&bytes).0, status::NOT_GRANTED);
+    }
+
+    #[test]
+    fn a_local_answer_is_left_out_unless_an_address_rule_covers_it() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, [127, 0, 0, 1], 60)]);
+        let mut service = Service::new();
+        let names = service
+            .add(Connection::new(rights::REACH, &names_only()).unwrap())
+            .unwrap();
+        let Action::Deferred = ask(&mut service, &mut w, names, "loop.zoraya") else {
+            panic!("deferred");
+        };
+        let bytes = reply_for(&mut service, &mut w, names);
+        assert_eq!(answer(&bytes), (status::LOCAL, vec![]));
+        // With a rule for the address as well, it is given.
+        let both = scope_with(&[
+            ReachRule {
+                target: zoraya_abi::net::Target::Wildcard("zoraya"),
+                ports: Ports::ANY,
+                protocols: Protocols::BOTH,
+            },
+            ReachRule {
+                target: zoraya_abi::net::Target::Address([127, 0, 0, 1]),
+                ports: Ports::ANY,
+                protocols: Protocols::BOTH,
+            },
+        ]);
+        let wide = service
+            .add(Connection::new(rights::REACH, &both).unwrap())
+            .unwrap();
+        let Action::Deferred = ask(&mut service, &mut w, wide, "loop2.zoraya") else {
+            panic!("deferred");
+        };
+        let bytes = reply_for(&mut service, &mut w, wide);
+        assert_eq!(answer(&bytes), (status::OK, vec![[127, 0, 0, 1]]));
+    }
+
+    #[test]
+    fn pending_names_are_bounded_per_account_and_one_per_connection() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|_| Vec::new());
+        let mut service = Service::new();
+        let root = service.add(Connection::root()).unwrap();
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &NarrowAccount {
+                rights: rights::REACH | rights::NARROW,
+                budget: Below(1),
+                scope: Data(&names_only()),
+            },
+            3,
+            &mut out,
+        )
+        .unwrap();
+        let Action::Narrowed { id: small, .. } =
+            service.handle(root, &out[..n], 1, &mut w.client, w.now)
+        else {
+            panic!("carved");
+        };
+        // A second connection of the same account.
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &zoraya_proto_net::Narrow {
+                rights: rights::REACH,
+                scope: Data(&names_only()),
+            },
+            3,
+            &mut out,
+        )
+        .unwrap();
+        let Action::Narrowed { id: twin, .. } =
+            service.handle(small, &out[..n], 1, &mut w.client, w.now)
+        else {
+            panic!("narrowed");
+        };
+        let Action::Deferred = ask(&mut service, &mut w, small, "a.zoraya") else {
+            panic!("deferred");
+        };
+        // One at a time on a connection.
+        let Action::Reply(bytes) = ask(&mut service, &mut w, small, "b.zoraya") else {
+            panic!("busy");
+        };
+        assert_eq!(answer(&bytes).0, status::BUSY);
+        // The budget of 1 allows one pending name in the account.
+        let Action::Reply(bytes) = ask(&mut service, &mut w, twin, "c.zoraya") else {
+            panic!("over quota");
+        };
+        assert_eq!(answer(&bytes).0, status::OVER_QUOTA);
+        // The session still resolves.
+        let Action::Deferred = ask(&mut service, &mut w, root, "d.zoraya") else {
+            panic!("session deferred");
+        };
+        // The asking connections go: the charge goes with the answer, which
+        // has nowhere to go (the resolver gives up at 8 s).
+        service.remove(small);
+        service.remove(twin);
+        for _ in 0..20_000 {
+            w.turn();
+            for a in w.conns.take_lookups() {
+                if let Some((to, _)) = service.resolve_done(&w.client, a, w.now) {
+                    assert_eq!(to, root, "only the session's connection is left");
+                }
+            }
+            if service.accounts().live() == 1 && service.accounts().used(0, Kind::Resolutions) == 0
+            {
+                return;
+            }
+        }
+        panic!("the lookups did not end");
+    }
+}

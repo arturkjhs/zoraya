@@ -19,6 +19,8 @@ pub enum Request<'a> {
         target: ConnectTarget<'a>,
         port: u16,
     },
+    /// The addresses of a name (N4).
+    Resolve { name: &'a str },
     /// `narrow` with the rights and the encoded scope asked for.
     Narrow { rights: u32, scope: &'a [u8] },
 }
@@ -124,6 +126,9 @@ impl Connection {
                     ConnectTarget::Name(n) => scope.allows_name(n, port, Protocols::TCP),
                     ConnectTarget::Address(a) => scope.allows_address(a, port, Protocols::TCP),
                 })
+            }
+            Request::Resolve { name } => {
+                verdict(self.rights & rights::REACH != 0 && self.scope().reaches_name(name))
             }
             Request::Narrow { rights, scope } => {
                 if self.rights & rights::NARROW == 0 {
