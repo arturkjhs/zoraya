@@ -341,28 +341,41 @@ fn a_kill_between_steps_leaves_nothing() {
         // call, which leaves nothing either; so the round is repeated until
         // a step point ended a call with `Cancelled`, which shows the
         // cancel path ran (INV-0270-2).
-        kill_round(role, false);
+        kill_round(role, false, 150);
         let mut landed = false;
-        for _ in 0..8 {
+        let mut rounds = 0;
+        // Each round kills at another moment (150..250 ms after the start,
+        // in steps that do not divide the child's loop), so on a fast host
+        // too some kill meets a call between its steps. Every round is
+        // checked for leaks whether it landed or not.
+        while rounds < 60 {
             let before = cancelled();
-            kill_round(role, true);
+            kill_round(role, true, 150 + (rounds * 37) % 101);
+            rounds += 1;
             if cancelled() > before {
                 landed = true;
                 break;
             }
         }
-        assert!(landed, "{role:?}: no kill ended a call between steps");
+        assert!(
+            landed,
+            "{role:?}: no kill ended a call between steps in {rounds} rounds"
+        );
+        println!(
+            "t_bound: {}: a kill ended a call between steps in round {rounds}",
+            core::str::from_utf8(role).unwrap_or("?")
+        );
     }
 }
 
-fn kill_round(role: &[u8], strict: bool) {
+fn kill_round(role: &[u8], strict: bool, delay_ms: u64) {
     let free = frames_accounted();
     let room = job_create(JOB, JobFlags::POSIX).expect("job");
     // The room's own record is charged to it, so "nothing left" is the use
     // it began with.
     let base = job_get_usage(room, false).expect("usage").memory.used;
     let p = child(room, role).expect("spawn");
-    nap(150);
+    nap(delay_ms);
     masked(true);
     job_kill(room).expect("kill");
     let record = wait_exit(p);
