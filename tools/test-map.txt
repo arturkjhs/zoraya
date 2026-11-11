@@ -17,6 +17,7 @@ tools/plan-lib.sh             check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
+tools/check-ethd-maps.sh      check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.

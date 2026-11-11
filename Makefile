@@ -566,7 +566,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-ethd-maps
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -639,6 +639,10 @@ check-charged-alloc:
 check-untrusted-gate:
 	tools/check-untrusted-gate.sh
 
+# INV-0280-1: ethd maps only its queue memory and takes no view of a frame slot.
+check-ethd-maps:
+	tools/check-ethd-maps.sh
+
 check-test-caps:
 	@bad=""; \
 	for f in crates/*/tests/*.rs; do \
@@ -667,7 +671,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate
+TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -692,7 +696,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

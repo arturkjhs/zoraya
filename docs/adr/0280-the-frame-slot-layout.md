@@ -91,9 +91,7 @@ SLIRP, and the time from the driver's wake to the message read by the client. **
   releases every received slot.
 
 ## Invariants
-- **INV-0280-1.** The driver reads no byte of any frame slot. *Check:* `zoraya-virtio-net` has `#![forbid(unsafe_code)]`
-  and takes no `Shared` view of the frames object; `ethd` maps only its queue memory (`make check`'s clippy and the
-  crate's host tests).
+- **INV-0280-1.** The driver reads no byte of any frame slot. *Check:* `zoraya-virtio-net` has `#![forbid(unsafe_code)]` and takes no `Shared` view of the frames object; `ethd` maps only its queue memory (`make check-ethd-maps`, a source check: one `memory_map` of the queue object, one `Shared` implementation, none in the crate; and clippy for `forbid(unsafe_code)`). It is not a run in QEMU: the kernel has no call that lists a process's mappings.
 
 ## Open questions
 - Whether 64 slots per direction and a single `received` batch of up to 64 are right once `netd` runs (ADR-0221's own

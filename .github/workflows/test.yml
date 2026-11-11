@@ -158,6 +158,7 @@ jobs:
           - make check-ci-jobs
           - make check-charged-alloc
           - make check-untrusted-gate
+          - make check-ethd-maps
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4
