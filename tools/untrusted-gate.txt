@@ -12,8 +12,8 @@
 # STAGE  NAME                 STEP          OWNER   WHAT
 1  charged-allocation   test-qemu     Q1      INV-0261-5: the lint (make check-charged-alloc) and the frame and heap deltas of every allocating call against job_get_usage
 1  memory-hog           test-qemu     Q1      memory_create loops in a limited job get OverQuota while a sibling maps to its own limit (INV-0261-4, INV-0263-1)
-1  fork-bomb            pending       Q2      :(){ :|:& };: in an untrusted room stops at a limit; home starts a command within 2 s (INV-0263-1)
-1  masked-time          pending       Q2      INV-0270-1: no call masks interrupts for more than the bound
+1  fork-bomb            test-qemu     Q2      t_quota: a fork bomb (two copies each, the shape of :(){ :|:& };:) in a limited job stops at its process limit; a command outside starts and ends within 2 s (INV-0263-1)
+1  masked-time          test-qemu     Q2      t_bound: INV-0270-1 and INV-0270-2, the longest masked time of every site against its one-step case, and job_kill between steps
 1  cpu-spinners         pending       Q4      two untrusted rooms spinning and bursting; a home terminal echoes within INV-0264-3's bound
 1  disk-filler          pending       Q5      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
 1  service-floods       pending       Q3      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)

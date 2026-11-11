@@ -10,8 +10,8 @@ extern crate alloc;
 use zoraya_abi::snapshot::Encoder as SnapshotEncoder;
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
-    ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, MapFlags, MemoryFlags,
-    OBJECT_TYPES, Rights, Status,
+    ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags, MemoryFlags,
+    OBJECT_TYPES, ObjectType, Rights, Status,
 };
 use zoraya_user::{
     channel_create, channel_write, clock_monotonic, console_entry, handle_close, handle_type,
@@ -75,6 +75,14 @@ fn child(job: Handle, role: &[u8]) -> Result<Handle, Status> {
     let program = image("t_bound");
     let mut e = Encoder::new(&mut buffer, job, program);
     e.handle(console_entry());
+    // The child's own job, at the slot a process finds it (a spawned process
+    // gets only what its list names).
+    e.handle(HandleEntry {
+        slot: JOB.slot(),
+        handle: job,
+        rights: JobObject::RIGHTS,
+        transfer: Transfer::Duplicate,
+    });
     e.arg(role);
     let length = e.finish().expect("room");
     let result = spawn(&buffer[..length]);
@@ -266,6 +274,12 @@ fn outer() -> i32 {
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, posix, me);
     e.handle(console_entry());
+    e.handle(HandleEntry {
+        slot: JOB.slot(),
+        handle: posix,
+        rights: JobObject::RIGHTS,
+        transfer: Transfer::Duplicate,
+    });
     e.handle(HandleEntry {
         slot: DIRECTORY.slot(),
         handle: DIRECTORY,

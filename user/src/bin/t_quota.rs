@@ -256,6 +256,7 @@ fn bomb() -> i32 {
         let program = image("t_quota");
         let mut e = Encoder::new(&mut buffer, JOB, program);
         e.handle(console_entry());
+        e.handle(zoraya_user::dup(JOB.slot(), JOB, JobObject::RIGHTS));
         e.handle(zoraya_user::dup(
             DIRECTORY.slot(),
             DIRECTORY,
@@ -264,7 +265,11 @@ fn bomb() -> i32 {
         e.arg(b"bomb");
         let length = e.finish().expect("room");
         // Refused at the limit; the copies already running stay.
-        let _ = spawn(&buffer[..length]);
+        if let Err(status) = spawn(&buffer[..length])
+            && status != Status::OverQuota
+        {
+            println!("t_quota: bomb: spawn: {status:?}");
+        }
         handle_close(program).expect("image");
     }
     nap(30_000);
@@ -291,6 +296,7 @@ fn a_fork_bomb_stops_at_the_process_limit() {
     let program = image("t_quota");
     let mut e = Encoder::new(&mut buffer, room, program);
     e.handle(console_entry());
+    e.handle(zoraya_user::dup(JOB.slot(), room, JobObject::RIGHTS));
     e.handle(zoraya_user::dup(
         DIRECTORY.slot(),
         DIRECTORY,

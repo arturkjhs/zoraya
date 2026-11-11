@@ -176,6 +176,9 @@ added later as a second job signal at a threshold below the limit; nothing here 
   the shell's hint over a line whose commands are refused several times.
 
 ## Open questions
+- *Q2 note (agent):* INV-0263-3's program per row in a limited room needs rooms (Q6a). Q2 checks the table (host test,
+  by field and call kind: `libposix` reads the field of the last `OverQuota` from `zoraya_rt::last_refusal`) and the
+  `fork` row from `t_posix forkbomb` under the session job's process limit.
 - Whether the notice's `Raise` button should double, or open the settings page on the room (ADR-0267).
 - Whether `OVER_QUOTA` should also be raised at a lower threshold as a pressure signal (DM-034): wait for a program
   that would shed memory on it.

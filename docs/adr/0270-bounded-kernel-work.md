@@ -131,6 +131,19 @@ and exits.
 
 ## Open questions
 - The step size: measure zeroing and copying per page under HVF and TCG.
+- *Q2 note (agent, ADR-0001 rule 6):* the steps of 64 are measured by `t_bound`: one step of `memory_create`, `memory_map`,
+  `memory_unmap` and a memory object's close takes 2 to 20 us masked under HVF, so the bound has room for steps several
+  times larger; Q2 left the 64 as the ADR says. The reaper frees 1024 frames a turn instead of 64: it runs with
+  interrupts on, so a turn delays no interrupt, and 64 made it slower than processes can be started (the test that
+  starts 255 processes one after another ran out of frames).
+- *Q2 note:* `schedule()` still calls `reap()` to drop a dead thread, and with it the small remainder of its process
+  (the kernel stack and the record): the frames of a large space or object were the unbounded part and now go to the
+  reaper. Moving the thread list too needs a way to wake the reaper from inside `schedule()`; it is not done.
+- *Q2 note:* a snapshot copies a mapped object that another process also maps in steps, so a concurrent writer is seen
+  part way (a plain `memcpy` of shared memory is no different); the copy of the caller's own pages cannot change meanwhile.
+  `snapshot_process` charges the caller's own pages page by page, not before the walk (review Q1, note 14).
+- *Q2 note:* a step point with a spinlock held would unmask interrupts under it. The test kernel asserts that none is
+  held (`sync::held`); the normal kernel does not count locks.
 
 ## Revisit triggers
 - SMP (interrupts masked on one CPU stop less, but locks across steps matter more).

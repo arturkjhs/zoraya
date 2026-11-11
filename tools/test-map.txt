@@ -68,6 +68,9 @@ user/src/bin/t_open.rs        test-gui
 user/src/bin/edit.rs          test-gui
 user/src/bin/settings.rs      test-gui
 user/src/bin/t_gui.rs         test-qemu
+user/src/bin/t_bound.rs       test-qemu
+user/src/bin/t_quota.rs       test-qemu
+user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu
 user/src/app.rs               test-gui
 

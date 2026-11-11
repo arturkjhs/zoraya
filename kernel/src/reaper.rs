@@ -26,6 +26,10 @@ use crate::steps::STEP;
 const REAPER_STEP: usize = 1024;
 use crate::sync::SpinLock;
 
+/// Items the queue holds from the start; past them it grows, or a drop frees
+/// on the spot.
+const QUEUE_ROOM: usize = 256;
+
 /// Frames to free and the charge they carry.
 struct Garbage {
     frames: Vec<Frame>,
@@ -48,6 +52,13 @@ static QUEUE: SpinLock<Queue> = SpinLock::new(Queue {
 
 /// Starts the thread. Call once, after `sched::init`.
 pub fn start() {
+    // Room for a burst of drops before the first one: a drop that fails and
+    // frees frames must not make the heap take frames for the queue.
+    QUEUE
+        .lock()
+        .items
+        .try_reserve_exact(QUEUE_ROOM)
+        .expect("room for the reaper's queue");
     let thread = sched::spawn_kernel(reaper_main, 0).expect("reaper thread");
     QUEUE.lock().thread = Some(thread);
 }
@@ -77,7 +88,9 @@ fn defer(frames: Vec<Frame>, paid: Paid) -> Result<(), (Vec<Frame>, Paid)> {
     let Some(thread) = queue.thread.clone() else {
         return Err((frames, paid));
     };
-    if queue.items.try_reserve(1).is_err() {
+    // Never grows: a drop must not make the heap take frames, and a full
+    // queue means the drop frees on the spot.
+    if queue.items.len() == queue.items.capacity() {
         return Err((frames, paid));
     }
     queue.items.push(Garbage {
