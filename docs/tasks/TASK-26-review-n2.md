@@ -310,3 +310,49 @@ the counter back.
   clamped below `NO_LEASE`.
 - **The dependency rows.** `docs/dependencies.md` has a row for every compiled registry crate, with its version and
   licence. All of them are permissive.
+
+## Dispositions
+
+(Main model, after the review. Tests named were run in this session.)
+
+1. **Fixed.** The run's deadline is fixed when it starts (`start + (count - 1) * 200 ms + timeout`); a request that cannot
+   be queued takes its turn and is lost; when a run ends its ICMP socket is removed and a fresh one added, so nothing
+   stuck survives it; each run has its own identifier (this also answers finding 12's late replies; `Truncated` no longer
+   ends the drain); `poll` asks for at least 1 ms on account of a run, never 0. Host tests: count 8 to an unanswered
+   address ends within its deadline with 8 sent and 0 received, a later run to the peer gets 4 of 4, and `poll` never
+   returns a delay below 1 ms or `Some(0)` meanwhile. `t_netd` does the same (ping 10.0.2.99 x8, then 10.0.2.2).
+2. **Fixed.** `zosh` declares `netd.cmd`'s settings beside its own and the compositor's. `tests/shell/net-settings.script`
+   (a step of `make test-net`, with a disk) runs `settings`: `net.gateway 10.0.2`, `net.ip 10.0.2.15` and `net.address
+   auto` are refused for their types, `net.gateway 10.0.2.2` and `net.dns +1.1.1.1` are written and read back. INV-0229-1's
+   row names both checks.
+3. **Fixed.** `poll` returns `Some(0)` only when a frame waits and a transmit slot is free; otherwise `netd` waits on the
+   driver channel's `READABLE`/`WRITABLE` and the timers. Host test added (`room = 0`).
+4. **Fixed.** A message with the error ordinal is a malformed request: the connection ends, and nothing answers it (test
+   added). `netd` already refuses a `narrow` handle that is not a channel; a channel end that leads back to `netd`
+   itself cannot loop any more because no reply-shaped message is ever answered. (`netd` cannot tell whose peer a channel
+   end is; N3 should keep `narrow`ed ends with launchers.)
+5. **Row made honest.** INV-0221-1 says `a self-report: each process looks at its own start-up table; no call lists another
+   process's handles`. Not done: a check of `start_network`'s entry lists in a host test.
+6. **Fixed.** INV-0220-3 cites `cargo test -p zoraya-abi -p zoraya-net`.
+7. **Fixed (text); not turned off.** ADR-0281 item 3 lists what smoltcp answers unasked. smoltcp 0.14 has no switch for
+   the ICMP unreachables or the TCP reset (a raw socket would suppress only the port-unreachable); turning them off would
+   be a fork. One reply per frame, bounded by `BURST`.
+8. **Fixed.** The fuzz target keeps one static and one DHCP stack for the process (no leak per input); mode 2 answers the
+   client's own DISCOVER/REQUEST with the transaction id and hardware address and the input as options (it reaches the
+   lease handling); mode 5 runs a ping and feeds fuzzed echo replies with the run's identifier. In the scratch driver
+   (200,000 inputs, debug) a lease of 10.0.2.15 is reached and echo replies reach the stack. Still not run under
+   libFuzzer; `fuzz/Cargo.lock` still not updated.
+9. **Not decided (the architect's).** The options: (a) accept as is (the lock's checksums pin the content; network once
+   per checkout); (b) accept with an explicit `make fetch-crates` (`cargo fetch --locked`), `--locked` in the build, a
+   crates.io cache in CI, and the architect rewording CLAUDE.md's rule to "after `make fetch-crates`"; (c) `cargo vendor`
+   with a source replacement (offline; takes the uncompiled `defmt`, `syn` and `unicode-ident` sources, the last
+   `(MIT OR Apache-2.0) AND Unicode-3.0`, outside CLAUDE.md's licence list, and every check that walks the tree must skip
+   `vendor/`); (d) vendor only smoltcp's real graph as path dependencies with its `defmt` feature removed (smallest, a
+   local fork). The reviewer's recommendation: (b) now, (c) or (d) when the TLS provider arrives. Not done: `--locked` in
+   the Makefile (`$(CARGO)` is the program, the flag goes after each subcommand in many places) and `make fetch-crates`.
+10, 11, 13 (in part), 14, 15, 16, 17, 18, 19, 20. **Open notes, not changed**, except 13: `narrow` now answers
+   `UNAVAILABLE` when the new end cannot be subscribed. The rest are recorded for N3: refused-lease message and DNS
+   filtering (10), a lower bound on the lease time (11), rising transactions in `netclient` (14), names that read as
+   numbers (15: N3's resolver and `libposix` must not parse a `Name` as a number), directed broadcast in `ping` (16),
+   `Faults` not in `status` (17), `READ` only for `/config` and no `READ` on the frames object (18), leaks on a failed
+   start (19), and INV-0229-3's row naming the structural argument instead of a write counter (20).

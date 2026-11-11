@@ -74,10 +74,16 @@ changed.
    acceptance test (`ping 10.0.2.2` through a test request in `netd`) and the shell's future `ping` need it; ADR-0222's
    revisit trigger "a program needing ICMP: a `raw` request behind a right of its own" is where a general one would go.
    smoltcp's automatic reply to echo requests addressed to the guest is **off** in `netd` (feature `echo-reply` only in
-   the host tests): the guest answers ARP and nothing else unasked.
+   the host tests). It is not true that the guest answers nothing unasked: smoltcp answers ARP, a UDP datagram to an
+   unbound port with ICMP port unreachable, an unknown IP protocol with ICMP protocol unreachable, and a TCP segment
+   to a closed port with RST (N2's review, finding 7). One reply per received frame, bounded by `BURST`, so no
+   amplification; smoltcp 0.14 has no switch for them (a raw socket would suppress the port-unreachable only), so they
+   stay on, and turning them off would be a fork of smoltcp. The echo run's sockets are replaced when a run ends, so
+   one request that could not leave never blocks the next run.
 4. **Settings types.** ADR-0229 proposes `address` and `prefix` for ADR-0157's list; `zoraya-describe` has them
    (dotted decimal, no sign, no leading zero, `a.b.c.d/len` with `len` 0 to 32; the empty value means "not set"), so
-   `settings net.gateway 10.0.2` is refused at the prompt (INV-0229-1). `net.dns` is `list of address 0 4`; `net.hosts`
+   `settings net.gateway 10.0.2` is refused at the prompt: `zosh` declares `netd.cmd`'s settings beside its own and
+   the compositor's, and `tests/shell/net-settings.script` runs `settings` (INV-0229-1). `net.dns` is `list of address 0 4`; `net.hosts`
    stays `list of text` (`name=address`, checked by `netd`).
 5. **Start-up record and description key.** `native::Slots` gains `net`, the byte that was the first reserved byte
    (ADR-0220 item 7), and `zoraya-describe` gains `needs net-status` (ADR-0224 item 2), honoured by `zosh` for base-system

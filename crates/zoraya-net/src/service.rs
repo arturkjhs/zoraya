@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use zoraya_proto_net::{
     Address, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, source, status as code,
 };
-use zoraya_protocol::{ErrorReply, Header, Seq, decode, encode};
+use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
 use crate::connection::{Connection, Request, Verdict};
 use crate::link::Link;
@@ -132,6 +132,10 @@ impl Service {
         };
         let t = header.transaction;
         match header.ordinal {
+            // A reply-shaped message is not a request, and answering it would
+            // let two servers (or a connection and its own peer) answer each
+            // other's errors forever: the connection ends.
+            ERROR_ORDINAL => Action::Close,
             1 => {
                 if decode::<GetStatus>(message, handles).is_err() {
                     return Action::Close;

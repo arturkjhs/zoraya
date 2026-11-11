@@ -263,6 +263,9 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	( case "$$hex" in *080045????????????????01????0a0002020a00020f0000*) ;; \
 		*) echo "[net-auto] FAIL: no ICMP echo reply from 10.0.2.2 in $(NET_PCAP)"; exit 1 ;; esac ) && \
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-auto -- $(RUN_QEMU) --test --keys --net --accel auto $(KERNEL) && \
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script tests/shell/net-settings.script --label net-settings-auto -- $(RUN_QEMU) --test --keys --net --disk $(NET_DISK) --accel auto $(KERNEL) && \
+	target/debug/zoraya-fsck $(NET_DISK) && \
 	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
 	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" )
 
