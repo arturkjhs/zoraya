@@ -24,8 +24,8 @@
 //! Keys: `name` or `topic`, `summary`, `usage` (one or more), `operand NAME
 //! KIND TEXT`, `option [SHORT] LONG [ARG KIND] TEXT` (an upper-case word is
 //! the argument only when a kind follows it), `when OPTION OPERAND
-//! KIND`, `cwd read|none`, `question`, `program PATH`, `exit CODE TEXT` and
-//! `setting NAME TYPE DEFAULT TEXT`.
+//! KIND`, `cwd read|none`, `question`, `program PATH`, `needs net-status`, `exit
+//! CODE TEXT` and `setting NAME TYPE DEFAULT TEXT`.
 //!
 //! An operand's NAME says how many arguments it takes, as the usage line
 //! writes it: `FILE` exactly one, `[FILE]` zero or one, `FILE...` one or
@@ -441,6 +441,10 @@ pub struct Description {
     /// Exit 1 means "no" (ADR-0155 rule 6).
     pub question: bool,
     pub program: Option<String>,
+    /// `needs net-status` (ADR-0224 item 2): the command asks the network
+    /// service for its state and nothing else. The shell honours it for
+    /// base-system commands only.
+    pub needs_net_status: bool,
     pub exits: Vec<Exit>,
     pub settings: Vec<Setting>,
     pub sections: Vec<Section>,
@@ -461,6 +465,7 @@ impl Description {
             cwd: Cwd::Read,
             question: false,
             program: None,
+            needs_net_status: false,
             exits: Vec::new(),
             settings: Vec::new(),
             sections: Vec::new(),
@@ -1011,6 +1016,15 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
                 }
                 d.program = Some(path.into());
             }
+            "needs" => {
+                if d.needs_net_status {
+                    return err(number, "needs net-status is given once");
+                }
+                if rest.trim_end() != "net-status" {
+                    return err(number, "needs takes net-status");
+                }
+                d.needs_net_status = true;
+            }
             "exit" => {
                 let Some((code, rest)) = next_word(rest) else {
                     return err(number, "exit needs a code");
@@ -1052,6 +1066,7 @@ pub fn parse(bytes: &[u8]) -> Result<Description> {
             || seen_cwd
             || seen_question
             || seen_program
+            || d.needs_net_status
             || !d.exits.is_empty()
             || !d.settings.is_empty();
         if command_only {

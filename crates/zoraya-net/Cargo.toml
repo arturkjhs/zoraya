@@ -25,6 +25,9 @@ smoltcp = { version = "=0.14.0", default-features = false, features = [
 ] }
 zoraya-abi = { path = "../zoraya-abi" }
 zoraya-describe = { path = "../zoraya-describe" }
+zoraya-proto-net = { path = "../zoraya-proto-net" }
+zoraya-proto-nic = { path = "../zoraya-proto-nic" }
+zoraya-protocol = { path = "../zoraya-protocol" }
 zoraya-settings = { path = "../zoraya-settings" }
 
 [lints]

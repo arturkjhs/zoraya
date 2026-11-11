@@ -13,6 +13,8 @@ extern crate alloc;
 pub mod config;
 pub mod connection;
 pub mod link;
+pub mod nic;
+pub mod service;
 pub mod stack;
 
 pub use config::{Config, Mode};

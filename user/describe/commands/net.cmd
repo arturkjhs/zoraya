@@ -4,6 +4,7 @@ usage    net
 usage    net status
 operand  [WORD]  text  status, the only thing net shows
 cwd      none
+needs    net-status
 exit     0  shown
 exit     1  the network is not available
 ---

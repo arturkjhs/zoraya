@@ -795,3 +795,9 @@ fn random_settings_files_never_panic() {
         let (_, _) = config::read(&bytes);
     }
 }
+
+#[path = "nic_tests.rs"]
+mod nic;
+
+#[path = "service_tests.rs"]
+mod service;

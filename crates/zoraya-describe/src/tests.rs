@@ -418,6 +418,25 @@ fn problem(extra: &str) -> &'static str {
     refused(&format!("name x\nsummary s\nusage x\n{extra}")).problem
 }
 
+/// ADR-0224 item 2: `needs net-status`.
+#[test]
+fn needs_net_status_is_one_known_word_given_once() {
+    assert!(header("needs net-status\n---\n").needs_net_status);
+    assert!(!header("---\n").needs_net_status);
+    assert_eq!(problem("needs\n---\n"), "needs takes net-status");
+    assert_eq!(problem("needs net\n---\n"), "needs takes net-status");
+    assert_eq!(
+        problem("needs net-status now\n---\n"),
+        "needs takes net-status"
+    );
+    assert_eq!(
+        problem("needs net-status\nneeds net-status\n---\n"),
+        "needs net-status is given once"
+    );
+    let topic = refused("topic t\nsummary s\nneeds net-status\n---\n");
+    assert_eq!(topic.problem, "a topic has only a summary and a body");
+}
+
 /// Mutation testing: the bounds are inclusive, a description of
 /// `MAX_SIZE` bytes and a line of `MAX_LINE` are accepted.
 #[test]

@@ -85,6 +85,18 @@ user/src/bin/ethd.rs          test-net
 tools/net-poke.sh             test-net
 user/src/bin/t_net.rs         test-net test-qemu
 
+# The network service (N2): its logic, its protocol, the service, the command
+# and the tests that start it as init does and through the normal boot.
+crates/zoraya-net/            test-net
+crates/zoraya-proto-net/      test-net
+user/src/bin/netd.rs          test-net
+user/src/bin/net.rs           test-net
+user/src/bin/t_netd.rs        test-net test-qemu
+user/src/netclient.rs         test-net
+user/describe/system/netd.cmd test-net
+user/describe/commands/net.cmd test-net test-files
+tests/shell/net.script        test-net
+
 # The POSIX personality.
 crates/zoraya-posix/          test-libposix test-posix test-posix-gui
 crates/zoraya-broker/         test-posix test-posix-gui

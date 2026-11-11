@@ -92,6 +92,9 @@ pub struct Slots {
     pub error: u8,
     pub job: u8,
     pub report: u8,
+    /// The network connection (ADR-0220 item 7): present only when the
+    /// launcher granted something.
+    pub net: u8,
 }
 
 impl Slots {
@@ -101,10 +104,18 @@ impl Slots {
         error: NO_HANDLE,
         job: NO_HANDLE,
         report: NO_HANDLE,
+        net: NO_HANDLE,
     };
 
-    fn all(&self) -> [u8; 5] {
-        [self.input, self.output, self.error, self.job, self.report]
+    fn all(&self) -> [u8; 6] {
+        [
+            self.input,
+            self.output,
+            self.error,
+            self.job,
+            self.report,
+            self.net,
+        ]
     }
 }
 
@@ -150,8 +161,9 @@ impl<'a> Startup<'a> {
             error: s[2],
             job: s[3],
             report: s[4],
+            net: s[5],
         };
-        if flags != 0 || s[5..8] != [0, 0, 0] || entry_count > MAX_ENTRIES {
+        if flags != 0 || s[6..8] != [0, 0] || entry_count > MAX_ENTRIES {
             return None;
         }
         let limit = handles.min(MAX_MESSAGE_HANDLES);
@@ -267,7 +279,7 @@ pub fn encode(
         put(&word.to_le_bytes())?;
     }
     let s = slots.all();
-    put(&[s[0], s[1], s[2], s[3], s[4], 0, 0, 0])?;
+    put(&[s[0], s[1], s[2], s[3], s[4], s[5], 0, 0])?;
     put(&u32::try_from(cwd.len()).ok()?.to_le_bytes())?;
     put(cwd.as_bytes())?;
     for e in sorted.iter().flatten() {

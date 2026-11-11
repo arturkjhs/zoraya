@@ -214,6 +214,17 @@ impl Ethd {
 fn main() -> i32 {
     let device = slot(5);
     let client = slot(6);
+    // INV-0221-1: no connection to any program but `netd`, whose channel is
+    // slot 6. The start-up table is looked at and the test reads the line.
+    let channels = zoraya_user::start_table()
+        .iter()
+        .find(|(kind, _)| *kind == "channel")
+        .map_or(0, |(_, n)| *n);
+    if channels != 1 {
+        println!("ethd: holds {channels} channels, not one");
+        return 1;
+    }
+    println!("ethd: holds one channel, to the network service");
     let index: u32 = startup()
         .argv
         .next()

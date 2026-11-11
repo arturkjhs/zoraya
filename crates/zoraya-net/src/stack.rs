@@ -330,9 +330,12 @@ impl<L: Link> Stack<L> {
                     }
                 }
                 Some(None) => {
-                    self.clear();
-                    self.lease = None;
-                    self.events.push(Event::Deconfigured);
+                    // smoltcp reports "no configuration" once at start.
+                    if self.lease.is_some() {
+                        self.clear();
+                        self.lease = None;
+                        self.events.push(Event::Deconfigured);
+                    }
                 }
                 None => break,
             }

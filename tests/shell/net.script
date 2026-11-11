@@ -1,0 +1,30 @@
+# The normal kernel with a network device (`--net`): `init` starts `ethd` and
+# `netd`, gives the shell its root network connection, and `net status` prints
+# the lease the service holds (ADR-0221 item 4, ADR-0229 item 4, N2). Under
+# the test runner's `restrict=on` the lease has no router and no DNS server.
+! panicked
+! first process ended
+< ethd: holds one channel, to the network service
+< netd: holds no device, interrupt or pin
+< Type help to begin, or help tour.
+< \r\n/>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n/>
+> net status\r
+< net0  up  52:54:00:12:34:56
+< address   10.0.2.15/24 (dhcp, lease
+< frames
+< \r\n/>
+# `net` alone is the same; a word that is not `status` is a usage mistake.
+> net\r
+< net0  up  52:54:00:12:34:56
+< \r\n/>
+> net lease\r
+< net: lease: net shows the state: net status
+< \r\n/>
+> net --help\r
+< net: show the state of the network
+< \r\n/>
+x power off
+> poweroff\r
