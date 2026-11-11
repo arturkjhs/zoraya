@@ -93,7 +93,7 @@ pub const MAX_CONTIG_FRAMES: u64 = 1024;
 
 /// Rounds of `reaper::help` a run's search makes before it fails: the scan of
 /// the frame map is repeated after each, so the number bounds the masked time.
-const CONTIG_HELP_ROUNDS: usize = 8;
+const CONTIG_HELP_ROUNDS: usize = (MAX_CONTIG_FRAMES / crate::steps::STEP as u64) as usize + 1;
 
 /// `count` contiguous frames, not zeroed: the caller zeroes them with
 /// [`zero_run`] in steps, before anything else can reach them.

@@ -159,7 +159,7 @@ and exits.
 - *Q2 note, contiguous memory:* `memory_create(CONTIGUOUS)` is capped at 4 MiB (1024 frames; `frames::MAX_CONTIG_FRAMES`),
   and a larger request fails with `NoMemory`. Users: `fsd`'s 2 MiB data area and the drivers' queues (a few pages),
   `t_devices` and `t_loop`. The run is zeroed in steps of 64 frames with interrupts on and freed through the reaper
-  when over a step; the search `help()` loop makes at most 8 rounds. The scan of the frame map for a run is still one
+  when over a step; the search `help()` loop makes at most 17 rounds (enough to free a run of the cap). The scan of the frame map for a run is still one
   masked pass whose cost depends on the machine's memory, not on the request (about 250 us on the 128 MiB test guest
   under HVF); a resumable scan is not done. The right to ask for it (ADR-0051: "for a device's queues") is not
   checked either; the cap is what bounds a job without one.

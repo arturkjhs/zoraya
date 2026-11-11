@@ -278,8 +278,13 @@ fn hold(wait_ms: u64) -> i32 {
 /// A child that makes and closes contiguous objects without end.
 fn churn_contiguous() -> i32 {
     loop {
-        let object = memory_create(CONTIGUOUS_CAP, MemoryFlags::CONTIGUOUS).expect("create");
-        handle_close(object).expect("close");
+        // A run that was just closed may still be with the reaper, and the
+        // machine may not have another: wait for it a little.
+        match memory_create(CONTIGUOUS_CAP, MemoryFlags::CONTIGUOUS) {
+            Ok(object) => handle_close(object).expect("close"),
+            Err(Status::NoMemory) => nap(1),
+            Err(status) => panic!("create: {status:?}"),
+        }
     }
 }
 
