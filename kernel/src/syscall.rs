@@ -1240,6 +1240,8 @@ pub mod test_calls {
     /// Returns the longest time IRQ stayed masked since the last reset, in
     /// nanoseconds (INV-0270-1); x0 not 0 resets it.
     pub const MASKED_MAX_NS: u64 = 0x7013;
+    /// Returns the live event sources and ports, as `sources << 32 | ports`.
+    pub const EVENTS_LIVE: u64 = 0x7014;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1265,6 +1267,10 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
         test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames(a0))),
         test_calls::MASKED_MAX_NS => Some(Ok(crate::steps::masked_max_ns(a0 != 0))),
+        test_calls::EVENTS_LIVE => {
+            let (sources, ports) = port::EVENTS.lock().live();
+            Some(Ok(((sources as u64) << 32) | ports as u64))
+        }
         test_calls::SNAPSHOT_NS => Some(Ok(LAST_SNAPSHOT.lock().0)),
         test_calls::SNAPSHOT_PAGES => Some(Ok(LAST_SNAPSHOT.lock().1)),
         test_calls::HANDLE_AT | test_calls::RIGHTS_AT | test_calls::GENERATION_AT => {

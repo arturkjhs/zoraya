@@ -18,6 +18,12 @@ use crate::charge::Paid;
 use crate::memory::frames;
 use crate::sched::{self, Thread};
 use crate::steps::STEP;
+
+/// Frames the reaper frees before it yields. The reaper runs with interrupts
+/// on, so its steps never delay one (INV-0270-1 counts masked time); the size
+/// is only how long it holds the CPU against the threads waiting, and large
+/// enough that it frees at least as fast as processes can be made.
+const REAPER_STEP: usize = 1024;
 use crate::sync::SpinLock;
 
 /// Frames to free and the charge they carry.
@@ -110,7 +116,7 @@ fn reaper_main(_: usize) {
         match item {
             Some(mut garbage) => {
                 while !garbage.frames.is_empty() {
-                    let keep = garbage.frames.len().saturating_sub(STEP);
+                    let keep = garbage.frames.len().saturating_sub(REAPER_STEP);
                     for frame in garbage.frames.drain(keep..) {
                         frames::free(frame);
                     }

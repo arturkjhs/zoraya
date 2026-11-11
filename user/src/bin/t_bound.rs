@@ -8,14 +8,15 @@
 extern crate alloc;
 
 use zoraya_abi::snapshot::Encoder as SnapshotEncoder;
-use zoraya_abi::spawn::{Encoder, Transfer};
+use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
-    ChannelEntry, Handle, JOB, JobFlags, MapFlags, MemoryFlags, OBJECT_TYPES, Rights, Status,
+    ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, MapFlags, MemoryFlags,
+    OBJECT_TYPES, Rights, Status,
 };
 use zoraya_user::{
     channel_create, channel_write, clock_monotonic, console_entry, handle_close, handle_type,
-    image, job_create, job_kill, memory_create, memory_map, memory_unmap, println, process_exit,
-    raw_syscall, sleep_until, snapshot_process, spawn, startup, wait_exit,
+    image, job_create, job_get_usage, job_kill, memory_create, memory_map, memory_unmap, println,
+    process_exit, raw_syscall, sleep_until, snapshot_process, spawn, startup, wait_exit,
 };
 
 const MASKED_MAX_NS: u64 = 0x7013;
@@ -163,6 +164,65 @@ fn hold(wait_ms: u64) -> i32 {
     0
 }
 
+/// A child that makes and closes `BIG` objects without end, or snapshots
+/// itself with `BIG` mapped without end, until it is killed.
+fn churn(snapshots: bool) -> i32 {
+    if !snapshots {
+        loop {
+            let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
+            handle_close(object).expect("close");
+        }
+    }
+    let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
+    memory_map(object, 0, BIG, MapFlags::WRITE).expect("map");
+    let mut buffer = alloc::vec![0u8; 512];
+    let length = SnapshotEncoder::new(&mut buffer, JOB)
+        .finish()
+        .expect("room");
+    loop {
+        let Some(child) = snapshot_process(&buffer[..length]).expect("snapshot") else {
+            process_exit(0)
+        };
+        wait_exit(child);
+        handle_close(child).expect("close");
+    }
+}
+
+/// INV-0270-2: a `job_kill` from another process during a large
+/// `memory_create` and a large `snapshot_process` leaves no object and no
+/// charge: the room's use and the free frames return to what they were once
+/// the reaper is idle.
+fn a_kill_between_steps_leaves_nothing() {
+    for role in [&b"create-loop"[..], b"snapshot-loop"] {
+        let free = free_frames();
+        let room = job_create(JOB, JobFlags::POSIX).expect("job");
+        let p = child(room, role).expect("spawn");
+        nap(150);
+        masked(true);
+        job_kill(room).expect("kill");
+        let record = wait_exit(p);
+        assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
+        let mut tries = 0;
+        while (free_frames() != free || job_get_usage(room, false).expect("usage").memory.used != 0)
+            && tries < 200
+        {
+            nap(10);
+            tries += 1;
+        }
+        let usage = job_get_usage(room, false).expect("usage");
+        assert_eq!(usage.memory.used, 0, "{role:?}: the room's use");
+        assert_eq!(usage.processes.used, 0, "{role:?}: the room's processes");
+        assert_eq!(free_frames(), free, "{role:?}: frames");
+        println!(
+            "t_bound: job_kill during {}: nothing left; {} us masked",
+            core::str::from_utf8(role).unwrap_or("?"),
+            masked(true) / 1000
+        );
+        handle_close(p).expect("close");
+        handle_close(room).expect("close");
+    }
+}
+
 fn teardown_sites() {
     let room = job_create(JOB, JobFlags::NONE).expect("job");
     // Exit of a process holding BIG, then job_kill of one.
@@ -198,18 +258,49 @@ fn teardown_sites() {
     assert_eq!(free_frames(), free, "frames after the exit and the kill");
 }
 
-#[unsafe(no_mangle)]
-fn main() -> i32 {
-    match startup().argv.next() {
-        Some(b"hold-short") => return hold(50),
-        Some(b"hold-long") => return hold(30_000),
-        _ => {}
-    }
+/// Runs the measurements inside a `posix` job, where `snapshot_process` is
+/// allowed.
+fn outer() -> i32 {
+    let posix = job_create(JOB, JobFlags::POSIX).expect("posix job");
+    let me = image("t_bound");
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, posix, me);
+    e.handle(console_entry());
+    e.handle(HandleEntry {
+        slot: DIRECTORY.slot(),
+        handle: DIRECTORY,
+        rights: rights_of(DIRECTORY),
+        transfer: Transfer::Duplicate,
+    });
+    e.arg(b"inner");
+    let length = e.finish().expect("room");
+    let child = spawn(&buffer[..length]).expect("spawn inner");
+    let record = wait_exit(child);
+    handle_close(child).expect("close");
+    handle_close(me).expect("close");
+    handle_close(posix).expect("close");
+    record.code
+}
+
+fn inner() -> i32 {
     memory_sites();
     check("snapshot_process", snapshot_of(STEP), snapshot_of(BIG));
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     teardown_sites();
+    a_kill_between_steps_leaves_nothing();
     println!("t_bound: all passed");
     0
+}
+
+#[unsafe(no_mangle)]
+fn main() -> i32 {
+    match startup().argv.next() {
+        Some(b"hold-short") => hold(50),
+        Some(b"hold-long") => hold(30_000),
+        Some(b"create-loop") => churn(false),
+        Some(b"snapshot-loop") => churn(true),
+        Some(b"inner") => inner(),
+        _ => outer(),
+    }
 }

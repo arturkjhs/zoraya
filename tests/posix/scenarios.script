@@ -80,10 +80,11 @@
 > kill -9 %1; wait %1; echo killed=$?\r
 < killed=137
 < PSURF>
-# A fork bomb in a sub-job, bounded by what exists today (ADR-0056 will add
-# quotas): forks until refused, then the session goes on.
+# A fork bomb, bounded by the session job's process limit (ADR-0261, ADR-0263
+# item 4): fork fails with EAGAIN, and then the session goes on.
 > t_posix forkbomb 400\r
 < t_posix: forkbomb made
+< before Resource temporarily unavailable
 < t_posix: forkbomb passed
 < PSURF>
 > echo still-here\r
