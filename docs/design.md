@@ -399,7 +399,7 @@ objects of stage 4. Logic lives in host-tested crates; the processes are thin.
   runs on the console. A storage restart starts a new terminal with the new shell.
 
 Measured on the M4 under QEMU 11.1.2, the last run of `make test` (`t_gui` in the test kernel at 128 MiB, the criterion
-script at 256 MiB). A full redraw is a client committing its whole 1024 × 768 surface and waiting for the reply, which
+script at 512 MiB). A full redraw is a client committing its whole 1024 × 768 surface and waiting for the reply, which
 no longer waits for the driver; "compose" is the compositor's time per frame for the copy and composition; "flush" is a
 flush's round trip through the driver, which the compositor does not wait for. Key to
 screendump is from QMP's key event to the first screendump that shows the character; reading one screendump (PPM,
@@ -1410,22 +1410,22 @@ message to its writer). A request that would pass a limit fails with `OverQuota`
 refused it asserts `OVER_QUOTA`. Nothing is killed or slowed (CPU is Q4). `job_get_usage` reads `limit`, `used`, `peak`,
 `refused`, and the user/kernel split.
 
-`init`'s job holds the frames free after boot less 1/64 (the kernel reserve), and `init` puts `ttyd`, the broker and the
+`init`'s job holds the frames free after boot less 1/16 (the kernel reserve, ADR-0261 point 10's assumption, kept until a Q task measures what the kernel needs), and `init` puts `ttyd`, the broker and the
 shell in a session job with three quarters of that and 200 processes. `room new --untrusted` is still refused
 (`make check-untrusted-gate`; the list of tests that end the refusal is `tools/untrusted-gate.txt`).
 
 Measured with Q1 (HVF, default guest, test kernel): `portbench` 1 idle 2208 ns, 10000 idle 1167 ns; `chanbench` round trip
 16 B 8167 ns. No run of the same benchmarks before the change was made in this session, so the cost of the charge on
-those is not known; the charge is one lock and one to four adds per allocation. The reserve: at 1/16 the 256 MiB GUI
-test ended with the session at 214.8 of 215.7 MiB and the files manager's menu refused; at 1/32 it passes with one
-refusal of a terminal window in its log.
+those is not known; the charge is one lock and one to four adds per allocation. The reserve: at 1/16 and at 1/32 the 256 MiB
+GUI test refused the files manager's menu; the GUI guests now have 512 MiB and the reserve stays 1/16 (the footprint
+is a row of `docs/backlog.md`).
 
 What is charged for the reserves that the heap shows only as they fill: a process, its handle table at the largest (1024
 slots) while it lives, and the charge goes back when it exits (a zombie keeps its record, not the table); a port, its
 record, its place in the event tables and room for 64 packets, then 64 more each time `port_queue` finds its ready list
 longer than what it has paid, kept until the port ends; a channel, its queues' slots at their most (1 KiB).
 
-Measured at the end of the 256 MiB GUI test (`files-manage:auto:2`): `init`'s job at
+Measured at the end of the GUI test at 256 MiB, before the guests were raised (`files-manage:auto:2`): `init`'s job at
 230.85 of 233.6 MB used (peak 233.1 MB), with 10.7 MB of frames really free, the charge being within 0.5 MB of the frames
 and heap pages in use. The over-charges are therefore not what refuses the terminal window: the session really uses
 nearly all of RAM. Before the change to ports and exits the figure was 231.2 MB.
