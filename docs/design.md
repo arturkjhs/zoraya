@@ -1551,7 +1551,7 @@ the driver is described under "Network service" below.
 `netd` (`user/src/bin/netd.rs`, ADR-0221 item 3) is one process, one thread and one port. It is the client of `ethd`
 (the frame protocol of N1), runs smoltcp 0.14 over it (`zoraya-net`, features: Ethernet, IPv4, ICMP, UDP, TCP with
 Reno, the DHCPv4 client; no IPv6, no `std`, no `log`), and serves the scope channels of `zoraya-proto-net`. The
-stack has no TCP user yet (N3) and no DNS (N3).
+stack's TCP client and its resolver are described under "TCP, names and `fetch`" below.
 
 - **Start.** `init` starts `ethd` and `netd` once the storage stack is up (`netd` reads `/config/settings` and needs the
   volume for it; without a volume it runs on the defaults). `netd`'s table: the console, slot 5 the channel to `ethd`,
@@ -1608,6 +1608,78 @@ stack has no TCP user yet (N3) and no DNS (N3).
   about 115 ms; restart after `netd` killed 124 ms to a lease, after `ethd` killed 126 ms. TCG: lease 114 ms; `ping 10.0.2.2` 4 of 4, round trip 3492/4321/4853 us; restart after `netd` killed 180 ms to a lease, after
   `ethd` killed 183 ms; `netd` killed with a ping in flight, client closed and `ethd` stopped 324 ms later (300 ms of that is the
   wait before the kill).
+
+## TCP, names and `fetch` (stage 8, N3: a native program fetches a page over HTTP)
+
+`netd` now opens TCP connections for its clients (`zoraya_net::conn`, `tcp`, `dns`; proposed ADR-0286). `fetch
+http://HOST[:PORT]/PATH` is the first program that uses them.
+
+- **`connect`** (`zoraya-proto-net` ordinal 3, ADR-0222 item 3 with the client's stream ends, its note of 2026-11-10).
+  The client makes the connection channel and two streams (`user/src/netconn.rs`), so the 128 KiB of the connection are
+  its own room's, and passes `netd` the channel's server end, the *write* end of the stream it reads and the *read* end of
+  the stream it writes. `netd` checks the right `reach`, the scope (a name needs a name rule, an address an address rule
+  and the port a port range), the three handle types (`channel`, `stream-write`, `stream-read`), replies `Connecting` on
+  the scope channel at once and sends `Connected { address, port }`, `Failed { reason }` or `Reset { why }` on the
+  connection channel. `Failed` and `Reset` are the last message; `netd` closes its stream ends after them. A client that
+  closes the write end it keeps (`shutdown(write)`) makes `netd` send a FIN once the ring is dry; the peer's FIN is end of
+  file on the inbound stream after the data; smoltcp keeps unread data across a reset, so a reader sees the data, then
+  `Reset { Peer }`.
+- **The copy.** `Conns::turn` is one turn of the single loop: frames in and timers, the resolver's answers, every
+  connection, the frames those queued out. A connection copies with smoltcp's own closures (`send`/`recv` hand out the free
+  space and the readable bytes) and non-blocking `stream_read`/`stream_write` inside them, so a byte is copied once in
+  `netd`, with no staging buffer, and the backpressure is the rings' and the sockets': a full inbound ring stops reading
+  the socket (the advertised window closes), an empty outbound ring or a full send buffer stops sending. At most 16
+  rounds per direction per connection per turn. A stream end is subscribed on the port only while the connection waits
+  for it (outbound readable after an empty read, inbound writable after a full write), so a ready stream nobody waits for
+  does not wake the loop. 32 KiB socket buffers each way, at most 8 sockets and 16 connections in the process (a bound
+  until the per-scope account of Q3), 10 s to connect per address, smoltcp's 60 s without an acknowledgement.
+- **The resolver** (`zoraya_net::dns`; the decoder is `zoraya-dns`). `net.hosts` first (and exempt from the local rule),
+  then a cache of 64 names kept for the answer's TTL up to an hour, then A queries over one UDP socket to the servers of
+  `status` (`net.dns`, else the lease's), attempts at 0, 1, 2 and 4 s to the servers in turn, up to 8 queries at once,
+  giving up at 8 s. An answer counts only from a configured server's port 53, with an identifier and question of a query in
+  flight; the decoder takes an address only from a record owned by the name or by a CNAME chain from it. An address that is
+  loopback, link-local, multicast, unspecified, the interface's own, the gateway or a DNS server is refused with `Local`
+  unless an address rule covers it (ADR-0223 item 4). Not built: AAAA, TCP for a truncated answer, negative caching, a
+  `resolve` request. The identifier and the source port come from the clock and the MAC, which an off-path sender can
+  guess (ADR-0227's service replaces them in N5).
+- **`fetch`** (`user/src/bin/fetch.rs`, `zoraya-http`). `fetch [-o FILE] [--sum] URL`: `http://` only, GET, no redirects,
+  a body of at most 64 MiB, a head of at most 8 KiB and 64 fields. The decoder is incremental and strict about framing
+  (both lengths, two lengths, a length that is not digits, any transfer coding but `chunked`, a bare LF and folding are
+  errors). The body of a non-2xx response is not printed; `--sum` prints the size, an FNV-1a checksum and the time.
+- **The grant.** `zoraya-describe` has a new operand kind `url`. For a base-system command with such an operand, `zosh`
+  makes the command's network connection with `narrow`: right `reach`, one rule for the URL's host (a name, or an address if
+  dotted decimal) and port, TCP. **The condition of ADR-0224 item 3 is not built:** the designation holds without a `+net`
+  rule on the line or in the room, and there is no hint, no REPORT message and no `grants` output for the scope. Rooms and
+  the panel's shells still have no `NET` slot, and `--net` still refuses `--gui`.
+- **Tests.** `cargo test -p zoraya-dns` (16: the query, a decoded answer, CNAME chains, every prefix and byte change of a
+  message, 100,000 random messages, pointer loops and forward pointers, name and length limits), `-p zoraya-http` (17: URLs,
+  the request, every framing, every split of the input, the caps, 60,000 hostile inputs), `-p zoraya-net` (59: 19 for the
+  connections over a scripted peer, with small rings and odd chunk sizes, FIN, reset, refusal, timeout, a client that stops
+  reading, the socket limit, the resolver with forged and misdirected answers, and the local-address rule; one for
+  `connect`'s checks), `-p zoraya-proto-net`. `make test-net` also runs `tests/shell/net-fetch.script`
+  (`make test-net-fetch`) against `tools/test-httpd`, a bounded server on the host's 127.0.0.1 that the guest reaches at
+  10.0.2.2: a page byte for byte, bodies of 1,000,000 (length), 300,000 (chunked, by name), 70,000 (until close) and
+  4,000,000 bytes by checksum, a file written and read back, 404, a redirect, a cut connection, a refused port, SLIRP's DNS
+  forwarder answering `localhost` (refused as local) and `nothing.invalid` (unresolvable), and bad URLs. The step runs the
+  network without `restrict=on` (`tools/run-qemu.sh --net-open`); every other step keeps it. The fuzz target
+  `fuzz/fuzz_targets/net_dns_http.rs` was compiled and driven with 400,000 random inputs in a scratch crate (not run under
+  libFuzzer: no nightly toolchain here).
+- **Measured** (`fetch --sum` against `tools/test-httpd` on the host, QEMU 11.1.2, 128 MiB, 1 CPU, normal kernel,
+  2026-11-11; 5 fetches of 16 MiB and 10 fetches of 1 byte per accelerator, medians): **HVF** 16 MiB in 232 ms, of which 19 ms
+  is `fetch`'s own FNV hashing: 213 ms of transfer, 79 MB/s; all five between 218 and 238 ms. **TCG** 1463 ms, 40 ms of it
+  hashing: 1423 ms, 11.8 MB/s; 1440 to 1498 ms. The page of one byte, connect to end of file (a new connection each time,
+  `Connection: close`): HVF 27.7 ms (17.5 to 28.0), TCG 7.8 ms (6.4 to 26.1). The HVF figure is three times TCG's and is
+  not explained: the guest's 10 ms timer tick or smoltcp's 10 ms ACK delay are the suspects (open item). The copies'
+  share of the 16 MiB is **not measured**; two copies of it at the stream rate of "Stage 6 objects" (1.0 to 1.8 GB/s)
+  would take 19 to 34 ms, 9 to 16 percent of 213 ms *(an estimate, not a measurement)*, and the frame slot is copied byte
+  by byte with volatile reads (`Frames::read_slot` in `netd`), which is more than a bulk copy of the same bytes. The
+  check on the way: 1,000,000 bytes 40 ms, 4,000,000 bytes 85 ms (HVF, in `make test-net`).
+- **Limits and what is not built.** One thread: a slow reader of a connection never blocks the others (its ring fills
+  and its socket's window closes), but the 8 sockets and 16 connections are global, so one client can take all of them
+  until Q3's per-scope account. No AAAA, no TCP fallback for DNS, no `resolve`, `datagram` or `listen` requests, no
+  `peer`/`local`/`share` on a connection, no TLS (N5), no redirects, no `+net` words, no hint, no REPORT message (N3b). A
+  reset after unread data delivers the data first. smoltcp does not say whether a timeout or a reset closed a socket, so
+  `Reset { TimedOut }` is never sent.
 
 ## Known limitations
 

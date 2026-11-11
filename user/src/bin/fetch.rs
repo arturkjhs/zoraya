@@ -157,7 +157,7 @@ fn main() -> i32 {
     let mut result = Ok(());
     let sum = p.flag(&c.d, "sum");
     let started = clock_monotonic();
-    let (mut size, mut hash) = (0u64, 0xcbf2_9ce4_8422_2325u64);
+    let (mut size, mut hash, mut hashing) = (0u64, 0xcbf2_9ce4_8422_2325u64, 0u64);
     loop {
         let n = match stream_read(conn.inbound, &mut buf) {
             Ok(0) => break,
@@ -180,9 +180,11 @@ fn main() -> i32 {
                 return;
             }
             if sum {
+                let t = clock_monotonic();
                 for b in bytes {
                     hash = (hash ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
                 }
+                hashing += clock_monotonic() - t;
                 size += bytes.len() as u64;
                 return;
             }
@@ -232,10 +234,13 @@ fn main() -> i32 {
     }
     if sum {
         let us = (clock_monotonic() - started) / 1000;
+        let hashing = hashing / 1000;
         zoraya_user::println!(
-            "{size} bytes fnv1a {hash:016x} in {}.{:03} ms",
+            "{size} bytes fnv1a {hash:016x} in {}.{:03} ms (hashing {}.{:03} ms)",
             us / 1000,
-            us % 1000
+            us % 1000,
+            hashing / 1000,
+            hashing % 1000
         );
     }
     0

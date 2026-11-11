@@ -13,8 +13,8 @@ Only http:// is understood (there is no TLS yet), redirects are not followed,
 and a page over 64 MiB is refused. The shell gives the command a network
 connection that reaches the host and port of URL and nothing else.
 
-With --sum nothing of the page is kept: the line `N bytes fnv1a HEX in M.mmm ms` is
-what the network tests compare, and the time is what they measure.
+With --sum nothing of the page is kept: the line `N bytes fnv1a HEX in M.mmm ms (hashing H.hhh ms)` is
+what the network tests compare, and the time, less the hashing, is what they measure.
 
 EXAMPLES
   fetch http://10.0.2.2:8080/
