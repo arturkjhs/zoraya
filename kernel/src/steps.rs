@@ -34,6 +34,15 @@ pub fn before(units: usize) {
     PENDING.fetch_add(units, Ordering::Relaxed);
 }
 
+/// A pause that also starts the count again: the end of a teardown's first
+/// part, before a part that may not yield (an exit after its table is off),
+/// so that the part left is counted from nothing and not from the units the
+/// first part had gathered since its last pause.
+pub fn flush() {
+    PENDING.store(0, core::sync::atomic::Ordering::Relaxed);
+    pause();
+}
+
 /// As [`before`] for one object that costs one unit besides the frames it
 /// frees (a handle, a mapping, a message), which counts it too.
 pub fn object() {

@@ -876,6 +876,8 @@ pub fn exit_current(record: ExitRecord) -> ! {
         crate::steps::count(1);
         drop(holder);
     }
+    // The count starts again, for what follows cannot yield.
+    crate::steps::flush();
     // SAFETY: no table is the safe value.
     unsafe { mmu::set_user_table(None) };
     // From here to `sched::exit_current` nothing may block or yield: the
