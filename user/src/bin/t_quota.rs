@@ -255,7 +255,7 @@ fn bomb() -> i32 {
         let mut buffer = [0; 512];
         let program = image("t_quota");
         let mut e = Encoder::new(&mut buffer, JOB, program);
-        e.handle(console_entry());
+        e.handle(console_again());
         e.handle(zoraya_user::dup(JOB.slot(), JOB, JobObject::RIGHTS));
         e.handle(zoraya_user::dup(
             DIRECTORY.slot(),
@@ -274,6 +274,15 @@ fn bomb() -> i32 {
     }
     nap(30_000);
     0
+}
+
+/// The console for a child that passes it on: with `DUPLICATE`.
+fn console_again() -> zoraya_abi::spawn::HandleEntry {
+    zoraya_user::dup(
+        zoraya_abi::CONSOLE.slot(),
+        zoraya_abi::CONSOLE,
+        Rights::WRITE.union(Rights::DUPLICATE),
+    )
 }
 
 fn directory_rights() -> Rights {
@@ -295,7 +304,7 @@ fn a_fork_bomb_stops_at_the_process_limit() {
     let mut buffer = [0; 512];
     let program = image("t_quota");
     let mut e = Encoder::new(&mut buffer, room, program);
-    e.handle(console_entry());
+    e.handle(console_again());
     e.handle(zoraya_user::dup(JOB.slot(), room, JobObject::RIGHTS));
     e.handle(zoraya_user::dup(
         DIRECTORY.slot(),

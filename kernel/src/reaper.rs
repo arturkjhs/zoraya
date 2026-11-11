@@ -113,6 +113,9 @@ pub fn idle() -> bool {
 /// compare counts with their starting values (INV-0270-2).
 #[cfg(feature = "qemu-test")]
 pub fn drain() {
+    // At least one turn of the scheduler, which drops a dead thread's stack
+    // (`schedule` calls `reap`), then until the reaper is idle.
+    sched::yield_now();
     while !idle() {
         sched::yield_now();
     }

@@ -10,13 +10,13 @@ extern crate alloc;
 use zoraya_abi::snapshot::Encoder as SnapshotEncoder;
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
-    ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags, MemoryFlags,
-    OBJECT_TYPES, ObjectType, Rights, Status,
+    CONSOLE, ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags,
+    MemoryFlags, OBJECT_TYPES, ObjectType, Rights, Status,
 };
 use zoraya_user::{
-    channel_create, channel_write, clock_monotonic, console_entry, handle_close, handle_type,
-    image, job_create, job_get_usage, job_kill, memory_create, memory_map, memory_unmap, println,
-    process_exit, raw_syscall, sleep_until, snapshot_process, spawn, startup, wait_exit,
+    channel_create, channel_write, clock_monotonic, handle_close, handle_type, image, job_create,
+    job_get_usage, job_kill, memory_create, memory_map, memory_unmap, println, process_exit,
+    raw_syscall, sleep_until, snapshot_process, spawn, startup, wait_exit,
 };
 
 const MASKED_MAX_NS: u64 = 0x7013;
@@ -41,6 +41,16 @@ fn free_frames() -> u64 {
 
 fn nap(ms: u64) {
     sleep_until(clock_monotonic() + ms * 1_000_000);
+}
+
+/// The console for a child that passes it on: with `DUPLICATE`.
+fn console_again() -> HandleEntry {
+    HandleEntry {
+        slot: CONSOLE.slot(),
+        handle: CONSOLE,
+        rights: Rights::WRITE.union(Rights::DUPLICATE),
+        transfer: Transfer::Duplicate,
+    }
 }
 
 fn rights_of(h: Handle) -> Rights {
@@ -74,7 +84,7 @@ fn child(job: Handle, role: &[u8]) -> Result<Handle, Status> {
     let mut buffer = [0; 512];
     let program = image("t_bound");
     let mut e = Encoder::new(&mut buffer, job, program);
-    e.handle(console_entry());
+    e.handle(console_again());
     // The child's own job, at the slot a process finds it (a spawned process
     // gets only what its list names).
     e.handle(HandleEntry {
@@ -139,27 +149,29 @@ fn snapshot_of(size: u64) -> u64 {
 }
 
 fn chain_close() -> (u64, u64) {
+    // INV-0050-6's chain: each new pair's end travels in the message queued
+    // for the one before, and the head's close walks the whole chain.
     let build = |n: usize| {
-        let mut held: Option<Handle> = None;
+        let (head, mut peer) = channel_create().expect("channel");
         for _ in 0..n {
-            let (x, y) = channel_create().expect("channel");
-            if let Some(prev) = held {
-                let entry = [ChannelEntry {
-                    handle: prev,
-                    rights: rights_of(prev),
-                    transfer: Transfer::Move,
-                }];
-                channel_write(x, b"c", &entry).expect("write");
-            }
-            handle_close(x).expect("close");
-            held = Some(y);
+            let (z, next) = channel_create().expect("channel");
+            let entry = [ChannelEntry {
+                handle: z,
+                rights: rights_of(z),
+                transfer: Transfer::Move,
+            }];
+            channel_write(peer, b"", &entry).expect("write");
+            handle_close(peer).expect("close");
+            peer = next;
         }
-        held.expect("a chain")
+        (head, peer)
     };
-    let short = build(64);
-    let (_, step) = measure(|| handle_close(short).expect("close"));
-    let long = build(CHAIN);
-    let (_, big) = measure(|| handle_close(long).expect("close"));
+    let (head, tail) = build(64);
+    let (_, step) = measure(|| handle_close(head).expect("close"));
+    handle_close(tail).expect("close");
+    let (head, tail) = build(CHAIN);
+    let (_, big) = measure(|| handle_close(head).expect("close"));
+    handle_close(tail).expect("close");
     (step, big)
 }
 
@@ -273,7 +285,7 @@ fn outer() -> i32 {
     let me = image("t_bound");
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, posix, me);
-    e.handle(console_entry());
+    e.handle(console_again());
     e.handle(HandleEntry {
         slot: JOB.slot(),
         handle: posix,
