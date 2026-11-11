@@ -3666,3 +3666,5 @@ extern crate zoraya_shell;
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]
 zoraya_test_alloc::cap_memory!();
+
+// CI probe: a comment-only change to measure the candidate plan (not merged).
