@@ -11,6 +11,11 @@ CLAUDE.md                     check
 .github/                      check
 .claude/                      check
 tools/test-map.txt            check
+tools/ci-plan.sh              check
+tools/ci-tests.txt            check
+tools/plan-lib.sh             check
+tools/test-changed.sh         check
+tools/check-ci-jobs.sh        check
 
 # The kernel and its ABI: every machine configuration.
 kernel/                       test-qemu test-boot

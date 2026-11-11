@@ -1,0 +1,34 @@
+# The jobs of CI's tests matrix, one a line: the full set, which is what
+# make test runs (make check-ci-jobs compares it with TEST_STEPS). On a
+# merge candidate tools/ci-plan.sh picks the lines the change needs.
+make test-unit
+make test-qemu-auto-default
+make test-qemu-auto-smp4-2g
+make test-qemu-auto-el2
+make test-qemu-tcg-default
+make test-qemu-tcg-smp4-gicv2
+make test-qemu-tcg-el2
+make test-qemu-tcg-smp4-gicv3
+make test-boot
+make test-files
+make test-libposix
+make test-posix-gui
+make test-tour-gui POSIX_ACCELS="auto"
+make test-tour-gui POSIX_ACCELS="tcg"
+make test-crash
+make test-gui
+make test-posix POSIX_SCRIPTS="tests/posix/hello.script tests/posix/w5.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/w8-j1.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/w8-pipe-j2.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/w8-fifo-j2.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/w8-pipe-j4.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/w8-fifo-j4.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/w9-int.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/w9-term.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/w9-term.script" POSIX_ACCELS="tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/w10.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/invariants.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/scenarios.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/zosh.script" POSIX_ACCELS="auto tcg"
+make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="auto"
+make test-posix POSIX_SCRIPTS="tests/posix/tour.script" POSIX_ACCELS="tcg"

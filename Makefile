@@ -120,8 +120,10 @@ debug: $(KERNEL)
 	@echo "  gdb-multiarch $(KERNEL) -ex 'target remote localhost:1234'"
 	$(RUN_QEMU) --debug $(KERNEL)
 
+# UNIT_ARGS narrows it to packages (CI's plan on a merge candidate).
+UNIT_ARGS ?= --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt
 test-unit:
-	$(CARGO) test --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt
+	$(CARGO) test $(UNIT_ARGS)
 
 # One runner invocation per machine configuration. "auto" is HVF on an
 # Apple Silicon Mac and TCG elsewhere; the tcg lines always use TCG, so on
@@ -656,10 +658,11 @@ ci-build: $(KERNEL) $(TEST_KERNEL) $(RUNNER) tools-storage
 	$(CARGO) build -q -p zoraya-test-runner -p zoraya-elf-check -p posix-stats -p zoraya-footprint
 
 CI_WORKFLOW ?= .github/workflows/test.yml
+CI_TESTS ?= tools/ci-tests.txt
 check-ci-jobs:
 	@TEST_STEPS="$(TEST_STEPS)" QEMU_CONFIGS="$(QEMU_CONFIGS)" POSIX_SCRIPTS="$(POSIX_SCRIPTS)" \
 	  POSIX_ACCELS="auto tcg" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" \
-	  tools/check-ci-jobs.sh $(CI_WORKFLOW)
+	  tools/check-ci-jobs.sh $(CI_WORKFLOW) $(CI_TESTS)
 
 # The tiers (CLAUDE.md, "Testing"): make check on every commit (seconds);
 # make test-changed for what a change touches (tools/test-map.txt, under
