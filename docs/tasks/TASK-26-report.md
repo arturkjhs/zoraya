@@ -442,3 +442,5 @@ mapped so `make test-changed` runs every step.
 Review: `crates/zoraya-fs/src/volume.rs` (the "Storage limits" block, `unname`, `delete_object`, rename, `resize`, `write`),
 `check.rs`, `format.rs`, `tests/limits.rs`, `crates/zoraya-proto-file/src/lib.rs`, `crates/zoraya-fs-service/src/lib.rs`,
 `tests/posix/t_posix.c` (`diskfill`), docs/adr/0290. Model use: Sonnet only; no Opus review of the engine was run.
+
+**Q5 review fixes** (`docs/tasks/TASK-26-review-q5.md`, dispositions at its end; proposed ADR-0292 for who may set a limit). The "Tests run" line above was wrong for `zoraya-posix` (finding 1); after the fixes `cargo test` of zoraya-fs, -fs-service, -fsclient, -mkfs, -fs-testkit, -proto-file, -posix and -command passes, `make check` passes, and `make test-posix` with `scenarios.script` passes again (81 steps). Changed since: the orphan rule (a directory with a charged open file under a limit cannot be removed), `SCAN_BOUND` 50,000, checked sums, `set_limit` not a freeing request unless it removes a limit, and the model/crash tests keep handles open and change limits.

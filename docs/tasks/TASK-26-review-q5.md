@@ -220,3 +220,20 @@ directories as deep as its limit allows. Neither walk is measured. Q5's measurem
   finding 1.
 - **`diskfill`.** It checks `EDQUOT`, `unlink` at the limit, `EXDEV` for a directory, and a write outside the limit.
   (The script runs it as a trusted program, not in a room, so INV-0265-3 rightly stays open.)
+
+## Dispositions
+
+1. Fixed: the test loops over `0..18` and `from_file(18)` is `EIO`; `cargo test -p zoraya-posix` run and passing.
+2. Fixed: `SetLimit` is refused with `ACCESS_DENIED` on a narrowed connection (`only_of`), `GetLimit` too and without `READ`; host test `a_narrowed_connection_cannot_change_a_limit`. The rule (a full directory connection with `WRITE`) and the `LIMIT` right are in proposed ADR-0292.
+3. Fixed: `subtree_used` uses `checked_add` and refuses the new limit with `OverQuota`; `fsck` reports a tree charged past `u64::MAX` as damage and `repair` removes the record; test `a_sum_past_u64_is_refused_and_not_clean` (two sparse `i64::MAX` files).
+4. Fixed by refusing: a directory with a charged open orphan and a limit on or above it cannot be removed (`NotEmpty`), also by rename over it; with no limit on or above it removal works as before (an existing test requires removal on a full volume) and the orphans are charged to the parent. ADR-0290 text changed to match. Tests `a_directory_with_a_charged_open_file_stays`.
+5. Fixed in code: `set_limit` is freeing only for `None`; a new limit keeps the reserve. The test cannot make a new limit fail where the old code passed (a limit fits in the 5 blocks a create does not); it checks the reserve stays and `None` works on a full volume.
+6. Fixed: `SCAN_BOUND` = 50,000 objects, `ScanTooLarge` (`LIMIT_REACHED`); test with 50,001 directories. The repeat-by-a-`WRITE`-holder remains bounded per request, not rate limited: open item for Q6a/ADR-0292.
+7. Fixed: the model test keeps up to four handles open across requests (unlinked meanwhile), writes through them, and changes, removes and restores limits; `fsck` is the oracle with orphans, the API oracle when none is open; the crash test keeps handles open to the crash, so the images hold orphans and the mount frees them.
+8. Fixed: the word is "over quota". Open: the `Disk` field of ADR-0263 item 1 is not in `Done` (the reply carries a count only); Q6a's hint can derive it from the status `OVER_QUOTA` of a file call.
+9. Fixed: round-trip, totality and hostile cases for `SetLimit`, `GetLimit`, `LimitReply`.
+10. Fixed with 2.
+11. Fixed: `fsck` requires the charged directory of an orphan to be the root or a directory with a parent link; `repair` charges to the root otherwise.
+12. Fixed: the message says to rebuild with `zoraya-mkfs`; header test. Not done: a mount test on a whole version-1 image.
+13. Fixed: docs restored; the root handle is closed.
+14. Open: a directory removal scans the orphan list once (one lookup when it is empty), and the chain walk is measured at depth 3 only; deeper chains are not measured.

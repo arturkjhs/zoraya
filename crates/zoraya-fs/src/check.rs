@@ -477,10 +477,11 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
                     if col
                         .inodes
                         .get(f)
-                        .is_none_or(|d| d.kind != ObjKind::Directory) =>
+                        .is_none_or(|d| d.kind != ObjKind::Directory)
+                        || (*f != ROOT_ID && !col.parents.contains_key(f)) =>
                 {
                     problems.push(format!(
-                        "orphan {id} is charged to {f}, which is not a directory"
+                        "orphan {id} is charged to {f}, which is not a directory with a name"
                     ));
                 }
                 _ => {}
@@ -509,6 +510,9 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
         }
         if !sums.is_empty() {
             let bound = col.inodes.len() + 2;
+            // A tree whose charge passes `u64::MAX` cannot be recorded in
+            // `used` (review Q5, finding 3): it is damage, not a clean sum.
+            let mut overflow: Vec<u64> = Vec::new();
             for (id, a) in &col.inodes {
                 if *id == ROOT_ID {
                     continue;
@@ -523,7 +527,10 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
                 let mut steps = 0;
                 while let Some(d) = at {
                     if let Some(s) = sums.get_mut(&d) {
-                        *s = s.saturating_add(c);
+                        match s.checked_add(c) {
+                            Some(n) => *s = n,
+                            None => overflow.push(d),
+                        }
                     }
                     steps += 1;
                     if d == ROOT_ID || steps > bound {
@@ -532,7 +539,17 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
                     at = col.parents.get(&d).copied();
                 }
             }
+            overflow.sort_unstable();
+            overflow.dedup();
+            for d in &overflow {
+                problems.push(format!(
+                    "directory {d} has a tree charged past the largest limit"
+                ));
+            }
             for (d, (limit, used)) in &col.limits {
+                if overflow.contains(d) {
+                    continue;
+                }
                 let want = sums.get(d).copied().unwrap_or(0);
                 if *used != want {
                     problems.push(format!(
@@ -888,6 +905,7 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
                 col.inodes
                     .get(d)
                     .is_some_and(|x| x.kind == ObjKind::Directory)
+                    && (*d == ROOT_ID || parent_of.contains_key(d))
             });
             let want = named.or(valid_old).or(Some(ROOT_ID));
             if col.fparents.get(id).copied() != want {
@@ -925,13 +943,19 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
     }
     if !sums.is_empty() {
         let bound = col.inodes.len() + 2;
+        let mut overflowed: BTreeSet<u64> = BTreeSet::new();
         for (id, a) in &col.inodes {
             let c = crate::volume::charge_of(a.kind, a.size);
             let mut at = final_parent.get(id).copied();
             let mut steps = 0;
             while let Some(d) = at {
                 if let Some(s) = sums.get_mut(&d) {
-                    *s = s.saturating_add(c);
+                    match s.checked_add(c) {
+                        Some(n) => *s = n,
+                        None => {
+                            overflowed.insert(d);
+                        }
+                    };
                 }
                 steps += 1;
                 if d == ROOT_ID || steps > bound {
@@ -941,7 +965,13 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
             }
         }
         for (d, want) in &sums {
-            if col.limits.get(d).map(|l| l.1) != Some(*want) {
+            if overflowed.contains(d) {
+                // No `used` can say it: the limit record goes.
+                fixes.push(Fix::SetUsed {
+                    dir: *d,
+                    used: None,
+                });
+            } else if col.limits.get(d).map(|l| l.1) != Some(*want) {
                 fixes.push(Fix::SetUsed {
                     dir: *d,
                     used: Some(*want),

@@ -42,6 +42,9 @@ pub enum FsError {
     /// A directory cannot move across the boundary of a storage limit
     /// (ADR-0265 rule 3); a copy and a delete can.
     CrossesLimit,
+    /// `set_limit` on a tree with more objects than one request may scan
+    /// (`SCAN_BOUND`); the file protocol's `LIMIT_REACHED`.
+    ScanTooLarge,
     /// The handle is not open.
     BadHandle,
     /// An internal consistency check of the engine failed. The volume is

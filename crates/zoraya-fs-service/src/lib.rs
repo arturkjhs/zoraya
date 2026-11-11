@@ -271,6 +271,7 @@ fn fs_status(e: &FsError) -> u32 {
         FsError::Corrupt => status::CORRUPT,
         FsError::OverQuota => status::OVER_QUOTA,
         FsError::CrossesLimit => status::CROSSES_LIMIT,
+        FsError::ScanTooLarge => status::LIMIT_REACHED,
         _ => status::STORAGE_FAILED,
     }
 }

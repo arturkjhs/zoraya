@@ -27,8 +27,10 @@ above 15. (5) Who may set a limit on the wire, and how a test sets one before a 
 - **Description:** Format version 2 adds `K_FPARENT` (the directory a file or link is charged to) beside `K_PARENT`
   of directories. A new object is charged to the directory it is made in; an unnamed file to the directory it was
   made in, and `publish` moves the charge like a rename; an object unlinked while open keeps its charge and its link
-  until it is freed (the last close or the next mount); when a directory is removed, the orphans charged to it are
-  charged to its parent from then on. A directory costs one block and gives it back when it is unnamed. A link costs
+  until it is freed (the last close or the next mount). A directory with such an orphan charged to it, and a limit on
+  or above it, cannot be removed (`NotEmpty`: the limit above would otherwise lose the file; XFS keeps the charge
+  with the project for the same reason); with no limit on or above it, removal always works and the orphans are charged
+  to its parent. A directory costs one block and gives it back when it is unnamed. A link costs
   one block and its target in blocks. `Code` becomes `Below<18>`; `OverQuota` and `CrossesLimit` are statuses 16
   and 17. `set_limit(name, bytes | none)` needs `WRITE` on the connection; `get_limit` is open to any connection.
   `fsck` recomputes every `used` and `repair` rewrites it.
@@ -61,9 +63,10 @@ above 15. (5) Who may set a limit on the wire, and how a test sets one before a 
 
 ## Consequences
 - **Positive.** No path writes past a limit; `fsck` is the oracle; the format change is one version.
-- **Negative.** A new limit on a directory scans its subtree in one request (the engine serves one request at a time),
-  so setting a limit on a very large tree stalls the volume's other clients for that long. The room keeper sets limits
-  on room directories that are empty or small; revisit if a limit is set on a large home.
+- **Negative.** A new limit on a directory scans its subtree in one request (the engine serves one request at a time).
+  The scan is bounded at 50,000 objects (`SCAN_BOUND`, an assumption): a larger tree is refused with `ScanTooLarge`
+  (`LIMIT_REACHED` on the wire, `ENOMEM` in `libposix`), and a sum past `u64::MAX` with `OverQuota`. Within the bound a
+  client with `WRITE` may still repeat the scan; ADR-0292 considers a `LIMIT` right.
 - **Follow-up.** Q6a's keeper uses `set_limit`; until then `zoraya-mkfs --limit PATH=SIZE` and the POSIX images' `/limited`
   are the test-only way.
 
@@ -75,7 +78,7 @@ above 15. (5) Who may set a limit on the wire, and how a test sets one before a 
 ## Open questions
 - Whether one block per object is the right metadata charge (ADR-0265's own question): the engine's real blocks per
   object are measured in Q5's report.
-- Whether the subtree scan of a new limit needs a bound or a background step.
+- Whether the scan bound of 50,000 objects is right, or the scan should be a background step.
 - Whether `FsError::OverQuota` on `open` with `O_CREAT` should leave the empty file it created. It does not: the
   request fails as a whole.
 

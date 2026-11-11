@@ -290,7 +290,9 @@ impl Header {
             return Err(Corrupt("bad metadata magic"));
         }
         if r.u16()? != FORMAT_VERSION {
-            return Err(Corrupt("unknown format version"));
+            return Err(Corrupt(
+                "format version is not 2: rebuild the volume with zoraya-mkfs",
+            ));
         }
         Ok(Header {
             kind: r.u8()?,
@@ -397,7 +399,9 @@ impl RootRecord {
             return Err(Corrupt("bad root record magic"));
         }
         if r.u16()? != FORMAT_VERSION {
-            return Err(Corrupt("unknown format version"));
+            return Err(Corrupt(
+                "format version is not 2: rebuild the volume with zoraya-mkfs",
+            ));
         }
         if r.u16()? != CSUM_CRC32C {
             return Err(Corrupt("unknown checksum algorithm"));
