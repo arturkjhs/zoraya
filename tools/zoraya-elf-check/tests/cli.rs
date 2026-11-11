@@ -66,7 +66,10 @@ fn passes_good_files_and_fails_on_any_refusal() {
         std::os::unix::fs::PermissionsExt::from_mode(0o000),
     )
     .unwrap();
-    let (ok, text) = run(&[d.join("bin"), d.join("locked")]);
-    assert!(!ok && text.contains("2 files, 1 refused"), "{text}");
+    // Root (the CI container) reads a mode-000 file: the refusal cannot be made then.
+    if std::fs::File::open(d.join("locked")).is_err() {
+        let (ok, text) = run(&[d.join("bin"), d.join("locked")]);
+        assert!(!ok && text.contains("2 files, 1 refused"), "{text}");
+    }
     assert!(!run(&[d.join("nowhere")]).0);
 }
