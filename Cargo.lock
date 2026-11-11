@@ -292,6 +292,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-dns"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-dtb"
 version = "0.1.0"
 dependencies = [
@@ -412,6 +419,13 @@ dependencies = [
 
 [[package]]
 name = "zoraya-heap"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-http"
 version = "0.1.0"
 dependencies = [
  "zoraya-test-alloc",
