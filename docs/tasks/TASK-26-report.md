@@ -501,3 +501,5 @@ INV-0262-1..3 for `netd`, the compositor and the broker are still unchecked.
 (`Account`, `carve`, `free_account`, `charge`/`release`, `room`, `send`, `flush_held`, `close_connection`, `fold_sync`,
 `answer_syncs`), `tests/service.rs` (end), `crates/zoraya-proto-file/src/lib.rs` (`CloneAccount`), ADR-0262, ADR-0265 item 9,
 ADR-0291. Model use: Sonnet only; no Opus review of the trust-boundary code was run (the orchestrator's review of Q3 is due).
+
+**Q5 review fixes** (`docs/tasks/TASK-26-review-q5.md`, dispositions at its end; proposed ADR-0292 for who may set a limit). The "Tests run" line above was wrong for `zoraya-posix` (finding 1); after the fixes `cargo test` of zoraya-fs, -fs-service, -fsclient, -mkfs, -fs-testkit, -proto-file, -posix and -command passes, `make check` passes, and `make test-posix` with `scenarios.script` passes again (81 steps). Changed since: the orphan rule (a directory with a charged open file under a limit cannot be removed), `SCAN_BOUND` 50,000, checked sums, `set_limit` not a freeing request unless it removes a limit, and the model/crash tests keep handles open and change limits.

@@ -44,6 +44,11 @@ pub const DELETE_RESERVE: u64 = 64;
 /// Object ids are reserved durably in batches of this many (ADR-0016, item
 /// 1).
 pub const ID_BATCH: u64 = 1024;
+/// Most objects (entries and orphans) one `set_limit` scans to start a new
+/// limit; a larger tree is refused with `ScanTooLarge` (review Q5, finding 6).
+/// About 50 ms on the host build for a flat tree; an assumption until measured
+/// on the guest.
+pub const SCAN_BOUND: usize = 50_000;
 /// One block, the unit of a limit's charge (ADR-0265 rule 1).
 const BLK: u64 = BLOCK_SIZE as u64;
 /// Default modes for native clients that give none (ADR-0014 rule 6).
@@ -522,15 +527,18 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     }
 
     /// Test only: writes a wrong `used` into the limit record of `dir`'s
-    /// child `name`, to see that `fsck` finds and repairs it.
+    /// child `name` (a record with no limit if it had none), to see that `fsck`
+    /// finds and repairs it.
     #[cfg(feature = "instrument")]
     pub fn debug_set_used(&mut self, dir: Handle, name: &str, used: u64) {
         let _ = self.mutate(false, false, &mut |v| {
             let (parent, name) = v.parent_of(dir, name)?;
             let (id, _) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
-            if let Some(Value::Limit { limit, .. }) = v.tget(&Key::limit(id))? {
-                v.tins(Key::limit(id), Value::Limit { limit, used })?;
-            }
+            let limit = match v.tget(&Key::limit(id))? {
+                Some(Value::Limit { limit, .. }) => limit,
+                _ => u64::MAX,
+            };
+            v.tins(Key::limit(id), Value::Limit { limit, used })?;
             v.now();
             Ok(())
         });
@@ -792,10 +800,23 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     /// past a limit.
     fn unname(&mut self, id: u64, kind: ObjKind, t: Timestamp) -> Result<(), FsError> {
         if kind == ObjKind::Directory {
+            // A file unlinked while open is still charged to the directory
+            // that held it, and through it to the limits above (ADR-0290):
+            // the directory stays until the file is freed (review Q5,
+            // finding 4; as a directory with a name in it).
+            // Where no limit is above or on the directory, nothing is
+            // charged and removal always works (ADR-0010): the open files
+            // are charged to the parent from now on.
+            let held = self.has_charged_orphans(id)?;
+            if held && !self.limited_chain(id)?.is_empty() {
+                return Err(FsError::NotEmpty);
+            }
             if let Some(Value::Parent(p)) = self.tget(&Key::parent(id))? {
                 let chain = self.limited_chain(p)?;
                 self.adjust_chain(&chain, BLK, false)?;
-                self.repoint_orphans(id, p)?;
+                if held {
+                    self.repoint_orphans(id, p)?;
+                }
             }
             self.tdel(&Key::limit(id))?;
             self.tdel(&Key::parent(id))?;
@@ -899,9 +920,8 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         Ok(())
     }
 
-    /// Orphans charged to the removed directory `dir` are charged to its
-    /// parent `up` from now on; the charge they already put on `up`'s
-    /// ancestors stays.
+    /// Orphans charged to the removed directory `dir` (which has no limit on
+    /// or above it) are charged to its parent `up` from now on.
     fn repoint_orphans(&mut self, dir: u64, up: u64) -> Result<(), FsError> {
         let mut at = Key::orphan(0);
         let mut inclusive = true;
@@ -920,6 +940,25 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         Ok(())
     }
 
+    /// Whether an object on the orphan list is charged to `dir`.
+    fn has_charged_orphans(&mut self, dir: u64) -> Result<bool, FsError> {
+        let mut at = Key::orphan(0);
+        let mut inclusive = true;
+        while let Some((k, _)) = self.tnext(&at, inclusive)? {
+            if k.id != 0 || k.kind != K_ORPHAN {
+                break;
+            }
+            if let Some(Value::Parent(p)) = self.tget(&Key::fparent(k.off))?
+                && p == dir
+            {
+                return Ok(true);
+            }
+            at = k;
+            inclusive = false;
+        }
+        Ok(false)
+    }
+
     /// Whether the chains of limited directories above `a` and `b` (each
     /// included) are the same set.
     fn same_limits(&mut self, a: u64, b: u64) -> Result<bool, FsError> {
@@ -930,8 +969,11 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
 
     /// The bytes an existing subtree under `dir` is charged: every object
     /// below it, and every orphan file charged to a directory inside it.
+    /// Refuses with `OverQuota` a sum past `u64::MAX` (no limit can say it)
+    /// and with `ScanTooLarge` a tree of more than `SCAN_BOUND` objects.
     fn subtree_used(&mut self, dir: u64) -> Result<u64, FsError> {
         let mut total = 0u64;
+        let mut seen = 0usize;
         let mut stack = vec![dir];
         while let Some(d) = stack.pop() {
             let mut at = Key::dirent(d, b"");
@@ -940,9 +982,15 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 if k.id != d || k.kind != K_DIRENT {
                     break;
                 }
+                seen += 1;
+                if seen > SCAN_BOUND {
+                    return Err(FsError::ScanTooLarge);
+                }
                 if let Value::Dirent { child, kind } = v {
                     let a = self.inode(child)?;
-                    total = total.saturating_add(charge_of(a.kind, a.size));
+                    total = total
+                        .checked_add(charge_of(a.kind, a.size))
+                        .ok_or(FsError::OverQuota)?;
                     if kind == ObjKind::Directory {
                         stack.push(child);
                     }
@@ -958,12 +1006,18 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
             if k.id != 0 || k.kind != K_ORPHAN {
                 break;
             }
+            seen += 1;
+            if seen > SCAN_BOUND {
+                return Err(FsError::ScanTooLarge);
+            }
             let a = self.inode(k.off)?;
             if a.kind != ObjKind::Directory
                 && let Some(Value::Parent(p)) = self.tget(&Key::fparent(k.off))?
                 && self.is_within(p, dir)?
             {
-                total = total.saturating_add(charge_of(a.kind, a.size));
+                total = total
+                    .checked_add(charge_of(a.kind, a.size))
+                    .ok_or(FsError::OverQuota)?;
             }
             at = k;
             inclusive = false;
@@ -1593,7 +1647,15 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         limit: Option<u64>,
     ) -> Result<(), FsError> {
         self.writable()?;
-        self.mutate(true, false, &mut |v| {
+        // A request that adds no record may use the delete reserve: taking a
+        // limit away, and changing one that is there (the keeper can set a
+        // limit again before removing it; re-check W4). A new record does not.
+        let existing = self
+            .parent_of(dir, name)
+            .ok()
+            .and_then(|(p, n)| self.entry(p, n.as_bytes()).ok().flatten())
+            .is_some_and(|(id, _)| matches!(self.tget(&Key::limit(id)), Ok(Some(_))));
+        self.mutate(limit.is_none() || existing, false, &mut |v| {
             let (parent, name) = v.parent_of(dir, name)?;
             let (id, kind) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
             if kind != ObjKind::Directory {

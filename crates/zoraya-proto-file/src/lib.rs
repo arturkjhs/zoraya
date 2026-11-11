@@ -920,6 +920,79 @@ mod tests {
         assert!(decode::<Remove<'_>>(&out[..length], 0).is_err());
     }
 
+    /// ADR-0265's messages: they round trip, decode totally, and refuse a
+    /// bound that is past (`remove` 2, a status of 18) or a name that climbs.
+    #[test]
+    fn the_limit_messages_round_trip_and_refuse_bad_bounds() {
+        for remove in [0, 1] {
+            let m = SetLimit {
+                remove: Below(remove),
+                limit: 1 << 40,
+                name: Name("room"),
+            };
+            let mut out = [0; 64];
+            let n = encode(&m, 1, &mut out).unwrap();
+            let (_, back) = decode::<SetLimit<'_>>(&out[..n], 0).unwrap();
+            assert_eq!(back, m);
+            exercise(&out[..n], |bytes| {
+                let _ = decode::<SetLimit<'_>>(bytes, 0);
+            });
+        }
+        check(GetLimit {}, 0);
+        check(
+            LimitReply {
+                status: Below(status::OVER_QUOTA),
+                limited: Below(1),
+                limit: u64::MAX,
+                used: 7,
+            },
+            0,
+        );
+        // Patch the first byte that differs between two values of a field.
+        fn first_diff(a: &[u8], b: &[u8]) -> usize {
+            a.iter().zip(b).position(|(x, y)| x != y).unwrap()
+        }
+        let set = |remove| SetLimit {
+            remove: Below(remove),
+            limit: 5,
+            name: Name("r"),
+        };
+        let mut a = [0; 64];
+        let mut b = [0; 64];
+        let la = encode(&set(0), 1, &mut a).unwrap();
+        encode(&set(1), 1, &mut b).unwrap();
+        a[first_diff(&a, &b)] = 2;
+        assert!(decode::<SetLimit<'_>>(&a[..la], 0).is_err(), "remove 2");
+        let reply = |s| LimitReply {
+            status: Below(s),
+            limited: Below(0),
+            limit: 0,
+            used: 0,
+        };
+        let mut a = [0; 64];
+        let mut b = [0; 64];
+        let la = encode(&reply(0), 1, &mut a).unwrap();
+        encode(&reply(1), 1, &mut b).unwrap();
+        a[first_diff(&a, &b)] = 18;
+        assert!(decode::<LimitReply>(&a[..la], 0).is_err(), "status 18");
+        // A name that climbs, and one cut short.
+        let mut a = [0; 64];
+        let la = encode(
+            &SetLimit {
+                remove: Below(0),
+                limit: 5,
+                name: Name("ab"),
+            },
+            1,
+            &mut a,
+        )
+        .unwrap();
+        let mut climbs = a;
+        climbs[la - 2..la].copy_from_slice(b"..");
+        assert!(decode::<SetLimit<'_>>(&climbs[..la], 0).is_err());
+        assert!(decode::<SetLimit<'_>>(&a[..la - 1], 0).is_err());
+    }
+
     #[test]
     fn no_ordinal_repeats() {
         for (i, (_, a)) in REQUESTS.iter().enumerate() {

@@ -44,7 +44,7 @@ pub use time::{Clock, Timestamp};
 pub use volume::{
     COMMIT_THRESHOLD_BLOCKS, DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, DELETE_RESERVE, DirEntry, Handle,
     ID_BATCH, LimitInfo, MAX_ATOMIC_WRITE, MkfsOptions, MountOptions, OpenOptions, PublishMode,
-    RenameMode, T_COMMIT_NS, Volume, mkfs,
+    RenameMode, SCAN_BOUND, T_COMMIT_NS, Volume, mkfs,
 };
 
 /// Upper bound on decoded node bytes held by the cache and by one root-to-

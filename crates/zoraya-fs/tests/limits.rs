@@ -343,15 +343,16 @@ fn a_file_unlinked_while_open_keeps_its_charge_until_closed() {
         v.write(f, 0, &vec![1u8; 10 * BLOCK_SIZE]),
         Err(FsError::OverQuota)
     );
-    // Removing the directory moves the open file's charge up; closing the
-    // file gives it back.
-    v.rmdir(root, "a/sub").unwrap();
-    assert_eq!(used(&mut v, "a"), 2 * BS);
+    // The directory stays while the open file is charged to it (review Q5,
+    // finding 4): removing it would let the file grow with no limit.
+    assert_eq!(v.rmdir(root, "a/sub"), Err(FsError::NotEmpty));
     v.write(f, 0, &vec![1u8; 2 * BLOCK_SIZE]).unwrap();
-    assert_eq!(used(&mut v, "a"), 3 * BS);
+    assert_eq!(used(&mut v, "a"), 4 * BS);
     v.sync().unwrap();
     fsck(v.clone_device_for_check());
     v.close(f).unwrap();
+    assert_eq!(used(&mut v, "a"), BS);
+    v.rmdir(root, "a/sub").unwrap();
     assert_eq!(used(&mut v, "a"), 0);
     v.sync().unwrap();
     fsck(v.unmount().unwrap());
@@ -427,7 +428,11 @@ fn limits_survive_remount() {
 static REFUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static CROSSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn random_request<D: BlockDevice>(v: &mut Volume<D, TestClock>, rng: &mut Rng) {
+fn random_request<D: BlockDevice>(
+    v: &mut Volume<D, TestClock>,
+    rng: &mut Rng,
+    pool: &mut Vec<Handle>,
+) {
     const DIRS: &[&str] = &["a", "a/b", "a/b/c", "d", "d/e", "f", ""];
     let root = v.root();
     let dir = |rng: &mut Rng| *rng.pick(DIRS);
@@ -467,7 +472,7 @@ fn random_request<D: BlockDevice>(v: &mut Volume<D, TestClock>, rng: &mut Rng) {
         ) => {}
         Err(e) => panic!("unexpected {e:?}"),
     };
-    match rng.below(10) {
+    match rng.below(14) {
         0..=2 => {
             let p = join(dir(rng), &name(rng));
             let off = rng.below(3 * BS);
@@ -513,6 +518,44 @@ fn random_request<D: BlockDevice>(v: &mut Volume<D, TestClock>, rng: &mut Rng) {
                 RenameMode::Exchange,
             ]);
             ok(v.rename(root, &s, root, &d, mode));
+        }
+        // Handles that live across requests: a file kept open can be
+        // unlinked meanwhile (an orphan, ADR-0290), grows on writing, and
+        // is freed by the close or at the next mount.
+        10 => {
+            if pool.len() < 4 {
+                let p = join(dir(rng), &name(rng));
+                if let Ok(h) = v.open(root, &p, create()) {
+                    pool.push(h);
+                }
+            }
+        }
+        11 => {
+            if !pool.is_empty() {
+                let h = *rng.pick(pool);
+                let off = rng.below(3 * BS);
+                let len = rng.below(2 * BS) as usize;
+                ok(v.write(h, off, &vec![5u8; len]).map(|_| ()));
+            }
+        }
+        12 => {
+            if !pool.is_empty() {
+                let at = rng.below(pool.len() as u64) as usize;
+                let h = pool.swap_remove(at);
+                v.close(h).unwrap();
+            }
+        }
+        // A limit changed, or taken away and put back (the scan of a
+        // subtree that holds orphans).
+        13 => {
+            let (d, _) = *rng.pick(LIMITED);
+            let new = (2 + rng.below(58)) * BS;
+            if rng.chance(1, 2) {
+                ok(v.set_limit(root, d, Some(new)));
+            } else {
+                ok(v.set_limit(root, d, None));
+                ok(v.set_limit(root, d, Some(new)));
+            }
         }
         _ => {
             let d = dir(rng);
@@ -567,20 +610,24 @@ fn random_requests_keep_the_counters_true() {
         let mut v = mount(fresh(1024), &clock);
         setup(&mut v);
         let mut rng = Rng::new(seed);
+        let mut pool = Vec::new();
         for i in 0..400 {
-            random_request(&mut v, &mut rng);
-            counters_true(&mut v, &format!("seed {seed} request {i}"));
-            let root = v.root();
-            for (d, l) in LIMITED {
-                let h = v.open(root, d, OpenOptions::default()).unwrap();
-                let info = v.limit_of(h).unwrap().unwrap();
-                v.close(h).unwrap();
-                assert!(info.used <= l * BS, "seed {seed}: {d} past its limit");
+            random_request(&mut v, &mut rng, &mut pool);
+            // The API oracle counts names; with no open handle there is no
+            // orphan, so it is complete. Otherwise `fsck` below is the
+            // oracle, orphans included.
+            if pool.is_empty() {
+                counters_true(&mut v, &format!("seed {seed} request {i}"));
             }
-            if i % 50 == 49 {
+            if i % 25 == 24 {
                 v.sync().unwrap();
+                fsck(v.device().clone());
             }
         }
+        for h in pool {
+            v.close(h).unwrap();
+        }
+        counters_true(&mut v, &format!("seed {seed} at the end"));
         v.sync().unwrap();
         fsck(v.unmount().unwrap());
     }
@@ -610,8 +657,11 @@ fn the_counters_survive_a_crash_at_every_write() {
         setup(&mut v);
         let mut rng = Rng::new(seed + 100);
         let mut done = 0u64;
+        // Handles stay open to the crash: the images hold orphans, and the
+        // mount frees them.
+        let mut pool = Vec::new();
         for i in 0..60 {
-            random_request(&mut v, &mut rng);
+            random_request(&mut v, &mut rng, &mut pool);
             done += 1;
             if i % 12 == 11 {
                 v.sync().unwrap();
@@ -692,6 +742,204 @@ fn fsck_finds_and_repairs_a_wrong_counter() {
     fsck(d.clone());
     let mut v = mount(d, &clock);
     assert_eq!(used(&mut v, "r"), 2 * BS);
+}
+
+/// Review Q5, finding 3: a tree whose charge passes `u64::MAX` gets no limit,
+/// and a later delete does not fail the volume; `fsck` calls a record of
+/// such a sum damage, not clean.
+#[test]
+fn a_sum_past_u64_is_refused_and_not_clean() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(256), &clock);
+    let root = v.root();
+    v.mkdir(root, "a", 0o755).unwrap();
+    for f in ["a/x", "a/y"] {
+        let h = v.open(root, f, create()).unwrap();
+        v.set_size(h, i64::MAX as u64).unwrap();
+        v.close(h).unwrap();
+    }
+    assert_eq!(
+        v.set_limit(root, "a", Some(u64::MAX)),
+        Err(FsError::OverQuota)
+    );
+    // Nothing was recorded, and the deletes work.
+    let h = v.open(root, "a", OpenOptions::default()).unwrap();
+    assert_eq!(v.limit_of(h).unwrap(), None);
+    v.close(h).unwrap();
+    v.unlink(root, "a/x").unwrap();
+    v.unlink(root, "a/y").unwrap();
+    assert!(v.failure().is_none());
+    // The checker: a record forced onto the huge tree is damage.
+    let h = v.open(root, "a/z", create()).unwrap();
+    v.set_size(h, i64::MAX as u64).unwrap();
+    v.close(h).unwrap();
+    let h = v.open(root, "a/w", create()).unwrap();
+    v.set_size(h, i64::MAX as u64).unwrap();
+    v.close(h).unwrap();
+    v.debug_set_used(root, "a", 5);
+    v.sync().unwrap();
+    let d = v.unmount().unwrap();
+    let rep = check(&mut d.clone(), CheckOptions::default());
+    assert!(
+        rep.problems
+            .iter()
+            .any(|p| p.what.contains("past the largest limit")),
+        "{:?}",
+        rep.problems
+    );
+    // Repair takes the record away.
+    let (_, d) = zoraya_fs::check::repair(d, clock.clone()).unwrap();
+    fsck(d);
+}
+
+/// Review Q5, finding 4: a directory that an open unlinked file is charged
+/// to cannot be removed, also by a rename over it, so the file cannot grow
+/// past the limit above.
+#[test]
+fn a_directory_with_a_charged_open_file_stays() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(256), &clock);
+    let root = v.root();
+    for d in ["room", "room/agent", "other"] {
+        v.mkdir(root, d, 0o755).unwrap();
+    }
+    v.set_limit(root, "room/agent", Some(4 * BS)).unwrap();
+    let f = v.open(root, "room/agent/f", create()).unwrap();
+    v.unlink(root, "room/agent/f").unwrap();
+    assert_eq!(v.rmdir(root, "room/agent"), Err(FsError::NotEmpty));
+    assert_eq!(
+        v.rename(root, "other", root, "room/agent", RenameMode::Replace),
+        Err(FsError::NotEmpty)
+    );
+    assert_eq!(
+        v.write(f, 0, &vec![1u8; 8 * BLOCK_SIZE]),
+        Err(FsError::OverQuota)
+    );
+    v.close(f).unwrap();
+    v.rmdir(root, "room/agent").unwrap();
+    v.sync().unwrap();
+    fsck(v.unmount().unwrap());
+}
+
+/// Review Q5, finding 5: `set_limit` is not a freeing request: on a full
+/// volume a new limit is refused for space and the delete reserve stays.
+#[test]
+fn a_new_limit_leaves_the_delete_reserve_alone() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(128), &clock);
+    let root = v.root();
+    for i in 0..30 {
+        v.mkdir(root, &format!("d{i}"), 0o755).unwrap();
+    }
+    let mut n = 0;
+    while put(&mut v, &format!("fill{n}"), 0, &vec![7u8; 4 * BLOCK_SIZE]).is_ok() {
+        n += 1;
+    }
+    // And the last blocks, with empty files, until even a create is refused.
+    let mut e = 0;
+    while put(&mut v, &format!("e{e}"), 0, b"").is_ok() {
+        e += 1;
+    }
+    // Taking a limit away frees, so it may use the reserve; a new limit does
+    // not (it asks for the reserve to stay free, as a create does).
+    v.set_limit(root, "d0", None).unwrap();
+    let before = v.free_blocks().unwrap();
+    let r = v.set_limit(root, "d1", Some(BS));
+    if r == Ok(()) {
+        // It fitted beside the reserve: the reserve is still all there.
+        assert!(v.free_blocks().unwrap() + 8 >= before.min(zoraya_fs::DELETE_RESERVE));
+    } else {
+        assert_eq!(r, Err(FsError::NoSpace));
+    }
+    v.unlink(root, "fill0").unwrap();
+    v.sync().unwrap();
+    fsck(v.unmount().unwrap());
+}
+
+/// Re-check W4: on a full volume a limit that is there can be changed or taken
+/// away (neither adds a record); a new one is refused for space.
+#[test]
+fn on_a_full_volume_an_existing_limit_can_be_changed() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(128), &clock);
+    let root = v.root();
+    v.mkdir(root, "room", 0o755).unwrap();
+    v.mkdir(root, "other", 0o755).unwrap();
+    v.set_limit(root, "room", Some(1000 * BS)).unwrap();
+    let mut n = 0;
+    while put(&mut v, &format!("room/f{n}"), 0, &vec![7u8; 4 * BLOCK_SIZE]).is_ok() {
+        n += 1;
+    }
+    let mut e = 0;
+    while put(&mut v, &format!("room/e{e}"), 0, b"").is_ok() {
+        e += 1;
+    }
+    assert!(
+        put(&mut v, "room/more", 0, b"").is_err(),
+        "the volume is not full"
+    );
+    // Lowering, raising and keeping all work: no record is added.
+    v.set_limit(root, "room", Some(10 * BS)).unwrap();
+    v.set_limit(root, "room", Some(2000 * BS)).unwrap();
+    assert_eq!(used(&mut v, "room"), oracle(&mut v, "room"));
+    // A limit that was taken away cannot be set again until there is room
+    // (a keeper sets the new value before it removes the old one).
+    v.set_limit(root, "room", None).unwrap();
+    assert_eq!(v.set_limit(root, "room", Some(BS)), Err(FsError::NoSpace));
+    v.unlink(root, "room/f0").unwrap();
+    v.sync().unwrap();
+    fsck(v.unmount().unwrap());
+}
+
+/// Re-check R7: exactly `SCAN_BOUND` objects are accepted.
+#[test]
+fn a_tree_of_exactly_the_scan_bound_gets_a_limit() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(16384), &clock);
+    let root = v.root();
+    v.mkdir(root, "big", 0o755).unwrap();
+    let h = v.open(root, "big", OpenOptions::default()).unwrap();
+    for i in 0..zoraya_fs::SCAN_BOUND {
+        v.mkdir(h, &format!("{i}"), 0o755).unwrap();
+    }
+    v.close(h).unwrap();
+    v.set_limit(root, "big", Some(u64::MAX)).unwrap();
+    assert_eq!(used(&mut v, "big"), zoraya_fs::SCAN_BOUND as u64 * BS);
+}
+
+/// Review Q5, finding 6: a tree past `SCAN_BOUND` objects gets no new limit.
+#[test]
+fn a_tree_past_the_scan_bound_gets_no_limit() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(16384), &clock);
+    let root = v.root();
+    v.mkdir(root, "big", 0o755).unwrap();
+    let h = v.open(root, "big", OpenOptions::default()).unwrap();
+    for i in 0..=zoraya_fs::SCAN_BOUND {
+        v.mkdir(h, &format!("{i}"), 0o755).unwrap();
+    }
+    v.close(h).unwrap();
+    assert_eq!(
+        v.set_limit(root, "big", Some(u64::MAX)),
+        Err(FsError::ScanTooLarge)
+    );
+    // A small tree next to it is fine, and removing nothing is.
+    v.mkdir(root, "small", 0o755).unwrap();
+    v.set_limit(root, "small", Some(BS)).unwrap();
+    v.set_limit(root, "big", None).unwrap();
+}
+
+/// Review Q5, finding 12: a volume of another format version is refused with
+/// words that say to rebuild it.
+#[test]
+fn another_format_version_says_to_rebuild() {
+    use zoraya_fs::format::{Header, NODE_MAGIC, Rd};
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&NODE_MAGIC.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 40]);
+    let err = Header::decode(&mut Rd::new(&bytes)).unwrap_err();
+    assert!(err.0.contains("zoraya-mkfs"), "{}", err.0);
 }
 
 /// The cost of a growing request with a limit three levels up (Q5's

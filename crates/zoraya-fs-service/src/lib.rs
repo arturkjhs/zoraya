@@ -384,6 +384,7 @@ fn fs_status(e: &FsError) -> u32 {
         FsError::Corrupt => status::CORRUPT,
         FsError::OverQuota => status::OVER_QUOTA,
         FsError::CrossesLimit => status::CROSSES_LIMIT,
+        FsError::ScanTooLarge => status::LIMIT_REACHED,
         _ => status::STORAGE_FAILED,
     }
 }
@@ -1406,13 +1407,20 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             38 => {
                 let (_, m) = decode::<proto::SetLimit<'_>>(bytes, n)?;
-                if !self.may_name(i, m.name.0) {
+                // A limit is set from above, on a full directory connection
+                // (proposed ADR-0292): a connection narrowed to one name,
+                // which carries create's `WRITE`, must not change it.
+                if self.only_of(i).is_some() {
                     return self.denied(i, t);
                 }
                 self.set_limit(i, t, m.name.0, (m.remove.0 == 0).then_some(m.limit));
             }
             39 => {
                 decode::<proto::GetLimit>(bytes, n)?;
+                // Like a listing: `READ`, and not on a narrowed connection.
+                if self.only_of(i).is_some() || !self.has(i, proto::rights::READ) {
+                    return self.denied(i, t);
+                }
                 self.get_limit(i, t);
             }
             35 => {
@@ -2410,7 +2418,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     /// `set_limit` (ADR-0265 rule 4): needs `WRITE` on the directory's
     /// connection, so a limit is set from above.
     fn set_limit(&mut self, i: usize, t: u32, name: &str, limit: Option<u64>) {
-        if !self.has(i, proto::rights::WRITE) {
+        // The rights of a whole tree, not only `WRITE`: a `write` operand
+        // that names a directory, or two `create` operands in one directory,
+        // give a full connection with `WRITE` but not `REMOVE` (re-check W2).
+        let tree = proto::rights::WRITE
+            | proto::rights::CREATE
+            | proto::rights::REMOVE
+            | proto::rights::RENAME;
+        if !self.has(i, tree) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let Some(directory) = self.handle_of(i) else {
