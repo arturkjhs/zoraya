@@ -76,7 +76,7 @@ pub enum Kind {
     Text,
     /// An `http://` URL: the base-system command is given a network
     /// connection that reaches that host and port, nothing else (ADR-0224
-    /// item 3, N3).
+    /// item 2, N3).
     Url,
 }
 

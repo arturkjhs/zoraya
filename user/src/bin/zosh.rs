@@ -231,40 +231,6 @@ fn split_last(abs: &str) -> (&str, &str) {
     }
 }
 
-/// The rights and scope of the network connection a base-system command gets
-/// (see `Shell::table`): none, the status of the network, or the reach of
-/// the host and port of its `url` operand. A URL that does not parse gives
-/// no connection; the command says what is wrong with it.
-fn net_for(d: &Description, exec: &Exec<'_>) -> Option<(u32, Vec<u8>)> {
-    use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode, rights};
-    if d.needs_net_status {
-        return Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec()));
-    }
-    let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-    let Ok(zoraya_command::Outcome::Run(parsed)) = zoraya_command::parse(d, &texts) else {
-        return None;
-    };
-    let operand = d
-        .operands
-        .iter()
-        .find(|o| o.kind == zoraya_describe::Kind::Url)?;
-    let url = zoraya_http::parse_url(parsed.operand(d, &operand.name)?).ok()?;
-    let host = url.host.to_ascii_lowercase();
-    let target = match zoraya_http::parse_ipv4(&host) {
-        Some(a) => Target::Address(a),
-        None => Target::Name(&host),
-    };
-    let rule = ReachRule {
-        target,
-        ports: Ports::one(url.port),
-        protocols: Protocols::TCP,
-    };
-    let mut out = alloc::vec![0u8; 512];
-    let n = encode(&[rule], &[], &mut out)?;
-    out.truncate(n);
-    Some((rights::REACH, out))
-}
-
 fn problem(status: u32) -> String {
     zoraya_command::file_problem(status)
 }
@@ -871,6 +837,32 @@ impl Z {
         self.plan_with(exec, &d, base).map(Some)
     }
 
+    /// The network connection the line gives its command (ADR-0224 item 2,
+    /// `zoraya_shell::netgrant`): a value where a literal `url` is needed
+    /// refuses the line.
+    fn net_grant(&mut self, exec: &Exec<'_>) -> Result<Option<(u32, Vec<u8>)>, String> {
+        let Some((d, base)) = self.program_description(exec.name) else {
+            return Ok(None);
+        };
+        let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
+        let parsed = match zoraya_command::parse(&d, &texts) {
+            Ok(zoraya_command::Outcome::Run(p)) => p,
+            _ => zoraya_command::Parsed::default(),
+        };
+        let line = grants::Line {
+            description: &d,
+            parsed: &parsed,
+            args: exec.args,
+            cwd: &self.cwd,
+            grants: exec.grants,
+            base_system: base,
+        };
+        zoraya_shell::netgrant::net_for(&line).map_err(|r| {
+            let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
+            zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
+        })
+    }
+
     /// The plan of a line running `exec` under description `d` (rules 1
     /// to 5); `base`: it is the system image's own.
     fn plan_with(
@@ -1120,9 +1112,7 @@ impl Z {
             return self.ready_from_volume(exec, &path);
         }
         let mut given = String::new();
-        let net = self
-            .program_description(exec.name)
-            .and_then(|(d, base)| if base { net_for(&d, exec) } else { None });
+        let net = self.net_grant(exec)?;
         let table = match self.plan_for(exec)? {
             None => None,
             Some(plan) if self.root.is_none() && !plan.is_empty() => {

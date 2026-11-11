@@ -141,3 +141,5 @@ user/src/netconn.rs          test-net
 user/describe/commands/fetch.cmd test-net test-files
 tests/shell/net-fetch.script test-net
 tools/test-httpd/            test-net
+tests/shell/net-dns.script   test-net
+crates/zoraya-shell/src/netgrant.rs test-net

@@ -700,6 +700,7 @@ dependencies = [
  "zoraya-abi",
  "zoraya-command",
  "zoraya-describe",
+ "zoraya-http",
  "zoraya-proto-file",
  "zoraya-resolve",
  "zoraya-test-alloc",

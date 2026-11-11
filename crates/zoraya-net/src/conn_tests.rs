@@ -3,7 +3,7 @@
 //! queues (INV-0222-1 and INV-0222-2, ADR-0223).
 
 use super::*;
-use crate::conn::{CONNECT_US, Client, Conns, MAX_CONNS, Rd, Step, Target, Wr};
+use crate::conn::{CONNECT_US, Client, Conns, LINGER_US, MAX_CONNS, Rd, Step, Target, Wr};
 use crate::dns::{ResolveFail, Start};
 use crate::tcp::MAX_TCP;
 use smoltcp::socket::tcp;
@@ -133,6 +133,9 @@ enum Script {
     Silent,
     /// Reset the connection when the first byte arrives.
     ResetOnData,
+    /// Send the bytes, close (a FIN), and reset when a byte arrives after
+    /// that: a server that closes and then hears more.
+    GreetThenReset(Vec<u8>),
 }
 
 type DnsScript = Box<dyn FnMut(&[u8]) -> Vec<Vec<u8>>>;
@@ -254,7 +257,7 @@ impl Peer {
         ) {
             return;
         }
-        if let Script::Greet(bytes) = &self.script
+        if let Script::Greet(bytes) | Script::GreetThenReset(bytes) = &self.script
             && !self.greeted
         {
             self.greeted = true;
@@ -265,7 +268,7 @@ impl Peer {
         while s.can_recv() {
             let n = s.recv_slice(&mut buf).unwrap();
             match self.script {
-                Script::ResetOnData => {
+                Script::ResetOnData | Script::GreetThenReset(_) => {
                     s.abort();
                     return;
                 }
@@ -859,4 +862,49 @@ fn many_random_connections_and_random_hostile_peers_never_panic() {
             fake.take();
         }
     }
+}
+
+#[test]
+fn a_reset_after_the_peers_fin_is_a_message_and_frees_the_slot_and_the_socket() {
+    // The review's finding 1: the peer sends its data, closes, and resets when
+    // the client's late byte arrives. The client closes its write end after
+    // the reset or never.
+    for close_after in [false, true] {
+        let (mut w, fake, _) = open_world(Script::GreetThenReset(b"bye".to_vec()));
+        assert!(w.run_until(5_000_000, |_| fake.0.borrow().in_closed));
+        assert_eq!(fake.take(), b"bye");
+        assert!(fake.message(18).is_none());
+        fake.write(b"late");
+        assert!(w.run_until(10_000_000, |_| fake.message(18).is_some()));
+        if close_after {
+            fake.close_write();
+        }
+        w.run_until(2_000_000, |_| false);
+        assert_eq!(w.conns.count(), 0, "close_after {close_after}");
+        assert_eq!(w.client.tcp_count(), 0, "close_after {close_after}");
+        let m = fake.message(18).expect("a reset message");
+        assert_eq!(decode::<Reset>(&m, 0).unwrap().1.why.0, reset::PEER);
+        assert!(fake.0.borrow().in_closed);
+        assert_eq!(fake.ordinals().iter().filter(|o| **o == 18).count(), 1);
+    }
+}
+
+#[test]
+fn a_half_closed_connection_that_goes_silent_is_ended_after_the_linger_limit() {
+    // The peer closes its side and says nothing more; the client never
+    // closes. Eight such connections must not hold the table for ever.
+    let (mut w, fake, _) = open_world(Script::Silent);
+    // Let the peer's side close: it closes when it sees our FIN.
+    fake.close_write();
+    assert!(w.run_until(5_000_000, |w| fake.0.borrow().in_closed
+        || w.conns.count() == 0));
+    // Now a connection that is half closed by the peer and idle: use Greet.
+    let (mut w, fake, _) = open_world(Script::Greet(Vec::new()));
+    assert!(w.run_until(5_000_000, |_| fake.0.borrow().in_closed));
+    assert!(!w.run_until(LINGER_US - 10_000_000, |w| w.conns.count() == 0));
+    assert!(w.run_until(30_000_000, |w| w.conns.count() == 0));
+    let m = fake.message(18).expect("a reset message");
+    assert_eq!(decode::<Reset>(&m, 0).unwrap().1.why.0, reset::ABORTED);
+    w.run_until(2_000_000, |_| false);
+    assert_eq!(w.client.tcp_count(), 0);
 }

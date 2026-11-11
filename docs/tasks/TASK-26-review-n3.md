@@ -246,3 +246,49 @@ ADR-0224 item 2 as accepted (literal operands of base-system commands). What rem
 words, `grants` output, REPORT and the hint) can then ship as a recorded limitation with N3b, rather than as a deviation
 to decide. ADR-0286 item 5 and its first open question need rewriting either way, because they put the condition on the
 wrong case.
+
+## Dispositions
+
+(By the implementation session, 2026-11-11, on top of 32a4c03.)
+
+1. **Fixed.** `Conn::copy` now ends a connection whose socket is gone after the peer's FIN while our side was never closed
+   (`Reset { Peer }`, inbound closed, slot and socket released), and a half-closed connection that moves no byte for
+   `LINGER_US` (30 s; smoltcp's own idle timeout, 60 s, is the later bound for any silent connection) with `Reset {
+   Aborted }`. Tests: `a_reset_after_the_peers_fin_is_a_message_and_frees_the_slot_and_the_socket` (the client never
+   closes, and closes after the reset) and `a_half_closed_connection_that_goes_silent_is_ended_after_the_linger_limit`
+   (`cargo test -p zoraya-net`). The order "client closes before the reset" is not producible with an in-order peer (its
+   FIN and the late byte arrive together and the peer's socket is no longer abortable); it is not tested. The rule applies
+   only when the peer's FIN was seen (`in_eof`): without it the receive loop drains what smoltcp kept and reports
+   `Reset` when it is empty, as before (a first version that ended on any closed socket lost 3,900 bytes in the ring test).
+2. **Fixed.** `net_for` moved to `zoraya_shell::netgrant` and refuses a `url` operand that is not literal, with host tests
+   (literal address and name, host and port, a value/substitution, unparsable URLs, non-base-system, `needs net-status`, the
+   local addresses written out). ADR-0286 item 5 and its open question were rewritten around ADR-0224 item 2; the
+   citations in `zoraya-describe`, `fetch.rs` and `docs/design.md` say item 2. ADR-0224's open questions carry the
+   rule-6 note. The script has a variable and a substitution step.
+3. **Fixed.** `fetch` fails with `fetch: URL: connection reset` when `netd` reported a reset and the page is not complete,
+   whatever the framing, and a stream read error is a cut connection. The Reset message path is covered by the host tests
+   of `Conn`; the script's cut-connection step checks exit status 1 and that no file appears. As the review notes (16),
+   SLIRP gives the guest a FIN for the server's close, so a real reset is not produced in QEMU; no `/reset-close` page was
+   added since it could not be told from a complete close-delimited page there.
+4. **Fixed by note.** ADR-0224's open questions say INV-0224-1 and -2 stay `not yet applicable` and why; the report's
+   "invariants delta" says so too. The rows were left as they were: the half of INV-0224-1 that exists is checked by
+   `cargo test -p zoraya-shell netgrant`, which is not the whole rule.
+5. **Fixed.** The two SLIRP-DNS steps moved to `tests/shell/net-dns.script`, a second boot after the fetch boot, run locally and
+   skipped on CI with `[net-dns] SKIP: ...` unless `NET_DNS=1`; ADR-0286's text and `docs/design.md` say so. The resolver's
+   logic stays covered by the scripted DNS in the host tests. The locally run step may send a query off the machine
+   (`nothing.invalid`); `make test` passes without it (the guest gives up after 8 s).
+6. **Fixed, differently from the suggestion.** The shell grants `create` as the parent narrowed to the one name, so a
+   temporary name is not available; `fetch -o` now opens (and empties) FILE at the first byte of a 2xx page. A refused
+   connection, a 404 or an unresolvable name leave an existing FILE alone (script steps); a cut transfer leaves it
+   partly written, exit 1, as `fetch.cmd` says.
+7. **Fixed.** `test-httpd --port 0` writes the port it got to `--ready-file`; the recipe reads it and substitutes it.
+8. **Fixed with 2.**
+9. **Recorded.** `docs/design.md` says a connection silent both ways is ended after 60 s and a half-closed one after 30 s; the
+   global bounds (8 sockets, 16 connections) remain Q3's.
+10. **Fixed in the text** (ADR-0286 item 4: one query per connection that needs the name). Joining queries is not done.
+11. Open: `dns_poll` still stops reading for the turn after an oversized datagram.
+12. Open: a dot inside a label compares equal to two labels; the equality is the server's own word about the name asked.
+13. **Recorded** in `fetch.cmd` (escape sequences reach the terminal as received).
+14. Open: `--net-open` without `--test` is accepted and does nothing.
+15. Noted; no change.
+16. Recorded in disposition 3.

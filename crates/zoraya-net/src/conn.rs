@@ -33,6 +33,11 @@ use crate::tcp::{TcpError, TcpId, TcpPhase, TcpRecv, TcpSend};
 pub const MAX_CONNS: usize = 16;
 /// How long one address gets to answer the SYN (smoltcp retries inside it).
 pub const CONNECT_US: i64 = 10_000_000;
+/// How long a half-closed connection (one side's end of file seen) may go
+/// without a byte moving before `netd` ends it with `Reset { Aborted }`: a
+/// peer or a client that closes one side and then says nothing cannot hold a
+/// socket for ever (the 8 sockets are global). 30 s; smoltcp's own idle timeout of 60 s ends any connection silent both ways, this one is the earlier bound for a half-closed one.
+pub const LINGER_US: i64 = 30_000_000;
 /// Rounds of copying per direction in one step, so one fast connection
 /// cannot hold the loop of `netd` (the next turn continues).
 const ROUNDS: usize = 16;
@@ -93,6 +98,9 @@ struct Open {
     out_eof: bool,
     /// The peer's FIN was seen, and the client was told.
     in_eof: bool,
+    /// When bytes last moved or the state last changed, for the linger
+    /// limit of a half-closed connection.
+    last_activity: i64,
 }
 
 pub struct Conn<C> {
@@ -265,6 +273,7 @@ impl<C: Client> Conn<C> {
                             tcp,
                             out_eof: false,
                             in_eof: false,
+                            last_activity: now_us,
                         });
                         let mut s = self.step(stack, None, now_us);
                         s.progress = true;
@@ -286,7 +295,7 @@ impl<C: Client> Conn<C> {
                     },
                 }
             }
-            Phase::Open(_) => self.copy(stack),
+            Phase::Open(_) => self.copy(stack, now_us),
         }
     }
 
@@ -297,7 +306,7 @@ impl<C: Client> Conn<C> {
         }
     }
 
-    fn copy<L: Link>(&mut self, stack: &mut Stack<L>) -> Step {
+    fn copy<L: Link>(&mut self, stack: &mut Stack<L>, now_us: i64) -> Step {
         let Phase::Open(open) = &mut self.phase else {
             return Step::default();
         };
@@ -386,32 +395,56 @@ impl<C: Client> Conn<C> {
             }
         }
         if reset_seen {
-            // smoltcp does not say whether a timeout or a reset closed the
-            // socket (`reset::TIMED_OUT` stays unused until it does).
-            let _ = self.client.notify(&message(&Reset {
-                why: Below(reset::PEER),
-            }));
-            self.client.close_inbound();
-            stack.tcp_release(tcp);
-            self.phase = Phase::Finished;
-            return Step {
-                progress: true,
-                done: true,
-                ..Step::default()
-            };
+            return self.reset_and_finish(stack, tcp, reset::PEER);
         }
+        let Phase::Open(open) = &mut self.phase else {
+            return step;
+        };
+        if step.progress {
+            open.last_activity = now_us;
+        }
+        let ended = stack.tcp_phase(tcp) == TcpPhase::Ended;
         // Both directions over and the socket has left the connection.
-        if let Phase::Open(open) = &self.phase
-            && open.out_eof
-            && open.in_eof
-            && stack.tcp_phase(tcp) == TcpPhase::Ended
-        {
+        if open.out_eof && open.in_eof && ended {
             stack.tcp_release(tcp);
             self.phase = Phase::Finished;
             step.done = true;
             step.progress = true;
+            return step;
+        }
+        // The socket is gone and we never closed our side: the peer reset it
+        // after its FIN (the receive loop no longer looks once `in_eof` is
+        // set), or smoltcp's timeout closed it. The client must hear of it.
+        if ended && open.in_eof && !open.out_eof {
+            return self.reset_and_finish(stack, tcp, reset::PEER);
+        }
+        // Half closed and silent for too long.
+        if open.out_eof || open.in_eof {
+            let idle = now_us - open.last_activity;
+            if idle >= LINGER_US {
+                stack.tcp_abort(tcp);
+                return self.reset_and_finish(stack, tcp, reset::ABORTED);
+            }
+            step.delay_us = Some(LINGER_US - idle);
         }
         step
+    }
+
+    /// Tells the client the connection ended badly, closes the inbound end,
+    /// gives the socket up and finishes (INV-0286-1).
+    fn reset_and_finish<L: Link>(&mut self, stack: &mut Stack<L>, tcp: TcpId, why: u32) -> Step {
+        // smoltcp does not say whether a timeout or a reset closed the
+        // socket, so `reset::TIMED_OUT` stays unused; the linger limit sends
+        // `reset::ABORTED`.
+        let _ = self.client.notify(&message(&Reset { why: Below(why) }));
+        self.client.close_inbound();
+        stack.tcp_release(tcp);
+        self.phase = Phase::Finished;
+        Step {
+            progress: true,
+            done: true,
+            ..Step::default()
+        }
     }
 }
 

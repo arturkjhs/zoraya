@@ -2,7 +2,7 @@
 #![no_main]
 
 //! `fetch URL [-o FILE]` (N3): an HTTP/1.1 GET over a connection `zosh`
-//! made for exactly this host and port (the `url` operand, ADR-0224 item 3).
+//! made for exactly this host and port (the `url` operand, ADR-0224 item 2).
 //! The request and the decoder of the response are `zoraya-http`; the bytes
 //! travel on the two streams this program made for `netd` (ADR-0222's note of
 //! 2026-11-10), so a slow page costs this program's room and nobody else's.
@@ -16,6 +16,7 @@ use zoraya_abi::{Handle, Mode, Packet, Status, stream_signals};
 use zoraya_http::{Error as HttpError, Limits, Parser, parse_ipv4, parse_url, request};
 use zoraya_proto_file::{open_flags, rights};
 use zoraya_proto_net::{reason, status};
+use zoraya_user::files::File;
 use zoraya_user::netconn::{CONNECT_WAIT_NS, ConnectError, Connection, connect};
 use zoraya_user::{
     clock_monotonic, command, handle_close, namespace, port_create, port_subscribe, port_wait,
@@ -60,6 +61,16 @@ fn write_all(port: Handle, end: Handle, mut bytes: &[u8]) -> bool {
         }
     }
     true
+}
+
+/// FILE, made or emptied (the shell granted the one name).
+fn open_output(path: &str) -> Result<File, u32> {
+    let ns = namespace::get().ok_or(zoraya_proto_file::status::ACCESS_DENIED)?;
+    ns.open(
+        path,
+        open_flags::CREATE | open_flags::TRUNCATE,
+        rights::READ | rights::WRITE,
+    )
 }
 
 fn why(e: ConnectError) -> &'static str {
@@ -111,27 +122,15 @@ fn main() -> i32 {
     let Some(net) = namespace::get().and_then(|n| n.net()) else {
         return fail(&c, None, "the network is not available to this command");
     };
-    // The output first, so that a file that cannot be made costs no
-    // connection.
-    let file = match p.value(&c.d, "output") {
-        Some(path) => {
-            let Some(ns) = namespace::get() else {
-                return fail(&c, None, "it was given no files: run it from zosh");
-            };
-            match ns.open(
-                path,
-                open_flags::CREATE | open_flags::TRUNCATE,
-                rights::READ | rights::WRITE,
-            ) {
-                Ok(f) => Some((f, path)),
-                Err(s) => {
-                    let name = zoraya_user::files::status_name(s);
-                    return fail(&c, Some(path), name);
-                }
-            }
-        }
-        None => None,
-    };
+    // The file is opened (and emptied) at the first byte of a 2xx page, not
+    // before: a refused connection, a 404 or a name that does not resolve
+    // leaves an existing FILE as it was.
+    let out_path = p.value(&c.d, "output");
+    if out_path.is_some() && namespace::get().is_none() {
+        return fail(&c, None, "it was given no files: run it from zosh");
+    }
+    let mut file: Option<File> = None;
+    let mut open_failed: Option<u32> = None;
     let host = String::from(url.host).to_ascii_lowercase();
     let (name, address) = match parse_ipv4(&host) {
         Some(a) => ("", a),
@@ -171,7 +170,12 @@ fn main() -> i32 {
                 }
                 continue;
             }
-            Err(_) => break,
+            // A read error is a stream that is not ours any more: the
+            // connection is cut (the check below says so).
+            Err(_) => {
+                result = Err(HttpError::Truncated);
+                break;
+            }
         };
         let fed = parser.feed(&buf[..n], &mut |head, bytes| {
             // Only a successful page is a page; the body of an error is not
@@ -188,19 +192,31 @@ fn main() -> i32 {
                 size += bytes.len() as u64;
                 return;
             }
-            match &file {
-                Some((f, _)) => match f.write(offset, 0, bytes) {
+            let Some(path) = out_path else {
+                zoraya_user::write_output(bytes);
+                return;
+            };
+            if file.is_none() {
+                match open_output(path) {
+                    Ok(f) => file = Some(f),
+                    Err(s) => {
+                        open_failed = Some(s);
+                        return;
+                    }
+                }
+            }
+            if let Some(f) = &file {
+                match f.write(offset, 0, bytes) {
                     Ok(_) => offset += bytes.len() as u64,
                     Err(_) => write_failed = true,
-                },
-                None => zoraya_user::write_output(bytes),
+                }
             }
         });
         if let Err(e) = fed {
             result = Err(e);
             break;
         }
-        if write_failed || parser.is_done() {
+        if write_failed || open_failed.is_some() || parser.is_done() {
             break;
         }
     }
@@ -210,17 +226,20 @@ fn main() -> i32 {
     let reset = conn.was_reset();
     conn.shutdown_write();
     let _ = handle_close(waiter);
+    if let Some(status) = open_failed {
+        let name = zoraya_user::files::status_name(status);
+        return fail(&c, out_path, name);
+    }
     if write_failed {
-        let path = file.as_ref().map(|(_, p)| *p);
-        return fail(&c, path, "the file could not be written");
+        return fail(&c, out_path, "the file could not be written");
+    }
+    // A reset before the end of the page is a cut page whatever the framing:
+    // a body that ends with the connection looks complete to the decoder.
+    if reset && !parser.is_done() {
+        return fail(&c, Some(text), "connection reset");
     }
     if let Err(e) = result {
-        let problem = if reset {
-            "the connection was reset"
-        } else {
-            http_why(e)
-        };
-        return fail(&c, Some(text), problem);
+        return fail(&c, Some(text), http_why(e));
     }
     let (status_code, redirected) = parser.head().map_or((0, false), |h| (h.status, h.redirect));
     if !(200..300).contains(&status_code) {
@@ -231,6 +250,12 @@ fn main() -> i32 {
         };
         let line = alloc::format!("{problem} (HTTP {status_code})");
         return fail(&c, Some(text), &line);
+    }
+    if let (Some(path), None) = (out_path, &file)
+        && !sum
+        && let Err(s) = open_output(path)
+    {
+        return fail(&c, Some(path), zoraya_user::files::status_name(s));
     }
     if sum {
         let us = (clock_monotonic() - started) / 1000;

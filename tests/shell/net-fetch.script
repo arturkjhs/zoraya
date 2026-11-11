@@ -42,6 +42,46 @@
 < fetched over HTTP, byte for byte
 
 < \r\n~>
+# `--output` leaves an existing file alone when nothing arrives: a 404, a
+# refused connection, a cut page (the file is made at the first byte of a 2xx
+# page, not before).
+> fetch --output keep.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> fetch --output keep.txt http://10.0.2.2:@PORT@/status/404\r
+< (HTTP 404)
+< \r\n~>
+> cat keep.txt\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> fetch --output keep.txt http://10.0.2.2:1/\r
+< the connection was refused
+< \r\n~>
+> cat keep.txt\r
+< Zoraya test page
+< \r\n~>
+> fetch --output cut.bin http://10.0.2.2:@PORT@/reset\r
+< the connection ended before the page did
+< \r\n~>
+> status\r
+< \r\nexit status 1
+< \r\n~>
+> cat cut.bin\r
+< cut.bin
+< \r\n~>
+> status\r
+< \r\nexit status 1
+< \r\n~>
+# A URL from a variable or a substitution does not designate (ADR-0224 item
+# 2): the line is refused before it runs.
+> set u http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> fetch $u\r
+< from a value, outside the line's network grants
+< \r\n~>
+> fetch $(echo http://10.0.2.2:@PORT@/)\r
+< network grants
+< \r\n~>
 # What goes wrong is said, and the exit status is 1.
 > fetch http://10.0.2.2:@PORT@/status/404\r
 < fetch: http://10.0.2.2:@PORT@/status/404: the server did not give the page (HTTP 404)
@@ -58,17 +98,6 @@
 # Nothing listens on port 1 of the host: SLIRP answers the SYN with a reset.
 > fetch http://10.0.2.2:1/\r
 < the connection was refused
-< \r\n~>
-# A name asked of SLIRP's DNS forwarder at 10.0.2.3, which answers `localhost`
-# from the host's own table (no Internet needed): the answer is 127.0.0.1, an
-# address of this side of the network, so the connection is refused as local
-# (ADR-0223 item 4). A name that does not exist (`.invalid`, RFC 2606) is
-# unresolvable.
-> fetch http://localhost:@PORT@/\r
-< the name points at this machine's own network
-< \r\n~>
-> fetch http://nothing.invalid/\r
-< the name has no address
 < \r\n~>
 # Only http:// with a host.
 > fetch https://10.0.2.2/\r

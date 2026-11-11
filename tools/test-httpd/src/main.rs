@@ -3,7 +3,8 @@
 //! 127.0.0.1. Std only, and bounded in every way a test server can be left
 //! running by mistake:
 //!
-//! - it listens on 127.0.0.1 only, on the port it is given;
+//! - it listens on 127.0.0.1 only, on the port it is given (0: a free one,
+//!   written to `--ready-file`);
 //! - at most `MAX_CONNECTIONS` connections at once (the others wait in the
 //!   kernel's backlog), each with a read and a write timeout, a request head
 //!   of at most 8 KiB, and at most `MAX_REQUESTS` requests;
@@ -252,7 +253,9 @@ fn main() {
         }
     };
     if let Some(path) = ready {
-        let _ = std::fs::write(path, format!("{port}\n"));
+        // The port it got: `--port 0` asks the kernel for a free one.
+        let got = listener.local_addr().map_or(port, |a| a.port());
+        let _ = std::fs::write(path, format!("{got}\n"));
     }
     let deadline = Instant::now() + Duration::from_secs(lifetime);
     // The accept loop wakes every 200 ms to see the deadline.

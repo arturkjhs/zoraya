@@ -275,14 +275,15 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 # (net.hosts), so that a name is resolved too; the script's checksums come
 # from the server's own pattern function (`--checksum`).
 HTTPD := target/debug/zoraya-test-httpd
-NET_HTTP_PORT := 47080
+NET_HTTP_READY := $(BUILD)/net-httpd.port
+NET_DNS_SCRIPT := tests/shell/net-dns.script
 NET_FETCH_ROOT := $(BUILD)/net-fetch-root
 NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
 NET_FETCH_TEMPLATE := tests/shell/net-fetch.script
 NET_FETCH_SCRIPT := $(BUILD)/net-fetch.script
 NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $(3) $(KERNEL)
 
-$(HTTPD):
+$(HTTPD): tools/test-httpd/src/main.rs
 	$(CARGO) build -q -p zoraya-test-httpd
 
 test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
@@ -290,22 +291,27 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
-	sed -e 's/@PORT@/$(NET_HTTP_PORT)/g' \
+	: > $(NET_HTTP_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/net-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	port=$$(cat $(NET_HTTP_READY)); \
+	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[net-fetch] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" \
 		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
 		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
 		-e "s/@SUM4M@/$$($(HTTPD) --checksum 4000000)/" \
-		$(NET_FETCH_TEMPLATE) > $(NET_FETCH_SCRIPT) && \
-	{ $(HTTPD) --port $(NET_HTTP_PORT) --lifetime 300 > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
-	httpd=$$(cat $(BUILD)/net-httpd.pid); up=0; \
-	for i in 1 2 3 4 5 6 7 8 9 10; do \
-		perl -MIO::Socket::INET -e 'exit(IO::Socket::INET->new(PeerAddr => "127.0.0.1:$(NET_HTTP_PORT)", Timeout => 1) ? 0 : 1)' && up=1 && break; sleep 0.5; done; \
-	if [ $$up != 1 ] || ! kill -0 $$httpd 2>/dev/null; then \
-		echo "[net-fetch] FAIL: the test server did not start (port $(NET_HTTP_PORT) taken?)"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd.log; exit 1; fi; \
+		$(NET_FETCH_TEMPLATE) > $(NET_FETCH_SCRIPT); \
 	$(call NET_FETCH_RUN,$(QEMU_TIMEOUT),net-fetch-auto,auto); rc=$$?; \
 	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_FETCH_DISK); rc=$$?; fi; \
+	if [ $$rc = 0 ]; then \
+		if [ -n "$$CI" ] && [ "$(NET_DNS)" != 1 ]; then echo "[net-dns] SKIP: SLIRP's DNS forwarder needs the host's resolver (NET_DNS=1 runs it on CI)"; \
+		else $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel auto $(KERNEL); rc=$$?; fi; \
+	fi; \
 	exit $$rc
 
 # An interactive machine on QEMU's user network without `restrict`: the guest

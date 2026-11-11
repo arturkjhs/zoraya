@@ -240,6 +240,14 @@ Threads: none.
 - Whether UDP should need its own word: *settled by the Decision*, no.
 - A chooser for the network (a "connect to" dialog that grants a host) for desktop programs without a URL operand.
 - The exact text curl prints for `EAI_SYSTEM` (ADR-0225); the examples assume "Could not resolve host".
+- *Note, 2026-11-11 (N3, recorded by an agent; ADR-0001 rule 6):* N3 is the first part in this area. It builds item 2's
+  designation by a **literal** `url` operand of a base-system command (`zoraya_shell::netgrant::net_for`, host-tested:
+  `cargo test -p zoraya-shell netgrant`) and the refusal of a `url` operand that came from a variable, a substitution or a
+  glob, which is INV-0224-1's rule for the value case *when no `+net` word exists*. It does **not** build the `+net` and
+  `+listen` words, so the value-inside-a-`+net`-rule case is always refused; nor `grants` output for the scope (so
+  INV-0224-2 stays untrue for a command with a `url` operand: `grants fetch http://x/` prints no network rule), the REPORT
+  message and the hint, the room words (INV-0224-3) or the desktop pills (INV-0224-5). Both rows stay `not yet applicable
+  (stage 8)` until those exist (N3b, N6).
 
 ## Revisit triggers
 - People routinely type `+net any`: the kinds are missing or the hosts too many.

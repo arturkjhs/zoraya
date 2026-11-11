@@ -595,7 +595,9 @@ worktree's cache (no download).
 - `tools/test-httpd` (std only, 127.0.0.1, bounded, exits after its lifetime), `tools/run-qemu.sh --net-open`, `make test-net`'s
   last step `test-net-fetch` with `tests/shell/net-fetch.script` (page byte for byte; 1,000,000 / 300,000 chunked by name /
   70,000 until close / 4,000,000 bytes by checksum; a file written and read back; 404; redirect; a cut connection; a refused
-  port; SLIRP's DNS answering `localhost` (refused as local) and `nothing.invalid`; bad URLs).
+  port; bad URLs; `-o` keeping an existing file on 404, refusal and a cut page; a URL from a variable or a substitution refused),
+  and `tests/shell/net-dns.script` (SLIRP's DNS answering `localhost`, refused as local, and `nothing.invalid`) in a second boot, skipped
+  on CI with a visible `[net-dns] SKIP` unless `NET_DNS=1`. The server takes `--port 0`.
 - Docs: `docs/design.md` "TCP, names and `fetch`", proposed ADR-0286, `docs/adr/invariants.md`.
 
 ### Decisions where the ADRs are silent (proposed ADR-0286; recommendations)
@@ -605,11 +607,10 @@ worktree's cache (no download).
    for.** Accept; the bounds are global until Q3's per-scope account.
 3. **Resolver details** (A only, attempts at 0/1/2/4 s, give up at 8 s, 64-entry cache, no TCP fallback, guessable ids and
    ports until ADR-0227). Accept.
-4. **A `url` operand designates, without the `+net` rule of ADR-0224 item 3.** **Read this first.** The ADR makes the designation
-   conditional on a `+net` rule on the line or in the room, else the line is refused with the hint; N3 did not build the words,
-   the REPORT message or the hint, so the designation is unconditional. The surface is the shell's own authority (the person
-   typed the line); rooms and panel shells have no `NET` slot and `--net` refuses `--gui`. Accept for N3 and build N3b, or hold the
-   merge until the words exist.
+4. **A literal `url` operand designates (ADR-0224 item 2); a value is refused.** After the review (`TASK-26-review-n3.md`) the
+   designation is `zoraya_shell::netgrant::net_for`, host-tested, and a `url` operand from a variable, a substitution or a
+   glob is refused before the line runs. Not built: the `+net`/`+listen` words (which would let a value designate), `grants`
+   output for the scope, the REPORT message and the hint (N3b). ADR-0224's open questions carry the note.
 5. **`restrict=off` for the fetch step only** (`--net-open`), against a loopback server. Accept.
 
 ### Invariants delta
@@ -677,3 +678,10 @@ boots. The copies' share is an estimate (9 to 16 percent of the HVF time from th
   updated; (8) INV-0221-4's test between two kills needs a fetch in a loop; (9) `libposix` sockets are N4; (10) the test needs SLIRP's
   DNS forwarder for `localhost` and `nothing.invalid`, which works without the Internet on this host (QEMU 11.1.2); a CI image whose
   host has no resolver that knows `localhost` would fail those two steps, and they are the first to suspect if CI differs.
+
+### Review fixes (after `docs/tasks/TASK-26-review-n3.md`; its "Dispositions" section has each finding)
+
+Errors 1 to 3 fixed (a reset after the peer's FIN and a 30 s limit for half-closed connections; `net_for` in `zoraya-shell` with a
+refusal of values; `fetch` fails on a reset whatever the framing), warnings 4 to 8 fixed (ADR-0224 note, DNS steps split and skipped
+on CI, `-o` opens at the first byte, `--port 0`, host tests). Tests: `cargo test -p zoraya-net` 61, `-p zoraya-shell` 110 (7 new).
+Open: notes 11, 12, 14.

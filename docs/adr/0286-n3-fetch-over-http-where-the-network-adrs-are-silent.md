@@ -68,7 +68,7 @@ ADR-0222 option B: rejected there (every byte a message, `pselect` cannot wait o
    smoltcp does not say whether a timeout or a reset closed the socket.
 4. **The resolver** (`zoraya_net::dns`, `zoraya-dns`): `net.hosts` first (exempt from the local rule), a cache of 64
    names kept for the answer's TTL up to an hour (the entry nearest its expiry goes), then A queries over one UDP socket
-   to the servers of `status`, one query in flight per name, attempts at 0, 1, 2 and 4 s to the servers in turn, giving
+   to the servers of `status`, one query per connection that needs the name (two connections to one name send two), attempts at 0, 1, 2 and 4 s to the servers in turn, giving
    up at 8 s, at most 8 queries at once. An answer counts only from a configured server's port 53, with the identifier
    and the question of a query in flight; the decoder takes an address only from a record whose owner is the name asked
    or a CNAME chain from it. The identifier and the source port come from a generator seeded with the time and the MAC,
@@ -76,15 +76,17 @@ ADR-0222 option B: rejected there (every byte a message, `pselect` cannot wait o
    truncated answer (it is `Unresolvable`), negative caching, a `resolve` request, search domains (ADR-0223 has none).
    The local-address rule (loopback, link-local, multicast, unspecified, the interface's address, the gateway, a DNS
    server) is applied to every answer and refuses with `Local` unless an address rule covers it.
-5. **A `url` operand designates** (`zoraya-describe` `Kind::Url`, the word `url`; ADR-0224 item 3). For a base-system
-   command whose description has such an operand and whose line parses, `zosh` makes the command's network connection with
-   `narrow`: right `reach`, one rule for that host (a name, or an address if it is dotted decimal) and port, TCP. A URL
-   that does not parse gives no connection and the command says what is wrong. **The condition of ADR-0224 item 3 is not
-   built yet**: that the designation holds only inside a `+net` rule on the line or in the room, else the line is
-   refused with the hint. N3 designates unconditionally. It is not weaker than today's state: the shell's own root
-   connection is the person's authority, rooms and the panel's shells have no `NET` slot, and `--net` refuses `--gui`.
-   The `+net` and `+listen` words, `grants` output for the scope, the REPORT message and the hint come next (N3b, or
-   with N6's rooms).
+5. **A literal `url` operand designates** (`zoraya-describe` `Kind::Url`, the word `url`; ADR-0224 item 2). For a
+   base-system command whose description has such an operand, `zosh` makes the command's network connection with
+   `narrow`: right `reach`, one rule for that host (a name, or an address if it is dotted decimal) and port, TCP. This is
+   `zoraya_shell::netgrant::net_for`, host-tested. As ADR-0224 item 2 says, only a *literal* operand designates: one that
+   came from a variable, a substitution or a glob is refused before the line runs (`zosh: URL: from a value, outside
+   the line's network grants`), because data would choose what the command reaches; ADR-0224 lets such an operand
+   designate inside a `+net` rule on the line or in the room, and those words are **not built**, so a value is always
+   refused until N3b. A URL that does not parse gives no connection and the command says what is wrong with it. Not built
+   either: the `+net` and `+listen` words, `grants` output for the scope, the REPORT message and the hint. Exposure
+   today: rooms and the panel's shells have no `NET` slot, `--net` refuses `--gui`, so only the console shell, which
+   holds the root connection, designates, and only for a URL written on its line.
 6. **`fetch` and the HTTP client** (`zoraya-http`): GET only, `Connection: close`, `http://` only, no redirects. The
    decoder is incremental (any split of the input gives the same result), caps the head at 8 KiB and 64 fields, a
    chunk-size line at 256 bytes, the body at 64 MiB whatever the framing says (INV-0286-2), and refuses what could hide a
@@ -96,7 +98,8 @@ ADR-0222 option B: rejected there (every byte a message, `pselect` cannot wait o
    exits by itself after its `--lifetime`. The guest reaches it at 10.0.2.2, SLIRP's alias of the host, which needs the
    network without `restrict=on`: `tools/run-qemu.sh --net-open` (with `--net`; refused without it), used only by
    `make test-net`'s fetch step. Nothing but the loopback server is reached by a test; the Internet is reachable only if
-   the host has it. `test.zoraya` is a `net.hosts` entry in the test disk's `/config/settings`.
+   the host has it. `test.zoraya` is a `net.hosts` entry in the test disk's `/config/settings`. The server takes `--port 0` and writes the port it got to a
+   `--ready-file`, so worktrees running the step at once do not collide.
 
 ## Consequences
 - **Positive.** A native program fetches a page; the rings are its own; every parser of outside bytes is in a host-tested
@@ -113,10 +116,15 @@ ADR-0222 option B: rejected there (every byte a message, `pselect` cannot wait o
   however the input is split. *Check:* `cargo test -p zoraya-http` (the caps, the splits, 60,000 random inputs).
 
 ## Open questions
-- Whether the designation by `url` should wait for the `+net` rule of ADR-0224 item 3 before N3 is merged, or ship as
-  built with the limitation in `docs/design.md`.
+- When the `+net` words, `grants` output and the REPORT message are built (N3b, or with N6's rooms): until then a `url`
+  operand from a value is refused, and `grants fetch URL` prints no network rule (INV-0224-2 stays open, ADR-0224's open
+  questions).
 - The buffer sizes (32 KiB sockets, 64 KiB rings) against the measured throughput of `docs/design.md`.
-- Whether SLIRP's DNS forwarder is reachable offline in CI (the DNS step of the fetch test is skipped when it is not).
+- SLIRP's DNS forwarder answers `localhost` from the host's own resolver, which CI does not promise. The two guest steps
+  that use it (`tests/shell/net-dns.script`: `localhost` refused as local, `nothing.invalid` unresolvable) run in their
+  own boot, locally by default, and are skipped on CI with a visible `[net-dns] SKIP` line unless `NET_DNS=1`; the
+  resolver's logic (answers, NXDOMAIN, forged and misdirected answers, the cache, the local rule) is covered by the host
+  tests over a scripted DNS server.
 
 ## Revisit triggers
 - A second user of `connect` that is not `fetch`: the `peer`, `local` and `share` requests of ADR-0222.

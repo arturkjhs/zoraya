@@ -1647,15 +1647,17 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   (both lengths, two lengths, a length that is not digits, any transfer coding but `chunked`, a bare LF and folding are
   errors). The body of a non-2xx response is not printed; `--sum` prints the size, an FNV-1a checksum and the time.
 - **The grant.** `zoraya-describe` has a new operand kind `url`. For a base-system command with such an operand, `zosh`
-  makes the command's network connection with `narrow`: right `reach`, one rule for the URL's host (a name, or an address if
-  dotted decimal) and port, TCP. **The condition of ADR-0224 item 3 is not built:** the designation holds without a `+net`
-  rule on the line or in the room, and there is no hint, no REPORT message and no `grants` output for the scope. Rooms and
-  the panel's shells still have no `NET` slot, and `--net` still refuses `--gui`.
+  makes the command's network connection with `narrow` (`zoraya_shell::netgrant::net_for`, host-tested): right `reach`, one
+  rule for the URL's host (a name, or an address if dotted decimal) and port, TCP. As ADR-0224 item 2 says, only a
+  *literal* operand designates; one from a variable, a substitution or a glob is refused before the line runs (`zosh: URL:
+  from a value, outside the line's network grants`). **Not built:** the `+net` and `+listen` words (which would let a value
+  designate), `grants` output for the scope (`grants fetch URL` prints no network rule), the REPORT message and the hint.
+  Rooms and the panel's shells still have no `NET` slot, and `--net` still refuses `--gui`.
 - **Tests.** `cargo test -p zoraya-dns` (16: the query, a decoded answer, CNAME chains, every prefix and byte change of a
   message, 100,000 random messages, pointer loops and forward pointers, name and length limits), `-p zoraya-http` (17: URLs,
-  the request, every framing, every split of the input, the caps, 60,000 hostile inputs), `-p zoraya-net` (59: 19 for the
-  connections over a scripted peer, with small rings and odd chunk sizes, FIN, reset, refusal, timeout, a client that stops
-  reading, the socket limit, the resolver with forged and misdirected answers, and the local-address rule; one for
+  the request, every framing, every split of the input, the caps, 60,000 hostile inputs), `-p zoraya-net` (61: 21 for the
+  connections over a scripted peer, with small rings and odd chunk sizes, FIN, reset (also after the peer's FIN), the linger
+  limit, refusal, timeout, a client that stops reading, the socket limit, the resolver with forged and misdirected answers, and the local-address rule; one for
   `connect`'s checks), `-p zoraya-proto-net`. `make test-net` also runs `tests/shell/net-fetch.script`
   (`make test-net-fetch`) against `tools/test-httpd`, a bounded server on the host's 127.0.0.1 that the guest reaches at
   10.0.2.2: a page byte for byte, bodies of 1,000,000 (length), 300,000 (chunked, by name), 70,000 (until close) and
@@ -1674,6 +1676,10 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   would take 19 to 34 ms, 9 to 16 percent of 213 ms *(an estimate, not a measurement)*, and the frame slot is copied byte
   by byte with volatile reads (`Frames::read_slot` in `netd`), which is more than a bulk copy of the same bytes. The
   check on the way: 1,000,000 bytes 40 ms, 4,000,000 bytes 85 ms (HVF, in `make test-net`).
+- **Idle connections.** smoltcp's timeout (60 s) ends a connection that is silent both ways with `Reset`; `netd` ends a
+  half-closed one (one side's end of file seen) after 30 s without a byte with `Reset { Aborted }` and a connection whose
+  socket was reset after the peer's FIN with `Reset { Peer }`, so a server cannot keep sockets by closing and going quiet.
+  `fetch -o FILE` makes or empties FILE at the first byte of a 2xx page; a cut transfer leaves it partly written, exit 1.
 - **Limits and what is not built.** One thread: a slow reader of a connection never blocks the others (its ring fills
   and its socket's window closes), but the 8 sockets and 16 connections are global, so one client can take all of them
   until Q3's per-scope account. No AAAA, no TCP fallback for DNS, no `resolve`, `datagram` or `listen` requests, no
