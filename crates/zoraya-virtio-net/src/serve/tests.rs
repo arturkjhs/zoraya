@@ -112,7 +112,11 @@ fn rig(room: usize) -> Rig {
 
 fn done_status(wire: &Fake) -> u32 {
     let w = wire.0.borrow();
-    let (_, m) = decode::<Done>(w.written.last().unwrap(), 0).unwrap();
+    let (h, m) = decode::<Done>(w.written.last().unwrap(), 0).unwrap();
+    assert_ne!(
+        h.transaction, 0,
+        "a reply carries its request's transaction"
+    );
     m.status.0
 }
 
@@ -275,7 +279,8 @@ fn a_link_change_and_replies_are_kept_while_the_channel_is_full() {
     let w = r.wire.0.borrow().written.clone();
     // One reply, one link message with the state of the moment.
     assert_eq!(ordinals(&r.wire), vec![1, 18]);
-    let (_, reply) = decode::<InfoReply>(&w[0], 0).unwrap();
+    let (h, reply) = decode::<InfoReply>(&w[0], 0).unwrap();
+    assert_eq!(h.transaction, 39, "the newest request's");
     assert!(!reply.link);
     let (_, link) = decode::<LinkChanged>(&w[1], 0).unwrap();
     assert!(!link.link);

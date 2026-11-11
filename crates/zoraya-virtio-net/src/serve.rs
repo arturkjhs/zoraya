@@ -107,8 +107,13 @@ pub struct Server<R, S, H> {
     out: [u8; BUFFER],
 }
 
-fn put<'a, H: Host, M: Message<'a>>(host: &mut H, out: &mut [u8; BUFFER], m: &M) -> Write {
-    match encode(m, NO_REPLY, out) {
+fn put<'a, H: Host, M: Message<'a>>(
+    host: &mut H,
+    out: &mut [u8; BUFFER],
+    transaction: u32,
+    m: &M,
+) -> Write {
+    match encode(m, transaction, out) {
         Ok(n) => host.write(&out[..n]),
         // A message that cannot be built cannot be sent later either.
         Err(_) => Write::Done,
@@ -267,7 +272,7 @@ impl<R: Registers, S: Shared, H: Host> Server<R, S, H> {
                 at: woke,
                 frames: Seq::Of(chunk),
             };
-            match put(&mut self.host, &mut self.out, &m) {
+            match put(&mut self.host, &mut self.out, NO_REPLY, &m) {
                 Write::Done => {}
                 Write::Full => {
                     for f in chunk {
@@ -285,21 +290,21 @@ impl<R: Registers, S: Shared, H: Host> Server<R, S, H> {
 
     /// Writes what is pending, until the channel is full.
     pub fn flush(&mut self) -> Flow {
-        if let Some((_, s)) = self.done {
-            match put(&mut self.host, &mut self.out, &Done { status: Below(s) }) {
+        if let Some((t, s)) = self.done {
+            match put(&mut self.host, &mut self.out, t, &Done { status: Below(s) }) {
                 Write::Done => self.done = None,
                 Write::Full => return Flow::Go,
                 Write::Closed => return Flow::Stop,
             }
         }
-        if self.info.is_some() {
+        if let Some(t) = self.info {
             let mac = self.net.mac();
             let m = InfoReply {
                 status: Below(status::OK),
                 link: self.net.link(),
                 mac: Data(&mac),
             };
-            match put(&mut self.host, &mut self.out, &m) {
+            match put(&mut self.host, &mut self.out, t, &m) {
                 Write::Done => self.info = None,
                 Write::Full => return Flow::Go,
                 Write::Closed => return Flow::Stop,
@@ -320,7 +325,7 @@ impl<R: Registers, S: Shared, H: Host> Server<R, S, H> {
             let m = Rejected {
                 slots: Seq::Of(&refusals[..count]),
             };
-            match put(&mut self.host, &mut self.out, &m) {
+            match put(&mut self.host, &mut self.out, NO_REPLY, &m) {
                 Write::Done => self.rejected = [0; SLOTS],
                 Write::Full => return Flow::Go,
                 Write::Closed => return Flow::Stop,
@@ -340,7 +345,7 @@ impl<R: Registers, S: Shared, H: Host> Server<R, S, H> {
             let m = Sent {
                 slots: Seq::Of(&slots[..count]),
             };
-            match put(&mut self.host, &mut self.out, &m) {
+            match put(&mut self.host, &mut self.out, NO_REPLY, &m) {
                 Write::Done => {
                     for s in &slots[..count] {
                         self.net.reported(s.slot);
@@ -355,7 +360,7 @@ impl<R: Registers, S: Shared, H: Host> Server<R, S, H> {
             let m = LinkChanged {
                 link: self.net.link(),
             };
-            match put(&mut self.host, &mut self.out, &m) {
+            match put(&mut self.host, &mut self.out, NO_REPLY, &m) {
                 Write::Done => self.link = false,
                 Write::Full => return Flow::Go,
                 Write::Closed => return Flow::Stop,
