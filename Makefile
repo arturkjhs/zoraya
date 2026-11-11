@@ -231,6 +231,8 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 # on CI (CI set) a skip, and any other failure of the probe, fails it.
 NET_DISK := $(BUILD)/net-disk.img
 NET_PCAP := target/test-logs/test-net.pcap
+# Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
+NET_FWD_PORT := 47015
 test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
@@ -239,13 +241,17 @@ test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
 	elif [ $$rc != 0 ]; then echo "[net] FAIL: the networking probe failed (exit $$rc)"; exit 1; fi; \
 	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
-	$(RUN_TEST) --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \
-		-- $(RUN_QEMU) --test --net --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel auto $(TEST_KERNEL) && \
+	run() { accel=$$1; shift; tools/net-poke.sh $(NET_FWD_PORT) 240 & poke=$$!; \
+		$(RUN_TEST) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
+		rc=$$?; kill $$poke 2>/dev/null; wait $$poke 2>/dev/null; return $$rc; }; \
+	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" && \
 	target/debug/zoraya-fsck $(NET_DISK) && \
-	( od -An -tx1 -v $(NET_PCAP) | tr -d ' \n' | grep -q 08060001080006040002525[0-9a-f]0a000202 \
-		|| { echo "[net-auto] FAIL: no ARP reply from the gateway in $(NET_PCAP)"; exit 1; } ) && \
-	( [ "$(FULL)" != 1 ] || $(RUN_TEST) --label net-tcg --expect-line "t_net: all passed" \
-		-- $(RUN_QEMU) --test --net --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel tcg $(TEST_KERNEL) )
+	hex="$$(od -An -tx1 -v $(NET_PCAP) | tr -d ' \n')" && \
+	( case "$$hex" in *08060001080006040002525[0-9a-f]0a000202*) ;; \
+		*) echo "[net-auto] FAIL: no ARP reply from the gateway in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( case "$$hex" in *080600010800060400025254001234560a00020f*) ;; \
+		*) echo "[net-auto] FAIL: the guest answered no ARP request for 10.0.2.15 in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" )
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.

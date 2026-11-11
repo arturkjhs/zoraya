@@ -21,9 +21,9 @@ tools/check-ethd-maps.sh      check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
-kernel/                       test-qemu test-boot
+kernel/                       test-qemu test-boot test-net
 crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
-crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-gui
+crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-gui test-net
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
@@ -82,6 +82,7 @@ crates/zoraya-virtio-net/     test-net
 crates/zoraya-proto-nic/      test-net
 fuzz/                         check
 user/src/bin/ethd.rs          test-net
+tools/net-poke.sh             test-net
 user/src/bin/t_net.rs         test-net test-qemu
 
 # The POSIX personality.

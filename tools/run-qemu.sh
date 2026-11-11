@@ -35,6 +35,9 @@
 #                         Refused with --gui until ADR-0221 item 8 is decided.
 #   --net-pcap FILE       with --net: write the frames to FILE (filter-dump),
 #                         256 bytes of each
+#   --net-forward PORT    with --net: forward 127.0.0.1:PORT on the host to the
+#                         guest's 10.0.2.15:PORT (tools/net-poke.sh connects to it,
+#                         so that SLIRP sends the guest an ARP who-has)
 #   --net-capture-all     with --net-pcap: whole frames, for benchmarks only
 #   --qmp PATH            a QMP socket at PATH, for screendumps and keys
 #   --display-opts OPTS   the interactive display and its suboptions (with
@@ -86,6 +89,7 @@ gui_scale=1
 gui_size=
 net=0
 net_pcap=
+net_forward=
 net_maxlen=,maxlen=256
 qmp=
 display_opts=
@@ -109,6 +113,7 @@ while [ $# -gt 0 ]; do
         --gui-size) [ $# -ge 2 ] || die "--gui-size needs WxH"; gui_size=$2; shift 2 ;;
         --net) net=1; shift ;;
         --net-pcap) [ $# -ge 2 ] || die "--net-pcap needs a file"; net_pcap=$2; shift 2 ;;
+        --net-forward) [ $# -ge 2 ] || die "--net-forward needs a port"; net_forward=$2; shift 2 ;;
         --net-capture-all) net_maxlen=; shift ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
@@ -202,6 +207,13 @@ esac
 if [ "$net" = 1 ] && [ "$gui" = 1 ]; then
     die "--net and --gui cannot be combined: the GUI takes all four device pages (ADR-0221 item 8)"
 fi
+case $net_forward in
+    "") ;;
+    *[!0-9]*) die "--net-forward needs a port number" ;;
+esac
+if [ -n "$net_forward" ] && [ "$net" != 1 ]; then
+    die "--net-forward needs --net"
+fi
 if [ -n "$net_pcap" ] && [ "$net" != 1 ]; then
     die "--net-pcap needs --net"
 fi
@@ -252,7 +264,9 @@ fi
 if [ "$net" = 1 ]; then
     restrict=
     [ "$mode" = test ] && restrict=,restrict=on
-    set -- "$@" -netdev "user,id=net0$restrict" \
+    forward=
+    [ -z "$net_forward" ] || forward=",hostfwd=tcp:127.0.0.1:$net_forward-10.0.2.15:$net_forward"
+    set -- "$@" -netdev "user,id=net0$restrict$forward" \
         -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.16
     if [ -n "$net_pcap" ]; then
         set -- "$@" -object "filter-dump,id=dump0,netdev=net0,file=$net_pcap$net_maxlen"

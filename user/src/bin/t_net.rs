@@ -31,6 +31,11 @@ use zoraya_user::{
 
 const OUR_IP: [u8; 4] = [10, 0, 2, 15];
 const GATEWAY_IP: [u8; 4] = [10, 0, 2, 2];
+/// The sender address of our who-has. Not 10.0.2.15: SLIRP learns the guest's
+/// MAC address from the sender of an ARP request, and asks who has 10.0.2.15
+/// (the thing `make test-net` wants to see answered) only while it does not
+/// know it.
+const PROBE_IP: [u8; 4] = [10, 0, 2, 30];
 /// Every wait ends: TCG is slow, so seconds.
 const WAIT_NS: u64 = 10_000_000_000;
 const ROUNDS: usize = 20;
@@ -333,7 +338,7 @@ fn main() -> i32 {
     let who_has = arp::Arp {
         operation: arp::Operation::Request,
         sender_mac: mac,
-        sender_ip: OUR_IP,
+        sender_ip: PROBE_IP,
         target_mac: [0; 6],
         target_ip: GATEWAY_IP,
     };
@@ -377,7 +382,7 @@ fn main() -> i32 {
                         } else if let Some(a) = arp::parse(&frame)
                             && a.operation == arp::Operation::Reply
                             && a.sender_ip == GATEWAY_IP
-                            && a.target_ip == OUR_IP
+                            && a.target_ip == PROBE_IP
                         {
                             assert_eq!(a.target_mac, mac);
                             gateway_mac = Some(a.sender_mac);
