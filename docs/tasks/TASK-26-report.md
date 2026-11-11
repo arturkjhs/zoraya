@@ -349,7 +349,12 @@ INV-0221-3).
 - `make check`: all 13 steps pass (fmt, clippy, adr-check, the `check-*`, `check-ci-jobs`).
 - `make test-net` (HVF): PASS, 104 passed and 9 expected failures of the test kernel, `t_net: all passed`, pcap checked,
   `zoraya-fsck` clean. `FULL=1 make test-net` also under TCG: PASS.
-- `make test-changed`: see the line at the end of this section.
+- `make test-changed` (every step, the Makefile changed; HVF, local): all pass except `test-qemu` config `auto-smp4-2g`,
+  where `t_bound` (Q2) fails `assert_eq!(free_frames(), free)` in "create-loop: frames" (512647 against 512903, 256 frames
+  late). It fails the same way, twice in a row, on `main` at `9a74448` built from `git archive` in a scratch directory,
+  so it is not N1's; an SMP 4 problem of Q2's reaper (frames freed late) for the architect. `test-boot`, `test-files`,
+  `test-libposix`, `test-posix`, `test-posix-gui`, `test-tour-gui`, `test-gui`, `test-crash` pass; `test-net` is not in
+  `test-changed`'s list (run alone above).
 - Not run: the fuzz target; `make test-boot` with `--net` (the normal kernel starts `ethd` under `make run-net`, which no
   step boots).
 
