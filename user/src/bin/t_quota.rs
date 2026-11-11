@@ -187,14 +187,18 @@ fn usage_matches_the_heap_and_the_frames() {
     let (u4, h4) = (used(), heap_live());
     // Charged for the queues' slots at their most and two sources, which the heap
     // shows only as messages queue.
-    assert_eq!(u4 - u3, (h4 - h3) + 2 * 64 * 8 + 2 * 64 + 0, "channel_create");
+    assert_eq!(u4 - u3, (h4 - h3) + 2 * 64 * 8 + 2 * 64, "channel_create");
     let (r, w) = zoraya_user::stream_create().expect("stream");
     let (u5, h5) = (used(), heap_live());
     // The ring is 64 KiB of user frames; the rest is the stream, its two ends,
     // the ring's record and two sources. The heap's own delta also holds the
     // handle table growing for two handles, which a process pays for up front.
     let kernel = (u5 - u4) - 65536;
-    assert!(kernel >= 512 && kernel <= (h5 - h4) + 256, "stream_create: {kernel} of {}", h5 - h4);
+    assert!(
+        kernel >= 512 && kernel <= (h5 - h4) + 256,
+        "stream_create: {kernel} of {}",
+        h5 - h4
+    );
     // And everything is given back.
     for h in [m, p, e, c0, c1, r, w] {
         handle_close(h).expect("close");

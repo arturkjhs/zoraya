@@ -198,7 +198,10 @@ fn a_payer_lives_exactly_as_long_as_its_message_is_queued() {
     let mut c: Channel<u32, Payer> = Channel::new();
     for i in 0..5u8 {
         c.prepare(0, 1).unwrap();
-        c.write(0, Box::new(Message::new(vec![i], vec![], Payer::new(&live))));
+        c.write(
+            0,
+            Box::new(Message::new(vec![i], vec![], Payer::new(&live))),
+        );
     }
     assert_eq!(live.get(), 5);
     // Read: the reader takes the message, and its payer goes with it when the
@@ -220,7 +223,10 @@ fn a_refused_write_leaves_no_payer_in_the_queue() {
     let mut c: Channel<u32, Payer> = Channel::new();
     for _ in 0..MAX_QUEUED {
         c.prepare(0, 1).unwrap();
-        c.write(0, Box::new(Message::new(vec![0], vec![], Payer::new(&live))));
+        c.write(
+            0,
+            Box::new(Message::new(vec![0], vec![], Payer::new(&live))),
+        );
     }
     assert_eq!(c.prepare(0, 1), Err(Refused::Full));
     assert_eq!(live.get(), MAX_QUEUED);
