@@ -174,7 +174,8 @@ pub fn end_subscriptions(entry: &Entry) {
     }
 }
 
-/// The work of closing a handle in units of a step (`steps::before`).
+/// The work of closing a handle in units of a step (`steps::before`), the
+/// handle's own unit included (the caller counts it with `steps::count(1)`).
 pub fn weight(entry: &Entry) -> usize {
     match &entry.object {
         Object::Memory(object) => crate::memory::object::weight(object),

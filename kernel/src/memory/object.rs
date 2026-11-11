@@ -25,12 +25,13 @@ enum Frames {
     Run { first: Frame, count: u64 },
 }
 
-/// The work of dropping an object in units of a step, for `steps::before`
-/// to be called by a teardown that drops many: its frames if they are freed
-/// on the spot (at most a step), else one, since the reaper frees them.
+/// The work of dropping an object whose handle or mapping the caller also
+/// counts (`steps::count(1)`), in units of a step, for `steps::before`: its
+/// frames if they are freed on the spot (at most a step), else none, since
+/// the reaper frees them; plus the one for the handle or mapping.
 pub fn weight(object: &MemoryObject) -> usize {
     let pages = (object.size() / FRAME_SIZE) as usize;
-    if pages > STEP { 1 } else { pages }
+    1 + if pages > STEP { 0 } else { pages }
 }
 
 pub struct MemoryObject {
