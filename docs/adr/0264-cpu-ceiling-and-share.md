@@ -156,6 +156,12 @@ unchanged. SMP keeps the unit; per-CPU budgets drawn from one pool per job (as C
 ## Open questions
 - The period: 20 ms against 10 ms and 100 ms; measure INV-0264-3's latency and the parking overhead with each.
 - Whether a room's ceiling should cover the time services spend on it (lending), once measured.
+- *Q4 note (agent, ADR-0001 rule 6):* the period measured with `t_cpu` (HVF, one run each; an uncapped process next to
+  two rooms at 25% each under 50%, each with 16 spinners and 16 that burst at the boundary): the longest wake-up
+  lateness was 5.7 ms at 10 ms, 9.6 ms at 20 ms and 50.1 ms at 100 ms; the median is 0.7 ms at all three. The 20 ms
+  of the ADR holds INV-0264-3's 50 ms with room, 100 ms only just; the parking overhead (a park per spinner per
+  period) did not show in the used CPU: 8 spinners at 25% used 502 ms of 500. The GUI half of INV-0264-3 waits for Q6a.
+  The details Q4 chose where this ADR is silent are in proposed ADR-0285.
 
 ## Revisit triggers
 - SMP.

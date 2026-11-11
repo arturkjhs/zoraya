@@ -139,6 +139,10 @@ and exits.
 - *Q2 note:* `schedule()` still calls `reap()` to drop a dead thread, and with it the small remainder of its process
   (the kernel stack and the record): the frames of a large space or object were the unbounded part and now go to the
   reaper. Moving the thread list too needs a way to wake the reaper from inside `schedule()`; it is not done.
+- *Q4 note:* `schedule()` now also charges the run time to the job's ancestors (at most 32 nodes) and parks at most 16
+  threads per call, and the timer callback that returns parked threads moves 64 and re-arms itself for the rest, so
+  none of the three holds interrupts masked for more than a bounded number of walks. `t_cpu` runs the masked-time and
+  units counters over the CPU tests: at most 1051 us and 69 units under HVF.
 - *Q2 note:* a snapshot copies a mapped object that another process also maps in steps, so a concurrent writer is seen
   part way (a plain `memcpy` of shared memory is no different); the copy of the caller's own pages cannot change meanwhile.
   `snapshot_process` charges the caller's own pages page by page, not before the walk (review Q1, note 14).

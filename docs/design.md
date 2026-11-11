@@ -243,7 +243,8 @@ The code is in `kernel/src/gic.rs`, `kernel/src/irq.rs`, `kernel/src/timer.rs` a
 The code is in `kernel/src/sched.rs`, `process.rs`, `syscall.rs` and `kernel/src/memory/{stack,user}.rs`.
 
 - **Scheduler.** One run queue, round robin, on one CPU. The kernel is not preempted: a slice ends at a return to
-  EL0, and kernel threads run until they yield or block. A 10 ms slice is armed only when another thread is ready.
+  EL0, and kernel threads run until they yield or block. A 10 ms slice is armed only when another thread is ready,
+  or when the thread's job has a CPU ceiling (below, "Quotas", Q4).
 - **Thread stacks.** 64 KiB with an unmapped guard page, in the stack window.
 - **Context switch.** Callee-saved registers, `FPCR`, `FPSR`, `TPIDR_EL0` and the stack limit. All else is in the
   exception frame. A thread ended is freed by a later one, since none can free its own stack.
@@ -1404,14 +1405,14 @@ designate (ADR-0153's Decision). Builtins are the commands that act on the shell
 and `sync`; the file commands are programs in the ramdisk. `rm` refuses a path that is `/`, or whose last
 component is `.` or `..`, with or without `--recursive`; `project/` is `project` (TASK-18 review S20).
 
-## Quotas (stage 8, Q1 and Q2: memory and processes on jobs, bounded kernel work)
+## Quotas (stage 8, Q1, Q2 and Q4: memory, processes and CPU on jobs, bounded kernel work)
 
 A job can carry a memory limit and a process limit (`job_set_limits`, needs the `LIMIT` right, which `job_create`
 returns and a launcher withholds from what it hands on). A limit never passes the parent's effective limit. Everything a
 program creates is charged to its job and to every job above it (user frames, page tables, memory objects, a process
 with its thread, kernel stack and handle table, channels, ports, streams, events, images, subscriptions, and each queued
 message to its writer). A request that would pass a limit fails with `OverQuota` and changes nothing; the job whose limit
-refused it asserts `OVER_QUOTA`. Nothing is killed or slowed (CPU is Q4). `job_get_usage` reads `limit`, `used`, `peak`,
+refused it asserts `OVER_QUOTA`. Nothing is killed; a CPU ceiling slows (Q4, below). `job_get_usage` reads `limit`, `used`, `peak`,
 `refused`, and the user/kernel split.
 
 `init`'s job holds the frames free after boot less 1/16 (the kernel reserve, ADR-0261 point 10's assumption, kept until a Q task measures what the kernel needs), and `init` puts `ttyd`, the broker and the
@@ -1454,6 +1455,46 @@ kernel counts the longest time IRQ stayed masked (`MASKED_MAX_NS`, `kernel/src/s
 Measured under HVF, 24 MiB (`t_bound`): before the steps `memory_create` 1707 us, `memory_map` 1333 us, `memory_unmap`
 786 us and the close of the object 962 us masked; after, one step and the whole are the same, about 19 us, 15 to 19 us,
 8 to 10 us and 11 us. See the report for the rest.
+
+**Q4: the CPU ceiling** (ADR-0264, proposed ADR-0285 for the details). `job_set_limits` takes `cpu`, 1 to 1000
+thousandths of the machine (0 and more than 1000 are `InvalidArgument`, as is one above the parent's effective ceiling);
+it is set together with the other two limits or not at all, and `None` clears the job's own ceiling. A period is 20 ms
+on boundaries every job shares, so 250 is 5 ms of CPU in each period. The logic is the crate `zoraya-cpu` (host
+tested on a simulated clock); `kernel/src/cpu.rs` gives it the job tree and `kernel/src/sched.rs` calls it:
+
+- At every switch away from a user thread its run time since it was switched in is charged to its job and every job
+  above it (`used_ns` since creation, `period_used` for the period of the switch; a run that crosses a boundary counts
+  only its part after it). Time in interrupt handlers while the thread runs is charged to it too.
+- A thread reaching the front of the run queue whose job, or an ancestor, has spent its budget goes to the parked list
+  instead of running (at most 16 per pick; one past that runs for the 50 us floor and is parked at its next pick).
+  Otherwise it runs with a slice of the smaller of 10 ms and the budget left (at least 50 us), armed also when it is
+  alone. Unlimited jobs keep ADR-0030's rule.
+- One deadline at the next boundary, armed only while something is parked, returns the parked threads to the end of the
+  run queue, 64 a time with an immediate deadline for the next 64, so interrupts are unmasked between batches. The
+  deadline queue keeps two slots for the scheduler (the slice and this one).
+- `job_get_usage` writes 120 bytes when the buffer holds them (`cpu.limit`, `cpu.used_ns`, `cpu.period_used`,
+  `cpu.parked`); the 88-byte record of Q1 is still accepted and read with the CPU words as zero.
+
+Measured under HVF, default guest, test kernel (`t_cpu`, one run each): eight spinners in a room at 25% for 2 s used
+502 ms of a budget of 500 ms (parked 802 times); three rooms at 25% under a job at 50% used 1006 ms of 1000 ms; the longest
+interval with IRQ masked over those tests 314 to 1051 us (units of work at most 69), against 2 ms. The wake-up lateness
+of an uncapped process that sleeps 1.7 ms at a time next to two rooms at 25% each under 50%, each with 16 spinners and 16
+processes that sleep until 1 ms before a boundary and then spin 3 ms (400 wake-ups):
+
+| Period | median | p99 | max |
+|---|---|---|---|
+| 10 ms | 749 us | 5.6 ms | 5.7 ms |
+| 20 ms (the default) | 682 us | 9.3 ms | 9.6 ms |
+| 100 ms | 683 us | 49.7 ms | 50.1 ms |
+
+The maximum is about the capped rooms' share of one period (50% of the period), as the arithmetic of ADR-0264 option D
+says, and the 50 ms of INV-0264-3 is met with room at 10 and 20 ms and only just at 100 ms. This is the scheduler's part of
+a key's latency; the terminal's own echo time comes on top of it. The GUI test of INV-0264-3 (a keystroke to a terminal
+in `home` next to two untrusted rooms) was not written: it needs rooms with `--cpu` (Q6a) and untrusted rooms are
+refused (the gate). TCG was not run here; CI runs it with the calibration `t_bound` uses.
+
+Known limits of Q4: a ceiling below about 0.25% runs at about that (the 50 us floor); a thread parked when its job is
+killed ends at the next boundary (at most one period); IRQ time is charged to the interrupted thread; one CPU (an SMP kernel gives each CPU a share of one pool, ADR-0264).
 
 ## Network driver (stage 8, N1: the driver answers ARP)
 
