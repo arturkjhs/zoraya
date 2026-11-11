@@ -78,8 +78,9 @@ pub struct FilesView {
     /// The window's body, physical.
     body: paint::Rect,
     buttons: u32,
-    /// The last left press: where, on which row, when.
-    press: Option<(i32, i32, Option<usize>, u64)>,
+    /// The last left press: where, on which row, when, and whether it was
+    /// plain (no Shift or Command held at the press).
+    press: Option<(i32, i32, Option<usize>, u64, bool)>,
     /// The press before it, for a double click: on which item (by name,
     /// in which folder) and when.
     last_press: Option<(String, u64)>,
@@ -353,7 +354,8 @@ impl FilesView {
             Hit::Row(p) => Some(p),
             _ => None,
         };
-        self.press = Some((x, y, row, now));
+        let plain = modifiers & (mods::SHIFT | mods::COMMAND) == 0;
+        self.press = Some((x, y, row, now, plain));
         self.dragged = false;
         let mut m = self.model.borrow_mut();
         // A press outside the menu closes it; one outside the rename field
@@ -444,10 +446,13 @@ impl FilesView {
         if pressed(RIGHT) {
             return self.right_press(x, y);
         }
-        // A release on a selected row that did not drag: the click alone.
+        // A release on a selected row that did not drag: the click alone,
+        // for a plain press. A press with Shift or Command already did its
+        // work; the release must not act again with the modifiers it finds
+        // (they may be gone by then, which collapsed the selection).
         if was & LEFT != 0 && buttons & LEFT == 0 {
             let press = self.press.take();
-            if let Some((_, _, Some(p), _)) = press {
+            if let Some((_, _, Some(p), _, true)) = press {
                 let mut m = self.model.borrow_mut();
                 if !self.dragged && m.is_selected(p) && m.selection().len() > 1 {
                     m.click(p, modifiers);
@@ -459,7 +464,7 @@ impl FilesView {
         // Moved with the button held from a row: a drag.
         if buttons & LEFT != 0
             && !self.dragged
-            && let Some((x0, y0, Some(p), _)) = self.press
+            && let Some((x0, y0, Some(p), _, _)) = self.press
             && ((x - x0).abs() > DRAG_START * k || (y - y0).abs() > DRAG_START * k)
         {
             self.dragged = true;
