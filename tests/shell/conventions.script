@@ -624,6 +624,25 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> net --help\r
+< \r\nnet: show the state of the network
+^ \r\nusage: net
+^ \r\n       net status
+^ \r\n  --help   show this help
+^ \r\nmore: help net
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> net --no-such-option\r
+< \r\nnet: --no-such-option: no such option
+^ \r\nusage: net
+^ \r\n       net status
+^ \r\nmore: help net
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > rm --help\r
 < \r\nrm: remove files
 ^ \r\nusage: rm [--recursive] PATH...

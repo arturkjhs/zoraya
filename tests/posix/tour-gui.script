@@ -34,10 +34,11 @@ screen   ls        list a directory
 screen   math      calculate
 screen   mkdir     make a directory
 screen   mv        move or rename
-screen   poweroff  turn the machine off
+screen   net       show the state of the network
 prefix -- space: next page, q: quit --
 key spc
 window
+screen   poweroff  turn the machine off
 screen   pwd       print the current directory
 screen   reboot    start the machine again
 screen   rm        remove files

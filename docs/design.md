@@ -875,8 +875,9 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   of its scripts run on images without the session file, so that `zosh` starts with the broker beside it:
   `tests/posix/zosh.script` (POSIX programs from `zosh`, ADR-0153 rule 10, ADR-0200) and `tests/posix/tour.script`,
   the whole of `docs/tour.md`, whose GUI twin `make test-tour-gui` plays (INV-0154-4);
-- `make test-net` (N1): the test kernel with `--net` and a pcap, whose `t_net` runs `ethd` against the real device (under
-  TCG too with `FULL=1`); it is skipped, and listed in the summary, on a QEMU without user-mode networking locally, and
+- `make test-net` (N1, N2): the test kernel with `--net` and a pcap, whose `t_net` runs `ethd` against the real device and
+  `t_netd` runs `netd` over it, then the normal kernel with `--net` and `tests/shell/net.script` (under TCG too with
+  `FULL=1`); it is skipped, and listed in the summary, on a QEMU without user-mode networking locally, and
   fails there on CI.
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP, one key every 8 ms (QEMU's virtio-input queue holds 16
@@ -1459,8 +1460,8 @@ Measured under HVF, 24 MiB (`t_bound`): before the steps `memory_create` 1707 us
 `tools/run-qemu.sh --net` (ADR-0230 item 2) puts `virtio-net-device` on transport 16 (page 2, alone, ADR-0091) over
 QEMU's user-mode network (SLIRP: guest `10.0.2.15/24`, gateway `10.0.2.2`); with `--test` it is `restrict=on`, and
 `--net-pcap FILE` keeps the frames (256 bytes each, `--net-capture-all` for whole frames). `--net` with `--gui` is
-refused (ADR-0221 item 8, deferred). `make run-net` is an interactive machine without `restrict`. There is no `netd`
-yet (N2): the driver is built and tested alone.
+refused (ADR-0221 item 8, deferred). `make run-net` is an interactive machine without `restrict`. The service on top of
+the driver is described under "Network service" below.
 
 - **`ethd`** (`zoraya-virtio-net`, ADR-0221 item 1, proposed ADR-0280). One process, the device at slot 5 and the
   client's channel at slot 6. It negotiates `VERSION_1`, `VIRTIO_NET_F_MAC` and `STATUS` only (offloads the device
@@ -1480,8 +1481,7 @@ yet (N2): the driver is built and tested alone.
   is lost and a slot is not reused before it was reported; `Transmit` and `Release` are the client's. `zoraya_proto_nic::arp` parses and builds
   ARP over IPv4 with checked slices only (truncated, wrong hardware or protocol type or sizes, unknown operations, a
   multicast sender: none panics; host tests and the fuzz target `fuzz/fuzz_targets/net_rx.rs`, not run).
-- **`init`** starts `ethd` when a virtio-net device is alone on its page and keeps the channel open. It is not
-  supervised until `netd` exists.
+- **`init`** starts `ethd` and `netd` when a virtio-net device is alone on its page, and supervises both (N2, below).
 - **`t_net`** (a test of the test kernel, `make test-net`) plays `netd`: it starts `ethd`, attaches a frames object, sends
   hostile requests (refused, with a reason), then sends 20 ARP who-has for `10.0.2.2` through the transmit path and reads
   SLIRP's reply through the receive path. `make test-net` forwards a host port to the guest and connects to it, so that
@@ -1504,6 +1504,69 @@ yet (N2): the driver is built and tested alone.
   interrupt to the frame message read in `t_net` (the driver's wake, the channel write, `t_net`'s wake and read) median
   7 to 8 us, max 11 us. TCG: ARP round trip median 384 us, min 372 us, max 1309 us; interrupt to message median
   190 us, max 794 us. The runs share a host with other work; a single run each.
+
+## Network service (stage 8, N2: `netd` answers ping and DHCP)
+
+`netd` (`user/src/bin/netd.rs`, ADR-0221 item 3) is one process, one thread and one port. It is the client of `ethd`
+(the frame protocol of N1), runs smoltcp 0.14 over it (`zoraya-net`, features: Ethernet, IPv4, ICMP, UDP, TCP with
+Reno, the DHCPv4 client; no IPv6, no `std`, no `log`), and serves the scope channels of `zoraya-proto-net`. The
+stack has no TCP user yet (N3) and no DNS (N3).
+
+- **Start.** `init` starts `ethd` and `netd` once the storage stack is up (`netd` reads `/config/settings` and needs the
+  volume for it; without a volume it runs on the defaults). `netd`'s table: the console, slot 5 the channel to `ethd`,
+  slot 6 a read-only `/config` directory connection (read once, then closed: there is no reload), slot 7 the root
+  connection whose other end `init` keeps. `netd` asks the driver for `Info`, creates the contiguous frames object,
+  `Attach`es it, builds the stack and prints `netd: net0 MAC`. It holds no device, interrupt or pin; it prints that after
+  looking at its own start-up table (`zoraya_user::start_table`), and `ethd` prints that it holds one channel
+  (INV-0221-1; a self-report, since no call lists another process's handles).
+- **The interface.** `zoraya-net`'s `Stack` (a `Link` of copied frames under smoltcp's `Device`). The MAC is checked
+  unicast before smoltcp sees it (the interface panics otherwise). A frame is copied out of its slot into a private
+  buffer, the slot is released, and only then is the copy parsed (the driver can write a lent slot). At most 64 frames
+  in and 64 out are moved in one turn; `poll` then returns 0 and the loop serves its other ports. smoltcp does not answer
+  echo requests addressed to the guest (feature `echo-reply` is on in the host tests only).
+- **DHCP.** smoltcp's client. The lease is applied only if the address is unicast with a prefix of 30 or less; the
+  host name from `net.hostname` is sent as option 12; the lease time is read from the server's packet. A renewal
+  changes what `status` returns and writes nothing (INV-0229-3; `netd` holds no writable connection to `/config`). The
+  stack starts, `net.address = static` applies `net.ip`/`net.gateway` at once, and a static setting without what it needs
+  leaves the interface without an address and says why once.
+- **Requests** (`zoraya-proto-net`, `Service`). `status` (right `status`), `ping` (right `reach` and a reach rule that
+  covers the address: a diagnostic of up to 16 echo requests, one every 200 ms, one run at a time in the process;
+  proposed ADR-0281), `narrow` (right `narrow`, a scope and rights inside the caller's). An unknown ordinal gets
+  `ErrorReply`; a message that does not decode, or comes with handles it should not have, ends that connection and no
+  other. At most 64 connections. Replies carry the request's transaction. A connection that does not read its replies
+  is closed.
+- **The scope** (`zoraya_abi::net::Scope`, ADR-0220). A total decoder over bytes, a matcher, and `within` for `narrow`
+  (a child rule must lie inside one rule of the parent). Names are lower-case ASCII with DNS's limits and are never
+  matched against an address rule (INV-0220-3, -4: 11 host tests with random scopes, truncations and mutations).
+- **Supervision.** `init` ends both jobs and starts both again, at most three times per boot, when either ends (service
+  first, so the new driver resets the device and the kernel releases the dead one's frames). A running shell keeps its
+  dead connection and `net status` says the network is not available until the shell is started again; ADR-0221 item 6's
+  services channel is not built.
+- **`net status`.** The shell holds a root connection at slot 9 (`init` makes it with `narrow` before each shell start).
+  A base-system command whose description says `needs net-status` (`net`) gets a connection with only the `status`
+  right and an empty scope, in the new `net` slot of its start-up record. `net status` prints
+  `net0  up  52:54:00:12:34:56`, the address with its source and the lease left, the gateway, the DNS servers and the frame
+  counters. The `net.*` settings are declared in `netd`'s description (`address` and `prefix` are new setting types):
+  `settings net.gateway 10.0.2` is refused.
+- **What SLIRP gives.** Under `restrict=on` (every test) the lease holds the address and its time only: no router and no
+  DNS server, so `net status` shows neither. Without `restrict` (`make run-net`) SLIRP gives gateway 10.0.2.2 and DNS
+  10.0.2.3. The lease time SLIRP gives is 24 h. ICMP to the gateway 10.0.2.2 is answered by SLIRP either way, and the
+  address is on-link.
+- **Tests.** `cargo test -p zoraya-net` (39 tests: the scripted DHCP server and echo responder, renewal, silence and
+  retry, static and unconfigured, ping with replies and without, 6000 hostile frames, a lying link, a flood served in
+  bursts, the slot bookkeeping against a hostile driver, the requests, `narrow`, the settings), `cargo test -p
+  zoraya-proto-net`, `-p zoraya-abi`, `-p zoraya-describe`. `make test-net` runs `t_net` (N1), `t_netd` and the normal
+  kernel with `--net` and `tests/shell/net.script`. `t_netd` plays `init`: lease, `net status`'s text, `ping 10.0.2.2`
+  (4 of 4), scopes, hostile requests, `netd` killed with a ping in flight (the client sees PEER_CLOSED, `ethd` exits 0
+  after resetting the device, a new start gets a lease), `ethd` killed with frames in flight (`netd` exits 1, the next
+  `ethd` releases the quarantine, a new lease, 4 of 4 echoes). The step also checks the pcap for the DHCP exchange and
+  an echo request and its reply. The fuzz target `fuzz/fuzz_targets/net_stack.rs` was compiled and driven with 200,000
+  random and near-valid inputs in a scratch crate in debug mode (not run under libFuzzer: no nightly toolchain here).
+- **Measured** (`t_netd`, QEMU 11.1.2, test kernel, 128 MiB, 1 CPU, 2026-11-11, single runs): HVF: lease 110 ms after
+  `netd` starts; `ping 10.0.2.2` 4 of 4, round trip min/avg/max 199/399/538 us; both processes started and leased in
+  about 115 ms; restart after `netd` killed 124 ms to a lease, after `ethd` killed 126 ms. TCG: lease 114 ms; `ping 10.0.2.2` 4 of 4, round trip 3492/4321/4853 us; restart after `netd` killed 180 ms to a lease, after
+  `ethd` killed 183 ms; `netd` killed with a ping in flight, client closed and `ethd` stopped 324 ms later (300 ms of that is the
+  wait before the kill).
 
 ## Known limitations
 
@@ -1726,6 +1789,7 @@ crates/                   no_std, host-tested
                           of ADR-0091, and a device-side fake (feature `fake`)
   zoraya-virtio-gpu/, zoraya-virtio-input/  the GPU and input drivers' logic (ADR-0090, ADR-0092)
   zoraya-virtio-net/, zoraya-proto-nic/  the network driver's logic and the frame protocol with ARP (ADR-0221)
+  zoraya-net/, zoraya-proto-net/  the network service's logic over smoltcp, and its protocol (ADR-0221, ADR-0229)
   zoraya-proto-display/, zoraya-proto-input/, zoraya-proto-gui/, zoraya-proto-term/  the GUI's protocols
   zoraya-proto-posix/, zoraya-proto-tty/  the broker's and the terminal's protocols (ADR-0104, ADR-0105)
   zoraya-broker/          the broker's logic: pids, groups, kill, the session file
@@ -1741,7 +1805,7 @@ crates/                   no_std, host-tested
                           gestures, chords, the switcher, the bar (ADR-0160, ADR-0164; window.rs, draw.rs)
   zoraya-posix/           the Rust half of libposix (ADR-0100): resolver, fd table, errno, the file functions; ffi.rs
                           is the C boundary in libc.a; tests/kernel is a fake kernel over the real fs-service
-user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, ethd, compd,
+user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, ethd, netd, net, compd,
                           term, posixrun (the launcher of C programs, stage 6c), broker and ttyd (the POSIX
                           session, stage 6d), test programs
   src/stack.rs            starts the driver and the service
