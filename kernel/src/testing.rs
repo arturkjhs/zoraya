@@ -508,6 +508,10 @@ static TESTS: &[Test] = &[
         run: kernel_work_is_bounded,
     },
     Test {
+        name: "cpu_ceiling_from_a_process",
+        run: cpu_ceiling_from_a_process,
+    },
+    Test {
         name: "snapshots_from_a_process",
         run: snapshots_from_a_process,
     },
@@ -1289,6 +1293,12 @@ fn job_suspend_from_a_process() {
 /// ADR-0261 and ADR-0263: limits on jobs, from processes.
 fn quotas_from_a_process() {
     assert_eq!(run_program("t_quota"), exited(0));
+}
+
+/// ADR-0264: the CPU ceiling, parking and the wake-up latency next to capped
+/// rooms (INV-0264-1, -2, -4 and the kernel half of -3).
+fn cpu_ceiling_from_a_process() {
+    assert_eq!(run_program("t_cpu"), exited(0));
 }
 
 /// ADR-0270, INV-0270-1 and -2: the longest masked time over every call that

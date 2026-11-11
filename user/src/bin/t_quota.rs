@@ -101,35 +101,43 @@ fn the_rules_of_setting_limits() {
     job_set_limits(below, &limits(Some(MIB), Some(2))).expect("narrower");
     // The CPU ceiling (ADR-0264): 1 to 1000 thousandths, not above the
     // parent's, and set together with the others or not at all.
-    let cpu = |cpu| JobLimits {
-        memory: None,
-        processes: None,
+    let all = |memory, processes, cpu| JobLimits {
+        memory,
+        processes,
         cpu: Some(cpu),
     };
-    assert_err!(job_set_limits(below, &cpu(0)), Status::InvalidArgument);
-    assert_err!(job_set_limits(below, &cpu(1001)), Status::InvalidArgument);
-    job_set_limits(room, &cpu(500)).expect("cpu");
-    assert_err!(job_set_limits(below, &cpu(501)), Status::InvalidArgument);
-    job_set_limits(below, &cpu(250)).expect("cpu below");
+    let (room_limits, below_limits) = ((Some(2 * MIB), Some(3)), (Some(MIB), Some(2)));
+    assert_err!(
+        job_set_limits(below, &all(below_limits.0, below_limits.1, 0)),
+        Status::InvalidArgument
+    );
+    assert_err!(
+        job_set_limits(below, &all(below_limits.0, below_limits.1, 1001)),
+        Status::InvalidArgument
+    );
+    job_set_limits(room, &all(room_limits.0, room_limits.1, 500)).expect("cpu");
+    assert_err!(
+        job_set_limits(below, &all(below_limits.0, below_limits.1, 501)),
+        Status::InvalidArgument
+    );
+    job_set_limits(below, &all(below_limits.0, below_limits.1, 250)).expect("cpu below");
     assert_eq!(
         job_get_usage(below, false).expect("usage").cpu.limit,
         Some(250)
     );
     // A refused memory limit leaves the CPU ceiling as it was.
-    let both = JobLimits {
-        memory: Some(4 * MIB),
-        processes: None,
-        cpu: Some(100),
-    };
-    assert_err!(job_set_limits(below, &both), Status::InvalidArgument);
+    assert_err!(
+        job_set_limits(below, &all(Some(4 * MIB), None, 100)),
+        Status::InvalidArgument
+    );
     assert_eq!(
         job_get_usage(below, false).expect("usage").cpu.limit,
         Some(250)
     );
     // None removes the job's own ceiling; the parent's still applies.
-    job_set_limits(below, &limits(Some(MIB), Some(2))).expect("remove");
+    job_set_limits(below, &limits(below_limits.0, below_limits.1)).expect("remove");
     assert_eq!(job_get_usage(below, false).expect("usage").cpu.limit, None);
-    job_set_limits(room, &limits(Some(2 * MIB), Some(3))).expect("remove");
+    job_set_limits(room, &limits(room_limits.0, room_limits.1)).expect("remove");
     let usage = job_get_usage(room, false).expect("usage");
     assert_eq!(usage.memory.limit, Some(2 * MIB));
     assert_eq!(usage.processes.limit, Some(3));
