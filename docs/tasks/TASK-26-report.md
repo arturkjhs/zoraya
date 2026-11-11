@@ -338,10 +338,12 @@ after the pin; the pin keeps the frames. The slot buffers are posted once per sl
 `release` (or at once if the client could not be told), tracked per slot (`Posted`/`Lent`, `Free`/`Queued`), so the
 device never holds a slot the client believes it owns, except the client's own transmit slots, which it must not
 rewrite until `Sent` (the client's frames are its own data). If `ethd` is killed with buffers in flight, the pins'
-last handles close without `dma_unpin`: the frames stay quarantined (ADR-0054, INV-0054-3 and -7) until the next
-`ethd` resets the device (`Net::new` calls `begin`, which resets) and `main` has called `dma_release_quarantine`
-(first thing, as `blkd` and `inputd` do). Not tested in N1: a kill test with frames in flight (open item for N2, with
-INV-0221-3).
+last handles close without `dma_unpin`: the frames stay quarantined (ADR-0054, INV-0054-3 and -7). The kernel's
+`dma_release_quarantine` resets the device and releases them (`release_quarantine` in `kernel/src/device.rs`, ADR-0070);
+the next `ethd` calls it first, before `device_map`, as `blkd` and `inputd` do (not `Net::new`, whose `begin` also
+resets, but later). `t_net` now closes the channel and waits for `ethd` to end by itself (exit code 0: reset and both
+unpinned), then calls `dma_release_quarantine` and expects nothing to release. Not tested: a kill with frames in flight
+(open item for N2, with INV-0221-3).
 
 ### Tests run
 

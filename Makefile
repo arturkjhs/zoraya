@@ -227,12 +227,16 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 # N1 (ADR-0221, ADR-0230): the test kernel with a virtio-net device on QEMU's
 # restricted user network, whose `t_net` (ethd, ARP through both paths) is
 # the point; the pcap stays in target/test-logs/. A host whose QEMU has no
-# user-mode networking skips the step (INV-0230-3).
+# user-mode networking skips the step, listed by `make test`'s summary (INV-0230-3);
+# on CI (CI set) a skip, and any other failure of the probe, fails it.
 NET_DISK := $(BUILD)/net-disk.img
 NET_PCAP := target/test-logs/test-net.pcap
 test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
-	@if ! $(RUN_QEMU) --accel tcg --net --dumpdtb $(BUILD)/net-probe.dtb >/dev/null 2>&1; then \
-		echo "[net] skipped: QEMU has no user-mode networking"; exit 0; fi; \
+	@$(RUN_QEMU) --probe-net; rc=$$?; \
+	if [ $$rc = 1 ]; then \
+		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
+		echo "[net] skipped: QEMU has no user-mode networking"; exit 0; \
+	elif [ $$rc != 0 ]; then echo "[net] FAIL: the networking probe failed (exit $$rc)"; exit 1; fi; \
 	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
 	$(RUN_TEST) --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \

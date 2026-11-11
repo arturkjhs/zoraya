@@ -52,6 +52,10 @@
 #                         virtualisation needs an M3 or later). TCG is not
 #                         probed. The probe creates the VM through --dumpdtb, so
 #                         it tests the host, never the kernel.
+#   --probe-net           no kernel needed: exit 0 if this QEMU has user-mode
+#                         networking (`-netdev user`), 1 with the reason on
+#                         stdout if it lists backends and not that one, 2 if it
+#                         cannot list them at all (a broken QEMU is no skip).
 #
 # Loading: the kernel ELF is passed with -kernel. QEMU's virt board treats an
 # ELF as a bare-metal image: it loads the segments at their physical
@@ -72,6 +76,7 @@ dumpdtb=
 print_cmd=0
 reboot=
 probe_el2=0
+probe_net=0
 keys=0
 test_disk=0
 write_error=0
@@ -112,6 +117,7 @@ while [ $# -gt 0 ]; do
         --print-cmd) print_cmd=1; shift ;;
         --reboot) reboot=1; shift ;;
         --probe-el2) probe_el2=1; shift ;;
+        --probe-net) probe_net=1; shift ;;
         -h|--help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
         -*) die "unknown option $1" ;;
         *) [ -z "$kernel" ] || die "more than one kernel given"; kernel=$1; shift ;;
@@ -147,6 +153,13 @@ if [ "$probe_el2" = 1 ]; then
     ("$0" --accel hvf --dumpdtb "$dir/plain.dtb"; exit $?) </dev/null >/dev/null 2>&1 || exit 0
     ("$0" --accel hvf --machine-opt virtualization=on --dumpdtb "$dir/el2.dtb"; exit $?) </dev/null >/dev/null 2>&1 && exit 0
     echo "HVF on this Mac has no EL2 (needs M3 or later)"
+    exit 1
+fi
+
+if [ "$probe_net" = 1 ]; then
+    list=$("$QEMU" -machine "$machine" -netdev help 2>&1) || die "QEMU could not list its netdev backends: $list"
+    printf '%s\n' "$list" | grep -qx user && exit 0
+    echo "this QEMU has no user-mode networking (-netdev user)"
     exit 1
 fi
 
