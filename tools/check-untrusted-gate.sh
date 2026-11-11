@@ -29,14 +29,16 @@ echo "$entries" | awk '$1 != "1" && $1 != "2" { exit 1 }' || bad "a line of $gat
 
 # The steps of `make test` and of the workflow.
 test_steps=$(sed -n 's/^TEST_STEPS := //p;s/^TEST_STEPS += //p' Makefile)
+# The workflow's matrix is the plan's: the full list is tools/ci-tests.txt.
 workflow=.github/workflows/test.yml
+jobs_list=tools/ci-tests.txt
 step_exists() { # a step name
 	case " $test_steps " in *" $1 "*) ;; *) return 1 ;; esac
-	[ -r "$workflow" ] || return 1
+	[ -r "$workflow" ] && [ -r "$jobs_list" ] || return 1
 	if [ "$1" = test-qemu ]; then
-		grep -q 'make test-qemu-' "$workflow"
+		grep -q 'make test-qemu-' "$workflow" "$jobs_list"
 	else
-		grep -q -E "make $1([^[:alnum:]_-]|\$)" "$workflow"
+		grep -q -E "make $1([^[:alnum:]_-]|\$)" "$workflow" "$jobs_list"
 	fi
 }
 

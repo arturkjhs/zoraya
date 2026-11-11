@@ -86,3 +86,12 @@ an assumption to be measured, not tuned to make a test pass); the GUI test guest
 smaller charges stay (the handle table's charge goes back at exit; ports pay for packets in steps). The footprint is
 the backlog row 'Desktop memory footprint'. An earlier commit of this branch lowered the reserve to 1/64; it is undone.
 The tags `candidate/work-q1` and `candidate/work-q1-b` are published and stay.
+
+### Handoff rule: the nightly run (infrastructure part, 2026-11-11)
+
+CI no longer runs every job on a merge candidate: a candidate runs the steps its change touches and a smoke set, and
+the full set (all of `tools/ci-tests.txt`) runs nightly on `main` (02:17 UTC), on demand and on a `candidate-full/NAME`
+tag. A failure that only the full set shows is therefore found by the nightly run. **A red nightly run is the first
+item of the next session**, before any new work. Where to look: `gh run list --workflow 'make test' --event schedule
+--limit 5`, then `gh run view RUNID --json jobs` for the failing jobs and `log-triage` on the log of the first. Read
+it at the start of every session; do not infer it.

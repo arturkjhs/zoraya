@@ -7,16 +7,24 @@
 # accelerator, W8 (POSIX_ONCE) as each of its builds' scripts under the first.
 #
 #   TEST_STEPS=... QEMU_CONFIGS=... POSIX_SCRIPTS=... POSIX_ACCELS=...
-#   POSIX_ONCE=... W8_BUILDS=... tools/check-ci-jobs.sh WORKFLOW
+#   POSIX_ONCE=... W8_BUILDS=... tools/check-ci-jobs.sh WORKFLOW [TESTS_LIST]
+#
+# The tests job's matrix is not in the workflow: on a merge candidate it is
+# the part of the FULL list (TESTS_LIST, tools/ci-tests.txt) that
+# tools/ci-plan.sh picks, so this checks the full list, and that the workflow
+# reads the plan and that FULL=1 gives the plan the whole list.
 set -eu
 workflow=$1
+list=${2:-tools/ci-tests.txt}
 [ -r "$workflow" ] || { echo "check-ci-jobs: cannot read $workflow" >&2; exit 2; }
+[ -r "$list" ] || { echo "check-ci-jobs: cannot read $list" >&2; exit 2; }
 
 # Every command the workflow gives, one a line, without YAML's list dash,
 # key or quoting: `run:` and `cmd:` values and the matrix's list items.
 commands=$(sed -n -E -e 's/^[[:space:]]*(- )?(run|cmd):[[:space:]]*//p' \
 	-e 's/^[[:space:]]*- //p' "$workflow" |
 	sed -e "s/^'\(.*\)'\$/\1/" -e 's/^"\(.*\)"$/\1/' | grep -E '^make ' || true)
+commands=$(printf '%s\n%s\n' "$commands" "$(grep -E '^make ' "$list")")
 
 missing=0
 need() { # what, for the message
@@ -62,6 +70,18 @@ for step in $TEST_STEPS; do
 		has_make "$step" || need "make $step" ;;
 	esac
 done
+
+if ! grep -q 'fromJSON(needs.plan.outputs.tests)' "$workflow"; then
+	need "its tests from the plan (fromJSON(needs.plan.outputs.tests))"
+fi
+if grep -q -E '^[[:space:]]*- .?make test' "$workflow"; then
+	need "only the full list in $list: a test command is in the workflow's matrix"
+fi
+planned=$(FULL=1 sh tools/ci-plan.sh 2>/dev/null | sed -n 's/^summary=full set: \([0-9]*\) jobs$/\1/p')
+listed=$(grep -c -E '^make ' "$list")
+if [ "${planned:-0}" != "$listed" ]; then
+	need "all $listed jobs of $list in the full plan (tools/ci-plan.sh with FULL=1 gives ${planned:-none})"
+fi
 if [ "$missing" -gt 0 ]; then
 	echo "check-ci-jobs: $missing missing" >&2
 	exit 1
