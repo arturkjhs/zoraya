@@ -389,6 +389,11 @@ POSIX_TIMEOUTS := w1=600 w2=600 w2j=900 w3=600 w3j=900 w8=1800 w9-int=600 w9-ter
 # (CI's jobs, ADR-0213's Decision).
 POSIX_W8_BUILDS := j1 pipe-j2 fifo-j2 pipe-j4 fifo-j4
 POSIX_IMAGE_SIZE := 256M
+# The directory /limited of the POSIX images carries a storage limit of this
+# size (ADR-0265, Q5): `t_posix diskfill` writes into it until EDQUOT
+# (tests/posix/scenarios.script). Until the room keeper (Q6a) sets limits, the
+# image tool does.
+POSIX_LIMITED ?= 64K
 POSIX_ZOSH_ROOT := $(BUILD)/posix-zosh
 POSIX_TOUR_ROOT := $(BUILD)/posix-tour
 # The guest's memory for the POSIX session: W8 at -j4 ran out of 128 MiB
@@ -401,7 +406,8 @@ define posix_run
 	name=$$(basename $$script .script); \
 	timeout=$$(echo " $(POSIX_TIMEOUTS) " | sed -n "s/.* $$name=\([0-9]*\) .*/\1/p"); \
 	root=$(POSIX_ROOT); case $$name in zosh*) root=$(POSIX_ZOSH_ROOT);; tour*) root=$(POSIX_TOUR_ROOT);; esac; \
-	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $$root $(POSIX_DISK) > /dev/null && \
+	limit=""; [ -d $$root/limited ] && limit="--limit limited=$(POSIX_LIMITED)"; \
+	target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) $$limit --from $$root $(POSIX_DISK) > /dev/null && \
 	$(RUNNER) --timeout $${timeout:-$(QEMU_TIMEOUT)} --script $$script --label posix-$$name-$$accel -- \
 	  $(RUN_QEMU) --test --keys --mem $(POSIX_MEM) --disk $(POSIX_DISK) --accel $$accel $(KERNEL) && \
 	target/debug/zoraya-fsck $(POSIX_DISK)

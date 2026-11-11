@@ -157,3 +157,55 @@ fn an_empty_keep_file_is_not_copied() {
     // The root, home and other; only other/.keep.
     assert_eq!((rep.stats.files, rep.stats.directories), (1, 3));
 }
+
+/// `--limit PATH=SIZE` puts a storage limit (ADR-0265) on a directory of
+/// the image, counting what the copy put there.
+#[test]
+fn limits_on_directories_of_the_image() {
+    let dir = tmp("mkfs-limit");
+    let src = dir.join("tree");
+    fs::create_dir_all(src.join("room/inner")).unwrap();
+    fs::create_dir_all(src.join("other")).unwrap();
+    fs::write(src.join("room/inner/f"), vec![1u8; 5000]).unwrap();
+    let image = dir.join("disk.img");
+    let out = Command::new(env!("CARGO_BIN_EXE_zoraya-mkfs"))
+        .args([
+            "--size",
+            "16M",
+            "--limit",
+            "room=64K",
+            "--limit",
+            "room/inner=1M",
+            "--from",
+        ])
+        .arg(&src)
+        .arg(&image)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dev = FileDevice::open(&image, false).unwrap();
+    let opts = MountOptions {
+        read_only: true,
+        ..MountOptions::default()
+    };
+    let mut v = Volume::mount(dev, SystemClock::default(), opts).unwrap();
+    let root = v.root();
+    let room = v.open(root, "room", OpenOptions::default()).unwrap();
+    // inner (1 block) + f (1 + 2 blocks).
+    let l = v.limit_of(room).unwrap().unwrap();
+    assert_eq!((l.limit, l.used), (65536, 4 * 4096));
+    let inner = v.open(root, "room/inner", OpenOptions::default()).unwrap();
+    assert_eq!(v.limit_of(inner).unwrap().unwrap().used, 3 * 4096);
+    let other = v.open(root, "other", OpenOptions::default()).unwrap();
+    assert_eq!(v.limit_of(other).unwrap(), None);
+    let bad = Command::new(env!("CARGO_BIN_EXE_zoraya-mkfs"))
+        .args(["--size", "16M", "--limit", "nowhere=1K"])
+        .arg(dir.join("bad.img"))
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+}
