@@ -567,9 +567,13 @@ fn assemble(
     } else {
         0
     };
+    // The charge first: a refused one allocates nothing, and the source below is
+    // made only once the process is paid for (INV-0261-2, review Q1 error 1).
+    let mut count = count;
+    count.kernel(charge::arc_cost::<Process>().saturating_add(extra))?;
     let source = port::new_source(bits).map_err(|_| OutOfMemory)?;
     let ttbr0 = space.ttbr0();
-    let process = charge::arc(count, extra, |paid| Process {
+    let process = charge::prepaid_arc(Process {
         name: owned,
         ttbr0,
         space: SpinLock::new(Some(space)),
@@ -578,7 +582,7 @@ fn assemble(
             waiters: Vec::new(),
         }),
         job,
-        paid: SpinLock::new(paid),
+        paid: SpinLock::new(count),
         source,
         handles: SpinLock::new(handles),
         thread: SpinLock::new(None),

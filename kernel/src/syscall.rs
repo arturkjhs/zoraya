@@ -621,6 +621,7 @@ impl Handlers for Calls<'_> {
             })
             .map_err(|e| match e {
                 MappingError::Limit => Status::LimitReached,
+                MappingError::Quota => Status::OverQuota,
                 _ => Status::NoMemory,
             })
     }
@@ -806,6 +807,7 @@ impl Handlers for Calls<'_> {
             .map_object(FRAME_SIZE, attributes, Holder::Device(mapping), |_| base)
             .map_err(|e| match e {
                 MappingError::Limit => Status::LimitReached,
+                MappingError::Quota => Status::OverQuota,
                 _ => Status::NoMemory,
             })?;
         let mut record = [0; 16];
