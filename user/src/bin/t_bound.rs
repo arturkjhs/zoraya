@@ -225,6 +225,8 @@ fn a_kill_between_steps_leaves_nothing() {
         job_kill(room).expect("kill");
         let record = wait_exit(p);
         assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
+        // A zombie keeps its record charged until its last handle closes.
+        handle_close(p).expect("close");
         let mut tries = 0;
         while (free_frames() != free
             || job_get_usage(room, false).expect("usage").memory.used != base)
@@ -242,7 +244,6 @@ fn a_kill_between_steps_leaves_nothing() {
             core::str::from_utf8(role).unwrap_or("?"),
             masked(true) / 1000
         );
-        handle_close(p).expect("close");
         handle_close(room).expect("close");
     }
 }
