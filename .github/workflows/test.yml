@@ -93,6 +93,12 @@ jobs:
           key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-v1
       - name: Install clang (zcc, libc.a and the ports) and zstd
         run: |
+          # GitHub's Ubuntu images carry both: when they are there the network
+          # is not needed (the runners' mirrors have been slow or unreachable).
+          if command -v clang >/dev/null && command -v zstd >/dev/null; then
+            echo "clang $(clang --version | head -1) and zstd are installed: no apt"
+            exit 0
+          fi
           pkgs="clang zstd"
           opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
           mkdir -p "$HOME/apt-debs"
