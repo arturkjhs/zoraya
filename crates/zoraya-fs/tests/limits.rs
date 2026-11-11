@@ -694,4 +694,45 @@ fn fsck_finds_and_repairs_a_wrong_counter() {
     assert_eq!(used(&mut v, "r"), 2 * BS);
 }
 
+/// The cost of a growing request with a limit three levels up (Q5's
+/// measurement): appends of one block to a file in `a/b/c`, with no limit
+/// and with a limit on `a`, on a memory device. Run by hand:
+/// `cargo test --release -p zoraya-fs --test limits -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, not a test"]
+fn measure_the_cost_of_a_growing_request() {
+    use std::time::Instant;
+    fn run(limit_on: Option<&str>) -> f64 {
+        let clock = TestClock::new(T0);
+        let mut v = mount(fresh(8192), &clock);
+        let root = v.root();
+        for d in ["a", "a/b", "a/b/c"] {
+            v.mkdir(root, d, 0o755).unwrap();
+        }
+        if let Some(l) = limit_on {
+            v.set_limit(root, l, Some(1 << 30)).unwrap();
+        }
+        let f = v.open(root, "a/b/c/f", create()).unwrap();
+        let block = vec![7u8; BLOCK_SIZE];
+        let n = 4000u64;
+        let t = Instant::now();
+        for i in 0..n {
+            v.write(f, i * BS, &block).unwrap();
+        }
+        let dt = t.elapsed().as_nanos() as f64 / n as f64;
+        v.close(f).unwrap();
+        dt
+    }
+    // Best of five, to leave the machine's noise out.
+    let best = |l: Option<&str>| (0..5).map(|_| run(l)).fold(f64::MAX, f64::min);
+    let none = best(None);
+    let up3 = best(Some("a"));
+    let near = best(Some("a/b/c"));
+    eprintln!(
+        "growing write of one block, ns per request: no limit {none:.0}, limit on a (3 levels up) {up3:.0} \
+         (+{:.0}), limit on the parent {near:.0}",
+        up3 - none
+    );
+}
+
 zoraya_test_alloc::cap_memory!();

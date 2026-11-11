@@ -301,6 +301,21 @@ over the tree on a 64 KiB process stack, and a block passed by value through tha
 - **Mount.** Picks the highest generation with a valid root record copy; refuses an invalid tree root of that
   generation; mounts read-only and reports corruption if the generations in the ring are not consecutive; frees the
   orphan list (and commits) on a read-write mount.
+- **Storage limits (format 2, [ADR-0265](adr/0265-storage-limits.md), [ADR-0290](adr/0290-what-the-engine-charges.md)
+  proposed).** A directory may carry a limit record `{ limit, used }` (`K_LIMIT`), and every file and link a link to the
+  directory it is charged to (`K_FPARENT`). `used` counts, below the directory, one 4 KiB block per object and a
+  file's or link's size in blocks; it is kept by every request that creates, grows, shrinks, removes or renames, and
+  is part of the copy-on-write tree, so a crash leaves it true. A growing request walks the directories up to the
+  root and fails with `OverQuota` if any limited one would pass its limit, changing nothing; a shrinking request is
+  never refused. A file renamed across a boundary moves its charge; a directory refuses with `CrossesLimit`. An
+  unnamed file is charged where it was made, and a file unlinked while open keeps its charge until freed.
+  `set_limit(name, bytes | none)` needs `WRITE` on the parent's connection; `get_limit` reports the record. A new
+  limit on a directory with content scans its subtree in one request. `zoraya_fs::check` recomputes every `used`.
+  A growing one-block write costs 111 ns more (7.0 us against 6.9 us, release build, in-memory device) with a limit
+  three levels above the file; `zoraya-mkfs --limit PATH=SIZE` limits a directory of an image.
+  The file protocol has `OVER_QUOTA` (16) and `CROSSES_LIMIT` (17), `SetLimit` (38) and `GetLimit` (39); `libposix` maps
+  them to `EDQUOT` and `EXDEV`. Known limitation: no program sets a limit yet except through the protocol and the
+  image tool (the room keeper of Q6a will), and `stat`/`files` do not show it yet.
 - **Requests.** Open (with exclusive create and truncate), mkdir, symlink (inert link objects), unlink, rmdir,
   rename (replace, no-replace, exchange), set attributes, set size, write (at most 1 MiB), read, stat, readdir,
   readlink, unnamed create and publish, close, sync. Paths are relative, components validated (ADR-0013); a link

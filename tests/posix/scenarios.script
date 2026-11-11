@@ -94,13 +94,12 @@
 # directory does not cross the limit's boundary (EXDEV), and a write outside
 # the limit still works.
 > t_posix diskfill /limited /home\r
-< t_posix: diskfill wrote 15 blocks before Disk quota exceeded
+< t_posix: diskfill wrote 15 blocks before Quota exceeded
 < t_posix: diskfill passed
 < PSURF>
 > echo outside > /home/outside && cat /home/outside && ls /limited; echo done\r
 < outside
 < done
-< PSURF>
 < PSURF>
 > exit\r
 < BROKER-STATS

@@ -399,3 +399,46 @@ decides the randomness source and runs it on the target. No dependency row was a
 - Open for N2: `netd` must create the object `CONTIGUOUS`; supervise `ethd` (`init` does not); the
   kill-with-frames-in-flight test; INV-0230-1/-3 checks; `fuzz/Cargo.lock` is not updated (the fuzz workspace was not
   built; cargo regenerates it on the first run).
+
+## Q5: storage limits (branch `work/q5`, on `work/integ`)
+
+**Built.** `zoraya-fs` format version 2: a limit record `{ limit, used }` per directory (`K_LIMIT`) and a link from every
+file and link to the directory it is charged to (`K_FPARENT`). `used` is kept by create, mkdir, symlink, write, `set_size`,
+truncate, unlink, rmdir, rename (replace, no-replace, exchange), `create_unnamed` and `publish`; checked against every
+limited ancestor; `OverQuota` rolls the request back. A directory crossing a boundary is `CrossesLimit`. `Volume::set_limit`
+and `limit_of`; `fsck` recomputes every `used` and `repair` rewrites it. File protocol: statuses `OVER_QUOTA` (16),
+`CROSSES_LIMIT` (17) (`Code` widened to `Below<18>`; the old bound dropped any reply with them), requests `SetLimit` (38,
+needs `WRITE`) and `GetLimit` (39); `zoraya-fsclient` `set_limit` and `limit`; `libposix` `EDQUOT` and `EXDEV`;
+`zoraya-command` words. Test-only setter: `zoraya-mkfs --limit PATH=SIZE`; the POSIX images carry `/limited` at 64K
+(`POSIX_LIMITED`). The ports have no `dd`, so `t_posix diskfill DIR OUT` does what it does (scenarios.script).
+
+**Decisions** (ADR-0290, proposed; the numbers 0290 to 0299 are Q5's, N2 may take 0281): a parent link for files; unnamed files
+charged where made and `publish` moves the charge; a file unlinked while open keeps its charge until freed, and when its
+directory is removed it is charged to the parent; link = 1 block + target in blocks; a directory is one block; a limit
+below `used` stops growth only; a new limit scans the subtree in one request (stalls the volume for a very large tree).
+Recommendation: accept ADR-0290 as written.
+
+**Invariant delta.** INV-0265-1, -2: checked (`make test-unit`, `crates/zoraya-fs/tests/limits.rs`; the protocol half in
+`zoraya-fsclient`). INV-0265-3 (a room's directory) stays for Q6a; the `dd` half runs now in `make test-posix`
+(scenarios). New INV-0290-1 (checked by `fsck` on every crash image). Counts 503 -> 504.
+
+**Tests run (this session).** `cargo test` of zoraya-fs (all, including `limits.rs`: 803 refusals and 35 `CrossesLimit` in the
+random run; 2162 crash images each `fsck`-clean with the counters equal to an API recomputation), zoraya-fsclient,
+zoraya-fs-service, zoraya-posix, zoraya-proto-file, zoraya-mkfs: pass. `make check`: pass. `make test-posix` with
+`POSIX_SCRIPTS=tests/posix/scenarios.script`: PASS (81 steps; `diskfill wrote 15 blocks before Quota exceeded`, a write
+outside works, fsck clean). `tools/test-par.sh test-files test-crash test-qemu test-libposix` (HVF, one lane): all ok. Not run:
+the full `make test-posix`, test-gui, test-boot, test-tour-gui, test-net, mutation runs (the full CI does).
+
+**Measurement.** A growing one-block write to a file in `a/b/c`, release build, in-memory device, best of five over 4000
+writes: 6931 ns with no limit, 7041 ns with a limit on `a` (+111 ns, 1.6%), 7023 ns with the limit on the parent. Run it:
+`cargo test --release -p zoraya-fs --test limits -- --ignored --nocapture`. Not measured under QEMU.
+
+**Open items.** Nothing sets limits for a person yet (Q6a); `stat`/`files` do not show the record (the protocol has
+`GetLimit`); the format change makes version 1 volumes unreadable (rebuild with `zoraya-mkfs`); `tools/test-map.txt` lines
+added for `tools/zoraya-mkfs/` and for the proto, fs and fs-service crates (test-posix); `Makefile` and the testkit are not
+mapped so `make test-changed` runs every step.
+
+**Handoff / by hand.** `zoraya-mkfs --size 64M --limit room=64K --from DIR img`; `make test-posix POSIX_SCRIPTS=tests/posix/scenarios.script`.
+Review: `crates/zoraya-fs/src/volume.rs` (the "Storage limits" block, `unname`, `delete_object`, rename, `resize`, `write`),
+`check.rs`, `format.rs`, `tests/limits.rs`, `crates/zoraya-proto-file/src/lib.rs`, `crates/zoraya-fs-service/src/lib.rs`,
+`tests/posix/t_posix.c` (`diskfill`), docs/adr/0290. Model use: Sonnet only; no Opus review of the engine was run.
