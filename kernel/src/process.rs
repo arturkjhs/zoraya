@@ -771,7 +771,7 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
     // The reserve (ADR-0261 point 10): everything `init` starts is bounded by
-    // the frames free now less 1/16 for the heap's overhead and the fixed
+    // the frames free now less 1/32 for the heap's overhead and the fixed
     // allocations, so that the kernel always has room to refuse with.
     let free = crate::memory::frames::stats().free * zoraya_pmm::FRAME_SIZE;
     job.set_limits(zoraya_abi::quota::JobLimits {

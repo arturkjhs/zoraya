@@ -176,3 +176,23 @@ kill that refunds a subtree's holdings in random order.
 - **`unsafe`.** The one new block, in the heap test, has a true SAFETY comment. `zoraya-charge` forbids `unsafe`.
 - **`check-untrusted-gate`.** It does fail when a marker is removed while stage-1 tests are pending, apart from
   finding 7.
+
+## Dispositions (Sonnet main session)
+
+- **Error 1** (leaked event source on a refused spawn): fixed in `assemble`: the process is charged before
+  `new_source`. A test of `EVENTS.live()` around a refused spawn is open (Q2 writes the refused-`spawn` half of
+  INV-0261-2).
+- **Error 2** (`memory_map`/`device_map` turned `Quota` into `NoMemory`): fixed, both return `OverQuota`. The `t_quota`
+  case that maps a foreign object at the limit is open for Q2.
+- **Warning 3** (`init` holds `LIMIT` on its own job): accepted for stage 8. `init` is trusted; untrusted rooms hold no
+  handle on it, and the keeper (Q6a) hands out jobs without `LIMIT` (INV-0269-2). Recorded for Q7's review.
+- **Warning 4** (panel launches outside the session job; `session()` falls back to `init`'s job): open. The panel's
+  launches move under the session in Q6a with the keeper; the fallback should fail loudly then.
+- **Warning 5** (`Paid` dropped under `EVENTS`): an unstated invariant (a subscription's holder process outlives it).
+  Stays on Q7's list.
+- **Warnings 6, 7** (lint reach; `checked:` rows with open halves): accepted for Q1. The lint's reach grows with each
+  part; Q7 re-reads the rows whose halves are open before the gate can open (stage 1 stays `pending` until then).
+- **Warning 8** (zombies keep the table charge): accepted; it is the cause of the thin margin in the 256 MiB GUI test
+  and goes to the architect (report, Q1 decisions).
+- **Notes:** the stale 1/16 comment is fixed; the rest (single-CPU `LAST_REFUSED`, `held` counting the job's own record,
+  snapshot charging page by page, the model test without kills) are recorded in the report.
