@@ -305,7 +305,9 @@ zoraya_test_alloc::cap_memory!();
 fn block_size_is_what_live_counts() {
     let arena = Arena::new(8 << 20, 0);
     let mut heap = Heap::new(arena);
-    for size in [1usize, 15, 16, 17, 100, 1024, 1025, 2048, 2049, 4096, 4097, 10_000] {
+    for size in [
+        1usize, 15, 16, 17, 100, 1024, 1025, 2048, 2049, 4096, 4097, 10_000,
+    ] {
         for align in [1usize, 8, 64] {
             let layout = Layout::from_size_align(size, align).unwrap();
             let before = heap.stats().live;

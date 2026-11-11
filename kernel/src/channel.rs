@@ -8,7 +8,8 @@ use zoraya_events::SourceId;
 
 use zoraya_abi::{Status, spawn::Transfer};
 
-use crate::memory::heap::{try_arc, try_box};
+use crate::charge::{self, Paid};
+use crate::job::Job;
 use crate::object::{self, Entry, Object};
 use crate::port;
 use crate::sync::SpinLock;
@@ -16,14 +17,19 @@ use crate::sync::SpinLock;
 pub use zoraya_channel::{MAX_MESSAGE, MAX_MESSAGE_HANDLES};
 
 pub struct Pair {
-    channel: SpinLock<Channel<Entry>>,
+    channel: SpinLock<Channel<Entry, Paid>>,
     sources: [SourceId; 2],
+    /// The creator pays for the pair, the queues' slots and the two sources.
+    _paid: Paid,
     /// What each end's source shows, so that only changes reach ports.
     shown: SpinLock<[u32; 2]>,
 }
 
 impl Pair {
-    pub fn new() -> Result<Arc<Pair>, Status> {
+    /// A pair paid for by `payer` (`None`: the kernel's).
+    pub fn new(payer: Option<&Arc<Job>>) -> Result<Arc<Pair>, Status> {
+        let mut paid = Paid::new(payer);
+        paid.kernel(charge::arc_cost::<Pair>() + QUEUE_SLOTS + 2 * charge::SOURCE_COST)?;
         let channel = Channel::new();
         let first = port::new_source(channel.signals(0))?;
         let second = match port::new_source(channel.signals(1)) {
@@ -34,13 +40,14 @@ impl Pair {
             }
         };
         let shown = [channel.signals(0), channel.signals(1)];
-        // On failure the value was dropped, and its `Drop` freed the sources.
-        try_arc(Pair {
+        // On failure the value was dropped, and its `Drop` freed the sources
+        // and gave the charge back.
+        charge::prepaid_arc(Pair {
             channel: SpinLock::new(channel),
             sources: [first, second],
+            _paid: paid,
             shown: SpinLock::new(shown),
         })
-        .map_err(|_| Status::NoMemory)
     }
 
     pub fn source(&self, end: usize) -> SourceId {
@@ -48,7 +55,7 @@ impl Pair {
     }
 
     /// Brings both ends' signals up to date.
-    fn show(&self, channel: &Channel<Entry>) {
+    fn show(&self, channel: &Channel<Entry, Paid>) {
         let mut shown = self.shown.lock();
         for end in 0..2 {
             let bits = channel.signals(end);
@@ -80,7 +87,7 @@ impl Pair {
     }
 
     /// After [`Pair::prepare`], with nothing between.
-    pub fn write(&self, end: usize, message: alloc::boxed::Box<Message<Entry>>) {
+    pub fn write(&self, end: usize, message: alloc::boxed::Box<Message<Entry, Paid>>) {
         let mut channel = self.channel.lock();
         channel.write(end, message);
         self.show(&channel);
@@ -105,7 +112,7 @@ impl Pair {
         f(channel.front_bytes(end).ok_or(Status::WouldBlock)?)
     }
 
-    pub fn read(&self, end: usize) -> Option<alloc::boxed::Box<Message<Entry>>> {
+    pub fn read(&self, end: usize) -> Option<alloc::boxed::Box<Message<Entry, Paid>>> {
         let mut channel = self.channel.lock();
         let message = channel.read(end);
         self.show(&channel);
@@ -120,12 +127,25 @@ impl Drop for Pair {
     }
 }
 
-/// A message's bytes and handles, boxed.
+/// Queue slots of a pair at their most: `MAX_QUEUED` pointers a direction.
+const QUEUE_SLOTS: u64 = 2 * zoraya_channel::MAX_QUEUED as u64 * 8;
+
+/// What a queued message costs its writer: the box, the bytes and the room for
+/// `entries` handles (ADR-0261 point 7).
+pub fn message_cost(bytes: usize, entries: usize) -> u64 {
+    charge::box_cost::<Message<Entry, Paid>>()
+        + charge::vec_cost::<u8>(bytes)
+        + charge::vec_cost::<Entry>(entries)
+}
+
+/// A message's bytes and handles, boxed, paid by `paid` (charged by the
+/// caller with [`message_cost`] for the vectors as they are).
 pub fn message(
     bytes: alloc::vec::Vec<u8>,
     handles: alloc::vec::Vec<Entry>,
-) -> Result<alloc::boxed::Box<Message<Entry>>, Status> {
-    try_box(Message::new(bytes, handles)).map_err(|_| Status::NoMemory)
+    paid: Paid,
+) -> Result<alloc::boxed::Box<Message<Entry, Paid>>, Status> {
+    charge::prepaid_box(Message::new(bytes, handles, paid))
 }
 
 /// How a listed handle's table entry reaches a message.
@@ -157,7 +177,7 @@ pub fn close(pair: &Pair, end: usize) {
     }
 }
 
-fn close_one(pair: &Pair, end: usize) -> Pile<Entry> {
+fn close_one(pair: &Pair, end: usize) -> Pile<Entry, Paid> {
     let mut channel = pair.channel.lock();
     let pile = channel.close(end);
     pair.show(&channel);

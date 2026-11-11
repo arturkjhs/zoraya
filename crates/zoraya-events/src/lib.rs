@@ -259,7 +259,8 @@ impl<W, P> Events<W, P> {
     fn remove_matching(&mut self, source: SourceId, owner: Option<u64>) {
         self.sweeps += 1;
         let sweep = self.sweeps;
-        let matches = |s: &Subscription<P>| s.source == source.0 && owner.is_none_or(|o| s.owner == o);
+        let matches =
+            |s: &Subscription<P>| s.source == source.0 && owner.is_none_or(|o| s.owner == o);
         for i in 0..self.source(source.0).subscriptions.len() {
             let s = self.source(source.0).subscriptions[i];
             let subscription = self.subscription(s);

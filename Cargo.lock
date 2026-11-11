@@ -267,6 +267,7 @@ version = "0.1.0"
 dependencies = [
  "zoraya-abi",
  "zoraya-channel",
+ "zoraya-charge",
  "zoraya-console",
  "zoraya-dtb",
  "zoraya-elf",

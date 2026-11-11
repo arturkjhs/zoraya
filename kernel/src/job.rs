@@ -6,11 +6,15 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
+use zoraya_abi::quota::{FieldUsage, JobLimits, JobUsage};
 use zoraya_abi::{ExitReason, ExitRecord, RequestKind, Status, job_signals};
+use zoraya_charge::{Counters, Field, Kind};
 use zoraya_events::SourceId;
 
-use crate::memory::heap::try_arc;
+use crate::charge;
+use crate::memory::heap::uncharged_arc;
 use crate::port;
 use crate::process::Process;
 use crate::sync::SpinLock;
@@ -42,6 +46,10 @@ pub struct Job {
     posix: bool,
     source: SourceId,
     state: SpinLock<State>,
+    /// The job's counters (ADR-0261), under [`charge`]'s walk.
+    acct: SpinLock<Counters>,
+    /// What the job's own record was charged, given back when it drops.
+    record: AtomicU64,
 }
 
 impl Job {
@@ -54,7 +62,7 @@ impl Job {
             job_signals::TERMINATED
         };
         let source = port::new_source(bits)?;
-        let job = try_arc(Job {
+        let job = uncharged_arc(Job {
             parent,
             depth,
             posix,
@@ -66,9 +74,22 @@ impl Job {
                 closed: false,
                 suspended,
             }),
+            acct: SpinLock::new(Counters::new()),
+            record: AtomicU64::new(0),
         });
         // On failure the value was dropped, and its `Drop` freed the source.
         job.map_err(|_| Status::NoMemory)
+    }
+
+    /// Makes the job pay for its own record, and so its ancestors too
+    /// (ADR-0261 point 6). The root has no payer.
+    fn charge_record(job: Arc<Job>) -> Result<Arc<Job>, Status> {
+        if job.parent.is_some() {
+            let cost = charge::arc_cost::<Job>();
+            charge::charge_memory(&job, cost, Kind::Kernel)?;
+            job.record.store(cost, Ordering::Relaxed);
+        }
+        Ok(job)
     }
 
     /// The job of processes the kernel starts.
@@ -85,7 +106,7 @@ impl Job {
         if parent.depth + 1 >= MAX_DEPTH {
             return Err(Status::LimitReached);
         }
-        let job = Job::new(Some(parent.clone()), posix || parent.posix)?;
+        let job = Job::charge_record(Job::new(Some(parent.clone()), posix || parent.posix)?)?;
         let _tree = TREE.lock();
         let mut state = parent.state.lock();
         if state.closed {
@@ -102,6 +123,56 @@ impl Job {
 
     pub fn source(&self) -> SourceId {
         self.source
+    }
+
+    pub(crate) fn acct(&self) -> &SpinLock<Counters> {
+        &self.acct
+    }
+
+    pub(crate) fn parent_ref(&self) -> Option<&Job> {
+        self.parent.as_deref()
+    }
+
+    /// `job_set_limits` (ADR-0261 points 1 to 3). `cpu` waits for ADR-0264.
+    pub fn set_limits(&self, limits: JobLimits) -> Result<(), Status> {
+        if limits.cpu.is_some() {
+            return Err(Status::NotSupported);
+        }
+        charge::set_limits(self, limits.memory, limits.processes)
+    }
+
+    /// `job_get_usage` (ADR-0261 point 11). With `clear`, also clears
+    /// `OVER_QUOTA`.
+    pub fn usage(&self, clear: bool) -> JobUsage {
+        if clear {
+            port::clear_signals(self.source, job_signals::OVER_QUOTA);
+        }
+        let counters = charge::counters(self);
+        let field = |f: Field| {
+            let c = counters.get(f);
+            FieldUsage {
+                limit: c.limit,
+                used: c.used,
+                peak: c.peak,
+                refused: c.refused,
+            }
+        };
+        let (memory, processes) = (field(Field::Memory), field(Field::Processes));
+        let user = counters.get(Field::User).used;
+        let state = self.state.lock();
+        // Charges kept alive from outside after the last process ended.
+        let held = if state.closed && state.live == 0 {
+            memory.used
+        } else {
+            0
+        };
+        JobUsage {
+            memory,
+            processes,
+            user,
+            kernel: memory.used.saturating_sub(user),
+            held,
+        }
     }
 
     /// The `posix` policy bit.
@@ -269,6 +340,10 @@ impl Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
+        let record = self.record.load(Ordering::Relaxed);
+        if record != 0 {
+            charge::refund_memory(self, record, Kind::Kernel);
+        }
         if let Some(parent) = &self.parent {
             let this: *const Job = self;
             parent

@@ -3,7 +3,7 @@
 //!
 //! Infallible allocation (`Box::new`, `Vec::push`) panics when memory runs
 //! out. It is allowed only at boot and at bounded call sites no user action
-//! can influence. Anything a system call can reach uses [`try_box`] and
+//! can influence. Anything a system call can reach uses [`uncharged_box`] and
 //! `Vec::try_reserve` and returns the failure.
 
 use alloc::alloc::{alloc, dealloc};
@@ -92,7 +92,7 @@ static GLOBAL: KernelHeap = KernelHeap;
 pub struct OutOfMemory;
 
 /// `Box::new` that returns the failure. On failure `value` is dropped.
-pub fn try_box<T>(value: T) -> Result<Box<T>, OutOfMemory> {
+pub fn uncharged_box<T>(value: T) -> Result<Box<T>, OutOfMemory> {
     let layout = Layout::new::<T>();
     if layout.size() == 0 {
         return Ok(Box::new(value));
@@ -114,7 +114,7 @@ pub fn try_box<T>(value: T) -> Result<Box<T>, OutOfMemory> {
 /// (ADR-0041). It takes and frees a block of the size `Arc` will ask for: with
 /// one CPU, in code that nothing preempts, with the block just freed, the
 /// allocation inside `Arc::new` then finds it. SMP must replace this.
-pub fn try_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
+pub fn uncharged_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
     #[cfg(feature = "qemu-test")]
     if FAIL_NEXT_ARC.swap(false, core::sync::atomic::Ordering::Relaxed) {
         return Err(OutOfMemory);
@@ -129,7 +129,7 @@ pub fn try_arc<T>(value: T) -> Result<Arc<T>, OutOfMemory> {
     arc.ok_or(OutOfMemory)
 }
 
-/// Makes the next `try_arc` fail, as an exhausted heap would.
+/// Makes the next `uncharged_arc` fail, as an exhausted heap would.
 #[cfg(feature = "qemu-test")]
 pub static FAIL_NEXT_ARC: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -147,6 +147,11 @@ pub fn can_allocate(layout: Layout) -> bool {
     // SAFETY: allocated just above with this layout.
     unsafe { dealloc(block, layout) };
     true
+}
+
+/// The bytes the heap counts as live for a block of `layout`.
+pub fn block_size(layout: Layout) -> usize {
+    zoraya_heap::block_size(layout)
 }
 
 /// Byte counts.

@@ -6,8 +6,9 @@ use alloc::vec::Vec;
 
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
-use super::heap::try_arc;
 use super::{frames, phys_to_virt};
+use crate::charge::{self, Paid};
+use crate::job::Job;
 use zoraya_abi::Status;
 
 enum Frames {
@@ -19,27 +20,50 @@ enum Frames {
 
 pub struct MemoryObject {
     frames: Frames,
+    /// Its creator pays for its frames and its record for as long as it lives,
+    /// however many jobs map or hold it (ADR-0261 point 8).
+    _paid: Paid,
 }
 
 impl MemoryObject {
     /// Commits `size` bytes, zeroed, or fails having changed nothing
-    /// (INV-0051-1). `size` must be a whole number of pages, not 0.
-    pub fn new(size: u64, contiguous: bool) -> Result<Arc<MemoryObject>, Status> {
-        MemoryObject::make(size, contiguous, true)
+    /// (INV-0051-1). `size` must be a whole number of pages, not 0. `payer`
+    /// is the creating job: `None` for the kernel's own objects.
+    pub fn new(
+        size: u64,
+        contiguous: bool,
+        payer: Option<&Arc<Job>>,
+    ) -> Result<Arc<MemoryObject>, Status> {
+        MemoryObject::make(size, contiguous, true, payer)
     }
 
     /// As [`MemoryObject::new`], scattered and not zeroed: for a copy that
     /// writes every byte before anything can reach the object (a snapshot's
     /// mapped objects, ADR-0102 item 2). The caller must do so.
-    pub fn new_for_copy(size: u64) -> Result<Arc<MemoryObject>, Status> {
-        MemoryObject::make(size, false, false)
+    pub fn new_for_copy(size: u64, payer: Option<&Arc<Job>>) -> Result<Arc<MemoryObject>, Status> {
+        MemoryObject::make(size, false, false, payer)
     }
 
-    fn make(size: u64, contiguous: bool, zeroed: bool) -> Result<Arc<MemoryObject>, Status> {
+    fn make(
+        size: u64,
+        contiguous: bool,
+        zeroed: bool,
+        payer: Option<&Arc<Job>>,
+    ) -> Result<Arc<MemoryObject>, Status> {
         if size == 0 || !size.is_multiple_of(FRAME_SIZE) {
             return Err(Status::InvalidArgument);
         }
         let count = size / FRAME_SIZE;
+        // The charge comes first: a refusal allocates nothing. The frames, then
+        // the record and the list of frames a scattered object keeps.
+        let mut paid = Paid::new(payer);
+        paid.user(size)?;
+        let list = if contiguous {
+            0
+        } else {
+            charge::vec_cost::<Frame>(count as usize)
+        };
+        paid.kernel(charge::arc_cost::<MemoryObject>().saturating_add(list))?;
         let frames = if contiguous {
             let first = frames::alloc_contig_zeroed(count).map_err(|_| Status::NoMemory)?;
             Frames::Run { first, count }
@@ -66,8 +90,12 @@ impl MemoryObject {
             drop(object);
             Frames::Scattered(list)
         };
-        // On failure the value was dropped, and its `Drop` freed the frames.
-        try_arc(MemoryObject { frames }).map_err(|_| Status::NoMemory)
+        // On failure the value was dropped, and its `Drop` freed the frames
+        // and gave the charge back.
+        charge::prepaid_arc(MemoryObject {
+            frames,
+            _paid: paid,
+        })
     }
 
     pub fn size(&self) -> u64 {

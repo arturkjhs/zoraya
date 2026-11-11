@@ -774,14 +774,20 @@ fn fallible_allocation_returns_failure() {
             .is_err()
     );
     assert_eq!((heap::stats(), frames::stats()), before, "no trace of it");
-    assert_eq!(*heap::try_box(7u32).expect("small block"), 7);
+    assert_eq!(*heap::uncharged_box(7u32).expect("small block"), 7);
     // Heap addresses are near the top of the address space, so rounding up to
     // this alignment overflows; it must fail like any other request.
     let huge_align = Layout::from_size_align(8192, 1 << 47).expect("layout");
     // SAFETY: the size is not zero; a block would be freed below.
     let block = unsafe { alloc::alloc::alloc(huge_align) };
     assert!(block.is_null(), "no span has that alignment");
-    assert_eq!(*heap::try_box(()).map(|_| 5).as_ref().expect("no block"), 5);
+    assert_eq!(
+        *heap::uncharged_box(())
+            .map(|_| 5)
+            .as_ref()
+            .expect("no block"),
+        5
+    );
 }
 
 /// Drains the allocator, links every frame through the direct map, and checks
@@ -1242,7 +1248,7 @@ fn images_from_a_process() {
     let (_, file) = ramdisk::find("hello").expect("hello");
     let size = (PAGE_SIZE + file.len() as u64).next_multiple_of(PAGE_SIZE);
     twice_with_nothing_left(|| {
-        let object = MemoryObject::new(size, false).expect("memory");
+        let object = MemoryObject::new(size, false, None).expect("memory");
         assert!(object.write(0, &(file.len() as u64).to_le_bytes()));
         assert!(object.write(8, &size.to_le_bytes()));
         assert!(object.write(PAGE_SIZE, file));
@@ -1305,7 +1311,7 @@ fn a_device_with_no_transport_keeps_its_quarantine() {
     let window = memory::paging::map_device(info.uart.base, 4096) as usize;
     let device = crate::device::without_transport(info.uart.base, window);
     let frames_before = frames::stats().free;
-    let memory = crate::memory::object::MemoryObject::new(4096, false).expect("memory");
+    let memory = crate::memory::object::MemoryObject::new(4096, false, None).expect("memory");
     let pin = crate::device::Pin::new(device.clone(), memory).expect("pin");
     assert_eq!(
         device.release_quarantine(),
@@ -1802,14 +1808,14 @@ fn an_ended_process_asserts_only_terminated() {
     assert_eq!(bits, process_signals::TERMINATED);
 }
 
-/// R-01 of the TASK-09 review: a failing `try_arc` drops the object, whose
+/// R-01 of the TASK-09 review: a failing `uncharged_arc` drops the object, whose
 /// `Drop` is the only free.
 fn failed_allocation_frees_each_object_once() {
     use core::sync::atomic::Ordering::Relaxed;
     let before = port::EVENTS.lock().live();
     let fail = || heap::FAIL_NEXT_ARC.store(true, Relaxed);
     fail();
-    assert!(port::Port::new().is_err());
+    assert!(port::Port::new(None).is_err());
     fail();
     assert!(Job::create(&root(), false).is_err());
     fail();
@@ -1827,7 +1833,7 @@ fn failed_allocation_frees_each_object_once() {
     assert!(result.is_err());
     assert_eq!(port::EVENTS.lock().live(), before);
     // And the id table still works.
-    let port = port::Port::new().expect("port");
+    let port = port::Port::new(None).expect("port");
     port.close();
 }
 
@@ -1949,13 +1955,13 @@ fn port_wait_ignores_idle_subscriptions() {
     assert!(record.code <= PORT_RATIO_LIMIT, "ratio {}%", record.code);
 }
 
-/// ADR-0041: `try_arc` rests on this, so that it fails where `Arc::new` would
-/// panic. A value too large for the machine cannot be passed to `try_arc`
+/// ADR-0041: `uncharged_arc` rests on this, so that it fails where `Arc::new` would
+/// panic. A value too large for the machine cannot be passed to `uncharged_arc`
 /// itself: it would not fit on a stack.
 fn try_arc_reports_failure() {
     assert!(!heap::can_allocate(Layout::new::<[u8; 1 << 40]>()));
     assert!(heap::can_allocate(Layout::new::<u64>()));
-    assert_eq!(heap::try_arc(7u64).map(|a| *a), Ok(7));
+    assert_eq!(heap::uncharged_arc(7u64).map(|a| *a), Ok(7));
 }
 
 /// The test-only system call that makes the kernel overflow a thread's stack.

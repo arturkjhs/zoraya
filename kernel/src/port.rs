@@ -7,12 +7,13 @@ use zoraya_abi::{Mode, Packet, Status};
 use zoraya_events::{Error, Events, PortId, SourceId};
 use zoraya_time::Deadline;
 
-use crate::memory::heap::try_arc;
+use crate::charge::{self, Paid};
+use crate::job::Job;
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
 use crate::{arch, timer};
 
-pub static EVENTS: SpinLock<Events<Arc<Thread>>> = SpinLock::new(Events::new());
+pub static EVENTS: SpinLock<Events<Arc<Thread>, Paid>> = SpinLock::new(Events::new());
 
 fn status(e: Error) -> Status {
     match e {
@@ -48,13 +49,23 @@ pub fn clear_signals(source: SourceId, bits: u32) {
 
 pub struct Port {
     id: PortId,
+    /// The creator pays for the port and the packets it can hold.
+    _paid: Paid,
 }
 
+/// What a port costs beside its record: its entry in the event tables, and the
+/// user packets it may hold at most (`MAX_USER_PACKETS`, 24 bytes each).
+const PORT_EXTRA: u64 = 128 + zoraya_events::MAX_USER_PACKETS as u64 * 24;
+
 impl Port {
-    pub fn new() -> Result<Arc<Port>, Status> {
+    /// A port paid for by `payer` (`None`: the kernel's).
+    pub fn new(payer: Option<&Arc<Job>>) -> Result<Arc<Port>, Status> {
+        let mut paid = Paid::new(payer);
+        paid.kernel(charge::arc_cost::<Port>() + PORT_EXTRA)?;
         let id = EVENTS.lock().new_port().map_err(status)?;
-        // On failure the value was dropped, and its `Drop` freed the port.
-        try_arc(Port { id }).map_err(|_| Status::NoMemory)
+        // On failure the value was dropped, and its `Drop` freed the port and
+        // gave the charge back.
+        charge::prepaid_arc(Port { id, _paid: paid })
     }
 
     /// Ends all waits and subscriptions (ADR-0006 rule 5).
@@ -69,10 +80,11 @@ impl Port {
         key: u64,
         mode: Mode,
         owner: u64,
+        paid: Paid,
     ) -> Result<(), Status> {
         EVENTS
             .lock()
-            .subscribe(self.id, source, mask, key, mode, owner)
+            .subscribe_paid(self.id, source, mask, key, mode, owner, paid)
             .map_err(status)
     }
 
