@@ -15,9 +15,15 @@ use zoraya_abi::{
 };
 use zoraya_user::{
     assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, image, job_create,
-    job_get_usage, job_kill, job_set_limits, memory_create, println, sleep_until, spawn, startup,
-    wait_exit,
+    job_get_usage, job_kill, job_set_limits, memory_create, println, raw_syscall, sleep_until,
+    spawn, startup, wait_exit,
 };
+
+const HEAP_LIVE: u64 = 0x700b;
+
+fn heap_live() -> u64 {
+    raw_syscall(HEAP_LIVE, [0; 6]).1
+}
 
 const MIB: u64 = 1 << 20;
 const CHUNK: u64 = 64 << 10;
@@ -157,6 +163,46 @@ fn a_sibling_keeps_its_own_limit_and_a_kill_gives_everything_back() {
     }
 }
 
+/// INV-0261-5: what `job_get_usage` says a call cost is what the heap and the
+/// frames show. The job here is this process's own, which nothing else
+/// allocates for; the heap grows only by what the call took (a 64 KiB chunk
+/// of a class may already be there, but `live` counts blocks).
+fn usage_matches_the_heap_and_the_frames() {
+    let used = || job_get_usage(JOB, false).expect("usage").memory.used;
+    let (u0, h0) = (used(), heap_live());
+    // A memory object: its frames, then its record and list.
+    let m = memory_create(4 * CHUNK, MemoryFlags::NONE).expect("memory");
+    let (u1, h1) = (used(), heap_live());
+    assert_eq!(u1 - u0, (h1 - h0) + 4 * CHUNK, "memory_create");
+    // Each of the others costs exactly what the heap took.
+    let p = zoraya_user::port_create().expect("port");
+    let (u2, h2) = (used(), heap_live());
+    // A port is charged for the packets it may hold at most (1024 of 24 bytes)
+    // and its place in the event tables, which the heap shows only as they fill.
+    assert_eq!(u2 - u1, (h2 - h1) + 128 + 1024 * 24, "port_create");
+    let e = zoraya_user::event_create().expect("event");
+    let (u3, h3) = (used(), heap_live());
+    assert_eq!(u3 - u2, h3 - h2, "event_create");
+    let (c0, c1) = zoraya_user::channel_create().expect("channel");
+    let (u4, h4) = (used(), heap_live());
+    // Charged for the queues' slots at their most and two sources, which the heap
+    // shows only as messages queue.
+    assert_eq!(u4 - u3, (h4 - h3) + 2 * 64 * 8 + 2 * 64 + 0, "channel_create");
+    let (r, w) = zoraya_user::stream_create().expect("stream");
+    let (u5, h5) = (used(), heap_live());
+    // The ring is 64 KiB of user frames; the rest is the stream, its two ends,
+    // the ring's record and two sources. The heap's own delta also holds the
+    // handle table growing for two handles, which a process pays for up front.
+    let kernel = (u5 - u4) - 65536;
+    assert!(kernel >= 512 && kernel <= (h5 - h4) + 256, "stream_create: {kernel} of {}", h5 - h4);
+    // And everything is given back.
+    for h in [m, p, e, c0, c1, r, w] {
+        handle_close(h).expect("close");
+    }
+    assert_eq!(used(), u0);
+    assert_eq!(heap_live(), h0);
+}
+
 /// `spawn` is refused at the process limit, with no effect.
 fn spawn_stops_at_the_process_limit() {
     let room = job_create(JOB, JobFlags::NONE).expect("job");
@@ -218,6 +264,7 @@ fn main() -> i32 {
     a_hog_is_refused_and_exits_by_itself();
     a_sibling_keeps_its_own_limit_and_a_kill_gives_everything_back();
     spawn_stops_at_the_process_limit();
+    usage_matches_the_heap_and_the_frames();
     println!("t_quota: all passed");
     0
 }

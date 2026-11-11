@@ -69,6 +69,40 @@ fn give(slot: u32, handle: Handle, rights: Rights) -> HandleEntry {
 /// backend, then the broker with the root connection, the terminal's
 /// control and first connections and the output stream's write end. `init`
 /// makes the stream and the channels and hands each end to its holder.
+/// The session job (ADR-0261 point 10, ADR-0266 point 4): everything the
+/// person launches is under it, with three quarters of `init`'s memory and 200
+/// of the 255 address space identifiers, so that the drivers and services keep
+/// the rest. The values are `[assumption]` until Q1's measurements.
+const SESSION_PROCESSES: u32 = 200;
+
+static SESSION: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// The session job; made on first use. If it cannot be made or limited,
+/// `init`'s own job stands in: nothing starts without a parent.
+fn session() -> Handle {
+    use core::sync::atomic::Ordering;
+    if let Some(h) = Handle::new(SESSION.load(Ordering::Relaxed)) {
+        return h;
+    }
+    let made = job_create(JOB, JobFlags::NONE).ok().and_then(|job| {
+        let own = zoraya_user::job_get_usage(JOB, false).ok()?.memory.limit;
+        let limits = zoraya_abi::quota::JobLimits {
+            memory: own.map(|m| m / 4 * 3),
+            processes: Some(SESSION_PROCESSES),
+            cpu: None,
+        };
+        zoraya_user::job_set_limits(job, &limits).ok()?;
+        Some(job)
+    });
+    match made {
+        Some(job) => {
+            SESSION.store(job.raw(), Ordering::Relaxed);
+            job
+        }
+        None => JOB,
+    }
+}
+
 struct Session {
     ttyd: (Handle, Handle),
     broker: (Handle, Handle),
@@ -79,7 +113,7 @@ fn start_session(root: &File, window: Option<Handle>) -> Option<Session> {
     let (out_read, out_write) = stream_create().ok()?;
     let (control_service, control_broker) = channel_create().ok()?;
     let (first_service, first_broker) = channel_create().ok()?;
-    let job = job_create(JOB, JobFlags::NONE).ok()?;
+    let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "ttyd").ok()?;
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, job, image);
@@ -103,7 +137,7 @@ fn start_session(root: &File, window: Option<Handle>) -> Option<Session> {
     let ttyd = spawn(&buffer[..length]).ok();
     let _ = handle_close(image);
     let ttyd = (job, ttyd?);
-    let job = job_create(JOB, JobFlags::POSIX).ok()?;
+    let job = job_create(session(), JobFlags::POSIX).ok()?;
     let image = directory_lookup(DIRECTORY, "broker").ok()?;
     let root = root.clone_as(ALL).ok()?;
     let mut buffer = [0; 512];
@@ -145,7 +179,7 @@ fn start_shell(
     terminal: Option<Handle>,
     broker: Option<&Beside>,
 ) -> Option<(Handle, Handle)> {
-    let job = job_create(JOB, JobFlags::NONE).ok()?;
+    let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, job, image);

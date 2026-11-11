@@ -174,3 +174,56 @@ fn the_rule_refuses_the_same_channel_and_a_full_end() {
     assert!(!may_travel(true, false));
     assert!(!may_travel(false, true));
 }
+
+/// What a writer pays for a queued message: counts live payers, so a payer that
+/// is not dropped when the message leaves the queue shows up (INV-0261-7).
+struct Payer(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl Payer {
+    fn new(live: &std::rc::Rc<std::cell::Cell<usize>>) -> Payer {
+        live.set(live.get() + 1);
+        Payer(live.clone())
+    }
+}
+
+impl Drop for Payer {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
+#[test]
+fn a_payer_lives_exactly_as_long_as_its_message_is_queued() {
+    let live = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut c: Channel<u32, Payer> = Channel::new();
+    for i in 0..5u8 {
+        c.prepare(0, 1).unwrap();
+        c.write(0, Box::new(Message::new(vec![i], vec![], Payer::new(&live))));
+    }
+    assert_eq!(live.get(), 5);
+    // Read: the reader takes the message, and its payer goes with it when the
+    // reader is done, not before.
+    let first = c.read(1).unwrap();
+    assert_eq!(live.get(), 5);
+    drop(first);
+    assert_eq!(live.get(), 4);
+    // Closing the reading end destroys the rest, payers with them.
+    let pile = c.close(1);
+    assert_eq!(live.get(), 4);
+    drop(pile);
+    assert_eq!(live.get(), 0);
+}
+
+#[test]
+fn a_refused_write_leaves_no_payer_in_the_queue() {
+    let live = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut c: Channel<u32, Payer> = Channel::new();
+    for _ in 0..MAX_QUEUED {
+        c.prepare(0, 1).unwrap();
+        c.write(0, Box::new(Message::new(vec![0], vec![], Payer::new(&live))));
+    }
+    assert_eq!(c.prepare(0, 1), Err(Refused::Full));
+    assert_eq!(live.get(), MAX_QUEUED);
+    drop(c);
+    assert_eq!(live.get(), 0);
+}
