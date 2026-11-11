@@ -216,6 +216,9 @@ fn a_kill_between_steps_leaves_nothing() {
     for role in [&b"create-loop"[..], b"snapshot-loop"] {
         let free = free_frames();
         let room = job_create(JOB, JobFlags::POSIX).expect("job");
+        // The room's own record is charged to it, so "nothing left" is the
+        // use it began with.
+        let base = job_get_usage(room, false).expect("usage").memory.used;
         let p = child(room, role).expect("spawn");
         nap(150);
         masked(true);
@@ -223,14 +226,15 @@ fn a_kill_between_steps_leaves_nothing() {
         let record = wait_exit(p);
         assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
         let mut tries = 0;
-        while (free_frames() != free || job_get_usage(room, false).expect("usage").memory.used != 0)
+        while (free_frames() != free
+            || job_get_usage(room, false).expect("usage").memory.used != base)
             && tries < 200
         {
             nap(10);
             tries += 1;
         }
         let usage = job_get_usage(room, false).expect("usage");
-        assert_eq!(usage.memory.used, 0, "{role:?}: the room's use");
+        assert_eq!(usage.memory.used, base, "{role:?}: the room's use");
         assert_eq!(usage.processes.used, 0, "{role:?}: the room's processes");
         assert_eq!(free_frames(), free, "{role:?}: frames");
         println!(

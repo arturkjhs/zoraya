@@ -368,6 +368,7 @@ fn mapping_a_foreign_object_at_the_limit_is_refused() {
     let program = image("t_quota");
     let mut e = Encoder::new(&mut buffer, room, program);
     e.handle(console_entry());
+    e.handle(zoraya_user::dup(JOB.slot(), room, JobObject::RIGHTS));
     e.handle(zoraya_user::dup(
         8,
         foreign,
@@ -377,12 +378,12 @@ fn mapping_a_foreign_object_at_the_limit_is_refused() {
     let length = e.finish().expect("room");
     let p = spawn(&buffer[..length]).expect("spawn");
     handle_close(program).expect("image");
-    // While the child sleeps, the room's limit becomes its use plus two
-    // pages: the page tables of an 8 MiB mapping do not fit. It reports in
+    // While the child sleeps, the room's limit becomes its use plus half a
+    // page: not even the first page table of an 8 MiB mapping fits. It reports in
     // its exit code.
     nap(150);
     let used = job_get_usage(room, false).expect("usage").memory.used;
-    job_set_limits(room, &limits(Some(used + 8192), None)).expect("narrower");
+    job_set_limits(room, &limits(Some(used + 2048), None)).expect("narrower");
     let record = wait_exit(p);
     assert_eq!(record.code, EXIT_AFTER_REFUSAL, "{record:?}");
     handle_close(p).expect("close");
