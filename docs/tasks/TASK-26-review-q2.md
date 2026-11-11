@@ -222,3 +222,30 @@ catch an overflow, but only as a panic.
   disk is Q5. `NoMemory` still maps to `ENOMEM` for `Call::Process`.
 - **`unsafe`.** The SAFETY comments in `snapshot_step` (copy and clean) and `steps.rs` (`isb`, counter reads) are
   true. `pause`'s is incomplete (finding 5).
+
+## Dispositions
+
+Commits are on `work/q2` after `a33dab1` (this review); see `git log --oneline a33dab1..`: "Q2 review 1-3" (kernel
+teardown, contiguous, `t_bound`), "Q2 review 1" (the unit fix), "Q2 review warnings", "test-map".
+
+1. fixed: `steps::before` counts the whole exit (handles, mappings, messages); the reaper's queue doubles; contiguous
+   runs over a step go to the reaper. `t_bound` has the 400-object and the 256-mapping/1024-handle exits and kills.
+   Open: a drop that cannot grow the queue (heap exhausted) still frees on the spot.
+2. fixed, with a remainder: capped at 4 MiB, zeroed and freed in steps, at most 17 help rounds. Open: the frame-map scan
+   for a run is one masked pass (about 250 us on the test guest) and the ADR-0051 right is not checked.
+3. fixed: the assertion is the INV-0270-1 bound (2 ms under HVF, scaled by a printed calibration elsewhere), with the
+   units of work asserted on every host. Measured under HVF: exit 95 to 353 us, `job_kill` 31 to 120 us.
+4. fixed: `mask_ended` moved to the end of `user_thread_start`.
+5. fixed in words: `pause`, `between`, `unmask_interrupts` and `sync::held` say the lock count is the caller's duty
+   and checked only in the test kernel; the ADR records that locks are not counted in the normal kernel.
+6. fixed: `hold_frames` drains before taking `HELD` and uses `frames::stats()`.
+7. fixed: the reaper yields after each emptied item.
+8. fixed: `fork` and `posix_spawn` read `last_refusal` first (`rt_errno_seen`).
+9. fixed: the kill round repeats until `between()` ended a call with `Cancelled` (test call `CANCELLED`).
+10. accepted as open questions: the deviations are stated plainly in ADR-0270; the row says the check is only in part
+    (adr-check allows only `checked:` or `not yet applicable`).
+11. fixed in words: the INV-0261-2 row says a page of heap and that a refusal part way through the copy is not tested.
+    Open: the test for it.
+12. open (accepted by ADR-0270 "briefly"). 13. open. 14. open (user spaces are in the lower half, pages mapped one by
+    one). 15. open. 16. open. 17. open (the guard and canary catch an overflow).
+18. fixed: the duplicate line is removed and `crates/zoraya-rt/` has a line in `tools/test-map.txt`.

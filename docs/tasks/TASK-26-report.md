@@ -157,9 +157,48 @@ outside the limited job ended in under 1 ms. The "before" for `memory_create` to
 on the commit that had the counter but no steps; the others come from `docs/design.md`'s earlier figures (the first
 `t_bound` run failed before them).
 
+### Review fixes (after `docs/tasks/TASK-26-review-q2.md`)
+
+Done: the teardown of many small objects is counted across the whole exit (`steps::before`: the exit's handle loop, its
+mappings, `channel::close`), the reaper's queue doubles instead of freeing whole, the reaper takes contiguous runs and
+yields after each emptied item; `memory_create(CONTIGUOUS)` is capped at 4 MiB (users: `fsd` 2 MiB, drivers' queues,
+`t_devices`, `t_loop`), zeroed and freed in steps, and its search makes at most 17 rounds; `t_bound` asserts the INV-0270-1
+bound of 2 ms scaled by a calibration (1 under HVF), the units of work per masked interval on every host, an exit and a
+`job_kill` of 400 objects of 256 KiB and of 256 mappings with 1024 handles, a contiguous case and its refusal, and that
+a kill ended a call between steps; the warnings 4 to 11 and the notes 18 and the CI timing failure (below).
+
+The CI failure of the first candidate run (`memory_create: 2756496 ns masked, limit 2000000`, 14 to 17 ms elsewhere) was
+a time bound on hosts that are not HVF. The 2 ms bound is `[assumption]` under HVF. It is now checked as ADR-0270 open
+questions say: the work between two step points is counted (at most 64 + 16 units, on any host) and the time is scaled
+by a calibration printed in the test's output. I could not reproduce the TCG figures locally (TCG runs are skipped);
+the CI run of this head tells whether the factor is enough. The test that still fails there would be a measure of the
+scan below.
+
+Measured under HVF after the fixes (`t_bound`, 128 MiB guest, calibration factor 1): exit of a process holding 24 MiB
+97 us masked, `job_kill` 14 us; exit of 400 objects of 256 KiB 102 us, kill 28 us; exit of 256 mappings and 1024
+handles 104 us, kill 60 us (at most 65 units of work in any interval); a contiguous 4 MiB create 382 us, of which about
+250 us is the frame-map scan; a kill landed between steps in the create, snapshot and contiguous loops. The teardown
+assertion is the 2 ms bound (it was 4 ms), and the figures are well inside it.
+
+Not fixed, and why:
+- The scan of the frame map for a contiguous run is one masked pass that costs about 250 us on the 128 MiB guest and
+  grows with the machine's memory, not with the request (ADR-0270 open question). A resumable scan was not built.
+- The right for `CONTIGUOUS` (ADR-0051) is not checked; the cap bounds the job without it.
+- Drops that free on the spot when the heap cannot grow the reaper's queue (exhaustion) stay masked.
+- Review notes 12 (the charge outlives frames that `help()` frees), 13 (`SnapshotBuild` assumes the mappings did not
+  change), 14 (`walk_from` at the top of the address space and with block leaves), 15 (`LAST_REFUSED` and steps), 16
+  (the `fork` row's POSIX script cannot fail on the field), 17 (stack headroom for an IRQ in a call): open, as recorded
+  in the review; none changes behaviour today.
+- Warning 11's second half (a refusal in `copy_page` part way through a snapshot) has no test; the row says so.
+- Warning 10: the deviations from ADR-0270 point 4 stay open-question notes, stated plainly in the ADR; no ADR was
+  proposed because the architect reserves the numbers.
+- The `boot-tcg-smp4-gicv2` "timed out waiting for bytes dropped" of the candidate run is the known input flake.
+
 ### Tests run
 
-`make check` before every commit. `make test-changed` (every step, because the Makefile and `zoraya-rt` changed; HVF; TCG
+`make check` before every commit. After the review fixes, `make test-changed` ran four times; the last, on the head of
+the branch, passed all nine steps (the three before failed `test-qemu` on `t_bound`'s new cases, each fixed in its own
+commit). Earlier: `make test-changed` (every step, because the Makefile and `zoraya-rt` changed; HVF; TCG
 runs skipped locally) was run ten times while the code was built; the last run on the head of the branch passed all nine
 steps (`test-boot`, `test-qemu`, `test-libposix`, `test-files`, `test-crash`, `test-posix`, `test-posix-gui`,
 `test-tour-gui`, `test-gui`). One earlier run failed `boot-auto-smp4-2g` (the shell's "bytes dropped" line, a timing
