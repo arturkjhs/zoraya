@@ -214,28 +214,36 @@ fn churn(snapshots: bool) -> i32 {
 /// the reaper is idle.
 fn a_kill_between_steps_leaves_nothing() {
     for role in [&b"create-loop"[..], b"snapshot-loop"] {
-        let free = free_frames();
-        let room = job_create(JOB, JobFlags::POSIX).expect("job");
-        // The room's own record is charged to it, so "nothing left" is the
-        // use it began with.
-        let base = job_get_usage(room, false).expect("usage").memory.used;
-        let p = child(room, role).expect("spawn");
-        nap(150);
-        masked(true);
-        job_kill(room).expect("kill");
-        let record = wait_exit(p);
-        assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
-        // A zombie keeps its record charged until its last handle closes.
-        handle_close(p).expect("close");
-        let mut tries = 0;
-        while (free_frames() != free
-            || job_get_usage(room, false).expect("usage").memory.used != base)
-            && tries < 200
-        {
-            nap(10);
-            tries += 1;
-        }
-        let usage = job_get_usage(room, false).expect("usage");
+        // The first round lets the kernel heap take the room it will use
+        // (it keeps what it grew by); the second is the one that counts.
+        kill_round(role, false);
+        kill_round(role, true);
+    }
+}
+
+fn kill_round(role: &[u8], strict: bool) {
+    let free = free_frames();
+    let room = job_create(JOB, JobFlags::POSIX).expect("job");
+    // The room's own record is charged to it, so "nothing left" is the use
+    // it began with.
+    let base = job_get_usage(room, false).expect("usage").memory.used;
+    let p = child(room, role).expect("spawn");
+    nap(150);
+    masked(true);
+    job_kill(room).expect("kill");
+    let record = wait_exit(p);
+    assert_eq!(record.reason, ExitReason::Killed, "{role:?}");
+    // A zombie keeps its record charged until its last handle closes.
+    handle_close(p).expect("close");
+    let mut tries = 0;
+    while (free_frames() != free || job_get_usage(room, false).expect("usage").memory.used != base)
+        && tries < 200
+    {
+        nap(10);
+        tries += 1;
+    }
+    let usage = job_get_usage(room, false).expect("usage");
+    if strict {
         assert_eq!(usage.memory.used, base, "{role:?}: the room's use");
         assert_eq!(usage.processes.used, 0, "{role:?}: the room's processes");
         assert_eq!(free_frames(), free, "{role:?}: frames");
@@ -244,8 +252,8 @@ fn a_kill_between_steps_leaves_nothing() {
             core::str::from_utf8(role).unwrap_or("?"),
             masked(true) / 1000
         );
-        handle_close(room).expect("close");
     }
+    handle_close(room).expect("close");
 }
 
 fn teardown_sites() {
