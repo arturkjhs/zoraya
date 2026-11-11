@@ -62,6 +62,7 @@ impl Job {
             job_signals::TERMINATED
         };
         let source = port::new_source(bits)?;
+        // uncharged: the job charges its own record next (charge_record), the root has no payer
         let job = uncharged_arc(Job {
             parent,
             depth,

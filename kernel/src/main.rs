@@ -121,6 +121,7 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
     #[cfg(not(feature = "qemu-test"))]
     {
         let numbers: Vec<u64> = (1..=1000).collect();
+        // uncharged: boot-time heap check
         let sum = memory::heap::uncharged_box(numbers.iter().sum::<u64>()).expect("heap check");
         let backing = memory::heap::stats().backing >> 10;
         println!("heap check: Box and Vec work, sum {sum}, {backing} KiB of heap");

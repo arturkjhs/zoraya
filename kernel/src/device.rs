@@ -172,6 +172,7 @@ impl Device {
         let source = port::new_source(0)?;
         // On failure the value was dropped, and its `Drop` frees the source
         // alone: the line is taken only after this.
+        // uncharged: device objects have no paying job (ADR-0261 point 6)
         let interrupt = uncharged_arc(Interrupt {
             intid: range.intid,
             source,
@@ -314,6 +315,7 @@ impl Pin {
                 .try_reserve(room)
                 .map_err(|_| Status::NoMemory)?;
         }
+        // uncharged: pins are made by driver processes for their devices (ADR-0261 point 6)
         let mut pin = uncharged_arc(Pin {
             device: device.clone(),
             memory,

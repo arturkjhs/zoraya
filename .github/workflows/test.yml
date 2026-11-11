@@ -85,6 +85,8 @@ jobs:
           - make check-tokens
           - make check-fetch-ports
           - make check-ci-jobs
+          - make check-charged-alloc
+          - make check-untrusted-gate
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4

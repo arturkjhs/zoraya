@@ -1,0 +1,25 @@
+# The tests that end the refusal of `room new --untrusted` (ADR-0268 point 3 and
+# point 7), and the step of `make test` that runs each. `tools/check-untrusted-gate.sh`
+# (`make check-untrusted-gate`) reads this file, `docs/adr/invariants.md` and the
+# refusal's markers in the shell and the panel (INV-0268-1, INV-0268-2).
+#
+# Removing a line needs an ADR. A line whose step is `pending` is a test not
+# written yet; the task that writes it replaces `pending` with its step and
+# names itself in OWNER.
+#
+# STAGE 1: untrusted rooms without `+net`. STAGE 2: `+net` and `+listen`.
+#
+# STAGE  NAME                 STEP          OWNER   WHAT
+1  charged-allocation   test-qemu     Q1      INV-0261-5: the lint (make check-charged-alloc) and the frame and heap deltas of every allocating call against job_get_usage
+1  memory-hog           test-qemu     Q1      memory_create loops in a limited job get OverQuota while a sibling maps to its own limit (INV-0261-4, INV-0263-1)
+1  fork-bomb            pending       Q2      :(){ :|:& };: in an untrusted room stops at a limit; home starts a command within 2 s (INV-0263-1)
+1  masked-time          pending       Q2      INV-0270-1: no call masks interrupts for more than the bound
+1  cpu-spinners         pending       Q4      two untrusted rooms spinning and bursting; a home terminal echoes within INV-0264-3's bound
+1  disk-filler          pending       Q5      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
+1  service-floods       pending       Q3      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)
+1  keeper               pending       Q6a     INV-0269-1 to INV-0269-3
+1  many-rooms           pending       Q6a     four untrusted rooms with a fork bomb and a hog each; home starts processes and maps memory (INV-0261-8)
+1  hostile-programs     pending       Q7      TASK-21's hostile cases from inside an untrusted room
+1  fuzzing              pending       Q7      a fuzz target for each decoder an untrusted program reaches that has none (10 minutes each)
+2  net-account-flood    pending       N6      connecting without end from the room stops at --conns while home connects (INV-0262-1, INV-0262-4)
+2  net-fuzz             pending       N6      the fuzz target of the network protocol

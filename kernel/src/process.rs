@@ -418,9 +418,10 @@ impl<'a> Loadable<'a> {
     }
 }
 
-/// The kernel reserve is 1/16 of the frames free after boot `[assumption]`
-/// (ADR-0261 point 10; measured in the report of Q1).
-const KERNEL_RESERVE_DIVISOR: u64 = 16;
+/// The kernel reserve is 1/32 of the frames free after boot `[assumption]`: the
+/// ADR's 1/16 refused the files manager's menu in the 256 MiB GUI test with the
+/// session at 214.8 of 215.7 MiB (Q1's report; a proposed change to the number).
+const KERNEL_RESERVE_DIVISOR: u64 = 32;
 
 /// A process's place in its job's lists of members: one `Arc` each in the
 /// job's `processes` vector and in the scheduler's queues, rounded up.

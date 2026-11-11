@@ -128,6 +128,7 @@ pub fn preemptions() -> u64 {
 }
 
 fn boot_thread() -> Arc<Thread> {
+    // uncharged: the boot thread, made before the heap can refuse.
     Arc::new(Thread {
         context: UnsafeCell::new(Context::default()),
         state: AtomicU8::new(RUNNING),
@@ -155,6 +156,7 @@ pub fn init() {
 fn new_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
     let stack = KernelStack::new()?;
     let context = Context::new_kernel(entry as usize, arg, stack.top(), stack.limit());
+    // uncharged: kernel threads have no paying job
     uncharged_arc(Thread {
         context: UnsafeCell::new(context),
         state: AtomicU8::new(READY),

@@ -519,6 +519,7 @@ impl Panel {
         match kind {
             LAUNCH => match APPS.get(index as usize) {
                 // Nothing runs in an untrusted room until quotas exist
+                // untrusted-gate: refusal (ADR-0268, `make check-untrusted-gate`)
                 // (ADR-0056, TASK-24): `room new --untrusted` is refused, and
                 // so is a launch in a hand-written untrusted room.
                 _ if self.room().is_some_and(|r| r.untrusted) => Action::Nothing,

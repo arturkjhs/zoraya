@@ -2677,6 +2677,7 @@ impl Z {
         };
         if room.untrusted {
             // Nothing runs untrusted until quotas exist (review 7d, 1).
+            // untrusted-gate: refusal (ADR-0268, `make check-untrusted-gate`)
             return Err(zoraya_command::error(
                 "room",
                 Some(name),
@@ -2750,6 +2751,7 @@ impl Z {
             }
             ["new", name, rest @ ..] => {
                 if p.flag(d, "untrusted") {
+                    // untrusted-gate: refusal (ADR-0268, `make check-untrusted-gate`)
                     return fail(
                         io,
                         Some(name),
