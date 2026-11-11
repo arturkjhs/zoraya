@@ -1,0 +1,34 @@
+# `settings` knows the net.* keys netd declares (ADR-0229, INV-0229-1): a value
+# outside its type is refused and the file is unchanged, a good one is written.
+! panicked
+! storage failed
+< Type help to begin, or help tour.
+< \r\n~>
+> settings net.gateway 10.0.2\r
+< 10.0.2 is not an address
+< \r\n~>
+> settings net.ip 10.0.2.15\r
+< is not an address with a prefix length
+< \r\n~>
+> settings net.address auto\r
+< is not one of dhcp, static
+< \r\n~>
+> cat /config/settings\r
+x net.gateway
+x net.ip
+< \r\n~>
+> settings net.gateway 10.0.2.2\r
+< \r\n~>
+> settings net.dns +1.1.1.1\r
+< \r\n~>
+> settings net.dns +10.0.2\r
+< 10.0.2 is not an address
+< \r\n~>
+> cat /config/settings\r
+< net.gateway = 10.0.2.2
+< net.dns = 1.1.1.1
+< \r\n~>
+> settings --check\r
+< \r\n~>
+x power off
+> poweroff\r

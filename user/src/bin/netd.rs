@@ -286,7 +286,8 @@ impl Netd {
         (clock_monotonic() / 1000) as i64
     }
 
-    fn attach_connection(&mut self, id: usize, end: Handle) {
+    /// Whether the connection is served now; if not, it is gone.
+    fn attach_connection(&mut self, id: usize, end: Handle) -> bool {
         if self.channels.len() <= id {
             self.channels.resize(id + 1, None);
         }
@@ -295,9 +296,10 @@ impl Netd {
         if port_subscribe(self.port, end, wanted, key, Mode::Level).is_err() {
             let _ = handle_close(end);
             self.service.remove(id);
-            return;
+            return false;
         }
         self.channels[id] = Some(end);
+        true
     }
 
     /// Tells a client its `connect` failed, then lets go of its handles.
@@ -348,8 +350,19 @@ impl Netd {
                 Action::Narrowed { id: new, reply } => {
                     let given = handles[0];
                     if count == 1 && handle_type(given) == Ok("channel") {
-                        self.attach_connection(new, given);
-                        self.write_to(id, &reply);
+                        if self.attach_connection(new, given) {
+                            self.write_to(id, &reply);
+                        } else {
+                            let mut out = [0u8; 64];
+                            let refused = zoraya_proto_net::Narrowed {
+                                status: zoraya_protocol::Below(
+                                    zoraya_proto_net::status::UNAVAILABLE,
+                                ),
+                            };
+                            if let Ok(n) = encode(&refused, 0, &mut out) {
+                                self.write_to(id, &out[..n]);
+                            }
+                        }
                     } else {
                         // A handle that is not a channel end: the request
                         // was not the one it said.
@@ -603,7 +616,9 @@ fn main() -> i32 {
     let root = slot(ROOT);
     if handle_type(root) == Ok("channel") {
         match netd.service.add(Connection::root()) {
-            Some(id) => netd.attach_connection(id, root),
+            Some(id) => {
+                netd.attach_connection(id, root);
+            }
             None => return 1,
         }
     }

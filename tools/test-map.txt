@@ -122,9 +122,10 @@ docs/tour.md                  test-tour-gui
 tests/shell/                  test-boot test-files
 
 # Storage.
-crates/zoraya-fs/             test-files test-crash test-qemu
-crates/zoraya-fs-service/     test-files test-crash test-qemu
-crates/zoraya-proto-file/     test-files test-crash test-gui
+crates/zoraya-fs/             test-files test-crash test-qemu test-posix
+crates/zoraya-fs-service/     test-files test-crash test-qemu test-posix
+tools/zoraya-mkfs/            test-files test-posix
+crates/zoraya-proto-file/     test-files test-crash test-gui test-posix
 user/src/bin/fsd.rs           test-files test-crash
 user/src/bin/blkd.rs          test-files test-crash
 user/src/files.rs             test-files test-gui

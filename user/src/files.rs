@@ -40,6 +40,8 @@ pub fn status_name(s: u32) -> &'static str {
         status::TOO_MANY_OPEN => "TooManyOpen",
         status::LIMIT_REACHED => "LimitReached",
         status::UNSUPPORTED => "Unsupported",
+        status::OVER_QUOTA => "OverQuota",
+        status::CROSSES_LIMIT => "CrossesLimit",
         GONE => "VolumeGone",
         _ => "Unknown",
     }

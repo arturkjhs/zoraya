@@ -503,6 +503,152 @@ The kill rows include a 300 ms wait before the kill. SLIRP's lease: 24 h; no rou
   (Q3's netd account); (6) the fuzz targets never ran under libFuzzer, `fuzz/Cargo.lock` is not updated; (7) the burst bound of 64 is
   untuned; (8) a CI runner without a crates.io cache downloads the registry crates in each job (the workflow was not touched), and the
   CI `test-net` job must build the normal kernel too now.
+## CI image
+
+Why: on 2026-11-11 Ubuntu's mirrors were slow or unreachable for hours (a runner's apt fetched 1.4 MB in 8 minutes and
+the `build` job was cancelled in its apt step). Now the jobs of `.github/workflows/test.yml` run in an image with
+everything installed.
+
+- **Contents** (`.github/ci/Dockerfile`, `ubuntu:24.04` by tag: no digest was readable offline): build-essential,
+  clang, lld, llvm, zstd, `qemu-system-arm`, git, curl, patch, perl, python3, ruby, xz/bzip2/unzip/zip, gawk, and the
+  Rust toolchain of `rust-toolchain.toml` (channel, components, targets) in `/usr/local/{rustup,cargo}`, on `PATH`.
+  Jobs run as root; `safe.directory` is set system-wide.
+- **Tag:** `tools/ci-image-tag.sh` = first 16 hex digits of SHA-256 of `.github/ci/Dockerfile`,
+  `tools/ci-apt-install.sh` and `rust-toolchain.toml`. Image: `ghcr.io/<owner>/<repo>/ci:<tag>` (lowercase) and `:latest`.
+  Both workflows call the script.
+- **Rebuild:** `gh workflow run ci-image.yml --ref BRANCH` (always builds); it also runs on a push to `main` that
+  changes those files, and on `candidate/**` and `candidate-full/**` tags (skipped when the tag exists).
+- **Fallback chain:** test.yml's job `image` logs in to ghcr.io with the job token and runs `docker manifest inspect`;
+  `ref` is empty on any failure. With a ref, `build`, `checks` and `tests` use `container:` (no apt, no rustup
+  install). Without one, `container` is `null` (the bare runner) and the guarded steps install as before, through
+  `tools/ci-apt-install.sh`: skip when clang and zstd exist; 3 attempts on the runner's mirror; then
+  `mirrors.edge.kernel.org` and `mirror.math.princeton.edu` (noble, -updates, -security, x86_64 only); then the
+  cached .debs without the network. The Dockerfile builds with the same script.
+- **To verify on the first run** (not testable offline): (1) `ci-image.yml` builds and pushes (the push needs the
+  repository's Actions workflow permissions to allow packages; the package is created private and linked to the
+  repo); (2) `image` finds it (`image: ghcr.io/...` in its log); (3) `container: null` really is accepted when `ref`
+  is empty (run test.yml once before the image exists, e.g. on this branch); (4) with the image, the three jobs
+  start (the credentials are the job token, which needs `packages: read`; a fork's pull request has none and falls
+  back); (5) in the container: `git ls-files`, `make`, `qemu-system-aarch64`, rust-cache, `actions/cache` (zstd)
+  work; `check-host-paths` and `make check-ci-jobs` pass; (6) the ports build needs no tool the image lacks (the
+  runner image has more packages than the container).
+- **Build job time:** before, 3 min 10 s (green main run 42996307525, 2026-11-11, from the runner's own clang and
+  zstd). After: to be read from the first run with the image (`gh run view RUN --json jobs`).
+## Q5: storage limits (branch `work/q5`, on `work/integ`)
+
+**Built.** `zoraya-fs` format version 2: a limit record `{ limit, used }` per directory (`K_LIMIT`) and a link from every
+file and link to the directory it is charged to (`K_FPARENT`). `used` is kept by create, mkdir, symlink, write, `set_size`,
+truncate, unlink, rmdir, rename (replace, no-replace, exchange), `create_unnamed` and `publish`; checked against every
+limited ancestor; `OverQuota` rolls the request back. A directory crossing a boundary is `CrossesLimit`. `Volume::set_limit`
+and `limit_of`; `fsck` recomputes every `used` and `repair` rewrites it. File protocol: statuses `OVER_QUOTA` (16),
+`CROSSES_LIMIT` (17) (`Code` widened to `Below<18>`; the old bound dropped any reply with them), requests `SetLimit` (38,
+needs `WRITE`) and `GetLimit` (39); `zoraya-fsclient` `set_limit` and `limit`; `libposix` `EDQUOT` and `EXDEV`;
+`zoraya-command` words. Test-only setter: `zoraya-mkfs --limit PATH=SIZE`; the POSIX images carry `/limited` at 64K
+(`POSIX_LIMITED`). The ports have no `dd`, so `t_posix diskfill DIR OUT` does what it does (scenarios.script).
+
+**Decisions** (ADR-0290, proposed; the numbers 0290 to 0299 are Q5's, N2 may take 0281): a parent link for files; unnamed files
+charged where made and `publish` moves the charge; a file unlinked while open keeps its charge until freed, and when its
+directory is removed it is charged to the parent; link = 1 block + target in blocks; a directory is one block; a limit
+below `used` stops growth only; a new limit scans the subtree in one request (stalls the volume for a very large tree).
+Recommendation: accept ADR-0290 as written.
+
+**Invariant delta.** INV-0265-1, -2: checked (`make test-unit`, `crates/zoraya-fs/tests/limits.rs`; the protocol half in
+`zoraya-fsclient`). INV-0265-3 (a room's directory) stays for Q6a; the `dd` half runs now in `make test-posix`
+(scenarios). New INV-0290-1 (checked by `fsck` on every crash image). Counts 503 -> 504.
+
+**Tests run (this session).** `cargo test` of zoraya-fs (all, including `limits.rs`: 803 refusals and 35 `CrossesLimit` in the
+random run; 2162 crash images each `fsck`-clean with the counters equal to an API recomputation), zoraya-fsclient,
+zoraya-fs-service, zoraya-posix, zoraya-proto-file, zoraya-mkfs: pass. `make check`: pass. `make test-posix` with
+`POSIX_SCRIPTS=tests/posix/scenarios.script`: PASS (81 steps; `diskfill wrote 15 blocks before Quota exceeded`, a write
+outside works, fsck clean). `tools/test-par.sh test-files test-crash test-qemu test-libposix` (HVF, one lane): all ok. Not run:
+the full `make test-posix`, test-gui, test-boot, test-tour-gui, test-net, mutation runs (the full CI does).
+
+**Measurement.** A growing one-block write to a file in `a/b/c`, release build, in-memory device, best of five over 4000
+writes: 6931 ns with no limit, 7041 ns with a limit on `a` (+111 ns, 1.6%), 7023 ns with the limit on the parent. Run it:
+`cargo test --release -p zoraya-fs --test limits -- --ignored --nocapture`. Not measured under QEMU.
+
+**Open items.** Nothing sets limits for a person yet (Q6a); `stat`/`files` do not show the record (the protocol has
+`GetLimit`); the format change makes version 1 volumes unreadable (rebuild with `zoraya-mkfs`); `tools/test-map.txt` lines
+added for `tools/zoraya-mkfs/` and for the proto, fs and fs-service crates (test-posix); `Makefile` and the testkit are not
+mapped so `make test-changed` runs every step.
+
+**Handoff / by hand.** `zoraya-mkfs --size 64M --limit room=64K --from DIR img`; `make test-posix POSIX_SCRIPTS=tests/posix/scenarios.script`.
+Review: `crates/zoraya-fs/src/volume.rs` (the "Storage limits" block, `unname`, `delete_object`, rename, `resize`, `write`),
+`check.rs`, `format.rs`, `tests/limits.rs`, `crates/zoraya-proto-file/src/lib.rs`, `crates/zoraya-fs-service/src/lib.rs`,
+`tests/posix/t_posix.c` (`diskfill`), docs/adr/0290. Model use: Sonnet only; no Opus review of the engine was run.
+
+## Q3 (fsd): accounts in the file service (branch `work/q3`, on `work/q5`)
+
+**Built.** `zoraya-fs-service` keeps accounts (ADR-0262 item 2). Each connection has an account; `open`, `clone`, `narrow` and
+`share` join the caller's; the root connection's is the session's. Each account has a limit and a count for open handles
+(`MAX_OPEN` 896 in all: connections, tokens, buffers, held-reply handles), mapped buffers (`MAX_BUFFERS` 240) and held replies
+(`MAX_HELD` = 896). A new request `CloneAccount { rights, budget }` (40; `zoraya-fsclient::clone_account`) carves an account from
+the caller's: `budget` open, `budget/8` buffers, `budget/32` held (each at least 1). From the session's account a budget is 1..=32
+and at most four such accounts live (the untrusted column: 128 open, 16 buffers, 4 held; session keeps 768, 224, 892). At the
+open bound: `TOO_MANY_OPEN`; at the buffer bound: `LIMIT_REACHED`; a reply that would be a second held one in an account at
+its bound closes its connection. The last connection of an account frees it and returns its limits to its parent
+(sub-accounts are re-parented; if the session account ends first its carve is dropped and a new session account takes what
+the live ones leave). `Sync` on an untrusted account's connection (any carved account) does not commit: it waits for the next
+commit (timed or another client's `sync`), the connection is not read meanwhile (interest `Closed`), a failed volume answers it
+`STORAGE_FAILED`, nothing to commit answers at once. `fsd.rs` needed no change (the account code is in the library). Q5's
+`SetLimit`/`GetLimit` and statuses untouched.
+
+**Decisions** (ADR-0291, proposed; all reversible): `CloneAccount` as a new request, `Clone` unchanged; the account's
+buffers and held bounds derive from one budget (explicit numbers were option C); FIFO stream ends (only in `fsd --memory`)
+are service-level, counted in the global bound only; the held bound closes the connection (a made reply has no room for a
+status); only `Sync` is folded, not `DURABLE` writes (open question: same stall, needs a deferred reply with a count);
+"untrusted" = any carved account. **For the architect, from Q5's review:** if `SetLimit` must not be allowed to a plain
+`WRITE` holder, the natural place to say who may set limits is the account (a connection of an untrusted account is
+`account.untrusted`); I did not change it.
+
+**Invariant delta.** INV-0262-1, -2, -3: `checked: make test-unit` for `fsd` (the other services say so in the row; the ADR
+text is per service). INV-0265-5 stays `not yet applicable (until Q3)` in the table: its check is the in-QEMU loop (Q6a/Q7);
+the host half is `an_untrusted_sync_waits_for_the_next_commit` and `a_sync_loop_in_an_untrusted_account_adds_no_commit`.
+New INV-0291-1 (the sums as an equality). Counts 504 -> 505. `make adr-check`: 0 errors.
+
+**Tests added** (`crates/zoraya-fs-service/tests/service.rs`, fsclient, proto): an account at its open, buffer and held bound
+is refused while a second uses its full bound and the session is not refused; the column (four accounts, no fifth, budget 0
+and over 32, 768/224 left); free with the last connection, in either order, with a sub-account of a dead parent; a random run
+(1500 steps of carve/open/attach/detach/close) checking after each step that the limits sum to 896/240/896, the column is
+within its bounds, counts do not pass limits and equal `open_count()`, and that all state is gone at the end; the folded
+`sync` (waits, no commit of its own, answered by a session `sync` or the timer, five rounds, a close while waiting);
+the wire (`CloneAccount` round trip, ordinals); `clone_account` through the client.
+
+**Measurements** (`worst_case::<u32>()`, from `the_service_size_follows_from_the_bounds`; run it with
+`cargo test -p zoraya-fs-service --test service the_service_size -- --nocapture`): fixed 192,512 B (input, output, data
+buffers); 766 B per open handle (connection, record, two names); 65,540 B per held reply; 72 B per account.
+Untrusted account (32 open, 1 held): 90,124 B. Session: 59,050,040 B. Whole service: 59,603,048 B. The 56 MiB is 896 held
+replies of 64 KiB: the session's bound is the number of connections it can have (unchanged by Q3); it would be 4 MiB at 64
+held. Proposed, not done (architect): lower the session's `MAX_HELD`. Handle size on the target is 8 B; the numbers move by
+under 1%.
+
+**Tests run (this session).** `cargo test` of zoraya-fs-service (65 service tests, fifo, time), zoraya-fsclient (10),
+zoraya-proto-file (7): pass. `make check` (fmt, clippy, adr-check and every check-*): pass. `make test-changed` (everything changed since origin/main, so all steps; HVF; `make fetch-ports` was needed in this worktree first): 54 host test binaries ok, then test-boot, test-qemu, test-libposix, test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui, test-net all ok (511 s). It found a Q5 break, fixed here: `zoraya-posix`'s `every_file_status_maps_once_and_only_ok_to_zero` still stopped at status 16; it now covers 0..18.
+
+**Open items.** No launcher calls `CloneAccount` yet (Q6a: one per untrusted room; the broker/tmpd of a shell in the shell's
+room job are Q6a too). `netd`'s part waits for N4/N6. `fsd` does not serve one request per account per pass (ADR-0262 open
+question, noted there). `top` does not read account counts yet (`Service::account_totals` is the host form).
+INV-0262-1..3 for `netd`, the compositor and the broker are still unchecked.
+
+**Handoff / by hand.** `cargo test -p zoraya-fs-service --test service accounts budgets random_accounts untrusted`;
+`cargo test -p zoraya-fsclient clone_account`. Review (reviewer gets the diff and ADR names): `crates/zoraya-fs-service/src/lib.rs`
+(`Account`, `carve`, `free_account`, `charge`/`release`, `room`, `send`, `flush_held`, `close_connection`, `fold_sync`,
+`answer_syncs`), `tests/service.rs` (end), `crates/zoraya-proto-file/src/lib.rs` (`CloneAccount`), ADR-0262, ADR-0265 item 9,
+ADR-0291. Model use: Sonnet only; no Opus review of the trust-boundary code was run (the orchestrator's review of Q3 is due).
+
+**Q5 review fixes** (`docs/tasks/TASK-26-review-q5.md`, dispositions at its end; proposed ADR-0292 for who may set a limit). The "Tests run" line above was wrong for `zoraya-posix` (finding 1); after the fixes `cargo test` of zoraya-fs, -fs-service, -fsclient, -mkfs, -fs-testkit, -proto-file, -posix and -command passes, `make check` passes, and `make test-posix` with `scenarios.script` passes again (81 steps). Changed since: the orphan rule (a directory with a charged open file under a limit cannot be removed), `SCAN_BOUND` 50,000, checked sums, `set_limit` not a freeing request unless it removes a limit, and the model/crash tests keep handles open and change limits.
+
+**Q3 (fsd) review fixes** (`docs/tasks/TASK-26-review-q3.md`, dispositions at its end; after merging `work/q5` at 26812b3 with its
+ADR-0292). Fixed: finding 1 (an account with no connection whose sub-accounts live is kept with its leftover limits until the
+last of them ends; the untrusted column is whole-subtree; the session's account is kept the same way, which also makes
+INV-0291-1 exact after it ends: finding 9), finding 2 (`answer_syncs` runs at the end of `after_engine`), finding 3
+(`NoMemory` replies are held and retried, only `Full` counts against the bound), finding 4 (durable writes of untrusted
+accounts fold like `sync`, with their count), finding 5 (per-account refusal counter, `account_refusals`), finding 6 (the model
+adds Clone, Share, Narrow, tokens, buffers, held replies by full queue and by no memory, and the session's own close, and
+sums the real column), finding 7 (a service with FIFOs refuses `CloneAccount`; `carve` saturates), finding 8 (`total()` counts
+an account per handle). Open: the launcher cannot read the refusal count yet (Q6a: a request or the supervisor channel),
+notes 10 and 11 (sync bookkeeping allocations; any wake of a syncing connection closes it), note 12 (who may set limits, with
+ADR-0292).
 
 ## Q4: the CPU ceiling (branch `work/q4`, on `work/n2`)
 
@@ -569,6 +715,14 @@ test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui and 
 first `test-changed` attempt stopped at the build because this worktree had no ports archives; they were copied from another
 worktree's cache (no download).
 
+### After the review (`docs/tasks/TASK-26-review-q4.md`)
+
+Fixed W1 to W6 and notes 7 to 11 (dispositions in the review file). A spent job's threads never run past the cap of parks per
+pick (idle calls `schedule` again); `JobRef::of` is `unsafe`; the time allowance is scaled only in its EL0 part and capped at
+2x the ceiling; the ceiling is checked by counts next to an uncapped spinner as well as by `used_ns`; ADR-0285 names its two
+deviations from ADR-0264; new `t_cpu` cases: 40 spinners, a job about 30 levels deep, a kill of a parked room.
+New finding for the architect: no sharing among rooms under one parent (one of three used 0 ms in 2 s).
+Open: the site of the largest masked interval; Q6a's check of `LIMIT` inside rooms.
 ## N3: a native program fetches a page over HTTP (branch `work/n3`, on `work/q4`)
 
 ### Built

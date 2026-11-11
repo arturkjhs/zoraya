@@ -45,29 +45,39 @@ pub fn set_test_period(ns: u64) {
 pub struct JobRef(NonNull<Job>);
 
 impl JobRef {
-    /// Names `job`. The reference is valid while `job` is: the caller (the
-    /// scheduler) keeps the thread, and so its process and the job tree above
-    /// it, alive for the whole walk.
-    pub fn of(job: &Job) -> JobRef {
+    /// Names `job`.
+    ///
+    /// # Safety
+    /// `job` and every job above it must stay alive for as long as the
+    /// returned value, or any id derived from it by [`JobTree`], is used.
+    /// Every job holds an `Arc` of its parent, so keeping `job` alive keeps
+    /// the chain.
+    pub unsafe fn of(job: &Job) -> JobRef {
         JobRef(NonNull::from(job))
     }
 
     fn job(&self) -> &Job {
-        // SAFETY: made from a live `&Job` by `of`, whose caller keeps the job
-        // alive for the walk (see `of`): every job holds an `Arc` of its
-        // parent, so the parents that `parent` returns are alive too.
+        // SAFETY: `of`'s caller promised the job outlives every use of this
+        // value, and a job's parents are held by it.
         unsafe { self.0.as_ref() }
     }
 }
 
 /// The job tree as `zoraya-cpu` walks it.
-pub struct JobTree<'a>(pub PhantomData<&'a ()>);
+pub struct JobTree<'a>(PhantomData<&'a ()>);
+
+impl JobTree<'_> {
+    pub fn new() -> Self {
+        JobTree(PhantomData)
+    }
+}
 
 impl Tree for JobTree<'_> {
     type Id = JobRef;
 
     fn parent(&self, id: JobRef) -> Option<JobRef> {
-        id.job().parent_ref().map(JobRef::of)
+        // SAFETY: the parent is held by the job `id` names (see `of`).
+        id.job().parent_ref().map(|p| unsafe { JobRef::of(p) })
     }
 
     fn get(&self, id: JobRef) -> CpuAcct {
@@ -89,7 +99,9 @@ fn refuse(e: LimitError) -> Status {
 /// first and puts the old value back with [`restore_limit`] if the memory or
 /// process limit is then refused (INV-0261-3).
 pub fn set_limit(job: &Job, limit: Option<u32>) -> Result<(), Status> {
-    zoraya_cpu::set_limit(&mut JobTree(PhantomData), JobRef::of(job), limit).map_err(refuse)
+    // SAFETY: `job` is borrowed for the whole call.
+    let id = unsafe { JobRef::of(job) };
+    zoraya_cpu::set_limit(&mut JobTree::new(), id, limit).map_err(refuse)
 }
 
 /// Puts back a ceiling [`set_limit`] replaced, whatever the rules say now.

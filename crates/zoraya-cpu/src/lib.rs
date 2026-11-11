@@ -33,9 +33,9 @@ pub const SLICE_NS: u64 = 10_000_000;
 /// therefore a ceiling of about that.
 pub const MIN_SLICE_NS: u64 = 50_000;
 /// The most threads one [`RunQueue::pick`] parks. A job over its budget can
-/// have up to the session's 200 processes ready; the rest run for
-/// [`MIN_SLICE_NS`] and are parked at their own pick, so no masked interval
-/// holds more than this many walks (INV-0270-1).
+/// have up to the session's 200 processes ready; the rest are parked by later
+/// picks (idle calls again), so no masked interval holds more than this many
+/// walks (INV-0270-1).
 pub const MAX_PARKS_PER_PICK: usize = 16;
 /// The most threads one release returns to the run queue; the caller repeats
 /// at once if more are parked (ADR-0264 point 5), with interrupts unmasked
@@ -235,7 +235,7 @@ pub struct Picked<T> {
 ///
 /// `ready` is round robin. A thread is parked only by [`RunQueue::pick`], when
 /// it reaches the front with its job over budget, so a thread woken or
-/// preempted just joins `ready`. The parked threads return to the end of
+/// preempted just joins `ready` (and is parked before it can run). The parked threads return to the end of
 /// `ready` in [`RunQueue::release`], called when the period ends: one list for
 /// all jobs, since they all come back at the same boundary.
 pub struct RunQueue<T> {
@@ -281,8 +281,14 @@ impl<T> RunQueue<T> {
     /// Takes the first ready thread whose job has budget. `job_of` gives the
     /// job of a thread, `None` for a kernel thread (never limited). Threads
     /// ahead of it whose job has none are parked, at most
-    /// [`MAX_PARKS_PER_PICK`]; one found after that runs for
-    /// [`MIN_SLICE_NS`] and is parked when it is next picked.
+    /// [`MAX_PARKS_PER_PICK`] per call, which bounds the walks one masked
+    /// interval holds (INV-0270-1). At that cap the thread found next is put
+    /// back at the front and `None` is returned: the caller runs idle, and
+    /// idle calls again while the ready list is not empty, so the rest are
+    /// parked in further intervals and **no thread of a spent job ever runs**
+    /// (the overrun per period stays one floor slice however many threads
+    /// the job has). `None` with [`RunQueue::is_empty`] false means "call
+    /// again".
     pub fn pick<Tr: Tree>(
         &mut self,
         tree: &mut Tr,
@@ -318,10 +324,8 @@ impl<T> RunQueue<T> {
                     self.parked.push_back(thread);
                 }
                 Decision::Park { .. } => {
-                    return Some(Picked {
-                        thread,
-                        slice_ns: Some(MIN_SLICE_NS),
-                    });
+                    self.ready.push_front(thread);
+                    return None;
                 }
             }
         }

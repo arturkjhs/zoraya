@@ -15,7 +15,7 @@ pub const MAX_PATH: usize = 4096;
 pub const MAX_ENTRIES: usize = 64;
 
 /// One of `status`.
-pub type Code = Below<16>;
+pub type Code = Below<18>;
 /// One of `kind`.
 pub type Kind = Below<3>;
 
@@ -48,6 +48,12 @@ pub mod status {
     pub const LIMIT_REACHED: u32 = 14;
     /// The service does not know the ordinal.
     pub const UNSUPPORTED: u32 = 15;
+    /// The request would pass the storage limit of a directory above the
+    /// object (ADR-0265 rule 2); `libposix` maps it to `EDQUOT`.
+    pub const OVER_QUOTA: u32 = 16;
+    /// A directory cannot move across the boundary of a storage limit
+    /// (ADR-0265 rule 3); `libposix` maps it to `EXDEV`.
+    pub const CROSSES_LIMIT: u32 = 17;
 }
 
 /// A connection's rights (ADR-0055).
@@ -148,6 +154,16 @@ protocol! {
     /// A new connection to this object with equal or fewer rights.
     message Clone = 2, handles 1 {
         rights: Rights,
+    }
+
+    /// A new connection to this object with equal or fewer rights, in a new
+    /// account carved from the caller's with `budget` open handles
+    /// (ADR-0262 item 2, ADR-0056's `clone` with a budget). The service
+    /// derives the account's other bounds from it. Answered by `Done`;
+    /// `TOO_MANY_OPEN` if the caller's account cannot spare the budget.
+    message CloneAccount = 40, handles 1 {
+        rights: Rights,
+        budget: u32,
     }
 
     /// A new connection to this directory with equal or fewer rights,
@@ -423,6 +439,27 @@ protocol! {
     /// file manager's status line (ADR-0248).
     message FreeSpace = 37, handles 0 {}
 
+    /// Sets, or with `remove` takes away, the storage limit of the child
+    /// directory `name` of this directory, in bytes (ADR-0265 rule 4). Needs
+    /// `WRITE`. Answered by `Done`.
+    message SetLimit<'a> = 38, handles 0 {
+        remove: Below<2>,
+        limit: u64,
+        name: Name<'a>,
+    }
+
+    /// This directory's own limit and the bytes charged below it (ADR-0265
+    /// rule 8), on any connection that can `stat` it.
+    message GetLimit = 39, handles 0 {}
+    message LimitReply = 39, handles 0 {
+        status: Code,
+        /// 1 if the directory carries a limit; `limit` and `used` are 0
+        /// otherwise.
+        limited: Below<2>,
+        limit: u64,
+        used: u64,
+    }
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -430,7 +467,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 37] = [
+pub const REQUESTS: [(&str, u32); 40] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -468,6 +505,9 @@ pub const REQUESTS: [(&str, u32); 37] = [
     ("time_base", 35),
     ("narrow", 36),
     ("free_space", 37),
+    ("set_limit", 38),
+    ("get_limit", 39),
+    ("clone_account", 40),
 ];
 
 /// `fifo_open`'s side.
@@ -508,6 +548,13 @@ mod tests {
 
     #[test]
     fn fixed_messages_round_trip_and_decode_totally() {
+        check(
+            CloneAccount {
+                rights: Flags(rights::READ),
+                budget: 32,
+            },
+            1,
+        );
         check(
             Clone {
                 rights: Flags(rights::READ),
@@ -871,6 +918,79 @@ mod tests {
         // The name's bytes are the last two: make it `..`.
         out[length - 2..length].copy_from_slice(b"..");
         assert!(decode::<Remove<'_>>(&out[..length], 0).is_err());
+    }
+
+    /// ADR-0265's messages: they round trip, decode totally, and refuse a
+    /// bound that is past (`remove` 2, a status of 18) or a name that climbs.
+    #[test]
+    fn the_limit_messages_round_trip_and_refuse_bad_bounds() {
+        for remove in [0, 1] {
+            let m = SetLimit {
+                remove: Below(remove),
+                limit: 1 << 40,
+                name: Name("room"),
+            };
+            let mut out = [0; 64];
+            let n = encode(&m, 1, &mut out).unwrap();
+            let (_, back) = decode::<SetLimit<'_>>(&out[..n], 0).unwrap();
+            assert_eq!(back, m);
+            exercise(&out[..n], |bytes| {
+                let _ = decode::<SetLimit<'_>>(bytes, 0);
+            });
+        }
+        check(GetLimit {}, 0);
+        check(
+            LimitReply {
+                status: Below(status::OVER_QUOTA),
+                limited: Below(1),
+                limit: u64::MAX,
+                used: 7,
+            },
+            0,
+        );
+        // Patch the first byte that differs between two values of a field.
+        fn first_diff(a: &[u8], b: &[u8]) -> usize {
+            a.iter().zip(b).position(|(x, y)| x != y).unwrap()
+        }
+        let set = |remove| SetLimit {
+            remove: Below(remove),
+            limit: 5,
+            name: Name("r"),
+        };
+        let mut a = [0; 64];
+        let mut b = [0; 64];
+        let la = encode(&set(0), 1, &mut a).unwrap();
+        encode(&set(1), 1, &mut b).unwrap();
+        a[first_diff(&a, &b)] = 2;
+        assert!(decode::<SetLimit<'_>>(&a[..la], 0).is_err(), "remove 2");
+        let reply = |s| LimitReply {
+            status: Below(s),
+            limited: Below(0),
+            limit: 0,
+            used: 0,
+        };
+        let mut a = [0; 64];
+        let mut b = [0; 64];
+        let la = encode(&reply(0), 1, &mut a).unwrap();
+        encode(&reply(1), 1, &mut b).unwrap();
+        a[first_diff(&a, &b)] = 18;
+        assert!(decode::<LimitReply>(&a[..la], 0).is_err(), "status 18");
+        // A name that climbs, and one cut short.
+        let mut a = [0; 64];
+        let la = encode(
+            &SetLimit {
+                remove: Below(0),
+                limit: 5,
+                name: Name("ab"),
+            },
+            1,
+            &mut a,
+        )
+        .unwrap();
+        let mut climbs = a;
+        climbs[la - 2..la].copy_from_slice(b"..");
+        assert!(decode::<SetLimit<'_>>(&climbs[..la], 0).is_err());
+        assert!(decode::<SetLimit<'_>>(&a[..la - 1], 0).is_err());
     }
 
     #[test]

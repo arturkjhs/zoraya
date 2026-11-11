@@ -513,3 +513,140 @@ fn close_tells_the_link() {
     c.close(5);
     assert_eq!(c.link.closed, [5]);
 }
+
+/// ADR-0265 through the protocol: a limit is set from above with `WRITE`, the
+/// statuses are `OVER_QUOTA` and `CROSSES_LIMIT`, `remove` still works at the
+/// limit, and `limit` reports the record.
+#[test]
+fn a_storage_limit_through_the_protocol() {
+    let (mut c, root) = rig();
+    c.make_directory(root, "room").unwrap();
+    c.make_directory(root, "other").unwrap();
+    assert_eq!(c.set_limit(root, "room", Some(4 * 4096)), Ok(()));
+    let room = c
+        .open(root, "room", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 0))));
+    let other = c
+        .open(root, "other", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(other), Ok(None));
+    // A connection that holds the room itself cannot change its limit: the
+    // limit is of a child, named from above. It can only narrow below.
+    c.make_directory(room, "sub").unwrap();
+    assert_eq!(c.set_limit(room, "sub", Some(4096)), Ok(()));
+    assert_eq!(
+        c.set_limit(room, "nothing", Some(1)),
+        Err(status::NOT_FOUND)
+    );
+    // Without WRITE the limit stays.
+    let ro = c.clone_with(root, rights::READ).unwrap();
+    assert_eq!(c.set_limit(ro, "room", None), Err(status::ACCESS_DENIED));
+    // Fill it: 2 blocks left (sub took one, the file takes one + data).
+    let f = c.open(room, "f", open_flags::CREATE, rights::ALL).unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 2 * 4096))));
+    assert_eq!(c.write_all(f, &[1u8; 12288]), Err(status::OVER_QUOTA));
+    c.write_all(f, &[1u8; 4096]).unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 3 * 4096))));
+    c.close(f);
+    // A directory does not cross the boundary; remove works.
+    c.make_directory(other, "d").unwrap();
+    assert_eq!(
+        c.rename_into(other, "d", room, "d"),
+        Err(status::CROSSES_LIMIT)
+    );
+    c.remove(room, "f").unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 4096))));
+    assert_eq!(c.set_limit(root, "room", None), Ok(()));
+    assert_eq!(c.limit(room), Ok(None));
+}
+
+/// ADR-0262 item 2: `clone_account` makes an account with the budget and
+/// the service refuses what the caller cannot spare or a budget out of range.
+#[test]
+fn clone_account_carves_a_budget_and_refuses_the_rest() {
+    let (mut c, root) = rig();
+    assert_eq!(
+        c.clone_account(root, rights::ALL, 0),
+        Err(status::INVALID_ARGUMENT)
+    );
+    let room = c.clone_account(root, rights::ALL, 3).unwrap();
+    // Three handles: the clone itself and two more, then the bound.
+    let a = c.open(room, "a", open_flags::CREATE, rights::ALL).unwrap();
+    let b = c.open(room, "b", open_flags::CREATE, rights::ALL).unwrap();
+    assert_eq!(
+        c.open(room, "c", open_flags::CREATE, rights::ALL),
+        Err(status::TOO_MANY_OPEN)
+    );
+    // The session is not affected, and closing gives the places back.
+    assert!(c.open(root, "s", open_flags::CREATE, rights::ALL).is_ok());
+    c.close(a);
+    c.close(b);
+    assert!(c.open(room, "c", open_flags::CREATE, rights::ALL).is_ok());
+}
+
+/// A connection narrowed to one name (the shape of `Save` and of an output
+/// operand: `WRITE` and `CREATE` for that name) can neither remove nor raise
+/// that name's limit, nor read the limit of the directory (review Q5, finding 2).
+#[test]
+fn a_narrowed_connection_cannot_change_a_limit() {
+    let (mut c, root) = rig();
+    c.make_directory(root, "room").unwrap();
+    c.set_limit(root, "room", Some(4096 * 4)).unwrap();
+    let narrow = c.narrow(root, "room", rights::ALL).unwrap();
+    assert_eq!(
+        c.set_limit(narrow, "room", None),
+        Err(status::ACCESS_DENIED)
+    );
+    assert_eq!(
+        c.set_limit(narrow, "room", Some(u64::MAX)),
+        Err(status::ACCESS_DENIED)
+    );
+    assert_eq!(c.limit(narrow), Err(status::ACCESS_DENIED));
+    // A cloned connection without READ cannot read it either.
+    let w = c.clone_with(root, rights::WRITE).unwrap();
+    assert_eq!(c.limit(w), Err(status::ACCESS_DENIED));
+    let room = c
+        .open(root, "room", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4096 * 4, 0))));
+}
+
+/// Re-check W2: a full directory connection with `WRITE` and `CREATE` (what two
+/// `create` operands in one directory give) or with `WRITE` alone (a `write`
+/// operand naming a directory) cannot change a limit; one with `WRITE`,
+/// `CREATE`, `REMOVE` and `RENAME` can.
+#[test]
+fn only_a_connection_with_the_rights_of_a_tree_sets_a_limit() {
+    let (mut c, root) = rig();
+    c.make_directory(root, "room").unwrap();
+    c.set_limit(root, "room", Some(4096 * 4)).unwrap();
+    for have in [
+        rights::READ | rights::WRITE | rights::CREATE,
+        rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
+        rights::WRITE | rights::CREATE | rights::REMOVE,
+    ] {
+        let part = c.clone_with(root, have).unwrap();
+        assert_eq!(
+            c.set_limit(part, "room", None),
+            Err(status::ACCESS_DENIED),
+            "{have:#x}"
+        );
+        assert_eq!(
+            c.set_limit(part, "room", Some(u64::MAX)),
+            Err(status::ACCESS_DENIED),
+            "{have:#x}"
+        );
+    }
+    let full = c
+        .clone_with(
+            root,
+            rights::READ | rights::WRITE | rights::CREATE | rights::REMOVE | rights::RENAME,
+        )
+        .unwrap();
+    assert_eq!(c.set_limit(full, "room", Some(4096 * 8)), Ok(()));
+    let room = c
+        .open(root, "room", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4096 * 8, 0))));
+}

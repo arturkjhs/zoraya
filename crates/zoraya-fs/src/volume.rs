@@ -44,9 +44,34 @@ pub const DELETE_RESERVE: u64 = 64;
 /// Object ids are reserved durably in batches of this many (ADR-0016, item
 /// 1).
 pub const ID_BATCH: u64 = 1024;
+/// Most objects (entries and orphans) one `set_limit` scans to start a new
+/// limit; a larger tree is refused with `ScanTooLarge` (review Q5, finding 6).
+/// About 50 ms on the host build for a flat tree; an assumption until measured
+/// on the guest.
+pub const SCAN_BOUND: usize = 50_000;
+/// One block, the unit of a limit's charge (ADR-0265 rule 1).
+const BLK: u64 = BLOCK_SIZE as u64;
 /// Default modes for native clients that give none (ADR-0014 rule 6).
 pub const DEFAULT_FILE_MODE: u16 = 0o644;
 pub const DEFAULT_DIR_MODE: u16 = 0o755;
+
+/// What an object adds to the `used` of every limited directory above it:
+/// one block for the object, and for a file or link its logical size rounded
+/// up to blocks (ADR-0265 rule 1).
+pub(crate) fn charge_of(kind: ObjKind, size: u64) -> u64 {
+    match kind {
+        ObjKind::Directory => BLK,
+        _ => BLK.saturating_add(size.div_ceil(BLK).saturating_mul(BLK)),
+    }
+}
+
+/// A directory's storage limit record, as `stat` reports it (ADR-0265
+/// rule 8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LimitInfo {
+    pub limit: u64,
+    pub used: u64,
+}
 
 /// A handle to an open object. Handles are per volume; the service maps
 /// them to kernel handles.
@@ -501,6 +526,24 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         core::mem::take(&mut self.touched)
     }
 
+    /// Test only: writes a wrong `used` into the limit record of `dir`'s
+    /// child `name` (a record with no limit if it had none), to see that `fsck`
+    /// finds and repairs it.
+    #[cfg(feature = "instrument")]
+    pub fn debug_set_used(&mut self, dir: Handle, name: &str, used: u64) {
+        let _ = self.mutate(false, false, &mut |v| {
+            let (parent, name) = v.parent_of(dir, name)?;
+            let (id, _) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
+            let limit = match v.tget(&Key::limit(id))? {
+                Some(Value::Limit { limit, .. }) => limit,
+                _ => u64::MAX,
+            };
+            v.tins(Key::limit(id), Value::Limit { limit, used })?;
+            v.now();
+            Ok(())
+        });
+    }
+
     /// Blocks the open group needs at commit (tree nodes and data) and the
     /// count found by walking the dirty tree, which must be equal.
     pub fn debug_dirty_counts(&self) -> (u64, u64) {
@@ -732,8 +775,18 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     }
 
     /// Removes an object entirely: attributes, parent link, data, orphan
-    /// entry.
+    /// entry. A file or link gives back its charge to the limited
+    /// directories above it (ADR-0265 rule 2); a directory gave its back in
+    /// `unname`.
     fn delete_object(&mut self, id: u64) -> Result<(), FsError> {
+        let a = self.inode(id)?;
+        if a.kind != ObjKind::Directory
+            && let Some(Value::Parent(p)) = self.tget(&Key::fparent(id))?
+        {
+            let chain = self.limited_chain(p)?;
+            self.adjust_chain(&chain, charge_of(a.kind, a.size), false)?;
+            self.tdel(&Key::fparent(id))?;
+        }
         self.tdel(&Key::inode(id))?;
         self.tdel(&Key::parent(id))?;
         self.remove_extents_from(id, 0)?;
@@ -742,9 +795,30 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
     }
 
     /// The object lost its last name: free it, or keep it on the orphan
-    /// list while handles are open (ADR-0011 rule 7).
+    /// list while handles are open (ADR-0011 rule 7). An open file keeps its
+    /// charge until it is freed, so a file unlinked while open cannot grow
+    /// past a limit.
     fn unname(&mut self, id: u64, kind: ObjKind, t: Timestamp) -> Result<(), FsError> {
         if kind == ObjKind::Directory {
+            // A file unlinked while open is still charged to the directory
+            // that held it, and through it to the limits above (ADR-0290):
+            // the directory stays until the file is freed (review Q5,
+            // finding 4; as a directory with a name in it).
+            // Where no limit is above or on the directory, nothing is
+            // charged and removal always works (ADR-0010): the open files
+            // are charged to the parent from now on.
+            let held = self.has_charged_orphans(id)?;
+            if held && !self.limited_chain(id)?.is_empty() {
+                return Err(FsError::NotEmpty);
+            }
+            if let Some(Value::Parent(p)) = self.tget(&Key::parent(id))? {
+                let chain = self.limited_chain(p)?;
+                self.adjust_chain(&chain, BLK, false)?;
+                if held {
+                    self.repoint_orphans(id, p)?;
+                }
+            }
+            self.tdel(&Key::limit(id))?;
             self.tdel(&Key::parent(id))?;
         }
         if self.open.get(&id).copied().unwrap_or(0) > 0 {
@@ -756,6 +830,199 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         } else {
             self.delete_object(id)
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Storage limits (ADR-0265).
+
+    /// The directory a file or link object is charged to.
+    fn fparent(&mut self, id: u64) -> Result<u64, FsError> {
+        match self.tget(&Key::fparent(id))? {
+            Some(Value::Parent(p)) => Ok(p),
+            _ => Err(self.inconsistent()),
+        }
+    }
+
+    /// The directories carrying a limit record among `dir` and its
+    /// ancestors, nearest first.
+    fn limited_chain(&mut self, mut dir: u64) -> Result<Vec<u64>, FsError> {
+        let mut out = Vec::new();
+        // Bounded like `is_within`: a crafted parent cycle is caught.
+        let bound = self.durable.block_count.saturating_mul(256);
+        for _ in 0..=bound {
+            if let Some(Value::Limit { .. }) = self.tget(&Key::limit(dir))? {
+                out.push(dir);
+            }
+            if dir == ROOT_ID {
+                return Ok(out);
+            }
+            dir = match self.tget(&Key::parent(dir))? {
+                Some(Value::Parent(p)) => p,
+                _ => return Err(self.inconsistent()),
+            };
+        }
+        Err(self.inconsistent())
+    }
+
+    /// Adds `bytes` to the `used` of each directory of `chain` (refused with
+    /// `OverQuota` when any would pass its limit), or takes them away (never
+    /// refused).
+    fn adjust_chain(&mut self, chain: &[u64], bytes: u64, add: bool) -> Result<(), FsError> {
+        if bytes == 0 {
+            return Ok(());
+        }
+        for &d in chain {
+            let Some(Value::Limit { limit, used }) = self.tget(&Key::limit(d))? else {
+                return Err(self.inconsistent());
+            };
+            let used = if add {
+                let n = used.checked_add(bytes).ok_or(FsError::OverQuota)?;
+                if n > limit {
+                    return Err(FsError::OverQuota);
+                }
+                n
+            } else {
+                match used.checked_sub(bytes) {
+                    Some(n) => n,
+                    None => return Err(self.inconsistent()),
+                }
+            };
+            self.tins(Key::limit(d), Value::Limit { limit, used })?;
+        }
+        Ok(())
+    }
+
+    /// Charges `bytes` for a new object or growth under directory `dir`.
+    fn charge_under(&mut self, dir: u64, bytes: u64) -> Result<(), FsError> {
+        let chain = self.limited_chain(dir)?;
+        self.adjust_chain(&chain, bytes, true)
+    }
+
+    /// Moves charges between directories: each `(bytes, from, to)` leaves
+    /// the limited ancestors of `from` that `to` does not share and enters
+    /// those of `to` that `from` does not share. Everything leaves before
+    /// anything enters, so a swap that fits is not refused in between.
+    fn move_charges(&mut self, moves: &[(u64, u64, u64)]) -> Result<(), FsError> {
+        let mut chains = Vec::new();
+        for &(bytes, from, to) in moves {
+            let f = self.limited_chain(from)?;
+            let t = self.limited_chain(to)?;
+            chains.push((bytes, f, t));
+        }
+        for (bytes, f, t) in &chains {
+            let out: Vec<u64> = f.iter().copied().filter(|d| !t.contains(d)).collect();
+            self.adjust_chain(&out, *bytes, false)?;
+        }
+        for (bytes, f, t) in &chains {
+            let inn: Vec<u64> = t.iter().copied().filter(|d| !f.contains(d)).collect();
+            self.adjust_chain(&inn, *bytes, true)?;
+        }
+        Ok(())
+    }
+
+    /// Orphans charged to the removed directory `dir` (which has no limit on
+    /// or above it) are charged to its parent `up` from now on.
+    fn repoint_orphans(&mut self, dir: u64, up: u64) -> Result<(), FsError> {
+        let mut at = Key::orphan(0);
+        let mut inclusive = true;
+        while let Some((k, _)) = self.tnext(&at, inclusive)? {
+            if k.id != 0 || k.kind != K_ORPHAN {
+                break;
+            }
+            if let Some(Value::Parent(p)) = self.tget(&Key::fparent(k.off))?
+                && p == dir
+            {
+                self.tins(Key::fparent(k.off), Value::Parent(up))?;
+            }
+            at = k;
+            inclusive = false;
+        }
+        Ok(())
+    }
+
+    /// Whether an object on the orphan list is charged to `dir`.
+    fn has_charged_orphans(&mut self, dir: u64) -> Result<bool, FsError> {
+        let mut at = Key::orphan(0);
+        let mut inclusive = true;
+        while let Some((k, _)) = self.tnext(&at, inclusive)? {
+            if k.id != 0 || k.kind != K_ORPHAN {
+                break;
+            }
+            if let Some(Value::Parent(p)) = self.tget(&Key::fparent(k.off))?
+                && p == dir
+            {
+                return Ok(true);
+            }
+            at = k;
+            inclusive = false;
+        }
+        Ok(false)
+    }
+
+    /// Whether the chains of limited directories above `a` and `b` (each
+    /// included) are the same set.
+    fn same_limits(&mut self, a: u64, b: u64) -> Result<bool, FsError> {
+        let x = self.limited_chain(a)?;
+        let y = self.limited_chain(b)?;
+        Ok(x.len() == y.len() && x.iter().all(|d| y.contains(d)))
+    }
+
+    /// The bytes an existing subtree under `dir` is charged: every object
+    /// below it, and every orphan file charged to a directory inside it.
+    /// Refuses with `OverQuota` a sum past `u64::MAX` (no limit can say it)
+    /// and with `ScanTooLarge` a tree of more than `SCAN_BOUND` objects.
+    fn subtree_used(&mut self, dir: u64) -> Result<u64, FsError> {
+        let mut total = 0u64;
+        let mut seen = 0usize;
+        let mut stack = vec![dir];
+        while let Some(d) = stack.pop() {
+            let mut at = Key::dirent(d, b"");
+            let mut inclusive = true;
+            while let Some((k, v)) = self.tnext(&at, inclusive)? {
+                if k.id != d || k.kind != K_DIRENT {
+                    break;
+                }
+                seen += 1;
+                if seen > SCAN_BOUND {
+                    return Err(FsError::ScanTooLarge);
+                }
+                if let Value::Dirent { child, kind } = v {
+                    let a = self.inode(child)?;
+                    total = total
+                        .checked_add(charge_of(a.kind, a.size))
+                        .ok_or(FsError::OverQuota)?;
+                    if kind == ObjKind::Directory {
+                        stack.push(child);
+                    }
+                }
+                at = k;
+                inclusive = false;
+            }
+        }
+        // Orphan files charged inside the subtree.
+        let mut at = Key::orphan(0);
+        let mut inclusive = true;
+        while let Some((k, _)) = self.tnext(&at, inclusive)? {
+            if k.id != 0 || k.kind != K_ORPHAN {
+                break;
+            }
+            seen += 1;
+            if seen > SCAN_BOUND {
+                return Err(FsError::ScanTooLarge);
+            }
+            let a = self.inode(k.off)?;
+            if a.kind != ObjKind::Directory
+                && let Some(Value::Parent(p)) = self.tget(&Key::fparent(k.off))?
+                && self.is_within(p, dir)?
+            {
+                total = total
+                    .checked_add(charge_of(a.kind, a.size))
+                    .ok_or(FsError::OverQuota)?;
+            }
+            at = k;
+            inclusive = false;
+        }
+        Ok(total)
     }
 
     fn adjust_dir(&mut self, dir: u64, delta: i64, t: Timestamp) -> Result<(), FsError> {
@@ -985,6 +1252,10 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         self.st.next_id += 1;
         let t = self.now();
         let size = target.map_or(0, |s| s.len() as u64);
+        self.charge_under(parent, charge_of(kind, size))?;
+        if kind != ObjKind::Directory {
+            self.tins(Key::fparent(id), Value::Parent(parent))?;
+        }
         self.put_inode(Attr {
             id,
             kind,
@@ -1143,6 +1414,19 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
             {
                 return Err(FsError::InvalidArgument);
             }
+            // Storage limits (ADR-0265 rule 3): a directory moves only
+            // inside one set of limited ancestors.
+            if sp != dp {
+                let mut dirs_move = skind == ObjKind::Directory;
+                if mode == RenameMode::Exchange
+                    && let Some((_, ObjKind::Directory)) = dst
+                {
+                    dirs_move = true;
+                }
+                if dirs_move && !v.same_limits(sp, dp)? {
+                    return Err(FsError::CrossesLimit);
+                }
+            }
             let t = v.now();
             match (mode, dst) {
                 (RenameMode::Exchange, Some((did, dkind))) => {
@@ -1160,9 +1444,19 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                             kind: skind,
                         },
                     )?;
+                    let mut moves = Vec::new();
+                    for (id, kind, from, to) in [(sid, skind, sp, dp), (did, dkind, dp, sp)] {
+                        if kind != ObjKind::Directory {
+                            let size = v.inode(id)?.size;
+                            moves.push((charge_of(kind, size), from, to));
+                        }
+                    }
+                    v.move_charges(&moves)?;
                     for (id, kind, parent) in [(sid, skind, dp), (did, dkind, sp)] {
                         if kind == ObjKind::Directory {
                             v.tins(Key::parent(id), Value::Parent(parent))?;
+                        } else {
+                            v.tins(Key::fparent(id), Value::Parent(parent))?;
                         }
                         let mut a = v.inode(id)?;
                         a.ctime = t;
@@ -1185,6 +1479,10 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                     )?;
                     if skind == ObjKind::Directory {
                         v.tins(Key::parent(sid), Value::Parent(dp))?;
+                    } else {
+                        let size = v.inode(sid)?.size;
+                        v.move_charges(&[(charge_of(skind, size), sp, dp)])?;
+                        v.tins(Key::fparent(sid), Value::Parent(dp))?;
                     }
                     let mut a = v.inode(sid)?;
                     a.ctime = t;
@@ -1239,11 +1537,35 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 self.set_extent(id, size / bs, b)?;
             }
         }
+        self.charge_size_change(id, a.kind, a.size, size)?;
         let t = self.now();
         a.size = size;
         a.mtime = t;
         a.ctime = t;
         self.put_inode(a)
+    }
+
+    /// Keeps the limited directories above file `id` in step with its size
+    /// going from `old` to `new`: growth is checked, a shrink never refused
+    /// (ADR-0265 rule 2).
+    fn charge_size_change(
+        &mut self,
+        id: u64,
+        kind: ObjKind,
+        old: u64,
+        new: u64,
+    ) -> Result<(), FsError> {
+        let (o, n) = (charge_of(kind, old), charge_of(kind, new));
+        if o == n {
+            return Ok(());
+        }
+        let p = self.fparent(id)?;
+        let chain = self.limited_chain(p)?;
+        if n > o {
+            self.adjust_chain(&chain, n - o, true)
+        } else {
+            self.adjust_chain(&chain, o - n, false)
+        }
     }
 
     /// Sets a file's size; new space reads as zeros.
@@ -1303,13 +1625,74 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 v.set_extent(e.id, index, b)?;
                 pos += n as u64;
             }
+            let new_size = a.size.max(end);
+            v.charge_size_change(e.id, a.kind, a.size, new_size)?;
             let t = v.now();
-            a.size = a.size.max(end);
+            a.size = new_size;
             a.mtime = t;
             a.ctime = t;
             v.put_inode(a)?;
             Ok(data.len())
         })
+    }
+
+    /// Sets (`Some`) or removes (`None`) the storage limit of the directory
+    /// `name` in `dir` (ADR-0265 rule 4). A new limit starts from the bytes
+    /// the directory's subtree holds; a limit below `used` is allowed and
+    /// refuses growth until `used` falls.
+    pub fn set_limit(
+        &mut self,
+        dir: Handle,
+        name: &str,
+        limit: Option<u64>,
+    ) -> Result<(), FsError> {
+        self.writable()?;
+        // A request that adds no record may use the delete reserve: taking a
+        // limit away, and changing one that is there (the keeper can set a
+        // limit again before removing it; re-check W4). A new record does not.
+        let existing = self
+            .parent_of(dir, name)
+            .ok()
+            .and_then(|(p, n)| self.entry(p, n.as_bytes()).ok().flatten())
+            .is_some_and(|(id, _)| matches!(self.tget(&Key::limit(id)), Ok(Some(_))));
+        self.mutate(limit.is_none() || existing, false, &mut |v| {
+            let (parent, name) = v.parent_of(dir, name)?;
+            let (id, kind) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
+            if kind != ObjKind::Directory {
+                return Err(FsError::NotDir);
+            }
+            match (limit, v.tget(&Key::limit(id))?) {
+                (None, _) => {
+                    v.tdel(&Key::limit(id))?;
+                }
+                (Some(l), Some(Value::Limit { used, .. })) => {
+                    v.tins(Key::limit(id), Value::Limit { limit: l, used })?;
+                }
+                (Some(l), _) => {
+                    let used = v.subtree_used(id)?;
+                    v.tins(Key::limit(id), Value::Limit { limit: l, used })?;
+                }
+            }
+            v.now();
+            Ok(())
+        })
+    }
+
+    /// The limit record of the directory `h`, if it has one (ADR-0265
+    /// rule 8).
+    pub fn limit_of(&mut self, h: Handle) -> Result<Option<LimitInfo>, FsError> {
+        let e = self.handle(h)?;
+        if e.kind != ObjKind::Directory {
+            return Ok(None);
+        }
+        match self.tget(&Key::limit(e.id)) {
+            Ok(Some(Value::Limit { limit, used })) => Ok(Some(LimitInfo { limit, used })),
+            Ok(_) => Ok(None),
+            Err(e) => {
+                self.note_meta_error();
+                Err(e)
+            }
+        }
     }
 
     /// Reads from `offset` into `buf`; returns the bytes read (0 at or past
@@ -1421,6 +1804,8 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 ctime: t,
                 posix_mode: mode,
             })?;
+            v.charge_under(d, BLK)?;
+            v.tins(Key::fparent(id), Value::Parent(d))?;
             v.tins(Key::orphan(id), Value::Orphan)?;
             Ok(id)
         })?;
@@ -1463,6 +1848,10 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 v.unname(did, dkind, t)?;
             }
             v.tdel(&Key::orphan(e.id))?;
+            let from = v.fparent(e.id)?;
+            let size = v.inode(e.id)?.size;
+            v.move_charges(&[(charge_of(ObjKind::File, size), from, parent)])?;
+            v.tins(Key::fparent(e.id), Value::Parent(parent))?;
             v.tins(
                 Key::dirent(parent, name.as_bytes()),
                 Value::Dirent {
@@ -1758,6 +2147,24 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                             v.put_inode(a)?;
                         }
                     }
+                    Fix::SetCharged { id, dir } => match dir {
+                        Some(d) => {
+                            v.tins(Key::fparent(*id), Value::Parent(*d))?;
+                        }
+                        None => {
+                            v.tdel(&Key::fparent(*id))?;
+                        }
+                    },
+                    Fix::SetUsed { dir, used } => match used {
+                        Some(u) => {
+                            if let Some(Value::Limit { limit, .. }) = v.tget(&Key::limit(*dir))? {
+                                v.tins(Key::limit(*dir), Value::Limit { limit, used: *u })?;
+                            }
+                        }
+                        None => {
+                            v.tdel(&Key::limit(*dir))?;
+                        }
+                    },
                     Fix::SetParent { dir, parent } => match parent {
                         Some(p) => {
                             v.tins(Key::parent(*dir), Value::Parent(*p))?;
@@ -1775,7 +2182,10 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
                 }
                 Fix::Orphan(_) => out.objects_orphaned += 1,
                 Fix::SetDirSize { .. } => out.sizes_fixed += 1,
-                Fix::SetParent { .. } | Fix::SetEntryKind { .. } => out.parents_fixed += 1,
+                Fix::SetParent { .. }
+                | Fix::SetEntryKind { .. }
+                | Fix::SetCharged { .. }
+                | Fix::SetUsed { .. } => out.parents_fixed += 1,
             }
         }
         self.commit()

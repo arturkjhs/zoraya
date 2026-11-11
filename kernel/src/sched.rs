@@ -223,10 +223,10 @@ pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>
 }
 
 /// What a user thread costs its process's job: the record, the kernel stack
-/// and a place in each of the scheduler's two queues.
+/// and a place in each of the scheduler's three lists (ready, parked, dead).
 fn thread_paid(process: &Process) -> Result<Paid, Status> {
     let mut paid = Paid::new(Some(process.job()));
-    let queues = 2 * core::mem::size_of::<usize>() as u64;
+    let queues = 3 * core::mem::size_of::<usize>() as u64;
     paid.kernel(charge::arc_cost::<Thread>() + THREAD_STACK_SIZE as u64 + queues)?;
     Ok(paid)
 }
@@ -325,9 +325,8 @@ fn period_end(_: usize) {
         if again.is_ok() {
             return;
         }
-        // No deadline to be had: never strand a thread. Bounded by the
-        // threads that exist, and only when the deadline queue is full.
-        while s.ready.release() > 0 {}
+        // No slot for the next batch (the queue keeps two for the scheduler,
+        // so this is not reached): the next `schedule` arms it again.
     }
     s.release_armed = false;
 }
@@ -342,8 +341,11 @@ fn arm_release(s: &mut Sched, now: u64) {
     if timer::arm_reserved(at, period_end, 0).is_ok() {
         s.release_armed = true;
     } else {
-        // See `period_end`: a parked thread must have a way back.
-        while s.ready.release() > 0 {}
+        // A parked thread must have a way back (INV-0285-1). A slot is
+        // always free (two are reserved, only this deadline and the slice use
+        // them), so this is not reached; if it were, one bounded batch goes
+        // back now and the next `schedule` tries again.
+        s.ready.release();
     }
 }
 
@@ -366,8 +368,10 @@ fn schedule() {
             let ran = now.saturating_sub(s.switched_in);
             let since = zoraya_cpu::period_start(now, period_ns).max(s.switched_in);
             zoraya_cpu::charge(
-                &mut JobTree(core::marker::PhantomData),
-                JobRef::of(process.job()),
+                &mut JobTree::new(),
+                // SAFETY: `current` (an `Arc<Thread>`, so its process and the
+                // job chain above it) is a local until the end of this block.
+                unsafe { JobRef::of(process.job()) },
                 ran,
                 now.saturating_sub(since),
                 zoraya_cpu::period_of(now, period_ns),
@@ -388,12 +392,13 @@ fn schedule() {
         }
         // The first ready thread whose job has budget; those ahead of it
         // whose job has none are parked (ADR-0264 point 5).
-        let picked = s.ready.pick(
-            &mut JobTree(core::marker::PhantomData),
-            now,
-            period_ns,
-            |t| t.process.as_ref().map(|p| JobRef::of(p.job())),
-        );
+        // `None` with threads still ready: the cap of parks per pick was hit;
+        // idle runs and calls `schedule` again (see `RunQueue::pick`).
+        let picked = s.ready.pick(&mut JobTree::new(), now, period_ns, |t| {
+            // SAFETY: `pick` owns `t` (popped from the queue) until it has
+            // decided on it, and a thread holds its process and so the jobs.
+            t.process.as_ref().map(|p| unsafe { JobRef::of(p.job()) })
+        });
         arm_release(s, now);
         let (next, limited) = match picked {
             Some(p) => (p.thread, p.slice_ns),
@@ -426,7 +431,7 @@ fn schedule() {
         unsafe { mmu::set_user_table(ttbr0) };
         // SAFETY: every exception is masked. Both threads are kept alive past
         // the switch: `next` by SCHED.current; `prev` by the ready queue, the
-        // dead list, `s.idle`, its process's `thread`, or the waiter list or
+        // parked list, the dead list, `s.idle`, its process's `thread`, or the waiter list or
         // count that will wake it. No local here holds a count.
         unsafe { arch::switch((*prev).context.get(), (*next).context.get()) };
     }

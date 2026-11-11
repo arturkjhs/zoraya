@@ -188,6 +188,23 @@ impl<L: Link> Client<L> {
         self.connect(conn, &m)
     }
 
+    /// A new connection to the same object in a new account carved from this
+    /// connection's with `budget` open handles (ADR-0262 item 2): what a
+    /// launcher gives an untrusted room. `TOO_MANY_OPEN` if the account
+    /// cannot spare the budget.
+    pub fn clone_account(
+        &mut self,
+        conn: L::Handle,
+        rights: u32,
+        budget: u32,
+    ) -> Result<L::Handle, Status> {
+        let m = proto::CloneAccount {
+            rights: Flags(rights),
+            budget,
+        };
+        self.connect(conn, &m)
+    }
+
     /// A connection to `dir` through which only `name` can be used, with
     /// `rights` (ADR-0153 rule 2).
     pub fn narrow(&mut self, dir: L::Handle, name: &str, rights: u32) -> Result<L::Handle, Status> {
@@ -330,6 +347,40 @@ impl<L: Link> Client<L> {
         };
         let length = self.call(dir, &m, &[])?;
         self.done(length).map(|_| ())
+    }
+
+    /// Sets (`Some(bytes)`) or removes (`None`) the storage limit of the
+    /// child directory `name` of `dir` (ADR-0265 rule 4). Needs `WRITE`.
+    pub fn set_limit(
+        &mut self,
+        dir: L::Handle,
+        name: &str,
+        limit: Option<u64>,
+    ) -> Result<(), Status> {
+        if !Name::is_valid(name) {
+            return Err(status::INVALID_NAME);
+        }
+        let m = proto::SetLimit {
+            remove: Below(u32::from(limit.is_none())),
+            limit: limit.unwrap_or(0),
+            name: Name(name),
+        };
+        let length = self.call(dir, &m, &[])?;
+        self.done(length).map(|_| ())
+    }
+
+    /// The limit of the directory `dir` itself and the bytes charged below
+    /// it, as `(limit, used)`, or `None` if it has no limit (ADR-0265
+    /// rule 8).
+    pub fn limit(&mut self, dir: L::Handle) -> Result<Option<(u64, u64)>, Status> {
+        let length = self.call(dir, &proto::GetLimit {}, &[])?;
+        match decode::<proto::LimitReply>(&self.reply[..length], 0) {
+            Ok((_, r)) if r.status.0 == status::OK => {
+                Ok((r.limited.0 == 1).then_some((r.limit, r.used)))
+            }
+            Ok((_, r)) => Err(r.status.0),
+            Err(_) => Err(self.done(length).err().unwrap_or(status::INVALID_ARGUMENT)),
+        }
     }
 
     /// Removes `name` from `dir` (a directory only when empty).

@@ -1,0 +1,76 @@
+# Builds the image the jobs of test.yml run in (.github/ci/Dockerfile) and
+# pushes it to ghcr.io/OWNER/REPO/ci:TAG and :latest. TAG is
+# tools/ci-image-tag.sh's hash of the Dockerfile, tools/ci-apt-install.sh and
+# rust-toolchain.toml; test.yml computes the same tag and uses the image only
+# if it exists, so run this (workflow_dispatch) before relying on it.
+name: ci image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/ci/Dockerfile
+      - tools/ci-apt-install.sh
+      - tools/ci-image-tag.sh
+      - rust-toolchain.toml
+      - .github/workflows/ci-image.yml
+    tags:
+      - 'candidate/**'
+      - 'candidate-full/**'
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag
+        id: tag
+        run: |
+          tag=$(tools/ci-image-tag.sh)
+          repo=$(echo "ghcr.io/$GITHUB_REPOSITORY/ci" | tr '[:upper:]' '[:lower:]')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+      # A tag that exists is not rebuilt (a candidate tag without changes);
+      # a manual run always builds.
+      - name: Is the image there already
+        id: have
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.tag.outputs.repo }}:${{ steps.tag.outputs.tag }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] && docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "have=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "have=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/setup-buildx-action@v3.7.1
+        if: steps.have.outputs.have != 'true'
+      - uses: docker/login-action@v3.3.0
+        if: steps.have.outputs.have != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6.9.0
+        if: steps.have.outputs.have != 'true'
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tag.outputs.repo }}:${{ steps.tag.outputs.tag }}
+            ${{ steps.tag.outputs.repo }}:latest
+      - name: Summary
+        env:
+          IMAGE: ${{ steps.tag.outputs.repo }}:${{ steps.tag.outputs.tag }}
+          HAVE: ${{ steps.have.outputs.have }}
+        run: echo "$IMAGE already there=$HAVE" >> "$GITHUB_STEP_SUMMARY"

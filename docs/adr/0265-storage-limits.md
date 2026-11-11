@@ -161,6 +161,9 @@ cost nothing where none is set beyond the walk to the root.
 
 ## Open questions
 - Whether one block per object is the right charge for metadata: measure the engine's real blocks per object.
+  *Note (Q5, 2026-11-11):* the engine charges one block per object, a file's size in blocks and, for a link, its target's block
+  too; the real metadata is a few dozen bytes per object in a leaf, so the charge over-counts and is safe. Not measured
+  against a real directory tree. Details the ADR left open are in proposed ADR-0290.
 - Whether a soft limit with a grace period (XFS) is wanted for trusted directories.
 
 ## Revisit triggers

@@ -44,6 +44,7 @@ pub const EMSGSIZE: i32 = 90;
 pub const EILSEQ: i32 = 84;
 pub const ENOTSUP: i32 = 95;
 pub const ECANCELED: i32 = 125;
+pub const EDQUOT: i32 = 122;
 
 /// What kind of call met a native status: `LimitReached` is a full handle
 /// table for a call that makes a descriptor, a full mapping table for one
@@ -154,6 +155,11 @@ pub const FILE: &[(u32, i32)] = &[
     // The service's mappings for buffers are all in use.
     (file::LIMIT_REACHED, ENOMEM),
     (file::UNSUPPORTED, ENOSYS),
+    // ADR-0265 item 7: a storage limit of a directory above the object, and
+    // a directory moved across one (`mv` then copies and deletes, as across
+    // volumes).
+    (file::OVER_QUOTA, EDQUOT),
+    (file::CROSSES_LIMIT, EXDEV),
     (GONE, EIO),
 ];
 
@@ -204,6 +210,9 @@ mod tests {
         assert_eq!(other(Status::BadHandle), EBADF);
         assert_eq!(from_file(file::STORAGE_FAILED), EIO);
         assert_eq!(from_file(file::NO_SPACE), ENOSPC);
+        // ADR-0265 item 7, and not ENOSPC: a full limit is not a full volume.
+        assert_eq!(from_file(file::OVER_QUOTA), EDQUOT);
+        assert_eq!(from_file(file::CROSSES_LIMIT), EXDEV);
         assert_eq!(from_file(file::TOO_MANY_OPEN), ENFILE);
         assert_eq!(from_file(GONE), EIO);
     }
@@ -235,11 +244,11 @@ mod tests {
 
     #[test]
     fn every_file_status_maps_once_and_only_ok_to_zero() {
-        for s in 0..16 {
+        for s in 0..18 {
             assert_eq!(FILE.iter().filter(|(f, _)| *f == s).count(), 1, "{s}");
             assert_eq!(from_file(s) == 0, s == file::OK, "{s}");
         }
-        assert_eq!(from_file(16), EIO, "a status the protocol does not have");
+        assert_eq!(from_file(18), EIO, "a status the protocol does not have");
         // The numbers are musl's for AArch64 (arch/generic/bits/errno.h).
         let musl = [
             (ENOENT, 2),
