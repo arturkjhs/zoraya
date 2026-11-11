@@ -32,6 +32,27 @@ use zoraya_protocol::{
 pub const MAX_OPEN: usize = 896;
 /// Client buffers mapped at once (ADR-0055).
 pub const MAX_BUFFERS: usize = 240;
+/// Replies held for clients that do not read them, for all accounts
+/// together: one per connection at most, so as many as connections (ADR-0262
+/// item 2's table; the session's account keeps what it has today).
+pub const MAX_HELD: usize = MAX_OPEN;
+/// Accounts carved from the session's, at once (ADR-0262 item 2: four
+/// untrusted rooms, ADR-0269).
+pub const MAX_UNTRUSTED_ACCOUNTS: usize = 4;
+/// The most open handles one untrusted account may be given.
+pub const UNTRUSTED_OPEN: usize = 32;
+/// The mapped buffers an account of `budget` open handles may hold: an
+/// eighth, at least one (4 for the untrusted 32).
+pub const fn buffers_for(budget: usize) -> usize {
+    let n = budget / 8;
+    if n == 0 { 1 } else { n }
+}
+/// The held replies an account of `budget` open handles may have: a
+/// thirty-second, at least one (1 for the untrusted 32).
+pub const fn held_for(budget: usize) -> usize {
+    let n = budget / 32;
+    if n == 0 { 1 } else { n }
+}
 /// How long a reply that met `NoMemory` waits before the next try.
 const RETRY_NS: u64 = 10_000_000;
 
@@ -197,9 +218,98 @@ struct HeldReply<E> {
     handles: Vec<E>,
 }
 
+/// The service's worst-case memory for a transport whose handle is `E`,
+/// from its bounds (ADR-0262 "A service's size", INV-0262-3's size test).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorstCase {
+    /// The service's own buffers, whatever the clients do.
+    pub fixed: usize,
+    /// One open handle at its worst: a connection with its description and
+    /// the names it keeps (`only`, the directory position).
+    pub per_open: usize,
+    /// One held reply at its worst: a full message and its handle.
+    pub per_held: usize,
+    /// One account's bookkeeping.
+    pub per_account: usize,
+}
+
+impl WorstCase {
+    /// What an account with `open` handles and `held` held replies can make
+    /// the service keep.
+    pub const fn of_account(&self, open: usize, held: usize) -> usize {
+        self.per_account + open * self.per_open + held * self.per_held
+    }
+
+    /// The whole service with every bound used (the session's account and
+    /// the untrusted ones together are the global bounds).
+    pub const fn total(&self) -> usize {
+        self.fixed
+            + self.per_account * (1 + MAX_UNTRUSTED_ACCOUNTS)
+            + MAX_OPEN * self.per_open
+            + MAX_HELD * self.per_held
+    }
+}
+
+/// The worst case of a service over transport handles of type `E`.
+pub const fn worst_case<E>() -> WorstCase {
+    let name = zoraya_fs::name::MAX_NAME;
+    WorstCase {
+        fixed: 2 * MAX_WIRE_MESSAGE + proto::MAX_INLINE,
+        per_open: core::mem::size_of::<Option<Connection<E>>>()
+            + core::mem::size_of::<Option<Record>>()
+            // `only` and the directory position's name.
+            + 2 * name,
+        per_held: MAX_WIRE_MESSAGE + core::mem::size_of::<E>(),
+        per_account: core::mem::size_of::<Option<Account>>(),
+    }
+}
+
+/// What one client may make the service hold (ADR-0262 item 2): the
+/// connections reached from one launcher grant. Each limit is the capacity
+/// left for the account's own use; what it carved for sub-accounts is in
+/// theirs, so the limits of all live accounts add up to the service's
+/// bounds (INV-0262-3).
+struct Account {
+    /// The account this one was carved from, while it lives.
+    parent: Option<usize>,
+    /// False only for the session's account; `sync` of the others folds
+    /// into the next commit (ADR-0265 item 9).
+    untrusted: bool,
+    /// Carved from the session's account: in the untrusted column.
+    top: bool,
+    connections: u32,
+    open_limit: usize,
+    open: usize,
+    buffers_limit: usize,
+    buffers: usize,
+    held_limit: usize,
+    held: usize,
+}
+
+/// The accounts' totals, for tests and for `top` (ADR-0262).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct AccountTotals {
+    pub accounts: usize,
+    pub open_limit: usize,
+    pub open: usize,
+    pub buffers_limit: usize,
+    pub buffers: usize,
+    pub held_limit: usize,
+    pub held: usize,
+    /// The accounts carved from the session's, and their limits.
+    pub top_accounts: usize,
+    pub top_open_limit: usize,
+    pub top_buffers_limit: usize,
+}
+
 struct Connection<E> {
     end: E,
     record: usize,
+    /// The account that pays for this connection and what it holds.
+    account: usize,
+    /// A `sync` waiting for a commit: its transaction and the commit count
+    /// when it came (ADR-0265 item 9).
+    syncing: Option<(u32, u64)>,
     rights: u32,
     buffer: Option<Buffer<E>>,
     token: Option<E>,
@@ -235,6 +345,9 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     /// Handles held for clients (ADR-0055).
     open: usize,
     buffers: usize,
+    accounts: Vec<Option<Account>>,
+    /// Connections with a `sync` waiting for a commit.
+    syncs: Vec<usize>,
     /// Reads reported as `StorageFailed`, not to be counted as corrupt.
     outage_reads: u64,
     told_lost: bool,
@@ -335,6 +448,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             records: Vec::new(),
             open: 0,
             buffers: 0,
+            accounts: Vec::new(),
+            syncs: Vec::new(),
             outage_reads: 0,
             told_lost: false,
             peak_used: 0,
@@ -391,8 +506,173 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     pub fn add_root(&mut self, end: T::End) -> bool {
         let handle = self.volume.root();
         let record = self.new_record(handle);
-        self.add_connection(end, record, proto::rights::ALL)
+        let account = self.session_account();
+        self.add_connection(end, record, proto::rights::ALL, account)
             .is_some()
+    }
+
+    /// The session's account, made with what the live ones leave of each
+    /// bound if it is gone (ADR-0262 item 2).
+    fn session_account(&mut self) -> usize {
+        if let Some(i) = self
+            .accounts
+            .iter()
+            .position(|a| a.as_ref().is_some_and(|a| !a.untrusted))
+        {
+            return i;
+        }
+        let (mut open, mut buffers, mut held) = (0, 0, 0);
+        for a in self.accounts.iter().flatten() {
+            open += a.open_limit;
+            buffers += a.buffers_limit;
+            held += a.held_limit;
+        }
+        self.new_account(Account {
+            parent: None,
+            untrusted: false,
+            top: false,
+            connections: 0,
+            open_limit: MAX_OPEN.saturating_sub(open),
+            open: 0,
+            buffers_limit: MAX_BUFFERS.saturating_sub(buffers),
+            buffers: 0,
+            held_limit: MAX_HELD.saturating_sub(held),
+            held: 0,
+        })
+    }
+
+    fn new_account(&mut self, account: Account) -> usize {
+        match self.accounts.iter().position(Option::is_none) {
+            Some(i) => {
+                self.accounts[i] = Some(account);
+                i
+            }
+            None => {
+                self.accounts.push(Some(account));
+                self.accounts.len() - 1
+            }
+        }
+    }
+
+    fn account(&self, a: usize) -> Option<&Account> {
+        self.accounts.get(a)?.as_ref()
+    }
+
+    fn account_mut(&mut self, a: usize) -> Option<&mut Account> {
+        self.accounts.get_mut(a)?.as_mut()
+    }
+
+    /// The account of connection `i`; the session's if the slot is gone,
+    /// which `ready` never asks.
+    fn account_of(&self, i: usize) -> usize {
+        self.connections
+            .get(i)
+            .and_then(Option::as_ref)
+            .map_or(0, |c| c.account)
+    }
+
+    /// `n` handles more held for account `a` and the service.
+    fn charge(&mut self, a: usize, n: usize) {
+        self.open += n;
+        if let Some(x) = self.account_mut(a) {
+            x.open += n;
+        }
+    }
+
+    /// `n` handles less.
+    fn release(&mut self, a: usize, n: usize) {
+        self.open -= n;
+        if let Some(x) = self.account_mut(a) {
+            x.open = x.open.saturating_sub(n);
+        }
+    }
+
+    /// Carves a new account of `budget` open handles from `parent`'s
+    /// (ADR-0262 item 2): `clone` with a budget. The status is the refusal.
+    fn carve(&mut self, parent: usize, budget: usize) -> Result<usize, u32> {
+        let Some(p) = self.account(parent) else {
+            return Err(status::STORAGE_FAILED);
+        };
+        let top = !p.untrusted;
+        if budget == 0 || (top && budget > UNTRUSTED_OPEN) {
+            return Err(status::INVALID_ARGUMENT);
+        }
+        let (buffers, held) = (buffers_for(budget), held_for(budget));
+        let tops = self.accounts.iter().flatten().filter(|a| a.top).count();
+        if p.open_limit - p.open < budget
+            || p.buffers_limit - p.buffers < buffers
+            || p.held_limit - p.held < held
+            || (top && tops >= MAX_UNTRUSTED_ACCOUNTS)
+        {
+            return Err(status::TOO_MANY_OPEN);
+        }
+        if let Some(p) = self.account_mut(parent) {
+            p.open_limit -= budget;
+            p.buffers_limit -= buffers;
+            p.held_limit -= held;
+        }
+        Ok(self.new_account(Account {
+            parent: Some(parent),
+            untrusted: true,
+            top,
+            connections: 0,
+            open_limit: budget,
+            open: 0,
+            buffers_limit: buffers,
+            buffers: 0,
+            held_limit: held,
+            held: 0,
+        }))
+    }
+
+    /// Frees account `a`, which has no connection: what it was given goes
+    /// back to the account it was carved from, and the accounts carved from
+    /// it now answer to that one (INV-0262-2).
+    fn free_account(&mut self, a: usize) {
+        let Some(x) = self.accounts.get_mut(a).and_then(Option::take) else {
+            return;
+        };
+        debug_assert!(x.open == 0 && x.buffers == 0 && x.held == 0);
+        for c in self.accounts.iter_mut().flatten() {
+            if c.parent == Some(a) {
+                c.parent = x.parent;
+            }
+        }
+        if let Some(p) = x.parent.and_then(|p| self.account_mut(p)) {
+            p.open_limit += x.open_limit;
+            p.buffers_limit += x.buffers_limit;
+            p.held_limit += x.held_limit;
+        }
+    }
+
+    /// The accounts' totals.
+    pub fn account_totals(&self) -> AccountTotals {
+        let mut t = AccountTotals::default();
+        for a in self.accounts.iter().flatten() {
+            t.accounts += 1;
+            t.open_limit += a.open_limit;
+            t.open += a.open;
+            t.buffers_limit += a.buffers_limit;
+            t.buffers += a.buffers;
+            t.held_limit += a.held_limit;
+            t.held += a.held;
+            if a.top {
+                t.top_accounts += 1;
+                t.top_open_limit += a.open_limit;
+                t.top_buffers_limit += a.buffers_limit;
+            }
+        }
+        t
+    }
+
+    /// The account connection `i` belongs to, for tests.
+    pub fn account_index(&self, connection: usize) -> Option<usize> {
+        Some(self.connections.get(connection)?.as_ref()?.account)
+    }
+
+    /// Whether the account has been freed, for tests.
+    pub fn account_live(&self, account: usize) -> bool {
+        self.account(account).is_some()
     }
 
     fn new_record(&mut self, handle: Handle) -> usize {
@@ -414,11 +694,19 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
     }
 
-    fn add_connection(&mut self, end: T::End, record: usize, rights: u32) -> Option<usize> {
+    fn add_connection(
+        &mut self,
+        end: T::End,
+        record: usize,
+        rights: u32,
+        account: usize,
+    ) -> Option<usize> {
         let connection = Connection {
             end,
             record,
             rights,
+            account,
+            syncing: None,
             buffer: None,
             token: None,
             held: None,
@@ -440,7 +728,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 self.connections.len() - 1
             }
         };
-        self.open += 1;
+        self.charge(account, 1);
+        if let Some(x) = self.account_mut(account) {
+            x.connections += 1;
+        }
         // A connection the loop cannot hear would hang its client: refused.
         if !self
             .transport
@@ -455,11 +746,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     /// A second connection to the same record, which no stage 4 request can
     /// ask for. It shows that the record does not depend on the connection.
     pub fn attach_second(&mut self, connection: usize, end: T::End) -> Option<usize> {
-        let (record, rights, only) = {
+        let (record, rights, only, account) = {
             let c = self.connections.get(connection)?.as_ref()?;
-            (c.record, c.rights, c.only.clone())
+            (c.record, c.rights, c.only.clone(), c.account)
         };
-        let added = self.add_connection(end, record, rights)?;
+        let added = self.add_connection(end, record, rights, account)?;
         self.set_only(added, only);
         Some(added)
     }
@@ -497,19 +788,24 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(mut c) = self.connections.get_mut(index).and_then(Option::take) else {
             return;
         };
+        self.syncs.retain(|x| *x != index);
+        let account = c.account;
         self.transport.close(c.end);
-        self.open -= 1;
+        self.release(account, 1);
         if let Some(b) = c.buffer.take() {
-            self.drop_buffer(b);
+            self.drop_buffer(account, b);
         }
         if let Some(token) = c.token.take() {
             self.transport.close(token);
-            self.open -= 1;
+            self.release(account, 1);
         }
         if let Some(held) = c.held.take() {
             for handle in held.handles {
                 self.transport.close(handle);
-                self.open -= 1;
+                self.release(account, 1);
+            }
+            if let Some(x) = self.account_mut(account) {
+                x.held -= 1;
             }
         }
         if let Some((id, side)) = c.fifo.take() {
@@ -526,13 +822,23 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             let _ = self.volume.close(record.handle);
             self.after_engine();
         }
+        let empty = self.account_mut(account).is_some_and(|x| {
+            x.connections -= 1;
+            x.connections == 0
+        });
+        if empty {
+            self.free_account(account);
+        }
     }
 
-    fn drop_buffer(&mut self, b: Buffer<T::End>) {
+    fn drop_buffer(&mut self, account: usize, b: Buffer<T::End>) {
         self.transport.unmap(b.address, b.length);
         self.transport.close(b.end);
-        self.open -= 1;
+        self.release(account, 1);
         self.buffers -= 1;
+        if let Some(x) = self.account_mut(account) {
+            x.buffers -= 1;
+        }
     }
 
     /// Runs until the transport says stop.
@@ -582,8 +888,77 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         true
     }
 
+    /// ADR-0265 item 9: a `sync` on a connection of an untrusted account
+    /// does not commit at once. It waits for the next commit the volume
+    /// makes (the timed one or another client's `sync`), so that a loop of
+    /// them costs the volume nothing beyond its timed commits. True if the
+    /// reply will come then; false if the caller syncs now (a trusted
+    /// account, nothing to commit, a failed or read-only volume).
+    fn fold_sync(&mut self, i: usize, t: u32) -> bool {
+        let untrusted = self
+            .account(self.account_of(i))
+            .is_some_and(|a| a.untrusted);
+        if !untrusted
+            || self.volume.failure().is_some()
+            || self.volume.is_read_only()
+            || self.volume.commit_deadline().is_none()
+        {
+            return false;
+        }
+        let commits = self.volume.commits();
+        let Some(c) = self.connections[i].as_mut() else {
+            return false;
+        };
+        // One at a time: the connection is not read until this one is
+        // answered, so the waiting `sync`s are at most the connections.
+        c.syncing = Some((t, commits));
+        let end = c.end;
+        self.syncs.push(i);
+        self.transport.interest(end, i as u64, Interest::Closed);
+        true
+    }
+
+    /// Answers the `sync`s a commit has made durable, or a failed volume.
+    fn answer_syncs(&mut self) {
+        if self.syncs.is_empty() {
+            return;
+        }
+        let failed = self.volume.failure().is_some();
+        let commits = self.volume.commits();
+        let clean = self.volume.commit_deadline().is_none();
+        let mut waiting = core::mem::take(&mut self.syncs);
+        let mut kept = Vec::new();
+        for index in waiting.drain(..) {
+            let Some((t, at)) = self.connections[index].as_ref().and_then(|c| c.syncing) else {
+                continue;
+            };
+            if !(failed || clean || commits > at) {
+                kept.push(index);
+                continue;
+            }
+            let end = {
+                let Some(c) = self.connections[index].as_mut() else {
+                    continue;
+                };
+                c.syncing = None;
+                c.end
+            };
+            self.transport
+                .interest(end, index as u64, Interest::Requests);
+            let s = if failed {
+                status::STORAGE_FAILED
+            } else {
+                status::OK
+            };
+            self.done(index, t, s, 0);
+        }
+        kept.append(&mut self.syncs);
+        self.syncs = kept;
+    }
+
     /// After every engine call: ADR-0054's loss, then ADR-0016 rule 8's report.
     fn after_engine(&mut self) {
+        self.answer_syncs();
         if let Some(used) = self.volume.used_blocks() {
             self.peak_used = self.peak_used.max(used);
         }
@@ -616,6 +991,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             self.flush_held(index);
             return;
         }
+        if c.syncing.is_some() {
+            // Only the peer's closing wakes a connection waiting for a
+            // commit (its interest is `Closed`).
+            self.close_connection(index);
+            return;
+        }
         let end = c.end;
         let mut input = core::mem::take(&mut self.input);
         let mut handles = core::mem::take(&mut self.handles);
@@ -639,12 +1020,16 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(held) = c.held.as_ref() else {
             return;
         };
+        let account = c.account;
         match self.transport.write(c.end, &held.bytes, &held.handles) {
             Outgoing::Sent => {
                 let sent = held.handles.len();
-                c.held = None;
-                self.open -= sent;
                 let end = c.end;
+                c.held = None;
+                self.release(account, sent);
+                if let Some(x) = self.account_mut(account) {
+                    x.held -= 1;
+                }
                 self.transport
                     .interest(end, index as u64, Interest::Requests);
             }
@@ -666,46 +1051,58 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(c) = self.connections[index].as_mut() else {
             return;
         };
+        let account = c.account;
         match self.transport.write(c.end, &self.output[..length], handles) {
             Outgoing::Sent => {
                 // Moved to the client: no longer the service's.
-                self.open -= handles.len();
+                self.release(account, handles.len());
                 return;
             }
             Outgoing::Closed => {
-                self.drop_handles(handles);
+                self.drop_handles(account, handles);
                 self.close_connection(index);
                 return;
             }
             Outgoing::Full | Outgoing::NoMemory => {}
         }
         // Held: one reply, and this connection is not read until it goes.
-        // Its handles stay counted until then.
+        // Its handles stay counted until then. An account at its bound of
+        // held replies loses the connection instead (ADR-0262 item 2): the
+        // reply a client does not read is the only state it could make the
+        // service keep beyond its open handles.
         let mut bytes = Vec::new();
         let mut held = Vec::new();
-        if bytes.try_reserve_exact(length).is_err()
+        let may_hold = self.account(account).is_some_and(|x| x.held < x.held_limit);
+        if !may_hold
+            || bytes.try_reserve_exact(length).is_err()
             || held.try_reserve_exact(handles.len()).is_err()
         {
-            self.drop_handles(handles);
+            self.drop_handles(account, handles);
             self.close_connection(index);
             return;
         }
         bytes.extend_from_slice(&self.output[..length]);
         held.extend_from_slice(handles);
+        let Some(c) = self.connections[index].as_mut() else {
+            return;
+        };
         c.held = Some(HeldReply {
             bytes,
             handles: held,
         });
         let end = c.end;
+        if let Some(x) = self.account_mut(account) {
+            x.held += 1;
+        }
         self.transport.interest(end, index as u64, Interest::Reply);
     }
 
     /// Closes handles made for a reply that will not be sent.
-    fn drop_handles(&mut self, handles: &[T::End]) {
+    fn drop_handles(&mut self, account: usize, handles: &[T::End]) {
         for &handle in handles {
             self.transport.close(handle);
         }
-        self.open -= handles.len();
+        self.release(account, handles.len());
     }
 
     fn reply<'a, M: Message<'a>>(&mut self, index: usize, transaction: u32, m: &M) {
@@ -789,7 +1186,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             2 => {
                 let (_, m) = decode::<proto::Clone>(bytes, n)?;
-                self.clone_connection(i, t, m.rights.0, None, handles);
+                self.clone_connection(i, t, m.rights.0, None, None, handles);
             }
             36 => {
                 let (_, m) = decode::<proto::Narrow<'_>>(bytes, n)?;
@@ -798,7 +1195,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 if !self.may_name(i, name) {
                     return self.denied(i, t);
                 }
-                self.clone_connection(i, t, m.rights.0, Some(name.into()), handles);
+                self.clone_connection(i, t, m.rights.0, Some(name.into()), None, handles);
+            }
+            40 => {
+                let (_, m) = decode::<proto::CloneAccount>(bytes, n)?;
+                self.clone_connection(i, t, m.rights.0, None, Some(m.budget as usize), handles);
             }
             3 => {
                 let (_, m) = decode::<proto::Read>(bytes, n)?;
@@ -817,7 +1218,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 let buffer = self.connections[i].as_mut().and_then(|c| c.buffer.take());
                 let found = buffer.is_some();
                 if let Some(b) = buffer {
-                    self.drop_buffer(b);
+                    let account = self.account_of(i);
+                    self.drop_buffer(account, b);
                 }
                 let s = if found {
                     status::OK
@@ -866,11 +1268,13 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             15 => {
                 decode::<proto::Sync>(bytes, n)?;
-                let r = if self.has(i, proto::rights::SYNC) {
-                    self.volume.sync().map(|()| 0)
-                } else {
+                if !self.has(i, proto::rights::SYNC) {
                     return self.denied(i, t);
-                };
+                }
+                if self.fold_sync(i, t) {
+                    return Ok(());
+                }
+                let r = self.volume.sync().map(|()| 0);
                 self.after_engine();
                 self.done_result(i, t, r);
             }
@@ -1063,7 +1467,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             return self.error_reply(i, t, status::ACCESS_DENIED);
         }
         // The reply's end, and a fresh pair, take places in the table.
-        if self.open + 3 > MAX_OPEN {
+        // The pair's ends are the service's own (FIFOs exist only in a
+        // temporary directory service, which has one account, ADR-0262
+        // item 2's table); the reply's end is the connection's account's.
+        if self.open + 3 > MAX_OPEN || !self.room(i) {
             return self.error_reply(i, t, status::TOO_MANY_OPEN);
         }
         let Some(fifos) = self.fifos.as_mut() else {
@@ -1151,14 +1558,16 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(dup) = dup else {
             return self.error_reply(i, t, status::LIMIT_REACHED);
         };
-        self.open += 1;
+        let account = self.account_of(i);
+        self.charge(account, 1);
         let m = proto::FifoOpenReply {
             status: code(status::OK),
         };
         match encode(&m, t, &mut self.output) {
             Ok(length) => self.send(i, length, &[dup]),
             Err(_) => {
-                self.drop_handles(&[dup]);
+                let account = self.account_of(i);
+                self.drop_handles(account, &[dup]);
                 self.close_connection(i);
             }
         }
@@ -1244,8 +1653,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// A handle takes a place in the table, and past `MAX_OPEN` it does not
     /// (ADR-0055). The refused handle is closed by `ready`.
-    fn room(&self) -> bool {
+    fn room(&self, i: usize) -> bool {
         self.open < MAX_OPEN
+            && self
+                .account(self.account_of(i))
+                .is_some_and(|a| a.open < a.open_limit)
     }
 
     /// `open`: a native client's create gets `0o644` (ADR-0014 rule 6).
@@ -1267,7 +1679,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         handles: &mut Vec<T::End>,
     ) {
         use proto::{open_flags as f, rights as r};
-        if !self.room() {
+        if !self.room(i) {
             return self.open_answer(i, t, full, status::TOO_MANY_OPEN, ("", ""), None);
         }
         let flags = m.flags.0;
@@ -1381,7 +1793,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         } else {
             None
         };
-        let s = match self.add_connection(end, record, m.rights.0) {
+        let account = self.account_of(i);
+        let s = match self.add_connection(end, record, m.rights.0, account) {
             Some(_) => status::OK,
             None => status::LIMIT_REACHED,
         };
@@ -1439,9 +1852,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         t: u32,
         rights: u32,
         narrow: Option<String>,
+        budget: Option<usize>,
         handles: &mut Vec<T::End>,
     ) {
-        if !self.room() {
+        if !self.room(i) {
             return self.done(i, t, status::TOO_MANY_OPEN, 0);
         }
         if !self.has(i, proto::rights::CLONE) || !self.has(i, rights) {
@@ -1456,12 +1870,21 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(handle) = self.handle_of(i) else {
             return self.done(i, t, status::STORAGE_FAILED, 0);
         };
+        // A budget makes a new account for the new connection (ADR-0262
+        // item 2); without one it joins this connection's.
+        let account = match budget {
+            Some(budget) => match self.carve(self.account_of(i), budget) {
+                Ok(account) => account,
+                Err(s) => return self.done(i, t, s, 0),
+            },
+            None => self.account_of(i),
+        };
         match self.volume.reopen(handle) {
             Ok(handle) => {
                 handles.clear();
                 let record = self.new_record(handle);
                 let only = narrow.or_else(|| self.only_of(i));
-                let s = match self.add_connection(end, record, rights) {
+                let s = match self.add_connection(end, record, rights, account) {
                     Some(added) => {
                         self.set_only(added, only);
                         status::OK
@@ -1470,7 +1893,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 };
                 self.done(i, t, s, 0);
             }
-            Err(e) => self.done_result(i, t, Err(e)),
+            Err(e) => {
+                if budget.is_some() {
+                    self.free_account(account);
+                }
+                self.done_result(i, t, Err(e));
+            }
         }
     }
 
@@ -1548,10 +1976,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn attach(&mut self, i: usize, t: u32, length: u64, handles: &mut Vec<T::End>) {
-        if !self.room() {
+        if !self.room(i) {
             return self.done(i, t, status::TOO_MANY_OPEN, 0);
         }
-        if self.buffers >= MAX_BUFFERS {
+        let account = self.account_of(i);
+        let buffered = self
+            .account(account)
+            .is_none_or(|a| a.buffers >= a.buffers_limit);
+        if self.buffers >= MAX_BUFFERS || buffered {
             return self.done(i, t, status::LIMIT_REACHED, 0);
         }
         let attached = self.connections[i]
@@ -1574,8 +2006,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 length,
             });
         }
-        self.open += 1;
+        self.charge(account, 1);
         self.buffers += 1;
+        if let Some(x) = self.account_mut(account) {
+            x.buffers += 1;
+        }
         self.done(i, t, status::OK, length);
     }
 
@@ -1796,8 +2231,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let existing = self.connections[i].as_ref().and_then(|c| c.token);
         let token = match existing {
             Some(token) => Some(token),
-            None if self.room() => self.transport.new_token().inspect(|token| {
-                self.open += 1;
+            None if self.room(i) => self.transport.new_token().inspect(|token| {
+                let account = self.account_of(i);
+                self.charge(account, 1);
                 if let Some(c) = self.connections[i].as_mut() {
                     c.token = Some(*token);
                 }
@@ -1811,7 +2247,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         };
         // The copy is a handle the service holds until it is sent: it needs
         // room, and is counted.
-        if !self.room() {
+        if !self.room(i) {
             let m = proto::TokenReply {
                 status: code(status::TOO_MANY_OPEN),
             };
@@ -1819,7 +2255,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
         let copy = token.and_then(|token| self.transport.duplicate(token));
         if copy.is_some() {
-            self.open += 1;
+            let account = self.account_of(i);
+            self.charge(account, 1);
         }
         let Some(copy) = copy else {
             let m = proto::TokenReply {
@@ -1833,7 +2270,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         match encode(&m, t, &mut self.output) {
             Ok(size) => self.send(i, size, &[copy]),
             Err(_) => {
-                self.drop_handles(&[copy]);
+                let account = self.account_of(i);
+                self.drop_handles(account, &[copy]);
                 self.close_connection(i);
             }
         }
@@ -2085,7 +2523,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
 
     /// `clone`'s rules, but the new connection joins this one's record.
     fn share(&mut self, i: usize, t: u32, rights: u32, handles: &mut Vec<T::End>) {
-        if !self.room() {
+        if !self.room(i) {
             return self.done(i, t, status::TOO_MANY_OPEN, 0);
         }
         if !self.has(i, proto::rights::CLONE) || !self.has(i, rights) {
@@ -2102,7 +2540,8 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         };
         handles.clear();
         let only = self.only_of(i);
-        let s = match self.add_connection(end, record, rights) {
+        let account = self.account_of(i);
+        let s = match self.add_connection(end, record, rights, account) {
             Some(added) => {
                 self.set_only(added, only);
                 status::OK

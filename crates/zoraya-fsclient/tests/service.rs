@@ -560,3 +560,27 @@ fn a_storage_limit_through_the_protocol() {
     assert_eq!(c.set_limit(root, "room", None), Ok(()));
     assert_eq!(c.limit(room), Ok(None));
 }
+
+/// ADR-0262 item 2: `clone_account` makes an account with the budget and
+/// the service refuses what the caller cannot spare or a budget out of range.
+#[test]
+fn clone_account_carves_a_budget_and_refuses_the_rest() {
+    let (mut c, root) = rig();
+    assert_eq!(
+        c.clone_account(root, rights::ALL, 0),
+        Err(status::INVALID_ARGUMENT)
+    );
+    let room = c.clone_account(root, rights::ALL, 3).unwrap();
+    // Three handles: the clone itself and two more, then the bound.
+    let a = c.open(room, "a", open_flags::CREATE, rights::ALL).unwrap();
+    let b = c.open(room, "b", open_flags::CREATE, rights::ALL).unwrap();
+    assert_eq!(
+        c.open(room, "c", open_flags::CREATE, rights::ALL),
+        Err(status::TOO_MANY_OPEN)
+    );
+    // The session is not affected, and closing gives the places back.
+    assert!(c.open(root, "s", open_flags::CREATE, rights::ALL).is_ok());
+    c.close(a);
+    c.close(b);
+    assert!(c.open(room, "c", open_flags::CREATE, rights::ALL).is_ok());
+}

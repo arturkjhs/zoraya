@@ -188,6 +188,23 @@ impl<L: Link> Client<L> {
         self.connect(conn, &m)
     }
 
+    /// A new connection to the same object in a new account carved from this
+    /// connection's with `budget` open handles (ADR-0262 item 2): what a
+    /// launcher gives an untrusted room. `TOO_MANY_OPEN` if the account
+    /// cannot spare the budget.
+    pub fn clone_account(
+        &mut self,
+        conn: L::Handle,
+        rights: u32,
+        budget: u32,
+    ) -> Result<L::Handle, Status> {
+        let m = proto::CloneAccount {
+            rights: Flags(rights),
+            budget,
+        };
+        self.connect(conn, &m)
+    }
+
     /// A connection to `dir` through which only `name` can be used, with
     /// `rights` (ADR-0153 rule 2).
     pub fn narrow(&mut self, dir: L::Handle, name: &str, rights: u32) -> Result<L::Handle, Status> {

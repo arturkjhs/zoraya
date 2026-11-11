@@ -156,6 +156,16 @@ protocol! {
         rights: Rights,
     }
 
+    /// A new connection to this object with equal or fewer rights, in a new
+    /// account carved from the caller's with `budget` open handles
+    /// (ADR-0262 item 2, ADR-0056's `clone` with a budget). The service
+    /// derives the account's other bounds from it. Answered by `Done`;
+    /// `TOO_MANY_OPEN` if the caller's account cannot spare the budget.
+    message CloneAccount = 40, handles 1 {
+        rights: Rights,
+        budget: u32,
+    }
+
     /// A new connection to this directory with equal or fewer rights,
     /// through which requests may name only `name` (ADR-0055's note,
     /// ADR-0153 rule 2): an operand that creates, replaces, removes or
@@ -457,7 +467,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 39] = [
+pub const REQUESTS: [(&str, u32); 40] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -497,6 +507,7 @@ pub const REQUESTS: [(&str, u32); 39] = [
     ("free_space", 37),
     ("set_limit", 38),
     ("get_limit", 39),
+    ("clone_account", 40),
 ];
 
 /// `fifo_open`'s side.
@@ -537,6 +548,13 @@ mod tests {
 
     #[test]
     fn fixed_messages_round_trip_and_decode_totally() {
+        check(
+            CloneAccount {
+                rights: Flags(rights::READ),
+                budget: 32,
+            },
+            1,
+        );
         check(
             Clone {
                 rights: Flags(rights::READ),
