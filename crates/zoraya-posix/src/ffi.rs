@@ -518,6 +518,12 @@ const MAP_PRIVATE: i64 = 0x02;
 const MAP_FIXED: i64 = 0x10;
 const MAP_ANONYMOUS: i64 = 0x20;
 
+/// `errno` for a status from a system call, with the field of an `OverQuota`
+/// (ADR-0263 item 4; the field is the runtime's last refusal).
+pub(crate) fn rt_errno(status: Status, call: Call) -> i32 {
+    errno::from_status_seen(status, call, zoraya_rt::last_refusal())
+}
+
 fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
     if flags & MAP_SHARED != 0 || flags & MAP_ANONYMOUS == 0 || fd != -1 {
         // File and shared mappings are out of scope (ADR-0103 item 12).
@@ -528,8 +534,8 @@ fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
     }
     let size = (length as u64).next_multiple_of(PAGE_SIZE as u64);
     let free = mappings().iter().position(|m| m.1 == 0).ok_or(ENOMEM)?;
-    let object = zoraya_rt::memory_create(size, MemoryFlags::NONE)
-        .map_err(|s| errno::from_status(s, Call::Memory))?;
+    let object =
+        zoraya_rt::memory_create(size, MemoryFlags::NONE).map_err(|s| rt_errno(s, Call::Memory))?;
     match zoraya_rt::memory_map(object, 0, size, MapFlags::WRITE) {
         Ok(address) => {
             mappings()[free] = (address, size, object.raw());
@@ -537,7 +543,7 @@ fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
         }
         Err(s) => {
             let _ = zoraya_rt::handle_close(object);
-            Err(errno::from_status(s, Call::Memory))
+            Err(rt_errno(s, Call::Memory))
         }
     }
 }
@@ -549,7 +555,7 @@ fn unmap(address: u64, length: u64) -> Result<(), i32> {
         .iter_mut()
         .find(|m| m.1 != 0 && m.0 == address && m.1 == size)
         .ok_or(EINVAL)?;
-    zoraya_rt::memory_unmap(m.0, m.1).map_err(|s| errno::from_status(s, Call::Memory))?;
+    zoraya_rt::memory_unmap(m.0, m.1).map_err(|s| rt_errno(s, Call::Memory))?;
     if let Some(h) = Handle::new(m.2) {
         let _ = zoraya_rt::handle_close(h);
     }

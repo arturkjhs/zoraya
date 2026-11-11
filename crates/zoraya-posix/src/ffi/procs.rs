@@ -1315,7 +1315,7 @@ fn spawn_into(
             let _ = zoraya_rt::handle_close(boot);
             let _ = zoraya_rt::handle_close(boot_child);
             return Err(match s {
-                Status::NoMemory => ENOMEM,
+                Status::NoMemory | Status::OverQuota => super::rt_errno(s, Call::Process),
                 Status::LimitReached => EAGAIN,
                 _ => E2BIG,
             });
@@ -1927,10 +1927,10 @@ extern "C" fn fork() -> i32 {
                 }
                 let _ = zoraya_rt::handle_close(prepared.parent_job);
                 let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
-                Err(if s == Status::NoMemory {
-                    ENOMEM
-                } else {
-                    EAGAIN
+                // ADR-0263 item 4: processes -> EAGAIN, memory -> ENOMEM.
+                Err(match s {
+                    Status::NoMemory | Status::OverQuota => super::rt_errno(s, Call::Process),
+                    _ => EAGAIN,
                 })
             }
         }

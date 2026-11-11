@@ -115,10 +115,28 @@ pub fn raw_syscall(number: u64, registers: [u64; 6]) -> (u64, u64) {
 
 struct Svc;
 
+/// The field the kernel named in x1 with the last `OverQuota` (ADR-0261
+/// point 11; 0 before any). One word per process: a refusal's reader is the
+/// call that got it, before the next call is made.
+static LAST_REFUSAL: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 impl Invoke for Svc {
     fn invoke(number: u64, registers: [u64; 6]) -> (u64, u64) {
-        raw_syscall(number, registers)
+        let (status, value) = raw_syscall(number, registers);
+        if status == Status::OverQuota as u64 {
+            LAST_REFUSAL.store(value, core::sync::atomic::Ordering::Relaxed);
+        }
+        (status, value)
     }
+}
+
+/// Which limit refused the last call that failed with `OverQuota`, so that a
+/// library can choose its `errno` by field (ADR-0263 item 4). `None` if none
+/// has, or the kernel named a field this build does not know.
+pub fn last_refusal() -> Option<zoraya_abi::quota::QuotaField> {
+    zoraya_abi::quota::QuotaField::from_raw(
+        LAST_REFUSAL.load(core::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 fn bytes(slice: &[u8]) -> Buffer {
