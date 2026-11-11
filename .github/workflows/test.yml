@@ -51,6 +51,12 @@ concurrency:
 permissions:
   contents: read
 
+# bash everywhere: in the image container a step's default shell is `sh -e`
+# (dash), which has no `shopt`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # Looks for the CI image of this checkout; outputs its reference, or nothing.
   image:
@@ -154,6 +160,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.7.5
         with:
           shared-key: build
+          key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
       # ADR-0109: the fetch step is outside make test, as the toolchain's install is.
       - name: Cache the ports' archives
         uses: actions/cache@v4
@@ -169,7 +176,7 @@ jobs:
       # rebuilds more. Not the other sources: cargo would take an old time
       # for an unchanged file. A key that misses
       # builds everything, as before. If a restored build is ever wrong, change
-      # the prefix `ports-build-v1`.
+      # the prefix `ports-build-v2`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
         run: git ls-files -z ports tools/zcc | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
@@ -183,7 +190,7 @@ jobs:
             build/sysroot
             build/rootfs-posix
             build/workloads
-          key: ports-build-v1-${{ hashFiles('ports/**', 'tools/zcc/**') }}
+          key: ports-build-v2-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -236,6 +243,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.7.5
         with:
           shared-key: checks
+          key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
           save-if: ${{ matrix.cmd == 'make clippy' }}
       - name: Run
         run: ${{ matrix.cmd }}
