@@ -1400,6 +1400,30 @@ designate (ADR-0153's Decision). Builtins are the commands that act on the shell
 and `sync`; the file commands are programs in the ramdisk. `rm` refuses a path that is `/`, or whose last
 component is `.` or `..`, with or without `--recursive`; `project/` is `project` (TASK-18 review S20).
 
+## Quotas (stage 8, Q1: memory and processes on jobs)
+
+A job can carry a memory limit and a process limit (`job_set_limits`, needs the `LIMIT` right, which `job_create`
+returns and a launcher withholds from what it hands on). A limit never passes the parent's effective limit. Everything a
+program creates is charged to its job and to every job above it (user frames, page tables, memory objects, a process
+with its thread, kernel stack and handle table, channels, ports, streams, events, images, subscriptions, and each queued
+message to its writer). A request that would pass a limit fails with `OverQuota` and changes nothing; the job whose limit
+refused it asserts `OVER_QUOTA`. Nothing is killed or slowed (CPU is Q4). `job_get_usage` reads `limit`, `used`, `peak`,
+`refused`, and the user/kernel split.
+
+`init`'s job holds the frames free after boot less 1/32 (the kernel reserve), and `init` puts `ttyd`, the broker and the
+shell in a session job with three quarters of that and 200 processes. `room new --untrusted` is still refused
+(`make check-untrusted-gate`; the list of tests that end the refusal is `tools/untrusted-gate.txt`).
+
+Measured with Q1 (HVF, default guest, test kernel): `portbench` 1 idle 2208 ns, 10000 idle 1167 ns; `chanbench` round trip
+16 B 8167 ns. No run of the same benchmarks before the change was made in this session, so the cost of the charge on
+those is not known; the charge is one lock and one to four adds per allocation. The reserve: at 1/16 the 256 MiB GUI
+test ended with the session at 214.8 of 215.7 MiB and the files manager's menu refused; at 1/32 it passes with one
+refusal of a terminal window in its log.
+
+Known limits of Q1: each process is charged a 1024-slot handle table when it starts and keeps the charge until its
+record is dropped; a port is charged its largest packet queue; `snapshot_process` is refused page by page, not before
+copying; `libposix` maps `OverQuota` to `ENOMEM`/`EAGAIN` without looking at the field (Q2).
+
 ## Known limitations
 
 - **Masked interrupts.** System calls run with interrupts masked, and some scale with what they touch. Under HVF on
