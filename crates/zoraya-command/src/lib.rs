@@ -484,7 +484,7 @@ pub fn file_problem(status: u32) -> String {
         file::TOO_MANY_OPEN => "too many open files",
         file::LIMIT_REACHED => "a limit was reached",
         file::UNSUPPORTED => "not supported",
-        file::OVER_QUOTA => "over its disk limit",
+        file::OVER_QUOTA => "over quota",
         file::CROSSES_LIMIT => "a directory cannot move across a disk limit",
         FILE_GONE => "the file service is gone",
         other => return format!("unknown error (file status {other})"),

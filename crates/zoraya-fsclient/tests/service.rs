@@ -560,3 +560,30 @@ fn a_storage_limit_through_the_protocol() {
     assert_eq!(c.set_limit(root, "room", None), Ok(()));
     assert_eq!(c.limit(room), Ok(None));
 }
+
+/// A connection narrowed to one name (the shape of `Save` and of an output
+/// operand: `WRITE` and `CREATE` for that name) can neither remove nor raise
+/// that name's limit, nor read the limit of the directory (review Q5, finding 2).
+#[test]
+fn a_narrowed_connection_cannot_change_a_limit() {
+    let (mut c, root) = rig();
+    c.make_directory(root, "room").unwrap();
+    c.set_limit(root, "room", Some(4096 * 4)).unwrap();
+    let narrow = c.narrow(root, "room", rights::ALL).unwrap();
+    assert_eq!(
+        c.set_limit(narrow, "room", None),
+        Err(status::ACCESS_DENIED)
+    );
+    assert_eq!(
+        c.set_limit(narrow, "room", Some(u64::MAX)),
+        Err(status::ACCESS_DENIED)
+    );
+    assert_eq!(c.limit(narrow), Err(status::ACCESS_DENIED));
+    // A cloned connection without READ cannot read it either.
+    let w = c.clone_with(root, rights::WRITE).unwrap();
+    assert_eq!(c.limit(w), Err(status::ACCESS_DENIED));
+    let room = c
+        .open(root, "room", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4096 * 4, 0))));
+}

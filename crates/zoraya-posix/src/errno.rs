@@ -244,11 +244,11 @@ mod tests {
 
     #[test]
     fn every_file_status_maps_once_and_only_ok_to_zero() {
-        for s in 0..16 {
+        for s in 0..18 {
             assert_eq!(FILE.iter().filter(|(f, _)| *f == s).count(), 1, "{s}");
             assert_eq!(from_file(s) == 0, s == file::OK, "{s}");
         }
-        assert_eq!(from_file(16), EIO, "a status the protocol does not have");
+        assert_eq!(from_file(18), EIO, "a status the protocol does not have");
         // The numbers are musl's for AArch64 (arch/generic/bits/errno.h).
         let musl = [
             (ENOENT, 2),

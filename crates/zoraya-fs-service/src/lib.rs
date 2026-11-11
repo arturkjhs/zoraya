@@ -1002,13 +1002,20 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             38 => {
                 let (_, m) = decode::<proto::SetLimit<'_>>(bytes, n)?;
-                if !self.may_name(i, m.name.0) {
+                // A limit is set from above, on a full directory connection
+                // (proposed ADR-0292): a connection narrowed to one name,
+                // which carries create's `WRITE`, must not change it.
+                if self.only_of(i).is_some() {
                     return self.denied(i, t);
                 }
                 self.set_limit(i, t, m.name.0, (m.remove.0 == 0).then_some(m.limit));
             }
             39 => {
                 decode::<proto::GetLimit>(bytes, n)?;
+                // Like a listing: `READ`, and not on a narrowed connection.
+                if self.only_of(i).is_some() || !self.has(i, proto::rights::READ) {
+                    return self.denied(i, t);
+                }
                 self.get_limit(i, t);
             }
             35 => {
