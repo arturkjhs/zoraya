@@ -9,6 +9,8 @@ use zoraya_pmm::{FRAME_SIZE, Frame};
 use super::{frames, phys_to_virt};
 use crate::charge::{self, Paid};
 use crate::job::Job;
+use crate::reaper;
+use crate::steps::{self, STEP};
 use zoraya_abi::Status;
 
 enum Frames {
@@ -69,10 +71,20 @@ impl MemoryObject {
             Frames::Run { first, count }
         } else {
             let mut list = Vec::new();
-            let mut object = Frames::Scattered(Vec::new());
             list.try_reserve_exact(count as usize)
                 .map_err(|_| Status::NoMemory)?;
-            for _ in 0..count {
+            for n in 0..count {
+                // A step of at most `STEP` pages, then interrupts and a
+                // yield; a `job_kill` meanwhile frees what was done
+                // (ADR-0270 points 2 and 3, INV-0270-2). The object is in no
+                // table until the last step.
+                if n > 0
+                    && n.is_multiple_of(STEP as u64)
+                    && let Err(status) = steps::between()
+                {
+                    reaper::release(list, paid);
+                    return Err(status);
+                }
                 let frame = if zeroed {
                     frames::alloc_zeroed()
                 } else {
@@ -81,13 +93,11 @@ impl MemoryObject {
                 match frame {
                     Ok(frame) => list.push(frame),
                     Err(_) => {
-                        object = Frames::Scattered(list);
-                        free(&mut object);
+                        reaper::release(list, paid);
                         return Err(Status::NoMemory);
                     }
                 }
             }
-            drop(object);
             Frames::Scattered(list)
         };
         // On failure the value was dropped, and its `Drop` freed the frames
@@ -189,6 +199,15 @@ fn free(object: &mut Frames) {
 
 impl Drop for MemoryObject {
     fn drop(&mut self) {
-        free(&mut self.frames);
+        match &mut self.frames {
+            // A large object's frames go to the reaper with the charge
+            // (ADR-0270 point 4): the close is not the time of its size.
+            Frames::Scattered(list) if list.len() > STEP => {
+                let list = core::mem::take(list);
+                let paid = core::mem::take(&mut self._paid);
+                reaper::release(list, paid);
+            }
+            other => free(other),
+        }
     }
 }

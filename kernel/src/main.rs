@@ -26,6 +26,7 @@ mod port;
 mod process;
 mod psci;
 mod ramdisk;
+mod reaper;
 mod sched;
 mod steps;
 mod stream;
@@ -101,6 +102,7 @@ extern "C" fn kernel_main(x0: usize, entry_el: u64, phys_base: u64) -> ! {
 
     memory::frames::init(&info);
     sched::init();
+    reaper::start();
 
     let controller = info
         .interrupt_controller

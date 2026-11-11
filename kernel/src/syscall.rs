@@ -30,12 +30,12 @@ use crate::charge::{self, Paid};
 use crate::device::Pin;
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{Copied, Holder, MappingError, USER_HIGH};
+use crate::memory::user::{Copied, Holder, MappingError, SnapshotBuild, USER_HIGH};
 use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
 use crate::stream::Stream;
-use crate::{console, port, print, ramdisk, sched, timer};
+use crate::{console, port, print, ramdisk, sched, steps, timer};
 
 /// Longest `console_write`.
 ///
@@ -613,25 +613,85 @@ impl Handlers for Calls<'_> {
             user: true,
         };
         let frames = object.clone();
+        // In steps of `STEP` pages with no lock held between them
+        // (ADR-0270): the range is in the table of no mapping until the last
+        // step, and a `job_kill` between steps unmaps what was done. The
+        // process's one thread is in this call, so nothing else changes its
+        // space meanwhile.
+        let to_status = |e| match e {
+            MappingError::Limit => Status::LimitReached,
+            MappingError::Quota => Status::OverQuota,
+            _ => Status::NoMemory,
+        };
+        let va = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space.map_reserve(length).map_err(to_status)?
+        };
+        let page = |at: u64| frames.page(offset + at);
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut done = 0;
+        while done < length {
+            let n = step.min(length - done);
+            {
+                let mut space = self.process.space.lock();
+                let space = space.as_mut().ok_or(Status::BadState)?;
+                if let Err(e) = space.map_range(va, done, n, attributes, &page) {
+                    if done > 0 {
+                        space.unmap_range(va, 0, done);
+                    }
+                    return Err(to_status(e));
+                }
+            }
+            done += n;
+            if done < length
+                && let Err(status) = steps::between()
+            {
+                let mut space = self.process.space.lock();
+                if let Some(space) = space.as_mut() {
+                    space.unmap_range(va, 0, done);
+                }
+                return Err(status);
+            }
+        }
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
-        space
-            .map_object(length, attributes, Holder::Memory(object), |at| {
-                frames.page(offset + at)
-            })
-            .map_err(|e| match e {
-                MappingError::Limit => Status::LimitReached,
-                MappingError::Quota => Status::OverQuota,
-                _ => Status::NoMemory,
-            })
+        space.map_commit(va, length, attributes, Holder::Memory(object));
+        Ok(va)
     }
 
     fn memory_unmap(&mut self, address: Address, length: Size) -> Result<u64, Status> {
-        let mut space = self.process.space.lock();
-        let space = space.as_mut().ok_or(Status::BadState)?;
-        let holder = space
-            .unmap_object(address.0, length.0)
-            .map_err(|_| Status::InvalidArgument)?;
+        let (va, length) = (address.0, length.0);
+        {
+            let space = self.process.space.lock();
+            let space = space.as_ref().ok_or(Status::BadState)?;
+            if !space.is_mapped_exactly(va, length) {
+                return Err(Status::InvalidArgument);
+            }
+        }
+        // Unmapping goes on to its end whatever the process was asked
+        // (ADR-0270): a pause after each step, no cancel.
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut done = 0;
+        while done < length {
+            let n = step.min(length - done);
+            {
+                let mut space = self.process.space.lock();
+                let space = space.as_mut().ok_or(Status::BadState)?;
+                space.unmap_range(va, done, n);
+            }
+            done += n;
+            if done < length {
+                steps::pause();
+            }
+        }
+        let holder = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space
+                .unmap_commit(va, length)
+                .map_err(|_| Status::InvalidArgument)?
+        };
         drop(holder);
         Ok(0)
     }
@@ -971,13 +1031,29 @@ impl Handlers for Calls<'_> {
         let mut count = Paid::new(Some(&job));
         count.process()?;
         let mut copied = Copied::default();
-        let space = {
+        // The copy in steps (ADR-0270): the plan, the child and its objects
+        // with no lock held, then up to `STEP` pages at a time under the
+        // parent's lock, with the call open to a `job_kill` between them. The
+        // child is in no table until the end; a cancelled call drops it.
+        let plan = {
             let space = self.process.space.lock();
-            space
-                .as_ref()
-                .ok_or(Status::BadState)?
-                .snapshot(&mut copied, Some(&job))?
+            space.as_ref().ok_or(Status::BadState)?.snapshot_plan()?
         };
+        let mut build = SnapshotBuild::new(plan, Some(&job))?;
+        loop {
+            let done = {
+                let space = self.process.space.lock();
+                space
+                    .as_ref()
+                    .ok_or(Status::BadState)?
+                    .snapshot_step(&mut build, &mut copied)?
+            };
+            if done {
+                break;
+            }
+            steps::between()?;
+        }
+        let space = build.finish()?;
         let child = process::create_snapshot(Snapshot {
             parent: &self.process,
             space,

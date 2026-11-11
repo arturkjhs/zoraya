@@ -1281,7 +1281,11 @@ fn quotas_from_a_process() {
 /// ADR-0270, INV-0270-1 and -2: the longest masked time over every call that
 /// scales, measured by the test kernel's counter.
 fn kernel_work_is_bounded() {
-    assert_eq!(run_program("t_bound"), exited(0));
+    // With the device handles: the program snapshots itself (`posix` job).
+    let record = process::spawn_with_devices("t_bound")
+        .expect("program in the ramdisk")
+        .wait();
+    assert_eq!(record, exited(0));
 }
 
 /// ADR-0102 from a process: the criterion and every INV-0102 check, with the

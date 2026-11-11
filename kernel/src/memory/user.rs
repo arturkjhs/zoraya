@@ -15,6 +15,8 @@ use crate::arch::mmu;
 use crate::charge::Paid;
 use crate::device::DeviceMapping;
 use crate::job::Job;
+use crate::reaper;
+use crate::steps::{self, STEP};
 use crate::sync::SpinLock;
 use zoraya_abi::Status;
 
@@ -280,17 +282,84 @@ impl AddressSpace {
         Ok(va)
     }
 
-    /// Ends the mapping that is exactly `[va, va + length)`, and gives back
-    /// what it held only after no TLB can reach it: break, invalidate, free.
-    pub fn unmap_object(&mut self, va: u64, length: u64) -> Result<Holder, MappingError> {
+    /// The first of the three parts of a mapping made in steps (ADR-0270):
+    /// checks the room and finds the address. Nothing is changed.
+    pub fn map_reserve(&mut self, length: u64) -> Result<u64, MappingError> {
+        if self.mappings.len() >= MAX_MAPPINGS {
+            return Err(MappingError::Limit);
+        }
+        self.mappings
+            .try_reserve(1)
+            .map_err(|_| MappingError::Memory)?;
+        let (_, va) = self.find_gap(length).ok_or(MappingError::Memory)?;
+        Ok(va)
+    }
+
+    /// The second part: maps the pages of `[offset, offset + length)` of the
+    /// range at `va`. On failure it unmaps what it did of this range, and the
+    /// caller what it did before (see [`AddressSpace::unmap_range`]).
+    pub fn map_range(
+        &mut self,
+        va: u64,
+        offset: u64,
+        length: u64,
+        attributes: Attributes,
+        page: &impl Fn(u64) -> u64,
+    ) -> Result<(), MappingError> {
+        for at in (offset..offset + length).step_by(FRAME_SIZE as usize) {
+            let mapped =
+                self.table
+                    .map_pages(&mut self.memory, va + at, page(at), FRAME_SIZE, attributes);
+            if mapped.is_err() {
+                if at > offset {
+                    let _ = self.table.unmap(&mut self.memory, va + offset, at - offset);
+                }
+                return Err(match self.memory.failure() {
+                    Status::OverQuota => MappingError::Quota,
+                    _ => MappingError::Memory,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Unmaps `[va + offset, va + offset + length)` of a range being built or
+    /// ended, without touching the list of mappings.
+    pub fn unmap_range(&mut self, va: u64, offset: u64, length: u64) {
+        let _ = self.table.unmap(&mut self.memory, va + offset, length);
+    }
+
+    /// The third part: the range is mapped; records it and keeps `holder`.
+    pub fn map_commit(&mut self, va: u64, length: u64, attributes: Attributes, holder: Holder) {
+        let index = self.mappings.partition_point(|m| m.va < va);
+        // The room was reserved by `map_reserve`, and nothing else maps in
+        // between: the process's one thread is in this call.
+        self.mappings.insert(
+            index,
+            Mapping {
+                va,
+                length,
+                attributes,
+                holder,
+            },
+        );
+    }
+
+    /// Whether a mapping is exactly `[va, va + length)`.
+    pub fn is_mapped_exactly(&self, va: u64, length: u64) -> bool {
+        self.mappings
+            .iter()
+            .any(|m| m.va == va && m.length == length)
+    }
+
+    /// Removes the record of the mapping that is exactly `[va, va + length)`
+    /// after its pages were unmapped, and gives its holder back.
+    pub fn unmap_commit(&mut self, va: u64, length: u64) -> Result<Holder, MappingError> {
         let index = self
             .mappings
             .iter()
             .position(|m| m.va == va && m.length == length)
             .ok_or(MappingError::NotMapped)?;
-        self.table
-            .unmap(&mut self.memory, va, length)
-            .map_err(|_| MappingError::NotMapped)?;
         Ok(self.mappings.remove(index).holder)
     }
 
@@ -301,104 +370,80 @@ impl AddressSpace {
             .any(|m| matches!(m.holder, Holder::Device(_)))
     }
 
-    /// A copy of this space for a snapshot's child (ADR-0102 item 2): a fresh
-    /// frame for every page this space owns, with the same contents at the
-    /// same address with the same attributes, and a fresh memory object for
-    /// every mapping of one, holding a copy of the mapped range. Nothing is
-    /// shared. A device mapping refuses it with `BadState`. On failure,
-    /// everything it took is given back as the copy drops (INV-0102-3).
-    pub fn snapshot(
-        &self,
-        copied: &mut Copied,
-        payer: Option<&Arc<Job>>,
-    ) -> Result<AddressSpace, Status> {
+    /// What a snapshot of this space needs to know before it starts: the
+    /// range, length and attributes of each mapping of an object. A device
+    /// mapping refuses it with `BadState` (ADR-0102 item 2).
+    pub fn snapshot_plan(&self) -> Result<Vec<(u64, u64, Attributes)>, Status> {
         if self.has_device_mapping() {
             return Err(Status::BadState);
         }
-        let mut child = AddressSpace::new(payer)?;
-        child
-            .mappings
-            .try_reserve_exact(self.mappings.len())
+        let mut plan = Vec::new();
+        plan.try_reserve_exact(self.mappings.len())
             .map_err(|_| Status::NoMemory)?;
-        let mut objects = Vec::new();
-        objects
-            .try_reserve_exact(self.mappings.len())
-            .map_err(|_| Status::NoMemory)?;
-        for m in &self.mappings {
-            // Every page is written by the copy below before the child exists.
-            objects.push(MemoryObject::new_for_copy(m.length, payer)?);
-        }
+        plan.extend(self.mappings.iter().map(|m| (m.va, m.length, m.attributes)));
+        Ok(plan)
+    }
+
+    /// One step of a snapshot's copy (ADR-0102 item 2, ADR-0270): up to
+    /// `STEP` pages from where `build` stopped, each into a fresh frame of the
+    /// child or a page of the copy of its mapped object, with the same
+    /// contents and attributes. Gives `true` when the whole space was copied.
+    /// The caller holds this space's lock for the step only.
+    pub fn snapshot_step(
+        &self,
+        build: &mut SnapshotBuild,
+        copied: &mut Copied,
+    ) -> Result<bool, Status> {
         let mut failed = None;
-        let mut executable = false;
-        self.table.for_each_mapping(&self.memory, &mut |leaf| {
-            for offset in (0..leaf.size).step_by(FRAME_SIZE as usize) {
-                if failed.is_some() {
-                    return;
+        let mut taken = 0;
+        let mut next = build.next;
+        let reached_end = self
+            .table
+            .for_each_mapping_from(&self.memory, build.next, &mut |leaf| {
+                for offset in (0..leaf.size).step_by(FRAME_SIZE as usize) {
+                    let (va, pa) = (leaf.va + offset, leaf.pa + offset);
+                    // Mappings are kept by address, and do not overlap.
+                    let i = self.mappings.partition_point(|m| m.va + m.length <= va);
+                    let target = match self.mappings.get(i) {
+                        Some(m) if m.va <= va => build.objects[i].page(va - m.va),
+                        _ => match build.child.copy_page(va, leaf.attributes) {
+                            Ok(pa) => pa,
+                            Err(e) => {
+                                failed = Some(e);
+                                return false;
+                            }
+                        },
+                    };
+                    // SAFETY: both are whole frames of ordinary RAM in the
+                    // direct map: `pa` is mapped by this space, which the
+                    // caller's lock keeps, and `target` was just taken for the
+                    // copy and is reached by nothing else yet.
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            phys_to_virt(pa) as *const u8,
+                            phys_to_virt(target) as *mut u8,
+                            FRAME_SIZE as usize,
+                        );
+                    }
+                    if leaf.attributes.execute {
+                        // SAFETY: the frame just written, in the direct map.
+                        unsafe { mmu::clean_to_unification(phys_to_virt(target), FRAME_SIZE) };
+                        build.executable = true;
+                    }
+                    copied.pages += 1;
+                    taken += 1;
                 }
-                let (va, pa) = (leaf.va + offset, leaf.pa + offset);
-                // Mappings are kept by address, and do not overlap.
-                let i = self.mappings.partition_point(|m| m.va + m.length <= va);
-                let target = match self.mappings.get(i) {
-                    Some(m) if m.va <= va => objects[i].page(va - m.va),
-                    _ => match child.copy_page(va, leaf.attributes) {
-                        Ok(pa) => pa,
-                        Err(e) => {
-                            failed = Some(e);
-                            return;
-                        }
-                    },
-                };
-                // SAFETY: both are whole frames of ordinary RAM in the direct
-                // map: `pa` is mapped by this space, which the caller's lock
-                // keeps, and `target` was just taken for the copy and is
-                // reached by nothing else yet.
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        phys_to_virt(pa) as *const u8,
-                        phys_to_virt(target) as *mut u8,
-                        FRAME_SIZE as usize,
-                    );
-                }
-                if leaf.attributes.execute {
-                    // SAFETY: the frame just written, in the direct map.
-                    unsafe { mmu::clean_to_unification(phys_to_virt(target), FRAME_SIZE) };
-                    executable = true;
-                }
-                copied.pages += 1;
-            }
-        });
+                next = leaf.va + leaf.size;
+                taken < STEP
+            });
         if let Some(e) = failed {
             return Err(e);
         }
-        if executable {
-            // After every clean: fetches through the child's mappings then
-            // see the copies (Arm ARM D7.5.9).
-            mmu::invalidate_instruction_cache();
-        }
-        for (m, object) in self.mappings.iter().zip(objects) {
-            for offset in (0..m.length).step_by(FRAME_SIZE as usize) {
-                child
-                    .table
-                    .map_pages(
-                        &mut child.memory,
-                        m.va + offset,
-                        object.page(offset),
-                        FRAME_SIZE,
-                        m.attributes,
-                    )
-                    .map_err(|_| child.memory.failure())?;
-            }
-            child.mappings.push(Mapping {
-                va: m.va,
-                length: m.length,
-                attributes: m.attributes,
-                holder: Holder::Memory(object),
-            });
-        }
-        Ok(child)
+        build.next = next;
+        Ok(reached_end)
     }
 
-    /// Maps a new frame at `va` for [`AddressSpace::snapshot`] to fill: not
+    /// Maps a new frame at `va` for [`AddressSpace::snapshot_step`] to fill: not
     /// zeroed, since the whole page is written before anything can read it.
     fn copy_page(&mut self, va: u64, attributes: Attributes) -> Result<u64, Status> {
         self.memory.pay_user()?;
@@ -442,10 +487,93 @@ impl Drop for AddressSpace {
         mmu::invalidate_asid(self.memory.asid);
         // Only now can nothing reach what the mappings held.
         self.mappings.clear();
-        for frame in self.memory.frames.drain(..) {
-            frames::free(frame);
-        }
+        // A large space's frames go to the reaper with the charge, which
+        // stays until they are freed (ADR-0270 point 4); the ASID is free
+        // at once, since its entries are gone and nothing runs on the root.
+        let frames = core::mem::take(&mut self.memory.frames);
+        let paid = core::mem::take(&mut self.memory.paid);
+        reaper::release(frames, paid);
         free_asid(self.memory.asid);
+    }
+}
+
+/// A snapshot being built in steps (ADR-0102, ADR-0270): the child space, the
+/// copy of each mapped object, and where the copy of the parent stopped. It is
+/// in no table: dropping it, as a cancelled call does, gives everything back.
+pub struct SnapshotBuild {
+    child: AddressSpace,
+    plan: Vec<(u64, u64, Attributes)>,
+    objects: Vec<Arc<MemoryObject>>,
+    /// The address the next step of the copy resumes at.
+    next: u64,
+    executable: bool,
+}
+
+impl SnapshotBuild {
+    /// The child and a fresh object, not zeroed, for every mapping of `plan`.
+    /// The objects are made in steps (`MemoryObject::new_for_copy`).
+    pub fn new(
+        plan: Vec<(u64, u64, Attributes)>,
+        payer: Option<&Arc<Job>>,
+    ) -> Result<SnapshotBuild, Status> {
+        let mut child = AddressSpace::new(payer)?;
+        child
+            .mappings
+            .try_reserve_exact(plan.len())
+            .map_err(|_| Status::NoMemory)?;
+        let mut objects = Vec::new();
+        objects
+            .try_reserve_exact(plan.len())
+            .map_err(|_| Status::NoMemory)?;
+        for (_, length, _) in &plan {
+            // Every page is written by the copy before the child exists.
+            objects.push(MemoryObject::new_for_copy(*length, payer)?);
+        }
+        Ok(SnapshotBuild {
+            child,
+            plan,
+            objects,
+            next: 0,
+            executable: false,
+        })
+    }
+
+    /// Maps the copies of the objects into the child, in steps, and gives the
+    /// child. The copy of the parent must be complete.
+    pub fn finish(mut self) -> Result<AddressSpace, Status> {
+        if self.executable {
+            // After every clean: fetches through the child's mappings then
+            // see the copies (Arm ARM D7.5.9).
+            mmu::invalidate_instruction_cache();
+        }
+        let mut pages = 0usize;
+        let plan = core::mem::take(&mut self.plan);
+        let objects = core::mem::take(&mut self.objects);
+        for ((va, length, attributes), object) in plan.into_iter().zip(objects) {
+            for offset in (0..length).step_by(FRAME_SIZE as usize) {
+                if pages > 0 && pages.is_multiple_of(STEP) {
+                    steps::between()?;
+                }
+                pages += 1;
+                self.child
+                    .table
+                    .map_pages(
+                        &mut self.child.memory,
+                        va + offset,
+                        object.page(offset),
+                        FRAME_SIZE,
+                        attributes,
+                    )
+                    .map_err(|_| self.child.memory.failure())?;
+            }
+            self.child.mappings.push(Mapping {
+                va,
+                length,
+                attributes,
+                holder: Holder::Memory(object),
+            });
+        }
+        Ok(self.child)
     }
 }
 

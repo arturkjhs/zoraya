@@ -106,6 +106,10 @@ pub fn free(frame: Frame) {
 
 /// Frame counts.
 pub fn stats() -> Stats {
+    // The reaper frees large drops later (ADR-0270): a test that compares
+    // counts waits for it.
+    #[cfg(feature = "qemu-test")]
+    crate::reaper::drain();
     FRAMES
         .lock()
         .as_ref()

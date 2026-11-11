@@ -179,7 +179,6 @@ fn count_new() -> Result<(), OutOfMemory> {
 
 /// Starts a kernel thread running `entry(arg)`. When `entry` returns, the
 /// thread ends.
-#[cfg(feature = "qemu-test")]
 pub fn spawn_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
     let thread = new_kernel(entry, arg)?;
     count_new()?;

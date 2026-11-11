@@ -12,22 +12,19 @@ use crate::sched;
 
 /// Pages, page-table entries' worth of range or objects in one step
 /// (ADR-0270 point 2, `[assumption]` until measured).
-#[allow(dead_code)] // used from the next commit, which steps the long calls
 pub const STEP: usize = 64;
 
-/// The end of a step: lets a pending interrupt run, switches away if the
-/// slice ended, and fails with `Cancelled` if the process was asked to end
-/// meanwhile (`job_kill`), so that the call frees its partial work and
-/// returns (ADR-0270 point 3). A caller that is not a user process (boot
-/// code, kernel threads) is not in a system call and does nothing.
+/// The end of a step that frees or undoes: lets a pending interrupt run and
+/// switches away if the slice ended (ADR-0270 point 2). Nothing fails: a
+/// teardown goes on to its end whatever the process was asked. A caller that
+/// is not a user process (boot code, kernel threads) is not in a system call
+/// and does nothing.
 ///
 /// No spinlock may be held: the test kernel asserts it (INV-0270-2).
-#[allow(dead_code)] // used from the next commit, which steps the long calls
-pub fn between() -> Result<(), Status> {
-    let thread = sched::current();
-    let Some(process) = thread.process() else {
-        return Ok(());
-    };
+pub fn pause() {
+    if sched::current().process().is_none() {
+        return;
+    }
     #[cfg(feature = "qemu-test")]
     assert_eq!(
         crate::sync::held(),
@@ -44,10 +41,18 @@ pub fn between() -> Result<(), Status> {
     crate::arch::mask_interrupts();
     mask_began();
     sched::preempt_point();
-    if process.exit_requested() {
-        return Err(Status::Cancelled);
+}
+
+/// The end of a step of a call that builds something: as [`pause`], and fails
+/// with `Cancelled` if the process was asked to end meanwhile (`job_kill`),
+/// so that the call frees its partial work and returns (ADR-0270 point 3).
+pub fn between() -> Result<(), Status> {
+    pause();
+    let thread = sched::current();
+    match thread.process() {
+        Some(process) if process.exit_requested() => Err(Status::Cancelled),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Counts the longest time with IRQ masked, in the test kernel.
