@@ -7,12 +7,13 @@
 # accelerator, W8 (POSIX_ONCE) as each of its builds' scripts under the first.
 #
 #   TEST_STEPS=... QEMU_CONFIGS=... POSIX_SCRIPTS=... POSIX_ACCELS=...
-#   POSIX_ONCE=... W8_BUILDS=... tools/check-ci-jobs.sh WORKFLOW [TESTS_LIST]
+#   POSIX_ONCE=... W8_BUILDS=... GUI_RUNS_ALL=... tools/check-ci-jobs.sh WORKFLOW [TESTS_LIST]
 #
 # The tests job's matrix is not in the workflow: on a merge candidate it is
 # the part of the FULL list (TESTS_LIST, tools/ci-tests.txt) that
 # tools/ci-plan.sh picks, so this checks the full list, and that the workflow
-# reads the plan and that FULL=1 gives the plan the whole list.
+# reads the plan, that the test-gui lines (GUI_RUNS="script:accel:scale ...")
+# together run every run of GUI_RUNS_ALL, each in exactly one job, and that FULL=1 gives the plan the whole list.
 set -eu
 workflow=$1
 list=${2:-tools/ci-tests.txt}
@@ -71,6 +72,23 @@ for step in $TEST_STEPS; do
 	esac
 done
 
+# The runs of the test-gui lines against GUI_RUNS_ALL, as multisets.
+if echo "$TEST_STEPS" | grep -q -w test-gui; then
+	gui_lines=$(grep -E '^make test-gui([[:space:]]|$)' "$list" || true)
+	if echo "$gui_lines" | grep -q -v 'GUI_RUNS="[^"]*"'; then
+		need "test-gui with GUI_RUNS=\"...\" on every line (a line without it runs every run)"
+	fi
+	have=$(echo "$gui_lines" | sed -n 's/.*GUI_RUNS="\([^"]*\)".*/\1/p' | tr ' ' '\n' | grep . | sort)
+	want=$(echo "${GUI_RUNS_ALL:-}" | tr ' ' '\n' | grep . | sort)
+	[ -n "$want" ] || need "GUI_RUNS_ALL to compare the test-gui lines with (the Makefile gives none)"
+	for r in $(echo "$want" | uniq); do
+		n=$(echo "$have" | grep -c -x -F "$r" || true)
+		[ "$n" = 1 ] || need "GUI run $r in exactly one test-gui job (it is in $n)"
+	done
+	for r in $(echo "$have" | uniq); do
+		echo "$want" | grep -q -x -F "$r" || need "GUI run $r is not in GUI_RUNS_ALL"
+	done
+fi
 if ! grep -q 'fromJSON(needs.plan.outputs.tests)' "$workflow"; then
 	need "its tests from the plan (fromJSON(needs.plan.outputs.tests))"
 fi

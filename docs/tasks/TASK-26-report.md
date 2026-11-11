@@ -95,3 +95,27 @@ tag. A failure that only the full set shows is therefore found by the nightly ru
 item of the next session**, before any new work. Where to look: `gh run list --workflow 'make test' --event schedule
 --limit 5`, then `gh run view RUNID --json jobs` for the failing jobs and `log-triage` on the log of the first. Read
 it at the start of every session; do not infer it.
+
+### CI: test-gui split (2026-11-11)
+
+The single `test-gui` job took about 1257 s on CI (run 42987295524: 20 runs, 1194 s of runs plus the build). It is now
+four jobs, one `make test-gui GUI_RUNS="..."` line each in `tools/ci-tests.txt`, balanced by the per-run times of that
+run (job log; the VM boot is inside each run's time). The map, `tools/ci-plan.sh` and `tools/plan-lib.sh` are unchanged:
+a plan step `test-gui` selects every line whose target is `test-gui`, so a change that selects it runs all four groups,
+and the smoke set's `terminal:auto:1` run is added only when no group is selected. `make test-gui`, `make test`,
+`test-par` and `test-changed` still run every run of `GUI_RUNS_ALL` in one go.
+
+| Group | Runs | Estimated runs time |
+|---|---|---|
+| 1 | terminal:auto:2 terminal:tcg:2 windows:auto:2 | 312 s |
+| 2 | terminal:auto:1920x1200 files-manage:auto:2 terminal:auto:1600x1000 | 297 s |
+| 3 | rooms, files, files-manage at scale 1, auto and tcg | 303 s |
+| 4 | terminal, windows, layouts, settings at scale 1, auto and tcg | 282 s |
+
+Add the job's own setup (artifact download, `tools-storage`, image build): the guess is 5 to 6 minutes a job.
+`make check-ci-jobs` now fails unless the runs of all `test-gui` lines equal `GUI_RUNS_ALL` as a multiset (a run in no
+line, in two lines, or not in `GUI_RUNS_ALL`, or a line without `GUI_RUNS`). Checked by breaking copies of the list.
+
+To verify on the candidate run (a change touching the compositor's map entry): four `test-gui` jobs, each green and
+at or under about 6 minutes; the wall time of the run against the previous 27 minutes for such a change; the four jobs'
+`[gui-...] PASS` lines together name all 20 runs.
