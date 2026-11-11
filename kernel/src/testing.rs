@@ -538,6 +538,7 @@ pub fn run(start: usize) -> ! {
         println!("ZORAYA-TEST run {}", t.name);
         CURRENT.store(i, Ordering::Relaxed);
         sched::set_test_slice(0);
+        crate::cpu::set_test_period(0);
         (t.run)();
         CURRENT.store(NONE, Ordering::Relaxed);
         bump(&PASSED);

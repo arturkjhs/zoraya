@@ -13,6 +13,7 @@ mod arch;
 mod channel;
 mod charge;
 mod console;
+mod cpu;
 mod device;
 mod dtb;
 mod gic;

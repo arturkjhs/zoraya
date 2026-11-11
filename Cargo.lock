@@ -278,6 +278,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-cpu"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-describe"
 version = "0.1.0"
 dependencies = [
@@ -418,6 +425,7 @@ dependencies = [
  "zoraya-channel",
  "zoraya-charge",
  "zoraya-console",
+ "zoraya-cpu",
  "zoraya-dtb",
  "zoraya-elf",
  "zoraya-events",

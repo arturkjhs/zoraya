@@ -20,6 +20,7 @@ qemu-test = []
 zoraya-abi = { path = "../crates/zoraya-abi" }
 zoraya-channel = { path = "../crates/zoraya-channel" }
 zoraya-charge = { path = "../crates/zoraya-charge" }
+zoraya-cpu = { path = "../crates/zoraya-cpu" }
 zoraya-console = { path = "../crates/zoraya-console" }
 zoraya-stream = { path = "../crates/zoraya-stream" }
 zoraya-dtb = { path = "../crates/zoraya-dtb" }

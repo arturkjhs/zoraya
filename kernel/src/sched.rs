@@ -3,16 +3,24 @@
 //! One run queue, round robin. The kernel is not preempted: a slice that ends
 //! takes effect on return to EL0, or at `yield_now` and blocking points.
 //! The slice is a one-shot deadline, armed only when another thread is ready,
-//! so a lone thread takes no timer interrupts.
+//! so a lone thread takes no timer interrupts, except a thread of a job with a
+//! CPU ceiling (ADR-0264): its run time is charged at each switch, its slice
+//! is the smaller of 10 ms and the budget left, and when the budget is spent
+//! its threads wait on the parked list until the period ends. The queue and
+//! the budget arithmetic are `zoraya-cpu`; this file is the glue.
+//!
+//! Lock order: `SCHED`, then the timer queue's lock (arming a deadline), then
+//! a job's `cpu` lock (the walks); nothing is taken under the last. Those
+//! walks run with every exception masked, inside `schedule`.
 
-use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use zoraya_abi::Status;
-use zoraya_time::{Deadline, TimerId};
+use zoraya_cpu::RunQueue;
+use zoraya_time::{Deadline, Instant, TimerId};
 
 use crate::arch::THREAD_STACK_SIZE;
 
@@ -20,6 +28,7 @@ use crate::arch;
 use crate::arch::Context;
 use crate::arch::mmu;
 use crate::charge::{self, Paid};
+use crate::cpu::{self, JobRef, JobTree};
 use crate::memory::heap::{OutOfMemory, uncharged_arc};
 use crate::memory::stack::KernelStack;
 use crate::process::Process;
@@ -98,13 +107,19 @@ struct Sched {
     #[cfg(feature = "qemu-test")]
     boot: Option<Arc<Thread>>,
     idle: Option<Arc<Thread>>,
-    ready: VecDeque<Arc<Thread>>,
+    ready: RunQueue<Arc<Thread>>,
     /// Ended threads, freed by a later thread: none can free its own stack.
     dead: Vec<Arc<Thread>>,
     /// Threads that exist, for reserving queue space.
     threads: usize,
     need_resched: bool,
     slice: Option<TimerId>,
+    /// When the running thread was switched in, in nanoseconds: its run
+    /// time is charged to its job at the next switch (ADR-0264 point 3).
+    switched_in: u64,
+    /// The deadline that returns the parked threads at the period's end is
+    /// armed (one for all jobs, ADR-0264 point 5).
+    release_armed: bool,
 }
 
 static SCHED: SpinLock<Sched> = SpinLock::new(Sched {
@@ -112,11 +127,13 @@ static SCHED: SpinLock<Sched> = SpinLock::new(Sched {
     #[cfg(feature = "qemu-test")]
     boot: None,
     idle: None,
-    ready: VecDeque::new(),
+    ready: RunQueue::new(),
     dead: Vec::new(),
     threads: 0,
     need_resched: false,
     slice: None,
+    switched_in: 0,
+    release_armed: false,
 });
 
 static PREEMPTIONS: AtomicU64 = AtomicU64::new(0);
@@ -171,6 +188,7 @@ fn new_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> 
 fn count_new() -> Result<(), OutOfMemory> {
     let mut s = SCHED.lock();
     let threads = s.threads + 1;
+    // Both the ready list and the parked list: any thread may be in either.
     s.ready.try_reserve(threads).map_err(|_| OutOfMemory)?;
     s.dead.try_reserve(threads).map_err(|_| OutOfMemory)?;
     s.threads = threads;
@@ -293,6 +311,42 @@ fn end_of_slice(_: usize) {
     SCHED.lock().need_resched = true;
 }
 
+/// The period ends (ADR-0264 point 5): the parked threads return to the end
+/// of the run queue, in batches of `RELEASE_BATCH`. If more remain, the next
+/// batch is a deadline for now, so the interrupt returns and unmasks between
+/// them (INV-0270-1). Runs in the timer's interrupt, with no lock held.
+fn period_end(_: usize) {
+    let mut s = SCHED.lock();
+    if s.ready.release() > 0 {
+        s.need_resched = true;
+    }
+    if s.ready.parked_len() > 0 {
+        let again = timer::arm_reserved(timer::now(), period_end, 0);
+        if again.is_ok() {
+            return;
+        }
+        // No deadline to be had: never strand a thread. Bounded by the
+        // threads that exist, and only when the deadline queue is full.
+        while s.ready.release() > 0 {}
+    }
+    s.release_armed = false;
+}
+
+/// Arms the deadline that returns the parked threads, unless it is armed.
+/// Called with `SCHED` held, after something may have been parked.
+fn arm_release(s: &mut Sched, now: u64) {
+    if s.release_armed || s.ready.parked_len() == 0 {
+        return;
+    }
+    let at = Instant::from_nanos(zoraya_cpu::next_boundary(now, cpu::period_ns()));
+    if timer::arm_reserved(at, period_end, 0).is_ok() {
+        s.release_armed = true;
+    } else {
+        // See `period_end`: a parked thread must have a way back.
+        while s.ready.release() > 0 {}
+    }
+}
+
 /// Chooses the next thread and switches to it. Returns when this thread next
 /// runs, and never if it is dead.
 fn schedule() {
@@ -301,8 +355,24 @@ fn schedule() {
     let (prev, next, ttbr0) = {
         let mut guard = SCHED.lock();
         let s = &mut *guard;
+        let now = timer::now().as_nanos();
+        let period_ns = cpu::period_ns();
         let current = s.current.take().expect("a thread is running");
         let prev: *const Thread = Arc::as_ptr(&current);
+        // ADR-0264 point 3: the time since this thread was switched in is its
+        // job's, and its ancestors'. A kernel thread has no job. Only the part
+        // after the last period boundary counts to this period's budget.
+        if let Some(process) = current.process.as_ref() {
+            let ran = now.saturating_sub(s.switched_in);
+            let since = zoraya_cpu::period_start(now, period_ns).max(s.switched_in);
+            zoraya_cpu::charge(
+                &mut JobTree(core::marker::PhantomData),
+                JobRef::of(process.job()),
+                ran,
+                now.saturating_sub(since),
+                zoraya_cpu::period_of(now, period_ns),
+            );
+        }
         let idle = s.idle.as_ref().expect("idle thread");
         let is_idle = Arc::ptr_eq(&current, idle);
         match current.state.load(Ordering::Relaxed) {
@@ -316,18 +386,34 @@ fn schedule() {
             // A blocked thread is owned by whoever will wake it.
             _ => {}
         }
-        let next = s
-            .ready
-            .pop_front()
-            .unwrap_or_else(|| s.idle.clone().expect("idle thread"));
+        // The first ready thread whose job has budget; those ahead of it
+        // whose job has none are parked (ADR-0264 point 5).
+        let picked = s.ready.pick(
+            &mut JobTree(core::marker::PhantomData),
+            now,
+            period_ns,
+            |t| t.process.as_ref().map(|p| JobRef::of(p.job())),
+        );
+        arm_release(s, now);
+        let (next, limited) = match picked {
+            Some(p) => (p.thread, p.slice_ns),
+            None => (s.idle.clone().expect("idle thread"), None),
+        };
         next.state.store(RUNNING, Ordering::Relaxed);
         s.need_resched = false;
+        s.switched_in = now;
         if let Some(id) = s.slice.take() {
             timer::cancel(id);
         }
         let user = next.process.is_some();
-        if user && !s.ready.is_empty() {
-            let end = timer::now().plus_nanos(slice_ns());
+        // A limited job's slice is armed also for a lone thread (point 4).
+        let slice = match limited {
+            Some(ns) if user => Some(ns.min(slice_ns())),
+            _ if user && !s.ready.is_empty() => Some(slice_ns()),
+            _ => None,
+        };
+        if let Some(ns) = slice {
+            let end = timer::now().plus_nanos(ns);
             s.slice = timer::arm_reserved(end, end_of_slice, 0).ok();
         }
         let ttbr0 = next.process.as_ref().map(|p| p.ttbr0());
