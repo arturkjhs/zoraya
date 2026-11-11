@@ -145,17 +145,26 @@ line for Q2 now.
 | Site | Before (one call) | After: one step | After: whole |
 |---|---|---|---|
 | `memory_create` | 1707 us | 19 us | 19 us |
-| `memory_map` | 1333 us | 17 us | 14 us |
-| `memory_unmap` | 786 us | 9 us | 9 us |
-| close of the object | 962 us | 12 us | 11 us (the reaper frees them) |
-| `snapshot_process` | 0.4 ms for 2.2 MiB (design.md) | 157 us (the fixed work) | 91 us |
-| close of a 10,000 chain | about 11 ms for 20,000 (design.md) | 79 us (64 messages) | 88 us |
-| exit of a process holding 24 MiB / `job_kill` of one | not measured before | | 91 us / 30 us |
+| `memory_map` | 1333 us | 15 us | 19 us |
+| `memory_unmap` | 786 us | 8 us | 10 us |
+| close of the object | 962 us | 10 us | 11 us (the reaper frees them) |
+| `snapshot_process` | 0.4 ms for 2.2 MiB (design.md) | 157 us (the fixed work) | 91 us (24 MiB) |
+| close of a 10,000 chain | about 11 ms for 20,000 (design.md) | 78 us (64 messages) | 91 us |
+| exit of a process holding 24 MiB / `job_kill` of one | not measured before | | 91 us / 31 us |
 
-The fork bomb (`t_quota`): a limit of 24 processes was reached in 5 to 6 ms with 23 refusals, and a command started
+The fork bomb (`t_quota`): a limit of 24 processes was reached in 5 to 6 ms with 23 or 24 refusals, and a command started
 outside the limited job ended in under 1 ms. The "before" for `memory_create` to `close` was measured in this session
 on the commit that had the counter but no steps; the others come from `docs/design.md`'s earlier figures (the first
 `t_bound` run failed before them).
+
+### Tests run
+
+`make check` before every commit. `make test-changed` (every step, because the Makefile and `zoraya-rt` changed; HVF; TCG
+runs skipped locally) was run ten times while the code was built; the last run on the head of the branch passed all nine
+steps (`test-boot`, `test-qemu`, `test-libposix`, `test-files`, `test-crash`, `test-posix`, `test-posix-gui`,
+`test-tour-gui`, `test-gui`). One earlier run failed `boot-auto-smp4-2g` (the shell's "bytes dropped" line, a timing
+test) and passed unchanged on the next; it is probably a flake and the nightly run will say. `FULL=1` (TCG, crash rounds)
+was not run: CI does it.
 
 ### Handoff
 

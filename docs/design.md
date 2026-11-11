@@ -1448,8 +1448,8 @@ kernel thread (`kernel/src/reaper.rs`) with their charge, which stays on the job
 that finds no free frame first frees a step of the reaper's queue, so memory on its way back is not refused. The test
 kernel counts the longest time IRQ stayed masked (`MASKED_MAX_NS`, `kernel/src/steps.rs`), without the idle thread's wait.
 Measured under HVF, 24 MiB (`t_bound`): before the steps `memory_create` 1707 us, `memory_map` 1333 us, `memory_unmap`
-786 us and the close of the object 962 us masked; after, one step and the whole are the same, 19 us, 14 us, 9 us and
-11 us. See the report for the rest.
+786 us and the close of the object 962 us masked; after, one step and the whole are the same, about 19 us, 15 to 19 us,
+8 to 10 us and 11 us. See the report for the rest.
 
 ## Known limitations
 
