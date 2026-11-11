@@ -875,6 +875,8 @@ everything, and `KEEP_GOING=1` runs the steps after a failure. It runs:
   of its scripts run on images without the session file, so that `zosh` starts with the broker beside it:
   `tests/posix/zosh.script` (POSIX programs from `zosh`, ADR-0153 rule 10, ADR-0200) and `tests/posix/tour.script`,
   the whole of `docs/tour.md`, whose GUI twin `make test-tour-gui` plays (INV-0154-4);
+- `make test-net` (N1): the test kernel with `--net` and a pcap, whose `t_net` runs `ethd` against the real device (under
+  TCG too with `FULL=1`); it is skipped on a QEMU without user-mode networking.
 - `make test-gui`, the stage 5 criterion: the normal kernel with `--gui`, headless, under HVF (on a Mac) and TCG.
   The runner (`tools/test-runner/src/gui.rs`) types over QMP, one key every 8 ms (QEMU's virtio-input queue holds 16
   keys and drops what a busy guest has not taken), and reads QEMU screendumps back as text with `zoraya_term::read`:
@@ -1451,6 +1453,53 @@ Measured under HVF, 24 MiB (`t_bound`): before the steps `memory_create` 1707 us
 786 us and the close of the object 962 us masked; after, one step and the whole are the same, about 19 us, 15 to 19 us,
 8 to 10 us and 11 us. See the report for the rest.
 
+## Network driver (stage 8, N1: the driver answers ARP)
+
+`tools/run-qemu.sh --net` (ADR-0230 item 2) puts `virtio-net-device` on transport 16 (page 2, alone, ADR-0091) over
+QEMU's user-mode network (SLIRP: guest `10.0.2.15/24`, gateway `10.0.2.2`); with `--test` it is `restrict=on`, and
+`--net-pcap FILE` keeps the frames (256 bytes each, `--net-capture-all` for whole frames). `--net` with `--gui` is
+refused (ADR-0221 item 8, deferred). `make run-net` is an interactive machine without `restrict`. There is no `netd`
+yet (N2): the driver is built and tested alone.
+
+- **`ethd`** (`zoraya-virtio-net`, ADR-0221 item 1, proposed ADR-0280). One process, the device at slot 5 and the
+  client's channel at slot 6. It negotiates `VERSION_1`, `VIRTIO_NET_F_MAC` and `STATUS` only (offloads the device
+  offers are not taken), reads the MAC from the configuration, and sets up one receive and one transmit queue of 128
+  descriptors (two per buffer: a header cell in the driver's own queue memory and the frame slot). The logic is host
+  tested against the fake device, including every hostile value: a used length beyond the buffer or below the header, a
+  head that is odd, out of range or not offered, a used index that jumps, a slot completed twice, a transmit of a bad
+  slot, length or state, and a random mix of requests and lies (`cargo test -p zoraya-virtio-net`). A broken device
+  ends the driver (reset, unpin); a runt frame is dropped and its buffer reposted; a request the client may not make is
+  refused and counted. The driver never reads a frame slot (INV-0280-1).
+- **The frame protocol** (`zoraya-proto-nic`, ADR-0221 item 2). The client creates a contiguous object of 128 slots of
+  1536 bytes (64 receive, 64 transmit; 192 KiB), sends it with `Attach`; `Received { at, frames[] }`, `Sent { slots[] }`
+  and `LinkChanged` are pushed; `Transmit` and `Release` are the client's. `zoraya_proto_nic::arp` parses and builds
+  ARP over IPv4 with checked slices only (truncated, wrong hardware or protocol type or sizes, unknown operations, a
+  multicast sender: none panics; host tests and the fuzz target `fuzz/fuzz_targets/net_rx.rs`, not run).
+- **`init`** starts `ethd` when a virtio-net device is alone on its page and keeps the channel open. It is not
+  supervised until `netd` exists.
+- **`t_net`** (a test of the test kernel, `make test-net`) plays `netd`: it starts `ethd`, attaches a frames object, sends
+  hostile requests (refused), then sends 20 ARP who-has for `10.0.2.2` through the transmit path and reads SLIRP's
+  reply through the receive path. The step checks the pcap holds the reply too. A who-has for `10.0.2.15` from SLIRP
+  would be answered by hand; SLIRP did not send one in this test (it sends one only when the host starts a
+  connection to the guest), so that answer is host-tested only.
+- **The ID register.** The kernel prints `ID_AA64ISAR0_EL1` at boot (ADR-0227's open question). QEMU 11.1.2:
+  `0x0221100110212120` under HVF on the Apple CPU (AES 2, SHA1 1, SHA2 2, CRC32 1, atomics 2, RNDR 0), so RNDR is not
+  there under HVF; TCG (`cortex-a72`): `0x0000000000011120` (AES 2, SHA1 1, SHA2 1, CRC32 1, atomics 0, RNDR 0), RNDR absent
+  too. ADR-0227's RNDR input is therefore unavailable on both, and the provider check below does not need it.
+- **The TLS provider check** (ADR-0228's Decision). `rustls 0.23.46` (`default-features = false`, features `ring` and
+  `tls12`) with `ring 0.17.14` builds for `aarch64-unknown-none` on the pinned toolchain, with the host's `clang` as
+  `CC_aarch64_unknown_none`, `CFLAGS_aarch64_unknown_none="--target=aarch64-unknown-none-elf -ffreestanding -isystem
+  <sysroot>/usr/include"` (musl's headers from `build/sysroot`; without them ring's C stops at `assert.h`), and two
+  more things the survey did not know: ring's feature `less-safe-getrandom-custom-or-rdrand` (else `SystemRandom` has
+  no implementation), and `getrandom 0.2` with its `custom` feature and `register_custom_getrandom!`. `cargo build
+  --release` produces ring's C objects and the libraries. Nothing was run on the target: whether ring's aarch64 code
+  works without an operating system, and the source of its randomness, are N5's. BearSSL stays the POSIX answer.
+- **Measured** (`t_net`, 20 ARP rounds, QEMU 11.1.2, test kernel, 128 MiB, 1 CPU, 2026-11-11): HVF: ARP round trip
+  (guest transmit to the reply in `t_net`, through the driver and SLIRP) median 42 us, min 40 us, max 258 us;
+  interrupt to the frame message read in `t_net` (the driver's wake, the channel write, `t_net`'s wake and read) median
+  7 to 8 us, max 11 us. TCG: ARP round trip median 384 us, min 372 us, max 1309 us; interrupt to message median
+  190 us, max 794 us. The runs share a host with other work; a single run each.
+
 ## Known limitations
 
 - **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch
@@ -1671,6 +1720,7 @@ crates/                   no_std, host-tested
   zoraya-virtio/          virtio-blk over split queues; a generic split queue, the device page identification
                           of ADR-0091, and a device-side fake (feature `fake`)
   zoraya-virtio-gpu/, zoraya-virtio-input/  the GPU and input drivers' logic (ADR-0090, ADR-0092)
+  zoraya-virtio-net/, zoraya-proto-nic/  the network driver's logic and the frame protocol with ARP (ADR-0221)
   zoraya-proto-display/, zoraya-proto-input/, zoraya-proto-gui/, zoraya-proto-term/  the GUI's protocols
   zoraya-proto-posix/, zoraya-proto-tty/  the broker's and the terminal's protocols (ADR-0104, ADR-0105)
   zoraya-broker/          the broker's logic: pids, groups, kill, the session file
@@ -1686,7 +1736,7 @@ crates/                   no_std, host-tested
                           gestures, chords, the switcher, the bar (ADR-0160, ADR-0164; window.rs, draw.rs)
   zoraya-posix/           the Rust half of libposix (ADR-0100): resolver, fd table, errno, the file functions; ffi.rs
                           is the C boundary in libc.a; tests/kernel is a fake kernel over the real fs-service
-user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, compd,
+user/                     the programs in the ramdisk, on zoraya-rt: init, zosh, blkd, fsd, gpud, inputd, ethd, compd,
                           term, posixrun (the launcher of C programs, stage 6c), broker and ttyd (the POSIX
                           session, stage 6d), test programs
   src/stack.rs            starts the driver and the service

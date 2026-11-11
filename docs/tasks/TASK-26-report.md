@@ -271,3 +271,116 @@ at or under about 6 minutes; the wall time of the run against the previous 27 mi
   `log-triage`, `test-runner`) for CI and test runs.
 - **Next:** N1 (the driver answers ARP) on `work/n1` from main, then N2, Q5, Q3 (fsd), Q4, N3, N4 with Q3's netd account,
   N5, Q6a, Q6b, N6, Q7. Gate: closed (`make check-untrusted-gate`; fork-bomb and masked-time rows now run in `test-qemu`).
+
+## N1: the driver answers ARP (branch `work/n1`)
+
+### Built
+
+- `crates/zoraya-virtio-net`: the virtio-net driver's logic over `zoraya-virtio`'s traits (`#![forbid(unsafe_code)]`):
+  `VERSION_1` plus `MAC` and `STATUS` only, one receive and one transmit queue of 128 descriptors, two descriptors per
+  buffer, the MAC from the configuration space, slot states, every device value checked (table below). 24 host tests
+  against the fake device, with a 200-seed random mix of requests and lies.
+- `crates/zoraya-proto-nic`: the frame protocol (`Info`, `Attach`, `Transmit`, `Release`; pushed `Received`, `Sent`,
+  `LinkChanged`) and `arp`, a bounds-checked ARP parser/builder/answerer; 12 host tests (truncations, wrong hardware or
+  protocol type or sizes, operations, multicast sender, total decoding of every message).
+- `user/src/bin/ethd.rs` (the process), `t_net.rs` (plays `netd` against the real device), `init` starts `ethd` when a
+  virtio-net device is alone on its page (`gui::scan` gained `net`), the kernel prints `ID_AA64ISAR0_EL1`
+  (`kernel/src/main.rs`), a kernel test `network_driver_answers_arp`.
+- `tools/run-qemu.sh --net`, `--net-pcap FILE`, `--net-capture-all` (`--net` with `--gui` refused); `make test-net`
+  (a step of `make test`, `tools/ci-tests.txt`, a lane of `tools/test-par.sh`) and `make run-net`.
+- `fuzz/fuzz_targets/net_rx.rs` (ARP parser plus a hostile device and client). Not run: no nightly or `cargo-fuzz` on this
+  host. Its body was compiled and driven with 3000 random inputs in a scratch crate outside the repo.
+- Docs: `docs/design.md` "Network driver" (what exists, measurements, the provider check), ADR-0221's open-question note
+  (rule 6).
+
+### Decisions where the ADRs are silent
+
+- Proposed ADR-0280 (slot layout; recommendation: accept Option B, header in the driver's queue memory, so a slot is a
+  bare frame and the driver never reads frame bytes). Inside it: `Received.at` (wake time), `Sent` also reports refused
+  transmits, one contiguous object, any undecodable message ends the driver.
+- The plan says the runner sends the ARP who-has through SLIRP (a `guestfwd` attempt). SLIRP asks the guest for its MAC
+  only when the host starts a connection to it, and a `guestfwd` attempt needs a TCP stack (N2). So `t_net` sends the
+  who-has for the gateway itself, and the reply arrives through the receive path; both appear in the pcap, which
+  `make test-net` greps for the gateway's ARP reply. A who-has for `10.0.2.15` is answered by `arp::answer` in `t_net`,
+  but SLIRP sent none, so that answer is host-tested only. Open: provoke it from the runner (a `hostfwd`) in N2.
+- No new crate dependency: `docs/dependencies.md` unchanged.
+- The provider check is recorded in `docs/design.md`, not in `docs/research/network/survey.md` (CLAUDE.md forbids edits to
+  `docs/research/`).
+
+### Invariants delta
+
+INV-0221-2: the driver half is checked (`cargo test -p zoraya-virtio-net -p zoraya-proto-nic`); the row stays `not yet
+applicable (stage 8)` for `netd`'s half (note in ADR-0221's open questions). New INV-0280-1 (proposed ADR): `checked:
+make check`. INV-0230-1 and -3 are partly covered (`restrict=on` under `--test`; the step skips without user-mode
+networking) but their checks (printed command line assertion, fake `qemu` runner test) are not written: still `not yet
+applicable (stage 8)`.
+
+### Where a device-controlled number enters, and where it is checked (for the reviewer)
+
+| Number | Entry | Check |
+|---|---|---|
+| used index | `Queue::take`, `zoraya-virtio/src/queue.rs` | `new > outstanding` is `Error::Device` |
+| used entry id | same | `>= size` or not offered is `Device`; marks it not offered, so a repeat is `Device` |
+| used length, receive | `Net::poll` | below 12 or above 12 + 1514 is `Device`; 12 to 25 is a runt, dropped and reposted |
+| used head, both queues | `Net::poll` | odd, `slot >= 64` or slot not in the matching state is `Device` |
+| used length, transmit | `Net::poll` | ignored (not trusted, not used) |
+| feature bits | `queue::begin` | agreed = device & wanted; `MAC` missing is `Unusable` |
+| queue size | `Queue::set_up` | `QUEUE_NUM_MAX < 128` is `Error::Queue` |
+| MAC, link | `Net::new`, `read_link` | zero or multicast MAC is `Unusable`; link is one bit |
+| client slot, length | `Net::release`, `transmit` | slot range, state, length 14..=1514 before any index; refused is counted |
+| client attach | `Ethd::attach`, `Net::attach` | one pinned run of at least 196,608 bytes, `checked_add` on the address |
+| client message | `Ethd::handle` | `Header::decode` and `decode` are total; sequences bounded at 64; unknown ordinal ends the driver |
+| frame bytes | none in `ethd` | the driver reads no slot; `t_net` parses with `arp::parse` (checked slices) |
+
+Buffers under DMA: the queue memory and the client's object are pinned (`dma_pin`) before the device sees an address, and
+are unpinned only after `Net::reset()` returned true (the device is stopped, `Ethd::stop`). The client's handle is closed
+after the pin; the pin keeps the frames. The slot buffers are posted once per slot and re-posted only after the client's
+`release` (or at once if the client could not be told), tracked per slot (`Posted`/`Lent`, `Free`/`Queued`), so the
+device never holds a slot the client believes it owns, except the client's own transmit slots, which it must not
+rewrite until `Sent` (the client's frames are its own data). If `ethd` is killed with buffers in flight, the pins'
+last handles close without `dma_unpin`: the frames stay quarantined (ADR-0054, INV-0054-3 and -7) until the next
+`ethd` resets the device (`Net::new` calls `begin`, which resets) and `main` has called `dma_release_quarantine`
+(first thing, as `blkd` and `inputd` do). Not tested in N1: a kill test with frames in flight (open item for N2, with
+INV-0221-3).
+
+### Tests run
+
+- `cargo test -p zoraya-proto-nic -p zoraya-virtio-net`: 12 and 24 passed.
+- `make check`: all 13 steps pass (fmt, clippy, adr-check, the `check-*`, `check-ci-jobs`).
+- `make test-net` (HVF): PASS, 104 passed and 9 expected failures of the test kernel, `t_net: all passed`, pcap checked,
+  `zoraya-fsck` clean. `FULL=1 make test-net` also under TCG: PASS.
+- `make test-changed`: see the line at the end of this section.
+- Not run: the fuzz target; `make test-boot` with `--net` (the normal kernel starts `ethd` under `make run-net`, which no
+  step boots).
+
+### Measurements (`t_net`, 20 rounds, a single run each)
+
+| | HVF | TCG |
+|---|---|---|
+| ARP round trip (guest transmit to the reply read), median / min / max | 42 / 40 / 258 us | 384 / 372 / 1309 us |
+| the driver's wake to the message read in the client, median / max | 7 to 8 / 11 us | 190 / 794 us |
+| `ID_AA64ISAR0_EL1` | `0x0221100110212120` (RNDR 0) | `0x0000000000011120` (RNDR 0) |
+
+SLIRP's ARP behaviour under `restrict=on`: it answers the gateway's who-has for `10.0.2.2` with MAC `52:55:0a:00:02:02`
+at once; it sent no request of its own.
+
+### The provider check (ADR-0228)
+
+ring works: `rustls 0.23.46` (`default-features = false`, `ring`, `tls12`) with `ring 0.17.14` builds for
+`aarch64-unknown-none` with `clang` and musl's headers from `build/sysroot` as `-isystem`, ring's feature
+`less-safe-getrandom-custom-or-rdrand`, and `getrandom 0.2` (`custom`) with a registered function. `cargo build
+--release` produced ring's C objects and rlibs. Recommendation: keep ring for native programs as ADR-0228 says; N5
+decides the randomness source and runs it on the target. No dependency row was added (nothing links ring yet).
+
+### Handoff
+
+- State: branch `work/n1` from `main` at `9a74448`, local only.
+- By hand: `make run-net` (interactive, with Internet through SLIRP; the console prints `ethd: virtio-net 52:54:00:12:34:56`
+  and `ID_AA64ISAR0_EL1 ...` at boot); `make test-net` (add `FULL=1` for TCG); `target/test-logs/test-net.pcap` opens in
+  Wireshark.
+- Review: read `crates/zoraya-virtio-net/src/lib.rs` and `tests.rs`, `crates/zoraya-proto-nic/src/lib.rs`,
+  `crates/zoraya-virtio/src/queue.rs` (`Queue::take`, `begin`), `user/src/bin/ethd.rs`, `user/src/bin/t_net.rs`,
+  `tools/run-qemu.sh`, `docs/adr/0280-the-frame-slot-layout.md`, the `Makefile` `test-net` recipe, `fuzz/fuzz_targets/net_rx.rs`.
+- Open for N2: `netd` must create the object `CONTIGUOUS`; supervise `ethd` (`init` does not); provoke SLIRP's who-has from
+  the runner; the kill-with-frames-in-flight test; INV-0230-1/-3 checks; `fuzz/Cargo.lock` is not updated (the fuzz
+  workspace was not built).
