@@ -209,19 +209,19 @@ fn free_spinner(page: &Page) -> (Handle, Handle) {
 
 /// The room's share of all counts, in per mille, must be the ceiling's plus
 /// the overrun allowance (and a quarter for the host) at most, and half of it at least.
-fn check_share(room: u64, free: u64, per_mille: u64, elapsed: u64, periods: u64) {
+fn check_share(room: u64, free: u64, per_mille: u64) {
     let share = room as u128 * 1000 / (room + free).max(1) as u128;
-    // The counts of a duty-cycled load and of a continuous one differ by a few
-    // per cent with the host's clock (a room at 50% was seen at 517 against
-    // 512): a quarter more is allowed, so an under-charge of the order of a
-    // half still fails.
-    let high = upper(elapsed * per_mille / 1000, periods) as u128 * 1000 / elapsed as u128 * 5 / 4;
+    // The counts of a duty-cycled load and of a continuous one differ with
+    // the host's clock and load: the same 25% room was seen at 165 to 338 per
+    // mille. So this is a check for a gross error only: up to twice the
+    // ceiling and down to a quarter of it; the exact check is `used_ns`.
+    let high = per_mille as u128 * 2;
     println!(
         "t_cpu: the room counted {room}, an uncapped spinner {free}: {share} per mille (ceiling {per_mille}, at most {high})"
     );
     assert!(share <= high, "share {share} per mille, at most {high}");
     assert!(
-        share * 2 >= per_mille as u128,
+        share * 4 >= per_mille as u128,
         "share {share} per mille: starved"
     );
 }
@@ -262,7 +262,7 @@ fn a_room_at_a_quarter_gets_a_quarter(n: usize) {
     assert!(used * 5 >= budget * 4, "{used} ns of {budget}: starved");
     assert!(u1.cpu.parked > u0.cpu.parked);
     assert_eq!(u1.cpu.limit, Some(250));
-    check_share(counted, uncapped, 250, elapsed, periods);
+    check_share(counted, uncapped, 250);
     end(room, &spinners);
     end(free.0, &[free.1]);
     page.close();
@@ -314,7 +314,7 @@ fn rooms_together_stay_under_their_parent() {
     );
     assert!(total <= upper(elapsed / 2, periods), "{total} ns together");
     assert!(total * 5 >= elapsed / 2 * 4, "{total} ns: starved");
-    check_share(counted, uncapped, 500, elapsed, periods);
+    check_share(counted, uncapped, 500);
     for (room, was) in rooms.iter().zip(before) {
         let used = job_get_usage(*room, false).expect("u").cpu.used_ns - was;
         assert!(used <= upper(elapsed / 4, periods), "a room used {used} ns");

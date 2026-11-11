@@ -198,3 +198,7 @@ Fixes are in the commits after `5aa3b09`.
 
 New finding while fixing: with three rooms at 25% under a 50% parent, one room used 0 ms in 2 s (the first two in the queue
 spent the parent's budget). ADR-0264 promises ceilings and no shares; recorded as a question in ADR-0285.
+
+Later note on 4: the shares of the same 25% room ranged from 165 to 338 per mille between runs and hosts' loads while
+`used_ns` was 500 ms of 500 every time, so the count check is only for a gross error (up to twice the ceiling, down to a
+quarter); `used_ns` stays the exact check.
