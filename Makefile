@@ -661,7 +661,7 @@ CI_WORKFLOW ?= .github/workflows/test.yml
 CI_TESTS ?= tools/ci-tests.txt
 check-ci-jobs:
 	@TEST_STEPS="$(TEST_STEPS)" QEMU_CONFIGS="$(QEMU_CONFIGS)" POSIX_SCRIPTS="$(POSIX_SCRIPTS)" \
-	  POSIX_ACCELS="auto tcg" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" \
+	  POSIX_ACCELS="auto tcg" POSIX_ONCE="$(POSIX_ONCE)" W8_BUILDS="$(POSIX_W8_BUILDS)" GUI_RUNS_ALL="$(GUI_RUNS_ALL)" \
 	  tools/check-ci-jobs.sh $(CI_WORKFLOW) $(CI_TESTS)
 
 # The tiers (CLAUDE.md, "Testing"): make check on every commit (seconds);
