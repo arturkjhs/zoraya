@@ -16,6 +16,7 @@ tools/ci-tests.txt            check
 tools/plan-lib.sh             check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
+tools/check-untrusted-gate.sh check
 
 # The kernel and its ABI: every machine configuration.
 kernel/                       test-qemu test-boot
