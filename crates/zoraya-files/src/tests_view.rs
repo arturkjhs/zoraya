@@ -205,6 +205,29 @@ fn shift_and_command_clicks_select_through_the_widget() {
     assert_eq!(r.model.borrow().selected_names(), ["plán.txt"]);
 }
 
+/// The pointer and the keyboard are two devices: a release may be read after
+/// the modifier of its press is gone. The press did its work; the release
+/// must not collapse the selection to the row (the files-manage flake).
+#[test]
+fn a_release_without_the_modifier_of_its_press_keeps_the_selection() {
+    let mut r = rig(1);
+    later(DOUBLE_NS * 2);
+    r.click(Rig::row(2).0, Rig::row(2).1, 0);
+    later(DOUBLE_NS * 2);
+    let (x, y) = Rig::row(4);
+    r.at(x, y, 1, mods::SHIFT);
+    r.at(x, y, 0, 0);
+    assert_eq!(
+        r.model.borrow().selected_names(),
+        ["main.c", "notes.txt", "plán.txt"]
+    );
+    later(DOUBLE_NS * 2);
+    let (x, y) = Rig::row(3);
+    r.at(x, y, 1, mods::SYSTEM);
+    r.at(x, y, 0, mods::SYSTEM);
+    assert_eq!(r.model.borrow().selected_names(), ["main.c", "plán.txt"]);
+}
+
 #[test]
 fn a_press_moved_from_a_row_drags_its_file() {
     let mut r = rig(1);
