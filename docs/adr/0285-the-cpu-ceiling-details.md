@@ -19,7 +19,7 @@ at periods of 10, 20 and 100 ms. **Assumed:** one CPU (SMP is a revisit trigger 
 
 1. The scheduler's lock order and masked time are what INV-0270-1 bounds; a change keeps both small and says where it
    touches them.
-2. Nothing a limited room does may strand a thread or the deadline queue (ADR-0023: 288 entries, one for the slice).
+2. Nothing a limited room does may strand a thread or the deadline queue (ADR-0023: 288 entries, two kept for the slice and the period's deadline).
 3. A program written for Q1's 88-byte `job_get_usage` keeps working.
 
 ## Considered options

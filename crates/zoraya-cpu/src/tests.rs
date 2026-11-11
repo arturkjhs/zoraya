@@ -74,7 +74,11 @@ fn simulate(tree: &mut Arena, queue: &mut RunQueue<Th>, until: u64, period_ns: u
         }
         let picked = queue.pick(tree, now, period_ns, |t| t.job);
         let Some(picked) = picked else {
-            now = next_boundary(now, period_ns);
+            // At the cap of parks per pick, idle calls again at once; with
+            // nothing ready, idle waits for the boundary.
+            if queue.is_empty() {
+                now = next_boundary(now, period_ns);
+            }
             continue;
         };
         let th = picked.thread;
@@ -348,22 +352,27 @@ fn nothing_runs_between_the_budget_and_the_boundary_when_alone() {
     assert_eq!(runs.len(), 10);
 }
 
-/// A job over its budget with more threads than one pick may park: the rest
-/// run for the floor and are parked at their next pick.
+/// A job over its budget with more threads than one pick may park: the pick
+/// parks 16, puts the next back at the front and returns nothing (idle runs
+/// and calls again); no thread of the spent job is picked.
 #[test]
-fn a_pick_parks_at_most_sixteen() {
+fn a_pick_parks_at_most_sixteen_and_runs_none() {
     let mut a = Arena::new();
     let room = a.child(0, Some(250));
     charge(&mut a, room, 5 * MS, 5 * MS, 0);
     let mut q = RunQueue::new();
     spinners(&mut q, 0, 40, Some(room));
-    let picked = q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job).unwrap();
-    assert_eq!(picked.slice_ns, Some(MIN_SLICE_NS));
-    assert_eq!(picked.thread.id, MAX_PARKS_PER_PICK);
-    assert_eq!(q.parked_len(), MAX_PARKS_PER_PICK);
-    assert_eq!(a.get(room).parked, MAX_PARKS_PER_PICK as u64);
+    let mut calls = 0;
+    while !q.is_empty() {
+        let before = q.parked_len();
+        assert!(q.pick(&mut a, 5 * MS, PERIOD_NS, |t| t.job).is_none());
+        assert!(q.parked_len() - before <= MAX_PARKS_PER_PICK);
+        calls += 1;
+    }
+    assert_eq!(calls, 3, "40 threads: 16, 16, 8");
+    assert_eq!(q.parked_len(), 40);
+    assert_eq!(a.get(room).parked, 40);
     // After the boundary the whole lot comes back, in batches, in order.
-    let mut batches = 0;
     let mut total = 0;
     loop {
         let n = q.release();
@@ -371,11 +380,31 @@ fn a_pick_parks_at_most_sixteen() {
             break;
         }
         assert!(n <= RELEASE_BATCH);
-        batches += 1;
         total += n;
     }
-    assert_eq!((total, batches), (MAX_PARKS_PER_PICK, 1));
+    assert_eq!(total, 40);
     assert_eq!(q.parked_len(), 0);
+}
+
+/// ADR-0285 point 1, review W1: 200 threads in a room at 25% (the session's
+/// process limit) use no more than the budget plus one floor per period, and
+/// the other jobs' threads are not held up behind them.
+#[test]
+fn two_hundred_threads_in_a_spent_job_cost_one_floor_per_period() {
+    let mut a = Arena::new();
+    let room = a.child(0, Some(250));
+    let mut q = RunQueue::new();
+    spinners(&mut q, 0, 200, Some(room));
+    spinners(&mut q, 1000, 1, None);
+    let runs = simulate(&mut a, &mut q, 400 * MS, PERIOD_NS);
+    for p in 0..20 {
+        let in_p = run_ns(&runs, |r| {
+            r.thread < 1000 && period_of(r.start, PERIOD_NS) == p
+        });
+        assert!(in_p <= 5 * MS + MIN_SLICE_NS, "period {p}: {in_p}");
+    }
+    let free = run_ns(&runs, |r| r.thread == 1000);
+    assert!(free >= 400 * MS * 3 / 4 - 4 * MS, "{free}");
 }
 
 #[test]

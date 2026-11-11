@@ -1284,6 +1284,11 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::MASKED_MAX_NS => Some(Ok(crate::steps::masked_max_ns(a0 != 0))),
         test_calls::MASKED_MAX_UNITS => Some(Ok(crate::steps::masked_max_units(a0 != 0))),
         test_calls::CANCELLED => Some(Ok(crate::steps::cancelled())),
+        // Below 1 ms a low ceiling's budget is zero and the release deadline
+        // would storm; 0 restores the default.
+        test_calls::SET_CPU_PERIOD if a0 != 0 && a0 < 1_000_000 => {
+            Some(Err(Status::InvalidArgument))
+        }
         test_calls::SET_CPU_PERIOD => {
             crate::cpu::set_test_period(a0);
             Some(Ok(0))
