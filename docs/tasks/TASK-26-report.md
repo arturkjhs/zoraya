@@ -560,3 +560,11 @@ kernel preemption (SMP would need SCHED there). `timer::arm` leaves 2 slots inst
 Branch `work/q4` on `work/n2`, unmerged. Review: `crates/zoraya-cpu/src/lib.rs`, `kernel/src/sched.rs`, `kernel/src/cpu.rs`,
 `kernel/src/job.rs` (`set_limits`), `kernel/src/timer.rs`, `user/src/bin/t_cpu.rs`, ADR-0285. Commands: `cargo test -p zoraya-cpu`;
 `make test-qemu-one` (prints the `t_cpu:` lines); `make test-changed`.
+
+### Tests run (Q4)
+
+`make check` before each commit. `make test-changed` (every step, HVF): host tests (51 binaries), test-qemu, test-libposix,
+test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui and test-net passed; `test-boot` failed once at
+`boot-auto-smp4-2g` ("timed out waiting for bytes dropped]", the known input flake) and passed on `make test-boot` alone. The
+first `test-changed` attempt stopped at the build because this worktree had no ports archives; they were copied from another
+worktree's cache (no download).
