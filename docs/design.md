@@ -339,6 +339,21 @@ Two processes, each in a sub-job that `init` makes, and `init` over them, on [AD
   service, and resets the device when the service goes.
 - **`fsd`** runs the loop of `crates/zoraya-fs-service` over a `Transport`, with the engine under it. One request at a
   time, and its only blocking wait is on the driver, with a deadline of 30 s. Clients speak `zoraya-proto-file`.
+  **Accounts** ([ADR-0262](adr/0262-who-pays-for-service-objects.md) item 2, [ADR-0291](adr/0291-accounts-in-the-file-service.md)
+  proposed). Every connection belongs to one account; `open`, `clone`, `narrow` and `share` join the caller's. The root
+  connection's is the session's. `CloneAccount { rights, budget }` (request 40) makes a new account carved from the
+  caller's: `budget` open handles, an eighth of that in mapped buffers and a thirty-second in held replies (at least
+  one each). Carved from the session's, a budget is 1 to 32 and at most four such accounts exist (the untrusted
+  column: 128 open, 16 buffers, 4 held replies; the session keeps 768, 224 and 892). At its open bound an account's
+  requests get `TOO_MANY_OPEN` (`ENFILE`), at its buffer bound `LIMIT_REACHED`; a reply that cannot be sent and
+  would be a second held one closes its connection. The bounds of all live accounts add up to `MAX_OPEN` (896),
+  `MAX_BUFFERS` (240) and `MAX_HELD` (896); an account's last connection closing frees it and returns its bounds.
+  A `Sync` on an untrusted account's connection is answered at the next commit (the timed one or another client's
+  `sync`) and the connection is not read meanwhile; a durable write is not folded yet. Worst-case memory
+  (`zoraya_fs_service::worst_case`, 4-byte test handles): 192 KB fixed, 766 B per open handle, 64 KiB per held reply,
+  so an untrusted account costs at most 90 KB and the whole service 59 MB, 56 MiB of it the session's possible held
+  replies (as before accounts). Known limitation: no launcher calls `CloneAccount` yet (Q6a), and the loop serves
+  ready connections in the port's order, not one request per account per pass.
 - **`init`** finds the disk, starts both (`user/src/stack.rs`, which `t_storage` also uses), and gives the shell a
   connection to the root. On a report from the service or the death of either, it ends all three and starts them
   again, at most three times. After that the shell runs with no volume. When the shell ends, it syncs and powers off.

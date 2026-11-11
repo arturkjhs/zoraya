@@ -442,3 +442,62 @@ mapped so `make test-changed` runs every step.
 Review: `crates/zoraya-fs/src/volume.rs` (the "Storage limits" block, `unname`, `delete_object`, rename, `resize`, `write`),
 `check.rs`, `format.rs`, `tests/limits.rs`, `crates/zoraya-proto-file/src/lib.rs`, `crates/zoraya-fs-service/src/lib.rs`,
 `tests/posix/t_posix.c` (`diskfill`), docs/adr/0290. Model use: Sonnet only; no Opus review of the engine was run.
+
+## Q3 (fsd): accounts in the file service (branch `work/q3`, on `work/q5`)
+
+**Built.** `zoraya-fs-service` keeps accounts (ADR-0262 item 2). Each connection has an account; `open`, `clone`, `narrow` and
+`share` join the caller's; the root connection's is the session's. Each account has a limit and a count for open handles
+(`MAX_OPEN` 896 in all: connections, tokens, buffers, held-reply handles), mapped buffers (`MAX_BUFFERS` 240) and held replies
+(`MAX_HELD` = 896). A new request `CloneAccount { rights, budget }` (40; `zoraya-fsclient::clone_account`) carves an account from
+the caller's: `budget` open, `budget/8` buffers, `budget/32` held (each at least 1). From the session's account a budget is 1..=32
+and at most four such accounts live (the untrusted column: 128 open, 16 buffers, 4 held; session keeps 768, 224, 892). At the
+open bound: `TOO_MANY_OPEN`; at the buffer bound: `LIMIT_REACHED`; a reply that would be a second held one in an account at
+its bound closes its connection. The last connection of an account frees it and returns its limits to its parent
+(sub-accounts are re-parented; if the session account ends first its carve is dropped and a new session account takes what
+the live ones leave). `Sync` on an untrusted account's connection (any carved account) does not commit: it waits for the next
+commit (timed or another client's `sync`), the connection is not read meanwhile (interest `Closed`), a failed volume answers it
+`STORAGE_FAILED`, nothing to commit answers at once. `fsd.rs` needed no change (the account code is in the library). Q5's
+`SetLimit`/`GetLimit` and statuses untouched.
+
+**Decisions** (ADR-0291, proposed; all reversible): `CloneAccount` as a new request, `Clone` unchanged; the account's
+buffers and held bounds derive from one budget (explicit numbers were option C); FIFO stream ends (only in `fsd --memory`)
+are service-level, counted in the global bound only; the held bound closes the connection (a made reply has no room for a
+status); only `Sync` is folded, not `DURABLE` writes (open question: same stall, needs a deferred reply with a count);
+"untrusted" = any carved account. **For the architect, from Q5's review:** if `SetLimit` must not be allowed to a plain
+`WRITE` holder, the natural place to say who may set limits is the account (a connection of an untrusted account is
+`account.untrusted`); I did not change it.
+
+**Invariant delta.** INV-0262-1, -2, -3: `checked: make test-unit` for `fsd` (the other services say so in the row; the ADR
+text is per service). INV-0265-5 stays `not yet applicable (until Q3)` in the table: its check is the in-QEMU loop (Q6a/Q7);
+the host half is `an_untrusted_sync_waits_for_the_next_commit` and `a_sync_loop_in_an_untrusted_account_adds_no_commit`.
+New INV-0291-1 (the sums as an equality). Counts 504 -> 505. `make adr-check`: 0 errors.
+
+**Tests added** (`crates/zoraya-fs-service/tests/service.rs`, fsclient, proto): an account at its open, buffer and held bound
+is refused while a second uses its full bound and the session is not refused; the column (four accounts, no fifth, budget 0
+and over 32, 768/224 left); free with the last connection, in either order, with a sub-account of a dead parent; a random run
+(1500 steps of carve/open/attach/detach/close) checking after each step that the limits sum to 896/240/896, the column is
+within its bounds, counts do not pass limits and equal `open_count()`, and that all state is gone at the end; the folded
+`sync` (waits, no commit of its own, answered by a session `sync` or the timer, five rounds, a close while waiting);
+the wire (`CloneAccount` round trip, ordinals); `clone_account` through the client.
+
+**Measurements** (`worst_case::<u32>()`, from `the_service_size_follows_from_the_bounds`; run it with
+`cargo test -p zoraya-fs-service --test service the_service_size -- --nocapture`): fixed 192,512 B (input, output, data
+buffers); 766 B per open handle (connection, record, two names); 65,540 B per held reply; 72 B per account.
+Untrusted account (32 open, 1 held): 90,124 B. Session: 59,050,040 B. Whole service: 59,603,048 B. The 56 MiB is 896 held
+replies of 64 KiB: the session's bound is the number of connections it can have (unchanged by Q3); it would be 4 MiB at 64
+held. Proposed, not done (architect): lower the session's `MAX_HELD`. Handle size on the target is 8 B; the numbers move by
+under 1%.
+
+**Tests run (this session).** `cargo test` of zoraya-fs-service (65 service tests, fifo, time), zoraya-fsclient (10),
+zoraya-proto-file (7): pass. `make check` (fmt, clippy, adr-check and every check-*): pass. TEST_CHANGED_PLACEHOLDER
+
+**Open items.** No launcher calls `CloneAccount` yet (Q6a: one per untrusted room; the broker/tmpd of a shell in the shell's
+room job are Q6a too). `netd`'s part waits for N4/N6. `fsd` does not serve one request per account per pass (ADR-0262 open
+question, noted there). `top` does not read account counts yet (`Service::account_totals` is the host form).
+INV-0262-1..3 for `netd`, the compositor and the broker are still unchecked.
+
+**Handoff / by hand.** `cargo test -p zoraya-fs-service --test service accounts budgets random_accounts untrusted`;
+`cargo test -p zoraya-fsclient clone_account`. Review (reviewer gets the diff and ADR names): `crates/zoraya-fs-service/src/lib.rs`
+(`Account`, `carve`, `free_account`, `charge`/`release`, `room`, `send`, `flush_held`, `close_connection`, `fold_sync`,
+`answer_syncs`), `tests/service.rs` (end), `crates/zoraya-proto-file/src/lib.rs` (`CloneAccount`), ADR-0262, ADR-0265 item 9,
+ADR-0291. Model use: Sonnet only; no Opus review of the trust-boundary code was run (the orchestrator's review of Q3 is due).
