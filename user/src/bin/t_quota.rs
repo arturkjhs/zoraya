@@ -178,6 +178,9 @@ fn a_sibling_keeps_its_own_limit_and_a_kill_gives_everything_back() {
 /// allocates for; the heap grows only by what the call took (a 64 KiB chunk
 /// of a class may already be there, but `live` counts blocks).
 fn usage_matches_the_heap_and_the_frames() {
+    // What earlier tests freed is given back by the reaper (ADR-0270), with
+    // its charge: wait for it before the baseline.
+    let _ = free_frames();
     let used = || job_get_usage(JOB, false).expect("usage").memory.used;
     let (u0, h0) = (used(), heap_live());
     // A memory object: its frames, then its record and list.

@@ -54,11 +54,11 @@ static QUEUE: SpinLock<Queue> = SpinLock::new(Queue {
 pub fn start() {
     // Room for a burst of drops before the first one: a drop that fails and
     // frees frames must not make the heap take frames for the queue.
-    QUEUE
-        .lock()
-        .items
+    let mut items = Vec::new();
+    items
         .try_reserve_exact(QUEUE_ROOM)
         .expect("room for the reaper's queue");
+    QUEUE.lock().items = items;
     let thread = sched::spawn_kernel(reaper_main, 0).expect("reaper thread");
     QUEUE.lock().thread = Some(thread);
 }
@@ -125,36 +125,70 @@ pub fn drain() {
     }
 }
 
+/// Frees up to `max` queued frames on the spot and says whether it freed
+/// any. Drops nothing that frees heap or gives a charge back, so it can run
+/// under the heap's lock; the reaper drops the emptied items.
+fn free_some(max: usize) -> bool {
+    let mut queue = QUEUE.lock();
+    let mut left = max;
+    for item in queue.items.iter_mut() {
+        while left > 0 {
+            let Some(frame) = item.frames.pop() else {
+                break;
+            };
+            frames::free(frame);
+            left -= 1;
+        }
+        if left == 0 {
+            break;
+        }
+    }
+    left < max
+}
+
+/// For an allocation that found no free frame: frees a step of what the
+/// reaper holds, so that a short machine is not refused because teardown has
+/// not caught up. False if there is nothing queued.
+pub fn help() -> bool {
+    free_some(STEP)
+}
+
 fn reaper_main(_: usize) {
     loop {
-        let item = {
-            let mut queue = QUEUE.lock();
-            let item = queue.items.pop();
-            queue.busy = item.is_some();
-            item
-        };
-        match item {
-            Some(mut garbage) => {
-                while !garbage.frames.is_empty() {
-                    let keep = garbage.frames.len().saturating_sub(REAPER_STEP);
-                    for frame in garbage.frames.drain(keep..) {
-                        frames::free(frame);
-                    }
-                    sched::yield_now();
-                }
-                // The charge goes back only now.
-                drop(garbage);
-                QUEUE.lock().busy = false;
+        // Frames first, `REAPER_STEP` of them in steps of `STEP` under the
+        // lock, so that the lock is held for one step only.
+        let mut freed = false;
+        for _ in 0..REAPER_STEP / STEP {
+            if !free_some(STEP) {
+                break;
             }
-            None => {
-                // Masked from the check to the block, so that a `defer` cannot
-                // slip between them.
-                let daif = crate::arch::save_and_mask_interrupts();
-                if QUEUE.lock().items.is_empty() {
-                    sched::block_current();
-                }
-                crate::arch::restore_interrupts(daif);
-            }
+            freed = true;
         }
+        // An item with no frames left is dropped outside the lock: its list
+        // goes back to the heap and its charge is given back.
+        let done = {
+            let mut queue = QUEUE.lock();
+            let position = queue.items.iter().position(|g| g.frames.is_empty());
+            position.map(|at| {
+                queue.busy = true;
+                queue.items.swap_remove(at)
+            })
+        };
+        if let Some(garbage) = done {
+            drop(garbage);
+            QUEUE.lock().busy = false;
+            continue;
+        }
+        if freed {
+            sched::yield_now();
+            continue;
+        }
+        // Masked from the check to the block, so that a `defer` cannot slip
+        // between them.
+        let daif = crate::arch::save_and_mask_interrupts();
+        if QUEUE.lock().items.is_empty() {
+            sched::block_current();
+        }
+        crate::arch::restore_interrupts(daif);
     }
 }

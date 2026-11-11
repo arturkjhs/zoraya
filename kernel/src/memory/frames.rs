@@ -57,8 +57,19 @@ pub fn init(info: &PlatformInfo<'_>) {
 }
 
 /// One frame, with arbitrary contents.
+///
+/// When none is free and the reaper still holds frames, it frees a step of
+/// them and this tries again (ADR-0270 point 4): memory that is on its way
+/// back is not exhaustion.
 pub fn alloc() -> Result<Frame, OutOfFrames> {
-    FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc()
+    loop {
+        let found = FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc();
+        match found {
+            Err(e) if !crate::reaper::help() => return Err(e),
+            Err(_) => {}
+            Ok(frame) => return Ok(frame),
+        }
+    }
 }
 
 /// One zeroed frame.
@@ -74,11 +85,18 @@ pub fn alloc_zeroed() -> Result<Frame, OutOfFrames> {
 
 /// `count` contiguous zeroed frames.
 pub fn alloc_contig_zeroed(count: u64) -> Result<Frame, OutOfFrames> {
-    let first = FRAMES
-        .lock()
-        .as_mut()
-        .ok_or(OutOfFrames)?
-        .alloc_contig(count, 1)?;
+    let first = loop {
+        let found = FRAMES
+            .lock()
+            .as_mut()
+            .ok_or(OutOfFrames)?
+            .alloc_contig(count, 1);
+        match found {
+            Err(e) if !crate::reaper::help() => return Err(e),
+            Err(_) => {}
+            Ok(first) => break first,
+        }
+    };
     // SAFETY: as in `alloc_zeroed`, for each frame of the run.
     unsafe {
         (phys_to_virt(first.addr()) as *mut u8).write_bytes(0, (count * FRAME_SIZE) as usize);
