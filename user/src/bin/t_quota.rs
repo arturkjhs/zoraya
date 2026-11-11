@@ -10,16 +10,26 @@
 use zoraya_abi::quota::JobLimits;
 use zoraya_abi::spawn::Encoder;
 use zoraya_abi::{
-    ExitReason, Handle, JOB, JobFlags, JobObject, MemoryFlags, ObjectType, Rights, Status,
-    job_signals,
+    DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MemoryFlags, OBJECT_TYPES, ObjectType,
+    Rights, Status, job_signals,
 };
 use zoraya_user::{
-    assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, image, job_create,
-    job_get_usage, job_kill, job_set_limits, memory_create, println, raw_syscall, sleep_until,
-    spawn, startup, wait_exit,
+    assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, handle_type, image,
+    job_create, job_get_usage, job_kill, job_set_limits, memory_create, println, raw_syscall,
+    sleep_until, spawn, startup, wait_exit,
 };
 
 const HEAP_LIVE: u64 = 0x700b;
+const FREE_FRAMES: u64 = 0x7006;
+const EVENTS_LIVE: u64 = 0x7014;
+
+fn events_live() -> u64 {
+    raw_syscall(EVENTS_LIVE, [0; 6]).1
+}
+
+fn free_frames() -> u64 {
+    raw_syscall(FREE_FRAMES, [0; 6]).1
+}
 
 fn heap_live() -> u64 {
     raw_syscall(HEAP_LIVE, [0; 6]).1
@@ -168,6 +178,9 @@ fn a_sibling_keeps_its_own_limit_and_a_kill_gives_everything_back() {
 /// allocates for; the heap grows only by what the call took (a 64 KiB chunk
 /// of a class may already be there, but `live` counts blocks).
 fn usage_matches_the_heap_and_the_frames() {
+    // What earlier tests freed is given back by the reaper (ADR-0270), with
+    // its charge: wait for it before the baseline.
+    let _ = free_frames();
     let used = || job_get_usage(JOB, false).expect("usage").memory.used;
     let (u0, h0) = (used(), heap_live());
     // A memory object: its frames, then its record and list.
@@ -215,7 +228,13 @@ fn spawn_stops_at_the_process_limit() {
     job_set_limits(room, &limits(None, Some(2))).expect("limits");
     let a = child(room, b"idle").expect("first");
     let b = child(room, b"idle").expect("second");
+    // A refused spawn leaves no trace: no event source (review Q1, error 1),
+    // no heap, no frame (INV-0261-2).
+    let (events, heap, frames) = (events_live(), heap_live(), free_frames());
     assert_err!(child(room, b"idle"), Status::OverQuota);
+    assert_eq!(events_live(), events, "event sources after a refused spawn");
+    assert_eq!(free_frames(), frames, "frames after a refused spawn");
+    assert!(heap_live() <= heap + 4096, "heap after a refused spawn");
     let usage = job_get_usage(room, false).expect("usage");
     assert_eq!(usage.processes.used, 2);
     assert_eq!(usage.processes.refused, 1);
@@ -230,6 +249,167 @@ fn spawn_stops_at_the_process_limit() {
         .used
         == 0));
     handle_close(room).expect("close");
+}
+
+/// The classic `:|:&` without a shell: each copy starts two more in its own
+/// job and then waits to be killed. The job's process limit is what stops it.
+fn bomb() -> i32 {
+    for _ in 0..2 {
+        let mut buffer = [0; 512];
+        let program = image("t_quota");
+        let mut e = Encoder::new(&mut buffer, JOB, program);
+        e.handle(console_again());
+        e.handle(zoraya_user::dup(JOB.slot(), JOB, JobObject::RIGHTS));
+        e.handle(zoraya_user::dup(
+            DIRECTORY.slot(),
+            DIRECTORY,
+            directory_rights(),
+        ));
+        e.arg(b"bomb");
+        let length = e.finish().expect("room");
+        // Refused at the limit; the copies already running stay.
+        if let Err(status) = spawn(&buffer[..length])
+            && status != Status::OverQuota
+        {
+            println!("t_quota: bomb: spawn: {status:?}");
+        }
+        handle_close(program).expect("image");
+    }
+    nap(30_000);
+    0
+}
+
+/// The console for a child that passes it on: with `DUPLICATE`.
+fn console_again() -> zoraya_abi::spawn::HandleEntry {
+    zoraya_user::dup(
+        zoraya_abi::CONSOLE.slot(),
+        zoraya_abi::CONSOLE,
+        Rights::WRITE.union(Rights::DUPLICATE),
+    )
+}
+
+fn directory_rights() -> Rights {
+    OBJECT_TYPES
+        .iter()
+        .find(|t| Some(t.name) == handle_type(DIRECTORY).ok())
+        .map_or(Rights::NONE, |t| t.rights)
+}
+
+/// Q2's criterion: a fork bomb in a limited job stops at its process limit,
+/// and a command outside it starts and ends within 2 s (INV-0261-4,
+/// INV-0263-1).
+fn a_fork_bomb_stops_at_the_process_limit() {
+    const LIMIT: u32 = 24;
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    job_set_limits(room, &limits(None, Some(LIMIT))).expect("limits");
+    let frames = free_frames();
+    let started = clock_monotonic();
+    let mut buffer = [0; 512];
+    let program = image("t_quota");
+    let mut e = Encoder::new(&mut buffer, room, program);
+    e.handle(console_again());
+    e.handle(zoraya_user::dup(JOB.slot(), room, JobObject::RIGHTS));
+    e.handle(zoraya_user::dup(
+        DIRECTORY.slot(),
+        DIRECTORY,
+        directory_rights(),
+    ));
+    e.arg(b"bomb");
+    let length = e.finish().expect("room");
+    let root = spawn(&buffer[..length]).expect("the first copy");
+    handle_close(program).expect("image");
+    assert!(
+        eventually(|| {
+            let u = job_get_usage(room, false).expect("usage");
+            u.processes.used == u64::from(LIMIT) && u.processes.refused > 0
+        }),
+        "the bomb did not reach its limit: {:?}",
+        job_get_usage(room, false).expect("usage").processes
+    );
+    let reached = clock_monotonic() - started;
+    let usage = job_get_usage(room, false).expect("usage").processes;
+    println!(
+        "t_quota: fork bomb reached its limit of {LIMIT} processes in {} ms, {} refused",
+        reached / 1_000_000,
+        usage.refused
+    );
+    // A command outside the limited job starts and ends within 2 s, while the
+    // bomb sits at its limit.
+    let t0 = clock_monotonic();
+    let quick = child(JOB, b"quick").expect("a command outside the bomb's job");
+    let record = wait_exit(quick);
+    let took = clock_monotonic() - t0;
+    handle_close(quick).expect("close");
+    println!(
+        "t_quota: a command outside the bomb's job took {} ms",
+        took / 1_000_000
+    );
+    assert_eq!(record.code, 3);
+    assert!(took < 2_000_000_000, "{took} ns");
+    assert_eq!(
+        job_get_usage(room, false).expect("u").processes.used,
+        u64::from(LIMIT)
+    );
+    job_kill(room).expect("kill");
+    wait_exit(root);
+    handle_close(root).expect("close");
+    assert!(eventually(|| {
+        job_get_usage(room, false).expect("u").processes.used == 0 && free_frames() == frames
+    }));
+    handle_close(room).expect("close");
+}
+
+/// Review Q1, error 2: mapping an object another job made, in a job with no
+/// room for the page tables, is `OverQuota` (not `NoMemory`) and changes
+/// nothing.
+fn mapping_a_foreign_object_at_the_limit_is_refused() {
+    const SIZE: u64 = 8 * MIB;
+    let foreign = memory_create(SIZE, MemoryFlags::NONE).expect("made outside the room");
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    job_set_limits(room, &limits(Some(4 * MIB), None)).expect("limits");
+    let mut buffer = [0; 512];
+    let program = image("t_quota");
+    let mut e = Encoder::new(&mut buffer, room, program);
+    e.handle(console_entry());
+    e.handle(zoraya_user::dup(JOB.slot(), room, JobObject::RIGHTS));
+    e.handle(zoraya_user::dup(
+        8,
+        foreign,
+        Rights::READ.union(Rights::WRITE).union(Rights::DUPLICATE),
+    ));
+    e.arg(b"map-foreign");
+    let length = e.finish().expect("room");
+    let p = spawn(&buffer[..length]).expect("spawn");
+    handle_close(program).expect("image");
+    // While the child sleeps, the room's limit becomes its use plus half a
+    // page: not even the first page table of an 8 MiB mapping fits. It reports in
+    // its exit code.
+    nap(150);
+    let used = job_get_usage(room, false).expect("usage").memory.used;
+    job_set_limits(room, &limits(Some(used + 2048), None)).expect("narrower");
+    let record = wait_exit(p);
+    assert_eq!(record.code, EXIT_AFTER_REFUSAL, "{record:?}");
+    handle_close(p).expect("close");
+    handle_close(room).expect("close");
+    handle_close(foreign).expect("close");
+}
+
+/// In the child of `mapping_a_foreign_object_at_the_limit_is_refused`.
+fn map_foreign() -> i32 {
+    let object = Handle::from_parts(8, 0).expect("slot");
+    nap(400);
+    let before = job_get_usage(JOB, false).expect("usage").memory;
+    let result = zoraya_user::memory_map(object, 0, 8 * MIB, zoraya_abi::MapFlags::WRITE);
+    if result != Err(Status::OverQuota) {
+        println!("t_quota: map-foreign: {result:?}");
+        return 1;
+    }
+    let after = job_get_usage(JOB, false).expect("usage").memory;
+    if after.used != before.used || after.refused <= before.refused {
+        println!("t_quota: map-foreign: {before:?} -> {after:?}");
+        return 2;
+    }
+    EXIT_AFTER_REFUSAL
 }
 
 fn hog_until_refused(hold: bool) -> i32 {
@@ -260,6 +440,9 @@ fn main() -> i32 {
             }
             return 0;
         }
+        Some(b"bomb") => return bomb(),
+        Some(b"quick") => return 3,
+        Some(b"map-foreign") => return map_foreign(),
         Some(b"idle") => {
             nap(30_000);
             return 0;
@@ -270,6 +453,8 @@ fn main() -> i32 {
     a_hog_is_refused_and_exits_by_itself();
     a_sibling_keeps_its_own_limit_and_a_kill_gives_everything_back();
     spawn_stops_at_the_process_limit();
+    a_fork_bomb_stops_at_the_process_limit();
+    mapping_a_foreign_object_at_the_limit_is_refused();
     usage_matches_the_heap_and_the_frames();
     println!("t_quota: all passed");
     0

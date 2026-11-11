@@ -1400,7 +1400,7 @@ designate (ADR-0153's Decision). Builtins are the commands that act on the shell
 and `sync`; the file commands are programs in the ramdisk. `rm` refuses a path that is `/`, or whose last
 component is `.` or `..`, with or without `--recursive`; `project/` is `project` (TASK-18 review S20).
 
-## Quotas (stage 8, Q1: memory and processes on jobs)
+## Quotas (stage 8, Q1 and Q2: memory and processes on jobs, bounded kernel work)
 
 A job can carry a memory limit and a process limit (`job_set_limits`, needs the `LIMIT` right, which `job_create`
 returns and a launcher withholds from what it hands on). A limit never passes the parent's effective limit. Everything a
@@ -1431,19 +1431,42 @@ and heap pages in use. The over-charges are therefore not what refuses the termi
 nearly all of RAM. Before the change to ports and exits the figure was 231.2 MB.
 
 Known limits of Q1: a live process is charged a 1024-slot handle table whatever it holds; `snapshot_process` is refused page by page, not before
-copying; `libposix` maps `OverQuota` to `ENOMEM`/`EAGAIN` without looking at the field (Q2).
+copying.
+
+**Q2: processes, the fork bomb and bounded kernel work.** The `processes` field is charged first in `spawn` and
+`snapshot_process`, before any page: a fork bomb in a limited job stops at its limit (`t_quota`: 24 processes reached in
+about 5 ms with 23 refusals) and a command started outside it ends at once. `libposix` reads the field of the last
+`OverQuota` (`zoraya_rt::last_refusal`, kept by the runtime from the value register) and maps it by call: `processes`
+to `EAGAIN` for `fork`, `vfork` and `posix_spawn`, `memory` to `ENOMEM` (`zoraya_posix::errno::from_refusal`).
+
+Long calls proceed in steps (ADR-0270): `memory_create`, `memory_map`, `memory_unmap`, `snapshot_process`, the image
+copy and stack of `spawn` and the close of a chain of channels do at most 64 pages or messages and then call
+`steps::between` or `steps::pause`, with interrupts on and no spinlock held (the test kernel asserts it). `between`
+fails with `Cancelled` if `job_kill` came meanwhile, and the call frees what it did: nothing is visible until the last
+step. The frames of a closed memory object over 64 pages and of an address space over 64 frames go to the `reaper`
+kernel thread (`kernel/src/reaper.rs`) with their charge, which stays on the job until they are freed. An allocation
+that finds no free frame first frees a step of the reaper's queue, so memory on its way back is not refused. The test
+kernel counts the longest time IRQ stayed masked (`MASKED_MAX_NS`, `kernel/src/steps.rs`), without the idle thread's wait.
+Measured under HVF, 24 MiB (`t_bound`): before the steps `memory_create` 1707 us, `memory_map` 1333 us, `memory_unmap`
+786 us and the close of the object 962 us masked; after, one step and the whole are the same, about 19 us, 15 to 19 us,
+8 to 10 us and 11 us. See the report for the rest.
 
 ## Known limitations
 
-- **Masked interrupts.** System calls run with interrupts masked, and some scale with what they touch. Under HVF on
-  128 MiB: `memory_create` of all memory about 9 ms, and closing that object about 4 ms; closing a chain of 20,000
-  channel ends about 11 ms. `memory_map`, `dma_pin`, an address space's teardown and a device reset, up to 100 ms a
-  transport, are the same kind. ADR-0056 must bound them before untrusted code runs.
+- **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch
+  (under HVF on 128 MiB: `memory_create` of all memory about 9 ms, closing that object about 4 ms, closing a chain of
+  20,000 channel ends about 11 ms). `memory_create`, `memory_map`, `memory_unmap`, `snapshot_process`, `spawn`'s copy,
+  a chain's close and the teardown of an address space or a memory object are now in steps of 64 (ADR-0270). Still
+  masked for their size: `dma_pin` (drivers only) and a device reset (up to 100 ms a transport). `schedule()` still
+  drops a dead thread and its small remainder. A step point under a spinlock would unmask interrupts under it; only the
+  test kernel checks that none is held.
 - **Signal table.** `zoraya-events` keeps its peak size. A burst of channels leaves that memory in the kernel heap.
 - **Handles in messages.** A protocol decoder checks how many handles a message has. A server must then check their
   types with `handle_type` (ADR-0072).
-- **Snapshot stall.** `snapshot_process` copies with interrupts masked: 0.4 ms for a 2.2 MiB process under HVF,
-  about 16 ms for 9.2 MiB under TCG, more on a busy host ("Stage 6 kernel objects (as built)"). Suspends do not nest, and a resume of a
+- **Snapshot stall.** `snapshot_process` now copies in steps of 64 pages with interrupts on between them (Q2); the
+  figures here are of the copy as a whole: 0.4 ms for a 2.2 MiB process under HVF,
+  about 16 ms for 9.2 MiB under TCG, more on a busy host ("Stage 6 kernel objects (as built)"). A mapped object that
+  another process also maps may change between steps. Suspends do not nest, and a resume of a
   sub-job runs it while its parent stays suspended (ADR-0130 item 7). A stopped thread blocked in the kernel finishes
   its call before it parks. The stream ring is 64 KiB per stream, committed, with no quota (ADR-0056).
 - **No untrusted code.** Nothing limits what a process may cost the system: no job has a quota. So no untrusted code

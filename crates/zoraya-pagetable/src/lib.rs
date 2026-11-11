@@ -541,6 +541,57 @@ impl PageTable {
         };
         walk(mem, self.root, 0, base, f);
     }
+
+    /// Calls `f` for the leaves ending after `from`, in address order, until
+    /// `f` gives `false` (its step is full). Gives `true` if the walk reached
+    /// the end: a caller that stops resumes at the stopped leaf's end. Whole
+    /// subtrees before `from` are skipped without being read.
+    pub fn for_each_mapping_from<M: TableMemory>(
+        &self,
+        mem: &M,
+        from: u64,
+        f: &mut impl FnMut(Mapping) -> bool,
+    ) -> bool {
+        let base = match self.half {
+            Half::Lower => 0,
+            Half::Upper => 0xffff << VA_BITS,
+        };
+        walk_from(mem, self.root, 0, base, from, f)
+    }
+}
+
+fn walk_from<M: TableMemory>(
+    mem: &M,
+    table: u64,
+    level: usize,
+    base: u64,
+    from: u64,
+    f: &mut impl FnMut(Mapping) -> bool,
+) -> bool {
+    for index in 0..ENTRIES {
+        let size = level_size(level);
+        let va = base.wrapping_add(index as u64 * size);
+        if va.wrapping_add(size) <= from && va.wrapping_add(size) > va {
+            continue;
+        }
+        let descriptor = mem.read(table, index);
+        if !is_valid(descriptor) {
+            continue;
+        }
+        if is_table(descriptor, level) {
+            if !walk_from(mem, descriptor & ADDRESS_MASK, level + 1, va, from, f) {
+                return false;
+            }
+        } else if !f(Mapping {
+            va,
+            pa: descriptor & ADDRESS_MASK,
+            size,
+            attributes: Attributes::decode(descriptor),
+        }) {
+            return false;
+        }
+    }
+    true
 }
 
 fn walk<M: TableMemory>(mem: &M, table: u64, level: usize, base: u64, f: &mut impl FnMut(Mapping)) {

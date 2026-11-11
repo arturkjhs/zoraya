@@ -57,8 +57,20 @@ pub fn init(info: &PlatformInfo<'_>) {
 }
 
 /// One frame, with arbitrary contents.
+///
+/// When none is free and the reaper still holds frames, it frees a step of
+/// them and this tries again (ADR-0270 point 4): memory that is on its way
+/// back is not exhaustion.
 pub fn alloc() -> Result<Frame, OutOfFrames> {
-    FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc()
+    crate::steps::count(1);
+    loop {
+        let found = FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc();
+        match found {
+            Err(e) if !crate::reaper::help() => return Err(e),
+            Err(_) => {}
+            Ok(frame) => return Ok(frame),
+        }
+    }
 }
 
 /// One zeroed frame.
@@ -72,22 +84,54 @@ pub fn alloc_zeroed() -> Result<Frame, OutOfFrames> {
     Ok(frame)
 }
 
-/// `count` contiguous zeroed frames.
-pub fn alloc_contig_zeroed(count: u64) -> Result<Frame, OutOfFrames> {
-    let first = FRAMES
-        .lock()
-        .as_mut()
-        .ok_or(OutOfFrames)?
-        .alloc_contig(count, 1)?;
-    // SAFETY: as in `alloc_zeroed`, for each frame of the run.
+/// The most frames one contiguous run may have: 4 MiB. A run is found by a
+/// scan of the frame map and is zeroed, both with IRQ masked unless the
+/// zeroing is cut into steps; the drivers' queues and buffers need at most
+/// 2 MiB (`fsd`'s data area), and nothing else asks (ADR-0270 open
+/// questions).
+pub const MAX_CONTIG_FRAMES: u64 = 1024;
+
+/// Rounds of `reaper::help` a run's search makes before it fails: the scan of
+/// the frame map is repeated after each, so the number bounds the masked time.
+const CONTIG_HELP_ROUNDS: usize = (MAX_CONTIG_FRAMES / crate::steps::STEP as u64) as usize + 1;
+
+/// `count` contiguous frames, not zeroed: the caller zeroes them with
+/// [`zero_run`] in steps, before anything else can reach them.
+pub fn alloc_contig(count: u64) -> Result<Frame, OutOfFrames> {
+    if count > MAX_CONTIG_FRAMES {
+        return Err(OutOfFrames);
+    }
+    for round in 0.. {
+        let found = FRAMES
+            .lock()
+            .as_mut()
+            .ok_or(OutOfFrames)?
+            .alloc_contig(count, 1);
+        match found {
+            Err(e) if round == CONTIG_HELP_ROUNDS || !crate::reaper::help() => return Err(e),
+            Err(_) => {}
+            Ok(first) => {
+                crate::steps::count(1);
+                return Ok(first);
+            }
+        }
+    }
+    unreachable!()
+}
+
+/// Zeroes `count` frames of the run at `first`, counted as work.
+pub fn zero_run(first: Frame, count: u64) {
+    crate::steps::count(count as usize);
+    // SAFETY: as in `alloc_zeroed`, for each frame of the run, which belongs
+    // to the caller until it is shared.
     unsafe {
         (phys_to_virt(first.addr()) as *mut u8).write_bytes(0, (count * FRAME_SIZE) as usize);
     }
-    Ok(first)
 }
 
 /// Gives a run back.
 pub fn free_contig(first: Frame, count: u64) {
+    crate::steps::count(count as usize);
     let mut frames = FRAMES.lock();
     let frames = frames.as_mut().expect("frame allocator is up");
     if let Err(e) = frames.free_contig(first, count) {
@@ -97,6 +141,7 @@ pub fn free_contig(first: Frame, count: u64) {
 
 /// Gives a frame back. A bad free is a kernel bug, so it panics.
 pub fn free(frame: Frame) {
+    crate::steps::count(1);
     let mut frames = FRAMES.lock();
     let frames = frames.as_mut().expect("frame allocator is up");
     if let Err(e) = frames.free(frame) {
@@ -116,4 +161,13 @@ pub fn stats() -> Stats {
 #[cfg(feature = "qemu-test")]
 pub fn metadata() -> Range {
     METADATA.lock().expect("frame allocator is up")
+}
+
+/// [`stats`] once the reaper has freed what was queued (ADR-0270): for a test
+/// that compares counts with its starting values. Not for code that holds a
+/// lock, since it yields.
+#[cfg(feature = "qemu-test")]
+pub fn settled_stats() -> Stats {
+    crate::reaper::drain();
+    stats()
 }

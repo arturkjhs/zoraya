@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 use zoraya_abi::Status;
+use zoraya_abi::quota::QuotaField;
 use zoraya_proto_file::status as file;
 
 pub const EPERM: i32 = 1;
@@ -53,6 +54,8 @@ pub enum Call {
     Descriptor,
     /// `mmap`, `malloc`.
     Memory,
+    /// `fork`, `vfork`, `posix_spawn`: the calls that make a process.
+    Process,
     Other,
 }
 
@@ -79,8 +82,9 @@ pub const NATIVE: &[(Status, [i32; 3])] = &[
     // message: a message past that is not one this library asked for.
     (Status::BufferTooSmall, [EMSGSIZE, EMSGSIZE, EMSGSIZE]),
     (Status::NotSupported, [ENOTSUP, ENOTSUP, ENOTSUP]),
-    // ADR-0263 item 4 maps by call and field (Q2): until then memory refusals
-    // read as a short machine and the rest as a limit to retry under.
+    // ADR-0263 item 4 maps by call and field: `from_refusal` is the table
+    // that knows the field; this row is for a refusal whose field is not
+    // known (memory refusals read as a short machine, the rest as a limit).
     (Status::OverQuota, [ENOMEM, ENOMEM, EAGAIN]),
 ];
 
@@ -89,12 +93,39 @@ pub fn from_status(status: Status, call: Call) -> i32 {
     let column = match call {
         Call::Descriptor => 0,
         Call::Memory => 1,
-        Call::Other => 2,
+        Call::Process | Call::Other => 2,
     };
     NATIVE
         .iter()
         .find(|(s, _)| *s == status)
         .map_or(EIO, |(_, e)| e[column])
+}
+
+/// `errno` for a refusal by a quota (ADR-0263 item 4, INV-0263-3), by the
+/// field that refused and the kind of call. The kernel gives the field with
+/// the status (`zoraya_rt::last_refusal`); `None` is a refusal whose field
+/// was not seen, read as `OverQuota`'s column of [`NATIVE`].
+///
+/// | Refused | Calls | `errno` |
+/// |---|---|---|
+/// | memory | `malloc`, `mmap`, `brk`, `posix_memalign`, `fork`, `posix_spawn`, `pipe`, `socket`, `open` | `ENOMEM` |
+/// | processes | `fork`, `vfork`, `posix_spawn` | `EAGAIN` |
+pub fn from_refusal(field: Option<QuotaField>, call: Call) -> i32 {
+    match field {
+        Some(QuotaField::Memory) => ENOMEM,
+        Some(QuotaField::Processes) => EAGAIN,
+        None => from_status(Status::OverQuota, call),
+    }
+}
+
+/// `errno` for a native status that may be a quota refusal: the field of the
+/// last refusal is read from the runtime when the status is `OverQuota`.
+pub fn from_status_seen(status: Status, call: Call, field: Option<QuotaField>) -> i32 {
+    if status == Status::OverQuota {
+        from_refusal(field, call)
+    } else {
+        from_status(status, call)
+    }
 }
 
 /// The connection to a service is gone (ADR-0055: `StorageFailed`).
@@ -144,7 +175,7 @@ mod tests {
         for status in Status::ALL {
             let rows = NATIVE.iter().filter(|(s, _)| s == status).count();
             assert_eq!(rows, 1, "{status:?}");
-            for call in [Call::Descriptor, Call::Memory, Call::Other] {
+            for call in [Call::Descriptor, Call::Memory, Call::Process, Call::Other] {
                 let e = from_status(*status, call);
                 assert_eq!(e == 0, *status == Status::Ok, "{status:?} {call:?}");
             }
@@ -175,6 +206,31 @@ mod tests {
         assert_eq!(from_file(file::NO_SPACE), ENOSPC);
         assert_eq!(from_file(file::TOO_MANY_OPEN), ENFILE);
         assert_eq!(from_file(GONE), EIO);
+    }
+
+    /// INV-0263-3: ADR-0263 item 4's rows, by field and call.
+    #[test]
+    fn quota_refusals_map_by_field_and_call() {
+        use QuotaField::{Memory as Mem, Processes as Procs};
+        let rows = [
+            (Mem, Call::Memory, ENOMEM),
+            (Mem, Call::Process, ENOMEM),
+            (Mem, Call::Descriptor, ENOMEM),
+            (Procs, Call::Process, EAGAIN),
+        ];
+        for (field, call, want) in rows {
+            assert_eq!(from_refusal(Some(field), call), want, "{field:?} {call:?}");
+            assert_eq!(from_status_seen(Status::OverQuota, call, Some(field)), want);
+        }
+        // A field not seen reads as OverQuota's column.
+        assert_eq!(from_refusal(None, Call::Memory), ENOMEM);
+        assert_eq!(from_refusal(None, Call::Descriptor), ENOMEM);
+        assert_eq!(from_refusal(None, Call::Process), EAGAIN);
+        // Another status ignores the field.
+        assert_eq!(
+            from_status_seen(Status::NoMemory, Call::Process, Some(QuotaField::Processes)),
+            ENOMEM
+        );
     }
 
     #[test]

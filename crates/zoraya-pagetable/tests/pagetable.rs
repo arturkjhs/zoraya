@@ -569,3 +569,39 @@ fn random_sequences_match_a_model() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// A resumable walk (ADR-0270): steps of three leaves, each resuming where
+/// the last stopped, see every leaf once and in order.
+#[test]
+fn a_walk_in_steps_sees_every_leaf_once_in_order() {
+    let (mut m, mut t) = setup();
+    let pages: Vec<u64> = (0..20)
+        .map(|i| HIGH + 0x10_0000 + i * 7 * PAGE_SIZE)
+        .collect();
+    for &va in &pages {
+        t.map(
+            &mut m,
+            va,
+            0x4000_0000 + (va & 0xff_ffff),
+            PAGE_SIZE,
+            Attributes::KERNEL_DATA,
+        )
+        .unwrap();
+    }
+    let all = mappings(&m, &t);
+    let mut seen = Vec::new();
+    let mut from = 0;
+    loop {
+        let mut taken = 0;
+        let done = t.for_each_mapping_from(&m, from, &mut |x| {
+            seen.push(x);
+            from = x.va + x.size;
+            taken += 1;
+            taken < 3
+        });
+        if done {
+            break;
+        }
+    }
+    assert_eq!(seen, all);
+}

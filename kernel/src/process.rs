@@ -34,7 +34,7 @@ use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
 use crate::object::{self, HandleTable, MemoryImage, Object};
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
-use crate::{arch, port, println, ramdisk};
+use crate::{arch, port, println, ramdisk, steps};
 
 const _: () = assert!(USER_STACK_TOP == USER_HIGH - PAGE_SIZE);
 
@@ -48,6 +48,9 @@ pub enum SpawnError {
     OverQuota,
     /// The job was killed.
     JobClosed,
+    /// The process was asked to end while the call was in steps
+    /// (ADR-0270); nothing was made.
+    Cancelled,
     /// The vectors and program headers do not fit the startup block.
     TooLarge,
 }
@@ -71,6 +74,7 @@ impl From<Status> for SpawnError {
     fn from(e: Status) -> SpawnError {
         match e {
             Status::OverQuota => SpawnError::OverQuota,
+            Status::Cancelled => SpawnError::Cancelled,
             _ => SpawnError::NoMemory,
         }
     }
@@ -84,6 +88,7 @@ impl From<SpawnError> for Status {
             SpawnError::NoMemory => Status::NoMemory,
             SpawnError::OverQuota => Status::OverQuota,
             SpawnError::JobClosed => Status::BadState,
+            SpawnError::Cancelled => Status::Cancelled,
             SpawnError::TooLarge => Status::LimitReached,
         }
     }
@@ -442,7 +447,11 @@ fn load_segment(
     let attributes = attributes(s);
     let (start, end) = s.pages();
     let file_end = s.vaddr + s.filesz;
-    for page in (start..end).step_by(PAGE_SIZE as usize) {
+    for (n, page) in (start..end).step_by(PAGE_SIZE as usize).enumerate() {
+        // The image is copied in steps of `STEP` pages (ADR-0270 point 2).
+        if n > 0 && n.is_multiple_of(steps::STEP) {
+            steps::between()?;
+        }
         let target = space.map_new_page(page, attributes)?;
         // The part of this page that has file bytes.
         let from = page.max(s.vaddr);
@@ -529,7 +538,13 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
         load_segment(&mut space, start.image.source, segment)?;
     }
     let stack_low = USER_STACK_TOP - USER_STACK_SIZE;
-    for page in (stack_low..USER_STACK_TOP).step_by(PAGE_SIZE as usize) {
+    for (n, page) in (stack_low..USER_STACK_TOP)
+        .step_by(PAGE_SIZE as usize)
+        .enumerate()
+    {
+        if n > 0 && n.is_multiple_of(steps::STEP) {
+            steps::between()?;
+        }
         space.map_new_page(page, USER_STACK)?;
     }
     map_startup_block(&mut space, start.argv, start.envp, start.image.table)?;
@@ -833,6 +848,36 @@ pub fn exit_current(record: ExitRecord) -> ! {
         .process()
         .expect("a process is running")
         .clone();
+    // The handles first, while the space is still the running one: closing
+    // a long chain of channels yields between steps (ADR-0270), which is not
+    // allowed once the table is off (below).
+    loop {
+        let entry = process.handles.lock().pop();
+        match entry {
+            Some(entry) => {
+                // The work of the whole exit is counted, not of each
+                // object: one unit for the handle, and the frames an object
+                // frees count themselves; a pause after each step of them
+                // (INV-0270-1).
+                crate::steps::before(object::weight(&entry));
+                crate::steps::count(1);
+                object::close(entry);
+            }
+            None => break,
+        }
+    }
+    // The mappings next, for the same reason, while the space is still the
+    // running one: dropping a mapping may free the object it was the last
+    // holder of. The process has one thread, which is here.
+    loop {
+        let holder = process.space.lock().as_mut().and_then(|s| s.pop_mapping());
+        let Some(holder) = holder else { break };
+        crate::steps::before(holder.weight());
+        crate::steps::count(1);
+        drop(holder);
+    }
+    // The count starts again, for what follows cannot yield.
+    crate::steps::flush();
     // SAFETY: no table is the safe value.
     unsafe { mmu::set_user_table(None) };
     // From here to `sched::exit_current` nothing may block or yield: the
@@ -848,13 +893,6 @@ pub fn exit_current(record: ExitRecord) -> ! {
         }
     }
     drop(space);
-    loop {
-        let entry = process.handles.lock().pop();
-        match entry {
-            Some(entry) => object::close(entry),
-            None => break,
-        }
-    }
     // A zombie holds its record, not the table's memory.
     let table = core::mem::take(&mut *process.handles.lock());
     drop(table);
@@ -922,6 +960,10 @@ pub fn return_to_user() {
 extern "C" fn user_thread_start() {
     park_if_stopped();
     exit_if_requested();
+    // The thread returns to EL0, where IRQ is on, with no exception taken.
+    // The counter ends here and not before, so that the exit of a process
+    // killed before it ran is measured (INV-0270-1).
+    crate::steps::mask_ended();
 }
 
 /// Ends the running process for a synchronous exception from EL0 (ADR-0034).

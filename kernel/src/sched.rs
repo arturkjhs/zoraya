@@ -179,7 +179,6 @@ fn count_new() -> Result<(), OutOfMemory> {
 
 /// Starts a kernel thread running `entry(arg)`. When `entry` returns, the
 /// thread ends.
-#[cfg(feature = "qemu-test")]
 pub fn spawn_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
     let thread = new_kernel(entry, arg)?;
     count_new()?;
@@ -263,7 +262,12 @@ fn idle_main(_: usize) {
         let daif = arch::save_and_mask_interrupts();
         let empty = SCHED.lock().ready.is_empty();
         if empty {
+            // Waiting is not holding off an interrupt: a pending one wakes
+            // `wfi` and runs at once when the mask is restored (INV-0270-1's
+            // counter does not count this time).
+            crate::steps::mask_ended();
             arch::wait_for_interrupt();
+            crate::steps::mask_began();
         }
         arch::restore_interrupts(daif);
         if !SCHED.lock().ready.is_empty() {

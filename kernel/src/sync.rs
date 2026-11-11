@@ -15,6 +15,19 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::arch;
 
+/// How many locks are held, for the test kernel's check that none is held
+/// across a step (ADR-0270 point 2).
+#[cfg(feature = "qemu-test")]
+static HELD: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// The number of locks held now. Only the test kernel counts them, and only
+/// `steps::pause` asserts that there are none: the normal kernel relies on
+/// its callers (ADR-0270 open questions).
+#[cfg(feature = "qemu-test")]
+pub fn held() -> usize {
+    HELD.load(Ordering::Relaxed)
+}
+
 pub struct SpinLock<T> {
     locked: AtomicBool,
     value: UnsafeCell<T>,
@@ -40,6 +53,8 @@ impl<T> SpinLock<T> {
                 .is_ok(),
             "lock taken twice on one CPU"
         );
+        #[cfg(feature = "qemu-test")]
+        HELD.fetch_add(1, Ordering::Relaxed);
         Guard { lock: self, daif }
     }
 }
@@ -68,6 +83,8 @@ impl<T> DerefMut for Guard<'_, T> {
 
 impl<T> Drop for Guard<'_, T> {
     fn drop(&mut self) {
+        #[cfg(feature = "qemu-test")]
+        HELD.fetch_sub(1, Ordering::Relaxed);
         self.lock.locked.store(false, Ordering::Release);
         arch::restore_interrupts(self.daif);
     }

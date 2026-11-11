@@ -1309,13 +1309,17 @@ fn spawn_into(
     let process = match zoraya_rt::spawn(&buffer[..length]) {
         Ok(h) => h,
         Err(s) => {
+            // The field first, before the calls below can be refused too.
+            let seen = zoraya_rt::last_refusal();
             debug_later(p, "spawn", s);
             // A refused spawn moved nothing (INV-0042-3).
             undo_made(&made, &record.handles);
             let _ = zoraya_rt::handle_close(boot);
             let _ = zoraya_rt::handle_close(boot_child);
             return Err(match s {
-                Status::NoMemory => ENOMEM,
+                Status::NoMemory | Status::OverQuota => {
+                    super::rt_errno_seen(s, Call::Process, seen)
+                }
                 Status::LimitReached => EAGAIN,
                 _ => E2BIG,
             });
@@ -1921,16 +1925,21 @@ extern "C" fn fork() -> i32 {
                 Ok(0)
             }
             Err(s) => {
+                // The field first: the calls below can be refused too, and
+                // would overwrite it (ADR-0263 item 4).
+                let seen = zoraya_rt::last_refusal();
                 debug_later(p, "fork: snapshot_process", s);
                 for (_, h) in moves {
                     let _ = zoraya_rt::handle_close(h);
                 }
                 let _ = zoraya_rt::handle_close(prepared.parent_job);
                 let _ = p.broker_simple(&bp::SpawnAbort { pid: prepared.pid }, &[]);
-                Err(if s == Status::NoMemory {
-                    ENOMEM
-                } else {
-                    EAGAIN
+                // ADR-0263 item 4: processes -> EAGAIN, memory -> ENOMEM.
+                Err(match s {
+                    Status::NoMemory | Status::OverQuota => {
+                        super::rt_errno_seen(s, Call::Process, seen)
+                    }
+                    _ => EAGAIN,
                 })
             }
         }

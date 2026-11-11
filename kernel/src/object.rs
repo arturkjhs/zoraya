@@ -174,6 +174,15 @@ pub fn end_subscriptions(entry: &Entry) {
     }
 }
 
+/// The work of closing a handle in units of a step (`steps::before`), the
+/// handle's own unit included (the caller counts it with `steps::count(1)`).
+pub fn weight(entry: &Entry) -> usize {
+    match &entry.object {
+        Object::Memory(object) => crate::memory::object::weight(object),
+        _ => 1,
+    }
+}
+
 /// Ends a handle. A port or a channel end has one handle, so that closes it.
 pub fn close(entry: Entry) {
     end_subscriptions(&entry);

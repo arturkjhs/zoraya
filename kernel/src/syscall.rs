@@ -30,12 +30,12 @@ use crate::charge::{self, Paid};
 use crate::device::Pin;
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{Copied, Holder, MappingError, USER_HIGH};
+use crate::memory::user::{Copied, Holder, MappingError, SnapshotBuild, USER_HIGH};
 use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
 use crate::stream::Stream;
-use crate::{console, port, print, ramdisk, sched, timer};
+use crate::{console, port, print, ramdisk, sched, steps, timer};
 
 /// Longest `console_write`.
 ///
@@ -613,25 +613,85 @@ impl Handlers for Calls<'_> {
             user: true,
         };
         let frames = object.clone();
+        // In steps of `STEP` pages with no lock held between them
+        // (ADR-0270): the range is in the table of no mapping until the last
+        // step, and a `job_kill` between steps unmaps what was done. The
+        // process's one thread is in this call, so nothing else changes its
+        // space meanwhile.
+        let to_status = |e| match e {
+            MappingError::Limit => Status::LimitReached,
+            MappingError::Quota => Status::OverQuota,
+            _ => Status::NoMemory,
+        };
+        let va = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space.map_reserve(length).map_err(to_status)?
+        };
+        let page = |at: u64| frames.page(offset + at);
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut done = 0;
+        while done < length {
+            let n = step.min(length - done);
+            {
+                let mut space = self.process.space.lock();
+                let space = space.as_mut().ok_or(Status::BadState)?;
+                if let Err(e) = space.map_range(va, done, n, attributes, &page) {
+                    if done > 0 {
+                        space.unmap_range(va, 0, done);
+                    }
+                    return Err(to_status(e));
+                }
+            }
+            done += n;
+            if done < length
+                && let Err(status) = steps::between()
+            {
+                let mut space = self.process.space.lock();
+                if let Some(space) = space.as_mut() {
+                    space.unmap_range(va, 0, done);
+                }
+                return Err(status);
+            }
+        }
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
-        space
-            .map_object(length, attributes, Holder::Memory(object), |at| {
-                frames.page(offset + at)
-            })
-            .map_err(|e| match e {
-                MappingError::Limit => Status::LimitReached,
-                MappingError::Quota => Status::OverQuota,
-                _ => Status::NoMemory,
-            })
+        space.map_commit(va, length, attributes, Holder::Memory(object));
+        Ok(va)
     }
 
     fn memory_unmap(&mut self, address: Address, length: Size) -> Result<u64, Status> {
-        let mut space = self.process.space.lock();
-        let space = space.as_mut().ok_or(Status::BadState)?;
-        let holder = space
-            .unmap_object(address.0, length.0)
-            .map_err(|_| Status::InvalidArgument)?;
+        let (va, length) = (address.0, length.0);
+        {
+            let space = self.process.space.lock();
+            let space = space.as_ref().ok_or(Status::BadState)?;
+            if !space.is_mapped_exactly(va, length) {
+                return Err(Status::InvalidArgument);
+            }
+        }
+        // Unmapping goes on to its end whatever the process was asked
+        // (ADR-0270): a pause after each step, no cancel.
+        let step = (steps::STEP as u64) * FRAME_SIZE;
+        let mut done = 0;
+        while done < length {
+            let n = step.min(length - done);
+            {
+                let mut space = self.process.space.lock();
+                let space = space.as_mut().ok_or(Status::BadState)?;
+                space.unmap_range(va, done, n);
+            }
+            done += n;
+            if done < length {
+                steps::pause();
+            }
+        }
+        let holder = {
+            let mut space = self.process.space.lock();
+            let space = space.as_mut().ok_or(Status::BadState)?;
+            space
+                .unmap_commit(va, length)
+                .map_err(|_| Status::InvalidArgument)?
+        };
         drop(holder);
         Ok(0)
     }
@@ -971,13 +1031,29 @@ impl Handlers for Calls<'_> {
         let mut count = Paid::new(Some(&job));
         count.process()?;
         let mut copied = Copied::default();
-        let space = {
+        // The copy in steps (ADR-0270): the plan, the child and its objects
+        // with no lock held, then up to `STEP` pages at a time under the
+        // parent's lock, with the call open to a `job_kill` between them. The
+        // child is in no table until the end; a cancelled call drops it.
+        let plan = {
             let space = self.process.space.lock();
-            space
-                .as_ref()
-                .ok_or(Status::BadState)?
-                .snapshot(&mut copied, Some(&job))?
+            space.as_ref().ok_or(Status::BadState)?.snapshot_plan()?
         };
+        let mut build = SnapshotBuild::new(plan, Some(&job))?;
+        loop {
+            let done = {
+                let space = self.process.space.lock();
+                space
+                    .as_ref()
+                    .ok_or(Status::BadState)?
+                    .snapshot_step(&mut build, &mut copied)?
+            };
+            if done {
+                break;
+            }
+            steps::between()?;
+        }
+        let space = build.finish()?;
         let child = process::create_snapshot(Snapshot {
             parent: &self.process,
             space,
@@ -1161,6 +1237,18 @@ pub mod test_calls {
     pub const RIGHTS_AT: u64 = 0x7011;
     /// Returns the generation the caller's slot x0 is at.
     pub const GENERATION_AT: u64 = 0x7012;
+    /// Returns the longest time IRQ stayed masked since the last reset, in
+    /// nanoseconds (INV-0270-1); x0 not 0 resets it.
+    pub const MASKED_MAX_NS: u64 = 0x7013;
+    /// Returns the live event sources and ports, as `sources << 32 | ports`.
+    pub const EVENTS_LIVE: u64 = 0x7014;
+    /// Returns the most units of work (frames, messages, objects) done in
+    /// one interval with IRQ masked since the last reset (INV-0270-1); x0 not
+    /// 0 resets it.
+    pub const MASKED_MAX_UNITS: u64 = 0x7015;
+    /// Returns how many times a step point ended a call with `Cancelled`
+    /// because its process was killed (INV-0270-2).
+    pub const CANCELLED: u64 = 0x7016;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1181,10 +1269,17 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         }
         test_calls::FIRST_LINE => Some(Ok(u64::from(crate::device::first_line()))),
         test_calls::LINE_ENABLED => Some(Ok(u64::from(crate::gic::is_enabled(a0 as u32)))),
-        test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
-        test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::stats().live as u64)),
+        test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::settled_stats().free)),
+        test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::settled_stats().live as u64)),
         test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
         test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames(a0))),
+        test_calls::MASKED_MAX_NS => Some(Ok(crate::steps::masked_max_ns(a0 != 0))),
+        test_calls::MASKED_MAX_UNITS => Some(Ok(crate::steps::masked_max_units(a0 != 0))),
+        test_calls::CANCELLED => Some(Ok(crate::steps::cancelled())),
+        test_calls::EVENTS_LIVE => {
+            let (sources, ports) = port::EVENTS.lock().live();
+            Some(Ok(((sources as u64) << 32) | ports as u64))
+        }
         test_calls::SNAPSHOT_NS => Some(Ok(LAST_SNAPSHOT.lock().0)),
         test_calls::SNAPSHOT_PAGES => Some(Ok(LAST_SNAPSHOT.lock().1)),
         test_calls::HANDLE_AT | test_calls::RIGHTS_AT | test_calls::GENERATION_AT => {

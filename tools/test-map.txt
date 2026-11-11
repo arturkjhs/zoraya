@@ -17,10 +17,12 @@ tools/plan-lib.sh             check
 tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
+tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
 kernel/                       test-qemu test-boot
 crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
+crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-gui
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
@@ -68,6 +70,9 @@ user/src/bin/t_open.rs        test-gui
 user/src/bin/edit.rs          test-gui
 user/src/bin/settings.rs      test-gui
 user/src/bin/t_gui.rs         test-qemu
+user/src/bin/t_bound.rs       test-qemu
+user/src/bin/t_quota.rs       test-qemu
+user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu
 user/src/app.rs               test-gui
 

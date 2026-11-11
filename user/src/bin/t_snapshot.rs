@@ -14,6 +14,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use zoraya_abi::quota::JobLimits;
 use zoraya_abi::snapshot::{Encoder as SnapshotEncoder, Move};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::stream_signals;
@@ -26,10 +27,10 @@ use zoraya_abi::{Mode, Packet};
 use zoraya_user::{
     assert_err, channel_create, channel_read, channel_write, console_entry, device_map,
     directory_lookup, dma_pin, dma_unpin, handle_close, handle_duplicate, handle_type, job_create,
-    job_kill, job_signal, memory_create, memory_map, memory_unmap, object_get_signals, port_create,
-    println, process_exit, process_resume, process_set_disposition, process_take_request,
-    raw_syscall, snapshot_process, spawn, startup, stream_create, stream_read, stream_write,
-    wait_exit,
+    job_get_usage, job_kill, job_set_limits, job_signal, memory_create, memory_map, memory_unmap,
+    object_get_signals, port_create, println, process_exit, process_resume,
+    process_set_disposition, process_take_request, raw_syscall, snapshot_process, spawn, startup,
+    stream_create, stream_read, stream_write, wait_exit,
 };
 use zoraya_user::{
     clock_monotonic, job_resume, job_suspend, port_subscribe, port_wait, sleep_until,
@@ -45,6 +46,7 @@ const SELF_SLOT: u32 = 21;
 
 const FREE_FRAMES: u64 = 0x7006;
 const HEAP_LIVE: u64 = 0x700b;
+const EVENTS_LIVE: u64 = 0x7014;
 const HOLD_FRAMES: u64 = 0x700c;
 const RELEASE_FRAMES: u64 = 0x700d;
 const SNAPSHOT_NS: u64 = 0x700e;
@@ -987,9 +989,85 @@ fn inner() -> i32 {
     the_job_must_be_ours_and_open();
     bad_buffers_are_refused();
     snapshots_come_and_go();
+    a_snapshot_at_a_limit_is_refused_whole();
     measure_the_copy();
     println!("t_snapshot: all passed");
     0
+}
+
+/// ADR-0261 point 6, INV-0261-2 and INV-0263-1: a snapshot into a job at its
+/// process limit is refused with `OverQuota` and has no effect (no frame, no
+/// heap, no event source, no handle moved), and a job at its memory limit
+/// refuses a copy it cannot hold, also with no effect.
+fn a_snapshot_at_a_limit_is_refused_whole() {
+    let room = job_create(JOB, JobFlags::POSIX).expect("job");
+    job_set_limits(
+        room,
+        &JobLimits {
+            memory: None,
+            processes: Some(1),
+            cpu: None,
+        },
+    )
+    .expect("limits");
+    // The one slot goes to a suspended child.
+    let first = snap(room, &[], 0, true).expect("first");
+    let Some(first) = first else { process_exit(0) };
+    let (frames, heap, events) = (
+        test_call(FREE_FRAMES, 0),
+        test_call(HEAP_LIVE, 0),
+        test_call(EVENTS_LIVE, 0),
+    );
+    let before = job_get_usage(room, false).expect("usage");
+    let object = memory_create(4096, MemoryFlags::NONE).expect("memory");
+    assert_err!(
+        snap(
+            room,
+            &[Move {
+                handle: object,
+                slot: 9
+            }],
+            0,
+            false
+        ),
+        Status::OverQuota
+    );
+    assert_eq!(test_call(FREE_FRAMES, 0) + 1, frames, "frames");
+    assert!(test_call(HEAP_LIVE, 0) <= heap + 4096, "heap");
+    assert_eq!(test_call(EVENTS_LIVE, 0), events, "event sources");
+    let after = job_get_usage(room, false).expect("usage");
+    assert_eq!(after.processes.used, before.processes.used);
+    assert_eq!(after.processes.refused, before.processes.refused + 1);
+    assert_eq!(after.memory.used, before.memory.used, "the room's use");
+    // The moved handle is still ours: it was not moved.
+    handle_duplicate(object, Rights::READ).expect("the object is still held");
+    // Memory: a room whose limit is its use cannot hold the copy.
+    let tight = job_create(JOB, JobFlags::POSIX).expect("job");
+    let size = 1 << 20;
+    let big = memory_create(size, MemoryFlags::NONE).expect("memory");
+    let at = memory_map(big, 0, size, MapFlags::WRITE).expect("map");
+    job_set_limits(
+        tight,
+        &JobLimits {
+            memory: Some(64 << 10),
+            processes: None,
+            cpu: None,
+        },
+    )
+    .expect("limits");
+    let (frames, heap) = (test_call(FREE_FRAMES, 0), test_call(HEAP_LIVE, 0));
+    let used = job_get_usage(tight, false).expect("u").memory.used;
+    assert_err!(snap(tight, &[], 0, false), Status::OverQuota);
+    assert_eq!(test_call(FREE_FRAMES, 0), frames, "frames after the copy");
+    assert!(
+        test_call(HEAP_LIVE, 0) <= heap + 4096,
+        "heap after the copy"
+    );
+    assert_eq!(job_get_usage(tight, false).expect("u").memory.used, used);
+    memory_unmap(at, size).expect("unmap");
+    job_kill(room).expect("kill");
+    wait_exit(first);
+    close(&[first, object, big, tight, room]);
 }
 
 /// INV-0003-2 and INV-0002-2: refused without the `posix` bit; then the rest

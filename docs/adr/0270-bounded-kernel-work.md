@@ -131,6 +131,47 @@ and exits.
 
 ## Open questions
 - The step size: measure zeroing and copying per page under HVF and TCG.
+- *Q2 note (agent, ADR-0001 rule 6):* the steps of 64 are measured by `t_bound`: one step of `memory_create`, `memory_map`,
+  `memory_unmap` and a memory object's close takes 2 to 20 us masked under HVF, so the bound has room for steps several
+  times larger; Q2 left the 64 as the ADR says. The reaper frees 1024 frames a turn instead of 64: it runs with
+  interrupts on, so a turn delays no interrupt, and 64 made it slower than processes can be started (the test that
+  starts 255 processes one after another ran out of frames).
+- *Q2 note:* `schedule()` still calls `reap()` to drop a dead thread, and with it the small remainder of its process
+  (the kernel stack and the record): the frames of a large space or object were the unbounded part and now go to the
+  reaper. Moving the thread list too needs a way to wake the reaper from inside `schedule()`; it is not done.
+- *Q2 note:* a snapshot copies a mapped object that another process also maps in steps, so a concurrent writer is seen
+  part way (a plain `memcpy` of shared memory is no different); the copy of the caller's own pages cannot change meanwhile.
+  `snapshot_process` charges the caller's own pages page by page, not before the walk (review Q1, note 14).
+- *Q2 note:* a step point with a spinlock held would unmask interrupts under it, and the normal kernel does not count
+  locks: `steps::pause` is a safe function whose contract (`unmask_interrupts`'s `# Safety`) says no spinlock is held,
+  and only the test kernel asserts it (`sync::held`, in `steps::pause`). A path that no test reaches with a lock held is
+  not caught. Counting locks in every build was not done (one relaxed add per lock), to keep driver 4's "nil".
+- *Q2 note, deviations from point 4, stated plainly:* (1) `reap()` in `schedule()` does more than append: it drops a
+  dead thread and with it the small rest of its process, as before. (2) The reaper frees 1024 frames a turn, not 64
+  (above). Neither is a new ADR yet; both stay open questions for the architect, and INV-0270-1's row says that
+  `reap()` is not moved, so that it does not read as done.
+- *Q2 note (review of Q2):* the work of a teardown is counted across the whole exit, not per object: `steps::before`
+  pauses when the units since the last pause plus the next object's would pass a step. The exit, `channel::close` and
+  the dropping of mappings call it once per handle, message or mapping with the frames the object frees on the spot
+  (at most a step); an object over a step, or a contiguous run over a step, goes to the reaper. The reaper's queue
+  doubles when full (outside its lock). If the heap cannot grow it (exhaustion), the drop frees on the spot, masked.
+  Before the reaper starts, a drop frees on the spot too: no user process exists then.
+- *Q2 note, contiguous memory:* `memory_create(CONTIGUOUS)` is capped at 4 MiB (1024 frames; `frames::MAX_CONTIG_FRAMES`),
+  and a larger request fails with `NoMemory`. Users: `fsd`'s 2 MiB data area and the drivers' queues (a few pages),
+  `t_devices` and `t_loop`. The run is zeroed in steps of 64 frames with interrupts on and freed through the reaper
+  when over a step; the search `help()` loop makes at most 17 rounds (enough to free a run of the cap). The scan of the frame map for a run is still one
+  masked pass whose cost depends on the machine's memory, not on the request (about 250 us on the 128 MiB test guest
+  under HVF); a resumable scan is not done. The right to ask for it (ADR-0051: "for a device's queues") is not
+  checked either; the cap is what bounds a job without one.
+- *Q2 note, how the time bound is checked on a slow host:* 2 ms is `[assumption]` under HVF. The first candidate run
+  measured 2.7 to 17 ms for a 24 MiB `memory_create` on the CI runners (TCG, or a loaded host). `t_bound` therefore
+  checks two things. (a) On every host: the test kernel counts units of work (frames allocated or freed, messages,
+  handles, mappings) in each interval with IRQ masked, and the test asserts no interval holds more than 64 + 16
+  (`MASKED_MAX_UNITS`). (b) The time: scaled by a calibration (the best of five fills of 256 KiB against 10 us, the
+  figure under HVF; the factor is clamped to 1..64 and printed), and the large cases are the best of three runs, so
+  that a pause of the host is not taken for the kernel. Under HVF the factor is 1 and the bound is 2 ms.
+- *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
+  A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 
 ## Revisit triggers
 - SMP (interrupts masked on one CPU stop less, but locks across steps matter more).
