@@ -237,3 +237,153 @@ directories as deep as its limit allows. Neither walk is measured. Q5's measurem
 12. Fixed: the message says to rebuild with `zoraya-mkfs`; header test. Not done: a mount test on a whole version-1 image.
 13. Fixed: docs restored; the root handle is closed.
 14. Open: a directory removal scans the orphan list once (one lookup when it is empty), and the chain walk is measured at depth 3 only; deeper chains are not measured.
+
+## Re-check of the fixes
+
+A re-check by the `opus-review` subagent of the changed lines only, `git diff 3230ceb...work/q5` (head `e592317`),
+against the dispositions above, ADR-0265, proposed ADR-0290 and proposed ADR-0292. Commands run on an export of
+`work/q5` with its own target directory:
+- `cargo test -p zoraya-fs -p zoraya-fs-service -p zoraya-proto-file -p zoraya-posix -p zoraya-fsclient`: all pass
+  (231 tests, 0 failed; `limits.rs` 16 passed, 1 ignored).
+- Two scratch tests, added to the exported `tests/limits.rs` only and not committed:
+  - A limit on `A`; a file in `A/d` is opened and unlinked; `A/d` is renamed to `A/e`. Then `rmdir A/e` is `NotEmpty`.
+    After `set_limit(A, None)` the `rmdir` works. After `set_limit(A, Some(4 blocks))`, `used` is 4096, the write of 8
+    blocks is `OverQuota`, `fsck` is clean, and after `close` `used` is 0. No escape.
+  - On a full volume (filled inside a limited `room`): lowering the existing limit gives `Err(NoSpace)`; removing it
+    gives `Ok`; setting it again gives `Err(NoSpace)` (re-check 4).
+- `grep saturating crates/zoraya-fs/src`: no saturating sum of charges is left. The one that remains in charging is
+  `charge_of` (`volume.rs:64`), which cannot saturate for `size <= i64::MAX` and is the same function in the engine
+  and in `fsck`.
+
+No error found. Four warnings, five notes.
+
+| # | Severity | Where | Finding |
+|---|---|---|---|
+| R1 | warning | `crates/zoraya-fs/src/volume.rs:810-812`; ADR-0265 rule 2, INV-0265-2; ADR-0290 driver 3 | `rmdir` of an empty directory is now refused because of a limit. Accepted ADR-0265 and ADR-0290's own driver 3 say a freeing request never is, and the ADR does not say that it deviates. |
+| R2 | warning | `crates/zoraya-fs-service/src/lib.rs:1009`, `:1982-1985`; `crates/zoraya-shell/src/grants.rs:44`, `:140`, `:346-350` | A full directory connection with `WRITE` but without Tree's rights can still change a child's limit. Two shapes produce one: `write` on a directory ("change DIR"), and two `create` operands in one directory. |
+| R3 | warning | `docs/adr/0290-what-the-engine-charges.md:35`; `docs/adr/invariants.md:493`, `:512` | ADR-0290 still says "`get_limit` is open to any connection". INV-0265-1's Status still says the API oracle runs "after each request", and INV-0290-1 still says "an orphan's is a directory". |
+| R4 | warning | `crates/zoraya-fs/src/volume.rs:1650`; ADR-0292, ADR-0290 | On a full volume, a limit can only be removed, not changed. A keeper that resets a limit (remove, then set) leaves the room without one. Neither ADR says so. |
+| R5 | note | `docs/adr/0292-who-may-set-a-limit.md:19`, `:53` | Driver 3 says that a room "may narrow" limits below its directory. In fact it may set, raise, lower or remove any limit below, the keeper's included. Only the outer limit stays. |
+| R6 | note | `crates/zoraya-fs/tests/limits.rs:848-853` | Finding 5's test passes with the old `mutate(true, ..)` (as the disposition says). The fix has no test that fails without it, and it is not in `tools/mutants/`. |
+| R7 | note | `crates/zoraya-fs/tests/limits.rs:861-879`; `volume.rs:986`, `:1010` | The scan bound is tested from one side only: 50,001 is refused, but nothing shows that 50,000 is accepted (`>` against `>=` survives). Its cost on the guest is not measured. |
+| R8 | note | `crates/zoraya-fs/tests/limits.rs:607-650`, `:619` | The model test no longer checks `used <= limit` after a request, and it counts no orphans, no `repoint_orphans` and no `NotEmpty` refusals of the new rule. `REFUSED` and `CROSSED` show that a run reached its limit paths; nothing shows that it reached these. |
+| R9 | note | `crates/zoraya-fs/src/check.rs:965-972` | For a tree charged past `u64::MAX`, `repair` removes the limit record, which loosens a bound without a word in the ADR. The engine cannot produce this state any more. |
+
+**R1. warning: `rmdir` refused for a limit.** ADR-0265 rule 2 (accepted) says: "Requests that shrink (`unlink`,
+removing a directory, a smaller `set_size`) are never refused for a limit". INV-0265-2 says "a shrinking request never
+fails for a limit", and ADR-0290 driver 3 says "A request that frees space is never refused (ADR-0265 rule 2)". The new
+`unname` returns `NotEmpty` for an empty directory only when a limit is on or above it (`volume.rs:810-812`), and so
+does a `rename` over it.
+
+*Scenario:* the person runs `rm -r ~/sandbox/agent-1` while an agent there holds a `tmpfile`. The `rm` gets
+`ENOTEMPTY` for a directory that `ls` shows empty, and it keeps getting it until the agent's handle closes.
+
+The rule is safe: the scratch test above found no way out of the limit. But it changes an accepted rule.
+ADR-0290's new text (line 30) gives the behaviour without naming rule 2 or INV-0265-2, and it keeps driver 3 as it
+was. Q6a's `room drop` must therefore end the room's processes before it removes the directory, and nothing records
+that.
+
+*Fix:* in ADR-0290, say that this deviates from ADR-0265 rule 2 and INV-0265-2, and ask the architect to choose
+between this rule and the other one (keep the removed directory's `K_LIMIT` and `K_PARENT` until its last charged
+orphan is freed, so that `rmdir` always works). Change driver 3 to match. Add to Q6a's notes that `room drop` closes
+the room's handles before `rm -r`.
+
+**R2. warning: `WRITE` on a full directory connection is wider than Tree.** The service checks only
+`only_of(i).is_none()` and `WRITE`.
+- `Kind::Write` makes `Access::Change` on the path itself (`grants.rs:140`), with `READ | WRITE | SYNC | CLONE`
+  (`:44`), whatever the path is. A `write` operand that names a directory therefore gives a full connection with
+  `WRITE` to it.
+- `by_path` (`:346-350`) drops the name when two entries for one directory name different children, so two `create`
+  operands in `~/sandbox` give a full connection to `~/sandbox` with `WRITE`.
+
+*Scenario:* a program on the person's line, designated with `--out ~/sandbox/a --out ~/sandbox/b` (the words are
+"create and change anything in ~/sandbox"), or with a `write` operand of `~/sandbox` (the words are "change
+~/sandbox"), sends `SetLimit { remove: 1, name: "agent-1" }` and succeeds. Then agent-1's disk filler fills the volume.
+
+A room cannot do this inside itself, because its designations stay within its grants. So this does not block the
+ADR-0268 gate, as long as no room holds `+w` on a directory above another limited directory, which is ADR-0292's
+revisit trigger. The shell paths were read, not run. Whether the shell opens a `write` operand that is a directory
+as a directory connection was not run.
+
+*Fix (no ABI change):* in the service, require Tree's shape for `SetLimit`, that is `WRITE | CREATE | REMOVE | RENAME`.
+Neither shape has `REMOVE`. Add an `fsclient` test with `clone_with(root, READ | WRITE | CREATE)`. Alternatively,
+Option B, and record either choice in ADR-0292.
+
+**R3. warning: stale text.**
+- ADR-0290 line 35 contradicts ADR-0292 and the code (`lib.rs:1017`).
+- The Status of INV-0265-1 (`invariants.md:493`) says that `random_requests_keep_the_counters_true` "recomputes every
+  `used` through the API after each request". It now does so only when no handle is open (`limits.rs:619`), and runs
+  `fsck` every 25 requests.
+- INV-0290-1's text says that an orphan's charged directory "is a directory". `fsck` now also requires a name or the
+  root (`check.rs:478`).
+
+*Fix:* correct the three texts. ADR-0290 is proposed. INV-0290-1's statement is part of a proposed ADR, so its row may
+change with it.
+
+**R4. warning: changing a limit on a full volume.** `mutate(limit.is_none(), ..)` makes a change of an existing limit
+(the same record size) a non-freeing request, so it fails with `NoSpace` on a full volume. This matches ADR-0265
+rule 2's "rewrite in place". A new limit after a removal also fails, so a keeper that resets a room's limit by
+"remove, then set" on a full volume leaves the room unlimited (scratch test above).
+*Fix:* record in ADR-0290 or ADR-0292 that on a full volume a limit can be removed but not changed or set, and that
+the keeper never removes a limit in order to change it. Alternatively, let a change of an existing record use the
+reserve: it adds no key, as an `unlink` adds none.
+
+**R5. note: what a room can do to the limits below it.** It cannot reach its own root or anything above it. `Name` is
+one component, with no `.`, `..` or `/` (`zoraya-protocol` `Name::is_valid`), `parent_of` with one component starts at
+the connection's directory, and a link object gives `NotDir`. Narrowed clones keep `only` (`lib.rs:459-464`, `:1471`,
+`:2112`). Below its root it can set, raise, lower or remove any limit, including one that the keeper set, for example
+on a `tmp` below the room's directory. It can also create `CrossesLimit` boundaries and keep directories with
+`NotEmpty`. The outer limit always binds (`limited_chain` walks to the root). ADR-0292 says "narrow" and "set".
+*Fix:* say it exactly in ADR-0292's Consequences. Q6a must give a room's `/tmp` its own limited directory as the
+connection itself, never as a child of a directory that the room holds.
+
+**R6. note: finding 5 has no test that fails without the fix.** Add the old line to a list in `tools/mutants/` with a
+note that it is a known survivor, or build a volume whose free space lies exactly between the request's need and the
+reserve.
+
+**R7. note: the scan bound.** Add a test with exactly `SCAN_BOUND` objects that is accepted. The bound counts the
+volume's whole orphan list, but orphans are bounded by `MAX_OPEN` (896, `zoraya-fs-service/src/lib.rs:32`), so
+other clients' open files cannot push a small tree past it. The "50 ms" is a host figure, and ADR-0290 calls it an
+assumption.
+
+**R8. note: what the model test shows.** Add counters, like `REFUSED`, for orphans created, directories repointed and
+`NotEmpty` from the new rule, and assert that each is above 0. After each request, check `used <= limit` for every
+directory whose `used` grew in it.
+
+**R9. note: `repair` and an overflowing tree.** Removing the record is defensible, but it loosens a bound. Say so in
+ADR-0290 (fsck's rules), or have `repair` set `used = limit` so that growth stays refused.
+
+### Checked and found sound
+
+- **Narrowed connections.** `SetLimit` (`lib.rs:1009`) and `GetLimit` (`:1017`) are refused on a narrowed connection.
+  `GetLimit` is also refused without `READ`. `may_name` is no longer needed for `SetLimit`. A narrowed connection
+  opens its name as a directory with read rights only (`:1355`), so it gets no `WRITE` on the child. The test
+  `a_narrowed_connection_cannot_change_a_limit` passes.
+- **Sums.** `subtree_used` refuses a sum past `u64::MAX` with `OverQuota` before anything is written, and the mutation
+  is rolled back. `fsck` reports such a tree and skips its `used` comparison, and `repair` removes the record.
+  `adjust_chain` was already checked. `a_sum_past_u64_is_refused_and_not_clean` passes.
+- **Orphan rule.** An orphan can be charged to a removed directory only through `repoint_orphans`, which runs only when
+  no limit is on or above the directory. `limited_chain(parent)` is a subset of `limited_chain(dir)`, so the move
+  loosens nothing. A later new limit counts repointed orphans (`subtree_used` uses `is_within` on `fparent`). The
+  refusal and the move happen inside `mutate`, in one commit, so a crash image shows either the state before or the
+  state after. `fsck` now requires the charged directory to be the root or a directory with a parent link, and
+  `repair` falls back to the root. The crash test keeps handles open to the crash, and `fsck` is clean on every image
+  and after the mount's `free_orphans`.
+- **Scan bound.** The bound applies to dirents and orphans alike, and the refusal happens before anything is written.
+  The bound is reached only when a new limit is set: a change of an existing record does not scan.
+- **errno and codec.** `0..18` maps once each, and `from_file(18)` is `EIO`. The codec test covers both `remove`
+  values, `GetLimit`, `LimitReply` with the largest status, `remove` 2, status 18, `..` as a name and a truncated
+  message, and `exercise` runs on every encoding.
+- **Words.** `file_problem(OVER_QUOTA)` is "over quota". The missing `Disk` field is recorded in disposition 8.
+
+### Dispositions of the re-check
+
+- R1/W1: no behaviour change; ADR-0290 now says plainly that the rule deviates from ADR-0265 rule 2 and INV-0265-2 for one case, why, and puts the alternatives to the architect in its open questions; driver 3 and the `room drop` note match.
+- R2/W2: `SetLimit` needs `WRITE | CREATE | REMOVE | RENAME`; fsclient test `only_a_connection_with_the_rights_of_a_tree_sets_a_limit` (WRITE+CREATE, WRITE alone, WRITE+CREATE+REMOVE refused; all four allowed). Mutant `L-set-limit-rights`. Recorded in ADR-0292. The shell paths were read, not run.
+- R3/W3: fixed: ADR-0290 line on `get_limit`, INV-0265-1's Status (the API oracle runs only with no handle open), INV-0290-1's text (ADR and invariants.md).
+- R4/W4: a change of an existing record is now a freeing request (it adds no record) and works on a full volume (test `on_a_full_volume_an_existing_limit_can_be_changed`); a new or re-set limit after removal is still `NoSpace`, recorded in ADR-0290 and ADR-0292 (a keeper sets before it removes; the reserve is not extended to new records).
+- R5: ADR-0292 consequences say exactly what a room can do below its root and that Q6a gives `/tmp` its own limited directory.
+- R6: still no test that fails without the `existing` or `is_none` condition for a new record (a volume whose free space lies exactly between a limit's need and the reserve was not built); listed as a known survivor in `tools/mutants/fs-limits.toml` (`L-set-limit-new-record-frees`).
+- R7: test `a_tree_of_exactly_the_scan_bound_gets_a_limit` (mutant `L-scan-bound`); the 50 ms stays a host assumption.
+- R8: not done: counters for orphans created, repointed and `NotEmpty` from the new rule, and a per-request `used <= limit` check, are not in the model test; the dedicated tests cover those paths and the crash test keeps handles open. Open item.
+- R9: kept removal; recorded in ADR-0290 (setting `used = limit` would leave `fsck` reporting the tree; the engine cannot make the state any more).

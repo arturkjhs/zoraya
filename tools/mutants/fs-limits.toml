@@ -1,0 +1,35 @@
+# zoraya-fs storage limits (ADR-0265, ADR-0290, ADR-0292, Q5 and its reviews).
+# Host tests only.
+tests = ["cargo test -q -p zoraya-fs --test limits", "cargo test -q -p zoraya-fsclient --test service"]
+timeout = 900
+
+[[mutant]]
+id = "L-scan-bound"
+file = "crates/zoraya-fs/src/volume.rs"
+find = 'pub const SCAN_BOUND: usize = 50_000;'
+replace = 'pub const SCAN_BOUND: usize = 49_999;'
+note = "Q5 re-check R7: exactly the bound is accepted"
+
+[[mutant]]
+id = "L-set-limit-new-record-frees"
+file = "crates/zoraya-fs/src/volume.rs"
+find = 'self.mutate(limit.is_none() || existing, false,'
+replace = 'self.mutate(true, false,'
+note = "Q5 review finding 5 / re-check R6: a KNOWN SURVIVOR, a new record may use the delete reserve; no test builds a volume whose free space lies between the request's need and the reserve"
+
+[[mutant]]
+id = "L-set-limit-rights"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = 'if !self.has(i, tree) {'
+replace = 'if !self.has(i, proto::rights::WRITE) {'
+note = "Q5 re-check W2: a connection with only WRITE and CREATE cannot set a limit"
+
+[[mutant]]
+id = "L-narrowed-set-limit"
+file = "crates/zoraya-fs-service/src/lib.rs"
+find = '''                if self.only_of(i).is_some() {
+                    return self.denied(i, t);
+                }
+                self.set_limit('''
+replace = '''                self.set_limit('''
+note = "Q5 review finding 2"

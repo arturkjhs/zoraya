@@ -1980,7 +1980,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     /// `set_limit` (ADR-0265 rule 4): needs `WRITE` on the directory's
     /// connection, so a limit is set from above.
     fn set_limit(&mut self, i: usize, t: u32, name: &str, limit: Option<u64>) {
-        if !self.has(i, proto::rights::WRITE) {
+        // The rights of a whole tree, not only `WRITE`: a `write` operand
+        // that names a directory, or two `create` operands in one directory,
+        // give a full connection with `WRITE` but not `REMOVE` (re-check W2).
+        let tree = proto::rights::WRITE
+            | proto::rights::CREATE
+            | proto::rights::REMOVE
+            | proto::rights::RENAME;
+        if !self.has(i, tree) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let Some(directory) = self.handle_of(i) else {

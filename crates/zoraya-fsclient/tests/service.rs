@@ -587,3 +587,42 @@ fn a_narrowed_connection_cannot_change_a_limit() {
         .unwrap();
     assert_eq!(c.limit(room), Ok(Some((4096 * 4, 0))));
 }
+
+/// Re-check W2: a full directory connection with `WRITE` and `CREATE` (what two
+/// `create` operands in one directory give) or with `WRITE` alone (a `write`
+/// operand naming a directory) cannot change a limit; one with `WRITE`,
+/// `CREATE`, `REMOVE` and `RENAME` can.
+#[test]
+fn only_a_connection_with_the_rights_of_a_tree_sets_a_limit() {
+    let (mut c, root) = rig();
+    c.make_directory(root, "room").unwrap();
+    c.set_limit(root, "room", Some(4096 * 4)).unwrap();
+    for have in [
+        rights::READ | rights::WRITE | rights::CREATE,
+        rights::READ | rights::WRITE | rights::SYNC | rights::CLONE,
+        rights::WRITE | rights::CREATE | rights::REMOVE,
+    ] {
+        let part = c.clone_with(root, have).unwrap();
+        assert_eq!(
+            c.set_limit(part, "room", None),
+            Err(status::ACCESS_DENIED),
+            "{have:#x}"
+        );
+        assert_eq!(
+            c.set_limit(part, "room", Some(u64::MAX)),
+            Err(status::ACCESS_DENIED),
+            "{have:#x}"
+        );
+    }
+    let full = c
+        .clone_with(
+            root,
+            rights::READ | rights::WRITE | rights::CREATE | rights::REMOVE | rights::RENAME,
+        )
+        .unwrap();
+    assert_eq!(c.set_limit(full, "room", Some(4096 * 8)), Ok(()));
+    let room = c
+        .open(root, "room", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4096 * 8, 0))));
+}

@@ -856,6 +856,57 @@ fn a_new_limit_leaves_the_delete_reserve_alone() {
     fsck(v.unmount().unwrap());
 }
 
+/// Re-check W4: on a full volume a limit that is there can be changed or taken
+/// away (neither adds a record); a new one is refused for space.
+#[test]
+fn on_a_full_volume_an_existing_limit_can_be_changed() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(128), &clock);
+    let root = v.root();
+    v.mkdir(root, "room", 0o755).unwrap();
+    v.mkdir(root, "other", 0o755).unwrap();
+    v.set_limit(root, "room", Some(1000 * BS)).unwrap();
+    let mut n = 0;
+    while put(&mut v, &format!("room/f{n}"), 0, &vec![7u8; 4 * BLOCK_SIZE]).is_ok() {
+        n += 1;
+    }
+    let mut e = 0;
+    while put(&mut v, &format!("room/e{e}"), 0, b"").is_ok() {
+        e += 1;
+    }
+    assert!(
+        put(&mut v, "room/more", 0, b"").is_err(),
+        "the volume is not full"
+    );
+    // Lowering, raising and keeping all work: no record is added.
+    v.set_limit(root, "room", Some(10 * BS)).unwrap();
+    v.set_limit(root, "room", Some(2000 * BS)).unwrap();
+    assert_eq!(used(&mut v, "room"), oracle(&mut v, "room"));
+    // A limit that was taken away cannot be set again until there is room
+    // (a keeper sets the new value before it removes the old one).
+    v.set_limit(root, "room", None).unwrap();
+    assert_eq!(v.set_limit(root, "room", Some(BS)), Err(FsError::NoSpace));
+    v.unlink(root, "room/f0").unwrap();
+    v.sync().unwrap();
+    fsck(v.unmount().unwrap());
+}
+
+/// Re-check R7: exactly `SCAN_BOUND` objects are accepted.
+#[test]
+fn a_tree_of_exactly_the_scan_bound_gets_a_limit() {
+    let clock = TestClock::new(T0);
+    let mut v = mount(fresh(16384), &clock);
+    let root = v.root();
+    v.mkdir(root, "big", 0o755).unwrap();
+    let h = v.open(root, "big", OpenOptions::default()).unwrap();
+    for i in 0..zoraya_fs::SCAN_BOUND {
+        v.mkdir(h, &format!("{i}"), 0o755).unwrap();
+    }
+    v.close(h).unwrap();
+    v.set_limit(root, "big", Some(u64::MAX)).unwrap();
+    assert_eq!(used(&mut v, "big"), zoraya_fs::SCAN_BOUND as u64 * BS);
+}
+
 /// Review Q5, finding 6: a tree past `SCAN_BOUND` objects gets no new limit.
 #[test]
 fn a_tree_past_the_scan_bound_gets_no_limit() {

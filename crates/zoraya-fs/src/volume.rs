@@ -1647,7 +1647,15 @@ impl<D: BlockDevice, C: Clock> Volume<D, C> {
         limit: Option<u64>,
     ) -> Result<(), FsError> {
         self.writable()?;
-        self.mutate(limit.is_none(), false, &mut |v| {
+        // A request that adds no record may use the delete reserve: taking a
+        // limit away, and changing one that is there (the keeper can set a
+        // limit again before removing it; re-check W4). A new record does not.
+        let existing = self
+            .parent_of(dir, name)
+            .ok()
+            .and_then(|(p, n)| self.entry(p, n.as_bytes()).ok().flatten())
+            .is_some_and(|(id, _)| matches!(self.tget(&Key::limit(id)), Ok(Some(_))));
+        self.mutate(limit.is_none() || existing, false, &mut |v| {
             let (parent, name) = v.parent_of(dir, name)?;
             let (id, kind) = v.entry(parent, name.as_bytes())?.ok_or(FsError::NotFound)?;
             if kind != ObjKind::Directory {
