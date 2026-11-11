@@ -250,3 +250,24 @@ line, in two lines, or not in `GUI_RUNS_ALL`, or a line without `GUI_RUNS`). Che
 To verify on the candidate run (a change touching the compositor's map entry): four `test-gui` jobs, each green and
 at or under about 6 minutes; the wall time of the run against the previous 27 minutes for such a change; the four jobs'
 `[gui-...] PASS` lines together name all 20 runs.
+
+## Status after Q2 (orchestrator, 2026-11-11)
+
+- **Merged and tagged:** Q1 (`stage-8-q1`, main `8af2588`), the CI parts (`work/ci`, `work/ci-gui`, merged without a stage
+  tag), the files manager's release fix and the files-manage script guard (`work/gui-flake`), and Q2 (`stage-8-q2`, main
+  `0e6164a`, full CI green on main after one re-run of `w9-term` tcg, which hit its 10-minute job timeout once: attempt 2
+  took 3 min 39 s against 7 to 8 min earlier, so a runner stall).
+- **Flakes found and fixed on the way:** `files-manage:auto:2` step 24 was a real app bug (a release re-applied the click
+  with the modifiers read at release time); its step 113 `Exit` timeout was a script race (keys typed before the focus
+  click took effect on a slow guest). Frame timings across runs vary 2x between runners; no Q2 slowdown is shown.
+- **Candidate CI** now runs what the change touches: a kernel change about 10-16 min, a compositor change about 15 min
+  (was about 27), the full set about 13-16 min (49 jobs, `test-gui` split in four). Not measured: a docs-only candidate.
+- **Open for the architect:** the kernel reserve (1/16 kept; the desktop uses ~96% of 256 MiB, GUI guests now 512 MiB;
+  backlog row 'Desktop memory footprint'); ADR-0270 point 4 deviations (the `reaper` frees 1024 frames a turn, `reap()` in
+  `schedule()` not moved; the time bound is an assumption under HVF, checked on CI by a calibration factor and a unit
+  count); `init` holds `LIMIT` on its own job; the panel's launches are outside the session job until Q6a.
+- **Cost by model:** no counter is available to the session; the work was done by Sonnet subagents (Q1 fixes, CI parts,
+  Q2 build and fixes, the flake hunt), Opus for the Q1 and Q2 reviews and the Exit diagnosis, Haiku (`ci-watch`,
+  `log-triage`, `test-runner`) for CI and test runs.
+- **Next:** N1 (the driver answers ARP) on `work/n1` from main, then N2, Q5, Q3 (fsd), Q4, N3, N4 with Q3's netd account,
+  N5, Q6a, Q6b, N6, Q7. Gate: closed (`make check-untrusted-gate`; fork-bomb and masked-time rows now run in `test-qemu`).
