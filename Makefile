@@ -112,7 +112,7 @@ run: $(KERNEL) $(DISK)
 # scale 2 (the architect's check of 2026-11-10); GUI_SCALE=1 gives 1024x768.
 GUI_SCALE ?= $(if $(filter Darwin,$(shell uname -s)),2,1)
 run-gui: $(KERNEL) $(DISK)
-	$(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 256M --disk $(DISK) $(KERNEL)
+	$(RUN_QEMU) --gui --gui-scale $(GUI_SCALE) --mem 512M --disk $(DISK) $(KERNEL)
 
 debug: $(KERNEL)
 	@echo "Waiting for a debugger on localhost:1234. Attach with:"
@@ -447,7 +447,7 @@ test-posix-gui: $(POSIX_IMAGE_DEP) $(RUNNER)
 	@for accel in $(POSIX_ACCELS); do \
 	  target/debug/zoraya-mkfs --size $(POSIX_IMAGE_SIZE) --from $(POSIX_ROOT) $(BUILD)/posix-gui.img && \
 	  $(RUNNER) --timeout $(QEMU_TIMEOUT) --gui-script $(POSIX_GUI_SCRIPT) --qmp $(BUILD)/posix-gui-$$accel.qmp \
-	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 256M --qmp $(BUILD)/posix-gui-$$accel.qmp \
+	    --label posix-gui-$$accel -- $(RUN_QEMU) --test --gui --mem 512M --qmp $(BUILD)/posix-gui-$$accel.qmp \
 	    --disk $(BUILD)/posix-gui.img --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(BUILD)/posix-gui.img || exit 1; done
 
@@ -499,7 +499,7 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	  timeout=$(QEMU_TIMEOUT); [ $$scale = 1 ] || timeout=$(GUI_TIMEOUT_2); \
 	  case $$scale in *x*) size="--gui-size $$scale" ;; *) size="--gui-scale $$scale" ;; esac; \
 	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
-	    $(RUN_QEMU) --test --gui $$size --mem 256M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
+	    $(RUN_QEMU) --test --gui $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.

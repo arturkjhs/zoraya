@@ -74,6 +74,7 @@ sources or with QEMU's own tracing. The sweep since `e423bb5` holds frames once 
 | - | `zoraya-elf-check` | `USER_LOW` (4 MiB) is a copy of `kernel/src/memory/user.rs`'s; move it into `zoraya-abi`, which both would use, when that crate is next changed (TASK-17 review A11). |
 | - | `posix-surface-check` | `hide` and `check` share the tool's ELF reader; the cross-check against `zoraya-ar`'s index (its own reader) is what keeps a reader bug from hiding a name and passing the check alike. |
 | - | `libc.a` (ADR-0141) | `getpwnam` and friends call `pthread_setcancelstate` and the `nscd` client's `socket`, `connect` and `sendmsg`. Settled in 6c (proposed ADR-0180 item 9): `pthread_setcancelstate` succeeds and changes nothing, the socket calls fail with `ENOSYS`, and musl's parsers, which read the files first, are not patched. Drop this row if the architect accepts ADR-0180. |
+| - | Desktop memory footprint (found by Q1) | The GUI session at scale 2 used about 96% of a 256 MiB guest: the charge is within 0.5 MB of the frames in use (used 230.85 MB, peak 233.12 MB of 241 MB free at boot; with no limit only 10.7 MB stays free). Q1's session memory limit refused the files manager's menu in `gui-files-manage-auto-2`; the GUI guests now have 512 MiB. To look at: the compositor's surface copies for up to 8 clients, the 1 MiB heap steps per process, the 64 KiB kernel stack per thread. Decide a target once the Q tasks measure. |
 
 ## Mutation testing: `zoraya-virtio`
 
