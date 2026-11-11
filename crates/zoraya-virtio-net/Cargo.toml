@@ -9,6 +9,8 @@ license.workspace = true
 
 [dependencies]
 zoraya-virtio = { path = "../zoraya-virtio" }
+zoraya-proto-nic = { path = "../zoraya-proto-nic" }
+zoraya-protocol = { path = "../zoraya-protocol" }
 
 [dev-dependencies]
 zoraya-test-alloc = { path = "../zoraya-test-alloc" }

@@ -667,6 +667,8 @@ dependencies = [
 name = "zoraya-virtio-net"
 version = "0.1.0"
 dependencies = [
+ "zoraya-proto-nic",
+ "zoraya-protocol",
  "zoraya-test-alloc",
  "zoraya-virtio",
 ]

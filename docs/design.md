@@ -1467,12 +1467,16 @@ yet (N2): the driver is built and tested alone.
   descriptors (two per buffer: a header cell in the driver's own queue memory and the frame slot). The logic is host
   tested against the fake device, including every hostile value: a used length beyond the buffer or below the header, a
   head that is odd, out of range or not offered, a used index that jumps, a slot completed twice, a transmit of a bad
-  slot, length or state, and a random mix of requests and lies (`cargo test -p zoraya-virtio-net`). A broken device
+  slot, length or state, and a random mix of requests and lies (`cargo test -p zoraya-virtio-net`). The client half
+  (`zoraya_virtio_net::serve`, over a `Host` trait) is host tested too: a full channel for many rounds and then
+  drained loses and doubles nothing, a hostile client is refused or ends the driver. A broken device
   ends the driver (reset, unpin); a runt frame is dropped and its buffer reposted; a request the client may not make is
   refused and counted. The driver never reads a frame slot (INV-0280-1).
 - **The frame protocol** (`zoraya-proto-nic`, ADR-0221 item 2). The client creates a contiguous object of 128 slots of
-  1536 bytes (64 receive, 64 transmit; 192 KiB), sends it with `Attach`; `Received { at, frames[] }`, `Sent { slots[] }`
-  and `LinkChanged` are pushed; `Transmit` and `Release` are the client's. `zoraya_proto_nic::arp` parses and builds
+  1536 bytes (64 receive, 64 transmit; 192 KiB), sends it with `Attach`; `Received { at, frames[] }`, `Sent { slots[] }`,
+  `Rejected { slots[] }` (a refused transmit, with its reason) and `LinkChanged` are pushed, and what the client's
+  channel cannot take is kept and written again (bounded state, not a queue: ADR-0280 recommendation 5), so no `Sent`
+  is lost and a slot is not reused before it was reported; `Transmit` and `Release` are the client's. `zoraya_proto_nic::arp` parses and builds
   ARP over IPv4 with checked slices only (truncated, wrong hardware or protocol type or sizes, unknown operations, a
   multicast sender: none panics; host tests and the fuzz target `fuzz/fuzz_targets/net_rx.rs`, not run).
 - **`init`** starts `ethd` when a virtio-net device is alone on its page and keeps the channel open. It is not

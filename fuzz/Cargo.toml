@@ -23,6 +23,7 @@ zoraya-fs-testkit = { path = "../crates/zoraya-fs-testkit" }
 zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-shell = { path = "../crates/zoraya-shell" }
 zoraya-proto-nic = { path = "../crates/zoraya-proto-nic" }
+zoraya-protocol = { path = "../crates/zoraya-protocol" }
 zoraya-virtio = { path = "../crates/zoraya-virtio", features = ["fake"] }
 zoraya-virtio-net = { path = "../crates/zoraya-virtio-net" }
 

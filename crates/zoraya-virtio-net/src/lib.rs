@@ -20,6 +20,8 @@ use zoraya_virtio::{DEVICE_NET, Registers, Shared, reg};
 
 pub use zoraya_virtio::Error as TransportError;
 
+pub mod serve;
+
 /// Slots in each direction; the service's `zoraya-proto-nic::SLOTS` (the
 /// two are compared by the user program's build).
 pub const SLOTS: usize = 64;
@@ -96,6 +98,10 @@ enum Tx {
     Free,
     /// With the device.
     Queued,
+    /// Finished by the device, not yet reported to the service: not free
+    /// until [`Net::reported`], so that the service never sees a slot
+    /// reused before its `Sent`.
+    Done,
 }
 
 pub struct Net<R, S> {
@@ -208,8 +214,9 @@ impl<R: Registers, S: Shared> Net<R, S> {
                 writable: true,
             },
         ];
+        self.rx.offer(&mut self.shared, 2 * slot as u16, &chain)?;
         self.rx_state[slot] = Rx::Posted;
-        Ok(self.rx.offer(&mut self.shared, 2 * slot as u16, &chain)?)
+        Ok(())
     }
 
     /// Attaches the frames object: `frames` is the device address of its
@@ -251,6 +258,29 @@ impl<R: Registers, S: Shared> Net<R, S> {
         }
         self.rx.notify(&mut self.registers, &mut self.shared);
         Ok(())
+    }
+
+    /// A receive slot that was handed out in a message that then could not
+    /// be delivered: it goes back to the device and the frame is counted
+    /// dropped.
+    pub fn undo(&mut self, slot: u32) -> Result<(), Refused> {
+        self.release(slot)?;
+        self.dropped = self.dropped.saturating_add(1);
+        Ok(())
+    }
+
+    /// Transmit slot `slot` (a number in `SLOTS..2 * SLOTS`) has been
+    /// reported to the service: it is free again. False if it was not
+    /// finished.
+    pub fn reported(&mut self, slot: u32) -> bool {
+        let Some(index) = (slot as usize).checked_sub(SLOTS).filter(|i| *i < SLOTS) else {
+            return false;
+        };
+        if self.tx_state[index] == Tx::Done {
+            self.tx_state[index] = Tx::Free;
+            return true;
+        }
+        false
     }
 
     /// The service sends `length` bytes of transmit slot `slot` (a number
@@ -321,7 +351,10 @@ impl<R: Registers, S: Shared> Net<R, S> {
     /// the service could not be told: the slot then goes back to the device
     /// at once and the frame is counted dropped. `sent` is called with each
     /// transmit slot (a number in `SLOTS..2 * SLOTS`) the device is done
-    /// with.
+    /// with; the slot stays unusable until [`Net::reported`]. A call takes
+    /// at most `2 * SLOTS` used entries of the receive queue, so that a
+    /// device that keeps completing runts cannot keep the driver here; the
+    /// level-triggered interrupt brings the rest.
     pub fn poll(
         &mut self,
         received: &mut dyn FnMut(u32, u32) -> bool,
@@ -331,7 +364,10 @@ impl<R: Registers, S: Shared> Net<R, S> {
             return Ok(());
         };
         let mut posted = false;
-        while let Some(used) = self.rx.take(&self.shared)? {
+        for _ in 0..2 * SLOTS {
+            let Some(used) = self.rx.take(&self.shared)? else {
+                break;
+            };
             let head = usize::from(used.head);
             let slot = head / 2;
             if head % 2 != 0 || slot >= SLOTS || self.rx_state[slot] != Rx::Posted {
@@ -361,7 +397,7 @@ impl<R: Registers, S: Shared> Net<R, S> {
             if head % 2 != 0 || slot >= SLOTS || self.tx_state[slot] != Tx::Queued {
                 return Err(Error::Device);
             }
-            self.tx_state[slot] = Tx::Free;
+            self.tx_state[slot] = Tx::Done;
             sent((SLOTS + slot) as u32);
         }
         Ok(())
@@ -369,7 +405,7 @@ impl<R: Registers, S: Shared> Net<R, S> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

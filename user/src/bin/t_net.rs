@@ -14,18 +14,19 @@ extern crate alloc;
 
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
-    ChannelEntry, Handle, MapFlags, MemoryFlags, MemoryObject, Mode, ObjectType, Packet, Status,
-    channel_signals,
+    ChannelEntry, ExitReason, ExitRecord, Handle, MapFlags, MemoryFlags, MemoryObject, Mode,
+    ObjectType, Packet, Status, channel_signals, process_signals,
 };
 use zoraya_proto_nic::{
-    Attach, Done, Frame, Info, InfoReply, OBJECT_SIZE, Received, Release, SLOT_SIZE, SLOTS, Sent,
-    Slot, Transmit, arp, status,
+    Attach, Done, Frame, Info, InfoReply, LinkChanged, OBJECT_SIZE, Received, Rejected, Release,
+    SLOT_SIZE, SLOTS, Sent, Slot, Transmit, arp, reason, status,
 };
 use zoraya_protocol::{Header, Message, NO_REPLY, Seq, decode, encode};
 use zoraya_user::gui::{scan, start_driver};
 use zoraya_user::{
-    channel_read, channel_write, clock_monotonic, handle_close, memory_create, memory_map,
-    port_create, port_subscribe, port_wait, println,
+    channel_read, channel_write, clock_monotonic, dma_release_quarantine, handle_close,
+    memory_create, memory_map, port_create, port_subscribe, port_wait, println,
+    process_exit_record,
 };
 
 const OUR_IP: [u8; 4] = [10, 0, 2, 15];
@@ -33,6 +34,19 @@ const GATEWAY_IP: [u8; 4] = [10, 0, 2, 2];
 /// Every wait ends: TCG is slow, so seconds.
 const WAIT_NS: u64 = 10_000_000_000;
 const ROUNDS: usize = 20;
+/// How long to wait for an ARP request for us after the rounds.
+const HOLD_NS: u64 = 8_000_000_000;
+
+/// Waits up to `wait` ns for `process` to end; its record, or `None`.
+fn wait_exit_within(process: Handle, wait: u64) -> Option<ExitRecord> {
+    let port = port_create().expect("port");
+    port_subscribe(port, process, process_signals::TERMINATED, 1, Mode::Level).expect("subscribe");
+    let mut packets = [Packet::default()];
+    let waited = port_wait(port, clock_monotonic() + wait, &mut packets);
+    let _ = handle_close(port);
+    waited.ok()?;
+    process_exit_record(process).ok()
+}
 
 struct Nic {
     end: Handle,
@@ -45,6 +59,9 @@ struct Nic {
 enum Push {
     Received(u64, alloc::vec::Vec<Frame>),
     Sent(alloc::vec::Vec<u32>),
+    /// Refused transmits: the slot and the reason.
+    Rejected(alloc::vec::Vec<(u32, u32)>),
+    Link,
     Reply(alloc::vec::Vec<u8>),
 }
 
@@ -61,6 +78,22 @@ impl Nic {
             .into_iter()
             .collect();
         channel_write(self.end, &out[..n], &entries).expect("write to the driver");
+    }
+
+    /// The next message that is not a received frame (an unsolicited frame
+    /// from the network is given back and skipped).
+    fn next_not_received(&self, wait: u64) -> Push {
+        loop {
+            match self.next(wait).expect("the driver pushes") {
+                Push::Received(_, list) => {
+                    for f in list {
+                        self.release(f.slot);
+                    }
+                }
+                Push::Link => {}
+                other => return other,
+            }
+        }
     }
 
     /// The next message, if one comes before the deadline.
@@ -86,6 +119,14 @@ impl Nic {
             17 => {
                 let (_, s) = decode::<Sent>(m, 0).expect("sent");
                 Push::Sent(s.slots.iter().map(|s| s.slot).collect())
+            }
+            19 => {
+                let (_, r) = decode::<Rejected>(m, 0).expect("rejected");
+                Push::Rejected(r.slots.iter().map(|r| (r.slot, r.reason)).collect())
+            }
+            18 => {
+                decode::<LinkChanged>(m, 0).expect("link");
+                Push::Link
             }
             _ => Push::Reply(m.to_vec()),
         })
@@ -220,8 +261,8 @@ fn main() -> i32 {
         },
         None,
     );
-    match nic.next(WAIT_NS) {
-        Some(Push::Sent(s)) => assert_eq!(s, [64], "a refused transmit is reported at once"),
+    match nic.next_not_received(WAIT_NS) {
+        Push::Rejected(r) => assert_eq!(r, [(64, reason::NOT_ATTACHED)], "refused, not sent"),
         _ => panic!("expected a refusal"),
     }
     // A reply that is not an attach: Attach without a handle is refused.
@@ -281,8 +322,10 @@ fn main() -> i32 {
         },
         None,
     );
-    match nic.next(WAIT_NS) {
-        Some(Push::Sent(s)) => assert_eq!(s.len(), hostile.len()),
+    // Slots 0, 128 and u32::MAX are no transmit slots: counted, not
+    // reported. Slot 64 is refused for its length, never reported as sent.
+    match nic.next_not_received(WAIT_NS) {
+        Push::Rejected(r) => assert_eq!(r, [(64, reason::BAD_LENGTH)]),
         _ => panic!("expected the refusals"),
     }
 
@@ -299,6 +342,7 @@ fn main() -> i32 {
     let (mut rtts, mut deliveries) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
     let mut gateway_mac = None;
     let mut answered = 0u32;
+    let mut answer_busy = false;
     for _ in 0..ROUNDS {
         let started = clock_monotonic();
         nic.transmit(SLOTS, &request);
@@ -312,7 +356,10 @@ fn main() -> i32 {
                 Push::Sent(s) => {
                     // The answer's slot (SLOTS + 1) may be reported too.
                     sent |= s.contains(&SLOTS);
+                    answer_busy &= !s.contains(&(SLOTS + 1));
                 }
+                Push::Rejected(r) => panic!("a refused transmit: {r:?}"),
+                Push::Link => {}
                 Push::Received(at, list) => {
                     deliveries.push(clock_monotonic() - at);
                     for f in list {
@@ -320,9 +367,13 @@ fn main() -> i32 {
                         let frame = nic.read_slot(f.slot, f.length as usize);
                         let mut out = [0u8; 64];
                         if let Some(n) = arp::answer(&frame, mac, OUR_IP, &mut out) {
-                            // Answered by hand through the second transmit slot.
-                            nic.transmit(SLOTS + 1, &out[..n]);
-                            answered += 1;
+                            // Answered by hand through the second transmit
+                            // slot, once it is reported free again.
+                            if !answer_busy {
+                                nic.transmit(SLOTS + 1, &out[..n]);
+                                answer_busy = true;
+                                answered += 1;
+                            }
                         } else if let Some(a) = arp::parse(&frame)
                             && a.operation == arp::Operation::Reply
                             && a.sender_ip == GATEWAY_IP
@@ -359,10 +410,53 @@ fn main() -> i32 {
         us(&deliveries, 100)
     );
 
-    // The client goes away: the driver resets the device and ends.
+    // The host connects to a forwarded port (`make test-net` does, repeatedly),
+    // so SLIRP asks who has 10.0.2.15: wait a while for it and answer
+    // through the transmit path. The step greps the pcap for the reply.
+    let hold = clock_monotonic() + HOLD_NS;
+    while answered == 0 || answer_busy {
+        let Some(left) = hold.checked_sub(clock_monotonic()) else {
+            break;
+        };
+        match nic.next(left) {
+            Some(Push::Received(_, list)) => {
+                for f in list {
+                    let frame = nic.read_slot(f.slot, f.length as usize);
+                    let mut out = [0u8; 64];
+                    if !answer_busy && let Some(n) = arp::answer(&frame, mac, OUR_IP, &mut out) {
+                        nic.transmit(SLOTS + 1, &out[..n]);
+                        answer_busy = true;
+                        answered += 1;
+                    }
+                    nic.release(f.slot);
+                }
+            }
+            Some(Push::Sent(s)) => answer_busy &= !s.contains(&(SLOTS + 1)),
+            Some(_) => {}
+            None => break,
+        }
+    }
+    println!("t_net: requests for 10.0.2.15 answered: {answered}");
+
+    // The client goes away. The driver must notice, reset the device and
+    // unpin both memories, and end with code 0; a driver that is killed
+    // instead leaves them quarantined (ADR-0054), which this does not test.
     let _ = handle_close(end);
     let _ = handle_close(memory);
+    let ended = wait_exit_within(running.process, WAIT_NS);
+    match ended {
+        Some(record) => {
+            assert_eq!(record.reason, ExitReason::Exited, "ethd ended by itself");
+            assert_eq!(record.code, 0, "ethd reset the device and unpinned");
+            println!("t_net: ethd ended by itself: device reset, memories unpinned");
+        }
+        None => panic!(
+            "ethd did not end after its client closed the channel (it would be killed, quarantine path)"
+        ),
+    }
     running.end();
+    // Nothing is mapped, pinned or quarantined any more.
+    dma_release_quarantine(device.0).expect("nothing left to release");
     println!("t_net: all passed");
     0
 }

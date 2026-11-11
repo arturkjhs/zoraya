@@ -47,6 +47,12 @@ protocol! {
         length: u32,
     }
 
+    /// A refused transmit: the slot and why (one of `reason`).
+    record Refusal {
+        slot: u32,
+        reason: u32,
+    }
+
     /// A slot.
     record Slot {
         slot: u32,
@@ -68,9 +74,11 @@ protocol! {
     }
 
     /// Frames to send, each in a transmit slot. No reply: the driver
-    /// answers with `Sent` when the device has taken the slot. A slot
-    /// that is out of range, not free or of a bad length is refused: it
-    /// is reported in `Sent` at once and counted.
+    /// answers with `Sent` when the device is done with the slot. A frame
+    /// that is not carried out (not attached, not free, of a bad length) is
+    /// refused: the driver counts it and answers `Rejected` with the
+    /// reason. A rejected frame is never reported in `Sent` for that
+    /// request. A slot out of range is counted and not reported.
     message Transmit<'a> = 3, handles 0 {
         frames: Seq<'a, Frame, MAX_BATCH>,
     }
@@ -93,20 +101,43 @@ protocol! {
         slots: Seq<'a, Slot, MAX_BATCH>,
     }
 
+    /// Transmit requests the driver refused, pushed. Whether the slot is
+    /// the service's again depends on the reason: `reason::STILL_QUEUED`
+    /// means that the device still holds it (or its `Sent` is still to
+    /// come), and the service waits for that `Sent`; any other reason
+    /// leaves the slot with the service, which has not been taken.
+    message Rejected<'a> = 19, handles 0 {
+        slots: Seq<'a, Refusal, MAX_BATCH>,
+    }
+
     /// The link changed, pushed.
     message LinkChanged = 18, handles 0 {
         link: bool,
     }
 }
 
+/// Why a transmit was refused, in `Refusal`.
+pub mod reason {
+    /// No memory object is attached.
+    pub const NOT_ATTACHED: u32 = 1;
+    /// The slot is not a transmit slot. Counted by the driver, never sent.
+    pub const BAD_SLOT: u32 = 2;
+    /// The slot is with the device, or finished and not yet reported in
+    /// `Sent`: the service must wait for that `Sent`.
+    pub const STILL_QUEUED: u32 = 3;
+    /// The length is outside `MIN_FRAME..=MAX_FRAME`.
+    pub const BAD_LENGTH: u32 = 4;
+}
+
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 7] = [
+pub const ORDINALS: [(&str, u32); 8] = [
     ("info", 1),
     ("attach", 2),
     ("transmit", 3),
     ("release", 4),
     ("received", 16),
     ("sent", 17),
+    ("rejected", 19),
     ("link_changed", 18),
 ];
 
@@ -300,6 +331,23 @@ mod tests {
                 slots: Seq::Of(&slots)
             },
             |m: Sent<'_>| assert_eq!(m.slots.len(), 3)
+        );
+        let refusals = [
+            Refusal {
+                slot: 70,
+                reason: reason::STILL_QUEUED,
+            },
+            Refusal {
+                slot: 71,
+                reason: reason::BAD_LENGTH,
+            },
+        ];
+        trip!(
+            Rejected,
+            Rejected {
+                slots: Seq::Of(&refusals)
+            },
+            |m: Rejected<'_>| assert!(m.slots.iter().eq(refusals.iter().copied()))
         );
     }
 

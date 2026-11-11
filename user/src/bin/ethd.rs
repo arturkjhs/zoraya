@@ -11,32 +11,28 @@
 //! Buffers in flight: the queue memory and the client's frames object are
 //! pinned (`dma_pin`) and stay pinned until the device is reset. If this
 //! process ends with them in flight, the kernel keeps their frames
-//! quarantined (ADR-0054) until the next driver resets the device and calls
-//! `dma_release_quarantine`, which is the first thing `main` does.
-
-use alloc::vec::Vec;
+//! quarantined (ADR-0054). The kernel resets the device and releases the
+//! frames in `dma_release_quarantine`, which is the first thing the next
+//! `ethd` does, before it maps the device (ADR-0070).
 
 use zoraya_abi::{
     DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Status, channel_signals,
     interrupt_signals,
 };
-use zoraya_proto_nic::{
-    Attach, Done, Frame, Info, InfoReply, LinkChanged, Received, Release, Sent, Slot, Transmit,
-    status,
-};
-use zoraya_protocol::{Below, Data, Header, Message, NO_REPLY, Seq, decode, encode};
 use zoraya_user::{
     channel_read, channel_write, clock_monotonic, device_interrupt, device_map, dma_pin,
     dma_release_quarantine, dma_unpin, handle_close, interrupt_ack, memory_create, memory_map,
-    port_create, port_subscribe, port_wait, println, startup,
+    port_create, port_subscribe, port_unsubscribe, port_wait, println, startup,
 };
 use zoraya_virtio::{Registers, Shared};
+use zoraya_virtio_net::serve::{Flow, Host, Read, Server, Write};
 use zoraya_virtio_net::{Net, OBJECT_SIZE, SHARED_MEMORY};
 
 extern crate alloc;
 
 const KEY_DEVICE: u64 = 1;
 const KEY_CLIENT: u64 = 2;
+const KEY_WRITABLE: u64 = 3;
 
 struct Window(u64);
 
@@ -104,191 +100,113 @@ fn slot(n: u64) -> Handle {
     Handle::new(n).expect("slot is not zero")
 }
 
-struct Ethd {
-    net: Net<Window, Queues>,
+/// The channel, the pin and the clock of the driver (`serve::Host`).
+struct Chan {
     device: Handle,
     client: Handle,
-    interrupt: Handle,
-    /// The pin of the queue memory and of the frames object.
-    queue_pin: Handle,
+    /// The pin of the client's frames object.
     frames_pin: Option<Handle>,
-    out: Vec<u8>,
-    message: Vec<u8>,
+    handles: [Handle; 1],
 }
 
-impl Ethd {
-    /// Stops the device; frees the pins only once it is stopped.
-    fn stop(&mut self) -> ! {
-        if self.net.reset() {
-            if let Some(pin) = self.frames_pin.take() {
-                let _ = dma_unpin(pin);
-            }
-            let _ = dma_unpin(self.queue_pin);
+impl Host for Chan {
+    type Handle = Handle;
+
+    fn write(&mut self, bytes: &[u8]) -> Write {
+        match channel_write(self.client, bytes, &[]) {
+            Ok(()) => Write::Done,
+            Err(Status::WouldBlock) => Write::Full,
+            Err(_) => Write::Closed,
         }
-        zoraya_user::process_exit(1)
     }
 
-    fn send<'a, M: Message<'a>>(&mut self, transaction: u32, m: &M) -> bool {
-        match encode(m, transaction, &mut self.out) {
-            Ok(n) => match channel_write(self.client, &self.out[..n], &[]) {
-                Ok(()) => true,
-                Err(Status::PeerClosed) => self.stop(),
-                Err(_) => false,
+    fn read(&mut self, buffer: &mut [u8]) -> Read<Handle> {
+        match channel_read(self.client, buffer, &mut self.handles) {
+            Ok(sizes) => Read::Message {
+                length: sizes.bytes as usize,
+                handle: (sizes.handles > 0).then_some(self.handles[0]),
             },
-            Err(_) => false,
+            Err((Status::WouldBlock, _)) => Read::Empty,
+            Err(_) => Read::Closed,
         }
     }
 
-    fn attach(&mut self, memory: Handle) -> u32 {
-        if self.frames_pin.is_some() {
-            return status::BAD_OBJECT;
-        }
+    fn close(&mut self, handle: Handle) {
+        let _ = handle_close(handle);
+    }
+
+    fn pin(&mut self, memory: Handle) -> Option<u64> {
         // One run of device addresses, all of the object: the slot
         // arithmetic of `Net` needs it.
         let mut runs = [[0u64; 2]; 2];
-        let Ok(pin) = dma_pin(memory, self.device, &mut runs) else {
-            return status::BAD_OBJECT;
-        };
-        if runs[0][1] < OBJECT_SIZE || runs[1][1] != 0 || self.net.attach(runs[0][0]).is_err() {
+        let pin = dma_pin(memory, self.device, &mut runs).ok()?;
+        if runs[0][1] < OBJECT_SIZE || runs[1][1] != 0 {
             let _ = dma_unpin(pin);
-            return status::BAD_OBJECT;
+            return None;
         }
         self.frames_pin = Some(pin);
-        status::OK
+        Some(runs[0][0])
     }
 
-    fn serve(&mut self) {
-        let mut handles = [self.client; 1];
-        loop {
-            let mut message = core::mem::take(&mut self.message);
-            let (length, received) = match channel_read(self.client, &mut message, &mut handles) {
-                Ok(sizes) => (sizes.bytes as usize, sizes.handles > 0),
-                Err((Status::WouldBlock, _)) => {
-                    self.message = message;
-                    return;
-                }
-                Err(_) => self.stop(),
-            };
-            let bytes = &message[..length.min(message.len())];
-            self.handle(bytes, received.then_some(handles[0]));
-            self.message = message;
+    fn unpin(&mut self) {
+        if let Some(pin) = self.frames_pin.take() {
+            let _ = dma_unpin(pin);
         }
     }
 
-    fn handle(&mut self, bytes: &[u8], memory: Option<Handle>) {
-        let Ok((header, _)) = Header::decode(bytes) else {
-            self.stop();
-        };
-        let t = header.transaction;
-        // Only `Attach` takes a handle; any other is closed, not kept.
-        if let Some(h) = memory
-            && header.ordinal != 2
-        {
-            let _ = handle_close(h);
+    fn now(&mut self) -> u64 {
+        clock_monotonic()
+    }
+}
+
+struct Ethd {
+    server: Server<Window, Queues, Chan>,
+    interrupt: Handle,
+    /// The pin of the queue memory.
+    queue_pin: Handle,
+    port: Handle,
+    /// Whether the port watches the channel for `WRITABLE`.
+    watching: bool,
+}
+
+impl Ethd {
+    /// Stops the device; frees the pins only once it is stopped. Without
+    /// that, the pins stay and the kernel quarantines the frames (ADR-0054).
+    /// Exit code 0: the device was reset and both pins released; 3: the
+    /// device did not reset, so they stay (`t_net` tells the two apart).
+    fn stop(&mut self) -> ! {
+        if self.server.net.reset() {
+            self.server.host.unpin();
+            let _ = dma_unpin(self.queue_pin);
+            zoraya_user::process_exit(0)
         }
-        match header.ordinal {
-            1 if decode::<Info>(bytes, 0).is_ok() => {
-                let mac = self.net.mac();
-                let m = InfoReply {
-                    status: Below(status::OK),
-                    link: self.net.link(),
-                    mac: Data(&mac),
-                };
-                self.send(t, &m);
-            }
-            2 => {
-                let s = match memory {
-                    Some(h) if decode::<Attach>(bytes, 1).is_ok() => {
-                        let s = self.attach(h);
-                        let _ = handle_close(h);
-                        s
-                    }
-                    Some(h) => {
-                        let _ = handle_close(h);
-                        status::BAD_OBJECT
-                    }
-                    None => status::BAD_OBJECT,
-                };
-                self.send(t, &Done { status: Below(s) });
-            }
-            3 => {
-                if let Ok((_, m)) = decode::<Transmit>(bytes, 0) {
-                    let mut refused: Vec<Slot> = Vec::new();
-                    for f in m.frames.iter() {
-                        if self.net.transmit(f.slot, f.length).is_err() {
-                            refused.push(Slot { slot: f.slot });
-                        }
-                    }
-                    // A refused frame is reported as sent at once, so the
-                    // service's slot accounting never stalls.
-                    if !refused.is_empty() {
-                        for chunk in refused.chunks(zoraya_proto_nic::MAX_BATCH) {
-                            self.send(
-                                NO_REPLY,
-                                &Sent {
-                                    slots: Seq::Of(chunk),
-                                },
-                            );
-                        }
-                    }
-                } else {
-                    self.stop();
-                }
-            }
-            4 => {
-                if let Ok((_, m)) = decode::<Release>(bytes, 0) {
-                    for s in m.slots.iter() {
-                        let _ = self.net.release(s.slot);
-                    }
-                } else {
-                    self.stop();
-                }
-            }
-            _ => self.stop(),
-        }
+        zoraya_user::process_exit(3)
     }
 
-    fn device_event(&mut self) {
-        let woke = clock_monotonic();
-        self.net.acknowledge();
-        let mut frames: Vec<Frame> = Vec::new();
-        let mut slots: Vec<Slot> = Vec::new();
-        let polled = self.net.poll(
-            &mut |slot, length| {
-                frames.push(Frame { slot, length });
-                true
-            },
-            &mut |slot| slots.push(Slot { slot }),
-        );
-        if polled.is_err() {
-            println!("ethd: the device broke the protocol");
-            self.stop();
-        }
-        // The slots are the client's from here; if a message is lost, they
-        // are given back so that the device does not run out of buffers.
-        for chunk in frames.chunks(zoraya_proto_nic::MAX_BATCH) {
-            let m = Received {
-                at: woke,
-                frames: Seq::Of(chunk),
-            };
-            if !self.send(NO_REPLY, &m) {
-                for f in chunk {
-                    let _ = self.net.release(f.slot);
-                }
+    fn follow(&mut self, flow: Flow) {
+        match flow {
+            Flow::Go => {}
+            Flow::Stop => self.stop(),
+            Flow::Broken => {
+                println!("ethd: the device broke the protocol");
+                self.stop();
             }
         }
-        for chunk in slots.chunks(zoraya_proto_nic::MAX_BATCH) {
-            self.send(
-                NO_REPLY,
-                &Sent {
-                    slots: Seq::Of(chunk),
-                },
+        // What could not be written waits for the channel to take messages.
+        let pending = self.server.pending();
+        if pending && !self.watching {
+            let _ = port_subscribe(
+                self.port,
+                self.server.host.client,
+                channel_signals::WRITABLE,
+                KEY_WRITABLE,
+                Mode::Level,
             );
+            self.watching = true;
+        } else if !pending && self.watching {
+            let _ = port_unsubscribe(self.port, KEY_WRITABLE);
+            self.watching = false;
         }
-        if let Some(link) = self.net.link_changed() {
-            self.send(NO_REPLY, &LinkChanged { link });
-        }
-        let _ = interrupt_ack(self.interrupt);
     }
 }
 
@@ -335,30 +253,38 @@ fn main() -> i32 {
         "ethd: virtio-net {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     );
-    let mut ethd = Ethd {
-        net,
+    let chan = Chan {
         device,
         client,
+        frames_pin: None,
+        handles: [client; 1],
+    };
+    let mut ethd = Ethd {
+        server: Server::new(net, chan),
         interrupt,
         queue_pin,
-        frames_pin: None,
-        out: alloc::vec![0; 2048],
-        message: alloc::vec![0; 2048],
+        port,
+        watching: false,
     };
-    let mut packets = [Packet::default(); 2];
+    let mut packets = [Packet::default(); 3];
     loop {
         let Ok(count) = port_wait(port, DEADLINE_INFINITE, &mut packets) else {
             ethd.stop();
         };
         for p in &packets[..count] {
-            if p.key == KEY_CLIENT {
-                // Also the end of the client: its messages first, then a
-                // closed channel ends the read with an error.
-                ethd.serve();
-            }
+            // Also the end of the client: its messages first, then a
+            // closed channel ends the read with an error.
+            let flow = match p.key {
+                KEY_CLIENT => ethd.server.serve(),
+                KEY_WRITABLE => ethd.server.flush(),
+                _ => continue,
+            };
+            ethd.follow(flow);
         }
         if packets[..count].iter().any(|p| p.key == KEY_DEVICE) {
-            ethd.device_event();
+            let flow = ethd.server.device_event();
+            let _ = interrupt_ack(ethd.interrupt);
+            ethd.follow(flow);
         }
     }
 }

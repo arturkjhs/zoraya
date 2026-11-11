@@ -64,18 +64,30 @@ SLIRP, and the time from the driver's wake to the message read by the client. **
    back to the device; a used length beyond the buffer, or a used entry that names a chain the driver did not offer, is
    a broken device and ends the driver (reset, unpin, exit).
 4. The driver pushes `received { at, frames[] }` (`at`: monotonic nanoseconds at the driver's wake for the interrupt,
-   for the latency measurement), `sent { slots[] }` when the device has taken a transmit slot or when a transmit was
-   refused (so the client's accounting never stalls), and `link_changed`. A `received` the client cannot be sent is
-   undone: the slots go back to the device and the frames are counted dropped.
-5. Any message the driver cannot decode, or whose ordinal it does not know, ends the driver, as in `blkd`'s hostile
-   client rule; `init` is the supervisor.
-6. In N1 `init` starts `ethd` when a virtio-net device is alone on its page and keeps the channel open; nothing
+   for the latency measurement), `sent { slots[] }` when the device is done with a transmit slot, `rejected { slots[] }`
+   with a reason for each transmit it did not carry out, and `link_changed`. A refused transmit is never reported in
+   `sent`: reason `STILL_QUEUED` (the device holds the slot, or its `sent` is not delivered yet) leaves the slot with
+   the driver until that `sent`; `NOT_ATTACHED` and `BAD_LENGTH` leave it with the client, which was never taken. A
+   slot outside `64..128` is only counted. A `received` that cannot be written is undone: the slots go back to the
+   device and the frames are counted dropped.
+5. Nothing pushed is lost on a full channel, and memory stays bounded. The driver keeps what it owes as state, not as a
+   queue: one bit for each transmit slot finished and not yet told, at most one pending `rejected` reason for each
+   transmit slot, one pending `info` reply and one pending `attach` reply (the newest request's transaction), and one
+   "link changed" flag (the message carries the state when it is written). It writes them again whenever the channel
+   takes messages (on every event, and on the channel's `WRITABLE` signal while something is pending). A transmit slot
+   is not free for the driver until the `sent` that names it was written, so the client never sees a slot reused
+   before it was told. At most 64 messages are read from the client in one pass.
+6. Any message the driver cannot decode (an `attach` whose body is bad included), or whose ordinal it does not know,
+   ends the driver, as in `blkd`'s hostile client rule; `init` is the supervisor. An `attach` without its handle is
+   refused with `BAD_OBJECT`. The driver ends by itself, with exit code 0, after it reset the device and unpinned both
+   memories; if the reset fails it ends with code 3 and the pins stay (quarantine, ADR-0054).
+7. In N1 `init` starts `ethd` when a virtio-net device is alone on its page and keeps the channel open; nothing
    supervises it until `netd` exists (N2).
 
 ## Consequences
 - **Positive.** The driver's attack surface is lengths and indices only; the frame parser lives in `netd`.
 - **Negative.** 128 descriptors per queue; the contiguity requirement binds `netd`'s allocation (192 KiB, small).
-- **Follow-up.** `netd` (N2) creates the object with `CONTIGUOUS`, treats `sent` as the release of a transmit slot, and
+- **Follow-up.** `netd` (N2) creates the object with `CONTIGUOUS`, treats `sent` as the release of a transmit slot (and `rejected` with `STILL_QUEUED` as no release), and
   releases every received slot.
 
 ## Invariants
@@ -86,7 +98,8 @@ SLIRP, and the time from the driver's wake to the message read by the client. **
 ## Open questions
 - Whether 64 slots per direction and a single `received` batch of up to 64 are right once `netd` runs (ADR-0221's own
   open question).
-- Whether a refused transmit should carry a reason (`sent` has none).
+- Whether `info` should also give the client a way to ask which transmit slots the driver still owes (it cannot lose
+  them now, so this is not needed).
 
 ## Revisit triggers
 - A device or a client that needs a non-contiguous object: Option C, or runs in the protocol.

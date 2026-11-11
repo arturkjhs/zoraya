@@ -3,13 +3,13 @@ use zoraya_virtio::fake::{Device, FakeRegisters, FakeShared};
 
 use super::*;
 
-const BASE: u64 = 0x4000_0000;
-const FRAMES: u64 = BASE + SHARED_MEMORY as u64;
+pub(crate) const BASE: u64 = 0x4000_0000;
+pub(crate) const FRAMES: u64 = BASE + SHARED_MEMORY as u64;
 const MAC: [u8; 6] = [0x52, 0x54, 0, 0x12, 0x34, 0x56];
 
-type FakeNet = Net<FakeRegisters, FakeShared>;
+pub(crate) type FakeNet = Net<FakeRegisters, FakeShared>;
 
-fn device() -> Device {
+pub(crate) fn device() -> Device {
     let d = Device::new(DEVICE_NET, BASE, SHARED_MEMORY + OBJECT_SIZE as usize);
     {
         let mut f = d.state.borrow_mut();
@@ -20,11 +20,11 @@ fn device() -> Device {
     d
 }
 
-fn up(d: &Device) -> FakeNet {
+pub(crate) fn up(d: &Device) -> FakeNet {
     Net::new(d.registers(), d.shared(), BASE).unwrap()
 }
 
-fn attached(d: &Device) -> FakeNet {
+pub(crate) fn attached(d: &Device) -> FakeNet {
     let mut net = up(d);
     net.attach(FRAMES).unwrap();
     net
@@ -32,7 +32,7 @@ fn attached(d: &Device) -> FakeNet {
 
 /// What the device does to receive `bytes`: takes the next posted slot's
 /// chain, writes the header and the frame, and completes it.
-fn deliver(d: &Device, bytes: &[u8]) -> u16 {
+pub(crate) fn deliver(d: &Device, bytes: &[u8]) -> u16 {
     let mut f = d.state.borrow_mut();
     let head = f.next_available(0).expect("a posted buffer");
     let chain = f.chain(0, head);
@@ -56,7 +56,7 @@ fn last_available(d: &Device) -> Option<u16> {
 
 type Polled = (Vec<(u32, u32)>, Vec<u32>, Result<(), Error>);
 
-fn poll(net: &mut FakeNet) -> Polled {
+pub(crate) fn poll(net: &mut FakeNet) -> Polled {
     let (mut got, mut sent) = (Vec::new(), Vec::new());
     let r = net.poll(
         &mut |slot, length| {
@@ -291,7 +291,26 @@ fn a_transmit_is_a_zero_header_and_the_frame_and_is_reported_when_done() {
     d.state.borrow_mut().complete(1, u32::from(head), 0);
     let (got, sent, r) = poll(&mut net);
     assert_eq!((got.len(), sent, r), (0, vec![66], Ok(())));
+    // Finished is not free: only after the service has been told.
+    assert_eq!(net.transmit(66, 98), Err(Refused::WrongState));
+    assert!(!net.reported(67));
+    assert!(net.reported(66));
+    assert!(!net.reported(66));
+    assert!(!net.reported(3));
     assert_eq!(net.transmit(66, 98), Ok(()));
+}
+
+#[test]
+fn an_undone_receive_is_reposted_and_counted() {
+    let d = device();
+    let mut net = attached(&d);
+    deliver(&d, &[0; 60]);
+    let (got, _, _) = poll(&mut net);
+    assert_eq!(got.len(), 1);
+    let before = net.dropped();
+    assert_eq!(net.undo(got[0].0), Ok(()));
+    assert_eq!(net.dropped(), before + 1);
+    assert_eq!(net.undo(got[0].0), Err(Refused::WrongState));
 }
 
 #[test]
