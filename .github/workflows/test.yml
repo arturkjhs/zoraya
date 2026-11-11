@@ -82,8 +82,36 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      # The runner's apt cannot always resolve the Ubuntu mirrors (temporary
+      # DNS failures): the .deb files are cached (the key names the package
+      # list), apt retries, the step tries 5 times 30 s apart, and the last
+      # attempt installs from the cache without the network.
+      - name: Restore the apt packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-v1
       - name: Install clang (zcc, libc.a and the ports) and zstd
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang zstd
+        run: |
+          pkgs="clang zstd"
+          opts="-o Acquire::Retries=5 -o Acquire::http::Timeout=30"
+          mkdir -p "$HOME/apt-debs"
+          sudo cp -n "$HOME"/apt-debs/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          for attempt in 1 2 3 4 5; do
+            if [ "$attempt" -lt 5 ]; then
+              # shellcheck disable=SC2086
+              if sudo apt-get $opts update && sudo apt-get $opts install -y --no-install-recommends $pkgs; then ok=1; break; fi
+              echo "apt attempt $attempt failed; retrying in 30 s"
+              sleep 30
+            else
+              echo "apt attempt 5: from the cached packages, without the network"
+              # shellcheck disable=SC2086
+              if sudo apt-get $opts install -y --no-install-recommends --no-download $pkgs; then ok=1; break; fi
+            fi
+          done
+          [ "${ok:-0}" = 1 ] || { echo "apt: no attempt succeeded" >&2; exit 1; }
+          sudo cp -n /var/cache/apt/archives/*.deb "$HOME/apt-debs/" 2>/dev/null || true
+          sudo chown -R "$(id -u):$(id -g)" "$HOME/apt-debs"
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       # target/: the dependencies and the workspace's crates (the key is
