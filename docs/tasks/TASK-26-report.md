@@ -489,7 +489,7 @@ held. Proposed, not done (architect): lower the session's `MAX_HELD`. Handle siz
 under 1%.
 
 **Tests run (this session).** `cargo test` of zoraya-fs-service (65 service tests, fifo, time), zoraya-fsclient (10),
-zoraya-proto-file (7): pass. `make check` (fmt, clippy, adr-check and every check-*): pass. TEST_CHANGED_PLACEHOLDER
+zoraya-proto-file (7): pass. `make check` (fmt, clippy, adr-check and every check-*): pass. `make test-changed` (everything changed since origin/main, so all steps; HVF; `make fetch-ports` was needed in this worktree first): 54 host test binaries ok, then test-boot, test-qemu, test-libposix, test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui, test-net all ok (511 s). It found a Q5 break, fixed here: `zoraya-posix`'s `every_file_status_maps_once_and_only_ok_to_zero` still stopped at status 16; it now covers 0..18.
 
 **Open items.** No launcher calls `CloneAccount` yet (Q6a: one per untrusted room; the broker/tmpd of a shell in the shell's
 room job are Q6a too). `netd`'s part waits for N4/N6. `fsd` does not serve one request per account per pass (ADR-0262 open
