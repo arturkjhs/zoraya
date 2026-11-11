@@ -524,6 +524,16 @@ pub(crate) fn rt_errno(status: Status, call: Call) -> i32 {
     errno::from_status_seen(status, call, zoraya_rt::last_refusal())
 }
 
+/// As [`rt_errno`], with the field read earlier: by a caller that makes other
+/// calls (which can be refused too) before it maps the failing one's status.
+pub(crate) fn rt_errno_seen(
+    status: Status,
+    call: Call,
+    seen: Option<zoraya_abi::quota::QuotaField>,
+) -> i32 {
+    errno::from_status_seen(status, call, seen)
+}
+
 fn map(length: i64, flags: i64, fd: i64) -> Result<i64, i32> {
     if flags & MAP_SHARED != 0 || flags & MAP_ANONYMOUS == 0 || fd != -1 {
         // File and shared mappings are out of scope (ADR-0103 item 12).

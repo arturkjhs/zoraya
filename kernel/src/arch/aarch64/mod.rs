@@ -104,7 +104,9 @@ pub fn mask_interrupts() {
 /// # Safety
 ///
 /// The vectors are installed and the interrupt controller is set up, so an
-/// interrupt can be handled.
+/// interrupt can be handled, and the caller holds no spinlock (a handler that
+/// took the same lock would panic; only the test kernel counts the locks, in
+/// `steps::pause`).
 pub unsafe fn unmask_interrupts() {
     // SAFETY: the caller's contract. Not `nomem`, as in `mask_interrupts`.
     unsafe { asm!("msr daifclr, #3", options(nostack, preserves_flags)) };

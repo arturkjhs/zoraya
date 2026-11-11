@@ -20,7 +20,9 @@ use crate::arch;
 #[cfg(feature = "qemu-test")]
 static HELD: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-/// The number of locks held now.
+/// The number of locks held now. Only the test kernel counts them, and only
+/// `steps::pause` asserts that there are none: the normal kernel relies on
+/// its callers (ADR-0270 open questions).
 #[cfg(feature = "qemu-test")]
 pub fn held() -> usize {
     HELD.load(Ordering::Relaxed)

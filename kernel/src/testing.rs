@@ -2334,8 +2334,11 @@ static HELD: SpinLock<(u64, u64)> = SpinLock::new((0, 0));
 /// Takes frames until only `leave` are free, for tests of exhaustion from a
 /// process, and returns how many are held.
 pub fn hold_frames(leave: u64) -> u64 {
+    // The reaper's queue first: `settled_stats` yields, and no lock may be
+    // held while it does. The frames this loop takes come from the free ones.
+    crate::reaper::drain();
     let mut held = HELD.lock();
-    while frames::settled_stats().free > leave {
+    while frames::stats().free > leave {
         let Ok(frame) = frames::alloc() else {
             break;
         };
