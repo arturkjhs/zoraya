@@ -140,8 +140,12 @@ then files: asks Delete docs?
 key ret
 then files: Deleted docs.
 # The first terminal: power off.
+# Its focused title bar is waited for before any key: keyboard and tablet are
+# two devices, and on a slow guest the keys were read before focus moved and
+# went to the file manager (CI 43014436719, step 113 timed out).
 click 85 400
-pause 300
+region 130 76 100 4 f7f7f8
+pause 500
 origin 73 106
 type poweroff\r
 exit
