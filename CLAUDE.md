@@ -73,13 +73,18 @@ The host has crashed from memory exhaustion (`docs/backlog.md`, the memory entri
     crates that depend on them, and the QEMU steps that cover the changed paths (`tools/test-map.txt`; a path not
     in the map runs every step), under HVF, in parallel. Add a line to the map when you add a directory.
   - `make test-par`: every step, in parallel lanes (at most 3 QEMU guests and one host-test job, under the
-    watchdog). `make test`: every step, one after another.
-  - Locally the TCG runs, the tour's second run and crash rounds past 2 are skipped; CI runs them all, and `FULL=1`
-    runs them here.
-- Before a merge, run the full CI on the branch: push the tag `candidate/BRANCH` on its head (or
-  `gh workflow run test.yml --ref BRANCH`). A green full run there replaces the local `make test` from a clean
-  checkout; merge only when it is green. A stage is not done until that run, and then `main`'s, pass. Run them; do
-  not infer them.
+    watchdog). `make test`: every step, one after another. These are for the architect and for CI's own checks;
+    an agent session does not run them, nor a full GUI run (`FULL=1`, every `GUI_RUNS`).
+  - Locally the TCG runs, the tour's second run and crash rounds past 2 are skipped; CI runs them all.
+- Locally run only `make check` and `make test-changed`; CI does the rest. A merge candidate (the tag
+  `candidate/BRANCH` on the branch's head, a pull request, or `gh workflow run test.yml --ref BRANCH`) runs the
+  steps its change touches (`tools/ci-plan.sh`, the map of `make test-changed`) and a smoke set (boot, the shell's
+  files script, one GUI run, the POSIX hello script). The full set (`tools/ci-tests.txt`, what `make test` runs)
+  runs nightly on `main`, on demand (`gh workflow run test.yml --ref BRANCH -f full=true`) and on a tag
+  `candidate-full/NAME` that the orchestrator pushes before every stage tag.
+- Before a merge, the candidate run on the branch must be green; merge only when it is. A stage is not done until a
+  full run of its head (`candidate-full/`), and then `main`'s, pass. Run them; do not infer them. A red nightly run
+  is the first item of the next session.
 - Never claim that a test passes, or report a number or a behaviour, unless you ran the command that shows it in this
   session.
 - Logic that does not need hardware lives in a separate `no_std` crate under `crates/`, with host tests
