@@ -24,6 +24,7 @@ use zoraya_user::{
 const MASKED_MAX_NS: u64 = 0x7013;
 const MASKED_MAX_UNITS: u64 = 0x7015;
 const CANCELLED: u64 = 0x7016;
+const HEAP_BACKING: u64 = 0x7017;
 const FREE_FRAMES: u64 = 0x7006;
 const PAGE: u64 = 4096;
 /// One step of ADR-0270 point 2: 64 pages.
@@ -87,6 +88,22 @@ fn cancelled() -> u64 {
 
 fn free_frames() -> u64 {
     raw_syscall(FREE_FRAMES, [0; 6]).1
+}
+
+/// The free frames plus the frames the kernel heap has taken so far. The heap
+/// grows by 1 MiB at a time and never gives frames back, so a kill that makes
+/// it grow (more CPUs, more concurrent allocations) moves frames from free to
+/// the heap without leaking any: this sum is what must return to its start.
+/// Both calls wait for the reaper to be idle first.
+fn frames_accounted() -> u64 {
+    loop {
+        let before = raw_syscall(HEAP_BACKING, [0; 6]).1;
+        let free = free_frames();
+        // The heap did not grow between the two reads.
+        if raw_syscall(HEAP_BACKING, [0; 6]).1 == before {
+            return free + before / 4096;
+        }
+    }
 }
 
 fn nap(ms: u64) {
@@ -317,35 +334,65 @@ fn churn(snapshots: bool) -> i32 {
 /// charge: the room's use and the free frames return to what they were once
 /// the reaper is idle.
 fn a_kill_between_steps_leaves_nothing() {
+    // The duration of one call of the loops (create and close of `BIG`),
+    // the median of 3, with no kill. The children loop for ever, so a kill
+    // at delay `d` meets them at some phase of a call; the delays sweep
+    // from 0 (before the child has run: a miss, still checked for leaks) to
+    // the child's start-up plus 1.5 calls, in 60 steps, cycled. The sweep
+    // spans at least 20 ms of calls, whatever the host's speed.
+    let mut samples = [0u64; 3];
+    for sample in &mut samples {
+        let start = clock_monotonic();
+        let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
+        handle_close(object).expect("close");
+        *sample = clock_monotonic() - start;
+    }
+    samples.sort_unstable();
+    let call_ms = samples[1] / 1_000_000;
+    let span_ms = 100 + call_ms.max(20) * 3 / 2;
+    println!(
+        "t_bound: calibration: one call takes {} us; kill delays sweep 0..{span_ms} ms",
+        samples[1] / 1000
+    );
     for role in [&b"create-loop"[..], b"snapshot-loop", b"contiguous-loop"] {
         // The first round lets the kernel heap take the room it will use
         // (it keeps what it grew by); the next is the one that counts. A
         // kill may land at the child's return to EL0 and not inside the
-        // call, which leaves nothing either; so the round is repeated until
-        // a step point ended a call with `Cancelled`, which shows the
-        // cancel path ran (INV-0270-2).
-        kill_round(role, false);
+        // call, which leaves nothing either; so rounds are repeated until a
+        // step point ended a call with `Cancelled` (`steps::cancelled`
+        // counts every call a kill ended, whatever status the child saw),
+        // which shows the cancel path ran (INV-0270-2).
+        kill_round(role, false, 150);
         let mut landed = false;
-        for _ in 0..8 {
+        let mut rounds = 0;
+        while rounds < 120 {
             let before = cancelled();
-            kill_round(role, true);
+            kill_round(role, true, (rounds % 60) * span_ms / 60);
+            rounds += 1;
             if cancelled() > before {
                 landed = true;
                 break;
             }
         }
-        assert!(landed, "{role:?}: no kill ended a call between steps");
+        assert!(
+            landed,
+            "{role:?}: no kill ended a call between steps in {rounds} rounds"
+        );
+        println!(
+            "t_bound: {}: a kill ended a call between steps in round {rounds}",
+            core::str::from_utf8(role).unwrap_or("?")
+        );
     }
 }
 
-fn kill_round(role: &[u8], strict: bool) {
-    let free = free_frames();
+fn kill_round(role: &[u8], strict: bool, delay_ms: u64) {
+    let free = frames_accounted();
     let room = job_create(JOB, JobFlags::POSIX).expect("job");
     // The room's own record is charged to it, so "nothing left" is the use
     // it began with.
     let base = job_get_usage(room, false).expect("usage").memory.used;
     let p = child(room, role).expect("spawn");
-    nap(150);
+    nap(delay_ms);
     masked(true);
     job_kill(room).expect("kill");
     let record = wait_exit(p);
@@ -353,7 +400,8 @@ fn kill_round(role: &[u8], strict: bool) {
     // A zombie keeps its record charged until its last handle closes.
     handle_close(p).expect("close");
     let mut tries = 0;
-    while (free_frames() != free || job_get_usage(room, false).expect("usage").memory.used != base)
+    while (frames_accounted() != free
+        || job_get_usage(room, false).expect("usage").memory.used != base)
         && tries < 200
     {
         nap(10);
@@ -363,7 +411,7 @@ fn kill_round(role: &[u8], strict: bool) {
     if strict {
         assert_eq!(usage.memory.used, base, "{role:?}: the room's use");
         assert_eq!(usage.processes.used, 0, "{role:?}: the room's processes");
-        assert_eq!(free_frames(), free, "{role:?}: frames");
+        assert_eq!(frames_accounted(), free, "{role:?}: frames");
         println!(
             "t_bound: job_kill during {}: nothing left; {} us masked",
             core::str::from_utf8(role).unwrap_or("?"),
@@ -378,7 +426,7 @@ fn kill_round(role: &[u8], strict: bool) {
 /// and the frames back (INV-0270-2).
 fn teardown(label: &str, short: &[u8], long: &[u8]) {
     let room = job_create(JOB, JobFlags::NONE).expect("job");
-    let free = free_frames();
+    let free = frames_accounted();
     masked(true);
     units(true);
     let p = child(room, short).expect("spawn");
@@ -416,12 +464,12 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
     assert!(kill_units <= MAX_UNITS, "{label}: kill {kill_units} units");
     // The frames are back (INV-0270-2 for a killed process).
     let mut tries = 0;
-    while free_frames() != free && tries < 100 {
+    while frames_accounted() != free && tries < 100 {
         nap(10);
         tries += 1;
     }
     assert_eq!(
-        free_frames(),
+        frames_accounted(),
         free,
         "{label}: frames after the exit and the kill"
     );
@@ -442,7 +490,7 @@ fn teardown_sites() {
 /// besides and then small objects until its table is full (1024 handles).
 /// Then it waits, to end by itself or to be killed.
 fn crowd(mapped: bool, wait_ms: u64) -> i32 {
-    let fit = free_frames() / 2 / 64;
+    let fit = frames_accounted() / 2 / 64;
     let count = if mapped { fit.min(256) } else { fit.min(400) };
     for _ in 0..count {
         let object = memory_create(STEP, MemoryFlags::NONE).expect("create");

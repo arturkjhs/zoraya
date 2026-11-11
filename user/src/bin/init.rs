@@ -328,6 +328,17 @@ fn main() -> i32 {
             devices.inputs.len()
         );
     }
+    // The network driver (ADR-0221 item 4): started when a virtio-net
+    // device is alone on its page. There is no `netd` yet (N2), so nobody
+    // holds the other end of its channel; `init` keeps it open and the
+    // driver waits. Not supervised before `netd` exists (N2 adds that).
+    let _ethd = devices.net.and_then(|device| {
+        let started = zoraya_user::gui::start_driver("ethd", device);
+        if started.is_none() {
+            println!("init: the network driver did not start");
+        }
+        started
+    });
     loop {
         if stack.is_none()
             && storage_allowed

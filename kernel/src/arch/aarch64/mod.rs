@@ -46,6 +46,18 @@ pub fn pa_bits() -> u32 {
     }
 }
 
+/// `ID_AA64ISAR0_EL1`: which instruction-set extensions the CPU has (AES and
+/// SHA in bits 4 to 15, RNDR in 60 to 63). Printed at boot for ADR-0227's
+/// open question and the provider check of the plan's N1.
+pub fn isar0() -> u64 {
+    let v: u64;
+    // SAFETY: reading an ID register has no side effects and is permitted at EL1.
+    unsafe {
+        asm!("mrs {}, id_aa64isar0_el1", out(reg) v, options(nomem, nostack, preserves_flags))
+    };
+    v
+}
+
 /// `MPIDR_EL1`.
 pub fn mpidr() -> u64 {
     let v: u64;

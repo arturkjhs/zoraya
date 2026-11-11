@@ -415,6 +415,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-nic"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-posix"
 version = "0.1.0"
 dependencies = [
@@ -611,6 +619,7 @@ dependencies = [
  "zoraya-proto-file",
  "zoraya-proto-gui",
  "zoraya-proto-input",
+ "zoraya-proto-nic",
  "zoraya-proto-posix",
  "zoraya-proto-term",
  "zoraya-proto-tty",
@@ -628,6 +637,7 @@ dependencies = [
  "zoraya-virtio",
  "zoraya-virtio-gpu",
  "zoraya-virtio-input",
+ "zoraya-virtio-net",
 ]
 
 [[package]]
@@ -649,6 +659,16 @@ dependencies = [
 name = "zoraya-virtio-input"
 version = "0.1.0"
 dependencies = [
+ "zoraya-test-alloc",
+ "zoraya-virtio",
+]
+
+[[package]]
+name = "zoraya-virtio-net"
+version = "0.1.0"
+dependencies = [
+ "zoraya-proto-nic",
+ "zoraya-protocol",
  "zoraya-test-alloc",
  "zoraya-virtio",
 ]

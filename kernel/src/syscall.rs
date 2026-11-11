@@ -1249,6 +1249,9 @@ pub mod test_calls {
     /// Returns how many times a step point ended a call with `Cancelled`
     /// because its process was killed (INV-0270-2).
     pub const CANCELLED: u64 = 0x7016;
+    /// Returns the bytes the kernel heap has taken from the frames so far
+    /// (they never go back), once the reaper is idle.
+    pub const HEAP_BACKING: u64 = 0x7017;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1270,6 +1273,7 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::FIRST_LINE => Some(Ok(u64::from(crate::device::first_line()))),
         test_calls::LINE_ENABLED => Some(Ok(u64::from(crate::gic::is_enabled(a0 as u32)))),
         test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::settled_stats().free)),
+        test_calls::HEAP_BACKING => Some(Ok(crate::memory::heap::settled_stats().backing as u64)),
         test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::settled_stats().live as u64)),
         test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
         test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames(a0))),

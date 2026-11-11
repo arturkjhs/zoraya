@@ -59,14 +59,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	t_streams t_snapshot t_image t_suspend t_quota t_bound posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	ethd t_net t_streams t_snapshot t_image t_suspend t_quota t_bound posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui run-net test-net debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -223,6 +223,40 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
+
+# N1 (ADR-0221, ADR-0230): the test kernel with a virtio-net device on QEMU's
+# restricted user network, whose `t_net` (ethd, ARP through both paths) is
+# the point; the pcap stays in target/test-logs/. A host whose QEMU has no
+# user-mode networking skips the step, listed by `make test`'s summary (INV-0230-3);
+# on CI (CI set) a skip, and any other failure of the probe, fails it.
+NET_DISK := $(BUILD)/net-disk.img
+NET_PCAP := target/test-logs/test-net.pcap
+# Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
+NET_FWD_PORT := 47015
+test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
+	@$(RUN_QEMU) --probe-net; rc=$$?; \
+	if [ $$rc = 1 ]; then \
+		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
+		echo "[net] skipped: QEMU has no user-mode networking"; exit 0; \
+	elif [ $$rc != 0 ]; then echo "[net] FAIL: the networking probe failed (exit $$rc)"; exit 1; fi; \
+	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
+	run() { accel=$$1; shift; tools/net-poke.sh $(NET_FWD_PORT) 240 & poke=$$!; \
+		$(RUN_TEST) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
+		rc=$$?; kill $$poke 2>/dev/null; wait $$poke 2>/dev/null; return $$rc; }; \
+	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" && \
+	target/debug/zoraya-fsck $(NET_DISK) && \
+	hex="$$(od -An -tx1 -v $(NET_PCAP) | tr -d ' \n')" && \
+	( case "$$hex" in *08060001080006040002525[0-9a-f]0a000202*) ;; \
+		*) echo "[net-auto] FAIL: no ARP reply from the gateway in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( case "$$hex" in *080600010800060400025254001234560a00020f*) ;; \
+		*) echo "[net-auto] FAIL: the guest answered no ARP request for 10.0.2.15 in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" )
+
+# An interactive machine on QEMU's user network without `restrict`: the guest
+# reaches the Internet through the host, for trying things by hand.
+run-net: $(KERNEL) $(DISK)
+	$(RUN_QEMU) --net --disk $(DISK) $(KERNEL)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell
@@ -542,7 +576,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-ethd-maps
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -615,6 +649,10 @@ check-charged-alloc:
 check-untrusted-gate:
 	tools/check-untrusted-gate.sh
 
+# INV-0280-1: ethd maps only its queue memory and takes no view of a frame slot.
+check-ethd-maps:
+	tools/check-ethd-maps.sh
+
 check-test-caps:
 	@bad=""; \
 	for f in crates/*/tests/*.rs; do \
@@ -642,8 +680,8 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
-TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
+TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -668,7 +706,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

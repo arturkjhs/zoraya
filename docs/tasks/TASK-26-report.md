@@ -271,3 +271,163 @@ at or under about 6 minutes; the wall time of the run against the previous 27 mi
   `log-triage`, `test-runner`) for CI and test runs.
 - **Next:** N1 (the driver answers ARP) on `work/n1` from main, then N2, Q5, Q3 (fsd), Q4, N3, N4 with Q3's netd account,
   N5, Q6a, Q6b, N6, Q7. Gate: closed (`make check-untrusted-gate`; fork-bomb and masked-time rows now run in `test-qemu`).
+
+## N1: the driver answers ARP (branch `work/n1`)
+
+### Built
+
+- `crates/zoraya-virtio-net`: the virtio-net driver's logic over `zoraya-virtio`'s traits (`#![forbid(unsafe_code)]`):
+  `VERSION_1` plus `MAC` and `STATUS` only, one receive and one transmit queue of 128 descriptors, two descriptors per
+  buffer, the MAC from the configuration space, slot states, every device value checked (table below). Its module
+  `serve` is the client-facing half (messages in and out over a `Host` trait; what a full channel refused is kept as
+  bounded state and written again). 34 host tests against the fake device and a fake channel, with a 200-seed random
+  mix of requests and lies.
+- `crates/zoraya-proto-nic`: the frame protocol (`Info`, `Attach`, `Transmit`, `Release`; pushed `Received`, `Sent`,
+  `LinkChanged`, and `Rejected` with a reason for a refused transmit) and `arp`, a bounds-checked ARP parser/builder/answerer; 12 host tests (truncations, wrong hardware or
+  protocol type or sizes, operations, multicast sender, total decoding of every message).
+- `user/src/bin/ethd.rs` (the process), `t_net.rs` (plays `netd` against the real device), `init` starts `ethd` when a
+  virtio-net device is alone on its page (`gui::scan` gained `net`), the kernel prints `ID_AA64ISAR0_EL1`
+  (`kernel/src/main.rs`), a kernel test `network_driver_answers_arp`.
+- `tools/run-qemu.sh --net`, `--net-pcap FILE`, `--net-capture-all` (`--net` with `--gui` refused); `make test-net`
+  (a step of `make test`, `tools/ci-tests.txt`, a lane of `tools/test-par.sh`) and `make run-net`.
+- `fuzz/fuzz_targets/net_rx.rs` (ARP parser, a hostile device, and the client half: arbitrary messages to `serve::Server`
+  over a channel that is sometimes full). Not run under libFuzzer: no nightly or `cargo-fuzz` on this host. Its body was
+  compiled and driven with 20000 random inputs in a scratch crate outside the repo (no panic).
+- Docs: `docs/design.md` "Network driver" (what exists, measurements, the provider check), ADR-0221's open-question note
+  (rule 6).
+
+### Decisions where the ADRs are silent
+
+- Proposed ADR-0280 (slot layout; recommendation: accept Option B, header in the driver's queue memory, so a slot is a
+  bare frame and the driver never reads frame bytes). Inside it: `Received.at` (wake time), `Rejected` (with a reason)
+  reports refused transmits and `Sent` only finished ones, nothing pushed is lost on a full channel (bounded state, not a
+  queue), one contiguous object, any undecodable message ends the driver.
+- The plan says the runner sends the ARP who-has through SLIRP. SLIRP asks the guest for its MAC only when the host
+  starts a connection to it and does not know it yet. So `t_net` sends the who-has for the gateway itself, and the reply
+  arrives through the receive path. For the acceptance (the guest answers an ARP request for `10.0.2.15`), `make
+  test-net` runs QEMU with `--net-forward 47015` (a `hostfwd` to the guest) while `tools/net-poke.sh` connects to that
+  port every quarter second; SLIRP then asks who has `10.0.2.15`, `t_net` answers by `arp::answer` through a transmit
+  slot, and the step greps the pcap for both the gateway's reply and the guest's. Try 1 showed IP frames only: SLIRP
+  had learned the guest's MAC from `t_net`'s own who-has, which had sender `10.0.2.15`. Try 2, with sender `10.0.2.30`,
+  works (HVF: 1 request answered).
+- No new crate dependency: `docs/dependencies.md` unchanged.
+- The provider check is recorded in `docs/design.md`, not in `docs/research/network/survey.md` (CLAUDE.md forbids edits to
+  `docs/research/`).
+
+### Invariants delta
+
+INV-0221-2: the driver half is checked (`cargo test -p zoraya-virtio-net -p zoraya-proto-nic`); the row stays `not yet
+applicable (stage 8)` for `netd`'s half (note in ADR-0221's open questions). New INV-0280-1 (proposed ADR): `checked:
+make check-ethd-maps` (a source check, part of `make check` and CI; the kernel cannot list a process's mappings, so
+there is no check in QEMU). INV-0230-1 and -3 are partly covered (`restrict=on` under `--test`; the step skips without
+user-mode networking, listed by `make test`'s summary, and fails on CI) but their checks (printed command line assertion, fake `qemu` runner test) are not written: still `not yet
+applicable (stage 8)`.
+
+### Where a device-controlled number enters, and where it is checked (for the reviewer)
+
+| Number | Entry | Check |
+|---|---|---|
+| used index | `Queue::take`, `zoraya-virtio/src/queue.rs` | `new > outstanding` is `Error::Device` |
+| used entry id | same | `>= size` or not offered is `Device`; marks it not offered, so a repeat is `Device` |
+| used length, receive | `Net::poll` | below 12 or above 12 + 1514 is `Device`; 12 to 25 is a runt, dropped and reposted |
+| used head, both queues | `Net::poll` | odd, `slot >= 64` or slot not in the matching state is `Device` |
+| used length, transmit | `Net::poll` | ignored (not trusted, not used) |
+| feature bits | `queue::begin` | agreed = device & wanted; `MAC` missing is `Unusable` |
+| queue size | `Queue::set_up` | `QUEUE_NUM_MAX < 128` is `Error::Queue` |
+| MAC, link | `Net::new`, `read_link` | zero or multicast MAC is `Unusable`; link is one bit |
+| client slot, length | `Net::release`, `transmit` | slot range, state, length 14..=1514 before any index; refused is counted |
+| client attach | `Server::attach`, `Net::attach` | one pinned run of at least 196,608 bytes, `checked_add` on the address |
+| client message | `Server::handle` (`serve.rs`) | `Header::decode` and `decode` are total; sequences bounded at 64; unknown ordinal ends the driver |
+| frame bytes | none in `ethd` | the driver reads no slot; `t_net` parses with `arp::parse` (checked slices) |
+
+Buffers under DMA: the queue memory and the client's object are pinned (`dma_pin`) before the device sees an address, and
+are unpinned only after `Net::reset()` returned true (the device is stopped, `Ethd::stop`). The client's handle is closed
+after the pin; the pin keeps the frames. The slot buffers are posted once per slot and re-posted only after the client's
+`release` (or at once if the client could not be told), tracked per slot (`Posted`/`Lent`, `Free`/`Queued`), so the
+device never holds a slot the client believes it owns, except the client's own transmit slots, which it must not
+rewrite until `Sent` (the client's frames are its own data). If `ethd` is killed with buffers in flight, the pins'
+last handles close without `dma_unpin`: the frames stay quarantined (ADR-0054, INV-0054-3 and -7). The kernel's
+`dma_release_quarantine` resets the device and releases them (`release_quarantine` in `kernel/src/device.rs`, ADR-0070);
+the next `ethd` calls it first, before `device_map`, as `blkd` and `inputd` do (not `Net::new`, whose `begin` also
+resets, but later). `t_net` now closes the channel and waits for `ethd` to end by itself (exit code 0: reset and both
+unpinned), then calls `dma_release_quarantine` and expects nothing to release. Not tested: a kill with frames in flight
+(open item for N2, with INV-0221-3).
+
+### Tests run
+
+- `cargo test -p zoraya-proto-nic -p zoraya-virtio-net`: 12 and 34 passed (after the review fixes).
+- `make check`: all 14 steps pass (fmt, clippy, adr-check, the `check-*` including `check-ethd-maps`, `check-ci-jobs`).
+- `make test-net` (HVF), after the review fixes: PASS, 104 passed and 9 expected failures of the test kernel; `t_net`:
+  the gateway's ARP reply, 1 request for `10.0.2.15` answered, `ethd` ended by itself (reset, unpinned, exit 0),
+  `dma_release_quarantine` found nothing; `zoraya-fsck` clean; the pcap holds both replies. `FULL=1 make test-net`
+  (HVF then TCG): both PASS, same lines.
+- `make test-changed` after the review fixes (HVF, local; the Makefile changed, so every step but `test-net`): all pass
+  (`test-boot`, `test-qemu`, `test-libposix`, `test-files`, `test-crash`, `test-posix`, `test-posix-gui`, `test-tour-gui`,
+  `test-gui`; 404 s). The `t_bound` failure of `auto-smp4-2g` that the first run showed (also on `main`) did not occur in
+  this run: it is a flake of Q2's reaper, not N1's, and is not fixed here.
+- Not run: the fuzz target under libFuzzer; `make test-boot` with `--net` (the normal kernel starts `ethd` under `make run-net`, which no
+  step boots).
+
+### Measurements (`t_net`, 20 rounds, a single run each)
+
+| | HVF | TCG |
+|---|---|---|
+| ARP round trip (guest transmit to the reply read), median / min / max | 42 / 40 / 258 us | 384 / 372 / 1309 us |
+| the driver's wake to the message read in the client, median / max | 7 to 8 / 11 us | 190 / 794 us |
+| `ID_AA64ISAR0_EL1` | `0x0221100110212120` (RNDR 0) | `0x0000000000011120` (RNDR 0) |
+
+SLIRP's ARP behaviour under `restrict=on`: it answers the gateway's who-has for `10.0.2.2` with MAC `52:55:0a:00:02:02`
+at once; it sent no request of its own.
+
+### The provider check (ADR-0228)
+
+ring works: `rustls 0.23.46` (`default-features = false`, `ring`, `tls12`) with `ring 0.17.14` builds for
+`aarch64-unknown-none` with `clang` and musl's headers from `build/sysroot` as `-isystem`, ring's feature
+`less-safe-getrandom-custom-or-rdrand`, and `getrandom 0.2` (`custom`) with a registered function. `cargo build
+--release` produced ring's C objects and rlibs. Recommendation: keep ring for native programs as ADR-0228 says; N5
+decides the randomness source and runs it on the target. No dependency row was added (nothing links ring yet).
+
+### Handoff
+
+- State: branch `work/n1` from `main` at `9a74448`, local only.
+- By hand: `make run-net` (interactive, with Internet through SLIRP; the console prints `ethd: virtio-net 52:54:00:12:34:56`
+  and `ID_AA64ISAR0_EL1 ...` at boot); `make test-net` (add `FULL=1` for TCG); `target/test-logs/test-net.pcap` opens in
+  Wireshark.
+- Review: read `crates/zoraya-virtio-net/src/lib.rs` and `tests.rs`, `crates/zoraya-proto-nic/src/lib.rs`,
+  `crates/zoraya-virtio/src/queue.rs` (`Queue::take`, `begin`), `user/src/bin/ethd.rs`, `user/src/bin/t_net.rs`,
+  `tools/run-qemu.sh`, `docs/adr/0280-the-frame-slot-layout.md`, the `Makefile` `test-net` recipe, `fuzz/fuzz_targets/net_rx.rs`.
+- Open for N2: `netd` must create the object `CONTIGUOUS`; supervise `ethd` (`init` does not); the
+  kill-with-frames-in-flight test; INV-0230-1/-3 checks; `fuzz/Cargo.lock` is not updated (the fuzz workspace was not
+  built; cargo regenerates it on the first run).
+
+## CI image
+
+Why: on 2026-11-11 Ubuntu's mirrors were slow or unreachable for hours (a runner's apt fetched 1.4 MB in 8 minutes and
+the `build` job was cancelled in its apt step). Now the jobs of `.github/workflows/test.yml` run in an image with
+everything installed.
+
+- **Contents** (`.github/ci/Dockerfile`, `ubuntu:24.04` by tag: no digest was readable offline): build-essential,
+  clang, lld, llvm, zstd, `qemu-system-arm`, git, curl, patch, perl, python3, ruby, xz/bzip2/unzip/zip, gawk, and the
+  Rust toolchain of `rust-toolchain.toml` (channel, components, targets) in `/usr/local/{rustup,cargo}`, on `PATH`.
+  Jobs run as root; `safe.directory` is set system-wide.
+- **Tag:** `tools/ci-image-tag.sh` = first 16 hex digits of SHA-256 of `.github/ci/Dockerfile`,
+  `tools/ci-apt-install.sh` and `rust-toolchain.toml`. Image: `ghcr.io/<owner>/<repo>/ci:<tag>` (lowercase) and `:latest`.
+  Both workflows call the script.
+- **Rebuild:** `gh workflow run ci-image.yml --ref BRANCH` (always builds); it also runs on a push to `main` that
+  changes those files, and on `candidate/**` and `candidate-full/**` tags (skipped when the tag exists).
+- **Fallback chain:** test.yml's job `image` logs in to ghcr.io with the job token and runs `docker manifest inspect`;
+  `ref` is empty on any failure. With a ref, `build`, `checks` and `tests` use `container:` (no apt, no rustup
+  install). Without one, `container` is `null` (the bare runner) and the guarded steps install as before, through
+  `tools/ci-apt-install.sh`: skip when clang and zstd exist; 3 attempts on the runner's mirror; then
+  `mirrors.edge.kernel.org` and `mirror.math.princeton.edu` (noble, -updates, -security, x86_64 only); then the
+  cached .debs without the network. The Dockerfile builds with the same script.
+- **To verify on the first run** (not testable offline): (1) `ci-image.yml` builds and pushes (the push needs the
+  repository's Actions workflow permissions to allow packages; the package is created private and linked to the
+  repo); (2) `image` finds it (`image: ghcr.io/...` in its log); (3) `container: null` really is accepted when `ref`
+  is empty (run test.yml once before the image exists, e.g. on this branch); (4) with the image, the three jobs
+  start (the credentials are the job token, which needs `packages: read`; a fork's pull request has none and falls
+  back); (5) in the container: `git ls-files`, `make`, `qemu-system-aarch64`, rust-cache, `actions/cache` (zstd)
+  work; `check-host-paths` and `make check-ci-jobs` pass; (6) the ports build needs no tool the image lacks (the
+  runner image has more packages than the container).
+- **Build job time:** before, 3 min 10 s (green main run 42996307525, 2026-11-11, from the runner's own clang and
+  zstd). After: to be read from the first run with the image (`gh run view RUN --json jobs`).

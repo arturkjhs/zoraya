@@ -475,6 +475,10 @@ static TESTS: &[Test] = &[
         run: gui_from_a_process,
     },
     Test {
+        name: "network_driver_answers_arp",
+        run: network_driver_answers_arp,
+    },
+    Test {
         name: "text_renders_the_reference_digests",
         run: text_renders_the_reference_digests,
     },
@@ -1315,6 +1319,16 @@ fn storage_from_a_process() {
 /// configuration attaches them. Without them it passes having done nothing.
 fn gui_from_a_process() {
     let record = process::spawn_with_devices("t_gui")
+        .expect("program in the ramdisk")
+        .wait();
+    assert_eq!(record, exited(0));
+}
+
+/// N1 (ADR-0221, ADR-0230): `ethd` on a virtio-net device under `--net`,
+/// ARP through its transmit and receive paths. Without the device it passes
+/// having done nothing.
+fn network_driver_answers_arp() {
+    let record = process::spawn_with_devices("t_net")
         .expect("program in the ramdisk")
         .wait();
     assert_eq!(record, exited(0));

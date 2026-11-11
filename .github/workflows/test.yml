@@ -18,6 +18,14 @@
 # pushes before a stage's tag. A manual run without full=true is planned like
 # a candidate. A new push to a branch cancels its older run; on main every
 # merge keeps its own run, since a stage's tag waits for that run.
+#
+# The image (.github/ci/Dockerfile, built by ci-image.yml): the job `image`
+# computes its tag (tools/ci-image-tag.sh) and looks for it in ghcr.io. If it
+# exists, `build`, `checks` and `tests` run in it, with everything installed
+# (no apt at run time); if not (or ghcr.io cannot be read), `container:` is
+# null, the jobs run on the bare runner, and the steps guarded by
+# `needs.image.outputs.ref == ''` install what the image would have, with
+# tools/ci-apt-install.sh (retries, then other mirrors).
 name: make test
 
 on:
@@ -43,7 +51,41 @@ concurrency:
 permissions:
   contents: read
 
+# bash everywhere: in the image container a step's default shell is `sh -e`
+# (dash), which has no `shopt`.
+defaults:
+  run:
+    shell: bash
+
 jobs:
+  # Looks for the CI image of this checkout; outputs its reference, or nothing.
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      ref: ${{ steps.find.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find the image
+        id: find
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          repo=$(echo "ghcr.io/$GITHUB_REPOSITORY/ci" | tr '[:upper:]' '[:lower:]')
+          ref="$repo:$(tools/ci-image-tag.sh)"
+          # Any failure (no such tag, no access, ghcr.io down) means: no image.
+          if echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin \
+            && timeout 60 docker manifest inspect "$ref" >/dev/null; then
+            echo "image: $ref"
+            echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          else
+            echo "no image $ref: the jobs install their tools themselves"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
   # The jobs the tests job runs: all of tools/ci-tests.txt, or what the change
   # needs plus the smoke set (tools/ci-plan.sh).
   plan:
@@ -76,21 +118,49 @@ jobs:
   # tools and tests (built, not run) and the POSIX image (make ci-build), as
   # one archive whose files keep their times.
   build:
-    needs: plan
+    needs: [plan, image]
     if: ${{ needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    container: ${{ needs.image.outputs.ref && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', needs.image.outputs.ref, github.actor, github.token)) || null }}
     steps:
       - uses: actions/checkout@v4
+      # The runner's apt cannot always resolve the Ubuntu mirrors (temporary
+      # DNS failures): the .deb files are cached (the key names the package
+      # list), apt retries, the step tries 5 times 30 s apart, and the last
+      # attempt installs from the cache without the network.
+      # Without the image: the runner's apt cannot always reach the Ubuntu
+      # mirrors, so the .deb files are cached (the key names the package
+      # list) and tools/ci-apt-install.sh retries, tries other mirrors and
+      # last installs from the cache without the network.
+      - name: Restore the apt packages
+        if: ${{ needs.image.outputs.ref == '' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-debs
+          key: apt-debs-${{ runner.os }}-${{ runner.arch }}-clang-zstd-v1
       - name: Install clang (zcc, libc.a and the ports) and zstd
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang zstd
+        if: ${{ needs.image.outputs.ref == '' }}
+        run: |
+          # GitHub's Ubuntu images carry both: when they are there the network
+          # is not needed (the runners' mirrors have been slow or unreachable).
+          if command -v clang >/dev/null && command -v zstd >/dev/null; then
+            echo "clang $(clang --version | head -1) and zstd are installed: no apt"
+            exit 0
+          fi
+          APT_DEB_CACHE="$HOME/apt-debs" tools/ci-apt-install.sh clang zstd
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
       # target/: the dependencies and the workspace's crates (the key is
       # Cargo.lock, the toolchain and the job).
       - uses: Swatinem/rust-cache@v2.7.5
         with:
           shared-key: build
+          key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
       # ADR-0109: the fetch step is outside make test, as the toolchain's install is.
       - name: Cache the ports' archives
         uses: actions/cache@v4
@@ -106,7 +176,7 @@ jobs:
       # rebuilds more. Not the other sources: cargo would take an old time
       # for an unchanged file. A key that misses
       # builds everything, as before. If a restored build is ever wrong, change
-      # the prefix `ports-build-v1`.
+      # the prefix `ports-build-v2`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
         run: git ls-files -z ports tools/zcc | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
@@ -120,7 +190,7 @@ jobs:
             build/sysroot
             build/rootfs-posix
             build/workloads
-          key: ports-build-v1-${{ hashFiles('ports/**', 'tools/zcc/**') }}
+          key: ports-build-v2-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -139,8 +209,13 @@ jobs:
 
   # Steps that need nothing built.
   checks:
+    needs: image
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    container: ${{ needs.image.outputs.ref && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', needs.image.outputs.ref, github.actor, github.token)) || null }}
     strategy:
       fail-fast: false
       matrix:
@@ -158,14 +233,17 @@ jobs:
           - make check-ci-jobs
           - make check-charged-alloc
           - make check-untrusted-gate
+          - make check-ethd-maps
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2.7.5
         with:
           shared-key: checks
+          key: ${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}
           save-if: ${{ matrix.cmd == 'make clippy' }}
       - name: Run
         run: ${{ matrix.cmd }}
@@ -174,8 +252,12 @@ jobs:
   # the checkout's files get an old time, so that make and cargo find what
   # was built from them up to date and only run the tests.
   tests:
-    needs: [plan, build]
+    needs: [plan, build, image]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    container: ${{ needs.image.outputs.ref && fromJSON(format('{{"image":"{0}","credentials":{{"username":"{1}","password":"{2}"}}}}', needs.image.outputs.ref, github.actor, github.token)) || null }}
     # The tour's sessions are long under TCG, which is every accelerator on
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it); every other job stays
@@ -189,8 +271,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install QEMU, clang and zstd
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm clang zstd
+        if: ${{ needs.image.outputs.ref == '' }}
+        run: tools/ci-apt-install.sh qemu-system-arm clang zstd
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        if: ${{ needs.image.outputs.ref == '' }}
         run: rustup toolchain install
       - uses: actions/download-artifact@v4
         with:

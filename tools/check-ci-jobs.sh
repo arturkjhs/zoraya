@@ -100,6 +100,29 @@ listed=$(grep -c -E '^make ' "$list")
 if [ "${planned:-0}" != "$listed" ]; then
 	need "all $listed jobs of $list in the full plan (tools/ci-plan.sh with FULL=1 gives ${planned:-none})"
 fi
+# Every test step of TEST_STEPS must be in the full plan and in the plan of a
+# change the map does not know (which runs every step: plan-lib.sh's $all).
+for mode in full unmapped; do
+	if [ "$mode" = full ]; then
+		plan=$(FULL=1 sh tools/ci-plan.sh 2>/dev/null || true)
+	else
+		plan=$(CI_PLAN_PATHS="unmapped-path-for-check-ci-jobs/x" sh tools/ci-plan.sh origin/main 2>/dev/null || true)
+	fi
+	plan=$(echo "$plan" | sed -n 's/^tests=//p')
+	for step in $TEST_STEPS; do
+		case $step in
+		test-*) ;;
+		*) continue ;;
+		esac
+		case $step in
+		test-qemu) pat='"make test-qemu-' ;;
+		*) pat="\"make $step[\" ]" ;;
+		esac
+		if ! echo "$plan" | grep -E -q "$pat"; then
+			need "make $step in the $mode plan (tools/ci-plan.sh, plan-lib.sh's all)"
+		fi
+	done
+done
 if [ "$missing" -gt 0 ]; then
 	echo "check-ci-jobs: $missing missing" >&2
 	exit 1
