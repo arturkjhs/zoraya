@@ -418,10 +418,10 @@ impl<'a> Loadable<'a> {
     }
 }
 
-/// The kernel reserve is 1/32 of the frames free after boot `[assumption]`: the
+/// The kernel reserve is 1/64 of the frames free after boot `[assumption]`: the
 /// ADR's 1/16 refused the files manager's menu in the 256 MiB GUI test with the
 /// session at 214.8 of 215.7 MiB (Q1's report; a proposed change to the number).
-const KERNEL_RESERVE_DIVISOR: u64 = 32;
+const KERNEL_RESERVE_DIVISOR: u64 = 64;
 
 /// A process's place in its job's lists of members: one `Arc` each in the
 /// job's `processes` vector and in the scheduler's queues, rounded up.
@@ -777,7 +777,7 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
     // The reserve (ADR-0261 point 10): everything `init` starts is bounded by
-    // the frames free now less 1/32 for the heap's overhead and the fixed
+    // the frames free now less 1/64 for the heap's overhead and the fixed
     // allocations, so that the kernel always has room to refuse with.
     let free = crate::memory::frames::stats().free * zoraya_pmm::FRAME_SIZE;
     job.set_limits(zoraya_abi::quota::JobLimits {

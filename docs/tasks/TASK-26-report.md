@@ -35,7 +35,7 @@ Running report, updated after each part. Written by the Sonnet main session; rev
 - **`held`** is the whole of a job's memory once it is killed and empty. A per-holder figure needs identities the
   kernel does not keep (ADR-0261 open question).
 - **`failure value`**: the refusing field is in x1; the stubs expose only the status.
-- **Kernel reserve 1/32 instead of 1/16** (ADR-0261 point 10 is `[assumption]`): at 1/16 the 256 MiB GUI test
+- **Kernel reserve 1/64 instead of 1/16** (ADR-0261 point 10 is `[assumption]`): at 1/16 the 256 MiB GUI test
   (`files-manage:auto:2`) was refused 1.9 MB with the session at 214.8 of 215.7 MiB. At 1/32 it passes, with one
   `term: no memory for the window` line in the log, so the margin is thin. **For the architect:** the GUI's real need
   on 256 MiB is close to all of RAM; consider a smaller reserve still, or raising the guest.
@@ -77,3 +77,13 @@ Opus: the Q1 review.
   subagent reviews docs, tests and plain service code; report the cost per part by model.
 - **Cost per model, Q1:** not measured by the session (no counter is available to it); the architect's usage check says
   the main session ran at about 290k tokens of context per request. Recorded as the reason for the rules above.
+
+### Reserve: 1/64 (decided without the architect, after the candidate CI run failed at 1/32)
+
+The GUI session on 256 MiB really uses about 96% of RAM (the charge is within 0.5 MB of the frames in use; with no
+limit only 10.7 MB stays free). At 1/16 and at 1/32 `files-manage:auto:2` was refused (at 1/32: locally one 'no memory
+for the window' line, on CI a panic). The charge is accurate, so the margin cannot be won by charging less: the reserve
+is lowered to 1/64 (about 3.7 MB on 256 MiB, 1.9 MB on 128 MiB). **For the architect:** this changes ADR-0261 point 10's
+`[assumption]` (1/16); better answers are more RAM for the GUI test guests or a smaller GUI footprint. Revisit when the
+heap's real overhead is measured (ADR-0261 open question). The first candidate tag `candidate/work-q1` stays on its
+old commit (a published tag is not moved); the second run uses `candidate/work-q1-b`.

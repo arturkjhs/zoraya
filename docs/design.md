@@ -1410,7 +1410,7 @@ message to its writer). A request that would pass a limit fails with `OverQuota`
 refused it asserts `OVER_QUOTA`. Nothing is killed or slowed (CPU is Q4). `job_get_usage` reads `limit`, `used`, `peak`,
 `refused`, and the user/kernel split.
 
-`init`'s job holds the frames free after boot less 1/32 (the kernel reserve), and `init` puts `ttyd`, the broker and the
+`init`'s job holds the frames free after boot less 1/64 (the kernel reserve), and `init` puts `ttyd`, the broker and the
 shell in a session job with three quarters of that and 200 processes. `room new --untrusted` is still refused
 (`make check-untrusted-gate`; the list of tests that end the refusal is `tools/untrusted-gate.txt`).
 
