@@ -334,23 +334,40 @@ fn churn(snapshots: bool) -> i32 {
 /// charge: the room's use and the free frames return to what they were once
 /// the reaper is idle.
 fn a_kill_between_steps_leaves_nothing() {
+    // The duration of one call of the loops (create and close of `BIG`),
+    // the median of 3, with no kill. The children loop for ever, so a kill
+    // at delay `d` meets them at some phase of a call; the delays sweep
+    // from 0 (before the child has run: a miss, still checked for leaks) to
+    // the child's start-up plus 1.5 calls, in 60 steps, cycled. The sweep
+    // spans at least 20 ms of calls, whatever the host's speed.
+    let mut samples = [0u64; 3];
+    for sample in &mut samples {
+        let start = clock_monotonic();
+        let object = memory_create(BIG, MemoryFlags::NONE).expect("create");
+        handle_close(object).expect("close");
+        *sample = clock_monotonic() - start;
+    }
+    samples.sort_unstable();
+    let call_ms = samples[1] / 1_000_000;
+    let span_ms = 100 + call_ms.max(20) * 3 / 2;
+    println!(
+        "t_bound: calibration: one call takes {} us; kill delays sweep 0..{span_ms} ms",
+        samples[1] / 1000
+    );
     for role in [&b"create-loop"[..], b"snapshot-loop", b"contiguous-loop"] {
         // The first round lets the kernel heap take the room it will use
         // (it keeps what it grew by); the next is the one that counts. A
         // kill may land at the child's return to EL0 and not inside the
-        // call, which leaves nothing either; so the round is repeated until
-        // a step point ended a call with `Cancelled`, which shows the
-        // cancel path ran (INV-0270-2).
+        // call, which leaves nothing either; so rounds are repeated until a
+        // step point ended a call with `Cancelled` (`steps::cancelled`
+        // counts every call a kill ended, whatever status the child saw),
+        // which shows the cancel path ran (INV-0270-2).
         kill_round(role, false, 150);
         let mut landed = false;
         let mut rounds = 0;
-        // Each round kills at another moment (150..250 ms after the start,
-        // in steps that do not divide the child's loop), so on a fast host
-        // too some kill meets a call between its steps. Every round is
-        // checked for leaks whether it landed or not.
-        while rounds < 60 {
+        while rounds < 120 {
             let before = cancelled();
-            kill_round(role, true, 150 + (rounds * 37) % 101);
+            kill_round(role, true, (rounds % 60) * span_ms / 60);
             rounds += 1;
             if cancelled() > before {
                 landed = true;
