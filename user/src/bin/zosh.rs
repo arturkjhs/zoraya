@@ -85,6 +85,8 @@ const SETTINGS: &str = "/config/settings";
 const ROOMS: &str = "/config/rooms";
 /// The compositor's description, for the desktop's settings (ADR-0169).
 const COMPD: &str = include_str!("../../describe/system/compd.cmd");
+/// The network service's description, for the `net.*` settings (ADR-0229).
+const NETD: &str = include_str!("../../describe/system/netd.cmd");
 const START: &str = "/config/start.zosh";
 const HISTORY: &str = "/config/history";
 /// A line end inside one history entry, as `/config/history` keeps it: the
@@ -603,6 +605,9 @@ struct Z {
     /// The session's broker beside the shell and its temporary service's
     /// root (ADR-0153 rule 10), from `init` at slots 7 and 8.
     broker: Option<Broker>,
+    /// The shell's root network connection (slot 9, ADR-0221 item 4), from
+    /// which a command that needs the network's status gets a narrowed one.
+    net: Option<Handle>,
     tmp: Option<File>,
     next_tmp: u32,
     /// The `/tmp` directory of the line being started, once one is made.
@@ -928,7 +933,7 @@ impl Z {
 
     /// Opens every entry of `plan` and sends the start-up record (rule 8)
     /// with them on a new channel, whose other end the program gets.
-    fn table(&self, plan: &[grants::Planned]) -> Result<Table, String> {
+    fn table(&self, plan: &[grants::Planned], net_status: bool) -> Result<Table, String> {
         let merged = grants::merge(plan);
         let gone = || zoraya_command::error("zosh", None, "too many entries or handles", &[]);
         let mut handles: Vec<ChannelEntry> = Vec::new();
@@ -967,10 +972,29 @@ impl Z {
             rights: ChannelObject::RIGHTS,
             transfer: Transfer::Move,
         });
-        let slots = native::Slots {
+        let mut slots = native::Slots {
             report: (handles.len() - 1) as u8,
             ..native::Slots::NONE
         };
+        // `needs net-status` of a base-system command (ADR-0224 item 2): a
+        // connection with the `status` right and no scope, made from the
+        // shell's own, so it can ask the state and nothing else. Without a
+        // network, or if `netd` refuses, the command gets none and says so.
+        if net_status
+            && let Some(root) = self.net
+            && let Ok(status) = zoraya_user::netclient::narrow(
+                root,
+                zoraya_abi::net::rights::STATUS,
+                zoraya_abi::net::Scope::EMPTY.as_bytes(),
+            )
+        {
+            handles.push(ChannelEntry {
+                handle: status,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            slots.net = (handles.len() - 1) as u8;
+        }
         let entries: Vec<native::Entry<'_>> = merged
             .iter()
             .zip(&kinds)
@@ -1062,6 +1086,9 @@ impl Z {
             return self.ready_from_volume(exec, &path);
         }
         let mut given = String::new();
+        let net_status = self
+            .program_description(exec.name)
+            .is_some_and(|(d, base)| base && d.needs_net_status);
         let table = match self.plan_for(exec)? {
             None => None,
             Some(plan) if self.root.is_none() && !plan.is_empty() => {
@@ -1092,7 +1119,7 @@ impl Z {
                     }
                 }
                 given = grants::summary(&plan, &self.home());
-                Some(self.table(&plan)?)
+                Some(self.table(&plan, net_status)?)
             }
         };
         match directory_lookup(DIRECTORY, exec.name) {
@@ -1138,7 +1165,7 @@ impl Z {
         let undescribed = zoraya_describe::parse(UNDESCRIBED.as_bytes()).map_err(|_| fail("?"))?;
         if native {
             let plan = self.plan_with(exec, &undescribed, false);
-            let table = plan.and_then(|p| self.table(&p));
+            let table = plan.and_then(|p| self.table(&p, false));
             return match table {
                 Ok(t) => Ok((
                     Ready::Native {
@@ -3924,8 +3951,10 @@ fn main() -> i32 {
     // The shell's settings and the desktop's, which the compositor
     // declares (ADR-0169): `settings` knows both.
     let mut declared = c.d.settings.clone();
-    if let Ok(d) = zoraya_describe::parse(COMPD.as_bytes()) {
-        declared.extend(d.settings);
+    for text in [COMPD, NETD] {
+        if let Ok(d) = zoraya_describe::parse(text.as_bytes()) {
+            declared.extend(d.settings);
+        }
     }
     let mut z = Z {
         root,
@@ -3955,6 +3984,7 @@ fn main() -> i32 {
         broker: Handle::new(7)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(Broker::new),
+        net: Handle::new(9).filter(|h| handle_type(*h) == Ok("channel")),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(|end| File { end }),

@@ -32,6 +32,7 @@ pub struct Namespace {
     pub cwd: String,
     pub entries: Vec<Entry>,
     report: Option<Handle>,
+    net: Option<Handle>,
     reported: RefCell<Vec<String>>,
     dropped: RefCell<u32>,
 }
@@ -70,6 +71,7 @@ fn read_record() -> Option<Namespace> {
         cwd: record.cwd.into(),
         entries,
         report: nth(got, record.slots.report),
+        net: nth(got, record.slots.net),
         reported: RefCell::new(Vec::new()),
         dropped: RefCell::new(0),
     })
@@ -99,6 +101,11 @@ pub fn get() -> Option<&'static Namespace> {
 }
 
 impl Namespace {
+    /// The network connection the launcher gave (ADR-0220 item 7), if any.
+    pub fn net(&self) -> Option<Handle> {
+        self.net
+    }
+
     /// Absolute and normal (ADR-0153 rule 6).
     pub fn absolute(&self, path: &str) -> String {
         zoraya_resolve::join(&self.cwd, 0, path)

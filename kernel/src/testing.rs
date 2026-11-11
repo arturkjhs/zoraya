@@ -479,6 +479,10 @@ static TESTS: &[Test] = &[
         run: network_driver_answers_arp,
     },
     Test {
+        name: "network_service_answers_ping_and_dhcp",
+        run: network_service_answers_ping_and_dhcp,
+    },
+    Test {
         name: "text_renders_the_reference_digests",
         run: text_renders_the_reference_digests,
     },
@@ -1329,6 +1333,16 @@ fn gui_from_a_process() {
 /// having done nothing.
 fn network_driver_answers_arp() {
     let record = process::spawn_with_devices("t_net")
+        .expect("program in the ramdisk")
+        .wait();
+    assert_eq!(record, exited(0));
+}
+
+/// N2 (ADR-0221, ADR-0229): `netd` over `ethd` gets the DHCP lease and pings
+/// the gateway, and survives neither being killed with frames in flight. It
+/// passes having done nothing without the device.
+fn network_service_answers_ping_and_dhcp() {
+    let record = process::spawn_with_devices("t_netd")
         .expect("program in the ramdisk")
         .wait();
     assert_eq!(record, exited(0));

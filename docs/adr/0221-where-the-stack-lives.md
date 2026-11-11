@@ -220,10 +220,19 @@ replaces `netd`'s core with a router.
 - Which of item 8's three ways the architect prefers for a desktop with a network: deferred by the Decision; the
   plan's N6 waits on it.
 
-- INV-0221-2 (ADR-0001 rule 6, N1): the driver's half is checked by host tests (`cargo test -p zoraya-virtio-net -p
-  zoraya-proto-nic`, part of `make check`'s clippy and `make test-unit`, with the fuzz target `fuzz/fuzz_targets/net_rx.rs`);
-  the row stays `not yet applicable (stage 8)` because the invariant's other half, `netd` treating every frame as
-  untrusted, is built in N2.
+- INV-0221-2 (ADR-0001 rule 6, N1 and N2): both halves are checked by host tests (`cargo test -p zoraya-virtio-net -p
+  zoraya-proto-nic -p zoraya-net`, with the fuzz target `fuzz/fuzz_targets/net_rx.rs` for the driver and
+  `fuzz/fuzz_targets/net_stack.rs` for `netd`'s frames, DHCP replies, driver messages and requests). N2 made the row
+  `checked`.
+- INV-0221-1 (N2): `netd` and `ethd` each look at their own start-up handle table (`zoraya_user::start_table`) and print
+  the result, which `make test-net` expects. This is a report by the process about itself, not a view from outside: the
+  kernel has no call that lists another process's handles. A handle made later has a generation and cannot be a
+  device, interrupt or pin that `init` did not give.
+- INV-0221-3 and INV-0221-4 (N2, partial): `t_netd` kills `netd` and `ethd` with frames in flight, checks that the
+  client's channel shows `PEER_CLOSED`, that `ethd` resets the device and exits 0, that `netd` exits when the driver
+  goes, and that a new start gets a lease and echo replies (`make test-net`). Not yet: a `libposix` client's
+  `ECONNRESET` (the sockets come with N3), the three-restart bound as a test (the code is in `init`; the test needs a
+  fetch between kills), and ADR-0221 item 6's services channel. Both rows stay `not yet applicable (stage 8)`.
 
 ## Revisit triggers
 - Before the network on the desktop: item 8's decision, so that `--net` and `--gui` can combine.

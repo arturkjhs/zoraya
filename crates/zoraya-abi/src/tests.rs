@@ -1457,17 +1457,19 @@ mod native_startup {
             error: 4,
             job: 5,
             report: 6,
+            net: 7,
         };
-        encode("/work", &slots, &entries, 7, out).expect("encodes")
+        encode("/work", &slots, &entries, 8, out).expect("encodes")
     }
 
     #[test]
     fn a_record_round_trips_longest_first() {
         let mut out = [0u8; 512];
         let n = sample(&mut out);
-        let r = Startup::decode(&out[..n], 7).expect("decodes");
+        let r = Startup::decode(&out[..n], 8).expect("decodes");
         assert_eq!(r.cwd, "/work");
         assert_eq!(r.slots.report, 6);
+        assert_eq!(r.slots.net, 7);
         let paths: std::vec::Vec<&str> = r.entries().map(|e| e.path).collect();
         assert_eq!(paths, ["/work/notes.txt", "/work/new.txt", "/work"]);
         assert_eq!(r.entries().count(), r.entry_count());
@@ -1510,6 +1512,21 @@ mod native_startup {
         );
         out[at[2]] = b'd';
         assert!(Startup::decode(&out[..n], 3).is_some());
+        // The network slot is a handle like the others: once, in range, and
+        // the two bytes after it are zero.
+        let net = Slots {
+            net: 0,
+            ..Slots::NONE
+        };
+        assert!(encode("/", &net, &[d("/a", 0)], 1, &mut out).is_none());
+        assert!(encode("/", &net, &[], 1, &mut out).is_some());
+        assert!(encode("/", &net, &[], 0, &mut out).is_none());
+        let n = encode("/", &net, &[], 1, &mut out).unwrap();
+        for reserved in [22, 23] {
+            let mut m = out[..n].to_vec();
+            m[reserved] = 1;
+            assert!(Startup::decode(&m, 1).is_none(), "reserved byte {reserved}");
+        }
         let missing = Entry {
             path: "/x",
             kind: EntryKind::Missing,
@@ -1533,7 +1550,7 @@ mod native_startup {
         let mut out = [0u8; 512];
         let n = sample(&mut out);
         for cut in 0..n {
-            assert!(Startup::decode(&out[..cut], 7).is_none(), "cut at {cut}");
+            assert!(Startup::decode(&out[..cut], 8).is_none(), "cut at {cut}");
         }
         let mut x: u64 = 0x1234_5678_9abc_def0;
         for _ in 0..200_000 {
@@ -1543,7 +1560,7 @@ mod native_startup {
             let mut m = out[..n].to_vec();
             let at = (x as usize) % n;
             m[at] = (x >> 32) as u8;
-            if let Some(r) = Startup::decode(&m, 7) {
+            if let Some(r) = Startup::decode(&m, 8) {
                 assert_eq!(r.entries().count(), r.entry_count());
                 for e in r.entries() {
                     assert!(crate::posix::is_absolute_normal(e.path));

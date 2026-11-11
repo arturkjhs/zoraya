@@ -12,6 +12,7 @@ pub mod files;
 pub mod gui;
 mod heap;
 pub mod namespace;
+pub mod netclient;
 pub mod posix_child;
 pub mod stack;
 
@@ -26,6 +27,28 @@ use zoraya_abi::{
 /// `program` from the directory this process started with.
 pub fn image(program: &str) -> Handle {
     directory_lookup(DIRECTORY, program).expect("program in the ramdisk")
+}
+
+/// The types of the handles this process started with and how many of each,
+/// found by looking at every slot (a handle made later has a generation, so
+/// its value is not its slot and is not counted). INV-0221-1 is checked with
+/// it: `netd` starts with no device, interrupt or pin, and `ethd` with one
+/// channel.
+pub fn start_table() -> alloc::vec::Vec<(&'static str, u32)> {
+    let mut counts: alloc::vec::Vec<(&'static str, u32)> = alloc::vec::Vec::new();
+    for slot in 1..u64::from(zoraya_abi::MAX_HANDLES) {
+        let Some(handle) = Handle::new(slot) else {
+            continue;
+        };
+        let Ok(kind) = handle_type(handle) else {
+            continue;
+        };
+        match counts.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((kind, 1)),
+        }
+    }
+    counts
 }
 
 /// A handle list entry that duplicates `handle` to `slot` with `rights`.

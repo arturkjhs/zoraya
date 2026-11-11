@@ -16,6 +16,7 @@
 extern crate std;
 
 pub mod native;
+pub mod net;
 pub mod posix;
 pub mod quota;
 pub mod snapshot;
@@ -1251,6 +1252,8 @@ pub const fn request_from_value(value: u64) -> Option<(RequestKind, u32)> {
     }
 }
 
+#[cfg(test)]
+mod net_tests;
 #[cfg(test)]
 mod tests;
 

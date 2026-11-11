@@ -400,6 +400,140 @@ decides the randomness source and runs it on the target. No dependency row was a
   kill-with-frames-in-flight test; INV-0230-1/-3 checks; `fuzz/Cargo.lock` is not updated (the fuzz workspace was not
   built; cargo regenerates it on the first run).
 
+## N2: `netd` answers ping and DHCP (branch `work/n2`, on `work/integ`)
+
+### Built
+
+- `crates/zoraya-abi/src/net.rs`: `Scope` (reach and listen rules; names, wildcards, addresses, prefixes, `any`; port
+  ranges; TCP and UDP) with a total decoder, `encode`, the matcher and `within` (the subset relation `narrow` needs); 11 host
+  tests (`net_tests.rs`: round trip, every proper prefix refused, mutations, junk, mixed case, names that look like addresses,
+  a 4000-pair subset property). The start-up record gains the `net` slot (ADR-0220 item 7).
+- `crates/zoraya-proto-net` (`status`, `ping`, `narrow`, `net status`'s text; 4 tests) and `crates/zoraya-net` (39 tests,
+  heap-capped): smoltcp over copied frames (`link`), the stack with DHCP, the echo run and `status` (`stack`), the slot
+  bookkeeping against the driver (`nic`), scope and rights per connection (`connection`), the requests (`service`), the `net.*`
+  settings (`config`). Tests: a scripted DHCP server and echo responder (lease, renewal changing `status` with no write, silence
+  and retry, static, unconfigured), 6000 hostile frames, a lying link, a flood in bursts of 64, a hostile driver (bad slots and
+  lengths, a slot offered twice, `Sent` for slots not in flight, 20,000 random messages), every request kind and refusal, 20,000
+  random requests, the settings.
+- `zoraya-describe`: setting types `address` and `prefix` (ADR-0229), key `needs net-status` (ADR-0224 item 2).
+- `user/src/bin/netd.rs`, `net.rs`, `t_netd.rs`; `user/src/netclient.rs` (calls on a connection; `start_network`, shared by `init` and
+  `t_netd`); `init` starts `ethd` and `netd` after the storage stack, makes the shell's root network connection (slot 9) with `narrow`
+  and restarts both at most three times per boot; `zosh` gives a `needs net-status` command a `status`-only connection in the `net` slot.
+  `ethd` and `netd` print what their start-up table holds (INV-0221-1).
+- `tests/shell/net.script` (the normal kernel with `--net`, note 16 of the N1 review); `conventions.script` and `docs/tour.md`
+  (the `help` listing) updated for the `net` command. `make test-net` runs `t_net`, `t_netd` and the normal-boot script
+  (TCG too with `FULL=1`), and checks the pcap for the ARP replies, a DHCP exchange and an echo request and its reply.
+- `fuzz/fuzz_targets/net_stack.rs` (scope decoder, frames and DHCP replies into the stack, driver messages into `Nic`,
+  requests into `Service`, settings). Not run under libFuzzer (no nightly). Its body was compiled in a scratch crate outside the
+  repository and driven with 200,000 random and near-valid inputs, release and debug: no panic. `fuzz/Cargo.lock` not updated.
+- Docs: `docs/design.md` "Network service", `docs/dependencies.md`, ADR-0221's open questions, proposed ADR-0281.
+
+### Decisions where the ADRs are silent (proposed ADR-0281; recommendations)
+
+1. **smoltcp as a registry crate, pinned `=0.14.0`.** Accept for now; vendor when the TLS provider brings the next registry
+   crates or the CI cache is a cost. A deviation from CLAUDE.md's "make test must not need network once the toolchain is
+   installed" (the first build runs `cargo fetch`): **read this first.**
+2. **The scope's bytes** and a conservative subset rule (a child inside one parent rule; IPv4; canonical prefixes). Accept.
+3. **A diagnostic `ping` request** behind `reach` and a rule covering the address; smoltcp's own echo reply off. Accept.
+4. **Setting types `address` and `prefix`.** Accept.
+5. **`init` restarts `ethd` and `netd` together (three times); a running shell is not told.** Accept for N2; N3 builds ADR-0221 item 6's channel.
+6. **`netd` reads `/config` once**, no reload. Accept; a `reload` request is small.
+7. **Under `restrict=on` the lease has no router and no DNS server** (a SLIRP fact); ADR-0230 stays.
+
+### Invariants delta
+
+`checked`: INV-0220-3 and -4 (`cargo test -p zoraya-abi`), INV-0221-1 (`make test-net`; a report each process makes about its
+own start-up table, since no call lists another process's handles), INV-0221-2 (both halves), INV-0229-1 (`cargo test -p
+zoraya-describe -p zoraya-net`), INV-0229-3 (`cargo test -p zoraya-net`; `Stack` takes settings as bytes and `netd` closes its
+read-only `/config` connection after reading). New INV-0281-1 (checked). Partly covered, rows unchanged: INV-0221-3 (native half in
+`t_netd`; the `libposix` half needs sockets), INV-0221-4 (code in `init`; the test needs a fetch between kills, N3), INV-0230-1 and
+-3 (N1's note stands). adr-check total 504.
+
+### Where a device- or network-controlled number enters, and where it is checked
+
+| Number | Entry | Check |
+|---|---|---|
+| frame bytes | `Nic::recv`, `LinkDevice::receive` | copied to a private buffer before smoltcp parses; length at most `MAX_FRAME` and the buffer, else dropped and counted |
+| received slot, length | `Nic::arrive` | slot below 64, state `Device`, length 14..=1514; bad length gives the slot back; a slot offered twice or out of range is counted; `Frames::read_slot` (`netd.rs`) re-checks slot below 128 and length at most 1536 before indexing |
+| `Sent` / `Rejected` slot | `Nic::finish` | slot in 64..128 and in flight, else a fault; `STILL_QUEUED` does not free it |
+| driver message | `Nic::handle` | total decoders; an unknown ordinal or an undecodable message closes the driver (`netd` exits, `init` restarts) |
+| MAC, link | `netd.rs` main, `Stack::new` | status OK and length 6; unicast and non-zero before the interface exists |
+| DHCP reply | smoltcp `dhcpv4`, `Stack::dhcp_events` | smoltcp: valid mask, unicast `your_ip`; here: unicast address, prefix at most 30, unicast router; lease time via `DhcpRepr::parse` (an `Option`) |
+| lease left | `Stack::status` | `i64`, clamped to `0..u32::MAX - 1` |
+| echo reply | `Stack::ping_step` | `new_checked`, `Repr::parse` with checksums, identifier, source equal to target, sequence below those sent, first reply per sequence; round trip clamped to `u32` |
+| request | `Service::handle` | `Header::decode`, `decode::<M>` with the handle count; unknown ordinal gets `ErrorReply`; malformed closes that connection |
+| scope, rights | `Connection::decide`, `Scope::decode` | total decoder (counts, lengths, UTF-8, names, ports, protocols, trailing bytes); unknown right bits refused; child within parent |
+| echo count, timeout | `Below<17>`, `Below<30001>`; `Stack::ping` | decoder refuses larger; ping refuses 0 and over 64 |
+| settings file | `config::read` | `zoraya_settings::read` (total), `parse_address`, `parse_prefix`, `valid_name`; static needs unicast address, prefix at most 30, on-link gateway |
+| `Narrow` handle | `netd.rs` `serve` | exactly one, of type channel, else the connection is closed |
+
+### Tests run
+
+- `cargo test -p zoraya-abi -p zoraya-describe -p zoraya-proto-net -p zoraya-net`: 66, 23, 4, 39 passed.
+- `make check`: all 14 steps pass.
+- `make test-changed` (HVF, every step: `user/` and the Makefile changed): test-boot, test-qemu, test-libposix, test-files, test-crash,
+  test-posix-gui, test-gui, test-net passed; test-posix and test-tour-gui failed once because the tour's `help` listing lacked
+  `net` (fixed in `docs/tour.md`), then passed alone (`make test-tour-gui`: 914 steps; `make test-posix`).
+- `FULL=1 make test-net` (HVF then TCG): PASS, `t_net`, `t_netd` and the boot script under both.
+- Not run: the fuzz target under libFuzzer. `make test-changed` needed `make fetch-ports` in this worktree.
+
+### Measurements (`t_netd`, single runs)
+
+| | HVF | TCG |
+|---|---|---|
+| lease after `netd` starts | 110 ms | 114 ms |
+| `ping 10.0.2.2` x4, round trip min / avg / max | 199 / 399 / 538 us | 3492 / 4321 / 4853 us |
+| restart after `netd` killed, to a lease | 124 ms | 180 ms |
+| restart after `ethd` killed (quarantine released), to a lease | 126 ms | 183 ms |
+| `netd` killed with a ping in flight: client closed and `ethd` exited | 302 ms | 324 ms |
+
+The kill rows include a 300 ms wait before the kill. SLIRP's lease: 24 h; no router or DNS under `restrict=on` (the tests).
+
+### Handoff
+
+- State: branch `work/n2` from `work/integ` (`7a39a57`), local only, not merged.
+- By hand: `make run-net` (console shows `ethd:`, `netd:` and the lease; at the prompt `net status`; try `settings net.gateway 10.0.2`
+  which is refused); `make test-net` (`FULL=1` for TCG); `target/test-logs/test-net.pcap` opens in Wireshark.
+- For the reviewer: `crates/zoraya-abi/src/net.rs`, `crates/zoraya-net/src/{nic,stack,link,service,connection,config}.rs`,
+  `user/src/bin/netd.rs` (the unsafe in `Frames`), `init.rs`, `zosh.rs` (`table`), `netclient.rs`,
+  `crates/zoraya-describe/src/lib.rs`, `docs/adr/0281-*.md`, the `Makefile` `test-net` recipe, `fuzz/fuzz_targets/net_stack.rs`.
+- Open: (1) registry versus vendoring; (2) the services channel: a running shell keeps a dead connection, shells the panel starts and the
+  POSIX session have no `NET` slot; (3) the `libposix` half of INV-0221-3, INV-0221-4's test, INV-0230-1 and -3; (4) with `restrict=on`
+  there is no gateway or DNS in the lease, so N3's resolver needs `net.dns` or the runner's forward; (5) no `reload`, no accounts
+  (Q3's netd account); (6) the fuzz targets never ran under libFuzzer, `fuzz/Cargo.lock` is not updated; (7) the burst bound of 64 is
+  untuned; (8) a CI runner without a crates.io cache downloads the registry crates in each job (the workflow was not touched), and the
+  CI `test-net` job must build the normal kernel too now.
+## CI image
+
+Why: on 2026-11-11 Ubuntu's mirrors were slow or unreachable for hours (a runner's apt fetched 1.4 MB in 8 minutes and
+the `build` job was cancelled in its apt step). Now the jobs of `.github/workflows/test.yml` run in an image with
+everything installed.
+
+- **Contents** (`.github/ci/Dockerfile`, `ubuntu:24.04` by tag: no digest was readable offline): build-essential,
+  clang, lld, llvm, zstd, `qemu-system-arm`, git, curl, patch, perl, python3, ruby, xz/bzip2/unzip/zip, gawk, and the
+  Rust toolchain of `rust-toolchain.toml` (channel, components, targets) in `/usr/local/{rustup,cargo}`, on `PATH`.
+  Jobs run as root; `safe.directory` is set system-wide.
+- **Tag:** `tools/ci-image-tag.sh` = first 16 hex digits of SHA-256 of `.github/ci/Dockerfile`,
+  `tools/ci-apt-install.sh` and `rust-toolchain.toml`. Image: `ghcr.io/<owner>/<repo>/ci:<tag>` (lowercase) and `:latest`.
+  Both workflows call the script.
+- **Rebuild:** `gh workflow run ci-image.yml --ref BRANCH` (always builds); it also runs on a push to `main` that
+  changes those files, and on `candidate/**` and `candidate-full/**` tags (skipped when the tag exists).
+- **Fallback chain:** test.yml's job `image` logs in to ghcr.io with the job token and runs `docker manifest inspect`;
+  `ref` is empty on any failure. With a ref, `build`, `checks` and `tests` use `container:` (no apt, no rustup
+  install). Without one, `container` is `null` (the bare runner) and the guarded steps install as before, through
+  `tools/ci-apt-install.sh`: skip when clang and zstd exist; 3 attempts on the runner's mirror; then
+  `mirrors.edge.kernel.org` and `mirror.math.princeton.edu` (noble, -updates, -security, x86_64 only); then the
+  cached .debs without the network. The Dockerfile builds with the same script.
+- **To verify on the first run** (not testable offline): (1) `ci-image.yml` builds and pushes (the push needs the
+  repository's Actions workflow permissions to allow packages; the package is created private and linked to the
+  repo); (2) `image` finds it (`image: ghcr.io/...` in its log); (3) `container: null` really is accepted when `ref`
+  is empty (run test.yml once before the image exists, e.g. on this branch); (4) with the image, the three jobs
+  start (the credentials are the job token, which needs `packages: read`; a fork's pull request has none and falls
+  back); (5) in the container: `git ls-files`, `make`, `qemu-system-aarch64`, rust-cache, `actions/cache` (zstd)
+  work; `check-host-paths` and `make check-ci-jobs` pass; (6) the ports build needs no tool the image lacks (the
+  runner image has more packages than the container).
+- **Build job time:** before, 3 min 10 s (green main run 42996307525, 2026-11-11, from the runner's own clang and
+  zstd). After: to be read from the first run with the image (`gh run view RUN --json jobs`).
 ## Q5: storage limits (branch `work/q5`, on `work/integ`)
 
 **Built.** `zoraya-fs` format version 2: a limit record `{ limit, used }` per directory (`K_LIMIT`) and a link from every

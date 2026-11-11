@@ -1,0 +1,40 @@
+[package]
+name = "zoraya-net"
+description = "The network service's logic (ADR-0221 item 3): smoltcp over a frame link, DHCP, ICMP echo and status."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+# smoltcp answers echo requests addressed to the interface. Off in `netd`
+# (ADR-0281 item 3); the host tests turn it on for their scripted peer.
+echo-reply = ["smoltcp/auto-icmp-echo-reply"]
+
+[dependencies]
+smoltcp = { version = "=0.14.0", default-features = false, features = [
+    "alloc",
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-dhcpv4",
+    "socket-icmp",
+    "socket-udp",
+    "socket-tcp",
+    "socket-tcp-reno",
+] }
+zoraya-abi = { path = "../zoraya-abi" }
+zoraya-describe = { path = "../zoraya-describe" }
+zoraya-proto-net = { path = "../zoraya-proto-net" }
+zoraya-proto-nic = { path = "../zoraya-proto-nic" }
+zoraya-protocol = { path = "../zoraya-protocol" }
+zoraya-settings = { path = "../zoraya-settings" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# The scripted DHCP server builds a reply, whose DNS list is smoltcp's type.
+heapless = "=0.9.3"
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
+zoraya-net = { path = ".", features = ["echo-reply"] }

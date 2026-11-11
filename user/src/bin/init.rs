@@ -38,6 +38,7 @@ use zoraya_user::files::{ALL, File};
 use zoraya_user::gui::{
     Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
 };
+use zoraya_user::netclient::{Network, start_network};
 use zoraya_user::stack::{Stack, end_job, moved, start_stack};
 use zoraya_user::{
     channel_create, directory_lookup, dup, handle_close, job_create, port_create, port_subscribe,
@@ -53,6 +54,8 @@ const KEY_COMPOSITOR: u64 = 6;
 const KEY_TERMINAL: u64 = 7;
 const KEY_MANAGER: u64 = 8;
 const KEY_TTYD: u64 = 9;
+const KEY_NETD: u64 = 10;
+const KEY_ETHD: u64 = 11;
 const KEY_INPUT: u64 = 16;
 
 /// A moved handle with its type's rights.
@@ -170,6 +173,22 @@ fn start_session(root: &File, window: Option<Handle>) -> Option<Session> {
     })
 }
 
+/// `/config` read-only, for `netd`'s settings (ADR-0229 item 2).
+fn config_connection(stack: &Stack) -> Option<Handle> {
+    let rights = zoraya_proto_file::rights::READ | zoraya_proto_file::rights::CLONE;
+    let f = stack
+        .root
+        .open("config", zoraya_proto_file::open_flags::DIRECTORY, rights)
+        .ok()?;
+    let end = f.end;
+    core::mem::forget(f);
+    Some(end)
+}
+
+/// The shell's root network connection (ADR-0221 item 4), present when the
+/// network runs.
+const SHELL_NET_SLOT: u32 = 9;
+
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
 /// terminal at slot 6; with a broker beside it, its client connection at 7
 /// and the temporary service's root at 8. With a terminal the shell gets the console to write
@@ -178,6 +197,7 @@ fn start_shell(
     root: Option<File>,
     terminal: Option<Handle>,
     broker: Option<&Beside>,
+    network: Option<Handle>,
 ) -> Option<(Handle, Handle)> {
     let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
@@ -221,8 +241,16 @@ fn start_shell(
         e.handle(moved(7, b.client));
         e.handle(moved(8, b.tmp));
     }
+    if let Some(n) = network {
+        e.handle(moved(SHELL_NET_SLOT, n));
+    }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
+    if process.is_none()
+        && let Some(n) = network
+    {
+        let _ = handle_close(n);
+    }
     if process.is_some() && root_moved {
         // Moved: the shell's now.
         core::mem::forget(root);
@@ -321,6 +349,12 @@ fn main() -> i32 {
     // The chooser (ADR-0167), started with the panel and ended with it.
     let mut chooser: Option<Running> = None;
     let mut driver_restarts = (0, alloc::vec![0; devices.inputs.len()]);
+    // The network driver and service (ADR-0221 item 4). They are started
+    // once the storage stack is up, for the settings; restarted together at
+    // most three times per boot when either ends (item 5).
+    let mut network: Option<Network> = None;
+    let mut network_allowed = devices.net.is_some();
+    let mut network_restarts = 0;
     let mut shell_failures = 0;
     if gui_devices.is_some() {
         println!(
@@ -328,17 +362,6 @@ fn main() -> i32 {
             devices.inputs.len()
         );
     }
-    // The network driver (ADR-0221 item 4): started when a virtio-net
-    // device is alone on its page. There is no `netd` yet (N2), so nobody
-    // holds the other end of its channel; `init` keeps it open and the
-    // driver waits. Not supervised before `netd` exists (N2 adds that).
-    let _ethd = devices.net.and_then(|device| {
-        let started = zoraya_user::gui::start_driver("ethd", device);
-        if started.is_none() {
-            println!("init: the network driver did not start");
-        }
-        started
-    });
     loop {
         if stack.is_none()
             && storage_allowed
@@ -348,6 +371,17 @@ fn main() -> i32 {
             if stack.is_none() {
                 println!("init: the storage stack did not start");
                 storage_allowed = false;
+            }
+        }
+        if network.is_none()
+            && network_allowed
+            && let Some(device) = devices.net
+        {
+            let config = stack.as_ref().and_then(config_connection);
+            network = start_network(device, config);
+            if network.is_none() {
+                println!("init: the network did not start");
+                network_allowed = false;
             }
         }
         if gui.is_none()
@@ -411,7 +445,16 @@ fn main() -> i32 {
         } else {
             beside = stack.as_ref().and_then(|s| start_broker(&s.root));
             let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
-            start_shell(root, terminal.map(|t| t.1), beside.as_ref())
+            // Its root network connection, made from `init`'s own (item 4).
+            let root_network = network.as_ref().and_then(|n| {
+                zoraya_user::netclient::narrow(
+                    n.control,
+                    zoraya_abi::net::rights::ALL,
+                    &zoraya_user::netclient::root_scope(),
+                )
+                .ok()
+            });
+            start_shell(root, terminal.map(|t| t.1), beside.as_ref(), root_network)
         };
         let Some(shell) = shell else {
             println!("init: the shell did not start");
@@ -435,6 +478,10 @@ fn main() -> i32 {
             subscribe(port, t.process, KEY_TERMINAL);
         }
         subscribe(port, shell.1, KEY_SHELL);
+        if let Some(n) = &network {
+            subscribe(port, n.netd.process, KEY_NETD);
+            subscribe(port, n.ethd.process, KEY_ETHD);
+        }
         if let Some(s) = &session {
             subscribe(port, s.ttyd.1, KEY_TTYD);
         }
@@ -480,6 +527,38 @@ fn main() -> i32 {
                     break Ended::Closed;
                 }
                 KEY_COMPOSITOR | KEY_TERMINAL => break Ended::Gui,
+                KEY_NETD | KEY_ETHD => {
+                    // Either ending ends both (item 5): running programs'
+                    // connections are gone, new grants get a new service.
+                    if let Some(n) = network.take() {
+                        let which = if packets[0].key == KEY_NETD {
+                            "service"
+                        } else {
+                            "driver"
+                        };
+                        println!("init: the network {which} ended");
+                        n.end();
+                    }
+                    network_restarts += 1;
+                    if network_restarts > MAX_RESTARTS {
+                        println!("init: no more network restarts");
+                        network_allowed = false;
+                    } else if let Some(device) = devices.net {
+                        let config = stack.as_ref().and_then(config_connection);
+                        network = start_network(device, config);
+                        match &network {
+                            Some(n) => {
+                                println!("init: the network was restarted");
+                                subscribe(port, n.netd.process, KEY_NETD);
+                                subscribe(port, n.ethd.process, KEY_ETHD);
+                            }
+                            None => {
+                                println!("init: the network did not start");
+                                network_allowed = false;
+                            }
+                        }
+                    }
+                }
                 KEY_TTYD => {
                     let ttyd = session.as_ref().expect("a session").ttyd;
                     let record = wait_exit(ttyd.1);

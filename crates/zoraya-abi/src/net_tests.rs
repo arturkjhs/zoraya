@@ -1,0 +1,379 @@
+//! INV-0220-3 and INV-0220-4: the scope's decoder, round trip, matcher and
+//! subset relation.
+
+use std::vec;
+use std::vec::Vec;
+
+use super::net::*;
+
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+const NAMES: [&str; 6] = [
+    "example.org",
+    "www.example.org",
+    "a.b.example.org",
+    "other.example",
+    "org",
+    "x",
+];
+const SUFFIXES: [&str; 4] = ["example.org", "b.example.org", "org", "example"];
+const ADDRESSES: [[u8; 4]; 4] = [
+    [10, 0, 2, 2],
+    [10, 0, 2, 15],
+    [10, 1, 0, 1],
+    [192, 168, 0, 1],
+];
+
+fn random_target(rng: &mut Rng) -> Target<'static> {
+    match rng.below(5) {
+        0 => Target::Name(NAMES[rng.below(6) as usize]),
+        1 => Target::Wildcard(SUFFIXES[rng.below(4) as usize]),
+        2 => Target::Address(ADDRESSES[rng.below(4) as usize]),
+        3 => {
+            let len = [0u8, 8, 16, 24, 30, 32][rng.below(6) as usize];
+            let a = ADDRESSES[rng.below(4) as usize];
+            let m = u32::from_be_bytes(a) & if len == 0 { 0 } else { u32::MAX << (32 - len) };
+            Target::Prefix(m.to_be_bytes(), len)
+        }
+        _ => Target::Any,
+    }
+}
+
+fn random_ports(rng: &mut Rng) -> Ports {
+    match rng.below(4) {
+        0 => Ports::ANY,
+        1 => Ports::one([22, 80, 443, 8080][rng.below(4) as usize]),
+        2 => Ports::ranges(&[(1, 1023)]).unwrap(),
+        _ => Ports::ranges(&[(80, 90), (85, 100), (443, 443)]).unwrap(),
+    }
+}
+
+fn random_protocols(rng: &mut Rng) -> Protocols {
+    Protocols::from_raw(1 + rng.below(3) as u8).unwrap()
+}
+
+fn random_scope(rng: &mut Rng) -> Vec<u8> {
+    let reach: Vec<ReachRule<'static>> = (0..rng.below(4))
+        .map(|_| ReachRule {
+            target: random_target(rng),
+            ports: random_ports(rng),
+            protocols: random_protocols(rng),
+        })
+        .collect();
+    let listen: Vec<ListenRule> = (0..rng.below(3))
+        .map(|_| ListenRule {
+            ports: random_ports(rng),
+            protocols: random_protocols(rng),
+        })
+        .collect();
+    let mut out = vec![0u8; 4096];
+    let n = encode(&reach, &listen, &mut out).expect("a valid scope encodes");
+    out.truncate(n);
+    out
+}
+
+fn re_encode(scope: &Scope<'_>) -> Vec<u8> {
+    let reach: Vec<_> = scope.reach_rules().collect();
+    let listen: Vec<_> = scope.listen_rules().collect();
+    let mut out = vec![0u8; 4096];
+    let n = encode(&reach, &listen, &mut out).expect("a decoded scope encodes");
+    out.truncate(n);
+    out
+}
+
+#[test]
+fn a_scope_that_encodes_then_decodes_is_equal() {
+    let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+    for _ in 0..500 {
+        let bytes = random_scope(&mut rng);
+        let scope = Scope::decode(&bytes).expect("decodes");
+        assert_eq!(re_encode(&scope), bytes);
+        assert_eq!(Scope::decode(&re_encode(&scope)), Some(scope));
+    }
+}
+
+#[test]
+fn the_decoder_is_total_over_random_bytes_truncations_and_mutations() {
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    for _ in 0..300 {
+        let bytes = random_scope(&mut rng);
+        // Every proper prefix is refused: the counts say how much follows.
+        for end in 0..bytes.len() {
+            assert!(Scope::decode(&bytes[..end]).is_none(), "prefix {end}");
+        }
+        // A byte changed: no panic; if it decodes, it round-trips and its
+        // rules iterate in full.
+        for _ in 0..40 {
+            let mut m = bytes.clone();
+            let at = rng.below(m.len() as u64) as usize;
+            m[at] = rng.next() as u8;
+            if let Some(s) = Scope::decode(&m) {
+                assert_eq!(re_encode(&s), m);
+                assert_eq!(s.reach_rules().count(), s.reach_count());
+                assert_eq!(s.listen_rules().count(), s.listen_count());
+            }
+        }
+        // Trailing bytes are refused.
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(Scope::decode(&longer).is_none());
+    }
+    for _ in 0..5000 {
+        let n = rng.below(80) as usize;
+        let junk: Vec<u8> = (0..n).map(|_| rng.next() as u8).collect();
+        let _ = Scope::decode(&junk);
+        let mut head = vec![1, rng.below(3) as u8, rng.below(3) as u8, 0];
+        head.extend(junk);
+        let _ = Scope::decode(&head);
+    }
+    assert!(Scope::decode(&[]).is_none());
+    assert!(Scope::decode(&vec![0u8; MAX_SCOPE_BYTES + 1]).is_none());
+}
+
+#[test]
+fn the_empty_scope_decodes_and_allows_nothing() {
+    let s = Scope::decode(Scope::EMPTY.as_bytes()).unwrap();
+    assert!(s.is_empty());
+    assert!(!s.allows_name("example.org", 80, Protocols::TCP));
+    assert!(!s.allows_address([10, 0, 2, 2], 80, Protocols::TCP));
+    assert!(!s.allows_listen(80, Protocols::TCP));
+    assert!(s.within(&s));
+}
+
+fn one(target: Target<'_>, ports: Ports, protocols: Protocols) -> Vec<u8> {
+    let mut out = vec![0u8; 512];
+    let rule = ReachRule {
+        target,
+        ports,
+        protocols,
+    };
+    let n = encode(&[rule], &[], &mut out).unwrap();
+    out.truncate(n);
+    out
+}
+
+#[test]
+fn names_are_ascii_lower_case_and_within_dns_limits() {
+    for bad in [
+        "Example.org",
+        "exämple.org",
+        "",
+        ".",
+        "a..b",
+        ".a",
+        "a.",
+        "a b",
+        "a/b",
+        "10.0.2.2",
+        "example.123",
+        "1",
+    ] {
+        assert!(!valid_name(bad), "{bad:?}");
+        let mut out = vec![0u8; 512];
+        let rule = ReachRule {
+            target: Target::Name(bad),
+            ports: Ports::ANY,
+            protocols: Protocols::TCP,
+        };
+        assert!(encode(&[rule], &[], &mut out).is_none(), "{bad:?}");
+    }
+    assert!(valid_name("a-b_c.example.org"));
+    assert!(valid_name("1password.com"));
+    let label = "a".repeat(63);
+    assert!(valid_name(&label));
+    assert!(!valid_name(&"a".repeat(64)));
+    let long = std::format!("{label}.{label}.{label}.{}", "b".repeat(61));
+    assert_eq!(long.len(), 253);
+    assert!(valid_name(&long));
+    assert!(!valid_name(&std::format!("{long}c")));
+    // The decoder refuses a hand-written upper-case name too.
+    let mut bytes = one(Target::Name("example.org"), Ports::ANY, Protocols::TCP);
+    bytes[6] = b'E';
+    assert!(Scope::decode(&bytes).is_none());
+}
+
+#[test]
+fn a_prefix_has_zero_host_bits_and_a_length_to_32() {
+    let mut out = vec![0u8; 64];
+    let bad = ReachRule {
+        target: Target::Prefix([10, 0, 2, 1], 24),
+        ports: Ports::ANY,
+        protocols: Protocols::TCP,
+    };
+    assert!(encode(&[bad], &[], &mut out).is_none());
+    let bad = ReachRule {
+        target: Target::Prefix([0, 0, 0, 0], 33),
+        ports: Ports::ANY,
+        protocols: Protocols::TCP,
+    };
+    assert!(encode(&[bad], &[], &mut out).is_none());
+}
+
+#[test]
+fn ports_and_protocols_are_checked() {
+    assert!(Ports::ranges(&[]).is_none());
+    assert!(Ports::ranges(&[(0, 5)]).is_none());
+    assert!(Ports::ranges(&[(6, 5)]).is_none());
+    assert!(Ports::ranges(&[(1, 1); 9]).is_none());
+    assert!(Protocols::from_raw(0).is_none());
+    assert!(Protocols::from_raw(4).is_none());
+    let mut bytes = one(Target::Any, Ports::one(80), Protocols::TCP);
+    let last = bytes.len() - 1;
+    bytes[last] = 0;
+    assert!(Scope::decode(&bytes).is_none());
+    // Nonzero reserved byte, wrong version, too many rules.
+    let good = one(Target::Any, Ports::ANY, Protocols::BOTH);
+    for (i, v) in [(0, 2), (3, 1), (1, 65), (2, 64)] {
+        let mut b = good.clone();
+        b[i] = v;
+        assert!(Scope::decode(&b).is_none(), "byte {i}");
+    }
+}
+
+#[test]
+fn a_wildcard_covers_the_names_under_it_and_not_the_suffix() {
+    let bytes = one(Target::Wildcard("example.org"), Ports::ANY, Protocols::TCP);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_name("a.example.org", 1, Protocols::TCP));
+    assert!(s.allows_name("a.b.example.org", 1, Protocols::TCP));
+    assert!(!s.allows_name("example.org", 1, Protocols::TCP));
+    assert!(!s.allows_name("notexample.org", 1, Protocols::TCP));
+    assert!(!s.allows_name("a.example.org", 1, Protocols::UDP));
+}
+
+#[test]
+fn a_name_never_matches_an_address_rule_or_the_reverse() {
+    // INV-0220-4.
+    let by_address = one(Target::Address([10, 0, 2, 2]), Ports::ANY, Protocols::BOTH);
+    let s = Scope::decode(&by_address).unwrap();
+    for name in ["10.0.2.2", "10-0-2-2", "gateway"] {
+        assert!(!s.allows_name(name, 80, Protocols::TCP));
+    }
+    assert!(s.allows_address([10, 0, 2, 2], 80, Protocols::TCP));
+    assert!(!s.allows_address([10, 0, 2, 3], 80, Protocols::TCP));
+    let by_name = one(Target::Name("gateway"), Ports::ANY, Protocols::BOTH);
+    let s = Scope::decode(&by_name).unwrap();
+    assert!(!s.allows_address([10, 0, 2, 2], 80, Protocols::TCP));
+    assert!(!s.reaches_address([10, 0, 2, 2]));
+    let any = one(Target::Any, Ports::ANY, Protocols::BOTH);
+    assert!(Scope::decode(&any).unwrap().reaches_address([1, 2, 3, 4]));
+    // Types: a name is not an address and a wildcard not an exact name.
+    assert!(!Target::Name("a.example.org").within(&Target::Address([1, 2, 3, 4])));
+    assert!(!Target::Address([1, 2, 3, 4]).within(&Target::Name("a.example.org")));
+    assert!(!Target::Wildcard("example.org").within(&Target::Name("example.org")));
+    assert!(!Target::Any.within(&Target::Prefix([0; 4], 0)));
+    assert!(Target::Address([1, 2, 3, 4]).within(&Target::Prefix([0; 4], 0)));
+}
+
+#[test]
+fn ports_within_handles_overlapping_and_unordered_ranges() {
+    let outer = Ports::ranges(&[(100, 200), (50, 120), (201, 300)]).unwrap();
+    assert!(Ports::ranges(&[(60, 290)]).unwrap().within(&outer));
+    assert!(Ports::one(300).within(&outer));
+    assert!(!Ports::one(301).within(&outer));
+    assert!(!Ports::one(49).within(&outer));
+    assert!(!Ports::ANY.within(&outer));
+    assert!(outer.within(&Ports::ANY));
+    assert!(Ports::ANY.within(&Ports::ANY));
+    assert!(Ports::one(65535).within(&Ports::ranges(&[(1, 65535)]).unwrap()));
+}
+
+/// INV-0220-3: `within` is the subset relation, so narrowing never gives a
+/// request a path that the parent did not allow.
+#[test]
+fn a_scope_within_another_allows_nothing_the_other_does_not() {
+    let mut rng = Rng(0xdead_beef_cafe_f00d);
+    let mut subsets = 0;
+    for _ in 0..4000 {
+        let (a, b) = (random_scope(&mut rng), random_scope(&mut rng));
+        let (a, b) = (Scope::decode(&a).unwrap(), Scope::decode(&b).unwrap());
+        assert!(a.within(&a));
+        if !a.within(&b) {
+            continue;
+        }
+        subsets += 1;
+        for name in NAMES.iter().chain(SUFFIXES.iter()) {
+            for port in [22, 80, 85, 443, 1000, 8080] {
+                for p in [Protocols::TCP, Protocols::UDP] {
+                    if a.allows_name(name, port, p) {
+                        assert!(b.allows_name(name, port, p), "{name} {port}");
+                    }
+                }
+            }
+        }
+        for address in ADDRESSES {
+            for port in [22, 80, 85, 443, 1000, 8080] {
+                for p in [Protocols::TCP, Protocols::UDP] {
+                    if a.allows_address(address, port, p) {
+                        assert!(b.allows_address(address, port, p));
+                    }
+                }
+            }
+            if a.reaches_address(address) {
+                assert!(b.reaches_address(address));
+            }
+        }
+        for port in [22, 80, 85, 443, 1000, 8080] {
+            for p in [Protocols::TCP, Protocols::UDP] {
+                if a.allows_listen(port, p) {
+                    assert!(b.allows_listen(port, p));
+                }
+            }
+        }
+    }
+    assert!(subsets > 100, "the generator finds subsets: {subsets}");
+}
+
+#[test]
+fn narrowing_examples() {
+    let ports = Ports::ranges(&[(80, 443)]).unwrap();
+    let parent = one(Target::Wildcard("example.org"), ports, Protocols::BOTH);
+    let parent = Scope::decode(&parent).unwrap();
+    let inside = one(
+        Target::Name("www.example.org"),
+        Ports::one(443),
+        Protocols::TCP,
+    );
+    assert!(Scope::decode(&inside).unwrap().within(&parent));
+    for outside in [
+        one(Target::Name("example.org"), Ports::one(443), Protocols::TCP),
+        one(
+            Target::Name("www.example.org"),
+            Ports::one(444),
+            Protocols::TCP,
+        ),
+        one(Target::Name("www.example.org"), Ports::ANY, Protocols::TCP),
+        one(Target::Any, Ports::one(443), Protocols::TCP),
+        one(Target::Wildcard("org"), Ports::one(443), Protocols::TCP),
+    ] {
+        assert!(!Scope::decode(&outside).unwrap().within(&parent));
+    }
+    // The empty scope is inside everything; nothing but it is inside the empty.
+    assert!(Scope::EMPTY.within(&parent));
+    assert!(!parent.within(&Scope::EMPTY));
+    // A listen rule is not a reach rule.
+    let mut out = vec![0u8; 64];
+    let rule = ListenRule {
+        ports: Ports::one(80),
+        protocols: Protocols::TCP,
+    };
+    let n = encode(&[], &[rule], &mut out).unwrap();
+    let listen = Scope::decode(&out[..n]).unwrap();
+    assert!(!listen.within(&parent));
+    assert!(listen.allows_listen(80, Protocols::TCP));
+    assert!(!listen.allows_listen(81, Protocols::TCP));
+    assert!(!listen.allows_listen(80, Protocols::UDP));
+}

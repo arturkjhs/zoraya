@@ -59,7 +59,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd t_net t_streams t_snapshot t_image t_suspend t_quota t_bound posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	ethd netd net t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
@@ -233,7 +233,8 @@ NET_DISK := $(BUILD)/net-disk.img
 NET_PCAP := target/test-logs/test-net.pcap
 # Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
 NET_FWD_PORT := 47015
-test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
+NET_SCRIPT := tests/shell/net.script
+test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
 		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
@@ -244,14 +245,29 @@ test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
 	run() { accel=$$1; shift; tools/net-poke.sh $(NET_FWD_PORT) 240 & poke=$$!; \
 		$(RUN_TEST) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
 		rc=$$?; kill $$poke 2>/dev/null; wait $$poke 2>/dev/null; return $$rc; }; \
-	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" && \
+	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \
+		--expect-line "t_netd: all passed" --expect-line "t_netd: lease 10.0.2.15/24 gateway" \
+		--expect-line "netd: holds no device, interrupt or pin" --expect-line "ethd: holds one channel, to the network service" && \
 	target/debug/zoraya-fsck $(NET_DISK) && \
 	hex="$$(od -An -tx1 -v $(NET_PCAP) | tr -d ' \n')" && \
 	( case "$$hex" in *08060001080006040002525[0-9a-f]0a000202*) ;; \
 		*) echo "[net-auto] FAIL: no ARP reply from the gateway in $(NET_PCAP)"; exit 1 ;; esac ) && \
 	( case "$$hex" in *080600010800060400025254001234560a00020f*) ;; \
 		*) echo "[net-auto] FAIL: the guest answered no ARP request for 10.0.2.15 in $(NET_PCAP)"; exit 1 ;; esac ) && \
-	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" )
+	( case "$$hex" in *00440043*) ;; \
+		*) echo "[net-auto] FAIL: no DHCP request from port 68 to 67 in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( case "$$hex" in *00430044*) ;; \
+		*) echo "[net-auto] FAIL: no DHCP reply from port 67 to 68 in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( case "$$hex" in *080045????????????????01????0a00020f0a0002020800*) ;; \
+		*) echo "[net-auto] FAIL: no ICMP echo request from 10.0.2.15 to 10.0.2.2 in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	( case "$$hex" in *080045????????????????01????0a0002020a00020f0000*) ;; \
+		*) echo "[net-auto] FAIL: no ICMP echo reply from 10.0.2.2 in $(NET_PCAP)"; exit 1 ;; esac ) && \
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-auto -- $(RUN_QEMU) --test --keys --net --accel auto $(KERNEL) && \
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script tests/shell/net-settings.script --label net-settings-auto -- $(RUN_QEMU) --test --keys --net --disk $(NET_DISK) --accel auto $(KERNEL) && \
+	target/debug/zoraya-fsck $(NET_DISK) && \
+	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
+	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" )
 
 # An interactive machine on QEMU's user network without `restrict`: the guest
 # reaches the Internet through the host, for trying things by hand.

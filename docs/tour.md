@@ -47,8 +47,9 @@ Commands:
   math      calculate
   mkdir     make a directory
   mv        move or rename
-  poweroff  turn the machine off
+  net       show the state of the network
 -- space: next page, q: quit --
+  poweroff  turn the machine off
   pwd       print the current directory
   reboot    start the machine again
   rm        remove files
