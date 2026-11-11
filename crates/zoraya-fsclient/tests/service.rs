@@ -513,3 +513,50 @@ fn close_tells_the_link() {
     c.close(5);
     assert_eq!(c.link.closed, [5]);
 }
+
+/// ADR-0265 through the protocol: a limit is set from above with `WRITE`, the
+/// statuses are `OVER_QUOTA` and `CROSSES_LIMIT`, `remove` still works at the
+/// limit, and `limit` reports the record.
+#[test]
+fn a_storage_limit_through_the_protocol() {
+    let (mut c, root) = rig();
+    c.make_directory(root, "room").unwrap();
+    c.make_directory(root, "other").unwrap();
+    assert_eq!(c.set_limit(root, "room", Some(4 * 4096)), Ok(()));
+    let room = c
+        .open(root, "room", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 0))));
+    let other = c
+        .open(root, "other", open_flags::DIRECTORY, rights::ALL)
+        .unwrap();
+    assert_eq!(c.limit(other), Ok(None));
+    // A connection that holds the room itself cannot change its limit: the
+    // limit is of a child, named from above. It can only narrow below.
+    c.make_directory(room, "sub").unwrap();
+    assert_eq!(c.set_limit(room, "sub", Some(4096)), Ok(()));
+    assert_eq!(
+        c.set_limit(room, "nothing", Some(1)),
+        Err(status::NOT_FOUND)
+    );
+    // Without WRITE the limit stays.
+    let ro = c.clone_with(root, rights::READ).unwrap();
+    assert_eq!(c.set_limit(ro, "room", None), Err(status::ACCESS_DENIED));
+    // Fill it: 2 blocks left (sub took one, the file takes one + data).
+    let f = c.open(room, "f", open_flags::CREATE, rights::ALL).unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 2 * 4096))));
+    assert_eq!(c.write_all(f, &[1u8; 12288]), Err(status::OVER_QUOTA));
+    c.write_all(f, &[1u8; 4096]).unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 3 * 4096))));
+    c.close(f);
+    // A directory does not cross the boundary; remove works.
+    c.make_directory(other, "d").unwrap();
+    assert_eq!(
+        c.rename_into(other, "d", room, "d"),
+        Err(status::CROSSES_LIMIT)
+    );
+    c.remove(room, "f").unwrap();
+    assert_eq!(c.limit(room), Ok(Some((4 * 4096, 4096))));
+    assert_eq!(c.set_limit(root, "room", None), Ok(()));
+    assert_eq!(c.limit(room), Ok(None));
+}

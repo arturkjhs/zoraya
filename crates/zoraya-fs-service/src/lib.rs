@@ -269,6 +269,8 @@ fn fs_status(e: &FsError) -> u32 {
         FsError::IsLink { .. } => status::IS_LINK,
         FsError::InvalidArgument => status::INVALID_ARGUMENT,
         FsError::Corrupt => status::CORRUPT,
+        FsError::OverQuota => status::OVER_QUOTA,
+        FsError::CrossesLimit => status::CROSSES_LIMIT,
         _ => status::STORAGE_FAILED,
     }
 }
@@ -997,6 +999,17 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             34 => {
                 let (_, m) = decode::<proto::FifoOpen>(bytes, n)?;
                 self.fifo_open(i, t, m.side.0, m.nonblock.0 == 1);
+            }
+            38 => {
+                let (_, m) = decode::<proto::SetLimit<'_>>(bytes, n)?;
+                if !self.may_name(i, m.name.0) {
+                    return self.denied(i, t);
+                }
+                self.set_limit(i, t, m.name.0, (m.remove.0 == 0).then_some(m.limit));
+            }
+            39 => {
+                decode::<proto::GetLimit>(bytes, n)?;
+                self.get_limit(i, t);
             }
             35 => {
                 decode::<proto::TimeBase>(bytes, n)?;
@@ -1954,6 +1967,43 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let r = self.volume.set_attr(handle, mode, mtime);
         self.after_engine();
         self.done_result(i, t, r.map(|()| 0));
+    }
+
+    /// `set_limit` (ADR-0265 rule 4): needs `WRITE` on the directory's
+    /// connection, so a limit is set from above.
+    fn set_limit(&mut self, i: usize, t: u32, name: &str, limit: Option<u64>) {
+        if !self.has(i, proto::rights::WRITE) {
+            return self.done(i, t, status::ACCESS_DENIED, 0);
+        }
+        let Some(directory) = self.handle_of(i) else {
+            return self.done(i, t, status::STORAGE_FAILED, 0);
+        };
+        let r = self.volume.set_limit(directory, name, limit);
+        self.after_engine();
+        self.done_result(i, t, r.map(|()| 0));
+    }
+
+    fn get_limit(&mut self, i: usize, t: u32) {
+        let r = match self.handle_of(i) {
+            Some(handle) => self.volume.limit_of(handle),
+            None => Err(FsError::StorageFailed),
+        };
+        self.after_engine();
+        let m = match r {
+            Ok(l) => proto::LimitReply {
+                status: code(status::OK),
+                limited: Below(u32::from(l.is_some())),
+                limit: l.map_or(0, |l| l.limit),
+                used: l.map_or(0, |l| l.used),
+            },
+            Err(e) => proto::LimitReply {
+                status: code(self.engine_status(&e)),
+                limited: Below(0),
+                limit: 0,
+                used: 0,
+            },
+        };
+        self.reply(i, t, &m);
     }
 
     fn make_link(&mut self, i: usize, t: u32, name: &str, target: &str) {

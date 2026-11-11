@@ -15,7 +15,7 @@ pub const MAX_PATH: usize = 4096;
 pub const MAX_ENTRIES: usize = 64;
 
 /// One of `status`.
-pub type Code = Below<16>;
+pub type Code = Below<18>;
 /// One of `kind`.
 pub type Kind = Below<3>;
 
@@ -48,6 +48,12 @@ pub mod status {
     pub const LIMIT_REACHED: u32 = 14;
     /// The service does not know the ordinal.
     pub const UNSUPPORTED: u32 = 15;
+    /// The request would pass the storage limit of a directory above the
+    /// object (ADR-0265 rule 2); `libposix` maps it to `EDQUOT`.
+    pub const OVER_QUOTA: u32 = 16;
+    /// A directory cannot move across the boundary of a storage limit
+    /// (ADR-0265 rule 3); `libposix` maps it to `EXDEV`.
+    pub const CROSSES_LIMIT: u32 = 17;
 }
 
 /// A connection's rights (ADR-0055).
@@ -423,6 +429,27 @@ protocol! {
     /// file manager's status line (ADR-0248).
     message FreeSpace = 37, handles 0 {}
 
+    /// Sets, or with `remove` takes away, the storage limit of the child
+    /// directory `name` of this directory, in bytes (ADR-0265 rule 4). Needs
+    /// `WRITE`. Answered by `Done`.
+    message SetLimit<'a> = 38, handles 0 {
+        remove: Below<2>,
+        limit: u64,
+        name: Name<'a>,
+    }
+
+    /// This directory's own limit and the bytes charged below it (ADR-0265
+    /// rule 8), on any connection that can `stat` it.
+    message GetLimit = 39, handles 0 {}
+    message LimitReply = 39, handles 0 {
+        status: Code,
+        /// 1 if the directory carries a limit; `limit` and `used` are 0
+        /// otherwise.
+        limited: Below<2>,
+        limit: u64,
+        used: u64,
+    }
+
     /// A failed volume, on the supervisor channel (ADR-0080).
     message Failure = 100, handles 0 {
         reason: Below<{ failure::COUNT }>,
@@ -430,7 +457,7 @@ protocol! {
 }
 
 /// Every request's ordinal, for a test that none repeats.
-pub const REQUESTS: [(&str, u32); 37] = [
+pub const REQUESTS: [(&str, u32); 39] = [
     ("open", 1),
     ("clone", 2),
     ("read", 3),
@@ -468,6 +495,8 @@ pub const REQUESTS: [(&str, u32); 37] = [
     ("time_base", 35),
     ("narrow", 36),
     ("free_space", 37),
+    ("set_limit", 38),
+    ("get_limit", 39),
 ];
 
 /// `fifo_open`'s side.

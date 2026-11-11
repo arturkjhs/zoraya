@@ -36,6 +36,12 @@ pub enum FsError {
     StorageFailed,
     /// The volume is mounted read-only.
     ReadOnly,
+    /// The request would pass the limit of a directory above it
+    /// (ADR-0265 rule 2). Nothing changed.
+    OverQuota,
+    /// A directory cannot move across the boundary of a storage limit
+    /// (ADR-0265 rule 3); a copy and a delete can.
+    CrossesLimit,
     /// The handle is not open.
     BadHandle,
     /// An internal consistency check of the engine failed. The volume is
