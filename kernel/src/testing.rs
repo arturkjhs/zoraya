@@ -492,6 +492,10 @@ static TESTS: &[Test] = &[
         run: job_suspend_from_a_process,
     },
     Test {
+        name: "quotas_from_a_process",
+        run: quotas_from_a_process,
+    },
+    Test {
         name: "snapshots_from_a_process",
         run: snapshots_from_a_process,
     },
@@ -1263,6 +1267,11 @@ fn images_from_a_process() {
 /// ADR-0105 item 8 (INV-0105-5) and the latency of suspending 16 processes.
 fn job_suspend_from_a_process() {
     assert_eq!(run_program("t_suspend"), exited(0));
+}
+
+/// ADR-0261 and ADR-0263: limits on jobs, from processes.
+fn quotas_from_a_process() {
+    assert_eq!(run_program("t_quota"), exited(0));
 }
 
 /// ADR-0102 from a process: the criterion and every INV-0102 check, with the
