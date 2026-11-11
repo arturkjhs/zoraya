@@ -59,14 +59,14 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	t_streams t_snapshot t_image t_suspend t_quota t_bound posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	ethd t_net t_streams t_snapshot t_image t_suspend t_quota t_bound posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui run-net test-net debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -223,6 +223,30 @@ test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
+
+# N1 (ADR-0221, ADR-0230): the test kernel with a virtio-net device on QEMU's
+# restricted user network, whose `t_net` (ethd, ARP through both paths) is
+# the point; the pcap stays in target/test-logs/. A host whose QEMU has no
+# user-mode networking skips the step (INV-0230-3).
+NET_DISK := $(BUILD)/net-disk.img
+NET_PCAP := target/test-logs/test-net.pcap
+test-net: $(TEST_KERNEL) $(RUNNER) tools-storage
+	@if ! $(RUN_QEMU) --accel tcg --net --dumpdtb $(BUILD)/net-probe.dtb >/dev/null 2>&1; then \
+		echo "[net] skipped: QEMU has no user-mode networking"; exit 0; fi; \
+	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
+	$(RUN_TEST) --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \
+		-- $(RUN_QEMU) --test --net --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel auto $(TEST_KERNEL) && \
+	target/debug/zoraya-fsck $(NET_DISK) && \
+	( od -An -tx1 -v $(NET_PCAP) | tr -d ' \n' | grep -q 08060001080006040002525[0-9a-f]0a000202 \
+		|| { echo "[net-auto] FAIL: no ARP reply from the gateway in $(NET_PCAP)"; exit 1; } ) && \
+	( [ "$(FULL)" != 1 ] || $(RUN_TEST) --label net-tcg --expect-line "t_net: all passed" \
+		-- $(RUN_QEMU) --test --net --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel tcg $(TEST_KERNEL) )
+
+# An interactive machine on QEMU's user network without `restrict`: the guest
+# reaches the Internet through the host, for trying things by hand.
+run-net: $(KERNEL) $(DISK)
+	$(RUN_QEMU) --net --disk $(DISK) $(KERNEL)
 
 # The normal kernel, which the test kernel does not exercise: its own path
 # through boot, its heap and timer checks, the receive interrupt, and the shell
@@ -642,7 +666,7 @@ check-tokens:
 
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
-TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
+TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
 TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every

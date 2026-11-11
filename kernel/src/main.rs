@@ -188,6 +188,16 @@ fn print_banner(
         arch::mpidr(),
         arch::pa_bits()
     );
+    let isar0 = arch::isar0();
+    println!(
+        "ID_AA64ISAR0_EL1 {isar0:#018x}: AES {}, SHA1 {}, SHA2 {}, CRC32 {}, atomics {}, RNDR {}",
+        (isar0 >> 4) & 0xf,
+        (isar0 >> 8) & 0xf,
+        (isar0 >> 12) & 0xf,
+        (isar0 >> 16) & 0xf,
+        (isar0 >> 20) & 0xf,
+        (isar0 >> 60) & 0xf
+    );
     let (addr, how) = match source {
         dtb::Source::Register => (x0, "from x0"),
         dtb::Source::StartOfRam => (dtb::RAM_BASE, "at start of RAM"),

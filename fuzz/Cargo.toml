@@ -22,6 +22,9 @@ zoraya-fs = { path = "../crates/zoraya-fs" }
 zoraya-fs-testkit = { path = "../crates/zoraya-fs-testkit" }
 zoraya-describe = { path = "../crates/zoraya-describe" }
 zoraya-shell = { path = "../crates/zoraya-shell" }
+zoraya-proto-nic = { path = "../crates/zoraya-proto-nic" }
+zoraya-virtio = { path = "../crates/zoraya-virtio", features = ["fake"] }
+zoraya-virtio-net = { path = "../crates/zoraya-virtio-net" }
 
 [[bin]]
 name = "mount_walk"
@@ -59,3 +62,10 @@ doc = false
 bench = false
 
 [workspace]
+
+[[bin]]
+name = "net_rx"
+path = "fuzz_targets/net_rx.rs"
+test = false
+doc = false
+bench = false

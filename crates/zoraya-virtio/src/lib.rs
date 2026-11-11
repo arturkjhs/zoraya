@@ -76,6 +76,7 @@ pub mod reg {
 }
 
 pub const MAGIC: u32 = 0x7472_6976;
+pub const DEVICE_NET: u32 = 1;
 pub const DEVICE_BLOCK: u32 = 2;
 pub const DEVICE_GPU: u32 = 16;
 pub const DEVICE_INPUT: u32 = 18;

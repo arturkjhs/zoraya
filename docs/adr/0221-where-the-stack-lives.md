@@ -220,6 +220,11 @@ replaces `netd`'s core with a router.
 - Which of item 8's three ways the architect prefers for a desktop with a network: deferred by the Decision; the
   plan's N6 waits on it.
 
+- INV-0221-2 (ADR-0001 rule 6, N1): the driver's half is checked by host tests (`cargo test -p zoraya-virtio-net -p
+  zoraya-proto-nic`, part of `make check`'s clippy and `make test-unit`, with the fuzz target `fuzz/fuzz_targets/net_rx.rs`);
+  the row stays `not yet applicable (stage 8)` because the invariant's other half, `netd` treating every frame as
+  untrusted, is built in N2.
+
 ## Revisit triggers
 - Before the network on the desktop: item 8's decision, so that `--net` and `--gui` can combine.
 - A measured transfer rate dominated by the two process boundaries: a shared ring between `netd` and programs for

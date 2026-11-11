@@ -73,8 +73,15 @@ user/src/bin/t_gui.rs         test-qemu
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_quota.rs       test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
-user/src/gui.rs               test-gui test-qemu
+user/src/gui.rs               test-gui test-qemu test-net
 user/src/app.rs               test-gui
+
+# The network (N1): the driver, its protocol and the test that plays netd.
+crates/zoraya-virtio-net/     test-net
+crates/zoraya-proto-nic/      test-net
+fuzz/                         check
+user/src/bin/ethd.rs          test-net
+user/src/bin/t_net.rs         test-net test-qemu
 
 # The POSIX personality.
 crates/zoraya-posix/          test-libposix test-posix test-posix-gui

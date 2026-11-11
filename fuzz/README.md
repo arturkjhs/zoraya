@@ -14,6 +14,7 @@ deterministic fuzz test on the pinned toolchain instead
 | `editor_keys` | arbitrary key bytes to the line editor at any width (ADR-0154, INV-0154-1); the deterministic test is `crates/zoraya-shell/src/editor_tests.rs` |
 | `shell_parse` | arbitrary UTF-8 text as a shell line or script (ADR-0150, INV-0150-3); the deterministic test is `crates/zoraya-shell/src/lang_tests.rs` |
 | `describe` | arbitrary bytes as a command description (ADR-0156, INV-0156-1); the deterministic test is `crates/zoraya-describe/src/tests.rs` |
+| `net_rx` | arbitrary bytes as an Ethernet frame for the ARP parser and as a script for a hostile virtio-net device and a hostile service (ADR-0221, INV-0221-2); the deterministic tests are `crates/zoraya-virtio-net/src/tests.rs` and `crates/zoraya-proto-nic/src/lib.rs`. Not run by the agent that wrote it (no nightly or cargo-fuzz on the host); its body was compiled and driven with 3000 random inputs in a scratch crate |
 
 Each input is mounted read-only and read-write, walked through the request
 API (every directory, name, file and link target) and checked with `fsck`.

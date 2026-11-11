@@ -19,6 +19,8 @@ zoraya-heap = { path = "../crates/zoraya-heap" }
 zoraya-fs = { path = "../crates/zoraya-fs" }
 zoraya-fs-service = { path = "../crates/zoraya-fs-service" }
 zoraya-proto-block = { path = "../crates/zoraya-proto-block" }
+zoraya-proto-nic = { path = "../crates/zoraya-proto-nic" }
+zoraya-virtio-net = { path = "../crates/zoraya-virtio-net" }
 zoraya-proto-file = { path = "../crates/zoraya-proto-file" }
 zoraya-protocol = { path = "../crates/zoraya-protocol" }
 zoraya-virtio = { path = "../crates/zoraya-virtio" }
@@ -505,5 +507,15 @@ bench = false
 
 [[bin]]
 name = "search"
+test = false
+bench = false
+
+[[bin]]
+name = "ethd"
+test = false
+bench = false
+
+[[bin]]
+name = "t_net"
 test = false
 bench = false

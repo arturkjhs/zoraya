@@ -27,6 +27,15 @@
 #                         compositor's scale 2, ADR-0164)
 #   --gui-size WxH        with --gui: a display of W by H pixels instead
 #                         (ADR-0246; the compositor picks the scale)
+#   --net                 attach a virtio-net device on transport 16 (page 2, alone
+#                         on its page, ADR-0091) over QEMU's user-mode network
+#                         (SLIRP: guest 10.0.2.15/24, gateway 10.0.2.2). With
+#                         --test the network is `restrict=on`: the guest reaches
+#                         nothing outside it (ADR-0230 item 2, INV-0230-1).
+#                         Refused with --gui until ADR-0221 item 8 is decided.
+#   --net-pcap FILE       with --net: write the frames to FILE (filter-dump),
+#                         256 bytes of each
+#   --net-capture-all     with --net-pcap: whole frames, for benchmarks only
 #   --qmp PATH            a QMP socket at PATH, for screendumps and keys
 #   --display-opts OPTS   the interactive display and its suboptions (with
 #                         --gui; ignored with --test); the default is below
@@ -70,6 +79,9 @@ disk=
 gui=0
 gui_scale=1
 gui_size=
+net=0
+net_pcap=
+net_maxlen=,maxlen=256
 qmp=
 display_opts=
 kernel=
@@ -90,6 +102,9 @@ while [ $# -gt 0 ]; do
         --gui) gui=1; shift ;;
         --gui-scale) [ $# -ge 2 ] || die "--gui-scale needs 1 or 2"; gui_scale=$2; shift 2 ;;
         --gui-size) [ $# -ge 2 ] || die "--gui-size needs WxH"; gui_size=$2; shift 2 ;;
+        --net) net=1; shift ;;
+        --net-pcap) [ $# -ge 2 ] || die "--net-pcap needs a file"; net_pcap=$2; shift 2 ;;
+        --net-capture-all) net_maxlen=; shift ;;
         --qmp) [ $# -ge 2 ] || die "--qmp needs a path"; qmp=$2; shift 2 ;;
         --display-opts) [ $# -ge 2 ] || die "--display-opts needs a value"; display_opts=$2; shift 2 ;;
         --debug) mode=debug; accel=tcg; shift ;;
@@ -171,7 +186,13 @@ case $mode in
 esac
 
 # Version 2 of virtio-mmio: QEMU defaults to the legacy transport (ADR-0080).
-if [ "$test_disk" = 1 ] || [ -n "$disk" ] || [ "$gui" = 1 ]; then
+if [ "$net" = 1 ] && [ "$gui" = 1 ]; then
+    die "--net and --gui cannot be combined: the GUI takes all four device pages (ADR-0221 item 8)"
+fi
+if [ -n "$net_pcap" ] && [ "$net" != 1 ]; then
+    die "--net-pcap needs --net"
+fi
+if [ "$test_disk" = 1 ] || [ -n "$disk" ] || [ "$gui" = 1 ] || [ "$net" = 1 ]; then
     set -- "$@" -global virtio-mmio.force-legacy=false
 fi
 if [ "$test_disk" = 1 ]; then
@@ -212,6 +233,17 @@ if [ "$gui" = 1 ]; then
     set -- "$@" -device virtio-gpu-device,bus=virtio-mmio-bus.23,xres=$xres,yres=$yres \
         -device virtio-keyboard-device,bus=virtio-mmio-bus.15 \
         -device virtio-tablet-device,bus=virtio-mmio-bus.7
+fi
+# The network device alone on page 2 (transport 16, ADR-0230 item 2). Tests run
+# with restrict=on; a person at `make run-net` gets the Internet through SLIRP.
+if [ "$net" = 1 ]; then
+    restrict=
+    [ "$mode" = test ] && restrict=,restrict=on
+    set -- "$@" -netdev "user,id=net0$restrict" \
+        -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.16
+    if [ -n "$net_pcap" ]; then
+        set -- "$@" -object "filter-dump,id=dump0,netdev=net0,file=$net_pcap$net_maxlen"
+    fi
 fi
 if [ -n "$qmp" ]; then
     set -- "$@" -qmp "unix:$qmp,server=on,wait=off"

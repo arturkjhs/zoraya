@@ -16,7 +16,7 @@ use zoraya_rt::{
     handle_type, memory_unmap, port_create, port_subscribe, port_wait, println,
 };
 use zoraya_virtio::queue::{Page, Transport, identify};
-use zoraya_virtio::{DEVICE_BLOCK, DEVICE_GPU, DEVICE_INPUT, reg};
+use zoraya_virtio::{DEVICE_BLOCK, DEVICE_GPU, DEVICE_INPUT, DEVICE_NET, reg};
 
 use crate::dup;
 use crate::stack::{DRIVER_RIGHTS, console, end_job, moved, start};
@@ -30,6 +30,8 @@ pub struct Devices {
     pub disk: Option<(Handle, u32)>,
     pub gpu: Option<(Handle, u32)>,
     pub inputs: Vec<(Handle, u32)>,
+    /// The network device (ADR-0221 item 4), on its own page.
+    pub net: Option<(Handle, u32)>,
 }
 
 /// Reads every transport of a device page, one mapping at a time.
@@ -77,6 +79,7 @@ pub fn scan() -> Devices {
                 DEVICE_BLOCK if found.disk.is_none() => found.disk = Some((device, range)),
                 DEVICE_GPU if found.gpu.is_none() => found.gpu = Some((device, range)),
                 DEVICE_INPUT => found.inputs.push((device, range)),
+                DEVICE_NET if found.net.is_none() => found.net = Some((device, range)),
                 _ => {}
             },
             Page::Several => {
