@@ -27,8 +27,11 @@ Running report, updated after each part. Written by the Sonnet main session; rev
 - **Every job counts `used`, not only limited ones** (ADR-0261 point 4 keeps a counter only where a limit is at or
   below). It keeps `used` right when a limit is set on a job that already holds something, at the cost of an add per
   ancestor (at most 32).
-- **A process is charged for its handle table at 1024 slots** when it is created, and a port for the 1024 packets it may
-  hold, a channel for its queues' slots: reserves that the heap shows only as they fill. Over-charging, never under.
+- **A process is charged for its handle table at 1024 slots** while it lives (the charge goes back in `exit_current`, so
+  a zombie keeps only its record); a port is charged for 64 packets and 64 more each time its ready list outgrows what
+  it has paid (kept until the port ends); a channel for its queues' slots (1 KiB). Over-charging while live, never
+  under. Measured: after this the GUI test's init job ends at 230.8 of 233.6 MB (was 231.2), with the charge within 0.5
+  MB of the frames really used, so over-charging is not the cause of the thin margin.
 - **`held`** is the whole of a job's memory once it is killed and empty. A per-holder figure needs identities the
   kernel does not keep (ADR-0261 open question).
 - **`failure value`**: the refusing field is in x1; the stubs expose only the status.

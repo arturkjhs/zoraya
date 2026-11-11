@@ -49,13 +49,24 @@ pub fn clear_signals(source: SourceId, bits: u32) {
 
 pub struct Port {
     id: PortId,
-    /// The creator pays for the port and the packets it can hold.
-    _paid: Paid,
+    /// The creator pays for the port and, in steps, for the packets it holds.
+    paid: SpinLock<Charged>,
 }
 
-/// What a port costs beside its record: its entry in the event tables, and the
-/// user packets it may hold at most (`MAX_USER_PACKETS`, 24 bytes each).
-const PORT_EXTRA: u64 = 128 + zoraya_events::MAX_USER_PACKETS as u64 * 24;
+/// What a port has paid for: `paid`, and how many ready-list slots of it
+/// (`PACKET_STEP` at a time, never given back before the port ends).
+struct Charged {
+    paid: Paid,
+    slots: usize,
+}
+
+/// What a port costs beside its record: its entry in the event tables, and a
+/// first `PACKET_STEP` packets of 24 bytes. The ready list grows from there
+/// as packets are queued, and `Port::queue` charges each step first.
+const PORT_EXTRA: u64 = 128 + PACKET_STEP as u64 * 24;
+
+/// Packets charged for at a time.
+const PACKET_STEP: usize = 64;
 
 impl Port {
     /// A port paid for by `payer` (`None`: the kernel's).
@@ -65,7 +76,13 @@ impl Port {
         let id = EVENTS.lock().new_port().map_err(status)?;
         // On failure the value was dropped, and its `Drop` freed the port and
         // gave the charge back.
-        charge::prepaid_arc(Port { id, _paid: paid })
+        charge::prepaid_arc(Port {
+            id,
+            paid: SpinLock::new(Charged {
+                paid,
+                slots: PACKET_STEP,
+            }),
+        })
     }
 
     /// Ends all waits and subscriptions (ADR-0006 rule 5).
@@ -93,6 +110,16 @@ impl Port {
     }
 
     pub fn queue(&self, key: u64, data: u64) -> Result<(), Status> {
+        // The charge first, so that a refused one changes nothing. The ready
+        // list is an upper bound of the user packets, which it also holds.
+        {
+            let mut charged = self.paid.lock();
+            let needed = EVENTS.lock().ready_len(self.id) + 1;
+            while charged.slots < needed {
+                charged.paid.kernel(PACKET_STEP as u64 * 24)?;
+                charged.slots += PACKET_STEP;
+            }
+        }
         EVENTS
             .lock()
             .queue(self.id, key, data, &mut sched::wake)

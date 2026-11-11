@@ -544,6 +544,13 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     admit(process, thread, start.suspended)
 }
 
+/// What a process's handle table is charged at creation: its largest, 1024
+/// slots. A zombie keeps its record but not the table, so `exit_current` gives
+/// this back.
+fn handle_table_cost() -> u64 {
+    u64::from(zoraya_abi::MAX_HANDLES) * (core::mem::size_of::<object::Entry>() as u64 + 16)
+}
+
 /// The process object around a built address space and table.
 fn assemble(
     name: &str,
@@ -559,8 +566,7 @@ fn assemble(
     owned.push_str(name);
     // The table is charged at its largest, 1024 slots: handles are covered by
     // memory and processes (ADR-0260), not by a count of their own.
-    let table =
-        u64::from(zoraya_abi::MAX_HANDLES) * (core::mem::size_of::<object::Entry>() as u64 + 16);
+    let table = handle_table_cost();
     let extra = table + charge::vec_cost::<u8>(name.len()) + LIST_ENTRIES;
     let bits = if suspended {
         process_signals::SUSPENDED
@@ -850,6 +856,7 @@ pub fn exit_current(record: ExitRecord) -> ! {
     // A zombie holds its record, not the table's memory.
     let table = core::mem::take(&mut *process.handles.lock());
     drop(table);
+    process.paid.lock().release_kernel(handle_table_cost());
     let waiters = {
         let mut exit = process.exit.lock();
         exit.record = Some(record);

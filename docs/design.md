@@ -1420,8 +1420,17 @@ those is not known; the charge is one lock and one to four adds per allocation. 
 test ended with the session at 214.8 of 215.7 MiB and the files manager's menu refused; at 1/32 it passes with one
 refusal of a terminal window in its log.
 
-Known limits of Q1: each process is charged a 1024-slot handle table when it starts and keeps the charge until its
-record is dropped; a port is charged its largest packet queue; `snapshot_process` is refused page by page, not before
+What is charged for the reserves that the heap shows only as they fill: a process, its handle table at the largest (1024
+slots) while it lives, and the charge goes back when it exits (a zombie keeps its record, not the table); a port, its
+record, its place in the event tables and room for 64 packets, then 64 more each time `port_queue` finds its ready list
+longer than what it has paid, kept until the port ends; a channel, its queues' slots at their most (1 KiB).
+
+Measured at the end of the 256 MiB GUI test (`files-manage:auto:2`): `init`'s job at
+230.85 of 233.6 MB used (peak 233.1 MB), with 10.7 MB of frames really free, the charge being within 0.5 MB of the frames
+and heap pages in use. The over-charges are therefore not what refuses the terminal window: the session really uses
+nearly all of RAM. Before the change to ports and exits the figure was 231.2 MB.
+
+Known limits of Q1: a live process is charged a 1024-slot handle table whatever it holds; `snapshot_process` is refused page by page, not before
 copying; `libposix` maps `OverQuota` to `ENOMEM`/`EAGAIN` without looking at the field (Q2).
 
 ## Known limitations

@@ -177,9 +177,10 @@ fn usage_matches_the_heap_and_the_frames() {
     // Each of the others costs exactly what the heap took.
     let p = zoraya_user::port_create().expect("port");
     let (u2, h2) = (used(), heap_live());
-    // A port is charged for the packets it may hold at most (1024 of 24 bytes)
-    // and its place in the event tables, which the heap shows only as they fill.
-    assert_eq!(u2 - u1, (h2 - h1) + 128 + 1024 * 24, "port_create");
+    // A port is charged for a first 64 packets of 24 bytes and its place in the
+    // event tables, which the heap shows only as they fill; it pays for 64
+    // more each time its ready list outgrows what it has paid.
+    assert_eq!(u2 - u1, (h2 - h1) + 128 + 64 * 24, "port_create");
     let e = zoraya_user::event_create().expect("event");
     let (u3, h3) = (used(), heap_live());
     assert_eq!(u3 - u2, h3 - h2, "event_create");
