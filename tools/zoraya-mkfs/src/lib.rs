@@ -144,15 +144,42 @@ fn fs_err(path: &Path, e: FsError) -> String {
     format!("{}: {e:?}", path.display())
 }
 
+/// Sets a storage limit (ADR-0265) of `bytes` on the directory `path`, given
+/// relative to the root of the volume (`a/b`). For `--limit PATH=SIZE`: an
+/// image whose room directories are limited from the start, for the tests
+/// of quotas until a room keeper sets them (ADR-0266).
+pub fn set_limit<D: BlockDevice, C: Clock>(
+    v: &mut Volume<D, C>,
+    path: &str,
+    bytes: u64,
+) -> Result<(), String> {
+    let root = v.root();
+    let (parent, name) = match path.trim_matches('/').rsplit_once('/') {
+        Some((p, n)) => (p, n),
+        None => ("", path.trim_matches('/')),
+    };
+    let dir = if parent.is_empty() {
+        root
+    } else {
+        v.open(root, parent, OpenOptions::default())
+            .map_err(|e| format!("--limit {path}: {e:?}"))?
+    };
+    let r = v
+        .set_limit(dir, name, Some(bytes))
+        .map_err(|e| format!("--limit {path}: {e:?}"));
+    let _ = v.close(dir);
+    r
+}
+
+/// The name of an empty file that only keeps its directory in git.
+pub const KEEP: &str = ".keep";
+
 /// Copies the tree under `src` into directory `dir` of the volume: files,
 /// directories and symbolic links (as link objects, ADR-0013 rule 7), with
 /// their permission bits and modification times (ADR-0014 rule 1). A name
 /// the volume does not accept (ADR-0013 rules 1 and 2) is an error naming
 /// the path. Hard links become separate files (ADR-0013 rule 5). Other file
 /// types are an error.
-/// The name of an empty file that only keeps its directory in git.
-pub const KEEP: &str = ".keep";
-
 pub fn populate<D: BlockDevice, C: Clock>(
     v: &mut Volume<D, C>,
     dir: Handle,

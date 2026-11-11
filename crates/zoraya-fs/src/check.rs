@@ -37,9 +37,9 @@ use alloc::vec::Vec;
 
 use crate::device::{BLOCK_SIZE, Block, BlockDevice};
 use crate::format::{
-    Attr, BITS_PER_BITMAP, BlockPtr, Body, Child, DataRef, K_DIRENT, K_EXTENT, K_INODE, K_ORPHAN,
-    K_PARENT, Key, MAX_LINK_TARGET, Node, ObjKind, ROOT_ID, ROOT_SLOTS, RootRecord, Value,
-    decode_alloc_root, decode_bitmap,
+    Attr, BITS_PER_BITMAP, BlockPtr, Body, Child, DataRef, K_DIRENT, K_EXTENT, K_FPARENT, K_INODE,
+    K_LIMIT, K_ORPHAN, K_PARENT, Key, MAX_LINK_TARGET, Node, ObjKind, ROOT_ID, ROOT_SLOTS,
+    RootRecord, Value, decode_alloc_root, decode_bitmap,
 };
 use crate::root::{RootSelection, select_root};
 
@@ -123,6 +123,10 @@ impl Report {
 struct Collected {
     inodes: BTreeMap<u64, Attr>,
     parents: BTreeMap<u64, u64>,
+    /// The directory each file or link object is charged to (ADR-0265).
+    fparents: BTreeMap<u64, u64>,
+    /// Limit records: directory to (limit, used).
+    limits: BTreeMap<u64, (u64, u64)>,
     /// (directory, name, child, kind)
     dirents: Vec<(u64, Vec<u8>, u64, ObjKind)>,
     /// (object, index, pointer)
@@ -233,6 +237,12 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
             }
             (K_PARENT, Value::Parent(p)) => {
                 self.col.parents.insert(k.id, p);
+            }
+            (K_FPARENT, Value::Parent(p)) => {
+                self.col.fparents.insert(k.id, p);
+            }
+            (K_LIMIT, Value::Limit { limit, used }) => {
+                self.col.limits.insert(k.id, (limit, used));
             }
             (K_DIRENT, Value::Dirent { child, kind }) => {
                 self.col.dirents.push((k.id, k.name, child, kind))
@@ -442,6 +452,109 @@ impl<D: BlockDevice + ?Sized> Walker<'_, D> {
                             a.size
                         ));
                     }
+                }
+            }
+        }
+        // Storage limits (ADR-0265, INV-0265-1): every file and link has the
+        // directory it is charged to, and a limited directory's `used` is
+        // the sum of the charges below it.
+        let mut owner: BTreeMap<u64, u64> = BTreeMap::new();
+        for (dir, _, child, kind) in &col.dirents {
+            if *kind != ObjKind::Directory {
+                owner.insert(*child, *dir);
+            }
+        }
+        for (id, a) in &col.inodes {
+            if a.kind == ObjKind::Directory {
+                continue;
+            }
+            match (col.fparents.get(id), owner.get(id)) {
+                (None, _) => problems.push(format!("object {id} has no charged directory")),
+                (Some(f), Some(o)) if f != o => {
+                    problems.push(format!("object {id} is in {o} but is charged to {f}"))
+                }
+                (Some(f), None)
+                    if col
+                        .inodes
+                        .get(f)
+                        .is_none_or(|d| d.kind != ObjKind::Directory)
+                        || (*f != ROOT_ID && !col.parents.contains_key(f)) =>
+                {
+                    problems.push(format!(
+                        "orphan {id} is charged to {f}, which is not a directory with a name"
+                    ));
+                }
+                _ => {}
+            }
+        }
+        for id in col.fparents.keys() {
+            if col
+                .inodes
+                .get(id)
+                .is_none_or(|a| a.kind == ObjKind::Directory)
+            {
+                problems.push(format!(
+                    "charged directory for {id}, which is not a file or link"
+                ));
+            }
+        }
+        let mut sums: BTreeMap<u64, u64> = col.limits.keys().map(|d| (*d, 0)).collect();
+        for d in col.limits.keys() {
+            if col
+                .inodes
+                .get(d)
+                .is_none_or(|a| a.kind != ObjKind::Directory)
+            {
+                problems.push(format!("limit record for {d}, which is not a directory"));
+            }
+        }
+        if !sums.is_empty() {
+            let bound = col.inodes.len() + 2;
+            // A tree whose charge passes `u64::MAX` cannot be recorded in
+            // `used` (review Q5, finding 3): it is damage, not a clean sum.
+            let mut overflow: Vec<u64> = Vec::new();
+            for (id, a) in &col.inodes {
+                if *id == ROOT_ID {
+                    continue;
+                }
+                let up = if a.kind == ObjKind::Directory {
+                    col.parents.get(id)
+                } else {
+                    col.fparents.get(id)
+                };
+                let c = crate::volume::charge_of(a.kind, a.size);
+                let mut at = up.copied();
+                let mut steps = 0;
+                while let Some(d) = at {
+                    if let Some(s) = sums.get_mut(&d) {
+                        match s.checked_add(c) {
+                            Some(n) => *s = n,
+                            None => overflow.push(d),
+                        }
+                    }
+                    steps += 1;
+                    if d == ROOT_ID || steps > bound {
+                        break;
+                    }
+                    at = col.parents.get(&d).copied();
+                }
+            }
+            overflow.sort_unstable();
+            overflow.dedup();
+            for d in &overflow {
+                problems.push(format!(
+                    "directory {d} has a tree charged past the largest limit"
+                ));
+            }
+            for (d, (limit, used)) in &col.limits {
+                if overflow.contains(d) {
+                    continue;
+                }
+                let want = sums.get(d).copied().unwrap_or(0);
+                if *used != want {
+                    problems.push(format!(
+                        "directory {d} (limit {limit}) records {used} bytes used but its tree holds {want}"
+                    ));
                 }
             }
         }
@@ -667,6 +780,16 @@ pub(crate) enum Fix {
         dir: u64,
         parent: Option<u64>,
     },
+    /// Sets the directory a file or link is charged to (`None` removes it).
+    SetCharged {
+        id: u64,
+        dir: Option<u64>,
+    },
+    /// Sets a limit record's `used`, or removes the record (`None`).
+    SetUsed {
+        dir: u64,
+        used: Option<u64>,
+    },
 }
 
 /// Keeps, for every object, the first valid entry that reaches it from the
@@ -765,6 +888,95 @@ fn plan_namespace_fixes(col: &Collected) -> Vec<Fix> {
                 dir: *id,
                 parent: None,
             });
+        }
+    }
+    // Storage limits follow the structure that was kept.
+    let mut final_parent: BTreeMap<u64, u64> = BTreeMap::new();
+    for (id, a) in &col.inodes {
+        if *id == ROOT_ID {
+            continue;
+        }
+        let named = parent_of.get(id).copied();
+        let want = if a.kind == ObjKind::Directory {
+            named
+        } else {
+            let old = col.fparents.get(id).copied();
+            let valid_old = old.filter(|d| {
+                col.inodes
+                    .get(d)
+                    .is_some_and(|x| x.kind == ObjKind::Directory)
+                    && (*d == ROOT_ID || parent_of.contains_key(d))
+            });
+            let want = named.or(valid_old).or(Some(ROOT_ID));
+            if col.fparents.get(id).copied() != want {
+                fixes.push(Fix::SetCharged { id: *id, dir: want });
+            }
+            want
+        };
+        if let Some(w) = want {
+            final_parent.insert(*id, w);
+        }
+    }
+    for id in col.fparents.keys() {
+        if col
+            .inodes
+            .get(id)
+            .is_none_or(|a| a.kind == ObjKind::Directory)
+        {
+            fixes.push(Fix::SetCharged { id: *id, dir: None });
+        }
+    }
+    let mut sums: BTreeMap<u64, u64> = BTreeMap::new();
+    for d in col.limits.keys() {
+        if col
+            .inodes
+            .get(d)
+            .is_some_and(|a| a.kind == ObjKind::Directory)
+        {
+            sums.insert(*d, 0);
+        } else {
+            fixes.push(Fix::SetUsed {
+                dir: *d,
+                used: None,
+            });
+        }
+    }
+    if !sums.is_empty() {
+        let bound = col.inodes.len() + 2;
+        let mut overflowed: BTreeSet<u64> = BTreeSet::new();
+        for (id, a) in &col.inodes {
+            let c = crate::volume::charge_of(a.kind, a.size);
+            let mut at = final_parent.get(id).copied();
+            let mut steps = 0;
+            while let Some(d) = at {
+                if let Some(s) = sums.get_mut(&d) {
+                    match s.checked_add(c) {
+                        Some(n) => *s = n,
+                        None => {
+                            overflowed.insert(d);
+                        }
+                    };
+                }
+                steps += 1;
+                if d == ROOT_ID || steps > bound {
+                    break;
+                }
+                at = final_parent.get(&d).copied();
+            }
+        }
+        for (d, want) in &sums {
+            if overflowed.contains(d) {
+                // No `used` can say it: the limit record goes.
+                fixes.push(Fix::SetUsed {
+                    dir: *d,
+                    used: None,
+                });
+            } else if col.limits.get(d).map(|l| l.1) != Some(*want) {
+                fixes.push(Fix::SetUsed {
+                    dir: *d,
+                    used: Some(*want),
+                });
+            }
         }
     }
     for (id, index, _) in &col.extents {

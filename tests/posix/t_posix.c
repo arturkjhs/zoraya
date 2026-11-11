@@ -34,6 +34,13 @@
  *                      (INV-0105-1, run from the script)
  *   t_posix hostile    ignores every catchable signal, then sleeps
  *   t_posix forkbomb N forks until refused, N at most; reports the count
+ *   t_posix diskfill DIR OUT
+ *                      what `dd` into a limited directory does (ADR-0265, Q5;
+ *                      the ports have no dd): writes 4 KiB blocks to DIR/fill
+ *                      until a write fails, which must be EDQUOT; unlink
+ *                      works at the limit; the space is back; a directory
+ *                      does not move out of DIR into OUT (EXDEV) and a file
+ *                      does not fit back in
  *   t_posix products   ADR-0210's functions the workloads' own
  *                      programs need: chmod, rmdir, symlink, utimes, fsync,
  *                      gethostname, getrusage, mmap, popen and pclose, system,
@@ -835,6 +842,63 @@ static void hostile(void)
 		pause_ms(1000);
 }
 
+static void diskfill(const char *dir, const char *out)
+{
+	char path[256], sub[256], dest[256];
+	snprintf(path, sizeof path, "%s/fill", dir);
+	snprintf(sub, sizeof sub, "%s/sub", dir);
+	snprintf(dest, sizeof dest, "%s/diskfill-sub", out);
+	static char block[4096];
+	memset(block, 'z', sizeof block);
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	int blocks = 0, e = 0;
+	for (;;) {
+		ssize_t n = write(fd, block, sizeof block);
+		if (n < 0) {
+			e = errno;
+			break;
+		}
+		if (n == 0 || blocks >= 100000)
+			break;
+		blocks++;
+	}
+	printf("t_posix: diskfill wrote %d blocks before %s\n", blocks, e ? strerror(e) : "the end");
+	CHECK(e == EDQUOT);
+	CHECK(blocks > 0);
+	/* The file holds what was written, and the next write is refused again. */
+	struct stat st;
+	CHECK(fstat(fd, &st) == 0);
+	CHECK(st.st_size == (off_t)blocks * 4096);
+	CHECK(write(fd, block, sizeof block) < 0 && errno == EDQUOT);
+	CHECK(close(fd) == 0);
+	/* A new name is refused too: the limit counts the object's block. */
+	char other[256];
+	snprintf(other, sizeof other, "%s/other", dir);
+	int fd2 = open(other, O_WRONLY | O_CREAT | O_EXCL, 0644);
+	if (fd2 >= 0) {
+		/* There was room for the object but none for its data. */
+		CHECK(write(fd2, block, sizeof block) < 0 && errno == EDQUOT);
+		close(fd2);
+		CHECK(unlink(other) == 0);
+	} else {
+		CHECK(errno == EDQUOT);
+	}
+	/* rm works at the limit. */
+	CHECK(unlink(path) == 0);
+	/* A directory does not cross the boundary; mv would copy it instead. */
+	CHECK(mkdir(sub, 0755) == 0);
+	CHECK(rename(sub, dest) < 0 && errno == EXDEV);
+	CHECK(rmdir(sub) == 0);
+	/* And the space is back. */
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	CHECK(fd >= 0);
+	CHECK(write(fd, block, sizeof block) == (ssize_t)sizeof block);
+	CHECK(close(fd) == 0);
+	CHECK(unlink(path) == 0);
+	passed();
+}
+
 static void forkbomb(int limit)
 {
 	int made = 0;
@@ -984,6 +1048,8 @@ int main(int argc, char **argv)
 		hostile();
 	else if (!strcmp(argv[1], "forkbomb") && argc > 2)
 		forkbomb(atoi(argv[2]));
+	else if (!strcmp(argv[1], "diskfill") && argc > 3)
+		diskfill(argv[2], argv[3]);
 	else if (!strcmp(argv[1], "products"))
 		products();
 	else if (!strcmp(argv[1], "live") && argc > 2)

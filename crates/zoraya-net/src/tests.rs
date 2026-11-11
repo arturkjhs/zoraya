@@ -796,6 +796,66 @@ fn random_settings_files_never_panic() {
     }
 }
 
+/// Review error 1: requests that cannot leave must not stall the run, block
+/// the next one, or make `poll` spin.
+#[test]
+fn a_run_of_more_than_four_to_nobody_ends_by_its_deadline_and_the_next_run_works() {
+    let mut net = Net::new(static_config());
+    let start = net.now;
+    net.client
+        .ping([10, 0, 2, 99], 8, 1_000_000, net.now)
+        .unwrap();
+    // Until it ends, `poll` never asks to be called again at once.
+    let mut turns = 0;
+    while net.client.ping_running() && net.now < start + 20_000_000 {
+        net.server.poll(net.now);
+        let delay = net.client.poll(net.now);
+        net.server.poll(net.now);
+        assert!(
+            delay.is_none_or(|d| d >= crate::stack::MIN_DELAY_US),
+            "{delay:?}"
+        );
+        net.now += delay.unwrap_or(1_000_000).clamp(1_000, 1_000_000);
+        turns += 1;
+    }
+    assert!(!net.client.ping_running(), "the run ended");
+    // 7 intervals of 200 ms and the timeout of 1 s, and a little more.
+    assert!(net.now - start <= 3_500_000, "{}", net.now - start);
+    assert!(turns < 200, "{turns} turns: no spinning");
+    let done = net
+        .client
+        .take_events()
+        .into_iter()
+        .find_map(|e| match e {
+            Event::PingDone(r) => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((done.sent, done.received), (8, 0));
+    // The stuck requests went with the run: a good address answers.
+    net.client.ping(SERVER_IP, 4, 2_000_000, net.now).unwrap();
+    assert!(net.run_until(10_000_000, |n| !n.client.ping_running()));
+    let done = net
+        .client
+        .take_events()
+        .into_iter()
+        .find_map(|e| match e {
+            Event::PingDone(r) => Some(r),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((done.sent, done.received), (4, 4));
+}
+
+#[test]
+fn with_no_transmit_slot_free_poll_does_not_ask_to_come_back_at_once() {
+    let mut net = Net::new(static_config());
+    net.client.link().room = 0;
+    inject(&mut net, vec![0xaa; 60]);
+    let delay = net.client.poll(net.now);
+    assert!(delay != Some(0), "{delay:?}");
+}
+
 #[path = "nic_tests.rs"]
 mod nic;
 

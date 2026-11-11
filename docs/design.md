@@ -302,6 +302,21 @@ over the tree on a 64 KiB process stack, and a block passed by value through tha
 - **Mount.** Picks the highest generation with a valid root record copy; refuses an invalid tree root of that
   generation; mounts read-only and reports corruption if the generations in the ring are not consecutive; frees the
   orphan list (and commits) on a read-write mount.
+- **Storage limits (format 2, [ADR-0265](adr/0265-storage-limits.md), [ADR-0290](adr/0290-what-the-engine-charges.md)
+  proposed).** A directory may carry a limit record `{ limit, used }` (`K_LIMIT`), and every file and link a link to the
+  directory it is charged to (`K_FPARENT`). `used` counts, below the directory, one 4 KiB block per object and a
+  file's or link's size in blocks; it is kept by every request that creates, grows, shrinks, removes or renames, and
+  is part of the copy-on-write tree, so a crash leaves it true. A growing request walks the directories up to the
+  root and fails with `OverQuota` if any limited one would pass its limit, changing nothing; a shrinking request is
+  never refused. A file renamed across a boundary moves its charge; a directory refuses with `CrossesLimit`. An
+  unnamed file is charged where it was made, and a file unlinked while open keeps its charge until freed.
+  `set_limit(name, bytes | none)` needs `WRITE` on the parent's connection; `get_limit` reports the record. A new
+  limit on a directory with content scans its subtree in one request. `zoraya_fs::check` recomputes every `used`.
+  A growing one-block write costs 111 ns more (7.0 us against 6.9 us, release build, in-memory device) with a limit
+  three levels above the file; `zoraya-mkfs --limit PATH=SIZE` limits a directory of an image.
+  The file protocol has `OVER_QUOTA` (16) and `CROSSES_LIMIT` (17), `SetLimit` (38) and `GetLimit` (39); `libposix` maps
+  them to `EDQUOT` and `EXDEV`. Known limitation: no program sets a limit yet except through the protocol and the
+  image tool (the room keeper of Q6a will), and `stat`/`files` do not show it yet.
 - **Requests.** Open (with exclusive create and truncate), mkdir, symlink (inert link objects), unlink, rmdir,
   rename (replace, no-replace, exchange), set attributes, set size, write (at most 1 MiB), read, stat, readdir,
   readlink, unnamed create and publish, close, sync. Paths are relative, components validated (ADR-0013); a link
@@ -325,6 +340,21 @@ Two processes, each in a sub-job that `init` makes, and `init` over them, on [AD
   service, and resets the device when the service goes.
 - **`fsd`** runs the loop of `crates/zoraya-fs-service` over a `Transport`, with the engine under it. One request at a
   time, and its only blocking wait is on the driver, with a deadline of 30 s. Clients speak `zoraya-proto-file`.
+  **Accounts** ([ADR-0262](adr/0262-who-pays-for-service-objects.md) item 2, [ADR-0291](adr/0291-accounts-in-the-file-service.md)
+  proposed). Every connection belongs to one account; `open`, `clone`, `narrow` and `share` join the caller's. The root
+  connection's is the session's. `CloneAccount { rights, budget }` (request 40) makes a new account carved from the
+  caller's: `budget` open handles, an eighth of that in mapped buffers and a thirty-second in held replies (at least
+  one each). Carved from the session's, a budget is 1 to 32 and at most four such accounts exist (the untrusted
+  column: 128 open, 16 buffers, 4 held replies; the session keeps 768, 224 and 892). At its open bound an account's
+  requests get `TOO_MANY_OPEN` (`ENFILE`), at its buffer bound `LIMIT_REACHED`; a reply that cannot be sent and
+  would be a second held one (the client's queue full; a `NoMemory` reply is held and retried) closes its connection. The bounds of all live accounts add up to `MAX_OPEN` (896),
+  `MAX_BUFFERS` (240) and `MAX_HELD` (896); an account whose last connection closed and whose sub-accounts are gone is freed and returns its bounds (while a sub-account lives it stays with what it has left, so the untrusted column cannot be widened).
+  A `Sync` on an untrusted account's connection is answered at the next commit (the timed one or another client's
+  `sync`) and the connection is not read meanwhile; a durable write from such an account is folded the same way. Each refusal at an account's bound is counted for its launcher (`Service::account_refusals`). Worst-case memory
+  (`zoraya_fs_service::worst_case`, 4-byte test handles): 192 KB fixed, 766 B per open handle, 64 KiB per held reply,
+  so an untrusted account costs at most 90 KB and the whole service 59 MB, 56 MiB of it the session's possible held
+  replies (as before accounts). Known limitation: no launcher calls `CloneAccount` yet (Q6a), and the loop serves
+  ready connections in the port's order, not one request per account per pass.
 - **`init`** finds the disk, starts both (`user/src/stack.rs`, which `t_storage` also uses), and gives the shell a
   connection to the root. On a report from the service or the death of either, it ends all three and starts them
   again, at most three times. After that the shell runs with no volume. When the shell ends, it syncs and powers off.
@@ -1732,6 +1762,9 @@ stack has no TCP user yet (N3) and no DNS (N3).
   step of `make test` is a job of its own, `test-qemu` one a machine configuration and `test-posix` one a script, W8
   one a build. `make check-ci-jobs` fails if the workflow leaves one out. CI has no HVF, so `auto` is TCG there;
   `make test-posix-long` and `make measure-w4` run only where someone runs them.
+  The jobs run in an image (`.github/ci/Dockerfile`, built by `ci-image.yml`, tagged by `tools/ci-image-tag.sh`) so
+  that no job needs Ubuntu's mirrors; without the image they install their tools with `tools/ci-apt-install.sh`
+  (retries, then other mirrors). Details: `docs/tasks/TASK-26-report.md`, "CI image".
 - **Stage 6 acceptance (stage 6e).** One CPU: `-j` gives no speed. Every `exec` and `posix_spawn` reads the whole
   program file, debug information included (ADR-0212). A process ended by a signal reports no statistics. W9's
   interruption point is wall-clock on the host, so it differs with the accelerator (ADR-0110). SQLite's run-time

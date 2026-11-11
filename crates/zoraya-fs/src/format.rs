@@ -1,4 +1,9 @@
-//! On-disk format, version 1 (ADR-0011, ADR-0012, ADR-0014).
+//! On-disk format, version 2 (ADR-0011, ADR-0012, ADR-0014, ADR-0265).
+//!
+//! Version 2 (Q5) adds two item kinds: `K_FPARENT`, the directory a file or link
+//! object lives in (directories keep `K_PARENT`), and `K_LIMIT`, a directory's
+//! storage limit record `{ limit, used }`. Version 1 volumes are rebuilt with
+//! `zoraya-mkfs`.
 //!
 //! Every structure is encoded field by field, little-endian, at offsets
 //! fixed here; nothing depends on Rust's struct layout. Every decoder takes
@@ -53,7 +58,7 @@ use crate::name::{MAX_NAME, validate_name};
 use crate::time::Timestamp;
 
 /// Format version written by this code and the only one it reads.
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 /// Checksum algorithm identifier for CRC32C (ADR-0012 rule 2).
 pub const CSUM_CRC32C: u16 = 1;
 /// Root record pairs in the ring (ADR-0011 rule 3, an assumption there).
@@ -285,7 +290,9 @@ impl Header {
             return Err(Corrupt("bad metadata magic"));
         }
         if r.u16()? != FORMAT_VERSION {
-            return Err(Corrupt("unknown format version"));
+            return Err(Corrupt(
+                "format version is not 2: rebuild the volume with zoraya-mkfs",
+            ));
         }
         Ok(Header {
             kind: r.u8()?,
@@ -392,7 +399,9 @@ impl RootRecord {
             return Err(Corrupt("bad root record magic"));
         }
         if r.u16()? != FORMAT_VERSION {
-            return Err(Corrupt("unknown format version"));
+            return Err(Corrupt(
+                "format version is not 2: rebuild the volume with zoraya-mkfs",
+            ));
         }
         if r.u16()? != CSUM_CRC32C {
             return Err(Corrupt("unknown checksum algorithm"));
@@ -601,6 +610,11 @@ pub const K_PARENT: u8 = 2;
 pub const K_DIRENT: u8 = 3;
 pub const K_EXTENT: u8 = 4;
 pub const K_ORPHAN: u8 = 5;
+/// The directory that holds a file or link object (ADR-0265: a limit's walk
+/// from a file to the root).
+pub const K_FPARENT: u8 = 6;
+/// A directory's storage limit record (ADR-0265).
+pub const K_LIMIT: u8 = 7;
 
 /// Encoded size of a key without its name.
 pub const KEY_FIXED_LEN: usize = 18;
@@ -655,6 +669,22 @@ impl Key {
             name: Vec::new(),
         }
     }
+    pub fn fparent(id: u64) -> Key {
+        Key {
+            id,
+            kind: K_FPARENT,
+            off: 0,
+            name: Vec::new(),
+        }
+    }
+    pub fn limit(dir: u64) -> Key {
+        Key {
+            id: dir,
+            kind: K_LIMIT,
+            off: 0,
+            name: Vec::new(),
+        }
+    }
     pub fn orphan(id: u64) -> Key {
         Key {
             id: 0,
@@ -697,7 +727,9 @@ impl Key {
         let plain = self.name.is_empty();
         let ok = match self.kind {
             0 => self.id == 0 && self.off == 0 && plain, // Key::MIN, separators only
-            K_INODE | K_PARENT => self.id >= ROOT_ID && self.off == 0 && plain,
+            K_INODE | K_PARENT | K_FPARENT | K_LIMIT => {
+                self.id >= ROOT_ID && self.off == 0 && plain
+            }
             K_DIRENT => {
                 if self.name.len() > MAX_NAME || validate_name(&self.name).is_err() {
                     return Err(Corrupt("invalid name in directory entry"));
@@ -729,7 +761,16 @@ pub enum DataRef {
 pub enum Value {
     Inode(Attr),
     Parent(u64),
-    Dirent { child: u64, kind: ObjKind },
+    /// A directory's storage limit and the bytes charged below it
+    /// (ADR-0265 rule 1).
+    Limit {
+        limit: u64,
+        used: u64,
+    },
+    Dirent {
+        child: u64,
+        kind: ObjKind,
+    },
     Extent(DataRef),
     Orphan,
 }
@@ -739,6 +780,7 @@ impl Value {
         match self {
             Value::Inode(_) => ATTR_LEN,
             Value::Parent(_) => 8,
+            Value::Limit { .. } => 16,
             Value::Dirent { .. } => 9,
             Value::Extent(_) => PTR_LEN,
             Value::Orphan => 0,
@@ -749,6 +791,7 @@ impl Value {
         match self {
             Value::Inode(_) => K_INODE,
             Value::Parent(_) => K_PARENT,
+            Value::Limit { .. } => K_LIMIT,
             Value::Dirent { .. } => K_DIRENT,
             Value::Extent(_) => K_EXTENT,
             Value::Orphan => K_ORPHAN,
@@ -764,6 +807,10 @@ impl Value {
                 w.bytes(&rec)
             }
             Value::Parent(p) => w.u64(*p),
+            Value::Limit { limit, used } => {
+                w.u64(*limit)?;
+                w.u64(*used)
+            }
             Value::Dirent { child, kind } => {
                 w.u64(*child)?;
                 w.u8(kind.code())
@@ -784,7 +831,11 @@ impl Value {
                 }
                 return Ok(Value::Inode(a));
             }
-            K_PARENT => Value::Parent(r.u64()?),
+            K_PARENT | K_FPARENT => Value::Parent(r.u64()?),
+            K_LIMIT => Value::Limit {
+                limit: r.u64()?,
+                used: r.u64()?,
+            },
             K_DIRENT => {
                 let child = r.u64()?;
                 let kind = ObjKind::from_code(r.u8()?)?;
@@ -892,7 +943,9 @@ impl Node {
         match &self.body {
             Body::Leaf(items) => {
                 for (k, v) in items {
-                    if k.kind != v.kind_code() {
+                    if k.kind != v.kind_code()
+                        && !(k.kind == K_FPARENT && v.kind_code() == K_PARENT)
+                    {
                         return Err(Overflow);
                     }
                     k.encode(&mut w)?;

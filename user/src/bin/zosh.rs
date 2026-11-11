@@ -85,6 +85,8 @@ const SETTINGS: &str = "/config/settings";
 const ROOMS: &str = "/config/rooms";
 /// The compositor's description, for the desktop's settings (ADR-0169).
 const COMPD: &str = include_str!("../../describe/system/compd.cmd");
+/// The network service's description, for the `net.*` settings (ADR-0229).
+const NETD: &str = include_str!("../../describe/system/netd.cmd");
 const START: &str = "/config/start.zosh";
 const HISTORY: &str = "/config/history";
 /// A line end inside one history entry, as `/config/history` keeps it: the
@@ -3949,8 +3951,10 @@ fn main() -> i32 {
     // The shell's settings and the desktop's, which the compositor
     // declares (ADR-0169): `settings` knows both.
     let mut declared = c.d.settings.clone();
-    if let Ok(d) = zoraya_describe::parse(COMPD.as_bytes()) {
-        declared.extend(d.settings);
+    for text in [COMPD, NETD] {
+        if let Ok(d) = zoraya_describe::parse(text.as_bytes()) {
+            declared.extend(d.settings);
+        }
     }
     let mut z = Z {
         root,

@@ -2,13 +2,14 @@
 //! optionally populated from a host directory.
 //!
 //! ```text
-//! zoraya-mkfs --size BYTES [--from DIR] [--volume-id N] IMAGE
+//! zoraya-mkfs --size BYTES [--from DIR] [--limit PATH=BYTES]... [--volume-id N] IMAGE
 //! ```
 //!
 //! `BYTES` takes a `K`, `M` or `G` suffix. The image is created or
 //! truncated. With `--from`, the tree under `DIR` is copied in (see
 //! `zoraya_mkfs::populate`), committed, and checked with the same checker
-//! as `zoraya-fsck`. Exit status: 0 on success, 1 on failure, 2 on usage
+//! as `zoraya-fsck`. Each `--limit` sets a storage limit (ADR-0265) on a
+//! directory of the image, after the copy. Exit status: 0 on success, 1 on failure, 2 on usage
 //! errors.
 
 use std::path::PathBuf;
@@ -16,10 +17,12 @@ use std::process::ExitCode;
 
 use zoraya_fs::check::{CheckOptions, check};
 use zoraya_fs::{MkfsOptions, MountOptions, Volume, mkfs};
-use zoraya_mkfs::{Copied, FileDevice, SystemClock, populate, system_time};
+use zoraya_mkfs::{Copied, FileDevice, SystemClock, populate, set_limit, system_time};
 
 fn usage() -> ExitCode {
-    eprintln!("usage: zoraya-mkfs --size BYTES[K|M|G] [--from DIR] [--volume-id N] IMAGE");
+    eprintln!(
+        "usage: zoraya-mkfs --size BYTES[K|M|G] [--from DIR] [--limit PATH=BYTES]... [--volume-id N] IMAGE"
+    );
     ExitCode::from(2)
 }
 
@@ -36,10 +39,21 @@ fn parse_size(s: &str) -> Option<u64> {
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let (mut size, mut from, mut vid, mut image) = (None, None, None, None);
+    let mut limits: Vec<(String, u64)> = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--size" => size = args.next().and_then(|s| parse_size(&s)),
             "--from" => from = args.next().map(PathBuf::from),
+            "--limit" => {
+                let Some((path, bytes)) = args.next().and_then(|s| {
+                    s.split_once('=')
+                        .map(|(p, b)| (p.to_string(), parse_size(b)))
+                }) else {
+                    return usage();
+                };
+                let Some(bytes) = bytes else { return usage() };
+                limits.push((path, bytes));
+            }
             "--volume-id" => vid = args.next().and_then(|s| s.parse::<u64>().ok()),
             "-h" | "--help" => return usage(),
             s if s.starts_with('-') => return usage(),
@@ -49,7 +63,7 @@ fn main() -> ExitCode {
     let (Some(size), Some(image)) = (size, image) else {
         return usage();
     };
-    match run(size, from, vid, &image) {
+    match run(size, from, vid, &limits, &image) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("zoraya-mkfs: {e}");
@@ -66,6 +80,7 @@ fn run(
     size: u64,
     from: Option<PathBuf>,
     vid: Option<u64>,
+    limits: &[(String, u64)],
     image: &std::path::Path,
 ) -> Result<(), String> {
     let now = system_time(std::time::SystemTime::now());
@@ -86,16 +101,21 @@ fn run(
     )
     .map_err(|e| format!("mkfs: {e:?}"))?;
     let mut copied = Copied::default();
-    if let Some(src) = &from {
+    if from.is_some() || !limits.is_empty() {
         let mut v = Volume::mount(dev, SystemClock::default(), MountOptions::default())
             .map_err(|e| format!("mount: {e:?}"))?;
         let root = v.root();
-        populate(&mut v, root, src, &mut copied)?;
-        if let Ok(meta) = std::fs::metadata(src)
-            && let Ok(t) = meta.modified()
-        {
-            v.set_attr(root, None, Some(system_time(t)))
-                .map_err(|e| format!("root: {e:?}"))?;
+        if let Some(src) = &from {
+            populate(&mut v, root, src, &mut copied)?;
+            if let Ok(meta) = std::fs::metadata(src)
+                && let Ok(t) = meta.modified()
+            {
+                v.set_attr(root, None, Some(system_time(t)))
+                    .map_err(|e| format!("root: {e:?}"))?;
+            }
+        }
+        for (path, bytes) in limits {
+            set_limit(&mut v, path, *bytes)?;
         }
         v.close(root).map_err(|e| format!("{e:?}"))?;
         dev = v.unmount().map_err(|e| format!("commit: {e:?}"))?;

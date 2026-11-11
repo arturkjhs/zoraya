@@ -178,6 +178,24 @@ fn main() -> i32 {
     assert_eq!((r.status.0, r.sent), (status::OK, 4));
     assert!(r.received >= 1, "the gateway answers");
     assert!(r.rtt_min_us > 0 && r.rtt_min_us <= r.rtt_max_us);
+    // Requests that cannot leave (an on-link address that answers no ARP):
+    // a run of more than the socket's four slots ends by its deadline with
+    // everything lost, and the next run to the gateway still works (review
+    // error 1; under `restrict=on` the lease has no router either).
+    let lost = ping(root, [10, 0, 2, 99], 8);
+    println!(
+        "t_netd: ping 10.0.2.99: sent {} received {}",
+        lost.sent, lost.received
+    );
+    assert_eq!(
+        (lost.status.0, lost.sent, lost.received),
+        (status::OK, 8, 0)
+    );
+    let again = ping(root, GATEWAY, 4);
+    assert_eq!(
+        (again.status.0, again.sent, again.received),
+        (status::OK, 4, 4)
+    );
     // Not an address anyone can be pinged at.
     assert_eq!(
         ping(root, [0, 0, 0, 0], 1).status.0,

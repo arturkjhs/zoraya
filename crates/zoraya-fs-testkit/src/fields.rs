@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use zoraya_fs::check::{BlockKind, reachable_from};
 use zoraya_fs::crc32c::checksum64;
 use zoraya_fs::format::{
-    ATTR_FIELDS, BITMAP_BITS_OFF, HEADER_LEN, K_DIRENT, K_EXTENT, K_INODE, K_ORPHAN, K_PARENT,
-    KEY_FIXED_LEN, N_PAIRS, ROOT_CSUM_OFF, RootRecord,
+    ATTR_FIELDS, BITMAP_BITS_OFF, HEADER_LEN, K_DIRENT, K_EXTENT, K_FPARENT, K_INODE, K_LIMIT,
+    K_ORPHAN, K_PARENT, KEY_FIXED_LEN, N_PAIRS, ROOT_CSUM_OFF, RootRecord,
 };
 use zoraya_fs::{BLOCK_SIZE, BlockDevice, select_root};
 
@@ -245,7 +245,21 @@ pub fn field_map(dev: &mut ImageDevice) -> Result<FieldMap, String> {
                                     });
                                 }
                             }
-                            K_PARENT => fields.push(Field {
+                            K_LIMIT => {
+                                fields.push(Field {
+                                    block: b,
+                                    off: at,
+                                    len: 8,
+                                    what: "limit",
+                                });
+                                fields.push(Field {
+                                    block: b,
+                                    off: at + 8,
+                                    len: 8,
+                                    what: "limit used",
+                                });
+                            }
+                            K_PARENT | K_FPARENT => fields.push(Field {
                                 block: b,
                                 off: at,
                                 len: 8,

@@ -89,6 +89,17 @@
 < PSURF>
 > echo still-here\r
 < still-here
+# A disk filler in a limited directory (ADR-0265, Q5; the ports have no dd):
+# its writes stop at the limit with EDQUOT, rm still works at the limit, a
+# directory does not cross the limit's boundary (EXDEV), and a write outside
+# the limit still works.
+> t_posix diskfill /limited /home\r
+< t_posix: diskfill wrote 15 blocks before Quota exceeded
+< t_posix: diskfill passed
+< PSURF>
+> echo outside > /home/outside && cat /home/outside && ls /limited; echo done\r
+< outside
+< done
 < PSURF>
 > exit\r
 < BROKER-STATS

@@ -306,6 +306,10 @@ fn malformed_requests_close_the_connection_and_unknown_ones_do_not() {
         decode::<ErrorReply>(&r, 0).unwrap().1.status,
         status::INVALID
     );
+    // An ErrorReply sent as a request is not answered: the connection ends
+    // (two servers must not answer each other's errors forever).
+    let error = bytes(&ErrorReply { status: 3 }, 1);
+    assert_eq!(call(&error, 0), Action::Close);
     // A connection that is gone cannot ask.
     assert_eq!(
         service.handle(63, &status, 0, &mut net.client, 0),

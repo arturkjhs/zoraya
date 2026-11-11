@@ -30,6 +30,8 @@ const OPTION_HOSTNAME: u8 = 12;
 /// The most frames one `poll` moves each way, so that a flood cannot hold
 /// the single loop of `netd` (the rest waits for the next turn).
 pub const BURST: usize = 64;
+/// The shortest delay `poll` asks for on account of a run, in microseconds.
+pub const MIN_DELAY_US: i64 = 1_000;
 
 /// Why a stack could not be made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,12 +108,14 @@ pub struct PingResult {
 struct PingRun {
     target: [u8; 4],
     count: u32,
-    timeout_us: i64,
     sent: Vec<i64>,
     rtt: Vec<Option<u32>>,
     next_at: i64,
-    /// Set after the last request.
-    deadline: Option<i64>,
+    /// When the run ends whatever came back: fixed when it starts, the last
+    /// request's turn plus the timeout.
+    deadline: i64,
+    /// This run's identifier: a late reply of an earlier run is not ours.
+    ident: u16,
 }
 
 pub struct Stack<L: Link> {
@@ -125,7 +129,19 @@ pub struct Stack<L: Link> {
     lease: Option<Lease>,
     static_up: bool,
     ping: Option<PingRun>,
+    /// Runs started, for their identifiers.
+    runs: u16,
     events: Vec<Event>,
+}
+
+/// A fresh echo socket. Each run gets one, so that a request that could not
+/// leave (no route, no ARP answer) does not stay at the head of the transmit
+/// buffer and block the next run.
+fn new_icmp_socket() -> icmp::Socket<'static> {
+    icmp::Socket::new(
+        icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 4], vec![0; 4 * 256]),
+        icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 4], vec![0; 4 * 256]),
+    )
 }
 
 fn octets(a: Ipv4Address) -> [u8; 4] {
@@ -152,11 +168,7 @@ impl<L: Link> Stack<L> {
         iface_config.random_seed = seed;
         let iface = Interface::new(iface_config, &mut device, Instant::from_micros(now_us));
         let mut sockets = SocketSet::new(Vec::new());
-        let icmp_socket = icmp::Socket::new(
-            icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 4], vec![0; 4 * 256]),
-            icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 4], vec![0; 4 * 256]),
-        );
-        let icmp = sockets.add(icmp_socket);
+        let icmp = sockets.add(new_icmp_socket());
         let mut stack = Stack {
             device,
             iface,
@@ -168,13 +180,9 @@ impl<L: Link> Stack<L> {
             lease: None,
             static_up: false,
             ping: None,
+            runs: 0,
             events: Vec::new(),
         };
-        stack
-            .sockets
-            .get_mut::<icmp::Socket>(icmp)
-            .bind(IcmpEndpoint::Ident(PING_IDENT))
-            .expect("a fresh socket binds");
         match stack.config.mode.clone() {
             Mode::Dhcp => {
                 let mut socket = dhcpv4::Socket::new();
@@ -275,19 +283,25 @@ impl<L: Link> Stack<L> {
                 break;
             }
         }
-        if self.device.link.has_input() {
-            // More frames than one turn takes: come back at once.
+        if self.device.link.has_input() && self.device.link.can_send() {
+            // More frames than one turn takes, and room to answer them: come
+            // back at once. With no room the loop waits for the channel to
+            // become writable (or the timers) instead of spinning.
             return Some(0);
         }
         let by_stack = self
             .iface
             .poll_delay(now, &self.sockets)
             .map(|d| d.total_micros() as i64);
+        // The next thing a run waits for: its next request, or its deadline.
+        // Never zero: a run whose request cannot leave must not spin.
         let by_ping = self.ping.as_ref().map(|p| {
-            let at = p
-                .deadline
-                .map_or(p.next_at, |d| d.min(p.next_at.max(now_us)));
-            (at - now_us).max(0)
+            let at = if (p.sent.len() as u32) < p.count {
+                p.next_at.min(p.deadline)
+            } else {
+                p.deadline
+            };
+            (at - now_us).max(MIN_DELAY_US)
         });
         match (by_stack, by_ping) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -360,14 +374,23 @@ impl<L: Link> Stack<L> {
         if !is_unicast(target) || own == Some(target) || count == 0 || count > 64 {
             return Err(PingError::BadTarget);
         }
+        self.runs = self.runs.wrapping_add(1);
+        let ident = PING_IDENT.wrapping_add(self.runs);
+        let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
+        if socket.bind(IcmpEndpoint::Ident(ident)).is_err() {
+            return Err(PingError::Busy);
+        }
+        let timeout_us = timeout_us.max(0);
         self.ping = Some(PingRun {
             target,
             count,
-            timeout_us: timeout_us.max(0),
             sent: Vec::new(),
             rtt: Vec::new(),
             next_at: now_us,
-            deadline: None,
+            deadline: now_us
+                .saturating_add(i64::from(count - 1) * PING_INTERVAL_US)
+                .saturating_add(timeout_us),
+            ident,
         });
         Ok(())
     }
@@ -383,7 +406,13 @@ impl<L: Link> Stack<L> {
         let socket = self.sockets.get_mut::<icmp::Socket>(self.icmp);
         // Replies first.
         let mut buf = [0u8; 256];
-        while let Ok((n, from)) = socket.recv_slice(&mut buf) {
+        loop {
+            let (n, from) = match socket.recv_slice(&mut buf) {
+                Ok(r) => r,
+                // The packet was dequeued and was too long for us: not ours.
+                Err(icmp::RecvError::Truncated) => continue,
+                Err(_) => break,
+            };
             let IpAddress::Ipv4(from) = from;
             let caps = ChecksumCapabilities::default();
             let Ok(packet) = Icmpv4Packet::new_checked(&buf[..n]) else {
@@ -394,7 +423,7 @@ impl<L: Link> Stack<L> {
                 continue;
             };
             let seq = usize::from(seq_no);
-            if ident != PING_IDENT || octets(from) != run.target || seq >= run.sent.len() {
+            if ident != run.ident || octets(from) != run.target || seq >= run.sent.len() {
                 continue;
             }
             if run.rtt[seq].is_none() {
@@ -402,48 +431,48 @@ impl<L: Link> Stack<L> {
                 run.rtt[seq] = Some(u32::try_from(rtt).unwrap_or(u32::MAX));
             }
         }
-        // Then the next request, if it is due and the socket has room.
-        if (run.sent.len() as u32) < run.count && now_us >= run.next_at && socket.can_send() {
+        // Then the next request, if it is due. One that cannot be queued
+        // (the socket's four slots are held by requests that could not leave)
+        // takes its turn and is lost: the run's end does not wait for it.
+        if (run.sent.len() as u32) < run.count && now_us >= run.next_at {
             let repr = Icmpv4Repr::EchoRequest {
-                ident: PING_IDENT,
+                ident: run.ident,
                 seq_no: run.sent.len() as u16,
                 data: &PING_DATA,
             };
             let mut bytes = [0u8; 8 + PING_DATA.len()];
             let mut packet = Icmpv4Packet::new_unchecked(&mut bytes[..]);
             repr.emit(&mut packet, &ChecksumCapabilities::default());
-            let sent = socket
-                .send_slice(
+            if socket.can_send() {
+                let _ = socket.send_slice(
                     &bytes[..repr.buffer_len()],
                     IpAddress::Ipv4(Ipv4Address::from(run.target)),
-                )
-                .is_ok();
-            // A refused send still takes its turn: the run ends in a loss.
-            let _ = sent;
+                );
+            }
             run.sent.push(now_us);
             run.rtt.push(None);
-            run.next_at = now_us + PING_INTERVAL_US;
-            if run.sent.len() as u32 == run.count {
-                run.deadline = Some(now_us + run.timeout_us);
-            }
+            run.next_at = now_us.saturating_add(PING_INTERVAL_US);
         }
         let got = run.rtt.iter().flatten().count() as u32;
-        let finished = got == run.count
-            || run
-                .deadline
-                .is_some_and(|d| now_us >= d && run.sent.len() as u32 == run.count);
-        if finished {
+        let all_sent = run.sent.len() as u32 == run.count;
+        let finished = got == run.count || (all_sent && now_us >= run.deadline);
+        // Past the deadline nothing more is waited for, sent or not.
+        let expired = now_us >= run.deadline;
+        if finished || expired {
             let rtts: Vec<u32> = run.rtt.iter().flatten().copied().collect();
             let sum: u64 = rtts.iter().map(|r| u64::from(*r)).sum();
             let result = PingResult {
                 target: run.target,
-                sent: run.sent.len() as u32,
+                sent: run.count,
                 received: got,
                 rtt_min_us: rtts.iter().copied().min().unwrap_or(0),
                 rtt_avg_us: (sum / rtts.len().max(1) as u64) as u32,
                 rtt_max_us: rtts.iter().copied().max().unwrap_or(0),
             };
             self.ping = None;
+            // Whatever is still queued in the socket goes with it.
+            self.sockets.remove(self.icmp);
+            self.icmp = self.sockets.add(new_icmp_socket());
             self.events.push(Event::PingDone(result));
         }
     }
