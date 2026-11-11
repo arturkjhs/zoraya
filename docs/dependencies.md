@@ -6,7 +6,13 @@ purpose, and the reason it is not written in-house. Only permissively licensed (
 
 | Crate | Version | License | Used by | Purpose | Why not in-house |
 |---|---|---|---|---|---|
-| *(none)* | | | | | |
+| smoltcp | =0.14.0 | 0BSD | `zoraya-net` (`netd`) | The TCP/IP stack: Ethernet, ARP, IPv4, ICMP echo, UDP, TCP with Reno, the DHCPv4 client (ADR-0221 item 3; features `alloc`, `medium-ethernet`, `proto-ipv4`, `socket-dhcpv4`, `socket-icmp`, `socket-udp`, `socket-tcp`, `socket-tcp-reno`; no `std`, no `log`, no IPv6) | A TCP implementation with congestion control, a DHCP client and ARP is tens of thousands of lines whose bugs are remote-code-execution bugs; smoltcp is `no_std`, fuzzed upstream and the survey's choice (`docs/research/network/survey.md#smoltcp`). Proposed ADR-0281 records the decision |
+| managed | 0.8.0 | 0BSD | smoltcp | Owned-or-borrowed slices and maps | smoltcp's own dependency |
+| byteorder | 1.5.0 | Unlicense OR MIT | smoltcp | Big-endian integer access in the wire parsers | smoltcp's own dependency |
+| heapless | 0.9.3 | MIT OR Apache-2.0 | smoltcp; `zoraya-net` tests | Fixed-capacity vectors in smoltcp's API (the DHCP configuration's DNS list) | smoltcp's own dependency |
+| bitflags | 1.3.2 | MIT OR Apache-2.0 | smoltcp | Flag types | smoltcp's own dependency |
+| cfg-if | 1.0.5 | MIT OR Apache-2.0 | smoltcp | Conditional compilation | smoltcp's own dependency |
+| hash32, stable_deref_trait | 0.3.1, 1.2.1 | MIT OR Apache-2.0 | heapless | Hashing and a marker trait | heapless's own dependencies |
 
 The kernel uses `core` and `alloc`, and user programs `core`. The crates under `crates/` use only `core` (and `alloc`:
 `zoraya-fs`), and their tests use `std`, with seeded generators instead of a property-testing crate. `zoraya-fs-testkit`,
@@ -16,8 +22,10 @@ other. The GUI's text is `zoraya-text`, written for Zoraya (ADR-0162), with no r
 in the table below. The host-side tools
 (`zoraya-test-runner`, `zoraya-adr-check`, `zoraya-mkramdisk`, `zoraya-mutants`) use
 only `std`, and the test runner also the workspace's `zoraya-text`, `zoraya-term` and `zoraya-compositor`, to read the
-screen as the terminal draws it. `Cargo.lock` has no registry entries, so no build needs network access once the toolchain in
-`rust-toolchain.toml` is installed.
+screen as the terminal draws it. `Cargo.lock` has registry entries since N2 (smoltcp and the crates above, with their checksums; `Cargo.lock` also lists
+smoltcp's optional `defmt` crates, which no build compiles). The first build of a checkout downloads them from crates.io
+(`cargo fetch`); after that no build needs network access. This is a deviation from the earlier rule that a build needs
+only the toolchain: proposed ADR-0281 item 1 records it and the alternative (vendoring).
 
 ## Fonts
 

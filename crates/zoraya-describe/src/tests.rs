@@ -263,6 +263,62 @@ fn setting_types_check_their_bounds() {
     assert_eq!(parse_number("-"), None);
 }
 
+/// ADR-0229: the `address` and `prefix` types.
+#[test]
+fn addresses_and_prefixes_are_plain_dotted_decimal() {
+    assert_eq!(parse_address("10.0.2.15"), Some([10, 0, 2, 15]));
+    assert_eq!(parse_address("255.255.255.255"), Some([255; 4]));
+    for bad in [
+        "",
+        "10.0.2",
+        "10.0.2.15.1",
+        "10.0.2.256",
+        "10.0.2.015",
+        "10.0.2.-1",
+        "10.0.2.+1",
+        " 10.0.2.15",
+        "10.0.2.15 ",
+        "10..2.15",
+        "a.b.c.d",
+        "1000.0.0.1",
+        "0x0a.0.0.1",
+        "10.0.2.15/24",
+    ] {
+        assert_eq!(parse_address(bad), None, "{bad:?}");
+    }
+    assert_eq!(parse_prefix("10.0.2.15/24"), Some(([10, 0, 2, 15], 24)));
+    assert_eq!(parse_prefix("0.0.0.0/0"), Some(([0; 4], 0)));
+    for bad in [
+        "10.0.2.15",
+        "10.0.2.15/",
+        "10.0.2.15/33",
+        "10.0.2.15/024",
+        "10.0.2.15/-1",
+        "/24",
+        "10.0.2/24",
+        "10.0.2.15/2/4",
+    ] {
+        assert_eq!(parse_prefix(bad), None, "{bad:?}");
+    }
+    assert!(SettingType::Address.check("10.0.2.2").is_ok());
+    assert!(SettingType::Address.check("").is_ok());
+    assert_eq!(
+        SettingType::Address.check("10.0.2").unwrap_err(),
+        "10.0.2 is not an address"
+    );
+    assert!(SettingType::Prefix.check("10.0.2.15/24").is_ok());
+    assert!(SettingType::Prefix.check("").is_ok());
+    assert!(SettingType::Prefix.check("10.0.2.15").is_err());
+    let list = parse(
+        b"name x\nsummary s\nusage x\ncwd none\nsetting net.dns list of address 0 4 '' dns servers\nsetting net.ip prefix '' the address\n---\nbody\n",
+    )
+    .unwrap();
+    assert_eq!(list.settings[0].ty.word(), "list of address 0 4");
+    assert_eq!(list.settings[1].ty.word(), "prefix");
+    assert!(list.settings[0].ty.check("10.0.2.3 1.1.1.1").is_ok());
+    assert!(list.settings[0].ty.check("10.0.2.3 1.1.1").is_err());
+}
+
 /// A small deterministic generator, so that a failure repeats.
 struct Rng(u64);
 

@@ -226,6 +226,11 @@ pub enum SettingType {
     },
     Text,
     Path,
+    /// ADR-0229: an IPv4 address in dotted decimal, or empty (not set).
+    Address,
+    /// ADR-0229: an IPv4 address and a prefix length, `a.b.c.d/len`, or
+    /// empty (not set).
+    Prefix,
     Choice(Vec<String>),
     /// ADR-0171: items of one type, `min` to `max` of them, `unique`
     /// refusing a repeated one. The value is the items as words
@@ -275,6 +280,8 @@ impl SettingType {
             }
             SettingType::Text => true,
             SettingType::Path => value.starts_with('/'),
+            SettingType::Address => value.is_empty() || parse_address(value).is_some(),
+            SettingType::Prefix => value.is_empty() || parse_prefix(value).is_some(),
             SettingType::Choice(choices) => choices.iter().any(|c| c == value),
             SettingType::List {
                 item,
@@ -312,6 +319,8 @@ impl SettingType {
                 s.push_str(&max.to_string());
             }
             SettingType::Path => s.push_str(" is not an absolute path"),
+            SettingType::Address => s.push_str(" is not an address"),
+            SettingType::Prefix => s.push_str(" is not an address with a prefix length"),
             SettingType::Choice(choices) => {
                 s.push_str(" is not one of ");
                 s.push_str(&choices.join(", "));
@@ -334,6 +343,8 @@ impl SettingType {
             }
             SettingType::Text => "text".into(),
             SettingType::Path => "path".into(),
+            SettingType::Address => "address".into(),
+            SettingType::Prefix => "prefix".into(),
             SettingType::Choice(c) => {
                 let mut s = String::from("choice ");
                 s.push_str(&c.join("|"));
@@ -353,6 +364,37 @@ impl SettingType {
             }
         }
     }
+}
+
+/// An IPv4 address in dotted decimal: four numbers of at most three digits
+/// from 0 to 255, no sign, no leading zero (so `010` is not read as octal by
+/// anyone), nothing else (ADR-0229).
+pub fn parse_address(text: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut parts = text.split('.');
+    for byte in &mut out {
+        let part = parts.next()?;
+        if part.is_empty()
+            || part.len() > 3
+            || !part.bytes().all(|b| b.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            return None;
+        }
+        *byte = part.parse().ok()?;
+    }
+    parts.next().is_none().then_some(out)
+}
+
+/// `a.b.c.d/len` with `len` from 0 to 32 in the same plain decimal.
+pub fn parse_prefix(text: &str) -> Option<([u8; 4], u8)> {
+    let (address, length) = text.split_once('/')?;
+    let plain = !length.is_empty()
+        && length.len() <= 2
+        && length.bytes().all(|b| b.is_ascii_digit())
+        && (length.len() == 1 || !length.starts_with('0'));
+    let length: u8 = length.parse().ok().filter(|_| plain)?;
+    (length <= 32).then(|| parse_address(address).map(|a| (a, length)))?
 }
 
 /// A decimal integer with an optional `-`, without overflow.
@@ -760,6 +802,8 @@ fn item_type<'a>(ty: &str, rest: &'a str, line: usize) -> Result<(SettingType, &
         "yes-no" => SettingType::YesNo,
         "text" => SettingType::Text,
         "path" => SettingType::Path,
+        "address" => SettingType::Address,
+        "prefix" => SettingType::Prefix,
         "number" => {
             let Some((min, r1)) = next_word(rest) else {
                 return err(line, "a number needs MIN and MAX");
