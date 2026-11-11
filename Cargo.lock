@@ -58,6 +58,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-charge"
+version = "0.1.0"
+dependencies = [
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-chooser"
 version = "0.1.0"
 dependencies = [
@@ -260,6 +267,7 @@ version = "0.1.0"
 dependencies = [
  "zoraya-abi",
  "zoraya-channel",
+ "zoraya-charge",
  "zoraya-console",
  "zoraya-dtb",
  "zoraya-elf",

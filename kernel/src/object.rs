@@ -9,6 +9,7 @@ use zoraya_elf::Program;
 use zoraya_events::SourceId;
 
 use crate::channel::{self, Pair};
+use crate::charge::Paid;
 use crate::device::{Device, Interrupt, Pin};
 use crate::job::Job;
 use crate::memory::object::MemoryObject;
@@ -39,6 +40,13 @@ pub struct MemoryImage {
     pub program: Program,
     /// The file's whole program header table, for the startup block.
     pub table: Vec<u8>,
+    /// The creator pays for the record and the table (ADR-0261 point 6).
+    pub _paid: Paid,
+}
+
+/// What `event_create` makes: an identity, and what it costs its creator.
+pub struct Event {
+    pub _paid: Paid,
 }
 
 #[derive(Clone)]
@@ -52,7 +60,7 @@ pub enum Object {
     Port(Arc<Port>),
     Memory(Arc<MemoryObject>),
     /// Its identity is all it has (ADR-0080).
-    Event(Arc<u8>),
+    Event(Arc<Event>),
     Device(Arc<Device>),
     Interrupt(Arc<Interrupt>),
     Pin(Arc<Pin>),

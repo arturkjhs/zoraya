@@ -59,7 +59,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	t_streams t_snapshot t_image t_suspend posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	t_streams t_snapshot t_image t_suspend t_quota posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
@@ -540,7 +540,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -604,6 +604,15 @@ check-host-paths:
 # library, if it has tests, and every top-level file of tests/, by the cap or
 # by a counting allocator over `Capped`. An integration test binary does not
 # get the library's cap: TASK-20's mutants found that (docs/backlog.md).
+# INV-0261-5: kernel code reaches the heap's uncharged forms only where there is
+# no paying job; every other allocation goes through crate::charge.
+check-charged-alloc:
+	tools/check-charged-alloc.sh
+
+# INV-0268-1, INV-0268-2: the refusal of untrusted rooms and its gate list.
+check-untrusted-gate:
+	tools/check-untrusted-gate.sh
+
 check-test-caps:
 	@bad=""; \
 	for f in crates/*/tests/*.rs; do \
@@ -632,7 +641,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui
-TEST_STEPS += check-ci-jobs
+TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -656,7 +665,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

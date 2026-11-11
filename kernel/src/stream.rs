@@ -12,7 +12,8 @@ use zoraya_abi::Status;
 use zoraya_events::SourceId;
 use zoraya_stream::{CAPACITY, Error, PAGE, Refused, Ring, Storage};
 
-use crate::memory::heap::try_arc;
+use crate::charge::{self, Paid};
+use crate::job::Job;
 use crate::memory::object::MemoryObject;
 use crate::memory::phys_to_virt;
 use crate::port;
@@ -43,6 +44,9 @@ pub struct Stream {
     /// stream reaches its frames, and only under `state`.
     memory: Arc<MemoryObject>,
     sources: [SourceId; 2],
+    /// The creator pays for the stream, its two ends and their sources; the
+    /// ring's frames are `memory`'s.
+    _paid: Paid,
 }
 
 /// The ring's storage: the object's frames, through the direct map.
@@ -78,8 +82,15 @@ fn refused(e: Refused) -> Status {
 
 impl Stream {
     /// A stream and its two ends, everything committed now (INV-0101-4).
-    pub fn create() -> Result<(Arc<ReadEnd>, Arc<WriteEnd>), Status> {
-        let memory = MemoryObject::new(CAPACITY as u64, false)?;
+    pub fn create(payer: Option<&Arc<Job>>) -> Result<(Arc<ReadEnd>, Arc<WriteEnd>), Status> {
+        let mut paid = Paid::new(payer);
+        paid.kernel(
+            charge::arc_cost::<Stream>()
+                + charge::arc_cost::<ReadEnd>()
+                + charge::arc_cost::<WriteEnd>()
+                + 2 * charge::SOURCE_COST,
+        )?;
+        let memory = MemoryObject::new(CAPACITY as u64, false, payer)?;
         let ring = Ring::new();
         let shown = [ring.read_signals(), ring.write_signals()];
         let read = port::new_source(shown[READ_END])?;
@@ -91,15 +102,16 @@ impl Stream {
             }
         };
         // On failure the value was dropped, and its `Drop` freed the sources.
-        let stream = try_arc(Stream {
+        let stream = charge::prepaid_arc(Stream {
             state: SpinLock::new(State { ring, shown }),
             memory,
             sources: [read, write],
-        })
-        .map_err(|_| Status::NoMemory)?;
-        // A failed end closes its side as it drops, which only shows.
-        let reader = try_arc(ReadEnd(stream.clone())).map_err(|_| Status::NoMemory)?;
-        let writer = try_arc(WriteEnd(stream)).map_err(|_| Status::NoMemory)?;
+            _paid: paid,
+        })?;
+        // A failed end closes its side as it drops, which only shows. The ends'
+        // records are in the stream's charge.
+        let reader = charge::prepaid_arc(ReadEnd(stream.clone()))?;
+        let writer = charge::prepaid_arc(WriteEnd(stream))?;
         Ok((reader, writer))
     }
 

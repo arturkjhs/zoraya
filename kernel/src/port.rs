@@ -7,12 +7,13 @@ use zoraya_abi::{Mode, Packet, Status};
 use zoraya_events::{Error, Events, PortId, SourceId};
 use zoraya_time::Deadline;
 
-use crate::memory::heap::try_arc;
+use crate::charge::{self, Paid};
+use crate::job::Job;
 use crate::sched::{self, Thread};
 use crate::sync::SpinLock;
 use crate::{arch, timer};
 
-pub static EVENTS: SpinLock<Events<Arc<Thread>>> = SpinLock::new(Events::new());
+pub static EVENTS: SpinLock<Events<Arc<Thread>, Paid>> = SpinLock::new(Events::new());
 
 fn status(e: Error) -> Status {
     match e {
@@ -48,13 +49,40 @@ pub fn clear_signals(source: SourceId, bits: u32) {
 
 pub struct Port {
     id: PortId,
+    /// The creator pays for the port and, in steps, for the packets it holds.
+    paid: SpinLock<Charged>,
 }
 
+/// What a port has paid for: `paid`, and how many ready-list slots of it
+/// (`PACKET_STEP` at a time, never given back before the port ends).
+struct Charged {
+    paid: Paid,
+    slots: usize,
+}
+
+/// What a port costs beside its record: its entry in the event tables, and a
+/// first `PACKET_STEP` packets of 24 bytes. The ready list grows from there
+/// as packets are queued, and `Port::queue` charges each step first.
+const PORT_EXTRA: u64 = 128 + PACKET_STEP as u64 * 24;
+
+/// Packets charged for at a time.
+const PACKET_STEP: usize = 64;
+
 impl Port {
-    pub fn new() -> Result<Arc<Port>, Status> {
+    /// A port paid for by `payer` (`None`: the kernel's).
+    pub fn new(payer: Option<&Arc<Job>>) -> Result<Arc<Port>, Status> {
+        let mut paid = Paid::new(payer);
+        paid.kernel(charge::arc_cost::<Port>() + PORT_EXTRA)?;
         let id = EVENTS.lock().new_port().map_err(status)?;
-        // On failure the value was dropped, and its `Drop` freed the port.
-        try_arc(Port { id }).map_err(|_| Status::NoMemory)
+        // On failure the value was dropped, and its `Drop` freed the port and
+        // gave the charge back.
+        charge::prepaid_arc(Port {
+            id,
+            paid: SpinLock::new(Charged {
+                paid,
+                slots: PACKET_STEP,
+            }),
+        })
     }
 
     /// Ends all waits and subscriptions (ADR-0006 rule 5).
@@ -69,10 +97,11 @@ impl Port {
         key: u64,
         mode: Mode,
         owner: u64,
+        paid: Paid,
     ) -> Result<(), Status> {
         EVENTS
             .lock()
-            .subscribe(self.id, source, mask, key, mode, owner)
+            .subscribe_paid(self.id, source, mask, key, mode, owner, paid)
             .map_err(status)
     }
 
@@ -81,6 +110,16 @@ impl Port {
     }
 
     pub fn queue(&self, key: u64, data: u64) -> Result<(), Status> {
+        // The charge first, so that a refused one changes nothing. The ready
+        // list is an upper bound of the user packets, which it also holds.
+        {
+            let mut charged = self.paid.lock();
+            let needed = EVENTS.lock().ready_len(self.id) + 1;
+            while charged.slots < needed {
+                charged.paid.kernel(PACKET_STEP as u64 * 24)?;
+                charged.slots += PACKET_STEP;
+            }
+        }
         EVENTS
             .lock()
             .queue(self.id, key, data, &mut sched::wake)

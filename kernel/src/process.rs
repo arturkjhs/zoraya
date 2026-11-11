@@ -26,8 +26,9 @@ use zoraya_events::{RequestQueue, SourceId};
 use zoraya_pagetable::{Attributes, MemoryType};
 
 use crate::arch::{Frame, mmu};
+use crate::charge::{self, Paid};
 use crate::job::Job;
-use crate::memory::heap::{OutOfMemory, try_arc};
+use crate::memory::heap::OutOfMemory;
 use crate::memory::object::MemoryObject;
 use crate::memory::user::{AddressSpace, MapFailed, USER_HIGH, USER_LOW};
 use crate::object::{self, HandleTable, MemoryImage, Object};
@@ -43,6 +44,8 @@ pub enum SpawnError {
     NotFound,
     BadProgram(ElfError),
     NoMemory,
+    /// A limit of the job (or one above it) refused the process.
+    OverQuota,
     /// The job was killed.
     JobClosed,
     /// The vectors and program headers do not fit the startup block.
@@ -56,8 +59,20 @@ impl From<OutOfMemory> for SpawnError {
 }
 
 impl From<MapFailed> for SpawnError {
-    fn from(_: MapFailed) -> SpawnError {
-        SpawnError::NoMemory
+    fn from(e: MapFailed) -> SpawnError {
+        match e {
+            MapFailed::Quota => SpawnError::OverQuota,
+            _ => SpawnError::NoMemory,
+        }
+    }
+}
+
+impl From<Status> for SpawnError {
+    fn from(e: Status) -> SpawnError {
+        match e {
+            Status::OverQuota => SpawnError::OverQuota,
+            _ => SpawnError::NoMemory,
+        }
     }
 }
 
@@ -67,6 +82,7 @@ impl From<SpawnError> for Status {
             SpawnError::NotFound => Status::NotFound,
             SpawnError::BadProgram(_) => Status::InvalidArgument,
             SpawnError::NoMemory => Status::NoMemory,
+            SpawnError::OverQuota => Status::OverQuota,
             SpawnError::JobClosed => Status::BadState,
             SpawnError::TooLarge => Status::LimitReached,
         }
@@ -104,6 +120,10 @@ pub struct Process {
     pub space: SpinLock<Option<AddressSpace>>,
     exit: SpinLock<Exit>,
     job: Arc<Job>,
+    /// The process's slot in its job's count and its record, thread-less:
+    /// the slot goes at exit, the rest when the last holder lets go
+    /// (ADR-0261 point 5).
+    paid: SpinLock<Paid>,
     source: SourceId,
     pub handles: SpinLock<HandleTable>,
     /// Its thread, until exit: how a request reaches a process that is not
@@ -398,6 +418,15 @@ impl<'a> Loadable<'a> {
     }
 }
 
+/// The kernel reserve is 1/64 of the frames free after boot `[assumption]`: the
+/// ADR's 1/16 refused the files manager's menu in the 256 MiB GUI test with the
+/// session at 214.8 of 215.7 MiB (Q1's report; a proposed change to the number).
+const KERNEL_RESERVE_DIVISOR: u64 = 64;
+
+/// A process's place in its job's lists of members: one `Arc` each in the
+/// job's `processes` vector and in the scheduler's queues, rounded up.
+const LIST_ENTRIES: u64 = 64;
+
 /// The range `image_create` checks programs against (ADR-0108 item 1).
 pub const PROGRAM_LOW: u64 = USER_LOW;
 pub const PROGRAM_HIGH: u64 = STARTUP_BLOCK - PAGE_SIZE;
@@ -489,7 +518,11 @@ pub struct Start<'a> {
 /// Makes a process. Nothing else has changed if this fails.
 pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     let program = start.image.program;
-    let mut space = AddressSpace::new()?;
+    // The slot in the job's count first: a fork bomb stops here, before it
+    // takes a page (ADR-0263, INV-0263-1).
+    let mut count = Paid::new(Some(&start.job));
+    count.process()?;
+    let mut space = AddressSpace::new(Some(&start.job))?;
     for segment in program.segments() {
         load_segment(&mut space, start.image.source, segment)?;
     }
@@ -502,6 +535,7 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
         start.name,
         space,
         start.job,
+        count,
         start.handles,
         start.dispositions,
         start.suspended,
@@ -510,11 +544,19 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     admit(process, thread, start.suspended)
 }
 
+/// What a process's handle table is charged at creation: its largest, 1024
+/// slots. A zombie keeps its record but not the table, so `exit_current` gives
+/// this back.
+fn handle_table_cost() -> u64 {
+    u64::from(zoraya_abi::MAX_HANDLES) * (core::mem::size_of::<object::Entry>() as u64 + 16)
+}
+
 /// The process object around a built address space and table.
 fn assemble(
     name: &str,
     space: AddressSpace,
     job: Arc<Job>,
+    count: Paid,
     handles: HandleTable,
     dispositions: [Disposition; REQUEST_KINDS],
     suspended: bool,
@@ -522,14 +564,22 @@ fn assemble(
     let mut owned = String::new();
     owned.try_reserve(name.len()).map_err(|_| OutOfMemory)?;
     owned.push_str(name);
+    // The table is charged at its largest, 1024 slots: handles are covered by
+    // memory and processes (ADR-0260), not by a count of their own.
+    let table = handle_table_cost();
+    let extra = table + charge::vec_cost::<u8>(name.len()) + LIST_ENTRIES;
     let bits = if suspended {
         process_signals::SUSPENDED
     } else {
         0
     };
+    // The charge first: a refused one allocates nothing, and the source below is
+    // made only once the process is paid for (INV-0261-2, review Q1 error 1).
+    let mut count = count;
+    count.kernel(charge::arc_cost::<Process>().saturating_add(extra))?;
     let source = port::new_source(bits).map_err(|_| OutOfMemory)?;
     let ttbr0 = space.ttbr0();
-    let process = try_arc(Process {
+    let process = charge::prepaid_arc(Process {
         name: owned,
         ttbr0,
         space: SpinLock::new(Some(space)),
@@ -538,6 +588,7 @@ fn assemble(
             waiters: Vec::new(),
         }),
         job,
+        paid: SpinLock::new(count),
         source,
         handles: SpinLock::new(handles),
         thread: SpinLock::new(None),
@@ -552,7 +603,8 @@ fn assemble(
         #[cfg(feature = "qemu-test")]
         watch: SpinLock::new((0, None)),
     });
-    // On failure the value was dropped, and its `Drop` freed the source.
+    // On failure the value was dropped, and its `Drop` freed the source and
+    // gave the charge back.
     Ok(process?)
 }
 
@@ -583,6 +635,8 @@ pub struct Snapshot<'a> {
     pub parent: &'a Process,
     pub space: AddressSpace,
     pub job: Arc<Job>,
+    /// The child's slot in its job's count, taken before the copy.
+    pub count: Paid,
     pub handles: HandleTable,
     /// Where the child gets a handle to itself.
     pub self_handle: Option<Handle>,
@@ -601,6 +655,7 @@ pub fn create_snapshot(s: Snapshot<'_>) -> Result<Arc<Process>, SpawnError> {
         &s.parent.name,
         s.space,
         s.job,
+        s.count,
         s.handles,
         dispositions,
         s.suspended,
@@ -721,6 +776,16 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
     let root = Job::root().map_err(|_| SpawnError::NoMemory)?;
     let job = Job::create(&root, false).map_err(|_| SpawnError::NoMemory)?;
+    // The reserve (ADR-0261 point 10): everything `init` starts is bounded by
+    // the frames free now less 1/64 for the heap's overhead and the fixed
+    // allocations, so that the kernel always has room to refuse with.
+    let free = crate::memory::frames::stats().free * zoraya_pmm::FRAME_SIZE;
+    job.set_limits(zoraya_abi::quota::JobLimits {
+        memory: Some(free - free / KERNEL_RESERVE_DIVISOR),
+        processes: None,
+        cpu: None,
+    })
+    .map_err(|_| SpawnError::NoMemory)?;
     let mut handles = kernel_handles(job.clone())?;
     handles
         .insert_at(
@@ -791,6 +856,7 @@ pub fn exit_current(record: ExitRecord) -> ! {
     // A zombie holds its record, not the table's memory.
     let table = core::mem::take(&mut *process.handles.lock());
     drop(table);
+    process.paid.lock().release_kernel(handle_table_cost());
     let waiters = {
         let mut exit = process.exit.lock();
         exit.record = Some(record);
@@ -803,6 +869,7 @@ pub fn exit_current(record: ExitRecord) -> ! {
     );
     port::set_signals(process.source, process_signals::TERMINATED);
     process.job.leave(&process);
+    process.paid.lock().release_process();
     let thread = process.thread.lock().take();
     drop(thread);
     for waiter in waiters {

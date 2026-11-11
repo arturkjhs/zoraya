@@ -214,6 +214,28 @@ pub fn job_signal(job: Handle, kind: RequestKind, detail: u32) -> Result<(), Sta
     stubs::job_signal::<Svc>(job, kind, Detail(detail)).map(|_| ())
 }
 
+/// Sets the limits of a job; needs the `LIMIT` right (ADR-0261).
+pub fn job_set_limits(job: Handle, limits: &zoraya_abi::quota::JobLimits) -> Result<(), Status> {
+    let bytes = limits.encode();
+    stubs::job_set_limits::<Svc>(job, Bytes(self::bytes(&bytes))).map(|_| ())
+}
+
+/// A job's limits and use; `clear` also clears its `OVER_QUOTA` signal.
+pub fn job_get_usage(job: Handle, clear: bool) -> Result<zoraya_abi::quota::JobUsage, Status> {
+    let mut out = [0u8; zoraya_abi::quota::USAGE_SIZE];
+    let flags = if clear {
+        zoraya_abi::UsageFlags::CLEAR
+    } else {
+        zoraya_abi::UsageFlags::NONE
+    };
+    let target = Buffer {
+        address: out.as_mut_ptr() as u64,
+        length: out.len() as u64,
+    };
+    stubs::job_get_usage::<Svc>(job, Bytes(target), flags)?;
+    zoraya_abi::quota::JobUsage::decode(&out).ok_or(Status::InvalidArgument)
+}
+
 pub fn job_kill(job: Handle) -> Result<(), Status> {
     stubs::job_kill::<Svc>(job).map(|_| ())
 }

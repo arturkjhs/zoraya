@@ -85,6 +85,17 @@ fn fit(layout: Layout) -> Option<Fit> {
     Some(Fit::Large(bytes, layout.align().max(PAGE_SIZE)))
 }
 
+/// The bytes a block for `layout` takes from the heap: its size class, or its
+/// size in whole pages. This is what `Stats::live` counts for it, so a charge
+/// of this many bytes matches the heap's own count (ADR-0261 point 5).
+pub fn block_size(layout: Layout) -> usize {
+    match fit(layout) {
+        Some(Fit::Small(class)) => class_size(class),
+        Some(Fit::Large(bytes, _)) => bytes,
+        None => usize::MAX,
+    }
+}
+
 const fn class_size(class: usize) -> usize {
     1 << (class as u32 + MIN_CLASS_SHIFT)
 }

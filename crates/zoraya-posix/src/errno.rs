@@ -79,6 +79,9 @@ pub const NATIVE: &[(Status, [i32; 3])] = &[
     // message: a message past that is not one this library asked for.
     (Status::BufferTooSmall, [EMSGSIZE, EMSGSIZE, EMSGSIZE]),
     (Status::NotSupported, [ENOTSUP, ENOTSUP, ENOTSUP]),
+    // ADR-0263 item 4 maps by call and field (Q2): until then memory refusals
+    // read as a short machine and the rest as a limit to retry under.
+    (Status::OverQuota, [ENOMEM, ENOMEM, EAGAIN]),
 ];
 
 /// `errno` for a native status in a call of kind `call`.

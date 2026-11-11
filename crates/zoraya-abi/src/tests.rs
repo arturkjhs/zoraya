@@ -90,7 +90,7 @@ fn blocking_calls_take_a_deadline_and_no_masks_or_timeouts() {
 /// come from one list, so a new status is judged here.
 #[test]
 fn no_status_means_interrupted() {
-    assert_eq!(Status::ALL.len(), 16);
+    assert_eq!(Status::ALL.len(), 17);
     for (raw, s) in Status::ALL.iter().enumerate() {
         assert_eq!(*s as usize, raw);
         assert_eq!(Status::from_raw(raw as u64), Some(*s));
@@ -240,7 +240,9 @@ fn snapshot_process_is_the_one_personality_only_call() {
 fn a_job_can_be_waited_on_for_suspended() {
     assert_eq!(
         JobObject::WAITING,
-        Waiting::Signals(job_signals::TERMINATED | job_signals::SUSPENDED)
+        Waiting::Signals(
+            job_signals::TERMINATED | job_signals::SUSPENDED | job_signals::OVER_QUOTA
+        )
     );
 }
 
@@ -360,6 +362,8 @@ echo! {
     job_suspend(job: Handle);
     job_resume(job: Handle);
     object_get_signals(handle: Handle);
+    job_set_limits(job: Handle, limits: Bytes);
+    job_get_usage(job: Handle, out: Bytes, flags: UsageFlags);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.
@@ -395,7 +399,7 @@ fn a_value_too_wide_is_refused_not_truncated() {
     assert_eq!(Mode::decode(&[wide]), Err(Status::InvalidArgument));
     assert_eq!(ExitReason::decode(&[wide]), Err(Status::InvalidArgument));
     // And out-of-range values within 32 bits.
-    assert_eq!(Rights::decode(&[1 << 14]), Err(Status::InvalidArgument));
+    assert_eq!(Rights::decode(&[1 << 15]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[36]), Err(Status::InvalidArgument));
     assert_eq!(RequestKind::decode(&[35]), Ok(RequestKind::Custom(31)));
     assert_eq!(Disposition::decode(&[3]), Err(Status::InvalidArgument));

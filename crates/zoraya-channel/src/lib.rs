@@ -32,71 +32,75 @@ pub const READABLE: u32 = 1 << 0;
 pub const WRITABLE: u32 = 1 << 1;
 pub const PEER_CLOSED: u32 = 1 << 2;
 
-pub struct Message<H> {
+pub struct Message<H, P = ()> {
     pub bytes: Vec<u8>,
     pub handles: Vec<H>,
-    next: Option<Box<Message<H>>>,
+    /// What the writer pays for the message while it is queued: dropped with
+    /// the message, wherever that happens (ADR-0261 point 7).
+    pub paid: P,
+    next: Option<Box<Message<H, P>>>,
 }
 
-impl<H> Message<H> {
-    pub const fn new(bytes: Vec<u8>, handles: Vec<H>) -> Message<H> {
+impl<H, P> Message<H, P> {
+    pub const fn new(bytes: Vec<u8>, handles: Vec<H>, paid: P) -> Message<H, P> {
         Message {
             bytes,
             handles,
+            paid,
             next: None,
         }
     }
 }
 
 /// Messages to destroy. Dropping it takes no recursion.
-pub struct Pile<H> {
-    head: Option<Box<Message<H>>>,
+pub struct Pile<H, P = ()> {
+    head: Option<Box<Message<H, P>>>,
 }
 
-impl<H> Pile<H> {
-    pub const fn new() -> Pile<H> {
+impl<H, P> Pile<H, P> {
+    pub const fn new() -> Pile<H, P> {
         Pile { head: None }
     }
 
-    pub fn pop(&mut self) -> Option<Box<Message<H>>> {
+    pub fn pop(&mut self) -> Option<Box<Message<H, P>>> {
         let mut message = self.head.take()?;
         self.head = message.next.take();
         Some(message)
     }
 
-    fn push(&mut self, mut message: Box<Message<H>>) {
+    fn push(&mut self, mut message: Box<Message<H, P>>) {
         message.next = self.head.take();
         self.head = Some(message);
     }
 
     /// Moves everything in `other` here.
-    pub fn take_from(&mut self, other: &mut Pile<H>) {
+    pub fn take_from(&mut self, other: &mut Pile<H, P>) {
         while let Some(message) = other.pop() {
             self.push(message);
         }
     }
 }
 
-impl<H> Default for Pile<H> {
+impl<H, P> Default for Pile<H, P> {
     fn default() -> Self {
         Pile::new()
     }
 }
 
-impl<H> Drop for Pile<H> {
+impl<H, P> Drop for Pile<H, P> {
     fn drop(&mut self) {
         while self.pop().is_some() {}
     }
 }
 
-struct Direction<H> {
-    queue: VecDeque<Box<Message<H>>>,
+struct Direction<H, P> {
+    queue: VecDeque<Box<Message<H, P>>>,
     bytes: usize,
     handles: usize,
 }
 
-impl<H> Direction<H> {
-    const fn new() -> Direction<H> {
+impl<H, P> Direction<H, P> {
+    const fn new() -> Direction<H, P> {
         Direction {
             queue: VecDeque::new(),
             bytes: 0,
@@ -115,13 +119,13 @@ pub enum Refused {
 }
 
 /// The ends are 0 and 1. A direction is named by the end that reads it.
-pub struct Channel<H> {
-    inbound: [Direction<H>; 2],
+pub struct Channel<H, P = ()> {
+    inbound: [Direction<H, P>; 2],
     closed: [bool; 2],
 }
 
-impl<H> Channel<H> {
-    pub const fn new() -> Channel<H> {
+impl<H, P> Channel<H, P> {
+    pub const fn new() -> Channel<H, P> {
         Channel {
             inbound: [Direction::new(), Direction::new()],
             closed: [false; 2],
@@ -143,7 +147,7 @@ impl<H> Channel<H> {
     }
 
     /// Queues a message for the other end, after [`Channel::prepare`].
-    pub fn write(&mut self, end: usize, message: Box<Message<H>>) {
+    pub fn write(&mut self, end: usize, message: Box<Message<H, P>>) {
         let target = &mut self.inbound[1 - end];
         target.bytes += message.bytes.len();
         target.handles += message.handles.len();
@@ -161,7 +165,7 @@ impl<H> Channel<H> {
         Some(&self.inbound[end].queue.front()?.bytes)
     }
 
-    pub fn read(&mut self, end: usize) -> Option<Box<Message<H>>> {
+    pub fn read(&mut self, end: usize) -> Option<Box<Message<H, P>>> {
         let source = &mut self.inbound[end];
         let message = source.queue.pop_front()?;
         source.bytes -= message.bytes.len();
@@ -180,7 +184,7 @@ impl<H> Channel<H> {
 
     /// Ends `end`, and gives its unread messages. Messages it sent stay for
     /// the other end to read.
-    pub fn close(&mut self, end: usize) -> Pile<H> {
+    pub fn close(&mut self, end: usize) -> Pile<H, P> {
         self.closed[end] = true;
         let mut pile = Pile::new();
         let inbound = &mut self.inbound[end];
@@ -210,7 +214,7 @@ impl<H> Channel<H> {
     }
 }
 
-impl<H> Default for Channel<H> {
+impl<H, P> Default for Channel<H, P> {
     fn default() -> Self {
         Channel::new()
     }

@@ -5,6 +5,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE};
 use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
@@ -13,7 +14,8 @@ use zoraya_abi::{
     Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
     MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
     PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
-    Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject, StreamWriteObject, request_value,
+    Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject, StreamWriteObject, UsageFlags,
+    request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_elf::{EHDR_SIZE, Header, Program};
@@ -24,12 +26,12 @@ use zoraya_time::{Deadline, Instant};
 
 use crate::arch::{self, Frame};
 use crate::channel::{self, MAX_MESSAGE, MAX_MESSAGE_HANDLES, Pair};
+use crate::charge::{self, Paid};
 use crate::device::Pin;
 use crate::job::Job;
-use crate::memory::heap::try_arc;
 use crate::memory::object::MemoryObject;
 use crate::memory::user::{Copied, Holder, MappingError, USER_HIGH};
-use crate::object::{self, HandleTable, Image, MemoryImage, Object};
+use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
 use crate::stream::Stream;
@@ -442,7 +444,10 @@ impl Handlers for Calls<'_> {
 
     fn port_create(&mut self) -> Result<u64, Status> {
         self.process.handles.lock().reserve()?;
-        self.insert(Object::Port(Port::new()?), PortObject::RIGHTS)
+        self.insert(
+            Object::Port(Port::new(Some(self.process.job()))?),
+            PortObject::RIGHTS,
+        )
     }
 
     fn port_subscribe(
@@ -463,7 +468,10 @@ impl Handlers for Calls<'_> {
         if signals.0 == 0 || signals.0 & !known != 0 {
             return Err(Status::InvalidArgument);
         }
-        port.subscribe(source, signals.0, key.0, mode, owner)?;
+        // The holder pays for the subscription until it ends (ADR-0006 rule 2).
+        let mut paid = Paid::new(Some(self.process.job()));
+        paid.kernel(charge::SUBSCRIPTION_COST)?;
+        port.subscribe(source, signals.0, key.0, mode, owner, paid)?;
         Ok(0)
     }
 
@@ -572,7 +580,7 @@ impl Handlers for Calls<'_> {
     }
 
     fn memory_create(&mut self, size: Size, flags: MemoryFlags) -> Result<u64, Status> {
-        let object = MemoryObject::new(size.0, flags.is_contiguous())?;
+        let object = MemoryObject::new(size.0, flags.is_contiguous(), Some(self.process.job()))?;
         self.insert(Object::Memory(object), MemoryType::RIGHTS)
     }
 
@@ -613,6 +621,7 @@ impl Handlers for Calls<'_> {
             })
             .map_err(|e| match e {
                 MappingError::Limit => Status::LimitReached,
+                MappingError::Quota => Status::OverQuota,
                 _ => Status::NoMemory,
             })
     }
@@ -633,7 +642,7 @@ impl Handlers for Calls<'_> {
         }
         let target = UserSlice::of(ends.0)?;
         target.write(&[0; 16])?;
-        let pair = Pair::new()?;
+        let pair = Pair::new(Some(self.process.job()))?;
         let mut handles = self.process.handles.lock();
         handles.reserve_many(2)?;
         let mut record = [0; 16];
@@ -697,7 +706,10 @@ impl Handlers for Calls<'_> {
         carried
             .try_reserve_exact(entries)
             .map_err(|_| Status::NoMemory)?;
-        let mut message = channel::message(body, Vec::new())?;
+        // The writer pays for the message while it is queued (ADR-0261 point 7).
+        let mut paid = Paid::new(Some(self.process.job()));
+        paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
+        let mut message = channel::message(body, Vec::new(), paid)?;
         pair.prepare(side, message.bytes.len())?;
         for entry in listed {
             let object = match entry.transfer {
@@ -795,6 +807,7 @@ impl Handlers for Calls<'_> {
             .map_object(FRAME_SIZE, attributes, Holder::Device(mapping), |_| base)
             .map_err(|e| match e {
                 MappingError::Limit => Status::LimitReached,
+                MappingError::Quota => Status::OverQuota,
                 _ => Status::NoMemory,
             })?;
         let mut record = [0; 16];
@@ -876,7 +889,9 @@ impl Handlers for Calls<'_> {
     }
 
     fn event_create(&mut self) -> Result<u64, Status> {
-        let event = crate::memory::heap::try_arc(0u8).map_err(|_| Status::NoMemory)?;
+        self.process.handles.lock().reserve()?;
+        let paid = Paid::new(Some(self.process.job()));
+        let event = charge::arc(paid, 0, |_paid| Event { _paid })?;
         self.insert(Object::Event(event), EventObject::RIGHTS)
     }
 
@@ -894,7 +909,7 @@ impl Handlers for Calls<'_> {
         target.write(&[0; 16])?;
         let mut handles = self.process.handles.lock();
         handles.reserve_many(2)?;
-        let (reader, writer) = Stream::create()?;
+        let (reader, writer) = Stream::create(Some(self.process.job()))?;
         let read = Object::StreamRead(reader);
         let read = handles.insert(read, StreamReadObject::RIGHTS, object::next_id())?;
         let write = Object::StreamWrite(writer);
@@ -951,18 +966,23 @@ impl Handlers for Calls<'_> {
             }
         };
         let (table, self_handle) = self.snapshot_table(&request)?;
+        // The child's slot first, then its full copy, both paid by the child's
+        // job (ADR-0261 point 6): a limit refuses the call with no effect.
+        let mut count = Paid::new(Some(&job));
+        count.process()?;
         let mut copied = Copied::default();
         let space = {
             let space = self.process.space.lock();
             space
                 .as_ref()
                 .ok_or(Status::BadState)?
-                .snapshot(&mut copied)?
+                .snapshot(&mut copied, Some(&job))?
         };
         let child = process::create_snapshot(Snapshot {
             parent: &self.process,
             space,
             job,
+            count,
             handles: table,
             self_handle,
             frame: self.frame,
@@ -1018,16 +1038,45 @@ impl Handlers for Calls<'_> {
             .map_err(|_| Status::InvalidArgument)?;
         let mut handles = self.process.handles.lock();
         handles.reserve()?;
-        let image = try_arc(MemoryImage {
-            memory,
-            program,
-            table,
-        })
-        .map_err(|_| Status::NoMemory)?;
+        let image = charge::arc(
+            Paid::new(Some(self.process.job())),
+            charge::vec_cost::<u8>(table.capacity()),
+            |paid| MemoryImage {
+                memory,
+                program,
+                table,
+                _paid: paid,
+            },
+        )?;
         let image = Object::Image(Image::Memory(image));
         Ok(handles
             .insert(image, ImageObject::RIGHTS, object::next_id())?
             .raw())
+    }
+
+    fn job_set_limits(&mut self, job: Handle, limits: Bytes) -> Result<u64, Status> {
+        let job = self.job(job, Rights::LIMIT)?;
+        if limits.0.length != LIMITS_SIZE as u64 {
+            return Err(Status::InvalidArgument);
+        }
+        let bytes = UserSlice::of(limits.0)?.read()?;
+        job.set_limits(JobLimits::decode(&bytes)?)?;
+        Ok(0)
+    }
+
+    fn job_get_usage(&mut self, job: Handle, out: Bytes, flags: UsageFlags) -> Result<u64, Status> {
+        let job = self.job(job, Rights::WAIT)?;
+        let target = UserSlice::of(out.0)?;
+        if target.len() < USAGE_SIZE {
+            return Err(Status::BufferTooSmall);
+        }
+        // Written first, then cleared: a bad address clears nothing.
+        let usage = job.usage(false);
+        target.write(&usage.encode())?;
+        if flags.clears() {
+            job.usage(true);
+        }
+        Ok(0)
     }
 
     fn job_suspend(&mut self, job: Handle) -> Result<u64, Status> {
@@ -1235,7 +1284,7 @@ pub fn dispatch(frame: &mut Frame) {
     }
     let (status, value) = match result {
         Ok(value) => (Status::Ok, value),
-        Err(status) => (status, 0),
+        Err(status) => (status, charge::failure_value(status)),
     };
     frame.x[0] = status as u64;
     frame.x[1] = value;

@@ -298,3 +298,25 @@ fn fragmentation_stays_bounded_under_the_stated_workload() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// `block_size` is what `Stats::live` grows by for a block of that layout, at
+/// every size around each class boundary (the kernel's charges rest on this).
+#[test]
+fn block_size_is_what_live_counts() {
+    let arena = Arena::new(8 << 20, 0);
+    let mut heap = Heap::new(arena);
+    for size in [
+        1usize, 15, 16, 17, 100, 1024, 1025, 2048, 2049, 4096, 4097, 10_000,
+    ] {
+        for align in [1usize, 8, 64] {
+            let layout = Layout::from_size_align(size, align).unwrap();
+            let before = heap.stats().live;
+            let block = heap.alloc(layout);
+            assert!(!block.is_null());
+            assert_eq!(heap.stats().live - before, zoraya_heap::block_size(layout));
+            // SAFETY: `block` came from this heap with this layout, once.
+            unsafe { heap.dealloc(block, layout) };
+            assert_eq!(heap.stats().live, before);
+        }
+    }
+}

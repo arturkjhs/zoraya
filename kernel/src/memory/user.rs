@@ -9,11 +9,12 @@ use zoraya_pagetable::{Attributes, Half, MapError, PageTable, TableMemory};
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
 use super::frames;
-use super::heap::OutOfMemory;
 use super::object::MemoryObject;
 use super::phys_to_virt;
 use crate::arch::mmu;
+use crate::charge::Paid;
 use crate::device::DeviceMapping;
+use crate::job::Job;
 use crate::sync::SpinLock;
 use zoraya_abi::Status;
 
@@ -52,24 +53,57 @@ fn free_asid(asid: u16) {
 struct UserMemory {
     asid: u16,
     frames: Vec<Frame>,
+    /// What the space's job pays for its frames: user frames and the tables
+    /// that map them (ADR-0261 point 5), given back when it drops.
+    paid: Paid,
+    /// A charge was refused since this was last taken: how a table allocation
+    /// that returns only `None` says why.
+    refused: bool,
 }
 
 impl UserMemory {
     /// Keeps `frame`, or frees it and fails.
-    fn adopt(&mut self, frame: Frame) -> Result<(), OutOfMemory> {
+    fn adopt(&mut self, frame: Frame) -> Result<(), Status> {
         if self.frames.try_reserve(1).is_err() {
             frames::free(frame);
-            return Err(OutOfMemory);
+            return Err(Status::NoMemory);
         }
         self.frames.push(frame);
         Ok(())
+    }
+
+    /// Charges one frame of user memory, remembering a refusal.
+    fn pay_user(&mut self) -> Result<(), Status> {
+        self.paid
+            .user(FRAME_SIZE)
+            .inspect_err(|_| self.refused = true)
+    }
+
+    /// The status for a failure just seen: a refusal if one was made.
+    fn failure(&mut self) -> Status {
+        if core::mem::take(&mut self.refused) {
+            Status::OverQuota
+        } else {
+            Status::NoMemory
+        }
     }
 }
 
 impl TableMemory for UserMemory {
     fn alloc_table(&mut self) -> Option<u64> {
-        let frame = frames::alloc_zeroed().ok()?;
-        self.adopt(frame).ok()?;
+        // A page table is a kernel frame of the job's.
+        if self.paid.kernel(FRAME_SIZE).is_err() {
+            self.refused = true;
+            return None;
+        }
+        let Ok(frame) = frames::alloc_zeroed() else {
+            self.paid.release_kernel(FRAME_SIZE);
+            return None;
+        };
+        if self.adopt(frame).is_err() {
+            self.paid.release_kernel(FRAME_SIZE);
+            return None;
+        }
         Some(frame.addr())
     }
 
@@ -116,6 +150,8 @@ pub enum MappingError {
     /// The process has `MAX_MAPPINGS`.
     Limit,
     Memory,
+    /// The job's limit refused the page tables.
+    Quota,
     /// No mapping is exactly that range.
     NotMapped,
 }
@@ -129,11 +165,14 @@ pub struct AddressSpace {
 }
 
 impl AddressSpace {
-    pub fn new() -> Result<AddressSpace, OutOfMemory> {
-        let asid = alloc_asid().ok_or(OutOfMemory)?;
+    /// An empty space whose frames `payer` pays for (`None`: the kernel's).
+    pub fn new(payer: Option<&Arc<Job>>) -> Result<AddressSpace, Status> {
+        let asid = alloc_asid().ok_or(Status::NoMemory)?;
         let mut memory = UserMemory {
             asid,
             frames: Vec::new(),
+            paid: Paid::new(payer),
+            refused: false,
         };
         match PageTable::new(&mut memory, Half::Lower) {
             Ok(table) => Ok(AddressSpace {
@@ -142,9 +181,13 @@ impl AddressSpace {
                 mappings: Vec::new(),
             }),
             Err(_) => {
-                drop(memory.frames);
+                let failure = memory.failure();
+                // The frames it took go back through the memory's own list.
+                for frame in memory.frames.drain(..) {
+                    frames::free(frame);
+                }
                 free_asid(asid);
-                Err(OutOfMemory)
+                Err(failure)
             }
         }
     }
@@ -157,11 +200,24 @@ impl AddressSpace {
     /// Maps a new zeroed page at `va` and returns the address the kernel can
     /// fill it through.
     pub fn map_new_page(&mut self, va: u64, attributes: Attributes) -> Result<*mut u8, MapFailed> {
-        let frame = frames::alloc_zeroed().map_err(|_| MapFailed::Memory)?;
-        self.memory.adopt(frame).map_err(|_| MapFailed::Memory)?;
+        self.memory.pay_user().map_err(|_| MapFailed::Quota)?;
+        let frame = frames::alloc_zeroed().map_err(|_| {
+            self.memory.paid.release_user(FRAME_SIZE);
+            MapFailed::Memory
+        })?;
+        self.memory.adopt(frame).map_err(|_| {
+            self.memory.paid.release_user(FRAME_SIZE);
+            MapFailed::Memory
+        })?;
         self.table
             .map_pages(&mut self.memory, va, frame.addr(), FRAME_SIZE, attributes)
-            .map_err(MapFailed::Table)?;
+            .map_err(|e| {
+                if core::mem::take(&mut self.memory.refused) {
+                    MapFailed::Quota
+                } else {
+                    MapFailed::Table(e)
+                }
+            })?;
         Ok(phys_to_virt(frame.addr()) as *mut u8)
     }
 
@@ -206,7 +262,10 @@ impl AddressSpace {
                 if offset > 0 {
                     let _ = self.table.unmap(&mut self.memory, va, offset);
                 }
-                return Err(MappingError::Memory);
+                return Err(match self.memory.failure() {
+                    Status::OverQuota => MappingError::Quota,
+                    _ => MappingError::Memory,
+                });
             }
         }
         self.mappings.insert(
@@ -248,11 +307,15 @@ impl AddressSpace {
     /// every mapping of one, holding a copy of the mapped range. Nothing is
     /// shared. A device mapping refuses it with `BadState`. On failure,
     /// everything it took is given back as the copy drops (INV-0102-3).
-    pub fn snapshot(&self, copied: &mut Copied) -> Result<AddressSpace, Status> {
+    pub fn snapshot(
+        &self,
+        copied: &mut Copied,
+        payer: Option<&Arc<Job>>,
+    ) -> Result<AddressSpace, Status> {
         if self.has_device_mapping() {
             return Err(Status::BadState);
         }
-        let mut child = AddressSpace::new().map_err(|_| Status::NoMemory)?;
+        let mut child = AddressSpace::new(payer)?;
         child
             .mappings
             .try_reserve_exact(self.mappings.len())
@@ -263,7 +326,7 @@ impl AddressSpace {
             .map_err(|_| Status::NoMemory)?;
         for m in &self.mappings {
             // Every page is written by the copy below before the child exists.
-            objects.push(MemoryObject::new_for_copy(m.length)?);
+            objects.push(MemoryObject::new_for_copy(m.length, payer)?);
         }
         let mut failed = None;
         let mut executable = false;
@@ -323,7 +386,7 @@ impl AddressSpace {
                         FRAME_SIZE,
                         m.attributes,
                     )
-                    .map_err(|_| Status::NoMemory)?;
+                    .map_err(|_| child.memory.failure())?;
             }
             child.mappings.push(Mapping {
                 va: m.va,
@@ -338,11 +401,17 @@ impl AddressSpace {
     /// Maps a new frame at `va` for [`AddressSpace::snapshot`] to fill: not
     /// zeroed, since the whole page is written before anything can read it.
     fn copy_page(&mut self, va: u64, attributes: Attributes) -> Result<u64, Status> {
-        let frame = frames::alloc().map_err(|_| Status::NoMemory)?;
-        self.memory.adopt(frame).map_err(|_| Status::NoMemory)?;
+        self.memory.pay_user()?;
+        let frame = frames::alloc().map_err(|_| {
+            self.memory.paid.release_user(FRAME_SIZE);
+            Status::NoMemory
+        })?;
+        self.memory.adopt(frame).inspect_err(|_| {
+            self.memory.paid.release_user(FRAME_SIZE);
+        })?;
         self.table
             .map_pages(&mut self.memory, va, frame.addr(), FRAME_SIZE, attributes)
-            .map_err(|_| Status::NoMemory)?;
+            .map_err(|_| self.memory.failure())?;
         Ok(frame.addr())
     }
 
@@ -391,5 +460,7 @@ pub struct Copied {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapFailed {
     Memory,
+    /// The job's limit refused the frame or a table for it.
+    Quota,
     Table(MapError),
 }

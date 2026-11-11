@@ -439,6 +439,11 @@ test = false
 bench = false
 
 [[bin]]
+name = "t_quota"
+test = false
+bench = false
+
+[[bin]]
 name = "posixrun"
 test = false
 bench = false

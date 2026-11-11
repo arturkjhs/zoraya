@@ -1400,6 +1400,39 @@ designate (ADR-0153's Decision). Builtins are the commands that act on the shell
 and `sync`; the file commands are programs in the ramdisk. `rm` refuses a path that is `/`, or whose last
 component is `.` or `..`, with or without `--recursive`; `project/` is `project` (TASK-18 review S20).
 
+## Quotas (stage 8, Q1: memory and processes on jobs)
+
+A job can carry a memory limit and a process limit (`job_set_limits`, needs the `LIMIT` right, which `job_create`
+returns and a launcher withholds from what it hands on). A limit never passes the parent's effective limit. Everything a
+program creates is charged to its job and to every job above it (user frames, page tables, memory objects, a process
+with its thread, kernel stack and handle table, channels, ports, streams, events, images, subscriptions, and each queued
+message to its writer). A request that would pass a limit fails with `OverQuota` and changes nothing; the job whose limit
+refused it asserts `OVER_QUOTA`. Nothing is killed or slowed (CPU is Q4). `job_get_usage` reads `limit`, `used`, `peak`,
+`refused`, and the user/kernel split.
+
+`init`'s job holds the frames free after boot less 1/64 (the kernel reserve), and `init` puts `ttyd`, the broker and the
+shell in a session job with three quarters of that and 200 processes. `room new --untrusted` is still refused
+(`make check-untrusted-gate`; the list of tests that end the refusal is `tools/untrusted-gate.txt`).
+
+Measured with Q1 (HVF, default guest, test kernel): `portbench` 1 idle 2208 ns, 10000 idle 1167 ns; `chanbench` round trip
+16 B 8167 ns. No run of the same benchmarks before the change was made in this session, so the cost of the charge on
+those is not known; the charge is one lock and one to four adds per allocation. The reserve: at 1/16 the 256 MiB GUI
+test ended with the session at 214.8 of 215.7 MiB and the files manager's menu refused; at 1/32 it passes with one
+refusal of a terminal window in its log.
+
+What is charged for the reserves that the heap shows only as they fill: a process, its handle table at the largest (1024
+slots) while it lives, and the charge goes back when it exits (a zombie keeps its record, not the table); a port, its
+record, its place in the event tables and room for 64 packets, then 64 more each time `port_queue` finds its ready list
+longer than what it has paid, kept until the port ends; a channel, its queues' slots at their most (1 KiB).
+
+Measured at the end of the 256 MiB GUI test (`files-manage:auto:2`): `init`'s job at
+230.85 of 233.6 MB used (peak 233.1 MB), with 10.7 MB of frames really free, the charge being within 0.5 MB of the frames
+and heap pages in use. The over-charges are therefore not what refuses the terminal window: the session really uses
+nearly all of RAM. Before the change to ports and exits the figure was 231.2 MB.
+
+Known limits of Q1: a live process is charged a 1024-slot handle table whatever it holds; `snapshot_process` is refused page by page, not before
+copying; `libposix` maps `OverQuota` to `ENOMEM`/`EAGAIN` without looking at the field (Q2).
+
 ## Known limitations
 
 - **Masked interrupts.** System calls run with interrupts masked, and some scale with what they touch. Under HVF on

@@ -11,12 +11,16 @@ use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
+use zoraya_abi::Status;
 use zoraya_time::{Deadline, TimerId};
+
+use crate::arch::THREAD_STACK_SIZE;
 
 use crate::arch;
 use crate::arch::Context;
 use crate::arch::mmu;
-use crate::memory::heap::{OutOfMemory, try_arc};
+use crate::charge::{self, Paid};
+use crate::memory::heap::{OutOfMemory, uncharged_arc};
 use crate::memory::stack::KernelStack;
 use crate::process::Process;
 use crate::sync::SpinLock;
@@ -59,6 +63,9 @@ pub struct Thread {
     /// `None` for the boot thread, which runs on the image's stack.
     _stack: Option<KernelStack>,
     process: Option<Arc<Process>>,
+    /// A user thread's stack and record are its process's job's (ADR-0261
+    /// point 5); the boot and kernel threads have no payer.
+    _paid: Paid,
 }
 
 // SAFETY: `context` is only touched by `schedule`, with interrupts masked, on
@@ -121,11 +128,13 @@ pub fn preemptions() -> u64 {
 }
 
 fn boot_thread() -> Arc<Thread> {
+    // uncharged: the boot thread, made before the heap can refuse.
     Arc::new(Thread {
         context: UnsafeCell::new(Context::default()),
         state: AtomicU8::new(RUNNING),
         _stack: None,
         process: None,
+        _paid: Paid::default(),
     })
 }
 
@@ -147,11 +156,13 @@ pub fn init() {
 fn new_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMemory> {
     let stack = KernelStack::new()?;
     let context = Context::new_kernel(entry as usize, arg, stack.top(), stack.limit());
-    try_arc(Thread {
+    // uncharged: kernel threads have no paying job
+    uncharged_arc(Thread {
         context: UnsafeCell::new(context),
         state: AtomicU8::new(READY),
         _stack: Some(stack),
         process: None,
+        _paid: Paid::default(),
     })
 }
 
@@ -178,18 +189,29 @@ pub fn spawn_kernel(entry: fn(usize), arg: usize) -> Result<Arc<Thread>, OutOfMe
 
 /// Makes `process`'s thread, to go to EL0 at `pc` with `sp`. It is blocked:
 /// [`wake`] starts it, and [`discard`] gives it up.
-pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>, OutOfMemory> {
-    let stack = KernelStack::new()?;
+pub fn spawn_user(process: Arc<Process>, pc: u64, sp: u64) -> Result<Arc<Thread>, Status> {
+    let paid = thread_paid(&process)?;
+    let stack = KernelStack::new().map_err(|_| Status::NoMemory)?;
     let frame = stack.push_user_frame(pc, sp);
     let context = Context::new_user(frame, stack.limit());
-    let thread = try_arc(Thread {
+    let thread = charge::prepaid_arc(Thread {
         context: UnsafeCell::new(context),
         state: AtomicU8::new(BLOCKED),
         _stack: Some(stack),
         process: Some(process),
+        _paid: paid,
     })?;
-    count_new()?;
+    count_new().map_err(|_| Status::NoMemory)?;
     Ok(thread)
+}
+
+/// What a user thread costs its process's job: the record, the kernel stack
+/// and a place in each of the scheduler's two queues.
+fn thread_paid(process: &Process) -> Result<Paid, Status> {
+    let mut paid = Paid::new(Some(process.job()));
+    let queues = 2 * core::mem::size_of::<usize>() as u64;
+    paid.kernel(charge::arc_cost::<Thread>() + THREAD_STACK_SIZE as u64 + queues)?;
+    Ok(paid)
 }
 
 /// Makes `process`'s thread from a copy of `frame`, returning `Ok` and 0
@@ -199,17 +221,19 @@ pub fn spawn_user_from(
     process: Arc<Process>,
     frame: &arch::Frame,
     tpidr_el0: u64,
-) -> Result<Arc<Thread>, OutOfMemory> {
-    let stack = KernelStack::new()?;
+) -> Result<Arc<Thread>, Status> {
+    let paid = thread_paid(&process)?;
+    let stack = KernelStack::new().map_err(|_| Status::NoMemory)?;
     let at = stack.push_user_frame_copy(frame, zoraya_abi::Status::Ok as u64, 0);
     let context = Context::new_user_with_tls(at, stack.limit(), tpidr_el0);
-    let thread = try_arc(Thread {
+    let thread = charge::prepaid_arc(Thread {
         context: UnsafeCell::new(context),
         state: AtomicU8::new(BLOCKED),
         _stack: Some(stack),
         process: Some(process),
+        _paid: paid,
     })?;
-    count_new()?;
+    count_new().map_err(|_| Status::NoMemory)?;
     Ok(thread)
 }
 
