@@ -24,9 +24,11 @@ use zoraya_abi::{
     ChannelEntry, DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, MemoryObject, Mode, ObjectType,
     Packet, Status, channel_signals, stream_signals,
 };
+use zoraya_net::accounts::Kind;
 use zoraya_net::config;
 use zoraya_net::conn::{Client, Conns, Rd, Step, Wr};
 use zoraya_net::connection::Connection;
+use zoraya_net::dns::Owner;
 use zoraya_net::nic::{Nic, Read, SlotMemory, Wire, Write};
 use zoraya_net::service::{Action, Service};
 use zoraya_net::stack::{Event, Stack};
@@ -379,6 +381,8 @@ impl Netd {
                     port,
                     scope,
                     reply,
+                    account,
+                    over_quota,
                 } => {
                     // The client's channel end, then the write end of the
                     // stream it reads and the read end of the stream it
@@ -391,6 +395,9 @@ impl Netd {
                         for h in &handles[..count] {
                             let _ = handle_close(*h);
                         }
+                        if !over_quota {
+                            self.service.connection_ended(account);
+                        }
                         self.drop_connection(id);
                         return;
                     }
@@ -398,13 +405,32 @@ impl Netd {
                     let slot = self.conns.free_slot();
                     let client = StreamClient::new(self.port, slot.unwrap_or(0), &handles[..3]);
                     let now = Self::now_us();
-                    if slot.is_none() {
+                    // The account's bound: no charge was taken (ADR-0262).
+                    if over_quota {
+                        Self::refuse(client, reason::OVER_QUOTA);
+                    } else if slot.is_none() {
+                        self.service.connection_ended(account);
                         Self::refuse(client, reason::OVER_LIMIT);
-                    } else if let Err((client, why)) =
-                        self.conns
-                            .open(&mut self.stack, client, target, port, &scope, now)
-                    {
-                        Self::refuse(client, why);
+                    } else {
+                        let accounts = self.service.accounts();
+                        let owner = Owner {
+                            account,
+                            cache: accounts.limit(account, Kind::CacheEntries) as usize,
+                        };
+                        let resolutions = accounts.limit(account, Kind::Resolutions) as usize;
+                        if let Err((client, why)) = self.conns.open(
+                            &mut self.stack,
+                            client,
+                            owner,
+                            resolutions,
+                            target,
+                            port,
+                            &scope,
+                            now,
+                        ) {
+                            self.service.connection_ended(account);
+                            Self::refuse(client, why);
+                        }
                     }
                 }
                 other => {
@@ -437,6 +463,9 @@ impl Netd {
         self.stack.link().flush();
         // Dropping a client closes its handles and subscriptions.
         drop(finished);
+        for account in self.conns.take_released() {
+            self.service.connection_ended(account);
+        }
         for event in self.stack.take_events() {
             match event {
                 Event::Configured => {

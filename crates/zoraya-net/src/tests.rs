@@ -862,5 +862,7 @@ mod nic;
 #[path = "service_tests.rs"]
 mod service;
 
+#[path = "accounts_tests.rs"]
+mod accounts;
 #[path = "conn_tests.rs"]
 mod conn;

@@ -24,7 +24,7 @@ use zoraya_proto_net::{Connected, Failed, Reset, reason, reset};
 use zoraya_protocol::{Below, NO_REPLY, encode};
 
 use crate::config::is_unicast;
-use crate::dns::{Found, ResolveFail, Start};
+use crate::dns::{Found, Owner, ResolveFail, Start};
 use crate::link::Link;
 use crate::stack::Stack;
 use crate::tcp::{TcpError, TcpId, TcpPhase, TcpRecv, TcpSend};
@@ -105,6 +105,8 @@ struct Open {
 
 pub struct Conn<C> {
     client: C,
+    /// The account charged for it (ADR-0262; N4).
+    owner: Owner,
     phase: Phase,
     port: u16,
     /// The scope the request was checked against, to judge local addresses.
@@ -451,11 +453,18 @@ impl<C: Client> Conn<C> {
 /// The table of connections, with the resolver's tokens: token = slot.
 pub struct Conns<C> {
     slots: Vec<Option<Conn<C>>>,
+    /// Accounts of connections that ended since the last
+    /// [`Conns::take_released`]: each is one `Connections` charge to give
+    /// back.
+    released: Vec<usize>,
 }
 
 impl<C: Client> Default for Conns<C> {
     fn default() -> Conns<C> {
-        Conns { slots: Vec::new() }
+        Conns {
+            slots: Vec::new(),
+            released: Vec::new(),
+        }
     }
 }
 
@@ -476,13 +485,36 @@ impl<C: Client> Conns<C> {
             .or((self.slots.len() < MAX_CONNS).then_some(self.slots.len()))
     }
 
+    /// The connections of `account` waiting for a name.
+    pub fn resolving_for(&self, account: usize) -> usize {
+        self.slots
+            .iter()
+            .flatten()
+            .filter(|c| c.owner.account == account && matches!(c.phase, Phase::Resolving))
+            .count()
+    }
+
+    /// The accounts of the connections that ended since the last call, one
+    /// entry each.
+    pub fn take_released(&mut self) -> Vec<usize> {
+        core::mem::take(&mut self.released)
+    }
+
     /// Starts a connection to `target`:`port` for `client`; `scope` is the
     /// encoded scope the request was allowed under. Returns its slot, or the
-    /// client back with the reason when it cannot start (the caller tells it).
+    /// client back with the reason when it cannot start (the caller tells
+    /// it). `owner` is the account it is charged to, and `resolutions` the
+    /// most connections of that account that may wait for a name at once:
+    /// past it the reason is `OVER_QUOTA`. On `Err` nothing is recorded; the
+    /// caller gives the account's charge back. On `Ok` the charge comes back
+    /// through [`Conns::take_released`].
+    #[allow(clippy::too_many_arguments)] // the request's parts and the account's
     pub fn open<L: Link>(
         &mut self,
         stack: &mut Stack<L>,
         client: C,
+        owner: Owner,
+        resolutions: usize,
         target: Target,
         port: u16,
         scope: &[u8],
@@ -496,6 +528,7 @@ impl<C: Client> Conns<C> {
         }
         let mut conn = Conn {
             client,
+            owner,
             phase: Phase::Resolving,
             port,
             scope: scope.to_vec(),
@@ -510,8 +543,12 @@ impl<C: Client> Conns<C> {
                 addresses: vec![a],
                 from_hosts: false,
             })),
-            Target::Name(name) => match stack.resolve(slot as u32, &name, now_us) {
+            Target::Name(name) => match stack.resolve_as(slot as u32, owner, &name, now_us) {
                 Start::Done(found) => Some(Ok(found)),
+                Start::Pending if self.resolving_for(owner.account) >= resolutions => {
+                    stack.resolve_cancel(slot as u32);
+                    return Err((conn.client, reason::OVER_QUOTA));
+                }
                 Start::Pending => None,
                 Start::Failed(f) => Some(Err(f)),
             },
@@ -562,6 +599,7 @@ impl<C: Client> Conns<C> {
             if s.done
                 && let Some(c) = self.slots[id].take()
             {
+                self.released.push(c.owner.account);
                 finished.push((id, c.client));
             }
         }
@@ -602,6 +640,7 @@ impl<C: Client> Conns<C> {
     /// are gone: the socket is aborted and the slot freed.
     pub fn abort<L: Link>(&mut self, stack: &mut Stack<L>, id: usize) -> Option<C> {
         let conn = self.slots.get_mut(id)?.take()?;
+        self.released.push(conn.owner.account);
         stack.resolve_cancel(id as u32);
         match conn.phase {
             Phase::Connecting { tcp, .. } => stack.tcp_release(tcp),

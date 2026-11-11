@@ -10,6 +10,7 @@
 
 extern crate alloc;
 
+pub mod accounts;
 pub mod config;
 pub mod conn;
 pub mod connection;

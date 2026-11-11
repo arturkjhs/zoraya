@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::conn::{CONNECT_US, Client, Conns, LINGER_US, MAX_CONNS, Rd, Step, Target, Wr};
-use crate::dns::{ResolveFail, Start};
+use crate::dns::{Owner, ResolveFail, Start};
 use crate::tcp::MAX_TCP;
 use smoltcp::socket::tcp;
 use std::collections::VecDeque;
@@ -342,6 +342,8 @@ impl World {
             .open(
                 &mut self.client,
                 fake.clone(),
+                Owner::SESSION,
+                8,
                 target,
                 port,
                 &scope,
@@ -349,6 +351,30 @@ impl World {
             )
             .map_err(|e| e.1)
             .unwrap()
+    }
+
+    /// `connect` for an account: its owner and its bound of pending names.
+    fn connect_as(
+        &mut self,
+        fake: &Fake,
+        owner: Owner,
+        resolutions: usize,
+        target: Target,
+        port: u16,
+    ) -> Result<usize, u32> {
+        let scope = self.scope.clone();
+        self.conns
+            .open(
+                &mut self.client,
+                fake.clone(),
+                owner,
+                resolutions,
+                target,
+                port,
+                &scope,
+                self.now,
+            )
+            .map_err(|e| e.1)
     }
 
     fn turn(&mut self) {
@@ -586,7 +612,16 @@ fn too_many_connections_are_refused_with_a_reason_not_a_crash() {
         let f = Fake::new(1024);
         let scope = w.scope.clone();
         if w.conns
-            .open(&mut w.client, f, Target::Address(WEB), 80, &scope, w.now)
+            .open(
+                &mut w.client,
+                f,
+                Owner::SESSION,
+                8,
+                Target::Address(WEB),
+                80,
+                &scope,
+                w.now,
+            )
             .is_err()
         {
             refused += 1;
@@ -907,4 +942,116 @@ fn a_half_closed_connection_that_goes_silent_is_ended_after_the_linger_limit() {
     assert_eq!(decode::<Reset>(&m, 0).unwrap().1.why.0, reset::ABORTED);
     w.run_until(2_000_000, |_| false);
     assert_eq!(w.client.tcp_count(), 0);
+}
+
+#[test]
+fn pending_resolutions_are_bounded_per_account() {
+    // The server never answers a query: names stay pending.
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|_| Vec::new());
+    let (a, b) = (
+        Owner {
+            account: 1,
+            cache: 4,
+        },
+        Owner {
+            account: 2,
+            cache: 4,
+        },
+    );
+    let f = Fake::new(1024);
+    assert!(
+        w.connect_as(&f, a, 1, Target::Name("one.zoraya".into()), 80)
+            .is_ok()
+    );
+    let g = Fake::new(1024);
+    assert_eq!(
+        w.connect_as(&g, a, 1, Target::Name("two.zoraya".into()), 80),
+        Err(reason::OVER_QUOTA),
+        "a second pending name of account 1"
+    );
+    // The refusal left no query behind, and account 2 has its own.
+    assert_eq!(w.client.dns_pending(), 1);
+    for name in ["x.zoraya", "y.zoraya", "z.zoraya"] {
+        let h = Fake::new(1024);
+        assert!(
+            w.connect_as(&h, b, 3, Target::Name(name.into()), 80)
+                .is_ok(),
+            "{name}"
+        );
+    }
+    assert_eq!(w.conns.resolving_for(1), 1);
+    assert_eq!(w.conns.resolving_for(2), 3);
+    // An address needs no resolution, so the bound does not touch it.
+    let h = Fake::new(1024);
+    assert!(w.connect_as(&h, a, 1, Target::Address(WEB), 80).is_ok());
+}
+
+#[test]
+fn a_finished_connection_gives_its_account_back_once() {
+    let mut w = World::new(Script::Sink, &[]);
+    let a = Owner {
+        account: 3,
+        cache: 4,
+    };
+    let f = Fake::new(1024);
+    w.connect_as(&f, a, 4, Target::Address(WEB), 80).unwrap();
+    assert!(w.conns.take_released().is_empty());
+    assert!(w.run_until(5_000_000, |_| f.message(16).is_some()));
+    f.close_write();
+    assert!(w.run_until(60_000_000, |w| w.conns.count() == 0));
+    assert_eq!(w.conns.take_released(), vec![3]);
+    assert!(w.conns.take_released().is_empty());
+    // An abort gives it back too.
+    let g = Fake::new(1024);
+    let id = w.connect_as(&g, a, 4, Target::Address(WEB), 80).unwrap();
+    assert!(w.conns.abort(&mut w.client, id).is_some());
+    assert_eq!(w.conns.take_released(), vec![3]);
+}
+
+#[test]
+fn an_account_that_fills_its_cache_evicts_its_own_entries_not_another_accounts() {
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 300)]);
+    let (a, b) = (
+        Owner {
+            account: 1,
+            cache: 2,
+        },
+        Owner {
+            account: 2,
+            cache: 8,
+        },
+    );
+    let ask = |w: &mut World, owner, name: &str| {
+        let f = Fake::new(1024);
+        w.connect_as(&f, owner, 4, Target::Name(name.into()), 80)
+            .unwrap();
+        assert!(
+            w.run_until(5_000_000, |_| f.message(16).is_some()),
+            "{name}"
+        );
+        f.close_write();
+        assert!(w.run_until(60_000_000, |w| w.conns.count() == 0));
+        w.now += 1_000;
+    };
+    ask(&mut w, b, "bee.zoraya");
+    ask(&mut w, a, "a1.zoraya");
+    ask(&mut w, a, "a2.zoraya");
+    assert!(w.client.dns_cached("a1.zoraya") && w.client.dns_cached("a2.zoraya"));
+    // A third name of account 1 pushes out its own earliest, not b's.
+    ask(&mut w, a, "a3.zoraya");
+    assert!(!w.client.dns_cached("a1.zoraya"), "a1 was a's oldest");
+    assert!(w.client.dns_cached("a2.zoraya") && w.client.dns_cached("a3.zoraya"));
+    assert!(
+        w.client.dns_cached("bee.zoraya"),
+        "another account's entry stays"
+    );
+    // An account with no cache room caches nothing.
+    let none = Owner {
+        account: 4,
+        cache: 0,
+    };
+    ask(&mut w, none, "nothing.zoraya");
+    assert!(!w.client.dns_cached("nothing.zoraya"));
 }

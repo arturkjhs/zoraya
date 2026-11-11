@@ -128,7 +128,35 @@ fn connect_and_the_connection_channel_messages_round_trip_and_are_total() {
     total(Reset {
         why: Below(reset::ABORTED),
     });
-    assert!(encode(&Failed { reason: Below(6) }, 1, &mut out).is_err());
+    total(Failed {
+        reason: Below(reason::OVER_QUOTA),
+    });
+    assert!(encode(&Failed { reason: Below(7) }, 1, &mut out).is_err());
+    // N4: the account's budget, with its handle.
+    let scope = zoraya_abi::net::Scope::EMPTY.as_bytes();
+    let carve = NarrowAccount {
+        rights: 1,
+        budget: Below(4),
+        scope: Data(scope),
+    };
+    let length = encode(&carve, 1, &mut out).unwrap();
+    assert!(decode::<NarrowAccount<'_>>(&out[..length], 1).is_ok());
+    assert_eq!(
+        decode::<NarrowAccount<'_>>(&out[..length], 0).err(),
+        Some(WireError::WrongHandles)
+    );
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<NarrowAccount<'_>>(bytes, 1);
+    });
+    let too_many = NarrowAccount {
+        budget: Below(17),
+        ..carve
+    };
+    assert!(encode(&too_many, 1, &mut out).is_err());
+    total(Narrowed {
+        status: Below(status::OVER_QUOTA),
+    });
+    assert!(encode(&Narrowed { status: Below(6) }, 1, &mut out).is_err());
 }
 
 #[test]

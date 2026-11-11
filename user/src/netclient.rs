@@ -11,7 +11,9 @@ use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
     ChannelEntry, ChannelObject, Handle, Mode, ObjectType, Packet, Status, channel_signals,
 };
-use zoraya_proto_net::{GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply, status};
+use zoraya_proto_net::{
+    GetStatus, Narrow, NarrowAccount, Narrowed, Ping, PingReply, StatusReply, status,
+};
 use zoraya_protocol::{Below, Data, Message, decode, encode};
 
 use zoraya_abi::{CONSOLE, Rights};
@@ -76,11 +78,32 @@ pub fn parse_status(bytes: &[u8]) -> Option<StatusReply<'_>> {
 
 /// `narrow`: a new connection inside `conn`'s, or the status that refused.
 pub fn narrow(conn: Handle, rights: u32, scope: &[u8]) -> Result<Handle, u32> {
+    narrow_with(
+        conn,
+        &Narrow {
+            rights,
+            scope: Data(scope),
+        },
+    )
+}
+
+/// `narrow_account`: a new connection inside `conn`'s that also carves an
+/// account of `budget` connections (ADR-0262 item 2; N4), or the status that
+/// refused (`OVER_QUOTA` when the column is full).
+pub fn narrow_account(conn: Handle, rights: u32, budget: u32, scope: &[u8]) -> Result<Handle, u32> {
+    narrow_with(
+        conn,
+        &NarrowAccount {
+            rights,
+            budget: Below(budget),
+            scope: Data(scope),
+        },
+    )
+}
+
+fn narrow_with<'a, M: zoraya_protocol::Message<'a>>(conn: Handle, m: &M) -> Result<Handle, u32> {
     let (client, server) = channel_create().map_err(|_| status::UNAVAILABLE)?;
-    let message = request(&Narrow {
-        rights,
-        scope: Data(scope),
-    });
+    let message = request(m);
     let entry = ChannelEntry {
         handle: server,
         rights: ChannelObject::RIGHTS,

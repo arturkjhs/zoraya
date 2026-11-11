@@ -10,11 +10,12 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply,
-    source, status as code,
+    Address, Connect, Connecting, GetStatus, Narrow, NarrowAccount, Narrowed, Ping, PingReply,
+    StatusReply, source, status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
+use crate::accounts::{Accounts, CarveError, Kind};
 use crate::conn::Target;
 use crate::connection::{ConnectTarget, Connection, Request, Verdict};
 use crate::link::Link;
@@ -44,6 +45,13 @@ pub enum Action {
         port: u16,
         scope: Vec<u8>,
         reply: Vec<u8>,
+        /// The account the connection is charged to (a `Connections`
+        /// charge is taken; give it back with [`Service::connection_ended`]
+        /// when the connection is over or never opened).
+        account: usize,
+        /// The account is at its bound: tell the client `Failed {
+        /// OVER_QUOTA }` after `reply`, and open nothing.
+        over_quota: bool,
     },
     /// The request was malformed: close this connection.
     Close,
@@ -51,6 +59,7 @@ pub enum Action {
 
 pub struct Service {
     connections: Vec<Option<Connection>>,
+    accounts: Accounts,
     /// The connection and transaction a running `ping` answers.
     ping: Option<(usize, u32)>,
 }
@@ -90,26 +99,44 @@ impl Service {
     pub fn new() -> Service {
         Service {
             connections: Vec::new(),
+            accounts: Accounts::new(),
             ping: None,
         }
     }
 
     /// Adds a connection; its id, or `None` at the bound.
     pub fn add(&mut self, connection: Connection) -> Option<usize> {
-        if let Some(i) = self.connections.iter().position(Option::is_none) {
+        let account = connection.account();
+        let id = if let Some(i) = self.connections.iter().position(Option::is_none) {
             self.connections[i] = Some(connection);
-            return Some(i);
-        }
-        if self.connections.len() >= MAX_CONNECTIONS {
+            i
+        } else if self.connections.len() >= MAX_CONNECTIONS {
             return None;
-        }
-        self.connections.push(Some(connection));
-        Some(self.connections.len() - 1)
+        } else {
+            self.connections.push(Some(connection));
+            self.connections.len() - 1
+        };
+        self.accounts.join(account);
+        Some(id)
+    }
+
+    /// The accounts, for the loop (the resolver's and the connections'
+    /// bounds) and for the tests.
+    pub fn accounts(&self) -> &Accounts {
+        &self.accounts
+    }
+
+    /// A TCP connection of `account` is over (or never opened): its charge
+    /// goes back.
+    pub fn connection_ended(&mut self, account: usize) {
+        self.accounts.release(account, Kind::Connections);
     }
 
     pub fn remove(&mut self, id: usize) {
-        if let Some(slot) = self.connections.get_mut(id) {
-            *slot = None;
+        if let Some(slot) = self.connections.get_mut(id)
+            && let Some(c) = slot.take()
+        {
+            self.accounts.leave(c.account());
         }
         if self.ping.is_some_and(|(owner, _)| owner == id) {
             // Its reply has nowhere to go; the run itself finishes on its own.
@@ -206,21 +233,29 @@ impl Service {
                     };
                     (ConnectTarget::Name(n), Target::Name(n.into()))
                 };
-                match connection.decide(Request::Connect {
+                let verdict = connection.decide(Request::Connect {
                     target: target.0,
                     port,
-                }) {
-                    Verdict::Allowed => Action::Connect {
-                        target: target.1,
-                        port,
-                        scope: connection.scope_bytes().to_vec(),
-                        reply: reply(
-                            &Connecting {
-                                status: Below(code::OK),
-                            },
-                            t,
-                        ),
-                    },
+                });
+                let account = connection.account();
+                match verdict {
+                    Verdict::Allowed => {
+                        let scope = connection.scope_bytes().to_vec();
+                        let over_quota = self.accounts.charge(account, Kind::Connections).is_err();
+                        Action::Connect {
+                            target: target.1,
+                            port,
+                            scope,
+                            reply: reply(
+                                &Connecting {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            ),
+                            account,
+                            over_quota,
+                        }
+                    }
                     Verdict::NotGranted => answer(code::NOT_GRANTED),
                     Verdict::Invalid => answer(code::INVALID),
                 }
@@ -252,6 +287,48 @@ impl Service {
                                 ),
                             },
                             None => answer(code::BUSY),
+                        }
+                    }
+                }
+            }
+            7 => {
+                let Ok((_, m)) = decode::<NarrowAccount>(message, handles) else {
+                    return Action::Close;
+                };
+                let verdict = connection.decide(Request::Narrow {
+                    rights: m.rights,
+                    scope: m.scope.0,
+                });
+                let answer = |c| Action::Reply(reply(&Narrowed { status: Below(c) }, t));
+                match verdict {
+                    Verdict::NotGranted => answer(code::NOT_GRANTED),
+                    Verdict::Invalid => answer(code::INVALID),
+                    Verdict::Allowed => {
+                        let Some(child) = connection.narrowed(m.rights, m.scope.0) else {
+                            return answer(code::INVALID);
+                        };
+                        let parent = connection.account();
+                        let carved = match self.accounts.carve(parent, m.budget.0) {
+                            Ok(a) => a,
+                            Err(CarveError::Invalid) => return answer(code::INVALID),
+                            Err(CarveError::OverQuota) => return answer(code::OVER_QUOTA),
+                        };
+                        match self.add(child.in_account(carved)) {
+                            Some(new) => Action::Narrowed {
+                                id: new,
+                                reply: reply(
+                                    &Narrowed {
+                                        status: Below(code::OK),
+                                    },
+                                    t,
+                                ),
+                            },
+                            None => {
+                                // Nothing joined it: it ends with no hold.
+                                self.accounts.join(carved);
+                                self.accounts.leave(carved);
+                                answer(code::BUSY)
+                            }
                         }
                     }
                 }
