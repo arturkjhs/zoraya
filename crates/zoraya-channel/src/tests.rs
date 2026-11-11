@@ -4,7 +4,7 @@ use std::vec::Vec;
 use super::*;
 
 fn message(bytes: usize, handles: Vec<u32>) -> Box<Message<u32>> {
-    Box::new(Message::new(vec![0; bytes], handles))
+    Box::new(Message::new(vec![0; bytes], handles, ()))
 }
 
 fn send(c: &mut Channel<u32>, end: usize, bytes: usize) -> Result<(), Refused> {
@@ -18,7 +18,7 @@ fn messages_arrive_whole_and_in_order() {
     let mut c = Channel::new();
     for i in 0..5 {
         c.prepare(0, 1).unwrap();
-        c.write(0, Box::new(Message::new(vec![i], vec![u32::from(i)])));
+        c.write(0, Box::new(Message::new(vec![i], vec![u32::from(i)], ())));
     }
     for i in 0..5 {
         let m = c.read(1).unwrap();

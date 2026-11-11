@@ -76,7 +76,10 @@ enum Item {
 }
 
 #[derive(Debug)]
-struct Subscription {
+struct Subscription<P> {
+    /// What the holder pays for it, dropped with the subscription wherever
+    /// that happens (ADR-0261, ADR-0006 rule 2).
+    _paid: P,
     port: u32,
     source: u32,
     /// This subscription's place in the source's list.
@@ -125,25 +128,25 @@ impl<W> Port<W> {
 
 /// All sources, ports and subscriptions. `W` is what waits on a port.
 #[derive(Debug)]
-pub struct Events<W> {
+pub struct Events<W, P = ()> {
     sources: Vec<Option<Source>>,
     free_sources: Vec<u32>,
     ports: Vec<Option<Port<W>>>,
     free_ports: Vec<u32>,
-    subscriptions: Vec<Option<Subscription>>,
+    subscriptions: Vec<Option<Subscription<P>>>,
     free_subscriptions: Vec<u32>,
     serial: u64,
     sweeps: u64,
 }
 
-impl<W> Default for Events<W> {
+impl<W, P> Default for Events<W, P> {
     fn default() -> Self {
         Events::new()
     }
 }
 
-impl<W> Events<W> {
-    pub const fn new() -> Events<W> {
+impl<W, P> Events<W, P> {
+    pub const fn new() -> Events<W, P> {
         Events {
             sources: Vec::new(),
             free_sources: Vec::new(),
@@ -164,7 +167,7 @@ impl<W> Events<W> {
         self.ports[id as usize].as_mut().expect("port is alive")
     }
 
-    fn subscription(&mut self, id: u32) -> &mut Subscription {
+    fn subscription(&mut self, id: u32) -> &mut Subscription<P> {
         self.subscriptions[id as usize]
             .as_mut()
             .expect("subscription is alive")
@@ -256,7 +259,7 @@ impl<W> Events<W> {
     fn remove_matching(&mut self, source: SourceId, owner: Option<u64>) {
         self.sweeps += 1;
         let sweep = self.sweeps;
-        let matches = |s: &Subscription| s.source == source.0 && owner.is_none_or(|o| s.owner == o);
+        let matches = |s: &Subscription<P>| s.source == source.0 && owner.is_none_or(|o| s.owner == o);
         for i in 0..self.source(source.0).subscriptions.len() {
             let s = self.source(source.0).subscriptions[i];
             let subscription = self.subscription(s);
@@ -309,6 +312,25 @@ impl<W> Events<W> {
         key: u64,
         mode: Mode,
         owner: u64,
+    ) -> Result<(), Error>
+    where
+        P: Default,
+    {
+        self.subscribe_paid(port_id, source, mask, key, mode, owner, P::default())
+    }
+
+    /// As [`Events::subscribe`], keeping `paid` until the subscription ends.
+    /// On failure `paid` is dropped.
+    #[allow(clippy::too_many_arguments)] // the call's own list, plus the payer
+    pub fn subscribe_paid(
+        &mut self,
+        port_id: PortId,
+        source: SourceId,
+        mask: u32,
+        key: u64,
+        mode: Mode,
+        owner: u64,
+        paid: P,
     ) -> Result<(), Error> {
         let port = self.port(port_id.0);
         if port.closed {
@@ -353,6 +375,7 @@ impl<W> Events<W> {
             &mut self.subscriptions,
             &mut self.free_subscriptions,
             Subscription {
+                _paid: paid,
                 port: port_id.0,
                 source: source.0,
                 place,

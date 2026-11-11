@@ -372,6 +372,7 @@ fn the_fixed_status_wordings_are_exact() {
         (Status::BadHandle, "not a usable handle"),
         (Status::InvalidArgument, "not a valid argument"),
         (Status::NotSupported, "not supported by this machine"),
+        (Status::OverQuota, "over quota"),
     ] {
         assert_eq!(status_problem(status), words);
     }

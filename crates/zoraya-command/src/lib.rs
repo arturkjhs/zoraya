@@ -436,6 +436,7 @@ pub fn status_problem(status: Status) -> String {
         Status::BadHandle => "not a usable handle",
         Status::InvalidArgument => "not a valid argument",
         Status::NotSupported => "not supported by this machine",
+        Status::OverQuota => "over quota",
         _ => "",
     };
     if !fixed.is_empty() {
