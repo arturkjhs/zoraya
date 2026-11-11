@@ -106,10 +106,6 @@ pub fn free(frame: Frame) {
 
 /// Frame counts.
 pub fn stats() -> Stats {
-    // The reaper frees large drops later (ADR-0270): a test that compares
-    // counts waits for it.
-    #[cfg(feature = "qemu-test")]
-    crate::reaper::drain();
     FRAMES
         .lock()
         .as_ref()
@@ -120,4 +116,13 @@ pub fn stats() -> Stats {
 #[cfg(feature = "qemu-test")]
 pub fn metadata() -> Range {
     METADATA.lock().expect("frame allocator is up")
+}
+
+/// [`stats`] once the reaper has freed what was queued (ADR-0270): for a test
+/// that compares counts with its starting values. Not for code that holds a
+/// lock, since it yields.
+#[cfg(feature = "qemu-test")]
+pub fn settled_stats() -> Stats {
+    crate::reaper::drain();
+    stats()
 }

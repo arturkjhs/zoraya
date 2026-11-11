@@ -739,9 +739,9 @@ fn heap_stress_grows_and_reuses() {
             assert_eq!(block[BLOCK - 1], !(i as u8));
         }
     };
-    let before = heap::stats();
+    let before = heap::settled_stats();
     run();
-    let first = heap::stats();
+    let first = heap::settled_stats();
     assert!(
         first.backing - before.backing >= BLOCKS * BLOCK / 2,
         "the stress grows the heap: {first:?}"
@@ -750,7 +750,7 @@ fn heap_stress_grows_and_reuses() {
     for _ in 0..4 {
         run();
     }
-    let last = heap::stats();
+    let last = heap::settled_stats();
     assert_eq!(last.backing, first.backing, "later rounds reuse memory");
     assert_eq!(last.live, before.live, "nothing leaked");
 }
@@ -773,15 +773,19 @@ fn heap_blocks_are_aligned() {
 }
 
 fn fallible_allocation_returns_failure() {
-    let before = (heap::stats(), frames::stats());
+    let before = (heap::settled_stats(), frames::settled_stats());
     let mut too_big: Vec<u8> = Vec::new();
-    let free_bytes = frames::stats().free * zoraya_pmm::FRAME_SIZE;
+    let free_bytes = frames::settled_stats().free * zoraya_pmm::FRAME_SIZE;
     assert!(
         too_big
             .try_reserve_exact(free_bytes as usize + (1 << 20))
             .is_err()
     );
-    assert_eq!((heap::stats(), frames::stats()), before, "no trace of it");
+    assert_eq!(
+        (heap::settled_stats(), frames::settled_stats()),
+        before,
+        "no trace of it"
+    );
     assert_eq!(*heap::uncharged_box(7u32).expect("small block"), 7);
     // Heap addresses are near the top of the address space, so rounding up to
     // this alignment overflows; it must fail like any other request.
@@ -821,7 +825,7 @@ fn frames_avoid_every_reserved_region() {
         .map(|r| Range::at(r.address, r.size))
         .collect();
 
-    let before = frames::stats();
+    let before = frames::settled_stats();
     assert!(before.reserved > 0);
     assert_eq!(
         before.total * zoraya_pmm::FRAME_SIZE,
@@ -850,7 +854,7 @@ fn frames_avoid_every_reserved_region() {
         count += 1;
     }
     assert_eq!(count, before.free, "every free frame was returned");
-    assert_eq!(frames::stats().free, 0);
+    assert_eq!(frames::settled_stats().free, 0);
 
     while head != NO_FRAME {
         // SAFETY: written above; the frame is still allocated.
@@ -858,7 +862,7 @@ fn frames_avoid_every_reserved_region() {
         frames::free(Frame::from_addr(head).expect("aligned"));
         head = next;
     }
-    assert_eq!(frames::stats(), before);
+    assert_eq!(frames::settled_stats(), before);
 }
 
 /// How long to wait for an interrupt before failing, in nanoseconds. Far
@@ -1178,11 +1182,11 @@ fn console_and_listing_from_a_process() {
 /// ADR-0051 from a process, and INV-0051-1 and -4 by the counters: after it
 /// ends, the frames and heap are as they were.
 fn memory_objects_from_a_process() {
-    let frames_before = frames::stats().free;
-    let heap_before = heap::stats().live;
+    let frames_before = frames::settled_stats().free;
+    let heap_before = heap::settled_stats().live;
     assert_eq!(run_program("t_memory"), exited(0));
-    assert_eq!(frames::stats().free, frames_before);
-    assert_eq!(heap::stats().live, heap_before);
+    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(heap::settled_stats().live, heap_before);
 }
 
 /// ADR-0050 from a process. It ends with nothing left in the kernel.
@@ -1191,11 +1195,11 @@ fn channels_from_a_process() {
     // channel end is two entries of a table that does not shrink. A second run
     // must then change nothing.
     assert_eq!(run_program("t_channels"), exited(0));
-    let frames_before = frames::stats().free;
-    let heap_before = heap::stats().live;
+    let frames_before = frames::settled_stats().free;
+    let heap_before = heap::settled_stats().live;
     assert_eq!(run_program("t_channels"), exited(0));
-    assert_eq!(frames::stats().free, frames_before);
-    assert_eq!(heap::stats().live, heap_before);
+    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(heap::settled_stats().live, heap_before);
 }
 
 /// ADR-0054 and ADR-0070 from a process, with the test disk attached. What it
@@ -1208,11 +1212,11 @@ fn devices_from_a_process() {
     };
     assert_eq!(run(), exited(0));
     // Twice, so that the heap's growth is behind the counts.
-    let frames_before = frames::stats().free;
-    let heap_before = heap::stats().live;
+    let frames_before = frames::settled_stats().free;
+    let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::stats().free, frames_before);
-    assert_eq!(heap::stats().live, heap_before);
+    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(heap::settled_stats().live, heap_before);
 }
 
 /// Leaks: rounds of channels with handles in flight, mappings and pins, with
@@ -1224,11 +1228,11 @@ fn no_leak_after_rounds_of_objects() {
             .wait()
     };
     assert_eq!(run(), exited(0));
-    let frames_before = frames::stats().free;
-    let heap_before = heap::stats().live;
+    let frames_before = frames::settled_stats().free;
+    let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::stats().free, frames_before);
-    assert_eq!(heap::stats().live, heap_before);
+    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(heap::settled_stats().live, heap_before);
 }
 
 /// Runs `run` twice and checks that the second run left the frame and heap
@@ -1236,11 +1240,11 @@ fn no_leak_after_rounds_of_objects() {
 /// such as the signal table and the heap's chunks.
 fn twice_with_nothing_left(run: impl Fn() -> ExitRecord) {
     assert_eq!(run(), exited(0));
-    let frames_before = frames::stats().free;
-    let heap_before = heap::stats().live;
+    let frames_before = frames::settled_stats().free;
+    let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::stats().free, frames_before, "frames");
-    assert_eq!(heap::stats().live, heap_before, "heap");
+    assert_eq!(frames::settled_stats().free, frames_before, "frames");
+    assert_eq!(heap::settled_stats().live, heap_before, "heap");
 }
 
 /// ADR-0101 from a process (INV-0101-1 to -4), and the stream leak loop.
@@ -1333,7 +1337,7 @@ fn a_device_with_no_transport_keeps_its_quarantine() {
     let (_, info) = platform();
     let window = memory::paging::map_device(info.uart.base, 4096) as usize;
     let device = crate::device::without_transport(info.uart.base, window);
-    let frames_before = frames::stats().free;
+    let frames_before = frames::settled_stats().free;
     let memory = crate::memory::object::MemoryObject::new(4096, false, None).expect("memory");
     let pin = crate::device::Pin::new(device.clone(), memory).expect("pin");
     assert_eq!(
@@ -1347,7 +1351,7 @@ fn a_device_with_no_transport_keeps_its_quarantine() {
         Err(zoraya_abi::Status::BadState)
     );
     assert_eq!(device.quarantined(), 1, "nothing proved a stop");
-    assert!(frames::stats().free < frames_before);
+    assert!(frames::settled_stats().free < frames_before);
     drop(device);
 }
 
@@ -1496,13 +1500,13 @@ fn exited_processes_leave_nothing_behind() {
         run_program(name);
     }
     sched::yield_now();
-    let before = frames::stats();
+    let before = frames::settled_stats();
     for _ in 0..20 {
         assert_eq!(run_program("hello"), exited(7));
         assert_eq!(run_program("f_null").reason, ExitReason::Fault);
     }
     sched::yield_now();
-    assert_eq!(frames::stats(), before);
+    assert_eq!(frames::settled_stats(), before);
 }
 
 /// The 255 processes are held suspended, and run one at a time afterwards.
@@ -1519,7 +1523,7 @@ fn running_out_of_asids_is_an_error() {
     /// takes while it runs.
     const ROOM: u64 = 2 * (zoraya_heap::GROW_SIZE as u64) / zoraya_pmm::FRAME_SIZE;
     sched::set_test_slice(500_000);
-    let before = frames::stats().free;
+    let before = frames::settled_stats().free;
     let mut live = Vec::new();
     let failure = loop {
         match process::spawn_suspended("hello") {
@@ -1530,7 +1534,7 @@ fn running_out_of_asids_is_an_error() {
             break None;
         }
     };
-    let free = frames::stats().free;
+    let free = frames::settled_stats().free;
     println!(
         "running_out_of_asids: {} suspended processes take {} frames, {free} stay free",
         live.len(),
@@ -1938,8 +1942,8 @@ fn nothing_is_left_after_spawn_exit_close() {
         settle();
         let events = port::EVENTS.lock();
         (
-            frames::stats().free,
-            heap::stats().live,
+            frames::settled_stats().free,
+            heap::settled_stats().live,
             events.live(),
             events.subscription_count(),
         )
@@ -2331,7 +2335,7 @@ static HELD: SpinLock<(u64, u64)> = SpinLock::new((0, 0));
 /// process, and returns how many are held.
 pub fn hold_frames(leave: u64) -> u64 {
     let mut held = HELD.lock();
-    while frames::stats().free > leave {
+    while frames::settled_stats().free > leave {
         let Ok(frame) = frames::alloc() else {
             break;
         };

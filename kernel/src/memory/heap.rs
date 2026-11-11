@@ -156,8 +156,13 @@ pub fn block_size(layout: Layout) -> usize {
 
 /// Byte counts.
 pub fn stats() -> Stats {
-    // As `frames::stats`: the reaper's queue holds heap until it is drained.
-    #[cfg(feature = "qemu-test")]
-    crate::reaper::drain();
     HEAP.lock().stats()
+}
+
+/// [`stats`] once the reaper has freed what was queued (it holds heap until
+/// then); see `frames::settled_stats`.
+#[cfg(feature = "qemu-test")]
+pub fn settled_stats() -> Stats {
+    crate::reaper::drain();
+    stats()
 }

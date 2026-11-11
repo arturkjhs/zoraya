@@ -1262,8 +1262,8 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         }
         test_calls::FIRST_LINE => Some(Ok(u64::from(crate::device::first_line()))),
         test_calls::LINE_ENABLED => Some(Ok(u64::from(crate::gic::is_enabled(a0 as u32)))),
-        test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::stats().free)),
-        test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::stats().live as u64)),
+        test_calls::FREE_FRAMES => Some(Ok(crate::memory::frames::settled_stats().free)),
+        test_calls::HEAP_LIVE => Some(Ok(crate::memory::heap::settled_stats().live as u64)),
         test_calls::HOLD_FRAMES => Some(Ok(crate::testing::hold_frames(a0))),
         test_calls::RELEASE_FRAMES => Some(Ok(crate::testing::release_frames(a0))),
         test_calls::MASKED_MAX_NS => Some(Ok(crate::steps::masked_max_ns(a0 != 0))),
