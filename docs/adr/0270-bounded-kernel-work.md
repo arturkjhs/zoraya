@@ -143,6 +143,13 @@ and exits.
   threads per call, and the timer callback that returns parked threads moves 64 and re-arms itself for the rest, so
   none of the three holds interrupts masked for more than a bounded number of walks. `t_cpu` runs the masked-time and
   units counters over the CPU tests: at most 1051 us and 69 units under HVF.
+- *Q4 note (CI):* `job_kill` of a room of many processes exposed a sum the units bound did not cover: the scheduler goes
+  from one dying thread to the next with IRQ masked throughout, so the last part of one exit (the address space's
+  frames, at most 64 inline, and the previous thread's 16-frame kernel stack freed by `reap`) and the first part of the
+  next (handles and mappings, up to a step before the first pause) were one interval: 94 units under TCG, 114 and 212
+  on CI, against 80. `exit_current` now starts with `steps::flush()`, so an interval holds one part of one exit: at most
+  64 + 16 units (the tail), 71 measured under TCG. The test kernel records where the units of the busiest interval came
+  from (`steps::diagnose_units`, printed by `t_cpu` when a bound fails).
 - *Q2 note:* a snapshot copies a mapped object that another process also maps in steps, so a concurrent writer is seen
   part way (a plain `memcpy` of shared memory is no different); the copy of the caller's own pages cannot change meanwhile.
   `snapshot_process` charges the caller's own pages page by page, not before the walk (review Q1, note 14).

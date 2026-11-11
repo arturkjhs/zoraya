@@ -54,6 +54,7 @@ pub fn object() {
 /// that no interval between two step points held more than a step of work,
 /// on any host (INV-0270-1's machine-independent half).
 #[inline(always)]
+#[track_caller]
 pub fn count(units: usize) {
     #[cfg(feature = "qemu-test")]
     masked::count(units);
@@ -147,14 +148,53 @@ mod masked {
     static UNITS: AtomicU64 = AtomicU64::new(0);
     static MAX_UNITS: AtomicU64 = AtomicU64::new(0);
 
+    /// Where the units of the interval now running came from (the line of
+    /// the call of `steps::count`), and the same for the interval with the
+    /// most units so far: the test kernel's diagnosis when a bound fails.
+    const SLOTS: usize = 12;
+    static CUR: [[AtomicU64; 2]; SLOTS] = [const { [AtomicU64::new(0), AtomicU64::new(0)] }; SLOTS];
+    static BEST: [[AtomicU64; 2]; SLOTS] =
+        [const { [AtomicU64::new(0), AtomicU64::new(0)] }; SLOTS];
+
+    #[track_caller]
     pub fn count(units: usize) {
         UNITS.fetch_add(units as u64, Ordering::Relaxed);
+        let at = core::panic::Location::caller();
+        let key = ((at.file().len() as u64) << 32) | u64::from(at.line());
+        for slot in &CUR {
+            let have = slot[0].load(Ordering::Relaxed);
+            if have == key || have == 0 {
+                slot[0].store(key, Ordering::Relaxed);
+                slot[1].fetch_add(units as u64, Ordering::Relaxed);
+                break;
+            }
+        }
+    }
+
+    /// Prints where the units of the busiest interval came from.
+    pub fn diagnose() {
+        crate::println!("steps: the busiest interval, units by call site (file length, line):");
+        for slot in &BEST {
+            let key = slot[0].load(Ordering::Relaxed);
+            if key != 0 {
+                crate::println!(
+                    "steps:   {}:{} {}",
+                    key >> 32,
+                    key & 0xffff_ffff,
+                    slot[1].load(Ordering::Relaxed)
+                );
+            }
+        }
     }
 
     pub fn begin() {
         if SINCE.load(Ordering::Relaxed) == 0 {
             SINCE.store(ticks(), Ordering::Relaxed);
             UNITS.store(0, Ordering::Relaxed);
+            for slot in &CUR {
+                slot[0].store(0, Ordering::Relaxed);
+                slot[1].store(0, Ordering::Relaxed);
+            }
         }
     }
 
@@ -162,7 +202,13 @@ mod masked {
         let since = SINCE.swap(0, Ordering::Relaxed);
         if since != 0 {
             MAX_TICKS.fetch_max(ticks().saturating_sub(since), Ordering::Relaxed);
-            MAX_UNITS.fetch_max(UNITS.swap(0, Ordering::Relaxed), Ordering::Relaxed);
+            let units = UNITS.swap(0, Ordering::Relaxed);
+            if units > MAX_UNITS.fetch_max(units, Ordering::Relaxed) {
+                for (best, cur) in BEST.iter().zip(&CUR) {
+                    best[0].store(cur[0].load(Ordering::Relaxed), Ordering::Relaxed);
+                    best[1].store(cur[1].load(Ordering::Relaxed), Ordering::Relaxed);
+                }
+            }
         }
     }
 
@@ -202,6 +248,12 @@ pub fn mask_began() {
 pub fn mask_ended() {
     #[cfg(feature = "qemu-test")]
     masked::end();
+}
+
+/// Prints where the units of the busiest masked interval came from.
+#[cfg(feature = "qemu-test")]
+pub fn diagnose_units() {
+    masked::diagnose();
 }
 
 /// The longest time with IRQ masked since the last reset, in nanoseconds.

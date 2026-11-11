@@ -30,6 +30,7 @@ use zoraya_user::{
 const MASKED_MAX_NS: u64 = 0x7013;
 const MASKED_MAX_UNITS: u64 = 0x7015;
 const SET_CPU_PERIOD: u64 = 0x7018;
+const DIAGNOSE_UNITS: u64 = 0x7019;
 const MS: u64 = 1_000_000;
 /// The slot a spinner finds the shared counters at.
 const COUNTERS: u32 = 8;
@@ -149,6 +150,13 @@ fn end(room: Handle, handles: &[Handle]) {
 /// to the next return to EL0, which is scaled for a slow host; and never more
 /// than twice the ceiling, whatever the host.
 fn upper(budget_ns: u64, periods: u64) -> u64 {
+    // Off HVF the guest's clock runs while the host stalls the guest (TCG on
+    // a loaded runner overran by 250 ms in 2 s with no masked interval to
+    // show for it), so the time check is only that the ceiling is not
+    // doubled; the exactness is under HVF, where the factor is 1.
+    if factor() > 1 {
+        return 2 * budget_ns;
+    }
     // The longest interval with IRQ masked so far is the worst delay of the
     // slice's interrupt on this host (a loaded or nested host showed 3.6
     // times the HVF figure at a calibration of 2).
@@ -164,6 +172,9 @@ fn check_masked(what: &str) {
         "t_cpu: {what}: longest masked interval {} us, {u} units",
         ns / 1000
     );
+    if u > MAX_UNITS {
+        raw_syscall(DIAGNOSE_UNITS, [0; 6]);
+    }
     assert!(u <= MAX_UNITS, "{what}: {u} units");
     assert!(
         ns <= BOUND_NS * factor(),
@@ -390,6 +401,31 @@ fn a_deep_job_tree() {
     check_masked("a job about 30 levels deep");
 }
 
+/// INV-0270-1 across processes: `job_kill` of a room of 40 sleepers wakes them
+/// all at once, and they exit one after another without a return to EL0 in
+/// between. The work of one exit's last part and the next one's first part
+/// must not add up in one interval with IRQ masked (found on CI, where the
+/// interval held 114 and 212 units against 80).
+fn a_mass_exit_is_bounded() {
+    masked_ns(true);
+    units(true);
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    let sleepers: Vec<Handle> = (0..40).map(|_| start(room, b"sleep", 0, None)).collect();
+    nap(100);
+    units(true);
+    job_kill(room).expect("kill");
+    for h in &sleepers {
+        handle_close(*h).expect("close");
+    }
+    assert!(eventually(|| job_get_usage(room, false)
+        .expect("usage")
+        .processes
+        .used
+        == 0));
+    handle_close(room).expect("close");
+    check_masked("the exit of 40 sleepers");
+}
+
 /// Review W6, ADR-0285 point 7: `job_kill` of a room whose threads are parked:
 /// the room is gone within about one period, and its use goes to zero.
 fn a_killed_room_with_parked_threads_dies() {
@@ -561,6 +597,13 @@ fn wake_up_latency_next_to_capped_rooms(period: u64) {
     check_masked("rooms next to a woken process");
 }
 
+/// A process that sleeps (blocked in a system call) for a long time.
+fn sleeper() -> ! {
+    loop {
+        nap(30_000);
+    }
+}
+
 /// A process that only spins.
 fn spin() -> ! {
     loop {
@@ -599,6 +642,7 @@ fn main() -> i32 {
     let mut argv = startup().argv;
     match argv.next() {
         Some(b"spin") => spin(),
+        Some(b"sleep") => sleeper(),
         Some(b"count") => {
             let _ = argv.next();
             let index = argv.next().and_then(|a| a.first().copied()).unwrap_or(0);
@@ -617,6 +661,7 @@ fn main() -> i32 {
     a_room_at_a_quarter_gets_a_quarter(8);
     // More than the 16 parks one pick may make (review W1).
     a_room_at_a_quarter_gets_a_quarter(40);
+    a_mass_exit_is_bounded();
     a_deep_job_tree();
     a_killed_room_with_parked_threads_dies();
     rooms_together_stay_under_their_parent();
