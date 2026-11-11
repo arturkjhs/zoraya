@@ -192,14 +192,14 @@ quota would attach.
 
 ## Open questions
 - The bounds in the table: measure the tour, the POSIX session and an agent-like workload (many short connections).
+  *Note (Q3, 2026-11-11), `fsd` part measured:* an untrusted account (32 open, 1 held) costs the service at most about
+  90 KB (`zoraya-fs-service`'s `worst_case`); the whole service is about 59 MB, 56 MiB of it the session's possible held
+  replies (`MAX_HELD` is `MAX_OPEN`). The other choices are in proposed ADR-0291.
 - Whether the compositor's pixel budget should count the display's scale (a scale-2 surface is four times the bytes).
 - Whether one request per account per pass is fair enough in `fsd`, whose requests vary from a `stat` to a 1 MiB write.
   *Note (Q3, 2026-11-11):* `fsd` serves ready connections in the order the port gives them, not by account; it does
   not yet take one request per account per pass. A flooding account's requests are bounded by its connections (32), not
   by a pass. Not changed; measure when Q7 floods the service.
-- The bounds of the table, `fsd` part measured (Q3, 2026-11-11): an untrusted account (32 open, 1 held) costs the
-  service at most about 90 KB (`zoraya-fs-service`'s `worst_case`); the whole service is about 59 MB, 56 MiB of it the
-  session's possible held replies (`MAX_HELD` is `MAX_OPEN`). Details and the other choices are in proposed ADR-0291.
 
 ## Revisit triggers
 - A service's static size measured to keep memory from rooms that need it: consider Option B.

@@ -2505,7 +2505,9 @@ fn budgets_are_carved_and_the_column_is_bounded() {
 }
 
 /// INV-0262-2: an account's state goes with its last connection, whichever
-/// order the connections close in; a dead parent's sub-accounts go on.
+/// order the connections close in. An account with no connection whose
+/// sub-accounts live stays with the limits it has left, and goes with the
+/// last of them.
 #[test]
 fn an_account_is_freed_with_its_last_connection() {
     let mut r = rig();
@@ -2518,19 +2520,55 @@ fn an_account_is_freed_with_its_last_connection() {
     assert_eq!(r.service.account_totals().accounts, 3, "a2 holds it");
     r.peer_closes(a2);
     let t = r.service.account_totals();
-    assert_eq!(t.accounts, 2, "the parent is gone, its sub-account is not");
+    assert_eq!(t.accounts, 3, "the parent waits for its sub-account");
     assert_eq!(t.open, r.service.open_count());
-    // The sub-account's budget goes back to the session when it ends.
+    assert_eq!(t.open_limit, MAX_OPEN, "and nothing was returned or lost");
+    // The sub-account's end frees it and then its parent.
     r.peer_closes(sub);
     let t = r.service.account_totals();
     assert_eq!((t.accounts, t.open_limit, t.open), (1, MAX_OPEN, 1));
 }
 
-/// INV-0262-2 and -3: random clones with budgets, opens, attaches and
-/// closes. After each one the limits of all accounts add up to the global
-/// bounds, the column is within its bounds, nothing is over its limit, and
-/// the accounts' counts equal the service's; when every connection but the
-/// root is closed, one account is left with every bound back.
+/// Review Q3, finding 1: a room carves 31 of its 32 and closes its own
+/// connections. The column still holds the four accounts' 128, so a fifth
+/// top account is refused until the sub-account goes.
+#[test]
+fn a_dead_top_account_keeps_its_column_slot_while_a_sub_account_lives() {
+    let mut r = rig();
+    let root = r.root;
+    let mut tops = Vec::new();
+    for _ in 0..MAX_UNTRUSTED_ACCOUNTS {
+        tops.push(r.carve(root, UNTRUSTED_OPEN as u32).1);
+    }
+    let (s, sub) = r.carve(tops[0], 31);
+    assert_eq!(s, status::OK);
+    r.peer_closes(tops[0]);
+    assert_eq!(
+        r.carve(root, UNTRUSTED_OPEN as u32).0,
+        status::TOO_MANY_OPEN
+    );
+    let t = r.service.account_totals();
+    assert!(t.untrusted_open_limit <= MAX_UNTRUSTED_ACCOUNTS * UNTRUSTED_OPEN);
+    assert_eq!(
+        t.open_limit - t.untrusted_open_limit,
+        768,
+        "the session keeps 768"
+    );
+    r.peer_closes(sub);
+    assert_eq!(
+        r.carve(root, UNTRUSTED_OPEN as u32).0,
+        status::OK,
+        "now a place is free"
+    );
+}
+
+/// INV-0262-2, -3 and INV-0291-1: random clones with budgets, opens, clones,
+/// shares, narrows, tokens, buffers, held replies and closes, the session's
+/// own connection included. After each one the limits of all accounts add up
+/// to the global bounds, the untrusted accounts together (sub-accounts too)
+/// stay inside the column, nothing is over its limit, every live connection
+/// has a live account, and the accounts' counts equal the service's. At the
+/// end every connection is closed and no account is left.
 #[test]
 fn random_accounts_keep_the_sum_of_bounds_and_free_their_state() {
     let mut seed = 0x2545_f491_4f6c_dd1du64;
@@ -2543,9 +2581,12 @@ fn random_accounts_keep_the_sum_of_bounds_and_free_their_state() {
     let mut r = rig();
     let root = r.root;
     let mut live: Vec<End> = vec![root];
-    for step in 0..1500 {
+    for step in 0..3000 {
+        if live.is_empty() {
+            break;
+        }
         let from = live[next(live.len())];
-        match next(10) {
+        match next(16) {
             0..=1 => {
                 let budget = [1, 2, 8, 16, 32, 33, 100][next(7)];
                 let (s, e) = r.carve(from, budget);
@@ -2553,13 +2594,48 @@ fn random_accounts_keep_the_sum_of_bounds_and_free_their_state() {
                     live.push(e);
                 }
             }
-            2..=5 => {
+            2..=4 => {
                 let (s, e) = r.try_open(from, &format!("f{step}"), open_flags::CREATE, ANY);
                 if s == status::OK {
                     live.push(e);
                 }
             }
+            5 => {
+                let e = r.net.channel();
+                let (s, _) = r.done(from, &proto::Clone { rights: Flags(ANY) }, vec![e]);
+                if s == status::OK {
+                    live.push(e);
+                }
+            }
             6 => {
+                let e = r.net.channel();
+                let (s, _) = r.done(from, &proto::Share { rights: Flags(ANY) }, vec![e]);
+                if s == status::OK {
+                    live.push(e);
+                }
+            }
+            7 => {
+                let e = r.net.channel();
+                let m = proto::Narrow {
+                    rights: Flags(ANY),
+                    name: Name("n"),
+                };
+                let (s, _) = r.done(from, &m, vec![e]);
+                if s == status::OK {
+                    live.push(e);
+                }
+            }
+            8 => {
+                r.post(from, &proto::GetToken {}, vec![]);
+                r.run();
+                // The client takes the reply and its token copy.
+                while let Some((_, handles)) = r.net.take_reply(from) {
+                    for h in handles {
+                        r.net.0.borrow_mut().owned.remove(&h);
+                    }
+                }
+            }
+            9 => {
                 let memory = r.net.end(HandleKind::Memory);
                 r.net
                     .0
@@ -2568,38 +2644,171 @@ fn random_accounts_keep_the_sum_of_bounds_and_free_their_state() {
                     .insert(u64::from(memory), vec![0; 4096]);
                 let _ = r.done(from, &proto::Attach { size: 4096 }, vec![memory]);
             }
-            7 => {
+            10 => {
                 let _ = r.done(from, &proto::Detach {}, vec![]);
             }
-            _ => {
-                if from != root {
-                    live.retain(|e| *e != from);
-                    r.peer_closes(from);
+            11 => {
+                // A held reply: the client's queue is full for a request.
+                r.net.0.borrow_mut().room.insert(from, 0);
+                r.post(from, &proto::Status {}, vec![]);
+                r.run();
+                if next(2) == 0 {
+                    r.net.0.borrow_mut().no_memory = true;
+                    let other = live[next(live.len())];
+                    r.post(other, &proto::Status {}, vec![]);
+                    r.run();
+                    r.net.0.borrow_mut().no_memory = false;
+                }
+                r.net.0.borrow_mut().room.remove(&from);
+                r.net.0.borrow_mut().wake_deadline = true;
+                r.run();
+                let others = live.clone();
+                for e in others {
+                    while r.net.take_reply(e).is_some() {}
                 }
             }
+            _ => {
+                // Any connection may close, the session's included.
+                live.retain(|e| *e != from);
+                r.peer_closes(from);
+            }
         }
+        // Connections the service closed itself are not live.
+        live.retain(|e| !r.net.0.borrow().closed.contains(e));
         let t = r.service.account_totals();
-        assert_eq!(t.open_limit, MAX_OPEN, "step {step}");
-        assert_eq!(t.buffers_limit, MAX_BUFFERS, "step {step}");
-        assert_eq!(t.held_limit, MAX_HELD, "step {step}");
+        if t.accounts > 0 {
+            assert_eq!(t.open_limit, MAX_OPEN, "step {step}");
+            assert_eq!(t.buffers_limit, MAX_BUFFERS, "step {step}");
+            assert_eq!(t.held_limit, MAX_HELD, "step {step}");
+        }
         assert!(t.top_accounts <= MAX_UNTRUSTED_ACCOUNTS, "step {step}");
-        assert!(t.top_open_limit <= MAX_UNTRUSTED_ACCOUNTS * UNTRUSTED_OPEN);
-        assert!(t.top_buffers_limit <= MAX_UNTRUSTED_ACCOUNTS * buffers_for(UNTRUSTED_OPEN));
-        assert!(t.open <= t.open_limit && t.buffers <= t.buffers_limit && t.held <= t.held_limit);
+        assert!(
+            t.untrusted_open_limit <= MAX_UNTRUSTED_ACCOUNTS * UNTRUSTED_OPEN,
+            "step {step}: {t:?}"
+        );
+        assert!(
+            t.untrusted_buffers_limit <= MAX_UNTRUSTED_ACCOUNTS * buffers_for(UNTRUSTED_OPEN),
+            "step {step}"
+        );
+        assert!(
+            t.untrusted_held_limit <= MAX_UNTRUSTED_ACCOUNTS * held_for(UNTRUSTED_OPEN),
+            "step {step}"
+        );
+        assert!(
+            t.open <= t.open_limit && t.buffers <= t.buffers_limit,
+            "step {step}"
+        );
         assert_eq!(t.open, r.service.open_count(), "step {step}");
+        for c in 0..4000 {
+            if let Some(a) = r.service.account_index(c) {
+                assert!(r.service.account_live(a), "step {step}: connection {c}");
+            }
+        }
     }
     for e in live.clone() {
-        if e != root {
-            r.peer_closes(e);
-        }
+        r.peer_closes(e);
     }
     let t = r.service.account_totals();
-    assert_eq!(t.accounts, 1);
+    assert_eq!((t.accounts, t.open), (0, 0), "no account is left");
+    assert_eq!(r.service.open_count(), 0);
+}
+
+/// Review Q3, finding 2: the driver goes while an untrusted `sync` waits.
+/// The `sync` is answered `StorageFailed` without another client's request.
+#[test]
+fn a_lost_driver_answers_a_waiting_sync() {
+    let mut r = rig();
+    let root = r.root;
+    let (_, u) = r.carve(root, 8);
+    let f = r.open(u, "f", open_flags::CREATE);
+    r.write_text(f, 0, 0, b"x");
+    r.post(f, &proto::Sync {}, vec![]);
+    r.run();
+    assert!(r.net.take_reply(f).is_none());
+    r.net.0.borrow_mut().driver_closed = true;
+    r.run();
+    r.run();
+    let reply = r.net.take_reply(f).expect("answered").0;
+    assert_eq!(status_of(&reply), status::STORAGE_FAILED);
+}
+
+/// Review Q3, finding 3: `NoMemory` is not the client's doing and does not
+/// count against its account's bound of held replies.
+#[test]
+fn no_memory_does_not_close_a_connection_of_an_account_holding_a_reply() {
+    let mut r = rig();
+    let root = r.root;
+    let (_, a) = r.carve(root, UNTRUSTED_OPEN as u32);
+    let a2 = r.open(a, "x", open_flags::CREATE);
+    r.net.0.borrow_mut().room.insert(a, 0);
+    r.post(a, &proto::Status {}, vec![]);
+    r.run();
+    assert_eq!(r.service.account_totals().held, 1);
+    r.net.0.borrow_mut().no_memory = true;
+    r.post(a2, &proto::Status {}, vec![]);
+    r.run();
+    assert!(!r.net.0.borrow().closed.contains(&a2), "held, not closed");
+    // Retried when the memory is back.
+    r.net.0.borrow_mut().no_memory = false;
+    r.clock.advance_mono(1_000_000_000);
+    r.net.0.borrow_mut().wake_deadline = true;
+    r.run();
+    assert!(r.net.take_reply(a2).is_some());
+}
+
+/// Review Q3, finding 4: a durable write from an untrusted account waits
+/// for the next commit like a `sync`, and replies with its count.
+#[test]
+fn an_untrusted_durable_write_waits_for_the_next_commit() {
+    let mut r = rig();
+    let root = r.root;
+    let (_, u) = r.carve(root, 8);
+    let f = r.open(u, "f", open_flags::CREATE);
+    let m = proto::Write {
+        offset: 0,
+        flags: Flags(write_flags::DURABLE),
+        data: Data(b"abc"),
+    };
+    for round in 0..5 {
+        let before = r.flushes();
+        r.post(f, &m, vec![]);
+        r.run();
+        assert!(
+            r.net.take_reply(f).is_none(),
+            "round {round}: no answer yet"
+        );
+        assert_eq!(r.flushes(), before, "and no commit of its own");
+        r.clock.advance_mono(6_000_000_000);
+        r.net.0.borrow_mut().wake_deadline = true;
+        r.run();
+        let reply = r.net.take_reply(f).expect("answered by the timed commit").0;
+        let (_, d) = decode::<proto::Done>(&reply, 0).unwrap();
+        assert_eq!((d.status.0, d.count), (status::OK, 3));
+    }
+    // The session's durable write commits at once.
+    let g = r.open(root, "g", open_flags::CREATE);
     assert_eq!(
-        (t.open_limit, t.buffers_limit, t.held_limit),
-        (MAX_OPEN, MAX_BUFFERS, MAX_HELD)
+        r.write_text(g, 0, write_flags::DURABLE, b"z"),
+        (status::OK, 1)
     );
-    assert_eq!(t.open, 1, "the root connection");
+}
+
+/// Review Q3, finding 5: each refusal at an account's bound is counted for
+/// its launcher.
+#[test]
+fn refusals_are_counted_per_account() {
+    let mut r = rig();
+    let root = r.root;
+    let (_, a) = r.carve(root, 2);
+    let (_, b) = r.carve(root, 2);
+    let ia = r.service.account_index(1).unwrap();
+    let ib = r.service.account_index(2).unwrap();
+    let _ = (a, b);
+    assert_eq!(r.service.account_refusals(ia), Some(0));
+    let _ = r.open_until_refused(a, "a");
+    let _ = r.try_open(a, "again", open_flags::CREATE, ANY);
+    assert_eq!(r.service.account_refusals(ia), Some(2));
+    assert_eq!(r.service.account_refusals(ib), Some(0), "b is not charged");
 }
 
 /// INV-0262-3's size test: the service's worst case from its bounds, and an
@@ -2607,13 +2816,20 @@ fn random_accounts_keep_the_sum_of_bounds_and_free_their_state() {
 #[test]
 fn the_service_size_follows_from_the_bounds() {
     let w = worst_case::<End>();
-    let untrusted = w.of_account(UNTRUSTED_OPEN, held_for(UNTRUSTED_OPEN));
+    // An untrusted account, and a sub-account for each of its handles.
+    let untrusted = w.of_account(UNTRUSTED_OPEN, held_for(UNTRUSTED_OPEN))
+        + w.per_account * (UNTRUSTED_OPEN - 1);
     let session = w.of_account(
         MAX_OPEN - MAX_UNTRUSTED_ACCOUNTS * UNTRUSTED_OPEN,
         MAX_HELD - MAX_UNTRUSTED_ACCOUNTS * held_for(UNTRUSTED_OPEN),
     );
+    // The total counts an account for every handle (sub-accounts); the
+    // session's and the four untrusted ones above already count 5 + 4 * 31.
     assert_eq!(
-        w.fixed + session + MAX_UNTRUSTED_ACCOUNTS * untrusted,
+        w.fixed
+            + session
+            + MAX_UNTRUSTED_ACCOUNTS * untrusted
+            + w.per_account * (MAX_OPEN - 5 - 4 * 31),
         w.total(),
         "the session and four untrusted accounts are the whole"
     );

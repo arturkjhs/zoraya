@@ -503,3 +503,15 @@ INV-0262-1..3 for `netd`, the compositor and the broker are still unchecked.
 ADR-0291. Model use: Sonnet only; no Opus review of the trust-boundary code was run (the orchestrator's review of Q3 is due).
 
 **Q5 review fixes** (`docs/tasks/TASK-26-review-q5.md`, dispositions at its end; proposed ADR-0292 for who may set a limit). The "Tests run" line above was wrong for `zoraya-posix` (finding 1); after the fixes `cargo test` of zoraya-fs, -fs-service, -fsclient, -mkfs, -fs-testkit, -proto-file, -posix and -command passes, `make check` passes, and `make test-posix` with `scenarios.script` passes again (81 steps). Changed since: the orphan rule (a directory with a charged open file under a limit cannot be removed), `SCAN_BOUND` 50,000, checked sums, `set_limit` not a freeing request unless it removes a limit, and the model/crash tests keep handles open and change limits.
+
+**Q3 (fsd) review fixes** (`docs/tasks/TASK-26-review-q3.md`, dispositions at its end; after merging `work/q5` at 26812b3 with its
+ADR-0292). Fixed: finding 1 (an account with no connection whose sub-accounts live is kept with its leftover limits until the
+last of them ends; the untrusted column is whole-subtree; the session's account is kept the same way, which also makes
+INV-0291-1 exact after it ends: finding 9), finding 2 (`answer_syncs` runs at the end of `after_engine`), finding 3
+(`NoMemory` replies are held and retried, only `Full` counts against the bound), finding 4 (durable writes of untrusted
+accounts fold like `sync`, with their count), finding 5 (per-account refusal counter, `account_refusals`), finding 6 (the model
+adds Clone, Share, Narrow, tokens, buffers, held replies by full queue and by no memory, and the session's own close, and
+sums the real column), finding 7 (a service with FIFOs refuses `CloneAccount`; `carve` saturates), finding 8 (`total()` counts
+an account per handle). Open: the launcher cannot read the refusal count yet (Q6a: a request or the supervisor channel),
+notes 10 and 11 (sync bookkeeping allocations; any wake of a syncing connection closes it), note 12 (who may set limits, with
+ADR-0292).

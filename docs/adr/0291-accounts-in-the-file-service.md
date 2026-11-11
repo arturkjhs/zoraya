@@ -31,10 +31,19 @@ requests ADR-0265 item 9 folds.
   `TooManyOpen`. Everything is carved: the caller's limits fall by the new account's, and rise again when the
   account's last connection closes. Accounts the dead account carved answer to its parent from then on; if the
   session's account itself ends first, its carve is not returned (nothing can use it) and a new session account is
-  made with what the live ones leave. A reply that cannot be sent when the account holds its bound of replies is
-  dropped with its connection (as a failed allocation already does): the client sees the channel close.
+  made with what the live ones leave. A reply that cannot be sent because the client's queue is full (`Full`), when
+  the account already holds its bound of replies, is dropped with its connection: the client sees the channel close.
+  A reply refused for the machine's memory (`NoMemory`) is not the client's doing: it is held and retried as before
+  accounts, bounded by the connections (review Q3, finding 3).
   FIFO stream ends, which exist only in the temporary directory service, are the service's, not an account's, and are
-  bounded by the global `MAX_OPEN`. Only `Sync` is folded into the next commit; a durable write's own `sync` is not.
+  bounded by the global `MAX_OPEN`; a service with FIFOs refuses `CloneAccount` (`InvalidArgument`), since a deferred
+  FIFO answer is charged without a check. An account with no connection whose sub-accounts live stays with the limits
+  it has left until the last of them goes, so the sub-accounts stay in its column and the session cannot carve a fifth
+  top account from the room's budget (review Q3, finding 1); the session's account is kept in the same way, so the
+  sums stay exact after it ends. `Sync` and a durable write (`DURABLE`, a write and a `sync`, ADR-0010 rule 4) from an
+  untrusted account are folded into the next commit: the write is made, the reply `Done { count }` waits for it
+  (review Q3, finding 4: a one-byte `O_SYNC` loop is the same stall as a `sync` loop). Each refusal at an account's
+  bound is counted for its launcher (`Service::account_refusals`).
 - **Evidence for:** No change for existing clients; one number for the launcher to choose; the sums are exact, so
   INV-0262-3 is an equality the model test checks after every step.
 - **Evidence against:** One more request; a client at the held bound loses a connection instead of getting a status
@@ -67,9 +76,9 @@ requests ADR-0265 item 9 folds.
   `random_accounts_keep_the_sum_of_bounds_and_free_their_state`.
 
 ## Open questions
-- Whether a durable write (`DURABLE` flag, which libposix may send for `O_SYNC`) from an untrusted account should
-  fold into the next commit as `Sync` does. It is the same stall; folding it needs the write's reply deferred with
-  its count.
+- How the launcher reads the refusal count (a request, or the supervisor channel of ADR-0269): Q6a. Today it is a
+  host getter.
+- Sub-accounts are bounded by the handles of their parent, not by a count (worst case 72 B each).
 - Whether the held-reply bound of the session should be lowered (see Consequences).
 - Who may carve: today any connection with `CLONE`. An untrusted program can only subdivide its own account.
 

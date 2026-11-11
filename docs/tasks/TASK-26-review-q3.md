@@ -186,3 +186,27 @@ note under the existing bullet "The bounds in the table: measure ...".
   `fsclient::clone_account` only encodes it and reads a `Done`.
 - Statuses match ADR-0263 item 1 and ADR-0262 (`TooManyOpen` at the account's open bound, `LimitReached` for buffers
   as before). Ordinal 40 is unique (`REQUESTS`), and the `zoraya-posix` status test covers 0..18.
+
+## Dispositions
+
+(Main model, after merging `work/q5` 26812b3 into `work/q3`.)
+
+1. Fixed. `free_account` keeps an account that has no connection but has sub-accounts, with its leftover limits, and frees it
+   (and then its parent) when the last descendant goes; nothing is re-parented, so a column slot and the column's limits stay
+   counted. Test `a_dead_top_account_keeps_its_column_slot_while_a_sub_account_lives` (the review's scenario); the model's column
+   sum is now over every untrusted account (`untrusted_*_limit`).
+2. Fixed. `answer_syncs` runs last in `after_engine`. Test `a_lost_driver_answers_a_waiting_sync`. (The `tick` commit-failure
+   test: `a_failed_timed_commit_reaches_the_supervisor_once` exists for the report; a waiting-sync variant is not added.)
+3. Fixed. Only `Full` is bounded; `NoMemory` is held and retried. Test
+   `no_memory_does_not_close_a_connection_of_an_account_holding_a_reply`.
+4. Fixed. Durable writes from untrusted accounts defer their reply to the next commit (`durable`, `write_reply`); test
+   `an_untrusted_durable_write_waits_for_the_next_commit`. ADR-0291 records it. INV-0265-5's in-QEMU test should loop both.
+5. Fixed (counter and host getter `account_refusals`, test `refusals_are_counted_per_account`); the launcher's read is Q6a.
+6. Fixed. The model test now covers the listed moves, the session's close, and asserts live accounts; the invariant rows say what is covered.
+7. Fixed by refusing `CloneAccount` in a service with FIFOs, and `saturating_sub` in `carve`.
+8. Fixed in `total()`.
+9. Fixed by finding 1's rule (the session's account is a zombie, not dropped).
+10. Not changed (bounded by connections; recorded).
+11. Not changed (relies on `Level` `PEER_CLOSED` only, as `fsd.rs` subscribes).
+12. For the architect, with ADR-0292.
+13. Fixed (moved under the existing bullet as a note).

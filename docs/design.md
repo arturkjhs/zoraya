@@ -346,10 +346,10 @@ Two processes, each in a sub-job that `init` makes, and `init` over them, on [AD
   one each). Carved from the session's, a budget is 1 to 32 and at most four such accounts exist (the untrusted
   column: 128 open, 16 buffers, 4 held replies; the session keeps 768, 224 and 892). At its open bound an account's
   requests get `TOO_MANY_OPEN` (`ENFILE`), at its buffer bound `LIMIT_REACHED`; a reply that cannot be sent and
-  would be a second held one closes its connection. The bounds of all live accounts add up to `MAX_OPEN` (896),
-  `MAX_BUFFERS` (240) and `MAX_HELD` (896); an account's last connection closing frees it and returns its bounds.
+  would be a second held one (the client's queue full; a `NoMemory` reply is held and retried) closes its connection. The bounds of all live accounts add up to `MAX_OPEN` (896),
+  `MAX_BUFFERS` (240) and `MAX_HELD` (896); an account whose last connection closed and whose sub-accounts are gone is freed and returns its bounds (while a sub-account lives it stays with what it has left, so the untrusted column cannot be widened).
   A `Sync` on an untrusted account's connection is answered at the next commit (the timed one or another client's
-  `sync`) and the connection is not read meanwhile; a durable write is not folded yet. Worst-case memory
+  `sync`) and the connection is not read meanwhile; a durable write from such an account is folded the same way. Each refusal at an account's bound is counted for its launcher (`Service::account_refusals`). Worst-case memory
   (`zoraya_fs_service::worst_case`, 4-byte test handles): 192 KB fixed, 766 B per open handle, 64 KiB per held reply,
   so an untrusted account costs at most 90 KB and the whole service 59 MB, 56 MiB of it the session's possible held
   replies (as before accounts). Known limitation: no launcher calls `CloneAccount` yet (Q6a), and the loop serves
