@@ -201,7 +201,8 @@ fn the_keeper_makes_the_untrusted_job_with_adr_0266_ceilings_and_tells_init() {
         vec![Event::Created {
             room: String::new(),
             job: 1,
-            untrusted: true
+            untrusted: true,
+            launcher: None,
         }]
     );
     // A keeper restarted with init's duplicate makes none.
@@ -333,7 +334,7 @@ fn an_untrusted_room_is_launched_into_by_one_manage_holder_at_a_time() {
         (status::BUSY, "running from the console".to_string())
     );
     // A channel that closes gives up its lease.
-    k.channel_closed(2);
+    k.channel_closed(2, &CONSOLE);
     launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
 }
 
@@ -431,6 +432,35 @@ fn no_room_is_collected_while_it_has_processes_or_a_lease() {
     k.env().now += IDLE_MS;
     k.collect_idle();
     assert!(k.running().is_empty());
+}
+
+#[test]
+fn a_lease_is_per_channel_and_one_launcher_leaving_keeps_the_others() {
+    // Finding 1: the console enters `project`, the desktop launches into it
+    // and leaves: the console still holds its launch job.
+    let mut k = keeper();
+    launch(&mut k, 2, &CONSOLE, "project").unwrap();
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    simple(
+        &mut k,
+        1,
+        &DESKTOP,
+        &msg(&LeaveMsg {
+            room: Text("project"),
+        }),
+    )
+    .unwrap();
+    k.env().now += 10 * IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "the console still holds a lease");
+    // A closed channel removes only its own lease.
+    k.channel_closed(1, &DESKTOP);
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1);
+    k.channel_closed(2, &CONSOLE);
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty(), "no lease left");
 }
 
 #[test]
@@ -617,7 +647,8 @@ fn set_applies_the_new_line_and_refuses_what_is_above_its_parent() {
     assert_eq!(e.0, status::BAD_LINE);
     assert!(e.1.contains("above the untrusted rooms' 178M"), "{e:?}");
     assert_eq!(k.env().jobs[&j].limits.memory, Some(128 << 20), "unchanged");
-    // A room that does not run: nothing to apply.
+    // A room that does not run: nothing to apply, but the ceilings are
+    // checked all the same (ADR-0293 Option A).
     simple(
         &mut k,
         1,
@@ -627,6 +658,17 @@ fn set_applies_the_new_line_and_refuses_what_is_above_its_parent() {
         }),
     )
     .unwrap();
+    k.env().table = TABLE.replace("agent-3 --untrusted", "agent-3 --untrusted --mem 512M");
+    let e = simple(
+        &mut k,
+        1,
+        &DESKTOP,
+        &msg(&SetMsg {
+            room: Text("agent-3"),
+        }),
+    )
+    .unwrap_err();
+    assert_eq!(e.0, status::BAD_LINE, "{e:?}");
 }
 
 #[test]
@@ -671,12 +713,8 @@ fn a_restarted_keeper_stops_a_room_it_did_not_start() {
     let model = core::mem::take(first.env());
     let mut second = Keeper::new(model, Some(1));
     assert!(second.running().is_empty());
-    second.resume("agent-1", j, true);
+    second.resume("agent-1", j, true, Some(Launcher::Desktop));
     assert_eq!(second.untrusted_running(), 1);
-    // The room is not launched into a second time by another job.
-    let again = launch(&mut second, 9, &CONSOLE, "agent-1");
-    assert!(again.is_ok(), "no holder is known after a restart");
-    assert_eq!(second.job_of("agent-1"), Some(j));
     simple(
         &mut second,
         9,
@@ -687,6 +725,148 @@ fn a_restarted_keeper_stops_a_room_it_did_not_start() {
     )
     .unwrap();
     assert!(second.env().jobs[&j].killed);
+}
+
+fn restarted(holder: Option<Launcher>, procs: u64) -> (Keeper<Model>, JobId) {
+    let mut first = keeper();
+    launch(&mut first, 1, &DESKTOP, "agent-1").unwrap();
+    let j = first.job_of("agent-1").unwrap();
+    first.env().jobs.get_mut(&j).unwrap().procs = procs;
+    let model = core::mem::take(first.env());
+    let mut second = Keeper::new(model, Some(1));
+    second.resume("agent-1", j, true, holder);
+    (second, j)
+}
+
+#[test]
+fn a_resumed_room_keeps_its_holders_kind_and_is_leased_until_it_leaves() {
+    // Findings 2 and 3. The holder is known by kind, not by channel slot, and
+    // slot numbers are reused after a restart.
+    let (mut k, j) = restarted(Some(Launcher::Desktop), 1);
+    // The console, even on the slot the desktop had, is refused.
+    assert_eq!(
+        launch(&mut k, 1, &CONSOLE, "agent-1").unwrap_err(),
+        (status::BUSY, "running from the desktop".to_string())
+    );
+    // The leased room is not let go while its holder may come back.
+    k.env().jobs.get_mut(&j).unwrap().procs = 0;
+    k.env().now += 2 * IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "leased by its old holder");
+    assert_eq!(
+        launch(&mut k, 2, &CONSOLE, "agent-1").unwrap_err().0,
+        status::BUSY,
+        "still leased"
+    );
+    // The holder (a new channel) leaves: the lease ends.
+    simple(
+        &mut k,
+        3,
+        &DESKTOP,
+        &msg(&LeaveMsg {
+            room: Text("agent-1"),
+        }),
+    )
+    .unwrap();
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+    // Or its channel closes.
+    let (mut k, _) = restarted(Some(Launcher::Console), 0);
+    k.channel_closed(4, &CONSOLE);
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+    // Or it never comes back.
+    let (mut k, _) = restarted(Some(Launcher::Console), 0);
+    k.env().now += ORPHAN_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+    // The same kind of holder may launch again, and then holds a lease.
+    let (mut k, _) = restarted(Some(Launcher::Desktop), 2);
+    launch(&mut k, 5, &DESKTOP, "agent-1").unwrap();
+}
+
+#[test]
+fn a_resumed_room_with_processes_and_no_known_holder_is_busy() {
+    let (mut k, j) = restarted(None, 2);
+    for (chan, kind) in [(1, &DESKTOP), (2, &CONSOLE)] {
+        let e = launch(&mut k, chan, kind, "agent-1").unwrap_err();
+        assert_eq!(e.0, status::BUSY, "{e:?}");
+    }
+    k.env().jobs.get_mut(&j).unwrap().procs = 0;
+    launch(&mut k, 2, &CONSOLE, "agent-1").unwrap();
+}
+
+#[test]
+fn a_slot_reused_by_the_other_launcher_does_not_inherit_the_room() {
+    let mut k = keeper();
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    let j = k.job_of("agent-1").unwrap();
+    k.env().jobs.get_mut(&j).unwrap().procs = 1;
+    k.channel_closed(1, &DESKTOP);
+    assert_eq!(
+        launch(&mut k, 1, &CONSOLE, "agent-1").unwrap_err().0,
+        status::BUSY
+    );
+}
+
+#[test]
+fn a_resumed_room_does_not_report_old_refusals_again() {
+    let mut first = keeper();
+    launch(&mut first, 1, &DESKTOP, "agent-1").unwrap();
+    let j = first.job_of("agent-1").unwrap();
+    first.env().jobs.get_mut(&j).unwrap().refused_mem = 7;
+    let model = core::mem::take(first.env());
+    let mut second = Keeper::new(model, Some(1));
+    second.resume("agent-1", j, true, None);
+    assert!(second.refusals().is_empty());
+    second.env().jobs.get_mut(&j).unwrap().refused_mem = 8;
+    assert_eq!(second.refusals().len(), 1);
+}
+
+#[test]
+fn the_keeper_tells_init_who_holds_a_room_when_it_changes() {
+    let mut k = keeper();
+    k.take_events();
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    let ev = k.take_events();
+    assert!(matches!(
+        ev.as_slice(),
+        [Event::Created {
+            launcher: Some(Launcher::Desktop),
+            untrusted: false,
+            ..
+        }]
+    ));
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    assert!(k.take_events().is_empty(), "no change, nothing said");
+    launch(&mut k, 2, &CONSOLE, "project").unwrap();
+    assert!(matches!(
+        k.take_events().as_slice(),
+        [Event::Created {
+            launcher: Some(Launcher::Console),
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn home_cannot_be_stopped_or_set() {
+    let mut k = keeper();
+    launch(&mut k, 1, &DESKTOP, "home").unwrap();
+    let home = k.job_of("home").unwrap();
+    for bytes in [
+        msg(&Stop { room: Text("home") }),
+        msg(&SetMsg { room: Text("home") }),
+    ] {
+        assert_eq!(
+            simple(&mut k, 1, &DESKTOP, &bytes).unwrap_err().0,
+            status::NOT_ALLOWED
+        );
+    }
+    assert!(!k.env().jobs[&home].killed);
+    assert_eq!(k.running(), vec!["home".to_string()]);
 }
 
 #[test]
@@ -857,5 +1037,104 @@ fn only_manage_opens_channels_and_names_the_kind() {
             decode::<Denied<'_>>(&out[..n], 0).unwrap().1.status.0,
             status::NOT_ALLOWED
         );
+    }
+}
+
+/// A small xorshift, so that the test needs no dependency and replays.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+#[test]
+fn random_bytes_on_every_channel_kind_never_panic_or_leave_a_room_channels_room() {
+    // Finding 12: whatever a channel sends, the keeper answers without
+    // panicking, and a `Room(R)` channel never gets `Open` and never causes
+    // a room other than R to be made or a launch job in another room.
+    let seeds: std::vec::Vec<std::vec::Vec<u8>> = std::vec![
+        msg(&Launch {
+            room: Text("agent-2")
+        }),
+        msg(&Launch {
+            room: Text("agent-1")
+        }),
+        msg(&Launch { room: Text("home") }),
+        msg(&Launch { room: Text("") }),
+        msg(&Open {
+            kind: Below(0),
+            room: Text("agent-3")
+        }),
+        msg(&Open {
+            kind: Below(1),
+            room: Text("")
+        }),
+        msg(&Usage { room: Text("") }),
+        msg(&Usage {
+            room: Text("agent-2")
+        }),
+        msg(&LeaveMsg {
+            room: Text("agent-2")
+        }),
+        msg(&SetMsg {
+            room: Text("agent-2")
+        }),
+        msg(&Stop {
+            room: Text("agent-1")
+        }),
+    ];
+    let own = RoomName::new("agent-1").unwrap();
+    let kinds = [ChannelKind::Room(own), DESKTOP, CONSOLE, ChannelKind::Usage];
+    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+    for kind in &kinds {
+        let mut k = keeper();
+        // The room the Room channel is in exists.
+        launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+        for round in 0..4000 {
+            let mut bytes = if round % 4 == 0 {
+                (0..rng.below(80)).map(|_| rng.next() as u8).collect()
+            } else {
+                seeds[rng.below(seeds.len())].clone()
+            };
+            if round % 4 != 0 {
+                for _ in 0..rng.below(4) {
+                    if !bytes.is_empty() {
+                        let i = rng.below(bytes.len());
+                        bytes[i] = rng.next() as u8;
+                    }
+                }
+                if rng.below(5) == 0 {
+                    bytes.truncate(rng.below(bytes.len() + 1));
+                }
+            }
+            let handles = rng.below(3);
+            let mut out = vec![0u8; OUT_SIZE];
+            let before: std::vec::Vec<String> = k.running();
+            let reply = k.handle(3, kind, &bytes, handles, &mut out);
+            if let ChannelKind::Room(r) = kind {
+                assert!(!matches!(reply, Reply::Open(..)), "{bytes:?}");
+                if let Reply::SendJob(_, job) = reply {
+                    let parent = k.env().jobs[&job].parent;
+                    assert_eq!(parent, k.job_of(r.as_str()), "{bytes:?}");
+                }
+                assert_eq!(k.running(), before, "a Room channel changed the rooms");
+            }
+            if matches!(kind, ChannelKind::Usage) {
+                assert_eq!(k.running(), before, "a Usage channel changed the rooms");
+                assert!(!matches!(reply, Reply::SendJob(..) | Reply::Open(..)));
+            }
+            // Keep the model small: stopped rooms may come back by Launch.
+            if k.running().len() > 40 {
+                break;
+            }
+        }
     }
 }

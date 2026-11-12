@@ -42,6 +42,11 @@ pub const MAX_UNTRUSTED: usize = 4;
 /// launch (a launcher between `Launch` and its spawn holds nothing the
 /// keeper can see).
 pub const IDLE_MS: u64 = 5_000;
+/// A resumed room counts as leased by its old holder until the holder sends
+/// `Leave` or its channel closes; a holder that never comes back is given up
+/// after this long, so that the room does not count against
+/// [`MAX_UNTRUSTED`] for ever.
+pub const ORPHAN_MS: u64 = 30_000;
 
 /// Where a job goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +106,9 @@ pub enum Event {
         room: String,
         job: JobId,
         untrusted: bool,
+        /// Who launched last, for a restarted keeper. The event is sent again
+        /// (and `init` replaces its duplicate) when this changes.
+        launcher: Option<Launcher>,
     },
     /// The keeper let a room's job go.
     Gone { room: String },
@@ -120,14 +128,25 @@ struct Running {
     job: JobId,
     untrusted: bool,
     limits: Limits,
-    /// The last `Manage` holder to launch, and whether it still holds a
-    /// launch job it has not given back.
-    last: Option<(ChanId, Launcher)>,
-    leased: bool,
+    /// The kind of the last `Manage` holder to launch (kept after it left, for
+    /// as long as the room has processes).
+    holder: Option<Launcher>,
+    /// One lease per `Manage` channel that holds a launch job it has not
+    /// given back.
+    leases: Vec<(ChanId, Launcher)>,
+    /// A resumed room's old holder, when the keeper started: leased until it
+    /// leaves, its channel closes, or [`ORPHAN_MS`] pass.
+    orphan: Option<(Launcher, u64)>,
     last_launch_ms: u64,
     reports: [[u32; 4]; 4],
     seen_mem: u64,
     seen_procs: u64,
+}
+
+impl Running {
+    fn leased(&self) -> bool {
+        !self.leases.is_empty() || self.orphan.is_some()
+    }
 }
 
 pub struct Keeper<E: Env> {
@@ -199,6 +218,7 @@ impl<E: Env> Keeper<E> {
                 room: String::new(),
                 job,
                 untrusted: true,
+                launcher: None,
             });
             Some(job)
         });
@@ -214,26 +234,33 @@ impl<E: Env> Keeper<E> {
         &mut self.env
     }
 
-    /// A room `init` kept a job for (a restart): running again, with no
-    /// holder.
-    pub fn resume(&mut self, room: &str, job: JobId, untrusted: bool) {
+    /// A room `init` kept a job for (a restart): running again. `untrusted`
+    /// and `holder` are what `init` kept; a holder is treated as leasing the
+    /// room until it leaves or its channel closes.
+    pub fn resume(&mut self, room: &str, job: JobId, untrusted: bool, holder: Option<Launcher>) {
         let now = self.env.now_ms();
         let limits = match self.env.room_line(room) {
             Ok(Some(r)) => self.effective(&r),
             _ => Limits::default(),
         };
+        // The refusals that happened before are not new.
+        let (seen_mem, seen_procs) = self
+            .env
+            .usage(job, false)
+            .map_or((0, 0), |u| (u.memory.refused, u.processes.refused));
         self.rooms.retain(|r| r.name != room);
         self.rooms.push(Running {
             name: room.to_string(),
             job,
             untrusted,
             limits,
-            last: None,
-            leased: false,
+            holder,
+            leases: Vec::new(),
+            orphan: holder.map(|h| (h, now)),
             last_launch_ms: now,
             reports: [[0; 4]; 4],
-            seen_mem: 0,
-            seen_procs: 0,
+            seen_mem,
+            seen_procs,
         });
     }
 
@@ -281,11 +308,16 @@ impl<E: Env> Keeper<E> {
         l
     }
 
-    /// A channel went away: a launcher that held a lease no longer does.
-    pub fn channel_closed(&mut self, chan: ChanId) {
+    /// A channel went away: it holds no lease any more, and nobody else's is
+    /// touched. The closing of a `Manage` channel also ends the lease a
+    /// resumed room has for that kind of holder.
+    pub fn channel_closed(&mut self, chan: ChanId, kind: &ChannelKind) {
         for r in &mut self.rooms {
-            if r.last.is_some_and(|(c, _)| c == chan) {
-                r.leased = false;
+            r.leases.retain(|(c, _)| *c != chan);
+            if let ChannelKind::Manage(l) = kind
+                && r.orphan.is_some_and(|(o, _)| o == *l)
+            {
+                r.orphan = None;
             }
         }
     }
@@ -296,8 +328,14 @@ impl<E: Env> Keeper<E> {
         let now = self.env.now_ms();
         let mut i = 0;
         while i < self.rooms.len() {
+            let r = &mut self.rooms[i];
+            if r.orphan
+                .is_some_and(|(_, since)| now.saturating_sub(since) >= ORPHAN_MS)
+            {
+                r.orphan = None;
+            }
             let r = &self.rooms[i];
-            let idle = !r.leased
+            let idle = !r.leased()
                 && now.saturating_sub(r.last_launch_ms) >= IDLE_MS
                 && self
                     .env
@@ -410,10 +448,16 @@ impl<E: Env> Keeper<E> {
                 let Ok((_, m)) = decode::<Leave<'_>>(message, handles) else {
                     return Reply::Close;
                 };
+                let now = self.env.now_ms();
                 for r in &mut self.rooms {
-                    if r.name == m.room.0 && r.last.is_some_and(|(c, _)| c == chan) {
-                        r.leased = false;
-                        r.last_launch_ms = self.env.now_ms();
+                    if r.name == m.room.0 {
+                        r.leases.retain(|(c, _)| *c != chan);
+                        if let ChannelKind::Manage(l) = kind
+                            && r.orphan.is_some_and(|(o, _)| o == *l)
+                        {
+                            r.orphan = None;
+                        }
+                        r.last_launch_ms = now;
                     }
                 }
                 done(tx, out)
@@ -465,6 +509,10 @@ impl<E: Env> Keeper<E> {
                 let Ok((_, m)) = decode::<Stop<'_>>(message, handles) else {
                     return Reply::Close;
                 };
+                if m.room.0 == rooms::HOME {
+                    // `home` is the session's own terminals, not a room to kill.
+                    return denied(status::NOT_ALLOWED, "home cannot be stopped", tx, out);
+                }
                 let Some(i) = self.rooms.iter().position(|r| r.name == m.room.0) else {
                     return denied(status::NOT_RUNNING, "not running", tx, out);
                 };
@@ -505,17 +553,35 @@ impl<E: Env> Keeper<E> {
         if let Some(i) = self.rooms.iter().position(|r| r.name == room) {
             // An untrusted room is launched into by one `Manage` holder at a
             // time (ADR-0269 point 2); a `Room(R)` channel is inside it.
-            if self.rooms[i].untrusted && manage.is_some() {
+            if self.rooms[i].untrusted
+                && let Some(me) = manage
+            {
                 let procs = self
                     .env
                     .usage(self.rooms[i].job, false)
                     .map_or(0, |u| u.processes.used);
                 let r = &self.rooms[i];
-                if let Some((c, who)) = r.last
-                    && c != chan
-                    && (r.leased || procs > 0)
-                {
-                    return denied(status::BUSY, &format!("running {}", who.phrase()), tx, out);
+                // Another kind of launcher holds a lease, or the room has
+                // processes and its holder is another kind, or unknown (a
+                // resumed room whose holder `init` did not keep).
+                let other = r
+                    .leases
+                    .iter()
+                    .map(|(_, l)| *l)
+                    .chain(r.orphan.map(|(l, _)| l))
+                    .find(|l| *l != me);
+                let busy = match (other, procs > 0, r.holder) {
+                    (Some(l), _, _) => Some(Some(l)),
+                    (None, true, Some(h)) if h != me => Some(Some(h)),
+                    (None, true, None) => Some(None),
+                    _ => None,
+                };
+                if let Some(who) = busy {
+                    let text = match who {
+                        Some(l) => format!("running {}", l.phrase()),
+                        None => "running, holder unknown".to_string(),
+                    };
+                    return denied(status::BUSY, &text, tx, out);
                 }
             }
         } else {
@@ -555,14 +621,16 @@ impl<E: Env> Keeper<E> {
                 room: room.to_string(),
                 job,
                 untrusted: line.untrusted,
+                launcher: manage,
             });
             self.rooms.push(Running {
                 name: room.to_string(),
                 job,
                 untrusted: line.untrusted,
                 limits,
-                last: None,
-                leased: false,
+                holder: manage,
+                leases: Vec::new(),
+                orphan: None,
                 last_launch_ms: now,
                 reports: [[0; 4]; 4],
                 seen_mem: 0,
@@ -579,8 +647,20 @@ impl<E: Env> Keeper<E> {
         let r = &mut self.rooms[i];
         r.last_launch_ms = now;
         if let Some(who) = manage {
-            r.last = Some((chan, who));
-            r.leased = true;
+            r.leases.retain(|(c, _)| *c != chan);
+            r.leases.push((chan, who));
+            if r.orphan.is_some_and(|(o, _)| o == who) {
+                r.orphan = None;
+            }
+            if r.holder != Some(who) {
+                r.holder = Some(who);
+                self.events.push(Event::Created {
+                    room: r.name.clone(),
+                    job: r.job,
+                    untrusted: r.untrusted,
+                    launcher: Some(who),
+                });
+            }
         }
         match encode(&Launched {}, tx, out) {
             Ok(n) => Reply::SendJob(n, launch),
@@ -592,16 +672,27 @@ impl<E: Env> Keeper<E> {
     }
 
     fn set(&mut self, room: &str, tx: u32, out: &mut [u8]) -> Reply {
-        let Some(i) = self.rooms.iter().position(|r| r.name == room) else {
-            // Nothing runs: the next `Launch` reads the line.
-            return done(tx, out);
-        };
+        if room == rooms::HOME {
+            return denied(status::NOT_ALLOWED, "home has no limits to set", tx, out);
+        }
+        let running = self.rooms.iter().position(|r| r.name == room);
         let line = match self.line(room) {
             Ok(Some(l)) => l,
             Ok(None) => return denied(status::NO_SUCH_ROOM, "no such room", tx, out),
             Err(TableError) => {
                 return denied(status::NO_TABLE, "the room table is unreadable", tx, out);
             }
+        };
+        // ADR-0293 Option A: the ceilings are checked also for a room that
+        // does not run, so that `room set` says at once what a launch would.
+        let limits = self.effective(&line);
+        let m = self.env.machine();
+        if let Err(why) = limits.check_within(&m.ceilings(line.untrusted)) {
+            return denied(status::BAD_LINE, &why, tx, out);
+        }
+        // Nothing runs: the next `Launch` reads the line.
+        let Some(i) = running else {
+            return done(tx, out);
         };
         if line.untrusted != self.rooms[i].untrusted {
             return denied(
@@ -610,11 +701,6 @@ impl<E: Env> Keeper<E> {
                 tx,
                 out,
             );
-        }
-        let limits = self.effective(&line);
-        let m = self.env.machine();
-        if let Err(why) = limits.check_within(&m.ceilings(line.untrusted)) {
-            return denied(status::BAD_LINE, &why, tx, out);
         }
         if let Err(s) = self.env.set_limits(self.rooms[i].job, &job_limits(&limits)) {
             return denied(status::KERNEL, &format!("{s:?}"), tx, out);
@@ -630,8 +716,8 @@ impl<E: Env> Keeper<E> {
         rec.set_name(&r.name);
         rec.flags = flags::RUNNING
             | if r.untrusted { flags::UNTRUSTED } else { 0 }
-            | if r.leased { flags::LEASED } else { 0 };
-        rec.launcher = r.last.map_or(0, |(_, l)| l.raw());
+            | if r.leased() { flags::LEASED } else { 0 };
+        rec.launcher = r.holder.map_or(0, Launcher::raw);
         rec.mem_used = u.memory.used;
         rec.mem_limit = u.memory.limit.unwrap_or(NONE);
         rec.mem_peak = u.memory.peak;

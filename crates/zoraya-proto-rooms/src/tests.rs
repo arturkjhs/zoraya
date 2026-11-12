@@ -92,7 +92,9 @@ fn every_message_round_trips_and_decodes_totally() {
     round!(
         Keep<'_>,
         Keep {
-            untrusted: Below(1),
+            untrusted: Below(0),
+            room_untrusted: Below(1),
+            launcher: Below(2),
             room: Text("agent-1"),
         },
         1

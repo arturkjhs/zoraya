@@ -205,6 +205,10 @@ struct Kept {
     /// The room's name; empty for the untrusted job.
     room: alloc::string::String,
     job: Handle,
+    /// The room's job is under the untrusted job.
+    untrusted: bool,
+    /// `Launcher::raw()` of the room's last holder, or 0.
+    launcher: u32,
 }
 
 /// The shell's slots for the keeper: the `Manage` channel and the channel to
@@ -219,6 +223,8 @@ fn send_keep(chan: Handle, k: &Kept) {
     if let Ok(n) = zoraya_protocol::encode(
         &Keep {
             untrusted: zoraya_protocol::Below(u32::from(untrusted)),
+            room_untrusted: zoraya_protocol::Below(u32::from(k.untrusted)),
+            launcher: zoraya_protocol::Below(k.launcher),
             room: zoraya_protocol::Text(&k.room),
         },
         0,
@@ -240,7 +246,11 @@ fn start_rooms(stack: &Stack, kept: &[Kept]) -> Option<RoomKeeper> {
     for k in kept {
         send_keep(mine, k);
     }
-    let config = config_connection(stack)?;
+    let Some(config) = config_connection(stack) else {
+        let _ = handle_close(mine);
+        let _ = handle_close(theirs);
+        return None;
+    };
     let entries = [
         zoraya_user::stack::console(),
         dup(5, session(), JobObject::RIGHTS),
@@ -317,6 +327,8 @@ impl RoomKeeper {
                 kept.push(Kept {
                     room,
                     job: handles[0],
+                    untrusted: m.room_untrusted.0 == 1,
+                    launcher: m.launcher.0,
                 });
             } else if let Ok((_, m)) =
                 zoraya_protocol::decode::<zoraya_proto_rooms::Forget<'_>>(bytes, count)

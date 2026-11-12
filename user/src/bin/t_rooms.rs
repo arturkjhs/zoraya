@@ -687,11 +687,17 @@ fn main() -> i32 {
         let j = console.launch("agent-2").expect("launch");
         let victim = child_in(j, "hold").expect("child");
         // What the keeper told init: a duplicate of every job it made.
-        let mut kept: Vec<(String, bool, Handle)> = Vec::new();
+        let mut kept: Vec<(String, bool, Handle, u32, u32)> = Vec::new();
         let mut keep = Chan::new(keeper.init);
         while let Some((bytes, handle)) = keep.read(100) {
             if let (Ok((_, m)), Some(h)) = (decode::<pr::Keep<'_>>(&bytes, 1), handle) {
-                kept.push((String::from(m.room.0), m.untrusted.0 == 1, h));
+                kept.push((
+                    String::from(m.room.0),
+                    m.untrusted.0 == 1,
+                    h,
+                    m.room_untrusted.0,
+                    m.launcher.0,
+                ));
             }
         }
         assert!(kept.iter().any(|k| k.1), "the untrusted job was kept");
@@ -703,11 +709,13 @@ fn main() -> i32 {
         assert_err!(channel_write(console.end, b"x", &[]), Status::PeerClosed);
         // A new keeper, with the old one's jobs queued before it starts.
         let (init_mine, init_theirs) = channel_create().expect("channel");
-        for (room, untrusted, h) in &kept {
+        for (room, untrusted, h, room_untrusted, launcher) in &kept {
             let mut b = [0u8; 128];
             let n = encode(
                 &pr::Keep {
                     untrusted: Below(u32::from(*untrusted)),
+                    room_untrusted: Below(*room_untrusted),
+                    launcher: Below(*launcher),
                     room: Text(if *untrusted { "" } else { room }),
                 },
                 0,
@@ -727,6 +735,16 @@ fn main() -> i32 {
         let rec = console2.usage("agent-2");
         assert_eq!(rec.len(), 1, "the room is known after a restart");
         assert_eq!(rec[0].procs_used, 1);
+        // Its holder is known by kind, not by slot: the desktop is refused,
+        // and the room is still leased by the console that held it.
+        assert_eq!(rec[0].launcher, pr::Launcher::Console.raw());
+        assert_ne!(rec[0].flags & pr::flags::LEASED, 0);
+        let mut desktop2 = attach(&second, pr::attach::MANAGE_DESKTOP, "");
+        assert_eq!(
+            desktop2.launch("agent-2").unwrap_err().0,
+            pr::status::BUSY,
+            "a resumed room keeps its holder"
+        );
         let tx = console2.send(&pr::Stop {
             room: Text("agent-2"),
         });

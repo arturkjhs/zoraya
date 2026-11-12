@@ -35,6 +35,19 @@ simplest, least surprising and most reversible one; none changes an accepted dec
   refuses. The shell learns of a refusal by reading the room's counters from `Usage` at the end of each line (a
   synchronous count, no race with the notice), prints at most one hint, and the keeper's `Refused` notices go to the
   channels for the panel's pills (Q6b).
+- **Leases and restarts.** A lease is per `Manage` channel; `Leave` and a closed channel remove only their own, and a
+  room is idle only with no lease. "Another launcher" is decided by the holder's kind (`Launcher`), never by the
+  channel's slot, which is reused. `Keep` carries the room's trust (for every room job, not only the untrusted job) and
+  the kind of its last holder; `init` replaces its copy when the holder changes. A resumed room counts as leased by
+  that kind until it sends `Leave` or its channel closes (or 30 s pass without it, so that a holder that never returns
+  does not hold one of the four untrusted places for ever); a resumed room that has processes and no known holder
+  answers `BUSY`. `home` is refused `Stop` and `Set`: it is the session's terminals, not a room. A `Room(R)` or `Usage`
+  channel cannot take the last four of the 64 channel places: `init`'s `Attach` of a reconnecting `Manage` holder is
+  never dropped for want of one. The keeper writes `Keep` to `init` before it gives a launcher the launch job, and
+  refuses the `Launch` if that write fails.
+- **`init` holds a `LIMIT` duplicate of each job.** This is acceptable: `init` already holds `LIMIT` on the session
+  job, so the duplicates give it no authority it lacks, and they go only to a restarted keeper, over the start-up
+  channel `init` made.
 - **Evidence for:** Drivers 1 to 4; the keeper is 700 lines with its host model; every rule has a test.
 - **Evidence against:** Three requests and four `init` messages beyond ADR-0269's list; the lease is a convention
   (a launcher that never sends `Leave` and keeps its channel holds an idle room until its channel closes).
@@ -80,6 +93,8 @@ None.
 
 ## Open questions
 - Whether `IDLE_MS` (5 s) should be longer for a slow launcher under TCG.
+- Whether the 30 s after which a resumed room's old holder is given up (`ORPHAN_MS`) is right; and that a holder that
+  had already sent `Leave` before the keeper ended is still treated as holding until then (`Keep` does not say).
 - Whether a launcher that crashes holding a launch job should have the room's processes ended (today they run on).
 - Whether the keeper should ask `init` for the machine's free disk instead of assuming 8 GiB for the default of
   `--disk` when it fills a line in memory.

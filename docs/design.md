@@ -1544,9 +1544,11 @@ every right but `LIMIT`, and launches in it as before. Three kinds of channel sp
 the console's shell: `Launch`, `Leave`, `Set`, `Usage`, `Report`, `Stop`, `Open`), `Room(R)` (the shell the panel
 launches in a room, and `top` run in it: `Launch` and `Usage` of R) and `Usage` (reads). Which kind a message came on
 decides what it may do, never what it says. At most four untrusted rooms run; an untrusted room is used from one
-`Manage` holder at a time (`room: agent-1: running from the desktop`, with a lease given back by `Leave` or a closed
-channel); a room with no processes, no lease and no launch for 5 s is let go. The keeper tells `init` what it makes
-(`Keep`: a duplicate of each job, with `LIMIT`) and lets go (`Forget`); `init` restarts it up to three times and gives
+`Manage` kind at a time (`room: agent-1: running from the desktop`; a lease is per channel and is given back by that
+channel's `Leave` or its closing, and the holder is known by kind, never by slot); a room with no processes, no lease and
+no launch for 5 s is let go. The keeper tells `init` what it makes
+(`Keep`: a duplicate of each job, with `LIMIT`, its trust and its last holder's kind, sent before the launcher gets the
+launch job) and lets go (`Forget`); `init` restarts it up to three times and gives
 the new one those jobs, so `Stop`, `Set` and `Usage` still work and a room never gets a second job. The panel's and the
 console shell's `Manage` channels come from `init` (slots 8 and 11 of those programs) with a second channel (9 and 12)
 on which `init` gives a new one when the keeper has been restarted; a shell in a room gets its `Room(R)` channel at
@@ -1579,7 +1581,9 @@ are `init`'s, outside an untrusted room's job (INV-0268-3 is open; the panel's b
 rooms overview's `New room` form and the compositor's hover card do not show the limit words (Q6b); a POSIX session
 (`/etc/zoraya/session`) starts no keeper channel for its shell; the keeper restart in `init` itself, and the reconnect
 channel, are not run in QEMU (`t_rooms` stands in for `init`); a launcher that never sends `Leave` and keeps its channel
-holds an idle untrusted room.
+holds an idle untrusted room. A resumed room is leased by its old holder's kind until it leaves, its channel closes or
+30 s pass; `home` is refused `Stop` and `Set`; a shell or the panel will not enter a room whose line has limit words
+without a launch job from the keeper.
 
 ## Network driver (stage 8, N1: the driver answers ARP)
 

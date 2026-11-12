@@ -47,6 +47,10 @@ const KEY_CHANNEL: u64 = 1 << 16;
 const KEY_JOB: u64 = 1 << 32;
 /// Channels at once; `init` makes three kinds, and a shell asks for one.
 const MAX_CHANNELS: usize = 64;
+/// Of those, the places only a `Manage` channel may take: `init`'s `Attach`
+/// for a reconnecting launcher is never refused for want of one, whatever
+/// the shells in the rooms have opened.
+const MANAGE_RESERVED: usize = 4;
 /// How often idle rooms are looked for, in nanoseconds.
 const TURN_NS: u64 = 1_000_000_000;
 
@@ -138,7 +142,9 @@ impl Env for Sys {
     }
 
     fn close(&mut self, job: JobId) {
-        if let Some(slot) = self.jobs.get_mut((job as usize).saturating_sub(1))
+        if let Some(slot) = (job as usize)
+            .checked_sub(1)
+            .and_then(|i| self.jobs.get_mut(i))
             && let Some(h) = slot.take()
         {
             let _ = port_unsubscribe(self.port, KEY_JOB + u64::from(job));
@@ -202,6 +208,16 @@ struct Rooms {
 
 impl Rooms {
     fn attach(&mut self, end: Handle, kind: ChannelKind) -> bool {
+        let live = self.chans.iter().flatten().count();
+        let limit = if matches!(kind, ChannelKind::Manage(_)) {
+            MAX_CHANNELS
+        } else {
+            MAX_CHANNELS - MANAGE_RESERVED
+        };
+        if live >= limit {
+            println!("rooms: no place for another channel");
+            return false;
+        }
         let id = match self.chans.iter().position(Option::is_none) {
             Some(i) => i,
             None if self.chans.len() < MAX_CHANNELS => {
@@ -224,12 +240,14 @@ impl Rooms {
             let port = self.keeper.env().port;
             let _ = port_unsubscribe(port, KEY_CHANNEL + id as u64);
             let _ = handle_close(c.end);
-            self.keeper.channel_closed(id);
+            self.keeper.channel_closed(id, &c.kind);
         }
     }
 
     /// Tells `init` what the keeper made and let go (ADR-0269 point 5).
-    fn tell_init(&mut self) {
+    /// Whether `init` got everything.
+    fn tell_init(&mut self) -> bool {
+        let mut all = true;
         for event in self.keeper.take_events() {
             let mut b = [0u8; 128];
             match event {
@@ -237,18 +255,25 @@ impl Rooms {
                     room,
                     job,
                     untrusted,
+                    launcher,
                 } => {
                     let Some(handle) = self.keeper.env().get(job) else {
+                        all = false;
                         continue;
                     };
                     let Ok(n) = encode(
                         &Keep {
                             untrusted: Below(u32::from(untrusted && room.is_empty())),
+                            // Every room job carries its own trust, so that
+                            // a restart does not read it from a changed line.
+                            room_untrusted: Below(u32::from(untrusted)),
+                            launcher: Below(launcher.map_or(0, Launcher::raw)),
                             room: Text(&room),
                         },
                         0,
                         &mut b,
                     ) else {
+                        all = false;
                         continue;
                     };
                     // A duplicate with every right: init may hand it back.
@@ -257,15 +282,16 @@ impl Rooms {
                         rights: JobObject::RIGHTS,
                         transfer: Transfer::Duplicate,
                     };
-                    let _ = channel_write(self.init, &b[..n], &[entry]);
+                    all &= channel_write(self.init, &b[..n], &[entry]).is_ok();
                 }
                 Event::Gone { room } => {
                     if let Ok(n) = encode(&Forget { room: Text(&room) }, 0, &mut b) {
-                        let _ = channel_write(self.init, &b[..n], &[]);
+                        all &= channel_write(self.init, &b[..n], &[]).is_ok();
                     }
                 }
             }
         }
+        all
     }
 
     fn serve(&mut self, id: usize) {
@@ -297,6 +323,17 @@ impl Rooms {
                 Reply::Close
             } else {
                 self.keeper.handle(id, &kind, bytes, 0, &mut self.out)
+            };
+            // `init` is told before the launcher gets a launch job: if the
+            // write to `init` fails, the launch is refused (the channel is
+            // closed) and the job goes unused.
+            let told = self.tell_init();
+            let reply = match reply {
+                Reply::SendJob(_, job) if !told => {
+                    self.keeper.env().close(job);
+                    Reply::Close
+                }
+                other => other,
             };
             let sent = match reply {
                 Reply::Send(n) => channel_write(end, &self.out[..n], &[]).is_ok(),
@@ -402,7 +439,7 @@ fn main() -> i32 {
     // ended (`Keep`) and the channels to serve (`Attach`, held until the
     // keeper exists).
     let mut untrusted = None;
-    let mut resumed: Vec<(String, JobId)> = Vec::new();
+    let mut resumed: Vec<(String, JobId, bool, Option<Launcher>)> = Vec::new();
     let mut pending: Vec<(ChannelKind, Handle)> = Vec::new();
     loop {
         let mut handles = [init; 2];
@@ -417,7 +454,12 @@ fn main() -> i32 {
             if m.untrusted.0 == 1 {
                 untrusted = Some(id);
             } else {
-                resumed.push((String::from(m.room.0), id));
+                resumed.push((
+                    String::from(m.room.0),
+                    id,
+                    m.room_untrusted.0 == 1,
+                    Launcher::from_raw(m.launcher.0),
+                ));
             }
         } else if let Ok((_, m)) = decode::<zoraya_proto_rooms::Attach<'_>>(bytes, count) {
             match kind_of(m.kind.0, m.room.0) {
@@ -439,12 +481,10 @@ fn main() -> i32 {
         request: vec![0u8; 512],
         out: vec![0u8; OUT_SIZE],
     };
-    for (name, job) in resumed {
-        // An untrusted room's job is under the untrusted job; the line says.
-        let line = rooms.keeper.env().room_line(&name).ok().flatten();
-        rooms
-            .keeper
-            .resume(&name, job, line.is_some_and(|l| l.untrusted));
+    for (name, job, untrusted, holder) in resumed {
+        // The trust and the holder are what `init` kept, not what the line
+        // says now (`room remove` without `--kill` leaves a running room).
+        rooms.keeper.resume(&name, job, untrusted, holder);
     }
     for (kind, end) in pending {
         if !rooms.attach(end, kind) {

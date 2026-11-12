@@ -227,8 +227,14 @@ protocol! {
     /// Between `init` and the keeper: the keeper hands `init` a duplicate
     /// (with `LIMIT`) of a room's job (`room` empty: the untrusted job), or
     /// `init` hands a restarted keeper those it kept.
+    /// `untrusted` is 1 for the untrusted job itself (`room` empty);
+    /// `room_untrusted` is 1 for an untrusted room's job, so that a restarted
+    /// keeper does not read the trust from a line that has changed since;
+    /// `launcher` is `Launcher::raw()` of the room's last holder, or 0.
     message Keep<'a> = 96, handles 1 {
         untrusted: Below<2>,
+        room_untrusted: Below<2>,
+        launcher: Below<3>,
         room: Text<'a, MAX_ROOM>,
     }
 

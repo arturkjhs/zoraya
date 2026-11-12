@@ -194,6 +194,17 @@ impl Limits {
         out
     }
 
+    /// True when a word is set that only a job can enforce (`--mem`, `--cpu`,
+    /// `--procs`, `--conns`, `--tmp`): a room with one is not entered without
+    /// the launch job of the room keeper. `--disk` is the volume's.
+    pub fn needs_job(&self) -> bool {
+        self.mem.is_some()
+            || self.cpu.is_some()
+            || self.procs.is_some()
+            || self.conns.is_some()
+            || self.tmp.is_some()
+    }
+
     /// True when all six words are set (an untrusted room's line after any
     /// `room new` or `room set`, INV-0266-1).
     pub fn is_complete(&self) -> bool {

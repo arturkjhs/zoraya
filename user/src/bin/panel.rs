@@ -261,6 +261,15 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
             }
             return;
         }
+        // No keeper: the line's --mem, --procs and --cpu cannot be applied,
+        // and a room that cannot have them is not entered.
+        None if l.room.as_ref().is_some_and(|r| r.limits.needs_job()) => {
+            println!("panel: room {room_name}: its limits need the room keeper");
+            if let Some(h) = opened {
+                let _ = handle_close(h);
+            }
+            return;
+        }
         None => None,
     };
     let Ok((client, compositor_end)) = channel_create() else {
