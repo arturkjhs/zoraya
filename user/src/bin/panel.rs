@@ -89,9 +89,14 @@ fn tell_usage(st: &mut State) {
     let text = match keeper.usage("") {
         Ok(records) => {
             let readings = st.tracker.readings(&records, clock_monotonic());
-            zoraya_settings::usage::to_wire(&readings, gui::MAX_USAGE_TEXT)
+            let text = zoraya_settings::usage::to_wire(&readings, gui::MAX_USAGE_TEXT);
+            st.readings = readings;
+            text
         }
-        Err(_) => String::new(),
+        Err(_) => {
+            st.readings.clear();
+            String::new()
+        }
     };
     if text == st.told_usage {
         return;
@@ -102,6 +107,102 @@ fn tell_usage(st: &mut State) {
     if send(st.manager, &m, None) {
         st.told_usage = text;
     }
+}
+
+/// `/config/rooms` as it is now.
+fn rooms_file(st: &State) -> Vec<u8> {
+    st.root
+        .as_ref()
+        .and_then(|r| r.open(ROOMS, 0, zoraya_proto_file::rights::READ).ok())
+        .and_then(|f| read_all(&f).ok())
+        .unwrap_or_default()
+}
+
+/// The table written as a new file published over the old, or in place
+/// where the root holds no publish (as the shell does).
+fn write_rooms(st: &State, bytes: &[u8]) -> Result<(), String> {
+    use zoraya_user::files::{ALL, DIRECTORY};
+    let root = st.root.as_ref().ok_or("no volume")?;
+    let dir = root
+        .open("config", DIRECTORY, ALL)
+        .map_err(|_| String::from("/config cannot be opened"))?;
+    let published = dir.create_unnamed().and_then(|file| {
+        if !bytes.is_empty() {
+            file.write(0, 0, bytes)?;
+        }
+        file.publish(&dir, "rooms")
+    });
+    match published {
+        Ok(()) => Ok(()),
+        Err(zoraya_proto_file::status::ACCESS_DENIED) => {
+            let file = root
+                .open(
+                    ROOMS,
+                    zoraya_proto_file::open_flags::CREATE | zoraya_proto_file::open_flags::TRUNCATE,
+                    ALL,
+                )
+                .map_err(|_| String::from("/config/rooms cannot be written"))?;
+            file.write(0, 0, bytes)
+                .map(|_| ())
+                .map_err(|_| String::from("/config/rooms cannot be written"))
+        }
+        Err(_) => Err(String::from("/config/rooms cannot be written")),
+    }
+}
+
+/// The rooms of the table with their limits and use, for the settings
+/// window's Rooms section (ADR-0267 point 4).
+fn rooms_rows(st: &State) -> String {
+    let table = zoraya_settings::rooms::read(&rooms_file(st));
+    let rows: Vec<zoraya_settings::usage::RoomRow> = table
+        .rooms
+        .iter()
+        .map(|r| zoraya_settings::usage::RoomRow {
+            name: r.name.clone(),
+            untrusted: r.untrusted,
+            limits: r.limits,
+            reading: st.readings.iter().find(|x| x.name == r.name).cloned(),
+        })
+        .collect();
+    zoraya_settings::usage::rows_to_wire(&rows, zoraya_proto_chooser::MAX_ROOMS_REPLY)
+}
+
+/// `room set ROOM WORD VALUE` for the settings window: the line is
+/// rewritten, the room keeper applies it (and checks the ceilings), and the
+/// old line goes back if it refuses, as `room set` does in the shell. Never
+/// for a settings window of an untrusted room, which holds no `Set`
+/// (ADR-0266 point 6, ADR-0269).
+fn set_room_limit(
+    st: &mut State,
+    from: &Option<Room>,
+    room: &str,
+    word: &str,
+    value: &str,
+) -> Result<(), String> {
+    if from.as_ref().is_some_and(|r| r.untrusted) {
+        return Err(alloc::format!(
+            "{room}: from home: room set {room} {word} {value}"
+        ));
+    }
+    let old_bytes = rooms_file(st);
+    let (new, old) = zoraya_settings::rooms::with_limit(&old_bytes, room, word, value)
+        .map_err(|e| alloc::format!("{room}: {e}"))?;
+    write_rooms(st, &new)?;
+    if let Some(k) = st.keeper.as_mut()
+        && let Err(e) = k.set(room)
+    {
+        // Only that line goes back; the file is read again so that another
+        // edit made since is kept.
+        let now = rooms_file(st);
+        if let Ok(back) = zoraya_settings::rooms::replace(&now, &old) {
+            let _ = write_rooms(st, &back);
+        }
+        return Err(match e {
+            zoraya_user::roomsclient::Fail::Denied(_, t) => alloc::format!("{room}: {t}"),
+            zoraya_user::roomsclient::Fail::Gone => String::from("the room keeper does not answer"),
+        });
+    }
+    Ok(())
 }
 
 fn reload(panel: &mut Panel, root: Option<&File>) -> bool {
@@ -192,6 +293,8 @@ struct State {
     keeper: Option<zoraya_user::roomsclient::Keeper>,
     /// The CPU share of each room since the last reading (Q6b).
     tracker: zoraya_rooms::Tracker,
+    /// The last readings, for the settings window's Rooms section.
+    readings: Vec<zoraya_settings::usage::Reading>,
     /// What the compositor was last told of the rooms' use, so that a
     /// calm second sends nothing.
     told_usage: String,
@@ -527,6 +630,41 @@ fn launcher_requests(st: &mut State, i: usize) {
             }
             continue;
         }
+        // The Rooms section of the settings window (ADR-0267 point 4): the
+        // table with its limits and use, and one word changed through the
+        // same code as `room set`. Only the settings window's channel.
+        if app == "settings" {
+            if decode::<zoraya_proto_chooser::RoomsQuery>(msg, got.len()).is_ok() {
+                let text = rooms_rows(st);
+                let r = zoraya_proto_chooser::RoomsReply {
+                    text: Data(text.as_bytes()),
+                };
+                let mut out = alloc::vec![0u8; zoraya_proto_chooser::MAX_ROOMS_REPLY + 64];
+                if let Ok(n) = encode(&r, t, &mut out) {
+                    let _ = channel_write(end, &out[..n], &[]);
+                }
+                continue;
+            }
+            if let Ok((_, m)) = decode::<zoraya_proto_chooser::SetRoomLimit<'_>>(msg, got.len()) {
+                let text = |d: &[u8]| String::from(core::str::from_utf8(d).unwrap_or("?"));
+                let (r, w, v) = (text(m.room.0), text(m.word.0), text(m.value.0));
+                let done = set_room_limit(st, &room, &r, &w, &v);
+                let reply_text = done.clone().err().unwrap_or_default();
+                let mut clipped = reply_text.as_str();
+                while clipped.len() > 160 {
+                    clipped = &clipped[..clipped.floor_char_boundary(clipped.len() - 1)];
+                }
+                let reply = zoraya_proto_chooser::RoomLimitSet {
+                    status: zoraya_protocol::Below(u32::from(done.is_err())),
+                    text: Data(clipped.as_bytes()),
+                };
+                let mut out = [0u8; 256];
+                if let Ok(n) = encode(&reply, t, &mut out) {
+                    let _ = channel_write(end, &out[..n], &[]);
+                }
+                continue;
+            }
+        }
         // A terminal at a folder, in the file manager's own room (proposed
         // ADR-0248): only where that room's holds reach.
         if app == "files"
@@ -657,6 +795,7 @@ fn main() -> i32 {
         keeper: channel(8)
             .and_then(|manage| zoraya_user::roomsclient::Keeper::new(manage, channel(9))),
         tracker: zoraya_rooms::Tracker::new(),
+        readings: Vec::new(),
         told_usage: String::new(),
     };
     let mut next_reload = clock_monotonic() + RELOAD_NS;

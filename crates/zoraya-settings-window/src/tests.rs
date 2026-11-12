@@ -102,3 +102,96 @@ fn a_layout_turned_to_the_state_it_has_changes_nothing() {
     let off = changed(&now, LAYOUT + cz as u32, Value::On(false)).unwrap();
     assert_eq!(off.layouts, vec![0], "cz is off already");
 }
+
+fn rows() -> alloc::vec::Vec<zoraya_settings::usage::RoomRow> {
+    use zoraya_settings::rooms::Limits;
+    use zoraya_settings::usage::{Reading, RoomRow};
+    let agent = Limits {
+        mem: Some(64 << 20),
+        cpu: Some(25),
+        procs: Some(64),
+        disk: Some(2 << 30),
+        conns: Some(16),
+        tmp: Some(16 << 20),
+    };
+    vec![
+        RoomRow {
+            name: "project".into(),
+            untrusted: false,
+            limits: Limits {
+                mem: Some(512 << 20),
+                ..Limits::default()
+            },
+            reading: None,
+        },
+        RoomRow {
+            name: "agent-1".into(),
+            untrusted: true,
+            limits: agent,
+            reading: Some(Reading {
+                name: "agent-1".into(),
+                running: true,
+                untrusted: true,
+                mem_used: 58 << 20,
+                mem_limit: Some(64 << 20),
+                procs_used: 3,
+                procs_limit: Some(64),
+                ..Reading::default()
+            }),
+        },
+    ]
+}
+
+#[test]
+fn the_rooms_section_has_a_field_per_word_and_the_untrusted_have_tmp() {
+    let rows = rows();
+    let l = |v| zoraya_tokens::Scale::ONE.logical(v);
+    let mut w = zoraya_ui::Window::new(page_with_rooms(&s(b""), &rows, &[], ""), (l(600), l(520)));
+    // The line's values, as the line writes them; empty for a word it lacks.
+    assert_eq!(w.value(field_id(0, 0)), Value::Text("512M"));
+    assert_eq!(w.value(field_id(0, 1)), Value::Text(""));
+    assert_eq!(w.value(field_id(1, 1)), Value::Text("25%"));
+    assert_eq!(w.value(field_id(1, 5)), Value::Text("16M"));
+    // `project` is trusted: no --tmp field.
+    assert_eq!(w.value(field_id(0, 5)), Value::None);
+    assert!(has_field(&rows[1], 5) && !has_field(&rows[0], 5));
+    assert_eq!(field_of(field_id(1, 3)), Some((1, 3)));
+    assert_eq!(field_of(THEME), None);
+    assert_eq!(field_of(ROOM_FIELD + 6), None);
+    // Without rooms the page is the old one.
+    let mut old = zoraya_ui::Window::new(page(&s(b""), ""), (l(600), l(520)));
+    assert_eq!(old.value(field_id(0, 0)), Value::None);
+}
+
+#[test]
+fn only_the_fields_that_differ_are_changes_and_an_empty_one_is_none() {
+    let rows = rows();
+    assert!(room_changes(&rows, &[]).is_empty());
+    let drafts = vec![
+        (field_id(0, 0), String::from("1G")),
+        (field_id(0, 1), String::from("10%")),
+        (field_id(1, 0), String::new()),
+        (field_id(1, 1), String::from("25%")),
+        (field_id(1, 2), String::from(" 64 ")),
+    ];
+    let c = room_changes(&rows, &drafts);
+    assert_eq!(
+        c,
+        vec![
+            ("project".into(), "--mem", "1G".into()),
+            ("project".into(), "--cpu", "10%".into()),
+            ("agent-1".into(), "--mem", "none".into()),
+        ]
+    );
+    // The line under the fields is the command that would do it.
+    assert_eq!(
+        preview(&rows, &drafts, 0).as_deref(),
+        Some("room set project --mem 1G --cpu 10%")
+    );
+    assert_eq!(
+        preview(&rows, &drafts, 1).as_deref(),
+        Some("room set agent-1 --mem none")
+    );
+    assert_eq!(preview(&rows, &[], 0), None);
+    assert_eq!(preview(&rows, &drafts, 9), None);
+}
