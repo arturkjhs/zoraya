@@ -190,6 +190,18 @@ and exits.
   (`MASKED_MAX_UNITS`). (b) The time: scaled by a calibration (the best of five fills of 256 KiB against 10 us, the
   figure under HVF; the factor is clamped to 1..64 and printed), and the large cases are the best of three runs, so
   that a pause of the host is not taken for the kernel. Under HVF the factor is 1 and the bound is 2 ms.
+- *Q6 note (CI), the time off HVF:* the scaling of (b) did not hold. A CI run of `tcg-smp4-gicv2` (factor 64, the
+  clamp) had every memory case 20 to 40 times slower than the same job in green runs (`memory_map` of a step 14.5 ms
+  against 0.47 ms; the contiguous step 244 ms against 5.9 ms, its 4 MiB case 287 ms against the scaled 128 ms) with the
+  units within their bound: the host slowed the vCPU after the calibration, and the case with the largest fixed cost
+  (the scan of the frame map, above) crossed first. As `t_cpu` does since Q4, `t_bound` now checks the time against
+  2 ms only when the factor is 1 (HVF) and off HVF only that no interval lasted 1 s; the units, which no host speed
+  changes, are the bound on the work between step points there. The scan of the frame map is not counted in units, so
+  off HVF only the 1 s limit covers it; it is bounded by the machine's memory, not by the request. `t_bound` prints the
+  test kernel's diagnosis when the units bound fails, and `frames::alloc` counts at its caller's line, so the
+  diagnosis names the allocating path. Two paths can put more than a step of frames in one interval and are not
+  changed: the heap's growth (`GROW_SIZE`, 256 frames under the heap's lock) and `reaper::help` from `frames::alloc`
+  and `frames::alloc_contig` (64 frames freed in the caller's interval, up to 17 rounds for a run).
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 
