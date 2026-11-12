@@ -19,12 +19,13 @@ use zoraya_abi::{
     DEADLINE_INFINITE, Handle, MapFlags, MemoryFlags, Mode, Packet, Status, channel_signals,
     interrupt_signals,
 };
+use zoraya_user::mmio::Window;
 use zoraya_user::{
-    channel_read, channel_write, clock_monotonic, device_interrupt, device_map, dma_pin,
+    channel_read, channel_write, clock_monotonic, device_interrupt, dma_pin,
     dma_release_quarantine, dma_unpin, handle_close, interrupt_ack, memory_create, memory_map,
     port_create, port_subscribe, port_unsubscribe, port_wait, println, startup,
 };
-use zoraya_virtio::{Registers, Shared};
+use zoraya_virtio::Shared;
 use zoraya_virtio_net::serve::{Flow, Host, Read, Server, Write};
 use zoraya_virtio_net::{Net, OBJECT_SIZE, SHARED_MEMORY};
 
@@ -33,32 +34,6 @@ extern crate alloc;
 const KEY_DEVICE: u64 = 1;
 const KEY_CLIENT: u64 = 2;
 const KEY_WRITABLE: u64 = 3;
-
-struct Window(u64);
-
-impl Registers for Window {
-    fn read(&self, offset: usize) -> u32 {
-        // SAFETY: a device mapping of this process, and `offset` a register.
-        unsafe { ((self.0 + offset as u64) as *const u32).read_volatile() }
-    }
-
-    fn write(&mut self, offset: usize, value: u32) {
-        // SAFETY: as in `read`.
-        unsafe { ((self.0 + offset as u64) as *mut u32).write_volatile(value) }
-    }
-
-    // The configuration has byte fields: one byte access each (virtio 1.2,
-    // 4.2.2.2).
-    fn read8(&self, offset: usize) -> u8 {
-        // SAFETY: as in `read`; a byte access needs no alignment.
-        unsafe { ((self.0 + offset as u64) as *const u8).read_volatile() }
-    }
-
-    fn write8(&mut self, offset: usize, value: u8) {
-        // SAFETY: as in `read8`.
-        unsafe { ((self.0 + offset as u64) as *mut u8).write_volatile(value) }
-    }
-}
 
 struct Queues(u64);
 
@@ -234,7 +209,7 @@ fn main() -> i32 {
     // What a dead driver left: the device is reset first, then its pinned
     // frames are released (ADR-0054).
     let _ = dma_release_quarantine(device);
-    let (window, offset) = device_map(device, index).expect("map the device");
+    let window = Window::open(device, index).expect("map the device");
     let size = SHARED_MEMORY as u64;
     let queues = memory_create(size, MemoryFlags::CONTIGUOUS).expect("queue memory");
     let at = memory_map(queues, 0, size, MapFlags::WRITE).expect("map the queues");
@@ -252,7 +227,7 @@ fn main() -> i32 {
     .expect("subscribe");
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
     port_subscribe(port, client, wanted, KEY_CLIENT, Mode::Level).expect("subscribe");
-    let net = match Net::new(Window(window + offset), Queues(at), runs[0][0]) {
+    let net = match Net::new(window, Queues(at), runs[0][0]) {
         Ok(net) => net,
         Err(e) => {
             println!("ethd: {e:?}");

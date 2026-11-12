@@ -12,9 +12,9 @@ use zoraya_abi::{
 };
 use zoraya_user::{
     assert_err, channel_create, channel_read, channel_write, device_interrupt, device_map,
-    directory_lookup, dma_pin, dma_release_quarantine, dma_unpin, handle_close, handle_duplicate,
-    interrupt_ack, memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_wait,
-    raw_syscall, spawn, wait_exit,
+    device_read, device_transport, device_write, directory_lookup, dma_pin, dma_release_quarantine,
+    dma_unpin, handle_close, handle_duplicate, interrupt_ack, memory_create, memory_map,
+    memory_unmap, port_create, port_subscribe, port_wait, raw_syscall, spawn, wait_exit,
 };
 
 const VIRTIO_MAGIC: u32 = 0x7472_6976;
@@ -287,9 +287,83 @@ fn a_dead_holder_leaves_its_frames_quarantined() {
     assert_eq!(test_call(FREE_FRAMES), held + 1, "the one frame came back");
 }
 
+const DEVICE_WRITE: u64 = 55;
+
+/// ADR-0295: a transport device is one transport of a page, reached by
+/// register calls that the kernel bounds, and nothing else of the page.
+fn transport_devices() {
+    let (page, range) = find_block_device();
+    let t = device_transport(page, range).expect("transport");
+    assert_eq!(device_read(t, 0), Ok(VIRTIO_MAGIC));
+    assert_eq!(device_read(t, REG_DEVICE), Ok(DEVICE_BLOCK));
+    // Bounds: the block is 0x200 bytes of aligned words, whatever the caller says.
+    assert!(device_read(t, 0x1fc).is_ok());
+    for bad in [
+        0x200,
+        0x1fe,
+        1,
+        2,
+        3,
+        0x1000,
+        0x2000,
+        u64::MAX,
+        u64::MAX - 3,
+        1 << 32,
+    ] {
+        assert_err!(device_read(t, bad), Status::InvalidArgument);
+        assert_err!(device_write(t, bad, 0), Status::InvalidArgument);
+    }
+    // A value wider than a register is refused, not cut.
+    let (status, _) = raw_syscall(DEVICE_WRITE, [t.raw(), REG_STATUS, 1 << 32, 0, 0, 0]);
+    assert_eq!(status, Status::InvalidArgument as u64);
+    // A write reaches the register: reset, and read back.
+    device_write(t, REG_STATUS, 0).expect("write");
+    assert_eq!(device_read(t, REG_STATUS), Ok(0));
+    // No other transport of the page is reachable through it: another
+    // range's device is another handle, with its own registers.
+    let other = (range + 1) % 8;
+    let o = device_transport(page, other).expect("another transport");
+    assert_ne!(device_read(o, REG_DEVICE), Ok(DEVICE_BLOCK));
+    assert_err!(device_transport(page, 99), Status::InvalidArgument);
+    // A transport device is not a page: no mapping, no further transports,
+    // and a page device has no register calls.
+    assert_err!(device_map(t, 0), Status::AccessDenied);
+    assert_err!(device_transport(t, 0), Status::AccessDenied);
+    assert_err!(device_read(page, 0), Status::AccessDenied);
+    assert_err!(device_write(page, REG_STATUS, 0), Status::AccessDenied);
+    assert_eq!(test_call(DEVICE_MAPPINGS), 0);
+    // Rights: reading needs READ, writing WRITE, `device_transport` MAP.
+    let write_only = handle_duplicate(t, Rights::WRITE).expect("narrow");
+    assert_err!(device_read(write_only, 0), Status::AccessDenied);
+    handle_close(write_only).expect("close");
+    let read_only = handle_duplicate(t, Rights::READ).expect("narrow");
+    assert_err!(device_write(read_only, REG_STATUS, 0), Status::AccessDenied);
+    handle_close(read_only).expect("close");
+    let no_map = handle_duplicate(page, Rights::READ).expect("narrow");
+    assert_err!(device_transport(no_map, range), Status::AccessDenied);
+    handle_close(no_map).expect("close");
+    // Not a device: the right is checked first, then the type.
+    let memory = memory_create(PAGE, MemoryFlags::CONTIGUOUS).expect("memory");
+    assert_err!(device_read(memory, 0), Status::BadHandle);
+    assert_err!(device_write(memory, 0, 0), Status::BadHandle);
+    assert_err!(device_transport(JOB, 0), Status::AccessDenied);
+    // The interrupt and the pin are the transport's own, as the page's were.
+    assert_err!(device_interrupt(t, 1), Status::InvalidArgument);
+    let interrupt = device_interrupt(t, 0).expect("interrupt");
+    assert_err!(device_interrupt(page, range), Status::BadState);
+    handle_close(interrupt).expect("close");
+    let mut runs = [[0u64; 2]; 1];
+    let pin = dma_pin(memory, t, &mut runs).expect("pin through the transport");
+    dma_unpin(pin).expect("unpin");
+    handle_close(memory).expect("close");
+    handle_close(o).expect("close");
+    handle_close(t).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     maps_a_device();
+    transport_devices();
     takes_an_interrupt();
     pins_and_unpins();
     refusals();

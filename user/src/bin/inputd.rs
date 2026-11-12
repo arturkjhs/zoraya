@@ -14,44 +14,18 @@ use zoraya_abi::{
 };
 use zoraya_proto_input::{Event, Frame};
 use zoraya_protocol::{Below, NO_REPLY, Seq, encode};
+use zoraya_user::mmio::Window;
 use zoraya_user::{
-    channel_write, device_interrupt, device_map, dma_pin, dma_release_quarantine, dma_unpin,
-    interrupt_ack, memory_create, memory_map, port_create, port_subscribe, port_wait, println,
-    startup,
+    channel_write, device_interrupt, dma_pin, dma_release_quarantine, dma_unpin, interrupt_ack,
+    memory_create, memory_map, port_create, port_subscribe, port_wait, println, startup,
 };
-use zoraya_virtio::{Registers, Shared};
+use zoraya_virtio::Shared;
 use zoraya_virtio_input::{Input, Kind, MAX_FRAME, Record, SHARED_MEMORY};
 
 extern crate alloc;
 
 const KEY_DEVICE: u64 = 1;
 const KEY_CLIENT: u64 = 2;
-
-struct Window(u64);
-
-impl Registers for Window {
-    fn read(&self, offset: usize) -> u32 {
-        // SAFETY: a device mapping of this process, and `offset` a register.
-        unsafe { ((self.0 + offset as u64) as *const u32).read_volatile() }
-    }
-
-    fn write(&mut self, offset: usize, value: u32) {
-        // SAFETY: as in `read`.
-        unsafe { ((self.0 + offset as u64) as *mut u32).write_volatile(value) }
-    }
-
-    // The configuration has byte fields: one byte access each (virtio 1.2,
-    // 4.2.2.2).
-    fn read8(&self, offset: usize) -> u8 {
-        // SAFETY: as in `read`; a byte access needs no alignment.
-        unsafe { ((self.0 + offset as u64) as *const u8).read_volatile() }
-    }
-
-    fn write8(&mut self, offset: usize, value: u8) {
-        // SAFETY: as in `read8`.
-        unsafe { ((self.0 + offset as u64) as *mut u8).write_volatile(value) }
-    }
-}
 
 struct Queues(u64);
 
@@ -111,7 +85,7 @@ fn main() -> i32 {
         .and_then(|a| a.parse().ok())
         .unwrap_or(0);
     let _ = dma_release_quarantine(device);
-    let (window, offset) = device_map(device, index).expect("map the device");
+    let window = Window::open(device, index).expect("map the device");
     let size = SHARED_MEMORY as u64;
     let queues = memory_create(size, MemoryFlags::CONTIGUOUS).expect("queue memory");
     let at = memory_map(queues, 0, size, MapFlags::WRITE).expect("map the queues");
@@ -136,7 +110,7 @@ fn main() -> i32 {
         Mode::Level,
     )
     .expect("subscribe");
-    let mut input = match Input::new(Window(window + offset), Queues(at), runs[0][0]) {
+    let mut input = match Input::new(window, Queues(at), runs[0][0]) {
         Ok(input) => input,
         Err(e) => {
             println!("inputd: {e:?}");

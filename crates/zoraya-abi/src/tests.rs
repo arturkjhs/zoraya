@@ -22,7 +22,10 @@ fn parameters_come_from_the_allow_list() {
                 | Param::ExitCode
                 | Param::Detail => {}
                 Param::Opaque => assert!(
-                    matches!(s.name, "port_subscribe" | "port_unsubscribe" | "port_queue"),
+                    matches!(
+                        s.name,
+                        "port_subscribe" | "port_unsubscribe" | "port_queue" | "device_write"
+                    ),
                     "{}",
                     s.name
                 ),
@@ -31,7 +34,12 @@ fn parameters_come_from_the_allow_list() {
                 Param::Size => assert!(
                     matches!(
                         s.name,
-                        "memory_create" | "memory_map" | "memory_unmap" | "image_create"
+                        "memory_create"
+                            | "memory_map"
+                            | "memory_unmap"
+                            | "image_create"
+                            | "device_read"
+                            | "device_write"
                     ),
                     "{}",
                     s.name
@@ -39,7 +47,10 @@ fn parameters_come_from_the_allow_list() {
                 Param::Address => assert_eq!(s.name, "memory_unmap"),
                 Param::Out => assert_eq!(s.name, "channel_read"),
                 Param::RangeIndex => assert!(
-                    matches!(s.name, "device_map" | "device_interrupt"),
+                    matches!(
+                        s.name,
+                        "device_map" | "device_interrupt" | "device_transport"
+                    ),
                     "{}",
                     s.name
                 ),
@@ -364,6 +375,9 @@ echo! {
     object_get_signals(handle: Handle);
     job_set_limits(job: Handle, limits: Bytes);
     job_get_usage(job: Handle, out: Bytes, flags: UsageFlags);
+    device_transport(device: Handle, index: RangeIndex);
+    device_read(device: Handle, offset: Size);
+    device_write(device: Handle, offset: Size, value: Opaque);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.

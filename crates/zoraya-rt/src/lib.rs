@@ -426,6 +426,22 @@ pub fn device_map(device: Handle, index: u32) -> Result<(u64, u64), Status> {
     Ok((word(0), word(8)))
 }
 
+/// Transport `index` of a device page as a device of its own, reached by
+/// [`device_read`] and [`device_write`] only (ADR-0295).
+pub fn device_transport(device: Handle, index: u32) -> Result<Handle, Status> {
+    handle(stubs::device_transport::<Svc>(device, RangeIndex(index))?)
+}
+
+/// Register `offset` of a transport device.
+pub fn device_read(device: Handle, offset: u64) -> Result<u32, Status> {
+    stubs::device_read::<Svc>(device, Size(offset)).map(|value| value as u32)
+}
+
+/// Writes register `offset` of a transport device.
+pub fn device_write(device: Handle, offset: u64, value: u32) -> Result<(), Status> {
+    stubs::device_write::<Svc>(device, Size(offset), Opaque(u64::from(value))).map(|_| ())
+}
+
 pub fn device_interrupt(device: Handle, index: u32) -> Result<Handle, Status> {
     handle(stubs::device_interrupt::<Svc>(device, RangeIndex(index))?)
 }

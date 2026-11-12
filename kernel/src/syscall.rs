@@ -10,12 +10,12 @@ use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
     Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
-    Detail, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason, ExitRecord, Handle,
-    Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
-    MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
-    PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
-    Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject, StreamWriteObject, UsageFlags,
-    request_value,
+    Detail, DeviceObject, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason,
+    ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags,
+    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer,
+    PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind,
+    Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject,
+    StreamWriteObject, UsageFlags, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_elf::{EHDR_SIZE, Header, Program};
@@ -892,6 +892,36 @@ impl Handlers for Calls<'_> {
         };
         let interrupt = device.interrupt(index.0)?;
         self.insert(Object::Interrupt(interrupt), InterruptObject::RIGHTS)
+    }
+
+    /// ADR-0295: the device of one transport of a page, for a holder of the
+    /// page with `MAP`. The new handle has the rights of a device handle
+    /// (the kernel refuses `device_map` on it), so it passes where the page's
+    /// would, to the one driver whose transport it is.
+    fn device_transport(&mut self, device: Handle, index: RangeIndex) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::MAP)? else {
+            return Err(Status::BadHandle);
+        };
+        let transport = device.transport(index.0)?;
+        self.insert(Object::Device(transport), DeviceObject::RIGHTS)
+    }
+
+    /// ADR-0295: a register of a transport device. The offset is the
+    /// caller's and `Device::read_register` bounds it.
+    fn device_read(&mut self, device: Handle, offset: Size) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        device.read_register(offset.0).map(u64::from)
+    }
+
+    fn device_write(&mut self, device: Handle, offset: Size, value: Opaque) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        let value = u32::try_from(value.0).map_err(|_| Status::InvalidArgument)?;
+        device.write_register(offset.0, value)?;
+        Ok(0)
     }
 
     fn interrupt_ack(&mut self, interrupt: Handle) -> Result<u64, Status> {

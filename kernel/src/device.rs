@@ -27,6 +27,9 @@ const VIRTIO_MAGIC: u32 = 0x7472_6976;
 const REG_MAGIC: usize = 0x00;
 const REG_VERSION: usize = 0x04;
 const REG_STATUS: usize = 0x70;
+/// A transport's register block (virtio-mmio): the bound of `read_register`
+/// and `write_register` (ADR-0295).
+const TRANSPORT_SIZE: u64 = 0x200;
 /// How long a reset may take (ADR-0070).
 const RESET_NANOS: u64 = 100_000_000;
 
@@ -36,6 +39,9 @@ struct Range {
     offset: u64,
     intid: u32,
     edge: bool,
+    /// The bytes the transport's registers take from `offset`: the device
+    /// tree's size, never past `TRANSPORT_SIZE` (ADR-0295).
+    size: u64,
 }
 
 #[derive(Default)]
@@ -54,6 +60,12 @@ pub struct Device {
     /// The kernel's own mapping of the page, for the reset.
     kernel: usize,
     ranges: [Option<Range>; MAX_RANGES],
+    /// One device per transport of the page, reached by register calls only
+    /// (ADR-0295). Empty for a transport device itself.
+    transports: [Option<Arc<Device>>; MAX_RANGES],
+    /// A transport device: it has no mapping, `ranges[0]` is its transport,
+    /// and `read_register` and `write_register` work on it alone.
+    by_call: bool,
     state: SpinLock<State>,
 }
 
@@ -88,6 +100,7 @@ pub fn init(fdt: &Fdt<'_>) {
             offset: transport.base - base,
             intid: transport.interrupt.intid,
             edge: transport.interrupt.edge,
+            size: transport.size.clamp(REG_STATUS as u64 + 4, TRANSPORT_SIZE),
         };
         if let Some(device) = devices.iter_mut().find(|d| d.base == base) {
             match device.ranges.iter_mut().find(|r| r.is_none()) {
@@ -105,8 +118,13 @@ pub fn init(fdt: &Fdt<'_>) {
             base,
             kernel: paging::map_device(base, FRAME_SIZE) as usize,
             ranges,
+            transports: Default::default(),
+            by_call: false,
             state: SpinLock::new(State::default()),
         });
+    }
+    for device in &mut devices {
+        device.make_transports();
     }
     *DEVICES.lock() = devices.into_iter().map(Arc::new).collect();
     init_rtc(fdt);
@@ -160,11 +178,14 @@ fn init_rtc(fdt: &Fdt<'_>) {
         offset,
         intid: 0,
         edge: false,
+        size: clock.size.min(TRANSPORT_SIZE),
     });
     *RTC.lock() = Some(Arc::new(Device {
         base,
         kernel: paging::map_device(base, FRAME_SIZE) as usize,
         ranges,
+        transports: Default::default(),
+        by_call: false,
         state: SpinLock::new(State::default()),
     }));
 }
@@ -200,6 +221,8 @@ pub fn without_transport(base: u64, kernel: usize) -> Arc<Device> {
         base,
         kernel,
         ranges: [None; MAX_RANGES],
+        transports: Default::default(),
+        by_call: false,
         state: SpinLock::new(State::default()),
     })
 }
@@ -207,6 +230,67 @@ pub fn without_transport(base: u64, kernel: usize) -> Arc<Device> {
 impl Device {
     pub fn base(&self) -> u64 {
         self.base
+    }
+
+    /// Makes the transport devices of a page just built (a boot-time
+    /// allocation, ADR-0022). Each shares the page's kernel mapping and has
+    /// its own state, so pins, quarantine and reset are per transport.
+    fn make_transports(&mut self) {
+        for (slot, range) in self.transports.iter_mut().zip(self.ranges) {
+            let Some(range) = range else { continue };
+            let mut ranges = [None; MAX_RANGES];
+            ranges[0] = Some(range);
+            *slot = Some(Arc::new(Device {
+                base: self.base,
+                kernel: self.kernel,
+                ranges,
+                transports: Default::default(),
+                by_call: true,
+                state: SpinLock::new(State::default()),
+            }));
+        }
+    }
+
+    /// The device for transport `index` of this page (ADR-0295): no mapping,
+    /// register calls only. A transport device has none of its own.
+    pub fn transport(&self, index: u32) -> Result<Arc<Device>, Status> {
+        if self.by_call {
+            return Err(Status::AccessDenied);
+        }
+        self.transports
+            .get(index as usize)
+            .and_then(Option::as_ref)
+            .cloned()
+            .ok_or(Status::InvalidArgument)
+    }
+
+    /// The transport's register at `offset`, for a transport device. The
+    /// offset is the caller's: it is checked to be aligned and inside the
+    /// transport's block, so no other transport of the page is reached.
+    pub fn read_register(&self, offset: u64) -> Result<u32, Status> {
+        let at = self.register_offset(offset)?;
+        Ok(self.read(at))
+    }
+
+    /// As [`Device::read_register`], for a write.
+    pub fn write_register(&self, offset: u64, value: u32) -> Result<(), Status> {
+        let at = self.register_offset(offset)?;
+        self.write(at, value);
+        Ok(())
+    }
+
+    /// The offset in the page of register `offset` of this transport.
+    fn register_offset(&self, offset: u64) -> Result<usize, Status> {
+        if !self.by_call {
+            return Err(Status::AccessDenied);
+        }
+        let range = self.ranges[0].ok_or(Status::BadState)?;
+        if !offset.is_multiple_of(4) || offset.checked_add(4).is_none_or(|end| end > range.size) {
+            return Err(Status::InvalidArgument);
+        }
+        // `init` checked that the transport's block lies in the page, and
+        // `range.size` is at most that block.
+        Ok((range.offset + offset) as usize)
     }
 
     /// Range `index`'s offset in the window.
@@ -217,6 +301,9 @@ impl Device {
 
     /// Takes the one mapping.
     pub fn begin_mapping(self: &Arc<Self>) -> Result<DeviceMapping, Status> {
+        if self.by_call {
+            return Err(Status::AccessDenied);
+        }
         let mut state = self.state.lock();
         if state.mapped {
             return Err(Status::BadState);

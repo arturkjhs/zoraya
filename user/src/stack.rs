@@ -13,7 +13,13 @@ use zoraya_rt::{
 use crate::files::File;
 use crate::{dup, wait_exit};
 
-pub(crate) const DRIVER_RIGHTS: Rights = Rights::MAP.union(Rights::INTERRUPT).union(Rights::DMA);
+/// A driver's device: the mapping (or, for a transport device, the register
+/// calls), its interrupt and its DMA pins.
+pub(crate) const DRIVER_RIGHTS: Rights = Rights::MAP
+    .union(Rights::INTERRUPT)
+    .union(Rights::DMA)
+    .union(Rights::READ)
+    .union(Rights::WRITE);
 
 /// The block device: the one page holding exactly one, a block device
 /// (ADR-0091).

@@ -10,7 +10,7 @@
 #     object it created (`queues`), and implements `Shared` exactly once, for
 #     `Queues`, built from that mapping alone. The handle that comes with
 #     `Attach` is only pinned (`Host::pin`) and closed.
-#  3. `ethd.rs` calls `device_map(` exactly once, on its device handle.
+#  3. `ethd.rs` opens its device handle exactly once, through `Window::open`.
 #
 # A source check, not a run: it fails on the edit that would give the driver
 # a view of a frame slot, which no test in QEMU would notice.
@@ -41,9 +41,13 @@ count=$(grep -c ': Shared' "$net/lib.rs" "$net/serve.rs" | awk -F: '{ n += $2 } 
 maps=$(grep -c 'memory_map(' "$ethd" || true)
 [ "$maps" -eq 1 ] || bad "$ethd calls memory_map( $maps times; exactly one (the queue object) is allowed"
 grep -qE 'memory_map\(queues,' "$ethd" || bad "$ethd maps something other than 'queues'"
-devs=$(grep -c 'device_map(' "$ethd" || true)
-[ "$devs" -eq 1 ] || bad "$ethd calls device_map( $devs times; exactly one is allowed"
-grep -qE 'device_map\(device,' "$ethd" || bad "$ethd maps a device handle other than 'device'"
+# The device registers are opened once, through `Window::open` (user/src/mmio.rs: a
+# mapping, or register calls on a transport device, ADR-0295); `ethd` maps no
+# device itself.
+devs=$(grep -c 'Window::open(' "$ethd" || true)
+[ "$devs" -eq 1 ] || bad "$ethd calls Window::open( $devs times; exactly one is allowed"
+grep -qE 'Window::open\(device,' "$ethd" || bad "$ethd opens a device handle other than 'device'"
+! grep -q 'device_map(' "$ethd" || bad "$ethd calls device_map( itself; the device goes through Window::open"
 impls=$(grep -cE 'impl Shared for' "$ethd" || true)
 [ "$impls" -eq 1 ] || bad "$ethd implements Shared $impls times; exactly one (Queues) is allowed"
 grep -qE 'impl Shared for Queues' "$ethd" || bad "$ethd implements Shared for something other than Queues"
