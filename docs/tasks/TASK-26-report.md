@@ -1675,3 +1675,8 @@ The answers to the handoff's review questions: (2) and (3) are finding 1's fix, 
   register a byte at a time and got QEMU's 0.
 - `make test-net-fetch` (the new test image): PASS, 156 steps, and `net-dns` 14 steps.
 - `make test-gui GUI_RUNS="net:auto:1"`: PASS, 12 steps.
+- `PAR_QEMU=1 make test-changed` (every step, HVF, one guest at a time): the checks, 45 host test binaries, test-boot, test-libposix,
+  test-files, test-crash, test-posix, test-posix-gui, test-tour-gui and test-gui passed; **test-qemu and test-net failed only on
+  `a_spawn_with_a_big_space_is_bounded`** (`NoMemory`; 117 passed, the 9 expected panics), the intermittent failure above. test-net's
+  new INV-0296-1 check of the image's `netd` passed before the boot.
+- State: branch `work/n6` pushed, tag `candidate/work-n6` on its head for CI's candidate run.
