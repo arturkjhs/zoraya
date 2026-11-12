@@ -204,7 +204,18 @@ fn main() -> i32 {
                 for (room, word, value) in &changes {
                     match set_limit(panel, room, word, value) {
                         Ok(()) => said.push(alloc::format!("room set {room} {word} {value}: done")),
-                        Err(e) => said.push(alloc::format!("room: {room}: {e}")),
+                        Err(e) => {
+                            // After one answer that says nobody answers, the
+                            // rest would each wait as long: they are not
+                            // sent (Q6b review, ADR-0294).
+                            let silent = e == "the room keeper does not answer"
+                                || e == "the panel does not answer";
+                            said.push(alloc::format!("room: {room}: {e}"));
+                            if silent {
+                                said.push(String::from("the other changes were not sent"));
+                                break;
+                            }
+                        }
                     }
                 }
                 rows = query_rooms(panel);

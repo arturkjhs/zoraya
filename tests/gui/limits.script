@@ -19,8 +19,8 @@ origin 105 138
 screen Type help to begin, or help tour.
 screen project ~/project> _
 click 400 120
-# The pointer leaves the title bar, where the hover card would cover the
-# terminal's text.
+# The pointer leaves the title bar (the card is outside the window, above it
+# or below it, so it covers no text of the terminal).
 click 400 500
 type top\r
 prefix ROOM
@@ -41,7 +41,8 @@ shot limits-pill
 # The pill is in the title bar, first of the room's pills ("mem 99%", from the
 # panel's reading): its fill, which the calm title bar (d3e1e5) does not have.
 region 366 115 2 8 f6f9f9
-# The pointer on the title bar: the hover card, over the terminal's top right.
+# The pointer on the title bar: the hover card, above or below the window at
+# its right, where no pixel of the terminal's buffer is (ADR-0172 point 1).
 pointc d3e1e5 162 108 100 4
 pause 400
 shot limits-card

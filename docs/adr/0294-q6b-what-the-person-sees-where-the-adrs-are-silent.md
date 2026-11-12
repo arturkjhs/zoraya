@@ -43,7 +43,11 @@ changes an accepted decision except where the last section says so.
   4. **The hover card** is shown while the pointer is on a framed window's title bar, for a window of a room (not `home`):
      the room, its grants as the record has them, then the reading's lines. It is drawn by the compositor, not a client
      surface, above the windows and the dock and under the bar, and it takes no input (a card you cannot press cannot be
-     spoofed into a press).
+     spoofed into a press). It lies outside the window's outer rectangle, above it or else below it, where no pixel of
+     the client's buffer is, so a buffer that paints a copy of a card stays a picture in its own body (ADR-0172 point
+     1, INV-0172-1). A window with no free side (one as large as the work area) gets the card starting on its title
+     bar, which no client draws, so a copy lacks that part. The card is worked out again after every restack, close and
+     new window, from the pointer's last position.
   5. **The notice has no `Raise` button.** The card and `top ROOM` carry the notice's text: which limit refused, how
      often, and `raise: room set NAME --mem 128M` (twice the limit, the words of the shell's hint). A button needs an
      interactive trusted surface, which ADR-0172 has only for the chooser's sheet; it waits for the rooms overview.
@@ -54,14 +58,22 @@ changes an accepted decision except where the last section says so.
      (`MAX_WINDOWS` 32 less 12) stays for `home` and the trusted rooms. A client is in the account of its record's room if
      the record is untrusted. `CreateToplevel`, `CreatePopup` and `SetBuffer` past a bound answer the new status
      `OVER_QUOTA` (8, `Status` is `Below<9>`), count the refusal for the room and change nothing else. The count is readable
-     (`Compositor::accounts`) but does not reach the room keeper yet.
+     (`Compositor::accounts`) but does not reach the room keeper yet, and it is forgotten when the room's last client
+     is gone. A `SetBuffer` buffer waiting for its first commit is mapped, so the account holds it (a new buffer at the
+     size the window has is one more area until the commit; a newer one replaces the pending one). The totals over all
+     accounts (12 surfaces, 8 areas) can never bind, since 4 accounts of 3 surfaces and 2 areas reach them only at the
+     per-account bounds; they state ADR-0262's promise and guard a change of the three constants, and a mutant of those
+     two terms is equivalent. The bound on the number of accounts does bind (four rooms with one surface each).
   8. **The settings window's Rooms section** edits through the panel, not the keeper. The window holds `/config` narrowed
      to `settings` (INV-0169-4) and no `Manage` channel; giving it either would widen a client. It asks the panel on the
      channel it already has (`RoomsQuery`, `SetRoomLimit`), and the panel, which holds `Manage` and the volume, does what
      `room set` does: `rooms::with_limit` (the shell's checks), write the line, `Set` to the keeper (which checks the
      ceilings), put the old line back if refused. A settings window launched in an untrusted room is refused: such a
      room holds no `Set` (ADR-0266 point 6). The page shows a field per word, the use beside it, the `room set` line of
-     what is being edited, and one Apply.
+     what is being edited, and one Apply. The launch room of the settings window matters only when it is untrusted:
+     ADR-0269 gives the settings app `Manage`, so a window launched in `home` or a trusted room may set limits and one
+     launched in an untrusted room may not. The handler is `zoraya_panel::set_room_limit`, with the file and the keeper
+     as closures, so that the refusal is tested on the host.
 - **Evidence for:** Drivers 1 to 4; each rule has a host test; `top` and `room` show the same numbers as the card.
 - **Evidence against:** `top` is not a program (a different program cannot run it); the notice is text, not a button;
   the compositor's refusal count stays in the compositor.
@@ -97,6 +109,13 @@ builtin (point 1) and the settings window's edit through the panel (point 8).
 - **Negative.** The reading's disk and connection use are not reported (no launcher forwards the services' counts yet): the
   columns show the limit only. A card cannot be pressed. The panel reads usage once a second and waits up to 5 s for a
   keeper that does not answer.
+- **Limitations.** (a) Apply sends one `SetRoomLimit` per changed word, up to 32 rooms by 6 words, each a call of its
+  own that may wait up to 5 s for the keeper; the settings window stops sending after the first answer that says the
+  panel or the keeper does not answer, but a transaction (all words of a room in one request, with a check) is not
+  built. (b) The panel's read-modify-write of `/config/rooms` has no lock: it is the file's one writer while it handles
+  a request, but a person editing the file by hand at the same moment can lose an edit (the rollback re-reads the file
+  to keep other edits). (c) `cpu_share` is the share of one CPU while `cpu_permille` is the share of the machine; they
+  agree only while user threads run on one CPU, which is true today and must be revisited with SMP.
 - **Follow-up.** The rooms overview with `Raise`; a kernel call listing a job's children for `top ROOM`; the compositor
   forwarding its refusal count to the keeper.
 
@@ -108,8 +127,8 @@ builtin (point 1) and the settings window's edit through the panel (point 8).
   pill shows only at `NEAR_PERCENT` or more. *Check:* `cargo test -p zoraya-compositor usage` and
   `tests/gui/limits.script` in `make test-gui`.
 - **INV-0294-3.** The settings window's `SetRoomLimit` is refused when the window was launched in an untrusted room, and
-  otherwise does what `room set` does. *Check:* host tests of `zoraya_settings::rooms::with_limit` for the words and
-  values; the panel's handler itself waits for a crate of its own.
+  otherwise does what `room set` does. *Check:* `cargo test -p zoraya-panel` (`an_untrusted_origin_sets_no_limit` and
+  the handler's other tests) and host tests of `zoraya_settings::rooms::with_limit` for the words and values.
 
 ## Open questions
 - Whether the pill should also mark the dock chip and the badge (ADR-0263 point 7 says the badge and dock chip).

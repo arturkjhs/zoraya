@@ -1604,11 +1604,11 @@ second by every reader (`Throttle`, INV-0267-2); nothing is read on a calm deskt
   the client manager's channel) when the text changed. The compositor checks every line again, takes all or none, and
   draws from it and from nothing a client sends (INV-0172-1): a **pill** `mem 99%` (`procs`, `cpu`) at 90% of a limit in the
   title bar of each window of that room, before the grants so that a narrow bar folds the grants first; and, while the
-  pointer is on a framed window's title bar, a **hover card** under it: the room, its grants as the record has them, then
+  pointer is on a framed window's title bar, a **hover card** outside the window (above it, else below it; starting on the title bar if neither side is free), where no pixel of the client's buffer reaches: the room, its grants as the record has them, then
   `mem 65473K of 64M`, `procs 3 of 16`, the `limits ...` line, `(refused 1 mem)` and `raise: room set project --mem 128M`
   (the notice's text; there is no `Raise` button until the rooms overview exists). A room with no limit has no card and no
   pill, so no text of its window is covered. The card is the compositor's, above the windows and the dock and under the bar,
-  and takes no input.
+  and takes no input; it is worked out again after every restack, close and new window.
 - **The compositor's accounts** (ADR-0262 point 2, INV-0262-1 and -3 for the compositor): an untrusted room's windows are
   an account of 3 surfaces and 2 display areas of buffer pixels, all untrusted rooms together 12 surfaces and 8 display areas
   in at most 4 accounts, which leaves 20 of the 32 windows to `home` and the trusted rooms. `CreateToplevel`, `CreatePopup`
