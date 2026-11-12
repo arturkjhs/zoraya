@@ -2,7 +2,11 @@
 
 Running report, updated after each part. Written by the Sonnet main session; reviews by `opus-review`.
 
-## Status (orchestrator, 2026-11-12, main at `e9c5368`)
+## Status (orchestrator, 2026-11-13, main at `7de36fc`)
+
+Stage 8 is built and merged: every part below is on `main` with its tag. **The untrusted gate stays closed** (`room new --untrusted` is
+refused; `make check-untrusted-gate` passes with the gate closed and lists what is open when a marker is removed). There is no `stage-8`
+tag yet: it waits for the architect and for the full runs.
 
 | Part | Merge on main | Tag |
 |---|---|---|
@@ -18,6 +22,9 @@ Running report, updated after each part. Written by the Sonnet main session; rev
 | N5 | `1be11a1` | `stage-8-n5` |
 | Q6a | `1e9b1aa` | `stage-8-q6a` |
 | Q6b | `e9c5368` | `stage-8-q6b` |
+| N6 (partly done, see its section) | `cd58996` | `stage-8-n6` |
+| Q7 | `4250211` | `stage-8-q7` |
+| Review of the system calls and `work/q7-fixes` | `7de36fc` (no part tag) | - |
 
 Follow-ups merged without a stage tag:
 
@@ -25,37 +32,81 @@ Follow-ups merged without a stage tag:
 - `system-ro` (`0cbef2b`): `/system` read-only at run time, the architect's decision.
 - `tbound-fix` (`d78bdea`): `t_bound`'s time bound off HVF.
 - `units-fix` (`745669c`): bounded masked work in the frame allocator, the reaper and heap growth.
+- `work/q7-fixes` (merged as `7de36fc`): the fixes of the system-call review and of its four review rounds, then the red candidate run's fixes
+  (`0cc3863`, `29351b3`).
 
-Q6a's QEMU paths (the keeper's restart by `init`, the reconnect channel, `zosh`'s prompt rebind) are Q7 gate rows, `pending`
-(architect, 2026-11-12); the gate cannot report ready without them.
+### The review of the system call surface
 
-In progress, in this order:
+`docs/tasks/TASK-26-syscall-review.md` (opus-review, head `a3866f3`, ADR-0268 point 6): verdict, the gate stays closed. Two errors (INV-0270-1
+did not hold for the job tree walks, nor for subscriptions), five warnings, seven notes. Both errors are fixed on `work/q7-fixes`
+(walks in steps; subscriptions bounded to 1024 per port and per source, proposed ADR-0299), as are warnings 3 to 6; four review rounds of the
+fixes were answered (section "Review of the system call surface after stage 8"). Open: warning 7 and notes 8 to 14, below.
 
-1. N6 (`work/n6`): implementation and `opus-review` done, the review's findings fixed; the candidate run (`candidate/work-n6`), then the merge.
-2. Q7, both gate stages (`work/q7`: built and run locally, see the Q7 section; the `opus-review` and the candidate run are next).
-3. The `opus-review` report of the system-call surface.
-4. The `stage-8` tag, with the gate closed (`make check-untrusted-gate`) and a `candidate-full/` run, then `main`'s, green.
+### The gate
+
+- Closed: `room new --untrusted` is refused in the shell and the panel; the `+net` refusal for untrusted rooms is marked (`net-refusal`,
+  `net-refusal-call`), dead code until the gate opens. `make check-untrusted-gate` reads `tools/untrusted-gate.txt` and
+  `docs/adr/invariants.md`, counts the markers and passes a row only if its status begins `checked:` and names nothing open.
+- Rows of `tools/untrusted-gate.txt` with a step: charged-allocation, memory-hog, fork-bomb, masked-time, cpu-ceiling, cpu-spinners, disk-filler,
+  service-floods, keeper, keeper-restart, keeper-reconnect, prompt-rebind, many-rooms, hostile-programs, fuzzing (stage 1); net-account-flood,
+  net-fuzz (stage 2). **Pending:** `disk-filler-tmp` (an untrusted room's `/tmp`, owner Q8).
+- Blockers still open (Q7 and review sections, `docs/backlog.md` "Gate blockers from the review of the system calls"):
+  - Warning 7: the heap never returns frames while the charge is refunded; to measure, then a heap ceiling for the untrusted job, or return of
+    free chunks, or the bound in ADR-0261's open questions.
+  - Notes 8 to 14, not fixed: uncharged growth and the reaper's queue (8); `Paid` dropped under `EVENTS` holding the last `Arc<Job>` (9);
+    `console_write` keeps IRQ masked about 60 ms at 4 KiB (10); code can run from a memory object (11); the refusal lives only in the clients
+    (12); contiguous memory is open to every process (13); smaller items (14).
+  - Left over from the fixes: `Job::drop`'s `retain` and the growth of `children` are linear in a parent's children, in one interval each.
+  - Invariants not `checked:` that the strict check lists: INV-0172-3, INV-0260-1, INV-0261-2, -6, -7, INV-0262-1, -2, -3, INV-0263-3,
+    INV-0264-3 (the architect's bound), INV-0265-1, INV-0265-3 (the `/tmp` half), INV-0265-4, INV-0268-3, INV-0270-1 (names known breaches);
+    stage 2 also needs INV-0262-4 (a `netd` connection's rings charged to the client's job).
+  - Not built: an untrusted room's `/tmp` and `tmpd`, `+net`/`+listen` words in rooms (N6 "Not done"), the untrusted line reader.
+  - The architect's go-ahead, then a full run (`candidate-full/`) of the commit that removes the refusal, then `main`'s.
 
 ### Items for the architect
 
-- **Decided (2026-11-12):** ADRs 0287 to 0294 are accepted as recommended (0287 N4 sockets, 0288 clock and random, 0289 HTTPS, 0290
-  engine charges, 0291 fsd accounts, 0292 who may set a limit, 0293 Q6a keeper, 0294 Q6b display), recorded by an agent at the
-  architect's request. ADR-0289's "Architect's decision" carries the `/system` decision: read-only at run time for everyone, the
-  console shell included; `+w /system` is refused with a hint; it changes only when the image is built, and a system-update path is a
-  later ADR.
-- **Decided (2026-11-12): N4's curl and wget are deferred** to the next stage ("living in the system": BearSSL or rustls-ffi as the C
-  TLS library, then curl and wget). `zfetch` stands in until then. It is not a blocker for stage 8 (`docs/backlog.md`).
-- **CI infrastructure:** `QEMU_SLOW_TIMEOUT` is 300 s (`ci-timeout`); the CI image is on ghcr (section 'CI image'); timing tests flake on
-  loaded hosts, and `units-fix` bounds the masked work that a slow host stretched; a runner stall hit `w9-term` tcg once.
-- **ADR-0270 open items:** the address-space frame list doubling still runs inline; the `memory_map` list copy under the lock costs N/512
-  units (a flat list); the 2 ms bound is an `[assumption]` under HVF, checked on CI by a calibration factor.
-- **Decided (2026-11-12): Q6a paths never run in QEMU** (`init`'s keeper restart, the reconnect channel, `zosh`'s prompt rebind)
-  are Q7's gate tests: rows `keeper-restart`, `keeper-reconnect` and `prompt-rebind` of `tools/untrusted-gate.txt`, `pending` until Q7
-  builds them, so the gate cannot report ready without them.
-- **Untrusted gate rows still pending:** `cpu-spinners` and `disk-filler` (the GUI forms of INV-0264-3 and INV-0269-1); `room new
-  --untrusted` stays refused; an untrusted room's `/tmp`, `+w` and `+net` lines are not built (ADR-0268 point 7).
+- **Proposed ADRs awaiting a decision:** ADR-0295 (register access by call for shared pages), ADR-0296 (the services channel and the restart
+  test), ADR-0297 (the `+net` word in the shell), ADR-0298 (how the gate's tests run), ADR-0299 (subscriptions bounded to 1024; a change of
+  ADR-0006's behaviour). ADRs 0287 to 0294 were accepted as recommended on 2026-11-12; the status of the earlier stage-8 proposals (0281, 0285, 0286) is in `docs/adr/index.md`.
+- **INV-0264-3's GUI bound** (ADR-0298 item 4): +450 ms over the same run's no-spinner baseline, not 50 ms. The invariant is `not yet applicable`
+  until the architect accepts it or asks for a lower bound; the kernel half is checked by `t_cpu`.
+- **ADR-0006 INV-0006-3 against ADR-0299:** the check measures 10,000 idle subscriptions, which the bound of 1024 refuses. `portbench` now
+  measures with 1 and 1024 and fails on a refused call; whether the check's number becomes 1024 is the architect's change (recorded in ADR-0006's
+  open questions).
+- **Toolchain pin and rustup:** fuzzing uses `nightly-2026-11-12` (script, workflow, ADR-0298 item 3). Installing it ran
+  `rustup toolchain install`, which also updated rustup itself (1.29.2 to 1.29.3) on the host.
+- **ADR-0270 open items:** the address-space frame list doubling still runs inline; the `memory_map` list copy under the lock costs N/512 units
+  (a flat list); the 2 ms bound is an `[assumption]` under HVF, checked on CI by a calibration factor; ADR-0299's product bound (16 MiB moved)
+  and its 1.5 ms extrapolation are not measured at the full size.
+- **Decided (2026-11-12): N4's curl and wget are deferred** to the next stage ("living in the system": BearSSL or rustls-ffi as the C TLS
+  library, then curl and wget). `zfetch` stands in. Not a blocker for stage 8 (`docs/backlog.md`).
+- **Decided (2026-11-12):** `/system` is read-only at run time for everyone (ADR-0289's "Architect's decision"); `+w /system` is refused with a
+  hint; a system-update path is a later ADR. The Q6a paths in QEMU (keeper restart, reconnect, prompt rebind) became gate rows, now built and
+  passing in `test-keeper` (Q7).
 - **Open from earlier parts:** the kernel reserve (1/16 kept, GUI guests 512 MiB); the 'Not done' lists of Q6b (rooms overview, `Raise`
-  button, `top --session`, disk and connection use, refusal notices) and N5 (BearSSL and curl, `getrandom`, `rngd` restart, `tls.roots`).
+  button, `top --session`, disk and connection use, refusal notices), N5 (BearSSL and curl, `getrandom`, `rngd` restart, `tls.roots`) and N6
+  (rooms' `+net`, pills and hover card, `REPORT`, `+listen`).
+- **CI infrastructure:** `QEMU_SLOW_TIMEOUT` is 300 s; the CI image is on ghcr (section 'CI image'); timing tests flake on loaded hosts. The red
+  candidate run 43311917098 (`FORCE_SWITCH` under TCG; `portbench`) was fixed in `0cc3863` and `29351b3`.
+
+### Known limitations and backlog
+
+Recorded in `docs/design.md` (the network on the desktop and when it fails; two known limitations) and `docs/backlog.md`: `sleep 60 &` ending at once
+in a dock-launched terminal (not reproduced); a failed `t_gui` leaves its GUI stack running, so one failure reads as five; the fuzz targets
+reach few states of the keeper and the compositor (no structure-aware generator), and 600 s a target has not run in CI; the heap does not give
+frames back (warning 7); INV-0262-4 and the `status` counters are not built; two checks of the review fixes are by reasoning only (the
+front-to-back walk mutant, and the order of `write` and `prepare`); the `Vec::remove` mutant survives as equivalent. ADR-0270's own text
+still says '16,384 frames' and 'power of two' for the mutant survivors; the true figures are in the units-fix section (Q6b), from `kernel/src/testing.rs`.
+
+### What was and was not run
+
+Each part's section lists its own runs. For the fixes: `make check`, `make test-qemu-one` (HVF and, for the red run's fix, TCG),
+`cargo test -p zoraya-events`, the mutations named in the rounds. **Not run by the agents:** `make test-changed` on the fixes, the TCG runs
+of most steps, `make test` and `make test-par`, `test-posix*`, `test-tour-gui`, `test-crash`, fuzzing at 600 s a target.
+Candidate tags exist for every part (`candidate/work-*`); the newest on the fixes is `candidate/work-q7-fixes-f` at `29351b3`, whose result this report does not record.
+
+- **Full run `candidate-full/stage-8` on `7de36fc`: in progress.** Result: (the orchestrator fills this in: run id, conclusion, failing jobs)
+- `main`'s run after it: (the orchestrator fills this in)
 
 ## Q1: frame and kernel budgets on jobs (branch `work/q1`)
 
@@ -1497,7 +1548,7 @@ not listed (equivalent).
 - **3 partly fixed.** 17 mutants in `tools/mutants/kernel-objects.toml`: 9 killed (the image's `prepare_step`, the
   list's copy counted in `reserve_step` and in `adopt`, `prepare_step`'s reserve and its step point, `available`, the
   reaper's counter, the first zeroing step, the rescan) and 8 survivors with the reason in each note: a snapshot's two
-  `prepare_step`s and `memory_map`'s two need a process with 16,384 frames or more (a crafted image run by `t_bound`),
+  `prepare_step`s and `memory_map`'s two need a user process whose frame list passes a capacity (the list's capacities are 73 times a power of two, not powers of two: 9,344 at about 8,192 frames, 18,688 at about 16,384; the `t_bound` spawn test passes the first, and a snapshot or `memory_map` case would need a crafted image),
   the stack's and the startup block's are unreachable with `hello`, the segments' count needs a longer segment, and the
   kernel's tables come from the boot pool until 128 MiB of window.
 - **4 fixed.** `reaper::held` is a counter; `free_some` and `take` start at a cursor past the emptied items.
