@@ -26,6 +26,7 @@ const MASKED_MAX_UNITS: u64 = 0x7015;
 const CANCELLED: u64 = 0x7016;
 const HEAP_BACKING: u64 = 0x7017;
 const FREE_FRAMES: u64 = 0x7006;
+const DIAGNOSE_UNITS: u64 = 0x7019;
 const PAGE: u64 = 4096;
 /// One step of ADR-0270 point 2: 64 pages.
 const STEP: u64 = 64 * PAGE;
@@ -40,7 +41,7 @@ const MAX_UNITS: u64 = 64 + 16;
 /// The time `calibrate` takes on the machine the bound is stated for (HVF),
 /// in nanoseconds.
 const REFERENCE_FILL_NS: u64 = 10_000;
-/// The most the time bound is scaled for a slow host.
+/// The most the printed factor goes to.
 const MAX_FACTOR: u64 = 64;
 
 /// How many times slower than the reference host this one is, from
@@ -48,8 +49,8 @@ const MAX_FACTOR: u64 = 64;
 static FACTOR: AtomicU64 = AtomicU64::new(1);
 
 /// Times a fixed amount of work (a 256 KiB fill, the size of a step's
-/// pages, five times, the best) against the reference, so that the time
-/// bound is stated for the host's speed and not only for HVF's.
+/// pages, five times, the best) against the reference: a factor of 1 is
+/// HVF, where the time bound is INV-0270-1's 2 ms (`bound_ns`).
 fn calibrate() {
     let mut buffer = alloc::vec![0u64; 32768];
     let mut best = u64::MAX;
@@ -63,12 +64,34 @@ fn calibrate() {
     }
     let factor = best.div_ceil(REFERENCE_FILL_NS).clamp(1, MAX_FACTOR);
     FACTOR.store(factor, Ordering::Relaxed);
-    println!("t_bound: fill of 256 KiB takes {best} ns: time bounds scaled by {factor}");
+    let limit_ms = if factor > 1 {
+        SLOW_HOST_LIMIT_NS
+    } else {
+        BOUND_NS
+    } / 1_000_000;
+    println!("t_bound: fill of 256 KiB takes {best} ns: factor {factor}, time bound {limit_ms} ms");
 }
 
+/// What the longest masked interval of a case may last in wall time. Under
+/// HVF (factor 1) it is INV-0270-1's 2 ms. Off HVF the guest's clock runs
+/// while the host stalls or slows the vCPU, by more than any calibration
+/// taken before can tell: in one CI run of `tcg-smp4-gicv2` (factor 64, the
+/// clamp) every memory case took 20 to 40 times what the same job takes in
+/// green runs (`memory_map` of a step 14.5 ms against 0.47 ms, the
+/// contiguous step 244 ms against 5.9 ms) with no more units of work. There,
+/// as in `t_cpu`, the units (`measure`) are the check that the work between
+/// step points is bounded, and the time only that nothing ran masked for a
+/// second.
 fn bound_ns() -> u64 {
-    BOUND_NS * FACTOR.load(Ordering::Relaxed)
+    if FACTOR.load(Ordering::Relaxed) > 1 {
+        return SLOW_HOST_LIMIT_NS;
+    }
+    BOUND_NS
 }
+
+/// The masked-time limit off HVF (`bound_ns`): about 3.5 times the longest
+/// interval seen on a slowed CI host (287 ms, a contiguous object of 4 MiB).
+const SLOW_HOST_LIMIT_NS: u64 = 1_000_000_000;
 /// Chain length of the channel close, INV-0270-1.
 const CHAIN: usize = 10_000;
 
@@ -137,6 +160,10 @@ fn measure<T>(f: impl FnOnce() -> T) -> (T, u64) {
     let value = f();
     let ns = masked(true);
     let done = units(true);
+    if done > MAX_UNITS {
+        // Where the units of the busiest interval came from, for the log.
+        raw_syscall(DIAGNOSE_UNITS, [0; 6]);
+    }
     assert!(
         done <= MAX_UNITS,
         "{done} units of work between two step points, limit {MAX_UNITS}"
@@ -144,8 +171,8 @@ fn measure<T>(f: impl FnOnce() -> T) -> (T, u64) {
     (value, ns)
 }
 
-/// What a site's large case may take: the INV-0270-1 bound, scaled for the
-/// host's speed by `calibrate` (1 under HVF).
+/// What a site's large case may take: the INV-0270-1 bound under HVF, the
+/// limit of `bound_ns` off it.
 fn check(site: &str, step: u64, big: u64) {
     println!(
         "t_bound: {site}: one step {} us, large {} us masked",
@@ -450,7 +477,7 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
         exit_ns / 1000,
         kill_ns / 1000
     );
-    // The bound itself (INV-0270-1), scaled only for a slow host.
+    // The bound itself (INV-0270-1); off HVF only a sanity limit.
     let limit = bound_ns();
     assert!(
         exit_ns <= limit,
