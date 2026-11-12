@@ -2,6 +2,56 @@
 
 Running report, updated after each part. Written by the Sonnet main session; reviews by `opus-review`.
 
+## Status (orchestrator, 2026-11-12, main at `e9c5368`)
+
+| Part | Merge on main | Tag |
+|---|---|---|
+| Q1 | `8af2588` (`0a99422` first merge) | `stage-8-q1` |
+| Q2 | `0e6164a` | `stage-8-q2` |
+| N1 | `cad9f5a` (with `work/t-bound-fix`, `740e6a2`) | `stage-8-n1` |
+| N2 | `4d4812c` | `stage-8-n2` |
+| Q5 | `3995d03` (carried by the Q3 merge) | `stage-8-q5` |
+| Q3 | `3995d03` | `stage-8-q3` |
+| Q4 | `3f034e1` (`67e203d` plus the t_cpu masked-time fix) | `stage-8-q4` |
+| N3 | `da771a0` | `stage-8-n3` |
+| N4 | `a322e23` | `stage-8-n4` |
+| N5 | `1be11a1` | `stage-8-n5` |
+| Q6a | `1e9b1aa` | `stage-8-q6a` |
+| Q6b | `e9c5368` | `stage-8-q6b` |
+
+Follow-ups merged without a stage tag:
+
+- `ci-timeout` (`d4b9477`): a 300 s deadline for the TCG and smp4 QEMU steps.
+- `system-ro` (`0cbef2b`): `/system` read-only at run time, the architect's decision.
+- `tbound-fix` (`d78bdea`): `t_bound`'s time bound off HVF.
+- `units-fix` (`745669c`): bounded masked work in the frame allocator, the reaper and heap growth.
+
+In progress, in this order:
+
+1. N6 (`work/n6`): implementation, then `opus-review`.
+2. Q7, both gate stages.
+3. The `opus-review` report of the system-call surface.
+4. The `stage-8` tag, with the gate closed (`make check-untrusted-gate`) and a `candidate-full/` run, then `main`'s, green.
+
+### Items for the architect
+
+- **ADRs 0287 to 0294 are all `proposed`** (0287 N4 sockets, 0288 clock and random, 0289 HTTPS, 0290 engine charges, 0291 fsd accounts,
+  0292 who may set a limit, 0293 Q6a keeper, 0294 Q6b display). Each needs the architect's record.
+- **ADR-0289:** its `### Decision` sub-heading transcribes the architect's `/system` instruction (`work/system-ro`), but its
+  "Architect's decision" section is still empty.
+- **N4's done-when is not met:** curl and wget (W11, W13) and the `+net ... curl -O` check are missing; `zfetch` stands in
+  (N4 and N5 'Not done').
+- **CI infrastructure:** `QEMU_SLOW_TIMEOUT` is 300 s (`ci-timeout`); the CI image is on ghcr (section 'CI image'); timing tests flake on
+  loaded hosts, and `units-fix` bounds the masked work that a slow host stretched; a runner stall hit `w9-term` tcg once.
+- **ADR-0270 open items:** the address-space frame list doubling still runs inline; the `memory_map` list copy under the lock costs N/512
+  units (a flat list); the 2 ms bound is an `[assumption]` under HVF, checked on CI by a calibration factor.
+- **Q6a paths never run in QEMU:** `init`'s keeper restart and the reconnect channel (tested only through `t_rooms`' stand-in); the
+  `zosh` prompt rebind.
+- **Untrusted gate rows still pending:** `cpu-spinners` and `disk-filler` (the GUI forms of INV-0264-3 and INV-0269-1); `room new
+  --untrusted` stays refused; an untrusted room's `/tmp`, `+w` and `+net` lines are not built (ADR-0268 point 7).
+- **Open from earlier parts:** the kernel reserve (1/16 kept, GUI guests 512 MiB); the 'Not done' lists of Q6b (rooms overview, `Raise`
+  button, `top --session`, disk and connection use, refusal notices) and N5 (BearSSL and curl, `getrandom`, `rngd` restart, `tls.roots`).
+
 ## Q1: frame and kernel budgets on jobs (branch `work/q1`)
 
 ### Built
@@ -250,27 +300,6 @@ line, in two lines, or not in `GUI_RUNS_ALL`, or a line without `GUI_RUNS`). Che
 To verify on the candidate run (a change touching the compositor's map entry): four `test-gui` jobs, each green and
 at or under about 6 minutes; the wall time of the run against the previous 27 minutes for such a change; the four jobs'
 `[gui-...] PASS` lines together name all 20 runs.
-
-## Status after Q2 (orchestrator, 2026-11-11)
-
-- **Merged and tagged:** Q1 (`stage-8-q1`, main `8af2588`), the CI parts (`work/ci`, `work/ci-gui`, merged without a stage
-  tag), the files manager's release fix and the files-manage script guard (`work/gui-flake`), and Q2 (`stage-8-q2`, main
-  `0e6164a`, full CI green on main after one re-run of `w9-term` tcg, which hit its 10-minute job timeout once: attempt 2
-  took 3 min 39 s against 7 to 8 min earlier, so a runner stall).
-- **Flakes found and fixed on the way:** `files-manage:auto:2` step 24 was a real app bug (a release re-applied the click
-  with the modifiers read at release time); its step 113 `Exit` timeout was a script race (keys typed before the focus
-  click took effect on a slow guest). Frame timings across runs vary 2x between runners; no Q2 slowdown is shown.
-- **Candidate CI** now runs what the change touches: a kernel change about 10-16 min, a compositor change about 15 min
-  (was about 27), the full set about 13-16 min (49 jobs, `test-gui` split in four). Not measured: a docs-only candidate.
-- **Open for the architect:** the kernel reserve (1/16 kept; the desktop uses ~96% of 256 MiB, GUI guests now 512 MiB;
-  backlog row 'Desktop memory footprint'); ADR-0270 point 4 deviations (the `reaper` frees 1024 frames a turn, `reap()` in
-  `schedule()` not moved; the time bound is an assumption under HVF, checked on CI by a calibration factor and a unit
-  count); `init` holds `LIMIT` on its own job; the panel's launches are outside the session job until Q6a.
-- **Cost by model:** no counter is available to the session; the work was done by Sonnet subagents (Q1 fixes, CI parts,
-  Q2 build and fixes, the flake hunt), Opus for the Q1 and Q2 reviews and the Exit diagnosis, Haiku (`ci-watch`,
-  `log-triage`, `test-runner`) for CI and test runs.
-- **Next:** N1 (the driver answers ARP) on `work/n1` from main, then N2, Q5, Q3 (fsd), Q4, N3, N4 with Q3's netd account,
-  N5, Q6a, Q6b, N6, Q7. Gate: closed (`make check-untrusted-gate`; fork-bomb and masked-time rows now run in `test-qemu`).
 
 ## N1: the driver answers ARP (branch `work/n1`)
 
