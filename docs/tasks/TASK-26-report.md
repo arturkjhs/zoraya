@@ -941,7 +941,29 @@ parsers: `parse_sockaddr_in`, `inet_pton4`, `inet_aton` and `plan` are total by 
   (`fork_moves_into`); `ffi.rs` (`bootstrap`: the `ZPBN` message); `user/src/posix_child.rs` (`Launch::net`, every failure path closes
   it); `user/src/bin/zosh.rs` (`posix_net`, `Ready::Posix::net`); `tests/posix-net/zfetch.c`; `tools/posix-surface-check/src/surface.rs`
   (the deny list); `docs/adr/0287-*.md`.
-- Review questions: (1) a `fork` child of a program that has the connection has it too (`fork` copies the table): acceptable?
+- Review questions: (1) answered by the review (finding 1): a `fork` child does not hold the connection (a channel end is not
+  duplicable); `after_fork_in_child` clears `net` and the names, and its first `connect` is `EACCES` (ADR-0287 item 3).
   (2) `select` on a connecting socket waits on the control channel for both directions; a `Reset` on a connected socket's channel
   wakes a read wait, and the read then waits again. (3) `getaddrinfo`'s one-block-per-address layout and `freeaddrinfo` (a program
   that frees the `ai_addr` or `ai_canonname` separately would corrupt the heap; musl's own does the same with one block).
+
+### Review fixes (after `docs/tasks/TASK-26-review-n4.md`)
+
+- 1 (error): `after_fork_in_child` sets `net = None` and clears the remembered names; host test
+  `a_fork_child_has_no_connection_to_netd` (the child's `connect` and `getaddrinfo` are `EACCES`, nothing reaches `netd`). Question 1
+  above and ADR-0287 item 3 corrected: a fork child holds no connection.
+- 2: `Service::fresh_token` skips a token a pending lookup holds; test `a_wrapped_lookup_token_never_takes_a_pending_ones` (it fails
+  without the check).
+- 3: `zosh`'s `posix_net` now uses `narrow_account` with a budget of 2 (`POSIX_NET_BUDGET`), so each POSIX program counts against its
+  own account. Not done: a script line that goes past the budget. The test program `zfetch` holds one connection at a time; going
+  past needs a second C program with its own description in the image, left for a later step. The bound itself is host-tested
+  (`zoraya-net`) and the call runs in `make test-net-posix`.
+- 5, 9: stated in ADR-0287 (items 3 and 7). 6: `posix_child::launch` closes `me` and `net` when the `ZPBS`/`ZPBN` write fails.
+  7: `recvfrom` checks `addr`/`addrlen` before taking data. 8: `getsockopt` stores the bytes copied in `*len`. 10: `zfetch.c`
+  requires `strlen(head) >= 12` before `atoi(head + 9)`.
+- Fuzz: `fuzz/fuzz_targets/net_stack.rs` target 4 now also drives a connection narrowed with an account and `resolve_done` with
+  fuzzed tokens. `cargo check` of the fuzz crate passes; `cargo fuzz` is not installed here, so it was not run.
+- 4 (N4 done-when not met: no curl, wget or `+net`; no TCG run) stays the architect's call, as the review says.
+- 11 (for Q7's gate tests): a literal `url` operand designates the network with no check of the room's trust, for native and POSIX
+  programs alike, and trust is by path: any binary at `/bin/zfetch` gets the designated network (ADR-0153 rule 10's posture; the gate
+  refuses untrusted rooms for now). Q7's gate tests must cover it before the gate is lifted.

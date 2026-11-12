@@ -62,8 +62,13 @@ file service's channel for `netd` (the test of a program started without the gra
    connection (right `reach`, one rule for the host and port) and sends the result in that message. A program the image does
    not describe, or a line without the operand, gets none. The `+net` words are still not built (ADR-0286 item 5), so a
    POSIX program cannot be given a network by a grant on the line yet.
-3. **A child gets no network.** A POSIX program's `spawn` sends `ZPBS`, so the child has no connection; a socket fd named in a child's fd map is
-   `EBADF`; `fork` while a socket is open is `ENOTSUP` (ADR-0225 item 9's three-handle inheritance is not built).
+3. **A child, spawned or forked, gets no network.** A POSIX program's `spawn` and `exec` send `ZPBS`, so the child has no connection;
+   a `fork` child holds none either: a channel end cannot be duplicated (ADR-0102 item 3) and `fork_moves_into` does not move
+   it, so `after_fork_in_child` clears the library's `net` and its remembered names. Its `socket` works and its first `connect` or
+   `getaddrinfo` of a name is `EACCES`, as in a program without the grant. A socket fd named in a child's fd map is `EBADF`; `fork`
+   while a socket is open is `ENOTSUP` (ADR-0225 item 9's three-handle inheritance is not built). An open socket fd without
+   `SOCK_CLOEXEC` makes `exec`, `posix_spawn` and `system` fail with `EBADF` (they map every fd that is not close-on-exec),
+   where Linux would let the child inherit it; a program sets `SOCK_CLOEXEC` or closes the socket first.
    A pipeline of programs that each open their own socket works only for programs the shell started itself.
 4. **The surface built**: `socket` (`AF_INET`, `SOCK_STREAM`, protocol 0 or TCP, `SOCK_NONBLOCK`, `SOCK_CLOEXEC`),
    `connect`, `send`, `sendto` (the address is ignored, as TCP does), `recv`, `recvfrom`, `shutdown`, `setsockopt`,
@@ -81,6 +86,9 @@ file service's channel for `netd` (the test of a program started without the gra
    not an address by the scope's grammar (`0x7f000001`) is a name and goes to `netd`, whose resolver says no such name.
 7. **`getaddrinfo` returns `AF_INET`, `SOCK_STREAM`, TCP**, one `addrinfo` per address (at most 8) in one `malloc` block
    with its `sockaddr_in` and the canonical name; `freeaddrinfo` walks the list. Errors are musl's `EAI_*` numbers.
+   A `connect` to an address that `getaddrinfo` returned is sent with the name it came from (ADR-0225 item 3), so `netd` chooses the
+   address: a program that loops over `ai_next` reaches the same peer each time, and `getpeername` may differ from the address it
+   passed to `connect`.
 8. **Waiting**: `connect` blocks with the process's `wait` on the connection channel (a wait point, `EINTR` retried
    by the library as for a file read); `select` waits through the port on the control channel while connecting, on the
    read end for reads, on the write end for writes (ADR-0225 item 8).
