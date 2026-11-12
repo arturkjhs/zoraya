@@ -1403,6 +1403,20 @@ that the launch room of the settings window matters only when untrusted, because
 Mutation run (`make mutants`, the two lists, 22 mutants): all caught after the review's tests; three tests were added for survivors
 of the first run (SetBuffer refusal, the pending buffer, the fifth account, the rehover after a close). The two totals' mutants are
 not listed (equivalent).
+**Second review of Q6b (Opus, head after the first fixes).** Fixed, each with a test written first:
+
+1. **Warning, the card's damage.** `Compositor::card_sync` (run before each frame is composed) damages the rectangle the card was
+   last drawn at and the one it has now; so a drag, a tiling, a resize and a shrinking reading leave no stale pixels. Tests compare
+   the screen with a forced full redraw (`the_card_of_a_dragged_window_is_damaged_where_it_was_and_where_it_is`, the tiled and
+   shrinking variants). The first test run found the halo one pixel short of the material's blurred edge; `card_rect` adds it.
+   The tiling test passes also without `card_sync` (the card then goes through `rehover`, now called by `tile`).
+2. **Warning, a hidden window.** `set_hidden` calls `rehover`; `card_geometry` is None for a hidden window (`a_hidden_window_has_no_card`).
+3. **Note, the left limit.** The card's x is clamped to the screen (`the_card_stays_on_the_screen_at_the_left_limit`).
+4. **Note, the no-free-side case** is recorded in ADR-0294 point 4.
+5. **Note, the compile-time check** moved to `user/src/bin/panel.rs` beside the `MAX_ROOMS_TEXT` assert.
+6. **Note, the keeper test** now has a concurrent edit (`a_refusal_of_the_keeper_keeps_an_edit_made_while_it_was_asked`); the old
+   test is renamed `a_refusal_of_the_keeper_puts_the_old_line_back`.
+
 ### Units bound: the reaper's help, the heap's growth and the run search in steps (branch `work/units-fix`, from `work/tbound-fix`)
 
 `t_bound`'s units assertion (`units > 80` between step points) failed twice locally on `auto-el2` inside a loaded

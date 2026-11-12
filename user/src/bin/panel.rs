@@ -40,6 +40,12 @@ const RELOAD_NS: u64 = 1_000_000_000;
 const ROOMS: &str = "config/rooms";
 // The panel keeps the table it can tell the compositor (review 7d, 6).
 const _: () = assert!(zoraya_panel::MAX_ROOMS_TEXT == gui::MAX_ROOMS_TEXT);
+// The wire's caps are the worst case of what the panel sends (Q6b review):
+// `to_wire` leaves no room out for want of space.
+const _: () = {
+    assert!(gui::MAX_USAGE_TEXT >= zoraya_settings::usage::MAX_USAGE_WIRE);
+    assert!(zoraya_proto_chooser::MAX_ROOMS_REPLY >= zoraya_settings::usage::MAX_ROWS_WIRE);
+};
 
 fn send<'a, M: Message<'a>>(manager: Handle, m: &M, handle: Option<Handle>) -> bool {
     let mut out = alloc::vec![0u8; 16384];

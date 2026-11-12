@@ -47,7 +47,12 @@ changes an accepted decision except where the last section says so.
      the client's buffer is, so a buffer that paints a copy of a card stays a picture in its own body (ADR-0172 point
      1, INV-0172-1). A window with no free side (one as large as the work area) gets the card starting on its title
      bar, which no client draws, so a copy lacks that part. The card is worked out again after every restack, close and
-     new window, from the pointer's last position.
+     new window, from the pointer's last position, and its rectangle is damaged before and after whatever moves it (a drag,
+     a tiling, a hide, a reading that changes its lines): the compositor remembers the rectangle it last drew. A hidden
+     window has no card, and the card is kept on the screen, also for a window at the left limit. In the no-free-side case
+     (every tiled or full-height window, so the usual case for tiled windows) the card covers the right of the title bar,
+     close and minimise buttons and the client-chosen title included, until the pointer moves off the title bar or reaches
+     a button; that is a limitation of the design, not an oversight.
   5. **The notice has no `Raise` button.** The card and `top ROOM` carry the notice's text: which limit refused, how
      often, and `raise: room set NAME --mem 128M` (twice the limit, the words of the shell's hint). A button needs an
      interactive trusted surface, which ADR-0172 has only for the chooser's sheet; it waits for the rooms overview.

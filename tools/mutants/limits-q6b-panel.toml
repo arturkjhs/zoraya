@@ -15,7 +15,7 @@ id = "Q6b-panel-no-rollback"
 file = "crates/zoraya-panel/src/lib.rs"
 find = 'let _ = write(&back);'
 replace = ''
-note = "a_refusal_of_the_keeper_puts_the_old_line_back_and_keeps_other_edits"
+note = "a_refusal_of_the_keeper_puts_the_old_line_back"
 
 [[mutant]]
 id = "Q6b-panel-keeper-unasked"
@@ -29,4 +29,11 @@ id = "Q6b-panel-gone-text"
 file = "crates/zoraya-panel/src/lib.rs"
 find = 'KeeperFail::Gone => String::from("the room keeper does not answer"),'
 replace = 'KeeperFail::Gone => String::new(),'
-note = "a_refusal_of_the_keeper_puts_the_old_line_back_and_keeps_other_edits"
+note = "a_refusal_of_the_keeper_puts_the_old_line_back"
+
+[[mutant]]
+id = "Q6b-panel-rollback-stale"
+file = "crates/zoraya-panel/src/lib.rs"
+find = 'zoraya_settings::rooms::replace(&read(), &old)'
+replace = 'zoraya_settings::rooms::replace(&new, &old)'
+note = "a_refusal_of_the_keeper_keeps_an_edit_made_while_it_was_asked (the table as written, not as read again)"
