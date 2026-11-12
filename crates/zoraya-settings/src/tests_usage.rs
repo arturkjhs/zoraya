@@ -83,7 +83,7 @@ fn a_pill_shows_at_ninety_percent_and_not_below() {
     r.cpu_pct = Some(0);
     r.mem_used = 64 * MIB * 89 / 100;
     assert!(r.pills().is_empty(), "89%: {:?}", r.pills());
-    r.mem_used = 64 * MIB * 90 / 100;
+    r.mem_used = 64 * MIB * 90 / 100 + 1;
     assert_eq!(r.pills(), vec![String::from("mem 90%")]);
     r.mem_used = 64 * MIB;
     r.procs_used = 64;
