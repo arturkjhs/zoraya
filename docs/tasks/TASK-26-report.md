@@ -1775,7 +1775,7 @@ outside `net-test`; `diskfill`'s operand and options come from its description; 
 ### Tests run (this session)
 
 `make check` (all pass); `cargo test -p zoraya-test-runner`; `make test-fuzz` and `test-fuzz-net` at 15 and 180 s; `make test-keeper` (`FULL=1`, HVF and TCG);
-`tests/shell/disk-filler.script` and `hostile.script` through the runner (and through `make test-files`, see below);
+`make test-files` (every script, with `disk-filler` and `hostile`: pass);
 `make test-qemu-auto-default` (`t_gui`, `t_storage`, `t_quota` etc. pass), `make test-qemu-one`; `make test-net` up to `t_netd: all passed`;
 `make test-gui GUI_RUNS="spinners:auto:1"` and `terminal:auto:1`. **Not run:** `make test-changed` (an unmapped path, `Makefile` and `init.rs`,
 makes it run every step, and its build step needs the ports' sources, which are not in this worktree: `make fetch-ports` downloads);
