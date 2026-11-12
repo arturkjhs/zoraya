@@ -47,14 +47,23 @@ item 6 and the test. The ADRs leave open the message shapes, who the launchers a
 3. **The launcher.** Before a line that needs the network runs, the shell reads the channel without waiting. A
    `NetworkRestarted` replaces the root connection (the old one is closed); `NetworkDown` is remembered. If the root's far
    end is closed the line is refused: `zosh: fetch: the network is not available (restarting)`, or `(...)` left out after
-   `NetworkDown`. Running programs are not told: their connections are closed and they see `PEER_CLOSED`.
+   `NetworkDown`. A shell that holds the services channel and no root (none was made) refuses the line the same way, never
+   runs it without a connection (N6 review, finding 7; `zoraya_shell::netgrant::available`). Running programs are not
+   told: their connections are closed and they see `PEER_CLOSED`.
 4. **`init`.** On the end of either process it ends both and starts them again as before, then makes a new root with
-   `narrow` from its own control connection and sends `NetworkRestarted`. After the third restart it sends `NetworkDown`
-   and starts nothing.
-5. **The test-only request** `Crash` (ordinal 40) ends `netd` with exit code 3. `netd` honours it only if it was started
-   with an event handle at slot 8, which `init` gives only if the volume holds `/etc/zoraya/net-crash` (the way it reads
-   `/etc/zoraya/session`); any other `netd` answers it as an unknown ordinal. `net crash` sends it. The test volume of
-   `make test-net-fetch` holds the file; no image does.
+   `narrow` from its own control connection and sends `NetworkRestarted`; if the write fails it closes the new root
+   (N6 review, finding 9). After the third restart it sends `NetworkDown` and starts nothing. Its end of a shell's
+   services channel is closed when that shell ends (finding 3).
+5. **The test-only request** `Crash` (ordinal 40) ends `netd` with exit code 3. It exists only in the test image: `init`,
+   `netd` and `zosh` build its path only with the `zoraya-user` feature `net-test`, which only `make test-net-fetch`'s
+   image (`build/zoraya-kernel-net-test.elf`, its own ramdisk and target directories) has; every other kernel embeds a
+   ramdisk without it, so no volume can turn it on (N6 review, finding 2: the first cut honoured a file in `/etc`, which
+   anything that writes `/etc` could create, and `Crash` from any connection). In the test image `netd` honours it only
+   if it was started with an event handle at slot 8, which `init` gives only if the volume holds `/etc/zoraya/net-crash`,
+   and only on `init`'s control connection, not on a connection made from it with `narrow`. `net crash` makes the shell
+   ask `init` on its services channel (after the program's own connection is made); `init` sends `Crash` on its control
+   connection; the `net` program sends its own `Crash`, which `netd` answers as an unknown ordinal, and prints its line.
+   The production `netd` answers every `Crash` as an unknown ordinal.
 
 **Tensions with accepted ADRs.** *ADR-0053* "a process has what it was handed": the new root arrives on a channel the
 shell was handed at start. *ADR-0080* restarts the shell with the storage stack and the network without it; both stand.
@@ -62,12 +71,13 @@ shell was handed at start. *ADR-0080* restarts the shell with the storage stack 
 ## Consequences
 - **Positive.** A restart is visible to the person and healed for the next line; the bound of three is tested through
   `init`.
-- **Negative.** A flag in `netd` and a file `init` reads for tests; the panel's windows are not covered yet.
+- **Negative.** A second image to build for one test (`make ci-build` builds it); the panel's windows are not covered yet.
 
 ## Invariants
-- **INV-0296-1.** A normal boot has no way to end `netd` on a program's request: `Crash` is answered as an unknown
-  ordinal unless `init` was told by the volume. *Check:* `tests/shell/net.script` in `make test-net`: on a normal
-  boot `net crash` leaves the service up and `net status` answers after it.
+- **INV-0296-1.** No image but `make test-net-fetch`'s has a way to end `netd` on request, whatever its volume holds: its
+  `netd` answers `Crash` as an unknown ordinal; in the test image only `init`'s control connection can send one.
+  *Check:* `make test-net`: the image's `netd` holds no `netd: ended on request`, and on its boot (`tests/shell/net.script`) `net crash`
+  leaves the service up and `net status` answers after it.
 - **INV-0221-3 and INV-0221-4** (ADR-0221): the first for `init` and the shell. *Check:* `tests/shell/net-fetch.script`:
   three `net crash` with a fetch after each, the fourth leaves the network down and the next line is refused.
 

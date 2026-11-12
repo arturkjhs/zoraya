@@ -1922,10 +1922,14 @@ ADR-0221 items 5, 6 and 8).
 - **A shared page** (ADR-0221 item 8, the recommended option, as TASK-26 decided). With the GUI the four pages are the disk (31),
   the GPU (23), the keyboard (15) and the tablet (7); the network device is on transport 16, in page 2 with the GPU. Three
   calls: `device_transport(page, index)` (needs `MAP` on the page) gives the `Device` of one transport, made at boot, with
-  no mapping; `device_read(device, offset)` (`READ`) and `device_write(device, offset, value)` (`WRITE`) read and write a
-  32-bit register of a transport device. The offset must be a multiple of 4 with its word inside the transport's block (at most
-  0x200 bytes); a page device has no register calls, a transport device has no mapping and no transports. Pins, quarantine,
-  reset and the interrupt are per transport. `init` maps each page once to read the identifiers (`Page::One` goes to its
+  no mapping and a handle without `MAP`; `device_read(device, offset, width)` (`READ`) and `device_write(device, offset, value,
+  width)` (`WRITE`) make one access of 1, 2 or 4 bytes to a transport device (narrower than 4 only in the configuration, from
+  0x100). The offset must be a multiple of the width with the access inside the transport's block (at most 0x200 bytes; a
+  transport whose block would overlap the one before it is left out at boot); a page device has no register calls, a
+  transport device has no mapping and no transports. Pins, quarantine, reset and the interrupt are per transport. The first
+  write makes a process the transport's *holder* (kept in its address space, ended with its last handle that can write the
+  transport, or its exit): one holder at a time, none while the page is mapped, and the page is neither mapped nor released
+  while a transport has a holder or a live pin, nor a transport released while its page is mapped (INV-0295-3). `init` maps each page once to read the identifiers (`Page::One` goes to its
   driver whole, as before); a `Page::Several` is never given: each transport is split with `device_transport`, identified by
   `device_read`, and given to its driver, which opens it with `zoraya_user::mmio::Window::open` (a mapping, or calls if the
   kernel answers `device_map` with `AccessDenied`): the four drivers use one `Registers` type. `tools/run-qemu.sh` accepts
@@ -1936,10 +1940,14 @@ ADR-0221 items 5, 6 and 8).
   (slot 13) and sends it `NetworkRestarted` with a new root connection after a restart, `NetworkDown` after the third. The
   shell reads the channel before a line that needs the network runs; a closed root is `zosh: fetch: the network is not
   available (restarting)`, and without the `(restarting)` once `init` said so. Running programs see `PEER_CLOSED` on their
-  streams and are not told. The test (`tests/shell/net-fetch.script`, `make test-net-fetch`) uses a test-only request
-  `Crash` that `netd` honours only if `init` started it with an event handle at slot 8, which it does only when the volume
-  holds `/etc/zoraya/net-crash`; `net crash` sends it. Three `net crash` with a fetch after each work; the fourth leaves the
-  network down.
+  streams and are not told; with the services channel and no root at all a line is refused too. The test
+  (`tests/shell/net-fetch.script`, `make test-net-fetch`) uses a test-only request `Crash` that exists only in its own
+  image: `build/zoraya-kernel-net-test.elf` embeds a ramdisk built with the `zoraya-user` feature `net-test` (target
+  directories `target/user-net-test` and `target/net-test`); every other kernel's `netd` answers `Crash` as an unknown
+  ordinal. In the test image `netd` honours it only if `init` started it with an event handle at slot 8 (when the volume
+  holds `/etc/zoraya/net-crash`) and only on `init`'s control connection: `net crash` makes the shell ask `init` on the
+  services channel, and `init` sends it. Three `net crash` with a fetch after each work; the fourth leaves the network
+  down.
 - **`+net HOST[:PORT]`** in the shell (ADR-0224 item 1, ADR-0297): `any`, a host name, `*.suffix`, an address or
   `ADDRESS/BITS`; a `url` operand that came from a value designates inside a word of the line; `grants` prints the
   `net:` lines.
@@ -2093,11 +2101,12 @@ ADR-0221 items 5, 6 and 8).
   session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
   root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
   read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
-- **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport, but the
-  kernel does not make a mapping of the page and the transport devices exclude each other: a process that holds the page device
-  with `MAP` and maps it sees every transport. Only `init` holds a shared page and it maps it once, to read the identifiers. A page
-  device's `dma_release_quarantine` resets every transport of the page. A register read or write on a shared page costs a system
-  call (1.4 microseconds under HVF).
+- **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport; a
+  mapping of the page and a transport's holder exclude each other, but a process that maps the page (only `init`, once, to read
+  the identifiers) sees every transport while it does. A page device's `dma_release_quarantine` resets every transport of the
+  page. A transport's hold whose handle was moved to another process lasts until the first one ends. Reading a transport needs
+  no hold, so another holder of a transport handle can read its registers (a read restarts nothing). A register read or write on
+  a shared page costs a system call (1.4 microseconds under HVF).
 - **The network on the desktop** (N6). A shell started by the panel has no network connection and no services channel (only the
   console shell, which is also the first terminal window's shell, has them), so the network restart reaches no other launcher; a
   window cannot be given `+net` words and no pill shows one (the rooms' words are not built).

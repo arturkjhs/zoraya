@@ -31,7 +31,7 @@ Q6a's QEMU paths (the keeper's restart by `init`, the reconnect channel, `zosh`'
 
 In progress, in this order:
 
-1. N6 (`work/n6`): implementation, then `opus-review`.
+1. N6 (`work/n6`): implementation and `opus-review` done, the review's findings fixed; the candidate run (`candidate/work-n6`), then the merge.
 2. Q7, both gate stages.
 3. The `opus-review` report of the system-call surface.
 4. The `stage-8` tag, with the gate closed (`make check-untrusted-gate`) and a `candidate-full/` run, then `main`'s, green.
@@ -1620,3 +1620,58 @@ Register read by call (`t_devices`, 2,000 reads, three boots): 1,393 to 1,419 ns
   each other (only `init` maps it): is that enough; (4) the `Crash` hook in a production `netd`: acceptable behind the event handle,
   or should it be a build feature; (5) the shell refuses a line while the root is closed instead of running it without a
   network: the right default?
+
+### Review of N6 (Opus, head 9c2ff92) and its dispositions
+
+Fixed (tests written first where a test can show it):
+
+1. **Warning, a transport and its page did not see each other** (kernel). The quarantine check of a transport device read only its own
+   `mapped`, always false, so a driver given a whole single-device page could map it, pin through a transport, end the pin and release the
+   transport's quarantine (device reset, frames freed) with the mapping still live; and two processes could drive one transport. Now
+   (`kernel/src/device.rs`, `kernel/src/memory/user.rs`, `kernel/src/syscall.rs`): a transport device knows its page (`Weak`, made with
+   `Arc::new_cyclic` at boot); the first `device_write` makes the process the transport's *holder* (a `DeviceClaim` in its address space,
+   ended by `handle_close` of its last handle to the transport with `WRITE`, or by its exit); a second holder, a holder while the page is
+   mapped, the page's mapping or release while a transport has a holder or a live pin, and a transport's release while its page is mapped
+   are all `BadState`. Lock order: the page's state, then a transport's. A transport handle has no `MAP` (`init` gives drivers their
+   rights less `MAP` for one, `stack::driver_rights`). Test: `t_devices` `a_transport_and_its_page_keep_holders_apart` (the review's
+   scenario failed before the fix: `dma_release_quarantine(t) succeeded`; then a second writer in a child, the hold's end with the last
+   handle and with the child's exit, live pins refusing the page). New INV-0295-3, `checked: make test-qemu`. Reads take no hold (they
+   restart nothing), so `init` identifies a transport without holding it; a hold whose handle was moved away lasts until the process
+   ends (ADR-0295 item 3a, `docs/design.md` Known limitations).
+2. **Warning, `Crash` was a persistent denial of the network.** The Crash path is built only with the `zoraya-user` feature `net-test`,
+   which only `make test-net-fetch`'s image has (`build/zoraya-kernel-net-test.elf`, ramdisk `build/ramdisk-net-test.bin`, target
+   directories `target/user-net-test` and `target/net-test`; `make ci-build` builds it and `make clippy` lints the feature). In that image
+   `netd` honours `Crash` only on `init`'s control connection; `net crash` makes the shell ask `init` on its services channel (after the
+   program's own connection is made), `init` sends it, and the `net` program's own `Crash` is answered as an unknown ordinal. `make
+   test-net` now fails if the image's `netd` holds `netd: ended on request` (checked: the production `netd` has 0 occurrences, the test
+   image's 1). INV-0296-1 reworded. `make test-net-fetch` still does three restarts and the fourth stays down (156 steps, `init: the shell
+   asked the network service to end` four times).
+3. **Warning, `shell_services` was never closed:** closed next to `shell_reconnect` when the shell ends (`init.rs`). No test (`init`'s
+   table is not observable from a test today).
+4. **Warning, the gate's network rows:** `net-account-flood` and `net-fuzz` are re-owned to **Q7** in `tools/untrusted-gate.txt`
+   (still `pending`); N6 did not build them.
+5. **Note, overlapping transport blocks:** `device::init` leaves out a transport whose block would overlap the one before it in its
+   page (`follows`), with a message; kernel test `overlapping_transports_are_left_out`. INV-0295-1 says so.
+6. **Note, byte access by call:** `device_read` and `device_write` take a width (1, 2 or 4, aligned; narrower than 4 only in the
+   configuration from 0x100, since QEMU answers a narrow read of a control register with 0, as `t_devices` showed on the first try).
+   ABI change (calls 54 and 55 gain `width: Size`), `zoraya-rt` `device_read_width` and `device_write_width`, `Window::read8`/`write8`
+   by call make one byte access. Tests in `transport_devices`. ADR-0295 item 2.
+7. **Note, no root:** `zoraya_shell::netgrant::available` (host test
+   `a_launcher_with_no_root_refuses_a_line_that_needs_the_network`); `zosh` refuses a line that needs the network when it holds the
+   services channel and no root. ADR-0296 item 3.
+8. **Note, `+net $X`:** recorded in ADR-0297 item 1 (as ADR-0153 rule 3 for `+r $X`; `X=any` gives full reach, which `grants` shows).
+9. **Note, a failed `send_restarted`:** it closes the root it could not move (`netclient.rs`). No test (as 3).
+
+The answers to the handoff's review questions: (2) and (3) are finding 1's fix, (4) is finding 2's, (5) stands with finding 7.
+
+### Tests run (review fixes, this session)
+
+- `cargo test -p zoraya-abi` 67, `-p zoraya-shell` 122, `-p zoraya-proto-net` 5, `-p zoraya-virtio` 38: passed.
+- `make check` before each commit: passed; adr-check 0 errors, total 527.
+- `make test-qemu-one`: before the fix, `devices_from_a_process` failed on the review's scenario; after it, 118 kernel tests passed
+  (`devices_from_a_process`, `overlapping_transports_are_left_out`) with the 9 expected panics. Two of the four runs failed on
+  `a_spawn_with_a_big_space_is_bounded` (`NoMemory`, then `first process did not start: OverQuota`), the intermittent failure in
+  `docs/backlog.md`, which another agent is looking at; one of those also had the first form of the width test, which read a control
+  register a byte at a time and got QEMU's 0.
+- `make test-net-fetch` (the new test image): PASS, 156 steps, and `net-dns` 14 steps.
+- `make test-gui GUI_RUNS="net:auto:1"`: PASS, 12 steps.
