@@ -33,7 +33,7 @@ fn force_switch(on: bool) {
 
 /// Forced switching for the life of a case: on at creation, off when dropped.
 /// A failed assertion ends the program (the `Drop` may not run then); the
-/// flag is also reset at the start of `main` and of every case, so that a
+/// flag is also reset before the first case and at the start of every forced case, so that a
 /// case never starts with another's setting.
 struct Forced;
 
@@ -541,7 +541,6 @@ fn count(index: usize) -> ! {
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
-    force_switch(false);
     let mut argv = startup().argv;
     let first = argv.clone().next();
     if let Some(b"sleep") = first {
@@ -564,6 +563,9 @@ fn main() -> i32 {
         let index = digits.iter().fold(0, |n, d| n * 10 + usize::from(d - b'0'));
         count(index % COUNTERS);
     }
+    // Only the test process resets it: the children run this `main` too, and
+    // one that starts during a forced case must not turn the setting off.
+    force_switch(false);
     suspend_stops_the_whole_tree_and_resume_starts_it();
     suspend_and_resume_need_kill();
     resume_wakes_only_what_it_stopped();

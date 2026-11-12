@@ -1905,6 +1905,23 @@ Run: `make check` (all 15 pass); `make test-qemu-one` (last one passes: `t_bound
 The first commit of the round holds `FORCE_SWITCH` in `syscall.rs`, whose `steps` side is in the third commit, so only the head builds.
 6. **Notes.** ADR-0299 states: the time bound unchecked at factor above 1, the 1.5 ms extrapolated, the gate marker a proxy. `channel::close_one` counts a dropped port's units.
 
+### Review round 3 (opus-review of `work/q7-fixes` at `131e5b5`) and its dispositions
+
+1. **Error, `write` no longer adjacent to `prepare`.** `channel_write` now queues the message right after `prepare` and ends the moved entries' subscriptions (paced, no
+   lock held) after `pair.write`; the old ids are dead (`next_id`), so the order does not matter. Spawn and snapshot moves have no `prepare`/`write` pair (they write no
+   channel), so they were not affected. Test: `t_bound` `peer_closing_in_a_write` (`FORCE_SWITCH` on, a child closes the peer end at the writer's first pause; the write is
+   accepted or refused `PeerClosed`; if accepted the carried end's peer must see `PEER_CLOSED`; the heap returns). In the run all 6 rounds were accepted. **Not run:** the test against the
+   old order (no mutant of it), so its power is by reasoning. **Seen:** a spawn and exit leave about 150 bytes of live heap per round (a control run with nothing moved shows it too), so the heap
+   bound allows 1 KiB per round; not investigated (record for the architect).
+2. **Warning, spinning turn waiters.** A waiter calls `steps::pause` then `sched::yield_now`, so N waiters cost switches, not a slice each. The bound (quota(threads) x quota(jobs) x
+   slowdown) is in ADR-0270's notes. **Mutation (run, reverted):** `Exclusive::take` returning at once made `t_suspend` fail (`t_suspend.rs:188`, "SUSPENDED on a job below"). A first
+   try of the guard below reset `FORCE_SWITCH` at the start of `main`, which the children run too, so the mutant survived twice; the reset is now in the test process only.
+3. **Notes.** The handle's own `steps::count(1)` is counted in the moved paths (channel write, spawn, snapshot). The `failed` path of `channel_write` is commented as defensive and
+   unreachable. `t_suspend` sets `FORCE_SWITCH` through a guard (`Forced`, off on drop) and resets it before the first case and at the start of each forced case (a panic aborts, so the
+   reset at the start is what protects the next case).
+
+Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: `make test-changed`, CI, `cargo test`.
+
 ### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
 
 - **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for
