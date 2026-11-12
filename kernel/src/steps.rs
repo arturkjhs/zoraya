@@ -86,15 +86,44 @@ pub fn pause() {
     // SAFETY: only a user process's system call gets here, which runs after
     // the vectors and the interrupt controller are set up, and the caller
     // holds no spinlock (its contract, checked above in the test kernel).
-    // Interrupts are masked again below, before anything that expects them
-    // masked.
+    unsafe { step_point(sched::preempt_point) };
+}
+
+/// A window for interrupts, then `preempt` (the scheduler's preemption
+/// point, which says whether it switched away), and a second window if it
+/// did. The scheduler switches with IRQ masked, so a thread that resumes here
+/// resumes inside the interval of the threads that ran meanwhile: without
+/// the second window its next step (the tail of an exit, which cannot yield)
+/// was added to theirs, two exits' tails in one interval, 110 to 116 units
+/// against 80 on slow hosts (`t_cpu`, CI; INV-0270-1).
+///
+/// # Safety
+///
+/// As for [`crate::arch::unmask_interrupts`]: the vectors and the interrupt
+/// controller are set up and the caller holds no spinlock.
+pub(crate) unsafe fn step_point(preempt: impl FnOnce() -> bool) {
+    // SAFETY: the caller's contract.
+    unsafe { window() };
+    if preempt() {
+        // SAFETY: as above; the switch back holds no lock of this thread.
+        unsafe { window() };
+    }
+}
+
+/// Lets a pending interrupt run, and starts a new masked interval.
+///
+/// # Safety
+///
+/// As for [`step_point`].
+unsafe fn window() {
+    // SAFETY: the caller's contract. Interrupts are masked again below,
+    // before anything that expects them masked.
     unsafe { crate::arch::unmask_interrupts() };
     // SAFETY: `isb` only synchronises the instruction stream, so that an
     // interrupt that is pending is taken here and not later.
     unsafe { core::arch::asm!("isb", options(nomem, nostack, preserves_flags)) };
     crate::arch::mask_interrupts();
     mask_began();
-    sched::preempt_point();
 }
 
 /// The end of a step of a call that builds something: as [`pause`], and fails

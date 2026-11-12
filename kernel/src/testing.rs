@@ -119,6 +119,10 @@ static TESTS: &[Test] = &[
         run: lock_masks_interrupts,
     },
     Test {
+        name: "a_switch_at_a_step_point_starts_a_new_interval",
+        run: a_switch_at_a_step_point_starts_a_new_interval,
+    },
+    Test {
         name: "pmu_and_debug_registers_do_not_trap",
         run: pmu_and_debug_registers_do_not_trap,
     },
@@ -2142,6 +2146,41 @@ fn lock_masks_interrupts() {
     }
     assert_eq!(arch::interrupt_mask(), before, "restored on release");
     assert_eq!(*LOCK.lock(), 1);
+}
+
+/// INV-0270-1: a thread that the scheduler switched away at a step point
+/// resumes inside the masked interval of the threads that ran meanwhile (the
+/// switch keeps IRQ masked); its next step must start an interval of its own.
+/// The preemption point here is a stand-in that does what another thread's
+/// exit tail does between the switch and the switch back (40 units), so the
+/// timing that CI hit by chance (`t_cpu`, 110 units against 80) is forced.
+fn a_switch_at_a_step_point_starts_a_new_interval() {
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    crate::steps::count(40);
+    // SAFETY: the vectors and the GIC are up (tests run after boot set them
+    // up) and no spinlock is held here.
+    unsafe {
+        crate::steps::step_point(|| {
+            crate::steps::count(40);
+            true
+        })
+    };
+    crate::steps::count(40);
+    arch::restore_interrupts(daif);
+    assert_eq!(
+        crate::steps::masked_max_units(true),
+        40,
+        "the step after a switch is counted with the work before it"
+    );
+    // Without a switch one window is enough, and the units still split.
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::count(30);
+    // SAFETY: as above.
+    unsafe { crate::steps::step_point(|| false) };
+    crate::steps::count(30);
+    arch::restore_interrupts(daif);
+    assert_eq!(crate::steps::masked_max_units(true), 30);
 }
 
 fn pmu_and_debug_registers_do_not_trap() {

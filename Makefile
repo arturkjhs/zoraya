@@ -63,6 +63,9 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
+# The deadline of the TCG and 4-CPU test-qemu-* runs: 116 tests under TCG take
+# 147-176 s in CI, so 180 s dies under load. HVF runs keep QEMU_TIMEOUT.
+QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
@@ -153,6 +156,7 @@ EXPECT := --expect-panic harness_reports_panic_as_failure \
 	--expect-line "first process: hello" \
 	--expect-line "first process ended: ExitRecord { code: 7, reason: Exited"
 RUN_TEST = $(RUNNER) --timeout $(QEMU_TIMEOUT) $(EXPECT)
+RUN_TEST_SLOW = $(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) $(EXPECT)
 
 # Put in front of an "auto" configuration with virtualization=on: if the
 # accelerator cannot start a machine at EL2 (HVF before the M3), print
@@ -182,38 +186,38 @@ test-qemu-auto-default: test-qemu-disk
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-auto-smp4-2g: test-qemu-disk
-	$(RUN_TEST) --label auto-smp4-2g \
+	$(RUN_TEST_SLOW) --label auto-smp4-2g \
 		--expect-line "cpus: 4" --expect-line "2048 MiB  RAM" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --smp 4 --mem 2G $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-auto-el2: test-qemu-disk
-	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST) --label auto-el2 \
+	$(call EL2_OR_SKIP,auto-el2) $(RUN_TEST_SLOW) --label auto-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto --machine-opt virtualization=on $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-default: test-qemu-disk
-	$(RUN_TEST) --label tcg-default \
+	$(RUN_TEST_SLOW) --label tcg-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "(GICv2)" \
 		--expect-line "gic: version 2" --expect-line "t_gui: all passed" \
 		-- $(RUN_QEMU) --test --gui --disk $(TEST_DISK) --accel tcg $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-smp4-gicv2: test-qemu-disk
-	$(RUN_TEST) --label tcg-smp4-gicv2 \
+	$(RUN_TEST_SLOW) --label tcg-smp4-gicv2 \
 		--expect-line "cpus: 4" --expect-line "(GICv2)" --expect-line "gic: version 2" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-el2: test-qemu-disk
-	$(RUN_TEST) --label tcg-el2 \
+	$(RUN_TEST_SLOW) --label tcg-el2 \
 		--expect-line "exception level at entry: EL2, now EL1" --expect-line "psci: arm,psci-1.0 via smc" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --machine-opt virtualization=on $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 test-qemu-tcg-smp4-gicv3: test-qemu-disk
-	$(RUN_TEST) --label tcg-smp4-gicv3 \
+	$(RUN_TEST_SLOW) --label tcg-smp4-gicv3 \
 		--expect-line "cpus: 4" --expect-line "(GICv3)" \
 		--expect-line "gic: version 3" \
 		-- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel tcg --smp 4 --mem 2G --machine-opt gic-version=3 $(TEST_KERNEL)
