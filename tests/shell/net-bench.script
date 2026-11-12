@@ -1,0 +1,43 @@
+# `make bench-net` (N6): the numbers of docs/design.md's network sections. The same
+# guest and test server as tests/shell/net-fetch.script. Each line `fetch --sum`
+# prints "N bytes fnv1a SUM in T ms"; nothing is asserted but that the fetches end.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> sleep 3\r
+< \r\n~>
+# 16 MiB, five times.
+> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+< 16777216 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+< 16777216 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+< 16777216 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+< 16777216 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/16777216\r
+< 16777216 bytes fnv1a
+< \r\n~>
+# One byte, connect to end of file, five times.
+> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+< 1 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+< 1 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+< 1 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+< 1 bytes fnv1a
+< \r\n~>
+> fetch --sum http://10.0.2.2:@PORT@/pattern/1\r
+< 1 bytes fnv1a
+< \r\n~>
+x power off
+> poweroff\r

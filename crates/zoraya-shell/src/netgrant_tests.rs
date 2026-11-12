@@ -17,12 +17,28 @@ const NET: &str = include_str!("../../../user/describe/commands/net.cmd");
 const CAT: &str = include_str!("../../../user/describe/commands/cat.cmd");
 
 fn go(text: &str, args: &[(&str, bool)], base: bool) -> Result<Option<(u32, Vec<u8>)>, Refused> {
+    go_nets(text, args, &[], base)
+}
+
+fn go_nets(
+    text: &str,
+    args: &[(&str, bool)],
+    nets: &[&str],
+    base: bool,
+) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     let d: Description = zoraya_describe::parse(text.as_bytes()).unwrap();
     let values: Vec<Value> = args
         .iter()
         .map(|(a, literal)| Value {
             text: String::from(*a),
             literal: *literal,
+        })
+        .collect();
+    let nets: Vec<Value> = nets
+        .iter()
+        .map(|a| Value {
+            text: String::from(*a),
+            literal: true,
         })
         .collect();
     let texts: Vec<&str> = values.iter().map(|v| v.text.as_str()).collect();
@@ -36,6 +52,7 @@ fn go(text: &str, args: &[(&str, bool)], base: bool) -> Result<Option<(u32, Vec<
         args: &values,
         cwd: "/",
         grants: &[],
+        nets: &nets,
         base_system: base,
     })
 }
@@ -129,4 +146,196 @@ fn the_local_hosts_are_reached_only_when_written_out() {
     let s = Scope::decode(&bytes).unwrap();
     assert!(s.allows_address([127, 0, 0, 1], 80, Protocols::TCP));
     assert!(!s.allows_name("localhost", 80, Protocols::TCP));
+}
+
+// ---- the `+net` word (ADR-0224 item 1; N6, INV-0224-1) ----
+
+#[test]
+fn a_net_word_without_a_port_reaches_every_port_over_both_protocols() {
+    let (r, bytes) = scope_of(go_nets(CAT, &[], &["Example.org"], false).unwrap());
+    assert_eq!(r, rights::REACH);
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_name("example.org", 443, Protocols::TCP));
+    assert!(s.allows_name("example.org", 53, Protocols::UDP));
+    assert!(!s.allows_name("other.org", 443, Protocols::TCP));
+    assert!(!s.allows_name("www.example.org", 443, Protocols::TCP));
+}
+
+#[test]
+fn a_net_word_with_a_port_reaches_that_port_only() {
+    let (_, bytes) = scope_of(go_nets(CAT, &[], &["example.org:443"], false).unwrap());
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_name("example.org", 443, Protocols::TCP));
+    assert!(!s.allows_name("example.org", 80, Protocols::TCP));
+}
+
+#[test]
+fn a_wildcard_covers_the_names_under_it_and_not_itself() {
+    let (_, bytes) = scope_of(go_nets(CAT, &[], &["*.example.org"], false).unwrap());
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_name("www.example.org", 443, Protocols::TCP));
+    assert!(!s.allows_name("example.org", 443, Protocols::TCP));
+}
+
+#[test]
+fn addresses_prefixes_and_any() {
+    let (_, bytes) = scope_of(go_nets(CAT, &[], &["10.0.2.0/24:80", "192.0.2.7"], false).unwrap());
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_address([10, 0, 2, 9], 80, Protocols::TCP));
+    assert!(!s.allows_address([10, 0, 2, 9], 81, Protocols::TCP));
+    assert!(s.allows_address([192, 0, 2, 7], 1, Protocols::UDP));
+    assert!(!s.allows_address([192, 0, 2, 8], 1, Protocols::UDP));
+    let (_, any) = scope_of(go_nets(CAT, &[], &["any"], false).unwrap());
+    assert!(
+        Scope::decode(&any)
+            .unwrap()
+            .allows_name("x.org", 9, Protocols::TCP)
+    );
+}
+
+#[test]
+fn a_bad_net_word_refuses_the_line() {
+    for bad in [
+        "",
+        "exa mple",
+        "example.org:0",
+        "example.org:70000",
+        "example.org:x",
+        "10.0.2.1/33",
+        "10.0.2.1/24",
+        "*.",
+        "*.10",
+        "1.2.3",
+    ] {
+        let r = go_nets(CAT, &[], &[bad], false);
+        assert!(r.is_err(), "{bad:?} should be refused, got {r:?}");
+    }
+}
+
+#[test]
+fn a_value_url_designates_only_inside_a_net_word_of_the_line() {
+    // Outside: refused, with the grant that would allow it.
+    let r = go_nets(
+        FETCH,
+        &[("http://other.example/", false)],
+        &["example.org"],
+        true,
+    );
+    let e = r.unwrap_err();
+    assert!(e.hint.unwrap().contains("+net other.example:80"));
+    let r = go(FETCH, &[("http://other.example/", false)], true);
+    assert!(r.is_err());
+    // Inside: it runs, and the scope is the word's, nothing wider.
+    let (_, bytes) = scope_of(
+        go_nets(
+            FETCH,
+            &[("http://www.example.org/", false)],
+            &["*.example.org"],
+            true,
+        )
+        .unwrap(),
+    );
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_name("www.example.org", 80, Protocols::TCP));
+    assert!(s.allows_name("www.example.org", 443, Protocols::TCP));
+    assert!(!s.allows_name("other.example", 80, Protocols::TCP));
+    // The port matters: a rule for 443 does not cover a value on 80.
+    assert!(
+        go_nets(
+            FETCH,
+            &[("http://example.org/", false)],
+            &["example.org:443"],
+            true
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_literal_url_with_a_net_word_has_both_rules() {
+    let (_, bytes) = scope_of(
+        go_nets(
+            FETCH,
+            &[("http://10.0.2.2:8080/", true)],
+            &["example.org:443"],
+            true,
+        )
+        .unwrap(),
+    );
+    let s = Scope::decode(&bytes).unwrap();
+    assert!(s.allows_address([10, 0, 2, 2], 8080, Protocols::TCP));
+    assert!(s.allows_name("example.org", 443, Protocols::TCP));
+}
+
+#[test]
+fn net_words_and_status_together() {
+    // `net` needs the status; with a word it gets a scope as well.
+    let (r, bytes) = scope_of(go_nets(NET, &[], &["example.org"], true).unwrap());
+    assert_eq!(r, rights::REACH);
+    assert!(
+        Scope::decode(&bytes)
+            .unwrap()
+            .allows_name("example.org", 1, Protocols::TCP)
+    );
+}
+
+#[test]
+fn grants_prints_exactly_the_rules_the_connection_carries() {
+    // INV-0224-2 for the scope.
+    let (_, bytes) = scope_of(
+        go_nets(
+            FETCH,
+            &[("http://10.0.2.2:8080/", true)],
+            &["example.org", "*.test.zoraya:443"],
+            true,
+        )
+        .unwrap(),
+    );
+    let lines = crate::netgrant::describe(&bytes);
+    assert_eq!(lines.len(), Scope::decode(&bytes).unwrap().reach_count());
+    assert_eq!(
+        lines[0],
+        "net: example.org             reach, any port (grant +net)"
+    );
+    assert_eq!(
+        lines[1],
+        format!("net: {:<24}reach (grant +net)", "*.test.zoraya:443")
+    );
+    assert_eq!(
+        lines[2],
+        format!("net: {:<24}reach (operand URL)", "10.0.2.2:8080")
+    );
+}
+
+#[test]
+fn a_launcher_with_no_root_refuses_a_line_that_needs_the_network() {
+    use crate::netgrant::{Root, available};
+    // N6 review, finding 7 (ADR-0221 items 5 and 6): a launcher that `init`
+    // tells about the network (it has the services channel) runs no line
+    // that needs it without a usable root, as when the root is closed.
+    assert_eq!(available(true, Root::Open, false), Ok(()));
+    assert_eq!(
+        available(true, Root::Closed, false),
+        Err("the network is not available (restarting)")
+    );
+    assert_eq!(
+        available(true, Root::Closed, true),
+        Err("the network is not available")
+    );
+    assert_eq!(
+        available(true, Root::None, false),
+        Err("the network is not available")
+    );
+    assert_eq!(
+        available(true, Root::None, true),
+        Err("the network is not available")
+    );
+    // No services channel: a machine with no network device; the command
+    // runs without a connection and says so itself.
+    assert_eq!(available(false, Root::None, false), Ok(()));
+    assert_eq!(available(false, Root::Open, false), Ok(()));
+    assert_eq!(
+        available(false, Root::Closed, false),
+        Err("the network is not available (restarting)")
+    );
 }

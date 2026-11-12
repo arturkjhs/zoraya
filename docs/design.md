@@ -1914,6 +1914,53 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
 - **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption,
   the HTTPS lines under TCG, the GUI shells' roots entry (they have no network connection yet).
 
+## The network on the desktop, and when it fails (stage 8, N6)
+
+`--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of
+ADR-0221 items 5, 6 and 8).
+
+- **A shared page** (ADR-0221 item 8, the recommended option, as TASK-26 decided). With the GUI the four pages are the disk (31),
+  the GPU (23), the keyboard (15) and the tablet (7); the network device is on transport 16, in page 2 with the GPU. Three
+  calls: `device_transport(page, index)` (needs `MAP` on the page) gives the `Device` of one transport, made at boot, with
+  no mapping and a handle without `MAP`; `device_read(device, offset, width)` (`READ`) and `device_write(device, offset, value,
+  width)` (`WRITE`) make one access of 1, 2 or 4 bytes to a transport device (narrower than 4 only in the configuration, from
+  0x100). The offset must be a multiple of the width with the access inside the transport's block (at most 0x200 bytes; a
+  transport whose block would overlap the one before it is left out at boot); a page device has no register calls, a
+  transport device has no mapping and no transports. Pins, quarantine, reset and the interrupt are per transport. The first
+  write makes a process the transport's *holder* (kept in its address space, ended when its last handle that can write the
+  transport is closed or moved, or with its exit): one holder at a time, none while the page is mapped, and the page is neither mapped nor released
+  while a transport has a holder or a live pin, nor a transport released while its page is mapped (INV-0295-3). `init` maps each page once to read the identifiers (`Page::One` goes to its
+  driver whole, as before); a `Page::Several` is never given: each transport is split with `device_transport`, identified by
+  `device_read`, and given to its driver, which opens it with `zoraya_user::mmio::Window::open` (a mapping, or calls if the
+  kernel answers `device_map` with `AccessDenied`): the four drivers use one `Registers` type. `tools/run-qemu.sh` accepts
+  `--net` with `--gui`; `make test-gui` runs `tests/gui/net.script` (`net:auto:1`, `net:tcg:1` on CI): the terminal's
+  `net status` shows the lease.
+- **The restart reaches the shell** (ADR-0221 items 5 and 6). `init` had restarted `ethd` and `netd` together, at most three
+  times, since N2. It now also gives the console shell (which is the first terminal window's shell) a *services channel*
+  (slot 13) and sends it `NetworkRestarted` with a new root connection after a restart, `NetworkDown` after the third. The
+  shell reads the channel before a line that needs the network runs; a closed root is `zosh: fetch: the network is not
+  available (restarting)`, and without the `(restarting)` once `init` said so. Running programs see `PEER_CLOSED` on their
+  streams and are not told; with the services channel and no root at all a line is refused too. The test
+  (`tests/shell/net-fetch.script`, `make test-net-fetch`) uses a test-only request `Crash` that exists only in its own
+  image: `build/zoraya-kernel-net-test.elf` embeds a ramdisk built with the `zoraya-user` feature `net-test` (target
+  directories `target/user-net-test` and `target/net-test`); every other kernel's `netd` answers `Crash` as an unknown
+  ordinal. In the test image `netd` honours it only if `init` started it with an event handle at slot 8 (when the volume
+  holds `/etc/zoraya/net-crash`) and only on `init`'s control connection: `net crash` makes the shell ask `init` on the
+  services channel, and `init` sends it. Three `net crash` with a fetch after each work; the fourth leaves the network
+  down.
+- **`+net HOST[:PORT]`** in the shell (ADR-0224 item 1, ADR-0297): `any`, a host name, `*.suffix`, an address or
+  `ADDRESS/BITS`; a `url` operand that came from a value designates inside a word of the line; `grants` prints the
+  `net:` lines.
+- **Measured** (QEMU 11.1.2, HVF, one run, 2026-11-12). A register read by call: 1.39 to 1.42 microseconds (`t_devices`, 2,000 reads of the magic value, three
+  boots), most of it QEMU's trap on the device access and the system call. `make bench-net` (5 runs, `fetch --sum`): 16 MiB in
+  231 ms median (216 to 243 ms; the hashing takes 16 ms of it), 72 MB/s, as N3's 232 ms; one byte, connect to end of file, 27.2 ms
+  median (14.4 to 27.3 ms). TCG not run locally (`FULL=1 make bench-net` runs it). The restart's duration (the plan asks for it) is not measured: the test waits 5 s after each `net crash`, and a fetch
+  that ran with 3 s was once too early for the new lease.
+- **Not built:** the rooms' `+net` and `+listen` words and the creator's-scope check, the pills and the hover card for a
+  network rule, the `REPORT` message and the hint, the panel's and the broker's root connection and services channel (a
+  shell started by the panel has no network), `make bench-net`, a `libposix` client's `ECONNRESET` after a kill, the
+  network account flood and the fuzz target of the gate's second stage (`tools/untrusted-gate.txt`, still `pending`).
+
 ## Known limitations
 
 - **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch
@@ -2054,6 +2101,17 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
   root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
   read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
+- **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport; a
+  mapping of the page and a transport's holder exclude each other, but a process that maps the page (only `init`, once, to read
+  the identifiers) sees every transport while it does. A page device's `dma_release_quarantine` resets every transport of the
+  page, and holds the page's lock across each transport's reset (up to 100 ms), so another transport's calls on the page
+  wait behind it. A pin through a transport is allowed while the page is mapped or another process holds the transport (a
+  pin starts nothing); a live pin refuses the mapping and the releases. Reading a transport needs
+  no hold, so another holder of a transport handle can read its registers (a read restarts nothing). A register read or write on
+  a shared page costs a system call (1.4 microseconds under HVF).
+- **The network on the desktop** (N6). A shell started by the panel has no network connection and no services channel (only the
+  console shell, which is also the first terminal window's shell, has them), so the network restart reaches no other launcher; a
+  window cannot be given `+net` words and no pill shows one (the rooms' words are not built).
 
 ## Roadmap
 

@@ -50,6 +50,10 @@ endif
 FULL_ONLY = [ "$(FULL)" = 1 ] || exit 0;
 KERNEL := $(BUILD)/zoraya-kernel.elf
 TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
+# make test-net-fetch's image (below).
+NET_TEST_USER_DIR := target/user-net-test/$(TARGET)/user
+NET_TEST_RAMDISK := $(BUILD)/ramdisk-net-test.bin
+NET_TEST_KERNEL := $(BUILD)/zoraya-kernel-net-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
 DISK := $(BUILD)/disk.img
 TEST_DISK := $(BUILD)/test-disk.img
@@ -70,8 +74,8 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui run-net test-net test-net-fetch test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
-	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
+.PHONY: all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
 
@@ -102,6 +106,23 @@ $(TEST_KERNEL): $(RAMDISK)
 	ZORAYA_RAMDISK=$(abspath $(RAMDISK)) $(CARGO) build $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test
 	@mkdir -p $(BUILD)
 	cp target/qemu-test/$(TARGET)/debug/zoraya-kernel $@
+
+# The image of `make test-net-fetch` alone (ADR-0296 item 5): the user
+# programs with the feature `net-test`, which builds the test of the
+# network's restart into `init`, `netd` and `zosh`, and a kernel that embeds
+# them, each in a target directory of its own. Every other kernel embeds
+# $(RAMDISK), which has no such test, whatever its volume holds.
+$(NET_TEST_RAMDISK):
+	$(CARGO) build -q -p zoraya-ar
+	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user-net-test --features net-test
+	$(CARGO) build -p zoraya-mkramdisk
+	@mkdir -p $(BUILD)
+	target/debug/zoraya-mkramdisk --describe user/describe $@ $(addprefix $(NET_TEST_USER_DIR)/,$(USER_PROGRAMS))
+
+$(NET_TEST_KERNEL): $(NET_TEST_RAMDISK)
+	ZORAYA_RAMDISK=$(abspath $(NET_TEST_RAMDISK)) $(CARGO) build $(KERNEL_ARGS) --target-dir target/net-test
+	@mkdir -p $(BUILD)
+	cp target/net-test/$(TARGET)/debug/zoraya-kernel $@
 
 $(RUNNER):
 	$(CARGO) build -p zoraya-test-runner
@@ -242,7 +263,16 @@ NET_PCAP := target/test-logs/test-net.pcap
 # Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
 NET_FWD_PORT := 47015
 NET_SCRIPT := tests/shell/net.script
+# INV-0296-1: a string of each of the test image's Crash paths (feature
+# net-test), as PROGRAM:STRING: netd's end on request, init's request on its
+# control connection and its look for the volume's file. The shell's `net
+# crash` only asks init, which then has no such path. test-net checks that
+# the image's programs hold none; test-net-fetch that its own hold each, so
+# that a string changed in the source does not make the check pass blind.
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
+	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[net] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
 		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
@@ -294,16 +324,19 @@ NET_FETCH_ROOT := $(BUILD)/net-fetch-root
 NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
 NET_FETCH_TEMPLATE := tests/shell/net-fetch.script
 NET_FETCH_SCRIPT := $(BUILD)/net-fetch.script
-NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $(3) $(KERNEL)
+NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $(3) $(NET_TEST_KERNEL)
 
 $(HTTPD): tools/test-httpd/src/main.rs
 	$(CARGO) build -q -p zoraya-test-httpd
 
-test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		grep -a -q "$$s" $(NET_TEST_USER_DIR)/$$f || { echo "[net-fetch] FAIL: INV-0296-1's check is blind: $$f holds no '$$s'"; exit 1; }; done
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
+	mkdir -p $(NET_FETCH_ROOT)/etc/zoraya && : > $(NET_FETCH_ROOT)/etc/zoraya/net-crash && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
 	: > $(NET_HTTP_READY) && : > $(NET_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NET_TLS_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
@@ -335,6 +368,34 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		else $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel auto $(KERNEL); rc=$$?; fi; \
 	fi; \
 	exit $$rc
+
+# N6 (ADR-0230 item 8): the throughput and latency numbers of the network, from
+# `fetch --sum` against the test server: 16 MiB and one byte, five times each,
+# under HVF (`FULL=1` adds TCG). Prints the times of every fetch; nothing is
+# asserted but that every fetch ends. The numbers go to docs/design.md by hand.
+NET_BENCH_SCRIPT := $(BUILD)/net-bench.script
+bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[bench-net] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
+	: > $(NET_HTTP_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-bench.log 2>&1 & echo $$! > $(BUILD)/net-httpd-bench.pid; } && \
+	httpd=$$(cat $(BUILD)/net-httpd-bench.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	port=$$(cat $(NET_HTTP_READY)); \
+	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then echo "[bench-net] FAIL: the test server did not start"; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" tests/shell/net-bench.script > $(NET_BENCH_SCRIPT); \
+	for accel in auto $(if $(filter 1,$(FULL)),tcg); do \
+	  log=target/test-logs/bench-net-$$accel.log; \
+	  $(RUNNER) --timeout $(if $(filter 1,$(FULL)),400,$(QEMU_TIMEOUT)) --script $(NET_BENCH_SCRIPT) --label bench-net-$$accel -- \
+	    $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $$accel $(KERNEL) > $$log 2>&1; rc=$$?; \
+	  if [ $$rc != 0 ]; then echo "[bench-net] FAIL ($$accel), log $$log"; tail -20 $$log; kill $$httpd 2>/dev/null; exit $$rc; fi; \
+	  for size in 16777216 1; do \
+	    echo "[bench-net] $$accel $$size bytes, ms:" $$(grep -a "^$$size bytes fnv1a" $$log | sed -e 's/.* in \([0-9.]*\) ms.*/\1/' | tr '\n' ' '); \
+	  done; \
+	done; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; exit 0
 
 # N4 (ADR-0225, ADR-0287): `zfetch`, a C program built by zcc against libc.a,
 # fetches the same pages through libposix's sockets, started by the shell from
@@ -669,7 +730,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
@@ -681,8 +742,9 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	  target/debug/zoraya-mkfs --size 16M --from $$root $(GUI_IMAGE) > /dev/null && \
 	  timeout=$(QEMU_TIMEOUT); [ $$scale = 1 ] || timeout=$(GUI_TIMEOUT_2); \
 	  case $$scale in *x*) size="--gui-size $$scale" ;; *) size="--gui-scale $$scale" ;; esac; \
+	  net=; [ -f tests/gui/$$script.net ] && net=--net; \
 	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
-	    $(RUN_QEMU) --test --gui $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
+	    $(RUN_QEMU) --test --gui $$net $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
@@ -742,6 +804,7 @@ clippy:
 	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
 	$(CARGO) build -q -p zoraya-ar
 	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
+	$(CARGO) clippy -p zoraya-user --target $(TARGET) --features net-test -- -D warnings
 	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
 	@# the user programs' features do not unify with it.
 	$(CARGO) clippy -p zoraya-posix --target $(TARGET) -- -D warnings
@@ -843,7 +906,7 @@ TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-
 # test-posix one a script (and an accelerator where needed). ci-build is the
 # build job's; check-ci-jobs fails if the workflow leaves out a step, a
 # configuration, a script under an accelerator, or a W8 build.
-ci-build: $(KERNEL) $(TEST_KERNEL) $(RUNNER) tools-storage
+ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
 	$(MAKE) -f ports/Makefile ports workloads
 	@$(MAKE) -s posix-image

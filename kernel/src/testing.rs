@@ -493,6 +493,10 @@ static TESTS: &[Test] = &[
         run: devices_from_a_process,
     },
     Test {
+        name: "overlapping_transports_are_left_out",
+        run: overlapping_transports_are_left_out,
+    },
+    Test {
         name: "a_device_with_no_transport_keeps_its_quarantine",
         run: a_device_with_no_transport_keeps_its_quarantine,
     },
@@ -1424,6 +1428,33 @@ fn text_renders_the_reference_digests() {
 /// plan.md's measurements: printed, and not judged.
 fn channel_measurements() {
     assert_eq!(run_program("chanbench"), exited(0));
+}
+
+/// Review N6 finding 5 (INV-0295-1): a transport whose block would overlap
+/// the one before it in its page is left out at boot.
+fn overlapping_transports_are_left_out() {
+    use crate::device::blocks_follow;
+    assert!(blocks_follow((0, 0x200), (0x200, 0x200)), "QEMU's stride");
+    assert!(blocks_follow((0, 0x100), (0x200, 0x200)));
+    assert!(
+        !blocks_follow((0, 0x200), (0x100, 0x200)),
+        "a stride below the size"
+    );
+    assert!(
+        !blocks_follow((0x200, 0x200), (0x200, 0x200)),
+        "the same block"
+    );
+    assert!(!blocks_follow((u64::MAX - 1, 0x200), (0, 4)), "no overflow");
+    // Re-review N6 finding 3: `init`'s loop leaves out the overlapping
+    // transport, keeps the one after it, and keeps no more than a page holds.
+    use crate::device::blocks_kept;
+    assert_eq!(
+        blocks_kept(&[(0, 0x200), (0x100, 0x200), (0x200, 0x200)]),
+        0b101,
+        "the overlapping one is left out, the next kept"
+    );
+    let full: [(u64, u64); 9] = core::array::from_fn(|i| (i as u64 * 0x100, 0x100));
+    assert_eq!(blocks_kept(&full), 0xff, "eight in a page");
 }
 
 /// INV-0070-3: with no virtio transport nothing proves the device stopped, so

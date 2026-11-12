@@ -354,7 +354,9 @@ object_types! {
         COMMON
             .union(Rights::MAP)
             .union(Rights::INTERRUPT)
-            .union(Rights::DMA),
+            .union(Rights::DMA)
+            .union(Rights::READ)
+            .union(Rights::WRITE),
         Duplicable;
     InterruptObject "interrupt"
         Waiting::Signals(interrupt_signals::INTERRUPT),
@@ -1150,6 +1152,9 @@ syscalls! {
     50 PowerReset power_reset(power: Handle) false;
     51 JobSetLimits job_set_limits(job: Handle, limits: Bytes) false;
     52 JobGetUsage job_get_usage(job: Handle, out: Bytes, flags: UsageFlags) false;
+    53 DeviceTransport device_transport(device: Handle, index: RangeIndex) false;
+    54 DeviceRead device_read(device: Handle, offset: Size, width: Size) false;
+    55 DeviceWrite device_write(device: Handle, offset: Size, value: Opaque, width: Size) false;
 }
 
 /// One name in a listing (ADR-0061): the next cookie, 0 at the last name, then

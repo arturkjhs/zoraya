@@ -10,12 +10,12 @@ use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
     Address, Buffer, Bytes, ChannelEntry, ChannelObject, ChannelSizes, Cookie, DEADLINE_INFINITE,
-    Detail, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason, ExitRecord, Handle,
-    Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags, MemoryFlags,
-    MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer, PathBuffer,
-    PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind, Rights, SignalSet,
-    Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject, StreamWriteObject, UsageFlags,
-    request_value,
+    Detail, DeviceObject, DirectoryEntry, Disposition, EventObject, ExitCode, ExitReason,
+    ExitRecord, Handle, Handlers, ImageObject, InterruptObject, JobFlags, JobObject, MapFlags,
+    MemoryFlags, MemoryObject as MemoryType, Mode, ObjectType, Opaque, Out, Packet, PacketBuffer,
+    PathBuffer, PinObject, PortObject, ProcessObject, RangeIndex, RelativePath, RequestKind,
+    Rights, SignalSet, Size, SnapshotBuffer, SpawnBuffer, Status, StreamReadObject,
+    StreamWriteObject, UsageFlags, request_value,
 };
 use zoraya_console::INPUT_SIZE;
 use zoraya_elf::{EHDR_SIZE, Header, Program};
@@ -237,6 +237,33 @@ impl Calls<'_> {
         Ok((table, self_handle))
     }
 
+    /// INV-0295-3: the hold of a transport device ends with the last handle
+    /// of this process that can write it. Called with the table unlocked
+    /// after a handle to `object` left it, by a close or by a `Move` (spawn,
+    /// channel_write, snapshot). A process has one thread, so nothing adds a
+    /// handle meanwhile; and the kernel is not preempted on its one CPU
+    /// (design.md, Scheduler), so the process a moved handle went to runs
+    /// only after the hold has ended.
+    fn end_hold_if_unwritable(&self, object: &Object) {
+        let Object::Device(device) = object else {
+            return;
+        };
+        let writable = self.process.handles.lock().entries().any(|(_, e)| {
+            e.rights.contains(Rights::WRITE)
+                && matches!(&e.object, Object::Device(d) if Arc::ptr_eq(d, device))
+        });
+        if writable {
+            return;
+        }
+        let claim = self
+            .process
+            .space
+            .lock()
+            .as_mut()
+            .and_then(|s| s.let_go(device));
+        drop(claim);
+    }
+
     fn insert(&self, object: Object, rights: Rights) -> Result<u64, Status> {
         let handle = self
             .process
@@ -286,8 +313,14 @@ impl Handlers for Calls<'_> {
     }
 
     fn handle_close(&mut self, handle: Handle) -> Result<u64, Status> {
-        let entry = self.process.handles.lock().remove(handle);
-        object::close(entry.ok_or(Status::BadHandle)?);
+        let entry = self
+            .process
+            .handles
+            .lock()
+            .remove(handle)
+            .ok_or(Status::BadHandle)?;
+        self.end_hold_if_unwritable(&entry.object);
+        object::close(entry);
         Ok(0)
     }
 
@@ -367,6 +400,7 @@ impl Handlers for Calls<'_> {
                 let entry = self.process.handles.lock().remove(listed.handle);
                 if let Some(entry) = entry {
                     object::end_subscriptions(&entry);
+                    self.end_hold_if_unwritable(&entry.object);
                 }
             }
         }
@@ -780,7 +814,7 @@ impl Handlers for Calls<'_> {
         paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
         let mut message = channel::message(body, Vec::new(), paid)?;
         pair.prepare(side, message.bytes.len())?;
-        for entry in listed {
+        for entry in listed.clone() {
             let object = match entry.transfer {
                 Transfer::Duplicate => handles.check(entry.handle, Rights::NONE)?.object.clone(),
                 Transfer::Move => {
@@ -796,6 +830,12 @@ impl Handlers for Calls<'_> {
             });
         }
         drop(handles);
+        // Before the write: the reader holds the handles only after it.
+        for (entry, moved) in carried.iter().zip(listed) {
+            if moved.transfer == Transfer::Move {
+                self.end_hold_if_unwritable(&entry.object);
+            }
+        }
         message.handles = carried;
         pair.write(side, message);
         Ok(0)
@@ -892,6 +932,56 @@ impl Handlers for Calls<'_> {
         };
         let interrupt = device.interrupt(index.0)?;
         self.insert(Object::Interrupt(interrupt), InterruptObject::RIGHTS)
+    }
+
+    /// ADR-0295: the device of one transport of a page, for a holder of the
+    /// page with `MAP`. The new handle has the rights of a device handle but
+    /// `MAP` (a transport device is never mapped), so it passes where the
+    /// page's would, to the one driver whose transport it is.
+    fn device_transport(&mut self, device: Handle, index: RangeIndex) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::MAP)? else {
+            return Err(Status::BadHandle);
+        };
+        let transport = device.transport(index.0)?;
+        // No `MAP`: a transport device is never mapped (INV-0295-3).
+        self.insert(
+            Object::Device(transport),
+            DeviceObject::RIGHTS.without(Rights::MAP),
+        )
+    }
+
+    /// ADR-0295: a register of a transport device. The offset is the
+    /// caller's and `Device::read_register` bounds it.
+    fn device_read(&mut self, device: Handle, offset: Size, width: Size) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::READ)? else {
+            return Err(Status::BadHandle);
+        };
+        device.read_register(offset.0, width.0).map(u64::from)
+    }
+
+    fn device_write(
+        &mut self,
+        device: Handle,
+        offset: Size,
+        value: Opaque,
+        width: Size,
+    ) -> Result<u64, Status> {
+        let Object::Device(device) = self.object(device, Rights::WRITE)? else {
+            return Err(Status::BadHandle);
+        };
+        // A value wider than its access is refused, not cut.
+        if width.0 > 4 || value.0 >> (8 * width.0) != 0 {
+            return Err(Status::InvalidArgument);
+        }
+        let value = value.0 as u32;
+        device.check_register(offset.0, width.0)?;
+        // The first write makes this process the transport's holder, and a
+        // second holder is refused (INV-0295-3). A process has one thread.
+        let mut space = self.process.space.lock();
+        let space = space.as_mut().ok_or(Status::BadState)?;
+        let held = space.hold(&device)?;
+        device.write_register(held, offset.0, width.0, value)?;
+        Ok(0)
     }
 
     fn interrupt_ack(&mut self, interrupt: Handle) -> Result<u64, Status> {
@@ -1076,19 +1166,19 @@ impl Handlers for Calls<'_> {
             suspended: request.suspended,
         })?;
         // The child exists: only now do the moved handles leave (INV-0102-2).
-        let mut handles = self.process.handles.lock();
         for moved in request.moves() {
-            if let Some(entry) = handles.remove(moved.handle) {
+            let entry = self.process.handles.lock().remove(moved.handle);
+            if let Some(entry) = entry {
                 object::end_subscriptions(&entry);
+                self.end_hold_if_unwritable(&entry.object);
             }
         }
         // `snapshot_table` reserved this room, and removing made more.
-        let handle = handles.insert(
+        let handle = self.process.handles.lock().insert(
             Object::Process(child),
             ProcessObject::RIGHTS,
             object::next_id(),
         )?;
-        drop(handles);
         *LAST_SNAPSHOT.lock() = (timer::now().nanos_since(started), copied.pages);
         Ok(handle.raw())
     }

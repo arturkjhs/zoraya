@@ -621,6 +621,11 @@ struct Z {
     /// The shell's root network connection (slot 9, ADR-0221 item 4), from
     /// which a command that needs the network's status gets a narrowed one.
     net: Option<Handle>,
+    /// `init`'s channel for `NetworkRestarted` and `NetworkDown` (slot 13,
+    /// ADR-0221 item 6, proposed ADR-0296).
+    net_services: Option<Handle>,
+    /// `init` said the network will not come back this boot.
+    net_down: bool,
     /// The shell's connection to the random service (slot 10, ADR-0227
     /// item 3), from which each native program gets its own.
     random: Option<Handle>,
@@ -875,7 +880,41 @@ impl Z {
         let Some((d, base)) = self.program_description(exec.name) else {
             return Ok(None);
         };
-        Self::net_grant_with(exec, &d, base, &self.cwd)
+        let net = Self::net_grant_with(exec, &d, base, &self.cwd)?;
+        if net.is_some() {
+            self.network_available(exec.name)?;
+        }
+        Ok(net)
+    }
+
+    /// Takes what `init` sent on the services channel (a new root after a
+    /// restart, ADR-0221 item 6), then says whether the root connection can
+    /// be used. A line that needs the network is refused, not run, while the
+    /// service is down (the example of ADR-0221 item 5).
+    fn network_available(&mut self, name: &str) -> Result<(), String> {
+        use zoraya_user::netclient::{Services, is_closed, poll_services};
+        if let Some(services) = self.net_services {
+            match poll_services(services) {
+                Services::Restarted(root) => {
+                    if let Some(old) = self.net.replace(root) {
+                        let _ = handle_close(old);
+                    }
+                    self.net_down = false;
+                }
+                Services::Down => self.net_down = true,
+                Services::Quiet => {}
+            }
+        }
+        use zoraya_shell::netgrant::{Root, available};
+        let root = match self.net {
+            Some(root) if !is_closed(root) => Root::Open,
+            Some(_) => Root::Closed,
+            None => Root::None,
+        };
+        // With the services channel and no root the line is refused, not
+        // run without a connection (N6 review, finding 7).
+        available(self.net_services.is_some(), root, self.net_down)
+            .map_err(|why| zoraya_command::error("zosh", Some(name), why, &[]))
     }
 
     /// `net_grant` for a description given: the image's POSIX programs'
@@ -897,6 +936,7 @@ impl Z {
             args: exec.args,
             cwd,
             grants: exec.grants,
+            nets: exec.nets,
             base_system: base,
         };
         zoraya_shell::netgrant::net_for(&line).map_err(|r| {
@@ -921,6 +961,7 @@ impl Z {
         let Some((rights, scope)) = Self::net_grant_with(exec, d, true, &self.cwd)? else {
             return Ok(None);
         };
+        self.network_available(exec.name)?;
         // Each POSIX program counts against an account of its own, carved
         // from the shell's (ADR-0262 item 2; Q3): what it opens does not use
         // up the shell's, or another program's, connections.
@@ -951,6 +992,7 @@ impl Z {
             args: exec.args,
             cwd: &self.cwd,
             grants: exec.grants,
+            nets: exec.nets,
             base_system: base,
         };
         let planned = grants::plan(&line).and_then(|p| {
@@ -1247,6 +1289,18 @@ impl Z {
                 Some(self.table(&plan, net)?)
             }
         };
+        // The test image's `net crash` (ADR-0296 item 5): `netd` honours
+        // `Crash` only on `init`'s control connection, so the shell asks
+        // `init` on its services channel, once the program's own connection
+        // is made; the program sends its `Crash`, which `netd` ignores, and
+        // says so.
+        #[cfg(feature = "net-test")]
+        if exec.name == "net"
+            && exec.args.iter().map(|a| a.text.as_str()).eq(["crash"])
+            && let Some(services) = self.net_services
+        {
+            let _ = zoraya_user::netclient::crash(services);
+        }
         match directory_lookup(DIRECTORY, exec.name) {
             Ok(image) => Ok((Ready::Native { image, table }, given)),
             Err(s) => {
@@ -3596,6 +3650,18 @@ impl Host for Z {
 
     fn grants(&mut self, _: &mut State, exec: &Exec<'_>, io: &mut Io) -> i32 {
         let code = self.grants_report(exec, io);
+        // ADR-0224 item 3: the scope rules the command's connection would
+        // carry, exactly as `net_grant` makes them (INV-0224-2).
+        if code == 0
+            && let Some((d, base)) = self.program_description(exec.name)
+            && let Ok(Some((rights, scope))) = Self::net_grant_with(exec, &d, base, &self.cwd)
+            && rights & zoraya_abi::net::rights::REACH != 0
+        {
+            for line in zoraya_shell::netgrant::describe(&scope) {
+                io.out.push_str(&line);
+                io.out.push('\n');
+            }
+        }
         // ADR-0266 point 7: in a room, the room's limits, in the words of its
         // line, from the keeper's record (the truth), else from the line.
         if code == 0
@@ -4572,6 +4638,8 @@ fn main() -> i32 {
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(Broker::new),
         net: Handle::new(9).filter(|h| handle_type(*h) == Ok("channel")),
+        net_services: Handle::new(13).filter(|h| handle_type(*h) == Ok("channel")),
+        net_down: false,
         random: Handle::new(10).filter(|h| handle_type(*h) == Ok("channel")),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))

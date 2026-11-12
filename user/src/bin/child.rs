@@ -8,10 +8,10 @@ use zoraya_abi::{
     RequestKind, Rights, Status, channel_signals,
 };
 use zoraya_user::{
-    assert_err, channel_read, channel_write, clock_monotonic, dma_pin, handle_duplicate,
-    memory_map, memory_unmap, port_create, port_queue, port_subscribe, port_unsubscribe, port_wait,
-    println, process_exit, process_exit_terminated, process_set_disposition, process_take_request,
-    sleep_until, startup, thread_yield,
+    assert_err, channel_read, channel_write, clock_monotonic, device_write, dma_pin,
+    handle_duplicate, memory_map, memory_unmap, port_create, port_queue, port_subscribe,
+    port_unsubscribe, port_wait, println, process_exit, process_exit_terminated,
+    process_set_disposition, process_take_request, sleep_until, startup, thread_yield,
 };
 
 /// Every slot of this process's table is empty (INV-0003-1).
@@ -88,6 +88,16 @@ fn main() -> i32 {
             let mut runs = [[0; 2]; 4];
             dma_pin(at_slot(3), at_slot(4), &mut runs).expect("pin");
             0
+        }
+        b"write-register" => {
+            // Slot 4 a transport device: writes its status register, as a
+            // second driver on the transport would. 0 if the kernel let it,
+            // 1 if it refused with `BadState` (another holder, ADR-0295).
+            match device_write(at_slot(4), 0x70, 0) {
+                Ok(()) => 0,
+                Err(Status::BadState) => 1,
+                Err(_) => 2,
+            }
         }
         b"memory-writer" => {
             let at = memory_map(at_slot(3), 0, 4096, MapFlags::WRITE).expect("map");

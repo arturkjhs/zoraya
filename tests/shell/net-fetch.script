@@ -82,6 +82,25 @@
 > fetch $(echo http://10.0.2.2:@PORT@/)\r
 < network grants
 < \r\n~>
+# N6, ADR-0224 item 1: a `+net` word on the line lets the value designate, and
+# only what it covers: the host and port written, not the rest.
+> +net 10.0.2.2:@PORT@ fetch $u\r
+< Zoraya test page
+< \r\n~>
+> +net 10.0.2.2:1 fetch $u\r
+< from a value, outside the line's network grants
+< +net 10.0.2.2:@PORT@ COMMAND
+< \r\n~>
+> +net nonsense: fetch http://10.0.2.2:@PORT@/\r
+< +net nonsense:
+< \r\n~>
+> grants +net 10.0.2.2:@PORT@ fetch $u\r
+< net: 10.0.2.2:@PORT@
+< reach (grant +net)
+< \r\n~>
+> grants fetch http://10.0.2.2:@PORT@/\r
+< reach (operand URL)
+< \r\n~>
 # What goes wrong is said, and the exit status is 1.
 > fetch http://10.0.2.2:@PORT@/status/404\r
 < fetch: http://10.0.2.2:@PORT@/status/404: the server did not give the page (HTTP 404)
@@ -137,5 +156,45 @@
 > fetch http://10.0.2.2:99999/\r
 < the port is not a number from 1 to 65535
 < \r\n~>
+# N6, ADR-0221 items 5 and 6 (INV-0221-3, INV-0221-4): this is the test image
+# (feature net-test, ADR-0296 item 5) and the volume holds
+# /etc/zoraya/net-crash, so `init` started `netd` to end on request. Each
+# `net crash` has the shell ask `init`, which sends `Crash` on its control
+# connection and so ends the service; `init` restarts the network and the shell gets
+# a new root connection on its services channel, so a fetch works again. The
+# fourth end is past the three restarts of a boot: the network stays down (the
+# refusal has no "(restarting)" after it), and a line that needs it is refused.
+# No program is ended by any of it.
+> net crash\r
+< net: asked the network service to end
+< \r\n~>
+> sleep 5\r
+< \r\n~>
+> fetch http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< \r\n~>
+> net crash\r
+< \r\n~>
+> sleep 5\r
+< \r\n~>
+> fetch http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< \r\n~>
+> net crash\r
+< \r\n~>
+> sleep 5\r
+< \r\n~>
+> fetch http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< \r\n~>
+> net crash\r
+< net: asked the network service to end
+< \r\n~>
+> sleep 1\r
+< \r\n~>
+> fetch http://10.0.2.2:@PORT@/\r
+< zosh: fetch: the network is not available\r\n~>
+> net status\r
+< zosh: net: the network is not available\r\n~>
 x power off
 > poweroff\r
