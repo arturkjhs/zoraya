@@ -120,6 +120,22 @@ impl Checker {
         }
     }
 
+    /// Where the run stands, for the line the runner prints on a timeout, so
+    /// that a slow run (many tests passed, the last one still going) can be
+    /// told from a hang (few passed, one test stuck).
+    pub fn progress(&self) -> String {
+        let total = self.begin.map_or(String::new(), |n| format!(" of {n}"));
+        let running = match &self.running {
+            Some(t) => format!("running test {t}"),
+            None => "no test running".to_string(),
+        };
+        format!(
+            "{} tests passed{total}, {} failed, {running}",
+            self.ok.len(),
+            self.failed.len()
+        )
+    }
+
     pub fn feed(&mut self, line: &str) -> Flow {
         let line = line.trim_end_matches(['\r', '\n']);
         for (i, e) in self.expect_lines.iter().enumerate() {
@@ -335,6 +351,20 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn progress_names_the_running_test_and_the_count() {
+        let mut c = Checker::new(vec![], vec![]);
+        assert_eq!(c.progress(), "0 tests passed, 0 failed, no test running");
+        let _ = c.feed("ZORAYA-TEST begin 3");
+        let _ = c.feed("ZORAYA-TEST run a");
+        let _ = c.feed("ZORAYA-TEST ok a");
+        let _ = c.feed("ZORAYA-TEST run b");
+        assert_eq!(
+            c.progress(),
+            "1 tests passed of 3, 0 failed, running test b"
+        );
+    }
 
     fn run(lines: &[&str], exit: Exit) -> Report {
         let mut c = Checker::new(vec!["boom".into()], vec!["banner".into()]);
