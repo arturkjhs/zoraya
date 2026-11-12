@@ -11,9 +11,11 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use zoraya_abi::quota::{FieldUsage, JobLimits, JobUsage};
 use zoraya_abi::{ExitReason, ExitRecord, RequestKind, Status, job_signals};
 use zoraya_charge::{Counters, Field, Kind};
+use zoraya_cpu::CpuAcct;
 use zoraya_events::SourceId;
 
 use crate::charge;
+use crate::cpu;
 use crate::memory::heap::uncharged_arc;
 use crate::port;
 use crate::process::Process;
@@ -48,6 +50,9 @@ pub struct Job {
     state: SpinLock<State>,
     /// The job's counters (ADR-0261), under [`charge`]'s walk.
     acct: SpinLock<Counters>,
+    /// The job's CPU ceiling and use (ADR-0264). A leaf lock, taken under the
+    /// scheduler's (`cpu.rs`).
+    cpu: SpinLock<CpuAcct>,
     /// What the job's own record was charged, given back when it drops.
     record: AtomicU64,
 }
@@ -76,6 +81,7 @@ impl Job {
                 suspended,
             }),
             acct: SpinLock::new(Counters::new()),
+            cpu: SpinLock::new(CpuAcct::new()),
             record: AtomicU64::new(0),
         });
         // On failure the value was dropped, and its `Drop` freed the source.
@@ -130,16 +136,24 @@ impl Job {
         &self.acct
     }
 
+    pub(crate) fn cpu(&self) -> &SpinLock<CpuAcct> {
+        &self.cpu
+    }
+
     pub(crate) fn parent_ref(&self) -> Option<&Job> {
         self.parent.as_deref()
     }
 
-    /// `job_set_limits` (ADR-0261 points 1 to 3). `cpu` waits for ADR-0264.
+    /// `job_set_limits` (ADR-0261 points 1 to 3, ADR-0264 point 6): all three
+    /// limits are set together or none is.
     pub fn set_limits(&self, limits: JobLimits) -> Result<(), Status> {
-        if limits.cpu.is_some() {
-            return Err(Status::NotSupported);
+        let old = self.cpu.lock().limit;
+        cpu::set_limit(self, limits.cpu)?;
+        let result = charge::set_limits(self, limits.memory, limits.processes);
+        if result.is_err() {
+            cpu::restore_limit(self, old);
         }
-        charge::set_limits(self, limits.memory, limits.processes)
+        result
     }
 
     /// `job_get_usage` (ADR-0261 point 11). With `clear`, also clears
@@ -173,6 +187,7 @@ impl Job {
             user,
             kernel: memory.used.saturating_sub(user),
             held,
+            cpu: cpu::usage(self),
         }
     }
 

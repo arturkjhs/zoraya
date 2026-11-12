@@ -5,7 +5,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE};
+use zoraya_abi::quota::{JobLimits, LIMITS_SIZE, USAGE_SIZE, USAGE_SIZE_CPU};
 use zoraya_abi::snapshot::{MAX_SNAPSHOT_SIZE, SnapshotRequest};
 use zoraya_abi::spawn::{MAX_SPAWN_SIZE, SpawnRequest, Transfer};
 use zoraya_abi::{
@@ -1147,8 +1147,9 @@ impl Handlers for Calls<'_> {
             return Err(Status::BufferTooSmall);
         }
         // Written first, then cleared: a bad address clears nothing.
-        let usage = job.usage(false);
-        target.write(&usage.encode())?;
+        // The first version's 88 bytes, or the record with the CPU words.
+        let usage = job.usage(false).encode();
+        target.write(&usage[..target.len().min(USAGE_SIZE_CPU)])?;
         if flags.clears() {
             job.usage(true);
         }
@@ -1252,6 +1253,11 @@ pub mod test_calls {
     /// Returns the bytes the kernel heap has taken from the frames so far
     /// (they never go back), once the reaper is idle.
     pub const HEAP_BACKING: u64 = 0x7017;
+    /// Sets the CPU period to x0 nanoseconds; 0 restores the default
+    /// (ADR-0264's measurement). The harness restores it between tests.
+    pub const SET_CPU_PERIOD: u64 = 0x7018;
+    /// Prints where the units of the busiest masked interval came from.
+    pub const DIAGNOSE_UNITS: u64 = 0x7019;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1280,6 +1286,19 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         test_calls::MASKED_MAX_NS => Some(Ok(crate::steps::masked_max_ns(a0 != 0))),
         test_calls::MASKED_MAX_UNITS => Some(Ok(crate::steps::masked_max_units(a0 != 0))),
         test_calls::CANCELLED => Some(Ok(crate::steps::cancelled())),
+        // Below 1 ms a low ceiling's budget is zero and the release deadline
+        // would storm; 0 restores the default.
+        test_calls::SET_CPU_PERIOD if a0 != 0 && a0 < 1_000_000 => {
+            Some(Err(Status::InvalidArgument))
+        }
+        test_calls::DIAGNOSE_UNITS => {
+            crate::steps::diagnose_units();
+            Some(Ok(0))
+        }
+        test_calls::SET_CPU_PERIOD => {
+            crate::cpu::set_test_period(a0);
+            Some(Ok(0))
+        }
         test_calls::EVENTS_LIVE => {
             let (sources, ports) = port::EVENTS.lock().live();
             Some(Ok(((sources as u64) << 32) | ports as u64))

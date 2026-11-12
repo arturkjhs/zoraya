@@ -218,3 +218,17 @@ find = '''
 replace = '''
 '''
 note = "INV-0130-3: dma_pin refuses in a posix job (the architect's decision on ADR-0130)"
+
+[[mutant]]
+id = "K-step-point-no-window-after-switch"
+file = "kernel/src/steps.rs"
+find = '''
+    if preempt() {
+        // SAFETY: as above; the switch back holds no lock of this thread.
+        unsafe { window() };
+    }
+'''
+replace = '''
+    let _ = preempt();
+'''
+note = "INV-0270-1: a thread switched away at a step point resumes in a new masked interval (Q4, CI: two exit tails in one)"

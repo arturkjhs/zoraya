@@ -2,13 +2,17 @@
 //! Integers are little-endian; a number that does not apply is `NONE`.
 //!
 //! Limits, 24 bytes: `memory` u64 bytes, `processes` u32, `cpu` u32 (a
-//! share in thousandths of a period, ADR-0264; the kernel refuses one until
-//! the CPU ceiling exists), then a reserved u64 that must be zero.
+//! share of the machine in thousandths, ADR-0264: 1 to 1000), then a reserved
+//! u64 that must be zero.
 //!
 //! Usage, 88 bytes: for memory and then for processes, `limit`, `used`, `peak`
 //! and `refused` (four u64), then memory's `user`, `kernel` and `held` (three
-//! u64). A longer buffer is accepted by the decoder and the extra bytes are
-//! ignored, so later fields can be appended.
+//! u64). Then, from Q4, the CPU (ADR-0264 point 8): `limit` in thousandths,
+//! `used_ns` since creation, `period_used` ns in the current period, `parked`
+//! times (four u64, 120 bytes in all). A buffer of 88 bytes is the first
+//! version: the kernel writes what fits, and the decoder reads the CPU words
+//! as zero and no limit when they are missing. A longer buffer is accepted
+//! and the extra bytes ignored, so later fields can be appended.
 //!
 //! The decoders are total.
 
@@ -22,6 +26,8 @@ const NONE32: u32 = u32::MAX;
 pub const LIMITS_SIZE: usize = 24;
 /// Size of the usage record.
 pub const USAGE_SIZE: usize = 88;
+/// Size of the usage record with the CPU words.
+pub const USAGE_SIZE_CPU: usize = 120;
 
 /// Which limit refused a charge: the value register of an `OverQuota`
 /// (ADR-0263 point 1).
@@ -105,6 +111,21 @@ pub struct JobUsage {
     /// Memory still charged to this job by objects kept alive from outside
     /// after its last process ended (ADR-0261 point 9).
     pub held: u64,
+    /// The CPU ceiling and use (ADR-0264 point 8).
+    pub cpu: CpuUsage,
+}
+
+/// The CPU part of a usage record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CpuUsage {
+    /// The job's own ceiling in thousandths, if it has one.
+    pub limit: Option<u32>,
+    /// Nanoseconds run since creation by the job and everything below it.
+    pub used_ns: u64,
+    /// Nanoseconds run in the current period.
+    pub period_used: u64,
+    /// Times a thread was parked because this job was over budget.
+    pub parked: u64,
 }
 
 fn put(out: &mut [u8], at: usize, value: u64) {
@@ -118,8 +139,8 @@ fn get(bytes: &[u8], at: usize) -> Option<u64> {
 }
 
 impl JobUsage {
-    pub fn encode(&self) -> [u8; USAGE_SIZE] {
-        let mut out = [0; USAGE_SIZE];
+    pub fn encode(&self) -> [u8; USAGE_SIZE_CPU] {
+        let mut out = [0; USAGE_SIZE_CPU];
         let words = [
             self.memory.limit.unwrap_or(NONE),
             self.memory.used,
@@ -132,6 +153,10 @@ impl JobUsage {
             self.user,
             self.kernel,
             self.held,
+            self.cpu.limit.map_or(NONE, u64::from),
+            self.cpu.used_ns,
+            self.cpu.period_used,
+            self.cpu.parked,
         ];
         for (at, word) in words.into_iter().enumerate() {
             put(&mut out, at, word);
@@ -158,6 +183,14 @@ impl JobUsage {
             user: get(bytes, 8)?,
             kernel: get(bytes, 9)?,
             held: get(bytes, 10)?,
+            cpu: CpuUsage {
+                limit: get(bytes, 11)
+                    .and_then(|v| (v != NONE).then_some(v))
+                    .and_then(|v| u32::try_from(v).ok()),
+                used_ns: get(bytes, 12).unwrap_or(0),
+                period_used: get(bytes, 13).unwrap_or(0),
+                parked: get(bytes, 14).unwrap_or(0),
+            },
         })
     }
 }
@@ -218,12 +251,22 @@ mod tests {
             user: 40,
             kernel: 20,
             held: 5,
+            cpu: CpuUsage {
+                limit: Some(250),
+                used_ns: 123_456_789,
+                period_used: 4_000_000,
+                parked: 7,
+            },
         };
         let bytes = u.encode();
         assert_eq!(JobUsage::decode(&bytes), Some(u));
         assert_eq!(JobUsage::decode(&bytes[..USAGE_SIZE - 1]), None);
-        let mut longer = [0u8; USAGE_SIZE + 16];
-        longer[..USAGE_SIZE].copy_from_slice(&bytes);
+        // The first version's record: the CPU words are missing, read as none.
+        let first = JobUsage::decode(&bytes[..USAGE_SIZE]).expect("88 bytes");
+        assert_eq!(first.cpu, CpuUsage::default());
+        assert_eq!(first.held, 5);
+        let mut longer = [0u8; USAGE_SIZE_CPU + 16];
+        longer[..USAGE_SIZE_CPU].copy_from_slice(&bytes);
         assert_eq!(JobUsage::decode(&longer), Some(u));
     }
 

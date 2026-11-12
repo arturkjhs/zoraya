@@ -649,3 +649,92 @@ sums the real column), finding 7 (a service with FIFOs refuses `CloneAccount`; `
 an account per handle). Open: the launcher cannot read the refusal count yet (Q6a: a request or the supervisor channel),
 notes 10 and 11 (sync bookkeeping allocations; any wake of a syncing connection closes it), note 12 (who may set limits, with
 ADR-0292).
+
+## Q4: the CPU ceiling (branch `work/q4`, on `work/n2`)
+
+### Built
+
+- **`crates/zoraya-cpu`** (new, `no_std`, host tests on a simulated clock): `CpuAcct` per job, `charge` (the run walks up
+  every ancestor; a run that crosses a period boundary counts only its later part to the budget), `decide` (unlimited,
+  run with a slice of `min(10 ms, budget left)` at least 50 us, or park), `set_limit` (1..=1000, not above the parent's
+  effective ceiling) and `RunQueue` (ready list plus one parked list; `pick` parks, `release` returns 64 at a time).
+  12 tests, among them INV-0264-1 and -4 over 2 s on the model and INV-0264-2.
+- **Kernel** `cpu.rs` (job tree adapter, `JobRef`, the period with a test setter, `usage`), `job.rs` (`cpu` leaf lock;
+  `set_limits` takes `cpu`, all or nothing with the others), `sched.rs` (charge at each switch, `pick`, slice armed also for a
+  lone limited thread, `period_end` deadline, `arm_release`), `timer.rs` (two reserved slots), `syscall.rs` (usage
+  record of 88 or 120 bytes; test call `SET_CPU_PERIOD` 0x7018).
+- **ABI**: `JobUsage.cpu: CpuUsage {limit, used_ns, period_used, parked}`, `USAGE_SIZE_CPU` = 120; the decoder reads an
+  88-byte record with the CPU words zero. `zoraya_rt::job_get_usage` asks for 120.
+- **Tests**: `t_cpu` (new, run by the test kernel as `cpu_ceiling_from_a_process`): INV-0264-1, -4, -2 and the wake-up
+  latency at 20, 10 and 100 ms; `t_quota` covers `cpu` in `job_set_limits` (range, parent, all or nothing).
+
+### Decisions where the ADRs are silent (proposed ADR-0285; recommendations)
+
+One parked list, not one per job; parking only in `pick`; a 50 us slice floor; at most 16 parks per pick; `cpu` 0 refused;
+every ancestor charged; IRQ time charged to the interrupted thread; a killed job's parked threads end at the next
+boundary; a 120-byte usage record; two reserved deadline slots; the period settable only in the test kernel. Numbers
+0285..0289 were taken for Q4, 0285 used.
+
+### Invariants delta
+
+INV-0264-1, -2, -4 checked (`cargo test -p zoraya-cpu`, `make test-qemu`). INV-0264-3 stays "not yet applicable" until Q6a:
+the GUI test needs `room new --cpu` and untrusted rooms (refused); its kernel half is in `t_cpu`. New INV-0285-1. The gate
+file gets `cpu-ceiling test-qemu Q4`; `cpu-spinners` stays `pending`, owner Q6a. Open-question notes in ADR-0264 and ADR-0270.
+
+### Measurements (HVF, default guest, test kernel, single runs)
+
+See `docs/design.md`, "Quotas", Q4. 8 spinners at 25% for 2 s: 502 ms of 500 ms; three rooms at 25% under 50%: 1006 ms of
+1000 ms; longest masked interval over the tests 314..1051 us (limit 2 ms), at most 69 units. Wake-up lateness (median / p99 /
+max): 10 ms period 0.75 / 5.6 / 5.7 ms; 20 ms 0.68 / 9.3 / 9.6 ms; 100 ms 0.68 / 49.7 / 50.1 ms. TCG not run locally.
+
+### Scheduler touch points (for the reviewer)
+
+Lock order `SCHED` then the timer queue then a job's `cpu` lock (leaf). `schedule()`: charge walk (<= 32 nodes) and `pick`
+(<= 16 parks, each a walk) with all exceptions masked; `period_end` (timer interrupt, SCHED held): <= 64 moves then an
+immediate re-arm; `arm_release` under SCHED; `JobRef` holds a raw pointer with one SAFETY comment (the thread, and so its
+process and the job chain, is held for the walk). `job.set_limits` reads and writes the `cpu` lock without SCHED: one CPU, no
+kernel preemption (SMP would need SCHED there). `timer::arm` leaves 2 slots instead of 1.
+
+### Not done
+
+- The GUI test of INV-0264-3 (Q6a dependency, above): not written, not run.
+- TCG and the `FULL=1` runs: CI's.
+- No measurement of the per-switch walk on `portbench`/`chanbench`.
+
+### Handoff
+
+Branch `work/q4` on `work/n2`, unmerged. Review: `crates/zoraya-cpu/src/lib.rs`, `kernel/src/sched.rs`, `kernel/src/cpu.rs`,
+`kernel/src/job.rs` (`set_limits`), `kernel/src/timer.rs`, `user/src/bin/t_cpu.rs`, ADR-0285. Commands: `cargo test -p zoraya-cpu`;
+`make test-qemu-one` (prints the `t_cpu:` lines); `make test-changed`.
+
+### Tests run (Q4)
+
+`make check` before each commit. `make test-changed` (every step, HVF): host tests (51 binaries), test-qemu, test-libposix,
+test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui and test-net passed; `test-boot` failed once at
+`boot-auto-smp4-2g` ("timed out waiting for bytes dropped]", the known input flake) and passed on `make test-boot` alone. The
+first `test-changed` attempt stopped at the build because this worktree had no ports archives; they were copied from another
+worktree's cache (no download).
+
+### After the review (`docs/tasks/TASK-26-review-q4.md`)
+
+Fixed W1 to W6 and notes 7 to 11 (dispositions in the review file). A spent job's threads never run past the cap of parks per
+pick (idle calls `schedule` again); `JobRef::of` is `unsafe`; the time allowance is scaled only in its EL0 part and capped at
+2x the ceiling; the ceiling is checked by counts next to an uncapped spinner as well as by `used_ns`; ADR-0285 names its two
+deviations from ADR-0264; new `t_cpu` cases: 40 spinners, a job about 30 levels deep, a kill of a parked room.
+New finding for the architect: no sharing among rooms under one parent (one of three used 0 ms in 2 s).
+Open: the site of the largest masked interval; Q6a's check of `LIMIT` inside rooms.
+
+### The units bound on CI (second fix)
+
+Run 43085222352 (`candidate/work-q4-b`) failed `t_cpu`'s units bound in five jobs: 110 units (the 30-level job, on
+`auto-smp4-2g` and `tcg-smp4-gicv2`; rooms next to a woken process, `tcg-smp4-gicv3`), 116 (a room of 40 at 25%,
+`tcg-el2`), 94 (`net-tcg`), against 80, every unit from `frames::free`. The values are two exits' tails (2 x 55, 2 x 58,
+55 + 39; one tail measures 55 to 71). Cause: `steps::pause` called the preemption point after its window, and a thread
+switched away there resumed inside the masked interval of the threads that ran meanwhile; switched away at the flush
+before its tail, it then ran the tail (which cannot yield) in the interval of the exit that switched to it. Only an
+exit as long as the slice meets that timing, hence slow hosts only. Fix: `steps::step_point` opens a second window
+when the scheduler ran (`sched::preempt_point` says so). The kernel test
+`a_switch_at_a_step_point_starts_a_new_interval` forces the timing with a stand-in switch; mutant
+`K-step-point-no-window-after-switch` (`tools/mutants/kernel-objects.toml`). `frames::free` and `free_contig` count at
+the caller's line, so `steps::diagnose_units` names the freeing path. The units bound stays 64 + 16 (an exit's tail:
+the space's frames, at most 64 inline, and one 16-frame kernel stack).

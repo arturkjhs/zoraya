@@ -54,6 +54,7 @@ pub fn object() {
 /// that no interval between two step points held more than a step of work,
 /// on any host (INV-0270-1's machine-independent half).
 #[inline(always)]
+#[track_caller]
 pub fn count(units: usize) {
     #[cfg(feature = "qemu-test")]
     masked::count(units);
@@ -85,15 +86,44 @@ pub fn pause() {
     // SAFETY: only a user process's system call gets here, which runs after
     // the vectors and the interrupt controller are set up, and the caller
     // holds no spinlock (its contract, checked above in the test kernel).
-    // Interrupts are masked again below, before anything that expects them
-    // masked.
+    unsafe { step_point(sched::preempt_point) };
+}
+
+/// A window for interrupts, then `preempt` (the scheduler's preemption
+/// point, which says whether it switched away), and a second window if it
+/// did. The scheduler switches with IRQ masked, so a thread that resumes here
+/// resumes inside the interval of the threads that ran meanwhile: without
+/// the second window its next step (the tail of an exit, which cannot yield)
+/// was added to theirs, two exits' tails in one interval, 110 to 116 units
+/// against 80 on slow hosts (`t_cpu`, CI; INV-0270-1).
+///
+/// # Safety
+///
+/// As for [`crate::arch::unmask_interrupts`]: the vectors and the interrupt
+/// controller are set up and the caller holds no spinlock.
+pub(crate) unsafe fn step_point(preempt: impl FnOnce() -> bool) {
+    // SAFETY: the caller's contract.
+    unsafe { window() };
+    if preempt() {
+        // SAFETY: as above; the switch back holds no lock of this thread.
+        unsafe { window() };
+    }
+}
+
+/// Lets a pending interrupt run, and starts a new masked interval.
+///
+/// # Safety
+///
+/// As for [`step_point`].
+unsafe fn window() {
+    // SAFETY: the caller's contract. Interrupts are masked again below,
+    // before anything that expects them masked.
     unsafe { crate::arch::unmask_interrupts() };
     // SAFETY: `isb` only synchronises the instruction stream, so that an
     // interrupt that is pending is taken here and not later.
     unsafe { core::arch::asm!("isb", options(nomem, nostack, preserves_flags)) };
     crate::arch::mask_interrupts();
     mask_began();
-    sched::preempt_point();
 }
 
 /// The end of a step of a call that builds something: as [`pause`], and fails
@@ -147,14 +177,53 @@ mod masked {
     static UNITS: AtomicU64 = AtomicU64::new(0);
     static MAX_UNITS: AtomicU64 = AtomicU64::new(0);
 
+    /// Where the units of the interval now running came from (the line of
+    /// the call of `steps::count`), and the same for the interval with the
+    /// most units so far: the test kernel's diagnosis when a bound fails.
+    const SLOTS: usize = 12;
+    static CUR: [[AtomicU64; 2]; SLOTS] = [const { [AtomicU64::new(0), AtomicU64::new(0)] }; SLOTS];
+    static BEST: [[AtomicU64; 2]; SLOTS] =
+        [const { [AtomicU64::new(0), AtomicU64::new(0)] }; SLOTS];
+
+    #[track_caller]
     pub fn count(units: usize) {
         UNITS.fetch_add(units as u64, Ordering::Relaxed);
+        let at = core::panic::Location::caller();
+        let key = ((at.file().len() as u64) << 32) | u64::from(at.line());
+        for slot in &CUR {
+            let have = slot[0].load(Ordering::Relaxed);
+            if have == key || have == 0 {
+                slot[0].store(key, Ordering::Relaxed);
+                slot[1].fetch_add(units as u64, Ordering::Relaxed);
+                break;
+            }
+        }
+    }
+
+    /// Prints where the units of the busiest interval came from.
+    pub fn diagnose() {
+        crate::println!("steps: the busiest interval, units by call site (file length, line):");
+        for slot in &BEST {
+            let key = slot[0].load(Ordering::Relaxed);
+            if key != 0 {
+                crate::println!(
+                    "steps:   {}:{} {}",
+                    key >> 32,
+                    key & 0xffff_ffff,
+                    slot[1].load(Ordering::Relaxed)
+                );
+            }
+        }
     }
 
     pub fn begin() {
         if SINCE.load(Ordering::Relaxed) == 0 {
             SINCE.store(ticks(), Ordering::Relaxed);
             UNITS.store(0, Ordering::Relaxed);
+            for slot in &CUR {
+                slot[0].store(0, Ordering::Relaxed);
+                slot[1].store(0, Ordering::Relaxed);
+            }
         }
     }
 
@@ -162,7 +231,13 @@ mod masked {
         let since = SINCE.swap(0, Ordering::Relaxed);
         if since != 0 {
             MAX_TICKS.fetch_max(ticks().saturating_sub(since), Ordering::Relaxed);
-            MAX_UNITS.fetch_max(UNITS.swap(0, Ordering::Relaxed), Ordering::Relaxed);
+            let units = UNITS.swap(0, Ordering::Relaxed);
+            if units > MAX_UNITS.fetch_max(units, Ordering::Relaxed) {
+                for (best, cur) in BEST.iter().zip(&CUR) {
+                    best[0].store(cur[0].load(Ordering::Relaxed), Ordering::Relaxed);
+                    best[1].store(cur[1].load(Ordering::Relaxed), Ordering::Relaxed);
+                }
+            }
         }
     }
 
@@ -202,6 +277,12 @@ pub fn mask_began() {
 pub fn mask_ended() {
     #[cfg(feature = "qemu-test")]
     masked::end();
+}
+
+/// Prints where the units of the busiest masked interval came from.
+#[cfg(feature = "qemu-test")]
+pub fn diagnose_units() {
+    masked::diagnose();
 }
 
 /// The longest time with IRQ masked since the last reset, in nanoseconds.

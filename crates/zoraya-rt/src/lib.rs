@@ -240,7 +240,7 @@ pub fn job_set_limits(job: Handle, limits: &zoraya_abi::quota::JobLimits) -> Res
 
 /// A job's limits and use; `clear` also clears its `OVER_QUOTA` signal.
 pub fn job_get_usage(job: Handle, clear: bool) -> Result<zoraya_abi::quota::JobUsage, Status> {
-    let mut out = [0u8; zoraya_abi::quota::USAGE_SIZE];
+    let mut out = [0u8; zoraya_abi::quota::USAGE_SIZE_CPU];
     let flags = if clear {
         zoraya_abi::UsageFlags::CLEAR
     } else {

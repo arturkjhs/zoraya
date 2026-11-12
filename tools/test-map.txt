@@ -30,6 +30,7 @@ crates/zoraya-pagetable/      test-qemu
 crates/zoraya-heap/           test-qemu
 crates/zoraya-handle/         test-qemu
 crates/zoraya-charge/         test-qemu
+crates/zoraya-cpu/            test-qemu
 crates/zoraya-events/         test-qemu
 crates/zoraya-channel/        test-qemu
 crates/zoraya-time/           test-qemu
@@ -72,6 +73,7 @@ user/src/bin/edit.rs          test-gui
 user/src/bin/settings.rs      test-gui
 user/src/bin/t_gui.rs         test-qemu
 user/src/bin/t_bound.rs       test-qemu
+user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu test-net
