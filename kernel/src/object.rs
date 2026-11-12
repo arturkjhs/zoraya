@@ -181,7 +181,7 @@ pub fn end_subscriptions(entry: &Entry) {
 /// source's, about 0.3 ms for a port of 1024 (the review's host figure, about 20 ms
 /// for 64; `t_bound`'s `exit_with_full_ports` checks it). 16 makes a full port
 /// 65 units, a whole step by itself (`steps::before` caps it at `STEP`).
-const SUBSCRIPTIONS_PER_UNIT: usize = 16;
+pub(crate) const SUBSCRIPTIONS_PER_UNIT: usize = 16;
 
 /// The work of closing a handle in units of a step (`steps::before`), the
 /// handle's own unit included (the caller counts it with `steps::count(1)`).

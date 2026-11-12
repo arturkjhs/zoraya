@@ -638,6 +638,25 @@ fn full_ports() -> i32 {
     0
 }
 
+/// Review round 2, error 1: 16 jobs whose sources have 1024 subscribers each
+/// (and their ports), all moved in one `channel_write`. Ending the old
+/// handles' subscriptions is paced like a close (`object::weight`), with no
+/// lock held; unpaced, the write was 1024 units between two step points.
+fn moved_jobs() -> i32 {
+    let (a, _b) = channel_create().expect("channel");
+    let mut entries = alloc::vec::Vec::new();
+    for i in 0..16 {
+        let (_, job) = full_pair(1024, i % 2 == 0);
+        entries.push(ChannelEntry {
+            handle: job,
+            rights: rights_of(job),
+            transfer: Transfer::Move,
+        });
+    }
+    channel_write(a, b"", &entries).expect("write");
+    0
+}
+
 /// Review error 3 (TASK-26 fix): a job's source with a subscriber on each of
 /// 32 ports, each port holding 1024 entries with the job's at the front of
 /// its sorted list (the worst place to remove from), and the other 1023
@@ -682,6 +701,7 @@ fn many_subscriptions_sites() {
     for (label, role) in [
         ("free_source", &b"wide-source"[..]),
         ("exit with 16 full ports", &b"full-ports"[..]),
+        ("16 moved jobs of 1024 subscribers", &b"moved-jobs"[..]),
     ] {
         let began = clock_monotonic();
         let (p, ns) = measure(|| {
@@ -791,6 +811,7 @@ fn main() -> i32 {
         Some(b"snapshot-loop") => churn(true),
         Some(b"wide-source") => wide_source(),
         Some(b"full-ports") => full_ports(),
+        Some(b"moved-jobs") => moved_jobs(),
         Some(b"inner") => inner(),
         _ => outer(),
     }

@@ -399,6 +399,7 @@ impl Handlers for Calls<'_> {
             if listed.transfer == Transfer::Move {
                 let entry = self.process.handles.lock().remove(listed.handle);
                 if let Some(entry) = entry {
+                    steps::before(object::weight(&entry));
                     object::end_subscriptions(&entry);
                     self.end_hold_if_unwritable(&entry.object);
                 }
@@ -814,14 +815,34 @@ impl Handlers for Calls<'_> {
         paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
         let mut message = channel::message(body, Vec::new(), paid)?;
         pair.prepare(side, message.bytes.len())?;
+        // The moved entries' old forms, whose subscriptions end after the
+        // handle-table lock is dropped, a pause at a time (review round 2,
+        // error 1): the old owner id is dead, so nothing can need them.
+        let mut moved_out = Vec::new();
+        moved_out
+            .try_reserve_exact(entries)
+            .map_err(|_| Status::NoMemory)?;
+        let mut failed = None;
         for entry in listed.clone() {
             let object = match entry.transfer {
-                Transfer::Duplicate => handles.check(entry.handle, Rights::NONE)?.object.clone(),
-                Transfer::Move => {
-                    let taken = handles.remove(entry.handle).ok_or(Status::BadHandle)?;
-                    object::end_subscriptions(&taken);
-                    taken.object
-                }
+                Transfer::Duplicate => match handles.check(entry.handle, Rights::NONE) {
+                    Ok(held) => held.object.clone(),
+                    Err(status) => {
+                        failed = Some(status);
+                        break;
+                    }
+                },
+                Transfer::Move => match handles.remove(entry.handle) {
+                    Some(taken) => {
+                        let object = taken.object.clone();
+                        moved_out.push(taken);
+                        object
+                    }
+                    None => {
+                        failed = Some(Status::BadHandle);
+                        break;
+                    }
+                },
             };
             carried.push(zoraya_handle::Entry {
                 object,
@@ -830,6 +851,13 @@ impl Handlers for Calls<'_> {
             });
         }
         drop(handles);
+        for taken in &moved_out {
+            steps::before(object::weight(taken));
+            object::end_subscriptions(taken);
+        }
+        if let Some(status) = failed {
+            return Err(status);
+        }
         // Before the write: the reader holds the handles only after it.
         for (entry, moved) in carried.iter().zip(listed) {
             if moved.transfer == Transfer::Move {
@@ -1181,6 +1209,7 @@ impl Handlers for Calls<'_> {
         for moved in request.moves() {
             let entry = self.process.handles.lock().remove(moved.handle);
             if let Some(entry) = entry {
+                steps::before(object::weight(&entry));
                 object::end_subscriptions(&entry);
                 self.end_hold_if_unwritable(&entry.object);
             }
@@ -1370,6 +1399,9 @@ pub mod test_calls {
     pub const SET_CPU_PERIOD: u64 = 0x7018;
     /// Prints where the units of the busiest masked interval came from.
     pub const DIAGNOSE_UNITS: u64 = 0x7019;
+    /// Makes every step point switch away (x0 = 1) or not (0): the walks of
+    /// different processes then interleave at each one (`t_suspend`).
+    pub const FORCE_SWITCH: u64 = 0x701a;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1402,6 +1434,10 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         // would storm; 0 restores the default.
         test_calls::SET_CPU_PERIOD if a0 != 0 && a0 < 1_000_000 => {
             Some(Err(Status::InvalidArgument))
+        }
+        test_calls::FORCE_SWITCH => {
+            crate::steps::set_always_switch(a0 != 0);
+            Some(Ok(0))
         }
         test_calls::DIAGNOSE_UNITS => {
             crate::steps::diagnose_units();

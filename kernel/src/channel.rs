@@ -176,7 +176,11 @@ pub fn close(pair: &Pair, end: usize) {
                     let mut more = close_one(other, *other_end);
                     work.take_from(&mut more);
                 }
-                Object::Port(port) => port.close(),
+                Object::Port(port) => {
+                    // As `object::close`: the port's list leaves with it.
+                    crate::steps::count(port.subscriptions() / object::SUBSCRIPTIONS_PER_UNIT);
+                    port.close();
+                }
                 _ => {}
             }
         }
