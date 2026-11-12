@@ -605,6 +605,37 @@ fn subscription_sites() {
     }
 }
 
+/// A child for `many_subscriptions_sites`: a port subscribed to a job's source
+/// `count` times, in the order that makes the last handle the one that
+/// matters (`port_first`: the port is made first, so the job's handle is
+/// closed first and frees a source with `count` subscribers).
+fn full_pair(count: u64, port_first: bool) -> (Handle, Handle) {
+    let (port, job) = if port_first {
+        let port = port_create().expect("port");
+        (port, job_create(JOB, JobFlags::NONE).expect("job"))
+    } else {
+        let job = job_create(JOB, JobFlags::NONE).expect("job");
+        (port_create().expect("port"), job)
+    };
+    for key in 0..count {
+        port_subscribe(port, job, job_signals::SUSPENDED, key, Mode::Edge).expect("subscribe");
+    }
+    (port, job)
+}
+
+/// Review error 4 (TASK-26 fix): a process that holds 64 ports of 1024
+/// subscriptions, each to a job of its own (so each job's source has 1024
+/// subscribers), half of them with the port closed first and half with the
+/// job. Its exit closes 128 handles, and the bound of 1024 per port and per
+/// source does not bound those together: each handle's weight scales with its
+/// subscriptions (`object::weight`), so the exit pauses between them.
+fn full_ports() -> i32 {
+    for i in 0..64 {
+        full_pair(1024, i % 2 == 0);
+    }
+    0
+}
+
 /// Review error 3 (TASK-26 fix): a job's source with a subscriber on each of
 /// 128 ports, each port holding 1024 entries with the job's at the front of
 /// its sorted list (the worst place to remove from), and the other 1023
@@ -646,17 +677,26 @@ fn wide_source() -> i32 {
 /// source, and what an exit or a `free_source` does is their product.
 fn many_subscriptions_sites() {
     let room = job_create(JOB, JobFlags::NONE).expect("job");
-    let label = "free_source";
-    let (p, ns) = measure(|| {
-        let p = child(room, b"wide-source").expect("spawn");
-        let record = wait_exit(p);
-        assert_eq!(record.code, 0, "{label}: the child");
-        p
-    });
-    handle_close(p).expect("close");
-    println!("t_bound: {label}: {} us masked at most", ns / 1000);
-    let limit = bound_ns();
-    assert!(ns <= limit, "{label}: {ns} ns masked, limit {limit}");
+    for (label, role) in [
+        ("free_source", &b"wide-source"[..]),
+        ("exit with 64 full ports", &b"full-ports"[..]),
+    ] {
+        let began = clock_monotonic();
+        let (p, ns) = measure(|| {
+            let p = child(room, role).expect("spawn");
+            let record = wait_exit(p);
+            assert_eq!(record.code, 0, "{label}: the child");
+            p
+        });
+        handle_close(p).expect("close");
+        println!(
+            "t_bound: {label}: {} us masked at most, run took {} ms",
+            ns / 1000,
+            (clock_monotonic() - began) / 1_000_000
+        );
+        let limit = bound_ns();
+        assert!(ns <= limit, "{label}: {ns} ns masked, limit {limit}");
+    }
     handle_close(room).expect("room");
 }
 
@@ -748,6 +788,7 @@ fn main() -> i32 {
         Some(b"create-loop") => churn(false),
         Some(b"snapshot-loop") => churn(true),
         Some(b"wide-source") => wide_source(),
+        Some(b"full-ports") => full_ports(),
         Some(b"inner") => inner(),
         _ => outer(),
     }

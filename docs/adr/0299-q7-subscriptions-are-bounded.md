@@ -56,6 +56,10 @@ counted in units (the `Paid` drops take the charge lock and walk at most 32 ance
 ## Consequences
 - **Positive.** `port_subscribe`, `set` on a source, `port_close` and `free_source` do a fixed amount of work.
 - **Negative.** A new refusal (`LimitReached`) that no program meets today.
+- **Exits.** The bounds are per port and per source; an exit closes up to 64 handles per interval (ADR-0270 point 2), so
+  64 ports of 1024 subscriptions were about 20 ms masked on the host (review of the fixes, error 4). `object::weight` now counts
+  a port's subscriptions, and those of the source of any other object, one unit per 16 (a full port is a whole step), so
+  the exit pauses between them; `t_bound` `full-ports` closes 64 ports and 64 jobs, each with 1024 subscriptions.
 - **Follow-up.** Count the 1024 as units if a measurement under HVF shows the close near 2 ms.
 
 ## Invariants

@@ -34,6 +34,11 @@ pub fn free_source(source: SourceId) {
     EVENTS.lock().free_source(source);
 }
 
+/// Subscriptions to `source` (the work of ending its handle, `object::weight`).
+pub fn source_subscriptions(source: SourceId) -> usize {
+    EVENTS.lock().source_subscriptions(source)
+}
+
 pub fn set_signals(source: SourceId, bits: u32) {
     EVENTS.lock().set(source, bits, &mut sched::wake);
 }
@@ -103,6 +108,11 @@ impl Port {
             .lock()
             .subscribe_paid(self.id, source, mask, key, mode, owner, paid)
             .map_err(status)
+    }
+
+    /// Subscriptions on the port, which closing it ends.
+    pub fn subscriptions(&self) -> usize {
+        EVENTS.lock().port_subscriptions(self.id)
     }
 
     pub fn unsubscribe(&self, key: u64) -> Result<(), Status> {
