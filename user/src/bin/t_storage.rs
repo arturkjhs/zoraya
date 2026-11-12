@@ -17,8 +17,8 @@ use zoraya_protocol::{ErrorReply, Flags, Path, decode, encode};
 use zoraya_user::files::{ALL, File, read_all};
 use zoraya_user::stack::{Stack, find_disk, start_stack};
 use zoraya_user::{
-    println, channel_create, channel_read, channel_write, clock_monotonic, handle_close, job_kill,
-    port_create, port_subscribe, port_wait, wait_exit,
+    channel_create, channel_read, channel_write, clock_monotonic, handle_close, job_kill,
+    port_create, port_subscribe, port_wait, println, wait_exit,
 };
 
 extern crate alloc;
@@ -296,7 +296,10 @@ fn account_flood(root: &File) {
     held.clear();
     let deadline = clock_monotonic() + 10_000_000_000;
     while room.clone_as(ALL).is_err() {
-        assert!(clock_monotonic() < deadline, "the closes give the account back");
+        assert!(
+            clock_monotonic() < deadline,
+            "the closes give the account back"
+        );
     }
 }
 

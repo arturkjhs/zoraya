@@ -15,15 +15,15 @@
 1  fork-bomb            test-qemu     Q2      t_quota: a fork bomb (two copies each, the shape of :(){ :|:& };:) in a limited job stops at its process limit; a command outside starts and ends within 2 s (INV-0263-1)
 1  masked-time          test-qemu     Q2      t_bound: INV-0270-1 and INV-0270-2, the longest masked time of every site against its one-step case, and job_kill between steps
 1  cpu-ceiling          test-qemu     Q4      t_cpu: 8 spinners at 25% use a quarter; three rooms under 50% use at most half; a parked spinner does not run; an uncapped process wakes within INV-0264-3's bound next to two capped rooms that spin and burst (INV-0264-1, -2, -4)
-1  cpu-spinners         pending       Q6a     two untrusted rooms spinning and bursting; a home terminal echoes within INV-0264-3's bound (the GUI half, which needs rooms with --cpu)
-1  disk-filler          pending       Q5      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
-1  service-floods       pending       Q3      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)
-1  keeper               pending       Q6a     INV-0269-1 to INV-0269-3: t_rooms covers the keeper's channels and a keeper restarted with `Keep` (stood in for by the test); not run in QEMU yet: init's own restart of the keeper, a launcher's reconnect, and the GUI form of INV-0269-1 (Q6b)
-1  keeper-restart      test-keeper  Q7      Q6a: init restarts a killed keeper in QEMU and the rooms it kept stay (INV-0269-1 to INV-0269-3)
-1  keeper-reconnect     test-keeper  Q7      Q6a: a launcher reconnects to the restarted keeper over the reconnect channel in QEMU
-1  prompt-rebind        test-keeper  Q7      Q6a: zosh's prompt rebinds to the restarted keeper in QEMU
+1  cpu-spinners         test-gui      Q7      two untrusted rooms spinning and bursting; a home terminal echoes within INV-0264-3's bound (the GUI half, which needs rooms with --cpu)
+1  disk-filler          test-files    Q7      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
+1  service-floods       test-qemu     Q7      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)
+1  keeper               test-qemu     Q7      INV-0269-1 to INV-0269-3: t_rooms covers the keeper's channels and a keeper restarted with `Keep` (stood in for by the test); not run in QEMU yet: init's own restart of the keeper, a launcher's reconnect, and the GUI form of INV-0269-1 (Q6b)
+1  keeper-restart       test-keeper   Q7      Q6a: init restarts a killed keeper in QEMU and the rooms it kept stay (INV-0269-1 to INV-0269-3)
+1  keeper-reconnect     test-keeper   Q7      Q6a: a launcher reconnects to the restarted keeper over the reconnect channel in QEMU
+1  prompt-rebind        test-keeper   Q7      Q6a: zosh's prompt rebinds to the restarted keeper in QEMU
 1  many-rooms           test-qemu     Q6a     t_rooms: four untrusted rooms with a fork bomb and a hog each; home starts 16 processes and maps 16 MiB (INV-0261-8)
-1  hostile-programs     pending       Q7      TASK-21's hostile cases from inside an untrusted room
+1  hostile-programs     test-files    Q7      TASK-21's hostile cases from inside an untrusted room
 1  fuzzing              test-fuzz     Q7      a fuzz target for each decoder an untrusted program reaches that has none (spawn's request, the keeper's, compositor, file service, broker and terminal messages; 10 minutes each in CI)
-2  net-account-flood    pending       Q7      connecting without end from the room stops at --conns while home connects (INV-0262-1, INV-0262-4)
-2  net-fuzz             pending       Q7      the fuzz target of the network protocol
+2  net-account-flood    test-net      Q7      connecting without end from the room stops at --conns while home connects (INV-0262-1, INV-0262-4)
+2  net-fuzz             test-fuzz-net Q7      the fuzz target of the network protocol

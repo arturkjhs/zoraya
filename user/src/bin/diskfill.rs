@@ -62,7 +62,10 @@ fn main() -> i32 {
             }
             let t = clock_monotonic();
             let bytes = [done as u8; 4096];
-            if let Err(s) = f.write((done % 16) * 4096, 0, &bytes).and_then(|_| f.sync()) {
+            if let Err(s) = f
+                .write((done % 16) * 4096, 0, &bytes)
+                .and_then(|_| f.sync())
+            {
                 println!("diskfill: sync {done}: status {s}");
                 return 1;
             }
@@ -70,7 +73,11 @@ fn main() -> i32 {
             done += 1;
         }
         // INV-0265-5: each sync within 5 s plus one commit's time.
-        let late = if syncs.is_some() && slowest > 5_000 { " (over 5 s)" } else { "" };
+        let late = if syncs.is_some() && slowest > 5_000 {
+            " (over 5 s)"
+        } else {
+            ""
+        };
         println!("diskfill: {done} syncs, slowest {slowest} ms{late}");
         return i32::from(!late.is_empty());
     }
@@ -85,7 +92,10 @@ fn main() -> i32 {
         ) {
             Ok(f) => f,
             Err(s) if refused(s) => {
-                println!("diskfill: stopped after {} KiB: create refused ({s})", written >> 10);
+                println!(
+                    "diskfill: stopped after {} KiB: create refused ({s})",
+                    written >> 10
+                );
                 return 42;
             }
             Err(s) => {
@@ -97,7 +107,10 @@ fn main() -> i32 {
             match f.write(chunk * BLOCK as u64, 0, &block) {
                 Ok(_) => written += BLOCK as u64,
                 Err(s) if refused(s) => {
-                    println!("diskfill: stopped after {} KiB: refused ({s})", written >> 10);
+                    println!(
+                        "diskfill: stopped after {} KiB: refused ({s})",
+                        written >> 10
+                    );
                     return 42;
                 }
                 Err(s) => {

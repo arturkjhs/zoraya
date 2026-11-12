@@ -28,7 +28,7 @@ done
 echo "$entries" | awk '$1 != "1" && $1 != "2" { exit 1 }' || bad "a line of $gate has no stage 1 or 2"
 
 # The steps of `make test` and of the workflow.
-test_steps=$(sed -n 's/^TEST_STEPS := //p;s/^TEST_STEPS += //p' Makefile)
+test_steps=$(sed -n 's/^TEST_STEPS := //p;s/^TEST_STEPS += //p' Makefile | tr '\n' ' ')
 # The workflow's matrix is the plan's: the full list is tools/ci-tests.txt.
 workflow=.github/workflows/test.yml
 jobs_list=tools/ci-tests.txt

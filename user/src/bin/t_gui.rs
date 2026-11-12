@@ -508,9 +508,11 @@ fn surface_flood(gui: &Gui) {
     let mut agent: Vec<Client> = (0..ROOM_SURFACES + 1)
         .map(|_| Client::in_room(gui, "agent", true))
         .collect();
-    let results: Vec<u32> = agent.iter_mut().map(|c| c.create(8, 8, 0x00aa_aaaa)).collect();
-    let (admitted, refused): (Vec<u32>, Vec<u32>) =
-        results.iter().partition(|s| **s == status::OK);
+    let results: Vec<u32> = agent
+        .iter_mut()
+        .map(|c| c.create(8, 8, 0x00aa_aaaa))
+        .collect();
+    let (admitted, refused): (Vec<u32>, Vec<u32>) = results.iter().partition(|s| **s == status::OK);
     println!(
         "t_gui: untrusted room agent: {} surfaces admitted, {} refused (status {:?}); another room and home admitted",
         admitted.len(),
@@ -520,19 +522,34 @@ fn surface_flood(gui: &Gui) {
     assert_eq!((admitted.len(), refused.len()), (ROOM_SURFACES, 1));
     assert!(refused.iter().all(|s| *s == refused[0]), "one refusal");
     // The refused client is done (the compositor serves 8 clients at once).
-    let refused_at = results.iter().position(|s| *s != status::OK).expect("one refused");
+    let refused_at = results
+        .iter()
+        .position(|s| *s != status::OK)
+        .expect("one refused");
     let _ = handle_close(agent.remove(refused_at).end);
     settle(gui);
     // Another untrusted room has its own account, and home is not asked.
     let mut other = Client::in_room(gui, "other", true);
-    assert_eq!(other.create(8, 8, 0x0055_5555), status::OK, "the other room's own");
+    assert_eq!(
+        other.create(8, 8, 0x0055_5555),
+        status::OK,
+        "the other room's own"
+    );
     let mut home = Client::connect(gui);
-    assert_eq!(home.create(8, 8, 0x0011_1111), status::OK, "home is not refused");
+    assert_eq!(
+        home.create(8, 8, 0x0011_1111),
+        status::OK,
+        "home is not refused"
+    );
     // Surfaces given back are given again.
     let _ = handle_close(agent.remove(0).end);
     settle(gui);
     let mut again = Client::in_room(gui, "agent", true);
-    assert_eq!(again.create(8, 8, 0x00aa_aaaa), status::OK, "a closed surface frees room");
+    assert_eq!(
+        again.create(8, 8, 0x00aa_aaaa),
+        status::OK,
+        "a closed surface frees room"
+    );
 }
 
 /// INV-0097-2: a killed GPU or input driver is restarted alone, and the

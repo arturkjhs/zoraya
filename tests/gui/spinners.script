@@ -4,7 +4,9 @@
 #
 # 1. INV-0269-1: a terminal launched from the dock in room `project` and the
 #    first terminal's shell, which enters the same room, run in ONE job: the
-#    room's `--procs 5` limit counts the processes of both.
+#    room's `--mem 16M` counts the terminal from the dock (about 5.4 MiB) against
+#    the memory a hog started from the first terminal can take, which stops at
+#    9 MiB and not at 15 (a job of its own would give it almost all 16).
 # 2. Two rooms with `--cpu 25%` run two spinners each (the rooms' own programs,
 #    from the system image); the key latency of a terminal in `home` is
 #    measured by the runner's `latency` step and bounded by 300 ms over one
@@ -17,67 +19,66 @@ type mkdir project\r
 screen ~> _
 type mkdir other\r
 screen ~> _
-type room new project --cpu 25% --procs 5 +w ~/project\r
-screen project --colour 1 --cpu 25% --procs 5 +w ~/project
+type room new project --mem 16M --procs 6 +w ~/project\r
+screen project --colour 1 --mem 16M --procs 6 +w ~/project
 screen ~> _
 # The dock's chip enters the room; System+Enter launches a terminal in it.
 clickc 2f7f8f 300 719 600 7
 chord meta ret
 origin 105 138
 screen Type help to begin, or help tour.
-screen project ~/project> _
+prefix project ~/project> _
 click 400 120
-type sleep 60 &\r
-screen [1] sleep 60
-screen project ~/project> _
-type sleep 60 &\r
-screen [2] sleep 60
-screen project ~/project> _
-# The first terminal's shell enters the same room: its processes go to the
-# job the dock's terminal runs in, so the room holds 3 (the dock's shell and
-# two sleeps) and two more fit, the third is refused at the one limit.
+type memhog\r
+prefix memhog: refused after 9
+prefix project ~/project> _
+# The first terminal's shell enters the same room: a hog started there is
+# refused at the same point, since the room has one job.
 click 400 80
 region 130 76 100 4 f7f7f8
 origin 73 106
 type room project\r
-screen project ~/project> _
-type sleep 60 &\r
-screen [1] sleep 60
-screen project ~/project> _
-type sleep 60 &\r
-screen [2] sleep 60
-screen project ~/project> _
-type sleep 60 &\r
-prefix hint: room project is at its process limit
-screen project ~/project> _
+prefix project ~/project> _
+type memhog\r
+prefix memhog: refused after 9
+prefix project ~/project> _
 shot one-job
-type top\r
-prefix project
-screen project ~/project> _
 type room --leave\r
 type cd /\r
-screen /> _
+prefix /> _
 # Two rooms at 25% with two spinners each, then the latency of a keystroke in
 # home.
+chord ctrl l
+top /> _
 type room new spin1 --cpu 25% --procs 6 +w ~/other\r
-screen spin1 --colour
-screen /> _
+prefix spin1 --colour
+prefix /> _
 type room new spin2 --cpu 25% --procs 6 +w ~/other\r
-screen spin2 --colour
-screen /> _
+prefix spin2 --colour
+prefix /> _
 type room spin1\r
 type spin &\r
-screen [1] spin
+prefix [1] spin
 type spin &\r
-screen [2] spin
-type room --leave\r
-type room spin2\r
-type spin &\r
-screen [1] spin
-type spin &\r
-screen [2] spin
+prefix [2] spin
+type jobs\r
+prefix [1]  running   spin
+prefix [2]  running   spin
 type room --leave\r
 type cd /\r
+prefix /> _
+chord ctrl l
+top /> _
+type room spin2\r
+type spin &\r
+prefix [3] spin
+type spin &\r
+prefix [4] spin
+type room --leave\r
+type cd /\r
+prefix /> _
+chord ctrl l
+top /> _
 pause 1500
 latency 10 300
 shot spinners
