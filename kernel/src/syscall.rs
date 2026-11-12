@@ -935,19 +935,27 @@ impl Handlers for Calls<'_> {
     }
 
     /// ADR-0295: the device of one transport of a page, for a holder of the
-    /// page with `MAP`. The new handle has the rights of a device handle but
-    /// `MAP` (a transport device is never mapped), so it passes where the
-    /// page's would, to the one driver whose transport it is.
+    /// page with `MAP`. The new handle has the page handle's rights that a
+    /// device handle has, but `MAP` (a transport device is never mapped), so
+    /// it passes where the page's would, to the one driver whose transport it
+    /// is.
     fn device_transport(&mut self, device: Handle, index: RangeIndex) -> Result<u64, Status> {
-        let Object::Device(device) = self.object(device, Rights::MAP)? else {
+        let (object, held) = {
+            let handles = self.process.handles.lock();
+            let entry = handles.check(device, Rights::MAP)?;
+            (entry.object.clone(), entry.rights)
+        };
+        let Object::Device(device) = object else {
             return Err(Status::BadHandle);
         };
         let transport = device.transport(index.0)?;
-        // No `MAP`: a transport device is never mapped (INV-0295-3).
-        self.insert(
-            Object::Device(transport),
-            DeviceObject::RIGHTS.without(Rights::MAP),
-        )
+        // Rights only decrease (ADR-0040): the page handle's rights that a
+        // device handle has, and no `MAP`: a transport device is never
+        // mapped (INV-0295-3).
+        let rights = Rights::from_raw(held.raw() & DeviceObject::RIGHTS.raw())
+            .ok_or(Status::InvalidArgument)?
+            .without(Rights::MAP);
+        self.insert(Object::Device(transport), rights)
     }
 
     /// ADR-0295: a register of a transport device. The offset is the

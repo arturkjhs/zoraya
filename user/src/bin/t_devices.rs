@@ -536,11 +536,27 @@ fn transport_devices() {
     handle_close(t).expect("close");
 }
 
+/// ADR-0040 (review warning 5): a transport has the page handle's rights that
+/// a device handle has, and no more. From a page handle with `MAP` and `READ`
+/// alone it cannot write or pin, and no right can be added to it.
+fn a_transport_has_no_right_its_page_lacks() {
+    let (page, range) = find_block_device();
+    let narrow = handle_duplicate(page, Rights::MAP.union(Rights::READ)).expect("narrow");
+    let t = device_transport(narrow, range).expect("transport");
+    assert_err!(device_write(t, REG_STATUS, 0), Status::AccessDenied);
+    assert_err!(handle_duplicate(t, Rights::WRITE), Status::AccessDenied);
+    assert_err!(handle_duplicate(t, Rights::DMA), Status::AccessDenied);
+    device_read(t, 0).expect("it reads");
+    handle_close(t).expect("close");
+    handle_close(narrow).expect("close");
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     maps_a_device();
     transport_devices();
     a_transport_and_its_page_keep_holders_apart();
+    a_transport_has_no_right_its_page_lacks();
     takes_an_interrupt();
     pins_and_unpins();
     refusals();
