@@ -360,7 +360,7 @@ bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	    $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $$accel $(KERNEL) > $$log 2>&1; rc=$$?; \
 	  if [ $$rc != 0 ]; then echo "[bench-net] FAIL ($$accel), log $$log"; tail -20 $$log; kill $$httpd 2>/dev/null; exit $$rc; fi; \
 	  for size in 16777216 1; do \
-	    echo "[bench-net] $$accel $$size bytes, ms:" $$(grep -a "^\[bench-net-$$accel\] $$size bytes fnv1a" $$log | sed -e 's/.* in \([0-9.]*\) ms.*/\1/' | tr '\n' ' '); \
+	    echo "[bench-net] $$accel $$size bytes, ms:" $$(grep -a "^$$size bytes fnv1a" $$log | sed -e 's/.* in \([0-9.]*\) ms.*/\1/' | tr '\n' ' '); \
 	  done; \
 	done; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; exit 0
