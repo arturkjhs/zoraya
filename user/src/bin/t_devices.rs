@@ -253,8 +253,9 @@ fn a_closed_pin_stays_quarantined() {
     memory_unmap(window, PAGE).expect("unmap");
 }
 
-/// Runs `child write-register` on `transport` and gives its exit code.
-fn second_writer(transport: Handle) -> i32 {
+/// Runs `child write-register` on `transport`, passed by `transfer`, and
+/// gives its exit code.
+fn second_writer(transport: Handle, transfer: Transfer) -> i32 {
     let image = directory_lookup(DIRECTORY, "child").expect("child");
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, JOB, image);
@@ -262,7 +263,7 @@ fn second_writer(transport: Handle) -> i32 {
         slot: 4,
         handle: transport,
         rights: Rights::WRITE,
-        transfer: Transfer::Duplicate,
+        transfer,
     });
     e.arg(b"write-register");
     let length = e.finish().expect("fits");
@@ -325,10 +326,18 @@ fn a_transport_and_its_page_keep_holders_apart() {
     // Two holders are kept apart: a second process's write is refused
     // while this one holds the transport, and allowed once it does not.
     device_write(t, REG_STATUS, 0).expect("hold");
-    assert_eq!(second_writer(t), 1, "a second holder is refused");
+    assert_eq!(
+        second_writer(t, Transfer::Duplicate),
+        1,
+        "a second holder is refused"
+    );
     handle_close(t).expect("close");
     let t = device_transport(page, range).expect("transport");
-    assert_eq!(second_writer(t), 0, "with no other holder it writes");
+    assert_eq!(
+        second_writer(t, Transfer::Duplicate),
+        0,
+        "with no other holder it writes"
+    );
     // The child's hold ended with it.
     dma_release_quarantine(t).expect("release");
     let (window, _) = device_map(page, range).expect("map");
@@ -336,6 +345,40 @@ fn a_transport_and_its_page_keep_holders_apart() {
     // A transport device's handle has no `MAP` at all.
     assert_err!(handle_duplicate(t, Rights::MAP), Status::AccessDenied);
     handle_close(t).expect("close");
+    the_hold_ends_with_a_move(page, range);
+}
+
+/// INV-0295-3 (re-review N6 finding 1): a `Move` of the holder's last
+/// handle that can write the transport ends its hold, as a close does: at
+/// a spawn, and over a channel.
+fn the_hold_ends_with_a_move(page: Handle, range: u32) {
+    let t = device_transport(page, range).expect("transport");
+    device_write(t, REG_STATUS, 0).expect("hold");
+    assert_eq!(
+        second_writer(t, Transfer::Move),
+        0,
+        "the child the handle moved to writes"
+    );
+    let t = device_transport(page, range).expect("transport");
+    device_write(t, REG_STATUS, 0).expect("hold");
+    let (a, b) = channel_create().expect("create");
+    let entry = ChannelEntry {
+        handle: t,
+        rights: Rights::READ.union(Rights::WRITE).union(Rights::TRANSFER),
+        transfer: Transfer::Move,
+    };
+    channel_write(a, b"", &[entry]).expect("write");
+    // Queued, the handle is no one's: the page maps and is released.
+    let (window, _) = device_map(page, range).expect("map with no holder");
+    memory_unmap(window, PAGE).expect("unmap");
+    dma_release_quarantine(page).expect("release with no holder");
+    let mut body = [0; 1];
+    let mut got = [a; 1];
+    channel_read(b, &mut body, &mut got).expect("read");
+    assert_eq!(second_writer(got[0], Transfer::Move), 0, "it writes");
+    for h in [a, b] {
+        handle_close(h).expect("close");
+    }
 }
 
 /// INV-0054-3: a driver that dies with a pin leaves its frames unreallocated.

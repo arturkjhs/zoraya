@@ -237,6 +237,33 @@ impl Calls<'_> {
         Ok((table, self_handle))
     }
 
+    /// INV-0295-3: the hold of a transport device ends with the last handle
+    /// of this process that can write it. Called with the table unlocked
+    /// after a handle to `object` left it, by a close or by a `Move` (spawn,
+    /// channel_write, snapshot). A process has one thread, so nothing adds a
+    /// handle meanwhile; and the kernel is not preempted on its one CPU
+    /// (design.md, Scheduler), so the process a moved handle went to runs
+    /// only after the hold has ended.
+    fn end_hold_if_unwritable(&self, object: &Object) {
+        let Object::Device(device) = object else {
+            return;
+        };
+        let writable = self.process.handles.lock().entries().any(|(_, e)| {
+            e.rights.contains(Rights::WRITE)
+                && matches!(&e.object, Object::Device(d) if Arc::ptr_eq(d, device))
+        });
+        if writable {
+            return;
+        }
+        let claim = self
+            .process
+            .space
+            .lock()
+            .as_mut()
+            .and_then(|s| s.let_go(device));
+        drop(claim);
+    }
+
     fn insert(&self, object: Object, rights: Rights) -> Result<u64, Status> {
         let handle = self
             .process
@@ -286,28 +313,13 @@ impl Handlers for Calls<'_> {
     }
 
     fn handle_close(&mut self, handle: Handle) -> Result<u64, Status> {
-        let mut handles = self.process.handles.lock();
-        let entry = handles.remove(handle).ok_or(Status::BadHandle)?;
-        // INV-0295-3: the hold of a transport device ends with the last
-        // handle that can write it. A process has one thread, so nothing
-        // adds a handle meanwhile.
-        let released = match &entry.object {
-            Object::Device(device) => !handles.entries().any(|(_, e)| {
-                e.rights.contains(Rights::WRITE)
-                    && matches!(&e.object, Object::Device(d) if Arc::ptr_eq(d, device))
-            }),
-            _ => false,
-        };
-        drop(handles);
-        if released && let Object::Device(device) = &entry.object {
-            let claim = self
-                .process
-                .space
-                .lock()
-                .as_mut()
-                .and_then(|s| s.let_go(device));
-            drop(claim);
-        }
+        let entry = self
+            .process
+            .handles
+            .lock()
+            .remove(handle)
+            .ok_or(Status::BadHandle)?;
+        self.end_hold_if_unwritable(&entry.object);
         object::close(entry);
         Ok(0)
     }
@@ -388,6 +400,7 @@ impl Handlers for Calls<'_> {
                 let entry = self.process.handles.lock().remove(listed.handle);
                 if let Some(entry) = entry {
                     object::end_subscriptions(&entry);
+                    self.end_hold_if_unwritable(&entry.object);
                 }
             }
         }
@@ -801,7 +814,7 @@ impl Handlers for Calls<'_> {
         paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
         let mut message = channel::message(body, Vec::new(), paid)?;
         pair.prepare(side, message.bytes.len())?;
-        for entry in listed {
+        for entry in listed.clone() {
             let object = match entry.transfer {
                 Transfer::Duplicate => handles.check(entry.handle, Rights::NONE)?.object.clone(),
                 Transfer::Move => {
@@ -817,6 +830,12 @@ impl Handlers for Calls<'_> {
             });
         }
         drop(handles);
+        // Before the write: the reader holds the handles only after it.
+        for (entry, moved) in carried.iter().zip(listed) {
+            if moved.transfer == Transfer::Move {
+                self.end_hold_if_unwritable(&entry.object);
+            }
+        }
         message.handles = carried;
         pair.write(side, message);
         Ok(0)
@@ -1147,19 +1166,19 @@ impl Handlers for Calls<'_> {
             suspended: request.suspended,
         })?;
         // The child exists: only now do the moved handles leave (INV-0102-2).
-        let mut handles = self.process.handles.lock();
         for moved in request.moves() {
-            if let Some(entry) = handles.remove(moved.handle) {
+            let entry = self.process.handles.lock().remove(moved.handle);
+            if let Some(entry) = entry {
                 object::end_subscriptions(&entry);
+                self.end_hold_if_unwritable(&entry.object);
             }
         }
         // `snapshot_table` reserved this room, and removing made more.
-        let handle = handles.insert(
+        let handle = self.process.handles.lock().insert(
             Object::Process(child),
             ProcessObject::RIGHTS,
             object::next_id(),
         )?;
-        drop(handles);
         *LAST_SNAPSHOT.lock() = (timer::now().nanos_since(started), copied.pages);
         Ok(handle.raw())
     }
