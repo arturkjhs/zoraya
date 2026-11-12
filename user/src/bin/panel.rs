@@ -77,6 +77,33 @@ fn tell_rooms(manager: Handle, panel: &Panel) {
     }
 }
 
+/// Reads every room's use from the keeper and tells the compositor, which
+/// draws the pills at 90% and the hover card from it (ADR-0267 point 3).
+/// Called once a second at most (the loop's reload tick; INV-0267-2); a
+/// keeper that does not answer gives the compositor an empty list, so no
+/// pill outlives the numbers it came from.
+fn tell_usage(st: &mut State) {
+    let Some(keeper) = st.keeper.as_mut() else {
+        return;
+    };
+    let text = match keeper.usage("") {
+        Ok(records) => {
+            let readings = st.tracker.readings(&records, clock_monotonic());
+            zoraya_settings::usage::to_wire(&readings, gui::MAX_USAGE_TEXT)
+        }
+        Err(_) => String::new(),
+    };
+    if text == st.told_usage {
+        return;
+    }
+    let m = gui::SetUsage {
+        readings: Data(text.as_bytes()),
+    };
+    if send(st.manager, &m, None) {
+        st.told_usage = text;
+    }
+}
+
 fn reload(panel: &mut Panel, root: Option<&File>) -> bool {
     let bytes = root
         .and_then(|r| r.open(ROOMS, 0, zoraya_proto_file::rights::READ).ok())
@@ -163,6 +190,11 @@ struct State {
     /// The room keeper (ADR-0269): the launch job of every launch comes
     /// from it. Without one, a trusted room launches in the panel's own job.
     keeper: Option<zoraya_user::roomsclient::Keeper>,
+    /// The CPU share of each room since the last reading (Q6b).
+    tracker: zoraya_rooms::Tracker,
+    /// What the compositor was last told of the rooms' use, so that a
+    /// calm second sends nothing.
+    told_usage: String,
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -624,6 +656,8 @@ fn main() -> i32 {
         launchers: Vec::new(),
         keeper: channel(8)
             .and_then(|manage| zoraya_user::roomsclient::Keeper::new(manage, channel(9))),
+        tracker: zoraya_rooms::Tracker::new(),
+        told_usage: String::new(),
     };
     let mut next_reload = clock_monotonic() + RELOAD_NS;
     let mut bytes = alloc::vec![0u8; 512];
@@ -663,6 +697,7 @@ fn main() -> i32 {
                 tell_rooms(manager, &panel);
             }
             next_reload = clock_monotonic() + RELOAD_NS;
+            tell_usage(&mut st);
         }
     }
 }
