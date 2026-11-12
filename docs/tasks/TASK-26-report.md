@@ -1188,8 +1188,8 @@ room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts u
 2. **Holder by kind**: the BUSY test compares `Launcher` kinds, never channel slots (`a_slot_reused_by_the_other_launcher...`).
    `Keep` carries the last holder's kind (`launcher`), re-sent when it changes; `init` keeps it; a resumed room with processes and
    no known holder answers BUSY. `t_rooms` checks the restarted keeper refuses the desktop on a console-held room (not run yet).
-3. **A resumed room is leased** by its old holder's kind until `Leave`, its channel closing, or `ORPHAN_MS` (30 s, so that a holder
-   that never returns does not hold one of the four places for ever; an addition to the finding, in ADR-0293 and its open questions).
+3. **A resumed room is leased** by its old holder's kind until `Leave`, a launch of that kind, or a `Manage` channel of that kind closing
+   (round 1 added a 30 s `ORPHAN_MS`; round 3 removed it, see below).
 4. **`Keep` before the launch job**: `serve` calls `tell_init` first and closes the channel (no job sent) if a write to `init` failed.
 5. **`Keep` has `room_untrusted`** for every room job; `resume` takes the trust from it, not from the line.
 6. **`Set` checks the ceilings before looking whether the room runs.** `room set` of a room with no line is now `no such room`.
@@ -1207,3 +1207,27 @@ room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts u
 
 ADR-0293 also records that `init` holding the `LIMIT` duplicate of each job is acceptable (no authority beyond the `LIMIT` it
 already holds on the session job; it goes only to a restarted keeper).
+
+### Review rounds 2 and 3 (Q6a)
+
+Round 2 (`b786bc5`): `room remove` always stops; the orphan lease kept while a channel of its kind was attached; `room set` fills
+words from the keeper's `Usage`; `Open` and init failures answer a denial.
+
+Round 3 (opus re-review; each test written first and seen to fail on `b786bc5`'s code):
+
+1. ERROR, fixed. The orphan lapsed on time while the console's `zosh` (which rebinds only when a call fails) was idle, so the empty
+   room was collected under its launch job. The 30 s limit is removed: the lease ends on a claiming launch, `Leave`, the closing of a
+   `Manage` channel of its kind, or `Stop`. `zosh` also calls `Keeper::pump` before each prompt and so binds to a restarted keeper
+   before its next command. Tests `a_resumed_rooms_lease_ends_only_when_its_kind_of_channel_closes` and
+   `a_resumed_room_keeps_its_holders_kind...`.
+2. Fixed. The test of the previous fix did not fail without it; the `manage` list it tested is gone, and the new test uses 0
+   processes, a long wait and the closing of the channel (the mutants that drop the `channel_closed` clearing fail it).
+3. Fixed by the same change (no `manage` pin remains); the width of the rule (any `Manage` channel of the kind closing ends it;
+   a kind that never returns keeps an empty room until `Stop`) is stated in ADR-0293's open questions.
+4. Fixed. `Keeper::undo_last_launch` (called by `rooms` when `init` did not take the launch's events) removes the channel's lease,
+   restores holder, orphan and launch time, and collects a room the launch made. Test `a_launch_that_init_did_not_take_is_undone`.
+5. Fixed. The logic moved to `zoraya_rooms::complete_from_running` (used by `room set`); test
+   `room_set_takes_the_missing_words_from_the_running_rooms_usage_or_refuses`.
+
+Not run: the `zosh` prompt rebind and the `rooms` undo path are not exercised in QEMU (the `rooms` binary's `!told` branch needs
+a failing write to `init`).

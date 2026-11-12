@@ -1581,8 +1581,8 @@ are `init`'s, outside an untrusted room's job (INV-0268-3 is open; the panel's b
 rooms overview's `New room` form and the compositor's hover card do not show the limit words (Q6b); a POSIX session
 (`/etc/zoraya/session`) starts no keeper channel for its shell; the keeper restart in `init` itself, and the reconnect
 channel, are not run in QEMU (`t_rooms` stands in for `init`); a launcher that never sends `Leave` and keeps its channel
-holds an idle untrusted room. A resumed room is leased by its old holder's kind until it leaves, its channel closes or
-30 s pass; `home` is refused `Stop` and `Set`; a shell or the panel will not enter a room whose line has limit words
+holds an idle untrusted room. A resumed room is leased by its old holder's kind until a launch of that kind claims it, it
+leaves, a `Manage` channel of that kind closes or the room is stopped (no time limit); `home` is refused `Stop` and `Set`; a shell or the panel will not enter a room whose line has limit words
 without a launch job from the keeper.
 
 ## Network driver (stage 8, N1: the driver answers ARP)

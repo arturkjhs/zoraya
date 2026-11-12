@@ -261,6 +261,14 @@ impl Keeper {
 
     /// The refusals that arrived since the last call, without waiting.
     pub fn take_refusals(&mut self) -> Vec<Refusal> {
+        self.pump();
+        core::mem::take(&mut self.refusals)
+    }
+
+    /// Reads what the keeper sent, without waiting; when its channel has
+    /// closed (a restarted keeper), binds to the new one now. A shell calls
+    /// it before each prompt.
+    pub fn pump(&mut self) {
         loop {
             let mut buf = [0u8; 256];
             let mut handles = [self.end; 1];
@@ -271,9 +279,15 @@ impl Keeper {
                     }
                     drain_note(&buf[..(s.bytes as usize).min(256)], &mut self.refusals);
                 }
-                Err(_) => break,
+                Err((Status::WouldBlock, _)) => break,
+                Err(_) => {
+                    // The keeper's end is closed: bind to the next keeper
+                    // now, before the next command, not at the call that
+                    // fails (the keeper's idle collection runs every turn).
+                    let _ = self.rebind();
+                    break;
+                }
             }
         }
-        core::mem::take(&mut self.refusals)
     }
 }

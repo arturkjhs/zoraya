@@ -779,12 +779,14 @@ fn a_resumed_room_keeps_its_holders_kind_and_is_leased_until_it_leaves() {
     k.env().now += IDLE_MS;
     k.collect_idle();
     assert!(k.running().is_empty());
-    // Or it never comes back: no channel of its kind is attached, and the
-    // lease lapses on time.
+    // Or it never comes back: no time limit ends the lease (round 3,
+    // finding 1: its client reconnects only at its next call, which may be
+    // long after the restart). Stop, Leave, a launch or the closing of a
+    // `Manage` channel of its kind end it.
     let (mut k, _) = restarted(Some(Launcher::Console), 0);
-    k.env().now += ORPHAN_MS;
+    k.env().now += 100 * IDLE_MS;
     k.collect_idle();
-    assert!(k.running().is_empty());
+    assert_eq!(k.running().len(), 1, "the lease does not lapse on time");
     // The same kind of holder may launch again, and then holds a lease.
     let (mut k, _) = restarted(Some(Launcher::Desktop), 2);
     launch(&mut k, 5, &DESKTOP, "agent-1").unwrap();
@@ -1231,32 +1233,28 @@ fn a_collected_room_does_not_hide_the_ones_after_it() {
 }
 
 #[test]
-fn a_lease_does_not_lapse_while_a_channel_of_its_kind_is_attached() {
-    // Round 2, finding 2: zosh reconnects only at its next call, so its
-    // channel may be attached long after ORPHAN_MS; the room must still be
-    // its own, and Stop and Launch must see one job.
-    let (mut k, j) = restarted(Some(Launcher::Console), 2);
-    k.channel_attached(9, &CONSOLE);
-    k.env().now += 10 * ORPHAN_MS;
+fn a_resumed_rooms_lease_ends_only_when_its_kind_of_channel_closes() {
+    // Round 3, findings 1 and 2: zosh reconnects only at its next call, so
+    // the room is its own however long it takes; Stop and Launch must see
+    // one job. With no process the room would be collected at once if the
+    // lease ended.
+    let (mut k, j) = restarted(Some(Launcher::Console), 0);
+    k.env().now += 100 * IDLE_MS;
     k.collect_idle();
-    assert_eq!(k.running().len(), 1, "the console's channel is attached");
+    assert_eq!(k.running().len(), 1, "the console's lease holds");
     assert_eq!(k.job_of("agent-1"), Some(j));
-    // The desktop is still refused, and the console launches into the same job.
+    assert!(!k.env().jobs[&j].killed);
+    // The desktop is refused, and the console launches into the same job.
     assert_eq!(
         launch(&mut k, 10, &DESKTOP, "agent-1").unwrap_err().0,
         status::BUSY
     );
-    // A channel of the other kind does not keep it.
-    let (mut k, _) = restarted(Some(Launcher::Console), 0);
-    k.channel_attached(9, &DESKTOP);
-    k.env().now += ORPHAN_MS;
+    // A channel of the other kind closing does not end it.
+    k.channel_closed(9, &DESKTOP);
     k.collect_idle();
-    assert!(k.running().is_empty(), "no console channel");
-    // Once the attached channel closes, the lease goes with it.
-    let (mut k, _) = restarted(Some(Launcher::Console), 0);
-    k.channel_attached(9, &CONSOLE);
+    assert_eq!(k.running().len(), 1, "a desktop channel is not the holder");
+    // A channel of its kind closing does.
     k.channel_closed(9, &CONSOLE);
-    k.env().now += ORPHAN_MS;
     k.collect_idle();
     assert!(k.running().is_empty());
 }
@@ -1296,4 +1294,88 @@ fn a_denial_answers_the_transaction_of_the_request() {
     assert_eq!(h.transaction, 5);
     assert_eq!((d.status.0, d.text.0), (status::TOO_MANY, "no place"));
     assert!(denial(status::KERNEL, "x", &[1, 2], &mut out).is_none());
+}
+
+#[test]
+fn a_launch_that_init_did_not_take_is_undone() {
+    // Round 3, finding 4: the client was told KERNEL and sends no Leave, so
+    // the lease, the holder and the new room go back to what they were.
+    let mut k = keeper();
+    k.env().now = 10 * IDLE_MS;
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    k.take_events();
+    k.undo_last_launch();
+    k.collect_idle();
+    assert!(
+        k.running().is_empty(),
+        "a room made by the launch is let go"
+    );
+
+    // A room that runs, its holder the desktop with no lease now: the
+    // console's launch is undone, and the desktop is not turned away.
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    k.channel_closed(1, &DESKTOP);
+    let j = k.job_of("agent-1").unwrap();
+    k.env().jobs.get_mut(&j).unwrap().procs = 1;
+    k.take_events();
+    launch(&mut k, 2, &CONSOLE, "agent-1").unwrap_err();
+    k.env().jobs.get_mut(&j).unwrap().procs = 0;
+    launch(&mut k, 2, &CONSOLE, "agent-1").unwrap();
+    k.env().jobs.get_mut(&j).unwrap().procs = 1;
+    k.undo_last_launch();
+    launch(&mut k, 3, &DESKTOP, "agent-1").unwrap();
+    // The undone console channel holds no lease: the desktop's leaves, and
+    // with no process the room is collected.
+    k.env().jobs.get_mut(&j).unwrap().procs = 0;
+    simple(
+        &mut k,
+        3,
+        &DESKTOP,
+        &msg(&LeaveMsg {
+            room: Text("agent-1"),
+        }),
+    )
+    .unwrap();
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+
+    // A denied launch leaves nothing to undo.
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    launch(&mut k, 2, &CONSOLE, "agent-1").unwrap_err();
+    k.undo_last_launch();
+    assert_eq!(k.running().len(), 1);
+    let j = k.job_of("agent-1").unwrap();
+    k.env().jobs.get_mut(&j).unwrap().procs = 0;
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "the desktop still holds its lease");
+}
+
+#[test]
+fn room_set_takes_the_missing_words_from_the_running_rooms_usage_or_refuses() {
+    // Round 3, finding 5: the logic of `room set` on an untrusted line with
+    // fewer than six words.
+    let mut k = keeper();
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    let running = records(&mut k, "agent-1").pop();
+    assert!(running.is_some());
+    let words = Limits {
+        mem: Some(1 << 20),
+        ..Limits::default()
+    };
+    // A running room: the missing words come from it, the given one stays.
+    let mut l = words;
+    assert!(complete_from_running(&mut l, running.as_ref()));
+    assert!(l.is_complete());
+    assert_eq!(l.mem, Some(1 << 20));
+    assert_eq!(l.procs, record_limits(running.as_ref().unwrap()).procs);
+    // A room that does not run, or no keeper: nothing is made up.
+    let mut l = words;
+    assert!(!complete_from_running(&mut l, None));
+    assert_eq!(l, words);
+    // A complete line needs nothing.
+    let mut full = record_limits(running.as_ref().unwrap());
+    assert!(full.is_complete());
+    assert!(complete_from_running(&mut full, None));
 }

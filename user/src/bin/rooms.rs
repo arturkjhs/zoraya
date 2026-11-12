@@ -231,7 +231,6 @@ impl Rooms {
         if port_subscribe(port, end, wanted, KEY_CHANNEL + id as u64, Mode::Level).is_err() {
             return false;
         }
-        self.keeper.channel_attached(id, &kind);
         self.chans[id] = Some(Chan { end, kind });
         true
     }
@@ -334,6 +333,10 @@ impl Rooms {
             let reply = match reply {
                 Reply::SendJob(_, job) if !told => {
                     self.keeper.env().close(job);
+                    // The client is told the launch failed and sends no
+                    // `Leave`: the lease and the holder go back.
+                    self.keeper.undo_last_launch();
+                    self.tell_init();
                     match zoraya_rooms::denial(
                         zoraya_proto_rooms::status::KERNEL,
                         "init did not take the job",

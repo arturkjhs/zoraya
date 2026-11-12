@@ -3080,10 +3080,7 @@ impl Z {
                 .filter(|_| self.keeper_manage)
                 .and_then(|k| k.usage(name).ok())
                 .and_then(|r| r.into_iter().next());
-            if let Some(r) = applied {
-                room.limits.fill_from(&zoraya_rooms::record_limits(&r));
-            }
-            if !room.limits.is_complete() {
+            if !zoraya_rooms::complete_from_running(&mut room.limits, applied.as_ref()) {
                 return fail(
                     io,
                     "an untrusted room needs all six limits and some are not known here",
@@ -4535,6 +4532,11 @@ fn main() -> i32 {
         show(&shell.host.jobs.take_notices());
         shell.host.history = editor.history().to_vec();
         editor.options = options(&shell.host);
+        // A restarted room keeper is found before the next command, not at
+        // the call that fails.
+        if let Some(k) = shell.host.keeper.as_mut() {
+            k.pump();
+        }
         let prompt = shell.host.prompt();
         out.clear();
         editor.start(&prompt, &mut out);

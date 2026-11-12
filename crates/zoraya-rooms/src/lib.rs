@@ -42,11 +42,6 @@ pub const MAX_UNTRUSTED: usize = 4;
 /// launch (a launcher between `Launch` and its spawn holds nothing the
 /// keeper can see).
 pub const IDLE_MS: u64 = 5_000;
-/// A resumed room counts as leased by its old holder until the holder sends
-/// `Leave` or its channel closes; a holder that never comes back is given up
-/// after this long, so that the room does not count against
-/// [`MAX_UNTRUSTED`] for ever.
-pub const ORPHAN_MS: u64 = 30_000;
 
 /// Where a job goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,11 +129,12 @@ struct Running {
     /// One lease per `Manage` channel that holds a launch job it has not
     /// given back.
     leases: Vec<(ChanId, Launcher)>,
-    /// A resumed room's old holder, when the keeper started: leased until it
-    /// leaves, its channel closes, or [`ORPHAN_MS`] pass with no `Manage`
-    /// channel of its kind attached (one that is attached may still claim
-    /// the room: its client reconnects at its next call).
-    orphan: Option<(Launcher, u64)>,
+    /// A resumed room's old holder, when the keeper started: leased until a
+    /// launch of its kind claims the room, it leaves, any `Manage` channel of
+    /// its kind closes, or the room is stopped. Not on time: its client
+    /// reconnects only at its next call, which may be long after the
+    /// restart (ADR-0293 open questions).
+    orphan: Option<Launcher>,
     last_launch_ms: u64,
     reports: [[u32; 4]; 4],
     seen_mem: u64,
@@ -156,8 +152,16 @@ pub struct Keeper<E: Env> {
     untrusted: Option<JobId>,
     rooms: Vec<Running>,
     events: Vec<Event>,
-    /// The `Manage` channels being served, by kind.
-    manage: Vec<(ChanId, Launcher)>,
+    /// What the last `Launch` changed, for [`Keeper::undo_last_launch`].
+    undo: Option<Undo>,
+}
+
+/// A room as it was before a `Launch` that was answered with a job.
+struct Undo {
+    room: String,
+    chan: ChanId,
+    /// `None`: the launch made the room.
+    before: Option<(Option<Launcher>, Option<Launcher>, u64)>,
 }
 
 fn denied(code: u32, text: &str, tx: u32, out: &mut [u8]) -> Reply {
@@ -215,6 +219,17 @@ pub fn record_limits(r: &UsageRecord) -> Limits {
     }
 }
 
+/// An untrusted room's line after `room set` has all six words
+/// (INV-0266-1): the missing ones are those the keeper applied to the
+/// running room, `applied` (None when the room does not run or there is no
+/// keeper: nothing is made up). Whether the line is complete now.
+pub fn complete_from_running(limits: &mut Limits, applied: Option<&UsageRecord>) -> bool {
+    if let Some(r) = applied {
+        limits.fill_from(&record_limits(r));
+    }
+    limits.is_complete()
+}
+
 impl<E: Env> Keeper<E> {
     /// A keeper with the untrusted job `init` kept for it, if any. Without
     /// one it makes its own, with ADR-0266 point 4's ceilings.
@@ -242,7 +257,7 @@ impl<E: Env> Keeper<E> {
             untrusted,
             rooms: Vec::new(),
             events,
-            manage: Vec::new(),
+            undo: None,
         }
     }
 
@@ -272,12 +287,37 @@ impl<E: Env> Keeper<E> {
             limits,
             holder,
             leases: Vec::new(),
-            orphan: holder.map(|h| (h, now)),
+            orphan: holder,
             last_launch_ms: now,
             reports: [[0; 4]; 4],
             seen_mem,
             seen_procs,
         });
+    }
+
+    /// The answer to the last `Launch` could not be given because `init` did
+    /// not take what the launch made: the channel's lease, the holder and a
+    /// room the launch made go back to what they were (the client is told
+    /// the launch failed and sends no `Leave`). Does nothing after any other
+    /// message.
+    pub fn undo_last_launch(&mut self) {
+        let Some(u) = self.undo.take() else {
+            return;
+        };
+        let now = self.env.now_ms();
+        let Some(r) = self.rooms.iter_mut().find(|r| r.name == u.room) else {
+            return;
+        };
+        r.leases.retain(|(c, _)| *c != u.chan);
+        match u.before {
+            Some((holder, orphan, last)) => {
+                r.holder = holder;
+                r.orphan = orphan;
+                r.last_launch_ms = last;
+            }
+            None => r.last_launch_ms = now.saturating_sub(IDLE_MS),
+        }
+        self.collect_idle();
     }
 
     /// What `init` should be told since the last call.
@@ -324,23 +364,14 @@ impl<E: Env> Keeper<E> {
         l
     }
 
-    /// The process serves a new channel: a `Manage` channel keeps an
-    /// orphaned lease of its kind from lapsing on time.
-    pub fn channel_attached(&mut self, chan: ChanId, kind: &ChannelKind) {
-        if let ChannelKind::Manage(l) = kind {
-            self.manage.push((chan, *l));
-        }
-    }
-
     /// A channel went away: it holds no lease any more, and nobody else's is
     /// touched. The closing of a `Manage` channel also ends the lease a
     /// resumed room has for that kind of holder.
     pub fn channel_closed(&mut self, chan: ChanId, kind: &ChannelKind) {
-        self.manage.retain(|(c, _)| *c != chan);
         for r in &mut self.rooms {
             r.leases.retain(|(c, _)| *c != chan);
             if let ChannelKind::Manage(l) = kind
-                && r.orphan.is_some_and(|(o, _)| o == *l)
+                && r.orphan == Some(*l)
             {
                 r.orphan = None;
             }
@@ -353,12 +384,6 @@ impl<E: Env> Keeper<E> {
         let now = self.env.now_ms();
         let mut i = 0;
         while i < self.rooms.len() {
-            let r = &mut self.rooms[i];
-            if r.orphan.is_some_and(|(l, since)| {
-                now.saturating_sub(since) >= ORPHAN_MS && !self.manage.iter().any(|(_, m)| *m == l)
-            }) {
-                r.orphan = None;
-            }
             let r = &self.rooms[i];
             let idle = !r.leased()
                 && now.saturating_sub(r.last_launch_ms) >= IDLE_MS
@@ -447,6 +472,7 @@ impl<E: Env> Keeper<E> {
             return Reply::Close;
         };
         let tx = header.transaction;
+        self.undo = None;
         // Which messages the kind may send, before any is read.
         let allowed = match kind {
             ChannelKind::Manage(_) => zoraya_proto_rooms::MANAGE_REQUESTS.as_slice(),
@@ -478,7 +504,7 @@ impl<E: Env> Keeper<E> {
                     if r.name == m.room.0 {
                         r.leases.retain(|(c, _)| *c != chan);
                         if let ChannelKind::Manage(l) = kind
-                            && r.orphan.is_some_and(|(o, _)| o == *l)
+                            && r.orphan == Some(*l)
                         {
                             r.orphan = None;
                         }
@@ -575,6 +601,11 @@ impl<E: Env> Keeper<E> {
         };
         self.collect_idle();
         let now = self.env.now_ms();
+        let before = self
+            .rooms
+            .iter()
+            .find(|r| r.name == room)
+            .map(|r| (r.holder, r.orphan, r.last_launch_ms));
         if let Some(i) = self.rooms.iter().position(|r| r.name == room) {
             // An untrusted room is launched into by one `Manage` holder at a
             // time (ADR-0269 point 2); a `Room(R)` channel is inside it.
@@ -593,7 +624,7 @@ impl<E: Env> Keeper<E> {
                     .leases
                     .iter()
                     .map(|(_, l)| *l)
-                    .chain(r.orphan.map(|(l, _)| l))
+                    .chain(r.orphan)
                     .find(|l| *l != me);
                 let busy = match (other, procs > 0, r.holder) {
                     (Some(l), _, _) => Some(Some(l)),
@@ -674,7 +705,7 @@ impl<E: Env> Keeper<E> {
         if let Some(who) = manage {
             r.leases.retain(|(c, _)| *c != chan);
             r.leases.push((chan, who));
-            if r.orphan.is_some_and(|(o, _)| o == who) {
+            if r.orphan == Some(who) {
                 r.orphan = None;
             }
             if r.holder != Some(who) {
@@ -687,6 +718,11 @@ impl<E: Env> Keeper<E> {
                 });
             }
         }
+        self.undo = Some(Undo {
+            room: room.to_string(),
+            chan,
+            before,
+        });
         match encode(&Launched {}, tx, out) {
             Ok(n) => Reply::SendJob(n, launch),
             Err(_) => {
