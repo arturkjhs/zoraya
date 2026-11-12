@@ -3,9 +3,11 @@
 
 use core::slice;
 
+use zoraya_abi::Status;
 use zoraya_dtb::platform::{MAX_REGIONS, PlatformInfo};
 use zoraya_pmm::{
-    FRAME_SIZE, Frame, FrameAllocator, OutOfFrames, Range, Stats, place_metadata, storage_words,
+    FRAME_SIZE, Frame, FrameAllocator, OutOfFrames, Range, RunSearch, Stats, place_metadata,
+    storage_words,
 };
 
 use super::{kernel_image_phys, phys_to_virt};
@@ -58,22 +60,17 @@ pub fn init(info: &PlatformInfo<'_>) {
 
 /// One frame, with arbitrary contents.
 ///
-/// When none is free and the reaper still holds frames, it frees a step of
-/// them and this tries again (ADR-0270 point 4): memory that is on its way
-/// back is not exhaustion. The unit is counted at the caller's line, as
-/// [`free`]'s is, so that the diagnosis of a busy interval names the path
-/// that allocated (the heap's growth, a page table, an object).
+/// When none is free and the reaper still holds frames, it takes one of
+/// them (ADR-0270 point 4): memory that is on its way back is not
+/// exhaustion, and the allocation stays one unit of work (INV-0270-1). The
+/// unit is counted at the caller's line, as [`free`]'s is, so that the
+/// diagnosis of a busy interval names the path that allocated (the heap's
+/// growth, a page table, an object).
 #[track_caller]
 pub fn alloc() -> Result<Frame, OutOfFrames> {
     crate::steps::count(1);
-    loop {
-        let found = FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc();
-        match found {
-            Err(e) if !crate::reaper::help() => return Err(e),
-            Err(_) => {}
-            Ok(frame) => return Ok(frame),
-        }
-    }
+    let found = FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc();
+    found.or_else(|e| crate::reaper::take().ok_or(e))
 }
 
 /// One zeroed frame, counted at the caller's line.
@@ -96,27 +93,83 @@ pub fn alloc_zeroed() -> Result<Frame, OutOfFrames> {
 pub const MAX_CONTIG_FRAMES: u64 = 1024;
 
 /// Rounds of `reaper::help` a run's search makes before it fails: the scan of
-/// the frame map is repeated after each, so the number bounds the masked time.
+/// the frame map is repeated after each, so the number bounds the work.
 const CONTIG_HELP_ROUNDS: usize = (MAX_CONTIG_FRAMES / crate::steps::STEP as u64) as usize + 1;
+
+/// Words of the frame map a run's search reads between two step points (each
+/// counted as a unit of work): with the candidate run that may pass it (at
+/// most `MAX_CONTIG_FRAMES / 64 + 2` words), within a step.
+const SCAN_WORDS: u64 = 48;
 
 /// `count` contiguous frames, not zeroed: the caller zeroes them with
 /// [`zero_run`] in steps, before anything else can reach them.
-pub fn alloc_contig(count: u64) -> Result<Frame, OutOfFrames> {
+///
+/// The scan of the frame map is made in steps of [`SCAN_WORDS`] words with a
+/// step point (`steps::between`) between them, the frame map's lock released;
+/// a run is taken only once all of it was read free under the lock
+/// (`zoraya_pmm::FrameAllocator::alloc_contig_step`). When none is found and
+/// the reaper holds frames, each round of its help frees a step of them
+/// between two step points, and the scan starts again. No interval holds
+/// more than a step of either (INV-0270-1); the caller holds no spinlock, as
+/// for any step point.
+pub fn alloc_contig(count: u64) -> Result<Frame, Status> {
+    alloc_contig_in_steps(count, crate::steps::between)
+}
+
+/// [`alloc_contig`] with the step point given, for the test kernel, whose
+/// threads are no process and so make none. A step point that fails (the
+/// process was asked to end, `steps::between`) ends the search with its
+/// status, so that a kill is not waited out by a scan that grows with the
+/// machine's memory (ADR-0270 point 3); the caller frees nothing of the run,
+/// which it did not take yet.
+///
+/// The scan is not atomic: the lock is released between steps. If frames were
+/// freed since the scan began (`FrameAllocator::generation`), a run may have
+/// appeared behind it (the rescan only helps runs freed behind the scan), so a scan that found none is made once more, counted
+/// as a round of help; `memory_create` of a contiguous object does not fail
+/// for a run that was free at every instant.
+pub(crate) fn alloc_contig_in_steps(
+    count: u64,
+    mut step_point: impl FnMut() -> Result<(), Status>,
+) -> Result<Frame, Status> {
     if count > MAX_CONTIG_FRAMES {
-        return Err(OutOfFrames);
+        return Err(Status::NoMemory);
     }
+    let mut rescanned = false;
     for round in 0.. {
-        let found = FRAMES
-            .lock()
-            .as_mut()
-            .ok_or(OutOfFrames)?
-            .alloc_contig(count, 1);
+        let mut search = RunSearch::default();
+        let mut began = None;
+        let (found, changed) = loop {
+            let (step, generation) = {
+                let mut frames = FRAMES.lock();
+                let frames = frames.as_mut().ok_or(Status::NoMemory)?;
+                let step = frames.alloc_contig_step(count, 1, &mut search, SCAN_WORDS);
+                (step, frames.generation())
+            };
+            let began = *began.get_or_insert(generation);
+            crate::steps::count(search.words_read() as usize);
+            match step {
+                Ok(None) => step_point()?,
+                Ok(Some(first)) => break (Ok(first), false),
+                Err(e) => break (Err(e), generation != began),
+            }
+        };
         match found {
-            Err(e) if round == CONTIG_HELP_ROUNDS || !crate::reaper::help() => return Err(e),
-            Err(_) => {}
             Ok(first) => {
                 crate::steps::count(1);
                 return Ok(first);
+            }
+            Err(_) if changed && !rescanned && round < CONTIG_HELP_ROUNDS => {
+                rescanned = true;
+                step_point()?;
+            }
+            Err(_) if round == CONTIG_HELP_ROUNDS => return Err(Status::NoMemory),
+            Err(_) => {
+                step_point()?;
+                if !crate::reaper::help() {
+                    return Err(Status::NoMemory);
+                }
+                step_point()?;
             }
         }
     }
@@ -155,6 +208,14 @@ pub fn free(frame: Frame) {
     if let Err(e) = frames.free(frame) {
         panic!("bad free of frame {:#x}: {e:?}", frame.addr());
     }
+}
+
+/// The frames an allocation can get: the free ones and those the reaper
+/// holds, which [`alloc`] takes when none is free. For a check before many
+/// allocations (the heap's growth), so that memory on its way back is not
+/// taken for exhaustion.
+pub fn available() -> u64 {
+    stats().free + crate::reaper::held()
 }
 
 /// Frame counts.

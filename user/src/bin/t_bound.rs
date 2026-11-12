@@ -114,7 +114,7 @@ fn free_frames() -> u64 {
 }
 
 /// The free frames plus the frames the kernel heap has taken so far. The heap
-/// grows by 1 MiB at a time and never gives frames back, so a kill that makes
+/// grows by 64 KiB at a time and never gives frames back, so a kill that makes
 /// it grow (more CPUs, more concurrent allocations) moves frames from free to
 /// the heap without leaking any: this sum is what must return to its start.
 /// Both calls wait for the reaper to be idle first.

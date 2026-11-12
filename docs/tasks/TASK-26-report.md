@@ -1256,3 +1256,60 @@ The architect decided: "/system is read-only at run time for everyone, the conso
 - **Invariants.** INV-0289-4 added (checked), INV-0289-1 names the name-constraint test. ADR-0289's limitation (review finding 9) is closed.
 - **Decisions of mine, small.** The seal is by name on the root of a disk volume, in the service (not in the engine or the ABI); `+w /` stays allowed because the volume refuses what it covers under `/system`. No wire change.
 - **Handoff.** State: branch `work/system-ro`, pushed without a candidate tag. For the reviewer (a security boundary, `opus-review`): `crates/zoraya-fs-service/src/lib.rs` (`Seal`, `has`, `seal_after`, `is_sealed_name`, `open_as`, `clone_connection`, `rename`, `publish`), `user/src/bin/fsd.rs`, `crates/zoraya-shell/src/eval.rs`, the three tests and `tests/shell/system-ro.script`. Question: the seal is by the name of the root's entry; a volume that is not the root volume and has a `system` entry gets it too (only `fsd` on a disk does; the only disk is the root volume).
+
+### Units bound: the reaper's help, the heap's growth and the run search in steps (branch `work/units-fix`, from `work/tbound-fix`)
+
+`t_bound`'s units assertion (`units > 80` between step points) failed twice locally on `auto-el2` inside a loaded
+`make test-changed`, with no log; three CI runs failed its contiguous case alone on time (279 to 345 ms masked).
+
+- **Proved first.** Test-kernel tests that force each path, run on the code before the change: an allocation with no
+  free frame while a dead object's frames are queued (65 units in its interval), a 128-frame run that waits for the
+  reaper (129 units), an allocation 512 KiB past every free span of the heap (267 units). The run search over a
+  fragmented map (every other frame free) was one masked pass, bit by bit, with no units counted.
+- **Built.** `reaper::take` (an allocation takes one queued frame instead of freeing a step); `alloc_contig_step` in
+  `zoraya-pmm` (a resumable, word-wise search; 48 words a step, counted) and step points around each help round and
+  before the first zeroing step of a contiguous object; `Backing::LEAST_GROWTH` and `Heap::fits` in `zoraya-heap`
+  (the kernel heap grows by 64 KiB at least; user heaps keep 1 MiB); `heap::prepare` (a large growth mapped ahead in
+  steps) at `memory_create`'s list and before each step of `spawn`, a snapshot's copy and `finish`, and `memory_map`.
+  `t_bound`'s time bound was first put back to 2 ms scaled by the calibration; the review below undid that (1 s off
+  HVF again). Details and what is not covered: ADR-0270's last two Q6 notes.
+- **Tests.** Test kernel: `an_allocation_short_of_frames_takes_one_from_the_reaper`,
+  `a_run_short_of_frames_waits_for_the_reaper_in_steps`, `a_run_search_over_a_fragmented_map_goes_in_steps`,
+  `a_prepared_allocation_grows_the_heap_in_steps`; host: `zoraya-pmm`'s
+  `a_run_search_in_steps_is_a_first_fit_within_its_budget`, `zoraya-heap`'s `fits` and least-growth tests. `t_image`,
+  `t_quota` and the test kernel's `*_from_a_process` compare free frames plus the heap's (the heap grows more often).
+  Mutants added to `tools/mutants/kernel-objects.toml` (not run here). A growth of the heap counts the reaper's
+  frames as available (`frames::available`): with 64 KiB growths, free frames alone refused one in `t_bound`'s create
+  loop (`NoMemory`) on one run.
+- **Run.** `make check`; `cargo test -p zoraya-heap -p zoraya-pmm`; `make test-qemu-one`, `make
+  test-qemu-auto-smp4-2g`, `make test-qemu-tcg-el2` on the final code, one at a time: each 111 passed, 9 expected
+  failures, `t_bound: all passed` (contiguous 4 MiB case 17 us masked under HVF, 76 us under TCG at factor 9).
+
+**Opus review fixes of the units bound** (branch `work/units-fix`, candidate `candidate/work-units-fix-b`):
+
+- **1, 8 fixed (counted, split, spawn measured).** The list of frames grows by `realloc` (allocate, copy, free); the copy
+  is counted as `len * 8 / 4096` units, `prepare_step` gives it a step point after it, and `spawn` prepares the list
+  before the startup block. The new test `a_spawn_with_a_big_space_is_bounded` (hello with up to 64 MiB more bss,
+  through step points in a kernel thread) found a second bug: `spawn` counted its steps per segment, so the last pages
+  of one segment and the first of the next made 80 units in one interval; it counts them across segments now.
+  `a_space_list_growth_is_counted_and_prepared` shows the copy and the heap growth counted in an unprepared step and
+  absent in a prepared one. Not done: building the list outside the lock for `memory_map` (the copy under the lock is
+  inherent to a flat list); recorded in ADR-0270 with the other inline paths.
+- **2 fixed.** `t_bound`'s bound is 2 ms at factor 1 and a 1 s sanity limit off HVF (the form of `68a22cb`);
+  INV-0270-1's status says so.
+- **3 partly fixed.** 17 mutants in `tools/mutants/kernel-objects.toml`: 9 killed (the image's `prepare_step`, the
+  list's copy counted in `reserve_step` and in `adopt`, `prepare_step`'s reserve and its step point, `available`, the
+  reaper's counter, the first zeroing step, the rescan) and 8 survivors with the reason in each note: a snapshot's two
+  `prepare_step`s and `memory_map`'s two need a process with 16,384 frames or more (a crafted image run by `t_bound`),
+  the stack's and the startup block's are unreachable with `hello`, the segments' count needs a longer segment, and the
+  kernel's tables come from the boot pool until 128 MiB of window.
+- **4 fixed.** `reaper::held` is a counter; `free_some` and `take` start at a cursor past the emptied items.
+- **5 fixed.** `FrameAllocator::generation`; a scan that found no run and saw a free rescans once (kernel test and a
+  host test).
+- **6 fixed.** The scan's step points are `steps::between`; `memory_create` of a contiguous object ends `Cancelled`
+  during its scan.
+- **7 fixed.** Kernel page-table frames are in `heap::stats().backing`.
+- **Run.** `make check`; `cargo test -p zoraya-pmm`; `make test-qemu-one` (114 passed after the first three new tests,
+  116 with all), `make test-qemu-auto-smp4-2g` and `make test-qemu-tcg-el2` (116 passed, 9 expected failures each,
+  `t_bound: all passed` on tcg-el2). Two kernel tests that spawn or run the scheduler have to come after the timer
+  tests: before them they left a slice deadline queued (`timer_is_off_with_no_deadlines`).

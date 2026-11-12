@@ -123,6 +123,26 @@ static TESTS: &[Test] = &[
         run: a_switch_at_a_step_point_starts_a_new_interval,
     },
     Test {
+        name: "an_allocation_short_of_frames_takes_one_from_the_reaper",
+        run: an_allocation_short_of_frames_takes_one_from_the_reaper,
+    },
+    Test {
+        name: "frames_the_reaper_holds_are_available_and_counted",
+        run: frames_the_reaper_holds_are_available_and_counted,
+    },
+    Test {
+        name: "a_run_short_of_frames_waits_for_the_reaper_in_steps",
+        run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
+    },
+    Test {
+        name: "a_run_search_over_a_fragmented_map_goes_in_steps",
+        run: a_run_search_over_a_fragmented_map_goes_in_steps,
+    },
+    Test {
+        name: "a_prepared_allocation_grows_the_heap_in_steps",
+        run: a_prepared_allocation_grows_the_heap_in_steps,
+    },
+    Test {
         name: "pmu_and_debug_registers_do_not_trap",
         run: pmu_and_debug_registers_do_not_trap,
     },
@@ -285,6 +305,20 @@ static TESTS: &[Test] = &[
     Test {
         name: "exited_processes_leave_nothing_behind",
         run: exited_processes_leave_nothing_behind,
+    },
+    Test {
+        name: "a_run_freed_behind_the_scan_is_found_by_a_second_pass",
+        run: a_run_freed_behind_the_scan_is_found_by_a_second_pass,
+    },
+    Test {
+        name: "a_space_list_growth_is_counted_and_prepared",
+        run: a_space_list_growth_is_counted_and_prepared,
+    },
+    // Ordering: this test needs a free 4 MiB run, so it must run before
+    // anything fragments the heap's frames.
+    Test {
+        name: "a_contiguous_object_is_zeroed_apart_from_its_search",
+        run: a_contiguous_object_is_zeroed_apart_from_its_search,
     },
     Test {
         name: "running_out_of_asids_is_an_error",
@@ -526,6 +560,13 @@ static TESTS: &[Test] = &[
     Test {
         name: "stack_canary_intact",
         run: stack_canary_intact,
+    },
+    // Ordering: this test and the kernel-steps tests must run after the timer
+    // tests, because they leave a slice deadline queued. The spawn test runs
+    // last (the heap keeps the frames it takes).
+    Test {
+        name: "a_spawn_with_a_big_space_is_bounded",
+        run: a_spawn_with_a_big_space_is_bounded,
     },
 ];
 
@@ -1203,10 +1244,10 @@ fn console_and_listing_from_a_process() {
 /// ADR-0051 from a process, and INV-0051-1 and -4 by the counters: after it
 /// ends, the frames and heap are as they were.
 fn memory_objects_from_a_process() {
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run_program("t_memory"), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1216,10 +1257,10 @@ fn channels_from_a_process() {
     // channel end is two entries of a table that does not shrink. A second run
     // must then change nothing.
     assert_eq!(run_program("t_channels"), exited(0));
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run_program("t_channels"), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1233,10 +1274,10 @@ fn devices_from_a_process() {
     };
     assert_eq!(run(), exited(0));
     // Twice, so that the heap's growth is behind the counts.
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1249,10 +1290,10 @@ fn no_leak_after_rounds_of_objects() {
             .wait()
     };
     assert_eq!(run(), exited(0));
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1261,10 +1302,10 @@ fn no_leak_after_rounds_of_objects() {
 /// such as the signal table and the heap's chunks.
 fn twice_with_nothing_left(run: impl Fn() -> ExitRecord) {
     assert_eq!(run(), exited(0));
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before, "frames");
+    assert_eq!(frames_accounted(), frames_before, "frames");
     assert_eq!(heap::settled_stats().live, heap_before, "heap");
 }
 
@@ -2192,6 +2233,536 @@ fn a_switch_at_a_step_point_starts_a_new_interval() {
     crate::steps::count(30);
     arch::restore_interrupts(daif);
     assert_eq!(crate::steps::masked_max_units(true), 30);
+}
+
+/// Takes every free frame, linked through the direct map, and gives the
+/// head of the list (0 for none).
+fn hoard_frames() -> u64 {
+    let mut head = 0;
+    while let Ok(frame) = frames::alloc() {
+        // SAFETY: the frame is allocated, so this code owns it, and the
+        // direct map holds it read-write.
+        unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(head) };
+        head = frame.addr();
+    }
+    head
+}
+
+/// The free frames plus those the kernel heap has taken, once the reaper is
+/// idle: the heap keeps what it grows by, so a test that makes it grow moves
+/// frames from free to the heap without leaking any.
+fn frames_accounted() -> u64 {
+    frames::settled_stats().free + (heap::settled_stats().backing / PAGE_SIZE as usize) as u64
+}
+
+/// The next frame of a list from [`hoard_frames`], and the rest of it.
+fn unhoard_one(head: u64) -> Option<(Frame, u64)> {
+    if head == 0 {
+        return None;
+    }
+    // SAFETY: written by `hoard_frames`; the frame is still allocated.
+    let next = unsafe { (memory::phys_to_virt(head) as *const u64).read() };
+    Some((Frame::from_addr(head).expect("aligned"), next))
+}
+
+/// Gives back every frame of a list from [`hoard_frames`].
+fn unhoard(mut head: u64) {
+    while let Some((frame, next)) = unhoard_one(head) {
+        frames::free(frame);
+        head = next;
+    }
+}
+
+/// The stand-in for a system call's step point in a test kernel thread,
+/// where `steps::pause` does nothing (no process): a window for interrupts,
+/// which ends the masked interval.
+fn test_step_point() -> Result<(), zoraya_abi::Status> {
+    // SAFETY: the vectors and the GIC are up (tests run after boot set them
+    // up), and the callers of a step point hold no spinlock (their contract).
+    unsafe { crate::steps::step_point(|| false) };
+    Ok(())
+}
+
+/// INV-0270-1: an allocation that finds no free frame while the reaper still
+/// holds some takes one of them; it does not free a step of them in its own
+/// masked interval (64 units for one frame, which made the interval of a
+/// step of `memory_create` 64 + 64).
+fn an_allocation_short_of_frames_takes_one_from_the_reaper() {
+    let before = frames_accounted();
+    let mut queued = Vec::new();
+    queued.try_reserve_exact(200).expect("room for the list");
+    let mut head = hoard_frames();
+    for _ in 0..200 {
+        let (frame, next) = unhoard_one(head).expect("200 frames");
+        queued.push(frame);
+        head = next;
+    }
+    // Masked throughout, so that the reaper cannot run before the
+    // allocation: what a system call sees when a dead object's frames are
+    // queued and none is free.
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    crate::reaper::release(queued, crate::charge::Paid::new(None));
+    let frame = frames::alloc();
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    let frame = frame.expect("a frame the reaper held");
+    frames::free(frame);
+    unhoard(head);
+    assert!(
+        units <= 1,
+        "{units} units in the interval of one allocation (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The frames the reaper holds are available to an allocation (`take`), which
+/// the heap's growth relies on (a growth refused for want of free frames
+/// while a closed object was still queued), and `held` follows `defer`,
+/// `take` and `help` exactly (it is a counter, not a walk of the queue).
+fn frames_the_reaper_holds_are_available_and_counted() {
+    const QUEUED: usize = 200;
+    let before = frames_accounted();
+    let held_before = crate::reaper::held();
+    let mut queued = Vec::new();
+    queued.try_reserve_exact(QUEUED).expect("room for the list");
+    let mut head = hoard_frames();
+    for _ in 0..QUEUED {
+        let (frame, next) = unhoard_one(head).expect("200 frames");
+        queued.push(frame);
+        head = next;
+    }
+    let free = frames::stats().free;
+    // Masked, so that the reaper does not run before the checks.
+    let daif = arch::save_and_mask_interrupts();
+    crate::reaper::release(queued, crate::charge::Paid::new(None));
+    let queued_held = crate::reaper::held() - held_before;
+    let available = frames::available();
+    let taken = crate::reaper::take();
+    let after_take = crate::reaper::held() - held_before;
+    let helped = crate::reaper::help();
+    let after_help = crate::reaper::held() - held_before;
+    arch::restore_interrupts(daif);
+    if let Some(frame) = taken {
+        frames::free(frame);
+    }
+    unhoard(head);
+    assert_eq!(queued_held, QUEUED as u64, "held after a release");
+    assert_eq!(available, free + held_before + QUEUED as u64);
+    assert!(taken.is_some() && helped);
+    assert_eq!(after_take, QUEUED as u64 - 1, "held after a take");
+    assert_eq!(
+        after_help,
+        QUEUED as u64 - 1 - crate::steps::STEP as u64,
+        "held after a step of help"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: a contiguous run that has to wait for the reaper to free
+/// frames makes a step point after each round of help, so that no interval
+/// holds more than one round (64 frames) of the reaper's work.
+fn a_run_short_of_frames_waits_for_the_reaper_in_steps() {
+    const RUN: u64 = 128;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let head = hoard_frames();
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    let got = frames::alloc_contig_in_steps(RUN, test_step_point);
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    let got = got.expect("the run back from the reaper");
+    frames::free_contig(got, RUN);
+    unhoard(head);
+    assert!(
+        units <= crate::steps::STEP as u64 + 1,
+        "{units} units in one interval of a run's search (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: the search of the frame map for a run reads it in steps of
+/// a few dozen words with a step point between them, counted as work, so
+/// that its masked time does not grow with the machine's memory or its
+/// fragmentation (CI: 279 to 345 ms masked for one `memory_create` of a
+/// contiguous object under TCG, the only case past its bound). Every other
+/// frame free: no run of two exists, and the search reads the whole map.
+fn a_run_search_over_a_fragmented_map_goes_in_steps() {
+    let before = frames_accounted();
+    let mut head = hoard_frames();
+    let mut kept = 0;
+    while let Some((frame, next)) = unhoard_one(head) {
+        if (frame.addr() / zoraya_pmm::FRAME_SIZE).is_multiple_of(2) {
+            frames::free(frame);
+        } else {
+            // SAFETY: the frame is still allocated, so this code owns it, and
+            // the direct map holds it read-write.
+            unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(kept) };
+            kept = frame.addr();
+        }
+        head = next;
+    }
+    let mut points = 0;
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    let got = frames::alloc_contig_in_steps(2, || {
+        points += 1;
+        test_step_point()
+    });
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    unhoard(kept);
+    assert!(got.is_err(), "no two adjacent frames are free");
+    let words = frames::stats().total / 64;
+    assert!(
+        points >= 2 && points as u64 * 66 >= words,
+        "{points} step points in a search of {words} words"
+    );
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in one interval of a run's search (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// The search for a run reads the frame map in steps with the lock released,
+/// so a run freed behind it is not seen by that pass; with frames freed since
+/// the pass began (`FrameAllocator::generation`), a pass that found none is
+/// made once more, and `memory_create` of a contiguous object does not fail
+/// for a run that was free at every instant. Every frame taken but two
+/// adjacent ones, which the second to last step point of the scan frees:
+/// behind the scan, and the reaper holds nothing to wait for.
+fn a_run_freed_behind_the_scan_is_found_by_a_second_pass() {
+    let before = frames_accounted();
+    let mut addrs: Vec<u64> = Vec::new();
+    addrs
+        .try_reserve_exact(frames::stats().free as usize + 16)
+        .expect("room");
+    let head = hoard_frames();
+    let mut at = head;
+    while let Some((frame, next)) = unhoard_one(at) {
+        addrs.push(frame.addr());
+        at = next;
+    }
+    addrs.sort_unstable();
+    let first = (0..addrs.len() - 1)
+        .find(|&i| addrs[i + 1] == addrs[i] + zoraya_pmm::FRAME_SIZE)
+        .expect("two adjacent frames");
+    let pair = [addrs[first], addrs[first + 1]];
+    // Two frames apart, free from the start, so that the scan has frames to
+    // find (`count > free` ends a search at once) and still no run.
+    let spare = [addrs[addrs.len() / 2], addrs[addrs.len() / 2 + 2]];
+    assert!(spare[1] != pair[1] && spare[0] != pair[0]);
+    drop(addrs);
+    for addr in spare {
+        frames::free(Frame::from_addr(addr).expect("aligned"));
+    }
+    // How many step points a scan that finds nothing makes.
+    let mut points = 0;
+    let none = frames::alloc_contig_in_steps(2, || {
+        points += 1;
+        test_step_point()
+    });
+    assert!(none.is_err(), "every frame is taken");
+    assert!(
+        points > 3,
+        "{points} step points in a scan of the whole map"
+    );
+    // The pass again, with the pair freed behind it.
+    let mut calls = 0;
+    let got = frames::alloc_contig_in_steps(2, || {
+        calls += 1;
+        if calls == points - 1 {
+            for addr in pair {
+                frames::free(Frame::from_addr(addr).expect("aligned"));
+            }
+        }
+        test_step_point()
+    });
+    let mut at = head;
+    while let Some((frame, next)) = unhoard_one(at) {
+        if !pair.contains(&frame.addr()) && !spare.contains(&frame.addr()) {
+            frames::free(frame);
+        }
+        at = next;
+    }
+    // If it was not found the step point freed the pair already.
+    if let Ok(run) = got {
+        frames::free_contig(run, 2);
+    }
+    assert_eq!(got.map(|run| run.addr()), Ok(pair[0]), "a second pass");
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: an allocation larger than every free span of the heap makes
+/// it grow; prepared, the growth is mapped in steps and the allocation maps
+/// nothing in its own interval. Unprepared, 512 KiB more than the heap held
+/// was mapped in one interval (128 units and more). The test grows it by 4 MiB.
+fn a_prepared_allocation_grows_the_heap_in_steps() {
+    let accounted = frames_accounted();
+    // 4 MiB past the free spans: the window passes at least one 2 MiB
+    // boundary, which takes a page table (counted with the heap's frames).
+    let bytes = (heap::stats().free_spans + (4 << 20)).next_multiple_of(PAGE_SIZE as usize);
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    heap::prepare_in_steps(bytes, || {
+        let _ = test_step_point();
+    });
+    let mut block: Vec<u8> = Vec::new();
+    let reserved = block.try_reserve_exact(bytes);
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    reserved.expect("room");
+    drop(block);
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in one interval of a heap's growth (INV-0270-1)"
+    );
+    assert_eq!(
+        frames_accounted(),
+        accounted,
+        "free frames and the heap's, with its page tables, stay the same"
+    );
+}
+
+/// A space of `pages` mapped pages, for the tests of the list of frames.
+fn space_of(pages: usize) -> crate::memory::user::AddressSpace {
+    use crate::memory::user::AddressSpace;
+    const BASE: u64 = 0x4000_0000;
+    let mut space = AddressSpace::new(None).expect("a space");
+    for n in 0..pages {
+        space
+            .map_new_page(BASE + n as u64 * PAGE_SIZE, USER_DATA)
+            .expect("a page");
+    }
+    space
+}
+
+const USER_DATA: zoraya_pagetable::Attributes = zoraya_pagetable::Attributes {
+    memory: MemoryType::Normal,
+    write: true,
+    execute: false,
+    user: true,
+};
+
+/// INV-0270-1: the list of frames of a space grows by a copy
+/// (`GlobalAlloc::realloc`: allocate, copy, free) that is work in the
+/// interval it runs in, counted as `len * 8 / 4096` units, and a step
+/// prepared with `AddressSpace::prepare_step` makes it, and the heap's
+/// growth for the new list, before its interval. Two equal spaces one step
+/// short of the list's doubling: one takes a step of 64 pages as it is, the
+/// other after `prepare_step`.
+fn a_space_list_growth_is_counted_and_prepared() {
+    const BASE: u64 = 0x4000_0000;
+    let step_pages = |space: &mut crate::memory::user::AddressSpace| {
+        for n in 0..crate::steps::STEP {
+            space
+                .map_new_page(BASE + (1 << 30) + n as u64 * PAGE_SIZE, USER_DATA)
+                .expect("a page");
+        }
+    };
+    // Pages until the list has room for fewer than a step more, at a
+    // capacity where the copy is more than a unit.
+    let mut pages = 0;
+    let mut probe = space_of(0);
+    loop {
+        let (len, capacity) = probe.list_state();
+        if capacity >= 2048 && capacity - len <= 40 {
+            break;
+        }
+        probe
+            .map_new_page(BASE + pages as u64 * PAGE_SIZE, USER_DATA)
+            .expect("a page");
+        pages += 1;
+    }
+    drop(probe);
+    let mut unprepared = space_of(pages);
+    let mut prepared = space_of(pages);
+    let (len, capacity) = unprepared.list_state();
+    assert!(len + crate::steps::STEP > capacity, "the step needs growth");
+    assert!(prepared.step_growth() > 0);
+
+    // The step points open and close the intervals (the test thread runs
+    // with IRQ masked, which `restore_interrupts` alone would not end).
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    step_pages(&mut unprepared);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    let as_it_is = crate::steps::masked_max_units(true);
+
+    prepared.prepare_step();
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    step_pages(&mut prepared);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    let ahead = crate::steps::masked_max_units(true);
+
+    // `reserve_step` in the interval, as `memory_map` does under the lock:
+    // the copy is counted there too.
+    let mut inline = space_of(pages);
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    inline.reserve_step();
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    let reserve = crate::steps::masked_max_units(true);
+
+    drop((unprepared, prepared, inline));
+    crate::reaper::drain();
+    let copy = (len * core::mem::size_of::<Frame>() / PAGE_SIZE as usize) as u64;
+    assert!(copy >= 3, "the test copies a list of {len} frames");
+    assert!(
+        ahead <= crate::steps::STEP as u64 + 16,
+        "{ahead} units in a prepared step (INV-0270-1)"
+    );
+    assert!(
+        reserve >= copy,
+        "{reserve} units in a reserve of the list of {len} frames, the copy is {copy}"
+    );
+    assert!(
+        as_it_is >= ahead + copy,
+        "{as_it_is} units in an unprepared step, {ahead} in a prepared one, \
+         and the copy of {len} frames is {copy}"
+    );
+}
+
+/// INV-0270-1: the last part of the search for a run (up to a step of words
+/// of the frame map, and the 16 words of a free run of 1024 frames) and the
+/// first step of zeroing it are two intervals: a step point between them.
+/// With the step points on in this thread (`steps::set_kernel_steps`), a
+/// contiguous object of 1024 frames is made and dropped in a masked thread.
+fn a_contiguous_object_is_zeroed_apart_from_its_search() {
+    use crate::memory::object::MemoryObject;
+    let before = frames_accounted();
+    crate::steps::set_kernel_steps(true);
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    let object = MemoryObject::new(1024 * zoraya_pmm::FRAME_SIZE, true, None);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    crate::steps::set_kernel_steps(false);
+    let units = crate::steps::masked_max_units(true);
+    if units > crate::steps::STEP as u64 + 16 {
+        crate::steps::diagnose_units();
+    }
+    drop(object.expect("a contiguous object of 4 MiB"));
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of a contiguous object (INV-0270-1)"
+    );
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
+}
+
+/// `hello`'s ELF file with `extra` bytes more of zeroed memory in its last
+/// writable segment.
+fn with_bss(file: &[u8], extra: u64) -> Vec<u8> {
+    let mut bytes = file.to_vec();
+    let word = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().expect("8"));
+    let phoff = word(&bytes, 32) as usize;
+    let phnum = u16::from_le_bytes(bytes[56..58].try_into().expect("2")) as usize;
+    let mut last = None;
+    for i in 0..phnum {
+        let ph = phoff + i * 56;
+        let kind = u32::from_le_bytes(bytes[ph..ph + 4].try_into().expect("4"));
+        let flags = u32::from_le_bytes(bytes[ph + 4..ph + 8].try_into().expect("4"));
+        if kind == 1 && flags & 2 != 0 {
+            last = Some(ph);
+        }
+    }
+    let ph = last.expect("a writable segment");
+    let memsz = word(&bytes, ph + 40) + extra;
+    bytes[ph + 40..ph + 48].copy_from_slice(&memsz.to_le_bytes());
+    bytes
+}
+
+/// INV-0270-1: `spawn` of a program with a large address space holds no more
+/// than a step of work in any interval: the list of frames grows ahead of each
+/// step (`prepare_step` in the image, the stack and the startup block), where
+/// the doubling was a copy and 64 pages of the heap in one interval. The list
+/// doubles from 16,384 to 32,768 frames (a copy of 128 KiB, a new list of
+/// 256 KiB) with the heap squeezed to the least free; `hello` is spawned with
+/// its bss sized so that the list passes 16,384 at each of the last 32 frames
+/// it takes. (The stack's and the startup block's `prepare_step` are not
+/// reached by this: with `hello`'s 16 stack pages and one page of block, the
+/// list never passes a power of two after a step boundary that is there; see
+/// ADR-0270.)
+/// Measured through the kernel's own call with the step points on in this
+/// thread (`steps::set_kernel_steps`). It runs last: the heap keeps the frames
+/// it grew by, scattered, and 4 MiB runs are few in a 128 MiB guest.
+fn a_spawn_with_a_big_space_is_bounded() {
+    const CAP: usize = 16384;
+    const SWEEP_FIRST: usize = 0;
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let before = frames_accounted();
+    let spawn_with = |bss: usize| {
+        // No free span of the heap fits the new list: its growth is the
+        // step's, unless it was prepared.
+        let mut hog: Vec<alloc::boxed::Box<[u8; 4096]>> = Vec::new();
+        hog.try_reserve_exact(heap::stats().free_spans / 4096 + 64)
+            .expect("room");
+        while heap::stats().free_spans > 32 << 10 {
+            hog.push(alloc::boxed::Box::new([0; 4096]));
+        }
+        let big = with_bss(file, (bss * PAGE_SIZE as usize) as u64);
+        crate::steps::set_kernel_steps(true);
+        let daif = arch::save_and_mask_interrupts();
+        let _ = test_step_point();
+        crate::steps::masked_max_units(true);
+        let spawned = process::spawn_bytes_suspended("big", &big);
+        let _ = test_step_point();
+        arch::restore_interrupts(daif);
+        crate::steps::set_kernel_steps(false);
+        let units = crate::steps::masked_max_units(true);
+        if units > crate::steps::STEP as u64 + 16 {
+            crate::steps::diagnose_units();
+        }
+        let process = spawned.expect("a process with a big space");
+        let len = process
+            .space
+            .lock()
+            .as_ref()
+            .expect("a space")
+            .list_state()
+            .0;
+        let _ = process.signal(RequestKind::Terminate, 0);
+        let _ = process.resume();
+        process.wait();
+        drop(process);
+        drop(hog);
+        crate::reaper::drain();
+        (units, len)
+    };
+    let free = frames::settled_stats().free as usize;
+    let room = free - free / 16;
+    assert!(room > CAP + 200, "{room} frames: no room for the test");
+    let (_, len) = spawn_with(CAP - 100);
+    let mut worst = 0;
+    for d in SWEEP_FIRST..SWEEP_FIRST + 32 {
+        // The list's length grows with the bss by one a page, and by a table
+        // every 512 pages.
+        let bss = CAP - 100 + CAP + 1 + d - len;
+        let (units, now) = spawn_with(bss);
+        println!(
+            "a spawn of {bss} bss pages: list of {now} frames, {units} units, {} accounted",
+            frames_accounted()
+        );
+        assert!(
+            units <= crate::steps::STEP as u64 + 16,
+            "{units} units in an interval of a spawn of {bss} pages (INV-0270-1)"
+        );
+        worst = worst.max(units);
+    }
+    assert!(worst > 0);
+    assert_eq!(frames_accounted(), before);
 }
 
 fn pmu_and_debug_registers_do_not_trap() {

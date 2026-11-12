@@ -175,6 +175,55 @@ fn growth_is_bounded_and_works_without_contiguous_backing() {
     check(p, huge.size());
 }
 
+/// A backing whose least growth is one chunk, as the kernel's is.
+struct Chunked(Arena);
+
+// SAFETY: forwards to `Arena`, which meets the contract.
+unsafe impl Backing for Chunked {
+    const LEAST_GROWTH: usize = CHUNK_SIZE;
+
+    fn grow(&mut self, pages: usize) -> Option<usize> {
+        self.0.grow(pages)
+    }
+}
+
+/// A request of at most the backing's least growth takes that much from it:
+/// 16 pages for the kernel's, which it maps with interrupts masked
+/// (INV-0270-1); `GROW_SIZE` for any other.
+#[test]
+fn a_small_request_grows_the_backing_by_its_least_growth() {
+    let mut heap = Heap::new(Chunked(Arena::new(1 << 20, 0)));
+    assert!(!heap.alloc(layout(16, 8)).is_null());
+    assert_eq!(heap.stats().backing, CHUNK_SIZE);
+    assert!(!heap.alloc(layout(3 * PAGE_SIZE, 8)).is_null());
+    assert_eq!(heap.stats().backing, 2 * CHUNK_SIZE);
+    let mut heap = Heap::new(Arena::new(4 << 20, 0));
+    assert!(!heap.alloc(layout(16, 8)).is_null());
+    assert_eq!(heap.stats().backing, GROW_SIZE);
+}
+
+/// `fits` says whether a request would grow the backing, and changes nothing.
+#[test]
+fn fits_says_whether_a_request_grows_the_backing() {
+    let mut heap = Heap::new(Chunked(Arena::new(1 << 20, 0)));
+    let small = layout(16, 8);
+    let large = layout(3 * PAGE_SIZE, 8);
+    assert!(!heap.fits(small) && !heap.fits(large), "nothing yet");
+    assert_eq!(heap.stats().backing, 0);
+    let p = heap.alloc(large);
+    assert!(!p.is_null());
+    let grown = heap.stats();
+    // The rest of the growth, 13 pages, holds 3 pages but not 14.
+    assert!(heap.fits(large));
+    assert!(!heap.fits(layout(14 * PAGE_SIZE, 8)));
+    assert!(!heap.fits(small), "a class needs a whole chunk");
+    assert_eq!(heap.stats(), grown, "nothing changed");
+    assert!(!heap.alloc(large).is_null());
+    assert_eq!(heap.stats().grows, grown.grows, "served without growing");
+    assert!(!heap.alloc(small).is_null());
+    assert!(heap.fits(small), "the class has blocks left");
+}
+
 #[test]
 fn exhausted_backing_returns_null_and_stays_usable() {
     let mut heap = Heap::new(Arena::new(GROW_SIZE, 0));
