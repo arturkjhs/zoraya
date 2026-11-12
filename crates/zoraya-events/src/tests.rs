@@ -374,3 +374,41 @@ fn a_source_has_a_bounded_number_of_subscriptions() {
     assert_eq!(e.subscription_count(), 0);
     e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
 }
+
+/// Review error 3 (TASK-26 fix): the two bounds do not bound their product.
+/// A source with `MAX_SUBSCRIPTIONS` subscribers, each on a port that holds
+/// `MAX_SUBSCRIPTIONS` entries with the source's at the front (the worst
+/// place for the move), is freed. The work is a search and a move per
+/// subscriber, not a pass over the 1M entries of the ports; the bound is
+/// loose because the host and the build vary, and the kernel measures its own
+/// (`t_bound`).
+#[test]
+fn freeing_a_full_source_on_full_ports_is_bounded() {
+    use std::time::{Duration, Instant};
+    let n = MAX_SUBSCRIPTIONS as u64;
+    let mut e = E::new();
+    let source = e.new_source(0).unwrap();
+    let others: Vec<SourceId> = (0..n - 1).map(|_| e.new_source(0).unwrap()).collect();
+    let mut ports = Vec::new();
+    for _ in 0..n {
+        let port = e.new_port().unwrap();
+        e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
+        // Keys 1.., spread over the other sources (each takes at most one
+        // subscription per port here, so at most `n` in all).
+        for (i, other) in others.iter().enumerate() {
+            e.subscribe(port, *other, A, 1 + i as u64, Mode::Level, 0)
+                .unwrap();
+        }
+        ports.push(port);
+    }
+    assert_eq!(e.subscription_count(), (n * n) as usize);
+    let start = Instant::now();
+    e.free_source(source);
+    let time = start.elapsed();
+    assert_eq!(e.subscription_count(), (n * (n - 1)) as usize);
+    // The key 0 is free again on every port, the others are untouched.
+    let other = e.new_source(0).unwrap();
+    e.subscribe(ports[0], other, A, 0, Mode::Level, 0).unwrap();
+    std::eprintln!("free_source, 1024 ports of 1024 entries: {time:?}");
+    assert!(time < Duration::from_millis(250), "{time:?}");
+}

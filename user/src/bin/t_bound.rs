@@ -605,6 +605,61 @@ fn subscription_sites() {
     }
 }
 
+/// Review error 3 (TASK-26 fix): a job's source with a subscriber on each of
+/// 128 ports, each port holding 1024 entries with the job's at the front of
+/// its sorted list (the worst place to remove from), and the other 1023
+/// entries to 128 other jobs (a source takes 1024). One eighth of the
+/// product the bounds allow (1024 ports); closing the job's handle frees the
+/// source and removes its 128 entries.
+fn wide_source() -> i32 {
+    const PORTS: usize = 128;
+    let job = job_create(JOB, JobFlags::NONE).expect("job");
+    let others: alloc::vec::Vec<Handle> = (0..PORTS)
+        .map(|_| job_create(JOB, JobFlags::NONE).expect("other"))
+        .collect();
+    for _ in 0..PORTS {
+        let port = port_create().expect("port");
+        port_subscribe(port, job, job_signals::SUSPENDED, 0, Mode::Edge).expect("subscribe");
+        for at in 0..1023usize {
+            let other = others[at / 8];
+            port_subscribe(
+                port,
+                other,
+                job_signals::SUSPENDED,
+                1 + at as u64,
+                Mode::Edge,
+            )
+            .expect("subscribe");
+        }
+    }
+    let (_, ns) = measure(|| handle_close(job).expect("close"));
+    println!(
+        "t_bound: free_source of 128 subscribers on ports of 1024: {} us masked",
+        ns / 1000
+    );
+    let limit = bound_ns();
+    assert!(ns <= limit, "free_source: {ns} ns masked, limit {limit}");
+    0
+}
+
+/// ADR-0299, review errors 3 and 4: the two bounds are on a port and on a
+/// source, and what an exit or a `free_source` does is their product.
+fn many_subscriptions_sites() {
+    let room = job_create(JOB, JobFlags::NONE).expect("job");
+    let label = "free_source";
+    let (p, ns) = measure(|| {
+        let p = child(room, b"wide-source").expect("spawn");
+        let record = wait_exit(p);
+        assert_eq!(record.code, 0, "{label}: the child");
+        p
+    });
+    handle_close(p).expect("close");
+    println!("t_bound: {label}: {} us masked at most", ns / 1000);
+    let limit = bound_ns();
+    assert!(ns <= limit, "{label}: {ns} ns masked, limit {limit}");
+    handle_close(room).expect("room");
+}
+
 fn teardown_sites() {
     teardown("a process holding 24 MiB", b"hold-short", b"hold-long");
     teardown("400 objects of 256 KiB", b"crowd-short", b"crowd-long");
@@ -673,6 +728,7 @@ fn inner() -> i32 {
     check("channel chain close", step, big);
     job_tree_sites();
     subscription_sites();
+    many_subscriptions_sites();
     teardown_sites();
     a_kill_between_steps_leaves_nothing();
     println!("t_bound: all passed");
@@ -691,6 +747,7 @@ fn main() -> i32 {
         Some(b"contiguous-loop") => churn_contiguous(),
         Some(b"create-loop") => churn(false),
         Some(b"snapshot-loop") => churn(true),
+        Some(b"wide-source") => wide_source(),
         Some(b"inner") => inner(),
         _ => outer(),
     }

@@ -28,7 +28,13 @@ closing a port or freeing a source frees them all. INV-0270-1 (2 ms masked) does
 ### Option B: a bound on the subscriptions of a port and of a source, refused as `LimitReached`
 - **Description:** `zoraya_events::MAX_SUBSCRIPTIONS` = 1024 for a port and for a source. `subscribe` past it fails with
   `Error::TooMany`, which the kernel maps to `Status::LimitReached` (as `Full`, the user packets' bound, already is), the
-  `paid` dropped and nothing changed. Every walk is then a fixed amount: at most 1024 subscriptions.
+  `paid` dropped and nothing changed. Each walk of one port's or one source's list is then a fixed amount: at most 1024
+  subscriptions. The two bounds do not bound a call that touches both (review of the fixes, error 3): freeing a source with 1024
+  subscribers on 1024 ports that each hold 1024 entries removes 1024 entries, each by a binary search and a move of up to
+  1023 entries of 16 bytes (16 MiB moved at most). The first version swept every port's list (over 1M entries, 1.94 ms on
+  the host, about 10 ms in the kernel); the search takes 1.05 ms on the host (`freeing_a_full_source_on_full_ports_is_bounded`,
+  release build, one run), and `t_bound` measures the call at an eighth of the product (128 ports). A handle table of 1024
+  also bounds what one process can hold, but not what many processes subscribe to one source.
 - **Evidence for:** drivers 1 to 4; the same shape as `MAX_USER_PACKETS`.
 - **Evidence against:** a service with more than 1024 clients on one port (none today; the table's own limit is 1024 handles)
   would need a second port.

@@ -8,9 +8,9 @@
 //! packets and some items left stale by removals, and room for that is reserved
 //! when a subscription or user packet is added, so asserting a signal never
 //! allocates. Removal marks items stale instead of searching the list, and
-//! removing many subscriptions sweeps each port once, so ending a handle costs
-//! what it holds, not the square of it. `take` costs the packets
-//! it returns plus the entries that went stale, which earlier assertions paid
+//! removing a subscription finds its entry in the port's list by key, so ending
+//! a handle costs what it holds times a search and a move (ADR-0299). `take`
+//! costs the packets it returns plus the entries that went stale, which earlier assertions paid
 //! for, and never looks at an idle subscription.
 
 #![no_std]
@@ -123,8 +123,6 @@ struct Port<W> {
     user: usize,
     /// Items in `ready` whose subscription is gone.
     stale: usize,
-    /// The last sweep that visited this port.
-    swept: u64,
     closed: bool,
     waiters: Vec<W>,
 }
@@ -147,7 +145,6 @@ pub struct Events<W, P = ()> {
     subscriptions: Vec<Option<Subscription<P>>>,
     free_subscriptions: Vec<u32>,
     serial: u64,
-    sweeps: u64,
 }
 
 impl<W, P> Default for Events<W, P> {
@@ -166,7 +163,6 @@ impl<W, P> Events<W, P> {
             subscriptions: Vec::new(),
             free_subscriptions: Vec::new(),
             serial: 0,
-            sweeps: 0,
         }
     }
 
@@ -205,7 +201,6 @@ impl<W, P> Events<W, P> {
             subscriptions: Vec::new(),
             user: 0,
             stale: 0,
-            swept: 0,
             closed: false,
             waiters: Vec::new(),
         };
@@ -266,10 +261,13 @@ impl<W, P> Events<W, P> {
     }
 
     /// Removes the subscriptions of `source` that belong to `owner`, or all of
-    /// them. Each port's list is swept once, however many leave it.
+    /// them. Each one's entry in its port's list is found by binary search on
+    /// its key and removed, so the work is at most the matching subscriptions
+    /// (at most [`MAX_SUBSCRIPTIONS`]) times a search and a move of the rest
+    /// of one port's list (at most [`MAX_SUBSCRIPTIONS`] entries of 16 bytes):
+    /// a product of 1024 by 1024 entries moved in the worst case (ADR-0299),
+    /// not a pass over every entry of every port.
     fn remove_matching(&mut self, source: SourceId, owner: Option<u64>) {
-        self.sweeps += 1;
-        let sweep = self.sweeps;
         let matches =
             |s: &Subscription<P>| s.source == source.0 && owner.is_none_or(|o| s.owner == o);
         for i in 0..self.source(source.0).subscriptions.len() {
@@ -278,17 +276,11 @@ impl<W, P> Events<W, P> {
             if !matches(subscription) {
                 continue;
             }
-            let port_id = subscription.port;
+            let (port_id, key) = (subscription.port, subscription.key);
             self.mark_stale(s);
-            if self.port(port_id).swept != sweep {
-                self.port(port_id).swept = sweep;
-                let mut list = core::mem::take(&mut self.port(port_id).subscriptions);
-                list.retain(|(_, s)| {
-                    !self.subscriptions[*s as usize]
-                        .as_ref()
-                        .is_some_and(matches)
-                });
-                self.port(port_id).subscriptions = list;
+            let port = self.port(port_id);
+            if let Ok(at) = port.subscriptions.binary_search_by_key(&key, |e| e.0) {
+                port.subscriptions.remove(at);
             }
         }
         let mut i = 0;
@@ -593,6 +585,17 @@ impl<W, P> Events<W, P> {
     pub fn has_room(&mut self, id: PortId) -> bool {
         let port = self.port(id.0);
         port.ready.capacity() >= port.subscriptions.len() + port.user + port.stale
+    }
+
+    /// Subscriptions on a port, which closing it ends.
+    pub fn port_subscriptions(&mut self, id: PortId) -> usize {
+        self.port(id.0).subscriptions.len()
+    }
+
+    /// Subscriptions to a source, which freeing it (or ending a handle's)
+    /// walks.
+    pub fn source_subscriptions(&mut self, id: SourceId) -> usize {
+        self.source(id.0).subscriptions.len()
     }
 
     /// Items on the ready list, stale ones too.
