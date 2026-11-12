@@ -1421,8 +1421,17 @@ pub mod test_calls {
     /// Prints where the units of the busiest masked interval came from.
     pub const DIAGNOSE_UNITS: u64 = 0x7019;
     /// Makes every step point switch away (x0 = 1) or not (0): the walks of
-    /// different processes then interleave at each one (`t_suspend`).
+    /// different processes then interleave at each one (`t_suspend`). While
+    /// it is on, user threads also get [`FORCED_SLICE_NS`] slices.
     pub const FORCE_SWITCH: u64 = 0x701a;
+    /// The slice while `FORCE_SWITCH` is on. Each step point of a walk then
+    /// runs every other ready thread before the walk goes on, and a process
+    /// that spins at EL0 keeps the CPU for its whole slice: with the default
+    /// 10 ms, `t_suspend`'s two forced cases (700 jobs, up to 18 spinning
+    /// processes) took about 235 s of a 240 s `t_suspend` under TCG on the
+    /// development host and pushed every CI test-qemu run past its 300 s;
+    /// with 1 ms the whole of `t_suspend` took 39 s there.
+    pub const FORCED_SLICE_NS: u64 = 1_000_000;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1458,6 +1467,13 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
         }
         test_calls::FORCE_SWITCH => {
             crate::steps::set_always_switch(a0 != 0);
+            // 0 restores the default slice; the harness also restores it
+            // before every test.
+            sched::set_test_slice(if a0 != 0 {
+                test_calls::FORCED_SLICE_NS
+            } else {
+                0
+            });
             Some(Ok(0))
         }
         test_calls::DIAGNOSE_UNITS => {

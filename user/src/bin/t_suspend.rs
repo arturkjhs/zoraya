@@ -32,6 +32,9 @@ fn force_switch(on: bool) {
 }
 
 /// Forced switching for the life of a case: on at creation, off when dropped.
+/// The kernel also shortens the slice while it is on (`FORCED_SLICE_NS`), so
+/// that the processes spinning at EL0 do not make each forced switch cost a
+/// whole 10 ms slice each.
 /// A failed assertion ends the program (the `Drop` may not run then); the
 /// flag is also reset before the first case and at the start of every forced case, so that a
 /// case never starts with another's setting.
