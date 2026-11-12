@@ -345,7 +345,7 @@ fn answer_reconnect(reconnect: Handle, rooms: Option<&RoomKeeper>, kind: u32) {
             rights: ChannelObject::RIGHTS,
             transfer: Transfer::Move,
         });
-        let list: &[zoraya_abi::ChannelEntry] = entry.as_ref().map_or(&[], core::slice::from_ref);
+        let list = entry.as_slice();
         if zoraya_user::channel_write(reconnect, b"m", list).is_err()
             && let Some(h) = new
         {

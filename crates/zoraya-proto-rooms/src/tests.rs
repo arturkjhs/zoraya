@@ -220,7 +220,7 @@ fn a_usage_record_round_trips_and_any_bytes_decode() {
     }
     assert_eq!(Launcher::from_raw(1), Some(Launcher::Desktop));
     assert_eq!(Launcher::from_raw(0), None);
-    assert_eq!(Launcher::Desktop.from_words(), "from the desktop");
+    assert_eq!(Launcher::Desktop.phrase(), "from the desktop");
 }
 
 #[test]

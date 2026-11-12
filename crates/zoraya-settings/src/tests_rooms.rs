@@ -330,13 +330,7 @@ fn the_limit_words_read_and_write_back_in_the_lines_order() {
     let a = r.get("agent-1").unwrap();
     assert!(a.limits.is_complete());
     assert_eq!(a.limits.mem, Some(89 << 20));
-    assert_eq!(
-        a.line(),
-        text.lines()
-            .next()
-            .unwrap()
-            .replace("--untrusted --mem", "--untrusted --mem")
-    );
+    assert_eq!(a.line(), text.lines().next().unwrap());
     let b = r.get("build").unwrap();
     assert_eq!(
         (b.limits.mem, b.limits.cpu, b.limits.tmp),

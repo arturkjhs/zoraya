@@ -94,9 +94,9 @@ pub fn parse_size(text: &str) -> Option<u64> {
 
 /// The size in the largest unit that holds it exactly: `2G`, `89M`, `5000K`.
 pub fn format_size(bytes: u64) -> String {
-    if bytes != 0 && bytes % GIB == 0 {
+    if bytes != 0 && bytes.is_multiple_of(GIB) {
         format!("{}G", bytes / GIB)
-    } else if bytes != 0 && bytes % MIB == 0 {
+    } else if bytes != 0 && bytes.is_multiple_of(MIB) {
         format!("{}M", bytes / MIB)
     } else {
         format!("{}K", bytes.div_ceil(KIB))

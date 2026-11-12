@@ -94,9 +94,9 @@ impl Env for Model {
     fn now_ms(&mut self) -> u64 {
         self.now
     }
-    fn room_line(&mut self, name: &str) -> Result<Option<Room>, ()> {
+    fn room_line(&mut self, name: &str) -> Result<Option<Room>, TableError> {
         if self.table == "BROKEN" {
-            return Err(());
+            return Err(TableError);
         }
         Ok(rooms::read(self.table.as_bytes()).get(name).cloned())
     }

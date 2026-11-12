@@ -157,3 +157,15 @@ vendor/ring.sha256            check
 tools/check-vendor-ring.sh    check
 tests/net/tls/                test-net
 user/src/bin/rngd.rs          test-files test-net
+
+# The room keeper and the room line (Q6a, ADR-0269): the keeper's decisions and
+# protocol, its process and QEMU test, the launchers' client, memhog and the
+# console script. `init`, the shell and the panel are not mapped (every step).
+crates/zoraya-rooms/          test-qemu test-files
+crates/zoraya-proto-rooms/    test-qemu test-files
+user/src/bin/rooms.rs         test-qemu test-files
+user/src/bin/t_rooms.rs       test-qemu
+user/src/bin/memhog.rs        test-files
+user/src/roomsclient.rs       test-files test-gui test-qemu
+user/describe/tests/memhog.cmd test-files
+tests/shell/rooms.script      test-files

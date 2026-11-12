@@ -45,7 +45,7 @@ pub enum Launcher {
 
 impl Launcher {
     /// `from the desktop` and `from the console`.
-    pub const fn from_words(self) -> &'static str {
+    pub const fn phrase(self) -> &'static str {
         match self {
             Launcher::Desktop => "from the desktop",
             Launcher::Console => "from the console",

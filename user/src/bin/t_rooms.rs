@@ -16,7 +16,6 @@
 
 extern crate alloc;
 
-use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -24,8 +23,8 @@ use alloc::vec::Vec;
 use zoraya_abi::quota::JobLimits;
 use zoraya_abi::spawn::{Encoder, Transfer};
 use zoraya_abi::{
-    ChannelEntry, DIRECTORY, DirectoryObject, Handle, JOB, JobFlags, JobObject, MapFlags,
-    MemoryFlags, ObjectType, Rights, Status,
+    ChannelEntry, DIRECTORY, DirectoryObject, Handle, JOB, JobFlags, JobObject, MemoryFlags,
+    ObjectType, Rights, Status,
 };
 use zoraya_proto_file::{open_flags, rights};
 use zoraya_proto_rooms as pr;
@@ -34,7 +33,7 @@ use zoraya_user::files::File;
 use zoraya_user::{
     assert_err, channel_create, channel_read, channel_write, clock_monotonic, console_entry, dup,
     handle_close, handle_duplicate, image, job_create, job_get_usage, job_kill, job_set_limits,
-    memory_create, memory_map, println, sleep_until, spawn, startup, wait_exit,
+    memory_create, println, sleep_until, spawn, startup, wait_exit,
 };
 
 const MIB: u64 = 1 << 20;
@@ -743,13 +742,8 @@ fn main() -> i32 {
     }
     println!("t_rooms: INV-0269-3: a restarted keeper stops a room it did not start");
 
-    let _ = (
-        pa,
-        pb,
-        MapFlags::READ,
-        memory_map as fn(_, _, _, _) -> _,
-        format!(""),
-    );
+    handle_close(pa).expect("close");
+    handle_close(pb).expect("close");
     job_kill(keeper.job).expect("end the keeper");
     println!("t_rooms: all passed");
     0

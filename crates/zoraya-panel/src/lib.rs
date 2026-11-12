@@ -12,6 +12,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -477,7 +478,7 @@ pub fn terminal_at(room: Option<&Room>, path: &str, home: &str) -> Option<Launch
 /// What a press on the dock asks of the panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    Launch(Launch),
+    Launch(Box<Launch>),
     /// The current room changed: tell the compositor.
     Entered,
     /// `+`: the rooms overview's form is not built yet (ADR-0172's
@@ -539,8 +540,8 @@ impl Panel {
                 // (ADR-0056, TASK-24): `room new --untrusted` is refused, and
                 // so is a launch in a hand-written untrusted room.
                 _ if self.room().is_some_and(|r| r.untrusted) => Action::Nothing,
-                Some(("term", _)) => Action::Launch(terminal(self.room())),
-                Some((app, _)) => Action::Launch(application(self.room(), app, None)),
+                Some(("term", _)) => Action::Launch(Box::new(terminal(self.room()))),
+                Some((app, _)) => Action::Launch(Box::new(application(self.room(), app, None))),
                 _ => Action::Nothing,
             },
             ROOM => {

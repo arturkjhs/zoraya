@@ -18,8 +18,8 @@
 1  cpu-spinners         pending       Q6a     two untrusted rooms spinning and bursting; a home terminal echoes within INV-0264-3's bound (the GUI half, which needs rooms with --cpu)
 1  disk-filler          pending       Q5      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
 1  service-floods       pending       Q3      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)
-1  keeper               pending       Q6a     INV-0269-1 to INV-0269-3
-1  many-rooms           pending       Q6a     four untrusted rooms with a fork bomb and a hog each; home starts processes and maps memory (INV-0261-8)
+1  keeper               test-qemu     Q6a     t_rooms: INV-0269-1 to INV-0269-3 at the keeper's channels (the GUI form of INV-0269-1 is Q6b's)
+1  many-rooms           test-qemu     Q6a     t_rooms: four untrusted rooms with a fork bomb and a hog each; home starts 16 processes and maps 16 MiB (INV-0261-8)
 1  hostile-programs     pending       Q7      TASK-21's hostile cases from inside an untrusted room
 1  fuzzing              pending       Q7      a fuzz target for each decoder an untrusted program reaches that has none (10 minutes each)
 2  net-account-flood    pending       N6      connecting without end from the room stops at --conns while home connects (INV-0262-1, INV-0262-4)

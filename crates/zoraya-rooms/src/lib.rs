@@ -67,10 +67,14 @@ pub trait Env {
     fn now_ms(&mut self) -> u64;
     /// The room's line in `/config/rooms`: `Ok(None)` if there is none, `Err`
     /// if the table cannot be read.
-    fn room_line(&mut self, name: &str) -> Result<Option<Room>, ()>;
+    fn room_line(&mut self, name: &str) -> Result<Option<Room>, TableError>;
     /// The session's size, from its job.
     fn machine(&mut self) -> Machine;
 }
+
+/// The room table could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableError;
 
 /// What the process does with a `handle` call.
 #[derive(Debug, PartialEq, Eq)]
@@ -253,7 +257,7 @@ impl<E: Env> Keeper<E> {
 
     /// A room's line; `home` has none and is a trusted room without limits
     /// (its launch jobs put the panel's terminals under the session job).
-    fn line(&mut self, room: &str) -> Result<Option<Room>, ()> {
+    fn line(&mut self, room: &str) -> Result<Option<Room>, TableError> {
         if room == rooms::HOME {
             return Ok(Some(Room {
                 name: room.to_string(),
@@ -511,19 +515,14 @@ impl<E: Env> Keeper<E> {
                     && c != chan
                     && (r.leased || procs > 0)
                 {
-                    return denied(
-                        status::BUSY,
-                        &format!("running {}", who.from_words()),
-                        tx,
-                        out,
-                    );
+                    return denied(status::BUSY, &format!("running {}", who.phrase()), tx, out);
                 }
             }
         } else {
             let line = match self.line(room) {
                 Ok(Some(l)) => l,
                 Ok(None) => return denied(status::NO_SUCH_ROOM, "no such room", tx, out),
-                Err(()) => {
+                Err(TableError) => {
                     return denied(status::NO_TABLE, "the room table is unreadable", tx, out);
                 }
             };
@@ -600,7 +599,9 @@ impl<E: Env> Keeper<E> {
         let line = match self.line(room) {
             Ok(Some(l)) => l,
             Ok(None) => return denied(status::NO_SUCH_ROOM, "no such room", tx, out),
-            Err(()) => return denied(status::NO_TABLE, "the room table is unreadable", tx, out),
+            Err(TableError) => {
+                return denied(status::NO_TABLE, "the room table is unreadable", tx, out);
+            }
         };
         if line.untrusted != self.rooms[i].untrusted {
             return denied(

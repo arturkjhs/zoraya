@@ -28,7 +28,7 @@ use zoraya_abi::{
 use zoraya_proto_rooms::alloc_free::RoomName;
 use zoraya_proto_rooms::{ChannelKind, Forget, Keep, Launcher, attach};
 use zoraya_protocol::{Below, Text, decode, encode};
-use zoraya_rooms::{Env, Event, JobId, Keeper, OUT_SIZE, Parent, Reply};
+use zoraya_rooms::{Env, Event, JobId, Keeper, OUT_SIZE, Parent, Reply, TableError};
 use zoraya_settings::rooms::{self, Machine, Room};
 use zoraya_user::files::{File, read_all};
 use zoraya_user::{
@@ -145,15 +145,15 @@ impl Env for Sys {
         clock_monotonic() / 1_000_000
     }
 
-    fn room_line(&mut self, name: &str) -> Result<Option<Room>, ()> {
+    fn room_line(&mut self, name: &str) -> Result<Option<Room>, TableError> {
         let Some(config) = &self.config else {
-            return Err(());
+            return Err(TableError);
         };
         // No file is no rooms.
         let Ok(file) = config.open("rooms", 0, zoraya_proto_file::rights::READ) else {
             return Ok(None);
         };
-        let bytes = read_all(&file).map_err(|_| ())?;
+        let bytes = read_all(&file).map_err(|_| TableError)?;
         Ok(rooms::read(&bytes).get(name).cloned())
     }
 
@@ -357,7 +357,7 @@ impl Rooms {
     }
 
     /// One message from `init`: a channel to serve.
-    fn from_init(&mut self) -> bool {
+    fn read_init(&mut self) -> bool {
         let mut handles = [self.init; 2];
         let mut buf = [0u8; 128];
         let sizes = match channel_read(self.init, &mut buf, &mut handles) {
@@ -469,7 +469,7 @@ fn main() -> i32 {
         };
         for p in &packets[..count] {
             match p.key {
-                KEY_INIT => while rooms.from_init() {},
+                KEY_INIT => while rooms.read_init() {},
                 k if k >= KEY_JOB => rooms.notices(),
                 k if k >= KEY_CHANNEL => rooms.serve((k - KEY_CHANNEL) as usize),
                 _ => {}
