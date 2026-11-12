@@ -1743,7 +1743,7 @@ code from outside the system image ran as untrusted, and nothing here opens anyt
 |---|---|---|
 | keeper-restart, keeper-reconnect, prompt-rebind | `test-keeper` | pass, 55 steps, HVF and TCG (`FULL=1` TCG run once) |
 | keeper | `test-qemu` | `t_rooms` (unchanged); the QEMU paths are the three rows above; the GUI form of INV-0269-1 is in `spinners.script` |
-| cpu-spinners | `test-gui` | `spinners:auto:1` pass, 67 steps. Two rooms at `--cpu 25%` with two spinners each (jobs `running`): median key 168 ms to a screendump (floor 3.9 ms); the same script's terminal without spinners (`terminal:auto:1`): 188 ms. The bound is 300 ms over the floor |
+| cpu-spinners | `test-gui` | `spinners:auto:1` pass, 67 steps. Two rooms at `--cpu 25%` with two spinners each (jobs `running`): median key 168 ms to a screendump (floor 3.9 ms); the same script's terminal without spinners (`terminal:auto:1`): 188 ms. The bound is relative: at most 450 ms over the median of the same run's no-spinner baseline (`latency N +MS`) |
 | disk-filler | `test-files` | pass, 60 steps: the filler stops at 224 KiB of `--disk 256K` (`OverQuota`), home and another room write, 100 write-and-syncs in home next to a sync loop (138193 syncs in 40 s): slowest 0 ms (loop 2 ms) |
 | service-floods | `test-qemu` | `fsd`: the room stopped at 19 of 20, another account opened 18, home 100 (pass); compositor: 3 surfaces admitted, 1 refused (status 8), another room and home admitted (`t_gui` pass); `netd` in `net-account-flood` |
 | hostile-programs | `test-files` | pass, 48 steps: `stubborn` ended by the second Ctrl-C, `badptr`, `fuzz` (random registers into every call) exit 0 in a room with limits, a hog refused, the shell and home answer, the room removed with `--kill` |
@@ -1756,7 +1756,7 @@ code from outside the system image ran as untrusted, and nothing here opens anyt
 1. The tests play the room's client against the production service (account carved as the launcher does) and use trusted rooms with limits for the job's limits; no switch lifts the refusal. Recommend accepting.
 2. A test hook on the net-test image: `room crash-keeper` -> `init` kills the keeper; two marks in `NET_CRASH_MARKS` keep it out of the production image.
 3. Fuzzing through `tools/run-fuzz.sh` on nightly, 600 s a target in two 30-minute CI jobs, a fetch step outside `make test` (`cargo +nightly fetch --locked` in `fuzz/`).
-4. INV-0264-3's GUI half is bounded at 300 ms over a screendump read, not 50 ms (a screendump cannot read 50 ms); the 50 ms stays in `t_cpu`. **Architect: accept or ask for a lower bound.** INV-0264-3 was marked `checked` on that basis and is reverted to `not yet applicable` until accepted (Review fixes below); `spinners.script` is a starvation smoke test.
+4. INV-0264-3's GUI half is bounded at 450 ms over the same run's no-spinner baseline, not 50 ms (the runner polls the screen every 150 ms); the 50 ms stays in `t_cpu`. **Architect: accept or ask for a lower bound.** INV-0264-3 was marked `checked` on that basis and is reverted to `not yet applicable` until accepted (Review fixes below); `spinners.script` is a starvation smoke test.
 
 ### Invariants delta
 
@@ -1800,7 +1800,7 @@ the TCG runs of everything but `test-keeper`; the whole of `test-posix*`, `test-
   `user/src/bin/t_storage.rs` (`account_flood`), `user/src/bin/t_gui.rs` (`surface_flood`), `user/src/gui.rs` (`new_room_client`), `fuzz/fuzz_targets/*.rs` (the new ones),
   `tools/run-fuzz.sh`, `tools/check-quota-tests.sh`, `tools/check-untrusted-gate.sh`, `tests/shell/{keeper,disk-filler,hostile}.script`, `tests/gui/spinners.script`, ADR-0298.
 - Review questions: (1) is the test hook's reach (a reconnect channel message) acceptable on a net-test image only; (2) are tests that play an untrusted client
-  enough for INV-0262-1 in the compositor and `netd`, or must a room's real line exist first; (3) is 300 ms an acceptable GUI bound for INV-0264-3; (4) should the full CI
+  enough for INV-0262-1 in the compositor and `netd`, or must a room's real line exist first; (3) is +450 ms over a baseline an acceptable GUI bound for INV-0264-3; (4) should the full CI
   run the fuzzers 600 s each; (5) the candidate bug above.
 
 ### Review fixes (opus-review of Q7, a later session)
