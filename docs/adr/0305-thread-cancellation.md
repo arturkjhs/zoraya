@@ -21,8 +21,9 @@ cancellation point goes through `__syscall_cp`, which is that assembly. Zoraya h
 INV-0004-1) and the shim's `__syscall_cp` is a plain `__syscall` with "no cancellation points" (ADR-0100 item 5, written for
 one thread). ADR-0180 item 9 made `pthread_setcancelstate` a no-op that changes nothing.
 
-What `thread_interrupt` gives (ADR-0300 item 5): a one-shot flag that makes the target's next or current blocking call
-(`port_wait`, `sleep_until`, `futex_wait`) return `Interrupted`, with nothing running on the target.
+What `thread_interrupt` gives (ADR-0300 item 5): a one-shot flag that makes the target's next or current `futex_wait` or
+`sleep_until` return early with `Ok` and the value 1, with nothing running on the target and no `Interrupted` status. A thread
+in `port_wait` is woken by a user packet queued to its own port (ADR-0006), which the library sends with the interrupt.
 
 ## Decision drivers
 
@@ -71,16 +72,20 @@ What `thread_interrupt` gives (ADR-0300 item 5): a one-shot flag that makes the 
 
 1. **`pthread_cancel(t)`** (a patch to musl's `pthread_cancel.c`, `0003-deferred-cancel.patch`): `a_store(&t->cancel, 1)`; if
    `t` is the caller and cancellation is enabled and asynchronous, `__cancel()` at once, else nothing; if `t` is another
-   thread, `zoraya_posix_tkill(t->tid, SIGCANCEL)`, which the library does not treat as a signal: it calls
-   `thread_interrupt` on `t`'s handle and sets `t`'s "cancel pending" bit. The signal handler setup (`init_cancellation`,
+   thread, `zoraya_posix_tkill(t->tid, SIGCANCEL)`, which the library does not treat as a signal: it
+   sets `t`'s "cancel pending" bit, calls `thread_interrupt` on `t`'s handle and queues a user packet to `t`'s port. The signal handler setup (`init_cancellation`,
    `cancel_handler`) is deleted by the patch. An ended thread returns `ESRCH` as now.
 2. **Cancellation points are the wrappers.** Every `ffi` wrapper that is a POSIX cancellation point does, **outside the
    library lock**, before its work: `__testcancel()` (musl's: if `cancel` is set and the thread's state is enabled it
    calls `__cancel`, which calls `pthread_exit(PTHREAD_CANCELED)`); and after each long wait (ADR-0302 item 9) that
-   returned `Interrupted`, the same test. A wait that returns `Interrupted` with no handler to run and no cancel is
-   resumed. The retained musl functions reach their futex waits through `__timedwait_cp`, which uses `__syscall_cp`; the
+   returned early on the interrupt (a user packet on the thread's port, or the value 1 of ADR-0300 item 5), the same
+   test. A wait that returns early with no handler to run and no cancel is resumed (ADR-0304 item 11 case (c)). The retained musl functions reach their futex waits through `__timedwait_cp`, which uses `__syscall_cp`; the
    shim defines `__syscall_cp(...)` as musl's `__syscall_cp_c` with the assembly window replaced by a plain call to the
-   routed function: it tests the thread's `cancel` flag before (if enabled) and after (`-EINTR` with `cancel` set).
+   routed function: it tests the thread's `cancel` flag before (if enabled), and after an early return of a futex wait it follows
+   ADR-0304 item 11: with `cancel` set and the state enabled, deferred, it calls `__cancel`; with `cancel` set under
+   `PTHREAD_CANCEL_MASKED` it returns `-ECANCELED`, which is what musl's `pthread_cond_wait` expects from
+   `__syscall_cp_c` (a `-EINTR` there makes musl re-wait with the one-shot flag spent and the cancel is lost); it never
+   turns a cancel into `-EINTR`.
 3. **`pthread_setcancelstate`, `pthread_setcanceltype`, `pthread_testcancel`, `pthread_cleanup_push` and `_pop`** are musl's
    (the stubs of ADR-0180 item 9 are deleted). `PTHREAD_CANCEL_ASYNCHRONOUS` is accepted and sets `cancelasync`, which
    `__cancel` honours at the next cancellation point and which the entry poll (ADR-0106 item 5) also tests, so an
@@ -118,6 +123,10 @@ a cancel interrupt is resumed or ends the thread, and is never an `EINTR` to the
   `tools/check-cancel-points.sh`, a grep over `crates/zoraya-posix/src/ffi*` that fails on a call inside the closure given to `with`.
 - **INV-0305-4.** No signal handler is ever run for `SIGCANCEL`, and signal numbers 32 to 34 are refused by `sigaction`. *Check:* a
   `libposix` test.
+- **INV-0305-5.** A cancel under `PTHREAD_CANCEL_MASKED` is never lost at a futex wait: a thread in `pthread_cond_wait` with
+  masked cancellation, cancelled while blocked, gets `-ECANCELED` from the shim (never `-EINTR`) and `pthread_cond_wait`
+  returns with the cancel visible to the next cancellation point. *Check:* an in-QEMU `libposix` test of 1000 rounds,
+  cancel before and during the wait.
 
 ## Open questions
 

@@ -99,8 +99,8 @@ kernel is `__syscall(SYS_futex ...)`, `SYS_exit`, `SYS_set_tid_address`, `SYS_rt
 
    | musl's call | Route |
    |---|---|
-   | `SYS_futex` | `zoraya_posix_futex(uaddr, op, val, timeout, uaddr2, val3)`: `WAIT` and `WAKE` with or without `PRIVATE` are `futex_wait` and `futex_wake` (a relative timeout becomes `now + timeout`); `REQUEUE` is a wake of its requeue count; everything else `-ENOSYS` (ADR-0301 item 4) |
-   | `SYS_exit` | `zoraya_posix_thread_exit(code)`: ends the calling thread with `thread_exit(clear, 0, 0)`, `clear` being the `ctid` its `__clone` was given |
+   | `SYS_futex` | `zoraya_posix_futex(uaddr, op, val, timeout, uaddr2, val3)`: `WAIT` and `WAKE` with or without `PRIVATE` are `futex_wait` and `futex_wake` (a relative timeout becomes `now + timeout`); `REQUEUE` is a wake of its requeue count; everything else `-ENOSYS` (ADR-0301 item 4); a `futex_wait` that returns early with the interrupt value is not passed to musl as `-EINTR`: ADR-0304 item 11 gives the three outcomes |
+   | `SYS_exit` | `zoraya_posix_thread_exit(code)`: closes the thread's own handle and port (item 4), then ends the calling thread with `thread_exit(clear, 0, 0)`, `clear` being the `ctid` its `__clone` was given |
    | `SYS_rt_sigprocmask` | the calling thread's mask (ADR-0304) |
    | `SYS_tkill` | `zoraya_posix_tkill(tid, sig)`: a thread-directed signal (ADR-0304 item 2) |
    | `SYS_gettid` | the calling thread's tid |
@@ -114,13 +114,17 @@ kernel is `__syscall(SYS_futex ...)`, `SYS_exit`, `SYS_set_tid_address`, `SYS_rt
    passes the same set), stores the new tid at `*ptid` before the thread starts, records `ctid` in the library's thread
    table, calls `thread_create(trampoline, stack, {fn, arg}, tls)` and returns the tid. The trampoline sets nothing
    (the kernel gave `TPIDR_EL0`) and calls `fn(arg)`; `fn` is musl's `start`, which never returns. `__unmapself(base,
-   size)` is `thread_exit(ctid, base, size)`. The musl file `src/thread/aarch64/clone.s` and `__unmapself.s` are
+   size)` closes the thread's own handle and port, then calls `thread_exit(ctid, base, size)`. The musl file `src/thread/aarch64/clone.s` and `__unmapself.s` are
    excluded.
 4. **The library's thread table** is a `Vec` in `Posix`, one record per live thread: tid, the thread handle (from
    `thread_create`, or `thread_self` for the main thread, called once at start-up and after a `fork`), the thread's own
    port (created at its start, closed at its end), its signal mask and thread-pending set (ADR-0304), its `ctid`, and
    a wait flag. A thread finds its record through `__pthread_self()->tid`. Two handle slots per thread, so with 128 threads
-   256 of the 1024 slots.
+   256 of the 1024 slots. **The thread closes both itself**, in its exit path (`zoraya_posix_thread_exit` and
+   `__unmapself`, which take the library lock briefly and remove the record) before it calls `thread_exit`, whether it
+   is joinable or detached; joining waits on the `ctid` word, not on the handle (ADR-0300 item 3). So no slot outlives
+   its thread, and 1024 slots are never used up by detached threads (INV-0300-7). The main thread's handle and port are
+   closed by the process's end.
 5. **One port per thread.** `Sys::wait` and `wait_any` use `self.port`, a single port per process; with threads two
    waiters on one port take each other's packets. The port moves into the thread's record, and a thread subscribes the
    same handles on its own port for each wait, as it does now.
@@ -154,8 +158,9 @@ kernel is `__syscall(SYS_futex ...)`, `SYS_exit`, `SYS_set_tid_address`, `SYS_rt
     polls its thread's flags before it takes the lock and after each wait, never while holding it.
 
 **Tensions with accepted ADRs.** *ADR-0100 item 5* ("No `pthread_*` is exported", `sem_*` no-ops) and *ADR-0141 item 2*
-(`futex` answered `-ENOSYS`) are superseded by ADR-0308 once accepted. *ADR-0100 item 2* (the replaced list) gains
-`src/thread` as retained, minus the files in item 1. *ADR-0180 item 9* (`pthread_setcancelstate` changes nothing) is
+(`futex` answered `-ENOSYS`) are superseded by ADR-0308 once accepted. *ADR-0100 item 2* (the replaced list of directories, which names `src/thread`) gains
+`src/thread` as retained, minus the files in item 1; *ADR-0141* (item 2's `futex` answer and its revisit trigger) is
+replaced by item 2's table. *ADR-0180 item 9* (`pthread_setcancelstate` changes nothing) is
 replaced by musl's. *ADR-0005 INV-0005-2* names `pthread_create` on the deny list "unless an accepted ADR adds it": ADR-0308
 does.
 
@@ -183,7 +188,8 @@ does.
   atomic exchange. *Check:* the call counters of `__zoraya_calls` over the existing `make test-posix` workloads show zero futex calls.
 - **INV-0302-6.** A write below the lowest address of a thread's stack mapping faults the process (the mapping gap). *Check:* an
   in-QEMU test with an expected `Fault` exit.
-- **INV-0302-7.** Every `Status` maps to one `errno` per call, with `Interrupted` to `EINTR`, `OverQuota(Threads)` to `EAGAIN`.
+- **INV-0302-7.** Every `Status` maps to one `errno` per call, with `OverQuota(Threads)` to `EAGAIN` (there is no `Interrupted` status; `EINTR` comes from
+  ADR-0304 item 11 only).
   *Check:* INV-0100-4's host test over `Status::ALL`.
 
 ## Open questions

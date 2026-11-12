@@ -113,11 +113,27 @@ kernel signal.
 8. **Faults** are not signals (ADR-0106 item 12): a fault in any thread ends the process with `Fault`.
 9. **`sigprocmask`** in a threaded process is `pthread_sigmask` (the POSIX text leaves it unspecified; musl does this).
 10. **`SIGCANCEL`** is not a signal number here (ADR-0305): the numbers 32 to 34 that musl reserves stay unused.
+11. **An early return of a futex wait or a sleep is not an `EINTR`.** `thread_interrupt` makes `futex_wait` and
+    `sleep_until` return early with `Ok` and the value 1 (ADR-0300 item 5); it also fires when the interrupt only
+    re-routes a signal (item 3(b)) or carries a cancel (ADR-0305). So the shim's `zoraya_posix_futex`, after a
+    `futex_wait` that returned the value 1, and the `nanosleep` wrapper, after a `sleep_until` that did, run delivery with
+    the library lock free (item 6: the thread-pending set, then the process-pending set for signals it has unblocked, then
+    the kernel's queue) and give musl one of three results. (a) A handler ran on this thread: `-EINTR`. musl's
+    `__timedwait_cp` passes `EINTR` up, so `sem_wait` returns `EINTR` with a handler having run, as ADR-0106 item 6
+    and INV-0106-3 require; `pthread_cond_wait` and the mutex loops treat it as a spurious wake `[read from musl 1.2.5's
+    __timedwait.c; the step checks]`. (b) The thread is cancelled and cancellation is in musl's masked mode
+    (`PTHREAD_CANCEL_MASKED`, which `pthread_cond_wait` expects to see as `-ECANCELED` from `__syscall_cp_c`): `-ECANCELED`,
+    never `-EINTR`, because musl would re-wait with the one-shot cancel flag spent and lose the cancel (ADR-0305 item 2
+    for the deferred case). (c) Nothing for this thread (the interrupt only re-routed a signal to another thread, or
+    its flag was left over from an interrupt that a port packet had already served): return 0, a spurious wake, and
+    musl's loop re-checks the word and waits again. A `read` or `waitpid` wrapper does the same at its own waits
+    (ADR-0302 item 9): it resumes the wait in case (c) and returns `EINTR` only in case (a).
 
 **Tensions with accepted ADRs.** *ADR-0106 item 2* ("the library's pending set, one bit per signal") becomes per process plus
 per thread. *ADR-0106 item 5* (a poll at entry when a handler is installed) polls per calling thread. *ADR-0006
 INV-0006-7* ("`pselect` returns `EINTR` only if a handler ran") holds for the thread that waits: a `thread_interrupt` that
-only re-routes a signal makes the receiving thread poll and, if it finds nothing for it, wait again without `EINTR`.
+only re-routes a signal makes the receiving thread poll and, if it finds nothing for it, wait again without `EINTR`;
+item 11 is that rule for the futex shim, where musl's own callers (`sem_wait`, `pthread_cond_wait`) see the result.
 
 ## Consequences
 
@@ -144,6 +160,14 @@ only re-routes a signal makes the receiving thread poll and, if it finds nothing
   the functions ADR-0106 INV-0106-2 lists, with any number of threads. *Check:* INV-0106-2's host test with the
   thread table populated.
 - **INV-0304-6.** A `SIGTERM` with `SIG_DFL` ends a process whose threads all block it, with `WTERMSIG` 15. *Check:* an in-QEMU test.
+- **INV-0304-7.** A `sem_wait` in a thread whose process has a handler installed does not return `EINTR` unless a handler ran
+  on that thread (INV-0106-3): a `thread_interrupt` sent only to re-route a signal to another thread returns 0 from the
+  shim and the wait resumes. *Check:* an in-QEMU `libposix` test: thread A in `sem_wait` with `SIGUSR1` blocked, thread B
+  unblocked in a compute loop that polls, a `kill` taken by A's wake and routed to B, 1000 rounds; A's `sem_wait` never
+  returns until `sem_post`.
+- **INV-0304-8.** A thread in `pthread_cond_wait` or `pthread_mutex_lock` that is interrupted without a handler or cancel
+  re-checks its word and waits again, and with a handler returns to its caller as musl's code defines. *Check:* an
+  in-QEMU `libposix` test that counts `futex_wait` calls and handler runs for each of the two outcomes.
 
 ## Open questions
 
