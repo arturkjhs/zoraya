@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
 use libfuzzer_sys::fuzz_target;
+use zoraya_fs::check::{CheckOptions, check};
 use zoraya_fs::{MkfsOptions, MountOptions, Timestamp, Volume, mkfs};
 use zoraya_fs_service::memory::MemoryDevice;
 use zoraya_fs_service::{HandleKind, Incoming, Interest, Outgoing, Service, Transport, Wake};
@@ -187,4 +188,11 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let _ = (service.open_count(), service.descriptions());
+    // What the service committed must check (`zoraya-fsck`'s own check, on
+    // the live device); a volume that refused the commit (full, read-only,
+    // failed) is a state of its own and is not checked.
+    if service.volume().sync().is_ok() {
+        let report = check(service.volume().device_mut(), CheckOptions::default());
+        assert!(report.is_clean(), "fsck: {:?}", report.problems);
+    }
 });

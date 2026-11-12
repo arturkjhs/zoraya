@@ -168,6 +168,9 @@ fn account_flood(root: Handle) {
         match zoraya_user::channel_read(*control, &mut buf, &mut []) {
             Ok(sizes) => {
                 let m = &buf[..(sizes.bytes as usize).min(buf.len())];
+                // Only a `Failed` (ordinal 17) can be waiting at this point.
+                let (header, _) = zoraya_protocol::Header::decode(m).expect("a header");
+                assert_eq!(header.ordinal, 17, "a Failed, nothing else");
                 match decode::<Failed>(m, 0) {
                     Ok((_, f)) if f.reason.0 == reason::OVER_QUOTA => refused += 1,
                     _ => other += 1,

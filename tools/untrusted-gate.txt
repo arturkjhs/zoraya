@@ -16,7 +16,8 @@
 1  masked-time          test-qemu     Q2      t_bound: INV-0270-1 and INV-0270-2, the longest masked time of every site against its one-step case, and job_kill between steps
 1  cpu-ceiling          test-qemu     Q4      t_cpu: 8 spinners at 25% use a quarter; three rooms under 50% use at most half; a parked spinner does not run; an uncapped process wakes within INV-0264-3's bound next to two capped rooms that spin and burst (INV-0264-1, -2, -4)
 1  cpu-spinners         test-gui      Q7      two untrusted rooms spinning and bursting; a home terminal echoes within INV-0264-3's bound (the GUI half, which needs rooms with --cpu)
-1  disk-filler          test-files    Q7      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
+1  disk-filler          test-files    Q7      a filler in the room's directory stops at its limits; home and another room still write (INV-0265-3, directory half); a sync loop next to 100 home syncs (INV-0265-5, folded `sync`: t_storage)
+1  disk-filler-tmp      pending       Q8      the same in an untrusted room's /tmp (--tmp, INV-0265-3's /tmp half and INV-0265-4): not built
 1  service-floods       test-qemu     Q7      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)
 1  keeper               test-qemu     Q7      INV-0269-1 to INV-0269-3: t_rooms covers the keeper's channels and a keeper restarted with `Keep` (stood in for by the test); not run in QEMU yet: init's own restart of the keeper, a launcher's reconnect, and the GUI form of INV-0269-1 (Q6b)
 1  keeper-restart       test-keeper   Q7      Q6a: init restarts a killed keeper in QEMU and the rooms it kept stay (INV-0269-1 to INV-0269-3)

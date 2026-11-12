@@ -19,7 +19,7 @@ bad() { echo "check-untrusted-gate: $*" >&2; fail=1; }
 
 [ -r "$gate" ] || { echo "check-untrusted-gate: no $gate" >&2; exit 1; }
 
-required="charged-allocation memory-hog fork-bomb masked-time cpu-spinners disk-filler service-floods keeper many-rooms hostile-programs fuzzing net-account-flood net-fuzz"
+required="charged-allocation memory-hog fork-bomb masked-time cpu-spinners disk-filler disk-filler-tmp service-floods keeper many-rooms hostile-programs fuzzing net-account-flood net-fuzz"
 entries=$(grep -v '^#' "$gate" | grep -v '^[[:space:]]*$' || true)
 for name in $required; do
 	echo "$entries" | awk -v n="$name" '$2 == n { found = 1 } END { exit !found }' ||

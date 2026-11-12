@@ -372,6 +372,10 @@ fn answer_reconnect(reconnect: Handle, rooms: Option<&RoomKeeper>, kind: u32) {
         }
         #[cfg(not(feature = "net-test"))]
         let _ = sizes;
+        // The test image says so, so that keeper.script can tell the prompt's
+        // rebind from the lazy one of the first call (prompt-rebind row).
+        #[cfg(feature = "net-test")]
+        println!("init: the shell reconnected to the room keeper (a test)");
         let new = rooms.and_then(|r| r.channel(kind, ""));
         let entry = new.map(|h| zoraya_abi::ChannelEntry {
             handle: h,

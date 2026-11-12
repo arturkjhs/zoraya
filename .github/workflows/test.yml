@@ -280,8 +280,8 @@ jobs:
       - name: Install the nightly toolchain and fetch the fuzz crates (ADR-0298)
         if: ${{ contains(matrix.cmd, 'test-fuzz') }}
         run: |
-          rustup toolchain install nightly --profile minimal
-          (cd fuzz && cargo +nightly fetch --locked)
+          rustup toolchain install nightly-2026-11-12 --profile minimal
+          (cd fuzz && cargo +nightly-2026-11-12 fetch --locked)
       - uses: actions/download-artifact@v4
         with:
           name: build

@@ -2,11 +2,15 @@
 # INV-0265-3 and INV-0265-5) from the console, in rooms with `--disk`: a
 # program writes in a room's directory until the limit refuses; the other
 # room and home still write; a sync loop in one room does not hold up the sync
-# of a program in home beyond the bound. (An untrusted room's /tmp, `--tmp`,
-# is not built: ADR-0265 point 7 waits for the line reader of untrusted rooms.)
+# of a program in home beyond the bound. The rooms here are trusted (the gate
+# is closed), so the loop's syncs are not folded into the commits; the fold of
+# an untrusted account's `sync` (ADR-0265 item 9, INV-0265-5) is checked by
+# `t_storage`. This is a smoke test of the loop. (An untrusted room's /tmp,
+# `--tmp`, is not built: the gate row disk-filler-tmp is pending.)
 ! panicked
 ! storage failed
 ! (over 5 s)
+! diskfill: sync 
 < Type help to begin
 < \r\n~> 
 > mkdir /t/fill\r
@@ -67,6 +71,6 @@
 < diskfill: 100 syncs, slowest
 < \r\n/> 
 > wait\r
-< diskfill:
+< syncs, slowest
 < \r\n/> 
 > poweroff\r

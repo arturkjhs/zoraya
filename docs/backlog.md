@@ -100,3 +100,10 @@ sources or with QEMU's own tracing. The sweep since `e423bb5` holds frames once 
 The triage's one miss: it said the 30-piece test kills `MAX_PIECES` = 16, but a test that takes its count from
 `MAX_PIECES` changes with it. The test uses a literal 30.
 | - | Stage 9, "living in the system" (architect, 2026-11-12) | **curl and wget (N4's W11, W13)** are deferred from stage 8: a C TLS library first (BearSSL or rustls-ffi), then curl and wget and the `+net ... curl -O` check. `zfetch` stands in until then. Not a blocker for stage 8. |
+
+## `sleep 60 &` ends at once in a dock-launched terminal (Q7)
+
+Seen once in `tests/gui/spinners.script` (`[1] done: sleep 60`, a terminal launched from the dock in a room); not reproduced by the reviewer,
+and the same line in the console shell's room stays running. `sleep` ignored `sleep_until`'s early return; it now loops until
+`clock_monotonic()` passes the deadline (Q7 review fixes). If it still happens in the GUI, look at what wakes the process (a signal or
+an event on its terminal) and at the job notice for a background job in a dock room. `spinners.script` uses `spin &`.

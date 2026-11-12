@@ -10,7 +10,11 @@
 #    to the same job;
 #  - prompt-rebind: the prompt before the next line rebinds the shell to the
 #    keeper (zosh calls the keeper's pump before each prompt), so the prompt
-#    keeps the room's name and its lines keep running in the room's job.
+#    keeps the room's name and its lines keep running in the room's job. The
+#    test image's init prints a line when it answers a reconnect; it must come
+#    right after the restart, before any keeper call (a call rebinds lazily).
+#  - `sleep 300` in the room survives the restart (`top` counts it: 1 of 16)
+#    and `room remove --kill` ends it (INV-0269-3).
 ! panicked
 ! storage failed
 < Type help to begin
@@ -26,22 +30,27 @@
 > top\r
 < agent-1
 < of 64M
-< of 16
+< 1 of 16
 < agent-1 /t/w> 
 # keeper-restart: the keeper ends; init starts another.
 > room crash-keeper\r
 < init: the shell asked the room keeper to end
 < init: the room keeper ended
 < init: the room keeper was restarted
+# prompt-rebind: the prompt before the next line rebinds the shell, before any
+# keeper call: `init` says it answered a reconnect right after the restart, and
+# the prompt follows. (The first keeper call would otherwise rebind lazily and
+# hide a prompt that does not.)
+< init: the shell reconnected to the room keeper
 < agent-1 /t/w> 
-# prompt-rebind: the prompt still names the room, and the line runs in its job.
+# The prompt still names the room, and the line runs in its job.
 > grants probe\r
 < limits --mem 64M --procs 16  (room agent-1)
 < agent-1 /t/w> 
 > top\r
 < agent-1
 < of 64M
-< of 16
+< 1 of 16
 < agent-1 /t/w> 
 # The kept job still refuses at its limit (INV-0266-1, INV-0269-1).
 > memhog\r
@@ -69,5 +78,6 @@
 < /t/w> 
 > room\r
 < home
+< sleep 300: killed
 < /t/w> 
 > poweroff\r

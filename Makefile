@@ -269,9 +269,10 @@ NET_SCRIPT := tests/shell/net.script
 # crash` only asks init, which then has no such path. test-net checks that
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
-NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end'
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
 		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[net] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
@@ -758,16 +759,19 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Fuzzing (ADR-0268 point 3's "fuzzing" and point 7's "net-fuzz", ADR-0298):
-# libFuzzer on the nightly toolchain for FUZZ_SECONDS a target, FUZZ_JOBS at
+# libFuzzer on a pinned dated nightly (tools/run-fuzz.sh; skipped unless CI or
+# FUZZ_FORCE=1 is set, as test-net skips without user networking) for FUZZ_SECONDS a target, FUZZ_JOBS at
 # once. CI runs 600 s (tools/ci-tests.txt); locally 20 s.
 FUZZ_SECONDS ?= 20
-FUZZ_JOBS ?= 3
+FUZZ_JOBS ?= 2
 FUZZ_TARGETS := spawn_request keeper_messages broker_tty compositor_protocol file_protocol
 FUZZ_NET_TARGETS := net_rx net_stack net_dns_http
 test-fuzz:
+	@if [ -z "$$CI$$FUZZ_FORCE" ]; then echo "[fuzz] skipped: needs the pinned nightly toolchain (tools/run-fuzz.sh); runs on CI, or here with FUZZ_FORCE=1"; exit 0; fi; \
 	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_TARGETS)
 
 test-fuzz-net:
+	@if [ -z "$$CI$$FUZZ_FORCE" ]; then echo "[fuzz] skipped: needs the pinned nightly toolchain (tools/run-fuzz.sh); runs on CI, or here with FUZZ_FORCE=1"; exit 0; fi; \
 	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_NET_TARGETS)
 
 # The room keeper ended in QEMU (Q7; gate rows keeper-restart, keeper-reconnect
@@ -775,8 +779,9 @@ test-fuzz-net:
 # proposed ADR-0298) ends the keeper under a running room; init restarts it,
 # the shell reconnects and rebinds.
 KEEPER_SCRIPT := tests/shell/keeper.script
-test-keeper: $(NET_TEST_KERNEL) $(RUNNER) tools-storage
+test-keeper: $(NET_TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if [ ! -f $(USER_DIR)/$$f ]; then echo "[keeper] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
 		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[keeper] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
 	mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
 	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)

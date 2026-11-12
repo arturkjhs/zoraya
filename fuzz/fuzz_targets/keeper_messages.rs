@@ -2,7 +2,8 @@
 //! INV-0269-2: what each kind of channel may send). Messages arrive from the
 //! three kinds of channel, in any order, with a model of the kernel's jobs
 //! under the keeper; between them the keeper's timers run. Nothing may panic
-//! and no launch job may carry `LIMIT`.
+//! and the keeper never targets a launch job: the model's `set_limits` and
+//! `create_job` panic when it does (INV-0269-2).
 
 #![no_main]
 
@@ -41,7 +42,15 @@ impl Env for Model {
         self.next += 1;
         let p = match parent {
             Parent::Session => 0,
-            Parent::Job(j) => j,
+            // INV-0269-2: the keeper never makes a job below a launch job
+            // (its handle cannot set limits), so it never asks to.
+            Parent::Job(j) => {
+                assert!(
+                    self.jobs.get(&j).is_none_or(|&(_, limit)| limit),
+                    "the keeper made a job below launch job {j}"
+                );
+                j
+            }
         };
         self.jobs.insert(self.next, (Some(p), true));
         Ok(self.next)
@@ -54,7 +63,10 @@ impl Env for Model {
     fn set_limits(&mut self, job: JobId, _: &JobLimits) -> Result<(), Status> {
         match self.jobs.get(&job) {
             Some((_, true)) => Ok(()),
-            Some(_) => Err(Status::AccessDenied),
+            // INV-0269-2: the keeper never sets limits on a launch job (the
+            // kernel would refuse; the model fails the run, so that a keeper
+            // that tried is found and not hidden by the refusal).
+            Some(_) => panic!("the keeper set limits on launch job {job}"),
             None => Err(Status::BadHandle),
         }
     }
@@ -102,11 +114,5 @@ fuzz_target!(|data: &[u8]| {
             _ => {}
         }
         let _ = k.take_events();
-    }
-    // INV-0269-2: no job a launcher holds can set limits.
-    for (&job, &(_, limit)) in k.env().jobs.clone().iter() {
-        if !limit {
-            assert!(k.env().set_limits(job, &JobLimits::default()).is_err());
-        }
     }
 });

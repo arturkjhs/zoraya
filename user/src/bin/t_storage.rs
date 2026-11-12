@@ -303,6 +303,61 @@ fn account_flood(root: &File) {
     }
 }
 
+/// INV-0265-5 (ADR-0265 item 9): a `sync` of an untrusted account waits for
+/// the next commit the volume makes instead of making one, so a loop of them
+/// delays nobody. A carved account (an untrusted one) writes and sends a
+/// `sync` it does not wait for: no reply while nothing commits, and none of
+/// root's 100 write-and-sync rounds is slow; root's first commit answers it.
+/// (Without the fold the volume would commit for the room's `sync` at once and
+/// the reply would be there within the first wait.)
+fn untrusted_sync_folds(root: &File) {
+    let mut client = zoraya_fsclient::Client::new(zoraya_user::app::Files);
+    let room = client
+        .clone_account(root.end, ALL, 20)
+        .map(|end| File { end })
+        .expect("an account for the room");
+    let f = room
+        .open("fold.txt", open_flags::CREATE | open_flags::TRUNCATE, ALL)
+        .expect("the room creates a file");
+    f.write(0, 0, b"dirty").expect("the room writes");
+    let port = port_create().expect("port");
+    port_subscribe(port, f.end, channel_signals::READABLE, 1, Mode::Level).expect("subscribe");
+    let mut out = [0; 64];
+    let length = encode(&proto::Sync {}, 1, &mut out).expect("fits");
+    channel_write(f.end, &out[..length], &[]).expect("the room's sync");
+    let mut packets = [Packet::default()];
+    assert!(
+        port_wait(port, clock_monotonic() + 300_000_000, &mut packets).is_err(),
+        "the room's sync was answered before any commit: it is not folded"
+    );
+    let started = clock_monotonic();
+    let mut slowest = 0;
+    for round in 0..100u8 {
+        let t = clock_monotonic();
+        let g = root
+            .open(
+                "fold-home.txt",
+                open_flags::CREATE | open_flags::TRUNCATE,
+                ALL,
+            )
+            .expect("home creates");
+        g.write(0, 0, &[round; 64]).expect("home writes");
+        g.sync().expect("home syncs");
+        slowest = slowest.max(clock_monotonic() - t);
+    }
+    assert!(slowest < 1_000_000_000, "home's sync took {slowest} ns");
+    port_wait(port, clock_monotonic() + 10_000_000_000, &mut packets)
+        .expect("a commit answers the room's sync");
+    let mut reply = [0; 64];
+    channel_read(f.end, &mut reply, &mut []).expect("the reply");
+    handle_close(port).expect("close");
+    println!(
+        "t_storage: a room's sync waited for a commit; 100 home syncs took {} ms, slowest {} ms",
+        (clock_monotonic() - started) / 1_000_000,
+        slowest / 1_000_000
+    );
+}
+
 /// INV-0055-6: a client that sends and never reads.
 fn a_client_that_never_reads(root: &File) {
     let client = root.clone_as(ALL).expect("clone");
@@ -334,6 +389,7 @@ fn main() -> i32 {
     hostile_paths(&stack.root);
     too_many_open(&stack.root);
     account_flood(&stack.root);
+    untrusted_sync_folds(&stack.root);
     a_client_that_never_reads(&stack.root);
     stack.end();
     0

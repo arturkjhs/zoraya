@@ -124,7 +124,8 @@ tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix
 
 # The shell and its crates.
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net
+user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper
 crates/zoraya-shell/          test-boot test-files test-tour-gui
 crates/zoraya-command/        test-boot test-files test-tour-gui
 crates/zoraya-describe/       test-files test-tour-gui
@@ -177,6 +178,6 @@ user/src/bin/t_rooms.rs       test-qemu
 user/src/bin/memhog.rs        test-files
 user/src/bin/diskfill.rs      test-files
 user/describe/tests/diskfill.cmd test-files
-user/src/roomsclient.rs       test-files test-gui test-qemu
+user/src/roomsclient.rs       test-files test-gui test-qemu test-keeper
 user/describe/tests/memhog.cmd test-files
 tests/shell/rooms.script      test-files

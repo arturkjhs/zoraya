@@ -520,7 +520,11 @@ fn surface_flood(gui: &Gui) {
         refused.first()
     );
     assert_eq!((admitted.len(), refused.len()), (ROOM_SURFACES, 1));
-    assert!(refused.iter().all(|s| *s == refused[0]), "one refusal");
+    assert_eq!(
+        refused,
+        [status::OVER_QUOTA],
+        "the refusal is OVER_QUOTA (8)"
+    );
     // The refused client is done (the compositor serves 8 clients at once).
     let refused_at = results
         .iter()

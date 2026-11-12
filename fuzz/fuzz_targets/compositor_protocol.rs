@@ -4,6 +4,13 @@
 //! added (one with a room name), with memory objects of any size, interleaved
 //! with the input drivers' frames. The compositor runs on a fake platform and
 //! must never panic, whatever order the messages come in.
+//!
+//! Limit: the compositor is made once per process (parsing the fonts and
+//! painting the desktop cost more than an input), so state carries over
+//! between inputs, and a saved artifact reproduces a crash only together with
+//! the inputs the process ran before it. Re-run the whole corpus
+//! (`-runs=0 corpus/`) in one process to reproduce, or read the log's last
+//! input. It is not a per-input oracle.
 
 #![no_main]
 
@@ -232,11 +239,26 @@ fuzz_target!(|data: &[u8]| {
 fn run(r: &mut Rig, data: &[u8]) {
     let (manager, keyboard, tablet) = (r.manager, r.keyboard, r.tablet);
     let c = &mut r.c;
-    // Three clients, as the manager adds them; the last input's are gone.
+    // Four clients, as the manager adds them: three plain ones, and one a
+    // room launched (`AddRoomClient`, an untrusted one with a room name, whose
+    // launch record no client message may change: INV-0172-1); the last
+    // input's are gone.
     let mut clients = Vec::new();
-    for _ in 0..3 {
+    for i in 0..4 {
         let end = c.platform().channel();
-        let bytes = message(&gui::AddClient {});
+        let bytes = if i == 3 {
+            message(&gui::AddRoomClient {
+                untrusted: 1,
+                colour: 0,
+                tag: 5,
+                room: zoraya_protocol::Data(b"agent-1"),
+                app: zoraya_protocol::Data(b"term"),
+                entries: zoraya_protocol::Data(b"+w ~/sandbox/agent-1\n"),
+                line: zoraya_protocol::Data(b"room agent-1 term"),
+            })
+        } else {
+            message(&gui::AddClient {})
+        };
         c.platform().send(manager, bytes, vec![end]);
         c.step();
         clients.push(end);
