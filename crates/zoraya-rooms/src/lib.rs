@@ -229,6 +229,82 @@ pub fn record_limits(r: &UsageRecord) -> Limits {
     }
 }
 
+/// A usage record as the one reading every rendering is made from
+/// (INV-0267-1): `top`, `room`, `grants`, the panel's `SetUsage` and the
+/// compositor's hover card. `cpu_pct` is the share over the interval since
+/// the previous record (`zoraya_settings::usage::cpu_share`), if there was
+/// one.
+pub fn reading_of(r: &UsageRecord, cpu_pct: Option<u64>) -> zoraya_settings::usage::Reading {
+    let some = |v: u64| (v != NONE).then_some(v);
+    zoraya_settings::usage::Reading {
+        name: String::from(r.name()),
+        running: r.flags & flags::RUNNING != 0,
+        untrusted: r.flags & flags::UNTRUSTED != 0,
+        mem_used: r.mem_used,
+        mem_limit: some(r.mem_limit),
+        mem_refused: r.mem_refused,
+        procs_used: r.procs_used,
+        procs_limit: some(r.procs_limit),
+        procs_refused: r.procs_refused,
+        cpu_permille: some(r.cpu_limit),
+        cpu_pct,
+        disk_limit: some(r.disk_limit),
+        conns_limit: some(r.conns_limit),
+        tmp_limit: some(r.tmp_limit),
+    }
+}
+
+/// The shortest interval a CPU share is read over, ns: a share over a few
+/// milliseconds is noise, so a reading sooner than this repeats the last
+/// share.
+pub const MIN_SHARE_NS: u64 = 200_000_000;
+
+/// Turns the keeper's records into readings with the CPU share since the
+/// previous reading of each room (ADR-0267 point 1: "the share of the last
+/// second"); the panel's once a second and a shell's `top` each keep one.
+#[derive(Debug, Clone, Default)]
+pub struct Tracker {
+    /// `(room, cpu_used_ns then, when, last share)`.
+    last: Vec<(String, u64, u64, Option<u64>)>,
+}
+
+impl Tracker {
+    pub fn new() -> Tracker {
+        Tracker::default()
+    }
+
+    /// The readings of `records` at `now_ns`, in their order. A room that
+    /// has no earlier record, or whose counter went back (restarted), has
+    /// no share yet.
+    pub fn readings(
+        &mut self,
+        records: &[UsageRecord],
+        now_ns: u64,
+    ) -> Vec<zoraya_settings::usage::Reading> {
+        use zoraya_settings::usage::cpu_share;
+        let mut next: Vec<(String, u64, u64, Option<u64>)> = Vec::new();
+        let mut out = Vec::new();
+        for r in records {
+            let name = String::from(r.name());
+            let prev = self.last.iter().find(|p| p.0 == name);
+            let (entry, share) = match prev {
+                Some((_, ns, at, last)) if now_ns >= *at && now_ns - at >= MIN_SHARE_NS => {
+                    let share = cpu_share(*ns, r.cpu_used_ns, now_ns - at);
+                    ((name.clone(), r.cpu_used_ns, now_ns, share), share)
+                }
+                Some((_, ns, at, last)) if now_ns >= *at && r.cpu_used_ns >= *ns => {
+                    ((name.clone(), *ns, *at, *last), *last)
+                }
+                _ => ((name.clone(), r.cpu_used_ns, now_ns, None), None),
+            };
+            next.push(entry);
+            out.push(reading_of(r, share));
+        }
+        self.last = next;
+        out
+    }
+}
+
 /// An untrusted room's line after `room set` has all six words
 /// (INV-0266-1): the missing ones are those the keeper applied to the
 /// running room, `applied` (None when the room does not run or there is no

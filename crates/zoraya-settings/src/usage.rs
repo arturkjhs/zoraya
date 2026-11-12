@@ -190,7 +190,40 @@ impl Reading {
         if !limits.is_empty() {
             out.push(limits);
         }
+        // The notice (ADR-0263 point 3): which limit refused, and the line
+        // that raises it twofold, in the words of the shell's hint.
+        let trailer = self.trailer();
+        if !trailer.is_empty() {
+            out.push(trailer);
+        }
+        if let Some(raise) = self.raise_line() {
+            out.push(raise);
+        }
         out
+    }
+
+    /// `room set NAME --mem 128M`: the line that doubles the limit that
+    /// refused (memory first, then processes); none when nothing refused.
+    pub fn raise_line(&self) -> Option<String> {
+        if self.mem_refused > 0
+            && let Some(l) = self.mem_limit
+        {
+            return Some(format!(
+                "raise: room set {} --mem {}",
+                self.name,
+                format_size(l.saturating_mul(2))
+            ));
+        }
+        if self.procs_refused > 0
+            && let Some(l) = self.procs_limit
+        {
+            return Some(format!(
+                "raise: room set {} --procs {}",
+                self.name,
+                l.saturating_mul(2)
+            ));
+        }
+        None
     }
 
     /// The pills of a room at its limits (ADR-0263 point 7): `mem 94%`,

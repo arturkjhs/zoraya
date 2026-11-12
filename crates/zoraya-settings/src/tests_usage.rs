@@ -54,8 +54,26 @@ fn top_the_room_words_the_card_and_grants_show_the_same_limits_and_use() {
     assert_eq!(r.limits(), line);
     let grants = alloc::format!("limits {}", line.words());
     assert_eq!(r.limits_line(), grants);
-    assert_eq!(card.last(), Some(&grants));
+    assert!(card.contains(&grants));
     assert!(row.contains("(refused 3 mem)"), "{row}");
+    // The notice: what refused, and the line that raises it twofold, the
+    // words of the shell's hint (`quota_hint`).
+    assert!(card.contains(&String::from("(refused 3 mem)")));
+    assert_eq!(
+        r.raise_line().as_deref(),
+        Some("raise: room set agent-1 --mem 128M")
+    );
+    let hint = crate::rooms::quota_hint("agent-1", crate::rooms::Refused::Memory, 64 * MIB, true);
+    assert!(hint.contains("room set agent-1 --mem 128M"), "{hint}");
+    let mut p = agent();
+    p.mem_refused = 0;
+    p.procs_refused = 1;
+    assert_eq!(
+        p.raise_line().as_deref(),
+        Some("raise: room set agent-1 --procs 128")
+    );
+    p.procs_refused = 0;
+    assert_eq!(p.raise_line(), None);
 }
 
 #[test]

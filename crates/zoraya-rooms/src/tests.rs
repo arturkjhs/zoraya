@@ -281,6 +281,31 @@ fn an_untrusted_room_has_all_its_defaults_under_the_untrusted_job() {
         "--mem 89M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 16M"
     );
     assert!(record_limits(&rec).is_complete());
+    // The reading every rendering is made from has the same words and the
+    // same use (INV-0266-3, INV-0267-1).
+    let reading = reading_of(&rec, Some(3));
+    assert_eq!(reading.limits(), record_limits(&rec));
+    assert_eq!(
+        reading.limits_line(),
+        "limits --mem 89M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 16M"
+    );
+    assert_eq!(
+        (reading.name.as_str(), reading.untrusted, reading.running),
+        ("agent-1", true, true)
+    );
+    assert_eq!(reading.mem_used, rec.mem_used);
+    assert_eq!(reading.cpu_pct, Some(3));
+    // A record with no limits (`home`) has none in the reading.
+    let none = UsageRecord {
+        mem_limit: NONE,
+        procs_limit: NONE,
+        cpu_limit: NONE,
+        disk_limit: NONE,
+        conns_limit: NONE,
+        tmp_limit: NONE,
+        ..rec
+    };
+    assert_eq!(reading_of(&none, None).limits_line(), "");
 }
 
 #[test]
@@ -1481,4 +1506,36 @@ fn only_a_lost_peer_makes_a_client_look_for_a_new_keeper() {
     assert!(!keeper_is_gone(Status::BufferTooSmall));
     assert!(!keeper_is_gone(Status::DeadlineExceeded));
     assert!(!keeper_is_gone(Status::WouldBlock));
+}
+
+#[test]
+fn the_tracker_reads_a_share_over_the_interval_and_repeats_it_when_asked_too_soon() {
+    let rec = |ns: u64| {
+        let mut r = UsageRecord::default();
+        r.set_name("agent-1");
+        r.flags = flags::RUNNING;
+        r.cpu_used_ns = ns;
+        r
+    };
+    let mut t = Tracker::new();
+    let s = 1_000_000_000;
+    // The first reading has no share.
+    assert_eq!(t.readings(&[rec(0)], 10 * s)[0].cpu_pct, None);
+    // A second later, a quarter of a second of CPU: 25%.
+    assert_eq!(t.readings(&[rec(s / 4)], 11 * s)[0].cpu_pct, Some(25));
+    // Asked 10 ms after: the same share, the baseline unchanged.
+    assert_eq!(
+        t.readings(&[rec(s / 4 + 5_000_000)], 11 * s + 10_000_000)[0].cpu_pct,
+        Some(25)
+    );
+    // A second after the baseline: the share since it, not since the repeat.
+    assert_eq!(
+        t.readings(&[rec(s / 4 + s / 2)], 12 * s)[0].cpu_pct,
+        Some(50)
+    );
+    // A counter that went back (the room restarted) has no share.
+    assert_eq!(t.readings(&[rec(5)], 13 * s)[0].cpu_pct, None);
+    // A room that is gone is forgotten; one that returns starts again.
+    assert_eq!(t.readings(&[], 14 * s).len(), 0);
+    assert_eq!(t.readings(&[rec(s)], 15 * s)[0].cpu_pct, None);
 }
