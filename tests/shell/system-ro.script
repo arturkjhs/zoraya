@@ -1,0 +1,113 @@
+# /system is read-only at run time for everyone (ADR-0289 item 8, ADR-0228):
+# the console shell holds the volume's root, and still cannot change
+# /system/tls/roots, nor can a `+w` grant, a command or a redirection. The
+# volume is rootfs/; the Makefile turns @ROOTSSIZE@ into the size of
+# rootfs/system/tls/roots. Each refusal leaves the file as it was.
+! panicked
+! storage failed
+< Type help to begin, or help tour.
+< \r\n~>
+> cd /\r
+< \r\n/>
+> stat /system/tls/roots\r
+< file size @ROOTSSIZE@ mtime
+< \r\n/>
+# The shell's own redirections and commands, with the volume root.
+> echo evil > /system/tls/roots\r
+< not granted
+< \r\n/>
+> echo evil >> /system/tls/roots\r
+< not granted
+< \r\n/>
+> cp /hello.txt /system/tls/roots\r
+< not granted
+< \r\n/>
+> rm /system/tls/roots\r
+< not granted
+< \r\n/>
+> mv /system/tls/roots /home/roots\r
+< not granted
+< \r\n/>
+> mv /hello.txt /system/tls/roots\r
+< not granted
+< \r\n/>
+> echo sync\r
+< sync
+< \r\n/>
+> mkdir /system/tls/more\r
+< not granted
+< \r\n/>
+> cp /hello.txt /system/new.txt\r
+< not granted
+< \r\n/>
+> rm /system\r
+< not granted
+< \r\n/>
+> mv /system /home/system\r
+< not granted
+< \r\n/>
+> mv /hello.txt /system\r
+< not granted
+< \r\n/>
+> echo sync\r
+< sync
+< \r\n/>
+# A grant cannot give write: the shell refuses `+w` at or under /system, with a
+# hint, and does not run the command.
+> +w /system/tls/roots cp /hello.txt /system/tls/roots\r
+< /system is read-only
+< \r\n/>
+> +w /system/tls cp /hello.txt /system/tls/roots\r
+< the system image changes only when it is built
+< \r\n/>
+> +w /system rm /system/tls/roots\r
+< /system is read-only
+< \r\n/>
+# A grant that is allowed (the whole volume) reaches the rest and not
+# /system: the volume refuses what the program asks.
+> +w / cp /hello.txt /system/tls/roots\r
+< not granted
+< \r\n/>
+> +w / rm /system/tls/roots\r
+< not granted
+< \r\n/>
+> +w / mv /system /home/system\r
+< not granted
+< \r\n/>
+> +w / probe /system/tls/roots\r
+< path /system/tls/roots: read=ok change=not granted
+< \r\n/>
+# Reading works, and the file is as it was.
+> head --lines 1 /system/tls/roots\r
+< # The roots programs with a network grant trust (ADR-0228 item 3).
+< \r\n/>
+> stat /system/tls/roots\r
+< file size @ROOTSSIZE@ mtime
+< \r\n/>
+> ls /system/tls\r
+< roots
+< \r\n/>
+> ls /system\r
+< tls/
+< \r\n/>
+# None of the refused names exists under /system.
+> stat /system/new.txt\r
+< not found
+< \r\n/>
+> stat /system/tls/more\r
+< not found
+< \r\n/>
+> stat /system/hello.txt\r
+< not found
+< \r\n/>
+> stat /home/system\r
+< not found
+< \r\n/>
+# The rest of the volume is still writable.
+> echo fine > /home/fine.txt\r
+< \r\n/>
+> cat /home/fine.txt\r
+< fine
+< \r\n/>
+x power off
+> poweroff\r

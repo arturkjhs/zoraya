@@ -177,6 +177,25 @@ fn a_root_that_did_not_sign_it_fails_before_any_byte_is_sent() {
     assert!(server.join().unwrap().app_bytes.is_empty());
 }
 
+/// The test root may sign only names under `.zoraya` (its nameConstraints):
+/// `outside` is a validly dated leaf for `www.example.org`, signed by that
+/// root with its own key, and the right name is asked for. The verifier
+/// refuses it for the constraint alone, and the peer reads no application
+/// byte. The date, the signature and the name are right, and `valid` shows
+/// the same root vouching for a `.zoraya` name. (`tests/net/tls/make-outside.sh`;
+/// ADR-0289 item 5.)
+#[test]
+fn a_name_outside_the_roots_constraints_fails_before_any_byte_is_sent() {
+    let (port, server) = serve("outside", usize::MAX, 0);
+    let result = connect(port, "www.example.org", "root.pem");
+    let err = result.err().expect("the handshake must fail");
+    assert!(
+        matches!(&err, Error::Certificate(why) if why.contains("NameConstraintViolation")),
+        "{err:?}"
+    );
+    assert!(server.join().unwrap().app_bytes.is_empty());
+}
+
 #[test]
 fn no_date_means_no_handshake() {
     let (port, server) = serve("valid", usize::MAX, 0);

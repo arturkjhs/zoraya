@@ -1089,6 +1089,49 @@ fn a_grant_is_written_and_is_one_path() {
     assert_eq!(sh.host.granted[1], (false, "a.txt".into(), true));
 }
 
+/// ADR-0289 item 8: `/system` is read-only for everyone, so a `+w` that names
+/// it or anything below it is refused with a hint, whatever the spelling, and
+/// the command does not run; `+r` and a `+w` elsewhere are not affected.
+#[test]
+fn a_write_grant_never_reaches_the_system_directory() {
+    let mut sh = shell();
+    for line in [
+        "+w /system ok",
+        "+w /system/tls ok",
+        "+w /system/tls/roots ok",
+        "+w /system/../system/tls ok",
+        "+w //system/ ok",
+        "set d /system/tls; +w $d ok",
+        "grants +w /system/tls/roots ok",
+    ] {
+        let out = run(&mut sh, line);
+        assert!(out.contains("/system is read-only"), "{line}: {out}");
+        assert!(
+            out.contains("changes only when it is built"),
+            "{line}: {out}"
+        );
+    }
+    sh.host.cwd = "/system/tls".into();
+    let out = run(&mut sh, "+w . ok");
+    assert!(out.contains("/system is read-only"), "{out}");
+    assert!(
+        sh.host.granted.is_empty(),
+        "none ran: {:?}",
+        sh.host.granted
+    );
+    sh.host.cwd = "/home".into();
+    for line in [
+        "+r /system/tls/roots ok",
+        "+w /systemx ok",
+        "+w /home/system ok",
+        "+w / ok",
+    ] {
+        let out = run(&mut sh, line);
+        assert!(!out.contains("read-only"), "{line}: {out}");
+    }
+    assert_eq!(sh.host.granted.len(), 4);
+}
+
 /// Review S5: a redirection's target from a value reaches only inside the
 /// current directory (or a grant of a program's line); written out, it
 /// goes where it says.

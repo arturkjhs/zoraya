@@ -49,6 +49,14 @@ New or alpha (`network/survey.md#rustls`); not tried.
 
 ## Recommendation
 
+### Decision
+
+**Decided by the architect (his instruction of the follow-up task `work/system-ro`, transcribed by an agent):**
+`/system` is read-only at run time for everyone, the console shell included. `fsd` serves it read-only, and no grant
+can give write to it (`+w /system` is refused, with a hint). It changes only when the image is built (later: an
+explicit system-update path, its own ADR). Item 8 below is how this is built; it replaces the limitation that the
+review of N5 recorded.
+
 **Recommendation (not a decision): Option A,** with:
 
 1. **The C compiler and archiver for ring** are set in `.cargo/config.toml` for `aarch64-unknown-none` only:
@@ -72,7 +80,7 @@ New or alpha (`network/survey.md#rustls`); not tried.
    2026-11-12), without roots that lack the Websites trust bit, have a "distrust for TLS after" date, or carry
    Mozilla applied constraints (the verifier does not apply constraints). Refreshing it is a manual step; its header
    says where it came from. `tls.roots` (ADR-0229) is not a setting yet: the path is a constant. The file is in the
-   root volume, which a person can write: "read-only" holds for the program, not for the shell's own tree.
+   root volume and, like all of `/system`, read-only at run time for everyone (item 8).
 5. **Test servers** (ADR-0230 item 4): `tools/test-httpd --tls-dir tests/net/tls` runs three TLS terminators (valid,
    expired, wrong name) in front of its plain server, on ports it reports, and logs whether any request byte came
    through; the guest reaches them as `HOST:PORT` through the `net.hosts` names. This replaces the plan's
@@ -82,6 +90,24 @@ New or alpha (`network/survey.md#rustls`); not tried.
 6. **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, the `tls.roots` setting,
    the `grants` hint for the roots line in the panel's shells, a certificate revocation check, session resumption,
    a TCG run of the HTTPS lines on this machine.
+7. **The test roots' name constraints are tested.** `tests/net/tls/outside.pem` (`make-outside.sh`) is a leaf for
+   `www.example.org`, dated and signed correctly by the test root, which may sign only names under `.zoraya`;
+   `cargo test -p zoraya-tls` shows `connect` refusing it with `NameConstraintViolation` (webpki's) and the peer
+   reading no application byte. A program that trusted a leaked copy of the test root would still accept no real site.
+8. **`/system` is read-only at run time** (the Decision above). The service of a disk volume (`fsd`, not the
+   temporary service) is told `Service::seal("system")`: the root's entry of that name and everything below it
+   are sealed. On every connection to a sealed record the mutating rights (`WRITE`, `CREATE`, `REMOVE`, `RENAME`,
+   `PUBLISH`) are never held, whatever the connection asked, and a clone, a narrowing, an `open` or a token cannot add
+   them; `open` with a create, a truncate or a write right under the seal is refused before the engine runs. On the
+   root, the entry itself cannot be removed, renamed (either side, exchange included), replaced by a publish, made
+   again or given a limit. Reading, listing and `sync` are unchanged. The records know their place (outside, root,
+   sealed) from the path they were opened by, so no path spelling reaches a writable record; a symbolic link is
+   resolved by the client from the root again, through the same check. The shell refuses `+w` at or under `/system`
+   before the command runs: `zosh: +w /system/tls: /system is read-only`, with the hint "the system image changes
+   only when it is built; use +r to let a command read it". Writers that remain: the image build (`zoraya-mkfs
+   --from rootfs`, on the host, before the volume is served) and nothing at run time; `init` and `fsd` write nothing
+   there (first boot included), checked by reading both. The explicit system-update path that will change `/system`
+   on a running system is a later ADR; until it exists a change to `/system` is a new image.
 
 ## Consequences
 - **Positive.** HTTPS works for native programs with the real date and real entropy; the verifier is the audited
@@ -89,14 +115,16 @@ New or alpha (`network/survey.md#rustls`); not tried.
 - **Negative.** 8 MB of vendored C and assembly; a second copy of ring's upgrade path; `fetch` is 1 MB; a handshake
   costs the time shown in `docs/design.md`; a certificate valid for a name behind `net.hosts` is checked against
   that name only.
-- **Limitation (review).** `/system/tls/roots` is read-only only in a program's own table: a console shell holds the
-  volume root and a granted `fetch URL -o /system/tls/roots` can replace the file. Not fixed in N5 (protecting `/system`
-  needs a volume-level read-only area); recorded here, in ADR-0228's open questions and in `docs/design.md`.
+- **Limitation (review), now closed.** N5's review found that a console shell, which holds the volume root, and a
+  granted `fetch URL -o /system/tls/roots` could replace the file. The architect decided that `/system` is read-only
+  for everyone (Decision, item 8); the limitation no longer holds. What remains: the file changes only with the
+  image, so a root store update is a new image until the system-update path exists.
 - **Follow-up.** BearSSL and curl; `getrandom` in `libposix`; the revocation question; the `tls.roots` setting.
 
 ## Invariants
-- **INV-0289-1.** An expired certificate, a certificate for another name, a root that did not sign it and a missing
-  date each fail in `connect`, and the peer has read no application byte. *Check:* `cargo test -p zoraya-tls`
+- **INV-0289-1.** An expired certificate, a certificate for another name, a name outside the root's name constraints
+  (`outside.pem`, item 7), a root that did not sign it and a missing date each fail in `connect`, and the peer has
+  read no application byte. *Check:* `cargo test -p zoraya-tls`
   (`tests/handshake.rs`); `make test-net-fetch` (the server's log has, for the expired and the wrong-name server,
   exactly `ended after 0 request bytes`). Which path runs where: the host handshake tests get ring's randomness from
   the operating system, so the generator-backed `getrandom` path (`zoraya-tls`'s `fill_random`, seeded by
@@ -110,10 +138,19 @@ New or alpha (`network/survey.md#rustls`); not tried.
 - **INV-0289-3.** `netd` has no TLS dependency (INV-0228-2). *Check:* `cargo tree -p zoraya-user --bin netd` shows
   neither `rustls` nor `ring` (`netd` is a bin of `zoraya-user`; cargo links by use, so the check is on the binary's
   symbols; not automated yet).
+- **INV-0289-4.** `/system` is read-only on every connection of the root volume's service, the console shell's
+  included: no write, create, remove, rename, publish or limit below it, none of its entry in the root, and no
+  clone, narrowing, token or `+w` grant adds one. *Check:* `cargo test -p zoraya-fs-service --test service`
+  (`a_sealed_entry_is_read_only_for_every_connection`); `cargo test -p zoraya-shell`
+  (`a_write_grant_never_reaches_the_system_directory`); `make test-files` (`tests/shell/system-ro.script`: the
+  console shell, a refused `+w /system/tls`, and a `+w /` grant fail to change `/system/tls/roots`, whose size and
+  first line are as they were).
 
 ## Open questions
 - Whether a vendored ring or an upstream change (a `none` OS in ring's table) is the long-term answer.
-- Whether the roots file belongs in the volume or in the image (ADR-0228 says the image).
+- Whether the roots file belongs in the volume or in the image (ADR-0228 says the image). `/system` is in the volume
+  but only the image build writes it (item 8), which is what "in the image" needs for now.
+- The system-update path that changes `/system` on a running system (its own ADR, the architect's instruction).
 
 ## Revisit triggers
 - ring adds bare-metal aarch64 to its assembly table: drop the vendored copy.
