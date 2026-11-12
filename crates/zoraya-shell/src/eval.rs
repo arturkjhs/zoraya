@@ -506,6 +506,9 @@ struct ShellError {
     code: i32,
 }
 
+/// The directory that is read-only for every grant.
+const SYSTEM_DIR: &str = "/system";
+
 fn shell_error(subject: &str, problem: &str) -> ShellError {
     ShellError {
         subject: subject.into(),
@@ -1399,6 +1402,18 @@ impl<H: Host> Shell<H> {
             if !(g.literal && (g.text == "+r" || g.text == "+w")) {
                 break;
             }
+            if g.text == "+w"
+                && let Err(e) = self.system_is_read_only(&path.text)
+            {
+                let hints: Vec<&str> = e.hints.iter().map(String::as_str).collect();
+                io.err.push_str(&zoraya_command::error(
+                    "zosh",
+                    Some(&e.subject),
+                    &e.problem,
+                    &hints,
+                ));
+                return e.code;
+            }
             given.push((g.text == "+w", path.clone()));
             rest = after;
         }
@@ -1417,6 +1432,24 @@ impl<H: Host> Shell<H> {
             err_too: false,
         };
         self.host.grants(state, &exec, io)
+    }
+
+    /// `+w` never reaches `/system`: the volume serves it read-only to
+    /// everyone, the console shell included, and it changes only when the
+    /// image is built (ADR-0289 item 8). Refused here with the reason, so
+    /// that the person is not left to meet it as an access error later.
+    fn system_is_read_only(&mut self, path: &str) -> Result<(), ShellError> {
+        let cwd = self.host.cwd();
+        let abs = zoraya_resolve::join(&cwd, 0, path);
+        if !zoraya_resolve::covers(SYSTEM_DIR, &abs) {
+            return Ok(());
+        }
+        let mut e = shell_error(&alloc::format!("+w {path}"), "/system is read-only");
+        e.hints.push(
+            "the system image changes only when it is built; use +r to let a command read it"
+                .into(),
+        );
+        Err(e)
     }
 
     /// Rule 4 for a redirection (review S5): a target from a value reaches
@@ -1566,6 +1599,11 @@ impl<H: Host> Shell<H> {
             if v.len() != 1 {
                 let marker = if g.write { "+w" } else { "+r" };
                 return Err(self.report(&shell_error(marker, "needs exactly one path")));
+            }
+            if g.write
+                && let Err(e) = self.system_is_read_only(&v[0].text)
+            {
+                return Err(self.report(&e));
             }
             grants.push((g.write, v[0].clone()));
         }
