@@ -1,0 +1,5 @@
+#!/bin/sh
+# The C compiler `cc-rs` uses for ring on aarch64-unknown-none (.cargo/config.toml,
+# ADR-0228): the host's clang, freestanding, with the few libc declarations
+# of tools/ring-include in place of a libc.
+exec clang -ffreestanding -isystem "$(dirname "$0")/ring-include" "$@"

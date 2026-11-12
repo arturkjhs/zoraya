@@ -205,3 +205,15 @@ fn count_begin_tokens(blob: &[u8]) -> usize {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+#[test]
+fn the_pl031_is_found_and_no_seed_is_invented() {
+    for (name, blob) in ALL {
+        let fdt = Fdt::new(blob).expect("fixture parses");
+        // QEMU hw/arm/virt.c: the RTC is at 0x09010000, one page.
+        let rtc = zoraya_dtb::platform::rtc(&fdt).unwrap_or_else(|| panic!("{name}: no rtc"));
+        assert_eq!((rtc.base, rtc.size), (0x0901_0000, 0x1000), "{name}");
+        // The fixtures were dumped with `dumpdtb`, which has no seed.
+        let _ = zoraya_dtb::platform::rng_seed(&fdt);
+    }
+}

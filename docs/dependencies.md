@@ -14,6 +14,28 @@ purpose, and the reason it is not written in-house. Only permissively licensed (
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | smoltcp | Conditional compilation | smoltcp's own dependency |
 | hash32, stable_deref_trait | 0.3.1, 1.2.1 | MIT OR Apache-2.0 | heapless | Hashing and a marker trait | heapless's own dependencies |
 
+| rustls | =0.23.46 (`default-features = false`; `ring`, `tls12`; `std` only for tests and `tools/test-httpd`) | Apache-2.0 OR ISC OR MIT | `zoraya-tls` (`fetch`) | TLS 1.2 and 1.3 client with the unbuffered API, record layer and handshake (ADR-0228, proposed ADR-0289) | A TLS implementation is the largest hostile-input parser after TCP; rustls is `no_std` capable, memory safe and the survey's choice (`docs/research/network/survey.md#rustls`) |
+| rustls-webpki | 0.103.16 | ISC | rustls | X.509 path validation, name and validity checks | rustls's own dependency |
+| rustls-pki-types | 1.16.0 | MIT OR Apache-2.0 | rustls | DER and PEM types (`CertificateDer`, `ServerName`, `UnixTime`) | rustls's own dependency |
+| ring | =0.17.14 (a copy in `vendor/ring`, `tools/vendor-ring.sh`) | Apache-2.0 AND ISC | rustls (the crypto provider) | AES-GCM, ChaCha20-Poly1305, ECDSA, RSA verify, X25519, SHA-2, HKDF; C and pregenerated aarch64 assembly built by the host's clang (ADR-0228 Decision, proposed ADR-0289) | Hand-written crypto is out of the question; ring is the provider ADR-0228 chose. The copy differs from the registry's by one line in `build.rs` (`"none"` added to the operating systems with the Linux ABI, so that its aarch64 assembly is built for `aarch64-unknown-none`) and a `[lints]` table; its tests are left out |
+| untrusted | 0.9.0 | ISC | ring, rustls-webpki | Safe parsing of untrusted byte slices | their own dependency |
+| subtle | 2.6.1 | BSD-3-Clause | rustls | Constant-time comparisons | rustls's own dependency |
+| zeroize | 1.9.1 | Apache-2.0 OR MIT | rustls | Wiping secrets from memory | rustls's own dependency |
+| once_cell | 1.21.4 | MIT OR Apache-2.0 | rustls | One-time initialisation | rustls's own dependency |
+| getrandom | =0.2.17 (`custom`) | MIT OR Apache-2.0 | ring | The `custom` source is `zoraya_tls::fill_random`, a generator seeded from the random service (ADR-0227, ADR-0288) | ring's own dependency; the target has no operating system to ask |
+| cc, shlex, find-msvc-tools | 1.11.1, 2.0.1, 0.1.15 | MIT OR Apache-2.0 | ring (build script only, host) | Compiles ring's C with `tools/ring-cc` | ring's own build dependencies |
+
+Build tools for ring on the target: the host's `clang` (already needed by ADR-0109) and the toolchain's own `zoraya-ar`
+(`.cargo/config.toml`); no Perl, no NASM and no libc sysroot (the pregenerated assembly is used, and `tools/ring-include`
+holds three declaration-only headers).
+
+## Data
+
+| File | Source | Licence | Used by | Purpose |
+|---|---|---|---|---|
+| `rootfs/system/tls/roots` | The CCADB report `IncludedCACertificateReportPEMCSV` (Mozilla's included CA certificates), fetched 2026-11-12; 108 certificates with the Websites trust bit, no distrust date and no applied constraints | CDLA-Permissive-2.0 (data only, ADR-0228 Decision; `CLAUDE.md`) | `fetch` (through the shell's roots entry) | The trust anchors for HTTPS |
+| `tests/net/tls/*` | Made by `tests/net/tls/make.sh` with OpenSSL 3 | none (test keys, protect nothing) | `zoraya-tls` tests, `tools/test-httpd`, `make test-net-fetch` | A test root, a valid, an expired and a wrong-name leaf |
+
 The kernel uses `core` and `alloc`, and user programs `core`. The crates under `crates/` use only `core` (and `alloc`:
 `zoraya-fs`), and their tests use `std`, with seeded generators instead of a property-testing crate. `zoraya-fs-testkit`,
 `zoraya-mkfs` and `zoraya-fsck` (TASK-07) use only `std` and the workspace's own crates. The GUI's crates (TASK-14: `zoraya-virtio-gpu`, `zoraya-virtio-input`, the four `zoraya-proto-*` of

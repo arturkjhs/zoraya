@@ -181,9 +181,9 @@ impl MemoryObject {
         true
     }
 
-    /// Copies `bytes` into the object at `offset`, for tests that hand a
-    /// process prepared contents. False if they do not fit.
-    #[cfg(feature = "qemu-test")]
+    /// Copies `bytes` into the object at `offset`, for the kernel's own
+    /// objects (the seed) and for tests that hand a process prepared
+    /// contents. False if they do not fit.
     pub fn write(&self, offset: u64, bytes: &[u8]) -> bool {
         let end = offset.checked_add(bytes.len() as u64);
         if end.is_none_or(|end| end > self.size()) {

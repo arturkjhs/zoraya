@@ -291,6 +291,36 @@ pub fn virtio_transports<'a>(fdt: &Fdt<'a>) -> impl Iterator<Item = VirtioTransp
     })
 }
 
+/// The real-time clock: the first enabled `arm,pl031` node with a range
+/// (ADR-0226 item 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rtc {
+    pub base: u64,
+    pub size: u64,
+}
+
+/// The PL031 of the device tree, if there is one.
+pub fn rtc(fdt: &Fdt<'_>) -> Option<Rtc> {
+    fdt.nodes().find_map(|node| {
+        if !node.is_compatible("arm,pl031") || !node.is_enabled() {
+            return None;
+        }
+        let reg = first_reg(&node).filter(|r| r.size >= 4)?;
+        Some(Rtc {
+            base: reg.address,
+            size: reg.size,
+        })
+    })
+}
+
+/// The bytes of `/chosen/rng-seed`, if the boot loader gave any
+/// (ADR-0227 item 1).
+pub fn rng_seed<'a>(fdt: &Fdt<'a>) -> Option<&'a [u8]> {
+    let chosen = fdt.find_node("/chosen")?;
+    let value = chosen.property("rng-seed")?.value;
+    (!value.is_empty()).then_some(value)
+}
+
 /// Every non-empty `reg` range of every enabled `device_type = "memory"` node.
 /// A range that wraps past 2^64 is dropped.
 pub fn memory_regions(fdt: &Fdt<'_>) -> RegionList {

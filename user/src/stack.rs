@@ -2,8 +2,13 @@
 //! the service, each in a sub-job. A test starts the same one.
 
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
-use zoraya_abi::{CONSOLE, ChannelObject, DIRECTORY, Handle, JOB, JobFlags, ObjectType, Rights};
-use zoraya_rt::{channel_create, directory_lookup, handle_close, job_create, job_kill, spawn};
+use zoraya_abi::{
+    CONSOLE, ChannelObject, DIRECTORY, Handle, JOB, JobFlags, ObjectType, RTC_SLOT, Rights,
+};
+use zoraya_rt::{
+    channel_create, device_map, directory_lookup, handle_close, handle_type, job_create, job_kill,
+    memory_unmap, spawn,
+};
 
 use crate::files::File;
 use crate::{dup, wait_exit};
@@ -25,7 +30,7 @@ pub fn moved(slot: u32, handle: Handle) -> HandleEntry {
     }
 }
 
-pub(crate) fn console() -> HandleEntry {
+pub fn console() -> HandleEntry {
     dup(CONSOLE.slot(), CONSOLE, Rights::WRITE)
 }
 
@@ -64,7 +69,34 @@ impl Stack {
     }
 }
 
+/// The real-time clock in nanoseconds since the epoch, read once through the
+/// PL031 `init` holds at `RTC_SLOT` (ADR-0226 item 2); 0 when there is no
+/// device or it gave nothing.
+pub fn read_rtc() -> u64 {
+    let Some(device) = Handle::new(u64::from(RTC_SLOT)) else {
+        return 0;
+    };
+    if handle_type(device) != Ok("device") {
+        return 0;
+    }
+    let Ok((window, offset)) = device_map(device, 0) else {
+        return 0;
+    };
+    // SAFETY: a device mapping of this process at range 0, whose offset the
+    // kernel checked holds the PL031's registers; `RTC_DR` is the 32-bit
+    // word at offset 0, aligned.
+    let seconds = unsafe { ((window + offset) as *const u32).read_volatile() };
+    let _ = memory_unmap(window, 4096);
+    u64::from(seconds) * 1_000_000_000
+}
+
 pub fn start_stack(device: Handle, range: u32) -> Option<Stack> {
+    start_stack_at(device, range, 0)
+}
+
+/// As [`start_stack`], with the root volume's time floor (ADR-0226): the
+/// nanoseconds [`read_rtc`] gave, or 0.
+pub fn start_stack_at(device: Handle, range: u32, floor: u64) -> Option<Stack> {
     let (service_end, driver_end) = channel_create().ok()?;
     let (root_client, root_server) = channel_create().ok()?;
     let (supervisor, supervisor_end) = channel_create().ok()?;
@@ -79,16 +111,19 @@ pub fn start_stack(device: Handle, range: u32) -> Option<Stack> {
         ],
         &[&digits],
     )?;
-    let service = start(
-        "fsd",
-        &[
-            console(),
-            moved(5, service_end),
-            moved(6, root_server),
-            moved(7, supervisor_end),
-        ],
-        &[],
-    )?;
+    let mut floor_digits = [0u8; 20];
+    let floor_text = decimal(floor, &mut floor_digits);
+    let fsd_handles = [
+        console(),
+        moved(5, service_end),
+        moved(6, root_server),
+        moved(7, supervisor_end),
+    ];
+    let service = if floor == 0 {
+        start("fsd", &fsd_handles, &[])
+    } else {
+        start("fsd", &fsd_handles, &[b"--time-floor", floor_text])
+    }?;
     Some(Stack {
         driver,
         service,
@@ -103,4 +138,18 @@ pub fn end_job(job: (Handle, Handle)) {
     wait_exit(job.1);
     let _ = handle_close(job.1);
     let _ = handle_close(job.0);
+}
+
+/// `n` in decimal, in the tail of `buffer`.
+fn decimal(mut n: u64, buffer: &mut [u8; 20]) -> &[u8] {
+    let mut at = buffer.len();
+    loop {
+        at -= 1;
+        buffer[at] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    &buffer[at..]
 }

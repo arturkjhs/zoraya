@@ -17,8 +17,8 @@ use zoraya_abi::spawn::{
 };
 use zoraya_abi::{
     CONSOLE, ConsoleObject, DIRECTORY, DeviceObject, DirectoryObject, Disposition, ExitReason,
-    ExitRecord, FIRST_DEVICE_SLOT, Handle, JOB, JobObject, ObjectType, REQUEST_KINDS, RequestKind,
-    Rights, Status, process_signals,
+    ExitRecord, FIRST_DEVICE_SLOT, Handle, JOB, JobObject, ObjectType, REQUEST_KINDS, RTC_SLOT,
+    RequestKind, Rights, SEED_SLOT, Status, process_signals,
 };
 use zoraya_abi::{POWER, PowerObject};
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, PHDR_SIZE, Program, Segment};
@@ -714,8 +714,20 @@ fn kernel_handles(job: Arc<Job>) -> Result<HandleTable, SpawnError> {
     Ok(handles)
 }
 
-/// Every device, from slot `FIRST_DEVICE_SLOT` on (ADR-0053).
+/// The real-time clock at `RTC_SLOT` when the device tree has one (ADR-0226
+/// item 1), then every virtio device from slot `FIRST_DEVICE_SLOT` on
+/// (ADR-0053).
 fn insert_devices(handles: &mut HandleTable) -> Result<(), SpawnError> {
+    if let Some(clock) = crate::device::rtc_device() {
+        handles
+            .insert_at(
+                RTC_SLOT,
+                Object::Device(clock),
+                DeviceObject::RIGHTS,
+                object::next_id(),
+            )
+            .map_err(|_| SpawnError::NoMemory)?;
+    }
     for (i, device) in crate::device::all().iter().enumerate() {
         handles
             .insert_at(
@@ -813,6 +825,17 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
         )
         .map_err(|_| SpawnError::NoMemory)?;
     insert_devices(&mut handles)?;
+    if let Some(seed) = crate::device::seed_object() {
+        // Read and map only: `init` hands it to `rngd` and keeps nothing.
+        handles
+            .insert_at(
+                SEED_SLOT,
+                Object::Memory(seed),
+                Rights::READ.union(Rights::MAP).union(Rights::TRANSFER),
+                object::next_id(),
+            )
+            .map_err(|_| SpawnError::NoMemory)?;
+    }
     create(Start {
         name,
         image: Loadable::from_file(file)?,

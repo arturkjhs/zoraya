@@ -70,6 +70,11 @@ zoraya_user::describe!("system", "zosh");
 /// The connections a POSIX program may hold open at once (ADR-0262 item 2).
 const POSIX_NET_BUDGET: u32 = 2;
 
+/// The roots every native program with a network grant may read (ADR-0228
+/// item 3; the `tls.roots` setting of ADR-0229 is not built, so the path is
+/// fixed).
+const TLS_ROOTS: &str = "/system/tls/roots";
+
 const CONSOLE_KEY: u64 = 1;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
@@ -616,6 +621,9 @@ struct Z {
     /// The shell's root network connection (slot 9, ADR-0221 item 4), from
     /// which a command that needs the network's status gets a narrowed one.
     net: Option<Handle>,
+    /// The shell's connection to the random service (slot 10, ADR-0227
+    /// item 3), from which each native program gets its own.
+    random: Option<Handle>,
     tmp: Option<File>,
     next_tmp: u32,
     /// The `/tmp` directory of the line being started, once one is made.
@@ -1066,6 +1074,19 @@ impl Z {
             });
             slots.net = (handles.len() - 1) as u8;
         }
+        // Every program gets its own connection to the random service,
+        // made through the shell's (ADR-0227 item 3): randomness designates
+        // nothing, so there is no grant word. Without the service, none.
+        if let Some(root) = self.random
+            && let Some(connection) = zoraya_user::random::share(root)
+        {
+            handles.push(ChannelEntry {
+                handle: connection,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            slots.random = (handles.len() - 1) as u8;
+        }
         let entries: Vec<native::Entry<'_>> = merged
             .iter()
             .zip(&kinds)
@@ -1076,7 +1097,14 @@ impl Z {
             })
             .collect();
         let mut bytes = alloc::vec![0u8; 64 * 1024];
-        let Some(n) = native::encode(&self.cwd, &slots, &entries, handles.len(), &mut bytes) else {
+        let Some(n) = native::encode(
+            &self.cwd,
+            &slots,
+            &entries,
+            handles.len(),
+            self.realtime_base,
+            &mut bytes,
+        ) else {
             close_all(&handles);
             let _ = handle_close(report_ours);
             return Err(gone());
@@ -1186,6 +1214,21 @@ impl Z {
                     if let Some(hint) = self.not_given(exec.name, &abs, write, Some(&line)) {
                         return Err(hint);
                     }
+                }
+                // The roots for TLS come with a network that can be reached
+                // (ADR-0228 item 3, ADR-0153 rule 1): read only, not checked
+                // against the terminal's table because the network grant
+                // implies it, and shown by `grants` as "with the network".
+                let mut plan = plan;
+                if net
+                    .as_ref()
+                    .is_some_and(|(rights, _)| rights & zoraya_abi::net::rights::REACH != 0)
+                {
+                    plan.push(grants::Planned {
+                        path: String::from(TLS_ROOTS),
+                        access: grants::Access::Read,
+                        reason: String::from("with the network"),
+                    });
                 }
                 given = grants::summary(&plan, &self.home());
                 Some(self.table(&plan, net)?)
@@ -4073,6 +4116,7 @@ fn main() -> i32 {
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(Broker::new),
         net: Handle::new(9).filter(|h| handle_type(*h) == Ok("channel")),
+        random: Handle::new(10).filter(|h| handle_type(*h) == Ok("channel")),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(|end| File { end }),

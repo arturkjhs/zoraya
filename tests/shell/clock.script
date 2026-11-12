@@ -1,0 +1,30 @@
+# ADR-0226, INV-0226-2: `date` shows the host's time (the RTC under QEMU
+# follows the host), within 2 s of the host's clock at the moment the runner
+# reads the line. A second reading after `sleep 3` is later than the first
+# (the wall clock goes on with the monotonic one).
+! panicked
+! ZORAYA-FAULT
+! no real-time clock reading
+< Type help to begin, or help tour.
+< \r\n~>
+> date\r
+D 2
+< \r\n~>
+> sleep 3\r
+< \r\n~>
+> date\r
+D 2
+< \r\n~>
+# ADR-0227, INV-0227-1: three programs of one boot get different bytes (the
+# runner fails if two words after `random:` are equal, which "unavailable"
+# would be).
+! no entropy source
+> random\r
+< ok\r\n~>
+> random\r
+< ok\r\n~>
+> random\r
+< ok\r\n~>
+U 3 random:
+x power off
+> poweroff\r

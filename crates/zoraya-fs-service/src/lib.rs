@@ -417,14 +417,16 @@ fn nanoseconds(t: Timestamp) -> u64 {
         .saturating_add(u64::from(t.nanos))
 }
 
-/// The boot's time base from the root volume (ADR-0191): the latest time the
-/// volume holds, less the monotonic clock now, so that the base plus the
-/// monotonic clock goes on from that time and never falls below it. A
-/// volume made before 1970 or by a clock ahead of this one gives 0 at
-/// least.
-pub fn time_base(latest: Timestamp, monotonic_ns: u64) -> u64 {
+/// The boot's time base from the root volume (ADR-0191, ADR-0226 item 3): the
+/// later of the latest time the volume holds plus one nanosecond and the
+/// `floor` the real-time clock gave (0 for none), less the monotonic clock
+/// now, so that the base plus the monotonic clock goes on from that time and
+/// never falls below the volume's latest time or the floor. A volume made
+/// before 1970 or by a clock ahead of this one gives 0 at least.
+pub fn time_base(latest: Timestamp, monotonic_ns: u64, floor: u64) -> u64 {
     nanoseconds(latest)
         .saturating_add(1)
+        .max(floor)
         .saturating_sub(monotonic_ns)
 }
 

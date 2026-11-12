@@ -12,7 +12,13 @@
 //! entry count      u32
 //! in, out, err     u8 each: handle indices, or NO_HANDLE
 //! job, report      u8 each: the program's own job, the REPORT channel
-//! reserved         3 bytes, zero
+//! random, reserved u8 each: the connection to the random service
+//!                  (ADR-0227 item 3) or NO_HANDLE; zero
+//! realtime base    u64: nanoseconds added to the monotonic clock for the
+//!                  wall clock (ADR-0226 item 4); 0 keeps the monotonic one.
+//!                  Its lowest bit says whether the real-time clock gave the
+//!                  date ([`base_is_dated`]): without it the date is only
+//!                  the volume's latest time and TLS refuses to use it
 //! cwd              u32 length, bytes: the current directory, absolute
 //! entries          kind u8, handle u8, two zero bytes, u32 length, path;
 //!                  longest path first
@@ -29,7 +35,7 @@ use crate::posix::{MAX_MESSAGE_HANDLES, MAX_PATH, NO_HANDLE, is_absolute_normal}
 
 const MAGIC: &[u8; 4] = b"ZNS1";
 /// The size of this version's header.
-pub const HEADER_SIZE: usize = 24;
+pub const HEADER_SIZE: usize = 32;
 const ENTRY_HEADER: usize = 8;
 /// The most entries one record holds.
 pub const MAX_ENTRIES: usize = 64;
@@ -45,6 +51,29 @@ pub mod slot {
     pub const IN: Handle = Handle(1001);
     pub const OUT: Handle = Handle(1002);
     pub const ERR: Handle = Handle(1003);
+}
+
+/// The lowest bit of a realtime base: the real-time clock gave the date
+/// (a floor was applied, ADR-0226 item 3). A base is in nanoseconds, so the
+/// bit costs a program at most one nanosecond, and a consumer that does not
+/// know of it is right to a nanosecond.
+pub const BASE_DATED: u64 = 1;
+
+/// `base` marked as dated or not.
+pub const fn tag_base(base: u64, dated: bool) -> u64 {
+    (base & !BASE_DATED) | if dated { BASE_DATED } else { 0 }
+}
+
+/// Whether the real-time clock gave the date `base` goes on from.
+pub const fn base_is_dated(base: u64) -> bool {
+    base & BASE_DATED != 0
+}
+
+/// The wall clock in whole seconds for something that checks validity
+/// periods (TLS): `None` unless `base` is dated, so a date that is only the
+/// volume's latest time is never trusted (ADR-0226 driver 1).
+pub fn checked_wall_seconds(base: u64, monotonic_ns: u64) -> Option<u64> {
+    base_is_dated(base).then(|| (base & !BASE_DATED).saturating_add(monotonic_ns) / 1_000_000_000)
 }
 
 /// What an entry is (ADR-0153 rule 2).
@@ -95,6 +124,9 @@ pub struct Slots {
     /// The network connection (ADR-0220 item 7): present only when the
     /// launcher granted something.
     pub net: u8,
+    /// The connection to the random service (ADR-0227 item 3): every
+    /// program the shell starts gets one when the service runs.
+    pub random: u8,
 }
 
 impl Slots {
@@ -105,9 +137,10 @@ impl Slots {
         job: NO_HANDLE,
         report: NO_HANDLE,
         net: NO_HANDLE,
+        random: NO_HANDLE,
     };
 
-    fn all(&self) -> [u8; 6] {
+    fn all(&self) -> [u8; 7] {
         [
             self.input,
             self.output,
@@ -115,6 +148,7 @@ impl Slots {
             self.job,
             self.report,
             self.net,
+            self.random,
         ]
     }
 }
@@ -125,6 +159,8 @@ impl Slots {
 pub struct Startup<'a> {
     pub cwd: &'a str,
     pub slots: Slots,
+    /// The wall clock's base (ADR-0226 item 4), or 0.
+    pub realtime_base: u64,
     entries: &'a [u8],
     entry_count: usize,
 }
@@ -154,7 +190,8 @@ impl<'a> Startup<'a> {
         }
         let flags = u32_at(bytes, 8)?;
         let entry_count = u32_at(bytes, 12)? as usize;
-        let s = bytes.get(16..HEADER_SIZE)?;
+        let s = bytes.get(16..24)?;
+        let realtime_base = u64::from(u32_at(bytes, 24)?) | (u64::from(u32_at(bytes, 28)?) << 32);
         let slots = Slots {
             input: s[0],
             output: s[1],
@@ -162,8 +199,9 @@ impl<'a> Startup<'a> {
             job: s[3],
             report: s[4],
             net: s[5],
+            random: s[6],
         };
-        if flags != 0 || s[6..8] != [0, 0] || entry_count > MAX_ENTRIES {
+        if flags != 0 || s[7] != 0 || entry_count > MAX_ENTRIES {
             return None;
         }
         let limit = handles.min(MAX_MESSAGE_HANDLES);
@@ -218,6 +256,7 @@ impl<'a> Startup<'a> {
         Some(Startup {
             cwd,
             slots,
+            realtime_base,
             entries: &bytes[start..at],
             entry_count,
         })
@@ -253,6 +292,7 @@ pub fn encode(
     slots: &Slots,
     entries: &[Entry<'_>],
     handles: usize,
+    realtime_base: u64,
     out: &mut [u8],
 ) -> Option<usize> {
     if entries.len() > MAX_ENTRIES {
@@ -279,7 +319,8 @@ pub fn encode(
         put(&word.to_le_bytes())?;
     }
     let s = slots.all();
-    put(&[s[0], s[1], s[2], s[3], s[4], s[5], 0, 0])?;
+    put(&[s[0], s[1], s[2], s[3], s[4], s[5], s[6], 0])?;
+    put(&realtime_base.to_le_bytes())?;
     put(&u32::try_from(cwd.len()).ok()?.to_le_bytes())?;
     put(cwd.as_bytes())?;
     for e in sorted.iter().flatten() {

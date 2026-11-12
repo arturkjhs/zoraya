@@ -143,7 +143,7 @@ deny it could (it is a handle), which no surveyed system offers and none needs. 
   child can read, through the child's shared connection, streams that differ from each other. *Check:* an in-QEMU
   test reading 32 bytes in two programs and in a forked pair, asserting success in the child and inequality.
 - **INV-0227-2.** `rngd` reseeds from the device: with a fake device whose output is recorded, the generator's output
-  changes after the reseed point and depends on the device's bytes. *Check:* a host test of the generator crate.
+  changes after the reseed point and depends on the device's bytes. *Check:* a host test of the generator crate (it covers `mix`, the entry for a device's bytes; `rngd` has no device to reseed from yet).
 - **INV-0227-3.** `bytes(n)` never blocks and never returns fewer than `n` bytes for `n` up to 4096. *Check:* a host
   test of the service loop.
 

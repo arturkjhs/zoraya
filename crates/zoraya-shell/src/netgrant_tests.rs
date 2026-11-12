@@ -88,7 +88,7 @@ fn an_operand_from_a_variable_a_substitution_or_a_glob_is_refused_before_it_runs
 #[test]
 fn a_url_that_does_not_parse_gives_no_connection_and_the_command_says_why() {
     for bad in [
-        "https://a.b/",
+        "https://a.b:0/",
         "http://a.b:0/",
         "http://u:p@a.b/",
         "http://a b/",
@@ -96,6 +96,15 @@ fn a_url_that_does_not_parse_gives_no_connection_and_the_command_says_why() {
     ] {
         assert_eq!(go(FETCH, &[(bad, true)], true).unwrap(), None, "{bad}");
     }
+}
+
+/// ADR-0228: an `https://` address designates the host and port 443 (or the
+/// one written), like `http://` does with 80.
+#[test]
+fn an_https_url_designates_its_host_and_port_443() {
+    let (_, https) = scope_of(go(FETCH, &[("https://a.b/", true)], true).unwrap());
+    let (_, http443) = scope_of(go(FETCH, &[("http://a.b:443/", true)], true).unwrap());
+    assert_eq!(https, http443);
 }
 
 #[test]

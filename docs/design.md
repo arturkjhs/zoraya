@@ -1023,7 +1023,7 @@ deterministic random mutations.
 - **Protocols (`crates/zoraya-protocol`, `zoraya-proto-block`, `zoraya-proto-file`, ADR-0052).** The `protocol!` macro
   and a flat wire format with total decoders. `blkd` and `fsd` serve them (TASK-13).
 - **`init` (`user/src/bin/init.rs`, ADR-0053).** The one process the kernel starts, with the console, its own job, the
-  ramdisk directory, `Power` at slot 4 and `Device` handles from slot 5. It starts `zosh` in a sub-job with only what
+  ramdisk directory, `Power` at slot 4, the real-time clock's `Device` at slot 5 and the entropy seed at slot 6 (each empty when the device tree has none; N5), and `Device` handles for the virtio pages from slot 7. It starts `rngd` when there is a seed, and `zosh` in a sub-job with only what
   the shell needs, or, when the volume has `/etc/zoraya/session`, `ttyd` and the broker (stage 6d), and turns the
   machine off when the shell or the session ends.
 - **Devices (`kernel/src/device.rs`, ADR-0054, ADR-0070).** One `Device` per page of `virtio,mmio` transports. A window
@@ -1769,6 +1769,53 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex`, `getrandom`; a socket does not cross `spawn` (`EBADF`) or
   `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
   curl and wget (W11, W13), which need `poll` and TLS.
+
+## The clock, the random service and HTTPS (stage 8, N5)
+
+`fetch https://HOST[:PORT]/PATH` fetches a page over TLS with the system's date, the system's randomness and the system's
+roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228).
+
+- **The clock** (ADR-0226). The kernel makes a `Device` for the PL031's page (`device::init_rtc`: one range, `intid` 0, so no
+  interrupt can be made of it); `init` holds it at slot 5 and, each time it starts the storage stack, maps it, reads `RTC_DR`
+  (whole seconds) and passes `--time-floor NANOSECONDS` to the root volume's `fsd`. `time_base(latest, monotonic, floor)` is
+  `max(latest + 1, floor) - monotonic`. `ZNS1` (the native start-up record) has a 32-byte header with `realtime_base`;
+  `zoraya_user::namespace::realtime()` is that base plus the monotonic clock; the base's lowest bit says the real-time clock gave the date, and `checked_realtime_seconds()` (what `fetch` gives TLS) is `None` without it, so a certificate is never checked against the volume's latest time alone; `date` prints it as `YYYY-MM-DD HH:MM:SS UTC`.
+  Virtio devices now start at slot 7 (`FIRST_DEVICE_SLOT`); slot 6 holds the entropy seed. Under QEMU the guest's `date`
+  agrees with the host's within 2 s (`tests/shell/clock.script`, the runner's `D` step).
+- **The random service** (ADR-0227). The kernel copies `/chosen/rng-seed` into a memory object for `init`, which gives it to
+  `rngd` (`user/src/bin/rngd.rs`; the logic is `zoraya-rng`, host tested). The generator is ChaCha20 with fast key erasure
+  and an absorbing `mix` (a construction of ours; ADR-0288 item 5 asks the reviewer to decide on it). A connection speaks
+  `Bytes(n)` (exactly `n` bytes, `n` up to 4,096, at once) and `Share(server end)`. The shell holds one and shares a fresh one
+  with every native program it starts (the `random` slot of `ZNS1`); `random [COUNT]` prints bytes; `zoraya_user::random::random`
+  is the program's call. **Not built:** the virtio-rng reseed, `libposix`'s `getrandom` and `/dev/urandom`, the connection of the
+  panel's and the broker's programs and of a `fork` child, a restart of `rngd`.
+- **TLS** (ADR-0228). `zoraya-tls` is a blocking client over rustls 0.23.46's unbuffered API with ring 0.17.14 as the provider,
+  `no_std`: `Config::new(roots, now)`, `Connection::connect(config, name, transport, seed)` (32 fresh bytes from the random service are mixed into the generator first; `seed_random` refuses fewer than 32; the handshake and nothing else, so no
+  application byte goes out before it succeeds), `read`, `write_all`, `close`. The date is the function the program gives (the
+  wall clock; none, no handshake); ring's `getrandom` is a `zoraya-rng` generator the program seeds with 32 bytes from its
+  random connection (`rngd` refuses a seed under 32 bytes or all zero and does not serve; only `init`'s and the shell's connections may `Share`, 64 live children each). `fetch` reads `/system/tls/roots`, which the shell adds (read only, "with the network") to the table of a
+  program that gets `reach`, and verifies the host of the address, the name that was granted. `netd` sees ciphertext.
+- **ring on `aarch64-unknown-none`.** N1's check built ring's objects but never linked: ring assembles its aarch64 assembly
+  only for operating systems it lists, and `none` is not one. `vendor/ring` is the registry copy with that one line changed
+  (`tools/vendor-ring.sh`), `[patch.crates-io]` selects it; `tools/ring-cc` (the host's clang, freestanding, three header stubs
+  in `tools/ring-include`) and `target/debug/zoraya-ar` (the host's `ar` makes an empty archive of ELF objects) are set for the
+  target in `.cargo/config.toml`; `make` builds the archiver first. No musl sysroot, Perl or NASM is needed. BearSSL, the
+  recorded fallback, was not needed.
+- **The roots** are Mozilla's list from the CCADB report (108 certificates with the Websites trust bit, no distrust date and no
+  applied constraints; CDLA-Permissive-2.0 data; 2026-11-12) in `rootfs/system/tls/roots`. The path is a constant (the
+  `tls.roots` setting of ADR-0229 is not built). The file is in the root volume, which the shell's tree can write: a console shell, or a `fetch URL -o /system/tls/roots` it grants, can replace the trust store (a recorded limitation; ADR-0289, ADR-0228's open questions). Every `.key` under `tests/net/tls` is public and for tests only (its README; name-constrained to `.zoraya`).
+- **Tests.** `cargo test -p zoraya-rng` (10: RFC 8439's block vector, the generator, the service), `-p zoraya-tls` (8: a rustls server
+  on loopback with the test PKI of `tests/net/tls`, 200 kB each way; expired, another name, an unknown root, no date, a bad name,
+  no roots, PEM; and no random without a seed), `-p zoraya-fs-service --test time` (the floor), `-p zoraya-dtb`, `-p zoraya-abi`.
+  `make test-files` (`clock.script`: `date` twice, three `random`s that differ), `make test-net-fetch` (HTTPS: 1,000,000 bytes by
+  checksum, the page, `expired.zoraya`, `wrong.zoraya`, by number, a plain server on an HTTPS address, `ftp://`; and the test
+  server's log has no request line for the refused names). The test server runs three TLS terminators (`--tls-dir`) in front of
+  its plain server, on ports it reports; this replaces the plan's `guestfwd` on 443.
+- **Measured** (QEMU 11.1.2, HVF, 1 CPU, one run, 2026-11-12): `fetch --sum https://test.zoraya:PORT/pattern/1000000`: handshake
+  51.1 ms (ECDSA P-256 certificate, 108 roots parsed, `user` profile at opt-level 1), then 1,000,000 bytes in 25.1 ms against
+  38.8 ms for the same page over HTTP in the same boot.
+- **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption,
+  the HTTPS lines under TCG, the GUI shells' roots entry (they have no network connection yet).
 
 ## Known limitations
 

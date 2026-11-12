@@ -6,6 +6,13 @@
 # command line.
 runner = "tools/run-qemu.sh"
 
+[env]
+# ring's C files (ADR-0228): see tools/ring-cc.
+CC_aarch64_unknown_none = { value = "tools/ring-cc", relative = true }
+# The host's ar cannot make an archive of ELF objects; the toolchain's own can
+# (ADR-0109 item 3). `make` builds it before the user programs.
+AR_aarch64_unknown_none = { value = "target/debug/zoraya-ar", relative = true }
+
 [alias]
 kbuild = "build -p zoraya-kernel --target aarch64-unknown-none"
 krun = "run -p zoraya-kernel --target aarch64-unknown-none"

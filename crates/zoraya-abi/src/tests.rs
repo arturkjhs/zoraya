@@ -1458,8 +1458,9 @@ mod native_startup {
             job: 5,
             report: 6,
             net: 7,
+            random: NO_HANDLE,
         };
-        encode("/work", &slots, &entries, 8, out).expect("encodes")
+        encode("/work", &slots, &entries, 8, 1_800_000_000_123_456_789, out).expect("encodes")
     }
 
     #[test]
@@ -1470,6 +1471,8 @@ mod native_startup {
         assert_eq!(r.cwd, "/work");
         assert_eq!(r.slots.report, 6);
         assert_eq!(r.slots.net, 7);
+        assert_eq!(r.slots.random, NO_HANDLE);
+        assert_eq!(r.realtime_base, 1_800_000_000_123_456_789);
         let paths: std::vec::Vec<&str> = r.entries().map(|e| e.path).collect();
         assert_eq!(paths, ["/work/notes.txt", "/work/new.txt", "/work"]);
         assert_eq!(r.entries().count(), r.entry_count());
@@ -1485,18 +1488,19 @@ mod native_startup {
         };
         // Not absolute or not normal, a handle used twice or out of range,
         // a missing entry with a handle, too few handles in the message.
-        assert!(encode("home", &Slots::NONE, &[], 0, &mut out).is_none());
-        assert!(encode("/a/../b", &Slots::NONE, &[], 0, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a/", 0)], 1, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/b", 0)], 2, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a", 1)], 1, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/a", 1)], 2, &mut out).is_none());
+        assert!(encode("home", &Slots::NONE, &[], 0, 0, &mut out).is_none());
+        assert!(encode("/a/../b", &Slots::NONE, &[], 0, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a/", 0)], 1, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/b", 0)], 2, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 1)], 1, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/a", 1)], 2, 0, &mut out).is_none());
         // A path repeated with another of its length between (review K11).
         let n = encode(
             "/",
             &Slots::NONE,
             &[d("/a", 0), d("/b", 1), d("/c", 2)],
             3,
+            0,
             &mut out,
         )
         .expect("three paths");
@@ -1518,31 +1522,39 @@ mod native_startup {
             net: 0,
             ..Slots::NONE
         };
-        assert!(encode("/", &net, &[d("/a", 0)], 1, &mut out).is_none());
-        assert!(encode("/", &net, &[], 1, &mut out).is_some());
-        assert!(encode("/", &net, &[], 0, &mut out).is_none());
-        let n = encode("/", &net, &[], 1, &mut out).unwrap();
-        for reserved in [22, 23] {
-            let mut m = out[..n].to_vec();
-            m[reserved] = 1;
-            assert!(Startup::decode(&m, 1).is_none(), "reserved byte {reserved}");
-        }
+        assert!(encode("/", &net, &[d("/a", 0)], 1, 0, &mut out).is_none());
+        assert!(encode("/", &net, &[], 1, 0, &mut out).is_some());
+        assert!(encode("/", &net, &[], 0, 0, &mut out).is_none());
+        let n = encode("/", &net, &[], 1, 0, &mut out).unwrap();
+        let mut m = out[..n].to_vec();
+        m[23] = 1;
+        assert!(Startup::decode(&m, 1).is_none(), "reserved byte 23");
+        // The random slot is a handle like the others, and byte 23 is still
+        // reserved.
+        let random = Slots {
+            random: 0,
+            ..Slots::NONE
+        };
+        assert!(encode("/", &random, &[], 1, 0, &mut out).is_some());
+        assert!(encode("/", &random, &[d("/a", 0)], 1, 0, &mut out).is_none());
+        let n = encode("/", &random, &[], 1, 0, &mut out).unwrap();
+        assert_eq!(Startup::decode(&out[..n], 1).unwrap().slots.random, 0);
         let missing = Entry {
             path: "/x",
             kind: EntryKind::Missing,
             handle: 0,
         };
-        assert!(encode("/", &Slots::NONE, &[missing], 1, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[missing], 1, 0, &mut out).is_none());
         let slots = Slots {
             job: 0,
             ..Slots::NONE
         };
         assert!(
-            encode("/", &slots, &[d("/", 0)], 1, &mut out).is_none(),
+            encode("/", &slots, &[d("/", 0)], 1, 0, &mut out).is_none(),
             "job and entry share 0"
         );
-        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, &mut out[..10]).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, &mut out).is_some());
+        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, 0, &mut out[..10]).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, 0, &mut out).is_some());
     }
 
     #[test]
@@ -1569,4 +1581,23 @@ mod native_startup {
             let _ = Startup::decode(&m, (x >> 40) as usize % 70);
         }
     }
+}
+
+#[test]
+fn a_base_says_whether_the_real_time_clock_gave_the_date() {
+    use crate::native::{base_is_dated, checked_wall_seconds, tag_base};
+    let base = 1_800_000_000_123_456_788u64;
+    let dated = tag_base(base, true);
+    let undated = tag_base(base, false);
+    assert!(base_is_dated(dated) && !base_is_dated(undated));
+    assert_eq!(dated - undated, 1);
+    assert_eq!(tag_base(0, false), 0);
+    // Only a dated base gives a date to check certificates against.
+    assert_eq!(
+        checked_wall_seconds(dated, 5_000_000_000),
+        Some(1_800_000_005)
+    );
+    assert_eq!(checked_wall_seconds(undated, 5_000_000_000), None);
+    assert_eq!(checked_wall_seconds(0, 5_000_000_000), None);
+    assert!(checked_wall_seconds(u64::MAX, u64::MAX).is_some());
 }

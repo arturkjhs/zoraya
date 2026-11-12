@@ -22,6 +22,7 @@ zoraya-proto-block = { path = "../crates/zoraya-proto-block" }
 zoraya-proto-nic = { path = "../crates/zoraya-proto-nic" }
 zoraya-proto-net = { path = "../crates/zoraya-proto-net" }
 zoraya-http = { path = "../crates/zoraya-http" }
+zoraya-tls = { path = "../crates/zoraya-tls" }
 zoraya-net = { path = "../crates/zoraya-net" }
 zoraya-virtio-net = { path = "../crates/zoraya-virtio-net" }
 zoraya-proto-file = { path = "../crates/zoraya-proto-file" }
@@ -47,6 +48,7 @@ zoraya-panel = { path = "../crates/zoraya-panel" }
 zoraya-app = { path = "../crates/zoraya-app" }
 zoraya-chooser = { path = "../crates/zoraya-chooser" }
 zoraya-files = { path = "../crates/zoraya-files" }
+zoraya-rng = { path = "../crates/zoraya-rng" }
 zoraya-settings-window = { path = "../crates/zoraya-settings-window" }
 zoraya-editor = { path = "../crates/zoraya-editor" }
 zoraya-fsclient = { path = "../crates/zoraya-fsclient" }
@@ -235,6 +237,24 @@ bench = false
 [[bin]]
 name = "echo-args"
 path = "src/bin/echo_args.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "date"
+path = "src/bin/date.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "rngd"
+path = "src/bin/rngd.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "random"
+path = "src/bin/random.rs"
 test = false
 bench = false
 

@@ -1,11 +1,17 @@
 #![no_std]
 #![no_main]
 
-//! `fetch URL [-o FILE]` (N3): an HTTP/1.1 GET over a connection `zosh`
+//! `fetch URL [-o FILE]` (N3, N5): an HTTP/1.1 GET over a connection `zosh`
 //! made for exactly this host and port (the `url` operand, ADR-0224 item 2).
 //! The request and the decoder of the response are `zoraya-http`; the bytes
 //! travel on the two streams this program made for `netd` (ADR-0222's note of
 //! 2026-11-10), so a slow page costs this program's room and nobody else's.
+//! With `https://` the bytes are TLS (`zoraya-tls`, ADR-0228) over the same
+//! streams: the roots come from `/system/tls/roots`, which the shell adds to
+//! the table of a program with a network grant, the date from the wall clock
+//! of ADR-0226 and the randomness from the connection ADR-0227 gives every
+//! program; `netd` sees ciphertext only. The name checked against the
+//! certificate is the host of the address, which is also the name granted.
 
 extern crate alloc;
 
@@ -16,6 +22,7 @@ use zoraya_abi::{Handle, Mode, Packet, Status, stream_signals};
 use zoraya_http::{Error as HttpError, Limits, Parser, parse_ipv4, parse_url, request};
 use zoraya_proto_file::{open_flags, rights};
 use zoraya_proto_net::{reason, status};
+use zoraya_tls::{Config, Connection as Tls, Transport, TransportError};
 use zoraya_user::files::File;
 use zoraya_user::netconn::{CONNECT_WAIT_NS, ConnectError, Connection, connect};
 use zoraya_user::{
@@ -90,6 +97,98 @@ fn why(e: ConnectError) -> &'static str {
     }
 }
 
+/// The roots the shell put in this program's table (ADR-0228 item 3).
+const ROOTS: &str = "/system/tls/roots";
+
+/// The wall clock in seconds (ADR-0226 item 4), or none: also none when the
+/// real-time clock gave no date, so that the handshake fails with "no date"
+/// rather than check a certificate against the volume's latest time.
+fn wall_clock() -> Option<u64> {
+    namespace::checked_realtime_seconds()
+}
+
+/// TLS over the two streams of the connection.
+struct StreamIo {
+    waiter: Handle,
+    inbound: Handle,
+    outbound: Handle,
+}
+
+impl Transport for StreamIo {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, TransportError> {
+        loop {
+            match stream_read(self.inbound, buffer) {
+                Ok(n) => return Ok(n.min(buffer.len())),
+                Err(Status::WouldBlock) => {
+                    let until = clock_monotonic() + IDLE_NS;
+                    let signals = stream_signals::READABLE | stream_signals::PEER_CLOSED;
+                    if !wait(self.waiter, self.inbound, signals, until) {
+                        return Err(TransportError("no answer in time"));
+                    }
+                }
+                Err(_) => return Err(TransportError("the stream failed")),
+            }
+        }
+    }
+
+    fn write_all(&mut self, data: &[u8]) -> Result<(), TransportError> {
+        if write_all(self.waiter, self.outbound, data) {
+            Ok(())
+        } else {
+            Err(TransportError("the request could not be sent"))
+        }
+    }
+}
+
+/// The handshake with `host` over `io`: roots, date and randomness from the
+/// system, or why not.
+fn start_tls(host: &str, io: StreamIo) -> Result<Tls<StreamIo>, String> {
+    let roots = namespace::get()
+        .and_then(|ns| ns.open(ROOTS, 0, rights::READ).ok())
+        .and_then(|f| zoraya_user::files::read_all(&f).ok())
+        .map(|text| zoraya_tls::pem_certificates(&text))
+        .unwrap_or_default();
+    if roots.is_empty() {
+        return Err(String::from("no trusted roots were given to this command"));
+    }
+    let mut seed = [0u8; 32];
+    if !zoraya_user::random::random(&mut seed) {
+        return Err(String::from("the system gave no random bytes"));
+    }
+    let config = Config::new(&roots, wall_clock).map_err(|e| alloc::format!("{e}"))?;
+    Tls::connect(&config, host, io, &seed).map_err(|e| alloc::format!("{e}"))
+}
+
+/// Where the page's bytes come from: the stream as it is, or TLS over it.
+enum Source {
+    Plain { waiter: Handle, inbound: Handle },
+    Tls(alloc::boxed::Box<Tls<StreamIo>>),
+}
+
+impl Source {
+    /// Reads some bytes: 0 is the end. `Err` says why not.
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Option<String>> {
+        match self {
+            Source::Plain { waiter, inbound } => loop {
+                match stream_read(*inbound, buf) {
+                    Ok(n) => return Ok(n.min(buf.len())),
+                    Err(Status::WouldBlock) => {
+                        let until = clock_monotonic() + IDLE_NS;
+                        let signals = stream_signals::READABLE | stream_signals::PEER_CLOSED;
+                        if !wait(*waiter, *inbound, signals, until) {
+                            return Err(None);
+                        }
+                    }
+                    // A read error is a stream that is not ours any more: the
+                    // connection is cut (the check below says so).
+                    Err(_) => return Err(None),
+                }
+            },
+            Source::Tls(tls) => tls.read(buf).map_err(|e| Some(alloc::format!("{e}"))),
+        }
+    }
+}
+
 fn http_why(e: HttpError) -> &'static str {
     match e {
         HttpError::Truncated => "the connection ended before the page did",
@@ -110,7 +209,9 @@ fn main() -> i32 {
         Ok(u) => u,
         Err(e) => {
             let problem = match e {
-                zoraya_http::UrlError::Scheme => "only http:// addresses are understood",
+                zoraya_http::UrlError::Scheme => {
+                    "only http:// and https:// addresses are understood"
+                }
                 zoraya_http::UrlError::Host => "the host is not a name or a dotted address",
                 zoraya_http::UrlError::Port => "the port is not a number from 1 to 65535",
                 zoraya_http::UrlError::Userinfo => "a user name or password in the address",
@@ -146,9 +247,40 @@ fn main() -> i32 {
     let Some(outbound) = conn.outbound else {
         return fail(&c, None, "no stream");
     };
-    if !write_all(waiter, outbound, &request(&url)) {
-        return fail(&c, Some(text), "the request could not be sent");
-    }
+    let mut handshake_us = 0u64;
+    let mut source = if url.tls {
+        let io = StreamIo {
+            waiter,
+            inbound: conn.inbound,
+            outbound,
+        };
+        // The handshake ends before any byte of the request is sent
+        // (INV-0228-1): a name, date or root that does not fit fails here.
+        let began = clock_monotonic();
+        let started_tls = start_tls(&host, io);
+        handshake_us = (clock_monotonic() - began) / 1000;
+        match started_tls {
+            Ok(mut tls) => {
+                if tls.write_all(&request(&url)).is_err() {
+                    return fail(&c, Some(text), "the request could not be sent");
+                }
+                Source::Tls(alloc::boxed::Box::new(tls))
+            }
+            Err(problem) => {
+                conn.shutdown_write();
+                return fail(&c, Some(text), &problem);
+            }
+        }
+    } else {
+        if !write_all(waiter, outbound, &request(&url)) {
+            return fail(&c, Some(text), "the request could not be sent");
+        }
+        Source::Plain {
+            waiter,
+            inbound: conn.inbound,
+        }
+    };
+    let mut tls_problem: Option<String> = None;
     let mut parser = Parser::new(Limits::DEFAULT);
     let mut buf = vec![0u8; 16 * 1024];
     let mut offset = 0u64;
@@ -158,21 +290,11 @@ fn main() -> i32 {
     let started = clock_monotonic();
     let (mut size, mut hash, mut hashing) = (0u64, 0xcbf2_9ce4_8422_2325u64, 0u64);
     loop {
-        let n = match stream_read(conn.inbound, &mut buf) {
+        let n = match source.read(&mut buf) {
             Ok(0) => break,
-            Ok(n) => n.min(buf.len()),
-            Err(Status::WouldBlock) => {
-                let until = clock_monotonic() + IDLE_NS;
-                let signals = stream_signals::READABLE | stream_signals::PEER_CLOSED;
-                if !wait(waiter, conn.inbound, signals, until) {
-                    result = Err(HttpError::Truncated);
-                    break;
-                }
-                continue;
-            }
-            // A read error is a stream that is not ours any more: the
-            // connection is cut (the check below says so).
-            Err(_) => {
+            Ok(n) => n,
+            Err(why) => {
+                tls_problem = why;
                 result = Err(HttpError::Truncated);
                 break;
             }
@@ -224,6 +346,9 @@ fn main() -> i32 {
         result = parser.finish();
     }
     let reset = conn.was_reset();
+    if let Source::Tls(tls) = source {
+        let _ = tls.close();
+    }
     conn.shutdown_write();
     let _ = handle_close(waiter);
     if let Some(status) = open_failed {
@@ -239,6 +364,9 @@ fn main() -> i32 {
         return fail(&c, Some(text), "connection reset");
     }
     if let Err(e) = result {
+        if let Some(problem) = &tls_problem {
+            return fail(&c, Some(text), problem);
+        }
         return fail(&c, Some(text), http_why(e));
     }
     let (status_code, redirected) = parser.head().map_or((0, false), |h| (h.status, h.redirect));
@@ -258,6 +386,13 @@ fn main() -> i32 {
         return fail(&c, Some(path), zoraya_user::files::status_name(s));
     }
     if sum {
+        if url.tls {
+            zoraya_user::println!(
+                "tls handshake {}.{:03} ms",
+                handshake_us / 1000,
+                handshake_us % 1000
+            );
+        }
         let us = (clock_monotonic() - started) / 1000;
         let hashing = hashing / 1000;
         zoraya_user::println!(

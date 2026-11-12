@@ -16,7 +16,7 @@ x hello from EL0
 # The shell holds what init listed, and the port it made: no Device, by type
 # (INV-0053-2).
 > slots\r
-< slots: 1:console 2:job 3:directory 4:power 5:memory 6:port
+< slots: 1:console 2:job 3:directory 4:power 10:channel 11:memory 12:port
 < \r\n/> 
 # A command and its output (and the receive interrupt).
 > echo a  b\r

@@ -26,6 +26,8 @@ members = [
     "crates/zoraya-net",
     "crates/zoraya-proto-net",
     "crates/zoraya-dns",
+    "crates/zoraya-rng",
+    "crates/zoraya-tls",
     "crates/zoraya-http",
     "crates/zoraya-proto-file",
     "crates/zoraya-proto-display",
@@ -111,6 +113,7 @@ default-members = [
     "crates/zoraya-net",
     "crates/zoraya-proto-net",
     "crates/zoraya-dns",
+    "crates/zoraya-rng",
     "crates/zoraya-http",
     "crates/zoraya-proto-file",
     "crates/zoraya-proto-display",
@@ -203,3 +206,8 @@ inherits = "release"
 opt-level = 1
 debug = false
 strip = true
+
+# ring 0.17.14 with one line changed so that its aarch64 assembly is built for
+# aarch64-unknown-none (tools/vendor-ring.sh, ADR-0289).
+[patch.crates-io]
+ring = { path = "vendor/ring" }

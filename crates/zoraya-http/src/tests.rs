@@ -32,7 +32,16 @@ fn urls_are_parsed_and_the_odd_ones_refused() {
     assert_eq!((u.host, u.port, u.path), ("10.0.2.2", 8080, "/a/b?c=d"));
     let u = parse_url("HTTP://Example.org").unwrap();
     assert_eq!((u.host, u.port, u.path), ("Example.org", 80, "/"));
-    assert_eq!(parse_url("https://a.b/").unwrap_err(), UrlError::Scheme);
+    assert!(!u.tls);
+    let h = parse_url("HTTPS://a.b/x").unwrap();
+    assert_eq!((h.tls, h.host, h.port, h.path), (true, "a.b", 443, "/x"));
+    assert_eq!(parse_url("https://a.b:8443/").unwrap().port, 8443);
+    assert_eq!(parse_url("https:/a.b/").unwrap_err(), UrlError::Scheme);
+    // The default port is left out of Host, the other one is not.
+    let r = request(&parse_url("https://a.b/").unwrap());
+    assert!(r.starts_with(b"GET / HTTP/1.1\r\nHost: a.b\r\n"));
+    let r = request(&parse_url("https://a.b:80/").unwrap());
+    assert!(r.starts_with(b"GET / HTTP/1.1\r\nHost: a.b:80\r\n"));
     assert_eq!(parse_url("ftp://a.b/").unwrap_err(), UrlError::Scheme);
     assert_eq!(parse_url("a.b/").unwrap_err(), UrlError::Scheme);
     assert_eq!(parse_url("http:///x").unwrap_err(), UrlError::Host);

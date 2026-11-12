@@ -99,9 +99,40 @@
 > fetch http://10.0.2.2:1/\r
 < the connection was refused
 < \r\n~>
-# Only http:// with a host.
-> fetch https://10.0.2.2/\r
-< only http:// addresses are understood
+# HTTPS (N5, ADR-0228; the runner's TLS terminators in front of the same
+# server, with the test PKI whose root is this disk's /system/tls/roots). The
+# date and the randomness are the system's: the certificates are checked
+# against `date`'s clock, and the handshake draws on the random service.
+> fetch --sum https://test.zoraya:@TLSVALID@/pattern/1000000\r
+< 1000000 bytes fnv1a @SUM1M@ in
+< \r\n~>
+> fetch https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+# Refused before any byte of the request is sent; the Makefile checks the
+# server's log for the same.
+> fetch https://expired.zoraya:@TLSEXPIRED@/\r
+< certificate expired
+< \r\n~>
+> status\r
+< \r\nexit status 1
+< \r\n~>
+> fetch https://wrong.zoraya:@TLSWRONG@/\r
+< certificate is for another name
+< \r\n~>
+# A plain server on an HTTPS address is no TLS server.
+> fetch https://test.zoraya:@PORT@/\r
+< the connection ended without a close_notify
+< \r\n~>
+# The certificate is checked against the name in the address: asked by number,
+# the valid server's certificate is for no name that matches.
+> fetch https://10.0.2.2:@TLSVALID@/\r
+< certificate is for another name
+< \r\n~>
+# Only http:// and https:// with a host.
+> fetch ftp://10.0.2.2/\r
+< only http:// and https:// addresses are understood
 < \r\n~>
 > fetch http://10.0.2.2:99999/\r
 < the port is not a number from 1 to 65535

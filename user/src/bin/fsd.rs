@@ -380,7 +380,13 @@ fn main() -> i32 {
     };
     // The root volume's service sets the boot's base (ADR-0191).
     let latest = volume.last_assigned();
-    BASE.store(time_base(latest, clock_monotonic()), Ordering::Relaxed);
+    // The floor is the real-time clock's reading `init` took (ADR-0226 item 3).
+    let floor = option(b"--time-floor").unwrap_or(0);
+    // The lowest bit of the base says that the clock gave the date.
+    BASE.store(
+        zoraya_abi::native::tag_base(time_base(latest, clock_monotonic(), floor), floor != 0),
+        Ordering::Relaxed,
+    );
     let port = port_create().expect("port");
     port_subscribe(
         port,

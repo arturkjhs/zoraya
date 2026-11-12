@@ -59,12 +59,13 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd random broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
-# The deadline of the TCG and 4-CPU test-qemu-* runs: 116 tests under TCG take
-# 147-176 s in CI, so 180 s dies under load. HVF runs keep QEMU_TIMEOUT.
+# The deadline of the TCG, 4-CPU and CI test-qemu-* and test-net runs: 116 tests
+# take 147-176 s under TCG in CI and the suite grows, so 180 s dies under load
+# (slowest green run: 176 s, 70% margin at 300 s). HVF-only runs keep QEMU_TIMEOUT.
 QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
@@ -79,6 +80,9 @@ build: $(KERNEL)
 # User programs go into the ramdisk, and the ramdisk into the kernel image
 # (ADR-0033). They have their own target directory and a stripped profile.
 $(RAMDISK):
+	@# ring's build script archives its C objects with the toolchain's ar
+	@# (.cargo/config.toml), which must exist first (ADR-0289).
+	$(CARGO) build -q -p zoraya-ar
 	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user
 	$(CARGO) build -p zoraya-mkramdisk
 	@mkdir -p $(BUILD)
@@ -177,7 +181,7 @@ test-qemu-disk: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 
 test-qemu-auto-default: test-qemu-disk
-	$(RUN_TEST) --label auto-default \
+	$(RUN_TEST_SLOW) --label auto-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
 		--expect-line "memory: 131072 KiB total" \
 		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
@@ -225,7 +229,7 @@ test-qemu-tcg-smp4-gicv3: test-qemu-disk
 
 test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
-	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
+	$(RUN_TEST_SLOW) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 # N1 (ADR-0221, ADR-0230): the test kernel with a virtio-net device on QEMU's
@@ -247,7 +251,7 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
 	run() { accel=$$1; shift; tools/net-poke.sh $(NET_FWD_PORT) 240 & poke=$$!; \
-		$(RUN_TEST) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
+		$(RUN_TEST_SLOW) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
 		rc=$$?; kill $$poke 2>/dev/null; wait $$poke 2>/dev/null; return $$rc; }; \
 	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \
 		--expect-line "t_netd: all passed" --expect-line "t_netd: lease 10.0.2.15/24 gateway" \
@@ -284,6 +288,7 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 # from the server's own pattern function (`--checksum`).
 HTTPD := target/debug/zoraya-test-httpd
 NET_HTTP_READY := $(BUILD)/net-httpd.port
+NET_TLS_READY := $(BUILD)/net-tlsd.ports
 NET_DNS_SCRIPT := tests/shell/net-dns.script
 NET_FETCH_ROOT := $(BUILD)/net-fetch-root
 NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
@@ -297,16 +302,18 @@ $(HTTPD): tools/test-httpd/src/main.rs
 test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
-	: > $(NET_HTTP_READY) && \
-	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
+	: > $(NET_HTTP_READY) && : > $(NET_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NET_TLS_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/net-httpd.pid); \
-	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && [ -s $(NET_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(NET_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
 	port=$$(cat $(NET_HTTP_READY)); \
 	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[net-fetch] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
 		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
@@ -315,6 +322,13 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	$(call NET_FETCH_RUN,$(QEMU_TIMEOUT),net-fetch-auto,auto); rc=$$?; \
 	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd.log \
+		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd.log \
+		   || grep '^tls \(expired\|wrong\): ended after' target/test-logs/test-httpd.log | grep -qv 'ended after 0 request bytes'; then \
+			echo '[net-fetch] FAIL: INV-0228-1: the server saw request bytes after a refused handshake (or no clean end for it), or no request on the valid one'; cat target/test-logs/test-httpd.log; rc=1; \
+		else echo '[net-fetch] ok: the refused TLS servers read no request byte'; fi; \
+	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_FETCH_DISK); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \
 		if [ -n "$$CI" ] && [ "$(NET_DNS)" != 1 ]; then echo "[net-dns] SKIP: SLIRP's DNS forwarder needs the host's resolver (NET_DNS=1 runs it on CI)"; \
@@ -377,6 +391,7 @@ REBOOT_SCRIPT := tests/shell/reboot.script
 CONVENTIONS_SCRIPT := tests/shell/conventions.script
 FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
+CLOCK_SCRIPT := tests/shell/clock.script
 STORAGE_DOWN := tests/shell/storage-down.script
 DEVICE_ERROR := tests/shell/device-error.script
 GRANTS_SCRIPT := tests/shell/grants.script
@@ -408,6 +423,10 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 # INV-0155-1: every command's --help and usage error, with a volume.
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(CONVENTIONS_SCRIPT) --label conventions -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# ADR-0226: the date is the host's, to 2 s.
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(CLOCK_SCRIPT) --label clock -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # What a command gets (ADR-0153): rootfs/ with link objects over it.
 	rm -rf $(GRANTS_ROOT) && mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
@@ -707,6 +726,7 @@ fmt-check:
 
 clippy:
 	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
+	$(CARGO) build -q -p zoraya-ar
 	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
 	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
 	@# the user programs' features do not unify with it.
@@ -743,12 +763,19 @@ check-kernel-tty:
 # Host paths: macOS's users' folders, and this host's own home directory (on Linux
 # /home/NAME); not every /home/, which is Zoraya's own home folder
 # (shell.home, /data/home/APP).
-check-host-paths:
+# vendor/ring/ is other people's code, with its authors' names and addresses; the
+# rest of vendor/ is ours (its manifest is checked for what it holds, below).
+check-host-paths: check-vendor-ring
 	@id="$$(git config user.email)"; \
 	home="$$(echo "$$HOME" | sed 's/[.[\*^$$]/\\&/g')"; \
 	hits="$$(git grep -n -I -E "/Use[r]s/|$${home:-/nonexistent}/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}" -- . \
-	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
+	  ':!docs/research/' ':!tools/posix-surface/results/' ':!vendor/ring/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
+
+# INV-0289-2 offline: vendor/ring matches its committed SHA-256 manifest.
+.PHONY: check-vendor-ring
+check-vendor-ring:
+	tools/check-vendor-ring.sh
 
 # Every host-tested crate caps its test heap (CLAUDE.md, Memory limits): the
 # library, if it has tests, and every top-level file of tests/, by the cap or

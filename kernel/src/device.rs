@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use zoraya_abi::{Status, interrupt_signals};
 use zoraya_dtb::Fdt;
-use zoraya_dtb::platform::{VirtioTransport, virtio_transports};
+use zoraya_dtb::platform::{VirtioTransport, rng_seed, rtc, virtio_transports};
 use zoraya_events::SourceId;
 use zoraya_pmm::FRAME_SIZE;
 use zoraya_time::Instant;
@@ -58,6 +58,11 @@ pub struct Device {
 }
 
 static DEVICES: SpinLock<Vec<Arc<Device>>> = SpinLock::new(Vec::new());
+/// The real-time clock's page, if the device tree has a PL031 (ADR-0226).
+static RTC: SpinLock<Option<Arc<Device>>> = SpinLock::new(None);
+/// The boot's entropy seed (ADR-0227 item 1): a memory object holding
+/// `/chosen/rng-seed` as a length (u32, little-endian) and the bytes.
+static SEED: SpinLock<Option<Arc<MemoryObject>>> = SpinLock::new(None);
 /// The interrupts objects own, by line.
 static LINES: SpinLock<Vec<(u32, SourceId)>> = SpinLock::new(Vec::new());
 
@@ -104,6 +109,69 @@ pub fn init(fdt: &Fdt<'_>) {
         });
     }
     *DEVICES.lock() = devices.into_iter().map(Arc::new).collect();
+    init_rtc(fdt);
+    init_seed(fdt);
+}
+
+/// Copies the device tree's seed into a memory object for `init`. The
+/// boot loader's copy stays in the device tree blob, which only the kernel
+/// maps (a limitation recorded in ADR-0287's note on the seed).
+fn init_seed(fdt: &Fdt<'_>) {
+    let Some(seed) = rng_seed(fdt) else {
+        println!("device: no /chosen/rng-seed in the device tree");
+        return;
+    };
+    let seed = &seed[..seed.len().min(FRAME_SIZE as usize - 4)];
+    let Ok(object) = MemoryObject::new(FRAME_SIZE, false, None) else {
+        println!("device: no memory for the seed");
+        return;
+    };
+    let wrote = object.write(0, &(seed.len() as u32).to_le_bytes()) && object.write(4, seed);
+    if wrote {
+        println!("device: entropy seed of {} bytes", seed.len());
+        *SEED.lock() = Some(object);
+    }
+}
+
+/// The seed's memory object, if the device tree had one, handed on once:
+/// the kernel keeps no reference, so the object and its frame live only as
+/// long as `init`'s and then `rngd`'s handle.
+pub fn seed_object() -> Option<Arc<MemoryObject>> {
+    SEED.lock().take()
+}
+
+/// The PL031's page as a device with one range and no interrupt line (its
+/// `intid` is 0, which `interrupt` refuses): `init` maps it and reads
+/// `RTC_DR` (ADR-0226 item 2).
+fn init_rtc(fdt: &Fdt<'_>) {
+    let Some(clock) = rtc(fdt) else { return };
+    let base = clock.base & !(FRAME_SIZE - 1);
+    let offset = clock.base - base;
+    if !clock.base.is_multiple_of(4)
+        || offset
+            .checked_add(clock.size)
+            .is_none_or(|end| end > FRAME_SIZE)
+    {
+        println!("device: the rtc at {:#x} does not fit a page", clock.base);
+        return;
+    }
+    let mut ranges = [None; MAX_RANGES];
+    ranges[0] = Some(Range {
+        offset,
+        intid: 0,
+        edge: false,
+    });
+    *RTC.lock() = Some(Arc::new(Device {
+        base,
+        kernel: paging::map_device(base, FRAME_SIZE) as usize,
+        ranges,
+        state: SpinLock::new(State::default()),
+    }));
+}
+
+/// The real-time clock's device, if there is one.
+pub fn rtc_device() -> Option<Arc<Device>> {
+    RTC.lock().clone()
 }
 
 /// Every device.
@@ -163,6 +231,7 @@ impl Device {
             .get(index as usize)
             .copied()
             .flatten()
+            .filter(|range| range.intid != 0)
             .ok_or(Status::InvalidArgument)?;
         let mut lines = LINES.lock();
         if lines.iter().any(|(intid, _)| *intid == range.intid) {

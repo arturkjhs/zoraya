@@ -131,8 +131,15 @@ pub const JOB: Handle = Handle(2);
 pub const DIRECTORY: Handle = Handle(3);
 /// In the first process only (ADR-0062).
 pub const POWER: Handle = Handle(4);
-/// The first process's first device, then one a slot (ADR-0053).
-pub const FIRST_DEVICE_SLOT: u32 = 5;
+/// The real-time clock's page, in the first process only; empty when the
+/// device tree has no PL031 (ADR-0226 item 1).
+pub const RTC_SLOT: u32 = 5;
+/// The boot's entropy seed, a memory object; empty when there is none
+/// (ADR-0227 item 1).
+pub const SEED_SLOT: u32 = 6;
+/// The first process's first virtio device, then one a slot (ADR-0053, as
+/// ADR-0226 and ADR-0227 move it).
+pub const FIRST_DEVICE_SLOT: u32 = 7;
 
 /// What a handle allows (ADR-0040). Rights only decrease.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

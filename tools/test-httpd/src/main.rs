@@ -25,6 +25,15 @@
 //! /reset             closes the connection with a reset after the head
 //! ```
 //!
+//! With `--tls-dir DIR` (the test PKI of `tests/net/tls`) three more listeners
+//! run in front of the same server, one per certificate: `valid` (for
+//! `test.zoraya`), `expired` (for `expired.zoraya`, whose validity ended in
+//! 2020) and `wrong` (a certificate for `other.zoraya`, to be asked as
+//! `wrong.zoraya`). Each terminates TLS and passes the request to the plain
+//! server on this host, then the answer back and a close_notify (ADR-0228,
+//! ADR-0230). Their ports are written to `--tls-ready-file`, one line:
+//! `valid expired wrong`.
+//!
 //! `pattern(n)` is the one place the bytes are defined; the guest side
 //! compares sizes and a checksum printed by `tests/shell/net-fetch.script`
 //! (`make test-net` computes the expected line from this same function with
@@ -217,16 +226,122 @@ fn serve(mut stream: TcpStream) {
     let _ = stream.read(&mut sink);
 }
 
+/// The certificate chain and key of `DIR/NAME.pem` and `DIR/NAME.key`.
+fn tls_config(dir: &str, name: &str) -> Result<Arc<rustls::ServerConfig>, String> {
+    let pem = |ext: &str| {
+        std::fs::read(format!("{dir}/{name}.{ext}")).map_err(|e| format!("{dir}/{name}.{ext}: {e}"))
+    };
+    let chain: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls::pki_types::pem::PemObject::pem_slice_iter(&pem("pem")?)
+            .collect::<Result<_, _>>()
+            .map_err(|e| format!("{name}.pem: {e}"))?;
+    let key = rustls::pki_types::pem::PemObject::from_pem_slice(&pem("key")?)
+        .map_err(|e| format!("{name}.key: {e}"))?;
+    rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(chain, key)
+        .map(Arc::new)
+        .map_err(|e| format!("{name}: {e}"))
+}
+
+/// One TLS connection: the request head from the client, to the plain server,
+/// its whole answer back, a close_notify.
+fn tls_serve(name: &str, config: Arc<rustls::ServerConfig>, backend: u16, mut tcp: TcpStream) {
+    let _ = tcp.set_read_timeout(Some(TIMEOUT));
+    let _ = tcp.set_write_timeout(Some(TIMEOUT));
+    let Ok(mut conn) = rustls::ServerConnection::new(config) else {
+        return;
+    };
+    let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 1024];
+    while !request.ends_with(b"\r\n\r\n") && request.len() < MAX_HEAD {
+        match tls.read(&mut chunk) {
+            Ok(0) | Err(_) => {
+                // The test script's checker reads these lines: a refused
+                // handshake must leave no `request` line (INV-0228-1).
+                eprintln!("tls {name}: ended after {} request bytes", request.len());
+                return;
+            }
+            Ok(n) => request.extend_from_slice(&chunk[..n]),
+        }
+    }
+    eprintln!("tls {name}: request of {} bytes", request.len());
+    let Ok(mut plain) = TcpStream::connect(("127.0.0.1", backend)) else {
+        return;
+    };
+    let _ = plain.set_read_timeout(Some(TIMEOUT));
+    if plain.write_all(&request).is_err() {
+        return;
+    }
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        match plain.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                if tls.write_all(&buf[..n]).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+    tls.conn.send_close_notify();
+    let _ = tls.flush();
+    let _ = tcp.shutdown(Shutdown::Write);
+    let mut sink = [0u8; 256];
+    let _ = tcp.set_read_timeout(Some(Duration::from_millis(200)));
+    let _ = tcp.read(&mut sink);
+}
+
+/// Starts the three TLS listeners; gives their ports.
+fn start_tls(dir: &str, backend: u16, deadline: Instant) -> Result<[u16; 3], String> {
+    let mut ports = [0u16; 3];
+    for (i, name) in ["valid", "expired", "wrong"].into_iter().enumerate() {
+        let config = tls_config(dir, name)?;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
+        ports[i] = listener.local_addr().map_err(|e| e.to_string())?.port();
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        thread::spawn(move || {
+            let active = Arc::new(AtomicUsize::new(0));
+            while Instant::now() < deadline {
+                if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                    thread::sleep(Duration::from_millis(20));
+                    continue;
+                }
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let _ = stream.set_nonblocking(false);
+                        active.fetch_add(1, Ordering::SeqCst);
+                        let (active, config) = (active.clone(), config.clone());
+                        thread::spawn(move || {
+                            tls_serve(name, config, backend, stream);
+                            active.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(100)),
+                }
+            }
+        });
+    }
+    Ok(ports)
+}
+
 fn main() {
     let mut port: Option<u16> = None;
     let mut lifetime = 300u64;
     let mut ready: Option<String> = None;
+    let (mut tls_dir, mut tls_ready): (Option<String>, Option<String>) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--port" => port = args.next().and_then(|v| v.parse().ok()),
             "--lifetime" => lifetime = args.next().and_then(|v| v.parse().ok()).unwrap_or(300),
             "--ready-file" => ready = args.next(),
+            "--tls-dir" => tls_dir = args.next(),
+            "--tls-ready-file" => tls_ready = args.next(),
             "--checksum" => {
                 // The expected FNV-1a of /pattern/N, for the test script.
                 let n = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -235,7 +350,7 @@ fn main() {
             }
             _ => {
                 eprintln!(
-                    "usage: zoraya-test-httpd --port N [--lifetime SECONDS] [--ready-file FILE] | --checksum N"
+                    "usage: zoraya-test-httpd --port N [--lifetime SECONDS] [--ready-file FILE] [--tls-dir DIR --tls-ready-file FILE] | --checksum N"
                 );
                 exit(2);
             }
@@ -258,6 +373,21 @@ fn main() {
         let _ = std::fs::write(path, format!("{got}\n"));
     }
     let deadline = Instant::now() + Duration::from_secs(lifetime);
+    if let Some(dir) = tls_dir {
+        let backend = listener.local_addr().map_or(port, |a| a.port());
+        match start_tls(&dir, backend, deadline) {
+            Ok(ports) => {
+                if let Some(path) = tls_ready {
+                    let _ =
+                        std::fs::write(path, format!("{} {} {}\n", ports[0], ports[1], ports[2]));
+                }
+            }
+            Err(e) => {
+                eprintln!("zoraya-test-httpd: tls: {e}");
+                exit(1);
+            }
+        }
+    }
     // The accept loop wakes every 200 ms to see the deadline.
     listener.set_nonblocking(true).expect("non-blocking");
     let active = Arc::new(AtomicUsize::new(0));
