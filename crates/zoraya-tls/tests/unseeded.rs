@@ -12,7 +12,11 @@ fn an_unseeded_program_has_no_random_bytes_and_a_seeded_one_has_different_ones()
     let mut a = [0u8; 32];
     assert_eq!(fill_random(&mut a), Err(Error::NoRandom));
     assert_eq!(a, [0u8; 32], "nothing written on failure");
-    seed_random(b"seed bytes from the random service, 32 or more");
+    // A short seed, or a first seed of zeros, is refused and leaves it unseeded.
+    assert_eq!(seed_random(b"short"), Err(Error::BadSeed));
+    assert_eq!(seed_random(&[0u8; 32]), Err(Error::BadSeed));
+    assert!(!is_seeded());
+    seed_random(b"seed bytes from the random service, 32 or more").unwrap();
     let mut b = [0u8; 32];
     let mut c = [0u8; 32];
     fill_random(&mut b).unwrap();
@@ -20,7 +24,8 @@ fn an_unseeded_program_has_no_random_bytes_and_a_seeded_one_has_different_ones()
     assert!(is_seeded());
     assert_ne!(b, c);
     // A reseed changes the stream.
-    seed_random(b"more bytes");
+    assert_eq!(seed_random(b"more bytes"), Err(Error::BadSeed));
+    seed_random(b"more bytes, but at least thirty-two of them").unwrap();
     let mut d = [0u8; 32];
     fill_random(&mut d).unwrap();
     assert_ne!(c, d);

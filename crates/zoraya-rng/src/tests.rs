@@ -43,7 +43,8 @@ fn the_same_seed_gives_the_same_stream_and_another_gives_another() {
         output(&mut Generator::new(b"x"), 16),
         output(&mut Generator::new(b"x\0"), 16)
     );
-    // The empty seed still gives output, and not zeros.
+    // The unchecked constructor still gives output for an empty seed, and
+    // not zeros; `from_seed` is what refuses it (below).
     assert!(output(&mut Generator::new(b""), 64).iter().any(|b| *b != 0));
 }
 
@@ -121,7 +122,7 @@ fn ask(s: &mut Service, count: u32, transaction: u32) -> (Action, Vec<u8>) {
     let mut message = [0u8; 64];
     let n = encode(&Bytes { count }, transaction, &mut message).unwrap();
     let mut out = std::vec![0u8; OUT_SIZE];
-    let action = s.handle(&message[..n], 0, &mut out);
+    let action = s.handle(&mut Conn::root(), &message[..n], 0, &mut out);
     (action, out)
 }
 
@@ -167,16 +168,17 @@ fn two_requests_get_different_bytes() {
 #[test]
 fn share_is_bounded_and_closes_on_nonsense() {
     let mut s = service();
+    let mut c = Conn::root();
     assert!(s.attached());
     let mut message = [0u8; 64];
     let n = encode(&Share {}, 3, &mut message).unwrap();
     let mut out = std::vec![0u8; OUT_SIZE];
     // With one handle: the second connection fits, the third does not.
     assert!(matches!(
-        s.handle(&message[..n], 1, &mut out),
+        s.handle(&mut c, &message[..n], 1, &mut out),
         Action::Share { attach: true, .. }
     ));
-    let Action::Share { reply, attach } = s.handle(&message[..n], 1, &mut out) else {
+    let Action::Share { reply, attach } = s.handle(&mut c, &message[..n], 1, &mut out) else {
         panic!()
     };
     assert!(!attach);
@@ -188,14 +190,17 @@ fn share_is_bounded_and_closes_on_nonsense() {
     s.detached();
     assert_eq!(s.connections(), 1);
     // No handle, or two: not the message it says.
-    assert_eq!(s.handle(&message[..n], 0, &mut out), Action::Close);
-    assert_eq!(s.handle(&message[..n], 2, &mut out), Action::Close);
+    assert_eq!(s.handle(&mut c, &message[..n], 0, &mut out), Action::Close);
+    assert_eq!(s.handle(&mut c, &message[..n], 2, &mut out), Action::Close);
     // Garbage ends the connection; an unknown ordinal does not.
-    assert_eq!(s.handle(b"junk", 0, &mut out), Action::Close);
+    assert_eq!(s.handle(&mut c, b"junk", 0, &mut out), Action::Close);
     let mut unknown = [0u8; 16];
     unknown[..4].copy_from_slice(&zoraya_protocol::MAGIC_VERSION.to_le_bytes());
     unknown[4..8].copy_from_slice(&99u32.to_le_bytes());
-    assert!(matches!(s.handle(&unknown, 0, &mut out), Action::Reply(_)));
+    assert!(matches!(
+        s.handle(&mut c, &unknown, 0, &mut out),
+        Action::Reply(_)
+    ));
 }
 
 /// 20,000 random messages: no panic, and replies always decode.
@@ -218,7 +223,87 @@ fn random_messages_never_panic() {
             m[4..8].copy_from_slice(&((x >> 8) as u32 % 4).to_le_bytes());
             m[12..16].copy_from_slice(&((len - 16) as u32).to_le_bytes());
         }
-        let _ = s.handle(&m[..len], (x >> 20) as usize % 3, &mut out);
+        let _ = s.handle(
+            &mut Conn::root(),
+            &m[..len],
+            (x >> 20) as usize % 3,
+            &mut out,
+        );
         s.detached();
     }
+}
+
+#[test]
+fn from_seed_refuses_short_and_zero_seeds() {
+    assert_eq!(Generator::from_seed(b"").err(), Some(SeedError::Short));
+    assert_eq!(
+        Generator::from_seed(&[7u8; 31]).err(),
+        Some(SeedError::Short)
+    );
+    assert_eq!(
+        Generator::from_seed(&[0u8; 32]).err(),
+        Some(SeedError::Zero)
+    );
+    assert_eq!(
+        Generator::from_seed(&[0u8; 100]).err(),
+        Some(SeedError::Zero)
+    );
+    let mut ok = Generator::from_seed(&[1u8; 32]).unwrap();
+    assert_eq!(
+        output(&mut ok, 40),
+        output(&mut Generator::new(&[1u8; 32]), 40)
+    );
+    // One non-zero byte among zeros is enough to start.
+    let mut seed = [0u8; 64];
+    seed[63] = 1;
+    assert!(Generator::from_seed(&seed).is_ok());
+}
+
+#[test]
+fn only_the_first_two_levels_share_and_children_are_counted() {
+    let mut s = Service::new(Generator::new(b"share"), 1000);
+    let mut message = [0u8; 64];
+    let n = encode(&Share {}, 3, &mut message).unwrap();
+    let mut out = std::vec![0u8; OUT_SIZE];
+    // init's connection: shares up to the cap, then is refused.
+    let mut root = Conn::root();
+    for _ in 0..MAX_CHILDREN {
+        assert!(matches!(
+            s.handle(&mut root, &message[..n], 1, &mut out),
+            Action::Share { attach: true, .. }
+        ));
+    }
+    assert!(matches!(
+        s.handle(&mut root, &message[..n], 1, &mut out),
+        Action::Share { attach: false, .. }
+    ));
+    // A child closing frees one.
+    root.released();
+    assert!(matches!(
+        s.handle(&mut root, &message[..n], 1, &mut out),
+        Action::Share { attach: true, .. }
+    ));
+    // The shell's connection (depth 1) shares; a program's (depth 2) never.
+    let mut shell = Conn::root().child();
+    assert!(matches!(
+        s.handle(&mut shell, &message[..n], 1, &mut out),
+        Action::Share { attach: true, .. }
+    ));
+    let mut program = shell.child();
+    for _ in 0..300 {
+        let Action::Share { reply, attach } = s.handle(&mut program, &message[..n], 1, &mut out)
+        else {
+            panic!()
+        };
+        assert!(!attach);
+        assert_eq!(
+            decode::<ShareReply>(&out[..reply], 0).unwrap().1.status.0,
+            status::NO_SPACE
+        );
+    }
+    assert_eq!(program.children(), 0);
+    // A refused share did not count a connection.
+    let before = s.connections();
+    let _ = s.handle(&mut program, &message[..n], 1, &mut out);
+    assert_eq!(s.connections(), before);
 }

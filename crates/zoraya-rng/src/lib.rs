@@ -121,6 +121,18 @@ fn nonce(domain: u32, count: u64) -> [u8; 12] {
     n
 }
 
+/// The smallest seed a generator is started from, in bytes.
+pub const MIN_SEED: usize = 32;
+
+/// Why [`Generator::from_seed`] refused a seed.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum SeedError {
+    /// Fewer than [`MIN_SEED`] bytes.
+    Short,
+    /// Every byte is zero.
+    Zero,
+}
+
 /// The generator. Its state is a key; nothing else is secret.
 pub struct Generator {
     key: [u8; 32],
@@ -131,7 +143,22 @@ pub struct Generator {
 }
 
 impl Generator {
-    /// A generator that has absorbed `seed` (a device tree's `rng-seed`).
+    /// A generator seeded from a boot loader's bytes: refuses a seed under
+    /// [`MIN_SEED`] bytes or one that is all zero, because the output of
+    /// such a generator can be predicted and so can every key made from it.
+    pub fn from_seed(seed: &[u8]) -> Result<Generator, SeedError> {
+        if seed.len() < MIN_SEED {
+            return Err(SeedError::Short);
+        }
+        if seed.iter().all(|b| *b == 0) {
+            return Err(SeedError::Zero);
+        }
+        Ok(Generator::new(seed))
+    }
+
+    /// A generator that has absorbed `seed`, whatever it is. No check of
+    /// the seed's quality: `rngd` uses [`Generator::from_seed`]; this is for
+    /// tests and callers that checked.
     pub fn new(seed: &[u8]) -> Generator {
         let mut g = Generator {
             key: [0; 32],
@@ -203,6 +230,51 @@ pub enum Action {
     Close,
 }
 
+/// Connections that may make others: `init`'s (depth 0) and the shell's
+/// (depth 1). A program's own connection (depth 2) may not, so a program
+/// cannot use up the table (review finding 3).
+pub const SHARE_DEPTH: u8 = 2;
+/// Live connections one connection may have made.
+pub const MAX_CHILDREN: u16 = 64;
+
+/// What the service keeps per connection, owned by the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conn {
+    depth: u8,
+    children: u16,
+}
+
+impl Conn {
+    /// `init`'s connection.
+    pub const fn root() -> Conn {
+        Conn {
+            depth: 0,
+            children: 0,
+        }
+    }
+
+    /// The record of a connection this one made.
+    pub const fn child(&self) -> Conn {
+        Conn {
+            depth: self.depth.saturating_add(1),
+            children: 0,
+        }
+    }
+
+    /// A connection this one made has closed (or never attached).
+    pub fn released(&mut self) {
+        self.children = self.children.saturating_sub(1);
+    }
+
+    pub fn children(&self) -> u16 {
+        self.children
+    }
+
+    fn may_share(&self) -> bool {
+        self.depth < SHARE_DEPTH && self.children < MAX_CHILDREN
+    }
+}
+
 /// The service: a generator and a bound on its connections.
 pub struct Service {
     generator: Generator,
@@ -254,7 +326,13 @@ impl Service {
 
     /// Decides on `message` that came with `handles` handles. `out` is at
     /// least [`OUT_SIZE`] bytes.
-    pub fn handle(&mut self, message: &[u8], handles: usize, out: &mut [u8]) -> Action {
+    pub fn handle(
+        &mut self,
+        conn: &mut Conn,
+        message: &[u8],
+        handles: usize,
+        out: &mut [u8],
+    ) -> Action {
         let Ok((header, _)) = Header::decode(message) else {
             return Action::Close;
         };
@@ -286,7 +364,10 @@ impl Service {
                 let Ok((h, _)) = decode::<Share>(message, handles) else {
                     return Action::Close;
                 };
-                let attach = self.attached();
+                let attach = conn.may_share() && self.attached();
+                if attach {
+                    conn.children += 1;
+                }
                 let code = if attach { status::OK } else { status::NO_SPACE };
                 match encode(
                     &ShareReply {

@@ -10,9 +10,7 @@ use std::thread::JoinHandle;
 use std::vec::Vec;
 
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use zoraya_tls::{
-    Config, Connection, Error, Transport, TransportError, pem_certificates, seed_random,
-};
+use zoraya_tls::{Config, Connection, Error, Transport, TransportError, pem_certificates};
 
 zoraya_test_alloc::cap_memory!();
 
@@ -105,14 +103,21 @@ fn serve(leaf: &'static str, expect: usize, after: usize) -> (u16, JoinHandle<Se
     (port, handle)
 }
 
+/// The 32 bytes a program draws from the random service per connection.
+/// The process-wide generator is for one thread (a native program has one):
+/// the tests that connect take turns.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+const SEED: [u8; 32] = *b"a seed for the tests, 32 bytes!!";
+
 fn config(root: &str) -> Config {
-    seed_random(b"a seed for the tests, thirty-two or more bytes");
     Config::new(&pem_certificates(&file(root)), now).unwrap()
 }
 
 fn connect(port: u16, name: &str, root: &str) -> Result<Connection<Tcp>, Error> {
     let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    Connection::connect(&config(root), name, Tcp(tcp))
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    Connection::connect(&config(root), name, Tcp(tcp), &SEED)
 }
 
 #[test]
@@ -175,10 +180,10 @@ fn a_root_that_did_not_sign_it_fails_before_any_byte_is_sent() {
 #[test]
 fn no_date_means_no_handshake() {
     let (port, server) = serve("valid", usize::MAX, 0);
-    seed_random(b"a seed for the tests, thirty-two or more bytes");
     let config = Config::new(&pem_certificates(&file("root.pem")), || None).unwrap();
     let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    let result = Connection::connect(&config, "test.zoraya", Tcp(tcp));
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let result = Connection::connect(&config, "test.zoraya", Tcp(tcp), &SEED);
     assert_eq!(result.err(), Some(Error::NoClock));
     assert!(server.join().unwrap().app_bytes.is_empty());
 }
@@ -187,8 +192,9 @@ fn no_date_means_no_handshake() {
 fn a_bad_name_and_no_roots_are_refused_up_front() {
     let (port, _server) = serve("valid", usize::MAX, 0);
     let tcp = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
     assert_eq!(
-        Connection::connect(&config("root.pem"), "not a name!", Tcp(tcp)).err(),
+        Connection::connect(&config("root.pem"), "not a name!", Tcp(tcp), &SEED).err(),
         Some(Error::BadName)
     );
     assert_eq!(Config::new(&[], now).err(), Some(Error::NoRoots));

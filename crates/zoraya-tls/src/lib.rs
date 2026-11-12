@@ -72,13 +72,24 @@ fn with<R>(f: impl FnOnce(&mut Option<Generator>) -> R) -> Option<R> {
 }
 
 /// Seeds (or reseeds) the generator with bytes from the random service
-/// (ADR-0227 item 6); 32 bytes or more. A handshake reseeds it first, so
-/// two connections never continue one stream.
-pub fn seed_random(bytes: &[u8]) {
-    with(|g| match g {
-        Some(g) => g.mix(bytes),
-        None => *g = Some(Generator::new(bytes)),
+/// (ADR-0227 item 6). Refuses fewer than 32 bytes with [`Error::BadSeed`],
+/// and a first seed of all zeros. [`Connection::connect`] takes its own 32
+/// bytes and calls this, so two connections never continue one stream.
+pub fn seed_random(bytes: &[u8]) -> Result<(), Error> {
+    if bytes.len() < zoraya_rng::MIN_SEED {
+        return Err(Error::BadSeed);
+    }
+    let done = with(|g| match g {
+        Some(g) => {
+            g.mix(bytes);
+            Ok(())
+        }
+        None => {
+            *g = Some(Generator::from_seed(bytes).map_err(|_| Error::BadSeed)?);
+            Ok(())
+        }
     });
+    done.unwrap_or(Err(Error::NoRandom))
 }
 
 /// True once [`seed_random`] has been called.
@@ -137,6 +148,8 @@ pub enum Error {
     NoClock,
     /// The random service was not asked for bytes (see [`seed_random`]).
     NoRandom,
+    /// The seed for the generator was under 32 bytes, or all zero.
+    BadSeed,
     /// The server's certificate has expired.
     Expired,
     /// The server's certificate is not yet valid.
@@ -164,6 +177,7 @@ impl fmt::Display for Error {
                 f.write_str("the system has no date to check the certificate against")
             }
             Error::NoRandom => f.write_str("no random bytes for the handshake"),
+            Error::BadSeed => f.write_str("the random seed is too short or all zero"),
             Error::Expired => f.write_str("certificate expired"),
             Error::NotYetValid => f.write_str("certificate not yet valid"),
             Error::WrongName => f.write_str("certificate is for another name"),
@@ -271,8 +285,17 @@ fn transport(e: TransportError) -> Error {
 
 impl<T: Transport> Connection<T> {
     /// Starts a connection to `name` over `io` and runs its handshake.
-    /// Nothing the program sends goes out before it has succeeded.
-    pub fn connect(config: &Config, name: &str, io: T) -> Result<Connection<T>, Error> {
+    /// Nothing the program sends goes out before it has succeeded. `seed` is
+    /// 32 fresh bytes from the random service, mixed into the program's
+    /// generator before anything is drawn from it, so that no two
+    /// connections (or a program and its forked child) continue one stream.
+    pub fn connect(
+        config: &Config,
+        name: &str,
+        io: T,
+        seed: &[u8; 32],
+    ) -> Result<Connection<T>, Error> {
+        seed_random(seed)?;
         let server_name = ServerName::try_from(name.to_string()).map_err(|_| Error::BadName)?;
         let conn = UnbufferedClientConnection::new(config.0.clone(), server_name).map_err(map)?;
         let mut c = Connection {
