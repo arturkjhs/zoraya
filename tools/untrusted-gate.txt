@@ -25,5 +25,5 @@
 1  many-rooms           test-qemu     Q6a     t_rooms: four untrusted rooms with a fork bomb and a hog each; home starts 16 processes and maps 16 MiB (INV-0261-8)
 1  hostile-programs     pending       Q7      TASK-21's hostile cases from inside an untrusted room
 1  fuzzing              pending       Q7      a fuzz target for each decoder an untrusted program reaches that has none (10 minutes each)
-2  net-account-flood    pending       N6      connecting without end from the room stops at --conns while home connects (INV-0262-1, INV-0262-4)
-2  net-fuzz             pending       N6      the fuzz target of the network protocol
+2  net-account-flood    pending       Q7      connecting without end from the room stops at --conns while home connects (INV-0262-1, INV-0262-4)
+2  net-fuzz             pending       Q7      the fuzz target of the network protocol

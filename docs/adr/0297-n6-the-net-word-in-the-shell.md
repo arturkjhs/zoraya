@@ -37,7 +37,10 @@ leaves open the grammar of the argument, which commands may take the word, and w
 **Recommendation (not a decision): Option A.** Built in N6.
 
 1. `+net WORD` is a prefix word like `+r`; any number of them. `zoraya_shell::netgrant::parse_word` reads the argument;
-   a bad one refuses the line (`zosh: +net nonsense:: the port is not a number from 1 to 65535`).
+   a bad one refuses the line (`zosh: +net nonsense:: the port is not a number from 1 to 65535`). The argument may come
+   from a value (`+net $X fetch $u`), as ADR-0153 rule 3 lets `+r $X` take its path from one: the token is literal, so a
+   value never adds a grant, but it chooses the argument the person wrote the word for. A value of `any` gives full reach,
+   as `+r $X` with `X=/` gives the whole tree; `grants` shows the rule it made. (N6 review, finding 8.)
 2. A `url` operand of a base-system command that a word covers designates nothing more; one it does not cover and that
    is literal adds its own TCP rule (as N3); one that came from a value and is not covered is refused with the word that
    would allow it (`if that is meant: +net HOST:PORT COMMAND`).
