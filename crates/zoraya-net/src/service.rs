@@ -302,8 +302,7 @@ impl Service {
                 if self.accounts.charge(account, Kind::Resolutions).is_err() {
                     return answer(code::OVER_QUOTA);
                 }
-                let token = LOOKUP_BASE + (self.next_token & 0xffff);
-                self.next_token = self.next_token.wrapping_add(1);
+                let token = self.fresh_token();
                 let owner = Owner {
                     account,
                     cache: self.accounts.limit(account, Kind::CacheEntries) as usize,
@@ -408,6 +407,19 @@ impl Service {
                 },
                 t,
             )),
+        }
+    }
+
+    /// A lookup token no pending lookup holds. Lookups answered at once also
+    /// use tokens, so the 16-bit counter can wrap onto a slow lookup that is
+    /// still pending; skipping those keeps an answer with its connection.
+    fn fresh_token(&mut self) -> u32 {
+        loop {
+            let token = LOOKUP_BASE + (self.next_token & 0xffff);
+            self.next_token = self.next_token.wrapping_add(1);
+            if !self.lookups.iter().any(|l| l.token == token) {
+                return token;
+            }
         }
     }
 

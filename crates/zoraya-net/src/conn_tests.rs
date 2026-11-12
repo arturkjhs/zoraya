@@ -1127,6 +1127,69 @@ mod resolve {
         assert_eq!(w.peer.dns_queries, 1);
     }
 
+    /// Lookups answered from the cache use tokens too; after 65,536 of them
+    /// the 16-bit counter reaches the token of a slow lookup that is still
+    /// pending. A new lookup must not take it (its answer would go to the
+    /// other connection).
+    #[test]
+    fn a_wrapped_lookup_token_never_takes_a_pending_ones() {
+        let mut w = World::new(Script::Sink, &[]);
+        // The slow name is answered only once the test lets it, and the two
+        // names get different addresses, so a reply says which lookup it
+        // answers.
+        let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = release.clone();
+        w.peer.dns_script = Box::new(move |q| {
+            let slow = q.windows(4).any(|w| w == b"slow");
+            if slow && !gate.load(std::sync::atomic::Ordering::SeqCst) {
+                return vec![];
+            }
+            vec![a_record_reply(q, if slow { WEB } else { [10, 9, 9, 9] }, 300)]
+        });
+        let open = release.clone();
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut service = Service::new();
+        let a = service.add(Connection::root()).unwrap();
+        let b = service.add(Connection::root()).unwrap();
+        // Token 0 fills the cache; token 1 is the slow lookup of `a`.
+        let Action::Deferred = ask(&mut service, &mut w, a, "cached.zoraya") else {
+            panic!("deferred");
+        };
+        reply_for(&mut service, &mut w, a);
+        open.store(false, std::sync::atomic::Ordering::SeqCst);
+        let Action::Deferred = ask(&mut service, &mut w, a, "slow.zoraya") else {
+            panic!("deferred");
+        };
+        // Tokens 2..=65535 and 0 from the cache: the next would be 1 again.
+        for _ in 0..65_535 {
+            let Action::Reply(_) = ask(&mut service, &mut w, b, "cached.zoraya") else {
+                panic!("cached");
+            };
+        }
+        let Action::Deferred = ask(&mut service, &mut w, b, "other.zoraya") else {
+            panic!("deferred");
+        };
+        let mut to = Vec::new();
+        let mut seen = Vec::new();
+        for _ in 0..20_000 {
+            w.turn();
+            for r in w.conns.take_lookups() {
+                if let Some((id, bytes)) = service.resolve_done(&w.client, r, w.now) {
+                    to.push(id);
+                    seen.push((id, answer(&bytes).1));
+                    open.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            if to.len() == 2 {
+                break;
+            }
+        }
+        seen.sort();
+        let mut want = vec![(a, vec![WEB]), (b, vec![[10, 9, 9, 9]])];
+        want.sort();
+        assert_eq!(seen, want, "each answer to its own asker");
+    }
+
     #[test]
     fn a_name_that_does_not_exist_and_one_that_is_not_in_scope_are_refused_apart() {
         let mut w = World::new(Script::Sink, &[]);
