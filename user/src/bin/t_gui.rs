@@ -554,6 +554,15 @@ fn surface_flood(gui: &Gui) {
         status::OK,
         "a closed surface frees room"
     );
+    // Every client opened here goes. The compositor serves MAX_CLIENTS (8)
+    // at once; the five this left open, with `a` and `b`, left the later
+    // tests one free slot, which full_redraw's client, closed just before,
+    // could still hold when switcher_cost's connected: refused, PeerClosed
+    // (the CI run of candidate/work-q7-a).
+    for c in agent.into_iter().chain([other, home, again]) {
+        let _ = handle_close(c.end);
+    }
+    settle(gui);
 }
 
 /// INV-0097-2: a killed GPU or input driver is restarted alone, and the

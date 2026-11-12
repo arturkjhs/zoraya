@@ -107,3 +107,11 @@ Seen once in `tests/gui/spinners.script` (`[1] done: sleep 60`, a terminal launc
 and the same line in the console shell's room stays running. `sleep` ignored `sleep_until`'s early return; it now loops until
 `clock_monotonic()` passes the deadline (Q7 review fixes). If it still happens in the GUI, look at what wakes the process (a signal or
 an event on its terminal) and at the job notice for a background job in a dock room. `spinners.script` uses `spin &`.
+
+## A failed `t_gui` leaves its GUI stack running (Q7)
+
+When `t_gui` panics before `gui.end()`, the compositor and drivers it started keep their frames: every later process test
+of the same `make test-qemu` run fails with `NoMemory` (`t_bound`, `t_rooms`, `t_snapshot`, then
+`a_spawn_with_a_big_space_is_bounded`), so one failure reads as five. Seen on the candidate run of `work/q7`
+(`candidate/work-q7-a`) and reproduced with a `panic!` after `full_redraw`. Read the first `user panic` of the log; the
+fix is for the GUI stack to end with the process that started it (a job of its own that `t_gui`'s exit kills).
