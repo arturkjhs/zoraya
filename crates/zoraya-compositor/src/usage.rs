@@ -227,6 +227,9 @@ impl<P: Platform> Compositor<P> {
     /// above or below the window at the right, physical pixels.
     pub(crate) fn card_geometry(&mut self, key: Key) -> Option<(Rect, Vec<String>)> {
         let i = self.index(key)?;
+        if self.windows[i].hidden {
+            return None;
+        }
         let lines = self.card_lines(key)?;
         let k = self.scale.factor();
         let cap = text::CAPTION.physical(Scale::ONE) * k;
@@ -247,7 +250,12 @@ impl<P: Platform> Compositor<P> {
         let o = self.windows[i].outer(&f);
         let width = i64::from(tw + 20 * si);
         let height = i64::from((8 + 15 * lines.len() as i32) * si);
-        let x = (o.right() - width - 8 * i64::from(k)).max(o.x);
+        // At the window's right, but on the screen: a window dragged to the
+        // left limit does not take the card off it.
+        let x = (o.right() - width - 8 * i64::from(k))
+            .max(o.x)
+            .min(i64::from(self.width) - width)
+            .max(0);
         // Outside the window, which a client's buffer cannot reach: above
         // it, else below it (ADR-0172 point 1: a display the program cannot
         // forge, INV-0172-1). With no room on either side the card starts on
@@ -271,13 +279,32 @@ impl<P: Platform> Compositor<P> {
     /// halo of its material.
     pub(crate) fn card_rect(&mut self, key: Key) -> Option<Rect> {
         let (r, _) = self.card_geometry(key)?;
-        let halo = i64::from(space::DOCK_PADDING.physical(self.scale)) * 2;
+        // One pixel more than the material's halo: its blurred edge reaches it.
+        let halo = i64::from(space::DOCK_PADDING.physical(self.scale)) * 2 + 2;
         Some(Rect::new(
             r.x - halo,
             r.y - halo,
             r.width + 2 * halo,
             r.height + 2 * halo,
         ))
+    }
+
+    /// Damages the card where it was last drawn and where it is now,
+    /// whatever moved it: the window dragged, tiled, resized or hidden, a
+    /// reading that changed its lines, the card gone. Called before each
+    /// frame is composed.
+    pub(crate) fn card_sync(&mut self) {
+        let now = self.card.and_then(|k| self.card_rect(k));
+        if now == self.card_drawn {
+            return;
+        }
+        if let Some(r) = self.card_drawn {
+            self.dirty(&r);
+        }
+        if let Some(r) = now {
+            self.dirty(&r);
+        }
+        self.card_drawn = now;
     }
 
     /// The text of a window's card: the room, its grants as the record has

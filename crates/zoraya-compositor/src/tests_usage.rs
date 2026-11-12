@@ -553,3 +553,96 @@ fn the_refusals_of_a_room_go_with_its_last_client() {
     s.c.step();
     assert!(s.c.accounts().is_empty());
 }
+
+/// A room `a1` window of 300 x 120 with its card shown by the pointer on
+/// the title bar; the pointer's place.
+fn hovered() -> (Setup, u32, (i64, i64)) {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let end = s.room_client(panel, "a1", "term", "+w ~/a");
+    s.window_of(end, 300, 120, 0x0040_4040);
+    assert_eq!(
+        s.set_usage(panel, &reading("a1", 20 * MIB).to_wire()),
+        status::OK
+    );
+    let o = s.outer(0, 1);
+    let at = (o.x + o.width / 2, o.y + s.c.frame().title / 2);
+    let (dw, dh) = s.f().display_size;
+    s.point(
+        super::rooms::axis(at.0, dw),
+        super::rooms::axis(at.1, dh),
+        None,
+    );
+    assert_eq!(s.c.card(), Some(Key { client: 0, id: 1 }));
+    (s, panel, at)
+}
+
+/// The number of pixels the screen shows differently from a full redraw.
+fn stale_pixels(s: &mut Setup) -> usize {
+    let shown = s.f().frame.clone();
+    s.c.damage = s.c.screen();
+    s.c.scene = true;
+    s.c.step();
+    let now = s.f().frame.clone();
+    shown.iter().zip(&now).filter(|(a, b)| a != b).count()
+}
+
+#[test]
+fn the_card_of_a_dragged_window_is_damaged_where_it_was_and_where_it_is() {
+    let (mut s, _, (x, y)) = hovered();
+    assert_eq!(stale_pixels(&mut s), 0);
+    let (dw, dh) = s.f().display_size;
+    let ax = |p: i64| super::rooms::axis(p, dw);
+    let ay = |p: i64| super::rooms::axis(p, dh);
+    s.point(ax(x), ay(y), Some(1));
+    s.point(ax(x + 40), ay(y + 100), Some(1));
+    s.point(ax(x + 40), ay(y + 100), Some(0));
+    assert_eq!(stale_pixels(&mut s), 0, "pixels of the card, old or new");
+}
+
+#[test]
+fn the_card_of_a_tiled_window_is_damaged_where_it_was_and_where_it_is() {
+    let (mut s, _, _) = hovered();
+    let meta = code::RIGHT_META;
+    s.keys(&[(meta, 1), (code::RIGHT, 1), (code::RIGHT, 0), (meta, 0)]);
+    assert_eq!(stale_pixels(&mut s), 0);
+}
+
+#[test]
+fn a_card_that_shrinks_leaves_nothing_of_the_old_one() {
+    let (mut s, panel, _) = hovered();
+    let mut r = reading("a1", 20 * MIB);
+    r.procs_limit = None;
+    r.cpu_permille = None;
+    r.disk_limit = None;
+    r.conns_limit = None;
+    assert_eq!(s.set_usage(panel, &r.to_wire()), status::OK);
+    assert!(s.c.card().is_some());
+    assert_eq!(stale_pixels(&mut s), 0);
+}
+
+#[test]
+fn a_hidden_window_has_no_card() {
+    let (mut s, _, _) = hovered();
+    let key = Key { client: 0, id: 1 };
+    s.c.set_hidden(key, true);
+    s.c.step();
+    assert_eq!(s.c.card(), None);
+    assert_eq!(s.c.card_geometry(key).map(|g| g.0), None);
+    assert_eq!(stale_pixels(&mut s), 0);
+}
+
+#[test]
+fn the_card_stays_on_the_screen_at_the_left_limit() {
+    let (mut s, _, (x, y)) = hovered();
+    let (dw, dh) = s.f().display_size;
+    let ax = |p: i64| super::rooms::axis(p, dw);
+    let ay = |p: i64| super::rooms::axis(p, dh);
+    s.point(ax(x), ay(y), Some(1));
+    s.point(ax(0), ay(y), Some(1));
+    s.point(ax(0), ay(y), Some(0));
+    let (card, _) = s.c.card_geometry(Key { client: 0, id: 1 }).unwrap();
+    assert!(card.x >= 0 && card.right() <= i64::from(dw), "{card:?}");
+    assert_eq!(stale_pixels(&mut s), 0);
+}

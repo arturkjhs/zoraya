@@ -354,6 +354,8 @@ pub struct Compositor<P: Platform> {
     refusals: Vec<(String, u32)>,
     /// The window whose hover card is shown: the pointer is on its title bar.
     card: Option<Key>,
+    /// The rectangle the card was last damaged at (`card_sync`).
+    card_drawn: Option<Rect>,
     /// Show-commands mode (System+?, ADR-0172 point 8).
     commands: bool,
     /// The wallpaper with the rooms' fields on it.
@@ -480,6 +482,7 @@ impl<P: Platform> Compositor<P> {
             usage: Vec::new(),
             refusals: Vec::new(),
             card: None,
+            card_drawn: None,
             commands: false,
             fielded: Vec::new(),
             fields_dirty: true,
@@ -1825,6 +1828,7 @@ impl<P: Platform> Compositor<P> {
         }
         let f = self.frame();
         self.dirty(&self.windows[i].reach(&f));
+        self.rehover();
         if self.windows[i].kind == WindowKind::Toplevel {
             self.send_event_plain(
                 key.client,
@@ -1919,6 +1923,7 @@ impl<P: Platform> Compositor<P> {
         self.dirty(&after);
         self.configure(key);
         self.place_sheets(key);
+        self.rehover();
     }
 
     /// After the display changed size or scale (ADR-0246): popups close, and
@@ -3602,6 +3607,7 @@ impl<P: Platform> Compositor<P> {
             self.dock_changed();
             self.update_fields();
         }
+        self.card_sync();
         let scene = core::mem::take(&mut self.scene);
         let reuse = self.switcher.is_some() && !scene && !self.switcher_frame.is_empty();
         if self.switcher.is_some() && scene {
