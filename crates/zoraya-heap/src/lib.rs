@@ -20,7 +20,8 @@ pub const PAGE_SIZE: usize = 4096;
 pub const MAX_SMALL: usize = 2048;
 /// Span size a size class is refilled with.
 pub const CHUNK_SIZE: usize = 64 * 1024;
-/// Least memory asked of the backing at a time.
+/// Least memory asked of the backing at a time, unless the backing says
+/// otherwise ([`Backing::LEAST_GROWTH`]).
 pub const GROW_SIZE: usize = 1024 * 1024;
 
 const MIN_CLASS_SHIFT: u32 = 4;
@@ -35,6 +36,12 @@ const CLASSES: usize = (MAX_SMALL.trailing_zeros() - MIN_CLASS_SHIFT + 1) as usi
 /// valid for as long as the heap exists. Ranges from separate calls must not
 /// overlap.
 pub unsafe trait Backing {
+    /// The least the heap asks for at a time, a multiple of [`PAGE_SIZE`]
+    /// and at least [`CHUNK_SIZE`]: [`GROW_SIZE`] unless the backing pays for
+    /// each page of a growth where that matters (the kernel maps them with
+    /// interrupts masked, ADR-0270).
+    const LEAST_GROWTH: usize = GROW_SIZE;
+
     /// More memory, or `None` if there is none. The heap coalesces ranges
     /// that happen to be adjacent, but does not rely on it.
     fn grow(&mut self, pages: usize) -> Option<usize>;
@@ -85,6 +92,17 @@ fn fit(layout: Layout) -> Option<Fit> {
     Some(Fit::Large(bytes, layout.align().max(PAGE_SIZE)))
 }
 
+/// Where `bytes` at a multiple of `align` fit in the span at `start` of
+/// `size` bytes, if they do. Heap addresses can be near the top of the
+/// address space, so the rounding itself can overflow: that span does not
+/// fit.
+fn span_fits(start: usize, size: usize, bytes: usize, align: usize) -> Option<usize> {
+    let end = start + size;
+    start
+        .checked_next_multiple_of(align)
+        .filter(|at| at.checked_add(bytes).is_some_and(|e| e <= end))
+}
+
 /// The bytes a block for `layout` takes from the heap: its size class, or its
 /// size in whole pages. This is what `Stats::live` counts for it, so a charge
 /// of this many bytes matches the heap's own count (ADR-0261 point 5).
@@ -131,6 +149,14 @@ impl<B: Backing> Heap<B> {
 
     pub fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// The backing, for a caller that prepares it ahead of a growth (the
+    /// kernel maps pages ahead in steps, ADR-0270). The heap uses only the
+    /// ranges `grow` returned to it, so what the caller does with the backing
+    /// cannot make the heap hand out memory it does not own.
+    pub fn backing_mut(&mut self) -> &mut B {
+        &mut self.backing
     }
 
     fn add_live(&mut self, bytes: usize) {
@@ -213,13 +239,39 @@ impl<B: Backing> Heap<B> {
         // The worst-case alignment gap is `align - PAGE_SIZE`.
         let want = bytes
             .checked_add(align - PAGE_SIZE)?
-            .max(GROW_SIZE)
+            .max(B::LEAST_GROWTH)
             .checked_next_multiple_of(PAGE_SIZE)?;
         let addr = self.backing.grow(want / PAGE_SIZE)?;
         self.stats.backing += want;
         self.stats.grows += 1;
         self.give_span(addr, want);
         self.search_spans(bytes, align)
+    }
+
+    /// Whether a block for `layout` would be served without asking the
+    /// backing for more: what a caller that prepares the backing ahead needs
+    /// to know (ADR-0270). Changes nothing.
+    pub fn fits(&self, layout: Layout) -> bool {
+        match fit(layout) {
+            None => false,
+            Some(Fit::Small(class)) => {
+                !self.classes[class].is_null() || self.has_span(CHUNK_SIZE, PAGE_SIZE)
+            }
+            Some(Fit::Large(bytes, align)) => self.has_span(bytes, align),
+        }
+    }
+
+    fn has_span(&self, bytes: usize, align: usize) -> bool {
+        let mut cur = self.spans;
+        while !cur.is_null() {
+            // SAFETY: list members are free spans holding a valid header.
+            let Span { size, next } = unsafe { cur.read() };
+            if span_fits(cur as usize, size, bytes, align).is_some() {
+                return true;
+            }
+            cur = next;
+        }
+        false
     }
 
     fn search_spans(&mut self, bytes: usize, align: usize) -> Option<usize> {
@@ -230,12 +282,7 @@ impl<B: Backing> Heap<B> {
             // SAFETY: list members are free spans holding a valid header.
             let Span { size, next } = unsafe { cur.read() };
             let end = start + size;
-            // Heap addresses can be near the top of the address space, so
-            // the rounding itself can overflow: that span does not fit.
-            let fitting = start
-                .checked_next_multiple_of(align)
-                .filter(|at| at.checked_add(bytes).is_some_and(|e| e <= end));
-            if let Some(at) = fitting {
+            if let Some(at) = span_fits(start, size, bytes, align) {
                 self.unlink(prev, next);
                 self.stats.free_spans -= size;
                 if at > start {

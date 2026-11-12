@@ -27,8 +27,21 @@ fn events_live() -> u64 {
     raw_syscall(EVENTS_LIVE, [0; 6]).1
 }
 
+const HEAP_BACKING: u64 = 0x7017;
+
+/// The free frames plus the frames the kernel heap has taken. The heap grows
+/// by 64 KiB at a time (more for one larger request) and keeps what it grew
+/// by, so a call that makes it grow moves frames from free to the heap
+/// without leaking any: this sum is what must return to its start.
 fn free_frames() -> u64 {
-    raw_syscall(FREE_FRAMES, [0; 6]).1
+    loop {
+        let before = raw_syscall(HEAP_BACKING, [0; 6]).1;
+        let free = raw_syscall(FREE_FRAMES, [0; 6]).1;
+        // The heap did not grow between the two reads.
+        if raw_syscall(HEAP_BACKING, [0; 6]).1 == before {
+            return free + before / 4096;
+        }
+    }
 }
 
 fn heap_live() -> u64 {

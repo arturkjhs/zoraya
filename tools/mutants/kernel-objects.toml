@@ -232,3 +232,208 @@ replace = '''
     let _ = preempt();
 '''
 note = "INV-0270-1: a thread switched away at a step point resumes in a new masked interval (Q4, CI: two exit tails in one)"
+
+[[mutant]]
+id = "K-alloc-no-frame-from-the-reaper"
+file = "kernel/src/memory/frames.rs"
+find = 'found.or_else(|e| crate::reaper::take().ok_or(e))'
+replace = 'found'
+note = "ADR-0270 point 4: an allocation with no free frame takes one the reaper holds (an_allocation_short_of_frames_takes_one_from_the_reaper)"
+
+[[mutant]]
+id = "K-alloc-frees-a-step-of-the-reaper"
+file = "kernel/src/memory/frames.rs"
+find = 'found.or_else(|e| crate::reaper::take().ok_or(e))'
+replace = 'found.or_else(|e| if crate::reaper::help() { FRAMES.lock().as_mut().ok_or(e)?.alloc() } else { Err(e) })'
+note = "INV-0270-1: the old help path, 65 units for one frame (an_allocation_short_of_frames_takes_one_from_the_reaper)"
+
+[[mutant]]
+id = "K-contig-help-without-step-point"
+file = "kernel/src/memory/frames.rs"
+find = '''
+                if !crate::reaper::help() {
+                    return Err(e);
+                }
+                step_point();
+'''
+replace = '''
+                if !crate::reaper::help() {
+                    return Err(e);
+                }
+'''
+note = "INV-0270-1: a round of the reaper's help and the next scan in one interval (a_run_short_of_frames_waits_for_the_reaper_in_steps)"
+
+[[mutant]]
+id = "K-contig-scan-in-one-step"
+file = "kernel/src/memory/frames.rs"
+find = 'const SCAN_WORDS: u64 = 48;'
+replace = 'const SCAN_WORDS: u64 = u64::MAX;'
+note = "INV-0270-1: the frame map's scan for a run in steps (a_run_search_over_a_fragmented_map_goes_in_steps)"
+
+[[mutant]]
+id = "K-heap-prepare-in-one-interval"
+file = "kernel/src/memory/heap.rs"
+find = 'window.map_ahead((pages - ahead).min(STEP as u64) as usize)'
+replace = 'window.map_ahead((pages - ahead) as usize)'
+note = "INV-0270-1: the heap's growth mapped ahead in steps (a_prepared_allocation_grows_the_heap_in_steps)"
+
+# The review fixes of the units bound (work/units-fix, finding 3): the room made ahead
+# of each step of a space's list of frames, and the other changes of that
+# round. Nine are killed by the test kernel. The others survive, each for a
+# reason in its note: they are in the list so that a run shows them, and a
+# larger guest or a crafted image would kill most (ADR-0270, open questions).
+[[mutant]]
+id = "K-spawn-image-no-prepare"
+file = "kernel/src/process.rs"
+find = '''
+            space.prepare_step();
+        }
+        *pages += 1;
+'''
+replace = '''
+        }
+        *pages += 1;
+'''
+note = "INV-0270-1: room in the list before each step of the image (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-spawn-stack-no-prepare"
+file = "kernel/src/process.rs"
+find = '''
+            space.prepare_step();
+        }
+        pages += 1;
+'''
+replace = '''
+        }
+        pages += 1;
+'''
+note = "INV-0270-1: room in the list before each step of the stack. Survives: a stack boundary at the list's doubling needs the spawn to end past it, and hello's 16 stack pages and block cannot (ADR-0270)"
+
+[[mutant]]
+id = "K-spawn-startup-no-prepare"
+file = "kernel/src/process.rs"
+find = '''
+    steps::between()?;
+    space.prepare_step();
+    map_startup_block'''
+replace = '''
+    steps::between()?;
+    map_startup_block'''
+note = "INV-0270-1: room in the list before the startup block. Survives with hello: the block is one page, and a doubling there needs a block of 4 pages or more (argv of the test kernel's Start would do; ADR-0270)"
+
+[[mutant]]
+id = "K-spawn-segments-count-apart"
+file = "kernel/src/process.rs"
+find = '    let (start, end) = s.pages();'
+replace = '''    let (start, end) = s.pages();
+    *pages = 0;'''
+note = "INV-0270-1: the pages of two segments are one count of steps. Survives: hello's segments end less than 17 pages past a step boundary, so the old count met the bound (the case that failed at 80 units had the copy of the list in it)"
+
+[[mutant]]
+id = "K-list-growth-copy-uncounted"
+file = "kernel/src/memory/user.rs"
+find = '''            self.memory.count_list_copy();
+'''
+replace = ''
+note = "INV-0270-1: the copy of the list's growth is work (a_space_list_growth_is_counted_and_prepared)"
+
+[[mutant]]
+id = "K-adopt-copy-uncounted"
+file = "kernel/src/memory/user.rs"
+find = '''        if self.frames.len() == self.frames.capacity() {
+            self.count_list_copy();
+        }
+'''
+replace = ''
+note = "INV-0270-1: a frame that fills the list pays for its growth's copy (a_space_list_growth_is_counted_and_prepared)"
+
+[[mutant]]
+id = "K-prepare-step-no-reserve"
+file = "kernel/src/memory/user.rs"
+find = '''        heap::prepare(self.step_growth());
+        self.reserve_step();
+        if grows {'''
+replace = '''        heap::prepare(self.step_growth());
+        if grows {'''
+note = "INV-0270-1: room in the list ahead of the step (a_space_list_growth_is_counted_and_prepared)"
+
+[[mutant]]
+id = "K-prepare-step-copy-with-the-pages"
+file = "kernel/src/memory/user.rs"
+find = '''        if grows {
+            steps::pause();
+        }'''
+replace = ''
+note = "INV-0270-1: the list's growth copy has an interval of its own (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-available-without-the-reaper"
+file = "kernel/src/memory/frames.rs"
+find = 'stats().free + crate::reaper::held()'
+replace = 'stats().free'
+note = "ADR-0270 point 4: frames the reaper holds are available (frames_the_reaper_holds_are_available_and_counted)"
+
+[[mutant]]
+id = "K-reaper-held-not-counted-down"
+file = "kernel/src/reaper.rs"
+find = '''    if taken.is_some() {
+        queue.held -= 1;'''
+replace = '''    if taken.is_some() {'''
+note = "the reaper's held counter follows take (frames_the_reaper_holds_are_available_and_counted)"
+
+[[mutant]]
+id = "K-contig-zero-with-the-search"
+file = "kernel/src/memory/object.rs"
+find = '''                steps::between()?;
+                let n = (STEP as u64).min(count - done);'''
+replace = '''                if done > 0 {
+                    steps::between()?;
+                }
+                let n = (STEP as u64).min(count - done);'''
+note = "INV-0270-1: the first zeroing step is apart from the search for the run (a_contiguous_object_is_zeroed_apart_from_its_search)"
+
+[[mutant]]
+id = "K-contig-no-rescan"
+file = "kernel/src/memory/frames.rs"
+find = 'Err(_) if changed && !rescanned && round < CONTIG_HELP_ROUNDS => {'
+replace = 'Err(_) if false && changed && !rescanned && round < CONTIG_HELP_ROUNDS => {'
+note = "a run freed behind the stepped scan is found by a second pass (a_run_freed_behind_the_scan_is_found_by_a_second_pass)"
+
+[[mutant]]
+id = "K-kernel-tables-not-in-backing"
+file = "kernel/src/memory/heap.rs"
+find = 'stats.backing += ahead + (paging::table_frames() * PAGE_SIZE as u64) as usize;'
+replace = 'stats.backing += ahead;'
+note = "the kernel's page-table frames are the heap's in the sum of frames. Survives while the boot pool (64 tables, 128 MiB of window) has tables left: until then a growth takes no frame for a table"
+
+[[mutant]]
+id = "K-snapshot-no-prepare"
+file = "kernel/src/syscall.rs"
+find = '            build.prepare_step();'
+replace = ''
+note = "INV-0270-1: room in the child's list before each step of a snapshot (needs a process with a space of 16K frames: survives at 128 MiB)"
+
+[[mutant]]
+id = "K-snapshot-finish-no-prepare"
+file = "kernel/src/memory/user.rs"
+find = '''                    self.child.prepare_step();
+                }
+                pages += 1;'''
+replace = '''                }
+                pages += 1;'''
+note = "INV-0270-1: the same in the child's last mapping step (survives at 128 MiB)"
+
+[[mutant]]
+id = "K-memory-map-no-heap-prepare"
+file = "kernel/src/syscall.rs"
+find = '            heap::prepare(growth);'
+replace = ''
+note = "INV-0270-1: the heap's room for the space's list before a step of memory_map (survives at 128 MiB)"
+
+[[mutant]]
+id = "K-memory-map-no-reserve"
+file = "kernel/src/syscall.rs"
+find = '                space.reserve_step();'
+replace = ''
+note = "INV-0270-1: room in the space's list before a step of memory_map (survives at 128 MiB)"

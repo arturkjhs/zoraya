@@ -29,8 +29,9 @@ use crate::channel::{self, MAX_MESSAGE, MAX_MESSAGE_HANDLES, Pair};
 use crate::charge::{self, Paid};
 use crate::device::Pin;
 use crate::job::Job;
+use crate::memory::heap;
 use crate::memory::object::MemoryObject;
-use crate::memory::user::{Copied, Holder, MappingError, SnapshotBuild, USER_HIGH};
+use crate::memory::user::{AddressSpace, Copied, Holder, MappingError, SnapshotBuild, USER_HIGH};
 use crate::object::{self, Event, HandleTable, Image, MemoryImage, Object};
 use crate::port::Port;
 use crate::process::{self, Loadable, PROGRAM_HIGH, PROGRAM_LOW, Process, Snapshot, Start};
@@ -633,9 +634,17 @@ impl Handlers for Calls<'_> {
         let mut done = 0;
         while done < length {
             let n = step.min(length - done);
+            // Room for the step's tables in the space's list, mapped ahead
+            // with no lock held (INV-0270-1).
+            let growth = {
+                let space = self.process.space.lock();
+                space.as_ref().map_or(0, AddressSpace::step_growth)
+            };
+            heap::prepare(growth);
             {
                 let mut space = self.process.space.lock();
                 let space = space.as_mut().ok_or(Status::BadState)?;
+                space.reserve_step();
                 if let Err(e) = space.map_range(va, done, n, attributes, &page) {
                     if done > 0 {
                         space.unmap_range(va, 0, done);
@@ -1041,6 +1050,7 @@ impl Handlers for Calls<'_> {
         };
         let mut build = SnapshotBuild::new(plan, Some(&job))?;
         loop {
+            build.prepare_step();
             let done = {
                 let space = self.process.space.lock();
                 space

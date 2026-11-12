@@ -38,7 +38,9 @@ struct KernelTables {
 impl TableMemory for KernelTables {
     fn alloc_table(&mut self) -> Option<u64> {
         if self.used == POOL_TABLES {
-            return frames::alloc_zeroed().ok().map(Frame::addr);
+            let frame = frames::alloc_zeroed().ok()?;
+            TABLE_FRAMES.fetch_add(1, Ordering::Relaxed);
+            return Some(frame.addr());
         }
         let va = (&raw mut POOL) as u64 + (self.used as u64) * FRAME_SIZE;
         self.used += 1;
@@ -68,6 +70,17 @@ impl TableMemory for KernelTables {
     fn sync(&mut self) {
         mmu::sync_tables();
     }
+}
+
+/// Frames the kernel tables (heap window, kernel stacks, devices) took after
+/// the boot pool ran out, e.g. one table per 2 MiB the heap's window grows
+/// into. They are never given back.
+static TABLE_FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// The frames the kernel's page tables have taken from the frame allocator
+/// (`heap::stats` counts them with the heap's, which causes them).
+pub fn table_frames() -> u64 {
+    TABLE_FRAMES.load(Ordering::Relaxed)
 }
 
 struct Kernel {

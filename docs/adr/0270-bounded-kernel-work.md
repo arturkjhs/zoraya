@@ -202,6 +202,73 @@ and exits.
   diagnosis names the allocating path. Two paths can put more than a step of frames in one interval and are not
   changed: the heap's growth (`GROW_SIZE`, 256 frames under the heap's lock) and `reaper::help` from `frames::alloc`
   and `frames::alloc_contig` (64 frames freed in the caller's interval, up to 17 rounds for a run).
+- *Q6 note (agent, ADR-0001 rule 6), the paths of the two notes above, now bounded:* `t_bound` failed twice locally
+  on `auto-el2` under a loaded host (`units > 80`, no log kept), and three CI runs failed its contiguous case alone on
+  time (287 ms at factor 64, 345 ms against 30 ms at factor 15, 279 ms; the other memory cases 1 to 18 ms).
+  Test-kernel tests now force each path; measured before the change: one `frames::alloc` with no free frame and a dead
+  object's frames queued, 65 units (64 freed by `reaper::help` plus the frame); a 128-frame contiguous run that had to
+  wait for the reaper, 129 units (two rounds of help and the run); an allocation 512 KiB larger than every free span of
+  the heap, 267 units (its growth mapped in one interval). The search of the frame map for a run was one masked pass
+  that read the map bit by bit and counted no units. Changes: (1) `frames::alloc` takes one of the reaper's queued
+  frames (`reaper::take`) instead of freeing a step of them and trying again: the frame keeps the dead object's charge
+  until its item is emptied, and the new owner pays for it as for any frame (ADR-0261). (2) The search for a run reads
+  the map a word at a time and in steps of 48 words (`zoraya_pmm::FrameAllocator::alloc_contig_step`, a resumable
+  search; a run is taken only once all of it was read free under the lock, and one freed behind the search is not seen
+  by that pass), each word counted as a unit, with a step point between steps, around each round of `reaper::help`,
+  and before the first zeroing step; its only caller, `memory_create`, holds no lock there. The 4 MiB contiguous case
+  of `t_bound` went from about 250 us masked under HVF to 20 us. (3) The kernel heap's least growth is 64 KiB, one
+  chunk (`Backing::LEAST_GROWTH`, new in `zoraya-heap`; user heaps keep `GROW_SIZE`, 1 MiB), so a request of up to
+  that maps at most 16 pages in its interval, the fixed work beside a step; it was 1 MiB (256 frames). The heap grows
+  more often by less, so the tests that compared free frames across a program (`t_image`, `t_quota`, the test kernel's
+  `*_from_a_process`) compare free frames plus the heap's, as `t_bound` did. (4) An allocation whose size grows with
+  an argument or with what a process holds is prepared: `heap::prepare` maps the pages ahead in steps of 64 with a step
+  point after each, only when no free span fits it (`Heap::fits`); the window keeps them mapped past its `next`, and
+  `heap::stats().backing` counts them. A growth's check that the frames exist counts those the reaper holds
+  (`frames::available`), which an allocation now takes: with growths of 64 KiB, free frames alone refused one while a
+  closed 24 MiB object was still queued (`t_bound`'s create loop got `NoMemory`). Callers: `memory_create`'s list of frames, and the list of frames of an address
+  space before each step of `spawn`'s image and stack, of a snapshot's copy and of its `finish`, and of `memory_map`
+  (its doubling was a growth of the heap proportional to the space: 64 pages for a 64 MiB process). After the change
+  the tests measure at most 1, 65 and 80 units, and the fragmented-map search at most 80 in any interval. With the scan
+  in steps, the 1 s of the note above stayed (see the next note: the scaled bound was reverted again).
+- *Q6 note (agent), review fixes of the note above:* (1) The list of frames grows by `GlobalAlloc::realloc` (the
+  kernel heap does not override it): allocate, copy `len * 8` bytes, free. The copy is work, counted as
+  `len * 8 / 4096` units (`UserMemory::count_list_copy`, in `AddressSpace::reserve_step` and in `adopt` when a frame
+  fills the list), so that the test kernel sees it; and `AddressSpace::prepare_step` (no lock held: `spawn`, a
+  snapshot's child) ends its growth with a step point, so the copy is an interval of its own and the step's pages are
+  not added to it. `spawn` also prepares the list before the startup block, and counts its steps across segments:
+  the last pages of one segment and the first of the next were one interval of up to 64 + 16 frames (measured at 80
+  units by `a_spawn_with_a_big_space_is_bounded`, which spawns `hello` with 12,670 pages more of bss through the
+  test kernel's step points, `steps::set_kernel_steps`). (2) `t_bound`'s time bound is 2 ms only at factor 1 and a
+  sanity limit of 1 s off HVF again, as in `68a22cb`: a run of CI (43176131236) had every memory case 20 to 40 times
+  slower than in green runs with the same units, and a 30 ms bound at factor 15 fails on one stall of the host. The
+  units are the check on every host. (3) New mutants for the room made ahead of each step, the first zeroing step of
+  a contiguous object, `available`, the reaper's counter and the rescan (`tools/mutants/kernel-objects.toml`). (4)
+  The reaper keeps the frames it holds in a counter (`held`, updated by `defer`, `free_some` and `take`) and a cursor
+  to the first item with frames: `held`, which a heap growth reads under the heap's lock, and the walks of `free_some`
+  and `take` no longer visit the emptied items, which stay queued until the reaper drops them. (5) The stepped search
+  for a run is not atomic: a run freed behind it is not seen by that pass. `FrameAllocator::generation` counts the
+  calls that freed frames; a pass that found none and saw it change is made once more, once, counted as a round
+  (`a_run_freed_behind_the_scan_is_found_by_a_second_pass`, and a host test of the generation). A run that exists at
+  every instant is found; one freed and taken again between two steps may still be missed, which is a refusal at
+  exhaustion and not a bug. (6) The step points of that search are `steps::between`, so a `job_kill` ends a
+  `memory_create` of a contiguous object during its scan (`Cancelled`; the run was not taken yet). (7) The kernel's
+  page-table frames (one level-3 table per 2 MiB of the heap's window) are counted in `heap::stats().backing`
+  (`paging::table_frames`), so that the sum of free frames and the heap's, which `t_image`, `t_quota` and the test
+  kernel compare, does not read one frame low across a 2 MiB boundary of the window.
+  Still inline, recorded here for the architect: (a) the copy of the list under the space's lock in `memory_map`
+  (`reserve_step` with the lock held; the list holds every frame of the space, so a process that holds N frames
+  copies `N * 8` bytes, N / 512 units of a page, in one interval: 32 units at 64 MiB, 512 at 1 GiB; moving it out of
+  the lock needs a list in chunks, or a swap that copies under the lock all the same); (b) the same copy in `adopt`
+  when a single frame outside these loops fills the list (a page table of a one-page mapping), bounded as in (a);
+  (c) eight mutants survive, and the list says why: a snapshot's `prepare_step` and its `finish`'s, and `memory_map`'s
+  `heap::prepare` and `reserve_step`, need a user process with a space of at least 16,384 frames (the test kernel's
+  `spawn` test covers `process::create` only; a crafted image run by `t_bound` would cover them); the `prepare_step`
+  of `spawn`'s stack and of its startup block are reached only if the list passes a power of two there, which
+  `hello`'s 16 stack pages and one page of block do not allow (a startup block of 4 pages or more, from a `Start`
+  with long arguments, would); counting steps across segments needs a segment that ends more than 16 pages past a
+  step boundary; and the kernel's page-table frames come from the boot pool (64 tables) until it is empty, so the
+  count of them in `backing` shows only past 128 MiB of window; (d) `reaper::free_some` still frees up
+  to a step under the queue's lock, as before.
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 

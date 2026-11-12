@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
-use super::{frames, phys_to_virt};
+use super::{frames, heap, phys_to_virt};
 use crate::charge::{self, Paid};
 use crate::job::Job;
 use crate::reaper;
@@ -81,7 +81,7 @@ impl MemoryObject {
         };
         paid.kernel(charge::arc_cost::<MemoryObject>().saturating_add(list))?;
         let frames = if contiguous {
-            let first = frames::alloc_contig(count).map_err(|_| Status::NoMemory)?;
+            let first = frames::alloc_contig(count)?;
             // The object owns the run from here: a cancel or a failure below
             // drops it, and its `Drop` frees the run and the charge. Nobody
             // else can reach the frames until it is returned, so they are
@@ -92,15 +92,19 @@ impl MemoryObject {
             };
             let mut done = 0;
             while done < count {
-                if done > 0 {
-                    steps::between()?;
-                }
+                // A step point before the first step too: the last part of
+                // the search for the run is in the interval before it
+                // (INV-0270-1).
+                steps::between()?;
                 let n = (STEP as u64).min(count - done);
                 frames::zero_run(run_frame(first, done), n);
                 done += n;
             }
             return charge::prepaid_arc(run);
         } else {
+            // The list grows with the request: the heap's growth for it is
+            // mapped ahead in steps, not in this interval (INV-0270-1).
+            heap::prepare((count as usize).saturating_mul(size_of::<Frame>()));
             let mut list = Vec::new();
             list.try_reserve_exact(count as usize)
                 .map_err(|_| Status::NoMemory)?;

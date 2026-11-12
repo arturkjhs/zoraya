@@ -443,15 +443,23 @@ fn load_segment(
     space: &mut AddressSpace,
     source: Source<'_>,
     s: &Segment,
+    pages: &mut usize,
 ) -> Result<(), SpawnError> {
     let attributes = attributes(s);
     let (start, end) = s.pages();
     let file_end = s.vaddr + s.filesz;
-    for (n, page) in (start..end).step_by(PAGE_SIZE as usize).enumerate() {
-        // The image is copied in steps of `STEP` pages (ADR-0270 point 2).
-        if n > 0 && n.is_multiple_of(steps::STEP) {
-            steps::between()?;
+    for page in (start..end).step_by(PAGE_SIZE as usize) {
+        // The image is copied in steps of `STEP` pages (ADR-0270 point 2),
+        // each with room for its frames in the space's list. `pages` counts
+        // from the first page of the first segment, so that the last pages
+        // of one segment and the first of the next are one step, not two.
+        if pages.is_multiple_of(steps::STEP) {
+            if *pages > 0 {
+                steps::between()?;
+            }
+            space.prepare_step();
         }
+        *pages += 1;
         let target = space.map_new_page(page, attributes)?;
         // The part of this page that has file bytes.
         let from = page.max(s.vaddr);
@@ -534,19 +542,25 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
     let mut count = Paid::new(Some(&start.job));
     count.process()?;
     let mut space = AddressSpace::new(Some(&start.job))?;
+    let mut pages = 0;
     for segment in program.segments() {
-        load_segment(&mut space, start.image.source, segment)?;
+        load_segment(&mut space, start.image.source, segment, &mut pages)?;
     }
     let stack_low = USER_STACK_TOP - USER_STACK_SIZE;
-    for (n, page) in (stack_low..USER_STACK_TOP)
-        .step_by(PAGE_SIZE as usize)
-        .enumerate()
-    {
-        if n > 0 && n.is_multiple_of(steps::STEP) {
-            steps::between()?;
+    for page in (stack_low..USER_STACK_TOP).step_by(PAGE_SIZE as usize) {
+        if pages.is_multiple_of(steps::STEP) {
+            if pages > 0 {
+                steps::between()?;
+            }
+            space.prepare_step();
         }
+        pages += 1;
         space.map_new_page(page, USER_STACK)?;
     }
+    // The block (at most `STARTUP_BLOCK_MAX`) is a step of its own, with
+    // room for its pages and tables in the list, as for the stack.
+    steps::between()?;
+    space.prepare_step();
     map_startup_block(&mut space, start.argv, start.envp, start.image.table)?;
     let process = assemble(
         start.name,
@@ -860,6 +874,13 @@ pub fn spawn(name: &str) -> Result<Arc<Process>, SpawnError> {
 #[cfg(feature = "qemu-test")]
 pub fn spawn_suspended(name: &str) -> Result<Arc<Process>, SpawnError> {
     let (name, file) = ramdisk::find(name).ok_or(SpawnError::NotFound)?;
+    spawn_bytes_as(name, file, true)
+}
+
+/// As [`spawn_suspended`], from ELF bytes (the test kernel patches a program's
+/// segment to make a large address space).
+#[cfg(feature = "qemu-test")]
+pub fn spawn_bytes_suspended(name: &str, file: &[u8]) -> Result<Arc<Process>, SpawnError> {
     spawn_bytes_as(name, file, true)
 }
 
