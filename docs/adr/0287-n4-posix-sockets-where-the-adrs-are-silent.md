@@ -1,6 +1,6 @@
 # ADR-0287: What N4 decided where ADR-0225 is silent: the connection to `netd`, the surface of the stream client, a POSIX program's `url` operand, and what is not built
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0005, ADR-0100, ADR-0107, ADR-0141, ADR-0153, ADR-0220, ADR-0222, ADR-0224, ADR-0225, ADR-0262, ADR-0286
 - **Evidence:** CP-27, CP-28, DM-074, DM-075, DM-077, X-1, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, network/survey.md#posix-sockets-what-curl-and-wget-call, network/survey.md#capsicum-and-casper
@@ -149,4 +149,4 @@ inet_ntoa
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.

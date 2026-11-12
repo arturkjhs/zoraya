@@ -1,6 +1,6 @@
 # ADR-0293: Q6a, the room keeper where ADR-0266 and ADR-0269 are silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0052, ADR-0153, ADR-0172, ADR-0221, ADR-0261, ADR-0262, ADR-0263, ADR-0265, ADR-0266, ADR-0268, ADR-0269, ADR-0292
 - **Evidence:** CP-05, CP-07, quotas/survey.md#genode-resource-trading, quotas/survey.md#linux-cgroups-v2
@@ -122,4 +122,4 @@ simplest, least surprising and most reversible one; none changes an accepted dec
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.
