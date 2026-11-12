@@ -9,7 +9,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zoraya_abi::posix::{self as abi, EntryKind, FdKind, NO_HANDLE, SELF_MESSAGE, slot};
+use zoraya_abi::posix::{
+    self as abi, EntryKind, FdKind, NO_HANDLE, SELF_MESSAGE, SELF_NET_MESSAGE, slot,
+};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     ChannelEntry, ChannelObject, DEADLINE_INFINITE, Disposition, ExitReason, ExitRecord, Handle,
@@ -225,8 +227,9 @@ pub struct Launch<'a> {
     pub streams: [Handle; 3],
     /// The refused-path channel's write end (ADR-0153 rule 11); moved.
     pub report: Handle,
-    /// A connection to `netd` for the program (ADR-0225 item 2), moved to
-    /// the `NET` slot; none for a program the line gave no network.
+    /// A connection to `netd` for the program (ADR-0225 item 2), moved in
+    /// the second bootstrap message beside `SELF` (`SELF_NET_MESSAGE`);
+    /// none for a program the line gave no network.
     pub net: Option<Handle>,
     pub realtime_base: u64,
 }
@@ -398,10 +401,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         (slot::BROKER.slot(), p.broker_end, ChannelObject::RIGHTS),
         (slot::REPORT.slot(), l.report, ChannelObject::RIGHTS),
         (slot::PROCESS_JOB.slot(), p.child_job, abi::job_rights::OWN),
-    ]
-    .into_iter()
-    .chain(l.net.map(|n| (slot::NET.slot(), n, ChannelObject::RIGHTS)))
-    {
+    ] {
         e.handle(HandleEntry {
             slot: at,
             handle: h,
@@ -443,15 +443,31 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     if let Err(s) = channel_write(boot, &record[..n], &moved) {
         close_entries(&l.entries);
         let _ = handle_close(boot);
+        if let Some(n) = l.net {
+            let _ = handle_close(n);
+        }
         return Err(gone(s));
     }
     if let Ok(me) = handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
-        let entry = [ChannelEntry {
+        let mut entry = vec![ChannelEntry {
             handle: me,
             rights: Rights::WAIT,
             transfer: Transfer::Move,
         }];
-        let _ = channel_write(boot, SELF_MESSAGE, &entry);
+        let message = match l.net {
+            Some(net) => {
+                entry.push(ChannelEntry {
+                    handle: net,
+                    rights: ChannelObject::RIGHTS,
+                    transfer: Transfer::Move,
+                });
+                SELF_NET_MESSAGE
+            }
+            None => SELF_MESSAGE,
+        };
+        let _ = channel_write(boot, message, &entry);
+    } else if let Some(net) = l.net {
+        let _ = handle_close(net);
     }
     let _ = handle_close(boot);
     if let Err(s) = broker.commit(p.pid, process) {

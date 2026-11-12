@@ -43,8 +43,9 @@
 > zfetch http://10.0.2.2:1/\r
 < Connection refused
 < \r\n~>
+# A server that closes after the head: the page is cut, and the program says so.
 > zfetch --sum http://10.0.2.2:@PORT@/reset\r
-< zfetch: recv: Connection reset
+< the connection closed before the end of the page
 < \r\n~>
 # A URL from a value does not designate: the line is refused before it runs.
 > set u http://10.0.2.2:@PORT@/\r

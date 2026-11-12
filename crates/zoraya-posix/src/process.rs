@@ -274,7 +274,7 @@ pub struct Posix<S: Sys> {
     pub stats: Stats,
     /// The signal state (ADR-0106).
     pub signals: crate::signals::Signals,
-    /// The connection to `netd` at slot `NET` (ADR-0225 item 2), if the
+    /// The connection to `netd` (ADR-0225 item 2; ADR-0287), if the
     /// launcher gave one: sockets need it for the first call that names a
     /// destination.
     pub net: Option<S::H>,

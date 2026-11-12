@@ -1,4 +1,4 @@
-# ADR-0287: What N4 decided where ADR-0225 is silent: the `NET` slot, the surface of the stream client, a POSIX program's `url` operand, and what is not built
+# ADR-0287: What N4 decided where ADR-0225 is silent: the connection to `netd`, the surface of the stream client, a POSIX program's `url` operand, and what is not built
 
 - **Status:** proposed
 - **Date:** 2026-11-12
@@ -40,26 +40,29 @@ Listeners, datagrams, `socketpair`, `poll`, inheritance and curl in N4, the whol
 `listen` or `datagram` request yet (ADR-0286 builds `connect` and `resolve`), so most of it could not be tested against
 the real service. It stays the follow-up.
 
-### Option C: `NET` as an entry of the bootstrap record (the plan's "`NET` in `ZPB1`")
+### Option C: a fixed slot for the connection, beside `REPORT`
 
-The record gains a kind and a launcher check. Rejected for the first user: the record already names the table and the
-fds; the other connection to a service the program gets by position, `REPORT`, is a fixed slot (ADR-0153 rule 11).
+Built first and found wrong: a handle that arrives in a message takes the slot after the last one `spawn` filled, so
+the first directory entry of a program without a network landed in the slot after `FD0` and the library took a
+file service's channel for `netd` (the test of a program started without the grant found it: `connect` answered
+`EIO`). A slot cannot say "absent".
 
 ## Recommendation
 
 **Recommendation (not a decision): Option A.**
 
-1. **`NET` is a fixed slot, 1006** (`zoraya_abi::posix::slot::NET`), beside `REPORT`, not a record field. A launcher moves
-   a channel there (`posix_child::Launch::net`, `posixrun`); `libposix` reads it at start-up if the slot holds a
-   channel. `ZPB1` is unchanged, so no record version moves. A process that has none has `Posix::net == None`, and its
-   first call that names a destination fails with `EACCES` (ADR-0225 item 2). *This differs from the plan's "`NET` in
-   `ZPB1`"; the slot is what makes the hostile case cheap (a record cannot name a handle the launcher did not move).*
+1. **The connection comes in the second bootstrap message**, beside `SELF`: a message `ZPBN`
+   (`zoraya_abi::posix::SELF_NET_MESSAGE`) with two handles, `SELF` and a channel, where a launcher that gives no
+   network sends `ZPBS` and one handle as before. `libposix` takes the channel for `Posix::net` and closes anything
+   else; a process with no such message has `net == None`, and its first call that names a destination fails with
+   `EACCES` (ADR-0225 item 2). `ZPB1` is unchanged and no slot is reserved. *This differs from the plan's "`NET` in
+   `ZPB1`"; it needs no record version, and the connection cannot be mistaken for a table entry.*
 2. **The shell gives it** from a literal `url` operand of a POSIX program the image describes (ADR-0224 item 2, ADR-0286
    item 5): the description `user/describe/posix/zfetch.cmd` names the operand, `zosh` makes `narrow` from its own
-   connection (right `reach`, one rule for the host and port) and moves the result to `NET`. A program the image does
+   connection (right `reach`, one rule for the host and port) and sends the result in that message. A program the image does
    not describe, or a line without the operand, gets none. The `+net` words are still not built (ADR-0286 item 5), so a
    POSIX program cannot be given a network by a grant on the line yet.
-3. **A child gets no network.** A POSIX program's `spawn` puts nothing at `NET`; a socket fd named in a child's fd map is
+3. **A child gets no network.** A POSIX program's `spawn` sends `ZPBS`, so the child has no connection; a socket fd named in a child's fd map is
    `EBADF`; `fork` while a socket is open is `ENOTSUP` (ADR-0225 item 9's three-handle inheritance is not built).
    A pipeline of programs that each open their own socket works only for programs the shell started itself.
 4. **The surface built**: `socket` (`AF_INET`, `SOCK_STREAM`, protocol 0 or TCP, `SOCK_NONBLOCK`, `SOCK_CLOEXEC`),
@@ -128,7 +131,7 @@ inet_ntoa
   prints is `fetch --sum`'s for the same URL. *Check:* `make test-net-posix`.
 
 ## Open questions
-- Whether the `NET` slot should become a record entry when the second kind of connection (a listener's) arrives.
+- Whether the connection should become a record entry when a second kind of connection (a listener's) arrives.
 - `SO_RCVTIMEO`: a library deadline needs the wait with a timeout on the connection channel (`wait_any` has one).
 - The cost of the C path against `fetch`: `docs/design.md` has the first numbers.
 

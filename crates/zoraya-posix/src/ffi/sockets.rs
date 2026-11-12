@@ -255,19 +255,19 @@ extern "C" fn getaddrinfo(
     if result.is_null() {
         return sock::EAI_FAIL;
     }
-    // SAFETY: C's contract: NULL or NUL-ended strings.
     let node = if node.is_null() {
         None
     } else {
+        // SAFETY: C's contract: NULL or a NUL-ended string.
         match unsafe { c_str(node) } {
             Ok(n) => Some(n),
             Err(_) => return sock::EAI_NONAME,
         }
     };
-    // SAFETY: as above.
     let service = if service.is_null() {
         None
     } else {
+        // SAFETY: as above.
         match unsafe { c_str(service) } {
             Ok(n) => Some(n),
             Err(_) => return sock::EAI_SERVICE,
@@ -300,7 +300,11 @@ extern "C" fn getaddrinfo(
             return sock::EAI_SYSTEM;
         }
     };
-    let (addresses, port, canon) = found;
+    let crate::net::Lookup {
+        addresses,
+        port,
+        canonical: canon,
+    } = found;
     let mut head: *mut u8 = ptr::null_mut();
     let mut tail: *mut u8 = ptr::null_mut();
     for (i, a) in addresses.iter().enumerate() {

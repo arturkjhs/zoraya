@@ -179,7 +179,7 @@ fn rigged(script: Script) -> Rigged {
                 _ => log.kinds.push("other"),
             }
         }
-        for (i, m) in log.pending.drain(..).collect::<Vec<_>>() {
+        for (i, m) in std::mem::take(&mut log.pending) {
             let ctl = log.held[i].ctl;
             n.send_message(ctl, &m, &[]);
         }
@@ -215,10 +215,10 @@ fn a_socket_without_the_network_is_made_and_refused_at_connect() {
             .unwrap_err();
     assert_eq!((err.eai, err.errno), (sock::EAI_SYSTEM, EACCES));
     // A literal address needs no network to resolve.
-    let (found, port, _) =
+    let l =
         r.p.lookup(Some(b"10.0.2.2"), Some(b"8080"), &Hints::default())
             .unwrap();
-    assert_eq!((found, port), (vec![[10, 0, 2, 2]], 8080));
+    assert_eq!((l.addresses, l.port), (vec![[10, 0, 2, 2]], 8080));
     r.p.close(fd).unwrap();
 }
 
@@ -264,7 +264,7 @@ fn a_name_resolved_by_getaddrinfo_is_connected_by_name() {
         page: b"ok".to_vec(),
         ..Script::default()
     });
-    let (found, port, canon) =
+    let l =
         t.r.p
             .lookup(
                 Some(b"test.zoraya"),
@@ -275,8 +275,9 @@ fn a_name_resolved_by_getaddrinfo_is_connected_by_name() {
                 },
             )
             .unwrap();
+    let (found, port) = (l.addresses.clone(), l.port);
     assert_eq!(
-        (found.clone(), port, canon.as_deref()),
+        (l.addresses, l.port, l.canonical.as_deref()),
         (vec![EXAMPLE], 80, Some("test.zoraya"))
     );
     let fd = stream(&mut t.r);
@@ -291,11 +292,11 @@ fn a_name_resolved_by_getaddrinfo_is_connected_by_name() {
 #[test]
 fn a_literal_or_a_numeric_service_asks_nobody() {
     let mut t = rigged(Script::default());
-    let (found, _, _) =
+    let l =
         t.r.p
             .lookup(Some(b"1.2.3.4"), Some(b"443"), &Hints::default())
             .unwrap();
-    assert_eq!(found, vec![[1, 2, 3, 4]]);
+    assert_eq!(l.addresses, vec![[1, 2, 3, 4]]);
     // An address spelled any other way is not one: `127.1` ends in digits,
     // so it is no name either, and nobody is asked.
     let e =

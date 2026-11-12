@@ -1276,7 +1276,7 @@ impl Z {
         };
         // A literal `url` operand of a POSIX program the image describes
         // designates, as for a native one (ADR-0224 item 2): the program
-        // gets a connection at `NET` that reaches that host and port.
+        // gets a connection to `netd` that reaches that host and port.
         let net = match self.posix_net(exec, path) {
             Ok(n) => n,
             Err(e) => {

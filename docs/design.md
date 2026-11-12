@@ -1723,6 +1723,53 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   reset after unread data delivers the data first. smoltcp does not say whether a timeout or a reset closed a socket, so
   `Reset { TimedOut }` is never sent.
 
+## POSIX sockets (stage 8, N4: a POSIX program fetches a page)
+
+`libposix` has the stream client's socket calls (`crates/zoraya-posix/src/{socket,net}.rs`, the C boundary in
+`src/ffi/sockets.rs`; proposed ADR-0287 on top of ADR-0225). `zfetch` (`tests/posix-net/zfetch.c`, built by `zcc` against
+`libc.a`) is `fetch` written with `getaddrinfo`, `socket`, `connect`, `send` and `recv`.
+
+- **A socket fd** is a `Desc::Socket` of the descriptor table: the kind, a state (`Fresh`, `Connecting`, `Connected`, `Dead`),
+  the options, and the three handles of ADR-0222's note, made by the library: the read end of the inbound stream, the
+  write end of the outbound stream and the connection channel. `socket()` makes the object and asks nobody. `connect`
+  makes the two streams and the channel, sends `netd` the three far ends, and waits for `Connected` or `Failed` on the
+  channel (`SOCK_NONBLOCK`: `EINPROGRESS`, then `SO_ERROR` or `select` finishes it). `read`/`write`/`send`/`recv` are
+  `stream_read`/`stream_write` with ADR-0101's blocking loop; the end of the inbound stream is `recv` returning 0, after
+  a `Reset` has been given once as `ECONNRESET`; `shutdown(SHUT_WR)` closes the outbound end. `close` closes the three.
+- **Names.** `getaddrinfo` answers a dotted quad itself (strictly: four decimals, no leading zeros) and otherwise sends
+  one `resolve`; the addresses are remembered by name (64, the oldest goes first), and a `connect` to a remembered
+  address is sent to `netd` as the *name*, so a scope of names works (INV-0225-2). Service names are a table of nine.
+  `/etc/hosts` and `/etc/resolv.conf` are never read.
+- **The grant.** The connection to `netd` reaches the program in the second bootstrap message beside `SELF`
+  (`ZPBN`, two handles; `ZPBS` is the message without one). `zosh` makes it for a POSIX program the image describes
+  (`user/describe/posix/zfetch.cmd`) when the line has a literal `url` operand, exactly as for `fetch` (`narrow`: one host and
+  port). Without it `connect` is `EACCES` (the report and hint of ADR-0224 rule 5 are not built). A fixed slot was tried first
+  and found wrong: a handle that arrives in a message takes the slot after the last one `spawn` filled.
+- **Errors.** `connect`'s statuses and `Failed`'s reasons are `EACCES`, `ECONNREFUSED`, `ENETUNREACH`, `ETIMEDOUT`,
+  `EHOSTUNREACH`, `ENOBUFS` (a connection or name bound of the account); a dead `netd` is `ENETDOWN`. `getaddrinfo` gives
+  musl's `EAI_*` numbers, `EAI_SYSTEM` with `errno` for a refusal.
+- **Surface.** `posix-surface-check` reads ADR-0287's block beside the tier list (it prints a note while the ADR is
+  proposed): 22 names, `libc.a` has 315 exports against a list of 318. `socket` and `getaddrinfo` are off the check's deny list,
+  as ADR-0225 item 1 says; ADR-0005's text is the architect's.
+- **Tests.** `cargo test -p zoraya-posix`: 48 unit tests (11 for the socket module: addresses, `inet_aton`'s forms, the plan of
+  `getaddrinfo`, the cache, the options, the errno rows) and 13 in `tests/net.rs` against a fake `netd` through the fake
+  kernel (it counts request kinds: one `resolve` per name, the name in the `connect`, none for a literal; a page by address;
+  every status and reason; non-blocking connect; a `Reset` after data; `shutdown`; handles back to the count; `fstat`,
+  `lseek`, `fcntl`; unoffered calls; a dead `netd`). `make test-net-posix` (a step of `make test-net`): `zfetch` on the disk
+  in the normal boot, a page byte for byte, bodies of 1,000,000, 70,000, 300,000 (by name) and 4,000,000 bytes by checksum
+  against the server's own, 404, a refused port, a cut page, a value as URL (refused by the shell), and a run without the
+  grant through `posixrun` (`Permission denied`).
+- **Measured** (`zfetch --sum` against `tools/test-httpd`, the same boot as `fetch --sum`, QEMU 11.1.2, 128 MiB, 1 CPU,
+  2026-11-12; 5 fetches of 16 MiB and 10 of one byte each, medians; both programs hash the body): **HVF** 16 MiB in 226 ms
+  (218 to 233) for `zfetch`, 236 ms (230 to 240) for `fetch`; one byte, 23.1 ms (7.4 to 24.0) against 28.1 ms. **TCG**
+  16 MiB 1,305 ms (1,299 to 1,354) against 1,380 ms (1,338 to 1,397); one byte 23.1 ms (6.6 to 32.3) against 20.5 ms (1.9 to
+  29.7). The C path is not slower than the native one: the copies are the same (`stream_read` into the program's buffer),
+  and `zfetch` hashes in C at -O2. The one-byte numbers vary by the 10 ms tick, as in N3.
+- **Not built** (ADR-0287 item 9): `bind`, `listen`, `accept`, datagram sockets, `socketpair`, `poll`, `sendmsg`/`recvmsg`,
+  `getnameinfo`, `gethostbyname`, `getservbyname`, `if_nametoindex`, `getrandom`; a socket does not cross `spawn` (`EBADF`) or
+  `fork` (`ENOTSUP`) and a child has no network; `SO_RCVTIMEO` is accepted and ignored; `getsockname` gives `0.0.0.0:0`;
+  curl and wget (W11, W13), which need `poll` and TLS.
+
 ## Known limitations
 
 - **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch

@@ -1,6 +1,6 @@
 //! Socket fds over `netd` (ADR-0225; N4): `socket`, `connect`, reads and
 //! writes, `shutdown`, the options and `getaddrinfo`'s `resolve`, on the
-//! handles of a connection to `netd` at slot `NET`. A stream socket is the
+//! handles of the connection to `netd` the launcher gave. A stream socket is the
 //! three handles of ADR-0222 item 3's note: the connection channel and the
 //! two stream ends the library created, so the 128 KiB are this process's
 //! (INV-0262-4). Data never goes through the broker or a request: `read` and
@@ -23,6 +23,15 @@ use crate::errno::{
 use crate::process::{Desc, Posix, native};
 use crate::socket::{self as sock, Hints, Socket, State};
 use crate::sys::{Sys, User, signals};
+
+/// What `getaddrinfo` found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lookup {
+    pub addresses: Vec<[u8; 4]>,
+    pub port: u16,
+    /// The name, when `AI_CANONNAME` asked for it.
+    pub canonical: Option<String>,
+}
 
 /// What a failed `resolve` was, for `getaddrinfo` (ADR-0225 item 6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -483,7 +492,7 @@ impl<S: Sys> Posix<S> {
         Ok(())
     }
 
-    /// The addresses of `name`: one `resolve` request on `NET` (ADR-0225
+    /// The addresses of `name`: one `resolve` request on the connection to `netd` (ADR-0225
     /// item 6, INV-0225-3), the results remembered for `connect`.
     pub fn resolve_name(&mut self, name: &str) -> Result<Vec<[u8; 4]>, ResolveError> {
         let Some(net) = self.net else {
@@ -536,14 +545,22 @@ impl<S: Sys> Posix<S> {
         node: Option<&[u8]>,
         service: Option<&[u8]>,
         hints: &Hints,
-    ) -> Result<(Vec<[u8; 4]>, u16, Option<String>), ResolveError> {
+    ) -> Result<Lookup, ResolveError> {
         let plan =
             sock::plan(node, service, hints).map_err(|eai| ResolveError { eai, errno: 0 })?;
         match plan.host {
-            sock::Host::Fixed(a) => Ok((alloc::vec![a], plan.port, None)),
+            sock::Host::Fixed(a) => Ok(Lookup {
+                addresses: alloc::vec![a],
+                port: plan.port,
+                canonical: None,
+            }),
             sock::Host::Name(n) => {
                 let found = self.resolve_name(&n)?;
-                Ok((found, plan.port, plan.canonical.then_some(n)))
+                Ok(Lookup {
+                    addresses: found,
+                    port: plan.port,
+                    canonical: plan.canonical.then_some(n),
+                })
             }
         }
     }

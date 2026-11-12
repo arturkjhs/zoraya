@@ -20,7 +20,7 @@ use core::cell::{Cell, UnsafeCell};
 use core::ffi::c_char;
 use core::ptr;
 
-use zoraya_abi::posix::{self as abi, Bootstrap, SELF_MESSAGE, slot};
+use zoraya_abi::posix::{self as abi, Bootstrap, SELF_MESSAGE, SELF_NET_MESSAGE, slot};
 use zoraya_abi::{
     Buffer, Bytes, ChannelEntry, DEADLINE_INFINITE, Handle, Invoke, MapFlags, MemoryFlags,
     MemoryObject, Mode, OBJECT_TYPES, ObjectType, Packet, Status, stubs,
@@ -679,9 +679,17 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     // The second message: SELF, which a fork child gets otherwise.
     let mut second = [0u8; 16];
     let mut self_handle = Vec::new();
-    let kept = match read(sys, &mut second, &mut self_handle) {
-        Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => self_handle.pop(),
-        _ => None,
+    let (kept, net) = match read(sys, &mut second, &mut self_handle) {
+        Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => {
+            (self_handle.pop(), None)
+        }
+        // `SELF` and the connection to `netd` (ADR-0287): only a channel
+        // is taken for the network.
+        Some(4) if &second[..4] == SELF_NET_MESSAGE && self_handle.len() == 2 => {
+            let net = self_handle.pop();
+            (self_handle.pop(), net)
+        }
+        _ => (None, None),
     };
     for h in self_handle.drain(..) {
         let _ = zoraya_rt::handle_close(h);
@@ -694,14 +702,17 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
         Some(record) => {
             let mut p = Posix::from_bootstrap(sys, &record, &handles, at_slot, report);
             p.self_handle = kept;
-            p.net = zoraya_rt::handle_type(slot::NET)
-                .ok()
-                .filter(|t| *t == "channel")
-                .map(|_| slot::NET);
+            p.net = net.filter(|h| {
+                let channel = zoraya_rt::handle_type(*h) == Ok("channel");
+                if !channel {
+                    let _ = zoraya_rt::handle_close(*h);
+                }
+                channel
+            });
             p
         }
         None => {
-            for h in handles.into_iter().chain(kept) {
+            for h in handles.into_iter().chain(kept).chain(net) {
                 let _ = zoraya_rt::handle_close(h);
             }
             Posix::new(sys, facts)
