@@ -279,10 +279,9 @@ note = "INV-0270-1: the heap's growth mapped ahead in steps (a_prepared_allocati
 
 # The review fixes of the units bound (work/units-fix, finding 3): the room made ahead
 # of each step of a space's list of frames, and the other changes of that
-# round. The first fourteen are killed by the test kernel; the four after them
-# need a user process with a space of tens of thousands of frames, which a
-# 128 MiB guest cannot hold, and are listed so that a run shows them (see
-# ADR-0270, open questions).
+# round. Nine are killed by the test kernel. The others survive, each for a
+# reason in its note: they are in the list so that a run shows them, and a
+# larger guest or a crafted image would kill most (ADR-0270, open questions).
 [[mutant]]
 id = "K-spawn-image-no-prepare"
 file = "kernel/src/process.rs"
@@ -309,7 +308,7 @@ replace = '''
         }
         pages += 1;
 '''
-note = "INV-0270-1: room in the list before each step of the stack (a_spawn_with_a_big_space_is_bounded)"
+note = "INV-0270-1: room in the list before each step of the stack. Survives: a stack boundary at the list's doubling needs the spawn to end past it, and hello's 16 stack pages and block cannot (ADR-0270)"
 
 [[mutant]]
 id = "K-spawn-startup-no-prepare"
@@ -321,7 +320,7 @@ find = '''
 replace = '''
     steps::between()?;
     map_startup_block'''
-note = "INV-0270-1: room in the list before the startup block (a_spawn_with_a_big_space_is_bounded)"
+note = "INV-0270-1: room in the list before the startup block. Survives with hello: the block is one page, and a doubling there needs a block of 4 pages or more (argv of the test kernel's Start would do; ADR-0270)"
 
 [[mutant]]
 id = "K-spawn-segments-count-apart"
@@ -329,7 +328,7 @@ file = "kernel/src/process.rs"
 find = '    let (start, end) = s.pages();'
 replace = '''    let (start, end) = s.pages();
     *pages = 0;'''
-note = "INV-0270-1: the pages of two segments are one count of steps (a_spawn_with_a_big_space_is_bounded)"
+note = "INV-0270-1: the pages of two segments are one count of steps. Survives: hello's segments end less than 17 pages past a step boundary, so the old count met the bound (the case that failed at 80 units had the copy of the list in it)"
 
 [[mutant]]
 id = "K-list-growth-copy-uncounted"
@@ -406,7 +405,7 @@ id = "K-kernel-tables-not-in-backing"
 file = "kernel/src/memory/heap.rs"
 find = 'stats.backing += ahead + (paging::table_frames() * PAGE_SIZE as u64) as usize;'
 replace = 'stats.backing += ahead;'
-note = "the kernel's page-table frames are the heap's in the sum of frames (t_image, t_quota, frames_accounted)"
+note = "the kernel's page-table frames are the heap's in the sum of frames. Survives while the boot pool (64 tables, 128 MiB of window) has tables left: until then a growth takes no frame for a table"
 
 [[mutant]]
 id = "K-snapshot-no-prepare"

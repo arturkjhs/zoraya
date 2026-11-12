@@ -2674,13 +2674,17 @@ fn with_bss(file: &[u8], extra: u64) -> Vec<u8> {
 /// the doubling was a copy and 64 pages of the heap in one interval. The list
 /// doubles from 16,384 to 32,768 frames (a copy of 128 KiB, a new list of
 /// 256 KiB) with the heap squeezed to the least free; `hello` is spawned with
-/// its bss sized so that the list passes 16,384 at each of the last 24 frames
-/// it takes, which are the startup block's, the stack's and the image's last.
+/// its bss sized so that the list passes 16,384 at each of the last 32 frames
+/// it takes. (The stack's and the startup block's `prepare_step` are not
+/// reached by this: with `hello`'s 16 stack pages and one page of block, the
+/// list never passes a power of two after a step boundary that is there; see
+/// ADR-0270.)
 /// Measured through the kernel's own call with the step points on in this
 /// thread (`steps::set_kernel_steps`). It runs last: the heap keeps the frames
 /// it grew by, scattered, and 4 MiB runs are few in a 128 MiB guest.
 fn a_spawn_with_a_big_space_is_bounded() {
     const CAP: usize = 16384;
+    const SWEEP_FIRST: usize = 0;
     let (_, file) = ramdisk::find("hello").expect("hello");
     let before = frames_accounted();
     let spawn_with = |bss: usize| {
@@ -2726,12 +2730,15 @@ fn a_spawn_with_a_big_space_is_bounded() {
     assert!(room > CAP + 200, "{room} frames: no room for the test");
     let (_, len) = spawn_with(CAP - 100);
     let mut worst = 0;
-    for d in 0..24 {
+    for d in SWEEP_FIRST..SWEEP_FIRST + 32 {
         // The list's length grows with the bss by one a page, and by a table
         // every 512 pages.
         let bss = CAP - 100 + CAP + 1 + d - len;
         let (units, now) = spawn_with(bss);
-        println!("a spawn of {bss} bss pages: list of {now} frames, {units} units");
+        println!(
+            "a spawn of {bss} bss pages: list of {now} frames, {units} units, {} accounted",
+            frames_accounted()
+        );
         assert!(
             units <= crate::steps::STEP as u64 + 16,
             "{units} units in an interval of a spawn of {bss} pages (INV-0270-1)"

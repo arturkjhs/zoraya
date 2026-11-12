@@ -260,10 +260,14 @@ and exits.
   copies `N * 8` bytes, N / 512 units of a page, in one interval: 32 units at 64 MiB, 512 at 1 GiB; moving it out of
   the lock needs a list in chunks, or a swap that copies under the lock all the same); (b) the same copy in `adopt`
   when a single frame outside these loops fills the list (a page table of a one-page mapping), bounded as in (a);
-  (c) the mutants for `prepare_step` in a snapshot's copy and `finish`, and for `heap::prepare` and `reserve_step` in
-  `memory_map`, are not killed by any test at 128 MiB: they need a user process with a space of at least 16,384
-  frames, and the test kernel's `spawn` test covers `process::create` only (the mutants are in the list so that a run
-  on a larger guest, or a test with a crafted image in `t_bound`, shows them); (d) `reaper::free_some` still frees up
+  (c) eight mutants survive, and the list says why: a snapshot's `prepare_step` and its `finish`'s, and `memory_map`'s
+  `heap::prepare` and `reserve_step`, need a user process with a space of at least 16,384 frames (the test kernel's
+  `spawn` test covers `process::create` only; a crafted image run by `t_bound` would cover them); the `prepare_step`
+  of `spawn`'s stack and of its startup block are reached only if the list passes a power of two there, which
+  `hello`'s 16 stack pages and one page of block do not allow (a startup block of 4 pages or more, from a `Start`
+  with long arguments, would); counting steps across segments needs a segment that ends more than 16 pages past a
+  step boundary; and the kernel's page-table frames come from the boot pool (64 tables) until it is empty, so the
+  count of them in `backing` shows only past 128 MiB of window; (d) `reaper::free_some` still frees up
   to a step under the queue's lock, as before.
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.

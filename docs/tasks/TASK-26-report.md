@@ -1115,9 +1115,12 @@ The architect decided: "/system is read-only at run time for everyone, the conso
   inherent to a flat list); recorded in ADR-0270 with the other inline paths.
 - **2 fixed.** `t_bound`'s bound is 2 ms at factor 1 and a 1 s sanity limit off HVF (the form of `68a22cb`);
   INV-0270-1's status says so.
-- **3 partly fixed.** 18 mutants in `tools/mutants/kernel-objects.toml`; results below. Four of them (a snapshot's
-  `prepare_step` and its `finish`, `memory_map`'s `heap::prepare` and `reserve_step`) cannot be killed in a 128 MiB
-  guest: they need a process with 16,384 frames or more, which only a crafted image run by `t_bound` would give.
+- **3 partly fixed.** 17 mutants in `tools/mutants/kernel-objects.toml`: 9 killed (the image's `prepare_step`, the
+  list's copy counted in `reserve_step` and in `adopt`, `prepare_step`'s reserve and its step point, `available`, the
+  reaper's counter, the first zeroing step, the rescan) and 8 survivors with the reason in each note: a snapshot's two
+  `prepare_step`s and `memory_map`'s two need a process with 16,384 frames or more (a crafted image run by `t_bound`),
+  the stack's and the startup block's are unreachable with `hello`, the segments' count needs a longer segment, and the
+  kernel's tables come from the boot pool until 128 MiB of window.
 - **4 fixed.** `reaper::held` is a counter; `free_some` and `take` start at a cursor past the emptied items.
 - **5 fixed.** `FrameAllocator::generation`; a scan that found no run and saw a free rescans once (kernel test and a
   host test).
