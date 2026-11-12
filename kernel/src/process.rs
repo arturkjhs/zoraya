@@ -977,9 +977,10 @@ pub fn exit_current(record: ExitRecord) -> ! {
 
 /// Waits while the process's job tree is suspended, unless it is to end.
 /// Called on the thread's own stack with interrupts masked, on the way to
-/// EL0; its process holds the thread, and [`Process::cont`] or an exit
-/// request wakes it.
-fn park_if_stopped() {
+/// EL0 (or by a walk of the job tree that waits its turn, with no lock held,
+/// `job::Exclusive`); its process holds the thread, and [`Process::cont`] or
+/// an exit request wakes it.
+pub(crate) fn park_if_stopped() {
     let thread = sched::current();
     let Some(process) = thread.process() else {
         return;
@@ -989,6 +990,15 @@ fn park_if_stopped() {
         sched::block_current();
     }
     process.parked.store(false, Ordering::Relaxed);
+}
+
+/// Whether the running process is stopped and not to end, so that
+/// [`park_if_stopped`] would wait. False for a thread that is not a process.
+pub(crate) fn current_is_stopped() -> bool {
+    let thread = sched::current();
+    thread
+        .process()
+        .is_some_and(|p| p.stopped.load(Ordering::Relaxed) && !p.exit_requested())
 }
 
 /// Ends the running process if it was asked to.

@@ -5,6 +5,10 @@
 //! process, with counting children it spawns from itself, and the latency of
 //! suspending a job of 16 processes.
 
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags, MemoryFlags, MemoryObject, ObjectType,
@@ -78,6 +82,108 @@ fn counter(job: Handle, counters: &Counters, index: u8) -> Handle {
     let child = spawn(&buffer[..length]).expect("spawn");
     handle_close(program).expect("image");
     child
+}
+
+/// `n` jobs in chains of 12 under `top`, every one held by a handle: a tree
+/// whose walk takes several steps (`steps::STEP` visits each), so that it
+/// pauses between them.
+fn big_tree(top: Handle, n: usize) -> Vec<Handle> {
+    let mut held = Vec::new();
+    while held.len() < n {
+        let mut parent = top;
+        for _ in 0..12 {
+            if held.len() >= n {
+                break;
+            }
+            let job = job_create(parent, JobFlags::NONE).expect("job");
+            held.push(job);
+            parent = job;
+        }
+    }
+    held
+}
+
+/// A child in `job` that is given `jobs` at slots 3.. and does `what` with
+/// them.
+fn with_jobs(job: Handle, what: &[u8], jobs: &[Handle]) -> Handle {
+    let mut buffer = [0; 1024];
+    let program = image("t_suspend");
+    let mut e = Encoder::new(&mut buffer, job, program);
+    e.handle(console_entry());
+    for (at, &handle) in jobs.iter().enumerate() {
+        e.handle(HandleEntry {
+            slot: 3 + at as u32,
+            handle,
+            rights: JobObject::RIGHTS,
+            transfer: Transfer::Duplicate,
+        });
+    }
+    e.arg(what);
+    let length = e.finish().expect("room");
+    let child = spawn(&buffer[..length]).expect("spawn");
+    handle_close(program).expect("image");
+    child
+}
+
+/// Review of the fixes, error 2 (INV-0105-5): `job_suspend` of a tree of 700
+/// jobs pauses between steps. A process inside the tree that holds handles to
+/// jobs below it calls `job_resume` on them without end; none of them may run
+/// when `job_suspend` has returned. A stress case: the walks interleave only
+/// when a slice ends during one (certain on SMP, by chance on one CPU), so it
+/// repeats; without the turns (`job::Exclusive`) and the park of a stopped
+/// caller it failed on SMP.
+fn a_resume_from_inside_cannot_undo_a_suspend_walk() {
+    let counters = Counters::new();
+    let top = job_create(JOB, JobFlags::NONE).expect("job");
+    let held = big_tree(top, 700);
+    // Counting processes in the jobs the walk meets first (the last chains),
+    // the resumer in the first job, which it meets last.
+    let at = [699, 690, 680, 640];
+    let jobs: Vec<Handle> = at.iter().map(|&i| held[i]).collect();
+    let counting: Vec<Handle> = at
+        .iter()
+        .enumerate()
+        .map(|(i, &j)| counter(held[j], &counters, i as u8))
+        .collect();
+    let resumer = with_jobs(held[0], b"resumer", &jobs);
+    assert!(
+        eventually(|| counters.read()[..4].iter().all(|&c| c > 0)),
+        "all counting: {:?}",
+        counters.read()
+    );
+    for round in 0..40 {
+        job_suspend(top).expect("suspend");
+        for &j in &jobs {
+            assert!(suspended(j), "round {round}: SUSPENDED on a job below");
+        }
+        let before = counters.read();
+        nap(3);
+        assert_eq!(before, counters.read(), "round {round}: nothing runs");
+        job_resume(top).expect("resume");
+        assert!(
+            eventually(|| counters.read()[..4].iter().zip(&before).all(|(a, b)| a > b)),
+            "round {round}: all running again"
+        );
+    }
+    job_kill(top).expect("kill");
+    for child in counting.into_iter().chain([resumer]) {
+        wait_exit(child);
+        handle_close(child).expect("close");
+    }
+    for job in held {
+        handle_close(job).expect("close");
+    }
+    handle_close(top).expect("close");
+}
+
+/// The child of the case above: resumes the jobs it was given, without end,
+/// until the tree is killed.
+fn resumer() -> ! {
+    loop {
+        for slot in 3..7 {
+            let _ = job_resume(Handle::new(slot).expect("slot"));
+        }
+    }
 }
 
 fn nap(ms: u64) {
@@ -283,6 +389,9 @@ fn main() -> i32 {
         sleep_until(until);
         return if clock_monotonic() >= until { 0 } else { 1 };
     }
+    if let Some(b"resumer") = first {
+        resumer();
+    }
     if let Some(b"count") = argv.next() {
         let digits = argv.next().unwrap_or(b"0");
         let index = digits.iter().fold(0, |n, d| n * 10 + usize::from(d - b'0'));
@@ -292,6 +401,7 @@ fn main() -> i32 {
     suspend_and_resume_need_kill();
     resume_wakes_only_what_it_stopped();
     measure_suspend_latency();
+    a_resume_from_inside_cannot_undo_a_suspend_walk();
     println!("t_suspend: all passed");
     0
 }

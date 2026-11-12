@@ -282,9 +282,18 @@ and exits.
   never skip one (`Job::walk`'s comment): twice is harmless to `suspend`, `resume` and `kill`, and a `job_signal` may deliver
   to a process twice when another process of the same job leaves during a pause (stated, not prevented). What joins during a walk is not reached by it: `job_kill` closes each job before its children, so a
   job or process made later is refused; `job_suspend` and `job_resume` leave a job created or joined later in the state
-  its parent has; `job_signal` is for what was there when it started. Two walks may now interleave, so a `job_resume`
-  that lands between the steps of a `job_suspend` of the same tree leaves its later jobs suspended: the same outcome as
-  the two calls in the other order. `t_bound` builds a tree of 700 jobs under one top job and measures the four calls
+  its parent has; `job_signal` is for what was there when it started. `job_suspend`, `job_resume` and
+  `job_kill` take turns (`Job::Exclusive`, a flag; a caller that finds it taken waits at `steps::pause`, no lock held). The
+  first version let them interleave and the review found the INV-0105-5 breach: a process of a suspended tree, holding a
+  handle to a job B below it, could `job_resume` B after the `suspend` walk had visited B and before it ended, and
+  `job_suspend` returned with B running (review of the fixes, error 2). Chosen over a check in `resume` of every job's
+  ancestors under `TREE` because the check covers only a resume of a job below, not two calls on the same top job, which
+  would still leave a mixture; the turns make each call as whole as it was before the walks were stepped. The wait is
+  bounded by the holder's walk (one tree, steps of 64), which runs to its end whatever the holder was asked, so a holder
+  is never stopped or killed inside it. `job_signal` does not take a turn (it changes nothing a later call depends on). A caller that is stopped while it waits for
+  its turn (it is in the tree, inside the call) parks first (`process::park_if_stopped`), as if it had called after being stopped:
+  otherwise its `job_resume` would run right after the `suspend` returned and start what that left stopped. The test is a stress
+  case (`t_suspend`, a resumer inside a tree of 700 jobs): the walks interleave when a slice ends during one. `t_bound` builds a tree of 700 jobs under one top job and measures the four calls
   against a tree of 8 (units on every host, time at factor 1). Not changed: `Job::drop`'s `retain` and the growth of
   `children` are linear in the parent's children, in one interval each (bounded by the memory limit; a later task);
   the drop of a long chain of jobs (each holds its parent) runs in whichever call drops the last handle.
