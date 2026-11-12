@@ -356,6 +356,25 @@ impl Gui {
         Some(ours)
     }
 
+    /// A client of room `room`, untrusted or not, with a record that lists
+    /// nothing: what `t_gui` needs to play a program of that room (the
+    /// compositor's per-room account, ADR-0262, INV-0262-1) without running
+    /// untrusted code. The panel's `launch` makes the real ones.
+    pub fn new_room_client(&self, room: &str, untrusted: bool) -> Option<Handle> {
+        let (ours, theirs) = channel_create().ok()?;
+        let m = gui::AddRoomClient {
+            untrusted: u32::from(untrusted),
+            colour: 0,
+            tag: 0,
+            room: zoraya_protocol::Data(room.as_bytes()),
+            app: zoraya_protocol::Data(b"term"),
+            entries: zoraya_protocol::Data(b""),
+            line: zoraya_protocol::Data(b"term"),
+        };
+        manager_send(self.manager, &m, Some(theirs), 0, &mut [])?;
+        Some(ours)
+    }
+
     /// A terminal's client in `home`, with its launch record: the shell
     /// in it holds the volume's root (ADR-0168, ADR-0172 point 4).
     pub fn new_terminal_client(&self) -> Option<Handle> {

@@ -19,7 +19,7 @@ bad() { echo "check-untrusted-gate: $*" >&2; fail=1; }
 
 [ -r "$gate" ] || { echo "check-untrusted-gate: no $gate" >&2; exit 1; }
 
-required="charged-allocation memory-hog fork-bomb masked-time cpu-spinners disk-filler service-floods keeper many-rooms hostile-programs fuzzing net-account-flood net-fuzz"
+required="charged-allocation memory-hog fork-bomb masked-time cpu-spinners disk-filler disk-filler-tmp service-floods keeper many-rooms hostile-programs fuzzing net-account-flood net-fuzz"
 entries=$(grep -v '^#' "$gate" | grep -v '^[[:space:]]*$' || true)
 for name in $required; do
 	echo "$entries" | awk -v n="$name" '$2 == n { found = 1 } END { exit !found }' ||
@@ -28,7 +28,7 @@ done
 echo "$entries" | awk '$1 != "1" && $1 != "2" { exit 1 }' || bad "a line of $gate has no stage 1 or 2"
 
 # The steps of `make test` and of the workflow.
-test_steps=$(sed -n 's/^TEST_STEPS := //p;s/^TEST_STEPS += //p' Makefile)
+test_steps=$(sed -n 's/^TEST_STEPS := //p;s/^TEST_STEPS += //p' Makefile | tr '\n' ' ')
 # The workflow's matrix is the plan's: the full list is tools/ci-tests.txt.
 workflow=.github/workflows/test.yml
 jobs_list=tools/ci-tests.txt

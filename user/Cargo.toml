@@ -488,6 +488,11 @@ test = false
 bench = false
 
 [[bin]]
+name = "diskfill"
+test = false
+bench = false
+
+[[bin]]
 name = "t_rooms"
 test = false
 bench = false

@@ -63,7 +63,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd rooms t_rooms memhog random broker ttyd
+	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd rooms t_rooms memhog diskfill random broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
@@ -74,7 +74,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -269,9 +269,10 @@ NET_SCRIPT := tests/shell/net.script
 # crash` only asks init, which then has no such path. test-net checks that
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
-NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash'
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end' 'init:init: the shell reconnected to the room keeper'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if [ ! -f $(USER_DIR)/$$f ]; then echo "[net] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
 		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[net] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
@@ -456,6 +457,8 @@ CLOCK_SCRIPT := tests/shell/clock.script
 STORAGE_DOWN := tests/shell/storage-down.script
 DEVICE_ERROR := tests/shell/device-error.script
 ROOMS_SCRIPT := tests/shell/rooms.script
+DISK_FILLER_SCRIPT := tests/shell/disk-filler.script
+HOSTILE_SCRIPT := tests/shell/hostile.script
 GRANTS_SCRIPT := tests/shell/grants.script
 GRANTS_ROOT := $(BUILD)/grants-root
 SYSTEM_RO_ROOT := $(BUILD)/system-ro-root
@@ -507,6 +510,14 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 # Rooms with limits through the room keeper (Q6a; INV-0266-1, INV-0263-4, INV-0269-1).
 	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(ROOMS_SCRIPT) --label rooms -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# The gate's disk-filler and hostile-programs rows (Q7), from the console, in
+# rooms with limits: DISK_FILLER_SCRIPT, HOSTILE_SCRIPT.
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(DISK_FILLER_SCRIPT) --label disk-filler -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(HOSTILE_SCRIPT) --label hostile -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # A volume that cannot be mounted: ADR-0080's limit on restarts, from `init`.
 # Then one failed write, injected in QEMU's block layer.
@@ -730,7 +741,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 spinners:auto:1 spinners:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
@@ -746,6 +757,39 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
 	    $(RUN_QEMU) --test --gui $$net $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
+
+# Fuzzing (ADR-0268 point 3's "fuzzing" and point 7's "net-fuzz", ADR-0298):
+# libFuzzer on a pinned dated nightly (tools/run-fuzz.sh; skipped unless CI or
+# FUZZ_FORCE=1 is set, as test-net skips without user networking) for FUZZ_SECONDS a target, FUZZ_JOBS at
+# once. CI runs 600 s (tools/ci-tests.txt); locally 20 s.
+FUZZ_SECONDS ?= 20
+FUZZ_JOBS ?= 2
+FUZZ_TARGETS := spawn_request keeper_messages broker_tty compositor_protocol file_protocol
+FUZZ_NET_TARGETS := net_rx net_stack net_dns_http
+test-fuzz:
+	@if [ -z "$$CI$$FUZZ_FORCE" ]; then echo "[fuzz] skipped: needs the pinned nightly toolchain (tools/run-fuzz.sh); runs on CI, or here with FUZZ_FORCE=1"; exit 0; fi; \
+	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_TARGETS)
+
+test-fuzz-net:
+	@if [ -z "$$CI$$FUZZ_FORCE" ]; then echo "[fuzz] skipped: needs the pinned nightly toolchain (tools/run-fuzz.sh); runs on CI, or here with FUZZ_FORCE=1"; exit 0; fi; \
+	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_NET_TARGETS)
+
+# The room keeper ended in QEMU (Q7; gate rows keeper-restart, keeper-reconnect
+# and prompt-rebind): the test image's `room crash-keeper` (feature net-test,
+# proposed ADR-0298) ends the keeper under a running room; init restarts it,
+# the shell reconnects and rebinds.
+KEEPER_SCRIPT := tests/shell/keeper.script
+test-keeper: $(NET_TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
+	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if [ ! -f $(USER_DIR)/$$f ]; then echo "[keeper] FAIL: INV-0296-1: no $(USER_DIR)/$$f to look in"; exit 1; fi; \
+		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[keeper] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
+	mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(NET_TEST_KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+	$(FULL_ONLY) target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE) && \
+		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper-tcg -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel tcg $(NET_TEST_KERNEL) && \
+		target/debug/zoraya-fsck $(CRASH_IMAGE)
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
 test-crash: $(KERNEL) tools-storage
@@ -785,7 +829,7 @@ mutants-host:
 
 # Stage 6b: the cross toolchain, the sysroot and the ported programs
 # (ADR-0109, ports/Makefile). fetch-ports is the only step that downloads.
-.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-ethd-maps
+.PHONY: fetch-ports ports check-ports clean-ports check-fetch-ports check-test-caps check-tokens check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps
 fetch-ports ports check-ports clean-ports:
 	@$(MAKE) -f ports/Makefile $@
 
@@ -868,6 +912,9 @@ check-untrusted-gate:
 	tools/check-untrusted-gate.sh
 
 # INV-0280-1: ethd maps only its queue memory and takes no view of a frame slot.
+check-quota-tests:
+	tools/check-quota-tests.sh
+
 check-ethd-maps:
 	tools/check-ethd-maps.sh
 
@@ -899,7 +946,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
+TEST_STEPS += check-ci-jobs test-keeper test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and
@@ -924,7 +971,7 @@ check-ci-jobs:
 # make test-changed for what a change touches (tools/test-map.txt, under
 # HVF); make test-par for everything in parallel lanes (tools/test-par.sh,
 # at most 3 QEMU guests); make test for everything one step after another.
-CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
+CHECK_STEPS := fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-charged-alloc check-untrusted-gate check-quota-tests check-ethd-maps
 check:
 	@MAKE="$(MAKE)" tools/test-summary.sh $(CHECK_STEPS)
 

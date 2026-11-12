@@ -1,0 +1,94 @@
+# The gate's cpu-spinners row and the GUI form of INV-0269-1 (TASK-26 Q7;
+# ADR-0264, ADR-0269, ADR-0268 point 3; INV-0264-3's GUI half). Coordinates
+# as tests/gui/limits.script's (logical, 1024 x 768, scale 1).
+#
+# 1. INV-0269-1: a terminal launched from the dock in room `project` and the
+#    first terminal's shell, which enters the same room, run in ONE job: the
+#    room's `--mem 16M` counts the terminal from the dock (about 5.4 MiB) against
+#    the memory a hog started from the first terminal can take, which stops at
+#    9 MiB and not at 15 (a job of its own would give it almost all 16).
+# 2. Two rooms with `--cpu 25%` run two spinners each (the rooms' own programs,
+#    from the system image); the key latency of a terminal in `home` is
+#    measured by the runner's `latency` step, first with nothing spinning (the
+#    baseline) and then with the spinners, and the second may be at most
+#    450 ms over the first (both over one screendump read). A smoke test of
+#    starvation, not a timing: the runner reads the screen every 150 ms, so a
+#    time is a screendump plus whole polls (CI, auto: 169 ms with nothing
+#    spinning, 331 ms with the spinners, a fixed 300 ms failed); 450 ms is
+#    three more polls, and a starved terminal takes seconds. The kernel's own
+#    50 ms bound for an uncapped process next to capped rooms that spin and
+#    burst is checked by t_cpu (make test-qemu).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+type mkdir project\r
+screen ~> _
+type mkdir other\r
+screen ~> _
+type room new project --mem 16M --procs 6 +w ~/project\r
+screen project --colour 1 --mem 16M --procs 6 +w ~/project
+screen ~> _
+# The dock's chip enters the room; System+Enter launches a terminal in it.
+clickc 2f7f8f 300 719 600 7
+chord meta ret
+origin 105 138
+screen Type help to begin, or help tour.
+prefix project ~/project> _
+click 400 120
+type memhog\r
+prefix memhog: refused after 9
+prefix project ~/project> _
+# The first terminal's shell enters the same room: a hog started there is
+# refused at the same point, since the room has one job.
+click 400 80
+region 130 76 100 4 f7f7f8
+origin 73 106
+type room project\r
+prefix project ~/project> _
+type memhog\r
+prefix memhog: refused after 9
+prefix project ~/project> _
+shot one-job
+type room --leave\r
+type cd /\r
+prefix /> _
+# The baseline: a keystroke's latency in home with nothing spinning. Then
+# two rooms at 25% with two spinners each, and the latency again.
+chord ctrl l
+top /> _
+pause 1500
+latency 10
+type room new spin1 --cpu 25% --procs 6 +w ~/other\r
+prefix spin1 --colour
+prefix /> _
+type room new spin2 --cpu 25% --procs 6 +w ~/other\r
+prefix spin2 --colour
+prefix /> _
+type room spin1\r
+type spin &\r
+prefix [1] spin
+type spin &\r
+prefix [2] spin
+type jobs\r
+prefix [1]  running   spin
+prefix [2]  running   spin
+type room --leave\r
+type cd /\r
+prefix /> _
+chord ctrl l
+top /> _
+type room spin2\r
+type spin &\r
+prefix [3] spin
+type spin &\r
+prefix [4] spin
+type room --leave\r
+type cd /\r
+prefix /> _
+chord ctrl l
+top /> _
+pause 1500
+latency 10 +450
+shot spinners
+type poweroff\r
+exit

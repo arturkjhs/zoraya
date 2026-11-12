@@ -18,6 +18,8 @@ tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
+tools/check-quota-tests.sh    check
+tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
@@ -72,6 +74,10 @@ user/src/bin/t_open.rs        test-gui
 user/src/bin/edit.rs          test-gui
 user/src/bin/settings.rs      test-gui
 user/src/bin/t_gui.rs         test-qemu
+user/src/bin/t_storage.rs     test-qemu
+tests/shell/keeper.script     test-keeper
+tests/shell/disk-filler.script test-files
+tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
@@ -84,7 +90,8 @@ user/src/app.rs               test-gui
 # The network (N1): the driver, its protocol and the test that plays netd.
 crates/zoraya-virtio-net/     test-net
 crates/zoraya-proto-nic/      test-net
-fuzz/                         check
+fuzz/                         test-fuzz test-fuzz-net
+tools/run-fuzz.sh             test-fuzz test-fuzz-net
 user/src/bin/ethd.rs          test-net
 tools/net-poke.sh             test-net
 user/src/bin/t_net.rs         test-net test-qemu
@@ -117,7 +124,8 @@ tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix
 
 # The shell and its crates.
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net
+user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper
 crates/zoraya-shell/          test-boot test-files test-tour-gui
 crates/zoraya-command/        test-boot test-files test-tour-gui
 crates/zoraya-describe/       test-files test-tour-gui
@@ -168,6 +176,8 @@ crates/zoraya-proto-rooms/    test-qemu test-files
 user/src/bin/rooms.rs         test-qemu test-files
 user/src/bin/t_rooms.rs       test-qemu
 user/src/bin/memhog.rs        test-files
-user/src/roomsclient.rs       test-files test-gui test-qemu
+user/src/bin/diskfill.rs      test-files
+user/describe/tests/diskfill.cmd test-files
+user/src/roomsclient.rs       test-files test-gui test-qemu test-keeper
 user/describe/tests/memhog.cmd test-files
 tests/shell/rooms.script      test-files

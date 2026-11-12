@@ -52,8 +52,12 @@
 //! window            a new window: the next `screen` looks from its top row
 //! top TEXT          wait until the top row reads TEXT (a cleared screen),
 //!                   then a new window as `window`
-//! latency N         type `x` N times at the prompt, timing each until it
-//!                   shows, then erase them
+//! latency N [MS]    type `x` N times at the prompt, timing each until it
+//!                   shows, then erase them; with MS, fail if the median
+//!                   is more than MS over one screendump read; with +MS,
+//!                   more than MS over the last `latency` step's median
+//!                   (both over the screendump read), the baseline of the
+//!                   same run
 //! shot NAME         keep the screen as `build/shots/NAME-LABEL.ppm` (the screens
 //!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
@@ -146,6 +150,16 @@ const SETTLE_MOST: Duration = Duration::from_secs(10);
 /// silent QEMU fails the run instead of blocking it past its deadline.
 const QMP_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// A `latency` step's bound, in ms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bound {
+    /// The median over one screendump read is at most this.
+    Fixed(u32),
+    /// The median over one screendump read is at most this more than the
+    /// previous `latency` step's, in the same run.
+    OverBase(u32),
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Step {
     Serial(String),
@@ -157,7 +171,8 @@ pub enum Step {
     Key(String),
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
-    Latency(usize),
+    /// The count, and the bound on the median over one idle screendump read.
+    Latency(usize, Option<Bound>),
     Click(i64, i64),
     DoubleClick(i64, i64),
     RightClick(i64, i64),
@@ -283,7 +298,25 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 };
                 Step::Drag(x, y, x2, y2, hold)
             }
-            "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
+            "latency" => {
+                let mut words = rest.split_whitespace();
+                let n = words
+                    .next()
+                    .and_then(|w| w.parse().ok())
+                    .ok_or_else(|| bad("latency N [MS | +MS]"))?;
+                let ms = |w: &str| w.parse().map_err(|_| bad("not a number of ms"));
+                let bound = match words.next() {
+                    None => None,
+                    Some(w) => Some(match w.strip_prefix('+') {
+                        Some(w) => Bound::OverBase(ms(w)?),
+                        None => Bound::Fixed(ms(w)?),
+                    }),
+                };
+                if words.next().is_some() {
+                    return Err(bad("latency N [MS | +MS]"));
+                }
+                Step::Latency(n, bound)
+            }
             "origin" => {
                 let v: Vec<i64> = rest
                     .split_whitespace()
@@ -719,6 +752,9 @@ struct Run {
     /// The body of the terminal read (`origin`), logical; the first's when
     /// none.
     origin: Option<(i64, i64)>,
+    /// The median over one screendump read of the last `latency` step,
+    /// in ms: the baseline of a `+MS` bound.
+    latency_base: Option<f64>,
 }
 
 impl Run {
@@ -962,7 +998,7 @@ impl Run {
                 }
                 std::thread::sleep(SCREEN_POLL);
             },
-            Step::Latency(n) => {
+            Step::Latency(n, bound) => {
                 let mut times = Vec::new();
                 let row = self.row;
                 let prompt = self.qmp.screen()?.rows(&mut self.reader)[row.unwrap_or(0)].clone();
@@ -997,6 +1033,41 @@ impl Run {
                     ms(&times[times.len() - 1]),
                     ms(&idle[2])
                 );
+                // A bound is on the median over the floor, so that the cost of
+                // reading a screendump is not counted (a starved terminal
+                // takes seconds, not tens of milliseconds more).
+                // A screen is read every SCREEN_POLL, so a time is one
+                // screendump plus a whole number of polls (CI, auto: 169 ms
+                // idle, 331 ms with spinners); a `+MS` bound is against the
+                // same run's own idle median, not a fixed number of polls.
+                let over = ms(&times[times.len() / 2]) - ms(&idle[2]);
+                let base = self.latency_base.replace(over);
+                match bound {
+                    None => {}
+                    Some(Bound::Fixed(limit)) => {
+                        if over > f64::from(*limit) {
+                            return Err(format!(
+                                "latency: the median key took {over:.1} ms over one screendump read, more than {limit} ms"
+                            ));
+                        }
+                    }
+                    Some(Bound::OverBase(limit)) => {
+                        let Some(base) = base else {
+                            return Err(
+                                "latency +MS: no earlier latency step to compare with".into()
+                            );
+                        };
+                        say!(
+                            "[{}] measure: key latency {over:.1} ms over a screendump read, baseline {base:.1} ms",
+                            self.label
+                        );
+                        if over > base + f64::from(*limit) {
+                            return Err(format!(
+                                "latency: the median key took {over:.1} ms over one screendump read, more than {limit} ms over the baseline's {base:.1} ms"
+                            ));
+                        }
+                    }
+                }
                 Ok(())
             }
             Step::Window => {
@@ -1224,6 +1295,7 @@ pub fn run(file: &str, label: &str, timeout: u64, qmp: &str, command: &[String])
             deadline,
             row: None,
             origin: None,
+            latency_base: None,
             reader: reader(),
             scale: Scale::ONE,
             layout: 0,
@@ -1271,6 +1343,17 @@ mod tests {
         assert_eq!(steps[4], Step::Region(0, 0, 2, 2, 0x20_3040));
         assert!(parse("region 1 2 3\n").is_err());
         assert!(parse("dance\n").is_err());
+        assert_eq!(parse("latency 10\n").unwrap(), [Step::Latency(10, None)]);
+        assert_eq!(
+            parse("latency 10 300\n").unwrap(),
+            [Step::Latency(10, Some(Bound::Fixed(300)))]
+        );
+        assert_eq!(
+            parse("latency 10 +450\n").unwrap(),
+            [Step::Latency(10, Some(Bound::OverBase(450)))]
+        );
+        assert!(parse("latency 10 +x\n").is_err());
+        assert!(parse("latency 10 300 4\n").is_err());
         assert_eq!(
             parse("chord ctrl c\n").unwrap(),
             [Step::Chord("ctrl".into(), "c".into())]

@@ -3295,6 +3295,14 @@ impl Z {
             1
         };
         let words = p.operand_values(d, "WORDS");
+        // The test image's `room crash-keeper` (proposed ADR-0298).
+        #[cfg(feature = "net-test")]
+        if words.as_slice() == ["crash-keeper"] {
+            return match self.keeper.as_ref() {
+                Some(k) if k.crash() => 0,
+                _ => fail(io, None, "no room keeper to end", &[]),
+            };
+        }
         if p.flag(d, "leave") {
             self.leave_room_job();
             self.room = None;

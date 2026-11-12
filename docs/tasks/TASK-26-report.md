@@ -32,7 +32,7 @@ Q6a's QEMU paths (the keeper's restart by `init`, the reconnect channel, `zosh`'
 In progress, in this order:
 
 1. N6 (`work/n6`): implementation and `opus-review` done, the review's findings fixed; the candidate run (`candidate/work-n6`), then the merge.
-2. Q7, both gate stages.
+2. Q7, both gate stages (`work/q7`: built and run locally, see the Q7 section; the `opus-review` and the candidate run are next).
 3. The `opus-review` report of the system-call surface.
 4. The `stage-8` tag, with the gate closed (`make check-untrusted-gate`) and a `candidate-full/` run, then `main`'s, green.
 
@@ -1706,3 +1706,124 @@ The answers to the handoff's review questions: (2) and (3) are finding 1's fix, 
    (`netd`'s end, `init`'s request and its look for `/etc/zoraya/net-crash`); `make test-net` fails if the image's `netd` or `init`
    holds one, and `make test-net-fetch` fails if its own image's lacks one (a check that cannot go blind). The shell's `net crash`
    path has no string and only asks `init`. ADR-0296 and the invariants table say so.
+
+## Q7: the gate's tests, both stages (branch `work/q7`, on `main` at cd58996)
+
+Sonnet main session. No `opus-review` yet (the branch has no candidate tag; the review comes first). **The gate stays closed:**
+`room new --untrusted` is still refused in `zosh` and the panel, `make check-untrusted-gate` passes with the refusal in place, no
+code from outside the system image ran as untrusted, and nothing here opens anything.
+
+### Built
+
+- **Fuzz targets** (`fuzz/fuzz_targets/`, `wire.rs` makes messages with valid headers around fuzzed bodies): `spawn_request`
+  (`SpawnRequest::decode`, `StartupBlock::decode`, a valid request with bytes changed), `keeper_messages` (the room keeper's
+  `handle` on the three channel kinds, a model of the kernel's jobs), `broker_tty` (the POSIX broker on a model kernel, the terminal
+  server with keys, output and resizes), `compositor_protocol` (a client's messages and input frames on a fake platform),
+  `file_protocol` (`fsd`'s `Service` over a fake transport on a small volume). The network's are the existing `net_rx`, `net_stack`,
+  `net_dns_http`. `tools/run-fuzz.sh` builds them with the `nightly` toolchain and LLVM's coverage flags (no cargo-fuzz), runs
+  libFuzzer for `FUZZ_SECONDS` each, in parallel, output in `target/test-logs/fuzz-TARGET.log`; `make test-fuzz`, `make test-fuzz-net`.
+- **`make test-keeper`** (`tests/shell/keeper.script`, the net-test image): `room crash-keeper` (test image only, ADR-0298 item 2) makes
+  `init` kill the keeper under a running room; the script checks `init`'s restart (the room keeps its job, its process and its
+  limit: `top`, `grants`, a hog refused at the kept limit), the reconnect (`room set` over the channel `init` gives, applied to the same
+  job) and the prompt's rebind, twice in a row. HVF and TCG.
+- **`tests/shell/disk-filler.script`** and **`tests/shell/hostile.script`** in `make test-files`; new test program `diskfill` (fills a
+  directory until the limit refuses; `--syncs N` and `--loop S` time syncs).
+- **Service floods:** `t_storage` (`fsd`: an account of 20 open handles; `clone_account` as the launcher does), `t_gui` (the compositor:
+  untrusted-room clients played by the test, `Gui::new_room_client`), `t_netd` (`netd`: `narrow_account` of 3 connections).
+- **`tests/gui/spinners.script`** in `make test-gui`; the runner's `latency N MS` step fails if the median key is more than MS over one
+  screendump read.
+- **`make check-quota-tests`** (INV-0260-1): reads ADR-0260's hard rows, requires each to name a gate row with a step
+  (`tools/quota-tests.txt`); it reports the one gap (an untrusted room's `/tmp`) and fails only when the refusal is gone.
+- `check-untrusted-gate.sh` now joins the Makefile's `TEST_STEPS` lines (a step at a line's end was not found); ADR-0298 (proposed);
+  `docs/adr/invariants.md`: INV-0298-1, -2, and the statuses below.
+
+### Gate rows
+
+| Row | Step | Result (this session) |
+|---|---|---|
+| keeper-restart, keeper-reconnect, prompt-rebind | `test-keeper` | pass, 55 steps, HVF and TCG (`FULL=1` TCG run once) |
+| keeper | `test-qemu` | `t_rooms` (unchanged); the QEMU paths are the three rows above; the GUI form of INV-0269-1 is in `spinners.script` |
+| cpu-spinners | `test-gui` | `spinners:auto:1` pass, 67 steps. Two rooms at `--cpu 25%` with two spinners each (jobs `running`): median key 168 ms to a screendump (floor 3.9 ms); the same script's terminal without spinners (`terminal:auto:1`): 188 ms. The bound is relative: at most 450 ms over the median of the same run's no-spinner baseline (`latency N +MS`) |
+| disk-filler | `test-files` | pass, 60 steps: the filler stops at 224 KiB of `--disk 256K` (`OverQuota`), home and another room write, 100 write-and-syncs in home next to a sync loop (138193 syncs in 40 s): slowest 0 ms (loop 2 ms) |
+| service-floods | `test-qemu` | `fsd`: the room stopped at 19 of 20, another account opened 18, home 100 (pass); compositor: 3 surfaces admitted, 1 refused (status 8), another room and home admitted (`t_gui` pass); `netd` in `net-account-flood` |
+| hostile-programs | `test-files` | pass, 48 steps: `stubborn` ended by the second Ctrl-C, `badptr`, `fuzz` (random registers into every call) exit 0 in a room with limits, a hog refused, the shell and home answer, the room removed with `--kill` |
+| fuzzing | `test-fuzz` | 180 s each, no finding: `spawn_request` 199M runs, `keeper_messages` 3.0M, `broker_tty` 12.9M, `compositor_protocol` 56k, `file_protocol` 490k (cov 122 / 529 / 1487 / 1605 / 2100) |
+| net-fuzz (stage 2) | `test-fuzz-net` | 180 s each, no finding: `net_rx` 8.9M, `net_stack` 16.4M, `net_dns_http` 337M |
+| net-account-flood (stage 2) | `test-net` | `t_netd`: an account of 3 connections opened 12 to an address that answers no ARP: 3 admitted, 9 refused `OVER_QUOTA` at once, the root connection still connects. (`make test-net` as a whole fails here at `test-net-posix`: the ports' sources are not in this worktree) |
+
+### Decisions where the ADRs are silent (proposed ADR-0298; recommendations)
+
+1. The tests play the room's client against the production service (account carved as the launcher does) and use trusted rooms with limits for the job's limits; no switch lifts the refusal. Recommend accepting.
+2. A test hook on the net-test image: `room crash-keeper` -> `init` kills the keeper; two marks in `NET_CRASH_MARKS` keep it out of the production image.
+3. Fuzzing through `tools/run-fuzz.sh` on nightly, 600 s a target in two 30-minute CI jobs, a fetch step outside `make test` (`cargo +nightly fetch --locked` in `fuzz/`).
+4. INV-0264-3's GUI half is bounded at 450 ms over the same run's no-spinner baseline, not 50 ms (the runner polls the screen every 150 ms); the 50 ms stays in `t_cpu`. **Architect: accept or ask for a lower bound.** INV-0264-3 was marked `checked` on that basis and is reverted to `not yet applicable` until accepted (Review fixes below); `spinners.script` is a starvation smoke test.
+
+### Invariants delta
+
+INV-0264-3 `not yet applicable` (kernel half checked, GUI half waits for the architect, see 4 and Review fixes), INV-0265-5 `checked: make test-qemu` (`t_storage`) and `make test-files`, INV-0265-3's directory half checked (the `/tmp` half is not
+built, status stays `not yet applicable`), INV-0260-1 has its check (`make check-quota-tests`), INV-0298-1 and -2 added. Stage 1
+invariants of the gate's list still not `checked`: **INV-0172-3** (stage 7: the compositor's confirm card for a drop or paste into an
+untrusted window; no QEMU form), **INV-0260-1** (one resource with no test), **INV-0265-3** (`/tmp` half), **INV-0265-4** (an untrusted
+room's `/tmp` and its `tmpd`), and, outside the checked pattern, **INV-0268-3** (broker and `tmpd` in an untrusted room's job); stage 2: **INV-0262-4**
+(a `netd` connection's stream rings charged to the client's job: not tested).
+
+### Where a number or text from outside enters (for the reviewer)
+
+`wire::messages` (fuzz) feeds ordinals and bodies; `room crash-keeper` is the only new message on a reconnect channel and is compiled out
+outside `net-test`; `diskfill`'s operand and options come from its description; the runner's `latency N MS` reads a number from a script.
+
+### Tests run (this session)
+
+`make check` (all pass); `cargo test -p zoraya-test-runner`; `make test-fuzz` and `test-fuzz-net` at 15 and 180 s; `make test-keeper` (`FULL=1`, HVF and TCG);
+`make test-files` (every script, with `disk-filler` and `hostile`: pass);
+`make test-qemu-auto-default` (`t_gui`, `t_storage`, `t_quota` etc. pass), `make test-qemu-one`; `make test-net` up to `t_netd: all passed`;
+`make test-gui GUI_RUNS="spinners:auto:1"` and `terminal:auto:1`. **Not run:** `make test-changed` (an unmapped path, `Makefile` and `init.rs`,
+makes it run every step, and its build step needs the ports' sources, which are not in this worktree: `make fetch-ports` downloads);
+the TCG runs of everything but `test-keeper`; the whole of `test-posix*`, `test-tour-gui`, `test-crash`; the candidate and the `candidate-full/` run.
+
+### Not done
+
+- **The gate's open items, for the architect:** the six invariants above; an untrusted room's `/tmp` (`--tmp`, a `tmpd` in the room's job), the broker and `tmpd` in
+  an untrusted room's job, the untrusted line reader, `+net` in rooms (ADR-0268 point 7; the stage 2 rows run the services' own accounts, not an
+  untrusted `+net` line); the architect's go-ahead; the `opus-review` report of the system-call surface (point 6).
+- The fuzz targets reach few states of the keeper (valid names are rare in random bytes) and of the compositor; no structure-aware generator. 600 s a target has not run in CI.
+- `sleep 60 &` in a terminal launched from the dock ended at once in `spinners.script` (`[1] done: sleep 60`), while the same line in the console shell's room, and
+  `spin &` in the GUI, stay running. Not reproduced by the reviewer; `sleep` now loops until the clock passes its deadline (see "Review fixes"); backlog entry.
+- INV-0262-4 (rings charged to the job) and the `status` counters; the TCG runs of `t_netd` flood under `FULL=1`.
+
+### Handoff
+
+- State: branch `work/q7` from `main` at cd58996, pushed, no candidate tag. Commits: fuzz targets and steps; keeper test; `t_netd` flood, `diskfill`, scripts;
+  compositor flood, GUI script, ADR-0298; gate file and invariants; quota check.
+- For `opus-review`: `user/src/bin/init.rs` (`answer_reconnect`, the `net-test` branch), `user/src/roomsclient.rs` (`crash`), `user/src/bin/zosh.rs`
+  (`room_builtin`'s `crash-keeper`), `user/src/netconn.rs` (`start` and `wait`, split from `connect`), `user/src/bin/t_netd.rs` (`account_flood`),
+  `user/src/bin/t_storage.rs` (`account_flood`), `user/src/bin/t_gui.rs` (`surface_flood`), `user/src/gui.rs` (`new_room_client`), `fuzz/fuzz_targets/*.rs` (the new ones),
+  `tools/run-fuzz.sh`, `tools/check-quota-tests.sh`, `tools/check-untrusted-gate.sh`, `tests/shell/{keeper,disk-filler,hostile}.script`, `tests/gui/spinners.script`, ADR-0298.
+- Review questions: (1) is the test hook's reach (a reconnect channel message) acceptable on a net-test image only; (2) are tests that play an untrusted client
+  enough for INV-0262-1 in the compositor and `netd`, or must a room's real line exist first; (3) is +450 ms over a baseline an acceptable GUI bound for INV-0264-3; (4) should the full CI
+  run the fuzzers 600 s each; (5) the candidate bug above.
+
+### Review fixes (opus-review of Q7, a later session)
+
+- **INV-0265-5** was `checked` on a script whose rooms are trusted (the fold of ADR-0265 item 9 needs an untrusted account, made only by
+  `carve`/`clone_account`). New `t_storage::untrusted_sync_folds`: a carved account writes and sends a `sync` it does not wait for; no
+  reply within 300 ms while nothing commits; 100 write-and-sync rounds of the session's account each under 1 s (88 ms in all, slowest 3 ms);
+  the first commit answers the room's `sync`. **Mutation:** `may_fold` made to return false: `t_storage` panics "the room's sync was
+  answered before any commit: it is not folded" (reverted). The status is `checked` on `make test-qemu` (t_storage) plus the script as a smoke test.
+  `disk-filler.script` now also fails on `diskfill: sync N: status` and expects the looper's result.
+- **INV-0264-3** is back to `not yet applicable (until the architect accepts ADR-0298 item 4's bound ...)`, kernel half by `t_cpu`.
+  `spinners.script` stays as a starvation smoke test; ADR-0298 item 4, the gate file and this report say so.
+- **prompt-rebind** is tested: the net-test `init` prints "the shell reconnected to the room keeper (a test)" when it answers a reconnect, and
+  `keeper.script` expects it right after the restart, before any keeper call. **Mutation:** the rebind in `Keeper::pump` removed:
+  `make test-keeper` fails (timed out waiting for that line); reverted. The line is a fourth mark of `NET_CRASH_MARKS`; the mark loops of
+  `test-net` and `test-keeper` now fail when the production program is missing, and `test-keeper` builds `$(KERNEL)` first.
+- **keeper.script:** `top` is matched with `1 of 16` (`sleep 300` survived); after `room remove agent-1 --kill` the notice `sleep 300: killed` is expected (INV-0269-3).
+- **Fuzz:** `FUZZ_JOBS` limits runs (the oldest is waited for; the earlier code waited for a `PID:target` and did nothing); default 2 targets,
+  `-rss_limit_mb=1024` (was 3 x 2048); `make test-fuzz` and `test-fuzz-net` skip unless `CI` or `FUZZ_FORCE=1`; the toolchain is pinned to
+  `nightly-2026-11-12` (script, workflow, ADR-0298 item 3). Installing it ran `rustup toolchain install`, which also updated rustup itself (1.29.2 to 1.29.3).
+  `keeper_messages`: the model's `set_limits` and `create_job` panic when the keeper targets a launch job (the old end-of-input assertion could not fail).
+  `compositor_protocol` also sends `AddRoomClient`; its header now says that state carries over between inputs, so a saved artifact is not a per-input
+  reproduction. `file_protocol` now runs the volume's check (`zoraya_fs::check`) after a final `sync`.
+- **Gate file:** `disk-filler-tmp` (the `/tmp` half, `pending`, owner Q8) split from `disk-filler`; `check-untrusted-gate` requires it; the gate stays closed.
+- **Other:** `t_gui` asserts `OVER_QUOTA` (8); `t_netd` asserts the control channel's message has ordinal 17; `tools/test-map.txt` maps `init.rs`,
+  `zosh.rs` and `roomsclient.rs` to `test-keeper`; `sleep` loops until the clock passes the deadline.
