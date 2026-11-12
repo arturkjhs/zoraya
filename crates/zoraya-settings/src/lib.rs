@@ -363,11 +363,14 @@ fn distance(a: &str, b: &str) -> usize {
 }
 
 pub mod rooms;
+pub mod usage;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_rooms;
+#[cfg(test)]
+mod tests_usage;
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 #[cfg(test)]

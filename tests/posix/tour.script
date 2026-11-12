@@ -50,6 +50,7 @@
 ^ \r\n  status    describe how the last command ended
 ^ \r\n  sync      make written data durable
 ^ \r\n  test      check a condition
+^ \r\n  top       each room's use against its limits
 ^ \r\n  unset     remove a variable
 ^ \r\n  uptime    time since boot
 ^ \r\n  wait      wait for background jobs

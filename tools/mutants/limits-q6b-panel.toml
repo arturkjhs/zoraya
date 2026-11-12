@@ -1,0 +1,39 @@
+# zoraya-panel, Q6b: the settings window's SetRoomLimit (ADR-0294,
+# INV-0294-3). Host tests only.
+tests = ["cargo test -q -p zoraya-panel"]
+timeout = 300
+
+[[mutant]]
+id = "Q6b-panel-untrusted-allowed"
+file = "crates/zoraya-panel/src/lib.rs"
+find = 'if untrusted_origin {'
+replace = 'if false {'
+note = "an_untrusted_origin_sets_no_limit"
+
+[[mutant]]
+id = "Q6b-panel-no-rollback"
+file = "crates/zoraya-panel/src/lib.rs"
+find = 'let _ = write(&back);'
+replace = ''
+note = "a_refusal_of_the_keeper_puts_the_old_line_back"
+
+[[mutant]]
+id = "Q6b-panel-keeper-unasked"
+file = "crates/zoraya-panel/src/lib.rs"
+find = '&& let Err(e) = keeper(room)'
+replace = '&& let Err(e) = keeper("")'
+note = "a_trusted_origin_rewrites_the_line_and_asks_the_keeper"
+
+[[mutant]]
+id = "Q6b-panel-gone-text"
+file = "crates/zoraya-panel/src/lib.rs"
+find = 'KeeperFail::Gone => String::from("the room keeper does not answer"),'
+replace = 'KeeperFail::Gone => String::new(),'
+note = "a_refusal_of_the_keeper_puts_the_old_line_back"
+
+[[mutant]]
+id = "Q6b-panel-rollback-stale"
+file = "crates/zoraya-panel/src/lib.rs"
+find = 'zoraya_settings::rooms::replace(&read(), &old)'
+replace = 'zoraya_settings::rooms::replace(&new, &old)'
+note = "a_refusal_of_the_keeper_keeps_an_edit_made_while_it_was_asked (the table as written, not as read again)"

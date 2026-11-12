@@ -127,6 +127,13 @@ impl Window {
         )
     }
 
+    /// The pixels of the window's buffers: the one it shows and the one
+    /// waiting for its first commit (`SetBuffer`), both mapped.
+    pub fn pixels(&self) -> u64 {
+        let area = |b: &Buffer| u64::from(b.width) * u64::from(b.height);
+        area(&self.buffer) + self.next.as_ref().map_or(0, area)
+    }
+
     /// The whole window: the title bar above the body and the border
     /// around both. A popup is its body.
     pub fn outer(&self, f: &Frame) -> Rect {

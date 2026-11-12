@@ -1257,6 +1257,166 @@ The architect decided: "/system is read-only at run time for everyone, the conso
 - **Decisions of mine, small.** The seal is by name on the root of a disk volume, in the service (not in the engine or the ABI); `+w /` stays allowed because the volume refuses what it covers under `/system`. No wire change.
 - **Handoff.** State: branch `work/system-ro`, pushed without a candidate tag. For the reviewer (a security boundary, `opus-review`): `crates/zoraya-fs-service/src/lib.rs` (`Seal`, `has`, `seal_after`, `is_sealed_name`, `open_as`, `clone_connection`, `rename`, `publish`), `user/src/bin/fsd.rs`, `crates/zoraya-shell/src/eval.rs`, the three tests and `tests/shell/system-ro.script`. Question: the seal is by the name of the root's entry; a volume that is not the root volume and has a `system` entry gets it too (only `fsd` on a disk does; the only disk is the root volume).
 
+## Q6b: what the person sees (branch `work/q6b`, on `main` at 1e9b1aa)
+
+### Built
+
+- **Step 0 (disk).** 42 GB free (threshold 25 GB): nothing removed. The cleanup of merged worktrees was denied by the
+  permission classifier and was not needed; the worktree `zoraya-q6b` was made beside the others. The ports archives (15 MB) were
+  copied from the orchestrator's `build/ports/src`, read only, as in Q6a.
+- **One reading** (`zoraya-settings`' `usage` module; 26 host tests): `Reading` (the keeper's record in plain numbers),
+  `top_table`, `room_words` (`--mem 64M (58M)`), `Reading::card_lines`, `limits_line` (the text of `grants`), `pills` (at
+  `NEAR_PERCENT` = 90), the notice's lines (`(refused 3 mem)`, `raise: room set agent-1 --mem 128M`), `to_wire`/`from_wire` (total),
+  `RoomRow` for the settings window, `Throttle` and `watch` (at most one reading a second). `zoraya-rooms`: `reading_of` and
+  `Tracker` (the CPU share since the last reading, 200 ms at least).
+- **`top`** (builtin of `zosh`, ADR-0294 point 1): `top`, `top ROOM`, `top --watch`; `room` shows the use after each limit of a room
+  that runs. A room's shell asks the keeper for its own room by name (a `Room(R)` channel is refused the empty name).
+- **The panel** reads `Usage` on its once-a-second tick and sends `SetUsage` (new request 44, client manager only) when the text
+  changed; answers `RoomsQuery` and `SetRoomLimit` from the settings window (new, ADR-0294 point 8).
+- **The compositor** (`usage.rs`): the accounts of untrusted rooms (3 surfaces, 2 display areas; 12 and 8 together; 4 accounts;
+  `OVER_QUOTA` = 8 in `CreateToplevel`, `CreatePopup`, `SetBuffer`); `SetUsage` all or none; the pill in the title bar at 90%
+  (before the grants); the hover card outside the window (above or below it) of a room with a limit.
+- **The settings window**: a `Rooms` section (scrolled page) with a field per limit word, the use beside it, the `room set` line
+  of what is being edited and Apply, through the panel; the window holds no new right.
+- **Tests and documents.** `tests/gui/limits.script` (`make test-gui`, in `tools/ci-tests.txt`), `tests/shell/rooms.script` (`top`,
+  `room`), `memhog --hold`, the two tour scripts list `top`; ADR-0294 (proposed), `docs/design.md` ("What the person sees of limits"),
+  the invariants table (INV-0262-1/-3 compositor, INV-0266-3, INV-0267-1/-2 checked; INV-0294-1 to -3).
+
+### Decisions where the ADRs are silent (proposed ADR-0294; recommendations)
+
+1. `top` is a builtin, not a program with a keeper slot (the shell holds the channel; no new designation rule). Accept, or send back.
+2. The settings window edits limits through the panel (`RoomsQuery`, `SetRoomLimit`), not over a `Manage` channel of its own: no
+   application gains launch authority. A settings window of an untrusted room is refused. Accept, or send back.
+3. The notice is text on the card and in `top ROOM`, not a `Raise` button; the rooms overview is not built (it is not built in stage
+   7 either). The card appears only for a room that has a limit, so a room without one loses no text under it.
+4. `OVER_QUOTA` is a new `status` of the compositor protocol (`Status` is `Below<9>`).
+5. The compositor's untrusted accounts are keyed by the record's room; one room's applications share one account.
+
+### Where a number or text from outside enters, and where it is checked (for the reviewer)
+
+- `SetUsage` text: only on the client manager's channel (`clients && none` in the ordinal match); `usage::from_wire` is total
+  (every line a reading with a room name, at most 33, names distinct, flags 0 to 3); the compositor draws numbers it formats
+  itself, never the panel's words.
+- `SetRoomLimit` / `RoomsQuery`: only from `app == "settings"` launchers; the room must be in the table (`with_limit`), the word and
+  value go through `Limits::set`; the panel refuses when the window's room (as launched) is untrusted; the keeper checks the
+  ceilings and the old line goes back if it refuses.
+- Window requests of an untrusted client are bounded before any mapping (`within_account` before `map_buffer`).
+
+### Invariants delta
+
+INV-0262-1 and -3 (compositor), INV-0266-3, INV-0267-1, INV-0267-2: checked (rows say how). INV-0294-1, -2 checked, -3 checked after the review
+(the panel's handler is `zoraya_panel::set_room_limit`, host-tested). Table 522 rows. `make adr-check`: 0 errors.
+
+### Tests run (this session)
+
+- `cargo test -p zoraya-settings` (42), `-p zoraya-rooms` (43), `-p zoraya-compositor` (176, 7 new), `-p zoraya-settings-window` (9),
+  `-p zoraya-proto-chooser`, `-p zoraya-proto-gui`: pass.
+- `make check`: pass. `make test-changed`: host tests, test-boot, test-qemu, test-libposix, test-files (with `rooms.script`'s new
+  `top` steps), test-crash, test-posix-gui, test-tour-gui, test-gui (with the new `limits` run), test-net ok; test-posix failed once
+  on the tour's `help` list (it lacked `top`; fixed in the tour scripts), then `make test-posix test-tour-gui` passed and
+  `make test-gui GUI_RUNS=limits:auto:1` passed again (37 steps) after the last change. TCG runs and rounds past 2 were skipped.
+
+### Measurements (HVF, one run, `tests/gui/limits.script`)
+
+- The panel's once-a-second reading, average of the first 5 ticks: `Usage` from the keeper and the text 866 us (tour-gui with no
+  room: 53 us), the send of `SetUsage` 1,227 us. At one tick a second that is about 0.2% of one CPU.
+- A room at its memory limit: `top` showed `65473K of 64M`-class rows, the pill `mem 99%` was in the title bar within the 2.5 s
+  pause, and the card listed `(refused 1 mem)` and `raise: room set project --mem 128M` (shots `build/shots/limits-pill-*`, `limits-card-*`).
+
+### Screens
+
+Shots of the run: `limits-calm` (`top`, `grants` in room `project --mem 64M --procs 16`), `limits-pill` (title bar `zosh -- ~/project  [mem 99%] [+w ~/project] ...`),
+`limits-card` (the card: `project`, the grants, `mem 65473K of 64M`, `procs 3 of 16`, `limits --mem 64M --procs 16`, `(refused 1 mem)`,
+`raise: room set project --mem 128M`). Terminal transcript:
+
+```
+project ~/project> top
+ROOM     MEM           CPU  PROCS    DISK  CONNS
+project  5450K of 64M  -    2 of 16  -     -
+session  5450K         -    2        -     -
+project ~/project> grants echo
+limits --mem 64M --procs 16  (room project)
+```
+
+### Not done
+
+- The rooms overview (System+R) and the `+` chip's form with the limit fields; `Raise` as a button; a pill on the badge and the dock chip.
+- `top --session` and the job tree of `top ROOM` (no kernel call lists a job's children; the keeper has no session numbers).
+- Disk and connection use in `top` and the card (no launcher forwards the services' counts: `Report` has no sender yet).
+- The compositor's refusal count reaching the keeper (`Compositor::accounts` has it); the notice on a refused window request.
+- The settings window's Rooms section and `SetRoomLimit` in QEMU (no GUI script clicks it); the handler's logic is host-tested since the review.
+- A card that waits for the pointer to rest (it appears at once while the pointer is on a title bar of such a room).
+- Mutation testing of the new pure code: run after the review, `tools/mutants/limits-q6b.toml` and `limits-q6b-panel.toml` (see below).
+- The gate is untouched: `room new --untrusted` is still refused (`make check-untrusted-gate` passes); no code from outside the
+  system image runs as untrusted.
+
+### Handoff
+
+- State: branch `work/q6b` from `main` at 1e9b1aa, pushed, no candidate tag (the review comes first: the compositor and the panel
+  are a trust boundary).
+- For the reviewer: `crates/zoraya-compositor/src/usage.rs` (`within_account`, `set_usage`, `card_*`), its hooks in `lib.rs`
+  (`create`, `create_popup`, `set_buffer`, the ordinal 44 arm, `remove_window`), `draw_rooms.rs` (`win_views`, `card`),
+  `user/src/bin/panel.rs` (`tell_usage`, `set_room_limit`, `write_rooms`, `launcher_requests`), `crates/zoraya-settings/src/usage.rs`,
+  `rooms.rs` (`with_limit`), `crates/zoraya-rooms/src/lib.rs` (`reading_of`, `Tracker`), `crates/zoraya-settings-window/src/lib.rs`,
+  `user/src/bin/settings.rs`, `user/src/bin/zosh.rs` (`top_builtin`, `readings`), `tests/gui/limits.script`, ADR-0294.
+- Review questions: (1) is `SetRoomLimit` from a trusted room's settings window acceptable (it can raise another room's limit, as
+  `room set` can from a trusted shell)? (2) the compositor groups accounts by the record's room name: can a trusted client
+  influence its record (it cannot: `AddRoomClient` is manager-only)? (3) the panel blocks up to 5 s on a keeper that does not
+  answer, once a second: acceptable? (4) the card covers the top right of a terminal while the pointer is on its title bar (changed by the review: it is now outside the window).
+
+### Review of Q6b (Opus, head ae426dd) and its dispositions
+
+Fixed (each with a test written first; `cargo test -p zoraya-compositor` 182, `-p zoraya-panel` 19, `-p zoraya-settings`):
+
+1. **Warning, the card could be forged.** The card sat in the window body. It now lies above the window, else below it, else (a window
+   as large as the work area) starts on the title bar, which no client draws (`usage.rs`, `card_geometry`). Tests:
+   `a_client_buffer_cannot_cover_or_imitate_the_card` (the card rectangle is disjoint from the body, and its pixels do not depend on
+   the buffer's colour) and `a_card_with_no_room_beside_its_window_covers_the_frame_first`. ADR-0294 point 4, `docs/design.md` and the
+   comments of `tests/gui/limits.script` follow; the script's assertions did not name the card's place.
+2. **Warning, the tail of the account test asserted nothing.** Now: Close, then the next request is served. New tests: a popup counts
+   as a surface (`OVER_QUOTA` from `CreatePopup`), `SetBuffer` refusals on pixels, a fifth account refused with surfaces to spare, a
+   client's death gives its surfaces back. The `all_surfaces <= 12` and `all_pixels <= 8 areas` terms can never bind (4 accounts x 3
+   surfaces, x 2 areas): said in `usage.rs` and ADR-0294 point 7; their mutants are equivalent. Hand mutants for the three
+   `within_account` calls and the account terms: `tools/mutants/limits-q6b.toml`.
+3. **Warning, the untrusted-origin refusal had no test.** The handler moved to `zoraya_panel::set_room_limit` (file and keeper as
+   closures); tests for the refusal (nothing read, written or asked), the write and ask, the rollback and a missing keeper;
+   mutants in `tools/mutants/limits-q6b-panel.toml`. INV-0294-3 is `checked: make test-unit`.
+4. **Note, the pending `SetBuffer` buffer.** `Window::pixels` counts it; a newer one replaces it in the count (test
+   `a_new_buffer_counts_in_the_account_until_it_replaces_the_old`).
+5. **Note, the card after a restack.** `rehover` runs after a raise, a new window, a removed window and a dropped client (test
+   `the_card_follows_a_restack_under_a_still_pointer`).
+6. **Note, a wide room name.** Line 0 is measured in the title face it is drawn in.
+7. **Note, `refusals` never reset.** Pruned when the room's last client goes (`prune_refusals`; test
+   `the_refusals_of_a_room_go_with_its_last_client`). It never has more entries than there are clients.
+8. **Note, the size caps.** `MAX_USAGE_TEXT` = 33 x 258 and `MAX_ROOMS_REPLY` = 33 x 467, the worst case derived in
+   `zoraya_settings::usage` (`MAX_READING_LINE`, `MAX_ROW_LINE`; test with 33 readings and rows at their longest); a compile-time
+   check in `zoraya-panel` ties the protocol constants to it. The panel's send buffer and the settings window's reply buffer were
+   raised to fit. `to_wire` therefore cannot cut a room off.
+9. **Note, Apply's calls.** Partly fixed: the settings window stops sending after the first answer that says the panel or the keeper
+   does not answer (`user/src/bin/settings.rs`, not host-tested). Recorded as a limitation in ADR-0294: no transaction check, one
+   call per word.
+
+Recorded, not fixed (ADR-0294, Consequences, "Limitations"): the unlocked read-modify-write of `/config/rooms` (10); `cpu_share` is of
+one CPU while `cpu_permille` is of the machine, right only while user threads run on one CPU (11). ADR-0294 point 8 now says outright
+that the launch room of the settings window matters only when untrusted, because ADR-0269 gives the settings app `Manage`.
+
+Mutation run (`make mutants`, the two lists, 22 mutants): all caught after the review's tests; three tests were added for survivors
+of the first run (SetBuffer refusal, the pending buffer, the fifth account, the rehover after a close). The two totals' mutants are
+not listed (equivalent).
+**Second review of Q6b (Opus, head after the first fixes).** Fixed, each with a test written first:
+
+1. **Warning, the card's damage.** `Compositor::card_sync` (run before each frame is composed) damages the rectangle the card was
+   last drawn at and the one it has now; so a drag, a tiling, a resize and a shrinking reading leave no stale pixels. Tests compare
+   the screen with a forced full redraw (`the_card_of_a_dragged_window_is_damaged_where_it_was_and_where_it_is`, the tiled and
+   shrinking variants). The first test run found the halo one pixel short of the material's blurred edge; `card_rect` adds it.
+   The tiling test passes also without `card_sync` (the card then goes through `rehover`, now called by `tile`).
+2. **Warning, a hidden window.** `set_hidden` calls `rehover`; `card_geometry` is None for a hidden window (`a_hidden_window_has_no_card`).
+3. **Note, the left limit.** The card's x is clamped to the screen (`the_card_stays_on_the_screen_at_the_left_limit`).
+4. **Note, the no-free-side case** is recorded in ADR-0294 point 4.
+5. **Note, the compile-time check** moved to `user/src/bin/panel.rs` beside the `MAX_ROOMS_TEXT` assert.
+6. **Note, the keeper test** now has a concurrent edit (`a_refusal_of_the_keeper_keeps_an_edit_made_while_it_was_asked`); the old
+   test is renamed `a_refusal_of_the_keeper_puts_the_old_line_back`.
+
 ### Units bound: the reaper's help, the heap's growth and the run search in steps (branch `work/units-fix`, from `work/tbound-fix`)
 
 `t_bound`'s units assertion (`units > 80` between step points) failed twice locally on `auto-el2` inside a loaded

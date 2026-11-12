@@ -486,3 +486,141 @@ fn files_gets_no_config_through_its_home() {
     confine_files(&mut t, "/");
     assert!(t.holds.contains(&(String::from("/config"), true)));
 }
+
+/// What `set_room_limit` touched, with a file and a keeper that record it.
+struct LimitWorld {
+    file: Vec<u8>,
+    writes: usize,
+    asked: Vec<String>,
+    refuse: Option<KeeperFail>,
+}
+
+impl LimitWorld {
+    fn new() -> LimitWorld {
+        LimitWorld {
+            file: ROOMS.to_vec(),
+            writes: 0,
+            asked: Vec::new(),
+            refuse: None,
+        }
+    }
+
+    fn set(
+        &mut self,
+        untrusted_origin: bool,
+        room: &str,
+        word: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        // The three closures share the world through a cell.
+        let w = core::cell::RefCell::new(self);
+        set_room_limit(
+            untrusted_origin,
+            room,
+            word,
+            value,
+            || w.borrow().file.clone(),
+            |b| {
+                let mut w = w.borrow_mut();
+                w.writes += 1;
+                w.file = b.to_vec();
+                Ok(())
+            },
+            Some(|name: &str| {
+                let mut w = w.borrow_mut();
+                w.asked.push(name.into());
+                w.refuse.take().map_or(Ok(()), Err)
+            }),
+        )
+    }
+}
+
+/// INV-0294-3: a settings window launched in an untrusted room cannot set a
+/// limit: nothing is read back, written or asked of the keeper.
+#[test]
+fn an_untrusted_origin_sets_no_limit() {
+    let mut w = LimitWorld::new();
+    let err = w.set(true, "project", "--mem", "64M").unwrap_err();
+    assert!(err.contains("from home"), "{err}");
+    assert_eq!((w.writes, w.asked.len()), (0, 0));
+    assert_eq!(w.file, ROOMS);
+}
+
+#[test]
+fn a_trusted_origin_rewrites_the_line_and_asks_the_keeper() {
+    let mut w = LimitWorld::new();
+    assert_eq!(w.set(false, "project", "--mem", "64M"), Ok(()));
+    assert_eq!(
+        (w.writes, w.asked.clone()),
+        (1, vec![String::from("project")])
+    );
+    assert!(
+        String::from_utf8(w.file.clone())
+            .unwrap()
+            .contains("--mem 64M")
+    );
+}
+
+#[test]
+fn a_refusal_of_the_keeper_puts_the_old_line_back() {
+    let mut w = LimitWorld::new();
+    w.refuse = Some(KeeperFail::Denied(String::from("over the ceiling")));
+    let err = w.set(false, "project", "--mem", "64M").unwrap_err();
+    assert_eq!(err, "project: over the ceiling");
+    assert_eq!(w.file, ROOMS, "the old line is back");
+    assert_eq!(w.writes, 2);
+    w.refuse = Some(KeeperFail::Gone);
+    let err = w.set(false, "project", "--mem", "64M").unwrap_err();
+    assert_eq!(err, "the room keeper does not answer");
+    // A bad word is refused before anything is written.
+    let before = w.writes;
+    assert!(w.set(false, "project", "--nonsense", "1").is_err());
+    assert_eq!(w.writes, before);
+}
+
+#[test]
+fn a_refusal_of_the_keeper_keeps_an_edit_made_while_it_was_asked() {
+    // Another writer adds a line while the keeper is asked about
+    // project's: the old line of project goes back and the other edit stays.
+    let file = core::cell::RefCell::new(ROOMS.to_vec());
+    let r = set_room_limit(
+        false,
+        "project",
+        "--mem",
+        "64M",
+        || file.borrow().clone(),
+        |b| {
+            *file.borrow_mut() = b.to_vec();
+            Ok(())
+        },
+        Some(|_: &str| {
+            file.borrow_mut().extend_from_slice(b"other --colour 2\n");
+            Err(KeeperFail::Denied(String::from("over the ceiling")))
+        }),
+    );
+    assert_eq!(r, Err(String::from("project: over the ceiling")));
+    let now = file.borrow().clone();
+    let text = core::str::from_utf8(&now).unwrap();
+    assert!(text.starts_with("project --colour 1 +w ~/project +r ~/include\n"));
+    assert!(text.ends_with("other --colour 2\n"), "{text}");
+    assert!(!text.contains("--mem"), "{text}");
+}
+
+#[test]
+fn without_a_keeper_the_line_is_written_and_kept() {
+    let file = core::cell::RefCell::new(ROOMS.to_vec());
+    let r = set_room_limit(
+        false,
+        "project",
+        "--procs",
+        "8",
+        || file.borrow().clone(),
+        |b| {
+            *file.borrow_mut() = b.to_vec();
+            Ok(())
+        },
+        None::<fn(&str) -> Result<(), KeeperFail>>,
+    );
+    assert_eq!(r, Ok(()));
+    assert_ne!(*file.borrow(), ROOMS);
+}

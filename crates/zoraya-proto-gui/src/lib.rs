@@ -24,7 +24,7 @@
 use zoraya_protocol::{Below, Data, Flags, protocol};
 
 /// One of `status`.
-pub type Status = Below<8>;
+pub type Status = Below<9>;
 
 pub mod status {
     pub const OK: u32 = 0;
@@ -43,6 +43,10 @@ pub mod status {
     pub const UNSUPPORTED: u32 = 6;
     /// A manager's record, room table or dock list that does not parse.
     pub const INVALID: u32 = 7;
+    /// The client's account is at its bound (ADR-0262 point 2, ADR-0263):
+    /// an untrusted room's surfaces or pixels. Nothing of any other account
+    /// changes.
+    pub const OVER_QUOTA: u32 = 8;
 }
 
 /// Modifier bits of a key event.
@@ -471,6 +475,16 @@ protocol! {
         apps: Data<'a, MAX_DOCK_TEXT>,
     }
 
+    /// Client manager (the panel, ADR-0267 point 3): the usage of the rooms
+    /// that run, one reading a line in `zoraya_settings::usage`'s text, once
+    /// a second at most. The compositor checks every line again and takes
+    /// all or none (`INVALID`); it draws the pills at 90% and the hover card
+    /// from them, and from nothing a client sends (INV-0172-1). The reply is
+    /// `ManagerDone`.
+    message SetUsage<'a> = 44, handles 0 {
+        readings: Data<'a, MAX_USAGE_TEXT>,
+    }
+
     /// Compositor to the client manager, unasked: the person pressed the
     /// dock (ADR-0168). `kind` is one of [`dock`]; `index` the application
     /// in `SetDock`'s order or the room (0 `home`, then the table's order).
@@ -493,7 +507,7 @@ pub const MANAGER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 38, 42];
 /// The ordinals only a manager may send besides `MANAGER_REQUESTS`:
 /// `AddRoomClient` from either, the rooms and the dock from the client
 /// manager only (ADR-0168).
-pub const CLIENT_MANAGER_REQUESTS: [u32; 4] = [37, 39, 40, 43];
+pub const CLIENT_MANAGER_REQUESTS: [u32; 5] = [37, 39, 40, 43, 44];
 /// What the compositor sends the manager unasked.
 pub const MANAGER_EVENTS: [u32; 2] = [36, 41];
 
@@ -516,6 +530,10 @@ pub const MAX_CLIPBOARD: usize = 32 * 1024;
 pub const MAX_DROPPED_NAME: usize = 64;
 pub const MAX_ROOMS_TEXT: usize = 3072;
 pub const MAX_DOCK_TEXT: usize = 1024;
+/// The longest `SetUsage` text: 33 readings of at most 258 bytes with their
+/// newline (`zoraya_settings::usage::MAX_USAGE_WIRE`; the panel's tests check
+/// this is at least that).
+pub const MAX_USAGE_TEXT: usize = 33 * 258;
 
 #[cfg(test)]
 extern crate std;

@@ -63,11 +63,21 @@ impl<P: Platform> Compositor<P> {
                         r.room.clone()
                     }
                 });
+                // The grants, then the pills of a room at 90% of a limit
+                // (ADR-0263 point 7): they come from the panel's readings.
+                // They come first: a window too narrow for all folds the
+                // grants into `+N`, never the room's warning.
+                let mut pills = if r.room.is_empty() {
+                    Vec::new()
+                } else {
+                    self.usage_pills(&r.room)
+                };
+                pills.extend(r.entries.iter().cloned());
                 WinView {
                     colour: self.room_colour(r),
                     untrusted: r.untrusted,
                     badge,
-                    pills: r.entries.clone(),
+                    pills,
                     app: r.app.clone(),
                 }
             })
@@ -303,6 +313,32 @@ pub fn tag(
         let t: &mut zoraya_text::Text<'static> = if *is_mono { mono } else { name_t };
         let lw = t.measure(l, cap);
         draw_text(c, t, l, cap, centre - lw / 2, baseline, p.fg_text);
+        baseline += 15 * si;
+    }
+}
+
+/// A window's hover card (ADR-0267 point 3): the room, its grants and its
+/// use, one line each in the monospaced face, on the trusted material at
+/// `r`. The first line is the room's name.
+pub fn card(
+    c: &mut Canvas<'_>,
+    lines: &[String],
+    r: paint::Rect,
+    k: u32,
+    p: &Palette,
+    texts: (
+        &mut zoraya_text::Text<'static>,
+        &mut zoraya_text::Text<'static>,
+    ),
+) {
+    let (name_t, mono) = texts;
+    let si = k as i32;
+    let cap = text::CAPTION.physical(Scale::ONE) * k;
+    material(p, k, space::RADIUS_CONTROL.physical(Scale::ONE) * k).draw(c, r);
+    let mut baseline = r.y + 4 * si + cap as i32;
+    for (i, l) in lines.iter().enumerate() {
+        let t: &mut zoraya_text::Text<'static> = if i == 0 { name_t } else { mono };
+        draw_text(c, t, l, cap, r.x + 10 * si, baseline, p.fg_text);
         baseline += 15 * si;
     }
 }

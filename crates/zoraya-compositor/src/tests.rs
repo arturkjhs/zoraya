@@ -1642,3 +1642,5 @@ mod rooms;
 mod settings;
 #[path = "tests_sheets.rs"]
 mod sheets;
+#[path = "tests_usage.rs"]
+mod usage;

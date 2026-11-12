@@ -1578,12 +1578,56 @@ above the untrusted job is refused; four untrusted rooms, each with a fork bomb 
 Known limits of Q6a: `room new --untrusted` and the panel's untrusted launch are still refused (the gate); an untrusted
 room's `/tmp` (`--tmp`, a `tmpd` per shell in the room's job) is not built, and the console shell's broker and `tmpd`
 are `init`'s, outside an untrusted room's job (INV-0268-3 is open; the panel's broker is in the room's launch job); the
-rooms overview's `New room` form and the compositor's hover card do not show the limit words (Q6b); a POSIX session
+rooms overview's `New room` form does not exist (Q6b built the hover card, below); a POSIX session
 (`/etc/zoraya/session`) starts no keeper channel for its shell; the keeper restart in `init` itself, and the reconnect
 channel, are not run in QEMU (`t_rooms` stands in for `init`); a launcher that never sends `Leave` and keeps its channel
 holds an idle untrusted room. A resumed room is leased by its old holder's kind until a launch of that kind claims it, it
 leaves, a `Manage` channel of that kind closes or the room is stopped (no time limit); `home` is refused `Stop` and `Set`; a shell or the panel will not enter a room whose line has limit words
 without a launch job from the keeper.
+
+## What the person sees of limits (stage 8, Q6b)
+
+One `Reading` (`zoraya-settings`' `usage` module) is the keeper's usage record in plain numbers, and every text of a room's
+limits and use is made from it (proposed ADR-0294, ADR-0267): `top`'s table, `room`'s words with the use after each limit
+(`--mem 64M (58M)`), `grants`' `limits ...` line, the pills and the hover card; `zoraya-rooms` has the conversion from a
+record (`reading_of`) and `Tracker`, which gives each room's CPU share since the last reading. Usage is read at most once a
+second by every reader (`Throttle`, INV-0267-2); nothing is read on a calm desktop beyond that.
+
+- **`top`** is a builtin of `zosh` (ADR-0294 point 1; ADR-0267 says a program with a keeper slot): `top` prints `ROOM MEM
+  CPU PROCS DISK CONNS`, a row per room that runs and a `session` row that sums them, `USED of LIMIT` where a room has
+  a limit and `(refused 3 mem)` at the end of a row; `top ROOM` adds the room's limits and the line that raises the limit
+  that refused; `top --watch` prints again every second until Ctrl-C. A room's own shell sees that room alone; without a
+  keeper it prints `top: no room keeper` and exits 1. DISK and CONNS show the limit only (no launcher forwards the
+  services' use yet); `top --session` and the job tree of `top ROOM` are not built (the keeper has no session ceiling to
+  give, and no kernel call lists a job's children).
+- **The panel** reads `Usage` from the keeper on its once-a-second tick and sends the compositor `SetUsage` (request 44 of
+  the client manager's channel) when the text changed. The compositor checks every line again, takes all or none, and
+  draws from it and from nothing a client sends (INV-0172-1): a **pill** `mem 99%` (`procs`, `cpu`) at 90% of a limit in the
+  title bar of each window of that room, before the grants so that a narrow bar folds the grants first; and, while the
+  pointer is on a framed window's title bar, a **hover card** outside the window (above it, else below it; starting on the title bar if neither side is free), where no pixel of the client's buffer reaches: the room, its grants as the record has them, then
+  `mem 65473K of 64M`, `procs 3 of 16`, the `limits ...` line, `(refused 1 mem)` and `raise: room set project --mem 128M`
+  (the notice's text; there is no `Raise` button until the rooms overview exists). A room with no limit has no card and no
+  pill, so no text of its window is covered. The card is the compositor's, above the windows and the dock and under the bar,
+  and takes no input; it is worked out again after every restack, close and new window.
+- **The compositor's accounts** (ADR-0262 point 2, INV-0262-1 and -3 for the compositor): an untrusted room's windows are
+  an account of 3 surfaces and 2 display areas of buffer pixels, all untrusted rooms together 12 surfaces and 8 display areas
+  in at most 4 accounts, which leaves 20 of the 32 windows to `home` and the trusted rooms. `CreateToplevel`, `CreatePopup`
+  and `SetBuffer` past a bound answer `OVER_QUOTA` (status 8), count the refusal for the room (`Compositor::accounts`) and
+  change nothing else. The count does not reach the keeper yet.
+- **The settings window's `Rooms` section** lists each room of the table (the panel answers `RoomsQuery`: the window cannot
+  read `/config/rooms`) with a field per limit word (`--tmp` for untrusted rooms), the use beside it, the `room set` line of
+  what is being edited, and Apply. Apply sends `SetRoomLimit` per changed word to the panel, which does what `room set` does
+  (`rooms::with_limit`, the file, `Set` to the keeper, the old line back if refused); a settings window launched in an
+  untrusted room is refused. The window holds no `Manage` channel and no new right (ADR-0294 point 8).
+
+Try it: `room new project --mem 64M --procs 16 +w ~/project`, enter it from the dock's chip, System+Enter, `top`, `memhog --hold 6 &`
+and look at the title bar and move the pointer onto it (`tests/gui/limits.script` does this: 37 steps, `make test-gui GUI_RUNS=limits:auto:1`,
+shots `limits-calm`, `limits-pill` and `limits-card` in `build/shots/`); `top` on the console is in `tests/shell/rooms.script`.
+
+Known limits of Q6b: the rooms overview (System+R, the `+` chip's form) is not built, so its usage lines and `Raise` are not
+either; the badge and the dock chip carry no pill; disk and connection use are not reported; the compositor's refusals are not
+forwarded to the keeper; the settings window's Rooms section is not run in QEMU (its logic is host-tested; the panel's handler
+is not).
 
 ## Network driver (stage 8, N1: the driver answers ARP)
 

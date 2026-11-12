@@ -27,6 +27,7 @@ pub mod fields;
 pub mod rect;
 pub mod rooms;
 pub mod settings;
+pub mod usage;
 pub mod window;
 
 use alloc::string::String;
@@ -347,6 +348,14 @@ pub struct Compositor<P: Platform> {
     dock_sig: String,
     /// The application icon under the pointer: its tooltip is shown.
     hover: Option<usize>,
+    /// The rooms' limits and use, from the panel once a second (Q6b).
+    usage: Vec<zoraya_settings::usage::Reading>,
+    /// Requests refused at an untrusted room's account, by room.
+    refusals: Vec<(String, u32)>,
+    /// The window whose hover card is shown: the pointer is on its title bar.
+    card: Option<Key>,
+    /// The rectangle the card was last damaged at (`card_sync`).
+    card_drawn: Option<Rect>,
     /// Show-commands mode (System+?, ADR-0172 point 8).
     commands: bool,
     /// The wallpaper with the rooms' fields on it.
@@ -470,6 +479,10 @@ impl<P: Platform> Compositor<P> {
             dock: DockGeometry::default(),
             dock_sig: String::new(),
             hover: None,
+            usage: Vec::new(),
+            refusals: Vec::new(),
+            card: None,
+            card_drawn: None,
             commands: false,
             fielded: Vec::new(),
             fields_dirty: true,
@@ -1275,6 +1288,7 @@ impl<P: Platform> Compositor<P> {
         self.drag_to(x, y);
         if self.drag.is_none() {
             self.dock_hover(x, y);
+            self.card_hover(x, y);
         }
     }
 
@@ -1793,6 +1807,7 @@ impl<P: Platform> Compositor<P> {
             self.dirty(&w.reach(&f));
         }
         self.windows.extend(moved);
+        self.rehover();
     }
 
     /// Hides or shows a window; a hidden one loses focus to the next.
@@ -1813,6 +1828,7 @@ impl<P: Platform> Compositor<P> {
         }
         let f = self.frame();
         self.dirty(&self.windows[i].reach(&f));
+        self.rehover();
         if self.windows[i].kind == WindowKind::Toplevel {
             self.send_event_plain(
                 key.client,
@@ -1907,6 +1923,7 @@ impl<P: Platform> Compositor<P> {
         self.dirty(&after);
         self.configure(key);
         self.place_sheets(key);
+        self.rehover();
     }
 
     /// After the display changed size or scale (ADR-0246): popups close, and
@@ -2373,6 +2390,10 @@ impl<P: Platform> Compositor<P> {
                 Ok((_, m)) => (self.set_dock(m.apps.0), false),
                 Err(_) => (status::INVALID, false),
             },
+            44 if clients && none => match decode::<gui::SetUsage<'_>>(bytes, 0) {
+                Ok((_, m)) => (self.set_usage(m.readings.0), false),
+                Err(_) => (status::INVALID, false),
+            },
             43 if clients && none => match decode::<gui::ApplySettings<'_>>(bytes, 0) {
                 Ok((_, m)) => {
                     fn t(d: &[u8]) -> &str {
@@ -2757,6 +2778,12 @@ impl<P: Platform> Compositor<P> {
     fn remove_window(&mut self, key: Key) {
         self.fields_dirty = true;
         let Some(i) = self.index(key) else { return };
+        if self.card == Some(key) {
+            if let Some(r) = self.card_rect(key) {
+                self.dirty(&r);
+            }
+            self.card = None;
+        }
         let w = self.windows.remove(i);
         let f = self.frame();
         self.dirty(&w.reach(&f));
@@ -2828,6 +2855,7 @@ impl<P: Platform> Compositor<P> {
             });
             self.set_focus(top);
         }
+        self.rehover();
     }
 
     /// The pixels a client's buffers hold, all windows together.
@@ -2867,6 +2895,8 @@ impl<P: Platform> Compositor<P> {
         if let Some(c) = self.clients[slot].take() {
             self.platform.close(c.end);
         }
+        self.prune_refusals();
+        self.rehover();
     }
 
     fn client_message(&mut self, slot: usize) {
@@ -3210,6 +3240,10 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return Err(status::NO_MEMORY);
         }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::OVER_QUOTA);
+        }
         let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
         // A toplevel is never larger than the work area: its body is made
         // to fit, and the `Configure` after `Created` tells the client the
@@ -3252,6 +3286,7 @@ impl<P: Platform> Compositor<P> {
         if self.focus.is_none() {
             self.set_focus(Some(key));
         }
+        self.rehover();
         Ok(id)
     }
 
@@ -3304,6 +3339,10 @@ impl<P: Platform> Compositor<P> {
         if !fits || !self.within_budget(slot, u64::from(bw) * u64::from(bh)) {
             self.platform.close(memory);
             return Err(status::BAD_BUFFER);
+        }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::OVER_QUOTA);
         }
         let body = self.windows[pi].body_rect();
         let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
@@ -3377,6 +3416,17 @@ impl<P: Platform> Compositor<P> {
         if !self.within_budget(slot, more) {
             self.platform.close(memory);
             return status::NO_MEMORY;
+        }
+        // The account holds both buffers: the new one replaces the pending
+        // one, if there is one, and otherwise adds to the shown one.
+        let pending = self.windows[i]
+            .next
+            .as_ref()
+            .map_or(0, |n| u64::from(n.width) * u64::from(n.height));
+        let account_more = (u64::from(bw) * u64::from(bh)).saturating_sub(pending);
+        if !self.within_account(slot, 0, account_more) {
+            self.platform.close(memory);
+            return status::OVER_QUOTA;
         }
         // The copy is made at the first commit.
         match self.map_buffer(bw, bh, memory, false) {
@@ -3557,6 +3607,7 @@ impl<P: Platform> Compositor<P> {
             self.dock_changed();
             self.update_fields();
         }
+        self.card_sync();
         let scene = core::mem::take(&mut self.scene);
         let reuse = self.switcher.is_some() && !scene && !self.switcher_frame.is_empty();
         if self.switcher.is_some() && scene {

@@ -595,6 +595,57 @@ pub fn dock_text() -> String {
     s
 }
 
+/// Why the room keeper did not apply a line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeeperFail {
+    /// The keeper answered no, with the sentence for `NAME: ...`.
+    Denied(String),
+    /// No keeper answers.
+    Gone,
+}
+
+/// `room set ROOM WORD VALUE` for the settings window: the line is
+/// rewritten, the room keeper applies it (and checks the ceilings), and the
+/// old line goes back if it refuses, as `room set` does in the shell. Never
+/// for a settings window launched in an untrusted room, which holds no
+/// `Set` (ADR-0266 point 6, ADR-0269, INV-0294-3): nothing is then read,
+/// written or asked.
+///
+/// `read` gives the table's bytes, `write` replaces them, `keeper` asks the
+/// room keeper to apply the room's line (none: the line stays as written).
+/// The read-modify-write has no lock; the panel is the one writer while it
+/// handles a request (ADR-0294).
+pub fn set_room_limit(
+    untrusted_origin: bool,
+    room: &str,
+    word: &str,
+    value: &str,
+    mut read: impl FnMut() -> Vec<u8>,
+    mut write: impl FnMut(&[u8]) -> Result<(), String>,
+    keeper: Option<impl FnMut(&str) -> Result<(), KeeperFail>>,
+) -> Result<(), String> {
+    if untrusted_origin {
+        return Err(format!("{room}: from home: room set {room} {word} {value}"));
+    }
+    let (new, old) = zoraya_settings::rooms::with_limit(&read(), room, word, value)
+        .map_err(|e| format!("{room}: {e}"))?;
+    write(&new)?;
+    if let Some(mut keeper) = keeper
+        && let Err(e) = keeper(room)
+    {
+        // Only that line goes back; the file is read again so that another
+        // edit made since is kept.
+        if let Ok(back) = zoraya_settings::rooms::replace(&read(), &old) {
+            let _ = write(&back);
+        }
+        return Err(match e {
+            KeeperFail::Denied(t) => format!("{room}: {t}"),
+            KeeperFail::Gone => String::from("the room keeper does not answer"),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;
 

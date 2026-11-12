@@ -98,6 +98,7 @@ impl<P: Platform> Compositor<P> {
         let dock = self.dock_view();
         let commands = self.commands;
         let carried = self.carried.as_ref().map(|c| c.name.clone());
+        let card = self.card.and_then(|k| self.card_geometry(k));
         let Compositor {
             platform,
             windows,
@@ -181,6 +182,18 @@ impl<P: Platform> Compositor<P> {
             p,
             (title_text, ui, mono),
         );
+        // A window's hover card, above the windows and the dock, under the
+        // bar (ADR-0267 point 3).
+        if let Some((r, lines)) = &card {
+            crate::draw_rooms::card(
+                &mut c,
+                lines,
+                prect(*r),
+                scale.factor(),
+                p,
+                (title_text, mono),
+            );
+        }
         // The bar, above every window (INV-0160-7): the blurred wallpaper
         // under it, tinted, with its light.
         let bar = space::BAR_HEIGHT.physical(scale) as i32;

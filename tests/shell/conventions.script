@@ -302,6 +302,28 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> top --help\r
+< \r\ntop: each room's use against its limits
+^ \r\nusage: top
+^ \r\n       top ROOM
+^ \r\n       top --watch
+^ \r\n  -w, --watch   print again every second until Ctrl-C
+^ \r\n  --help        show this help
+^ \r\nmore: help top
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> top --no-such-option\r
+< \r\ntop: --no-such-option: no such option
+^ \r\nusage: top
+^ \r\n       top ROOM
+^ \r\n       top --watch
+^ \r\nmore: help top
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > uptime --help\r
 < \r\nuptime: time since boot
 ^ \r\nusage: uptime

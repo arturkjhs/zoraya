@@ -26,6 +26,10 @@ pub const MAX_FILTERS: usize = 128;
 pub const MAX_NAME: usize = 255;
 /// The longest grant words (`+r ~/project/plán.txt edit`).
 pub const MAX_WORDS: usize = 512;
+/// The longest `RoomsReply`: 33 rows of at most 467 bytes with their newline
+/// (`zoraya_settings::usage::MAX_ROWS_WIRE`; the panel's tests check this is
+/// at least that).
+pub const MAX_ROOMS_REPLY: usize = 33 * 467;
 
 /// What an entry gives, in ADR-0153's kinds (the subset the chooser makes).
 pub mod kind {
@@ -158,6 +162,34 @@ protocol! {
     message TerminalOpened = 34, handles 0 {
         status: Below<4>,
     }
+
+    /// The settings window to the panel (Q6b, ADR-0267 point 4, proposed
+    /// ADR-0294): the rooms of the table with their limits and use, for the
+    /// Rooms section. Only the settings window's channel may send it.
+    message RoomsQuery = 36, handles 0 {}
+
+    /// The rooms, one a line in `zoraya_settings::usage::RoomRow`'s text.
+    message RoomsReply<'a> = 36, handles 0 {
+        text: Data<'a, MAX_ROOMS_REPLY>,
+    }
+
+    /// The settings window to the panel: change one limit word of a room,
+    /// as `room set ROOM WORD VALUE` would. The panel, which is the one
+    /// writer of `/config/rooms` here, checks the word and the value,
+    /// writes the line, asks the room keeper to apply it (which checks the
+    /// ceilings) and puts the old line back if refused. A settings window
+    /// of an untrusted room is refused (ADR-0266 point 6).
+    message SetRoomLimit<'a> = 37, handles 0 {
+        room: Data<'a, 24>,
+        word: Data<'a, 8>,
+        value: Data<'a, 24>,
+    }
+
+    /// `status` 0 done, 1 refused with `text` the sentence to show.
+    message RoomLimitSet<'a> = 37, handles 0 {
+        status: Below<2>,
+        text: Data<'a, 160>,
+    }
 }
 
 /// The application requests' ordinals.
@@ -167,7 +199,7 @@ pub const ANSWERS: [u32; 2] = [8, 9];
 /// The panel's requests.
 pub const PANEL_REQUESTS: [u32; 1] = [16];
 /// The file manager's request to the panel.
-pub const LAUNCHER_REQUESTS: [u32; 4] = [32, 33, 34, 35];
+pub const LAUNCHER_REQUESTS: [u32; 6] = [32, 33, 34, 35, 36, 37];
 
 #[cfg(test)]
 extern crate std;

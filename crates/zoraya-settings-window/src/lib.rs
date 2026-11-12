@@ -16,8 +16,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use zoraya_compositor::settings::{self, GuiSettings, words};
+use zoraya_settings::rooms::{LIMIT_WORDS, Limits, format_size};
+use zoraya_settings::usage::RoomRow;
 use zoraya_ui::layout::{Column, Row};
-use zoraya_ui::widgets::{CheckBox, Label, RadioGroup, Switch};
+use zoraya_ui::widgets::{Button, CheckBox, Label, RadioGroup, ScrollView, Switch, TextField};
 use zoraya_ui::{Value, Widget};
 
 pub const THEME: u32 = 1;
@@ -27,6 +29,13 @@ pub const SCALE: u32 = 3;
 pub const ACTIVE: u32 = 4;
 /// One check box per layout: `LAYOUT + i` for `zoraya_keymap::LAYOUTS[i]`.
 pub const LAYOUT: u32 = 10;
+
+/// The Rooms section's button (ADR-0267 point 4).
+pub const APPLY_ROOMS: u32 = 500;
+/// The field of room `r`'s limit word `w` (`LIMIT_WORDS[w]`): `ROOM_FIELD + r * 8 + w`.
+pub const ROOM_FIELD: u32 = 1000;
+/// Rooms the section lists (the room table's most and `home` is not one).
+pub const MAX_ROOM_ROWS: usize = 32;
 
 /// A layout's name as the page shows it.
 fn layout_label(i: usize) -> &'static str {
@@ -55,6 +64,141 @@ fn row(label: &str, control: Box<dyn Widget>) -> Box<dyn Widget> {
 
 /// The page for `s`, with `status` under it (what the last change did).
 pub fn page(s: &GuiSettings, status: &str) -> Box<dyn Widget> {
+    page_with_rooms(s, &[], &[], status)
+}
+
+/// The text of room `row`'s word `w` as its field shows it: the line's
+/// value, empty for a word the line does not carry.
+pub fn field_text(l: &Limits, w: usize) -> String {
+    match w {
+        0 => l.mem.map(format_size),
+        1 => l.cpu.map(|v| alloc::format!("{v}%")),
+        2 => l.procs.map(|v| alloc::format!("{v}")),
+        3 => l.disk.map(format_size),
+        4 => l.conns.map(|v| alloc::format!("{v}")),
+        5 => l.tmp.map(format_size),
+        _ => None,
+    }
+    .unwrap_or_default()
+}
+
+/// Whether word `w` is a field of this room (`--tmp` is for untrusted
+/// rooms only, ADR-0266 point 1).
+pub fn has_field(row: &RoomRow, w: usize) -> bool {
+    w < LIMIT_WORDS.len() && (w != 5 || row.untrusted)
+}
+
+/// The id of the field of room `r`, word `w`, and its inverse.
+pub fn field_id(r: usize, w: usize) -> u32 {
+    ROOM_FIELD + (r * 8 + w) as u32
+}
+
+pub fn field_of(id: u32) -> Option<(usize, usize)> {
+    let n = id.checked_sub(ROOM_FIELD)? as usize;
+    let (r, w) = (n / 8, n % 8);
+    (r < MAX_ROOM_ROWS && w < LIMIT_WORDS.len()).then_some((r, w))
+}
+
+/// What the fields say, if the person has typed in them: `drafts` holds
+/// `(field id, text)`; a field with no draft shows the line's value.
+fn text_of(rows: &[RoomRow], drafts: &[(u32, String)], r: usize, w: usize) -> String {
+    let id = field_id(r, w);
+    drafts
+        .iter()
+        .find(|(d, _)| *d == id)
+        .map(|(_, t)| t.clone())
+        .unwrap_or_else(|| field_text(&rows[r].limits, w))
+}
+
+/// The changes the fields ask for: `(room, word, value)` for each field
+/// whose text differs from the line's; an empty text is `none`.
+pub fn room_changes(
+    rows: &[RoomRow],
+    drafts: &[(u32, String)],
+) -> Vec<(String, &'static str, String)> {
+    let mut out = Vec::new();
+    for (r, row) in rows.iter().enumerate().take(MAX_ROOM_ROWS) {
+        for (w, word) in LIMIT_WORDS.iter().enumerate() {
+            if !has_field(row, w) {
+                continue;
+            }
+            let now = field_text(&row.limits, w);
+            let want = text_of(rows, drafts, r, w);
+            let want = want.trim();
+            if want != now {
+                let value = if want.is_empty() { "none" } else { want };
+                out.push((row.name.clone(), *word, String::from(value)));
+            }
+        }
+    }
+    out
+}
+
+/// The `room set` line under a room's fields while its words are being
+/// edited (ADR-0267 point 4, ADR-0172's rule that everything has its text).
+pub fn preview(rows: &[RoomRow], drafts: &[(u32, String)], r: usize) -> Option<String> {
+    let row = rows.get(r)?;
+    let changes: Vec<String> = room_changes(rows, drafts)
+        .into_iter()
+        .filter(|(n, _, _)| *n == row.name)
+        .map(|(_, w, v)| alloc::format!("{w} {v}"))
+        .collect();
+    (!changes.is_empty()).then(|| alloc::format!("room set {} {}", row.name, changes.join(" ")))
+}
+
+/// The Rooms section: for each room its limit words as fields with the use
+/// beside them, the `room set` line of what is being edited, and Apply.
+fn rooms_section(rows: &[RoomRow], drafts: &[(u32, String)]) -> Vec<Box<dyn Widget>> {
+    let mut out: Vec<Box<dyn Widget>> = vec![heading("Rooms")];
+    for (r, row) in rows.iter().enumerate().take(MAX_ROOM_ROWS) {
+        let name = if row.untrusted {
+            alloc::format!("{}  untrusted", row.name)
+        } else {
+            row.name.clone()
+        };
+        out.push(Box::new(Label::new(&name)));
+        // The use from the same reading as `top` and the hover card
+        // (INV-0267-1); a room that does not run has none.
+        let use_line = match &row.reading {
+            Some(rd) if rd.running => rd
+                .card_lines()
+                .into_iter()
+                .filter(|l| !l.starts_with("limits") && !l.starts_with("raise"))
+                .collect::<Vec<_>>()
+                .join("  "),
+            _ => String::from("not running"),
+        };
+        out.push(note(&use_line));
+        for (w, word) in LIMIT_WORDS.iter().enumerate() {
+            if !has_field(row, w) {
+                continue;
+            }
+            let text = text_of(rows, drafts, r, w);
+            out.push(row_of(
+                word,
+                Box::new(TextField::new(field_id(r, w), &text)),
+            ));
+        }
+        if let Some(p) = preview(rows, drafts, r) {
+            out.push(note(&p));
+        }
+    }
+    out.push(Box::new(Button::new(APPLY_ROOMS, "Apply")));
+    out
+}
+
+fn row_of(label: &str, control: Box<dyn Widget>) -> Box<dyn Widget> {
+    row(label, control)
+}
+
+/// The page with the Rooms section under the keyboard's, when the panel
+/// knows the rooms; scrolled, since the rooms make it long.
+pub fn page_with_rooms(
+    s: &GuiSettings,
+    rows: &[RoomRow],
+    drafts: &[(u32, String)],
+    status: &str,
+) -> Box<dyn Widget> {
     let scale = match s.scale {
         1 => 1,
         2 => 2,
@@ -95,7 +239,11 @@ pub fn page(s: &GuiSettings, status: &str) -> Box<dyn Widget> {
         Box::new(RadioGroup::new(ACTIVE, &enabled, active)),
     ));
     column.push(note(status));
-    Box::new(Column::new(column))
+    if rows.is_empty() {
+        return Box::new(Column::new(column));
+    }
+    column.extend(rooms_section(rows, drafts));
+    Box::new(ScrollView::new(Box::new(Column::new(column))))
 }
 
 /// `s` after control `id` took `value`; `Err` with the reason when the
