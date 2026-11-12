@@ -15,7 +15,10 @@
 //! random, reserved u8 each: the connection to the random service
 //!                  (ADR-0227 item 3) or NO_HANDLE; zero
 //! realtime base    u64: nanoseconds added to the monotonic clock for the
-//!                  wall clock (ADR-0226 item 4); 0 keeps the monotonic one
+//!                  wall clock (ADR-0226 item 4); 0 keeps the monotonic one.
+//!                  Its lowest bit says whether the real-time clock gave the
+//!                  date ([`base_is_dated`]): without it the date is only
+//!                  the volume's latest time and TLS refuses to use it
 //! cwd              u32 length, bytes: the current directory, absolute
 //! entries          kind u8, handle u8, two zero bytes, u32 length, path;
 //!                  longest path first
@@ -48,6 +51,29 @@ pub mod slot {
     pub const IN: Handle = Handle(1001);
     pub const OUT: Handle = Handle(1002);
     pub const ERR: Handle = Handle(1003);
+}
+
+/// The lowest bit of a realtime base: the real-time clock gave the date
+/// (a floor was applied, ADR-0226 item 3). A base is in nanoseconds, so the
+/// bit costs a program at most one nanosecond, and a consumer that does not
+/// know of it is right to a nanosecond.
+pub const BASE_DATED: u64 = 1;
+
+/// `base` marked as dated or not.
+pub const fn tag_base(base: u64, dated: bool) -> u64 {
+    (base & !BASE_DATED) | if dated { BASE_DATED } else { 0 }
+}
+
+/// Whether the real-time clock gave the date `base` goes on from.
+pub const fn base_is_dated(base: u64) -> bool {
+    base & BASE_DATED != 0
+}
+
+/// The wall clock in whole seconds for something that checks validity
+/// periods (TLS): `None` unless `base` is dated, so a date that is only the
+/// volume's latest time is never trusted (ADR-0226 driver 1).
+pub fn checked_wall_seconds(base: u64, monotonic_ns: u64) -> Option<u64> {
+    base_is_dated(base).then(|| (base & !BASE_DATED).saturating_add(monotonic_ns) / 1_000_000_000)
 }
 
 /// What an entry is (ADR-0153 rule 2).

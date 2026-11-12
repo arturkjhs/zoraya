@@ -100,9 +100,11 @@ fn why(e: ConnectError) -> &'static str {
 /// The roots the shell put in this program's table (ADR-0228 item 3).
 const ROOTS: &str = "/system/tls/roots";
 
-/// The wall clock in seconds (ADR-0226 item 4), or none.
+/// The wall clock in seconds (ADR-0226 item 4), or none: also none when the
+/// real-time clock gave no date, so that the handshake fails with "no date"
+/// rather than check a certificate against the volume's latest time.
 fn wall_clock() -> Option<u64> {
-    namespace::realtime().map(|ns| ns / 1_000_000_000)
+    namespace::checked_realtime_seconds()
 }
 
 /// TLS over the two streams of the connection.
@@ -153,9 +155,8 @@ fn start_tls(host: &str, io: StreamIo) -> Result<Tls<StreamIo>, String> {
     if !zoraya_user::random::random(&mut seed) {
         return Err(String::from("the system gave no random bytes"));
     }
-    zoraya_tls::seed_random(&seed);
     let config = Config::new(&roots, wall_clock).map_err(|e| alloc::format!("{e}"))?;
-    Tls::connect(&config, host, io).map_err(|e| alloc::format!("{e}"))
+    Tls::connect(&config, host, io, &seed).map_err(|e| alloc::format!("{e}"))
 }
 
 /// Where the page's bytes come from: the stream as it is, or TLS over it.

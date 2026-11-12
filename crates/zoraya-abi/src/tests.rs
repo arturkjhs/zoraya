@@ -1582,3 +1582,22 @@ mod native_startup {
         }
     }
 }
+
+#[test]
+fn a_base_says_whether_the_real_time_clock_gave_the_date() {
+    use crate::native::{base_is_dated, checked_wall_seconds, tag_base};
+    let base = 1_800_000_000_123_456_788u64;
+    let dated = tag_base(base, true);
+    let undated = tag_base(base, false);
+    assert!(base_is_dated(dated) && !base_is_dated(undated));
+    assert_eq!(dated - undated, 1);
+    assert_eq!(tag_base(0, false), 0);
+    // Only a dated base gives a date to check certificates against.
+    assert_eq!(
+        checked_wall_seconds(dated, 5_000_000_000),
+        Some(1_800_000_005)
+    );
+    assert_eq!(checked_wall_seconds(undated, 5_000_000_000), None);
+    assert_eq!(checked_wall_seconds(0, 5_000_000_000), None);
+    assert!(checked_wall_seconds(u64::MAX, u64::MAX).is_some());
+}

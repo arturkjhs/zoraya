@@ -382,8 +382,9 @@ fn main() -> i32 {
     let latest = volume.last_assigned();
     // The floor is the real-time clock's reading `init` took (ADR-0226 item 3).
     let floor = option(b"--time-floor").unwrap_or(0);
+    // The lowest bit of the base says that the clock gave the date.
     BASE.store(
-        time_base(latest, clock_monotonic(), floor),
+        zoraya_abi::native::tag_base(time_base(latest, clock_monotonic(), floor), floor != 0),
         Ordering::Relaxed,
     );
     let port = port_create().expect("port");

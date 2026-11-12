@@ -114,6 +114,14 @@ pub fn realtime() -> Option<u64> {
     (base != 0).then(|| base.saturating_add(crate::clock_monotonic()))
 }
 
+/// The wall clock in seconds for checking certificate validity: `None`
+/// unless the real-time clock gave the date the base goes on from
+/// (ADR-0226 driver 1; the volume's latest time alone is not trusted).
+pub fn checked_realtime_seconds() -> Option<u64> {
+    let base = get()?.realtime_base;
+    zoraya_abi::native::checked_wall_seconds(base, crate::clock_monotonic())
+}
+
 impl Namespace {
     /// The connection to the random service the launcher gave (ADR-0227).
     pub fn random(&self) -> Option<Handle> {
