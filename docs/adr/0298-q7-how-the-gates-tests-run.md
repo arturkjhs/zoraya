@@ -58,8 +58,12 @@ choices.
    `file_protocol` (their inputs are messages with valid headers around fuzzed bodies, `fuzz/fuzz_targets/wire.rs`); the
    network's are `net_rx`, `net_stack` and `net_dns_http`.
 4. **A bound for the GUI half of INV-0264-3.** The runner's `latency N MS` step fails if the median keystroke is more than MS
-   over one screendump read. The invariant's 50 ms cannot be read through a screendump; the script uses 300 ms to catch
-   starvation, and the 50 ms of the kernel half stays in `t_cpu`. `tests/gui/spinners.script` is therefore a smoke test of
+   over one screendump read, and `latency N +MS` if it is more than MS over the median of the same run's previous `latency`
+   step. The invariant's 50 ms cannot be read through a screendump: the runner reads the screen every 150 ms, so a time is a
+   screendump plus whole polls. The script measures the keystroke first with nothing spinning, then with the spinners, and
+   allows 450 ms more (three polls); a starved terminal takes seconds. A fixed 300 ms failed on CI (candidate run of
+   `work/q7`, auto: 331 ms with the spinners, where `main`'s nightly measured 169 ms and 241 ms with none). The 50 ms of the
+   kernel half stays in `t_cpu`. `tests/gui/spinners.script` is therefore a smoke test of
    starvation and does not make INV-0264-3 `checked`: the invariant stays `not yet applicable` (kernel half checked by `t_cpu`)
    until the architect accepts this bound or sets another.
 
