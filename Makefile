@@ -760,11 +760,12 @@ check-kernel-tty:
 # Host paths: macOS's users' folders, and this host's own home directory (on Linux
 # /home/NAME); not every /home/, which is Zoraya's own home folder
 # (shell.home, /data/home/APP).
+# vendor/ is other people's code (ring), with its authors' names and addresses.
 check-host-paths:
 	@id="$$(git config user.email)"; \
 	home="$$(echo "$$HOME" | sed 's/[.[\*^$$]/\\&/g')"; \
 	hits="$$(git grep -n -I -E "/Use[r]s/|$${home:-/nonexistent}/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}" -- . \
-	  ':!docs/research/' ':!tools/posix-surface/results/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
+	  ':!docs/research/' ':!tools/posix-surface/results/' ':!vendor/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
 
 # Every host-tested crate caps its test heap (CLAUDE.md, Memory limits): the
