@@ -2,8 +2,8 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-12
-- **Depends on:** ADR-0002, ADR-0004, ADR-0030, ADR-0031, ADR-0032, ADR-0034, ADR-0040, ADR-0041, ADR-0044, ADR-0046, ADR-0051, ADR-0105, ADR-0261, ADR-0264, ADR-0270, ADR-0285
-- **Evidence:** CP-05, CP-10, CP-14, DM-003, DM-004, alternatives-postmortem.md#amoeba, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, task-02/posix-surface.md#key-observations
+- **Depends on:** ADR-0002, ADR-0004, ADR-0006, ADR-0030, ADR-0031, ADR-0032, ADR-0034, ADR-0040, ADR-0041, ADR-0044, ADR-0046, ADR-0051, ADR-0105, ADR-0261, ADR-0264, ADR-0270, ADR-0285
+- **Evidence:** CP-05, CP-10, CP-14, DM-003, DM-004, GR-011, alternatives-postmortem.md#amoeba, alternatives-postmortem.md#fuchsia--zircon-incl-starnix, task-02/posix-surface.md#key-observations
 
 ## Context
 

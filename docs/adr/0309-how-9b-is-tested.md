@@ -72,7 +72,12 @@ test must therefore hammer the wait and wake path (lost wakes, broadcast, time-o
 **Recommendation (not a decision): Option A.** The four things:
 
 1. **Conformance subset: musl's `libc-test`**, pinned by commit with a SHA-256 in `ports/sources.lock` (the commit and
-   hash are recorded by the 9b step that fetches it, then never changed; the archive is kept in the ports cache). The
+   hash are recorded by the 9b step that fetches it, then never changed; the archive is kept in the ports cache, `build/ports/src`). The hash is **recorded at the first
+   fetch** (trust on first use), which ADR-0109 accepts: `make fetch-ports` is the only step that uses the network and
+   every later build checks the cached file against the recorded hash. A GitHub-generated archive of a commit is not
+   guaranteed to keep its bytes, so the pin is an archive whose bytes do not change: an immutable release asset or mirror,
+   else the file as first fetched, kept in the cache and named in `ports/sources.lock` with its hash (the same holds for
+   `sqlite-src-3540100.zip`, whose hash is also recorded at fetch). The
    subset is a rule, not a list: every program of `src/functional` and `src/regression` whose name begins with `pthread_`,
    `sem_`, `tls_`, `thrd` or `cnd`, plus `fork`-, `vfork`- and `spawn`-named ones, **minus** the written exclusions below,
    which the harness reads from `tests/posix/threads-excluded.txt` (one name and a reason per line). Initial exclusions,
@@ -92,13 +97,15 @@ test must therefore hammer the wait and wake path (lost wakes, broadcast, time-o
 3. **Stress program: `tests/posix/t_threads.c`**, ours, one binary with named cases, each with a seed and an iteration count
    and a wall limit: (a) a mutex counter with 8 threads; (b) a condition-variable producer and consumer ring with
    timed waits and broadcast; (c) 100,000 `pthread_once` races; (d) create and join 2,000 threads in batches of 32, and
-   detached ones; (e) a thread per core of the quota: creation to the `EAGAIN` of `threads` and to the memory limit
+   detached ones, with the handle slots in use and `job_get_usage` checked after (INV-0300-7); (e) a thread per core of the quota: creation to the `EAGAIN` of `threads` and to the memory limit
    (ADR-0307), then recovery; (f) cancellation of threads in each wait (ADR-0305); (g) `fork` from a threaded process with
-   a sibling holding each lock (ADR-0306); (h) signals: `pthread_kill`, `sigwait` thread, process-directed `SIGTERM`
+   a sibling holding each lock and a sibling looping on `mmap` and `munmap` (ADR-0306, INV-0306-6); (h) signals: `pthread_kill`, `sigwait` thread, process-directed `SIGTERM`
    with all threads blocking it (ADR-0304); (i) `exit` from a non-main thread with siblings spinning, `exec` with siblings
    opening files (INV-0306-4); (j) TLS: `errno` and a `_Thread_local` array per thread (ADR-0303). The cases are the
    in-QEMU tests of the `INV-03xx` rows that name "an in-QEMU `libposix` test".
-4. **OpenSSL with threads.** The 9a build of OpenSSL is rebuilt with `threads` (and `no-shared`, `no-dso`, `no-engine`
+4. **OpenSSL with threads (outside 9b's done criterion until 9a is merged).** Part 9a has not started (curl and wget were
+   deferred from stage 8 on 2026-11-12), so this step, plan step 4.2, is not part of 9b's done criterion until 9a is
+   merged; 9b is done and merges without it, and the step is recorded as pending. The 9a build of OpenSSL is rebuilt with `threads` (and `no-shared`, `no-dso`, `no-engine`
    as before), its lock and `CRYPTO_THREAD_*` functions over `pthread_*`, `pthread_once` and thread-local keys. Two checks
    in `tests/posix/ossl_threads.c`: 8 threads each doing 200 SHA-256, AES-GCM and `RAND_bytes` operations whose
    results match single-threaded ones, and 4 threads each making an HTTPS request to the runner's TLS test server

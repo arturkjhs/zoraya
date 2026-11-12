@@ -2,7 +2,7 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-12
-- **Depends on:** ADR-0005, ADR-0100, ADR-0141, ADR-0180, ADR-0225, ADR-0300, ADR-0301, ADR-0302, ADR-0303, ADR-0304, ADR-0305, ADR-0306, ADR-0307
+- **Depends on:** ADR-0005, ADR-0006, ADR-0041, ADR-0100, ADR-0102, ADR-0104, ADR-0106, ADR-0141, ADR-0180, ADR-0225, ADR-0260, ADR-0261, ADR-0263, ADR-0285, ADR-0300, ADR-0301, ADR-0302, ADR-0303, ADR-0304, ADR-0305, ADR-0306, ADR-0307
 - **Evidence:** DM-004, task-02/posix-surface.md#jumps-between-tiers, task-02/posix-surface.md#key-observations
 
 ## Context
@@ -66,7 +66,10 @@ ADRs.
 
 **Recommendation (not a decision): Option A.**
 
-1. **What this ADR supersedes, once accepted, and nothing else.**
+1. **What this ADR supersedes, once accepted, and nothing else.** The list is complete: it names every sentence of an
+   accepted ADR that ADR-0300 to ADR-0307 change, so that **part 9b cannot merge until all of ADR-0300 to ADR-0308 are
+   accepted** (each of them changes accepted text, as the bullets say; ADR-0309 changes none and is the test method).
+   What is *not* superseded is said too: ADR-0006 rule 5 and INV-0006-6 stand (no `Status` is added, ADR-0300 item 5).
    - ADR-0100 item 5, all of it: `sem_*` as counters, "No `pthread_*` is exported (INV-0005-2)", and the premise "a process
      has one thread" wherever ADR-0100 or ADR-0141 uses it as a reason (`ffi.rs`'s "one thread: a cell with no lock"). The
      TLS part of item 5 (musl's `__init_tls` retained, `__set_thread_area` is `msr tpidr_el0`) stays and is extended by
@@ -82,6 +85,26 @@ ADRs.
      same with one thread.
    - `docs/design.md`'s sentences "One thread per process" and "Not built: threads" (the architect updates the Vision
      sections; agents update the as-built sections).
+   - From **ADR-0300:** ADR-0041's rule that a process ends on its one thread (it ends on the owner thread of ADR-0300
+     item 6; the zombie rule is unchanged); ADR-0105 item 8 (`job_suspend` parks "that thread": every thread of the
+     process); ADR-0030's premise of one thread per process (the scheduler is unchanged); ADR-0031's premise in
+     `map_reserve` that the process's one thread is in the call (ADR-0301 item 6); ADR-0270 and ADR-0285's comment in
+     `exit_current` that the process has one thread there.
+   - From **ADR-0301:** ADR-0141 item 2's `futex` answer (already above); ADR-0260's table row "Kernel deadlines: 288 in
+     one queue" (a derived `QUEUE_SIZE`, ADR-0301 item 5).
+   - **ADR-0006 INV-0006-2's lint**, and nothing else of ADR-0006: its parameter set `{ Handle, Port, Deadline, &mut
+     [Packet], flags }` gains `Address` and `Word32` for `futex_wait`, and its count of blocking calls (exactly two,
+     `crates/zoraya-abi/src/tests.rs`) becomes three (`port_wait`, `sleep_until`, `futex_wait`). Rule 2 (every blocking
+     call takes a `Deadline`) holds; rule 5 and INV-0006-6 (`Status::ALL.len() == 17`, no `Interrupted`) are unchanged.
+   - From **ADR-0302:** ADR-0100 item 2 (`src/thread` leaves the replaced directories) and ADR-0141 (above);
+     ADR-0005's INV-0005-2 row.
+   - From **ADR-0304:** ADR-0106 item 2 (the pending set is per process plus per thread) and item 5 (the entry poll is
+     per calling thread); ADR-0106 item 6 and INV-0106-3 hold (ADR-0304 item 11).
+   - From **ADR-0306:** ADR-0102 item 5 (the child's one thread: now the whole rule, with the freeze) and item 2's
+     stepped copy (held under the mapping lock); ADR-0104 item 6 (`exec` holds the library lock until the old image ends).
+   - From **ADR-0307:** ADR-0260's table row "Threads: later" and its open question on threads and processes; ADR-0261
+     point 1 (`JobLimits` gains `threads`); ADR-0263 point 4's table (rows for threads); ADR-0285 point 4 (the usage
+     record grows from 120 to 152 bytes); ADR-0266 point 1 stays five words.
 2. **The T9 list.** `docs/adr/posix-surface-T9.txt`, written by the first implementation step and checked like the TN rows
    (ADR-0225 item 1, INV-0225-5): every defined global symbol of `libc.a` whose name does not begin with `_` is in
    `posix-surface-T1.txt`, in the TN list, or in this one. It holds the names of musl's `src/thread` and `<semaphore.h>`
@@ -105,7 +128,8 @@ ADRs.
    `_POSIX_THREAD_PROCESS_SHARED` is -1, `_POSIX_THREAD_PRIO_INHERIT` and `_PROTECT` are -1 (the rows ADR-0100 item 6 left
    at `sysconf`).
 5. **The architect's step.** When the architect accepts this ADR, ADR-0100 stays `accepted` and the index row for ADR-0100
-   gets "item 5 superseded by ADR-0308" in its summary; agents do not edit ADR-0100's text or status.
+   gets "item 5 superseded by ADR-0308" in its summary, and the rows of the other ADRs in item 1 get the same pointer;
+   agents do not edit any of their texts or statuses.
 
 **Tensions with accepted ADRs.** This ADR is the tension: items 1 above names each one. *ADR-0005's* "T3 and threads"
 table row (`thread functions and thread clones appear only in T3`) stays true as a measurement and false as a scope
@@ -130,6 +154,10 @@ statement.
   futex counter of INV-0302-5.
 - **INV-0308-4.** `docs/design.md` has no sentence saying a process has one thread after the architect accepts this ADR. *Check:*
   a grep script added with the acceptance (until then, not applicable).
+- **INV-0308-5.** The amended lint of INV-0006-2 expects exactly three blocking calls (`port_wait`, `sleep_until`,
+  `futex_wait`), allows `Address` and `Word32` parameters for `futex_wait` only, and the lint of INV-0006-6 is unchanged:
+  `Status::ALL.len()` is 17 and no variant is named `Interrupted`. *Check:* `cargo test -p zoraya-abi`
+  (`crates/zoraya-abi/src/tests.rs`), with the new expectations written by step 1 of the 9b plan.
 
 ## Open questions
 
