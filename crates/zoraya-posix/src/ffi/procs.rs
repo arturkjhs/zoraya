@@ -95,7 +95,7 @@ fn stop_self(n: u32) {
 
 /// The poll at a library entry (ADR-0106 item 5): only with a handler
 /// installed (INV-0106-2), or with a pending one now unblocked.
-fn poll() {
+pub(super) fn poll() {
     let wanted =
         with(|p| p.signals.handlers_installed() || p.signals.pending & !p.signals.blocked != 0)
             .unwrap_or(false);
@@ -106,7 +106,7 @@ fn poll() {
 
 /// Runs `f` on the state, delivering what interrupts it: again when every
 /// handler that ran had `SA_RESTART`, else `EINTR` (INV-0006-7).
-fn restartable<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
+pub(super) fn restartable<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
     loop {
         match state(&mut f) {
             Err(EINTR) => {
@@ -645,6 +645,7 @@ fn select_once(
                         read.map(|e| (e, READABLE | PEER_CLOSED))
                     }
                 }
+                Some(Desc::Socket(sk)) => sk.wait_source(writing),
                 Some(_) => None,
             };
             match end {

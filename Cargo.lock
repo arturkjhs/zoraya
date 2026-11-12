@@ -546,6 +546,7 @@ dependencies = [
  "zoraya-fs-testkit",
  "zoraya-heap",
  "zoraya-proto-file",
+ "zoraya-proto-net",
  "zoraya-proto-posix",
  "zoraya-proto-tty",
  "zoraya-protocol",

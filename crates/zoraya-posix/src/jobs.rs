@@ -806,6 +806,10 @@ impl<S: Sys> Posix<S> {
                     };
                     conns.push((c, wanted));
                 }
+                // A socket's three handles do not cross `fork` yet
+                // (ADR-0225 item 9; ADR-0287 lists it as not built): refused
+                // rather than copied as a description with no handles.
+                Desc::Socket(_) => return Err(crate::errno::ENOTSUP),
                 _ => {}
             }
         }

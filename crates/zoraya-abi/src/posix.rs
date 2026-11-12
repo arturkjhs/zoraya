@@ -69,8 +69,11 @@ pub mod slot {
     /// fd 0's handle: slot 0 holds none, so fd 0 is the one fd not at its
     /// number (ADR-0190).
     pub const FD0: Handle = Handle(1005);
+    /// The connection to `netd` (ADR-0220 item 7, ADR-0225 item 2), when
+    /// the launcher granted a scope; a program without it has none.
+    pub const NET: Handle = Handle(1006);
 
-    pub const ALL: [Handle; 6] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT, FD0];
+    pub const ALL: [Handle; 7] = [BOOTSTRAP, BROKER, PROCESS_JOB, SELF, REPORT, FD0, NET];
 
     /// The slot that holds fd `fd`'s handle: its number, but fd 0's.
     pub const fn of_fd(fd: u32) -> u32 {

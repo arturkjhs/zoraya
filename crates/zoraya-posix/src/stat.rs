@@ -12,6 +12,7 @@ pub const S_IFDIR: u32 = 0o040000;
 pub const S_IFCHR: u32 = 0o020000;
 pub const S_IFREG: u32 = 0o100000;
 pub const S_IFIFO: u32 = 0o010000;
+pub const S_IFSOCK: u32 = 0o140000;
 pub const S_IFLNK: u32 = 0o120000;
 /// The bits `posix_mode` stores (ADR-0014 rule 1).
 pub const MODE_BITS: u32 = 0o7777;
@@ -32,6 +33,8 @@ pub enum Kind {
     Fifo,
     /// `/dev/null` or a terminal.
     Character,
+    /// A socket (ADR-0225).
+    Socket,
 }
 
 impl Kind {
@@ -51,6 +54,7 @@ impl Kind {
             Kind::Link => S_IFLNK,
             Kind::Fifo => S_IFIFO,
             Kind::Character => S_IFCHR,
+            Kind::Socket => S_IFSOCK,
         }
     }
 

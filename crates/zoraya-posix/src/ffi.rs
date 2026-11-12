@@ -9,6 +9,7 @@
 //! item 5), so the state is a cell with no lock.
 
 mod procs;
+mod sockets;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -693,6 +694,10 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
         Some(record) => {
             let mut p = Posix::from_bootstrap(sys, &record, &handles, at_slot, report);
             p.self_handle = kept;
+            p.net = zoraya_rt::handle_type(slot::NET)
+                .ok()
+                .filter(|t| *t == "channel")
+                .map(|_| slot::NET);
             p
         }
         None => {

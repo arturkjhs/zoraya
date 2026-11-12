@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -122,6 +123,8 @@ pub enum Desc<H> {
     },
     /// `/dev/null`.
     Null { access: u32 },
+    /// A socket (ADR-0225 item 2; `crate::net`).
+    Socket(Box<crate::socket::Socket<H>>),
 }
 
 /// A namespace entry (ADR-0107 item 4).
@@ -271,6 +274,12 @@ pub struct Posix<S: Sys> {
     pub stats: Stats,
     /// The signal state (ADR-0106).
     pub signals: crate::signals::Signals,
+    /// The connection to `netd` at slot `NET` (ADR-0225 item 2), if the
+    /// launcher gave one: sockets need it for the first call that names a
+    /// destination.
+    pub net: Option<S::H>,
+    /// The names of the last resolved addresses (ADR-0225 item 3).
+    pub addrs: crate::socket::AddrCache,
     /// The broker's connection at slot `BROKER` (ADR-0104), if any.
     pub broker: Option<S::H>,
     /// The process's own job at slot `PROCESS_JOB`, for `exec`.
@@ -334,6 +343,8 @@ impl<S: Sys> Posix<S> {
             transaction: 0,
             stats: Stats::default(),
             signals: crate::signals::Signals::starting(facts.ignored, facts.blocked),
+            net: None,
+            addrs: crate::socket::AddrCache::default(),
             broker: None,
             process_job: None,
             children: Vec::new(),
@@ -1043,7 +1054,7 @@ impl<S: Sys> Posix<S> {
                     .map(|_| ())
                     .map_err(|_| EIO)
             }
-            Some(Desc::Stream { .. } | Desc::Null { .. }) => Err(EINVAL),
+            Some(Desc::Stream { .. } | Desc::Null { .. } | Desc::Socket(_)) => Err(EINVAL),
         }
     }
 
@@ -1078,6 +1089,12 @@ impl<S: Sys> Posix<S> {
                 Ok(())
             }
             Desc::Null { .. } => Ok(()),
+            Desc::Socket(s) => {
+                for h in [s.read, s.write, s.ctl].into_iter().flatten() {
+                    self.sys.close(h);
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1135,6 +1152,7 @@ impl<S: Sys> Posix<S> {
                 nonblock,
                 ..
             }) => self.read_tty(fd, conn, into, nonblock),
+            Some(Desc::Socket(_)) => self.sock_read(fd, into, false),
             Some(Desc::Stream { read: None, .. }) => Err(EBADF),
             Some(&Desc::Stream {
                 read: Some(end),
@@ -1177,7 +1195,7 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    fn read_stream(&mut self, end: S::H, into: User, nonblock: bool) -> Result<usize, i32> {
+    pub(crate) fn read_stream(&mut self, end: S::H, into: User, nonblock: bool) -> Result<usize, i32> {
         loop {
             match self.sys.stream_read(end, into) {
                 Ok(n) => return Ok(n),
@@ -1203,6 +1221,7 @@ impl<S: Sys> Posix<S> {
                     Ok(from.length)
                 }
             }
+            Some(Desc::Socket(_)) => self.sock_write(fd, from, false),
             Some(Desc::Stream { write: None, .. }) => Err(EBADF),
             Some(&Desc::Stream {
                 write: Some(end),
@@ -1260,7 +1279,7 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    fn write_stream(&mut self, end: S::H, from: User, nonblock: bool) -> Result<usize, i32> {
+    pub(crate) fn write_stream(&mut self, end: S::H, from: User, nonblock: bool) -> Result<usize, i32> {
         let mut done = 0;
         while done < from.length {
             match self
@@ -1302,7 +1321,7 @@ impl<S: Sys> Posix<S> {
         };
         match self.fds.get(fd) {
             None => Err(EBADF),
-            Some(Desc::Stream { .. }) => Err(ESPIPE),
+            Some(Desc::Stream { .. } | Desc::Socket(_)) => Err(ESPIPE),
             Some(Desc::Null { .. }) => Ok(0),
             Some(&Desc::Object { conn, .. }) => {
                 self.stats.seeks += 1;
@@ -1343,6 +1362,15 @@ impl<S: Sys> Posix<S> {
                     gid,
                 ))
             }
+            Some(Desc::Socket(_)) => Ok(stat::encode(
+                Kind::Socket,
+                &Meta {
+                    mode: 0o600,
+                    ..Meta::default()
+                },
+                uid,
+                gid,
+            )),
             Some(Desc::Null { .. }) => {
                 let meta = Meta {
                     mode: 0o666,
@@ -1884,6 +1912,7 @@ impl<S: Sys> Posix<S> {
                 let (access, nonblock, conn) = match self.fds.get(fd) {
                     None => return Err(EBADF),
                     Some(Desc::Null { access }) => (*access, false, None),
+                    Some(Desc::Socket(s)) => (o::RDWR, s.nonblock, None),
                     Some(Desc::Stream { read, nonblock, .. }) => (
                         if read.is_some() { o::RDONLY } else { o::WRONLY },
                         *nonblock,
@@ -1915,6 +1944,10 @@ impl<S: Sys> Posix<S> {
                 let conn = match self.fds.get_mut(fd) {
                     None => return Err(EBADF),
                     Some(Desc::Null { .. }) => None,
+                    Some(Desc::Socket(s)) => {
+                        s.nonblock = flags & o::NONBLOCK != 0;
+                        None
+                    }
                     Some(Desc::Stream { nonblock, .. }) => {
                         *nonblock = flags & o::NONBLOCK != 0;
                         None
