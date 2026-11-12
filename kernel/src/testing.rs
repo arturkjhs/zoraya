@@ -2708,23 +2708,45 @@ fn with_bss(file: &[u8], extra: u64) -> Vec<u8> {
 /// INV-0270-1: `spawn` of a program with a large address space holds no more
 /// than a step of work in any interval: the list of frames grows ahead of each
 /// step (`prepare_step` in the image, the stack and the startup block), where
-/// the doubling was a copy and 64 pages of the heap in one interval. The list
-/// doubles from 16,384 to 32,768 frames (a copy of 128 KiB, a new list of
-/// 256 KiB) with the heap squeezed to the least free; `hello` is spawned with
-/// its bss sized so that the list passes 16,384 at each of the last 32 frames
-/// it takes. (The stack's and the startup block's `prepare_step` are not
+/// the doubling was a copy and the heap's growth for the new list in one
+/// interval. The list's capacities are not powers of two: the first
+/// `prepare_step` reserves `STEP_FRAMES` past the root table, and each growth
+/// doubles that, so they are 73 times a power of two. A probe spawn reads the
+/// capacity the list has at about 8,192 frames (9,344), and `hello` is then
+/// spawned with its bss sized so that the list passes that capacity at each of
+/// the last 32 frames it takes, with the heap squeezed to the least free, so
+/// that each doubling (a copy of 73 KiB, a new list of 146 KiB) is a growth of
+/// the heap. (The stack's and the startup block's `prepare_step` are not
 /// reached by this: with `hello`'s 16 stack pages and one page of block, the
-/// list never passes a power of two after a step boundary that is there; see
+/// list never passes its capacity after a step boundary that is there; see
 /// ADR-0270.)
+///
+/// Each spawn leaves the heap larger by what its lists took (about 100
+/// frames): the heap keeps the frames it grows by, and the squeeze takes the
+/// spans the last spawn's lists left. The test was first written for a list of
+/// 16,384 frames, which it never passed (its capacity was 18,688), and its 33
+/// spawns of 64 MiB with that growth needed all but about a hundred of the
+/// free frames of a 128 MiB guest: it failed with `NoMemory` when the tests
+/// before it had left the heap a little larger. So the room is checked before
+/// each spawn, and a list that does not pass the probe's capacity fails.
 /// Measured through the kernel's own call with the step points on in this
 /// thread (`steps::set_kernel_steps`). It runs last: the heap keeps the frames
 /// it grew by, scattered, and 4 MiB runs are few in a 128 MiB guest.
 fn a_spawn_with_a_big_space_is_bounded() {
-    const CAP: usize = 16384;
-    const SWEEP_FIRST: usize = 0;
+    const PROBE: usize = 8192;
+    const SWEEP: usize = 32;
+    // Frames a spawn takes beside its bss and list: `hello`'s other pages,
+    // its stack and block, the tables, and the heap's growth (measured at
+    // about 100 frames a spawn; twice that and more).
+    const BESIDE: usize = 512;
     let (_, file) = ramdisk::find("hello").expect("hello");
     let before = frames_accounted();
     let spawn_with = |bss: usize| {
+        let free = frames::settled_stats().free as usize;
+        assert!(
+            free > bss + BESIDE,
+            "{free} frames free: no room for a spawn of {bss} bss pages"
+        );
         // No free span of the heap fits the new list: its growth is the
         // step's, unless it was prepared.
         let mut hog: Vec<alloc::boxed::Box<[u8; 4096]>> = Vec::new();
@@ -2746,35 +2768,45 @@ fn a_spawn_with_a_big_space_is_bounded() {
         if units > crate::steps::STEP as u64 + 16 {
             crate::steps::diagnose_units();
         }
-        let process = spawned.expect("a process with a big space");
-        let len = process
-            .space
-            .lock()
-            .as_ref()
-            .expect("a space")
-            .list_state()
-            .0;
+        let process = spawned.unwrap_or_else(|e| {
+            panic!(
+                "a process with {bss} bss pages: {e:?}, {} frames free, {} held, heap {:?}",
+                frames::stats().free,
+                crate::reaper::held(),
+                heap::stats()
+            )
+        });
+        let list = process.space.lock().as_ref().expect("a space").list_state();
         let _ = process.signal(RequestKind::Terminate, 0);
         let _ = process.resume();
         process.wait();
         drop(process);
         drop(hog);
         crate::reaper::drain();
-        (units, len)
+        (units, list)
     };
-    let free = frames::settled_stats().free as usize;
-    let room = free - free / 16;
-    assert!(room > CAP + 200, "{room} frames: no room for the test");
-    let (_, len) = spawn_with(CAP - 100);
+    let (_, (len, cap)) = spawn_with(PROBE);
+    assert!(len < cap, "a list of {len} frames in a capacity of {cap}");
+    // The list's length grows with the bss by one a page, and by a table
+    // every 512 pages: a second probe corrects the first's estimate.
+    let first = PROBE + cap + 1 - len;
+    let (_, (now, _)) = spawn_with(first);
+    let first = (first + cap + 1)
+        .checked_sub(now)
+        .expect("a list near the capacity");
     let mut worst = 0;
-    for d in SWEEP_FIRST..SWEEP_FIRST + 32 {
-        // The list's length grows with the bss by one a page, and by a table
-        // every 512 pages.
-        let bss = CAP - 100 + CAP + 1 + d - len;
-        let (units, now) = spawn_with(bss);
+    for d in 0..SWEEP {
+        let bss = first + d;
+        let (units, (now, grown)) = spawn_with(bss);
         println!(
-            "a spawn of {bss} bss pages: list of {now} frames, {units} units, {} accounted",
+            "a spawn of {bss} bss pages: list of {now} frames in {grown}, {units} units, \
+             {} free, {} accounted",
+            frames::stats().free,
             frames_accounted()
+        );
+        assert!(
+            now > cap && grown > cap,
+            "a list of {now} frames in {grown} did not pass the probe's capacity of {cap}"
         );
         assert!(
             units <= crate::steps::STEP as u64 + 16,
