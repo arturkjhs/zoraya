@@ -7,8 +7,9 @@
 # refusal is gone from any of them, it fails unless every condition of the ADR
 # holds: no test of stage 1 is `pending`, every named step is a step of
 # `make test` and of the CI workflow, and every invariant of ADR-0260 to
-# ADR-0267, ADR-0269 and ADR-0270 (INV-0262-4 aside) and INV-0172-2 and
-# INV-0172-3 is `checked`. The same for stage 2 and the `+net` refusal (lines
+# ADR-0267, INV-0268-3, ADR-0269 and ADR-0270 (INV-0262-4 aside) and INV-0172-2
+# and INV-0172-3 is `checked`, with no word in its status that says part is open.
+# Every marker is counted (two in the shell, one in the panel): losing one opens it. The same for stage 2 and the `+net` refusal (lines
 # marked `untrusted-gate: net-refusal`; they stay until stage 2 is ready and
 # INV-0262-4 is `checked`). The architect's go-ahead is not a thing
 # a script can read: it is the commit that removes the markers.
@@ -63,27 +64,50 @@ for line in $(echo "$entries" | awk '$3 != "pending" { print $2 ":" $3 }'); do
 	step_exists "$step" || bad "${line%%:*} names step $step, which is not a step of make test run by $workflow"
 done
 
-invariants_ok() { # a pattern of ids
-	not_checked=$(grep -E "^\| ($1) " docs/adr/invariants.md | grep -v -F 'checked:' || true)
+# The status cell of an invariant's row (the text from its last `| checked:`
+# on; a row whose status does not begin so has none) must say `checked:` and
+# not say that part of the check is open (ADR-0268 point 2: "checked", not
+# "partly checked").
+invariants_ok() { # a pattern of ids, then ids left out
+	rows=$(grep -E "^\| ($1) " docs/adr/invariants.md || true)
+	[ -z "${2:-}" ] || rows=$(echo "$rows" | grep -v -E "^\| ($2) " || true)
+	not_checked=$(echo "$rows" | awk '
+		NF == 0 { next }
+		{
+			at = 0; line = $0
+			while ((i = index(substr(line, at + 1), "| checked:")) > 0) at += i
+			id = $2
+			if (at == 0) { print id " (status is not `checked:`)"; next }
+			status = substr(line, at)
+			if (status ~ /[Nn]ot yet|[Pp]ending/ || tolower(status) ~ /(^|[^[:alnum:]])open([^[:alnum:]]|$)/)
+				print id " (its status says that part is open or not yet checked)"
+		}')
 	if [ -n "$not_checked" ]; then
-		echo "$not_checked" | cut -d'|' -f2 | tr -d ' ' | sed 's/^/  not checked: /' >&2
+		echo "$not_checked" | sed 's/^/  not checked: /' >&2
 		return 1
 	fi
 }
 
-files_without_refusal=$(grep -c 'untrusted-gate: refusal' user/src/bin/zosh.rs crates/zoraya-panel/src/lib.rs | awk -F: '$2 < 1 { n++ } END { print n + 0 }')
-if [ "$files_without_refusal" -eq 0 ]; then
+# The markers of the refusal, counted one by one (a file with two of three
+# gone would still be a file with a marker): the shell's two (entry to an
+# untrusted room, `room new --untrusted`) and the panel's one (a launch).
+markers() { grep -c "$1" "$2" || true; }
+zosh_refusals=$(markers 'untrusted-gate: refusal' user/src/bin/zosh.rs)
+panel_refusals=$(markers 'untrusted-gate: refusal' crates/zoraya-panel/src/lib.rs)
+if [ "$zosh_refusals" -ge 2 ] && [ "$panel_refusals" -ge 1 ]; then
 	pending=$(echo "$entries" | awk '$1 == "1" && $3 == "pending"' | wc -l | tr -d ' ')
-	echo "check-untrusted-gate: the refusal is in place; $pending test(s) of stage 1 are still pending"
+	echo "check-untrusted-gate: the refusal is in place ($zosh_refusals markers in the shell, $panel_refusals in the panel); $pending test(s) of stage 1 are still pending"
 else
+	echo "check-untrusted-gate: a marker of the refusal is gone ($zosh_refusals of 2 in the shell, $panel_refusals of 1 in the panel): the gate is open" >&2
 	ready 1 || bad "the refusal of room new --untrusted is gone while a test of stage 1 is pending or missing"
-	invariants_ok "INV-026[0-7]-[0-9]+|INV-0269-[0-9]+|INV-0270-[0-9]+|INV-0172-2|INV-0172-3" ||
+	# INV-0262-4 waits for stage 2 (ADR-0268 point 2).
+	invariants_ok "INV-026[0-7]-[0-9]+|INV-0268-3|INV-0269-[0-9]+|INV-0270-[0-9]+|INV-0172-2|INV-0172-3" "INV-0262-4" ||
 		bad "the refusal is gone while invariants of ADR-0260 to ADR-0270 are not checked"
 fi
 
 # The +net refusal (ADR-0268 point 7) stays until stage 2 is ready, whether or
 # not the gate is open: without it the first stage would open +net as well.
-net_refusal=$(grep -h -c 'untrusted-gate: net-refusal' user/src/bin/zosh.rs crates/zoraya-panel/src/lib.rs | awk '{ n += $1 } END { print n + 0 }')
+net_refusal=$(( $(markers 'untrusted-gate: net-refusal' user/src/bin/zosh.rs) + $(markers 'untrusted-gate: net-refusal' crates/zoraya-panel/src/lib.rs) ))
 if [ "$net_refusal" -eq 0 ]; then
 	ready 2 || bad "no +net refusal is marked (untrusted-gate: net-refusal) while a test of stage 2 is pending or missing"
 	invariants_ok "INV-0262-4" ||
