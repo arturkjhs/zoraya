@@ -1022,7 +1022,7 @@ INV-0226-1, -2, INV-0227-2, -3 and INV-0228-1 are `checked`. INV-0226-3 (a POSIX
   `-p zoraya-tls` 8, `-p zoraya-http` 17 and `-p zoraya-shell` (110) passed; `-p zoraya-test-runner` passed (unit tests of the new steps).
 - `make check`: all 14 passed. `make test-files` (with `clock.script`): passed, `date` twice 3 s apart within 2 s of the host, three `random`
   lines differ. `make test-net-fetch`: passed, 108 steps, `fsck` clean, "the refused TLS servers read no request byte".
-- `make test-changed`: see the last paragraph of the Handoff.
+- `make test-changed` (HVF, parallel lanes, 608 s; locally TCG, the tour's second run and crash rounds past 2 skipped): host tests 69 binaries, build, test-qemu, test-libposix, test-posix, test-posix-gui, test-tour-gui, test-gui and test-net ok. The first two runs failed on things this part changed and the scripts had not followed: the tour's `help` list (date, random), the conventions script, `rngd: ready` matching the jobs script's `d: ready`, the shell's `slots` line (the random connection at slot 10) and the grants script's table (one more channel). Fixed; `make test-boot` and `make test-files` were then run alone and passed. The third run's test-boot and test-files steps are those two.
 
 ### Measurements (HVF, one run)
 

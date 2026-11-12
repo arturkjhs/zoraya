@@ -24,7 +24,7 @@
 # A path inside an entry that gives it as much takes no entry of its own
 # (review S3, S9): the tree covers real/deep.txt, the current directory
 # inside.txt. The first entry follows the slots directly.
-< slots: 2:job 1001:stream-read 1002:stream-write 1003:stream-write 1004:memory 1005:channel 1006:channel 1007:channel
+< slots: 2:job 1001:stream-read 1002:stream-write 1003:stream-write 1004:memory 1005:channel 1006:channel 1007:channel 1008:channel
 ^ \r\nentry /t/w/real directory: stat=ok widen=not granted list=ok create=ok mkdir=ok remove=ok sync=ok rename=ok token=ok share=not granted narrow=not granted unnamed=not granted
 < entry /t/w directory: stat=ok widen=not granted list=ok create=not granted mkdir=not granted remove=not granted sync=not granted rename=not granted token=ok share=not granted narrow=not granted unnamed=not granted
 < \r\n/t/w> 
