@@ -27,7 +27,7 @@ use zoraya_proto_rooms::{
     Refused, Report, Set, Stop, Usage, UsageList, UsageRecord, field, flags, ordinal, status,
 };
 use zoraya_protocol::{Below, Data, Header, Text, decode, encode};
-use zoraya_settings::rooms::{Limits, Machine, Room};
+use zoraya_settings::rooms::{self, Limits, Machine, Room};
 
 /// What the environment calls a job: the process maps it to a handle.
 pub type JobId = u32;
@@ -46,7 +46,8 @@ pub const IDLE_MS: u64 = 5_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parent {
     Session,
-    Untrusted,
+    /// A job the keeper holds: the untrusted job.
+    Job(JobId),
 }
 
 /// The kernel and the files, as the keeper uses them.
@@ -246,6 +247,21 @@ impl<E: Env> Keeper<E> {
         self.rooms.iter().find(|r| r.name == room).map(|r| r.job)
     }
 
+    /// A room's line; `home` has none and is a trusted room without limits
+    /// (its launch jobs put the panel's terminals under the session job).
+    fn line(&mut self, room: &str) -> Result<Option<Room>, ()> {
+        if room == rooms::HOME {
+            return Ok(Some(Room {
+                name: room.to_string(),
+                untrusted: false,
+                colour: 0,
+                limits: Limits::default(),
+                grants: Vec::new(),
+            }));
+        }
+        self.env.room_line(room)
+    }
+
     /// The line's limits with an untrusted room's missing words filled in
     /// (the line is rewritten by the next `room set`).
     fn effective(&mut self, room: &Room) -> Limits {
@@ -292,6 +308,11 @@ impl<E: Env> Keeper<E> {
     /// Rooms whose jobs reached a limit since the last call (`Refused`).
     pub fn refusals(&mut self) -> Vec<Notice> {
         let mut out = Vec::new();
+        // The untrusted job's own signal is cleared too, or its level would
+        // wake the keeper without end; the rooms under it say what happened.
+        if let Some(u) = self.untrusted {
+            let _ = self.env.usage(u, true);
+        }
         for r in &mut self.rooms {
             let Some(u) = self.env.usage(r.job, true) else {
                 continue;
@@ -478,7 +499,7 @@ impl<E: Env> Keeper<E> {
                 }
             }
         } else {
-            let line = match self.env.room_line(room) {
+            let line = match self.line(room) {
                 Ok(Some(l)) => l,
                 Ok(None) => return denied(status::NO_SUCH_ROOM, "no such room", tx, out),
                 Err(()) => {
@@ -499,10 +520,10 @@ impl<E: Env> Keeper<E> {
                 return denied(status::BAD_LINE, &why, tx, out);
             }
             let parent = if line.untrusted {
-                if self.untrusted.is_none() {
-                    return denied(status::KERNEL, "no untrusted job", tx, out);
+                match self.untrusted {
+                    Some(u) => Parent::Job(u),
+                    None => return denied(status::KERNEL, "no untrusted job", tx, out),
                 }
-                Parent::Untrusted
             } else {
                 Parent::Session
             };
@@ -555,7 +576,7 @@ impl<E: Env> Keeper<E> {
             // Nothing runs: the next `Launch` reads the line.
             return done(tx, out);
         };
-        let line = match self.env.room_line(room) {
+        let line = match self.line(room) {
             Ok(Some(l)) => l,
             Ok(None) => return denied(status::NO_SUCH_ROOM, "no such room", tx, out),
             Err(()) => return denied(status::NO_TABLE, "the room table is unreadable", tx, out),

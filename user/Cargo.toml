@@ -49,6 +49,8 @@ zoraya-app = { path = "../crates/zoraya-app" }
 zoraya-chooser = { path = "../crates/zoraya-chooser" }
 zoraya-files = { path = "../crates/zoraya-files" }
 zoraya-rng = { path = "../crates/zoraya-rng" }
+zoraya-rooms = { path = "../crates/zoraya-rooms" }
+zoraya-proto-rooms = { path = "../crates/zoraya-proto-rooms" }
 zoraya-settings-window = { path = "../crates/zoraya-settings-window" }
 zoraya-editor = { path = "../crates/zoraya-editor" }
 zoraya-fsclient = { path = "../crates/zoraya-fsclient" }
@@ -243,6 +245,12 @@ bench = false
 [[bin]]
 name = "date"
 path = "src/bin/date.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "rooms"
+path = "src/bin/rooms.rs"
 test = false
 bench = false
 
@@ -465,6 +473,11 @@ bench = false
 
 [[bin]]
 name = "t_quota"
+test = false
+bench = false
+
+[[bin]]
+name = "t_rooms"
 test = false
 bench = false
 

@@ -36,8 +36,7 @@ impl Env for Model {
         self.next += 1;
         let parent = match parent {
             Parent::Session => 0,
-            // The untrusted job is the first one the keeper makes.
-            Parent::Untrusted => 1,
+            Parent::Job(j) => j,
         };
         self.jobs.insert(
             self.next,
@@ -796,4 +795,19 @@ fn four_untrusted_rooms_at_their_defaults_fit_under_the_untrusted_job() {
         let j = k.job_of(room).unwrap();
         assert_eq!(k.env().jobs[&j].parent, Some(1));
     }
+}
+
+#[test]
+fn home_is_a_trusted_room_without_limits_under_the_session() {
+    let mut k = keeper();
+    let a = launch(&mut k, 1, &DESKTOP, "home").unwrap();
+    let b = launch(&mut k, 2, &CONSOLE, "home").unwrap();
+    assert_ne!(a, b);
+    let room = k.job_of("home").unwrap();
+    assert_eq!(k.env().jobs[&room].parent, Some(0));
+    assert_eq!(k.env().jobs[&room].limits, JobLimits::default());
+    assert_eq!(k.untrusted_running(), 0);
+    // `home` never appears in the file, so the table does not matter.
+    k.env().table = "BROKEN".into();
+    launch(&mut k, 1, &DESKTOP, "home").unwrap();
 }
