@@ -176,11 +176,24 @@ fn check_masked(what: &str) {
         raw_syscall(DIAGNOSE_UNITS, [0; 6]);
     }
     assert!(u <= MAX_UNITS, "{what}: {u} units");
-    assert!(
-        ns <= BOUND_NS * factor(),
-        "{what}: {ns} ns masked, limit {}",
-        BOUND_NS * factor()
-    );
+    let limit = masked_limit();
+    assert!(ns <= limit, "{what}: {ns} ns masked, limit {limit}");
+}
+
+/// What one interval with IRQ masked may last in wall time over a whole
+/// subtest. Under HVF (factor 1) it is ADR-0270's 2 ms. Off HVF the guest's
+/// clock runs while the host stalls the vCPU, and these subtests run for
+/// seconds under load, so one interval can hold a stall that is no work of
+/// the kernel's: on CI's EL2 runner (factor 13) intervals of 25 to 27 ms
+/// showed up with 55 units of work, fewer than the 71 of a 10 ms one, in a
+/// different subtest each run. There the units (above) are the check that
+/// the work between step points is bounded, and the time only that nothing
+/// ran masked for a period's length.
+fn masked_limit() -> u64 {
+    if factor() > 1 {
+        return BOUND_NS * MAX_FACTOR;
+    }
+    BOUND_NS
 }
 
 /// A page of counters shared with the spinners: word `i` is spinner `i`'s.
