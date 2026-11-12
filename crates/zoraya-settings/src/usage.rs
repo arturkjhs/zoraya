@@ -477,3 +477,83 @@ pub fn watch(
         sleep(throttle.wait(now()).max(1_000_000));
     }
 }
+
+/// One room of the table as the settings window's Rooms section shows it:
+/// its line's limits, and its reading if it runs. The panel makes these
+/// (the window cannot read `/config/rooms`), in [`rows_to_wire`]'s text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomRow {
+    pub name: String,
+    pub untrusted: bool,
+    pub limits: Limits,
+    pub reading: Option<Reading>,
+}
+
+impl RoomRow {
+    pub fn to_wire(&self) -> String {
+        format!(
+            "{}\t{}\t{}\t{}",
+            self.name,
+            u8::from(self.untrusted),
+            self.limits.words(),
+            self.reading
+                .as_ref()
+                .map_or_else(|| String::from("-"), Reading::to_wire),
+        )
+    }
+
+    pub fn from_wire(line: &str) -> Option<RoomRow> {
+        let mut it = line.split('\t');
+        let name = it.next().filter(|n| crate::rooms::is_room_name(n))?;
+        let untrusted = match it.next()? {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        let words: Vec<&str> = it.next()?.split(' ').filter(|w| !w.is_empty()).collect();
+        let mut limits = Limits::default();
+        if words.len() % 2 != 0 {
+            return None;
+        }
+        for pair in words.chunks(2) {
+            limits.set(pair[0], pair[1], untrusted).ok()?;
+        }
+        let reading = match it.next()? {
+            "-" => None,
+            r => Some(Reading::from_wire(r)?),
+        };
+        it.next().is_none().then(|| RoomRow {
+            name: String::from(name),
+            untrusted,
+            limits,
+            reading,
+        })
+    }
+}
+
+/// The rows in one text, as many as fit in `max` bytes.
+pub fn rows_to_wire(rows: &[RoomRow], max: usize) -> String {
+    let mut out = String::new();
+    for r in rows.iter().take(MAX_READINGS) {
+        let line = r.to_wire();
+        if out.len() + line.len() + 1 > max {
+            break;
+        }
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Total: every line a row, or `None`.
+pub fn rows_from_wire(text: &str) -> Option<Vec<RoomRow>> {
+    let mut out: Vec<RoomRow> = Vec::new();
+    for l in text.split('\n').filter(|l| !l.is_empty()) {
+        let r = RoomRow::from_wire(l)?;
+        if out.len() == MAX_READINGS || out.iter().any(|o| o.name == r.name) {
+            return None;
+        }
+        out.push(r);
+    }
+    Some(out)
+}

@@ -659,6 +659,34 @@ pub fn replace(bytes: &[u8], room: &Room) -> Result<Vec<u8>, RoomRefusal> {
     Ok(out)
 }
 
+/// `room set NAME WORD VALUE` on the table's bytes, without the keeper:
+/// the table with the word changed and the room as it was (to put back if
+/// the keeper refuses). The checks are the shell's: the word and the value,
+/// `none` for trusted rooms only, an untrusted line complete. The ceilings
+/// are the keeper's (INV-0266-2).
+pub fn with_limit(
+    bytes: &[u8],
+    name: &str,
+    word: &str,
+    value: &str,
+) -> Result<(Vec<u8>, Room), String> {
+    let table = read(bytes);
+    let old = table
+        .get(name)
+        .cloned()
+        .ok_or_else(|| format!("{name}: no such room"))?;
+    let mut room = old.clone();
+    room.limits.set(word, value, room.untrusted)?;
+    if room.untrusted && !room.limits.is_complete() {
+        return Err(String::from(
+            "an untrusted room needs all six limits and some are not in its line",
+        ));
+    }
+    let new =
+        replace(bytes, &room).map_err(|_| String::from("the room's line cannot be rewritten"))?;
+    Ok((new, old))
+}
+
 /// Which limit a room refused, for the shell's hint (ADR-0263 point 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Refused {

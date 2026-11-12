@@ -280,3 +280,72 @@ fn a_reading_the_caller_took_counts_against_the_first_turn() {
     );
     assert_eq!(reads.get(), 1);
 }
+
+#[test]
+fn rows_round_trip_and_refuse_every_other_text() {
+    let a = agent();
+    let rows = vec![
+        RoomRow {
+            name: "agent-1".into(),
+            untrusted: true,
+            limits: a.limits(),
+            reading: Some(a),
+        },
+        RoomRow {
+            name: "project".into(),
+            untrusted: false,
+            limits: Limits {
+                mem: Some(512 * MIB),
+                ..Limits::default()
+            },
+            reading: None,
+        },
+        RoomRow {
+            name: "plain".into(),
+            untrusted: false,
+            limits: Limits::default(),
+            reading: None,
+        },
+    ];
+    let text = rows_to_wire(&rows, 6144);
+    assert_eq!(rows_from_wire(&text), Some(rows.clone()));
+    for bad in [
+        "agent-1\t2\t\t-\n",
+        "Agent\t0\t\t-\n",
+        "x\t0\t--mem\t-\n",
+        "x\t0\t--mem 1\t-\n",
+        "x\t0\t--tmp 1M\t-\n",
+        "x\t0\t\t-\textra\n",
+        "x\t0\t\tx 1 2\n",
+        "x\t0\t\t-\nx\t0\t\t-\n",
+    ] {
+        assert_eq!(rows_from_wire(bad), None, "{bad:?}");
+    }
+    let one = rows[0].to_wire().len() + 1;
+    assert_eq!(rows_to_wire(&rows, one).lines().count(), 1);
+}
+
+#[test]
+fn a_limit_is_changed_in_the_table_as_room_set_would() {
+    use crate::rooms::with_limit;
+    let table = b"# mine\nproject --colour 1 --mem 64M +w ~/p\nagent-1 --untrusted --mem 89M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 16M +w ~/s\n";
+    let (new, old) = with_limit(table, "project", "--mem", "128M").unwrap();
+    assert_eq!(old.limits.mem, Some(64 * MIB));
+    assert_eq!(
+        new,
+        b"# mine\nproject --colour 1 --mem 128M +w ~/p\nagent-1 --untrusted --mem 89M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 16M +w ~/s\n"
+    );
+    // The old line put back restores every byte.
+    assert_eq!(crate::rooms::replace(&new, &old).unwrap(), table);
+    // `none` removes a trusted word; an untrusted room cannot be emptied.
+    assert!(with_limit(table, "project", "--mem", "none").is_ok());
+    assert!(with_limit(table, "agent-1", "--mem", "none").is_err());
+    // A bad value, a word of the other trust, a room that is not there.
+    assert!(with_limit(table, "project", "--mem", "12").is_err());
+    assert!(with_limit(table, "project", "--tmp", "1M").is_err());
+    assert!(with_limit(table, "nope", "--mem", "1M").is_err());
+    assert!(with_limit(table, "project", "--colour", "2").is_err());
+    // An untrusted line that lacks a word is not completed here.
+    let thin = b"a --untrusted --mem 8M +w ~/s\n";
+    assert!(with_limit(thin, "a", "--mem", "9M").is_err());
+}
