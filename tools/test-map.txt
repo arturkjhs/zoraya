@@ -84,7 +84,8 @@ user/src/app.rs               test-gui
 # The network (N1): the driver, its protocol and the test that plays netd.
 crates/zoraya-virtio-net/     test-net
 crates/zoraya-proto-nic/      test-net
-fuzz/                         check
+fuzz/                         test-fuzz test-fuzz-net
+tools/run-fuzz.sh             test-fuzz test-fuzz-net
 user/src/bin/ethd.rs          test-net
 tools/net-poke.sh             test-net
 user/src/bin/t_net.rs         test-net test-qemu

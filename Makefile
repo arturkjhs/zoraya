@@ -74,7 +74,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -747,6 +747,19 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	    $(RUN_QEMU) --test --gui $$net $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
+# Fuzzing (ADR-0268 point 3's "fuzzing" and point 7's "net-fuzz", ADR-0298):
+# libFuzzer on the nightly toolchain for FUZZ_SECONDS a target, FUZZ_JOBS at
+# once. CI runs 600 s (tools/ci-tests.txt); locally 20 s.
+FUZZ_SECONDS ?= 20
+FUZZ_JOBS ?= 3
+FUZZ_TARGETS := spawn_request keeper_messages broker_tty compositor_protocol file_protocol
+FUZZ_NET_TARGETS := net_rx net_stack net_dns_http
+test-fuzz:
+	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_TARGETS)
+
+test-fuzz-net:
+	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_NET_TARGETS)
+
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
 test-crash: $(KERNEL) tools-storage
 	$(CARGO) build -q -p zoraya-test-runner
@@ -899,7 +912,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-maps
+TEST_STEPS += check-ci-jobs test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-ethd-maps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and

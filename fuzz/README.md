@@ -15,11 +15,21 @@ deterministic fuzz test on the pinned toolchain instead
 | `shell_parse` | arbitrary UTF-8 text as a shell line or script (ADR-0150, INV-0150-3); the deterministic test is `crates/zoraya-shell/src/lang_tests.rs` |
 | `describe` | arbitrary bytes as a command description (ADR-0156, INV-0156-1); the deterministic test is `crates/zoraya-describe/src/tests.rs` |
 | `net_rx` | arbitrary bytes as an Ethernet frame for the ARP parser and as a script for a hostile virtio-net device and a hostile service (ADR-0221, INV-0221-2); the deterministic tests are `crates/zoraya-virtio-net/src/tests.rs` and `crates/zoraya-proto-nic/src/lib.rs`. Not run by the agent that wrote it (no nightly or cargo-fuzz on the host); its body was compiled and driven with 3000 random inputs in a scratch crate |
+| `spawn_request` | `spawn`'s request (as it is, and a valid one with bytes changed) and the startup block (ADR-0298, Q7) |
+| `keeper_messages` | messages from the three kinds of channel to the room keeper, on a model of the kernel's jobs (ADR-0269, INV-0269-2) |
+| `broker_tty` | requests to the POSIX broker on a model of the kernel, and to the terminal server, with keys, output and resizes (ADR-0104, ADR-0105) |
+| `compositor_protocol` | a client's messages (windows, sheets, buffers, drops) and input frames to the compositor on a fake platform (ADR-0093, ADR-0094) |
+| `file_protocol` | requests to `fsd` over the fake transport, with channels, tokens and memory objects as handles; ends in a walk of the service's counts (ADR-0055) |
 
 Each input is mounted read-only and read-write, walked through the request
 API (every directory, name, file and link target) and checked with `fsck`.
 A panic, an out-of-bounds access, an overflow (debug assertions are on) or
 a timeout is a finding.
+
+The targets of Q7 (ADR-0298) take their bytes as messages: `wire.rs` splits the input into `sel, flags, ordinal,
+length, bytes` and wraps the bytes in a valid header unless a flag says they are the whole message. `make test-fuzz` and
+`make test-fuzz-net` build them with the nightly toolchain and LLVM's coverage instrumentation (`tools/run-fuzz.sh`, no
+cargo-fuzz) and run each for `FUZZ_SECONDS` (20 locally, 600 in CI), output in `target/test-logs/fuzz-TARGET.log`.
 
 ## Running
 

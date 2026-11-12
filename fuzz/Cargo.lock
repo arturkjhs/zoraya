@@ -229,6 +229,16 @@ name = "zoraya-abi"
 version = "0.1.0"
 
 [[package]]
+name = "zoraya-broker"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-posix",
+ "zoraya-proto-tty",
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-command"
 version = "0.1.0"
 dependencies = [
@@ -238,11 +248,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-compositor"
+version = "0.1.0"
+dependencies = [
+ "zoraya-describe",
+ "zoraya-fonts",
+ "zoraya-keymap",
+ "zoraya-paint",
+ "zoraya-proto-display",
+ "zoraya-proto-gui",
+ "zoraya-proto-input",
+ "zoraya-protocol",
+ "zoraya-settings",
+ "zoraya-text",
+ "zoraya-tokens",
+]
+
+[[package]]
 name = "zoraya-describe"
 version = "0.1.0"
 
 [[package]]
 name = "zoraya-dns"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-fonts"
 version = "0.1.0"
 
 [[package]]
@@ -255,18 +286,40 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "zoraya-abi",
+ "zoraya-broker",
+ "zoraya-compositor",
  "zoraya-describe",
  "zoraya-dns",
  "zoraya-fs",
+ "zoraya-fs-service",
  "zoraya-fs-testkit",
  "zoraya-http",
  "zoraya-net",
+ "zoraya-proto-block",
+ "zoraya-proto-display",
+ "zoraya-proto-file",
+ "zoraya-proto-gui",
+ "zoraya-proto-input",
  "zoraya-proto-net",
  "zoraya-proto-nic",
+ "zoraya-proto-rooms",
  "zoraya-protocol",
+ "zoraya-rooms",
+ "zoraya-settings",
  "zoraya-shell",
+ "zoraya-tty",
  "zoraya-virtio",
  "zoraya-virtio-net",
+]
+
+[[package]]
+name = "zoraya-fs-service"
+version = "0.1.0"
+dependencies = [
+ "zoraya-fs",
+ "zoraya-proto-block",
+ "zoraya-proto-file",
+ "zoraya-protocol",
 ]
 
 [[package]]
@@ -278,6 +331,10 @@ dependencies = [
 
 [[package]]
 name = "zoraya-http"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-keymap"
 version = "0.1.0"
 
 [[package]]
@@ -295,7 +352,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-paint"
+version = "0.1.0"
+dependencies = [
+ "zoraya-text",
+ "zoraya-tokens",
+]
+
+[[package]]
+name = "zoraya-proto-block"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-display"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-proto-file"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-gui"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-input"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
@@ -317,12 +410,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-posix"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-rooms"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
+name = "zoraya-proto-tty"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+]
+
+[[package]]
 name = "zoraya-protocol"
 version = "0.1.0"
 
 [[package]]
 name = "zoraya-resolve"
 version = "0.1.0"
+
+[[package]]
+name = "zoraya-rooms"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-rooms",
+ "zoraya-protocol",
+ "zoraya-settings",
+]
 
 [[package]]
 name = "zoraya-settings"
@@ -341,6 +465,26 @@ dependencies = [
  "zoraya-http",
  "zoraya-proto-file",
  "zoraya-resolve",
+]
+
+[[package]]
+name = "zoraya-text"
+version = "0.1.0"
+dependencies = [
+ "zoraya-tokens",
+]
+
+[[package]]
+name = "zoraya-tokens"
+version = "0.1.0"
+
+[[package]]
+name = "zoraya-tty"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-tty",
+ "zoraya-protocol",
 ]
 
 [[package]]
