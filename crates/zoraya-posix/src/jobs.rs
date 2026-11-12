@@ -865,6 +865,13 @@ impl<S: Sys> Posix<S> {
         self.fork_group = -1;
         // The parent's channels are not the child's: nothing to report on.
         self.report = None;
+        // A channel end cannot be duplicated (ADR-0102 item 3), so the
+        // connection to `netd` stays with the parent: the child's `net` would
+        // name an empty slot that a later handle can take. The child has no
+        // network, as a program without the grant (ADR-0287 item 3). The
+        // slot is not closed: it is not the child's.
+        self.net = None;
+        self.addrs = crate::socket::AddrCache::default();
         for d in self.fds.descriptions_mut() {
             if let Desc::Object { attached, .. } = d {
                 *attached = false;

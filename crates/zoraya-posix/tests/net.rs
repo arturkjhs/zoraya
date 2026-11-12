@@ -290,6 +290,32 @@ fn a_name_resolved_by_getaddrinfo_is_connected_by_name() {
 }
 
 #[test]
+fn a_fork_child_has_no_connection_to_netd() {
+    // A channel end is not duplicable (ADR-0102 item 3), so the child holds
+    // no connection (ADR-0287 item 3): it must not keep the parent's slot
+    // value, which a handle of its own could take, nor the parent's names.
+    let mut t = rigged(Script::default());
+    let l =
+        t.r.p
+            .lookup(Some(b"test.zoraya"), Some(b"http"), &Hints::default())
+            .unwrap();
+    assert!(!t.r.p.addrs.is_empty());
+    let found = l.addresses[0];
+    t.r.p.after_fork_in_child(77, 77);
+    assert!(t.r.p.net.is_none());
+    assert!(t.r.p.addrs.is_empty());
+    let fd = stream(&mut t.r);
+    assert_eq!(t.r.p.connect(fd, &addr(found, 80)), Err(EACCES));
+    let err =
+        t.r.p
+            .lookup(Some(b"test.zoraya"), Some(b"80"), &Hints::default())
+            .unwrap_err();
+    assert_eq!((err.eai, err.errno), (sock::EAI_SYSTEM, EACCES));
+    // Nothing but the parent's one resolve reached netd.
+    assert_eq!(t.log.borrow().kinds, vec!["resolve"]);
+}
+
+#[test]
 fn a_literal_or_a_numeric_service_asks_nobody() {
     let mut t = rigged(Script::default());
     let l =
