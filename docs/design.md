@@ -1856,11 +1856,11 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   recorded fallback, was not needed.
 - **The roots** are Mozilla's list from the CCADB report (108 certificates with the Websites trust bit, no distrust date and no
   applied constraints; CDLA-Permissive-2.0 data; 2026-11-12) in `rootfs/system/tls/roots`. The path is a constant (the
-  `tls.roots` setting of ADR-0229 is not built). The file is in the root volume, which the shell's tree can write: a console shell, or a `fetch URL -o /system/tls/roots` it grants, can replace the trust store (a recorded limitation; ADR-0289, ADR-0228's open questions). Every `.key` under `tests/net/tls` is public and for tests only (its README; name-constrained to `.zoraya`).
-- **Tests.** `cargo test -p zoraya-rng` (10: RFC 8439's block vector, the generator, the service), `-p zoraya-tls` (8: a rustls server
-  on loopback with the test PKI of `tests/net/tls`, 200 kB each way; expired, another name, an unknown root, no date, a bad name,
+  `tls.roots` setting of ADR-0229 is not built). The file is in the root volume, and `/system` is read-only at run time for everyone (the architect's decision, ADR-0289 item 8, ADR-0228's open questions): `fsd` seals the root's `system` entry on every connection, the console shell's included, so no write, create, remove, rename, publish or limit reaches it and no clone, narrowing or `+w` grant adds one; the shell refuses `+w /system...` with a hint. It changes only when the image is built (`zoraya-mkfs --from rootfs`); an explicit system-update path is a later ADR. A name-constraint test (`outside.pem` against the test root) shows the verifier refusing a name outside `.zoraya`. Every `.key` under `tests/net/tls` is public and for tests only (its README; name-constrained to `.zoraya`).
+- **Tests.** `cargo test -p zoraya-rng` (10: RFC 8439's block vector, the generator, the service), `-p zoraya-tls` (9: a rustls server
+  on loopback with the test PKI of `tests/net/tls`, 200 kB each way; expired, another name, a name outside the root's constraints, an unknown root, no date, a bad name,
   no roots, PEM; and no random without a seed), `-p zoraya-fs-service --test time` (the floor), `-p zoraya-dtb`, `-p zoraya-abi`.
-  `make test-files` (`clock.script`: `date` twice, three `random`s that differ), `make test-net-fetch` (HTTPS: 1,000,000 bytes by
+  `make test-files` (`system-ro.script`: `/system/tls/roots` unchanged after the console shell's and a `+w /` grant's writes; `clock.script`: `date` twice, three `random`s that differ), `make test-net-fetch` (HTTPS: 1,000,000 bytes by
   checksum, the page, `expired.zoraya`, `wrong.zoraya`, by number, a plain server on an HTTPS address, `ftp://`; and the test
   server's log has no request line for the refused names). The test server runs three TLS terminators (`--tls-dir`) in front of
   its plain server, on ports it reports; this replaces the plan's `guestfwd` on 443.

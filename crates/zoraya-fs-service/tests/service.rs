@@ -2913,3 +2913,184 @@ fn a_closed_connection_waiting_for_a_sync_is_dropped() {
     assert_eq!(r.done(root, &proto::Sync {}, vec![]).0, status::OK);
     assert_eq!(r.service.account_totals().open, r.service.open_count());
 }
+
+/// ADR-0289 item 8: a sealed entry of the root, and all below it, is
+/// read-only on every connection; no clone, narrowing, token or open can add
+/// a write to it, and the entry itself cannot be removed, renamed or replaced.
+#[test]
+fn a_sealed_entry_is_read_only_for_every_connection() {
+    let mut r = rig();
+    let root = r.root;
+    let denied = status::ACCESS_DENIED;
+    let mkdir = |r: &mut Rig, dir: End, name: &'static str| {
+        let m = proto::MakeDirectory {
+            mode: 0o755,
+            name: Name(name),
+        };
+        assert_eq!(r.done(dir, &m, vec![]).0, status::OK);
+    };
+    mkdir(&mut r, root, "system");
+    let sys = r.open(root, "system", open_flags::DIRECTORY);
+    mkdir(&mut r, sys, "tls");
+    let roots = r.open(root, "system/tls/roots", open_flags::CREATE);
+    assert_eq!(r.write_text(roots, 0, 0, b"anchor").0, status::OK);
+    r.open(root, "other", open_flags::CREATE);
+    // Sealing needs a service without connections: close them all, seal,
+    // and take the root again.
+    let ends: Vec<End> = r.net.0.borrow().queues.keys().copied().collect();
+    r.net.0.borrow_mut().closed.extend(ends);
+    r.run();
+    r.service.seal("system");
+    let root = r.net.channel();
+    r.net.0.borrow_mut().owned.insert(root);
+    assert!(r.service.add_root(root));
+
+    // Opening: reading is allowed, anything that changes is not, by any
+    // spelling of the path.
+    let read = rights::READ | rights::CLONE;
+    for path in ["system/tls/roots"] {
+        for wanted in [rights::WRITE, rights::CREATE, rights::REMOVE, ANY] {
+            assert_eq!(r.try_open(root, path, 0, wanted).0, denied, "{path}");
+        }
+        assert_eq!(
+            r.try_open(root, path, open_flags::TRUNCATE, rights::READ).0,
+            denied,
+            "{path} truncate"
+        );
+        let (s, ro) = r.try_open(root, path, 0, read);
+        assert_eq!(s, status::OK, "{path} for reading");
+        assert_eq!(r.read_text(ro, 0, 6).1, b"anchor");
+        assert_eq!(r.write_text(ro, 0, 0, b"x").0, denied);
+        let m = proto::Clone {
+            rights: Flags(rights::WRITE),
+        };
+        let end = r.net.channel();
+        assert_eq!(r.done(ro, &m, vec![end]).0, denied, "clone adds no write");
+    }
+    assert_eq!(
+        r.try_open(root, "system/tls/new", open_flags::CREATE, rights::READ)
+            .0,
+        denied
+    );
+    assert_eq!(
+        r.try_open(root, "system/x", open_flags::UNNAMED, rights::READ)
+            .0,
+        denied
+    );
+
+    // A directory connection below the seal holds read rights only (it was
+    // opened under the seal), so these refusals are rights checks; the seal
+    // itself is tested above and below through connections with full rights.
+    let (s, tls) = r.try_open(root, "system/tls", open_flags::DIRECTORY, read);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.try_open(tls, "roots", 0, rights::WRITE).0, denied);
+    assert_eq!(r.try_open(tls, "new", open_flags::CREATE, ANY).0, denied);
+    let m = proto::MakeDirectory {
+        mode: 0o755,
+        name: Name("d"),
+    };
+    assert_eq!(r.done(tls, &m, vec![]).0, denied);
+    assert_eq!(
+        r.done(
+            tls,
+            &proto::Remove {
+                name: Name("roots")
+            },
+            vec![]
+        )
+        .0,
+        denied
+    );
+    let m = proto::MakeLink {
+        name: Name("l"),
+        target: Text("roots"),
+    };
+    assert_eq!(r.done(tls, &m, vec![]).0, denied);
+    let m = proto::SetLimit {
+        remove: Below(0),
+        limit: 1 << 20,
+        name: Name("roots"),
+    };
+    assert_eq!(r.done(tls, &m, vec![]).0, denied);
+    let token = token_of(&mut r, tls);
+    let m = proto::Publish {
+        mode: Below(proto::publish_mode::REPLACE),
+        name: Name("roots"),
+    };
+    let (s, unnamed) = r.try_open(root, "tmp-file", open_flags::UNNAMED, ANY);
+    assert_eq!(s, status::OK);
+    assert_eq!(r.done(unnamed, &m, vec![token]).0, denied, "no publish in");
+    let token = token_of(&mut r, tls);
+    let m = proto::Rename {
+        mode: Below(0),
+        old: Name("roots"),
+        new: Name("moved"),
+    };
+    assert_eq!(r.done(tls, &m, vec![token]).0, denied, "no rename out");
+    let token = token_of(&mut r, tls);
+    let m = proto::Rename {
+        mode: Below(0),
+        old: Name("other"),
+        new: Name("roots"),
+    };
+    assert_eq!(r.done(root, &m, vec![token]).0, denied, "no rename in");
+
+    // The root itself: the entry is kept, its siblings are not affected.
+    let remove = proto::Remove {
+        name: Name("system"),
+    };
+    assert_eq!(r.done(root, &remove, vec![]).0, denied);
+    let token = token_of(&mut r, root);
+    let m = proto::Rename {
+        mode: Below(0),
+        old: Name("system"),
+        new: Name("away"),
+    };
+    assert_eq!(r.done(root, &m, vec![token]).0, denied);
+    let token = token_of(&mut r, root);
+    let m = proto::Rename {
+        mode: Below(proto::rename_mode::EXCHANGE),
+        old: Name("other"),
+        new: Name("system"),
+    };
+    assert_eq!(r.done(root, &m, vec![token]).0, denied);
+    let token = token_of(&mut r, root);
+    let m = proto::Publish {
+        mode: Below(proto::publish_mode::REPLACE),
+        name: Name("system"),
+    };
+    let (_, unnamed) = r.try_open(root, "tmp-file2", open_flags::UNNAMED, ANY);
+    assert_eq!(r.done(unnamed, &m, vec![token]).0, denied);
+    let m = proto::SetLimit {
+        remove: Below(0),
+        limit: 1 << 20,
+        name: Name("system"),
+    };
+    assert_eq!(r.done(root, &m, vec![]).0, denied);
+
+    // A clone or a narrowing of the root with write opens "system" to read
+    // only, too.
+    let end = r.net.channel();
+    let m = proto::Narrow {
+        rights: Flags(ANY),
+        name: Name("system"),
+    };
+    assert_eq!(r.done(root, &m, vec![end]).0, status::OK);
+    r.net.0.borrow_mut().queues.entry(end).or_default();
+    assert_eq!(r.try_open(end, "system", 0, rights::WRITE).0, denied);
+    let end2 = r.net.channel();
+    let m = proto::Clone { rights: Flags(ANY) };
+    assert_eq!(r.done(root, &m, vec![end2]).0, status::OK);
+    assert_eq!(
+        r.try_open(end2, "system/tls/roots", 0, rights::WRITE).0,
+        denied
+    );
+
+    // The rest of the volume is still writable, and the file is unchanged.
+    let m = proto::Remove {
+        name: Name("other"),
+    };
+    assert_eq!(r.done(root, &m, vec![]).0, status::OK);
+    let (_, ro) = r.try_open(root, "system/tls/roots", 0, read);
+    assert_eq!(r.read_text(ro, 0, 16).1, b"anchor");
+}

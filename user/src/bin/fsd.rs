@@ -9,6 +9,9 @@
 //! a fresh volume of that size in memory, with FIFO nodes, and no driver;
 //! slot 6 is the root connection's end and slot 7, when present, the
 //! supervisor channel.
+//!
+//! `fsd --sealed-system` (the root volume, set by `init`'s stack) keeps the
+//! root's `system` entry read-only on every connection (ADR-0289 item 8).
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -257,11 +260,25 @@ fn slot(n: u64) -> Handle {
 }
 
 /// Serves the volume until every connection is gone.
-fn serve<D: Device>(volume: Volume<D, Time>, kernel: Kernel, root: Handle, fifos: bool) -> i32 {
+///
+/// The root volume (`--sealed-system`, set by the stack) keeps `/system`
+/// read-only on every connection, the console shell's included (ADR-0289
+/// item 8); it changes when the image is built. The temporary directory
+/// service (`fifos`) and a data disk have no such entry.
+fn serve<D: Device>(
+    volume: Volume<D, Time>,
+    kernel: Kernel,
+    root: Handle,
+    fifos: bool,
+    sealed: bool,
+) -> i32 {
     let mut service = Box::new(Service::new(volume, kernel));
     service.set_time_base(BASE.load(Ordering::Relaxed));
     if fifos {
         service.enable_fifos();
+    }
+    if sealed {
+        service.seal("system");
     }
     if !service.add_root(root) {
         println!("fsd: the root connection cannot be served");
@@ -280,6 +297,11 @@ fn option(name: &[u8]) -> Option<u64> {
         }
     }
     None
+}
+
+/// Whether the flag `name` is among the arguments.
+fn flag(name: &[u8]) -> bool {
+    startup().argv.any(|a| a == name)
 }
 
 /// `--memory MIB`: the size of the temporary volume, if the option is there.
@@ -325,7 +347,7 @@ fn temporary(size: u64) -> i32 {
         supervisor,
         subscribed: Vec::new(),
     };
-    serve(volume, kernel, root, true)
+    serve(volume, kernel, root, true, false)
 }
 
 #[unsafe(no_mangle)]
@@ -401,5 +423,5 @@ fn main() -> i32 {
         supervisor: Some(supervisor),
         subscribed: Vec::new(),
     };
-    serve(volume, kernel, root, false)
+    serve(volume, kernel, root, false, flag(b"--sealed-system"))
 }

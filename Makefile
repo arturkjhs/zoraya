@@ -397,6 +397,9 @@ DEVICE_ERROR := tests/shell/device-error.script
 ROOMS_SCRIPT := tests/shell/rooms.script
 GRANTS_SCRIPT := tests/shell/grants.script
 GRANTS_ROOT := $(BUILD)/grants-root
+SYSTEM_RO_ROOT := $(BUILD)/system-ro-root
+SYSTEM_RO_TEMPLATE := tests/shell/system-ro.script
+SYSTEM_RO_SCRIPT := $(BUILD)/system-ro.script
 CRASH_IMAGE := $(BUILD)/crash.img
 CRASH_ROUNDS ?= $(if $(filter 1,$(FULL)),10,2)
 RUN_BOOT = $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SHELL_SCRIPT)
@@ -420,6 +423,12 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_WRITE) --label files-write -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(FILES_READ) --label files-read -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# ADR-0289 item 8: /system is read-only for the console shell and for a +w grant.
+	rm -rf $(SYSTEM_RO_ROOT) && mkdir -p $(SYSTEM_RO_ROOT) && cp -R rootfs/. $(SYSTEM_RO_ROOT)/
+	target/debug/zoraya-mkfs --size 16M --from $(SYSTEM_RO_ROOT) $(CRASH_IMAGE)
+	sed -e "s/@ROOTSSIZE@/$$(wc -c < rootfs/system/tls/roots | tr -d ' ')/" $(SYSTEM_RO_TEMPLATE) > $(SYSTEM_RO_SCRIPT)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(SYSTEM_RO_SCRIPT) --label system-ro -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # INV-0155-1: every command's --help and usage error, with a volume.
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)

@@ -60,7 +60,10 @@ pub fn init(info: &PlatformInfo<'_>) {
 ///
 /// When none is free and the reaper still holds frames, it frees a step of
 /// them and this tries again (ADR-0270 point 4): memory that is on its way
-/// back is not exhaustion.
+/// back is not exhaustion. The unit is counted at the caller's line, as
+/// [`free`]'s is, so that the diagnosis of a busy interval names the path
+/// that allocated (the heap's growth, a page table, an object).
+#[track_caller]
 pub fn alloc() -> Result<Frame, OutOfFrames> {
     crate::steps::count(1);
     loop {
@@ -73,7 +76,8 @@ pub fn alloc() -> Result<Frame, OutOfFrames> {
     }
 }
 
-/// One zeroed frame.
+/// One zeroed frame, counted at the caller's line.
+#[track_caller]
 pub fn alloc_zeroed() -> Result<Frame, OutOfFrames> {
     let frame = alloc()?;
     // SAFETY: the frame is allocated and so is ordinary RAM, which the direct

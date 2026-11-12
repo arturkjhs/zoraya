@@ -90,13 +90,19 @@ pub fn read_rtc() -> u64 {
     u64::from(seconds) * 1_000_000_000
 }
 
+/// A volume under test: `/system` is not sealed.
 pub fn start_stack(device: Handle, range: u32) -> Option<Stack> {
-    start_stack_at(device, range, 0)
+    start_stack_with(device, range, 0, false)
 }
 
 /// As [`start_stack`], with the root volume's time floor (ADR-0226): the
-/// nanoseconds [`read_rtc`] gave, or 0.
+/// nanoseconds [`read_rtc`] gave, or 0. This is the root volume: its service
+/// keeps `/system` read-only (ADR-0289 item 8).
 pub fn start_stack_at(device: Handle, range: u32, floor: u64) -> Option<Stack> {
+    start_stack_with(device, range, floor, true)
+}
+
+fn start_stack_with(device: Handle, range: u32, floor: u64, sealed: bool) -> Option<Stack> {
     let (service_end, driver_end) = channel_create().ok()?;
     let (root_client, root_server) = channel_create().ok()?;
     let (supervisor, supervisor_end) = channel_create().ok()?;
@@ -119,11 +125,18 @@ pub fn start_stack_at(device: Handle, range: u32, floor: u64) -> Option<Stack> {
         moved(6, root_server),
         moved(7, supervisor_end),
     ];
-    let service = if floor == 0 {
-        start("fsd", &fsd_handles, &[])
-    } else {
-        start("fsd", &fsd_handles, &[b"--time-floor", floor_text])
-    }?;
+    let mut args: [&[u8]; 3] = [&[]; 3];
+    let mut count = 0;
+    if floor != 0 {
+        args[0] = b"--time-floor";
+        args[1] = floor_text;
+        count = 2;
+    }
+    if sealed {
+        args[count] = b"--sealed-system";
+        count += 1;
+    }
+    let service = start("fsd", &fsd_handles, &args[..count])?;
     Some(Stack {
         driver,
         service,
