@@ -25,14 +25,14 @@
 < stubborn: killed
 < hostile /t/w> 
 > badptr\r
-< hostile /t/w> 
-> echo $?\r
-< 0
+< \r\nhostile /t/w> 
+> echo $status\r
+< \r\n0
 < hostile /t/w> 
 > fuzz\r
-< hostile /t/w> 
-> echo $?\r
-< 0
+< \r\nhostile /t/w> 
+> echo $status\r
+< \r\n0
 < hostile /t/w> 
 > memhog --hold 1\r
 < memhog: refused after
@@ -45,13 +45,14 @@
 < of 16
 < hostile /t/w> 
 > room --leave\r
-< \r\n~> 
+> cd /\r
+< \r\n/> 
 > echo home still works\r
 < home still works
-< \r\n~> 
+< \r\n/> 
 > room remove hostile --kill\r
-< \r\n~> 
+< \r\n/> 
 > room\r
 < home
-< \r\n~> 
+< \r\n/> 
 > poweroff\r

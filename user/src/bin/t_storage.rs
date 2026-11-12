@@ -17,7 +17,7 @@ use zoraya_protocol::{ErrorReply, Flags, Path, decode, encode};
 use zoraya_user::files::{ALL, File, read_all};
 use zoraya_user::stack::{Stack, find_disk, start_stack};
 use zoraya_user::{
-    channel_create, channel_read, channel_write, clock_monotonic, handle_close, job_kill,
+    println, channel_create, channel_read, channel_write, clock_monotonic, handle_close, job_kill,
     port_create, port_subscribe, port_wait, wait_exit,
 };
 
@@ -249,6 +249,57 @@ fn too_many_open(root: &File) {
     }
 }
 
+/// The gate's `service-floods` row, files (ADR-0268 point 3, ADR-0262 item 2,
+/// INV-0262-1) through the real `fsd`: a launcher carves an account of `BUDGET`
+/// open handles for a room; the room opens without end and stops at the
+/// budget with `TooManyOpen`, a second account and home (the session's) keep
+/// opening to their own bounds, and the flooder's closes give the room back.
+fn account_flood(root: &File) {
+    const BUDGET: u32 = 20;
+    let mut client = zoraya_fsclient::Client::new(zoraya_user::app::Files);
+    let carve = |client: &mut zoraya_fsclient::Client<_>| {
+        client
+            .clone_account(root.end, ALL, BUDGET)
+            .map(|end| File { end })
+    };
+    let room = carve(&mut client).expect("an account for the room");
+    let other = carve(&mut client).expect("an account for another room");
+    let mut held = Vec::new();
+    let refused = loop {
+        match room.clone_as(ALL) {
+            Ok(file) => held.push(file),
+            Err(s) => break s,
+        }
+    };
+    assert_eq!(refused, status::TOO_MANY_OPEN);
+    assert!(
+        (BUDGET as usize - 2..=BUDGET as usize).contains(&held.len()),
+        "the room opened {} of its {BUDGET}",
+        held.len()
+    );
+    // Nobody else is refused because of it.
+    let mut others = Vec::new();
+    while others.len() < BUDGET as usize - 2 {
+        others.push(other.clone_as(ALL).expect("the other account is whole"));
+    }
+    let mut home = Vec::new();
+    for _ in 0..100 {
+        home.push(root.clone_as(ALL).expect("home is whole"));
+    }
+    root.stat().expect("home answers");
+    println!(
+        "t_storage: account of {BUDGET}: room stopped at {} open, another account opened {}, home opened {}",
+        held.len(),
+        others.len(),
+        home.len()
+    );
+    held.clear();
+    let deadline = clock_monotonic() + 10_000_000_000;
+    while room.clone_as(ALL).is_err() {
+        assert!(clock_monotonic() < deadline, "the closes give the account back");
+    }
+}
+
 /// INV-0055-6: a client that sends and never reads.
 fn a_client_that_never_reads(root: &File) {
     let client = root.clone_as(ALL).expect("clone");
@@ -279,6 +330,7 @@ fn main() -> i32 {
     malformed_messages(&stack.root);
     hostile_paths(&stack.root);
     too_many_open(&stack.root);
+    account_flood(&stack.root);
     a_client_that_never_reads(&stack.root);
     stack.end();
     0

@@ -7,7 +7,7 @@ operand  DIR  tree  the directory to write in
 exit     42  the directory's limit (or the volume) refused the write
 exit     0  the syncs were done
 ---
-Writes files of 64 KiB blocks in DIR until a write is refused (OverQuota, or
+Writes files of 32 KiB blocks in DIR until a write is refused (OverQuota, or
 NoSpace on a full volume), says how much it wrote and exits with 42. It stops
 at 64 MiB if nothing refuses. With --syncs it writes 4 KiB and syncs, N times,
 and says the slowest sync; with --loop it does the same until the time is up.

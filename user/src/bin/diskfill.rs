@@ -15,7 +15,7 @@ use zoraya_user::{clock_monotonic, command, namespace, println};
 
 zoraya_user::describe!("tests", "diskfill");
 
-const BLOCK: usize = 64 << 10;
+const BLOCK: usize = 32 << 10;
 /// Stops a run that nothing limits.
 const MOST: u64 = 64 << 20;
 
@@ -39,7 +39,7 @@ fn main() -> i32 {
         let f = match ns.open(
             &format!("{dir}/synced"),
             open_flags::CREATE | open_flags::TRUNCATE,
-            rights::READ | rights::WRITE,
+            rights::READ | rights::WRITE | rights::SYNC,
         ) {
             Ok(f) => f,
             Err(s) => {
@@ -93,7 +93,7 @@ fn main() -> i32 {
                 return 1;
             }
         };
-        for chunk in 0..16u64 {
+        for chunk in 0..32u64 {
             match f.write(chunk * BLOCK as u64, 0, &block) {
                 Ok(_) => written += BLOCK as u64,
                 Err(s) if refused(s) => {
