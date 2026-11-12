@@ -195,8 +195,28 @@ struct Fifo<E> {
     writers: u32,
 }
 
+/// Where a record lies in relation to the sealed directory (ADR-0289 item 8).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Seal {
+    /// Anywhere else.
+    Outside,
+    /// The volume's root: the sealed name is the one entry it must keep.
+    Root,
+    /// The sealed directory or anything below it: nothing there can change.
+    Sealed,
+}
+
+/// The rights that change what a volume holds. A record under the seal never
+/// has them, on any connection (ADR-0289 item 8).
+const MUTATING: u32 = proto::rights::WRITE
+    | proto::rights::CREATE
+    | proto::rights::REMOVE
+    | proto::rights::RENAME
+    | proto::rights::PUBLISH;
+
 struct Record {
     handle: Handle,
+    seal: Seal,
     connections: u32,
     /// Where the requests without an offset read and write.
     position: u64,
@@ -351,6 +371,9 @@ pub struct Service<D: Device, C: Clock, T: Transport> {
     fifo_create: bool,
     /// What `time_base` answers (ADR-0191).
     time_base: u64,
+    /// The name of the root's entry that is read-only for everyone, with all
+    /// below it (ADR-0289 item 8); `None` for a volume that has none.
+    sealed: Option<String>,
     connections: Vec<Option<Connection<T::End>>>,
     records: Vec<Option<Record>>,
     /// Handles held for clients (ADR-0055).
@@ -460,6 +483,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             fifo_nodes: BTreeSet::new(),
             fifo_create: false,
             time_base: 0,
+            sealed: None,
             connections: Vec::new(),
             records: Vec::new(),
             open: 0,
@@ -478,6 +502,22 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             data: vec![0; proto::MAX_INLINE],
             handles: Vec::with_capacity(64),
         }
+    }
+
+    /// Makes the root's entry `name`, and everything below it, read-only on
+    /// every connection from now on: no write, create, remove, rename,
+    /// publish or limit, and no clone or narrowing can add one (ADR-0289
+    /// item 8). The entry cannot be removed, renamed or replaced either.
+    ///
+    /// Call it before the first connection: a record opened earlier does not
+    /// know the seal, so the call refuses (panics) when any connection
+    /// exists.
+    pub fn seal(&mut self, name: &str) {
+        assert!(
+            self.connections.iter().all(Option::is_none),
+            "seal before the first connection"
+        );
+        self.sealed = Some(name.into());
     }
 
     /// The time base `time_base` gives (ADR-0191).
@@ -523,6 +563,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     pub fn add_root(&mut self, end: T::End) -> bool {
         let handle = self.volume.root();
         let record = self.new_record(handle);
+        if let Some(r) = self.records[record].as_mut() {
+            r.seal = Seal::Root;
+        }
         let account = self.session_account();
         self.add_connection(end, record, proto::rights::ALL, account)
             .is_some()
@@ -726,6 +769,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     fn new_record(&mut self, handle: Handle) -> usize {
         let record = Some(Record {
             handle,
+            seal: Seal::Outside,
             connections: 0,
             position: 0,
             flags: 0,
@@ -1201,9 +1245,47 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn has(&self, index: usize, right: u32) -> bool {
+        // Defence in depth: `seal_after` gives a record under the seal no
+        // mutating right, so no connection reaches this refusal today (deleting
+        // it is an equivalent mutant, noted in tools/mutants/fs-service.toml).
+        if right & MUTATING != 0 && self.seal_of(index) == Seal::Sealed {
+            return false;
+        }
         self.connections[index]
             .as_ref()
             .is_some_and(|c| c.rights & right == right)
+    }
+
+    fn seal_of(&self, index: usize) -> Seal {
+        self.connections
+            .get(index)
+            .and_then(Option::as_ref)
+            .and_then(|c| self.records.get(c.record)?.as_ref())
+            .map_or(Seal::Outside, |r| r.seal)
+    }
+
+    /// Whether `name`, in the directory connection `index` holds, is the
+    /// sealed entry: the root's entry cannot be changed as a whole either.
+    fn is_sealed_name(&self, index: usize, name: &str) -> bool {
+        self.seal_of(index) == Seal::Root && self.sealed.as_deref() == Some(name)
+    }
+
+    /// The first component of `path`, as the engine reads it.
+    fn first_component(path: &str) -> &str {
+        path.split('/').find(|c| !c.is_empty()).unwrap_or("")
+    }
+
+    /// The seal of what `path` opens from connection `index`.
+    fn seal_after(&self, index: usize, path: &str) -> Seal {
+        match self.seal_of(index) {
+            Seal::Sealed => Seal::Sealed,
+            Seal::Root => match Self::first_component(path) {
+                "" => Seal::Root,
+                first if self.sealed.as_deref() == Some(first) => Seal::Sealed,
+                _ => Seal::Outside,
+            },
+            Seal::Outside => Seal::Outside,
+        }
     }
 
     fn handle_of(&self, index: usize) -> Option<Handle> {
@@ -1314,14 +1396,14 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             13 => {
                 let (_, m) = decode::<proto::Remove<'_>>(bytes, n)?;
-                if !self.may_name(i, m.name.0) {
+                if !self.may_name(i, m.name.0) || self.is_sealed_name(i, m.name.0) {
                     return self.denied(i, t);
                 }
                 self.remove(i, t, m.name.0);
             }
             14 => {
                 let (_, m) = decode::<proto::MakeDirectory<'_>>(bytes, n)?;
-                if !self.may_name(i, m.name.0) {
+                if !self.may_name(i, m.name.0) || self.is_sealed_name(i, m.name.0) {
                     return self.denied(i, t);
                 }
                 self.make_directory(i, t, m.mode, m.name.0);
@@ -1383,7 +1465,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             }
             21 => {
                 let (_, m) = decode::<proto::MakeLink<'_>>(bytes, n)?;
-                if !self.may_name(i, m.name.0) {
+                if !self.may_name(i, m.name.0) || self.is_sealed_name(i, m.name.0) {
                     return self.denied(i, t);
                 }
                 self.make_link(i, t, m.name.0, m.target.0);
@@ -1469,7 +1551,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
                 // A limit is set from above, on a full directory connection
                 // (proposed ADR-0292): a connection narrowed to one name,
                 // which carries create's `WRITE`, must not change it.
-                if self.only_of(i).is_some() {
+                if self.only_of(i).is_some() || self.is_sealed_name(i, m.name.0) {
                     return self.denied(i, t);
                 }
                 self.set_limit(i, t, m.name.0, (m.remove.0 == 0).then_some(m.limit));
@@ -1768,6 +1850,12 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let Some(dir) = self.handle_of(i) else {
             return self.open_answer(i, t, full, status::STORAGE_FAILED, ("", ""), None);
         };
+        // What lies under the seal is opened to read: a write right, a
+        // create or a truncation is refused before the engine runs.
+        let seal = self.seal_after(i, m.path.0);
+        if seal == Seal::Sealed && needed & MUTATING != 0 {
+            return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
+        }
         if !self.has(i, needed) {
             return self.open_answer(i, t, full, status::ACCESS_DENIED, ("", ""), None);
         }
@@ -1840,6 +1928,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let record = self.new_record(handle);
         if let Some(r) = self.records[record].as_mut() {
             r.flags = description;
+            r.seal = seal;
         }
         // What the full reply tells of the object, read before the
         // connection exists: a connection the transport refuses closes the
@@ -1959,6 +2048,10 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
             Ok(handle) => {
                 handles.clear();
                 let record = self.new_record(handle);
+                let seal = self.seal_of(i);
+                if let Some(r) = self.records[record].as_mut() {
+                    r.seal = seal;
+                }
                 let only = narrow.or_else(|| self.only_of(i));
                 let s = match self.add_connection(end, record, rights, account) {
                     Some(added) => {
@@ -2406,6 +2499,16 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         }
     }
 
+    /// Whether the connection a token names is the root and `name` is the
+    /// sealed entry.
+    fn token_is_sealed_name(&mut self, token: T::End, name: &str) -> bool {
+        if self.transport.kind(token) != HandleKind::Token {
+            return false;
+        }
+        self.token_target(token)
+            .is_some_and(|target| self.is_sealed_name(target, name))
+    }
+
     fn token_directory(&mut self, token: T::End, right: u32) -> Result<Handle, u32> {
         if self.transport.kind(token) != HandleKind::Token {
             return Err(status::INVALID_ARGUMENT);
@@ -2426,7 +2529,11 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let (Some(source), Some(token)) = (self.handle_of(i), handles.first().copied()) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
-        if !self.may_name(i, m.old.0) || !self.token_may_name(token, m.new.0) {
+        if !self.may_name(i, m.old.0)
+            || !self.token_may_name(token, m.new.0)
+            || self.is_sealed_name(i, m.old.0)
+            || self.token_is_sealed_name(token, m.new.0)
+        {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let target = match self.token_directory(token, right) {
@@ -2451,7 +2558,7 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
         let (Some(file), Some(token)) = (self.handle_of(i), handles.first().copied()) else {
             return self.done(i, t, status::INVALID_ARGUMENT, 0);
         };
-        if !self.token_may_name(token, m.name.0) {
+        if !self.token_may_name(token, m.name.0) || self.token_is_sealed_name(token, m.name.0) {
             return self.done(i, t, status::ACCESS_DENIED, 0);
         }
         let directory = match self.token_directory(token, right) {

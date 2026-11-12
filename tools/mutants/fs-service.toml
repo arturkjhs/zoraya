@@ -1,5 +1,9 @@
 # zoraya-fs-service: rights (INV-0055-3), the open table (INV-0055-7, -8),
 # the timed commit (ADR-0010 rule 5). Host tests only.
+#
+# Not listed, equivalent: the `Seal::Sealed` clause of `has` (defence in depth;
+# `seal_after` never gives a record under the seal a mutating right, so no
+# test can reach it).
 tests = ["cargo test -q -p zoraya-fs-service --test service"]
 timeout = 600
 

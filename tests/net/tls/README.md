@@ -10,4 +10,6 @@ accept no certificate for a name outside `.zoraya`.
   (Makefile), and nowhere else: never into `rootfs/`.
 - `valid`, `expired` and `wrong` are leaves for `test.zoraya`, `expired.zoraya`
   and `other.zoraya` (served as `wrong.zoraya`).
+- `outside` is a leaf for `www.example.org`, signed by the test root with its own key (`make-outside.sh`): the root's
+  name constraint must make a verifier refuse it (`crates/zoraya-tls/tests/handshake.rs`).
 - `make.sh` makes all of them again; run it only to renew them.

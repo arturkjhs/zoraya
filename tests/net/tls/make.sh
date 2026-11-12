@@ -57,4 +57,5 @@ leaf() { # name file startdate enddate
 leaf test.zoraya valid 20200101000000Z 21260101000000Z
 leaf expired.zoraya expired 20200101000000Z 20200102000000Z
 leaf other.zoraya wrong 20200101000000Z 21260101000000Z
+./make-outside.sh
 ls -l
