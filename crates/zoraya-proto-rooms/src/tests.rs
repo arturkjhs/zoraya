@@ -60,6 +60,15 @@ fn every_message_round_trips_and_decodes_totally() {
         },
         0
     );
+    round!(
+        Open<'_>,
+        Open {
+            kind: Below(0),
+            room: Text("agent-1"),
+        },
+        0
+    );
+    round!(Opened, Opened {}, 1);
     round!(Launched, Launched {}, 1);
     round!(Done, Done {}, 0);
     round!(
@@ -156,6 +165,8 @@ fn the_ordinal_sets_are_disjoint_by_direction() {
         <Usage<'_> as Message>::ORDINAL,
         <Report<'_> as Message>::ORDINAL,
         <Stop<'_> as Message>::ORDINAL,
+        <Open<'_> as Message>::ORDINAL,
+        <Opened as Message>::ORDINAL,
         <Launched as Message>::ORDINAL,
         <Done as Message>::ORDINAL,
         <Denied<'_> as Message>::ORDINAL,

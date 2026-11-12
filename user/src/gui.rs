@@ -370,6 +370,7 @@ impl Gui {
         &self,
         root: &crate::files::File,
         chooser: Option<Handle>,
+        keeper: Option<(Handle, Handle)>,
     ) -> Option<Running> {
         let (ours, theirs) = channel_create().ok()?;
         if !attached(self.manager, &gui::AttachClientManager {}, theirs) {
@@ -408,6 +409,12 @@ impl Gui {
             if let Some(c) = chooser {
                 e.handle(moved(7, c));
             }
+            // The room keeper's `Manage` channel and the way to a new one
+            // (ADR-0269 point 3).
+            if let Some((manage, reconnect)) = keeper {
+                e.handle(moved(8, manage));
+                e.handle(moved(9, reconnect));
+            }
             let process = e
                 .finish()
                 .and_then(|length| zoraya_rt::spawn(&buffer[..length]).ok());
@@ -427,6 +434,10 @@ impl Gui {
             None => {
                 // Not taken: closed here (the root with its drop).
                 let _ = handle_close(ours);
+                if let Some((manage, reconnect)) = keeper {
+                    let _ = handle_close(manage);
+                    let _ = handle_close(reconnect);
+                }
                 None
             }
         }

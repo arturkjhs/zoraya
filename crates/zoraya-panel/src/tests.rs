@@ -90,6 +90,12 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
         ]
     );
     assert!(s[1].2.is_empty());
+    // Only a shell in a room holds a keeper channel (INV-0269-2); `home`'s
+    // terminal holds none.
+    assert!(
+        s.iter()
+            .all(|(_, h, _)| h.iter().all(|x| x.1 != Give::Keeper))
+    );
     // Only the shell has a start-up record; nothing holds the volume's
     // root, and home gives no write to `/` (ADR-0242's condition).
     for (image, handles, _) in &s {
@@ -139,11 +145,12 @@ fn a_launch_gives_exactly_its_record_in_its_room() {
             }
         }
         assert_eq!(spawned(&l)[1].2, ["--room", room.name.as_str()]);
-        assert_eq!(
-            spawned(&l)[1].1,
-            spawned(&home)[1].1,
-            "the same handles in every room"
-        );
+        // The same handles in every room, and a `Room(R)` channel to the
+        // keeper in a room's shell alone (INV-0269-2).
+        let mut with_keeper = spawned(&home)[1].1.clone();
+        with_keeper.push((KEEPER_SLOT, Give::Keeper));
+        assert_eq!(spawned(&l)[1].1, with_keeper);
+        assert!(spawned(&l)[0].1.iter().all(|h| h.1 != Give::Keeper));
     }
 }
 

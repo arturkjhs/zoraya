@@ -104,6 +104,7 @@ pub mod ordinal {
     pub const USAGE: u32 = 4;
     pub const REPORT: u32 = 5;
     pub const STOP: u32 = 6;
+    pub const OPEN: u32 = 7;
 }
 
 /// Why a request was not done (`Denied`).
@@ -183,6 +184,17 @@ protocol! {
         room: Text<'a, MAX_ROOM>,
     }
 
+    /// `Manage` only: a new channel to the keeper for a program the sender
+    /// launches (the panel gives each shell in a room one): `kind` 0 is
+    /// `Room(room)`, 1 is `Usage` (`room` empty). Answered by `Opened`.
+    message Open<'a> = 7, handles 0 {
+        kind: Below<2>,
+        room: Text<'a, MAX_ROOM>,
+    }
+
+    /// The answer to `Open`: the new channel's client end.
+    message Opened = 68, handles 1 {}
+
     /// The answer to `Launch`: the launch job.
     message Launched = 64, handles 1 {}
 
@@ -235,7 +247,7 @@ protocol! {
 }
 
 /// The requests a `Manage` channel may send.
-pub const MANAGE_REQUESTS: [u32; 6] = [1, 2, 3, 4, 5, 6];
+pub const MANAGE_REQUESTS: [u32; 7] = [1, 2, 3, 4, 5, 6, 7];
 /// The requests a `Room(R)` channel may send, and only for R.
 pub const ROOM_REQUESTS: [u32; 2] = [1, 4];
 /// The requests a `Usage` channel may send.

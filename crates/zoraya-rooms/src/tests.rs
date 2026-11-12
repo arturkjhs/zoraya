@@ -166,7 +166,7 @@ fn launch(
             let (_, d) = decode::<Denied<'_>>(&out[..n], 0).unwrap();
             Err((d.status.0, d.text.0.into()))
         }
-        Reply::Close => Err((99, "closed".into())),
+        Reply::Close | Reply::Open(..) => Err((99, "closed".into())),
     }
 }
 
@@ -443,7 +443,7 @@ fn which_messages_each_channel_kind_may_send() {
     let room = |n: &str| ChannelKind::Room(RoomName::new(n).unwrap());
     let project = room("project");
     let name = |n| Text::<24>(n);
-    let all: [(&str, std::vec::Vec<u8>); 6] = [
+    let all: [(&str, std::vec::Vec<u8>); 7] = [
         (
             "launch",
             msg(&Launch {
@@ -484,6 +484,13 @@ fn which_messages_each_channel_kind_may_send() {
                 room: name("project"),
             }),
         ),
+        (
+            "open",
+            msg(&zoraya_proto_rooms::Open {
+                kind: Below(0),
+                room: name("project"),
+            }),
+        ),
     ];
     for (what, bytes) in &all {
         let (r, out) = ask(&mut k, 3, &project, bytes);
@@ -497,7 +504,7 @@ fn which_messages_each_channel_kind_may_send() {
                 let (_, d) = decode::<Denied<'_>>(&out[..n], 0).unwrap();
                 assert_eq!(d.status.0, status::NOT_ALLOWED, "{what}");
             }
-            Reply::Close => panic!("{what}"),
+            Reply::Close | Reply::Open(..) => panic!("{what}"),
         }
     }
     assert_eq!(k.running().len(), 2, "stop was not done");
@@ -549,7 +556,7 @@ fn which_messages_each_channel_kind_may_send() {
         }
     }
     // An unused request ordinal is denied, not served.
-    for ord in [7u32, 15] {
+    for ord in [8u32, 15] {
         let mut b = msg(&Done {});
         b[4..8].copy_from_slice(&ord.to_le_bytes());
         let (r, out) = ask(&mut k, 3, &DESKTOP, &b);
@@ -810,4 +817,45 @@ fn home_is_a_trusted_room_without_limits_under_the_session() {
     // `home` never appears in the file, so the table does not matter.
     k.env().table = "BROKEN".into();
     launch(&mut k, 1, &DESKTOP, "home").unwrap();
+}
+
+#[test]
+fn only_manage_opens_channels_and_names_the_kind() {
+    let mut k = keeper();
+    let m = msg(&zoraya_proto_rooms::Open {
+        kind: Below(0),
+        room: Text("agent-1"),
+    });
+    let (r, _) = ask(&mut k, 1, &DESKTOP, &m);
+    let Reply::Open(_, kind) = r else {
+        panic!("{r:?}")
+    };
+    assert_eq!(kind, ChannelKind::Room(RoomName::new("agent-1").unwrap()));
+    let m = msg(&zoraya_proto_rooms::Open {
+        kind: Below(1),
+        room: Text(""),
+    });
+    let (r, _) = ask(&mut k, 1, &CONSOLE, &m);
+    assert!(matches!(r, Reply::Open(_, ChannelKind::Usage)));
+    let m = msg(&zoraya_proto_rooms::Open {
+        kind: Below(0),
+        room: Text(""),
+    });
+    let (r, _) = ask(&mut k, 1, &DESKTOP, &m);
+    assert!(matches!(r, Reply::Send(_)), "an empty room name is refused");
+    for kind in [
+        ChannelKind::Usage,
+        ChannelKind::Room(RoomName::new("agent-1").unwrap()),
+    ] {
+        let m = msg(&zoraya_proto_rooms::Open {
+            kind: Below(1),
+            room: Text(""),
+        });
+        let (r, out) = ask(&mut k, 2, &kind, &m);
+        let Reply::Send(n) = r else { panic!() };
+        assert_eq!(
+            decode::<Denied<'_>>(&out[..n], 0).unwrap().1.status.0,
+            status::NOT_ALLOWED
+        );
+    }
 }

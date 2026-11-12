@@ -57,7 +57,15 @@ pub enum Give {
     Broker,
     /// That broker's temporary service's root, the shell's `/tmp`.
     Tmp,
+    /// A `Room(R)` channel to the room keeper (ADR-0269 point 3): the
+    /// shell of a terminal in a room only, for `grants`' limits line, `top`
+    /// and the quota hint. Nothing else in a room holds a keeper channel
+    /// (INV-0269-2).
+    Keeper,
 }
+
+/// The slot of a room shell's `Room(R)` channel to the keeper.
+pub const KEEPER_SLOT: u32 = 11;
 
 /// The start-up record's slot (`zoraya-abi`'s `native::slot::STARTUP`).
 pub const STARTUP_SLOT: u32 = 1000;
@@ -368,7 +376,11 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             .collect(),
     };
     let entries = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
-    Launch {
+    let keeper = room.is_some().then_some(Slot {
+        slot: KEEPER_SLOT,
+        give: Give::Keeper,
+    });
+    let mut launch = Launch {
         app: "term",
         room: room.cloned(),
         entries,
@@ -429,7 +441,11 @@ pub fn terminal(room: Option<&Room>) -> Launch {
                 args,
             },
         ],
+    };
+    if let (Some(slot), Some(shell)) = (keeper, launch.programs.get_mut(1)) {
+        shell.handles.push(slot);
     }
+    launch
 }
 
 /// A terminal launched in `room` (`None` is `home`) to start at `path`, an

@@ -23,8 +23,9 @@ use alloc::vec::Vec;
 use zoraya_abi::Status;
 use zoraya_abi::quota::{JobLimits, JobUsage};
 use zoraya_proto_rooms::{
-    ChannelKind, Denied, Done, Launch, Launched, Launcher, Leave, MAX_ROOMS, NONE, RECORD_SIZE,
-    Refused, Report, Set, Stop, Usage, UsageList, UsageRecord, field, flags, ordinal, status,
+    ChannelKind, Denied, Done, Launch, Launched, Launcher, Leave, MAX_ROOMS, NONE, Open, Opened,
+    RECORD_SIZE, Refused, Report, Set, Stop, Usage, UsageList, UsageRecord, field, flags, ordinal,
+    status,
 };
 use zoraya_protocol::{Below, Data, Header, Text, decode, encode};
 use zoraya_settings::rooms::{self, Limits, Machine, Room};
@@ -78,6 +79,9 @@ pub enum Reply {
     Send(usize),
     /// Write `out[..n]` with this job (a launch job) and then close it.
     SendJob(usize, JobId),
+    /// Write `out[..n]` with the client end of a new channel of this kind,
+    /// which the process makes and serves.
+    Open(usize, ChannelKind),
     /// The message was not one this kind of channel may send, or was
     /// malformed: close the channel.
     Close,
@@ -435,6 +439,23 @@ impl<E: Env> Keeper<E> {
                 // Service numbers are 1 to 4; slot i holds service i + 1.
                 r.reports[m.service.0 as usize] = [m.service.0 + 1, m.used, m.limit, m.refused];
                 done(tx, out)
+            }
+            ordinal::OPEN => {
+                let Ok((_, m)) = decode::<Open<'_>>(message, handles) else {
+                    return Reply::Close;
+                };
+                let kind = match m.kind.0 {
+                    0 => zoraya_proto_rooms::alloc_free::RoomName::new(m.room.0)
+                        .map(ChannelKind::Room),
+                    _ => Some(ChannelKind::Usage),
+                };
+                let Some(kind) = kind else {
+                    return denied(status::NO_SUCH_ROOM, "not a room name", tx, out);
+                };
+                match encode(&Opened {}, tx, out) {
+                    Ok(n) => Reply::Open(n, kind),
+                    Err(_) => Reply::Close,
+                }
             }
             ordinal::STOP => {
                 let Ok((_, m)) = decode::<Stop<'_>>(message, handles) else {

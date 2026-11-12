@@ -98,12 +98,13 @@ fn moved(slot: u32, handle: Handle) -> HandleEntry {
 /// lists; `take` gives the channel ends and the root for the slots that
 /// carry them.
 fn spawn_program(
+    parent: Handle,
     image: &str,
     handles: &[zoraya_panel::Slot],
     args: &[String],
     mut take: impl FnMut(Give) -> Option<Handle>,
 ) -> bool {
-    let Ok(job) = job_create(JOB, JobFlags::NONE) else {
+    let Ok(job) = job_create(parent, JobFlags::NONE) else {
         return false;
     };
     let Ok(file) = directory_lookup(DIRECTORY, image) else {
@@ -159,6 +160,9 @@ struct State {
     /// `OpenTerminal`, `settings` `SettingsChanged`, nothing else (review
     /// 7f, 8).
     launchers: Vec<Option<(Handle, &'static str, Option<Room>)>>,
+    /// The room keeper (ADR-0269): the launch job of every launch comes
+    /// from it. Without one, a trusted room launches in the panel's own job.
+    keeper: Option<zoraya_user::roomsclient::Keeper>,
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -235,7 +239,34 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         zoraya_panel::confine_files(&mut confined, &zoraya_user::namespace::shell_home(root));
     }
     let l = &confined;
+    // The room's one job (ADR-0269): a launch job from the keeper, asked for
+    // before anything is made. A refusal is the whole launch's (an untrusted
+    // room is used from one launcher at a time). Without a keeper a trusted
+    // room launches in the panel's own job, as before.
+    let room_name = l.room.as_ref().map_or("home", |r| r.name.as_str());
+    let untrusted = l.room.as_ref().is_some_and(|r| r.untrusted);
+    let launch_job = match st.keeper.as_mut().map(|k| k.launch(room_name)) {
+        Some(Ok(job)) => Some(job),
+        Some(Err(why)) => {
+            println!("panel: room {room_name}: {why:?}");
+            if let Some(h) = opened {
+                let _ = handle_close(h);
+            }
+            return;
+        }
+        None if untrusted => {
+            println!("panel: room {room_name}: an untrusted room needs the room keeper");
+            if let Some(h) = opened {
+                let _ = handle_close(h);
+            }
+            return;
+        }
+        None => None,
+    };
     let Ok((client, compositor_end)) = channel_create() else {
+        if let Some(j) = launch_job {
+            let _ = handle_close(j);
+        }
         return;
     };
     let tag = st.next_tag;
@@ -283,8 +314,11 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         .programs
         .iter()
         .any(|p| p.handles.iter().any(|s| s.give == Give::Broker));
+    let parent = launch_job.unwrap_or(JOB);
     let beside = if wants_broker {
-        st.root.as_ref().and_then(zoraya_user::beside::start_broker)
+        st.root
+            .as_ref()
+            .and_then(|r| zoraya_user::beside::start_broker_in(r, parent))
     } else {
         None
     };
@@ -296,7 +330,7 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
         let root = st.root.as_ref();
         let chooser = st.chooser;
         let mut launcher = None;
-        let ok = spawn_program(p.image, &p.handles, &p.args, |g| match g {
+        let ok = spawn_program(parent, p.image, &p.handles, &p.args, |g| match g {
             Give::Compositor => client.take(),
             Give::Terminal => ends[i.min(1)].take(),
             Give::Startup => {
@@ -329,6 +363,8 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
                 Some(h)
             }
             Give::Broker => broker.take(),
+            // A `Room(R)` channel for the shell in a room (ADR-0269 point 3).
+            Give::Keeper => st.keeper.as_mut().and_then(|k| k.open(room_name).ok()),
             Give::Tmp => tmp.take(),
             _ => None,
         });
@@ -355,6 +391,14 @@ fn launch(st: &mut State, l: &Launch, mut opened: Option<Handle>) {
     if let Some(b) = beside {
         let _ = handle_close(b.job.0);
         let _ = handle_close(b.job.1);
+    }
+    // Done launching: the keeper may let an untrusted room go to the other
+    // launcher once its processes have ended.
+    if let Some(j) = launch_job {
+        let _ = handle_close(j);
+        if let Some(k) = st.keeper.as_mut() {
+            let _ = k.leave(room_name);
+        }
     }
 }
 
@@ -569,6 +613,8 @@ fn main() -> i32 {
         next_tag: 1,
         port,
         launchers: Vec::new(),
+        keeper: channel(8)
+            .and_then(|manage| zoraya_user::roomsclient::Keeper::new(manage, channel(9))),
     };
     let mut next_reload = clock_monotonic() + RELOAD_NS;
     let mut bytes = alloc::vec![0u8; 512];

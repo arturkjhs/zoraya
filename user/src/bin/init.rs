@@ -56,6 +56,10 @@ const KEY_MANAGER: u64 = 8;
 const KEY_TTYD: u64 = 9;
 const KEY_NETD: u64 = 10;
 const KEY_ETHD: u64 = 11;
+const KEY_ROOMS: u64 = 12;
+const KEY_ROOMS_CHAN: u64 = 13;
+const KEY_RECONNECT_SHELL: u64 = 14;
+const KEY_RECONNECT_PANEL: u64 = 15;
 const KEY_INPUT: u64 = 16;
 
 /// A moved handle with its type's rights.
@@ -185,6 +189,171 @@ fn config_connection(stack: &Stack) -> Option<Handle> {
     Some(end)
 }
 
+/// The room keeper (ADR-0269, proposed ADR-0293), started with the storage
+/// stack (it reads `/config/rooms`) and restarted at most [`MAX_RESTARTS`]
+/// times; `kept` is a duplicate, with `LIMIT`, of the untrusted job (room
+/// name empty) and of each room job the keeper made, for a restarted keeper.
+struct RoomKeeper {
+    job: Handle,
+    process: Handle,
+    /// `init`'s end of the start-up channel.
+    chan: Handle,
+}
+
+/// What `init` keeps for a restarted keeper.
+struct Kept {
+    /// The room's name; empty for the untrusted job.
+    room: alloc::string::String,
+    job: Handle,
+}
+
+/// The shell's slots for the keeper: the `Manage` channel and the channel to
+/// `init` that gives a new one.
+const SHELL_ROOMS_SLOT: u32 = 11;
+const SHELL_ROOMS_RECONNECT_SLOT: u32 = 12;
+
+fn send_keep(chan: Handle, k: &Kept) {
+    use zoraya_proto_rooms::Keep;
+    let mut b = [0u8; 128];
+    let untrusted = k.room.is_empty();
+    if let Ok(n) = zoraya_protocol::encode(
+        &Keep {
+            untrusted: zoraya_protocol::Below(u32::from(untrusted)),
+            room: zoraya_protocol::Text(&k.room),
+        },
+        0,
+        &mut b,
+    ) {
+        let entry = zoraya_abi::ChannelEntry {
+            handle: k.job,
+            rights: JobObject::RIGHTS,
+            transfer: Transfer::Duplicate,
+        };
+        let _ = zoraya_user::channel_write(chan, &b[..n], &[entry]);
+    }
+}
+
+fn start_rooms(stack: &Stack, kept: &[Kept]) -> Option<RoomKeeper> {
+    let (mine, theirs) = channel_create().ok()?;
+    // Queued before the keeper starts: it reads them first (the untrusted job
+    // before the rooms', which `kept` has in order).
+    for k in kept {
+        send_keep(mine, k);
+    }
+    let config = config_connection(stack)?;
+    let entries = [
+        zoraya_user::stack::console(),
+        dup(5, session(), JobObject::RIGHTS),
+        moved(6, theirs),
+        moved(7, config),
+    ];
+    match zoraya_user::stack::start("rooms", &entries, &[]) {
+        Some((job, process)) => Some(RoomKeeper {
+            job,
+            process,
+            chan: mine,
+        }),
+        None => {
+            let _ = handle_close(mine);
+            None
+        }
+    }
+}
+
+impl RoomKeeper {
+    fn end(self) {
+        end_job((self.job, self.process));
+        let _ = handle_close(self.chan);
+    }
+
+    /// A new channel of `kind` to the keeper: the keeper's end is sent over
+    /// the start-up channel, the other is returned.
+    fn channel(&self, kind: u32, room: &str) -> Option<Handle> {
+        let (client, server) = channel_create().ok()?;
+        let mut b = [0u8; 128];
+        let n = zoraya_protocol::encode(
+            &zoraya_proto_rooms::Attach {
+                kind: zoraya_protocol::Below(kind),
+                room: zoraya_protocol::Text(room),
+            },
+            0,
+            &mut b,
+        )
+        .ok()?;
+        let entry = zoraya_abi::ChannelEntry {
+            handle: server,
+            rights: ChannelObject::RIGHTS,
+            transfer: Transfer::Move,
+        };
+        if zoraya_user::channel_write(self.chan, &b[..n], &[entry]).is_err() {
+            let _ = handle_close(client);
+            let _ = handle_close(server);
+            return None;
+        }
+        Some(client)
+    }
+
+    /// What the keeper sent: a job it made (`Keep`) or let go (`Forget`).
+    fn pump(&self, kept: &mut alloc::vec::Vec<Kept>) {
+        loop {
+            let mut buf = [0u8; 128];
+            let mut handles = [self.chan; 1];
+            let Ok(sizes) = zoraya_user::channel_read(self.chan, &mut buf, &mut handles) else {
+                return;
+            };
+            let bytes = &buf[..sizes.bytes as usize];
+            let count = sizes.handles as usize;
+            if let Ok((_, m)) =
+                zoraya_protocol::decode::<zoraya_proto_rooms::Keep<'_>>(bytes, count)
+            {
+                let room = if m.untrusted.0 == 1 {
+                    alloc::string::String::new()
+                } else {
+                    alloc::string::String::from(m.room.0)
+                };
+                if let Some(old) = kept.iter().position(|k| k.room == room) {
+                    let _ = handle_close(kept.remove(old).job);
+                }
+                kept.push(Kept {
+                    room,
+                    job: handles[0],
+                });
+            } else if let Ok((_, m)) =
+                zoraya_protocol::decode::<zoraya_proto_rooms::Forget<'_>>(bytes, count)
+            {
+                if let Some(old) = kept.iter().position(|k| k.room == m.room.0) {
+                    let _ = handle_close(kept.remove(old).job);
+                }
+            } else {
+                for h in &handles[..count.min(1)] {
+                    let _ = handle_close(*h);
+                }
+            }
+        }
+    }
+}
+
+/// A launcher's request for a new channel to the keeper (ADR-0269 point 5):
+/// answered with one, or with none if there is no keeper.
+fn answer_reconnect(reconnect: Handle, rooms: Option<&RoomKeeper>, kind: u32) {
+    let mut buf = [0u8; 16];
+    let mut handles = [reconnect; 1];
+    while zoraya_user::channel_read(reconnect, &mut buf, &mut handles).is_ok() {
+        let new = rooms.and_then(|r| r.channel(kind, ""));
+        let entry = new.map(|h| zoraya_abi::ChannelEntry {
+            handle: h,
+            rights: ChannelObject::RIGHTS,
+            transfer: Transfer::Move,
+        });
+        let list: &[zoraya_abi::ChannelEntry] = entry.as_ref().map_or(&[], core::slice::from_ref);
+        if zoraya_user::channel_write(reconnect, b"m", list).is_err()
+            && let Some(h) = new
+        {
+            let _ = handle_close(h);
+        }
+    }
+}
+
 /// The shell's root network connection (ADR-0221 item 4), present when the
 /// network runs.
 const SHELL_NET_SLOT: u32 = 9;
@@ -226,6 +395,7 @@ fn start_shell(
     broker: Option<&Beside>,
     network: Option<Handle>,
     random: Option<Handle>,
+    keeper: Option<(Handle, Handle)>,
 ) -> Option<(Handle, Handle)> {
     let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
@@ -275,11 +445,20 @@ fn start_shell(
     if let Some(r) = random {
         e.handle(moved(SHELL_RANDOM_SLOT, r));
     }
+    // The room keeper's `Manage` channel and the way to a new one.
+    if let Some((manage, reconnect)) = keeper {
+        e.handle(moved(SHELL_ROOMS_SLOT, manage));
+        e.handle(moved(SHELL_ROOMS_RECONNECT_SLOT, reconnect));
+    }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
     if process.is_none() {
         for h in [network, random].into_iter().flatten() {
             let _ = handle_close(h);
+        }
+        if let Some((a, b)) = keeper {
+            let _ = handle_close(a);
+            let _ = handle_close(b);
         }
     }
     if process.is_some() && root_moved {
@@ -391,6 +570,13 @@ fn main() -> i32 {
     let mut network_allowed = devices.net.is_some();
     let mut network_restarts = 0;
     let mut shell_failures = 0;
+    // The room keeper (ADR-0269): started with the storage stack.
+    let mut rooms: Option<RoomKeeper> = None;
+    let mut rooms_allowed = true;
+    let mut rooms_restarts = 0;
+    let mut kept: alloc::vec::Vec<Kept> = alloc::vec::Vec::new();
+    // `init`'s end of the panel's way to a new keeper channel.
+    let mut panel_reconnect: Option<Handle> = None;
     if gui_devices.is_some() {
         println!(
             "init: gui: gpu on its own page, {} input device(s)",
@@ -406,6 +592,16 @@ fn main() -> i32 {
             if stack.is_none() {
                 println!("init: the storage stack did not start");
                 storage_allowed = false;
+            }
+        }
+        if rooms.is_none()
+            && rooms_allowed
+            && let Some(s) = stack.as_ref()
+        {
+            rooms = start_rooms(s, &kept);
+            if rooms.is_none() {
+                println!("init: the room keeper did not start");
+                rooms_allowed = false;
             }
         }
         if network.is_none()
@@ -460,9 +656,20 @@ fn main() -> i32 {
                     None
                 }
             };
-            panel = g.start_panel(&s.root, registration);
+            // Its `Manage` channel to the keeper and the way to a new one.
+            let keeper = rooms.as_ref().and_then(|r| {
+                let manage = r.channel(zoraya_proto_rooms::attach::MANAGE_DESKTOP, "")?;
+                let (theirs, ours) = channel_create().ok()?;
+                Some((manage, theirs, ours))
+            });
+            panel = g.start_panel(&s.root, registration, keeper.map(|k| (k.0, k.1)));
             if panel.is_none() {
                 println!("init: the panel did not start");
+                if let Some((_, _, ours)) = keeper {
+                    let _ = handle_close(ours);
+                }
+            } else {
+                panel_reconnect = keeper.map(|k| k.2);
             }
         }
         let wants_session = stack.as_ref().is_some_and(|s| {
@@ -472,6 +679,7 @@ fn main() -> i32 {
         });
         let mut session = None;
         let mut beside = None;
+        let mut shell_reconnect: Option<Handle> = None;
         let shell = if wants_session {
             println!("init: /etc/zoraya/session: a POSIX session");
             let root = &stack.as_ref().expect("a stack").root;
@@ -492,12 +700,20 @@ fn main() -> i32 {
             let random = rng
                 .as_ref()
                 .and_then(|(_, conn)| zoraya_user::random::share(*conn));
+            // The console shell's `Manage` channel (ADR-0269 point 3).
+            let keeper = rooms.as_ref().and_then(|r| {
+                let manage = r.channel(zoraya_proto_rooms::attach::MANAGE_CONSOLE, "")?;
+                let (theirs, ours) = channel_create().ok()?;
+                shell_reconnect = Some(ours);
+                Some((manage, theirs))
+            });
             start_shell(
                 root,
                 terminal.map(|t| t.1),
                 beside.as_ref(),
                 root_network,
                 random,
+                keeper,
             )
         };
         let Some(shell) = shell else {
@@ -528,6 +744,20 @@ fn main() -> i32 {
         }
         if let Some(s) = &session {
             subscribe(port, s.ttyd.1, KEY_TTYD);
+        }
+        if let Some(r) = &rooms {
+            subscribe(port, r.process, KEY_ROOMS);
+            let readable = channel_signals::READABLE;
+            port_subscribe(port, r.chan, readable, KEY_ROOMS_CHAN, Mode::Level).expect("subscribe");
+        }
+        for (end, key) in [
+            (shell_reconnect, KEY_RECONNECT_SHELL),
+            (panel_reconnect, KEY_RECONNECT_PANEL),
+        ] {
+            if let Some(end) = end {
+                let readable = channel_signals::READABLE;
+                port_subscribe(port, end, readable, key, Mode::Level).expect("subscribe");
+            }
         }
         let ended = loop {
             let mut packets = [Packet::default()];
@@ -603,6 +833,48 @@ fn main() -> i32 {
                         }
                     }
                 }
+                KEY_ROOMS_CHAN => {
+                    if let Some(r) = &rooms {
+                        r.pump(&mut kept);
+                    }
+                }
+                KEY_RECONNECT_SHELL | KEY_RECONNECT_PANEL => {
+                    let (end, kind) = if packets[0].key == KEY_RECONNECT_SHELL {
+                        (shell_reconnect, zoraya_proto_rooms::attach::MANAGE_CONSOLE)
+                    } else {
+                        (panel_reconnect, zoraya_proto_rooms::attach::MANAGE_DESKTOP)
+                    };
+                    if let Some(end) = end {
+                        answer_reconnect(end, rooms.as_ref(), kind);
+                    }
+                }
+                KEY_ROOMS => {
+                    // The keeper ended: running rooms keep their jobs and
+                    // limits; the new one gets the jobs `init` kept
+                    // (ADR-0080's bound on restarts).
+                    println!("init: the room keeper ended");
+                    if let Some(r) = rooms.take() {
+                        r.pump(&mut kept);
+                        r.end();
+                    }
+                    rooms_restarts += 1;
+                    if rooms_restarts > MAX_RESTARTS {
+                        println!("init: no more room keeper restarts");
+                        rooms_allowed = false;
+                    } else if let Some(s) = stack.as_ref() {
+                        rooms = start_rooms(s, &kept);
+                        match &rooms {
+                            Some(r) => {
+                                println!("init: the room keeper was restarted");
+                                subscribe(port, r.process, KEY_ROOMS);
+                                let readable = channel_signals::READABLE;
+                                port_subscribe(port, r.chan, readable, KEY_ROOMS_CHAN, Mode::Level)
+                                    .expect("subscribe");
+                            }
+                            None => rooms_allowed = false,
+                        }
+                    }
+                }
                 KEY_TTYD => {
                     let ttyd = session.as_ref().expect("a session").ttyd;
                     let record = wait_exit(ttyd.1);
@@ -625,6 +897,9 @@ fn main() -> i32 {
             }
         };
         end_job(shell);
+        if let Some(c) = shell_reconnect.take() {
+            let _ = handle_close(c);
+        }
         if let Some(b) = beside.take() {
             end_job(b.job);
         }
@@ -661,6 +936,9 @@ fn main() -> i32 {
             Ended::Closed => println!("init: the terminal was closed"),
             Ended::Gui => {
                 println!("init: the gui failed");
+                if let Some(c) = panel_reconnect.take() {
+                    let _ = handle_close(c);
+                }
                 if let Some(p) = panel.take() {
                     p.end();
                 }
@@ -679,7 +957,16 @@ fn main() -> i32 {
             }
             Ended::Storage => {
                 println!("init: storage failed");
-                // Its root was the volume's: started again with the next.
+                // Its root was the volume's: started again with the next. The
+                // keeper's `/config` was the volume's too; the jobs of the
+                // rooms it made stay with `init`, for the next.
+                if let Some(r) = rooms.take() {
+                    r.pump(&mut kept);
+                    r.end();
+                }
+                if let Some(c) = panel_reconnect.take() {
+                    let _ = handle_close(c);
+                }
                 if let Some(p) = panel.take() {
                     p.end();
                 }

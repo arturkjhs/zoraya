@@ -22,8 +22,8 @@ use alloc::vec::Vec;
 use zoraya_abi::quota::{JobLimits, JobUsage};
 use zoraya_abi::spawn::Transfer;
 use zoraya_abi::{
-    ChannelEntry, Handle, JobFlags, JobObject, Mode, ObjectType, Packet, Rights, Status,
-    channel_signals, job_signals,
+    ChannelEntry, ChannelObject, Handle, JobFlags, JobObject, Mode, ObjectType, Packet, Rights,
+    Status, channel_signals, job_signals,
 };
 use zoraya_proto_rooms::alloc_free::RoomName;
 use zoraya_proto_rooms::{ChannelKind, Forget, Keep, Launcher, attach};
@@ -308,6 +308,27 @@ impl Rooms {
                     self.keeper.env().close(job);
                     ok
                 }
+                Reply::Open(n, new_kind) => match zoraya_user::channel_create() {
+                    Ok((client, server)) => {
+                        if self.attach(server, new_kind) {
+                            let entry = ChannelEntry {
+                                handle: client,
+                                rights: ChannelObject::RIGHTS,
+                                transfer: Transfer::Move,
+                            };
+                            let ok = channel_write(end, &self.out[..n], &[entry]).is_ok();
+                            if !ok {
+                                let _ = handle_close(client);
+                            }
+                            ok
+                        } else {
+                            let _ = handle_close(server);
+                            let _ = handle_close(client);
+                            false
+                        }
+                    }
+                    Err(_) => false,
+                },
                 Reply::Close => false,
             };
             self.tell_init();
