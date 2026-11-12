@@ -52,8 +52,9 @@
 //! window            a new window: the next `screen` looks from its top row
 //! top TEXT          wait until the top row reads TEXT (a cleared screen),
 //!                   then a new window as `window`
-//! latency N         type `x` N times at the prompt, timing each until it
-//!                   shows, then erase them
+//! latency N [MS]    type `x` N times at the prompt, timing each until it
+//!                   shows, then erase them; with MS, fail if the median
+//!                   is more than MS over one screendump read
 //! shot NAME         keep the screen as `build/shots/NAME-LABEL.ppm` (the screens
 //!                   of a task's report)
 //! exit              wait for QEMU to end with status 0
@@ -157,7 +158,8 @@ pub enum Step {
     Key(String),
     Chord(String, String),
     Region(i64, i64, i64, i64, u32),
-    Latency(usize),
+    /// The count, and the most the median may exceed one idle screendump read, in ms.
+    Latency(usize, Option<u32>),
     Click(i64, i64),
     DoubleClick(i64, i64),
     RightClick(i64, i64),
@@ -283,7 +285,18 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
                 };
                 Step::Drag(x, y, x2, y2, hold)
             }
-            "latency" => Step::Latency(rest.parse().map_err(|_| bad("not a count"))?),
+            "latency" => {
+                let mut words = rest.split_whitespace();
+                let n = words
+                    .next()
+                    .and_then(|w| w.parse().ok())
+                    .ok_or_else(|| bad("latency N [MS]"))?;
+                let bound = match words.next() {
+                    None => None,
+                    Some(w) => Some(w.parse().map_err(|_| bad("not a number of ms"))?),
+                };
+                Step::Latency(n, bound)
+            }
             "origin" => {
                 let v: Vec<i64> = rest
                     .split_whitespace()
@@ -962,7 +975,7 @@ impl Run {
                 }
                 std::thread::sleep(SCREEN_POLL);
             },
-            Step::Latency(n) => {
+            Step::Latency(n, bound) => {
                 let mut times = Vec::new();
                 let row = self.row;
                 let prompt = self.qmp.screen()?.rows(&mut self.reader)[row.unwrap_or(0)].clone();
@@ -997,6 +1010,17 @@ impl Run {
                     ms(&times[times.len() - 1]),
                     ms(&idle[2])
                 );
+                // A bound is on the median over the floor, so that the cost of
+                // reading a screendump is not counted (a starved terminal
+                // takes seconds, not tens of milliseconds more).
+                if let Some(limit) = bound {
+                    let over = ms(&times[times.len() / 2]) - ms(&idle[2]);
+                    if over > f64::from(*limit) {
+                        return Err(format!(
+                            "latency: the median key took {over:.1} ms over one screendump read, more than {limit} ms"
+                        ));
+                    }
+                }
                 Ok(())
             }
             Step::Window => {

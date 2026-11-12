@@ -1,0 +1,85 @@
+# The gate's cpu-spinners row and the GUI form of INV-0269-1 (TASK-26 Q7;
+# ADR-0264, ADR-0269, ADR-0268 point 3; INV-0264-3's GUI half). Coordinates
+# as tests/gui/limits.script's (logical, 1024 x 768, scale 1).
+#
+# 1. INV-0269-1: a terminal launched from the dock in room `project` and the
+#    first terminal's shell, which enters the same room, run in ONE job: the
+#    room's `--procs 5` limit counts the processes of both.
+# 2. Two rooms with `--cpu 25%` run two spinners each (the rooms' own programs,
+#    from the system image); the key latency of a terminal in `home` is
+#    measured by the runner's `latency` step and bounded by 300 ms over one
+#    screendump read. The kernel's own 50 ms bound for an uncapped process next
+#    to capped rooms that spin and burst is checked by t_cpu (make test-qemu).
+serial init: gui: gpu on its own page
+screen Type help to begin, or help tour.
+screen ~> _
+type mkdir project\r
+screen ~> _
+type mkdir other\r
+screen ~> _
+type room new project --cpu 25% --procs 5 +w ~/project\r
+screen project --colour 1 --cpu 25% --procs 5 +w ~/project
+screen ~> _
+# The dock's chip enters the room; System+Enter launches a terminal in it.
+clickc 2f7f8f 300 719 600 7
+chord meta ret
+origin 105 138
+screen Type help to begin, or help tour.
+screen project ~/project> _
+click 400 120
+type sleep 60 &\r
+screen [1] sleep 60
+screen project ~/project> _
+type sleep 60 &\r
+screen [2] sleep 60
+screen project ~/project> _
+# The first terminal's shell enters the same room: its processes go to the
+# job the dock's terminal runs in, so the room holds 3 (the dock's shell and
+# two sleeps) and two more fit, the third is refused at the one limit.
+click 400 80
+region 130 76 100 4 f7f7f8
+origin 73 106
+type room project\r
+screen project ~/project> _
+type sleep 60 &\r
+screen [1] sleep 60
+screen project ~/project> _
+type sleep 60 &\r
+screen [2] sleep 60
+screen project ~/project> _
+type sleep 60 &\r
+prefix hint: room project is at its process limit
+screen project ~/project> _
+shot one-job
+type top\r
+prefix project
+screen project ~/project> _
+type room --leave\r
+type cd /\r
+screen /> _
+# Two rooms at 25% with two spinners each, then the latency of a keystroke in
+# home.
+type room new spin1 --cpu 25% --procs 6 +w ~/other\r
+screen spin1 --colour
+screen /> _
+type room new spin2 --cpu 25% --procs 6 +w ~/other\r
+screen spin2 --colour
+screen /> _
+type room spin1\r
+type spin &\r
+screen [1] spin
+type spin &\r
+screen [2] spin
+type room --leave\r
+type room spin2\r
+type spin &\r
+screen [1] spin
+type spin &\r
+screen [2] spin
+type room --leave\r
+type cd /\r
+pause 1500
+latency 10 300
+shot spinners
+type poweroff\r
+exit

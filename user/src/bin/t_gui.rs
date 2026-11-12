@@ -78,6 +78,18 @@ fn surface_memory(pixels: usize) -> (Handle, &'static mut [u32]) {
 }
 
 impl Client {
+    /// A client of an untrusted room's account, played by this test.
+    fn in_room(gui: &Gui, room: &str, untrusted: bool) -> Client {
+        Client {
+            end: gui.new_room_client(room, untrusted).expect("a room client"),
+            memory: Handle::new(1).expect("slot"),
+            pixels: &mut [],
+            width: 0,
+            height: 0,
+            events: Vec::new(),
+        }
+    }
+
     fn connect(gui: &Gui) -> Client {
         Client {
             end: gui.new_client().expect("a client"),
@@ -485,6 +497,44 @@ fn no_injection(gui: &Gui, a: &mut Client, b: &mut Client) {
     println!("t_gui: no client can inject or read ok");
 }
 
+/// The gate's `service-floods` row, surfaces (ADR-0268 point 3, ADR-0262 item
+/// 2, ADR-0294, INV-0262-1) through the real compositor: the clients of an
+/// untrusted room share its account of `ROOM_SURFACES`; clients of the room
+/// that ask for more are refused with one status each; another untrusted
+/// room and `home` still get their own. This test plays the room's clients
+/// itself; no program from outside the image runs.
+fn surface_flood(gui: &Gui) {
+    use zoraya_compositor::usage::ROOM_SURFACES;
+    let mut agent: Vec<Client> = (0..ROOM_SURFACES + 1)
+        .map(|_| Client::in_room(gui, "agent", true))
+        .collect();
+    let results: Vec<u32> = agent.iter_mut().map(|c| c.create(8, 8, 0x00aa_aaaa)).collect();
+    let (admitted, refused): (Vec<u32>, Vec<u32>) =
+        results.iter().partition(|s| **s == status::OK);
+    println!(
+        "t_gui: untrusted room agent: {} surfaces admitted, {} refused (status {:?}); another room and home admitted",
+        admitted.len(),
+        refused.len(),
+        refused.first()
+    );
+    assert_eq!((admitted.len(), refused.len()), (ROOM_SURFACES, 1));
+    assert!(refused.iter().all(|s| *s == refused[0]), "one refusal");
+    // The refused client is done (the compositor serves 8 clients at once).
+    let refused_at = results.iter().position(|s| *s != status::OK).expect("one refused");
+    let _ = handle_close(agent.remove(refused_at).end);
+    settle(gui);
+    // Another untrusted room has its own account, and home is not asked.
+    let mut other = Client::in_room(gui, "other", true);
+    assert_eq!(other.create(8, 8, 0x0055_5555), status::OK, "the other room's own");
+    let mut home = Client::connect(gui);
+    assert_eq!(home.create(8, 8, 0x0011_1111), status::OK, "home is not refused");
+    // Surfaces given back are given again.
+    let _ = handle_close(agent.remove(0).end);
+    settle(gui);
+    let mut again = Client::in_room(gui, "agent", true);
+    assert_eq!(again.create(8, 8, 0x00aa_aaaa), status::OK, "a closed surface frees room");
+}
+
 /// INV-0097-2: a killed GPU or input driver is restarted alone, and the
 /// compositor takes the new one; the new GPU driver answers a flush.
 fn driver_restarts(gui: &mut Gui, a: &mut Client) {
@@ -717,6 +767,7 @@ fn main() -> i32 {
     rewritten_during_composition(&gui, &mut a);
     routing_and_focus(&gui, &keyboard, &mut a, &mut b);
     no_injection(&gui, &mut a, &mut b);
+    surface_flood(&gui);
     driver_restarts(&mut gui, &mut a);
     a_hung_display_driver_stalls_nobody(&mut gui, &keyboard, &mut a, &mut b);
     full_redraw(&gui);
