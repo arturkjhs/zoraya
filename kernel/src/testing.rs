@@ -127,6 +127,10 @@ static TESTS: &[Test] = &[
         run: an_allocation_short_of_frames_takes_one_from_the_reaper,
     },
     Test {
+        name: "frames_the_reaper_holds_are_available_and_counted",
+        run: frames_the_reaper_holds_are_available_and_counted,
+    },
+    Test {
         name: "a_run_short_of_frames_waits_for_the_reaper_in_steps",
         run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
     },
@@ -309,6 +313,10 @@ static TESTS: &[Test] = &[
     Test {
         name: "a_space_list_growth_is_counted_and_prepared",
         run: a_space_list_growth_is_counted_and_prepared,
+    },
+    Test {
+        name: "a_contiguous_object_is_zeroed_apart_from_its_search",
+        run: a_contiguous_object_is_zeroed_apart_from_its_search,
     },
     Test {
         name: "a_spawn_with_a_big_space_is_bounded",
@@ -2292,6 +2300,49 @@ fn an_allocation_short_of_frames_takes_one_from_the_reaper() {
     assert_eq!(frames_accounted(), before);
 }
 
+/// The frames the reaper holds are available to an allocation (`take`), which
+/// the heap's growth relies on (a growth refused for want of free frames
+/// while a closed object was still queued), and `held` follows `defer`,
+/// `take` and `help` exactly (it is a counter, not a walk of the queue).
+fn frames_the_reaper_holds_are_available_and_counted() {
+    const QUEUED: usize = 200;
+    let before = frames_accounted();
+    let held_before = crate::reaper::held();
+    let mut queued = Vec::new();
+    queued.try_reserve_exact(QUEUED).expect("room for the list");
+    let mut head = hoard_frames();
+    for _ in 0..QUEUED {
+        let (frame, next) = unhoard_one(head).expect("200 frames");
+        queued.push(frame);
+        head = next;
+    }
+    let free = frames::stats().free;
+    // Masked, so that the reaper does not run before the checks.
+    let daif = arch::save_and_mask_interrupts();
+    crate::reaper::release(queued, crate::charge::Paid::new(None));
+    let queued_held = crate::reaper::held() - held_before;
+    let available = frames::available();
+    let taken = crate::reaper::take();
+    let after_take = crate::reaper::held() - held_before;
+    let helped = crate::reaper::help();
+    let after_help = crate::reaper::held() - held_before;
+    arch::restore_interrupts(daif);
+    if let Some(frame) = taken {
+        frames::free(frame);
+    }
+    unhoard(head);
+    assert_eq!(queued_held, QUEUED as u64, "held after a release");
+    assert_eq!(available, free + held_before + QUEUED as u64);
+    assert!(taken.is_some() && helped);
+    assert_eq!(after_take, QUEUED as u64 - 1, "held after a take");
+    assert_eq!(
+        after_help,
+        QUEUED as u64 - 1 - crate::steps::STEP as u64,
+        "held after a step of help"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
 /// INV-0270-1: a contiguous run that has to wait for the reaper to free
 /// frames makes a step point after each round of help, so that no interval
 /// holds more than one round (64 frames) of the reaper's work.
@@ -2541,6 +2592,35 @@ fn a_space_list_growth_is_counted_and_prepared() {
         "{as_it_is} units in an unprepared step, {ahead} in a prepared one, \
          and the copy of {len} frames is {copy}"
     );
+}
+
+/// INV-0270-1: the last part of the search for a run (up to a step of words
+/// of the frame map, and the 16 words of a free run of 1024 frames) and the
+/// first step of zeroing it are two intervals: a step point between them.
+/// With the step points on in this thread (`steps::set_kernel_steps`), a
+/// contiguous object of 1024 frames is made and dropped in a masked thread.
+fn a_contiguous_object_is_zeroed_apart_from_its_search() {
+    use crate::memory::object::MemoryObject;
+    let before = frames_accounted();
+    crate::steps::set_kernel_steps(true);
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    let object = MemoryObject::new(1024 * zoraya_pmm::FRAME_SIZE, true, None);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    crate::steps::set_kernel_steps(false);
+    let units = crate::steps::masked_max_units(true);
+    if units > crate::steps::STEP as u64 + 16 {
+        crate::steps::diagnose_units();
+    }
+    drop(object.expect("a contiguous object of 4 MiB"));
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of a contiguous object (INV-0270-1)"
+    );
+    crate::reaper::drain();
+    assert_eq!(frames_accounted(), before);
 }
 
 /// `hello`'s ELF file with `extra` bytes more of zeroed memory in its last

@@ -276,3 +276,165 @@ file = "kernel/src/memory/heap.rs"
 find = 'window.map_ahead((pages - ahead).min(STEP as u64) as usize)'
 replace = 'window.map_ahead((pages - ahead) as usize)'
 note = "INV-0270-1: the heap's growth mapped ahead in steps (a_prepared_allocation_grows_the_heap_in_steps)"
+
+# The review fixes of the units bound (work/units-fix, finding 3): the room made ahead
+# of each step of a space's list of frames, and the other changes of that
+# round. The first fourteen are killed by the test kernel; the four after them
+# need a user process with a space of tens of thousands of frames, which a
+# 128 MiB guest cannot hold, and are listed so that a run shows them (see
+# ADR-0270, open questions).
+[[mutant]]
+id = "K-spawn-image-no-prepare"
+file = "kernel/src/process.rs"
+find = '''
+            space.prepare_step();
+        }
+        *pages += 1;
+'''
+replace = '''
+        }
+        *pages += 1;
+'''
+note = "INV-0270-1: room in the list before each step of the image (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-spawn-stack-no-prepare"
+file = "kernel/src/process.rs"
+find = '''
+            space.prepare_step();
+        }
+        pages += 1;
+'''
+replace = '''
+        }
+        pages += 1;
+'''
+note = "INV-0270-1: room in the list before each step of the stack (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-spawn-startup-no-prepare"
+file = "kernel/src/process.rs"
+find = '''
+    steps::between()?;
+    space.prepare_step();
+    map_startup_block'''
+replace = '''
+    steps::between()?;
+    map_startup_block'''
+note = "INV-0270-1: room in the list before the startup block (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-spawn-segments-count-apart"
+file = "kernel/src/process.rs"
+find = '    let (start, end) = s.pages();'
+replace = '''    let (start, end) = s.pages();
+    *pages = 0;'''
+note = "INV-0270-1: the pages of two segments are one count of steps (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-list-growth-copy-uncounted"
+file = "kernel/src/memory/user.rs"
+find = '''            self.memory.count_list_copy();
+'''
+replace = ''
+note = "INV-0270-1: the copy of the list's growth is work (a_space_list_growth_is_counted_and_prepared)"
+
+[[mutant]]
+id = "K-adopt-copy-uncounted"
+file = "kernel/src/memory/user.rs"
+find = '''        if self.frames.len() == self.frames.capacity() {
+            self.count_list_copy();
+        }
+'''
+replace = ''
+note = "INV-0270-1: a frame that fills the list pays for its growth's copy (a_space_list_growth_is_counted_and_prepared)"
+
+[[mutant]]
+id = "K-prepare-step-no-reserve"
+file = "kernel/src/memory/user.rs"
+find = '''        heap::prepare(self.step_growth());
+        self.reserve_step();
+        if grows {'''
+replace = '''        heap::prepare(self.step_growth());
+        if grows {'''
+note = "INV-0270-1: room in the list ahead of the step (a_space_list_growth_is_counted_and_prepared)"
+
+[[mutant]]
+id = "K-prepare-step-copy-with-the-pages"
+file = "kernel/src/memory/user.rs"
+find = '''        if grows {
+            steps::pause();
+        }'''
+replace = ''
+note = "INV-0270-1: the list's growth copy has an interval of its own (a_spawn_with_a_big_space_is_bounded)"
+
+[[mutant]]
+id = "K-available-without-the-reaper"
+file = "kernel/src/memory/frames.rs"
+find = 'stats().free + crate::reaper::held()'
+replace = 'stats().free'
+note = "ADR-0270 point 4: frames the reaper holds are available (frames_the_reaper_holds_are_available_and_counted)"
+
+[[mutant]]
+id = "K-reaper-held-not-counted-down"
+file = "kernel/src/reaper.rs"
+find = '''    if taken.is_some() {
+        queue.held -= 1;'''
+replace = '''    if taken.is_some() {'''
+note = "the reaper's held counter follows take (frames_the_reaper_holds_are_available_and_counted)"
+
+[[mutant]]
+id = "K-contig-zero-with-the-search"
+file = "kernel/src/memory/object.rs"
+find = '''                steps::between()?;
+                let n = (STEP as u64).min(count - done);'''
+replace = '''                if done > 0 {
+                    steps::between()?;
+                }
+                let n = (STEP as u64).min(count - done);'''
+note = "INV-0270-1: the first zeroing step is apart from the search for the run (a_contiguous_object_is_zeroed_apart_from_its_search)"
+
+[[mutant]]
+id = "K-contig-no-rescan"
+file = "kernel/src/memory/frames.rs"
+find = 'Err(_) if changed && !rescanned && round < CONTIG_HELP_ROUNDS => {'
+replace = 'Err(_) if false && changed && !rescanned && round < CONTIG_HELP_ROUNDS => {'
+note = "a run freed behind the stepped scan is found by a second pass (a_run_freed_behind_the_scan_is_found_by_a_second_pass)"
+
+[[mutant]]
+id = "K-kernel-tables-not-in-backing"
+file = "kernel/src/memory/heap.rs"
+find = 'stats.backing += ahead + (paging::table_frames() * PAGE_SIZE as u64) as usize;'
+replace = 'stats.backing += ahead;'
+note = "the kernel's page-table frames are the heap's in the sum of frames (t_image, t_quota, frames_accounted)"
+
+[[mutant]]
+id = "K-snapshot-no-prepare"
+file = "kernel/src/syscall.rs"
+find = '            build.prepare_step();'
+replace = ''
+note = "INV-0270-1: room in the child's list before each step of a snapshot (needs a process with a space of 16K frames: survives at 128 MiB)"
+
+[[mutant]]
+id = "K-snapshot-finish-no-prepare"
+file = "kernel/src/memory/user.rs"
+find = '''                    self.child.prepare_step();
+                }
+                pages += 1;'''
+replace = '''                }
+                pages += 1;'''
+note = "INV-0270-1: the same in the child's last mapping step (survives at 128 MiB)"
+
+[[mutant]]
+id = "K-memory-map-no-heap-prepare"
+file = "kernel/src/syscall.rs"
+find = '            heap::prepare(growth);'
+replace = ''
+note = "INV-0270-1: the heap's room for the space's list before a step of memory_map (survives at 128 MiB)"
+
+[[mutant]]
+id = "K-memory-map-no-reserve"
+file = "kernel/src/syscall.rs"
+find = '                space.reserve_step();'
+replace = ''
+note = "INV-0270-1: room in the space's list before a step of memory_map (survives at 128 MiB)"
