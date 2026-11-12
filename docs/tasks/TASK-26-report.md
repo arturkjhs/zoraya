@@ -1473,3 +1473,113 @@ not listed (equivalent).
   116 with all), `make test-qemu-auto-smp4-2g` and `make test-qemu-tcg-el2` (116 passed, 9 expected failures each,
   `t_bound: all passed` on tcg-el2). Two kernel tests that spawn or run the scheduler have to come after the timer
   tests: before them they left a slice deadline queued (`timer_is_off_with_no_deadlines`).
+
+## N6: failure, rooms and the desktop (branch `work/n6`, on `main` at e9c5368), partly done
+
+Done: the register-access kernel call and `--gui --net` (ADR-0221 item 8), the restart reaching the console shell (items 5 and 6),
+the `+net` word in the shell, `make bench-net`. Not done: the rooms' `+net` words, untrusted rooms with a network, the pills, the
+hover card, the panel's hint and network, the `REPORT` message. They are listed under "Not done".
+
+### Built
+
+- **Register access by kernel call** (ADR-0221 item 8 as the task decided; proposed ADR-0295). Three calls in
+  `crates/zoraya-abi/src/lib.rs` (53 to 55): `device_transport(page, index)` (needs `MAP`) returns the `Device` of one transport,
+  made at boot in `kernel/src/device.rs` (`Device::make_transports`; one per range, sharing the page's kernel mapping, with its own
+  pins, quarantine, reset and interrupt, no mapping); `device_read(device, offset)` (`READ`) and `device_write(device, offset,
+  value)` (`WRITE`) on a transport device only. `Device::register_offset` is the one place an offset is checked: a multiple of 4,
+  the word inside the transport's block (the device tree's size, at most 0x200); a value above `u32::MAX` is refused. `DeviceObject`
+  gained `READ` and `WRITE` in its rights (the page devices have them and the calls refuse them). `device_map` on a transport
+  device is `AccessDenied` (`begin_mapping`). No allocation in the calls (the Arcs exist from boot), so no charge (ADR-0261).
+- **The drivers** open their device through `user/src/mmio.rs` (`Window::open`: a mapping, or calls when the kernel answers
+  `AccessDenied`); `ethd`, `gpud`, `inputd` and `blkd` lost their own `Window` types and no logic changed. `init`'s scan (`user/src/gui.rs`)
+  keeps `Page::One` as before and, for `Page::Several`, splits each transport (`device_transport`), reads it with `device_read`, and gives
+  it to its driver with range 0. `tools/run-qemu.sh` accepts `--net --gui`. `tools/check-ethd-maps.sh` follows (`Window::open(device,` once).
+- **The restart** (ADR-0221 items 5, 6; proposed ADR-0296). `init` already restarted `ethd`/`netd` (N2); now the console shell has a services
+  channel at slot 13: `NetworkRestarted` (ordinal 32, one handle, the new root) and `NetworkDown` (33) in `zoraya-proto-net`;
+  `init` makes the new root with `narrow` from its control connection (`root_connection`) and sends it; `zosh`'s `network_available`
+  reads the channel before a line that needs the network and refuses the line while the root is closed. The test-only `Crash` (40):
+  `netd` honours it only if it has an event at slot 8, which `init` gives only if the volume holds `/etc/zoraya/net-crash`; `net crash`
+  sends it.
+- **`+net` in the shell** (ADR-0224 item 1; proposed ADR-0297): `zoraya_shell::netgrant::{parse_word, net_for, describe}`; the parser, `eval`
+  (`Exec::nets`) and `zosh` (`grants` prints the `net:` lines; a value `url` operand designates inside a word).
+- **`make bench-net`** (ADR-0230 item 8; `tests/shell/net-bench.script`).
+
+### Decisions where the ADRs are silent (proposed ADR-0295, ADR-0296, ADR-0297; recommendations)
+
+1. **A transport device per transport, calls only on it, `device_transport` needs `MAP` on the page** (ADR-0295). Accept. Open: a process that maps
+   the page can still reach every transport; only `init` maps a shared page (once, to read the identifiers). The kernel does not make
+   the mapping and the calls exclude each other.
+2. **`Size` for the register offset and `Opaque` for the value** in the ABI (no new parameter kind); the allow-list test names the calls.
+3. **The console shell only gets the services channel.** The panel and the broker hold no root connection today (a shell started by the panel has
+   none), so there is nothing to tell them. Accept for now; they come with the rooms' words.
+4. **`Crash` honoured by a flag that is an event at slot 8**, given by `init` when `/etc/zoraya/net-crash` exists (a described program may
+   not read argv, INV-0155-2). Accept.
+5. **`+net` grammar** as ADR-0297 (any, name, `*.suffix`, address, `ADDRESS/BITS`, `:PORT`; both protocols; any described program).
+6. **A line that needs the network is refused while the root is closed** rather than run without a connection (the ADR-0221 example).
+
+### Where a number or text from outside enters, and where it is checked (for the reviewer)
+
+| Input | Entry | Check |
+|---|---|---|
+| register offset and value | `device_read`, `device_write` in `kernel/src/syscall.rs` | `Device::register_offset`: transport devices only, multiple of 4, `offset + 4 <= range.size <= 0x200` with `checked_add`; the value `u32::try_from`; the rights `READ`/`WRITE` first |
+| transport index | `device_transport` | `MAP` on the page, `get(index)` on the 8-slot array, a transport device refuses |
+| `+net` argument | `netgrant::parse_word` | total over any text: port 1 to 65535, `valid_name`, dotted address, prefix bits 0 to 32 with no bits past it, at most `MAX_RULES` rules |
+| `NetworkRestarted` / `NetworkDown` | `netclient::poll_services` | decoded with the exact handle count; the handle must be a channel; others are closed |
+| `Crash` | `netd` before `Service::handle` | only with the event at slot 8 and no handle with the message |
+
+### Invariants delta
+
+`checked`: INV-0221-4 (`make test-net-fetch`: three `net crash` with a fetch after each, the fourth leaves the network down and the next line
+is refused), INV-0295-1 (`t_devices`), INV-0295-2 (`tests/gui/net.script`), INV-0296-1 (`tests/shell/net.script`), INV-0297-1 (`cargo test -p
+zoraya-shell netgrant`). Not changed (still `not yet applicable (stage 8)`): INV-0221-3 (partial: `t_netd` shows `PEER_CLOSED` for a native client, no
+`ECONNRESET` test), INV-0224-1 to -5 (notes in ADR-0224), INV-0230-1 to -4 (as before; `make test-net` runs). adr-check total 526.
+
+### Tests run (this session)
+
+- `cargo test -p zoraya-abi -p zoraya-proto-net -p zoraya-net -p zoraya-shell`: 67, 5, 83, 121 passed (8 new `netgrant` tests).
+- `make check` before each commit: all 14 checks pass; adr-check 0 errors, total 526.
+- `make test-qemu-one`: 116 kernel tests and `t_devices` (the new `transport_devices`) pass (twice, standalone).
+- `make test-gui GUI_RUNS="net:auto:1"`: PASS, 12 steps (`--gui --net`; `net status` read from the screen).
+- `make test-net-fetch`: PASS, 156 steps (the +net lines, three `net crash` with a fetch after each, the fourth leaves the network down, the next line is
+  refused), `net-dns` 14 steps, the refused TLS servers read no request byte. `make bench-net` runs (HVF).
+- `PAR_QEMU=1 make test-changed` (every step, as `init.rs` and the `Makefile` are not in the map; HVF, one guest at a time; the worktree had no
+  ports archives, copied from another worktree's cache and verified with `make fetch-ports`): 45 host test binaries, test-boot, test-libposix,
+  test-files, test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui (315 s) passed; **test-qemu and test-net failed** on
+  `a_spawn_with_a_big_space_is_bounded` (`NoMemory`), an intermittent failure that is not N6's: the same message came from `make test-net` on the
+  tree of `main` (ac8d7de, worktree `zoraya-q6b`) in 1 of 3 runs, and on `work/n6` in 2 of 4 standalone runs (the others passed; `test-qemu-one`
+  passed 2 of 2). Entered in `docs/backlog.md`. I did not re-run all of `test-changed`.
+- Not run: `FULL=1`, TCG, fuzz targets, mutation tests.
+
+### Measurements (HVF, one run)
+
+Register read by call (`t_devices`, 2,000 reads, three boots): 1,393 to 1,419 ns. `make bench-net` (5 runs): 16 MiB 216, 217, 231, 235, 243 ms
+(median 231 ms, 72 MB/s); one byte 14.4, 19.8, 27.2, 27.3, 27.3 ms (median 27.2 ms). The restart's duration is not measured (see `docs/design.md`).
+
+### Not done
+
+- The rooms' `+net` and `+listen` words (`room new NAME ... +net HOST`, resolved against the creator's scope, INV-0224-3), the panel giving a
+  window's shell a network connection narrowed to its room, untrusted rooms with network words (the gate's stage 2 rows `net-account-flood` and
+  `net-fuzz` stay `pending`), the pills and hover card for a network rule (INV-0224-5), the `REPORT` message and the hint (INV-0224-4), `+listen`,
+  the roots entry that goes with a network rule, editor highlighting of `+net`.
+- A `libposix` client's `ECONNRESET` after a kill (INV-0221-3), the panel's and the broker's services channels.
+- Counters in `status` beyond frames: the per-account bounds and refusals exist (N4), `status` does not print them yet.
+- TCG for the new steps (GUI net, bench) and the fuzz targets under libFuzzer. No mutation run (the kernel part is small and bounded; the
+  checks are in `t_devices`).
+- `docs/design.md` has the section "The network on the desktop, and when it fails" and two Known limitations; the roadmap row is unchanged.
+
+### Handoff
+
+- State: branch `work/n6` from `main` at e9c5368, pushed, no candidate tag (`opus-review` first: a kernel call and a driver boundary).
+- For the reviewer (kernel, `unsafe`-adjacent, the driver boundary): `kernel/src/device.rs` (`make_transports`, `transport`,
+  `read_register`, `write_register`, `register_offset`, `begin_mapping`), `kernel/src/syscall.rs` (`device_transport`, `device_read`,
+  `device_write`), `crates/zoraya-abi/src/lib.rs` (calls 53 to 55, `DeviceObject` rights), `user/src/mmio.rs`, `user/src/gui.rs` (`scan`,
+  `read_transport`, `classify`), `user/src/bin/t_devices.rs` (`transport_devices`), `user/src/bin/init.rs` (`root_connection`, `net_crash`,
+  the arms for `KEY_NETD | KEY_ETHD`, `start_shell`), `user/src/netclient.rs` (`poll_services`, `send_restarted`, `send_down`,
+  `crash`, `start_network_with`), `user/src/bin/netd.rs` (the `crash_on_request` check), `user/src/bin/zosh.rs` (`network_available`,
+  `grants`), `crates/zoraya-shell/src/netgrant.rs`, ADR-0295 to ADR-0297.
+- Review questions: (1) is it right that a page device handle has `READ`/`WRITE` rights that the calls refuse, or should the
+  rights be per type; (2) `device_transport` returns a handle with `MAP`: acceptable since `device_map` refuses a transport device
+  (`begin_mapping`), or should the rights exclude `MAP`; (3) the mapping of a shared page and the register calls do not exclude
+  each other (only `init` maps it): is that enough; (4) the `Crash` hook in a production `netd`: acceptable behind the event handle,
+  or should it be a build feature; (5) the shell refuses a line while the root is closed instead of running it without a
+  network: the right default?

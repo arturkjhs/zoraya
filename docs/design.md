@@ -1943,7 +1943,11 @@ ADR-0221 items 5, 6 and 8).
 - **`+net HOST[:PORT]`** in the shell (ADR-0224 item 1, ADR-0297): `any`, a host name, `*.suffix`, an address or
   `ADDRESS/BITS`; a `url` operand that came from a value designates inside a word of the line; `grants` prints the
   `net:` lines.
-- **Measured** (QEMU 11.1.2, HVF, one run, 2026-11-12): REGISTER_CALL_NS.
+- **Measured** (QEMU 11.1.2, HVF, one run, 2026-11-12). A register read by call: 1.39 to 1.42 microseconds (`t_devices`, 2,000 reads of the magic value, three
+  boots), most of it QEMU's trap on the device access and the system call. `make bench-net` (5 runs, `fetch --sum`): 16 MiB in
+  231 ms median (216 to 243 ms; the hashing takes 16 ms of it), 72 MB/s, as N3's 232 ms; one byte, connect to end of file, 27.2 ms
+  median (14.4 to 27.3 ms). TCG not run locally (`FULL=1 make bench-net` runs it). The restart's duration (the plan asks for it) is not measured: the test waits 5 s after each `net crash`, and a fetch
+  that ran with 3 s was once too early for the new lease.
 - **Not built:** the rooms' `+net` and `+listen` words and the creator's-scope check, the pills and the hover card for a
   network rule, the `REPORT` message and the hint, the panel's and the broker's root connection and services channel (a
   shell started by the panel has no network), `make bench-net`, a `libposix` client's `ECONNRESET` after a kill, the
@@ -2089,6 +2093,14 @@ ADR-0221 items 5, 6 and 8).
   session and `zosh` do not share the console; from `zosh` a POSIX program has no terminal. Dates are the
   root volume's (ADR-0191), not a clock's. The GUI terminal holds up to 4 KiB of keys a slow `ttyd` or `zosh` has not
   read yet (TASK-24 7a, which fixed the loss of a burst's tail under TCG); past that, keys are dropped and counted.
+- **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport, but the
+  kernel does not make a mapping of the page and the transport devices exclude each other: a process that holds the page device
+  with `MAP` and maps it sees every transport. Only `init` holds a shared page and it maps it once, to read the identifiers. A page
+  device's `dma_release_quarantine` resets every transport of the page. A register read or write on a shared page costs a system
+  call (1.4 microseconds under HVF).
+- **The network on the desktop** (N6). A shell started by the panel has no network connection and no services channel (only the
+  console shell, which is also the first terminal window's shell, has them), so the network restart reaches no other launcher; a
+  window cannot be given `+net` words and no pill shows one (the rooms' words are not built).
 
 ## Roadmap
 
