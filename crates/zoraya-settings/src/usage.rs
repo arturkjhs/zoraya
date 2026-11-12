@@ -512,7 +512,7 @@ impl RoomRow {
         };
         let words: Vec<&str> = it.next()?.split(' ').filter(|w| !w.is_empty()).collect();
         let mut limits = Limits::default();
-        if words.len() % 2 != 0 {
+        if !words.len().is_multiple_of(2) {
             return None;
         }
         for pair in words.chunks(2) {

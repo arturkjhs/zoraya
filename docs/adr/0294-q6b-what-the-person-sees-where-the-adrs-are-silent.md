@@ -6,6 +6,7 @@
 - **Evidence:** CP-23, DM-034, quotas/survey.md#linux-cgroups-v2, quotas/survey.md#lessons-for-zoraya
 
 ## Context
+The survey's lesson is to say which limit was hit, not only that one was (`quotas/survey.md#lessons-for-zoraya`).
 ADR-0267 says `top` is a native program with a keeper channel in a designated slot, that the desktop shows a card and
 pills from the panel's once-a-second `Usage`, that a notice carries a `Raise` action, that the rooms overview has a card
 per room, and that the settings window sends `Set` over a `Manage` channel the panel gives it. ADR-0262 says the
@@ -17,7 +18,7 @@ changes an accepted decision except where the last section says so.
 1. One reading renders everywhere: `top`, `room`, `grants`, the pills and the card must not be able to disagree
    (INV-0266-3, INV-0267-1, CP-23).
 2. No new authority: no application gets a `Manage` channel or `LIMIT` it does not hold (ADR-0269, INV-0269-2).
-3. Calm by default (ADR-0267 driver 5): nothing moves until a limit is near.
+3. Calm by default (ADR-0267 driver 5; DM-034 has no pressure signal): nothing moves until a limit is near.
 4. Nothing a client sends reaches what the compositor draws of rooms (INV-0172-1).
 
 ## Considered options
@@ -100,12 +101,15 @@ builtin (point 1) and the settings window's edit through the panel (point 8).
   forwarding its refusal count to the keeper.
 
 ## Invariants
-- A refused window request of one account changes nothing of any other account's. *Check:* `cargo test -p
-  zoraya-compositor usage` (INV-0262-1, INV-0262-3 for the compositor).
-- The compositor's `SetUsage` is accepted only from the client manager's channel, whole or not at all. *Check:* the same
-  tests.
-- The settings window's `SetRoomLimit` from an untrusted room is refused. *Check:* not yet (the panel's handler is
-  `user/src/bin/panel.rs`, host-testable only through `rooms::with_limit`).
+- **INV-0294-1.** A window request of an untrusted room's account that passes a bound is refused with `OverQuota`, and
+  nothing of any other account changes; the untrusted accounts together leave `home` and the trusted rooms at least 20
+  of the compositor's 32 windows. *Check:* `cargo test -p zoraya-compositor usage` (the three account tests).
+- **INV-0294-2.** The compositor takes the rooms' use only from the client manager's channel, whole or not at all, and a
+  pill shows only at `NEAR_PERCENT` or more. *Check:* `cargo test -p zoraya-compositor usage` and
+  `tests/gui/limits.script` in `make test-gui`.
+- **INV-0294-3.** The settings window's `SetRoomLimit` is refused when the window was launched in an untrusted room, and
+  otherwise does what `room set` does. *Check:* host tests of `zoraya_settings::rooms::with_limit` for the words and
+  values; the panel's handler itself waits for a crate of its own.
 
 ## Open questions
 - Whether the pill should also mark the dock chip and the badge (ADR-0263 point 7 says the badge and dock chip).

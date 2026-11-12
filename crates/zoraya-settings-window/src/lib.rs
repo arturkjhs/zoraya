@@ -118,7 +118,7 @@ pub fn room_changes(
 ) -> Vec<(String, &'static str, String)> {
     let mut out = Vec::new();
     for (r, row) in rows.iter().enumerate().take(MAX_ROOM_ROWS) {
-        for w in 0..LIMIT_WORDS.len() {
+        for (w, word) in LIMIT_WORDS.iter().enumerate() {
             if !has_field(row, w) {
                 continue;
             }
@@ -127,7 +127,7 @@ pub fn room_changes(
             let want = want.trim();
             if want != now {
                 let value = if want.is_empty() { "none" } else { want };
-                out.push((row.name.clone(), LIMIT_WORDS[w], String::from(value)));
+                out.push((row.name.clone(), *word, String::from(value)));
             }
         }
     }
@@ -169,13 +169,13 @@ fn rooms_section(rows: &[RoomRow], drafts: &[(u32, String)]) -> Vec<Box<dyn Widg
             _ => String::from("not running"),
         };
         out.push(note(&use_line));
-        for w in 0..LIMIT_WORDS.len() {
+        for (w, word) in LIMIT_WORDS.iter().enumerate() {
             if !has_field(row, w) {
                 continue;
             }
             let text = text_of(rows, drafts, r, w);
             out.push(row_of(
-                LIMIT_WORDS[w],
+                word,
                 Box::new(TextField::new(field_id(r, w), &text)),
             ));
         }

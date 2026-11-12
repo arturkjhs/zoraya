@@ -24,7 +24,6 @@ fn agent() -> Reading {
         disk_limit: Some(2 << 30),
         conns_limit: Some(16),
         tmp_limit: Some(16 * MIB),
-        ..Reading::default()
     }
 }
 
@@ -151,10 +150,12 @@ fn cpu_share_is_between_two_readings() {
 #[test]
 fn the_wire_round_trips_and_every_other_text_is_refused() {
     let mut a = agent();
-    let mut b = Reading::default();
-    b.name = "home".into();
-    b.running = true;
-    b.mem_used = 7;
+    let b = Reading {
+        name: "home".into(),
+        running: true,
+        mem_used: 7,
+        ..Reading::default()
+    };
     a.cpu_pct = None;
     let rows = vec![a.clone(), b.clone()];
     let text = to_wire(&rows, 4096);

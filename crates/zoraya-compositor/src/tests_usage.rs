@@ -175,7 +175,7 @@ fn only_the_client_manager_sets_usage_and_a_bad_text_changes_nothing() {
     let c = s.room_client(panel, "a1", "term", "+w ~/a");
     s.f().send(c, message(&m, 4), vec![]);
     s.c.step();
-    assert!(s.f().peers.get(&c).is_some());
+    assert_eq!(s.c.reading("a1").map(|r| r.mem_used), Some(10 * MIB));
 }
 
 #[test]
