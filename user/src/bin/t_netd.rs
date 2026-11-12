@@ -143,6 +143,61 @@ fn ping(conn: Handle, address: [u8; 4], count: u32) -> zoraya_proto_net::PingRep
     netclient::ping(conn, address, count, 3000).expect("a ping reply")
 }
 
+/// The gate's `net-account-flood` (ADR-0268 point 7, INV-0262-1): a client
+/// in an account of `BUDGET` connections opens connections without end, to an
+/// on-link address that answers no ARP so that none ends by itself. `netd`
+/// admits `BUDGET` and tells every other `Failed(OVER_QUOTA)` at once, while
+/// the root connection (home) still connects, and the flooder's own
+/// connections ending give its account back.
+fn account_flood(root: Handle) {
+    use zoraya_proto_net::{Failed, reason};
+    const BUDGET: u32 = 3;
+    const TRIES: u32 = 12;
+    let account =
+        netclient::narrow_account(root, rights::ALL, BUDGET, &root_scope()).expect("an account");
+    let mut held = Vec::new();
+    for _ in 0..TRIES {
+        let ends = zoraya_user::netconn::start(account, "", [10, 0, 2, 99], 80)
+            .expect("netd says Connecting");
+        held.push(ends);
+    }
+    sleep_until(clock_monotonic() + 300_000_000);
+    let (mut refused, mut pending, mut other) = (0u32, 0u32, 0u32);
+    for (control, _, _) in &held {
+        let mut buf = [0u8; 128];
+        match zoraya_user::channel_read(*control, &mut buf, &mut []) {
+            Ok(sizes) => {
+                let m = &buf[..(sizes.bytes as usize).min(buf.len())];
+                match decode::<Failed>(m, 0) {
+                    Ok((_, f)) if f.reason.0 == reason::OVER_QUOTA => refused += 1,
+                    _ => other += 1,
+                }
+            }
+            Err(_) => pending += 1,
+        }
+    }
+    println!(
+        "t_netd: account of {BUDGET}: {TRIES} connections opened, {pending} pending, {refused} refused over quota, {other} ended otherwise"
+    );
+    assert_eq!(
+        (pending + other, refused),
+        (BUDGET, TRIES - BUDGET),
+        "the account admits its budget and refuses the rest"
+    );
+    // Home is not affected: the root connection still connects (the gateway
+    // refuses the port or accepts it; either way netd admitted it).
+    match zoraya_user::netconn::connect(root, "", GATEWAY, 80, 3_000_000_000) {
+        Ok(_) | Err(zoraya_user::netconn::ConnectError::Failed(reason::REFUSED)) => {}
+        Err(e) => panic!("home's connection under the flood: {e:?}"),
+    }
+    for (control, a, b) in held {
+        for h in [control, a, b] {
+            let _ = handle_close(h);
+        }
+    }
+    let _ = handle_close(account);
+}
+
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let devices = scan();
@@ -363,6 +418,8 @@ fn main() -> i32 {
         "t_netd: ping after the restart: received {} of {}",
         r.received, r.sent
     );
+
+    account_flood(root);
 
     // A clean end: the connection closes, the service stays.
     net.netd.end();

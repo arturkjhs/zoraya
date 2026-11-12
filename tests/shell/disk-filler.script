@@ -1,0 +1,73 @@
+# The gate's disk-filler row (TASK-26 Q7; ADR-0265, ADR-0268 point 3;
+# INV-0265-3 and INV-0265-5) from the console, in rooms with `--disk`: a
+# program writes in a room's directory until the limit refuses; the other
+# room and home still write; a sync loop in one room does not hold up the sync
+# of a program in home beyond the bound. (An untrusted room's /tmp, `--tmp`,
+# is not built: ADR-0265 point 7 waits for the line reader of untrusted rooms.)
+! panicked
+! storage failed
+! (over 5 s)
+< Type help to begin
+< \r\n~> 
+> mkdir /t/fill\r
+< \r\n~> 
+> mkdir /t/other\r
+< \r\n~> 
+> mkdir /t/home\r
+< \r\n~> 
+> room new filler --disk 256K --procs 16 +w /t/fill\r
+< filler --colour 1 --disk 256K --procs 16 +w /t/fill
+< \r\n~> 
+> room new other --disk 256K --procs 16 +w /t/other\r
+< other --colour 2 --disk 256K --procs 16 +w /t/other
+< \r\n~> 
+# The filler writes until the directory's limit refuses.
+> room filler\r
+< filler /t/fill> 
+> diskfill /t/fill\r
+< diskfill: stopped after
+< refused (16)
+< filler /t/fill> 
+# Full: a new file in the directory is refused, and removing one frees room.
+> echo more > /t/fill/more.txt\r
+< filler /t/fill> 
+> rm /t/fill/fill-0\r
+< filler /t/fill> 
+> echo again > /t/fill/more.txt\r
+< filler /t/fill> 
+> room --leave\r
+< \r\n~> 
+# Home writes (the room's limit is on its directory only), and so does the
+# other room, up to its own limit (INV-0265-3).
+> echo home > /t/home/note.txt\r
+< \r\n~> 
+> cat /t/home/note.txt\r
+< home
+< \r\n~> 
+> room other\r
+< other /t/other> 
+> diskfill /t/other\r
+< diskfill: stopped after
+< refused (16)
+< other /t/other> 
+> room --leave\r
+< \r\n~> 
+# A sync loop in a room, and a program in home that writes and syncs 100
+# times: none of its syncs takes over five seconds (INV-0265-5; the program
+# says so when one does).
+> room other\r
+< other /t/other> 
+> rm /t/other/fill-0\r
+< other /t/other> 
+> diskfill --loop 40 /t/other &\r
+< [1] diskfill --loop 40 /t/other
+< other /t/other> 
+> room --leave\r
+< \r\n~> 
+> diskfill --syncs 100 /t/home\r
+< diskfill: 100 syncs, slowest
+< \r\n~> 
+> wait\r
+< diskfill:
+< \r\n~> 
+> poweroff\r

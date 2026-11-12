@@ -63,7 +63,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd rooms t_rooms memhog random broker ttyd
+	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date rngd rooms t_rooms memhog diskfill random broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
@@ -456,6 +456,8 @@ CLOCK_SCRIPT := tests/shell/clock.script
 STORAGE_DOWN := tests/shell/storage-down.script
 DEVICE_ERROR := tests/shell/device-error.script
 ROOMS_SCRIPT := tests/shell/rooms.script
+DISK_FILLER_SCRIPT := tests/shell/disk-filler.script
+HOSTILE_SCRIPT := tests/shell/hostile.script
 GRANTS_SCRIPT := tests/shell/grants.script
 GRANTS_ROOT := $(BUILD)/grants-root
 SYSTEM_RO_ROOT := $(BUILD)/system-ro-root
@@ -507,6 +509,14 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 # Rooms with limits through the room keeper (Q6a; INV-0266-1, INV-0263-4, INV-0269-1).
 	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(ROOMS_SCRIPT) --label rooms -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# The gate's disk-filler and hostile-programs rows (Q7), from the console, in
+# rooms with limits: DISK_FILLER_SCRIPT, HOSTILE_SCRIPT.
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(DISK_FILLER_SCRIPT) --label disk-filler -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(HOSTILE_SCRIPT) --label hostile -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # A volume that cannot be mounted: ADR-0080's limit on restarts, from `init`.
 # Then one failed write, injected in QEMU's block layer.
