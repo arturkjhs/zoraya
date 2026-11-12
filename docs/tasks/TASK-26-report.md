@@ -105,8 +105,8 @@ Each part's section lists its own runs. For the fixes: `make check`, `make test-
 of most steps, `make test` and `make test-par`, `test-posix*`, `test-tour-gui`, `test-crash`, fuzzing at 600 s a target.
 Candidate tags exist for every part (`candidate/work-*`); the newest on the fixes is `candidate/work-q7-fixes-f` at `29351b3`, whose result this report does not record.
 
-- **Full run `candidate-full/stage-8` on `7de36fc`: in progress.** Result: (the orchestrator fills this in: run id, conclusion, failing jobs)
-- `main`'s run after it: (the orchestrator fills this in)
+- **Full run `candidate-full/stage-8` on `7de36fc`: success** (run 43327428941, 56 of 56 jobs; the plan job ran with `full=1`). `main`'s own push run on `7de36fc` (43323966568) also passed, 56 of 56. The candidate run of `work/q7-fixes` at `29351b3` (43320805132) passed too.
+- `main`'s run on the commit that carries this line: see the `stage-8` tag, which is placed only after it is green.
 
 ## Q1: frame and kernel budgets on jobs (branch `work/q1`)
 
