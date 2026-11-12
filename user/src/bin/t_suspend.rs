@@ -17,7 +17,7 @@ use zoraya_abi::{
 use zoraya_user::{
     assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, image, job_create,
     job_kill, job_resume, job_suspend, memory_create, memory_map, object_get_signals, println,
-    process_resume, sleep_until, spawn, startup, wait_exit,
+    process_exit, process_resume, sleep_until, spawn, startup, wait_exit,
 };
 
 const COUNTERS: usize = 32;
@@ -182,6 +182,92 @@ fn resumer() -> ! {
     loop {
         for slot in 3..7 {
             let _ = job_resume(Handle::new(slot).expect("slot"));
+        }
+    }
+}
+
+/// Review of the fixes, warning 7: `job_suspend` of 700 jobs marks every one
+/// `SUSPENDED` and stops a process in each of 16 spread through the chains
+/// (the first, the last, and in between), while another process makes and
+/// closes jobs under the top job and under a job in the middle between the
+/// walk's steps (a dead child leaves the list by `swap_remove`: the walk
+/// skips nobody and may visit one twice). A job made during the suspend is
+/// suspended too (`Job::create` reads the parent's state under `TREE`), and
+/// `job_resume` undoes it all.
+fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
+    let counters = Counters::new();
+    let top = job_create(JOB, JobFlags::NONE).expect("job");
+    let held = big_tree(top, 700);
+    let at: Vec<usize> = (0..16).map(|i| i * 46).collect();
+    let counting: Vec<Handle> = at
+        .iter()
+        .enumerate()
+        .map(|(i, &j)| counter(held[j], &counters, i as u8))
+        .collect();
+    let churn = with_jobs(JOB, b"churn", &[top, held[350]]);
+    let all = |c: &[u64; COUNTERS]| c[..16].iter().all(|&n| n > 0);
+    assert!(
+        eventually(|| all(&counters.read())),
+        "all counting: {:?}",
+        counters.read()
+    );
+    for round in 0..15 {
+        job_suspend(top).expect("suspend");
+        assert!(suspended(top), "round {round}: the top job");
+        for (i, &job) in held.iter().enumerate() {
+            assert!(suspended(job), "round {round}: job {i} of 700 is SUSPENDED");
+        }
+        let before = counters.read();
+        nap(3);
+        assert_eq!(
+            before,
+            counters.read(),
+            "round {round}: a process in each of 16 jobs is stopped"
+        );
+        job_resume(top).expect("resume");
+        for (i, &job) in held.iter().enumerate() {
+            assert!(!suspended(job), "round {round}: job {i} is running again");
+        }
+        assert!(
+            eventually(|| counters.read()[..16]
+                .iter()
+                .zip(&before)
+                .all(|(a, b)| a > b)),
+            "round {round}: all running again"
+        );
+    }
+    // The killed tree refuses the churn's next job: it ends.
+    job_kill(top).expect("kill");
+    let record = wait_exit(churn);
+    assert_eq!(record.code, 0, "the churning process ended by itself");
+    for child in counting {
+        wait_exit(child);
+        handle_close(child).expect("close");
+    }
+    handle_close(churn).expect("close");
+    for job in held {
+        handle_close(job).expect("close");
+    }
+    handle_close(top).expect("close");
+}
+
+/// The child of the case above: makes three jobs under each job it was given
+/// (slots 3 and 4) and closes them middle, first, last, until a job cannot
+/// be made (the tree was killed).
+fn churn() -> ! {
+    loop {
+        for slot in 3..5 {
+            let parent = Handle::new(slot).expect("slot");
+            let mut made = [parent; 3];
+            for job in &mut made {
+                match job_create(parent, JobFlags::NONE) {
+                    Ok(j) => *job = j,
+                    Err(_) => process_exit(0),
+                }
+            }
+            for at in [1, 0, 2] {
+                handle_close(made[at]).expect("close");
+            }
         }
     }
 }
@@ -392,6 +478,9 @@ fn main() -> i32 {
     if let Some(b"resumer") = first {
         resumer();
     }
+    if let Some(b"churn") = first {
+        churn();
+    }
     if let Some(b"count") = argv.next() {
         let digits = argv.next().unwrap_or(b"0");
         let index = digits.iter().fold(0, |n, d| n * 10 + usize::from(d - b'0'));
@@ -402,6 +491,7 @@ fn main() -> i32 {
     resume_wakes_only_what_it_stopped();
     measure_suspend_latency();
     a_resume_from_inside_cannot_undo_a_suspend_walk();
+    a_large_tree_is_suspended_whole_while_jobs_come_and_go();
     println!("t_suspend: all passed");
     0
 }

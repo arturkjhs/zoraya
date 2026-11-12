@@ -1853,6 +1853,38 @@ the job tree walks and for subscriptions), five warnings and seven notes; 40-odd
 6. **Warning 5, `device_transport`.** The transport gets the page handle's rights that a device handle has, without `MAP`; `t_devices` case
    `a_transport_has_no_right_its_page_lacks`.
 
+### Review of the fixes (opus-review of `work/q7-fixes` at `7af044c`) and its dispositions
+
+Eight findings, fixed in order, one commit each (on top of `7af044c`):
+
+1. **Error, dead child slots leaked.** `WALKS` is gone. A dropped job leaves its parent's list by `swap_remove`, as a process does. A walk counts down from the end,
+   so none is skipped; one may be visited twice (`Job::walk`'s comment, ADR-0270 note).
+2. **Error, suspend and resume interleaved (INV-0105-5).** `job_suspend`, `job_resume` and `job_kill` take turns (`Job::Exclusive`, waiting at `steps::pause`, no
+   lock held). A caller that was stopped while it waited parks before taking its turn (`process::park_if_stopped`), else its `job_resume` would run right after the
+   `suspend` returned. Chosen over an ancestor check under `TREE` because that does not settle two calls on one top job. Test: `t_suspend`
+   `a_resume_from_inside_cannot_undo_a_suspend_walk` (a resumer inside 700 jobs; a stress case, since the walks interleave only when a slice ends during one; the
+   mutation without the turns was **not** run: it is probabilistic on one CPU).
+3. **Error, `remove_matching`.** Each entry is found by binary search on its key and removed, not by a pass over every port's list. Worst case (1024 ports of
+   1024 entries, the source's entry first): 1.05 ms on the host, release build (the pass over every list was 1.94 ms there, about 10 ms in the kernel by the
+   review's estimate). ADR-0299 states the product bound (16 MiB moved). Host test `freeing_a_full_source_on_full_ports_is_bounded`; `t_bound` `wide-source`:
+   32 ports of 1024, `handle_close` of the job 47 us masked (auto-default, factor 4), so about 1.5 ms scaled to 1024 ports, linear in the ports.
+4. **Error, `weight`.** A port weighs `1 + subscriptions/16`, and any object with a source `1 + subscribers/16`; `end_subscriptions` and `close` count those units, so
+   the 80-unit check sees them on every host. `t_bound` `full-ports`: 16 ports of 1024, each with a job of 1024 subscribers, half closed port first: 779 us masked for the whole
+   run. **Smaller than the review's 64:** the test machine has 128 MiB and the heap does not give frames back (warning 7), so 64 ports (65k subscriptions) and 128 ports of
+   `wide-source` made later tests fail for want of memory (run and seen). By reasoning, weight 1 would put over 1000 units in one interval and fail the 80-unit check.
+5. **Warning, shared per-source bound.** The broker polls (100 ms) a job it could not subscribe to instead of ignoring the error. Not prevented: a per-holder bound
+   is bypassed by duplicating the handle, and a reserve needs the kernel to tell the broker from other holders. ADR-0299 records it. Not tested (no test of the
+   broker fills a source; the code is small).
+6. **Warning, `+net` marker.** `untrusted-gate: net-refusal-call` at each of the two calls in `zosh.rs`, at least 2 required by `check-untrusted-gate.sh`. **Mutation
+   (reverted):** deleting the POSIX call and its marker failed the script ("1 of 2 markers").
+7. **Warning, tree test.** `t_suspend` `a_large_tree_is_suspended_whole_while_jobs_come_and_go` (put in `t_suspend`, which has the counting children, not `t_bound`):
+   700 jobs, 16 counting processes spread through them, a second process making and closing jobs under the top job and a middle job; every job `SUSPENDED` and the 16
+   stopped after each of 15 suspends, all running after each resume.
+8. **Notes.** `Job::create` takes the parent's `suspended` under `TREE` and makes the new job match (both ways); `Job::walk`'s comment says a second visit can happen.
+
+Run: `make check` before each commit; `cargo test -p zoraya-events`; `make test-qemu-one` three times (the first run failed for the memory above; the second and the last, after the `t_suspend` tree test, passed with
+`t_bound` and `t_suspend`). Not run: `make test-changed`, TCG, CI, the broker's polling.
+
 ### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
 
 - **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for
@@ -1861,7 +1893,7 @@ the job tree walks and for subscriptions), five warnings and seven notes; 40-odd
   `console_write` keeps IRQ masked about 60 ms at 4 KiB (10); any process can run code from a memory object (11); the refusal lives only in the clients (12);
   contiguous memory is open to every process (13); smaller items: the RTC's rights, calls 53 to 55 under a proposed ADR, `held` counts the job's own record (14).
 - **Left over from the fixes:** `Job::drop`'s `retain` and the growth of `children` are still linear in a parent's children, in one interval each; the drop of a long job chain
-  runs in whichever call drops the last handle; two job walks may interleave (ADR-0270 note).
+  runs in whichever call drops the last handle (the walks no longer interleave: ADR-0270 note).
 - **Rows the strict check now lists as not `checked:`** (run the check with a marker removed to see them): INV-0172-3, INV-0260-1, INV-0261-2, INV-0261-6, INV-0261-7,
   INV-0262-1, -2 and -3, INV-0263-3, INV-0264-3 (the architect's bound), INV-0265-1, INV-0265-3 (the `/tmp` half), INV-0265-4, INV-0268-3, INV-0270-1 (its status names known breaches).
   INV-0262-4 is needed for `+net` (stage 2).
