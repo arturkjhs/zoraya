@@ -882,9 +882,27 @@ impl Z {
         };
         let net = Self::net_grant_with(exec, &d, base, &self.cwd)?;
         if net.is_some() {
+            // untrusted-gate: net-refusal-call (the POSIX path below has its own)
+            self.refuse_net_in_untrusted_room(exec.name)?;
             self.network_available(exec.name)?;
         }
         Ok(net)
+    }
+
+    /// ADR-0268 point 7: the gate opens in two stages, the first without
+    /// `+net`. A line that would get a network connection is refused in an
+    /// untrusted room until the second stage (the network's quota tests).
+    fn refuse_net_in_untrusted_room(&self, name: &str) -> Result<(), String> {
+        if self.room.as_ref().is_some_and(|r| r.untrusted) {
+            // untrusted-gate: net-refusal (ADR-0268 point 7, `make check-untrusted-gate`)
+            return Err(zoraya_command::error(
+                "room",
+                Some(name),
+                "+net in an untrusted room needs the network's quota tests",
+                &["ADR-0268 point 7: the network opens in the second stage of the gate"],
+            ));
+        }
+        Ok(())
     }
 
     /// Takes what `init` sent on the services channel (a new root after a
@@ -961,6 +979,8 @@ impl Z {
         let Some((rights, scope)) = Self::net_grant_with(exec, d, true, &self.cwd)? else {
             return Ok(None);
         };
+        // untrusted-gate: net-refusal-call (the native path above has its own)
+        self.refuse_net_in_untrusted_room(exec.name)?;
         self.network_available(exec.name)?;
         // Each POSIX program counts against an account of its own, carved
         // from the shell's (ADR-0262 item 2; Q3): what it opens does not use

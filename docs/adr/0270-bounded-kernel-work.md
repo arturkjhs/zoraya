@@ -269,6 +269,49 @@ and exits.
   step boundary; and the kernel's page-table frames come from the boot pool (64 tables) until it is empty, so the
   count of them in `backing` shows only past 128 MiB of window; (d) `reaper::free_some` still frees up
   to a step under the queue's lock, as before.
+- *Q7 review note (agent, ADR-0001 rule 6), the job tree walks are sites:* the review of the system calls
+  (`docs/tasks/TASK-26-syscall-review.md`, error 1) found `job_signal`, `job_suspend`, `job_resume` and `job_kill` walking a
+  whole subtree with IRQ masked and `TREE` held; a limited room can keep tens of thousands of jobs. They are sites of
+  point 1 now. `Job::walk` goes in steps of `steps::STEP` visits (a job, or one of its processes, is one): inside a step
+  it holds `TREE`; between steps it holds nothing and calls `steps::pause`, which cannot fail, so a walk runs to its end
+  whatever the caller was asked (as a teardown does). The way through is a path of at most 32 frames (the depth limit)
+  with the counts of children and of processes not yet visited, counted down from the end of the lists; a process that
+  leaves (`swap_remove`) is either behind the walk or still ahead of it, and so is a dropped job (also `swap_remove`:
+  the first version kept its dead slot while any walk ran, which left uncharged memory growing without bound, because a dead
+  `Weak` keeps its allocation; review of the fixes, error 1). Removing from the list can make one entry be visited twice,
+  never skip one (`Job::walk`'s comment): twice is harmless to `suspend`, `resume` and `kill`, and a `job_signal` may deliver
+  to a process twice when another process of the same job leaves during a pause (stated, not prevented). What joins during a walk is not reached by it: `job_kill` closes each job before its children, so a
+  job or process made later is refused; `job_suspend` and `job_resume` leave a job created or joined later in the state
+  its parent has; `job_signal` is for what was there when it started. `job_suspend`, `job_resume` and
+  `job_kill` took turns (`Job::Exclusive`, a flag; a caller that finds it taken waits, no lock held). The
+  first version let them interleave and the review found the INV-0105-5 breach: a process of a suspended tree, holding a
+  handle to a job B below it, could `job_resume` B after the `suspend` walk had visited B and before it ended, and
+  `job_suspend` returned with B running (review of the fixes, error 2). Chosen over a check in `resume` of every job's
+  ancestors under `TREE` because the check covers only a resume of a job below, not two calls on the same top job, which
+  would still leave a mixture; the turns make each call as whole as it was before the walks were stepped. *Round 2, error 2:*
+  the flag was unfair (a process looping `job_resume` on a big tree of its own could take every turn and starve another
+  room's `job_kill`, so the wait was not bounded by "the holder's walk"), so the turn is now a ticket queue (first come, first
+  served) for `suspend` and `resume` only; `job_kill` takes no turn (it closes jobs and asks processes to exit, which
+  interleaves with a stop or a continue to the same end, a stopped process that is asked to exit leaves
+  `park_if_stopped`, and the broker's kill must not queue behind an untrusted caller). A caller now waits for the walks
+  queued before it: at most one per thread with a call open, each bounded by its tree and run to its end whatever the
+  holder was asked, so a holder is never stopped or killed inside it. Not done: a turn per room (the top ancestor below the
+  root). A walk on the root job and a walk in a room must exclude each other, which two per-room queues would not do; a
+  later task may take both. `job_signal` does not take a turn (it changes nothing a later call depends on). *Round 3, warning 2:* a waiter first spun at `steps::pause`, which switches only when the slice ends, so N waiters each burned a slice
+  per round and the holder got 1/(N+1) of the CPU; a waiter now yields (`sched::yield_now`) after each pause, which costs a switch, not a slice.
+  The wait is bounded by quota(threads) x quota(jobs) x slowdown: at most one queued walk per thread with a call open (the thread
+  quota), each walk bounded by its tree (the job quota), each step slowed by the waiters' switches (a bounded factor, since a
+  waiter that finds no other thread ready runs on at once). A caller that is stopped while it waits for
+  its turn (it is in the tree, inside the call) parks first (`process::park_if_stopped`), as if it had called after being stopped:
+  otherwise its `job_resume` would run right after the `suspend` returned and start what that left stopped. The test is a stress
+  case (`t_suspend`, a resumer inside a tree of 700 jobs): the walks interleave when a slice ends during one. `t_bound` builds a tree of 700 jobs under one top job and measures the four calls
+  against a tree of 8 (units on every host, time at factor 1). Not changed: `Job::drop`'s `retain` and the growth of
+  `children` are linear in the parent's children, in one interval each (bounded by the memory limit; a later task);
+  the drop of a long chain of jobs (each holds its parent) runs in whichever call drops the last handle.
+- *Q7 review note (agent), subscriptions:* `port_subscribe`, `Events::set`, closing a port and freeing a source are linear in
+  the subscriptions of a port or a source, under `EVENTS` and in interrupt handlers, where a walk cannot pause (review
+  error 2). They are bounded, not stepped: ADR-0299 (proposed) limits both to 1024, so each is a fixed amount; the frees
+  of up to 1024 `Paid` are not counted in units, only timed (`t_bound`).
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 

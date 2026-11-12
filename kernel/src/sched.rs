@@ -307,6 +307,13 @@ fn reap() {
     }
 }
 
+/// Asks for a switch at the next preemption point (the test kernel's
+/// `FORCE_SWITCH`, `steps::set_always_switch`).
+#[cfg(feature = "qemu-test")]
+pub fn request_resched() {
+    SCHED.lock().need_resched = true;
+}
+
 fn end_of_slice(_: usize) {
     SCHED.lock().need_resched = true;
 }

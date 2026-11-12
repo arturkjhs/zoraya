@@ -1827,3 +1827,141 @@ the TCG runs of everything but `test-keeper`; the whole of `test-posix*`, `test-
 - **Gate file:** `disk-filler-tmp` (the `/tmp` half, `pending`, owner Q8) split from `disk-filler`; `check-untrusted-gate` requires it; the gate stays closed.
 - **Other:** `t_gui` asserts `OVER_QUOTA` (8); `t_netd` asserts the control channel's message has ordinal 17; `tools/test-map.txt` maps `init.rs`,
   `zosh.rs` and `roomsclient.rs` to `test-keeper`; `sleep` loops until the clock passes the deadline.
+
+## Review of the system call surface after stage 8 (opus-review, head `a3866f3`) and its fixes (branch `work/q7-fixes`)
+
+The review is `docs/tasks/TASK-26-syscall-review.md` (ADR-0268 point 6). **Verdict: the gate stays closed.** Two errors (INV-0270-1 did not hold for
+the job tree walks and for subscriptions), five warnings and seven notes; 40-odd calls checked and found sound otherwise.
+
+### Fixed on `work/q7-fixes` (one commit each)
+
+1. **Error 1, job tree walks.** `Job::walk` goes in steps of `steps::STEP` visits with `TREE` held inside a step only and `steps::pause` between steps
+   (a path of at most 32 frames; dead child slots stay while a walk runs so no index moves; processes are visited from the end of their list).
+   `t_bound::job_tree_sites` builds 700 jobs in chains of 12 under one job and measures `job_signal`, `job_suspend`, `job_resume` and `job_kill`
+   against 8 jobs (units on every host: at most 80). ADR-0270 has a note that lists the sites (open-question note, no Decision change).
+2. **Error 2, subscriptions.** Not stepped (`set` runs in handlers): bounded. 1024 per port and per source, `Error::TooMany`, `LimitReached` for a
+   program. **Proposed ADR-0299** (a behaviour change of ADR-0006), INV-0299-1; host tests `a_port_holds_a_bounded_number_of_subscriptions` and
+   `a_source_has_a_bounded_number_of_subscriptions`; `t_bound::subscription_sites` at the limit (one run, auto-default: last subscribe 11 us,
+   signal of a source 64 us, close of the port 313 us masked). The frees of 1024 `Paid` are timed, not counted in units.
+3. **Warning 3, `+net`.** `zosh` refuses a line that would get a network connection while its room is untrusted (`untrusted-gate: net-refusal`; dead code
+   while no untrusted room can be entered). `check-untrusted-gate.sh` fails when no such marker exists unless stage 2 is ready and INV-0262-4 is `checked`,
+   gate open or closed.
+4. **Warning 6, the check.** Markers are counted (the shell's two, the panel's one); a row passes only if its status begins `checked:` and says nothing
+   is open or not yet checked; INV-0268-3 is in the list; INV-0262-4 is left to stage 2. **Mutation (reverted):** removing only the marker of
+   `room new --untrusted` in `zosh.rs` made `make check-untrusted-gate` fail (15 rows listed); with the gate closed it passes as before.
+5. **Warning 4, `stream_create`.** The table's lock is released while the stream is built (`reserve_many(2)`, build, lock, insert).
+6. **Warning 5, `device_transport`.** The transport gets the page handle's rights that a device handle has, without `MAP`; `t_devices` case
+   `a_transport_has_no_right_its_page_lacks`.
+
+### Review of the fixes (opus-review of `work/q7-fixes` at `7af044c`) and its dispositions
+
+Eight findings, fixed in order, one commit each (on top of `7af044c`):
+
+1. **Error, dead child slots leaked.** `WALKS` is gone. A dropped job leaves its parent's list by `swap_remove`, as a process does. A walk counts down from the end,
+   so none is skipped; one may be visited twice (`Job::walk`'s comment, ADR-0270 note).
+2. **Error, suspend and resume interleaved (INV-0105-5).** `job_suspend`, `job_resume` and `job_kill` take turns (`Job::Exclusive`, waiting at `steps::pause`, no
+   lock held). A caller that was stopped while it waited parks before taking its turn (`process::park_if_stopped`), else its `job_resume` would run right after the
+   `suspend` returned. Chosen over an ancestor check under `TREE` because that does not settle two calls on one top job. Test: `t_suspend`
+   `a_resume_from_inside_cannot_undo_a_suspend_walk` (a resumer inside 700 jobs; a stress case, since the walks interleave only when a slice ends during one; the
+   mutation without the turns was **not** run: it is probabilistic on one CPU).
+3. **Error, `remove_matching`.** Each entry is found by binary search on its key and removed, not by a pass over every port's list. Worst case (1024 ports of
+   1024 entries, the source's entry first): 1.05 ms on the host, release build (the pass over every list was 1.94 ms there, about 10 ms in the kernel by the
+   review's estimate). ADR-0299 states the product bound (16 MiB moved). Host test `freeing_a_full_source_on_full_ports_is_bounded`; `t_bound` `wide-source`:
+   32 ports of 1024, `handle_close` of the job 47 us masked (auto-default, factor 4), so about 1.5 ms scaled to 1024 ports, linear in the ports.
+4. **Error, `weight`.** A port weighs `1 + subscriptions/16`, and any object with a source `1 + subscribers/16`; `end_subscriptions` and `close` count those units, so
+   the 80-unit check sees them on every host. `t_bound` `full-ports`: 16 ports of 1024, each with a job of 1024 subscribers, half closed port first: 779 us masked for the whole
+   run. **Smaller than the review's 64:** the test machine has 128 MiB and the heap does not give frames back (warning 7), so 64 ports (65k subscriptions) and 128 ports of
+   `wide-source` made later tests fail for want of memory (run and seen). By reasoning, weight 1 would put over 1000 units in one interval and fail the 80-unit check.
+5. **Warning, shared per-source bound.** The broker polls (100 ms) a job it could not subscribe to instead of ignoring the error. Not prevented: a per-holder bound
+   is bypassed by duplicating the handle, and a reserve needs the kernel to tell the broker from other holders. ADR-0299 records it. Not tested (no test of the
+   broker fills a source; the code is small).
+6. **Warning, `+net` marker.** `untrusted-gate: net-refusal-call` at each of the two calls in `zosh.rs`, at least 2 required by `check-untrusted-gate.sh`. **Mutation
+   (reverted):** deleting the POSIX call and its marker failed the script ("1 of 2 markers").
+7. **Warning, tree test.** `t_suspend` `a_large_tree_is_suspended_whole_while_jobs_come_and_go` (put in `t_suspend`, which has the counting children, not `t_bound`):
+   700 jobs, 16 counting processes spread through them, a second process making and closing jobs under the top job and a middle job; every job `SUSPENDED` and the 16
+   stopped after each of 15 suspends, all running after each resume.
+8. **Notes.** `Job::create` takes the parent's `suspended` under `TREE` and makes the new job match (both ways); `Job::walk`'s comment says a second visit can happen.
+
+Run: `make check` before each commit; `cargo test -p zoraya-events`; `make test-qemu-one` three times (the first run failed for the memory above; the second and the last, after the `t_suspend` tree test, passed with
+`t_bound` and `t_suspend`). Not run: `make test-changed`, TCG, CI, the broker's polling.
+
+### Review round 2 (opus-review of `work/q7-fixes` at `b94798f`) and its dispositions
+
+1. **Error, moved handles not paced.** `channel_write` collects the moved entries and ends their subscriptions after the table's lock is dropped, each after
+   `steps::before(weight)` (error paths too); spawn and snapshot moves call `before(weight)` per handle. `t_bound` `moved-jobs` (16 full jobs in one write).
+2. **Error, unfair `Exclusive`.** A ticket queue (FIFO) for `suspend` and `resume`; `job_kill` takes no turn. Not per room (a root-level walk must exclude room
+   walks). ADR-0270 note corrected ("bounded by the holder's walk" was only true with one walk; now by the walks queued before).
+3. **Warning, vacuous test.** Test-kernel call `FORCE_SWITCH` (0x701a, `qemu-test` only) makes every `steps::pause` ask for a switch; `t_suspend` sets it for
+   `a_resume_from_inside_cannot_undo_a_suspend_walk` and the tree test. **Mutation (reverted, run):** `Exclusive::take` returning at once (no turns) made `t_suspend` fail at
+   round 0 ("SUSPENDED on a job below", `t_suspend.rs:168`); the unmutated run passes. So the test is no longer vacuous.
+4. **Warning, `swap_remove`.** A `dropper` child drops the last handle of one of the first four children of the top job (visited last) while the walk is between
+   steps (forced switch); it yields while it waits (spinning cost a slice per forced switch and the first version gave up after 20 s). **Mutation (reverted, run):** `Vec::remove` instead of
+   `swap_remove` in `Job::drop` **survived**: it is an equivalent mutant for the walk (the shift makes at most a second visit, never a skip). A skip needs a front-to-back walk, which was not built as
+   a mutant; the test would fail it (every one of 700 jobs must be `SUSPENDED`), but that is by reasoning, not run.
+5. **Warning, broker poll.** `next_poll` is fixed; the poll runs at the top of the loop whenever `clock_monotonic() >= next_poll`, whatever woke the loop. A subscribe error
+   (`BadHandle`) lands in `polled` and is reported as terminated (`object_get_signals` fails). Not run: no test of the broker covers it.
+
+Run: `make check` (all 15 pass); `make test-qemu-one` (last one passes: `t_bound` with `moved-jobs`, `t_suspend` all passed; 9 expected failures as before). Not run: `cargo test -p zoraya-events` (not touched), `make test-changed`, CI.
+The first commit of the round holds `FORCE_SWITCH` in `syscall.rs`, whose `steps` side is in the third commit, so only the head builds.
+6. **Notes.** ADR-0299 states: the time bound unchecked at factor above 1, the 1.5 ms extrapolated, the gate marker a proxy. `channel::close_one` counts a dropped port's units.
+
+### Review round 3 (opus-review of `work/q7-fixes` at `131e5b5`) and its dispositions
+
+1. **Error, `write` no longer adjacent to `prepare`.** `channel_write` now queues the message right after `prepare` and ends the moved entries' subscriptions (paced, no
+   lock held) after `pair.write`; the old ids are dead (`next_id`), so the order does not matter. Spawn and snapshot moves have no `prepare`/`write` pair (they write no
+   channel), so they were not affected. Test: `t_bound` `peer_closing_in_a_write` (`FORCE_SWITCH` on, a child closes the peer end at the writer's first pause; the write is
+   accepted or refused `PeerClosed`; if accepted the carried end's peer must see `PEER_CLOSED`; the heap returns). In the run all 6 rounds were accepted. **Not run:** the test against the
+   old order (no mutant of it), so its power is by reasoning. **Seen:** a spawn and exit leave about 150 bytes of live heap per round (a control run with nothing moved shows it too), so the heap
+   bound allows 1 KiB per round; not investigated (record for the architect).
+2. **Warning, spinning turn waiters.** A waiter calls `steps::pause` then `sched::yield_now`, so N waiters cost switches, not a slice each. The bound (quota(threads) x quota(jobs) x
+   slowdown) is in ADR-0270's notes. **Mutation (run, reverted):** `Exclusive::take` returning at once made `t_suspend` fail (`t_suspend.rs:188`, "SUSPENDED on a job below"). A first
+   try of the guard below reset `FORCE_SWITCH` at the start of `main`, which the children run too, so the mutant survived twice; the reset is now in the test process only.
+3. **Notes.** The handle's own `steps::count(1)` is counted in the moved paths (channel write, spawn, snapshot). The `failed` path of `channel_write` is commented as defensive and
+   unreachable. `t_suspend` sets `FORCE_SWITCH` through a guard (`Forced`, off on drop) and resets it before the first case and at the start of each forced case (a panic aborts, so the
+   reset at the start is what protects the next case).
+
+Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: `make test-changed`, CI, `cargo test`.
+
+### Review round 4 (final findings) and its dispositions
+
+1. **Error, last references dropped together.** `channel_write` now consumes `moved_out`, dropping each object after its own `before`/`count`/`end_subscriptions`. The spawn and
+   snapshot move paths already drop each entry at the end of its iteration. Test: `t_bound` `moved_memory_is_freed_a_step_at_a_time` (64 memory objects of 63 pages moved to a
+   reader that closes them, forced switch). **Mutation (run, reverted):** the old loop (`for taken in &moved_out`) freed 4033 units in one interval and the test failed (limit 80); the fix gives 64.
+2. **Warning, heap residue.** Not a kernel leak. A loop of spawn and exit in a room kept open leaves the live heap exactly constant (8 rounds measured; closing the room frees its 544-byte record).
+   The 144 bytes a round were the write test's own page mapping, never unmapped. The test unmaps it and now asserts exact equality after round 0. Nothing for `docs/backlog.md`.
+3. **Notes.** `moved_out.try_reserve_exact` is above `prepare`; ADR-0270 now says "finds no other thread ready".
+
+Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: CI, `make test-changed`.
+
+### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
+
+- **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for
+  good). To measure (`HEAP_BACKING`, free frames, on 512 MiB), then a heap ceiling for the untrusted job, or return of free chunks, or the bound in ADR-0261's open questions.
+- **Notes 8 to 14**, not fixed: uncharged growth on call paths and the reaper's queue (8); `Paid` dropped under `EVENTS` must never hold the last `Arc<Job>` (9);
+  `console_write` keeps IRQ masked about 60 ms at 4 KiB (10); any process can run code from a memory object (11); the refusal lives only in the clients (12);
+  contiguous memory is open to every process (13); smaller items: the RTC's rights, calls 53 to 55 under a proposed ADR, `held` counts the job's own record (14).
+- **Left over from the fixes:** `Job::drop`'s `retain` and the growth of `children` are still linear in a parent's children, in one interval each; the drop of a long job chain
+  runs in whichever call drops the last handle (the walks no longer interleave: ADR-0270 note).
+- **Rows the strict check now lists as not `checked:`** (run the check with a marker removed to see them): INV-0172-3, INV-0260-1, INV-0261-2, INV-0261-6, INV-0261-7,
+  INV-0262-1, -2 and -3, INV-0263-3, INV-0264-3 (the architect's bound), INV-0265-1, INV-0265-3 (the `/tmp` half), INV-0265-4, INV-0268-3, INV-0270-1 (its status names known breaches).
+  INV-0262-4 is needed for `+net` (stage 2).
+- The pending row `disk-filler-tmp` (an untrusted room's `/tmp` and its `tmpd`); the architect's go-ahead; a full CI run (`candidate-full/`) of the commit that removes the refusal, then `main`'s.
+- ADR-0299 (proposed) needs the architect's decision.
+
+### Red candidate run 43311917098 (`candidate/work-q7-fixes-e`, head 96da472) and its fixes
+
+- **Every test-qemu job and test-net timed out at 300 s** (stopping between test 110 and 117 of 127, wherever the budget ran out; the 9 failures
+  are the expected panics). No hang: under TCG on the development host `job_suspend_from_a_process` took 240 s (it used to take a few), of
+  which the two forced cases of round 2 took about 235 s (`a_resume_from_inside_cannot_undo_a_suspend_walk` 2 s a round for 40 rounds,
+  `a_large_tree_is_suspended_whole_while_jobs_come_and_go` 9 s a round for 15). `FORCE_SWITCH` makes each step point of a 700-job walk
+  switch, and every process spinning at EL0 then kept the CPU for a whole 10 ms slice before the walk went on. Fix: while `FORCE_SWITCH` is
+  on, the test kernel gives user threads 1 ms slices (`test_calls::FORCED_SLICE_NS`). `t_suspend` then took 39 s under TCG and the whole
+  tcg-default run 141 s (PASS); the mutation of `Exclusive::take` returning at once still fails `t_suspend` (HVF, auto-default).
+- **`portbench` panicked (`subscribe: LimitReached`) and the test passed**: it subscribed 10,000 times to one port and one job, which
+  ADR-0299's bound of 1024 refuses; its panic exit 101 is under `PORT_RATIO_LIMIT` (150). It now measures with 1024 subscriptions and
+  exits with `i32::MAX` on any refused call. INV-0006-3's 10,000 is recorded in ADR-0006's open questions for the architect.
+
+### Tests run (this session)
+
+`make check`; `make test-qemu-one` (the whole test kernel on auto-default, which includes `t_bound` and `t_devices`) after steps 1 to 2 and after steps 5 and 6; `cargo test -p zoraya-events`;
+the mutation above. Not run: `make test-changed`/`test-keeper` (the shell's refusal is dead code until the gate opens), `make test-qemu` on TCG, CI.

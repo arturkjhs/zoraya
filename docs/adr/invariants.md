@@ -535,6 +535,7 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0297-1 | [ADR-0297](0297-n6-the-net-word-in-the-shell.md) | The rules of `net_for` are the ones `grants` prints and nothing is added: the scope of a line is its `+net` words, plus its literal `url` operand's rule if no word covers it. | `cargo test -p zoraya-shell netgrant` (`grants_prints_exactly_the_rules_the_connection_carries` and the cases of value and literal operands). | checked: `make test-unit` |
 | INV-0298-1 | [ADR-0298](0298-q7-how-the-gates-tests-run.md) | The image of `make test-net` (the production programs) holds none of the strings of the keeper's test hook (the request to end the keeper, its refusal text and the line `init` prints when it answers a reconnect). | `make test-net` (`NET_CRASH_MARKS`, the marks added to ADR-0296's) and `make test-keeper`; both fail when the program to look in is missing. | checked: `make test-net` |
 | INV-0298-2 | [ADR-0298](0298-q7-how-the-gates-tests-run.md) | Every fuzz target of `fuzz/` that a gate row names builds and runs for its time without a finding. | `make test-fuzz`, `make test-fuzz-net`. | checked: `make test-fuzz` |
+| INV-0299-1 | [ADR-0299](0299-q7-subscriptions-are-bounded.md) | A port holds at most 1024 subscriptions and a source has at most 1024; the next `subscribe` fails with `TooMany` (`LimitReached` for a program) and changes nothing. | `cargo test -p zoraya-events`, and `t_bound` for the masked time at the limit. | checked: `make test-unit` (`a_port_holds_a_bounded_number_of_subscriptions`, `a_source_has_a_bounded_number_of_subscriptions`); the masked time at the limit is measured by `t_bound` (`make test-qemu`) |
 
 ## Counts
 
@@ -690,4 +691,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0296](0296-n6-the-services-channel-and-the-restart-test.md) N6, the services channel and the test of the network's restart | 1 |
 | [ADR-0297](0297-n6-the-net-word-in-the-shell.md) N6, the `+net` word in the shell where ADR-0224 is silent | 1 |
 | [ADR-0298](0298-q7-how-the-gates-tests-run.md) Q7, how the gate's tests run where ADR-0268 is silent | 2 |
-| **Total** | **529** |
+| [ADR-0299](0299-q7-subscriptions-are-bounded.md) Q7, subscriptions are bounded per port and per source | 1 |
+| **Total** | **530** |
