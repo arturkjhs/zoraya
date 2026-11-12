@@ -1144,7 +1144,11 @@ mod resolve {
             if slow && !gate.load(std::sync::atomic::Ordering::SeqCst) {
                 return vec![];
             }
-            vec![a_record_reply(q, if slow { WEB } else { [10, 9, 9, 9] }, 300)]
+            vec![a_record_reply(
+                q,
+                if slow { WEB } else { [10, 9, 9, 9] },
+                300,
+            )]
         });
         let open = release.clone();
         release.store(true, std::sync::atomic::Ordering::SeqCst);
