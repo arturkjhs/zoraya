@@ -90,7 +90,12 @@ simplest, least surprising and most reversible one; none changes an accepted dec
   option B for the room directory's limits and builds the `tmpd` in the room's job.
 
 ## Invariants
-None.
+- One `Manage` channel per kind (desktop, console) is attached to the keeper at a time. `init` makes one for the shell and
+  one for the panel. The orphan rule below ("ANY `Manage` channel of the kind closing ends it") is safe only because of
+  this. The `rooms` process enforces it: a second `Manage` channel of a kind that attaches is a reconnect, and replaces
+  the old one, whose leases move to it (`Keeper::replace_channel`); the old channel is dropped without
+  `channel_closed`. Test `a_replacement_manage_channel_takes_over_the_leases_of_the_one_it_replaces` (the keeper's
+  part); the attach in `user/src/bin/rooms.rs` is not host-tested.
 
 ## Open questions
 - Whether `IDLE_MS` (5 s) should be longer for a slow launcher under TCG.
@@ -102,6 +107,9 @@ None.
   places and answers `BUSY` to the other kind, until `Stop`. Only trusted `init`, the shell and the panel hold
   `Manage`, so this is a nuisance and not an escalation. A holder that had already sent `Leave` before the keeper ended
   is still treated as holding until then (`Keep` does not say).
+- Worst case of `Keeper::pump` (the shell's call before each prompt): when `init` does not answer the reconnect
+  request and the keeper is down, `rebind` waits its 5 s for every prompt. A shell with no keeper is slow, not wrong.
+  A keeper that is alive but slow no longer causes a rebind (only `PeerClosed` does, round 4), so its leases stay.
 - `room set` of an untrusted line takes the words it lacks from the keeper's `Usage` of the running room and refuses for a
   stopped room; a request for the keeper's machine would let it fill them for a stopped one.
 - Whether a launcher that crashes holding a launch job should have the room's processes ended (today they run on).

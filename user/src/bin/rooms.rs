@@ -231,15 +231,35 @@ impl Rooms {
         if port_subscribe(port, end, wanted, KEY_CHANNEL + id as u64, Mode::Level).is_err() {
             return false;
         }
+        // One `Manage` channel per kind (ADR-0293 invariant): a second one is
+        // a launcher that reconnected. It takes over the leases of the old
+        // one, which is dropped without ending them or the resumed room's
+        // lease.
+        let old = match kind {
+            ChannelKind::Manage(_) => self
+                .chans
+                .iter()
+                .position(|c| c.as_ref().is_some_and(|c| c.kind == kind)),
+            _ => None,
+        };
         self.chans[id] = Some(Chan { end, kind });
+        if let Some(old) = old {
+            self.keeper.replace_channel(old, id);
+            self.close_channel(old);
+        }
         true
     }
 
+    fn close_channel(&mut self, id: usize) -> Option<Chan> {
+        let c = self.chans.get_mut(id).and_then(Option::take)?;
+        let port = self.keeper.env().port;
+        let _ = port_unsubscribe(port, KEY_CHANNEL + id as u64);
+        let _ = handle_close(c.end);
+        Some(c)
+    }
+
     fn drop_channel(&mut self, id: usize) {
-        if let Some(c) = self.chans.get_mut(id).and_then(Option::take) {
-            let port = self.keeper.env().port;
-            let _ = port_unsubscribe(port, KEY_CHANNEL + id as u64);
-            let _ = handle_close(c.end);
+        if let Some(c) = self.close_channel(id) {
             self.keeper.channel_closed(id, &c.kind);
         }
     }

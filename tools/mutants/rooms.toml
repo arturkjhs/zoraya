@@ -74,3 +74,35 @@ file = "crates/zoraya-rooms/src/lib.rs"
 find = 'limits.fill_from(&record_limits(r));'
 replace = 'let _ = r;'
 note = "round 3 finding 5: room set takes the missing words from the running room"
+
+[[mutant]]
+id = "R-undo-drops-the-orphan"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = "                r.orphan = orphan;"
+replace = "                let _ = orphan;"
+note = "round 4 finding 4: the undo of a launch that claimed the orphan restores it"
+
+[[mutant]]
+id = "R-undo-drops-the-earlier-lease"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''        if let Some(l) = u.lease {
+            r.leases.push((u.chan, l));
+        }'''
+replace = ""
+note = "round 4 finding 1: the undo restores the channel's earlier lease"
+
+[[mutant]]
+id = "R-undo-says-nothing-of-the-holder"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = "                if r.holder != holder {"
+replace = "                if false {"
+note = "round 4 finding 5: the undo tells init the restored holder"
+
+[[mutant]]
+id = "R-replace-drops-the-leases"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''                if *c == old {
+                    *c = new;
+                }'''
+replace = ""
+note = "round 4 findings 2, 3: a replacement channel takes over the old one's leases"

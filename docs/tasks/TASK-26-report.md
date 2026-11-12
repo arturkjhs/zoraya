@@ -1229,5 +1229,20 @@ Round 3 (opus re-review; each test written first and seen to fail on `b786bc5`'s
 5. Fixed. The logic moved to `zoraya_rooms::complete_from_running` (used by `room set`); test
    `room_set_takes_the_missing_words_from_the_running_rooms_usage_or_refuses`.
 
+Round 4 (opus re-review of `0411eea`; tests written first, seen to fail on it; ADR-0293 updated):
+
+1. Fixed. `Undo` carries the channel's earlier lease and `undo_last_launch` puts it back (a second launch of `zosh` into a room it
+   holds, undone, no longer deletes the first lease). Test `undoing_a_second_launch_of_a_channel_restores_its_earlier_lease`.
+2. Fixed. `pump` and `call` rebind only on `PeerClosed` (`zoraya_rooms::keeper_is_gone`, host-tested); a `BufferTooSmall` or a 5 s
+   timeout against a slow live keeper keeps the channel. Plus the lease move of 3: a reconnect loses no lease. The client code
+   itself is not exercised in QEMU.
+3. Fixed. `rooms` attaches one `Manage` channel per kind: a second one replaces the old (`Keeper::replace_channel` moves its
+   leases). Stated as an invariant in ADR-0293. Test `a_replacement_manage_channel_takes_over_the_leases_of_the_one_it_replaces`.
+4. Fixed. Test `undoing_a_launch_into_a_resumed_room_restores_its_orphan_lease` (it passed on the old code, as the finding says; the
+   hand mutant `R-undo-drops-the-orphan` in `tools/mutants/rooms.toml` is what proves it).
+5. Fixed. `undo_last_launch` pushes a `Created` with the restored holder when the holder changed. Test
+   `undoing_a_launch_that_changed_the_holder_tells_init_the_old_holder`.
+6. Recorded as a limitation in ADR-0293's open questions: up to 5 s per prompt while `init` does not answer and the keeper is down.
+
 Not run: the `zosh` prompt rebind and the `rooms` undo path are not exercised in QEMU (the `rooms` binary's `!told` branch needs
 a failing write to `init`).

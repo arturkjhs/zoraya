@@ -156,10 +156,20 @@ pub struct Keeper<E: Env> {
     undo: Option<Undo>,
 }
 
+/// Whether a failed read or write on a launcher's keeper channel means the
+/// keeper is gone, so that the client binds to the next one. Only a closed
+/// peer does: a message too big for the buffer or a keeper slow to answer
+/// leaves the channel, and the leases held on it, as they are.
+pub fn keeper_is_gone(s: Status) -> bool {
+    s == Status::PeerClosed
+}
+
 /// A room as it was before a `Launch` that was answered with a job.
 struct Undo {
     room: String,
     chan: ChanId,
+    /// The lease the channel held in the room before the launch.
+    lease: Option<Launcher>,
     /// `None`: the launch made the room.
     before: Option<(Option<Launcher>, Option<Launcher>, u64)>,
 }
@@ -309,8 +319,20 @@ impl<E: Env> Keeper<E> {
             return;
         };
         r.leases.retain(|(c, _)| *c != u.chan);
+        if let Some(l) = u.lease {
+            r.leases.push((u.chan, l));
+        }
         match u.before {
             Some((holder, orphan, last)) => {
+                if r.holder != holder {
+                    // The `Created` of the launch may have got through.
+                    self.events.push(Event::Created {
+                        room: r.name.clone(),
+                        job: r.job,
+                        untrusted: r.untrusted,
+                        launcher: holder,
+                    });
+                }
                 r.holder = holder;
                 r.orphan = orphan;
                 r.last_launch_ms = last;
@@ -318,6 +340,26 @@ impl<E: Env> Keeper<E> {
             None => r.last_launch_ms = now.saturating_sub(IDLE_MS),
         }
         self.collect_idle();
+    }
+
+    /// A new `Manage` channel replaces `old`, the one of its kind (a launcher
+    /// that reconnected): the leases of `old` are `new`'s, so that the
+    /// reconnect loses none (ADR-0293: one `Manage` channel per kind). The
+    /// process then drops `old` without [`Keeper::channel_closed`].
+    pub fn replace_channel(&mut self, old: ChanId, new: ChanId) {
+        for r in &mut self.rooms {
+            r.leases.retain(|(c, _)| *c != new);
+            for (c, _) in &mut r.leases {
+                if *c == old {
+                    *c = new;
+                }
+            }
+        }
+        if let Some(u) = &mut self.undo
+            && u.chan == old
+        {
+            u.chan = new;
+        }
     }
 
     /// What `init` should be told since the last call.
@@ -601,6 +643,12 @@ impl<E: Env> Keeper<E> {
         };
         self.collect_idle();
         let now = self.env.now_ms();
+        let lease = self
+            .rooms
+            .iter()
+            .find(|r| r.name == room)
+            .and_then(|r| r.leases.iter().find(|(c, _)| *c == chan))
+            .map(|(_, l)| *l);
         let before = self
             .rooms
             .iter()
@@ -721,6 +769,7 @@ impl<E: Env> Keeper<E> {
         self.undo = Some(Undo {
             room: room.to_string(),
             chan,
+            lease,
             before,
         });
         match encode(&Launched {}, tx, out) {

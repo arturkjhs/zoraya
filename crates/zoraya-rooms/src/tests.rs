@@ -1379,3 +1379,106 @@ fn room_set_takes_the_missing_words_from_the_running_rooms_usage_or_refuses() {
     assert!(full.is_complete());
     assert!(complete_from_running(&mut full, None));
 }
+
+#[test]
+fn undoing_a_second_launch_of_a_channel_restores_its_earlier_lease() {
+    // Round 4, finding 1: zosh holds launch job A in the room and launches
+    // again; the second launch is undone, the first lease stays.
+    let mut k = keeper();
+    k.env().now = 10 * IDLE_MS;
+    launch(&mut k, 1, &CONSOLE, "agent-1").unwrap();
+    launch(&mut k, 1, &CONSOLE, "agent-1").unwrap();
+    k.undo_last_launch();
+    k.env().now += 2 * IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "the first launch's lease is kept");
+    simple(
+        &mut k,
+        1,
+        &CONSOLE,
+        &msg(&LeaveMsg {
+            room: Text("agent-1"),
+        }),
+    )
+    .unwrap();
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+}
+
+#[test]
+fn undoing_a_launch_into_a_resumed_room_restores_its_orphan_lease() {
+    // Round 4, finding 4: the launch of the old holder's kind claimed the
+    // orphan; undone, the orphan is back, and only the kind's close ends it.
+    let (mut k, j) = restarted(Some(Launcher::Desktop), 0);
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    k.undo_last_launch();
+    k.env().now += 2 * IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "the orphan is leased again");
+    k.channel_closed(1, &DESKTOP);
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+    assert!(k.env().jobs[&j].closed);
+}
+
+#[test]
+fn undoing_a_launch_that_changed_the_holder_tells_init_the_old_holder() {
+    // Round 4, finding 5: the Created event of the launch may have got
+    // through; init is told the restored holder.
+    let mut k = keeper();
+    k.env().now = 10 * IDLE_MS;
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    k.channel_closed(1, &DESKTOP);
+    launch(&mut k, 2, &CONSOLE, "project").unwrap();
+    k.take_events();
+    k.undo_last_launch();
+    assert!(matches!(
+        k.take_events().as_slice(),
+        [Event::Created {
+            launcher: Some(Launcher::Desktop),
+            ..
+        }]
+    ));
+    // No change of holder, nothing to correct.
+    launch(&mut k, 2, &DESKTOP, "project").unwrap();
+    k.take_events();
+    k.undo_last_launch();
+    assert!(k.take_events().is_empty());
+}
+
+#[test]
+fn a_replacement_manage_channel_takes_over_the_leases_of_the_one_it_replaces() {
+    // Round 4, findings 2 and 3: one Manage channel per kind. A reconnect
+    // attaches a new one; the old one's leases move to it.
+    let mut k = keeper();
+    k.env().now = 10 * IDLE_MS;
+    launch(&mut k, 1, &CONSOLE, "agent-1").unwrap();
+    k.replace_channel(1, 7);
+    k.env().now += 2 * IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "the lease moved, not dropped");
+    // The lease is the new channel's: its Leave ends it.
+    simple(
+        &mut k,
+        7,
+        &CONSOLE,
+        &msg(&LeaveMsg {
+            room: Text("agent-1"),
+        }),
+    )
+    .unwrap();
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+}
+
+#[test]
+fn only_a_lost_peer_makes_a_client_look_for_a_new_keeper() {
+    // Round 4, finding 2: a full buffer or a slow keeper is not a dead one.
+    assert!(keeper_is_gone(Status::PeerClosed));
+    assert!(!keeper_is_gone(Status::BufferTooSmall));
+    assert!(!keeper_is_gone(Status::DeadlineExceeded));
+    assert!(!keeper_is_gone(Status::WouldBlock));
+}

@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use zoraya_abi::{Handle, Mode, Packet, Status, channel_signals};
 use zoraya_proto_rooms as pr;
 use zoraya_protocol::{Header, Text, decode, encode};
+use zoraya_rooms::keeper_is_gone;
 use zoraya_rt::{
     channel_read, channel_write, clock_monotonic, handle_close, port_create, port_subscribe,
     port_unsubscribe, port_wait,
@@ -121,8 +122,11 @@ impl Keeper {
     }
 
     /// Sends `bytes` and waits for the answer of transaction `tx`.
-    fn once(&mut self, bytes: &[u8], tx: u32) -> Result<(Vec<u8>, Option<Handle>), Fail> {
-        channel_write(self.end, bytes, &[]).map_err(|_| Fail::Gone)?;
+    /// The error says whether the keeper's channel is closed (the only case
+    /// for a new keeper, `zoraya_rooms::keeper_is_gone`): a timeout or a full
+    /// queue leaves the channel, and the leases held on it, alone.
+    fn once(&mut self, bytes: &[u8], tx: u32) -> Result<(Vec<u8>, Option<Handle>), bool> {
+        channel_write(self.end, bytes, &[]).map_err(keeper_is_gone)?;
         let deadline = clock_monotonic() + WAIT_NS;
         let mut packets = [Packet::default()];
         loop {
@@ -145,11 +149,11 @@ impl Keeper {
                     }
                 }
                 Err((Status::WouldBlock, _)) => {
-                    if port_wait(self.port, deadline, &mut packets).is_err() {
-                        return Err(Fail::Gone);
+                    if let Err(s) = port_wait(self.port, deadline, &mut packets) {
+                        return Err(keeper_is_gone(s));
                     }
                 }
-                Err(_) => return Err(Fail::Gone),
+                Err((s, _)) => return Err(keeper_is_gone(s)),
             }
         }
     }
@@ -163,8 +167,9 @@ impl Keeper {
         self.next = self.next.wrapping_add(1).max(1);
         let n = encode(m, tx, &mut b).map_err(|_| Fail::Gone)?;
         match self.once(&b[..n], tx) {
-            Err(Fail::Gone) if self.rebind() => self.once(&b[..n], tx),
-            other => other,
+            Ok(done) => Ok(done),
+            Err(true) if self.rebind() => self.once(&b[..n], tx).map_err(|_| Fail::Gone),
+            Err(_) => Err(Fail::Gone),
         }
     }
 
@@ -280,11 +285,16 @@ impl Keeper {
                     drain_note(&buf[..(s.bytes as usize).min(256)], &mut self.refusals);
                 }
                 Err((Status::WouldBlock, _)) => break,
-                Err(_) => {
+                Err((s, _)) => {
                     // The keeper's end is closed: bind to the next keeper
                     // now, before the next command, not at the call that
                     // fails (the keeper's idle collection runs every turn).
-                    let _ = self.rebind();
+                    // Any other error (a message too big for the buffer, left
+                    // queued) is no reason: rebinding closes this channel
+                    // and the keeper drops its leases.
+                    if keeper_is_gone(s) {
+                        let _ = self.rebind();
+                    }
                     break;
                 }
             }
