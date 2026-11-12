@@ -229,10 +229,42 @@ and exits.
   space before each step of `spawn`'s image and stack, of a snapshot's copy and of its `finish`, and of `memory_map`
   (its doubling was a growth of the heap proportional to the space: 64 pages for a 64 MiB process). After the change
   the tests measure at most 1, 65 and 80 units, and the fragmented-map search at most 80 in any interval. With the scan
-  in steps, `t_bound`'s time bound is again 2 ms scaled by the calibration off HVF, not the 1 s of the note above.
-  Not covered: an address space's list still doubles inline when a single frame outside these loops fills it (a page
-  table of a one-page mapping, the startup block): bounded by the space's size (a list of N frames maps N/256 pages),
-  not by a step.
+  in steps, the 1 s of the note above stayed (see the next note: the scaled bound was reverted again).
+- *Q6 note (agent), review fixes of the note above:* (1) The list of frames grows by `GlobalAlloc::realloc` (the
+  kernel heap does not override it): allocate, copy `len * 8` bytes, free. The copy is work, counted as
+  `len * 8 / 4096` units (`UserMemory::count_list_copy`, in `AddressSpace::reserve_step` and in `adopt` when a frame
+  fills the list), so that the test kernel sees it; and `AddressSpace::prepare_step` (no lock held: `spawn`, a
+  snapshot's child) ends its growth with a step point, so the copy is an interval of its own and the step's pages are
+  not added to it. `spawn` also prepares the list before the startup block, and counts its steps across segments:
+  the last pages of one segment and the first of the next were one interval of up to 64 + 16 frames (measured at 80
+  units by `a_spawn_with_a_big_space_is_bounded`, which spawns `hello` with 12,670 pages more of bss through the
+  test kernel's step points, `steps::set_kernel_steps`). (2) `t_bound`'s time bound is 2 ms only at factor 1 and a
+  sanity limit of 1 s off HVF again, as in `68a22cb`: a run of CI (43176131236) had every memory case 20 to 40 times
+  slower than in green runs with the same units, and a 30 ms bound at factor 15 fails on one stall of the host. The
+  units are the check on every host. (3) New mutants for the room made ahead of each step, the first zeroing step of
+  a contiguous object, `available`, the reaper's counter and the rescan (`tools/mutants/kernel-objects.toml`). (4)
+  The reaper keeps the frames it holds in a counter (`held`, updated by `defer`, `free_some` and `take`) and a cursor
+  to the first item with frames: `held`, which a heap growth reads under the heap's lock, and the walks of `free_some`
+  and `take` no longer visit the emptied items, which stay queued until the reaper drops them. (5) The stepped search
+  for a run is not atomic: a run freed behind it is not seen by that pass. `FrameAllocator::generation` counts the
+  calls that freed frames; a pass that found none and saw it change is made once more, once, counted as a round
+  (`a_run_freed_behind_the_scan_is_found_by_a_second_pass`, and a host test of the generation). A run that exists at
+  every instant is found; one freed and taken again between two steps may still be missed, which is a refusal at
+  exhaustion and not a bug. (6) The step points of that search are `steps::between`, so a `job_kill` ends a
+  `memory_create` of a contiguous object during its scan (`Cancelled`; the run was not taken yet). (7) The kernel's
+  page-table frames (one level-3 table per 2 MiB of the heap's window) are counted in `heap::stats().backing`
+  (`paging::table_frames`), so that the sum of free frames and the heap's, which `t_image`, `t_quota` and the test
+  kernel compare, does not read one frame low across a 2 MiB boundary of the window.
+  Still inline, recorded here for the architect: (a) the copy of the list under the space's lock in `memory_map`
+  (`reserve_step` with the lock held; the list holds every frame of the space, so a process that holds N frames
+  copies `N * 8` bytes, N / 512 units of a page, in one interval: 32 units at 64 MiB, 512 at 1 GiB; moving it out of
+  the lock needs a list in chunks, or a swap that copies under the lock all the same); (b) the same copy in `adopt`
+  when a single frame outside these loops fills the list (a page table of a one-page mapping), bounded as in (a);
+  (c) the mutants for `prepare_step` in a snapshot's copy and `finish`, and for `heap::prepare` and `reserve_step` in
+  `memory_map`, are not killed by any test at 128 MiB: they need a user process with a space of at least 16,384
+  frames, and the test kernel's `spawn` test covers `process::create` only (the mutants are in the list so that a run
+  on a larger guest, or a test with a crafted image in `t_bound`, shows them); (d) `reaper::free_some` still frees up
+  to a step under the queue's lock, as before.
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 

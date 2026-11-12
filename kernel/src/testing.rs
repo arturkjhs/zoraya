@@ -319,10 +319,6 @@ static TESTS: &[Test] = &[
         run: a_contiguous_object_is_zeroed_apart_from_its_search,
     },
     Test {
-        name: "a_spawn_with_a_big_space_is_bounded",
-        run: a_spawn_with_a_big_space_is_bounded,
-    },
-    Test {
         name: "running_out_of_asids_is_an_error",
         run: running_out_of_asids_is_an_error,
     },
@@ -558,6 +554,10 @@ static TESTS: &[Test] = &[
     Test {
         name: "stack_canary_intact",
         run: stack_canary_intact,
+    },
+    Test {
+        name: "a_spawn_with_a_big_space_is_bounded",
+        run: a_spawn_with_a_big_space_is_bounded,
     },
 ];
 
@@ -2483,9 +2483,12 @@ fn a_run_freed_behind_the_scan_is_found_by_a_second_pass() {
 /// INV-0270-1: an allocation larger than every free span of the heap makes
 /// it grow; prepared, the growth is mapped in steps and the allocation maps
 /// nothing in its own interval. Unprepared, 512 KiB more than the heap held
-/// was mapped in one interval (128 units and more).
+/// was mapped in one interval (128 units and more). The test grows it by 4 MiB.
 fn a_prepared_allocation_grows_the_heap_in_steps() {
-    let bytes = (heap::stats().free_spans + (512 << 10)).next_multiple_of(PAGE_SIZE as usize);
+    let accounted = frames_accounted();
+    // 4 MiB past the free spans: the window passes at least one 2 MiB
+    // boundary, which takes a page table (counted with the heap's frames).
+    let bytes = (heap::stats().free_spans + (4 << 20)).next_multiple_of(PAGE_SIZE as usize);
     let daif = arch::save_and_mask_interrupts();
     crate::steps::masked_max_units(true);
     heap::prepare_in_steps(bytes, || {
@@ -2500,6 +2503,11 @@ fn a_prepared_allocation_grows_the_heap_in_steps() {
     assert!(
         units <= crate::steps::STEP as u64 + 16,
         "{units} units in one interval of a heap's growth (INV-0270-1)"
+    );
+    assert_eq!(
+        frames_accounted(),
+        accounted,
+        "free frames and the heap's, with its page tables, stay the same"
     );
 }
 
@@ -2579,13 +2587,28 @@ fn a_space_list_growth_is_counted_and_prepared() {
     arch::restore_interrupts(daif);
     let ahead = crate::steps::masked_max_units(true);
 
-    drop((unprepared, prepared));
+    // `reserve_step` in the interval, as `memory_map` does under the lock:
+    // the copy is counted there too.
+    let mut inline = space_of(pages);
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    inline.reserve_step();
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    let reserve = crate::steps::masked_max_units(true);
+
+    drop((unprepared, prepared, inline));
     crate::reaper::drain();
     let copy = (len * core::mem::size_of::<Frame>() / PAGE_SIZE as usize) as u64;
     assert!(copy >= 3, "the test copies a list of {len} frames");
     assert!(
         ahead <= crate::steps::STEP as u64 + 16,
         "{ahead} units in a prepared step (INV-0270-1)"
+    );
+    assert!(
+        reserve >= copy,
+        "{reserve} units in a reserve of the list of {len} frames, the copy is {copy}"
     );
     assert!(
         as_it_is >= ahead + copy,
@@ -2645,39 +2668,77 @@ fn with_bss(file: &[u8], extra: u64) -> Vec<u8> {
     bytes
 }
 
-/// INV-0270-1: `spawn` of a program with a large address space (half the free
-/// frames, at most 64 MiB) holds no more than a step of work in any interval:
-/// the list of frames grows ahead of each step (`prepare_step` in the image,
-/// the stack and the startup block), where the doubling was 64 pages of the
-/// heap and a copy in one interval. Measured through the kernel's own call
-/// with the step points on in this thread (`steps::set_kernel_steps`).
+/// INV-0270-1: `spawn` of a program with a large address space holds no more
+/// than a step of work in any interval: the list of frames grows ahead of each
+/// step (`prepare_step` in the image, the stack and the startup block), where
+/// the doubling was a copy and 64 pages of the heap in one interval. The list
+/// doubles from 16,384 to 32,768 frames (a copy of 128 KiB, a new list of
+/// 256 KiB) with the heap squeezed to the least free; `hello` is spawned with
+/// its bss sized so that the list passes 16,384 at each of the last 24 frames
+/// it takes, which are the startup block's, the stack's and the image's last.
+/// Measured through the kernel's own call with the step points on in this
+/// thread (`steps::set_kernel_steps`). It runs last: the heap keeps the frames
+/// it grew by, scattered, and 4 MiB runs are few in a 128 MiB guest.
 fn a_spawn_with_a_big_space_is_bounded() {
+    const CAP: usize = 16384;
     let (_, file) = ramdisk::find("hello").expect("hello");
-    let pages = (frames::settled_stats().free / 2).min(16384);
-    let big = with_bss(file, pages * PAGE_SIZE);
     let before = frames_accounted();
-    crate::steps::set_kernel_steps(true);
-    let daif = arch::save_and_mask_interrupts();
-    let _ = test_step_point();
-    crate::steps::masked_max_units(true);
-    let spawned = process::spawn_bytes_suspended("big", &big);
-    let _ = test_step_point();
-    arch::restore_interrupts(daif);
-    crate::steps::set_kernel_steps(false);
-    let units = crate::steps::masked_max_units(true);
-    if units > crate::steps::STEP as u64 + 16 {
-        crate::steps::diagnose_units();
+    let spawn_with = |bss: usize| {
+        // No free span of the heap fits the new list: its growth is the
+        // step's, unless it was prepared.
+        let mut hog: Vec<alloc::boxed::Box<[u8; 4096]>> = Vec::new();
+        hog.try_reserve_exact(heap::stats().free_spans / 4096 + 64)
+            .expect("room");
+        while heap::stats().free_spans > 32 << 10 {
+            hog.push(alloc::boxed::Box::new([0; 4096]));
+        }
+        let big = with_bss(file, (bss * PAGE_SIZE as usize) as u64);
+        crate::steps::set_kernel_steps(true);
+        let daif = arch::save_and_mask_interrupts();
+        let _ = test_step_point();
+        crate::steps::masked_max_units(true);
+        let spawned = process::spawn_bytes_suspended("big", &big);
+        let _ = test_step_point();
+        arch::restore_interrupts(daif);
+        crate::steps::set_kernel_steps(false);
+        let units = crate::steps::masked_max_units(true);
+        if units > crate::steps::STEP as u64 + 16 {
+            crate::steps::diagnose_units();
+        }
+        let process = spawned.expect("a process with a big space");
+        let len = process
+            .space
+            .lock()
+            .as_ref()
+            .expect("a space")
+            .list_state()
+            .0;
+        let _ = process.signal(RequestKind::Terminate, 0);
+        let _ = process.resume();
+        process.wait();
+        drop(process);
+        drop(hog);
+        crate::reaper::drain();
+        (units, len)
+    };
+    let free = frames::settled_stats().free as usize;
+    let room = free - free / 16;
+    assert!(room > CAP + 200, "{room} frames: no room for the test");
+    let (_, len) = spawn_with(CAP - 100);
+    let mut worst = 0;
+    for d in 0..24 {
+        // The list's length grows with the bss by one a page, and by a table
+        // every 512 pages.
+        let bss = CAP - 100 + CAP + 1 + d - len;
+        let (units, now) = spawn_with(bss);
+        println!("a spawn of {bss} bss pages: list of {now} frames, {units} units");
+        assert!(
+            units <= crate::steps::STEP as u64 + 16,
+            "{units} units in an interval of a spawn of {bss} pages (INV-0270-1)"
+        );
+        worst = worst.max(units);
     }
-    let process = spawned.expect("a process with a big space");
-    let _ = process.signal(RequestKind::Terminate, 0);
-    let _ = process.resume();
-    process.wait();
-    drop(process);
-    crate::reaper::drain();
-    assert!(
-        units <= crate::steps::STEP as u64 + 16,
-        "{units} units in an interval of a spawn of {pages} pages (INV-0270-1)"
-    );
+    assert!(worst > 0);
     assert_eq!(frames_accounted(), before);
 }
 
