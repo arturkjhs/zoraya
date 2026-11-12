@@ -634,6 +634,17 @@ struct Z {
     on_volume: BTreeMap<String, String>,
     /// The room the shell is in (ADR-0172 point 3); `None` is `home`.
     room: Option<zoraya_settings::rooms::Room>,
+    /// The room keeper (ADR-0269): slot 11, and whether it is a `Manage`
+    /// channel (the console's shell: slot 12 is the way to a new one) or a
+    /// `Room(R)` channel (a shell the panel launched in a room).
+    keeper: Option<zoraya_user::roomsclient::Keeper>,
+    keeper_manage: bool,
+    /// The launch job of the room entered from here (a `Manage` shell): the
+    /// parent of every line's job, so that the line counts against the room.
+    room_job: Option<Handle>,
+    /// The room's refusal counters (memory, processes) at the end of the last
+    /// line, for the quota hint.
+    refused_seen: (u64, u64),
 }
 
 impl Z {
@@ -2798,6 +2809,7 @@ impl Z {
     /// grants. `home` leaves.
     fn enter_room(&mut self, name: &str) -> Result<(), String> {
         if name == zoraya_settings::rooms::HOME {
+            self.leave_room_job();
             self.room = None;
             return Ok(());
         }
@@ -2843,6 +2855,9 @@ impl Z {
                 ],
             ));
         }
+        // The room's one job (ADR-0269 point 4): asked for before anything
+        // else changes, so that a refusal leaves the shell where it was.
+        self.join_room_job(&room)?;
         if let Some(g) = room.grants.iter().find(|g| g.write) {
             let dir = self.room_path(&g.path);
             if self.open(&dir, OPEN_DIRECTORY).is_ok() {
@@ -2851,7 +2866,234 @@ impl Z {
             }
         }
         self.room = Some(room);
+        self.refused_seen = self.room_refusals();
         Ok(())
+    }
+
+    /// A launch job in `room` from the keeper, for a shell that holds a
+    /// `Manage` channel; the job the shell was in before is given back. A shell
+    /// the panel launched in a room is in it already; a shell with no keeper
+    /// enters a trusted room as before and refuses an untrusted one.
+    fn join_room_job(&mut self, room: &zoraya_settings::rooms::Room) -> Result<(), String> {
+        use zoraya_user::roomsclient::Fail;
+        let needs = |why: &str, hints: &[&str]| {
+            Err(zoraya_command::error("room", Some(&room.name), why, hints))
+        };
+        if !self.keeper_manage {
+            return if room.untrusted && self.room.is_none() {
+                needs("an untrusted room needs the room keeper", &[])
+            } else {
+                Ok(())
+            };
+        }
+        let Some(k) = self.keeper.as_mut() else {
+            return if room.untrusted {
+                needs("an untrusted room needs the room keeper", &[])
+            } else {
+                Ok(())
+            };
+        };
+        match k.launch(&room.name) {
+            Ok(job) => {
+                self.leave_room_job();
+                self.room_job = Some(job);
+                Ok(())
+            }
+            Err(Fail::Denied(status, text)) => {
+                let hint = if status == zoraya_proto_rooms::status::BUSY {
+                    "use its terminal, or end it first: room remove NAME --kill"
+                        .replace("NAME", &room.name)
+                } else {
+                    String::from("room lists the rooms")
+                };
+                needs(&text, &[hint.as_str()])
+            }
+            Err(Fail::Gone) if room.untrusted => {
+                needs("an untrusted room needs the room keeper", &[])
+            }
+            Err(Fail::Gone) => Ok(()),
+        }
+    }
+
+    /// Gives the launch job back: the keeper may let the room go to the other
+    /// launcher once its processes have ended.
+    fn leave_room_job(&mut self) {
+        if let Some(job) = self.room_job.take() {
+            let _ = handle_close(job);
+            if let (Some(k), Some(r)) = (self.keeper.as_mut(), self.room.as_ref()) {
+                let _ = k.leave(&r.name);
+            }
+        }
+    }
+
+    /// The room's refusal counters (memory, processes), from the keeper; zero
+    /// without one.
+    fn room_refusals(&mut self) -> (u64, u64) {
+        let Some(name) = self.room.as_ref().map(|r| r.name.clone()) else {
+            return (0, 0);
+        };
+        match self.keeper.as_mut().map(|k| k.usage(&name)) {
+            Some(Ok(records)) => records
+                .first()
+                .map_or((0, 0), |r| (r.mem_refused, r.procs_refused)),
+            _ => (0, 0),
+        }
+    }
+
+    /// After a line (ADR-0263 point 3, INV-0263-4): at most one hint, naming
+    /// the field the room refused and the room.
+    fn quota_hint(&mut self) {
+        use zoraya_settings::rooms::{quota_hint, refused_field};
+        let Some(name) = self.room.as_ref().map(|r| r.name.clone()) else {
+            return;
+        };
+        let before = self.refused_seen;
+        let Some(Ok(records)) = self.keeper.as_mut().map(|k| k.usage(&name)) else {
+            return;
+        };
+        let Some(r) = records.first() else { return };
+        let after = (r.mem_refused, r.procs_refused);
+        self.refused_seen = after;
+        match refused_field(before, after) {
+            Some(zoraya_settings::rooms::Refused::Memory) => show(&quota_hint(
+                &name,
+                zoraya_settings::rooms::Refused::Memory,
+                r.mem_limit,
+                self.keeper_manage,
+            )),
+            Some(zoraya_settings::rooms::Refused::Processes) => show(&quota_hint(
+                &name,
+                zoraya_settings::rooms::Refused::Processes,
+                r.procs_limit,
+                self.keeper_manage,
+            )),
+            None => {}
+        }
+    }
+
+    /// The limit words of `room new` and `room set` into `limits`; the
+    /// first bad value is the error. `none` removes a word of a trusted room.
+    fn limit_options(
+        d: &Description,
+        p: &Parsed<'_>,
+        limits: &mut zoraya_settings::rooms::Limits,
+        untrusted: bool,
+    ) -> Result<(), String> {
+        for (word, name) in [
+            ("--mem", "mem"),
+            ("--cpu", "cpu"),
+            ("--procs", "procs"),
+            ("--disk", "disk"),
+            ("--conns", "conns"),
+            ("--tmp", "tmp"),
+        ] {
+            if let Some(v) = p.value(d, name) {
+                limits.set(word, v, untrusted)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `--disk` on each `+w` directory of the room (ADR-0265, ADR-0266
+    /// point 6); a directory that is not there is said, not made.
+    fn apply_disk(&mut self, room: &zoraya_settings::rooms::Room, io: &mut Io) {
+        let Some(bytes) = room.limits.disk else {
+            return;
+        };
+        for g in room.grants.iter().filter(|g| g.write) {
+            let path = self.room_path(&g.path);
+            match self.parent(&path) {
+                Ok((dir, leaf)) => {
+                    let mut client = zoraya_fsclient::Client::new(zoraya_user::app::Files);
+                    if client.set_limit(dir.end, &leaf, Some(bytes)).is_err() {
+                        io.err.push_str(&format!(
+                            "room: {}: --disk: could not limit {}\n",
+                            room.name,
+                            g.words()
+                        ));
+                    }
+                }
+                Err(_) => io.err.push_str(&format!(
+                    "room: {}: --disk: {} is not there\n",
+                    room.name,
+                    g.words()
+                )),
+            }
+        }
+    }
+
+    /// `room set NAME WORD VALUE...` (ADR-0266 point 6): the line is
+    /// changed and, if the room runs, the keeper applies it to the room's job
+    /// at once. A refusal by the keeper (a limit above the parent's) puts the
+    /// old line back. `--disk` is applied to the room's `+w` directories.
+    fn room_set(&mut self, d: &Description, p: &Parsed<'_>, name: &str, io: &mut Io) -> i32 {
+        use zoraya_settings::rooms;
+        let fail = |io: &mut Io, why: &str, hints: &[&str]| {
+            io.err
+                .push_str(&zoraya_command::error("room", Some(name), why, hints));
+            1
+        };
+        // A room's own shell holds no `Set` (ADR-0269): it says where.
+        if self.room.is_some() && !self.keeper_manage {
+            return fail(
+                io,
+                "from home: room set cannot be run inside a room",
+                &["leave with exit, or run it in a shell in home"],
+            );
+        }
+        let old = self
+            .open(ROOMS, 0)
+            .and_then(|f| read_all(&f))
+            .unwrap_or_default();
+        let Some(mut room) = rooms::read(&old).get(name).cloned() else {
+            return fail(io, "no such room", &["room lists them; room new makes one"]);
+        };
+        let before = room.limits;
+        if let Err(e) = Self::limit_options(d, p, &mut room.limits, room.untrusted) {
+            return fail(io, &e, &[]);
+        }
+        if room.limits == before {
+            return fail(
+                io,
+                "nothing to change",
+                &["room set NAME --mem 128M --cpu 10%"],
+            );
+        }
+        if room.untrusted {
+            // An untrusted line always has all six (INV-0266-1).
+            room.limits.fill_defaults(&rooms::Machine {
+                session_mem: 1 << 40,
+                session_procs: 200,
+                free_disk: 8 << 30,
+            });
+        }
+        let new = match rooms::replace(&old, &room) {
+            Ok(b) => b,
+            Err(_) => return fail(io, "the room's line cannot be rewritten", &[]),
+        };
+        if let Err(e) = self.publish_file(ROOMS, &new) {
+            return fail(io, &e, &[]);
+        }
+        if let Some(k) = self.keeper.as_mut()
+            && self.keeper_manage
+            && let Err(e) = k.set(name)
+        {
+            // Put the old line back: the person sees why, and the table
+            // still says what runs.
+            let _ = self.publish_file(ROOMS, &old);
+            let why = match e {
+                zoraya_user::roomsclient::Fail::Denied(_, t) => t,
+                zoraya_user::roomsclient::Fail::Gone => {
+                    String::from("the room keeper does not answer")
+                }
+            };
+            return fail(io, &why, &[]);
+        }
+        if room.limits.disk != before.disk {
+            self.apply_disk(&room, io);
+        }
+        io.out.push_str(&format!("{}\n", room.line()));
+        0
     }
 
     /// `room` (ADR-0172 point 3): list, enter, leave, make and remove
@@ -2865,6 +3107,7 @@ impl Z {
         };
         let words = p.operand_values(d, "WORDS");
         if p.flag(d, "leave") {
+            self.leave_room_job();
             self.room = None;
             return 0;
         }
@@ -2891,6 +3134,11 @@ impl Z {
                     let mut line = format!("{}{}", mark(&r.name), r.name);
                     if r.untrusted {
                         line.push_str(" untrusted");
+                    }
+                    let limits = r.limits.words();
+                    if !limits.is_empty() {
+                        line.push_str("  ");
+                        line.push_str(&limits);
                     }
                     for g in &r.grants {
                         line.push_str("  ");
@@ -2972,16 +3220,23 @@ impl Z {
                     .and_then(|f| read_all(&f))
                     .unwrap_or_default();
                 let table = rooms::read(&bytes);
+                // The six words (ADR-0266 point 1); a trusted room has the
+                // ones given. `--tmp` is for untrusted rooms only.
+                let mut limits = rooms::Limits::default();
+                if let Err(e) = Self::limit_options(d, p, &mut limits, false) {
+                    return fail(io, Some(name), &e, &[]);
+                }
                 let room = Room {
                     name: (*name).into(),
                     untrusted: false,
                     colour: table.free_colour(),
-                    limits: rooms::Limits::default(),
+                    limits,
                     grants: given,
                 };
                 match rooms::add(&bytes, &room) {
                     Ok(out) => match self.publish_file(ROOMS, &out) {
                         Ok(()) => {
+                            self.apply_disk(&room, io);
                             io.out.push_str(&format!("{}\n", room.line()));
                             0
                         }
@@ -2999,6 +3254,27 @@ impl Z {
                 }
             }
             ["remove", name] => {
+                // `--kill` ends the room's processes first (ADR-0269
+                // point 2's `Stop`), also one a keeper started before it
+                // was restarted (INV-0269-3).
+                if p.flag(d, "kill") {
+                    match self.keeper.as_mut().map(|k| k.stop(name)) {
+                        Some(Ok(())) | None => {}
+                        Some(Err(zoraya_user::roomsclient::Fail::Denied(
+                            zoraya_proto_rooms::status::NOT_RUNNING,
+                            _,
+                        ))) => {}
+                        Some(Err(e)) => {
+                            let why = match e {
+                                zoraya_user::roomsclient::Fail::Denied(_, t) => t,
+                                zoraya_user::roomsclient::Fail::Gone => {
+                                    String::from("the room keeper does not answer")
+                                }
+                            };
+                            return fail(io, Some(name), &why, &[]);
+                        }
+                    }
+                }
                 let bytes = self
                     .open(ROOMS, 0)
                     .and_then(|f| read_all(&f))
@@ -3007,6 +3283,7 @@ impl Z {
                     Ok(out) => match self.publish_file(ROOMS, &out) {
                         Ok(()) => {
                             if current.as_deref() == Some(*name) {
+                                self.leave_room_job();
                                 self.room = None;
                             }
                             0
@@ -3016,6 +3293,7 @@ impl Z {
                     Err(_) => fail(io, Some(name), "no such room", &[]),
                 }
             }
+            ["set", name] => self.room_set(d, p, name, io),
             [name] => match self.enter_room(name) {
                 Ok(()) => 0,
                 Err(e) => {
@@ -3159,7 +3437,24 @@ impl Host for Z {
     }
 
     fn grants(&mut self, _: &mut State, exec: &Exec<'_>, io: &mut Io) -> i32 {
-        self.grants_report(exec, io)
+        let code = self.grants_report(exec, io);
+        // ADR-0266 point 7: in a room, the room's limits, in the words of its
+        // line, from the keeper's record (the truth), else from the line.
+        if code == 0
+            && let Some(name) = self.room.as_ref().map(|r| r.name.clone())
+        {
+            let mut limits = self.room.as_ref().map(|r| r.limits).unwrap_or_default();
+            if let Some(Ok(records)) = self.keeper.as_mut().map(|k| k.usage(&name))
+                && let Some(r) = records.first()
+            {
+                limits = zoraya_rooms::record_limits(r);
+            }
+            let words = limits.words();
+            if !words.is_empty() {
+                io.out.push_str(&format!("limits {words}  (room {name})\n"));
+            }
+        }
+        code
     }
 
     fn lookup(&mut self, name: &str) -> Found {
@@ -3529,7 +3824,7 @@ impl Host for Z {
             }
         }
         let number = self.jobs.free_number();
-        let job = match job_create(JOB, JobFlags::NONE) {
+        let job = match job_create(self.room_job.unwrap_or(JOB), JobFlags::NONE) {
             Ok(j) => j,
             Err(s) => {
                 show(&zoraya_command::error(
@@ -4127,6 +4422,17 @@ fn main() -> i32 {
         realtime_base: 0,
         on_volume: BTreeMap::new(),
         room: None,
+        keeper: Handle::new(11)
+            .filter(|h| handle_type(*h) == Ok("channel"))
+            .and_then(|end| {
+                zoraya_user::roomsclient::Keeper::new(
+                    end,
+                    Handle::new(12).filter(|h| handle_type(*h) == Ok("channel")),
+                )
+            }),
+        keeper_manage: Handle::new(12).is_some_and(|h| handle_type(h) == Ok("channel")),
+        room_job: None,
+        refused_seen: (0, 0),
     };
     z.realtime_base = z
         .root
@@ -4244,6 +4550,7 @@ fn main() -> i32 {
             shell.host.jobs.other_line();
         }
         run_entry(&mut shell, &entry);
+        shell.host.quota_hint();
         // The line joins the history once it has run, so that `history`
         // lists what ran before it (the tour's example 21).
         if core::mem::take(&mut shell.host.clear_history) {

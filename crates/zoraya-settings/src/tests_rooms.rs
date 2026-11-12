@@ -466,3 +466,22 @@ fn every_untrusted_line_is_complete_after_fill_and_survives_the_reader() {
         assert_eq!(read(room.line().as_bytes()).rooms, vec![room]);
     }
 }
+
+#[test]
+fn a_line_with_many_refusals_gets_one_hint_naming_the_field_and_the_room() {
+    // INV-0263-4: however often a line's commands were refused, one hint.
+    assert_eq!(refused_field((3, 0), (3, 0)), None);
+    assert_eq!(refused_field((3, 1), (900, 40)), Some(Refused::Memory));
+    assert_eq!(refused_field((3, 1), (3, 40)), Some(Refused::Processes));
+    let h = quota_hint("agent-1", Refused::Memory, 64 << 20, true);
+    assert_eq!(
+        h,
+        "hint: room agent-1 is at its memory limit of 64M; room set agent-1 --mem 128M\n"
+    );
+    assert_eq!(h.matches("hint:").count(), 1);
+    let h = quota_hint("agent-1", Refused::Processes, 32, false);
+    assert_eq!(
+        h,
+        "hint: room agent-1 is at its processes limit of 32; from home: room set agent-1 --procs 64\n"
+    );
+}

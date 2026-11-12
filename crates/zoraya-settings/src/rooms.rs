@@ -636,3 +636,49 @@ pub fn replace(bytes: &[u8], room: &Room) -> Result<Vec<u8>, RoomRefusal> {
     }
     Ok(out)
 }
+
+/// Which limit a room refused, for the shell's hint (ADR-0263 point 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    Memory,
+    Processes,
+}
+
+/// The refusal counters of a room, before and after a line: `(memory,
+/// processes)` refusals. At most one hint per line (INV-0263-4): the memory
+/// field if it rose, else the processes field, however many times either
+/// was refused.
+pub fn refused_field(before: (u64, u64), after: (u64, u64)) -> Option<Refused> {
+    if after.0 > before.0 {
+        Some(Refused::Memory)
+    } else if after.1 > before.1 {
+        Some(Refused::Processes)
+    } else {
+        None
+    }
+}
+
+/// The hint text for a refused field of `room`, whose limit is `limit`
+/// (bytes or processes): it names the field and the room, and the line that
+/// raises it twofold. `manage` is false in a room's own shell, which holds
+/// no `Set` (ADR-0266 point 6) and so says where to run it.
+pub fn quota_hint(room: &str, field: Refused, limit: u64, manage: bool) -> String {
+    let (what, word, now, raised) = match field {
+        Refused::Memory => (
+            "memory",
+            "--mem",
+            format_size(limit),
+            format_size(limit.saturating_mul(2)),
+        ),
+        Refused::Processes => (
+            "processes",
+            "--procs",
+            format!("{limit}"),
+            format!("{}", limit.saturating_mul(2)),
+        ),
+    };
+    let from = if manage { "" } else { "from home: " };
+    format!(
+        "hint: room {room} is at its {what} limit of {now}; {from}room set {room} {word} {raised}\n"
+    )
+}
