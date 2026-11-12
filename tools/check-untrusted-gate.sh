@@ -9,7 +9,8 @@
 # `make test` and of the CI workflow, and every invariant of ADR-0260 to
 # ADR-0267, ADR-0269 and ADR-0270 (INV-0262-4 aside) and INV-0172-2 and
 # INV-0172-3 is `checked`. The same for stage 2 and the `+net` refusal (lines
-# marked `untrusted-gate: net-refusal`). The architect's go-ahead is not a thing
+# marked `untrusted-gate: net-refusal`; they stay until stage 2 is ready and
+# INV-0262-4 is `checked`). The architect's go-ahead is not a thing
 # a script can read: it is the commit that removes the markers.
 set -eu
 cd "$(dirname "$0")/.."
@@ -80,9 +81,13 @@ else
 		bad "the refusal is gone while invariants of ADR-0260 to ADR-0270 are not checked"
 fi
 
-net_refusal=$(grep -c 'untrusted-gate: net-refusal' user/src/bin/zosh.rs crates/zoraya-panel/src/lib.rs | awk -F: '$2 > 0 { n++ } END { print n + 0 }')
-if [ "$net_refusal" -eq 0 ] && [ "$files_without_refusal" -ne 0 ]; then
-	ready 2 || bad "+net is allowed in untrusted rooms while a test of stage 2 is pending or missing"
+# The +net refusal (ADR-0268 point 7) stays until stage 2 is ready, whether or
+# not the gate is open: without it the first stage would open +net as well.
+net_refusal=$(grep -h -c 'untrusted-gate: net-refusal' user/src/bin/zosh.rs crates/zoraya-panel/src/lib.rs | awk '{ n += $1 } END { print n + 0 }')
+if [ "$net_refusal" -eq 0 ]; then
+	ready 2 || bad "no +net refusal is marked (untrusted-gate: net-refusal) while a test of stage 2 is pending or missing"
+	invariants_ok "INV-0262-4" ||
+		bad "no +net refusal is marked while INV-0262-4 (the connection's stream rings charged to the client) is not checked"
 fi
 
 [ "$fail" -eq 0 ] || exit 1
