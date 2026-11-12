@@ -27,6 +27,7 @@ pub mod fields;
 pub mod rect;
 pub mod rooms;
 pub mod settings;
+pub mod usage;
 pub mod window;
 
 use alloc::string::String;
@@ -347,6 +348,12 @@ pub struct Compositor<P: Platform> {
     dock_sig: String,
     /// The application icon under the pointer: its tooltip is shown.
     hover: Option<usize>,
+    /// The rooms' limits and use, from the panel once a second (Q6b).
+    usage: Vec<zoraya_settings::usage::Reading>,
+    /// Requests refused at an untrusted room's account, by room.
+    refusals: Vec<(String, u32)>,
+    /// The window whose hover card is shown: the pointer is on its title bar.
+    card: Option<Key>,
     /// Show-commands mode (System+?, ADR-0172 point 8).
     commands: bool,
     /// The wallpaper with the rooms' fields on it.
@@ -470,6 +477,9 @@ impl<P: Platform> Compositor<P> {
             dock: DockGeometry::default(),
             dock_sig: String::new(),
             hover: None,
+            usage: Vec::new(),
+            refusals: Vec::new(),
+            card: None,
             commands: false,
             fielded: Vec::new(),
             fields_dirty: true,
@@ -1275,6 +1285,7 @@ impl<P: Platform> Compositor<P> {
         self.drag_to(x, y);
         if self.drag.is_none() {
             self.dock_hover(x, y);
+            self.card_hover(x, y);
         }
     }
 
@@ -2373,6 +2384,10 @@ impl<P: Platform> Compositor<P> {
                 Ok((_, m)) => (self.set_dock(m.apps.0), false),
                 Err(_) => (status::INVALID, false),
             },
+            44 if clients && none => match decode::<gui::SetUsage<'_>>(bytes, 0) {
+                Ok((_, m)) => (self.set_usage(m.readings.0), false),
+                Err(_) => (status::INVALID, false),
+            },
             43 if clients && none => match decode::<gui::ApplySettings<'_>>(bytes, 0) {
                 Ok((_, m)) => {
                     fn t(d: &[u8]) -> &str {
@@ -2757,6 +2772,12 @@ impl<P: Platform> Compositor<P> {
     fn remove_window(&mut self, key: Key) {
         self.fields_dirty = true;
         let Some(i) = self.index(key) else { return };
+        if self.card == Some(key) {
+            if let Some(r) = self.card_rect(key) {
+                self.dirty(&r);
+            }
+            self.card = None;
+        }
         let w = self.windows.remove(i);
         let f = self.frame();
         self.dirty(&w.reach(&f));
@@ -3210,6 +3231,10 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return Err(status::NO_MEMORY);
         }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::OVER_QUOTA);
+        }
         let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
         // A toplevel is never larger than the work area: its body is made
         // to fit, and the `Configure` after `Created` tells the client the
@@ -3305,6 +3330,10 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return Err(status::BAD_BUFFER);
         }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {
+            self.platform.close(memory);
+            return Err(status::OVER_QUOTA);
+        }
         let body = self.windows[pi].body_rect();
         let (buffer, copy) = self.map_buffer(bw, bh, memory, true)?;
         // Relative to the parent's body, drawn clipped to the work area
@@ -3377,6 +3406,10 @@ impl<P: Platform> Compositor<P> {
         if !self.within_budget(slot, more) {
             self.platform.close(memory);
             return status::NO_MEMORY;
+        }
+        if !self.within_account(slot, 0, more) {
+            self.platform.close(memory);
+            return status::OVER_QUOTA;
         }
         // The copy is made at the first commit.
         match self.map_buffer(bw, bh, memory, false) {

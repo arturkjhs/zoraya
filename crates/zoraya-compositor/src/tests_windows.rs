@@ -84,7 +84,7 @@ impl Setup {
         self.c.window(Key { client, id }).unwrap().outer(&f)
     }
 
-    fn region(&mut self, r: Rect) -> Vec<u32> {
+    pub(super) fn region(&mut self, r: Rect) -> Vec<u32> {
         let mut v = Vec::new();
         for y in r.y..r.bottom() {
             for x in r.x..r.right() {
