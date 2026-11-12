@@ -63,8 +63,9 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
-# The deadline of the TCG and 4-CPU test-qemu-* runs: 116 tests under TCG take
-# 147-176 s in CI, so 180 s dies under load. HVF runs keep QEMU_TIMEOUT.
+# The deadline of the TCG, 4-CPU and CI test-qemu-* and test-net runs: 116 tests
+# take 147-176 s under TCG in CI and the suite grows, so 180 s dies under load
+# (slowest green run: 176 s, 70% margin at 300 s). HVF-only runs keep QEMU_TIMEOUT.
 QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
@@ -180,7 +181,7 @@ test-qemu-disk: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
 
 test-qemu-auto-default: test-qemu-disk
-	$(RUN_TEST) --label auto-default \
+	$(RUN_TEST_SLOW) --label auto-default \
 		--expect-line "exception level at entry: EL1, now EL1" --expect-line "cpus: 1" \
 		--expect-line "memory: 131072 KiB total" \
 		--expect-line "console: pl011 at 0x9000000 (/pl011@9000000)" \
@@ -228,7 +229,7 @@ test-qemu-tcg-smp4-gicv3: test-qemu-disk
 
 test-qemu-one: $(TEST_KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(TEST_DISK)
-	$(RUN_TEST) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
+	$(RUN_TEST_SLOW) --label auto-default -- $(RUN_QEMU) --test --disk $(TEST_DISK) --accel auto $(TEST_KERNEL)
 	target/debug/zoraya-fsck $(TEST_DISK)
 
 # N1 (ADR-0221, ADR-0230): the test kernel with a virtio-net device on QEMU's
@@ -250,7 +251,7 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	mkdir -p target/test-logs && rm -f $(NET_PCAP) && \
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(NET_DISK) && \
 	run() { accel=$$1; shift; tools/net-poke.sh $(NET_FWD_PORT) 240 & poke=$$!; \
-		$(RUN_TEST) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
+		$(RUN_TEST_SLOW) "$$@" -- $(RUN_QEMU) --test --net --net-forward $(NET_FWD_PORT) --net-pcap $(NET_PCAP) --disk $(NET_DISK) --accel $$accel $(TEST_KERNEL); \
 		rc=$$?; kill $$poke 2>/dev/null; wait $$poke 2>/dev/null; return $$rc; }; \
 	run auto --label net-auto --expect-line "t_net: all passed" --expect-line "t_net: arp reply from 10.0.2.2" \
 		--expect-line "t_netd: all passed" --expect-line "t_netd: lease 10.0.2.15/24 gateway" \
