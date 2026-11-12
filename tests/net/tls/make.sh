@@ -3,7 +3,9 @@
 # test.zoraya, an expired leaf for expired.zoraya and a leaf for other.zoraya
 # (served as wrong.zoraya). The outputs are committed; run this only to make
 # them again (OpenSSL 3, e.g. Homebrew's). The keys are for tests and protect
-# nothing. The validity of the valid ones ends in 2126.
+# nothing (see README.md); both roots may sign only names under .zoraya
+# (name constraints), so that a leaked copy of the keys cannot vouch for a real
+# site where a program trusts it. The validity of the valid ones ends in 2126.
 set -eu
 OPENSSL="${OPENSSL:-/opt/homebrew/bin/openssl}"
 cd "$(dirname "$0")"
@@ -35,12 +37,14 @@ EOF
 "$OPENSSL" ecparam -name prime256v1 -genkey -noout -out root.key
 "$OPENSSL" req -x509 -new -key root.key -sha256 -days 36500 -config "$work/ca.cnf" \
   -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "nameConstraints=critical,permitted;DNS:.zoraya" \
   -out root.pem
 # A second root that signs nothing here: a program that trusts only this
 # one must refuse every leaf above.
 "$OPENSSL" ecparam -name prime256v1 -genkey -noout -out other-root.key
 "$OPENSSL" req -x509 -new -key other-root.key -sha256 -days 36500 -subj "/CN=Zoraya other root" \
   -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+  -addext "nameConstraints=critical,permitted;DNS:.zoraya" \
   -out other-root.pem
 leaf() { # name file startdate enddate
   "$OPENSSL" ecparam -name prime256v1 -genkey -noout -out "$2.key"
