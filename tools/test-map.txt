@@ -77,6 +77,8 @@ user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
 user/src/bin/t_snapshot.rs    test-qemu
 user/src/gui.rs               test-gui test-qemu test-net
+user/src/mmio.rs              test-gui test-qemu test-net test-files
+user/src/bin/t_devices.rs     test-qemu
 user/src/app.rs               test-gui
 
 # The network (N1): the driver, its protocol and the test that plays netd.

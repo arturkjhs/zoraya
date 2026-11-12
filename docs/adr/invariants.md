@@ -528,6 +528,8 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | INV-0294-1 | [ADR-0294](0294-q6b-what-the-person-sees-where-the-adrs-are-silent.md) | A window request of an untrusted room's account that passes a bound is refused with `OverQuota`, and nothing of any other account changes; the untrusted accounts together leave `home` and the trusted rooms at least 20 of the compositor's 32 windows. | `cargo test -p zoraya-compositor usage` (the three account tests). | checked: `make test-unit` |
 | INV-0294-2 | [ADR-0294](0294-q6b-what-the-person-sees-where-the-adrs-are-silent.md) | The compositor takes the rooms' use only from the client manager's channel, whole or not at all, and a pill shows only at `NEAR_PERCENT` or more. | `cargo test -p zoraya-compositor usage` and `tests/gui/limits.script` in `make test-gui`. | checked: `make test-unit`, `make test-gui` |
 | INV-0294-3 | [ADR-0294](0294-q6b-what-the-person-sees-where-the-adrs-are-silent.md) | The settings window's `SetRoomLimit` is refused when the window was launched in an untrusted room, and otherwise does what `room set` does. | `cargo test -p zoraya-panel` (`an_untrusted_origin_sets_no_limit` and the handler's other tests) and host tests of `zoraya_settings::rooms::with_limit` for the words and values. | checked: `make test-unit` |
+| INV-0295-1 | [ADR-0295](0295-n6-register-access-by-call-for-shared-pages.md) | `device_read` and `device_write` reach only the registers of the transport device's own block: an offset that is not a multiple of 4, or whose word is not inside the block, is refused, a page device has no register calls, and a transport device has no mapping and no transports. | `t_devices` (`transport_devices`) in `make test-qemu`. | checked: `make test-qemu` |
+| INV-0295-2 | [ADR-0295](0295-n6-register-access-by-call-for-shared-pages.md) | On a shared page `init` gives no driver the page, only its transport. | `make test-gui` with `tests/gui/net.script`: the machine with `--gui --net` boots, `init` reports the shared page, the network has its lease and the terminal shows `net status`. | checked: `make test-gui` |
 
 ## Counts
 
@@ -679,4 +681,5 @@ Every invariant from every ADR in `docs/adr/`, with the ADR it comes from, its s
 | [ADR-0290](0290-what-the-engine-charges.md) What the filesystem engine charges to a limit: files' parents, unnamed and unlinked files, and the wire | 1 |
 | [ADR-0291](0291-accounts-in-the-file-service.md) Accounts in the file service: the request that carves one, the derived bounds, and what a bound does | 1 |
 | [ADR-0294](0294-q6b-what-the-person-sees-where-the-adrs-are-silent.md) Q6b, what the person sees where ADR-0262 and ADR-0267 are silent: the accounts of the compositor, the readings, the card and the pills | 3 |
-| **Total** | **522** |
+| [ADR-0295](0295-n6-register-access-by-call-for-shared-pages.md) N6, a shared virtio-mmio page: register access by call, one device per transport | 2 |
+| **Total** | **524** |

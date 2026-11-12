@@ -669,7 +669,7 @@ GUI_IMAGE := $(BUILD)/gui.img
 # The terminal also under TCG at scale 2, which is what CI's "auto" runs
 # (it found term's 5 s wait for the compositor too short, 2026-11-09).
 GUI_TIMEOUT_2 ?= 540
-GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
+GUI_RUNS_ALL := terminal:auto:1 terminal:tcg:1 windows:auto:1 windows:tcg:1 layouts:auto:1 layouts:tcg:1 rooms:auto:1 rooms:tcg:1 limits:auto:1 limits:tcg:1 files:auto:1 files:tcg:1 files-manage:auto:1 files-manage:tcg:1 files-manage:auto:2 settings:auto:1 settings:tcg:1 net:auto:1 net:tcg:1 terminal:auto:2 terminal:tcg:2 windows:auto:2 terminal:auto:1600x1000 terminal:auto:1920x1200
 GUI_RUNS ?= $(if $(filter 1,$(FULL)),$(GUI_RUNS_ALL),$(filter-out %:tcg:1 %:tcg:2,$(GUI_RUNS_ALL)))
 test-gui: $(KERNEL) $(RUNNER) tools-storage
 	@for run in $(GUI_RUNS); do \
@@ -681,8 +681,9 @@ test-gui: $(KERNEL) $(RUNNER) tools-storage
 	  target/debug/zoraya-mkfs --size 16M --from $$root $(GUI_IMAGE) > /dev/null && \
 	  timeout=$(QEMU_TIMEOUT); [ $$scale = 1 ] || timeout=$(GUI_TIMEOUT_2); \
 	  case $$scale in *x*) size="--gui-size $$scale" ;; *) size="--gui-scale $$scale" ;; esac; \
+	  net=; [ -f tests/gui/$$script.net ] && net=--net; \
 	  $(RUNNER) --timeout $$timeout --gui-script tests/gui/$$script.script --qmp $(BUILD)/$$label.qmp --label $$label -- \
-	    $(RUN_QEMU) --test --gui $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
+	    $(RUN_QEMU) --test --gui $$net $$size --mem 512M --qmp $(BUILD)/$$label.qmp --disk $(GUI_IMAGE) --accel $$accel $(KERNEL) && \
 	  target/debug/zoraya-fsck $(GUI_IMAGE) > /dev/null || exit 1; done
 
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.

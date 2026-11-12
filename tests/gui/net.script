@@ -1,0 +1,17 @@
+# N6 (ADR-0221 item 8, ADR-0295): the desktop and the network on one machine.
+# `--gui --net` puts the network device on transport 16, in the page of the
+# GPU (transport 23); `init` gives each driver its own transport by register
+# calls, so the window shows a terminal whose shell has the network's root
+# connection and `net status` shows the lease.
+serial init: gui: gpu on its own page
+serial init: device slot
+screen Type help to begin, or help tour.
+screen ~> _
+pause 3000
+type net status\r
+prefix net0  up  52:54:00:12:34:56
+prefix   address   10.0.2.15/24 (dhcp, lease
+screen ~> _
+shot gui-net
+type poweroff\r
+exit
