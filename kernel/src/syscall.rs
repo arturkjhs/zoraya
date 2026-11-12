@@ -1066,9 +1066,13 @@ impl Handlers for Calls<'_> {
         }
         let target = UserSlice::of(ends.0)?;
         target.write(&[0; 16])?;
-        let mut handles = self.process.handles.lock();
-        handles.reserve_many(2)?;
+        // The table's lock is not held while the stream is built: its
+        // memory object prepares the heap, which may pause (ADR-0270
+        // point 2). The room for both ends is kept by the reservation (a
+        // process has one thread).
+        self.process.handles.lock().reserve_many(2)?;
         let (reader, writer) = Stream::create(Some(self.process.job()))?;
+        let mut handles = self.process.handles.lock();
         let read = Object::StreamRead(reader);
         let read = handles.insert(read, StreamReadObject::RIGHTS, object::next_id())?;
         let write = Object::StreamWrite(writer);
