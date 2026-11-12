@@ -126,7 +126,25 @@ impl Job {
             .try_reserve(1)
             .map_err(|_| Status::NoMemory)?;
         state.children.push(Arc::downgrade(&job));
+        let suspended = state.suspended;
         drop(state);
+        // `Job::new` read the parent's state before `TREE` was held. A
+        // `job_suspend` (or `job_resume`) that entered the parent since will
+        // not reach this job (it was not in the list then), so the job takes
+        // the parent's state here, under `TREE`, which orders this against
+        // the walk's steps. A walk that has not entered the parent yet
+        // reaches it by the list (review note 8).
+        let differs = {
+            let mut own = job.state.lock();
+            let differs = own.suspended != suspended;
+            own.suspended = suspended;
+            differs
+        };
+        if differs && suspended {
+            port::set_signals(job.source, job_signals::SUSPENDED);
+        } else if differs {
+            port::clear_signals(job.source, job_signals::SUSPENDED);
+        }
         Ok(job)
     }
 
