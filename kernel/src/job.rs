@@ -53,7 +53,7 @@ struct State {
 /// `job_suspend` returned with a job running in a tree it reports as
 /// suspended (INV-0105-5; review of the fixes, error 2). Taking turns makes
 /// each call whole, as it was before the walks were stepped. A caller waits
-/// at [`steps::pause`], with no lock held (the holder's walk goes on to its
+/// by yielding (after a [`steps::pause`]), with no lock held (the holder's walk goes on to its
 /// end whatever it was asked, and a stop or a kill takes effect only on the
 /// way back to EL0, so the holder is never stopped inside the walk). The
 /// order is first come, first served (review round 2, error 2): with one
@@ -85,8 +85,13 @@ impl Exclusive {
             crate::process::park_if_stopped();
             let ticket = NEXT_TURN.fetch_add(1, Ordering::Relaxed);
             while SERVING.load(Ordering::Acquire) != ticket {
-                core::hint::spin_loop();
+                // Yield, not just pause: a pause switches only when the slice
+                // ends, and N waiters would each burn one per round, leaving
+                // the holder 1/(N+1) of the CPU (review round 3, warning 2).
+                // A yielding waiter costs a switch, not a slice. No lock is
+                // held here.
                 steps::pause();
+                crate::sched::yield_now();
             }
             if crate::process::current_is_stopped() {
                 SERVING.store(ticket + 1, Ordering::Release);
