@@ -23,6 +23,7 @@ struct ModelJob {
     limits: JobLimits,
     procs: u64,
     refused_mem: u64,
+    refused_procs: u64,
     killed: bool,
     closed: bool,
     has_limit_right: bool,
@@ -76,6 +77,7 @@ impl Env for Model {
         u.processes.limit = j.limits.processes.map(u64::from);
         u.processes.used = j.procs;
         u.memory.refused = j.refused_mem;
+        u.processes.refused = j.refused_procs;
         u.cpu.limit = j.limits.cpu;
         let _ = clear;
         Some(u)
@@ -110,7 +112,7 @@ impl Env for Model {
 }
 
 const TABLE: &str = "project --colour 1 +w ~/project\n\
-build --colour 2 --cpu 50% --mem 64M +w ~/build\n\
+build --colour 2 --cpu 50% --mem 64M --disk 2G +w ~/build\n\
 agent-1 --untrusted +w ~/sandbox/agent-1\n\
 agent-2 --untrusted --mem 16M +w ~/sandbox/agent-2\n\
 agent-3 --untrusted +w ~/sandbox/agent-3\n\
@@ -1137,4 +1139,92 @@ fn random_bytes_on_every_channel_kind_never_panic_or_leave_a_room_channels_room(
             }
         }
     }
+}
+
+fn records(k: &mut Keeper<Model>, room: &str) -> std::vec::Vec<UsageRecord> {
+    let (r, out) = ask(k, 1, &ChannelKind::Usage, &msg(&Usage { room: Text(room) }));
+    let Reply::Send(n) = r else { panic!("{r:?}") };
+    let (_, list) = decode::<UsageList<'_>>(&out[..n], 0).unwrap();
+    list.records
+        .0
+        .chunks(RECORD_SIZE)
+        .map(|c| UsageRecord::decode(c).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_resumed_room_reads_its_line_and_resuming_twice_keeps_the_others() {
+    let mut first = keeper();
+    launch(&mut first, 1, &DESKTOP, "build").unwrap();
+    launch(&mut first, 1, &DESKTOP, "project").unwrap();
+    let (b, p) = (
+        first.job_of("build").unwrap(),
+        first.job_of("project").unwrap(),
+    );
+    let model = core::mem::take(first.env());
+    let mut k = Keeper::new(model, Some(1));
+    k.resume("build", b, false, None);
+    k.resume("project", p, false, None);
+    k.resume("build", b, false, None);
+    assert_eq!(k.running().len(), 2, "one entry per room");
+    // The disk word is the line's alone: the keeper reads it again.
+    assert_eq!(records(&mut k, "build")[0].disk_limit, 2 << 30);
+}
+
+#[test]
+fn procs_refusals_are_noticed_once_and_a_named_usage_lists_one_room() {
+    let mut k = keeper();
+    launch(&mut k, 1, &DESKTOP, "build").unwrap();
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    let j = k.job_of("build").unwrap();
+    k.env().jobs.get_mut(&j).unwrap().refused_procs = 2;
+    let n = k.refusals();
+    assert_eq!(n.len(), 1);
+    assert_eq!(
+        (n[0].room.as_str(), n[0].field),
+        ("build", field::PROCESSES)
+    );
+    assert!(k.refusals().is_empty());
+    assert_eq!(records(&mut k, "build").len(), 1);
+    assert_eq!(records(&mut k, "").len(), 2);
+}
+
+#[test]
+fn a_record_says_running_untrusted_and_leased() {
+    let mut k = keeper();
+    launch(&mut k, 1, &DESKTOP, "agent-1").unwrap();
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    let a = records(&mut k, "agent-1")[0];
+    assert_eq!(a.flags, flags::RUNNING | flags::UNTRUSTED | flags::LEASED);
+    let p = records(&mut k, "project")[0];
+    assert_eq!(p.flags, flags::RUNNING | flags::LEASED);
+    simple(
+        &mut k,
+        1,
+        &DESKTOP,
+        &msg(&LeaveMsg {
+            room: Text("project"),
+        }),
+    )
+    .unwrap();
+    assert_eq!(records(&mut k, "project")[0].flags, flags::RUNNING);
+}
+
+#[test]
+fn a_collected_room_does_not_hide_the_ones_after_it() {
+    let mut k = keeper();
+    launch(&mut k, 1, &DESKTOP, "project").unwrap();
+    launch(&mut k, 2, &CONSOLE, "build").unwrap();
+    simple(
+        &mut k,
+        2,
+        &CONSOLE,
+        &msg(&LeaveMsg {
+            room: Text("build"),
+        }),
+    )
+    .unwrap();
+    k.env().now += IDLE_MS;
+    k.collect_idle();
+    assert_eq!(k.running(), vec!["project".to_string()]);
 }
