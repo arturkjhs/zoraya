@@ -37,7 +37,7 @@ pub const MAX_INTERIM: usize = 4;
 /// Why [`parse_url`] refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UrlError {
-    /// Not `http://` (this client has no TLS yet).
+    /// Not `http://` or `https://`.
     Scheme,
     /// No host, or a host that is neither a valid name nor a dotted address.
     Host,
@@ -50,9 +50,11 @@ pub enum UrlError {
     Path,
 }
 
-/// A parsed `http://` URL; it borrows from the text.
+/// A parsed `http://` or `https://` URL; it borrows from the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Url<'a> {
+    /// `https://`: the connection is TLS (ADR-0228), port 443 unless given.
+    pub tls: bool,
     pub host: &'a str,
     pub port: u16,
     /// Starts with `/`; includes the query; no fragment.
@@ -98,16 +100,23 @@ fn valid_host(host: &str) -> bool {
     })
 }
 
-/// `http://HOST[:PORT][/PATH[?QUERY]][#FRAGMENT]`.
+/// `http://` or `https://` `HOST[:PORT][/PATH[?QUERY]][#FRAGMENT]`.
 pub fn parse_url(text: &str) -> Result<Url<'_>, UrlError> {
     if text.len() > MAX_URL {
         return Err(UrlError::Path);
     }
-    let rest = text
+    let (tls, rest) = if let Some(rest) = text
         .get(..7)
         .filter(|s| s.eq_ignore_ascii_case("http://"))
         .map(|_| &text[7..])
-        .ok_or(UrlError::Scheme)?;
+    {
+        (false, rest)
+    } else {
+        text.get(..8)
+            .filter(|s| s.eq_ignore_ascii_case("https://"))
+            .map(|_| (true, &text[8..]))
+            .ok_or(UrlError::Scheme)?
+    };
     let rest = rest.split('#').next().unwrap_or("");
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -131,7 +140,7 @@ pub fn parse_url(text: &str) -> Result<Url<'_>, UrlError> {
                 _ => return Err(UrlError::Port),
             }
         }
-        None => (authority, 80),
+        None => (authority, if tls { 443 } else { 80 }),
     };
     if !valid_host(host) {
         return Err(UrlError::Host);
@@ -139,7 +148,12 @@ pub fn parse_url(text: &str) -> Result<Url<'_>, UrlError> {
     if !path.bytes().all(|b| (0x21..0x7f).contains(&b)) {
         return Err(UrlError::Path);
     }
-    Ok(Url { host, port, path })
+    Ok(Url {
+        tls,
+        host,
+        port,
+        path,
+    })
 }
 
 /// The request for `url`: `GET`, HTTP/1.1, `Host`, `Connection: close`.
@@ -149,7 +163,7 @@ pub fn request(url: &Url<'_>) -> Vec<u8> {
     s.push_str(url.path);
     s.push_str(" HTTP/1.1\r\nHost: ");
     s.push_str(url.host);
-    if url.port != 80 {
+    if url.port != if url.tls { 443 } else { 80 } {
         s.push(':');
         push_number(&mut s, u64::from(url.port));
     }

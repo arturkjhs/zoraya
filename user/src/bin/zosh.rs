@@ -70,6 +70,11 @@ zoraya_user::describe!("system", "zosh");
 /// The connections a POSIX program may hold open at once (ADR-0262 item 2).
 const POSIX_NET_BUDGET: u32 = 2;
 
+/// The roots every native program with a network grant may read (ADR-0228
+/// item 3; the `tls.roots` setting of ADR-0229 is not built, so the path is
+/// fixed).
+const TLS_ROOTS: &str = "/system/tls/roots";
+
 const CONSOLE_KEY: u64 = 1;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
@@ -1209,6 +1214,21 @@ impl Z {
                     if let Some(hint) = self.not_given(exec.name, &abs, write, Some(&line)) {
                         return Err(hint);
                     }
+                }
+                // The roots for TLS come with a network that can be reached
+                // (ADR-0228 item 3, ADR-0153 rule 1): read only, not checked
+                // against the terminal's table because the network grant
+                // implies it, and shown by `grants` as "with the network".
+                let mut plan = plan;
+                if net
+                    .as_ref()
+                    .is_some_and(|(rights, _)| rights & zoraya_abi::net::rights::REACH != 0)
+                {
+                    plan.push(grants::Planned {
+                        path: String::from(TLS_ROOTS),
+                        access: grants::Access::Read,
+                        reason: String::from("with the network"),
+                    });
                 }
                 given = grants::summary(&plan, &self.home());
                 Some(self.table(&plan, net)?)

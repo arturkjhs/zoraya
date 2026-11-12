@@ -79,6 +79,9 @@ build: $(KERNEL)
 # User programs go into the ramdisk, and the ramdisk into the kernel image
 # (ADR-0033). They have their own target directory and a stripped profile.
 $(RAMDISK):
+	@# ring's build script archives its C objects with the toolchain's ar
+	@# (.cargo/config.toml), which must exist first (ADR-0289).
+	$(CARGO) build -q -p zoraya-ar
 	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user
 	$(CARGO) build -p zoraya-mkramdisk
 	@mkdir -p $(BUILD)
@@ -284,6 +287,7 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 # from the server's own pattern function (`--checksum`).
 HTTPD := target/debug/zoraya-test-httpd
 NET_HTTP_READY := $(BUILD)/net-httpd.port
+NET_TLS_READY := $(BUILD)/net-tlsd.ports
 NET_DNS_SCRIPT := tests/shell/net-dns.script
 NET_FETCH_ROOT := $(BUILD)/net-fetch-root
 NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
@@ -297,16 +301,18 @@ $(HTTPD): tools/test-httpd/src/main.rs
 test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
-	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
-	: > $(NET_HTTP_READY) && \
-	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
+	: > $(NET_HTTP_READY) && : > $(NET_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NET_TLS_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
 	httpd=$$(cat $(BUILD)/net-httpd.pid); \
-	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && [ -s $(NET_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(NET_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
 	port=$$(cat $(NET_HTTP_READY)); \
 	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
 		echo "[net-fetch] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd.log; exit 1; fi; \
-	sed -e "s/@PORT@/$$port/g" \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
 		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
 		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
 		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
@@ -315,6 +321,11 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	$(call NET_FETCH_RUN,$(QEMU_TIMEOUT),net-fetch-auto,auto); rc=$$?; \
 	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd.log; then \
+			echo '[net-fetch] FAIL: INV-0228-1: the server saw a request after a refused handshake, or none on the valid one'; cat target/test-logs/test-httpd.log; rc=1; \
+		else echo '[net-fetch] ok: the refused TLS servers read no request byte'; fi; \
+	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_FETCH_DISK); rc=$$?; fi; \
 	if [ $$rc = 0 ]; then \
 		if [ -n "$$CI" ] && [ "$(NET_DNS)" != 1 ]; then echo "[net-dns] SKIP: SLIRP's DNS forwarder needs the host's resolver (NET_DNS=1 runs it on CI)"; \
@@ -712,6 +723,7 @@ fmt-check:
 
 clippy:
 	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
+	$(CARGO) build -q -p zoraya-ar
 	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
 	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
 	@# the user programs' features do not unify with it.

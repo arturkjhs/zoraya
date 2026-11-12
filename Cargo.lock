@@ -147,8 +147,6 @@ dependencies = [
 [[package]]
 name = "ring"
 version = "0.17.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
@@ -930,6 +928,9 @@ version = "0.1.0"
 [[package]]
 name = "zoraya-test-httpd"
 version = "0.1.0"
+dependencies = [
+ "rustls",
+]
 
 [[package]]
 name = "zoraya-test-runner"
@@ -1047,6 +1048,7 @@ dependencies = [
  "zoraya-shell",
  "zoraya-term",
  "zoraya-text",
+ "zoraya-tls",
  "zoraya-tokens",
  "zoraya-tty",
  "zoraya-ui",

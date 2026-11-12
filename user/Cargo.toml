@@ -22,6 +22,7 @@ zoraya-proto-block = { path = "../crates/zoraya-proto-block" }
 zoraya-proto-nic = { path = "../crates/zoraya-proto-nic" }
 zoraya-proto-net = { path = "../crates/zoraya-proto-net" }
 zoraya-http = { path = "../crates/zoraya-http" }
+zoraya-tls = { path = "../crates/zoraya-tls" }
 zoraya-net = { path = "../crates/zoraya-net" }
 zoraya-virtio-net = { path = "../crates/zoraya-virtio-net" }
 zoraya-proto-file = { path = "../crates/zoraya-proto-file" }

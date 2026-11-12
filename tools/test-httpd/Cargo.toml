@@ -7,5 +7,10 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[dependencies]
+# TLS in front of the plain server for the HTTPS tests (ADR-0228, ADR-0230):
+# std, host only; recorded in docs/dependencies.md.
+rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+
 [lints]
 workspace = true
