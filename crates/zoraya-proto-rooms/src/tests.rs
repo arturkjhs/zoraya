@@ -89,6 +89,13 @@ fn every_message_round_trips_and_decodes_totally() {
         1
     );
     round!(
+        Forget<'_>,
+        Forget {
+            room: Text("agent-1")
+        },
+        0
+    );
+    round!(
         Attach<'_>,
         Attach {
             kind: Below(attach::ROOM),
@@ -156,6 +163,7 @@ fn the_ordinal_sets_are_disjoint_by_direction() {
         <Refused<'_> as Message>::ORDINAL,
         <Keep<'_> as Message>::ORDINAL,
         <Attach<'_> as Message>::ORDINAL,
+        <Forget<'_> as Message>::ORDINAL,
     ];
     for (i, a) in all.iter().enumerate() {
         assert!(!all[i + 1..].contains(a), "{a} twice");

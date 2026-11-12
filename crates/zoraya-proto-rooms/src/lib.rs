@@ -220,6 +220,12 @@ protocol! {
         room: Text<'a, MAX_ROOM>,
     }
 
+    /// The keeper to `init`: it let this room's job go (idle, or stopped);
+    /// `init` drops its duplicate.
+    message Forget<'a> = 98, handles 0 {
+        room: Text<'a, MAX_ROOM>,
+    }
+
     /// `init` to the keeper: serve this end as a channel of the kind
     /// (`attach::*`); `room` names the room of a `ROOM` channel.
     message Attach<'a> = 97, handles 1 {
