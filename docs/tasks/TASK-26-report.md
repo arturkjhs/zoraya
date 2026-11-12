@@ -1180,3 +1180,30 @@ room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts u
   job? (3) `Keep` sends a duplicate of the untrusted job with `LIMIT` to `init`; `init` holds it for ever: is that more authority than ADR-0269 point 5 intends? (4) The panel falls
   back to its own job when the keeper does not answer (a trusted room only): acceptable, or should it refuse? (5) `reconnect`: `init` hands a
   `Manage` channel to whoever writes on a launcher's reconnect channel, which only the launcher holds.
+
+### Review fixes (Q6a, the `opus-review` findings)
+
+1. **Leases per channel** (`Running.leases`): `Leave` and `channel_closed(chan, kind)` remove only their own; a room is idle only
+   with no lease. Test `a_lease_is_per_channel_and_one_launcher_leaving_keeps_the_others` failed before the change.
+2. **Holder by kind**: the BUSY test compares `Launcher` kinds, never channel slots (`a_slot_reused_by_the_other_launcher...`).
+   `Keep` carries the last holder's kind (`launcher`), re-sent when it changes; `init` keeps it; a resumed room with processes and
+   no known holder answers BUSY. `t_rooms` checks the restarted keeper refuses the desktop on a console-held room (not run yet).
+3. **A resumed room is leased** by its old holder's kind until `Leave`, its channel closing, or `ORPHAN_MS` (30 s, so that a holder
+   that never returns does not hold one of the four places for ever; an addition to the finding, in ADR-0293 and its open questions).
+4. **`Keep` before the launch job**: `serve` calls `tell_init` first and closes the channel (no job sent) if a write to `init` failed.
+5. **`Keep` has `room_untrusted`** for every room job; `resume` takes the trust from it, not from the line.
+6. **`Set` checks the ceilings before looking whether the room runs.** `room set` of a room with no line is now `no such room`.
+7. **No launch job, no limited room**: `Limits::needs_job` (`--mem --cpu --procs --conns --tmp`; `--disk` is the volume's and
+   applies without a job) makes `join_room_job` and the panel's `launch` refuse when the keeper is absent or gone.
+8. **`home`** is refused `Stop` and `Set` by the keeper; `room remove NAME --kill` resolves the line (and refuses `home`) first.
+9. **Gate row `keeper` is `pending` again** (its text says what ran: the keeper's channels and a keeper restarted by a stand-in for
+   `init`). Not done: a QEMU step that kills the keeper and checks that `init` restarts it and a launcher reconnects.
+10. **64 channel places, 4 reserved for `Manage`** (`MANAGE_RESERVED`); a refused attach prints a line.
+11. Notes: `resume` starts `seen_mem`/`seen_procs` at the job's counters (no spurious `Refused`); `room set` of an untrusted line takes the
+    defaults from the limits of the shell's own job and, with none known, leaves the missing words for the keeper (no made-up
+    1 TiB machine); the rollback re-reads the table and puts back only the changed line (a window remains: no file lock);
+    `start_rooms` closes both channel ends if `config_connection` fails; `Sys::close` and `get` both use `checked_sub`.
+12. Property test `random_bytes_on_every_channel_kind...`: 4000 random or mutated messages per channel kind.
+
+ADR-0293 also records that `init` holding the `LIMIT` duplicate of each job is acceptable (no authority beyond the `LIMIT` it
+already holds on the session job; it goes only to a restarted keeper).

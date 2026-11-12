@@ -479,3 +479,40 @@ fn a_line_with_many_refusals_gets_one_hint_naming_the_field_and_the_room() {
         "hint: room agent-1 is at its processes limit of 32; from home: room set agent-1 --procs 64\n"
     );
 }
+
+#[test]
+fn only_the_words_a_job_enforces_need_the_keeper() {
+    assert!(!Limits::default().needs_job());
+    // `--disk` is the volume's: it applies without a launch job.
+    assert!(
+        !Limits {
+            disk: Some(1 << 30),
+            ..Limits::default()
+        }
+        .needs_job()
+    );
+    for l in [
+        Limits {
+            mem: Some(1 << 20),
+            ..Limits::default()
+        },
+        Limits {
+            cpu: Some(10),
+            ..Limits::default()
+        },
+        Limits {
+            procs: Some(4),
+            ..Limits::default()
+        },
+        Limits {
+            conns: Some(4),
+            ..Limits::default()
+        },
+        Limits {
+            tmp: Some(1 << 20),
+            ..Limits::default()
+        },
+    ] {
+        assert!(l.needs_job(), "{l:?}");
+    }
+}
