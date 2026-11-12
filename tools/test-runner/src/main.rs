@@ -169,7 +169,8 @@ fn main() -> ExitCode {
         }
         c
     };
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(args.timeout);
     let mut ended_at: Option<Instant> = None;
     let exit = loop {
         let limit = match ended_at {
@@ -197,6 +198,12 @@ fn main() -> ExitCode {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 kill(&mut child);
+                say!(
+                    "[{label}] timed out after {} s (limit {} s): {}",
+                    started.elapsed().as_secs(),
+                    args.timeout,
+                    checker.progress()
+                );
                 break if ended_at.is_some() {
                     Exit::NoPowerOff
                 } else {
