@@ -233,6 +233,7 @@ jobs:
           - make check-ci-jobs
           - make check-charged-alloc
           - make check-untrusted-gate
+          - make check-quota-tests
           - make check-ethd-maps
     name: ${{ matrix.cmd }}
     steps:

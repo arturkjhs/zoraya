@@ -1963,6 +1963,14 @@ ADR-0221 items 5, 6 and 8).
 
 ## Known limitations
 
+- **The gate's tests (Q7, ADR-0298, proposed).** Every row of `tools/untrusted-gate.txt` now names a step, and the refusal of
+  `room new --untrusted` is still in place. The tests play an untrusted room's client against the production service (an `fsd`
+  account in `t_storage`, a compositor record with `untrusted` in `t_gui`, a `netd` account in `t_netd`) and run the system image's
+  own programs in trusted rooms with limits (`tests/shell/disk-filler.script`, `hostile.script`, `tests/gui/spinners.script`); the
+  keeper's restart is `make test-keeper` (a test-image-only `room crash-keeper`). Fuzzing is `make test-fuzz` and `make
+  test-fuzz-net` (`tools/run-fuzz.sh`, nightly toolchain, 20 s locally, 600 s in CI). Not built: an untrusted room's `/tmp`, the broker
+  and `tmpd` in the room's job and the untrusted line reader, so INV-0265-4, INV-0268-3 and the `/tmp` half of INV-0265-3 are not
+  `checked`; INV-0264-3's GUI half is bounded at 300 ms over a screendump read, not 50 ms.
 - **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch
   (under HVF on 128 MiB: `memory_create` of all memory about 9 ms, closing that object about 4 ms, closing a chain of
   20,000 channel ends about 11 ms). `memory_create`, `memory_map`, `memory_unmap`, `snapshot_process`, `spawn`'s copy,

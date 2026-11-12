@@ -18,6 +18,8 @@ tools/test-changed.sh         check
 tools/check-ci-jobs.sh        check
 tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
+tools/check-quota-tests.sh    check
+tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
@@ -72,6 +74,10 @@ user/src/bin/t_open.rs        test-gui
 user/src/bin/edit.rs          test-gui
 user/src/bin/settings.rs      test-gui
 user/src/bin/t_gui.rs         test-qemu
+user/src/bin/t_storage.rs     test-qemu
+tests/shell/keeper.script     test-keeper
+tests/shell/disk-filler.script test-files
+tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
 user/src/bin/t_cpu.rs         test-qemu
 user/src/bin/t_quota.rs       test-qemu
