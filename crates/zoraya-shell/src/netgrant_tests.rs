@@ -306,3 +306,36 @@ fn grants_prints_exactly_the_rules_the_connection_carries() {
         format!("net: {:<24}reach (operand URL)", "10.0.2.2:8080")
     );
 }
+
+#[test]
+fn a_launcher_with_no_root_refuses_a_line_that_needs_the_network() {
+    use crate::netgrant::{Root, available};
+    // N6 review, finding 7 (ADR-0221 items 5 and 6): a launcher that `init`
+    // tells about the network (it has the services channel) runs no line
+    // that needs it without a usable root, as when the root is closed.
+    assert_eq!(available(true, Root::Open, false), Ok(()));
+    assert_eq!(
+        available(true, Root::Closed, false),
+        Err("the network is not available (restarting)")
+    );
+    assert_eq!(
+        available(true, Root::Closed, true),
+        Err("the network is not available")
+    );
+    assert_eq!(
+        available(true, Root::None, false),
+        Err("the network is not available")
+    );
+    assert_eq!(
+        available(true, Root::None, true),
+        Err("the network is not available")
+    );
+    // No services channel: a machine with no network device; the command
+    // runs without a connection and says so itself.
+    assert_eq!(available(false, Root::None, false), Ok(()));
+    assert_eq!(available(false, Root::Open, false), Ok(()));
+    assert_eq!(
+        available(false, Root::Closed, false),
+        Err("the network is not available (restarting)")
+    );
+}

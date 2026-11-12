@@ -905,18 +905,16 @@ impl Z {
                 Services::Quiet => {}
             }
         }
-        match self.net {
-            Some(root) if !is_closed(root) => Ok(()),
-            Some(_) => {
-                let why = if self.net_down {
-                    "the network is not available"
-                } else {
-                    "the network is not available (restarting)"
-                };
-                Err(zoraya_command::error("zosh", Some(name), why, &[]))
-            }
-            None => Ok(()),
-        }
+        use zoraya_shell::netgrant::{Root, available};
+        let root = match self.net {
+            Some(root) if !is_closed(root) => Root::Open,
+            Some(_) => Root::Closed,
+            None => Root::None,
+        };
+        // With the services channel and no root the line is refused, not
+        // run without a connection (N6 review, finding 7).
+        available(self.net_services.is_some(), root, self.net_down)
+            .map_err(|why| zoraya_command::error("zosh", Some(name), why, &[]))
     }
 
     /// `net_grant` for a description given: the image's POSIX programs'
@@ -1291,6 +1289,18 @@ impl Z {
                 Some(self.table(&plan, net)?)
             }
         };
+        // The test image's `net crash` (ADR-0296 item 5): `netd` honours
+        // `Crash` only on `init`'s control connection, so the shell asks
+        // `init` on its services channel, once the program's own connection
+        // is made; the program sends its `Crash`, which `netd` ignores, and
+        // says so.
+        #[cfg(feature = "net-test")]
+        if exec.name == "net"
+            && exec.args.iter().map(|a| a.text.as_str()).eq(["crash"])
+            && let Some(services) = self.net_services
+        {
+            let _ = zoraya_user::netclient::crash(services);
+        }
         match directory_lookup(DIRECTORY, exec.name) {
             Ok(image) => Ok((Ready::Native { image, table }, given)),
             Err(s) => {

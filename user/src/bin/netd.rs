@@ -281,8 +281,14 @@ struct Netd {
     ethd: Handle,
     watching: bool,
     request: Vec<u8>,
-    /// `init` started this service for a test of its restart (ADR-0296).
+    /// `init` started this service for a test of its restart (ADR-0296):
+    /// built only into the test image (feature `net-test`).
+    #[cfg(feature = "net-test")]
     crash_on_request: bool,
+    /// The id of `init`'s control connection, the only one whose `Crash`
+    /// counts (N6 review, finding 2).
+    #[cfg(feature = "net-test")]
+    control: Option<usize>,
 }
 
 impl Netd {
@@ -347,9 +353,12 @@ impl Netd {
             };
             let count = (sizes.handles as usize).min(handles.len());
             let message = self.request[..sizes.bytes as usize].to_vec();
-            // A test of `init`'s restart (proposed ADR-0296): only when
-            // `init` started this service with the flag.
+            // A test of `init`'s restart (proposed ADR-0296): only in the
+            // test image, only when `init` started this service with the
+            // flag, and only on `init`'s control connection.
+            #[cfg(feature = "net-test")]
             if self.crash_on_request
+                && self.control == Some(id)
                 && count == 0
                 && zoraya_protocol::Header::decode(&message)
                     .is_ok_and(|(h, _)| h.ordinal == zoraya_proto_net::CRASH_ORDINAL)
@@ -657,13 +666,20 @@ fn main() -> i32 {
         ethd,
         watching: false,
         request: vec![0u8; REQUEST],
+        #[cfg(feature = "net-test")]
         crash_on_request: handle_type(slot(8)) == Ok("event"),
+        #[cfg(feature = "net-test")]
+        control: None,
     };
     // The connection `init` holds; it makes the launchers' with `narrow`.
     let root = slot(ROOT);
     if handle_type(root) == Ok("channel") {
         match netd.service.add(Connection::root()) {
             Some(id) => {
+                #[cfg(feature = "net-test")]
+                {
+                    netd.control = Some(id);
+                }
                 netd.attach_connection(id, root);
             }
             None => return 1,

@@ -61,6 +61,10 @@ const KEY_ROOMS_CHAN: u64 = 13;
 const KEY_RECONNECT_SHELL: u64 = 14;
 const KEY_RECONNECT_PANEL: u64 = 15;
 const KEY_INPUT: u64 = 16;
+/// The shell's services channel, read only in the test image: its request
+/// to end `netd` (ADR-0296 item 5). Matched before `KEY_INPUT`'s range.
+#[cfg(feature = "net-test")]
+const KEY_SHELL_SERVICES: u64 = 1 << 40;
 
 /// A moved handle with its type's rights.
 fn give(slot: u32, handle: Handle, rights: Rights) -> HandleEntry {
@@ -413,13 +417,38 @@ fn root_connection(n: &Network) -> Option<Handle> {
 
 /// Whether the volume holds `/etc/zoraya/net-crash`: the test of the
 /// network's restart then starts `netd` so that it ends on request
-/// (proposed ADR-0296).
+/// (proposed ADR-0296). Only the test image (feature `net-test`) looks;
+/// any other is never started so (N6 review, finding 2).
+#[cfg(feature = "net-test")]
 fn net_crash(stack: Option<&Stack>) -> bool {
     stack.is_some_and(|s| {
         s.root
             .open("etc/zoraya/net-crash", 0, zoraya_proto_file::rights::READ)
             .is_ok()
     })
+}
+
+#[cfg(not(feature = "net-test"))]
+fn net_crash(_: Option<&Stack>) -> bool {
+    false
+}
+
+/// The test image's shell asked, on its services channel, for `netd` to
+/// end: `init` sends `Crash` on its own control connection, the only one
+/// `netd` honours it on (ADR-0296 item 5).
+#[cfg(feature = "net-test")]
+fn crash_on_request(services: Handle, network: Option<&Network>) {
+    let mut bytes = [0u8; 64];
+    while let Ok(sizes) = zoraya_user::channel_read(services, &mut bytes, &mut []) {
+        let message = &bytes[..(sizes.bytes as usize).min(bytes.len())];
+        let asked = sizes.handles == 0
+            && zoraya_protocol::Header::decode(message)
+                .is_ok_and(|(h, _)| h.ordinal == zoraya_proto_net::CRASH_ORDINAL);
+        if asked && let Some(n) = network {
+            println!("init: the shell asked the network service to end (a test)");
+            let _ = zoraya_user::netclient::crash(n.control);
+        }
+    }
 }
 
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
@@ -798,6 +827,12 @@ fn main() -> i32 {
             let readable = channel_signals::READABLE;
             port_subscribe(port, r.chan, readable, KEY_ROOMS_CHAN, Mode::Level).expect("subscribe");
         }
+        #[cfg(feature = "net-test")]
+        if let Some(services) = shell_services {
+            let readable = channel_signals::READABLE;
+            port_subscribe(port, services, readable, KEY_SHELL_SERVICES, Mode::Level)
+                .expect("subscribe");
+        }
         for (end, key) in [
             (shell_reconnect, KEY_RECONNECT_SHELL),
             (panel_reconnect, KEY_RECONNECT_PANEL),
@@ -827,6 +862,12 @@ fn main() -> i32 {
                 KEY_GPU => restart_gpu(gui.as_mut().expect("a GUI"), port),
                 // Read below, with every other wake-up.
                 KEY_MANAGER => {}
+                #[cfg(feature = "net-test")]
+                KEY_SHELL_SERVICES => {
+                    if let Some(services) = shell_services {
+                        crash_on_request(services, network.as_ref());
+                    }
+                }
                 k if k >= KEY_INPUT => {
                     let g = gui.as_mut().expect("a GUI");
                     let i = (k - KEY_INPUT) as usize;
@@ -957,6 +998,10 @@ fn main() -> i32 {
         end_job(shell);
         if let Some(c) = shell_reconnect.take() {
             let _ = handle_close(c);
+        }
+        // Each shell gets a services channel of its own (N6 review, finding 3).
+        if let Some(s) = shell_services.take() {
+            let _ = handle_close(s);
         }
         if let Some(b) = beside.take() {
             end_job(b.job);

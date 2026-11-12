@@ -156,9 +156,11 @@
 > fetch http://10.0.2.2:99999/\r
 < the port is not a number from 1 to 65535
 < \r\n~>
-# N6, ADR-0221 items 5 and 6 (INV-0221-3, INV-0221-4): the volume holds
+# N6, ADR-0221 items 5 and 6 (INV-0221-3, INV-0221-4): this is the test image
+# (feature net-test, ADR-0296 item 5) and the volume holds
 # /etc/zoraya/net-crash, so `init` started `netd` to end on request. Each
-# `net crash` ends the service; `init` restarts the network and the shell gets
+# `net crash` has the shell ask `init`, which sends `Crash` on its control
+# connection and so ends the service; `init` restarts the network and the shell gets
 # a new root connection on its services channel, so a fetch works again. The
 # fourth end is past the three restarts of a boot: the network stays down (the
 # refusal has no "(restarting)" after it), and a line that needs it is refused.

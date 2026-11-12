@@ -246,3 +246,28 @@ pub fn describe(scope: &[u8]) -> Vec<String> {
         })
         .collect()
 }
+
+/// The launcher's root connection, as [`available`] sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Root {
+    /// None held.
+    None,
+    /// Its far end is closed: the service ended.
+    Closed,
+    Open,
+}
+
+/// Whether a line that needs the network may run (ADR-0221 items 5 and 6,
+/// ADR-0296 item 3), or the refusal's problem. `told` says the launcher has
+/// the services channel, so `init` runs a network for it: with no usable
+/// root such a line is refused, never run without a connection (N6 review,
+/// finding 7). `down` is `NetworkDown` received: no restart comes.
+pub fn available(told: bool, root: Root, down: bool) -> Result<(), &'static str> {
+    match root {
+        Root::Open => Ok(()),
+        Root::Closed if !down => Err("the network is not available (restarting)"),
+        Root::Closed => Err("the network is not available"),
+        Root::None if told => Err("the network is not available"),
+        Root::None => Ok(()),
+    }
+}

@@ -247,15 +247,21 @@ pub enum Services {
 /// new root connection (moved). Never blocks; false if the launcher is gone.
 pub fn send_restarted(services: Handle, root: Handle) -> bool {
     let mut out = [0u8; 64];
-    let Ok(n) = encode(&zoraya_proto_net::NetworkRestarted {}, 0, &mut out) else {
-        return false;
-    };
-    let entry = ChannelEntry {
-        handle: root,
-        rights: ChannelObject::RIGHTS,
-        transfer: Transfer::Move,
-    };
-    channel_write(services, &out[..n], &[entry]).is_ok()
+    let sent = encode(&zoraya_proto_net::NetworkRestarted {}, 0, &mut out).is_ok_and(|n| {
+        let entry = ChannelEntry {
+            handle: root,
+            rights: ChannelObject::RIGHTS,
+            transfer: Transfer::Move,
+        };
+        channel_write(services, &out[..n], &[entry]).is_ok()
+    });
+    // A failed write moves nothing: the root is still the caller's, and
+    // closed here so that no connection is left in its table (N6 review,
+    // finding 9).
+    if !sent {
+        let _ = handle_close(root);
+    }
+    sent
 }
 
 /// `init`'s side: tells a launcher that no more restarts will come.

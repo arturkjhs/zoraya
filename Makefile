@@ -50,6 +50,10 @@ endif
 FULL_ONLY = [ "$(FULL)" = 1 ] || exit 0;
 KERNEL := $(BUILD)/zoraya-kernel.elf
 TEST_KERNEL := $(BUILD)/zoraya-kernel-test.elf
+# make test-net-fetch's image (below).
+NET_TEST_USER_DIR := target/user-net-test/$(TARGET)/user
+NET_TEST_RAMDISK := $(BUILD)/ramdisk-net-test.bin
+NET_TEST_KERNEL := $(BUILD)/zoraya-kernel-net-test.elf
 RAMDISK := $(BUILD)/ramdisk.bin
 DISK := $(BUILD)/disk.img
 TEST_DISK := $(BUILD)/test-disk.img
@@ -71,7 +75,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
 .PHONY: all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
-	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
+	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
 
@@ -102,6 +106,23 @@ $(TEST_KERNEL): $(RAMDISK)
 	ZORAYA_RAMDISK=$(abspath $(RAMDISK)) $(CARGO) build $(KERNEL_ARGS) --features qemu-test --target-dir target/qemu-test
 	@mkdir -p $(BUILD)
 	cp target/qemu-test/$(TARGET)/debug/zoraya-kernel $@
+
+# The image of `make test-net-fetch` alone (ADR-0296 item 5): the user
+# programs with the feature `net-test`, which builds the test of the
+# network's restart into `init`, `netd` and `zosh`, and a kernel that embeds
+# them, each in a target directory of its own. Every other kernel embeds
+# $(RAMDISK), which has no such test, whatever its volume holds.
+$(NET_TEST_RAMDISK):
+	$(CARGO) build -q -p zoraya-ar
+	$(CARGO) build -p zoraya-user --target $(TARGET) --profile user --target-dir target/user-net-test --features net-test
+	$(CARGO) build -p zoraya-mkramdisk
+	@mkdir -p $(BUILD)
+	target/debug/zoraya-mkramdisk --describe user/describe $@ $(addprefix $(NET_TEST_USER_DIR)/,$(USER_PROGRAMS))
+
+$(NET_TEST_KERNEL): $(NET_TEST_RAMDISK)
+	ZORAYA_RAMDISK=$(abspath $(NET_TEST_RAMDISK)) $(CARGO) build $(KERNEL_ARGS) --target-dir target/net-test
+	@mkdir -p $(BUILD)
+	cp target/net-test/$(TARGET)/debug/zoraya-kernel $@
 
 $(RUNNER):
 	$(CARGO) build -p zoraya-test-runner
@@ -243,6 +264,8 @@ NET_PCAP := target/test-logs/test-net.pcap
 NET_FWD_PORT := 47015
 NET_SCRIPT := tests/shell/net.script
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
+	@# INV-0296-1: the image's netd has no Crash path (feature net-test).
+	@if grep -a -q 'netd: ended on request' $(USER_DIR)/netd; then echo "[net] FAIL: INV-0296-1: the image's netd ends on request"; exit 1; fi
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
 		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
@@ -294,12 +317,12 @@ NET_FETCH_ROOT := $(BUILD)/net-fetch-root
 NET_FETCH_DISK := $(BUILD)/net-fetch-disk.img
 NET_FETCH_TEMPLATE := tests/shell/net-fetch.script
 NET_FETCH_SCRIPT := $(BUILD)/net-fetch.script
-NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $(3) $(KERNEL)
+NET_FETCH_RUN = $(RUNNER) --timeout $(1) --script $(NET_FETCH_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $(3) $(NET_TEST_KERNEL)
 
 $(HTTPD): tools/test-httpd/src/main.rs
 	$(CARGO) build -q -p zoraya-test-httpd
 
-test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
@@ -772,6 +795,7 @@ clippy:
 	$(CARGO) clippy --workspace --exclude zoraya-kernel --exclude zoraya-user --exclude zoraya-rt --all-targets -- -D warnings
 	$(CARGO) build -q -p zoraya-ar
 	$(CARGO) clippy -p zoraya-user -p zoraya-rt --target $(TARGET) -- -D warnings
+	$(CARGO) clippy -p zoraya-user --target $(TARGET) --features net-test -- -D warnings
 	@# zoraya-posix links zoraya-rt without its entry point: apart, so that
 	@# the user programs' features do not unify with it.
 	$(CARGO) clippy -p zoraya-posix --target $(TARGET) -- -D warnings
@@ -873,7 +897,7 @@ TEST_STEPS += check-ci-jobs check-charged-alloc check-untrusted-gate check-ethd-
 # test-posix one a script (and an accelerator where needed). ci-build is the
 # build job's; check-ci-jobs fails if the workflow leaves out a step, a
 # configuration, a script under an accelerator, or a W8 build.
-ci-build: $(KERNEL) $(TEST_KERNEL) $(RUNNER) tools-storage
+ci-build: $(KERNEL) $(TEST_KERNEL) $(NET_TEST_KERNEL) $(RUNNER) tools-storage
 	@# Not -s: check-ports reads the compile commands in the ports' logs.
 	$(MAKE) -f ports/Makefile ports workloads
 	@$(MAKE) -s posix-image
