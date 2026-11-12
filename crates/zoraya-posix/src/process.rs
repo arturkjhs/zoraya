@@ -1195,7 +1195,12 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    pub(crate) fn read_stream(&mut self, end: S::H, into: User, nonblock: bool) -> Result<usize, i32> {
+    pub(crate) fn read_stream(
+        &mut self,
+        end: S::H,
+        into: User,
+        nonblock: bool,
+    ) -> Result<usize, i32> {
         loop {
             match self.sys.stream_read(end, into) {
                 Ok(n) => return Ok(n),
@@ -1279,7 +1284,12 @@ impl<S: Sys> Posix<S> {
         }
     }
 
-    pub(crate) fn write_stream(&mut self, end: S::H, from: User, nonblock: bool) -> Result<usize, i32> {
+    pub(crate) fn write_stream(
+        &mut self,
+        end: S::H,
+        from: User,
+        nonblock: bool,
+    ) -> Result<usize, i32> {
         let mut done = 0;
         while done < from.length {
             match self

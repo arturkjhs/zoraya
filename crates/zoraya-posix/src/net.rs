@@ -17,8 +17,8 @@ use zoraya_proto_net::{Connect, Connected, Connecting, Failed, Reset, Resolve, R
 use zoraya_protocol::{Below, Data, Header, decode, encode};
 
 use crate::errno::{
-    EACCES, EADDRNOTAVAIL, EALREADY, EBADF, ECONNABORTED, ECONNRESET, EAGAIN, EINPROGRESS,
-    EINVAL, EIO, EISCONN, EMFILE, ENETDOWN, ENOTCONN, ENOTSOCK, EOPNOTSUPP, EPIPE, Call,
+    Call, EACCES, EADDRNOTAVAIL, EAGAIN, EALREADY, EBADF, ECONNABORTED, ECONNRESET, EINPROGRESS,
+    EINVAL, EIO, EISCONN, EMFILE, ENETDOWN, ENOTCONN, ENOTSOCK, EOPNOTSUPP, EPIPE,
 };
 use crate::process::{Desc, Posix, native};
 use crate::socket::{self as sock, Hints, Socket, State};
@@ -92,7 +92,10 @@ impl<S: Sys> Posix<S> {
             self.sys.close(h);
         }
         loop {
-            match self.sys.channel_read(net, &mut self.input, &mut self.handles) {
+            match self
+                .sys
+                .channel_read(net, &mut self.input, &mut self.handles)
+            {
                 Ok(size) => {
                     for h in self.handles.drain(..) {
                         self.sys.close(h);
@@ -127,9 +130,11 @@ impl<S: Sys> Posix<S> {
         };
         match state {
             State::Fresh => {}
-            State::Connecting => return self.finish_connect(fd, !nonblock).map_err(|e| {
-                if e == EINPROGRESS { EALREADY } else { e }
-            }),
+            State::Connecting => {
+                return self
+                    .finish_connect(fd, !nonblock)
+                    .map_err(|e| if e == EINPROGRESS { EALREADY } else { e });
+            }
             State::Connected => return Err(EISCONN),
             State::Dead => return Err(ECONNABORTED),
         }
@@ -235,7 +240,10 @@ impl<S: Sys> Posix<S> {
             let Some(ctl) = s.ctl else {
                 return Err(EIO);
             };
-            match self.sys.channel_read(ctl, &mut self.input, &mut self.handles) {
+            match self
+                .sys
+                .channel_read(ctl, &mut self.input, &mut self.handles)
+            {
                 Ok(size) => {
                     for h in self.handles.drain(..) {
                         self.sys.close(h);
@@ -304,7 +312,10 @@ impl<S: Sys> Posix<S> {
     /// (ADR-0225 item 4): its `errno`, once.
     fn take_reset(&mut self, fd: i32) -> Option<i32> {
         let ctl = self.socket_of(fd).ok()?.ctl?;
-        while let Ok(size) = self.sys.channel_read(ctl, &mut self.input, &mut self.handles) {
+        while let Ok(size) = self
+            .sys
+            .channel_read(ctl, &mut self.input, &mut self.handles)
+        {
             for h in self.handles.drain(..) {
                 self.sys.close(h);
             }
@@ -502,7 +513,11 @@ impl<S: Sys> Posix<S> {
             let (eai, errno) = sock::resolve_status(r.status.0);
             return Err(ResolveError { eai, errno });
         }
-        let found: Vec<[u8; 4]> = r.addresses.iter().map(|a| a.address.to_be_bytes()).collect();
+        let found: Vec<[u8; 4]> = r
+            .addresses
+            .iter()
+            .map(|a| a.address.to_be_bytes())
+            .collect();
         if found.is_empty() {
             return Err(ResolveError {
                 eai: sock::EAI_NONAME,
@@ -522,7 +537,8 @@ impl<S: Sys> Posix<S> {
         service: Option<&[u8]>,
         hints: &Hints,
     ) -> Result<(Vec<[u8; 4]>, u16, Option<String>), ResolveError> {
-        let plan = sock::plan(node, service, hints).map_err(|eai| ResolveError { eai, errno: 0 })?;
+        let plan =
+            sock::plan(node, service, hints).map_err(|eai| ResolveError { eai, errno: 0 })?;
         match plan.host {
             sock::Host::Fixed(a) => Ok((alloc::vec![a], plan.port, None)),
             sock::Host::Name(n) => {

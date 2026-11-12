@@ -339,8 +339,10 @@ pub struct Plan {
 /// (ADR-0225 item 6). Only `AF_INET` and `SOCK_STREAM` exist: other families
 /// are `EAI_FAMILY`, datagram and raw sockets `EAI_SOCKTYPE`. The node is a
 /// strict dotted quad or a name `netd` could resolve; a spelling of an
-/// address that is neither (`0x7f000001`, `127.1`, an uppercase name) is
-/// `EAI_NONAME` without a request.
+/// address that is neither (`127.1`, `1.2.3`, an uppercase name) is
+/// `EAI_NONAME` without a request. (`0x7f000001` is a name by the scope's
+/// grammar, since its last label is not all digits: `netd` is asked and the
+/// resolver says no such name.)
 pub fn plan(node: Option<&[u8]>, service: Option<&[u8]>, hints: &Hints) -> Result<Plan, i32> {
     if hints.flags & !AI_KNOWN != 0 {
         return Err(EAI_BADFLAGS);
@@ -466,7 +468,13 @@ pub fn set_option(o: &mut Options, level: i32, name: i32, value: i32) -> Result<
 
 /// `getsockopt` for the options with an integer value; `SO_ERROR` is the
 /// caller's (it clears the pending error).
-pub fn get_option(o: &Options, kind: i32, accepting: bool, level: i32, name: i32) -> Result<i32, i32> {
+pub fn get_option(
+    o: &Options,
+    kind: i32,
+    accepting: bool,
+    level: i32,
+    name: i32,
+) -> Result<i32, i32> {
     Ok(match (level, name) {
         (SOL_SOCKET, SO_REUSEADDR) => i32::from(o.reuse),
         (SOL_SOCKET, SO_KEEPALIVE) => i32::from(o.keepalive),
@@ -563,5 +571,315 @@ impl<H: Copy> Socket<H> {
             State::Connected if writing => self.write.map(|e| (e, WRITABLE | PEER_CLOSED)),
             State::Connected => self.read.map(|e| (e, READABLE | PEER_CLOSED)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sockaddr_round_trips_and_short_or_foreign_ones_are_refused() {
+        let sa = sockaddr_in([10, 0, 2, 2], 8080);
+        assert_eq!(parse_sockaddr_in(&sa), Ok(([10, 0, 2, 2], 8080)));
+        assert_eq!(&sa[2..4], &[0x1f, 0x90]);
+        assert_eq!(parse_sockaddr_in(&sa[..15]), Err(EINVAL));
+        let mut v6 = sa;
+        v6[..2].copy_from_slice(&(AF_INET6 as u16).to_ne_bytes());
+        assert_eq!(parse_sockaddr_in(&v6), Err(EAFNOSUPPORT));
+        // Total on any input.
+        for n in 0..40 {
+            let _ = parse_sockaddr_in(&[0xff; 40][..n]);
+        }
+    }
+
+    #[test]
+    fn inet_pton_takes_only_four_plain_decimals() {
+        assert_eq!(inet_pton4(b"1.2.3.4"), Some([1, 2, 3, 4]));
+        assert_eq!(inet_pton4(b"0.0.0.0"), Some([0; 4]));
+        assert_eq!(inet_pton4(b"255.255.255.255"), Some([255; 4]));
+        for bad in [
+            &b""[..],
+            b"1.2.3",
+            b"1.2.3.4.5",
+            b"256.1.1.1",
+            b"01.2.3.4",
+            b"1.2.3.",
+            b".1.2.3",
+            b"0x7f.0.0.1",
+            b"127.1",
+            b"1.2.3.4 ",
+            b"1..3.4",
+            b"-1.2.3.4",
+            b"1.2.3.+4",
+            b"1.2.3.4000",
+        ] {
+            assert_eq!(inet_pton4(bad), None, "{:?}", core::str::from_utf8(bad));
+        }
+    }
+
+    #[test]
+    fn inet_aton_takes_the_historical_forms() {
+        assert_eq!(inet_aton(b"127.1"), Some([127, 0, 0, 1]));
+        assert_eq!(inet_aton(b"0x7f000001"), Some([127, 0, 0, 1]));
+        assert_eq!(inet_aton(b"0177.0.0.1"), Some([127, 0, 0, 1]));
+        assert_eq!(inet_aton(b"1.2.3.4 trailing"), Some([1, 2, 3, 4]));
+        assert_eq!(inet_aton(b"1.2.3.256"), None);
+        assert_eq!(inet_aton(b"256.1"), None);
+        assert_eq!(inet_aton(b"1.65536"), Some([1, 1, 0, 0]));
+        assert_eq!(inet_aton(b"1.16777216"), None);
+        assert_eq!(inet_aton(b"4294967296"), None);
+        assert_eq!(inet_aton(b""), None);
+        assert_eq!(inet_aton(b"1.2.3.4.5"), None);
+        assert_eq!(inet_aton(b"08"), None);
+    }
+
+    #[test]
+    fn dotted_text_is_what_ntop_gives() {
+        assert_eq!(ntop4([192, 0, 2, 7]), "192.0.2.7");
+    }
+
+    #[test]
+    fn services_are_the_table_or_a_number() {
+        assert_eq!(service_port(b"http"), Some(80));
+        assert_eq!(service_port(b"https"), Some(443));
+        assert_eq!(service_port(b"8080"), Some(8080));
+        assert_eq!(service_port(b"gopher"), None);
+        assert_eq!(numeric_port(b"65535"), Some(65535));
+        assert_eq!(numeric_port(b"65536"), None);
+        assert_eq!(numeric_port(b"http"), None);
+        assert_eq!(numeric_port(b""), None);
+        assert_eq!(numeric_port(b"123456"), None);
+    }
+
+    #[test]
+    fn statuses_and_reasons_have_their_errnos() {
+        assert_eq!(connect_status(status::NOT_GRANTED), EACCES);
+        assert_eq!(connect_status(status::OVER_QUOTA), ENOBUFS);
+        assert_eq!(connect_status(status::UNAVAILABLE), ENETUNREACH);
+        assert_eq!(connect_status(999), crate::errno::EIO);
+        assert_eq!(failed_reason(reason::REFUSED), ECONNREFUSED);
+        assert_eq!(failed_reason(reason::TIMED_OUT), ETIMEDOUT);
+        assert_eq!(failed_reason(reason::LOCAL), EHOSTUNREACH);
+        assert_eq!(failed_reason(999), crate::errno::EIO);
+        assert_eq!(reset_why(reset::PEER), ECONNRESET);
+        assert_eq!(reset_why(reset::TIMED_OUT), ETIMEDOUT);
+        assert_eq!(reset_why(reset::ABORTED), ECONNABORTED);
+        assert_eq!(resolve_status(status::NOT_GRANTED), (EAI_SYSTEM, EACCES));
+        assert_eq!(resolve_status(status::UNRESOLVABLE), (EAI_NONAME, 0));
+        assert_eq!(resolve_status(status::UNAVAILABLE), (EAI_AGAIN, 0));
+        assert_eq!(resolve_status(77), (EAI_FAIL, 0));
+        assert_eq!(gai_message(EAI_NONAME), b"Name does not resolve\0");
+        assert_eq!(gai_message(-99), b"Unknown error\0");
+    }
+
+    #[test]
+    fn the_plan_follows_the_hints() {
+        let none = Hints::default();
+        assert_eq!(
+            plan(Some(b"1.2.3.4"), Some(b"80"), &none),
+            Ok(Plan {
+                host: Host::Fixed([1, 2, 3, 4]),
+                port: 80,
+                canonical: false
+            })
+        );
+        let named = plan(Some(b"example.org"), Some(b"https"), &none).unwrap();
+        assert_eq!(named.host, Host::Name("example.org".into()));
+        assert_eq!(named.port, 443);
+        assert_eq!(plan(None, None, &none), Err(EAI_NONAME));
+        assert_eq!(
+            plan(None, Some(b"80"), &none).unwrap().host,
+            Host::Fixed([127, 0, 0, 1])
+        );
+        let passive = Hints {
+            flags: AI_PASSIVE,
+            ..none
+        };
+        assert_eq!(
+            plan(None, Some(b"80"), &passive).unwrap().host,
+            Host::Fixed([0; 4])
+        );
+        let numeric = Hints {
+            flags: AI_NUMERICHOST,
+            ..none
+        };
+        assert_eq!(plan(Some(b"example.org"), None, &numeric), Err(EAI_NONAME));
+        let numserv = Hints {
+            flags: AI_NUMERICSERV,
+            ..none
+        };
+        assert_eq!(
+            plan(Some(b"1.2.3.4"), Some(b"http"), &numserv),
+            Err(EAI_NONAME)
+        );
+        assert_eq!(
+            plan(
+                Some(b"1.2.3.4"),
+                None,
+                &Hints {
+                    flags: 0x8000,
+                    ..none
+                }
+            ),
+            Err(EAI_BADFLAGS)
+        );
+        assert_eq!(
+            plan(
+                None,
+                Some(b"80"),
+                &Hints {
+                    flags: AI_CANONNAME,
+                    ..none
+                }
+            ),
+            Err(EAI_BADFLAGS)
+        );
+        assert_eq!(
+            plan(
+                Some(b"1.2.3.4"),
+                None,
+                &Hints {
+                    family: AF_INET6,
+                    ..none
+                }
+            ),
+            Err(EAI_FAMILY)
+        );
+        assert_eq!(
+            plan(
+                Some(b"1.2.3.4"),
+                None,
+                &Hints {
+                    socktype: SOCK_DGRAM,
+                    ..none
+                }
+            ),
+            Err(EAI_SOCKTYPE)
+        );
+        assert_eq!(
+            plan(
+                Some(b"1.2.3.4"),
+                None,
+                &Hints {
+                    protocol: 17,
+                    ..none
+                }
+            ),
+            Err(EAI_SOCKTYPE)
+        );
+        assert_eq!(
+            plan(Some(b"1.2.3.4"), Some(b"nosuch"), &none),
+            Err(EAI_SERVICE)
+        );
+        // Uppercase, a trailing dot, a space, an address spelled oddly.
+        for bad in [
+            &b"Example.org"[..],
+            b"example.org.",
+            b"a b",
+            b"127.1",
+            b"1.2.3",
+            b"\xff",
+        ] {
+            assert_eq!(plan(Some(bad), None, &none), Err(EAI_NONAME), "{bad:?}");
+        }
+        let canon = plan(
+            Some(b"example.org"),
+            None,
+            &Hints {
+                flags: AI_CANONNAME,
+                ..none
+            },
+        )
+        .unwrap();
+        assert!(canon.canonical);
+    }
+
+    #[test]
+    fn the_cache_is_bounded_and_keeps_the_newest() {
+        let mut c = AddrCache::default();
+        assert!(c.is_empty());
+        for i in 0..(CACHE as u32 + 10) {
+            c.remember(i.to_be_bytes(), &alloc::format!("h{i}"));
+        }
+        assert_eq!(c.len(), CACHE);
+        assert_eq!(c.name_of((CACHE as u32 + 9).to_be_bytes()), Some("h73"));
+        // The oldest went first.
+        assert_eq!(c.name_of(0u32.to_be_bytes()), None);
+        assert_eq!(c.name_of((CACHE as u32).to_be_bytes()), Some("h64"));
+        // A name seen again replaces the old one for that address.
+        c.remember(70u32.to_be_bytes(), "other");
+        assert_eq!(c.name_of(70u32.to_be_bytes()), Some("other"));
+        assert_eq!(c.len(), CACHE);
+    }
+
+    #[test]
+    fn the_options_table_accepts_what_the_adr_says() {
+        let mut o = Options::default();
+        set_option(&mut o, SOL_SOCKET, SO_KEEPALIVE, 1).unwrap();
+        set_option(&mut o, IPPROTO_TCP, TCP_NODELAY, 1).unwrap();
+        set_option(&mut o, SOL_SOCKET, SO_REUSEADDR, 1).unwrap();
+        set_option(&mut o, SOL_SOCKET, SO_RCVTIMEO, 0).unwrap();
+        assert_eq!(set_option(&mut o, SOL_SOCKET, 99, 1), Err(ENOPROTOOPT));
+        assert_eq!(
+            get_option(&o, SOCK_STREAM, false, SOL_SOCKET, SO_KEEPALIVE),
+            Ok(1)
+        );
+        assert_eq!(
+            get_option(&o, SOCK_STREAM, false, IPPROTO_TCP, TCP_NODELAY),
+            Ok(1)
+        );
+        assert_eq!(
+            get_option(&o, SOCK_STREAM, false, SOL_SOCKET, SO_RCVBUF),
+            Ok(RING)
+        );
+        assert_eq!(
+            get_option(&o, SOCK_STREAM, true, SOL_SOCKET, SO_ACCEPTCONN),
+            Ok(1)
+        );
+        assert_eq!(
+            get_option(&o, SOCK_STREAM, false, SOL_SOCKET, 99),
+            Err(ENOPROTOOPT)
+        );
+    }
+
+    #[test]
+    fn a_socket_call_is_checked_for_family_type_and_protocol() {
+        assert_eq!(
+            check_socket(AF_INET, SOCK_STREAM, 0),
+            Ok((SOCK_STREAM, false, false))
+        );
+        assert_eq!(
+            check_socket(
+                AF_INET,
+                SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                IPPROTO_TCP
+            ),
+            Ok((SOCK_STREAM, true, true))
+        );
+        assert_eq!(check_socket(AF_INET6, SOCK_STREAM, 0), Err(EAFNOSUPPORT));
+        assert_eq!(check_socket(AF_INET, SOCK_DGRAM, 0), Err(EPROTONOSUPPORT));
+        assert_eq!(check_socket(AF_INET, SOCK_RAW, 0), Err(EPROTONOSUPPORT));
+        assert_eq!(check_socket(AF_INET, SOCK_STREAM, 17), Err(EPROTONOSUPPORT));
+    }
+
+    #[test]
+    fn what_a_socket_is_waited_on_by_follows_its_state() {
+        use crate::sys::signals::{PEER_CLOSED, READABLE, WRITABLE};
+        let mut s: Socket<u8> = Socket::fresh(SOCK_STREAM, false);
+        assert_eq!(s.wait_source(false), None);
+        s.ctl = Some(1);
+        s.read = Some(2);
+        s.write = Some(3);
+        s.state = State::Connecting;
+        assert_eq!(s.wait_source(true), Some((1, READABLE | PEER_CLOSED)));
+        assert_eq!(s.wait_source(false), Some((1, READABLE | PEER_CLOSED)));
+        s.state = State::Connected;
+        assert_eq!(s.wait_source(false), Some((2, READABLE | PEER_CLOSED)));
+        assert_eq!(s.wait_source(true), Some((3, WRITABLE | PEER_CLOSED)));
+        s.read = None;
+        assert_eq!(s.wait_source(false), None);
+        s.state = State::Dead;
+        assert_eq!(s.wait_source(true), None);
     }
 }

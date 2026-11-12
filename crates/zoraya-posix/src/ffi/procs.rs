@@ -106,7 +106,9 @@ pub(super) fn poll() {
 
 /// Runs `f` on the state, delivering what interrupts it: again when every
 /// handler that ran had `SA_RESTART`, else `EINTR` (INV-0006-7).
-pub(super) fn restartable<R>(mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>) -> Result<R, i32> {
+pub(super) fn restartable<R>(
+    mut f: impl FnMut(&mut Posix<RtSys>) -> Result<R, i32>,
+) -> Result<R, i32> {
     loop {
         match state(&mut f) {
             Err(EINTR) => {

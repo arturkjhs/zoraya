@@ -23,7 +23,11 @@ unsafe fn copy_bytes(p: *const u8, len: usize) -> Result<Vec<u8>, i32> {
         return Err(EINVAL);
     }
     if p.is_null() {
-        return if len == 0 { Ok(Vec::new()) } else { Err(EFAULT) };
+        return if len == 0 {
+            Ok(Vec::new())
+        } else {
+            Err(EFAULT)
+        };
     }
     // SAFETY: the caller's contract.
     Ok(unsafe { core::slice::from_raw_parts(p, len) }.to_vec())
@@ -145,7 +149,8 @@ extern "C" fn shutdown(fd: i32, how: i32) -> i32 {
 extern "C" fn setsockopt(fd: i32, level: i32, name: i32, value: *const u8, len: u32) -> i32 {
     // The timeouts are a `struct timeval` and are accepted unread; every
     // other option is an `int`.
-    let timeout = level == sock::SOL_SOCKET && matches!(name, sock::SO_RCVTIMEO | sock::SO_SNDTIMEO);
+    let timeout =
+        level == sock::SOL_SOCKET && matches!(name, sock::SO_RCVTIMEO | sock::SO_SNDTIMEO);
     let v = if timeout {
         0
     } else if value.is_null() || len < 4 {
@@ -402,7 +407,14 @@ extern "C" fn inet_ntop(family: i32, from: *const u8, out: *mut u8, room: u32) -
         return ptr::null();
     }
     // SAFETY: C's contract: `from` is a `struct in_addr`, 4 bytes.
-    let a = unsafe { [from.read(), from.add(1).read(), from.add(2).read(), from.add(3).read()] };
+    let a = unsafe {
+        [
+            from.read(),
+            from.add(1).read(),
+            from.add(2).read(),
+            from.add(3).read(),
+        ]
+    };
     let mut text = sock::ntop4(a).into_bytes();
     text.push(0);
     if text.len() > room as usize {
