@@ -1827,3 +1827,48 @@ the TCG runs of everything but `test-keeper`; the whole of `test-posix*`, `test-
 - **Gate file:** `disk-filler-tmp` (the `/tmp` half, `pending`, owner Q8) split from `disk-filler`; `check-untrusted-gate` requires it; the gate stays closed.
 - **Other:** `t_gui` asserts `OVER_QUOTA` (8); `t_netd` asserts the control channel's message has ordinal 17; `tools/test-map.txt` maps `init.rs`,
   `zosh.rs` and `roomsclient.rs` to `test-keeper`; `sleep` loops until the clock passes the deadline.
+
+## Review of the system call surface after stage 8 (opus-review, head `a3866f3`) and its fixes (branch `work/q7-fixes`)
+
+The review is `docs/tasks/TASK-26-syscall-review.md` (ADR-0268 point 6). **Verdict: the gate stays closed.** Two errors (INV-0270-1 did not hold for
+the job tree walks and for subscriptions), five warnings and seven notes; 40-odd calls checked and found sound otherwise.
+
+### Fixed on `work/q7-fixes` (one commit each)
+
+1. **Error 1, job tree walks.** `Job::walk` goes in steps of `steps::STEP` visits with `TREE` held inside a step only and `steps::pause` between steps
+   (a path of at most 32 frames; dead child slots stay while a walk runs so no index moves; processes are visited from the end of their list).
+   `t_bound::job_tree_sites` builds 700 jobs in chains of 12 under one job and measures `job_signal`, `job_suspend`, `job_resume` and `job_kill`
+   against 8 jobs (units on every host: at most 80). ADR-0270 has a note that lists the sites (open-question note, no Decision change).
+2. **Error 2, subscriptions.** Not stepped (`set` runs in handlers): bounded. 1024 per port and per source, `Error::TooMany`, `LimitReached` for a
+   program. **Proposed ADR-0299** (a behaviour change of ADR-0006), INV-0299-1; host tests `a_port_holds_a_bounded_number_of_subscriptions` and
+   `a_source_has_a_bounded_number_of_subscriptions`; `t_bound::subscription_sites` at the limit (one run, auto-default: last subscribe 11 us,
+   signal of a source 64 us, close of the port 313 us masked). The frees of 1024 `Paid` are timed, not counted in units.
+3. **Warning 3, `+net`.** `zosh` refuses a line that would get a network connection while its room is untrusted (`untrusted-gate: net-refusal`; dead code
+   while no untrusted room can be entered). `check-untrusted-gate.sh` fails when no such marker exists unless stage 2 is ready and INV-0262-4 is `checked`,
+   gate open or closed.
+4. **Warning 6, the check.** Markers are counted (the shell's two, the panel's one); a row passes only if its status begins `checked:` and says nothing
+   is open or not yet checked; INV-0268-3 is in the list; INV-0262-4 is left to stage 2. **Mutation (reverted):** removing only the marker of
+   `room new --untrusted` in `zosh.rs` made `make check-untrusted-gate` fail (15 rows listed); with the gate closed it passes as before.
+5. **Warning 4, `stream_create`.** The table's lock is released while the stream is built (`reserve_many(2)`, build, lock, insert).
+6. **Warning 5, `device_transport`.** The transport gets the page handle's rights that a device handle has, without `MAP`; `t_devices` case
+   `a_transport_has_no_right_its_page_lacks`.
+
+### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
+
+- **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for
+  good). To measure (`HEAP_BACKING`, free frames, on 512 MiB), then a heap ceiling for the untrusted job, or return of free chunks, or the bound in ADR-0261's open questions.
+- **Notes 8 to 14**, not fixed: uncharged growth on call paths and the reaper's queue (8); `Paid` dropped under `EVENTS` must never hold the last `Arc<Job>` (9);
+  `console_write` keeps IRQ masked about 60 ms at 4 KiB (10); any process can run code from a memory object (11); the refusal lives only in the clients (12);
+  contiguous memory is open to every process (13); smaller items: the RTC's rights, calls 53 to 55 under a proposed ADR, `held` counts the job's own record (14).
+- **Left over from the fixes:** `Job::drop`'s `retain` and the growth of `children` are still linear in a parent's children, in one interval each; the drop of a long job chain
+  runs in whichever call drops the last handle; two job walks may interleave (ADR-0270 note).
+- **Rows the strict check now lists as not `checked:`** (run the check with a marker removed to see them): INV-0172-3, INV-0260-1, INV-0261-2, INV-0261-6, INV-0261-7,
+  INV-0262-1, -2 and -3, INV-0263-3, INV-0264-3 (the architect's bound), INV-0265-1, INV-0265-3 (the `/tmp` half), INV-0265-4, INV-0268-3, INV-0270-1 (its status names known breaches).
+  INV-0262-4 is needed for `+net` (stage 2).
+- The pending row `disk-filler-tmp` (an untrusted room's `/tmp` and its `tmpd`); the architect's go-ahead; a full CI run (`candidate-full/`) of the commit that removes the refusal, then `main`'s.
+- ADR-0299 (proposed) needs the architect's decision.
+
+### Tests run (this session)
+
+`make check`; `make test-qemu-one` (the whole test kernel on auto-default, which includes `t_bound` and `t_devices`) after steps 1 to 2 and after steps 5 and 6; `cargo test -p zoraya-events`;
+the mutation above. Not run: `make test-changed`/`test-keeper` (the shell's refusal is dead code until the gate opens), `make test-qemu` on TCG, CI.

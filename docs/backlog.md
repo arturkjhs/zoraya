@@ -115,3 +115,14 @@ of the same `make test-qemu` run fails with `NoMemory` (`t_bound`, `t_rooms`, `t
 `a_spawn_with_a_big_space_is_bounded`), so one failure reads as five. Seen on the candidate run of `work/q7`
 (`candidate/work-q7-a`) and reproduced with a `panic!` after `full_redraw`. Read the first `user panic` of the log; the
 fix is for the GUI stack to end with the process that started it (a job of its own that `t_gui`'s exit kills).
+
+## Gate blockers from the review of the system calls (TASK-26, branch `work/q7-fixes`)
+
+`room new --untrusted` stays refused. Fixed on `work/q7-fixes`: errors 1 and 2, warnings 3 to 6 (see `docs/tasks/TASK-26-report.md`). Open:
+
+- Warning 7: the heap keeps its high-water mark while the charge is refunded. Measure first (`HEAP_BACKING` and free frames after a burst of queued 64 KiB
+  messages, on 512 MiB), then a heap ceiling for the untrusted job, or return free chunks to the frames, or record the bound in ADR-0261.
+- Notes 8 to 14 of `docs/tasks/TASK-26-syscall-review.md`: uncharged growth, `Paid` under `EVENTS` holding the last `Arc<Job>`, `console_write` at 60 ms, code from memory
+  objects, the refusal only in the clients, contiguous memory, smaller items.
+- `Job::drop`'s `retain` and the `children` growth are linear in a parent's children (one interval each); a long job chain's drop runs in whichever call drops the last handle.
+- Gate rows that are not truly `checked:` (the strict check lists them), the pending `disk-filler-tmp`, INV-0262-4 for `+net`, the architect's decision on ADR-0299, then the full CI.
