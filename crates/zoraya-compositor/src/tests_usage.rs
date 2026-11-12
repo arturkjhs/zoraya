@@ -135,15 +135,124 @@ fn the_untrusted_rooms_together_leave_home_twenty_windows() {
         }
     }
     assert_eq!(opened, MAX_WINDOWS - UNTRUSTED_SURFACES);
-    // Once an account's window closed, the room's next request is served.
-    let closed = {
-        let m = gui::Close { window: 1 };
-        s.f().send(ends[0], message(&m, 8), vec![]);
-        s.c.step();
-        s.f().take(ends[0]);
-        s.c.windows.len()
+    // Once an account's window closed, the room's next request is served
+    // and the one after it is not (the session's windows are all open).
+    let m = gui::Close { window: 1 };
+    s.f().send(ends[0], message(&m, 8), vec![]);
+    s.c.step();
+    s.f().take(ends[0]);
+    assert_eq!(s.try_toplevel(ends[0], 60, 40).0, status::OK);
+    assert_ne!(s.try_toplevel(ends[0], 60, 40).0, status::OK);
+}
+
+#[test]
+fn a_popup_counts_as_a_surface_of_its_room() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let a1 = s.room_client(panel, "a1", "term", "+w ~/a");
+    let (_, parent) = (s.try_toplevel(a1, 100, 60).0, 1);
+    assert_eq!(s.try_toplevel(a1, 100, 60).0, status::OK);
+    let popup = |s: &mut Setup| {
+        let m = s.f().memory(vec![7; 20 * 10], 800, false);
+        let out = s.request(
+            a1,
+            &gui::CreatePopup {
+                parent,
+                x: 10,
+                y: 20,
+                width: 20,
+                height: 10,
+            },
+            vec![m],
+        );
+        out.iter()
+            .find_map(|m| decode::<gui::PopupCreated>(m, 0).ok())
+            .map(|(_, p)| p.status.0)
+            .or_else(|| {
+                out.iter()
+                    .find_map(|r| decode::<zoraya_protocol::ErrorReply>(r, 0).ok())
+                    .map(|e| e.1.status)
+            })
+            .expect("a reply")
     };
-    assert!(closed <= MAX_WINDOWS);
+    // Two toplevels and a popup are the room's three; the next popup is not.
+    assert_eq!(popup(&mut s), status::OK);
+    assert_eq!(popup(&mut s), status::OVER_QUOTA);
+    assert_eq!(s.try_toplevel(a1, 100, 60).0, status::OVER_QUOTA);
+    let a = s.c.accounts();
+    assert_eq!(a[0].surfaces, ROOM_SURFACES);
+    assert_eq!(a[0].refused, 2);
+}
+
+#[test]
+fn a_new_buffer_counts_in_the_account_until_it_replaces_the_old() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let a1 = s.room_client(panel, "a1", "term", "+w ~/a");
+    let work = s.c.work_area();
+    let k = s.c.scale().factor();
+    let set_buffer = |s: &mut Setup, (w, h): (u32, u32)| {
+        let (bw, bh) = (w, h);
+        let n = (bw * k * bh * k) as usize;
+        let m = s.f().memory(vec![0; n], n as u64 * 4, false);
+        let out = s.request(
+            a1,
+            &gui::SetBuffer {
+                window: 1,
+                width: bw,
+                height: bh,
+            },
+            vec![m],
+        );
+        decode::<gui::BufferDone>(&out[0], 0).unwrap().1.status.0
+    };
+    // A toplevel is made to fit the work area: its body is what it gets.
+    let (work_w, work_h) = (work.width as u32, work.height as u32);
+    assert_eq!(s.try_toplevel(a1, work_w, work_h).0, status::OK);
+    let body = s.c.window(Key { client: 0, id: 1 }).unwrap().body_rect();
+    let (w, h) = (body.width as u32 / k, body.height as u32 / k);
+    let area = u64::from(W) * u64::from(H);
+    let pixels = |s: &Setup| s.c.accounts()[0].pixels;
+    let one = pixels(&s);
+    let new = u64::from(w * k) * u64::from(h * k);
+    // The test needs the shown buffer and a new one to fit two displays,
+    // and a second window beside them not to.
+    assert!(one + new <= 2 * area && 2 * one + new > 2 * area);
+    // A new buffer, even at the size it has, is one more area until the
+    // commit, and a newer one replaces the pending one.
+    assert_eq!(set_buffer(&mut s, (w, h)), status::OK);
+    assert_eq!(pixels(&s), one + new);
+    assert_eq!(set_buffer(&mut s, (w, h)), status::OK);
+    assert_eq!(pixels(&s), one + new);
+    assert_eq!(s.try_toplevel(a1, work_w, work_h).0, status::OVER_QUOTA);
+    // The commit makes the new buffer the window's, and the old goes.
+    assert_eq!(s.commit_to(a1, 1, 0, 0, w, h), status::OK);
+    assert_eq!(pixels(&s), new);
+    assert_eq!(s.try_toplevel(a1, work_w, work_h).0, status::OK);
+    assert_eq!(s.c.accounts()[0].refused, 1);
+}
+
+#[test]
+fn a_client_that_dies_gives_its_surfaces_back() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let a1 = s.room_client(panel, "a1", "term", "+w ~/a");
+    for _ in 0..ROOM_SURFACES {
+        assert_eq!(s.try_toplevel(a1, 100, 60).0, status::OK);
+    }
+    assert_eq!(s.try_toplevel(a1, 100, 60).0, status::OVER_QUOTA);
+    s.f().peers.get_mut(&a1).unwrap().gone = true;
+    s.c.step();
+    // The room starts again: a new client has all three.
+    let again = s.room_client(panel, "a1", "term", "+w ~/a");
+    for i in 0..ROOM_SURFACES {
+        assert_eq!(s.try_toplevel(again, 100, 60).0, status::OK, "surface {i}");
+    }
+    assert_eq!(s.c.accounts()[0].surfaces, ROOM_SURFACES);
+    assert_eq!(s.c.accounts()[0].refused, 0, "the old refusals are gone");
 }
 
 #[test]
@@ -366,11 +475,7 @@ fn the_card_follows_a_restack_under_a_still_pointer() {
     let o = s.outer(0, 1);
     let (dw, dh) = s.f().display_size;
     let (px, py) = (o.x + o.width / 2, o.y + s.c.frame().title - 1);
-    s.point(
-        super::rooms::axis(px, dw),
-        super::rooms::axis(py, dh),
-        None,
-    );
+    s.point(super::rooms::axis(px, dw), super::rooms::axis(py, dh), None);
     assert_eq!(s.c.card(), Some(Key { client: 0, id: 1 }));
     // A window of `home` as large as the screen opens over the pointer.
     let home = s.room_client(panel, "", "term", "");
@@ -378,6 +483,16 @@ fn the_card_follows_a_restack_under_a_still_pointer() {
     let covering = s.outer(1, 1);
     assert!(covering.y <= py && py < covering.bottom(), "{covering:?}");
     assert_eq!(s.c.card(), None, "the card of a covered title bar");
+    // Raising the first window (a keyboard focus change does) puts its title
+    // bar under the pointer again, and its card with it.
+    s.c.raise(Key { client: 0, id: 1 });
+    assert_eq!(s.c.card(), Some(Key { client: 0, id: 1 }));
+    // Closing the covering window does the same.
+    s.c.raise(Key { client: 1, id: 1 });
+    assert_eq!(s.c.card(), None);
+    s.f().peers.get_mut(&home).unwrap().gone = true;
+    s.c.step();
+    assert_eq!(s.c.card(), Some(Key { client: 0, id: 1 }));
 }
 
 #[test]

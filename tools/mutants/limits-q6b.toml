@@ -1,0 +1,160 @@
+# zoraya-compositor, Q6b: the accounts of untrusted rooms (ADR-0262 point 2,
+# ADR-0294) and the hover card (ADR-0172 point 1). Hand mutants for the
+# within_account calls of the three request paths and the card's place.
+# Host tests only.
+tests = ["cargo test -q -p zoraya-compositor usage"]
+timeout = 600
+
+[[mutant]]
+id = "Q6b-toplevel-unchecked"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+            return Err(status::NO_MEMORY);
+        }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {'''
+replace = '''
+            return Err(status::NO_MEMORY);
+        }
+        if false {'''
+note = "a_room_holds... / an_untrusted_account_at_its_bound_is_refused_and_home_still_opens_one"
+
+[[mutant]]
+id = "Q6b-popup-unchecked"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+            return Err(status::BAD_BUFFER);
+        }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {'''
+replace = '''
+            return Err(status::BAD_BUFFER);
+        }
+        if false {'''
+note = "a_popup_counts_as_a_surface_of_its_room"
+
+[[mutant]]
+id = "Q6b-popup-no-surface"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+            return Err(status::BAD_BUFFER);
+        }
+        if !self.within_account(slot, 1, u64::from(bw) * u64::from(bh)) {'''
+replace = '''
+            return Err(status::BAD_BUFFER);
+        }
+        if !self.within_account(slot, 0, u64::from(bw) * u64::from(bh)) {'''
+note = "a_popup_counts_as_a_surface_of_its_room"
+
+[[mutant]]
+id = "Q6b-setbuffer-unchecked"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if !self.within_account(slot, 0, account_more) {'
+replace = 'if false {'
+note = "a_new_buffer_counts_in_the_account_until_it_replaces_the_old"
+
+[[mutant]]
+id = "Q6b-setbuffer-no-pixels"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'if !self.within_account(slot, 0, account_more) {'
+replace = 'if !self.within_account(slot, 0, 0) {'
+note = "a_new_buffer_counts_in_the_account_until_it_replaces_the_old"
+
+[[mutant]]
+id = "Q6b-setbuffer-pending-ignored"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = 'let account_more = (u64::from(bw) * u64::from(bh)).saturating_sub(pending);'
+replace = 'let account_more = u64::from(bw) * u64::from(bh);'
+note = "a_new_buffer_counts_in_the_account_until_it_replaces_the_old"
+
+[[mutant]]
+id = "Q6b-pixels-next-ignored"
+file = "crates/zoraya-compositor/src/window.rs"
+find = 'area(&self.buffer) + self.next.as_ref().map_or(0, area)'
+replace = 'area(&self.buffer)'
+note = "a_new_buffer_counts_in_the_account_until_it_replaces_the_old"
+
+[[mutant]]
+id = "Q6b-account-surfaces"
+file = "crates/zoraya-compositor/src/usage.rs"
+find = 'let ok = surfaces + more_surfaces <= ROOM_SURFACES'
+replace = 'let ok = surfaces + more_surfaces <= ROOM_SURFACES + 1'
+note = "an_untrusted_account_at_its_bound_is_refused_and_home_still_opens_one"
+
+[[mutant]]
+id = "Q6b-account-areas"
+file = "crates/zoraya-compositor/src/usage.rs"
+find = '&& pixels + more_pixels <= ROOM_AREAS * area'
+replace = '&& pixels + more_pixels <= (ROOM_AREAS + 1) * area'
+note = "a_room_holds_two_displays_of_pixels_and_no_more"
+
+[[mutant]]
+id = "Q6b-account-fifth"
+file = "crates/zoraya-compositor/src/usage.rs"
+find = '&& (!new_account || rooms.len() < UNTRUSTED_ACCOUNTS);'
+replace = '&& (!new_account || rooms.len() <= UNTRUSTED_ACCOUNTS);'
+note = "the_untrusted_rooms_together_leave_home_twenty_windows"
+
+[[mutant]]
+id = "Q6b-card-inside-body"
+file = "crates/zoraya-compositor/src/usage.rs"
+find = '''
+            below
+        } else {
+            o.y
+        };'''
+replace = '''
+            below
+        } else {
+            o.y + f.title
+        };'''
+note = "a_card_with_no_room_beside_its_window_covers_the_frame_first"
+
+[[mutant]]
+id = "Q6b-card-above-body"
+file = "crates/zoraya-compositor/src/usage.rs"
+find = 'let above = o.y - height - gap;'
+replace = 'let above = o.y + f.title + gap;'
+note = "a_client_buffer_cannot_cover_or_imitate_the_card"
+
+[[mutant]]
+id = "Q6b-rehover-raise"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+        self.windows.extend(moved);
+        self.rehover();'''
+replace = '''
+        self.windows.extend(moved);'''
+note = "the_card_follows_a_restack_under_a_still_pointer"
+
+[[mutant]]
+id = "Q6b-prune-refusals"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = '''
+        self.prune_refusals();
+'''
+replace = '''
+'''
+note = "the_refusals_of_a_room_go_with_its_last_client"
+
+[[mutant]]
+id = "Q6b-rehover-create"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = """        self.rehover();
+        Ok(id)
+    }
+
+    fn create_popup"""
+replace = """        Ok(id)
+    }
+
+    fn create_popup"""
+note = "the_card_follows_a_restack_under_a_still_pointer"
+
+[[mutant]]
+id = "Q6b-rehover-close"
+file = "crates/zoraya-compositor/src/lib.rs"
+find = """            self.set_focus(top);
+        }
+        self.rehover();"""
+replace = """            self.set_focus(top);
+        }"""
+note = "the_card_follows_a_restack_under_a_still_pointer"

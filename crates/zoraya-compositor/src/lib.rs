@@ -3412,7 +3412,14 @@ impl<P: Platform> Compositor<P> {
             self.platform.close(memory);
             return status::NO_MEMORY;
         }
-        if !self.within_account(slot, 0, more) {
+        // The account holds both buffers: the new one replaces the pending
+        // one, if there is one, and otherwise adds to the shown one.
+        let pending = self.windows[i]
+            .next
+            .as_ref()
+            .map_or(0, |n| u64::from(n.width) * u64::from(n.height));
+        let account_more = (u64::from(bw) * u64::from(bh)).saturating_sub(pending);
+        if !self.within_account(slot, 0, account_more) {
             self.platform.close(memory);
             return status::OVER_QUOTA;
         }

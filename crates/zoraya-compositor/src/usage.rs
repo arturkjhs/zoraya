@@ -22,6 +22,13 @@ pub const ROOM_AREAS: u64 = 2;
 /// leaves `home` and the trusted rooms at least `MAX_WINDOWS - 12` = 20.
 pub const UNTRUSTED_SURFACES: usize = 12;
 /// Display areas of all untrusted rooms together (8).
+///
+/// Neither total can bind: at most `UNTRUSTED_ACCOUNTS` (4) accounts exist
+/// and each is held to `ROOM_SURFACES` (3) and `ROOM_AREAS` (2), so the sums
+/// reach 12 and 8 only at the per-account bounds. They state the sums
+/// ADR-0262 point 2 promises (INV-0262-3) and guard a later change of one
+/// of the three constants; a mutant of `all_surfaces`/`all_pixels` is
+/// equivalent while the constants are what they are.
 pub const UNTRUSTED_AREAS: u64 = 8;
 /// Untrusted rooms with surfaces at once (the keeper's four, ADR-0269).
 pub const UNTRUSTED_ACCOUNTS: usize = 4;
@@ -52,7 +59,7 @@ impl<P: Platform> Compositor<P> {
         for w in &self.windows {
             if self.account_room(w.client) == Some(room) {
                 surfaces += 1;
-                pixels += u64::from(w.buffer.width) * u64::from(w.buffer.height);
+                pixels += w.pixels();
             }
         }
         (surfaces, pixels)
@@ -81,7 +88,7 @@ impl<P: Platform> Compositor<P> {
         for w in &self.windows {
             if let Some(r) = self.account_room(w.client) {
                 all_surfaces += 1;
-                all_pixels += u64::from(w.buffer.width) * u64::from(w.buffer.height);
+                all_pixels += w.pixels();
                 if !rooms.contains(&r) {
                     rooms.push(r);
                 }

@@ -40,7 +40,15 @@ impl Setup {
         (memory, id)
     }
 
-    fn commit_to(&mut self, end: u32, window: u32, x: u32, y: u32, w: u32, h: u32) -> u32 {
+    pub(super) fn commit_to(
+        &mut self,
+        end: u32,
+        window: u32,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+    ) -> u32 {
         let m = gui::CommitTo {
             window,
             x,
