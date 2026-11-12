@@ -27,6 +27,7 @@ members = [
     "crates/zoraya-proto-net",
     "crates/zoraya-dns",
     "crates/zoraya-rng",
+    "crates/zoraya-tls",
     "crates/zoraya-http",
     "crates/zoraya-proto-file",
     "crates/zoraya-proto-display",

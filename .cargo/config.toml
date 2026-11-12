@@ -6,6 +6,10 @@
 # command line.
 runner = "tools/run-qemu.sh"
 
+[env]
+# ring's C files (ADR-0228): see tools/ring-cc.
+CC_aarch64_unknown_none = { value = "tools/ring-cc", relative = true }
+
 [alias]
 kbuild = "build -p zoraya-kernel --target aarch64-unknown-none"
 krun = "run -p zoraya-kernel --target aarch64-unknown-none"
