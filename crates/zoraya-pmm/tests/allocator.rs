@@ -7,7 +7,7 @@ use zoraya_dtb::Fdt;
 use zoraya_dtb::platform::PlatformInfo;
 use zoraya_pmm::{
     FRAME_SIZE, Frame, FrameAllocator, FrameState, FreeError, InitError, OutOfFrames, Range,
-    RangeSet, place_metadata, storage_words,
+    RangeSet, RunSearch, place_metadata, storage_words,
 };
 
 const RAM: u64 = 0x4000_0000;
@@ -139,6 +139,86 @@ fn contig_respects_alignment_reservations_and_holes() {
     assert_eq!(a.alloc_contig(1000, 1), Err(OutOfFrames));
     assert_eq!(a.alloc_contig(0, 1), Err(OutOfFrames));
     assert_eq!(a.alloc_contig(1, 3), Err(OutOfFrames));
+}
+
+/// ADR-0270: the search for a run in steps finds what a first fit over the
+/// map finds, whatever its budget, and no step reads more than its budget
+/// plus one candidate run's words; the search of the whole map at once
+/// agrees with both.
+#[test]
+fn a_run_search_in_steps_is_a_first_fit_within_its_budget() {
+    const FRAMES: u64 = 3000;
+    let mem = [
+        Range::at(RAM, FRAMES * FRAME_SIZE),
+        Range::at(0x1_0000_0000, 700 * FRAME_SIZE),
+    ];
+    for seed in 1..40u64 {
+        let mut rng = Rng(seed);
+        let mut s = storage(&mem);
+        let mut a = FrameAllocator::new(&mem, &[], &mut s).unwrap();
+        // A fragmented map: everything taken, then some stretches given back.
+        let mut taken = Vec::new();
+        while let Ok(f) = a.alloc() {
+            taken.push(f);
+        }
+        taken.sort_by_key(|f| f.addr());
+        let mut free = vec![false; taken.len()];
+        let mut i = 0;
+        while i < taken.len() {
+            let run = 1 + rng.below(if seed % 3 == 0 { 300 } else { 40 }) as usize;
+            if rng.below(3) == 0 {
+                for f in &mut free[i..(i + run).min(taken.len())] {
+                    *f = true;
+                }
+            }
+            i += run + 1 + rng.below(4) as usize;
+        }
+        for (f, _) in taken.iter().zip(&free).filter(|(_, free)| **free) {
+            a.free(*f).unwrap();
+        }
+        let count = 1 + rng.below(200);
+        let align = 1 << rng.below(3);
+        // The first fit, from the model.
+        let expected = (0..taken.len()).find(|&i| {
+            let first = taken[i].addr() / FRAME_SIZE;
+            first.is_multiple_of(align)
+                && i + count as usize <= taken.len()
+                && (0..count as usize).all(|k| {
+                    free[i + k] && taken[i + k].addr() == taken[i].addr() + k as u64 * FRAME_SIZE
+                })
+        });
+        let budget = 1 + rng.below(8);
+        let mut search = RunSearch::default();
+        let mut steps = 0;
+        let got = loop {
+            match a.alloc_contig_step(count, align, &mut search, budget) {
+                Ok(Some(f)) => break Some(f),
+                Ok(None) => steps += 1,
+                Err(OutOfFrames) => break None,
+            }
+            assert!(
+                search.words_read() <= budget + count / 64 + 2,
+                "seed {seed}: {} words, budget {budget}",
+                search.words_read()
+            );
+        };
+        assert_eq!(
+            got.map(|f| f.addr()),
+            expected.map(|i| taken[i].addr()),
+            "seed {seed}"
+        );
+        if got.is_none() {
+            assert!(steps > 0, "seed {seed}: the map is longer than a budget");
+        }
+        if let Some(f) = got {
+            a.free_contig(f, count).unwrap();
+            assert_eq!(
+                a.alloc_contig(count, align),
+                Ok(f),
+                "seed {seed}: at once, the same"
+            );
+        }
+    }
 }
 
 #[test]

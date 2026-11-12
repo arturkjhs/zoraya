@@ -131,6 +131,10 @@ static TESTS: &[Test] = &[
         run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
     },
     Test {
+        name: "a_run_search_over_a_fragmented_map_goes_in_steps",
+        run: a_run_search_over_a_fragmented_map_goes_in_steps,
+    },
+    Test {
         name: "a_prepared_allocation_grows_the_heap_in_steps",
         run: a_prepared_allocation_grows_the_heap_in_steps,
     },
@@ -2294,6 +2298,50 @@ fn a_run_short_of_frames_waits_for_the_reaper_in_steps() {
     unhoard(head);
     assert!(
         units <= crate::steps::STEP as u64 + 1,
+        "{units} units in one interval of a run's search (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: the search of the frame map for a run reads it in steps of
+/// a few dozen words with a step point between them, counted as work, so
+/// that its masked time does not grow with the machine's memory or its
+/// fragmentation (CI: 279 to 345 ms masked for one `memory_create` of a
+/// contiguous object under TCG, the only case past its bound). Every other
+/// frame free: no run of two exists, and the search reads the whole map.
+fn a_run_search_over_a_fragmented_map_goes_in_steps() {
+    let before = frames_accounted();
+    let mut head = hoard_frames();
+    let mut kept = 0;
+    while let Some((frame, next)) = unhoard_one(head) {
+        if (frame.addr() / zoraya_pmm::FRAME_SIZE).is_multiple_of(2) {
+            frames::free(frame);
+        } else {
+            // SAFETY: the frame is still allocated, so this code owns it, and
+            // the direct map holds it read-write.
+            unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(kept) };
+            kept = frame.addr();
+        }
+        head = next;
+    }
+    let mut points = 0;
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    let got = frames::alloc_contig_in_steps(2, || {
+        points += 1;
+        test_step_point();
+    });
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    unhoard(kept);
+    assert!(got.is_err(), "no two adjacent frames are free");
+    let words = frames::stats().total / 64;
+    assert!(
+        points >= 2 && points as u64 * 66 >= words,
+        "{points} step points in a search of {words} words"
+    );
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
         "{units} units in one interval of a run's search (INV-0270-1)"
     );
     assert_eq!(frames_accounted(), before);

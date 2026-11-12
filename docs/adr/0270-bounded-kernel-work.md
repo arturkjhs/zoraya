@@ -202,30 +202,37 @@ and exits.
   diagnosis names the allocating path. Two paths can put more than a step of frames in one interval and are not
   changed: the heap's growth (`GROW_SIZE`, 256 frames under the heap's lock) and `reaper::help` from `frames::alloc`
   and `frames::alloc_contig` (64 frames freed in the caller's interval, up to 17 rounds for a run).
-- *Q6 note (agent, ADR-0001 rule 6), the two paths of the note above, now bounded:* `t_bound` failed twice locally on
-  `auto-el2` under a loaded host (`units > 80`, no log kept). Test-kernel tests now force each path and measured, before
-  the change: one `frames::alloc` with no free frame and a dead object's frames queued, 65 units (64 freed by
-  `reaper::help` plus the frame); a 128-frame contiguous run that had to wait for the reaper, 129 units (two rounds of
-  help and the run); an allocation 512 KiB larger than every free span of the heap, 267 units (its growth mapped in
-  one interval). Changes: (1) `frames::alloc` takes one of the reaper's queued frames (`reaper::take`) instead of
-  freeing a step of them and trying again: the frame keeps the dead object's charge until its item is emptied, and the
-  new owner pays for it as for any frame (ADR-0261). (2) `frames::alloc_contig` makes a step point after each round of
-  `reaper::help` (its only caller, `memory_create`, holds no lock there), so an interval holds one round (64 frames)
-  and one scan of the frame map. (3) The kernel heap's least growth is 64 KiB, one chunk (`Backing::LEAST_GROWTH`, new in
-  `zoraya-heap`; user heaps keep `GROW_SIZE`, 1 MiB), so a request of up to that maps at most 16 pages in its interval,
-  the fixed work beside a step; it was 1 MiB (256 frames). The heap grows more often by less, so the tests that compared
-  free frames across a program (`t_image`, `t_quota`, the test kernel's `*_from_a_process`) compare free frames plus
-  the heap's, as `t_bound` did.
-  (4) An allocation whose size grows with an argument or with what a process holds is prepared: `heap::prepare` maps
-  the pages ahead in steps of 64 with a step point after each (the window keeps them mapped past its `next`, and
-  `heap::stats().backing` counts them, so `t_bound`'s free plus heap sum is unchanged), and the allocation then maps
-  none. Callers: `memory_create`'s list of frames, and the list of frames of an address space before each step of
-  `spawn`'s image and stack, of a snapshot's copy and of its `finish`, and of `memory_map` (its doubling was a growth of
-  the heap proportional to the space: 64 pages for a 64 MiB process). After the change the three tests measure at
-  most 1, 65 and 80 units. Not covered: an address space's list still doubles inline when a single frame outside these
-  loops fills it (a page table of a one-page mapping, the startup block): bounded by the space's size (a list of N
-  frames maps N/256 pages), not by a step; and the pages `prepare` maps ahead stay with the heap, as the heap keeps what
-  it grew by (at most the largest list prepared, 1/512 of the largest object).
+- *Q6 note (agent, ADR-0001 rule 6), the paths of the two notes above, now bounded:* `t_bound` failed twice locally
+  on `auto-el2` under a loaded host (`units > 80`, no log kept), and three CI runs failed its contiguous case alone on
+  time (287 ms at factor 64, 345 ms against 30 ms at factor 15, 279 ms; the other memory cases 1 to 18 ms).
+  Test-kernel tests now force each path; measured before the change: one `frames::alloc` with no free frame and a dead
+  object's frames queued, 65 units (64 freed by `reaper::help` plus the frame); a 128-frame contiguous run that had to
+  wait for the reaper, 129 units (two rounds of help and the run); an allocation 512 KiB larger than every free span of
+  the heap, 267 units (its growth mapped in one interval). The search of the frame map for a run was one masked pass
+  that read the map bit by bit and counted no units. Changes: (1) `frames::alloc` takes one of the reaper's queued
+  frames (`reaper::take`) instead of freeing a step of them and trying again: the frame keeps the dead object's charge
+  until its item is emptied, and the new owner pays for it as for any frame (ADR-0261). (2) The search for a run reads
+  the map a word at a time and in steps of 48 words (`zoraya_pmm::FrameAllocator::alloc_contig_step`, a resumable
+  search; a run is taken only once all of it was read free under the lock, and one freed behind the search is not seen
+  by that pass), each word counted as a unit, with a step point between steps, around each round of `reaper::help`,
+  and before the first zeroing step; its only caller, `memory_create`, holds no lock there. The 4 MiB contiguous case
+  of `t_bound` went from about 250 us masked under HVF to 20 us. (3) The kernel heap's least growth is 64 KiB, one
+  chunk (`Backing::LEAST_GROWTH`, new in `zoraya-heap`; user heaps keep `GROW_SIZE`, 1 MiB), so a request of up to
+  that maps at most 16 pages in its interval, the fixed work beside a step; it was 1 MiB (256 frames). The heap grows
+  more often by less, so the tests that compared free frames across a program (`t_image`, `t_quota`, the test kernel's
+  `*_from_a_process`) compare free frames plus the heap's, as `t_bound` did. (4) An allocation whose size grows with
+  an argument or with what a process holds is prepared: `heap::prepare` maps the pages ahead in steps of 64 with a step
+  point after each, only when no free span fits it (`Heap::fits`); the window keeps them mapped past its `next`, and
+  `heap::stats().backing` counts them. A growth's check that the frames exist counts those the reaper holds
+  (`frames::available`), which an allocation now takes: with growths of 64 KiB, free frames alone refused one while a
+  closed 24 MiB object was still queued (`t_bound`'s create loop got `NoMemory`). Callers: `memory_create`'s list of frames, and the list of frames of an address
+  space before each step of `spawn`'s image and stack, of a snapshot's copy and of its `finish`, and of `memory_map`
+  (its doubling was a growth of the heap proportional to the space: 64 pages for a 64 MiB process). After the change
+  the tests measure at most 1, 65 and 80 units, and the fragmented-map search at most 80 in any interval. With the scan
+  in steps, `t_bound`'s time bound is again 2 ms scaled by the calibration off HVF, not the 1 s of the note above.
+  Not covered: an address space's list still doubles inline when a single frame outside these loops fills it (a page
+  table of a one-page mapping, the startup block): bounded by the space's size (a list of N frames maps N/256 pages),
+  not by a step.
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 

@@ -92,9 +92,10 @@ impl MemoryObject {
             };
             let mut done = 0;
             while done < count {
-                if done > 0 {
-                    steps::between()?;
-                }
+                // A step point before the first step too: the last part of
+                // the search for the run is in the interval before it
+                // (INV-0270-1).
+                steps::between()?;
                 let n = (STEP as u64).min(count - done);
                 frames::zero_run(run_frame(first, done), n);
                 done += n;

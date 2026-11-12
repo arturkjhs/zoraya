@@ -47,7 +47,7 @@ impl Window {
         let Some(end) = end else {
             return false;
         };
-        if end > HEAP_WINDOW + HEAP_WINDOW_SIZE || pages as u64 > frames::stats().free {
+        if end > HEAP_WINDOW + HEAP_WINDOW_SIZE || pages as u64 > frames::available() {
             return false;
         }
         for i in 0..pages {
@@ -215,7 +215,7 @@ pub(crate) fn prepare_in_steps(bytes: usize, mut step_point: impl FnMut()) {
     // What `zoraya_heap` asks of the backing for this layout: the size in
     // pages, at least a growth.
     let pages = bytes.max(Window::LEAST_GROWTH).div_ceil(PAGE_SIZE) as u64;
-    if pages > frames::stats().free {
+    if pages > frames::available() {
         return;
     }
     // The rounds are bounded, so that threads that take the pages at the

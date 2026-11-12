@@ -250,9 +250,25 @@ note = "INV-0270-1: the old help path, 65 units for one frame (an_allocation_sho
 [[mutant]]
 id = "K-contig-help-without-step-point"
 file = "kernel/src/memory/frames.rs"
-find = 'Err(_) => step_point(),'
-replace = 'Err(_) => {}'
-note = "INV-0270-1: rounds of the reaper's help in one interval, 129 units (a_run_short_of_frames_waits_for_the_reaper_in_steps)"
+find = '''
+                if !crate::reaper::help() {
+                    return Err(e);
+                }
+                step_point();
+'''
+replace = '''
+                if !crate::reaper::help() {
+                    return Err(e);
+                }
+'''
+note = "INV-0270-1: a round of the reaper's help and the next scan in one interval (a_run_short_of_frames_waits_for_the_reaper_in_steps)"
+
+[[mutant]]
+id = "K-contig-scan-in-one-step"
+file = "kernel/src/memory/frames.rs"
+find = 'const SCAN_WORDS: u64 = 48;'
+replace = 'const SCAN_WORDS: u64 = u64::MAX;'
+note = "INV-0270-1: the frame map's scan for a run in steps (a_run_search_over_a_fragmented_map_goes_in_steps)"
 
 [[mutant]]
 id = "K-heap-prepare-in-one-interval"

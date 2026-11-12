@@ -210,6 +210,17 @@ fn free_some(max: usize) -> bool {
     left < max
 }
 
+/// The frames queued and not yet freed. Like `take`, it takes only the
+/// queue's lock, so it runs under the heap's.
+pub fn held() -> u64 {
+    let queue = QUEUE.lock();
+    queue
+        .items
+        .iter()
+        .map(|item| item.frames.len() as u64 + item.run.map_or(0, |(_, count)| count))
+        .sum()
+}
+
 /// For a contiguous run that found none: frees a step of what the reaper
 /// holds, so that a short machine is not refused because teardown has not
 /// caught up. False if there is nothing queued. It is a step of work: the

@@ -93,6 +93,23 @@ pub struct Stats {
     pub free: u64,
 }
 
+/// Where a search for a contiguous run resumes
+/// ([`FrameAllocator::alloc_contig_step`]). The default starts at the first
+/// region.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunSearch {
+    region: usize,
+    number: u64,
+    words: u64,
+}
+
+impl RunSearch {
+    /// The words of the frame map the last step read: its work.
+    pub fn words_read(&self) -> u64 {
+        self.words
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct Region {
     /// Frame number of the first frame.
@@ -323,17 +340,52 @@ impl<'m> FrameAllocator<'m> {
     }
 
     /// Allocates `count` contiguous frames starting at a frame number that
-    /// is a multiple of `align` (a power of two, in frames).
+    /// is a multiple of `align` (a power of two, in frames): the whole search
+    /// at once ([`FrameAllocator::alloc_contig_step`] with no budget).
     pub fn alloc_contig(&mut self, count: u64, align: u64) -> Result<Frame, OutOfFrames> {
+        let mut search = RunSearch::default();
+        loop {
+            if let Some(frame) = self.alloc_contig_step(count, align, &mut search, u64::MAX)? {
+                return Ok(frame);
+            }
+        }
+    }
+
+    /// One step of a search for `count` contiguous frames at a multiple of
+    /// `align`: reads at most about `budget` words of the frame map (one
+    /// candidate run more, at most `count / 64 + 2` words, may pass it),
+    /// then gives `Ok(None)` with `search` saying where to go on. A run is
+    /// taken only after all of it was read free in the same call, so the
+    /// map may change between steps (ADR-0270: the kernel lets interrupts in
+    /// between); a run freed behind the search is not seen by it.
+    /// `Err(OutOfFrames)` when the search has passed every region.
+    pub fn alloc_contig_step(
+        &mut self,
+        count: u64,
+        align: u64,
+        search: &mut RunSearch,
+        budget: u64,
+    ) -> Result<Option<Frame>, OutOfFrames> {
         if count == 0 || !align.is_power_of_two() || count > self.stats.free {
             return Err(OutOfFrames);
         }
-        for ri in 0..self.region_count {
-            let region = self.regions[ri];
-            let mut number = region.first.next_multiple_of(align);
+        search.words = 0;
+        while search.region < self.region_count {
+            let region = self.regions[search.region];
+            let mut number = search
+                .number
+                .max(region.first)
+                .checked_next_multiple_of(align)
+                .ok_or(OutOfFrames)?;
             let limit = region.first + region.frames;
             while number + count <= limit {
-                if let Some(busy) = self.first_used(&region, number, number + count) {
+                if search.words >= budget {
+                    search.number = number;
+                    return Ok(None);
+                }
+                let (busy, words) = self.first_used(&region, number, number + count);
+                search.words += words;
+                if let Some(busy) = busy {
                     number = (busy + 1).next_multiple_of(align);
                     continue;
                 }
@@ -342,18 +394,37 @@ impl<'m> FrameAllocator<'m> {
                     self.storage[region.used + word] |= mask;
                 }
                 self.stats.free -= count;
-                return Ok(Frame(number * FRAME_SIZE));
+                return Ok(Some(Frame(number * FRAME_SIZE)));
             }
+            search.region += 1;
+            search.number = 0;
         }
         Err(OutOfFrames)
     }
 
-    /// The first frame number in `[start, end)` that is not free.
-    fn first_used(&self, region: &Region, start: u64, end: u64) -> Option<u64> {
-        (start..end).find(|n| {
-            let (word, mask) = bit(n - region.first);
-            self.storage[region.used + word] & mask != 0
-        })
+    /// The first frame number in `[start, end)` that is not free, read a word
+    /// at a time, and the number of words read.
+    fn first_used(&self, region: &Region, start: u64, end: u64) -> (Option<u64>, u64) {
+        let mut n = start;
+        let mut words = 0;
+        while n < end {
+            let index = n - region.first;
+            let (word, _) = bit(index);
+            let shift = index % WORD_BITS;
+            let span = (WORD_BITS - shift).min(end - n);
+            let mask = if span == WORD_BITS {
+                u64::MAX
+            } else {
+                (1 << span) - 1
+            };
+            words += 1;
+            let busy = (self.storage[region.used + word] >> shift) & mask;
+            if busy != 0 {
+                return (Some(n + u64::from(busy.trailing_zeros())), words);
+            }
+            n += span;
+        }
+        (None, words)
     }
 
     fn check_free(&self, frame_number: u64) -> Result<(Region, u64), FreeError> {
