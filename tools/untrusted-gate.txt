@@ -19,9 +19,9 @@
 1  disk-filler          pending       Q5      dd into the room's directory and /tmp stops at its limits; home still writes (INV-0265-3, INV-0265-5)
 1  service-floods       pending       Q3      opening files and creating surfaces without end stop at the account's bounds (INV-0262-1)
 1  keeper               pending       Q6a     INV-0269-1 to INV-0269-3: t_rooms covers the keeper's channels and a keeper restarted with `Keep` (stood in for by the test); not run in QEMU yet: init's own restart of the keeper, a launcher's reconnect, and the GUI form of INV-0269-1 (Q6b)
-1  keeper-restart      pending       Q7      Q6a: init restarts a killed keeper in QEMU and the rooms it kept stay (INV-0269-1 to INV-0269-3)
-1  keeper-reconnect     pending       Q7      Q6a: a launcher reconnects to the restarted keeper over the reconnect channel in QEMU
-1  prompt-rebind        pending       Q7      Q6a: zosh's prompt rebinds to the restarted keeper in QEMU
+1  keeper-restart      test-keeper  Q7      Q6a: init restarts a killed keeper in QEMU and the rooms it kept stay (INV-0269-1 to INV-0269-3)
+1  keeper-reconnect     test-keeper  Q7      Q6a: a launcher reconnects to the restarted keeper over the reconnect channel in QEMU
+1  prompt-rebind        test-keeper  Q7      Q6a: zosh's prompt rebinds to the restarted keeper in QEMU
 1  many-rooms           test-qemu     Q6a     t_rooms: four untrusted rooms with a fork bomb and a hog each; home starts 16 processes and maps 16 MiB (INV-0261-8)
 1  hostile-programs     pending       Q7      TASK-21's hostile cases from inside an untrusted room
 1  fuzzing              test-fuzz     Q7      a fuzz target for each decoder an untrusted program reaches that has none (spawn's request, the keeper's, compositor, file service, broker and terminal messages; 10 minutes each in CI)

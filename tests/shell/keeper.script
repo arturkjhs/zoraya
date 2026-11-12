@@ -1,0 +1,73 @@
+# The room keeper restarted in QEMU (TASK-26 Q7; ADR-0269, proposed ADR-0293
+# and ADR-0298; gate rows keeper-restart, keeper-reconnect and prompt-rebind
+# of tools/untrusted-gate.txt). On the test image (feature net-test), `room
+# crash-keeper` asks init to end the keeper with the room running:
+#  - keeper-restart: init starts a new keeper, which finds the room's job again
+#    with its limits and its process (INV-0269-1 to INV-0269-3): the limit still
+#    refuses, `top` still counts the process, the room has one job;
+#  - keeper-reconnect: the shell's next request (`room set`) goes over a new
+#    channel that init gives on the reconnect channel, and the keeper applies it
+#    to the same job;
+#  - prompt-rebind: the prompt before the next line rebinds the shell to the
+#    keeper (zosh calls the keeper's pump before each prompt), so the prompt
+#    keeps the room's name and its lines keep running in the room's job.
+! panicked
+! storage failed
+< Type help to begin
+< \r\n~> 
+> room new agent-1 --mem 64M --procs 16 +w /t/w\r
+< agent-1 --colour 1 --mem 64M --procs 16 +w /t/w
+< \r\n~> 
+> room agent-1\r
+< agent-1 /t/w> 
+> sleep 300 &\r
+< [1] sleep 300
+< agent-1 /t/w> 
+> top\r
+< agent-1
+< of 64M
+< of 16
+< agent-1 /t/w> 
+# keeper-restart: the keeper ends; init starts another.
+> room crash-keeper\r
+< init: the shell asked the room keeper to end
+< init: the room keeper ended
+< init: the room keeper was restarted
+< agent-1 /t/w> 
+# prompt-rebind: the prompt still names the room, and the line runs in its job.
+> grants probe\r
+< limits --mem 64M --procs 16  (room agent-1)
+< agent-1 /t/w> 
+> top\r
+< agent-1
+< of 64M
+< of 16
+< agent-1 /t/w> 
+# The kept job still refuses at its limit (INV-0266-1, INV-0269-1).
+> memhog\r
+< memhog: refused after
+< hint: room agent-1 is at its memory limit of 64M
+< agent-1 /t/w> 
+# keeper-reconnect: a request over the new channel reaches the same job.
+> room set agent-1 --mem 48M\r
+< agent-1 --colour 1 --mem 48M --procs 16 +w /t/w
+< agent-1 /t/w> 
+> grants probe\r
+< limits --mem 48M --procs 16  (room agent-1)
+< agent-1 /t/w> 
+# A second end of the keeper and the same again.
+> room crash-keeper\r
+< init: the room keeper was restarted
+< agent-1 /t/w> 
+> memhog\r
+< memhog: refused after
+< hint: room agent-1 is at its memory limit of 48M
+< agent-1 /t/w> 
+> room --leave\r
+< /t/w> 
+> room remove agent-1 --kill\r
+< /t/w> 
+> room\r
+< home
+< /t/w> 
+> poweroff\r

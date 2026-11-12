@@ -74,7 +74,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: test-keeper test-fuzz test-fuzz-net all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK) $(NET_TEST_KERNEL) $(NET_TEST_RAMDISK)
 
 all: build
@@ -269,7 +269,7 @@ NET_SCRIPT := tests/shell/net.script
 # crash` only asks init, which then has no such path. test-net checks that
 # the image's programs hold none; test-net-fetch that its own hold each, so
 # that a string changed in the source does not make the check pass blind.
-NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash'
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash' 'init:init: the shell asked the room keeper to end' 'zosh:no room keeper to end'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
 		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[net] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
@@ -760,6 +760,22 @@ test-fuzz:
 test-fuzz-net:
 	tools/run-fuzz.sh $(FUZZ_SECONDS) $(FUZZ_JOBS) $(FUZZ_NET_TARGETS)
 
+# The room keeper ended in QEMU (Q7; gate rows keeper-restart, keeper-reconnect
+# and prompt-rebind): the test image's `room crash-keeper` (feature net-test,
+# proposed ADR-0298) ends the keeper under a running room; init restarts it,
+# the shell reconnects and rebinds.
+KEEPER_SCRIPT := tests/shell/keeper.script
+test-keeper: $(NET_TEST_KERNEL) $(RUNNER) tools-storage
+	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[keeper] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
+	mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/
+	target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(NET_TEST_KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+	$(FULL_ONLY) target/debug/zoraya-mkfs --size 16M --from $(GRANTS_ROOT) $(CRASH_IMAGE) && \
+		$(RUNNER) --timeout $(QEMU_SLOW_TIMEOUT) --script $(KEEPER_SCRIPT) --label keeper-tcg -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel tcg $(NET_TEST_KERNEL) && \
+		target/debug/zoraya-fsck $(CRASH_IMAGE)
+
 # Crashes at random points. CRASH_ROUNDS=200 for the number in the report.
 test-crash: $(KERNEL) tools-storage
 	$(CARGO) build -q -p zoraya-test-runner
@@ -912,7 +928,7 @@ check-tokens:
 # `make test` prints a summary and keeps each step's output in build/logs/;
 # `make test V=1` prints everything as it runs.
 TEST_STEPS := fmt-check clippy test-unit adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports test-qemu test-boot test-files test-libposix test-posix test-posix-gui test-tour-gui test-crash test-gui test-net
-TEST_STEPS += check-ci-jobs test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-ethd-maps
+TEST_STEPS += check-ci-jobs test-keeper test-fuzz test-fuzz-net check-charged-alloc check-untrusted-gate check-ethd-maps
 
 # CI (ADR-0213's Decision): one job builds what every test needs, and every
 # step of TEST_STEPS is a job of its own, test-qemu one a configuration and

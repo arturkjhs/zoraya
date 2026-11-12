@@ -357,7 +357,21 @@ impl RoomKeeper {
 fn answer_reconnect(reconnect: Handle, rooms: Option<&RoomKeeper>, kind: u32) {
     let mut buf = [0u8; 16];
     let mut handles = [reconnect; 1];
-    while zoraya_user::channel_read(reconnect, &mut buf, &mut handles).is_ok() {
+    while let Ok(sizes) = zoraya_user::channel_read(reconnect, &mut buf, &mut handles) {
+        // The test image's `room crash-keeper` (proposed ADR-0298): the
+        // shell asks for the keeper to end, so that the run of `init`'s
+        // restart, the reconnect and the prompt's rebind can be tested in
+        // QEMU. No other image looks.
+        #[cfg(feature = "net-test")]
+        if &buf[..(sizes.bytes as usize).min(buf.len())] == b"crash" {
+            if let Some(r) = rooms {
+                println!("init: the shell asked the room keeper to end (a test)");
+                let _ = zoraya_rt::job_kill(r.job);
+            }
+            continue;
+        }
+        #[cfg(not(feature = "net-test"))]
+        let _ = sizes;
         let new = rooms.and_then(|r| r.channel(kind, ""));
         let entry = new.map(|h| zoraya_abi::ChannelEntry {
             handle: h,
