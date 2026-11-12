@@ -293,7 +293,8 @@ fn removed_items_go_stale_and_are_bounded() {
 
 /// R-02 of the TASK-09 review: closing a handle with many ready subscriptions,
 /// keys in the worst order for the sorted list. A quadratic path takes 16
-/// times as long for 4 times the size, and this allows 8.
+/// times as long for 4 times the size, and this allows 8. A port holds at most
+/// `MAX_SUBSCRIPTIONS`, so the sizes are 256 and that.
 #[test]
 fn ending_a_handle_is_not_quadratic() {
     use std::time::{Duration, Instant};
@@ -310,9 +311,66 @@ fn ending_a_handle_is_not_quadratic() {
         time
     }
     let best = |n| (0..5).map(|_| run(n)).min().unwrap();
-    let (small, large) = (best(20_000), best(80_000));
+    let (small, large) = (best(256), best(MAX_SUBSCRIPTIONS as u64));
     assert!(
         large < small * 8 + Duration::from_millis(5),
         "{small:?} {large:?}"
     );
+}
+
+/// ADR-0299: a port takes `MAX_SUBSCRIPTIONS` subscriptions, to any sources,
+/// and refuses the next; an unsubscribe makes room, and the refusal changed
+/// nothing.
+#[test]
+fn a_port_holds_a_bounded_number_of_subscriptions() {
+    let mut e = E::new();
+    let port = e.new_port().unwrap();
+    for key in 0..MAX_SUBSCRIPTIONS as u64 {
+        let source = e.new_source(0).unwrap();
+        e.subscribe(port, source, A, key, Mode::Level, 0).unwrap();
+    }
+    let source = e.new_source(0).unwrap();
+    let key = MAX_SUBSCRIPTIONS as u64;
+    assert_eq!(
+        e.subscribe(port, source, A, key, Mode::Level, 0),
+        Err(Error::TooMany)
+    );
+    assert_eq!(e.subscription_count(), MAX_SUBSCRIPTIONS);
+    e.unsubscribe(port, 7).unwrap();
+    e.subscribe(port, source, A, key, Mode::Level, 0).unwrap();
+    assert_eq!(
+        e.subscribe(port, source, A, key + 1, Mode::Level, 0),
+        Err(Error::TooMany)
+    );
+    // Another port is not affected, and a closed port gives its room back.
+    let other = e.new_port().unwrap();
+    e.subscribe(other, source, A, 0, Mode::Level, 0).unwrap();
+    e.close_port(port, &mut drop_wake());
+    assert_eq!(e.subscription_count(), 1);
+}
+
+/// ADR-0299: a source takes `MAX_SUBSCRIPTIONS` subscriptions, from any
+/// ports, so the walk of `set` is a fixed amount.
+#[test]
+fn a_source_has_a_bounded_number_of_subscriptions() {
+    let mut e = E::new();
+    let source = e.new_source(0).unwrap();
+    let mut ports = Vec::new();
+    for _ in 0..MAX_SUBSCRIPTIONS {
+        let port = e.new_port().unwrap();
+        e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
+        ports.push(port);
+    }
+    let port = e.new_port().unwrap();
+    assert_eq!(
+        e.subscribe(port, source, A, 0, Mode::Level, 0),
+        Err(Error::TooMany)
+    );
+    e.set(source, A, &mut drop_wake());
+    for port in ports {
+        assert_eq!(keys(&mut e, port), [0]);
+    }
+    e.remove_owner(source, 0);
+    assert_eq!(e.subscription_count(), 0);
+    e.subscribe(port, source, A, 0, Mode::Level, 0).unwrap();
 }

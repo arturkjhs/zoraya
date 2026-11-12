@@ -13,13 +13,13 @@ use zoraya_abi::snapshot::Encoder as SnapshotEncoder;
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     CONSOLE, ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags,
-    MemoryFlags, OBJECT_TYPES, ObjectType, RequestKind, Rights, Status,
+    MemoryFlags, Mode, OBJECT_TYPES, ObjectType, RequestKind, Rights, Status, job_signals,
 };
 use zoraya_user::{
     channel_create, channel_write, clock_monotonic, handle_close, handle_type, image, job_create,
     job_get_usage, job_kill, job_resume, job_signal, job_suspend, memory_create, memory_map,
-    memory_unmap, println, process_exit, raw_syscall, sleep_until, snapshot_process, spawn,
-    startup, wait_exit,
+    memory_unmap, port_create, port_subscribe, println, process_exit, raw_syscall, sleep_until,
+    snapshot_process, spawn, startup, wait_exit,
 };
 
 const MASKED_MAX_NS: u64 = 0x7013;
@@ -563,6 +563,48 @@ fn job_tree_sites() {
     }
 }
 
+/// ADR-0270, ADR-0299, INV-0270-1: a port holds at most 1024 subscriptions and
+/// a source has at most 1024, so the sorted insert, the walk of `set` (a job
+/// signal that rises) and the close of the port are a fixed amount. One port,
+/// one source, keys in descending order (each insert goes to the front of the
+/// sorted list), against a port with 8; the call after the limit is refused.
+fn subscription_sites() {
+    let max = 1024u64;
+    let mut results = [(0, 0); 3];
+    for (round, n) in [8u64, max].into_iter().enumerate() {
+        let job = job_create(JOB, JobFlags::NONE).expect("job");
+        let port = port_create().expect("port");
+        let mut worst = 0;
+        for key in (0..n).rev() {
+            let (r, ns) =
+                measure(|| port_subscribe(port, job, job_signals::SUSPENDED, key, Mode::Edge));
+            r.expect("subscribe");
+            worst = worst.max(ns);
+        }
+        if n == max {
+            let r = port_subscribe(port, job, job_signals::SUSPENDED, max, Mode::Edge);
+            assert_eq!(r, Err(Status::LimitReached), "the 1025th subscription");
+        }
+        let (_, signal) = measure(|| job_suspend(job).expect("suspend"));
+        let (_, close) = measure(|| handle_close(port).expect("close"));
+        let r = [worst, signal, close];
+        for at in 0..3 {
+            if round == 0 {
+                results[at].0 = r[at];
+            } else {
+                results[at].1 = r[at];
+            }
+        }
+        handle_close(job).expect("close");
+    }
+    for (at, site) in ["port_subscribe", "signal of a source", "port close"]
+        .into_iter()
+        .enumerate()
+    {
+        check(site, results[at].0, results[at].1);
+    }
+}
+
 fn teardown_sites() {
     teardown("a process holding 24 MiB", b"hold-short", b"hold-long");
     teardown("400 objects of 256 KiB", b"crowd-short", b"crowd-long");
@@ -630,6 +672,7 @@ fn inner() -> i32 {
     let (step, big) = chain_close();
     check("channel chain close", step, big);
     job_tree_sites();
+    subscription_sites();
     teardown_sites();
     a_kill_between_steps_leaves_nothing();
     println!("t_bound: all passed");

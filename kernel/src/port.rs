@@ -21,7 +21,7 @@ fn status(e: Error) -> Status {
         Error::Closed => Status::BadState,
         Error::KeyInUse => Status::InvalidArgument,
         Error::NoSuchKey => Status::NotFound,
-        Error::Full => Status::LimitReached,
+        Error::Full | Error::TooMany => Status::LimitReached,
     }
 }
 

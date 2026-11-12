@@ -286,6 +286,10 @@ and exits.
   against a tree of 8 (units on every host, time at factor 1). Not changed: `Job::drop`'s `retain` and the growth of
   `children` are linear in the parent's children, in one interval each (bounded by the memory limit; a later task);
   the drop of a long chain of jobs (each holds its parent) runs in whichever call drops the last handle.
+- *Q7 review note (agent), subscriptions:* `port_subscribe`, `Events::set`, closing a port and freeing a source are linear in
+  the subscriptions of a port or a source, under `EVENTS` and in interrupt handlers, where a walk cannot pause (review
+  error 2). They are bounded, not stepped: ADR-0299 (proposed) limits both to 1024, so each is a fixed amount; the frees
+  of up to 1024 `Paid` are not counted in units, only timed (`t_bound`).
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 

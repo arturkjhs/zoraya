@@ -29,6 +29,14 @@ use zoraya_abi::{Mode, PACKET_SIGNAL, PACKET_USER, Packet};
 /// fixed bound stops one sender from taking all of it).
 pub const MAX_USER_PACKETS: usize = 1024;
 
+/// Subscriptions one port can hold, and subscriptions one source can have
+/// (ADR-0299). The calls that walk them (`subscribe`'s insertion, `set`,
+/// `close_port`, `free_source`) run with IRQ masked, in the caller's call or
+/// in another process's, so their length is a fixed amount (ADR-0270). 1024
+/// is a handle table's size: a service needs one subscription per handle it
+/// serves, and the services keep less.
+pub const MAX_SUBSCRIPTIONS: usize = 1024;
+
 /// What can go wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
@@ -41,6 +49,9 @@ pub enum Error {
     NoSuchKey,
     /// The port holds as many user packets as it may.
     Full,
+    /// The port, or the source, holds as many subscriptions as it may
+    /// ([`MAX_SUBSCRIPTIONS`]).
+    TooMany,
 }
 
 /// Takes a slot. `free` always has room for every slot, so that giving one
@@ -333,6 +344,7 @@ impl<W, P> Events<W, P> {
         owner: u64,
         paid: P,
     ) -> Result<(), Error> {
+        let source_full = self.source(source.0).subscriptions.len() >= MAX_SUBSCRIPTIONS;
         let port = self.port(port_id.0);
         if port.closed {
             return Err(Error::Closed);
@@ -341,6 +353,9 @@ impl<W, P> Events<W, P> {
             Ok(_) => return Err(Error::KeyInUse),
             Err(at) => at,
         };
+        if source_full || port.subscriptions.len() >= MAX_SUBSCRIPTIONS {
+            return Err(Error::TooMany);
+        }
         // Stale items are bounded by what is live, so subscribing and removing
         // in a loop cannot grow the list.
         if port.stale > port.subscriptions.len() + port.user {
