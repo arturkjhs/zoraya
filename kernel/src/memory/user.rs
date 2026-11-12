@@ -444,9 +444,6 @@ impl AddressSpace {
         Ok(self.mappings.remove(index).holder)
     }
 
-    /// Takes the last mapping off the list and gives its holder, for an exit
-    /// that drops them in steps. The pages stay in the table, which nothing
-    /// runs on again: the table goes with the space.
     /// Makes this process the holder of transport device `device`, if it
     /// is not already (INV-0295-3).
     pub fn hold(&mut self, device: &Arc<Device>) -> Result<&DeviceClaim, Status> {
@@ -477,6 +474,9 @@ impl AddressSpace {
         Some(self.claims.swap_remove(at))
     }
 
+    /// Takes the last mapping off the list and gives its holder, for an exit
+    /// that drops them in steps. The pages stay in the table, which nothing
+    /// runs on again: the table goes with the space.
     pub fn pop_mapping(&mut self) -> Option<Holder> {
         self.mappings.pop().map(|m| m.holder)
     }

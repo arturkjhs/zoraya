@@ -263,9 +263,16 @@ NET_PCAP := target/test-logs/test-net.pcap
 # Forwarded to the guest so that SLIRP asks who has 10.0.2.15 (tools/net-poke.sh).
 NET_FWD_PORT := 47015
 NET_SCRIPT := tests/shell/net.script
+# INV-0296-1: a string of each of the test image's Crash paths (feature
+# net-test), as PROGRAM:STRING: netd's end on request, init's request on its
+# control connection and its look for the volume's file. The shell's `net
+# crash` only asks init, which then has no such path. test-net checks that
+# the image's programs hold none; test-net-fetch that its own hold each, so
+# that a string changed in the source does not make the check pass blind.
+NET_CRASH_MARKS := 'netd:netd: ended on request' 'init:init: the shell asked the network service to end' 'init:etc/zoraya/net-crash'
 test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
-	@# INV-0296-1: the image's netd has no Crash path (feature net-test).
-	@if grep -a -q 'netd: ended on request' $(USER_DIR)/netd; then echo "[net] FAIL: INV-0296-1: the image's netd ends on request"; exit 1; fi
+	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		if grep -a -q "$$s" $(USER_DIR)/$$f; then echo "[net] FAIL: INV-0296-1: the image's $$f holds '$$s'"; exit 1; fi; done
 	@$(RUN_QEMU) --probe-net; rc=$$?; \
 	if [ $$rc = 1 ]; then \
 		if [ -n "$$CI" ]; then echo "[net] FAIL: no user-mode networking on a CI runner"; exit 1; fi; \
@@ -323,6 +330,8 @@ $(HTTPD): tools/test-httpd/src/main.rs
 	$(CARGO) build -q -p zoraya-test-httpd
 
 test-net-fetch: $(NET_TEST_KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@for m in $(NET_CRASH_MARKS); do f=$${m%%:*}; s=$${m#*:}; \
+		grep -a -q "$$s" $(NET_TEST_USER_DIR)/$$f || { echo "[net-fetch] FAIL: INV-0296-1's check is blind: $$f holds no '$$s'"; exit 1; }; done
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-fetch] skipped: QEMU has no user-mode networking"; exit 0; }; \
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \

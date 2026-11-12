@@ -113,18 +113,13 @@ pub fn init(fdt: &Fdt<'_>) {
             size: transport.size.clamp(REG_STATUS as u64 + 4, TRANSPORT_SIZE),
         };
         if let Some(device) = devices.iter_mut().find(|d| d.base == base) {
-            // Sorted by base, so the page's last range is the one before.
-            let last = device.ranges.iter().flatten().last().copied();
-            if last.is_some_and(|last| !follows(&last, &range)) {
-                println!(
+            match place(&mut device.ranges, range) {
+                Ok(()) => {}
+                Err(LeftOut::Overlaps) => println!(
                     "device: {:#x} overlaps the transport before it, left out",
                     transport.base
-                );
-                continue;
-            }
-            match device.ranges.iter_mut().find(|r| r.is_none()) {
-                Some(slot) => *slot = Some(range),
-                None => println!(
+                ),
+                Err(LeftOut::Full) => println!(
                     "device: {:#x} is past {MAX_RANGES} in a page, left out",
                     transport.base
                 ),
@@ -163,6 +158,53 @@ fn follows(last: &Range, range: &Range) -> bool {
     last.offset
         .checked_add(last.size)
         .is_some_and(|end| end <= range.offset)
+}
+
+/// Why `init` left a transport out of its page.
+enum LeftOut {
+    /// Its block overlaps the one before it (INV-0295-1).
+    Overlaps,
+    /// The page has [`MAX_RANGES`] transports already.
+    Full,
+}
+
+/// Adds `range` to a page's `ranges`, which `init` fills in order of
+/// offset, so the page's last range is the one before it.
+fn place(ranges: &mut [Option<Range>; MAX_RANGES], range: Range) -> Result<(), LeftOut> {
+    let last = ranges.iter().flatten().last();
+    if last.is_some_and(|last| !follows(last, &range)) {
+        return Err(LeftOut::Overlaps);
+    }
+    let slot = ranges
+        .iter_mut()
+        .find(|r| r.is_none())
+        .ok_or(LeftOut::Full)?;
+    *slot = Some(range);
+    Ok(())
+}
+
+/// What `init` keeps of a page's transports, given as (offset, size)
+/// blocks in order of offset, the first already placed as `init` places
+/// it: bit `i` is set if block `i` was kept. For the test kernel.
+#[cfg(feature = "qemu-test")]
+pub fn blocks_kept(blocks: &[(u64, u64)]) -> u32 {
+    let range = |&(offset, size): &(u64, u64)| Range {
+        offset,
+        intid: 0,
+        edge: false,
+        size,
+    };
+    let mut ranges = [None; MAX_RANGES];
+    let mut kept = 0;
+    for (i, block) in blocks.iter().enumerate() {
+        if i == 0 {
+            ranges[0] = Some(range(block));
+            kept |= 1;
+        } else if place(&mut ranges, range(block)).is_ok() {
+            kept |= 1 << i;
+        }
+    }
+    kept
 }
 
 /// [`follows`] for blocks at `a` and `b` of the given sizes, for the test

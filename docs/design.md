@@ -1927,8 +1927,8 @@ ADR-0221 items 5, 6 and 8).
   0x100). The offset must be a multiple of the width with the access inside the transport's block (at most 0x200 bytes; a
   transport whose block would overlap the one before it is left out at boot); a page device has no register calls, a
   transport device has no mapping and no transports. Pins, quarantine, reset and the interrupt are per transport. The first
-  write makes a process the transport's *holder* (kept in its address space, ended with its last handle that can write the
-  transport, or its exit): one holder at a time, none while the page is mapped, and the page is neither mapped nor released
+  write makes a process the transport's *holder* (kept in its address space, ended when its last handle that can write the
+  transport is closed or moved, or with its exit): one holder at a time, none while the page is mapped, and the page is neither mapped nor released
   while a transport has a holder or a live pin, nor a transport released while its page is mapped (INV-0295-3). `init` maps each page once to read the identifiers (`Page::One` goes to its
   driver whole, as before); a `Page::Several` is never given: each transport is split with `device_transport`, identified by
   `device_read`, and given to its driver, which opens it with `zoraya_user::mmio::Window::open` (a mapping, or calls if the
@@ -2104,7 +2104,9 @@ ADR-0221 items 5, 6 and 8).
 - **A shared virtio page** (ADR-0295, N6). The register calls give each driver of a shared page only its own transport; a
   mapping of the page and a transport's holder exclude each other, but a process that maps the page (only `init`, once, to read
   the identifiers) sees every transport while it does. A page device's `dma_release_quarantine` resets every transport of the
-  page. A transport's hold whose handle was moved to another process lasts until the first one ends. Reading a transport needs
+  page, and holds the page's lock across each transport's reset (up to 100 ms), so another transport's calls on the page
+  wait behind it. A pin through a transport is allowed while the page is mapped or another process holds the transport (a
+  pin starts nothing); a live pin refuses the mapping and the releases. Reading a transport needs
   no hold, so another holder of a transport handle can read its registers (a read restarts nothing). A register read or write on
   a shared page costs a system call (1.4 microseconds under HVF).
 - **The network on the desktop** (N6). A shell started by the panel has no network connection and no services channel (only the

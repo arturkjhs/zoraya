@@ -59,13 +59,18 @@ choice needs. It changes ADR-0091 only for a page with more than one device.
    driver's death resets its transport and no other. Interrupt lines are taken once, by line, as before.
 3a. **Holders (N6 review, finding 1).** A transport device and its page are one device to ADR-0070. A process that
    writes a transport's registers becomes its *holder*: the kernel keeps the hold in the process's address space and ends
-   it when the process closes its last handle to the transport that has `WRITE`, or ends. A transport has at most one
+   it when the process no longer has a handle to the transport with `WRITE`, whether it closed its last one or moved it
+   (`Move` at `spawn`, `channel_write` or `snapshot_process`; re-review N6 finding 1), or when it ends. A transport has at most one
    holder, and none while its page is mapped; a second writer, or a writer while the page is mapped, gets `BadState`.
    The page cannot be mapped, nor its quarantine released, while any of its transports has a holder or a live pin; a
    transport's quarantine is released only with no holder, no live pin and its page unmapped. Reading needs no hold (a
-   read restarts nothing), so `init` identifies a transport without holding it. A hold whose handle was moved to another
-   process (`channel_write`) lasts until the first process ends: the safe direction. Lock order: the page's state, then a
-   transport's.
+   read restarts nothing), so `init` identifies a transport without holding it. A hold ends before the process a handle
+   moved to can write: `channel_write` ends it before the message is queued, and at `spawn` and `snapshot_process` the
+   child runs only after the call returns (the kernel is not preempted and schedules on one CPU, design.md). The
+   exclusion is one-way for pins (re-review N6 finding 2): `dma_pin` through a transport is allowed while its page is
+   mapped or another process holds the transport, since a pin starts nothing; a live pin then refuses the page's mapping
+   and both releases (`t_devices` pins through a transport of a mapped page to build the first review's scenario). Lock
+   order: the page's state, then a transport's.
 3b. **Blocks do not overlap.** At boot a transport whose block (offset and size, as clamped above) would overlap the one
    before it in its page is left out with a message (N6 review, finding 5), so no transport device reaches a neighbour's
    registers whatever the device tree says.
@@ -92,7 +97,11 @@ access is the price of a desktop with a network.
 
 ## Consequences
 - **Positive.** `--gui --net` works on `virt`; the RTC and any later device get the same way; no driver logic changed.
-- **Negative.** A system call per register access on a shared page; two paths to the registers (mapping, call).
+- **Negative.** A system call per register access on a shared page; two paths to the registers (mapping, call). A
+  release holds the page's state lock across a transport's reset, which waits for the device up to `RESET_NANOS`
+  (100 ms, ADR-0070) with the lock held (re-review N6 finding 4): bounded, as ADR-0270 asks of kernel work, but a
+  claim, a mapping or a release on another transport of the same page spins behind it meanwhile. Releases are rare (a
+  driver's restart), and a virtio reset QEMU emulates ends at once.
 - **Follow-up.** The cost of a call is measured in the report (N6). If a page is ever shared by a disk and a driver that
   notifies at a high rate, the call's cost should be measured again.
 
@@ -101,7 +110,7 @@ access is the price of a desktop with a network.
   access whose width is not 1, 2 or 4, narrower than 4 below the configuration (0x100), whose offset is not a multiple
   of its width, or that is not inside the block, is refused, a page device has no register calls, a transport device has no mapping, no `MAP` and no transports, and no
   two blocks of a page overlap. *Check:* `t_devices` (`transport_devices`) and the kernel test
-  `overlapping_transports_are_left_out` in `make test-qemu`.
+  `overlapping_transports_are_left_out` (the rule, and `init`'s placing of a page's blocks) in `make test-qemu`.
 - **INV-0295-2.** On a shared page `init` gives no driver the page, only its transport. *Check:* `make test-gui` with
   `tests/gui/net.script`: the machine with `--gui --net` boots, `init` reports the shared page, the network has its lease
   and the terminal shows `net status`.
@@ -109,9 +118,11 @@ access is the price of a desktop with a network.
 - **INV-0295-3.** A transport device and its page are never driven by two processes at once, and neither's quarantine is
   released while the other could restart the device: a transport has at most one holder and none while its page is
   mapped; a page is not mapped or released while a transport has a holder or a live pin; a transport is not released
-  while its page is mapped or it has a holder or a live pin. *Check:* `t_devices`
+  while its page is mapped or it has a holder or a live pin. The exclusion is one-way for pins: a mapping or a holder
+  does not refuse a pin (item 3a). *Check:* `t_devices`
   (`a_transport_and_its_page_keep_holders_apart`: the review's scenario, a second writer, the hold's end with the last
-  handle and with the holder's exit) in `make test-qemu`.
+  handle and with the holder's exit; `the_hold_ends_with_a_move`: a held transport moved to a child at `spawn`, and over
+  a channel, where the page maps and is released while the message is queued) in `make test-qemu`.
 
 ## Open questions
 - The cost of a register call under HVF and TCG (report, N6).

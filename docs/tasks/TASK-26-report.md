@@ -1636,8 +1636,8 @@ Fixed (tests written first where a test can show it):
    rights less `MAP` for one, `stack::driver_rights`). Test: `t_devices` `a_transport_and_its_page_keep_holders_apart` (the review's
    scenario failed before the fix: `dma_release_quarantine(t) succeeded`; then a second writer in a child, the hold's end with the last
    handle and with the child's exit, live pins refusing the page). New INV-0295-3, `checked: make test-qemu`. Reads take no hold (they
-   restart nothing), so `init` identifies a transport without holding it; a hold whose handle was moved away lasts until the process
-   ends (ADR-0295 item 3a, `docs/design.md` Known limitations).
+   restart nothing), so `init` identifies a transport without holding it; a hold whose handle was moved away lasted until the process
+   ended (corrected by the re-review's finding 1 below).
 2. **Warning, `Crash` was a persistent denial of the network.** The Crash path is built only with the `zoraya-user` feature `net-test`,
    which only `make test-net-fetch`'s image has (`build/zoraya-kernel-net-test.elf`, ramdisk `build/ramdisk-net-test.bin`, target
    directories `target/user-net-test` and `target/net-test`; `make ci-build` builds it and `make clippy` lints the feature). In that image
@@ -1680,3 +1680,29 @@ The answers to the handoff's review questions: (2) and (3) are finding 1's fix, 
   `a_spawn_with_a_big_space_is_bounded`** (`NoMemory`; 117 passed, the 9 expected panics), the intermittent failure above. test-net's
   new INV-0296-1 check of the image's `netd` passed before the boot.
 - State: branch `work/n6` pushed, tag `candidate/work-n6` on its head for CI's candidate run.
+
+### Re-review of N6 (Opus, head 4cc31c3) and its dispositions
+
+1. **Warning, a `Move` did not end a transport's hold** (fixed). Only `handle_close` ended it, so a driver that moved its only
+   transport handle (at `spawn`, over a channel, at `snapshot_process`) kept the hold until it exited: the receiver's first write,
+   and `init`'s `device_map` and `dma_release_quarantine` on the page, got `BadState`. One helper, `Calls::end_hold_if_unwritable`
+   (`kernel/src/syscall.rs`), now runs after every removal: `handle_close`, the moves of `spawn` and `snapshot_process`, and
+   `channel_write` before the message is queued. Test first: `t_devices` `the_hold_ends_with_a_move` (failed before the fix,
+   "the child the handle moved to writes", 1 for 0): a held transport moved to a child at `spawn` and its write succeeds; moved
+   over a channel, the page maps and is released while the message is queued, and the reader's child writes. Mutants
+   `K-transport-hold-kept-on-spawn-move` and `K-transport-hold-kept-on-channel-move` in `tools/mutants/kernel-objects.toml`.
+   ADR-0295 item 3a, INV-0295-3 and `docs/design.md` say so; the limitation is gone from Known limitations.
+2. **Note, pins are one-way** (recorded). `dma_pin` through a transport is allowed while the page is mapped or another process
+   holds the transport (a pin starts nothing; `t_devices` builds the first review's scenario so); a live pin refuses the mapping
+   and both releases. ADR-0295 item 3a, INV-0295-3 and `docs/design.md`.
+3. **Note, `init`'s overlap `continue` was untested** (fixed). The placing of a transport in its page is `device::place`, which
+   `init` calls; the kernel test `overlapping_transports_are_left_out` runs it on a built list through `blocks_kept` (the
+   overlapping block left out and the next kept, nine blocks of which eight kept). Mutant `K-transport-overlap-kept`.
+4. **Note, the page's lock across a reset's spin** (recorded): ADR-0295 Consequences and `docs/design.md` (bounded by
+   `RESET_NANOS`, 100 ms; other transports of the page wait behind it). ADR-0270 is accepted and not edited.
+5. **Note, two doc comments** (fixed): `AddressSpace::pop_mapping` has its own again and `hold` only its own;
+   `device_transport` says its handle has the device rights but `MAP`.
+6. **Note, INV-0296-1's check was a canary** (fixed). `NET_CRASH_MARKS` in the `Makefile` lists a string of each `Crash` path
+   (`netd`'s end, `init`'s request and its look for `/etc/zoraya/net-crash`); `make test-net` fails if the image's `netd` or `init`
+   holds one, and `make test-net-fetch` fails if its own image's lacks one (a check that cannot go blind). The shell's `net crash`
+   path has no string and only asks `init`. ADR-0296 and the invariants table say so.

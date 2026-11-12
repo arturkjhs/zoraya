@@ -76,8 +76,11 @@ shell was handed at start. *ADR-0080* restarts the shell with the storage stack 
 ## Invariants
 - **INV-0296-1.** No image but `make test-net-fetch`'s has a way to end `netd` on request, whatever its volume holds: its
   `netd` answers `Crash` as an unknown ordinal; in the test image only `init`'s control connection can send one.
-  *Check:* `make test-net`: the image's `netd` holds no `netd: ended on request`, and on its boot (`tests/shell/net.script`) `net crash`
-  leaves the service up and `net status` answers after it.
+  *Check:* `make test-net`: the image's `netd` and `init` hold none of the strings of the test image's `Crash` paths
+  (`NET_CRASH_MARKS` in the `Makefile`: `netd`'s end on request, `init`'s request on its control connection and its look
+  for `/etc/zoraya/net-crash`), `make test-net-fetch` checks that its own programs hold each (so the check is not blind),
+  and on the image's boot (`tests/shell/net.script`) `net crash` leaves the service up and `net status` answers after it.
+  The shell's `net crash` path has no string; it only asks `init`, whose path the check covers (re-review N6 finding 6).
 - **INV-0221-3 and INV-0221-4** (ADR-0221): the first for `init` and the shell. *Check:* `tests/shell/net-fetch.script`:
   three `net crash` with a fetch after each, the fourth leaves the network down and the next line is refused.
 

@@ -437,3 +437,25 @@ file = "kernel/src/syscall.rs"
 find = '                space.reserve_step();'
 replace = ''
 note = "INV-0270-1: room in the space's list before a step of memory_map (survives at 128 MiB)"
+
+[[mutant]]
+id = "K-transport-overlap-kept"
+file = "kernel/src/device.rs"
+find = '        return Err(LeftOut::Overlaps);'
+replace = ''
+note = "INV-0295-1 (re-review N6 finding 3): init leaves out a transport whose block overlaps the one before it"
+
+[[mutant]]
+id = "K-transport-hold-kept-on-spawn-move"
+file = "kernel/src/syscall.rs"
+find = '                    self.end_hold_if_unwritable(&entry.object);'
+replace = ''
+note = "INV-0295-3 (re-review N6 finding 1): a Move at spawn of the last handle that can write a transport ends the hold"
+
+[[mutant]]
+id = "K-transport-hold-kept-on-channel-move"
+file = "kernel/src/syscall.rs"
+find = '                self.end_hold_if_unwritable(&entry.object);'
+occurrence = 2
+replace = ''
+note = "INV-0295-3 (re-review N6 finding 1): a Move over a channel of the last handle that can write a transport ends the hold"

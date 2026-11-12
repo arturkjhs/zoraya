@@ -935,9 +935,9 @@ impl Handlers for Calls<'_> {
     }
 
     /// ADR-0295: the device of one transport of a page, for a holder of the
-    /// page with `MAP`. The new handle has the rights of a device handle
-    /// (the kernel refuses `device_map` on it), so it passes where the page's
-    /// would, to the one driver whose transport it is.
+    /// page with `MAP`. The new handle has the rights of a device handle but
+    /// `MAP` (a transport device is never mapped), so it passes where the
+    /// page's would, to the one driver whose transport it is.
     fn device_transport(&mut self, device: Handle, index: RangeIndex) -> Result<u64, Status> {
         let Object::Device(device) = self.object(device, Rights::MAP)? else {
             return Err(Status::BadHandle);
