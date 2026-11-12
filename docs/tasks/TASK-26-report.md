@@ -967,3 +967,87 @@ parsers: `parse_sockaddr_in`, `inet_pton4`, `inet_aton` and `plan` are total by 
 - 11 (for Q7's gate tests): a literal `url` operand designates the network with no check of the room's trust, for native and POSIX
   programs alike, and trust is by path: any binary at `/bin/zfetch` gets the designated network (ADR-0153 rule 10's posture; the gate
   refuses untrusted rooms for now). Q7's gate tests must cover it before the gate is lifted.
+
+## N5: HTTPS with a real clock and real randomness (branch `work/n5`, on `main` at a322e23)
+
+### Built
+
+- **Step 0 (disk).** 44 GB free at the start (the task's threshold is 25 GB): nothing removed.
+- **The clock** (ADR-0226; commit c1c2993): `zoraya_dtb::platform::rtc`, the PL031 as a `Device` (one range, `intid` 0) at slot 5,
+  `FIRST_DEVICE_SLOT` 7; `init::stack::read_rtc` and `fsd --time-floor`; `time_base(latest, monotonic, floor)`; `ZNS1` with a 32-byte
+  header and `realtime_base`; `zoraya_user::namespace::realtime()`; the `date` command; the runner's `D SECONDS` step compares a UTC
+  line with the host's clock when it reads it.
+- **The random service** (ADR-0227; abf7d69): the seed in a memory object at slot 6; crate `zoraya-rng` (ChaCha20 with fast key erasure,
+  protocol, service logic); `rngd`; the shell's connection at slot 10 and a `random` slot in `ZNS1` for each native program;
+  `zoraya_user::random`; the `random` command; the runner's `U N PREFIX` step (N words after a prefix, all different).
+- **TLS** (ADR-0228; a92ae82, 3b22dde): `zoraya-tls`, `fetch https://`, `zoraya-http` with `tls`, the roots in the shell's table
+  (`/system/tls/roots`, 108 Mozilla roots as CDLA-Permissive-2.0 data), the vendored ring, `tools/ring-cc`, `tools/ring-include`, the
+  TLS terminators of `tools/test-httpd`, the test PKI `tests/net/tls`, `docs/dependencies.md`, `docs/design.md`.
+
+### The provider check, corrected
+
+N1 said ring builds for `aarch64-unknown-none`. It built the objects; the **link** failed (`ring_core_*_bn_mul4x_mont` and the other
+assembly routines) because ring's `build.rs` assembles its aarch64 assembly only for the operating systems it lists, and the host's
+`ar` makes an empty archive of ELF objects. Fixed by a vendored ring with one line changed (`tools/vendor-ring.sh`), `tools/ring-cc` and
+`zoraya-ar` (`.cargo/config.toml`). BearSSL was not needed. Cost: 8 MB in `vendor/`; `check-host-paths` leaves `vendor/` alone
+(its authors' addresses). Proposed ADR-0289 records it.
+
+### Decisions where the ADRs are silent (proposed ADR-0288 and ADR-0289; recommendations)
+
+The numbers are the next free of the task's 0280 to 0299 (the task reserved a range, not numbers). ADR-0288: the RTC device shape, the
+slot layout, `ZNS1`'s growth, the seed object, the generator's construction (ours: for the reviewer), the service, what is not built.
+ADR-0289: ring's vendoring, the TLS crate, `fetch https`, the roots file, the test servers on ports (not `guestfwd` 443).
+
+### Invariants delta
+
+INV-0226-1, -2, INV-0227-2, -3 and INV-0228-1 are `checked`. INV-0226-3 (a POSIX `time()` against `realtime()`) is not tested in QEMU
+(both come from the same base by construction); INV-0227-1 holds for native programs only (no forked pair); INV-0228-2 was checked by hand
+(`strings` finds no `rustls`/`ring` in `netd` or `zosh`, 43 hits in `fetch`); INV-0228-3 is not checked. New: INV-0288-1 to -3, INV-0289-1 to -3.
+
+### Where a network-controlled number or byte enters, and where it is checked
+
+| Input | Where | Check |
+|---|---|---|
+| TLS records, handshake, certificates | `zoraya-tls` (rustls, webpki) | rustls' parsers; the incoming buffer is bounded at 49,152 bytes; errors map to `Error`, nothing is skipped |
+| the server's name | `Connection::connect` | `ServerName::try_from` of the address's host, the host that was granted |
+| the date | `Config::new`'s function | none: no date is no handshake |
+| the roots file | `pem_certificates` | total on any bytes (host test); unusable blocks are skipped; no usable root is `NoRoots` |
+| the random service's reply | `random::fill` | the length must equal the request or the call fails |
+| the RTC value | `read_rtc` | 0 is "none" and no floor; a u32 of seconds |
+| `/chosen/rng-seed` | kernel `init_seed` | cut at 4,092 bytes; `rngd` checks the length again |
+
+### Tests run
+
+- `cargo test`: `-p zoraya-dtb` 14, `-p zoraya-abi` 66, `-p zoraya-fs-service --test time` 3, `-p zoraya-files` 34, `-p zoraya-rng` 10,
+  `-p zoraya-tls` 8, `-p zoraya-http` 17 and `-p zoraya-shell` (110) passed; `-p zoraya-test-runner` passed (unit tests of the new steps).
+- `make check`: all 14 passed. `make test-files` (with `clock.script`): passed, `date` twice 3 s apart within 2 s of the host, three `random`
+  lines differ. `make test-net-fetch`: passed, 108 steps, `fsck` clean, "the refused TLS servers read no request byte".
+- `make test-changed`: see the last paragraph of the Handoff.
+
+### Measurements (HVF, one run)
+
+`fetch --sum https://test.zoraya:PORT/pattern/1000000`: TLS handshake 51.1 ms; 1,000,000 bytes in 25.1 ms; the same page over HTTP 38.8 ms
+(same boot). `fetch` is 1.06 MB, `netd` 0.30 MB. TCG not run for the HTTPS lines.
+
+### Not done
+
+BearSSL and the curl port (W12's curl half, and the plan's `+net test.zoraya curl -O` check); `https` for the POSIX `zfetch`; the
+virtio-rng reseed; `getrandom` and `/dev/urandom` in `libposix`; random connections for the panel's, the broker's and a `fork` child's
+programs; a restart of `rngd`; `netd`'s own seeding; the `grants` line for the random connection; the `tls.roots` setting; the GUI shells'
+roots entry; the HTTPS lines under TCG; INV-0289-2 and -3 as automatic checks. No fuzz target for `zoraya-rng` (20,000 random messages
+in a host test) or `zoraya-tls`. No mutation run.
+
+### Handoff
+
+- State: branch `work/n5` from `main` at a322e23, pushed without a tag. A candidate tag needs the `opus-review` first.
+- For the reviewer (TLS, a trust boundary; the generator is hand-written; a kernel and `init` change): `crates/zoraya-tls/src/lib.rs`
+  (the pump loop, the `getrandom` source, the time provider, error mapping) and `tests/`; `crates/zoraya-rng/src/lib.rs` (ChaCha20,
+  `mix`, `fill`, `Service::handle`); `user/src/bin/fetch.rs`; `user/src/bin/rngd.rs`; `kernel/src/device.rs` (`init_rtc`, `init_seed`,
+  the `intid` 0 filter) and `kernel/src/process.rs` (slots 5 and 6); `user/src/stack.rs` (`read_rtc`) and `user/src/bin/init.rs`;
+  `user/src/bin/zosh.rs` (the roots entry in `ready`, the random share in the table); `crates/zoraya-abi/src/native.rs`;
+  `tools/ring-cc`, `tools/vendor-ring.sh`, `.cargo/config.toml`, the one-line diff of `vendor/ring/build.rs`;
+  `rootfs/system/tls/roots` (its filters); ADR-0288 and ADR-0289.
+- Review questions: (1) is the generator acceptable or should it be a library DRBG; (2) the seed also stays in the kernel's device tree
+  copy; (3) `fetch` treats a connection that ends without `close_notify` as an error unless the page was complete, and the roots entry
+  is checked by the terminal's `not_given` only in `open_entry`; (4) any hostile-byte path in `pump` (the 49,152-byte bound, `discard`
+  accounting); (5) the vendored ring: is one line the right size of change.

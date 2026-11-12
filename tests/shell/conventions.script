@@ -556,7 +556,7 @@
 < \r\nexit status 2
 ^ \r\n~>
 > fetch --help\r
-< \r\nfetch: fetch a page over HTTP
+< \r\nfetch: fetch a page over HTTP or HTTPS
 ^ \r\nusage: fetch [--output FILE] [--sum] URL
 ^ \r\n  -o, --output FILE   write the page to FILE instead of the terminal
 ^ \r\n  -s, --sum           print the size, an FNV-1a checksum and the time instead of the page
