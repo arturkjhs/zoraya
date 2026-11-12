@@ -811,11 +811,6 @@ impl Handlers for Calls<'_> {
         carried
             .try_reserve_exact(entries)
             .map_err(|_| Status::NoMemory)?;
-        // The writer pays for the message while it is queued (ADR-0261 point 7).
-        let mut paid = Paid::new(Some(self.process.job()));
-        paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
-        let mut message = channel::message(body, Vec::new(), paid)?;
-        pair.prepare(side, message.bytes.len())?;
         // The moved entries' old forms, whose subscriptions end after the
         // handle-table lock is dropped, a pause at a time (review round 2,
         // error 1): the old owner id is dead, so nothing can need them.
@@ -823,6 +818,11 @@ impl Handlers for Calls<'_> {
         moved_out
             .try_reserve_exact(entries)
             .map_err(|_| Status::NoMemory)?;
+        // The writer pays for the message while it is queued (ADR-0261 point 7).
+        let mut paid = Paid::new(Some(self.process.job()));
+        paid.kernel(channel::message_cost(body.capacity(), carried.capacity()))?;
+        let mut message = channel::message(body, Vec::new(), paid)?;
+        pair.prepare(side, message.bytes.len())?;
         let mut failed = None;
         for entry in listed.clone() {
             let object = match entry.transfer {
@@ -876,10 +876,15 @@ impl Handlers for Calls<'_> {
         // Only now the moved entries' subscriptions end, a pause at a time
         // with no lock held. The old ids are dead (`next_id`), so the order
         // against the write does not matter.
-        for taken in &moved_out {
-            steps::before(object::weight(taken));
+        // Each is dropped after its own announcement: the reader may have
+        // closed them meanwhile, and these are then the last references, so
+        // holding them all to the end would free them in one interval (review
+        // round 4, error 1).
+        for taken in moved_out {
+            steps::before(object::weight(&taken));
             steps::count(1);
-            object::end_subscriptions(taken);
+            object::end_subscriptions(&taken);
+            drop(taken);
         }
         Ok(0)
     }

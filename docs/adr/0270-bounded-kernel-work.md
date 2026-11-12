@@ -301,7 +301,7 @@ and exits.
   per round and the holder got 1/(N+1) of the CPU; a waiter now yields (`sched::yield_now`) after each pause, which costs a switch, not a slice.
   The wait is bounded by quota(threads) x quota(jobs) x slowdown: at most one queued walk per thread with a call open (the thread
   quota), each walk bounded by its tree (the job quota), each step slowed by the waiters' switches (a bounded factor, since a
-  waiter that finds the holder alone runs on at once). A caller that is stopped while it waits for
+  waiter that finds no other thread ready runs on at once). A caller that is stopped while it waits for
   its turn (it is in the tree, inside the call) parks first (`process::park_if_stopped`), as if it had called after being stopped:
   otherwise its `job_resume` would run right after the `suspend` returned and start what that left stopped. The test is a stress
   case (`t_suspend`, a resumer inside a tree of 700 jobs): the walks interleave when a slice ends during one. `t_bound` builds a tree of 700 jobs under one top job and measures the four calls

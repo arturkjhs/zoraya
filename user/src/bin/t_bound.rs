@@ -17,10 +17,11 @@ use zoraya_abi::{
     job_signals,
 };
 use zoraya_user::{
-    channel_create, channel_write, clock_monotonic, handle_close, handle_type, image, job_create,
-    job_get_usage, job_kill, job_resume, job_signal, job_suspend, memory_create, memory_map,
-    memory_unmap, object_get_signals, port_create, port_subscribe, println, process_exit,
-    raw_syscall, sleep_until, snapshot_process, spawn, startup, thread_yield, wait_exit,
+    channel_create, channel_read, channel_write, clock_monotonic, handle_close, handle_type, image,
+    job_create, job_get_usage, job_kill, job_resume, job_signal, job_suspend, memory_create,
+    memory_map, memory_unmap, object_get_signals, port_create, port_subscribe, println,
+    process_exit, raw_syscall, sleep_until, snapshot_process, spawn, startup, thread_yield,
+    wait_exit,
 };
 
 const MASKED_MAX_NS: u64 = 0x7013;
@@ -768,31 +769,97 @@ fn peer_closing_in_a_write() {
         }
         assert_eq!(wait_exit(process).code, 0, "round {round}: closer");
         handle_close(process).expect("close");
+        memory_unmap(at, PAGE).expect("unmap");
         for h in ports.into_iter().chain([a, y, page]) {
             handle_close(h).expect("close");
         }
-        // Round 0 lets the heap take the room it will use. A spawn and an
-        // exit leave about 150 bytes of live heap each in this kernel (seen
-        // with no handle moved, a control run of this test), so the heap may
-        // be a little above its start; what a message queued into a closed
-        // end leaves (the carried end, 4 jobs of 1024 subscriptions) is
-        // kilobytes.
+        // Round 0 lets the heap take the room it will use; after it the
+        // heap returns exactly (an earlier version allowed a residue of 150
+        // bytes a round, which was this test's own unmapped page).
         let mut tries = 0;
         if round == 0 {
             start = heap_live();
         }
-        let allowed = start + 1024 * round;
-        while heap_live() > allowed && tries < 200 {
+        while heap_live() != start && tries < 200 {
             nap(10);
             tries += 1;
         }
-        assert!(
-            heap_live() <= allowed,
-            "round {round}: heap {} above {allowed}",
-            heap_live()
-        );
+        assert_eq!(heap_live(), start, "round {round}: heap back");
     }
     println!("t_bound: a peer closing during a write: {accepted} of 6 accepted, nothing left");
+    handle_close(room).expect("close");
+}
+
+/// The child of `moved_memory_is_freed_a_step_at_a_time`: reads the message
+/// on slot 3 until it arrives and closes every handle in it.
+fn reader() -> i32 {
+    let end = Handle::new(3).expect("slot");
+    let gave_up = clock_monotonic() + 60_000_000_000;
+    let mut handles = [end; 64];
+    loop {
+        match channel_read(end, &mut [], &mut handles) {
+            Ok(sizes) => {
+                for h in &handles[..sizes.handles as usize] {
+                    handle_close(*h).expect("close");
+                }
+                return 0;
+            }
+            Err(_) => {
+                if clock_monotonic() > gave_up {
+                    return 1;
+                }
+                thread_yield();
+            }
+        }
+    }
+}
+
+/// Review round 4, error 1: 64 memory objects of 63 pages moved in one write
+/// to a reader that closes them as soon as it can (a forced switch at the
+/// writer's first pause). The writer's own references to the moved objects must
+/// not be the last ones when they are all dropped at the end: each is dropped
+/// after its own announcement, so no interval frees more than a step.
+fn moved_memory_is_freed_a_step_at_a_time() {
+    let room = job_create(JOB, JobFlags::POSIX).expect("room");
+    let (a, b) = channel_create().expect("channel");
+    let mut buffer = [0; 512];
+    let program = image("t_bound");
+    let mut e = Encoder::new(&mut buffer, room, program);
+    e.handle(console_again());
+    e.handle(HandleEntry {
+        slot: 3,
+        handle: b,
+        rights: rights_of(b),
+        transfer: Transfer::Move,
+    });
+    e.arg(b"reader");
+    let length = e.finish().expect("room");
+    let process = spawn(&buffer[..length]).expect("spawn reader");
+    handle_close(program).expect("image");
+    let mut entries = alloc::vec::Vec::new();
+    for _ in 0..64 {
+        let object = memory_create(63 * PAGE, MemoryFlags::NONE).expect("create");
+        entries.push(ChannelEntry {
+            handle: object,
+            rights: rights_of(object),
+            transfer: Transfer::Move,
+        });
+    }
+    // Let the reader reach its loop, then reset the meter.
+    nap(50);
+    units(true);
+    raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+    channel_write(a, b"", &entries).expect("write");
+    raw_syscall(FORCE_SWITCH, [0; 6]);
+    assert_eq!(wait_exit(process).code, 0, "reader");
+    handle_close(process).expect("close");
+    let most = units(false);
+    println!("t_bound: 64 moved memory objects freed by the reader: {most} units in one interval");
+    assert!(
+        most <= MAX_UNITS,
+        "{most} units in one interval, limit {MAX_UNITS}"
+    );
+    handle_close(a).expect("close");
     handle_close(room).expect("close");
 }
 
@@ -931,6 +998,7 @@ fn inner() -> i32 {
     subscription_sites();
     many_subscriptions_sites();
     peer_closing_in_a_write();
+    moved_memory_is_freed_a_step_at_a_time();
     teardown_sites();
     a_kill_between_steps_leaves_nothing();
     println!("t_bound: all passed");
@@ -953,6 +1021,7 @@ fn main() -> i32 {
         Some(b"full-ports") => full_ports(),
         Some(b"moved-jobs") => moved_jobs(),
         Some(b"closer") => closer(),
+        Some(b"reader") => reader(),
         Some(b"inner") => inner(),
         _ => outer(),
     }

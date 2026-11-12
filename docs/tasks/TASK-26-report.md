@@ -1922,6 +1922,17 @@ The first commit of the round holds `FORCE_SWITCH` in `syscall.rs`, whose `steps
 
 Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: `make test-changed`, CI, `cargo test`.
 
+### Review round 4 (final findings) and its dispositions
+
+1. **Error, last references dropped together.** `channel_write` now consumes `moved_out`, dropping each object after its own `before`/`count`/`end_subscriptions`. The spawn and
+   snapshot move paths already drop each entry at the end of its iteration. Test: `t_bound` `moved_memory_is_freed_a_step_at_a_time` (64 memory objects of 63 pages moved to a
+   reader that closes them, forced switch). **Mutation (run, reverted):** the old loop (`for taken in &moved_out`) freed 4033 units in one interval and the test failed (limit 80); the fix gives 64.
+2. **Warning, heap residue.** Not a kernel leak. A loop of spawn and exit in a room kept open leaves the live heap exactly constant (8 rounds measured; closing the room frees its 544-byte record).
+   The 144 bytes a round were the write test's own page mapping, never unmapped. The test unmaps it and now asserts exact equality after round 0. Nothing for `docs/backlog.md`.
+3. **Notes.** `moved_out.try_reserve_exact` is above `prepare`; ADR-0270 now says "finds no other thread ready".
+
+Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: CI, `make test-changed`.
+
 ### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
 
 - **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for
