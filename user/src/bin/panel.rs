@@ -201,7 +201,7 @@ fn set_room_limit(
         word,
         value,
         || rooms_file(&st.borrow()),
-        |b| write_rooms(&mut st.borrow_mut(), b),
+        |b| write_rooms(&st.borrow(), b),
         Some(|name: &str| {
             let mut st = st.borrow_mut();
             let Some(k) = st.keeper.as_mut() else {
