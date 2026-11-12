@@ -39,7 +39,7 @@ use zoraya_user::gui::{
     Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
 };
 use zoraya_user::netclient::{Network, start_network};
-use zoraya_user::stack::{Stack, end_job, moved, start_stack};
+use zoraya_user::stack::{Stack, end_job, moved, read_rtc, start_stack_at};
 use zoraya_user::{
     channel_create, directory_lookup, dup, handle_close, job_create, port_create, port_subscribe,
     port_wait, power_off, println, process_exit_record, spawn, stream_create, wait_exit,
@@ -336,6 +336,9 @@ fn restart_gpu(g: &mut Gui, port: Handle) {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     let devices = scan();
+    if read_rtc() == 0 {
+        println!("init: no real-time clock reading; dates count from the volume");
+    }
     let mut storage_allowed = devices.disk.is_some();
     let mut restarts = Restarts::new();
     let mut stack: Option<Stack> = None;
@@ -367,7 +370,7 @@ fn main() -> i32 {
             && storage_allowed
             && let Some((device, range)) = devices.disk
         {
-            stack = start_stack(device, range);
+            stack = start_stack_at(device, range, read_rtc());
             if stack.is_none() {
                 println!("init: the storage stack did not start");
                 storage_allowed = false;

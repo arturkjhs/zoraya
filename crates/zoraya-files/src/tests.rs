@@ -727,3 +727,19 @@ fn a_drop_into_another_place_or_from_a_read_only_one_copies() {
         [Act::Transfer { copy: true, .. }]
     ));
 }
+
+#[test]
+fn utc_shows_the_date_and_time() {
+    use crate::format::utc;
+    assert_eq!(utc(0), "1970-01-01 00:00:00 UTC");
+    // 2026-11-04 10:12:31 UTC, with nanoseconds that are dropped.
+    assert_eq!(
+        utc(1_793_787_151 * 1_000_000_000 + 999),
+        "2026-11-04 10:12:31 UTC"
+    );
+    // A leap day.
+    assert_eq!(
+        utc(1_709_164_800 * 1_000_000_000),
+        "2024-02-29 00:00:00 UTC"
+    );
+}

@@ -48,6 +48,18 @@ pub fn civil(days: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// A wall-clock time as `YYYY-MM-DD HH:MM:SS UTC` (ADR-0226's examples).
+pub fn utc(nanos: u64) -> String {
+    let (y, m, d) = civil((nanos / NS_PER_DAY) as i64);
+    let secs = (nanos % NS_PER_DAY) / 1_000_000_000;
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        secs / 3600,
+        secs / 60 % 60,
+        secs % 60
+    )
+}
+
 /// A modification time against `now` (both nanoseconds since the epoch;
 /// 0 is unknown).
 pub fn date(at: u64, now: u64) -> String {

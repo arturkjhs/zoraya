@@ -59,7 +59,7 @@ USER_PROGRAMS := hello spin isolate badptr fuzz regs f_kread f_kwrite f_null f_p
 	parent child counter portclose t_handles t_spawn t_signals t_ports portbench t_stress t_leak \
 	busy zosh echo-args sleep exit-with fault fanout flood ticker handles stubborn requests probe t_console t_memory t_channels init t_devices t_loop chanbench blkd fsd \
 	crashwriter crashcheck fsbench t_storage gpud inputd compd term panel chooser t_open files settings edit t_gui guibench t_text \
-	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search broker ttyd
+	ethd netd net fetch t_net t_netd t_streams t_snapshot t_image t_suspend t_quota t_bound t_cpu posixrun ls cat cp mv rm mkdir stat head find search date broker ttyd
 RUNNER := target/debug/zoraya-test-runner
 RUN_QEMU := tools/run-qemu.sh
 QEMU_TIMEOUT ?= 180
@@ -377,6 +377,7 @@ REBOOT_SCRIPT := tests/shell/reboot.script
 CONVENTIONS_SCRIPT := tests/shell/conventions.script
 FILES_WRITE := tests/shell/files-write.script
 FILES_READ := tests/shell/files-read.script
+CLOCK_SCRIPT := tests/shell/clock.script
 STORAGE_DOWN := tests/shell/storage-down.script
 DEVICE_ERROR := tests/shell/device-error.script
 GRANTS_SCRIPT := tests/shell/grants.script
@@ -408,6 +409,10 @@ test-files: $(KERNEL) $(RUNNER) tools-storage
 # INV-0155-1: every command's --help and usage error, with a volume.
 	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
 	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(CONVENTIONS_SCRIPT) --label conventions -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
+	target/debug/zoraya-fsck $(CRASH_IMAGE)
+# ADR-0226: the date is the host's, to 2 s.
+	target/debug/zoraya-mkfs --size 16M --from rootfs $(CRASH_IMAGE)
+	$(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(CLOCK_SCRIPT) --label clock -- $(RUN_QEMU) --test --keys --disk $(CRASH_IMAGE) --accel auto $(KERNEL)
 	target/debug/zoraya-fsck $(CRASH_IMAGE)
 # What a command gets (ADR-0153): rootfs/ with link objects over it.
 	rm -rf $(GRANTS_ROOT) && mkdir -p $(GRANTS_ROOT) && cp -R rootfs/. tests/shell/grants-root/. $(GRANTS_ROOT)/

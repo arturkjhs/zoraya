@@ -1459,7 +1459,7 @@ mod native_startup {
             report: 6,
             net: 7,
         };
-        encode("/work", &slots, &entries, 8, out).expect("encodes")
+        encode("/work", &slots, &entries, 8, 1_800_000_000_123_456_789, out).expect("encodes")
     }
 
     #[test]
@@ -1470,6 +1470,7 @@ mod native_startup {
         assert_eq!(r.cwd, "/work");
         assert_eq!(r.slots.report, 6);
         assert_eq!(r.slots.net, 7);
+        assert_eq!(r.realtime_base, 1_800_000_000_123_456_789);
         let paths: std::vec::Vec<&str> = r.entries().map(|e| e.path).collect();
         assert_eq!(paths, ["/work/notes.txt", "/work/new.txt", "/work"]);
         assert_eq!(r.entries().count(), r.entry_count());
@@ -1485,18 +1486,19 @@ mod native_startup {
         };
         // Not absolute or not normal, a handle used twice or out of range,
         // a missing entry with a handle, too few handles in the message.
-        assert!(encode("home", &Slots::NONE, &[], 0, &mut out).is_none());
-        assert!(encode("/a/../b", &Slots::NONE, &[], 0, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a/", 0)], 1, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/b", 0)], 2, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a", 1)], 1, &mut out).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/a", 1)], 2, &mut out).is_none());
+        assert!(encode("home", &Slots::NONE, &[], 0, 0, &mut out).is_none());
+        assert!(encode("/a/../b", &Slots::NONE, &[], 0, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a/", 0)], 1, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/b", 0)], 2, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 1)], 1, 0, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/a", 0), d("/a", 1)], 2, 0, &mut out).is_none());
         // A path repeated with another of its length between (review K11).
         let n = encode(
             "/",
             &Slots::NONE,
             &[d("/a", 0), d("/b", 1), d("/c", 2)],
             3,
+            0,
             &mut out,
         )
         .expect("three paths");
@@ -1518,10 +1520,10 @@ mod native_startup {
             net: 0,
             ..Slots::NONE
         };
-        assert!(encode("/", &net, &[d("/a", 0)], 1, &mut out).is_none());
-        assert!(encode("/", &net, &[], 1, &mut out).is_some());
-        assert!(encode("/", &net, &[], 0, &mut out).is_none());
-        let n = encode("/", &net, &[], 1, &mut out).unwrap();
+        assert!(encode("/", &net, &[d("/a", 0)], 1, 0, &mut out).is_none());
+        assert!(encode("/", &net, &[], 1, 0, &mut out).is_some());
+        assert!(encode("/", &net, &[], 0, 0, &mut out).is_none());
+        let n = encode("/", &net, &[], 1, 0, &mut out).unwrap();
         for reserved in [22, 23] {
             let mut m = out[..n].to_vec();
             m[reserved] = 1;
@@ -1532,17 +1534,17 @@ mod native_startup {
             kind: EntryKind::Missing,
             handle: 0,
         };
-        assert!(encode("/", &Slots::NONE, &[missing], 1, &mut out).is_none());
+        assert!(encode("/", &Slots::NONE, &[missing], 1, 0, &mut out).is_none());
         let slots = Slots {
             job: 0,
             ..Slots::NONE
         };
         assert!(
-            encode("/", &slots, &[d("/", 0)], 1, &mut out).is_none(),
+            encode("/", &slots, &[d("/", 0)], 1, 0, &mut out).is_none(),
             "job and entry share 0"
         );
-        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, &mut out[..10]).is_none());
-        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, &mut out).is_some());
+        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, 0, &mut out[..10]).is_none());
+        assert!(encode("/", &Slots::NONE, &[d("/", 0)], 1, 0, &mut out).is_some());
     }
 
     #[test]

@@ -538,6 +538,23 @@
 > status\r
 < \r\nexit status 2
 ^ \r\n~>
+> date --help\r
+< \r\ndate: show the date and time
+^ \r\nusage: date
+^ \r\n  --help   show this help
+^ \r\nmore: help date
+^ \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+^ \r\n~>
+> date --no-such-option\r
+< \r\ndate: --no-such-option: no such option
+^ \r\nusage: date
+^ \r\nmore: help date
+^ \r\n~>
+> status\r
+< \r\nexit status 2
+^ \r\n~>
 > fetch --help\r
 < \r\nfetch: fetch a page over HTTP
 ^ \r\nusage: fetch [--output FILE] [--sum] URL

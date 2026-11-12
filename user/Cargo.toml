@@ -239,6 +239,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "date"
+path = "src/bin/date.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "sleep"
 path = "src/bin/sleep.rs"
 test = false

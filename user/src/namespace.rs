@@ -33,6 +33,8 @@ pub struct Namespace {
     pub entries: Vec<Entry>,
     report: Option<Handle>,
     net: Option<Handle>,
+    /// The wall clock's base from the record (ADR-0226 item 4), or 0.
+    realtime_base: u64,
     reported: RefCell<Vec<String>>,
     dropped: RefCell<u32>,
 }
@@ -72,6 +74,7 @@ fn read_record() -> Option<Namespace> {
         entries,
         report: nth(got, record.slots.report),
         net: nth(got, record.slots.net),
+        realtime_base: record.realtime_base,
         reported: RefCell::new(Vec::new()),
         dropped: RefCell::new(0),
     })
@@ -98,6 +101,14 @@ pub fn get() -> Option<&'static Namespace> {
     // the static lives as long as the program, and nothing borrows it
     // mutably again once it is `Some`.
     Some(unsafe { &*(ns as *const Namespace) })
+}
+
+/// The wall clock in nanoseconds since the epoch: the record's base plus the
+/// monotonic clock (ADR-0226 item 4). `None` for a program started without a
+/// record or with a base of 0 (ADR-0191 rule 5: it keeps the monotonic clock).
+pub fn realtime() -> Option<u64> {
+    let base = get()?.realtime_base;
+    (base != 0).then(|| base.saturating_add(crate::clock_monotonic()))
 }
 
 impl Namespace {
@@ -340,7 +351,9 @@ pub fn record(root: &File, home: &str, cwd: &str, holds: &[(String, bool)]) -> O
         })
         .collect();
     let mut bytes = alloc::vec![0u8; 16 * 1024];
-    let Some(n) = native::encode(cwd, &Slots::NONE, &entries, handles.len(), &mut bytes) else {
+    let base = root.time_base().unwrap_or(0);
+    let Some(n) = native::encode(cwd, &Slots::NONE, &entries, handles.len(), base, &mut bytes)
+    else {
         close(&handles);
         return None;
     };

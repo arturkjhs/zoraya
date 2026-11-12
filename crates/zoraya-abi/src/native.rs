@@ -12,7 +12,9 @@
 //! entry count      u32
 //! in, out, err     u8 each: handle indices, or NO_HANDLE
 //! job, report      u8 each: the program's own job, the REPORT channel
-//! reserved         3 bytes, zero
+//! reserved         2 bytes, zero
+//! realtime base    u64: nanoseconds added to the monotonic clock for the
+//!                  wall clock (ADR-0226 item 4); 0 keeps the monotonic one
 //! cwd              u32 length, bytes: the current directory, absolute
 //! entries          kind u8, handle u8, two zero bytes, u32 length, path;
 //!                  longest path first
@@ -29,7 +31,7 @@ use crate::posix::{MAX_MESSAGE_HANDLES, MAX_PATH, NO_HANDLE, is_absolute_normal}
 
 const MAGIC: &[u8; 4] = b"ZNS1";
 /// The size of this version's header.
-pub const HEADER_SIZE: usize = 24;
+pub const HEADER_SIZE: usize = 32;
 const ENTRY_HEADER: usize = 8;
 /// The most entries one record holds.
 pub const MAX_ENTRIES: usize = 64;
@@ -125,6 +127,8 @@ impl Slots {
 pub struct Startup<'a> {
     pub cwd: &'a str,
     pub slots: Slots,
+    /// The wall clock's base (ADR-0226 item 4), or 0.
+    pub realtime_base: u64,
     entries: &'a [u8],
     entry_count: usize,
 }
@@ -154,7 +158,8 @@ impl<'a> Startup<'a> {
         }
         let flags = u32_at(bytes, 8)?;
         let entry_count = u32_at(bytes, 12)? as usize;
-        let s = bytes.get(16..HEADER_SIZE)?;
+        let s = bytes.get(16..24)?;
+        let realtime_base = u64::from(u32_at(bytes, 24)?) | (u64::from(u32_at(bytes, 28)?) << 32);
         let slots = Slots {
             input: s[0],
             output: s[1],
@@ -218,6 +223,7 @@ impl<'a> Startup<'a> {
         Some(Startup {
             cwd,
             slots,
+            realtime_base,
             entries: &bytes[start..at],
             entry_count,
         })
@@ -253,6 +259,7 @@ pub fn encode(
     slots: &Slots,
     entries: &[Entry<'_>],
     handles: usize,
+    realtime_base: u64,
     out: &mut [u8],
 ) -> Option<usize> {
     if entries.len() > MAX_ENTRIES {
@@ -280,6 +287,7 @@ pub fn encode(
     }
     let s = slots.all();
     put(&[s[0], s[1], s[2], s[3], s[4], s[5], 0, 0])?;
+    put(&realtime_base.to_le_bytes())?;
     put(&u32::try_from(cwd.len()).ok()?.to_le_bytes())?;
     put(cwd.as_bytes())?;
     for e in sorted.iter().flatten() {

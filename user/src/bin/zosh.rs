@@ -1076,7 +1076,14 @@ impl Z {
             })
             .collect();
         let mut bytes = alloc::vec![0u8; 64 * 1024];
-        let Some(n) = native::encode(&self.cwd, &slots, &entries, handles.len(), &mut bytes) else {
+        let Some(n) = native::encode(
+            &self.cwd,
+            &slots,
+            &entries,
+            handles.len(),
+            self.realtime_base,
+            &mut bytes,
+        ) else {
             close_all(&handles);
             let _ = handle_close(report_ours);
             return Err(gone());
