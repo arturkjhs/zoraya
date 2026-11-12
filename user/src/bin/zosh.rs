@@ -67,6 +67,9 @@ use zoraya_user::{
 
 zoraya_user::describe!("system", "zosh");
 
+/// The connections a POSIX program may hold open at once (ADR-0262 item 2).
+const POSIX_NET_BUDGET: u32 = 2;
+
 const CONSOLE_KEY: u64 = 1;
 /// Port keys of jobs start here.
 const JOB_KEY: u64 = 1000;
@@ -897,9 +900,12 @@ impl Z {
         let Some((rights, scope)) = Self::net_grant_with(exec, d, true, &self.cwd)? else {
             return Ok(None);
         };
-        Ok(self
-            .net
-            .and_then(|root| zoraya_user::netclient::narrow(root, rights, &scope).ok()))
+        // Each POSIX program counts against an account of its own, carved
+        // from the shell's (ADR-0262 item 2; Q3): what it opens does not use
+        // up the shell's, or another program's, connections.
+        Ok(self.net.and_then(|root| {
+            zoraya_user::netclient::narrow_account(root, rights, POSIX_NET_BUDGET, &scope).ok()
+        }))
     }
 
     /// The plan of a line running `exec` under description `d` (rules 1
