@@ -170,6 +170,8 @@ pub fn next_id() -> u64 {
 /// belong to it there. A moved handle ends them too (ADR-0040).
 pub fn end_subscriptions(entry: &Entry) {
     if let Some((source, _)) = entry.object.signals() {
+        // The source's subscribers count as the units `weight` announced.
+        crate::steps::count(port::source_subscriptions(source) / SUBSCRIPTIONS_PER_UNIT);
         port::EVENTS.lock().remove_owner(source, entry.id);
     }
 }
@@ -201,7 +203,10 @@ pub fn weight(entry: &Entry) -> usize {
 pub fn close(entry: Entry) {
     end_subscriptions(&entry);
     match &entry.object {
-        Object::Port(port) => port.close(),
+        Object::Port(p) => {
+            crate::steps::count(p.subscriptions() / SUBSCRIPTIONS_PER_UNIT);
+            p.close();
+        }
         Object::Channel(pair, end) => channel::close(pair, *end),
         _ => {}
     }

@@ -623,29 +623,31 @@ fn full_pair(count: u64, port_first: bool) -> (Handle, Handle) {
     (port, job)
 }
 
-/// Review error 4 (TASK-26 fix): a process that holds 64 ports of 1024
+/// Review error 4 (TASK-26 fix): a process that holds 16 ports of 1024
 /// subscriptions, each to a job of its own (so each job's source has 1024
 /// subscribers), half of them with the port closed first and half with the
-/// job. Its exit closes 128 handles, and the bound of 1024 per port and per
-/// source does not bound those together: each handle's weight scales with its
+/// job. Its exit closes 32 handles. (The review's case was 64 ports; the test machine
+/// has 128 MiB and the kernel heap does not give frames back, so 16 ports, 16k
+/// subscriptions.) The bound of 1024 per port and per source does not bound
+/// those together: each handle's weight scales with its
 /// subscriptions (`object::weight`), so the exit pauses between them.
 fn full_ports() -> i32 {
-    for i in 0..64 {
+    for i in 0..16 {
         full_pair(1024, i % 2 == 0);
     }
     0
 }
 
 /// Review error 3 (TASK-26 fix): a job's source with a subscriber on each of
-/// 128 ports, each port holding 1024 entries with the job's at the front of
+/// 32 ports, each port holding 1024 entries with the job's at the front of
 /// its sorted list (the worst place to remove from), and the other 1023
-/// entries to 128 other jobs (a source takes 1024). One eighth of the
-/// product the bounds allow (1024 ports); closing the job's handle frees the
-/// source and removes its 128 entries.
+/// entries to 128 other jobs (a source takes 1024). One 32nd of the
+/// product the bounds allow (1024 ports; memory as above); closing the job's handle frees the
+/// source and removes its 32 entries.
 fn wide_source() -> i32 {
-    const PORTS: usize = 128;
+    const PORTS: usize = 32;
     let job = job_create(JOB, JobFlags::NONE).expect("job");
-    let others: alloc::vec::Vec<Handle> = (0..PORTS)
+    let others: alloc::vec::Vec<Handle> = (0..128)
         .map(|_| job_create(JOB, JobFlags::NONE).expect("other"))
         .collect();
     for _ in 0..PORTS {
@@ -665,7 +667,7 @@ fn wide_source() -> i32 {
     }
     let (_, ns) = measure(|| handle_close(job).expect("close"));
     println!(
-        "t_bound: free_source of 128 subscribers on ports of 1024: {} us masked",
+        "t_bound: free_source of 32 subscribers on ports of 1024: {} us masked",
         ns / 1000
     );
     let limit = bound_ns();
@@ -679,7 +681,7 @@ fn many_subscriptions_sites() {
     let room = job_create(JOB, JobFlags::NONE).expect("job");
     for (label, role) in [
         ("free_source", &b"wide-source"[..]),
-        ("exit with 64 full ports", &b"full-ports"[..]),
+        ("exit with 16 full ports", &b"full-ports"[..]),
     ] {
         let began = clock_monotonic();
         let (p, ns) = measure(|| {
