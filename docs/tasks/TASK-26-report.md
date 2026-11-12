@@ -1885,6 +1885,26 @@ Eight findings, fixed in order, one commit each (on top of `7af044c`):
 Run: `make check` before each commit; `cargo test -p zoraya-events`; `make test-qemu-one` three times (the first run failed for the memory above; the second and the last, after the `t_suspend` tree test, passed with
 `t_bound` and `t_suspend`). Not run: `make test-changed`, TCG, CI, the broker's polling.
 
+### Review round 2 (opus-review of `work/q7-fixes` at `b94798f`) and its dispositions
+
+1. **Error, moved handles not paced.** `channel_write` collects the moved entries and ends their subscriptions after the table's lock is dropped, each after
+   `steps::before(weight)` (error paths too); spawn and snapshot moves call `before(weight)` per handle. `t_bound` `moved-jobs` (16 full jobs in one write).
+2. **Error, unfair `Exclusive`.** A ticket queue (FIFO) for `suspend` and `resume`; `job_kill` takes no turn. Not per room (a root-level walk must exclude room
+   walks). ADR-0270 note corrected ("bounded by the holder's walk" was only true with one walk; now by the walks queued before).
+3. **Warning, vacuous test.** Test-kernel call `FORCE_SWITCH` (0x701a, `qemu-test` only) makes every `steps::pause` ask for a switch; `t_suspend` sets it for
+   `a_resume_from_inside_cannot_undo_a_suspend_walk` and the tree test. **Mutation (reverted, run):** `Exclusive::take` returning at once (no turns) made `t_suspend` fail at
+   round 0 ("SUSPENDED on a job below", `t_suspend.rs:168`); the unmutated run passes. So the test is no longer vacuous.
+4. **Warning, `swap_remove`.** A `dropper` child drops the last handle of one of the first four children of the top job (visited last) while the walk is between
+   steps (forced switch); it yields while it waits (spinning cost a slice per forced switch and the first version gave up after 20 s). **Mutation (reverted, run):** `Vec::remove` instead of
+   `swap_remove` in `Job::drop` **survived**: it is an equivalent mutant for the walk (the shift makes at most a second visit, never a skip). A skip needs a front-to-back walk, which was not built as
+   a mutant; the test would fail it (every one of 700 jobs must be `SUSPENDED`), but that is by reasoning, not run.
+5. **Warning, broker poll.** `next_poll` is fixed; the poll runs at the top of the loop whenever `clock_monotonic() >= next_poll`, whatever woke the loop. A subscribe error
+   (`BadHandle`) lands in `polled` and is reported as terminated (`object_get_signals` fails). Not run: no test of the broker covers it.
+
+Run: `make check` (all 15 pass); `make test-qemu-one` (last one passes: `t_bound` with `moved-jobs`, `t_suspend` all passed; 9 expected failures as before). Not run: `cargo test -p zoraya-events` (not touched), `make test-changed`, CI.
+The first commit of the round holds `FORCE_SWITCH` in `syscall.rs`, whose `steps` side is in the third commit, so only the head builds.
+6. **Notes.** ADR-0299 states: the time bound unchecked at factor above 1, the 1.5 ms extrapolated, the gate marker a proxy. `channel::close_one` counts a dropped port's units.
+
 ### Gate blockers (what remains before the refusal can be removed; also in `docs/backlog.md`)
 
 - **Warning 7:** the heap never returns frames while the charge is refunded (a room's burst of kernel objects moves its ceiling's worth of frames into the heap for

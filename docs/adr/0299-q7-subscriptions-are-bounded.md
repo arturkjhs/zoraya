@@ -67,6 +67,17 @@ counted in units (the `Paid` drops take the charge lock and walk at most 32 ance
   instead is that an observer must handle the refusal: the broker polls (every 100 ms, `Server::polled`) a job it could not
   subscribe to instead of ignoring the error, which left a record that nothing ended. Other services that watch a job
   from outside must do the same. A holder can still deny a source to others for as long as it holds its 1024.
+- **Moved handles (round 2, error 1).** A handle moved by `channel_write`, `process_spawn` or `snapshot_process` ends its
+  subscriptions too (`object::end_subscriptions`), so each is announced with `steps::before(weight)` first, after the handle
+  table's lock is dropped (`channel_write` collects the taken entries and ends them after the lock, and on an error path too;
+  the old owner id is dead, so nothing needs them). `t_bound` `moved-jobs`: 16 jobs of 1024 subscribers moved in one
+  `channel_write`. Only that path is tested; the spawn and snapshot paths use the same two calls and are not.
+  A port inside a message that is dropped (`channel::close_one`) counts its subscriptions as `object::close` does.
+- **What is not checked.** `t_bound`'s time bound is unchecked at factor above 1 (a slow host scales the limit, the unit
+  count is the check on every host), and the 1.5 ms figure for `wide-source` (47 us for 32 ports at factor 4, scaled to 1024
+  ports) is an extrapolation, linear in the ports, not a measurement of 1024 ports (128 MiB test machine). The gate
+  marker `untrusted-gate: net-refusal-call` is a comment above each call: a proxy, which checks that the comment is there
+  and not that the call is guarded.
 - **Follow-up.** Count the 1024 as units if a measurement under HVF shows the close near 2 ms.
 
 ## Invariants
