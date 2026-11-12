@@ -98,3 +98,4 @@ sources or with QEMU's own tracing. The sweep since `e423bb5` holds frames once 
 
 The triage's one miss: it said the 30-piece test kills `MAX_PIECES` = 16, but a test that takes its count from
 `MAX_PIECES` changes with it. The test uses a literal 30.
+| - | Stage 9, "living in the system" (architect, 2026-11-12) | **curl and wget (N4's W11, W13)** are deferred from stage 8: a C TLS library first (BearSSL or rustls-ffi), then curl and wget and the `+net ... curl -O` check. `zfetch` stands in until then. Not a blocker for stage 8. |

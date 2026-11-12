@@ -1,6 +1,6 @@
 # ADR-0291: Accounts in the file service: the request that carves one, the derived bounds, and what a bound does
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0055, ADR-0056, ADR-0100, ADR-0262, ADR-0263, ADR-0265, ADR-0269
 - **Evidence:** CP-01, CP-14, quotas/survey.md#the-service-pays-problem
@@ -87,4 +87,4 @@ requests ADR-0265 item 9 folds.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.

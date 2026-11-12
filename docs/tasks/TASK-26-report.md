@@ -26,6 +26,9 @@ Follow-ups merged without a stage tag:
 - `tbound-fix` (`d78bdea`): `t_bound`'s time bound off HVF.
 - `units-fix` (`745669c`): bounded masked work in the frame allocator, the reaper and heap growth.
 
+Q6a's QEMU paths (the keeper's restart by `init`, the reconnect channel, `zosh`'s prompt rebind) are Q7 gate rows, `pending`
+(architect, 2026-11-12); the gate cannot report ready without them.
+
 In progress, in this order:
 
 1. N6 (`work/n6`): implementation, then `opus-review`.
@@ -35,18 +38,20 @@ In progress, in this order:
 
 ### Items for the architect
 
-- **ADRs 0287 to 0294 are all `proposed`** (0287 N4 sockets, 0288 clock and random, 0289 HTTPS, 0290 engine charges, 0291 fsd accounts,
-  0292 who may set a limit, 0293 Q6a keeper, 0294 Q6b display). Each needs the architect's record.
-- **ADR-0289:** its `### Decision` sub-heading transcribes the architect's `/system` instruction (`work/system-ro`), but its
-  "Architect's decision" section is still empty.
-- **N4's done-when is not met:** curl and wget (W11, W13) and the `+net ... curl -O` check are missing; `zfetch` stands in
-  (N4 and N5 'Not done').
+- **Decided (2026-11-12):** ADRs 0287 to 0294 are accepted as recommended (0287 N4 sockets, 0288 clock and random, 0289 HTTPS, 0290
+  engine charges, 0291 fsd accounts, 0292 who may set a limit, 0293 Q6a keeper, 0294 Q6b display), recorded by an agent at the
+  architect's request. ADR-0289's "Architect's decision" carries the `/system` decision: read-only at run time for everyone, the
+  console shell included; `+w /system` is refused with a hint; it changes only when the image is built, and a system-update path is a
+  later ADR.
+- **Decided (2026-11-12): N4's curl and wget are deferred** to the next stage ("living in the system": BearSSL or rustls-ffi as the C
+  TLS library, then curl and wget). `zfetch` stands in until then. It is not a blocker for stage 8 (`docs/backlog.md`).
 - **CI infrastructure:** `QEMU_SLOW_TIMEOUT` is 300 s (`ci-timeout`); the CI image is on ghcr (section 'CI image'); timing tests flake on
   loaded hosts, and `units-fix` bounds the masked work that a slow host stretched; a runner stall hit `w9-term` tcg once.
 - **ADR-0270 open items:** the address-space frame list doubling still runs inline; the `memory_map` list copy under the lock costs N/512
   units (a flat list); the 2 ms bound is an `[assumption]` under HVF, checked on CI by a calibration factor.
-- **Q6a paths never run in QEMU:** `init`'s keeper restart and the reconnect channel (tested only through `t_rooms`' stand-in); the
-  `zosh` prompt rebind.
+- **Decided (2026-11-12): Q6a paths never run in QEMU** (`init`'s keeper restart, the reconnect channel, `zosh`'s prompt rebind)
+  are Q7's gate tests: rows `keeper-restart`, `keeper-reconnect` and `prompt-rebind` of `tools/untrusted-gate.txt`, `pending` until Q7
+  builds them, so the gate cannot report ready without them.
 - **Untrusted gate rows still pending:** `cpu-spinners` and `disk-filler` (the GUI forms of INV-0264-3 and INV-0269-1); `room new
   --untrusted` stays refused; an untrusted room's `/tmp`, `+w` and `+net` lines are not built (ADR-0268 point 7).
 - **Open from earlier parts:** the kernel reserve (1/16 kept, GUI guests 512 MiB); the 'Not done' lists of Q6b (rooms overview, `Raise`
@@ -955,7 +960,8 @@ one-byte page 23.1 against 28.1 ms (HVF). Medians of 5 and 10 runs, single boots
 
 ### Not done
 
-curl and wget (W11, W13) and the plan's `+net ... curl -O` check; `bind`, `listen`, `accept`, datagrams, `socketpair`, `poll`,
+curl and wget (W11, W13) and the plan's `+net ... curl -O` check (deferred by the architect, 2026-11-12, to the next stage, "living in
+the system": BearSSL or rustls-ffi as the C TLS library, then curl and wget; backlog row; not a blocker for stage 8); `bind`, `listen`, `accept`, datagrams, `socketpair`, `poll`,
 `sendmsg`/`recvmsg`, `getnameinfo`, `gethostbyname`; inheritance through `spawn` and `fork`; the REPORT message and hint of
 ADR-0224 rule 5 (INV-0225-1); `SO_RCVTIMEO`; `getsockname` (no `local` request). `FULL=1` was not run. No fuzz target for the new
 parsers: `parse_sockaddr_in`, `inet_pton4`, `inet_aton` and `plan` are total by construction and tested on boundary inputs.
@@ -1191,7 +1197,9 @@ room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts u
   `tmpd` in an untrusted room's job (INV-0268-3). `+w` directories only and no `+net` in untrusted lines (ADR-0268 point 7): the line reader
   has no network words, and `room new --untrusted` is refused whole by the gate before any line is built.
 - **The quota hint through `Refused` notices** and the rooms overview's form and hover card (Q6b).
-- **A run of `init`'s keeper restart and of the reconnect channel in QEMU** (the logic is tested through `t_rooms`' stand-in for `init`).
+- **A run of `init`'s keeper restart and of the reconnect channel in QEMU** (the logic is tested through `t_rooms`' stand-in for `init`),
+  and of `zosh`'s prompt rebind. Decided by the architect (2026-11-12): these are Q7's gate tests, the `pending` rows `keeper-restart`,
+  `keeper-reconnect` and `prompt-rebind` of `tools/untrusted-gate.txt`; the gate stays closed until Q7 builds them.
 - **A POSIX session** (`/etc/zoraya/session`) gets no keeper channel.
 - **Mutation testing** of `zoraya-rooms` (not run: the budget went to the integration; the crate is small and `mutants-host` is the
   next step before the merge).

@@ -1,6 +1,6 @@
 # ADR-0289: What N5 decided where ADR-0228 is silent: ring for `aarch64-unknown-none`, the TLS crate, the roots and the test servers
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0100, ADR-0109, ADR-0153, ADR-0166, ADR-0220, ADR-0222, ADR-0223, ADR-0224, ADR-0226, ADR-0227, ADR-0228, ADR-0230, ADR-0286, ADR-0288
 - **Evidence:** CP-15, CP-27, DM-048, network/survey.md#rustls, network/survey.md#bearssl, network/survey.md#the-root-store-and-its-licence, network/survey.md#what-a-fetch-over-https-needs
@@ -158,4 +158,4 @@ review of N5 recorded.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request. /system is read-only at run time for everyone, the console shell included; fsd serves it read-only and no grant can give write to it (+w /system is refused with a hint). It changes only when the image is built; a system-update path is a later ADR.
