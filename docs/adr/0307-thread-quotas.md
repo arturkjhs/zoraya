@@ -17,8 +17,7 @@ What a thread costs that memory does not bound: a thread stack is 64 KiB of kern
 the program maps; at 512 MiB of room memory that is up to 8,000 threads. Things that grow with the number of threads, not
 with bytes: the run queue and the parked list walks (ADR-0285 point 1 caps a pick at 16 parks and a release at 64, so
 time is bounded but a long list lengthens a period), the deadline queue (one entry per thread that sleeps with a
-deadline, ADR-0301 item 5), the waiter list of a futex (at most `MAX_THREADS` per process), `job_kill`'s wake of every
-blocked thread (steps of 64, ADR-0300 item 6) and the handle table (two slots per thread in the library). Memory
+deadline, ADR-0301 item 5), the waiter list of a futex (at most `MAX_THREADS` per process), `job_kill`'s wake of one blocked thread per process, which wakes the others in steps of 64 (ADR-0300 item 6) and the handle table (two slots per thread in the library). Memory
 overcommit's lesson (DM-030) is that a resource that can be asked for without a count is eventually asked for without
 limit; CP-14 wants the refusal at the request; CP-07 wants the room to contain it.
 
@@ -76,7 +75,10 @@ number (`RLIMIT_NPROC`, `pids.max`).
    memory, so the field that refuses is the first that would be exceeded in the order processes, threads, memory.
 2. **The records.** `JobLimits.threads: Option<u32>` is stored at bytes 16 to 20 of the 24-byte limits record, 0 meaning no
    limit (the word is today "reserved, must be zero", so an old caller that writes zeros means "no thread limit", and the
-   decoder accepts it); bytes 20 to 24 stay reserved. The usage record grows from 120 to 152 bytes: `limit`, `used`, `peak`
+   decoder accepts it); bytes 20 to 24 stay reserved. **`job_set_limits` replaces the whole record**: today all limits are set together or none
+   (`Job::set_limits`, memory, processes and CPU), and `threads` joins them, so a call that leaves bytes 16 to 20 zero removes an earlier thread limit of that job (an old
+   caller does this by not knowing the word), and the limits of the ancestors still apply through the walk, so what is
+   removed is only the job's own ceiling. Callers that must keep it read the record back and write it whole. The usage record grows from 120 to 152 bytes: `limit`, `used`, `peak`
    and `refused` (four `u64`) for threads after the CPU words. The kernel writes what fits; a decoder reads missing
    words as zero and no limit (ADR-0285 point 4's rule).
 3. **The call.** `job_set_limits` checks `threads` as ADR-0261 point 2 checks the others (not above the parent's
@@ -84,11 +86,12 @@ number (`RLIMIT_NPROC`, `pids.max`).
    `QuotaField::Threads` in the value register when the walk refuses.
 4. **Numbers** `[assumption, all]`. The room keeper derives `threads = 3 × procs` for every room that has `procs`:
    32 gives 96. `init` sets the session job to 600 (three times its 200 processes) and the keeper sets the untrusted rooms'
-   job to 288 (three times its 96), so no combination allows more than the 600 threads that the deadline queue of 1024
-   entries covers together with the 55 service processes of ADR-0266 point 4 and the kernel's two reserved entries
-   (ADR-0301 item 5). A trusted room and `home` have no figure of their own. The kernel's `MAX_THREADS_SYSTEM` (1000) stays
-   as the last stop. No new word in the room's line yet: `room` shows the derived figure in `grants` (one more number after
-   `--procs`) and `--threads N` is the later sibling that ADR-0266 left open.
+   job to 288 (three times its 96). These per-job figures bound the session and the untrusted rooms only; the 55 service
+   processes of ADR-0266 point 4 and the trusted jobs outside the session have no thread figure, and only the kernel's
+   `MAX_THREADS_SYSTEM` (1000) bounds them. The deadline queue is therefore sized from that system figure, not from the
+   session's 600: `QUEUE_SIZE >= MAX_THREADS_SYSTEM + kernel timers + RESERVED` (ADR-0301 item 5). A trusted room and `home`
+   have no figure of their own. No new word in the room's line yet: `room` shows the derived figure in `grants` (one
+   more number after `--procs`) and `--threads N` is the later sibling that ADR-0266 left open.
 5. **The signal.** A refusal asserts `OVER_QUOTA` on the limited job as for any field (ADR-0263 point 3); the keeper's
    `Refused { field }` gains `Threads`, and `top` shows the figure as `thr` (ADR-0267, ADR-0294) as a follow-up.
 6. **POSIX** (rows added to ADR-0263 point 4's table): threads refused: `pthread_create`, `thrd_create` return `EAGAIN`
@@ -96,7 +99,9 @@ number (`RLIMIT_NPROC`, `pids.max`).
    `EAGAIN` as for processes.
 7. **What a thread does not cost twice.** The stack, TLS and `struct pthread` are one memory object charged to memory
    (ADR-0303 item 3); the kernel stack and record are charged at `thread_create` (ADR-0300 item 2). A thread that ends
-   refunds the kernel stack, the record and the figure; the user mapping is refunded by the joiner or by itself.
+   refunds the kernel stack, the record and the figure **in `thread_exit`** (ADR-0300 item 3), not when its handle is
+   closed or the process ends; the user mapping is refunded by the joiner or by the thread itself. The thread object that
+   remains costs a few words and is refunded when its handle is closed, which the thread does itself (ADR-0302 item 4).
 
 **Tensions with accepted ADRs.** *ADR-0260's* row "Threads | later" is filled. *ADR-0261 point 1* (`JobLimits` has memory and
 processes, CPU in ADR-0264) gains a field. *ADR-0266 point 1* (five words) stays five. *ADR-0263 point 4's* table gains a row.
@@ -119,7 +124,8 @@ processes, CPU in ADR-0264) gains a field. *ADR-0266 point 1* (five words) stays
   still accepted. *Check:* `cargo test -p zoraya-abi` (the decoders over the old sizes).
 - **INV-0307-3.** The sum of the thread ceilings the keeper and `init` set never exceeds 600 under the session, and a room's is
   three times its processes figure. *Check:* a host test in `zoraya-rooms` over the derivation.
-- **INV-0307-4.** A thread that ends refunds the figure: usage after 1000 create and join rounds equals before. *Check:* an
+- **INV-0307-4.** A thread that ends refunds the figure, at its `thread_exit`: usage after 1000 create and join rounds, and
+  after 2,000 detached ones, equals before. *Check:* an
   in-QEMU test with `job_get_usage`.
 - **INV-0307-5.** `pthread_create` returns `EAGAIN` for `OverQuota(Threads)` and for `OverQuota(Memory)`. *Check:* INV-0100-4's
   table test and an in-QEMU `libposix` test in a limited job.

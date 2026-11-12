@@ -74,10 +74,15 @@ the child would deadlock `fork`'s child at its first `malloc`, `open` or `printf
 2. **Freeze.** `snapshot_process` sets `snapshot_freeze` on the caller's process for the call. Every other thread of the
    process parks at its next return to EL0 (the `park_if_stopped` mechanism of ADR-0105 item 8, with its own flag), and a
    thread blocked in the kernel parks when it returns. The flag is cleared on success and on every failure path, and when the
-   caller is killed. Nothing waits for siblings to park: they are not running on the one CPU while the caller runs
-   (a sibling that is mid-call at a step point parks when its call ends). The freeze is the whole of the copy, so the
-   child's memory is the parent's at the instant the call began, for everything but the in-kernel copy-out of a sibling's
-   blocked call that finishes after the freeze (its buffer is that sibling's own).
+   caller is killed. The flag alone does not stop a sibling that is inside the kernel: a stepped `memory_map` or `memory_unmap`
+   that is between two steps, or a detached sibling unmapping its stack in `thread_exit`, would change the address space
+   under the copy. So **`snapshot_process` takes the per-process mapping lock (ADR-0301 item 6) after setting the flag
+   and holds it for the whole call, through an RAII guard released on every path.** A sibling mid-mapping-call finishes
+   that call (or waits at its next mapping call), then parks at its next return to EL0; a sibling in `thread_exit`'s
+   unmap waits for the lock and is the same case. The caller does not wait for siblings to park: they are not running
+   on the one CPU while it runs. With both, the child's memory is the parent's at the instant the call began, for
+   everything but the in-kernel copy-out of a sibling's blocked call that finishes after the freeze (its buffer is that
+   sibling's own).
 3. **Charge before copy.** The child's job pays the copy of *every* mapping, other threads' stacks included, and the call is
    refused before copying if it does not fit (ADR-0102 item 7, ADR-0261 point 6): a 32-thread process forks a child that
    costs 32 stacks until the child frees them (item 5).
@@ -134,6 +139,10 @@ rule. *ADR-0104 item 6* gains the lock.
   inherited ones.
 - **INV-0306-5.** A failed `snapshot_process` leaves no thread parked: the siblings run again. *Check:* an in-QEMU test with a
   refused charge, then the siblings' counter advancing.
+- **INV-0306-6.** A sibling that maps and unmaps in a loop (`mmap`/`munmap` of 64 KiB, and stepped maps of 1 MiB) while
+  the main thread forks changes nothing in the copy: every child sees the mappings and bytes that existed at the
+  instant the call began, and the parent's mapping table is unchanged by the call. *Check:* an in-QEMU `libposix` test,
+  200 forks, under HVF and TCG, each child comparing a checksum of the loop's final-published region table.
 
 ## Open questions
 
