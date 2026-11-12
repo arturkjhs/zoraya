@@ -1,6 +1,6 @@
 # ADR-0294: Q6b, what the person sees where ADR-0262 and ADR-0267 are silent
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0153, ADR-0169, ADR-0172, ADR-0262, ADR-0263, ADR-0266, ADR-0267, ADR-0269, ADR-0293
 - **Evidence:** CP-23, DM-034, quotas/survey.md#linux-cgroups-v2, quotas/survey.md#lessons-for-zoraya
@@ -146,4 +146,4 @@ builtin (point 1) and the settings window's edit through the panel (point 8).
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0288: What N5 decided where ADR-0226 and ADR-0227 are silent: the clock, the seed, the generator and the random service
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0043, ADR-0050, ADR-0052, ADR-0053, ADR-0054, ADR-0091, ADR-0153, ADR-0191, ADR-0220, ADR-0226, ADR-0227, ADR-0228, ADR-0287
 - **Evidence:** CP-15, CP-20, CP-27, DM-048, DM-065, network/survey.md#a-real-clock, network/survey.md#entropy, network/survey.md#what-a-fetch-over-https-needs
@@ -105,4 +105,4 @@ Predictable; rejected for anything that guards a secret.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.

@@ -1,6 +1,6 @@
 # ADR-0292: Who may set or read a storage limit on the file protocol
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0055, ADR-0153, ADR-0265, ADR-0290
 - **Evidence:** CP-14, quotas/survey.md#storage
@@ -70,4 +70,4 @@ None.
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.

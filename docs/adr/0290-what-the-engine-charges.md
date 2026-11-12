@@ -1,6 +1,6 @@
 # ADR-0290: What the filesystem engine charges to a limit: files' parents, unnamed and unlinked files, and the wire
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-11
 - **Depends on:** ADR-0010, ADR-0011, ADR-0013, ADR-0016, ADR-0055, ADR-0263, ADR-0265
 - **Evidence:** CP-01, CP-14, quotas/survey.md#storage
@@ -101,4 +101,4 @@ above 15. (5) Who may set a limit on the wire, and how a test sets one before a 
 
 ## Architect's decision
 
-(Left empty for the architect.)
+Accepted 2026-11-12. Decided by the architect; recorded by an agent at the architect's request.
