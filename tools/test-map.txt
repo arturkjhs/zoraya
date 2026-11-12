@@ -147,3 +147,13 @@ tests/shell/net-fetch.script test-net
 tools/test-httpd/            test-net
 tests/shell/net-dns.script   test-net
 crates/zoraya-shell/src/netgrant.rs test-net
+
+# HTTPS and the random service (N5): the TLS crate, ring, the generator, rngd
+# and the test PKI. The files script holds `random`, the net script `fetch https`.
+crates/zoraya-tls/            test-net
+crates/zoraya-rng/            test-files test-net
+vendor/                       test-net
+vendor/ring.sha256            check
+tools/check-vendor-ring.sh    check
+tests/net/tls/                test-net
+user/src/bin/rngd.rs          test-files test-net

@@ -1051,3 +1051,16 @@ in a host test) or `zoraya-tls`. No mutation run.
   copy; (3) `fetch` treats a connection that ends without `close_notify` as an error unless the page was complete, and the roots entry
   is checked by the terminal's `not_given` only in `open_entry`; (4) any hostile-byte path in `pump` (the 49,152-byte bound, `discard`
   accounting); (5) the vendored ring: is one line the right size of change.
+
+### Review fixes (N5, `docs/tasks/TASK-26-review-n5.md`)
+
+1. `rngd` refuses a seed under 32 bytes or all zero ("no entropy source", it does not serve; `Generator::from_seed`); `seed_random` returns a `Result` and refuses fewer than 32 bytes (tests in `zoraya-rng` and `zoraya-tls/tests/unseeded.rs`).
+2. The realtime base's lowest bit says the real-time clock gave the date; `fetch` gives TLS no clock without it, so the handshake fails with `NoClock` ("no date") (`zoraya-abi` test; `no_date_means_no_handshake`).
+3. Only connections of depth 0 (`init`) and 1 (the shell) may `Share`, 64 live children each, freed when a child closes (`only_the_first_two_levels_share_and_children_are_counted`).
+4. `vendor/ring.sha256` is checked by `make check` (`tools/check-vendor-ring.sh`, through `check-host-paths`); that check's exclusion is `vendor/ring/` only.
+5. The kernel hands the seed object on once (`take()`); ADR-0288 item 4 says so; `rngd` overwrites its seed buffer.
+6. The `net-fetch` check requires `ended after 0 request bytes` for both refused servers.
+7. `Connection::connect` takes 32 seed bytes and mixes them in; INV-0289-1 says the generator-backed `getrandom` runs only in `make test-net-fetch`.
+8. The test roots carry `nameConstraints=permitted;DNS:.zoraya` (PKI regenerated); `tests/net/tls/README.md` says the keys are public.
+9. Limitation recorded (not fixed): a console shell, or a granted `fetch URL -o /system/tls/roots`, can replace `/system/tls/roots`. INV-0227-2's text says the check covers `mix` only. `tools/test-map.txt` has lines for `zoraya-tls`, `zoraya-rng`, `vendor/`, `rngd`; `device.rs` uses `checked_add`.
+Not done: the differential property test of `pem.rs` against rustls's PEM parser.

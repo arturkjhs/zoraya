@@ -89,15 +89,24 @@ New or alpha (`network/survey.md#rustls`); not tried.
 - **Negative.** 8 MB of vendored C and assembly; a second copy of ring's upgrade path; `fetch` is 1 MB; a handshake
   costs the time shown in `docs/design.md`; a certificate valid for a name behind `net.hosts` is checked against
   that name only.
+- **Limitation (review).** `/system/tls/roots` is read-only only in a program's own table: a console shell holds the
+  volume root and a granted `fetch URL -o /system/tls/roots` can replace the file. Not fixed in N5 (protecting `/system`
+  needs a volume-level read-only area); recorded here, in ADR-0228's open questions and in `docs/design.md`.
 - **Follow-up.** BearSSL and curl; `getrandom` in `libposix`; the revocation question; the `tls.roots` setting.
 
 ## Invariants
 - **INV-0289-1.** An expired certificate, a certificate for another name, a root that did not sign it and a missing
   date each fail in `connect`, and the peer has read no application byte. *Check:* `cargo test -p zoraya-tls`
-  (`tests/handshake.rs`); `make test-net-fetch` (the server's log has no `request` line for them).
+  (`tests/handshake.rs`); `make test-net-fetch` (the server's log has, for the expired and the wrong-name server,
+  exactly `ended after 0 request bytes`). Which path runs where: the host handshake tests get ring's randomness from
+  the operating system, so the generator-backed `getrandom` path (`zoraya-tls`'s `fill_random`, seeded by
+  `Connection::connect`'s 32 bytes) runs only in `make test-net-fetch`; `cargo test -p zoraya-tls --test unseeded`
+  covers the generator on the host. A date counts only if the real-time clock gave it (the lowest bit of the realtime
+  base, `zoraya-abi`'s `checked_wall_seconds`): without one `fetch` fails with "no date".
 - **INV-0289-2.** `vendor/ring` equals the registry copy of 0.17.14 apart from `build.rs` (one line) and `Cargo.toml`
-  (a lints table) and the missing tests. *Check:* `tools/vendor-ring.sh` regenerates it and `git diff --exit-code
-  vendor/ring` is empty (not yet in `make check`).
+  (a lints table) and the missing tests. *Check:* `tools/vendor-ring.sh` regenerates it; `make check` (through `check-host-paths`) compares
+  every tracked file of `vendor/ring` with the SHA-256 manifest `vendor/ring.sha256` (`tools/check-vendor-ring.sh`, no
+  network). A later change to ring's C or assembly fails until the manifest is rewritten on purpose.
 - **INV-0289-3.** `netd` has no TLS dependency (INV-0228-2). *Check:* `cargo tree -p zoraya-user --bin netd` shows
   neither `rustls` nor `ring` (`netd` is a bin of `zoraya-user`; cargo links by use, so the check is on the binary's
   symbols; not automated yet).

@@ -52,11 +52,13 @@ Predictable; rejected for anything that guards a secret.
    is `max(latest + 1, floor) - monotonic`, saturating at 0 (INV-0226-1).
 3. **`ZNS1` grows to a 32-byte header**: bytes 24 to 31 are `realtime_base` (u64, little endian); byte 22 is the
    index of the random connection and byte 23 stays reserved. `Startup::decode` stays total. `namespace::realtime()`
-   is the base plus the monotonic clock, or `None` for a record with 0 (ADR-0191 rule 5). `date` prints it in UTC.
+   is the base plus the monotonic clock, or `None` for a record with 0 (ADR-0191 rule 5). The base's lowest bit says that the real-time clock gave the date (a floor was applied); `zoraya-abi`'s `checked_wall_seconds` is `None` without it, so TLS never checks a certificate against the volume's latest time. `date` prints it in UTC.
 4. **The seed** is `/chosen/rng-seed` copied by the kernel into one memory object (a `u32` length, then at most 4,092
    bytes), given to `init` at `SEED_SLOT` = 6 with read, map and transfer rights. `init` moves it to `rngd`, which maps
-   it, hands the bytes to the generator, unmaps and closes it. The device tree blob still holds the same bytes in the
-   kernel's memory; wiping it is not done (a limitation: only the kernel maps it).
+   it, hands the bytes to the generator, unmaps and closes it, and wipes its own copy. The kernel takes its reference
+   out of its table when it hands the object to `init`, so the object (and its frame) ends with `rngd`'s handle. The
+   device tree blob still holds the same bytes in the kernel's memory; wiping it is not done (a limitation: only the
+   kernel maps it). `rngd` refuses a seed under 32 bytes or all zero ("no entropy source") and does not serve.
 5. **The generator** (`zoraya-rng`) is ChaCha20 (RFC 8439's block function, tested against its vector) with fast key
    erasure: a request's output comes from the block stream under the key, and the first 32 bytes of that stream replace
    the key before any output leaves. Absorbing input XORs 32-byte chunks into the key, each followed by one block
@@ -67,7 +69,9 @@ Predictable; rejected for anything that guards a secret.
 6. **`rngd`** starts when the seed exists (else `init` says `no entropy source`, no `Random` connection is given and
    `random` fails). One channel to `init`, then up to 256 connections made by `Share` (a message carrying the server
    end); `Bytes(n)` answers exactly `n` bytes for `n` up to 4,096 at once (INV-0227-3); a message that does not
-   decode ends the connection, an unknown ordinal gets `ErrorReply`.
+   decode ends the connection, an unknown ordinal gets `ErrorReply`. Only `init`'s connection and the shell's (depth 0
+   and 1) may `Share`, each for at most 64 live children (freed when a child closes), so a program cannot use up the
+   table.
 7. **The shell** holds a connection at slot 10 (from `init`) and shares a fresh one with each native program it
    starts, in the new `random` slot of `ZNS1`; `random [COUNT]` prints bytes. A program started without a shell has
    none. `zoraya_user::random::random(buf)` is the call; `zoraya-tls` seeds its own generator with 32 bytes from it

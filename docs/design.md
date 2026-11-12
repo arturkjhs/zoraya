@@ -1779,7 +1779,7 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   interrupt can be made of it); `init` holds it at slot 5 and, each time it starts the storage stack, maps it, reads `RTC_DR`
   (whole seconds) and passes `--time-floor NANOSECONDS` to the root volume's `fsd`. `time_base(latest, monotonic, floor)` is
   `max(latest + 1, floor) - monotonic`. `ZNS1` (the native start-up record) has a 32-byte header with `realtime_base`;
-  `zoraya_user::namespace::realtime()` is that base plus the monotonic clock; `date` prints it as `YYYY-MM-DD HH:MM:SS UTC`.
+  `zoraya_user::namespace::realtime()` is that base plus the monotonic clock; the base's lowest bit says the real-time clock gave the date, and `checked_realtime_seconds()` (what `fetch` gives TLS) is `None` without it, so a certificate is never checked against the volume's latest time alone; `date` prints it as `YYYY-MM-DD HH:MM:SS UTC`.
   Virtio devices now start at slot 7 (`FIRST_DEVICE_SLOT`); slot 6 holds the entropy seed. Under QEMU the guest's `date`
   agrees with the host's within 2 s (`tests/shell/clock.script`, the runner's `D` step).
 - **The random service** (ADR-0227). The kernel copies `/chosen/rng-seed` into a memory object for `init`, which gives it to
@@ -1790,10 +1790,10 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   is the program's call. **Not built:** the virtio-rng reseed, `libposix`'s `getrandom` and `/dev/urandom`, the connection of the
   panel's and the broker's programs and of a `fork` child, a restart of `rngd`.
 - **TLS** (ADR-0228). `zoraya-tls` is a blocking client over rustls 0.23.46's unbuffered API with ring 0.17.14 as the provider,
-  `no_std`: `Config::new(roots, now)`, `Connection::connect(config, name, transport)` (the handshake and nothing else, so no
+  `no_std`: `Config::new(roots, now)`, `Connection::connect(config, name, transport, seed)` (32 fresh bytes from the random service are mixed into the generator first; `seed_random` refuses fewer than 32; the handshake and nothing else, so no
   application byte goes out before it succeeds), `read`, `write_all`, `close`. The date is the function the program gives (the
   wall clock; none, no handshake); ring's `getrandom` is a `zoraya-rng` generator the program seeds with 32 bytes from its
-  random connection. `fetch` reads `/system/tls/roots`, which the shell adds (read only, "with the network") to the table of a
+  random connection (`rngd` refuses a seed under 32 bytes or all zero and does not serve; only `init`'s and the shell's connections may `Share`, 64 live children each). `fetch` reads `/system/tls/roots`, which the shell adds (read only, "with the network") to the table of a
   program that gets `reach`, and verifies the host of the address, the name that was granted. `netd` sees ciphertext.
 - **ring on `aarch64-unknown-none`.** N1's check built ring's objects but never linked: ring assembles its aarch64 assembly
   only for operating systems it lists, and `none` is not one. `vendor/ring` is the registry copy with that one line changed
@@ -1803,7 +1803,7 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
   recorded fallback, was not needed.
 - **The roots** are Mozilla's list from the CCADB report (108 certificates with the Websites trust bit, no distrust date and no
   applied constraints; CDLA-Permissive-2.0 data; 2026-11-12) in `rootfs/system/tls/roots`. The path is a constant (the
-  `tls.roots` setting of ADR-0229 is not built). The file is in the root volume, which the shell's tree can write.
+  `tls.roots` setting of ADR-0229 is not built). The file is in the root volume, which the shell's tree can write: a console shell, or a `fetch URL -o /system/tls/roots` it grants, can replace the trust store (a recorded limitation; ADR-0289, ADR-0228's open questions). Every `.key` under `tests/net/tls` is public and for tests only (its README; name-constrained to `.zoraya`).
 - **Tests.** `cargo test -p zoraya-rng` (10: RFC 8439's block vector, the generator, the service), `-p zoraya-tls` (8: a rustls server
   on loopback with the test PKI of `tests/net/tls`, 200 kB each way; expired, another name, an unknown root, no date, a bad name,
   no roots, PEM; and no random without a seed), `-p zoraya-fs-service --test time` (the floor), `-p zoraya-dtb`, `-p zoraya-abi`.
