@@ -21,3 +21,6 @@ perl -0pi -e 's/const LINUX_ABI: &\[&str\] = &\[\n/const LINUX_ABI: &[&str] = &[
 grep -q 'Zoraya: aarch64-unknown-none' vendor/ring/build.rs
 # And its warnings are upstream's, not ours: a path dependency would show them.
 printf '\n[lints.rust]\nwarnings = "allow"\n' >> vendor/ring/Cargo.toml
+# The manifest `make check` compares the directory with (INV-0289-2). It lists
+# tracked files, so run `git add vendor/ring` before this last step if the
+# directory changed: tools/check-vendor-ring.sh --write

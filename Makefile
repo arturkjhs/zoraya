@@ -322,8 +322,10 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_FETCH_RUN,400,net-fetch-tcg,tcg); rc=$$?; fi; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
 	if [ $$rc = 0 ]; then \
-		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd.log; then \
-			echo '[net-fetch] FAIL: INV-0228-1: the server saw a request after a refused handshake, or none on the valid one'; cat target/test-logs/test-httpd.log; rc=1; \
+		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd.log \
+		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd.log \
+		   || grep '^tls \(expired\|wrong\): ended after' target/test-logs/test-httpd.log | grep -qv 'ended after 0 request bytes'; then \
+			echo '[net-fetch] FAIL: INV-0228-1: the server saw request bytes after a refused handshake (or no clean end for it), or no request on the valid one'; cat target/test-logs/test-httpd.log; rc=1; \
 		else echo '[net-fetch] ok: the refused TLS servers read no request byte'; fi; \
 	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_FETCH_DISK); rc=$$?; fi; \
@@ -760,13 +762,19 @@ check-kernel-tty:
 # Host paths: macOS's users' folders, and this host's own home directory (on Linux
 # /home/NAME); not every /home/, which is Zoraya's own home folder
 # (shell.home, /data/home/APP).
-# vendor/ is other people's code (ring), with its authors' names and addresses.
-check-host-paths:
+# vendor/ring/ is other people's code, with its authors' names and addresses; the
+# rest of vendor/ is ours (its manifest is checked for what it holds, below).
+check-host-paths: check-vendor-ring
 	@id="$$(git config user.email)"; \
 	home="$$(echo "$$HOME" | sed 's/[.[\*^$$]/\\&/g')"; \
 	hits="$$(git grep -n -I -E "/Use[r]s/|$${home:-/nonexistent}/|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}" -- . \
-	  ':!docs/research/' ':!tools/posix-surface/results/' ':!vendor/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
+	  ':!docs/research/' ':!tools/posix-surface/results/' ':!vendor/ring/' | { if [ -n "$$id" ]; then grep -vF "$$id"; else cat; fi; })"; \
 	if [ -n "$$hits" ]; then echo "host paths or email addresses in tracked files:"; echo "$$hits"; exit 1; fi
+
+# INV-0289-2 offline: vendor/ring matches its committed SHA-256 manifest.
+.PHONY: check-vendor-ring
+check-vendor-ring:
+	tools/check-vendor-ring.sh
 
 # Every host-tested crate caps its test heap (CLAUDE.md, Memory limits): the
 # library, if it has tests, and every top-level file of tests/, by the cap or
