@@ -1,12 +1,13 @@
 //! Jobs (ADR-0003, ADR-0004, ADR-0046). Every process is in one, and a job
 //! tree is how a set of processes is signalled or killed as one.
 //!
-//! [`TREE`] covers adding to a job, leaving one, and walking a tree, so a
-//! process being created is either in the walk or created after it.
+//! [`TREE`] covers adding to a job, leaving one, and one step of a walk of a
+//! tree (ADR-0270), so a process being created is either in the walk or
+//! created after it.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use zoraya_abi::quota::{FieldUsage, JobLimits, JobUsage};
 use zoraya_abi::{ExitReason, ExitRecord, RequestKind, Status, job_signals};
@@ -19,12 +20,17 @@ use crate::cpu;
 use crate::memory::heap::uncharged_arc;
 use crate::port;
 use crate::process::Process;
+use crate::steps;
 use crate::sync::SpinLock;
 
 /// Deepest job tree (ADR-0046).
 const MAX_DEPTH: u32 = 32;
 
 static TREE: SpinLock<()> = SpinLock::new(());
+/// Walks of a tree now running or paused between steps. While there are
+/// any, a dropped job leaves its dead slot in its parent's list (a dead
+/// `Weak` is skipped) so that no walk's index moves.
+static WALKS: AtomicUsize = AtomicUsize::new(0);
 static ROOT: SpinLock<Option<Arc<Job>>> = SpinLock::new(None);
 
 struct State {
@@ -118,6 +124,10 @@ impl Job {
         let mut state = parent.state.lock();
         if state.closed {
             return Err(Status::BadState);
+        }
+        if state.children.len() == state.children.capacity() && WALKS.load(Ordering::SeqCst) == 0 {
+            // Dead slots left by drops during a walk go before the list grows.
+            state.children.retain(|c| c.strong_count() > 0);
         }
         state
             .children
@@ -270,45 +280,127 @@ impl Job {
         drop(member);
     }
 
-    /// Calls `f` for every job in the tree, holding [`TREE`] throughout, which
-    /// stops the lists changing, so an index is a stable way through them.
-    fn walk(&self, f: &mut impl FnMut(&Job)) {
-        f(self);
-        let mut i = 0;
-        loop {
-            let child = self.state.lock().children.get(i).and_then(Weak::upgrade);
-            match child {
-                Some(child) => child.walk(f),
-                None if i >= self.state.lock().children.len() => break,
-                None => {}
-            }
-            i += 1;
+    /// Visits every job of the tree below `this` (`on_job`, then `on_process`
+    /// for each of its processes) in steps of at most [`steps::STEP`] visits
+    /// (ADR-0270 point 1). [`TREE`] is held inside a step only: between steps
+    /// no lock is held and the call pauses, so the tree may change meanwhile.
+    ///
+    /// The way through it is a path of at most [`MAX_DEPTH`] frames, each with
+    /// the number of children and of processes of its job not yet visited,
+    /// counted down from the end of the list: a process that leaves
+    /// (`swap_remove`) moves the last one into the hole, which a visit from
+    /// the end has either passed or will still reach. Dead children are not
+    /// taken out of a list while any walk is running ([`WALKS`]), so no index
+    /// moves. What joins during a walk is appended and not reached by it:
+    /// a job that is closed or suspended already has the effect (`join`,
+    /// `create`), and a signal is for what was there when the call began.
+    fn walk(
+        this: &Arc<Job>,
+        on_job: &mut impl FnMut(&Job),
+        on_process: &mut impl FnMut(&Arc<Process>),
+    ) {
+        struct Frame {
+            job: Arc<Job>,
+            entered: bool,
+            processes: usize,
+            children: usize,
         }
-    }
-
-    fn for_each_process(&self, f: &mut impl FnMut(&Arc<Process>)) {
-        let mut i = 0;
-        loop {
-            let process = self.state.lock().processes.get(i).cloned();
-            match process {
-                Some(process) => f(&process),
-                None => break,
+        /// Keeps [`WALKS`] true for the life of the walk.
+        struct Active;
+        impl Active {
+            fn new() -> Active {
+                WALKS.fetch_add(1, Ordering::SeqCst);
+                Active
             }
-            i += 1;
+        }
+        impl Drop for Active {
+            fn drop(&mut self) {
+                WALKS.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _active = Active::new();
+        let mut path: [Option<Frame>; MAX_DEPTH as usize + 1] =
+            [const { None }; MAX_DEPTH as usize + 1];
+        let mut depth = 1;
+        path[0] = Some(Frame {
+            job: this.clone(),
+            entered: false,
+            processes: 0,
+            children: 0,
+        });
+        while depth > 0 {
+            {
+                let _tree = TREE.lock();
+                let mut budget = steps::STEP;
+                while budget > 0 && depth > 0 {
+                    let Some(frame) = path[depth - 1].as_mut() else {
+                        break;
+                    };
+                    budget -= 1;
+                    steps::count(1);
+                    if !frame.entered {
+                        frame.entered = true;
+                        on_job(&frame.job);
+                        let state = frame.job.state.lock();
+                        frame.processes = state.processes.len();
+                        frame.children = state.children.len();
+                        continue;
+                    }
+                    if frame.processes > 0 {
+                        frame.processes -= 1;
+                        let process = frame
+                            .job
+                            .state
+                            .lock()
+                            .processes
+                            .get(frame.processes)
+                            .cloned();
+                        if let Some(process) = process {
+                            on_process(&process);
+                        }
+                        continue;
+                    }
+                    if frame.children > 0 {
+                        frame.children -= 1;
+                        let child = frame
+                            .job
+                            .state
+                            .lock()
+                            .children
+                            .get(frame.children)
+                            .and_then(Weak::upgrade);
+                        if let Some(child) = child {
+                            path[depth] = Some(Frame {
+                                job: child,
+                                entered: false,
+                                processes: 0,
+                                children: 0,
+                            });
+                            depth += 1;
+                        }
+                        continue;
+                    }
+                    depth -= 1;
+                    path[depth] = None;
+                }
+            }
+            if depth > 0 {
+                // No lock is held: a pending interrupt runs, and the slice
+                // may end. The walk goes on to its end whatever the caller
+                // was asked, as a teardown does.
+                steps::pause();
+            }
         }
     }
 
     /// ADR-0004 rule 3: all or later. Delivers to everything it can, and
     /// reports a full queue afterwards (ADR-0046).
-    pub fn signal(&self, kind: RequestKind, detail: u32) -> Result<(), Status> {
-        let _tree = TREE.lock();
+    pub fn signal(self: &Arc<Self>, kind: RequestKind, detail: u32) -> Result<(), Status> {
         let mut result = Ok(());
-        self.walk(&mut |job| {
-            job.for_each_process(&mut |process| {
-                if let Err(e) = process.signal(kind, detail) {
-                    result = Err(e);
-                }
-            });
+        Job::walk(self, &mut |_| {}, &mut |process| {
+            if let Err(e) = process.signal(kind, detail) {
+                result = Err(e);
+            }
         });
         result
     }
@@ -316,41 +408,47 @@ impl Job {
     /// Stops every process in the tree and asserts `SUSPENDED` on every job in
     /// it (ADR-0105 item 8). On one CPU, with the kernel running, no other
     /// thread is at EL0: each one parks on its next way there, so none runs a
-    /// user instruction after this returns (INV-0105-5).
-    pub fn suspend(&self) {
-        let _tree = TREE.lock();
-        self.walk(&mut |job| {
-            job.state.lock().suspended = true;
-            port::set_signals(job.source, job_signals::SUSPENDED);
-            job.for_each_process(&mut |process| process.stop());
-        });
+    /// user instruction after this returns (INV-0105-5). A process that joins
+    /// a job already visited starts stopped (`join`); a job made under one
+    /// starts suspended.
+    pub fn suspend(self: &Arc<Self>) {
+        Job::walk(
+            self,
+            &mut |job| {
+                job.state.lock().suspended = true;
+                port::set_signals(job.source, job_signals::SUSPENDED);
+            },
+            &mut |process| process.stop(),
+        );
     }
 
     /// Undoes [`Job::suspend`] for the tree. A job that is not suspended is
     /// left as it is.
-    pub fn resume(&self) {
-        let _tree = TREE.lock();
-        self.walk(&mut |job| {
-            job.state.lock().suspended = false;
-            port::clear_signals(job.source, job_signals::SUSPENDED);
-            job.for_each_process(&mut |process| process.cont());
-        });
+    pub fn resume(self: &Arc<Self>) {
+        Job::walk(
+            self,
+            &mut |job| {
+                job.state.lock().suspended = false;
+                port::clear_signals(job.source, job_signals::SUSPENDED);
+            },
+            &mut |process| process.cont(),
+        );
     }
 
     /// Ends the tree and closes it to new processes (ADR-0046).
-    pub fn kill(&self) {
-        let _tree = TREE.lock();
-        self.walk(&mut |job| {
-            job.state.lock().closed = true;
-            job.for_each_process(&mut |process| {
+    pub fn kill(self: &Arc<Self>) {
+        Job::walk(
+            self,
+            &mut |job| job.state.lock().closed = true,
+            &mut |process| {
                 process.request_exit(ExitRecord {
                     code: 0,
                     reason: ExitReason::Killed,
                     detail: 0,
                     request_kind: None,
                 });
-            });
-        });
+            },
+        );
     }
 }
 
@@ -361,12 +459,15 @@ impl Drop for Job {
             charge::refund_memory(self, record, Kind::Kernel);
         }
         if let Some(parent) = &self.parent {
-            let this: *const Job = self;
-            parent
-                .state
-                .lock()
-                .children
-                .retain(|c| !core::ptr::eq(c.as_ptr(), this));
+            // Not while a walk runs: it counts on the slots staying (`walk`).
+            if WALKS.load(Ordering::SeqCst) == 0 {
+                let this: *const Job = self;
+                parent
+                    .state
+                    .lock()
+                    .children
+                    .retain(|c| !core::ptr::eq(c.as_ptr(), this));
+            }
         }
         port::free_source(self.source);
     }

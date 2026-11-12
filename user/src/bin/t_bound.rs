@@ -13,12 +13,13 @@ use zoraya_abi::snapshot::Encoder as SnapshotEncoder;
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     CONSOLE, ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags,
-    MemoryFlags, OBJECT_TYPES, ObjectType, Rights, Status,
+    MemoryFlags, OBJECT_TYPES, ObjectType, RequestKind, Rights, Status,
 };
 use zoraya_user::{
     channel_create, channel_write, clock_monotonic, handle_close, handle_type, image, job_create,
-    job_get_usage, job_kill, memory_create, memory_map, memory_unmap, println, process_exit,
-    raw_syscall, sleep_until, snapshot_process, spawn, startup, wait_exit,
+    job_get_usage, job_kill, job_resume, job_signal, job_suspend, memory_create, memory_map,
+    memory_unmap, println, process_exit, raw_syscall, sleep_until, snapshot_process, spawn,
+    startup, wait_exit,
 };
 
 const MASKED_MAX_NS: u64 = 0x7013;
@@ -502,6 +503,66 @@ fn teardown(label: &str, short: &[u8], long: &[u8]) {
     );
 }
 
+/// ADR-0270, INV-0270-1: `job_signal`, `job_suspend`, `job_resume` and
+/// `job_kill` walk a whole tree of jobs, in steps. A top job with `n` jobs
+/// below it (chains of 12 under it, all held by handles, which a room's table and
+/// memory limit allow in the hundreds), then each call on the top job, with the longest masked interval.
+fn job_tree_sites() {
+    let build = |n: usize| {
+        let top = job_create(JOB, JobFlags::NONE).expect("top job");
+        let mut held = alloc::vec::Vec::new();
+        let mut made = 0;
+        while made < n {
+            let mut parent = top;
+            for _ in 0..12 {
+                if made >= n {
+                    break;
+                }
+                let job = job_create(parent, JobFlags::NONE).expect("job");
+                held.push(job);
+                made += 1;
+                parent = job;
+            }
+        }
+        (top, held)
+    };
+    let mut results = [(0, 0); 4];
+    for (round, n) in [8usize, 700].into_iter().enumerate() {
+        let (top, held) = build(n);
+        let calls: [(&str, &dyn Fn()); 3] = [
+            ("job_signal", &|| {
+                job_signal(top, RequestKind::Custom(7), 0).expect("signal");
+            }),
+            ("job_suspend", &|| job_suspend(top).expect("suspend")),
+            ("job_resume", &|| job_resume(top).expect("resume")),
+        ];
+        for (at, (_, call)) in calls.iter().enumerate() {
+            let (_, ns) = measure(call);
+            if round == 0 {
+                results[at].0 = ns;
+            } else {
+                results[at].1 = ns;
+            }
+        }
+        let (_, ns) = measure(|| job_kill(top).expect("kill"));
+        if round == 0 {
+            results[3].0 = ns;
+        } else {
+            results[3].1 = ns;
+        }
+        for job in held {
+            handle_close(job).expect("close");
+        }
+        handle_close(top).expect("close");
+    }
+    for (at, site) in ["job_signal", "job_suspend", "job_resume", "job_kill"]
+        .into_iter()
+        .enumerate()
+    {
+        check(site, results[at].0, results[at].1);
+    }
+}
+
 fn teardown_sites() {
     teardown("a process holding 24 MiB", b"hold-short", b"hold-long");
     teardown("400 objects of 256 KiB", b"crowd-short", b"crowd-long");
@@ -568,6 +629,7 @@ fn inner() -> i32 {
     check("snapshot_process", snapshot_of(STEP), snapshot_of(BIG));
     let (step, big) = chain_close();
     check("channel chain close", step, big);
+    job_tree_sites();
     teardown_sites();
     a_kill_between_steps_leaves_nothing();
     println!("t_bound: all passed");

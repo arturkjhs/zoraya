@@ -269,6 +269,23 @@ and exits.
   step boundary; and the kernel's page-table frames come from the boot pool (64 tables) until it is empty, so the
   count of them in `backing` shows only past 128 MiB of window; (d) `reaper::free_some` still frees up
   to a step under the queue's lock, as before.
+- *Q7 review note (agent, ADR-0001 rule 6), the job tree walks are sites:* the review of the system calls
+  (`docs/tasks/TASK-26-syscall-review.md`, error 1) found `job_signal`, `job_suspend`, `job_resume` and `job_kill` walking a
+  whole subtree with IRQ masked and `TREE` held; a limited room can keep tens of thousands of jobs. They are sites of
+  point 1 now. `Job::walk` goes in steps of `steps::STEP` visits (a job, or one of its processes, is one): inside a step
+  it holds `TREE`; between steps it holds nothing and calls `steps::pause`, which cannot fail, so a walk runs to its end
+  whatever the caller was asked (as a teardown does). The way through is a path of at most 32 frames (the depth limit)
+  with the counts of children and of processes not yet visited, counted down from the end of the lists; a process that
+  leaves (`swap_remove`) is either behind the walk or still ahead of it, and a dropped job leaves its dead slot in its
+  parent's list while any walk runs (`WALKS`), so no index moves; a list drops dead slots when it is about to grow, with
+  no walk running. What joins during a walk is not reached by it: `job_kill` closes each job before its children, so a
+  job or process made later is refused; `job_suspend` and `job_resume` leave a job created or joined later in the state
+  its parent has; `job_signal` is for what was there when it started. Two walks may now interleave, so a `job_resume`
+  that lands between the steps of a `job_suspend` of the same tree leaves its later jobs suspended: the same outcome as
+  the two calls in the other order. `t_bound` builds a tree of 700 jobs under one top job and measures the four calls
+  against a tree of 8 (units on every host, time at factor 1). Not changed: `Job::drop`'s `retain` and the growth of
+  `children` are linear in the parent's children, in one interval each (bounded by the memory limit; a later task);
+  the drop of a long chain of jobs (each holds its parent) runs in whichever call drops the last handle.
 - *Q2 note:* the INV-0261-2 test compares the heap with 4 KiB of allowance: the kernel heap keeps what it grew by.
   A refusal part way through the walk of `snapshot_process` (the charge of `copy_page`) is not tested yet.
 
