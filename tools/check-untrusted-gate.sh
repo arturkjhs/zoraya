@@ -114,5 +114,14 @@ if [ "$net_refusal" -eq 0 ]; then
 		bad "no +net refusal is marked while INV-0262-4 (the connection's stream rings charged to the client) is not checked"
 fi
 
+# The refusal is one function called from two places in the shell (a native
+# program's grant and a POSIX program's): each call carries its own marker,
+# so that deleting one call (review of the fixes, warning 6) fails here even
+# though the function and its marker are still there.
+net_calls=$(markers 'untrusted-gate: net-refusal-call' user/src/bin/zosh.rs)
+if [ "$net_refusal" -gt 0 ] && [ "$net_calls" -lt 2 ]; then
+	bad "a call of the +net refusal is gone from the shell ($net_calls of 2 markers 'untrusted-gate: net-refusal-call'): one path to a connection is open"
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "check-untrusted-gate: ok"

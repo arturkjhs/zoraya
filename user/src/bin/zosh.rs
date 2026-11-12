@@ -882,6 +882,7 @@ impl Z {
         };
         let net = Self::net_grant_with(exec, &d, base, &self.cwd)?;
         if net.is_some() {
+            // untrusted-gate: net-refusal-call (the POSIX path below has its own)
             self.refuse_net_in_untrusted_room(exec.name)?;
             self.network_available(exec.name)?;
         }
@@ -978,6 +979,7 @@ impl Z {
         let Some((rights, scope)) = Self::net_grant_with(exec, d, true, &self.cwd)? else {
             return Ok(None);
         };
+        // untrusted-gate: net-refusal-call (the native path above has its own)
         self.refuse_net_in_untrusted_room(exec.name)?;
         self.network_available(exec.name)?;
         // Each POSIX program counts against an account of its own, carved
