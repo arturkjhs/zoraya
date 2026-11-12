@@ -64,8 +64,8 @@ note = "round 3 finding 2: the closing of a Manage channel of the orphan's kind 
 id = "R-undo-keeps-the-lease"
 file = "crates/zoraya-rooms/src/lib.rs"
 find = '''        r.leases.retain(|(c, _)| *c != u.chan);
-        match u.before {'''
-replace = '''        match u.before {'''
+        if let Some(l) = u.lease {'''
+replace = '''        if let Some(l) = u.lease {'''
 note = "round 3 finding 4: a launch init did not take leaves no lease"
 
 [[mutant]]
