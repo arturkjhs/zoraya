@@ -1,0 +1,59 @@
+# A room with limits, from the console (TASK-26 Q6a; ADR-0266, ADR-0269): the
+# six words in the line, `room set`, `grants`' limits line, the quota hint
+# and the keeper's refusal of a limit above the session's. The console's
+# shell enters the room through the room keeper, so its lines run in the
+# room's one job and a hog in it is refused at the room's memory.
+! panicked
+! storage failed
+< Type help to begin
+< \r\n~> 
+> room new agent-1 --mem 64M --cpu 25% --procs 16 +w /t/w\r
+< agent-1 --colour 1 --mem 64M --cpu 25% --procs 16 +w /t/w
+< \r\n~> 
+> room\r
+< agent-1  --mem 64M --cpu 25% --procs 16  +w /t/w
+< \r\n~> 
+# --tmp is for untrusted rooms only; an untrusted room is refused for now.
+> room set agent-1 --tmp 1M\r
+< --tmp is for untrusted rooms only
+< \r\n~> 
+> room new agent-2 --untrusted +w /t/w\r
+< untrusted rooms wait for quotas
+< \r\n~> 
+# Entering the room: the keeper gives the shell a launch job.
+> room agent-1\r
+< agent-1 /t/w> 
+> grants probe\r
+< limits --mem 64M --cpu 25% --procs 16  (room agent-1)
+< agent-1 /t/w> 
+# A hog takes all 64M and is refused (OverQuota); the shell says so once.
+> memhog\r
+< memhog: refused after
+< hint: room agent-1 is at its memory limit of 64M; room set agent-1 --mem 128M
+< agent-1 /t/w> 
+# The next line is refused again: a new hint for the new line, still one.
+> memhog\r
+< hint: room agent-1 is at its memory limit of 64M
+< agent-1 /t/w> 
+# The room's job takes the new limit at once.
+> room set agent-1 --mem 68M\r
+< agent-1 --colour 1 --mem 68M --cpu 25% --procs 16 +w /t/w
+< agent-1 /t/w> 
+> grants probe\r
+< limits --mem 68M --cpu 25% --procs 16  (room agent-1)
+< agent-1 /t/w> 
+# Above the session's ceiling: the keeper refuses, the line is put back.
+> room set agent-1 --mem 90G\r
+< --mem 90G: above the session's
+< agent-1 /t/w> 
+> grants probe\r
+< limits --mem 68M --cpu 25% --procs 16  (room agent-1)
+< agent-1 /t/w> 
+> room --leave\r
+< /t/w> 
+> room remove agent-1 --kill\r
+< /t/w> 
+> room\r
+< home
+< /t/w> 
+> poweroff\r

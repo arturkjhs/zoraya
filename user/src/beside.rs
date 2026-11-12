@@ -39,13 +39,20 @@ pub struct Beside {
 }
 
 pub fn start_broker(root: &File) -> Option<Beside> {
+    start_broker_in(root, JOB)
+}
+
+/// As [`start_broker`], with its job under `parent`: a room's launch job
+/// (ADR-0269, INV-0268-3), so that the broker counts against the room's
+/// limits.
+pub fn start_broker_in(root: &File, parent: Handle) -> Option<Beside> {
     let wanted = zoraya_proto_file::rights::READ;
     root.open("bin", zoraya_proto_file::open_flags::DIRECTORY, wanted)
         .ok()?;
     let base = root.time_base().unwrap_or(0);
     let (handoff, handoff_broker) = channel_create().ok()?;
     // Every way out below closes what was made before it (review K6).
-    let Ok(job) = job_create(JOB, JobFlags::POSIX) else {
+    let Ok(job) = job_create(parent, JobFlags::POSIX) else {
         let _ = handle_close(handoff);
         let _ = handle_close(handoff_broker);
         return None;

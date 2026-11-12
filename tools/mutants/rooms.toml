@@ -1,0 +1,108 @@
+# zoraya-rooms, the review of Q6a (leases, holders by kind, resume, home, Set).
+# Host tests only. `make mutants-host CRATE=zoraya-rooms` (round 3: 141 mutants, 112
+# caught, 19 unviable, 9 missed, 1 timeout). Not listed as holes, because they are
+# equivalent or unreachable:
+#  - `record`: `|` to `^` on flags (two, the bits are disjoint, so the value is the same);
+#  - `usage`: `<` to `<=` against MAX_ROOMS (the file holds 32 rooms and `home`: 33);
+#  - `OUT_SIZE`: `+` to `*` or `-` (five) in a buffer size that only has to be large
+#    enough (a test asserts it holds a full list);
+#  - `launch`: `o == who` on the orphan (every path that ends a lease also ends the
+#    orphan of the same kind, so it is not observable);
+#  - `collect_idle`: `i += 1` to `*= 1` loops for ever (the timeout).
+tests = ["cargo test -q -p zoraya-rooms"]
+timeout = 300
+
+[[mutant]]
+id = "R-busy-by-slot"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = 'if h != me => Some(Some(h)),'
+replace = 'if false => Some(Some(h)),'
+note = "review finding 2: a room with processes is busy for the other kind of launcher, whatever the slot"
+
+[[mutant]]
+id = "R-idle-ignores-leases"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = 'let idle = !r.leased()'
+replace = 'let idle = true'
+note = "review finding 1 and 3: a leased room is not let go"
+
+[[mutant]]
+id = "R-home-can-be-stopped"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = 'if m.room.0 == rooms::HOME {'
+replace = 'if false {'
+note = "review finding 8"
+
+[[mutant]]
+id = "R-resume-old-refusals"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = 'map_or((0, 0), |u| (u.memory.refused, u.processes.refused));'
+replace = 'map_or((0, 0), |_| (0, 0));'
+note = "review note 11: a resumed room does not report old refusals again"
+
+[[mutant]]
+id = "R-close-drops-every-lease"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''            r.leases.retain(|(c, _)| *c != chan);
+            if let ChannelKind::Manage(l) = kind'''
+replace = '''            r.leases.clear();
+            if let ChannelKind::Manage(l) = kind'''
+note = "review finding 1: a closed channel removes only its own lease"
+
+[[mutant]]
+id = "R-orphan-survives-its-kinds-close"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''&& r.orphan == Some(*l)
+            {
+                r.orphan = None;'''
+replace = '''&& r.orphan == Some(*l)
+            {
+                r.orphan = r.orphan;'''
+note = "round 3 finding 2: the closing of a Manage channel of the orphan's kind ends the lease"
+
+[[mutant]]
+id = "R-undo-keeps-the-lease"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''        r.leases.retain(|(c, _)| *c != u.chan);
+        if let Some(l) = u.lease {'''
+replace = '''        if let Some(l) = u.lease {'''
+note = "round 3 finding 4: a launch init did not take leaves no lease"
+
+[[mutant]]
+id = "R-set-fill-ignores-the-running-room"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = 'limits.fill_from(&record_limits(r));'
+replace = 'let _ = r;'
+note = "round 3 finding 5: room set takes the missing words from the running room"
+
+[[mutant]]
+id = "R-undo-drops-the-orphan"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = "                r.orphan = orphan;"
+replace = "                let _ = orphan;"
+note = "round 4 finding 4: the undo of a launch that claimed the orphan restores it"
+
+[[mutant]]
+id = "R-undo-drops-the-earlier-lease"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''        if let Some(l) = u.lease {
+            r.leases.push((u.chan, l));
+        }'''
+replace = ""
+note = "round 4 finding 1: the undo restores the channel's earlier lease"
+
+[[mutant]]
+id = "R-undo-says-nothing-of-the-holder"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = "                if r.holder != holder {"
+replace = "                if false {"
+note = "round 4 finding 5: the undo tells init the restored holder"
+
+[[mutant]]
+id = "R-replace-drops-the-leases"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''                if *c == old {
+                    *c = new;
+                }'''
+replace = ""
+note = "round 4 findings 2, 3: a replacement channel takes over the old one's leases"

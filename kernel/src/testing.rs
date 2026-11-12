@@ -516,6 +516,10 @@ static TESTS: &[Test] = &[
         run: cpu_ceiling_from_a_process,
     },
     Test {
+        name: "room_keeper_from_a_process",
+        run: room_keeper_from_a_process,
+    },
+    Test {
         name: "snapshots_from_a_process",
         run: snapshots_from_a_process,
     },
@@ -1303,6 +1307,13 @@ fn quotas_from_a_process() {
 /// rooms (INV-0264-1, -2, -4 and the kernel half of -3).
 fn cpu_ceiling_from_a_process() {
     assert_eq!(run_program("t_cpu"), exited(0));
+}
+
+/// ADR-0269, ADR-0266 and ADR-0261 point 10 (INV-0269-1 to -3, INV-0266-1,
+/// INV-0261-8): the room keeper under a session job, with four untrusted rooms
+/// at their limits next to a `home` program.
+fn room_keeper_from_a_process() {
+    assert_eq!(run_program("t_rooms"), exited(0));
 }
 
 /// ADR-0270, INV-0270-1 and -2: the longest masked time over every call that

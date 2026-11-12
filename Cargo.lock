@@ -817,6 +817,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-rooms"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-term"
 version = "0.1.0"
 dependencies = [
@@ -859,6 +867,17 @@ name = "zoraya-rng"
 version = "0.1.0"
 dependencies = [
  "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
+name = "zoraya-rooms"
+version = "0.1.0"
+dependencies = [
+ "zoraya-abi",
+ "zoraya-proto-rooms",
+ "zoraya-protocol",
+ "zoraya-settings",
  "zoraya-test-alloc",
 ]
 
@@ -1037,11 +1056,13 @@ dependencies = [
  "zoraya-proto-net",
  "zoraya-proto-nic",
  "zoraya-proto-posix",
+ "zoraya-proto-rooms",
  "zoraya-proto-term",
  "zoraya-proto-tty",
  "zoraya-protocol",
  "zoraya-resolve",
  "zoraya-rng",
+ "zoraya-rooms",
  "zoraya-rt",
  "zoraya-settings",
  "zoraya-settings-window",

@@ -103,6 +103,7 @@ fn the_writer_keeps_every_other_byte() {
         name: "notes".into(),
         untrusted: false,
         colour: 2,
+        limits: Limits::default(),
         grants: vec![Grant {
             write: true,
             path: "~/notes".into(),
@@ -183,9 +184,11 @@ fn every_bound_is_where_it_says() {
     let grants = (0..MAX_GRANTS)
         .map(|i| format!(" +r /g{i}"))
         .collect::<String>();
-    // 4 + 2 * MAX_GRANTS words is still a line; one more is not.
-    let at = format!("full --colour 1{grants} x\n");
-    let past = format!("full --colour 1{grants} x y\n");
+    // 4 + 2 * (MAX_GRANTS + the six limit words) words is still a line; one
+    // more is not.
+    let pad = " x".repeat(2 * LIMIT_WORDS.len());
+    let at = format!("full --colour 1{grants}{pad} x\n");
+    let past = format!("full --colour 1{grants}{pad} x y\n");
     let p = |t: &str| read(t.as_bytes()).problems[0].problem.clone();
     assert!(p(&at).contains("not --untrusted"), "{}", p(&at));
     assert_eq!(p(&past), "too many grants");
@@ -204,6 +207,7 @@ fn every_bound_is_where_it_says() {
         name: String::from("new"),
         untrusted: false,
         colour: 1,
+        limits: Limits::default(),
         grants: (0..n)
             .map(|i| Grant {
                 write: false,
@@ -244,4 +248,295 @@ fn the_cut_is_exact() {
     let exact = pad(crate::MAX_SIZE);
     assert_eq!(exact.len(), crate::MAX_SIZE);
     assert!(read(exact.as_bytes()).problems.is_empty());
+}
+
+#[test]
+fn sizes_parse_and_print_the_way_the_line_writes_them() {
+    assert_eq!(parse_size("512M"), Some(512 << 20));
+    assert_eq!(parse_size("2G"), Some(2 << 30));
+    assert_eq!(parse_size("64K"), Some(64 << 10));
+    for bad in [
+        "",
+        "M",
+        "0M",
+        "12",
+        "1.5G",
+        "-1M",
+        "1m",
+        "99999999999999999G",
+        "1MB",
+    ] {
+        assert_eq!(parse_size(bad), None, "{bad}");
+    }
+    assert_eq!(format_size(89 << 20), "89M");
+    assert_eq!(format_size(2 << 30), "2G");
+    assert_eq!(format_size(5000 << 10), "5000K");
+    for n in [1u64, 1023, 1024, 65536, 1 << 20, 3 << 29, 5 << 30] {
+        let t = format_size(n);
+        assert_eq!(parse_size(&t), Some(n.div_ceil(1024) * 1024), "{n} {t}");
+    }
+}
+
+fn machine(session_mem: u64) -> Machine {
+    Machine {
+        session_mem,
+        session_procs: 200,
+        free_disk: 64 << 30,
+    }
+}
+
+#[test]
+fn defaults_follow_adr_0266_on_both_guest_sizes() {
+    // ADR-0266 point 3's table: a quarter of the session, whole MiB.
+    let mut l = Limits::default();
+    l.fill_defaults(&machine(86 << 20));
+    assert_eq!(
+        l.words(),
+        "--mem 21M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 5M"
+    );
+    let mut l = Limits::default();
+    l.fill_defaults(&machine(356 << 20));
+    assert_eq!(
+        l.words(),
+        "--mem 89M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 16M"
+    );
+    // A small volume: an eighth of its free space.
+    let mut l = Limits::default();
+    l.fill_defaults(&Machine {
+        free_disk: 80 << 20,
+        ..machine(356 << 20)
+    });
+    assert_eq!(l.disk, Some(10 << 20));
+    // What the person gave stays.
+    let mut l = Limits {
+        mem: Some(64 << 20),
+        cpu: Some(10),
+        ..Limits::default()
+    };
+    l.fill_defaults(&machine(356 << 20));
+    assert_eq!(
+        (l.mem, l.cpu, l.tmp),
+        (Some(64 << 20), Some(10), Some(16 << 20))
+    );
+    assert!(l.is_complete());
+}
+
+#[test]
+fn the_limit_words_read_and_write_back_in_the_lines_order() {
+    let text = "agent-1 --untrusted --mem 89M --cpu 25% --procs 32 --disk 1G --conns 16 --tmp 16M +w ~/sandbox/agent-1\n\
+                build --colour 2 --cpu 50% --mem 2G +w ~/build\n";
+    let r = read(text.as_bytes());
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+    let a = r.get("agent-1").unwrap();
+    assert!(a.limits.is_complete());
+    assert_eq!(a.limits.mem, Some(89 << 20));
+    assert_eq!(a.line(), text.lines().next().unwrap());
+    let b = r.get("build").unwrap();
+    assert_eq!(
+        (b.limits.mem, b.limits.cpu, b.limits.tmp),
+        (Some(2 << 30), Some(50), None)
+    );
+    // Written in the order of the line, whatever order it was typed in.
+    assert_eq!(b.line(), "build --colour 2 --mem 2G --cpu 50% +w ~/build");
+    // The word may come before `--untrusted`.
+    let r = read(b"x --tmp 1M --untrusted\n");
+    assert!(r.problems.is_empty(), "{:?}", r.problems);
+    // Without the words the limits are empty.
+    assert_eq!(
+        read(MOCKUP.as_bytes()).get("project").unwrap().limits,
+        Limits::default()
+    );
+}
+
+#[test]
+fn bad_limit_words_are_reported_and_the_line_skipped() {
+    for bad in [
+        "a --mem",
+        "a --mem 12",
+        "a --mem 0M",
+        "a --mem 1M --mem 2M",
+        "a --cpu 0%",
+        "a --cpu 101%",
+        "a --cpu 25",
+        "a --procs 0",
+        "a --procs x",
+        "a --conns -1",
+        "a --disk none",
+        "a --mem none",
+        "a --tmp 1M",
+    ] {
+        let r = read(bad.as_bytes());
+        assert!(r.rooms.is_empty(), "{bad}");
+        assert_eq!(r.problems.len(), 1, "{bad}");
+    }
+}
+
+#[test]
+fn set_refuses_none_for_untrusted_and_a_tmp_for_trusted() {
+    let mut l = Limits::default();
+    l.fill_defaults(&machine(356 << 20));
+    assert!(l.set("--mem", "none", true).is_err());
+    assert!(l.set("--tmp", "1M", false).is_err());
+    assert!(l.set("--cpu", "10%", true).is_ok());
+    assert_eq!(l.cpu, Some(10));
+    let mut t = Limits::default();
+    t.set("--mem", "1G", false).unwrap();
+    t.set("--mem", "none", false).unwrap();
+    assert_eq!(t, Limits::default());
+    assert!(t.set("--mem", "512", false).is_err());
+    assert!(t.set("--nonsense", "1", false).is_err());
+}
+
+#[test]
+fn no_limit_is_above_its_parents() {
+    let m = machine(356 << 20);
+    let mut l = Limits::default();
+    l.set("--mem", "512M", true).unwrap();
+    assert_eq!(
+        l.check_within(&m.untrusted()).unwrap_err(),
+        "--mem 512M: above the untrusted rooms' 178M"
+    );
+    assert!(l.check_within(&m.session()).is_err());
+    let mut l = Limits::default();
+    l.set("--procs", "97", true).unwrap();
+    assert!(l.check_within(&m.untrusted()).is_err());
+    assert!(l.check_within(&m.session()).is_ok());
+    l.set("--procs", "201", true).unwrap();
+    assert!(l.check_within(&m.session()).is_err());
+    let mut l = Limits::default();
+    l.set("--cpu", "60%", true).unwrap();
+    assert!(l.check_within(&m.untrusted()).is_err());
+    assert!(l.check_within(&m.session()).is_ok());
+    // The defaults themselves fit on the machines of ADR-0266.
+    for session in [86u64 << 20, 356 << 20] {
+        let m = machine(session);
+        let mut d = Limits::default();
+        d.fill_defaults(&m);
+        assert_eq!(d.check_within(&m.untrusted()), Ok(()));
+        // Two rooms at their default fill the untrusted job (point 4).
+        assert!(d.mem.unwrap() * 2 <= m.untrusted().mem + (2 << 20));
+    }
+}
+
+#[test]
+fn replace_swaps_one_line_and_keeps_the_rest() {
+    let r = read(MOCKUP.as_bytes());
+    let mut a = r.get("agent-1").unwrap().clone();
+    a.limits.fill_defaults(&machine(356 << 20));
+    let out = replace(MOCKUP.as_bytes(), &a).unwrap();
+    let text = String::from_utf8(out.clone()).unwrap();
+    assert!(text.starts_with("# the mockups' rooms\nproject --colour 1 +w ~/project +r ~/include\nagent-1 --untrusted --mem 89M"));
+    assert_eq!(read(&out).get("agent-1"), Some(&a));
+    assert_eq!(read(&out).get("project"), r.get("project"));
+    let ghost = Room {
+        name: "ghost".into(),
+        ..a.clone()
+    };
+    assert_eq!(
+        replace(MOCKUP.as_bytes(), &ghost),
+        Err(RoomRefusal::NoSuchRoom)
+    );
+}
+
+#[test]
+fn every_untrusted_line_is_complete_after_fill_and_survives_the_reader() {
+    for word in LIMIT_WORDS {
+        let mut l = Limits::default();
+        l.fill_defaults(&machine(356 << 20));
+        let value = match word {
+            "--cpu" => "10%",
+            "--procs" | "--conns" => "3",
+            _ => "1M",
+        };
+        l.set(word, value, true).unwrap();
+        assert!(l.is_complete());
+        let room = Room {
+            name: "z".into(),
+            untrusted: true,
+            colour: 0,
+            limits: l,
+            grants: vec![],
+        };
+        assert_eq!(read(room.line().as_bytes()).rooms, vec![room]);
+    }
+}
+
+#[test]
+fn a_line_with_many_refusals_gets_one_hint_naming_the_field_and_the_room() {
+    // INV-0263-4: however often a line's commands were refused, one hint.
+    assert_eq!(refused_field((3, 0), (3, 0)), None);
+    assert_eq!(refused_field((3, 1), (900, 40)), Some(Refused::Memory));
+    assert_eq!(refused_field((3, 1), (3, 40)), Some(Refused::Processes));
+    let h = quota_hint("agent-1", Refused::Memory, 64 << 20, true);
+    assert_eq!(
+        h,
+        "hint: room agent-1 is at its memory limit of 64M; room set agent-1 --mem 128M\n"
+    );
+    assert_eq!(h.matches("hint:").count(), 1);
+    let h = quota_hint("agent-1", Refused::Processes, 32, false);
+    assert_eq!(
+        h,
+        "hint: room agent-1 is at its processes limit of 32; from home: room set agent-1 --procs 64\n"
+    );
+}
+
+#[test]
+fn only_the_words_a_job_enforces_need_the_keeper() {
+    assert!(!Limits::default().needs_job());
+    // `--disk` is the volume's: it applies without a launch job.
+    assert!(
+        !Limits {
+            disk: Some(1 << 30),
+            ..Limits::default()
+        }
+        .needs_job()
+    );
+    for l in [
+        Limits {
+            mem: Some(1 << 20),
+            ..Limits::default()
+        },
+        Limits {
+            cpu: Some(10),
+            ..Limits::default()
+        },
+        Limits {
+            procs: Some(4),
+            ..Limits::default()
+        },
+        Limits {
+            conns: Some(4),
+            ..Limits::default()
+        },
+        Limits {
+            tmp: Some(1 << 20),
+            ..Limits::default()
+        },
+    ] {
+        assert!(l.needs_job(), "{l:?}");
+    }
+}
+
+#[test]
+fn limits_are_complete_with_six_words_and_take_the_missing_from_another() {
+    let mut l = Limits {
+        mem: Some(1),
+        ..Limits::default()
+    };
+    assert!(!l.is_complete());
+    let keeper = Limits {
+        mem: Some(9),
+        cpu: Some(25),
+        procs: Some(32),
+        disk: Some(7),
+        conns: Some(16),
+        tmp: Some(3),
+    };
+    l.fill_from(&keeper);
+    assert!(l.is_complete());
+    assert_eq!(l.mem, Some(1), "a word the line has is kept");
+    assert_eq!(
+        (l.cpu, l.procs, l.disk, l.conns, l.tmp),
+        (Some(25), Some(32), Some(7), Some(16), Some(3))
+    );
 }

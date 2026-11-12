@@ -12,6 +12,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
@@ -57,7 +58,15 @@ pub enum Give {
     Broker,
     /// That broker's temporary service's root, the shell's `/tmp`.
     Tmp,
+    /// A `Room(R)` channel to the room keeper (ADR-0269 point 3): the
+    /// shell of a terminal in a room only, for `grants`' limits line, `top`
+    /// and the quota hint. Nothing else in a room holds a keeper channel
+    /// (INV-0269-2).
+    Keeper,
 }
+
+/// The slot of a room shell's `Room(R)` channel to the keeper.
+pub const KEEPER_SLOT: u32 = 11;
 
 /// The start-up record's slot (`zoraya-abi`'s `native::slot::STARTUP`).
 pub const STARTUP_SLOT: u32 = 1000;
@@ -368,7 +377,11 @@ pub fn terminal(room: Option<&Room>) -> Launch {
             .collect(),
     };
     let entries = holds.iter().map(|(p, w)| grant_words(p, *w)).collect();
-    Launch {
+    let keeper = room.is_some().then_some(Slot {
+        slot: KEEPER_SLOT,
+        give: Give::Keeper,
+    });
+    let mut launch = Launch {
         app: "term",
         room: room.cloned(),
         entries,
@@ -429,7 +442,11 @@ pub fn terminal(room: Option<&Room>) -> Launch {
                 args,
             },
         ],
+    };
+    if let (Some(slot), Some(shell)) = (keeper, launch.programs.get_mut(1)) {
+        shell.handles.push(slot);
     }
+    launch
 }
 
 /// A terminal launched in `room` (`None` is `home`) to start at `path`, an
@@ -461,7 +478,7 @@ pub fn terminal_at(room: Option<&Room>, path: &str, home: &str) -> Option<Launch
 /// What a press on the dock asks of the panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    Launch(Launch),
+    Launch(Box<Launch>),
     /// The current room changed: tell the compositor.
     Entered,
     /// `+`: the rooms overview's form is not built yet (ADR-0172's
@@ -523,8 +540,8 @@ impl Panel {
                 // (ADR-0056, TASK-24): `room new --untrusted` is refused, and
                 // so is a launch in a hand-written untrusted room.
                 _ if self.room().is_some_and(|r| r.untrusted) => Action::Nothing,
-                Some(("term", _)) => Action::Launch(terminal(self.room())),
-                Some((app, _)) => Action::Launch(application(self.room(), app, None)),
+                Some(("term", _)) => Action::Launch(Box::new(terminal(self.room()))),
+                Some((app, _)) => Action::Launch(Box::new(application(self.room(), app, None))),
                 _ => Action::Nothing,
             },
             ROOM => {

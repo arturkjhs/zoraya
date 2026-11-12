@@ -1532,6 +1532,59 @@ never idles) a room at 250 counted 17 to 23% of the two (ceiling 25%), three roo
 Known limits of Q4: rooms under one parent get no share (with three rooms at 25% under 50%, one used 0 ms in 2 s);  a ceiling below about 0.25% runs at about that (the 50 us floor); a thread parked when its job is
 killed ends at the next boundary (at most one period); IRQ time is charged to the interrupted thread; one CPU (an SMP kernel gives each CPU a share of one pool, ADR-0264).
 
+## Rooms with limits and the room keeper (stage 8, Q6a)
+
+A room is one job, whoever launches into it (ADR-0269, proposed ADR-0293). `init` starts `rooms`
+(`user/src/bin/rooms.rs`; the decisions are `crates/zoraya-rooms`, the wire is `crates/zoraya-proto-rooms`, both host
+tested with a model of the kernel) when the volume is up. It holds the session job (`LIMIT`) and a read connection to
+`/config`, makes the untrusted job under the session (half its memory, 96 processes, 50% CPU; ADR-0266 point 4) and one
+job per room at its first `Launch`: under the session for a trusted room and `home`, under the untrusted job for an
+untrusted room, with the limits of the room's line. A launcher gets a *launch job*, a sub-job of the room's job with
+every right but `LIMIT`, and launches in it as before. Three kinds of channel speak the protocol: `Manage` (the panel,
+the console's shell: `Launch`, `Leave`, `Set`, `Usage`, `Report`, `Stop`, `Open`), `Room(R)` (the shell the panel
+launches in a room, and `top` run in it: `Launch` and `Usage` of R) and `Usage` (reads). Which kind a message came on
+decides what it may do, never what it says. At most four untrusted rooms run; an untrusted room is used from one
+`Manage` kind at a time (`room: agent-1: running from the desktop`; a lease is per channel and is given back by that
+channel's `Leave` or its closing, and the holder is known by kind, never by slot); a room with no processes, no lease and
+no launch for 5 s is let go. The keeper tells `init` what it makes
+(`Keep`: a duplicate of each job, with `LIMIT`, its trust and its last holder's kind, sent before the launcher gets the
+launch job) and lets go (`Forget`); `init` restarts it up to three times and gives
+the new one those jobs, so `Stop`, `Set` and `Usage` still work and a room never gets a second job. The panel's and the
+console shell's `Manage` channels come from `init` (slots 8 and 11 of those programs) with a second channel (9 and 12)
+on which `init` gives a new one when the keeper has been restarted; a shell in a room gets its `Room(R)` channel at
+slot 11 from the keeper through the panel (`Open`).
+
+The room's line has six more words (`zoraya-settings`: `--mem SIZE --cpu PCT --procs N --disk SIZE --conns N --tmp
+SIZE`, ADR-0266): a trusted room has the ones it is given, an untrusted line has all six (the keeper fills a missing one
+in memory from ADR-0266 point 3's defaults; `room new` writes them), and no limit may be above its parent's: the keeper
+refuses it when it makes the job or applies `Set` (`room: agent-1: --mem 512M: above the untrusted rooms' 178M`).
+`room new NAME --mem 64M --cpu 25% +w DIR` makes a room with limits; `room set NAME --mem 128M` rewrites the line, asks
+the keeper to apply it to the running room's job and puts the old line back if the keeper refuses; `--disk` is set on
+each `+w` directory through the file protocol's `SetLimit` (ADR-0292 option A); `room remove NAME --kill` ends the room's
+processes first; `room` lists the limits after the trust; `grants` in a room ends with
+`limits --mem 64M --cpu 25% ...  (room NAME)`, read from the keeper's record. When a line leaves the room's job at its
+memory or process limit the shell prints one hint naming the field and the room (`hint: room agent-1 is at its memory
+limit of 64M; room set agent-1 --mem 128M`; in a room's own shell, `from home: room set ...`).
+
+Try it: `room new agent-1 --mem 64M --cpu 25% --procs 16 +w ~/sandbox/agent-1`, `room agent-1`, `grants ls`,
+`memhog` (takes memory until refused), `room set agent-1 --mem 68M`, `room --leave`, `room remove agent-1 --kill`
+(`tests/shell/rooms.script` does this on the console). The QEMU test `t_rooms` runs the real keeper under a session job
+it makes: one job for two launchers; no launch job carries `LIMIT`; a `Room(R)` channel may send only `Launch` and `Usage`
+of R; a hog is refused and the keeper's `Refused` reaches the room's, the overview's and the console's channels; `Set`
+above the untrusted job is refused; four untrusted rooms, each with a fork bomb and a hog, while a `home` program starts
+16 processes and maps 16 MiB; a restarted keeper stops a room it did not start. The keeper's round trip per `Launch` was
+24 us (average of 50, HVF, `home`).
+
+Known limits of Q6a: `room new --untrusted` and the panel's untrusted launch are still refused (the gate); an untrusted
+room's `/tmp` (`--tmp`, a `tmpd` per shell in the room's job) is not built, and the console shell's broker and `tmpd`
+are `init`'s, outside an untrusted room's job (INV-0268-3 is open; the panel's broker is in the room's launch job); the
+rooms overview's `New room` form and the compositor's hover card do not show the limit words (Q6b); a POSIX session
+(`/etc/zoraya/session`) starts no keeper channel for its shell; the keeper restart in `init` itself, and the reconnect
+channel, are not run in QEMU (`t_rooms` stands in for `init`); a launcher that never sends `Leave` and keeps its channel
+holds an idle untrusted room. A resumed room is leased by its old holder's kind until a launch of that kind claims it, it
+leaves, a `Manage` channel of that kind closes or the room is stopped (no time limit); `home` is refused `Stop` and `Set`; a shell or the panel will not enter a room whose line has limit words
+without a launch job from the keeper.
+
 ## Network driver (stage 8, N1: the driver answers ARP)
 
 `tools/run-qemu.sh --net` (ADR-0230 item 2) puts `virtio-net-device` on transport 16 (page 2, alone, ADR-0091) over
@@ -2042,6 +2095,7 @@ crates/                   no_std, host-tested
   zoraya-virtio-gpu/, zoraya-virtio-input/  the GPU and input drivers' logic (ADR-0090, ADR-0092)
   zoraya-virtio-net/, zoraya-proto-nic/  the network driver's logic and the frame protocol with ARP (ADR-0221)
   zoraya-net/, zoraya-proto-net/  the network service's logic over smoltcp, and its protocol (ADR-0221, ADR-0229)
+  zoraya-rooms/, zoraya-proto-rooms/  the room keeper's decisions over a kernel trait, and its protocol (ADR-0269, ADR-0293)
   zoraya-proto-display/, zoraya-proto-input/, zoraya-proto-gui/, zoraya-proto-term/  the GUI's protocols
   zoraya-proto-posix/, zoraya-proto-tty/  the broker's and the terminal's protocols (ADR-0104, ADR-0105)
   zoraya-broker/          the broker's logic: pids, groups, kill, the session file
