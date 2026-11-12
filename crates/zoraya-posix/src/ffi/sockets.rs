@@ -204,8 +204,8 @@ const ADDRINFO: usize = 48;
 
 /// One result: an `addrinfo`, its `sockaddr_in` and, in the first, the
 /// canonical name, in one `malloc` block, so that `freeaddrinfo` frees a
-/// list by walking it (musl's own results are a block per element, so a
-/// program cannot tell).
+/// list by walking it; a program that frees `ai_addr` or `ai_canonname`
+/// itself would corrupt the heap, as it would with musl's single block.
 fn build_addrinfo(
     ty: i32,
     protocol: i32,
