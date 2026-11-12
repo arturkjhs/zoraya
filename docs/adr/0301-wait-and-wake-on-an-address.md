@@ -35,7 +35,7 @@ the shared form when the first returns `ENOSYS`; and it uses priority-inheritanc
    scopes").
 3. A wait must not fail for lack of memory after the check (a waiter's node is made at thread creation and charged then,
    ADR-0300 item 2).
-4. Every blocking call takes a `Deadline` (ADR-0006 INV-0006-2).
+4. Every blocking call takes a `Deadline` (ADR-0006 rule 2); the lint of INV-0006-2 is amended for it (ADR-0308).
 5. Bounded work with interrupts masked (ADR-0270).
 6. Private to a process: no cross-process wake (ADR-0141 item 2 and ADR-0005 exclude shared mappings).
 
@@ -78,15 +78,24 @@ the shared form when the first returns `ENOSYS`; and it uses priority-inheritanc
 
 **Recommendation (not a decision): Option B.**
 
-1. **`futex_wait(address: Address, expected: Word32, deadline: Deadline)`** (call 57). `address` must be 4-aligned and in a
-   readable mapping of the caller's space (`BadAddress` otherwise). With the process's futex lock held, the kernel reads
-   the 32-bit word with one aligned load; if it differs from `expected` the call returns `WouldBlock` at once; otherwise
-   it puts the thread's own node on the process's wait list, keyed by the address, in arrival order, releases the lock,
-   and blocks with the deadline. It returns `Ok` when woken, `DeadlineExceeded` at the deadline, `Interrupted` after
-   `thread_interrupt` (ADR-0300 item 5) and `Cancelled` when the process is ending (ADR-0300 item 6). Any return takes
-   the node off the list again. A wake and a time-out that race return `Ok`: a wake is never dropped, because the waker
-   took the node off the list under the same lock before it woke the thread.
-2. **`futex_wake(address: Address, count: Count)`** (call 58): wakes up to `count` threads of the caller's process waiting
+1. **`futex_wait(address: Address, expected: Word32, deadline: Deadline)`** (call 60). `address` must be 4-aligned and in a
+   readable mapping of the caller's space (`BadAddress` otherwise). **Interrupts stay masked from the read of the word to
+   the moment the thread is `BLOCKED`**: this is the contract of `block_until` (as `Process::wait` relies on it), because
+   `sched::wake` does nothing to a thread that is not yet `BLOCKED` (`kernel/src/sched.rs`), so a wake that came between
+   the check and the block, with interrupts open, would be lost; on the one CPU (ADR-0030) no waker runs in that
+   interval. Within it, with the process's futex lock held, the kernel reads the 32-bit word with one aligned load; if it
+   differs from `expected` the call returns `WouldBlock` at once; otherwise, **in this order**: (a) a finite deadline
+   takes its entry in the deadline queue, and a full queue returns `NoMemory` here, with the node not yet on any list,
+   so nothing has to be undone (if the implementation arms the deadline inside `block_until` after the enqueue, it must
+   remove the node under the same masked interval on `NoMemory`: no path leaves a node on the wait list after a failed
+   call); (b) the thread's own node goes on the process's wait list, keyed by the address, in arrival order; (c) the lock
+   is released as part of the block and the thread blocks. It returns `Ok` with the value register 0 when woken,
+   `DeadlineExceeded` at the deadline, `Ok` with the value register 1 after `thread_interrupt` (ADR-0300 item 5: a
+   spurious wake the caller must re-check; there is no `Interrupted` status) and `Cancelled` when the process is ending
+   (ADR-0300 item 6). Any return takes the node and the deadline entry off again. A wake and a time-out that race
+   return `Ok`: a wake is never dropped, because the waker took the node off the list under the same lock before it
+   woke the thread.
+2. **`futex_wake(address: Address, count: Count)`** (call 61): wakes up to `count` threads of the caller's process waiting
    on `address`, oldest first, and returns how many (in the value register). `count` is 1 to 128. It names no object and
    needs no right: it acts only inside the caller's own process, so there is nothing to leak. An address that is not mapped
    wakes none.
@@ -100,16 +109,26 @@ the shared form when the first returns `ENOSYS`; and it uses priority-inheritanc
    `PTHREAD_PRIO_INHERIT` mutex.
 5. **Time.** `deadline` is absolute on `clock_monotonic`; the shim turns musl's relative timeout into `now + timeout`,
    and `pthread_cond_timedwait`'s absolute `CLOCK_REALTIME` or `CLOCK_MONOTONIC` time (a `__timedwait` argument) into the
-   same. A finite deadline uses one entry of the kernel's deadline queue while the thread sleeps. The queue grows from 288
-   to 1024 entries (`kernel/src/timer.rs` `QUEUE_SIZE`), two still reserved (ADR-0264, ADR-0285), so that no thread
-   count that the quotas allow can fill it: the session's 600 threads (ADR-0307 item 4), the 55 service processes of ADR-0266
-   point 4 and the kernel's own sleepers stay below it. A full queue still returns `NoMemory`, which the shim returns as
-   `-EAGAIN`.
+   same. A finite deadline uses one entry of the kernel's deadline queue while the thread sleeps. **The queue's size is a
+   derived constant**, `QUEUE_SIZE >= MAX_THREADS_SYSTEM + KERNEL_TIMERS + RESERVED` (`kernel/src/timer.rs`, with a
+   `const` assertion): every thread in the system, services and the trusted jobs outside the session included, may
+   hold one entry, and only `MAX_THREADS_SYSTEM` (1000) bounds those (ADR-0307's per-job figures bound only the session
+   and the untrusted rooms), plus the kernel's own timers and the two reserved entries (ADR-0264, ADR-0285). The
+   implementation sets it to that sum (1024 if the kernel's timers and the reserved entries are 24 or fewer, which the
+   step measures; today's 288 is the one-thread-per-process figure). A full queue still returns `NoMemory`, which
+   the shim returns as `-EAGAIN`. **The queue's operations are O(log n):** `DeadlineQueue` (`zoraya-time`) is a sorted
+   array whose insert and cancel are a linear scan and a rotate (`lib.rs`), which at 1024 entries under a masked
+   spinlock is about 16 times ADR-0270's step, and `on_interrupt` pops each due entry with a rotate of up to 1024.
+   Instead of counting those units in INV-0270-1, this ADR decides on a binary min-heap now: each waiter's deadline
+   entry holds its own heap index, so insert, cancel and pop are at most 10 moves at 1024 entries, and `on_interrupt`
+   pops at most 64 due entries per pass, re-arming the timer for an immediate second pass if more are due. An entry is
+   about 40 bytes (a time, a thread reference and the heap index), so the static queue is about 40 KiB, not 16.
 6. **Mapping and the wait list.** The address space's mapping calls take a per-process mapping lock (a kernel mutex whose
    waiters sleep, not a spinlock) for the whole of a call, including its steps, because `map_reserve` and `map_commit`
    assume nothing maps between them (ADR-0270, `memory/user.rs`); a second thread's mapping call sleeps until the first
    ends. The futex lock is a separate spinlock, taken only for the read-and-enqueue, so a long mapping call never delays a
-   wake.
+   wake. The mapping lock is also held by `snapshot_process` for the whole of its call (ADR-0306 item 2) and by the
+   unmap in `thread_exit` (ADR-0300 item 3), and is released by an RAII guard on every path (ADR-0300 item 6).
 7. **Bounded work.** Each thread owns its wait node, made at `thread_create` and charged there, so `futex_wait` allocates
    nothing and cannot fail for memory after its check. `futex_wake` takes at most 64 nodes off the list per step, drops the
    lock and passes a preemption point between steps (ADR-0270 item 2); at most 128 threads wait in a process, so a wake is
@@ -118,14 +137,16 @@ the shared form when the first returns `ENOSYS`; and it uses priority-inheritanc
    returns `BadAddress` and never panics.
 
 **Tensions with accepted ADRs.** *ADR-0141 item 2* ("`futex` is answered with `-ENOSYS` in the header") is replaced by the
-shim of this item; ADR-0302 states it. *ADR-0006 rule 2* (every blocking call takes a `Deadline`) holds. *ADR-0260's* table row "Kernel deadlines: 288 in one
-queue" becomes 1024. *ADR-0031:* the mapping lock of item 6.
+shim of this item; ADR-0302 states it. *ADR-0006 rule 2* (every blocking call takes a `Deadline`) holds; *ADR-0006 INV-0006-2's* lint (parameters drawn from
+`{ Handle, Port, Deadline, &mut [Packet], flags }`, exactly two blocking calls) does not: `futex_wait` takes an `Address`
+and a `Word32` and is a third blocking call, so the lint's set and count are superseded by ADR-0308 (INV-0308-5).
+*ADR-0006 rule 5 and INV-0006-6* are untouched: this ADR adds no `Status`. *ADR-0260's* table row "Kernel deadlines: 288
+in one queue" becomes the derived size of item 5. *ADR-0031:* the mapping lock of item 6.
 
 ## Consequences
 
 - **Positive.** Two small calls; no lost wake; no allocation after the check; musl's algorithms run unchanged.
-- **Negative.** Broadcast cost without requeue; a bigger deadline queue (16 bytes an entry, so 16 KiB static), with an
-  ordered insert whose worst case is measured (open question); a new kernel lock for mapping calls.
+- **Negative.** Broadcast cost without requeue; a bigger deadline queue (about 40 bytes an entry, so about 40 KiB static), now a heap; a new kernel lock for mapping calls.
 - **Follow-up.** `zoraya-rt` stubs; the shim; `Word32` and `Count` argument types in `abi`; the lints that every blocking
   call takes a `Deadline`.
 
@@ -139,16 +160,25 @@ queue" becomes 1024. *ADR-0031:* the mapping lock of item 6.
 - **INV-0301-3.** `futex_wait` and `futex_wake` allocate nothing: the heap statistics are equal before and after 10,000 rounds, and
   the job's usage does not change. *Check:* an in-QEMU test with the test kernel's heap and usage calls.
 - **INV-0301-4.** No futex or thread-ending path keeps interrupts masked longer than ADR-0270's bound with 128 waiters. *Check:*
-  `t_bound` extended: 128 threads waiting on one address, one `futex_wake(128)`, and a `job_kill` of the process, with the
-  masked-time counter (INV-0270-1).
+  `t_bound` extended with three cases and the masked-time counter (INV-0270-1): 128 threads waiting on one address and
+  one `futex_wake(128)`; a `job_kill` of one process of 128 threads; and a `job_kill` of a job of **4 processes x 128
+  threads** (and the `job_resume` of the same after a `job_suspend`), which must show one wake per process under `TREE`
+  (ADR-0300 item 6).
 - **INV-0301-5.** Every call in the `abi` table that blocks takes a `Deadline`, and the two futex calls are in the table with their
-  argument types. *Check:* INV-0006-2's lint over `abi`.
+  argument types. *Check:* INV-0006-2's lint over `abi` **as amended by ADR-0308 (INV-0308-5)**: the lint as it stands
+  (`crates/zoraya-abi/src/tests.rs`) rejects `futex_wait`'s `Address` and `Word32` and expects two blocking calls, so it
+  does not cover the futex calls until it is amended; the amended lint expects three.
 - **INV-0301-6.** A timed `futex_wait` never returns `DeadlineExceeded` before its deadline. *Check:* an in-QEMU test with 64 threads
   and staggered deadlines, comparing `clock_monotonic` at return.
+- **INV-0301-7.** The deadline queue holds `MAX_THREADS_SYSTEM` timed waiters plus the kernel's timers and the reserved
+  entries at once, never returns `NoMemory` to a `futex_wait` below that, and no insert, cancel or pop moves more than 12
+  entries. *Check:* a `const` assertion on `QUEUE_SIZE`, `cargo test -p zoraya-time` (the move count over 1024 random
+  inserts, cancels and expiries) and an in-QEMU test with 1000 threads each in a timed `futex_wait`.
 
 ## Open questions
 
-- The cost of an insert into a 1024-entry queue with interrupts masked: measure under TCG; if above 100 us use a heap.
+- The cost of a heap insert into the queue with interrupts masked, measured under TCG (the heap is decided; this is the
+  number that confirms the 64-pop pass).
 - Whether a broadcast to 100 waiters needs a requeue after all: measure with the stress test of ADR-0309.
 - `futex_wait` on several words (GR-011's lesson on multi-wait): not needed by musl; deferred.
 
