@@ -102,6 +102,26 @@ impl<P: Platform> Compositor<P> {
         ok
     }
 
+    /// Forgets the refusals of rooms that have no client any more, so the
+    /// list is never longer than the clients there are.
+    pub(crate) fn prune_refusals(&mut self) {
+        let clients = &self.clients;
+        self.refusals.retain(|(room, _)| {
+            clients
+                .iter()
+                .flatten()
+                .any(|c| c.record.untrusted && c.record.room == *room)
+        });
+    }
+
+    /// The pointer's last position again: after a restack or a close the
+    /// window under it may be another, and its card with it.
+    pub(crate) fn rehover(&mut self) {
+        if let Some((x, y)) = self.pointer {
+            self.card_hover(x, y);
+        }
+    }
+
     /// The accounts of the untrusted rooms that have surfaces or refusals.
     pub fn accounts(&self) -> Vec<Account> {
         let mut out: Vec<Account> = Vec::new();
@@ -197,7 +217,7 @@ impl<P: Platform> Compositor<P> {
     }
 
     /// Where the hover card of a framed window is drawn, with its lines:
-    /// under its title bar at the right, physical pixels.
+    /// above or below the window at the right, physical pixels.
     pub(crate) fn card_geometry(&mut self, key: Key) -> Option<(Rect, Vec<String>)> {
         let i = self.index(key)?;
         let lines = self.card_lines(key)?;
@@ -205,15 +225,38 @@ impl<P: Platform> Compositor<P> {
         let cap = text::CAPTION.physical(Scale::ONE) * k;
         let si = k as i32;
         let mut tw = 0;
-        for l in &lines {
-            tw = tw.max(self.mono.measure(l, cap));
+        // Line 0, the room's name, is drawn in the title face; the others
+        // in the monospaced one (`draw_rooms::card`): each is measured with
+        // the face it is drawn in, so a wide name stays inside the card.
+        for (n, l) in lines.iter().enumerate() {
+            let w = if n == 0 {
+                self.title_text.measure(l, cap)
+            } else {
+                self.mono.measure(l, cap)
+            };
+            tw = tw.max(w);
         }
         let f = self.frame();
         let o = self.windows[i].outer(&f);
         let width = i64::from(tw + 20 * si);
         let height = i64::from((8 + 15 * lines.len() as i32) * si);
         let x = (o.right() - width - 8 * i64::from(k)).max(o.x);
-        let y = o.y + f.title + 4 * i64::from(k);
+        // Outside the window, which a client's buffer cannot reach: above
+        // it, else below it (ADR-0172 point 1: a display the program cannot
+        // forge, INV-0172-1). With no room on either side the card starts on
+        // the title bar, which no client draws, so a copy made in the body
+        // lacks that part and the real card is above all of it.
+        let gap = 4 * i64::from(k);
+        let work = self.work_area();
+        let above = o.y - height - gap;
+        let below = o.bottom() + gap;
+        let y = if above >= work.y {
+            above
+        } else if below + height <= work.bottom() {
+            below
+        } else {
+            o.y
+        };
         Some((Rect::new(x, y, width, height), lines))
     }
 

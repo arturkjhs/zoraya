@@ -1804,6 +1804,7 @@ impl<P: Platform> Compositor<P> {
             self.dirty(&w.reach(&f));
         }
         self.windows.extend(moved);
+        self.rehover();
     }
 
     /// Hides or shows a window; a hidden one loses focus to the next.
@@ -2849,6 +2850,7 @@ impl<P: Platform> Compositor<P> {
             });
             self.set_focus(top);
         }
+        self.rehover();
     }
 
     /// The pixels a client's buffers hold, all windows together.
@@ -2888,6 +2890,8 @@ impl<P: Platform> Compositor<P> {
         if let Some(c) = self.clients[slot].take() {
             self.platform.close(c.end);
         }
+        self.prune_refusals();
+        self.rehover();
     }
 
     fn client_message(&mut self, slot: usize) {
@@ -3277,6 +3281,7 @@ impl<P: Platform> Compositor<P> {
         if self.focus.is_none() {
             self.set_focus(Some(key));
         }
+        self.rehover();
         Ok(id)
     }
 

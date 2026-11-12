@@ -300,3 +300,114 @@ fn a_card_goes_with_its_window() {
     s.c.step();
     assert_eq!(s.c.card(), None);
 }
+
+/// Shows the card of a window of `w` x `h` whose buffer is `colour`: the
+/// body, the card and the card's pixels.
+fn shown_card(w: u32, h: u32, colour: u32) -> (Rect, Rect, Vec<u32>) {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let end = s.room_client(panel, "a1", "term", "+w ~/a");
+    s.window_of(end, w, h, colour);
+    assert_eq!(
+        s.set_usage(panel, &reading("a1", 20 * MIB).to_wire()),
+        status::OK
+    );
+    let o = s.outer(0, 1);
+    let (dw, dh) = s.f().display_size;
+    s.point(
+        super::rooms::axis(o.x + o.width / 2, dw),
+        super::rooms::axis(o.y + s.c.frame().title / 2, dh),
+        None,
+    );
+    let key = Key { client: 0, id: 1 };
+    assert_eq!(s.c.card(), Some(key));
+    let body = s.c.window(key).unwrap().body_rect();
+    let (card, _) = s.c.card_geometry(key).unwrap();
+    let pixels = s.region(card);
+    (body, card, pixels)
+}
+
+#[test]
+fn a_client_buffer_cannot_cover_or_imitate_the_card() {
+    // INV-0172-1, ADR-0172 point 1: the card is where no pixel of the
+    // client's buffer is, so a buffer that paints one stays a picture in
+    // its own body, and whatever the buffer holds changes nothing of it.
+    let (body, card, pixels) = shown_card(300, 120, 0x0040_4040);
+    assert!(
+        card.intersect(&body).is_empty(),
+        "{card:?} overlaps the body {body:?}"
+    );
+    let (_, _, other) = shown_card(300, 120, 0x00ff_ffff);
+    assert_eq!(pixels, other, "the buffer's colour reaches the card");
+}
+
+#[test]
+fn a_card_with_no_room_beside_its_window_covers_the_frame_first() {
+    // A window as large as the work area has no free side: the card then
+    // starts on the title bar, which no client draws, so a copy in the body
+    // lacks that part.
+    let work = setup().c.work_area();
+    let (body, card, _) = shown_card(work.width as u32, work.height as u32, 0x0040_4040);
+    assert!(card.y < body.y, "{card:?} starts inside the body {body:?}");
+}
+
+#[test]
+fn the_card_follows_a_restack_under_a_still_pointer() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let end = s.room_client(panel, "a1", "term", "+w ~/a");
+    s.window_of(end, 300, 120, 0x0040_4040);
+    assert_eq!(
+        s.set_usage(panel, &reading("a1", 20 * MIB).to_wire()),
+        status::OK
+    );
+    let o = s.outer(0, 1);
+    let (dw, dh) = s.f().display_size;
+    let (px, py) = (o.x + o.width / 2, o.y + s.c.frame().title - 1);
+    s.point(
+        super::rooms::axis(px, dw),
+        super::rooms::axis(py, dh),
+        None,
+    );
+    assert_eq!(s.c.card(), Some(Key { client: 0, id: 1 }));
+    // A window of `home` as large as the screen opens over the pointer.
+    let home = s.room_client(panel, "", "term", "");
+    s.window_of(home, 560, 380, 0x0040_4040);
+    let covering = s.outer(1, 1);
+    assert!(covering.y <= py && py < covering.bottom(), "{covering:?}");
+    assert_eq!(s.c.card(), None, "the card of a covered title bar");
+}
+
+#[test]
+fn the_refusals_of_a_room_go_with_its_last_client() {
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    let a1 = s.room_client(panel, "a1", "term", "+w ~/a");
+    for _ in 0..=ROOM_SURFACES {
+        s.try_toplevel(a1, 60, 40);
+    }
+    assert_eq!(s.c.accounts().len(), 1);
+    s.f().peers.get_mut(&a1).unwrap().gone = true;
+    s.c.step();
+    assert!(s.c.accounts().is_empty());
+    // And the list is never longer than the clients there are.
+    let table: String = (0..8).map(|i| format!("r{i} --untrusted\n")).collect();
+    assert_eq!(s.set_rooms(panel, "", &table), status::OK);
+    let mut ends = Vec::new();
+    for i in 0..8 {
+        let e = s.room_client(panel, &format!("r{i}"), "term", "+w ~/a");
+        for _ in 0..=ROOM_SURFACES {
+            s.try_toplevel(e, 60, 40);
+        }
+        ends.push(e);
+    }
+    assert_eq!(s.c.accounts().len(), 8);
+    for e in ends {
+        s.f().peers.get_mut(&e).unwrap().gone = true;
+    }
+    s.c.step();
+    assert!(s.c.accounts().is_empty());
+}
