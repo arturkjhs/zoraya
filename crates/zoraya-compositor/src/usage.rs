@@ -232,13 +232,19 @@ impl<P: Platform> Compositor<P> {
 
     /// The text of a window's card: the room, its grants as the record has
     /// them, then the reading's lines (`mem 58M of 64M`, ... `limits ...`).
-    /// None for a window without a room.
+    /// None for a window without a room, and for a room with no limit or
+    /// no reading yet.
     pub fn card_lines(&self, key: Key) -> Option<Vec<String>> {
         let i = self.index(key)?;
         let r = self.record(self.windows[i].client)?;
         if r.room.is_empty() {
             return None;
         }
+        // A room that holds no limit has nothing for a card to say that its
+        // pills do not: no card, and no text of the window covered for it.
+        let reading = self
+            .reading(&r.room)
+            .filter(|rd| !rd.limits().words().is_empty())?;
         let mut lines = Vec::new();
         lines.push(if r.untrusted {
             alloc::format!("{}  untrusted", r.room)
@@ -246,9 +252,7 @@ impl<P: Platform> Compositor<P> {
             r.room.clone()
         });
         lines.extend(r.entries.iter().cloned());
-        if let Some(reading) = self.reading(&r.room) {
-            lines.extend(reading.card_lines());
-        }
+        lines.extend(reading.card_lines());
         Some(lines)
     }
 

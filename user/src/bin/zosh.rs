@@ -3129,7 +3129,13 @@ impl Z {
     /// The keeper's records as readings, with the CPU share since the last
     /// reading this shell took.
     fn readings(&mut self) -> Option<Vec<zoraya_settings::usage::Reading>> {
-        let records = self.keeper.as_mut()?.usage("").ok()?;
+        // A `Manage` channel is asked for every room; a room's own
+        // `Room(R)` channel answers for R alone, and by name.
+        let own = match (&self.room, self.keeper_manage) {
+            (Some(r), false) => r.name.clone(),
+            _ => String::new(),
+        };
+        let records = self.keeper.as_mut()?.usage(&own).ok()?;
         Some(self.usage_tracker.readings(&records, clock_monotonic()))
     }
 

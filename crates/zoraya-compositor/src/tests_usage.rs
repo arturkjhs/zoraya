@@ -267,16 +267,35 @@ fn a_card_goes_with_its_window() {
     let end = s.room_client(panel, "project", "term", "+w ~/project");
     s.window_of(end, 300, 120, 0x0040_4040);
     let o = s.outer(0, 1);
+    // A room with no limit has no card, whatever the reading says: its
+    // pills are all it has to say and nothing of the window is covered.
+    assert_eq!(s.c.card_lines(Key { client: 0, id: 1 }), None);
+    assert_eq!(s.c.card(), None);
+    let mut r = reading("project", MIB);
+    r.mem_limit = None;
+    r.procs_limit = None;
+    r.cpu_permille = None;
+    r.disk_limit = None;
+    r.conns_limit = None;
+    assert_eq!(s.set_usage(panel, &r.to_wire()), status::OK);
+    assert_eq!(s.c.card_lines(Key { client: 0, id: 1 }), None);
+    // With a limit it has one, and it goes with its window.
+    assert_eq!(
+        s.set_usage(panel, &reading("project", MIB).to_wire()),
+        status::OK
+    );
     let (w, h) = s.f().display_size;
     s.point(
         super::rooms::axis(o.x + o.width / 2, w),
         super::rooms::axis(o.y + s.c.frame().title / 2, h),
         None,
     );
+    s.point(
+        super::rooms::axis(o.x + o.width / 2 + 1, w),
+        super::rooms::axis(o.y + s.c.frame().title / 2, h),
+        None,
+    );
     assert!(s.c.card().is_some());
-    // Without a reading the card still names the room and its grants.
-    let lines = s.c.card_lines(Key { client: 0, id: 1 }).unwrap();
-    assert_eq!(lines, ["project", "+w ~/project"]);
     s.f().peers.get_mut(&end).unwrap().gone = true;
     s.c.step();
     assert_eq!(s.c.card(), None);
