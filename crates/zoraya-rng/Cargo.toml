@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-rng"
+description = "The random service's generator and protocol (ADR-0227): a ChaCha20 generator with fast key erasure, reseeded from the boot seed and a device."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-protocol = { path = "../zoraya-protocol" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }

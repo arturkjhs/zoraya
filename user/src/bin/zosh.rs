@@ -616,6 +616,9 @@ struct Z {
     /// The shell's root network connection (slot 9, ADR-0221 item 4), from
     /// which a command that needs the network's status gets a narrowed one.
     net: Option<Handle>,
+    /// The shell's connection to the random service (slot 10, ADR-0227
+    /// item 3), from which each native program gets its own.
+    random: Option<Handle>,
     tmp: Option<File>,
     next_tmp: u32,
     /// The `/tmp` directory of the line being started, once one is made.
@@ -1065,6 +1068,19 @@ impl Z {
                 transfer: Transfer::Move,
             });
             slots.net = (handles.len() - 1) as u8;
+        }
+        // Every program gets its own connection to the random service,
+        // made through the shell's (ADR-0227 item 3): randomness designates
+        // nothing, so there is no grant word. Without the service, none.
+        if let Some(root) = self.random
+            && let Some(connection) = zoraya_user::random::share(root)
+        {
+            handles.push(ChannelEntry {
+                handle: connection,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            slots.random = (handles.len() - 1) as u8;
         }
         let entries: Vec<native::Entry<'_>> = merged
             .iter()
@@ -4080,6 +4096,7 @@ fn main() -> i32 {
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(Broker::new),
         net: Handle::new(9).filter(|h| handle_type(*h) == Ok("channel")),
+        random: Handle::new(10).filter(|h| handle_type(*h) == Ok("channel")),
         tmp: Handle::new(8)
             .filter(|h| handle_type(*h) == Ok("channel"))
             .map(|end| File { end }),

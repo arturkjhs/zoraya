@@ -30,7 +30,7 @@ pub fn moved(slot: u32, handle: Handle) -> HandleEntry {
     }
 }
 
-pub(crate) fn console() -> HandleEntry {
+pub fn console() -> HandleEntry {
     dup(CONSOLE.slot(), CONSOLE, Rights::WRITE)
 }
 

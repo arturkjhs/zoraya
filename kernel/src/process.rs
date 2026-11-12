@@ -18,7 +18,7 @@ use zoraya_abi::spawn::{
 use zoraya_abi::{
     CONSOLE, ConsoleObject, DIRECTORY, DeviceObject, DirectoryObject, Disposition, ExitReason,
     ExitRecord, FIRST_DEVICE_SLOT, Handle, JOB, JobObject, ObjectType, REQUEST_KINDS, RTC_SLOT,
-    RequestKind, Rights, Status, process_signals,
+    RequestKind, Rights, SEED_SLOT, Status, process_signals,
 };
 use zoraya_abi::{POWER, PowerObject};
 use zoraya_elf::{Error as ElfError, PAGE_SIZE, PHDR_SIZE, Program, Segment};
@@ -825,6 +825,17 @@ pub fn spawn_first(name: &str) -> Result<Arc<Process>, SpawnError> {
         )
         .map_err(|_| SpawnError::NoMemory)?;
     insert_devices(&mut handles)?;
+    if let Some(seed) = crate::device::seed_object() {
+        // Read and map only: `init` hands it to `rngd` and keeps nothing.
+        handles
+            .insert_at(
+                SEED_SLOT,
+                Object::Memory(seed),
+                Rights::READ.union(Rights::MAP).union(Rights::TRANSFER),
+                object::next_id(),
+            )
+            .map_err(|_| SpawnError::NoMemory)?;
+    }
     create(Start {
         name,
         image: Loadable::from_file(file)?,

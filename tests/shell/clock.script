@@ -15,5 +15,16 @@ D 2
 > date\r
 D 2
 < \r\n~>
+# ADR-0227, INV-0227-1: three programs of one boot get different bytes (the
+# runner fails if two words after `random:` are equal, which "unavailable"
+# would be).
+! no entropy source
+> random\r
+< ok\r\n~>
+> random\r
+< ok\r\n~>
+> random\r
+< ok\r\n~>
+U 3 random:
 x power off
 > poweroff\r

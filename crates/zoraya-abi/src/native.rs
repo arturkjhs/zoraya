@@ -12,7 +12,8 @@
 //! entry count      u32
 //! in, out, err     u8 each: handle indices, or NO_HANDLE
 //! job, report      u8 each: the program's own job, the REPORT channel
-//! reserved         2 bytes, zero
+//! random, reserved u8 each: the connection to the random service
+//!                  (ADR-0227 item 3) or NO_HANDLE; zero
 //! realtime base    u64: nanoseconds added to the monotonic clock for the
 //!                  wall clock (ADR-0226 item 4); 0 keeps the monotonic one
 //! cwd              u32 length, bytes: the current directory, absolute
@@ -97,6 +98,9 @@ pub struct Slots {
     /// The network connection (ADR-0220 item 7): present only when the
     /// launcher granted something.
     pub net: u8,
+    /// The connection to the random service (ADR-0227 item 3): every
+    /// program the shell starts gets one when the service runs.
+    pub random: u8,
 }
 
 impl Slots {
@@ -107,9 +111,10 @@ impl Slots {
         job: NO_HANDLE,
         report: NO_HANDLE,
         net: NO_HANDLE,
+        random: NO_HANDLE,
     };
 
-    fn all(&self) -> [u8; 6] {
+    fn all(&self) -> [u8; 7] {
         [
             self.input,
             self.output,
@@ -117,6 +122,7 @@ impl Slots {
             self.job,
             self.report,
             self.net,
+            self.random,
         ]
     }
 }
@@ -167,8 +173,9 @@ impl<'a> Startup<'a> {
             job: s[3],
             report: s[4],
             net: s[5],
+            random: s[6],
         };
-        if flags != 0 || s[6..8] != [0, 0] || entry_count > MAX_ENTRIES {
+        if flags != 0 || s[7] != 0 || entry_count > MAX_ENTRIES {
             return None;
         }
         let limit = handles.min(MAX_MESSAGE_HANDLES);
@@ -286,7 +293,7 @@ pub fn encode(
         put(&word.to_le_bytes())?;
     }
     let s = slots.all();
-    put(&[s[0], s[1], s[2], s[3], s[4], s[5], 0, 0])?;
+    put(&[s[0], s[1], s[2], s[3], s[4], s[5], s[6], 0])?;
     put(&realtime_base.to_le_bytes())?;
     put(&u32::try_from(cwd.len()).ok()?.to_le_bytes())?;
     put(cwd.as_bytes())?;

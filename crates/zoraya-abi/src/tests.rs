@@ -1458,6 +1458,7 @@ mod native_startup {
             job: 5,
             report: 6,
             net: 7,
+            random: NO_HANDLE,
         };
         encode("/work", &slots, &entries, 8, 1_800_000_000_123_456_789, out).expect("encodes")
     }
@@ -1470,6 +1471,7 @@ mod native_startup {
         assert_eq!(r.cwd, "/work");
         assert_eq!(r.slots.report, 6);
         assert_eq!(r.slots.net, 7);
+        assert_eq!(r.slots.random, NO_HANDLE);
         assert_eq!(r.realtime_base, 1_800_000_000_123_456_789);
         let paths: std::vec::Vec<&str> = r.entries().map(|e| e.path).collect();
         assert_eq!(paths, ["/work/notes.txt", "/work/new.txt", "/work"]);
@@ -1524,11 +1526,19 @@ mod native_startup {
         assert!(encode("/", &net, &[], 1, 0, &mut out).is_some());
         assert!(encode("/", &net, &[], 0, 0, &mut out).is_none());
         let n = encode("/", &net, &[], 1, 0, &mut out).unwrap();
-        for reserved in [22, 23] {
-            let mut m = out[..n].to_vec();
-            m[reserved] = 1;
-            assert!(Startup::decode(&m, 1).is_none(), "reserved byte {reserved}");
-        }
+        let mut m = out[..n].to_vec();
+        m[23] = 1;
+        assert!(Startup::decode(&m, 1).is_none(), "reserved byte 23");
+        // The random slot is a handle like the others, and byte 23 is still
+        // reserved.
+        let random = Slots {
+            random: 0,
+            ..Slots::NONE
+        };
+        assert!(encode("/", &random, &[], 1, 0, &mut out).is_some());
+        assert!(encode("/", &random, &[d("/a", 0)], 1, 0, &mut out).is_none());
+        let n = encode("/", &random, &[], 1, 0, &mut out).unwrap();
+        assert_eq!(Startup::decode(&out[..n], 1).unwrap().slots.random, 0);
         let missing = Entry {
             path: "/x",
             kind: EntryKind::Missing,

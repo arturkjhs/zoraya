@@ -33,6 +33,8 @@ pub struct Namespace {
     pub entries: Vec<Entry>,
     report: Option<Handle>,
     net: Option<Handle>,
+    /// The connection to the random service (ADR-0227 item 3), if any.
+    random: Option<Handle>,
     /// The wall clock's base from the record (ADR-0226 item 4), or 0.
     realtime_base: u64,
     reported: RefCell<Vec<String>>,
@@ -74,6 +76,7 @@ fn read_record() -> Option<Namespace> {
         entries,
         report: nth(got, record.slots.report),
         net: nth(got, record.slots.net),
+        random: nth(got, record.slots.random),
         realtime_base: record.realtime_base,
         reported: RefCell::new(Vec::new()),
         dropped: RefCell::new(0),
@@ -112,6 +115,11 @@ pub fn realtime() -> Option<u64> {
 }
 
 impl Namespace {
+    /// The connection to the random service the launcher gave (ADR-0227).
+    pub fn random(&self) -> Option<Handle> {
+        self.random
+    }
+
     /// The network connection the launcher gave (ADR-0220 item 7), if any.
     pub fn net(&self) -> Option<Handle> {
         self.net

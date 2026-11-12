@@ -47,6 +47,7 @@ zoraya-panel = { path = "../crates/zoraya-panel" }
 zoraya-app = { path = "../crates/zoraya-app" }
 zoraya-chooser = { path = "../crates/zoraya-chooser" }
 zoraya-files = { path = "../crates/zoraya-files" }
+zoraya-rng = { path = "../crates/zoraya-rng" }
 zoraya-settings-window = { path = "../crates/zoraya-settings-window" }
 zoraya-editor = { path = "../crates/zoraya-editor" }
 zoraya-fsclient = { path = "../crates/zoraya-fsclient" }
@@ -241,6 +242,18 @@ bench = false
 [[bin]]
 name = "date"
 path = "src/bin/date.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "rngd"
+path = "src/bin/rngd.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "random"
+path = "src/bin/random.rs"
 test = false
 bench = false
 

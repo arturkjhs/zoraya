@@ -188,6 +188,33 @@ fn config_connection(stack: &Stack) -> Option<Handle> {
 /// The shell's root network connection (ADR-0221 item 4), present when the
 /// network runs.
 const SHELL_NET_SLOT: u32 = 9;
+/// The shell's connection to the random service (ADR-0227 item 3).
+const SHELL_RANDOM_SLOT: u32 = 10;
+
+/// Starts `rngd` with the boot seed (ADR-0227 item 2) and gives the
+/// connection `init` keeps to make the launchers'. `None` without a seed
+/// object: the service would have no entropy, so it does not run and
+/// `getrandom` fails (stated here, never silent).
+fn start_rng() -> Option<((Handle, Handle), Handle)> {
+    let seed = Handle::new(u64::from(zoraya_abi::SEED_SLOT))?;
+    if zoraya_user::handle_type(seed) != Ok("memory") {
+        println!("init: no entropy source: no seed in the device tree, no random service");
+        return None;
+    }
+    let (mine, theirs) = channel_create().ok()?;
+    let entry = zoraya_abi::spawn::HandleEntry {
+        slot: 5,
+        handle: seed,
+        rights: Rights::READ.union(Rights::MAP),
+        transfer: zoraya_abi::spawn::Transfer::Move,
+    };
+    let running = zoraya_user::stack::start(
+        "rngd",
+        &[zoraya_user::stack::console(), entry, moved(6, theirs)],
+        &[],
+    )?;
+    Some((running, mine))
+}
 
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
 /// terminal at slot 6; with a broker beside it, its client connection at 7
@@ -198,6 +225,7 @@ fn start_shell(
     terminal: Option<Handle>,
     broker: Option<&Beside>,
     network: Option<Handle>,
+    random: Option<Handle>,
 ) -> Option<(Handle, Handle)> {
     let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
@@ -244,12 +272,15 @@ fn start_shell(
     if let Some(n) = network {
         e.handle(moved(SHELL_NET_SLOT, n));
     }
+    if let Some(r) = random {
+        e.handle(moved(SHELL_RANDOM_SLOT, r));
+    }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
-    if process.is_none()
-        && let Some(n) = network
-    {
-        let _ = handle_close(n);
+    if process.is_none() {
+        for h in [network, random].into_iter().flatten() {
+            let _ = handle_close(h);
+        }
     }
     if process.is_some() && root_moved {
         // Moved: the shell's now.
@@ -339,6 +370,7 @@ fn main() -> i32 {
     if read_rtc() == 0 {
         println!("init: no real-time clock reading; dates count from the volume");
     }
+    let rng = start_rng();
     let mut storage_allowed = devices.disk.is_some();
     let mut restarts = Restarts::new();
     let mut stack: Option<Stack> = None;
@@ -457,7 +489,16 @@ fn main() -> i32 {
                 )
                 .ok()
             });
-            start_shell(root, terminal.map(|t| t.1), beside.as_ref(), root_network)
+            let random = rng
+                .as_ref()
+                .and_then(|(_, conn)| zoraya_user::random::share(*conn));
+            start_shell(
+                root,
+                terminal.map(|t| t.1),
+                beside.as_ref(),
+                root_network,
+                random,
+            )
         };
         let Some(shell) = shell else {
             println!("init: the shell did not start");

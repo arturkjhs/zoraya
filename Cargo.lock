@@ -667,6 +667,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-rng"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-rt"
 version = "0.1.0"
 dependencies = [
@@ -831,6 +839,7 @@ dependencies = [
  "zoraya-proto-tty",
  "zoraya-protocol",
  "zoraya-resolve",
+ "zoraya-rng",
  "zoraya-rt",
  "zoraya-settings",
  "zoraya-settings-window",

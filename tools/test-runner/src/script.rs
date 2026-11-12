@@ -22,6 +22,9 @@
 //!                 match, and fail unless it is within SECONDS of the host's
 //!                 clock at the moment the runner reads it (ADR-0226
 //!                 INV-0226-2)
+//! U N PREFIX      wait for N words anywhere in the output that follow PREFIX
+//!                 (each up to the next blank), and fail if two of them are equal (ADR-0227
+//!                 INV-0227-1: programs get different random bytes)
 //! % NAME          print `RUNNER-TIME NAME SECONDS`, the time since the
 //!                 previous `%` (or the start), for the stage 6 tables
 //! ```
@@ -54,8 +57,28 @@ pub enum Step {
     Repeat(usize, Vec<u8>, String),
     /// A time mark: the seconds since the last one, measured on the host.
     Mark(String),
+    /// This many words after a prefix, all different.
+    Distinct(usize, String),
     /// A UTC time the guest printed, within this many seconds of the host's.
     Clock(u64),
+}
+
+/// The words that follow each occurrence of `prefix` in `text`, each up to
+/// the next whitespace, and only if the word is finished (followed by one).
+pub fn words_after(text: &str, prefix: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(prefix) {
+        rest = rest[at + prefix.len()..].trim_start_matches([' ', '\t']);
+        match rest.find(char::is_whitespace) {
+            Some(end) if end > 0 => {
+                words.push(rest[..end].to_string());
+                rest = &rest[end..];
+            }
+            _ => break,
+        }
+    }
+    words
 }
 
 /// The first `YYYY-MM-DD HH:MM:SS UTC` in `text`: seconds since the epoch
@@ -66,7 +89,11 @@ pub fn find_utc(text: &str) -> Option<(i64, usize)> {
     'at: for start in 0..bytes.len().saturating_sub(SHAPE.len() - 1) {
         let window = &bytes[start..start + SHAPE.len()];
         for (b, s) in window.iter().zip(SHAPE) {
-            let ok = if *s == b'd' { b.is_ascii_digit() } else { b == s };
+            let ok = if *s == b'd' {
+                b.is_ascii_digit()
+            } else {
+                b == s
+            };
             if !ok {
                 continue 'at;
             }
@@ -186,6 +213,21 @@ pub fn parse(text: &str) -> Result<Vec<Step>, String> {
             }
             "!" => Step::Forbid(rest.to_string()),
             "%" => Step::Mark(rest.to_string()),
+            "U" => {
+                let (n, prefix) = rest
+                    .split_once(' ')
+                    .ok_or(format!("line {number}: no prefix"))?;
+                let n: usize = n
+                    .parse()
+                    .map_err(|_| format!("line {number}: not a count"))?;
+                if n < 2 {
+                    return Err(format!("line {number}: fewer than two words cannot differ"));
+                }
+                Step::Distinct(
+                    n,
+                    text_of(prefix).map_err(|e| format!("line {number}: {e}"))?,
+                )
+            }
             "D" => Step::Clock(
                 rest.parse()
                     .map_err(|_| format!("line {number}: not a number of seconds"))?,
@@ -310,6 +352,11 @@ impl Seen {
         self.before = self.from;
         self.from += by;
         self.looking = None;
+    }
+
+    /// All the output so far.
+    pub fn all(&self) -> &str {
+        &self.text
     }
 
     /// Output after the last match.
@@ -463,6 +510,26 @@ fn steps_then_drain(
                 mark = now;
             }
             Step::Forbid(text) => link.seen.forbid(text),
+            Step::Distinct(n, prefix) => loop {
+                let words = words_after(link.seen.all(), prefix);
+                if words.len() >= *n {
+                    for (i, a) in words.iter().enumerate() {
+                        if words[..i].contains(a) {
+                            return Err(format!("{prefix:?} was followed by {a:?} twice"));
+                        }
+                    }
+                    break;
+                }
+                if let Some(bad) = link.seen.violation() {
+                    return Err(format!("forbidden output: {bad}"));
+                }
+                if Instant::now() >= link.deadline {
+                    return Err(format!("timed out waiting for {n} words after {prefix:?}"));
+                }
+                if !link.receive(link.deadline)? {
+                    return Err(format!("output ended before {n} words after {prefix:?}"));
+                }
+            },
             Step::Clock(within) => loop {
                 if let Some((guest, end)) = find_utc(link.seen.since_match()) {
                     let host = std::time::SystemTime::now()
@@ -626,11 +693,25 @@ mod tests {
         let (t, end) = find_utc("~> date\r\n2026-11-04 10:12:31 UTC\r\n~>").unwrap();
         assert_eq!(t, 1_793_787_151);
         assert_eq!(&"~> date\r\n2026-11-04 10:12:31 UTC\r\n~>"[end..], "\r\n~>");
-        assert_eq!(find_utc("2024-02-29 00:00:00 UTC").unwrap().0, 1_709_164_800);
+        assert_eq!(
+            find_utc("2024-02-29 00:00:00 UTC").unwrap().0,
+            1_709_164_800
+        );
         assert_eq!(find_utc("1970-01-01 00:00:00 UTC").unwrap().0, 0);
         assert!(find_utc("2026-13-04 10:12:31 UTC").is_none());
         assert!(find_utc("2026-11-04 10:12:3").is_none());
         assert_eq!(parse("D 2").unwrap(), vec![Step::Clock(2)]);
+    }
+
+    #[test]
+    fn words_after_a_prefix_are_found_when_finished() {
+        let text = "random: aa\r\nxx random: bb\r\nrandom: cc";
+        assert_eq!(words_after(text, "random: "), ["aa", "bb"]);
+        assert_eq!(
+            parse("U 2 random: ").unwrap(),
+            vec![Step::Distinct(2, "random: ".into())]
+        );
+        assert!(parse("U 1 x").is_err());
     }
 
     #[test]
