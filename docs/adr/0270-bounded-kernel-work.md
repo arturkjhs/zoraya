@@ -276,9 +276,11 @@ and exits.
   it holds `TREE`; between steps it holds nothing and calls `steps::pause`, which cannot fail, so a walk runs to its end
   whatever the caller was asked (as a teardown does). The way through is a path of at most 32 frames (the depth limit)
   with the counts of children and of processes not yet visited, counted down from the end of the lists; a process that
-  leaves (`swap_remove`) is either behind the walk or still ahead of it, and a dropped job leaves its dead slot in its
-  parent's list while any walk runs (`WALKS`), so no index moves; a list drops dead slots when it is about to grow, with
-  no walk running. What joins during a walk is not reached by it: `job_kill` closes each job before its children, so a
+  leaves (`swap_remove`) is either behind the walk or still ahead of it, and so is a dropped job (also `swap_remove`:
+  the first version kept its dead slot while any walk ran, which left uncharged memory growing without bound, because a dead
+  `Weak` keeps its allocation; review of the fixes, error 1). Removing from the list can make one entry be visited twice,
+  never skip one (`Job::walk`'s comment): twice is harmless to `suspend`, `resume` and `kill`, and a `job_signal` may deliver
+  to a process twice when another process of the same job leaves during a pause (stated, not prevented). What joins during a walk is not reached by it: `job_kill` closes each job before its children, so a
   job or process made later is refused; `job_suspend` and `job_resume` leave a job created or joined later in the state
   its parent has; `job_signal` is for what was there when it started. Two walks may now interleave, so a `job_resume`
   that lands between the steps of a `job_suspend` of the same tree leaves its later jobs suspended: the same outcome as

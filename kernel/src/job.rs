@@ -7,7 +7,7 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::quota::{FieldUsage, JobLimits, JobUsage};
 use zoraya_abi::{ExitReason, ExitRecord, RequestKind, Status, job_signals};
@@ -27,10 +27,6 @@ use crate::sync::SpinLock;
 const MAX_DEPTH: u32 = 32;
 
 static TREE: SpinLock<()> = SpinLock::new(());
-/// Walks of a tree now running or paused between steps. While there are
-/// any, a dropped job leaves its dead slot in its parent's list (a dead
-/// `Weak` is skipped) so that no walk's index moves.
-static WALKS: AtomicUsize = AtomicUsize::new(0);
 static ROOT: SpinLock<Option<Arc<Job>>> = SpinLock::new(None);
 
 struct State {
@@ -124,10 +120,6 @@ impl Job {
         let mut state = parent.state.lock();
         if state.closed {
             return Err(Status::BadState);
-        }
-        if state.children.len() == state.children.capacity() && WALKS.load(Ordering::SeqCst) == 0 {
-            // Dead slots left by drops during a walk go before the list grows.
-            state.children.retain(|c| c.strong_count() > 0);
         }
         state
             .children
@@ -287,13 +279,18 @@ impl Job {
     ///
     /// The way through it is a path of at most [`MAX_DEPTH`] frames, each with
     /// the number of children and of processes of its job not yet visited,
-    /// counted down from the end of the list: a process that leaves
-    /// (`swap_remove`) moves the last one into the hole, which a visit from
-    /// the end has either passed or will still reach. Dead children are not
-    /// taken out of a list while any walk is running ([`WALKS`]), so no index
-    /// moves. What joins during a walk is appended and not reached by it:
-    /// a job that is closed or suspended already has the effect (`join`,
-    /// `create`), and a signal is for what was there when the call began.
+    /// counted down from the end of the list: the entries still to visit are
+    /// the first `count` of the list. A process that leaves or a job that is
+    /// dropped (`swap_remove` in both) moves the last entry into the hole:
+    /// if the hole is among those still to visit, an entry the walk has
+    /// passed may move into it and be visited a second time, and none is
+    /// skipped. A second visit does nothing to a job (`suspend`, `resume`
+    /// and `kill` are idempotent), and may deliver a signal to a process
+    /// twice (`signal`: the ones that were there when the call began, and
+    /// possibly one of them twice, if another leaves during a pause). What
+    /// joins during a walk is appended and not reached by it: a job that is
+    /// closed or suspended already has the effect (`admit`, `create`), and a
+    /// signal is for what was there when the call began.
     fn walk(
         this: &Arc<Job>,
         on_job: &mut impl FnMut(&Job),
@@ -305,20 +302,6 @@ impl Job {
             processes: usize,
             children: usize,
         }
-        /// Keeps [`WALKS`] true for the life of the walk.
-        struct Active;
-        impl Active {
-            fn new() -> Active {
-                WALKS.fetch_add(1, Ordering::SeqCst);
-                Active
-            }
-        }
-        impl Drop for Active {
-            fn drop(&mut self) {
-                WALKS.fetch_sub(1, Ordering::SeqCst);
-            }
-        }
-        let _active = Active::new();
         let mut path: [Option<Frame>; MAX_DEPTH as usize + 1] =
             [const { None }; MAX_DEPTH as usize + 1];
         let mut depth = 1;
@@ -459,14 +442,18 @@ impl Drop for Job {
             charge::refund_memory(self, record, Kind::Kernel);
         }
         if let Some(parent) = &self.parent {
-            // Not while a walk runs: it counts on the slots staying (`walk`).
-            if WALKS.load(Ordering::SeqCst) == 0 {
-                let this: *const Job = self;
-                parent
-                    .state
-                    .lock()
-                    .children
-                    .retain(|c| !core::ptr::eq(c.as_ptr(), this));
+            // `swap_remove`, as for processes: a walk counts down from the
+            // end of the list and copes with it (`walk`). Dead slots are not
+            // kept, since a dead `Weak` keeps its allocation (the job's
+            // record, already refunded) until the list drops it.
+            let this: *const Job = self;
+            let mut state = parent.state.lock();
+            let at = state
+                .children
+                .iter()
+                .position(|c| core::ptr::eq(c.as_ptr(), this));
+            if let Some(at) = at {
+                state.children.swap_remove(at);
             }
         }
         port::free_source(self.source);
