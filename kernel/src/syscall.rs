@@ -400,6 +400,7 @@ impl Handlers for Calls<'_> {
                 let entry = self.process.handles.lock().remove(listed.handle);
                 if let Some(entry) = entry {
                     steps::before(object::weight(&entry));
+                    steps::count(1);
                     object::end_subscriptions(&entry);
                     self.end_hold_if_unwritable(&entry.object);
                 }
@@ -853,7 +854,9 @@ impl Handlers for Calls<'_> {
         drop(handles);
         if let Some(status) = failed {
             // Defensive, unreachable: the entries were validated above under
-            // the same lock, which is still the only way to change them.
+            // the same lock, which is still the only way to change them (one
+            // `handles` guard). Kept so that a later change cannot leak a
+            // subscription.
             for taken in &moved_out {
                 object::end_subscriptions(taken);
             }
@@ -1222,6 +1225,7 @@ impl Handlers for Calls<'_> {
             let entry = self.process.handles.lock().remove(moved.handle);
             if let Some(entry) = entry {
                 steps::before(object::weight(&entry));
+                steps::count(1);
                 object::end_subscriptions(&entry);
                 self.end_hold_if_unwritable(&entry.object);
             }

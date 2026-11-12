@@ -31,6 +31,26 @@ fn force_switch(on: bool) {
     raw_syscall(FORCE_SWITCH, [on as u64, 0, 0, 0, 0, 0]);
 }
 
+/// Forced switching for the life of a case: on at creation, off when dropped.
+/// A failed assertion ends the program (the `Drop` may not run then); the
+/// flag is also reset at the start of `main` and of every case, so that a
+/// case never starts with another's setting.
+struct Forced;
+
+impl Forced {
+    fn on() -> Forced {
+        force_switch(false);
+        force_switch(true);
+        Forced
+    }
+}
+
+impl Drop for Forced {
+    fn drop(&mut self) {
+        force_switch(false);
+    }
+}
+
 struct Counters {
     object: Handle,
     at: u64,
@@ -143,7 +163,7 @@ fn with_jobs(job: Handle, what: &[u8], jobs: &[Handle]) -> Handle {
 /// resumer runs inside each walk on one CPU too; without the turns
 /// (`job::Exclusive`) it fails (round 2, warning 3: the mutation was run).
 fn a_resume_from_inside_cannot_undo_a_suspend_walk() {
-    force_switch(true);
+    let _forced = Forced::on();
     let counters = Counters::new();
     let top = job_create(JOB, JobFlags::NONE).expect("job");
     let held = big_tree(top, 700);
@@ -185,7 +205,6 @@ fn a_resume_from_inside_cannot_undo_a_suspend_walk() {
         handle_close(job).expect("close");
     }
     handle_close(top).expect("close");
-    force_switch(false);
 }
 
 /// The child of the case above: resumes the jobs it was given, without end,
@@ -207,7 +226,7 @@ fn resumer() -> ! {
 /// suspended too (`Job::create` reads the parent's state under `TREE`), and
 /// `job_resume` undoes it all.
 fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
-    force_switch(true);
+    let _forced = Forced::on();
     let counters = Counters::new();
     let top = job_create(JOB, JobFlags::NONE).expect("job");
     // The first four children of `top`, which a walk visits last: the
@@ -280,7 +299,6 @@ fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
         handle_close(job).expect("close");
     }
     handle_close(top).expect("close");
-    force_switch(false);
 }
 
 /// The child of the case above: holds the last handles of the first four
@@ -523,6 +541,7 @@ fn count(index: usize) -> ! {
 
 #[unsafe(no_mangle)]
 fn main() -> i32 {
+    force_switch(false);
     let mut argv = startup().argv;
     let first = argv.clone().next();
     if let Some(b"sleep") = first {
