@@ -5,64 +5,244 @@
 //!
 //! Only a *literal* `url` operand designates, as only a literal path does
 //! (ADR-0153 rule 4): one that came from a variable, a substitution or a
-//! glob would let data choose what the command reaches, and is refused
-//! before the line runs. ADR-0224 item 2 lets such an operand designate
-//! inside a `+net` rule on the line or in the room; those words are not
-//! built (N3b), so a value is always outside them.
+//! glob would let data choose what the command reaches. Such an operand
+//! designates only inside a `+net` rule on the line (N6; the room's rules
+//! come with the rooms' words, which are not built) and is refused before
+//! the line runs otherwise. A `+net` word is the person's, typed literally
+//! (the token; its one argument may be expanded, ADR-0153 rule 3).
 
 use alloc::vec::Vec;
 
-use zoraya_abi::net::{Ports, Protocols, ReachRule, Scope, Target, encode, rights};
+use alloc::string::String;
+use zoraya_abi::net::{
+    MAX_RULES, Ports, Protocols, ReachRule, Scope, Target, encode, rights, valid_name,
+};
 use zoraya_describe::Kind;
 
 use crate::grants::{Line, Refused, value_of};
 
+/// A `+net` word: what it names, owned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetWord {
+    target: Named,
+    ports: Ports,
+    protocols: Protocols,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Named {
+    Name(String),
+    Wildcard(String),
+    Address([u8; 4]),
+    Prefix([u8; 4], u8),
+    Any,
+}
+
+impl NetWord {
+    fn rule(&self) -> ReachRule<'_> {
+        ReachRule {
+            target: match &self.target {
+                Named::Name(n) => Target::Name(n),
+                Named::Wildcard(n) => Target::Wildcard(n),
+                Named::Address(a) => Target::Address(*a),
+                Named::Prefix(a, l) => Target::Prefix(*a, *l),
+                Named::Any => Target::Any,
+            },
+            ports: self.ports,
+            protocols: self.protocols,
+        }
+    }
+}
+
+/// Reads the word after `+net` (ADR-0224 items 1 and 2): `any`, a host name,
+/// `*.SUFFIX` (the names under it, not the suffix), a dotted address or
+/// `ADDRESS/BITS`, each with an optional `:PORT` (without one, every port, as
+/// the architect decided; one word covers TCP and UDP). Total: any text gives
+/// a word or the reason.
+pub fn parse_word(text: &str) -> Result<NetWord, String> {
+    let (host, ports) = match text.rsplit_once(':') {
+        Some((host, port)) => {
+            let n: u32 = port
+                .parse()
+                .ok()
+                .filter(|n| (1..=65535).contains(n))
+                .ok_or_else(|| String::from("the port is not a number from 1 to 65535"))?;
+            (host, Ports::one(n as u16))
+        }
+        None => (text, Ports::ANY),
+    };
+    let host = host.to_ascii_lowercase();
+    let target = if host == "any" {
+        Named::Any
+    } else if let Some((address, bits)) = host.split_once('/') {
+        let a = zoraya_http::parse_ipv4(address)
+            .ok_or_else(|| String::from("not an address with a prefix length"))?;
+        let bits: u8 = bits
+            .parse()
+            .ok()
+            .filter(|b| *b <= 32)
+            .ok_or_else(|| String::from("the prefix length is from 0 to 32"))?;
+        let mask = if bits == 0 {
+            0
+        } else {
+            u32::MAX << (32 - u32::from(bits))
+        };
+        if u32::from_be_bytes(a) & !mask != 0 {
+            return Err(String::from("the address has bits past its prefix length"));
+        }
+        Named::Prefix(a, bits)
+    } else if let Some(a) = zoraya_http::parse_ipv4(&host) {
+        Named::Address(a)
+    } else if let Some(suffix) = host.strip_prefix("*.") {
+        if !valid_name(suffix) {
+            return Err(String::from("not a host name after *."));
+        }
+        Named::Wildcard(String::from(suffix))
+    } else if valid_name(&host) {
+        Named::Name(host)
+    } else {
+        return Err(String::from("not a host name, an address or any"));
+    };
+    Ok(NetWord {
+        target,
+        ports,
+        protocols: Protocols::BOTH,
+    })
+}
+
 /// The rights and scope to `narrow` the shell's connection to, if the
-/// command gets a connection at all. A URL that does not parse gives none:
-/// the command says what is wrong with it.
+/// command gets a connection at all: the line's `+net` words (`nets`, their
+/// values as written after the token), then the `url` operand of a
+/// base-system command. A URL that does not parse gives none of its own: the
+/// command says what is wrong with it.
 pub fn net_for(line: &Line<'_>) -> Result<Option<(u32, Vec<u8>)>, Refused> {
     let d = line.description;
-    if !line.base_system {
-        return Ok(None);
+    let mut words: Vec<NetWord> = Vec::new();
+    for v in line.nets {
+        match parse_word(&v.text) {
+            Ok(w) => words.push(w),
+            Err(problem) => {
+                return Err(Refused {
+                    subject: alloc::format!("+net {}", v.text),
+                    problem,
+                    hint: Some(String::from(
+                        "write a host, *.suffix, an address, ADDRESS/BITS or any, with :PORT if one port",
+                    )),
+                });
+            }
+        }
     }
-    if d.needs_net_status {
-        return Ok(Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec())));
-    }
-    let Some((_, text)) = line
-        .parsed
-        .operands
-        .iter()
-        .find(|(i, _)| d.operands[*i].kind == Kind::Url)
-    else {
-        return Ok(None);
+    let operand = if line.base_system {
+        line.parsed
+            .operands
+            .iter()
+            .find(|(i, _)| d.operands[*i].kind == Kind::Url)
+            .map(|(_, text)| *text)
+    } else {
+        None
     };
-    // A text that is no argument's is taken as from a value: fails closed.
-    if !value_of(line.args, text).is_some_and(|v| v.literal) {
+    if let Some(text) = operand {
+        let literal = value_of(line.args, text).is_some_and(|v| v.literal);
+        if let Ok(url) = zoraya_http::parse_url(text) {
+            let host = url.host.to_ascii_lowercase();
+            let named = match zoraya_http::parse_ipv4(&host) {
+                Some(a) => Named::Address(a),
+                None => Named::Name(host.clone()),
+            };
+            let word = NetWord {
+                target: named,
+                ports: Ports::one(url.port),
+                protocols: Protocols::TCP,
+            };
+            let covered = words.iter().any(|outer| word.rule().within(&outer.rule()));
+            // A value designates only inside a `+net` rule of the line
+            // (ADR-0224 item 2); a literal one adds its own.
+            if !literal && !covered {
+                return Err(Refused {
+                    subject: (*text).into(),
+                    problem: "from a value, outside the line's network grants".into(),
+                    hint: Some(alloc::format!(
+                        "if that is meant: +net {host}:{} COMMAND",
+                        url.port
+                    )),
+                });
+            }
+            if literal && !covered {
+                words.push(word);
+            }
+        } else if !literal && words.is_empty() {
+            return Err(Refused {
+                subject: (*text).into(),
+                problem: "from a value, outside the line's network grants".into(),
+                hint: Some(
+                    "write the address on the line itself, or give it with +net HOST".into(),
+                ),
+            });
+        }
+    }
+    let rules: Vec<ReachRule<'_>> = words.iter().map(NetWord::rule).collect();
+    if rules.is_empty() {
+        if d.needs_net_status && line.base_system {
+            return Ok(Some((rights::STATUS, Scope::EMPTY.as_bytes().to_vec())));
+        }
+        return Ok(None);
+    }
+    if rules.len() > MAX_RULES {
         return Err(Refused {
-            subject: (*text).into(),
-            problem: "from a value, outside the line's network grants".into(),
-            hint: Some(
-                "write the address on the line itself; the +net words that would allow a value are not built yet"
-                    .into(),
-            ),
+            subject: "+net".into(),
+            problem: "too many network rules on one line".into(),
+            hint: None,
         });
     }
-    let Ok(url) = zoraya_http::parse_url(text) else {
-        return Ok(None);
-    };
-    let host = url.host.to_ascii_lowercase();
-    let target = match zoraya_http::parse_ipv4(&host) {
-        Some(a) => Target::Address(a),
-        None => Target::Name(&host),
-    };
-    let rule = ReachRule {
-        target,
-        ports: Ports::one(url.port),
-        protocols: Protocols::TCP,
-    };
-    let mut out = alloc::vec![0u8; 512];
-    Ok(encode(&[rule], &[], &mut out).map(|n| {
+    let mut out = alloc::vec![0u8; 512 + 128 * rules.len()];
+    Ok(encode(&rules, &[], &mut out).map(|n| {
         out.truncate(n);
         (rights::REACH, out)
     }))
+}
+
+/// The lines `grants` prints for the scope `net_for` made (ADR-0224 item 3),
+/// one per reach rule: `net: example.org:443    reach (operand URL)`, or
+/// `net: example.org         reach, any port (grant +net)`. A rule over TCP
+/// alone is the `url` operand's; one over both protocols is a `+net` word's.
+/// A scope that does not decode (not made here) gives none.
+pub fn describe(scope: &[u8]) -> Vec<String> {
+    let Some(scope) = Scope::decode(scope) else {
+        return Vec::new();
+    };
+    scope
+        .reach_rules()
+        .map(|rule| {
+            let host = match rule.target {
+                Target::Name(n) => String::from(n),
+                Target::Wildcard(n) => alloc::format!("*.{n}"),
+                Target::Address(a) => alloc::format!("{}.{}.{}.{}", a[0], a[1], a[2], a[3]),
+                Target::Prefix(a, l) => alloc::format!("{}.{}.{}.{}/{l}", a[0], a[1], a[2], a[3]),
+                Target::Any => String::from("any"),
+            };
+            let (shown, access) = if rule.ports.is_any() {
+                (host, "reach, any port")
+            } else {
+                let ports: Vec<String> = rule
+                    .ports
+                    .list()
+                    .iter()
+                    .map(|&(l, h)| {
+                        if l == h {
+                            alloc::format!("{l}")
+                        } else {
+                            alloc::format!("{l}-{h}")
+                        }
+                    })
+                    .collect();
+                (alloc::format!("{host}:{}", ports.join(",")), "reach")
+            };
+            let source = if rule.protocols == Protocols::TCP {
+                "operand URL"
+            } else {
+                "grant +net"
+            };
+            alloc::format!("net: {shown:<24}{access} ({source})")
+        })
+        .collect()
 }

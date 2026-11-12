@@ -38,7 +38,7 @@ use zoraya_user::files::{ALL, File};
 use zoraya_user::gui::{
     Gui, MAX_RESTARTS, Running, read_manager_events, scan, start_terminal, take_display_hung,
 };
-use zoraya_user::netclient::{Network, start_network};
+use zoraya_user::netclient::{Network, send_down, send_restarted, start_network_with};
 use zoraya_user::stack::{Stack, end_job, moved, read_rtc, start_stack_at};
 use zoraya_user::{
     channel_create, directory_lookup, dup, handle_close, job_create, port_create, port_subscribe,
@@ -215,6 +215,9 @@ struct Kept {
 /// `init` that gives a new one.
 const SHELL_ROOMS_SLOT: u32 = 11;
 const SHELL_ROOMS_RECONNECT_SLOT: u32 = 12;
+/// The shell's services channel, from `init` (ADR-0221 item 6, proposed
+/// ADR-0296): `NetworkRestarted` with a new root connection, or `NetworkDown`.
+const SHELL_SERVICES_SLOT: u32 = 13;
 
 fn send_keep(chan: Handle, k: &Kept) {
     use zoraya_proto_rooms::Keep;
@@ -397,6 +400,28 @@ fn start_rng() -> Option<((Handle, Handle), Handle)> {
     Some((running, mine))
 }
 
+/// A new root network connection for a launcher, made from `init`'s own
+/// (ADR-0221 item 4).
+fn root_connection(n: &Network) -> Option<Handle> {
+    zoraya_user::netclient::narrow(
+        n.control,
+        zoraya_abi::net::rights::ALL,
+        &zoraya_user::netclient::root_scope(),
+    )
+    .ok()
+}
+
+/// Whether the volume holds `/etc/zoraya/net-crash`: the test of the
+/// network's restart then starts `netd` so that it ends on request
+/// (proposed ADR-0296).
+fn net_crash(stack: Option<&Stack>) -> bool {
+    stack.is_some_and(|s| {
+        s.root
+            .open("etc/zoraya/net-crash", 0, zoraya_proto_file::rights::READ)
+            .is_ok()
+    })
+}
+
 /// Starts the shell, with the volume's root at slot 5 and, in GUI mode, its
 /// terminal at slot 6; with a broker beside it, its client connection at 7
 /// and the temporary service's root at 8. With a terminal the shell gets the console to write
@@ -408,6 +433,7 @@ fn start_shell(
     network: Option<Handle>,
     random: Option<Handle>,
     keeper: Option<(Handle, Handle)>,
+    services: Option<Handle>,
 ) -> Option<(Handle, Handle)> {
     let job = job_create(session(), JobFlags::NONE).ok()?;
     let image = directory_lookup(DIRECTORY, "zosh").ok()?;
@@ -462,9 +488,15 @@ fn start_shell(
         e.handle(moved(SHELL_ROOMS_SLOT, manage));
         e.handle(moved(SHELL_ROOMS_RECONNECT_SLOT, reconnect));
     }
+    if let Some(s) = services {
+        e.handle(moved(SHELL_SERVICES_SLOT, s));
+    }
     let length = e.finish()?;
     let process = spawn(&buffer[..length]).ok();
     if process.is_none() {
+        if let Some(s) = services {
+            let _ = handle_close(s);
+        }
         for h in [network, random].into_iter().flatten() {
             let _ = handle_close(h);
         }
@@ -621,7 +653,7 @@ fn main() -> i32 {
             && let Some(device) = devices.net
         {
             let config = stack.as_ref().and_then(config_connection);
-            network = start_network(device, config);
+            network = start_network_with(device, config, net_crash(stack.as_ref()));
             if network.is_none() {
                 println!("init: the network did not start");
                 network_allowed = false;
@@ -692,6 +724,8 @@ fn main() -> i32 {
         let mut session = None;
         let mut beside = None;
         let mut shell_reconnect: Option<Handle> = None;
+        // `init`'s end of the shell's services channel (item 6).
+        let mut shell_services: Option<Handle> = None;
         let shell = if wants_session {
             println!("init: /etc/zoraya/session: a POSIX session");
             let root = &stack.as_ref().expect("a stack").root;
@@ -701,14 +735,15 @@ fn main() -> i32 {
             beside = stack.as_ref().and_then(|s| start_broker(&s.root));
             let root = stack.as_ref().and_then(|s| s.root.clone_as(ALL).ok());
             // Its root network connection, made from `init`'s own (item 4).
-            let root_network = network.as_ref().and_then(|n| {
-                zoraya_user::netclient::narrow(
-                    n.control,
-                    zoraya_abi::net::rights::ALL,
-                    &zoraya_user::netclient::root_scope(),
-                )
-                .ok()
-            });
+            let root_network = network.as_ref().and_then(root_connection);
+            let services = if network_allowed || network.is_some() {
+                channel_create().ok().map(|(ours, theirs)| {
+                    shell_services = Some(ours);
+                    theirs
+                })
+            } else {
+                None
+            };
             let random = rng
                 .as_ref()
                 .and_then(|(_, conn)| zoraya_user::random::share(*conn));
@@ -726,6 +761,7 @@ fn main() -> i32 {
                 root_network,
                 random,
                 keeper,
+                services,
             )
         };
         let Some(shell) = shell else {
@@ -829,14 +865,24 @@ fn main() -> i32 {
                     if network_restarts > MAX_RESTARTS {
                         println!("init: no more network restarts");
                         network_allowed = false;
+                        if let Some(services) = shell_services {
+                            let _ = send_down(services);
+                        }
                     } else if let Some(device) = devices.net {
                         let config = stack.as_ref().and_then(config_connection);
-                        network = start_network(device, config);
+                        network = start_network_with(device, config, net_crash(stack.as_ref()));
                         match &network {
                             Some(n) => {
                                 println!("init: the network was restarted");
                                 subscribe(port, n.netd.process, KEY_NETD);
                                 subscribe(port, n.ethd.process, KEY_ETHD);
+                                // Item 6: the launcher gets a new root.
+                                if let (Some(services), Some(root)) =
+                                    (shell_services, root_connection(n))
+                                    && !send_restarted(services, root)
+                                {
+                                    println!("init: the shell's services channel is closed");
+                                }
                             }
                             None => {
                                 println!("init: the network did not start");

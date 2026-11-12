@@ -160,7 +160,7 @@ GUI test can fetch through a desktop program the same way. Threads: none.
 
 ## Open questions
 - Whether SLIRP's behaviour under TCG on a loaded CI runner is deterministic enough, or W12 needs longer deadlines.
-- The GUI test with the network (plan N6) waits on ADR-0221 item 8's decision about the virtio-mmio pages.
+- The GUI test with the network (plan N6) waits on ADR-0221 item 8's decision about the virtio-mmio pages. *Note, 2026-11-12 (N6):* decided and built (proposed ADR-0295); `tests/gui/net.script` boots `--gui --net` and reads `net status` from the screen. The `+net` pill waits on the rooms' words.
 - DNS in QEMU: a UDP `guestfwd` does not exist, so testing `netd`'s resolver against a controlled server in QEMU
   needs the runner to answer through SLIRP's forwarder (host-dependent) or a Zoraya DNS test server in a second guest
   (Option C).

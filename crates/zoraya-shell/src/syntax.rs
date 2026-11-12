@@ -89,6 +89,8 @@ pub struct Redirect {
 /// `+r PATH` or `+w PATH` (ADR-0153 rule 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Grant {
+    /// `+net HOST` (ADR-0224 item 1): `path` is the target word, `write` false.
+    pub net: bool,
     pub write: bool,
     pub path: Word,
     pub span: Span,
@@ -712,18 +714,20 @@ impl<'a> Parser<'a> {
             }
             let start = self.at;
             let prefix = s.words.is_empty();
-            if prefix && let Some(marker @ ("+r" | "+w")) = self.peek_literal() {
-                self.at += 2;
+            if prefix && let Some(marker @ ("+r" | "+w" | "+net")) = self.peek_literal() {
+                self.at += marker.len();
                 self.blanks();
+                let needs = if marker == "+net" { "a host" } else { "a path" };
                 match self.peek() {
-                    None => return invalid(self.at, &alloc::format!("{marker} needs a path")),
+                    None => return invalid(self.at, &alloc::format!("{marker} needs {needs}")),
                     Some(c) if is_break(c) => {
-                        return invalid(self.at, &alloc::format!("{marker} needs a path"));
+                        return invalid(self.at, &alloc::format!("{marker} needs {needs}"));
                     }
                     _ => {}
                 }
                 let path = self.word()?;
                 s.grants.push(Grant {
+                    net: marker == "+net",
                     write: marker == "+w",
                     path,
                     span: Span {

@@ -58,6 +58,7 @@ fn go(
         args: &values,
         cwd,
         grants: &grants,
+        nets: &[],
         base_system: base,
     })
 }

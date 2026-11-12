@@ -313,6 +313,14 @@ fn transport_devices() {
         assert_err!(device_read(t, bad), Status::InvalidArgument);
         assert_err!(device_write(t, bad, 0), Status::InvalidArgument);
     }
+    // The cost of one register call (reported, never asserted): 2,000 reads
+    // of the magic value, timed.
+    let from = zoraya_user::clock_monotonic();
+    for _ in 0..2000 {
+        assert_eq!(device_read(t, 0), Ok(VIRTIO_MAGIC));
+    }
+    let nanos = (zoraya_user::clock_monotonic() - from) / 2000;
+    zoraya_user::println!("t_devices: a register read by call takes {nanos} ns");
     // A value wider than a register is refused, not cut.
     let (status, _) = raw_syscall(DEVICE_WRITE, [t.raw(), REG_STATUS, 1 << 32, 0, 0, 0]);
     assert_eq!(status, Status::InvalidArgument as u64);

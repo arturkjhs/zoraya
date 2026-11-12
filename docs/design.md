@@ -1914,6 +1914,41 @@ roots (proposed ADR-0288 and ADR-0289 on top of ADR-0226, ADR-0227 and ADR-0228)
 - **Not built:** the BearSSL port and curl (W12's curl half), `https` for the POSIX `zfetch`, `tls.roots`, revocation, resumption,
   the HTTPS lines under TCG, the GUI shells' roots entry (they have no network connection yet).
 
+## The network on the desktop, and when it fails (stage 8, N6)
+
+`--gui --net` boots one machine with the desktop and the network (proposed ADR-0295, ADR-0296 and ADR-0297 on top of
+ADR-0221 items 5, 6 and 8).
+
+- **A shared page** (ADR-0221 item 8, the recommended option, as TASK-26 decided). With the GUI the four pages are the disk (31),
+  the GPU (23), the keyboard (15) and the tablet (7); the network device is on transport 16, in page 2 with the GPU. Three
+  calls: `device_transport(page, index)` (needs `MAP` on the page) gives the `Device` of one transport, made at boot, with
+  no mapping; `device_read(device, offset)` (`READ`) and `device_write(device, offset, value)` (`WRITE`) read and write a
+  32-bit register of a transport device. The offset must be a multiple of 4 with its word inside the transport's block (at most
+  0x200 bytes); a page device has no register calls, a transport device has no mapping and no transports. Pins, quarantine,
+  reset and the interrupt are per transport. `init` maps each page once to read the identifiers (`Page::One` goes to its
+  driver whole, as before); a `Page::Several` is never given: each transport is split with `device_transport`, identified by
+  `device_read`, and given to its driver, which opens it with `zoraya_user::mmio::Window::open` (a mapping, or calls if the
+  kernel answers `device_map` with `AccessDenied`): the four drivers use one `Registers` type. `tools/run-qemu.sh` accepts
+  `--net` with `--gui`; `make test-gui` runs `tests/gui/net.script` (`net:auto:1`, `net:tcg:1` on CI): the terminal's
+  `net status` shows the lease.
+- **The restart reaches the shell** (ADR-0221 items 5 and 6). `init` had restarted `ethd` and `netd` together, at most three
+  times, since N2. It now also gives the console shell (which is the first terminal window's shell) a *services channel*
+  (slot 13) and sends it `NetworkRestarted` with a new root connection after a restart, `NetworkDown` after the third. The
+  shell reads the channel before a line that needs the network runs; a closed root is `zosh: fetch: the network is not
+  available (restarting)`, and without the `(restarting)` once `init` said so. Running programs see `PEER_CLOSED` on their
+  streams and are not told. The test (`tests/shell/net-fetch.script`, `make test-net-fetch`) uses a test-only request
+  `Crash` that `netd` honours only if `init` started it with an event handle at slot 8, which it does only when the volume
+  holds `/etc/zoraya/net-crash`; `net crash` sends it. Three `net crash` with a fetch after each work; the fourth leaves the
+  network down.
+- **`+net HOST[:PORT]`** in the shell (ADR-0224 item 1, ADR-0297): `any`, a host name, `*.suffix`, an address or
+  `ADDRESS/BITS`; a `url` operand that came from a value designates inside a word of the line; `grants` prints the
+  `net:` lines.
+- **Measured** (QEMU 11.1.2, HVF, one run, 2026-11-12): REGISTER_CALL_NS.
+- **Not built:** the rooms' `+net` and `+listen` words and the creator's-scope check, the pills and the hover card for a
+  network rule, the `REPORT` message and the hint, the panel's and the broker's root connection and services channel (a
+  shell started by the panel has no network), `make bench-net`, a `libposix` client's `ECONNRESET` after a kill, the
+  network account flood and the fuzz target of the gate's second stage (`tools/untrusted-gate.txt`, still `pending`).
+
 ## Known limitations
 
 - **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch

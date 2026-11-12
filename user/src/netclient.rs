@@ -176,6 +176,16 @@ impl Network {
 /// 5, `/config` at 6 if there is one, and the root connection's service end
 /// at 7.
 pub fn start_network(device: (Handle, u32), config: Option<Handle>) -> Option<Network> {
+    start_network_with(device, config, false)
+}
+
+/// As [`start_network`]; with `crash_on_request`, `netd` ends when a
+/// connection sends `Crash` (a test of `init`'s restart, proposed ADR-0296).
+pub fn start_network_with(
+    device: (Handle, u32),
+    config: Option<Handle>,
+    crash_on_request: bool,
+) -> Option<Network> {
     let close_config = |config: Option<Handle>| {
         if let Some(c) = config {
             let _ = handle_close(c);
@@ -199,6 +209,16 @@ pub fn start_network(device: (Handle, u32), config: Option<Handle>) -> Option<Ne
         entries.push(moved(6, c));
     }
     entries.push(moved(7, theirs));
+    // An event at slot 8 says so: a described program reads no argv
+    // (INV-0155-2).
+    if crash_on_request && let Ok(flag) = crate::event_create() {
+        entries.push(zoraya_abi::spawn::HandleEntry {
+            slot: 8,
+            handle: flag,
+            rights: Rights::TRANSFER,
+            transfer: Transfer::Move,
+        });
+    }
     match start("netd", &entries, &[]) {
         Some((job, process)) => Some(Network {
             ethd,
@@ -211,4 +231,88 @@ pub fn start_network(device: (Handle, u32), config: Option<Handle>) -> Option<Ne
             None
         }
     }
+}
+
+/// What a launcher learns on its services channel (ADR-0221 item 6).
+pub enum Services {
+    /// Nothing new.
+    Quiet,
+    /// The network was restarted: the launcher's new root connection.
+    Restarted(Handle),
+    /// The restarts are used up.
+    Down,
+}
+
+/// `init`'s side: tells a launcher that the network was restarted, with its
+/// new root connection (moved). Never blocks; false if the launcher is gone.
+pub fn send_restarted(services: Handle, root: Handle) -> bool {
+    let mut out = [0u8; 64];
+    let Ok(n) = encode(&zoraya_proto_net::NetworkRestarted {}, 0, &mut out) else {
+        return false;
+    };
+    let entry = ChannelEntry {
+        handle: root,
+        rights: ChannelObject::RIGHTS,
+        transfer: Transfer::Move,
+    };
+    channel_write(services, &out[..n], &[entry]).is_ok()
+}
+
+/// `init`'s side: tells a launcher that no more restarts will come.
+pub fn send_down(services: Handle) -> bool {
+    let mut out = [0u8; 64];
+    let Ok(n) = encode(&zoraya_proto_net::NetworkDown {}, 0, &mut out) else {
+        return false;
+    };
+    channel_write(services, &out[..n], &[]).is_ok()
+}
+
+/// A launcher's side: what `init` sent since the last call, the last
+/// restart's root connection winning (an earlier one is closed). Reads
+/// without waiting; a message of another kind, or a handle with a message
+/// that should have none, is closed and ignored.
+pub fn poll_services(services: Handle) -> Services {
+    let mut result = Services::Quiet;
+    let mut bytes = [0u8; 64];
+    let mut handles = [services; 2];
+    while let Ok(sizes) = channel_read(services, &mut bytes, &mut handles) {
+        let count = (sizes.handles as usize).min(handles.len());
+        let message = &bytes[..(sizes.bytes as usize).min(bytes.len())];
+        let is_restart = count == 1
+            && decode::<zoraya_proto_net::NetworkRestarted>(message, 1).is_ok()
+            && crate::handle_type(handles[0]) == Ok("channel");
+        if is_restart {
+            if let Services::Restarted(old) = result {
+                let _ = handle_close(old);
+            }
+            result = Services::Restarted(handles[0]);
+        } else {
+            for h in &handles[..count] {
+                let _ = handle_close(*h);
+            }
+            if count == 0 && decode::<zoraya_proto_net::NetworkDown>(message, 0).is_ok() {
+                if let Services::Restarted(old) = result {
+                    let _ = handle_close(old);
+                }
+                result = Services::Down;
+            }
+        }
+    }
+    result
+}
+
+/// Whether a root connection's service has ended: its far end is closed.
+pub fn is_closed(conn: Handle) -> bool {
+    crate::object_get_signals(conn)
+        .map(|s| s & channel_signals::PEER_CLOSED != 0)
+        .unwrap_or(true)
+}
+
+/// Asks the service to end (a test, see `Crash`).
+pub fn crash(conn: Handle) -> bool {
+    let mut out = [0u8; 64];
+    let Ok(n) = encode(&zoraya_proto_net::Crash {}, 1, &mut out) else {
+        return false;
+    };
+    channel_write(conn, &out[..n], &[]).is_ok()
 }

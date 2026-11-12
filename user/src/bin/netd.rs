@@ -281,6 +281,8 @@ struct Netd {
     ethd: Handle,
     watching: bool,
     request: Vec<u8>,
+    /// `init` started this service for a test of its restart (ADR-0296).
+    crash_on_request: bool,
 }
 
 impl Netd {
@@ -345,6 +347,16 @@ impl Netd {
             };
             let count = (sizes.handles as usize).min(handles.len());
             let message = self.request[..sizes.bytes as usize].to_vec();
+            // A test of `init`'s restart (proposed ADR-0296): only when
+            // `init` started this service with the flag.
+            if self.crash_on_request
+                && count == 0
+                && zoraya_protocol::Header::decode(&message)
+                    .is_ok_and(|(h, _)| h.ordinal == zoraya_proto_net::CRASH_ORDINAL)
+            {
+                println!("netd: ended on request");
+                zoraya_user::process_exit(3);
+            }
             let action = self
                 .service
                 .handle(id, &message, count, &mut self.stack, Self::now_us());
@@ -645,6 +657,7 @@ fn main() -> i32 {
         ethd,
         watching: false,
         request: vec![0u8; REQUEST],
+        crash_on_request: handle_type(slot(8)) == Ok("event"),
     };
     // The connection `init` holds; it makes the launchers' with `narrow`.
     let root = slot(ROOT);

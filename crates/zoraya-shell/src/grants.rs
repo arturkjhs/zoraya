@@ -96,6 +96,8 @@ pub struct Line<'a> {
     pub cwd: &'a str,
     /// `+r` (false) and `+w` (true) with their paths, as written.
     pub grants: &'a [(bool, Value)],
+    /// `+net` words with their arguments, as written (ADR-0224 item 1).
+    pub nets: &'a [Value],
     /// The description is the system image's own (ADR-0153's Decision):
     /// only then are kinds other than `read` designated.
     pub base_system: bool,

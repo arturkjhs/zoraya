@@ -22,8 +22,10 @@ const WAIT_NS: u64 = 5_000_000_000;
 fn main() -> i32 {
     let c = command::start(DESCRIPTION);
     let p = c.parse();
+    let crash = p.operand(&c.d, "WORD") == Some("crash");
     if let Some(word) = p.operand(&c.d, "WORD")
         && word != "status"
+        && !crash
     {
         c.error(Some(word), "net shows the state: net status");
         return 2;
@@ -32,6 +34,13 @@ fn main() -> i32 {
         c.error(None, "the network is not available");
         return 1;
     };
+    // A test of `init`'s restart (proposed ADR-0296): the service ends only
+    // if `init` started it for that; else it answers with an error.
+    if crash {
+        zoraya_user::netclient::crash(end);
+        zoraya_user::println!("net: asked the network service to end");
+        return 0;
+    }
     let mut out = [0u8; 64];
     let n = encode(&GetStatus {}, 1, &mut out).expect("fits");
     if channel_write(end, &out[..n], &[]).is_err() {

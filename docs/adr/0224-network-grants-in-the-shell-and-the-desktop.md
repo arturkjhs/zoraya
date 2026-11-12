@@ -248,6 +248,12 @@ Threads: none.
   INV-0224-2 stays untrue for a command with a `url` operand: `grants fetch http://x/` prints no network rule), the REPORT
   message and the hint, the room words (INV-0224-3) or the desktop pills (INV-0224-5). Both rows stay `not yet applicable
   (stage 8)` until those exist (N3b, N6).
+- *Note, 2026-11-12 (N6, recorded by an agent; ADR-0001 rule 6):* N6 builds the `+net` word in the shell (proposed ADR-0297):
+  its grammar, a value `url` operand designating inside a word, and `grants` printing the `net:` lines
+  (`cargo test -p zoraya-shell netgrant`; `tests/shell/net-fetch.script`). INV-0224-1's shell halves are tested; the room
+  half, `+listen`, `grants`' roots entry, the rooms' words (INV-0224-3), the report and hint (INV-0224-4) and the pills
+  (INV-0224-5) are not built. INV-0224-2 holds for the scope of the shell's own lines only. The rows stay
+  `not yet applicable (stage 8)`.
 
 ## Revisit triggers
 - People routinely type `+net any`: the kinds are missing or the hosts too many.

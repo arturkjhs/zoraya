@@ -70,7 +70,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui run-net test-net test-net-fetch test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui run-net test-net test-net-fetch bench-net test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -304,6 +304,7 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
 	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
 	cp tests/net/tls/root.pem $(NET_FETCH_ROOT)/system/tls/roots && \
+	mkdir -p $(NET_FETCH_ROOT)/etc/zoraya && : > $(NET_FETCH_ROOT)/etc/zoraya/net-crash && \
 	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
 	: > $(NET_HTTP_READY) && : > $(NET_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(NET_TLS_READY) > target/test-logs/test-httpd.log 2>&1 & echo $$! > $(BUILD)/net-httpd.pid; } && \
@@ -335,6 +336,34 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		else $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel auto $(KERNEL); rc=$$?; fi; \
 	fi; \
 	exit $$rc
+
+# N6 (ADR-0230 item 8): the throughput and latency numbers of the network, from
+# `fetch --sum` against the test server: 16 MiB and one byte, five times each,
+# under HVF (`FULL=1` adds TCG). Prints the times of every fetch; nothing is
+# asserted but that every fetch ends. The numbers go to docs/design.md by hand.
+NET_BENCH_SCRIPT := $(BUILD)/net-bench.script
+bench-net: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[bench-net] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	mkdir -p $(NET_FETCH_ROOT) target/test-logs && cp -R rootfs/. $(NET_FETCH_ROOT)/ && \
+	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_FETCH_ROOT)/config/settings && \
+	target/debug/zoraya-mkfs --size 16M --from $(NET_FETCH_ROOT) $(NET_FETCH_DISK) && \
+	: > $(NET_HTTP_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-bench.log 2>&1 & echo $$! > $(BUILD)/net-httpd-bench.pid; } && \
+	httpd=$$(cat $(BUILD)/net-httpd-bench.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	port=$$(cat $(NET_HTTP_READY)); \
+	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then echo "[bench-net] FAIL: the test server did not start"; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" tests/shell/net-bench.script > $(NET_BENCH_SCRIPT); \
+	for accel in auto $(if $(filter 1,$(FULL)),tcg); do \
+	  log=target/test-logs/bench-net-$$accel.log; \
+	  $(RUNNER) --timeout $(if $(filter 1,$(FULL)),400,$(QEMU_TIMEOUT)) --script $(NET_BENCH_SCRIPT) --label bench-net-$$accel -- \
+	    $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel $$accel $(KERNEL) > $$log 2>&1; rc=$$?; \
+	  if [ $$rc != 0 ]; then echo "[bench-net] FAIL ($$accel), log $$log"; tail -20 $$log; kill $$httpd 2>/dev/null; exit $$rc; fi; \
+	  for size in 16777216 1; do \
+	    echo "[bench-net] $$accel $$size bytes, ms:" $$(grep -a "^\[bench-net-$$accel\] $$size bytes fnv1a" $$log | sed -e 's/.* in \([0-9.]*\) ms.*/\1/' | tr '\n' ' '); \
+	  done; \
+	done; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; exit 0
 
 # N4 (ADR-0225, ADR-0287): `zfetch`, a C program built by zcc against libc.a,
 # fetches the same pages through libposix's sockets, started by the shell from
