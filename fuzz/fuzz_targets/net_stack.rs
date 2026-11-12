@@ -9,7 +9,10 @@
 //!    client's own last frame (its transaction id and hardware address) with
 //!    the input as options, which reaches the lease handling;
 //! 3. messages from the driver for `Nic::pump`, then whatever it queued;
-//! 4. requests for `Service::handle` on a root connection;
+//! 4. requests for `Service::handle` on a root connection and on a
+//!    connection narrowed from it with an account (ordinal 7, then the
+//!    requests go to both, and `narrow` on the child), then `resolve_done`
+//!    with fuzzed tokens (ones in the lookups' range among them);
 //! 5. a ping answered by echo replies with the run's identifier and the input
 //!    as payload;
 //! 6. a settings file for `config::read`.
@@ -22,10 +25,12 @@
 use std::collections::VecDeque;
 
 use libfuzzer_sys::fuzz_target;
-use zoraya_abi::net::{ListenRule, ReachRule, Scope, encode};
+use zoraya_abi::net::{ListenRule, Ports, Protocols, ReachRule, Scope, Target, encode};
 use zoraya_net::config;
+use zoraya_net::conn::LOOKUP_BASE;
+use zoraya_net::dns::{Found, Resolved};
 use zoraya_net::nic::{Nic, Read, SlotMemory, Wire, Write};
-use zoraya_net::service::Service;
+use zoraya_net::service::{Action, Service};
 use zoraya_net::{Config, Connection, Link, Mode, Stack};
 
 const MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
@@ -125,13 +130,37 @@ fn echo_reply(ident: u16, payload: &[u8]) -> Vec<u8> {
     let payload = &payload[..payload.len().min(200)];
     let icmp_len = 8 + payload.len();
     let ip_len = 20 + icmp_len;
-    let mut f = vec![0x52, 0x54, 0, 0x12, 0x34, 0x56, 0x52, 0x55, 0x0a, 0, 2, 2, 8, 0];
-    let mut ip = vec![0x45, 0, (ip_len >> 8) as u8, ip_len as u8, 0, 0, 0, 0, 64, 1, 0, 0];
+    let mut f = vec![
+        0x52, 0x54, 0, 0x12, 0x34, 0x56, 0x52, 0x55, 0x0a, 0, 2, 2, 8, 0,
+    ];
+    let mut ip = vec![
+        0x45,
+        0,
+        (ip_len >> 8) as u8,
+        ip_len as u8,
+        0,
+        0,
+        0,
+        0,
+        64,
+        1,
+        0,
+        0,
+    ];
     ip.extend_from_slice(&[10, 0, 2, 2, 10, 0, 2, 15]);
     let sum = checksum(&ip);
     ip[10..12].copy_from_slice(&sum.to_be_bytes());
     f.extend_from_slice(&ip);
-    let mut icmp = vec![0, 0, 0, 0, (ident >> 8) as u8, ident as u8, 0, payload.first().copied().unwrap_or(0) % 4];
+    let mut icmp = vec![
+        0,
+        0,
+        0,
+        0,
+        (ident >> 8) as u8,
+        ident as u8,
+        0,
+        payload.first().copied().unwrap_or(0) % 4,
+    ];
     icmp.extend_from_slice(payload);
     let sum = checksum(&icmp);
     icmp[2..4].copy_from_slice(&sum.to_be_bytes());
@@ -184,7 +213,20 @@ fn dhcp_frame(payload: &[u8]) -> Vec<u8> {
     let ip_len = 20 + udp_len;
     let mut f = vec![0xff; 6];
     f.extend_from_slice(&[0x52, 0x55, 0x0a, 0x00, 0x02, 0x02, 0x08, 0x00]);
-    let mut ip = vec![0x45, 0, (ip_len >> 8) as u8, ip_len as u8, 0, 0, 0, 0, 64, 17, 0, 0];
+    let mut ip = vec![
+        0x45,
+        0,
+        (ip_len >> 8) as u8,
+        ip_len as u8,
+        0,
+        0,
+        0,
+        0,
+        64,
+        17,
+        0,
+        0,
+    ];
     ip.extend_from_slice(&[10, 0, 2, 2, 255, 255, 255, 255]);
     let sum = checksum(&ip);
     ip[10..12].copy_from_slice(&sum.to_be_bytes());
@@ -288,9 +330,64 @@ fuzz_target!(|data: &[u8]| {
         4 => with_rig(|rig| {
             let mut service = Service::new();
             let root = service.add(Connection::root()).unwrap();
-            let handles = usize::from(rest.first().copied().unwrap_or(0) % 3);
-            for message in frames(rest.get(1..).unwrap_or(&[])) {
-                let _ = service.handle(root, &message, handles, &mut rig.fixed, rig.now);
+            let selector = rest.first().copied().unwrap_or(0);
+            let handles = usize::from(selector % 3);
+            let mut ids = vec![root];
+            // A connection with an account of its own, as `zosh` makes for a
+            // POSIX program: the scope is one wildcard (so `resolve` and
+            // `connect` get past the scope), the rights and the budget come
+            // from the input (a budget over 16 does not decode).
+            let wild = [ReachRule {
+                target: Target::Wildcard("zoraya"),
+                ports: Ports::ANY,
+                protocols: Protocols::BOTH,
+            }];
+            let mut scope = [0u8; 128];
+            if let Some(n) = encode(&wild, &[], &mut scope) {
+                let carve = zoraya_proto_net::NarrowAccount {
+                    rights: u32::from(selector >> 2 & 0xf),
+                    budget: zoraya_protocol::Below(u32::from(selector >> 6) + 1),
+                    scope: zoraya_protocol::Data(&scope[..n]),
+                };
+                let mut out = [0u8; 256];
+                if let Ok(len) = zoraya_protocol::encode(&carve, 1, &mut out) {
+                    if let Action::Narrowed { id, .. } =
+                        service.handle(root, &out[..len], 1, &mut rig.fixed, rig.now)
+                    {
+                        ids.push(id);
+                    }
+                }
+            }
+            for (i, message) in frames(rest.get(1..).unwrap_or(&[])).iter().enumerate() {
+                let id = ids[i % ids.len()];
+                if let Action::Narrowed { id, .. } =
+                    service.handle(id, message, handles, &mut rig.fixed, rig.now)
+                    && ids.len() < 8
+                {
+                    ids.push(id);
+                }
+            }
+            // Answers of the resolver with fuzzed tokens: unknown ones, ones
+            // in the range of the lookups, and ones that wrap.
+            for (i, c) in rest.chunks_exact(4).enumerate() {
+                let raw = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                let token = if i % 2 == 0 {
+                    raw
+                } else {
+                    LOOKUP_BASE + (raw & 0xffff)
+                };
+                let result = if raw & 1 == 0 {
+                    Ok(Found {
+                        addresses: vec![c.try_into().map(|a: [u8; 4]| a).unwrap_or([0; 4])],
+                        from_hosts: raw & 2 != 0,
+                    })
+                } else {
+                    Err(zoraya_net::dns::ResolveFail::Failure)
+                };
+                let _ = service.resolve_done(&rig.fixed, Resolved { token, result }, rig.now);
+            }
+            for id in ids {
+                service.remove(id);
             }
         }),
         5 => with_rig(|rig| {
