@@ -508,7 +508,15 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     /// every connection from now on: no write, create, remove, rename,
     /// publish or limit, and no clone or narrowing can add one (ADR-0289
     /// item 8). The entry cannot be removed, renamed or replaced either.
+    ///
+    /// Call it before the first connection: a record opened earlier does not
+    /// know the seal, so the call refuses (panics) when any connection
+    /// exists.
     pub fn seal(&mut self, name: &str) {
+        assert!(
+            self.connections.iter().all(Option::is_none),
+            "seal before the first connection"
+        );
         self.sealed = Some(name.into());
     }
 
@@ -1237,6 +1245,9 @@ impl<D: Device, C: Clock, T: Transport> Service<D, C, T> {
     }
 
     fn has(&self, index: usize, right: u32) -> bool {
+        // Defence in depth: `seal_after` gives a record under the seal no
+        // mutating right, so no connection reaches this refusal today (deleting
+        // it is an equivalent mutant, noted in tools/mutants/fs-service.toml).
         if right & MUTATING != 0 && self.seal_of(index) == Seal::Sealed {
             return false;
         }

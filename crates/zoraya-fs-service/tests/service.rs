@@ -2935,7 +2935,15 @@ fn a_sealed_entry_is_read_only_for_every_connection() {
     let roots = r.open(root, "system/tls/roots", open_flags::CREATE);
     assert_eq!(r.write_text(roots, 0, 0, b"anchor").0, status::OK);
     r.open(root, "other", open_flags::CREATE);
+    // Sealing needs a service without connections: close them all, seal,
+    // and take the root again.
+    let ends: Vec<End> = r.net.0.borrow().queues.keys().copied().collect();
+    r.net.0.borrow_mut().closed.extend(ends);
+    r.run();
     r.service.seal("system");
+    let root = r.net.channel();
+    r.net.0.borrow_mut().owned.insert(root);
+    assert!(r.service.add_root(root));
 
     // Opening: reading is allowed, anything that changes is not, by any
     // spelling of the path.
@@ -2970,7 +2978,9 @@ fn a_sealed_entry_is_read_only_for_every_connection() {
         denied
     );
 
-    // A directory connection below the seal.
+    // A directory connection below the seal holds read rights only (it was
+    // opened under the seal), so these refusals are rights checks; the seal
+    // itself is tested above and below through connections with full rights.
     let (s, tls) = r.try_open(root, "system/tls", open_flags::DIRECTORY, read);
     assert_eq!(s, status::OK);
     assert_eq!(r.try_open(tls, "roots", 0, rights::WRITE).0, denied);
