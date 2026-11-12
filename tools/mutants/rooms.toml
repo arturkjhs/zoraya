@@ -1,12 +1,14 @@
 # zoraya-rooms, the review of Q6a (leases, holders by kind, resume, home, Set).
-# Host tests only. `make mutants-host CRATE=zoraya-rooms` found 14 survivors that
-# are not listed here because they are equivalent or unreachable:
-#  - `record`: `|` to `^` on flags (the bits are disjoint, so the value is the same);
+# Host tests only. `make mutants-host CRATE=zoraya-rooms` (round 3: 141 mutants, 112
+# caught, 19 unviable, 9 missed, 1 timeout). Not listed as holes, because they are
+# equivalent or unreachable:
+#  - `record`: `|` to `^` on flags (two, the bits are disjoint, so the value is the same);
 #  - `usage`: `<` to `<=` against MAX_ROOMS (the file holds 32 rooms and `home`: 33);
-#  - `OUT_SIZE`: `+` to `*` or `-` in a buffer size that only has to be large enough
-#    (a test asserts it holds a full list);
+#  - `OUT_SIZE`: `+` to `*` or `-` (five) in a buffer size that only has to be large
+#    enough (a test asserts it holds a full list);
 #  - `launch`: `o == who` on the orphan (every path that ends a lease also ends the
-#    orphan of the same kind, so it is not observable).
+#    orphan of the same kind, so it is not observable);
+#  - `collect_idle`: `i += 1` to `*= 1` loops for ever (the timeout).
 tests = ["cargo test -q -p zoraya-rooms"]
 timeout = 300
 
@@ -46,3 +48,29 @@ find = '''            r.leases.retain(|(c, _)| *c != chan);
 replace = '''            r.leases.clear();
             if let ChannelKind::Manage(l) = kind'''
 note = "review finding 1: a closed channel removes only its own lease"
+
+[[mutant]]
+id = "R-orphan-survives-its-kinds-close"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''&& r.orphan == Some(*l)
+            {
+                r.orphan = None;'''
+replace = '''&& r.orphan == Some(*l)
+            {
+                r.orphan = r.orphan;'''
+note = "round 3 finding 2: the closing of a Manage channel of the orphan's kind ends the lease"
+
+[[mutant]]
+id = "R-undo-keeps-the-lease"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = '''        r.leases.retain(|(c, _)| *c != u.chan);
+        match u.before {'''
+replace = '''        match u.before {'''
+note = "round 3 finding 4: a launch init did not take leaves no lease"
+
+[[mutant]]
+id = "R-set-fill-ignores-the-running-room"
+file = "crates/zoraya-rooms/src/lib.rs"
+find = 'limits.fill_from(&record_limits(r));'
+replace = 'let _ = r;'
+note = "round 3 finding 5: room set takes the missing words from the running room"
