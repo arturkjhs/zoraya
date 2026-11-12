@@ -224,9 +224,17 @@
 ^ \r\n       room NAME
 ^ \r\n       room --leave
 ^ \r\n       room new NAME GRANT...
+^ \r\n       room set NAME WORD VALUE...
 ^ \r\n       room remove NAME
 ^ \r\n  --leave       go back to home
 ^ \r\n  --untrusted   with new: an untrusted room (refused until quotas, ADR-0056)
+^ \r\n  --mem SIZE    memory of everything in the room: 512M, 2G; none removes it (trusted rooms)
+^ \r\n  --cpu PCT     at most this share of the machine: 25%
+^ \r\n  --procs N     live processes
+^ \r\n  --disk SIZE   on each +w directory of the room
+^ \r\n  --conns N     network connections
+^ \r\n  --tmp SIZE    the /tmp of each shell in an untrusted room, inside --mem
+^ \r\n  --kill        with remove: end the room's processes first
 ^ \r\n  --help        show this help
 ^ \r\nmore: help room
 ^ \r\n~>
@@ -239,6 +247,7 @@
 ^ \r\n       room NAME
 ^ \r\n       room --leave
 ^ \r\n       room new NAME GRANT...
+^ \r\n       room set NAME WORD VALUE...
 ^ \r\n       room remove NAME
 ^ \r\nmore: help room
 ^ \r\n~>

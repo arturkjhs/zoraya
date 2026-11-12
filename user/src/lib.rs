@@ -16,6 +16,7 @@ pub mod netclient;
 pub mod netconn;
 pub mod posix_child;
 pub mod random;
+pub mod roomsclient;
 pub mod stack;
 
 pub use zoraya_rt::*;
