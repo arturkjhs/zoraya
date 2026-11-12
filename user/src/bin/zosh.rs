@@ -2811,6 +2811,7 @@ impl Z {
                     name: name.into(),
                     untrusted: false,
                     colour: 0,
+                    limits: zoraya_settings::rooms::Limits::default(),
                     grants: entries
                         .iter()
                         .map(|e| zoraya_settings::rooms::Grant {
@@ -2975,6 +2976,7 @@ impl Z {
                     name: (*name).into(),
                     untrusted: false,
                     colour: table.free_colour(),
+                    limits: rooms::Limits::default(),
                     grants: given,
                 };
                 match rooms::add(&bytes, &room) {
