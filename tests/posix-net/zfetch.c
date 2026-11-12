@@ -243,7 +243,7 @@ int main(int argc, char **argv)
 			p += used;
 			m -= used;
 			*end = 0;
-			if (strncmp(head, "HTTP/1.", 7) != 0)
+			if (strlen(head) < 12 || strncmp(head, "HTTP/1.", 7) != 0)
 				return fail(host, "not an HTTP response");
 			status = atoi(head + 9);
 			for (char *l = strstr(head, "\r\n"); l; l = strstr(l + 2, "\r\n")) {

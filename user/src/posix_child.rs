@@ -465,7 +465,13 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             }
             None => SELF_MESSAGE,
         };
-        let _ = channel_write(boot, message, &entry);
+        // On a failed write the caller keeps what it moved (INV-0050-1).
+        if channel_write(boot, message, &entry).is_err() {
+            let _ = handle_close(me);
+            if let Some(net) = l.net {
+                let _ = handle_close(net);
+            }
+        }
     } else if let Some(net) = l.net {
         let _ = handle_close(net);
     }

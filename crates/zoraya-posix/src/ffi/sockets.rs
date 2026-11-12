@@ -117,6 +117,11 @@ extern "C" fn recvfrom(
     addr: *mut u8,
     addrlen: *mut u32,
 ) -> isize {
+    // Check the pair before any data is taken: an error after `recv_flags`
+    // would lose the bytes.
+    if addr.is_null() != addrlen.is_null() {
+        return size(Err(EFAULT));
+    }
     let r = recv_flags(fd, buf, n, flags).and_then(|got| {
         if let Some(Some((a, port))) = with(|p| p.getpeername(fd).ok()) {
             // SAFETY: C's contract for `recvfrom`'s `addr` and `addrlen`.
@@ -173,8 +178,10 @@ extern "C" fn getsockopt(fd: i32, level: i32, name: i32, value: *mut u8, len: *m
         unsafe {
             let room = len.read_unaligned() as usize;
             let bytes = v.to_ne_bytes();
-            ptr::copy_nonoverlapping(bytes.as_ptr(), value, room.min(4));
-            len.write_unaligned(4);
+            let copied = room.min(4);
+            ptr::copy_nonoverlapping(bytes.as_ptr(), value, copied);
+            // As Linux: the length of what was copied.
+            len.write_unaligned(copied as u32);
         }
     });
     unit(r)
