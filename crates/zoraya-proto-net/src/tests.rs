@@ -128,7 +128,87 @@ fn connect_and_the_connection_channel_messages_round_trip_and_are_total() {
     total(Reset {
         why: Below(reset::ABORTED),
     });
-    assert!(encode(&Failed { reason: Below(6) }, 1, &mut out).is_err());
+    total(Failed {
+        reason: Below(reason::OVER_QUOTA),
+    });
+    assert!(encode(&Failed { reason: Below(7) }, 1, &mut out).is_err());
+    // N4: the account's budget, with its handle.
+    let scope = zoraya_abi::net::Scope::EMPTY.as_bytes();
+    let carve = NarrowAccount {
+        rights: 1,
+        budget: Below(4),
+        scope: Data(scope),
+    };
+    let length = encode(&carve, 1, &mut out).unwrap();
+    assert!(decode::<NarrowAccount<'_>>(&out[..length], 1).is_ok());
+    assert_eq!(
+        decode::<NarrowAccount<'_>>(&out[..length], 0).err(),
+        Some(WireError::WrongHandles)
+    );
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<NarrowAccount<'_>>(bytes, 1);
+    });
+    let too_many = NarrowAccount {
+        budget: Below(17),
+        ..carve
+    };
+    assert!(encode(&too_many, 1, &mut out).is_err());
+    total(Narrowed {
+        status: Below(status::OVER_QUOTA),
+    });
+    assert!(encode(&Narrowed { status: Below(8) }, 1, &mut out).is_err());
+    // N4: `resolve` and its answer.
+    let length = encode(
+        &Resolve {
+            name: Data(b"test.zoraya"),
+        },
+        1,
+        &mut out,
+    )
+    .unwrap();
+    assert_eq!(
+        decode::<Resolve<'_>>(&out[..length], 0).unwrap().1.name.0,
+        b"test.zoraya"
+    );
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<Resolve<'_>>(bytes, 0);
+    });
+    let long = [b'a'; 254];
+    assert!(encode(&Resolve { name: Data(&long) }, 1, &mut out).is_err());
+    let found = [Address { address: 1 }, Address { address: 2 }];
+    let answer = Resolved {
+        status: Below(status::OK),
+        addresses: Seq::Of(&found),
+    };
+    let length = encode(&answer, 1, &mut out).unwrap();
+    let (_, back) = decode::<Resolved<'_>>(&out[..length], 0).unwrap();
+    assert_eq!(back.addresses.iter().count(), 2);
+    exercise(&out[..length], |bytes| {
+        let _ = decode::<Resolved<'_>>(bytes, 0);
+    });
+    let nine = [Address { address: 1 }; 9];
+    assert!(
+        encode(
+            &Resolved {
+                status: Below(status::OK),
+                addresses: Seq::Of(&nine),
+            },
+            1,
+            &mut out
+        )
+        .is_err()
+    );
+    assert!(
+        encode(
+            &Resolved {
+                status: Below(status::LOCAL),
+                addresses: Seq::Of(&[]),
+            },
+            1,
+            &mut out
+        )
+        .is_ok()
+    );
 }
 
 #[test]

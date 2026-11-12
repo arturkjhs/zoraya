@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::conn::{CONNECT_US, Client, Conns, LINGER_US, MAX_CONNS, Rd, Step, Target, Wr};
-use crate::dns::{ResolveFail, Start};
+use crate::dns::{Owner, ResolveFail, Start};
 use crate::tcp::MAX_TCP;
 use smoltcp::socket::tcp;
 use std::collections::VecDeque;
@@ -342,6 +342,8 @@ impl World {
             .open(
                 &mut self.client,
                 fake.clone(),
+                Owner::SESSION,
+                8,
                 target,
                 port,
                 &scope,
@@ -349,6 +351,30 @@ impl World {
             )
             .map_err(|e| e.1)
             .unwrap()
+    }
+
+    /// `connect` for an account: its owner and its bound of pending names.
+    fn connect_as(
+        &mut self,
+        fake: &Fake,
+        owner: Owner,
+        resolutions: usize,
+        target: Target,
+        port: u16,
+    ) -> Result<usize, u32> {
+        let scope = self.scope.clone();
+        self.conns
+            .open(
+                &mut self.client,
+                fake.clone(),
+                owner,
+                resolutions,
+                target,
+                port,
+                &scope,
+                self.now,
+            )
+            .map_err(|e| e.1)
     }
 
     fn turn(&mut self) {
@@ -586,7 +612,16 @@ fn too_many_connections_are_refused_with_a_reason_not_a_crash() {
         let f = Fake::new(1024);
         let scope = w.scope.clone();
         if w.conns
-            .open(&mut w.client, f, Target::Address(WEB), 80, &scope, w.now)
+            .open(
+                &mut w.client,
+                f,
+                Owner::SESSION,
+                8,
+                Target::Address(WEB),
+                80,
+                &scope,
+                w.now,
+            )
             .is_err()
         {
             refused += 1;
@@ -907,4 +942,408 @@ fn a_half_closed_connection_that_goes_silent_is_ended_after_the_linger_limit() {
     assert_eq!(decode::<Reset>(&m, 0).unwrap().1.why.0, reset::ABORTED);
     w.run_until(2_000_000, |_| false);
     assert_eq!(w.client.tcp_count(), 0);
+}
+
+#[test]
+fn pending_resolutions_are_bounded_per_account() {
+    // The server never answers a query: names stay pending.
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|_| Vec::new());
+    let (a, b) = (
+        Owner {
+            account: 1,
+            cache: 4,
+        },
+        Owner {
+            account: 2,
+            cache: 4,
+        },
+    );
+    let f = Fake::new(1024);
+    assert!(
+        w.connect_as(&f, a, 1, Target::Name("one.zoraya".into()), 80)
+            .is_ok()
+    );
+    let g = Fake::new(1024);
+    assert_eq!(
+        w.connect_as(&g, a, 1, Target::Name("two.zoraya".into()), 80),
+        Err(reason::OVER_QUOTA),
+        "a second pending name of account 1"
+    );
+    // The refusal left no query behind, and account 2 has its own.
+    assert_eq!(w.client.dns_pending(), 1);
+    for name in ["x.zoraya", "y.zoraya", "z.zoraya"] {
+        let h = Fake::new(1024);
+        assert!(
+            w.connect_as(&h, b, 3, Target::Name(name.into()), 80)
+                .is_ok(),
+            "{name}"
+        );
+    }
+    assert_eq!(w.conns.resolving_for(1), 1);
+    assert_eq!(w.conns.resolving_for(2), 3);
+    // An address needs no resolution, so the bound does not touch it.
+    let h = Fake::new(1024);
+    assert!(w.connect_as(&h, a, 1, Target::Address(WEB), 80).is_ok());
+}
+
+#[test]
+fn a_finished_connection_gives_its_account_back_once() {
+    let mut w = World::new(Script::Sink, &[]);
+    let a = Owner {
+        account: 3,
+        cache: 4,
+    };
+    let f = Fake::new(1024);
+    w.connect_as(&f, a, 4, Target::Address(WEB), 80).unwrap();
+    assert!(w.conns.take_released().is_empty());
+    assert!(w.run_until(5_000_000, |_| f.message(16).is_some()));
+    f.close_write();
+    assert!(w.run_until(60_000_000, |w| w.conns.count() == 0));
+    assert_eq!(w.conns.take_released(), vec![3]);
+    assert!(w.conns.take_released().is_empty());
+    // An abort gives it back too.
+    let g = Fake::new(1024);
+    let id = w.connect_as(&g, a, 4, Target::Address(WEB), 80).unwrap();
+    assert!(w.conns.abort(&mut w.client, id).is_some());
+    assert_eq!(w.conns.take_released(), vec![3]);
+}
+
+#[test]
+fn an_account_that_fills_its_cache_evicts_its_own_entries_not_another_accounts() {
+    let mut w = World::new(Script::Sink, &[]);
+    w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 300)]);
+    let (a, b) = (
+        Owner {
+            account: 1,
+            cache: 2,
+        },
+        Owner {
+            account: 2,
+            cache: 8,
+        },
+    );
+    let ask = |w: &mut World, owner, name: &str| {
+        let f = Fake::new(1024);
+        w.connect_as(&f, owner, 4, Target::Name(name.into()), 80)
+            .unwrap();
+        assert!(
+            w.run_until(5_000_000, |_| f.message(16).is_some()),
+            "{name}"
+        );
+        f.close_write();
+        assert!(w.run_until(60_000_000, |w| w.conns.count() == 0));
+        w.now += 1_000;
+    };
+    ask(&mut w, b, "bee.zoraya");
+    ask(&mut w, a, "a1.zoraya");
+    ask(&mut w, a, "a2.zoraya");
+    assert!(w.client.dns_cached("a1.zoraya") && w.client.dns_cached("a2.zoraya"));
+    // A third name of account 1 pushes out its own earliest, not b's.
+    ask(&mut w, a, "a3.zoraya");
+    assert!(!w.client.dns_cached("a1.zoraya"), "a1 was a's oldest");
+    assert!(w.client.dns_cached("a2.zoraya") && w.client.dns_cached("a3.zoraya"));
+    assert!(
+        w.client.dns_cached("bee.zoraya"),
+        "another account's entry stays"
+    );
+    // An account with no cache room caches nothing.
+    let none = Owner {
+        account: 4,
+        cache: 0,
+    };
+    ask(&mut w, none, "nothing.zoraya");
+    assert!(!w.client.dns_cached("nothing.zoraya"));
+}
+
+/// `resolve` through the service over the scripted DNS server: the request
+/// is deferred, the resolver's answer comes out of `take_lookups`, and the
+/// service turns it into the reply (N4).
+mod resolve {
+    use super::*;
+    use crate::accounts::Kind;
+    use crate::service::{Action, Service};
+    use zoraya_abi::net::rights;
+    use zoraya_proto_net::{Address, NarrowAccount, Resolve, Resolved, status};
+    use zoraya_protocol::{Below, Data, encode};
+
+    fn ask(service: &mut Service, w: &mut World, id: usize, name: &str) -> Action {
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &Resolve {
+                name: Data(name.as_bytes()),
+            },
+            9,
+            &mut out,
+        )
+        .unwrap();
+        service.handle(id, &out[..n], 0, &mut w.client, w.now)
+    }
+
+    fn answer(bytes: &[u8]) -> (u32, Vec<[u8; 4]>) {
+        let (_, r) = decode::<Resolved<'_>>(bytes, 0).unwrap();
+        let list: Vec<Address> = r.addresses.iter().collect();
+        (
+            r.status.0,
+            list.iter().map(|a| a.address.to_be_bytes()).collect(),
+        )
+    }
+
+    /// Runs the world until the service has the reply for `id`.
+    fn reply_for(service: &mut Service, w: &mut World, id: usize) -> Vec<u8> {
+        for _ in 0..20_000 {
+            w.turn();
+            for a in w.conns.take_lookups() {
+                if let Some((to, bytes)) = service.resolve_done(&w.client, a, w.now) {
+                    assert_eq!(to, id);
+                    return bytes;
+                }
+            }
+        }
+        panic!("no answer");
+    }
+
+    #[test]
+    fn a_name_resolves_to_its_addresses_and_is_cached_on_the_account() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, WEB, 300)]);
+        let mut service = Service::new();
+        let root = service.add(Connection::root()).unwrap();
+        let first = ask(&mut service, &mut w, root, "test.zoraya");
+        let Action::Deferred = first else {
+            panic!("deferred: {first:?}");
+        };
+        // The charge is held while it runs.
+        assert_eq!(service.accounts().used(0, Kind::Resolutions), 1);
+        let bytes = reply_for(&mut service, &mut w, root);
+        assert_eq!(answer(&bytes), (status::OK, vec![WEB]));
+        assert_eq!(service.accounts().used(0, Kind::Resolutions), 0);
+        assert_eq!(w.peer.dns_queries, 1, "one query for one resolve");
+        // A second resolve of the name is answered from the cache at once.
+        let Action::Reply(bytes) = ask(&mut service, &mut w, root, "test.zoraya") else {
+            panic!("cached");
+        };
+        assert_eq!(answer(&bytes), (status::OK, vec![WEB]));
+        assert_eq!(w.peer.dns_queries, 1);
+    }
+
+    /// Lookups answered from the cache use tokens too; after 65,536 of them
+    /// the 16-bit counter reaches the token of a slow lookup that is still
+    /// pending. A new lookup must not take it (its answer would go to the
+    /// other connection).
+    #[test]
+    fn a_wrapped_lookup_token_never_takes_a_pending_ones() {
+        let mut w = World::new(Script::Sink, &[]);
+        // The slow name is answered only once the test lets it, and the two
+        // names get different addresses, so a reply says which lookup it
+        // answers.
+        let release = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let gate = release.clone();
+        w.peer.dns_script = Box::new(move |q| {
+            let slow = q.windows(4).any(|w| w == b"slow");
+            if slow && !gate.load(std::sync::atomic::Ordering::SeqCst) {
+                return vec![];
+            }
+            vec![a_record_reply(
+                q,
+                if slow { WEB } else { [10, 9, 9, 9] },
+                300,
+            )]
+        });
+        let open = release.clone();
+        release.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut service = Service::new();
+        let a = service.add(Connection::root()).unwrap();
+        let b = service.add(Connection::root()).unwrap();
+        // Token 0 fills the cache; token 1 is the slow lookup of `a`.
+        let Action::Deferred = ask(&mut service, &mut w, a, "cached.zoraya") else {
+            panic!("deferred");
+        };
+        reply_for(&mut service, &mut w, a);
+        open.store(false, std::sync::atomic::Ordering::SeqCst);
+        let Action::Deferred = ask(&mut service, &mut w, a, "slow.zoraya") else {
+            panic!("deferred");
+        };
+        // Tokens 2..=65535 and 0 from the cache: the next would be 1 again.
+        for _ in 0..65_535 {
+            let Action::Reply(_) = ask(&mut service, &mut w, b, "cached.zoraya") else {
+                panic!("cached");
+            };
+        }
+        let Action::Deferred = ask(&mut service, &mut w, b, "other.zoraya") else {
+            panic!("deferred");
+        };
+        let mut to = Vec::new();
+        let mut seen = Vec::new();
+        for _ in 0..20_000 {
+            w.turn();
+            for r in w.conns.take_lookups() {
+                if let Some((id, bytes)) = service.resolve_done(&w.client, r, w.now) {
+                    to.push(id);
+                    seen.push((id, answer(&bytes).1));
+                    open.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            if to.len() == 2 {
+                break;
+            }
+        }
+        seen.sort();
+        let mut want = vec![(a, vec![WEB]), (b, vec![[10, 9, 9, 9]])];
+        want.sort();
+        assert_eq!(seen, want, "each answer to its own asker");
+    }
+
+    #[test]
+    fn a_name_that_does_not_exist_and_one_that_is_not_in_scope_are_refused_apart() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| {
+            let mut m = q.to_vec();
+            m[2] = 0x81;
+            m[3] = 0x83;
+            vec![m]
+        });
+        let mut service = Service::new();
+        let only = Connection::new(
+            rights::REACH,
+            &scope_with(&[ReachRule {
+                target: zoraya_abi::net::Target::Name("gone.zoraya"),
+                ports: Ports::one(80),
+                protocols: Protocols::TCP,
+            }]),
+        )
+        .unwrap();
+        let id = service.add(only).unwrap();
+        let Action::Reply(bytes) = ask(&mut service, &mut w, id, "other.zoraya") else {
+            panic!("refused at once");
+        };
+        assert_eq!(answer(&bytes).0, status::NOT_GRANTED);
+        assert_eq!(
+            w.peer.dns_queries, 0,
+            "nothing was asked for the refused name"
+        );
+        let Action::Deferred = ask(&mut service, &mut w, id, "gone.zoraya") else {
+            panic!("deferred");
+        };
+        let bytes = reply_for(&mut service, &mut w, id);
+        assert_eq!(answer(&bytes), (status::UNRESOLVABLE, vec![]));
+        // No `reach` right: not granted either.
+        let status_only = service
+            .add(Connection::new(rights::STATUS, &scope_with(&[])).unwrap())
+            .unwrap();
+        let Action::Reply(bytes) = ask(&mut service, &mut w, status_only, "gone.zoraya") else {
+            panic!("refused");
+        };
+        assert_eq!(answer(&bytes).0, status::NOT_GRANTED);
+    }
+
+    #[test]
+    fn a_local_answer_is_left_out_unless_an_address_rule_covers_it() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|q| vec![a_record_reply(q, [127, 0, 0, 1], 60)]);
+        let mut service = Service::new();
+        let names = service
+            .add(Connection::new(rights::REACH, &names_only()).unwrap())
+            .unwrap();
+        let Action::Deferred = ask(&mut service, &mut w, names, "loop.zoraya") else {
+            panic!("deferred");
+        };
+        let bytes = reply_for(&mut service, &mut w, names);
+        assert_eq!(answer(&bytes), (status::LOCAL, vec![]));
+        // With a rule for the address as well, it is given.
+        let both = scope_with(&[
+            ReachRule {
+                target: zoraya_abi::net::Target::Wildcard("zoraya"),
+                ports: Ports::ANY,
+                protocols: Protocols::BOTH,
+            },
+            ReachRule {
+                target: zoraya_abi::net::Target::Address([127, 0, 0, 1]),
+                ports: Ports::ANY,
+                protocols: Protocols::BOTH,
+            },
+        ]);
+        let wide = service
+            .add(Connection::new(rights::REACH, &both).unwrap())
+            .unwrap();
+        let Action::Deferred = ask(&mut service, &mut w, wide, "loop2.zoraya") else {
+            panic!("deferred");
+        };
+        let bytes = reply_for(&mut service, &mut w, wide);
+        assert_eq!(answer(&bytes), (status::OK, vec![[127, 0, 0, 1]]));
+    }
+
+    #[test]
+    fn pending_names_are_bounded_per_account_and_one_per_connection() {
+        let mut w = World::new(Script::Sink, &[]);
+        w.peer.dns_script = Box::new(|_| Vec::new());
+        let mut service = Service::new();
+        let root = service.add(Connection::root()).unwrap();
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &NarrowAccount {
+                rights: rights::REACH | rights::NARROW,
+                budget: Below(1),
+                scope: Data(&names_only()),
+            },
+            3,
+            &mut out,
+        )
+        .unwrap();
+        let Action::Narrowed { id: small, .. } =
+            service.handle(root, &out[..n], 1, &mut w.client, w.now)
+        else {
+            panic!("carved");
+        };
+        // A second connection of the same account.
+        let mut out = vec![0u8; 512];
+        let n = encode(
+            &zoraya_proto_net::Narrow {
+                rights: rights::REACH,
+                scope: Data(&names_only()),
+            },
+            3,
+            &mut out,
+        )
+        .unwrap();
+        let Action::Narrowed { id: twin, .. } =
+            service.handle(small, &out[..n], 1, &mut w.client, w.now)
+        else {
+            panic!("narrowed");
+        };
+        let Action::Deferred = ask(&mut service, &mut w, small, "a.zoraya") else {
+            panic!("deferred");
+        };
+        // One at a time on a connection.
+        let Action::Reply(bytes) = ask(&mut service, &mut w, small, "b.zoraya") else {
+            panic!("busy");
+        };
+        assert_eq!(answer(&bytes).0, status::BUSY);
+        // The budget of 1 allows one pending name in the account.
+        let Action::Reply(bytes) = ask(&mut service, &mut w, twin, "c.zoraya") else {
+            panic!("over quota");
+        };
+        assert_eq!(answer(&bytes).0, status::OVER_QUOTA);
+        // The session still resolves.
+        let Action::Deferred = ask(&mut service, &mut w, root, "d.zoraya") else {
+            panic!("session deferred");
+        };
+        // The asking connections go: the charge goes with the answer, which
+        // has nowhere to go (the resolver gives up at 8 s).
+        service.remove(small);
+        service.remove(twin);
+        for _ in 0..20_000 {
+            w.turn();
+            for a in w.conns.take_lookups() {
+                if let Some((to, _)) = service.resolve_done(&w.client, a, w.now) {
+                    assert_eq!(to, root, "only the session's connection is left");
+                }
+            }
+            if service.accounts().live() == 1 && service.accounts().used(0, Kind::Resolutions) == 0
+            {
+                return;
+            }
+        }
+        panic!("the lookups did not end");
+    }
 }

@@ -10,13 +10,15 @@
 
 use alloc::vec::Vec;
 use zoraya_proto_net::{
-    Address, Connect, Connecting, GetStatus, Narrow, Narrowed, Ping, PingReply, StatusReply,
-    source, status as code,
+    Address, Connect, Connecting, GetStatus, MAX_ADDRESSES, Narrow, NarrowAccount, Narrowed, Ping,
+    PingReply, Resolve, Resolved, StatusReply, source, status as code,
 };
 use zoraya_protocol::{ERROR_ORDINAL, ErrorReply, Header, Seq, decode, encode};
 
-use crate::conn::Target;
+use crate::accounts::{Accounts, CarveError, Kind};
+use crate::conn::{LOOKUP_BASE, Target, is_local};
 use crate::connection::{ConnectTarget, Connection, Request, Verdict};
+use crate::dns::{Found, Owner, ResolveFail, Resolved as Answer, Start};
 use crate::link::Link;
 use crate::stack::{PingError, PingResult, Source, Stack};
 use zoraya_proto_net::{Code, MAX_DNS, NO_LEASE};
@@ -44,13 +46,33 @@ pub enum Action {
         port: u16,
         scope: Vec<u8>,
         reply: Vec<u8>,
+        /// The account the connection is charged to (a `Connections`
+        /// charge is taken; give it back with [`Service::connection_ended`]
+        /// when the connection is over or never opened).
+        account: usize,
+        /// The account is at its bound: tell the client `Failed {
+        /// OVER_QUOTA }` after `reply`, and open nothing.
+        over_quota: bool,
     },
     /// The request was malformed: close this connection.
     Close,
 }
 
+/// A `resolve` whose answer the resolver has not given yet.
+struct Lookup {
+    token: u32,
+    /// The connection to answer; `None` once it is gone.
+    conn: Option<usize>,
+    transaction: u32,
+    account: usize,
+    scope: Vec<u8>,
+}
+
 pub struct Service {
     connections: Vec<Option<Connection>>,
+    accounts: Accounts,
+    lookups: Vec<Lookup>,
+    next_token: u32,
     /// The connection and transaction a running `ping` answers.
     ping: Option<(usize, u32)>,
 }
@@ -90,26 +112,51 @@ impl Service {
     pub fn new() -> Service {
         Service {
             connections: Vec::new(),
+            accounts: Accounts::new(),
+            lookups: Vec::new(),
+            next_token: 0,
             ping: None,
         }
     }
 
     /// Adds a connection; its id, or `None` at the bound.
     pub fn add(&mut self, connection: Connection) -> Option<usize> {
-        if let Some(i) = self.connections.iter().position(Option::is_none) {
+        let account = connection.account();
+        let id = if let Some(i) = self.connections.iter().position(Option::is_none) {
             self.connections[i] = Some(connection);
-            return Some(i);
-        }
-        if self.connections.len() >= MAX_CONNECTIONS {
+            i
+        } else if self.connections.len() >= MAX_CONNECTIONS {
             return None;
-        }
-        self.connections.push(Some(connection));
-        Some(self.connections.len() - 1)
+        } else {
+            self.connections.push(Some(connection));
+            self.connections.len() - 1
+        };
+        self.accounts.join(account);
+        Some(id)
+    }
+
+    /// The accounts, for the loop (the resolver's and the connections'
+    /// bounds) and for the tests.
+    pub fn accounts(&self) -> &Accounts {
+        &self.accounts
+    }
+
+    /// A TCP connection of `account` is over (or never opened): its charge
+    /// goes back.
+    pub fn connection_ended(&mut self, account: usize) {
+        self.accounts.release(account, Kind::Connections);
     }
 
     pub fn remove(&mut self, id: usize) {
-        if let Some(slot) = self.connections.get_mut(id) {
-            *slot = None;
+        if let Some(slot) = self.connections.get_mut(id)
+            && let Some(c) = slot.take()
+        {
+            self.accounts.leave(c.account());
+        }
+        // A lookup of this connection still runs; its charge goes with its
+        // answer.
+        for l in self.lookups.iter_mut().filter(|l| l.conn == Some(id)) {
+            l.conn = None;
         }
         if self.ping.is_some_and(|(owner, _)| owner == id) {
             // Its reply has nowhere to go; the run itself finishes on its own.
@@ -206,23 +253,79 @@ impl Service {
                     };
                     (ConnectTarget::Name(n), Target::Name(n.into()))
                 };
-                match connection.decide(Request::Connect {
+                let verdict = connection.decide(Request::Connect {
                     target: target.0,
                     port,
-                }) {
-                    Verdict::Allowed => Action::Connect {
-                        target: target.1,
-                        port,
-                        scope: connection.scope_bytes().to_vec(),
-                        reply: reply(
-                            &Connecting {
-                                status: Below(code::OK),
-                            },
-                            t,
-                        ),
-                    },
+                });
+                let account = connection.account();
+                match verdict {
+                    Verdict::Allowed => {
+                        let scope = connection.scope_bytes().to_vec();
+                        let over_quota = self.accounts.charge(account, Kind::Connections).is_err();
+                        Action::Connect {
+                            target: target.1,
+                            port,
+                            scope,
+                            reply: reply(
+                                &Connecting {
+                                    status: Below(code::OK),
+                                },
+                                t,
+                            ),
+                            account,
+                            over_quota,
+                        }
+                    }
                     Verdict::NotGranted => answer(code::NOT_GRANTED),
                     Verdict::Invalid => answer(code::INVALID),
+                }
+            }
+            4 => {
+                let Ok((_, m)) = decode::<Resolve>(message, handles) else {
+                    return Action::Close;
+                };
+                let answer = |c| Action::Reply(resolved_reply(c, &[], t));
+                let Some(name) = core::str::from_utf8(m.name.0)
+                    .ok()
+                    .filter(|n| zoraya_abi::net::valid_name(n))
+                else {
+                    return answer(code::INVALID);
+                };
+                if connection.decide(Request::Resolve { name }) != Verdict::Allowed {
+                    return answer(code::NOT_GRANTED);
+                }
+                if self.lookups.iter().any(|l| l.conn == Some(id)) {
+                    return answer(code::BUSY);
+                }
+                let account = connection.account();
+                let scope = connection.scope_bytes().to_vec();
+                if self.accounts.charge(account, Kind::Resolutions).is_err() {
+                    return answer(code::OVER_QUOTA);
+                }
+                let token = self.fresh_token();
+                let owner = Owner {
+                    account,
+                    cache: self.accounts.limit(account, Kind::CacheEntries) as usize,
+                };
+                match stack.resolve_as(token, owner, name, now_us) {
+                    Start::Pending => {
+                        self.lookups.push(Lookup {
+                            token,
+                            conn: Some(id),
+                            transaction: t,
+                            account,
+                            scope,
+                        });
+                        Action::Deferred
+                    }
+                    Start::Done(found) => {
+                        self.accounts.release(account, Kind::Resolutions);
+                        Action::Reply(found_reply(&found, &scope, stack, now_us, t))
+                    }
+                    Start::Failed(f) => {
+                        self.accounts.release(account, Kind::Resolutions);
+                        answer(fail_code(f))
+                    }
                 }
             }
             6 => {
@@ -256,6 +359,48 @@ impl Service {
                     }
                 }
             }
+            7 => {
+                let Ok((_, m)) = decode::<NarrowAccount>(message, handles) else {
+                    return Action::Close;
+                };
+                let verdict = connection.decide(Request::Narrow {
+                    rights: m.rights,
+                    scope: m.scope.0,
+                });
+                let answer = |c| Action::Reply(reply(&Narrowed { status: Below(c) }, t));
+                match verdict {
+                    Verdict::NotGranted => answer(code::NOT_GRANTED),
+                    Verdict::Invalid => answer(code::INVALID),
+                    Verdict::Allowed => {
+                        let Some(child) = connection.narrowed(m.rights, m.scope.0) else {
+                            return answer(code::INVALID);
+                        };
+                        let parent = connection.account();
+                        let carved = match self.accounts.carve(parent, m.budget.0) {
+                            Ok(a) => a,
+                            Err(CarveError::Invalid) => return answer(code::INVALID),
+                            Err(CarveError::OverQuota) => return answer(code::OVER_QUOTA),
+                        };
+                        match self.add(child.in_account(carved)) {
+                            Some(new) => Action::Narrowed {
+                                id: new,
+                                reply: reply(
+                                    &Narrowed {
+                                        status: Below(code::OK),
+                                    },
+                                    t,
+                                ),
+                            },
+                            None => {
+                                // Nothing joined it: it ends with no hold.
+                                self.accounts.join(carved);
+                                self.accounts.leave(carved);
+                                answer(code::BUSY)
+                            }
+                        }
+                    }
+                }
+            }
             _ => Action::Reply(reply(
                 &ErrorReply {
                     status: code::INVALID,
@@ -263,6 +408,39 @@ impl Service {
                 t,
             )),
         }
+    }
+
+    /// A lookup token no pending lookup holds. Lookups answered at once also
+    /// use tokens, so the 16-bit counter can wrap onto a slow lookup that is
+    /// still pending; skipping those keeps an answer with its connection.
+    fn fresh_token(&mut self) -> u32 {
+        loop {
+            let token = LOOKUP_BASE + (self.next_token & 0xffff);
+            self.next_token = self.next_token.wrapping_add(1);
+            if !self.lookups.iter().any(|l| l.token == token) {
+                return token;
+            }
+        }
+    }
+
+    /// The reply to a `resolve` the resolver has answered: the connection
+    /// and the bytes, or `None` if its connection is gone (its charge is
+    /// given back either way).
+    pub fn resolve_done<L: Link>(
+        &mut self,
+        stack: &Stack<L>,
+        answer: Answer,
+        now_us: i64,
+    ) -> Option<(usize, Vec<u8>)> {
+        let at = self.lookups.iter().position(|l| l.token == answer.token)?;
+        let l = self.lookups.swap_remove(at);
+        self.accounts.release(l.account, Kind::Resolutions);
+        let id = l.conn?;
+        let bytes = match answer.result {
+            Ok(found) => found_reply(&found, &l.scope, stack, now_us, l.transaction),
+            Err(f) => resolved_reply(fail_code(f), &[], l.transaction),
+        };
+        Some((id, bytes))
     }
 
     /// The reply to the run that ended: the connection and the bytes, or
@@ -278,6 +456,52 @@ impl Service {
             rtt_max_us: result.rtt_max_us,
         };
         Some((id, reply(&body, t)))
+    }
+}
+
+fn fail_code(f: ResolveFail) -> u32 {
+    match f {
+        ResolveFail::BadName => code::INVALID,
+        ResolveFail::Busy => code::BUSY,
+        ResolveFail::NoServer => code::UNAVAILABLE,
+        ResolveFail::NoSuchName | ResolveFail::NoAnswer | ResolveFail::Failure => {
+            code::UNRESOLVABLE
+        }
+    }
+}
+
+fn resolved_reply(status: u32, addresses: &[Address], t: u32) -> Vec<u8> {
+    reply(
+        &Resolved {
+            status: Below(status),
+            addresses: Seq::Of(addresses),
+        },
+        t,
+    )
+}
+
+/// The answer for the addresses of a name: the ones that are not local, or
+/// that an address rule of the scope covers; none left is `LOCAL`
+/// (ADR-0223 item 4). `net.hosts` is the person's own word and exempt.
+fn found_reply<L: Link>(
+    found: &Found,
+    scope: &[u8],
+    stack: &Stack<L>,
+    now_us: i64,
+    t: u32,
+) -> Vec<u8> {
+    let scope = zoraya_abi::net::Scope::decode(scope).unwrap_or(zoraya_abi::net::Scope::EMPTY);
+    let usable: Vec<Address> = found
+        .addresses
+        .iter()
+        .filter(|a| found.from_hosts || !is_local(stack, **a, now_us) || scope.reaches_address(**a))
+        .take(MAX_ADDRESSES)
+        .map(|a| Address { address: be(*a) })
+        .collect();
+    if usable.is_empty() {
+        resolved_reply(code::LOCAL, &[], t)
+    } else {
+        resolved_reply(code::OK, &usable, t)
     }
 }
 

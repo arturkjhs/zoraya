@@ -3,6 +3,7 @@
 //! is checked against them, so a request kind added later is checked in the
 //! same function.
 
+use crate::accounts::SESSION;
 use alloc::vec::Vec;
 use zoraya_abi::net::{Protocols, Scope, rights};
 
@@ -18,6 +19,8 @@ pub enum Request<'a> {
         target: ConnectTarget<'a>,
         port: u16,
     },
+    /// The addresses of a name (N4).
+    Resolve { name: &'a str },
     /// `narrow` with the rights and the encoded scope asked for.
     Narrow { rights: u32, scope: &'a [u8] },
 }
@@ -43,6 +46,9 @@ pub enum Verdict {
 pub struct Connection {
     scope: Vec<u8>,
     rights: u32,
+    /// The account it belongs to (ADR-0262; N4): its parent's, unless a
+    /// `narrow_account` carved a new one.
+    account: usize,
 }
 
 impl Connection {
@@ -64,6 +70,7 @@ impl Connection {
         Connection {
             scope: bytes[..n].to_vec(),
             rights: rights::ALL,
+            account: SESSION,
         }
     }
 
@@ -74,6 +81,7 @@ impl Connection {
         (rights & !rights::ALL == 0).then(|| Connection {
             scope: scope.to_vec(),
             rights,
+            account: SESSION,
         })
     }
 
@@ -81,6 +89,17 @@ impl Connection {
     /// resolves to a local address, ADR-0223 item 4).
     pub fn scope_bytes(&self) -> &[u8] {
         &self.scope
+    }
+
+    /// The account this connection belongs to.
+    pub fn account(&self) -> usize {
+        self.account
+    }
+
+    /// The same connection in another account (a carve).
+    pub fn in_account(mut self, account: usize) -> Connection {
+        self.account = account;
+        self
     }
 
     pub fn rights(&self) -> u32 {
@@ -108,6 +127,9 @@ impl Connection {
                     ConnectTarget::Address(a) => scope.allows_address(a, port, Protocols::TCP),
                 })
             }
+            Request::Resolve { name } => {
+                verdict(self.rights & rights::REACH != 0 && self.scope().reaches_name(name))
+            }
             Request::Narrow { rights, scope } => {
                 if self.rights & rights::NARROW == 0 {
                     return Verdict::NotGranted;
@@ -129,6 +151,7 @@ impl Connection {
     pub fn narrowed(&self, rights: u32, scope: &[u8]) -> Option<Connection> {
         (self.decide(Request::Narrow { rights, scope }) == Verdict::Allowed)
             .then(|| Connection::new(rights, scope))?
+            .map(|c| c.in_account(self.account))
     }
 }
 

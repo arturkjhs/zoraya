@@ -22,7 +22,7 @@ use zoraya_abi::net::MAX_SCOPE_BYTES;
 use zoraya_protocol::{Below, Data, Seq, protocol};
 
 /// One of `status`.
-pub type Code = Below<5>;
+pub type Code = Below<8>;
 
 /// The status of every reply.
 pub mod status {
@@ -37,6 +37,16 @@ pub mod status {
     pub const INVALID: u32 = 3;
     /// The network has no address yet, or no route.
     pub const UNAVAILABLE: u32 = 4;
+    /// The request would pass a bound of the connection's account
+    /// (ADR-0262; N4): `netd` carves no account, or a `Narrow` with a
+    /// budget asks for more than the account or the column can give.
+    pub const OVER_QUOTA: u32 = 5;
+    /// A `resolve`: the name has no address (no such name, no A record, or
+    /// no answer in time).
+    pub const UNRESOLVABLE: u32 = 6;
+    /// A `resolve`: every address the name has is local and no address rule
+    /// covers it (ADR-0223 item 4).
+    pub const LOCAL: u32 = 7;
 }
 
 /// Why a `connect` failed, as `Failed` says it on the connection channel
@@ -55,10 +65,14 @@ pub mod reason {
     pub const LOCAL: u32 = 4;
     /// A bound of `netd` (connections at once), until accounts (ADR-0056).
     pub const OVER_LIMIT: u32 = 5;
+    /// A bound of the connection's account (ADR-0262 item 2, ADR-0263
+    /// item 4; N4): connections or pending resolutions. `libposix` says
+    /// `ENOBUFS`.
+    pub const OVER_QUOTA: u32 = 6;
 }
 
 /// One of `reason`.
-pub type Reason = Below<6>;
+pub type Reason = Below<7>;
 
 /// Why an established connection ended abnormally, as `Reset` says it.
 pub mod reset {
@@ -78,6 +92,8 @@ pub mod source {
     pub const STATIC: u32 = 2;
 }
 
+/// The most addresses one `resolve` answers.
+pub const MAX_ADDRESSES: usize = 8;
 /// The most DNS servers `status` carries.
 pub const MAX_DNS: usize = 4;
 /// The most echo requests of one `ping`.
@@ -151,6 +167,19 @@ protocol! {
         status: Code,
     }
 
+    /// The addresses of `name` (right `reach`, and a reach rule whose target
+    /// covers the name on some port; ADR-0222 item 2, ADR-0223). One at a
+    /// time per connection. Answered when the resolver has an answer, at most
+    /// 8 addresses; addresses that are local and not covered by an address
+    /// rule are left out.
+    message Resolve<'a> = 4, handles 0 {
+        name: Data<'a, 253>,
+    }
+    message Resolved<'a> = 4, handles 0 {
+        status: Code,
+        addresses: Seq<'a, Address, MAX_ADDRESSES>,
+    }
+
     /// On the connection channel, from `netd`: the connection is open.
     message Connected = 16, handles 0 {
         address: u32,
@@ -178,14 +207,32 @@ protocol! {
     message Narrowed = 6, handles 0 {
         status: Code,
     }
+
+    /// `Narrow` that also carves an *account* for the new connection and
+    /// the ones narrowed from it (ADR-0262 item 2; N4): up to `budget`
+    /// connections at once (1 to `MAX_BUDGET`), and the pending
+    /// resolutions, listeners, datagram sockets and resolver cache entries
+    /// that follow from it. `Narrow` is unchanged and joins the caller's
+    /// account. Answered with `Narrowed`.
+    message NarrowAccount<'a> = 7, handles 1 {
+        rights: u32,
+        budget: Below<17>,
+        scope: Data<'a, MAX_SCOPE_BYTES>,
+    }
 }
 
+/// The most connections one carved account may be given (ADR-0262's
+/// `--conns`, scaled to `netd`'s 16: a quarter).
+pub const MAX_BUDGET: u32 = 4;
+
 /// Every ordinal, for a test that none repeats.
-pub const ORDINALS: [(&str, u32); 7] = [
+pub const ORDINALS: [(&str, u32); 9] = [
     ("status", 1),
     ("ping", 2),
     ("connect", 3),
+    ("resolve", 4),
     ("narrow", 6),
+    ("narrow_account", 7),
     ("connected", 16),
     ("failed", 17),
     ("reset", 18),

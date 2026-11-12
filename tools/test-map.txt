@@ -98,21 +98,24 @@ user/src/netclient.rs         test-net
 user/describe/system/netd.cmd test-net
 user/describe/commands/net.cmd test-net test-files
 tests/shell/net.script        test-net
+tests/shell/net-posix.script  test-net
+tests/posix-net/              test-net
+user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix test-posix-gui
+crates/zoraya-posix/          test-libposix test-posix test-posix-gui test-net
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
 user/src/bin/posixrun.rs      test-libposix test-posix
-user/src/posix_child.rs       test-posix
-ports/                        test-libposix test-posix test-posix-gui
+user/src/posix_child.rs       test-posix test-net
+ports/                        test-libposix test-posix test-posix-gui test-net
 tests/posix/                  test-posix test-posix-gui test-tour-gui
 tests/posix-core/             test-libposix
 
 # The shell and its crates.
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net
 crates/zoraya-shell/          test-boot test-files test-tour-gui
 crates/zoraya-command/        test-boot test-files test-tour-gui
 crates/zoraya-describe/       test-files test-tour-gui

@@ -725,8 +725,6 @@ fn the_exclusion_table_is_inv_0005_2_s() {
         "msgget",
         "semget",
         "shmget",
-        "socket",
-        "getaddrinfo",
         "pthread_create",
         "dlopen",
         "flock",
@@ -743,6 +741,8 @@ fn the_exclusion_table_is_inv_0005_2_s() {
         assert!(surface::is_denied(n), "{n}");
     }
     assert!(!surface::is_denied("open") && !surface::is_denied("epoll"));
+    // ADR-0225 item 1 (accepted) takes these two off the table.
+    assert!(!surface::is_denied("socket") && !surface::is_denied("getaddrinfo"));
 }
 
 #[test]

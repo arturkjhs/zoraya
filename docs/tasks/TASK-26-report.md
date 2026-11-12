@@ -855,3 +855,115 @@ Errors 1 to 3 fixed (a reset after the peer's FIN and a 30 s limit for half-clos
 refusal of values; `fetch` fails on a reset whatever the framing), warnings 4 to 8 fixed (ADR-0224 note, DNS steps split and skipped
 on CI, `-o` opens at the first byte, `--port 0`, host tests). Tests: `cargo test -p zoraya-net` 61, `-p zoraya-shell` 110 (7 new).
 Open: notes 11, 12, 14.
+
+## N4: a POSIX program fetches a page, with Q3's `netd` account (branch `work/n4`, on `main` at da771a0)
+
+### Built
+
+- **`netd` accounts and `resolve`** (commits f9c74cc, 7dce152, earlier in the branch): the account of ADR-0262 item 2 on `narrow` with a
+  budget (`NarrowAccount`, ordinal 7), connections, pending names and cache entries bounded per account, `connect` refused with
+  `OVER_QUOTA`; `resolve` (ordinal 4, ADR-0222 item 2, ADR-0223): one lookup per request, charged as a pending resolution, local
+  answers left out.
+- **`libposix` sockets** (`crates/zoraya-posix/src/{socket,net}.rs`, `ffi/sockets.rs`): `Desc::Socket` in the descriptor table, with its
+  arms in `read`, `write`, `lseek`, `fstat` (`S_IFSOCK`), `fsync`, `fcntl` and `release`; `socket`, `connect`, `send`, `sendto`, `recv`,
+  `recvfrom`, `shutdown`, `setsockopt`, `getsockopt`, `getsockname`, `getpeername`, `getaddrinfo`, `freeaddrinfo`, `gai_strerror`,
+  `htons`, `ntohs`, `ntohl`, `inet_pton`, `inet_ntop`, `inet_aton`, `inet_addr`, `inet_ntoa`; `select` over sockets. The names are in
+  ADR-0287's `posix-surface-added` block; `socket` and `getaddrinfo` are off the check's deny list (ADR-0225 item 1).
+- **The grant**: the connection to `netd` reaches a POSIX program in the second bootstrap message (`ZPBN`: `SELF` and a channel;
+  `ZPBS` without one). `zosh` makes it from a literal `url` operand of a POSIX program the image describes
+  (`user/describe/posix/zfetch.cmd`, `Ready::Posix::net`, `posix_child::Launch::net`), as for `fetch`.
+- **`zfetch`** (`tests/posix-net/zfetch.c`): `fetch` in C; `make test-net-posix` (a step of `make test-net`) builds it with `zcc`,
+  puts it in `/bin` of a disk and fetches the test server's pages by the shell, by address and by name.
+
+### Decisions where the ADRs are silent (proposed ADR-0287; recommendations)
+
+1. **The connection in the second bootstrap message, not a fixed slot and not a record field.** A fixed slot 1006 was built first: the
+   first run of a program *without* a grant answered `connect` with `EIO`, because the kernel puts a handle that arrives in a message
+   in the slot after the last one `spawn` filled, so the first directory entry was in slot 1006 and the library took a file
+   service's channel for `netd`. Found by the test of a program started without the grant (the reason that test is in the script).
+   Differs from the plan's "`NET` in `ZPB1`" (no record version moves).
+2. **A child has no network; a socket does not cross `spawn` (`EBADF`) or `fork` (`ENOTSUP`).** ADR-0225 item 9's three-handle
+   inheritance is not built; refusing is the closed choice.
+3. **`inet_pton` and `getaddrinfo` read an address strictly** (the N3 review asked); `inet_aton`/`inet_addr` keep the historical forms.
+4. **The workload is `zfetch`, not curl.** curl and wget (W11, W13) need `poll`, `getnameinfo`, `gethostbyname`, TLS; the plan's done-when
+   ("`+net test.zoraya curl -O ...`") is not met as written: `+net` words are not built (N3b) and curl is not a port yet.
+5. **`socket` and `getaddrinfo` leave the check's deny list** (`tools/posix-surface-check`, ADR-0225 item 1 accepted). ADR-0005's text
+   is unchanged: its superseding note is the architect's (ADR-0225 says so).
+6. **`getaddrinfo` returns one malloc block per address** (`addrinfo`, `sockaddr_in` and the canonical name together).
+
+### Invariants delta
+
+- INV-0225-2 and INV-0225-3: `checked: cargo test -p zoraya-posix --test net` (the counting fake `netd`).
+- INV-0287-1, -2, -3: new, all `checked`. Total 512.
+- Still `not yet applicable (stage 8)`: INV-0225-1 (the one report per target: the hint is not built; the `EACCES` half is tested by the
+  script's run without the grant), -4 (`poll`; only `select` is built), -5 (`getnameinfo` is not built).
+
+### Where a program-controlled or network-controlled number enters, and where it is checked
+
+| Input | Where | Check |
+|---|---|---|
+| `sockaddr` pointer and length from the program | `connect`, `ffi/sockets.rs` | length at most 128, copied, then `parse_sockaddr_in` (length, family, port 0 refused) |
+| `getaddrinfo` strings and hints | `ffi/sockets.rs`, `socket::plan` | `c_str` bounds (PATH_MAX); `valid_name`; flags, family, type, protocol checked; unknown flags `EAI_BADFLAGS` |
+| `setsockopt` value | `ffi/sockets.rs` | at least four bytes, an `int`; the timeouts are not read |
+| `Resolved`, `Connecting`, `Failed`, `Reset` | `net.rs` | decoded by the protocol crate (total); a status or reason outside the table is `EIO` |
+| a page (in `zfetch`) | `zfetch.c` | head 8,192 bytes, header lines scanned inside it, chunk-size line 63 bytes and at most 2^40, lengths by `strtoull`; a malformed chunk is an error |
+
+### Tests run
+
+- `cargo test -p zoraya-abi -p zoraya-posix`: 66, 48, 49 (files), 13 (net) passed. `make adr-check`: 0 errors.
+- `make check`: all 14 checks passed.
+- `make test-net-posix` (alone, HVF, four runs while the test was fixed; the last): PASS, 45 steps, then `zoraya-fsck` clean.
+  `libc.a` against the tier list: 315 exports against 318 names, passed.
+- `make test-changed` (HVF, parallel lanes, 485 s): host tests 47 binaries 81 s; build, test-boot, test-qemu, test-libposix, test-files,
+  test-crash, test-posix, test-posix-gui, test-tour-gui, test-gui, test-net all ok (`test-net` includes `test-net-posix`). Locally TCG
+  runs and the tour's second run are skipped.
+- Not run: `FULL=1` (TCG for the posix step; it is written, 400 s), `make test` and `make test-par` (the architect's and CI's).
+
+### Measurements
+
+See `docs/design.md`, "POSIX sockets": HVF 16 MiB in 226 ms for `zfetch` against 236 ms for `fetch`; TCG 1,305 against 1,380 ms; a
+one-byte page 23.1 against 28.1 ms (HVF). Medians of 5 and 10 runs, single boots, one guest.
+
+### Not done
+
+curl and wget (W11, W13) and the plan's `+net ... curl -O` check; `bind`, `listen`, `accept`, datagrams, `socketpair`, `poll`,
+`sendmsg`/`recvmsg`, `getnameinfo`, `gethostbyname`; inheritance through `spawn` and `fork`; the REPORT message and hint of
+ADR-0224 rule 5 (INV-0225-1); `SO_RCVTIMEO`; `getsockname` (no `local` request). `FULL=1` was not run. No fuzz target for the new
+parsers: `parse_sockaddr_in`, `inet_pton4`, `inet_aton` and `plan` are total by construction and tested on boundary inputs.
+
+### Handoff
+
+- State: branch `work/n4`, pushed without a tag, not merged. The brief said the worktree held uncommitted libposix code with an
+  ffi layer, a C `zfetch`, tests, wiring and measurements; it held only `socket.rs`, `net.rs`, the `errno` rows and the
+  `Desc::Socket` variant, none of which compiled. Everything else here was written in this session.
+- For the reviewer (trust boundary, untrusted input): `crates/zoraya-posix/src/{socket,net}.rs`; `src/ffi/sockets.rs` (every `unsafe`
+  block and `build_addrinfo`/`freeaddrinfo` against musl's `struct addrinfo`); the `Desc::Socket` arms in `process.rs`; `jobs.rs`
+  (`fork_moves_into`); `ffi.rs` (`bootstrap`: the `ZPBN` message); `user/src/posix_child.rs` (`Launch::net`, every failure path closes
+  it); `user/src/bin/zosh.rs` (`posix_net`, `Ready::Posix::net`); `tests/posix-net/zfetch.c`; `tools/posix-surface-check/src/surface.rs`
+  (the deny list); `docs/adr/0287-*.md`.
+- Review questions: (1) answered by the review (finding 1): a `fork` child does not hold the connection (a channel end is not
+  duplicable); `after_fork_in_child` clears `net` and the names, and its first `connect` is `EACCES` (ADR-0287 item 3).
+  (2) `select` on a connecting socket waits on the control channel for both directions; a `Reset` on a connected socket's channel
+  wakes a read wait, and the read then waits again. (3) `getaddrinfo`'s one-block-per-address layout and `freeaddrinfo` (a program
+  that frees the `ai_addr` or `ai_canonname` separately would corrupt the heap; musl's own does the same with one block).
+
+### Review fixes (after `docs/tasks/TASK-26-review-n4.md`)
+
+- 1 (error): `after_fork_in_child` sets `net = None` and clears the remembered names; host test
+  `a_fork_child_has_no_connection_to_netd` (the child's `connect` and `getaddrinfo` are `EACCES`, nothing reaches `netd`). Question 1
+  above and ADR-0287 item 3 corrected: a fork child holds no connection.
+- 2: `Service::fresh_token` skips a token a pending lookup holds; test `a_wrapped_lookup_token_never_takes_a_pending_ones` (it fails
+  without the check).
+- 3: `zosh`'s `posix_net` now uses `narrow_account` with a budget of 2 (`POSIX_NET_BUDGET`), so each POSIX program counts against its
+  own account. Not done: a script line that goes past the budget. The test program `zfetch` holds one connection at a time; going
+  past needs a second C program with its own description in the image, left for a later step. The bound itself is host-tested
+  (`zoraya-net`) and the call runs in `make test-net-posix`.
+- 5, 9: stated in ADR-0287 (items 3 and 7). 6: `posix_child::launch` closes `me` and `net` when the `ZPBS`/`ZPBN` write fails.
+  7: `recvfrom` checks `addr`/`addrlen` before taking data. 8: `getsockopt` stores the bytes copied in `*len`. 10: `zfetch.c`
+  requires `strlen(head) >= 12` before `atoi(head + 9)`.
+- Fuzz: `fuzz/fuzz_targets/net_stack.rs` target 4 now also drives a connection narrowed with an account and `resolve_done` with
+  fuzzed tokens. `cargo check` of the fuzz crate passes; `cargo fuzz` is not installed here, so it was not run.
+- 4 (N4 done-when not met: no curl, wget or `+net`; no TCG run) stays the architect's call, as the review says.
+- 11 (for Q7's gate tests): a literal `url` operand designates the network with no check of the room's trust, for native and POSIX
+  programs alike, and trust is by path: any binary at `/bin/zfetch` gets the designated network (ADR-0153 rule 10's posture; the gate
+  refuses untrusted rooms for now). Q7's gate tests must cover it before the gate is lifted.

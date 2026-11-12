@@ -99,6 +99,60 @@ impl Net {
         }
     }
 
+    /// The next message queued at channel end `h`, as the process holding
+    /// it would read it.
+    pub fn take_message(&mut self, h: H) -> Option<(Vec<u8>, Vec<H>)> {
+        let object = self.object(h)?;
+        match self.objects.get_mut(&object) {
+            Some(Obj::End { queue, .. }) => queue.pop_front(),
+            _ => None,
+        }
+    }
+
+    /// Sends a message from channel end `h` to its peer, moving `handles`.
+    pub fn send_message(&mut self, h: H, bytes: &[u8], handles: &[H]) -> bool {
+        let Some(object) = self.object(h) else {
+            return false;
+        };
+        let peer = match self.objects.get(&object) {
+            Some(Obj::End { peer, .. }) => *peer,
+            _ => return false,
+        };
+        match self.objects.get_mut(&peer) {
+            Some(Obj::End { queue, .. }) => {
+                queue.push_back((bytes.to_vec(), handles.to_vec()));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Writes `bytes` into the stream whose *write* end is `h`, as its
+    /// holder would.
+    pub fn push(&mut self, h: H, bytes: &[u8]) {
+        if let Some(Obj::StreamWrite(r)) = self.object(h).and_then(|o| self.objects.get(&o)) {
+            r.borrow_mut().bytes.extend(bytes.iter().copied());
+        }
+    }
+
+    /// Takes everything out of the stream whose read end is `h`.
+    pub fn pulled(&mut self, h: H) -> Vec<u8> {
+        let Some(Obj::StreamRead(r)) = self.object(h).and_then(|o| self.objects.get(&o)) else {
+            return Vec::new();
+        };
+        r.borrow_mut().bytes.drain(..).collect()
+    }
+
+    /// Whether handle `h` is still held by anyone.
+    pub fn is_open(&self, h: H) -> bool {
+        self.object(h).is_some()
+    }
+
+    /// The signals `h` asserts now.
+    pub fn signals_of(&self, h: H) -> u32 {
+        self.signals(h)
+    }
+
     pub fn close(&mut self, h: H) {
         let Some(object) = self.handles.remove(&h) else {
             return;

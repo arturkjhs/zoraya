@@ -69,7 +69,7 @@ QEMU_SLOW_TIMEOUT ?= 300
 
 KERNEL_ARGS := -p zoraya-kernel --target $(TARGET)
 
-.PHONY: all build run run-gui run-net test-net test-net-fetch debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
+.PHONY: all build run run-gui run-net test-net test-net-fetch test-net-posix debug check test-changed test-par test test-unit test-qemu test-qemu-one test-qemu-disk ci-build check-ci-jobs $(addprefix test-qemu-,$(QEMU_CONFIGS)) test-boot test-files test-libposix test-posix test-posix-long posix-calls posix-table measure-w4 test-posix-gui test-tour-gui posix-image tour-scripts test-crash test-gui mutants mutants-host tools-storage ramdisk fmt-check check-user-access check-kernel-tty check-argv check-host-paths clippy adr-check clean \
 	$(KERNEL) $(TEST_KERNEL) $(RUNNER) $(RAMDISK)
 
 all: build
@@ -272,7 +272,8 @@ test-net: $(TEST_KERNEL) $(KERNEL) $(RUNNER) tools-storage
 	target/debug/zoraya-fsck $(NET_DISK) && \
 	( [ "$(FULL)" != 1 ] || $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_SCRIPT) --label net-boot-tcg -- $(RUN_QEMU) --test --keys --net --accel tcg $(KERNEL) ) && \
 	( [ "$(FULL)" != 1 ] || run tcg --label net-tcg --expect-line "t_net: all passed" --expect-line "t_netd: all passed" ) && \
-	$(MAKE) --no-print-directory test-net-fetch
+	$(MAKE) --no-print-directory test-net-fetch && \
+	$(MAKE) --no-print-directory test-net-posix
 
 # N3 (ADR-0222, ADR-0223): `fetch` in the guest against the host-side test
 # server (tools/test-httpd: 127.0.0.1 only, bounded, gone after 300 s or when
@@ -319,6 +320,45 @@ test-net-fetch: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
 		if [ -n "$$CI" ] && [ "$(NET_DNS)" != 1 ]; then echo "[net-dns] SKIP: SLIRP's DNS forwarder needs the host's resolver (NET_DNS=1 runs it on CI)"; \
 		else $(RUNNER) --timeout $(QEMU_TIMEOUT) --script $(NET_DNS_SCRIPT) --label net-dns-auto -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_FETCH_DISK) --accel auto $(KERNEL); rc=$$?; fi; \
 	fi; \
+	exit $$rc
+
+# N4 (ADR-0225, ADR-0287): `zfetch`, a C program built by zcc against libc.a,
+# fetches the same pages through libposix's sockets, started by the shell from
+# the disk's /bin through the broker, with the connection the shell narrows to
+# the URL's host and port. Needs libc.a (musl's source in the cache of `make
+# fetch-ports`, as test-libposix does). The test server and the guest's network
+# are test-net-fetch's.
+NET_POSIX_ROOT := $(BUILD)/net-posix-root
+NET_POSIX_DISK := $(BUILD)/net-posix-disk.img
+NET_POSIX_TEMPLATE := tests/shell/net-posix.script
+NET_POSIX_SCRIPT := $(BUILD)/net-posix.script
+NET_POSIX_RUN = $(RUNNER) --timeout $(1) --script $(NET_POSIX_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(NET_POSIX_DISK) --accel $(3) $(KERNEL)
+
+test-net-posix: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[net-posix] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	$(MAKE) -s -f ports/Makefile libc && $(MAKE) -s -f ports/Makefile check-libc && \
+	mkdir -p $(NET_POSIX_ROOT) target/test-logs && cp -R rootfs/. $(NET_POSIX_ROOT)/ && mkdir -p $(NET_POSIX_ROOT)/bin && \
+	printf 'net.hosts = test.zoraya=10.0.2.2\n' > $(NET_POSIX_ROOT)/config/settings && \
+	tools/zcc -O2 -o $(NET_POSIX_ROOT)/bin/zfetch tests/posix-net/zfetch.c && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(NET_POSIX_ROOT)/bin/zfetch && \
+	target/debug/zoraya-mkfs --size 16M --from $(NET_POSIX_ROOT) $(NET_POSIX_DISK) && \
+	: > $(NET_HTTP_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(NET_HTTP_READY) > target/test-logs/test-httpd-posix.log 2>&1 & echo $$! > $(BUILD)/net-httpd-posix.pid; } && \
+	httpd=$$(cat $(BUILD)/net-httpd-posix.pid); \
+	for i in $$(seq 1 20); do [ -s $(NET_HTTP_READY) ] && break; sleep 0.25; done; \
+	port=$$(cat $(NET_HTTP_READY)); \
+	if [ -z "$$port" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[net-posix] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-posix.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" \
+		-e "s/@SUM1M@/$$($(HTTPD) --checksum 1000000)/" \
+		-e "s/@SUM300K@/$$($(HTTPD) --checksum 300000)/" \
+		-e "s/@SUM70K@/$$($(HTTPD) --checksum 70000)/" \
+		-e "s/@SUM4M@/$$($(HTTPD) --checksum 4000000)/" \
+		$(NET_POSIX_TEMPLATE) > $(NET_POSIX_SCRIPT); \
+	$(call NET_POSIX_RUN,$(QEMU_TIMEOUT),net-posix-auto,auto); rc=$$?; \
+	if [ $$rc = 0 ] && [ "$(FULL)" = 1 ]; then $(call NET_POSIX_RUN,400,net-posix-tcg,tcg); rc=$$?; fi; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NET_POSIX_DISK); rc=$$?; fi; \
 	exit $$rc
 
 # An interactive machine on QEMU's user network without `restrict`: the guest

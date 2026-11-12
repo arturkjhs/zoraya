@@ -72,7 +72,24 @@ pub struct Resolved {
     pub result: Result<Found, ResolveFail>,
 }
 
+/// Whose answers a query's cache entry is (ADR-0262; N4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Owner {
+    pub account: usize,
+    /// The most cache entries the account holds.
+    pub cache: usize,
+}
+
+impl Owner {
+    /// The session's: bounded by [`CACHE_ENTRIES`] alone.
+    pub const SESSION: Owner = Owner {
+        account: 0,
+        cache: CACHE_ENTRIES,
+    };
+}
+
 struct Query {
+    owner: Owner,
     token: u32,
     name: String,
     id: u16,
@@ -82,6 +99,7 @@ struct Query {
 }
 
 struct CacheEntry {
+    account: usize,
     name: String,
     addresses: Vec<[u8; 4]>,
     expires_us: i64,
@@ -140,8 +158,16 @@ impl<L: Link> Stack<L> {
         h
     }
 
-    /// Starts resolving `name` for `token`.
+    /// Starts resolving `name` for `token`, for the session's account (no
+    /// bound of its own on the cache but [`CACHE_ENTRIES`]).
     pub fn resolve(&mut self, token: u32, name: &str, now_us: i64) -> Start {
+        self.resolve_as(token, Owner::SESSION, name, now_us)
+    }
+
+    /// Starts resolving `name` for `token`; the answer is cached on
+    /// `owner`'s account, which holds at most `owner.cache` entries
+    /// (ADR-0262 item 2: an account that fills the cache evicts its own).
+    pub fn resolve_as(&mut self, token: u32, owner: Owner, name: &str, now_us: i64) -> Start {
         let name = lower(name);
         if !zoraya_dns::valid_name(&name) {
             return Start::Failed(ResolveFail::BadName);
@@ -176,6 +202,7 @@ impl<L: Link> Stack<L> {
             }
         };
         r.queries.push(Query {
+            owner,
             token,
             name,
             id,
@@ -225,17 +252,31 @@ impl<L: Link> Stack<L> {
                 Ok(Outcome::Addresses(a)) => {
                     let q = r.queries.remove(at);
                     let addresses = a.as_slice().to_vec();
-                    if r.cache.len() >= CACHE_ENTRIES {
-                        // The entry closest to expiry goes.
-                        if let Some(i) = (0..r.cache.len()).min_by_key(|i| r.cache[*i].expires_us) {
-                            r.cache.remove(i);
-                        }
+                    // An account at its bound evicts its own entry closest to
+                    // expiry, so it cannot push another account's out; the
+                    // service's bound evicts the closest of all.
+                    let mine = |e: &CacheEntry| e.account == q.owner.account;
+                    let own = r.cache.iter().filter(|e| mine(e)).count();
+                    let evict = if own >= q.owner.cache {
+                        (0..r.cache.len())
+                            .filter(|i| mine(&r.cache[*i]))
+                            .min_by_key(|i| r.cache[*i].expires_us)
+                    } else if r.cache.len() >= CACHE_ENTRIES {
+                        (0..r.cache.len()).min_by_key(|i| r.cache[*i].expires_us)
+                    } else {
+                        None
+                    };
+                    if let Some(i) = evict {
+                        r.cache.remove(i);
                     }
-                    r.cache.push(CacheEntry {
-                        name: q.name,
-                        addresses: addresses.clone(),
-                        expires_us: now_us + i64::from(a.ttl) * 1_000_000,
-                    });
+                    if q.owner.cache > 0 {
+                        r.cache.push(CacheEntry {
+                            account: q.owner.account,
+                            name: q.name,
+                            addresses: addresses.clone(),
+                            expires_us: now_us + i64::from(a.ttl) * 1_000_000,
+                        });
+                    }
                     r.done.push(Resolved {
                         token: q.token,
                         result: Ok(Found {

@@ -9,7 +9,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zoraya_abi::posix::{self as abi, EntryKind, FdKind, NO_HANDLE, SELF_MESSAGE, slot};
+use zoraya_abi::posix::{
+    self as abi, EntryKind, FdKind, NO_HANDLE, SELF_MESSAGE, SELF_NET_MESSAGE, slot,
+};
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     ChannelEntry, ChannelObject, DEADLINE_INFINITE, Disposition, ExitReason, ExitRecord, Handle,
@@ -225,6 +227,10 @@ pub struct Launch<'a> {
     pub streams: [Handle; 3],
     /// The refused-path channel's write end (ADR-0153 rule 11); moved.
     pub report: Handle,
+    /// A connection to `netd` for the program (ADR-0225 item 2), moved in
+    /// the second bootstrap message beside `SELF` (`SELF_NET_MESSAGE`);
+    /// none for a program the line gave no network.
+    pub net: Option<Handle>,
     pub realtime_base: u64,
 }
 
@@ -253,6 +259,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
+            if let Some(n) = l.net {
+                let _ = handle_close(n);
+            }
             return Err(s);
         }
     };
@@ -261,6 +270,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
+            if let Some(n) = l.net {
+                let _ = handle_close(n);
+            }
             return Err(s);
         }
     };
@@ -341,7 +353,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     ) else {
         close_entries(&l.entries);
         let _ = handle_close(l.report);
-        for h in [p.child_job, p.broker_end] {
+        for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
             let _ = handle_close(h);
         }
         return Err(fail(Status::InvalidArgument, &p));
@@ -351,7 +363,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
-            for h in [p.child_job, p.broker_end] {
+            for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
                 let _ = handle_close(h);
             }
             return Err(fail(s, &p));
@@ -411,7 +423,10 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Ok(process) => process,
         Err(s) => {
             close_entries(&l.entries);
-            for h in [boot, boot_child, p.broker_end, l.report, p.child_job] {
+            for h in [boot, boot_child, p.broker_end, l.report, p.child_job]
+                .into_iter()
+                .chain(l.net)
+            {
                 let _ = handle_close(h);
             }
             return Err(fail(s, &p));
@@ -428,15 +443,37 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     if let Err(s) = channel_write(boot, &record[..n], &moved) {
         close_entries(&l.entries);
         let _ = handle_close(boot);
+        if let Some(n) = l.net {
+            let _ = handle_close(n);
+        }
         return Err(gone(s));
     }
     if let Ok(me) = handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
-        let entry = [ChannelEntry {
+        let mut entry = vec![ChannelEntry {
             handle: me,
             rights: Rights::WAIT,
             transfer: Transfer::Move,
         }];
-        let _ = channel_write(boot, SELF_MESSAGE, &entry);
+        let message = match l.net {
+            Some(net) => {
+                entry.push(ChannelEntry {
+                    handle: net,
+                    rights: ChannelObject::RIGHTS,
+                    transfer: Transfer::Move,
+                });
+                SELF_NET_MESSAGE
+            }
+            None => SELF_MESSAGE,
+        };
+        // On a failed write the caller keeps what it moved (INV-0050-1).
+        if channel_write(boot, message, &entry).is_err() {
+            let _ = handle_close(me);
+            if let Some(net) = l.net {
+                let _ = handle_close(net);
+            }
+        }
+    } else if let Some(net) = l.net {
+        let _ = handle_close(net);
     }
     let _ = handle_close(boot);
     if let Err(s) = broker.commit(p.pid, process) {

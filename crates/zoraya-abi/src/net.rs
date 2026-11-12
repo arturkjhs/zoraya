@@ -480,6 +480,12 @@ impl<'a> Scope<'a> {
         })
     }
 
+    /// Whether some reach rule covers the name on some port: what `resolve`
+    /// has (it names no port yet).
+    pub fn reaches_name(&self, name: &str) -> bool {
+        self.reach_rules().any(|r| r.target.covers_name(name))
+    }
+
     /// As [`Scope::allows_name`] for an address; an address rule only.
     pub fn allows_address(&self, address: [u8; 4], port: u16, protocol: Protocols) -> bool {
         self.reach_rules().any(|r| {
