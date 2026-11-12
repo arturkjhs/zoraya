@@ -8,9 +8,9 @@ use zoraya_pagetable::MemoryType;
 use zoraya_pagetable::{Attributes, Half, MapError, PageTable, TableMemory};
 use zoraya_pmm::{FRAME_SIZE, Frame};
 
-use super::frames;
 use super::object::MemoryObject;
 use super::phys_to_virt;
+use super::{frames, heap};
 use crate::arch::mmu;
 use crate::charge::Paid;
 use crate::device::DeviceMapping;
@@ -24,6 +24,10 @@ use zoraya_abi::Status;
 pub const USER_LOW: u64 = 0x40_0000;
 /// One past the highest user address.
 pub const USER_HIGH: u64 = 1 << 47;
+
+/// Frames one step may add to a space's list: its pages, and the tables that
+/// map them (a step of 64 pages crosses at most one boundary of each level).
+pub const STEP_FRAMES: usize = STEP + 8;
 
 /// Mappings a process may hold (ADR-0051).
 pub const MAX_MAPPINGS: usize = 256;
@@ -72,6 +76,13 @@ impl UserMemory {
         }
         self.frames.push(frame);
         Ok(())
+    }
+
+    /// The capacity the list of frames needs to take `more`, if it must grow:
+    /// doubled, as `Vec` would, so that one growth serves many steps.
+    fn capacity_for(&self, more: usize) -> Option<usize> {
+        let need = self.frames.len().saturating_add(more);
+        (need > self.frames.capacity()).then(|| need.max(self.frames.capacity() * 2))
     }
 
     /// Charges one frame of user memory, remembering a refusal.
@@ -177,6 +188,35 @@ pub struct AddressSpace {
 }
 
 impl AddressSpace {
+    /// The bytes the list of frames would allocate to take a step of
+    /// [`STEP_FRAMES`] more, or 0 if it has room: what [`heap::prepare`]
+    /// maps ahead before a step, with no lock held.
+    pub fn step_growth(&self) -> usize {
+        self.memory
+            .capacity_for(STEP_FRAMES)
+            .map_or(0, |capacity| capacity * size_of::<Frame>())
+    }
+
+    /// Makes room in the list of frames for a step, after
+    /// `heap::prepare(step_growth())`, so that the step's frames and tables
+    /// do not grow the list, and with it the heap, in the step's masked
+    /// interval (INV-0270-1). The list grows with what the space holds: its
+    /// doubling was a growth of the heap proportional to the space. Best
+    /// effort: if the heap has no room, the step's first frame reports it.
+    pub fn reserve_step(&mut self) {
+        if let Some(capacity) = self.memory.capacity_for(STEP_FRAMES) {
+            let more = capacity - self.memory.frames.len();
+            let _ = self.memory.frames.try_reserve_exact(more);
+        }
+    }
+
+    /// [`heap::prepare`] and [`AddressSpace::reserve_step`], for a space no
+    /// lock holds (one being built: `spawn`, a snapshot's child).
+    pub fn prepare_step(&mut self) {
+        heap::prepare(self.step_growth());
+        self.reserve_step();
+    }
+
     /// An empty space whose frames `payer` pays for (`None`: the kernel's).
     pub fn new(payer: Option<&Arc<Job>>) -> Result<AddressSpace, Status> {
         let asid = alloc_asid().ok_or(Status::NoMemory)?;
@@ -555,6 +595,12 @@ impl SnapshotBuild {
         })
     }
 
+    /// Before a step of the copy: room for its frames in the child's list,
+    /// mapped ahead in steps (`AddressSpace::prepare_step`). No lock held.
+    pub fn prepare_step(&mut self) {
+        self.child.prepare_step();
+    }
+
     /// Maps the copies of the objects into the child, in steps, and gives the
     /// child. The copy of the parent must be complete.
     pub fn finish(mut self) -> Result<AddressSpace, Status> {
@@ -568,8 +614,11 @@ impl SnapshotBuild {
         let objects = core::mem::take(&mut self.objects);
         for ((va, length, attributes), object) in plan.into_iter().zip(objects) {
             for offset in (0..length).step_by(FRAME_SIZE as usize) {
-                if pages > 0 && pages.is_multiple_of(STEP) {
-                    steps::between()?;
+                if pages.is_multiple_of(STEP) {
+                    if pages > 0 {
+                        steps::between()?;
+                    }
+                    self.child.prepare_step();
                 }
                 pages += 1;
                 self.child

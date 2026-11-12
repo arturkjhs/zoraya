@@ -12,16 +12,21 @@ use alloc::sync::Arc;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr;
 
-use zoraya_heap::{Backing, Heap, PAGE_SIZE, Stats};
+use zoraya_heap::{Backing, CHUNK_SIZE, Heap, PAGE_SIZE, Stats};
 use zoraya_pmm::OutOfFrames;
 
 use super::layout::{HEAP_WINDOW, HEAP_WINDOW_SIZE};
 use super::{frames, paging};
 use crate::arch;
+use crate::steps::{self, STEP};
 use crate::sync::SpinLock;
 
 struct Window {
+    /// The next address `grow` hands to the heap.
     next: u64,
+    /// The end of the pages mapped ahead of `next` by [`prepare`]: `grow`
+    /// hands them out without mapping (ADR-0270).
+    mapped: u64,
 }
 
 impl Window {
@@ -32,19 +37,19 @@ impl Window {
             frames::free(frame);
         }
     }
-}
 
-// SAFETY: `grow` returns fresh addresses from a window nothing else maps,
-// never the same twice, backed by frames that were allocated for it and that
-// stay mapped read-write for the kernel's lifetime.
-unsafe impl Backing for Window {
-    fn grow(&mut self, pages: usize) -> Option<usize> {
-        let bytes = (pages as u64).checked_mul(PAGE_SIZE as u64)?;
-        let end = self.next.checked_add(bytes)?;
+    /// Maps `pages` more pages at `mapped`, or none of them.
+    fn map_ahead(&mut self, pages: usize) -> bool {
+        let start = self.mapped;
+        let end = (pages as u64)
+            .checked_mul(PAGE_SIZE as u64)
+            .and_then(|bytes| start.checked_add(bytes));
+        let Some(end) = end else {
+            return false;
+        };
         if end > HEAP_WINDOW + HEAP_WINDOW_SIZE || pages as u64 > frames::stats().free {
-            return None;
+            return false;
         }
-        let start = self.next;
         for i in 0..pages {
             let va = start + i as u64 * PAGE_SIZE as u64;
             let mapped = frames::alloc().map(|frame| (frame, paging::map_page(va, frame)));
@@ -53,20 +58,46 @@ unsafe impl Backing for Window {
                 Ok((frame, Err(_))) => {
                     frames::free(frame);
                     Self::roll_back(start, i);
-                    return None;
+                    return false;
                 }
                 Err(OutOfFrames) => {
                     Self::roll_back(start, i);
-                    return None;
+                    return false;
                 }
             }
         }
+        self.mapped = end;
+        true
+    }
+}
+
+// SAFETY: `grow` returns fresh addresses from a window nothing else maps,
+// never the same twice (`next` only moves up, and `mapped` is never below
+// it), backed by frames that were allocated for it and mapped by
+// `map_ahead`, here or earlier in `prepare`, and that stay mapped read-write
+// for the kernel's lifetime.
+unsafe impl Backing for Window {
+    /// One chunk (16 pages), not `GROW_SIZE`: a growth for a request of up to
+    /// that maps 16 pages in the request's masked interval, the fixed work
+    /// beside a step (INV-0270-1); a larger request is prepared ([`prepare`]).
+    const LEAST_GROWTH: usize = CHUNK_SIZE;
+
+    fn grow(&mut self, pages: usize) -> Option<usize> {
+        let bytes = (pages as u64).checked_mul(PAGE_SIZE as u64)?;
+        let end = self.next.checked_add(bytes)?;
+        if end > self.mapped && !self.map_ahead(((end - self.mapped) / PAGE_SIZE as u64) as usize) {
+            return None;
+        }
+        let start = self.next;
         self.next = end;
         Some(start as usize)
     }
 }
 
-static HEAP: SpinLock<Heap<Window>> = SpinLock::new(Heap::new(Window { next: HEAP_WINDOW }));
+static HEAP: SpinLock<Heap<Window>> = SpinLock::new(Heap::new(Window {
+    next: HEAP_WINDOW,
+    mapped: HEAP_WINDOW,
+}));
 
 struct KernelHeap;
 
@@ -154,9 +185,70 @@ pub fn block_size(layout: Layout) -> usize {
     zoraya_heap::block_size(layout)
 }
 
-/// Byte counts.
+/// Maps ahead the pages that an allocation of `bytes` (aligned to 8) would
+/// make the heap grow by, if no free span fits it, in steps of [`STEP`] pages
+/// with a step point after each, so that the allocation that follows maps
+/// none in its own masked interval (INV-0270-1). For an allocation whose size
+/// comes from an argument or from what a process holds, made with no spinlock
+/// held (a step point's rule): a memory object's list of frames, the list of
+/// an address space that a step adds to. Without it a growth maps what the
+/// request needs in the interval of the request: at most the least growth
+/// (16 pages) for a request of up to that, the fixed work beside a step.
+///
+/// Never fails: a request the frames cannot cover, or one that other threads
+/// keep taking the pages of, maps what is missing in the allocation, which
+/// fails or not as it did before. The pages mapped ahead are what the
+/// heap's next growth takes; [`stats`]'s `backing` counts them.
+pub fn prepare(bytes: usize) {
+    prepare_in_steps(bytes, steps::pause);
+}
+
+/// [`prepare`] with the step point given, for the test kernel, whose threads
+/// are no process and so make none.
+pub(crate) fn prepare_in_steps(bytes: usize, mut step_point: impl FnMut()) {
+    let Ok(layout) = Layout::from_size_align(bytes, 8) else {
+        return;
+    };
+    if bytes == 0 {
+        return;
+    }
+    // What `zoraya_heap` asks of the backing for this layout: the size in
+    // pages, at least a growth.
+    let pages = bytes.max(Window::LEAST_GROWTH).div_ceil(PAGE_SIZE) as u64;
+    if pages > frames::stats().free {
+        return;
+    }
+    // The rounds are bounded, so that threads that take the pages at the
+    // step points cannot keep this call going.
+    for _ in 0..2 * pages.div_ceil(STEP as u64) + 1 {
+        let mapped = {
+            let mut heap = HEAP.lock();
+            if heap.fits(layout) {
+                return;
+            }
+            let window = heap.backing_mut();
+            let ahead = (window.mapped - window.next) / PAGE_SIZE as u64;
+            if ahead >= pages {
+                return;
+            }
+            window.map_ahead((pages - ahead).min(STEP as u64) as usize)
+        };
+        if !mapped {
+            return;
+        }
+        step_point();
+    }
+}
+
+/// Byte counts. `backing` counts the pages mapped ahead by [`prepare`] too:
+/// they are frames the heap has taken.
 pub fn stats() -> Stats {
-    HEAP.lock().stats()
+    let mut heap = HEAP.lock();
+    let window = heap.backing_mut();
+    let ahead = (window.mapped - window.next) as usize;
+    let mut stats = heap.stats();
+    stats.backing += ahead;
+    stats
 }
 
 /// [`stats`] once the reaper has freed what was queued (it holds heap until

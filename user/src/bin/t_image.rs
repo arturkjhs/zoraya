@@ -27,8 +27,21 @@ const PAGE: u64 = 4096;
 const FREE_FRAMES: u64 = 0x7006;
 const HEAP_LIVE: u64 = 0x700b;
 
+const HEAP_BACKING: u64 = 0x7017;
+
+/// The free frames plus the frames the kernel heap has taken. The heap grows
+/// by 64 KiB at a time (more for one larger request) and keeps what it grew
+/// by, so a call that makes it grow moves frames from free to the heap
+/// without leaking any: this sum is what must return to its start.
 fn free_frames() -> u64 {
-    raw_syscall(FREE_FRAMES, [0; 6]).1
+    loop {
+        let before = raw_syscall(HEAP_BACKING, [0; 6]).1;
+        let free = raw_syscall(FREE_FRAMES, [0; 6]).1;
+        // The heap did not grow between the two reads.
+        if raw_syscall(HEAP_BACKING, [0; 6]).1 == before {
+            return free + before / PAGE;
+        }
+    }
 }
 
 fn heap_live() -> u64 {

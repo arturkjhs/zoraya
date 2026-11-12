@@ -58,22 +58,17 @@ pub fn init(info: &PlatformInfo<'_>) {
 
 /// One frame, with arbitrary contents.
 ///
-/// When none is free and the reaper still holds frames, it frees a step of
-/// them and this tries again (ADR-0270 point 4): memory that is on its way
-/// back is not exhaustion. The unit is counted at the caller's line, as
-/// [`free`]'s is, so that the diagnosis of a busy interval names the path
-/// that allocated (the heap's growth, a page table, an object).
+/// When none is free and the reaper still holds frames, it takes one of
+/// them (ADR-0270 point 4): memory that is on its way back is not
+/// exhaustion, and the allocation stays one unit of work (INV-0270-1). The
+/// unit is counted at the caller's line, as [`free`]'s is, so that the
+/// diagnosis of a busy interval names the path that allocated (the heap's
+/// growth, a page table, an object).
 #[track_caller]
 pub fn alloc() -> Result<Frame, OutOfFrames> {
     crate::steps::count(1);
-    loop {
-        let found = FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc();
-        match found {
-            Err(e) if !crate::reaper::help() => return Err(e),
-            Err(_) => {}
-            Ok(frame) => return Ok(frame),
-        }
-    }
+    let found = FRAMES.lock().as_mut().ok_or(OutOfFrames)?.alloc();
+    found.or_else(|e| crate::reaper::take().ok_or(e))
 }
 
 /// One zeroed frame, counted at the caller's line.
@@ -96,12 +91,26 @@ pub fn alloc_zeroed() -> Result<Frame, OutOfFrames> {
 pub const MAX_CONTIG_FRAMES: u64 = 1024;
 
 /// Rounds of `reaper::help` a run's search makes before it fails: the scan of
-/// the frame map is repeated after each, so the number bounds the masked time.
+/// the frame map is repeated after each, so the number bounds the work.
 const CONTIG_HELP_ROUNDS: usize = (MAX_CONTIG_FRAMES / crate::steps::STEP as u64) as usize + 1;
 
 /// `count` contiguous frames, not zeroed: the caller zeroes them with
 /// [`zero_run`] in steps, before anything else can reach them.
+///
+/// When none is free and the reaper holds frames, each round of its help
+/// frees a step of them and is followed by a step point (`steps::pause`),
+/// so that the rounds are not one masked interval (INV-0270-1): the caller
+/// holds no spinlock, as for any step point.
 pub fn alloc_contig(count: u64) -> Result<Frame, OutOfFrames> {
+    alloc_contig_in_steps(count, crate::steps::pause)
+}
+
+/// [`alloc_contig`] with the step point given, for the test kernel, whose
+/// threads are no process and so make none.
+pub(crate) fn alloc_contig_in_steps(
+    count: u64,
+    mut step_point: impl FnMut(),
+) -> Result<Frame, OutOfFrames> {
     if count > MAX_CONTIG_FRAMES {
         return Err(OutOfFrames);
     }
@@ -113,7 +122,7 @@ pub fn alloc_contig(count: u64) -> Result<Frame, OutOfFrames> {
             .alloc_contig(count, 1);
         match found {
             Err(e) if round == CONTIG_HELP_ROUNDS || !crate::reaper::help() => return Err(e),
-            Err(_) => {}
+            Err(_) => step_point(),
             Ok(first) => {
                 crate::steps::count(1);
                 return Ok(first);

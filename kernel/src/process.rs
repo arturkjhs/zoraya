@@ -448,9 +448,13 @@ fn load_segment(
     let (start, end) = s.pages();
     let file_end = s.vaddr + s.filesz;
     for (n, page) in (start..end).step_by(PAGE_SIZE as usize).enumerate() {
-        // The image is copied in steps of `STEP` pages (ADR-0270 point 2).
-        if n > 0 && n.is_multiple_of(steps::STEP) {
-            steps::between()?;
+        // The image is copied in steps of `STEP` pages (ADR-0270 point 2),
+        // each with room for its frames in the space's list.
+        if n.is_multiple_of(steps::STEP) {
+            if n > 0 {
+                steps::between()?;
+            }
+            space.prepare_step();
         }
         let target = space.map_new_page(page, attributes)?;
         // The part of this page that has file bytes.
@@ -542,8 +546,11 @@ pub fn create(start: Start<'_>) -> Result<Arc<Process>, SpawnError> {
         .step_by(PAGE_SIZE as usize)
         .enumerate()
     {
-        if n > 0 && n.is_multiple_of(steps::STEP) {
-            steps::between()?;
+        if n.is_multiple_of(steps::STEP) {
+            if n > 0 {
+                steps::between()?;
+            }
+            space.prepare_step();
         }
         space.map_new_page(page, USER_STACK)?;
     }

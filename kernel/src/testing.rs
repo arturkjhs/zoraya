@@ -123,6 +123,18 @@ static TESTS: &[Test] = &[
         run: a_switch_at_a_step_point_starts_a_new_interval,
     },
     Test {
+        name: "an_allocation_short_of_frames_takes_one_from_the_reaper",
+        run: an_allocation_short_of_frames_takes_one_from_the_reaper,
+    },
+    Test {
+        name: "a_run_short_of_frames_waits_for_the_reaper_in_steps",
+        run: a_run_short_of_frames_waits_for_the_reaper_in_steps,
+    },
+    Test {
+        name: "a_prepared_allocation_grows_the_heap_in_steps",
+        run: a_prepared_allocation_grows_the_heap_in_steps,
+    },
+    Test {
         name: "pmu_and_debug_registers_do_not_trap",
         run: pmu_and_debug_registers_do_not_trap,
     },
@@ -1199,10 +1211,10 @@ fn console_and_listing_from_a_process() {
 /// ADR-0051 from a process, and INV-0051-1 and -4 by the counters: after it
 /// ends, the frames and heap are as they were.
 fn memory_objects_from_a_process() {
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run_program("t_memory"), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1212,10 +1224,10 @@ fn channels_from_a_process() {
     // channel end is two entries of a table that does not shrink. A second run
     // must then change nothing.
     assert_eq!(run_program("t_channels"), exited(0));
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run_program("t_channels"), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1229,10 +1241,10 @@ fn devices_from_a_process() {
     };
     assert_eq!(run(), exited(0));
     // Twice, so that the heap's growth is behind the counts.
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1245,10 +1257,10 @@ fn no_leak_after_rounds_of_objects() {
             .wait()
     };
     assert_eq!(run(), exited(0));
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before);
+    assert_eq!(frames_accounted(), frames_before);
     assert_eq!(heap::settled_stats().live, heap_before);
 }
 
@@ -1257,10 +1269,10 @@ fn no_leak_after_rounds_of_objects() {
 /// such as the signal table and the heap's chunks.
 fn twice_with_nothing_left(run: impl Fn() -> ExitRecord) {
     assert_eq!(run(), exited(0));
-    let frames_before = frames::settled_stats().free;
+    let frames_before = frames_accounted();
     let heap_before = heap::settled_stats().live;
     assert_eq!(run(), exited(0));
-    assert_eq!(frames::settled_stats().free, frames_before, "frames");
+    assert_eq!(frames_accounted(), frames_before, "frames");
     assert_eq!(heap::settled_stats().live, heap_before, "heap");
 }
 
@@ -2181,6 +2193,131 @@ fn a_switch_at_a_step_point_starts_a_new_interval() {
     crate::steps::count(30);
     arch::restore_interrupts(daif);
     assert_eq!(crate::steps::masked_max_units(true), 30);
+}
+
+/// Takes every free frame, linked through the direct map, and gives the
+/// head of the list (0 for none).
+fn hoard_frames() -> u64 {
+    let mut head = 0;
+    while let Ok(frame) = frames::alloc() {
+        // SAFETY: the frame is allocated, so this code owns it, and the
+        // direct map holds it read-write.
+        unsafe { (memory::phys_to_virt(frame.addr()) as *mut u64).write(head) };
+        head = frame.addr();
+    }
+    head
+}
+
+/// The free frames plus those the kernel heap has taken, once the reaper is
+/// idle: the heap keeps what it grows by, so a test that makes it grow moves
+/// frames from free to the heap without leaking any.
+fn frames_accounted() -> u64 {
+    frames::settled_stats().free + (heap::settled_stats().backing / PAGE_SIZE as usize) as u64
+}
+
+/// The next frame of a list from [`hoard_frames`], and the rest of it.
+fn unhoard_one(head: u64) -> Option<(Frame, u64)> {
+    if head == 0 {
+        return None;
+    }
+    // SAFETY: written by `hoard_frames`; the frame is still allocated.
+    let next = unsafe { (memory::phys_to_virt(head) as *const u64).read() };
+    Some((Frame::from_addr(head).expect("aligned"), next))
+}
+
+/// Gives back every frame of a list from [`hoard_frames`].
+fn unhoard(mut head: u64) {
+    while let Some((frame, next)) = unhoard_one(head) {
+        frames::free(frame);
+        head = next;
+    }
+}
+
+/// The stand-in for a system call's step point in a test kernel thread,
+/// where `steps::pause` does nothing (no process): a window for interrupts,
+/// which ends the masked interval.
+fn test_step_point() {
+    // SAFETY: the vectors and the GIC are up (tests run after boot set them
+    // up), and the callers of a step point hold no spinlock (their contract).
+    unsafe { crate::steps::step_point(|| false) };
+}
+
+/// INV-0270-1: an allocation that finds no free frame while the reaper still
+/// holds some takes one of them; it does not free a step of them in its own
+/// masked interval (64 units for one frame, which made the interval of a
+/// step of `memory_create` 64 + 64).
+fn an_allocation_short_of_frames_takes_one_from_the_reaper() {
+    let before = frames_accounted();
+    let mut queued = Vec::new();
+    queued.try_reserve_exact(200).expect("room for the list");
+    let mut head = hoard_frames();
+    for _ in 0..200 {
+        let (frame, next) = unhoard_one(head).expect("200 frames");
+        queued.push(frame);
+        head = next;
+    }
+    // Masked throughout, so that the reaper cannot run before the
+    // allocation: what a system call sees when a dead object's frames are
+    // queued and none is free.
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    crate::reaper::release(queued, crate::charge::Paid::new(None));
+    let frame = frames::alloc();
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    let frame = frame.expect("a frame the reaper held");
+    frames::free(frame);
+    unhoard(head);
+    assert!(
+        units <= 1,
+        "{units} units in the interval of one allocation (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: a contiguous run that has to wait for the reaper to free
+/// frames makes a step point after each round of help, so that no interval
+/// holds more than one round (64 frames) of the reaper's work.
+fn a_run_short_of_frames_waits_for_the_reaper_in_steps() {
+    const RUN: u64 = 128;
+    let before = frames_accounted();
+    let run = frames::alloc_contig(RUN).expect("a run");
+    let head = hoard_frames();
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    crate::reaper::release_run(run, RUN, crate::charge::Paid::new(None));
+    let got = frames::alloc_contig_in_steps(RUN, test_step_point);
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    let got = got.expect("the run back from the reaper");
+    frames::free_contig(got, RUN);
+    unhoard(head);
+    assert!(
+        units <= crate::steps::STEP as u64 + 1,
+        "{units} units in one interval of a run's search (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
+}
+
+/// INV-0270-1: an allocation larger than every free span of the heap makes
+/// it grow; prepared, the growth is mapped in steps and the allocation maps
+/// nothing in its own interval. Unprepared, 512 KiB more than the heap held
+/// was mapped in one interval (128 units and more).
+fn a_prepared_allocation_grows_the_heap_in_steps() {
+    let bytes = (heap::stats().free_spans + (512 << 10)).next_multiple_of(PAGE_SIZE as usize);
+    let daif = arch::save_and_mask_interrupts();
+    crate::steps::masked_max_units(true);
+    heap::prepare_in_steps(bytes, test_step_point);
+    let mut block: Vec<u8> = Vec::new();
+    let reserved = block.try_reserve_exact(bytes);
+    arch::restore_interrupts(daif);
+    let units = crate::steps::masked_max_units(true);
+    reserved.expect("room");
+    drop(block);
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in one interval of a heap's growth (INV-0270-1)"
+    );
 }
 
 fn pmu_and_debug_registers_do_not_trap() {

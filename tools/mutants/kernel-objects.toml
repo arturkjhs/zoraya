@@ -232,3 +232,31 @@ replace = '''
     let _ = preempt();
 '''
 note = "INV-0270-1: a thread switched away at a step point resumes in a new masked interval (Q4, CI: two exit tails in one)"
+
+[[mutant]]
+id = "K-alloc-no-frame-from-the-reaper"
+file = "kernel/src/memory/frames.rs"
+find = 'found.or_else(|e| crate::reaper::take().ok_or(e))'
+replace = 'found'
+note = "ADR-0270 point 4: an allocation with no free frame takes one the reaper holds (an_allocation_short_of_frames_takes_one_from_the_reaper)"
+
+[[mutant]]
+id = "K-alloc-frees-a-step-of-the-reaper"
+file = "kernel/src/memory/frames.rs"
+find = 'found.or_else(|e| crate::reaper::take().ok_or(e))'
+replace = 'found.or_else(|e| if crate::reaper::help() { FRAMES.lock().as_mut().ok_or(e)?.alloc() } else { Err(e) })'
+note = "INV-0270-1: the old help path, 65 units for one frame (an_allocation_short_of_frames_takes_one_from_the_reaper)"
+
+[[mutant]]
+id = "K-contig-help-without-step-point"
+file = "kernel/src/memory/frames.rs"
+find = 'Err(_) => step_point(),'
+replace = 'Err(_) => {}'
+note = "INV-0270-1: rounds of the reaper's help in one interval, 129 units (a_run_short_of_frames_waits_for_the_reaper_in_steps)"
+
+[[mutant]]
+id = "K-heap-prepare-in-one-interval"
+file = "kernel/src/memory/heap.rs"
+find = 'window.map_ahead((pages - ahead).min(STEP as u64) as usize)'
+replace = 'window.map_ahead((pages - ahead) as usize)'
+note = "INV-0270-1: the heap's growth mapped ahead in steps (a_prepared_allocation_grows_the_heap_in_steps)"

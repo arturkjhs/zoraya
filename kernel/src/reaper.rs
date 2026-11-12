@@ -210,11 +210,40 @@ fn free_some(max: usize) -> bool {
     left < max
 }
 
-/// For an allocation that found no free frame: frees a step of what the
-/// reaper holds, so that a short machine is not refused because teardown has
-/// not caught up. False if there is nothing queued.
+/// For a contiguous run that found none: frees a step of what the reaper
+/// holds, so that a short machine is not refused because teardown has not
+/// caught up. False if there is nothing queued. It is a step of work: the
+/// caller makes a step point after it (`frames::alloc_contig`, INV-0270-1).
 pub fn help() -> bool {
     free_some(STEP)
+}
+
+/// For an allocation of one frame that found none free: hands it one of the
+/// frames the reaper holds, without freeing it first, so that memory on its
+/// way back is not exhaustion and the allocation stays one unit of work
+/// (INV-0270-1; `help`, which this replaces there, freed a step for each
+/// frame). The dead object's charge stays until its item is emptied and
+/// dropped, as for the frames still queued, and the new owner's job pays for
+/// the frame as for any other (ADR-0261). Like `free_some` it frees no heap
+/// and gives no charge back, so it runs under the heap's lock; it takes only
+/// the queue's.
+pub fn take() -> Option<Frame> {
+    let mut queue = QUEUE.lock();
+    for item in queue.items.iter_mut() {
+        if let Some(frame) = item.frames.pop() {
+            return Some(frame);
+        }
+        if let Some((first, count)) = item.run {
+            item.run = (count > 1).then(|| {
+                (
+                    Frame::from_addr(first.addr() + zoraya_pmm::FRAME_SIZE).expect("in the run"),
+                    count - 1,
+                )
+            });
+            return Some(first);
+        }
+    }
+    None
 }
 
 fn reaper_main(_: usize) {
