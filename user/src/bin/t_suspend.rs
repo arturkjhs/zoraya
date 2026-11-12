@@ -17,10 +17,19 @@ use zoraya_abi::{
 use zoraya_user::{
     assert_err, clock_monotonic, console_entry, handle_close, handle_duplicate, image, job_create,
     job_kill, job_resume, job_suspend, memory_create, memory_map, object_get_signals, println,
-    process_exit, process_resume, sleep_until, spawn, startup, wait_exit,
+    process_exit, process_resume, raw_syscall, sleep_until, spawn, startup, thread_yield,
+    wait_exit,
 };
 
 const COUNTERS: usize = 32;
+/// The test kernel's call that makes every step point switch away
+/// (`steps::set_always_switch`): the walks interleave at each, whatever the
+/// slice, so the cases that need an interleaving do not depend on chance.
+const FORCE_SWITCH: u64 = 0x701a;
+
+fn force_switch(on: bool) {
+    raw_syscall(FORCE_SWITCH, [on as u64, 0, 0, 0, 0, 0]);
+}
 
 struct Counters {
     object: Handle,
@@ -130,9 +139,11 @@ fn with_jobs(job: Handle, what: &[u8], jobs: &[Handle]) -> Handle {
 /// jobs below it calls `job_resume` on them without end; none of them may run
 /// when `job_suspend` has returned. A stress case: the walks interleave only
 /// when a slice ends during one (certain on SMP, by chance on one CPU), so it
-/// repeats; without the turns (`job::Exclusive`) and the park of a stopped
-/// caller it failed on SMP.
+/// repeats, and `FORCE_SWITCH` makes every step point switch, so that the
+/// resumer runs inside each walk on one CPU too; without the turns
+/// (`job::Exclusive`) it fails (round 2, warning 3: the mutation was run).
 fn a_resume_from_inside_cannot_undo_a_suspend_walk() {
+    force_switch(true);
     let counters = Counters::new();
     let top = job_create(JOB, JobFlags::NONE).expect("job");
     let held = big_tree(top, 700);
@@ -174,6 +185,7 @@ fn a_resume_from_inside_cannot_undo_a_suspend_walk() {
         handle_close(job).expect("close");
     }
     handle_close(top).expect("close");
+    force_switch(false);
 }
 
 /// The child of the case above: resumes the jobs it was given, without end,
@@ -195,8 +207,16 @@ fn resumer() -> ! {
 /// suspended too (`Job::create` reads the parent's state under `TREE`), and
 /// `job_resume` undoes it all.
 fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
+    force_switch(true);
     let counters = Counters::new();
     let top = job_create(JOB, JobFlags::NONE).expect("job");
+    // The first four children of `top`, which a walk visits last: the
+    // dropper child drops one in each walk, between two steps (round 2,
+    // warning 4), so a removal at a low index is made while the walk still
+    // has the entries after it to visit.
+    let leaves: Vec<Handle> = (0..4)
+        .map(|_| job_create(top, JobFlags::NONE).expect("leaf"))
+        .collect();
     let held = big_tree(top, 700);
     let at: Vec<usize> = (0..16).map(|i| i * 46).collect();
     let counting: Vec<Handle> = at
@@ -205,6 +225,14 @@ fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
         .map(|(i, &j)| counter(held[j], &counters, i as u8))
         .collect();
     let churn = with_jobs(JOB, b"churn", &[top, held[350]]);
+    let dropper = with_jobs(
+        JOB,
+        b"dropper",
+        &[top, leaves[0], leaves[1], leaves[2], leaves[3]],
+    );
+    for leaf in leaves {
+        handle_close(leaf).expect("close");
+    }
     let all = |c: &[u64; COUNTERS]| c[..16].iter().all(|&n| n > 0);
     assert!(
         eventually(|| all(&counters.read())),
@@ -240,6 +268,9 @@ fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
     job_kill(top).expect("kill");
     let record = wait_exit(churn);
     assert_eq!(record.code, 0, "the churning process ended by itself");
+    let record = wait_exit(dropper);
+    assert_eq!(record.code, 0, "the dropper dropped its four jobs");
+    handle_close(dropper).expect("close");
     for child in counting {
         wait_exit(child);
         handle_close(child).expect("close");
@@ -249,6 +280,31 @@ fn a_large_tree_is_suspended_whole_while_jobs_come_and_go() {
         handle_close(job).expect("close");
     }
     handle_close(top).expect("close");
+    force_switch(false);
+}
+
+/// The child of the case above: holds the last handles of the first four
+/// children of the top job (slots 4..8) and drops one each time it sees the
+/// top job suspended, then waits for it to be running again. It yields while
+/// it waits, so that a step point of the walk (forced to switch) runs it
+/// without a slice of spinning. Gives up after 60 s.
+fn dropper() -> ! {
+    let top = Handle::new(3).expect("slot");
+    let gave_up = clock_monotonic() + 60_000_000_000;
+    for slot in 4..8 {
+        for want in [true, false] {
+            if !want {
+                handle_close(Handle::new(slot).expect("slot")).expect("close");
+            }
+            while suspended(top) != want {
+                if clock_monotonic() > gave_up {
+                    process_exit(1);
+                }
+                thread_yield();
+            }
+        }
+    }
+    process_exit(0)
 }
 
 /// The child of the case above: makes three jobs under each job it was given
@@ -477,6 +533,9 @@ fn main() -> i32 {
     }
     if let Some(b"resumer") = first {
         resumer();
+    }
+    if let Some(b"dropper") = first {
+        dropper();
     }
     if let Some(b"churn") = first {
         churn();
