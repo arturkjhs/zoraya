@@ -45,6 +45,9 @@ Read `docs/design.md` first. It says what exists and where it lives.
   task is about it.
 - `tools/run-qemu.sh` is the only thing that invokes QEMU. To change the QEMU command line, change that script.
 - `make test` must not need network access once the toolchain in `rust-toolchain.toml` is installed.
+- Disk: before starting a part, check free disk (`df -h`). Below 25 GB, first delete `target/` and `build/` of the
+  worktrees whose parts are merged, and remove those worktrees. After a part is merged, remove its worktree and its
+  mutants' copies (`build/mutants/w*`) at once. At most two worktrees with builds at a time.
 
 ## Memory limits
 

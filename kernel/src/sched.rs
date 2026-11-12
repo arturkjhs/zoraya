@@ -444,8 +444,9 @@ pub fn yield_now() {
 }
 
 /// Switches away if the slice ended. Called on the way back to EL0, on the
-/// thread's own stack, with interrupts masked.
-pub fn preempt_point() {
+/// thread's own stack, with interrupts masked. True if it called the
+/// scheduler, which may have run other threads before this one again.
+pub fn preempt_point() -> bool {
     let (due, other) = {
         let s = SCHED.lock();
         (s.need_resched, !s.ready.is_empty())
@@ -456,6 +457,7 @@ pub fn preempt_point() {
         }
         schedule();
     }
+    due
 }
 
 /// The running thread.

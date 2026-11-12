@@ -129,7 +129,8 @@ pub fn zero_run(first: Frame, count: u64) {
     }
 }
 
-/// Gives a run back.
+/// Gives a run back, counted at the caller's line as [`free`] is.
+#[track_caller]
 pub fn free_contig(first: Frame, count: u64) {
     crate::steps::count(count as usize);
     let mut frames = FRAMES.lock();
@@ -139,7 +140,10 @@ pub fn free_contig(first: Frame, count: u64) {
     }
 }
 
-/// Gives a frame back. A bad free is a kernel bug, so it panics.
+/// Gives a frame back. A bad free is a kernel bug, so it panics. The units
+/// are counted at the caller's line, so that the test kernel's diagnosis of
+/// a busy interval names the path that freed (`steps::diagnose_units`).
+#[track_caller]
 pub fn free(frame: Frame) {
     crate::steps::count(1);
     let mut frames = FRAMES.lock();
