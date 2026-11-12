@@ -146,6 +146,24 @@ fn the_untrusted_rooms_together_leave_home_twenty_windows() {
 }
 
 #[test]
+fn a_fifth_untrusted_room_has_no_account_even_with_surfaces_to_spare() {
+    // Four rooms with one surface each use 4 of the 12: the fifth is
+    // refused for the accounts alone.
+    let mut s = setup();
+    let panel = s.panel();
+    assert_eq!(s.set_rooms(panel, "", TABLE), status::OK);
+    for room in ["a1", "a2", "a3", "a4"] {
+        let e = s.room_client(panel, room, "term", "+w ~/a");
+        assert_eq!(s.try_toplevel(e, 60, 40).0, status::OK);
+    }
+    let a5 = s.room_client(panel, "a5", "term", "+w ~/a");
+    assert_eq!(s.try_toplevel(a5, 60, 40).0, status::OVER_QUOTA);
+    // An existing account still takes its second surface.
+    let a1 = s.room_client(panel, "a1", "term", "+w ~/a");
+    assert_eq!(s.try_toplevel(a1, 60, 40).0, status::OK);
+}
+
+#[test]
 fn a_popup_counts_as_a_surface_of_its_room() {
     let mut s = setup();
     let panel = s.panel();
@@ -224,13 +242,23 @@ fn a_new_buffer_counts_in_the_account_until_it_replaces_the_old() {
     // commit, and a newer one replaces the pending one.
     assert_eq!(set_buffer(&mut s, (w, h)), status::OK);
     assert_eq!(pixels(&s), one + new);
+    // A small window beside them leaves less than a second new buffer
+    // would take, so only a replacement of the pending one is served.
+    assert_eq!(s.try_toplevel(a1, 300, 200).0, status::OK);
+    let small = pixels(&s) - one - new;
+    assert!(one + small + 2 * new > 2 * area && one + small + new <= 2 * area);
     assert_eq!(set_buffer(&mut s, (w, h)), status::OK);
-    assert_eq!(pixels(&s), one + new);
-    assert_eq!(s.try_toplevel(a1, work_w, work_h).0, status::OVER_QUOTA);
+    assert_eq!(pixels(&s), one + small + new);
     // The commit makes the new buffer the window's, and the old goes.
     assert_eq!(s.commit_to(a1, 1, 0, 0, w, h), status::OK);
-    assert_eq!(pixels(&s), new);
+    assert_eq!(pixels(&s), new + small);
+    // A third window of the work area fits; then a new buffer for the first
+    // is a fourth area-and-more: refused, and the account is as it was.
     assert_eq!(s.try_toplevel(a1, work_w, work_h).0, status::OK);
+    let now = pixels(&s);
+    assert!(now + new > 2 * area);
+    assert_eq!(set_buffer(&mut s, (w, h)), status::OVER_QUOTA);
+    assert_eq!(pixels(&s), now);
     assert_eq!(s.c.accounts()[0].refused, 1);
 }
 
@@ -490,8 +518,7 @@ fn the_card_follows_a_restack_under_a_still_pointer() {
     // Closing the covering window does the same.
     s.c.raise(Key { client: 1, id: 1 });
     assert_eq!(s.c.card(), None);
-    s.f().peers.get_mut(&home).unwrap().gone = true;
-    s.c.step();
+    s.c.remove_window(Key { client: 1, id: 1 });
     assert_eq!(s.c.card(), Some(Key { client: 0, id: 1 }));
 }
 
