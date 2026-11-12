@@ -257,11 +257,17 @@ fn slot(n: u64) -> Handle {
 }
 
 /// Serves the volume until every connection is gone.
+///
+/// A disk volume keeps `/system` read-only on every connection, the console
+/// shell's included (ADR-0289 item 8); it changes when the image is built.
+/// The temporary directory service (`fifos`) has no such entry.
 fn serve<D: Device>(volume: Volume<D, Time>, kernel: Kernel, root: Handle, fifos: bool) -> i32 {
     let mut service = Box::new(Service::new(volume, kernel));
     service.set_time_base(BASE.load(Ordering::Relaxed));
     if fifos {
         service.enable_fifos();
+    } else {
+        service.seal("system");
     }
     if !service.add_root(root) {
         println!("fsd: the root connection cannot be served");
