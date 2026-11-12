@@ -56,6 +56,7 @@ screen   stat      describe a file
 screen   status    describe how the last command ended
 screen   sync      make written data durable
 screen   test      check a condition
+screen   top       each room's use against its limits
 screen   unset     remove a variable
 screen   uptime    time since boot
 screen   wait      wait for background jobs

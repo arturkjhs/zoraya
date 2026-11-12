@@ -86,6 +86,7 @@ fn tell_usage(st: &mut State) {
     let Some(keeper) = st.keeper.as_mut() else {
         return;
     };
+    let t0 = clock_monotonic();
     let text = match keeper.usage("") {
         Ok(records) => {
             let readings = st.tracker.readings(&records, clock_monotonic());
@@ -98,14 +99,29 @@ fn tell_usage(st: &mut State) {
             String::new()
         }
     };
-    if text == st.told_usage {
-        return;
+    let t1 = clock_monotonic();
+    // The first five readings' cost, once (the measurement of Q6b).
+    let changed = text != st.told_usage;
+    if changed {
+        let m = gui::SetUsage {
+            readings: Data(text.as_bytes()),
+        };
+        if send(st.manager, &m, None) {
+            st.told_usage = text;
+        }
     }
-    let m = gui::SetUsage {
-        readings: Data(text.as_bytes()),
-    };
-    if send(st.manager, &m, None) {
-        st.told_usage = text;
+    let t2 = clock_monotonic();
+    if st.cost.2 < 5 {
+        st.cost.0 += t1 - t0;
+        st.cost.1 += t2 - t1;
+        st.cost.2 += 1;
+        if st.cost.2 == 5 {
+            println!(
+                "panel: measure: usage read {} us, told {} us (average of 5 ticks)",
+                st.cost.0 / 5000,
+                st.cost.1 / 5000
+            );
+        }
     }
 }
 
@@ -298,6 +314,10 @@ struct State {
     /// What the compositor was last told of the rooms' use, so that a
     /// calm second sends nothing.
     told_usage: String,
+    /// What the once-a-second reading costs, for `docs/design.md`: the
+    /// time of `Usage` and the readings' text, and of the send, summed over
+    /// the first ticks.
+    cost: (u64, u64, u32),
 }
 
 const KEY_LAUNCHER: u64 = 100;
@@ -797,6 +817,7 @@ fn main() -> i32 {
         tracker: zoraya_rooms::Tracker::new(),
         readings: Vec::new(),
         told_usage: String::new(),
+        cost: (0, 0, 0),
     };
     let mut next_reload = clock_monotonic() + RELOAD_NS;
     let mut bytes = alloc::vec![0u8; 512];
