@@ -4,7 +4,7 @@
 //! a device, and when it ends without `dma_unpin` its frames stay quarantined
 //! until the kernel has reset the device (ADR-0070).
 
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -48,6 +48,10 @@ struct Range {
 struct State {
     /// A process maps the window: at most one (ADR-0054).
     mapped: bool,
+    /// A transport device's holder: a process that wrote its registers and
+    /// still holds a handle that can (ADR-0295, INV-0295-3). At most one,
+    /// and never while the page is mapped: either could restart it.
+    claimed: bool,
     live_pins: usize,
     /// Objects a device may still write. Each is space reserved in advance by
     /// `Pin::new`, so ending a pin cannot fail.
@@ -66,6 +70,10 @@ pub struct Device {
     /// A transport device: it has no mapping, `ranges[0]` is its transport,
     /// and `read_register` and `write_register` work on it alone.
     by_call: bool,
+    /// A transport device's page (empty for a page). Devices live as long
+    /// as `DEVICES`, so it always upgrades; weak, so the two do not hold
+    /// each other.
+    page: Weak<Device>,
     state: SpinLock<State>,
 }
 
@@ -120,13 +128,19 @@ pub fn init(fdt: &Fdt<'_>) {
             ranges,
             transports: Default::default(),
             by_call: false,
+            page: Weak::new(),
             state: SpinLock::new(State::default()),
         });
     }
-    for device in &mut devices {
-        device.make_transports();
-    }
-    *DEVICES.lock() = devices.into_iter().map(Arc::new).collect();
+    *DEVICES.lock() = devices
+        .into_iter()
+        .map(|mut device| {
+            Arc::new_cyclic(move |page| {
+                device.make_transports(page);
+                device
+            })
+        })
+        .collect();
     init_rtc(fdt);
     init_seed(fdt);
 }
@@ -186,6 +200,7 @@ fn init_rtc(fdt: &Fdt<'_>) {
         ranges,
         transports: Default::default(),
         by_call: false,
+        page: Weak::new(),
         state: SpinLock::new(State::default()),
     }));
 }
@@ -223,6 +238,7 @@ pub fn without_transport(base: u64, kernel: usize) -> Arc<Device> {
         ranges: [None; MAX_RANGES],
         transports: Default::default(),
         by_call: false,
+        page: Weak::new(),
         state: SpinLock::new(State::default()),
     })
 }
@@ -234,8 +250,10 @@ impl Device {
 
     /// Makes the transport devices of a page just built (a boot-time
     /// allocation, ADR-0022). Each shares the page's kernel mapping and has
-    /// its own state, so pins, quarantine and reset are per transport.
-    fn make_transports(&mut self) {
+    /// its own state, so pins, quarantine and reset are per transport; each
+    /// knows its page, so that a holder of one is a holder of the other
+    /// (INV-0295-3).
+    fn make_transports(&mut self, page: &Weak<Device>) {
         for (slot, range) in self.transports.iter_mut().zip(self.ranges) {
             let Some(range) = range else { continue };
             let mut ranges = [None; MAX_RANGES];
@@ -246,6 +264,7 @@ impl Device {
                 ranges,
                 transports: Default::default(),
                 by_call: true,
+                page: page.clone(),
                 state: SpinLock::new(State::default()),
             }));
         }
@@ -272,11 +291,54 @@ impl Device {
         Ok(self.read(at))
     }
 
-    /// As [`Device::read_register`], for a write.
-    pub fn write_register(&self, offset: u64, value: u32) -> Result<(), Status> {
+    /// As [`Device::read_register`], for a write. The caller holds the
+    /// transport ([`Device::claim`]).
+    pub fn write_register(
+        &self,
+        held: &DeviceClaim,
+        offset: u64,
+        value: u32,
+    ) -> Result<(), Status> {
+        if !core::ptr::eq(Arc::as_ptr(&held.0), self) {
+            return Err(Status::BadState);
+        }
         let at = self.register_offset(offset)?;
         self.write(at, value);
         Ok(())
+    }
+
+    /// Whether `offset` is a register of this transport device.
+    pub fn check_register(&self, offset: u64) -> Result<(), Status> {
+        self.register_offset(offset).map(|_| ())
+    }
+
+    /// Makes the caller the transport device's holder (INV-0295-3): refused
+    /// with `BadState` while another holds it or a process maps its page,
+    /// either of which could restart the device. Lock order: the page's
+    /// state, then the transport's.
+    pub fn claim(self: &Arc<Self>) -> Result<DeviceClaim, Status> {
+        if !self.by_call {
+            return Err(Status::AccessDenied);
+        }
+        let page = self.page.upgrade().ok_or(Status::BadState)?;
+        let page_state = page.state.lock();
+        let mut state = self.state.lock();
+        if page_state.mapped || state.claimed {
+            return Err(Status::BadState);
+        }
+        state.claimed = true;
+        drop(state);
+        drop(page_state);
+        Ok(DeviceClaim(self.clone()))
+    }
+
+    /// Whether a transport device of this page has a holder or a live pin.
+    /// The caller holds the page's state (the lock order of `claim`).
+    fn transports_busy(&self) -> bool {
+        self.transports.iter().flatten().any(|t| {
+            let state = t.state.lock();
+            state.claimed || state.live_pins != 0
+        })
     }
 
     /// The offset in the page of register `offset` of this transport.
@@ -305,7 +367,8 @@ impl Device {
             return Err(Status::AccessDenied);
         }
         let mut state = self.state.lock();
-        if state.mapped {
+        // A transport's holder or live pin is the page's (INV-0295-3).
+        if state.mapped || self.transports_busy() {
             return Err(Status::BadState);
         }
         state.mapped = true;
@@ -382,15 +445,29 @@ impl Device {
 
     /// Ends the quarantine, if that is safe (ADR-0070): with no mapping no
     /// process can restart the device, and with no live pin nothing is using
-    /// it, so a reset the kernel sees finishes it.
+    /// it, so a reset the kernel sees finishes it. A page and its transport
+    /// devices are one device here (INV-0295-3): a transport's release waits
+    /// for no mapping of its page and no holder of its own; a page's for no
+    /// holder or live pin of any of its transports. Lock order: the page's
+    /// state, then a transport's, held across the reset.
     pub fn release_quarantine(&self) -> Result<(), Status> {
+        let page = if self.by_call {
+            Some(self.page.upgrade().ok_or(Status::BadState)?)
+        } else {
+            None
+        };
+        let page_state = page.as_ref().map(|p| p.state.lock());
+        if page_state.as_ref().is_some_and(|s| s.mapped) {
+            return Err(Status::BadState);
+        }
         let mut state = self.state.lock();
-        if state.mapped || state.live_pins != 0 {
+        if state.mapped || state.claimed || state.live_pins != 0 || self.transports_busy() {
             return Err(Status::BadState);
         }
         self.reset()?;
         let held = core::mem::take(&mut state.quarantine);
         drop(state);
+        drop(page_state);
         drop(held);
         Ok(())
     }
@@ -408,6 +485,23 @@ pub struct DeviceMapping(Arc<Device>);
 impl Drop for DeviceMapping {
     fn drop(&mut self) {
         self.0.state.lock().mapped = false;
+    }
+}
+
+/// A process's hold of a transport device (INV-0295-3), kept in its
+/// address space: it ends when the process holds no handle that can write
+/// the transport, or ends.
+pub struct DeviceClaim(Arc<Device>);
+
+impl DeviceClaim {
+    pub fn device(&self) -> &Arc<Device> {
+        &self.0
+    }
+}
+
+impl Drop for DeviceClaim {
+    fn drop(&mut self) {
+        self.0.state.lock().claimed = false;
     }
 }
 

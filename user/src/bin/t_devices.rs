@@ -252,6 +252,91 @@ fn a_closed_pin_stays_quarantined() {
     memory_unmap(window, PAGE).expect("unmap");
 }
 
+/// Runs `child write-register` on `transport` and gives its exit code.
+fn second_writer(transport: Handle) -> i32 {
+    let image = directory_lookup(DIRECTORY, "child").expect("child");
+    let mut buffer = [0; 512];
+    let mut e = Encoder::new(&mut buffer, JOB, image);
+    e.handle(HandleEntry {
+        slot: 4,
+        handle: transport,
+        rights: Rights::WRITE,
+        transfer: Transfer::Duplicate,
+    });
+    e.arg(b"write-register");
+    let length = e.finish().expect("fits");
+    let child = spawn(&buffer[..length]).expect("spawn");
+    handle_close(image).expect("close");
+    let code = wait_exit(child).code;
+    handle_close(child).expect("close");
+    code
+}
+
+/// INV-0295-3 (review N6 finding 1): a transport and its page are one
+/// device to ADR-0070. A mapping of the page, or a process that wrote a
+/// transport's registers (its holder), could restart it: either refuses
+/// the other, a second holder, and the release of the quarantine.
+fn a_transport_and_its_page_keep_holders_apart() {
+    let (page, range) = find_block_device();
+    let t = device_transport(page, range).expect("transport");
+    // The review's scenario: the page mapped, a pin through the transport
+    // ended without `dma_unpin`, then the transport's release.
+    let (window, _) = device_map(page, range).expect("map");
+    let free = test_call(FREE_FRAMES);
+    let memory = memory_create(PAGE, MemoryFlags::NONE).expect("memory");
+    let mut runs = [[0u64; 2]; 1];
+    let pin = dma_pin(memory, t, &mut runs).expect("pin through the transport");
+    handle_close(memory).expect("close");
+    handle_close(pin).expect("close with no unpin");
+    assert_eq!(test_call(FREE_FRAMES), free - 1, "quarantined");
+    assert_err!(dma_release_quarantine(t), Status::BadState);
+    assert_eq!(
+        test_call(FREE_FRAMES),
+        free - 1,
+        "the mapping could restart it"
+    );
+    // No holder by call while the page is mapped.
+    assert_err!(device_write(t, REG_STATUS, 0), Status::BadState);
+    memory_unmap(window, PAGE).expect("unmap");
+    // A writer is the transport's holder: the page can be neither mapped
+    // nor released, and the transport not released, while it holds it.
+    device_write(t, REG_STATUS, 0).expect("the first write takes the transport");
+    assert_err!(device_map(page, range), Status::BadState);
+    assert_err!(dma_release_quarantine(t), Status::BadState);
+    assert_err!(dma_release_quarantine(page), Status::BadState);
+    assert_eq!(test_call(FREE_FRAMES), free - 1);
+    // The hold ends with the holder's last handle to the transport.
+    let copy = handle_duplicate(t, Rights::DMA.union(Rights::WRITE)).expect("copy");
+    handle_close(t).expect("close");
+    assert_err!(dma_release_quarantine(copy), Status::BadState);
+    handle_close(copy).expect("close");
+    let t = device_transport(page, range).expect("transport");
+    dma_release_quarantine(t).expect("release");
+    assert_eq!(test_call(FREE_FRAMES), free, "the frame came back");
+    // A live pin through the transport refuses the page's mapping and
+    // release.
+    let memory = memory_create(PAGE, MemoryFlags::NONE).expect("memory");
+    let pin = dma_pin(memory, t, &mut runs).expect("pin");
+    assert_err!(device_map(page, range), Status::BadState);
+    assert_err!(dma_release_quarantine(page), Status::BadState);
+    dma_unpin(pin).expect("unpin");
+    handle_close(memory).expect("close");
+    // Two holders are kept apart: a second process's write is refused
+    // while this one holds the transport, and allowed once it does not.
+    device_write(t, REG_STATUS, 0).expect("hold");
+    assert_eq!(second_writer(t), 1, "a second holder is refused");
+    handle_close(t).expect("close");
+    let t = device_transport(page, range).expect("transport");
+    assert_eq!(second_writer(t), 0, "with no other holder it writes");
+    // The child's hold ended with it.
+    dma_release_quarantine(t).expect("release");
+    let (window, _) = device_map(page, range).expect("map");
+    memory_unmap(window, PAGE).expect("unmap");
+    // A transport device's handle has no `MAP` at all.
+    assert_err!(handle_duplicate(t, Rights::MAP), Status::AccessDenied);
+    handle_close(t).expect("close");
+}
+
 /// INV-0054-3: a driver that dies with a pin leaves its frames unreallocated.
 fn a_dead_holder_leaves_its_frames_quarantined() {
     let (device, _) = find_block_device();
@@ -372,6 +457,7 @@ fn transport_devices() {
 fn main() -> i32 {
     maps_a_device();
     transport_devices();
+    a_transport_and_its_page_keep_holders_apart();
     takes_an_interrupt();
     pins_and_unpins();
     refusals();

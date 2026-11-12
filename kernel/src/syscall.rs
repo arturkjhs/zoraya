@@ -286,8 +286,29 @@ impl Handlers for Calls<'_> {
     }
 
     fn handle_close(&mut self, handle: Handle) -> Result<u64, Status> {
-        let entry = self.process.handles.lock().remove(handle);
-        object::close(entry.ok_or(Status::BadHandle)?);
+        let mut handles = self.process.handles.lock();
+        let entry = handles.remove(handle).ok_or(Status::BadHandle)?;
+        // INV-0295-3: the hold of a transport device ends with the last
+        // handle that can write it. A process has one thread, so nothing
+        // adds a handle meanwhile.
+        let released = match &entry.object {
+            Object::Device(device) => !handles.entries().any(|(_, e)| {
+                e.rights.contains(Rights::WRITE)
+                    && matches!(&e.object, Object::Device(d) if Arc::ptr_eq(d, device))
+            }),
+            _ => false,
+        };
+        drop(handles);
+        if released && let Object::Device(device) = &entry.object {
+            let claim = self
+                .process
+                .space
+                .lock()
+                .as_mut()
+                .and_then(|s| s.let_go(device));
+            drop(claim);
+        }
+        object::close(entry);
         Ok(0)
     }
 
@@ -903,7 +924,11 @@ impl Handlers for Calls<'_> {
             return Err(Status::BadHandle);
         };
         let transport = device.transport(index.0)?;
-        self.insert(Object::Device(transport), DeviceObject::RIGHTS)
+        // No `MAP`: a transport device is never mapped (INV-0295-3).
+        self.insert(
+            Object::Device(transport),
+            DeviceObject::RIGHTS.without(Rights::MAP),
+        )
     }
 
     /// ADR-0295: a register of a transport device. The offset is the
@@ -920,7 +945,13 @@ impl Handlers for Calls<'_> {
             return Err(Status::BadHandle);
         };
         let value = u32::try_from(value.0).map_err(|_| Status::InvalidArgument)?;
-        device.write_register(offset.0, value)?;
+        device.check_register(offset.0)?;
+        // The first write makes this process the transport's holder, and a
+        // second holder is refused (INV-0295-3). A process has one thread.
+        let mut space = self.process.space.lock();
+        let space = space.as_mut().ok_or(Status::BadState)?;
+        let held = space.hold(&device)?;
+        device.write_register(held, offset.0, value)?;
         Ok(0)
     }
 

@@ -13,7 +13,7 @@ use super::phys_to_virt;
 use super::{frames, heap};
 use crate::arch::mmu;
 use crate::charge::Paid;
-use crate::device::DeviceMapping;
+use crate::device::{Device, DeviceClaim, DeviceMapping};
 use crate::job::Job;
 use crate::reaper;
 use crate::steps::{self, STEP};
@@ -197,6 +197,9 @@ pub struct AddressSpace {
     memory: UserMemory,
     /// By address.
     mappings: Vec<Mapping>,
+    /// The transport devices this process holds (INV-0295-3): one entry
+    /// each, ended when it holds no handle that can write one, or ends.
+    claims: Vec<DeviceClaim>,
 }
 
 impl AddressSpace {
@@ -258,6 +261,7 @@ impl AddressSpace {
                 table,
                 memory,
                 mappings: Vec::new(),
+                claims: Vec::new(),
             }),
             Err(_) => {
                 let failure = memory.failure();
@@ -443,6 +447,36 @@ impl AddressSpace {
     /// Takes the last mapping off the list and gives its holder, for an exit
     /// that drops them in steps. The pages stay in the table, which nothing
     /// runs on again: the table goes with the space.
+    /// Makes this process the holder of transport device `device`, if it
+    /// is not already (INV-0295-3).
+    pub fn hold(&mut self, device: &Arc<Device>) -> Result<&DeviceClaim, Status> {
+        let at = match self
+            .claims
+            .iter()
+            .position(|c| Arc::ptr_eq(c.device(), device))
+        {
+            Some(at) => at,
+            None => {
+                // Not charged, as a pin is not (ADR-0261 point 6): a
+                // driver's, and at most one per transport device, which are
+                // fixed at boot.
+                self.claims.try_reserve(1).map_err(|_| Status::NoMemory)?;
+                self.claims.push(device.claim()?);
+                self.claims.len() - 1
+            }
+        };
+        Ok(&self.claims[at])
+    }
+
+    /// Ends this process's hold of `device`, if it has one.
+    pub fn let_go(&mut self, device: &Arc<Device>) -> Option<DeviceClaim> {
+        let at = self
+            .claims
+            .iter()
+            .position(|c| Arc::ptr_eq(c.device(), device))?;
+        Some(self.claims.swap_remove(at))
+    }
+
     pub fn pop_mapping(&mut self) -> Option<Holder> {
         self.mappings.pop().map(|m| m.holder)
     }

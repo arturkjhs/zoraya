@@ -20,7 +20,7 @@ use zoraya_virtio::queue::{Page, Transport, identify};
 use zoraya_virtio::{DEVICE_BLOCK, DEVICE_GPU, DEVICE_INPUT, DEVICE_NET, reg};
 
 use crate::dup;
-use crate::stack::{DRIVER_RIGHTS, console, end_job, moved, start};
+use crate::stack::{console, driver_rights, end_job, moved, start};
 
 /// Restarts allowed for each driver, and for the session (ADR-0097).
 pub const MAX_RESTARTS: u32 = 3;
@@ -156,7 +156,11 @@ impl Running {
 pub fn start_driver(name: &str, device: (Handle, u32)) -> Option<(Running, Handle)> {
     let (ours, theirs) = channel_create().ok()?;
     let digits = [b'0' + device.1 as u8];
-    let entries = [console(), dup(5, device.0, DRIVER_RIGHTS), moved(6, theirs)];
+    let entries = [
+        console(),
+        dup(5, device.0, driver_rights(device.0)),
+        moved(6, theirs),
+    ];
     match start(name, &entries, &[&digits]) {
         Some((job, process)) => Some((Running { job, process }, ours)),
         None => {
