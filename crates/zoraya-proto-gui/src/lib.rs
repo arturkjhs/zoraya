@@ -530,8 +530,10 @@ pub const MAX_CLIPBOARD: usize = 32 * 1024;
 pub const MAX_DROPPED_NAME: usize = 64;
 pub const MAX_ROOMS_TEXT: usize = 3072;
 pub const MAX_DOCK_TEXT: usize = 1024;
-/// The longest `SetUsage` text: 33 readings of about 110 bytes.
-pub const MAX_USAGE_TEXT: usize = 4096;
+/// The longest `SetUsage` text: 33 readings of at most 258 bytes with their
+/// newline (`zoraya_settings::usage::MAX_USAGE_WIRE`; the panel's tests check
+/// this is at least that).
+pub const MAX_USAGE_TEXT: usize = 33 * 258;
 
 #[cfg(test)]
 extern crate std;

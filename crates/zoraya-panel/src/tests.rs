@@ -596,3 +596,12 @@ fn without_a_keeper_the_line_is_written_and_kept() {
     assert_eq!(r, Ok(()));
     assert_ne!(*file.borrow(), ROOMS);
 }
+
+/// The wire's caps are the worst case of what the panel sends (Q6b review):
+/// `to_wire` leaves no room out for want of space.
+#[test]
+fn the_wire_caps_hold_the_longest_readings_and_rows() {
+    use zoraya_settings::usage::{MAX_ROWS_WIRE, MAX_USAGE_WIRE};
+    assert!(zoraya_proto_gui::MAX_USAGE_TEXT >= MAX_USAGE_WIRE);
+    assert!(zoraya_proto_chooser::MAX_ROOMS_REPLY >= MAX_ROWS_WIRE);
+}

@@ -350,3 +350,57 @@ fn a_limit_is_changed_in_the_table_as_room_set_would() {
     let thin = b"a --untrusted --mem 8M +w ~/s\n";
     assert!(with_limit(thin, "a", "--mem", "9M").is_err());
 }
+
+fn worst_reading(i: usize) -> Reading {
+    Reading {
+        // 24 bytes, the longest name (`rooms::MAX_NAME`), distinct.
+        name: alloc::format!("{:a<22}{:02}", "r", i),
+        running: true,
+        untrusted: true,
+        mem_used: u64::MAX,
+        mem_limit: Some(u64::MAX),
+        mem_refused: u64::MAX,
+        procs_used: u64::MAX,
+        procs_limit: Some(u64::MAX),
+        procs_refused: u64::MAX,
+        cpu_permille: Some(u64::MAX),
+        cpu_pct: Some(u64::MAX),
+        disk_limit: Some(u64::MAX),
+        conns_limit: Some(u64::MAX),
+        tmp_limit: Some(u64::MAX),
+    }
+}
+
+/// The caps of the wire are the worst case, not a typical one: every
+/// reading of the 33 at its longest still fits whole, so `to_wire` never
+/// drops the last rooms.
+#[test]
+fn the_longest_readings_and_rows_fit_their_caps() {
+    let r = worst_reading(0);
+    assert_eq!(r.name.len(), crate::rooms::MAX_NAME);
+    assert_eq!(r.to_wire().len(), MAX_READING_LINE);
+    let all: Vec<Reading> = (0..MAX_READINGS).map(worst_reading).collect();
+    let text = to_wire(&all, MAX_USAGE_WIRE);
+    assert_eq!(text.lines().count(), MAX_READINGS);
+    assert_eq!(text.len(), MAX_USAGE_WIRE);
+    assert_eq!(from_wire(&text), Some(all.clone()));
+
+    let row = |r: &Reading| RoomRow {
+        name: r.name.clone(),
+        untrusted: true,
+        limits: Limits {
+            mem: Some(u64::MAX),
+            cpu: Some(u32::MAX),
+            procs: Some(u32::MAX),
+            disk: Some(u64::MAX),
+            conns: Some(u32::MAX),
+            tmp: Some(u64::MAX),
+        },
+        reading: Some(r.clone()),
+    };
+    let rows: Vec<RoomRow> = all.iter().map(row).collect();
+    assert!(rows[0].to_wire().len() <= MAX_ROW_LINE);
+    let text = rows_to_wire(&rows, MAX_ROWS_WIRE);
+    assert_eq!(text.lines().count(), MAX_READINGS);
+    assert!(text.len() <= MAX_ROWS_WIRE);
+}

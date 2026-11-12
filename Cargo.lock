@@ -711,7 +711,9 @@ dependencies = [
 name = "zoraya-panel"
 version = "0.1.0"
 dependencies = [
+ "zoraya-proto-chooser",
  "zoraya-proto-file",
+ "zoraya-proto-gui",
  "zoraya-settings",
  "zoraya-test-alloc",
 ]

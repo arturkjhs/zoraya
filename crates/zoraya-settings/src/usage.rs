@@ -23,6 +23,18 @@ pub const NEAR_PERCENT: u64 = 90;
 pub const MIN_INTERVAL_NS: u64 = 1_000_000_000;
 /// Readings on the wire: the rooms of the file and `home`.
 pub const MAX_READINGS: usize = 33;
+/// The longest line of [`Reading::to_wire`]: the name, the flags and eleven
+/// numbers of at most 20 digits (`u64::MAX`), each after a space.
+pub const MAX_READING_LINE: usize = crate::rooms::MAX_NAME + 2 + 11 * 21;
+/// The longest `SetUsage` text: every reading at its longest. The wire's
+/// cap (`zoraya_proto_gui::MAX_USAGE_TEXT`) is at least this, so that
+/// [`to_wire`] never leaves a room out (checked in `zoraya-panel`).
+pub const MAX_USAGE_WIRE: usize = MAX_READINGS * (MAX_READING_LINE + 1);
+/// The longest [`RoomRow`] line: the name, the row's flag, six limit words
+/// of at most 8 + 1 + 20 bytes and a space, and the reading, between tabs.
+pub const MAX_ROW_LINE: usize = crate::rooms::MAX_NAME + 3 + 1 + 6 * 30 + 1 + MAX_READING_LINE;
+/// The longest `RoomsReply` text: every row at its longest.
+pub const MAX_ROWS_WIRE: usize = MAX_READINGS * (MAX_ROW_LINE + 1);
 
 /// One room's limits and use at one moment. `None` is a word the room does
 /// not have, or a use nobody reports (disk and connections, until the

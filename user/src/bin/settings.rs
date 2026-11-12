@@ -88,7 +88,7 @@ fn announce(panel: Handle) -> bool {
 /// wait the panel's own work needs (a limit written and applied).
 fn call_panel(panel: Handle, request: &[u8]) -> Option<vec::Vec<u8>> {
     channel_write(panel, request, &[]).ok()?;
-    let mut bytes = vec![0u8; 8192];
+    let mut bytes = vec![0u8; pc::MAX_ROOMS_REPLY + 256];
     let mut handles = [panel; 1];
     loop {
         match channel_read(panel, &mut bytes, &mut handles) {

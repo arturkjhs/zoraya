@@ -26,8 +26,10 @@ pub const MAX_FILTERS: usize = 128;
 pub const MAX_NAME: usize = 255;
 /// The longest grant words (`+r ~/project/plán.txt edit`).
 pub const MAX_WORDS: usize = 512;
-/// The longest `RoomsReply`: 33 rooms of about 150 bytes.
-pub const MAX_ROOMS_REPLY: usize = 6144;
+/// The longest `RoomsReply`: 33 rows of at most 467 bytes with their newline
+/// (`zoraya_settings::usage::MAX_ROWS_WIRE`; the panel's tests check this is
+/// at least that).
+pub const MAX_ROOMS_REPLY: usize = 33 * 467;
 
 /// What an entry gives, in ADR-0153's kinds (the subset the chooser makes).
 pub mod kind {

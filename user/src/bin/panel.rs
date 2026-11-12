@@ -42,7 +42,7 @@ const ROOMS: &str = "config/rooms";
 const _: () = assert!(zoraya_panel::MAX_ROOMS_TEXT == gui::MAX_ROOMS_TEXT);
 
 fn send<'a, M: Message<'a>>(manager: Handle, m: &M, handle: Option<Handle>) -> bool {
-    let mut out = alloc::vec![0u8; 8192];
+    let mut out = alloc::vec![0u8; 16384];
     let Ok(n) = encode(m, NO_REPLY, &mut out) else {
         if let Some(h) = handle {
             let _ = handle_close(h);
