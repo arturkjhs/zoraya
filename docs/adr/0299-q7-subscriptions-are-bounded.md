@@ -60,6 +60,13 @@ counted in units (the `Paid` drops take the charge lock and walk at most 32 ance
   64 ports of 1024 subscriptions were about 20 ms masked on the host (review of the fixes, error 4). `object::weight` now counts
   a port's subscriptions, and those of the source of any other object, one unit per 16 (a full port is a whole step), so
   the exit pauses between them; `t_bound` `full-ports` closes 64 ports and 64 jobs, each with 1024 subscriptions.
+- **Shared bound.** The per-source bound is shared by every observer of the source, so a process that holds a job handle (a
+  POSIX process holds its own job) can subscribe 1024 times and make every other `port_subscribe` to that job fail with
+  `LimitReached` (review of the fixes, warning 5). Not prevented: an owner or per-holder bound could be bypassed by
+  duplicating the handle, and a reserve for the broker would need the kernel to tell it from other holders. What is done
+  instead is that an observer must handle the refusal: the broker polls (every 100 ms, `Server::polled`) a job it could not
+  subscribe to instead of ignoring the error, which left a record that nothing ended. Other services that watch a job
+  from outside must do the same. A holder can still deny a source to others for as long as it holds its 1024.
 - **Follow-up.** Count the 1024 as units if a measurement under HVF shows the close near 2 ms.
 
 ## Invariants

@@ -36,10 +36,10 @@ use zoraya_proto_tty as tp;
 use zoraya_protocol::{Header, MAX_WIRE_MESSAGE, Message, NO_REPLY, decode, encode};
 use zoraya_user::files::{File, read_all};
 use zoraya_user::{
-    channel_create, channel_read, channel_write, directory_lookup, handle_close, handle_duplicate,
-    handle_type, image_create, job_create, job_kill, job_resume, job_signal, job_suspend,
-    memory_create, memory_map, memory_unmap, object_get_signals, port_create, port_subscribe,
-    port_unsubscribe, port_wait, println, process_exit_record, spawn, startup,
+    channel_create, channel_read, channel_write, clock_monotonic, directory_lookup, handle_close,
+    handle_duplicate, handle_type, image_create, job_create, job_kill, job_resume, job_signal,
+    job_suspend, memory_create, memory_map, memory_unmap, object_get_signals, port_create,
+    port_subscribe, port_unsubscribe, port_wait, println, process_exit_record, spawn, startup,
 };
 
 const ROOT: u32 = 5;
@@ -405,7 +405,14 @@ struct Server {
     queued: Vec<(u32, u32)>,
     transaction: u32,
     out: Vec<u8>,
+    /// Jobs whose `TERMINATED` could not be subscribed (the source already
+    /// has as many subscriptions as it may, ADR-0299, which any holder of
+    /// the job can use up), looked at every [`POLL_MS`] instead.
+    polled: Vec<(u32, Handle)>,
 }
+
+/// How often the jobs in [`Server::polled`] are looked at.
+const POLL_MS: u64 = 100;
 
 impl Server {
     fn act(&mut self, core: &mut Broker<Rt>, actions: Vec<Action<Handle>>) {
@@ -460,11 +467,18 @@ impl Server {
                 }
                 Action::WatchJob { pid, job } => {
                     let key = KEY_JOB + u64::from(pid);
-                    let _ =
-                        port_subscribe(self.port, job, job_signals::TERMINATED, key, Mode::Level);
+                    // A refusal (`LimitReached`: a process holding the job
+                    // filled its source's subscriptions, ADR-0299) must not
+                    // leave a record that nothing ends: the job is polled.
+                    if port_subscribe(self.port, job, job_signals::TERMINATED, key, Mode::Level)
+                        .is_err()
+                    {
+                        self.polled.push((pid, job));
+                    }
                 }
                 Action::UnwatchJob { pid } => {
                     let _ = port_unsubscribe(self.port, KEY_JOB + u64::from(pid));
+                    self.polled.retain(|&(p, _)| p != pid);
                 }
                 Action::Foreground { group, job } => self.foreground(group, job),
             }
@@ -569,6 +583,7 @@ fn main() -> i32 {
         queued: Vec::new(),
         transaction: 0,
         out: vec![0; MAX_WIRE_MESSAGE],
+        polled: Vec::new(),
     };
     let mut core = Broker::new(Rt, session_job, !no_shell);
     let wanted = channel_signals::READABLE | channel_signals::PEER_CLOSED;
@@ -665,8 +680,32 @@ fn main() -> i32 {
             return 0;
         }
         let mut packets = [Packet::default()];
-        if port_wait(port, DEADLINE_INFINITE, &mut packets).is_err() {
-            return 1;
+        let deadline = if server.polled.is_empty() {
+            DEADLINE_INFINITE
+        } else {
+            clock_monotonic() + POLL_MS * 1_000_000
+        };
+        match port_wait(port, deadline, &mut packets) {
+            Ok(_) => {}
+            Err(Status::DeadlineExceeded) => {
+                // The jobs that could not be subscribed to.
+                let ended: Vec<u32> = server
+                    .polled
+                    .iter()
+                    .filter(|&&(_, job)| {
+                        object_get_signals(job)
+                            .map_or(true, |bits| bits & job_signals::TERMINATED != 0)
+                    })
+                    .map(|&(pid, _)| pid)
+                    .collect();
+                for pid in ended {
+                    server.polled.retain(|&(p, _)| p != pid);
+                    let actions = core.terminated(pid);
+                    server.act(&mut core, actions);
+                }
+                continue;
+            }
+            Err(_) => return 1,
         }
         let key = packets[0].key;
         if key == KEY_CONTROL {
