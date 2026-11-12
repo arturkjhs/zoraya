@@ -64,8 +64,9 @@ struct Sys {
 }
 
 impl Sys {
-    fn add(&mut self, h: Handle) -> JobId {
-        let id = match self.jobs.iter().position(Option::is_none) {
+    /// Keeps `h` under a job id, in the first free place.
+    fn insert(&mut self, h: Handle) -> JobId {
+        let i = match self.jobs.iter().position(Option::is_none) {
             Some(i) => {
                 self.jobs[i] = Some(h);
                 i
@@ -75,7 +76,12 @@ impl Sys {
                 self.jobs.len() - 1
             }
         };
-        let id = id as JobId + 1;
+        i as JobId + 1
+    }
+
+    /// A room's job, or the untrusted job: kept and watched for `OVER_QUOTA`.
+    fn add(&mut self, h: Handle) -> JobId {
+        let id = self.insert(h);
         let _ = port_subscribe(
             self.port,
             h,
@@ -114,8 +120,7 @@ impl Env for Sys {
         let job = job_create(parent, JobFlags::NONE)?;
         // Not subscribed: the keeper watches the room's job, whose counters
         // include this one's.
-        self.jobs.push(Some(job));
-        Ok(self.jobs.len() as JobId)
+        Ok(self.insert(job))
     }
 
     fn set_limits(&mut self, job: JobId, limits: &JobLimits) -> Result<(), Status> {

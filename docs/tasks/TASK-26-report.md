@@ -1064,3 +1064,119 @@ in a host test) or `zoraya-tls`. No mutation run.
 8. The test roots carry `nameConstraints=permitted;DNS:.zoraya` (PKI regenerated); `tests/net/tls/README.md` says the keys are public.
 9. Limitation recorded (not fixed): a console shell, or a granted `fetch URL -o /system/tls/roots`, can replace `/system/tls/roots`. INV-0227-2's text says the check covers `mix` only. `tools/test-map.txt` has lines for `zoraya-tls`, `zoraya-rng`, `vendor/`, `rngd`; `device.rs` uses `checked_add`.
 Not done: the differential property test of `pem.rs` against rustls's PEM parser.
+
+## Q6a: the rooms keeper and the room line (branch `work/q6a`, on `main` at 1be11a1)
+
+### Built
+
+- **Step 0 (disk).** 42 GB free at the start (the task's threshold is 25 GB): nothing removed; the ports archives (15 MB) were copied from the
+  orchestrator's `build/ports/src` into this worktree, read only, so that `make test-changed` has them.
+- **The room's line** (`crates/zoraya-settings/src/rooms.rs`; ADR-0266 points 1, 3, 5, 8): `Limits` (the six words), `parse_size` and
+  `format_size` (K, M, G, 1024-based), `Machine` and `Ceilings` (the session's and the untrusted job's), `fill_defaults` (point 3's table,
+  tested on both guest sizes), `Limits::set` (`none` for a trusted room only, `--tmp` for untrusted only), `check_within`
+  (`--mem 512M: above the untrusted rooms' 178M`), `replace` (one line rewritten, every other byte kept), and the quota hint's pure
+  part (`refused_field`, `quota_hint`). 9 new host tests.
+- **The protocol** (`crates/zoraya-proto-rooms`): `Launch`, `Leave`, `Set`, `Usage`, `Report`, `Stop`, `Open` and their replies
+  (`Launched`, `Done`, `Denied`, `UsageList`, `Opened`), the unasked `Refused`, `Keep`, `Forget` and `Attach` between `init` and the
+  keeper; `ChannelKind` (`Manage(Desktop|Console)`, `Room(R)`, `Usage`); a 192-byte `UsageRecord` that holds a room's use, its six limit
+  words and four service reports. 6 host tests (every message round-trips and decodes totally).
+- **The decisions** (`crates/zoraya-rooms`, 20 host tests over a model of the kernel's jobs): the three channel kinds and what each may
+  send (INV-0269-2), one job per room, launch jobs without `LIMIT`, the untrusted job (ADR-0266 point 4), at most four untrusted rooms,
+  one `Manage` holder at a time with a lease, idle rooms let go after 5 s, `Set` with the ceilings checked also for a room that does not
+  run, `Stop`, `Report`, `home` as a trusted room without limits under the session job, a restarted keeper (`resume`) and the notices of
+  `Refused`.
+- **The process** (`user/src/bin/rooms.rs`): the `Env` over the kernel (jobs, limits, usage, `OVER_QUOTA` subscriptions), `/config/rooms`
+  read through a connection, channels served from `init`'s `Attach`, `Keep` and `Forget` to `init`.
+- **`init`** (`user/src/bin/init.rs`, `user/src/gui.rs`): starts the keeper with the volume (session job, start-up channel, `/config`),
+  attaches a `Manage` channel for the panel (its slot 8) and for the console shell (slot 11), keeps the jobs the keeper sends and restarts it
+  up to three times with them, and answers a launcher's request on its reconnect channel (panel slot 9, shell slot 12) with a new channel.
+- **The launchers.** The panel (`user/src/bin/panel.rs`) asks the keeper for a launch job before anything else of a launch, spawns the
+  programs under it (`spawn_program(parent, ...)`), starts a terminal's broker in it (`beside::start_broker_in`) and gives the shell of a
+  room a `Room(R)` channel (`Give::Keeper`, slot 11, minted by `Open`); it sends `Leave` after the spawn. `zosh` asks for a launch job when it
+  enters a room and runs every line under it; `room --leave`, `room remove` and entering another room give it back.
+- **The shell** (`user/src/bin/zosh.rs`, `user/describe/builtins/room.cmd`): `room new NAME [--mem ...] GRANT...`, `room set NAME WORD VALUE...`
+  (writes the line, asks the keeper, puts the old line back if refused; `--disk` on the `+w` directories), `room remove NAME --kill`,
+  `room` lists the limits after the trust, `grants` ends with the room's `limits ...  (room NAME)` from the keeper's record, and one
+  hint per line naming the field and the room.
+- **Tests.** `t_rooms` (QEMU, `make test-qemu`; the real keeper under a session job the test makes, the test standing in for `init`);
+  `tests/shell/rooms.script` (QEMU, `make test-files`; the real `init`, the console shell and `memhog`, a new test program that maps
+  memory until its job refuses).
+- **Documents.** ADR-0293 (proposed), `docs/design.md` ("Rooms with limits and the room keeper"), the invariants table, the gate list
+  (`keeper` and `many-rooms` are `test-qemu` now), `tools/test-map.txt`.
+
+### Decisions where the ADRs are silent (proposed ADR-0293; recommendations)
+
+1. `Open` (request 7, `Manage` only) mints a `Room(R)` or `Usage` channel, so the panel can give each shell in a room its own. Recommend: accept.
+2. `Leave` and a lease for an untrusted room: busy while another `Manage` channel holds a launch job it has not given back or the room has
+   a process. The holder's closed channel gives the lease up. Recommend: accept.
+3. `init` keeps duplicates (`Keep`/`Forget`) and gives launchers a reconnect channel; the ADR's "services channel" did not exist.
+4. `home` is a room the keeper serves (launch jobs under the session job, no limits): the panel's `home` launches were outside the session
+   job until now (the orchestrator's open item). The console shell in `home` still launches in its own job, which `init` made under the session.
+5. The keeper checks every ceiling (at `Launch` and `Set`, also for a room that does not run); the shell checks syntax only. `room set`
+   writes first and rolls back on refusal, so the two cannot disagree.
+6. The hint reads the room's refusal counters from `Usage` at the end of each line (synchronous, no race with the notice); `Refused`
+   notices are sent for Q6b's pills. At most one hint per line.
+7. `--disk` is set by the shell on the room's `+w` directories through `SetLimit` (ADR-0292 option A). Option B (a `LIMIT` right) is for Q7.
+8. Idle rooms are let go after 5 s (`IDLE_MS`), which is what lets a fifth untrusted room run after one has ended.
+
+### Where a program-controlled number enters, and where it is checked (for the reviewer)
+
+- A room name arrives on a channel: `Text<24>` on the wire, `RoomName::new` for a `Room(R)` kind, a lookup in `/config/rooms` for a name
+  that is not running (`is_room_name` is the file reader's rule). A `Room(R)` channel is compared with R before any message is acted on.
+- A `Launch` from an untrusted room's own shell creates a job whose record is charged to the room (`Job::charge_record` charges the job
+  and its ancestors), so a flood stops at the room's memory limit (OverQuota becomes `Denied(KERNEL)`); the reply is a queued message on a
+  channel the keeper writes (a channel that is full or closed is dropped by the keeper).
+- Limits come from the line (`parse_size` bounds the digits and `checked_mul`; counts 1 to 1,000,000; `--cpu` 1 to 100%), are checked
+  against the parent's ceilings by `check_within`, and by the kernel again (`job_set_limits`, INV-0261-3).
+- `Report` counts are stored as given (they are the launcher's own account); `Usage` copies them out unchanged.
+
+### Invariants delta
+
+INV-0261-8, INV-0263-4, INV-0266-1, INV-0266-2, INV-0269-2: checked (`make test-unit`, `make test-qemu`, `make test-files` as the rows say).
+INV-0269-1 and -3: checked at the keeper's channels in `t_rooms` (the test stands in for `init`; the GUI form of -1 and `init`'s own
+restart path are not run). INV-0266-3 stays open for the compositor's hover card (Q6b); INV-0265-3 and -4 and INV-0268-3 stay open (the
+room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts unchanged (the table has 518 rows).
+
+### Tests run (this session)
+
+- `cargo test -p zoraya-settings` (27), `-p zoraya-proto-rooms` (6), `-p zoraya-rooms` (20), `-p zoraya-panel` (14): pass.
+- `make test-qemu-one` (HVF, the test kernel, all tests including `t_rooms`): pass; `t_rooms` prints each invariant's line.
+- `tests/shell/rooms.script` through the runner against the real kernel and `init`: PASS, 48 steps, `zoraya-fsck` clean.
+- `make check`: pass (clippy and fmt included, `adr-check` 0 errors).
+- `make test-changed`: see the line at the end of this section.
+
+### Measurements (HVF, one run, `t_rooms`)
+
+- The keeper's round trip per `Launch` (`home`, average of 50, request, launch job and reply): 24 us.
+- Four untrusted rooms at `--mem 8M --procs 12` (a fork bomb and a hog each): each stopped at 8183 of 8192 KiB with 5 processes (the memory
+  limit came first; the process limit is `t_quota`'s test), refused 6 to 7 times; a `home` program then started 16 processes and mapped 16 MiB
+  in the session job (64 MiB, of which the untrusted job holds 32).
+- `memhog` in a room at `--mem 64M` on the 128 MiB console guest: refused after 63,872 KiB; the session's ceiling there is 71,100K, so
+  `room set agent-1 --mem 90G` is refused with `above the session's 71100K`.
+
+### Not done
+
+- **The GUI tests**: INV-0269-1's GUI form (a terminal from the dock and the console's shell in one job) and INV-0264-3's GUI half
+  (`cpu-spinners`), which need a dock room with limits; the `cpu-spinners` and `disk-filler` gate rows stay `pending`.
+- **An untrusted room's `/tmp`** (`--tmp`, a `tmpd` in the room's job per shell, ADR-0265 point 7) and the console shell's own broker and
+  `tmpd` in an untrusted room's job (INV-0268-3). `+w` directories only and no `+net` in untrusted lines (ADR-0268 point 7): the line reader
+  has no network words, and `room new --untrusted` is refused whole by the gate before any line is built.
+- **The quota hint through `Refused` notices** and the rooms overview's form and hover card (Q6b).
+- **A run of `init`'s keeper restart and of the reconnect channel in QEMU** (the logic is tested through `t_rooms`' stand-in for `init`).
+- **A POSIX session** (`/etc/zoraya/session`) gets no keeper channel.
+- **Mutation testing** of `zoraya-rooms` (not run: the budget went to the integration; the crate is small and `mutants-host` is the
+  next step before the merge).
+
+### Handoff
+
+- State: branch `work/q6a` from `main` at 1be11a1, pushed; no candidate tag (the review comes first).
+- For the reviewer (a trust boundary and `init`): `crates/zoraya-rooms/src/lib.rs` (`handle`, `launch`, `set`, `collect_idle`,
+  `refusals`), `crates/zoraya-proto-rooms/src/lib.rs`, `user/src/bin/rooms.rs` (`Sys`, `serve`, `read_init`, the startup loop),
+  `user/src/bin/init.rs` (`start_rooms`, `RoomKeeper`, `answer_reconnect`, the arms for `KEY_ROOMS*`), `user/src/roomsclient.rs`
+  (`rebind`, `once`), `user/src/bin/panel.rs` (`launch`), `user/src/bin/zosh.rs` (`join_room_job`, `leave_room_job`, `room_set`,
+  `quota_hint`), `crates/zoraya-settings/src/rooms.rs` (`Limits`, `replace`), `user/src/bin/t_rooms.rs`, ADR-0293.
+- Review questions: (1) a `Room(R)` channel can call `Launch` without end: is the charge to the room (job record) enough, or should the
+  keeper count launch jobs per channel? (2) The lease: is "busy while leased or has processes" right when a launcher dies holding a launch
+  job? (3) `Keep` sends a duplicate of the untrusted job with `LIMIT` to `init`; `init` holds it for ever: is that more authority than ADR-0269 point 5 intends? (4) The panel falls
+  back to its own job when the keeper does not answer (a trusted room only): acceptable, or should it refuse? (5) `reconnect`: `init` hands a
+  `Manage` channel to whoever writes on a launcher's reconnect channel, which only the launcher holds.

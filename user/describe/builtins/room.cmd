@@ -3,9 +3,9 @@ summary  list, enter, make or remove rooms
 usage    room
 usage    room NAME
 usage    room --leave
-usage    room new NAME [--mem SIZE] [--cpu PCT] [--procs N] [--disk SIZE] [--conns N] GRANT...
-usage    room set NAME --mem SIZE --cpu PCT --procs N --disk SIZE --conns N --tmp SIZE
-usage    room remove NAME [--kill]
+usage    room new NAME GRANT...
+usage    room set NAME WORD VALUE...
+usage    room remove NAME
 operand  [WORDS...]  text  a room to enter, or new or remove and their words
 option   --leave           go back to home
 option   --untrusted       with new: an untrusted room (refused until quotas, ADR-0056)
