@@ -13,19 +13,22 @@ use zoraya_abi::snapshot::Encoder as SnapshotEncoder;
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     CONSOLE, ChannelEntry, DIRECTORY, ExitReason, Handle, JOB, JobFlags, JobObject, MapFlags,
-    MemoryFlags, Mode, OBJECT_TYPES, ObjectType, RequestKind, Rights, Status, job_signals,
+    MemoryFlags, Mode, OBJECT_TYPES, ObjectType, RequestKind, Rights, Status, channel_signals,
+    job_signals,
 };
 use zoraya_user::{
     channel_create, channel_write, clock_monotonic, handle_close, handle_type, image, job_create,
     job_get_usage, job_kill, job_resume, job_signal, job_suspend, memory_create, memory_map,
-    memory_unmap, port_create, port_subscribe, println, process_exit, raw_syscall, sleep_until,
-    snapshot_process, spawn, startup, wait_exit,
+    memory_unmap, object_get_signals, port_create, port_subscribe, println, process_exit,
+    raw_syscall, sleep_until, snapshot_process, spawn, startup, thread_yield, wait_exit,
 };
 
 const MASKED_MAX_NS: u64 = 0x7013;
 const MASKED_MAX_UNITS: u64 = 0x7015;
 const CANCELLED: u64 = 0x7016;
 const HEAP_BACKING: u64 = 0x7017;
+const HEAP_LIVE: u64 = 0x700b;
+const FORCE_SWITCH: u64 = 0x701a;
 const FREE_FRAMES: u64 = 0x7006;
 const DIAGNOSE_UNITS: u64 = 0x7019;
 const PAGE: u64 = 4096;
@@ -657,6 +660,132 @@ fn moved_jobs() -> i32 {
     0
 }
 
+/// The child of `peer_closing_in_a_write`: holds the peer end (slot 3) and
+/// closes it as soon as the flag in the shared page (slot 4) is set. With
+/// `FORCE_SWITCH` the writer's first pause hands it the CPU.
+fn closer() -> i32 {
+    let end = Handle::new(3).expect("slot");
+    let object = Handle::new(4).expect("slot");
+    let at = memory_map(object, 0, PAGE, MapFlags::WRITE).expect("map");
+    let gave_up = clock_monotonic() + 60_000_000_000;
+    // SAFETY: the first word of the page mapped above; the parent writes it.
+    while unsafe { (at as *const u64).read_volatile() } == 0 {
+        if clock_monotonic() > gave_up {
+            return 1;
+        }
+        thread_yield();
+    }
+    handle_close(end).expect("close");
+    0
+}
+
+fn heap_live() -> u64 {
+    raw_syscall(HEAP_LIVE, [0; 6]).1
+}
+
+/// Review round 3, error 1: `channel_write` queues its message right after
+/// `prepare`, with nothing that pauses in between, and the moved handles'
+/// subscriptions end after it. A writer moving heavy jobs and a channel end
+/// pauses at each step (forced to switch here); the peer end is closed by
+/// another process at the first of them. The message either is refused
+/// (`PeerClosed`: the close came first) or was queued before the close and
+/// is drained by it: then the carried end's peer must see `PEER_CLOSED`,
+/// and the heap must return to where it was (nothing queued into a closed
+/// end, never drained). Before the fix the message was queued into the
+/// closed end and the carried end was never closed.
+fn peer_closing_in_a_write() {
+    let room = job_create(JOB, JobFlags::POSIX).expect("room");
+    let mut start = 0;
+    let mut accepted = 0;
+    for round in 0..4 {
+        let page = memory_create(PAGE, MemoryFlags::NONE).expect("page");
+        let at = memory_map(page, 0, PAGE, MapFlags::WRITE).expect("map");
+        let (a, b) = channel_create().expect("channel");
+        let (x, y) = channel_create().expect("carried");
+        let mut buffer = [0; 512];
+        let program = image("t_bound");
+        let mut e = Encoder::new(&mut buffer, room, program);
+        e.handle(console_again());
+        e.handle(HandleEntry {
+            slot: 3,
+            handle: b,
+            rights: rights_of(b),
+            transfer: Transfer::Move,
+        });
+        e.handle(HandleEntry {
+            slot: 4,
+            handle: page,
+            rights: rights_of(page),
+            transfer: Transfer::Duplicate,
+        });
+        e.arg(b"closer");
+        let length = e.finish().expect("room");
+        let process = spawn(&buffer[..length]).expect("spawn closer");
+        handle_close(program).expect("image");
+        let mut entries = alloc::vec::Vec::new();
+        entries.push(ChannelEntry {
+            handle: x,
+            rights: rights_of(x),
+            transfer: Transfer::Move,
+        });
+        let mut ports = alloc::vec::Vec::new();
+        let mut jobs = alloc::vec::Vec::new();
+        for i in 0..4 {
+            let (port, job) = full_pair(1024, i % 2 == 0);
+            ports.push(port);
+            jobs.push(job);
+            entries.push(ChannelEntry {
+                handle: job,
+                rights: rights_of(job),
+                transfer: Transfer::Move,
+            });
+        }
+        raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+        // SAFETY: the first word of the page mapped above; the child reads it.
+        unsafe { (at as *mut u64).write_volatile(1) };
+        let result = channel_write(a, b"", &entries);
+        raw_syscall(FORCE_SWITCH, [0; 6]);
+        match result {
+            Ok(_) => {
+                accepted += 1;
+                let mut tries = 0;
+                while object_get_signals(y).expect("signals") & channel_signals::PEER_CLOSED == 0 {
+                    assert!(
+                        tries < 500,
+                        "round {round}: the carried end's peer is never closed"
+                    );
+                    tries += 1;
+                    nap(10);
+                }
+            }
+            Err(Status::PeerClosed) => {
+                handle_close(x).expect("close");
+                for job in jobs {
+                    handle_close(job).expect("close");
+                }
+            }
+            Err(status) => panic!("round {round}: write: {status:?}"),
+        }
+        assert_eq!(wait_exit(process).code, 0, "round {round}: closer");
+        handle_close(process).expect("close");
+        for h in ports.into_iter().chain([a, y, page]) {
+            handle_close(h).expect("close");
+        }
+        // The first round lets the heap take the room it will use.
+        let mut tries = 0;
+        if round == 0 {
+            start = heap_live();
+        }
+        while heap_live() != start && tries < 200 {
+            nap(10);
+            tries += 1;
+        }
+        assert_eq!(heap_live(), start, "round {round}: heap back");
+    }
+    println!("t_bound: a peer closing during a write: {accepted} of 4 accepted, nothing left");
+    handle_close(room).expect("close");
+}
+
 /// Review error 3 (TASK-26 fix): a job's source with a subscriber on each of
 /// 32 ports, each port holding 1024 entries with the job's at the front of
 /// its sorted list (the worst place to remove from), and the other 1023
@@ -791,6 +920,7 @@ fn inner() -> i32 {
     job_tree_sites();
     subscription_sites();
     many_subscriptions_sites();
+    peer_closing_in_a_write();
     teardown_sites();
     a_kill_between_steps_leaves_nothing();
     println!("t_bound: all passed");
@@ -812,6 +942,7 @@ fn main() -> i32 {
         Some(b"wide-source") => wide_source(),
         Some(b"full-ports") => full_ports(),
         Some(b"moved-jobs") => moved_jobs(),
+        Some(b"closer") => closer(),
         Some(b"inner") => inner(),
         _ => outer(),
     }

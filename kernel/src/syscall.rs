@@ -851,11 +851,12 @@ impl Handlers for Calls<'_> {
             });
         }
         drop(handles);
-        for taken in &moved_out {
-            steps::before(object::weight(taken));
-            object::end_subscriptions(taken);
-        }
         if let Some(status) = failed {
+            // Defensive, unreachable: the entries were validated above under
+            // the same lock, which is still the only way to change them.
+            for taken in &moved_out {
+                object::end_subscriptions(taken);
+            }
             return Err(status);
         }
         // Before the write: the reader holds the handles only after it.
@@ -865,7 +866,18 @@ impl Handlers for Calls<'_> {
             }
         }
         message.handles = carried;
+        // `write` follows `prepare` with nothing that can pause between them
+        // (channel.rs): a pause there lets the peer close, and the message
+        // would be queued into a closed end (review round 3, error 1).
         pair.write(side, message);
+        // Only now the moved entries' subscriptions end, a pause at a time
+        // with no lock held. The old ids are dead (`next_id`), so the order
+        // against the write does not matter.
+        for taken in &moved_out {
+            steps::before(object::weight(taken));
+            steps::count(1);
+            object::end_subscriptions(taken);
+        }
         Ok(0)
     }
 
