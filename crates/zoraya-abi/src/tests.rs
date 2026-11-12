@@ -376,8 +376,8 @@ echo! {
     job_set_limits(job: Handle, limits: Bytes);
     job_get_usage(job: Handle, out: Bytes, flags: UsageFlags);
     device_transport(device: Handle, index: RangeIndex);
-    device_read(device: Handle, offset: Size);
-    device_write(device: Handle, offset: Size, value: Opaque);
+    device_read(device: Handle, offset: Size, width: Size);
+    device_write(device: Handle, offset: Size, value: Opaque, width: Size);
 }
 
 /// INV-0044-1: each number reaches the handler of the name the table gives.

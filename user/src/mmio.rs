@@ -6,7 +6,7 @@
 //! bounds to this one transport.
 
 use zoraya_abi::{Handle, Status};
-use zoraya_rt::{device_map, device_read, device_write};
+use zoraya_rt::{device_map, device_read, device_read_width, device_write, device_write_width};
 use zoraya_virtio::Registers;
 
 /// The registers of one transport.
@@ -54,15 +54,14 @@ impl Registers for Window {
         }
     }
 
-    // The configuration has byte fields: one byte access each when mapped
-    // (virtio 1.2, 4.2.2.2). By call the aligned word is read, and a byte
-    // write writes the word back with the byte changed, as the trait's
-    // default does: right for the devices here, which ignore the others.
+    // The configuration has byte fields: one byte access each, mapped or
+    // by call (virtio 1.2, 4.2.2.2; ADR-0295 item 2).
     fn read8(&self, offset: usize) -> u8 {
         match self {
             // SAFETY: as in `read`; a byte access needs no alignment.
             Window::Mapped(at) => unsafe { ((at + offset as u64) as *const u8).read_volatile() },
-            Window::Call(_) => (self.read(offset & !3) >> (8 * (offset & 3))) as u8,
+            // A refused read gives 0, as in `read`.
+            Window::Call(device) => device_read_width(*device, offset as u64, 1).unwrap_or(0) as u8,
         }
     }
 
@@ -72,13 +71,8 @@ impl Registers for Window {
             Window::Mapped(at) => unsafe {
                 ((*at + offset as u64) as *mut u8).write_volatile(value);
             },
-            Window::Call(_) => {
-                let word = self.read(offset & !3);
-                let shift = 8 * (offset & 3);
-                self.write(
-                    offset & !3,
-                    word & !(0xff << shift) | u32::from(value) << shift,
-                );
+            Window::Call(device) => {
+                let _ = device_write_width(*device, offset as u64, u32::from(value), 1);
             }
         }
     }

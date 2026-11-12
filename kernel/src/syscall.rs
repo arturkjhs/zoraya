@@ -933,25 +933,35 @@ impl Handlers for Calls<'_> {
 
     /// ADR-0295: a register of a transport device. The offset is the
     /// caller's and `Device::read_register` bounds it.
-    fn device_read(&mut self, device: Handle, offset: Size) -> Result<u64, Status> {
+    fn device_read(&mut self, device: Handle, offset: Size, width: Size) -> Result<u64, Status> {
         let Object::Device(device) = self.object(device, Rights::READ)? else {
             return Err(Status::BadHandle);
         };
-        device.read_register(offset.0).map(u64::from)
+        device.read_register(offset.0, width.0).map(u64::from)
     }
 
-    fn device_write(&mut self, device: Handle, offset: Size, value: Opaque) -> Result<u64, Status> {
+    fn device_write(
+        &mut self,
+        device: Handle,
+        offset: Size,
+        value: Opaque,
+        width: Size,
+    ) -> Result<u64, Status> {
         let Object::Device(device) = self.object(device, Rights::WRITE)? else {
             return Err(Status::BadHandle);
         };
-        let value = u32::try_from(value.0).map_err(|_| Status::InvalidArgument)?;
-        device.check_register(offset.0)?;
+        // A value wider than its access is refused, not cut.
+        if width.0 > 4 || value.0 >> (8 * width.0) != 0 {
+            return Err(Status::InvalidArgument);
+        }
+        let value = value.0 as u32;
+        device.check_register(offset.0, width.0)?;
         // The first write makes this process the transport's holder, and a
         // second holder is refused (INV-0295-3). A process has one thread.
         let mut space = self.process.space.lock();
         let space = space.as_mut().ok_or(Status::BadState)?;
         let held = space.hold(&device)?;
-        device.write_register(held, offset.0, value)?;
+        device.write_register(held, offset.0, width.0, value)?;
         Ok(0)
     }
 

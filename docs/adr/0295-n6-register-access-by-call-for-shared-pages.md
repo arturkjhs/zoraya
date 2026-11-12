@@ -43,15 +43,32 @@ choice needs. It changes ADR-0091 only for a page with more than one device.
 
 1. **`device_transport(page, index)`** (call 53) gives a handle to the device of transport `index` of a page. It needs
    `MAP` on the page (the holder of a page may split it), and returns a `Device` object made at boot (ADR-0022), one per
-   transport, with the rights of a device handle. Asking a transport device for a transport, or for a mapping, is
-   `AccessDenied`; an index with no range is `InvalidArgument`.
-2. **`device_read(device, offset)`** (call 54, `READ`) and **`device_write(device, offset, value)`** (call 55, `WRITE`) read
-   and write a 32-bit register of a transport device. The offset must be a multiple of 4 and its word inside the
-   transport's block (the device tree's size, at most 0x200 bytes); else `InvalidArgument`. A value above `u32::MAX` is
-   `InvalidArgument`, not cut. A page device has no register calls (`AccessDenied`). The offset argument is a `Size`
-   and the value an `Opaque`, which the ABI's allow list (INV-0045-1) now lists by name for these two calls.
+   transport, with the rights of a device handle less `MAP` (N6 review, finding 1). Asking a transport device for a
+   transport, or for a mapping, is `AccessDenied`; an index with no range is `InvalidArgument`. `init` gives a driver a
+   transport with the driver's rights less `MAP`.
+2. **`device_read(device, offset, width)`** (call 54, `READ`) and **`device_write(device, offset, value, width)`** (call 55,
+   `WRITE`) read and write `width` bytes (1, 2 or 4) of a transport device, one access of that width: the configuration's
+   8- and 16-bit fields get the accesses virtio 1.2 4.2.2.2 asks for (N6 review, finding 6; the first cut read a word and
+   wrote a byte back as a whole word). The control registers below 0x100 take 32-bit accesses only, as the same section
+   says (QEMU answers a narrower read there with 0). The offset must be a multiple of the width and the access inside
+   the transport's block (the device tree's size, at most 0x200 bytes); else, or for any other width, `InvalidArgument`. A value wider
+   than the access is `InvalidArgument`, not cut. A page device has no register calls (`AccessDenied`). The offset and
+   width are `Size`s and the value an `Opaque`, which the ABI's allow list (INV-0045-1) lists by name for these two calls.
+   `zoraya-rt` has `device_read` and `device_write` for 32 bits and `device_read_width` and `device_write_width`.
 3. **What is per transport.** Interrupt (range 0 only), pin, quarantine and reset are the transport device's own, so a
    driver's death resets its transport and no other. Interrupt lines are taken once, by line, as before.
+3a. **Holders (N6 review, finding 1).** A transport device and its page are one device to ADR-0070. A process that
+   writes a transport's registers becomes its *holder*: the kernel keeps the hold in the process's address space and ends
+   it when the process closes its last handle to the transport that has `WRITE`, or ends. A transport has at most one
+   holder, and none while its page is mapped; a second writer, or a writer while the page is mapped, gets `BadState`.
+   The page cannot be mapped, nor its quarantine released, while any of its transports has a holder or a live pin; a
+   transport's quarantine is released only with no holder, no live pin and its page unmapped. Reading needs no hold (a
+   read restarts nothing), so `init` identifies a transport without holding it. A hold whose handle was moved to another
+   process (`channel_write`) lasts until the first process ends: the safe direction. Lock order: the page's state, then a
+   transport's.
+3b. **Blocks do not overlap.** At boot a transport whose block (offset and size, as clamped above) would overlap the one
+   before it in its page is left out with a message (N6 review, finding 5), so no transport device reaches a neighbour's
+   registers whatever the device tree says.
 4. **`init`'s scan.** A page with one device is given whole, mapped, as ADR-0091 says. A page with several is read, and
    each of its transports is split with `device_transport`, identified by `device_read`, and given to the driver for its
    device ID with range 0. A driver opens its device with `Window::open`: it maps the page if it may and uses the calls if
@@ -63,12 +80,11 @@ choice needs. It changes ADR-0091 only for a page with more than one device.
 - *ADR-0091 INV-0091-1* ("a device page goes to a driver only if exactly one transport holds a device") holds for the
   page; for a shared page the rule is that no driver gets the page, and each gets a transport device. *INV-0091-2*
   ("each GUI device alone on its page") is not true with `--net`, by design.
-- *ADR-0054*: a mapped page is still held by one process at a time; the transport devices are independent objects. A
-  process that maps the page can reach every transport on it. Only `init` holds a page of a shared kind (it maps it to
-  read the identifiers and ends the mapping before it hands anything on), so the kernel does not make the mapping and the
-  calls exclude each other. Recorded as a limitation.
-- *ADR-0070*: a page device's quarantine release still resets every transport of the page. `init` never calls it on
-  a shared page; a transport device's release resets that transport only.
+- *ADR-0054*: a mapped page is still held by one process at a time. A process that maps the page can reach every
+  transport on it, so the mapping and the transports' holders exclude each other (item 3a): ADR-0070's premise, no
+  mapping and so no process that can restart the device, holds for a transport as for a page.
+- *ADR-0070*: a page device's quarantine release still resets every transport of the page, and is refused while any of
+  them has a holder or a live pin; a transport device's release resets that transport only.
 
 ### Effect of the vision
 Target 2: the drivers are in the trusted base; separating them is fault isolation, as in ADR-0091. A call per register
@@ -82,17 +98,23 @@ access is the price of a desktop with a network.
 
 ## Invariants
 - **INV-0295-1.** `device_read` and `device_write` reach only the registers of the transport device's own block: an
-  offset that is not a multiple of 4, or whose word is not inside the block, is refused, a page device has no register
-  calls, and a transport device has no mapping and no transports. *Check:* `t_devices` (`transport_devices`) in
-  `make test-qemu`.
+  access whose width is not 1, 2 or 4, narrower than 4 below the configuration (0x100), whose offset is not a multiple
+  of its width, or that is not inside the block, is refused, a page device has no register calls, a transport device has no mapping, no `MAP` and no transports, and no
+  two blocks of a page overlap. *Check:* `t_devices` (`transport_devices`) and the kernel test
+  `overlapping_transports_are_left_out` in `make test-qemu`.
 - **INV-0295-2.** On a shared page `init` gives no driver the page, only its transport. *Check:* `make test-gui` with
   `tests/gui/net.script`: the machine with `--gui --net` boots, `init` reports the shared page, the network has its lease
   and the terminal shows `net status`.
 
+- **INV-0295-3.** A transport device and its page are never driven by two processes at once, and neither's quarantine is
+  released while the other could restart the device: a transport has at most one holder and none while its page is
+  mapped; a page is not mapped or released while a transport has a holder or a live pin; a transport is not released
+  while its page is mapped or it has a holder or a live pin. *Check:* `t_devices`
+  (`a_transport_and_its_page_keep_holders_apart`: the review's scenario, a second writer, the hold's end with the last
+  handle and with the holder's exit) in `make test-qemu`.
+
 ## Open questions
 - The cost of a register call under HVF and TCG (report, N6).
-- Whether the kernel should refuse a mapping of a page while any of its transport devices is held. Not done: only `init`
-  maps a shared page, once, at start.
 
 ## Revisit triggers
 - A driver on a shared page that notifies at a high rate (a measured cost).

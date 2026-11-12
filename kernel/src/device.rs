@@ -27,6 +27,8 @@ const VIRTIO_MAGIC: u32 = 0x7472_6976;
 const REG_MAGIC: usize = 0x00;
 const REG_VERSION: usize = 0x04;
 const REG_STATUS: usize = 0x70;
+/// Where a virtio-mmio transport's configuration starts.
+const CONFIG: u64 = 0x100;
 /// A transport's register block (virtio-mmio): the bound of `read_register`
 /// and `write_register` (ADR-0295).
 const TRANSPORT_SIZE: u64 = 0x200;
@@ -111,6 +113,15 @@ pub fn init(fdt: &Fdt<'_>) {
             size: transport.size.clamp(REG_STATUS as u64 + 4, TRANSPORT_SIZE),
         };
         if let Some(device) = devices.iter_mut().find(|d| d.base == base) {
+            // Sorted by base, so the page's last range is the one before.
+            let last = device.ranges.iter().flatten().last().copied();
+            if last.is_some_and(|last| !follows(&last, &range)) {
+                println!(
+                    "device: {:#x} overlaps the transport before it, left out",
+                    transport.base
+                );
+                continue;
+            }
             match device.ranges.iter_mut().find(|r| r.is_none()) {
                 Some(slot) => *slot = Some(range),
                 None => println!(
@@ -143,6 +154,28 @@ pub fn init(fdt: &Fdt<'_>) {
         .collect();
     init_rtc(fdt);
     init_seed(fdt);
+}
+
+/// Whether `range` may follow `last` in a page: their blocks do not
+/// overlap, so no transport device reaches a neighbour's registers
+/// (INV-0295-1).
+fn follows(last: &Range, range: &Range) -> bool {
+    last.offset
+        .checked_add(last.size)
+        .is_some_and(|end| end <= range.offset)
+}
+
+/// [`follows`] for blocks at `a` and `b` of the given sizes, for the test
+/// kernel.
+#[cfg(feature = "qemu-test")]
+pub fn blocks_follow(a: (u64, u64), b: (u64, u64)) -> bool {
+    let range = |(offset, size)| Range {
+        offset,
+        intid: 0,
+        edge: false,
+        size,
+    };
+    follows(&range(a), &range(b))
 }
 
 /// Copies the device tree's seed into a memory object for `init`. The
@@ -283,12 +316,13 @@ impl Device {
             .ok_or(Status::InvalidArgument)
     }
 
-    /// The transport's register at `offset`, for a transport device. The
-    /// offset is the caller's: it is checked to be aligned and inside the
-    /// transport's block, so no other transport of the page is reached.
-    pub fn read_register(&self, offset: u64) -> Result<u32, Status> {
-        let at = self.register_offset(offset)?;
-        Ok(self.read(at))
+    /// The transport's register at `offset`, an access of `width` bytes
+    /// (1, 2 or 4), for a transport device. The offset is the caller's: it
+    /// is checked to be aligned to the width and inside the transport's
+    /// block, so no other transport of the page is reached.
+    pub fn read_register(&self, offset: u64, width: u64) -> Result<u32, Status> {
+        let at = self.register_offset(offset, width)?;
+        Ok(self.read_sized(at, width))
     }
 
     /// As [`Device::read_register`], for a write. The caller holds the
@@ -297,19 +331,21 @@ impl Device {
         &self,
         held: &DeviceClaim,
         offset: u64,
+        width: u64,
         value: u32,
     ) -> Result<(), Status> {
         if !core::ptr::eq(Arc::as_ptr(&held.0), self) {
             return Err(Status::BadState);
         }
-        let at = self.register_offset(offset)?;
-        self.write(at, value);
+        let at = self.register_offset(offset, width)?;
+        self.write_sized(at, width, value);
         Ok(())
     }
 
-    /// Whether `offset` is a register of this transport device.
-    pub fn check_register(&self, offset: u64) -> Result<(), Status> {
-        self.register_offset(offset).map(|_| ())
+    /// Whether an access of `width` at `offset` is one of this transport
+    /// device's.
+    pub fn check_register(&self, offset: u64, width: u64) -> Result<(), Status> {
+        self.register_offset(offset, width).map(|_| ())
     }
 
     /// Makes the caller the transport device's holder (INV-0295-3): refused
@@ -341,13 +377,20 @@ impl Device {
         })
     }
 
-    /// The offset in the page of register `offset` of this transport.
-    fn register_offset(&self, offset: u64) -> Result<usize, Status> {
+    /// The offset in the page of an access of `width` at `offset` of this
+    /// transport.
+    fn register_offset(&self, offset: u64, width: u64) -> Result<usize, Status> {
         if !self.by_call {
             return Err(Status::AccessDenied);
         }
         let range = self.ranges[0].ok_or(Status::BadState)?;
-        if !offset.is_multiple_of(4) || offset.checked_add(4).is_none_or(|end| end > range.size) {
+        // Narrower accesses are for the configuration only: the control
+        // registers below it take 32-bit ones (virtio 1.2 4.2.2.2).
+        if !matches!(width, 1 | 2 | 4)
+            || (width != 4 && offset < CONFIG)
+            || !offset.is_multiple_of(width)
+            || offset.checked_add(width).is_none_or(|end| end > range.size)
+        {
             return Err(Status::InvalidArgument);
         }
         // `init` checked that the transport's block lies in the page, and
@@ -420,6 +463,32 @@ impl Device {
     fn write(&self, offset: usize, value: u32) {
         // SAFETY: as in `read`.
         unsafe { self.register(offset).write_volatile(value) }
+    }
+
+    /// An access of `width` bytes (1, 2 or 4) at `offset`, aligned to it.
+    fn read_sized(&self, offset: usize, width: u64) -> u32 {
+        let at = self.kernel + offset;
+        match width {
+            // SAFETY: `kernel` maps this device's whole page as Device
+            // memory, and `offset` is inside it and aligned to the width
+            // (`register_offset`).
+            1 => u32::from(unsafe { (at as *const u8).read_volatile() }),
+            // SAFETY: as above.
+            2 => u32::from(unsafe { (at as *const u16).read_volatile() }),
+            _ => self.read(offset),
+        }
+    }
+
+    /// As [`Device::read_sized`], for a write of `value`, which fits `width`.
+    fn write_sized(&self, offset: usize, width: u64, value: u32) {
+        let at = self.kernel + offset;
+        match width {
+            // SAFETY: as in `read_sized`.
+            1 => unsafe { (at as *mut u8).write_volatile(value as u8) },
+            // SAFETY: as in `read_sized`.
+            2 => unsafe { (at as *mut u16).write_volatile(value as u16) },
+            _ => self.write(offset, value),
+        }
     }
 
     /// Stops every virtio transport in the window and sees it stopped. An

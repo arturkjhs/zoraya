@@ -12,9 +12,10 @@ use zoraya_abi::{
 };
 use zoraya_user::{
     assert_err, channel_create, channel_read, channel_write, device_interrupt, device_map,
-    device_read, device_transport, device_write, directory_lookup, dma_pin, dma_release_quarantine,
-    dma_unpin, handle_close, handle_duplicate, interrupt_ack, memory_create, memory_map,
-    memory_unmap, port_create, port_subscribe, port_wait, raw_syscall, spawn, wait_exit,
+    device_read, device_read_width, device_transport, device_write, device_write_width,
+    directory_lookup, dma_pin, dma_release_quarantine, dma_unpin, handle_close, handle_duplicate,
+    interrupt_ack, memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_wait,
+    raw_syscall, spawn, wait_exit,
 };
 
 const VIRTIO_MAGIC: u32 = 0x7472_6976;
@@ -398,6 +399,45 @@ fn transport_devices() {
         assert_err!(device_read(t, bad), Status::InvalidArgument);
         assert_err!(device_write(t, bad, 0), Status::InvalidArgument);
     }
+    // Review N6 finding 6 (virtio 1.2 4.2.2.2): 8- and 16-bit accesses to
+    // the configuration (from 0x100), as its fields want, aligned to their
+    // width and inside the block; the control registers below it take
+    // 32-bit accesses only (QEMU answers a narrower one with 0).
+    let config = device_read(t, 0x100).expect("config");
+    assert_eq!(device_read_width(t, 0x100, 1), Ok(config & 0xff));
+    assert_eq!(device_read_width(t, 0x101, 1), Ok((config >> 8) & 0xff));
+    assert_eq!(device_read_width(t, 0x103, 1), Ok(config >> 24));
+    assert_eq!(device_read_width(t, 0x102, 2), Ok(config >> 16));
+    assert!(device_read_width(t, 0x1ff, 1).is_ok());
+    assert!(device_read_width(t, 0x1fe, 2).is_ok());
+    for (offset, width) in [
+        (0, 1),
+        (2, 2),
+        (0xfe, 2),
+        (0x101, 2),
+        (0x103, 2),
+        (0x102, 4),
+        (0x200, 1),
+        (0x200, 2),
+        (0x100, 3),
+        (0x100, 8),
+        (0x100, 0),
+    ] {
+        assert_err!(device_read_width(t, offset, width), Status::InvalidArgument);
+        assert_err!(
+            device_write_width(t, offset, 0, width),
+            Status::InvalidArgument
+        );
+    }
+    // A value wider than its access is refused, not cut.
+    assert_err!(
+        device_write_width(t, 0x100, 0x100, 1),
+        Status::InvalidArgument
+    );
+    assert_err!(
+        device_write_width(t, 0x100, 0x1_0000, 2),
+        Status::InvalidArgument
+    );
     // The cost of one register call (reported, never asserted): 2,000 reads
     // of the magic value, timed.
     let from = zoraya_user::clock_monotonic();
@@ -407,7 +447,7 @@ fn transport_devices() {
     let nanos = (zoraya_user::clock_monotonic() - from) / 2000;
     zoraya_user::println!("t_devices: a register read by call takes {nanos} ns");
     // A value wider than a register is refused, not cut.
-    let (status, _) = raw_syscall(DEVICE_WRITE, [t.raw(), REG_STATUS, 1 << 32, 0, 0, 0]);
+    let (status, _) = raw_syscall(DEVICE_WRITE, [t.raw(), REG_STATUS, 1 << 32, 4, 0, 0]);
     assert_eq!(status, Status::InvalidArgument as u64);
     // A write reaches the register: reset, and read back.
     device_write(t, REG_STATUS, 0).expect("write");

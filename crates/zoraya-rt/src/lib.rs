@@ -432,14 +432,31 @@ pub fn device_transport(device: Handle, index: u32) -> Result<Handle, Status> {
     handle(stubs::device_transport::<Svc>(device, RangeIndex(index))?)
 }
 
-/// Register `offset` of a transport device.
+/// Register `offset` of a transport device, a 32-bit access.
 pub fn device_read(device: Handle, offset: u64) -> Result<u32, Status> {
-    stubs::device_read::<Svc>(device, Size(offset)).map(|value| value as u32)
+    device_read_width(device, offset, 4)
 }
 
-/// Writes register `offset` of a transport device.
+/// Writes register `offset` of a transport device, a 32-bit access.
 pub fn device_write(device: Handle, offset: u64, value: u32) -> Result<(), Status> {
-    stubs::device_write::<Svc>(device, Size(offset), Opaque(u64::from(value))).map(|_| ())
+    device_write_width(device, offset, value, 4)
+}
+
+/// An access of `width` bytes (1, 2 or 4, aligned to it) at `offset` of a
+/// transport device: the configuration's 8- and 16-bit fields (ADR-0295).
+pub fn device_read_width(device: Handle, offset: u64, width: u64) -> Result<u32, Status> {
+    stubs::device_read::<Svc>(device, Size(offset), Size(width)).map(|value| value as u32)
+}
+
+/// As [`device_read_width`], for a write; `value` must fit `width`.
+pub fn device_write_width(
+    device: Handle,
+    offset: u64,
+    value: u32,
+    width: u64,
+) -> Result<(), Status> {
+    stubs::device_write::<Svc>(device, Size(offset), Opaque(u64::from(value)), Size(width))
+        .map(|_| ())
 }
 
 pub fn device_interrupt(device: Handle, index: u32) -> Result<Handle, Status> {
