@@ -655,10 +655,32 @@ fn main() -> i32 {
         server.act(&mut core, actions);
     }
     let mut bytes = vec![0u8; MAX_WIRE_MESSAGE];
+    // Zero: a first job to poll is polled at once.
+    let mut next_poll = 0;
     loop {
         let queued = core::mem::take(&mut server.queued);
         for (group, signal) in queued {
             core.suspend(group, signal);
+        }
+        // The jobs that could not be subscribed to are polled when `next_poll`
+        // is due, whatever woke the loop: traffic more often than `POLL_MS`
+        // must not keep a job's end from being reported.
+        if !server.polled.is_empty() && clock_monotonic() >= next_poll {
+            next_poll = clock_monotonic() + POLL_MS * 1_000_000;
+            let ended: Vec<u32> = server
+                .polled
+                .iter()
+                .filter(|&&(_, job)| {
+                    // An error (a BadHandle from the failed subscribe) counts as ended.
+                    object_get_signals(job).map_or(true, |bits| bits & job_signals::TERMINATED != 0)
+                })
+                .map(|&(pid, _)| pid)
+                .collect();
+            for pid in ended {
+                server.polled.retain(|&(p, _)| p != pid);
+                let actions = core.terminated(pid);
+                server.act(&mut core, actions);
+            }
         }
         if core.finished() {
             if let Some(e) = core.shell_exit {
@@ -683,28 +705,12 @@ fn main() -> i32 {
         let deadline = if server.polled.is_empty() {
             DEADLINE_INFINITE
         } else {
-            clock_monotonic() + POLL_MS * 1_000_000
+            next_poll
         };
         match port_wait(port, deadline, &mut packets) {
             Ok(_) => {}
-            Err(Status::DeadlineExceeded) => {
-                // The jobs that could not be subscribed to.
-                let ended: Vec<u32> = server
-                    .polled
-                    .iter()
-                    .filter(|&&(_, job)| {
-                        object_get_signals(job)
-                            .map_or(true, |bits| bits & job_signals::TERMINATED != 0)
-                    })
-                    .map(|&(pid, _)| pid)
-                    .collect();
-                for pid in ended {
-                    server.polled.retain(|&(p, _)| p != pid);
-                    let actions = core.terminated(pid);
-                    server.act(&mut core, actions);
-                }
-                continue;
-            }
+            // The poll at the top of the loop is due.
+            Err(Status::DeadlineExceeded) => continue,
             Err(_) => return 1,
         }
         let key = packets[0].key;
