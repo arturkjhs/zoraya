@@ -817,6 +817,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "zoraya-proto-rooms"
+version = "0.1.0"
+dependencies = [
+ "zoraya-protocol",
+ "zoraya-test-alloc",
+]
+
+[[package]]
 name = "zoraya-proto-term"
 version = "0.1.0"
 dependencies = [

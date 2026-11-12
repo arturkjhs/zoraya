@@ -1,0 +1,17 @@
+[package]
+name = "zoraya-proto-rooms"
+description = "The protocol of the room keeper (ADR-0269): launch jobs, limits, usage and refusals."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+zoraya-protocol = { path = "../zoraya-protocol" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+zoraya-test-alloc = { path = "../zoraya-test-alloc" }
