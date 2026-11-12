@@ -35,6 +35,29 @@
 > memhog\r
 < hint: room agent-1 is at its memory limit of 64M
 < agent-1 /t/w> 
+# top (ADR-0267, INV-0267-1): the room's row against its limits, what refused
+# and the line that raises it, from the same reading as the desktop's card;
+# `room` shows the use after each limit.
+> top\r
+< ROOM
+< agent-1
+< of 64M
+< of 16
+< (refused
+< session
+< agent-1 /t/w> 
+> top agent-1\r
+< limits --mem 64M --cpu 25% --procs 16
+< raise: room set agent-1 --mem 128M
+< agent-1 /t/w> 
+> top nosuch\r
+< no such room
+< agent-1 /t/w> 
+> room\r
+< --mem 64M (
+< --cpu 25% (
+< --procs 16 (
+< agent-1 /t/w> 
 # The room's job takes the new limit at once.
 > room set agent-1 --mem 68M\r
 < agent-1 --colour 1 --mem 68M --cpu 25% --procs 16 +w /t/w

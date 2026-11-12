@@ -105,9 +105,9 @@ const GREETING: &str = "Type help to begin, or help tour.\n";
 
 /// Builtins this program runs (ADR-0155 item 8), and, until step 7, the
 /// file commands.
-const BUILTINS: [&str; 17] = [
+const BUILTINS: [&str; 18] = [
     "cd", "pwd", "history", "help", "grants", "jobs", "fg", "bg", "wait", "kill", "settings",
-    "slots", "uptime", "exit", "poweroff", "reboot", "room",
+    "slots", "uptime", "exit", "poweroff", "reboot", "room", "top",
 ];
 /// File commands still built in: `sync` needs the `sync` right, which no
 /// entry of a program's table carries (ADR-0155's open questions).
@@ -645,6 +645,8 @@ struct Z {
     /// The room's refusal counters (memory, processes) at the end of the last
     /// line, for the quota hint.
     refused_seen: (u64, u64),
+    /// The CPU share of each room since this shell last asked (`top`).
+    usage_tracker: zoraya_rooms::Tracker,
 }
 
 impl Z {
@@ -3124,6 +3126,105 @@ impl Z {
         0
     }
 
+    /// The keeper's records as readings, with the CPU share since the last
+    /// reading this shell took.
+    fn readings(&mut self) -> Option<Vec<zoraya_settings::usage::Reading>> {
+        let records = self.keeper.as_mut()?.usage("").ok()?;
+        Some(self.usage_tracker.readings(&records, clock_monotonic()))
+    }
+
+    /// `top` (ADR-0267 point 1): one row a room from the keeper's records,
+    /// the table the desktop's pills and hover card are made from
+    /// (`zoraya_settings::usage`, INV-0267-1). The shell holds the keeper's
+    /// channel, so `top` is a builtin and not a program given a slot
+    /// (proposed ADR-0294).
+    fn top_builtin(&mut self, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
+        use zoraya_settings::usage::{self, Reading};
+        let fail = |io: &mut Io, subject: Option<&str>, problem: &str| {
+            io.err
+                .push_str(&zoraya_command::error("top", subject, problem, &[]));
+            1
+        };
+        let only = p.operand(d, "ROOM").map(String::from);
+        let table = |rows: &[Reading], only: Option<&str>| -> Option<String> {
+            let mut rows: Vec<Reading> = match only {
+                Some(n) => rows.iter().filter(|r| r.name == n).cloned().collect(),
+                None => rows.to_vec(),
+            };
+            if only.is_some() && rows.is_empty() {
+                return None;
+            }
+            if only.is_none() {
+                // The session row: the sum of the rooms that run, with no
+                // limit of its own to show here.
+                let mut s = Reading {
+                    name: String::from("session"),
+                    running: true,
+                    ..Reading::default()
+                };
+                for r in &rows {
+                    s.mem_used = s.mem_used.saturating_add(r.mem_used);
+                    s.procs_used = s.procs_used.saturating_add(r.procs_used);
+                    s.cpu_pct = match (s.cpu_pct, r.cpu_pct) {
+                        (Some(a), Some(b)) => Some((a + b).min(100)),
+                        (None, b) => b,
+                        (a, None) => a,
+                    };
+                }
+                rows.push(s);
+            }
+            let mut out = usage::top_table(&rows);
+            if only.is_some() {
+                for r in &rows {
+                    for l in r.card_lines().iter().skip(1) {
+                        if l.starts_with("limits") || l.starts_with("raise") {
+                            out.push_str(&format!("  {l}\n"));
+                        }
+                    }
+                }
+            }
+            Some(out)
+        };
+        if self.keeper.is_none() {
+            return fail(io, None, "no room keeper");
+        }
+        let Some(rows) = self.readings() else {
+            return fail(io, None, "the room keeper does not answer");
+        };
+        let Some(first) = table(&rows, only.as_deref()) else {
+            return fail(io, only.as_deref(), "no such room, or it does not run");
+        };
+        if !p.flag(d, "watch") {
+            io.out.push_str(&first);
+            return 0;
+        }
+        // Under --watch: the first table now, then one a second at most
+        // (INV-0267-2) until Ctrl-C. The shell reads the keys between turns.
+        show(&first);
+        let mut throttle = usage::Throttle::new();
+        throttle.due(clock_monotonic());
+        let interrupted = core::cell::Cell::new(false);
+        let this = core::cell::RefCell::new(&mut *self);
+        usage::watch(
+            throttle,
+            clock_monotonic,
+            |ns| zoraya_user::sleep_until(clock_monotonic() + ns.min(100_000_000)),
+            || this.borrow_mut().readings(),
+            |rows| {
+                if let Some(t) = table(rows, only.as_deref()) {
+                    show(&format!("\n{t}"));
+                }
+            },
+            || {
+                if this.borrow_mut().interrupted() {
+                    interrupted.set(true);
+                }
+                interrupted.get()
+            },
+        );
+        0
+    }
+
     /// `room` (ADR-0172 point 3): list, enter, leave, make and remove
     /// rooms, in `/config/rooms`.
     fn room_builtin(&mut self, d: &Description, p: &Parsed<'_>, io: &mut Io) -> i32 {
@@ -3158,12 +3259,21 @@ impl Z {
                     }
                 };
                 io.out.push_str(&format!("{}home\n", mark("home")));
+                // A room that runs shows its use after each limit, from the
+                // same reading `top` and the desktop's card are made from
+                // (ADR-0267 point 2, INV-0267-1).
+                let readings = self.readings().unwrap_or_default();
                 for r in &table.rooms {
                     let mut line = format!("{}{}", mark(&r.name), r.name);
                     if r.untrusted {
                         line.push_str(" untrusted");
                     }
-                    let limits = r.limits.words();
+                    let limits = match readings.iter().find(|x| x.name == r.name && x.running) {
+                        Some(x) if !x.limits().words().is_empty() => {
+                            zoraya_settings::usage::room_words(x)
+                        }
+                        _ => r.limits.words(),
+                    };
                     if !limits.is_empty() {
                         line.push_str("  ");
                         line.push_str(&limits);
@@ -3732,6 +3842,7 @@ impl Host for Z {
             }
             "settings" => self.settings_builtin(d, p, io),
             "room" => self.room_builtin(d, p, io),
+            "top" => self.top_builtin(d, p, io),
             "slots" => {
                 io.out.push_str("slots:");
                 for slot in 1..=u64::from(MAX_HANDLES) {
@@ -4475,6 +4586,7 @@ fn main() -> i32 {
         keeper_manage: Handle::new(12).is_some_and(|h| handle_type(h) == Ok("channel")),
         room_job: None,
         refused_seen: (0, 0),
+        usage_tracker: zoraya_rooms::Tracker::new(),
     };
     z.realtime_base = z
         .root

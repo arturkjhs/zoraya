@@ -453,23 +453,24 @@ impl Throttle {
     }
 }
 
-/// `top --watch`'s loop (ADR-0267 point 1, INV-0267-2). `read` is called at
-/// most once in [`MIN_INTERVAL_NS`] of `now`'s clock however often the loop
-/// turns; `sleep` is given the time to wait; the loop ends when `stop` is
-/// true or `read` gives `None` (no keeper).
+/// `top --watch`'s loop (ADR-0267 point 1, INV-0267-2). `throttle` is the
+/// caller's, so that a reading the caller already took counts; `read` is
+/// called at most once in [`MIN_INTERVAL_NS`] of `now`'s clock however often
+/// the loop turns; `sleep` is given the time to wait; the loop ends when
+/// `stop` is true or `read` gives `None` (no keeper).
 pub fn watch(
+    mut throttle: Throttle,
     mut now: impl FnMut() -> u64,
     mut sleep: impl FnMut(u64),
     mut read: impl FnMut() -> Option<Vec<Reading>>,
-    mut show: impl FnMut(&str),
+    mut show: impl FnMut(&[Reading]),
     mut stop: impl FnMut() -> bool,
 ) {
-    let mut throttle = Throttle::new();
     while !stop() {
         let t = now();
         if throttle.due(t) {
             match read() {
-                Some(rows) => show(&top_table(&rows)),
+                Some(rows) => show(&rows),
                 None => return,
             }
         }

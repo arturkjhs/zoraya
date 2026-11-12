@@ -206,6 +206,7 @@ fn usage_is_read_at_most_once_a_second_under_watch() {
     let turns = Cell::new(0u32);
     let times: core::cell::RefCell<Vec<u64>> = core::cell::RefCell::new(Vec::new());
     watch(
+        Throttle::new(),
         || clock.get(),
         |ns| clock.set(clock.get() + ns.min(10_000_000)),
         || {
@@ -233,6 +234,7 @@ fn usage_is_read_at_most_once_a_second_under_watch() {
 fn watch_ends_when_the_keeper_is_gone() {
     let mut reads = 0;
     watch(
+        Throttle::new(),
         || 0,
         |_| {},
         || {
@@ -254,4 +256,27 @@ fn the_throttle_survives_a_clock_that_goes_back() {
     assert!(t.due(1)); // back in time: one reading, start again
     assert!(!t.due(2));
     assert_eq!(t.wait(500_000_001), MIN_INTERVAL_NS - 500_000_000);
+}
+
+#[test]
+fn a_reading_the_caller_took_counts_against_the_first_turn() {
+    // `top --watch` reads once to check its room, then watches: the first
+    // turn must not read again at once.
+    let clock = Cell::new(1_000_000_000u64);
+    let reads = Cell::new(0u32);
+    let mut throttle = Throttle::new();
+    assert!(throttle.due(clock.get()));
+    watch(
+        throttle,
+        || clock.get(),
+        |ns| clock.set(clock.get() + ns.min(100_000_000)),
+        || {
+            reads.set(reads.get() + 1);
+            assert!(clock.get() >= 2_000_000_000, "read at {}", clock.get());
+            Some(vec![agent()])
+        },
+        |_| {},
+        || clock.get() >= 2_050_000_000,
+    );
+    assert_eq!(reads.get(), 1);
 }
