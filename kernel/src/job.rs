@@ -7,7 +7,7 @@
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use zoraya_abi::quota::{FieldUsage, JobLimits, JobUsage};
 use zoraya_abi::{ExitReason, ExitRecord, RequestKind, Status, job_signals};
@@ -27,8 +27,9 @@ use crate::sync::SpinLock;
 const MAX_DEPTH: u32 = 32;
 
 static TREE: SpinLock<()> = SpinLock::new(());
-/// Held for the whole of a `suspend`, `resume` or `kill` (see [`Exclusive`]).
-static EXCLUSIVE: AtomicBool = AtomicBool::new(false);
+/// The next turn to hand out and the turn being served (see [`Exclusive`]).
+static NEXT_TURN: AtomicU64 = AtomicU64::new(0);
+static SERVING: AtomicU64 = AtomicU64::new(0);
 static ROOT: SpinLock<Option<Arc<Job>>> = SpinLock::new(None);
 
 struct State {
@@ -44,21 +45,32 @@ struct State {
     suspended: bool,
 }
 
-/// One `suspend`, `resume` or `kill` walk at a time. Their walks pause
-/// between steps, and two of them interleaved gave answers that neither order
-/// of the calls gives: a process of a suspended tree could resume a job (the
-/// handle sent to it) after the `suspend` walk had stopped it and before the
-/// walk was done, so that `job_suspend` returned with a job running in a tree
-/// it reports as suspended (INV-0105-5; review of the fixes, error 2).
-/// Taking turns makes each call whole, as it was before the walks were
-/// stepped. A caller that finds it taken waits at [`steps::pause`], with no
-/// lock held (the holder's walk goes on to its end whatever it was asked, and
-/// a stop or a kill takes effect only on the way back to EL0, so the holder
-/// is never stopped inside the walk). Not for `signal`, which changes no
-/// state a later call depends on. The alternative, skipping any job with a
-/// suspended ancestor in `resume`, would not have settled two calls on one
-/// tree (a `resume` of the top interleaved with a `suspend` still leaves a
-/// mixture), and needs the ancestors read in every step.
+/// One `suspend` or `resume` walk at a time, in the order the calls came
+/// (a ticket queue). Their walks pause between steps, and two of them
+/// interleaved gave answers that neither order of the calls gives: a process
+/// of a suspended tree could resume a job (the handle sent to it) after the
+/// `suspend` walk had stopped it and before the walk was done, so that
+/// `job_suspend` returned with a job running in a tree it reports as
+/// suspended (INV-0105-5; review of the fixes, error 2). Taking turns makes
+/// each call whole, as it was before the walks were stepped. A caller waits
+/// at [`steps::pause`], with no lock held (the holder's walk goes on to its
+/// end whatever it was asked, and a stop or a kill takes effect only on the
+/// way back to EL0, so the holder is never stopped inside the walk). The
+/// order is first come, first served (review round 2, error 2): with one
+/// flag, a process looping `job_resume` on a big tree of its own could take
+/// every turn and starve a waiter in another room; with tickets a caller
+/// waits for the walks queued before it, at most one per thread that has a
+/// call open, each bounded by its tree. `kill` takes no turn: it closes and
+/// asks to exit, which interleaves with a stop or a continue to the same
+/// end (a stopped process that is asked to exit leaves `park_if_stopped`),
+/// and the broker's kill must not wait behind an untrusted caller's walks.
+/// Not for `signal`, which changes no state a later call depends on. The
+/// turn is global, not per room: a walk on the root job and one in a room
+/// must exclude each other, which a per-room turn would not do. The
+/// alternative, skipping any job with a suspended ancestor in `resume`, would
+/// not have settled two calls on one tree (a `resume` of the top interleaved
+/// with a `suspend` still leaves a mixture), and needs the ancestors read in
+/// every step.
 struct Exclusive;
 
 impl Exclusive {
@@ -66,29 +78,28 @@ impl Exclusive {
     /// tree being suspended, inside this very call) does not go on until it
     /// is resumed, as if it had made the call after being stopped: otherwise
     /// its `job_resume` of a job below would run right after the `suspend`
-    /// that stopped it returned, and start what that left stopped.
+    /// that stopped it returned, and start what that left stopped. It gives
+    /// its turn up and queues again after it is resumed.
     fn take() -> Exclusive {
         loop {
             crate::process::park_if_stopped();
-            if EXCLUSIVE
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                if crate::process::current_is_stopped() {
-                    EXCLUSIVE.store(false, Ordering::Release);
-                    continue;
-                }
-                return Exclusive;
+            let ticket = NEXT_TURN.fetch_add(1, Ordering::Relaxed);
+            while SERVING.load(Ordering::Acquire) != ticket {
+                core::hint::spin_loop();
+                steps::pause();
             }
-            core::hint::spin_loop();
-            steps::pause();
+            if crate::process::current_is_stopped() {
+                SERVING.store(ticket + 1, Ordering::Release);
+                continue;
+            }
+            return Exclusive;
         }
     }
 }
 
 impl Drop for Exclusive {
     fn drop(&mut self) {
-        EXCLUSIVE.store(false, Ordering::Release);
+        SERVING.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -475,7 +486,7 @@ impl Job {
     }
 
     /// Undoes [`Job::suspend`] for the tree. A job that is not suspended is
-    /// left as it is. One at a time with `suspend` and `kill` ([`Exclusive`]).
+    /// left as it is. One at a time with `suspend` ([`Exclusive`]).
     pub fn resume(self: &Arc<Self>) {
         let _turn = Exclusive::take();
         Job::walk(
@@ -490,7 +501,7 @@ impl Job {
 
     /// Ends the tree and closes it to new processes (ADR-0046).
     pub fn kill(self: &Arc<Self>) {
-        let _turn = Exclusive::take();
+        // No turn (see [`Exclusive`]).
         Job::walk(
             self,
             &mut |job| job.state.lock().closed = true,

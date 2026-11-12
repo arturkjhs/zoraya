@@ -283,14 +283,21 @@ and exits.
   to a process twice when another process of the same job leaves during a pause (stated, not prevented). What joins during a walk is not reached by it: `job_kill` closes each job before its children, so a
   job or process made later is refused; `job_suspend` and `job_resume` leave a job created or joined later in the state
   its parent has; `job_signal` is for what was there when it started. `job_suspend`, `job_resume` and
-  `job_kill` take turns (`Job::Exclusive`, a flag; a caller that finds it taken waits at `steps::pause`, no lock held). The
+  `job_kill` took turns (`Job::Exclusive`, a flag; a caller that finds it taken waits at `steps::pause`, no lock held). The
   first version let them interleave and the review found the INV-0105-5 breach: a process of a suspended tree, holding a
   handle to a job B below it, could `job_resume` B after the `suspend` walk had visited B and before it ended, and
   `job_suspend` returned with B running (review of the fixes, error 2). Chosen over a check in `resume` of every job's
   ancestors under `TREE` because the check covers only a resume of a job below, not two calls on the same top job, which
-  would still leave a mixture; the turns make each call as whole as it was before the walks were stepped. The wait is
-  bounded by the holder's walk (one tree, steps of 64), which runs to its end whatever the holder was asked, so a holder
-  is never stopped or killed inside it. `job_signal` does not take a turn (it changes nothing a later call depends on). A caller that is stopped while it waits for
+  would still leave a mixture; the turns make each call as whole as it was before the walks were stepped. *Round 2, error 2:*
+  the flag was unfair (a process looping `job_resume` on a big tree of its own could take every turn and starve another
+  room's `job_kill`, so the wait was not bounded by "the holder's walk"), so the turn is now a ticket queue (first come, first
+  served) for `suspend` and `resume` only; `job_kill` takes no turn (it closes jobs and asks processes to exit, which
+  interleaves with a stop or a continue to the same end, a stopped process that is asked to exit leaves
+  `park_if_stopped`, and the broker's kill must not queue behind an untrusted caller). A caller now waits for the walks
+  queued before it: at most one per thread with a call open, each bounded by its tree and run to its end whatever the
+  holder was asked, so a holder is never stopped or killed inside it. Not done: a turn per room (the top ancestor below the
+  root). A walk on the root job and a walk in a room must exclude each other, which two per-room queues would not do; a
+  later task may take both. `job_signal` does not take a turn (it changes nothing a later call depends on). A caller that is stopped while it waits for
   its turn (it is in the tree, inside the call) parks first (`process::park_if_stopped`), as if it had called after being stopped:
   otherwise its `job_resume` would run right after the `suspend` returned and start what that left stopped. The test is a stress
   case (`t_suspend`, a resumer inside a tree of 700 jobs): the walks interleave when a slice ends during one. `t_bound` builds a tree of 700 jobs under one top job and measures the four calls
