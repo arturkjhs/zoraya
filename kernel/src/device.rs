@@ -133,9 +133,11 @@ fn init_seed(fdt: &Fdt<'_>) {
     }
 }
 
-/// The seed's memory object, if the device tree had one.
+/// The seed's memory object, if the device tree had one, handed on once:
+/// the kernel keeps no reference, so the object and its frame live only as
+/// long as `init`'s and then `rngd`'s handle.
 pub fn seed_object() -> Option<Arc<MemoryObject>> {
-    SEED.lock().clone()
+    SEED.lock().take()
 }
 
 /// The PL031's page as a device with one range and no interrupt line (its
@@ -145,7 +147,11 @@ fn init_rtc(fdt: &Fdt<'_>) {
     let Some(clock) = rtc(fdt) else { return };
     let base = clock.base & !(FRAME_SIZE - 1);
     let offset = clock.base - base;
-    if !clock.base.is_multiple_of(4) || offset + clock.size > FRAME_SIZE {
+    if !clock.base.is_multiple_of(4)
+        || offset
+            .checked_add(clock.size)
+            .is_none_or(|end| end > FRAME_SIZE)
+    {
         println!("device: the rtc at {:#x} does not fit a page", clock.base);
         return;
     }
