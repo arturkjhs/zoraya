@@ -853,7 +853,12 @@ pub fn exit_current(record: ExitRecord) -> ! {
     // one dying thread to the next with IRQ masked throughout): without it a
     // job_kill of many processes held the tail of one exit (up to 64 frames)
     // and the head of the next in one interval, 94 to 212 units against 80
-    // (found on CI and under TCG, `t_cpu`; INV-0270-1).
+    // (found on CI and under TCG, `t_cpu`; INV-0270-1). A thread that comes
+    // here from `return_to_user`'s preemption point resumed inside the
+    // interval of the threads that ran meanwhile; one that is switched away
+    // at a step point below gets a window of its own when it resumes
+    // (`steps::step_point`), so the tail after the second flush is not
+    // added to another exit's tail either.
     crate::steps::flush();
     // The handles first, while the space is still the running one: closing
     // a long chain of channels yields between steps (ADR-0270), which is not

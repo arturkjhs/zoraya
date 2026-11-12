@@ -723,6 +723,22 @@ pick (idle calls `schedule` again); `JobRef::of` is `unsafe`; the time allowance
 deviations from ADR-0264; new `t_cpu` cases: 40 spinners, a job about 30 levels deep, a kill of a parked room.
 New finding for the architect: no sharing among rooms under one parent (one of three used 0 ms in 2 s).
 Open: the site of the largest masked interval; Q6a's check of `LIMIT` inside rooms.
+
+### The units bound on CI (second fix)
+
+Run 43085222352 (`candidate/work-q4-b`) failed `t_cpu`'s units bound in five jobs: 110 units (the 30-level job, on
+`auto-smp4-2g` and `tcg-smp4-gicv2`; rooms next to a woken process, `tcg-smp4-gicv3`), 116 (a room of 40 at 25%,
+`tcg-el2`), 94 (`net-tcg`), against 80, every unit from `frames::free`. The values are two exits' tails (2 x 55, 2 x 58,
+55 + 39; one tail measures 55 to 71). Cause: `steps::pause` called the preemption point after its window, and a thread
+switched away there resumed inside the masked interval of the threads that ran meanwhile; switched away at the flush
+before its tail, it then ran the tail (which cannot yield) in the interval of the exit that switched to it. Only an
+exit as long as the slice meets that timing, hence slow hosts only. Fix: `steps::step_point` opens a second window
+when the scheduler ran (`sched::preempt_point` says so). The kernel test
+`a_switch_at_a_step_point_starts_a_new_interval` forces the timing with a stand-in switch; mutant
+`K-step-point-no-window-after-switch` (`tools/mutants/kernel-objects.toml`). `frames::free` and `free_contig` count at
+the caller's line, so `steps::diagnose_units` names the freeing path. The units bound stays 64 + 16 (an exit's tail:
+the space's frames, at most 64 inline, and one 16-frame kernel stack).
+
 ## N3: a native program fetches a page over HTTP (branch `work/n3`, on `work/q4`)
 
 ### Built
