@@ -169,7 +169,7 @@ fn main() -> i32 {
     if handle_type(root) == Ok("channel") && rngd.service.attached() && !rngd.attach(root) {
         return 1;
     }
-    println!("rngd: ready");
+    println!("rngd: serving");
     let mut packets = [Packet::default(); 8];
     loop {
         let count = match port_wait(port, DEADLINE_INFINITE, &mut packets) {

@@ -32,6 +32,7 @@ Commands:
   cd        change the current directory
   count     count arguments, or the lines of files
   cp        copy a file
+  date      show the date and time
   echo      print its arguments
   exit      end this shell; a new one starts
   export    give a variable to the programs you run
@@ -47,11 +48,12 @@ Commands:
   ls        list a directory
   math      calculate
   mkdir     make a directory
-  mv        move or rename
 -- space: next page, q: quit --
+  mv        move or rename
   net       show the state of the network
   poweroff  turn the machine off
   pwd       print the current directory
+  random    show random bytes
   reboot    start the machine again
   rm        remove files
   room      list, enter, make or remove rooms

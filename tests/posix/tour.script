@@ -14,6 +14,7 @@
 ^ \r\n  cd        change the current directory
 ^ \r\n  count     count arguments, or the lines of files
 ^ \r\n  cp        copy a file
+^ \r\n  date      show the date and time
 ^ \r\n  echo      print its arguments
 ^ \r\n  exit      end this shell; a new one starts
 ^ \r\n  export    give a variable to the programs you run
@@ -29,12 +30,13 @@
 ^ \r\n  ls        list a directory
 ^ \r\n  math      calculate
 ^ \r\n  mkdir     make a directory
-^ \r\n  mv        move or rename
 < -- space: next page, q: quit --
 > \x20
-<   net       show the state of the network
+<   mv        move or rename
+^ \r\n  net       show the state of the network
 ^ \r\n  poweroff  turn the machine off
 ^ \r\n  pwd       print the current directory
+^ \r\n  random    show random bytes
 ^ \r\n  reboot    start the machine again
 ^ \r\n  rm        remove files
 ^ \r\n  room      list, enter, make or remove rooms

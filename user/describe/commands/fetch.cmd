@@ -1,5 +1,5 @@
 name     fetch
-summary  fetch a page over HTTP or HTTPS
+summary  fetch a page over HTTP
 usage    fetch [--output FILE] [--sum] URL
 operand  URL  url  the address, http(s)://HOST[:PORT]/PATH; this command may reach that host and port only
 option   -o --output FILE create  write the page to FILE instead of the terminal

@@ -19,6 +19,7 @@ screen   cat       print files
 screen   cd        change the current directory
 screen   count     count arguments, or the lines of files
 screen   cp        copy a file
+screen   date      show the date and time
 screen   echo      print its arguments
 screen   exit      end this shell; a new one starts
 screen   export    give a variable to the programs you run
@@ -34,13 +35,14 @@ screen   kill      end a job
 screen   ls        list a directory
 screen   math      calculate
 screen   mkdir     make a directory
-screen   mv        move or rename
 prefix -- space: next page, q: quit --
 key spc
 window
+screen   mv        move or rename
 screen   net       show the state of the network
 screen   poweroff  turn the machine off
 screen   pwd       print the current directory
+screen   random    show random bytes
 screen   reboot    start the machine again
 screen   rm        remove files
 screen   room      list, enter, make or remove rooms
