@@ -105,7 +105,7 @@ const SCAN_WORDS: u64 = 48;
 /// [`zero_run`] in steps, before anything else can reach them.
 ///
 /// The scan of the frame map is made in steps of [`SCAN_WORDS`] words with a
-/// step point (`steps::pause`) between them, the frame map's lock released;
+/// step point (`steps::between`) between them, the frame map's lock released;
 /// a run is taken only once all of it was read free under the lock
 /// (`zoraya_pmm::FrameAllocator::alloc_contig_step`). When none is found and
 /// the reaper holds frames, each round of its help frees a step of them
@@ -125,7 +125,7 @@ pub fn alloc_contig(count: u64) -> Result<Frame, Status> {
 ///
 /// The scan is not atomic: the lock is released between steps. If frames were
 /// freed since the scan began (`FrameAllocator::generation`), a run may have
-/// appeared behind it, so a scan that found none is made once more, counted
+/// appeared behind it (the rescan only helps runs freed behind the scan), so a scan that found none is made once more, counted
 /// as a round of help; `memory_create` of a contiguous object does not fail
 /// for a run that was free at every instant.
 pub(crate) fn alloc_contig_in_steps(

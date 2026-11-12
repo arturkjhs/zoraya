@@ -314,6 +314,8 @@ static TESTS: &[Test] = &[
         name: "a_space_list_growth_is_counted_and_prepared",
         run: a_space_list_growth_is_counted_and_prepared,
     },
+    // Ordering: this test needs a free 4 MiB run, so it must run before
+    // anything fragments the heap's frames.
     Test {
         name: "a_contiguous_object_is_zeroed_apart_from_its_search",
         run: a_contiguous_object_is_zeroed_apart_from_its_search,
@@ -555,6 +557,9 @@ static TESTS: &[Test] = &[
         name: "stack_canary_intact",
         run: stack_canary_intact,
     },
+    // Ordering: this test and the kernel-steps tests must run after the timer
+    // tests, because they leave a slice deadline queued. The spawn test runs
+    // last (the heap keeps the frames it takes).
     Test {
         name: "a_spawn_with_a_big_space_is_bounded",
         run: a_spawn_with_a_big_space_is_bounded,

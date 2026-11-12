@@ -98,7 +98,8 @@ pub fn pause() {
 #[cfg(feature = "qemu-test")]
 static KERNEL_STEPS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Sets [`KERNEL_STEPS`].
+/// Sets [`KERNEL_STEPS`]. It is one global flag, for the test kernel only,
+/// valid while those tests are single-actor.
 #[cfg(feature = "qemu-test")]
 pub fn set_kernel_steps(on: bool) {
     KERNEL_STEPS.store(on, core::sync::atomic::Ordering::Relaxed);

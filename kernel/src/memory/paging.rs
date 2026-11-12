@@ -72,8 +72,9 @@ impl TableMemory for KernelTables {
     }
 }
 
-/// Frames the kernel's tables took after the boot pool ran out: one table
-/// per 2 MiB the heap's window grows into. They are never given back.
+/// Frames the kernel tables (heap window, kernel stacks, devices) took after
+/// the boot pool ran out, e.g. one table per 2 MiB the heap's window grows
+/// into. They are never given back.
 static TABLE_FRAMES: AtomicU64 = AtomicU64::new(0);
 
 /// The frames the kernel's page tables have taken from the frame allocator
