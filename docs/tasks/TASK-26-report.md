@@ -1143,7 +1143,7 @@ room's `/tmp` and an untrusted room's `tmpd` and broker are not built). Counts u
 - `make test-qemu-one` (HVF, the test kernel, all tests including `t_rooms`): pass; `t_rooms` prints each invariant's line.
 - `tests/shell/rooms.script` through the runner against the real kernel and `init`: PASS, 48 steps, `zoraya-fsck` clean.
 - `make check`: pass (clippy and fmt included, `adr-check` 0 errors).
-- `make test-changed`: see the line at the end of this section.
+- `make test-changed` (every step: `init` and the Makefile changed; HVF, TCG and crash rounds past 2 skipped locally): test-qemu, test-libposix, test-posix, test-posix-gui, test-tour-gui, test-gui, test-net ok; test-files failed once on `conventions.script` (the `room --help` text, fixed in the same branch), then `make test-files test-crash` passed (rooms, conventions, grants and the rest).
 
 ### Measurements (HVF, one run, `t_rooms`)
 
