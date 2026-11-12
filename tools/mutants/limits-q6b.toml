@@ -138,23 +138,23 @@ note = "the_refusals_of_a_room_go_with_its_last_client"
 [[mutant]]
 id = "Q6b-rehover-create"
 file = "crates/zoraya-compositor/src/lib.rs"
-find = """        self.rehover();
+find = '''        self.rehover();
         Ok(id)
     }
 
-    fn create_popup"""
-replace = """        Ok(id)
+    fn create_popup'''
+replace = '''        Ok(id)
     }
 
-    fn create_popup"""
+    fn create_popup'''
 note = "the_card_follows_a_restack_under_a_still_pointer"
 
 [[mutant]]
 id = "Q6b-rehover-close"
 file = "crates/zoraya-compositor/src/lib.rs"
-find = """            self.set_focus(top);
+find = '''            self.set_focus(top);
         }
-        self.rehover();"""
-replace = """            self.set_focus(top);
-        }"""
+        self.rehover();'''
+replace = '''            self.set_focus(top);
+        }'''
 note = "the_card_follows_a_restack_under_a_still_pointer"

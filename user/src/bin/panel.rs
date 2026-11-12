@@ -183,11 +183,8 @@ fn rooms_rows(st: &State) -> String {
     zoraya_settings::usage::rows_to_wire(&rows, zoraya_proto_chooser::MAX_ROOMS_REPLY)
 }
 
-/// `room set ROOM WORD VALUE` for the settings window: the line is
-/// rewritten, the room keeper applies it (and checks the ceilings), and the
-/// old line goes back if it refuses, as `room set` does in the shell. Never
-/// for a settings window of an untrusted room, which holds no `Set`
-/// (ADR-0266 point 6, ADR-0269).
+/// `room set ROOM WORD VALUE` for the settings window: the logic is
+/// `zoraya_panel::set_room_limit`; this gives it the file and the keeper.
 fn set_room_limit(
     st: &mut State,
     from: &Option<Room>,
@@ -195,30 +192,27 @@ fn set_room_limit(
     word: &str,
     value: &str,
 ) -> Result<(), String> {
-    if from.as_ref().is_some_and(|r| r.untrusted) {
-        return Err(alloc::format!(
-            "{room}: from home: room set {room} {word} {value}"
-        ));
-    }
-    let old_bytes = rooms_file(st);
-    let (new, old) = zoraya_settings::rooms::with_limit(&old_bytes, room, word, value)
-        .map_err(|e| alloc::format!("{room}: {e}"))?;
-    write_rooms(st, &new)?;
-    if let Some(k) = st.keeper.as_mut()
-        && let Err(e) = k.set(room)
-    {
-        // Only that line goes back; the file is read again so that another
-        // edit made since is kept.
-        let now = rooms_file(st);
-        if let Ok(back) = zoraya_settings::rooms::replace(&now, &old) {
-            let _ = write_rooms(st, &back);
-        }
-        return Err(match e {
-            zoraya_user::roomsclient::Fail::Denied(_, t) => alloc::format!("{room}: {t}"),
-            zoraya_user::roomsclient::Fail::Gone => String::from("the room keeper does not answer"),
-        });
-    }
-    Ok(())
+    let untrusted = from.as_ref().is_some_and(|r| r.untrusted);
+    // The three closures share the state through a cell.
+    let st = core::cell::RefCell::new(st);
+    zoraya_panel::set_room_limit(
+        untrusted,
+        room,
+        word,
+        value,
+        || rooms_file(&st.borrow()),
+        |b| write_rooms(&mut st.borrow_mut(), b),
+        Some(|name: &str| {
+            let mut st = st.borrow_mut();
+            let Some(k) = st.keeper.as_mut() else {
+                return Ok(());
+            };
+            k.set(name).map_err(|e| match e {
+                zoraya_user::roomsclient::Fail::Denied(_, t) => zoraya_panel::KeeperFail::Denied(t),
+                zoraya_user::roomsclient::Fail::Gone => zoraya_panel::KeeperFail::Gone,
+            })
+        }),
+    )
 }
 
 fn reload(panel: &mut Panel, root: Option<&File>) -> bool {
