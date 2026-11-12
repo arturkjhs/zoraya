@@ -39,8 +39,9 @@ simplest, least surprising and most reversible one; none changes an accepted dec
   room is idle only with no lease. "Another launcher" is decided by the holder's kind (`Launcher`), never by the
   channel's slot, which is reused. `Keep` carries the room's trust (for every room job, not only the untrusted job) and
   the kind of its last holder; `init` replaces its copy when the holder changes. A resumed room counts as leased by
-  that kind until it sends `Leave` or its channel closes (or 30 s pass without it, so that a holder that never returns
-  does not hold one of the four untrusted places for ever); a resumed room that has processes and no known holder
+  that kind until it sends `Leave` or its channel closes (or 30 s pass with no `Manage` channel of that kind attached,
+  so that a holder that never returns does not hold one of the four untrusted places for ever, while a client that
+  reconnects late, as `zosh` does at its next call, still finds its room); a resumed room that has processes and no known holder
   answers `BUSY`. `home` is refused `Stop` and `Set`: it is the session's terminals, not a room. A `Room(R)` or `Usage`
   channel cannot take the last four of the 64 channel places: `init`'s `Attach` of a reconnecting `Manage` holder is
   never dropped for want of one. The keeper writes `Keep` to `init` before it gives a launcher the launch job, and
@@ -95,6 +96,9 @@ None.
 - Whether `IDLE_MS` (5 s) should be longer for a slow launcher under TCG.
 - Whether the 30 s after which a resumed room's old holder is given up (`ORPHAN_MS`) is right; and that a holder that
   had already sent `Leave` before the keeper ended is still treated as holding until then (`Keep` does not say).
+- A client of the orphan's kind that stays attached and never launches or leaves keeps the room until its channel closes.
+- `room set` of an untrusted line takes the words it lacks from the keeper's `Usage` of the running room and refuses for a
+  stopped room; a request for the keeper's machine would let it fill them for a stopped one.
 - Whether a launcher that crashes holding a launch job should have the room's processes ended (today they run on).
 - Whether the keeper should ask `init` for the machine's free disk instead of assuming 8 GiB for the default of
   `--disk` when it fills a line in memory.

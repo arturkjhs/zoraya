@@ -3068,21 +3068,27 @@ impl Z {
                 &["room set NAME --mem 128M --cpu 10%"],
             );
         }
-        if room.untrusted {
-            // An untrusted line always has all six (INV-0266-1). The defaults
-            // come from the limits of this shell's own job (the session's, or
-            // below it); with none known the words stay out and the keeper,
-            // which reads the session job, fills them when it launches or
-            // sets the room. No machine is made up here.
-            let usage = zoraya_user::job_get_usage(JOB, false).ok();
-            if let Some(m) = usage.and_then(|u| {
-                Some(rooms::Machine {
-                    session_mem: u.memory.limit?,
-                    session_procs: u.processes.limit?.min(u64::from(u32::MAX)) as u32,
-                    free_disk: 8 << 30,
-                })
-            }) {
-                room.limits.fill_defaults(&m);
+        if room.untrusted && !room.limits.is_complete() {
+            // An untrusted line always has all six (INV-0266-1). The missing
+            // words are the ones the keeper applied to the running room: it
+            // fills them from the session job, which this shell's own job
+            // may not show. With none (the room does not run, or there is no
+            // keeper) nothing is made up: the change is refused.
+            let applied = self
+                .keeper
+                .as_mut()
+                .filter(|_| self.keeper_manage)
+                .and_then(|k| k.usage(name).ok())
+                .and_then(|r| r.into_iter().next());
+            if let Some(r) = applied {
+                room.limits.fill_from(&zoraya_rooms::record_limits(&r));
+            }
+            if !room.limits.is_complete() {
+                return fail(
+                    io,
+                    "an untrusted room needs all six limits and some are not known here",
+                    &["give every word: --mem --cpu --procs --disk --conns --tmp"],
+                );
             }
         }
         let new = match rooms::replace(&old, &room) {
@@ -3282,20 +3288,20 @@ impl Z {
                 // `--kill` ends the room's processes first (ADR-0269
                 // point 2's `Stop`), also one a keeper started before it
                 // was restarted (INV-0269-3).
+                if *name == zoraya_settings::rooms::HOME {
+                    // `home` is the session's own terminals: nothing to
+                    // stop, and no line to remove.
+                    return fail(io, Some(name), "no such room", &[]);
+                }
+                let mut stopped = false;
                 if p.flag(d, "kill") {
-                    // The line first: `home` and a name that is no room kill
-                    // nothing (`home` is the session's own terminals).
-                    let table = self
-                        .open(ROOMS, 0)
-                        .and_then(|f| read_all(&f))
-                        .unwrap_or_default();
-                    if *name == zoraya_settings::rooms::HOME
-                        || zoraya_settings::rooms::read(&table).get(name).is_none()
-                    {
-                        return fail(io, Some(name), "no such room", &[]);
-                    }
+                    // Always sent, whether or not the line is still there: a
+                    // room removed without `--kill` goes on running, and a
+                    // later `--kill` must end it. A room that does not run is
+                    // fine.
                     match self.keeper.as_mut().map(|k| k.stop(name)) {
-                        Some(Ok(())) | None => {}
+                        Some(Ok(())) => stopped = true,
+                        None => {}
                         Some(Err(zoraya_user::roomsclient::Fail::Denied(
                             zoraya_proto_rooms::status::NOT_RUNNING,
                             _,
@@ -3326,6 +3332,9 @@ impl Z {
                         }
                         Err(e) => fail(io, Some(ROOMS), &e, &[]),
                     },
+                    // The line was removed before (without `--kill`); the stop
+                    // just done is what this call was for.
+                    Err(_) if stopped => 0,
                     Err(_) => fail(io, Some(name), "no such room", &[]),
                 }
             }

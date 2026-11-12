@@ -135,7 +135,9 @@ struct Running {
     /// given back.
     leases: Vec<(ChanId, Launcher)>,
     /// A resumed room's old holder, when the keeper started: leased until it
-    /// leaves, its channel closes, or [`ORPHAN_MS`] pass.
+    /// leaves, its channel closes, or [`ORPHAN_MS`] pass with no `Manage`
+    /// channel of its kind attached (one that is attached may still claim
+    /// the room: its client reconnects at its next call).
     orphan: Option<(Launcher, u64)>,
     last_launch_ms: u64,
     reports: [[u32; 4]; 4],
@@ -154,6 +156,8 @@ pub struct Keeper<E: Env> {
     untrusted: Option<JobId>,
     rooms: Vec<Running>,
     events: Vec<Event>,
+    /// The `Manage` channels being served, by kind.
+    manage: Vec<(ChanId, Launcher)>,
 }
 
 fn denied(code: u32, text: &str, tx: u32, out: &mut [u8]) -> Reply {
@@ -167,6 +171,17 @@ fn denied(code: u32, text: &str, tx: u32, out: &mut [u8]) -> Reply {
     ) {
         Ok(n) => Reply::Send(n),
         Err(_) => Reply::Close,
+    }
+}
+
+/// A denial of the request `request`, for a process that must answer with one
+/// where it would otherwise close the channel (it could not do what the
+/// request asked, or has no place for what it opened).
+pub fn denial(code: u32, text: &str, request: &[u8], out: &mut [u8]) -> Option<usize> {
+    let (header, _) = Header::decode(request).ok()?;
+    match denied(code, text, header.transaction, out) {
+        Reply::Send(n) => Some(n),
+        _ => None,
     }
 }
 
@@ -227,6 +242,7 @@ impl<E: Env> Keeper<E> {
             untrusted,
             rooms: Vec::new(),
             events,
+            manage: Vec::new(),
         }
     }
 
@@ -308,10 +324,19 @@ impl<E: Env> Keeper<E> {
         l
     }
 
+    /// The process serves a new channel: a `Manage` channel keeps an
+    /// orphaned lease of its kind from lapsing on time.
+    pub fn channel_attached(&mut self, chan: ChanId, kind: &ChannelKind) {
+        if let ChannelKind::Manage(l) = kind {
+            self.manage.push((chan, *l));
+        }
+    }
+
     /// A channel went away: it holds no lease any more, and nobody else's is
     /// touched. The closing of a `Manage` channel also ends the lease a
     /// resumed room has for that kind of holder.
     pub fn channel_closed(&mut self, chan: ChanId, kind: &ChannelKind) {
+        self.manage.retain(|(c, _)| *c != chan);
         for r in &mut self.rooms {
             r.leases.retain(|(c, _)| *c != chan);
             if let ChannelKind::Manage(l) = kind
@@ -329,9 +354,9 @@ impl<E: Env> Keeper<E> {
         let mut i = 0;
         while i < self.rooms.len() {
             let r = &mut self.rooms[i];
-            if r.orphan
-                .is_some_and(|(_, since)| now.saturating_sub(since) >= ORPHAN_MS)
-            {
+            if r.orphan.is_some_and(|(l, since)| {
+                now.saturating_sub(since) >= ORPHAN_MS && !self.manage.iter().any(|(_, m)| *m == l)
+            }) {
                 r.orphan = None;
             }
             let r = &self.rooms[i];

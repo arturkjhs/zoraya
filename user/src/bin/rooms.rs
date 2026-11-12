@@ -231,6 +231,7 @@ impl Rooms {
         if port_subscribe(port, end, wanted, KEY_CHANNEL + id as u64, Mode::Level).is_err() {
             return false;
         }
+        self.keeper.channel_attached(id, &kind);
         self.chans[id] = Some(Chan { end, kind });
         true
     }
@@ -328,10 +329,20 @@ impl Rooms {
             // write to `init` fails, the launch is refused (the channel is
             // closed) and the job goes unused.
             let told = self.tell_init();
+            // Not a close: a client that reads a closed channel as "no keeper"
+            // might go on without one. It is told the launch is refused.
             let reply = match reply {
                 Reply::SendJob(_, job) if !told => {
                     self.keeper.env().close(job);
-                    Reply::Close
+                    match zoraya_rooms::denial(
+                        zoraya_proto_rooms::status::KERNEL,
+                        "init did not take the job",
+                        &self.request[..sizes.bytes as usize],
+                        &mut self.out,
+                    ) {
+                        Some(n) => Reply::Send(n),
+                        None => Reply::Close,
+                    }
                 }
                 other => other,
             };
@@ -366,7 +377,15 @@ impl Rooms {
                         } else {
                             let _ = handle_close(server);
                             let _ = handle_close(client);
-                            false
+                            // No place: the requester keeps its channel and
+                            // its leases, and is told.
+                            zoraya_rooms::denial(
+                                zoraya_proto_rooms::status::TOO_MANY,
+                                "too many channels",
+                                &self.request[..sizes.bytes as usize],
+                                &mut self.out,
+                            )
+                            .is_some_and(|n| channel_write(end, &self.out[..n], &[]).is_ok())
                         }
                     }
                     Err(_) => false,

@@ -216,6 +216,17 @@ impl Limits {
             && self.tmp.is_some()
     }
 
+    /// Takes each word this lacks from `other` (the limits the room keeper
+    /// applied to the running room), keeping the words it has.
+    pub fn fill_from(&mut self, other: &Limits) {
+        self.mem = self.mem.or(other.mem);
+        self.cpu = self.cpu.or(other.cpu);
+        self.procs = self.procs.or(other.procs);
+        self.disk = self.disk.or(other.disk);
+        self.conns = self.conns.or(other.conns);
+        self.tmp = self.tmp.or(other.tmp);
+    }
+
     /// Fills each word an untrusted room's line lacks (ADR-0266 point 3).
     /// `[assumption, every value]` until measured.
     pub fn fill_defaults(&mut self, m: &Machine) {

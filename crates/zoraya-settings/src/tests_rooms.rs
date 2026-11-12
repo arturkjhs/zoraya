@@ -516,3 +516,27 @@ fn only_the_words_a_job_enforces_need_the_keeper() {
         assert!(l.needs_job(), "{l:?}");
     }
 }
+
+#[test]
+fn limits_are_complete_with_six_words_and_take_the_missing_from_another() {
+    let mut l = Limits {
+        mem: Some(1),
+        ..Limits::default()
+    };
+    assert!(!l.is_complete());
+    let keeper = Limits {
+        mem: Some(9),
+        cpu: Some(25),
+        procs: Some(32),
+        disk: Some(7),
+        conns: Some(16),
+        tmp: Some(3),
+    };
+    l.fill_from(&keeper);
+    assert!(l.is_complete());
+    assert_eq!(l.mem, Some(1), "a word the line has is kept");
+    assert_eq!(
+        (l.cpu, l.procs, l.disk, l.conns, l.tmp),
+        (Some(25), Some(32), Some(7), Some(16), Some(3))
+    );
+}

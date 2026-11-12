@@ -779,7 +779,8 @@ fn a_resumed_room_keeps_its_holders_kind_and_is_leased_until_it_leaves() {
     k.env().now += IDLE_MS;
     k.collect_idle();
     assert!(k.running().is_empty());
-    // Or it never comes back.
+    // Or it never comes back: no channel of its kind is attached, and the
+    // lease lapses on time.
     let (mut k, _) = restarted(Some(Launcher::Console), 0);
     k.env().now += ORPHAN_MS;
     k.collect_idle();
@@ -1227,4 +1228,72 @@ fn a_collected_room_does_not_hide_the_ones_after_it() {
     k.env().now += IDLE_MS;
     k.collect_idle();
     assert_eq!(k.running(), vec!["project".to_string()]);
+}
+
+#[test]
+fn a_lease_does_not_lapse_while_a_channel_of_its_kind_is_attached() {
+    // Round 2, finding 2: zosh reconnects only at its next call, so its
+    // channel may be attached long after ORPHAN_MS; the room must still be
+    // its own, and Stop and Launch must see one job.
+    let (mut k, j) = restarted(Some(Launcher::Console), 2);
+    k.channel_attached(9, &CONSOLE);
+    k.env().now += 10 * ORPHAN_MS;
+    k.collect_idle();
+    assert_eq!(k.running().len(), 1, "the console's channel is attached");
+    assert_eq!(k.job_of("agent-1"), Some(j));
+    // The desktop is still refused, and the console launches into the same job.
+    assert_eq!(
+        launch(&mut k, 10, &DESKTOP, "agent-1").unwrap_err().0,
+        status::BUSY
+    );
+    // A channel of the other kind does not keep it.
+    let (mut k, _) = restarted(Some(Launcher::Console), 0);
+    k.channel_attached(9, &DESKTOP);
+    k.env().now += ORPHAN_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty(), "no console channel");
+    // Once the attached channel closes, the lease goes with it.
+    let (mut k, _) = restarted(Some(Launcher::Console), 0);
+    k.channel_attached(9, &CONSOLE);
+    k.channel_closed(9, &CONSOLE);
+    k.env().now += ORPHAN_MS;
+    k.collect_idle();
+    assert!(k.running().is_empty());
+}
+
+#[test]
+fn stop_frees_a_resumed_room_of_unknown_holder() {
+    // Finding 6: the BUSY of "running, holder unknown" has a way out.
+    let (mut k, j) = restarted(None, 2);
+    assert_eq!(
+        launch(&mut k, 1, &CONSOLE, "agent-1").unwrap_err(),
+        (status::BUSY, "running, holder unknown".to_string())
+    );
+    simple(
+        &mut k,
+        1,
+        &CONSOLE,
+        &msg(&Stop {
+            room: Text("agent-1"),
+        }),
+    )
+    .unwrap();
+    assert!(k.env().jobs.get(&j).unwrap().killed);
+    assert!(k.running().is_empty());
+    launch(&mut k, 1, &CONSOLE, "agent-1").unwrap();
+}
+
+#[test]
+fn a_denial_answers_the_transaction_of_the_request() {
+    // Findings 4 and 5: the process answers with a denial instead of
+    // closing the channel.
+    let request = msg(&Launch {
+        room: Text("agent-1"),
+    });
+    let mut out = vec![0u8; OUT_SIZE];
+    let n = denial(status::TOO_MANY, "no place", &request, &mut out).unwrap();
+    let (h, d) = decode::<Denied<'_>>(&out[..n], 0).unwrap();
+    assert_eq!(h.transaction, 5);
+    assert_eq!((d.status.0, d.text.0), (status::TOO_MANY, "no place"));
+    assert!(denial(status::KERNEL, "x", &[1, 2], &mut out).is_none());
 }
