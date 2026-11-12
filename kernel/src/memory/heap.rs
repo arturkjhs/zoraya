@@ -241,13 +241,16 @@ pub(crate) fn prepare_in_steps(bytes: usize, mut step_point: impl FnMut()) {
 }
 
 /// Byte counts. `backing` counts the pages mapped ahead by [`prepare`] too:
-/// they are frames the heap has taken.
+/// they are frames the heap has taken. So does the kernel's page tables'
+/// frames (`paging::table_frames`): a growth across a 2 MiB boundary of the
+/// window takes a table too, which the sum of free frames and `backing` must
+/// see to stay constant across a test that makes the heap grow.
 pub fn stats() -> Stats {
     let mut heap = HEAP.lock();
     let window = heap.backing_mut();
     let ahead = (window.mapped - window.next) as usize;
     let mut stats = heap.stats();
-    stats.backing += ahead;
+    stats.backing += ahead + (paging::table_frames() * PAGE_SIZE as u64) as usize;
     stats
 }
 

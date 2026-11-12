@@ -43,12 +43,35 @@ struct Queue {
     thread: Option<Arc<Thread>>,
     /// An item is being freed.
     busy: bool,
+    /// The frames queued and not yet freed, kept up to date by `defer`,
+    /// `free_some` and `take`, so that `held` (which an allocation reads
+    /// under the heap's lock) does not walk the queue.
+    held: u64,
+    /// Every item before this index is emptied and waits for the reaper to
+    /// drop it; the frames are taken from the items from here on. Emptying
+    /// is in order, so the walks of `free_some` and `take` start at the first
+    /// item with frames and not at the first item.
+    cursor: usize,
+}
+
+impl Queue {
+    /// Moves the cursor past the items with nothing left to free.
+    fn skip_emptied(&mut self) {
+        while let Some(item) = self.items.get(self.cursor)
+            && item.frames.is_empty()
+            && item.run.is_none()
+        {
+            self.cursor += 1;
+        }
+    }
 }
 
 static QUEUE: SpinLock<Queue> = SpinLock::new(Queue {
     items: Vec::new(),
     thread: None,
     busy: false,
+    held: 0,
+    cursor: 0,
 });
 
 /// Starts the thread. Call once, after `sched::init`.
@@ -142,6 +165,7 @@ fn defer(frames: Vec<Frame>, run: Option<(Frame, u64)>, paid: Paid) -> Result<()
     if queue.items.len() == queue.items.capacity() {
         return Err((frames, run, paid));
     }
+    queue.held += frames.len() as u64 + run.map_or(0, |(_, count)| count);
     queue.items.push(Garbage {
         frames,
         run,
@@ -181,7 +205,8 @@ pub fn drain() {
 fn free_some(max: usize) -> bool {
     let mut queue = QUEUE.lock();
     let mut left = max;
-    for item in queue.items.iter_mut() {
+    let cursor = queue.cursor;
+    for item in queue.items[cursor..].iter_mut() {
         while left > 0 {
             let Some(frame) = item.frames.pop() else {
                 break;
@@ -207,18 +232,15 @@ fn free_some(max: usize) -> bool {
             break;
         }
     }
+    queue.held -= (max - left) as u64;
+    queue.skip_emptied();
     left < max
 }
 
 /// The frames queued and not yet freed. Like `take`, it takes only the
 /// queue's lock, so it runs under the heap's.
 pub fn held() -> u64 {
-    let queue = QUEUE.lock();
-    queue
-        .items
-        .iter()
-        .map(|item| item.frames.len() as u64 + item.run.map_or(0, |(_, count)| count))
-        .sum()
+    QUEUE.lock().held
 }
 
 /// For a contiguous run that found none: frees a step of what the reaper
@@ -240,9 +262,12 @@ pub fn help() -> bool {
 /// the queue's.
 pub fn take() -> Option<Frame> {
     let mut queue = QUEUE.lock();
-    for item in queue.items.iter_mut() {
+    let cursor = queue.cursor;
+    let mut taken = None;
+    for item in queue.items[cursor..].iter_mut() {
         if let Some(frame) = item.frames.pop() {
-            return Some(frame);
+            taken = Some(frame);
+            break;
         }
         if let Some((first, count)) = item.run {
             item.run = (count > 1).then(|| {
@@ -251,10 +276,15 @@ pub fn take() -> Option<Frame> {
                     count - 1,
                 )
             });
-            return Some(first);
+            taken = Some(first);
+            break;
         }
     }
-    None
+    if taken.is_some() {
+        queue.held -= 1;
+        queue.skip_emptied();
+    }
+    taken
 }
 
 fn reaper_main(_: usize) {
@@ -272,13 +302,16 @@ fn reaper_main(_: usize) {
         // goes back to the heap and its charge is given back.
         let done = {
             let mut queue = QUEUE.lock();
-            let position = queue
-                .items
-                .iter()
-                .position(|g| g.frames.is_empty() && g.run.is_none());
+            // The items before the cursor are the emptied ones.
+            let position = queue.cursor.checked_sub(1);
             position.map(|at| {
                 queue.busy = true;
-                queue.items.swap_remove(at)
+                let garbage = queue.items.swap_remove(at);
+                // The last item took its place: the items before it are
+                // still emptied, and it may not be.
+                queue.cursor = at;
+                queue.skip_emptied();
+                garbage
             })
         };
         if let Some(garbage) = done {

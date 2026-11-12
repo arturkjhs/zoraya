@@ -191,6 +191,10 @@ pub struct FrameAllocator<'m> {
     stats: Stats,
     /// Next-fit position: region index and frame index within the region.
     hint: (usize, u64),
+    /// How many times frames were freed. A search for a run made in steps
+    /// ([`FrameAllocator::alloc_contig_step`]) that saw it change knows that
+    /// a run may have been freed behind it, and reads the map once more.
+    generation: u64,
 }
 
 impl<'m> FrameAllocator<'m> {
@@ -231,6 +235,7 @@ impl<'m> FrameAllocator<'m> {
                 free: total,
             },
             hint: (0, 0),
+            generation: 0,
         };
         a.seal_padding();
         for r in reserved {
@@ -275,6 +280,11 @@ impl<'m> FrameAllocator<'m> {
 
     pub fn stats(&self) -> Stats {
         self.stats
+    }
+
+    /// The number of calls that freed frames so far (wrapping).
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The managed RAM ranges, in address order.
@@ -458,6 +468,7 @@ impl<'m> FrameAllocator<'m> {
             self.storage[region.used + word] &= !mask;
         }
         self.stats.free += count;
+        self.generation = self.generation.wrapping_add(1);
         Ok(())
     }
 }

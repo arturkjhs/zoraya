@@ -74,7 +74,11 @@ pub fn count(units: usize) {
 /// that no test reaches with a lock held is not caught (ADR-0270, open
 /// questions).
 pub fn pause() {
-    if sched::current().process().is_none() {
+    #[cfg(feature = "qemu-test")]
+    let kernel_steps = KERNEL_STEPS.load(core::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(feature = "qemu-test"))]
+    let kernel_steps = false;
+    if sched::current().process().is_none() && !kernel_steps {
         return;
     }
     #[cfg(feature = "qemu-test")]
@@ -87,6 +91,17 @@ pub fn pause() {
     // the vectors and the interrupt controller are set up, and the caller
     // holds no spinlock (its contract, checked above in the test kernel).
     unsafe { step_point(sched::preempt_point) };
+}
+
+/// Whether [`pause`] makes a step point in a kernel thread too: a test
+/// that runs a call of the kernel's with IRQ masked, as a system call does.
+#[cfg(feature = "qemu-test")]
+static KERNEL_STEPS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Sets [`KERNEL_STEPS`].
+#[cfg(feature = "qemu-test")]
+pub fn set_kernel_steps(on: bool) {
+    KERNEL_STEPS.store(on, core::sync::atomic::Ordering::Relaxed);
 }
 
 /// A window for interrupts, then `preempt` (the scheduler's preemption

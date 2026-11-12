@@ -508,3 +508,53 @@ fn range_set_reports_full_and_stays_unchanged() {
 
 // A runaway test fails at 512 MiB instead of taking the host (docs/backlog.md).
 zoraya_test_alloc::cap_memory!();
+
+/// A search in steps that sees the free generation change knows a run may
+/// have been freed behind it: the pass finds none (the frames it has passed
+/// were taken when it read them), a run is freed behind it, and only the
+/// generation says so. Allocating does not move the generation, a failed
+/// free does not, a free does.
+#[test]
+fn the_free_generation_tells_a_stepped_search_that_a_run_appeared_behind_it() {
+    let mem = [Range::at(RAM, 512 * FRAME_SIZE)];
+    let mut s = storage(&mem);
+    let mut a = FrameAllocator::new(&mem, &[], &mut s).unwrap();
+    let mut taken = Vec::new();
+    while let Ok(f) = a.alloc() {
+        taken.push(f);
+    }
+    taken.sort_by_key(|f| f.addr());
+    assert_eq!(a.generation(), 0, "allocating moves nothing");
+    // Four single frames far ahead, so that the pass has enough free frames
+    // to start and no run to find.
+    for at in [100, 200, 300, 400] {
+        a.free(taken[at]).unwrap();
+    }
+    let began = a.generation();
+    assert_ne!(began, 0);
+    // A step of the pass with a budget too small to reach the end.
+    let mut search = RunSearch::default();
+    assert_eq!(a.alloc_contig_step(4, 1, &mut search, 2), Ok(None));
+    // Four frames at the start, behind the search, are freed.
+    assert_eq!(a.free(frame(0)), Err(FreeError::OutOfRange));
+    assert_eq!(a.generation(), began, "a refused free moves nothing");
+    for f in &taken[1..5] {
+        a.free(*f).unwrap();
+    }
+    assert_ne!(a.generation(), began);
+    // The rest of the pass does not see the run...
+    let mut missed = Ok(None);
+    while let Ok(None) = missed {
+        missed = a.alloc_contig_step(4, 1, &mut search, 2);
+    }
+    assert_eq!(missed, Err(OutOfFrames));
+    // ... and a pass from the start does.
+    let mut again = RunSearch::default();
+    assert_eq!(
+        a.alloc_contig_step(4, 1, &mut again, u64::MAX),
+        Ok(Some(taken[1]))
+    );
+    let free = a.generation();
+    a.free_contig(taken[1], 4).unwrap();
+    assert_ne!(a.generation(), free, "free_contig moves it");
+}

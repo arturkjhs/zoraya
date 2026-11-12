@@ -3,6 +3,7 @@
 
 use core::slice;
 
+use zoraya_abi::Status;
 use zoraya_dtb::platform::{MAX_REGIONS, PlatformInfo};
 use zoraya_pmm::{
     FRAME_SIZE, Frame, FrameAllocator, OutOfFrames, Range, RunSearch, Stats, place_metadata,
@@ -111,32 +112,46 @@ const SCAN_WORDS: u64 = 48;
 /// between two step points, and the scan starts again. No interval holds
 /// more than a step of either (INV-0270-1); the caller holds no spinlock, as
 /// for any step point.
-pub fn alloc_contig(count: u64) -> Result<Frame, OutOfFrames> {
-    alloc_contig_in_steps(count, crate::steps::pause)
+pub fn alloc_contig(count: u64) -> Result<Frame, Status> {
+    alloc_contig_in_steps(count, crate::steps::between)
 }
 
 /// [`alloc_contig`] with the step point given, for the test kernel, whose
-/// threads are no process and so make none.
+/// threads are no process and so make none. A step point that fails (the
+/// process was asked to end, `steps::between`) ends the search with its
+/// status, so that a kill is not waited out by a scan that grows with the
+/// machine's memory (ADR-0270 point 3); the caller frees nothing of the run,
+/// which it did not take yet.
+///
+/// The scan is not atomic: the lock is released between steps. If frames were
+/// freed since the scan began (`FrameAllocator::generation`), a run may have
+/// appeared behind it, so a scan that found none is made once more, counted
+/// as a round of help; `memory_create` of a contiguous object does not fail
+/// for a run that was free at every instant.
 pub(crate) fn alloc_contig_in_steps(
     count: u64,
-    mut step_point: impl FnMut(),
-) -> Result<Frame, OutOfFrames> {
+    mut step_point: impl FnMut() -> Result<(), Status>,
+) -> Result<Frame, Status> {
     if count > MAX_CONTIG_FRAMES {
-        return Err(OutOfFrames);
+        return Err(Status::NoMemory);
     }
+    let mut rescanned = false;
     for round in 0.. {
         let mut search = RunSearch::default();
-        let found = loop {
-            let step = FRAMES
-                .lock()
-                .as_mut()
-                .ok_or(OutOfFrames)?
-                .alloc_contig_step(count, 1, &mut search, SCAN_WORDS);
+        let mut began = None;
+        let (found, changed) = loop {
+            let (step, generation) = {
+                let mut frames = FRAMES.lock();
+                let frames = frames.as_mut().ok_or(Status::NoMemory)?;
+                let step = frames.alloc_contig_step(count, 1, &mut search, SCAN_WORDS);
+                (step, frames.generation())
+            };
+            let began = *began.get_or_insert(generation);
             crate::steps::count(search.words_read() as usize);
             match step {
-                Ok(None) => step_point(),
-                Ok(Some(first)) => break Ok(first),
-                Err(e) => break Err(e),
+                Ok(None) => step_point()?,
+                Ok(Some(first)) => break (Ok(first), false),
+                Err(e) => break (Err(e), generation != began),
             }
         };
         match found {
@@ -144,13 +159,17 @@ pub(crate) fn alloc_contig_in_steps(
                 crate::steps::count(1);
                 return Ok(first);
             }
-            Err(e) if round == CONTIG_HELP_ROUNDS => return Err(e),
-            Err(e) => {
-                step_point();
+            Err(_) if changed && !rescanned && round < CONTIG_HELP_ROUNDS => {
+                rescanned = true;
+                step_point()?;
+            }
+            Err(_) if round == CONTIG_HELP_ROUNDS => return Err(Status::NoMemory),
+            Err(_) => {
+                step_point()?;
                 if !crate::reaper::help() {
-                    return Err(e);
+                    return Err(Status::NoMemory);
                 }
-                step_point();
+                step_point()?;
             }
         }
     }

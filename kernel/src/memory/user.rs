@@ -70,12 +70,24 @@ struct UserMemory {
 impl UserMemory {
     /// Keeps `frame`, or frees it and fails.
     fn adopt(&mut self, frame: Frame) -> Result<(), Status> {
+        if self.frames.len() == self.frames.capacity() {
+            self.count_list_copy();
+        }
         if self.frames.try_reserve(1).is_err() {
             frames::free(frame);
             return Err(Status::NoMemory);
         }
         self.frames.push(frame);
         Ok(())
+    }
+
+    /// Counts the copy that growing the list makes (`GlobalAlloc::realloc` is
+    /// allocate, copy, free): `len * 8` bytes, in units of a page, so that the
+    /// test kernel sees it where it runs in a masked interval. It runs there
+    /// when the list grows under the space's lock (INV-0270-1, ADR-0270 open
+    /// questions).
+    fn count_list_copy(&self) {
+        steps::count(self.frames.len() * size_of::<Frame>() / FRAME_SIZE as usize);
     }
 
     /// The capacity the list of frames needs to take `more`, if it must grow:
@@ -206,15 +218,30 @@ impl AddressSpace {
     pub fn reserve_step(&mut self) {
         if let Some(capacity) = self.memory.capacity_for(STEP_FRAMES) {
             let more = capacity - self.memory.frames.len();
+            self.memory.count_list_copy();
             let _ = self.memory.frames.try_reserve_exact(more);
         }
     }
 
+    /// The length and capacity of the list of frames, for the test kernel.
+    #[cfg(feature = "qemu-test")]
+    pub fn list_state(&self) -> (usize, usize) {
+        (self.memory.frames.len(), self.memory.frames.capacity())
+    }
+
     /// [`heap::prepare`] and [`AddressSpace::reserve_step`], for a space no
     /// lock holds (one being built: `spawn`, a snapshot's child).
+    ///
+    /// The copy the list's growth makes is work (counted, `count_list_copy`)
+    /// and gets an interval of its own: a step point after it, so that the
+    /// step's pages are not added to it (INV-0270-1). No lock may be held.
     pub fn prepare_step(&mut self) {
+        let grows = self.step_growth() > 0;
         heap::prepare(self.step_growth());
         self.reserve_step();
+        if grows {
+            steps::pause();
+        }
     }
 
     /// An empty space whose frames `payer` pays for (`None`: the kernel's).

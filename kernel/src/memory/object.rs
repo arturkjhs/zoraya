@@ -81,7 +81,7 @@ impl MemoryObject {
         };
         paid.kernel(charge::arc_cost::<MemoryObject>().saturating_add(list))?;
         let frames = if contiguous {
-            let first = frames::alloc_contig(count).map_err(|_| Status::NoMemory)?;
+            let first = frames::alloc_contig(count)?;
             // The object owns the run from here: a cancel or a failure below
             // drops it, and its `Drop` frees the run and the charge. Nobody
             // else can reach the frames until it is returned, so they are

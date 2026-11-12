@@ -303,6 +303,18 @@ static TESTS: &[Test] = &[
         run: exited_processes_leave_nothing_behind,
     },
     Test {
+        name: "a_run_freed_behind_the_scan_is_found_by_a_second_pass",
+        run: a_run_freed_behind_the_scan_is_found_by_a_second_pass,
+    },
+    Test {
+        name: "a_space_list_growth_is_counted_and_prepared",
+        run: a_space_list_growth_is_counted_and_prepared,
+    },
+    Test {
+        name: "a_spawn_with_a_big_space_is_bounded",
+        run: a_spawn_with_a_big_space_is_bounded,
+    },
+    Test {
         name: "running_out_of_asids_is_an_error",
         run: running_out_of_asids_is_an_error,
     },
@@ -2240,10 +2252,11 @@ fn unhoard(mut head: u64) {
 /// The stand-in for a system call's step point in a test kernel thread,
 /// where `steps::pause` does nothing (no process): a window for interrupts,
 /// which ends the masked interval.
-fn test_step_point() {
+fn test_step_point() -> Result<(), zoraya_abi::Status> {
     // SAFETY: the vectors and the GIC are up (tests run after boot set them
     // up), and the callers of a step point hold no spinlock (their contract).
     unsafe { crate::steps::step_point(|| false) };
+    Ok(())
 }
 
 /// INV-0270-1: an allocation that finds no free frame while the reaper still
@@ -2329,7 +2342,7 @@ fn a_run_search_over_a_fragmented_map_goes_in_steps() {
     crate::steps::masked_max_units(true);
     let got = frames::alloc_contig_in_steps(2, || {
         points += 1;
-        test_step_point();
+        test_step_point()
     });
     arch::restore_interrupts(daif);
     let units = crate::steps::masked_max_units(true);
@@ -2347,6 +2360,75 @@ fn a_run_search_over_a_fragmented_map_goes_in_steps() {
     assert_eq!(frames_accounted(), before);
 }
 
+/// The search for a run reads the frame map in steps with the lock released,
+/// so a run freed behind it is not seen by that pass; with frames freed since
+/// the pass began (`FrameAllocator::generation`), a pass that found none is
+/// made once more, and `memory_create` of a contiguous object does not fail
+/// for a run that was free at every instant. Every frame taken but two
+/// adjacent ones, which the second to last step point of the scan frees:
+/// behind the scan, and the reaper holds nothing to wait for.
+fn a_run_freed_behind_the_scan_is_found_by_a_second_pass() {
+    let before = frames_accounted();
+    let mut addrs: Vec<u64> = Vec::new();
+    addrs
+        .try_reserve_exact(frames::stats().free as usize + 16)
+        .expect("room");
+    let head = hoard_frames();
+    let mut at = head;
+    while let Some((frame, next)) = unhoard_one(at) {
+        addrs.push(frame.addr());
+        at = next;
+    }
+    addrs.sort_unstable();
+    let first = (0..addrs.len() - 1)
+        .find(|&i| addrs[i + 1] == addrs[i] + zoraya_pmm::FRAME_SIZE)
+        .expect("two adjacent frames");
+    let pair = [addrs[first], addrs[first + 1]];
+    // Two frames apart, free from the start, so that the scan has frames to
+    // find (`count > free` ends a search at once) and still no run.
+    let spare = [addrs[addrs.len() / 2], addrs[addrs.len() / 2 + 2]];
+    assert!(spare[1] != pair[1] && spare[0] != pair[0]);
+    drop(addrs);
+    for addr in spare {
+        frames::free(Frame::from_addr(addr).expect("aligned"));
+    }
+    // How many step points a scan that finds nothing makes.
+    let mut points = 0;
+    let none = frames::alloc_contig_in_steps(2, || {
+        points += 1;
+        test_step_point()
+    });
+    assert!(none.is_err(), "every frame is taken");
+    assert!(
+        points > 3,
+        "{points} step points in a scan of the whole map"
+    );
+    // The pass again, with the pair freed behind it.
+    let mut calls = 0;
+    let got = frames::alloc_contig_in_steps(2, || {
+        calls += 1;
+        if calls == points - 1 {
+            for addr in pair {
+                frames::free(Frame::from_addr(addr).expect("aligned"));
+            }
+        }
+        test_step_point()
+    });
+    let mut at = head;
+    while let Some((frame, next)) = unhoard_one(at) {
+        if !pair.contains(&frame.addr()) && !spare.contains(&frame.addr()) {
+            frames::free(frame);
+        }
+        at = next;
+    }
+    // If it was not found the step point freed the pair already.
+    if let Ok(run) = got {
+        frames::free_contig(run, 2);
+    }
+    assert_eq!(got.map(|run| run.addr()), Ok(pair[0]), "a second pass");
+    assert_eq!(frames_accounted(), before);
+}
+
 /// INV-0270-1: an allocation larger than every free span of the heap makes
 /// it grow; prepared, the growth is mapped in steps and the allocation maps
 /// nothing in its own interval. Unprepared, 512 KiB more than the heap held
@@ -2355,7 +2437,9 @@ fn a_prepared_allocation_grows_the_heap_in_steps() {
     let bytes = (heap::stats().free_spans + (512 << 10)).next_multiple_of(PAGE_SIZE as usize);
     let daif = arch::save_and_mask_interrupts();
     crate::steps::masked_max_units(true);
-    heap::prepare_in_steps(bytes, test_step_point);
+    heap::prepare_in_steps(bytes, || {
+        let _ = test_step_point();
+    });
     let mut block: Vec<u8> = Vec::new();
     let reserved = block.try_reserve_exact(bytes);
     arch::restore_interrupts(daif);
@@ -2366,6 +2450,155 @@ fn a_prepared_allocation_grows_the_heap_in_steps() {
         units <= crate::steps::STEP as u64 + 16,
         "{units} units in one interval of a heap's growth (INV-0270-1)"
     );
+}
+
+/// A space of `pages` mapped pages, for the tests of the list of frames.
+fn space_of(pages: usize) -> crate::memory::user::AddressSpace {
+    use crate::memory::user::AddressSpace;
+    const BASE: u64 = 0x4000_0000;
+    let mut space = AddressSpace::new(None).expect("a space");
+    for n in 0..pages {
+        space
+            .map_new_page(BASE + n as u64 * PAGE_SIZE, USER_DATA)
+            .expect("a page");
+    }
+    space
+}
+
+const USER_DATA: zoraya_pagetable::Attributes = zoraya_pagetable::Attributes {
+    memory: MemoryType::Normal,
+    write: true,
+    execute: false,
+    user: true,
+};
+
+/// INV-0270-1: the list of frames of a space grows by a copy
+/// (`GlobalAlloc::realloc`: allocate, copy, free) that is work in the
+/// interval it runs in, counted as `len * 8 / 4096` units, and a step
+/// prepared with `AddressSpace::prepare_step` makes it, and the heap's
+/// growth for the new list, before its interval. Two equal spaces one step
+/// short of the list's doubling: one takes a step of 64 pages as it is, the
+/// other after `prepare_step`.
+fn a_space_list_growth_is_counted_and_prepared() {
+    const BASE: u64 = 0x4000_0000;
+    let step_pages = |space: &mut crate::memory::user::AddressSpace| {
+        for n in 0..crate::steps::STEP {
+            space
+                .map_new_page(BASE + (1 << 30) + n as u64 * PAGE_SIZE, USER_DATA)
+                .expect("a page");
+        }
+    };
+    // Pages until the list has room for fewer than a step more, at a
+    // capacity where the copy is more than a unit.
+    let mut pages = 0;
+    let mut probe = space_of(0);
+    loop {
+        let (len, capacity) = probe.list_state();
+        if capacity >= 2048 && capacity - len <= 40 {
+            break;
+        }
+        probe
+            .map_new_page(BASE + pages as u64 * PAGE_SIZE, USER_DATA)
+            .expect("a page");
+        pages += 1;
+    }
+    drop(probe);
+    let mut unprepared = space_of(pages);
+    let mut prepared = space_of(pages);
+    let (len, capacity) = unprepared.list_state();
+    assert!(len + crate::steps::STEP > capacity, "the step needs growth");
+    assert!(prepared.step_growth() > 0);
+
+    // The step points open and close the intervals (the test thread runs
+    // with IRQ masked, which `restore_interrupts` alone would not end).
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    step_pages(&mut unprepared);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    let as_it_is = crate::steps::masked_max_units(true);
+
+    prepared.prepare_step();
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    step_pages(&mut prepared);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    let ahead = crate::steps::masked_max_units(true);
+
+    drop((unprepared, prepared));
+    crate::reaper::drain();
+    let copy = (len * core::mem::size_of::<Frame>() / PAGE_SIZE as usize) as u64;
+    assert!(copy >= 3, "the test copies a list of {len} frames");
+    assert!(
+        ahead <= crate::steps::STEP as u64 + 16,
+        "{ahead} units in a prepared step (INV-0270-1)"
+    );
+    assert!(
+        as_it_is >= ahead + copy,
+        "{as_it_is} units in an unprepared step, {ahead} in a prepared one, \
+         and the copy of {len} frames is {copy}"
+    );
+}
+
+/// `hello`'s ELF file with `extra` bytes more of zeroed memory in its last
+/// writable segment.
+fn with_bss(file: &[u8], extra: u64) -> Vec<u8> {
+    let mut bytes = file.to_vec();
+    let word = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().expect("8"));
+    let phoff = word(&bytes, 32) as usize;
+    let phnum = u16::from_le_bytes(bytes[56..58].try_into().expect("2")) as usize;
+    let mut last = None;
+    for i in 0..phnum {
+        let ph = phoff + i * 56;
+        let kind = u32::from_le_bytes(bytes[ph..ph + 4].try_into().expect("4"));
+        let flags = u32::from_le_bytes(bytes[ph + 4..ph + 8].try_into().expect("4"));
+        if kind == 1 && flags & 2 != 0 {
+            last = Some(ph);
+        }
+    }
+    let ph = last.expect("a writable segment");
+    let memsz = word(&bytes, ph + 40) + extra;
+    bytes[ph + 40..ph + 48].copy_from_slice(&memsz.to_le_bytes());
+    bytes
+}
+
+/// INV-0270-1: `spawn` of a program with a large address space (half the free
+/// frames, at most 64 MiB) holds no more than a step of work in any interval:
+/// the list of frames grows ahead of each step (`prepare_step` in the image,
+/// the stack and the startup block), where the doubling was 64 pages of the
+/// heap and a copy in one interval. Measured through the kernel's own call
+/// with the step points on in this thread (`steps::set_kernel_steps`).
+fn a_spawn_with_a_big_space_is_bounded() {
+    let (_, file) = ramdisk::find("hello").expect("hello");
+    let pages = (frames::settled_stats().free / 2).min(16384);
+    let big = with_bss(file, pages * PAGE_SIZE);
+    let before = frames_accounted();
+    crate::steps::set_kernel_steps(true);
+    let daif = arch::save_and_mask_interrupts();
+    let _ = test_step_point();
+    crate::steps::masked_max_units(true);
+    let spawned = process::spawn_bytes_suspended("big", &big);
+    let _ = test_step_point();
+    arch::restore_interrupts(daif);
+    crate::steps::set_kernel_steps(false);
+    let units = crate::steps::masked_max_units(true);
+    if units > crate::steps::STEP as u64 + 16 {
+        crate::steps::diagnose_units();
+    }
+    let process = spawned.expect("a process with a big space");
+    let _ = process.signal(RequestKind::Terminate, 0);
+    let _ = process.resume();
+    process.wait();
+    drop(process);
+    crate::reaper::drain();
+    assert!(
+        units <= crate::steps::STEP as u64 + 16,
+        "{units} units in an interval of a spawn of {pages} pages (INV-0270-1)"
+    );
+    assert_eq!(frames_accounted(), before);
 }
 
 fn pmu_and_debug_registers_do_not_trap() {
