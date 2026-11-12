@@ -22,6 +22,7 @@ screen   cp        copy a file
 screen   echo      print its arguments
 screen   exit      end this shell; a new one starts
 screen   export    give a variable to the programs you run
+screen   fetch     fetch a page over HTTP
 screen   fg        continue a job in the foreground
 screen   find      find files by name
 screen   grants    show what a command would be given, without running it
@@ -34,10 +35,10 @@ screen   ls        list a directory
 screen   math      calculate
 screen   mkdir     make a directory
 screen   mv        move or rename
-screen   net       show the state of the network
 prefix -- space: next page, q: quit --
 key spc
 window
+screen   net       show the state of the network
 screen   poweroff  turn the machine off
 screen   pwd       print the current directory
 screen   reboot    start the machine again

@@ -362,3 +362,119 @@ fn random_requests_never_panic() {
     }
     assert!(service.connection(id).is_some());
 }
+
+fn connect_message(name: &str, address: [u8; 4], port: u32) -> Vec<u8> {
+    bytes(
+        &zoraya_proto_net::Connect {
+            name: Data(name.as_bytes()),
+            address: u32::from_be_bytes(address),
+            port: Below(port),
+        },
+        4,
+    )
+}
+
+#[test]
+fn connect_is_checked_against_the_right_and_the_scope_before_anything_else() {
+    use zoraya_abi::net::Target as ScopeTarget;
+    use zoraya_proto_net::Connecting;
+    let mut net = Net::new(static_config());
+    let mut service = Service::new();
+    let scope = |target, ports| {
+        let mut out = vec![0u8; 128];
+        let r = ReachRule {
+            target,
+            ports,
+            protocols: Protocols::TCP,
+        };
+        let n = encode_scope(&[r], &[], &mut out).unwrap();
+        out.truncate(n);
+        out
+    };
+    let only_80 = || Ports::one(80);
+    let by_name = Connection::new(
+        rights::REACH,
+        &scope(ScopeTarget::Name("test.zoraya"), only_80()),
+    )
+    .unwrap();
+    let by_address = Connection::new(
+        rights::REACH,
+        &scope(ScopeTarget::Address([10, 0, 2, 2]), Ports::ANY),
+    )
+    .unwrap();
+    let no_right = Connection::new(rights::STATUS, &scope(ScopeTarget::Any, Ports::ANY)).unwrap();
+    let name_id = service.add(by_name).unwrap();
+    let address_id = service.add(by_address).unwrap();
+    let none_id = service.add(no_right).unwrap();
+    let mut code = |id, message: &[u8]| match service.handle(id, message, 3, &mut net.client, 0) {
+        Action::Reply(r) => decode::<Connecting>(&r, 0).unwrap().1.status.0,
+        Action::Connect { reply, .. } => {
+            assert_eq!(
+                decode::<Connecting>(&reply, 0).unwrap().1.status.0,
+                status::OK
+            );
+            status::OK
+        }
+        other => panic!("{other:?}"),
+    };
+    // Inside the scope.
+    assert_eq!(
+        code(name_id, &connect_message("test.zoraya", [0; 4], 80)),
+        status::OK
+    );
+    assert_eq!(
+        code(address_id, &connect_message("", [10, 0, 2, 2], 8080)),
+        status::OK
+    );
+    // Outside it: another port, another name, a name where an address rule is,
+    // an address where a name rule is, no right at all.
+    assert_eq!(
+        code(name_id, &connect_message("test.zoraya", [0; 4], 81)),
+        status::NOT_GRANTED
+    );
+    assert_eq!(
+        code(name_id, &connect_message("other.zoraya", [0; 4], 80)),
+        status::NOT_GRANTED
+    );
+    assert_eq!(
+        code(address_id, &connect_message("test.zoraya", [0; 4], 80)),
+        status::NOT_GRANTED
+    );
+    assert_eq!(
+        code(name_id, &connect_message("", [10, 0, 2, 2], 80)),
+        status::NOT_GRANTED
+    );
+    assert_eq!(
+        code(none_id, &connect_message("", [10, 0, 2, 2], 80)),
+        status::NOT_GRANTED
+    );
+    // Not usable: port 0, address 0 with no name, a name that is not in the
+    // scope's spelling (upper case, an address, a space), non-UTF-8.
+    assert_eq!(
+        code(address_id, &connect_message("", [10, 0, 2, 2], 0)),
+        status::NOT_GRANTED
+    );
+    assert_eq!(
+        code(address_id, &connect_message("", [0; 4], 80)),
+        status::INVALID
+    );
+    for bad in ["Test.Zoraya", "10.0.2.2", "a b", "a..b"] {
+        assert_eq!(
+            code(name_id, &connect_message(bad, [0; 4], 80)),
+            status::INVALID,
+            "{bad}"
+        );
+    }
+    let mut raw = connect_message("test.zoraya", [0; 4], 80);
+    let n = raw.len();
+    raw[n - 1] = 0xff;
+    assert_eq!(code(name_id, &raw), status::INVALID);
+    // Handles: exactly three, else the connection is closed.
+    for handles in [0, 1, 2, 4] {
+        let m = connect_message("test.zoraya", [0; 4], 80);
+        assert_eq!(
+            service.handle(name_id, &m, handles, &mut net.client, 0),
+            Action::Close
+        );
+    }
+}

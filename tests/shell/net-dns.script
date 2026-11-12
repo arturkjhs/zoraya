@@ -1,0 +1,24 @@
+# A name asked of SLIRP's DNS forwarder (N3; `make test-net-fetch`, not on CI
+# unless NET_DNS=1: it depends on the host's own resolver, which CI does not
+# promise; the resolver's logic is covered by `cargo test -p zoraya-net` with
+# a scripted DNS server). The guest is on QEMU's user network without
+# `restrict=on`.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+> sleep 3\r
+< \r\n~>
+# A name asked of SLIRP's DNS forwarder at 10.0.2.3, which answers `localhost`
+# from the host's own table (no Internet needed): the answer is 127.0.0.1, an
+# address of this side of the network, so the connection is refused as local
+# (ADR-0223 item 4). A name that does not exist (`.invalid`, RFC 2606) is
+# unresolvable.
+> fetch http://localhost:80/\r
+< the name points at this machine's own network
+< \r\n~>
+> fetch http://nothing.invalid/\r
+< the name has no address
+< \r\n~>
+x power off
+> poweroff\r

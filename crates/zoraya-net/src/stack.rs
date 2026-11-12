@@ -119,9 +119,9 @@ struct PingRun {
 }
 
 pub struct Stack<L: Link> {
-    device: LinkDevice<L>,
-    iface: Interface,
-    sockets: SocketSet<'static>,
+    pub(crate) device: LinkDevice<L>,
+    pub(crate) iface: Interface,
+    pub(crate) sockets: SocketSet<'static>,
     dhcp: Option<SocketHandle>,
     icmp: SocketHandle,
     mac: [u8; 6],
@@ -132,6 +132,8 @@ pub struct Stack<L: Link> {
     /// Runs started, for their identifiers.
     runs: u16,
     events: Vec<Event>,
+    /// TCP connections and the resolver (`tcp`, `dns`).
+    pub(crate) extra: crate::tcp::Extra,
 }
 
 /// A fresh echo socket. Each run gets one, so that a request that could not
@@ -182,6 +184,7 @@ impl<L: Link> Stack<L> {
             ping: None,
             runs: 0,
             events: Vec::new(),
+            extra: crate::tcp::Extra::default(),
         };
         match stack.config.mode.clone() {
             Mode::Dhcp => {

@@ -13,6 +13,7 @@ pub mod gui;
 mod heap;
 pub mod namespace;
 pub mod netclient;
+pub mod netconn;
 pub mod posix_child;
 pub mod stack;
 

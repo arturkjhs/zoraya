@@ -11,11 +11,14 @@
 extern crate alloc;
 
 pub mod config;
+pub mod conn;
 pub mod connection;
+pub mod dns;
 pub mod link;
 pub mod nic;
 pub mod service;
 pub mod stack;
+pub mod tcp;
 
 pub use config::{Config, Mode};
 pub use connection::{Connection, Request, Verdict};

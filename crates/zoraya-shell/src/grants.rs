@@ -135,7 +135,7 @@ fn entries_for(kind: Kind, abs: &str, reason: &str, out: &mut Vec<Planned>) {
         }
     };
     match kind {
-        Kind::Text => {}
+        Kind::Text | Kind::Url => {}
         Kind::Read => push(out, abs.into(), Access::Read),
         Kind::Write => push(out, abs.into(), Access::Change),
         Kind::Create => narrowed(out, Access::Create),
@@ -152,7 +152,7 @@ fn entries_for(kind: Kind, abs: &str, reason: &str, out: &mut Vec<Planned>) {
 /// The value an operand's text came from: the argument whose text holds
 /// it, the whole word or a piece of it (`-C$d`, `--directory=$d`, which
 /// the parser gives as part of a word; review S1).
-fn value_of<'v>(args: &'v [Value], text: &str) -> Option<&'v Value> {
+pub(crate) fn value_of<'v>(args: &'v [Value], text: &str) -> Option<&'v Value> {
     args.iter().find(|a| within(&a.text, text))
 }
 

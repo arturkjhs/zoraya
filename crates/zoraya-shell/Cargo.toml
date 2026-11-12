@@ -13,6 +13,7 @@ zoraya-describe = { path = "../zoraya-describe" }
 zoraya-command = { path = "../zoraya-command" }
 zoraya-proto-file = { path = "../zoraya-proto-file" }
 zoraya-resolve = { path = "../zoraya-resolve" }
+zoraya-http = { path = "../zoraya-http" }
 
 [lints]
 workspace = true

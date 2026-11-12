@@ -738,3 +738,120 @@ when the scheduler ran (`sched::preempt_point` says so). The kernel test
 `K-step-point-no-window-after-switch` (`tools/mutants/kernel-objects.toml`). `frames::free` and `free_contig` count at
 the caller's line, so `steps::diagnose_units` names the freeing path. The units bound stays 64 + 16 (an exit's tail:
 the space's frames, at most 64 inline, and one 16-frame kernel stack).
+
+## N3: a native program fetches a page over HTTP (branch `work/n3`, on `work/q4`)
+
+### Built
+
+- `crates/zoraya-dns` (new, `no_std`, 16 tests): the A query and a total, bounded decoder of the answer (backward compression
+  pointers only, at most 8 jumps, names of at most 253 bytes in a fixed buffer, 32 records read, 8 addresses kept, a message of
+  at most 1,232 bytes, our identifier and our question repeated, an address only from a record owned by the name or by a CNAME
+  chain from it). `crates/zoraya-http` (new, `no_std`, 17 tests): `parse_url`, the request, and an incremental response
+  decoder (any split of the input gives the same result; 8 KiB head, 64 fields, 256-byte lines, 64 MiB body; strict framing).
+  `fuzz/fuzz_targets/net_dns_http.rs`: compiled and driven with 400,000 random inputs in a scratch crate (not run under libFuzzer;
+  `fuzz/Cargo.lock` not updated).
+- `zoraya-proto-net`: `connect` (ordinal 3, three handles: the connection channel's server end, the write end of the stream the
+  client reads, the read end of the stream it writes), `connecting`, and on the connection channel `connected`, `failed`,
+  `reset` (ADR-0222 item 3 with its note of 2026-11-10: the client's stream ends, so INV-0262-4 holds for a netd connection).
+- `zoraya-net`: `tcp` (the socket table, smoltcp's closures, release with the reset going out first), `dns` (the resolver:
+  `net.hosts`, cache, retries), `conn` (`Conns::turn`: the single loop's order, the copy, half close, reset, refusal, timeout, the
+  local-address rule), `Request::Connect` in `Connection::decide`, `Action::Connect` in `Service`. 59 tests (was 39): the new
+  ones run connections over a scripted peer (a TCP server and a DNS server at fixed addresses on the far end of the frame
+  queues) with rings from 100 bytes to 64 KiB and chunks of 7 to 1,000 bytes.
+- `netd`: `StreamClient` (the three handles; only non-blocking calls; a stream end is subscribed only while the connection waits
+  for it) and `Conns` in the loop. `user/src/netconn.rs`: `connect` for clients. `user/src/bin/fetch.rs`:
+  `fetch [-o FILE] [--sum] URL`. `zoraya-describe`: operand kind `url`. `zosh`: `net_for` gives a base-system command with a
+  `url` operand a connection with one reach rule (the URL's host and port, TCP). `docs/tour.md` and the generated scripts list `fetch`.
+- `tools/test-httpd` (std only, 127.0.0.1, bounded, exits after its lifetime), `tools/run-qemu.sh --net-open`, `make test-net`'s
+  last step `test-net-fetch` with `tests/shell/net-fetch.script` (page byte for byte; 1,000,000 / 300,000 chunked by name /
+  70,000 until close / 4,000,000 bytes by checksum; a file written and read back; 404; redirect; a cut connection; a refused
+  port; bad URLs; `-o` keeping an existing file on 404, refusal and a cut page; a URL from a variable or a substitution refused),
+  and `tests/shell/net-dns.script` (SLIRP's DNS answering `localhost`, refused as local, and `nothing.invalid`) in a second boot, skipped
+  on CI with a visible `[net-dns] SKIP` unless `NET_DNS=1`. The server takes `--port 0`.
+- Docs: `docs/design.md` "TCP, names and `fetch`", proposed ADR-0286, `docs/adr/invariants.md`.
+
+### Decisions where the ADRs are silent (proposed ADR-0286; recommendations)
+
+1. **`connect`'s shape** as above; reasons `Unresolvable`, `Refused`, `Unreachable`, `TimedOut`, `Local`, `OverLimit`. Accept.
+2. **Copy through smoltcp's closures, 32 KiB socket buffers, 8 sockets and 16 connections, subscriptions only while waited
+   for.** Accept; the bounds are global until Q3's per-scope account.
+3. **Resolver details** (A only, attempts at 0/1/2/4 s, give up at 8 s, 64-entry cache, no TCP fallback, guessable ids and
+   ports until ADR-0227). Accept.
+4. **A literal `url` operand designates (ADR-0224 item 2); a value is refused.** After the review (`TASK-26-review-n3.md`) the
+   designation is `zoraya_shell::netgrant::net_for`, host-tested, and a `url` operand from a variable, a substitution or a
+   glob is refused before the line runs. Not built: the `+net`/`+listen` words (which would let a value designate), `grants`
+   output for the scope, the REPORT message and the hint (N3b). ADR-0224's open questions carry the note.
+5. **`restrict=off` for the fetch step only** (`--net-open`), against a loopback server. Accept.
+
+### Invariants delta
+
+`checked`: INV-0222-1, -2 (`cargo test -p zoraya-net`; "connected before any stream end" is the note's new shape: the client holds
+the stream ends from the start and `connected` says the connection opened), INV-0222-3 (`cargo test -p zoraya-proto-net`),
+INV-0223-2 (the scope tests of `connect`), INV-0223-4 (`cargo test -p zoraya-dns`). New INV-0286-1, -2 (checked). Partly covered,
+rows unchanged: INV-0223-3 (the refusal is tested; "reported" needs the REPORT message), INV-0223-1 and INV-0220-2 (the decision is
+tested; the frame-recorder test is not written), INV-0221-4 (the test between kills still needs a fetch loop: a candidate for N6),
+INV-0224-1 (the `url` source exists; the `+net` words do not). adr-check total 507.
+
+### Where a network-controlled number enters, and where it is checked
+
+| Number | Entry | Check |
+|---|---|---|
+| DNS answer bytes | `Stack::dns_poll`, `zoraya_dns::parse_response` | copied from smoltcp's UDP socket into a 1,233-byte buffer; source must be a configured server on port 53; the identifier must be a query in flight; then the decoder: length 12 to 1,232, QR and opcode, one question equal to ours, rcode, at most 32 records, each length against the message, pointers backward and at most 8, names at most 253, an A record of 4 bytes, an owner equal to the name or a CNAME target |
+| DNS TTL | `parse_response` | the smallest of the addresses' TTLs, at most 3,600 s, then multiplied as an `i64` of microseconds |
+| resolved addresses | `Conn::next_candidate` | the local-address rule against `status` (own address, gateway, DNS servers) and the scope's address rules; `tcp_open` refuses non-unicast |
+| TCP payload | smoltcp's `recv` closure | never parsed here; copied to the ring (`Wr::Wrote(n)` capped at `data.len()`) |
+| stream read count | `StreamClient::read_outbound` | `n.min(buf.len())`, 0 only as end of file; the closure result is capped again by `tcp_send` |
+| HTTP response | `zoraya_http::Parser` in `fetch` | 8 KiB head, 64 fields, strict framing, 64 MiB body; the cap holds for every framing and every split (INV-0286-2) |
+| URL | `zoraya_http::parse_url` in `fetch` and in `zosh` | scheme, host (name or dotted quad, a name never ends in a number), port 1 to 65,535, no user information, printable path, at most 2,048 bytes |
+| `connect` request | `Service::handle` | decoder: three handles, port below 65,536, name at most 253 bytes; then UTF-8 and `valid_name`, the right `reach`, the scope for name or address and port, handle types in `netd` |
+
+### Tests run
+
+- `cargo test -p zoraya-dns -p zoraya-http -p zoraya-proto-net -p zoraya-net -p zoraya-describe -p zoraya-shell`: 16, 17, 5, 59, 23, 103 passed.
+- `make check` before each commit; `adr-check` clean (0 errors).
+- `PAR_QEMU=1 make test-changed` (every step, because `user/Cargo.toml` and `tools/run-qemu.sh` are not in the map; HVF, one guest at a time):
+  host tests (56 binaries), test-boot, test-qemu, test-libposix, test-files, test-crash, test-posix, test-posix-gui, test-tour-gui,
+  test-gui and test-net all passed, 949 s. The worktree had no ports archives; they were copied from another worktree's cache
+  (no download) and `make fetch-ports` verified them.
+- `make test-net-fetch` on its own after the last change to `fetch`: PASS, 57 steps. Not run: `FULL=1` (TCG for the fetch step) and the
+  fuzz targets under libFuzzer. The TCG fetch step is written (`FULL=1 make test-net` runs it with a 400 s timeout) and was exercised
+  only through the benchmark script, which ran the same fetches under TCG.
+
+### Measurements
+
+See `docs/design.md`, "TCP, names and `fetch`": HVF 16 MiB in 232 ms (213 ms without `fetch`'s hashing, 79 MB/s), TCG 1,463 ms
+(1,423 ms, 11.8 MB/s); a one-byte page, connect to end of file, 27.7 ms (HVF) and 7.8 ms (TCG). Medians of 5 and 10 runs, single
+boots. The copies' share is an estimate (9 to 16 percent of the HVF time from the stream rates of stage 6), not a measurement.
+
+### Handoff
+
+- State: branch `work/n3` on `work/q4` on `work/n2` on `work/integ`, local only, not merged.
+- By hand: start `target/debug/zoraya-test-httpd --port 8080` on the host, then `make run-net` and at the prompt
+  `fetch http://10.0.2.2:8080/`; `fetch --sum http://10.0.2.2:8080/pattern/16777216` for the numbers;
+  `fetch http://localhost:8080/` (refused as local); `net status`. `make test-net` (`FULL=1` for TCG);
+  `make test-net-fetch` alone; the server's log is `target/test-logs/test-httpd.log`.
+- For the reviewer: `crates/zoraya-net/src/{conn,tcp,dns,service,connection}.rs` and `conn_tests.rs`; `crates/zoraya-dns/src/lib.rs`;
+  `crates/zoraya-http/src/lib.rs`; `user/src/bin/netd.rs` (`StreamClient`, the `Action::Connect` arm, `turn`);
+  `user/src/netconn.rs`; `user/src/bin/fetch.rs`; `user/src/bin/zosh.rs` (`net_for`); `tools/test-httpd/src/main.rs`;
+  `tools/run-qemu.sh` (`--net-open`); the `test-net-fetch` recipe; `docs/adr/0286-*.md`.
+- **Merging with the fixes on `work/n2`** (the N2 review's open items: `poll` returning `Some(0)`, `ErrorReply` answering an
+  `ErrorReply`, the ICMP socket recreate): not duplicated. My edits to files those fixes may touch are small: `stack.rs` (three
+  fields made `pub(crate)` and one field `extra` added, plus its initialiser), `netd.rs` (the `turn` body and the match on keys),
+  `service.rs` (one ordinal arm and one `Action` variant). Expect a textual conflict in `Stack`'s struct literal and in `turn`.
+  `Conns::turn` takes the delay `stack.poll` returns and combines it with the resolver's and the connections' deadlines; if the
+  `Some(0)` fix changes what `poll` returns when frames wait, `turn` follows it with no change.
+- Open: (1) the `+net` words, `grants`, the REPORT message and the hint (N3b); (2) the `Reset` reasons (smoltcp does not say a timeout
+  from a reset); (3) per-scope bounds and accounts for the 8 sockets, the 16 connections and netd's buffers (Q3); (4) the HVF latency
+  of 27.7 ms against TCG's 7.8 ms: the guest timer tick and smoltcp's ACK delay are the suspects, no cause found; (5) `datagram`,
+  `listen`, `resolve`, `peer`/`local`/`share`, AAAA, TCP DNS, negative caching; (6) the frame slot is copied byte by byte with volatile
+  reads (`Frames::read_slot`), a cost on every received byte; (7) the fuzz targets never ran under libFuzzer and `fuzz/Cargo.lock` is not
+  updated; (8) INV-0221-4's test between two kills needs a fetch in a loop; (9) `libposix` sockets are N4; (10) the test needs SLIRP's
+  DNS forwarder for `localhost` and `nothing.invalid`, which works without the Internet on this host (QEMU 11.1.2); a CI image whose
+  host has no resolver that knows `localhost` would fail those two steps, and they are the first to suspect if CI differs.
+
+### Review fixes (after `docs/tasks/TASK-26-review-n3.md`; its "Dispositions" section has each finding)
+
+Errors 1 to 3 fixed (a reset after the peer's FIN and a 30 s limit for half-closed connections; `net_for` in `zoraya-shell` with a
+refusal of values; `fetch` fails on a reset whatever the framing), warnings 4 to 8 fixed (ADR-0224 note, DNS steps split and skipped
+on CI, `-o` opens at the first byte, `--port 0`, host tests). Tests: `cargo test -p zoraya-net` 61, `-p zoraya-shell` 110 (7 new).
+Open: notes 11, 12, 14.
