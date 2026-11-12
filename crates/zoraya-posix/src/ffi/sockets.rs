@@ -362,11 +362,6 @@ extern "C" fn ntohs(v: u16) -> u16 {
 }
 
 #[unsafe(no_mangle)]
-extern "C" fn htonl(v: u32) -> u32 {
-    v.to_be()
-}
-
-#[unsafe(no_mangle)]
 extern "C" fn ntohl(v: u32) -> u32 {
     u32::from_be(v)
 }

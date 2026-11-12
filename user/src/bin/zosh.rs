@@ -303,6 +303,9 @@ enum Ready {
         /// The current directory below that entry.
         cwd: String,
         report: (Handle, Handle),
+        /// A connection to `netd` for the program (ADR-0225 item 2), made
+        /// with `narrow` from a literal `url` operand.
+        net: Option<Handle>,
     },
 }
 
@@ -321,10 +324,12 @@ impl Ready {
                 image,
                 entries,
                 report,
+                net,
                 ..
             } => {
                 for h in [image, report.0, report.1]
                     .into_iter()
+                    .chain(net)
                     .chain(entries.iter().filter_map(|e| e.handle))
                 {
                     let _ = handle_close(h);
@@ -846,16 +851,27 @@ impl Z {
         let Some((d, base)) = self.program_description(exec.name) else {
             return Ok(None);
         };
+        Self::net_grant_with(exec, &d, base, &self.cwd)
+    }
+
+    /// `net_grant` for a description given: the image's POSIX programs'
+    /// as well (N4).
+    fn net_grant_with(
+        exec: &Exec<'_>,
+        d: &Description,
+        base: bool,
+        cwd: &str,
+    ) -> Result<Option<(u32, Vec<u8>)>, String> {
         let texts: Vec<&str> = exec.args.iter().map(|a| a.text.as_str()).collect();
-        let parsed = match zoraya_command::parse(&d, &texts) {
+        let parsed = match zoraya_command::parse(d, &texts) {
             Ok(zoraya_command::Outcome::Run(p)) => p,
             _ => zoraya_command::Parsed::default(),
         };
         let line = grants::Line {
-            description: &d,
+            description: d,
             parsed: &parsed,
             args: exec.args,
-            cwd: &self.cwd,
+            cwd,
             grants: exec.grants,
             base_system: base,
         };
@@ -863,6 +879,27 @@ impl Z {
             let hints: Vec<&str> = r.hint.iter().map(String::as_str).collect();
             zoraya_command::error("zosh", Some(&r.subject), &r.problem, &hints)
         })
+    }
+
+    /// The connection a POSIX program of the image gets for a literal `url`
+    /// operand (ADR-0224 item 2, ADR-0225 item 2; N4): `narrow` from the
+    /// shell's own, with `reach` and the scope of that host and port. None
+    /// for a program the image does not describe, a line with no such
+    /// operand, or a session without a network.
+    fn posix_net(&mut self, exec: &Exec<'_>, path: &str) -> Result<Option<Handle>, String> {
+        let trusted: Vec<Description> = descriptions::POSIX
+            .iter()
+            .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
+            .collect();
+        let Some(d) = grants::trusted_description(&trusted, path) else {
+            return Ok(None);
+        };
+        let Some((rights, scope)) = Self::net_grant_with(exec, d, true, &self.cwd)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .net
+            .and_then(|root| zoraya_user::netclient::narrow(root, rights, &scope).ok()))
     }
 
     /// The plan of a line running `exec` under description `d` (rules 1
@@ -1237,6 +1274,21 @@ impl Z {
                 return Err(fail(&zoraya_command::status_problem(s)));
             }
         };
+        // A literal `url` operand of a POSIX program the image describes
+        // designates, as for a native one (ADR-0224 item 2): the program
+        // gets a connection at `NET` that reaches that host and port.
+        let net = match self.posix_net(exec, path) {
+            Ok(n) => n,
+            Err(e) => {
+                for h in [image, report.0, report.1]
+                    .into_iter()
+                    .chain(entries.iter().filter_map(|e| e.handle))
+                {
+                    let _ = handle_close(h);
+                }
+                return Err(e);
+            }
+        };
         let given = grants::summary(&plan, &self.home());
         Ok((
             Ready::Posix {
@@ -1246,6 +1298,7 @@ impl Z {
                 cwd_entry,
                 cwd,
                 report,
+                net,
             },
             given,
         ))
@@ -3457,12 +3510,14 @@ impl Host for Z {
                         cwd_entry,
                         cwd,
                         report,
+                        net,
                     } => {
                         let question = false;
                         elements.push((exec.name.to_string(), question, Some(report.0)));
                         if failed.is_some() {
                             for h in [image, report.1]
                                 .into_iter()
+                                .chain(net)
                                 .chain(entries.iter().filter_map(|e| e.handle))
                             {
                                 let _ = handle_close(h);
@@ -3494,6 +3549,7 @@ impl Host for Z {
                             env: &env,
                             streams: *ends,
                             report: report.1,
+                            net,
                             realtime_base: self.realtime_base,
                         };
                         let broker = self.broker.as_ref().expect("checked by ready");

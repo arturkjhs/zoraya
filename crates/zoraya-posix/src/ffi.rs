@@ -1989,7 +1989,8 @@ extern "C" fn siglongjmp(env: *mut u8, value: i32) -> ! {
 // ------------------------------------------------------------ outside T1
 
 /// Names of the tier list that no measured T1 program needs working
-/// (sockets, `syscall`, `setsid`): each fails with `ENOSYS`, as ADR-0140's
+/// (`sendmsg`, `syscall`, `setsid`; the stream client's socket calls are
+/// `sockets.rs`, N4): each fails with `ENOSYS`, as ADR-0140's
 /// stub did.
 macro_rules! not_yet {
     (int $($name:ident)*) => {$(
@@ -2007,5 +2008,5 @@ macro_rules! not_yet {
     )*};
 }
 
-not_yet!(int syscall tee connect getrandom send sendmsg setgroups setsid socket);
+not_yet!(int syscall tee getrandom sendmsg setgroups setsid);
 not_yet!(ptr __map_file);

@@ -225,6 +225,9 @@ pub struct Launch<'a> {
     pub streams: [Handle; 3],
     /// The refused-path channel's write end (ADR-0153 rule 11); moved.
     pub report: Handle,
+    /// A connection to `netd` for the program (ADR-0225 item 2), moved to
+    /// the `NET` slot; none for a program the line gave no network.
+    pub net: Option<Handle>,
     pub realtime_base: u64,
 }
 
@@ -253,6 +256,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
+            if let Some(n) = l.net {
+                let _ = handle_close(n);
+            }
             return Err(s);
         }
     };
@@ -261,6 +267,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
+            if let Some(n) = l.net {
+                let _ = handle_close(n);
+            }
             return Err(s);
         }
     };
@@ -341,7 +350,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     ) else {
         close_entries(&l.entries);
         let _ = handle_close(l.report);
-        for h in [p.child_job, p.broker_end] {
+        for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
             let _ = handle_close(h);
         }
         return Err(fail(Status::InvalidArgument, &p));
@@ -351,7 +360,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
-            for h in [p.child_job, p.broker_end] {
+            for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
                 let _ = handle_close(h);
             }
             return Err(fail(s, &p));
@@ -389,7 +398,10 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         (slot::BROKER.slot(), p.broker_end, ChannelObject::RIGHTS),
         (slot::REPORT.slot(), l.report, ChannelObject::RIGHTS),
         (slot::PROCESS_JOB.slot(), p.child_job, abi::job_rights::OWN),
-    ] {
+    ]
+    .into_iter()
+    .chain(l.net.map(|n| (slot::NET.slot(), n, ChannelObject::RIGHTS)))
+    {
         e.handle(HandleEntry {
             slot: at,
             handle: h,
@@ -411,7 +423,10 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Ok(process) => process,
         Err(s) => {
             close_entries(&l.entries);
-            for h in [boot, boot_child, p.broker_end, l.report, p.child_job] {
+            for h in [boot, boot_child, p.broker_end, l.report, p.child_job]
+                .into_iter()
+                .chain(l.net)
+            {
                 let _ = handle_close(h);
             }
             return Err(fail(s, &p));

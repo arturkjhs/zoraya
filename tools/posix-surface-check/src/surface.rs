@@ -16,14 +16,15 @@ pub const TIERS: [&str; 2] = ["T0", "T1"];
 pub const STRUCK: [&str; 6] = ["setuid", "setgid", "dlopen", "dlsym", "dlclose", "dlerror"];
 /// Rows added to the list.
 pub const ADDED: [&str; 1] = ["writev"];
-/// INV-0005-2's exclusion table: no export may have these names.
-pub const DENIED: [&str; 16] = [
+/// INV-0005-2's exclusion table: no export may have these names. `socket`
+/// and `getaddrinfo` are no longer in it: ADR-0225 item 1 (accepted) takes
+/// them off, and they are exported only if the tier list or an ADR's
+/// `posix-surface-added` block names them (ADR-0287).
+pub const DENIED: [&str; 14] = [
     "ptrace",
     "msgget",
     "semget",
     "shmget",
-    "socket",
-    "getaddrinfo",
     "pthread_create",
     "dlopen",
     "flock",

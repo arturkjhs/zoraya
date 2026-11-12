@@ -1,0 +1,61 @@
+# `zfetch`, a C program on libposix sockets, against the host-side test server
+# (N4; `make test-net-posix`, which turns @PORT@ and the @SUM...@ checksums
+# into numbers, as `make test-net-fetch` does). The program is /bin/zfetch of
+# the disk, run through the broker; the shell gives it a connection to the host
+# and port of the URL on its line (ADR-0224 item 2) at the NET slot.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+# The same page as `fetch`, byte for byte, by address.
+> zfetch http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+
+< fetched over HTTP, byte for byte
+
+< \r\n~>
+# Each framing, by checksum: the numbers `fetch --sum` is compared with.
+> zfetch --sum http://10.0.2.2:@PORT@/pattern/1000000\r
+< 1000000 bytes fnv1a @SUM1M@ in
+< \r\n~>
+> zfetch --sum http://10.0.2.2:@PORT@/close/70000\r
+< 70000 bytes fnv1a @SUM70K@ in
+< \r\n~>
+# By name: getaddrinfo asks netd (net.hosts gives test.zoraya), and connect
+# goes by the name it came from (INV-0225-2).
+> zfetch --sum http://test.zoraya:@PORT@/chunked/300000\r
+< 300000 bytes fnv1a @SUM300K@ in
+< \r\n~>
+# More than the rings and the socket buffers hold.
+> zfetch --sum http://10.0.2.2:@PORT@/pattern/4000000\r
+< 4000000 bytes fnv1a @SUM4M@ in
+< \r\n~>
+# What goes wrong is said, and the exit status is 1.
+> zfetch http://10.0.2.2:@PORT@/status/404\r
+< zfetch: http://10.0.2.2:@PORT@/status/404: HTTP 404
+< \r\n~>
+> status\r
+< \r\nexit status 1
+< \r\n~>
+> zfetch http://10.0.2.2:1/\r
+< Connection refused
+< \r\n~>
+> zfetch --sum http://10.0.2.2:@PORT@/reset\r
+< zfetch: recv: Connection reset
+< \r\n~>
+# A URL from a value does not designate: the line is refused before it runs.
+> set u http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> zfetch $u\r
+< from a value, outside the line's network grants
+< \r\n~>
+# Without the grant (INV-0225-1): the socket is made, and connect is refused.
+> posixrun -m /bin=/bin:ro -m /home=/home -C /home /bin/zfetch http://10.0.2.2:@PORT@/\r
+< zfetch: 10.0.2.2: Permission denied
+< posixrun: exit 1
+< \r\n~>
+x power off
+> poweroff\r
