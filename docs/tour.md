@@ -67,6 +67,7 @@ Commands:
   status    describe how the last command ended
   sync      make written data durable
   test      check a condition
+  top       each room's use against its limits
   unset     remove a variable
   uptime    time since boot
   wait      wait for background jobs
