@@ -1948,6 +1948,19 @@ Run: `make check`; `make test-qemu-one` (passes with the final head). Not run: C
 - The pending row `disk-filler-tmp` (an untrusted room's `/tmp` and its `tmpd`); the architect's go-ahead; a full CI run (`candidate-full/`) of the commit that removes the refusal, then `main`'s.
 - ADR-0299 (proposed) needs the architect's decision.
 
+### Red candidate run 43311917098 (`candidate/work-q7-fixes-e`, head 96da472) and its fixes
+
+- **Every test-qemu job and test-net timed out at 300 s** (stopping between test 110 and 117 of 127, wherever the budget ran out; the 9 failures
+  are the expected panics). No hang: under TCG on the development host `job_suspend_from_a_process` took 240 s (it used to take a few), of
+  which the two forced cases of round 2 took about 235 s (`a_resume_from_inside_cannot_undo_a_suspend_walk` 2 s a round for 40 rounds,
+  `a_large_tree_is_suspended_whole_while_jobs_come_and_go` 9 s a round for 15). `FORCE_SWITCH` makes each step point of a 700-job walk
+  switch, and every process spinning at EL0 then kept the CPU for a whole 10 ms slice before the walk went on. Fix: while `FORCE_SWITCH` is
+  on, the test kernel gives user threads 1 ms slices (`test_calls::FORCED_SLICE_NS`). `t_suspend` then took 39 s under TCG and the whole
+  tcg-default run 141 s (PASS); the mutation of `Exclusive::take` returning at once still fails `t_suspend` (HVF, auto-default).
+- **`portbench` panicked (`subscribe: LimitReached`) and the test passed**: it subscribed 10,000 times to one port and one job, which
+  ADR-0299's bound of 1024 refuses; its panic exit 101 is under `PORT_RATIO_LIMIT` (150). It now measures with 1024 subscriptions and
+  exits with `i32::MAX` on any refused call. INV-0006-3's 10,000 is recorded in ADR-0006's open questions for the architect.
+
 ### Tests run (this session)
 
 `make check`; `make test-qemu-one` (the whole test kernel on auto-default, which includes `t_bound` and `t_devices`) after steps 1 to 2 and after steps 5 and 6; `cargo test -p zoraya-events`;

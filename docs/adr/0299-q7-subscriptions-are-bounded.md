@@ -55,7 +55,7 @@ counted in units (the `Paid` drops take the charge lock and walk at most 32 ance
 
 ## Consequences
 - **Positive.** `port_subscribe`, `set` on a source, `port_close` and `free_source` do a fixed amount of work.
-- **Negative.** A new refusal (`LimitReached`) that no program meets today.
+- **Negative.** A new refusal (`LimitReached`). One program met it: `portbench` (INV-0006-3) subscribed 10,000 times to one port and one job, panicked, and its exit code 101 passed the ratio bound of 150; it now measures with 1024 and fails the test on a refusal (ADR-0006, open questions).
 - **Exits.** The bounds are per port and per source; an exit closes up to 64 handles per interval (ADR-0270 point 2), so
   64 ports of 1024 subscriptions were about 20 ms masked on the host (review of the fixes, error 4). `object::weight` now counts
   a port's subscriptions, and those of the source of any other object, one unit per 16 (a full port is a whole step), so
