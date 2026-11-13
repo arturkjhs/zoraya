@@ -97,9 +97,20 @@ impl<T> Members<T> {
 
     /// Gives back the room `reserve_all` made, down to the live entries or
     /// one, whichever is more (a failed first `thread_create` undoes its
-    /// growth). Never allocates.
-    pub fn shrink(&mut self) {
-        self.list.shrink_to(self.list.len().max(1));
+    /// growth). It builds the smaller list with `try_reserve_exact` and swaps
+    /// it in, so a failed allocation is an `Err` that leaves the large list
+    /// as it was (`Vec::shrink_to` would allocate through the infallible
+    /// path, and the kernel allocator has no `realloc`; ADR-0022).
+    pub fn shrink(&mut self) -> Result<(), TryReserveError> {
+        let room = self.list.len().max(1);
+        if self.list.capacity() <= room {
+            return Ok(());
+        }
+        let mut smaller = Vec::new();
+        smaller.try_reserve_exact(room)?;
+        smaller.append(&mut self.list);
+        self.list = smaller;
+        Ok(())
     }
 
     /// Drops the list's memory: what a zombie keeps is its record, not the

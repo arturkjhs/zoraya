@@ -115,7 +115,11 @@ pub fn ensure_multi(process: &Process) -> Result<Arc<Multi>, Status> {
         return Ok(multi);
     }
     let cost = multi_cost();
-    process.paid().lock().kernel(cost)?;
+    // A failed earlier call may have kept the member list's charge (below):
+    // it is paid already, and `multi_cost` holds it until the lists are made.
+    let kept = process.multi_cost().load(Ordering::Relaxed);
+    let owed = cost - kept;
+    process.paid().lock().kernel(owed)?;
     let built = (|| {
         let futex = WaitList::new(MAX_THREADS).map_err(|_| Status::NoMemory)?;
         let map_waiters = WaitList::new(MAX_THREADS).map_err(|_| Status::NoMemory)?;
@@ -128,11 +132,6 @@ pub fn ensure_multi(process: &Process) -> Result<Arc<Multi>, Status> {
             futex: SpinLock::new(futex),
             map_waiters: SpinLock::new(map_waiters),
         })
-        .inspect_err(|_| {
-            // The list grew but its charge goes back: shrink it too, or it
-            // would stay uncharged.
-            process.members().lock().shrink();
-        })
     })();
     match built {
         Ok(multi) => {
@@ -141,7 +140,18 @@ pub fn ensure_multi(process: &Process) -> Result<Arc<Multi>, Status> {
             Ok(multi)
         }
         Err(e) => {
-            process.paid().lock().release_kernel(cost);
+            // The member list may have grown. Give it back if the allocator
+            // allows (the smaller list is built first, so a failure keeps the
+            // large one); else its charge stays, and `multi_cost` records it
+            // for the next attempt and for the teardown.
+            let members_cost = Members::<Arc<Thread>>::reserved_bytes() as u64;
+            let still = if process.members().lock().shrink().is_ok() {
+                0
+            } else {
+                members_cost
+            };
+            process.multi_cost().store(still, Ordering::Relaxed);
+            process.paid().lock().release_kernel(kept + owed - still);
             Err(e)
         }
     }
@@ -238,7 +248,9 @@ pub fn create(
 /// Gives up a thread that never ran and was not listed: its object link is
 /// cut, its figure goes with its record.
 fn undo(thread: &Arc<Thread>) {
-    if let Some(object) = thread.object().lock().take() {
+    // The link is taken first: the lock is not held while `terminated` runs.
+    let object = thread.object().lock().take();
+    if let Some(object) = object {
         object.terminated();
     }
     thread.release_thread();

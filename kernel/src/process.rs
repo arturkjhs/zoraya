@@ -1107,8 +1107,10 @@ fn teardown(process: Arc<Process>) -> ! {
     drop(table);
     process.paid.lock().release_kernel(handle_table_cost());
     let multi = process.multi.lock().take();
-    if multi.is_some() {
-        let cost = process.multi_cost.swap(0, Ordering::Relaxed);
+    // Also when the lists were never made but a failed attempt kept the
+    // member list's charge (`thread::ensure_multi`).
+    let cost = process.multi_cost.swap(0, Ordering::Relaxed);
+    if multi.is_some() || cost != 0 {
         process.paid.lock().release_kernel(cost);
         // The member list grown with the lists was part of that charge: a
         // zombie keeps none of it (the owner left, so the list is empty).

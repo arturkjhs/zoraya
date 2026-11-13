@@ -5,6 +5,8 @@
 //! holds the devices at slots 5 on, with a virtio-blk device attached and no
 //! driver.
 
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering::SeqCst};
+
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
     ChannelEntry, DIRECTORY, DeviceObject, FIRST_DEVICE_SLOT, Handle, JOB, MapFlags, MemoryFlags,
@@ -15,7 +17,7 @@ use zoraya_user::{
     device_read, device_read_width, device_transport, device_write, device_write_width,
     directory_lookup, dma_pin, dma_release_quarantine, dma_unpin, handle_close, handle_duplicate,
     interrupt_ack, memory_create, memory_map, memory_unmap, port_create, port_subscribe, port_wait,
-    raw_syscall, spawn, wait_exit,
+    raw_syscall, spawn, thread_create, thread_exit, thread_yield, wait_exit,
 };
 
 const VIRTIO_MAGIC: u32 = 0x7472_6976;
@@ -89,6 +91,68 @@ fn maps_a_device() {
     let no_map = handle_duplicate(device, Rights::INTERRUPT).expect("narrow");
     assert_err!(device_map(no_map, 0), Status::AccessDenied);
     handle_close(no_map).expect("close");
+}
+
+const FORCE_SWITCH: u64 = 0x701a;
+const STEPPED_PAGES: u64 = 256;
+const STACK: u64 = 16 * 1024;
+static MAP_GO: AtomicU32 = AtomicU32::new(0);
+static MAP_DONE: AtomicU32 = AtomicU32::new(0);
+static MAP_OBJECT: AtomicU64 = AtomicU64::new(0);
+static MAP_BASE: AtomicU64 = AtomicU64::new(0);
+
+extern "C" fn stepped_mapper(clear: u64) -> ! {
+    while MAP_GO.load(SeqCst) == 0 {
+        thread_yield();
+    }
+    let object = Handle::new(MAP_OBJECT.load(SeqCst)).expect("object");
+    // Pauses at each step point: the main thread's `device_map` runs inside.
+    let base = memory_map(object, 0, STEPPED_PAGES * PAGE, MapFlags::WRITE).expect("stepped map");
+    MAP_BASE.store(base, SeqCst);
+    MAP_DONE.store(1, SeqCst);
+    thread_exit(clear, 0, 0)
+}
+
+/// ADR-0301 item 6: `device_map` takes the mapping lock. A sibling's stepped
+/// map holds a reserved range between its parts; without the lock the
+/// device's page could be given the same addresses. `FORCE_SWITCH` makes the
+/// map hand over the CPU at its first step point.
+fn device_map_waits_for_a_stepped_map() {
+    let (device, range) = find_block_device();
+    let object = memory_create(STEPPED_PAGES * PAGE, MemoryFlags::NONE).expect("object");
+    MAP_OBJECT.store(object.raw(), SeqCst);
+    let stack_object = memory_create(STACK, MemoryFlags::NONE).expect("stack object");
+    let stack = memory_map(stack_object, 0, STACK, MapFlags::WRITE).expect("stack");
+    handle_close(stack_object).expect("close");
+    for _ in 0..4 {
+        MAP_GO.store(0, SeqCst);
+        MAP_DONE.store(0, SeqCst);
+        // SAFETY: the stack's lowest word is this thread's `clear` word; the
+        // mapping stays until the thread has cleared it.
+        let clear = unsafe { &*(stack as *const AtomicU32) };
+        clear.store(1, SeqCst);
+        let entry = stepped_mapper as extern "C" fn(u64) -> !;
+        let thread = thread_create(entry as usize as u64, stack + STACK, stack, 0).expect("thread");
+        raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
+        MAP_GO.store(1, SeqCst);
+        thread_yield();
+        let mapped = device_map(device, range);
+        raw_syscall(FORCE_SWITCH, [0; 6]);
+        while MAP_DONE.load(SeqCst) == 0 || clear.load(SeqCst) != 0 {
+            thread_yield();
+        }
+        let (window, _) = mapped.expect("device_map beside a stepped map");
+        let base = MAP_BASE.load(SeqCst);
+        assert!(
+            window + PAGE <= base || base + STEPPED_PAGES * PAGE <= window,
+            "the device window {window:#x} lies inside the stepped map at {base:#x}"
+        );
+        memory_unmap(window, PAGE).expect("unmap the window");
+        memory_unmap(base, STEPPED_PAGES * PAGE).expect("unmap the map");
+        handle_close(thread).expect("close");
+    }
+    memory_unmap(stack, STACK).expect("unmap");
+    handle_close(object).expect("close");
 }
 
 /// plan.md step 5, and INV-0054-2: one packet, then none until the ack.
@@ -554,6 +618,7 @@ fn a_transport_has_no_right_its_page_lacks() {
 #[unsafe(no_mangle)]
 fn main() -> i32 {
     maps_a_device();
+    device_map_waits_for_a_stepped_map();
     transport_devices();
     a_transport_and_its_page_keep_holders_apart();
     a_transport_has_no_right_its_page_lacks();

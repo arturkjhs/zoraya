@@ -82,6 +82,23 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
    its kernel stack go back to the job in `thread_exit` or at its leave (`Paid::release_exited`); the memory itself is freed by the
    reaper at the next switch. The refund is made before the `clear` store and its wake (which may yield, in steps of 64, with
    that many joiners), so a joiner woken by the store always sees the figures refunded.
+   *Bound (review of step 1).* The refund comes before the stack is freed, so for a short time the job is charged less than the
+   kernel holds. Only a thread that yields after the refund is in that state: the 64 or more `clear` waiters being woken, and the
+   single sweeper; each leaves one record and one kernel stack uncharged until its own switch (the reaper frees them at the next
+   switch). Transient and bounded by 128 threads. A visible effect: a joiner's next `thread_create` passes the job's `threads`
+   quota while the exiting thread is still listed in the process, so at 128 threads `has_room` then answers `LimitReached`
+   (the process list, not the quota, is the limit).
+6. **A failed first lists-making gives back the member list if it can** (review of step 1). `Members::shrink` builds the smaller
+   list with `try_reserve_exact` and swaps it in (the kernel allocator has no `realloc`, and `Vec::shrink_to` cannot fail
+   softly). If that fails, the large list stays and so does its charge: `multi_cost` records it (while no lists exist), the next
+   `ensure_multi` pays only the rest, and the teardown refunds it.
+7. **A `Move` list holds its handles from the check to the child** (review of step 1; refines ADR-0042 and ADR-0102's "nothing of
+   the caller's changes until the child exists"). `spawn` and `snapshot_process` pause between their check and the removal of the
+   moved handles; a sibling could move the same handle out meanwhile, leaving it in the child and in a receiver (a handle without
+   DUPLICATE twice). `zoraya_handle::Table::begin_move` marks the entry held: no other call finds, duplicates, closes or moves it
+   (they see `BadHandle`) until the call ends the hold, by taking the entry or by giving it back on failure. Other calls that
+   check, pause and remove were listed: `channel_write` checks and removes under one lock; `dma_unpin` removes after a
+   repeatable `unpin`, which gives nobody more rights. A handle listed twice in one `Move` list now fails with `BadHandle`.
 
 ## Consequences
 
@@ -97,7 +114,7 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
   that was not ending and loses its last thread is ended by that leave. *Check:* `cargo test -p zoraya-thread`.
 - **INV-0313-2.** A futex waiter that returns for any reason leaves no node on the process's wait list: after any mixture of
   wakes, time-outs and interrupts, a `futex_wake` of the address wakes none. *Check:* `t_thread` in `make test-qemu`.
-- **INV-0313-3.** A thread that has stored its `clear` word has already given its `threads` figure and kernel memory back: the job's
+- **INV-0313-3.** A thread that has stored its `clear` word has already given its `threads` figure and kernel memory back (the memory half is checked with one joiner, the figure also with 70 joiners woken across a yield): the job's
   usage read right after `join` and the close of the thread's handle equals its value before the thread was made: the refund precedes the store and the wake of the `clear` word, which may yield with 64 or more waiters. *Check:* `t_thread` in `make test-qemu`.
 
 ## Open questions

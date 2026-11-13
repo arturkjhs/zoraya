@@ -586,6 +586,7 @@ fn schedule() {
 
 /// Gives way to any ready thread.
 pub fn yield_now() {
+    crate::steps::assert_unlocked("a yield");
     schedule();
 }
 
@@ -615,6 +616,7 @@ pub fn current() -> Arc<Thread> {
 /// that decided to block, and someone must hold the thread: a waiter list, a
 /// deadline, or its process.
 pub fn block_current() {
+    crate::steps::assert_unlocked("a block");
     let current: *const Thread = {
         let s = SCHED.lock();
         Arc::as_ptr(s.current.as_ref().expect("a thread is running"))
