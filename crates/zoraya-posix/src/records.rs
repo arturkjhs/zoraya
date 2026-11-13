@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::errno::{EINVAL, EOVERFLOW};
 use alloc::vec::Vec;
 
 /// The most records at once: `ENOLCK` past it (a split makes one more).
@@ -138,9 +139,32 @@ impl<O: Copy + PartialEq> Locks<O> {
         Ok(())
     }
 
-    /// Gives up `start..end` of `owner`'s locks on `file`.
-    pub fn unlock(&mut self, file: File, owner: Owner<O>, start: u64, end: u64) {
+    /// Gives up `start..end` of `owner`'s locks on `file`. A range inside
+    /// one record splits it in two: [`Full::Table`] when that would pass
+    /// [`MAX_RECORDS`] (`ENOLCK`, as Linux can answer), and nothing changes.
+    pub fn unlock(
+        &mut self,
+        file: File,
+        owner: Owner<O>,
+        start: u64,
+        end: u64,
+    ) -> Result<(), Full> {
+        let splits = self
+            .records
+            .iter()
+            .filter(|r| r.file == file && r.owner == owner && r.start < start && end < r.end)
+            .count();
+        if self.records.len() + splits > MAX_RECORDS {
+            return Err(Full::Table);
+        }
         self.subtract(file, owner, start, end);
+        Ok(())
+    }
+
+    /// Forgets every record: a `fork` child's copy of the table names the
+    /// parent's locks and the parent's connections, not its own.
+    pub fn clear(&mut self) {
+        self.records.clear();
     }
 
     fn subtract(&mut self, file: File, owner: Owner<O>, start: u64, end: u64) {
@@ -212,22 +236,33 @@ pub fn waits(command: i32) -> bool {
 
 /// The decoded range of a `struct flock`, with `base` the offset its
 /// `l_whence` counts from (0, the current position or the size): bytes
-/// `start..end`, or `None` for an empty or negative-start one that `fcntl`
-/// refuses with `EINVAL`.
-pub fn range(base: i64, start: i64, len: i64) -> Option<(u64, u64)> {
-    let at = base.checked_add(start)?;
+/// `start..end`. A start before the file's first byte is `EINVAL`; a range
+/// whose last byte (`l_start + l_len - 1`) passes `off_t` is `EOVERFLOW`, as
+/// on Linux, so that every `end` but [`EOF`] is at most `2^63`.
+pub fn range(base: i64, start: i64, len: i64) -> Result<(u64, u64), i32> {
+    let at = base.checked_add(start).ok_or(EOVERFLOW)?;
     if len >= 0 {
-        let from = u64::try_from(at).ok()?;
+        let from = u64::try_from(at).map_err(|_| EINVAL)?;
         if len == 0 {
-            return Some((from, EOF));
+            return Ok((from, EOF));
         }
-        Some((from, from.saturating_add(len as u64).min(EOF - 1)))
+        // Both are below 2^63, so the sum does not wrap.
+        let end = from + len as u64;
+        if end > OFF_END {
+            return Err(EOVERFLOW);
+        }
+        Ok((from, end))
     } else {
         // A negative length covers the bytes before `at`.
-        let from = u64::try_from(at.checked_add(len)?).ok()?;
-        Some((from, at as u64))
+        let from = at.checked_add(len).ok_or(EOVERFLOW)?;
+        let from = u64::try_from(from).map_err(|_| EINVAL)?;
+        Ok((from, at as u64))
     }
 }
+
+/// The first offset that does not fit `off_t`: a lock reaching it is "to the
+/// end" for `l_len`.
+const OFF_END: u64 = 1 << 63;
 
 pub fn flock_type(b: &[u8; FLOCK_SIZE]) -> i16 {
     i16::from_le_bytes([b[0], b[1]])
@@ -251,7 +286,13 @@ pub fn flock_pid(b: &[u8; FLOCK_SIZE]) -> i32 {
 
 /// What `F_GETLK` answers: the lock in the way, as `SEEK_SET` bytes.
 pub fn put_conflict(b: &mut [u8; FLOCK_SIZE], write: bool, start: u64, end: u64, pid: i32) {
-    let len = if end == EOF { 0 } else { (end - start) as i64 };
+    // A record that reaches the last offset has no length `off_t` holds:
+    // `l_len` 0, as Linux answers.
+    let len = if end >= OFF_END {
+        0
+    } else {
+        (end - start) as i64
+    };
     b[0..2].copy_from_slice(&(if write { F_WRLCK } else { F_RDLCK }).to_le_bytes());
     b[2..4].copy_from_slice(&0i16.to_le_bytes());
     b[8..16].copy_from_slice(&(start as i64).to_le_bytes());
@@ -303,12 +344,12 @@ mod tests {
     fn unlock_splits_and_get_reports_the_first_conflict() {
         let mut t = Locks::new();
         t.lock(F, A, true, 0, EOF).unwrap();
-        t.unlock(F, A, 10, 20);
+        t.unlock(F, A, 10, 20).unwrap();
         assert_eq!(t.len(), 2);
         assert!(t.conflict(F, B, false, 10, 20).is_none());
         let c = t.conflict(F, B, false, 15, 25).unwrap();
         assert_eq!((c.start, c.end, c.write, c.owner), (20, EOF, true, A));
-        t.unlock(F, A, 0, EOF);
+        t.unlock(F, A, 0, EOF).unwrap();
         assert!(t.is_empty());
     }
 
@@ -350,12 +391,49 @@ mod tests {
 
     #[test]
     fn ranges_follow_flock() {
-        assert_eq!(range(0, 10, 5), Some((10, 15)));
-        assert_eq!(range(0, 10, 0), Some((10, EOF)));
-        assert_eq!(range(100, -10, 5), Some((90, 95)));
-        assert_eq!(range(0, 10, -4), Some((6, 10)), "bytes before 10");
-        assert_eq!(range(0, -1, 1), None);
-        assert_eq!(range(0, 2, -3), None);
-        assert_eq!(range(0, 0, i64::MAX), Some((0, i64::MAX as u64)));
+        assert_eq!(range(0, 10, 5), Ok((10, 15)));
+        assert_eq!(range(0, 10, 0), Ok((10, EOF)));
+        assert_eq!(range(100, -10, 5), Ok((90, 95)));
+        assert_eq!(range(0, 10, -4), Ok((6, 10)), "bytes before 10");
+        assert_eq!(range(0, -1, 1), Err(EINVAL));
+        assert_eq!(range(0, 2, -3), Err(EINVAL));
+        assert_eq!(range(0, 0, i64::MAX), Ok((0, i64::MAX as u64)));
+        // The last byte is offset i64::MAX at most.
+        assert_eq!(range(0, 1, i64::MAX), Ok((1, 1 << 63)));
+        assert_eq!(range(0, 2, i64::MAX), Err(EOVERFLOW));
+        assert_eq!(range(i64::MAX, 1, 1), Err(EOVERFLOW));
+    }
+
+    #[test]
+    fn unlock_splits_are_bounded_too() {
+        let mut t = Locks::new();
+        t.lock(F, P, true, 0, 100_000).unwrap();
+        let mut n = 0;
+        let err = loop {
+            match t.unlock(F, P, n * 2 + 1, n * 2 + 2) {
+                Ok(()) => n += 1,
+                Err(e) => break e,
+            }
+            assert!(n < 5000, "the table must stop growing");
+        };
+        assert_eq!(err, Full::Table);
+        assert_eq!(t.len(), MAX_RECORDS);
+        // An unlock that does not split still works when the table is full.
+        t.unlock(F, P, 0, 1).unwrap();
+        assert_eq!(t.len(), MAX_RECORDS - 1);
+    }
+
+    #[test]
+    fn a_merged_record_never_reports_a_negative_length() {
+        let mut t = Locks::new();
+        t.lock(F, P, true, 0, 10).unwrap();
+        let (s, e) = range(0, 10, i64::MAX - 9).unwrap();
+        t.lock(F, P, true, s, e).unwrap();
+        let c = t.conflict(F, A, false, 0, 1).unwrap();
+        assert_eq!((c.start, c.end), (0, 1 << 63));
+        let mut b = [0u8; FLOCK_SIZE];
+        put_conflict(&mut b, c.write, c.start, c.end, 5);
+        assert_eq!(flock_start(&b), 0);
+        assert_eq!(flock_len(&b), 0, "to the end, not a negative length");
     }
 }

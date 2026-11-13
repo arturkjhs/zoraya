@@ -310,7 +310,7 @@ pub struct Posix<S: Sys> {
     /// What a terminal read was given beyond the buffer that asked.
     pub(crate) tty_rest: Vec<(S::H, Vec<u8>)>,
     /// The record locks of this process (ADR-0319). A `fork` child starts
-    /// with none, as POSIX has it.
+    /// with none, as POSIX has it: `after_fork_in_child` clears the copy.
     pub(crate) locks: crate::records::Locks<S::H>,
 }
 

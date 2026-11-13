@@ -957,6 +957,9 @@ impl<S: Sys> Posix<S> {
         self.tty_rest.clear();
         self.signals.pending = 0;
         self.threads_after_fork();
+        // The copy names the parent's locks and the parent's connections:
+        // a fork child starts with none (ADR-0319 item 2).
+        self.locks.clear();
         self.sigchld = false;
         self.fork_group = -1;
         // The parent's channels are not the child's: nothing to report on.

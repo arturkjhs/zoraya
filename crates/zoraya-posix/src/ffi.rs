@@ -2134,9 +2134,15 @@ fn fcntl_record_lock(fd: i32, command: i32, argument: i64) -> Result<i32, i32> {
         return Err(EFAULT);
     }
     let at = argument as *mut [u8; FLOCK_SIZE];
-    // SAFETY: C's contract: the third argument of a record-lock command is a
-    // pointer to a `struct flock`, which is `FLOCK_SIZE` bytes on this ABI.
+    // SAFETY: the caller (C's `fcntl`) passes, for a record-lock command, a
+    // pointer to a readable `struct flock` of `FLOCK_SIZE` bytes. Only null is
+    // checked: any other bad pointer faults the process, where Linux answers
+    // `EFAULT` (as the other pointer arguments of this file do). The read is
+    // unaligned-safe for `[u8; N]`.
     let mut flock = unsafe { at.read() };
+    // A waiter must not take the lock on another file if its fd is closed and
+    // the number reused meanwhile: the description is checked between polls.
+    let conn = with(|p| p.lock_description(fd));
     loop {
         match state(|p| p.fcntl_lock(fd, command, &mut flock)) {
             Ok(()) => break,
@@ -2146,12 +2152,15 @@ fn fcntl_record_lock(fd: i32, command: i32, argument: i64) -> Result<i32, i32> {
                 if e != 0 {
                     return Err(e);
                 }
+                if with(|p| p.lock_description(fd)) != conn {
+                    return Err(EBADF);
+                }
             }
             Err(e) => return Err(e),
         }
     }
     if matches!(command, records::F_GETLK | records::F_OFD_GETLK) {
-        // SAFETY: as above; `F_GETLK` is the command that writes the struct.
+        // SAFETY: as above, the pointer is writable (`F_GETLK` fills the struct).
         unsafe { at.write(flock) };
     }
     Ok(0)

@@ -39,7 +39,7 @@ notion of a lock; the library's state of a process (`Posix`) is shared by its th
   `F_OFD_GETLK` in `libposix`, over a table of `(volume, id, range, kind, owner)` in `Posix`. A POSIX lock conflicts
   only with an OFD lock (any process-owned lock is never in its own way); OFD locks conflict between descriptions and
   with POSIX locks of the same process, as on Linux. Closing an fd of a file drops the process's POSIX locks on it;
-  closing the last fd of a description drops its OFD locks. A `fork` child starts with none (its `Posix` is new); `exec`
+  closing the last fd of a description drops its OFD locks. A `fork` child starts with none (it is a copy of the parent's `Posix`, and `after_fork_in_child` clears the table); `exec`
   starts a new image with none.
 - **Evidence for:** drivers 1 to 4 within one process. Everything SQLite needs of `fcntl` inside one process: its own
   inode table already orders its connections.
@@ -84,20 +84,26 @@ Option A, with Option B recorded as the follow-up when a measured program needs 
    the file service for the position, `SEEK_END` for the size); a negative `l_len` covers the bytes before `l_start`;
    `l_len` 0 means to the end of the file and beyond.
 2. **Scope.** The table is the process's. A lock is not seen by another process, and is lost across `exec` and not
-   inherited by `fork` (POSIX: the child has none). A file is identified by `(st_dev, st_ino)` from `Stat` on the
+   inherited by `fork` (POSIX: the child has none). A `fork` child is a copy of the parent's memory, not a new `Posix`:
+   `after_fork_in_child` empties the table, OFD records included. Decision: Linux lets the child share the parent's
+   descriptions, so an OFD lock would stay held for both, but the child's connections are clones with other handles, so
+   a record keyed by the parent's handle would name nothing of the child's; the child has none, an honest limit. A file is identified by `(st_dev, st_ino)` from `Stat` on the
    connection.
 3. **Conflicts.** Read locks share; a write lock excludes every other owner. One owner never conflicts with itself and
    setting a range replaces the owner's part there (split, merge, change of kind). A conflict of `F_SETLK` is `EAGAIN`;
    `F_GETLK` reports the first lock in the way as `SEEK_SET` bytes with the holder's pid (`l_pid` -1 for an OFD
-   holder), or `F_UNLCK`.
+   holder), or `F_UNLCK`. `F_GETLK` with `l_type` `F_UNLCK` is `EINVAL`. A range whose last byte passes `off_t` is
+   `EOVERFLOW`, a start before the file `EINVAL`; a record that reaches the last offset is reported with `l_len` 0.
 4. **Waiting.** `F_SETLKW` and `F_OFD_SETLKW` sleep a millisecond at a time with the library lock released and ask again;
-   a handler that ran ends the wait with `EINTR`; cancellation applies (the sleep is the library's). No deadlock
-   detection: `EDEADLK` is never returned.
+   a handler that ran ends the wait with `EINTR`; cancellation applies (the sleep is the library's). `SA_RESTART` is ignored: a wait ends with `EINTR` whenever a
+   handler ran, where Linux restarts `F_SETLKW`. Between polls the wait checks that its fd still names the same
+   description (`EBADF` if another thread closed it); a close and a reopen that give the same connection handle inside
+   one poll are not told apart. No deadlock detection: `EDEADLK` is never returned.
 5. **Release.** `close`, `dup2` and `dup3` over an fd drop the process's POSIX locks on the file (one `Stat` while the
    process holds any lock); the last fd of a description drops its OFD locks.
 6. **Descriptors.** The lock needs a file or directory description: a pipe, a terminal, a socket and `/dev/null` give
    `EINVAL`. `F_RDLCK` needs a readable description and `F_WRLCK` a writable one (`EBADF`).
-7. **Bound.** 4096 records; past it `ENOLCK`.
+7. **Bound.** 4096 records; past it `ENOLCK`, for a lock and for an unlock that would split a record.
 8. **Tension with ADR-0005.** Item 6 and the table row for record locks say they are absent; this ADR admits
    `fcntl`'s record locks only, in the process. `flock`, `lockf` are unchanged (`lockf` is musl's, over `fcntl`, and
    works now).
@@ -120,10 +126,11 @@ so. Threads: the table is under the library's one lock, so all threads of a proc
   read locks share; one owner never conflicts with itself. *Check:* `cargo test -p zoraya-posix` (`records` and
   `record_locks`).
 - **INV-0319-2.** `close` of any fd of a file drops the process's POSIX locks on it, and the last close of a description
-  drops its OFD locks; a new `Posix` (a `fork` child's) has none. *Check:* `cargo test -p zoraya-posix` (`close_releases`,
-  `a_new_process_starts_with_no_locks`).
+  drops its OFD locks; a `fork` child (`after_fork_in_child`) has none. *Check:* `cargo test -p zoraya-posix` (`close_releases`,
+  `a_fork_child_starts_with_no_locks`).
 - **INV-0319-3.** SQLite's `threadtest3` runs its listed scenarios on SQLite's default unix VFS in Zoraya, with
-  integrity checks of its own, under HVF and TCG. *Check:* `make test-posix-threadtest3`.
+  integrity checks of its own, under HVF and TCG. Not evidence for the lock logic (one process, one owner): INV-0319-1 and -2 are. *Check:*
+  `make test-posix-threadtest3`.
 
 ## Open questions
 - Whether `exec` should keep the locks (POSIX does; only another process could tell, and only Option B has one).

@@ -1820,8 +1820,70 @@ mod record_locks {
         let _ = F_OFD_SETLKW;
     }
 
+    /// A `fork` child is a copy of its parent's `Posix`: `after_fork_in_child`
+    /// leaves it no lock, so that a phantom record does not block it.
+    #[test]
+    fn a_fork_child_starts_with_no_locks() {
+        let mut r = rig();
+        let a = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+        lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        lk(&mut r, a, F_OFD_SETLK, flock(F_WRLCK, 0, 0, 0)).unwrap_err();
+        assert!(!r.p.locks_is_empty());
+        r.p.after_fork_in_child(77, 77);
+        assert!(r.p.locks_is_empty(), "nothing is left of the parent's");
+        lk(&mut r, a, F_OFD_SETLK, flock(F_RDLCK, 0, 0, 0)).unwrap();
+        let g = lk(&mut r, a, F_OFD_GETLK, flock(F_WRLCK, 0, 0, 0)).unwrap();
+        assert_eq!(ty(&g), F_UNLCK, "its own lock is not reported");
+    }
+
+    /// F_GETLK asks about a read or a write lock; `F_UNLCK` is `EINVAL`.
+    #[test]
+    fn getlk_of_an_unlock_is_einval() {
+        let mut r = rig();
+        let a = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+        assert_eq!(lk(&mut r, a, F_GETLK, flock(F_UNLCK, 0, 0, 0)), Err(EINVAL));
+        assert_eq!(
+            lk(&mut r, a, F_OFD_GETLK, flock(F_UNLCK, 0, 0, 0)),
+            Err(EINVAL)
+        );
+    }
+
+    /// A range that passes `off_t` is refused, and a merged record that
+    /// reaches the end is answered with `l_len` 0.
+    #[test]
+    fn huge_ranges_are_refused_or_reported_to_the_end() {
+        let mut r = rig();
+        let a = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+        assert_eq!(
+            lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 2, i64::MAX)),
+            Err(EOVERFLOW)
+        );
+        lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 0, 10)).unwrap();
+        lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 10, i64::MAX - 9)).unwrap();
+        let b = open(&mut r, "f", o::RDWR, 0).unwrap();
+        let g = lk(&mut r, b, F_OFD_GETLK, flock(F_RDLCK, 0, 0, 1)).unwrap();
+        assert_eq!(i64::from_le_bytes(g[8..16].try_into().unwrap()), 0);
+        assert_eq!(i64::from_le_bytes(g[16..24].try_into().unwrap()), 0);
+    }
+
+    /// Unlocking pieces of a big lock is bounded like locking.
+    #[test]
+    fn unlock_splits_give_enolck_at_the_bound() {
+        let mut r = rig();
+        let a = open(&mut r, "f", RW_CREATE, 0o644).unwrap();
+        lk(&mut r, a, F_SETLK, flock(F_WRLCK, 0, 0, 100_000)).unwrap();
+        let mut last = Ok(());
+        for i in 0..5000 {
+            last = lk(&mut r, a, F_SETLK, flock(F_UNLCK, 0, i * 2 + 1, 1)).map(|_| ());
+            if last.is_err() {
+                break;
+            }
+        }
+        assert_eq!(last, Err(ENOLCK));
+    }
+
     /// A file's locks are those of the process that holds them: a table of a
-    /// new `Posix` (a `fork` child's) is empty.
+    /// new `Posix` is empty.
     #[test]
     fn a_new_process_starts_with_no_locks() {
         let mut r = rig();

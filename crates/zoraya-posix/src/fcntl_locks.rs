@@ -37,6 +37,10 @@ impl<S: Sys> Posix<S> {
             Some(&Desc::Object { conn, access, .. }) => (conn, access),
             Some(_) => return Err(EINVAL),
         };
+        // POSIX: `F_GETLK` asks about a read or a write lock, not an unlock.
+        if get && kind == r::F_UNLCK {
+            return Err(EINVAL);
+        }
         if !get
             && ((kind == r::F_RDLCK && access == o::WRONLY)
                 || (kind == r::F_WRLCK && access == o::RDONLY))
@@ -50,8 +54,7 @@ impl<S: Sys> Posix<S> {
             2 => i64::try_from(meta.size).map_err(|_| EINVAL)?,
             _ => return Err(EINVAL),
         };
-        let (start, end) =
-            r::range(base, r::flock_start(flock), r::flock_len(flock)).ok_or(EINVAL)?;
+        let (start, end) = r::range(base, r::flock_start(flock), r::flock_len(flock))?;
         let file = (meta.volume, meta.id);
         let owner = if ofd {
             Owner::Description(conn)
@@ -73,8 +76,10 @@ impl<S: Sys> Posix<S> {
             return Ok(());
         }
         if kind == r::F_UNLCK {
-            self.locks.unlock(file, owner, start, end);
-            return Ok(());
+            return self
+                .locks
+                .unlock(file, owner, start, end)
+                .map_err(|_| ENOLCK);
         }
         self.locks
             .lock(file, owner, write, start, end)
@@ -82,6 +87,15 @@ impl<S: Sys> Posix<S> {
                 Full::Conflict => EAGAIN,
                 Full::Table => ENOLCK,
             })
+    }
+
+    /// The open file description `fd` names, to see between two polls of a
+    /// waiting lock command that it is still the same one.
+    pub fn lock_description(&self, fd: i32) -> Option<S::H> {
+        match self.fds.get(fd) {
+            Some(&Desc::Object { conn, .. }) => Some(conn),
+            _ => None,
+        }
     }
 
     /// `close` of `fd` ends every POSIX lock of the process on its file,
