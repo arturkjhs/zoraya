@@ -2219,7 +2219,7 @@ ADR-0221 items 5, 6 and 8).
   again; without it QEMU ends on a reset (`-no-reboot`).
 - **GUI.** The font is ASCII; everything else draws a box. One keyboard layout (US), one display, no
   resizing, no window decorations beyond a frame, no clipboard. F12 is reserved by the compositor. The compositor keeps
-  a copy of every surface (up to 8 clients, each up to the display's size), bounded only by those limits until
+  a copy of every surface (up to 32 clients since 9e, ADR-0323, each up to the display's size), bounded only by those limits until
   ADR-0056. Attaching a new display driver still waits for it, up to 2 s per call; `init` blocks up to 6 s while it
   restarts a driver (backlog: to fix before stage 6). NUL cannot be typed in the window. A QMP socket's path must be under 104 bytes
   on macOS, so the tests keep it in `build/`. The runner's key latency figure under HVF is bounded by the cost of one
