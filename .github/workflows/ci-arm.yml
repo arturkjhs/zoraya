@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install QEMU, clang and the build tools
         run: |
-          uname -m; qemu-system-aarch64 --version 2>/dev/null | head -1
+          uname -m; qemu-system-aarch64 --version 2>/dev/null | head -1 || true
           tools/ci-apt-install.sh build-essential ca-certificates clang lld llvm zstd qemu-system-arm \
             git curl patch perl python3 ruby xz-utils bzip2 gzip unzip zip file gawk pkg-config
           qemu-system-aarch64 --version | head -1
