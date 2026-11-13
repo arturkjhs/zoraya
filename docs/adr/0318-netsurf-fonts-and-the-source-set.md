@@ -1,6 +1,6 @@
 # ADR-0318: NetSurf 3.11: its libraries, its own fonts for now, and the pinned source set
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0109, ADR-0140, ADR-0141, ADR-0162, ADR-0310, ADR-0312, ADR-0317
 - **Evidence:** CP-25, CP-27
@@ -87,3 +87,6 @@ Recommended: **Option B**, with the source set below. It is a recommendation, no
 - A page the architect names that shows boxes where text is expected; a measured text-measure cost above 5% of a page load.
 
 ## Architect's decision
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option B.

@@ -1,6 +1,6 @@
 # ADR-0317: The window of a POSIX program: a `window` line in the description, a client channel from the panel, a raw-surface client in a static library
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-13
 - **Depends on:** ADR-0052, ADR-0093, ADR-0100, ADR-0104, ADR-0153, ADR-0160, ADR-0165, ADR-0168, ADR-0172, ADR-0310
 - **Evidence:** CP-01, CP-17, CP-25, alternatives-postmortem.md#genode, alternatives-postmortem.md#haiku--beos, desktop/survey.md#haiku
@@ -138,3 +138,6 @@ zoraya_window_poll
   window under HVF.
 
 ## Architect's decision
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
+
+Option C with item 7's amendment. Item 4's "wheel to mouse 4 and 5" is removed because the protocol has no wheel event; a wheel/scroll event in the compositor protocol is a small follow-up part after 9d (docs/backlog.md). Part 9d merges only after the review's must-fix findings are fixed and checked.
