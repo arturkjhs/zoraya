@@ -1888,6 +1888,12 @@ fn debug_later(p: &mut Posix<RtSys>, what: &str, detail: impl core::fmt::Debug) 
 /// the parent commits, the child sets its facts right.
 #[unsafe(no_mangle)]
 extern "C" fn fork() -> i32 {
+    // Until the fork freeze lands (ADR-0302 open question): a child would
+    // inherit the thread table and the library lock's state with siblings
+    // that do not exist in it, and possibly `MEM` held by one of them.
+    if with(|p| p.thread_count() > 1).unwrap_or(false) {
+        return int(Err(EAGAIN));
+    }
     poll();
     let started = zoraya_rt::clock_monotonic();
     let r = state(|p| {
