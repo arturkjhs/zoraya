@@ -481,15 +481,19 @@ HAND_GUI_SCRIPT := tests/shell/hand-run-gui.script
 HAND_HTTP_READY := $(BUILD)/hand-run-httpd.port
 HAND_TLS_READY := $(BUILD)/hand-run-tlsd.ports
 test-hand-run: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage
-	@rm -f $(HAND_DISK).key $(HAND_DISK).old $(BUILD)/hand-run-disk.copy
+	@rm -f $(HAND_DISK) $(HAND_DISK).key $(HAND_DISK).old $(HAND_DISK).old.* $(BUILD)/hand-run-disk.copy
 	@head -c 1048576 /dev/zero > $(HAND_DISK)
-	@tools/run-disk.sh $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; cat $(BUILD)/hand-run-disk.log; \
+	@$(MAKE) --no-print-directory DISK=$(HAND_DISK) $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; cat $(BUILD)/hand-run-disk.log; \
 	if [ ! -f $(HAND_DISK).old ] || ! grep -q 'made for another format' $(BUILD)/hand-run-disk.log; then \
 		echo "[hand-run] FAIL: tools/run-disk.sh kept a disk without a key"; exit 1; fi; \
-	cp $(HAND_DISK) $(BUILD)/hand-run-disk.copy && tools/run-disk.sh $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; \
+	cp $(HAND_DISK) $(BUILD)/hand-run-disk.copy && $(MAKE) --no-print-directory DISK=$(HAND_DISK) $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; \
 	if [ -s $(BUILD)/hand-run-disk.log ] || ! cmp -s $(HAND_DISK) $(BUILD)/hand-run-disk.copy; then \
 		echo "[hand-run] FAIL: tools/run-disk.sh replaced a disk of this system"; cat $(BUILD)/hand-run-disk.log; exit 1; fi; \
-	echo "[hand-run] ok: a stale disk is replaced, a current one kept"
+	cp $(HAND_DISK).old $(BUILD)/hand-run-disk.copy && echo stale > $(HAND_DISK).key && \
+	$(MAKE) --no-print-directory DISK=$(HAND_DISK) $(HAND_DISK) 2> $(BUILD)/hand-run-disk.log; \
+	if [ ! -f $(HAND_DISK).old.1 ] || ! cmp -s $(HAND_DISK).old $(BUILD)/hand-run-disk.copy; then \
+		echo "[hand-run] FAIL: tools/run-disk.sh overwrote an earlier .old disk"; cat $(BUILD)/hand-run-disk.log; exit 1; fi; \
+	echo "[hand-run] ok: a stale disk is replaced and never overwrites an earlier .old, a current one kept"
 	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[hand-run] skipped run-net: QEMU has no user-mode networking"; exit 0; }; \
 	mkdir -p target/test-logs && : > $(HAND_HTTP_READY) && : > $(HAND_TLS_READY) && \
 	{ $(HTTPD) --port 0 --lifetime 300 --ready-file $(HAND_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(HAND_TLS_READY) > target/test-logs/test-httpd-hand-run.log 2>&1 & echo $$! > $(BUILD)/hand-run-httpd.pid; } && \

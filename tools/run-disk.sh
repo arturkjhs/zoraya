@@ -10,8 +10,9 @@
 # (crates/zoraya-fs/src/format.rs; fsd mounts no other) and a checksum of
 # rootfs/system, which is read-only at run time for everyone (ADR-0289 item 8)
 # and so changes only with a new image. When the key is missing or differs, the
-# kept image is moved to IMAGE.old (replacing an older one) and a new one is
-# made. Without this, an image from before a format change (format 2, Q5) fails
+# kept image is moved to IMAGE.old, or to IMAGE.old.N (the next free N from 1)
+# if that exists: an earlier old disk, with a person's files, is never
+# overwritten. Then a new one is made. Without this, an image from before a format change (format 2, Q5) fails
 # to mount ("fsd: mount: Corrupt"): the shell runs without a volume, its prompt
 # is "/>", and every network command fails with "the file service is gone",
 # since the shell grants it /system/tls/roots (ADR-0228 item 3). One from before
@@ -40,9 +41,15 @@ if [ -f "$image" ] && [ -f "$image.key" ] && [ "$(cat "$image.key")" = "$key" ];
     exit 0
 fi
 if [ -f "$image" ]; then
-    mv "$image" "$image.old"
+    old="$image.old"
+    n=0
+    while [ -e "$old" ]; do
+        n=$((n + 1))
+        old="$image.old.$n"
+    done
+    mv "$image" "$old"
     echo "run-disk.sh: $image was made for another format or another /system;" \
-        "it is now $image.old, and a new one is made from rootfs/" >&2
+        "it is now $old, and a new one is made from rootfs/" >&2
 fi
 rm -f "$image.key"
 mkdir -p "$(dirname "$image")"
