@@ -69,7 +69,7 @@ pub fn select_root<D: BlockDevice + ?Sized>(dev: &mut D) -> Result<RootSelection
         .ok_or_else(|| {
             if foreign_format_version(dev).is_some() {
                 Corrupt(
-                    "no valid root record: the volume is of another format version (rebuild it with zoraya-mkfs)",
+                    "no valid root record: the volume is of another format version, or damaged: run zoraya-fsck",
                 )
             } else {
                 Corrupt("no valid root record")

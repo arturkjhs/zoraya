@@ -2144,10 +2144,16 @@ that exact line, and `tests/shell/hand-run-gui.script` now checks `net status` a
 
 **6. A disk of another format.** `zoraya_fs::foreign_format_version` finds a root slot with the magic and another version;
 `fsd` prints `fsd: the disk is format 1, this system needs format 2: make a new disk (make run does)` before `mount: Corrupt`, and
-`select_root` (so `zoraya-fsck`) says `no valid root record: the volume is of another format version (rebuild it with
-zoraya-mkfs)`. Host test: `crates/zoraya-fs/tests/integrity.rs`.
+`select_root` (so `zoraya-fsck`) says `no valid root record: the volume is of another format version, or damaged: run zoraya-fsck`. Host test: `crates/zoraya-fs/tests/integrity.rs`.
 
 **Run.** `make check` (16 steps) before each commit; `make test-net-fetch` (196 steps, ping lines included) and `make test-net`
 (`t_netd`, boot, settings, fetch, dns pass; `net-posix` stops at "musl-1.2.5.tar.gz is missing: run make fetch-ports first", this
 worktree has no ports cache, as before); `make test-hand-run` (`hand-run-net` 50 steps, `hand-run` 12, `hand-run-gui` 15 with the network and ping), clean under `zoraya-fsck`.
 Item 6 also under QEMU: a disk with its root slots patched to format 1, under the `make run` line and `tests/shell/hand-run.script`, printed the new `fsd:` line before `mount: Corrupt`. Not run: TCG, CI, `make test-changed`.
+
+**Review of f7d514c (opus-review), fixed.** `tools/run-disk.sh` never overwrites an earlier `IMAGE.old` (it rotates to `IMAGE.old.N`;
+the preamble of `test-hand-run` plants a second mismatch and builds `HAND_DISK` through `make DISK=... $(DISK)`); INV-0330-1 is
+checked for lost requests (`t_netd`'s lost run, a host test with replies 1 and 3 dropped, the mutant in `tools/mutants/net-ping.toml`);
+a run is clamped to `MAX_PINGS`; the `host` operand makes a grant only for a dotted address, and ADR-0330 now says plainly that its
+rule (TCP, any port of the address) is wider than an echo, with the echo-only alternative for the architect. Only `NET=0` turns the
+network off in `make run-gui`; the variable keeps its name.

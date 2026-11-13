@@ -144,7 +144,8 @@ FORCE:
 # window. `make run`: the serial console, no network. `make run-net`: the serial
 # console and the network. `make run-gui`: the window and the network (the GUI
 # and the network work together since N6); `NET=0 make run-gui` leaves the
-# network out (the test boots RUN_GUI_CMD as it is, so with NET=1).
+# network out: only NET=0 turns it off, any other value (or none) leaves it on.
+# The test boots RUN_GUI_CMD as it is, so with the network.
 NET ?= 1
 RUN_CMD = $(RUN_QEMU) --disk $(1) $(KERNEL)
 RUN_NET_CMD = $(RUN_QEMU) --net --disk $(1) $(KERNEL)
