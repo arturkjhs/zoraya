@@ -24,7 +24,7 @@ use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use zoraya_app::{Platform, Poll};
+use zoraya_platform::{Platform, Poll};
 use zoraya_proto_gui::{self as gui, buttons, status};
 use zoraya_protocol::{Data, Header, Message, decode, encode};
 

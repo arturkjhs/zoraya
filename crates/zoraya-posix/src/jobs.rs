@@ -970,6 +970,8 @@ impl<S: Sys> Posix<S> {
         // The same for the random service's connection: the child's
         // `getrandom` is `ENOSYS`, not a read of the parent's slot.
         self.random = None;
+        // A window channel is the same: one end, the parent's.
+        self.window = None;
         self.addrs = crate::socket::AddrCache::default();
         for d in self.fds.descriptions_mut() {
             if let Desc::Object { attached, .. } = d {

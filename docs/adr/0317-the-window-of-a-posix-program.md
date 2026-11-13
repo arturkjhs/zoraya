@@ -101,6 +101,17 @@ Recommended: **Option C**. It is a recommendation, not a decision. The details a
    offered (page keys, arrows and the scrollbar work); a blocking wait with a time limit is a poll with short sleeps
    in the C surface until the library can wait on the channel with a deadline.
 
+The names `libc.a` adds for the window (the C surface's five calls, with `struct zoraya_window_event` in
+`ports/netsurf/zoraya_window.h`; none touches a handle the program can name):
+
+```posix-surface-added
+zoraya_window_buffer
+zoraya_window_close
+zoraya_window_damage
+zoraya_window_open
+zoraya_window_poll
+```
+
 ## Consequences
 - **Positive.** A POSIX program can have a window with a record the person sees; `netsurf` is the first; later ports (a
   PDF viewer, an editor) reuse it.

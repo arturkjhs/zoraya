@@ -43,7 +43,7 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # that add names (posix-surface-check's LIST+ADR form).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
 	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
-	docs/adr/0310-surface-for-tls-curl-and-wget.md
+	docs/adr/0310-surface-for-tls-curl-and-wget.md docs/adr/0317-the-window-of-a-posix-program.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -718,8 +718,9 @@ $(DEPS)/lib/libcurl.a: $(CURL_BIN)
 	@touch $@
 
 netsurf-src: $(NETSURF)
-$(NETSURF): $(LOCK) $(wildcard ports/patches/netsurf/*.patch)
+$(NETSURF): $(LOCK) $(wildcard ports/patches/netsurf/*.patch) ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h
 	$(call unpack,netsurf,ports/patches/netsurf)
+	cp ports/netsurf/zoraya.c ports/netsurf/zoraya_window.h $@/libnsfb/src/surface/
 	@touch $@
 
 # The libraries, one make each, installed into $(DEPS). Tests are not built.

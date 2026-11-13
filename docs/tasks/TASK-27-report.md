@@ -420,8 +420,34 @@ functions) and ADR-0318 (NetSurf 3.11 with its own bitmap font for 9d, `zoraya-t
 `ports/sources.lock`, fetched and verified by `make fetch-ports`: netsurf-all 3.11, libpng 1.6.50, IJG libjpeg 9f,
 pkg-config 0.29.2. `make check` passed.
 
-Not done (the next sessions, in order): `make netsurf` (libpng, libjpeg, the NetSurf libraries with `nsgenbind` built
-for the host, `netsurf` with `TARGET=framebuffer`); `crates/zoraya-surface` and the C surface; the `window` key
-in `zoraya-describe`, the panel's request and the shell's `ZPBX` slot; the test pages; HTTPS, forms, downloads; the
-CI step. Host tools: perl, python3, gperf, flex, bison, cmake are on the Mac; `pkg-config` is not (the plan builds the
-pinned one into `build/`); the CI image needs `gperf`, `flex`, `bison` and `pkg-config` added to `tools/ci-apt-install.sh`'s list.
+## 9d: NetSurf, steps 1b and 2 (branch `work/9d`, 2026-11-13)
+
+Done and run on the Mac (`make check` passes; no QEMU step was run):
+- `make netsurf` (`ports/Makefile`, top `Makefile` forwards): libpng 1.6.50, libjpeg 9f, libcurl installed into `build/ports/deps`,
+  NetSurf's libraries (`buildsystem libnslog libwapcaplet libparserutils libcss libhubbub libdom libnsbmp libnsgif libnsutils
+  libutf8proc libnspsl libnsfb`), then `netsurf` (framebuffer front end, internal font, curl + OpenSSL from 9a) linked by `zcc`;
+  `build/rootfs-apps/bin/netsurf` (12.5 MB, `zoraya-elf-check` ok) and `build/rootfs-apps/share/netsurf/` (resources). Host
+  tools built into `build/ports/host` only when needed: pkg-config 0.29.2, bison 3.8.2 (macOS has 2.3; pinned in
+  `ports/sources.lock`), zlib and libpng (for `convert_image`). The CI image (`.github/ci/Dockerfile`) gains gperf, flex,
+  bison. Decisions recorded in ADR-0318 item 5: no JavaScript (so no `nsgenbind`), no SVG (needs expat), `ports/apps/nsshim.c`
+  for names `libc.a` lacks (atol, strncasecmp, modf, iconv*, dirfd, scandir), libnslog patch for old bison.
+- `crates/zoraya-platform` (the `Platform` trait, re-exported by `zoraya-app`), `crates/zoraya-surface` (`Surface<P>`: open,
+  pixels, damage, commit, event, set_title, close; 15 host tests with a fake compositor), `zoraya-posix/src/ffi/window.rs`
+  (five `zoraya_window_*` calls, names added to `libc.a` by a block in ADR-0317; `libc.a` builds and `check-libc` passes),
+  `EXT_WINDOW = 4` in `ZPBX` (`zoraya-abi`, test updated) and `Posix::window`, taken from the bootstrap; `ports/netsurf/zoraya.c`
+  and `zoraya_window.h` (the `libnsfb` surface `zoraya`, key and button maps) added to the unpacked tree by a patch of
+  `libnsfb.h` and its `surface/Makefile`; `netsurf` links with them. ADR-0317 item 7 records the answers to its two open
+  questions (rlib into libposix, one allocator; the `ZPBX` flag).
+
+Not done, in order (nothing below exists yet):
+1. Step 3 of the list: `window TITLE` key in `zoraya-describe`; the panel's request (a client channel in the shell's room,
+   pills of the line's grants, refused in an untrusted room, with a test); `zosh`'s plan passing the channel as the `EXT_WINDOW`
+   handle of `ZPBX` (`user/src/posix_child.rs` line ~500 is where `EXT_RANDOM` is added); `user/describe/posix/netsurf.cmd`
+   (`+net` from the URL, `window`, `+r /share/netsurf`, download directory through the chooser); host tests for each piece.
+2. Run `netsurf` under QEMU: whether `libnsfb`'s constructor registration of the `zoraya` surface runs under musl's start
+   (if not, call `zoraya_register_surface` explicitly); a first window on a test page; a GUI script and `make test-netsurf`
+   (Makefile `TEST_STEPS`, `tools/ci-tests.txt`, `tools/test-map.txt`, `tools/plan-lib.sh`, workflow timeout); HTTPS, a form,
+   downloads; screens under `docs/`; the real-site commands for the architect.
+3. `make test-libposix`, `test-posix` and `test-apps` were not run after `libc.a` gained five names and `Posix` a field.
+Known limits: no wheel events (the protocol has none), no NetSurf cursor shape, timed waits are a 2 ms poll loop, SVG is not shown,
+Cyrillic text shows placeholders (ADR-0318).
