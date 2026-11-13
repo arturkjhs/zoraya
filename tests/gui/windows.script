@@ -71,12 +71,19 @@ shot windows-many
 # dragged by its title bar (y 220 is in it at both) up against the bar,
 # where the compositor stops every window: its body then starts at
 # (361, 64), the bar's 28 and the title bar's 36, at both scales.
+# The drag moves it in steps, and the compositor draws each; under TCG a
+# frame read after the release can still show it on the way, a row or more
+# below its place, and a `screen` there matched the banner a row too low, so
+# that the prompt, read later at its place, was above the match (CI,
+# 2026-11-13). So the click that focuses it comes first: its input follows
+# the release, and its focused title bar, waited for against the bar, is
+# drawn only with the window at its place; then its rows are read.
 drag 560 220 560 30
+click 560 46
+region 600 33 60 4 f7f7f8
 origin 361 64
 screen Type help to begin, or help tour.
 screen ~> _
-click 560 46
-region 600 33 60 4 f7f7f8
 pause 500
 type echo eleven clients\r
 screen eleven clients
