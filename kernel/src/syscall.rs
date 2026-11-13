@@ -828,6 +828,7 @@ impl Handlers for Calls<'_> {
         let target = UserSlice::of(ends.0)?;
         target.write(&[0; 16])?;
         let pair = Pair::new(Some(self.process.job()))?;
+        heap::pause_if_asked();
         let mut handles = self.process.handles.lock();
         handles.reserve_many(2)?;
         let mut record = [0; 16];
@@ -1607,6 +1608,10 @@ pub mod test_calls {
     /// development host and pushed every CI test-qemu run past its 300 s;
     /// with 1 ms the whole of `t_suspend` took 39 s there.
     pub const FORCED_SLICE_NS: u64 = 1_000_000;
+    /// Makes `heap::prepare` pause once on every call (x0 = 1) or not (0):
+    /// a creating call then always lets a sibling run before it makes its
+    /// handles. The test that sets it clears it.
+    pub const PAUSE_IN_PREPARE: u64 = 0x701b;
 }
 
 #[cfg(feature = "qemu-test")]
@@ -1649,6 +1654,11 @@ fn test_call(number: u64, a0: u64) -> Option<Result<u64, Status>> {
             } else {
                 0
             });
+            Some(Ok(0))
+        }
+        test_calls::PAUSE_IN_PREPARE => {
+            crate::memory::heap::PAUSE_IN_PREPARE
+                .store(a0 != 0, core::sync::atomic::Ordering::Relaxed);
             Some(Ok(0))
         }
         test_calls::DIAGNOSE_UNITS => {

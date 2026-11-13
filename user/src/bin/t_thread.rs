@@ -502,6 +502,7 @@ fn interrupts() {
 // ---- the mapping lock: a contender sleeps without holding a spinlock.
 
 const FORCE_SWITCH: u64 = 0x701a;
+const PAUSE_IN_PREPARE: u64 = 0x701b;
 static MAP_GO: AtomicU32 = AtomicU32::new(0);
 static MAP_DONE: AtomicU32 = AtomicU32::new(0);
 static VICTIM: AtomicU64 = AtomicU64::new(0);
@@ -575,36 +576,41 @@ extern "C" fn ends_unmapper(arg: u64) -> ! {
 /// `stream_create` and `channel_create` pause while they build their objects;
 /// a sibling may unmap the buffer for the two handles meanwhile. The call
 /// then fails, and must leave no handle in the table, where the caller does
-/// not know of it. (If no pause reached the sibling the call succeeds and
-/// its two handles stay, unknown here: only failures are checked.) Measured:
-/// the calls pause only when the kernel heap has to grow, which a warm heap
-/// does not, so the sibling usually runs after the call; the check guards
-/// the order of the kernel code (room made after the last pause, undo on a
-/// failed write), and a mutant of it survives (listed in the report).
+/// not know of it, and the job's charges go back. `PAUSE_IN_PREPARE` makes
+/// the pause certain (a warm heap does not pause by itself) and
+/// `FORCE_SWITCH` hands the CPU to the sibling there, so every round fails
+/// and reaches the undo (the mutant that keeps the handles dies here).
 fn creating_calls_leave_no_handles() {
     const CALLS: [(&str, u64); 2] = [("stream_create", 42), ("channel_create", 30)];
     for (name, call) in CALLS {
         let mut failed = 0;
         for _ in 0..8 {
+            let charged = job_get_usage(JOB, false).expect("usage").memory.used;
             let ends = new_stack();
             ENDS_AT.store(ends, SeqCst);
             ENDS_GO.store(0, SeqCst);
             let (t, flag) = start(ends_unmapper, OWN_BASE);
             let slots = slots_in_use();
+            raw_syscall(PAUSE_IN_PREPARE, [1, 0, 0, 0, 0, 0]);
             raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
             ENDS_GO.store(1, SeqCst);
             let (status, _) = raw_syscall(call, [ends, 16, 0, 0, 0, 0]);
             raw_syscall(FORCE_SWITCH, [0; 6]);
+            raw_syscall(PAUSE_IN_PREPARE, [0; 6]);
             while ENDS_GO.load(SeqCst) != 2 {
                 thread_yield();
             }
-            if status != Status::Ok as u64 {
-                failed += 1;
-                assert_eq!(status, Status::BadAddress as u64, "{name}");
-                assert_eq!(slots_in_use(), slots, "{name}: a failed call left handles");
-            }
+            assert_ne!(status, Status::Ok as u64, "{name}: the sibling ran first");
+            failed += 1;
+            assert_eq!(status, Status::BadAddress as u64, "{name}");
+            assert_eq!(slots_in_use(), slots, "{name}: a failed call left handles");
             join(flag);
             handle_close(t).expect("close");
+            assert_eq!(
+                job_get_usage(JOB, false).expect("usage").memory.used,
+                charged,
+                "{name}: a failed call left a charge"
+            );
         }
         println!("t_thread: {name}: {failed} of 8 failed");
     }

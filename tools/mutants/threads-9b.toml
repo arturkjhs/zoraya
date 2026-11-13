@@ -10,7 +10,7 @@ id = "T-no-sweep"
 file = "kernel/src/process.rs"
 find = 'thread::wake_siblings(&process);'
 replace = ''
-note = "INV-0300-3: the first leaver wakes the others. SURVIVES (run of step-1 review): the chain wake alone reaches every sibling, one leaver after another, so the sweep only shortens the end; with 121 blocked siblings the end is still within 400 ms. Equivalent by function, not by time"
+note = "INV-0300-3: the first leaver wakes the others. EQUIVALENT (run of step-1 review; kept in the list as such, the sweep stays per ADR-0313 item 1): the chain wake alone reaches every sibling, one leaver after another, so the sweep only shortens the end; with 121 blocked siblings the end is still within 400 ms. Equivalent by function, not by time"
 
 [[mutant]]
 id = "T-no-chain-wake"
@@ -47,11 +47,11 @@ file = "kernel/src/syscall.rs"
 find = '''        let _map = MapGuard::acquire(&self.process)?;
         let mapping = device.begin_mapping()?;'''
 replace = '''        let mapping = device.begin_mapping()?;'''
-note = "ADR-0301 item 6: device_map takes the mapping lock; no test reaches it (needs a device handle in a threaded process): expected to survive"
+note = "ADR-0301 item 6: device_map takes the mapping lock. KILLED (t_devices device_map_waits_for_a_stepped_map: a sibling's 256-page map under FORCE_SWITCH while the main thread maps the device; without the lock device_map fails with NoMemory beside the reserved range)"
 
 [[mutant]]
 id = "T-stream-keeps-handles"
 file = "kernel/src/syscall.rs"
 find = 'let gone = [handles.remove(read), handles.remove(write)];'
 replace = 'let gone: [Option<_>; 2] = [None, None];'
-note = "a failed stream_create takes both handles back; the pause that exposes it needs a heap growth, so expected to survive"
+note = "a failed stream_create takes both handles back. KILLED (t_thread creating_calls_leave_no_handles: PAUSE_IN_PREPARE and FORCE_SWITCH make the sibling unmap the buffer in every round)"
