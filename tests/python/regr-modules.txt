@@ -1,0 +1,15 @@
+test_bisect
+test_heapq
+test_int
+test_dict
+test_list
+test_string
+test_re
+test_json
+test_zlib
+test_hashlib
+test_sqlite3
+test_threading
+test_asyncio.test_tasks
+test_asyncio.test_futures
+test_asyncio.test_locks

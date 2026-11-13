@@ -1,0 +1,15 @@
+--- a/Modules/getpath.py	2026-11-13 15:35:09
++++ b/Modules/getpath.py	2026-11-13 15:35:09
+@@ -346,7 +346,11 @@
+ # Calling Py_SetPath() will override venv detection.
+ # Calling Py_SetPythonHome() or setting $PYTHONHOME will override the 'home' key
+ # specified in pyvenv.cfg.
+-if not py_setpath:
++# TASK-27 9c, ADR-0320 item 6: no virtual environments here (no ensurepip, no
++# home to put one in), so no pyvenv.cfg is looked for: the search would try to
++# read files next to /bin, which a program is not given (the shell would hint
++# at each run).
++if False and not py_setpath:
+     try:
+         # prefix2 is just to avoid calculating dirname again later,
+         # as the path in venv_prefix is the more common case.

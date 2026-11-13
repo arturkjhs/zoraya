@@ -1,10 +1,63 @@
-# CPython (TASK-27 9c, proposed ADR-0320; `make test-python`): a static
-# python3 from the volume's /bin with its standard library in
-# /usr/lib/python3.15, a POSIX program run through the broker.
+# CPython (TASK-27 9c, proposed ADR-0320; `make test-python`, which turns
+# @TLS...@ ports into numbers): a static python3 from the volume's /bin with
+# its standard library in /usr/lib/python3.15, a POSIX program run through
+# the broker. The disk's /system/tls/roots is the test PKI's root; the names
+# come from net.hosts; the programs are tests/python/*.py in the volume's root.
 ! panicked
 ! first process ended
 < Type help to begin, or help tour.
 < \r\n~>
+# Starts, runs a program, ends.
 > python3 -V\r
 < Python 3.15.2
 < \r\n~>
+> python3 -c 'print(6*7)'\r
+< 42
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> python3 -c 'raise SystemExit(5)'\r
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+> python3 -c 'import nosuchmodule'\r
+< ModuleNotFoundError
+< \r\n~>
+# The environment decides nothing, no bytecode is written, no user site.
+> python3 smoke.py\r
+< ok flags 1 True 1
+< ok basics
+< ok sqlite
+< ok threads
+< ok ssl
+< ok asyncio
+< ok subprocess
+< smoke done
+< \r\n~>
+# What the line gives (ADR-0320 item 7): the script and the standard library
+# to read; no network without a +net word, and the roots only with it.
+> grants python3 smoke.py\r
+< python3 gets (a POSIX program):
+< the terminal
+< /bin /usr /etc       read (system)
+< \r\n~>
+> grants +net test.zoraya:@TLSVALID@ python3 https_client.py test.zoraya @TLSVALID@\r
+< /system/tls          read (with the network)
+< net: test.zoraya:@TLSVALID@
+< \r\n~>
+# An asyncio HTTPS client against the test PKI's valid server, and the refusal
+# of an expired and of a wrong-name certificate before any request byte.
+> +net test.zoraya:@TLSVALID@ python3 https_client.py test.zoraya @TLSVALID@\r
+< status HTTP/1.0 200
+< body Zoraya test page
+< \r\n~>
+> +net expired.zoraya:@TLSEXPIRED@ python3 https_client.py expired.zoraya @TLSEXPIRED@\r
+< refused certificate has expired
+< \r\n~>
+> +net wrong.zoraya:@TLSWRONG@ python3 https_client.py wrong.zoraya @TLSWRONG@\r
+< refused
+< \r\n~>
+x power off
+> poweroff\r

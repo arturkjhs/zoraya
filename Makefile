@@ -602,15 +602,50 @@ PYTHON_TEST_ROOT := $(BUILD)/python-root
 PYTHON_DISK := $(BUILD)/python-disk.img
 PYTHON_TEMPLATE := tests/shell/python.script
 PYTHON_SCRIPT := $(BUILD)/python.script
+PYTHON_HTTP_READY := $(BUILD)/python-httpd.port
+PYTHON_TLS_READY := $(BUILD)/python-tlsd.ports
 PYTHON_QEMU ?= --mem 512M
+PYTHON_TIMEOUT ?= 1800
+# The standard library's own tests: the modules of tests/python/regr-modules.txt,
+# with the support files of Lib/test (every file of its top level that is not
+# a test, support/ and libregrtest/), taken from the source tree (configure's
+# --disable-test-modules leaves Lib/test out of the stage) and compiled by the
+# host python, as the rest of the library is.
+PYTHON_STAGE_LIB := $(BUILD)/ports/work/Python-3.15.2/Lib
+PYTHON_HOSTPY := $(BUILD)/ports/host/bin/python3.15
 PYTHON_RUN = $(RUNNER) --timeout $(1) --script $(PYTHON_SCRIPT) --label $(2) -- $(RUN_QEMU) --test --keys --net --net-open --disk $(PYTHON_DISK) $(PYTHON_QEMU) --accel $(3) $(KERNEL)
-test-python: $(KERNEL) $(RUNNER) tools-storage python
-	@rm -rf $(PYTHON_TEST_ROOT) && mkdir -p $(PYTHON_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYTHON_TEST_ROOT)/ && \
-	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && \
-	target/debug/zoraya-elf-check $(PYTHON_TEST_ROOT)/bin && \
-	target/debug/zoraya-mkfs --size 192M --from $(PYTHON_TEST_ROOT) $(PYTHON_DISK) && \
-	cp $(PYTHON_TEMPLATE) $(PYTHON_SCRIPT) && \
-	$(call PYTHON_RUN,$(QEMU_SLOW_TIMEOUT),python-auto,auto); rc=$$?; \
+test-python: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage python
+	@$(RUN_QEMU) --probe-net >/dev/null 2>&1 || { echo "[python] skipped: QEMU has no user-mode networking"; exit 0; }; \
+	rm -rf $(PYTHON_TEST_ROOT) && mkdir -p $(PYTHON_TEST_ROOT) target/test-logs && cp -R rootfs/. $(PYTHON_TEST_ROOT)/ && \
+	cp -R $(PYTHON_ROOT)/. $(PYTHON_TEST_ROOT)/ && cp tests/python/*.py tests/python/regr-modules.txt $(PYTHON_TEST_ROOT)/ && \
+	T=$(PYTHON_TEST_ROOT)/usr/lib/python3.15/test && mkdir -p $$T && \
+	for f in $(PYTHON_STAGE_LIB)/test/*; do n=$$(basename $$f); \
+		case $$n in test_*) ;; *) cp -R $$f $$T/ ;; esac; done && \
+	for m in $$(sed 's/\..*//' tests/python/regr-modules.txt | sort -u); do cp -R $(PYTHON_STAGE_LIB)/test/$$m* $$T/; done && \
+	(: deliberately bad test files do not compile, so the exit status is not read; \
+	$(PYTHON_HOSTPY) -I -m compileall -q -f -j3 --invalidation-mode unchecked-hash -d /usr/lib/python3.15/test $$T >/dev/null 2>&1; true) && \
+	printf 'net.hosts = test.zoraya=10.0.2.2 expired.zoraya=10.0.2.2 wrong.zoraya=10.0.2.2\n' > $(PYTHON_TEST_ROOT)/config/settings && \
+	cp tests/net/tls/root.pem $(PYTHON_TEST_ROOT)/system/tls/roots && \
+	$(CARGO) build -q -p zoraya-elf-check && target/debug/zoraya-elf-check $(PYTHON_TEST_ROOT)/bin && \
+	target/debug/zoraya-mkfs --size 256M --from $(PYTHON_TEST_ROOT) $(PYTHON_DISK) && \
+	: > $(PYTHON_HTTP_READY) && : > $(PYTHON_TLS_READY) && \
+	{ $(HTTPD) --port 0 --lifetime 1800 --ready-file $(PYTHON_HTTP_READY) --tls-dir tests/net/tls --tls-ready-file $(PYTHON_TLS_READY) > target/test-logs/test-httpd-python.log 2>&1 & echo $$! > $(BUILD)/python-httpd.pid; } && \
+	httpd=$$(cat $(BUILD)/python-httpd.pid); \
+	for i in $$(seq 1 20); do [ -s $(PYTHON_HTTP_READY) ] && [ -s $(PYTHON_TLS_READY) ] && break; sleep 0.25; done; \
+	set -- $$(cat $(PYTHON_TLS_READY)); tlsvalid=$$1; tlsexpired=$$2; tlswrong=$$3; \
+	port=$$(cat $(PYTHON_HTTP_READY)); \
+	if [ -z "$$port" ] || [ -z "$$tlswrong" ] || ! kill -0 $$httpd 2>/dev/null; then \
+		echo "[python] FAIL: the test server did not start"; kill $$httpd 2>/dev/null; cat target/test-logs/test-httpd-python.log; exit 1; fi; \
+	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" -e "s/@TLSWRONG@/$$tlswrong/g" \
+		$(PYTHON_TEMPLATE) > $(PYTHON_SCRIPT); \
+	$(call PYTHON_RUN,$(PYTHON_TIMEOUT),python-auto,auto); rc=$$?; \
+	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		if grep -q '^tls \(expired\|wrong\): request of' target/test-logs/test-httpd-python.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-python.log \
+		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-python.log || ! grep -q '^tls wrong: ended after 0 request bytes' target/test-logs/test-httpd-python.log; then \
+			echo '[python] FAIL: INV-0320-3: a Python program sent request bytes after a refused handshake (or the server saw no clean end), or no request on the valid one'; cat target/test-logs/test-httpd-python.log; rc=1; \
+		else echo '[python] ok: asyncio sent no request byte to the refused TLS servers'; fi; \
+	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(PYTHON_DISK); rc=$$?; fi; \
 	exit $$rc
 
