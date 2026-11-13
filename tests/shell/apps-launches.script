@@ -1,0 +1,17 @@
+# Sixteen runs of `curl` on a machine of 128 MiB (`make test-apps`, its
+# second run). Each run of a program from the volume must give back its
+# image: a duplicate of the image's memory object that `posix_child::load`
+# kept made each `curl` (6.7 MiB) cost the shell's job for good, and the
+# ninth run here failed (TASK-27 9a item 2).
+! panicked
+! first process ended
+! over quota
+! the other end is gone
+< Type help to begin, or help tour.
+< \r\n~>
+* 16 curl --version\r | libz SSL threadsafe\r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+x power off
+> poweroff\r

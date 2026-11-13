@@ -742,6 +742,7 @@ dependencies = [
  "zoraya-proto-tty",
  "zoraya-protocol",
  "zoraya-resolve",
+ "zoraya-rng",
  "zoraya-rt",
  "zoraya-test-alloc",
 ]

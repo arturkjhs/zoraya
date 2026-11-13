@@ -1,0 +1,82 @@
+diff -ruN a/src/init.c b/src/init.c
+--- a/src/init.c	2024-11-10 15:44:08
++++ b/src/init.c	2026-11-13 05:42:45
+@@ -411,9 +411,19 @@
+   opt.ftp_glob = true;
+   opt.htmlify = true;
+   opt.http_keep_alive = true;
++#ifdef __zoraya__
++  /* No proxy from the environment or a file: the program's connection
++     reaches the hosts the line names and nothing else. */
++  opt.use_proxy = false;
++#else
+   opt.use_proxy = true;
++#endif
+   opt.convert_file_only = false;
++#ifndef __zoraya__
+   tmp = getenv ("no_proxy");
++#else
++  tmp = NULL;
++#endif
+   if (tmp)
+     opt.no_proxy = sepstring (tmp);
+   opt.prefer_family = prefer_none;
+@@ -506,8 +516,9 @@
+   opt.show_progress = -1;
+   opt.noscroll = false;
+ 
+-#ifdef HAVE_HSTS
+-  /* HSTS is enabled by default */
++#if defined(HAVE_HSTS) && !defined(__zoraya__)
++  /* HSTS is enabled by default.  Not on Zoraya (TASK-27 9a, ADR-0310): the
++     database is ~/.wget-hsts, a file no grant of the line names. */
+   opt.hsts = true;
+ #endif
+ 
+@@ -748,6 +759,15 @@
+   file_stats_t flstats;
+   bool ok = true;
+ 
++#ifdef __zoraya__
++  /* No configuration file and no WGETRC or SYSTEM_WGETRC (TASK-27 9a,
++     ADR-0310 item 6, INV-0228-1): the program's TLS and trust settings are
++     the ones built in, whatever the environment or the home directory
++     holds.  */
++  (void) env_sysrc;
++  (void) ok;
++  return 0;
++#endif
+   memset(&flstats, 0, sizeof(flstats));
+   /* Run a non-standard system rc file when the according environment
+      variable has been set. For internal testing purposes only!  */
+diff -ruN a/src/main.c b/src/main.c
+--- a/src/main.c	2024-11-10 22:26:57
++++ b/src/main.c	2026-11-13 05:42:45
+@@ -1439,8 +1439,16 @@
+               noconfig = true;
+               break;
+             }
++#ifdef __zoraya__
+           else if (strcmp (config_opt->long_name, "config") == 0)
+             {
++              /* No configuration file (ADR-0310 item 6). */
++              fprintf (stderr, _("Exiting due to error in %s\n"), optarg);
++              exit (WGET_EXIT_PARSE_ERROR);
++            }
++#endif
++          else if (strcmp (config_opt->long_name, "config") == 0)
++            {
+               file_stats_t flstats;
+               use_userconfig = true;
+               memset(&flstats, 0, sizeof(flstats));
+@@ -1518,6 +1526,10 @@
+           append_to_log = true;
+           break;
+         case OPT__EXECUTE:
++#ifdef __zoraya__
++          /* `-e` runs a `.wgetrc` command, which could turn the checks off. */
++          exit (WGET_EXIT_PARSE_ERROR);
++#endif
+           if (optarg) /* check silences static analyzer */
+             run_command (optarg);
+           break;

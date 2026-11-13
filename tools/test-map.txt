@@ -6,7 +6,7 @@
 #
 # PREFIX                      STEPS
 docs/                         check
-docs/adr/posix-surface-T9.txt  check test-libposix test-posix-threads test-posix-suites
+docs/adr/posix-surface-T9.txt  check test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
 README                        check
 CLAUDE.md                     check
 .github/                      check
@@ -21,14 +21,16 @@ tools/check-untrusted-gate.sh check
 tools/check-ethd-maps.sh      check
 tools/check-quota-tests.sh    check
 tools/check-tls-roots.sh      check
+tools/test-run-disk.sh        check
+tools/run-disk.sh             check test-hand-run test-apps
 rootfs/system/tls/        check test-files test-hand-run
 tools/quota-tests.txt         check
 tools/untrusted-gate.txt      check
 
 # The kernel and its ABI: every machine configuration.
-kernel/                       test-qemu test-boot test-net test-posix-threads test-posix-suites
+kernel/                       test-qemu test-boot test-net test-posix-threads test-posix-suites test-posix-threadtest3
 crates/zoraya-abi/            test-qemu test-boot test-files test-posix test-gui
-crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-posix-suites test-gui test-net
+crates/zoraya-rt/             test-qemu test-boot test-files test-posix test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-gui test-net
 crates/zoraya-dtb/            test-qemu
 crates/zoraya-pmm/            test-qemu
 crates/zoraya-pagetable/      test-qemu
@@ -81,7 +83,6 @@ user/src/bin/t_gui.rs         test-qemu
 user/src/bin/t_storage.rs     test-qemu
 tests/shell/keeper.script     test-keeper
 tests/shell/hand-run        test-hand-run
-tools/run-disk.sh             test-hand-run
 tests/shell/disk-filler.script test-files
 tests/shell/hostile.script    test-files
 user/src/bin/t_bound.rs       test-qemu
@@ -116,27 +117,36 @@ user/describe/commands/net.cmd test-net test-files
 tests/shell/net.script        test-net
 tests/shell/net-posix.script  test-net
 tests/posix-net/              test-net
+tests/apps/                  test-apps
+tests/shell/apps.script       test-apps
+tests/shell/apps-launches.script test-apps
+ports/apps/                   test-apps test-hand-run
+ports/patches/openssl/        test-apps test-hand-run
+ports/patches/wget/           test-apps test-hand-run
+ports/patches/curl/           test-apps test-hand-run
+user/describe/posix/curl.cmd  test-apps test-files
+user/describe/posix/wget.cmd  test-apps test-files
 user/describe/posix/zfetch.cmd test-net test-files
 
 # The POSIX personality.
-crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-net
+crates/zoraya-posix/          test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps
 crates/zoraya-broker/         test-posix test-posix-gui
 crates/zoraya-proto-term/     test-posix test-posix-gui test-gui
 user/src/bin/broker.rs        test-posix test-posix-gui
 user/src/bin/ttyd.rs          test-posix test-posix-gui
-user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix
-user/src/posix_child.rs       test-posix test-net
-ports/                        test-libposix test-posix-threads test-posix-suites test-posix test-posix-gui test-net
+user/src/bin/posixrun.rs      test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix
+user/src/posix_child.rs       test-posix test-net test-apps
+ports/                        test-libposix test-posix-threads test-posix-suites test-posix-threadtest3 test-posix test-posix-gui test-net test-apps test-hand-run
 tests/posix/                  test-posix test-posix-gui test-tour-gui
-tests/posix-core/             test-libposix test-posix-threads test-posix-suites
-tests/libc-test/             test-posix-suites
+tests/posix-core/             test-libposix test-posix-threads test-posix-suites test-posix-threadtest3
+tests/libc-test/             test-posix-suites test-posix-threadtest3
 
 # The shell and its crates.
 user/src/bin/init.rs          test-qemu test-boot test-files test-gui test-net test-keeper test-hand-run
-user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run
-crates/zoraya-shell/          test-boot test-files test-tour-gui
+user/src/bin/zosh.rs          test-boot test-files test-tour-gui test-net test-keeper test-hand-run test-apps
+crates/zoraya-shell/          test-boot test-files test-tour-gui test-apps
 crates/zoraya-command/        test-boot test-files test-tour-gui
-crates/zoraya-describe/       test-files test-tour-gui
+crates/zoraya-describe/       test-files test-tour-gui test-apps
 crates/zoraya-settings/       test-files test-tour-gui test-gui
 user/describe/                test-files test-tour-gui
 docs/tour.md                  test-tour-gui
@@ -175,11 +185,11 @@ crates/zoraya-shell/src/netgrant.rs test-net
 # HTTPS and the random service (N5): the TLS crate, ring, the generator, rngd
 # and the test PKI. The files script holds `random`, the net script `fetch https`.
 crates/zoraya-tls/            test-net test-hand-run
-crates/zoraya-rng/            test-files test-net
+crates/zoraya-rng/            test-files test-net test-apps
 vendor/                       test-net
 vendor/ring.sha256            check
 tools/check-vendor-ring.sh    check
-tests/net/tls/                test-net
+tests/net/tls/                test-net test-apps
 user/src/bin/rngd.rs          test-files test-net
 
 # The room keeper and the room line (Q6a, ADR-0269): the keeper's decisions and

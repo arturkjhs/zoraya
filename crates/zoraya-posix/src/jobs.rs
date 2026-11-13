@@ -957,6 +957,9 @@ impl<S: Sys> Posix<S> {
         self.tty_rest.clear();
         self.signals.pending = 0;
         self.threads_after_fork();
+        // The copy names the parent's locks and the parent's connections:
+        // a fork child starts with none (ADR-0319 item 2).
+        self.locks.clear();
         self.sigchld = false;
         self.fork_group = -1;
         // The parent's channels are not the child's: nothing to report on.
@@ -967,6 +970,9 @@ impl<S: Sys> Posix<S> {
         // network, as a program without the grant (ADR-0287 item 3). The
         // slot is not closed: it is not the child's.
         self.net = None;
+        // The same for the random service's connection: the child's
+        // `getrandom` is `ENOSYS`, not a read of the parent's slot.
+        self.random = None;
         self.addrs = crate::socket::AddrCache::default();
         for d in self.fds.descriptions_mut() {
             if let Desc::Object { attached, .. } = d {

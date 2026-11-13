@@ -121,7 +121,8 @@ jobs:
     needs: [plan, image]
     if: ${{ needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # 30: a cold ports cache builds OpenSSL, curl and wget as well (TASK-27 9a).
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
@@ -176,7 +177,7 @@ jobs:
       # rebuilds more. Not the other sources: cargo would take an old time
       # for an unchanged file. A key that misses
       # builds everything, as before. If a restored build is ever wrong, change
-      # the prefix `ports-build-v2`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
+      # the prefix `ports-build-v3`. The key also names the layout (container or bare): the build holds absolute paths, so a cache is never restored into the other layout.
       - name: Give the sources an old time, for the ports' cache
         run: git ls-files -z ports tools/zcc | xargs -0 touch -h -t 200001010000
       - name: Cache the ports' build
@@ -187,10 +188,12 @@ jobs:
             build/ports/obj
             build/ports/bin
             build/ports/logs
+            build/ports/deps
             build/sysroot
             build/rootfs-posix
+            build/rootfs-apps
             build/workloads
-          key: ports-build-v2-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**') }}
+          key: ports-build-v3-${{ needs.image.outputs.ref != '' && 'container' || 'bare' }}-${{ hashFiles('ports/**', 'tools/zcc/**') }}
       - name: make ci-build
         run: make ci-build
       - name: Pack build/ and target/
@@ -236,6 +239,7 @@ jobs:
           - make check-quota-tests
           - make check-ethd-maps
           - make check-tls-roots
+          - make check-run-disk
     name: ${{ matrix.cmd }}
     steps:
       - uses: actions/checkout@v4
@@ -264,7 +268,7 @@ jobs:
     # GitHub's x86 runners (review K2), and so are test-gui's scripts, at
     # scale 2 most (2026-11-09: 10 minutes ended it), and test-hand-run's
     # three boots, one with the desktop; every other job stays within 10.
-    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'threads.script')) && 30 || 10 }}
+    timeout-minutes: ${{ (contains(matrix.cmd, 'tour') || contains(matrix.cmd, 'test-gui') || contains(matrix.cmd, 'test-fuzz') || contains(matrix.cmd, 'test-net') || contains(matrix.cmd, 'test-hand-run') || contains(matrix.cmd, 'threads.script') || contains(matrix.cmd, 'threadtest3')) && 30 || 10 }}
     strategy:
       fail-fast: false
       matrix:

@@ -74,6 +74,9 @@ const POSIX_NET_BUDGET: u32 = 2;
 /// item 3; the `tls.roots` setting of ADR-0229 is not built, so the path is
 /// fixed).
 const TLS_ROOTS: &str = "/system/tls/roots";
+/// The directory of that file, which is what a POSIX program is given (it
+/// gets directories only, ADR-0153 rule 10; TASK-27 9a, proposed ADR-0311).
+const TLS_ROOTS_DIR: &str = "/system/tls";
 
 const CONSOLE_KEY: u64 = 1;
 /// Port keys of jobs start here.
@@ -963,12 +966,14 @@ impl Z {
         })
     }
 
-    /// The connection a POSIX program of the image gets for a literal `url`
-    /// operand (ADR-0224 item 2, ADR-0225 item 2; N4): `narrow` from the
-    /// shell's own, with `reach` and the scope of that host and port. None
-    /// for a program the image does not describe, a line with no such
-    /// operand, or a session without a network.
-    fn posix_net(&mut self, exec: &Exec<'_>, path: &str) -> Result<Option<Handle>, String> {
+    /// The rights and scope the line would give a POSIX program the image
+    /// describes (`net_grant_with` under its trusted description), nothing
+    /// made: for the connection and for `grants`.
+    fn posix_net_scope(
+        &mut self,
+        exec: &Exec<'_>,
+        path: &str,
+    ) -> Result<Option<(u32, Vec<u8>)>, String> {
         let trusted: Vec<Description> = descriptions::POSIX
             .iter()
             .filter_map(|(_, text)| zoraya_describe::parse(text.as_bytes()).ok())
@@ -976,7 +981,26 @@ impl Z {
         let Some(d) = grants::trusted_description(&trusted, path) else {
             return Ok(None);
         };
-        let Some((rights, scope)) = Self::net_grant_with(exec, d, true, &self.cwd)? else {
+        Self::net_grant_with(exec, d, true, &self.cwd)
+    }
+
+    /// Whether the line gives a POSIX program of the image a connection that
+    /// reaches a host: the one condition for `/system/tls` (INV-0311-2),
+    /// for the run and for `grants` alike.
+    fn posix_reaches(&mut self, exec: &Exec<'_>, path: &str) -> bool {
+        self.posix_net_scope(exec, path)
+            .ok()
+            .flatten()
+            .is_some_and(|(r, _)| r & zoraya_abi::net::rights::REACH != 0)
+    }
+
+    /// The connection a POSIX program of the image gets for a literal `url`
+    /// operand (ADR-0224 item 2, ADR-0225 item 2; N4): `narrow` from the
+    /// shell's own, with `reach` and the scope of that host and port. None
+    /// for a program the image does not describe, a line with no such
+    /// operand, or a session without a network.
+    fn posix_net(&mut self, exec: &Exec<'_>, path: &str) -> Result<Option<Handle>, String> {
+        let Some((rights, scope)) = self.posix_net_scope(exec, path)? else {
             return Ok(None);
         };
         // untrusted-gate: net-refusal-call (the native path above has its own)
@@ -1388,41 +1412,54 @@ impl Z {
                 &["the broker runs beside zosh on a volume with /bin (ADR-0153 rule 10)"],
             ));
         }
-        let planned = self
-            .posix_plan(exec, path)
-            .and_then(|plan| self.posix_entries(exec, image, &plan).map(|t| (t, plan)));
-        let ((entries, cwd_entry, cwd), plan) = match planned {
-            Ok(x) => x,
-            Err(e) => {
-                let _ = handle_close(image);
-                return Err(e);
-            }
-        };
-        let report = match channel_create() {
-            Ok(r) => r,
-            Err(s) => {
-                let _ = handle_close(image);
-                for e in &entries {
-                    if let Some(h) = e.handle {
-                        let _ = handle_close(h);
-                    }
-                }
-                return Err(fail(&zoraya_command::status_problem(s)));
-            }
-        };
         // A literal `url` operand of a POSIX program the image describes
         // designates, as for a native one (ADR-0224 item 2): the program
         // gets a connection to `netd` that reaches that host and port.
         let net = match self.posix_net(exec, path) {
             Ok(n) => n,
             Err(e) => {
-                for h in [image, report.0, report.1]
-                    .into_iter()
+                let _ = handle_close(image);
+                return Err(e);
+            }
+        };
+        // The roots for TLS come with that network, read only (ADR-0228
+        // item 3, INV-0228-3). A POSIX program is given directories only
+        // (rule 10), so it is the directory `/system/tls`, which holds the
+        // roots file and nothing else (`make check-tls-roots`); `grants`
+        // says "with the network" as for a native program.
+        let with_roots = net.is_some() && self.posix_reaches(exec, path);
+        let planned = self
+            .posix_plan(exec, path)
+            .map(|mut plan| {
+                if with_roots {
+                    plan.push(grants::Planned {
+                        path: String::from(TLS_ROOTS_DIR),
+                        access: grants::Access::Read,
+                        reason: String::from("with the network"),
+                    });
+                }
+                plan
+            })
+            .and_then(|plan| self.posix_entries(exec, image, &plan).map(|t| (t, plan)));
+        let ((entries, cwd_entry, cwd), plan) = match planned {
+            Ok(x) => x,
+            Err(e) => {
+                for h in core::iter::once(image).chain(net) {
+                    let _ = handle_close(h);
+                }
+                return Err(e);
+            }
+        };
+        let report = match channel_create() {
+            Ok(r) => r,
+            Err(s) => {
+                for h in core::iter::once(image)
+                    .chain(net)
                     .chain(entries.iter().filter_map(|e| e.handle))
                 {
                     let _ = handle_close(h);
                 }
-                return Err(e);
+                return Err(fail(&zoraya_command::status_problem(s)));
             }
         };
         let given = grants::summary(&plan, &self.home());
@@ -1562,10 +1599,54 @@ impl Z {
         entries.sort_by_key(|e| core::cmp::Reverse(e.prefix.len()));
         // The current directory is its own entry, or below the one that
         // covers it (review S3: an entry inside a wider one is left out).
+        // A path below the current directory (`-o sub/f`) with nothing at it:
+        // libposix resolves a relative path from the current directory's
+        // entry, which has to supply a prefix only. It is a placeholder with
+        // no handle, so the program can read nothing through it (review of
+        // 9a, W1; ADR-0311 item 5).
+        let below = entries.iter().any(|e| {
+            e.kind == P::Directory
+                && e.prefix != self.cwd
+                && zoraya_resolve::covers(&self.cwd, &e.prefix)
+        });
+        let covered = entries
+            .iter()
+            .any(|e| e.kind == P::Directory && zoraya_resolve::covers(&e.prefix, &self.cwd));
+        if below && !covered {
+            // The record wants a directory connection at the current
+            // directory's entry (`Bootstrap::decode`), so the placeholder is
+            // a connection whose other end is closed: every request on it
+            // fails, and nothing of the directory is reachable through it.
+            let Ok((dead, peer)) = channel_create() else {
+                close(&entries);
+                return Err(zoraya_command::error(
+                    "zosh",
+                    Some(exec.name),
+                    "the current directory cannot be given",
+                    &[],
+                ));
+            };
+            let _ = handle_close(peer);
+            entries.push(posix_child::Entry {
+                prefix: self.cwd.clone(),
+                kind: P::Directory,
+                handle: Some(dead),
+            });
+            entries.sort_by_key(|e| core::cmp::Reverse(e.prefix.len()));
+        }
         let prefixes: Vec<&str> = entries.iter().map(|e| e.prefix.as_str()).collect();
         let found = zoraya_resolve::longest(prefixes.iter().copied(), &self.cwd)
             .filter(|(i, _)| entries[*i].kind == P::Directory)
             .map(|(i, rest)| (i, String::from(rest)));
+        // A program whose description gives it none of the current directory
+        // and whose line designates nothing in it starts in `/bin`, read
+        // only: it has no relative path to resolve.
+        let found = found.or_else(|| {
+            entries
+                .iter()
+                .position(|e| e.prefix == "/bin" && e.kind == P::Directory)
+                .map(|i| (i, String::new()))
+        });
         let Some((cwd_entry, cwd_rest)) = found else {
             close(&entries);
             return Err(zoraya_command::error(
@@ -3576,8 +3657,12 @@ impl Z {
         {
             let native = self.root.as_ref().is_some_and(|r| {
                 r.open_followed(path.trim_start_matches('/'), 0, file_rights::READ)
-                    .and_then(|f| read_all(&f))
-                    .is_ok_and(|bytes| zoraya_elf::is_native(&bytes))
+                    .ok()
+                    .and_then(|f| posix_child::load(&f).ok())
+                    .is_some_and(|(image, native)| {
+                        let _ = handle_close(image);
+                        native
+                    })
             });
             let plan = if native {
                 zoraya_describe::parse(UNDESCRIBED.as_bytes())
@@ -3591,7 +3676,16 @@ impl Z {
                     io.err.push_str(&e);
                     1
                 }
-                Ok(plan) => {
+                Ok(mut plan) => {
+                    // As a run adds it: the roots come with a network the
+                    // line gives a POSIX program (proposed ADR-0311 item 4).
+                    if !native && self.posix_reaches(exec, &path) {
+                        plan.push(grants::Planned {
+                            path: String::from(TLS_ROOTS_DIR),
+                            access: grants::Access::Read,
+                            reason: String::from("with the network"),
+                        });
+                    }
                     let home = self.home();
                     io.out
                         .push_str(&grants::report(name, &plan, &home, "the terminal", !native));
@@ -3680,9 +3774,21 @@ impl Host for Z {
         let code = self.grants_report(exec, io);
         // ADR-0224 item 3: the scope rules the command's connection would
         // carry, exactly as `net_grant` makes them (INV-0224-2).
-        if code == 0
-            && let Some((d, base)) = self.program_description(exec.name)
-            && let Ok(Some((rights, scope))) = Self::net_grant_with(exec, &d, base, &self.cwd)
+        let scope = if code != 0 {
+            None
+        } else if let Some((d, base)) = self.program_description(exec.name) {
+            Self::net_grant_with(exec, &d, base, &self.cwd)
+                .ok()
+                .flatten()
+        } else if self.lookup(exec.name) == Found::Program
+            && let Some(path) = self.on_volume.get(exec.name).cloned()
+        {
+            // A POSIX program the image describes (N4; proposed ADR-0311).
+            self.posix_net_scope(exec, &path).ok().flatten()
+        } else {
+            None
+        };
+        if let Some((rights, scope)) = scope
             && rights & zoraya_abi::net::rights::REACH != 0
         {
             for line in zoraya_shell::netgrant::describe(&scope) {
@@ -4149,6 +4255,11 @@ impl Host for Z {
                             streams: *ends,
                             report: report.1,
                             net,
+                            // Every program gets its own connection to the
+                            // random service, with no word of the line's
+                            // (ADR-0227 item 3): `getrandom` for C programs
+                            // (proposed ADR-0310).
+                            random: self.random.and_then(zoraya_user::random::share),
                             realtime_base: self.realtime_base,
                         };
                         let broker = self.broker.as_ref().expect("checked by ready");

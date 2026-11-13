@@ -10,7 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use zoraya_abi::posix::{
-    self as abi, EntryKind, FdKind, NO_HANDLE, SELF_MESSAGE, SELF_NET_MESSAGE, slot,
+    self as abi, EXT_NET, EXT_RANDOM, EntryKind, FdKind, NO_HANDLE, SELF_EXT_MESSAGE, SELF_MESSAGE,
+    SELF_NET_MESSAGE, slot,
 };
 use zoraya_abi::spawn::{Encoder, HandleEntry, Transfer};
 use zoraya_abi::{
@@ -231,8 +232,16 @@ pub struct Launch<'a> {
     /// the second bootstrap message beside `SELF` (`SELF_NET_MESSAGE`);
     /// none for a program the line gave no network.
     pub net: Option<Handle>,
+    /// A connection to the random service for `getrandom` (ADR-0227 item
+    /// 3; proposed ADR-0310), moved in the same message; none when the
+    /// launcher has no service to share.
+    pub random: Option<Handle>,
     pub realtime_base: u64,
 }
+
+/// The largest program file `load` takes (the image is a memory object of its
+/// size).
+const LOAD_LIMIT: u64 = 64 << 20;
 
 /// A started POSIX child.
 pub struct Child {
@@ -262,6 +271,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             if let Some(n) = l.net {
                 let _ = handle_close(n);
             }
+            if let Some(r) = l.random {
+                let _ = handle_close(r);
+            }
             return Err(s);
         }
     };
@@ -272,6 +284,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             let _ = handle_close(l.report);
             if let Some(n) = l.net {
                 let _ = handle_close(n);
+            }
+            if let Some(r) = l.random {
+                let _ = handle_close(r);
             }
             return Err(s);
         }
@@ -353,7 +368,11 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
     ) else {
         close_entries(&l.entries);
         let _ = handle_close(l.report);
-        for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
+        for h in [p.child_job, p.broker_end]
+            .into_iter()
+            .chain(l.net)
+            .chain(l.random)
+        {
             let _ = handle_close(h);
         }
         return Err(fail(Status::InvalidArgument, &p));
@@ -363,7 +382,11 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         Err(s) => {
             close_entries(&l.entries);
             let _ = handle_close(l.report);
-            for h in [p.child_job, p.broker_end].into_iter().chain(l.net) {
+            for h in [p.child_job, p.broker_end]
+                .into_iter()
+                .chain(l.net)
+                .chain(l.random)
+            {
                 let _ = handle_close(h);
             }
             return Err(fail(s, &p));
@@ -426,6 +449,7 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             for h in [boot, boot_child, p.broker_end, l.report, p.child_job]
                 .into_iter()
                 .chain(l.net)
+                .chain(l.random)
             {
                 let _ = handle_close(h);
             }
@@ -446,6 +470,9 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
         if let Some(n) = l.net {
             let _ = handle_close(n);
         }
+        if let Some(r) = l.random {
+            let _ = handle_close(r);
+        }
         return Err(gone(s));
     }
     if let Ok(me) = handle_duplicate(process, Rights::WAIT.union(Rights::TRANSFER)) {
@@ -454,26 +481,47 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
             rights: Rights::WAIT,
             transfer: Transfer::Move,
         }];
-        let message = match l.net {
-            Some(net) => {
-                entry.push(ChannelEntry {
-                    handle: net,
-                    rights: ChannelObject::RIGHTS,
-                    transfer: Transfer::Move,
-                });
-                SELF_NET_MESSAGE
+        // The plain messages when only the network is given or nothing is;
+        // `ZPBX` with flags when the random service's connection is (the
+        // launcher's rule: handles in the order SELF, net, random).
+        let mut flags = 0u8;
+        if let Some(net) = l.net {
+            entry.push(ChannelEntry {
+                handle: net,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            flags |= EXT_NET;
+        }
+        if let Some(random) = l.random {
+            entry.push(ChannelEntry {
+                handle: random,
+                rights: ChannelObject::RIGHTS,
+                transfer: Transfer::Move,
+            });
+            flags |= EXT_RANDOM;
+        }
+        let mut message = [0u8; 5];
+        let message: &[u8] = match flags {
+            0 => SELF_MESSAGE,
+            EXT_NET => SELF_NET_MESSAGE,
+            _ => {
+                message[..4].copy_from_slice(SELF_EXT_MESSAGE);
+                message[4] = flags;
+                &message
             }
-            None => SELF_MESSAGE,
         };
         // On a failed write the caller keeps what it moved (INV-0050-1).
         if channel_write(boot, message, &entry).is_err() {
             let _ = handle_close(me);
-            if let Some(net) = l.net {
-                let _ = handle_close(net);
+            for h in l.net.into_iter().chain(l.random) {
+                let _ = handle_close(h);
             }
         }
-    } else if let Some(net) = l.net {
-        let _ = handle_close(net);
+    } else {
+        for h in l.net.into_iter().chain(l.random) {
+            let _ = handle_close(h);
+        }
     }
     let _ = handle_close(boot);
     if let Err(s) = broker.commit(p.pid, process) {
@@ -488,19 +536,25 @@ pub fn launch(broker: &Broker, l: Launch<'_>) -> Result<Child, Status> {
 }
 
 /// A program file of a volume as an image (ADR-0108), and whether it is a
-/// native program (ADR-0153 rule 9): its bytes are read once for the mark
-/// and once into the image's memory object.
+/// native program (ADR-0153 rule 9): its bytes are read once into the image's
+/// memory object, 1 MiB at a time, and the mark is looked for in that object
+/// mapped read-only for the purpose. (It was a `Vec` of the whole file read
+/// 4 KiB a request: a 6.7 MiB `curl` cost a thousand requests and two copies
+/// in the shell's heap, and a machine of 128 MiB gave out after five runs.)
 pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
     let gone = |_| Status::BadState;
-    let bytes = crate::files::read_all(file).map_err(gone)?;
-    let native = zoraya_elf::is_native(&bytes);
-    let length = bytes.len() as u64;
-    drop(bytes);
+    let length = file.stat().map_err(gone)?.size;
+    if length == 0 || length > LOAD_LIMIT {
+        return Err(Status::BadState);
+    }
     let size = length.next_multiple_of(4096).max(4096);
     let object = crate::memory_create(size, zoraya_abi::MemoryFlags::NONE)?;
     let fill = || -> Result<(), Status> {
-        let copy = handle_duplicate(object, <zoraya_abi::MemoryObject as ObjectType>::RIGHTS)?;
-        file.attach(copy, size).map_err(gone)?;
+        // `attach` sends a duplicate and leaves `object` here. (A duplicate
+        // made for it was never closed: each program run from the volume
+        // kept its image alive and charged to the shell, 6.7 MiB a `curl`,
+        // until the session's memory gave out; TASK-27 9a.)
+        file.attach(object, size).map_err(gone)?;
         let mut at = 0;
         while at < length {
             let n = (length - at).min(1 << 20) as u32;
@@ -511,7 +565,23 @@ pub fn load(file: &crate::files::File) -> Result<(Handle, bool), Status> {
         }
         Ok(())
     };
-    let image = fill().and_then(|()| crate::image_create(object, length));
+    let mut native = false;
+    let image = fill().and_then(|()| {
+        // The mark is in a section header at the end of the file: look at
+        // the object itself, mapped for reading, and let it go.
+        let base = zoraya_rt::memory_map(object, 0, size, zoraya_abi::MapFlags::READ)?;
+        // SAFETY: the object is `size` bytes, mapped readable at `base` for
+        // as long as it is mapped; `length <= size`. The file service keeps
+        // its own attached copy of the object, writable, so this does not
+        // rely on nothing else mapping it but on the service (a trusted
+        // system service, ADR-0033) writing only while it serves
+        // `read_buffer`, which has returned; a stray write would change the
+        // bytes `is_native` reads, not their validity.
+        let bytes = unsafe { core::slice::from_raw_parts(base as *const u8, length as usize) };
+        native = zoraya_elf::is_native(bytes);
+        let _ = zoraya_rt::memory_unmap(base, size);
+        crate::image_create(object, length)
+    });
     let _ = handle_close(object);
     Ok((image?, native))
 }

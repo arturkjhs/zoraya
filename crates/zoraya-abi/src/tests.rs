@@ -1680,3 +1680,18 @@ fn a_base_says_whether_the_real_time_clock_gave_the_date() {
     assert_eq!(checked_wall_seconds(0, 5_000_000_000), None);
     assert!(checked_wall_seconds(u64::MAX, u64::MAX).is_some());
 }
+
+// The second bootstrap message's extended form (proposed ADR-0310 item 3):
+// the flags name the handles that follow SELF, and a flag this library does
+// not know makes the message unknown.
+#[test]
+fn zpbx_flags_count_the_handles_after_self() {
+    use crate::posix::{EXT_NET, EXT_RANDOM, ext_handles};
+    assert_eq!(ext_handles(0), Some(0));
+    assert_eq!(ext_handles(EXT_NET), Some(1));
+    assert_eq!(ext_handles(EXT_RANDOM), Some(1));
+    assert_eq!(ext_handles(EXT_NET | EXT_RANDOM), Some(2));
+    for flags in 4..=255u8 {
+        assert_eq!(ext_handles(flags), None, "{flags:#x}");
+    }
+}

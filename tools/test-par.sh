@@ -27,7 +27,7 @@ max_qemu=${PAR_QEMU:-3}
 mkdir -p "$logs"
 [ -n "$internal" ] || rm -f "$logs"/*.log "$logs"/*.status
 
-checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs"
+checks="fmt-check clippy adr-check check-user-access check-kernel-tty check-host-paths check-argv check-test-caps check-tokens check-fetch-ports check-ci-jobs check-run-disk"
 # The QEMU lanes, each a list of steps sharing an image: test-files and
 # test-crash write build/crash.img; test-posix-gui and test-tour-gui
 # build/posix-gui.img.

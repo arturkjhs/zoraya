@@ -541,3 +541,185 @@ fn merge_folds_only_what_is_covered() {
     let d = m.iter().find(|e| e.path == "/u/d").expect("/u/d");
     assert_eq!(d.rights, Access::Tree.rights(), "{m:?}");
 }
+
+// `names OPTION OPERAND` (TASK-27 9a, proposed ADR-0311; INV-0311-1): curl's
+// -O creates the file the URL's last segment names, in the current
+// directory, and nothing else.
+const CURL: &str = "name curl\nsummary fetch\nusage curl [-O] URL...\noperand URL... url the address\noption -o --output FILE create where\noption -O --remote-name save under the name of the address\nnames --remote-name URL\n";
+
+#[test]
+fn curl_o_creates_the_name_of_the_url_in_the_current_directory() {
+    let p = go(
+        CURL,
+        &["-O", "https://x.example/a/b.txt"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&p),
+        vec![
+            ("/u/p".into(), Access::Read, "current directory".into()),
+            (
+                "/u/p".into(),
+                Access::Create("b.txt".into()),
+                "option -O".into()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn curl_o_with_two_urls_creates_two_names_and_without_o_none() {
+    let p = go(
+        CURL,
+        &["-O", "http://h/one", "http://h/dir/two.html?x=1#f"],
+        &[],
+        &[],
+        true,
+        "/u",
+    )
+    .unwrap();
+    let creates: Vec<&str> = p.iter().filter_map(|e| e.access.name()).collect();
+    assert_eq!(creates, vec!["one", "two.html"]);
+    let p = go(CURL, &["http://h/one"], &[], &[], true, "/u").unwrap();
+    assert!(p.iter().all(|e| e.access.name().is_none()));
+}
+
+#[test]
+fn curl_o_refuses_a_name_the_shell_cannot_be_sure_of() {
+    for url in [
+        "https://h/",
+        "https://h",
+        "https://h/a/",
+        "https://h/a%2Fb",
+        "https://h/a b",
+        "https://h/..",
+        "https://h/.",
+        "https://h/a\u{e9}",
+        "https://h/a;b",
+    ] {
+        let r = go(CURL, &["-O", url], &[], &[], true, "/u").unwrap_err();
+        assert_eq!(r.subject, url, "{url}");
+        assert!(r.problem.contains("cannot be sure"), "{url}: {}", r.problem);
+        assert_eq!(
+            r.hint.as_deref(),
+            Some("to say where it goes, write -o FILE")
+        );
+    }
+}
+
+#[test]
+fn curl_o_in_a_description_that_is_not_the_images_designates_nothing() {
+    let p = go(CURL, &["-O", "https://h/b.txt"], &[], &[], false, "/u").unwrap();
+    assert!(p.iter().all(|e| e.access == Access::Read));
+}
+
+// With `cwd none` (curl's and wget's descriptions) the one name is all the
+// program is given of the current directory: the merge keeps the entry
+// narrowed to it, and `-o`/`-O` together with the current directory's read
+// is what would have folded into "create and change anything in" (ADR-0311
+// item 5, INV-0311-1).
+const CURL_NO_CWD: &str = "name curl\nsummary fetch\nusage curl [-O] URL...\noperand URL... url the address\noption -o --output FILE create where\noption -O --remote-name save under the name of the address\nnames --remote-name URL\ncwd none\n";
+
+#[test]
+fn curl_o_with_no_cwd_is_one_narrowed_entry_and_nothing_else_of_the_directory() {
+    let p = go(
+        CURL_NO_CWD,
+        &["-O", "https://x.example/a/b.txt"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&p),
+        vec![(
+            "/u/p".into(),
+            Access::Create("b.txt".into()),
+            "option -O".into()
+        )]
+    );
+    let m = merge(&p);
+    assert_eq!(m.len(), 1, "{m:?}");
+    assert_eq!(m[0].path, "/u/p");
+    assert_eq!(m[0].name.as_deref(), Some("b.txt"));
+    assert_eq!(
+        m[0].lines,
+        vec![(
+            "create or replace b.txt".to_string(),
+            "option -O".to_string()
+        )]
+    );
+    // `-o FILE` is the same.
+    let p = go(
+        CURL_NO_CWD,
+        &["-o", "f.txt", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    let m = merge(&p);
+    assert_eq!((m.len(), m[0].name.as_deref()), (1, Some("f.txt")));
+}
+
+const WGET_NO_CWD: &str = "name wget\nsummary get\nusage wget [-O FILE] URL...\noperand URL... url the address\noption -O --output-document FILE create where\ncwd none\n";
+
+#[test]
+fn wget_o_dash_is_the_terminal_and_creates_nothing() {
+    // `-O -` is the standard output (review of 9a, N5).
+    let p = go(
+        WGET_NO_CWD,
+        &["-O", "-", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert!(p.is_empty(), "{p:?}");
+    // A file named otherwise is still one narrowed entry.
+    let p = go(
+        WGET_NO_CWD,
+        &["-O", "x", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(p.len(), 1);
+}
+
+#[test]
+fn curl_o_below_the_directory_and_data_from_a_file_needs_a_grant() {
+    // W1: `-o sub/f` gives the path below the directory, nothing at it; a
+    // `-d @x` file is not given by the plan, so zosh refuses it unless a
+    // `+r` of the line covers it. The plan holds one narrowed entry.
+    let p = go(
+        CURL_NO_CWD,
+        &["-o", "sub/f", "http://h/"],
+        &[],
+        &[],
+        true,
+        "/u/p",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&p),
+        vec![(
+            "/u/p/sub".into(),
+            Access::Create("f".into()),
+            "option -o".into()
+        )]
+    );
+    assert!(
+        p.iter()
+            .all(|e| e.access != Access::Read && e.path != "/u/p")
+    );
+}

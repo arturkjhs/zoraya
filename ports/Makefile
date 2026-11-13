@@ -42,7 +42,8 @@ TIER_LIST := docs/adr/posix-surface-T1.txt
 # The names libc.a may export: the generated list, and the blocks of the ADRs
 # that add names (posix-surface-check's LIST+ADR form).
 ADDED_ADRS := docs/adr/posix-surface-T9.txt docs/adr/0142-surface-for-dash-job-control.md docs/adr/0144-surface-for-sort-and-wc.md \
-	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md
+	docs/adr/0210-surface-for-the-workloads-products.md docs/adr/0287-n4-posix-sockets-where-the-adrs-are-silent.md \
+	docs/adr/0310-surface-for-tls-curl-and-wget.md
 empty :=
 space := $(empty) $(empty)
 TIER_SPEC := $(subst $(space),+,$(TIER_LIST) $(ADDED_ADRS))
@@ -58,7 +59,7 @@ logged = $(1) > $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2
 # nothing to do (musl), so that its log keeps the compile commands.
 logged_append = $(1) >> $(LOGS)/$(2).log 2>&1 || { echo "ports: $(2) failed: $(LOGS)/$(2).log"; tail -40 $(LOGS)/$(2).log; exit 1; }
 
-.PHONY: suites ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
+.PHONY: suites apps tlsthreads cryptothreads zlib openssl curl wget ports fetch-ports check-ports check-libc sysroot libc rootfs tools musl headers posix \
 	dash make pdpmake toybox busybox tcc tcc-host workloads t2-probe clean-ports FORCE
 .SUFFIXES:
 
@@ -441,6 +442,176 @@ $(ROOTFS_STAMP): $(DASH_BIN) $(GMAKE_BIN) $(PDPMAKE_BIN) $(TOYBOX_BIN) $(BUSYBOX
 	cp $(BUSYBOX_BIN) $(ROOTFS)/bin/busybox
 	for a in $(BUSYBOX_APPLETS); do ln -s busybox $(ROOTFS)/bin/$$a; done
 	cp -R $(SYSROOT)/usr/include $(SYSROOT)/usr/lib $(ROOTFS)/usr/
+	@touch $@
+
+# ---------------------------------------------------------------- TLS for C programs, curl, wget (TASK-27 9a)
+
+# zlib, OpenSSL, curl and wget for the volume (ADR-0310), built by zcc into
+# $(APPS_ROOT) (bin/curl, bin/wget). The libraries go into $(DEPS), not into
+# the sysroot: they are for these two programs, not for every program that
+# tcc builds in Zoraya. OpenSSL is static, with threads (musl pthreads in libposix, ADR-0302; 9a step 2 of ADR-0309),
+# shared objects, dynamic loading, engines or assembly; its entropy is
+# libposix's getrandom (ports/patches/openssl/0001-*), its roots file is
+# /system/tls/roots (ADR-0228 item 3) and curl's and wget's are the same.
+DEPS := $(PORTS)/deps
+APPS_ROOT := $(ROOT)/build/rootfs-apps
+APPS_STAMP := $(OBJ)/apps.stamp
+CROSS_ROOTS := /system/tls/roots
+# No debug information: curl and wget with OpenSSL are 17 MiB with it, 6.7 MiB without.
+APPS_CFLAGS := -O2
+
+ZLIB := $(WORK)/zlib-$(call lock_ver,zlib)
+zlib: $(DEPS)/lib/libz.a
+$(ZLIB): $(LOCK) $(wildcard ports/patches/zlib/*.patch)
+	$(call unpack,zlib,ports/patches/zlib)
+	@touch $@
+$(DEPS)/lib/libz.a: $(ZLIB) $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)
+	@cd $(ZLIB) && $(call logged,$(CROSS_ENV) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib CFLAGS="$(APPS_CFLAGS)" ./configure --static --prefix=$(DEPS),zlib-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(ZLIB) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar ARFLAGS=rc libz.a,zlib)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(ZLIB) install,zlib-install)
+	@touch $@
+
+OPENSSL := $(WORK)/openssl-$(call lock_ver,openssl)
+openssl: $(DEPS)/lib/libssl.a
+$(OPENSSL): $(LOCK) $(wildcard ports/patches/openssl/*.patch)
+	$(call unpack,openssl,ports/patches/openssl)
+	@touch $@
+# linux-generic64 is OpenSSL's portable 64-bit target (no assembly, no CPU
+# probing); no-secure-memory leaves out mmap/mlock tricks, no-async the
+# ucontext coroutines. TLS 1.2 and 1.3 are the only protocols compiled in
+# (no SSL 3, TLS 1.0, TLS 1.1 or DTLS: INV-0310-5), and the only entropy
+# source is getrandom (--with-rand-seed=getrandom leaves out the /dev/urandom
+# and /dev/random code: INV-0310-5). The patches under __zoraya__ also make the
+# library read no environment variable and load no openssl.cnf; curl and wget read no
+# configuration file or environment variable for trust (INV-0310-4).
+OPENSSL_OPTS := no-shared no-dso threads no-engine no-asm no-async no-afalgeng no-ui-console no-secure-memory \
+	no-sock no-dgram no-quic no-tests no-docs no-comp no-ssl3 no-ssl3-method no-weak-ssl-ciphers no-legacy no-autoload-config \
+	no-tls1 no-tls1_1 no-tls1-method no-tls1_1-method no-dtls no-dtls1-method no-dtls1_2-method --with-rand-seed=getrandom
+# The configuration the library was built with: the options, the compile flags
+# and the hash of the patch set. The stamp file changes only when that text
+# does, so a change of OPENSSL_OPTS rebuilds libssl.a (make reads times, not
+# options). CI's cache key hashes ports/**, which holds this Makefile, so a
+# cache of another configuration is not restored as current either.
+OPENSSL_STAMP := $(WORK)/openssl-config.stamp
+OPENSSL_CONFIG = $(OPENSSL_OPTS) / $(APPS_CFLAGS) / $(shell cat $(sort $(wildcard ports/patches/openssl/*.patch)) | cksum)
+$(OPENSSL_STAMP): FORCE
+	@mkdir -p $(WORK)
+	@printf '%s\n' '$(OPENSSL_CONFIG)' > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+$(DEPS)/lib/libssl.a: $(OPENSSL) $(OPENSSL_STAMP) $(DEPS)/lib/libz.a $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)
+	@if [ -f $(OPENSSL)/Makefile ]; then $(MAKE) -C $(OPENSSL) clean >/dev/null 2>&1; fi
+	@cd $(OPENSSL) && $(call logged,$(CROSS_ENV) CC=$(ZCC) AR=$(TOOLBIN)/aarch64-unknown-zoraya-ar \
+	  RANLIB=$(TOOLBIN)/aarch64-unknown-zoraya-ranlib ./Configure linux-generic64 $(OPENSSL_OPTS) \
+	  --prefix=$(DEPS) --openssldir=/system/tls --libdir=lib $(APPS_CFLAGS) -D__STDC_NO_ATOMICS__,openssl-configure)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(OPENSSL) -j3 build_libs,openssl)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(OPENSSL) install_dev,openssl-install)
+	@touch $@
+
+# The names the two programs reference that libc.a does not export
+# (ports/apps/zshim.c): linked from here, after everything else.
+$(DEPS)/lib/libzshim.a: ports/apps/zshim.c $(SYSROOT_STAMP)
+	@mkdir -p $(DEPS)/lib $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -c -o $(OBJ)/apps/zshim.o ports/apps/zshim.c
+	rm -f $@ && $(TOOLBIN)/aarch64-unknown-zoraya-ar rcs $@ $(OBJ)/apps/zshim.o
+
+# The test program of ADR-0309 item 4 (OpenSSL with threads): four threads
+# share one context and run handshakes at the same time. It is built here,
+# against the OpenSSL above, but is not part of $(APPS_ROOT): `make test-apps`
+# copies it to its own volume.
+TLSTHREADS_BIN := $(OBJ)/apps/tlsthreads
+tlsthreads: $(TLSTHREADS_BIN)
+$(TLSTHREADS_BIN): tests/apps/tlsthreads.c $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a
+	@mkdir -p $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -I$(DEPS)/include -o $@ tests/apps/tlsthreads.c -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim
+
+CRYPTOTHREADS_BIN := $(OBJ)/apps/cryptothreads
+cryptothreads: $(CRYPTOTHREADS_BIN)
+$(CRYPTOTHREADS_BIN): tests/apps/cryptothreads.c $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a
+	@mkdir -p $(OBJ)/apps
+	$(ZCC) $(APPS_CFLAGS) -I$(DEPS)/include -o $@ tests/apps/cryptothreads.c -L$(DEPS)/lib -lssl -lcrypto -lz -lzshim
+
+CURL := $(WORK)/curl-$(call lock_ver,curl)
+CURL_BIN := $(CURL)/src/curl
+curl: $(CURL_BIN)
+$(CURL): $(LOCK) $(wildcard ports/patches/curl/*.patch)
+	$(call unpack,curl,ports/patches/curl)
+	@touch $@
+# HTTP and HTTPS only, synchronous name resolution (no threads), no IPv6
+# (ADR-0225 offers IPv4), OpenSSL's roots from the system image, no `-k`
+# surprises left to a configuration file: the description lists the options.
+# No passwd lookups (getpwuid): the volume has no /etc/passwd, and curl's search
+# for a .curlrc would only make the shell report a refused read of it. OpenSSL's
+# configuration file is not loaded either (no /system/tls/openssl.cnf).
+CURL_OPTS := --disable-shared --enable-static --with-openssl=$(DEPS) --with-zlib=$(DEPS) \
+	--with-ca-bundle=$(CROSS_ROOTS) --without-ca-path --without-ca-fallback \
+	--disable-threaded-resolver --disable-ipv6 --disable-unix-sockets --disable-docs --disable-manual \
+	--disable-ftp --disable-file --disable-ldap --disable-ldaps --disable-rtsp --disable-dict \
+	--disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smtp --disable-gopher \
+	--disable-smb --disable-mqtt --disable-websockets --disable-ntlm --disable-ares --disable-libcurl-option \
+	--disable-netrc --disable-cookies --disable-hsts --disable-alt-svc --disable-proxy --disable-sspi \
+	--without-libpsl --without-brotli --without-zstd --without-nghttp2 --without-nghttp3 --without-ngtcp2 \
+	--without-libidn2 --without-librtmp --without-libssh2 --without-libssh --without-gssapi --without-winidn
+$(CURL_BIN): $(CURL) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
+	@cd $(CURL) && $(call logged,$(CROSS_ENV) ac_cv_func_getpwuid=no ac_cv_func_getpwuid_r=no ./configure --host=aarch64-unknown-zoraya \
+	  $(CURL_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-DCURL_DISABLE_OPENSSL_AUTO_LOAD_CONFIG" LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim",curl-configure)
+	rm -f $(CURL_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(CURL) -j3 V=1,curl)
+	@touch $@
+
+WGET := $(WORK)/wget-$(call lock_ver,wget)
+WGET_BIN := $(WGET)/src/wget
+wget: $(WGET_BIN)
+$(WGET): $(LOCK) $(wildcard ports/patches/wget/*.patch)
+	$(call unpack,wget,ports/patches/wget)
+	@touch $@
+# HTTP and HTTPS over OpenSSL (the one built above), IPv6 code compiled in (it
+# resolves with getaddrinfo, which libposix answers with IPv4 only), no name
+# translation, no PCRE, no libpsl, no digest or NTLM authentication, no
+# metalink or libuuid. The host triple names musl, not Zoraya: wget's gnulib
+# answers its run tests (mbrtowc and the like) by the C library's name when it
+# cannot run them, and Zoraya's libc is musl's; the compiler is still zcc,
+# which defines nothing of Linux (INV-0143-1).
+WGET_OPTS := --sysconfdir=/etc --with-ssl=openssl --with-libssl-prefix=$(DEPS) --with-zlib --disable-nls --enable-ipv6 \
+	--disable-iri --disable-pcre --disable-pcre2 --disable-opie --disable-digest --disable-ntlm \
+	--disable-debug --disable-threads --disable-rpath --without-libpsl --without-libuuid --without-metalink \
+	--without-cares --without-libidn --without-gpgme --without-included-regex
+$(WGET_BIN): $(WGET) $(DEPS)/lib/libssl.a $(DEPS)/lib/libzshim.a ports/config.site
+	@cd $(WGET) && $(call logged,$(CROSS_ENV) PKG_CONFIG=false ac_cv_header_uchar_h=no ac_cv_func_rewinddir=yes ./configure --host=aarch64-unknown-linux-musl \
+	  $(WGET_OPTS) $(CROSS_TOOLS) CFLAGS="$(APPS_CFLAGS)" CPPFLAGS="-I$(DEPS)/include" \
+	  LDFLAGS="-L$(DEPS)/lib" LIBS="-lzshim" ZLIB_CFLAGS="-I$(DEPS)/include" ZLIB_LIBS="-L$(DEPS)/lib -lz",wget-configure)
+	rm -f $(WGET_BIN)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/lib -j3,wget-lib)
+	@$(call logged,$(CROSS_ENV) $(MAKE) -C $(WGET)/src -j3 V=1,wget)
+	@touch $@
+
+# build/rootfs-apps: the two programs as they go into the volume's /bin
+# (ADR-0310), and nothing else. `make image EXTRA_ROOT=build/rootfs-apps`
+# (tools/run-disk.sh) is how an image takes them; their descriptions are
+# user/describe/posix/curl.cmd and wget.cmd, in the ramdisk with the others.
+apps: $(APPS_STAMP)
+$(APPS_STAMP): $(CURL_BIN) $(WGET_BIN)
+	rm -rf $(APPS_ROOT) && mkdir -p $(APPS_ROOT)/bin
+	cp $(CURL_BIN) $(APPS_ROOT)/bin/curl
+	cp $(WGET_BIN) $(APPS_ROOT)/bin/wget
+	$(ELF_CHECK) $(APPS_ROOT)/bin
+	@echo "== no entropy source but getrandom, and no TLS before 1.2 (INV-0310-5)"
+	@for b in curl wget; do \
+	  if LC_ALL=C grep -a -q -e '/dev/urandom' -e '/dev/random' $(APPS_ROOT)/bin/$$b; then \
+	    echo "$$b names /dev/urandom or /dev/random"; exit 1; fi; \
+	  nm $(APPS_ROOT)/bin/$$b > $(APPS_ROOT)/$$b.nm || { echo "nm failed on $$b"; exit 1; }; \
+	  grep -q -e ' T TLS_method' $(APPS_ROOT)/$$b.nm || { echo "$$b: nm shows no TLS_method (control)"; exit 1; }; \
+	  if grep -q -e ' T TLSv1_method' -e ' T TLSv1_1_method' -e ' T SSLv3_method' -e ' T DTLSv1_method' $(APPS_ROOT)/$$b.nm; then \
+	    echo "$$b links a TLS method before 1.2"; exit 1; fi; rm -f $(APPS_ROOT)/$$b.nm; done
+	@echo "== no app was compiled with __linux__, and every compile ran zcc (INV-0310-3, INV-0143-1)"
+	@for l in zlib openssl curl wget; do \
+	  grep -q -e '$(ZCC)' $(LOGS)/$$l.log || { echo "$$l.log shows no compile commands"; exit 1; }; \
+	  if grep -l -e '-D__linux' -e '-D__gnu_linux' $(LOGS)/$$l.log; then exit 1; fi; done
+	@echo "== every change of the OpenSSL patches is under __zoraya__ (INV-0310-3)"
+	@for p in ports/patches/openssl/*.patch; do \
+	  grep -q '^+.*__zoraya__' $$p || { echo "$$p changes OpenSSL for every system"; exit 1; }; done
 	@touch $@
 
 # ---------------------------------------------------------------- the workloads' sources

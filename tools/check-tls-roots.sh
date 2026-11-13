@@ -11,6 +11,9 @@
 #  4. none of the test PKI's certificates (tests/net/tls/*.pem) is among them,
 #     and docs/dependencies.md states the same count.
 #
+#  5. rootfs/system/tls holds that file and nothing else: a POSIX program with a
+#     network is given the directory, not the file (proposed ADR-0311 item 4).
+#
 # The handshake against these roots is not run here: `cargo test -p zoraya-tls`
 # (tests/production_roots.rs) loads every block into the verifier.
 set -eu
@@ -60,6 +63,8 @@ for pem in tests/net/tls/*.pem; do
 done
 grep -q "$count certificates with the Websites trust bit" docs/dependencies.md \
 	|| bad "docs/dependencies.md does not state $count certificates for $roots"
+
+[ "$(ls -A rootfs/system/tls)" = roots ] || bad "rootfs/system/tls holds more than roots: $(ls -A rootfs/system/tls | tr '\n' ' ')"
 
 [ "$fail" = 0 ] || exit 1
 echo "check-tls-roots: ok ($count roots)"

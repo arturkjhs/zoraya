@@ -1,0 +1,13 @@
+--- a/crypto/mem.c	2026-11-13 04:28:56
++++ b/crypto/mem.c	2026-11-13 04:28:56
+@@ -251,7 +251,9 @@
+ 
+     /* Allow non-malloc() allocations as long as no malloc_impl is provided. */
+     if (malloc_impl == CRYPTO_malloc) {
+-#if defined(_BSD_SOURCE) || (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200112L)
++/* libposix has neither posix_memalign nor aligned_alloc: the loop below. */
++#if defined(__zoraya__)
++#elif defined(_BSD_SOURCE) || (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE >= 200112L)
+         if (posix_memalign(&ret, alignment, num))
+             return NULL;
+         *freeptr = ret;

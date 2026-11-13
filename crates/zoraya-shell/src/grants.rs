@@ -195,6 +195,12 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
             if !kind.is_path() {
                 return Ok(());
             }
+            // `-` after a `create` option of a `cwd none` description is the
+            // standard output (`wget -O -`), not a file named `-`: nothing
+            // to create (review of 9a, N5).
+            if kind == Kind::Create && text == "-" && d.cwd == Cwd::None {
+                return Ok(());
+            }
             let abs = join(line.cwd, 0, text);
             // A text that is no argument's is taken as from a value: the
             // check fails closed.
@@ -245,6 +251,36 @@ pub fn plan(line: &Line<'_>) -> Result<Vec<Planned>, Refused> {
                 None => format!("option --{}", o.long),
             };
             designate(arg.kind, text, reason, &mut out)?;
+        }
+    }
+    // `names OPTION OPERAND` (proposed ADR-0311): the option makes the program
+    // create a file named by the URL's last segment in the current
+    // directory. The shell works the name out itself and designates that one
+    // file to create; a name it cannot be sure of refuses the line.
+    for n in &d.names {
+        if !p.options.iter().any(|(o, _)| *o == n.option) {
+            continue;
+        }
+        let o = &d.options[n.option];
+        let reason = match o.short {
+            Some(c) => format!("option -{c}"),
+            None => format!("option --{}", o.long),
+        };
+        for (index, text) in &p.operands {
+            if *index != n.operand {
+                continue;
+            }
+            let Some(name) = zoraya_describe::url_file_name(text) else {
+                return Err(Refused {
+                    subject: (*text).into(),
+                    problem: format!(
+                        "{} would save under a name the shell cannot be sure of",
+                        o.label()
+                    ),
+                    hint: Some("to say where it goes, write -o FILE".into()),
+                });
+            };
+            designate(Kind::Create, name, reason.clone(), &mut out)?;
         }
     }
     out.extend(grant_entries);
