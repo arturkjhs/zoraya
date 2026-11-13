@@ -5,8 +5,11 @@
  * atol, strncasecmp and modf are what musl has, written out here; iconv is
  * musl's own (libc.a keeps it under the hidden `__zoraya_` prefix, which the
  * surface check leaves unexported), forwarded; scandir is built on
- * opendir/readdir; dirfd fails, because the DIR of libposix does not expose
- * its descriptor (NetSurf's only use is an optimisation it can do without).
+ * opendir/readdir; dirfd fails with ENOTSUP: libposix's `Dir` keeps its
+ * descriptor in a Rust struct whose layout C cannot name, and NetSurf's config
+ * defines HAVE_DIRFD, but only its fs_backing_store (disabled in this build)
+ * calls it. iconv forwards to musl's own, hidden by the `__zoraya_` prefix
+ * (libc.a does not export iconv; recorded in ADR-0318).
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -53,7 +56,15 @@ double modf(double x, double *ip)
 		union { double d; unsigned long long u; } t = { x };
 		t.u &= ~((1ULL << (52 - e)) - 1);
 		*ip = t.d;
-		return x - t.d;
+		{
+			double f = x - t.d;
+			if (f == 0) { /* musl: a zero fraction has x's sign */
+				union { double d; unsigned long long u; } z = { 0.0 };
+				z.u |= v.u & (1ULL << 63);
+				return z.d;
+			}
+			return f;
+		}
 	}
 }
 

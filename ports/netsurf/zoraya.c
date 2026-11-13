@@ -30,13 +30,22 @@
 /* Linux key numbers (the compositor's key codes) of the keys NetSurf uses that
  * have no code point, and of the main block's unshifted US characters: the
  * front end tracks the modifier keys itself and shifts the unshifted code. */
-static int map_key(uint32_t code, uint32_t text)
+static int map_key(uint32_t code, uint32_t text, uint32_t mods)
 {
 	static const char main_row1[] = "\0\0" "1234567890-=";   /* codes 0..13 */
 	static const char main_row2[] = "qwertyuiop[]";          /* codes 16..27 */
 	static const char main_row3[] = "asdfghjkl;'`";          /* codes 30..41 */
 	static const char main_row4[] = "\\zxcvbnm,./";          /* codes 43..53 */
 
+	/* A layout that is not US: an unshifted printable ASCII text of a
+	 * main-block key wins over the US table (W5 of the 9d review). With
+	 * Shift held the text is the shifted character and the front end
+	 * shifts the unshifted one itself, so the table is used. Text of
+	 * 127 and above has no key code in libnsfb and is dropped. */
+	if (((code >= 2 && code <= 13) || (code >= 16 && code <= 27) ||
+	     (code >= 30 && code <= 41) || (code >= 43 && code <= 53)) &&
+	    !(mods & MODIFIER_SHIFT) && text >= 32 && text < 127)
+		return (int)text;
 	if (code >= 2 && code <= 13)
 		return main_row1[code];
 	if (code >= 16 && code <= 27)
@@ -76,6 +85,28 @@ static int map_key(uint32_t code, uint32_t text)
 		return (int)text;
 	return NSFB_KEY_UNKNOWN;
 }
+
+/* The modifier keys the front end believes are down; on losing the focus
+ * their releases are sent, so that Ctrl is not left latched (W5). */
+static unsigned held_mods;
+static int held_bit(int k)
+{
+	switch (k) {
+	case NSFB_KEY_LCTRL: return 1;
+	case NSFB_KEY_RCTRL: return 2;
+	case NSFB_KEY_LSHIFT: return 4;
+	case NSFB_KEY_RSHIFT: return 8;
+	case NSFB_KEY_LALT: return 16;
+	case NSFB_KEY_RALT: return 32;
+	case NSFB_KEY_LSUPER: return 64;
+	case NSFB_KEY_RSUPER: return 128;
+	default: return 0;
+	}
+}
+static const int held_keys[8] = {
+	NSFB_KEY_LCTRL, NSFB_KEY_RCTRL, NSFB_KEY_LSHIFT, NSFB_KEY_RSHIFT,
+	NSFB_KEY_LALT, NSFB_KEY_RALT, NSFB_KEY_LSUPER, NSFB_KEY_RSUPER
+};
 
 static int button_key(uint32_t bit)
 {
@@ -155,8 +186,23 @@ static bool zoraya_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
 {
 	struct zoraya_window_event e;
 	int waited = 0;
+	static bool lost_focus;
 
 	for (;;) {
+		if (held_mods != 0) {
+			/* Releases owed after a loss of focus. */
+			int i = 0;
+			while (!(held_mods & (1u << i)))
+				i++;
+			if (lost_focus) {
+				held_mods &= ~(1u << i);
+				event->type = NSFB_EVENT_KEY_UP;
+				event->value.keycode = (enum nsfb_key_code_e)held_keys[i];
+				if (held_mods == 0)
+					lost_focus = false;
+				return true;
+			}
+		}
 		int got = zoraya_window_poll(&e, timeout < 0);
 		if (got < 0)
 			return false;
@@ -178,9 +224,15 @@ static bool zoraya_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
 		}
 		switch (e.kind) {
 		case ZW_KEY: {
-			int k = map_key(e.a, e.b);
+			int k = map_key(e.a, e.b, e.d);
 			if (k == NSFB_KEY_UNKNOWN)
 				continue;
+			if (held_bit(k)) {
+				if (e.c)
+					held_mods |= (unsigned)held_bit(k);
+				else
+					held_mods &= ~(unsigned)held_bit(k);
+			}
 			event->type = e.c ? NSFB_EVENT_KEY_DOWN : NSFB_EVENT_KEY_UP;
 			event->value.keycode = (enum nsfb_key_code_e)k;
 			return true;
@@ -211,8 +263,12 @@ static bool zoraya_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
 			event->type = NSFB_EVENT_CONTROL;
 			event->value.controlcode = NSFB_CONTROL_QUIT;
 			return true;
+		case ZW_FOCUS:
+			if (!e.a && held_mods != 0)
+				lost_focus = true;
+			continue;
 		default:
-			continue; /* focus: nothing for the front end */
+			continue;
 		}
 	}
 }

@@ -101,8 +101,8 @@ Recommended: **Option C**. It is a recommendation, not a decision. The details a
    offered (page keys, arrows and the scrollbar work); a blocking wait with a time limit is a poll with short sleeps
    in the C surface until the library can wait on the channel with a deadline.
 
-The names `libc.a` adds for the window (the C surface's five calls, with `struct zoraya_window_event` in
-`ports/netsurf/zoraya_window.h`; none touches a handle the program can name):
+The names `libc.a` adds for the window (the C surface's five calls; this is not a boundary: C code can issue raw calls on the channel, and what protects the compositor is that it takes only client requests, checks every buffer against the display and the budget, and draws the pills from the record), with `struct zoraya_window_event` in
+`ports/netsurf/zoraya_window.h`; the C surface calls them, but C code can issue raw calls on the channel; the boundary is the compositor's client rules, not these names):
 
 ```posix-surface-added
 zoraya_window_buffer
@@ -124,9 +124,9 @@ zoraya_window_poll
   trusted room and the panel added it to the compositor with that room's record. *Check:* host tests of `zoraya-shell`
   (the plan) and `zoraya-panel` (the request); a GUI step that reads the pills of the window.
 - **INV-0317-2.** `zoraya-surface` sends only the client requests of `zoraya-proto-gui` (`CLIENT_REQUESTS`) and every
-  damage rectangle is clipped to the buffer before a pixel is read. *Check:* `cargo test -p zoraya-surface`.
+  damage rectangle is clipped to the buffer before a pixel is read. *Check:* `cargo test -p zoraya-surface` (`only_client_requests_are_sent`, `damage_is_clipped_to_the_buffer_before_anything_is_sent`).
 - **INV-0317-3.** A `libnsfb` call with a rectangle or a coordinate outside the surface changes no memory outside the
-  buffer. *Check:* the surface's tests with a fake `Platform` (property test over rectangles).
+  buffer. *Check:* `cargo test -p zoraya-surface` checks the surface's clipping and `fits` over every edge rectangle with a fake `Platform`; what `libnsfb` itself writes is checked only by the GUI step of `make test-netsurf` (the screen), and the buffer's bounds by `Gui::buffer`'s checked size.
 
 ## Open questions
 - Does `libposix`'s startup already give Rust code a `GlobalAlloc`? *(read `crates/zoraya-posix/src/lib.rs` and the
