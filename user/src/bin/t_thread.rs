@@ -691,7 +691,8 @@ fn spawn_holds_moved_handles() {
             assert_eq!(wait_exit(child).reason, ExitReason::Exited);
             handle_close(child).expect("close");
         } else {
-            handle_close(a).expect("the handle is still here");
+            // The receiver's write moved `a` first (the assert above): it is gone.
+            assert_err!(handle_close(a), Status::BadHandle);
         }
         handle_close(program).expect("image");
         for h in [b, c, d] {
