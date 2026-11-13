@@ -35,6 +35,35 @@
 > fetch https://10.0.2.2:@TLSVALID@/\r
 < certificate is not signed by a trusted root
 < \r\n~>
+# `curl` and `wget` (TASK-27 9a) are on this image's volume (tools/run-disk.sh
+# puts build/rootfs-apps there): C programs on OpenSSL, the shell's grants and
+# getrandom. Plain HTTP works; HTTPS with the production roots reaches the
+# certificate and is refused there (exit status 60 for curl, 5 for wget), as
+# `fetch` is (the full path, with the test PKI's root, is test-apps').
+> curl -s http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> wget -q -O - http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> curl -s https://10.0.2.2:@TLSVALID@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> curl https://10.0.2.2:@TLSVALID@/\r
+< curl: (60) SSL
+< \r\n~>
+> wget -O - https://10.0.2.2:@TLSVALID@/\r
+< ERROR: cannot verify 10.0.2.2's certificate
+< \r\n~>
+> grants curl -O https://x.example/y\r
+< create or replace y (option -O)
+< /system/tls          read (with the network)
+< net: x.example:443           reach (operand URL)
+< \r\n~>
 # `ping` (TASK-26, hand-run): echo requests to the gateway, which SLIRP answers.
 > ping 10.0.2.2\r
 < PING 10.0.2.2: 4 requests

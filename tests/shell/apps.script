@@ -1,0 +1,344 @@
+# `curl` and `wget` (TASK-27 9a; `make test-apps`, which turns @PORT@ and the
+# @TLS...@ ports into numbers). C programs on OpenSSL, zlib and libposix's
+# sockets and getrandom, run through the broker from the disk's /bin. The
+# disk's /system/tls/roots is the test PKI's root (the production image's
+# refusal of it is test-hand-run's); the names come from net.hosts. The
+# shell gives each program a connection that reaches the host and port of the
+# URL on its line, /system/tls to read, and nothing else.
+! panicked
+! first process ended
+< Type help to begin, or help tour.
+< \r\n~>
+# The lease takes a few hundred milliseconds under TCG.
+> sleep 3\r
+< \r\n~>
+# HTTP: a page, byte for byte; to a file; under the URL's name.
+> curl -s http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> curl -s -o page.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> cat page.txt\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> curl -sO http://10.0.2.2:@PORT@/pattern/1000000\r
+< \r\n~>
+> stat 1000000\r
+< file size 1000000
+< \r\n~>
+> wget -q -O - http://10.0.2.2:@PORT@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> wget -q -O big.bin http://test.zoraya:@PORT@/chunked/300000\r
+< \r\n~>
+> stat big.bin\r
+< file size 300000
+< \r\n~>
+> wget -q -O more.bin http://10.0.2.2:@PORT@/close/70000\r
+< \r\n~>
+> stat more.bin\r
+< file size 70000
+< \r\n~>
+# What goes wrong is said, and the exit status is the program's own.
+> curl -s http://10.0.2.2:@PORT@/status/404\r
+< status 404
+< \r\n~>
+> curl -sf http://10.0.2.2:@PORT@/status/404\r
+< \r\n~>
+> status\r
+< \r\nexit status 22
+< \r\n~>
+> curl -s http://10.0.2.2:1/\r
+< \r\n~>
+> status\r
+< \r\nexit status 7
+< \r\n~>
+> wget -q -O - http://10.0.2.2:1/\r
+< \r\n~>
+> status\r
+< \r\nexit status 4
+< \r\n~>
+# HTTPS against the test PKI's root: the handshake draws on getrandom (a
+# program with no random connection cannot start one), the certificate is
+# checked against the system's date, the roots and the name in the address.
+> curl -s https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> wget -q -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< fetched over HTTP, byte for byte
+< \r\n~>
+> curl -sO https://test.zoraya:@TLSVALID@/pattern/70000\r
+< \r\n~>
+> stat 70000\r
+< file size 70000
+< \r\n~>
+> wget -q -O tls.bin https://test.zoraya:@TLSVALID@/pattern/1000000\r
+< \r\n~>
+> stat tls.bin\r
+< file size 1000000
+< \r\n~>
+# OpenSSL with threads (ADR-0309 item 4): four threads handshake at once over
+# one context. Against the valid server every handshake succeeds and returns the
+# page; against the expired and the wrong-name servers all are refused (the
+# Makefile checks that the servers saw no request byte).
+> tlsthreads https://test.zoraya:@TLSVALID@/\r
+< 12 handshakes from 4 threads, all verified and served
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> tlsthreads -r expired https://expired.zoraya:@TLSEXPIRED@/\r
+< 12 handshakes from 4 threads, all refused
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+> tlsthreads -r name https://wrong.zoraya:@TLSWRONG@/\r
+< 12 handshakes from 4 threads, all refused
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+# The crypto half of ADR-0309 item 4: eight threads of SHA-256, AES-GCM and
+# RAND_bytes against a single-threaded reference; a fork child gets no random bytes.
+> cryptothreads\r
+< 8 threads x 200 rounds of SHA-256, AES-256-GCM and RAND_bytes as the single-threaded; a fork child gets no random bytes
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+# Refused before any byte of the request is sent; the Makefile checks the
+# server's log for the same. There is no option to turn the check off.
+> curl https://expired.zoraya:@TLSEXPIRED@/\r
+< certificate has expired
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< Issued certificate has expired.
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+> curl https://wrong.zoraya:@TLSWRONG@/\r
+< no alternative certificate subject name matches target hostname 'wrong.zoraya'
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> wget -O - https://wrong.zoraya:@TLSWRONG@/\r
+< no certificate subject alternative name matches
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+# A plain server on an HTTPS address is no TLS server.
+> curl -s https://test.zoraya:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 35
+< \r\n~>
+# By number, the valid server's certificate is for no name that matches.
+> curl -s https://10.0.2.2:@TLSVALID@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+# `-k` and `--no-check-certificate` are not options of the descriptions: the
+# line is a usage mistake, the program gets no connection and cannot resolve
+# or connect (no request is sent: the Makefile checks the server's log).
+> curl -k https://test.zoraya:@TLSVALID@/\r
+< Could not resolve
+< \r\n~>
+> wget --no-check-certificate -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< Permission denied
+< \r\n~>
+> status\r
+< \r\nexit status 4
+< \r\n~>
+# What the line gives, exactly (ADR-0311): the network, /system/tls to read
+# with it, and for -O the one file the URL names. A line without a URL
+# gives no network and no roots.
+> grants curl -O https://x.example/y\r
+< curl gets (a POSIX program):
+< the terminal\r\n  ~                    create or replace y (option -O)\r\n  /system/tls          read (with the network)\r\n  /bin /usr /etc       read (system)
+< net: x.example:443           reach (operand URL)
+< \r\n~>
+> grants curl --help\r
+< the terminal\r\n  /bin /usr /etc       read (system)
+< \r\n~>
+> grants curl -o f.txt http://x.example/y\r
+< the terminal\r\n  ~                    create or replace f.txt (option -o)\r\n  /system/tls          read (with the network)
+< \r\n~>
+> grants wget -O out.txt https://x.example/y\r
+< wget gets (a POSIX program):
+< the terminal\r\n  ~                    create or replace out.txt (option -O)\r\n  /system/tls          read (with the network)
+< net: x.example:443           reach (operand URL)
+< \r\n~>
+# A name the shell cannot be sure of is refused before the program runs.
+> curl -O https://x.example/\r
+< would save under a name the shell cannot be sure of
+< to say where it goes, write -o FILE
+< \r\n~>
+> curl -O https://x.example/a%2Fb\r
+< would save under a name the shell cannot be sure of
+< \r\n~>
+# A URL from a value designates nothing (ADR-0224 item 2); a +net word lets it.
+> set u http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> curl -s $u\r
+< from a value, outside the line's network grants
+< \r\n~>
+> +net 10.0.2.2:@PORT@ curl -s $u\r
+< Zoraya test page
+< \r\n~>
+# A program may create only what the shell designated: curl -O makes the one
+# file; wget without -O has none to write in the read-only directory.
+> wget -q http://10.0.2.2:@PORT@/pattern/10\r
+< \r\n~>
+> status\r
+< \r\nexit status 3
+< \r\n~>
+> stat 10\r
+< not found
+< \r\n~>
+# The program is given the one file the line names of the current directory
+# and nothing else of it (ADR-0311 item 5, INV-0311-1): -d @FILE is a read of
+# a file the line does not give, and fails (exit 26); the page goes to the one
+# file; what was there is not touched.
+> echo keep this > secret.txt\r
+< \r\n~>
+> curl -s -o got.txt -d @secret.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 26
+< \r\n~>
+> cat secret.txt\r
+< keep this
+< \r\n~>
+# The same below the directory: -o sub/f gives the path, not the directory
+# (the starting point is a dead connection; review of 9a, W1).
+> mkdir sub\r
+< \r\n~>
+> curl -s -o sub/got.txt -d @secret.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 26
+< \r\n~>
+> grants curl -o sub/got.txt http://10.0.2.2:@PORT@/\r
+< create or replace got.txt (option -o)
+< \r\n~>
+# A +r of the directory gives the read, for exactly what the line says.
+> +r . curl -s -d @secret.txt http://10.0.2.2:@PORT@/\r
+< \r\n~>
+> status\r
+< \r\nsucceeded (exit status 0)
+< \r\n~>
+# Nothing in a file of the home directory or in the environment changes what
+# the programs trust (ADR-0310 item 4, INV-0228-1; the Makefile checks the
+# server's log for 0 request bytes where the check must refuse). Each line
+# has the home directory read (+r .), so a configuration file *could* be read.
+> echo insecure > .curlrc\r
+< \r\n~>
+> echo check_certificate = off > .wgetrc\r
+< \r\n~>
+> +r . curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> +r . curl https://wrong.zoraya:@TLSWRONG@/\r
+< no alternative certificate subject name matches target hostname 'wrong.zoraya'
+< \r\n~>
+> +r . wget -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< Issued certificate has expired.
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+> export WGETRC .wgetrc\r
+< \r\n~>
+> export SYSTEM_WGETRC .wgetrc\r
+< \r\n~>
+> +r . wget -O - https://wrong.zoraya:@TLSWRONG@/\r
+< no certificate subject alternative name matches
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+# A configuration file that is not read cannot break the valid transfers.
+> echo no-such-option-at-all > .curlrc\r
+< \r\n~>
+> echo no_such_command = on > .wgetrc\r
+< \r\n~>
+> +r . curl -s https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+# Variables that name roots or a configuration file that EXISTS and would
+# break the valid transfer if honoured (INV-0310-4; review of 9a, W2). Stock
+# OpenSSL/curl would trust only the other root of the test PKI (which signs
+# nothing) for CURL_CA_BUNDLE and SSL_CERT_FILE, and so refuse the valid
+# server; the configuration file asks for an impossible protocol range, which
+# fails every handshake. SSL_CERT_DIR names an existing hashed directory (the
+# other root's): stock OpenSSL adds it to the trust, which cannot be seen here
+# because every server of the test PKI chains to the one root; it is a control
+# that an existing directory changes nothing.
+> echo "openssl_conf = default_conf" > ossl.cnf\r
+< \r\n~>
+> echo "[default_conf]" >> ossl.cnf\r
+< \r\n~>
+> echo "ssl_conf = ssl_sect" >> ossl.cnf\r
+< \r\n~>
+> echo "[ssl_sect]" >> ossl.cnf\r
+< \r\n~>
+> echo "system_default = sys" >> ossl.cnf\r
+< \r\n~>
+> echo "[sys]" >> ossl.cnf\r
+< \r\n~>
+> echo "MinProtocol = TLSv1.3" >> ossl.cnf\r
+< \r\n~>
+> echo "MaxProtocol = TLSv1.1" >> ossl.cnf\r
+< \r\n~>
+> export CURL_CA_BUNDLE /etc/test-pki/other-root.pem\r
+< \r\n~>
+> export SSL_CERT_FILE /etc/test-pki/other-root.pem\r
+< \r\n~>
+> export SSL_CERT_DIR /etc/test-pki/hashed\r
+< \r\n~>
+> export OPENSSL_CONF ossl.cnf\r
+< \r\n~>
+> +r . curl -s https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> +r . wget -q -O - https://test.zoraya:@TLSVALID@/\r
+< Zoraya test page
+< \r\n~>
+> +r . curl -s https://wrong.zoraya:@TLSWRONG@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> +r . curl -s https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 60
+< \r\n~>
+> +r . wget -q -O - https://expired.zoraya:@TLSEXPIRED@/\r
+< \r\n~>
+> status\r
+< \r\nexit status 5
+< \r\n~>
+x power off
+> poweroff\r

@@ -7,11 +7,11 @@ Running report, updated after each part. Part 9b's design was written by a Sonne
 
 | Part | State | Tag |
 |---|---|---|
-| 9a TLS for C, zlib, curl, wget | not started | |
+| **9a TLS for C, zlib, curl, wget** | implemented on `work/9a` (merged with `origin/main` at `a0cfc1f`, so it has 9b's kernel and libposix threads); ADR-0312 accepted 2026-11-13; ADR-0310 and ADR-0311 `proposed` (they only add decisions); OpenSSL rebuilt with threads; not merged; tests in the section "9a: OpenSSL with threads" below | |
 | **9b POSIX threads** | **design accepted 2026-11-13** (ADR-0300 to ADR-0309 accepted by the architect as recommended; ADR-0308 supersedes ADR-0100's "no threads" and the other places it lists); kernel step implemented on `work/9b`; ADR-0313 (the kernel as built) accepted 2026-11-13; libposix step on `work/9b-libc` (ADR-0314, ADR-0315 proposed). Next: 9a, then 9b implementation and 9d in parallel, then 9c. Thread calls stay 56 to 61 (the highest call on main is 55, `device_write`) | |
 | 9c CPython | not started | |
 | 9d NetSurf | not started | |
-| image addition (`EXTRA_ROOT`) | not started | |
+| image addition (`EXTRA_ROOT`) | done inside 9a (`tools/run-disk.sh`, `make check-run-disk`), without descriptions for unknown programs; already on `work/9a` | |
 
 ### The ADRs of part 9b (all accepted 2026-11-13; they were `proposed`; one line each is a recommendation, not a decision)
 
@@ -283,3 +283,131 @@ What exists (ADR-0315 items 9 and 10, INV-0315-5 to -7):
   `tools/plan-lib.sh`. `tests/posix/threads.script` runs in `make test-posix` (both accelerators in CI). `make posix-threadtest3` is not a step (no `fcntl` record locks).
 
 Not done: INV-0306-3 and -5 checks; INV-0308-3 over fresh logs of all workloads; the mapping-count measurement; a TCG run of `test-posix-threads` and the full `make test-posix` (see the final report of the session); `accept` in a thread (no loopback server in the session).
+
+---
+
+## 9a: TLS for C programs, zlib, curl, wget
+
+Branch `work/9a` from `origin/main` at `972bbf0`; one Sonnet 5.5 session, 2026-11-13.
+
+### What exists
+
+- `ports/sources.lock`: OpenSSL 3.5.9, zlib 1.3.1, curl 8.23.0, wget 1.25.0 (version, SHA-256, URLs; `make fetch-ports`
+  downloaded and verified them; `docs/dependencies.md` and `ports/README.md` list them with licences and patches).
+- `make apps` (`ports/Makefile`): zlib, OpenSSL (static, `no-threads`), curl and wget with `zcc`, 6.7 MiB each without debug
+  information; the end of the target checks the logs for `-D__linux` and that every OpenSSL patch is under `__zoraya__`.
+  Patches: `ports/patches/openssl/` (3), `curl/` (config.sub), `wget/` (plain-fd BIO, no `MSG_PEEK`).
+- `getrandom` in libposix (`crates/zoraya-posix/src/random.rs`), the `ZPBX` bootstrap form (`zoraya-abi`), the share in `zosh`
+  (`user/src/bin/zosh.rs`, `user/src/posix_child.rs`).
+- Descriptions `user/describe/posix/curl.cmd` and `wget.cmd`; the key `names` (`zoraya-describe`); `grants` and the run give a
+  POSIX program the roots directory and show the `net:` line; `posix_child::load` reads the program into its image directly.
+- `tools/run-disk.sh` `EXTRA_ROOT`; `ports/apps/zshim.c`.
+- 22 names in `libc.a` (now 337 exports); ADR-0310 to ADR-0312 with 6 INV rows (the Total is 538).
+
+### Tests (what ran in this session, on the M4, HVF)
+
+| Command | Result |
+|---|---|
+| `cargo test -p zoraya-posix --test random` | 7 passed |
+| `cargo test -p zoraya-describe -p zoraya-shell -p zoraya-command` | passed (the `names` key, `url_file_name`, 4 `curl_o_*` plans) |
+| `cargo test -p zoraya-abi` | 69 passed (one new: the `ZPBX` flags) |
+| `make check` | 17 of 17 passed (adr-check 0 errors; `check-run-disk` is new) |
+| `make test-apps` (new) | passed: both programs over HTTP and TLS, expired and wrong-name certificates refused by both with no request byte at the server, `grants`, refused `-O` names, `-k` as a usage mistake |
+| `make test-apps FULL=1` | passed under HVF and TCG |
+| `make test-net-posix`, `test-libposix`, `test-boot` | passed (they cover what the bootstrap and `grants` changes touch) |
+| `make test-files` | passed (an earlier `rootfs/etc/wgetrc` had made `/etc` appear in the root listing; it is gone) |
+| `make test-hand-run` | passed: the production `run-net` image with `curl` and `wget`: HTTP works, HTTPS reaches the certificate and is refused (curl exit 60, wget "cannot verify") |
+
+Not run here: `make test-changed` as a whole, `test-net`, `test-posix*`, `test-tour-gui`, `test-gui`, `test-crash`, `test-qemu` (CI's candidate run
+covers them), TCG for anything but `test-apps`, mutation testing. Disk: 44 GB free at the start, 42 GB at the end; the worktree
+is `zoraya-9a` with its own `target/` and `build/`. The CI workflow changed: the build job also builds `make apps` (cache paths and `ports-build-v3`; timeout 30 minutes).
+
+### Decisions
+
+See ADR-0310 to ADR-0312 and Items 2 and 4 above. Not done in 9a: `getrandom` for programs a POSIX parent starts, `tls.roots`
+for C programs, threads (9b), a hand-written mutation list for the new code (`tools/mutants/`).
+
+### For the independent review (security and trust boundaries first)
+
+1. `crates/zoraya-posix/src/random.rs`, `ffi/sockets.rs` (`getrandom`), `ffi.rs` (`bootstrap`'s `ZPBX` parse: handle counts,
+   closing what is not a channel), `user/src/posix_child.rs` (the message and every close path on failure), the share in `zosh`.
+2. The description files (`curl.cmd`, `wget.cmd`): the options list is the policy (no `-k`, no `--cacert`, no config file); the `names` key
+   (`crates/zoraya-describe`, `crates/zoraya-shell/src/grants.rs`): can the name the shell approves differ from the file curl
+   makes? (`url_file_name` is deliberately stricter than curl.)
+3. TLS root handling in C programs: `zosh.rs` `ready_from_volume` (the roots directory added with the network),
+   `ports/patches/openssl/0003`, `ports/patches/wget/0001` (a plain-fd BIO).
+4. `tools/run-disk.sh` `EXTRA_ROOT`, and `grants` for POSIX programs (`grants_report`, `Host::grants`).
+5. The wget patches and the shim (`ports/apps/zshim.c`) are C that runs with the program's authority only; skim.
+
+## 9a: fixes after the independent review (opus-review), same branch
+
+Decisions made without the architect, all in ADR-0310 to ADR-0312 (still `proposed`):
+
+- **Finding 2 (the one to look at).** `-o`/`-O` gave the program the whole current directory (the shell folded the one
+  `create NAME` with the directory's read). Chosen: the preferred fix. `curl.cmd` and `wget.cmd` say `cwd none`; the one
+  name reaches the program as a directory handle narrowed to it at the current directory's prefix, and `grants` says
+  `create or replace NAME (option -O)` and nothing else for the directory (ADR-0311 item 5, INV-0311-1). A line with no
+  output file starts the program in `/bin`, read only; a path below the directory gets a placeholder entry with a dead connection as a
+  starting point (nothing readable; review W1). Alternative for the architect: `cwd read` as before, and say that `-o`/`-O` write the whole directory.
+  Test: `make test-apps` (`grants` lines; `-d @secret.txt` fails with exit 26 for a file the line does not give, and works
+  with `+r .`). wget's `.wget-hsts` is gone with HSTS off.
+- **Finding 1.** The patches (`ports/patches/{openssl/0004,curl/0002,wget/0003}`, ADR-0310 item 6, INV-0310-4): no
+  environment variable and no configuration file decides trust. Tested with `+r .` on the line so that a file could be
+  read: `.curlrc` `insecure`, `.wgetrc` `check_certificate = off`, `WGETRC`/`SYSTEM_WGETRC`, and `CURL_CA_BUNDLE`,
+  `SSL_CERT_FILE`, `SSL_CERT_DIR`, `OPENSSL_CONF` naming nothing (a valid server still works, an expired and a wrong-name one
+  still fail; the server's log shows 0 request bytes).
+- **Findings 3 and 4.** `--with-rand-seed=getrandom no-tls1 no-tls1_1 no-dtls` (and the `-method` forms); the end of `make apps`
+  checks that neither program names `/dev/urandom` or `/dev/random` or links `TLSv1_method` and the like (INV-0310-5). Not tested:
+  a run without the random connection (the shell always gives one); `cargo test -p zoraya-posix --test random` covers the
+  library side (`ENOSYS`). A TLS 1.0 server is not in the test PKI.
+- **Finding 5.** `rootfs/etc/wgetrc` removed (patch 0003 of OpenSSL gives the roots; wget reads no rc file); `files-write.script` back.
+- **Finding 6.** The descriptions now say that `-d @FILE` and `-H @FILE` read only what a `+r`/`+w` of the line gives, and that no
+  configuration file is read; the tests above.
+- **Findings 7 to 11.** `url_file_name` cuts `?` and `#` before the path (host tests); `/system/tls` by the same `REACH` test
+  in the run and in `grants`; a `ZPBX` message with an unknown flag keeps `SELF` (code now agrees with the abi doc);
+  `getrandom` keeps `EINTR` and `EINVAL` (its wait is a signal wait point; no host test of the `EINTR` path: the fake kernel
+  has no signal source), the limit of 64 connections per shell is documented in `random.rs` and ADR-0310; the SAFETY
+  comment of the image mapping states what it relies on.
+
+Ran in this session: `make check`; `cargo test -p zoraya-describe -p zoraya-posix -p zoraya-shell`; `make apps`; `make test-apps`
+(one run, HVF, 235 steps); `make test-hand-run`; `make test-files`. Not run: `FULL=1` (TCG), `make test-changed`, `test-net-posix`.
+
+## 9a: OpenSSL with threads, and the merge with `main` (2026-11-13)
+
+Done on `work/9a` after ADR-0312 was accepted and 9b's `libposix` pthreads (ADR-0314, ADR-0315) reached `main`.
+
+- **Merge.** `origin/main` (`a0cfc1f`) merged into `work/9a`; conflicts in the Makefile step lists, `ports/Makefile`, `ports/sources.lock`,
+  `tools/plan-lib.sh`, `tools/test-map.txt`, the fake kernel of `crates/zoraya-posix/tests/kernel/mod.rs`, `docs/adr/invariants.md`
+  (Total recomputed: 615) and this file; both sides kept. ADR numbers do not collide (0310 to 0312 are 9a's; 0313 to 0316 are 9b's and
+  first-lookup's). `work/9a-leak`'s fix (`posix_child::load` attaches the image's object itself) was merged into `work/9a` earlier
+  (`git merge-base --is-ancestor origin/work/9a-leak HEAD` holds); nothing to fold in.
+- **OpenSSL with threads.** `ports/Makefile` `OPENSSL_OPTS` has `threads` in place of `no-threads`; the rest (`no-tls1 no-tls1_1 no-dtls no-ssl3
+  no-engine no-dso no-shared`, `--with-rand-seed=getrandom`, the four patches) is unchanged, and `getrandom` is still the only seed source (the end
+  of `make apps` checks it as before). Its locks are OpenSSL's own `threads_pthread.c` (`CRYPTO_THREAD_*` over `pthread_rwlock_*`,
+  `pthread_once`, `pthread_key_*`) on musl's pthreads in `libc.a`; the build and the test link and run without a shim. curl and wget stay
+  single-threaded: curl's options already say `--disable-threaded-resolver` (synchronous resolver; chosen, recorded in ADR-0310 item 2)
+  and wget's `--disable-threads`. `curl --version` now lists `threadsafe` (a feature of the build with OpenSSL's threads), which
+  `tests/shell/apps-launches.script` expects.
+- **The test of ADR-0309 item 4 (TLS half).** `tests/apps/tlsthreads.c` (built by `ports/Makefile`, copied to the test volume by `make test-apps` only;
+  described by `user/describe/posix/tlsthreads.cmd`, so the shell gives it a connection and `/system/tls`): four threads, one shared `SSL_CTX`, three
+  handshakes each per URL. Against the valid server all 12 succeed and return the page; against the expired and the wrong-name server all 12
+  are refused (and the Makefile's check of the server logs shows 0 request bytes). The shell's connection account for a POSIX program holds two
+  connections (`POSIX_NET_BUDGET`), so a thread whose `connect` fails waits 50 ms and tries again: at most two handshakes are in flight at once.
+- **Not done:** the SHA-256 / AES-GCM / `RAND_bytes` check of ADR-0309 item 4 (`tests/posix/ossl_threads.c`).
+- **A stale build trap found:** `build/ramdisk.bin` is rebuilt only when missing, so a new `user/describe/posix/*.cmd` (or any user-program change)
+  does not reach `make test-apps`' kernel until `build/ramdisk.bin` and `build/zoraya-kernel.elf` are removed (CI starts clean).
+
+## Status for the architect (9a)
+
+1. **ADR-0310 and ADR-0311 are `proposed`.** They only add decisions (names for `libc.a`, the `names` description key, the roots directory). Accept,
+   change or reject them; 9a does not merge on their account alone, but the descriptions and the shell code depend on them.
+2. **wget is GPL-3.0-or-later.** It is a separate program in the image, built from the pinned tarball, not linked into anything; the precedent is
+   ADR-0109 (GNU make, GPL-3.0, in the image). `docs/dependencies.md` lists it. Confirm that this is acceptable.
+3. **SQLite's source is public domain** and is used as a test input only (`threadtest3` in 9b, W3's source); it is not linked into the kernel or a
+   `no_std` crate.
+4. **Linux CI build of the ports** (`make apps` in the build job): verified by the candidate run 43371864611 (green on `11d77f2`, as the orchestrator reported; not rerun here). The
+   candidate for this head is the orchestrator's to tag.
+5. **The `libc-test` fetch is pinned by git commit** (`ports/sources.lock`: `libctest 63e36e9...`, with the SHA-256 of the tarball made from it), not
+   by a release; there is no upstream release to pin. A new commit means a new line and a new hash.
+6. **Open from the earlier 9a report:** the ~8.5 MiB leak per `curl`/`wget` launch was fixed by `work/9a-leak` (merged; the `apps-launches` step
+   runs 16 launches on 128 MiB); the choices of Item 4 of the earlier status (wget host triple, `rand`/`srand` exported, no `-k`) stand.

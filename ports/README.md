@@ -44,6 +44,14 @@ that program's licence, not under the repository's BSD-2-Clause `LICENSE`.
 | libc-test | `63e36e934e8f2bedf645303a90b64098e2af6c8f` (fetched with git from repo.or.cz/libc-test.git, ADR-0309; the hash is of the tar, see below; the archive was taken at first fetch, ADR-0109 trust on first use) | MIT (its `COPYRIGHT`) | none; `make test-posix-suites` builds its thread tests (ADR-0309), which `tests/libc-test/threads-excluded.txt` narrows. repo.or.cz generates snapshot tarballs on demand, so the archive's bytes (and its hash) can change with its software: keep the fetched archive in `ports/cache` and mirror it if the hash ever fails |
 | SQLite source tree | 3.54.1 (`sqlite-src-3540100.zip`) | public domain | none; `test/threadtest3.c` for ADR-0309 item 2 |
 | GNU hello | 2.12.3 | GPL-3.0-or-later (`COPYING`, `src/hello.c`) | none; W4's source, built inside Zoraya |
+| OpenSSL | 3.5.9 | Apache-2.0 (`LICENSE.txt`) | `patches/openssl/0001-zoraya-getrandom.patch` (the seed source is libposix's `getrandom`), `0002-no-posix_memalign.patch`, `0003-roots-file.patch` (`/system/tls/roots`); TASK-27 9a, ADR-0310 |
+| zlib | 1.3.1 | zlib (the licence at the end of `zlib.h`) | none |
+| curl | 8.23.0 | curl (`COPYING`) | `patches/curl/0001-config-sub-zoraya.patch` (one line of `config.sub`) |
+| GNU wget | 1.25.0 | GPL-3.0-or-later (`COPYING`) | `patches/wget/0001-openssl-without-sockets.patch` (`SSL_set_fd` becomes a plain-fd BIO), `0002-no-msg-peek.patch` (`fd_read_hunk` reads a byte at a time: libposix has no `MSG_PEEK`) |
+
+`make apps` (TASK-27 9a, ADR-0310) builds zlib, OpenSSL, curl and wget into `build/ports/deps` and
+`build/rootfs-apps/bin`; `tools/run-disk.sh` puts that directory on the volume of `make run`, `run-net` and
+`run-gui`. `ports/apps/zshim.c` is the small archive of names those two programs need and `libc.a` does not export.
 
 Lua, SQLite and hello are not built on the host: `make -f ports/Makefile workloads`
 unpacks them into `build/ports/workloads/`, with tcc's tree (the ports' patches

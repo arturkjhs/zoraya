@@ -19,6 +19,7 @@ pub mod lock;
 pub mod net;
 pub mod path;
 pub mod process;
+pub mod random;
 pub mod signals;
 pub mod socket;
 pub mod stat;

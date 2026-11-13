@@ -1,0 +1,70 @@
+diff -ruN a/lib/vtls/keylog.c b/lib/vtls/keylog.c
+--- a/lib/vtls/keylog.c	2026-10-14 07:54:05
++++ b/lib/vtls/keylog.c	2026-11-13 05:42:57
+@@ -38,7 +38,12 @@
+ void Curl_tls_keylog_open(void)
+ {
+   if(!keylog_file_fp) {
++#ifdef __zoraya__
++    /* No key log written for a name from the environment (ADR-0310 item 6). */
++    keylog_file_name = NULL;
++#else
+     keylog_file_name = getenv("SSLKEYLOGFILE");
++#endif
+     if(keylog_file_name) {
+       keylog_file_fp = curlx_fopen(keylog_file_name, FOPEN_APPENDTEXT);
+       if(keylog_file_fp) {
+diff -ruN a/src/tool_getparam.c b/src/tool_getparam.c
+--- a/src/tool_getparam.c	2026-10-14 07:54:05
++++ b/src/tool_getparam.c	2026-11-13 05:42:57
+@@ -2277,6 +2277,11 @@
+     err = GetFileAndPassword(nextarg, &config->cert, &config->key_passwd);
+     break;
+   case C_CONFIG: /* --config */
++#ifdef __zoraya__
++    /* No configuration file (ADR-0310 item 6). */
++    err = PARAM_BAD_USE;
++    break;
++#endif
+     if(--max_recursive < 0) {
+       errorf("Max config file recursion level reached (%d)",
+              CONFIG_MAX_LEVELS);
+diff -ruN a/src/tool_operate.c b/src/tool_operate.c
+--- a/src/tool_operate.c	2026-10-14 07:54:05
++++ b/src/tool_operate.c	2026-11-13 05:42:57
+@@ -2263,6 +2263,12 @@
+   char *env;
+   CURLcode result = CURLE_OK;
+ 
++#ifdef __zoraya__
++  /* No CURL_CA_BUNDLE, SSL_CERT_DIR or SSL_CERT_FILE (TASK-27 9a, ADR-0310
++     item 6, INV-0228-1): the roots are the ones built in. */
++  (void)env;
++  return CURLE_OK;
++#endif
+   if(!feature_ssl || config->cacert || config->capath ||
+      (config->insecure_ok && (!config->doh_url || config->doh_insecure_ok)))
+     return CURLE_OK;
+@@ -2435,6 +2441,14 @@
+   setlocale(LC_NUMERIC, "C");
+ #endif
+ 
++#ifdef __zoraya__
++  /* No .curlrc, CURL_HOME, XDG_CONFIG_HOME or HOME lookup (ADR-0310 item
++      6): the program is configured by the line alone. */
++  if(argc < 2) {
++    helpf(NULL);
++    result = CURLE_FAILED_INIT;
++  }
++#else
+   /* Parse .curlrc if necessary */
+   if((argc == 1) ||
+      (first_arg && strncmp(first_arg, "-q", 2) &&
+@@ -2448,6 +2462,7 @@
+       result = CURLE_FAILED_INIT;
+     }
+   }
++#endif
+ 
+   unicodefree(CURL_UNCONST(first_arg));
+ 

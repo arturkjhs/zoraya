@@ -24,7 +24,10 @@ use core::ffi::c_char;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use zoraya_abi::posix::{self as abi, Bootstrap, SELF_MESSAGE, SELF_NET_MESSAGE, slot};
+use zoraya_abi::posix::{
+    self as abi, Bootstrap, EXT_NET, EXT_RANDOM, SELF_EXT_MESSAGE, SELF_MESSAGE, SELF_NET_MESSAGE,
+    ext_handles, slot,
+};
 use zoraya_abi::{
     Buffer, Bytes, ChannelEntry, DEADLINE_INFINITE, Handle, Invoke, MapFlags, MemoryFlags,
     MemoryObject, Mode, OBJECT_TYPES, ObjectType, Packet, Status, stubs,
@@ -914,17 +917,43 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
     // The second message: SELF, which a fork child gets otherwise.
     let mut second = [0u8; 16];
     let mut self_handle = Vec::new();
-    let (kept, net) = match read(sys, &mut second, &mut self_handle) {
+    let (kept, net, random) = match read(sys, &mut second, &mut self_handle) {
         Some(4) if &second[..4] == SELF_MESSAGE && self_handle.len() == 1 => {
-            (self_handle.pop(), None)
+            (self_handle.pop(), None, None)
         }
         // `SELF` and the connection to `netd` (ADR-0287): only a channel
         // is taken for the network.
         Some(4) if &second[..4] == SELF_NET_MESSAGE && self_handle.len() == 2 => {
             let net = self_handle.pop();
-            (self_handle.pop(), net)
+            (self_handle.pop(), net, None)
         }
-        _ => (None, None),
+        // `SELF`, then the connections the flags name (proposed ADR-0310).
+        Some(5)
+            if &second[..4] == SELF_EXT_MESSAGE
+                && ext_handles(second[4]).is_some_and(|n| self_handle.len() == 1 + n) =>
+        {
+            let random = if second[4] & EXT_RANDOM != 0 {
+                self_handle.pop()
+            } else {
+                None
+            };
+            let net = if second[4] & EXT_NET != 0 {
+                self_handle.pop()
+            } else {
+                None
+            };
+            (self_handle.pop(), net, random)
+        }
+        // A flag this library does not know: `SELF` is still the first
+        // handle (abi::SELF_EXT_MESSAGE's contract); the rest is closed below.
+        Some(5)
+            if &second[..4] == SELF_EXT_MESSAGE
+                && ext_handles(second[4]).is_none()
+                && !self_handle.is_empty() =>
+        {
+            (Some(self_handle.remove(0)), None, None)
+        }
+        _ => (None, None, None),
     };
     for h in self_handle.drain(..) {
         let _ = zoraya_rt::handle_close(h);
@@ -937,17 +966,21 @@ fn bootstrap(sys: &mut RtSys) -> Posix<RtSys> {
         Some(record) => {
             let mut p = Posix::from_bootstrap(sys, &record, &handles, at_slot, report);
             p.self_handle = kept;
-            p.net = net.filter(|h| {
-                let channel = zoraya_rt::handle_type(*h) == Ok("channel");
+            // Only a channel is taken for a connection; anything else
+            // that arrived in its place is closed.
+            let channel = |h: Handle| {
+                let channel = zoraya_rt::handle_type(h) == Ok("channel");
                 if !channel {
-                    let _ = zoraya_rt::handle_close(*h);
+                    let _ = zoraya_rt::handle_close(h);
                 }
                 channel
-            });
+            };
+            p.net = net.filter(|h| channel(*h));
+            p.random = random.filter(|h| channel(*h));
             p
         }
         None => {
-            for h in handles.into_iter().chain(kept).chain(net) {
+            for h in handles.into_iter().chain(kept).chain(net).chain(random) {
                 let _ = zoraya_rt::handle_close(h);
             }
             Posix::new(sys, facts)
@@ -2601,5 +2634,5 @@ macro_rules! not_yet {
     )*};
 }
 
-not_yet!(int syscall tee getrandom sendmsg setgroups setsid);
+not_yet!(int syscall tee sendmsg setgroups setsid);
 not_yet!(ptr __map_file);

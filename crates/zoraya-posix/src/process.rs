@@ -278,6 +278,10 @@ pub struct Posix<S: Sys> {
     /// launcher gave one: sockets need it for the first call that names a
     /// destination.
     pub net: Option<S::H>,
+    /// The connection to the random service (ADR-0227 item 3; ADR-0310),
+    /// if the launcher gave one: `getrandom` needs it. Like `net`, a `fork`
+    /// child has none (a channel end cannot be duplicated, ADR-0102 item 3).
+    pub random: Option<S::H>,
     /// The names of the last resolved addresses (ADR-0225 item 3).
     pub addrs: crate::socket::AddrCache,
     /// The broker's connection at slot `BROKER` (ADR-0104), if any.
@@ -353,6 +357,7 @@ impl<S: Sys> Posix<S> {
             stats: Stats::default(),
             signals: crate::signals::Signals::starting(facts.ignored, facts.blocked),
             net: None,
+            random: None,
             addrs: crate::socket::AddrCache::default(),
             broker: None,
             process_job: None,

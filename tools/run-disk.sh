@@ -18,6 +18,14 @@
 # since the shell grants it /system/tls/roots (ADR-0228 item 3). One from before
 # a change to /system keeps the old system files (an old root store) forever.
 #
+# EXTRA_ROOT (TASK-27 9a, proposed ADR-0310) is a directory whose files are
+# added to the volume over rootfs/'s, with their descriptions (user/describe/)
+# in the ramdisk: programs built outside the repository, such as the ports'
+# curl and wget in build/rootfs-apps (`make apps`). It defaults to
+# build/rootfs-apps when that exists; EXTRA_ROOT= (empty) takes none. Its
+# files go in the key, so a new curl makes a new disk. /system is read-only to
+# everyone (ADR-0289 item 8), so an EXTRA_ROOT may not hold files under it.
+#
 # Needs target/debug/zoraya-mkfs (make tools-storage).
 
 set -eu
@@ -35,7 +43,23 @@ format=$(sed -n 's/^pub const FORMAT_VERSION: u16 = \([0-9][0-9]*\);$/\1/p' crat
 system=$(cd rootfs && find system -type f | LC_ALL=C sort | while read -r f; do
     printf '%s %s\n' "$f" "$(cksum < "$f")"
 done | cksum)
+extra=${EXTRA_ROOT-build/rootfs-apps}
+if [ -n "$extra" ] && [ ! -d "$extra" ]; then
+    # The default is optional; a root named on purpose must exist.
+    [ -z "${EXTRA_ROOT+x}" ] && extra= || { echo "run-disk.sh: EXTRA_ROOT $extra is not a directory" >&2; exit 2; }
+fi
+extra_sum=
+if [ -n "$extra" ]; then
+    if [ -e "$extra/system" ]; then
+        echo "run-disk.sh: EXTRA_ROOT $extra holds /system, which only rootfs/ may" >&2
+        exit 2
+    fi
+    extra_sum=$(cd "$extra" && find . -type f | LC_ALL=C sort | while read -r f; do
+        printf '%s %s\n' "$f" "$(cksum < "$f")"
+    done | cksum)
+fi
 key="format $format; size $size; system $system"
+[ -z "$extra_sum" ] || key="$key; extra $extra_sum"
 
 if [ -f "$image" ] && [ -f "$image.key" ] && [ "$(cat "$image.key")" = "$key" ]; then
     exit 0
@@ -53,5 +77,13 @@ if [ -f "$image" ]; then
 fi
 rm -f "$image.key"
 mkdir -p "$(dirname "$image")"
-"$mkfs" --size "$size" --from rootfs "$image"
+if [ -n "$extra" ]; then
+    stage=$(mktemp -d "${TMPDIR:-/tmp}/zoraya-disk.XXXXXX")
+    trap 'rm -rf "$stage"' EXIT
+    cp -R rootfs/. "$stage/"
+    cp -R "$extra"/. "$stage/"
+    "$mkfs" --size "$size" --from "$stage" "$image"
+else
+    "$mkfs" --size "$size" --from rootfs "$image"
+fi
 printf '%s\n' "$key" > "$image.key"
