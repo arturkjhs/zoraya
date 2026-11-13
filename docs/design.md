@@ -1990,8 +1990,15 @@ ADR-0221 items 5, 6 and 8).
   keeper's restart is `make test-keeper` (a test-image-only `room crash-keeper`). Fuzzing is `make test-fuzz` and `make
   test-fuzz-net` (`tools/run-fuzz.sh`, nightly toolchain, 20 s locally, 600 s in CI). Not built: an untrusted room's `/tmp`, the broker
   and `tmpd` in the room's job and the untrusted line reader, so INV-0265-4, INV-0268-3 and the `/tmp` half of INV-0265-3 are not
-  `checked`; INV-0264-3's GUI half is a starvation smoke test: the median key with spinners at most 450 ms over the same run's
-  median with none (both over a screendump read), not 50 ms.
+  `checked`. INV-0264-3 is `checked` by `tests/gui/spinners.script` (`latency 30 +50 tcg +450`, accepted by the architect
+  2026-11-13, ADR-0298 item 4): the median key to a terminal in `home` with two rooms at `--cpu 25%` and two spinners each is at most 50 ms
+  over the same run's median with none under HVF (a local run; the runner reads the screen every 10 ms there, `LATENCY_POLL`), and at most
+  450 ms under TCG (CI; the runner must read every 150 ms there, so a time is a screendump plus whole polls). The runner learns the
+  accelerator from `tools/run-qemu.sh --print-accel`. Measured under HVF (M-series Mac, 512 MiB guest, eight passing runs, 30 keys each; a screendump
+  read alone costs 4 to 7 ms): the median key to screendump 24.0 to 24.9 ms with nothing spinning, 22.8 to 23.1 ms with the spinners; over a
+  screendump read 18.0 to 20.6 ms and 18.8 to 19.0 ms: the difference is -1.7 to +0.9 ms against the 50 ms bound (no defect). The 10 ms read makes a
+  time a screendump plus at most 10 ms, so a difference of medians of 30 keys resolves a few ms. The first measurement also
+  failed once because 30 backspaces were sent at once and 8 were lost, so the erase now paces them like the typing.
 - **Masked interrupts.** Until stage 8's Q2, system calls ran with interrupts masked and some scaled with what they touch
   (under HVF on 128 MiB: `memory_create` of all memory about 9 ms, closing that object about 4 ms, closing a chain of
   20,000 channel ends about 11 ms). `memory_create`, `memory_map`, `memory_unmap`, `snapshot_process`, `spawn`'s copy,

@@ -1,6 +1,6 @@
 # ADR-0299: Q7, subscriptions are bounded per port and per source
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-12
 - **Depends on:** ADR-0006, ADR-0041, ADR-0261, ADR-0270
 - **Evidence:** CP-14
@@ -92,4 +92,4 @@ counted in units (the `Paid` drops take the charge lock and walk at most 32 ance
 - A service that needs more than 1024 subscriptions on one port.
 
 ## Architect's decision
-(Left empty for the human: accepted / changed / rejected, date, notes.)
+Accepted 2026-11-13. Decided by the architect; recorded by an agent at the architect's request.
