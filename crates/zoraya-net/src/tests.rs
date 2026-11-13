@@ -350,6 +350,81 @@ fn the_client_asks_again_when_the_server_is_silent() {
     assert!(net.run_until(60_000_000, |n| n.client.address().is_some()));
 }
 
+/// One turn of both sides as `Conns::turn` does for the resolver: the stack's
+/// poll, then the resolver's.
+fn dns_step(net: &mut Net) {
+    net.server.poll(net.now);
+    let delay = net.client.poll(net.now);
+    net.client.dns_poll(net.now);
+    net.server.poll(net.now);
+    let delay = match (delay, net.client.dns_delay(net.now)) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    net.now += delay.unwrap_or(1_000_000).clamp(1_000, 1_000_000);
+}
+
+#[test]
+fn a_lookup_before_the_lease_waits_for_it_under_its_normal_bound() {
+    // ADR-0316: with a lease on its way the query is kept, not failed, and
+    // goes out once the lease is there.
+    let mut net = Net::new(dhcp());
+    assert_eq!(
+        net.client
+            .resolve_as(1, crate::dns::Owner::SESSION, "a.zoraya", 0),
+        crate::dns::Start::Pending
+    );
+    dns_step(&mut net);
+    assert!(net.client.address().is_none(), "no lease yet");
+    assert_eq!(net.client.dns_pending(), 1);
+    assert_eq!(
+        net.client.dns_attempts(),
+        0,
+        "nothing goes out without a lease"
+    );
+    assert!(net.client.take_resolved().is_empty());
+    while net.client.address().is_none() && net.now < 20_000_000 {
+        dns_step(&mut net);
+    }
+    assert!(net.now < 8_000_000, "the lease came inside the bound");
+    dns_step(&mut net);
+    assert!(
+        net.client.dns_attempts() >= 1,
+        "asked once the lease is there"
+    );
+    // The silent server ends it at the bound, counted from the start.
+    while net.client.take_resolved().is_empty() && net.now < 20_000_000 {
+        dns_step(&mut net);
+        if net.now < 8_000_000 {
+            assert_eq!(net.client.dns_pending(), 1);
+        }
+    }
+    assert!((8_000_000..9_500_000).contains(&net.now), "{}", net.now);
+}
+
+#[test]
+fn a_lookup_in_flight_when_the_lease_goes_ends_at_its_bound_not_as_no_server() {
+    let mut net = Net::new(dhcp());
+    net.server.lease = 3;
+    assert!(net.run_until(5_000_000, |n| n.client.address().is_some()));
+    let start = net.now;
+    assert_eq!(
+        net.client
+            .resolve_as(1, crate::dns::Owner::SESSION, "a.zoraya", start),
+        crate::dns::Start::Pending
+    );
+    net.server.mute = true;
+    let mut got = Vec::new();
+    while got.is_empty() && net.now < start + 20_000_000 {
+        dns_step(&mut net);
+        got = net.client.take_resolved();
+    }
+    assert!(net.client.address().is_none(), "the lease went");
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].result, Err(crate::dns::ResolveFail::TimedOut));
+    assert!(net.now >= start + 8_000_000, "{}", net.now - start);
+}
+
 #[test]
 fn a_static_address_is_up_at_once_and_has_no_lease() {
     let mut net = Net::new(static_config());

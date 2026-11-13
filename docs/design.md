@@ -1805,7 +1805,10 @@ http://HOST[:PORT]/PATH` is the first program that uses them.
   the connection or echo request that follows a first lookup does not wait that second. The answer to a `ping` by name
   comes inside a turn, after the stack's poll, so `Service::answer_lookups` makes the loop come back at once when its
   run starts there (before the fix of proposed ADR-0316 the loop slept on the delay of before the run, none at all, and
-  the first `ping NAME` of a boot ended with the client's wait). An answer counts only from a configured server's port 53, with an identifier and question of a query in
+  the first `ping NAME` of a boot ended with the client's wait). A lookup asked while a DHCP lease is still to come
+  (no `net.dns` and no lease, or the lease gone) is kept under its normal bound and goes out once the lease is there;
+  `NoServer` (a static interface with no `net.dns`) is `status::UNAVAILABLE` and, for a `connect`, `reason::UNREACHABLE`.
+  An answer counts only from a configured server's port 53, with an identifier and question of a query in
   flight; the decoder takes an address only from a record owned by the name or by a CNAME chain from it. An address that is
   loopback, link-local, multicast, unspecified, the interface's own, the gateway or a DNS server is refused with `Local`
   unless an address rule covers it (ADR-0223 item 4). Not built: AAAA, TCP for a truncated answer, negative caching, a

@@ -206,7 +206,9 @@ impl<L: Link> Stack<L> {
                 from_hosts: false,
             });
         }
-        if self.status(now_us).dns.is_empty() {
+        // With a lease on its way the query waits for it, under its normal
+        // deadline (ADR-0316); with none to come, there is no server.
+        if self.status(now_us).dns.is_empty() && !self.lease_pending() {
             return Start::Failed(ResolveFail::NoServer);
         }
         if self.extra.resolver.queries.len() >= MAX_QUERIES {
@@ -259,6 +261,7 @@ impl<L: Link> Stack<L> {
             return false;
         };
         let servers = self.status(now_us).dns;
+        let waiting = self.lease_pending();
         let mut buf = [0u8; MAX_MESSAGE + 1];
         loop {
             let socket = self.sockets.get_mut::<udp::Socket>(handle);
@@ -342,6 +345,12 @@ impl<L: Link> Stack<L> {
                 let due = q.sent < ATTEMPTS_US.len() && age >= ATTEMPTS_US[q.sent];
                 (due, age >= GIVE_UP_US, q.sent, q.id, q.name.clone())
             };
+            // Waiting for the lease: nothing goes out, no attempt is used up,
+            // and only the bound ends the query.
+            if waiting && !give_up {
+                i += 1;
+                continue;
+            }
             if give_up || servers.is_empty() {
                 let q = self.extra.resolver.queries.remove(i);
                 self.extra.resolver.done.push(Resolved {
@@ -373,16 +382,21 @@ impl<L: Link> Stack<L> {
 
     /// Microseconds until a query needs attention, if one is out.
     pub fn dns_delay(&self, now_us: i64) -> Option<i64> {
+        let waiting = self.lease_pending();
         self.extra
             .resolver
             .queries
             .iter()
             .map(|q| {
-                let next = ATTEMPTS_US
-                    .get(q.sent)
-                    .copied()
-                    .unwrap_or(GIVE_UP_US)
-                    .min(GIVE_UP_US);
+                let next = if waiting {
+                    GIVE_UP_US
+                } else {
+                    ATTEMPTS_US
+                        .get(q.sent)
+                        .copied()
+                        .unwrap_or(GIVE_UP_US)
+                        .min(GIVE_UP_US)
+                };
                 (q.started_us + next - now_us).max(0)
             })
             .min()
@@ -392,6 +406,12 @@ impl<L: Link> Stack<L> {
     pub fn dns_port(&self) -> Option<u16> {
         let h = self.extra.resolver.socket?;
         Some(self.sockets.get::<udp::Socket>(h).endpoint().port)
+    }
+
+    /// Attempts sent by the queries in flight, for tests.
+    #[cfg(test)]
+    pub(crate) fn dns_attempts(&self) -> usize {
+        self.extra.resolver.queries.iter().map(|q| q.sent).sum()
     }
 
     /// Queries in flight.

@@ -83,8 +83,10 @@ their own (`ping` waited `2 * WAIT_NS` for a lookup, `connect` 25 s), equal to `
 1. **No lost wake-up.** `Service::answer_lookups` takes the turn's lookup answers and its delay; when a run started
    there, the delay is zero, so the next turn sends the first request and counts the run's own time.
 2. **A timed-out lookup is a status.** `status::TIMED_OUT` (8) for `Resolved` and `PingReply`, `reason::LOOKUP_TIMED_OUT`
-   (7) for `Failed`; `Unresolvable` stays for no such name, no A record or a server that said it failed. `libposix`
-   maps them to `EAI_AGAIN` and `ETIMEDOUT`. `ping` and `fetch` print "the name lookup timed out"; "the network
+   (7) for `Failed`; `Unresolvable` stays for no such name, no A record or a server that said it failed. An empty
+   server list (a static interface with no `net.dns`, or a lease that gave none) is not "no such name" either: it is
+   `status::UNAVAILABLE` and, for a `connect`, `reason::UNREACHABLE` (`ENETUNREACH`, "there is no route to the host").
+   `libposix` maps the new ones to `EAI_AGAIN` and `ETIMEDOUT`. `ping` and `fetch` print "the name lookup timed out"; "the network
    service did not answer" is kept for no reply within the wait.
 3. **One bound.** `zoraya_proto_net::LOOKUP_US` is the resolver's give-up time; `ping_answer_us(by_name, count,
    timeout)` is the longest a `ping` reply takes; `CONNECT_ATTEMPT_US` is one address's attempt. `ping` waits
@@ -92,7 +94,13 @@ their own (`ping` waited `2 * WAIT_NS` for a lookup, `connect` 25 s), equal to `
 4. **Neighbours known before they are needed.** When the interface is configured (a lease or a static address),
    `netd` sends an ARP request for the gateway and each DNS server on the link; when a lookup goes out, for the
    gateway if its last request is older than 30 s (smoltcp forgets a neighbour 60 s after its last frame).
-5. **The test.** `make test-net-lookup` boots the test image against `tools/test-dns`, which answers late or never;
+5. **A lookup waits for the lease.** In DHCP mode with no lease (at boot, or after the lease went) a lookup is kept, not
+   failed: nothing is sent and no attempt is used up while the lease is pending, the query keeps its normal deadline
+   (`LOOKUP_US` from its start; the loop's delay is that deadline, not zero), and once the lease is there the due
+   attempts go out (up to the first four in a burst, as they were all due). The clients' waits already cover the
+   bound, so the first command right after boot works once the lease arrives and says "the name lookup timed out"
+   if it does not come in time. A `ping` by address before the lease still answers `UNAVAILABLE` at once.
+6. **The test.** `make test-net-lookup` boots the test image against `tools/test-dns`, which answers late or never;
    its `netd` (feature `net-test` only) takes the server's port from `/config/net-test-dns-port`, because port 53
    needs root on the host. The capture is checked by `zoraya-test-dns --check-pcap`.
 
@@ -113,8 +121,10 @@ failed. Targets 2 and 3: an agent or a desktop program that resolves gets `EAI_A
 - **Negative.** A name with several addresses that all stay silent still takes `netd` one attempt each, longer than
   `connect`'s wait; the client then says `TimedOut` while `netd` still tries. ARP requests that smoltcp would not have
   sent.
-- **Follow-up.** An overall bound on a `connect` by name over all its addresses; a lookup asked before the lease is
-  there is answered `UNAVAILABLE` at once rather than waiting for it.
+- **Negative (lease wait).** When the lease comes late, the attempts that fell due meanwhile go out together instead of
+  at 0, 1, 2 and 4 s; a lookup asked with the lease never coming ends at the bound with "timed out", not at once with
+  "not available".
+- **Follow-up.** An overall bound on a `connect` by name over all its addresses.
 
 ## Invariants
 - **INV-0316-1.** A lookup no server answers is answered when the resolver gives up (`LOOKUP_US`), with
@@ -127,10 +137,16 @@ failed. Targets 2 and 3: an agent or a desktop program that resolves gets `EAI_A
   answers).
 - **INV-0316-3.** When the interface is configured, `netd` asks for the gateway and the DNS servers on the link once;
   the first query to the server is preceded by exactly one ARP request for it. *Check:* `cargo test -p zoraya-net` (the
-  stack's probes) and the capture of `make test-net-lookup`.
+  stack's probes) and the capture of `make test-net-lookup`, which also requires that request to come at least 500 ms
+  before the first query. (In that test the DNS server is the gateway, for which the code before this ADR also sent
+  one request, right before the query: "exactly one" alone proves nothing there; the lead time does, and `zoraya-test-dns`
+  has a unit test with the request right before the query. A server that is not the gateway is not covered by the
+  capture, only by the stack's host test.)
+- **INV-0316-4.** A lookup asked while a DHCP lease is pending is kept under its normal bound, sends nothing until the
+  lease is there, and ends `TimedOut` (not `NoServer`) if it does not come, also when the lease goes while the
+  lookup is in flight. *Check:* `cargo test -p zoraya-net`.
 
 ## Open questions
-- Whether a lookup asked before the first lease should wait for it (up to the lookup bound) rather than fail at once.
 - Whether `connect` by name should have one bound over all its addresses, which its client's wait could then follow.
 
 ## Revisit triggers

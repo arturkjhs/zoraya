@@ -604,6 +604,12 @@ impl<L: Link> Stack<L> {
         core::mem::take(&mut self.events)
     }
 
+    /// Whether the interface waits for a DHCP lease: its address and (unless
+    /// `net.dns` names them) its servers are still to come (ADR-0316).
+    pub(crate) fn lease_pending(&self) -> bool {
+        matches!(self.config.mode, Mode::Dhcp) && self.lease.is_none()
+    }
+
     pub fn status(&self, now_us: i64) -> Status {
         let (source, prefix) = match (&self.lease, self.static_up) {
             (Some(l), _) => (Source::Dhcp, l.prefix),
