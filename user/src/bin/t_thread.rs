@@ -712,6 +712,8 @@ fn spawn_holds_moved_handles() {
 static FILL_GO: AtomicU32 = AtomicU32::new(0);
 static FILL_MEMORY: AtomicU64 = AtomicU64::new(0);
 static FILL_RESULT: AtomicU64 = AtomicU64::new(0);
+static FILL_RETURNED: AtomicU32 = AtomicU32::new(0);
+static FILL_IN_WINDOW: AtomicU32 = AtomicU32::new(0);
 
 extern "C" fn filler(arg: u64) -> ! {
     while FILL_GO.load(SeqCst) == 0 {
@@ -722,6 +724,9 @@ extern "C" fn filler(arg: u64) -> ! {
         Ok(_) => 0,
         Err(status) => status as u64,
     };
+    // The CPU is this thread's until it ends its slice or blocks, so a spawn
+    // that has not returned yet is still paused around this call.
+    FILL_IN_WINDOW.store(u32::from(FILL_RETURNED.load(SeqCst) == 0), SeqCst);
     FILL_RESULT.store(result, SeqCst);
     FILL_GO.store(2, SeqCst);
     thread_exit(arg, 0, 0)
@@ -746,6 +751,8 @@ fn spawn_keeps_room_for_the_child() {
     FILL_MEMORY.store(memory.raw(), SeqCst);
     FILL_GO.store(0, SeqCst);
     FILL_RESULT.store(0, SeqCst);
+    FILL_RETURNED.store(0, SeqCst);
+    FILL_IN_WINDOW.store(0, SeqCst);
     let (t, flag) = start(filler, OWN_BASE);
     let mut buffer = [0; 512];
     let mut e = Encoder::new(&mut buffer, JOB, program);
@@ -756,10 +763,16 @@ fn spawn_keeps_room_for_the_child() {
     raw_syscall(FORCE_SWITCH, [1, 0, 0, 0, 0, 0]);
     FILL_GO.store(1, SeqCst);
     let spawned = spawn(&buffer[..length]);
+    FILL_RETURNED.store(1, SeqCst);
     raw_syscall(FORCE_SWITCH, [0; 6]);
     while FILL_GO.load(SeqCst) != 2 {
         thread_yield();
     }
+    assert_eq!(
+        FILL_IN_WINDOW.load(SeqCst),
+        1,
+        "the sibling's fill was not made inside the spawn"
+    );
     let child = spawned.expect("the spawn has its room, whatever the sibling does");
     assert_eq!(
         FILL_RESULT.load(SeqCst),

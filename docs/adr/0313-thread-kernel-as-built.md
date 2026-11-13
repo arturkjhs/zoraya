@@ -142,6 +142,11 @@ futex hand-offs in about 0.3 s and 2,000 create-and-join rounds in about 70 ms.
   thread should answer `WouldBlock` or `BadState` (a program that waits on a word with no other thread can only time out).
 - Whether the park head should be a list when a process has many parked threads after a long suspend (one wake plus steps is
   128 wakes at most).
+- Items 6, 7 and 8 (`Members::shrink` with `try_reserve_exact`; the hold on a `Move`d handle; the room kept for the
+  spawn's child) were added during review after the architect accepted items 1 to 5, and the Context's "five places" and
+  the recorded decision's "five refinements" count only items 1 to 5. They refine the implementation without changing
+  any accepted guarantee. The architect is asked to confirm them. The index row summarises items 1 to 5 only and is
+  left as it is.
 
 ## Revisit triggers
 

@@ -145,8 +145,9 @@ impl<T> Table<T> {
         if self.count + self.kept + count > MAX_HANDLES as usize {
             return Err(Status::LimitReached);
         }
-        // `insert` appends while the table can grow, even past free slots.
-        let slots = (self.slots.len() + count).min(MAX_HANDLES as usize);
+        // `insert` appends while the table can grow, even past free slots, and
+        // each append asks `reserve` for room for itself and every kept one.
+        let slots = (self.slots.len() + count + self.kept).min(MAX_HANDLES as usize);
         self.slots
             .try_reserve(slots - self.slots.len())
             .map_err(|_| Status::NoMemory)
@@ -372,6 +373,14 @@ mod tests {
         for i in 0..MAX_HANDLES {
             u.insert(i, Rights::NONE, 0).unwrap();
         }
+    }
+
+    #[test]
+    fn reserve_many_counts_the_kept_room() {
+        let mut t: Table<u32> = Table::new();
+        t.keep_room().unwrap();
+        t.reserve_many(3).unwrap();
+        assert!(t.slots.capacity() >= t.slots.len() + 3 + t.kept);
     }
 
     #[test]

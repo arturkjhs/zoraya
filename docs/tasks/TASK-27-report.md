@@ -46,7 +46,10 @@ Running report, updated after each part. Part 9b's design was written by a Sonne
 3. **The plan needs part 9a for one item only** (OpenSSL rebuilt with threads, step 4.2); steps 1 to 3 and the rest of step 4
    do not. 9a has not started (curl was deferred from stage 8 on 2026-11-12), so step 4.2 is **outside 9b's done
    criterion until 9a is merged**; 9b merges without it and the step is recorded as pending.
-4. Merge conflict note for the orchestrator: this file is new on `work/9b-design`; `work/9-docs` may create the same
+4. **Confirm ADR-0313 items 6 to 8.** They (`Members::shrink` with `try_reserve_exact`, the hold on a `Move`d handle,
+   the room kept for the spawn's child) were added by the step-1 reviews after you accepted items 1 to 5; they refine the
+   implementation and change no accepted guarantee. Recorded in the ADR's open questions; its text and status are untouched.
+5. Merge conflict note for the orchestrator: this file is new on `work/9b-design`; `work/9-docs` may create the same
    path. Keep the Status block of whichever is newer and this file's "9b" section below.
 
 Manual checks the architect must do for 9b: none. Measurements: none yet (design only). Time and model: one Sonnet session
