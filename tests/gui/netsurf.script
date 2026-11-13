@@ -43,6 +43,13 @@ pause 500
 type netsurf https://expired.zoraya:@TLSEXPIRED@/ns/page\r
 pause 15000
 shot netsurf-refused
+region 110 175 40 20 9e9e9e
+# "Proceed" on the privacy error page does not turn verification off: the same
+# refusal comes back (the program has no such option, INV-0228-3).
+click 764 471
+pause 5000
+shot netsurf-refused-again
+region 110 175 40 20 9e9e9e
 click 122 119
 pause 3000
 click 300 87

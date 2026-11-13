@@ -622,6 +622,13 @@ test-netsurf: $(KERNEL) $(RUNNER) $(HTTPD) tools-storage netsurf
 	sed -e "s/@PORT@/$$port/g" -e "s/@TLSVALID@/$$tlsvalid/g" -e "s/@TLSEXPIRED@/$$tlsexpired/g" $(NS_TEMPLATE) > $(NS_SCRIPT); \
 	$(call NS_RUN,$(QEMU_SLOW_TIMEOUT),auto,auto); rc=$$?; \
 	kill $$httpd 2>/dev/null; wait $$httpd 2>/dev/null; \
+	if [ $$rc = 0 ]; then \
+		if grep -q '^tls expired: request of' target/test-logs/test-httpd-netsurf.log || ! grep -q '^tls valid: request of' target/test-logs/test-httpd-netsurf.log \
+		   || ! grep -q '^tls expired: ended after 0 request bytes' target/test-logs/test-httpd-netsurf.log \
+		   || grep '^tls expired: ended after' target/test-logs/test-httpd-netsurf.log | grep -qv 'ended after 0 request bytes'; then \
+			echo '[netsurf] FAIL: INV-0228-1: NetSurf sent request bytes after a refused handshake (or no request on the valid one)'; cat target/test-logs/test-httpd-netsurf.log; rc=1; \
+		else echo '[netsurf] ok: NetSurf sent no request byte to the expired-certificate server, also after Proceed'; fi; \
+	fi; \
 	if [ $$rc = 0 ]; then target/debug/zoraya-fsck $(NS_DISK); rc=$$?; fi; \
 	exit $$rc
 
