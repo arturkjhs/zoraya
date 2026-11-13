@@ -65,12 +65,18 @@ pause 4000
 shot windows-many
 # The tenth window, on top where the cascade meets the work area's corner,
 # has its shell: it takes keys after a click on its title bar. With 8 slots
-# the compositor refused the seventh of them.
-origin 361 231
+# the compositor refused the seventh of them. Where the cascade stops it
+# depends on the terminal's height, which is not the same at both scales
+# (its title bar is at y 196 at scale 1, 209 at scale 2), so it is first
+# dragged by its title bar (y 220 is in it at both) up against the bar,
+# where the compositor stops every window: its body then starts at
+# (361, 64), the bar's 28 and the title bar's 36, at both scales.
+drag 560 220 560 30
+origin 361 64
 screen Type help to begin, or help tour.
 screen ~> _
-click 560 212
-region 600 200 60 4 f7f7f8
+click 560 46
+region 600 33 60 4 f7f7f8
 pause 500
 type echo eleven clients\r
 screen eleven clients
