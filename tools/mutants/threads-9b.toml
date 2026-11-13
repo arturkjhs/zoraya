@@ -10,7 +10,7 @@ id = "T-no-sweep"
 file = "kernel/src/process.rs"
 find = 'thread::wake_siblings(&process);'
 replace = ''
-note = "INV-0300-3: the first leaver of an ending process wakes the others (t_thread sweep)"
+note = "INV-0300-3: the first leaver wakes the others. SURVIVES (run of step-1 review): the chain wake alone reaches every sibling, one leaver after another, so the sweep only shortens the end; with 121 blocked siblings the end is still within 400 ms. Equivalent by function, not by time"
 
 [[mutant]]
 id = "T-no-chain-wake"
